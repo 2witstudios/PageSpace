@@ -1135,7 +1135,7 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
   describe('the org guests policy', () => {
     const adminWhoCanInvite = () => vi.mocked(loadDriveRelationship).mockResolvedValue({ isOwner: true, membership: null });
 
-    it('POL-2 X-6 (partial) guests OFF refuses an outsider by user id with 403 naming the policy, and creates nothing', async () => {
+    it('POL-2 (partial) X-6 (partial) guests OFF refuses an outsider by user id with 403 naming the policy, and creates nothing', async () => {
       adminWhoCanInvite();
       decideOrgDriveAdmission.mockResolvedValue({ decision: 'refuse', orgId: 'org_1' });
 
@@ -1147,7 +1147,7 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
       expect(requestGuestApproval).not.toHaveBeenCalled();
     });
 
-    it('POL-2 guests APPROVE queues an outsider added by user id: 202, the request stored with what was asked, NOTHING granted', async () => {
+    it('POL-2 (partial) guests APPROVE queues an outsider added by user id: 202, the request stored with what was asked, NOTHING granted', async () => {
       decideOrgDriveAdmission.mockResolvedValue({ decision: 'hold', orgId: 'org_1' });
 
       const res = await POST(buildPost(mockDriveId, userIdBody), createContext(mockDriveId));
@@ -1166,11 +1166,20 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
       expect(recordOrgAuditEvent).toHaveBeenCalledWith(expect.objectContaining({ eventType: 'org.guest.requested', orgId: 'org_1' }));
     });
 
-    it('POL-2 guests ON (or a personal drive) adds them exactly as before', async () => {
+    it('POL-2 (partial) guests ON (or a personal drive) adds them exactly as before', async () => {
       const res = await POST(buildPost(mockDriveId, userIdBody), createContext(mockDriveId));
       expect(res.status).toBe(200);
       expect(driveInviteRepository.createAcceptedMemberWithPermissions).toHaveBeenCalled();
       expect(requestGuestApproval).not.toHaveBeenCalled();
+    });
+
+    it('POL-2 (partial) guests turned OFF between the check and the write: the write refuses and the route answers 403 naming the policy', async () => {
+      vi.mocked(driveInviteRepository.createAcceptedMemberWithPermissions).mockResolvedValue({ refused: 'GUEST_POLICY' });
+
+      const res = await POST(buildPost(mockDriveId, userIdBody), createContext(mockDriveId));
+
+      expect(res.status).toBe(403);
+      expect(await res.json()).toMatchObject({ code: 'org_policy', policy: 'guests' });
     });
 
     it('POL-2 (partial) guests ON on an ORG drive (decision allow, org named) adds them at once: nothing is queued', async () => {

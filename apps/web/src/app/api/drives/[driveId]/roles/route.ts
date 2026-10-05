@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log'
-import { checkDriveAccessForRoles, listDriveRoles, createDriveRole, validateRolePermissions, validateDriveWidePermissions } from '@pagespace/lib/services/drive-role-service';
+import { checkDriveAccessForRoles, listDriveRoles, createDriveRole, validateRolePermissions, validateDriveWidePermissions, OpenRoleFloorError } from '@pagespace/lib/services/drive-role-service';
 import { getActorInfo, logRoleActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
@@ -131,6 +131,9 @@ export async function POST(
     return NextResponse.json({ role: newRole }, { status: 201 });
   } catch (error) {
     console.error('Error creating role:', error);
+    if (error instanceof OpenRoleFloorError) {
+      return NextResponse.json({ error: error.message, code: error.code, policy: error.policy }, { status: error.status });
+    }
     // Check for unique constraint violation
     if (error instanceof Error && error.message.includes('unique')) {
       return NextResponse.json({ error: 'A role with this name already exists' }, { status: 409 });

@@ -21,6 +21,10 @@ const mockTransaction = vi.hoisted(() => vi.fn());
 // POL-2: acceptance asks the org's guests policy inside the transaction; these unit tests are about a drive with no org.
 const decideOrgDriveAdmission = vi.hoisted(() => vi.fn());
 vi.mock('@pagespace/lib/permissions/guest-admission', () => ({ decideOrgDriveAdmission }));
+// P2-6: under approve, acceptance consumes an `approved` marker or queues the request.
+const consumeApprovedInvitation = vi.hoisted(() => vi.fn());
+const requestGuestApproval = vi.hoisted(() => vi.fn());
+vi.mock('@pagespace/lib/permissions/guest-holds', () => ({ consumeApprovedInvitation, requestGuestApproval }));
 
 vi.mock('@pagespace/db/db', () => ({
   db: {
@@ -506,8 +510,9 @@ describe('driveInviteRepository.consumeInviteAndCreateMembership', () => {
     const txInsertValues = vi.fn().mockReturnValue({ onConflictDoUpdate: txInsertOnConflict });
     const txInsert = vi.fn().mockReturnValue({ values: txInsertValues });
 
+    const txSelect = vi.fn().mockReturnValue({ from: vi.fn().mockReturnValue({ where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([{ email: 'invitee@example.com' }]) }) }) });
     mockTransaction.mockImplementation(async (cb: (tx: unknown) => Promise<unknown>) => {
-      const tx = { update: txUpdate, insert: txInsert };
+      const tx = { update: txUpdate, insert: txInsert, select: txSelect };
       return cb(tx);
     });
 
@@ -558,10 +563,26 @@ describe('driveInviteRepository.consumeInviteAndCreateMembership', () => {
     expect(decideOrgDriveAdmission).toHaveBeenCalledWith({ driveId: 'drive_1', userId: 'user_new' }, expect.anything());
   });
 
-  it('POL-2 (partial) guests APPROVE: an invitation that was approved when it was sent is not asked twice and is accepted', async () => {
+  it('POL-2 (partial) guests APPROVE: an invitation an Owner or Admin approved (its marker consumed) is accepted', async () => {
     setupTx({ consumeReturning: [{ id: 'inv_1' }], insertReturning: [{ id: 'mem_new' }] });
     decideOrgDriveAdmission.mockResolvedValue({ decision: 'hold', orgId: 'org_1' });
+    consumeApprovedInvitation.mockResolvedValue(true);
     expect(await driveInviteRepository.consumeInviteAndCreateMembership(baseInput)).toEqual({ ok: true, memberId: 'mem_new' });
+    expect(consumeApprovedInvitation).toHaveBeenCalledWith(expect.anything(), { driveId: 'drive_1', invite: { kind: 'drive', id: 'inv_1' } });
+    expect(requestGuestApproval).not.toHaveBeenCalled();
+  });
+
+  it('POL-2 (partial) guests APPROVE: an invitation nobody approved (sent while guests were on) is queued, spent, and grants nothing', async () => {
+    const { txUpdateSet, txInsertValues } = setupTx({ consumeReturning: [{ id: 'inv_1' }], insertReturning: [{ id: 'mem_new' }] });
+    decideOrgDriveAdmission.mockResolvedValue({ decision: 'hold', orgId: 'org_1' });
+    consumeApprovedInvitation.mockResolvedValue(false);
+
+    expect(await driveInviteRepository.consumeInviteAndCreateMembership(baseInput)).toEqual({ ok: false, reason: 'GUEST_APPROVAL_PENDING' });
+    expect(txUpdateSet).toHaveBeenCalledWith({ consumedAt: baseInput.acceptedAt });
+    expect(txInsertValues).not.toHaveBeenCalled();
+    expect(requestGuestApproval).toHaveBeenCalledWith(expect.objectContaining({
+      orgId: 'org_1', driveId: 'drive_1', userId: 'user_new', origin: 'invite', request: { role: 'MEMBER', customRoleId: null, invitedBy: 'inviter_1' },
+    }), expect.anything());
   });
 
   it('given the conditional consume matches zero rows (already consumed), returns ok=false reason=TOKEN_CONSUMED and skips the insert', async () => {
@@ -704,3 +725,41 @@ describe('driveInviteRepository — inviter name PII decryption at the read edge
   });
 });
 
+
+describe('driveInviteRepository.createAcceptedMemberWithPermissions and the guests policy', () => {
+  const input = {
+    driveId: 'drive_1',
+    userId: 'user_outside',
+    role: 'MEMBER' as const,
+    customRoleId: null,
+    invitedBy: 'inviter_1',
+    permissions: [{ pageId: 'page_1', canView: true, canEdit: false, canShare: false }],
+    grantedBy: 'inviter_1',
+    validPageIds: new Set(['page_1']),
+  };
+  const setupTx = () => {
+    const memberValues = vi.fn().mockReturnValue({ returning: vi.fn().mockResolvedValue([{ id: 'mem_1' }]) });
+    const grantValues = vi.fn().mockResolvedValue(undefined);
+    const insert = vi.fn().mockReturnValueOnce({ values: memberValues }).mockReturnValueOnce({ values: grantValues });
+    const tx = { insert };
+    mockTransaction.mockImplementation(async (cb: (t: unknown) => Promise<unknown>) => cb(tx));
+    return { tx, insert };
+  };
+
+  it('POL-2 (partial) guests turned OFF after the route asked: the write asks again inside its transaction and creates nothing', async () => {
+    const { tx, insert } = setupTx();
+    decideOrgDriveAdmission.mockResolvedValue({ decision: 'refuse', orgId: 'org_1' });
+
+    expect(await driveInviteRepository.createAcceptedMemberWithPermissions(input)).toEqual({ refused: 'GUEST_POLICY' });
+    expect(decideOrgDriveAdmission).toHaveBeenCalledWith({ driveId: 'drive_1', userId: 'user_outside' }, tx);
+    expect(insert).not.toHaveBeenCalled();
+  });
+
+  it('POL-2 (partial) allowed (or approved and replayed): the member row and its grants are written', async () => {
+    const { insert } = setupTx();
+    decideOrgDriveAdmission.mockResolvedValue({ decision: 'hold', orgId: 'org_1' });
+
+    expect(await driveInviteRepository.createAcceptedMemberWithPermissions(input)).toEqual({ memberId: 'mem_1', permissionsGranted: 1 });
+    expect(insert).toHaveBeenCalledTimes(2);
+  });
+});

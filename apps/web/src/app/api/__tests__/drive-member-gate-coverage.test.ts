@@ -133,8 +133,8 @@ const EXEMPT = new Map<string, Exemption>([
     reason: 'loadDriveMemberRowState reads the requester\'s row pending included, for the Restricted-drive join decisions only: a pending invitation is theirs to accept, so it blocks a request and an admission. It returns `accepted` with the row, and the decision grants nothing from an unaccepted one.',
   }],
   ['packages/lib/src/permissions/guest-holds.ts', {
-    ormReads: 1,
-    reason: 'suspendOrgGuests reads the org\'s guest rows (pending included, on purpose) to snapshot each into org_guest_holds and remove it from the live tables: a writer that REMOVES access, run inside the policy transaction. It grants nothing; restore re-inserts from the snapshot.',
+    ormReads: 2,
+    reason: 'Both ungated reads find an outsider\'s rows (pending included, on purpose) to TAKE THEM OUT of the live tables: memberOutsiders lists the outsiders of an org\'s drives, and takeOutsider reads one person\'s row to snapshot it into org_guest_holds (parked, or queued for approval) before deleting it. Writers that REMOVE access, inside the transaction that changed the policy or brought the access in; they grant nothing. The admission read (admitReentry) is gated: only an accepted, non-GUEST row counts as an admitted guest.',
   }],
   ['packages/lib/src/permissions/org-guest-footprint.ts', {
     ormReads: 1,

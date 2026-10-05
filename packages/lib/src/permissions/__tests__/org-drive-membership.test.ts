@@ -24,6 +24,7 @@ vi.mock('@pagespace/db/db', () => ({
         const next = () => Promise.resolve(selects.results.shift() ?? []);
         const chain = {
           where: () => chain,
+          orderBy: () => chain,
           limit: next,
           then: (resolve: (rows: unknown[]) => unknown, reject: (error: unknown) => unknown) => next().then(resolve, reject),
         };
@@ -34,7 +35,7 @@ vi.mock('@pagespace/db/db', () => ({
 }));
 vi.mock('@pagespace/db/schema/members', () => ({
   driveMembers: { __table: 'drive_members', driveId: 'driveId', userId: 'userId', role: 'role', customRoleId: 'customRoleId', source: 'source', acceptedAt: 'acceptedAt' },
-  driveRoles: { __table: 'drive_roles', id: 'id', driveId: 'driveId', isDefault: 'isDefault' },
+  driveRoles: { __table: 'drive_roles', id: 'id', driveId: 'driveId', isDefault: 'isDefault', position: 'position' },
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
   drives: { __table: 'drives', orgId: 'orgId', orgVisibility: 'orgVisibility', id: 'id' },
@@ -44,6 +45,7 @@ vi.mock('@pagespace/db/schema/organizations', () => ({
 }));
 vi.mock('@pagespace/db/operators', () => ({
   and: vi.fn(),
+  asc: vi.fn(),
   eq: vi.fn(),
   inArray: vi.fn(),
   isNotNull: vi.fn(),

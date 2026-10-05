@@ -20,7 +20,6 @@ import { eq } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { drives } from '@pagespace/db/schema/core';
 import { notifications } from '@pagespace/db/schema/notifications';
-import { organizations } from '@pagespace/db/schema/organizations';
 import { walletCapAlerts, wallets } from '@pagespace/db/schema/wallets';
 import { loggers } from '../logging/logger-config';
 import { walletFunderUserIds } from '../permissions/wallet-funders';
@@ -69,7 +68,10 @@ async function driveLegWindows(wallet: { id: string; subjectId: string | null },
 async function seatLegWindows(pool: { id: string; orgId: string; monthlyPeriodStart: Date | null }, userId: string, now: Date): Promise<LegWindows> {
   const policy = await readOrgSpendPolicy(db, pool.orgId);
   const seat = await loadSeatCapFacts(db, { poolId: pool.id, poolPeriodStart: pool.monthlyPeriodStart, userId, policySeatAllowanceCents: policy.seatAllowanceCents, now });
-  const [org] = await db.select({ name: organizations.name }).from(organizations).where(eq(organizations.id, pool.orgId));
+  // Loaded on use: the org repository brings field crypto, which must stay out of credit-consume's
+  // static (client-reachable) import graph.
+  const { findOrganizationNames } = await import('../organizations/repository');
+  const org = { name: (await findOrganizationNames([pool.orgId])).get(pool.orgId) };
   return {
     windows: [
       { window: 'daily', capCents: seat.dailyCapCents, spentCents: seatSpentCents(seat.windows.day.grossMillicents), periodStart: new Date(utcDayStartMs(now.getTime())) },

@@ -13,6 +13,7 @@ import { pendingInvites } from '@pagespace/db/schema/pending-invites';
 import { userEmailMatch, decryptUserRow } from '@pagespace/lib/auth/user-repository';
 import { decryptField } from '@pagespace/lib/encryption/field-crypto';
 import { decideOrgDriveAdmission } from '@pagespace/lib/permissions/guest-admission';
+import { consumeApprovedInvitation, requestGuestApproval } from '@pagespace/lib/permissions/guest-holds';
 
 export const driveInviteRepository = {
   async findDriveById(driveId: string) {
@@ -189,8 +190,13 @@ export const driveInviteRepository = {
     permissions: Array<{ pageId: string; canView: boolean; canEdit: boolean; canShare: boolean }>;
     grantedBy: string;
     validPageIds: Set<string>;
-  }): Promise<{ memberId: string; permissionsGranted: number }> {
+  }): Promise<{ memberId: string; permissionsGranted: number } | { refused: 'GUEST_POLICY' }> {
     return db.transaction(async (tx) => {
+      // POL-2, again at the write and under the org row's share lock: the caller asked the policy before, but guests
+      // may have been turned OFF since; then nothing is written (the change's suspension could not have seen it).
+      const admission = await decideOrgDriveAdmission({ driveId: input.driveId, userId: input.userId }, tx);
+      if (admission.decision === 'refuse') return { refused: 'GUEST_POLICY' } as const;
+
       const [member] = await tx
         .insert(driveMembers)
         .values({
@@ -475,7 +481,7 @@ export const driveInviteRepository = {
     acceptedAt: Date;
   }): Promise<
     | { ok: true; memberId: string }
-    | { ok: false; reason: 'TOKEN_CONSUMED' | 'ALREADY_MEMBER' | 'GUEST_POLICY' }
+    | { ok: false; reason: 'TOKEN_CONSUMED' | 'ALREADY_MEMBER' | 'GUEST_POLICY' | 'GUEST_APPROVAL_PENDING' }
   > {
     const { inviteId, driveId, userId, role, customRoleId, invitedBy, acceptedAt } = input;
     // The ALREADY_MEMBER signal must roll back the consume — if the user is
@@ -483,14 +489,37 @@ export const driveInviteRepository = {
     // a sentinel inside the transaction so Drizzle rolls back, then translate
     // it to a result outside the tx boundary.
     const ALREADY_MEMBER = Symbol('ALREADY_MEMBER');
+    const HELD = 'GUEST_APPROVAL_PENDING' as const;
     try {
-      const memberId = await db.transaction(async (tx) => {
+      const memberId = await db.transaction(async (tx): Promise<string> => {
         // POL-2, at the moment the membership would be created: an org that has turned guests OFF admits no outsider,
         // whenever the invitation was sent. Asked BEFORE the token is consumed, so a refusal burns nothing and the
-        // invitation works again if the policy is turned back on. Under `approve` the invitation was already
-        // approved when it was sent, so it is not asked twice.
+        // invitation works again if the policy is turned back on. Under `approve`, only an invitation an Owner or
+        // Admin approved (its approval left an `approved` marker) admits; one sent while guests were on, or before the
+        // drive joined the org, is queued for approval instead (independent review of #2762, P2-6).
         const admission = await decideOrgDriveAdmission({ driveId, userId }, tx);
         if (admission.decision === 'refuse') throw 'GUEST_POLICY';
+        if (admission.decision === 'hold' && admission.orgId) {
+          // Only THIS invitation's approval admits (re-verify N3), never another approval to the same address.
+          const approved = await consumeApprovedInvitation(tx, { driveId, invite: { kind: 'drive', id: inviteId } });
+          if (!approved) {
+            const consumedForQueue = await tx
+              .update(pendingInvites)
+              .set({ consumedAt: acceptedAt })
+              .where(and(eq(pendingInvites.id, inviteId), isNull(pendingInvites.consumedAt)))
+              .returning({ id: pendingInvites.id });
+            if (consumedForQueue.length === 0) throw 'TOKEN_CONSUMED';
+            await requestGuestApproval({
+              orgId: admission.orgId,
+              driveId,
+              userId,
+              origin: 'invite',
+              request: { role: role === 'MEMBER' ? 'MEMBER' : 'ADMIN', customRoleId, invitedBy },
+              requestedBy: invitedBy,
+            }, tx);
+            return HELD;
+          }
+        }
 
         const consumed = await tx
           .update(pendingInvites)
@@ -537,6 +566,8 @@ export const driveInviteRepository = {
           throw error;
         }
       });
+      // The invitation was answered by the approval queue: nothing granted, the token spent.
+      if (memberId === HELD) return { ok: false, reason: 'GUEST_APPROVAL_PENDING' };
       return { ok: true, memberId };
     } catch (error) {
       if (error === 'TOKEN_CONSUMED') {

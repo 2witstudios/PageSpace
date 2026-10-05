@@ -4,6 +4,7 @@ import {
   ORG_POLICY_CODE,
   customDomainsDecision,
   decideGuestAdmission,
+  pageGrantWidensAccess,
   publishingDecision,
   shareLinkCreationDecision,
   shareLinkUsable,
@@ -72,5 +73,26 @@ describe('decideGuestAdmission', () => {
 
   it('POL-2 (partial) a personal drive has no guest policy: everyone is allowed', () => {
     expect(decideGuestAdmission(null, { isOrgMember: false })).toBe('allow');
+  });
+});
+
+describe('pageGrantWidensAccess', () => {
+  const flags = (over: Partial<{ canView: boolean; canEdit: boolean; canShare: boolean; canDelete: boolean }> = {}) => ({ canView: false, canEdit: false, canShare: false, canDelete: false, ...over });
+
+  it('POL-2 (partial) a first grant that gives anything is an admission; a first grant of nothing is not', () => {
+    expect(pageGrantWidensAccess(null, flags({ canView: true }))).toBe(true);
+    expect(pageGrantWidensAccess(null, flags())).toBe(false);
+  });
+
+  it.each(['canView', 'canEdit', 'canShare', 'canDelete'] as const)('POL-2 (partial) turning %s on over an existing grant widens access', (flag) => {
+    expect(pageGrantWidensAccess(flags({ canView: true }), flags({ canView: true, [flag]: true }))).toBe(flag !== 'canView');
+    expect(pageGrantWidensAccess(flags(), flags({ [flag]: true }))).toBe(true);
+  });
+
+  it('POL-2 (partial) narrowing or repeating a grant never asks the policy: a guest can always be given LESS', () => {
+    const full = flags({ canView: true, canEdit: true, canShare: true, canDelete: true });
+    expect(pageGrantWidensAccess(full, flags({ canView: true }))).toBe(false);
+    expect(pageGrantWidensAccess(full, full)).toBe(false);
+    expect(pageGrantWidensAccess(full, flags())).toBe(false);
   });
 });

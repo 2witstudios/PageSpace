@@ -7,6 +7,8 @@ import {
   SUSPENSION_KINDS,
   driveSpendPolicy,
   mergeOrgPolicies,
+  newlyBlockedKinds,
+  openDefaultRoleMeetsFloor,
   orgPolicySpendPolicy,
   parseOrgPolicies,
   suspensionKindsChanged,
@@ -194,5 +196,69 @@ describe('spend policy', () => {
   it('POL-7 (partial) a drive that states no rule inherits the org rule', () => {
     const org = { ...DEFAULT_ORG_POLICIES, walletFallback: 'own_credits' as const };
     expect(driveSpendPolicy(org, null).fallback).toBe('own_credits');
+  });
+});
+
+describe('newlyBlockedKinds', () => {
+  const p = (over: Partial<typeof DEFAULT_ORG_POLICIES> = {}) => ({ ...DEFAULT_ORG_POLICIES, ...over });
+
+  it.each([
+    ['publishedApps', { publishedApps: false }],
+    ['persistentEnvironments', { persistentEnvironments: false }],
+    ['crossDriveAgents', { crossDriveAgents: false }],
+    ['agentsAutonomous', { agentsAutonomous: false }],
+  ] as const)('POL-1 (partial) turning %s off newly blocks it; turning it back on blocks nothing', (kind, off) => {
+    expect(newlyBlockedKinds(p(), p(off))).toEqual([kind]);
+    expect(newlyBlockedKinds(p(off), p())).toEqual([]);
+  });
+
+  it('POL-1 (partial) a model or provider allowlist that takes anything away newly blocks models; one that only adds does not', () => {
+    expect(newlyBlockedKinds(p(), p({ modelAllowlist: ['m1'] }))).toEqual(['models']);
+    expect(newlyBlockedKinds(p(), p({ providerAllowlist: ['openai'] }))).toEqual(['models']);
+    expect(newlyBlockedKinds(p({ modelAllowlist: ['m1', 'm2'] }), p({ modelAllowlist: ['m1'] }))).toEqual(['models']);
+    expect(newlyBlockedKinds(p({ modelAllowlist: ['m1'] }), p({ modelAllowlist: ['m1', 'm2'] }))).toEqual([]);
+    expect(newlyBlockedKinds(p({ providerAllowlist: ['openai'] }), p({ providerAllowlist: null }))).toEqual([]);
+  });
+
+  it('POL-1 (partial) the suspendable kinds are not listed here: they are suspended and listed by the suspension', () => {
+    expect(newlyBlockedKinds(p(), p({ guests: 'off', publicShareLinks: false, publishWeb: false, customDomains: false, integrationsAllowlist: [] }))).toEqual([]);
+  });
+
+  it('POL-1 (partial) several at once come back in a stable order', () => {
+    expect(newlyBlockedKinds(p(), p({ agentsAutonomous: false, publishedApps: false, modelAllowlist: [] }))).toEqual(['publishedApps', 'agentsAutonomous', 'models']);
+  });
+});
+
+describe('the Open drive default-role floor', () => {
+  it.each(['edit', 'EDIT', 'admin', 7, null, ['edit'], { floor: 'edit' }])('POL-6 (partial) an unknown or unparseable floor (%j) fails CLOSED to view, the floor that adds nothing — never to edit', (raw) => {
+    expect(parseOrgPolicies({ openDriveRoleFloor: raw }).openDriveRoleFloor).toBe(raw === 'edit' ? 'edit' : 'view');
+  });
+
+  it('POL-6 (partial) an unset floor is view, today\'s behaviour', () => {
+    expect(DEFAULT_ORG_POLICIES.openDriveRoleFloor).toBe('view');
+  });
+
+  const wide = (canView: boolean, canEdit: boolean) => ({ canView, canEdit, canShare: false });
+
+  it('POL-6 (partial) a view floor admits a default role that grants view or more drive-wide, or no drive-wide grant at all (the member view the resolver falls back to), and refuses an explicit no-view', () => {
+    expect(openDefaultRoleMeetsFloor('view', wide(true, false))).toBe(true);
+    expect(openDefaultRoleMeetsFloor('view', wide(true, true))).toBe(true);
+    expect(openDefaultRoleMeetsFloor('view', null)).toBe(true);
+    expect(openDefaultRoleMeetsFloor('view', wide(false, false))).toBe(false);
+  });
+
+  it('POL-6 (partial) an edit floor admits only a default role that grants edit drive-wide: view alone, or no drive-wide grant (member view), is below it', () => {
+    expect(openDefaultRoleMeetsFloor('edit', wide(true, true))).toBe(true);
+    expect(openDefaultRoleMeetsFloor('edit', wide(true, false))).toBe(false);
+    expect(openDefaultRoleMeetsFloor('edit', null)).toBe(false);
+    // Edit without view is not a usable grant.
+    expect(openDefaultRoleMeetsFloor('edit', wide(false, true))).toBe(false);
+  });
+
+  it('POL-6 (partial) a per-page entry wins over the drive-wide grant on its page, so every entry must meet the floor too', () => {
+    expect(openDefaultRoleMeetsFloor('view', wide(true, false), { p1: wide(true, false) })).toBe(true);
+    expect(openDefaultRoleMeetsFloor('view', wide(true, false), { p1: wide(false, false) })).toBe(false);
+    expect(openDefaultRoleMeetsFloor('edit', wide(true, true), { p1: wide(true, true), p2: wide(true, false) })).toBe(false);
+    expect(openDefaultRoleMeetsFloor('edit', wide(true, true), { p1: wide(true, true) })).toBe(true);
   });
 });

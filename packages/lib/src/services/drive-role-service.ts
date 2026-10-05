@@ -13,6 +13,10 @@ import type { PagePerm } from '../permissions/membership-queries';
 import { computeReorderPlan, lockedBatchReorder } from './reorder';
 import { loadEffectiveDriveMembership } from '../permissions/org-drive-membership';
 import { isDriveLead } from '../permissions/drive-relationship';
+import { guardOpenRoleFloor } from '../organizations/open-role-floor';
+
+// POL-6: a role write that leaves an Open org drive's default below the org floor throws this.
+export { OpenRoleFloorError } from '../organizations/open-role-floor';
 
 // Re-export canonical type so callers can import from one place
 export type { PagePerm };
@@ -271,7 +275,8 @@ export async function createDriveRole(
     throw new Error('Invalid driveWidePermissions structure');
   }
 
-  return db.transaction(async (tx) => {
+  // POL-6: judged on the drive's state after the write (open-role-floor.ts).
+  return db.transaction(async (tx) => guardOpenRoleFloor(tx, driveId, async () => {
     // Read existing roles for the position computation; when creating as
     // default this doubles as the ordered drive-wide lock acquisition.
     const existingRoles = input.isDefault
@@ -303,7 +308,7 @@ export async function createDriveRole(
     }).returning();
 
     return newRole as DriveRole;
-  });
+  }));
 }
 
 /**
@@ -337,7 +342,8 @@ export async function updateDriveRole(
     throw new Error('Cannot specify both permissions and permissionsPatch');
   }
 
-  return db.transaction(async (tx) => {
+  // POL-6: judged on the drive's state after the write (open-role-floor.ts).
+  return db.transaction(async (tx) => guardOpenRoleFloor(tx, driveId, async () => {
     let existingRole: typeof driveRoles.$inferSelect | undefined;
     if (input.isDefault) {
       // Setting a default updates every role row in the drive, so acquire the
@@ -388,7 +394,7 @@ export async function updateDriveRole(
       role: updatedRole as DriveRole,
       wasDefault: existingRole.isDefault,
     };
-  });
+  }));
 }
 
 /**
@@ -410,11 +416,10 @@ export async function deleteDriveRole(
     throw new Error('Role not found');
   }
 
-  await db.delete(driveRoles)
-    .where(and(
-      eq(driveRoles.id, roleId),
-      eq(driveRoles.driveId, driveId)
-    ));
+  // POL-6: deleting an Open org drive's default leaves its members on the plain MEMBER role, which is below an
+  // edit floor; judged on the state after the delete.
+  await db.transaction((tx) => guardOpenRoleFloor(tx, driveId, () =>
+    tx.delete(driveRoles).where(and(eq(driveRoles.id, roleId), eq(driveRoles.driveId, driveId)))));
 }
 
 /**
@@ -433,7 +438,9 @@ export async function reorderDriveRoles(
   driveId: string,
   roleIds: string[]
 ): Promise<void> {
-  await db.transaction(async (tx) => {
+  // POL-6: through the floor guard like every role write, so its locks come in the same order and the default it
+  // leaves (the lowest-positioned one wins) is judged against the org floor.
+  await db.transaction(async (tx) => guardOpenRoleFloor(tx, driveId, async () => {
     const existingRoles = await lockDriveRolesInOrder(tx, driveId);
     const existingIds = new Set(existingRoles.map(r => r.id));
     const invalidIds = roleIds.filter(id => !existingIds.has(id));
@@ -453,7 +460,7 @@ export async function reorderDriveRoles(
         touchColumns: [driveRoles.updatedAt],
       });
     }
-  });
+  }));
 }
 
 /**

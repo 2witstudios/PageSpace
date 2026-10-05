@@ -37,6 +37,7 @@ import {
   adminMailboxAddress,
   decideAutoJoin,
   decideDomainVerification,
+  isAuditedRejoinSkip,
   emailDomain,
   normalizeDomain,
   txtRecordsProve,
@@ -361,7 +362,13 @@ const autoJoinDeps: AutoJoinDeps = {
 };
 
 type JoinOutcome =
-  | { result: AutoJoinResult; sync: OrgMembershipSyncResult | null; domain: string };
+  | {
+    result: AutoJoinResult;
+    sync: OrgMembershipSyncResult | null;
+    domain: string;
+    /** [D-OW-27] Set when a departed person's re-join was turned away: the org whose log records it. */
+    rejoinOrgId?: string | null;
+  };
 
 /**
  * SEC-1: join this person to the org that holds their address's domain verified, if they qualify and a
@@ -434,7 +441,9 @@ export async function autoJoinVerifiedDomainOrg(
       isOrgGuest: isMember ? false : await isOrgGuest(orgId, input.userId, tx),
       orgActive: (await checkOrgActive(orgId, { executor: tx, now: input.now })).ok,
     });
-    if (decision.action === 'skip') return { result: { kind: 'skipped', reason: decision.reason }, sync: null, domain };
+    if (decision.action === 'skip') {
+      return { result: { kind: 'skipped', reason: decision.reason }, sync: null, domain, rejoinOrgId: isAuditedRejoinSkip(decision.reason) ? orgId : null };
+    }
     if (decision.action === 'refuse') return { result: { kind: 'refused', orgId, reason: decision.reason }, sync: null, domain };
 
     // The joiner takes a seat like an invite does; no inviter, so the refusal reads for a member.
@@ -458,6 +467,17 @@ export async function autoJoinVerifiedDomainOrg(
       resourceType: 'user',
       resourceId: input.userId,
       details: { domain: outcome.domain, role: 'MEMBER', seatRaised: result.seatRaised },
+    });
+  } else if (result.kind === 'skipped' && outcome.rejoinOrgId) {
+    // [D-OW-27] A departed person tried to come back and was turned away: the Owner sees that someone tried, by
+    // account id and domain, never by address (a suppression holds only a keyed hash of it).
+    await recordOrgAuditEventAfterCommit({
+      orgId: outcome.rejoinOrgId,
+      eventType: 'org.member.auto_join_refused',
+      actorId: input.userId,
+      resourceType: 'user',
+      resourceId: input.userId,
+      details: { domain: outcome.domain, reason: result.reason },
     });
   } else if (result.kind === 'refused') {
     // The Owner finds a refused join in the audit trail; the person simply is not added.

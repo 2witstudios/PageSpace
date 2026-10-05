@@ -47,7 +47,10 @@ export type InviteAcceptanceErrorCode =
   | 'ALREADY_MEMBER'
   | 'ACCOUNT_SUSPENDED'
   // POL-2: the org's guests policy is OFF, so an outsider cannot accept. The invitation is not consumed.
-  | 'GUEST_POLICY';
+  | 'GUEST_POLICY'
+  // POL-2: the org's guests policy is APPROVE and this invitation was not approved: the acceptance is queued for an
+  // Owner or Admin, nothing is granted, and the invitation is spent.
+  | 'GUEST_APPROVAL_PENDING';
 
 export type AcceptInviteResult = Result<AcceptedInviteData, InviteAcceptanceErrorCode>;
 

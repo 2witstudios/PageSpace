@@ -8,7 +8,7 @@
  * transfer write both in ONE transaction.
  */
 import { db } from '@pagespace/db/db';
-import { and, asc, count, eq, isNull, sql } from '@pagespace/db/operators';
+import { and, asc, count, eq, inArray, isNull, sql } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import {
   organizations,
@@ -22,6 +22,26 @@ import { decideOrgOwnerCandidate, loadOrgPrincipalKind } from './owner-candidate
 import { recordOrgAuditEventAfterCommit } from '../audit/org-audit';
 
 const UNIQUE_VIOLATION = '23505';
+
+/**
+ * An organization as the rest of the app sees it: every column EXCEPT `policies`. Policies are read only through
+ * policy-reader.ts (Spec POL-1), so the record a route gets from here cannot carry them, and the seam guard
+ * (policy-seam.test.ts) fails any whole-row read of the table that would.
+ */
+export type OrgRecord = Omit<Organization, 'policies'>;
+
+const ORG_RECORD = {
+  id: organizations.id,
+  name: organizations.name,
+  slug: organizations.slug,
+  avatarUrl: organizations.avatarUrl,
+  ownerId: organizations.ownerId,
+  stripeCustomerId: organizations.stripeCustomerId,
+  stripeSubscriptionId: organizations.stripeSubscriptionId,
+  seatAutoAdd: organizations.seatAutoAdd,
+  createdAt: organizations.createdAt,
+  updatedAt: organizations.updatedAt,
+} satisfies Record<keyof OrgRecord, unknown>;
 
 /** drizzle 0.45 wraps driver errors; the Postgres SQLSTATE lives on `.cause`. */
 export function pgErrorCode(error: unknown): string | undefined {
@@ -74,8 +94,8 @@ export async function findMembershipRole(orgId: string, userId: string): Promise
   return row?.role ?? null;
 }
 
-export async function findOrganizationById(orgId: string): Promise<Organization | null> {
-  const [row] = await db.select().from(organizations).where(eq(organizations.id, orgId)).limit(1);
+export async function findOrganizationById(orgId: string): Promise<OrgRecord | null> {
+  const [row] = await db.select(ORG_RECORD).from(organizations).where(eq(organizations.id, orgId)).limit(1);
   return row ?? null;
 }
 
@@ -177,7 +197,7 @@ export async function countOrgSeats(orgId: string): Promise<number> {
 }
 
 export type CreateOrganizationResult =
-  | { ok: true; organization: Organization }
+  | { ok: true; organization: OrgRecord }
   | { ok: false; reason: 'slug_taken' | 'owner_not_human' | 'owner_not_found' };
 
 /**
@@ -197,7 +217,7 @@ export async function createOrganization(input: {
       const [org] = await tx
         .insert(organizations)
         .values({ name: input.name, slug: input.slug, avatarUrl: input.avatarUrl ?? null, ownerId: input.ownerId })
-        .returning();
+        .returning(ORG_RECORD);
       await tx.insert(orgMembers).values({ orgId: org.id, userId: input.ownerId, role: 'OWNER' });
       return { ok: true, organization: org };
     });
@@ -219,7 +239,7 @@ export async function createOrganization(input: {
 }
 
 export type UpdateOrganizationResult =
-  | { ok: true; organization: Organization }
+  | { ok: true; organization: OrgRecord }
   | { ok: false; reason: 'not_found' | 'slug_taken' };
 
 export async function updateOrganization(
@@ -228,7 +248,7 @@ export async function updateOrganization(
   actorId?: string,
 ): Promise<UpdateOrganizationResult> {
   try {
-    const [organization] = await db.update(organizations).set(patch).where(eq(organizations.id, orgId)).returning();
+    const [organization] = await db.update(organizations).set(patch).where(eq(organizations.id, orgId)).returning(ORG_RECORD);
     if (!organization) return { ok: false, reason: 'not_found' };
     await recordOrgAuditEventAfterCommit({
       orgId,
@@ -244,3 +264,15 @@ export async function updateOrganization(
     throw error;
   }
 }
+
+/**
+ * Org names by id, for labels (wallet lists, spend choices, cap alerts — UI-8, UI-10, WAL-7): the
+ * name column only, never the row (POL-1: policies are read through policy-reader alone).
+ */
+export async function findOrganizationNames(orgIds: readonly string[]): Promise<Map<string, string>> {
+  const unique = [...new Set(orgIds)];
+  if (unique.length === 0) return new Map();
+  const rows = await db.select({ id: organizations.id, name: organizations.name }).from(organizations).where(inArray(organizations.id, unique));
+  return new Map(rows.map((r) => [r.id, r.name]));
+}
+

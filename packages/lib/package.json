@@ -2963,6 +2963,16 @@
       "types": "./dist/permissions/guest-admission.d.ts",
       "import": "./dist/permissions/guest-admission.js",
       "require": "./dist/permissions/guest-admission.js"
+    },
+    "./permissions/page-grant-admission": {
+      "types": "./dist/permissions/page-grant-admission.d.ts",
+      "import": "./dist/permissions/page-grant-admission.js",
+      "require": "./dist/permissions/page-grant-admission.js"
+    },
+    "./organizations/open-role-floor": {
+      "types": "./dist/organizations/open-role-floor.d.ts",
+      "import": "./dist/organizations/open-role-floor.js",
+      "require": "./dist/organizations/open-role-floor.js"
     }
   },
   "typesVersions": {
@@ -3848,6 +3858,12 @@
       ],
       "permissions/guest-admission": [
         "./dist/permissions/guest-admission.d.ts"
+      ],
+      "permissions/page-grant-admission": [
+        "./dist/permissions/page-grant-admission.d.ts"
+      ],
+      "organizations/open-role-floor": [
+        "./dist/organizations/open-role-floor.d.ts"
       ]
     }
   },

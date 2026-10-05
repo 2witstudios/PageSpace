@@ -27,6 +27,7 @@ import { driveEnvs } from '@pagespace/db/schema/drive-envs';
 import { publishedApps } from '@pagespace/db/schema/published-apps';
 import { walletConsumerCaps, wallets } from '@pagespace/db/schema/wallets';
 import { userConsumerKey } from '../billing/wallet-core';
+import { holdOrgGuestsUnderPolicy } from '../permissions/guest-holds';
 import { recordOrgAuditEvent } from '../audit/org-audit';
 import { getActorInfo, logActivityWithTx } from '../monitoring/activity-logger';
 import { parseScopeList } from '../auth/oauth/scopes';
@@ -334,7 +335,7 @@ export interface LeaveCascadeCounts extends OrgDriveGrantCounts {
 }
 
 export type LeaveOrganizationResult =
-  | { ok: true; revoked: LeaveCascadeCounts; reassigned: LeadReassignment[]; computeReattributed: ComputeReattribution[] }
+  | { ok: true; revoked: LeaveCascadeCounts; reassigned: LeadReassignment[]; computeReattributed: ComputeReattribution[]; /** Drives where the person's remaining access was parked or queued as a guest's (POL-2). */ heldAsGuest: number }
   | { ok: false; reason: LeaveRefusal };
 
 /**
@@ -463,6 +464,10 @@ export async function leaveOrganization(
   options.collectReattributed?.push(...computeReattributed);
 
   await tx.delete(orgMembers).where(eq(orgMembers.id, membership.id));
+  // POL-2 (Review #2762 P2-8): with the membership gone the person is an OUTSIDER of the org's drives, and the
+  // invited (`source: 'invite'`) rows and page grants they kept are guest access like any other. The org's guests
+  // policy decides them now, in this transaction: off parks them, approve queues them, on leaves them.
+  const heldAsGuest = await holdOrgGuestsUnderPolicy(tx, { orgId, userId });
   // SEC-1: the org remembers that this person left, however they had joined, in the same transaction
   // as the delete. This is the ONE place a membership ends (a seam test keeps it that way), so a
   // verified domain can never auto-join someone back who left or was removed.
@@ -496,6 +501,7 @@ export async function leaveOrganization(
     },
     reassigned,
     computeReattributed,
+    heldAsGuest: heldAsGuest.length,
   };
 }
 

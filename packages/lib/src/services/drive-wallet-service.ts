@@ -22,7 +22,7 @@ import { users } from '@pagespace/db/schema/auth';
 import { conversations } from '@pagespace/db/schema/conversations';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { creditHolds, creditLedger } from '@pagespace/db/schema/credits';
-import { orgMembers, organizations } from '@pagespace/db/schema/organizations';
+import { orgMembers } from '@pagespace/db/schema/organizations';
 import {
   wallets,
   walletConsumerCaps,
@@ -55,7 +55,7 @@ import { toSubscriptionTier } from '../billing/subscription-tiers';
 import { planDeleteWallet, planTopUp, planWalletPatch, type DeleteBlocker, type WalletPatchInput } from '../billing/wallet-admin';
 import { donateToDriveWallet } from '../billing/wallet-funding-shell';
 import { checkOrgActive } from '../organizations/status';
-import { findMembershipRole } from '../organizations/repository';
+import { findMembershipRole, findOrganizationNames } from '../organizations/repository';
 import { planConsumerCapWrite, userConsumerKey, utcDayStartMs, utcMonthStartMs, type ConsumerCapWriteInput, type SpendSourceKind } from '../billing/wallet-core';
 import {
   capRemainingCents,
@@ -278,12 +278,9 @@ async function driveNamesById(driveIds: string[]): Promise<Map<string, string>> 
   return new Map(rows.map((r) => [r.id, r.name]));
 }
 
-/** Org names by id, for wallet lists (UI-10). */
+/** Org names by id, for wallet lists (UI-10): through the org repository (POL-1 seam). */
 async function orgNamesById(orgIds: string[]): Promise<Map<string, string>> {
-  const unique = [...new Set(orgIds)];
-  if (unique.length === 0) return new Map();
-  const rows = await db.select({ id: organizations.id, name: organizations.name }).from(organizations).where(inArray(organizations.id, unique));
-  return new Map(rows.map((r) => [r.id, r.name]));
+  return findOrganizationNames(orgIds);
 }
 
 async function poolFacts(orgId: string): Promise<PoolFacts | null> {

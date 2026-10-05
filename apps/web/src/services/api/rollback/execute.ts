@@ -13,6 +13,7 @@ import type { ActivityAction, ActivityActionResult, ActivityActionPreview } from
 import type { DeferredWorkflowTrigger, ActivityOperation } from '@pagespace/lib/monitoring/activity-logger';
 import type { RollbackContext } from '@pagespace/lib/permissions/rollback-permissions';
 import { withTx, type RollbackDeps, type PageUpdateContext, type PageMutationMeta } from './deps';
+import { guardOpenRoleFloor } from '@pagespace/lib/organizations/open-role-floor';
 import { AGENT_CONFIG_ROLLBACK_FIELDS } from './operations';
 import { isRollingBackRollback } from './target-values';
 import { getActivityById } from './activity-repo';
@@ -105,6 +106,9 @@ export async function executeRollback(
 
   const warnings: string[] = [...preview.warnings];
   const txDeps = withTx(deps, tx);
+  /** Run a write in the caller's transaction, or in one of its own when there is none. */
+  const inTransaction = <T>(run: (d: RollbackDeps) => Promise<T>): Promise<T> =>
+    tx ? run(txDeps) : deps.db.transaction((t) => run(withTx(deps, t as unknown as typeof db)));
   const changeGroupId = deps.genChangeGroupId();
   const changeGroupType = deps.inferChangeGroupType({ isAiGenerated: false });
 
@@ -167,9 +171,10 @@ export async function executeRollback(
         break;
 
       case 'permission':
-        restoredValues = rollingBackRollback
-          ? await redoPermissionChange(txDeps, activity, preview.targetValues, effectiveSourceOperation)
-          : await rollbackPermissionChange(txDeps, activity);
+        // POL-2: a re-entering grant is decided by the org's guests policy inside a transaction (deps.admitReentry).
+        restoredValues = await inTransaction((d) => rollingBackRollback
+          ? redoPermissionChange(d, activity, preview.targetValues, effectiveSourceOperation)
+          : rollbackPermissionChange(d, activity));
         break;
 
       case 'agent': {
@@ -182,16 +187,26 @@ export async function executeRollback(
       }
 
       case 'member':
-        restoredValues = rollingBackRollback
-          ? await redoMemberChange(txDeps, activity, preview.targetValues, effectiveSourceOperation)
-          : await rollbackMemberChange(txDeps, activity);
+        // POL-2: a re-entering member row is decided by the org's guests policy inside a transaction.
+        restoredValues = await inTransaction((d) => rollingBackRollback
+          ? redoMemberChange(d, activity, preview.targetValues, effectiveSourceOperation)
+          : rollbackMemberChange(d, activity));
         break;
 
-      case 'role':
-        restoredValues = rollingBackRollback
-          ? await redoRoleChange(txDeps, activity, preview.targetValues, effectiveSourceOperation)
-          : await rollbackRoleChange(txDeps, activity);
+      case 'role': {
+        const runRole = (d: RollbackDeps) => rollingBackRollback
+          ? redoRoleChange(d, activity, preview.targetValues, effectiveSourceOperation)
+          : rollbackRoleChange(d, activity);
+        // POL-6: undoing or redoing a role change may change an Open org drive's default role; it is judged against
+        // the org's floor like any role write, inside a transaction so a refusal writes nothing.
+        const roleDriveId = activity.driveId;
+        restoredValues = roleDriveId === null
+          ? await runRole(txDeps)
+          : tx
+            ? await guardOpenRoleFloor(tx, roleDriveId, () => runRole(txDeps))
+            : await deps.db.transaction((t) => guardOpenRoleFloor(t, roleDriveId, () => runRole(withTx(deps, t as unknown as typeof db))));
         break;
+      }
 
       case 'message':
         restoredValues = rollingBackRollback

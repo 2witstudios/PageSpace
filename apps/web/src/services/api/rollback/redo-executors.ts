@@ -19,7 +19,44 @@ import {
 } from './redo-plans';
 import type { ActivityOperation } from '@pagespace/lib/monitoring/activity-logger';
 import type { RollbackDeps, PageUpdateContext, PageChangeResult } from './deps';
+import type { ReentryDecision } from '@pagespace/lib/permissions/guest-holds';
+import { assertRestoredLeadEligible } from './lead-eligibility';
 import type { ActivityLogForRollback } from './types';
+
+/** POL-2: the result of a rollback or redo write the org's guests policy did not let through (nothing was written). */
+function guestPolicySkip(decision: ReentryDecision, ids: Record<string, string>): Record<string, unknown> {
+  return { skipped: true, reason: decision.outcome === 'refused' ? 'guest_policy_off' : 'guest_approval_pending', ...ids };
+}
+
+const grantFlags = (v: { canView?: unknown; canEdit?: unknown; canShare?: unknown; canDelete?: unknown }) => ({
+  canView: v.canView === true,
+  canEdit: v.canEdit === true,
+  canShare: v.canShare === true,
+  canDelete: v.canDelete === true,
+});
+
+/** The drive a page lives in (a page permission's drive), or null when the page is gone. */
+async function pageDriveId(deps: RollbackDeps, pageId: string): Promise<string | null> {
+  const [row] = await deps.db.select({ driveId: pages.driveId }).from(pages).where(eq(pages.id, pageId)).limit(1);
+  return row?.driveId ?? null;
+}
+
+/** POL-2: may this page grant (re-)enter? Asked only when it gives some access. */
+async function admitGrant(deps: RollbackDeps, pageId: string, userId: string, values: { canView?: unknown; canEdit?: unknown; canShare?: unknown; canDelete?: unknown; expiresAt?: unknown }): Promise<ReentryDecision> {
+  const flags = grantFlags(values);
+  if (!flags.canView && !flags.canEdit && !flags.canShare && !flags.canDelete) return { outcome: 'admit' };
+  const driveId = await pageDriveId(deps, pageId);
+  if (!driveId) return { outcome: 'admit' };
+  // The grant's expiry travels with it, so a queued request never outlives it (re-verify N1).
+  const expiresAt = values.expiresAt instanceof Date || typeof values.expiresAt === 'string' ? values.expiresAt : null;
+  return deps.admitReentry(deps.db, { driveId, userId, grants: [{ pageId, ...flags, expiresAt }], requestedBy: null });
+}
+
+/** POL-2: may this member row (re-)enter? A row that already exists is a role change, not an admission. */
+async function admitMember(deps: RollbackDeps, driveId: string, userId: string, values: object): Promise<ReentryDecision> {
+  return deps.admitReentry(deps.db, { driveId, userId, member: JSON.parse(JSON.stringify(values)) as Record<string, unknown>, requestedBy: null, memberRowIsRoleChange: true });
+}
+
 
 /** Execute a page redo: apply the redo update-data with the isTrashed cascade (orphan/restore children). */
 export async function redoPageChange(
@@ -105,6 +142,7 @@ export async function redoDriveChange(
     updateData.trashedAt = null;
   }
 
+  await assertRestoredLeadEligible(deps, activity.driveId, updateData);
   await deps.db.update(drives).set({ ...updateData, updatedAt: deps.clock() }).where(eq(drives.id, activity.driveId));
 
   return updateData;
@@ -121,6 +159,8 @@ export async function redoPermissionChange(
 
   switch (plan.op) {
     case 'upsert': {
+      const decision = await admitGrant(deps, plan.values.pageId, plan.values.userId, plan.values);
+      if (decision.outcome !== 'admit') return guestPolicySkip(decision, { pageId: plan.values.pageId, userId: plan.values.userId });
       await deps.db
         .insert(pagePermissions)
         .values(plan.values)
@@ -128,6 +168,8 @@ export async function redoPermissionChange(
       return { ...plan.values };
     }
     case 'update': {
+      const decision = await admitGrant(deps, plan.pageId, plan.userId, plan.set);
+      if (decision.outcome !== 'admit') return guestPolicySkip(decision, { pageId: plan.pageId, userId: plan.userId });
       await deps.db
         .update(pagePermissions)
         .set(plan.set)
@@ -154,6 +196,8 @@ export async function redoMemberChange(
 
   switch (plan.op) {
     case 'upsert': {
+      const decision = await admitMember(deps, plan.values.driveId, plan.values.userId, plan.values);
+      if (decision.outcome !== 'admit') return guestPolicySkip(decision, { driveId: plan.values.driveId, userId: plan.values.userId });
       await deps.db
         .insert(driveMembers)
         .values(plan.values)

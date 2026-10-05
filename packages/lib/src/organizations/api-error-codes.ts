@@ -70,6 +70,8 @@ export const ORG_DOMAIN_ERROR_CODES = [
   // guest approvals
   'not_a_link_request',
   'link_gone',
+  'not_a_page_grant',
+  'page_gone',
 ] as const;
 
 /** Wallet, cap and spend-source codes (drive-wallet-service, wallet-access). */

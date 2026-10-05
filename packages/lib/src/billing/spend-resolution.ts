@@ -15,7 +15,6 @@
 
 import { loadConsumerCapFacts } from './consumer-caps';
 import { drives } from '@pagespace/db/schema/core';
-import { organizations } from '@pagespace/db/schema/organizations';
 import { formatCreditCount } from './money-model';
 import { seatCapCheck } from './wallet-core';
 import { db } from '@pagespace/db/db';
@@ -57,6 +56,7 @@ import { toSubscriptionTier, type SubscriptionTier } from './subscription-tiers'
 import { ensurePersonalRootWalletId } from './personal-wallet';
 import { loadSeatCapFacts } from './seat-allowance';
 import { readOrgSpendPolicy } from '../organizations/policy-reader';
+import { findOrganizationNames } from '../organizations/repository';
 
 const WALLET_FACTS = {
   id: wallets.id,
@@ -491,6 +491,6 @@ export async function listSpendChoices(userId: string, driveId: string | null): 
 /** The drive's and the org's names, for labels (UI-8). */
 async function spendPlaceNames(driveId: string, orgId: string | null): Promise<{ driveName: string | null; orgName: string | null }> {
   const [drive] = await db.select({ name: drives.name }).from(drives).where(eq(drives.id, driveId));
-  const [org] = orgId ? await db.select({ name: organizations.name }).from(organizations).where(eq(organizations.id, orgId)) : [];
-  return { driveName: drive?.name ?? null, orgName: org?.name ?? null };
+  const orgName = orgId ? (await findOrganizationNames([orgId])).get(orgId) ?? null : null;
+  return { driveName: drive?.name ?? null, orgName };
 }

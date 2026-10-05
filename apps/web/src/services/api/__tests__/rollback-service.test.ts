@@ -87,6 +87,10 @@ vi.mock('@pagespace/db/schema/members', () => ({
 }));
 
 // Mock permission checks
+// POL-2: a re-entering grant or member asks the org's guests policy (proven against real Postgres in
+// guest-policy-reentry.integration.test.ts); these tests are about drives with no org, which it admits.
+vi.mock('@pagespace/lib/permissions/guest-holds', () => ({ admitReentry: vi.fn(async () => ({ outcome: 'admit' })) }));
+
 vi.mock('@pagespace/lib/permissions/rollback-permissions', () => ({
     canUserRollback: vi.fn(),
     isRollbackableOperation: vi.fn(),
@@ -200,6 +204,8 @@ const createMockActivity = (overrides: Partial<ActivityLogForRollback> = {}): Ac
 describe('rollback-service', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Grant and member rollbacks run in a transaction of their own when the caller passes none.
+    mockDb.transaction.mockImplementation(async (fn: (tx: typeof mockDb) => Promise<unknown>) => fn(mockDb));
   });
 
   // ============================================

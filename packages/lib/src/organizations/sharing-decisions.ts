@@ -83,3 +83,22 @@ export function decideGuestAdmission(policies: OrgPolicies | null, who: { isOrgM
       return 'allow';
   }
 }
+
+/** The four flags of a page grant. */
+export interface PageGrantFlags {
+  canView: boolean;
+  canEdit: boolean;
+  canShare: boolean;
+  canDelete: boolean;
+}
+
+const PAGE_GRANT_FLAGS = ['canView', 'canEdit', 'canShare', 'canDelete'] as const;
+
+/**
+ * POL-2: does writing `next` give a person more than they hold now (`existing`, null when they hold no grant)? Only
+ * a grant that WIDENS access admits someone, so only that asks the guests policy. Narrowing or repeating a grant
+ * never does: a guest can always be given less.
+ */
+export function pageGrantWidensAccess(existing: PageGrantFlags | null, next: PageGrantFlags): boolean {
+  return PAGE_GRANT_FLAGS.some((flag) => next[flag] && !existing?.[flag]);
+}

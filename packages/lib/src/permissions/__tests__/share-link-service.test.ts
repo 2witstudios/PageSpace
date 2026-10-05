@@ -168,6 +168,8 @@ beforeEach(() => {
   // Default: drives are STANDARD (not Home), pages have a drive
   mockDb.query.drives.findFirst.mockResolvedValue({ kind: 'STANDARD' });
   mockDb.query.pages.findFirst.mockResolvedValue({ driveId: DRIVE_ID });
+  // POL-2: a redemption's writes run in a transaction that re-asks the guests policy (a drive with no org here).
+  mockDb.transaction.mockImplementation(async (fn: (tx: typeof mockDb) => Promise<unknown>) => fn(mockDb));
 });
 
 describe('createDriveShareLink', () => {

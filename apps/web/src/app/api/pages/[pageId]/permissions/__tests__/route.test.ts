@@ -435,6 +435,28 @@ describe('POST /api/pages/[pageId]/permissions', () => {
     });
   });
 
+  describe('the org guests policy', () => {
+    it('POL-2 (partial) X-6 (partial) guests OFF: 403 naming the policy, and no notification', async () => {
+      vi.mocked(grantPagePermission).mockResolvedValue({ ok: false, error: { code: 'GUEST_POLICY_OFF', message: 'no guests' } });
+
+      const response = await POST(createRequest({ userId: mockTargetUserId, canView: true }), { params: mockParams });
+
+      expect(response.status).toBe(403);
+      expect(await response.json()).toEqual({ error: 'no guests', code: 'org_policy', policy: 'guests' });
+      expect(createPermissionNotification).not.toHaveBeenCalled();
+    });
+
+    it('POL-2 (partial) guests APPROVE: 202 pending approval with the request id; nothing is granted, so nothing is notified', async () => {
+      vi.mocked(grantPagePermission).mockResolvedValue({ ok: false, error: { code: 'GUEST_APPROVAL_PENDING', holdId: 'hold_1', message: 'waiting' } });
+
+      const response = await POST(createRequest({ userId: mockTargetUserId, canView: true }), { params: mockParams });
+
+      expect(response.status).toBe(202);
+      expect(await response.json()).toEqual({ kind: 'pending_approval', holdId: 'hold_1', message: 'waiting' });
+      expect(createPermissionNotification).not.toHaveBeenCalled();
+    });
+  });
+
   describe('error handling', () => {
     it('returns 400 for VALIDATION_FAILED error', async () => {
       vi.mocked(grantPagePermission).mockResolvedValue({
