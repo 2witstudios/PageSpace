@@ -5,6 +5,8 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: ['src/**/*.test.{ts,tsx}'],
+    // Need a live Postgres: run by vitest.integration.config.ts (test:integration).
+    exclude: ['src/**/*.integration.test.{ts,tsx}'],
     // CI runs `turbo run test:coverage`; json-summary feeds coverage-report.mjs.
     coverage: {
       provider: 'v8',
