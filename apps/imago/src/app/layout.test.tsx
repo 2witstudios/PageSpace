@@ -67,3 +67,48 @@ describe('RootLayout theme', () => {
     });
   });
 });
+
+const NOT_FOUND_DIGEST = 'NEXT_HTTP_ERROR_FALLBACK;404';
+
+const renderOrDigest = async (): Promise<{ html: string | null; digest: string | null }> => {
+  try {
+    return { html: await renderHtml(undefined), digest: null };
+  } catch (error) {
+    const digest = (error as { digest?: unknown }).digest;
+    return { html: null, digest: typeof digest === 'string' ? digest : null };
+  }
+};
+
+// A router prefetch skips middleware (see its matcher), so the layout is what
+// keeps those requests from rendering imago while it is switched off.
+// notFound() is the real one, so its digest is what Next acts on.
+describe('RootLayout IMAGO_ENABLED backstop', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  test('flag off', async () => {
+    for (const flag of [undefined, 'false', '', 'TRUE', '1']) {
+      vi.stubEnv('IMAGO_ENABLED', flag);
+
+      assert({
+        given: `IMAGO_ENABLED=${JSON.stringify(flag)}`,
+        should: 'answer notFound() instead of rendering',
+        actual: await renderOrDigest(),
+        expected: { html: null, digest: NOT_FOUND_DIGEST },
+      });
+    }
+  });
+
+  test('flag on', async () => {
+    vi.stubEnv('IMAGO_ENABLED', 'true');
+    const { html, digest } = await renderOrDigest();
+
+    assert({
+      given: "IMAGO_ENABLED='true'",
+      should: 'render the page with the request nonce on the webpack nonce script',
+      actual: [digest, html?.includes('<script nonce="test-nonce">')],
+      expected: [null, true],
+    });
+  });
+});
