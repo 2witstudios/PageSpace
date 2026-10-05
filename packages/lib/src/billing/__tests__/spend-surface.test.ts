@@ -164,7 +164,7 @@ describe('automationSpendCopy: who an automation spends as', () => {
 
   it('SPEND-6 (partial) an unknown creator or wallet still reads as a sentence', () => {
     expect(automationSpendCopy({ creatorName: null, walletLabel: null }).detail).toBe(
-      "Each scheduled run spends from the drive's wallet as its creator, under their caps and fallback. A channel mention or a manual Run counts against whoever triggered it. If no source can pay, the run is skipped and logged.",
+      "Each scheduled run spends as its creator, from the drive's wallet once it has one. A channel mention or a manual Run counts against whoever triggered it. If no source can pay, the run is skipped and logged.",
     );
     expect(automationSpendCopy({ creatorName: null, walletLabel: null }).badge).toBe('As its creator');
   });

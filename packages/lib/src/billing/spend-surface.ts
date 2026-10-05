@@ -161,10 +161,14 @@ export function spendFallbackCopy(input: { from: unknown; to: unknown; fromLabel
  */
 export function automationSpendCopy(input: { creatorName: string | null; walletLabel: string | null }): { badge: string; line: string | null; detail: string } {
   const firstName = input.creatorName?.trim().split(/\s+/)[0] ?? null;
-  const wallet = input.walletLabel ?? "the drive's wallet";
+  const who = input.creatorName ?? 'its creator';
+  // A drive with no wallet gives an automation nothing to spend (SPEND-6): say so, not "its wallet".
+  const spends = input.walletLabel
+    ? `Each scheduled run spends from ${input.walletLabel} as ${who}, under their caps and fallback.`
+    : `Each scheduled run spends as ${who}, from the drive's wallet once it has one.`;
   return {
     badge: firstName ? `As ${firstName}` : 'As its creator',
     line: input.creatorName ? `Created by ${input.creatorName}` : null,
-    detail: `Each scheduled run spends from ${wallet} as ${input.creatorName ?? 'its creator'}, under their caps and fallback. A channel mention or a manual Run counts against whoever triggered it. If no source can pay, the run is skipped and logged.`,
+    detail: `${spends} A channel mention or a manual Run counts against whoever triggered it. If no source can pay, the run is skipped and logged.`,
   };
 }

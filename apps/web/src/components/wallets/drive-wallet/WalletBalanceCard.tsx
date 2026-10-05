@@ -76,6 +76,7 @@ export function WalletBalanceCard({ driveId, driveName, orgName, wallet, panels,
             <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground tabular-nums">
               <span>
                 {funder.spentCredits} credits spent · {wallet.remainingCredits} credits left
+                {funder.topupRemainingCents > 0 && ` · includes ${funder.topupRemainingCredits} from top-ups`}
                 {funder.debtCents > 0 && ` · over by ${funder.debtCredits} credits`}
               </span>
               {period.range && <span>{period.range}</span>}
@@ -154,7 +155,17 @@ export function WalletBalanceCard({ driveId, driveName, orgName, wallet, panels,
           </>
         )}
 
-        <p className="text-xs text-muted-foreground">{status.hint}</p>
+        {panels.pause ? (
+          // The legend under the switch (canvas v9 DriveWallet / WalletStates): what each status means.
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs text-muted-foreground" data-testid="wallet-status-legend">
+            <span>Status</span>
+            <WalletStatusBadge status="active" /> <span>has credits left</span>
+            <WalletStatusBadge status="over" /> <span>allocation spent</span>
+            <WalletStatusBadge status="paused" /> <span>stopped by whoever funds it</span>
+          </div>
+        ) : (
+          <p className="text-xs text-muted-foreground">{status.hint}</p>
+        )}
       </CardContent>
     </Card>
   );

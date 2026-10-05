@@ -17,22 +17,25 @@
 import { formatCreditCount } from './money-model';
 import type { CapWindow, RefusalReason, SkipReason, SpendSourceKind } from './wallet-core';
 
-export const REFUSAL_REASONS = [
-  'no_source_chosen',
-  'source_empty',
-  'source_paused',
-  'source_unavailable',
-  'guest_drive_wallet_off',
-  'source_cap_reached',
-  'chosen_wallet_unavailable',
-] as const satisfies readonly RefusalReason[];
+/** Keyed by the union, so a reason added to wallet-core fails to compile here until it is listed. */
+const REFUSAL_REASON_KEYS: Record<RefusalReason, true> = {
+  no_source_chosen: true,
+  source_empty: true,
+  source_paused: true,
+  source_unavailable: true,
+  guest_drive_wallet_off: true,
+  source_cap_reached: true,
+  chosen_wallet_unavailable: true,
+};
+const SKIP_REASON_KEYS: Record<SkipReason, true> = {
+  drive_wallet_empty: true,
+  drive_wallet_paused: true,
+  no_drive_wallet: true,
+  creator_departed: true,
+};
 
-export const SKIP_REASONS = [
-  'drive_wallet_empty',
-  'drive_wallet_paused',
-  'no_drive_wallet',
-  'creator_departed',
-] as const satisfies readonly SkipReason[];
+export const REFUSAL_REASONS = Object.keys(REFUSAL_REASON_KEYS) as RefusalReason[];
+export const SKIP_REASONS = Object.keys(SKIP_REASON_KEYS) as SkipReason[];
 
 /** The source a refusal names, as the person's own options list labels it. */
 export interface RefusedSource {

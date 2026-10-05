@@ -27,6 +27,7 @@ vi.mock('@/components/billing/CreditBalance', () => ({ CreditBalance: () => <div
 import { SpendSourcePopover } from '../SpendSourcePopover';
 import { SpendRefusalCardView, SpendRefusalCard } from '../SpendRefusalCard';
 import { ComposerSpendStrip } from '../ComposerSpendStrip';
+import { SpendSurfaceProvider } from '../SpendSurface';
 import { AiBalanceWidget } from '@/components/billing/AiBalanceWidget';
 import { useSpendContextStore } from '@/stores/useSpendContextStore';
 
@@ -41,7 +42,7 @@ beforeEach(() => {
   spendState.choose.mockClear();
   toast.success.mockClear();
   toast.error.mockClear();
-  useSpendContextStore.setState({ active: null, popoverOpen: false });
+  useSpendContextStore.setState({ entries: [], active: null, popoverOpen: false });
 });
 
 describe('SpendSourcePopover: the header chip', () => {
@@ -60,6 +61,10 @@ describe('SpendSourcePopover: the header chip', () => {
     const chip = screen.getByTestId('spend-source-chip');
     expect(chip.textContent).toBe('192 credits');
     expect(chip.textContent).not.toContain('Product');
+    // Below sm the count is hidden and the chip is the icon alone: still one token, still reachable (SPEND-2 on phones).
+    expect(chip.className).toContain('inline-flex');
+    expect(chip.className).not.toMatch(/(^|\s)hidden(\s|$)/);
+    expect(screen.getByTestId('spend-source-chip-text').className).toMatch(/\bhidden\b.*\bsm:inline\b/);
     expect(chip.className).toMatch(/max-w-\[8\.5rem\]/);
     expect(chip.className).toContain('shrink-0');
     expect(chip.className).toContain('whitespace-nowrap');
@@ -103,7 +108,7 @@ describe('SpendSourcePopover: the header chip', () => {
 
 describe('AiBalanceWidget: which chip the header shows', () => {
   it('UI-8 (partial) the personal chip stays where the conversation in view has one source (SPEND-2, D20.8)', () => {
-    useSpendContextStore.setState({ active: { conversationId: 'c1', driveId: 'd-product', isGlobal: false, hasMessages: false } });
+    useSpendContextStore.setState({ active: { conversationId: 'c1', driveId: 'd-product', isGlobal: false } });
     spendState.spend = conversation([own], spends(own));
     render(<AiBalanceWidget />);
     expect(screen.getByTestId('personal-credit-chip')).toBeTruthy();
@@ -111,7 +116,7 @@ describe('AiBalanceWidget: which chip the header shows', () => {
   });
 
   it('UI-8 (partial) with more than one source the spending-from chip replaces it', () => {
-    useSpendContextStore.setState({ active: { conversationId: 'c1', driveId: 'd-product', isGlobal: false, hasMessages: false } });
+    useSpendContextStore.setState({ active: { conversationId: 'c1', driveId: 'd-product', isGlobal: false } });
     spendState.spend = conversation([product, seat, own], spends(product));
     render(<AiBalanceWidget />);
     expect(screen.getByTestId('spend-source-chip').textContent).toBe('192 credits');
@@ -119,7 +124,7 @@ describe('AiBalanceWidget: which chip the header shows', () => {
   });
 
   it('UI-8 (partial) a paused drive wallet reads "Paused" on the chip', () => {
-    useSpendContextStore.setState({ active: { conversationId: 'c1', driveId: 'd-product', isGlobal: false, hasMessages: false } });
+    useSpendContextStore.setState({ active: { conversationId: 'c1', driveId: 'd-product', isGlobal: false } });
     spendState.spend = conversation([product, seat, own], { kind: 'refuse', source: 'drive_wallet', reason: 'source_paused', options: [] });
     render(<AiBalanceWidget />);
     expect(screen.getByTestId('spend-source-chip').textContent).toBe('Paused');
@@ -164,9 +169,12 @@ describe('SpendRefusalCard: the refusal card', () => {
   });
 
   it('WAL-7 (partial) a reached cap names the window that ran out (source_cap_reached)', () => {
-    useSpendContextStore.setState({ active: { conversationId: 'c1', driveId: 'd-product', isGlobal: false, hasMessages: true } });
     spendState.spend = conversation([product, seat, own], { kind: 'refuse', source: 'drive_wallet', reason: 'source_cap_reached', options: [] });
-    render(<SpendRefusalCard refusal={{ source: 'drive_wallet', reason: 'source_cap_reached', options: ['seat_allowance', 'own_credits'] }} />);
+    render(
+      <SpendSurfaceProvider conversationId="c1" driveId="d-product" isGlobal={false}>
+        <SpendRefusalCard refusal={{ source: 'drive_wallet', reason: 'source_cap_reached', options: ['seat_allowance', 'own_credits'] }} />
+      </SpendSurfaceProvider>,
+    );
     expect(screen.getByText("You've reached your daily cap on Product wallet")).toBeTruthy();
   });
 
@@ -181,11 +189,15 @@ describe('SpendRefusalCard: the refusal card', () => {
 });
 
 describe('ComposerSpendStrip: the strip before the first message', () => {
-  it('SPEND-2 (partial) names the source before the first message and registers the conversation for the header chip', () => {
+  it('SPEND-2 (partial) names the source before the first message; its surface registers the conversation for the header chip', () => {
     spendState.spend = conversation([product, seat, own], spends(product));
-    render(<ComposerSpendStrip conversationId="c1" driveId="d-product" isGlobal={false} hasMessages={false} />);
+    render(
+      <SpendSurfaceProvider conversationId="c1" driveId="d-product" isGlobal={false}>
+        <ComposerSpendStrip conversationId="c1" driveId="d-product" isGlobal={false} hasMessages={false} />
+      </SpendSurfaceProvider>,
+    );
     expect(screen.getByTestId('composer-spend-strip').textContent).toContain('Spending from Product wallet · 192 credits left');
-    expect(useSpendContextStore.getState().active).toEqual({ conversationId: 'c1', driveId: 'd-product', isGlobal: false, hasMessages: false });
+    expect(useSpendContextStore.getState().active).toEqual({ conversationId: 'c1', driveId: 'd-product', isGlobal: false });
   });
 
   it('SPEND-4 (partial) when the chosen source is refused, the strip names it and what is wrong, and asks for a choice', () => {

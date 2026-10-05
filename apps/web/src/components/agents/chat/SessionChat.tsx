@@ -36,6 +36,7 @@ import { SideQuestionCard } from '@/components/ai/btw/SideQuestionCard';
 import type { AgentInfo } from '@/types/agent';
 import { useAgentSessionChat, type UseAgentSessionChatReturn } from './useAgentSessionChat';
 import { ComposerSpendStrip } from '@/components/wallets/ComposerSpendStrip';
+import { SpendSurfaceProvider } from '@/components/wallets/SpendSurface';
 
 export interface SessionChatProps {
   /** This conversation's pane-hosting session — null (the default) for a plain, session-less conversation. See `SessionChatViewProps.sessionId`. */
@@ -172,6 +173,8 @@ export function SessionChatView({
     // isReadOnly viewers get no answer plumbing at all — same as rendering
     // outside a chat surface entirely — so AskUserQuestionCard's options and
     // Submit stay disabled instead of letting a viewer attempt a 403'd resume.
+    // SpendSurfaceProvider: every spend control inside acts on THIS conversation (SPEND-3).
+    <SpendSurfaceProvider conversationId={spendScope ? conversationId : null} driveId={spendScope?.driveId ?? null} isGlobal={spendScope?.isGlobal ?? false}>
     <AskUserAnswerProvider value={isReadOnly ? null : chat.askUserAnswering}>
     <div
       data-testid="session-chat"
@@ -289,5 +292,6 @@ export function SessionChatView({
       )}
     </div>
     </AskUserAnswerProvider>
+    </SpendSurfaceProvider>
   );
 }

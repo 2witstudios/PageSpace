@@ -24,9 +24,10 @@ interface SpendSourcePopoverProps {
 
 /**
  * The header's spending-from chip and its popover (Spec UI-8, SPEND-2, SPEND-3; canvas v9
- * SpendSource). The chip is ONE short token — the source's kind as an icon and a credit count —
- * so it never widens the header at lg (the wallet's name lives in the popover). Switching here
- * changes the source for this conversation only, and it persists for it.
+ * SpendSource). The chip is ONE short token — the source's kind as an icon and a credit count
+ * (the icon alone below sm) — so it never widens the header (the wallet's name lives in the
+ * popover). Switching here changes the source of the conversation the chip shows — the
+ * surface the person last focused, by its explicit id — and it persists for it.
  */
 export function SpendSourcePopover({ chip, options, selectedWalletId, driveName, open, onOpenChange, onChoose }: SpendSourcePopoverProps) {
   return (
@@ -37,15 +38,17 @@ export function SpendSourcePopover({ chip, options, selectedWalletId, driveName,
           data-testid="spend-source-chip"
           aria-label={chip.ariaLabel}
           className={cn(
-            'hidden sm:inline-flex h-8 max-w-[8.5rem] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border px-2.5 text-xs font-medium tabular-nums',
+            // Below sm the chip is the source's icon alone (still one token, SPEND-2 on phones);
+            // from sm the count joins it. The full name is in the popover and the aria-label.
+            'inline-flex h-8 max-w-[8.5rem] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border px-2 text-xs font-medium tabular-nums sm:px-2.5',
             'bg-card text-foreground hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
             chip.tone === 'refused' && 'border-amber-300 text-amber-800 dark:border-amber-700 dark:text-amber-300',
             chip.tone === 'paused' && 'border-dashed text-muted-foreground',
           )}
         >
           <SpendSourceIcon source={chip.source} paused={chip.tone === 'paused'} className="text-muted-foreground" />
-          <span className="truncate">{chip.text}</span>
-          <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground" aria-hidden="true" />
+          <span className="hidden truncate sm:inline" data-testid="spend-source-chip-text">{chip.text}</span>
+          <ChevronDown className="hidden h-3 w-3 shrink-0 text-muted-foreground sm:inline" aria-hidden="true" />
         </button>
       </PopoverTrigger>
       <PopoverContent align="end" className="w-[min(24rem,calc(100vw-2rem))] p-0">

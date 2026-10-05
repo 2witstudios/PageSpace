@@ -10,7 +10,7 @@ import type { AISpendRefusal } from '@/lib/ai/shared/aiErrorCause';
 import { orgErrorMessage } from '@/lib/orgs/org-error-copy';
 import { useConversationSpend } from '@/hooks/useConversationSpend';
 import { useDriveWallet } from '@/hooks/useDriveWallet';
-import { useSpendContextStore } from '@/stores/useSpendContextStore';
+import { useSpendSurface } from './SpendSurface';
 
 export interface SpendRefusalCardViewProps {
   refusal: AISpendRefusal;
@@ -82,12 +82,16 @@ export function SpendRefusalCardView({ refusal, choices, myCap, now = new Date()
   );
 }
 
-/** The card for the conversation in view: reads its options, and the viewer's cap when a cap refused. */
+/**
+ * The card for the conversation of the surface it is rendered in (SpendSurfaceProvider): the
+ * refused conversation itself, never another mounted chat's (review #2835 P1-1). Reads its
+ * options, and the viewer's cap when a cap refused.
+ */
 export function SpendRefusalCard({ refusal }: { refusal: AISpendRefusal }) {
-  const active = useSpendContextStore((state) => state.active);
-  const { spend, choose } = useConversationSpend(active?.conversationId ?? null, {
-    driveId: active?.driveId ?? null,
-    isGlobal: active?.isGlobal ?? false,
+  const surface = useSpendSurface();
+  const { spend, choose } = useConversationSpend(surface?.conversationId ?? null, {
+    driveId: surface?.driveId ?? null,
+    isGlobal: surface?.isGlobal ?? false,
   });
   const capDriveId = refusal.reason === 'source_cap_reached' && refusal.source === 'drive_wallet' ? spend?.driveId ?? null : null;
   const { wallet } = useDriveWallet(capDriveId);

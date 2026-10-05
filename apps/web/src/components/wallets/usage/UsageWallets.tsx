@@ -78,9 +78,10 @@ function SpendFromSection({ wallets }: { wallets: MyWallets }) {
   const fundedByMe = new Set(wallets.funds.driveWallets.map((w) => w.walletId));
   const orgNameOfDrive = (driveId: string) => orgById(drives.find((d) => d.id === driveId)?.orgId)?.name ?? null;
   const renews = balance?.monthly.periodEnd ? new Date(balance.monthly.periodEnd).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : null;
-  const personalDetail = balance && balance.monthly.allowance > 0 && renews
-    ? `Personal balance · ${formatCreditCount(balance.monthly.allowance)} credits included on ${renews}`
-    : 'Personal balance';
+  const plan = balance?.subscriptionTier ? `${balance.subscriptionTier.charAt(0).toUpperCase()}${balance.subscriptionTier.slice(1)} plan` : null;
+  const personalDetail = ['Personal balance', plan, balance && balance.monthly.allowance > 0 && renews ? `${formatCreditCount(balance.monthly.allowance)} credits included on ${renews}` : null]
+    .filter(Boolean)
+    .join(' · ');
 
   return (
     <section className="flex flex-col gap-2">

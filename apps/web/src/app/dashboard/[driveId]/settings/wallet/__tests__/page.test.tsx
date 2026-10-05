@@ -132,6 +132,7 @@ describe('Drive Settings › Wallet', () => {
     expect(screen.getByTestId('wallet-pool-line').textContent).toBe('Org pool: 900,017 credits available · 780,017 not yet allocated');
     expect(screen.getByText('One-off top-up')).toBeTruthy();
     expect(screen.getByLabelText('Monthly allocation')).toBeTruthy();
+    expect(screen.getByTestId('wallet-status-legend')).toBeTruthy();
     const caps = await screen.findByTestId('wallet-caps-card');
     await waitFor(() => expect(within(caps).getAllByRole('button', { name: /Edit|Set cap/ }).length).toBe(2));
   });
@@ -145,7 +146,9 @@ describe('Drive Settings › Wallet', () => {
     viewAs('lead', { status: 'paused' });
     renderPage();
     expect(screen.getByRole('switch', { name: 'Pause spending' }).getAttribute('aria-checked')).toBe('true');
-    expect(screen.getByText('Paused')).toBeTruthy();
+    // The card's status badge, plus the legend under the switch that names all three states.
+    expect(screen.getAllByText('Paused')).toHaveLength(2);
+    expect(screen.getByTestId('wallet-status-legend').textContent).toContain('stopped by whoever funds it');
   });
 
   it('WAL-7 (partial) an over wallet shows the over state and what calls do', () => {

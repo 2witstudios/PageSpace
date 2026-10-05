@@ -91,6 +91,7 @@ import { ChatInput, type ChatInputRef } from '@/components/ai/chat/input';
 import { useSideQuestion, parseSideQuestionInput } from '@/components/ai/btw/useSideQuestion';
 import { SideQuestionCard } from '@/components/ai/btw/SideQuestionCard';
 import { ComposerSpendStrip } from '@/components/wallets/ComposerSpendStrip';
+import { SpendSurfaceProvider } from '@/components/wallets/SpendSurface';
 import { useImageAttachments } from '@/lib/ai/shared/hooks/useImageAttachments';
 import { hasVisionCapability } from '@/lib/ai/core/vision-models';
 import { DEFAULT_PROVIDER } from '@/lib/ai/core/ai-providers-config';
@@ -957,6 +958,7 @@ const GlobalAssistantView: React.FC = () => {
   }
 
   return (
+    <SpendSurfaceProvider conversationId={currentConversationId ?? null} driveId={selectedAgent ? selectedAgent.driveId : locationContext?.currentDrive?.id ?? null} isGlobal={!selectedAgent}>
     <AskUserAnswerProvider value={askUserAnswering}>
     <div data-testid="global-assistant-view" className="flex flex-col h-full">
       {/* Header */}
@@ -1182,6 +1184,7 @@ const GlobalAssistantView: React.FC = () => {
 
     </div>
     </AskUserAnswerProvider>
+    </SpendSurfaceProvider>
   );
 };
 

@@ -2,9 +2,17 @@ import { create } from 'zustand';
 
 /**
  * Which conversation the header's spending-from chip speaks for (Spec UI-8, SPEND-2). The header
- * is global chrome; the source is chosen per conversation (SPEND-3), so the chat surface in view
- * registers its conversation here and the chip reads it. The latest registration wins (the chat
- * the person last opened or focused); unregistering only clears the entry it set.
+ * is global chrome; the source is chosen per conversation (SPEND-3), so each mounted chat surface
+ * registers its conversation here and the chip shows the one the person last focused.
+ *
+ * READ-ONLY for everything but the header chip: a surface's own spend controls (the composer
+ * strip, the refusal card, the fallback notice) take their conversation from the surface that
+ * rendered them (SpendSurfaceProvider), never from here, so a write can only ever target the
+ * conversation the control belongs to (review #2835 P1-1). The header chip writes to the exact
+ * conversation it displays.
+ *
+ * Surfaces are kept in focus order (most recent last), so when the focused surface unmounts the
+ * header falls back to the one focused before it, not to nothing.
  */
 export interface SpendContext {
   conversationId: string;
@@ -12,27 +20,52 @@ export interface SpendContext {
   driveId: string | null;
   /** A global (assistant) conversation names its drive on the preview request (?driveId=). */
   isGlobal: boolean;
-  /** Whether the conversation already has messages (the composer strip shows only before the first). */
-  hasMessages: boolean;
+}
+
+interface SpendContextEntry extends SpendContext {
+  /** Identifies the mounted surface (two surfaces may show the same conversation). */
+  surfaceId: string;
 }
 
 interface SpendContextState {
+  /** Mounted surfaces, least recently focused first. */
+  entries: SpendContextEntry[];
+  /** The surface the header chip follows: the most recently focused one. */
   active: SpendContext | null;
-  /** Set the active conversation; returns an unregister that clears it only if it is still this one. */
-  register: (context: SpendContext) => () => void;
-  /** The popover the chip opens, so a "Change" link elsewhere (strip, fallback notice) can open it. */
+  /** Add or update a surface without changing focus order; returns its unregister. */
+  register: (surfaceId: string, context: SpendContext) => () => void;
+  /** Move a surface to the front: the person focused or clicked inside it. */
+  focus: (surfaceId: string) => void;
   popoverOpen: boolean;
   setPopoverOpen: (open: boolean) => void;
 }
 
+const activeOf = (entries: SpendContextEntry[]): SpendContext | null => {
+  const last = entries[entries.length - 1];
+  return last ? { conversationId: last.conversationId, driveId: last.driveId, isGlobal: last.isGlobal } : null;
+};
+
 export const useSpendContextStore = create<SpendContextState>((set, get) => ({
+  entries: [],
   active: null,
-  register: (context) => {
-    set({ active: context });
+  register: (surfaceId, context) => {
+    const existing = get().entries;
+    const entry: SpendContextEntry = { surfaceId, ...context };
+    const entries = existing.some((e) => e.surfaceId === surfaceId)
+      ? existing.map((e) => (e.surfaceId === surfaceId ? entry : e))
+      : [...existing, entry];
+    set({ entries, active: activeOf(entries) });
     return () => {
-      const current = get().active;
-      if (current && current.conversationId === context.conversationId) set({ active: null });
+      const remaining = get().entries.filter((e) => e.surfaceId !== surfaceId);
+      set({ entries: remaining, active: activeOf(remaining) });
     };
+  },
+  focus: (surfaceId) => {
+    const { entries } = get();
+    const entry = entries.find((e) => e.surfaceId === surfaceId);
+    if (!entry || entries[entries.length - 1]?.surfaceId === surfaceId) return;
+    const reordered = [...entries.filter((e) => e.surfaceId !== surfaceId), entry];
+    set({ entries: reordered, active: activeOf(reordered) });
   },
   popoverOpen: false,
   setPopoverOpen: (open) => set({ popoverOpen: open }),
