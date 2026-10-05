@@ -53,8 +53,16 @@ vi.mock('../../memory/memory-pages', () => ({
   }),
 }));
 
+// Imago agent provisioning runs against real Postgres in
+// agents/__tests__/provision-imago-agents.integration.test.ts (including through
+// this function); here we only care that every branch calls it in the same tx.
+vi.mock('../../agents/provision-imago-agents', () => ({
+  provisionImagoAgentsInTransaction: vi.fn(),
+}));
+
 import { db } from '@pagespace/db/db';
 import { sql } from '@pagespace/db/operators';
+import { provisionImagoAgentsInTransaction } from '../../agents/provision-imago-agents';
 import { drives } from '@pagespace/db/schema/core';
 import { HOME_DRIVE_NAME, resolveUniqueSlug } from '../../services/drive-guards';
 import { populateUserDrive } from '../drive-setup';
@@ -97,10 +105,66 @@ function makeTx(ownedDrives: OwnedDrive[] = []): MockTx {
   };
 }
 
+function agentsResult(deferredTriggers: Array<() => void> = []) {
+  return {
+    homeDriveId: 'drive',
+    folderId: 'imago-folder',
+    agents: { imago: 'a1', 'imago-planner': 'a2', 'imago-researcher': 'a3' },
+    created: [],
+    deferredTriggers,
+  };
+}
+
 describe('provisionHomeDriveIfNeeded', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(resolveUniqueSlug).mockReturnValue('home');
+    vi.mocked(provisionImagoAgentsInTransaction).mockResolvedValue(agentsResult());
+  });
+
+  test('given an existing Home drive, should provision the Imago agents in it so returning users get them', async () => {
+    const tx = makeTx([{ id: 'drive-home-existing', kind: 'HOME', slug: 'home' }]);
+    vi.mocked(db.transaction).mockImplementation((async (cb: (t: typeof tx) => unknown) => cb(tx)) as never);
+
+    await provisionHomeDriveIfNeeded('user-123');
+
+    expect(provisionImagoAgentsInTransaction).toHaveBeenCalledWith(tx, 'user-123', 'drive-home-existing');
+  });
+
+  test('given a new user, should provision the Imago agents into the new Home drive in the same tx', async () => {
+    const tx = makeTx();
+    vi.mocked(populateUserDrive).mockResolvedValue({ seeded: true });
+    vi.mocked(db.transaction).mockImplementation((async (cb: (t: typeof tx) => unknown) => cb(tx)) as never);
+
+    await provisionHomeDriveIfNeeded('user-new');
+
+    expect(provisionImagoAgentsInTransaction).toHaveBeenCalledWith(tx, 'user-new', 'drive-new');
+  });
+
+  test('given an existing user reached lazily, should still provision the Imago agents', async () => {
+    const tx = makeTx([{ id: 'other-drive-1', kind: 'STANDARD', slug: 'my-drive' }]);
+    vi.mocked(db.transaction).mockImplementation((async (cb: (t: typeof tx) => unknown) => cb(tx)) as never);
+
+    const result = await provisionHomeDriveIfNeeded('user-existing');
+
+    expect(result.created).toBe(false);
+    expect(provisionImagoAgentsInTransaction).toHaveBeenCalledWith(tx, 'user-existing', 'drive-new');
+  });
+
+  test('given agent pages created, should fire their workflow triggers only after the transaction commits', async () => {
+    const order: string[] = [];
+    const trigger = vi.fn(() => order.push('trigger'));
+    vi.mocked(provisionImagoAgentsInTransaction).mockResolvedValue(agentsResult([trigger]));
+    const tx = makeTx([{ id: 'drive-home-existing', kind: 'HOME', slug: 'home' }]);
+    vi.mocked(db.transaction).mockImplementation((async (cb: (t: typeof tx) => unknown) => {
+      const value = await cb(tx);
+      order.push('commit');
+      return value;
+    }) as never);
+
+    await provisionHomeDriveIfNeeded('user-123');
+
+    expect(order).toEqual(['commit', 'trigger']);
   });
 
   test('given existing kind=HOME drive, returns it with created:false and makes no inserts', async () => {

@@ -8,6 +8,8 @@ import { allocatePublishSubdomain } from '../services/drive-service'
 import { populateUserDrive } from './drive-setup'
 import { installStarterSkills } from '../commands/starter-skill-installer'
 import { provisionMemoryPages } from '../memory/memory-pages'
+import { provisionImagoAgentsInTransaction } from '../agents/provision-imago-agents'
+import type { DeferredWorkflowTrigger } from '../monitoring/activity-logger'
 
 type TransactionType = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -30,11 +32,17 @@ export interface ProvisionHomeDriveResult {
  * Race safety: a `SELECT … FOR UPDATE` on the user row serialises concurrent calls
  * (e.g. two rapid OAuth callbacks for the same user). The partial unique index on
  * (ownerId) WHERE kind='HOME' provides a DB-level backstop.
+ *
+ * Imago agents: every call — including the existing-Home branch, so returning
+ * users get them on their next sign-in — provisions the built-in Imago agents
+ * in Home (`provisionImagoAgentsInTransaction`), recreating any the user
+ * deleted. Their workflow triggers fire only after the transaction commits.
  */
 export async function provisionHomeDriveIfNeeded(
   userId: string
 ): Promise<ProvisionHomeDriveResult> {
-  return db.transaction(async (tx: TransactionType) => {
+  const deferredTriggers: DeferredWorkflowTrigger[] = [];
+  const result = await db.transaction(async (tx: TransactionType) => {
     await tx.execute(sql`SELECT 1 FROM ${users} WHERE ${users.id} = ${userId} FOR UPDATE`);
 
     // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
@@ -45,6 +53,8 @@ export async function provisionHomeDriveIfNeeded(
 
     const homeDrive = ownedDrives.find((d) => d.kind === 'HOME');
     if (homeDrive) {
+      const agents = await provisionImagoAgentsInTransaction(tx, userId, homeDrive.id);
+      deferredTriggers.push(...agents.deferredTriggers);
       return { driveId: homeDrive.id, created: false };
     }
 
@@ -77,6 +87,11 @@ export async function provisionHomeDriveIfNeeded(
     // profile as editable markdown documents — About You, Communication, Rules.
     await provisionMemoryPages(userId, newDrive.id, tx);
 
+    // The Imago agents install on BOTH branches too: they are the user's
+    // assistants, not tutorial content.
+    const agents = await provisionImagoAgentsInTransaction(tx, userId, newDrive.id);
+    deferredTriggers.push(...agents.deferredTriggers);
+
     if (isExistingUser) {
       return { driveId: newDrive.id, created: false };
     }
@@ -100,4 +115,6 @@ export async function provisionHomeDriveIfNeeded(
 
     return { driveId: newDrive.id, created: true };
   });
+  for (const trigger of deferredTriggers) trigger();
+  return result;
 }

@@ -1,5 +1,6 @@
 import {
   resolveUniquePublishSubdomain,
+  randomSuffixedPublishSubdomain,
   normalizeSubdomain,
   DEFAULT_SUBDOMAIN_BASE,
   MAX_SUBDOMAIN_LENGTH,
@@ -61,8 +62,9 @@ export function isUniqueViolation(err: unknown): boolean {
  * allocation, resolve a unique candidate and retry on a unique-constraint race
  * (two concurrent creates can both read `acme` as free, but only one insert wins).
  * The DB unique constraint on `publishSubdomain` is the authoritative arbiter;
- * this function just recovers from the race by re-reading `taken` and advancing
- * the suffix until the insert succeeds or the attempt limit is hit.
+ * this function just recovers from the race by re-reading `taken` and retrying
+ * with a random-suffixed candidate until the insert succeeds or the attempt
+ * limit is hit.
  */
 export async function allocateUniqueSubdomainWithRetry(args: {
   base: string;
@@ -72,6 +74,8 @@ export async function allocateUniqueSubdomainWithRetry(args: {
    * the locally-computed candidate, so a race never reports an unwritten subdomain. */
   attempt: (candidate: string) => Promise<string | void>;
   maxAttempts?: number;
+  /** Suffix generator for post-conflict candidates; injectable for tests. */
+  randomSuffix?: () => string;
 }): Promise<string> {
   const maxAttempts = args.maxAttempts ?? 5;
   let attempt = 0;
@@ -84,7 +88,12 @@ export async function allocateUniqueSubdomainWithRetry(args: {
       );
     }
     const taken = await args.fetchTaken();
-    const candidate = resolveUniquePublishSubdomain(args.base, taken);
+    // First attempt: the readable sequential name (`home`, `home-2`, …). After
+    // a conflict, rivals are racing for that same family and will keep taking
+    // the next number, so leave it (see randomSuffixedPublishSubdomain).
+    const candidate = attempt === 1
+      ? resolveUniquePublishSubdomain(args.base, taken)
+      : randomSuffixedPublishSubdomain(args.base, taken, args.randomSuffix);
     try {
       const persisted = await args.attempt(candidate);
       // Honor the actual persisted value when attempt returns one (race recovery);
