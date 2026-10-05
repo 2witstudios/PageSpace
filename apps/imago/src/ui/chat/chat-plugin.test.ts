@@ -99,9 +99,12 @@ describe('chatPlugin slice', () => {
   test('its own resources and transactions', () => {
     assert({
       given: 'the chat slice',
-      should: 'start with nothing streaming and own the start and end streaming transactions',
+      should: 'start with nothing streaming, no draft and no conversation, and own the streaming, draft and conversation transactions',
       actual: [chatPlugin.resources(), Object.keys(chatPlugin.transactions).sort()],
-      expected: [{ streaming: null }, ['endStreaming', 'startStreaming']],
+      expected: [
+        { streaming: null, chatDraft: '', chatConversationId: null },
+        ['endStreaming', 'openConversation', 'setChatDraft', 'startStreaming'],
+      ],
     });
   });
 });
