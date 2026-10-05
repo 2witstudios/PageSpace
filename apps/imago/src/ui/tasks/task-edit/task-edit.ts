@@ -134,12 +134,13 @@ export const updateTask = (root: TaskList, id: string, patch: TaskPatch): Outcom
 
 const sameAssignee = (a: Assignee, b: Assignee): boolean => a.type === b.type && a.id === b.id;
 
+/** Each person or agent once, first mention kept. */
+export const uniqueAssignees = (assignees: readonly Assignee[]): readonly Assignee[] =>
+  assignees.filter((entry, index) => assignees.findIndex((other) => sameAssignee(entry, other)) === index);
+
 /** Replaces who is on a task, each person or agent once. */
 export const setAssignees = (root: TaskList, id: string, assignees: readonly Assignee[]): TaskList =>
-  mapTask(root, id, (task) => ({
-    ...task,
-    assignees: assignees.filter((entry, index) => assignees.findIndex((other) => sameAssignee(entry, other)) === index),
-  }));
+  mapTask(root, id, (task) => ({ ...task, assignees: uniqueAssignees(assignees) }));
 
 /** A set of assignees with this one added, or taken off when already there. */
 export const toggledAssignees = (assignees: readonly Assignee[], assignee: Assignee): readonly Assignee[] =>

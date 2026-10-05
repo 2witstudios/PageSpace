@@ -4,7 +4,16 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, test, vi } from 'vitest';
 import { assert } from 'riteway/vitest';
 import { ImagoSWRProvider } from '@/api/swr-provider';
-import { useDriveTaskLists, useTaskList, useTaskStatuses, type TaskActions } from './use-tasks';
+import {
+  useAssignable,
+  useDriveTaskLists,
+  usePageTrail,
+  useTaskList,
+  useTaskStatuses,
+  type TaskActions,
+} from './use-tasks';
+import type { Assignee } from '../task-model/task';
+import type { TrailEntry } from '../task-api/task-api';
 import { fakeWeb, type FakeRoute } from '@/ui/test-support/fake-web';
 import { seededConfigs, taskItem, taskListResponse } from '../task-model/fixtures';
 import { statusesFrom } from '../task-model/from-api';
@@ -492,6 +501,91 @@ describe('useTaskList()', () => {
         actual: result,
         expected: { ok: false, refusal: 'Task list is still loading' },
       });
+    });
+  });
+});
+
+describe('setAssignees() with a repeat', () => {
+  test('one person chosen twice', async () => {
+    let answer: () => void = () => {};
+    const { web, seen } = mountList(
+      listRoutes({
+        'PATCH /api/pages/l1/tasks/z': () =>
+          new Promise<Response>((resolve) => {
+            answer = () => resolve(Response.json(taskItem('z')));
+          }),
+      }),
+    );
+    await loaded(seen);
+    const ada: Assignee = { type: 'user', id: 'u-ada', name: 'Ada' };
+    let pending: Promise<unknown> | undefined;
+    act(() => {
+      pending = seen.actions?.setAssignees('z', [ada, ada]);
+    });
+    await settle(() => {
+      if (web.writes().length === 0) throw new Error('not sent');
+    });
+    const shown = seen.list ? locate(seen.list, 'z')?.task.assignees : undefined;
+    await act(async () => {
+      answer();
+      await pending;
+    });
+
+    assert({
+      given: 'the same person chosen twice',
+      should: 'send them once, matching the set shown (unique task and user would 500)',
+      actual: web.writes().map((write) => write.body),
+      expected: [{ assigneeIds: [{ type: 'user', id: 'u-ada' }] }],
+    });
+    assert({
+      given: 'the same person chosen twice',
+      should: 'show them once while the write is in flight',
+      actual: shown,
+      expected: [ada],
+    });
+  });
+});
+
+describe('useAssignable() and usePageTrail()', () => {
+  test('reads', async () => {
+    const web = fakeWeb({
+      'GET /api/drives/d1/assignees': () =>
+        Response.json({ assignees: [{ id: 'u-1', type: 'user', name: 'Ada', image: null }] }),
+      'GET /api/pages/page-a/breadcrumbs': () =>
+        Response.json([
+          { id: 'l1', title: 'Launch', type: 'TASK_LIST', parentId: null, driveId: 'd1', drive: null },
+          { id: 'page-a', title: 'Draft', type: 'TASK_LIST', parentId: 'l1', driveId: 'd1', drive: null },
+        ]),
+    });
+    const seen: { people?: readonly Assignee[]; trail?: readonly TrailEntry[]; none?: unknown } = {};
+    function Probe() {
+      seen.people = useAssignable('d1').assignable;
+      seen.trail = usePageTrail('page-a').trail;
+      seen.none = usePageTrail(null).trail;
+      return null;
+    }
+    render(
+      <ImagoSWRProvider client={web.client}>
+        <Probe />
+      </ImagoSWRProvider>,
+    );
+    await settle(() => {
+      if (!seen.people || !seen.trail) throw new Error('not loaded');
+    });
+
+    assert({
+      given: 'a drive and a task page',
+      should: 'read who can be assigned and where the page sits, and ask nothing for no page',
+      actual: { people: seen.people, trail: seen.trail, none: seen.none, asked: web.requests.length },
+      expected: {
+        people: [{ type: 'user', id: 'u-1', name: 'Ada' }],
+        trail: [
+          { id: 'l1', title: 'Launch' },
+          { id: 'page-a', title: 'Draft' },
+        ],
+        none: undefined,
+        asked: 2,
+      },
     });
   });
 });

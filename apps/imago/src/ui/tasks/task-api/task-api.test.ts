@@ -4,7 +4,11 @@ import { ApiError } from '@/api/errors';
 import {
   createTask,
   deleteTask,
+  fetchAssignable,
   fetchDriveTaskLists,
+  fetchPageContent,
+  fetchPageTrail,
+  savePageContent,
   fetchTaskList,
   fetchTaskStatuses,
   loadTaskTree,
@@ -290,6 +294,125 @@ describe('writes', () => {
       should: 'reject with its code and words',
       actual: error instanceof ApiError ? [error.status, error.code, error.message] : error,
       expected: [422, 'SUBTASKS_INCOMPLETE', 'Complete all sub-tasks first (1 of 2 remaining)'],
+    });
+  });
+});
+
+describe('assignee writes', () => {
+  test('the same person twice', async () => {
+    const web = fakeWeb({ 'PATCH /api/pages/l1/tasks/t': () => Response.json(taskItem('t')) });
+    await setTaskAssignees(web.client, { listPageId: 'l1', taskId: 't' }, [
+      { type: 'user', id: 'u-1', name: 'Ada' },
+      { type: 'agent', id: 'u-1', name: 'Agent with a colliding id' },
+      { type: 'user', id: 'u-1', name: 'Ada' },
+    ]);
+
+    assert({
+      given: 'a set naming one person twice',
+      should: 'send each person or agent once, since task_assignees is unique per task and user',
+      actual: web.writes().map((write) => write.body),
+      expected: [
+        {
+          assigneeIds: [
+            { type: 'user', id: 'u-1' },
+            { type: 'agent', id: 'u-1' },
+          ],
+        },
+      ],
+    });
+  });
+
+  test('create with the same person twice', async () => {
+    const web = fakeWeb({ 'POST /api/pages/l1/tasks': () => Response.json(taskItem('t')) });
+    await createTask(web.client, 'l1', {
+      title: 'Ship',
+      assignees: [
+        { type: 'agent', id: 'a-1', name: 'Planner' },
+        { type: 'agent', id: 'a-1', name: 'Planner' },
+      ],
+    });
+
+    assert({
+      given: 'a new task naming one agent twice',
+      should: 'send the agent once',
+      actual: (web.writes()[0]?.body as { assigneeIds: unknown }).assigneeIds,
+      expected: [{ type: 'agent', id: 'a-1' }],
+    });
+  });
+});
+
+describe('fetchAssignable()', () => {
+  test('request and mapping', async () => {
+    const web = fakeWeb({
+      'GET /api/drives/d1/assignees': () =>
+        Response.json({
+          assignees: [
+            { id: 'u-1', type: 'user', name: 'Ada', image: null },
+            { id: 'a-1', type: 'agent', name: 'Planner', image: null, agentTitle: 'Planner' },
+          ],
+        }),
+    });
+
+    assert({
+      given: 'a drive',
+      should: 'list its members and the agents the viewer can see, from the drive assignees route',
+      actual: await fetchAssignable(web.client, 'd1'),
+      expected: [
+        { type: 'user', id: 'u-1', name: 'Ada' },
+        { type: 'agent', id: 'a-1', name: 'Planner' },
+      ],
+    });
+  });
+});
+
+describe('fetchPageTrail()', () => {
+  test('request and mapping', async () => {
+    const web = fakeWeb({
+      'GET /api/pages/page-a/breadcrumbs': () =>
+        Response.json([
+          { id: 'l1', title: 'Launch', type: 'TASK_LIST', parentId: null, driveId: 'd1', drive: null },
+          { id: 'page-p', title: 'Plan', type: 'TASK_LIST', parentId: 'l1', driveId: 'd1', drive: null },
+          { id: 'page-a', title: 'Draft', type: 'TASK_LIST', parentId: 'page-p', driveId: 'd1', drive: null },
+        ]),
+    });
+
+    assert({
+      given: 'a task’s page',
+      should: 'list its ancestors from the top of the drive down to the page itself',
+      actual: await fetchPageTrail(web.client, 'page-a'),
+      expected: [
+        { id: 'l1', title: 'Launch' },
+        { id: 'page-p', title: 'Plan' },
+        { id: 'page-a', title: 'Draft' },
+      ],
+    });
+  });
+});
+
+describe('page content', () => {
+  test('read', async () => {
+    const web = fakeWeb({
+      'GET /api/pages/page-a': () => Response.json({ id: 'page-a', content: '<p>Notes</p>' }),
+      'GET /api/pages/page-b': () => Response.json({ id: 'page-b', content: null }),
+    });
+
+    assert({
+      given: 'a task’s page, with and without content',
+      should: 'read its content, empty when it has none',
+      actual: [await fetchPageContent(web.client, 'page-a'), await fetchPageContent(web.client, 'page-b')],
+      expected: ['<p>Notes</p>', ''],
+    });
+  });
+
+  test('save', async () => {
+    const web = fakeWeb({ 'PATCH /api/pages/page-a': () => Response.json({ id: 'page-a' }) });
+    await savePageContent(web.client, 'page-a', '<p>New</p>');
+
+    assert({
+      given: 'a new description',
+      should: 'PATCH the task’s own page with it and the CSRF token',
+      actual: web.writes(),
+      expected: [{ method: 'PATCH', url: '/api/pages/page-a', csrf: 'tok-1', body: { content: '<p>New</p>' } }],
     });
   });
 });
