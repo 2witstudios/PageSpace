@@ -264,6 +264,45 @@ describe('ChatPane', () => {
     stream.close();
   });
 
+  test('a send before the conversations load', async () => {
+    const stream = fakeTurnStream();
+    let release: () => void = () => {};
+    const listed = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const web = chatWeb(stream, {
+      [CONVERSATIONS]: async () => {
+        await listed;
+        return Response.json(conversationsPage([agentConversation('c1')]));
+      },
+      [NEW_CONVERSATION]: () => Response.json({ conversationId: 'c-new' }),
+    });
+    const { container } = mountPane(web);
+    await settle(() => {
+      if (web.count(CONVERSATIONS) !== 1) throw new Error('list not asked for');
+    });
+    type(container, 'Continue');
+    press(field(container), 'Enter');
+    await act(async () => {});
+    const waiting = [control(container).disabled, web.writes().length, getUiState().resources.chatDraft];
+
+    release();
+    await settle(threadLoaded(container));
+    press(field(container), 'Enter');
+    await settle(() => {
+      if (web.count(TURN) !== 1) throw new Error('not sent');
+    });
+    const body = web.requests.find((request) => `${request.method} ${request.url}` === TURN)?.body as { conversationId: string };
+
+    assert({
+      given: 'a prompt sent while the agent’s conversations are still loading, then again once they have',
+      should: 'hold Send and the draft until the list says which conversation is latest, then continue it rather than start a new one',
+      actual: [waiting, body.conversationId, web.count(NEW_CONVERSATION)],
+      expected: [[true, 0, 'Continue'], 'c1', 0],
+    });
+    stream.close();
+  });
+
   test('an Imago agent not provisioned yet', async () => {
     const web = chatWeb(fakeTurnStream(), { [AGENTS]: () => Response.json(pointers({ imago: null })) });
     const { container } = mountPane(web);

