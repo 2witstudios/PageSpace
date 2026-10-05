@@ -81,6 +81,12 @@ interface PageAgentPromptInput extends SharedAgentPromptInput {
   readonly drivePromptPrefix: string;
   /** Cross-drive membership context. Applies to both branches. */
   readonly memberDriveContextPrefix: string;
+  /**
+   * A built-in Imago agent's granted-drive summary (`buildGrantedDrivesPrompt`).
+   * Omitted for every other agent. Applies to both branches: the Imago agents
+   * carry their own prompt, and their reach is not persona.
+   */
+  readonly grantedDrives?: string;
   /** The agent's own memory page. */
   readonly agentMemory: string;
   /** `TOOL_DISCOVERY_PROMPT` + the deferred tool catalog, as one block. */
@@ -245,6 +251,7 @@ export function buildAgentSystemPrompt(input: AgentSystemPromptInput): string {
 
   // Cross-drive membership applies uniformly, unlike drivePromptPrefix above.
   systemPrompt = input.memberDriveContextPrefix + systemPrompt;
+  systemPrompt += input.grantedDrives ?? '';
   systemPrompt += input.skillCatalog;
   systemPrompt += input.activePlan;
 

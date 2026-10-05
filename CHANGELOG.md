@@ -19,6 +19,11 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   read its pages but not private ones, and cannot edit, share or delete. They are never added to
   drives you only belong to. A drive whose access you remove stays removed, and when you hand a
   drive to a new owner your Imago agents leave it; the new owner decides which agents get in.
+- **Imago agents know where they can work** — each Imago agent is told which drives it has been
+  added to (by name and role) and, each turn, whether the drive or page you are looking at is one of
+  them. Asked to work somewhere it has not been added, it says so and tells you how to give it
+  access instead of trying and failing. It is never told about drives it has not been added to, and
+  a page you cannot open is never passed to it as your location.
 - **Give an agent its own account** — in an agent's settings (Accounts), or in your personal
   settings for your global assistant, add an API key for a site so the agent can call that site's
   API for you. The agent refers to the account by name and never sees the key: PageSpace keeps it in
