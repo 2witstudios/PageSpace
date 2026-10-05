@@ -8,6 +8,7 @@ import { fakeTurnStream, type FakeTurnStream } from '@/ui/test-support/fake-turn
 import { click, mount, press, unmountAll } from '@/ui/test-support/dom';
 import { getUiState, setUiState } from '@/ui/store/store';
 import { createInitialState } from '@/ui/store/state';
+import { dispatch, transactions } from '@/ui/store/transactions';
 import { stageFor } from '@/ui/frame/stage/stage';
 import { taskPaths } from '@/ui/tasks/task-api/task-api';
 import { chatPaths } from '../chat-api/chat-api';
@@ -258,6 +259,27 @@ describe('ChatPane', () => {
         [TURN, ABORT],
         true,
       ],
+    });
+  });
+
+  test('the hidden history’s opener', async () => {
+    const web = chatWeb(fakeTurnStream());
+    const { container, control: host } = mountPane(web);
+    await settle(threadLoaded(container));
+    const opener = () => container.querySelector<HTMLButtonElement>('header [data-leading] button[aria-label="Show Chat history"]');
+    const shown = opener() !== null;
+    act(() => dispatch(transactions.collapseSection, 'chat'));
+    act(() => host.go?.('/d1/files/p1'));
+    const besideObject = opener() !== null;
+    act(() => host.go?.('/d1'));
+    const hidden = opener();
+    if (hidden !== null) click(hidden);
+
+    assert({
+      given: 'the history shown, then hidden with a page open, then hidden on the chat stage and the opener pressed',
+      should: 'put the hamburger in the chat header only while the chat stage’s history is hidden, and bring it back',
+      actual: [shown, besideObject, hidden !== null, getUiState().resources.collapsedSections, opener()],
+      expected: [false, false, true, [], null],
     });
   });
 

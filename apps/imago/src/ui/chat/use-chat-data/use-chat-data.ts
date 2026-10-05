@@ -47,7 +47,7 @@ const uniqueById = <T extends { readonly id: string }>(rows: readonly T[]): read
 /** The viewer's conversations with an agent page, most recent first; more pages on `loadMore`. */
 export const useAgentConversations = (agentId: string | null) => {
   const client = useApiClient();
-  const { data, error, isLoading, isValidating, size, setSize } = useSWRInfinite(
+  const { data, error, isLoading, isValidating, size, setSize, mutate } = useSWRInfinite(
     (page: number, previous: ConversationsPage | null) =>
       agentId === null || (previous !== null && !previous.hasMore)
         ? null
@@ -62,6 +62,10 @@ export const useAgentConversations = (agentId: string | null) => {
     hasMore,
     loadMore: async (): Promise<void> => {
       if (hasMore) await setSize(size + 1);
+    },
+    /** Reads the loaded pages again: a new conversation, or one that moved to the top. */
+    revalidate: async (): Promise<void> => {
+      await mutate();
     },
     isLoading,
     isLoadingMore: isValidating && data !== undefined && data.length < size,

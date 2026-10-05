@@ -2,9 +2,9 @@ import { describe, test } from 'vitest';
 import { assert } from 'riteway/vitest';
 import { createInitialState } from '../store/state';
 import { transactions } from '../store/transactions';
-import { chatPlugin, isStreaming } from './chat-plugin';
+import { chatPlugin, isStreaming, shownConversationId } from './chat-plugin';
 
-const { startStreaming, endStreaming, setChatDraft, openConversation, selectAgent, loseAgent } = chatPlugin.transactions;
+const { startStreaming, endStreaming, setChatDraft, openConversation, startNewChat, selectAgent, loseAgent } = chatPlugin.transactions;
 
 describe('chatPlugin', () => {
   test('nothing streaming', () => {
@@ -20,16 +20,21 @@ describe('chatPlugin', () => {
     const first = chatPlugin.resources();
     assert({
       given: 'the chat slice’s resources, built twice, and a fresh UI state',
-      should: 'stream nothing, draft nothing and open no conversation, fresh each time and composed into the initial state',
+      should: 'stream nothing, draft nothing, open no conversation and no new chat, fresh each time and composed into the initial state',
       actual: [
         first,
         first === chatPlugin.resources(),
-        [createInitialState().resources.streaming, createInitialState().resources.chatDraft, createInitialState().resources.chatConversationId],
+        [
+          createInitialState().resources.streaming,
+          createInitialState().resources.chatDraft,
+          createInitialState().resources.chatConversationId,
+          createInitialState().resources.chatNew,
+        ],
       ],
       expected: [
-        { streaming: null, chatDraft: '', chatConversationId: null, chatAgent: null, chatAgentLost: null },
+        { streaming: null, chatDraft: '', chatConversationId: null, chatAgent: null, chatAgentLost: null, chatNew: false },
         false,
-        [null, '', null],
+        [null, '', null, false],
       ],
     });
   });
@@ -89,12 +94,54 @@ describe('chatPlugin', () => {
     });
   });
 
+  test('startNewChat', () => {
+    const opened = openConversation(createInitialState(), 'c2');
+    const fresh = startNewChat(setChatDraft(opened, 'half a thought'));
+    assert({
+      given: 'a conversation open with a draft, then New chat, then New chat again',
+      should: 'open an empty thread with no conversation, keep the draft, and change nothing on a repeat',
+      actual: [
+        fresh.resources.chatNew,
+        fresh.resources.chatConversationId,
+        fresh.resources.chatDraft,
+        startNewChat(fresh) === fresh,
+      ],
+      expected: [true, null, 'half a thought', true],
+    });
+  });
+
+  test('openConversation after New chat', () => {
+    const opened = openConversation(startNewChat(createInitialState()), 'c3');
+    assert({
+      given: 'New chat, then a conversation opened (picked, or created by the first send)',
+      should: 'leave the new chat for that conversation',
+      actual: [opened.resources.chatNew, opened.resources.chatConversationId],
+      expected: [false, 'c3'],
+    });
+  });
+
+  test('shownConversationId', () => {
+    const initial = createInitialState().resources;
+    const opened = openConversation(createInitialState(), 'c2').resources;
+    const fresh = startNewChat(createInitialState()).resources;
+    assert({
+      given: 'nothing chosen, a chosen conversation and New chat, each with the agent’s latest conversation c1',
+      should: 'show the latest, the chosen one, and none',
+      actual: [shownConversationId(initial, 'c1'), shownConversationId(opened, 'c1'), shownConversationId(fresh, 'c1'), shownConversationId(initial, null)],
+      expected: ['c1', 'c2', null, null],
+    });
+  });
+
   test('draft and conversation registered', () => {
     assert({
       given: 'the shell transactions',
-      should: 'include the draft and conversation transactions',
-      actual: [transactions.setChatDraft === setChatDraft, transactions.openConversation === openConversation],
-      expected: [true, true],
+      should: 'include the draft, conversation and new chat transactions',
+      actual: [
+        transactions.setChatDraft === setChatDraft,
+        transactions.openConversation === openConversation,
+        transactions.startNewChat === startNewChat,
+      ],
+      expected: [true, true, true],
     });
   });
 });
@@ -137,6 +184,24 @@ describe('the chat agent', () => {
     });
   });
 
+  test('a new chat follows the agent', () => {
+    const fresh = startNewChat(selectAgent(createInitialState(), planner));
+    const switched = selectAgent(fresh, support);
+    const lost = loseAgent(fresh, 'p-planner');
+    assert({
+      given: 'New chat open with Planner, then another agent chosen, or Planner refused',
+      should: 'leave the new chat for the next agent’s latest conversation either way',
+      actual: [
+        [switched.resources.chatNew, switched.resources.chatAgent?.id, shownConversationId(switched.resources, 'c-support')],
+        [lost.resources.chatNew, lost.resources.chatAgent, shownConversationId(lost.resources, 'c-imago')],
+      ],
+      expected: [
+        [false, 'a1', 'c-support'],
+        [false, null, 'c-imago'],
+      ],
+    });
+  });
+
   test('registered', () => {
     assert({
       given: 'the shell transactions',
@@ -151,11 +216,11 @@ describe('chatPlugin slice', () => {
   test('its own resources and transactions', () => {
     assert({
       given: 'the chat slice',
-      should: 'start with nothing streaming, no draft, no conversation and Imago, and own the streaming, draft, conversation and agent transactions',
+      should: 'start with nothing streaming, no draft, no conversation, Imago and no new chat, and own the streaming, draft, conversation, agent and new chat transactions',
       actual: [chatPlugin.resources(), Object.keys(chatPlugin.transactions).sort()],
       expected: [
-        { streaming: null, chatDraft: '', chatConversationId: null, chatAgent: null, chatAgentLost: null },
-        ['endStreaming', 'loseAgent', 'openConversation', 'selectAgent', 'setChatDraft', 'startStreaming'],
+        { streaming: null, chatDraft: '', chatConversationId: null, chatAgent: null, chatAgentLost: null, chatNew: false },
+        ['endStreaming', 'loseAgent', 'openConversation', 'selectAgent', 'setChatDraft', 'startNewChat', 'startStreaming'],
       ],
     });
   });

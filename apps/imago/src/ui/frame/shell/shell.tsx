@@ -5,6 +5,7 @@ import type { ReactNode } from 'react';
 import useSWR from 'swr';
 import { useUiState } from '../../store/store';
 import type { UiState } from '../../store/state';
+import { ChatHistory } from '../../chat/chat-history/chat-history';
 import { ChatPane } from '../../chat/chat-pane/chat-pane';
 import { FilesPane } from '../../files/files-pane/files-pane';
 import { MessagesPane } from '../../messages/messages-pane/messages-pane';
@@ -87,11 +88,14 @@ const rowsFor = (stage: Stage): ReactNode => {
 };
 
 /**
- * The list slot holds the section's list. Files draws its own pane, since
- * its header carries New page beside the close.
+ * The list slot holds the section's list; the chat's is its history of past
+ * chats. Files draws its own pane, since its header carries New page beside
+ * the close.
  */
 const listFor = (stage: Stage, layout: PaneLayout): ReactNode => {
-  if (!isListSection(stage.section) || layout.list === 'closed') return null;
+  if (layout.list === 'closed') return null;
+  if (stage.section === 'chat') return <ChatHistory />;
+  if (!isListSection(stage.section)) return null;
   if (stage.section === 'files' && stage.driveId !== null) {
     return (
       <FilesPane

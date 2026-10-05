@@ -7,7 +7,7 @@ import { describe, test } from 'vitest';
 import { assert } from 'riteway/vitest';
 import { listPaneClass } from '../list-pane/list-pane-class';
 import { paneClass } from '../pane/pane-class';
-import { paneLayout, stageFor, type ListSection } from '../stage/stage';
+import { paneLayout, stageFor, type HideableSection } from '../stage/stage';
 import {
   chatSlotClass,
   columnClass,
@@ -17,7 +17,7 @@ import {
   shellClass,
 } from './shell-class';
 
-const widths = (pathname: string, collapsedSections: readonly ListSection[] = []): readonly string[] => {
+const widths = (pathname: string, collapsedSections: readonly HideableSection[] = []): readonly string[] => {
   const layout = paneLayout(stageFor(pathname), { collapsedSections });
   return [listSlotClass(layout), objectSlotClass(layout), chatSlotClass(layout)];
 };
@@ -25,10 +25,13 @@ const widths = (pathname: string, collapsedSections: readonly ListSection[] = []
 describe('shell slot widths', () => {
   test('a drive’s chat', () => {
     assert({
-      given: 'the drive chat stage',
-      should: 'close the list and the object and give the chat the frame',
-      actual: widths('/drive-1'),
-      expected: ['w-0', 'w-0', 'w-stage-chat'],
+      given: 'the drive chat stage, then with its history hidden',
+      should: 'open the history beside the chat and close the object; hidden, give the chat the frame',
+      actual: [widths('/drive-1'), widths('/drive-1', ['chat'])],
+      expected: [
+        ['w-list-pane', 'w-0', 'w-stage-chat-list'],
+        ['w-0', 'w-0', 'w-stage-chat'],
+      ],
     });
   });
 

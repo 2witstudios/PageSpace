@@ -26,6 +26,8 @@ export type ChatPaneRenderProps = {
   readonly agents: AgentMenu;
   /** Void action: the option the viewer picked. */
   readonly selectAgent: (value: string) => void;
+  /** Ahead of the title: the hidden chat history's opener. */
+  readonly leading?: ReactNode;
   /** What the agent answers against: the drive, the section, or the open object. */
   readonly contextLabel: string;
   /** Oldest first; undefined while the conversation loads. */
@@ -82,11 +84,11 @@ const renderTitle = (props: ChatPaneRenderProps): ReactNode => (
  * section; dense beside an open object, where the header names the object.
  */
 export function renderChatPane(props: ChatPaneRenderProps): ReactNode {
-  const { density, agentName, messages, streamingMessageId, notice, citationDriveId, composer, scrollRef, onScroll } =
+  const { density, agentName, leading, messages, streamingMessageId, notice, citationDriveId, composer, scrollRef, onScroll } =
     props;
   return (
     <section className={chatPaneClass(density)} aria-label="Chat" data-density={density}>
-      {renderPaneHeader({ title: renderTitle(props) })}
+      {renderPaneHeader({ title: renderTitle(props), leading })}
       <div ref={scrollRef} onScroll={onScroll} className={chatScrollClass}>
         <ol className={chatThreadClass(density)} aria-busy={messages === undefined ? true : undefined}>
           {messages === undefined ? null : messages.length === 0 ? (
