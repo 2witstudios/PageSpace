@@ -19,10 +19,11 @@
  * removed until the toggle is used again; ownership transfer records the choice
  * for both users (`transferDriveOwnership`).
  *
- * Race safety: a grant re-reads the choice and inserts under the user-row lock
- * (`lockImagoUser`, the row provisioning locks), and the toggle writes the
- * choice and the memberships under the same lock — so a turn-off racing a
- * recreation at sign-in always ends off.
+ * Race safety: a grant re-reads the choice and the agent page's pointer and
+ * inserts under the user-row lock (`lockImagoUser`, the row provisioning
+ * locks), and the toggle writes the choice and the memberships under the same
+ * lock — so a turn-off racing a recreation at sign-in always ends off, and a
+ * page a sign-in trashed and replaced mid-grant never gains a membership.
  *
  * Grants run after the creating transaction commits (the agent pages and the
  * drive must be visible to the checks' own connection), so they are best
@@ -59,9 +60,11 @@ export interface ImagoGrantOutcome {
   driveId: string;
   /**
    * `already`: the membership existed; `refused`: the checks said no; `off`:
-   * the drive was switched off before the grant landed; `failed`: it threw.
+   * the drive was switched off before the grant landed; `replaced`: the page
+   * stopped being a live Imago agent (trashed, replaced) before it landed;
+   * `failed`: it threw.
    */
-  status: 'granted' | 'already' | 'refused' | 'off' | 'failed';
+  status: 'granted' | 'already' | 'refused' | 'off' | 'replaced' | 'failed';
 }
 
 /**
@@ -70,6 +73,31 @@ export interface ImagoGrantOutcome {
  */
 export async function lockImagoUser(tx: Tx, userId: string): Promise<void> {
   await tx.execute(sql`SELECT 1 FROM ${users} WHERE ${users.id} = ${userId} FOR UPDATE`);
+}
+
+/**
+ * Which of `pageIds` are still the user's live Imago agents: named by a
+ * `user_builtin_agents` pointer and not trashed. Read under `lockImagoUser`
+ * before inserting a membership authorized earlier: a sign-in may have
+ * trashed-and-replaced the page meanwhile, and a replaced page must never
+ * gain a membership — the toggle can no longer find it to revoke it.
+ */
+export async function liveImagoAgentPageIds(
+  executor: Tx | typeof db,
+  userId: string,
+  pageIds: readonly string[],
+): Promise<Set<string>> {
+  if (pageIds.length === 0) return new Set();
+  const rows = await executor
+    .select({ pageId: userBuiltinAgents.pageId })
+    .from(userBuiltinAgents)
+    .innerJoin(pages, eq(pages.id, userBuiltinAgents.pageId))
+    .where(and(
+      eq(userBuiltinAgents.userId, userId),
+      eq(pages.isTrashed, false),
+      inArray(userBuiltinAgents.pageId, [...pageIds]),
+    ));
+  return new Set(rows.map((row) => row.pageId));
 }
 
 /**
@@ -157,14 +185,18 @@ export async function grantImagoAgents(
   try {
     const landed = await db.transaction(async (tx: Tx) => {
       await lockImagoUser(tx, userId);
-      // Re-read under the lock: a turn-off that committed since the read above wins.
+      // Re-read under the lock: a turn-off, or a sign-in that replaced the
+      // page, committed since the reads above wins.
       const stillOn = new Set(await imagoOnDriveIds(tx, userId, [...new Set(authorized.map((grant) => grant.driveId))]));
+      const stillLive = await liveImagoAgentPageIds(tx, userId, authorized.map((grant) => grant.agentPageId));
       const statuses: ImagoGrantOutcome[] = [];
       for (const grant of authorized) {
-        const status = !stillOn.has(grant.driveId)
-          ? 'off'
-          // 409: a concurrent grant or the toggle got there first.
-          : (await insertAgentDriveMembership(tx, grant)).ok ? 'granted' : 'already';
+        const status = !stillLive.has(grant.agentPageId)
+          ? 'replaced'
+          : !stillOn.has(grant.driveId)
+            ? 'off'
+            // 409: a concurrent grant or the toggle got there first.
+            : (await insertAgentDriveMembership(tx, grant)).ok ? 'granted' : 'already';
         statuses.push({ agentPageId: grant.agentPageId, driveId: grant.driveId, status });
       }
       return statuses;

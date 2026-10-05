@@ -14,7 +14,7 @@ import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
 import { slugify } from '../utils/utils';
 import { customRoleBelongsToDrive, getMemberCustomRoleId, resolveDriveWideCanEdit } from '../permissions/membership-queries';
 import { isGuestRole } from '../permissions/guest-role';
-import { grantImagoAgents, revokeImagoAgentGrants, storeImagoDriveChoice } from '../agents/grant-imago-agents';
+import { grantImagoAgents, revokeImagoAgentGrants } from '../agents/grant-imago-agents';
 import { imagoDriveAccess } from '@pagespace/db/schema/imago-drive-access';
 import { homeDriveActionError, isHomeDrive } from './drive-guards';
 
@@ -745,11 +745,11 @@ export async function transferDriveOwnership(
     await tx
       .delete(imagoDriveAccess)
       .where(and(eq(imagoDriveAccess.userId, fromUserId), eq(imagoDriveAccess.driveId, driveId)));
-    const [toChoice] = await tx
-      .select({ enabled: imagoDriveAccess.enabled })
-      .from(imagoDriveAccess)
-      .where(and(eq(imagoDriveAccess.userId, toUserId), eq(imagoDriveAccess.driveId, driveId)));
-    if (!toChoice) await storeImagoDriveChoice(tx, toUserId, driveId, false);
+    // Never overwrite a choice the new owner made, even one committing now.
+    await tx
+      .insert(imagoDriveAccess)
+      .values({ userId: toUserId, driveId, enabled: false })
+      .onConflictDoNothing({ target: [imagoDriveAccess.userId, imagoDriveAccess.driveId] });
     return revokeImagoAgentGrants(tx, fromUserId, driveId);
   });
 }

@@ -32,7 +32,20 @@ import {
 } from '../services/drive-agent-service';
 import { homeDriveActionError } from '../services/drive-guards';
 import { BUILTIN_AGENT_KEYS, type BuiltinAgentKey } from './builtin-agents';
-import { imagoOnDriveIds, lockImagoUser, revokeImagoAgentGrants, storeImagoDriveChoice } from './grant-imago-agents';
+import {
+  imagoOnDriveIds,
+  liveImagoAgentPageIds,
+  lockImagoUser,
+  revokeImagoAgentGrants,
+  storeImagoDriveChoice,
+} from './grant-imago-agents';
+
+/**
+ * Turn-on passes before giving up on agents a concurrent sign-in keeps
+ * replacing; any left over are granted by that sign-in, which reads the stored
+ * choice.
+ */
+const MAX_TURN_ON_PASSES = 3;
 
 export interface ImagoDriveAccessAgent {
   key: BuiltinAgentKey;
@@ -87,29 +100,37 @@ export async function setImagoDriveAccess(
     return { ok: true, access: await readAccess(userId, driveId) };
   }
 
-  const before = await readAccess(userId, driveId);
-  if (before.agents.length === 0) {
-    return { ok: false, status: 409, error: 'Your Imago agents are not set up yet' };
-  }
-  // Every check before anything is written: one refusal changes nothing.
-  const grants: AuthorizedAgentDriveGrant[] = [];
-  for (const agent of before.agents) {
-    if (agent.isMember) continue;
-    const authorized = await authorizeAgentDriveGrant({
-      actingUserId: userId,
-      agentPageId: agent.agentPageId,
-      driveId,
-      requestedRole: 'MEMBER',
+  // A sign-in can trash-and-replace an agent page between the reads and the
+  // locked write; the replaced page is skipped under the lock and its
+  // replacement granted on the next pass.
+  for (let pass = 0; pass < MAX_TURN_ON_PASSES; pass++) {
+    const before = await readAccess(userId, driveId);
+    if (before.agents.length === 0) {
+      return { ok: false, status: 409, error: 'Your Imago agents are not set up yet' };
+    }
+    // Every check before anything is written: one refusal changes nothing.
+    const grants: AuthorizedAgentDriveGrant[] = [];
+    for (const agent of before.agents) {
+      if (agent.isMember) continue;
+      const authorized = await authorizeAgentDriveGrant({
+        actingUserId: userId,
+        agentPageId: agent.agentPageId,
+        driveId,
+        requestedRole: 'MEMBER',
+      });
+      if (!authorized.ok) return authorized;
+      grants.push(authorized.grant);
+    }
+    await db.transaction(async (tx) => {
+      await lockImagoUser(tx, userId);
+      await storeImagoDriveChoice(tx, userId, driveId, true);
+      const live = await liveImagoAgentPageIds(tx, userId, grants.map((grant) => grant.agentPageId));
+      // 409: a concurrent toggle or grant got there first.
+      for (const grant of grants) if (live.has(grant.agentPageId)) await insertAgentDriveMembership(tx, grant);
     });
-    if (!authorized.ok) return authorized;
-    grants.push(authorized.grant);
+    const after = await readAccess(userId, driveId);
+    if (after.agents.every((agent) => agent.isMember)) return { ok: true, access: after };
   }
-  await db.transaction(async (tx) => {
-    await lockImagoUser(tx, userId);
-    await storeImagoDriveChoice(tx, userId, driveId, true);
-    // 409: a concurrent toggle or grant got there first.
-    for (const grant of grants) await insertAgentDriveMembership(tx, grant);
-  });
   return { ok: true, access: await readAccess(userId, driveId) };
 }
 
