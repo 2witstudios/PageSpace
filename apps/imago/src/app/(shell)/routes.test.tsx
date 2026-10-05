@@ -24,7 +24,7 @@ const redirect = Object.assign(new Error('NEXT_REDIRECT'), {
   digest: 'NEXT_REDIRECT;replace;https://pagespace.ai/auth/signin?next=%2Fimago;307;',
 });
 
-type Params = Promise<Record<string, string>>;
+type Params = Promise<{ readonly driveId: string; readonly pageId: string; readonly conversationId: string }>;
 
 type Page = (props: { readonly params: Params }) => Promise<ReactNode>;
 
