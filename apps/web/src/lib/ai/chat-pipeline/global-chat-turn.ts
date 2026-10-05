@@ -1056,7 +1056,8 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
         userId,
         locationContext?.currentDrive?.id || null,
       );
-      if (currentDriveId) turnTimer.mark('drive_access_checked');
+      // The lookup ran whenever a drive was in view, member or not.
+      if (locationContext?.currentDrive?.id) turnTimer.mark('drive_access_checked');
       const integrationTools = await integrationResolver.resolveGlobalAssistantIntegrationTools({
         userId,
         driveId: currentDriveId,

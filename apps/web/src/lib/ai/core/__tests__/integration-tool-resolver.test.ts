@@ -42,6 +42,11 @@ vi.mock('@pagespace/lib/services/drive-service', () => ({
 vi.mock('@pagespace/lib/deployment-mode', () => ({
   isOnPrem: vi.fn(() => false),
 }));
+vi.mock('../imago-agent-context', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../imago-agent-context')>()),
+  findBuiltinAgentOwner: vi.fn(async () => null),
+  loadImagoAgentContext: vi.fn(),
+}));
 
 import {
   resolveAgentIntegrations,
@@ -54,6 +59,7 @@ import {
 import { createConfiguredToolExecutor } from '@pagespace/lib/integrations/saga/create-configured-executor';
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';
 import { isOnPrem } from '@pagespace/lib/deployment-mode';
+import { findBuiltinAgentOwner, loadImagoAgentContext } from '../imago-agent-context';
 import {
   resolvePageAgentIntegrationTools,
   resolveGlobalAssistantIntegrationTools,
@@ -79,6 +85,50 @@ const access = (role: 'OWNER' | 'ADMIN' | 'MEMBER' | null) => ({
 describe('resolvePageAgentIntegrationTools', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  describe('given a built-in Imago agent (IMG-4.9)', () => {
+    const imagoContext = { homeDriveId: 'home-1', grants: [{ driveId: 'granted-1', name: 'Acme', role: 'MEMBER' as const }] };
+
+    it('run by its owner, should resolve as the Imago agent and never load per-agent grants', async () => {
+      vi.mocked(findBuiltinAgentOwner).mockResolvedValueOnce('user-1');
+      vi.mocked(loadImagoAgentContext).mockResolvedValueOnce(imagoContext);
+      mockGetDriveAccess.mockResolvedValue(access('OWNER'));
+      mockResolveGlobalIntegrations.mockResolvedValue([]);
+
+      await resolvePageAgentIntegrationTools({
+        agentId: 'imago-1', userId: 'user-1', driveId: 'home-1', currentTools: {}, contextDriveId: 'granted-1', allowedDriveIds: ['granted-1'],
+      });
+
+      expect(mockResolveAgentIntegrations).not.toHaveBeenCalled();
+      expect(vi.mocked(loadImagoAgentContext)).toHaveBeenCalledWith({ userId: 'user-1', agentPageId: 'imago-1', allowedDriveIds: ['granted-1'] });
+      expect(mockResolveGlobalIntegrations).toHaveBeenCalledWith(expect.anything(), 'user-1', 'granted-1', 'OWNER');
+    });
+
+    it('run by its owner in an ungranted drive, should resolve with no drive', async () => {
+      vi.mocked(findBuiltinAgentOwner).mockResolvedValueOnce('user-1');
+      vi.mocked(loadImagoAgentContext).mockResolvedValueOnce(imagoContext);
+      mockResolveGlobalIntegrations.mockResolvedValue([]);
+
+      await resolvePageAgentIntegrationTools({
+        agentId: 'imago-1', userId: 'user-1', driveId: 'home-1', currentTools: {}, contextDriveId: 'ungranted-1',
+      });
+
+      expect(mockResolveGlobalIntegrations).toHaveBeenCalledWith(expect.anything(), 'user-1', null, null);
+      expect(mockResolveAgentIntegrations).not.toHaveBeenCalled();
+    });
+
+    it('run by anyone else, should resolve nothing', async () => {
+      vi.mocked(findBuiltinAgentOwner).mockResolvedValueOnce('owner-1');
+
+      const result = await resolvePageAgentIntegrationTools({
+        agentId: 'imago-1', userId: 'user-2', driveId: 'home-1', currentTools: {},
+      });
+
+      expect(result).toEqual({});
+      expect(mockResolveAgentIntegrations).not.toHaveBeenCalled();
+      expect(mockResolveGlobalIntegrations).not.toHaveBeenCalled();
+    });
   });
 
   it('given no grants, should return empty tool set', async () => {

@@ -25,6 +25,7 @@ import { PageType } from '@pagespace/lib/utils/enums';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
+import { userBuiltinAgents } from '@pagespace/db/schema/user-builtin-agents';
 
 export function getAgentPageId(context: ToolExecutionContext): string | undefined {
   return context.chatSource?.type === 'page' ? context.chatSource.agentPageId : undefined;
@@ -52,16 +53,53 @@ export async function hasAgentUserScopedAccess(agentPageId: string): Promise<boo
 
 /**
  * The ONE row both actor gates read for `chatSource.agentPageId`: is this page
- * actually an agent (`type`), and has it opted into user-scoped reach
- * (`userScopedAccess`)? Kept as a single select so the type gate below costs
- * zero additional queries on a path every tool call runs through.
+ * actually an agent (`type`), has it opted into user-scoped reach
+ * (`userScopedAccess`), and is it someone's built-in Imago agent
+ * (`builtinOwnerId`, from `user_builtin_agents`)? Kept as a single select so
+ * the gates below cost zero additional queries on a path every tool call runs
+ * through.
  */
 async function fetchActingPageRow(agentPageId: string) {
   const [row] = await db
-    .select({ type: pages.type, userScopedAccess: pages.userScopedAccess })
+    .select({ type: pages.type, userScopedAccess: pages.userScopedAccess, builtinOwnerId: userBuiltinAgents.userId })
     .from(pages)
+    .leftJoin(userBuiltinAgents, eq(userBuiltinAgents.pageId, pages.id))
     .where(eq(pages.id, agentPageId));
   return row;
+}
+
+/**
+ * A membership-scoped agent acting in a tool call. `cappedByUser` is set for a
+ * built-in Imago agent (Imago plan, DEC-2): it is the user's own assistant, so
+ * its drive grants are a ceiling, never a source of reach — every check that
+ * passes on the agent's membership must ALSO pass for the invoking user. A
+ * grant that outlives the user's access (a drive-member rollback or a
+ * permissions restore deletes the user's membership without revoking the
+ * grants they made) therefore reads nothing the user cannot. Ordinary page
+ * agents keep their own reach: a drive shares an agent precisely so members
+ * can use what it can see.
+ */
+interface ActingAgent {
+  agentPageId: string;
+  cappedByUser: boolean;
+}
+
+async function resolveActingAgent(context: ToolExecutionContext): Promise<ActingAgent | undefined> {
+  const agentPageId = getAgentPageId(context);
+  if (!agentPageId) return undefined;
+  const row = await fetchActingPageRow(agentPageId);
+  if (row?.type !== PageType.AI_CHAT || row.userScopedAccess) return undefined;
+  return { agentPageId, cappedByUser: row.builtinOwnerId != null };
+}
+
+/** The agent's answer, AND-ed with the invoking user's for an Imago agent. */
+async function withinUserCeiling(
+  agent: ActingAgent,
+  agentAllows: boolean,
+  userAllows: () => Promise<boolean>,
+): Promise<boolean> {
+  if (!agentAllows) return false;
+  return agent.cappedByUser ? userAllows() : true;
 }
 
 /**
@@ -96,11 +134,7 @@ async function fetchActingPageRow(agentPageId: string) {
  * re-deriving `getAgentPageId(context) && !hasAgentUserScopedAccess(...)` inline.
  */
 export async function resolveActingAgentId(context: ToolExecutionContext): Promise<string | undefined> {
-  const agentPageId = getAgentPageId(context);
-  if (!agentPageId) return undefined;
-  const row = await fetchActingPageRow(agentPageId);
-  if (row?.type !== PageType.AI_CHAT) return undefined;
-  return row.userScopedAccess ? undefined : agentPageId;
+  return (await resolveActingAgent(context))?.agentPageId;
 }
 
 /**
@@ -256,11 +290,12 @@ export async function canActorEditPage(
 ): Promise<boolean> {
   if (await pageOutsideMcpScope(context, pageId)) return false;
   if (await pageDeniedByAppToken(context, pageId, 'edit')) return false;
-  const agentPageId = await resolveActingAgentId(context);
-  if (agentPageId) {
-    if (await isAgentOwnedPage(agentPageId, pageId)) return true;
-    const perms = await getAgentAccessLevel(agentPageId, pageId);
-    return perms?.canEdit ?? false;
+  const agent = await resolveActingAgent(context);
+  if (agent) {
+    const agentAllows =
+      (await isAgentOwnedPage(agent.agentPageId, pageId)) ||
+      ((await getAgentAccessLevel(agent.agentPageId, pageId))?.canEdit ?? false);
+    return withinUserCeiling(agent, agentAllows, () => canUserEditPage(context.userId, pageId));
   }
   return canUserEditPage(context.userId, pageId);
 }
@@ -271,10 +306,10 @@ export async function canActorDeletePage(
 ): Promise<boolean> {
   if (await pageOutsideMcpScope(context, pageId)) return false;
   if (await pageDeniedByAppToken(context, pageId, 'delete')) return false;
-  const agentPageId = await resolveActingAgentId(context);
-  if (agentPageId) {
-    const perms = await getAgentAccessLevel(agentPageId, pageId);
-    return perms?.canDelete ?? false;
+  const agent = await resolveActingAgent(context);
+  if (agent) {
+    const perms = await getAgentAccessLevel(agent.agentPageId, pageId);
+    return withinUserCeiling(agent, perms?.canDelete ?? false, () => canUserDeletePage(context.userId, pageId));
   }
   return canUserDeletePage(context.userId, pageId);
 }
@@ -285,12 +320,16 @@ export async function canActorViewPage(
 ): Promise<boolean> {
   if (await pageOutsideMcpScope(context, pageId)) return false;
   if (await pageDeniedByAppToken(context, pageId, 'view')) return false;
-  const agentPageId = await resolveActingAgentId(context);
-  if (agentPageId) {
-    const perms = await getAgentAccessLevel(agentPageId, pageId);
-    return perms?.canView ?? false;
+  const agent = await resolveActingAgent(context);
+  if (agent) {
+    const perms = await getAgentAccessLevel(agent.agentPageId, pageId);
+    return withinUserCeiling(agent, perms?.canView ?? false, () => canUserViewPage(context.userId, pageId));
   }
-  const perms = await getUserAccessLevel(context.userId, pageId);
+  return canUserViewPage(context.userId, pageId);
+}
+
+async function canUserViewPage(userId: string, pageId: string): Promise<boolean> {
+  const perms = await getUserAccessLevel(userId, pageId);
   return perms?.canView ?? false;
 }
 
@@ -333,8 +372,14 @@ export async function canActorAccessDrive(
   if (hasAppTokenCeiling(context) && !(await hasAppDriveMembership(context.mcpTokenId!, driveId))) {
     return false;
   }
-  const agentPageId = await resolveActingAgentId(context);
-  if (agentPageId) return hasAgentDriveMembership(agentPageId, driveId);
+  const agent = await resolveActingAgent(context);
+  if (agent) {
+    return withinUserCeiling(
+      agent,
+      await hasAgentDriveMembership(agent.agentPageId, driveId),
+      () => getUserDriveAccess(context.userId, driveId),
+    );
+  }
   return getUserDriveAccess(context.userId, driveId);
 }
 
@@ -370,10 +415,16 @@ async function driveGateWithAgentCheck(
 ): Promise<boolean> {
   if (driveOutsideMcpScope(context, driveId)) return false;
   if (await driveDeniedByAppToken(context, driveId, 'manage')) return false;
-  const agentPageId = await resolveActingAgentId(context);
-  if (agentPageId) return agentCheck(agentPageId, driveId);
-  const access = await checkDriveAccess(driveId, context.userId);
-  return access.isOwner || access.isAdmin;
+  // An Imago agent is capped by the user here too: it may manage or
+  // administer a drive (cron workflows, cross-drive moves in) only where the
+  // invoking user is owner or admin, as the REST API requires of the user.
+  const userIsOwnerOrAdmin = async () => {
+    const access = await checkDriveAccess(driveId, context.userId);
+    return access.isOwner || access.isAdmin;
+  };
+  const agent = await resolveActingAgent(context);
+  if (agent) return withinUserCeiling(agent, await agentCheck(agent.agentPageId, driveId), userIsOwnerOrAdmin);
+  return userIsOwnerOrAdmin();
 }
 
 /**
@@ -401,23 +452,32 @@ export async function getActorAccessiblePagesInDrive(
   driveId: string,
 ): Promise<PageWithPermissions[]> {
   if (driveOutsideMcpScope(context, driveId)) return [];
-  const agentPageId = await resolveActingAgentId(context);
-  const actorPages = agentPageId
-    ? await getAgentAccessiblePagesInDrive(agentPageId, driveId)
+  const agent = await resolveActingAgent(context);
+  let actorPages = agent
+    ? await getAgentAccessiblePagesInDrive(agent.agentPageId, driveId)
     : await getUserAccessiblePagesInDriveWithDetails(context.userId, driveId);
+  // An Imago agent never sees more of the drive than the invoking user does.
+  if (agent?.cappedByUser && actorPages.length > 0) {
+    actorPages = capPages(actorPages, await getUserAccessiblePagesInDriveWithDetails(context.userId, driveId));
+  }
   if (!hasAppTokenCeiling(context)) return actorPages;
   // Inherit rows apply no ceiling — the key acts as its owner.
   if (!(await hasExplicitAppRole(context, driveId))) return actorPages;
 
-  // App-member ceiling: intersect with the token's own accessible set, AND-ing
-  // each permission flag so the token never exceeds its explicit membership role.
-  const tokenPages = new Map(
-    (await getAppAccessiblePagesInDrive(context.mcpTokenId!, driveId)).map((p) => [p.id, p.permissions]),
-  );
+  // App-member ceiling: the token never exceeds its explicit membership role.
+  return capPages(actorPages, await getAppAccessiblePagesInDrive(context.mcpTokenId!, driveId));
+}
+
+/**
+ * Intersect `actorPages` with the pages `ceiling` can view, AND-ing each
+ * permission flag so the result never exceeds the ceiling.
+ */
+function capPages(actorPages: PageWithPermissions[], ceiling: PageWithPermissions[]): PageWithPermissions[] {
+  const capById = new Map(ceiling.map((p) => [p.id, p.permissions]));
   return actorPages
-    .filter((p) => tokenPages.get(p.id)?.canView)
+    .filter((p) => capById.get(p.id)?.canView)
     .map((p) => {
-      const cap = tokenPages.get(p.id)!;
+      const cap = capById.get(p.id)!;
       return {
         ...p,
         permissions: {
@@ -453,6 +513,45 @@ export async function driveDeniedByAppToken(
   const level = await getAppDriveAccessLevel(context.mcpTokenId!, driveId);
   if (!level) return true;
   return need === 'edit' ? !level.canEdit : !level.canView;
+}
+
+/**
+ * The drives a membership-scoped agent may enumerate: its own drive ids, minus
+ * those outside the token ceiling (`filterDriveIdsByAppTokenScope`) and, for an
+ * Imago agent, those the invoking user cannot access — so drive discovery
+ * (list_drives, multi_drive_list_agents) never names a drive the gates above
+ * would refuse.
+ */
+export async function filterAgentDriveIdsByActorReach(
+  context: ToolExecutionContext,
+  driveIds: string[],
+): Promise<string[]> {
+  const scoped = await filterDriveIdsByAppTokenScope(context, driveIds);
+  const agent = await resolveActingAgent(context);
+  if (!agent?.cappedByUser) return scoped;
+  const results = await Promise.all(
+    scoped.map(async (driveId) => ((await getUserDriveAccess(context.userId, driveId)) ? driveId : null)),
+  );
+  return results.filter((id): id is string => id !== null);
+}
+
+/**
+ * For an Imago agent, the drives among `driveIds` it may access — its grant
+ * AND the invoking user (`canActorAccessDrive`). Any other actor gets
+ * `driveIds` back unchanged. For tools that start from the USER's drives
+ * (get_activity), where a drive the agent holds no grant on would otherwise
+ * surface its name, prompt and drive-level rows.
+ */
+export async function filterDriveIdsByImagoAgentReach(
+  context: ToolExecutionContext,
+  driveIds: string[],
+): Promise<string[]> {
+  const agent = await resolveActingAgent(context);
+  if (!agent?.cappedByUser) return driveIds;
+  const results = await Promise.all(
+    driveIds.map(async (driveId) => ((await canActorAccessDrive(context, driveId)) ? driveId : null)),
+  );
+  return results.filter((id): id is string => id !== null);
 }
 
 /**

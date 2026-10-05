@@ -219,6 +219,12 @@ vi.mock('@/lib/ai/core/tool-filtering', async (importOriginal) => {
     filterToolsForMcpScope: vi.fn(actual.filterToolsForMcpScope),
   };
 });
+// Not a built-in Imago agent: the route's Imago context load fails the turn
+// closed if it throws, so it must not reach this file's partial db mock.
+vi.mock('@/lib/ai/core/imago-agent-context', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/ai/core/imago-agent-context')>()),
+  loadImagoAgentContext: vi.fn().mockResolvedValue(null),
+}));
 vi.mock('@/lib/ai/core/page-tree-context', () => ({
   getPageTreeContext: vi.fn(),
 }));

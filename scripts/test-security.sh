@@ -311,6 +311,12 @@ echo "---------------------"
 run_test_suite "Imago Access Toggle Route (owner/admin only, CSRF + origin, off stays off)" "web" "src/app/api/drives/[driveId]/imago-access"
 run_db_test_suite "Imago Access Toggle Service (grant rights, Home refused, authoritative off)" "@pagespace/lib" "src/agents/__tests__/imago-drive-access.integration.test.ts"
 run_test_suite "Drive Ownership Rollback/Redo (revokes the outgoing owner's Imago grants)" "web" "src/services/api/rollback/__tests__/drive-ownership.integration.test.ts"
+# IMG-4.9: real POST /api/ai/chat turns, only the model mocked, driving the tool executors.
+run_test_suite "Imago Agent Reach (ungranted drives, another user's Home, cross-drive search: never beyond grants or the user)" "web" "src/lib/ai/chat-pipeline/__tests__/imago-agent-reach.security.test.ts"
+run_test_suite "Imago Agent Integrations (drive ones only where granted and a member, per-agent grants ignored, fail closed)" "web" "src/lib/ai/chat-pipeline/__tests__/imago-turn-integrations.integration.test.ts"
+run_test_suite "Actor Permissions (agent/user/token ceilings, Imago agents capped by the invoking user)" "web" "src/lib/ai/tools/__tests__/actor-permissions.test.ts"
+run_test_suite "Imago Agent Integrations outside page chat (@-mention engine, consult route, workflows)" "web" "src/lib/ai/core/__tests__/imago-integration-entrypoints.security.test.ts"
+run_test_suite "Member removal by rollback/redo/restore revokes the member's agent grants" "web" "src/services/api/rollback/__tests__/member-removal-agent-grants.integration.test.ts"
 
 # =============================================================================
 # AI Tool Security Tests

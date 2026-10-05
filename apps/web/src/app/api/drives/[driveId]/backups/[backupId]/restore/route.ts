@@ -15,6 +15,7 @@ import {
   planMemberRestoreOps,
   planRoleRestoreOps,
   applyPermRestoreOps,
+  revokeAgentGrantsOfRemovedMembers,
 } from '@/services/api/restore-permissions-service';
 import { runPreRestoreSnapshot } from '@/services/api/restore-backup-service';
 
@@ -141,6 +142,7 @@ export async function POST(
         driveId,
         tx as never,
       );
+      await revokeAgentGrantsOfRemovedMembers(tx, driveId, memberOps, skippedMembers);
 
       return {
         pagesCreated: diff.toCreate.length,
