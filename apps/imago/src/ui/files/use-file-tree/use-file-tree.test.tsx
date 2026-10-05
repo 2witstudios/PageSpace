@@ -336,7 +336,7 @@ describe('useFileTree() lazy children', () => {
     let answer: (response: Response) => void = () => {};
     const { current, switchDrive } = mountTree({
       [TREE]: () => Response.json(driveTree()),
-      'GET /api/drives/d2/pages': () => Response.json([treeRow('other', 'DOCUMENT', [], { driveId: 'd2' })]),
+      'GET /api/drives/d2/pages': () => Response.json([treeRow('other', 'DOCUMENT')]),
       [F1_CHILDREN]: () => Response.json([pageRow('loaded', 'DOCUMENT', { parentId: 'f1' })]),
       'GET /api/pages/sheet/children': () =>
         new Promise<Response>((resolve) => {
