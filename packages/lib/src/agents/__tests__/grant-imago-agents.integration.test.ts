@@ -22,7 +22,8 @@ import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
 import { BUILTIN_AGENT_KEYS } from '../builtin-agents';
 import { provisionImagoAgents } from '../provision-imago-agents';
-import { grantImagoAgentsToOwnedDrives, revokeImagoAgentGrants } from '../grant-imago-agents';
+import { grantImagoAgents, revokeImagoAgentGrants } from '../grant-imago-agents';
+import { setImagoDriveAccess } from '../imago-drive-access';
 import { provisionHomeDriveIfNeeded } from '../../onboarding/home-drive';
 import { createDrive, transferDriveOwnership } from '../../services/drive-service';
 import { addAgentToDrive, removeAgentFromDrive } from '../../services/drive-agent-service';
@@ -161,7 +162,7 @@ describe('Imago agent grants on provisioning (real Postgres)', () => {
     const owned = await factories.createDrive(user.id, { name: 'Owned' });
     const ids = await provisionedAgentIds(user.id);
 
-    const outcomes = await grantImagoAgentsToOwnedDrives(user.id, { driveIds: [owned.id] });
+    const outcomes = await grantImagoAgents(user.id, { driveIds: [owned.id] });
 
     expect(outcomes.map((outcome) => outcome.status)).toEqual(ids.map(() => 'already'));
     expect(await grantedDriveIds(ids, owned.id)).toEqual([...ids].sort());
@@ -175,7 +176,7 @@ describe('Imago agent grants on provisioning (real Postgres)', () => {
     const adminOf = await factories.createDrive(other.id, { name: 'Admin of' });
     await factories.createDriveMember(adminOf.id, user.id, { role: 'ADMIN' });
 
-    const outcomes = await grantImagoAgentsToOwnedDrives(user.id, { driveIds: [adminOf.id, home.id] });
+    const outcomes = await grantImagoAgents(user.id, { driveIds: [adminOf.id, home.id] });
 
     expect(outcomes).toEqual([]);
     expect(await grantedDriveIds(ids, adminOf.id)).toEqual([]);
@@ -278,7 +279,7 @@ describe('Imago agent grants on ownership transfer (real Postgres)', () => {
 
     await provisionHomeDriveIfNeeded(from.id);
     await provisionImagoAgents(from.id);
-    await grantImagoAgentsToOwnedDrives(from.id);
+    await grantImagoAgents(from.id);
 
     expect(await grantedDriveIds(fromAgents, drive.id)).toEqual([]);
   });
@@ -295,6 +296,32 @@ describe('Imago agent grants on ownership transfer (real Postgres)', () => {
     // The new owner's own decision (the IMG-4.6 toggle path) still works.
     const granted = await addAgentToDrive({ actingUserId: to.id, agentPageId: toAgents[0], driveId: drive.id, requestedRole: 'MEMBER' });
     expect(granted.ok).toBe(true);
+  });
+
+  it("given a transfer, should keep the new owner's recreated agents out of the acquired drive (IMG-4.6a)", async () => {
+    if (!dbAvailable) return;
+    const { from, to, drive, toAgents } = await transferredDrive();
+    await transferDriveOwnership(drive.id, from.id, to.id);
+    await db.delete(pages).where(inArray(pages.id, toAgents));
+
+    const recreated = await provisionedAgentIds(to.id);
+
+    expect(recreated.some((id) => toAgents.includes(id))).toBe(false);
+    expect(await grantedDriveIds(recreated, drive.id)).toEqual([]);
+  });
+
+  it("given a transfer to a former owner kept on as admin, should not re-grant the previous owner's recreated agents (IMG-4.6a)", async () => {
+    if (!dbAvailable) return;
+    const { from, to, drive, fromAgents } = await transferredDrive();
+    // An explicit "on" stored while they owned it must not survive the handover.
+    expect((await setImagoDriveAccess(from.id, drive.id, true)).ok).toBe(true);
+    await transferDriveOwnership(drive.id, from.id, to.id);
+    await factories.createDriveMember(drive.id, from.id, { role: 'ADMIN' });
+    await db.delete(pages).where(inArray(pages.id, fromAgents));
+
+    const recreated = await provisionedAgentIds(from.id);
+
+    expect(await grantedDriveIds(recreated, drive.id)).toEqual([]);
   });
 
   it('given a transfer, should keep a non-Imago agent grant the previous owner made explicitly', async () => {

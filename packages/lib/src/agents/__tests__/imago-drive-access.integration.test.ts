@@ -15,12 +15,15 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import { db } from '@pagespace/db/db';
 import { and, eq, inArray } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
-import { driveAgentMembers } from '@pagespace/db/schema/members';
+import { driveAgentMembers, driveMembers } from '@pagespace/db/schema/members';
+import { imagoDriveAccess } from '@pagespace/db/schema/imago-drive-access';
+import { userBuiltinAgents } from '@pagespace/db/schema/user-builtin-agents';
 import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
 import { BUILTIN_AGENT_KEYS } from '../builtin-agents';
 import { provisionImagoAgents } from '../provision-imago-agents';
 import { getImagoDriveAccess, setImagoDriveAccess } from '../imago-drive-access';
+import { grantImagoAgents } from '../grant-imago-agents';
 import { provisionHomeDriveIfNeeded } from '../../onboarding/home-drive';
 import { createDrive } from '../../services/drive-service';
 import { addAgentToDrive } from '../../services/drive-agent-service';
@@ -314,5 +317,212 @@ describe('Imago access off is authoritative across re-provisioning (real Postgre
 
     expect(await membersIn(a.id, ids)).toEqual(sorted(ids));
     expect(await membersIn(b.id, ids)).toEqual(sorted(ids));
+  });
+});
+
+async function storedChoice(userId: string, driveId: string) {
+  const [row] = await db
+    .select({ enabled: imagoDriveAccess.enabled })
+    .from(imagoDriveAccess)
+    .where(and(eq(imagoDriveAccess.userId, userId), eq(imagoDriveAccess.driveId, driveId)));
+  return row?.enabled ?? null;
+}
+
+/** Every page that was ever one of the user's Imago agents and is a member of `driveId` (Home pages included). */
+async function imagoPagesIn(driveId: string, pageIds: readonly string[]) {
+  return membersIn(driveId, [...pageIds]);
+}
+
+describe('IMG-4.6a: the opt-out is stored and outlives the agent pages (real Postgres)', () => {
+  it('given enabled=false, should store the opt-out for that user and drive only', async () => {
+    if (!dbAvailable) return;
+    const { user, on, off } = await setup();
+
+    await setImagoDriveAccess(user.id, off.id, false);
+
+    expect(await storedChoice(user.id, off.id)).toBe(false);
+    expect(await storedChoice(user.id, on.id)).toBeNull();
+  });
+
+  it('given a drive switched back on, should store the choice as on', async () => {
+    if (!dbAvailable) return;
+    const { user, off } = await setup();
+    await setImagoDriveAccess(user.id, off.id, false);
+
+    await setImagoDriveAccess(user.id, off.id, true);
+
+    expect(await storedChoice(user.id, off.id)).toBe(true);
+  });
+
+  it('given all three agent pages permanently deleted, should not re-grant the switched-off drive at sign-in', async () => {
+    if (!dbAvailable) return;
+    const { user, on, off, ids } = await setup();
+    await setImagoDriveAccess(user.id, off.id, false);
+    await db.delete(pages).where(inArray(pages.id, ids));
+
+    await provisionHomeDriveIfNeeded(user.id);
+    const recreated = Object.values((await provisionImagoAgents(user.id)).agents);
+
+    expect(recreated.some((id) => ids.includes(id))).toBe(false);
+    expect(await membersIn(off.id, recreated)).toEqual([]);
+    expect(await membersIn(on.id, recreated)).toEqual(sorted(recreated));
+    expect(await getImagoDriveAccess(user.id, off.id)).toMatchObject({ ok: true, access: { enabled: false } });
+  });
+
+  it('given all three agent pages permanently deleted, should not re-grant the switched-off drive through the backfill provisioner', async () => {
+    if (!dbAvailable) return;
+    const { user, on, off, ids } = await setup();
+    await setImagoDriveAccess(user.id, off.id, false);
+    await db.delete(pages).where(inArray(pages.id, ids));
+
+    const recreated = Object.values((await provisionImagoAgents(user.id)).agents);
+
+    expect(await membersIn(off.id, recreated)).toEqual([]);
+    expect(await membersIn(on.id, recreated)).toEqual(sorted(recreated));
+  });
+
+  it('given the drive-creation grant aimed at a switched-off drive, should grant nothing there', async () => {
+    if (!dbAvailable) return;
+    const { user, off, ids } = await setup();
+    await setImagoDriveAccess(user.id, off.id, false);
+
+    const outcomes = await grantImagoAgents(user.id, { driveIds: [off.id] });
+
+    expect(outcomes).toEqual([]);
+    expect(await membersIn(off.id, ids)).toEqual([]);
+  });
+});
+
+describe('IMG-4.6a: turning a drive off reaches superseded trashed agent pages (real Postgres)', () => {
+  it('given a trashed agent replaced at sign-in and then the drive switched off, should leave the old page no way back in', async () => {
+    if (!dbAvailable) return;
+    const { user, home, off, agents } = await setup();
+    const old = agents.imago;
+    await db.update(pages).set({ isTrashed: true, trashedAt: new Date() }).where(eq(pages.id, old));
+    await provisionHomeDriveIfNeeded(user.id);
+
+    await setImagoDriveAccess(user.id, off.id, false);
+    // The user restores the superseded page from the trash.
+    await db.update(pages).set({ isTrashed: false, trashedAt: null }).where(eq(pages.id, old));
+
+    expect(await imagoPagesIn(off.id, [old])).toEqual([]);
+    // Its native Home membership is untouched.
+    expect(await imagoPagesIn(home.id, [old])).toEqual([old]);
+  });
+
+  it('given a trashed agent not yet replaced, should revoke its membership when the drive is switched off', async () => {
+    if (!dbAvailable) return;
+    const { user, off, agents } = await setup();
+    const trashed = agents['imago-planner'];
+    await db.update(pages).set({ isTrashed: true, trashedAt: new Date() }).where(eq(pages.id, trashed));
+
+    await setImagoDriveAccess(user.id, off.id, false);
+    await db.update(pages).set({ isTrashed: false, trashedAt: null }).where(eq(pages.id, trashed));
+
+    expect(await imagoPagesIn(off.id, [trashed])).toEqual([]);
+  });
+});
+
+describe('IMG-4.6a: a drive the user administers but does not own (real Postgres)', () => {
+  async function adminSetup() {
+    const { user: owner } = await userWithHome();
+    const team = await factories.createDrive(owner.id, { name: 'Team' });
+    const { user: admin } = await userWithHome();
+    const provisioned = await provisionImagoAgents(admin.id);
+    await factories.createDriveMember(team.id, admin.id, { role: 'ADMIN' });
+    return { owner, team, admin, agents: provisioned.agents, ids: Object.values(provisioned.agents) };
+  }
+
+  function fullyOn(result: Awaited<ReturnType<typeof getImagoDriveAccess>>) {
+    return result.ok && result.access.enabled && result.access.agents.length === BUILTIN_AGENT_KEYS.length
+      && result.access.agents.every((agent) => agent.isMember);
+  }
+
+  it('given the toggle turned on and an agent permanently deleted and recreated, should keep every agent a member (no partial state)', async () => {
+    if (!dbAvailable) return;
+    const { team, admin, agents } = await adminSetup();
+    await setImagoDriveAccess(admin.id, team.id, true);
+    await db.delete(pages).where(eq(pages.id, agents.imago));
+
+    await provisionHomeDriveIfNeeded(admin.id);
+
+    expect(fullyOn(await getImagoDriveAccess(admin.id, team.id))).toBe(true);
+  });
+
+  it('given the toggle turned on and all three agents trashed and recreated, should keep the drive on', async () => {
+    if (!dbAvailable) return;
+    const { team, admin, ids } = await adminSetup();
+    await setImagoDriveAccess(admin.id, team.id, true);
+    await db.update(pages).set({ isTrashed: true, trashedAt: new Date() }).where(inArray(pages.id, ids));
+
+    await provisionHomeDriveIfNeeded(admin.id);
+
+    expect(fullyOn(await getImagoDriveAccess(admin.id, team.id))).toBe(true);
+  });
+
+  it('given the toggle never turned on, should leave the drive off across recreation (DEC-2: only owned drives default on)', async () => {
+    if (!dbAvailable) return;
+    const { team, admin, ids } = await adminSetup();
+    await db.delete(pages).where(inArray(pages.id, ids));
+
+    const recreated = Object.values((await provisionImagoAgents(admin.id)).agents);
+
+    expect(await membersIn(team.id, recreated)).toEqual([]);
+    expect(await getImagoDriveAccess(admin.id, team.id)).toMatchObject({ ok: true, access: { enabled: false } });
+  });
+
+  it('given an admin demoted after turning the toggle on, should not re-grant a recreated agent', async () => {
+    if (!dbAvailable) return;
+    const { team, admin, ids } = await adminSetup();
+    await setImagoDriveAccess(admin.id, team.id, true);
+    await db.update(driveMembers).set({ role: 'MEMBER' })
+      .where(and(eq(driveMembers.driveId, team.id), eq(driveMembers.userId, admin.id)));
+    await db.delete(pages).where(inArray(pages.id, ids));
+
+    const recreated = Object.values((await provisionImagoAgents(admin.id)).agents);
+
+    expect(await membersIn(team.id, recreated)).toEqual([]);
+  });
+
+  it('given the toggle on, should report enabled exactly when every live agent is a member', async () => {
+    if (!dbAvailable) return;
+    const { team, admin } = await adminSetup();
+
+    const on = await setImagoDriveAccess(admin.id, team.id, true);
+    expect(fullyOn(on)).toBe(true);
+    const off = await setImagoDriveAccess(admin.id, team.id, false);
+    expect(off.ok && !off.access.enabled && off.access.agents.every((agent) => !agent.isMember)).toBe(true);
+  });
+});
+
+describe('IMG-4.6a: a turn-off racing an agent recreation at sign-in (real concurrent Postgres)', () => {
+  // Each round: the user's three agent pages are gone, so the next sign-in
+  // recreates them and grants them where Imago is on — while, at the same
+  // moment, the user switches the drive off. Whatever the interleaving, the
+  // drive must end off: stored off, and no Imago page of the user a member.
+  const ROUNDS = 12;
+
+  it(`given ${ROUNDS} rounds of sign-in and turn-off fired together, should end opted out every time`, async () => {
+    if (!dbAvailable) return;
+    const failures: string[] = [];
+    for (let round = 0; round < ROUNDS; round++) {
+      const { user, off, ids } = await setup();
+      await db.delete(pages).where(inArray(pages.id, ids));
+
+      const [, toggled] = await Promise.all([
+        provisionHomeDriveIfNeeded(user.id),
+        setImagoDriveAccess(user.id, off.id, false),
+      ]);
+      expect(toggled.ok).toBe(true);
+
+      const pointers = await db
+        .select({ pageId: userBuiltinAgents.pageId })
+        .from(userBuiltinAgents)
+        .where(eq(userBuiltinAgents.userId, user.id));
+      const members = await membersIn(off.id, pointers.map((row) => row.pageId));
+      const stored = await storedChoice(user.id, off.id);
+      if (members.length > 0 || stored !== false) failures.push(`round ${round}: members=${members.length} stored=${stored}`);
+    }
+    expect(failures).toEqual([]);
   });
 });
