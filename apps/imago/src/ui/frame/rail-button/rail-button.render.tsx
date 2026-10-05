@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import type { MouseEvent, ReactNode } from 'react';
 import type { IconName } from '../../components/icon/icon-names';
+import type { RailPlace } from '../rail/rail-items';
 import { renderIcon } from '../../components/icon/icon.render';
 import { renderUnreadCount } from '../../components/unread-count/unread-count.render';
 import { railChipClass, railHitClass, railTooltipClass, railUnreadClass } from './rail-button-class';
@@ -10,7 +11,8 @@ export type RailButtonRenderProps = {
   readonly label: string;
   /** basePath-relative; null when there is no drive to link into. */
   readonly href: string | null;
-  readonly active: boolean;
+  /** Where the viewer is if this is the active item; null otherwise. */
+  readonly current: RailPlace | null;
   /** Drawn as the accent count above zero. */
   readonly unread: number;
   /**
@@ -27,13 +29,17 @@ export const renderRailTooltip = (label: string): ReactNode => (
   </span>
 );
 
+/** `page` only on the URL the link points at; `true` anywhere inside its section. */
+const ariaCurrent: Readonly<Record<RailPlace, 'page' | 'true'>> = { page: 'page', section: 'true' };
+
 /**
  * One rail destination: a 44px control carrying a 38px chip, the active
  * marker, its tooltip and any unread count. Every link prefetches its full
  * route, so a section opens from the cache.
  */
 export function renderRailButton(props: RailButtonRenderProps): ReactNode {
-  const { icon, label, href, active, unread, onReopen } = props;
+  const { icon, label, href, current, unread, onReopen } = props;
+  const active = current !== null;
   const name = unread > 0 ? `${label}, ${unread} unread` : label;
   const inner = (
     <>
@@ -65,7 +71,7 @@ export function renderRailButton(props: RailButtonRenderProps): ReactNode {
       prefetch={true}
       className={railHitClass(true)}
       aria-label={name}
-      aria-current={active ? 'page' : undefined}
+      aria-current={current === null ? undefined : ariaCurrent[current]}
       onClick={reopen}
     >
       {inner}

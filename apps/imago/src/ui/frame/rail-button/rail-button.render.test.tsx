@@ -11,7 +11,7 @@ const files: RailButtonRenderProps = {
   icon: 'files',
   label: 'Files',
   href: '/drive-1/files',
-  active: false,
+  current: null,
   unread: 0,
 };
 
@@ -41,12 +41,12 @@ describe('renderRailButton()', () => {
   });
 
   test('the active item', () => {
-    const html = renderToStaticMarkup(renderRailButton({ ...files, active: true }));
+    const html = renderToStaticMarkup(renderRailButton({ ...files, current: 'page' }));
     assert({
-      given: 'the item for the current section',
+      given: 'the item whose own URL is open',
       should: 'mark the link aria-current="page" and tint its chip',
       actual: [
-        linkOf({ ...files, active: true })['aria-current'],
+        linkOf({ ...files, current: 'page' })['aria-current'],
         html.includes('aria-current="page"'),
         html.includes(`class="${railChipClass(true, true)}"`),
       ],
@@ -54,9 +54,19 @@ describe('renderRailButton()', () => {
     });
   });
 
+  test('inside the active section', () => {
+    const html = renderToStaticMarkup(renderRailButton({ ...files, current: 'section' }));
+    assert({
+      given: 'a page open inside the item’s section, not the item’s own URL',
+      should: 'mark the link aria-current="true", not "page", and still tint its chip',
+      actual: [linkOf({ ...files, current: 'section' })['aria-current'], html.includes(`class="${railChipClass(true, true)}"`)],
+      expected: ['true', true],
+    });
+  });
+
   test('an unread count', () => {
     const html = renderToStaticMarkup(
-      renderRailButton({ icon: 'messages', label: 'Messages', href: '/drive-1/messages', active: false, unread: 3 }),
+      renderRailButton({ icon: 'messages', label: 'Messages', href: '/drive-1/messages', current: null, unread: 3 }),
     );
     assert({
       given: 'three unread messages',
@@ -82,7 +92,7 @@ describe('renderRailButton()', () => {
   test('reopening a collapsed section', () => {
     const onReopen = vi.fn();
     const preventDefault = vi.fn();
-    const link = linkOf({ ...files, active: true, onReopen });
+    const link = linkOf({ ...files, current: 'section', onReopen });
     link.onClick?.({ preventDefault } as unknown as MouseEvent);
     assert({
       given: 'the active item while its section’s list is hidden, clicked',

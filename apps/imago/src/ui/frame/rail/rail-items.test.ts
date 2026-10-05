@@ -3,6 +3,7 @@ import { assert } from 'riteway/vitest';
 import { stageFor } from '../stage/stage';
 import {
   activeRailItem,
+  activeRailPlace,
   classicHref,
   messagesUnread,
   overflowItems,
@@ -122,6 +123,26 @@ describe('activeRailItem()', () => {
       should: 'mark its section, DMs under Messages, and nothing for the account',
       actual: paths.map((path) => activeRailItem(stageFor(path))),
       expected: ['chat', 'files', 'files', 'messages', 'messages', 'tasks', 'settings', null],
+    });
+  });
+});
+
+describe('activeRailPlace()', () => {
+  test('the active item’s own URL, or a place inside its section', () => {
+    const paths = [
+      '/drive-1',
+      '/drive-1/files',
+      '/drive-1/files/page-1',
+      '/drive-1/messages/channel-1',
+      '/drive-1/settings',
+      '/dm',
+      '/dm/conversation-1',
+    ];
+    assert({
+      given: 'section roots, pages inside sections, and the driveless DMs',
+      should: 'call only the URL the item links to its page',
+      actual: paths.map((path) => activeRailPlace(stageFor(path))),
+      expected: ['page', 'page', 'section', 'section', 'page', 'section', 'section'],
     });
   });
 });

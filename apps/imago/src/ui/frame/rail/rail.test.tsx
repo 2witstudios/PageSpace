@@ -111,9 +111,9 @@ describe('Rail', () => {
 
     assert({
       given: 'a task list open in drive-1',
-      should: 'link every item into drive-1 and mark Tasks current',
+      should: 'link every item into drive-1 and mark Tasks as the current section',
       actual: [hrefs, control(container, 'Tasks').getAttribute('aria-current'), container.querySelectorAll('[aria-current]').length],
-      expected: [['/drive-1', '/drive-1/files', '/drive-1/messages', '/drive-1/tasks', '/drive-1/settings'], 'page', 1],
+      expected: [['/drive-1', '/drive-1/files', '/drive-1/messages', '/drive-1/tasks', '/drive-1/settings'], 'true', 1],
     });
   });
 
@@ -122,9 +122,40 @@ describe('Rail', () => {
 
     assert({
       given: 'a DM, which names no drive',
-      should: 'link into the Home drive and keep Messages current',
+      should: 'link into the Home drive and keep Messages the current section',
       actual: [control(container, 'Files').getAttribute('href'), control(container, 'Messages').getAttribute('aria-current')],
-      expected: ['/home-1/files', 'page'],
+      expected: ['/home-1/files', 'true'],
+    });
+  });
+
+  test('the active item at its own URL', () => {
+    const { container } = railAt('/drive-1/files');
+
+    assert({
+      given: 'the files list open',
+      should: 'mark Files as the current page',
+      actual: control(container, 'Files').getAttribute('aria-current'),
+      expected: 'page',
+    });
+  });
+
+  test('the active item with its list showing', () => {
+    const { container } = railAt('/drive-1/files/page-1');
+    const files = control(container, 'Files');
+    const expand = vi.spyOn(transactions, 'expandSection');
+    // jsdom has no app router: stop Next's Link at the anchor. Link still
+    // calls the rail's onClick first, so a reopen handler would still run.
+    const clicks = vi.fn((event: Event) => event.preventDefault());
+    files.addEventListener('click', clicks);
+    act(() => files.click());
+    const reopened = expand.mock.calls.length;
+    expand.mockRestore();
+
+    assert({
+      given: 'the files tree visible beside a page, and the active Files clicked',
+      should: 'leave it to the link: no reopen transaction and the store untouched',
+      actual: [clicks.mock.calls.length, reopened, getUiState().resources.collapsedSections],
+      expected: [1, 0, []],
     });
   });
 
@@ -165,10 +196,14 @@ describe('Rail', () => {
     await toggleMore(container);
     const opened = [...container.querySelectorAll('details a')].map((link) => link.getAttribute('href'));
 
+    const link = container.querySelector<HTMLElement>('details a');
+    act(() => link?.focus());
+    const focusedLink = document.activeElement === link;
     act(() => {
-      details?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      link?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     });
     const afterEscape = details?.open;
+    const focusBack = document.activeElement === control(container, 'More');
 
     await toggleMore(container);
     const reopened = details?.open;
@@ -178,8 +213,8 @@ describe('Rail', () => {
 
     assert({
       given: '⋯ clicked, then Escape, then ⋯ again and a click outside',
-      should: 'open the classic deep links for this drive, and close on Escape and on an outside click',
-      actual: [opened, afterEscape, reopened, details?.open],
+      should: 'open the classic deep links for this drive, close on Escape with focus back on ⋯, and close on an outside click',
+      actual: [opened, focusedLink, afterEscape, focusBack, reopened, details?.open],
       expected: [
         [
           '/dashboard/drive-1/calendar',
@@ -188,7 +223,9 @@ describe('Rail', () => {
           '/dashboard/drive-1/activity',
           '/dashboard/drive-1/trash',
         ],
+        true,
         false,
+        true,
         true,
         false,
       ],

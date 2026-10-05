@@ -10,6 +10,7 @@ const props = (overrides: Partial<RailRenderProps> = {}): RailRenderProps => ({
   items: railItems('drive-1'),
   settings: settingsItem('drive-1'),
   activeId: 'files',
+  activeAt: 'page',
   unread: { messages: 4 },
   overflow: overflowItems('drive-1'),
   moreOpen: false,
@@ -36,11 +37,17 @@ describe('renderRail()', () => {
   });
 
   test('one active item', () => {
+    const page = markup();
+    const section = markup({ activeAt: 'section' });
     assert({
-      given: 'Files active',
-      should: 'mark only Files as the current page',
-      actual: markup().match(/aria-current="page"/g)?.length ?? 0,
-      expected: 1,
+      given: 'Files active at its own URL, then at a page inside it',
+      should: 'mark only Files: as the current page, then as the current section',
+      actual: [
+        page.match(/aria-current="[^"]+"/g),
+        /aria-label="Files" aria-current="page"/.test(page),
+        section.match(/aria-current="[^"]+"/g),
+      ],
+      expected: [['aria-current="page"'], true, ['aria-current="true"']],
     });
   });
 

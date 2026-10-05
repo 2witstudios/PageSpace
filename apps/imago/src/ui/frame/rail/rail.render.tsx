@@ -9,12 +9,14 @@ import {
   railPinnedClass,
 } from '../rail-button/rail-button-class';
 import { renderRailButton, renderRailTooltip } from '../rail-button/rail-button.render';
-import type { OverflowItem, RailItem, RailItemId } from './rail-items';
+import type { OverflowItem, RailItem, RailItemId, RailPlace } from './rail-items';
 
 export type RailRenderProps = {
   readonly items: readonly RailItem[];
   readonly settings: RailItem;
   readonly activeId: RailItemId | null;
+  /** The active item's own URL is open, or a place inside its section. */
+  readonly activeAt: RailPlace;
   readonly unread: Partial<Readonly<Record<RailItemId, number>>>;
   /**
    * Void action, present only while the open section's list is hidden: the
@@ -39,7 +41,7 @@ const item = (entry: RailItem, props: RailRenderProps): ReactNode => {
         icon: entry.icon,
         label: entry.label,
         href: entry.href,
-        active,
+        current: active ? props.activeAt : null,
         unread: props.unread[entry.id] ?? 0,
         onReopen: active ? props.onReopen : undefined,
       })}

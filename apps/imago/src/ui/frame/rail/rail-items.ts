@@ -82,6 +82,18 @@ export const railDrive = (stage: Stage, homeDriveId: string | null): string | nu
 export const activeRailItem = (stage: Stage): RailItemId | null =>
   stage.section === 'account' ? null : stage.section;
 
+/**
+ * Where the viewer is relative to the active item: on the URL it links to
+ * (`page`), or somewhere inside its section (`section`), such as a page in
+ * Files or a DM, whose Messages link points at a drive.
+ */
+export type RailPlace = 'page' | 'section';
+
+export const activeRailPlace = (stage: Stage): RailPlace =>
+  stage.driveId !== null && (stage.object === null || stage.object.kind === 'settings')
+    ? 'page'
+    : 'section';
+
 const count = (value: unknown): number =>
   typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : 0;
 

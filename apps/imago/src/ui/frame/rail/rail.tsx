@@ -7,6 +7,7 @@ import { isListSection, type PaneLayout, type Stage } from '../stage/stage';
 import {
   SIDEBAR_BADGES,
   activeRailItem,
+  activeRailPlace,
   messagesUnread,
   overflowItems,
   railDrive,
@@ -44,7 +45,10 @@ export function Rail({ stage, layout, homeDriveId, footer }: RailProps) {
       if (!(event.target instanceof Node) || !disclosure?.contains(event.target)) setMoreOpen(false);
     };
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setMoreOpen(false);
+      if (event.key !== 'Escape') return;
+      setMoreOpen(false);
+      // Focus may be on a menu link that is about to hide: back to ⋯.
+      rail.current?.querySelector<HTMLElement>('details > summary')?.focus();
     };
     document.addEventListener('pointerdown', onPointerDown);
     document.addEventListener('keydown', onKeyDown);
@@ -61,6 +65,7 @@ export function Rail({ stage, layout, homeDriveId, footer }: RailProps) {
         items: railItems(driveId),
         settings: settingsItem(driveId),
         activeId: activeRailItem(stage),
+        activeAt: activeRailPlace(stage),
         unread: { messages: messagesUnread(badges) },
         onReopen:
           layout.listHidden && isListSection(section)

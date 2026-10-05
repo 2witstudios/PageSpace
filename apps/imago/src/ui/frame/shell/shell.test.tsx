@@ -235,7 +235,7 @@ describe('Shell', () => {
     );
     const messages = rail.querySelector('a[aria-label^="Messages"]');
     navigate('/drive-1/messages/channel-1');
-    const current = rail.querySelector('[aria-current="page"]');
+    const current = rail.querySelector('[aria-current]');
 
     assert({
       given: 'the shell on a drive chat, then on a channel',
@@ -244,7 +244,7 @@ describe('Shell', () => {
         names,
         [...rail.querySelectorAll('button')].some((button) => button.textContent === 'Sign out'),
         current === messages,
-        rail.querySelectorAll('[aria-current="page"]').length,
+        rail.querySelectorAll('[aria-current]').length,
       ],
       expected: [['Chat', 'Files', 'Messages', 'Tasks', 'More', 'Settings'], true, true, 1],
     });
