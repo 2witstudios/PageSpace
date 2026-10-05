@@ -1,4 +1,4 @@
-import type { Section } from '../frame/stage/stage';
+import type { ListSection } from '../frame/stage/stage';
 
 /**
  * Scalar shell state (drafts, filters, expansion, the open conversation).
@@ -6,7 +6,7 @@ import type { Section } from '../frame/stage/stage';
  */
 export type UiResources = {
   /** Sections whose list the viewer hid; the stage itself lives in the URL. */
-  readonly collapsedSections: readonly Section[];
+  readonly collapsedSections: readonly ListSection[];
 };
 
 /**

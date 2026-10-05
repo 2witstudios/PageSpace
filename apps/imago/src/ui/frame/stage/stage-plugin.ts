@@ -1,8 +1,8 @@
 import type { UiState } from '../../store/state';
 import type { UiPlugin } from '../../store/transactions';
-import type { Section } from './stage';
+import type { ListSection } from './stage';
 
-const withCollapsed = (state: UiState, collapsedSections: readonly Section[]): UiState => ({
+const withCollapsed = (state: UiState, collapsedSections: readonly ListSection[]): UiState => ({
   ...state,
   resources: { ...state.resources, collapsedSections },
 });
@@ -14,11 +14,11 @@ const withCollapsed = (state: UiState, collapsedSections: readonly Section[]): U
  */
 export const stagePlugin = {
   transactions: {
-    collapseSection: (state: UiState, section: Section): UiState =>
+    collapseSection: (state: UiState, section: ListSection): UiState =>
       state.resources.collapsedSections.includes(section)
         ? state
         : withCollapsed(state, [...state.resources.collapsedSections, section]),
-    expandSection: (state: UiState, section: Section): UiState =>
+    expandSection: (state: UiState, section: ListSection): UiState =>
       state.resources.collapsedSections.includes(section)
         ? withCollapsed(
             state,

@@ -132,3 +132,22 @@ describe('stage transactions through the store', () => {
     });
   });
 });
+
+describe('collapsible sections', () => {
+  test('only a list section', () => {
+    const state = createInitialState();
+    // Type-level: settings has no list, so tsc rejects collapsing it
+    // (bun run typecheck fails if the transaction's type widens again).
+    // @ts-expect-error settings has no list to collapse
+    const next = collapseSection(state, 'settings');
+    // @ts-expect-error account has no list to expand
+    expandSection(state, 'account');
+
+    assert({
+      given: 'collapsing a section that has no list',
+      should: 'be a type error (the call above only runs to prove it compiles out)',
+      actual: next === state,
+      expected: false,
+    });
+  });
+});
