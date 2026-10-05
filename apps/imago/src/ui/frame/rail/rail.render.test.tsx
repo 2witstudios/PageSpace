@@ -15,6 +15,7 @@ const props = (overrides: Partial<RailRenderProps> = {}): RailRenderProps => ({
   overflow: overflowItems('drive-1'),
   moreOpen: false,
   onMoreToggle: () => {},
+  brand: <span data-brand="">Alpha</span>,
   footer: <button type="button">Sign out</button>,
   ...overrides,
 });
@@ -54,7 +55,7 @@ describe('renderRail()', () => {
   test('the footer', () => {
     const html = markup();
     assert({
-      given: 'a footer control (sign-out, until the avatar menu lands)',
+      given: 'a footer control (the avatar menu)',
       should: 'render it in the pinned list after Settings',
       actual: html.indexOf('Sign out') > html.indexOf('aria-label="Settings"'),
       expected: true,
@@ -131,6 +132,23 @@ describe('renderRail()', () => {
       should: 'render every destination and More as disabled buttons, with no links',
       actual: [html.includes('<a '), html.includes('<details'), (html.match(/disabled=""/g) ?? []).length],
       expected: [false, false, 6],
+    });
+  });
+
+  test('the brand', () => {
+    const html = markup();
+    assert({
+      given: 'a drive switcher',
+      should: 'render it above the sections',
+      actual: [html.indexOf('data-brand') >= 0, html.indexOf('data-brand') < html.indexOf('aria-label="Chat"')],
+      expected: [true, true],
+    });
+
+    assert({
+      given: 'no drive switcher',
+      should: 'render no wrapper for it',
+      actual: markup({ brand: null }).includes('mb-rail-y'),
+      expected: false,
     });
   });
 });

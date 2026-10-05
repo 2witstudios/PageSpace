@@ -2,14 +2,19 @@
 
 import { usePathname } from 'next/navigation';
 import type { ReactNode } from 'react';
-import { SignOutButton } from '@/components/SignOutButton';
+import useSWR from 'swr';
 import { useUiState } from '../../store/store';
 import type { UiState } from '../../store/state';
 import { MessagesPane } from '../../messages/messages-pane/messages-pane';
 import { TasksPane } from '../../tasks/tasks-pane/tasks-pane';
+import { AvatarMenu } from '../avatar-menu/avatar-menu';
+import { BrandChip } from '../brand-chip/brand-chip';
+import { DRIVES, driveStatus, drivesFrom, type DriveSummary } from '../drives/drives';
+import { DRIVE_NOT_FOUND, renderNotFound } from '../not-found/not-found.render';
 import { renderPaneHeader } from '../pane/pane-header';
 import { ListOpener, ListPane } from '../list-pane/list-pane';
 import { Rail } from '../rail/rail';
+import { railDrive } from '../rail/rail-items';
 import {
   chatContextFor,
   isListSection,
@@ -27,6 +32,8 @@ export type ShellProps = {
   readonly children: ReactNode;
   /** The viewer's Home drive, where the rail links from the driveless stages. */
   readonly homeDriveId: string | null;
+  /** The viewer's drives as the server listed them for this page load; SWR revalidates them. */
+  readonly initialDrives: readonly DriveSummary[];
 };
 
 const titles: Readonly<Record<Section, string>> = {
@@ -39,6 +46,16 @@ const titles: Readonly<Record<Section, string>> = {
 };
 
 const selectCollapsed = (state: UiState) => state.resources.collapsedSections;
+
+/**
+ * A drive the API does not list for the viewer (it lists every drive they
+ * can reach): only the object column opens, holding the not-found object,
+ * whatever section the address named.
+ */
+const notFoundLayout: PaneLayout = { list: 'closed', listHidden: false, object: true };
+
+const homeHref = (homeDriveId: string | null): string | null =>
+  homeDriveId === null ? null : `/${encodeURIComponent(homeDriveId)}`;
 
 /** × on the stage-2 list steps back to the drive chat, or the Home root. */
 const chatHref = (stage: Stage): string =>
@@ -94,22 +111,44 @@ const openerFor = (stage: Stage, layout: PaneLayout): ReactNode =>
  * and the route's output fills only the object slot. The hamburger sits in
  * the leading slot of the object's header.
  */
-export function Shell({ children, homeDriveId }: ShellProps) {
+export function Shell({ children, homeDriveId, initialDrives }: ShellProps) {
   const pathname = usePathname() ?? '/';
   const collapsedSections = useUiState(selectCollapsed);
+  const { data, error } = useSWR<unknown>(DRIVES, { fallbackData: initialDrives });
+  const drives = drivesFrom(data, homeDriveId);
   const stage = stageFor(pathname);
-  const layout = paneLayout(stage, { collapsedSections });
-  const opener = openerFor(stage, layout);
-  const context = chatContextFor(stage);
+  const missing = driveStatus(drives, stage.driveId) === 'missing';
+  const layout = missing ? notFoundLayout : paneLayout(stage, { collapsedSections });
+  const opener = missing ? null : openerFor(stage, layout);
+  const drive = drives?.find((entry) => entry.id === stage.driveId);
+  const context = chatContextFor(stage, drive === undefined ? {} : { drive: drive.name });
+  const title = missing ? 'Not found' : titles[stage.section];
   return renderShell({
     stage,
     layout,
-    rail: <Rail stage={stage} layout={layout} homeDriveId={homeDriveId} footer={<SignOutButton />} />,
-    list: listFor(stage, layout),
+    rail: (
+      <Rail
+        stage={stage}
+        layout={layout}
+        homeDriveId={homeDriveId}
+        brand={
+          <BrandChip
+            stage={stage}
+            currentId={railDrive(stage, homeDriveId)}
+            drives={drives}
+            failed={error !== undefined}
+          />
+        }
+        footer={<AvatarMenu />}
+      />
+    ),
+    list: missing ? null : listFor(stage, layout),
     object: (
-      <section className={columnClass} aria-label={titles[stage.section]}>
-        {renderPaneHeader({ title: titles[stage.section], leading: opener })}
-        <div className="min-h-0 flex-1 overflow-y-auto">{children}</div>
+      <section className={columnClass} aria-label={title}>
+        {renderPaneHeader({ title, leading: opener })}
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          {missing ? renderNotFound({ ...DRIVE_NOT_FOUND, homeHref: homeHref(homeDriveId) }) : children}
+        </div>
       </section>
     ),
     chat: (

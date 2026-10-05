@@ -18,10 +18,10 @@ const navigation = vi.hoisted(() => ({ pathname: '/drive-1' }));
 vi.mock('next/navigation', () => ({
   usePathname: () => navigation.pathname,
 }));
-// The rail's foot offers sign-out until the avatar menu (IMG-3.4); its
-// network path is proven in lib/auth/sign-out.test.ts.
-vi.mock('@/components/SignOutButton', () => ({
-  SignOutButton: () => h('button', { type: 'button' }, 'Sign out'),
+// The avatar menu's theme switcher needs the root layout's theme provider;
+// its own suites prove it. Here it only has to be in the menu.
+vi.mock('@/ui/components/theme-switcher/theme-switcher', () => ({
+  ThemeSwitcher: () => h('div', { role: 'radiogroup', 'aria-label': 'Theme' }),
 }));
 
 // The messages pane loads through SWR and realtime; its own suite proves it
@@ -65,9 +65,16 @@ function Route() {
   return h('p', { 'data-route': mountId }, 'route');
 }
 
+/** What the server listed for the viewer; no SWR provider here, so it is all the shell has. */
+const initialDrives = [
+  { id: 'drive-2', name: 'Beta', kind: 'STANDARD' as const },
+  { id: 'home-1', name: 'Home', kind: 'HOME' as const },
+  { id: 'drive-1', name: 'Alpha', kind: 'STANDARD' as const },
+];
+
 const render = () =>
   act(() => {
-    root?.render(h(Shell, { homeDriveId: 'home-1', children: h(Route) }));
+    root?.render(h(Shell, { homeDriveId: 'home-1', initialDrives, children: h(Route) }));
   });
 
 const navigate = (pathname: string) => {
@@ -283,7 +290,7 @@ describe('Shell', () => {
 
   test('the chat slot', () => {
     render();
-    const roomy = [slot('chat').querySelector('section')?.dataset.density, slot('chat').textContent?.includes('This drive in context')];
+    const roomy = [slot('chat').querySelector('section')?.dataset.density, slot('chat').textContent?.includes('Alpha in context')];
     navigate('/drive-1/files/page-1');
 
     assert({
@@ -305,18 +312,23 @@ describe('Shell', () => {
     );
     const messages = rail.querySelector('a[aria-label^="Messages"]');
     navigate('/drive-1/messages/channel-1');
-    const current = rail.querySelector('[aria-current]');
+    const current = rail.querySelector(':scope > ul [aria-current]');
 
     assert({
       given: 'the shell on a drive chat, then on a channel',
-      should: 'fill the rail slot with the drive’s destinations and sign-out, and move aria-current without remounting the link',
+      should: 'fill the rail slot with the drive switcher, the drive’s destinations and the avatar menu, and move aria-current without remounting the link',
       actual: [
         names,
         [...rail.querySelectorAll('button')].some((button) => button.textContent === 'Sign out'),
         current === messages,
-        rail.querySelectorAll('[aria-current]').length,
+        rail.querySelectorAll(':scope > ul [aria-current]').length,
       ],
-      expected: [['Chat', 'Files', 'Messages', 'Tasks', 'More', 'Settings'], true, true, 1],
+      expected: [
+        ['Switch drive, Alpha', 'Chat', 'Files', 'Messages', 'Tasks', 'More', 'Settings', 'Account menu'],
+        true,
+        true,
+        1,
+      ],
     });
   });
 
@@ -340,12 +352,85 @@ describe('Shell', () => {
 
     assert({
       given: 'the account stage, which names no drive',
-      should: 'link the rail into the Home drive and mark nothing current',
+      should: 'link the rail into the Home drive and mark no section current',
       actual: [
         slot('rail').querySelector('a[aria-label="Settings"]')?.getAttribute('href'),
-        slot('rail').querySelector('[aria-current]'),
+        slot('rail').querySelector(':scope > ul [aria-current]'),
       ],
       expected: ['/home-1/settings', null],
+    });
+  });
+
+  test('the drive switcher', () => {
+    navigation.pathname = '/drive-1/tasks/list-1';
+    render();
+    const rows = [...slot('rail').querySelectorAll('ul[aria-label="Drives"] a')].map((link) => [
+      link.textContent,
+      link.getAttribute('href'),
+      link.getAttribute('aria-current'),
+    ]);
+
+    assert({
+      given: 'a task list open in Alpha, with Beta and Home also listed',
+      should: 'list Home first, then the rest by name, each linking to its Tasks, with Alpha current',
+      actual: rows,
+      expected: [
+        ['HHome', '/home-1/tasks', null],
+        ['AAlpha', '/drive-1/tasks', 'page'],
+        ['BBeta', '/drive-2/tasks', null],
+      ],
+    });
+  });
+
+  test('a drive the viewer cannot open', () => {
+    render();
+    const shell = frame();
+    const rail = slot('rail');
+    navigate('/secret-drive/files');
+    const notFound = slot('object').querySelector('[data-not-found]');
+
+    assert({
+      given: 'an address naming a drive the drive list does not hold',
+      should: 'keep the shell and show the not-found object in an open object column, with no list and no route content',
+      actual: [
+        frame() === shell && slot('rail') === rail,
+        notFound?.querySelector('h2')?.textContent,
+        notFound?.querySelector('a')?.getAttribute('href'),
+        slot('object').hasAttribute('inert'),
+        [frame().dataset.list, slot('list').hasAttribute('inert')],
+        slot('object').querySelector('[data-route]'),
+        slot('object').querySelector('section')?.getAttribute('aria-label'),
+      ],
+      expected: [true, 'Drive not found', '/home-1', false, ['closed', true], null, 'Not found'],
+    });
+
+    assert({
+      given: 'the same address',
+      should: 'never show a name for that drive on the switcher',
+      actual: [
+        rail.querySelector('summary[aria-label^="Switch drive"]')?.getAttribute('aria-label'),
+        rail.textContent?.includes('secret-drive'),
+      ],
+      expected: ['Switch drive', false],
+    });
+
+    navigate('/drive-1/files');
+    assert({
+      given: 'a switch back to a drive the viewer can open',
+      should: 'close the object column (it keeps its last content until the width transition ends) and show the section again',
+      actual: [slot('object').hasAttribute('inert'), frame().dataset.list, slot('list').hasAttribute('inert')],
+      expected: [true, 'list', false],
+    });
+  });
+
+  test('the chat names the open drive', () => {
+    render();
+
+    assert({
+      given: 'the chat of a drive the list names Alpha',
+      should: 'put the drive’s name in the chat context',
+      actual: slot('chat').textContent?.includes('Alpha in context'),
+      expected: true,
     });
   });
 });
