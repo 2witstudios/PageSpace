@@ -46,6 +46,11 @@ export type ApiRequestInit = {
 export type ApiClient = {
   /** Resolves with the parsed JSON body (null for an empty one); rejects with ApiError. */
   apiFetch: <T = unknown>(path: string, init?: ApiRequestInit) => Promise<T>;
+  /**
+   * The same request (credentials, CSRF, sign-in on 401, ApiError), resolving
+   * with the 2xx response's body unread, for a caller that streams it.
+   */
+  apiStream: (path: string, init?: ApiRequestInit) => Promise<Response>;
 };
 
 // Root-relative and nothing else: an absolute or protocol-relative URL would
@@ -121,7 +126,13 @@ export function createApiClient(io: ApiClientIO): ApiClient {
     return csrfInFlight;
   };
 
-  const apiFetch = async <T,>(path: string, init: ApiRequestInit = {}): Promise<T> => {
+  /** A response, and its body when deciding on a CSRF retry already read it. */
+  type Exchange = { readonly response: Response; readonly read?: { readonly body: unknown } };
+
+  // Sends the request (with the CSRF token for a mutation, retried once on a
+  // CSRF 403) and leaves a body it did not need to read unread, so a stream
+  // reaches its reader untouched.
+  const exchange = async (path: string, init: ApiRequestInit): Promise<Exchange> => {
     assertRootRelative(path);
     const method = (init.method ?? 'GET').toUpperCase();
     const mutating = MUTATING_METHODS.has(method);
@@ -141,19 +152,27 @@ export function createApiClient(io: ApiClientIO): ApiClient {
         headers: token ? { ...headers, [CSRF_HEADER]: token } : headers,
       });
 
-    let response = await send(mutating ? await csrf(false) : null);
-    let parsed = await readJson(response);
+    const response = await send(mutating ? await csrf(false) : null);
+    if (!mutating || response.status !== 403) return { response };
+    const rejected = await readJson(response);
+    if (!isCsrfRejection(response.status, rejected)) return { response, read: { body: rejected } };
+    return { response: await send(await csrf(true)) };
+  };
 
-    if (mutating && isCsrfRejection(response.status, parsed)) {
-      response = await send(await csrf(true));
-      parsed = await readJson(response);
-    }
+  /** The error for a non-2xx exchange; a 401 also leaves for sign-in. */
+  const failureOf = async ({ response, read }: Exchange): Promise<ApiError> => {
+    const body = read ? read.body : await readJson(response);
+    if (response.status === 401) return unauthorized(body);
+    return apiErrorFrom(response.status, body ?? null);
+  };
 
-    if (response.status === 401) throw unauthorized(parsed);
-    if (!response.ok) throw apiErrorFrom(response.status, parsed ?? null);
+  const apiFetch = async <T,>(path: string, init: ApiRequestInit = {}): Promise<T> => {
+    const sent = await exchange(path, init);
+    if (!sent.response.ok) throw await failureOf(sent);
+    const parsed = await readJson(sent.response);
     if (parsed === undefined) {
       throw new ApiError({
-        status: response.status,
+        status: sent.response.status,
         code: INVALID_RESPONSE,
         message: 'Response was not valid JSON',
       });
@@ -161,7 +180,13 @@ export function createApiClient(io: ApiClientIO): ApiClient {
     return parsed as T;
   };
 
-  return { apiFetch };
+  const apiStream = async (path: string, init: ApiRequestInit = {}): Promise<Response> => {
+    const sent = await exchange(path, init);
+    if (!sent.response.ok) throw await failureOf(sent);
+    return sent.response;
+  };
+
+  return { apiFetch, apiStream };
 }
 
 let browserClient: ApiClient | null = null;

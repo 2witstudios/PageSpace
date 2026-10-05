@@ -38,6 +38,10 @@ export const chatPaths = {
   messages: (agentId: string, conversationId: string, cursor?: string) =>
     `${agentConversations(agentId)}/${segment(conversationId)}/messages?limit=${MESSAGES_PAGE_SIZE}` +
     (cursor === undefined ? '' : `&direction=before&cursor=${segment(cursor)}`),
+  /** One agent turn, streamed back as the AI SDK UI message stream (the page-agent pipeline). */
+  turn: '/api/ai/chat',
+  /** Stops a turn server-side: streams are server-owned and outlive the reader. */
+  abort: '/api/ai/abort',
 };
 
 const invalid = (message: string) => new ApiError({ status: 200, code: INVALID_RESPONSE, message });

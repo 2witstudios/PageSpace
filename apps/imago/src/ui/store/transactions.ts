@@ -1,3 +1,4 @@
+import { chatPlugin } from '../chat/chat-plugin';
 import { filesPlugin } from '../files/files-plugin/files-plugin';
 import { stagePlugin } from '../frame/stage/stage-plugin';
 import { tasksPlugin } from '../tasks/tasks-plugin';
@@ -38,7 +39,7 @@ export const mergePlugins = <const P extends readonly UiPlugin[]>(
 };
 
 /** The shell's transactions. Section plugins join here as their leaves land. */
-export const transactions = mergePlugins(stagePlugin, tasksPlugin, filesPlugin);
+export const transactions = mergePlugins(stagePlugin, tasksPlugin, filesPlugin, chatPlugin);
 
 /** Runs a transaction over the current snapshot and stores the result. */
 export const dispatch = <A>(run: UiTransaction<A>, arg: A): void => {

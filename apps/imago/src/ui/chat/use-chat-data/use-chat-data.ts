@@ -8,9 +8,12 @@
 // fetches nothing. Conversations and messages page on demand: conversations
 // forward by page number, messages backward from the newest by cursor.
 
+import { useEffect, useRef } from 'react';
 import useSWR from 'swr';
 import useSWRInfinite from 'swr/infinite';
 import { useApiClient } from '@/api/swr-provider';
+import { getUiState, useUiState } from '@/ui/store/store';
+import { isStreaming } from '../chat-plugin';
 import type { AgentConversation, ChatMessage, ConversationsPage, MessagesPage } from '../chat-model/chat';
 import { fetchBuiltinAgents, fetchConversationMessages, fetchConversationsPage } from '../chat-api/chat-api';
 
@@ -56,17 +59,35 @@ export const useAgentConversations = (agentId: string | null) => {
   };
 };
 
-/** A conversation's messages, oldest first, `parts` as stored; older pages on `loadOlder`. */
+/**
+ * A conversation's messages, oldest first, `parts` as stored; older pages on
+ * `loadOlder`. While a turn streams into the conversation (the `streaming`
+ * resource), SWR is paused for it: a revalidation then would replace the
+ * thread under the live reply, so it fetches nothing (older pages included)
+ * until the turn ends. When `streaming` leaves the conversation, every mounted
+ * reader of it loads it again, whichever pane sent the turn and whether or not
+ * that pane is still mounted.
+ */
 export const useConversationMessages = (agentId: string | null, conversationId: string | null) => {
   const client = useApiClient();
-  const { data, error, isLoading, isValidating, size, setSize } = useSWRInfinite(
+  const { data, error, isLoading, isValidating, size, setSize, mutate } = useSWRInfinite(
     (page: number, newer: MessagesPage | null) => {
       if (agentId === null || conversationId === null) return null;
       if (page === 0) return ['imago:conversation-messages', agentId, conversationId, null] as const;
       return newer?.olderCursor ? (['imago:conversation-messages', agentId, conversationId, newer.olderCursor] as const) : null;
     },
     ([, agent, conversation, cursor]) => fetchConversationMessages(client, agent, conversation, cursor ?? undefined),
+    // Read at call time: the store, not a render, says whether a turn is live.
+    { isPaused: () => isStreaming(getUiState(), conversationId) },
   );
+  const streaming = useUiState((state) => isStreaming(state, conversationId));
+  const seen = useRef({ conversationId, streaming });
+  useEffect(() => {
+    const before = seen.current;
+    seen.current = { conversationId, streaming };
+    if (before.conversationId === conversationId && before.streaming && !streaming) void mutate();
+  }, [conversationId, streaming, mutate]);
+
   // Pages arrive newest first; each page is oldest first within itself.
   const messages: readonly ChatMessage[] | undefined =
     data === undefined ? undefined : [...data].reverse().flatMap((page) => page.messages);
@@ -76,6 +97,10 @@ export const useConversationMessages = (agentId: string | null, conversationId: 
     hasOlder,
     loadOlder: async (): Promise<void> => {
       if (hasOlder) await setSize(size + 1);
+    },
+    /** Reads the loaded pages again; does nothing while a turn streams into the conversation. */
+    revalidate: async (): Promise<void> => {
+      await mutate();
     },
     /** The rev the newest page was read at, the watermark for live updates. */
     rev: data?.[0]?.rev ?? null,
