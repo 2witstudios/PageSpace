@@ -29,7 +29,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import { TIER_PLAN_LIMITS } from './subscription-tiers';
+import { orgExtraSeatQuantity } from './org-plan-quote';
 
 /** Metadata key stamped on the org's Stripe customer and subscription. */
 export const ORG_ID_METADATA_KEY = 'pagespace_org_id';
@@ -49,17 +49,8 @@ export interface OrgBusinessPrices {
   seatPriceId: string;
 }
 
-/**
- * A-8: the extra-seat item's quantity for `seats` seats — max(0, seats − included),
- * with the included count from the tier table (5 for Business). A seat count that is
- * not a non-negative integer is refused: billing never rounds a guess.
- */
-export function orgExtraSeatQuantity(seats: number): number {
-  if (!Number.isInteger(seats) || seats < 0) {
-    throw new RangeError(`seat count must be a non-negative integer, got ${seats}`);
-  }
-  return Math.max(0, seats - TIER_PLAN_LIMITS.business.includedSeats);
-}
+/** A-8: the extra-seat item's quantity, from the one client-safe plan-quote module. */
+export { orgExtraSeatQuantity };
 
 export type OrgStripeOperation =
   | 'customer.create'

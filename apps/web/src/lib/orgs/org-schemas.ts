@@ -1,5 +1,6 @@
 /** Request bodies for /api/orgs routes, validated at the boundary. */
 import { z } from 'zod/v4';
+import { ORG_SLUG_PATTERN } from './org-slug';
 
 const orgName = z.string().trim().min(1).max(100);
 // Lowercase letters, digits and inner hyphens; it becomes part of org URLs.
@@ -7,7 +8,7 @@ const orgSlug = z
   .string()
   .trim()
   .toLowerCase()
-  .regex(/^[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?$/, 'Use 1-48 lowercase letters, digits or hyphens');
+  .regex(ORG_SLUG_PATTERN, 'Use 1-48 lowercase letters, digits or hyphens');
 // https only: the avatar is rendered as an image source, so no javascript:, data: or plain http.
 const avatarUrl = z.url({ protocol: /^https$/, hostname: z.regexes.domain }).max(2048).nullable();
 

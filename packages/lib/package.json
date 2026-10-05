@@ -799,6 +799,11 @@
       "import": "./dist/billing/org-subscription-core.js",
       "require": "./dist/billing/org-subscription-core.js"
     },
+    "./billing/org-plan-quote": {
+      "types": "./dist/billing/org-plan-quote.d.ts",
+      "import": "./dist/billing/org-plan-quote.js",
+      "require": "./dist/billing/org-plan-quote.js"
+    },
     "./test/wallet-leg-invariant": {
       "types": "./dist/test/wallet-leg-invariant.d.ts",
       "import": "./dist/test/wallet-leg-invariant.js",
@@ -3075,6 +3080,9 @@
       ],
       "billing/org-subscription-core": [
         "./dist/billing/org-subscription-core.d.ts"
+      ],
+      "billing/org-plan-quote": [
+        "./dist/billing/org-plan-quote.d.ts"
       ],
       "test/wallet-leg-invariant": [
         "./dist/test/wallet-leg-invariant.d.ts"

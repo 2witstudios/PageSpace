@@ -20,8 +20,9 @@
 import { allocateSpend, applyPaymentToDebt, computeMonthlyRefill, type Balance } from './credit-core';
 import { allowanceRefills } from './credit-pricing';
 import type { InvoiceGrant } from './invoice-grant';
-import { MONEY_MODEL_V2_ACTIVE, allowanceCentsForPaidCents, centsFromDollars, tierListPriceCents } from './money-model';
-import { TIER_PLAN_LIMITS, isSubscriptionTier } from './subscription-tiers';
+import { MONEY_MODEL_V2_ACTIVE, allowanceCentsForPaidCents } from './money-model';
+import { orgListPriceCents } from './org-plan-quote';
+import { isSubscriptionTier } from './subscription-tiers';
 import {
   allocateWalletSpend,
   type FundingLeg,
@@ -59,10 +60,7 @@ export const ORG_POOL_FUNDS_GIFTS = true;
  * price, times the Business ratio. Integer cents; multiply before any divide.
  */
 export function orgPoolListPriceGrantCents(extraSeats: number, active: boolean = MONEY_MODEL_V2_ACTIVE): number {
-  const seats = Number.isInteger(extraSeats) && extraSeats > 0 ? extraSeats : 0;
-  const listCents =
-    tierListPriceCents(ORG_POOL_TIER) + centsFromDollars(TIER_PLAN_LIMITS[ORG_POOL_TIER].extraSeatUsd) * seats;
-  return allowanceCentsForPaidCents(listCents, ORG_POOL_TIER, active);
+  return allowanceCentsForPaidCents(orgListPriceCents(extraSeats), ORG_POOL_TIER, active);
 }
 
 /**
