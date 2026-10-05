@@ -175,7 +175,3 @@ export function getBrowserApiClient(): ApiClient {
   });
   return browserClient;
 }
-
-/** apiFetch on the page's client. */
-export const apiFetch = <T = unknown,>(path: string, init?: ApiRequestInit): Promise<T> =>
-  getBrowserApiClient().apiFetch<T>(path, init);
