@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, test } from 'vitest';
 import { assert } from 'riteway/vitest';
 import type { RealtimeClient, RealtimeSocket } from './realtime-client';
-import { RealtimeProvider, useSocketEvent } from './realtime-provider';
+import { RealtimeProvider, useDriveRoom, useSocketEvent } from './realtime-provider';
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean | undefined;
@@ -35,11 +35,20 @@ const unmount = (root: Root): void => {
 
 type Listener = (...args: unknown[]) => void;
 
-/** A fake socket that records every on/off and can deliver events to its listeners. */
-const fakeSocket = () => {
+/**
+ * A fake socket that records every on/off and every emit to the server, and
+ * can deliver events to its listeners; delivering `connect` connects it.
+ */
+const fakeSocket = ({ connected = true }: { connected?: boolean } = {}) => {
   const listeners = new Map<string, Set<Listener>>();
   const log: string[] = [];
+  const sent: unknown[][] = [];
   const socket: RealtimeSocket = {
+    connected,
+    emit: (event, ...args) => {
+      sent.push([event, ...args]);
+      return socket;
+    },
     on: (event, listener) => {
       log.push(`on ${event}`);
       if (!listeners.has(event)) listeners.set(event, new Set());
@@ -54,15 +63,17 @@ const fakeSocket = () => {
     disconnect: () => socket,
   };
   const deliver = (event: string, ...args: unknown[]) => {
+    if (event === 'connect') socket.connected = true;
+    if (event === 'disconnect') socket.connected = false;
     for (const listener of listeners.get(event) ?? []) listener(...args);
   };
   const count = (event: string) => listeners.get(event)?.size ?? 0;
-  return { socket, log, deliver, count };
+  return { socket, log, sent, deliver, count };
 };
 
 /** A fake realtime client handing out one fake socket, recording its lifecycle calls. */
-const fakeClient = () => {
-  const fake = fakeSocket();
+const fakeClient = (options: { connected?: boolean } = {}) => {
+  const fake = fakeSocket(options);
   const lifecycle: string[] = [];
   const client: RealtimeClient = {
     socket: () => {
@@ -209,6 +220,115 @@ describe('RealtimeProvider', () => {
       should: 'disconnect',
       actual: fake.lifecycle,
       expected: ['socket', 'disconnect'],
+    });
+  });
+});
+
+describe('useDriveRoom', () => {
+  function Room({ driveId }: { driveId: string | null }) {
+    useDriveRoom(driveId);
+    return null;
+  }
+
+  test('a connected socket', () => {
+    const fake = fakeClient();
+    mount(
+      <RealtimeProvider client={fake.client}>
+        <Room driveId="d1" />
+      </RealtimeProvider>,
+    );
+
+    assert({
+      given: 'a drive and a socket already connected',
+      should: 'ask realtime to join that drive’s room once',
+      actual: fake.sent,
+      expected: [['join_drive', 'd1']],
+    });
+  });
+
+  test('a socket still connecting', () => {
+    const fake = fakeClient({ connected: false });
+    mount(
+      <RealtimeProvider client={fake.client}>
+        <Room driveId="d1" />
+      </RealtimeProvider>,
+    );
+    const before = [...fake.sent];
+    act(() => fake.deliver('connect'));
+
+    assert({
+      given: 'a socket that connects after the drive is known',
+      should: 'join only once it is connected',
+      actual: [before, fake.sent],
+      expected: [[], [['join_drive', 'd1']]],
+    });
+  });
+
+  test('a reconnect', () => {
+    const fake = fakeClient();
+    mount(
+      <RealtimeProvider client={fake.client}>
+        <Room driveId="d1" />
+      </RealtimeProvider>,
+    );
+    act(() => fake.deliver('disconnect'));
+    act(() => fake.deliver('connect'));
+
+    assert({
+      given: 'the socket reconnecting (realtime forgets a socket’s rooms)',
+      should: 'join the room again',
+      actual: fake.sent,
+      expected: [
+        ['join_drive', 'd1'],
+        ['join_drive', 'd1'],
+      ],
+    });
+  });
+
+  test('another drive', () => {
+    const fake = fakeClient();
+    let setDrive: (driveId: string | null) => void = () => {};
+    function Switcher() {
+      const [driveId, set] = useState<string | null>('d1');
+      setDrive = set;
+      return <Room driveId={driveId} />;
+    }
+    mount(
+      <RealtimeProvider client={fake.client}>
+        <Switcher />
+      </RealtimeProvider>,
+    );
+    act(() => setDrive('d2'));
+    act(() => fake.deliver('connect'));
+
+    assert({
+      given: 'the drive changing, then a reconnect',
+      should: 'join the new drive, and rejoin only it',
+      actual: fake.sent,
+      expected: [
+        ['join_drive', 'd1'],
+        ['join_drive', 'd2'],
+        ['join_drive', 'd2'],
+      ],
+    });
+  });
+
+  test('no drive and unmount', () => {
+    const fake = fakeClient();
+    const root = mount(
+      <RealtimeProvider client={fake.client}>
+        <Room driveId={null} />
+        <Room driveId="d1" />
+      </RealtimeProvider>,
+    );
+    unmount(root);
+    fake.deliver('connect');
+
+    assert({
+      given: 'no drive yet, and a reconnect after unmounting',
+      should: 'join nothing for the missing drive and stop rejoining once gone',
+      actual: [fake.sent, fake.count('connect')],
+      expected: [[['join_drive', 'd1']], 0],
     });
   });
 });

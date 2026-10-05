@@ -262,7 +262,8 @@ type FakeSocket = RealtimeSocket & {
   url: string | undefined;
   options: SocketOpts;
   calls: string[];
-  emit: (event: string, ...args: unknown[]) => void;
+  /** realtime sending this socket an event: calls its listeners. */
+  deliver: (event: string, ...args: unknown[]) => void;
   /** What socket.io does before each CONNECT: ask `auth` for the payload. */
   handshake: () => Promise<object | null>;
 };
@@ -292,7 +293,9 @@ const fakeSockets = () => {
         socket.calls.push('disconnect');
         return socket;
       },
-      emit: (event, ...args) => {
+      connected: false,
+      emit: () => socket,
+      deliver: (event, ...args) => {
         for (const listener of listeners.get(event) ?? []) listener(...args);
       },
       handshake: () =>
@@ -469,7 +472,7 @@ describe('createRealtimeClient lifecycle', () => {
         }),
       );
       const socket = client.socket() as FakeSocket;
-      socket.emit('connect_error', new Error(message));
+      socket.deliver('connect_error', new Error(message));
 
       assert({
         given: `connect_error "${message}"`,
@@ -497,12 +500,12 @@ describe('createRealtimeClient lifecycle', () => {
     const socket = client.socket() as FakeSocket;
     const delays: number[] = [];
     for (let i = 0; i < 7; i += 1) {
-      socket.emit('connect_error', new Error('Authentication error: Invalid or expired socket token.'));
+      socket.deliver('connect_error', new Error('Authentication error: Invalid or expired socket token.'));
       delays.push(...timers.live().map((t) => t.delay));
       timers.runAll();
     }
-    socket.emit('connect');
-    socket.emit('connect_error', new Error('Authentication error: Invalid or expired socket token.'));
+    socket.deliver('connect');
+    socket.deliver('connect_error', new Error('Authentication error: Invalid or expired socket token.'));
     const afterConnect = timers.live().map((t) => t.delay);
 
     assert({
@@ -531,7 +534,7 @@ describe('createRealtimeClient lifecycle', () => {
       schedule: timers.schedule,
     });
     const first = client.socket() as FakeSocket;
-    first.emit('connect_error', new Error('Authentication error: Invalid or expired socket token.'));
+    first.deliver('connect_error', new Error('Authentication error: Invalid or expired socket token.'));
     const handshake = first.handshake();
     client.disconnect();
     release('ps_sock_late');

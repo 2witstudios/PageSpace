@@ -12,6 +12,8 @@ export type UiResources = {
   readonly taskView: TaskViewName;
   /** Tasks whose subtasks the Tree view shows. */
   readonly expandedTasks: readonly string[];
+  /** Pages expanded in the files tree. */
+  readonly expandedFileIds: readonly string[];
 };
 
 /**
@@ -27,6 +29,6 @@ export type UiState = {
 
 /** The empty shell: the swap point for real data from later leaves. */
 export const createInitialState = (): UiState => ({
-  resources: { collapsedSections: [], taskView: defaultTaskView, expandedTasks: [] },
+  resources: { collapsedSections: [], taskView: defaultTaskView, expandedTasks: [], expandedFileIds: [] },
   collections: {},
 });
