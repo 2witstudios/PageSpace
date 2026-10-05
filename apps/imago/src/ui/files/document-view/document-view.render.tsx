@@ -21,7 +21,11 @@ export type DocumentViewRenderProps = {
   /** The pages above the document, top of the drive first. */
   readonly crumbs: readonly DocumentCrumb[];
   readonly hrefFor: (pageId: string) => string;
-  /** The document's content, drawn read-only. */
+  /** The title in the reading column; the plain title when not given. */
+  readonly heading?: ReactNode;
+  /** How saving stands, under the title. */
+  readonly notice?: ReactNode;
+  /** The document's content. */
   readonly body: ReactNode;
 };
 
@@ -46,13 +50,14 @@ const crumbsOf = ({ title, crumbs, hrefFor }: DocumentViewRenderProps): ReactNod
 
 /** A document opened as the object: its path in the header, then its title and content in the reading column. */
 export function renderDocumentView(props: DocumentViewRenderProps): ReactNode {
-  const { title, body } = props;
+  const { title, heading = title, notice = null, body } = props;
   return (
     <article className={documentViewClass} aria-label={title} data-document="">
       {renderPaneHeader({ title: crumbsOf(props) })}
       <div className={documentScrollClass}>
         <div className={documentColumnClass} data-reading-column="">
-          <h1 className={documentTitleClass}>{title}</h1>
+          <h1 className={documentTitleClass}>{heading}</h1>
+          {notice}
           {body}
         </div>
       </div>

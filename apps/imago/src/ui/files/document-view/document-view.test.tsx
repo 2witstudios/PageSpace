@@ -82,8 +82,11 @@ const tree: FakeRoute = () =>
     ], { title: 'Launch' }),
   ]);
 
+/** These viewers may read the page but not edit it (editing: document-edit.test.tsx). */
+const readOnly: FakeRoute = () => Response.json({ canView: true, canEdit: false, canShare: false, canDelete: false });
+
 const show = (routes: Record<string, FakeRoute>, pageId = 'notes') => {
-  const web = fakeWeb(routes);
+  const web = fakeWeb({ [`GET /api/pages/${pageId}/permissions/check`]: readOnly, ...routes });
   const container = mount(
     <ImagoSWRProvider client={web.client}>
       <RealtimeProvider client={quietRealtime()}>
@@ -201,6 +204,37 @@ describe('a DOCUMENT in the Files object', () => {
       should: 'name it Untitled and show no path above it yet',
       actual: [nav?.querySelectorAll('a').length, nav?.textContent, container.querySelector('h1')?.textContent],
       expected: [0, 'Untitled', 'Untitled'],
+    });
+  });
+});
+
+describe('crumbsFor()', () => {
+  test('a page a children load names but the drive tree does not list', async () => {
+    const { composeTree } = await import('../file-tree/file-tree');
+    const { fileNodesFrom } = await import('../file-model/from-api');
+    const { listedIdsFrom } = await import('../tree-view/tree-view');
+    const { crumbsFor } = await import('./document-view');
+    const pages = [
+      treeRow('launch', 'FOLDER', [treeRow('brief', 'DOCUMENT', [], { parentId: 'launch', title: 'Brief' })], {
+        title: 'Launch',
+      }),
+    ];
+    // Brief expanded: apps/web's children route checks only the parent, so it can name Secret.
+    const nodes = fileNodesFrom(
+      composeTree(
+        { pages, at: 1 },
+        {
+          brief: { children: [pageRow('secret', 'FOLDER', { parentId: 'brief', title: 'Secret' })], at: 2 },
+          secret: { children: [pageRow('notes', 'DOCUMENT', { parentId: 'secret', title: 'Notes' })], at: 3 },
+        },
+      ),
+    );
+    const listed = listedIdsFrom(pages);
+    assert({
+      given: 'a document reached in the loaded tree only through a page the drive tree does not list',
+      should: 'never name that page in the path',
+      actual: [crumbsFor(nodes, listed, 'notes'), crumbsFor(nodes, listed, 'brief')],
+      expected: [[], [{ id: 'launch', title: 'Launch' }]],
     });
   });
 });
