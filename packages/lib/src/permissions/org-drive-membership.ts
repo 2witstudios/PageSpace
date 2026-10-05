@@ -5,6 +5,7 @@ import { driveMembers, driveRoles } from '@pagespace/db/schema/members';
 import { orgMembers, type OrgRole } from '@pagespace/db/schema/organizations';
 import { auditOrgAdminPrivateDriveAccess } from './org-admin-access-audit';
 import { ORGS_ENABLED } from '../organizations/orgs-enabled';
+import { getOpenDriveRoleFloors } from '../organizations/policy-reader';
 import type { DriveRoleGrant, OrgDriveMembership } from './org-access';
 import { driveMembershipRole, driveMembershipRow } from './drive-member-role';
 import type { RequesterRow } from './drive-join-requests';
@@ -82,8 +83,9 @@ export interface ResolveMembershipsOptions {
  * The effective membership of many (user, drive) pairs whose accepted rows the caller already read,
  * in the order given. The ONE IO edge every human drive resolver goes through, single or batched:
  * while ORGS_ENABLED is false, or for a personal drive, it runs no query and returns the row.
- * Otherwise it reads the org roles (one query) and the default roles of the OPEN drives a row-less
- * member needs (one query), then applies resolveEffectiveDriveMembership to each pair.
+ * Otherwise it reads the org roles (one query), the default roles of the OPEN drives a row-less
+ * member needs (one query) and the Open-drive role floor of the orgs whose OPEN drives an org MEMBER
+ * resolves (one query, POL-6), then applies resolveEffectiveDriveMembership to each pair.
  */
 export async function resolveEffectiveDriveMemberships(
   candidates: MembershipCandidate[],
@@ -101,6 +103,7 @@ export async function resolveEffectiveDriveMemberships(
       orgRole: null,
       row,
       driveDefaultRole: NO_DEFAULT_ROLE,
+      openDriveRoleFloor: null,
     }));
   }
 
@@ -127,12 +130,17 @@ export async function resolveEffectiveDriveMemberships(
     executor,
     candidates.filter((_, i) => needsDefaultRole[i]).map(({ drive }) => drive.id),
   );
+  // POL-6: read once per org, only where an org MEMBER resolves an OPEN drive (the only place a floor can apply).
+  const floors = await getOpenDriveRoleFloors(candidates.flatMap((_, i) => {
+    const orgId = facts[i].orgId;
+    return orgId !== null && orgRoleOf(i) === 'MEMBER' && facts[i].orgVisibility === 'OPEN' ? [orgId] : [];
+  }));
 
   return candidates.map(({ userId, drive, row }, i) => {
     const orgId = facts[i].orgId;
     if (orgId === null) {
       return resolveEffectiveDriveMembership({
-        orgsEnabled: false, drive: facts[i], orgRole: null, row, driveDefaultRole: NO_DEFAULT_ROLE,
+        orgsEnabled: false, drive: facts[i], orgRole: null, row, driveDefaultRole: NO_DEFAULT_ROLE, openDriveRoleFloor: null,
       });
     }
     const orgRole = orgRoleOf(i);
@@ -144,6 +152,7 @@ export async function resolveEffectiveDriveMemberships(
       driveDefaultRole: needsDefaultRole[i]
         ? { role: 'MEMBER', customRoleId: defaultRoles.get(drive.id) ?? null }
         : NO_DEFAULT_ROLE,
+      openDriveRoleFloor: floors.get(orgId) ?? null,
     });
     if (options.audit && effective?.auditOrgAdminPrivateAccess && orgRole !== null) {
       void auditOrgAdminPrivateDriveAccess({ userId, driveId: drive.id, orgId, orgRole });

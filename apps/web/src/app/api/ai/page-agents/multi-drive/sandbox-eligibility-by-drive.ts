@@ -1,6 +1,8 @@
 import { computeTierForDrive, isSandboxAvailable } from '@pagespace/lib/billing/sandbox-eligibility';
 import { toSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { isDriveLead, type DriveRelationship } from '@pagespace/lib/permissions/drive-relationship';
+import { applyOpenDriveFloor } from '@pagespace/lib/permissions/open-drive-floor';
+import type { OpenRoleFloor } from '@pagespace/lib/organizations/policies-core';
 
 /**
  * Per-drive sandbox availability for THE REQUESTER: the payer's tier (the
@@ -49,10 +51,11 @@ export function computeSandboxEligibilityByDrive(
  * ADMINs always edit; a plain MEMBER edits; a MEMBER with a custom role
  * edits only when that role's driveWidePermissions grant canEdit explicitly
  * (an unresolvable role fails closed). Keyed strictly by (roleId, driveId)
- * so a role can never apply outside its own drive.
+ * so a role can never apply outside its own drive. POL-6: an implicit Open-drive
+ * member's org floor (`openDriveFloor`) lifts that answer to edit under an edit floor.
  */
 export function resolveEditableDriveIds(
-  membershipRows: readonly { driveId: string; role: string; customRoleId: string | null }[],
+  membershipRows: readonly { driveId: string; role: string; customRoleId: string | null; openDriveFloor: OpenRoleFloor | null }[],
   customRoleRows: readonly { id: string; driveId: string; driveWidePermissions: { canEdit?: boolean } | null }[],
 ): Set<string> {
   const driveWideEditByRole = new Map(
@@ -63,8 +66,8 @@ export function resolveEditableDriveIds(
       .filter((row) => {
         if (row.role === 'ADMIN') return true;
         if (row.role !== 'MEMBER') return false;
-        if (!row.customRoleId) return true;
-        return driveWideEditByRole.get(`${row.customRoleId}:${row.driveId}`) === true;
+        const canEdit = !row.customRoleId || driveWideEditByRole.get(`${row.customRoleId}:${row.driveId}`) === true;
+        return applyOpenDriveFloor({ canView: true, canEdit, canShare: false, canDelete: false }, row.openDriveFloor, { isPrivate: false })?.canEdit === true;
       })
       .map((row) => row.driveId),
   );
@@ -78,8 +81,8 @@ export function resolveEditableDriveIds(
  */
 export function membershipRowsOf(
   relationships: ReadonlyMap<string, DriveRelationship>,
-): { driveId: string; role: string; customRoleId: string | null }[] {
+): { driveId: string; role: string; customRoleId: string | null; openDriveFloor: OpenRoleFloor | null }[] {
   return [...relationships].flatMap(([driveId, { membership }]) =>
-    membership ? [{ driveId, role: membership.role, customRoleId: membership.customRoleId }] : [],
+    membership ? [{ driveId, role: membership.role, customRoleId: membership.customRoleId, openDriveFloor: membership.openDriveFloor }] : [],
   );
 }

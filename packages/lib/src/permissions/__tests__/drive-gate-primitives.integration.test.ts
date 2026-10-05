@@ -362,7 +362,7 @@ describe('B7c: the gate primitives agree with the canonical resolvers (integrati
     const few = await countQueries(() => loadDriveRelationships(nina, f.allDrives.filter((d) => d.id === f.drives.product.id)));
     const many = await countQueries(() => loadDriveRelationships(nina, f.allDrives));
     expect(many).toBe(few);
-    expect(few).toBe(3); // accepted rows, org roles, default roles
+    expect(few).toBe(4); // accepted rows, org roles, default roles, the orgs' Open-drive floors (POL-6, once per batch)
 
     const listBefore = await countQueries(() => listMemberDrives(priya, { includeTrashed: true }));
     // The first call claims Priya's ORG-4 audit window on Finance; count the warm calls.

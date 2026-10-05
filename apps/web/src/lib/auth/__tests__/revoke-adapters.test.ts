@@ -31,7 +31,7 @@ import { loadDriveRelationship } from '@pagespace/lib/permissions/drive-relation
 
 const asMember = (role: 'OWNER' | 'ADMIN' | 'MEMBER', source: 'invite' | 'org' = 'invite'): DriveRelationship => ({
   isOwner: false,
-  membership: { role, customRoleId: null, source, auditOrgAdminPrivateAccess: false },
+  membership: { role, customRoleId: null, source, auditOrgAdminPrivateAccess: false, openDriveFloor: null },
 });
 const orgDrive = { id: 'drive-1', ownerId: 'lead-1', orgId: 'org-1', orgVisibility: 'OPEN' as const };
 

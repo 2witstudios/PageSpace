@@ -27,6 +27,7 @@ import type {
 } from '../types';
 import { PageType } from '../utils/enums';
 import { readSheetDocument } from '../sheets/store';
+import { accessiblePageIdsSource, auditOrgPowerAccess, type OrgPowerRow } from '../permissions/accessible-page-ids';
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type Runner = typeof db | Tx;
@@ -46,10 +47,12 @@ async function ensurePageAccessible(
   userId: string,
   pageId: string,
 ): Promise<void> {
-  const result = await runner.execute<{ allowed: boolean }>(
-    sql`SELECT EXISTS(SELECT 1 FROM accessible_page_ids_for_user(${userId}) WHERE page_id = ${pageId}) AS allowed`,
+  const result = await runner.execute<OrgPowerRow>(
+    sql`SELECT org_power_drive_id, org_power_org_id, org_power_role FROM ${accessiblePageIdsSource(userId)} WHERE page_id = ${pageId}`,
   );
-  const allowed = result.rows[0]?.allowed ?? false;
+  const allowed = result.rows.length > 0;
+  // ORG-4: opening a PRIVATE drive's page through org power is audited here as on every other path.
+  auditOrgPowerAccess(userId, result.rows);
   if (!allowed) {
     throw new Error(`loadPagePayload: page ${pageId} is not accessible to user ${userId}`);
   }
@@ -130,7 +133,7 @@ async function fetchBreadcrumb(
       WHERE c.depth < 128
     ),
     allowed AS (
-      SELECT page_id FROM accessible_page_ids_for_user(${userId})
+      SELECT page_id FROM ${accessiblePageIdsSource(userId)}
     )
     SELECT
       c.id,

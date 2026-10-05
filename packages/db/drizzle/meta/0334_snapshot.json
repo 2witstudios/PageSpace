@@ -1,5 +1,5 @@
 {
-  "id": "00aa3d9f-d774-45c2-8ae9-a5f7beb161a4",
+  "id": "c5ad61c5-cd6a-48e3-a549-3f0b405c6e77",
   "prevId": "c303a432-e285-4a6f-a05d-a89ddd92ab45",
   "version": "7",
   "dialect": "postgresql",
@@ -15203,7 +15203,7 @@
           "name": "scheduledById",
           "type": "text",
           "primaryKey": false,
-          "notNull": false
+          "notNull": true
         },
         "triggerAt": {
           "name": "triggerAt",
@@ -15344,7 +15344,7 @@
           "columnsTo": [
             "id"
           ],
-          "onDelete": "set null",
+          "onDelete": "cascade",
           "onUpdate": "no action"
         }
       },
@@ -15383,7 +15383,7 @@
           "name": "createdBy",
           "type": "text",
           "primaryKey": false,
-          "notNull": false
+          "notNull": true
         },
         "name": {
           "name": "name",
@@ -15468,12 +15468,6 @@
           "primaryKey": false,
           "notNull": true,
           "default": true
-        },
-        "ownerLeftAt": {
-          "name": "ownerLeftAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": false
         },
         "nextRunAt": {
           "name": "nextRunAt",
@@ -15608,7 +15602,7 @@
           "columnsTo": [
             "id"
           ],
-          "onDelete": "set null",
+          "onDelete": "cascade",
           "onUpdate": "no action"
         },
         "workflows_agentPageId_pages_id_fk": {
@@ -23785,13 +23779,7 @@
           "name": "createdBy",
           "type": "text",
           "primaryKey": false,
-          "notNull": false
-        },
-        "ownerLeftAt": {
-          "name": "ownerLeftAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": false
+          "notNull": true
         },
         "createdAt": {
           "name": "createdAt",
@@ -23869,7 +23857,7 @@
           "columnsTo": [
             "id"
           ],
-          "onDelete": "set null",
+          "onDelete": "cascade",
           "onUpdate": "no action"
         }
       },
