@@ -138,7 +138,8 @@ export const startOrgSubscription = (orgId: string) =>
 
 export const openOrgBillingPortal = (orgId: string) => post<{ url: string }>(`/api/orgs/${orgId}/billing/portal`);
 
-export const moveDriveIntoOrg = (driveId: string, orgId: string) => put<{ drive: { id: string } }>(`/api/drives/${driveId}/org`, { orgId });
+export const moveDriveIntoOrg = (driveId: string, orgId: string, orgVisibility?: 'OPEN' | 'RESTRICTED' | 'PRIVATE') =>
+  put<{ drive: { id: string } }>(`/api/drives/${driveId}/org`, orgVisibility ? { orgId, orgVisibility } : { orgId });
 
 export const inviteToOrg = (orgId: string, body: { email: string; role?: 'ADMIN' | 'MEMBER' }) =>
   post<{ invitation: OrgInvitation }>(orgKeys.invitations(orgId), body);
@@ -167,7 +168,7 @@ export async function fetchDriveMemberEmails(driveId: string): Promise<string[]>
 // Members & seats, Drives, Policies (M2)
 // ---------------------------------------------------------------------------
 
-export type { OrgGuest, OrgDriveUsage, OrgMemberActivity } from '@pagespace/lib/permissions/org-read-models';
+export type { OrgGuest, OrgDriveUsage, OrgMemberActivity, OrgTrashedDrive } from '@pagespace/lib/permissions/org-read-models';
 export type { OrgSeatCapView, OrgSeatCapsRead, OrgPoolSplit } from '@pagespace/lib/services/drive-wallet-service';
 export type { OrgPolicies, OrgPoliciesPatch } from '@pagespace/lib/organizations/policies-core';
 
@@ -188,6 +189,7 @@ export const orgReadKeys = {
   driveUsage: (orgId: string) => `/api/orgs/${orgId}/drives/usage`,
   policies: (orgId: string) => `/api/orgs/${orgId}/policies`,
   pool: (orgId: string) => `/api/orgs/${orgId}/pool`,
+  trashedDrives: (orgId: string) => `/api/orgs/${orgId}/drives/trashed`,
   invoices: (orgId: string) => `/api/orgs/${orgId}/billing/invoices`,
 } as const;
 
