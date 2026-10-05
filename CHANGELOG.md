@@ -9,6 +9,11 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **Try Imago from the user menu (where an operator enables it)** — when a deployment switches
+  Imago on, the user menu shows a "Try Imago" item that opens the new interface at `/imago`.
+  While it is switched off, the item is hidden and every `/imago` page answers "not found".
+  On-prem, tenant and cloud deployments behave the same way.
+
 - **Give an agent its own account** — in an agent's settings (Accounts), or in your personal
   settings for your global assistant, add an API key for a site so the agent can call that site's
   API for you. The agent refers to the account by name and never sees the key: PageSpace keeps it in
