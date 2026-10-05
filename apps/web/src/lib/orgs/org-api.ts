@@ -115,6 +115,8 @@ export const orgKeys = {
   seats: (orgId: string) => `/api/orgs/${orgId}/billing/seats`,
   guestApprovals: (orgId: string) => `/api/orgs/${orgId}/guest-approvals`,
   automations: (orgId: string) => `/api/orgs/${orgId}/automations`,
+  guests: (orgId: string) => `/api/orgs/${orgId}/guests`,
+  drives: (orgId: string) => `/api/orgs/${orgId}/drives`,
 } as const;
 
 /** Every key that belongs to one org, so an org:changed event can refetch them all. */
