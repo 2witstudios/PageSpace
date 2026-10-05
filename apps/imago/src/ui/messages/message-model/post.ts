@@ -35,6 +35,11 @@ export type ChannelMessageResponse = {
   readonly replyCount: number;
   readonly user: { readonly id: string; readonly name: string | null; readonly image: string | null };
   readonly reactions: readonly ChannelReactionResponse[];
+  /**
+   * What the sender's POST carried, echoed on its response and broadcast so
+   * the sender can retire exactly its own sending post. Never stored.
+   */
+  readonly clientNonce?: string;
 };
 
 /** One page of a channel, oldest post first; `nextCursor` reaches older posts. */
@@ -71,4 +76,6 @@ export type Post = {
   readonly text: string;
   readonly edited: boolean;
   readonly reactions: readonly PostReaction[];
+  /** The viewer's own post, shown while apps/web has not yet stored it. */
+  readonly pending?: true;
 };
