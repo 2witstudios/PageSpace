@@ -1,6 +1,6 @@
 import { describe, test } from 'vitest';
 import { assert } from 'riteway/vitest';
-import { chatContextFor, paneLayout, stageFor, type ListSection, type Section } from './stage';
+import { chatContextFor, paneLayout, stageFor, type ListSection } from './stage';
 
 const page = (pageId: string) => ({ kind: 'page', pageId }) as const;
 
