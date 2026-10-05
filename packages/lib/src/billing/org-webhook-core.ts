@@ -13,7 +13,7 @@
  * An event with neither signal is a person's and takes the existing personal path
  * unchanged — which also finds nobody for a customer that is no user's.
  */
-import { ORG_ID_METADATA_KEY, ORG_SUBSCRIPTION_KIND } from './org-subscription-core';
+import { ORG_ID_METADATA_KEY, ORG_SUBSCRIPTION_KIND, orgSubscriptionItems, type OrgBusinessPrices } from './org-subscription-core';
 
 export type BillingOwnerRoute =
   | { kind: 'org'; orgId: string }
@@ -87,4 +87,42 @@ export function planOrgSubscriptionMirror(input: {
 }): OrgSubscriptionMirrorPlan {
   if (input.storedSubscriptionId === null) return 'no_row';
   return input.storedSubscriptionId === input.fetchedSubscriptionId ? 'apply' : 'ignore_other_subscription';
+}
+
+/** The seat linkage org_subscriptions stores, as the mirror compares it. */
+export interface StoredOrgSeatLinkage {
+  stripeBaseItemId: string;
+  stripeSeatItemId: string;
+  extraSeatQuantity: number;
+  seatRevision: number;
+}
+
+export type OrgSeatItemMirrorPatch = Partial<StoredOrgSeatLinkage>;
+
+/**
+ * Review 3+4 P2-8 (SEAT-7): the subscription mirror re-reads Stripe, so it refreshes the item
+ * ids and the extra-seat quantity from what Stripe says NOW — a seat change made outside the app
+ * (the dashboard, a support edit) is no longer left stale (the review saw stored 2 vs Stripe 3).
+ * A changed quantity bumps the seat revision, so the next seat change's idempotency key can never
+ * be one an earlier change already used. A subscription without the base price is not an org
+ * Business subscription and changes nothing; a missing seat item never erases the stored one.
+ * Only what differs is in the patch.
+ */
+export function planOrgSeatItemMirror(input: {
+  stored: StoredOrgSeatLinkage;
+  items: ReadonlyArray<{ id: string; priceId: string; quantity: number }>;
+  prices: OrgBusinessPrices;
+}): OrgSeatItemMirrorPatch {
+  const linkage = orgSubscriptionItems({ items: input.items }, input.prices);
+  if (!linkage) return {};
+  const patch: OrgSeatItemMirrorPatch = {};
+  if (linkage.baseItemId !== input.stored.stripeBaseItemId) patch.stripeBaseItemId = linkage.baseItemId;
+  if (linkage.seatItem) {
+    if (linkage.seatItem.id !== input.stored.stripeSeatItemId) patch.stripeSeatItemId = linkage.seatItem.id;
+    if (linkage.seatItem.quantity !== input.stored.extraSeatQuantity) {
+      patch.extraSeatQuantity = linkage.seatItem.quantity;
+      patch.seatRevision = input.stored.seatRevision + 1;
+    }
+  }
+  return patch;
 }

@@ -37,6 +37,7 @@ import { applyOrgPoolRefill, type OrgPoolRefillOutcome } from '@pagespace/lib/bi
 import { orgBillingLockKey } from '@pagespace/lib/billing/org-subscription-core';
 import {
   orgInvoiceExtraSeats,
+  planOrgSeatItemMirror,
   planOrgSubscriptionMirror,
   routeBillingOwner,
   type BillingOwnerRoute,
@@ -53,6 +54,8 @@ export interface OrgWebhookDeps {
   stripe: Pick<OrgBillingStripe, 'retrieveSubscription'>;
   /** The configured extra-seat price id (stripe-config orgPriceIds.extraSeat). */
   seatPriceId: () => string;
+  /** The configured Business base price id (stripe-config orgPriceIds.businessBase): finds the base item the mirror refreshes. */
+  basePriceId: () => string;
   now?: () => Date;
 }
 
@@ -129,12 +132,20 @@ export async function mirrorOrgSubscription(
     const fetched = await deps.stripe.retrieveSubscription(subscriptionId);
     const now = deps.now?.() ?? new Date();
     const billingEnabled = isBillingEnabled();
+    // Review 3+4 P2-8: the seat item and its quantity as Stripe has them NOW (a change made
+    // outside the app is mirrored, never left stale), alongside the status.
+    const seatPatch = planOrgSeatItemMirror({
+      stored,
+      items: fetched.items,
+      prices: { basePriceId: deps.basePriceId(), seatPriceId: deps.seatPriceId() },
+    });
     const next = {
       status: fetched.status,
       trialEnd: fetched.trialEnd === null ? null : new Date(fetched.trialEnd * 1000),
       currentPeriodStart: fetched.currentPeriodStart === null ? null : new Date(fetched.currentPeriodStart * 1000),
       currentPeriodEnd: fetched.currentPeriodEnd === null ? null : new Date(fetched.currentPeriodEnd * 1000),
       cancelAtPeriodEnd: fetched.cancelAtPeriodEnd,
+      ...seatPatch,
     };
     const before = deriveOrgStatus({ billingEnabled, subscription: stored, now }).status;
     await tx.update(orgSubscriptions).set(next).where(eq(orgSubscriptions.id, stored.id));
@@ -261,6 +272,7 @@ export function defaultOrgWebhookDeps(): OrgWebhookDeps {
   return {
     stripe: stripeOrgBilling(appStripe),
     seatPriceId: () => stripeConfig.orgPriceIds.extraSeat,
+    basePriceId: () => stripeConfig.orgPriceIds.businessBase,
   };
 }
 

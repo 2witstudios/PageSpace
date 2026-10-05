@@ -272,7 +272,7 @@ export interface OrgSubscriptionItemLinkage {
 }
 
 /** The item ids stored on the org; null when the subscription has no base item (not an org Business subscription). */
-export function orgSubscriptionItems(sub: OrgSubscriptionCandidate, prices: OrgBusinessPrices): OrgSubscriptionItemLinkage | null {
+export function orgSubscriptionItems(sub: Pick<OrgSubscriptionCandidate, 'items'>, prices: OrgBusinessPrices): OrgSubscriptionItemLinkage | null {
   const base = sub.items.find((i) => i.priceId === prices.basePriceId);
   if (!base) return null;
   const seat = sub.items.find((i) => i.priceId === prices.seatPriceId);

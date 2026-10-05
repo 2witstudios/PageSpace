@@ -406,6 +406,23 @@ describe('Stripe webhook — org routing, idempotency, lapse (real Postgres, in-
     }
   });
 
+  it('SEAT-7 (partial) review 3+4 P2-8: a seat quantity changed in Stripe outside the app (stored 2, Stripe 3) is mirrored by the next subscription event, with a new seat revision; a replay changes nothing more', async () => {
+    if (!dbAvailable) return;
+    const org = await northwind(7);
+    const before = await storedSub(org.orgId);
+    expect(before.extraSeatQuantity).toBe(2);
+    // A support edit in the Stripe dashboard: the seat item goes to 3.
+    const sub = org.stripe.subscriptions.get(org.subscriptionId);
+    if (!sub) throw new Error('no fake subscription');
+    sub.items = sub.items.map((i) => (i.priceId === PRICES.seatPriceId ? { ...i, quantity: 3 } : i));
+    const updated = eventPayload('customer.subscription.updated', { id: org.subscriptionId, object: 'subscription', customer: org.customerId, status: sub.status, metadata: orgMetadata(org.orgId) });
+    expect(await deliver(updated)).toBe(200);
+    const after = await storedSub(org.orgId);
+    expect(after).toMatchObject({ extraSeatQuantity: 3, seatRevision: before.seatRevision + 1, stripeSeatItemId: before.stripeSeatItemId, stripeBaseItemId: before.stripeBaseItemId });
+    expect(await deliver(updated)).toBe(200);
+    expect(await storedSub(org.orgId)).toMatchObject({ extraSeatQuantity: 3, seatRevision: before.seatRevision + 1 });
+  });
+
   it('SEAT-7 (partial) MON-3 (partial) replaying the same org invoice.paid event is a no-op: one grant, no second Stripe read, no second write', async () => {
     if (!dbAvailable) return;
     const org = await northwind(7);
