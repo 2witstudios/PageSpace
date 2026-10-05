@@ -26,8 +26,23 @@ const webAppInternalOrigin = (): string => {
 // In production the edge routes /imago to this app and /api to apps/web, so
 // the browser already sees one origin. `next dev` has no edge, so it proxies
 // /api (outside basePath) to apps/web itself: the session cookie and CSRF
-// token then behave as in production. The rewrite exists only in the dev
+// token then behave as in production. The proxy exists only in the dev
 // server phase, so `next build` never bakes it into the routes manifest.
+//
+// Next renders any request carrying next-router-prefetch: 1 in prefetch mode,
+// and for a document (non-RSC) request that render throws on the server
+// (`location is not defined`, a 500). Middleware and headers() never see the
+// flight headers, so such a request is rewritten to a 404 route instead.
+// Rewrites run after middleware, so the gates still apply. The router's own
+// prefetches send RSC: 1. API route handlers render no page, so the API space
+// is rewritten only as a fallback: where no handler matches, Next would render
+// the not-found page. Built fresh per route: Next rewrites the objects it loads.
+const prefetchDocument = () => ({
+  has: [{ type: "header" as const, key: "next-router-prefetch", value: "1" }],
+  missing: [{ type: "header" as const, key: "rsc", value: "1" }],
+  destination: "/api/prefetch-document",
+});
+
 export default function nextConfig(phase: string): NextConfig {
   return {
     basePath: "/imago",
@@ -61,14 +76,22 @@ export default function nextConfig(phase: string): NextConfig {
       }
       return config;
     },
-    ...(phase === PHASE_DEVELOPMENT_SERVER && {
-      rewrites: async () => [
-        {
-          source: "/api/:path*",
-          destination: `${webAppInternalOrigin()}/api/:path*`,
-          basePath: false,
-        },
+    rewrites: async () => ({
+      beforeFiles: [
+        { source: "/", ...prefetchDocument() },
+        { source: "/:path((?!api(?:/|$)|_next/).*)", ...prefetchDocument() },
       ],
+      afterFiles:
+        phase === PHASE_DEVELOPMENT_SERVER
+          ? [
+              {
+                source: "/api/:path*",
+                destination: `${webAppInternalOrigin()}/api/:path*`,
+                basePath: false,
+              },
+            ]
+          : [],
+      fallback: [{ source: "/api/:path*", ...prefetchDocument() }],
     }),
   };
 }

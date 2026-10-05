@@ -37,24 +37,30 @@ export function middleware(req: NextRequest): NextResponse {
 }
 
 // Matchers are prefixed with basePath, and `/imago/(...)` alone never matches
-// the bare `/imago` root, so the root gets its own entry. Router prefetches
-// skip middleware: they render nothing, so they need no nonce. The config is
-// parsed statically at build time, so each entry is written out literally.
+// the bare `/imago` root, so the root gets its own entries. Every client can
+// send the prefetch headers, so they must not open a way past the gates:
+// - API routes always run middleware: route handlers never render the root
+//   layout, whose notFound() backstops the flag for pages.
+// - Pages skip it only for a real router prefetch (RSC with
+//   next-router-prefetch: 1), which renders no page and so needs no nonce
+//   (a runtime prefetch, value 2, renders the page and so runs it); the
+//   root layout keeps those behind the flag. A matcher entry runs middleware
+//   when no `missing` header is present, so the two entries per page source
+//   leave out exactly the requests that carry both.
+// The config is parsed statically at build time, so each entry is written out
+// literally.
 export const config = {
   matcher: [
+    '/api/:path*',
+    { source: '/', missing: [{ type: 'header', key: 'rsc', value: '1' }] },
+    { source: '/', missing: [{ type: 'header', key: 'next-router-prefetch', value: '1' }] },
     {
-      source: '/',
-      missing: [
-        { type: 'header', key: 'next-router-prefetch' },
-        { type: 'header', key: 'purpose', value: 'prefetch' },
-      ],
+      source: '/((?!_next/static|_next/image|favicon.ico).*)',
+      missing: [{ type: 'header', key: 'rsc', value: '1' }],
     },
     {
       source: '/((?!_next/static|_next/image|favicon.ico).*)',
-      missing: [
-        { type: 'header', key: 'next-router-prefetch' },
-        { type: 'header', key: 'purpose', value: 'prefetch' },
-      ],
+      missing: [{ type: 'header', key: 'next-router-prefetch', value: '1' }],
     },
   ],
 };
