@@ -1,4 +1,5 @@
-import { test, expect, type APIRequestContext } from '@playwright/test';
+import { test, expect, type APIRequestContext, type Locator, type Page } from '@playwright/test';
+import { provisionHomeDriveIfNeeded } from '../../../packages/lib/src/onboarding/home-drive';
 import { seedUser, type SeededUser } from '../support/db';
 
 /**
@@ -22,6 +23,16 @@ import { seedUser, type SeededUser } from '../support/db';
  *
  * Start web WITHOUT the imago origin in `ADDITIONAL_ALLOWED_ORIGINS` and the first test fails
  * with 403 ORIGIN_INVALID: that is the "rejected without it" half of the criterion.
+ *
+ * ## Hydration under `next dev` (IMG-1.2a)
+ *
+ * React's development build needs eval, so imago's CSP adds 'unsafe-eval' to script-src under
+ * `next dev` only. The last describe block opens /imago on the dev server in a real browser and
+ * proves the shell hydrates: React props land on a rail link, and clicking it navigates on the
+ * client (a JS property tagged on the rail survives, which a document load cannot keep). That
+ * needs the dev server started with `IMAGO_ENABLED=true`. Drop the dev rule from
+ * apps/imago/src/middleware/security-headers.ts and it fails: Chromium reports
+ * `'unsafe-eval' is not an allowed source` and the link never gets React props.
  */
 
 const IMAGO_DEV_URL = process.env.IMAGO_DEV_URL ?? 'http://localhost:3006';
@@ -95,5 +106,68 @@ test.describe('imago dev /api proxy', () => {
 
     expect(response.status()).toBe(403);
     expect(await response.json()).toMatchObject({ code: 'CSRF_TOKEN_INVALID' });
+  });
+});
+
+type Probed = HTMLElement & { __probe?: string };
+
+const railLink = (page: Page, name: string): Locator =>
+  page.getByRole('navigation', { name: 'Primary' }).getByRole('link', { name, exact: true });
+
+test.describe('imago under next dev in a browser', () => {
+  let user: SeededUser;
+  let homeDriveId: string;
+
+  test.beforeAll(async () => {
+    user = await seedUser();
+    ({ driveId: homeDriveId } = await provisionHomeDriveIfNeeded(user.userId));
+  });
+
+  test('/imago hydrates and navigates on the client', async ({ browser }) => {
+    // The dev server compiles the shell on its first request.
+    test.setTimeout(120_000);
+    // Its own context: the suite's storageState belongs to the proxy origin's user.
+    const context = await browser.newContext({ storageState: undefined });
+    await context.addCookies([{ name: 'session', value: user.sessionToken, url: IMAGO_DEV_URL }]);
+    const page = await context.newPage();
+    const evalBlocked: string[] = [];
+    page.on('pageerror', (error) => {
+      if (error.message.includes('unsafe-eval')) evalBlocked.push(error.message);
+    });
+    page.on('console', (message) => {
+      if (message.text().includes('unsafe-eval')) evalBlocked.push(message.text());
+    });
+
+    try {
+      const response = await page.goto(new URL('/imago', IMAGO_DEV_URL).toString());
+      const csp = response?.headers()['content-security-policy'] ?? '';
+      expect(csp, 'the dev server serves the development CSP').toContain("'unsafe-eval'");
+
+      await page.waitForURL((url) => url.pathname === `/imago/${homeDriveId}`);
+      const files = railLink(page, 'Files');
+      await expect(files).toBeVisible();
+
+      // Server-rendered markup is visible before hydration; React props mean it hydrated.
+      await page.waitForFunction(
+        (node) => node !== null && Object.keys(node).some((key) => key.startsWith('__reactProps$')),
+        await files.elementHandle(),
+        { timeout: 60_000 },
+      );
+      const rail = page.getByRole('navigation', { name: 'Primary' });
+      await rail.evaluate((node) => {
+        (node as Probed).__probe = 'rail';
+      });
+
+      await files.click();
+      await page.waitForURL((url) => url.pathname === `/imago/${homeDriveId}/files`);
+      await expect(page.locator('[data-section]')).toHaveAttribute('data-section', 'files');
+      expect(
+        await rail.evaluate((node) => (node as Probed).__probe ?? null),
+        'the rail survives a client navigation',
+      ).toBe('rail');
+      expect(evalBlocked, 'no eval blocked by CSP').toEqual([]);
+    } finally {
+      await context.close();
+    }
   });
 });
