@@ -67,6 +67,38 @@
         "src/components/ui/**"
       ]
     },
+    "apps/imago": {
+      "ignoreDependencies": [
+        "eslint-config-next",
+        "eslint",
+        "@next/eslint-plugin-next",
+        "eslint-plugin-react-hooks",
+        "eslint-plugin-better-tailwindcss",
+        "tailwindcss",
+        "@ai-sdk/react",
+        "ai",
+        "@dnd-kit/core",
+        "@dnd-kit/sortable",
+        "@dnd-kit/utilities",
+        "@pagespace/db",
+        "@pagespace/editor",
+        "@pagespace/lib",
+        "@tiptap/core",
+        "@tiptap/extension-highlight",
+        "@tiptap/extension-list",
+        "@tiptap/extension-table",
+        "@tiptap/extension-text-align",
+        "@tiptap/extension-text-style",
+        "@tiptap/extensions",
+        "@tiptap/pm",
+        "@tiptap/react",
+        "@tiptap/starter-kit",
+        "lucide-react",
+        "socket.io-client",
+        "streamdown",
+        "swr"
+      ]
+    },
     "apps/realtime": {
       "entry": [
         "src/index.ts"
