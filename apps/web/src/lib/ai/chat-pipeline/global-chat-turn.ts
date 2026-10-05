@@ -90,7 +90,6 @@ import type { LocationContext } from '@/lib/ai/shared/chat-types';
 import type { ContextRef } from '@/lib/ai/shared/buildContextRef';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 import { calculateTotalContextSize } from '@pagespace/lib/monitoring/ai-context-calculator';
-import { getDriveAccess } from '@pagespace/lib/services/drive-service';
 import {
   attachStreamFinisher,
   createStreamAbortController,
@@ -1050,20 +1049,14 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
 
     // INTEGRATION TOOLS: Resolve and merge integration tools for global assistant
     try {
-      const { resolveGlobalAssistantIntegrationTools } = await import('@/lib/ai/core/integration-tool-resolver');
+      const { resolveGlobalAssistantIntegrationTools, resolveIntegrationDriveScope } = await import('@/lib/ai/core/integration-tool-resolver');
       turnTimer.mark('integrations_import');
-      let currentDriveId = locationContext?.currentDrive?.id || null;
-      let userDriveRole: 'OWNER' | 'ADMIN' | 'MEMBER' | null = null;
-      if (currentDriveId) {
-        const access = await getDriveAccess(currentDriveId, userId);
-        turnTimer.mark('drive_access_checked');
-        if (!access.isMember) {
-          // User is not a member of this drive — do not resolve drive-scoped integrations
-          currentDriveId = null;
-        } else {
-          userDriveRole = access.role;
-        }
-      }
+      // A drive the user is not a member of resolves no drive-scoped integrations.
+      const { driveId: currentDriveId, userDriveRole } = await resolveIntegrationDriveScope(
+        userId,
+        locationContext?.currentDrive?.id || null,
+      );
+      if (currentDriveId) turnTimer.mark('drive_access_checked');
       const integrationTools = await resolveGlobalAssistantIntegrationTools({
         userId,
         driveId: currentDriveId,
