@@ -21,11 +21,11 @@ import { userBuiltinAgents } from '@pagespace/db/schema/user-builtin-agents';
 import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
 import { BUILTIN_AGENT_KEYS } from '../builtin-agents';
-import { provisionImagoAgents } from '../provision-imago-agents';
+import { provisionImagoAgents, provisionImagoAgentsInTransaction } from '../provision-imago-agents';
 import { getImagoDriveAccess, setImagoDriveAccess } from '../imago-drive-access';
 import { grantImagoAgents, lockImagoUser } from '../grant-imago-agents';
 import { provisionHomeDriveIfNeeded } from '../../onboarding/home-drive';
-import { createDrive } from '../../services/drive-service';
+import { createDrive, transferDriveOwnership } from '../../services/drive-service';
 import { addAgentToDrive } from '../../services/drive-agent-service';
 
 let dbAvailable = false;
@@ -573,5 +573,126 @@ describe('IMG-4.6a: a turn-off and a grant in flight serialise on the user-row l
     expect(observedLockWait).toBe(true);
     expect(await membersIn(off.id, Object.values(agents))).toEqual([]);
     expect(await storedChoice(user.id, off.id)).toBe(false);
+  });
+});
+
+describe('IMG-4.6a review: an agent page replaced while a grant is in flight never keeps a membership (real Postgres)', () => {
+  type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+  /** Poll until some backend in this database waits on a lock: the call under test is blocked on the user row. */
+  async function waitForLockWait(settled: () => boolean) {
+    for (let attempt = 0; attempt < 150 && !settled(); attempt++) {
+      const waiting = await db.execute(sql`
+        SELECT 1 FROM pg_stat_activity
+        WHERE datname = current_database() AND wait_event_type = 'Lock' AND query ILIKE '%FOR UPDATE%'
+      `);
+      if (waiting.rows.length > 0) return true;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    return false;
+  }
+
+  /**
+   * Hold the user-row lock, start `call` (which reads and authorizes outside
+   * the lock, then queues on it), and only then — while it waits — trash
+   * `pageId` and let provisioning replace it inside the held transaction, as a
+   * sign-in would. Returns what `call` resolved to.
+   */
+  async function replaceWhileQueued<T>(userId: string, homeId: string, pageId: string, call: () => Promise<T>) {
+    let release: () => void = () => undefined;
+    let announceHeld: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const lockHeld = new Promise<void>((resolve) => { announceHeld = resolve; });
+    let replaced: Record<string, string> = {};
+    const signIn = db.transaction(async (tx: Tx) => {
+      await lockImagoUser(tx, userId);
+      announceHeld();
+      await held;
+      await tx.update(pages).set({ isTrashed: true, trashedAt: new Date() }).where(eq(pages.id, pageId));
+      replaced = (await provisionImagoAgentsInTransaction(tx, userId, homeId)).agents;
+    });
+    await lockHeld;
+
+    let settled = false;
+    const pending = call().finally(() => { settled = true; });
+    const observedLockWait = await waitForLockWait(() => settled);
+    release();
+    await signIn;
+    const result = await pending;
+    return { result, observedLockWait, replaced };
+  }
+
+  it('given a turn-on whose agent page is trashed and replaced by a sign-in before it lands, should grant the replacement and never the old page', async () => {
+    if (!dbAvailable) return;
+    const { user, home, off, agents } = await setup();
+    await setImagoDriveAccess(user.id, off.id, false);
+    const old = agents.imago;
+
+    const { result, observedLockWait, replaced } = await replaceWhileQueued(
+      user.id, home.id, old, () => setImagoDriveAccess(user.id, off.id, true),
+    );
+
+    expect(observedLockWait).toBe(true);
+    expect(result.ok).toBe(true);
+    expect(replaced.imago).not.toBe(old);
+    expect(await membersIn(off.id, [old])).toEqual([]);
+    // No partial state: the replacement is in, as are its siblings.
+    expect(await membersIn(off.id, Object.values(replaced))).toEqual(sorted(Object.values(replaced)));
+    // Restoring the old page from the trash brings nothing back, and a turn-off leaves nothing behind.
+    await db.update(pages).set({ isTrashed: false, trashedAt: null }).where(eq(pages.id, old));
+    await setImagoDriveAccess(user.id, off.id, false);
+    expect(await membersIn(off.id, [old, ...Object.values(replaced)])).toEqual([]);
+  });
+
+  it('given a provisioning grant whose agent page is trashed and replaced before it lands, should not grant the old page', async () => {
+    if (!dbAvailable) return;
+    const { user, home, on, agents } = await setup();
+    const old = agents['imago-planner'];
+    await db.delete(driveAgentMembers)
+      .where(and(eq(driveAgentMembers.driveId, on.id), eq(driveAgentMembers.agentPageId, old)));
+
+    const { observedLockWait } = await replaceWhileQueued(
+      user.id, home.id, old, () => grantImagoAgents(user.id, { agentPageIds: [old] }),
+    );
+
+    expect(observedLockWait).toBe(true);
+    expect(await membersIn(on.id, [old])).toEqual([]);
+  });
+});
+
+describe('IMG-4.6a review: ownership transfer never overwrites a concurrent choice of the new owner (real Postgres)', () => {
+  it("given the new owner's turn-on committing while the transfer runs, should keep the new owner's choice", async () => {
+    if (!dbAvailable) return;
+    const { user: from, on: drive } = await setup();
+    const { user: to } = await userWithHome();
+    await factories.createDriveMember(drive.id, to.id, { role: 'ADMIN' });
+
+    // The new owner's turn-on, holding its stored row uncommitted.
+    let release: () => void = () => undefined;
+    let announceHeld: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const rowHeld = new Promise<void>((resolve) => { announceHeld = resolve; });
+    const turnOn = db.transaction(async (tx) => {
+      await tx.insert(imagoDriveAccess).values({ userId: to.id, driveId: drive.id, enabled: true });
+      announceHeld();
+      await held;
+    });
+    await rowHeld;
+
+    let settled = false;
+    const transfer = transferDriveOwnership(drive.id, from.id, to.id).finally(() => { settled = true; });
+    for (let attempt = 0; attempt < 150 && !settled; attempt++) {
+      const waiting = await db.execute(sql`
+        SELECT 1 FROM pg_stat_activity
+        WHERE datname = current_database() AND wait_event_type = 'Lock' AND query ILIKE '%imago_drive_access%'
+      `);
+      if (waiting.rows.length > 0) break;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    release();
+    await turnOn;
+    await transfer;
+
+    expect(await storedChoice(to.id, drive.id)).toBe(true);
   });
 });
