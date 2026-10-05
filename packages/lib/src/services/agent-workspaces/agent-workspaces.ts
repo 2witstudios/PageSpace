@@ -65,11 +65,19 @@ export interface SpawnAgentSessionDeps {
    * has to remember (review #2261/2).
    */
   maxActiveSessions: number;
+  /**
+   * The owner's Home drive id, provisioning it when missing — where a
+   * global-assistant (driveless) spawn's row is created, so no row is ever
+   * written with a null `driveId`. REQUIRED for the same reason as the deps
+   * above. Called only for a driveless spawn, and only AFTER the env check,
+   * so resolving Home can never turn a global spawn into an env-bindable one.
+   */
+  resolveHomeDriveId: (ownerId: string) => Promise<string>;
 }
 
 export type SpawnAgentSessionResult =
   | { ok: true; session: AgentSessionRecord }
-  /** The drive does not exist (FK refused) or the insert failed outright. */
+  /** The drive does not exist (FK refused), the Home drive could not be resolved, or the insert failed outright. */
   | { ok: false; reason: 'spawn_failed'; detail?: string }
   /** The owner is already at `maxActiveSessions` not-ended sessions. */
   | { ok: false; reason: 'session_limit_reached' }
@@ -117,6 +125,14 @@ export type SpawnAgentSessionResult =
  * Nothing here touches the env's Sprite: an env provisions LAZILY, on the first
  * ensure of a session inside it, so spawning into an environment stays as
  * instant and as free as spawning outside one.
+ *
+ * **A driveless spawn is created in the owner's Home drive.** `driveId: null`
+ * still MEANS "global-assistant session" to this function — the env check
+ * above runs against it, so a global spawn stays env-less — but the row it
+ * writes carries the Home drive (`deps.resolveHomeDriveId`, provisioning it
+ * when missing). Home is owner-only (drive guards forbid sharing it), and its
+ * owner is the session owner, so tenant, payer and Sprite key resolve exactly
+ * as they did for a null-drive row.
  */
 export async function spawnAgentSession({
   ownerId,
@@ -126,7 +142,7 @@ export async function spawnAgentSession({
   deps,
 }: {
   ownerId: string;
-  /** null = a global-assistant session (user-scoped, outside any drive). */
+  /** null = a global-assistant session, created in the owner's Home drive. */
   driveId: string | null;
   /**
    * The persistent environment to run inside, or null/absent for the ordinary
@@ -156,7 +172,7 @@ export async function spawnAgentSession({
   try {
     const result = await deps.store.createIfUnderLimit({
       ownerId,
-      driveId,
+      driveId: driveId ?? (await deps.resolveHomeDriveId(ownerId)),
       name: name ?? null,
       envId: boundEnvId,
       now: deps.now(),

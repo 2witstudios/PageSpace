@@ -194,3 +194,38 @@ export function decideAgentSessionEndAccess(
   }
   return { allowed: true };
 }
+
+/** The facts about a session's drive that decide whether it may host another drive's agent. */
+export interface SessionDriveFacts {
+  kind: string;
+  ownerId: string;
+}
+
+/**
+ * May this session host an agent that lives in a DIFFERENT drive?
+ *
+ * A drive-scoped session may not: its tenant, payer and access all derive from
+ * ITS drive, so another drive's agent would run and bill inside a drive that
+ * never admitted it (`AgentNotInSessionDriveError`, the claim's
+ * `cross_drive_denied`). A global-assistant session may: tenant and payer are
+ * its owner whichever agent runs, and only its owner can open it — so it hosts
+ * any agent the owner can view (page permissions are checked separately).
+ *
+ * Global-assistant sessions are now created in their owner's Home drive
+ * (IMG-5.1), so "global" is decided by OWNERSHIP rather than `driveId === null`:
+ * a session in a HOME drive owned by the session's own owner has exactly the
+ * properties above (Home is owner-only by the drive guards, and its owner is
+ * the session owner, so tenant and payer resolve to them). A session in a Home
+ * drive someone ELSE owns — or in any team drive — stays drive-strict.
+ * `drive` is null when the session has no drive, or its drive is gone.
+ */
+export function sessionHostsAgentsFromAnyDrive({
+  session,
+  drive,
+}: {
+  session: { driveId: string | null; ownerId: string };
+  drive: SessionDriveFacts | null;
+}): boolean {
+  if (session.driveId === null) return true;
+  return drive !== null && drive.kind === 'HOME' && drive.ownerId === session.ownerId;
+}

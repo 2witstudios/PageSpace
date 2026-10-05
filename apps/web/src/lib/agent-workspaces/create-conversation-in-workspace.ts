@@ -77,7 +77,8 @@ export class SessionFullError extends Error {
  * turns — and bill their runtime — inside a workspace its drive never admitted
  * (three reviewers converged on this: codex p58/p59 + review M6).
  *
- * A GLOBAL workspace (driveId null) is exempt from this gate: its tenant/payer
+ * A GLOBAL workspace (driveId null, or — since IMG-5.1 — its owner's own Home
+ * drive; `sessionHostsAgentsFromAnyDrive`) is exempt from this gate: its tenant/payer
  * already resolve to the workspace's own owner regardless of which agent's
  * conversation runs inside it (`resolveSessionTenantId`/`resolveSessionPayerId`
  * key off the WORKSPACE's driveId/ownerId, never the hosted agent's), and each
@@ -172,7 +173,7 @@ export async function createConversationInSessionWith<Tx>(
     // Fail-closed on unresolved facts.
     const agentDriveId = await deps.findAgentDriveId(agentPageId);
     if (agentDriveId === null) throw new ConversationUnavailableError({ cause: new Error('agent_missing_or_trashed') });
-    if (sessionRow.driveId !== null && sessionRow.driveId !== agentDriveId) {
+    if (!sessionRow.hostsAgentsFromAnyDrive && sessionRow.driveId !== agentDriveId) {
       throw new AgentNotInSessionDriveError();
     }
   }
