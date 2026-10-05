@@ -54,12 +54,12 @@ describe('mergePlugins()', () => {
     });
   });
 
-  test('no plugins yet', () => {
+  test('the shell’s plugins', () => {
     assert({
-      given: 'the shell before any section plugin lands',
-      should: 'expose an empty transaction namespace',
-      actual: transactions,
-      expected: {},
+      given: 'the shell with the stage plugin registered',
+      should: 'expose exactly the stage transactions',
+      actual: Object.keys(transactions).sort(),
+      expected: ['collapseSection', 'expandSection'],
     });
   });
 });

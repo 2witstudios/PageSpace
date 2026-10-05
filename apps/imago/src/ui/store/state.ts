@@ -1,8 +1,13 @@
+import type { Section } from '../frame/stage/stage';
+
 /**
  * Scalar shell state (drafts, filters, expansion, the open conversation).
  * Section leaves add their fields here as they land.
  */
-export type UiResources = Readonly<Record<never, never>>;
+export type UiResources = {
+  /** Sections whose list the viewer hid; the stage itself lives in the URL. */
+  readonly collapsedSections: readonly Section[];
+};
 
 /**
  * Entity lists the shell renders (files, conversations, tasks). Real data
@@ -17,6 +22,6 @@ export type UiState = {
 
 /** The empty shell: the swap point for real data from later leaves. */
 export const createInitialState = (): UiState => ({
-  resources: {},
+  resources: { collapsedSections: [] },
   collections: {},
 });

@@ -6,9 +6,9 @@ describe('createInitialState()', () => {
   test('empty shell state', () => {
     assert({
       given: 'a fresh UI state',
-      should: 'carry empty resources and collections (no mock data)',
+      should: 'collapse no section and carry empty collections (no mock data)',
       actual: createInitialState(),
-      expected: { resources: {}, collections: {} },
+      expected: { resources: { collapsedSections: [] }, collections: {} },
     });
   });
 
@@ -23,8 +23,9 @@ describe('createInitialState()', () => {
         first === second,
         first.resources === second.resources,
         first.collections === second.collections,
+        first.resources.collapsedSections === second.resources.collapsedSections,
       ],
-      expected: [false, false, false],
+      expected: [false, false, false, false],
     });
   });
 });
