@@ -6,6 +6,8 @@ import { chatSlotClass, listSlotClass, objectSlotClass, railClass, shellClass } 
 export type ShellRenderProps = {
   readonly stage: Stage;
   readonly layout: PaneLayout;
+  /** React has hydrated the shell, so its controls act. */
+  readonly hydrated: boolean;
   readonly rail: ReactNode;
   readonly list: ReactNode;
   /** The object column, holding the route's own output. */
@@ -20,7 +22,7 @@ export type ShellRenderProps = {
  * attributes name the stage for tests and devtools; nothing styles off them.
  */
 export function renderShell(props: ShellRenderProps): ReactNode {
-  const { stage, layout, rail, list, object, chat } = props;
+  const { stage, layout, hydrated, rail, list, object, chat } = props;
   return (
     <div
       className={shellClass}
@@ -28,6 +30,7 @@ export function renderShell(props: ShellRenderProps): ReactNode {
       data-list={layout.list}
       data-list-hidden={layout.listHidden}
       data-object={stage.object?.kind}
+      data-hydrated={hydrated ? '' : undefined}
     >
       <nav aria-label="Primary" className={railClass} data-slot="rail">
         {rail}
