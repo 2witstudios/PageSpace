@@ -415,6 +415,9 @@ async function driveGateWithAgentCheck(
 ): Promise<boolean> {
   if (driveOutsideMcpScope(context, driveId)) return false;
   if (await driveDeniedByAppToken(context, driveId, 'manage')) return false;
+  // An Imago agent is capped by the user here too: it may manage or
+  // administer a drive (cron workflows, cross-drive moves in) only where the
+  // invoking user is owner or admin, as the REST API requires of the user.
   const userIsOwnerOrAdmin = async () => {
     const access = await checkDriveAccess(driveId, context.userId);
     return access.isOwner || access.isAdmin;
@@ -528,6 +531,25 @@ export async function filterAgentDriveIdsByActorReach(
   if (!agent?.cappedByUser) return scoped;
   const results = await Promise.all(
     scoped.map(async (driveId) => ((await getUserDriveAccess(context.userId, driveId)) ? driveId : null)),
+  );
+  return results.filter((id): id is string => id !== null);
+}
+
+/**
+ * For an Imago agent, the drives among `driveIds` it may access — its grant
+ * AND the invoking user (`canActorAccessDrive`). Any other actor gets
+ * `driveIds` back unchanged. For tools that start from the USER's drives
+ * (get_activity), where a drive the agent holds no grant on would otherwise
+ * surface its name, prompt and drive-level rows.
+ */
+export async function filterDriveIdsByImagoAgentReach(
+  context: ToolExecutionContext,
+  driveIds: string[],
+): Promise<string[]> {
+  const agent = await resolveActingAgent(context);
+  if (!agent?.cappedByUser) return driveIds;
+  const results = await Promise.all(
+    driveIds.map(async (driveId) => ((await canActorAccessDrive(context, driveId)) ? driveId : null)),
   );
   return results.filter((id): id is string => id !== null);
 }

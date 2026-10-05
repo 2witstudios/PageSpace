@@ -111,6 +111,7 @@ import { factories } from '@pagespace/db/test/factories';
 import { sessionService } from '@pagespace/lib/auth/session-service';
 import { provisionImagoAgents } from '@pagespace/lib/agents/provision-imago-agents';
 import { setImagoDriveAccess } from '@pagespace/lib/agents/imago-drive-access';
+import { logActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { BUILTIN_AGENTS, type BuiltinAgentKey } from '@pagespace/lib/agents/builtin-agents';
 import { getUserAccessLevel } from '@pagespace/lib/permissions/permissions';
 import { ensureTestDb } from '@/test/ensure-test-db';
@@ -174,7 +175,11 @@ async function seedWorld(): Promise<World> {
 
   const home = await factories.createDrive(user.id, { kind: 'HOME', name: 'Home', slug: `home-${createId()}` });
   const acme = await factories.createDrive(user.id, { name: `${MARK} Acme`, slug: `acme-${createId()}` });
-  const journal = await factories.createDrive(user.id, { name: `${MARK} Journal`, slug: `journal-${createId()}` });
+  const journal = await factories.createDrive(user.id, {
+    name: `${MARK} Journal`,
+    slug: `journal-${createId()}`,
+    drivePrompt: `${MARK}-journal-prompt`,
+  });
   const partner = await factories.createDrive(other.id, { name: `${MARK} Partner`, slug: `partner-${createId()}` });
   const rival = await factories.createDrive(stranger.id, { name: `${MARK} Rival`, slug: `rival-${createId()}` });
   const former = await factories.createDrive(other.id, { name: `${MARK} Former`, slug: `former-${createId()}` });
@@ -218,6 +223,21 @@ async function seedWorld(): Promise<World> {
   // The user can see — and edit — these pages of the other user's Home; the agent must not.
   for (const page of [otherShared, otherSheet, otherAgent, otherTaskList, otherTask]) {
     await factories.createPagePermission(page.id, user.id, { canEdit: true });
+  }
+
+  // Drive-level activity (no pageId): on the granted Acme (the control) and on
+  // drives the agent must not see — the ungranted Journal and the Gone drive
+  // the user lost.
+  for (const drive of [acme, journal, gone]) {
+    await logActivity({
+      userId: user.id,
+      actorEmail: 'someone@example.com',
+      operation: 'update',
+      resourceType: 'drive',
+      resourceId: drive.id,
+      resourceTitle: drive.name,
+      driveId: drive.id,
+    });
   }
 
   const token = await sessionService.createSession({ userId: user.id, type: 'user', scopes: ['*'], expiresInMs: 60 * 60 * 1000 });
@@ -417,6 +437,20 @@ describe('IMG-4.9 AC1 — a drive without a grant: no page reads, search hits or
 
     expect(leaked(outputs, [world.gone.open, world.gone.agent])).toEqual([]);
     expect(outputs.join('\n')).not.toContain(`${MARK} Gone`);
+  });
+
+  it("given get_activity, should neither name nor describe a drive the agent may not access", async () => {
+    for (const key of ['imago', 'imago-researcher'] as const) {
+      const { outputs } = await runTools(world.agents[key], [
+        { toolName: 'get_activity', input: { since: '30d', excludeOwnActivity: false } },
+        { toolName: 'get_activity', input: { since: '30d', excludeOwnActivity: false, driveIds: [world.journal.driveId, world.gone.driveId] } },
+      ]);
+
+      // Control: a granted drive's drive-level activity does come through.
+      expect(outputs[0], key).toContain(`${MARK} Acme`);
+      const all = outputs.join('\n');
+      for (const leak of [`${MARK} Journal`, `${MARK}-journal-prompt`, `${MARK} Gone`]) expect(all, `${key}: ${leak}`).not.toContain(leak);
+    }
   });
 
   it('given each Imago agent (planner, researcher), should deny the same read paths', async () => {
