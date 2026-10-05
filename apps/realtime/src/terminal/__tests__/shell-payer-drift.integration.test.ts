@@ -32,7 +32,7 @@ import { computeChargeFor, type ComputeCharge } from '@pagespace/lib/billing/com
 import { chargeMillicents } from '@pagespace/lib/billing/credit-core';
 import { MACHINE_MARKUP_BPS } from '@pagespace/lib/billing/credit-pricing';
 import { calculateMachineCostDollars } from '@pagespace/lib/monitoring/machine-pricing';
-import { claimBillingWindow, settleAccruedWindow } from '../shell-handler';
+import { claimBillingWindow, regateResumedWindow, resumeBillingClock, settleAccruedWindow } from '../shell-handler';
 import { pgWindowClaimLock, windowClaimLockKey } from '../window-claim-lock';
 import { withAdvisoryLock, withBlockingAdvisoryLock } from '@pagespace/db/advisory-lock';
 import { sql } from '@pagespace/db/operators';
@@ -255,6 +255,42 @@ describe('an open terminal session whose drive moves', () => {
  * far stays with the actor who opened it. The session's owner is never who a joiner's compute is
  * capped against.
  */
+describe('a quiesced terminal resuming after its org lapsed (review #2761 P3-1)', () => {
+  it('SEAT-9 (partial) the restarted window is re-gated at once: a lapsed org\'s shell is ended with no hold and no charge — no unheld tail until the next heartbeat; a paid org\'s resume takes a fresh hold', async () => {
+    const w = (world = await build('org'));
+    const { session, map } = await openSession(w, computeChargeFor({ kind: 'org', orgId: w.orgId }, w.ownerId));
+    // The shell quiesces: the window so far settles and the clock stops, holding nothing.
+    vi.setSystemTime(T0 + 2 * MIN);
+    expect(await settleAccruedWindow(defaultSandboxBillingDeps, map, session, 'k1', { stopClock: true })).toBe(true);
+    expect(session.connectedAt).toBeUndefined();
+    expect(session.holdId).toBeUndefined();
+    const usageBefore = (await usageOn(w.poolId)).length;
+
+    // While idle, the org lapses; then a keystroke resumes the shell.
+    await db.update(orgSubscriptions).set({ status: 'canceled' }).where(eq(orgSubscriptions.orgId, w.orgId));
+    vi.setSystemTime(T0 + 30 * MIN);
+    const ended = vi.fn();
+    expect(resumeBillingClock(session)).toBe(true);
+    await regateResumedWindow({ billing: defaultSandboxBillingDeps }, map, session, 'k1', ended);
+    expect(ended).toHaveBeenCalledTimes(1);
+    expect(session.holdId).toBeUndefined();
+    expect(await holdsOn(w.poolId)).toEqual([]);
+    expect((await usageOn(w.poolId)).length).toBe(usageBefore);
+
+    // Paid again: a resume re-gates and holds on the pool, and the session runs on.
+    await db.update(orgSubscriptions).set({ status: 'active' }).where(eq(orgSubscriptions.orgId, w.orgId));
+    session.connectedAt = undefined;
+    const kept = vi.fn();
+    expect(resumeBillingClock(session)).toBe(true);
+    await regateResumedWindow({ billing: defaultSandboxBillingDeps }, map, session, 'k1', kept);
+    expect(kept).not.toHaveBeenCalled();
+    expect(session.holdId).toEqual(expect.any(String));
+    expect((await holdsOn(w.poolId)).map((h) => h.id)).toEqual([session.holdId]);
+    // A second resume while the clock runs is inert.
+    expect(resumeBillingClock(session)).toBe(false);
+  });
+});
+
 describe('a member joining a live terminal window', () => {
   async function addBen(w: World, capped: boolean): Promise<string> {
     const ben = await factories.createUser({ name: 'Ben (drive-mate)', subscriptionTier: 'free' });

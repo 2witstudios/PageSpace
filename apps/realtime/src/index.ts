@@ -48,6 +48,7 @@ import { getRealtimeSpritesSdk } from './terminal/realtime-sprites-client';
 import {
   buildShellHandlers,
   claimBillingWindow,
+  regateResumedWindow,
   composeSocketKey,
   connectFailureMessage,
   ensureShellSession,
@@ -597,6 +598,10 @@ const shellIoDeps = {
     const billing = shellSessionDeps.billing;
     if (!billing) return true;
     return (await claimBillingWindow(billing, agentTerminalSessionMap, session, userId, pgWindowClaimLock)).ok;
+  },
+  // Review #2761: a window this send restarted is re-gated at once, never left unheld.
+  regateResumedWindow: (session: TerminalSession) => {
+    void regateResumedWindow(shellSessionDeps, agentTerminalSessionMap, session, session.sessionKey);
   },
 };
 
