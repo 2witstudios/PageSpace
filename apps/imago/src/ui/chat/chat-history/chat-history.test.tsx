@@ -11,7 +11,7 @@ import { createInitialState } from '@/ui/store/state';
 import { dispatch, transactions } from '@/ui/store/transactions';
 import { stageFor } from '@/ui/frame/stage/stage';
 import { chatPaths } from '../chat-api/chat-api';
-import { agentConversation, assistantWithTool, conversationsPage, messagesPage, pointers, userMessage } from '../chat-model/fixtures';
+import { agentConversation, assistantWithTool, conversationsPage, driveAgentsBody, messagesPage, pointers, userMessage } from '../chat-model/fixtures';
 import { ChatPane } from '../chat-pane/chat-pane';
 import { ChatHistory } from './chat-history';
 
@@ -21,6 +21,8 @@ const OLDER_CONVERSATIONS = `GET ${chatPaths.conversations('p-imago', 1)}`;
 const NEW_CONVERSATION = `POST ${chatPaths.newConversation('p-imago')}`;
 const MESSAGES = (id: string) => `GET ${chatPaths.messages('p-imago', id)}`;
 const TURN = `POST ${chatPaths.turn}`;
+const DRIVE_AGENTS = `GET ${chatPaths.driveAgents('d1')}`;
+const SUPPORT_CONVERSATIONS = `GET ${chatPaths.conversations('a-support', 0)}`;
 
 // Days are the viewer's: run far from UTC, at 08:30 on Oct 5 in Los Angeles.
 const zone = process.env.TZ;
@@ -68,6 +70,7 @@ const historyWeb = (stream: FakeTurnStream, extra: Record<string, FakeRoute> = {
     [MESSAGES('c3')]: () => thread('c3', 'When does Q3 launch?'),
     [MESSAGES('c1')]: () => thread('c1', 'Review the roadmap'),
     [TURN]: () => stream.response(),
+    [DRIVE_AGENTS]: () => Response.json(driveAgentsBody([{ id: 'a-support', title: 'Support' }])),
     ...extra,
   });
 
@@ -353,6 +356,28 @@ describe('ChatHistory', () => {
       should: 'list no chats and ask for none',
       actual: web.count(CONVERSATIONS),
       expected: 0,
+    });
+  });
+
+  test('the agent chosen in the header', async () => {
+    const web = historyWeb(fakeTurnStream(), {
+      [SUPPORT_CONVERSATIONS]: () =>
+        Response.json(conversationsPage([agentConversation('s1', { title: 'Refund policy', updatedAt: '2026-10-05T14:00:00.000Z' })])),
+      [`GET ${chatPaths.messages('a-support', 's1')}`]: () => Response.json(messagesPage([userMessage('s1-u', 'What is the refund policy?')], { conversationId: 's1' })),
+    });
+    const container = mountChat(web);
+    await settle(listed(container));
+    act(() => dispatch(transactions.startNewChat, undefined));
+    act(() => dispatch(transactions.selectAgent, { id: 'a-support', title: 'Support' }));
+    await settle(() => {
+      if (!current(container).includes('Refund policy')) throw new Error('support history not shown');
+    });
+    await settle(showing(container, 'What is the refund policy?'));
+    assert({
+      given: 'New chat open, then another agent chosen in the chat header',
+      should: 'list that agent’s chats beside the pane and leave the new chat for its latest',
+      actual: [groups(container), getUiState().resources.chatNew],
+      expected: [[['Today', ['Refund policy']]], false],
     });
   });
 
