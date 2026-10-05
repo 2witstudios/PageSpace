@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { isBillingEnabled } from '@pagespace/lib/deployment-mode';
-import { authorizeOrgRequest, orgsDisabledResponse, ORG_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
+import { authorizeOrgRequest, billingUnavailableResponse, ORG_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
 import { ensureOrgBusinessSubscription, OrgBillingError, orgSubscriptionSummary } from '@/lib/org-billing/org-subscription';
 
 /**
@@ -16,7 +16,7 @@ export async function POST(request: Request, context: { params: Promise<{ orgId:
   const { orgId } = await context.params;
   const gate = await authorizeOrgRequest(request, orgId, 'ADMIN', ORG_WRITE_AUTH);
   if (!gate.ok) return gate.response;
-  if (!isBillingEnabled()) return orgsDisabledResponse();
+  if (!isBillingEnabled()) return billingUnavailableResponse();
   try {
     const result = await ensureOrgBusinessSubscription(orgId);
     auditRequest(request, {
@@ -29,15 +29,15 @@ export async function POST(request: Request, context: { params: Promise<{ orgId:
     return NextResponse.json({ subscription: orgSubscriptionSummary(result.linkage) }, { status: result.kind === 'existing' ? 200 : 201 });
   } catch (error) {
     if (error instanceof OrgBillingError) {
-      if (error.code === 'org_not_found') return NextResponse.json({ error: 'Organization not found' }, { status: 404 });
+      if (error.code === 'org_not_found') return NextResponse.json({ error: 'Organization not found', code: 'org_not_found' }, { status: 404 });
       if (error.code === 'prices_not_configured') {
         loggers.api.error('Org billing prices are not configured', error);
-        return NextResponse.json({ error: 'Organization billing is not available' }, { status: 503 });
+        return NextResponse.json({ error: 'Organization billing is not available', code: 'billing_unavailable' }, { status: 503 });
       }
     }
     loggers.api.error('Error provisioning organization subscription:', error as Error, { orgId });
     return NextResponse.json(
-      { error: 'Could not reach the billing provider; try again.' },
+      { error: 'Could not reach the billing provider; try again.', code: 'billing_provider_unreachable' },
       { status: 502 },
     );
   }

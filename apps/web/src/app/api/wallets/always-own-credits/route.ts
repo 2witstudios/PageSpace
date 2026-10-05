@@ -33,7 +33,7 @@ export async function GET(request: Request) {
     return NextResponse.json({ alwaysOwnCredits, alwaysOwnCreditsInDrive });
   } catch (error) {
     loggers.api.error('Error reading the always-own-credits switches:', error as Error);
-    return NextResponse.json({ error: 'Failed to read the switches' }, { status: 500 });
+    return NextResponse.json({ error: 'Failed to read the switches', code: 'internal_error' }, { status: 500 });
   }
 }
 
@@ -55,6 +55,6 @@ export async function PUT(request: Request) {
     return NextResponse.json({ driveId: result.driveId, enabled: result.enabled });
   } catch (error) {
     loggers.api.error('Error setting the always-own-credits switch:', error as Error);
-    return NextResponse.json({ error: 'Failed to set the switch' }, { status: 500 });
+    return NextResponse.json({ error: 'Failed to set the switch', code: 'internal_error' }, { status: 500 });
   }
 }

@@ -24,7 +24,7 @@ export async function POST(request: Request) {
   try {
     const parsed = inviteAcceptSchema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) {
-      return NextResponse.json({ error: 'Invalid request body', issues: parsed.error.issues }, { status: 400 });
+      return NextResponse.json({ error: 'Invalid request body', issues: parsed.error.issues, code: 'invalid_request' }, { status: 400 });
     }
     const result = await acceptInvitation({ token: parsed.data.token, userId: gate.userId, now: new Date() });
     if (!result.ok) {
@@ -35,7 +35,7 @@ export async function POST(request: Request) {
         resourceId: 'token',
         details: { operation: 'accept_org_invitation', reason: result.reason },
       });
-      return NextResponse.json({ error: REFUSALS[result.reason], reason: result.reason }, { status: result.status });
+      return NextResponse.json({ error: REFUSALS[result.reason], code: result.reason }, { status: result.status });
     }
     auditRequest(request, {
       eventType: 'authz.role.assigned',
@@ -47,6 +47,6 @@ export async function POST(request: Request) {
     return NextResponse.json({ orgId: result.orgId, role: result.role, joined: result.joined });
   } catch (error) {
     loggers.api.error('Error accepting organization invitation:', error as Error);
-    return NextResponse.json({ error: 'Failed to accept invitation' }, { status: 500 });
+    return NextResponse.json({ error: 'Failed to accept invitation', code: 'internal_error' }, { status: 500 });
   }
 }

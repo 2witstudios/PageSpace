@@ -31,7 +31,7 @@ export async function POST(
     );
     if (!limit.allowed) {
       return NextResponse.json(
-        { error: 'Too many resends for this invitation. Please try again later.' },
+        { error: 'Too many resends for this invitation. Please try again later.', code: 'rate_limited' },
         { status: 429, headers: { 'Retry-After': String(limit.retryAfter ?? 900) } },
       );
     }
@@ -56,7 +56,7 @@ export async function POST(
       if (result.reason === 'delivery_failed') {
         // The service restored the previous link, which keeps working.
         loggers.api.error('Failed to resend organization invitation email', result.cause as Error, { orgId });
-        return NextResponse.json({ error: 'Failed to send the invitation email' }, { status: 502 });
+        return NextResponse.json({ error: 'Failed to send the invitation email', code: 'delivery_failed' }, { status: 502 });
       }
       if (result.reason === 'org_lapsed') return orgLapsedResponse(result.message);
       if (result.reason === 'org_policy') return orgPolicyRefusalResponse(result);
@@ -70,7 +70,7 @@ export async function POST(
         });
         return orgRefusalResponse({ status: result.status, message: result.message, code: result.reason });
       }
-      return NextResponse.json({ error: 'Invitation not found' }, { status: 404 });
+      return NextResponse.json({ error: 'Invitation not found', code: 'not_found' }, { status: 404 });
     }
 
     auditRequest(request, {
@@ -83,6 +83,6 @@ export async function POST(
     return NextResponse.json({ invitation: result.invitation });
   } catch (error) {
     loggers.api.error('Error resending organization invitation:', error as Error);
-    return NextResponse.json({ error: 'Failed to resend invitation' }, { status: 500 });
+    return NextResponse.json({ error: 'Failed to resend invitation', code: 'internal_error' }, { status: 500 });
   }
 }

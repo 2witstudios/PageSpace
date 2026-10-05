@@ -23,7 +23,7 @@ export async function GET(request: Request, context: Context) {
   if (!gate.ok) return gate.response;
   try {
     const org = await findOrganizationById(orgId);
-    if (!org) return NextResponse.json({ error: 'Organization not found' }, { status: 404 });
+    if (!org) return NextResponse.json({ error: 'Organization not found', code: 'org_not_found' }, { status: 404 });
     auditRequest(request, {
       eventType: 'data.read',
       userId: gate.userId,
@@ -40,7 +40,7 @@ export async function GET(request: Request, context: Context) {
     });
   } catch (error) {
     loggers.api.error('Error reading organization:', error as Error);
-    return NextResponse.json({ error: 'Failed to read organization' }, { status: 500 });
+    return NextResponse.json({ error: 'Failed to read organization', code: 'internal_error' }, { status: 500 });
   }
 }
 
@@ -52,13 +52,13 @@ export async function PATCH(request: Request, context: Context) {
   try {
     const parsed = orgUpdateSchema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) {
-      return NextResponse.json({ error: 'Invalid request body', issues: parsed.error.issues }, { status: 400 });
+      return NextResponse.json({ error: 'Invalid request body', issues: parsed.error.issues, code: 'invalid_request' }, { status: 400 });
     }
     const result = await updateOrganization(orgId, parsed.data, gate.userId);
     if (!result.ok) {
       return result.reason === 'slug_taken'
-        ? NextResponse.json({ error: 'That organization URL is already taken' }, { status: 409 })
-        : NextResponse.json({ error: 'Organization not found' }, { status: 404 });
+        ? NextResponse.json({ error: 'That organization URL is already taken', code: 'slug_taken' }, { status: 409 })
+        : NextResponse.json({ error: 'Organization not found', code: 'org_not_found' }, { status: 404 });
     }
     auditRequest(request, {
       eventType: 'data.write',
@@ -71,7 +71,7 @@ export async function PATCH(request: Request, context: Context) {
     return NextResponse.json({ organization: { id, name, slug, avatarUrl, ownerId, createdAt } });
   } catch (error) {
     loggers.api.error('Error updating organization:', error as Error);
-    return NextResponse.json({ error: 'Failed to update organization' }, { status: 500 });
+    return NextResponse.json({ error: 'Failed to update organization', code: 'internal_error' }, { status: 500 });
   }
 }
 
@@ -87,7 +87,7 @@ export async function DELETE(request: Request, context: Context) {
   try {
     const parsed = orgDeleteSchema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) {
-      return NextResponse.json({ error: 'Invalid request body', issues: parsed.error.issues }, { status: 400 });
+      return NextResponse.json({ error: 'Invalid request body', issues: parsed.error.issues, code: 'invalid_request' }, { status: 400 });
     }
     // The service re-checks the caller is still the Owner under the org row lock, and ends
     // the org's live Stripe subscription inside its transaction (a Stripe failure refuses
@@ -97,10 +97,10 @@ export async function DELETE(request: Request, context: Context) {
       { endSubscription: endOrgSubscriptionPort() },
     );
     if (!result.ok) {
-      if (result.status === 404) return NextResponse.json({ error: 'Organization not found' }, { status: 404 });
-      if (result.status === 403) return NextResponse.json({ error: 'Only the Owner can delete this organization' }, { status: 403 });
+      if (result.status === 404) return NextResponse.json({ error: 'Organization not found', code: 'org_not_found' }, { status: 404 });
+      if (result.status === 403) return NextResponse.json({ error: 'Only the Owner can delete this organization', code: 'not_owner' }, { status: 403 });
       return NextResponse.json(
-        { error: 'Every organization drive needs a valid destination', reason: result.reason, driveIds: result.driveIds },
+        { error: 'Every organization drive needs a valid destination', code: result.reason, driveIds: result.driveIds },
         { status: 400 },
       );
     }
@@ -129,6 +129,6 @@ export async function DELETE(request: Request, context: Context) {
     return NextResponse.json({ deleted: true, drives: result.steps });
   } catch (error) {
     loggers.api.error('Error deleting organization:', error as Error);
-    return NextResponse.json({ error: 'Failed to delete organization' }, { status: 500 });
+    return NextResponse.json({ error: 'Failed to delete organization', code: 'internal_error' }, { status: 500 });
   }
 }

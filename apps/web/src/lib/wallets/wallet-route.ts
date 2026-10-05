@@ -9,6 +9,7 @@
  * it reads or writes anything. A session write still needs CSRF.
  */
 import { NextResponse } from 'next/server';
+import { apiError } from '@/lib/api/api-error';
 import { getAllowedDriveIds, isMCPAuthResult, type AuthResult } from '@/lib/auth';
 import type { WalletServiceError } from '@pagespace/lib/services/drive-wallet-service';
 import type { WalletCredential } from '@pagespace/lib/permissions/wallet-access';
@@ -27,7 +28,7 @@ export function walletErrorResponse(error: WalletServiceError): NextResponse {
 /** A drive-scoped token may not read account-wide wallet data; null when allowed. */
 export function refuseScopedTokenForAccountRead(auth: AuthResult): NextResponse | null {
   if (isMCPAuthResult(auth) && getAllowedDriveIds(auth).length > 0) {
-    return NextResponse.json({ error: 'This token is limited to specific drives and cannot read account-wide wallets' }, { status: 403 });
+    return apiError(403, 'token_scope_refused', 'This token is limited to specific drives and cannot read account-wide wallets');
   }
   return null;
 }

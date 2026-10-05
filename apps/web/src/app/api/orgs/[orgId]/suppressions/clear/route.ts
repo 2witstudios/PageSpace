@@ -21,15 +21,15 @@ export async function POST(request: Request, context: Context) {
   try {
     const limit = await checkDistributedRateLimit(`org_suppression_clear:${orgId}:${gate.userId}`, DISTRIBUTED_RATE_LIMITS.API);
     if (!limit.allowed) {
-      return NextResponse.json({ error: 'Too many requests. Please try again later.' }, { status: 429, headers: { 'Retry-After': String(limit.retryAfter ?? 60) } });
+      return NextResponse.json({ error: 'Too many requests. Please try again later.', code: 'rate_limited' }, { status: 429, headers: { 'Retry-After': String(limit.retryAfter ?? 60) } });
     }
     const parsed = suppressionClearSchema.safeParse(await request.json().catch(() => null));
-    if (!parsed.success) return NextResponse.json({ error: 'Invalid request body' }, { status: 400 });
+    if (!parsed.success) return NextResponse.json({ error: 'Invalid request body', code: 'invalid_request' }, { status: 400 });
     const cleared = await clearDepartureSuppression({ orgId, email: parsed.data.email, actorId: gate.userId });
     auditRequest(request, { eventType: 'data.delete', userId: gate.userId, resourceType: 'org_departure_suppression', resourceId: orgId, details: { orgId, cleared } });
     return NextResponse.json({ cleared });
   } catch (error) {
     loggers.api.error('Error clearing a departure suppression:', error as Error);
-    return NextResponse.json({ error: 'Failed to clear the suppression' }, { status: 500 });
+    return NextResponse.json({ error: 'Failed to clear the suppression', code: 'internal_error' }, { status: 500 });
   }
 }

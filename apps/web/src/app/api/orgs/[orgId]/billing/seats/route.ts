@@ -4,7 +4,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { isBillingEnabled } from '@pagespace/lib/deployment-mode';
 import { getSeatSummary, setSeatAutoAdd } from '@pagespace/lib/organizations/seat-service';
-import { authorizeOrgRequest, orgsDisabledResponse, ORG_READ_AUTH, ORG_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
+import { authorizeOrgRequest, billingUnavailableResponse, ORG_READ_AUTH, ORG_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
 
 type Context = { params: Promise<{ orgId: string }> };
 
@@ -19,13 +19,13 @@ export async function GET(request: Request, context: Context) {
   const { orgId } = await context.params;
   const gate = await authorizeOrgRequest(request, orgId, 'ADMIN', ORG_READ_AUTH);
   if (!gate.ok) return gate.response;
-  if (!isBillingEnabled()) return orgsDisabledResponse();
+  if (!isBillingEnabled()) return billingUnavailableResponse();
   try {
     const { currentPeriodEnd, ...summary } = await getSeatSummary(orgId);
     return NextResponse.json({ seats: { ...summary, currentPeriodEnd: currentPeriodEnd?.toISOString() ?? null } });
   } catch (error) {
     loggers.api.error('Error reading organization seats:', error as Error, { orgId });
-    return NextResponse.json({ error: 'Failed to read seats' }, { status: 500 });
+    return NextResponse.json({ error: 'Failed to read seats', code: 'internal_error' }, { status: 500 });
   }
 }
 
@@ -38,14 +38,14 @@ export async function PATCH(request: Request, context: Context) {
   const { orgId } = await context.params;
   const gate = await authorizeOrgRequest(request, orgId, 'OWNER', ORG_WRITE_AUTH);
   if (!gate.ok) return gate.response;
-  if (!isBillingEnabled()) return orgsDisabledResponse();
+  if (!isBillingEnabled()) return billingUnavailableResponse();
   const parsed = bodySchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) {
-    return NextResponse.json({ error: 'Invalid request body', issues: parsed.error.issues }, { status: 400 });
+    return NextResponse.json({ error: 'Invalid request body', issues: parsed.error.issues, code: 'invalid_request' }, { status: 400 });
   }
   try {
     if (!(await setSeatAutoAdd(orgId, parsed.data.autoAdd, gate.userId))) {
-      return NextResponse.json({ error: 'Organization not found' }, { status: 404 });
+      return NextResponse.json({ error: 'Organization not found', code: 'org_not_found' }, { status: 404 });
     }
     auditRequest(request, {
       eventType: 'data.write',
@@ -57,6 +57,6 @@ export async function PATCH(request: Request, context: Context) {
     return NextResponse.json({ autoAdd: parsed.data.autoAdd });
   } catch (error) {
     loggers.api.error('Error updating seat auto-add:', error as Error, { orgId });
-    return NextResponse.json({ error: 'Failed to update seats' }, { status: 500 });
+    return NextResponse.json({ error: 'Failed to update seats', code: 'internal_error' }, { status: 500 });
   }
 }

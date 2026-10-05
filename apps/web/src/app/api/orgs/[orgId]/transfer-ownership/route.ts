@@ -17,7 +17,7 @@ export async function POST(request: Request, context: { params: Promise<{ orgId:
   try {
     const parsed = transferOwnershipSchema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) {
-      return NextResponse.json({ error: 'Invalid request body', issues: parsed.error.issues }, { status: 400 });
+      return NextResponse.json({ error: 'Invalid request body', issues: parsed.error.issues, code: 'invalid_request' }, { status: 400 });
     }
     const result = await transferOwnership({ orgId, actorId: gate.userId, targetId: parsed.data.toUserId });
     if (!result.ok) {
@@ -31,7 +31,7 @@ export async function POST(request: Request, context: { params: Promise<{ orgId:
               : result.reason === 'not_found'
                 ? 'Organization not found'
                 : 'Only the Owner can transfer ownership';
-      return NextResponse.json({ error, reason: result.reason }, { status: result.status });
+      return NextResponse.json({ error, code: result.reason }, { status: result.status });
     }
     auditRequest(request, {
       eventType: 'authz.role.assigned',
@@ -43,6 +43,6 @@ export async function POST(request: Request, context: { params: Promise<{ orgId:
     return NextResponse.json({ ownerId: parsed.data.toUserId });
   } catch (error) {
     loggers.api.error('Error transferring organization ownership:', error as Error);
-    return NextResponse.json({ error: 'Failed to transfer ownership' }, { status: 500 });
+    return NextResponse.json({ error: 'Failed to transfer ownership', code: 'internal_error' }, { status: 500 });
   }
 }

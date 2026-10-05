@@ -31,7 +31,7 @@ export async function GET(request: Request, context: Context) {
     return NextResponse.json({ invitations });
   } catch (error) {
     loggers.api.error('Error listing organization invitations:', error as Error);
-    return NextResponse.json({ error: 'Failed to list invitations' }, { status: 500 });
+    return NextResponse.json({ error: 'Failed to list invitations', code: 'internal_error' }, { status: 500 });
   }
 }
 
@@ -51,20 +51,20 @@ export async function POST(request: Request, context: Context) {
   try {
     if (!(await isEmailVerified(gate.userId))) {
       return NextResponse.json(
-        { error: 'Email verification required. Please verify your email to perform this action.', requiresEmailVerification: true },
+        { error: 'Email verification required. Please verify your email to perform this action.', requiresEmailVerification: true, code: 'email_verification_required' },
         { status: 403 },
       );
     }
     const parsed = inviteCreateSchema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) {
-      return NextResponse.json({ error: 'Invalid request body', issues: parsed.error.issues }, { status: 400 });
+      return NextResponse.json({ error: 'Invalid request body', issues: parsed.error.issues, code: 'invalid_request' }, { status: 400 });
     }
     const { email, role } = parsed.data;
 
     const limit = await checkDistributedRateLimit(`org_invite:org:${orgId}:${email}`, DISTRIBUTED_RATE_LIMITS.DRIVE_INVITE);
     if (!limit.allowed) {
       return NextResponse.json(
-        { error: 'Too many invitations to this address. Please try again later.' },
+        { error: 'Too many invitations to this address. Please try again later.', code: 'rate_limited' },
         { status: 429, headers: { 'Retry-After': String(limit.retryAfter ?? 900) } },
       );
     }
@@ -83,7 +83,7 @@ export async function POST(request: Request, context: Context) {
       if (result.reason === 'delivery_failed') {
         // The service has already undone the invite, so it holds no seat.
         loggers.api.error('Failed to send organization invitation email', result.cause as Error, { orgId });
-        return NextResponse.json({ error: 'Failed to send the invitation email' }, { status: 502 });
+        return NextResponse.json({ error: 'Failed to send the invitation email', code: 'delivery_failed' }, { status: 502 });
       }
       if (result.reason === 'org_lapsed') return orgLapsedResponse(result.message);
       if (result.reason === 'org_policy') return orgPolicyRefusalResponse(result);
@@ -102,7 +102,7 @@ export async function POST(request: Request, context: Context) {
         result.reason === 'already_member'
           ? 'That person is already a member of this organization'
           : 'That address already has a pending invitation; resend it instead';
-      return NextResponse.json({ error, reason: result.reason }, { status: 409 });
+      return NextResponse.json({ error, code: result.reason }, { status: 409 });
     }
 
     auditRequest(request, {
@@ -115,6 +115,6 @@ export async function POST(request: Request, context: Context) {
     return NextResponse.json({ invitation: result.invitation }, { status: result.rotated ? 200 : 201 });
   } catch (error) {
     loggers.api.error('Error creating organization invitation:', error as Error);
-    return NextResponse.json({ error: 'Failed to create invitation' }, { status: 500 });
+    return NextResponse.json({ error: 'Failed to create invitation', code: 'internal_error' }, { status: 500 });
   }
 }

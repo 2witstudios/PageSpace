@@ -134,6 +134,11 @@
       "import": "./dist/drive-envs/plan-env-delete.js",
       "require": "./dist/drive-envs/plan-env-delete.js"
     },
+    "./organizations/api-error-codes": {
+      "types": "./dist/organizations/api-error-codes.d.ts",
+      "import": "./dist/organizations/api-error-codes.js",
+      "require": "./dist/organizations/api-error-codes.js"
+    },
     "./organizations/authorize": {
       "types": "./dist/organizations/authorize.d.ts",
       "import": "./dist/organizations/authorize.js",

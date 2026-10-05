@@ -132,7 +132,7 @@ describe('domain routes', () => {
     vi.mocked(addOrgDomain).mockResolvedValueOnce({ ok: false, status: 409, reason: 'claimed_by_another_org' });
     const res = await POST(req('POST', { domain: 'northwind.com' }), ctx);
     expect(res.status).toBe(409);
-    expect((await res.json()).reason).toBe('claimed_by_another_org');
+    expect((await res.json()).code).toBe('claimed_by_another_org');
   });
 
   it('SEC-1 (partial) DNS verification runs for the caller\'s org and the claim in the path, never another org\'s', async () => {

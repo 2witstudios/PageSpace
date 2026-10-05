@@ -54,7 +54,7 @@ export async function GET(request: Request, context: RouteContext) {
     return NextResponse.json(body);
   } catch (error) {
     loggers.api.error('Error reading the conversation spend source:', error as Error);
-    return NextResponse.json({ error: 'Failed to read the spend source' }, { status: 500 });
+    return NextResponse.json({ error: 'Failed to read the spend source', code: 'internal_error' }, { status: 500 });
   }
 }
 
@@ -78,6 +78,6 @@ export async function PUT(request: Request, context: RouteContext) {
     return NextResponse.json(body);
   } catch (error) {
     loggers.api.error('Error setting the conversation spend source:', error as Error);
-    return NextResponse.json({ error: 'Failed to set the spend source' }, { status: 500 });
+    return NextResponse.json({ error: 'Failed to set the spend source', code: 'internal_error' }, { status: 500 });
   }
 }

@@ -50,7 +50,7 @@ async function write(request: Request, context: RouteContext, clear: boolean) {
     return NextResponse.json({ walletId: result.walletId, caps: result.caps });
   } catch (error) {
     loggers.api.error('Error writing a drive wallet cap:', error as Error);
-    return NextResponse.json({ error: 'Failed to write the cap' }, { status: 500 });
+    return NextResponse.json({ error: 'Failed to write the cap', code: 'internal_error' }, { status: 500 });
   }
 }
 

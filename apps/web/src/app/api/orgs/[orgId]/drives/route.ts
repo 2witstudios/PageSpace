@@ -17,7 +17,7 @@ export async function GET(request: Request, context: { params: Promise<{ orgId: 
   try {
     const drives = await listOrgDriveDirectory(orgId, gate.userId);
     // The gate admitted a member; a null here means they left between the two reads.
-    if (drives === null) return NextResponse.json({ error: 'Organization not found' }, { status: 404 });
+    if (drives === null) return NextResponse.json({ error: 'Organization not found', code: 'org_not_found' }, { status: 404 });
     auditRequest(request, {
       eventType: 'data.read',
       userId: gate.userId,
@@ -28,6 +28,6 @@ export async function GET(request: Request, context: { params: Promise<{ orgId: 
     return NextResponse.json({ drives });
   } catch (error) {
     loggers.api.error('Error listing the organization drive directory:', error as Error);
-    return NextResponse.json({ error: 'Failed to list drives' }, { status: 500 });
+    return NextResponse.json({ error: 'Failed to list drives', code: 'internal_error' }, { status: 500 });
   }
 }

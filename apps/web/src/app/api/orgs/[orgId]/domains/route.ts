@@ -33,7 +33,7 @@ export async function GET(request: Request, context: Context) {
     return NextResponse.json({ domains: domains.map(withDnsRecord) });
   } catch (error) {
     loggers.api.error('Error listing organization domains:', error as Error);
-    return NextResponse.json({ error: 'Failed to list domains' }, { status: 500 });
+    return NextResponse.json({ error: 'Failed to list domains', code: 'internal_error' }, { status: 500 });
   }
 }
 
@@ -47,12 +47,12 @@ export async function POST(request: Request, context: Context) {
   if (!gate.ok) return gate.response;
   try {
     const parsed = domainAddSchema.safeParse(await request.json().catch(() => null));
-    if (!parsed.success) return NextResponse.json({ error: 'Invalid request body', issues: parsed.error.issues }, { status: 400 });
+    if (!parsed.success) return NextResponse.json({ error: 'Invalid request body', issues: parsed.error.issues, code: 'invalid_request' }, { status: 400 });
     const result = await addOrgDomain({ orgId, domain: parsed.data.domain, actorId: gate.userId });
-    if (!result.ok) return NextResponse.json({ error: DOMAIN_ERRORS[result.reason], reason: result.reason }, { status: result.status });
+    if (!result.ok) return NextResponse.json({ error: DOMAIN_ERRORS[result.reason], code: result.reason }, { status: result.status });
     return NextResponse.json({ domain: withDnsRecord(result.domain) }, { status: 201 });
   } catch (error) {
     loggers.api.error('Error adding organization domain:', error as Error);
-    return NextResponse.json({ error: 'Failed to add domain' }, { status: 500 });
+    return NextResponse.json({ error: 'Failed to add domain', code: 'internal_error' }, { status: 500 });
   }
 }
