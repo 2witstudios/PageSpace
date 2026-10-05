@@ -79,6 +79,7 @@ import {
 import { decideAgentSessionAccess } from '@pagespace/lib/agent-workspaces/decide-workspace-access';
 import { MAX_SESSION_CONVERSATIONS } from '@pagespace/lib/agent-workspaces/plan-spawn-worker';
 import { resolveDevPreviewHolder } from '@pagespace/lib/services/sandbox/preview/dev-preview-core';
+import { provisionHomeDriveIfNeeded } from '@pagespace/lib/onboarding/home-drive';
 import { requestDevPreviewWatch } from '@/lib/dev-preview/detection-trigger';
 import { broadcastSessionUpdated } from '@/lib/websocket/agent-workspace-events';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
@@ -798,6 +799,9 @@ export async function spawnSession(input: {
       // assembly the provisioner also runs; the service calls this only when
       // the env's substrate is `local`.
       gateLocalEnvBind,
+      // A driveless (global-assistant) spawn is created in the owner's Home
+      // drive, provisioned on the spot for a user who has none yet.
+      resolveHomeDriveId: async (ownerId) => (await provisionHomeDriveIfNeeded(ownerId)).driveId,
     },
   });
 }
