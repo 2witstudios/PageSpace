@@ -3,6 +3,7 @@ import { and, eq } from '@pagespace/db/operators';
 import { zoomConnections, type ZoomConnection } from '@pagespace/db/schema/zoom';
 import { CREDIT_HOLD_ESTIMATE_CENTS } from '@pagespace/lib/billing/credit-pricing';
 import type { GateReason } from '@pagespace/lib/billing/credit-core';
+import type { SpendRefusal } from '@pagespace/lib/billing/credit-gate';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { pageService } from '@/services/api';
 import { acquireUserCreditHold } from '@/lib/ai/core/user-credit-hold';
@@ -158,6 +159,7 @@ export async function processZoomWebhook(
           source: 'zoom_transcript',
           meetingUuid,
           ...(enrichment.skippedReason ? { aiEnrichmentSkipped: enrichment.skippedReason } : {}),
+          ...(enrichment.skippedRefusal ? { aiEnrichmentRefusal: enrichment.skippedRefusal } : {}),
         },
       },
     }
@@ -188,6 +190,8 @@ interface TranscriptEnrichment {
    * reserved no drive wallet for them (SPEND-6, fail closed).
    */
   skippedReason?: GateReason | 'gate_error' | 'no_drive_wallet';
+  /** Why a named source refused, when it did — e.g. source_cap_reached once the connection owner's cap is spent ([D-OW-34]). */
+  skippedRefusal?: SpendRefusal['reason'];
 }
 
 /**
@@ -233,8 +237,9 @@ async function enrichTranscript(
     loggers.api.info('Zoom webhook: AI enrichment skipped (credit gate denied)', {
       userId: connection.userId,
       reason: hold.reason,
+      refusal: hold.refusal?.reason,
     });
-    return { summary: '', actionItems: [], skippedReason: hold.reason };
+    return { summary: '', actionItems: [], skippedReason: hold.reason, ...(hold.refusal ? { skippedRefusal: hold.refusal.reason } : {}) };
   }
 
   try {

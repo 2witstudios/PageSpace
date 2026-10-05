@@ -1,14 +1,15 @@
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
-import { canConsumeAI, type CreditGateResult, type GateOptions } from '@pagespace/lib/billing/credit-gate';
+import { canConsumeAI, type CreditGateResult, type GateOptions, type SpendRefusal } from '@pagespace/lib/billing/credit-gate';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import type { GateReason } from '@pagespace/lib/billing/credit-core';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 
 type UserCreditHold =
   | { allowed: true; walletId: string | undefined; release: () => void }
-  | { allowed: false; reason: GateReason };
+  /** `refusal` says why a named source refused (e.g. source_cap_reached), so a skipped run can record it (SPEND-6). */
+  | { allowed: false; reason: GateReason; refusal?: SpendRefusal };
 
 /**
  * Credit gate for an AI call made outside a request route — a Zoom transcript's
@@ -24,7 +25,7 @@ type UserCreditHold =
  */
 export async function acquireUserCreditHold(userId: string, opts: GateOptions): Promise<UserCreditHold> {
   const gate = await gateUserCall(userId, opts);
-  if (!gate.allowed) return { allowed: false, reason: gate.reason };
+  if (!gate.allowed) return gate.refusal ? { allowed: false, reason: gate.reason, refusal: gate.refusal } : { allowed: false, reason: gate.reason };
 
   const holdId = gate.holdId;
   let released = false;

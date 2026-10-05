@@ -152,6 +152,16 @@ describe('processZoomWebhook AI enrichment credit gate', () => {
     expect(createdMetadata()).toMatchObject({ aiEnrichmentSkipped: 'out_of_credits' });
   });
 
+  it('SPEND-6 (partial) given the connection owner\'s cap on the drive wallet is spent, should skip the enrichment and record source_cap_reached on the page', async () => {
+    mockCanConsumeAI.mockResolvedValue({ allowed: false, reason: 'source_refused', refusal: { source: 'drive_wallet', reason: 'source_cap_reached', options: [] } });
+
+    await processZoomWebhook(event, connection);
+
+    expect(mockGenerateText).not.toHaveBeenCalled();
+    expect(mockTrackUsage).not.toHaveBeenCalled();
+    expect(createdMetadata()).toMatchObject({ aiEnrichmentSkipped: 'source_refused', aiEnrichmentRefusal: 'source_cap_reached' });
+  });
+
   it('given a funded balance, should enrich the page, bill each model call and release the hold once', async () => {
     mockCanConsumeAI.mockResolvedValue({ allowed: true, reason: 'ok', holdId: 'hold-1', walletId: 'w-drive-1' });
 
