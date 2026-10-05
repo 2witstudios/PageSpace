@@ -123,7 +123,9 @@ const SPECS: { [K in OrgPolicyKey]: FieldSpec<OrgPolicies[K]> } = {
   whoCanInvite: { default: 'admins', strictest: 'admins', normalize: oneOf(ACTOR_POLICIES) },
   // Every member may create org drives today (DRV-3 without a policy), so that is the default; a damaged value is admins only.
   whoCanCreateDrives: { default: 'members', strictest: 'admins', normalize: oneOf(ACTOR_POLICIES) },
-  openDriveRoleFloor: { default: 'view', strictest: 'edit', normalize: oneOf(OPEN_ROLE_FLOORS) },
+  // A FLOOR is a minimum: a higher floor gives org members MORE in Open drives. So the value that fails closed is the
+  // lowest one, view (it adds nothing to what a drive chose), never edit (Review 3+4: `edit` here failed open).
+  openDriveRoleFloor: { default: 'view', strictest: 'view', normalize: oneOf(OPEN_ROLE_FLOORS) },
   seatAllowanceCents: { default: DEFAULT_SEAT_ALLOWANCE_CENTS, strictest: 0, normalize: wholeCents },
   walletFallback: { default: 'refuse', strictest: 'refuse', normalize: oneOf(WALLET_FALLBACKS) },
   // An invalid allowlist reads as EMPTY (nothing allowed), never as null (everything allowed).
@@ -244,6 +246,69 @@ export function suspensionKindsChanged(before: OrgPolicies, after: OrgPolicies):
   if (a.guests !== b.guests) changed.push('guests');
   if (!sameSet(a.integrations.restrictTo, b.integrations.restrictTo)) changed.push('integrations');
   return changed;
+}
+
+// ---------------------------------------------------------------------------
+// POL-6: the floor under an Open drive's default role
+// ---------------------------------------------------------------------------
+
+type FloorGrant = { canView: boolean; canEdit: boolean; canShare: boolean };
+
+/** What a role with no drive-wide grant gives drive-wide: the plain member's view (the resolver's fallback). */
+const MEMBER_VIEW: FloorGrant = { canView: true, canEdit: false, canShare: false };
+
+const grantMeetsFloor = (floor: OpenRoleFloor, grant: FloorGrant): boolean => grant.canView && (floor === 'view' || grant.canEdit);
+
+/**
+ * POL-6 (D-OW-11): the default role org members hold in an Open drive is the DRIVE's setting (its default custom
+ * role); the org policy sets only the floor under it. Does a default role meet `floor` with what it EFFECTIVELY
+ * grants? Its drive-wide grant (null: none, which the resolver reads as the plain member's view) and every per-page
+ * entry, because a per-page entry wins over the drive-wide grant on its page (Review #2762 P2-4, P3-2). `view`
+ * needs view everywhere; `edit` needs view and edit everywhere.
+ */
+export function openDefaultRoleMeetsFloor(
+  floor: OpenRoleFloor,
+  driveWide: FloorGrant | null,
+  pages: Record<string, FloorGrant> = {},
+): boolean {
+  return grantMeetsFloor(floor, driveWide ?? MEMBER_VIEW) && Object.values(pages).every((grant) => grantMeetsFloor(floor, grant));
+}
+
+export const OPEN_ROLE_FLOOR_MESSAGES: Record<OpenRoleFloor, string> = {
+  view: "This organization requires the default role in its drives to let members view the drive. Give the role drive-wide view, or choose another default.",
+  edit: "This organization requires the default role in its drives to let members edit the drive. Give the role drive-wide edit, or choose another default.",
+};
+
+export const OPEN_ROLE_FLOOR_RAISE_MESSAGE =
+  "Some of this organization's Open drives have a default role below that floor. Give each listed drive's default role drive-wide access at the new floor, or make the drive Restricted, then raise it.";
+
+// ---------------------------------------------------------------------------
+// Blocked, not suspended: what a change forbids that has no suspension (POL-1)
+// ---------------------------------------------------------------------------
+
+/**
+ * What a policy can newly forbid that is NOT suspended: these are stopped where they are used (the app and env
+ * routes, the agent resolver, the autonomy gates, the model gate), so nothing is parked or marked. A change that
+ * forbids them still lists the existing items it affects in the audit log, so an Owner or Admin can see what the
+ * change reached (Spec POL-1 "listed in the audit log").
+ */
+export const BLOCKED_KINDS = ['publishedApps', 'persistentEnvironments', 'crossDriveAgents', 'agentsAutonomous', 'models'] as const;
+export type BlockedKind = (typeof BLOCKED_KINDS)[number];
+
+/** True when `after` allows less than `before`: something on the old list (null = everything) is not on the new. */
+const narrowed = (before: readonly string[] | null, after: readonly string[] | null): boolean =>
+  after !== null && (before === null || before.some((v) => !after.includes(v)));
+
+/** The blocked kinds a change from `before` to `after` newly forbids, in BLOCKED_KINDS order. */
+export function newlyBlockedKinds(before: OrgPolicies, after: OrgPolicies): BlockedKind[] {
+  const turnedOff = (key: 'publishedApps' | 'persistentEnvironments' | 'crossDriveAgents' | 'agentsAutonomous') => before[key] && !after[key];
+  const blocked: BlockedKind[] = [];
+  if (turnedOff('publishedApps')) blocked.push('publishedApps');
+  if (turnedOff('persistentEnvironments')) blocked.push('persistentEnvironments');
+  if (turnedOff('crossDriveAgents')) blocked.push('crossDriveAgents');
+  if (turnedOff('agentsAutonomous')) blocked.push('agentsAutonomous');
+  if (narrowed(before.modelAllowlist, after.modelAllowlist) || narrowed(before.providerAllowlist, after.providerAllowlist)) blocked.push('models');
+  return blocked;
 }
 
 // ---------------------------------------------------------------------------

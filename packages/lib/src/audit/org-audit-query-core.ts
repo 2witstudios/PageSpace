@@ -29,7 +29,7 @@ export const ORG_AUDIT_CATEGORIES = {
   ],
   seats: ['org.seat.auto_add_changed', 'org.seat.quantity_changed', 'org.seat.refused'],
   invites: ['org.invite.created', 'org.invite.resent', 'org.invite.revoked'],
-  policies: ['org.policy.changed', 'org.policy.suspended', 'org.policy.restored', 'org.guest.requested', 'org.guest.approved', 'org.guest.declined'],
+  policies: ['org.policy.changed', 'org.policy.suspended', 'org.policy.restored', 'org.policy.blocked', 'org.guest.requested', 'org.guest.approved', 'org.guest.declined'],
   domains: ['org.domain.added', 'org.domain.verification_sent', 'org.domain.verified', 'org.domain.removed'],
   visibility: ['org.drive.visibility_changed', 'org.drive.join_requested', 'org.drive.join_approved', 'org.drive.join_declined', 'org.drive.join_withdrawn'],
   drive_moves: ['org.drive.created', 'org.drive.moved_in', 'org.drive.moved_out', 'org.drive.lead_changed'],
@@ -37,6 +37,8 @@ export const ORG_AUDIT_CATEGORIES = {
   wallets: ['org.wallet.allocation_changed', 'org.wallet.topped_up'],
   donations: ['org.wallet.donated'],
   billing: ['org.billing.subscription_changed', 'org.billing.pool_refilled'],
+  // [D-OW-28] Compute handed to the drive lead when its creator leaves or loses the drive; a parked app taken back.
+  compute: ['org.compute.reattributed', 'org.app.unparked'],
 } as const satisfies Record<string, readonly OrgAuditCatalogType[]>;
 
 export type OrgAuditCategory = keyof typeof ORG_AUDIT_CATEGORIES;

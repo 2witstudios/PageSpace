@@ -19,6 +19,11 @@ vi.mock('@pagespace/lib/services/drive-role-service', () => ({
     listDriveRoles: vi.fn(),
     createDriveRole: vi.fn(),
     validateRolePermissions: vi.fn(),
+    OpenRoleFloorError: class OpenRoleFloorError extends Error {
+      readonly code = 'org_policy';
+      readonly policy = 'openDriveRoleFloor';
+      readonly status = 403;
+    },
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -27,7 +32,7 @@ vi.mock('@/lib/auth', () => ({
   checkMCPDriveScope: vi.fn(),
 }));
 
-import { checkDriveAccessForRoles, listDriveRoles, createDriveRole, validateRolePermissions } from '@pagespace/lib/services/drive-role-service';
+import { checkDriveAccessForRoles, listDriveRoles, createDriveRole, validateRolePermissions, OpenRoleFloorError } from '@pagespace/lib/services/drive-role-service';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
 
 // ============================================================================
@@ -511,6 +516,23 @@ describe('POST /api/drives/[driveId]/roles', () => {
 
       expect(response.status).toBe(409);
       expect(body.error).toBe('A role with this name already exists');
+    });
+
+    it('POL-6 (partial) a new default role below the org floor is refused 403 naming the policy', async () => {
+      vi.mocked(checkDriveAccessForRoles).mockResolvedValue(createAccessFixture({
+        isOwner: true,
+        drive: createDriveFixture({ id: mockDriveId, name: 'Test' }),
+      }));
+      vi.mocked(createDriveRole).mockRejectedValueOnce(new OpenRoleFloorError('edit'));
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/roles`, {
+        method: 'POST',
+        body: JSON.stringify({ name: 'Default', permissions: {}, isDefault: true }),
+      });
+      const response = await POST(request, createContext(mockDriveId));
+
+      expect(response.status).toBe(403);
+      expect(await response.json()).toMatchObject({ code: 'org_policy', policy: 'openDriveRoleFloor' });
     });
 
     it('should return 500 for other database errors', async () => {

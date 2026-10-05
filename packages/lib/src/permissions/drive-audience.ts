@@ -1,5 +1,5 @@
 import { db } from '@pagespace/db/db';
-import { and, eq, inArray, isNotNull } from '@pagespace/db/operators';
+import { and, asc, eq, inArray, isNotNull } from '@pagespace/db/operators';
 import { drives, type OrgDriveVisibility } from '@pagespace/db/schema/core';
 import { driveMembers, driveRoles } from '@pagespace/db/schema/members';
 import { orgMembers, type OrgRole } from '@pagespace/db/schema/organizations';
@@ -69,7 +69,9 @@ export async function listDriveAudiences(driveIds: string[]): Promise<Map<string
       const defaults = await db
         .select({ driveId: driveRoles.driveId, id: driveRoles.id })
         .from(driveRoles)
-        .where(and(inArray(driveRoles.driveId, chunk), eq(driveRoles.isDefault, true)));
+        .where(and(inArray(driveRoles.driveId, chunk), eq(driveRoles.isDefault, true)))
+        // The same deterministic pick as the resolver and the POL-6 floor guard.
+        .orderBy(asc(driveRoles.position), asc(driveRoles.id));
       for (const d of defaults) if (!defaultRoleByDrive.has(d.driveId)) defaultRoleByDrive.set(d.driveId, d.id);
     }
   }

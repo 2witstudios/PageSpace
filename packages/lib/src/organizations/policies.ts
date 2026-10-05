@@ -13,6 +13,7 @@ import { recordOrgAuditEvent } from '../audit/org-audit';
 import { loggers } from '../logging/logger-config';
 import {
   mergeOrgPolicies,
+  newlyBlockedKinds,
   ORG_POLICY_KEYS,
   parseOrgPolicies,
   suspensionKindsChanged,
@@ -21,7 +22,11 @@ import {
   type OrgPolicyKey,
 } from './policies-core';
 import { getOrgPolicies } from './policy-reader';
+import { retryOnDeadlock } from './repository';
 import { applySuspension, type PolicySuspensionItem } from './policy-suspension';
+import { listPolicyBlockedItems, type PolicyBlockedItems } from './policy-blocked-items';
+import { openDrivesBelowFloor } from './open-role-floor';
+import type { OpenRoleFloor } from './policies-core';
 import { kickSuspendedGuests } from '../permissions/guest-holds';
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -42,10 +47,17 @@ export type UpdateOrgPoliciesResult =
       changes: PolicyChange[];
       suspended: PolicySuspensionItem[];
       restored: PolicySuspensionItem[];
+      /** What the change newly forbids that is blocked where it is used rather than suspended (counts, a bounded list). */
+      blocked: PolicyBlockedItems;
       /** False when the change committed but the audit chain rejected an append; the caller must surface it. */
       auditRecorded: boolean;
     }
-  | { ok: false; reason: 'not_found' };
+  | { ok: false; reason: 'not_found' }
+  /**
+   * POL-6: raising the Open-drive role floor while some Open drive's default role is below it would leave those
+   * drives' members under the floor; refused, nothing stored, and the drives named (bounded) so they can be fixed.
+   */
+  | { ok: false; reason: 'open_role_floor'; floor: OpenRoleFloor; drives: Array<{ id: string; name: string }> };
 
 const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
 
@@ -65,21 +77,30 @@ function countsByKind(items: readonly PolicySuspensionItem[]): Record<string, nu
  */
 export async function updateOrgPolicies(input: { orgId: string; actorId: string; patch: OrgPoliciesPatch }): Promise<UpdateOrgPoliciesResult> {
   const { orgId, actorId, patch } = input;
-  const done = await db.transaction(async (tx) => {
+  // A policy change can be chosen as a deadlock victim by a concurrent multi-step write (re-verify N6); it rolls back
+  // whole, so it is simply run again.
+  const done = await retryOnDeadlock(() => db.transaction(async (tx) => {
     const [row] = await tx.select({ policies: organizations.policies }).from(organizations).where(eq(organizations.id, orgId)).for('update').limit(1);
     if (!row) return null;
     const before = parseOrgPolicies(row.policies);
     const stored = mergeOrgPolicies(row.policies, patch);
     const after = parseOrgPolicies(stored);
+    if (after.openDriveRoleFloor !== before.openDriveRoleFloor) {
+      const below = await openDrivesBelowFloor(tx, orgId, after.openDriveRoleFloor);
+      if (below.length > 0) return { refused: true as const, floor: after.openDriveRoleFloor, drives: below };
+    }
     const kinds = suspensionKindsChanged(before, after);
     const outcome = await applySuspension(tx, orgId, after, kinds);
+    // Read in the same snapshot as the change: the existing items a newly forbidden, non-suspendable kind reaches.
+    const blocked = await listPolicyBlockedItems(tx, orgId, after, newlyBlockedKinds(before, after), AUDIT_LISTED_IDS);
     await tx.update(organizations).set({ policies: stored }).where(eq(organizations.id, orgId));
     const changes: PolicyChange[] = ORG_POLICY_KEYS.filter((k) => !same(before[k], after[k])).map((key) => ({ key, from: before[key], to: after[key] }));
-    return { after, changes, outcome };
-  });
+    return { refused: false as const, after, changes, outcome, blocked };
+  }));
   if (!done) return { ok: false, reason: 'not_found' };
+  if (done.refused) return { ok: false, reason: 'open_role_floor', floor: done.floor, drives: done.drives };
 
-  const { after, changes, outcome } = done;
+  const { after, changes, outcome, blocked } = done;
   // Realtime: a parked guest must stop receiving events in the drive's rooms now, not at their next reconnect.
   // Best effort and never throws; the per-event permission recheck is the enforcement either way.
   await kickSuspendedGuests(
@@ -112,12 +133,28 @@ export async function updateOrgPolicies(input: { orgId: string; actorId: string;
           },
         });
       }
+      // POL-1: what the change forbids but does not suspend is listed too, so the log shows everything it reached.
+      if (blocked.total > 0) {
+        await recordOrgAuditEvent({
+          orgId,
+          eventType: 'org.policy.blocked',
+          actorId,
+          resourceType: 'organization',
+          resourceId: orgId,
+          details: {
+            counts: blocked.counts,
+            total: blocked.total,
+            listed: blocked.items.slice(0, AUDIT_LISTED_IDS).map((i) => ({ kind: i.kind, type: i.resourceType, id: i.id, driveId: i.driveId })),
+            truncated: blocked.items.length < blocked.total || blocked.items.length > AUDIT_LISTED_IDS,
+          },
+        });
+      }
     } catch (error) {
       auditRecorded = false;
       loggers.security.error('Org policy change committed but its audit event was not recorded', error as Error, { orgId });
     }
   }
-  return { ok: true, policies: after, changes, suspended: outcome.suspended, restored: outcome.restored, auditRecorded };
+  return { ok: true, policies: after, changes, suspended: outcome.suspended, restored: outcome.restored, blocked, auditRecorded };
 }
 
 export type { SuspensionKind };

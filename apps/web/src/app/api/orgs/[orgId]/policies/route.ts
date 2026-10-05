@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getOrgPolicies, updateOrgPolicies } from '@pagespace/lib/organizations/policies';
-import { validateOrgPoliciesPatch } from '@pagespace/lib/organizations/policies-core';
+import { OPEN_ROLE_FLOOR_RAISE_MESSAGE, validateOrgPoliciesPatch } from '@pagespace/lib/organizations/policies-core';
 import { checkOrgActive } from '@pagespace/lib/organizations/status';
 import { reconcileOrgPublishedVisibility } from '@pagespace/lib/organizations/published-visibility';
 import { createPublishedObjectStore, isPublishConfigured } from '@/lib/canvas/published-storage';
@@ -38,7 +38,7 @@ const countByKind = (items: readonly { kind: string }[]): Record<string, number>
 /**
  * PATCH /api/orgs/[orgId]/policies — Owner and Admins change policies. A change applies immediately;
  * anything it newly forbids is suspended, never deleted, and listed (GET .../policies/suspended and the
- * audit log). A lapsed org cannot change policies (SEAT-9). The change itself is audited in lib
+ * audit log); what it forbids that cannot be suspended is blocked where it is used and listed in the audit log. A lapsed org cannot change policies (SEAT-9). The change itself is audited in lib
  * (updateOrgPolicies writes org.policy.changed with the org dimension), not here, so it is written once.
  */
 export async function PATCH(request: Request, context: Context) {
@@ -54,6 +54,9 @@ export async function PATCH(request: Request, context: Context) {
     if (!active.ok) return NextResponse.json({ error: active.message, code: active.code }, { status: active.status });
 
     const result = await updateOrgPolicies({ orgId, actorId: gate.userId, patch: parsed.patch });
+    if (!result.ok && result.reason === 'open_role_floor') {
+      return NextResponse.json({ error: OPEN_ROLE_FLOOR_RAISE_MESSAGE, code: 'org_policy', policy: 'openDriveRoleFloor', drives: result.drives }, { status: 403 });
+    }
     if (!result.ok) return NextResponse.json({ error: 'Organization not found' }, { status: 404 });
 
     // POL-4: published sites live in a public bucket the edge serves without asking the database, so a change to
@@ -75,6 +78,8 @@ export async function PATCH(request: Request, context: Context) {
       changed: result.changes.map((c) => c.key),
       suspended: countByKind(result.suspended),
       restored: countByKind(result.restored),
+      // POL-1: what it forbids but does not suspend (apps, envs, cross-drive agents, autonomy, models), by count.
+      blocked: result.blocked.counts,
       auditRecorded: result.auditRecorded,
       ...(publishedVisibility ? { publishedVisibility } : {}),
     });

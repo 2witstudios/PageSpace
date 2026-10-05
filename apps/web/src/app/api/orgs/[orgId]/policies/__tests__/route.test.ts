@@ -65,6 +65,7 @@ beforeEach(() => {
     changes: [{ key: 'publicShareLinks', from: true, to: false }],
     suspended: [{ kind: 'publicShareLinks', resourceType: 'drive_share_link', id: 'l1', driveId: 'd1' }],
     restored: [],
+    blocked: { counts: {}, total: 0, items: [] },
     auditRecorded: true,
   });
 });
@@ -103,6 +104,28 @@ describe('policies routes', () => {
     expect(await res.json()).toMatchObject({ changed: ['publicShareLinks'], suspended: { publicShareLinks: 1 }, restored: {}, auditRecorded: true });
   });
 
+  it('POL-1 (partial) what a change blocks without suspending (apps, envs, agents, autonomy, models) is reported by count', async () => {
+    as('ADMIN');
+    vi.mocked(updateOrgPolicies).mockResolvedValue({
+      ok: true,
+      policies: { ...DEFAULT_ORG_POLICIES, publishedApps: false },
+      changes: [{ key: 'publishedApps', from: true, to: false }],
+      suspended: [],
+      restored: [],
+      blocked: { counts: { publishedApps: 2 }, total: 2, items: [] },
+      auditRecorded: true,
+    });
+    expect(await (await PATCH(req('PATCH', '', { publishedApps: false }), ctx)).json()).toMatchObject({ blocked: { publishedApps: 2 } });
+  });
+
+  it('POL-6 (partial) raising the Open-drive floor while Open drives are below it is refused 403, naming the policy and the drives', async () => {
+    as('ADMIN');
+    vi.mocked(updateOrgPolicies).mockResolvedValue({ ok: false, reason: 'open_role_floor', floor: 'edit', drives: [{ id: 'd1', name: 'Product' }] });
+    const res = await PATCH(req('PATCH', '', { openDriveRoleFloor: 'edit' }), ctx);
+    expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({ code: 'org_policy', policy: 'openDriveRoleFloor', drives: [{ id: 'd1', name: 'Product' }] });
+  });
+
   it('POL-1 (partial) unknown keys, bad values and empty bodies are refused before anything is stored', async () => {
     as('OWNER');
     for (const body of [{ nope: true }, { guests: 'maybe' }, {}, null]) {
@@ -121,7 +144,7 @@ describe('policies routes', () => {
 
   it('POL-1 (partial) a change that committed but was not audited is reported, not hidden', async () => {
     as('OWNER');
-    vi.mocked(updateOrgPolicies).mockResolvedValue({ ok: true, policies: { ...DEFAULT_ORG_POLICIES }, changes: [], suspended: [], restored: [], auditRecorded: false });
+    vi.mocked(updateOrgPolicies).mockResolvedValue({ ok: true, policies: { ...DEFAULT_ORG_POLICIES }, changes: [], suspended: [], restored: [], blocked: { counts: {}, total: 0, items: [] }, auditRecorded: false });
     expect((await (await PATCH(req('PATCH', '', { guests: 'on' }), ctx)).json()).auditRecorded).toBe(false);
   });
 
@@ -139,6 +162,7 @@ describe('policies routes', () => {
         changes: [{ key: 'publishWeb', from: true, to: false }],
         suspended: [],
         restored: [],
+        blocked: { counts: {}, total: 0, items: [] },
         auditRecorded: true,
       });
 

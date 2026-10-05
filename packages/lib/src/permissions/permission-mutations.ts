@@ -19,6 +19,11 @@ import { logPermissionActivity, getActorInfo } from '../monitoring/activity-logg
 import { isHomeDrive, homeDriveActionError } from '../services/drive-guards';
 import { kickForPagePermissionRevocation } from './revocation-kick';
 import { loadEffectiveDriveMembership } from './org-drive-membership';
+import { decideOrgDriveAdmission } from './guest-admission';
+import { requestGuestApproval } from './guest-holds';
+import { GUESTS_HELD_MESSAGE, GUESTS_OFF_MESSAGE, pageGrantWidensAccess } from '../organizations/sharing-decisions';
+import { recordOrgAuditEvent } from '../audit/org-audit';
+import { loggers } from '../logging/logger-config';
 
 // ============================================================================
 // Error Types
@@ -31,7 +36,11 @@ export type PermissionMutationError =
   | { code: 'USER_NOT_FOUND'; userId: string }
   | { code: 'INSUFFICIENT_PERMISSION'; required: 'share' | 'admin' }
   | { code: 'SELF_PERMISSION_DENIED'; reason: string }
-  | { code: 'HOME_DRIVE'; message: string };
+  | { code: 'HOME_DRIVE'; message: string }
+  // POL-2: the org's guests policy is OFF and the grant would admit an outsider. Nothing is written.
+  | { code: 'GUEST_POLICY_OFF'; message: string }
+  // POL-2: the policy is APPROVE; the grant waits for an Owner or Admin (holdId) and nothing is written yet.
+  | { code: 'GUEST_APPROVAL_PENDING'; holdId: string; message: string };
 
 // ============================================================================
 // Result Types
@@ -262,7 +271,31 @@ export async function grantPagePermission(
   }
 
   // 6. Transaction - upsert permission (insert-first to prevent race conditions)
-  const result = await db.transaction(async (tx) => {
+  const outcome = await db.transaction(async (tx) => {
+    // POL-2, at the moment the grant would be written: a grant that gives an outsider more than they hold admits
+    // them to the org drive's content, so the org's guests policy decides it. Off writes nothing; approve queues
+    // exactly this grant for an Owner or Admin and writes nothing. Narrowing a grant is never asked.
+    const [current] = await tx
+      .select({ canView: pagePermissions.canView, canEdit: pagePermissions.canEdit, canShare: pagePermissions.canShare, canDelete: pagePermissions.canDelete })
+      .from(pagePermissions)
+      .where(and(eq(pagePermissions.pageId, pageId), eq(pagePermissions.userId, targetUserId)))
+      .limit(1);
+    if (pageGrantWidensAccess(current ?? null, permissions)) {
+      const admission = await decideOrgDriveAdmission({ driveId: page.driveId, userId: targetUserId }, tx);
+      if (admission.decision === 'refuse') return { kind: 'refused' } as const;
+      if (admission.decision === 'hold' && admission.orgId) {
+        const item = await requestGuestApproval({
+          orgId: admission.orgId,
+          driveId: page.driveId,
+          userId: targetUserId,
+          origin: 'page_grant',
+          request: { permissions: [{ pageId, ...permissions }], invitedBy: ctx.userId },
+          requestedBy: ctx.userId,
+        }, tx);
+        return { kind: 'held', orgId: admission.orgId, holdId: item.holdId } as const;
+      }
+    }
+
     const newId = createId();
 
     // Attempt insert first - onConflictDoNothing handles race conditions
@@ -286,7 +319,7 @@ export async function grantPagePermission(
 
     if (inserted.length > 0) {
       // Insert succeeded - new permission created
-      return { permissionId: inserted[0].id, isUpdate: false };
+      return { kind: 'granted', permissionId: inserted[0].id, isUpdate: false } as const;
     }
 
     // Conflict occurred - update existing permission
@@ -308,8 +341,23 @@ export async function grantPagePermission(
       )
       .returning({ id: pagePermissions.id });
 
-    return { permissionId: updated.id, isUpdate: true };
+    return { kind: 'granted', permissionId: updated.id, isUpdate: true } as const;
   });
+
+  if (outcome.kind === 'refused') return { ok: false, error: { code: 'GUEST_POLICY_OFF', message: GUESTS_OFF_MESSAGE } };
+  if (outcome.kind === 'held') {
+    await recordOrgAuditEvent({
+      orgId: outcome.orgId,
+      eventType: 'org.guest.requested',
+      actorId: ctx.userId,
+      resourceType: 'drive',
+      resourceId: page.driveId,
+      driveId: page.driveId,
+      details: { holdId: outcome.holdId, origin: 'page_grant', target: 'user' },
+    }).catch((error) => loggers.api.error('Page grant queued but its audit event was not recorded', error as Error));
+    return { ok: false, error: { code: 'GUEST_APPROVAL_PENDING', holdId: outcome.holdId, message: GUESTS_HELD_MESSAGE } };
+  }
+  const result = { permissionId: outcome.permissionId, isUpdate: outcome.isUpdate };
 
   // 7. Audit log (fire-and-forget)
   getActorInfo(ctx.userId).then((actorInfo) => {

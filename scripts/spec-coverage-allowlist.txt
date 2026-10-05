@@ -21,6 +21,12 @@
 #     test names it WITHOUT the marker, and only those hits make an entry here STALE-ALLOW. So a
 #     partially proven ID stays on this list, with a comment naming what is still unproven.
 # One ID per line; `#` starts a comment.
+# AUD-1 (org-scoped events): ow-policy-integrity (Review 3+4 P2-10) catalogues org.compute.reattributed and
+# org.app.unparked, adds the EMITTER -> CATALOG guard (org-audit-emitters.test.ts: every org.* member of
+# SecurityEventType and every org.* literal in source is catalogued), and audits a refused re-join by a departed or
+# suppressed person (org.member.auto_join_refused, no address). Still unproven, so titles stay "AUD-1 (partial)": a
+# seat quantity changed on Stripe's side writes no event, and org events are appended after commit and a failed
+# append is logged, not retried (org-audit.ts).
 AUD-1
 DRV-3
 # DRV-5 (Open: every org member resolves as an implicit member with the drive's default role; sidebar,
@@ -80,6 +86,37 @@ ORG-4
 # ORG-5 (one shared org permission function used by web routes, CLI, and MCP): B3 routes all go
 # through requireOrgRole, titled "ORG-5 (partial)"; CLI and MCP use it in Wave G (X-1).
 ORG-5
+# POL-1 (policies stored once per org and read through one function, no route reads the org row directly; a
+# change applies immediately; anything newly forbidden is suspended, not deleted, and listed in the audit log)
+# re-added per Review 3+4 (page v3pbwr7hy45eu1t2w6qbxm3e, P2-7 "removed but not proven"). ow-policy-integrity:
+# the repository returns OrgRecord (no `policies`); an IMPORT seam allows only 16 named modules to import the
+# `organizations` table object (and no namespace import but page-content-store's), backed by the column and
+# whole-row checks, and it also fails a re-export, a dynamic import( of the schema and a computed db.query[...]
+# key; review mutant M11 is red; a change lists what it blocks (org.policy.blocked). Still unproven, so titles stay
+# "POL-1 (partial)": raw SQL (db.execute(sql`select * from organizations`)) needs no import and works from ANY
+# module, and a dynamic import or computed key written in a shape the seam's patterns do not match would too; only a
+# DB view/grant or an AST lint closes that (follow-up filed by the orchestrator). Audit rows list at most 200 ids
+# (blocked items have counts but no list endpoint).
+POL-1
+# POL-2 (guests from outside: off, admins approve, on) re-added per Review 3+4 (page v3pbwr7hy45eu1t2w6qbxm3e,
+# P1-3 "removed but not proven"). ow-policy-integrity routes through decideOrgDriveAdmission, inside each write's
+# transaction under the org row's share lock: page share-invite, grantPagePermission, page and drive invite
+# acceptance (approve: only an approved invitation admits, P2-6), drive direct-add and both link redemptions; and
+# (independent review of #2762) every write that brings EXISTING access into an org drive or puts it back: a drive
+# moved in (P1-1), pages moved in (P1-2), backup restore (P1-3), rollback/redo of grants and members (P1-4), a
+# departed member's remaining rows (P2-8), outsiders' explicit-role MCP token scopes (P2-7); a departed lead is never
+# restored by a rollback (P1-5). Guests off parks, approve queues, on keeps; parked access restores without wedging
+# (P2-1). Each path has a test that failed before its fix, titled "POL-2 (partial)". It stays listed until a reviewer
+# agrees every clause is proven: several apps/web paths are proven against a mocked decision, and the merge with
+# #2761 (D-OW-30 "no subscription row = lapsed") is not yet re-verified on the merged tip.
+POL-2
+# POL-6 (default role in Open drives; read by the implicit-membership resolver; D-OW-11: the default is a drive
+# setting, the org sets only the floor). Enforced at every WRITE (point-guard ruling, no resolution overlay):
+# role create/update/delete/reorder, the page-permission path, backup restore, role rollback/redo, raising the
+# floor, a drive created/moved in/switched to Open; judged on the default's effective grants (drive-wide and
+# per-page; null drive-wide = member view); serialized with visibility changes (org then drive lock) and per drive;
+# org members follow the current default; a damaged floor fails closed to view. UNPROVEN: the implicit-membership
+# RESOLVER does not read the floor (resolution-time reading); filed as a follow-up by the orchestrator.
 POL-6
 # POL-8 (models available and provider allowlist): every model call is refused by the org allowlists in the one
 # provider factory and saving a disallowed model is refused, titled "POL-8 (partial)". Not claimed: the model

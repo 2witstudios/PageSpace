@@ -20,7 +20,11 @@ vi.mock('@pagespace/lib/permissions/guest-holds', () => ({
   listPendingGuestApprovalViews: vi.fn(),
   claimPendingGuestApproval: vi.fn(),
   requestGuestApproval: vi.fn(),
+  markApprovedInvitation: vi.fn(async () => {}),
 }));
+vi.mock('@pagespace/lib/notifications/notifications', () => ({ createPermissionNotification: vi.fn(async () => {}) }));
+vi.mock('@/lib/websocket', () => ({ broadcastPageEvent: vi.fn(async () => {}), createPageEventPayload: vi.fn((driveId: string, pageId: string, operation: string) => ({ driveId, pageId, operation })) }));
+vi.mock('@pagespace/db/db', () => ({ db: {} }));
 vi.mock('@pagespace/lib/permissions/share-link-service', () => ({ completeApprovedLinkAdmission: vi.fn() }));
 vi.mock('@pagespace/lib/organizations/policy-reader', () => ({ getOrgPolicies: vi.fn() }));
 vi.mock('@pagespace/lib/audit/org-audit', () => ({ recordOrgAuditEvent: vi.fn(async () => {}) }));
@@ -28,10 +32,15 @@ vi.mock('@pagespace/lib/services/invites', () => ({ emitAcceptanceSideEffects: v
 vi.mock('@/lib/auth/invite-acceptance-adapters', () => ({ buildAcceptancePorts: vi.fn(() => ({ ports: true })) }));
 vi.mock('@/lib/repositories/drive-invite-repository', () => ({ driveInviteRepository: { findDriveById: vi.fn() } }));
 vi.mock('@/lib/drive-invites/invite-handlers', () => ({ handleUserIdPath: vi.fn(), handleEmailPath: vi.fn() }));
+vi.mock('@pagespace/lib/permissions/page-grant-admission', () => ({ completeApprovedPageGrant: vi.fn() }));
+vi.mock('@/lib/repositories/page-invite-repository', () => ({ pageInviteRepository: { findPageById: vi.fn() } }));
+vi.mock('@/lib/page-invites/share-invite-handlers', () => ({ sendPendingPageInvite: vi.fn() }));
 
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { findMembershipRole } from '@pagespace/lib/organizations/repository';
-import { claimPendingGuestApproval, listPendingGuestApprovalViews, requestGuestApproval } from '@pagespace/lib/permissions/guest-holds';
+import { claimPendingGuestApproval, listPendingGuestApprovalViews, markApprovedInvitation, requestGuestApproval } from '@pagespace/lib/permissions/guest-holds';
+import { createPermissionNotification } from '@pagespace/lib/notifications/notifications';
+import { broadcastPageEvent } from '@/lib/websocket';
 import { completeApprovedLinkAdmission } from '@pagespace/lib/permissions/share-link-service';
 import { getOrgPolicies } from '@pagespace/lib/organizations/policy-reader';
 import { recordOrgAuditEvent } from '@pagespace/lib/audit/org-audit';
@@ -39,6 +48,9 @@ import { emitAcceptanceSideEffects } from '@pagespace/lib/services/invites';
 import { driveInviteRepository } from '@/lib/repositories/drive-invite-repository';
 import { handleEmailPath, handleUserIdPath } from '@/lib/drive-invites/invite-handlers';
 import { DEFAULT_ORG_POLICIES } from '@pagespace/lib/organizations/policies-core';
+import { completeApprovedPageGrant } from '@pagespace/lib/permissions/page-grant-admission';
+import { pageInviteRepository } from '@/lib/repositories/page-invite-repository';
+import { sendPendingPageInvite } from '@/lib/page-invites/share-invite-handlers';
 import { GET } from '../route';
 import { POST } from '../[holdId]/route';
 
@@ -183,5 +195,81 @@ describe('the approval queue routes', () => {
     as('OWNER');
     expect((await get()).status).toBe(404);
     expect((await decide({ decision: 'approve' })).status).toBe(404);
+  });
+
+  it('POL-2 (partial) approving a queued page grant writes exactly that grant and is audited; the drive invite handlers are not involved', async () => {
+    as('ADMIN');
+    vi.mocked(claimPendingGuestApproval).mockResolvedValue(claim({ origin: 'page_grant', request: { permissions: [{ pageId: 'p1', canView: true, canEdit: true, canShare: false }], invitedBy: 'user_marcus' } }) as never);
+    vi.mocked(completeApprovedPageGrant).mockResolvedValue({ ok: true, driveId: 'drive_1', userId: 'user_chris', pageIds: ['p1'] });
+    const res = await decide({ decision: 'approve' });
+    expect(await res.json()).toEqual({ decided: 'approved', driveId: 'drive_1', pageIds: ['p1'] });
+    expect(completeApprovedPageGrant).toHaveBeenCalledWith(expect.objectContaining({ holdId: 'hold_1', origin: 'page_grant' }));
+    expect(recordOrgAuditEvent).toHaveBeenCalledWith(expect.objectContaining({ eventType: 'org.guest.approved' }));
+    expect(handleUserIdPath).not.toHaveBeenCalled();
+  });
+
+  it('POL-2 (partial) a queued page grant whose page is gone admits nobody: 409 with the reason, not re-queued, not audited as approved', async () => {
+    as('ADMIN');
+    vi.mocked(claimPendingGuestApproval).mockResolvedValue(claim({ origin: 'page_grant' }) as never);
+    vi.mocked(completeApprovedPageGrant).mockResolvedValue({ ok: false, error: 'PAGE_GONE' });
+    const res = await decide({ decision: 'approve' });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ reason: 'PAGE_GONE' });
+    expect(requestGuestApproval).not.toHaveBeenCalled();
+    expect(recordOrgAuditEvent).not.toHaveBeenCalled();
+  });
+
+  it('POL-2 (partial) approving a queued page invitation by email sends it through the SAME handler as the share-invite route, as the original sharer', async () => {
+    as('ADMIN');
+    vi.mocked(claimPendingGuestApproval).mockResolvedValue(claim({
+      origin: 'page_invite', userId: null, email: 'new@example.com',
+      request: { pageId: 'p1', permissions: [{ pageId: 'p1', canView: true, canEdit: true, canShare: false }], expiryDays: 7, invitedBy: 'user_marcus' },
+    }) as never);
+    const page = { id: 'p1', title: 'Plan', driveId: 'drive_1', driveName: 'Finance' };
+    vi.mocked(pageInviteRepository.findPageById).mockResolvedValue(page);
+    vi.mocked(sendPendingPageInvite).mockResolvedValue(new Response(JSON.stringify({ kind: 'invited' }), { status: 200 }));
+    const res = await decide({ decision: 'approve' });
+    expect(await res.json()).toEqual({ decided: 'approved', result: { kind: 'invited' } });
+    expect(sendPendingPageInvite).toHaveBeenCalledWith(expect.objectContaining({ page, email: 'new@example.com', permissions: ['VIEW', 'EDIT'], expiryDays: 7, inviterUserId: 'user_marcus' }));
+  });
+
+  it('POL-2 (partial) a queued page invitation whose page left the drive invites nobody (409); one that fails to send goes back on the queue', async () => {
+    as('ADMIN');
+    const queued = claim({ origin: 'page_invite', userId: null, email: 'new@example.com', request: { pageId: 'p1', permissions: [{ pageId: 'p1', canView: true, canEdit: false, canShare: false }], invitedBy: 'user_marcus' } });
+    vi.mocked(claimPendingGuestApproval).mockResolvedValue(queued as never);
+    vi.mocked(pageInviteRepository.findPageById).mockResolvedValue({ id: 'p1', title: 'Plan', driveId: 'drive_other', driveName: 'Elsewhere' });
+    expect((await decide({ decision: 'approve' })).status).toBe(409);
+    expect(sendPendingPageInvite).not.toHaveBeenCalled();
+
+    vi.mocked(pageInviteRepository.findPageById).mockResolvedValue({ id: 'p1', title: 'Plan', driveId: 'drive_1', driveName: 'Finance' });
+    vi.mocked(sendPendingPageInvite).mockResolvedValue(new Response(JSON.stringify({ error: 'pending' }), { status: 409 }));
+    expect((await decide({ decision: 'approve' })).status).toBe(409);
+    expect(requestGuestApproval).toHaveBeenCalledWith(expect.objectContaining({ email: 'new@example.com', origin: 'page_invite' }));
+  });
+
+  it('POL-2 (partial) approving an emailed invitation records that it was approved, so its acceptance under approve is not queued again', async () => {
+    as('ADMIN');
+    vi.mocked(claimPendingGuestApproval).mockResolvedValue(claim({ userId: null, email: 'new@example.com' }) as never);
+    vi.mocked(handleEmailPath).mockResolvedValue(new Response(JSON.stringify({ kind: 'invited', memberId: 'pinv_77' }), { status: 200 }));
+    expect((await decide({ decision: 'approve' })).status).toBe(200);
+    // Exactly the invitation the email path just stored, never "any invitation to this address" (re-verify N3).
+    expect(markApprovedInvitation).toHaveBeenCalledWith(expect.anything(), { orgId: ORG_ID, driveId: 'drive_1', email: 'new@example.com', approvedBy: 'user_priya', invite: { kind: 'drive', id: 'pinv_77' } });
+  });
+
+  it('POL-2 (partial) an approved page grant tells the person and refreshes open clients, like an immediate grant', async () => {
+    as('ADMIN');
+    vi.mocked(claimPendingGuestApproval).mockResolvedValue(claim({ origin: 'page_grant', request: { permissions: [{ pageId: 'p1', canView: true, canEdit: true, canShare: false }], invitedBy: 'user_marcus' } }) as never);
+    vi.mocked(completeApprovedPageGrant).mockResolvedValue({ ok: true, driveId: 'drive_1', userId: 'user_chris', pageIds: ['p1'] });
+    expect((await decide({ decision: 'approve' })).status).toBe(200);
+    expect(createPermissionNotification).toHaveBeenCalledWith('user_chris', 'p1', 'granted', { canView: true, canEdit: true, canShare: false, canDelete: false }, 'user_marcus');
+    expect(broadcastPageEvent).toHaveBeenCalledWith({ driveId: 'drive_1', pageId: 'p1', operation: 'updated' });
+  });
+
+  it('POL-2 (partial) a page grant whose approval lost a race with guests turning off goes back on the queue instead of vanishing', async () => {
+    as('ADMIN');
+    vi.mocked(claimPendingGuestApproval).mockResolvedValue(claim({ origin: 'page_grant' }) as never);
+    vi.mocked(completeApprovedPageGrant).mockResolvedValue({ ok: false, error: 'POLICY_OFF' });
+    expect((await decide({ decision: 'approve' })).status).toBe(409);
+    expect(requestGuestApproval).toHaveBeenCalledWith(expect.objectContaining({ origin: 'page_grant', driveId: 'drive_1' }));
   });
 });

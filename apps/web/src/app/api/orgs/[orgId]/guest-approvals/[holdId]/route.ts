@@ -4,8 +4,15 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { recordOrgAuditEvent } from '@pagespace/lib/audit/org-audit';
 import { getOrgPolicies } from '@pagespace/lib/organizations/policy-reader';
 import { GUESTS_OFF_MESSAGE } from '@pagespace/lib/organizations/sharing-decisions';
-import { claimPendingGuestApproval, requestGuestApproval, type ClaimedGuestApproval } from '@pagespace/lib/permissions/guest-holds';
+import { claimPendingGuestApproval, markApprovedInvitation, requestGuestApproval, type ClaimedGuestApproval } from '@pagespace/lib/permissions/guest-holds';
+import { createPermissionNotification } from '@pagespace/lib/notifications/notifications';
+import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
+import { db } from '@pagespace/db/db';
 import { completeApprovedLinkAdmission } from '@pagespace/lib/permissions/share-link-service';
+import { completeApprovedPageGrant } from '@pagespace/lib/permissions/page-grant-admission';
+import { pageInviteRepository } from '@/lib/repositories/page-invite-repository';
+import { sendPendingPageInvite } from '@/lib/page-invites/share-invite-handlers';
+import type { PendingPagePermission } from '@pagespace/db/schema/pending-page-invites';
 import { emitAcceptanceSideEffects, type AcceptedInviteData } from '@pagespace/lib/services/invites';
 import { buildAcceptancePorts } from '@/lib/auth/invite-acceptance-adapters';
 import { driveInviteRepository } from '@/lib/repositories/drive-invite-repository';
@@ -15,6 +22,19 @@ import { authorizeOrgRequest, ORG_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
 type Context = { params: Promise<{ orgId: string; holdId: string }> };
 
 const decisionSchema = z.object({ decision: z.enum(['approve', 'decline']) });
+
+const PAGE_GRANT_REFUSALS = {
+  NOT_A_PAGE_GRANT: 'This request cannot be approved.',
+  PAGE_GONE: 'The page this person was asked onto no longer exists, so there is nothing to approve.',
+  POLICY_OFF: GUESTS_OFF_MESSAGE,
+} as const;
+
+/** The flags of a queued page grant, back in the share-invite's terms. */
+const invitePermissions = (p: { canView: boolean; canEdit: boolean; canShare: boolean }): PendingPagePermission[] => [
+  ...(p.canView ? ['VIEW' as const] : []),
+  ...(p.canEdit ? ['EDIT' as const] : []),
+  ...(p.canShare ? ['SHARE' as const] : []),
+];
 
 const LINK_REFUSALS = {
   NOT_A_LINK_REQUEST: 'This request cannot be approved.',
@@ -89,8 +109,65 @@ export async function POST(request: Request, context: Context) {
         await requeue(claim);
         return response;
       }
+      const result = await response.json().catch(() => null) as { kind?: string; memberId?: string } | null;
+      // An emailed invitation is admitted later, at its acceptance: remember that THIS invitation (the pending
+      // invite the email path just stored, returned as `memberId`) was approved, so its acceptance does not ask again.
+      // Any other invitation to the same address is queued there instead.
+      if (!claim.userId && claim.email && result?.kind === 'invited' && result.memberId) {
+        await markApprovedInvitation(db, { orgId, driveId: claim.driveId, email: claim.email, approvedBy: gate.userId, invite: { kind: 'drive', id: result.memberId } });
+      }
       await audit(claim, 'org.guest.approved', gate.userId);
-      return NextResponse.json({ decided: 'approved', result: await response.json().catch(() => null) });
+      return NextResponse.json({ decided: 'approved', result });
+    }
+
+    if (claim.origin === 'page_grant') {
+      const granted = await completeApprovedPageGrant(claim);
+      if (!granted.ok) {
+        // Guests turned OFF between the check above and the grant's own locked re-check: the request is not the
+        // approver's fault and must not vanish, so it goes back on the queue (it can be approved once allowed again).
+        if (granted.error === 'POLICY_OFF') await requeue(claim);
+        return NextResponse.json({ error: PAGE_GRANT_REFUSALS[granted.error], reason: granted.error }, { status: 409 });
+      }
+      // The same after-effects as an immediate grant: the person is told, and open clients refresh the pages.
+      const permissions = claim.request.permissions ?? [];
+      for (const pageId of granted.pageIds) {
+        const p = permissions.find((x) => x.pageId === pageId);
+        if (p) {
+          await createPermissionNotification(granted.userId, pageId, 'granted', { canView: p.canView, canEdit: p.canEdit, canShare: p.canShare, canDelete: p.canDelete ?? false }, claim.request.invitedBy ?? gate.userId)
+            .catch((error: unknown) => loggers.api.error('Page grant approved; notification failed', error as Error));
+        }
+        broadcastPageEvent(createPageEventPayload(granted.driveId, pageId, 'updated'))
+          .catch((error: Error) => loggers.api.error('Page grant approved; broadcast failed', error));
+      }
+      await audit(claim, 'org.guest.approved', gate.userId);
+      return NextResponse.json({ decided: 'approved', driveId: granted.driveId, pageIds: granted.pageIds });
+    }
+
+    if (claim.origin === 'page_invite') {
+      const req = claim.request;
+      const asked = req.permissions?.[0];
+      const page = req.pageId ? await pageInviteRepository.findPageById(req.pageId) : null;
+      if (!page || page.driveId !== claim.driveId || !asked || !claim.email) {
+        return NextResponse.json({ error: PAGE_GRANT_REFUSALS.PAGE_GONE, reason: 'PAGE_GONE' }, { status: 409 });
+      }
+      const response = await sendPendingPageInvite({
+        request,
+        page,
+        email: claim.email,
+        permissions: invitePermissions(asked),
+        expiryDays: req.expiryDays ?? null,
+        inviterUserId: req.invitedBy ?? gate.userId,
+      });
+      if (!response.ok) {
+        await requeue(claim);
+        return response;
+      }
+      const result = await response.json().catch(() => null) as { kind?: string; inviteId?: string } | null;
+      if (result?.kind === 'invited' && result.inviteId) {
+        await markApprovedInvitation(db, { orgId, driveId: claim.driveId, email: claim.email, approvedBy: gate.userId, invite: { kind: 'page', id: result.inviteId } });
+      }
+      await audit(claim, 'org.guest.approved', gate.userId);
+      return NextResponse.json({ decided: 'approved', result });
     }
 
     const admitted = await completeApprovedLinkAdmission(claim);

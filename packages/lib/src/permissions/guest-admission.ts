@@ -9,6 +9,10 @@
  *
  * A person with no account yet (an invite by email) can only be an outsider. The drive's lead is never a guest,
  * even a legacy lead who is outside the org.
+ *
+ * Asked with a transaction, the org row is held FOR SHARE until that transaction commits, so the decision and the
+ * write it guards cannot interleave with a policy change: turning guests off either sees (and parks) the write, or
+ * the write sees "off". Asked without one (a pre-check before any write), nothing is locked.
  */
 import { db } from '@pagespace/db/db';
 import { and, eq } from '@pagespace/db/operators';
@@ -27,7 +31,7 @@ export interface DriveAdmission {
 }
 
 export async function decideOrgDriveAdmission(input: { driveId: string; userId?: string | null }, executor: Executor = db): Promise<DriveAdmission> {
-  const context = await getDrivePolicies(input.driveId, executor);
+  const context = await getDrivePolicies(input.driveId, executor, { forShare: executor !== db });
   if (!context) return { decision: 'allow', orgId: null };
   let isOrgMember = false;
   if (input.userId) {

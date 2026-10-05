@@ -34,7 +34,7 @@ vi.mock('@/lib/auth', () => ({
   checkMCPDriveScope: vi.fn(),
 }));
 
-import { checkDriveAccessForRoles, getRoleById, updateDriveRole, deleteDriveRole, validateRolePermissions } from '@pagespace/lib/services/drive-role-service';
+import { checkDriveAccessForRoles, getRoleById, updateDriveRole, deleteDriveRole, validateRolePermissions, OpenRoleFloorError } from '@pagespace/lib/services/drive-role-service';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
 
 // ============================================================================
@@ -658,6 +658,26 @@ describe('PATCH /api/drives/[driveId]/roles/[roleId]', () => {
       expect(body.error).toBe('A role with this name already exists');
     });
 
+    it('POL-6 (partial) a default role below the org floor is refused 403 naming the policy', async () => {
+      vi.mocked(checkDriveAccessForRoles).mockResolvedValue(createAccessFixture({
+        isOwner: true,
+        drive: createDriveFixture({ id: mockDriveId, name: 'Test' }),
+      }));
+      vi.mocked(getRoleById).mockResolvedValue(
+        createRoleFixture({ id: mockRoleId, name: 'Original', driveId: mockDriveId })
+      );
+      vi.mocked(updateDriveRole).mockRejectedValueOnce(new OpenRoleFloorError('edit'));
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/roles/${mockRoleId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ isDefault: true }),
+      });
+      const response = await PATCH(request, createContext(mockDriveId, mockRoleId));
+
+      expect(response.status).toBe(403);
+      expect(await response.json()).toMatchObject({ code: 'org_policy', policy: 'openDriveRoleFloor' });
+    });
+
     it('should return 500 for other errors', async () => {
       vi.mocked(checkDriveAccessForRoles).mockResolvedValue(createAccessFixture({
         isOwner: true,
@@ -845,6 +865,25 @@ describe('DELETE /api/drives/[driveId]/roles/[roleId]', () => {
   });
 
   describe('error handling', () => {
+    it('POL-6 (partial) deleting the default of an Open drive under an edit floor is refused 403 naming the policy', async () => {
+      vi.mocked(checkDriveAccessForRoles).mockResolvedValue(createAccessFixture({
+        isOwner: true,
+        drive: createDriveFixture({ id: mockDriveId, name: 'Test' }),
+      }));
+      vi.mocked(getRoleById).mockResolvedValue(
+        createRoleFixture({ id: mockRoleId, name: 'ToDelete', driveId: mockDriveId })
+      );
+      vi.mocked(deleteDriveRole).mockRejectedValueOnce(new OpenRoleFloorError('edit'));
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/roles/${mockRoleId}`, {
+        method: 'DELETE',
+      });
+      const response = await DELETE(request, createContext(mockDriveId, mockRoleId));
+
+      expect(response.status).toBe(403);
+      expect(await response.json()).toMatchObject({ code: 'org_policy', policy: 'openDriveRoleFloor' });
+    });
+
     it('should return 500 when delete fails', async () => {
       vi.mocked(checkDriveAccessForRoles).mockResolvedValue(createAccessFixture({
         isOwner: true,

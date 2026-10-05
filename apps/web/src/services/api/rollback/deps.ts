@@ -24,6 +24,7 @@ import type { PageContentFormat } from '@pagespace/lib/content/page-content-form
 import type { SyncMentionsResult } from '@/services/api/page-mention-service';
 import { syncMentions } from '@/services/api/page-mention-service';
 import { createMentionNotification } from '@pagespace/lib/notifications/notifications';
+import { admitReentry, type ReentryDecision } from '@pagespace/lib/permissions/guest-holds';
 
 export interface RollbackDeps {
   /** Database handle — the real db, or a transaction when one is threaded. */
@@ -45,6 +46,18 @@ export interface RollbackDeps {
   canUserRollback: typeof canUserRollback;
   isRollbackableOperation: typeof isRollbackableOperation;
   createMentionNotification: typeof createMentionNotification;
+  /**
+   * POL-2 (independent review of #2762, P1-4): may access that a rollback or redo puts BACK go in? Asked through
+   * `db` (the rollback's transaction) before the write: `admit` writes, anything else skips the write.
+   */
+  admitReentry: (handle: typeof db, input: {
+    driveId: string;
+    userId: string;
+    member?: Record<string, unknown> | null;
+    grants?: Array<{ pageId: string; canView: boolean; canEdit: boolean; canShare: boolean; canDelete: boolean; expiresAt?: Date | string | null }>;
+    requestedBy: string | null;
+    memberRowIsRoleChange?: boolean;
+  }) => Promise<ReentryDecision>;
   logger: typeof loggers.api;
 }
 
@@ -64,6 +77,7 @@ export function defaultRollbackDeps(): RollbackDeps {
     canUserRollback,
     isRollbackableOperation,
     createMentionNotification,
+    admitReentry: (handle, input) => admitReentry(handle, input),
     logger: loggers.api,
   };
 }

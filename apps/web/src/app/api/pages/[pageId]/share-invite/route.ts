@@ -5,9 +5,8 @@ import { isEmailVerified } from '@pagespace/lib/auth/verification-utils';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { pageInviteRepository } from '@/lib/repositories/page-invite-repository';
-import { trackPageOperation } from '@pagespace/lib/monitoring/activity-tracker';
-import { createInviteToken } from '@pagespace/lib/auth/invite-token';
-import { sendPendingPageShareInvitationEmail } from '@pagespace/lib/services/notification-email-service';
+import { pageShareGuestPolicyResponse, sendPendingPageInvite } from '@/lib/page-invites/share-invite-handlers';
+import { guestsOffRefusal } from '@pagespace/lib/organizations/sharing-decisions';
 import {
   checkDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
@@ -39,12 +38,6 @@ const shareInviteBodySchema = z
       });
     }
   });
-
-function resolveAppUrl(): string | null {
-  const url = process.env.WEB_APP_URL || process.env.NEXT_PUBLIC_APP_URL;
-  if (!url) return null;
-  return url.replace(/\/+$/, '');
-}
 
 export async function POST(
   request: Request,
@@ -141,16 +134,32 @@ export async function POST(
       );
     }
 
+    const verifiedUserId = existingUser && existingUser.emailVerified ? existingUser.id : null;
+
+    // POL-2: sharing a page of an org drive with someone outside the org admits a guest, so the org's guests policy
+    // decides it before any row is written or any email sent. A verified account that already holds a grant on this
+    // page gains nothing here (the direct grant never widens an existing one), so it is not asked.
+    const alreadyGranted = verifiedUserId !== null && (await pageInviteRepository.findExistingPagePermission(pageId, verifiedUserId)) !== null;
+    if (!alreadyGranted) {
+      const held = await pageShareGuestPolicyResponse({ page, email, verifiedUserId, permissions, expiryDays: expiryDays ?? null, inviterUserId });
+      if (held) return held;
+    }
+
     // R1: Existing verified user — direct grant, no pendingPageInvites row
     if (existingUser && existingUser.emailVerified) {
       const permissionRow = await pageInviteRepository.createDirectPagePermission({
         pageId,
+        driveId: page.driveId,
         userId: existingUser.id,
         canView: permissions.includes('VIEW'),
         canEdit: permissions.includes('EDIT'),
         canShare: permissions.includes('SHARE'),
         grantedBy: inviterUserId,
       });
+      if (!permissionRow) {
+        const refusal = guestsOffRefusal();
+        return NextResponse.json({ error: refusal.message, code: refusal.code, policy: refusal.policy }, { status: refusal.status });
+      }
 
       auditRequest(request, {
         eventType: 'authz.permission.granted',
@@ -176,122 +185,7 @@ export async function POST(
     }
 
     // R2: Non-existing user (or unverified existing user) — create pending invite
-
-    const now = new Date();
-
-    const activePending = await pageInviteRepository.findActivePendingInviteByPageAndEmail(
-      pageId,
-      email,
-      now,
-    );
-    if (activePending) {
-      return NextResponse.json(
-        { error: 'An invitation is already pending for this email.', existingInviteId: activePending.id },
-        { status: 409 },
-      );
-    }
-
-    const appUrl = resolveAppUrl();
-    if (!appUrl) {
-      loggers.api.error(
-        'Page share invite email cannot be sent: WEB_APP_URL and NEXT_PUBLIC_APP_URL both unset',
-      );
-      return NextResponse.json(
-        { error: 'Email delivery is not configured on this deployment.' },
-        { status: 500 },
-      );
-    }
-
-    const { token, tokenHash, expiresAt } = createInviteToken({
-      now,
-      expiryMinutes: expiryDays ? expiryDays * 24 * 60 : null,
-    });
-
-    let pendingInvite: { id: string };
-    try {
-      pendingInvite = await pageInviteRepository.createPendingInvite({
-        tokenHash,
-        email,
-        pageId,
-        permissions,
-        invitedBy: inviterUserId,
-        expiresAt,
-        now,
-      });
-    } catch (insertError) {
-      const message = insertError instanceof Error ? insertError.message : String(insertError);
-      const isUniqueViolation =
-        message.includes('pending_page_invites_active_page_email_idx') ||
-        message.includes('pending_page_invites_token_hash_unique') ||
-        message.includes('duplicate key');
-      if (isUniqueViolation) {
-        return NextResponse.json(
-          { error: 'An invitation is already pending for this email.' },
-          { status: 409 },
-        );
-      }
-      loggers.api.error(
-        'Failed to persist pending page invite',
-        insertError instanceof Error ? insertError : new Error(String(insertError)),
-        { pageId },
-      );
-      return NextResponse.json({ error: 'Failed to send invite' }, { status: 500 });
-    }
-
-    const inviter = await pageInviteRepository.findInviterDisplay(inviterUserId);
-    const inviteUrl = `${appUrl}/invite/${encodeURIComponent(token)}`;
-
-    // R6: SMTP failure → compensating delete so the partial unique index stays clean
-    try {
-      await sendPendingPageShareInvitationEmail({
-        recipientEmail: email,
-        inviterName: inviter?.name ?? 'A teammate',
-        pageTitle: page.title,
-        driveName: page.driveName,
-        permissions: permissions.map((p) => p.toLowerCase()),
-        inviteUrl,
-      });
-    } catch (emailError) {
-      loggers.api.error(
-        'Failed to send pending page share invitation email; rolling back pending invite row',
-        emailError instanceof Error ? emailError : new Error(String(emailError)),
-        { pageId, recipientEmail: email },
-      );
-      try {
-        await pageInviteRepository.deletePendingInvite(pendingInvite.id);
-      } catch (rollbackError) {
-        loggers.api.error(
-          'Rollback of pending_page_invites row failed after email send failure',
-          rollbackError instanceof Error ? rollbackError : new Error(String(rollbackError)),
-          { inviteId: pendingInvite.id, pageId },
-        );
-      }
-      return NextResponse.json(
-        { error: 'Failed to send invitation email. Please try again.' },
-        { status: 502 },
-      );
-    }
-
-    trackPageOperation(inviterUserId, 'share', pageId, {
-      invitedEmail: email,
-      permissions,
-      pending: true,
-    });
-
-    auditRequest(request, {
-      eventType: 'authz.permission.granted',
-      userId: inviterUserId,
-      resourceType: 'page',
-      resourceId: pageId,
-      details: { targetEmail: email, permissions, operation: 'share_invite', pending: true },
-    });
-
-    return NextResponse.json({
-      kind: 'invited',
-      inviteId: pendingInvite.id,
-      email,
-      message: `Invitation sent to ${email}`,
-    });
+    return await sendPendingPageInvite({ request, page, email, permissions, expiryDays: expiryDays ?? null, inviterUserId });
   } catch (error) {
     loggers.api.error('Error in page share invite:', error as Error);
     return NextResponse.json({ error: 'Failed to send invite' }, { status: 500 });

@@ -3,6 +3,7 @@ import {
   DOMAIN_ADMIN_MAILBOXES,
   DOMAIN_TXT_PREFIX,
   decideAutoJoin,
+  isAuditedRejoinSkip,
   decideDomainVerification,
   dnsRecordName,
   dnsRecordValue,
@@ -187,5 +188,15 @@ describe('decideAutoJoin', () => {
 
   it('SEC-1 (partial) a lapsed org admits nobody', () => {
     expect(decideAutoJoin({ ...eligible, orgActive: false })).toEqual({ action: 'refuse', reason: 'org_lapsed' });
+  });
+});
+
+describe('isAuditedRejoinSkip', () => {
+  it.each(['previously_departed', 'departure_suppressed'] as const)('AUD-1 (partial) a skipped auto-join because the person left this org (%s) is a refused re-join the org must see', (reason) => {
+    expect(isAuditedRejoinSkip(reason)).toBe(true);
+  });
+
+  it.each(['domain_not_verified', 'email_not_verified', 'already_member', 'account_predates_verification', 'org_guest', 'invited'] as const)('AUD-1 (partial) an ordinary skip (%s) is not a re-join attempt and writes nothing', (reason) => {
+    expect(isAuditedRejoinSkip(reason)).toBe(false);
   });
 });
