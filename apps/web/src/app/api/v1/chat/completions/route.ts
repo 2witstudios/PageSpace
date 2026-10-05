@@ -268,7 +268,7 @@ export async function POST(request: Request): Promise<Response> {
     }
     holdId = creditGate.holdId;
     walletId = creditGate.walletId;
-    spend = resolvedSpend(spend, creditGate.spendSource);
+    spend = resolvedSpend(spend, creditGate.spendSource, creditGate.fallbackFromWalletId);
     spendFallback = spendFallbackNotice(creditGate);
   }
 

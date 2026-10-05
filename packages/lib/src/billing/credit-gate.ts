@@ -46,6 +46,7 @@ import { addOneMonth } from './wallet-funding';
 import { ORGS_ENABLED } from '../organizations/orgs-enabled';
 import {
   ORG_ENTITLEMENT_TIER,
+  PERSONAL_ROOT_NOT_YET_CREATED,
   personalRootDecision,
   resolvesDriveWallets,
   rootAvailableCents,
@@ -189,6 +190,12 @@ export interface CreditGateResult extends GateResult {
   refusal?: SpendRefusal;
   /** Set only when a drive rule moved the call to another source (SPEND-4): never silent. */
   fallback?: SpendFallback;
+  /**
+   * The chosen source's wallet when this call — or the turn it follows — fell back (WAL-6b).
+   * Recorded on the hold; a caller threads it into its follow-on targets (resolvedSpend), so
+   * their holds carry it too.
+   */
+  fallbackFromWalletId?: string;
 }
 
 /** Normalize the caller-supplied daily ceiling: zero/negative/absent → null (off). */
@@ -362,17 +369,24 @@ export async function canConsumeAI(
   const fallback: SpendFallback | undefined = decision.fallbackApplied && decision.fallbackFrom !== null
     ? { from: decision.fallbackFrom, to: decision.source }
     : undefined;
+  // WAL-6b: the wallet a fallback moved off. A personal root that does not exist yet has no row
+  // to land overshoot on (and would fail the hold's FK), so it carries nothing.
+  const fallbackFromWalletId = decision.fallbackFromWalletId !== null && decision.fallbackFromWalletId !== PERSONAL_ROOT_NOT_YET_CREATED
+    ? decision.fallbackFromWalletId
+    : null;
   const result = decision.source !== 'own_credits'
     ? await gateSharedWallet(userId, tier, opts, {
         walletId: decision.walletId,
         source: decision.source,
         entitlementTier: decision.entitlementTier,
-        fallbackFromWalletId: decision.fallbackFromWalletId,
+        fallbackFromWalletId,
       })
-    : await gatePersonalRoot(userId, tier, opts, decision.fallbackFromWalletId).then((personal): CreditGateResult => personal.allowed
+    : await gatePersonalRoot(userId, tier, opts, fallbackFromWalletId).then((personal): CreditGateResult => personal.allowed
         ? { ...personal, spendSource: 'own_credits', entitlementTier: decision.entitlementTier }
         : personal);
-  if (!result.allowed || fallback === undefined) return result;
+  if (!result.allowed) return result;
+  const carried: CreditGateResult = fallbackFromWalletId ? { ...result, fallbackFromWalletId } : result;
+  if (fallback === undefined) return carried;
   loggers.ai.info('spend source fell back', {
     userId,
     driveId: opts.spend.kind === 'personal' ? null : opts.spend.driveId,
@@ -380,7 +394,7 @@ export async function canConsumeAI(
     to: fallback.to,
     walletId: result.walletId,
   });
-  return { ...result, fallback };
+  return { ...carried, fallback };
 }
 
 /**

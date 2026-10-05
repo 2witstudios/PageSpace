@@ -180,7 +180,7 @@ export const startCallMeter = async (
   let walletId = opening.walletId;
   // Later windows name the source the opening hold resolved, so a call never switches
   // wallets part-way through (SPEND-4).
-  const windowSpend = resolvedSpend(spend, opening.spendSource);
+  const windowSpend = resolvedSpend(spend, opening.spendSource, opening.fallbackFromWalletId);
   let pending: RealtimeUsage | undefined;
   let billedDollars = 0;
   let stopped = false;

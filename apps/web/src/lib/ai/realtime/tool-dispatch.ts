@@ -320,7 +320,7 @@ export const buildVoiceToolContext = (
   creditSpend: {
     spend: request.spend === undefined
       ? PERSONAL_SPEND
-      : resolvedSpend(conversationSpend(request.spend.driveId, request.conversationId), request.spend.chosen ?? undefined),
+      : resolvedSpend(conversationSpend(request.spend.driveId, request.conversationId), request.spend.chosen ?? undefined, request.spend.fallbackFromWalletId),
   },
   aiProvider: 'openai_voice',
   aiModel: model,

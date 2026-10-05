@@ -336,7 +336,7 @@ export async function POST(request: Request) {
       // The gate's reservation for this call, released when usage is billed below.
       holdId = creditGate.holdId;
       walletId = creditGate.walletId;
-      spend = resolvedSpend(spend, creditGate.spendSource);
+      spend = resolvedSpend(spend, creditGate.spendSource, creditGate.fallbackFromWalletId);
       spendFallback = spendFallbackNotice(creditGate);
     }
 

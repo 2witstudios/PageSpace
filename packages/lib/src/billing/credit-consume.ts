@@ -60,6 +60,12 @@ export interface ConsumeCreditsInput {
    */
   walletId?: string;
   /**
+   * WAL-6b for a call with NO hold of its own (a nested agent call inside a gated turn): the
+   * chosen wallet the turn's fallback moved off (spendFallbackFromWalletId of its target).
+   * A hold that names one wins; this only fills in where there is no hold to read it from.
+   */
+  fallbackFromWalletId?: string;
+  /**
    * Optional scope so the live `credits:updated` push can carry conversation/page
    * hints (the per-conversation usage monitor filters on them). Live chat routes
    * thread these through; background jobs and the reconcile cron leave them unset,
@@ -129,10 +135,11 @@ async function decrementAndSettle(
   aiUsageLogId: string | null,
   holdId: string | null = null,
   spendKind: SpendKind = 'ai',
+  carriedFallbackFromWalletId: string | null = null,
 ): Promise<SettleOutcome | null> {
   // WAL-6b: the hold names the source a drive rule moved this call off, if it did; read before
-  // the hold is released below.
-  const fallbackFromWalletId = holdId ? await holdFallbackFromWalletId(tx, holdId) : null;
+  // the hold is released below. A call with no hold uses what its turn carried.
+  const fallbackFromWalletId = (holdId ? await holdFallbackFromWalletId(tx, holdId) : null) ?? carriedFallbackFromWalletId;
   const settled = await chargeWallet(tx, walletId, chargeMc, aiUsageLogId, fallbackFromWalletId);
 
   // No balance row yet (e.g. an existing user before the gate lazy-inits one).
@@ -812,6 +819,7 @@ export async function consumeCredits(input: ConsumeCreditsInput): Promise<Credit
         input.aiUsageLogId,
         input.holdId ?? null,
         input.spendKind ?? 'ai',
+        input.fallbackFromWalletId ?? null,
       );
     });
     // A committed transaction that decremented NOTHING (no balance row yet) left

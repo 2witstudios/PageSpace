@@ -7,6 +7,7 @@ import {
   driveSpend,
   automationSpend,
   personTriggeredSpend,
+  spendFallbackFromWalletId,
   automationSpendInput,
   automationRunUnreserved,
   resolvesDriveWallets,
@@ -283,6 +284,17 @@ describe('spend-target: decideCallSpend', () => {
       expect(decision).toMatchObject({ kind: 'refuse', source: chosen, reason: 'source_empty', chargeCents: 0 });
     },
   );
+
+  it('WAL-6 (partial) a follow-on in a turn that fell back carries the chosen wallet onto its own hold, and reports no fallback of its own', () => {
+    const target = resolvedSpend(driveSpend('d-product'), 'own_credits', 'w-product');
+    expect(target).toEqual({ kind: 'drive', driveId: 'd-product', chosen: 'own_credits', followOn: true, fallbackFromWalletId: 'w-product' });
+    expect(spendFallbackFromWalletId(target)).toBe('w-product');
+    const decision = decideCallSpend(input({ chosen: 'own_credits', followOn: true, fallbackFromWalletId: 'w-product' }));
+    expect(decision).toMatchObject({ kind: 'spend', source: 'own_credits', fallbackApplied: false, fallbackFrom: null, fallbackFromWalletId: 'w-product' });
+    // A first call ignores a carried origin: only a follow-on has a turn to inherit it from.
+    expect(decideCallSpend(input({ chosen: null, stored: { ...NO_STORED_CHOICE, chosenWalletId: 'w-marcus' }, fallbackFromWalletId: 'w-product' })))
+      .toMatchObject({ kind: 'spend', fallbackFromWalletId: null });
+  });
 
   it('SPEND-4 (partial) a follow-on call whose resolved source still covers it spends that source, unchanged', () => {
     const decision = decideCallSpend(input({ chosen: 'drive_wallet', followOn: true, driveRule: { fallback: 'own_credits', guestsMaySpendDriveWallet: false } }));

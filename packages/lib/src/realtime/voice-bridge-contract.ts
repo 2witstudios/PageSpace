@@ -300,6 +300,8 @@ export type RealtimeAttachPayload = z.infer<typeof realtimeAttachPayloadSchema>;
 export const voiceToolSpendSchema = z.object({
   driveId: z.string().min(1),
   chosen: z.enum(['drive_wallet', 'seat_allowance', 'own_credits']).nullable(),
+  /** The call's fallback origin (WAL-6b), so a tool's own hold lands overshoot where the chosen source would. */
+  fallbackFromWalletId: z.string().min(1).optional(),
 });
 
 export type VoiceToolSpend = z.infer<typeof voiceToolSpendSchema>;

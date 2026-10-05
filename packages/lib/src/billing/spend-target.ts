@@ -72,6 +72,12 @@ export type SpendTarget =
        * back again (SPEND-4).
        */
       followOn?: true;
+      /**
+       * Set with `followOn` when the turn's first call fell back: the wallet of the source it
+       * moved off. Carried onto every follow-on hold so their overshoot lands where that chosen
+       * source would have put it, never on the consumer (WAL-6b).
+       */
+      fallbackFromWalletId?: string;
     }
   | {
       kind: 'automation';
@@ -155,9 +161,19 @@ export function automationRunUnreserved(input: {
  * `source`: the same drive and exactly the source already chosen, so a tool that gates
  * its own model call can never land on a different wallet than the turn it runs in.
  */
-export function resolvedSpend(target: SpendTarget, source: SpendSourceKind | undefined): SpendTarget {
+export function resolvedSpend(target: SpendTarget, source: SpendSourceKind | undefined, fallbackFromWalletId?: string | null): SpendTarget {
   if (target.kind !== 'drive' || source === undefined) return target;
-  return { ...target, chosen: source, followOn: true };
+  return {
+    ...target,
+    chosen: source,
+    followOn: true,
+    ...(fallbackFromWalletId ? { fallbackFromWalletId } : {}),
+  };
+}
+
+/** The chosen wallet a turn's fallback moved off, as its follow-on target carries it (WAL-6b). */
+export function spendFallbackFromWalletId(target: SpendTarget | undefined): string | undefined {
+  return target?.kind === 'drive' ? target.fallbackFromWalletId : undefined;
 }
 
 /**
@@ -439,6 +455,8 @@ export interface CallSpendInput extends CallSpendLegs {
   chosen: SpendSourceKind | null;
   /** A follow-on call in a turn (SpendTarget `followOn`): no fallback, ever (SPEND-4). */
   followOn?: boolean;
+  /** The turn's fallback origin a follow-on carries (SpendTarget `fallbackFromWalletId`, WAL-6b). */
+  fallbackFromWalletId?: string | null;
   /** What is stored for this conversation and person (SPEND-3); none when omitted. */
   stored?: StoredSpendChoice;
   userOverride: UserSpendOverride;
@@ -557,7 +575,9 @@ export function decideCallSpend(input: CallSpendInput): CallSpendDecision {
     walletId: resolution.walletId,
     fallbackApplied: resolution.fallbackApplied,
     fallbackFrom: resolution.fallbackFrom,
-    fallbackFromWalletId: resolution.fallbackFromWalletId,
+    // A follow-on spends the source its turn resolved and never falls back itself, but when that
+    // turn fell back it carries the chosen wallet on, so its own overshoot lands there (WAL-6b).
+    fallbackFromWalletId: resolution.fallbackFromWalletId ?? (input.followOn === true ? input.fallbackFromWalletId ?? null : null),
     entitlementTier: entitlementTierFor({
       source: resolution.source,
       walletOwnerTier: input.walletOwnerTier,

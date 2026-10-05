@@ -30,7 +30,7 @@ import { requireDb } from '@pagespace/db/test/require-db';
 import { loggers } from '../../logging/logger-config';
 import { canConsumeAI } from '../credit-gate';
 import { consumeCredits, recordSeatOvershoot } from '../credit-consume';
-import { PERSONAL_SPEND, conversationSpend, driveSpend } from '../spend-target';
+import { PERSONAL_SPEND, conversationSpend, driveSpend, resolvedSpend, spendFallbackFromWalletId } from '../spend-target';
 import { DEFAULT_SEAT_ALLOWANCE_CENTS } from '../wallet-core';
 import { loadSeatCapFacts } from '../seat-allowance';
 import { applyOrgPoolRefill, donateToDriveWallet } from '../wallet-funding-shell';
@@ -1437,6 +1437,40 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
       expect((await walletRow(side.jonoRootId)).debtCents).toBe(50);
       const debt = (await ledgerOf(w.marcusId)).filter((r) => r.entryType === 'adjustment');
       expect(debt.map((r) => [r.walletId, r.amountCents])).toEqual([[side.jonoRootId, -50]]);
+    } finally {
+      await db.delete(creditLedger).where(eq(creditLedger.userId, w.marcusId));
+      await teardownPersonalDrive(side);
+    }
+  });
+
+  it('WAL-6 (partial) a FOLLOW-ON call in a turn that fell back (a tool, a voice window) holds with the chosen wallet too, and so does a hold-less nested call; neither overshoot lands on the consumer', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 5_000 });
+    const w = world;
+    const side = await personalDrive(w, { allocationCents: 0, fallbackRule: 'own_credits' });
+    await db.update(wallets).set({ monthlyRemainingCents: 200 }).where(eq(wallets.id, w.marcusWalletId));
+    try {
+      const first = await canConsumeAI(w.marcusId, 'free', { spend: driveSpend(side.driveId, 'drive_wallet') });
+      expect(first).toMatchObject({ allowed: true, fallback: { from: 'drive_wallet', to: 'own_credits' }, fallbackFromWalletId: side.walletId });
+      if (first.holdId) await db.delete(creditHolds).where(eq(creditHolds.id, first.holdId));
+
+      // The follow-on names the turn's resolved source and carries the origin (turn-credit, call-metering).
+      const followOnTarget = resolvedSpend(driveSpend(side.driveId, 'drive_wallet'), first.spendSource, first.fallbackFromWalletId);
+      const followOn = await canConsumeAI(w.marcusId, 'free', { spend: followOnTarget });
+      expect(followOn).toMatchObject({ allowed: true, walletId: w.marcusWalletId, fallbackFromWalletId: side.walletId });
+      expect(followOn.fallback).toBeUndefined(); // reported once, by the turn's first call
+      expect((await holdsOf(w.marcusId)).map((h) => h.fallbackFromWalletId)).toEqual([side.walletId]);
+      const [log] = await db.insert(aiUsageLogs).values({ userId: w.marcusId, provider: 'openrouter', model: 'm', cost: 1 }).returning({ id: aiUsageLogs.id });
+      await consumeCredits({ aiUsageLogId: log.id, userId: w.marcusId, costDollars: 1, holdId: followOn.holdId, walletId: followOn.walletId });
+      expect((await walletRow(w.marcusWalletId)).debtCents).toBe(0);
+      expect((await walletRow(side.jonoRootId)).debtCents).toBe(0); // 150¢ fit Marcus's 200¢: no overshoot yet
+
+      // A nested ask_agent call has no hold: its settle carries the origin from the turn's target.
+      const [nested] = await db.insert(aiUsageLogs).values({ userId: w.marcusId, provider: 'openrouter', model: 'm', cost: 1 }).returning({ id: aiUsageLogs.id });
+      await consumeCredits({ aiUsageLogId: nested.id, userId: w.marcusId, costDollars: 1, walletId: w.marcusWalletId, fallbackFromWalletId: spendFallbackFromWalletId(followOnTarget) });
+      // 50¢ left of Marcus's credits, 150¢ charged: the 100¢ overshoot lands on Jono's root (the chosen wallet's parent).
+      expect((await walletRow(w.marcusWalletId)).debtCents).toBe(0);
+      expect((await walletRow(side.jonoRootId)).debtCents).toBe(100);
     } finally {
       await db.delete(creditLedger).where(eq(creditLedger.userId, w.marcusId));
       await teardownPersonalDrive(side);

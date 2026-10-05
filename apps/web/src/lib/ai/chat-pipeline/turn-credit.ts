@@ -26,7 +26,7 @@ export const UNGATED_TURN_CREDIT: TurnCredit = Object.freeze({ spend: PERSONAL_S
 /** The turn's credit once its gate allowed the call against `spend`. */
 export function turnCreditAfterGate(spend: SpendTarget, gate: CreditGateResult): TurnCredit {
   return {
-    spend: resolvedSpend(spend, gate.spendSource),
+    spend: resolvedSpend(spend, gate.spendSource, gate.fallbackFromWalletId),
     walletId: gate.walletId,
     entitlementTier: gate.entitlementTier,
     ...(gate.fallback ? { fallback: gate.fallback } : {}),
