@@ -5,7 +5,7 @@ import { afterEach, describe, test, vi } from 'vitest';
 import { assert } from 'riteway/vitest';
 import { ImagoSWRProvider } from '@/api/swr-provider';
 import { ApiError } from '@/api/errors';
-import { fakeWeb, type FakeRoute } from '@/ui/tasks/task-api/fake-web';
+import { fakeWeb, type FakeRoute } from '@/ui/test-support/fake-web';
 import { useAgentConversations, useConversationMessages, useImagoAgents } from './use-chat-data';
 import { chatPaths, CONVERSATIONS_PAGE_SIZE } from '../chat-api/chat-api';
 import {
@@ -230,7 +230,7 @@ describe('useConversationMessages()', () => {
       {
         [messagesAt()]: () => Response.json(messagesPage([userMessage('m3', 'again'), assistantWithTool('m4')], { nextCursor: 'm3', rev: 4 })),
         [messagesAt('m3')]: () =>
-          Response.json(messagesPage([userMessage('m1', 'first'), userMessage('m2', 'second')], { nextCursor: null, rev: 4 })),
+          Response.json(messagesPage([userMessage('m1', 'first'), userMessage('m2', 'second')], { nextCursor: null, rev: 2 })),
       },
       <Probe seen={seen} />,
     );
@@ -245,9 +245,9 @@ describe('useConversationMessages()', () => {
 
     assert({
       given: 'loadOlder on a conversation with an older page',
-      should: 'put the older messages before the newer ones and offer nothing older after the start',
-      actual: [ids(seen.thread?.messages), seen.thread?.hasOlder],
-      expected: [['m1', 'm2', 'm3', 'm4'], false],
+      should: 'put the older messages before the newer ones, offer nothing older after the start, and keep the newest page\'s rev',
+      actual: [ids(seen.thread?.messages), seen.thread?.hasOlder, seen.thread?.rev],
+      expected: [['m1', 'm2', 'm3', 'm4'], false, 4],
     });
   });
 

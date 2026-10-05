@@ -24,7 +24,11 @@ export const useImagoAgents = () => {
 /** Rows from every loaded page, once each: a conversation created between page loads shifts the offsets. */
 const uniqueById = <T extends { readonly id: string }>(rows: readonly T[]): readonly T[] => {
   const seen = new Set<string>();
-  return rows.filter((row) => !seen.has(row.id) && Boolean(seen.add(row.id)));
+  return rows.filter((row) => {
+    if (seen.has(row.id)) return false;
+    seen.add(row.id);
+    return true;
+  });
 };
 
 /** The viewer's conversations with an agent page, most recent first; more pages on `loadMore`. */
