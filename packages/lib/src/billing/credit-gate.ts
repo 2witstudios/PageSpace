@@ -22,6 +22,7 @@ import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { and, eq, gt, gte, inArray, or, sql } from '@pagespace/db/operators';
 import { isBillingEnabled } from '../deployment-mode';
 import type { SpendFallback } from './spend-fallback';
+import { loadConsumerCapFacts } from './consumer-caps';
 import { loggers } from '../logging/logger-config';
 import {
   evaluateGate,
@@ -52,7 +53,7 @@ import {
   type SpendTarget,
   type WalletBalanceFacts,
 } from './spend-target';
-import { seatCapCheck, type RefusalReason, type SkipReason, type SpendSourceKind } from './wallet-core';
+import { evaluateCaps, seatCapCheck, type RefusalReason, type SkipReason, type SpendSourceKind } from './wallet-core';
 import { loadSeatCapFacts } from './seat-allowance';
 import { holdsInScope, isComputeSpendKind, ledgerRowsInScope, personBoundScopeFor, type PersonBoundScope } from './person-bound-scope';
 import { readOrgSpendPolicy } from '../organizations/policy-reader';
@@ -730,6 +731,19 @@ async function gateSharedWallet(
       seatRemainingCents = Math.min(cap.monthlyRemainingCents ?? Number.MAX_SAFE_INTEGER, cap.dailyRemainingCents ?? Number.MAX_SAFE_INTEGER);
     }
 
+    // WAL-7: a person's own caps on a drive-wallet leg, decided here under the wallet's row lock
+    // in the hold's transaction, so their simultaneous calls serialize like a seat's. An
+    // automation is the drive spending (SPEND-6), never the person it is recorded under.
+    let consumerRemainingCents: number | null = null;
+    if (chosen.source === 'drive_wallet' && opts.spend.kind !== 'automation') {
+      const capFacts = await loadConsumerCapFacts(tx, { walletId: wallet.id, userId, now });
+      if (capFacts) {
+        const cap = evaluateCaps({ caps: capFacts.caps, usage: capFacts.usage, reservationCents: estCost });
+        if (!cap.allowed) return refused('source_cap_reached');
+        consumerRemainingCents = Math.min(cap.monthlyRemainingCents ?? Number.MAX_SAFE_INTEGER, cap.dailyRemainingCents ?? Number.MAX_SAFE_INTEGER);
+      }
+    }
+
     // Holds reserved against this wallet and (for a drive wallet) against its parent by
     // everything else, plus this caller's own in-flight calls on any wallet.
     const parentId = parent?.id ?? null;
@@ -789,7 +803,7 @@ async function gateSharedWallet(
       spendSource: chosen.source ?? undefined,
       entitlementTier: chosen.entitlementTier,
       // A seat's per-stream budget is also bounded by what is left of its allowance.
-      balanceSnapshot: { netSpendableCents: Math.min(spendable, seatRemainingCents ?? spendable) - estCost },
+      balanceSnapshot: { netSpendableCents: Math.min(spendable, seatRemainingCents ?? spendable, consumerRemainingCents ?? spendable) - estCost },
     };
   });
 }

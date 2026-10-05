@@ -16,7 +16,8 @@ import {
   shouldNotifyFunderOfDebt,
   renewWalletAllocation,
   evaluateCaps,
-  capAlertThresholdsCrossed,
+  capThresholdsReached,
+  planConsumerCapWrite,
   DEFAULT_CONSUMER_CAPS,
   utcDayStartMs,
   utcMonthStartMs,
@@ -632,15 +633,33 @@ describe('evaluateCaps', () => {
   });
 
   it.each([
-    ['crossing 80%', c(100), c(70), c(85), [80]],
-    ['landing exactly on 80%', c(100), c(70), c(80), [80]],
-    ['crossing both at once', c(100), c(10), c(130), [80, 100]],
-    ['already past 80%, crossing 100%', c(100), c(85), c(100), [100]],
-    ['staying under 80%', c(100), c(10), c(79), []],
-    ['already past both', c(100), c(101), c(150), []],
-    ['no cap', null, c(0), c(500), []],
-  ] as const)('WAL-7 (partial) funder alert thresholds: %s', (_label, capCents, beforeCents, afterCents, expected) => {
-    expect(capAlertThresholdsCrossed({ capCents, beforeCents, afterCents })).toEqual(expected);
+    ['below 80%', c(100), c(79), []],
+    ['exactly 80%', c(100), c(80), [80]],
+    ['between', c(100), c(99), [80]],
+    ['at the cap', c(100), c(100), [80, 100]],
+    ['past the cap', c(100), c(150), [80, 100]],
+    ['no cap', null, c(500), []],
+    ['a zero cap is reached at once', 0, 0, [80, 100]],
+  ] as const)('WAL-7 (partial) funder alert thresholds reached: %s', (_label, capCents, spentCents, expected) => {
+    expect(capThresholdsReached({ capCents, spentCents })).toEqual(expected);
+  });
+});
+
+describe('writing a per-consumer cap (WAL-7)', () => {
+  it('WAL-7 (partial) enabling caps with nothing named takes the D20.5 defaults, 10 credits a day and 100 a month', () => {
+    expect(planConsumerCapWrite({}, null)).toEqual({ kind: 'set', caps: DEFAULT_CONSUMER_CAPS });
+    expect(DEFAULT_CONSUMER_CAPS).toEqual({ dailyCents: c(10), monthlyCents: c(100) });
+  });
+
+  it('WAL-7 (partial) a named window replaces only itself; null in a window means unlimited in it', () => {
+    expect(planConsumerCapWrite({ dailyCents: c(50) }, null)).toEqual({ kind: 'set', caps: { dailyCents: c(50), monthlyCents: c(100) } });
+    expect(planConsumerCapWrite({ monthlyCents: null }, { dailyCents: c(5), monthlyCents: c(70) }))
+      .toEqual({ kind: 'set', caps: { dailyCents: c(5), monthlyCents: null } });
+  });
+
+  it.each([-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, 2_147_483_648])('WAL-7 (partial) a cap of %s is refused, never stored', (bad) => {
+    expect(planConsumerCapWrite({ dailyCents: bad }, null)).toEqual({ kind: 'refuse', reason: 'invalid_amount' });
+    expect(planConsumerCapWrite({ monthlyCents: bad }, null)).toEqual({ kind: 'refuse', reason: 'invalid_amount' });
   });
 });
 

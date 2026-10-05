@@ -20,6 +20,7 @@ import {
   availableSources,
   preselectSoleSource,
   decideCallSpend,
+  cappedConsumerLeg,
   chooseSource,
   sourceOfWallet,
   NO_STORED_CHOICE,
@@ -469,3 +470,22 @@ describe('spend-target purity', () => {
     expect(imports.sort()).toEqual(['./subscription-tiers', './wallet-core']);
   });
 });
+
+describe('spend-target: a drive-wallet leg capped per consumer (WAL-7)', () => {
+  const leg = walletLeg('w-product', 'active', c(1200));
+  it('WAL-7 (partial) with no cap row the leg is the wallet, unchanged', () => {
+    expect(cappedConsumerLeg(leg, null)).toEqual(leg);
+  });
+
+  it('WAL-7 (partial) a cap bounds what the consumer may spend of the wallet, and says the cap, not the wallet, ran out', () => {
+    expect(cappedConsumerLeg(leg, { dailyRemainingCents: c(3), monthlyRemainingCents: c(40) }))
+      .toEqual({ ...leg, spendableCents: c(3), capReached: true });
+    expect(cappedConsumerLeg(leg, { dailyRemainingCents: null, monthlyRemainingCents: c(2000) })).toEqual(leg);
+  });
+
+  it('WAL-7 (partial) a spent cap refuses the drive wallet by name (source_cap_reached), and the fallback rule may then move the call', () => {
+    const capped = cappedConsumerLeg(leg, { dailyRemainingCents: 0, monthlyRemainingCents: c(40) });
+    expect(decideCallSpend(input({ driveWallet: capped }))).toMatchObject({ kind: 'refuse', source: 'drive_wallet', reason: 'source_cap_reached', chargeCents: 0 });
+  });
+});
+

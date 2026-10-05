@@ -19,6 +19,8 @@ import {
   entitlementTierFor,
   resolveSpendSource,
   seatLegSpendableCents,
+  legSpendableCents,
+  type CapRemaining,
   type DriveSpendRule,
   type RefusalReason,
   type SkipReason,
@@ -269,6 +271,17 @@ export function reservedAgainstCents(
 /** One wallet as a SpendLeg for wallet-core. */
 export function walletLeg(walletId: string, status: WalletStatus, spendableCents: number): SpendLeg {
   return { walletId, status, spendableCents: Math.max(0, whole(spendableCents)) };
+}
+
+/**
+ * A person's leg on a drive wallet, bounded by their own caps on it (WAL-7): never more than
+ * what is left of their daily and monthly cap. `capReached` says the cap, not the wallet, is
+ * the bound, so an uncovered leg refuses by name (`source_cap_reached`). No cap row: the leg.
+ */
+export function cappedConsumerLeg(leg: SpendLeg, remaining: CapRemaining | null): SpendLeg {
+  if (remaining === null) return leg;
+  const spendableCents = legSpendableCents(leg.spendableCents, remaining);
+  return spendableCents < leg.spendableCents ? { ...leg, spendableCents, capReached: true } : leg;
 }
 
 /**

@@ -13,6 +13,7 @@
  * the personal root wallet: personal spend behaves exactly as before wallets.
  */
 
+import { loadConsumerCapFacts } from './consumer-caps';
 import { db } from '@pagespace/db/db';
 import { and, eq, gt, inArray, isNull, or, sql } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
@@ -45,6 +46,7 @@ import {
   type StoredSpendChoice,
   type WalletBalanceFacts,
   type WalletHoldTotal,
+  cappedConsumerLeg,
 } from './spend-target';
 import { toSubscriptionTier, type SubscriptionTier } from './subscription-tiers';
 import { ensurePersonalRootWalletId } from './personal-wallet';
@@ -302,12 +304,17 @@ export async function resolveCallSpend(input: {
     personalDefault: personal?.defaultSpendSource ?? null,
   };
 
-  const { leg: driveLeg, holds } = await driveWalletLeg(
+  const { leg: uncappedDriveLeg, holds } = await driveWalletLeg(
     driveWallet,
     now,
     [pool?.id, personal?.id].filter((id): id is string => typeof id === 'string'),
     orgLapsed,
   );
+  // WAL-7: this person's own caps on the drive wallet bound their leg of it; a spent cap refuses
+  // by name (source_cap_reached). The gate re-checks under the wallet's lock.
+  const driveLeg = uncappedDriveLeg && driveWallet
+    ? cappedConsumerLeg(uncappedDriveLeg, (await loadConsumerCapFacts(db, { walletId: driveWallet.id, userId, now }))?.remaining ?? null)
+    : uncappedDriveLeg;
   // WAL-2: a seat is the pool capped per consumer — never more than what is left of this
   // person's monthly allowance this pool period (D-OW-12). The gate re-checks it under the lock.
   // POL-7: both the allowance and the fallback come from the org's policy row, read now.

@@ -1,5 +1,5 @@
 {
-  "id": "434f5d6f-3e2b-44ea-99c2-e26c7847e8eb",
+  "id": "be676fdc-ea72-4fa5-9119-3696877fba47",
   "prevId": "872bdc47-2220-409c-b989-194b27462621",
   "version": "7",
   "dialect": "postgresql",
@@ -19013,6 +19013,90 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
+    "public.wallet_cap_alerts": {
+      "name": "wallet_cap_alerts",
+      "schema": "",
+      "columns": {
+        "walletId": {
+          "name": "walletId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "consumerKey": {
+          "name": "consumerKey",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "capWindow": {
+          "name": "capWindow",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "periodStart": {
+          "name": "periodStart",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "threshold": {
+          "name": "threshold",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "sentAt": {
+          "name": "sentAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "wallet_cap_alerts_walletId_wallets_id_fk": {
+          "name": "wallet_cap_alerts_walletId_wallets_id_fk",
+          "tableFrom": "wallet_cap_alerts",
+          "tableTo": "wallets",
+          "columnsFrom": [
+            "walletId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "wallet_cap_alerts_pkey": {
+          "name": "wallet_cap_alerts_pkey",
+          "columns": [
+            "walletId",
+            "consumerKey",
+            "capWindow",
+            "periodStart",
+            "threshold"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "wallet_cap_alerts_window_valid": {
+          "name": "wallet_cap_alerts_window_valid",
+          "value": "\"wallet_cap_alerts\".\"capWindow\" IN ('daily', 'monthly')"
+        },
+        "wallet_cap_alerts_threshold_valid": {
+          "name": "wallet_cap_alerts_threshold_valid",
+          "value": "\"wallet_cap_alerts\".\"threshold\" IN (80, 100)"
+        }
+      },
+      "isRLSEnabled": false
+    },
     "public.wallet_consumer_caps": {
       "name": "wallet_consumer_caps",
       "schema": "",
@@ -27116,6 +27200,7 @@
         "TASK_ASSIGNED",
         "AUTOMATION_SKIPPED",
         "WALLET_DEBT",
+        "WALLET_CAP_ALERT",
         "PRODUCT_UPDATE"
       ]
     },

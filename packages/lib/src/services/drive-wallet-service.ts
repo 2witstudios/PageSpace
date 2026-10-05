@@ -37,6 +37,7 @@ import { getDriveIdsForUser, getUserDriveAccess } from '../permissions/permissio
 import { loadDriveWalletStanding, type DriveWalletStanding } from '../permissions/spend-standing';
 import {
   credentialRefusalFor,
+  decideSeatCapWrite,
   mayTakeWalletAction,
   viewerForCredential,
   walletActionsFor,
@@ -54,7 +55,8 @@ import { toSubscriptionTier } from '../billing/subscription-tiers';
 import { planDeleteWallet, planTopUp, planWalletPatch, type DeleteBlocker, type WalletPatchInput } from '../billing/wallet-admin';
 import { donateToDriveWallet } from '../billing/wallet-funding-shell';
 import { checkOrgActive } from '../organizations/status';
-import { userConsumerKey, utcDayStartMs, utcMonthStartMs, type SpendSourceKind } from '../billing/wallet-core';
+import { findMembershipRole } from '../organizations/repository';
+import { planConsumerCapWrite, userConsumerKey, utcDayStartMs, utcMonthStartMs, type ConsumerCapWriteInput, type SpendSourceKind } from '../billing/wallet-core';
 import {
   capRemainingCents,
   displayedWalletStatus,
@@ -655,6 +657,160 @@ export async function topUpDriveWallet(
     await recordOrgWalletEvent(standing, userId, 'org.wallet.topped_up', { amountCents: result.amountCents, paidDebtCents: result.paidDebtCents, legId: result.legId });
   }
   return result;
+}
+
+// ---------------------------------------------------------------------------
+// Per-consumer caps (WAL-7)
+// ---------------------------------------------------------------------------
+
+/** One consumer's caps on a leg, as the wallet surfaces show them: cents plus credit counts, and their name. */
+export interface ConsumerCapView {
+  userId: string;
+  displayName: string;
+  dailyCapCents: number | null;
+  monthlyCapCents: number | null;
+  dailyCapCredits: string | null;
+  monthlyCapCredits: string | null;
+}
+
+export interface WalletCapsRead {
+  ok: true;
+  walletId: string;
+  caps: ConsumerCapView[];
+}
+
+function capView(row: { userId: string; name: string | null; dailyCapCents: number | null; monthlyCapCents: number | null }): ConsumerCapView {
+  return {
+    userId: row.userId,
+    displayName: row.name ?? 'Unknown user',
+    dailyCapCents: row.dailyCapCents,
+    monthlyCapCents: row.monthlyCapCents,
+    dailyCapCredits: row.dailyCapCents === null ? null : formatCreditCount(row.dailyCapCents),
+    monthlyCapCredits: row.monthlyCapCents === null ? null : formatCreditCount(row.monthlyCapCents),
+  };
+}
+
+/** Every person's caps on `walletId`, by name. */
+async function capsOnWallet(walletId: string): Promise<ConsumerCapView[]> {
+  const rows = await db
+    .select({
+      consumerKey: walletConsumerCaps.consumerKey,
+      dailyCapCents: walletConsumerCaps.dailyCapCents,
+      monthlyCapCents: walletConsumerCaps.monthlyCapCents,
+      name: users.name,
+    })
+    .from(walletConsumerCaps)
+    .leftJoin(users, sql`${walletConsumerCaps.consumerKey} = 'user:' || ${users.id}`)
+    .where(eq(walletConsumerCaps.walletId, walletId));
+  return rows
+    .filter((r) => r.consumerKey.startsWith('user:'))
+    .map((r) => capView({ userId: r.consumerKey.slice('user:'.length), name: r.name, dailyCapCents: r.dailyCapCents, monthlyCapCents: r.monthlyCapCents }))
+    .sort((a, b) => a.displayName.localeCompare(b.displayName));
+}
+
+const noWallet = (): WalletServiceError => ({ ok: false, status: 404, code: 'no_wallet', message: 'This drive has no wallet' });
+const invalidCap = (): WalletServiceError => ({ ok: false, status: 400, code: 'invalid_amount', message: 'A cap must be a whole, non-negative number of cents, or null for no cap' });
+const notAConsumer = (): WalletServiceError => ({ ok: false, status: 404, code: 'not_a_consumer', message: 'That person cannot spend in this drive' });
+
+/** The caps set on a drive's wallet, per person (WAL-7). For whoever may set them, and the lead. */
+export async function listDriveWalletCaps(userId: string, driveId: string, credential: WalletCredential): Promise<WalletCapsRead | WalletServiceError> {
+  const access = await walletAccess(userId, driveId, credential);
+  if (!access.ok) return access;
+  if (!access.actions.includes('set_caps') && !access.actions.includes('view_spend_by_member')) return forbidden('set_caps');
+  const row = await driveWalletRow(db, driveId);
+  if (!row) return noWallet();
+  return { ok: true, walletId: row.id, caps: await capsOnWallet(row.id) };
+}
+
+/**
+ * Write one person's caps on a drive's wallet (WAL-7): org admins on an org drive, the lead (the
+ * wallet's owner) on a personal drive — wallet-access `set_caps`. Enabling with nothing named
+ * takes the D20.5 defaults; null in a window is no cap there. The person must be able to spend
+ * in the drive. `null` input clears the row (unlimited within the wallet).
+ */
+export async function setDriveWalletCap(
+  userId: string,
+  driveId: string,
+  consumerId: string,
+  input: ConsumerCapWriteInput | null,
+  credential: WalletCredential,
+): Promise<WalletCapsRead | WalletServiceError> {
+  const refused = refuseCredential(credential, 'set_caps');
+  if (refused) return refused;
+  const access = await walletAccess(userId, driveId, credential);
+  if (!access.ok) return access;
+  const denied = requireAction(access, 'set_caps') ?? (await requireOrgActiveForWrite(access));
+  if (denied) return denied;
+  const consumer = await loadDriveWalletStanding(consumerId, driveId);
+  if (!consumer || walletViewerRole(consumer) === 'none') return notAConsumer();
+  const row = await driveWalletRow(db, driveId);
+  if (!row) return noWallet();
+  const written = await writeConsumerCap(row.id, consumerId, input);
+  if (written) return written;
+  await recordOrgWalletEvent(access.standing, userId, 'org.wallet.allocation_changed', { operation: input === null ? 'clear_consumer_cap' : 'set_consumer_cap', consumerId });
+  return { ok: true, walletId: row.id, caps: await capsOnWallet(row.id) };
+}
+
+/** Upsert (or, for null, delete) one consumer's caps on a leg, under the row's lock. */
+async function writeConsumerCap(walletId: string, consumerId: string, input: ConsumerCapWriteInput | null): Promise<WalletServiceError | null> {
+  const consumerKey = userConsumerKey(consumerId);
+  return db.transaction(async (tx): Promise<WalletServiceError | null> => {
+    if (input === null) {
+      await tx.delete(walletConsumerCaps).where(and(eq(walletConsumerCaps.walletId, walletId), eq(walletConsumerCaps.consumerKey, consumerKey)));
+      return null;
+    }
+    const [existing] = await tx
+      .select({ dailyCents: walletConsumerCaps.dailyCapCents, monthlyCents: walletConsumerCaps.monthlyCapCents })
+      .from(walletConsumerCaps)
+      .where(and(eq(walletConsumerCaps.walletId, walletId), eq(walletConsumerCaps.consumerKey, consumerKey)))
+      .for('update');
+    const plan = planConsumerCapWrite(input, existing ?? null);
+    if (plan.kind === 'refuse') return invalidCap();
+    await tx
+      .insert(walletConsumerCaps)
+      .values({ walletId, consumerKey, dailyCapCents: plan.caps.dailyCents, monthlyCapCents: plan.caps.monthlyCents })
+      .onConflictDoUpdate({
+        target: [walletConsumerCaps.walletId, walletConsumerCaps.consumerKey],
+        set: { dailyCapCents: plan.caps.dailyCents, monthlyCapCents: plan.caps.monthlyCents, updatedAt: new Date() },
+      });
+    return null;
+  });
+}
+
+/**
+ * Write one member's caps on the org pool leg — their seat (WAL-7): the org's Owner or an Admin,
+ * for an accepted member (wallet-access `decideSeatCapWrite`). The monthly window is the seat
+ * allowance for that member (WAL-2); null clears the row back to the org's allowance.
+ */
+export async function setSeatCap(
+  userId: string,
+  orgId: string,
+  consumerId: string,
+  input: ConsumerCapWriteInput | null,
+): Promise<WalletCapsRead | WalletServiceError> {
+  if (!ORGS_ENABLED) return notFound('Organization not found');
+  const decision = decideSeatCapWrite({
+    actorRole: await findMembershipRole(orgId, userId),
+    consumerRole: await findMembershipRole(orgId, consumerId),
+  });
+  if (!decision.ok) {
+    return { ok: false, status: decision.status, code: decision.code, message: decision.code === 'insufficient_role' ? 'Only the organization Owner or an Admin can set a seat cap' : decision.code === 'not_org_member' ? 'That person is not a member of this organization' : 'Organization not found' };
+  }
+  const active = await checkOrgActive(orgId);
+  if (!active.ok) return { ok: false, status: active.status, code: active.code, message: active.message };
+  const pool = await orgPoolRow(db, orgId);
+  if (!pool) return { ok: false, status: 409, code: 'no_org_pool', message: 'This organization has no pool yet' };
+  const written = await writeConsumerCap(pool.id, consumerId, input);
+  if (written) return written;
+  await recordOrgAuditEventAfterCommit({
+    orgId,
+    eventType: 'org.wallet.allocation_changed',
+    actorId: userId,
+    resourceType: 'org_pool',
+    resourceId: pool.id,
+    details: { operation: input === null ? 'clear_seat_cap' : 'set_seat_cap', consumerId },
+  });
+  return { ok: true, walletId: pool.id, caps: await capsOnWallet(pool.id) };
 }
 
 /** Donate from the caller's own balance to the drive's wallet (WAL-4); the donation shell re-checks visibility. */

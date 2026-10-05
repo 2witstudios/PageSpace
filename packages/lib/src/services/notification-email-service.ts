@@ -44,6 +44,7 @@ export type NotificationType =
   | 'AUTOMATION_SKIPPED'
   // In-app only (WAL-6e): the funder's once-per-period notice that a wallet is in debt.
   | 'WALLET_DEBT'
+  | 'WALLET_CAP_ALERT'
   | 'PRODUCT_UPDATE';
 
 interface NotificationEmailData {
@@ -284,6 +285,7 @@ function getEmailTemplate(data: NotificationEmailData, user: { name: string; ema
     case 'PRODUCT_UPDATE': // broadcast-only (email_broadcasts), never a per-event email
     case 'AUTOMATION_SKIPPED': // in-app only (SPEND-6): the drive lead's skip notice
     case 'WALLET_DEBT': // in-app only (WAL-6e): the funder's debt notice
+    case 'WALLET_CAP_ALERT': // in-app only (WAL-7): the funder's 80% / 100% cap alert
       return null;
 
     default: {

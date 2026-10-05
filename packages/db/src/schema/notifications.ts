@@ -27,6 +27,9 @@ export const notificationType = pgEnum('NotificationType', [
   // A shared wallet carries debt from actual-cost overshoot (WAL-6e): its funder is told, in-app
   // only, at most once per period of that wallet (wallet_debt_notices).
   'WALLET_DEBT',
+  // A consumer reached 80% or 100% of their per-consumer cap on a wallet leg (WAL-7, D20.6): its
+  // funder is told, in-app only, once per threshold per cap window per period (wallet_cap_alerts).
+  'WALLET_CAP_ALERT',
   // Product announcements (SDK/CLI launch and the like). Broadcast-only: never
   // raised as an in-app notification, but it needs an enum value so recipients
   // can opt out through the same email_notification_preferences mechanism.

@@ -642,17 +642,54 @@ export const CAP_ALERT_THRESHOLDS = [80, 100] as const;
 export type CapAlertThreshold = (typeof CAP_ALERT_THRESHOLDS)[number];
 const PERCENT = 100;
 
-/** The thresholds a spend moved across, from strictly below to at-or-above. */
-export function capAlertThresholdsCrossed(input: {
-  capCents: number | null;
-  beforeCents: number;
-  afterCents: number;
-}): CapAlertThreshold[] {
-  if (input.capCents === null || input.capCents <= 0) return [];
-  const cap = input.capCents;
-  return CAP_ALERT_THRESHOLDS.filter(
-    (t) => input.beforeCents * PERCENT < cap * t && input.afterCents * PERCENT >= cap * t,
-  );
+/**
+ * The thresholds a consumer's spend in one cap window has reached (spent >= threshold% of the
+ * cap). The shell sends each at most once per window per period (wallet_cap_alerts), so a
+ * reached threshold is due until it has been sent — no crossing can be missed by two settles
+ * racing past it. A zero cap is reached at once; no cap reaches nothing.
+ */
+export function capThresholdsReached(input: { capCents: number | null; spentCents: number }): CapAlertThreshold[] {
+  if (input.capCents === null || !Number.isFinite(input.capCents)) return [];
+  const cap = wholeNonNegative(input.capCents);
+  const spent = wholeNonNegative(input.spentCents);
+  return CAP_ALERT_THRESHOLDS.filter((t) => spent * PERCENT >= cap * t);
+}
+
+/** A cap window of WAL-7: the UTC day, and the month (the pool period for a seat, D-OW-12). */
+export type CapWindow = 'daily' | 'monthly';
+
+/** A write of one consumer's caps; an omitted window keeps what it was (defaults when enabling). */
+export interface ConsumerCapWriteInput {
+  dailyCents?: number | null;
+  monthlyCents?: number | null;
+}
+
+export type ConsumerCapWritePlan =
+  | { kind: 'set'; caps: ConsumerCaps }
+  | { kind: 'refuse'; reason: 'invalid_amount' };
+
+const MAX_CAP_CENTS = 2_147_483_647;
+
+function validCap(value: number | null | undefined): boolean {
+  return value === undefined || value === null || (Number.isInteger(value) && value >= 0 && value <= MAX_CAP_CENTS);
+}
+
+/**
+ * Plan a write of one consumer's caps on one leg (WAL-7). Enabling caps (no row yet) starts from
+ * the D20.5 defaults, so a window the writer does not name takes its default; on an existing row
+ * an unnamed window keeps its value. `null` is unlimited in that window. Anything that is not a
+ * whole, non-negative cent count (or null) is refused and nothing is stored.
+ */
+export function planConsumerCapWrite(input: ConsumerCapWriteInput, existing: ConsumerCaps | null): ConsumerCapWritePlan {
+  if (!validCap(input.dailyCents) || !validCap(input.monthlyCents)) return { kind: 'refuse', reason: 'invalid_amount' };
+  const base = existing ?? DEFAULT_CONSUMER_CAPS;
+  return {
+    kind: 'set',
+    caps: {
+      dailyCents: input.dailyCents === undefined ? base.dailyCents : input.dailyCents,
+      monthlyCents: input.monthlyCents === undefined ? base.monthlyCents : input.monthlyCents,
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------
