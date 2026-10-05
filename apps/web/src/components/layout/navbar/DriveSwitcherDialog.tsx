@@ -241,7 +241,7 @@ function DrivePickerBody({ onClose, onCreate }: DrivePickerBodyProps) {
               key={group.key}
               heading={
                 <span className="flex items-center gap-2" data-testid={`picker-group-${group.kind}`}>
-                  {group.kind === "org" && <OrgMark name={group.label} avatarUrl={group.avatarUrl} size="sm" />}
+                  {group.kind === "org" && <OrgMark name={group.label} avatarUrl={group.avatarUrl} size="sm" decorative />}
                   <span>{group.label}</span>
                   <span className="text-muted-foreground/70">· {group.drives.length}</span>
                   {group.kind === "org" && (

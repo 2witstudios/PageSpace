@@ -104,7 +104,7 @@ function OrgOwnedCard({ drive, org, leadName, onChanged }: { drive: Drive; org: 
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
         <div className="flex items-start gap-3">
-          <OrgMark name={org.name} avatarUrl={org.avatarUrl} size="lg" />
+          <OrgMark name={org.name} avatarUrl={org.avatarUrl} size="lg" decorative />
           <div className="flex flex-col gap-0.5">
             <span className="text-sm font-medium">Owned by {org.name}</span>
             <span className="text-xs text-muted-foreground">{summary}</span>
