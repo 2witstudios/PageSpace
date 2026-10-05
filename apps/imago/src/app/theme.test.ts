@@ -8,6 +8,7 @@ import { describe, test } from 'vitest';
 import { assert } from 'riteway/vitest';
 
 const appDir = dirname(fileURLToPath(import.meta.url));
+const appRoot = join(appDir, '..', '..');
 const stylesheet = join(appDir, 'globals.css');
 const themeFiles = [
   stylesheet,
@@ -21,13 +22,22 @@ const tailwindTheme = join(
   'theme.css',
 );
 
-/** Compiles the real globals.css with exactly the given candidate classes. */
+let compiles = 0;
+
+/**
+ * Compiles the real globals.css with exactly the given candidate classes.
+ * @tailwindcss/postcss caches one compiler per input path, so each call gets
+ * its own (unwritten) path beside globals.css: its imports and `@source`
+ * globs still resolve from this directory.
+ */
 const compile = async (classes: string[]): Promise<Root> => {
+  compiles += 1;
   const source = `${readFileSync(stylesheet, 'utf8')}\n@source inline("${classes.join(' ')}");`;
-  const result = await postcss([tailwind() as postcss.AcceptedPlugin]).process(
-    source,
-    { from: stylesheet },
-  );
+  // `base` is the app root, as in `next build`, so source detection scans the
+  // same files the real build does.
+  const result = await postcss([
+    tailwind({ base: appRoot }) as postcss.AcceptedPlugin,
+  ]).process(source, { from: join(appDir, `globals.compile-${compiles}.css`) });
   return postcss.parse(result.css);
 };
 
@@ -156,6 +166,20 @@ describe('imago Tailwind theme (token lock)', () => {
       should: 'emit no rule for any of them',
       actual: [...candidates, ...samples].filter((utility) =>
         emitted.has(utility),
+      ),
+      expected: [],
+    });
+  });
+
+  test('class strings in test files', async () => {
+    const emitted = emittedClasses(await compile([]));
+
+    assert({
+      given:
+        'the lint probes in eslint-config.test.ts (an arbitrary value, a dark: variant, a scheme utility)',
+      should: 'never reach the stylesheet',
+      actual: ['w-[10px]', '[mask-type:luminance]', 'dark:bg-surface', 'scheme-dark'].filter(
+        (utility) => emitted.has(utility),
       ),
       expected: [],
     });

@@ -1,10 +1,16 @@
 import type { Metadata } from 'next';
+import { cookies } from 'next/headers';
 import { connection } from 'next/server';
 import { notFound } from 'next/navigation';
 import { Geist, Geist_Mono } from 'next/font/google';
 import { getRequestNonce } from '@/lib/request-nonce';
 import { isImagoEnabled } from '@/lib/imago-enabled';
 import { ImagoSWRProvider } from '@/api/swr-provider';
+import {
+  THEME_COOKIE_NAME,
+  parseThemePreference,
+} from '@/lib/theme/theme-preference';
+import './globals.css';
 
 // Self-hosted by next/font: served same-origin, so the CSP needs no font host.
 const sans = Geist({
@@ -34,9 +40,19 @@ export default async function RootLayout({
   // middleware (see its matcher); this keeps every page behind the flag too.
   if (!isImagoEnabled()) notFound();
   const nonce = await getRequestNonce();
+  // The served HTML carries the viewer's theme: data-theme selects
+  // color-scheme in globals.css, so the first paint is already right and no
+  // script has to correct it.
+  const theme = parseThemePreference(
+    (await cookies()).get(THEME_COOKIE_NAME)?.value,
+  );
 
   return (
-    <html lang="en" className={`${sans.variable} ${mono.variable}`}>
+    <html
+      lang="en"
+      data-theme={theme}
+      className={`${sans.variable} ${mono.variable}`}
+    >
       <body>
         {/* Set webpack nonce for dynamically loaded chunks (next/dynamic) */}
         <script
