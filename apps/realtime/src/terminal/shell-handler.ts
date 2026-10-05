@@ -929,8 +929,9 @@ function startSettleHeartbeat(
       // sites: if a socket came back through some path that did not restart the
       // clock, this beat notices and restarts it rather than letting the session
       // run on free forever.
-      if (!quiesced && resumeBillingClock(session)) await regateResumedWindow({ billing, persistColdTail }, sessionMap, session, sessionKey);
-      if (sessionMap.getByKey(sessionKey) !== session) return;
+      // (No separate re-gate here: the settle just below gates the next window on this same beat,
+      // and ends a payer that refuses — review #2761.)
+      if (!quiesced) resumeBillingClock(session);
       const solvent = await settleAccruedWindow(billing, sessionMap, session, sessionKey, { stopClock: quiesced });
       if (!solvent && sessionMap.getByKey(sessionKey) === session) {
         loggers.realtime.info('Shell session ended (payer out of credits at heartbeat)', {
