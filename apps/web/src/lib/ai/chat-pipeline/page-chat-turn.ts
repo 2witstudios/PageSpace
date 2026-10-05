@@ -93,6 +93,12 @@ import { buildLocationTurnPrompt } from '@/lib/ai/core/location-prompt';
 import { buildActivePlanPrompt, getActivePlan } from '@/lib/ai/core/plan-binding';
 import { resolveHomeDriveHint } from '@/lib/ai/core/home-drive-hint';
 import {
+  buildGrantedDrivesPrompt,
+  loadImagoAgentContext,
+  resolveImagoLocationAccess,
+  type ImagoAgentContext,
+} from '@/lib/ai/core/imago-agent-context';
+import {
   filterToolsForReadOnly,
   filterToolsForMcpScope,
   filterToolsForAgentAllowlist,
@@ -613,6 +619,23 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
       // Continue without member-drive context on error
     }
     turnTimer.mark('member_drive_context_loaded');
+
+    // A built-in Imago agent's reach is its explicit drive grants, not the
+    // user's: tell it which drives those are, and below, whether the drive in
+    // view is one of them. Null for every other agent, whose prompt this
+    // leaves byte-identical. See imago-agent-context.ts for the trust boundary.
+    let imagoContext: ImagoAgentContext | null = null;
+    try {
+      imagoContext = await loadImagoAgentContext({
+        userId,
+        agentPageId: chatId,
+        allowedDriveIds: getAllowedDriveIds(authResult),
+      });
+    } catch (error) {
+      loggers.ai.error('AI Page Chat API: Failed to load Imago agent context', error as Error);
+      // Continue without it, as for member-drive context above.
+    }
+    turnTimer.mark('imago_context_loaded');
 
     loggers.ai.debug('AI Page Chat API: Using custom agent configuration', {
       hasCustomSystemPrompt: !!customSystemPrompt,
@@ -1566,6 +1589,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
       currentDrive: turnLocation.currentDrive,
       breadcrumbs: turnLocation.breadcrumbs,
       homeDriveId: locationHomeDriveId,
+      agentAccess: imagoContext ? resolveImagoLocationAccess(turnLocation, imagoContext) : undefined,
     } : { homeDriveId: locationHomeDriveId });
 
     // Skill catalog applies uniformly — including to custom-systemPrompt
@@ -1642,6 +1666,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
       customSystemPrompt,
       drivePromptPrefix,
       memberDriveContextPrefix,
+      grantedDrives: imagoContext ? buildGrantedDrivesPrompt(imagoContext) : undefined,
       agentMemory: agentMemoryPrompt,
       toolDiscovery: toolDiscoveryPrompt,
     });

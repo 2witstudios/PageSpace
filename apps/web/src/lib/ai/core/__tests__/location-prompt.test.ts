@@ -116,3 +116,37 @@ describe('no-location Home drive hint', () => {
     expect(result).toContain('Do NOT default to the Home drive for general work');
   });
 });
+
+describe('buildLocationTurnPrompt — agent access (IMG-4.7, built-in Imago agents)', () => {
+  const drive = { name: 'Acme Plans', slug: 'acme', id: 'drive_acme' };
+
+  it('given no agentAccess, should render exactly what it rendered before', () => {
+    expect(buildLocationTurnPrompt({ currentDrive: drive, agentAccess: undefined })).toBe(
+      buildLocationTurnPrompt({ currentDrive: drive }),
+    );
+  });
+
+  it('given a granted drive, should state the role and keep the act-here defaults', () => {
+    const result = buildLocationTurnPrompt({ currentDrive: drive, agentAccess: { kind: 'granted', role: 'MEMBER' } });
+    expect(result).toContain('• Your access here: granted (MEMBER)');
+    expect(result).toContain('to act on THIS workspace');
+  });
+
+  it("given the user's Home drive, should say it is where the agent lives", () => {
+    const result = buildLocationTurnPrompt({ currentDrive: drive, agentAccess: { kind: 'home' } });
+    expect(result).toContain("• Your access here: this is the user's Home drive, where you live");
+  });
+
+  it('given an ungranted drive, should say so and drop the defaults that would send the agent there', () => {
+    const result = buildLocationTurnPrompt({ currentDrive: drive, agentAccess: { kind: 'not-granted' } });
+    expect(result).toContain('• Your access here: not granted');
+    expect(result).toContain('• Current workspace: "Acme Plans"');
+    expect(result).not.toContain('Default scope');
+    expect(result).not.toContain('Start with list_pages on this drive');
+    expect(result).not.toContain('to act on THIS workspace');
+  });
+
+  it('given no location at all, should ignore agentAccess', () => {
+    expect(buildLocationTurnPrompt({ agentAccess: { kind: 'not-granted' } })).toBe(buildLocationTurnPrompt({}));
+  });
+});

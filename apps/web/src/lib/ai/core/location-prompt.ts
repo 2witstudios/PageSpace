@@ -37,7 +37,31 @@ export interface LocationPromptInput {
    * content creation, and a skill that wants Home must say so explicitly.
    */
   homeDriveId?: string | null;
+  /**
+   * Whether the AGENT can work in the drive in view, for agents whose reach is
+   * narrower than the user's (built-in Imago agents: explicit drive grants).
+   * Absent for every other agent, whose block is unchanged. `not-granted`
+   * also drops the "act on this workspace" defaults, which would send the
+   * agent at a drive its tools will refuse.
+   */
+  agentAccess?: LocationAgentAccess;
 }
+
+export type LocationAgentAccess =
+  | { kind: 'home' }
+  | { kind: 'granted'; role: string }
+  | { kind: 'not-granted' };
+
+const agentAccessLine = (access: LocationAgentAccess): string => {
+  switch (access.kind) {
+    case 'home':
+      return "• Your access here: this is the user's Home drive, where you live";
+    case 'granted':
+      return `• Your access here: granted (${access.role})`;
+    case 'not-granted':
+      return '• Your access here: not granted — you cannot read or change this workspace. If the user wants you to work here, tell them they can grant you access to it';
+  }
+};
 
 export function buildLocationTurnPrompt(input: LocationPromptInput | undefined): string {
   if (!input || (!input.currentPage && !input.currentDrive)) {
@@ -75,7 +99,14 @@ export function buildLocationTurnPrompt(input: LocationPromptInput | undefined):
     lines.push(`• Path: ${input.breadcrumbs.join(' > ')}`);
   }
 
+  if (input.agentAccess) {
+    lines.push(agentAccessLine(input.agentAccess));
+  }
+
   lines.push('• When the user says "here" or "this", they mean the location above');
+  if (input.agentAccess?.kind === 'not-granted') {
+    return lines.join('\n');
+  }
   lines.push('• Default scope: operations should focus on this location unless the user indicates otherwise');
 
   if (input.currentDrive?.id) {
