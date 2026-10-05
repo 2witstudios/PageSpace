@@ -694,6 +694,16 @@
       "import": "./dist/billing/spend-fallback.js",
       "require": "./dist/billing/spend-fallback.js"
     },
+    "./billing/spend-refusal-copy": {
+      "types": "./dist/billing/spend-refusal-copy.d.ts",
+      "import": "./dist/billing/spend-refusal-copy.js",
+      "require": "./dist/billing/spend-refusal-copy.js"
+    },
+    "./billing/spend-surface": {
+      "types": "./dist/billing/spend-surface.d.ts",
+      "import": "./dist/billing/spend-surface.js",
+      "require": "./dist/billing/spend-surface.js"
+    },
     "./billing/spend-target": {
       "types": "./dist/billing/spend-target.d.ts",
       "import": "./dist/billing/spend-target.js",
