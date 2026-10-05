@@ -13,7 +13,7 @@
  */
 import { describe, it, expect, beforeAll } from 'vitest';
 import { db } from '@pagespace/db/db';
-import { and, eq, inArray } from '@pagespace/db/operators';
+import { and, eq, inArray, sql } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
 import { driveAgentMembers, driveMembers } from '@pagespace/db/schema/members';
 import { imagoDriveAccess } from '@pagespace/db/schema/imago-drive-access';
@@ -23,7 +23,7 @@ import { requireDb } from '@pagespace/db/test/require-db';
 import { BUILTIN_AGENT_KEYS } from '../builtin-agents';
 import { provisionImagoAgents } from '../provision-imago-agents';
 import { getImagoDriveAccess, setImagoDriveAccess } from '../imago-drive-access';
-import { grantImagoAgents } from '../grant-imago-agents';
+import { grantImagoAgents, lockImagoUser } from '../grant-imago-agents';
 import { provisionHomeDriveIfNeeded } from '../../onboarding/home-drive';
 import { createDrive } from '../../services/drive-service';
 import { addAgentToDrive } from '../../services/drive-agent-service';
@@ -524,5 +524,54 @@ describe('IMG-4.6a: a turn-off racing an agent recreation at sign-in (real concu
       if (members.length > 0 || stored !== false) failures.push(`round ${round}: members=${members.length} stored=${stored}`);
     }
     expect(failures).toEqual([]);
+  });
+});
+
+describe('IMG-4.6a: a turn-off and a grant in flight serialise on the user-row lock (real Postgres)', () => {
+  // The grant's last step (grantImagoAgents) is a transaction that takes the
+  // user-row lock, finds the drive still on and inserts the membership. Hold
+  // exactly that open and switch the drive off meanwhile: the turn-off must
+  // wait for it and then remove what it inserted. A turn-off that did not wait
+  // would delete before the insert commits, and the grant would land after it.
+  it('given a turn-off while a grant transaction holds the lock with its insert uncommitted, should end opted out', async () => {
+    if (!dbAvailable) return;
+    const { user, off, agents } = await setup();
+    await db.delete(driveAgentMembers)
+      .where(and(eq(driveAgentMembers.driveId, off.id), eq(driveAgentMembers.agentPageId, agents.imago)));
+
+    let release: () => void = () => undefined;
+    let announceHeld: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const lockHeld = new Promise<void>((resolve) => { announceHeld = resolve; });
+    const grantInFlight = db.transaction(async (tx) => {
+      await lockImagoUser(tx, user.id);
+      await tx.insert(driveAgentMembers).values({ driveId: off.id, agentPageId: agents.imago, role: 'MEMBER', addedBy: user.id });
+      announceHeld();
+      await held;
+    });
+    await lockHeld;
+
+    let toggleSettled = false;
+    const toggling = setImagoDriveAccess(user.id, off.id, false).finally(() => { toggleSettled = true; });
+    let observedLockWait = false;
+    for (let attempt = 0; attempt < 150 && !toggleSettled; attempt++) {
+      const waiting = await db.execute(sql`
+        SELECT 1 FROM pg_stat_activity
+        WHERE datname = current_database() AND wait_event_type = 'Lock' AND query ILIKE '%FOR UPDATE%'
+      `);
+      if (waiting.rows.length > 0) {
+        observedLockWait = true;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+
+    release();
+    await grantInFlight;
+    expect((await toggling).ok).toBe(true);
+
+    expect(observedLockWait).toBe(true);
+    expect(await membersIn(off.id, Object.values(agents))).toEqual([]);
+    expect(await storedChoice(user.id, off.id)).toBe(false);
   });
 });
