@@ -152,6 +152,7 @@ describe('a drive moved into an org brings its outsiders under the guests policy
   });
 
   it('POL-2 (partial) guests ON: the outsider keeps their access, and org members are never held', async () => {
+    await setGuests('on');
     const { drive, page } = await personalDriveWithOutsider();
     await db.insert(driveMembers).values({ driveId: drive, userId: w.member, role: 'MEMBER', acceptedAt: new Date() });
     await moveDriveToOrg(w.owner, drive, { orgId: w.orgId, orgVisibility: 'RESTRICTED' }, deps);
@@ -174,6 +175,7 @@ describe('a member who leaves becomes an outsider of what they kept', () => {
   });
 
   it('POL-2 (partial) guests ON: a departed member keeps an invited row as an outsider, as before', async () => {
+    await setGuests('on');
     await db.insert(driveMembers).values({ driveId: w.orgDrive, userId: w.member, role: 'MEMBER', source: 'invite', acceptedAt: new Date() });
     expect(await leaveOrganization(w.member, w.orgId)).toMatchObject({ ok: true, heldAsGuest: 0 });
     expect(await db.select().from(driveMembers).where(and(eq(driveMembers.driveId, w.orgDrive), eq(driveMembers.userId, w.member)))).toHaveLength(1);

@@ -44,6 +44,8 @@ import { getDriveRecipientUserIds } from '../../services/drive-member-service';
 import { syncOrgMemberAccess, type OrgMembershipSyncResult } from '../../services/org-membership-sync';
 import { createOrgDrive } from '../../services/org-drive-service';
 import { orgDriveServiceDeps } from '../../services/org-drive-service-deps';
+import { getOrgPolicies } from '../policy-reader';
+import { decideOrgDriveAdmission } from '../../permissions/guest-admission';
 
 // Org-derived access is dark by default; a test that proves an org-shaped negative turns it on,
 // or the negative would hold only because the whole org branch is off.
@@ -161,6 +163,16 @@ describe('org services (real Postgres)', () => {
       expect(org.ownerId).toBe(jono.id);
       expect(await ownerRows(org.id)).toEqual([{ userId: jono.id }]);
       expect(await requireOrgRole(jono.id, org.id, 'OWNER')).toEqual({ ok: true, role: 'OWNER' });
+    });
+
+    it('POL-2 (partial) a new org starts with guests at approve, stored explicitly; an outsider asked into its drive is held for approval ([D-OW-41])', async () => {
+      const { org } = await seedNorthwind();
+      const [row] = await db.select({ policies: organizations.policies }).from(organizations).where(eq(organizations.id, org.id));
+      expect(row.policies).toEqual({ guests: 'approve' });
+      expect((await getOrgPolicies(org.id)).guests).toBe('approve');
+      const outsider = await person('Otto Outsider');
+      const drive = await seedDrive(org.ownerId, org.id, { orgVisibility: 'OPEN' });
+      expect(await decideOrgDriveAdmission({ driveId: drive.id, userId: outsider.id })).toEqual({ decision: 'hold', orgId: org.id });
     });
 
     it('ORG-1 (partial) a taken slug creates neither the org nor a membership row', async () => {

@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { DEFAULT_SEAT_ALLOWANCE_CENTS } from '../../billing/wallet-core';
 import {
   DEFAULT_ORG_POLICIES,
+  NEW_ORG_POLICIES,
   MAX_SEAT_ALLOWANCE_CENTS,
   ORG_POLICY_KEYS,
   SUSPENSION_KINDS,
@@ -51,6 +52,12 @@ describe('parseOrgPolicies', () => {
     expect(read.walletFallback).toBe('refuse');
     expect(read.integrationsAllowlist).toEqual([]);
     expect(read.modelAllowlist).toEqual([]);
+  });
+
+  it('POL-2 (partial) guests from outside default to approve: an org that never set the policy queues outsiders for an Owner or Admin ([D-OW-41])', () => {
+    expect(DEFAULT_ORG_POLICIES.guests).toBe('approve');
+    expect(parseOrgPolicies({}).guests).toBe('approve');
+    expect(NEW_ORG_POLICIES).toEqual({ guests: 'approve' });
   });
 
   it('POL-1 (partial) unknown stored keys are ignored', () => {

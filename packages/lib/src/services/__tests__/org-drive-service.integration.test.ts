@@ -112,7 +112,8 @@ beforeEach(async () => {
     { id: lena, email: `lena-${run}@northwind.test`, name: 'Lena Schulz', updatedAt: new Date() },
     { id: chris, email: `chris-${run}@outside.test`, name: 'Chris Rowe', updatedAt: new Date() },
   ]);
-  await db.insert(organizations).values({ id: northwind, name: 'Northwind Labs', slug: `northwind-${run}`, ownerId: jono });
+  // [D-OW-41] Explicitly on: this suite is about drive moves, not the guests default (approve).
+  await db.insert(organizations).values({ id: northwind, name: 'Northwind Labs', slug: `northwind-${run}`, ownerId: jono, policies: { guests: 'on' } });
   // Paid: there is no org trial, and an unpaid org is lapsed from creation (D-OW-30).
   await factories.createOrgSubscription(northwind);
   await db.insert(orgMembers).values([
