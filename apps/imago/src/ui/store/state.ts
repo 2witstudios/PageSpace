@@ -1,11 +1,6 @@
 import { uiSlices } from './slices';
 import type { UiPlugin } from './transactions';
-
-export type UnionToIntersection<U> = (U extends unknown ? (union: U) => void : never) extends (
-  intersection: infer I,
-) => void
-  ? I
-  : never;
+import type { UnionToIntersection } from './types';
 
 /**
  * A section's store slice: its transactions plus the scalar resources it

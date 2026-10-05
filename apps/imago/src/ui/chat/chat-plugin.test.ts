@@ -51,3 +51,14 @@ describe('chatPlugin', () => {
     });
   });
 });
+
+describe('chatPlugin slice', () => {
+  test('its own resources and transactions', () => {
+    assert({
+      given: 'the chat slice',
+      should: 'start with nothing streaming and own the start and end streaming transactions',
+      actual: [chatPlugin.resources(), Object.keys(chatPlugin.transactions).sort()],
+      expected: [{ streaming: null }, ['endStreaming', 'startStreaming']],
+    });
+  });
+});

@@ -67,3 +67,14 @@ describe('toggleFileFolder()', () => {
     });
   });
 });
+
+describe('filesPlugin slice', () => {
+  test('its own resources and transactions', () => {
+    assert({
+      given: 'the files slice',
+      should: 'start with no folder expanded and own the folder toggle',
+      actual: [filesPlugin.resources(), Object.keys(filesPlugin.transactions)],
+      expected: [{ expandedFileIds: [] }, ['toggleFileFolder']],
+    });
+  });
+});

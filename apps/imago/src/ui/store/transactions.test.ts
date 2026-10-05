@@ -1,5 +1,6 @@
 import { beforeEach, describe, test } from 'vitest';
 import { assert } from 'riteway/vitest';
+import { uiSlices } from './slices';
 import { createInitialState, type UiState } from './state';
 import { getUiState, setUiState, subscribeUiState } from './store';
 import { dispatch, mergePlugins, transactions, type UiPlugin } from './transactions';
@@ -55,19 +56,17 @@ describe('mergePlugins()', () => {
   });
 
   test('the shell’s plugins', () => {
+    const shell = new Map(Object.entries(transactions));
+
     assert({
-      given: 'the shell with the stage, tasks, files and chat plugins registered',
-      should: 'expose exactly their transactions',
-      actual: Object.keys(transactions).sort(),
-      expected: [
-        'collapseSection',
-        'endStreaming',
-        'expandSection',
-        'setTaskView',
-        'startStreaming',
-        'toggleFileFolder',
-        'toggleTaskExpanded',
-      ],
+      given: 'the shell with its registered slices',
+      should: 'expose each slice’s own transactions under its name',
+      actual: uiSlices.every((slice) =>
+        Object.entries(slice.transactions).every(
+          ([name, transaction]) => shell.get(name) === transaction,
+        ),
+      ),
+      expected: true,
     });
   });
 });

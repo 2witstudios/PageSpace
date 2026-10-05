@@ -1,5 +1,6 @@
 import { uiSlices } from './slices';
-import type { UiState, UnionToIntersection } from './state';
+import type { UiState } from './state';
+import type { UnionToIntersection } from './types';
 import { getUiState, setUiState } from './store';
 
 /** A pure transaction: the next snapshot from the current one and an argument. */

@@ -1,3 +1,5 @@
+import { readdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, test } from 'vitest';
 import { assert } from 'riteway/vitest';
 import { composeResources, createInitialState, type UiSlice } from './state';
@@ -63,7 +65,51 @@ describe('composeResources()', () => {
   });
 });
 
+const uiRoot = join(__dirname, '..');
+
+/** Section slice modules under ui/: `<section>-plugin.ts` or `store-slice.ts`. */
+const sliceModules = (): readonly string[] =>
+  readdirSync(uiRoot, { recursive: true, encoding: 'utf8' })
+    .filter((file) => /(^|\/)([\w-]+-plugin|store-slice)\.ts$/.test(file));
+
+const isSlice = (value: unknown): value is UiSlice =>
+  typeof value === 'object' &&
+  value !== null &&
+  'resources' in value &&
+  typeof value.resources === 'function' &&
+  'transactions' in value;
+
 describe('uiSlices', () => {
+  test('every slice module is registered', async () => {
+    const registered = new Set<unknown>(uiSlices);
+    const found = new Set<unknown>();
+    const unregistered: string[] = [];
+    for (const file of sliceModules()) {
+      const exports: Record<string, unknown> = await import(/* @vite-ignore */ join(uiRoot, file));
+      for (const [name, value] of Object.entries(exports)) {
+        if (!isSlice(value)) continue;
+        found.add(value);
+        if (!registered.has(value)) unregistered.push(`${file}: ${name}`);
+      }
+    }
+
+    assert({
+      given: 'every section slice module under ui/',
+      should: 'find each exported slice in the registry, and each registered slice in a slice module',
+      actual: { unregistered, outsideSliceModules: uiSlices.filter((slice) => !found.has(slice)).length },
+      expected: { unregistered: [], outsideSliceModules: 0 },
+    });
+  });
+
+  test('the registry has no duplicate slice', () => {
+    assert({
+      given: 'the registry',
+      should: 'list each slice once',
+      actual: new Set(uiSlices).size,
+      expected: uiSlices.length,
+    });
+  });
+
   test('the registry is the shell’s resources', () => {
     assert({
       given: 'the slices listed in the registry',
