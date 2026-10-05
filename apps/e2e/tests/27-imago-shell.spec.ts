@@ -75,7 +75,9 @@ test.describe('signed in', () => {
 
     await page.waitForURL(pathnameIs(imagoPath(homeDriveId)));
     await expect(shell(page)).toHaveAttribute('data-section', 'chat');
-    await expect(shell(page)).toHaveAttribute('data-list', 'closed');
+    // The chat's own list is its history of past chats (IMG-6.5).
+    await expect(shell(page)).toHaveAttribute('data-list', 'list');
+    await expect(listPane(page).getByRole('region', { name: 'Chat history' })).toBeVisible();
     await expect(page.getByRole('region', { name: 'Chat', exact: true })).toBeVisible();
     await expect(railLink(page, 'Chat')).toHaveAttribute('aria-current', 'page');
   });
@@ -108,7 +110,7 @@ test.describe('signed in', () => {
     expect(await probeOf(shell(page))).toBeNull();
   });
 
-  test('× on the files list closes it to width 0 and inert', async ({ page }) => {
+  test('× on the files list leaves Files for the chat and its history', async ({ page }) => {
     await page.goto(imagoPath(homeDriveId, 'files'));
     await expect(shell(page)).toHaveAttribute('data-list', 'list');
     expect(await widthOf(listPane(page))).toBeGreaterThan(0);
@@ -118,10 +120,34 @@ test.describe('signed in', () => {
     await close.click();
 
     await page.waitForURL(pathnameIs(imagoPath(homeDriveId)));
+    await expect(shell(page)).toHaveAttribute('data-section', 'chat');
+    await expect(listPane(page).getByRole('region', { name: 'Chat history' })).toBeVisible();
+    await expect(listPane(page)).not.toHaveAttribute('inert');
+  });
+
+  test('× on the chat history hides it to width 0 and inert; the hamburger brings it back', async ({
+    page,
+  }) => {
+    const path = imagoPath(homeDriveId);
+    await page.goto(path);
+    await expect(shell(page)).toHaveAttribute('data-list', 'list');
+    expect(await widthOf(listPane(page))).toBeGreaterThan(0);
+
+    const hide = await whenHydrated(page, page.getByRole('button', { name: 'Hide Chat history' }));
+    await hide.click();
+
+    // View state, not a route: there is nowhere to step back to from the chat.
+    expect(new URL(page.url()).pathname).toBe(path);
     await expect(shell(page)).toHaveAttribute('data-list', 'closed');
+    await expect(shell(page)).toHaveAttribute('data-list-hidden', 'true');
     await expect.poll(() => widthOf(listPane(page))).toBe(0);
     await expect(listPane(page)).toHaveAttribute('inert', '');
     await expect(listPane(page)).toHaveAttribute('aria-hidden', 'true');
+
+    await page.getByRole('button', { name: 'Show Chat history' }).click();
+    await expect(shell(page)).toHaveAttribute('data-list', 'list');
+    await expect.poll(() => widthOf(listPane(page))).toBeGreaterThan(0);
+    await expect(listPane(page)).not.toHaveAttribute('inert');
   });
 
   test('× on the files tree beside an open page hides it to width 0 and inert', async ({
@@ -151,7 +177,8 @@ test.describe('signed in', () => {
    * open; with none it jumps straight there.
    */
   const paintedListWidths = async (page: Page): Promise<number[]> => {
-    await page.goto(imagoPath(homeDriveId));
+    // Settings has no list, so Files slides its list open from width 0.
+    await page.goto(imagoPath(homeDriveId, 'settings'));
     const files = await whenHydrated(page, railLink(page, 'Files'));
     await page.evaluate(() => {
       const pane = document.querySelector('[data-slot="list"]');
