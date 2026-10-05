@@ -10,6 +10,7 @@ import { getDriveAccessWithDrive, getDriveById, isValidDriveHomePage, updateDriv
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { listAgentDrives } from '@pagespace/lib/services/drive-agent-service';
+import { grantImagoAgentsToOwnedDrives } from '@pagespace/lib/agents/grant-imago-agents';
 import type { ToolExecutionContext } from '../core/types';
 import { resolveActingAgentId, filterDriveIdsByAppTokenScope, driveDeniedByAppToken, isMcpScoped, canActorManageDrive } from './actor-permissions';
 import { syncPublishedHomeRoot } from '@/lib/canvas/publish-page';
@@ -193,6 +194,9 @@ export const driveTools = {
           await allocatePublishSubdomain(created.id, slug, tx);
           return created;
         });
+
+        // After commit: the user's Imago agents join the drive they own (DEC-2).
+        await grantImagoAgentsToOwnedDrives(userId, { driveIds: [newDrive.id] });
 
         // Broadcast drive creation event (only creator receives for new drives)
         await broadcastDriveEvent(

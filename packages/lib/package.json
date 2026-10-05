@@ -104,6 +104,11 @@
       "import": "./dist/agents/builtin-agents.js",
       "require": "./dist/agents/builtin-agents.js"
     },
+    "./agents/grant-imago-agents": {
+      "types": "./dist/agents/grant-imago-agents.d.ts",
+      "import": "./dist/agents/grant-imago-agents.js",
+      "require": "./dist/agents/grant-imago-agents.js"
+    },
     "./agents/provision-imago-agents": {
       "types": "./dist/agents/provision-imago-agents.d.ts",
       "import": "./dist/agents/provision-imago-agents.js",

@@ -8,9 +8,12 @@ import { allocatePublishSubdomain } from '../services/drive-service'
 import { populateUserDrive } from './drive-setup'
 import { installStarterSkills } from '../commands/starter-skill-installer'
 import { provisionMemoryPages } from '../memory/memory-pages'
-import { grantCreatedImagoAgents, provisionImagoAgentsInTransaction } from '../agents/provision-imago-agents'
+import {
+  grantCreatedImagoAgents,
+  provisionImagoAgentsInTransaction,
+  type ProvisionImagoAgentsInTransactionResult,
+} from '../agents/provision-imago-agents'
 import type { DeferredWorkflowTrigger } from '../monitoring/activity-logger'
-import type { BuiltinAgentKey } from '../agents/builtin-agents'
 
 type TransactionType = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -46,7 +49,7 @@ export async function provisionHomeDriveIfNeeded(
 ): Promise<ProvisionHomeDriveResult> {
   const deferredTriggers: DeferredWorkflowTrigger[] = [];
   // Typed by assertion so the assignments inside the transaction callback are not narrowed away.
-  let agents = null as { agents: Record<BuiltinAgentKey, string>; created: BuiltinAgentKey[] } | null;
+  let agents = null as ProvisionImagoAgentsInTransactionResult | null;
   const result = await db.transaction(async (tx: TransactionType) => {
     await tx.execute(sql`SELECT 1 FROM ${users} WHERE ${users.id} = ${userId} FOR UPDATE`);
 
