@@ -8,6 +8,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { getActorInfo, logDriveActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { deleteConversationsForDrive } from '@pagespace/lib/repositories/conversation-cleanup';
+import { transferDriveOwnership } from '@pagespace/lib/services/drive-service';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -80,11 +81,10 @@ export async function POST(req: Request) {
         );
       }
 
-      // Transfer ownership
-      await db
-        .update(drives)
-        .set({ ownerId: newOwnerId })
-        .where(eq(drives.id, driveId));
+      // Transfer ownership. The previous owner's Imago agents lose the grants
+      // their ownership gave them in the same transaction; which agents reach
+      // the drive is now the new owner's decision.
+      await transferDriveOwnership(driveId, userId, newOwnerId);
 
       // Log activity for audit trail
       const actorInfo = await getActorInfo(userId);

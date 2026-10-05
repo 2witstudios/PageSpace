@@ -14,6 +14,7 @@ import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
 import { slugify } from '../utils/utils';
 import { customRoleBelongsToDrive, getMemberCustomRoleId, resolveDriveWideCanEdit } from '../permissions/membership-queries';
 import { isGuestRole } from '../permissions/guest-role';
+import { grantImagoAgentsToOwnedDrives, revokeImagoAgentGrants } from '../agents/grant-imago-agents';
 
 // ============================================================================
 // Types
@@ -218,6 +219,9 @@ export async function createDrive(
     await allocatePublishSubdomain(created.id, slug, tx);
     return created;
   });
+
+  // After commit: addAgentToDrive reads the drive on its own connection.
+  await grantImagoAgentsToOwnedDrives(userId, { driveIds: [newDrive.id] });
 
   return {
     ...newDrive,
@@ -693,5 +697,29 @@ export async function allocatePublishSubdomain(
         return reread[0].subdomain;
       }
     },
+  });
+}
+
+/**
+ * Hand a drive to a new owner. In the same transaction the previous owner's
+ * Imago agents lose the membership their ownership granted (DEC-2): which
+ * agents reach the drive is now the new owner's decision, and the new owner's
+ * own Imago agents are not granted here either. Explicit grants of other
+ * agents stay for the new owner to review. Returns the agentPageIds revoked.
+ * Throws when `fromUserId` does not own the drive.
+ */
+export async function transferDriveOwnership(
+  driveId: string,
+  fromUserId: string,
+  toUserId: string,
+): Promise<string[]> {
+  return db.transaction(async (tx) => {
+    const updated = await tx
+      .update(drives)
+      .set({ ownerId: toUserId, updatedAt: new Date() })
+      .where(and(eq(drives.id, driveId), eq(drives.ownerId, fromUserId)))
+      .returning({ id: drives.id });
+    if (updated.length === 0) throw new Error(`Drive ${driveId} is not owned by ${fromUserId}`);
+    return revokeImagoAgentGrants(tx, fromUserId, driveId);
   });
 }

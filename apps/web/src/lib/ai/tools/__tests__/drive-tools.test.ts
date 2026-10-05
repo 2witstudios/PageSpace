@@ -69,6 +69,10 @@ vi.mock('@pagespace/lib/services/drive-service', () => ({
   listAccessibleDrives: vi.fn().mockResolvedValue([]),
 }));
 
+vi.mock('@pagespace/lib/agents/grant-imago-agents', () => ({
+  grantImagoAgentsToOwnedDrives: vi.fn().mockResolvedValue([]),
+}));
+
 vi.mock('@pagespace/lib/services/drive-member-service', () => ({
   getDriveRecipientUserIds: vi.fn().mockResolvedValue([]),
 }));
@@ -97,6 +101,7 @@ import { listAgentDrives } from '@pagespace/lib/services/drive-agent-service';
 import { getDriveById, isValidDriveHomePage, updateDrive, listAccessibleDrives } from '@pagespace/lib/services/drive-service';
 import { syncPublishedHomeRoot } from '@/lib/canvas/publish-page';
 import { resolveActingAgentId } from '../actor-permissions';
+import { grantImagoAgentsToOwnedDrives } from '@pagespace/lib/agents/grant-imago-agents';
 import type { ToolExecutionContext } from '../../core/types';
 
 const mockDb = vi.mocked(db);
@@ -271,6 +276,17 @@ describe('drive-tools', () => {
         id: 'drive-new',
         name: 'Test Drive',
       });
+    });
+
+    it('given a created workspace, should grant the user\'s Imago agents in it (DEC-2)', async () => {
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+      };
+
+      await driveTools.create_drive.execute!({ name: 'Test Drive' }, context);
+
+      expect(grantImagoAgentsToOwnedDrives).toHaveBeenCalledWith('user-123', { driveIds: ['drive-new'] });
     });
 
     it('does not block a plain user (non-agent) call at the agent gate', async () => {

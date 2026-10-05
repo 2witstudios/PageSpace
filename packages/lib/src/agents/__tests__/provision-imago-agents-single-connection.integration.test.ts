@@ -28,6 +28,7 @@ const previousPoolMax = vi.hoisted(() => {
 import { db } from '@pagespace/db/db';
 import { and, eq, inArray } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
+import { driveAgentMembers } from '@pagespace/db/schema/members';
 import { activityLogs } from '@pagespace/db/schema/monitoring';
 import { userBuiltinAgents } from '@pagespace/db/schema/user-builtin-agents';
 import { factories } from '@pagespace/db/test/factories';
@@ -74,5 +75,25 @@ describe('Imago agent provisioning on a single-connection pool (real Postgres)',
       .where(and(eq(activityLogs.operation, 'create'), inArray(activityLogs.pageId, pointers.map((p) => p.pageId))));
     expect(logs).toHaveLength(BUILTIN_AGENT_KEYS.length);
     for (const log of logs) expect(log.actorEmail).toBe(user.email);
+  }, 20_000);
+
+  it('given DB_POOL_MAX=1 and owned STANDARD drives, should grant the new agents there promptly, after the lock is released', async () => {
+    if (!dbAvailable) return;
+    const user = await factories.createUser();
+    const owned = await factories.createDrive(user.id, { name: 'Owned' });
+
+    // addAgentToDrive reads through the global pool. Run under the Home
+    // transaction it would wait 10 s for the pool's only connection (and could
+    // not see the uncommitted agent pages anyway).
+    const started = Date.now();
+    await provisionHomeDriveIfNeeded(user.id);
+    expect(Date.now() - started).toBeLessThan(PROMPT_MS);
+
+    const pointers = await db.select().from(userBuiltinAgents).where(eq(userBuiltinAgents.userId, user.id));
+    const grants = await db
+      .select({ agentPageId: driveAgentMembers.agentPageId })
+      .from(driveAgentMembers)
+      .where(and(eq(driveAgentMembers.driveId, owned.id), inArray(driveAgentMembers.agentPageId, pointers.map((p) => p.pageId))));
+    expect(grants).toHaveLength(BUILTIN_AGENT_KEYS.length);
   }, 20_000);
 });

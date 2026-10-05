@@ -14,6 +14,11 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   added when you sign in (including with a passkey), and one you delete comes back the next time
   you sign in. Existing accounts get them (and a Home drive, if they lack one) from a
   one-time backfill, without having to sign in.
+- **Imago agents can read the drives you own** — when your Imago agents are first set up, and
+  whenever you create a drive, they are added to each regular drive you own as members: they can
+  read its pages but not private ones, and cannot edit, share or delete. They are never added to
+  drives you only belong to. A drive whose access you remove stays removed, and when you hand a
+  drive to a new owner your Imago agents leave it; the new owner decides which agents get in.
 - **Give an agent its own account** — in an agent's settings (Accounts), or in your personal
   settings for your global assistant, add an API key for a site so the agent can call that site's
   API for you. The agent refers to the account by name and never sees the key: PageSpace keeps it in
