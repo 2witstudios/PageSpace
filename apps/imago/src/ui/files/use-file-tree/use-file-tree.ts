@@ -19,6 +19,7 @@ import { getUiState, useUiState } from '../../store/store';
 import { dispatch, transactions } from '../../store/transactions';
 import { fileNodesFrom } from '../file-model/from-api';
 import type { FileNode, PageResponse, PageTreeResponse } from '../file-model/file-node';
+import { listedIdsFrom } from '../tree-view/tree-view';
 import { composeTree, type LoadedChildren, type TreeAnswer } from '../file-tree/file-tree';
 
 /**
@@ -52,9 +53,17 @@ export type FileTree = {
   /** Expands or collapses a page; expanding loads its children. */
   readonly toggle: (pageId: string) => void;
   readonly loadChildren: (pageId: string) => Promise<LoadResult>;
-  /** Void action: asks the server for the tree again after a failure. */
+  /** Void action: asks the server for the tree again (after a failure, or once a create answers). */
   readonly retry: () => void;
+  /**
+   * Every page the drive tree answer lists. A children load may name pages it
+   * does not (apps/web's children route checks only the parent); a view
+   * draws only these.
+   */
+  readonly listedIds: ReadonlySet<string>;
 };
+
+const NOTHING_LISTED: ReadonlySet<string> = new Set();
 
 const OFFLINE = 'Could not reach PageSpace';
 const NO_DRIVE = 'No drive is open';
@@ -172,6 +181,17 @@ export const useFileTree = (driveId: string | null): FileTree => {
   );
 
   const retry = useCallback(() => void mutate(), [mutate]);
+  const listedIds = useMemo(() => (data === undefined ? NOTHING_LISTED : listedIdsFrom(data.pages)), [data]);
 
-  return { nodes, error: error as unknown, isLoading, expandedIds, loadingIds, toggle, loadChildren, retry };
+  return {
+    nodes,
+    error: error as unknown,
+    isLoading,
+    expandedIds,
+    loadingIds,
+    toggle,
+    loadChildren,
+    retry,
+    listedIds,
+  };
 };

@@ -12,6 +12,10 @@ import {
   ChevronDown,
   ChevronRight,
   Ellipsis,
+  File,
+  FileCode,
+  FileImage,
+  FileSpreadsheet,
   FileText,
   Files,
   Flag,
@@ -83,6 +87,10 @@ describe('icon names', () => {
         lock: Lock,
         stop: Square,
         tool: Wrench,
+        canvas: FileImage,
+        sheet: FileSpreadsheet,
+        code: FileCode,
+        file: File,
       },
     });
   });
