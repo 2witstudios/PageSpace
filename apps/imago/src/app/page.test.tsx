@@ -1,4 +1,4 @@
-import { beforeEach, describe, test, vi } from 'vitest';
+import { afterEach, beforeEach, describe, test, vi } from 'vitest';
 import { assert } from 'riteway/vitest';
 import { isRedirectError } from 'next/dist/client/components/redirect-error';
 import { getURLFromRedirectError } from 'next/dist/client/components/redirect';
@@ -29,6 +29,23 @@ describe('imago index page', () => {
     getHomeDrive.mockReset();
     request.headers = new Headers({ host: 'pagespace.ai', 'x-forwarded-proto': 'https' });
     getViewer.mockResolvedValue({ userId: 'user-1', role: 'user', sessionId: 'session-1' });
+    vi.stubEnv('WEB_APP_URL', 'https://pagespace.ai');
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  test('a spoofed Host header', async () => {
+    getHomeDrive.mockResolvedValue(null);
+    request.headers = new Headers({ host: 'evil.example', 'x-forwarded-proto': 'http' });
+
+    assert({
+      given: 'a viewer with no Home drive on a request whose Host names another site',
+      should: 'send them to classic on the configured origin',
+      actual: await destination(),
+      expected: 'https://pagespace.ai/dashboard',
+    });
   });
 
   test('a viewer with a Home drive', async () => {

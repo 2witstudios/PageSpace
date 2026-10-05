@@ -45,6 +45,8 @@ const redirectTarget = async (): Promise<string | null> => {
 describe('getViewer() (unit)', () => {
   beforeEach(() => {
     seams.validateSession.mockReset();
+    // The origin imago's redirects are built on: configuration, never the request.
+    vi.stubEnv('WEB_APP_URL', 'https://pagespace.ai');
   });
 
   afterEach(() => {
@@ -102,6 +104,24 @@ describe('getViewer() (unit)', () => {
         target: 'https://pagespace.ai/auth/signin?next=%2Fimago%2Fdrive-1%2Ftasks',
         calls: 0,
       },
+    });
+  });
+
+  test('a spoofed Host header', async () => {
+    seams.headers = new Headers({
+      host: 'evil.example',
+      'x-forwarded-host': 'evil.example',
+      'x-forwarded-proto': 'http',
+      [PATHNAME_HEADER]: '/drive-1/tasks',
+      cookie: 'session=ps_sess_revoked',
+    });
+    seams.validateSession.mockResolvedValue(null);
+
+    assert({
+      given: 'a rejected session on a request whose Host and forwarded headers name another site',
+      should: 'still redirect to sign-in on the configured origin',
+      actual: await redirectTarget(),
+      expected: 'https://pagespace.ai/auth/signin?next=%2Fimago%2Fdrive-1%2Ftasks',
     });
   });
 

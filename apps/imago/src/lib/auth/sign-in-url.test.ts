@@ -3,9 +3,9 @@ import { assert } from 'riteway/vitest';
 import {
   basePathRelative,
   imagoReturnPath,
-  requestOrigin,
   signInLocation,
   signInOrigin,
+  webAppOrigin,
 } from './sign-in-url';
 
 const nextOf = (location: string): string | null => new URL(location).searchParams.get('next');
@@ -110,64 +110,75 @@ describe('signInLocation()', () => {
   });
 });
 
-describe('requestOrigin()', () => {
-  const headers = (init: Record<string, string>) => new Headers(init);
+describe('webAppOrigin()', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
 
-  test('origin from the request', () => {
+  const thrown = (run: () => unknown): string | null => {
+    try {
+      run();
+      return null;
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
+    }
+  };
+
+  test('production', () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('WEB_APP_URL', 'https://pagespace.ai/some/path?x=1');
+    vi.stubEnv('NEXT_PUBLIC_WEB_APP_URL', 'http://localhost:3000');
+
     assert({
-      given: 'a Host header and a forwarded https proto',
-      should: 'build the https origin',
-      actual: requestOrigin(headers({ host: 'pagespace.ai', 'x-forwarded-proto': 'https' })),
+      given: 'a production server with WEB_APP_URL configured',
+      should: 'use only that URL’s origin, never the dev setting',
+      actual: webAppOrigin(),
       expected: 'https://pagespace.ai',
-    });
-
-    assert({
-      given: 'a proxy chain of forwarded protos',
-      should: 'use the first (client-facing) one',
-      actual: requestOrigin(headers({ host: 'pagespace.ai', 'x-forwarded-proto': 'https, http' })),
-      expected: 'https://pagespace.ai',
-    });
-
-    assert({
-      given: 'a Host header and no forwarded proto',
-      should: 'default to http',
-      actual: requestOrigin(headers({ host: 'localhost:3006' })),
-      expected: 'http://localhost:3006',
     });
   });
 
-  test('untrusted values', () => {
+  test('tests and any other non-development env', () => {
+    vi.stubEnv('NODE_ENV', 'test');
+    vi.stubEnv('WEB_APP_URL', 'https://tenant.pagespace.ai');
+
     assert({
-      given: 'a forwarded proto that is not http or https',
-      should: 'default to http',
-      actual: requestOrigin(headers({ host: 'pagespace.ai', 'x-forwarded-proto': 'javascript' })),
-      expected: 'http://pagespace.ai',
+      given: 'a NODE_ENV other than development',
+      should: 'use WEB_APP_URL',
+      actual: webAppOrigin(),
+      expected: 'https://tenant.pagespace.ai',
+    });
+  });
+
+  test('a missing or misconfigured WEB_APP_URL', () => {
+    vi.stubEnv('NODE_ENV', 'production');
+
+    vi.stubEnv('WEB_APP_URL', '');
+    assert({
+      given: 'no WEB_APP_URL in production',
+      should: 'refuse to build an origin rather than fall back to the request',
+      actual: thrown(() => webAppOrigin()),
+      expected: 'WEB_APP_URL is not set: imago builds its sign-in and classic redirects from it',
     });
 
-    let error: unknown;
-    try {
-      requestOrigin(headers({ host: 'evil.com/path@x' }));
-    } catch (caught) {
-      error = caught;
-    }
+    vi.stubEnv('WEB_APP_URL', 'javascript:alert(1)');
     assert({
-      given: 'a Host header that is not a bare host',
-      should: 'refuse to build an origin from it',
-      actual: error instanceof Error,
-      expected: true,
-    });
-
-    let missing: unknown;
-    try {
-      requestOrigin(headers({}));
-    } catch (caught) {
-      missing = caught;
-    }
-    assert({
-      given: 'no Host header',
+      given: 'a non-http scheme',
       should: 'refuse to build an origin',
-      actual: missing instanceof Error,
-      expected: true,
+      actual: thrown(() => webAppOrigin()),
+      expected: 'WEB_APP_URL is not a valid http(s) URL: "javascript:alert(1)"',
+    });
+  });
+
+  test('next dev', () => {
+    vi.stubEnv('NODE_ENV', 'development');
+    vi.stubEnv('WEB_APP_URL', 'https://pagespace.ai');
+    vi.stubEnv('NEXT_PUBLIC_WEB_APP_URL', '');
+
+    assert({
+      given: 'next dev',
+      should: "use apps/web's dev origin, which serves sign-in and classic, as signInOrigin does",
+      actual: webAppOrigin(),
+      expected: 'http://localhost:3000',
     });
   });
 });

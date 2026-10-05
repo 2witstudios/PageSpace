@@ -92,13 +92,36 @@ export const DEFAULT_DEV_WEB_APP_URL = 'http://localhost:3000';
  */
 export function signInOrigin(origin: string): string {
   if (process.env.NODE_ENV !== 'development') return origin;
+  return devWebAppOrigin();
+}
 
-  const value = process.env.NEXT_PUBLIC_WEB_APP_URL || DEFAULT_DEV_WEB_APP_URL;
+/** apps/web's origin under next dev: NEXT_PUBLIC_WEB_APP_URL, or its default dev origin. */
+const devWebAppOrigin = (): string =>
+  httpOrigin('NEXT_PUBLIC_WEB_APP_URL', process.env.NEXT_PUBLIC_WEB_APP_URL || DEFAULT_DEV_WEB_APP_URL);
+
+const httpOrigin = (name: string, value: string): string => {
   const url = parseURL(value);
   if (url?.protocol !== 'http:' && url?.protocol !== 'https:') {
-    throw new Error(`NEXT_PUBLIC_WEB_APP_URL is not a valid http(s) URL: "${value}"`);
+    throw new Error(`${name} is not a valid http(s) URL: "${value}"`);
   }
   return url.origin;
+};
+
+/**
+ * The origin server code builds its absolute redirects on (classic's sign-in
+ * from getViewer(), classic's /dashboard from the index page), from
+ * configuration only. The request's Host and forwarded headers are the
+ * client's to write, so they never choose where imago sends anyone.
+ * WEB_APP_URL is apps/web's public URL, which in production is also imago's
+ * origin (both are served on one origin); next dev uses apps/web's dev
+ * origin, as signInOrigin() does. A missing or invalid value is a deploy
+ * error, so it throws rather than fall back to the request.
+ */
+export function webAppOrigin(): string {
+  if (process.env.NODE_ENV === 'development') return devWebAppOrigin();
+  const value = process.env.WEB_APP_URL;
+  if (!value) throw new Error('WEB_APP_URL is not set: imago builds its sign-in and classic redirects from it');
+  return httpOrigin('WEB_APP_URL', value);
 }
 
 const parseURL = (value: string): URL | null => {
@@ -117,22 +140,4 @@ export function basePathRelative(pathname: string): string | null {
   if (pathname === IMAGO_BASE_PATH) return '/';
   if (!pathname.startsWith(`${IMAGO_BASE_PATH}/`)) return null;
   return pathname.slice(IMAGO_BASE_PATH.length);
-}
-
-// A bare host with an optional port: no path, userinfo or scheme can ride in.
-const BARE_HOST = /^[a-z0-9.-]+(:\d{1,5})?$|^\[[0-9a-f:.]+\](:\d{1,5})?$/i;
-
-/**
- * The origin a request arrived on, for building a redirect from a server
- * component. Same derivation Next uses for `req.url` in middleware: the Host
- * header, and the scheme the edge proxy forwarded.
- */
-export function requestOrigin(headers: Headers): string {
-  const host = headers.get('host');
-  if (!host || !BARE_HOST.test(host)) {
-    throw new Error('Cannot build a sign-in redirect: the request has no usable Host header');
-  }
-  const forwardedProto = headers.get('x-forwarded-proto')?.split(',')[0]?.trim().toLowerCase();
-  const proto = forwardedProto === 'https' ? 'https' : 'http';
-  return `${proto}://${host}`;
 }

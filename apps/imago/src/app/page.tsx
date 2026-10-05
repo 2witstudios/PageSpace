@@ -1,8 +1,7 @@
-import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { getHomeDrive } from '@pagespace/lib/services/drive-service';
 import { getViewer } from '@/lib/auth/get-viewer';
-import { requestOrigin } from '@/lib/auth/sign-in-url';
+import { webAppOrigin } from '@/lib/auth/sign-in-url';
 
 /** Classic's landing page, outside imago's basePath. */
 const CLASSIC_HOME = '/dashboard';
@@ -16,5 +15,5 @@ export default async function ImagoIndex(): Promise<never> {
   if (home) redirect(`/${encodeURIComponent(home.id)}`);
   // Only until the Home backfill (IMG-4.3/4.4) reaches every user: classic
   // works without a Home drive, imago's stages all need a drive.
-  redirect(`${requestOrigin(await headers())}${CLASSIC_HOME}`);
+  redirect(`${webAppOrigin()}${CLASSIC_HOME}`);
 }
