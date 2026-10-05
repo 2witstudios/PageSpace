@@ -3,6 +3,7 @@ import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isPrin
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { checkDriveAccess, listDriveMembers, getDriveOwnerAsMember } from '@pagespace/lib/services/drive-member-service';
 import { driveInviteRepository } from '@/lib/repositories/drive-invite-repository';
+import { listDrivePageLinkGuests } from '@pagespace/lib/permissions/drive-member-labels';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 
@@ -52,10 +53,14 @@ export async function GET(
     const pendingInvites = canSeePending
       ? await driveInviteRepository.findUnconsumedInvitesByDrive(driveId)
       : [];
+    // D-OW-24 page-link guests are not members; the lead and admins see them listed apart
+    // (UI-5), by name with the pages they hold. Always an array, like pendingInvites.
+    const guests = canSeePending ? await listDrivePageLinkGuests(driveId) : [];
 
     return NextResponse.json({
       members,
       pendingInvites,
+      guests,
       currentUserRole: access.isOwner ? 'OWNER' : (access.isAdmin ? 'ADMIN' : 'MEMBER')
     });
   } catch (error) {

@@ -61,6 +61,11 @@ vi.mock('@pagespace/db/operators', () => {
 
 // The one org-aware membership enumeration (its decision is tested in drive-audience-decision.test.ts
 // and against Postgres in drive-gate-primitives.integration.test.ts).
+vi.mock('../../permissions/drive-member-labels', () => ({
+  driveOrgIdOf: vi.fn().mockResolvedValue(null),
+  acceptedOrgMemberIds: vi.fn().mockResolvedValue(new Set()),
+  isDriveGuest: (input: { driveOrgId: string | null; isOrgMember: boolean }) => input.driveOrgId !== null && !input.isOrgMember,
+}));
 vi.mock('../../permissions/drive-audience', () => ({
   listDriveAudience: vi.fn(async () => []),
 }));

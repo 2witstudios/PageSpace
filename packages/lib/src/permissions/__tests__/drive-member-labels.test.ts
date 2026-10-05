@@ -1,0 +1,13 @@
+import { describe, it, expect } from 'vitest';
+import { isDriveGuest } from '../drive-member-labels';
+
+describe('drive-member-labels: who is a guest', () => {
+  it('DRV-8 (partial) on an org drive a member with no accepted org role is a guest; an org member is not', () => {
+    expect(isDriveGuest({ driveOrgId: 'org-northwind', isOrgMember: false })).toBe(true);
+    expect(isDriveGuest({ driveOrgId: 'org-northwind', isOrgMember: true })).toBe(false);
+  });
+
+  it('DRV-8 (partial) a personal drive has no org, so nobody on it is a guest', () => {
+    expect(isDriveGuest({ driveOrgId: null, isOrgMember: false })).toBe(false);
+  });
+});

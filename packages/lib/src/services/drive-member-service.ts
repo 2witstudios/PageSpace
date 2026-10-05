@@ -10,6 +10,7 @@ import { eq, and, sql, isNotNull } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { driveMembers, userProfiles, driveRoles, pagePermissions } from '@pagespace/db/schema/members';
+import { acceptedOrgMemberIds, driveOrgIdOf, isDriveGuest, type DriveMemberSource } from '../permissions/drive-member-labels';
 import { decryptUserRow, decryptUsersByIdOnce } from '../auth/user-repository';
 import { loadEffectiveDriveMembership } from '../permissions/org-drive-membership';
 import { isDriveLead } from '../permissions/drive-relationship';
@@ -24,6 +25,10 @@ export interface MemberWithDetails {
   id: string;
   userId: string;
   role: 'OWNER' | 'ADMIN' | 'MEMBER';
+  /** How their standing came to be: an invitation, org membership (DRV-5), or the drive's lead. */
+  source: DriveMemberSource;
+  /** DRV-8: a member of an ORG drive with no accepted role in its org, labeled a guest (UI-5). */
+  isGuest: boolean;
   invitedBy: string | null;
   invitedAt: Date | null;
   acceptedAt: Date | null;
@@ -162,6 +167,7 @@ export async function listDriveMembers(driveId: string): Promise<MemberWithDetai
       id: driveMembers.id,
       userId: driveMembers.userId,
       role: driveMembers.role,
+      source: driveMembers.source,
       invitedBy: driveMembers.invitedBy,
       invitedAt: driveMembers.invitedAt,
       acceptedAt: driveMembers.acceptedAt,
@@ -224,8 +230,13 @@ export async function listDriveMembers(driveId: string): Promise<MemberWithDetai
   // even if the same user is ever joined in on more than one row.
   const decryptedUsersById = await decryptUsersByIdOnce(members.map((member) => member.user));
 
+  // DRV-8: on an org drive, a member with no accepted role in its org is a guest.
+  const driveOrgId = await driveOrgIdOf(driveId);
+  const orgMemberIds = driveOrgId ? await acceptedOrgMemberIds(driveOrgId, memberUserIds) : new Set<string>();
+
   return members.map((member) => ({
     ...member,
+    isGuest: isDriveGuest({ driveOrgId, isOrgMember: orgMemberIds.has(member.userId) }),
     user: member.user ? decryptedUsersById.get(member.user.id) ?? member.user : member.user,
     role: member.role as 'OWNER' | 'ADMIN' | 'MEMBER',
     permissionCounts: permMap.get(member.userId) ?? { view: 0, edit: 0, share: 0 },
@@ -261,6 +272,8 @@ export async function getDriveOwnerAsMember(driveId: string): Promise<MemberWith
     id: `owner-${row.id}`,
     userId: row.id,
     role: 'OWNER',
+    source: 'lead',
+    isGuest: false,
     invitedBy: null,
     invitedAt: null,
     acceptedAt: null,
@@ -313,6 +326,7 @@ export async function getDriveMemberDetails(
       id: driveMembers.id,
       userId: driveMembers.userId,
       role: driveMembers.role,
+      source: driveMembers.source,
       customRoleId: driveMembers.customRoleId,
       invitedBy: driveMembers.invitedBy,
       invitedAt: driveMembers.invitedAt,
@@ -340,8 +354,11 @@ export async function getDriveMemberDetails(
     return null;
   }
 
+  const driveOrgId = await driveOrgIdOf(driveId);
+  const isOrgMember = driveOrgId ? (await acceptedOrgMemberIds(driveOrgId, [targetUserId])).has(targetUserId) : false;
   return {
     ...memberData[0],
+    isGuest: isDriveGuest({ driveOrgId, isOrgMember }),
     // Decrypt the joined user's PII at the edge (legacy plaintext passes through).
     user: await decryptUserRow(memberData[0].user),
     role: memberData[0].role as 'OWNER' | 'ADMIN' | 'MEMBER',

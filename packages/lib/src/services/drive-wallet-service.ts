@@ -68,6 +68,7 @@ import {
   type PoolFacts,
 } from '../billing/wallet-views';
 import { recordOrgAuditEventAfterCommit } from '../audit/org-audit';
+import { decryptUserRow } from '../auth/user-repository';
 
 export interface WalletServiceError {
   ok: false;
@@ -702,9 +703,14 @@ async function capsOnWallet(walletId: string): Promise<ConsumerCapView[]> {
     .from(walletConsumerCaps)
     .leftJoin(users, sql`${walletConsumerCaps.consumerKey} = 'user:' || ${users.id}`)
     .where(eq(walletConsumerCaps.walletId, walletId));
-  return rows
-    .filter((r) => r.consumerKey.startsWith('user:'))
-    .map((r) => capView({ userId: r.consumerKey.slice('user:'.length), name: r.name, dailyCapCents: r.dailyCapCents, monthlyCapCents: r.monthlyCapCents }))
+  const people = rows.filter((r) => r.consumerKey.startsWith('user:'));
+  const views = await Promise.all(people.map(async (r) => capView({
+    userId: r.consumerKey.slice('user:'.length),
+    name: (await decryptUserRow({ name: r.name })).name ?? null,
+    dailyCapCents: r.dailyCapCents,
+    monthlyCapCents: r.monthlyCapCents,
+  })));
+  return views
     .sort((a, b) => a.displayName.localeCompare(b.displayName));
 }
 

@@ -2619,6 +2619,11 @@
       "import": "./dist/permissions/org-access.js",
       "require": "./dist/permissions/org-access.js"
     },
+    "./permissions/drive-member-labels": {
+      "types": "./dist/permissions/drive-member-labels.d.ts",
+      "import": "./dist/permissions/drive-member-labels.js",
+      "require": "./dist/permissions/drive-member-labels.js"
+    },
     "./permissions/wallet-access": {
       "types": "./dist/permissions/wallet-access.d.ts",
       "import": "./dist/permissions/wallet-access.js",
