@@ -2,7 +2,7 @@
 // the pages the drive tree listed, the creates still in flight, and the
 // filter's matches with the path down to them.
 
-import type { PageTypeValue } from '@pagespace/lib/client-safe';
+import { getPageTypeConfig, PageType, type PageTypeValue } from '@pagespace/lib/client-safe';
 import type { IconName } from '../../components/icon/icon-names';
 import type { FileNode, PageTreeResponse } from '../file-model/file-node';
 import type { PendingFile } from '../files-plugin/files-plugin';
@@ -21,6 +21,24 @@ const icons: Readonly<Record<PageTypeValue, IconName>> = {
 };
 
 export const fileIcon = (pageType: PageTypeValue): IconName => icons[pageType];
+
+const kindOf = (type: PageType): string => getPageTypeConfig(type).displayName;
+
+/** Each page type's name, as classic says it (page-types.config displayName). */
+const kinds: Readonly<Record<PageTypeValue, string>> = {
+  FOLDER: kindOf(PageType.FOLDER),
+  DOCUMENT: kindOf(PageType.DOCUMENT),
+  CHANNEL: kindOf(PageType.CHANNEL),
+  AI_CHAT: kindOf(PageType.AI_CHAT),
+  CANVAS: kindOf(PageType.CANVAS),
+  FILE: kindOf(PageType.FILE),
+  SHEET: kindOf(PageType.SHEET),
+  TASK_LIST: kindOf(PageType.TASK_LIST),
+  CODE: kindOf(PageType.CODE),
+};
+
+/** What kind of page a node is, for the folder browser's Kind column. */
+export const fileKind = (pageType: PageTypeValue): string => kinds[pageType];
 
 /** Every page id the drive tree answer nests, at any depth. */
 export const listedIdsFrom = (pages: readonly PageTreeResponse[]): ReadonlySet<string> => {

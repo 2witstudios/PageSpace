@@ -7,7 +7,7 @@ import type { UiState } from '../../store/state';
 import { dispatch, transactions } from '../../store/transactions';
 import { ListPane } from '../../frame/list-pane/list-pane';
 import type { ListPane as ListPaneVariant } from '../../frame/stage/stage';
-import { fileHref, useCreateFile } from '../create-file/create-file';
+import { fileHref, isCreatingIn, useCreateFile } from '../create-file/create-file';
 import { renderTreeRows } from '../tree-row/tree-row.render';
 import {
   disclosableIds,
@@ -74,7 +74,7 @@ export function FilesPane({ driveId, selectedPageId, variant, title, closeHref }
   const hrefFor = useCallback((pageId: string) => fileHref(driveId, pageId), [driveId]);
 
   // + is off until the tree loads, and while this drive's create is unanswered.
-  const creating = pending.some((file) => file.driveId === driveId && file.pageId === null);
+  const creating = isCreatingIn(pending, driveId);
   const actions = renderNewPageButton({ create: () => void create(), disabled: drawn === undefined || creating });
   const body = (() => {
     if (drawn === undefined) {

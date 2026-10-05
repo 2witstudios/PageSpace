@@ -30,3 +30,14 @@ export const dayLabel = (iso: string, today: string): string => {
   const at = new Date(day);
   return `${months[at.getUTCMonth()] ?? ''} ${at.getUTCDate()}`;
 };
+
+/**
+ * When a file last changed, as a Finder list says it: `Today, 9:12 AM`,
+ * `Yesterday, 11:00 PM`, `Sep 18` this year, `Dec 31, 2025` before it.
+ */
+export const modifiedLabel = (iso: string, today: string): string => {
+  const day = dayLabel(iso, today);
+  if (day === 'Today' || day === 'Yesterday') return `${day}, ${formatTime(iso)}`;
+  const year = dayOf(iso).slice(0, 4);
+  return year === today.slice(0, 4) ? day : `${day}, ${year}`;
+};

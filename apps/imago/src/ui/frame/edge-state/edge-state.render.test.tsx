@@ -25,6 +25,28 @@ describe('renderEmptyState()', () => {
   });
 });
 
+describe('renderEmptyState() with an action', () => {
+  test('an empty place the viewer can fill', () => {
+    assert({
+      given: 'a title, a detail and an action',
+      should: 'put the action under the two lines, inside the same quiet empty object',
+      actual: renderToStaticMarkup(
+        renderEmptyState({
+          title: 'This folder is empty',
+          detail: 'Pages you add here show up in it.',
+          action: <button type="button">New page</button>,
+        }),
+      ),
+      expected:
+        '<div class="flex h-full flex-col items-center justify-center gap-2 p-4 text-center" data-empty="">' +
+        '<h2 class="m-0 text-md font-semibold text-ink">This folder is empty</h2>' +
+        '<p class="m-0 text-sm text-ink-muted">Pages you add here show up in it.</p>' +
+        '<button type="button">New page</button>' +
+        '</div>',
+    });
+  });
+});
+
 describe('renderLoadingState()', () => {
   test('an object on its way', () => {
     assert({

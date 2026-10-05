@@ -5,6 +5,7 @@ import { assert } from 'riteway/vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { ReactElement, ReactNode } from 'react';
 import { ChannelThread } from '@/ui/messages/thread-view/channel-thread';
+import { FileObject } from '@/ui/files/file-object/file-object';
 import { PageObject } from '@/ui/files/page-object/page-object';
 import { ConversationObject } from '@/ui/messages/conversation-object/conversation-object';
 import { DmThread } from '@/ui/messages/thread-view/dm-thread';
@@ -269,9 +270,11 @@ describe('the stage routes', () => {
         }
         if (route.object === 'page-object') {
           // The gate settles what the id names in the browser; its suite proves the edges.
-          const gate = element as ReactElement<{ children: ReactNode }>;
-          const { children, ...gateProps } = gate.props;
-          return [gate.type, gateProps, renderToStaticMarkup(children)];
+          // Behind it, the switch opens a folder in the folder browser and any other page in its view.
+          const gate = element as ReactElement<{ children: ReactElement<{ children: ReactNode }> }>;
+          const { children: object, ...gateProps } = gate.props;
+          const { children: view, ...objectProps } = object.props;
+          return [gate.type, gateProps, object.type, objectProps, renderToStaticMarkup(view)];
         }
         return element === null ? null : renderToStaticMarkup(element);
       }),
@@ -280,14 +283,14 @@ describe('the stage routes', () => {
     assert({
       given: 'each stage route for a signed-in viewer',
       should:
-        'render nothing for the stages with no object, the channel thread for the viewer on a channel, a page behind the gate that settles its id, the DM thread behind the gate that settles the conversation, and only the object’s placeholder otherwise',
+        'render nothing for the stages with no object, the channel thread for the viewer on a channel, a page behind the gate that settles its id and the switch that opens a folder in the folder browser, the DM thread behind the gate that settles the conversation, and only the object’s placeholder otherwise',
       actual: rendered,
       expected: routes.map((route) => {
         if (route.object === 'channel-thread') {
           return [true, { driveId: 'drive-1', pageId: 'page-1', viewerId: 'user-1' }];
         }
         if (route.object === 'page-object') {
-          return [PageObject, { driveId: 'drive-1', pageId: 'page-1' }, placeholder('Page')];
+          return [PageObject, { driveId: 'drive-1', pageId: 'page-1' }, FileObject, { driveId: 'drive-1', pageId: 'page-1' }, placeholder('Page')];
         }
         if (route.object === 'conversation-object') {
           return [ConversationObject, { conversationId: 'c-1' }, true, { conversationId: 'c-1', viewerId: 'user-1' }];

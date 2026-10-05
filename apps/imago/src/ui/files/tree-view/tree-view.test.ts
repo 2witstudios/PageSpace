@@ -9,9 +9,11 @@ import {
   createParentFor,
   disclosableIds,
   fileIcon,
+  fileKind,
   filterTree,
   listedIdsFrom,
   onlyListed,
+  pathTo,
   settledKeys,
   withPendingCreates,
 } from './tree-view';
@@ -305,6 +307,44 @@ describe('settledKeys()', () => {
         'd1',
       ),
       expected: ['tmp-2'],
+    });
+  });
+});
+
+describe('pathTo()', () => {
+  const nodes = fileNodesFrom([
+    treeRow('work', 'FOLDER', [treeRow('launch', 'FOLDER', [treeRow('brief', 'DOCUMENT', [], { title: 'Brief' })], { title: 'Launch' })], {
+      title: 'Work',
+    }),
+  ]);
+  const names = (id: string) => pathTo(nodes, id)?.map((node) => node.name);
+
+  test('from the top of the drive to a node', () => {
+    assert({
+      given: 'a page two folders down, a folder one down and a top-level folder',
+      should: 'list every node above it, top first, then the node itself',
+      actual: [names('brief'), names('launch'), names('work')],
+      expected: [['Work', 'Launch', 'Brief'], ['Work', 'Launch'], ['Work']],
+    });
+  });
+
+  test('an id the tree does not hold', () => {
+    assert({
+      given: 'an id nowhere in the tree',
+      should: 'find no path',
+      actual: pathTo(nodes, 'nope'),
+      expected: undefined,
+    });
+  });
+});
+
+describe('fileKind()', () => {
+  test('every page type', () => {
+    assert({
+      given: 'each PageSpace page type',
+      should: 'name it as classic does',
+      actual: (['FOLDER', 'DOCUMENT', 'CHANNEL', 'AI_CHAT', 'CANVAS', 'FILE', 'SHEET', 'TASK_LIST', 'CODE'] as const).map(fileKind),
+      expected: ['Folder', 'Document', 'Channel', 'AI Chat', 'Canvas', 'File', 'Sheet', 'Task List', 'Code'],
     });
   });
 });

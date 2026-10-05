@@ -6,6 +6,9 @@ import { fileNodesFrom } from './from-api';
 import { pageRow, treeRow } from './fixtures';
 import type { PageResponse } from './file-node';
 
+/** When every fixture row last changed. */
+const AT = '2026-10-01T00:00:00.000Z';
+
 describe('PageResponse', () => {
   test('parity with the pages table', () => {
     // Both routes answer whole pages rows; a column renamed there fails here.
@@ -16,6 +19,7 @@ describe('PageResponse', () => {
       parentId: true,
       position: true,
       isTrashed: true,
+      updatedAt: true,
     };
 
     assert({
@@ -51,11 +55,11 @@ describe('fileNodesFrom()', () => {
           id: 'f1',
           name: 'Specs',
           kind: 'folder',
-          pageType: 'FOLDER',
+          pageType: 'FOLDER', updatedAt: AT,
           count: 2,
           children: [
-            { id: 'doc', name: 'Title doc', kind: 'page', pageType: 'DOCUMENT' },
-            { id: 'sheet', name: 'Title sheet', kind: 'page', pageType: 'SHEET' },
+            { id: 'doc', name: 'Title doc', kind: 'page', pageType: 'DOCUMENT', updatedAt: AT },
+            { id: 'sheet', name: 'Title sheet', kind: 'page', pageType: 'SHEET', updatedAt: AT },
           ],
         },
       ],
@@ -88,7 +92,7 @@ describe('fileNodesFrom()', () => {
       given: 'a folder the tree shows with no children',
       should: 'carry an empty children list and a zero count',
       actual: fileNodesFrom([treeRow('f1', 'FOLDER')]),
-      expected: [{ id: 'f1', name: 'Title f1', kind: 'folder', pageType: 'FOLDER', count: 0, children: [] }],
+      expected: [{ id: 'f1', name: 'Title f1', kind: 'folder', pageType: 'FOLDER', updatedAt: AT, count: 0, children: [] }],
     });
   });
 
@@ -104,14 +108,14 @@ describe('fileNodesFrom()', () => {
           id: 'doc',
           name: 'Title doc',
           kind: 'page',
-          pageType: 'DOCUMENT',
+          pageType: 'DOCUMENT', updatedAt: AT,
           children: [
             {
               id: 'sub',
               name: 'Title sub',
               kind: 'page',
-              pageType: 'CANVAS',
-              children: [{ id: 'deep', name: 'Title deep', kind: 'page', pageType: 'CODE' }],
+              pageType: 'CANVAS', updatedAt: AT,
+              children: [{ id: 'deep', name: 'Title deep', kind: 'page', pageType: 'CODE', updatedAt: AT }],
             },
           ],
         },
@@ -127,8 +131,8 @@ describe('fileNodesFrom()', () => {
       should: 'leave children and count off, so a view knows to load them rather than show an empty folder',
       actual: fileNodesFrom(rows),
       expected: [
-        { id: 'f2', name: 'Title f2', kind: 'folder', pageType: 'FOLDER' },
-        { id: 'doc', name: 'Title doc', kind: 'page', pageType: 'DOCUMENT' },
+        { id: 'f2', name: 'Title f2', kind: 'folder', pageType: 'FOLDER', updatedAt: AT },
+        { id: 'doc', name: 'Title doc', kind: 'page', pageType: 'DOCUMENT', updatedAt: AT },
       ],
     });
   });
@@ -148,9 +152,9 @@ describe('fileNodesFrom()', () => {
           id: 'f1',
           name: 'Title f1',
           kind: 'folder',
-          pageType: 'FOLDER',
+          pageType: 'FOLDER', updatedAt: AT,
           count: 1,
-          children: [{ id: 'kept', name: 'Title kept', kind: 'page', pageType: 'DOCUMENT' }],
+          children: [{ id: 'kept', name: 'Title kept', kind: 'page', pageType: 'DOCUMENT', updatedAt: AT }],
         },
       ],
     });
@@ -177,6 +181,23 @@ describe('fileNodesFrom()', () => {
       should: 'give no nodes',
       actual: fileNodesFrom([]),
       expected: [],
+    });
+  });
+});
+
+describe('fileNodesFrom() times', () => {
+  test('when each page last changed', () => {
+    const tree = [
+      treeRow('f1', 'FOLDER', [treeRow('doc', 'DOCUMENT', [], { updatedAt: '2026-10-05T09:12:00.000Z' })], {
+        updatedAt: '2026-09-18T10:00:00.000Z',
+      }),
+    ];
+
+    assert({
+      given: 'a folder and a page that changed at different times',
+      should: 'carry each page’s own updatedAt on its node, for the folder browser’s Modified column',
+      actual: [fileNodesFrom(tree)[0]?.updatedAt, fileNodesFrom(tree)[0]?.children?.[0]?.updatedAt],
+      expected: ['2026-09-18T10:00:00.000Z', '2026-10-05T09:12:00.000Z'],
     });
   });
 });

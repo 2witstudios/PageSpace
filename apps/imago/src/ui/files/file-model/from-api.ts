@@ -16,7 +16,7 @@ const visible = (pages: readonly PageTreeResponse[]): readonly PageTreeResponse[
  * "empty".
  */
 const fileNodeFrom = (page: PageTreeResponse): FileNode => {
-  const node = { id: page.id, name: page.title, pageType: page.type };
+  const node = { id: page.id, name: page.title, pageType: page.type, updatedAt: page.updatedAt };
   const children = page.children === undefined ? undefined : fileNodesFrom(page.children);
   if (page.type === PageType.FOLDER) {
     return children === undefined

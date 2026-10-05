@@ -17,6 +17,8 @@ export type PageResponse = {
   readonly parentId: string | null;
   readonly position: number;
   readonly isTrashed: boolean;
+  /** When the page last changed, as an ISO string. */
+  readonly updatedAt: string;
 };
 
 /**
@@ -41,6 +43,8 @@ export type FileNode = {
   readonly name: string;
   readonly kind: FileKind;
   readonly pageType: PageTypeValue;
+  /** When the page last changed (ISO); a create still in flight has no time yet. */
+  readonly updatedAt?: string;
   /** Item count shown beside a folder: its direct children. */
   readonly count?: number;
   readonly children?: readonly FileNode[];
