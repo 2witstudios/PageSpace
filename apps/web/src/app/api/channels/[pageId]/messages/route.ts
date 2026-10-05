@@ -180,12 +180,17 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
     return NextResponse.json({ messages: page, nextCursor, hasMore, isFollowing });
   }
 
-  // Fetch limit+1 in DESC order to determine if more exist, then reverse for chronological display
-  const messages = await channelMessageRepository.listChannelMessages({
-    pageId,
-    limit: limit + 1,
-    cursor: parsedCursor,
-  });
+  // Fetch limit+1 in DESC order to determine if more exist, then reverse for chronological display.
+  // The caller's own read watermark rides along so a reader can mark where
+  // unread begins before it marks the channel read.
+  const [messages, lastReadAt] = await Promise.all([
+    channelMessageRepository.listChannelMessages({
+      pageId,
+      limit: limit + 1,
+      cursor: parsedCursor,
+    }),
+    channelMessageRepository.findChannelLastReadAt({ userId, channelId: pageId }),
+  ]);
 
   const hasMore = messages.length > limit;
   const sliced = hasMore ? messages.slice(0, limit) : messages;
@@ -202,7 +207,12 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
 
   auditRequest(req, { eventType: 'data.read', userId: auth.userId, resourceType: 'channel', resourceId: pageId, details: { messageCount: page.length } });
 
-  return NextResponse.json({ messages: page, nextCursor, hasMore });
+  return NextResponse.json({
+    messages: page,
+    nextCursor,
+    hasMore,
+    lastReadAt: lastReadAt ? lastReadAt.toISOString() : null,
+  });
 }
 
 export async function POST(req: Request, { params }: { params: Promise<{ pageId: string }> }) {
