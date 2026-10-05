@@ -26,7 +26,12 @@ import { userBuiltinAgents } from '@pagespace/db/schema/user-builtin-agents';
 import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
 import { BUILTIN_AGENTS, BUILTIN_AGENT_KEYS } from '../builtin-agents';
-import { IMAGO_FOLDER_TITLE, provisionImagoAgents } from '../provision-imago-agents';
+import { ACTIVITY_CHAIN_LOCK_KEY } from '../../monitoring/activity-logger';
+import {
+  IMAGO_FOLDER_TITLE,
+  provisionImagoAgents,
+  provisionImagoAgentsInTransaction,
+} from '../provision-imago-agents';
 import { provisionHomeDriveIfNeeded } from '../../onboarding/home-drive';
 
 let dbAvailable = false;
@@ -329,6 +334,31 @@ describe('provisionImagoAgents (real Postgres)', () => {
     expect(observedLockWait).toBe(true);
     expect(result.created).toHaveLength(BUILTIN_AGENT_KEYS.length);
   });
+
+  // The activity hash chain has ONE global advisory lock, held to commit. Taken
+  // mid-transaction it would serialise every first sign-in (and every other
+  // activity write) behind the rest of the Home provisioning work — the
+  // 16-sign-in timeouts on pu/imago CI. The caller writes the entries last.
+  it('given a caller transaction, should provision the agents without taking the global activity chain lock', async () => {
+    if (!dbAvailable) return;
+    const { user, home } = await userWithHome();
+
+    const heldChainLocks = await dedicatedClient().transaction(async (tx) => {
+      const result = await provisionImagoAgentsInTransaction(tx, user.id, home.id);
+      expect(result.created).toHaveLength(BUILTIN_AGENT_KEYS.length);
+      const backend = await tx.execute(sql`SELECT pg_backend_pid() AS pid`);
+      // Observed from another connection, as any rival activity writer would.
+      const held = await db.execute(sql`
+        SELECT 1 FROM pg_locks
+        WHERE locktype = 'advisory' AND granted AND pid = ${backend.rows[0].pid}
+          AND classid = (${ACTIVITY_CHAIN_LOCK_KEY}::bigint >> 32)::oid
+          AND objid = (${ACTIVITY_CHAIN_LOCK_KEY}::bigint & 4294967295)::oid
+      `);
+      return held.rows.length;
+    });
+
+    expect(heldChainLocks).toBe(0);
+  });
 });
 
 describe('provisionHomeDriveIfNeeded → Imago agents (real Postgres)', () => {
@@ -343,6 +373,13 @@ describe('provisionHomeDriveIfNeeded → Imago agents (real Postgres)', () => {
     expect(pointers.map((p) => p.key).sort()).toEqual([...BUILTIN_AGENT_KEYS].sort());
     const agentPages = await db.select().from(pages).where(inArray(pages.id, pointers.map((p) => p.pageId)));
     for (const page of agentPages) expect(page.driveId).toBe(driveId);
+
+    // Written at the end of the Home transaction, not dropped.
+    const logs = await db
+      .select({ pageId: activityLogs.pageId })
+      .from(activityLogs)
+      .where(and(eq(activityLogs.operation, 'create'), inArray(activityLogs.pageId, pointers.map((p) => p.pageId))));
+    expect(logs).toHaveLength(BUILTIN_AGENT_KEYS.length);
   });
 
   it('given a returning user whose Home drive predates the agents, should provision them on the next sign-in', async () => {

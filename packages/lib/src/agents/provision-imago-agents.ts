@@ -18,6 +18,12 @@
  * default (no messages), so no page version is written, as with the other
  * provisioned pages (memory pages, starter skills, drive seeding).
  *
+ * Activity entries are returned, not written: the activity hash chain has one
+ * global advisory lock held until commit, so the caller writes them with
+ * `writeImagoAgentActivity` as its transaction's last step. Written here, the
+ * lock would cover the rest of the caller's work and serialise every
+ * concurrent first sign-in behind it (and every other activity write).
+ *
  * Race safety: the `FOR UPDATE` on the user row (the same row
  * `provisionHomeDriveIfNeeded`, `installStarterSkills` and
  * `provisionMemoryPages` lock) serialises concurrent provisioners; the unique
@@ -38,6 +44,7 @@ import { createChangeGroupId } from '../monitoring/change-group';
 import {
   getActorInfo,
   logActivityWithTx,
+  type ActivityLogInput,
   type DeferredWorkflowTrigger,
 } from '../monitoring/activity-logger';
 import { computePageStateHash } from '../services/page-version-service';
@@ -68,8 +75,11 @@ export interface ProvisionImagoAgentsResult {
 }
 
 export interface ProvisionImagoAgentsInTransactionResult extends ProvisionImagoAgentsResult {
-  /** Workflow triggers for the created pages; fire them only after the transaction commits. */
-  deferredTriggers: DeferredWorkflowTrigger[];
+  /**
+   * The created pages' `create` activity, not yet written. Write it with
+   * `writeImagoAgentActivity` as the transaction's last step.
+   */
+  pendingActivity: ActivityLogInput[];
 }
 
 /**
@@ -89,7 +99,8 @@ export async function provisionImagoAgents(
       .where(and(eq(drives.ownerId, userId), eq(drives.kind, 'HOME')))
       .limit(1);
     if (!home) throw new Error(`Cannot provision Imago agents: user ${userId} has no Home drive`);
-    return provisionImagoAgentsInTransaction(tx, userId, home.id);
+    const { pendingActivity, ...provisioned } = await provisionImagoAgentsInTransaction(tx, userId, home.id);
+    return { ...provisioned, deferredTriggers: await writeImagoAgentActivity(tx, pendingActivity) };
   });
   for (const trigger of deferredTriggers) trigger();
   await grantCreatedImagoAgents(userId, result);
@@ -168,8 +179,25 @@ export async function provisionImagoAgentsInTransaction(
     agents: agents as Record<BuiltinAgentKey, string>,
     created: missing.map((definition) => definition.key),
     replacedPageIds,
-    deferredTriggers: creator.deferredTriggers,
+    pendingActivity: creator.pendingActivity,
   };
+}
+
+/**
+ * Write provisioning's pending activity inside `tx`. This takes the global
+ * activity-chain lock until commit, so call it as the transaction's last step.
+ * Returns the workflow triggers to fire once the transaction has committed.
+ */
+export async function writeImagoAgentActivity(
+  tx: TransactionType,
+  pendingActivity: ActivityLogInput[],
+): Promise<DeferredWorkflowTrigger[]> {
+  const triggers: DeferredWorkflowTrigger[] = [];
+  for (const input of pendingActivity) {
+    const trigger = await logActivityWithTx(input, tx);
+    if (trigger) triggers.push(trigger);
+  }
+  return triggers;
 }
 
 /**
@@ -224,9 +252,12 @@ interface CreatePageInput {
   agent?: BuiltinAgentDefinition;
 }
 
-/** Inserts pages the way the page service's `createPage` does, inside `tx`. */
+/**
+ * Inserts pages the way the page service's `createPage` does, inside `tx`,
+ * collecting their activity in `pendingActivity` for the caller to write last.
+ */
 class PageCreator {
-  readonly deferredTriggers: DeferredWorkflowTrigger[] = [];
+  readonly pendingActivity: ActivityLogInput[] = [];
   private actor: Promise<{ actorEmail: string; actorDisplayName?: string }> | null = null;
   private model: Promise<{ aiProvider: string; aiModel: string }> | null = null;
   private readonly changeGroupId = createChangeGroupId();
@@ -308,7 +339,7 @@ class PageCreator {
     }
 
     const actor = await this.resolveActor();
-    const trigger = await logActivityWithTx({
+    this.pendingActivity.push({
       userId,
       actorEmail: actor.actorEmail,
       actorDisplayName: actor.actorDisplayName,
@@ -326,8 +357,7 @@ class PageCreator {
       changeGroupId: this.changeGroupId,
       changeGroupType: 'system',
       stateHashAfter: stateHash,
-    }, tx);
-    if (trigger) this.deferredTriggers.push(trigger);
+    });
 
     return id;
   }
