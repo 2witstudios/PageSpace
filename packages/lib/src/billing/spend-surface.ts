@@ -101,6 +101,13 @@ export interface ComposerStripModel {
   tone: 'normal' | 'fallback' | 'refused';
 }
 
+const REFUSED_STRIP_TEXT: Readonly<Record<string, string>> = {
+  source_paused: 'paused',
+  source_cap_reached: 'you reached your cap here',
+  source_empty: 'empty this month',
+  guest_drive_wallet_off: 'not open to guests',
+};
+
 /** The strip above the composer before a conversation's first message (SPEND-2). */
 export function composerStripModel(input: {
   orgsEnabled: boolean;
@@ -111,12 +118,16 @@ export function composerStripModel(input: {
   if (input.hasMessages || !surfacesShow(input.orgsEnabled, input.options)) return null;
   const { resolved } = input;
   const choice = choiceFor(resolved, input.options);
+  if (resolved.kind === 'refuse' && choice && Object.prototype.hasOwnProperty.call(REFUSED_STRIP_TEXT, resolved.reason)) {
+    return { label: choice.label, detail: `${REFUSED_STRIP_TEXT[resolved.reason]} · choose another source`, tone: 'refused' };
+  }
   if (resolved.kind !== 'spend' || !choice) {
     return { label: null, detail: 'Choose what this conversation spends from', tone: 'refused' };
   }
+  // "left", not "left this month": the amount is also bounded by the person's own daily cap.
   const amount = choice.remainingCredits === null
     ? 'No cap'
-    : choice.source === 'own_credits' ? `${choice.remainingCredits} credits` : `${choice.remainingCredits} credits left this month`;
+    : choice.source === 'own_credits' ? `${choice.remainingCredits} credits` : `${choice.remainingCredits} credits left`;
   if (resolved.fallbackApplied && resolved.fallbackFrom) {
     const from = input.options.find((o) => o.source === resolved.fallbackFrom);
     return { label: choice.label, detail: `${amount} · ${from?.label ?? 'The chosen source'} cannot cover this`, tone: 'fallback' };

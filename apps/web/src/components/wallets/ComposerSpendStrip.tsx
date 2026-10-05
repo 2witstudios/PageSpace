@@ -52,7 +52,11 @@ export function ComposerSpendStrip({ conversationId, driveId, isGlobal, hasMessa
     >
       <SpendSourceIcon source={selected?.source ?? null} className="text-muted-foreground" />
       <span className="min-w-0 flex-1 truncate">
-        {strip.label ? (
+        {strip.label && strip.tone === 'refused' ? (
+          <>
+            <b className="font-semibold">{strip.label}</b>: {strip.detail}
+          </>
+        ) : strip.label ? (
           <>
             Spending from <b className="font-semibold">{strip.label}</b> · {strip.detail}
           </>
@@ -63,7 +67,7 @@ export function ComposerSpendStrip({ conversationId, driveId, isGlobal, hasMessa
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger asChild>
           <button type="button" className="shrink-0 font-medium text-primary hover:underline">
-            {strip.label ? 'Change' : 'Choose'}
+            {strip.label && strip.tone !== 'refused' ? 'Change' : 'Choose'}
           </button>
         </PopoverTrigger>
         <PopoverContent align="end" side="top" className="w-[min(24rem,calc(100vw-2rem))] p-0">

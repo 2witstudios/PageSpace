@@ -184,8 +184,17 @@ describe('ComposerSpendStrip: the strip before the first message', () => {
   it('SPEND-2 (partial) names the source before the first message and registers the conversation for the header chip', () => {
     spendState.spend = conversation([product, seat, own], spends(product));
     render(<ComposerSpendStrip conversationId="c1" driveId="d-product" isGlobal={false} hasMessages={false} />);
-    expect(screen.getByTestId('composer-spend-strip').textContent).toContain('Spending from Product wallet · 192 credits left this month');
+    expect(screen.getByTestId('composer-spend-strip').textContent).toContain('Spending from Product wallet · 192 credits left');
     expect(useSpendContextStore.getState().active).toEqual({ conversationId: 'c1', driveId: 'd-product', isGlobal: false, hasMessages: false });
+  });
+
+  it('SPEND-4 (partial) when the chosen source is refused, the strip names it and what is wrong, and asks for a choice', () => {
+    spendState.spend = conversation([product, seat, own], { kind: 'refuse', source: 'drive_wallet', reason: 'source_cap_reached', options: [] });
+    render(<ComposerSpendStrip conversationId="c1" driveId="d-product" isGlobal={false} hasMessages={false} />);
+    const strip = screen.getByTestId('composer-spend-strip');
+    expect(strip.textContent).toContain('Product wallet: you reached your cap here · choose another source');
+    expect(strip.textContent).not.toContain('Spending from');
+    expect(screen.getByRole('button', { name: 'Choose' })).toBeTruthy();
   });
 
   it('SPEND-2 (partial) the strip is gone once the conversation has messages', () => {

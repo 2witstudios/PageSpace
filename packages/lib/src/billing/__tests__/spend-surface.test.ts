@@ -106,7 +106,7 @@ describe('spendChoiceHint and spendChoiceAmount: the popover rows', () => {
 describe('composerStripModel: the strip before the first message', () => {
   it('SPEND-2 (partial) the source is named before the first message, and only then', () => {
     expect(composerStripModel({ orgsEnabled: true, options: [product, seat, own], resolved: spends(product), hasMessages: false }))
-      .toEqual({ label: 'Product wallet', detail: '192 credits left this month', tone: 'normal' });
+      .toEqual({ label: 'Product wallet', detail: '192 credits left', tone: 'normal' });
     expect(composerStripModel({ orgsEnabled: true, options: [product, seat, own], resolved: spends(product), hasMessages: true })).toBeNull();
   });
 
@@ -117,7 +117,17 @@ describe('composerStripModel: the strip before the first message', () => {
 
   it('SPEND-4 (partial) a fallback the drive rule applies is named on the strip before sending', () => {
     expect(composerStripModel({ orgsEnabled: true, options: [product, seat, own], resolved: spends(seat, 'drive_wallet'), hasMessages: false }))
-      .toEqual({ label: 'Northwind Labs seat', detail: '54 credits left this month · Product wallet cannot cover this', tone: 'fallback' });
+      .toEqual({ label: 'Northwind Labs seat', detail: '54 credits left · Product wallet cannot cover this', tone: 'fallback' });
+  });
+
+  it('SPEND-4 (partial) a refused source the person knows is named with what is wrong, so they know to choose another', () => {
+    const refuse = (reason: string): SurfaceDecision => ({ kind: 'refuse', source: 'drive_wallet', reason, options: [] });
+    expect(composerStripModel({ orgsEnabled: true, options: [product, seat, own], resolved: refuse('source_cap_reached'), hasMessages: false }))
+      .toEqual({ label: 'Product wallet', detail: 'you reached your cap here · choose another source', tone: 'refused' });
+    expect(composerStripModel({ orgsEnabled: true, options: [product, own], resolved: refuse('source_paused'), hasMessages: false })?.detail)
+      .toBe('paused · choose another source');
+    expect(composerStripModel({ orgsEnabled: true, options: [product, own], resolved: refuse('source_empty'), hasMessages: false })?.detail)
+      .toBe('empty this month · choose another source');
   });
 
   it('SPEND-4 (partial) a refused source asks for a choice instead of naming a source', () => {
