@@ -1,11 +1,16 @@
-import { createId } from '@paralleldrive/cuid2';
 import type { Locator, Page } from '@playwright/test';
 import { factories } from '@pagespace/db/test/factories';
-import { db } from '@pagespace/db/db';
-import { verificationTokens } from '@pagespace/db/schema/auth';
-import { generateToken } from '../../../packages/lib/src/auth/token-utils';
-import { provisionHomeDriveIfNeeded } from '../../../packages/lib/src/onboarding/home-drive';
+import { provisionHomeDriveIfNeeded } from '@pagespace/lib/onboarding/home-drive';
 import { test, expect } from '../fixtures/auth.fixture';
+import {
+  deleteUsers,
+  emailedMagicLink,
+  hydrated,
+  imagoPath,
+  imagoUser,
+  pathnameIs,
+  shell,
+} from '../fixtures/imago.fixture';
 import { getSeedState } from '../fixtures/seed-state';
 
 /**
@@ -39,16 +44,12 @@ import { getSeedState } from '../fixtures/seed-state';
 type Probed = HTMLElement & { __probe?: string };
 
 const rail = (page: Page) => page.getByRole('navigation', { name: 'Primary' });
-const shell = (page: Page) => page.locator('[data-section]');
 const listPane = (page: Page) => page.locator('[data-slot="list"]');
 const railLink = (page: Page, name: string) => rail(page).getByRole('link', { name, exact: true });
 
-/** Acting on the inert server-rendered node would not reach React: wait for its props. */
-const hydrated = async (page: Page, control: Locator): Promise<Locator> => {
-  await page.waitForFunction(
-    (node) => node !== null && Object.keys(node).some((key) => key.startsWith('__reactProps$')),
-    await control.elementHandle(),
-  );
+/** Acting on the inert server-rendered markup would not reach React: wait for the shell to hydrate. */
+const whenHydrated = async (page: Page, control: Locator): Promise<Locator> => {
+  await hydrated(page);
   return control;
 };
 
@@ -60,11 +61,6 @@ const tag = (locator: Locator, value: string) =>
 const probeOf = (locator: Locator) => locator.evaluate((node) => (node as Probed).__probe ?? null);
 
 const widthOf = (locator: Locator) => locator.evaluate((node) => node.getBoundingClientRect().width);
-
-const imagoPath = (driveId: string, section = '') =>
-  section === '' ? `/imago/${driveId}` : `/imago/${driveId}/${section}`;
-
-const pathnameIs = (path: string) => (url: URL) => url.pathname === path;
 
 let homeDriveId: string;
 
@@ -88,7 +84,7 @@ test.describe('signed in', () => {
     page,
   }) => {
     await page.goto(imagoPath(homeDriveId));
-    await hydrated(page, railLink(page, 'Files'));
+    await whenHydrated(page, railLink(page, 'Files'));
     await tag(rail(page), 'rail');
     await tag(shell(page), 'shell');
 
@@ -118,7 +114,7 @@ test.describe('signed in', () => {
     expect(await widthOf(listPane(page))).toBeGreaterThan(0);
     await expect(listPane(page)).not.toHaveAttribute('inert');
 
-    const close = await hydrated(page, page.getByRole('link', { name: 'Close Files' }));
+    const close = await whenHydrated(page, page.getByRole('link', { name: 'Close Files' }));
     await close.click();
 
     await page.waitForURL(pathnameIs(imagoPath(homeDriveId)));
@@ -137,7 +133,7 @@ test.describe('signed in', () => {
     await expect(shell(page)).toHaveAttribute('data-list', 'tree');
     expect(await widthOf(listPane(page))).toBeGreaterThan(0);
 
-    const hide = await hydrated(page, page.getByRole('button', { name: 'Hide Files' }));
+    const hide = await whenHydrated(page, page.getByRole('button', { name: 'Hide Files' }));
     await hide.click();
 
     // View state, not a route: the address and the open object stay.
@@ -156,7 +152,7 @@ test.describe('signed in', () => {
    */
   const paintedListWidths = async (page: Page): Promise<number[]> => {
     await page.goto(imagoPath(homeDriveId));
-    const files = await hydrated(page, railLink(page, 'Files'));
+    const files = await whenHydrated(page, railLink(page, 'Files'));
     await page.evaluate(() => {
       const pane = document.querySelector('[data-slot="list"]');
       const record = window as Window & { __widths?: number[] };
@@ -210,28 +206,17 @@ test.describe('signed in', () => {
 test.describe('signed out', () => {
   test.use({ storageState: { cookies: [], origins: [] } });
 
-  /**
-   * The link classic's magic-link email carries for `next` (apps/web
-   * lib/auth/magic-link-adapters.ts): the token row is minted as the email adapter mints it,
-   * because the run has no mailbox to receive it. Everything after the click is the real path:
-   * web's verify route redeems the token, sets the session cookie and redirects to `next`.
-   */
-  const emailedMagicLink = async (userId: string, next: string): Promise<string> => {
-    const { token, hash, tokenPrefix } = generateToken('ps_magic');
-    await db.insert(verificationTokens).values({
-      id: createId(),
-      userId,
-      tokenHash: hash,
-      tokenPrefix,
-      type: 'magic_link',
-      expiresAt: new Date(Date.now() + 5 * 60 * 1000),
-    });
-    return `/api/auth/magic-link/verify?token=${encodeURIComponent(token)}&next=${encodeURIComponent(next)}`;
-  };
+  // The user this test signs in, and every row that hangs off them, goes when it ends.
+  let created: string[] = [];
+  test.afterEach(async () => {
+    await deleteUsers(created);
+    created = [];
+  });
 
   test('an imago path redirects to sign-in and returns there after signing in', async ({ page }) => {
-    const user = await factories.createUser({ emailVerified: new Date() });
-    const { driveId } = await provisionHomeDriveIfNeeded(user.id);
+    const user = await imagoUser('Signed-out e2e');
+    created = [user.id];
+    const driveId = user.homeDriveId;
     const requested = imagoPath(driveId, 'files');
 
     await page.goto(requested);
