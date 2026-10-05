@@ -347,9 +347,16 @@ export const APP_ROUTER_ROUTE_PATH = '/api/app-hosting/router';
 export const routeOwnsItsOwnCsp = (pathname: string): boolean =>
   isHandoffBridgeRoute(pathname) || pathname === APP_ROUTER_ROUTE_PATH;
 
+/**
+ * Pages that embed Stripe's Payment Element: under COEP credentialless its js.stripe.com frames do not
+ * load. That includes Settings (the create-organization dialog's payment step) and every org settings
+ * page (the lapse banner's Reactivate payment).
+ */
 export const shouldDisableCOEP = (pathname: string): boolean =>
+  pathname === '/settings' ||
   pathname.startsWith('/settings/plan') ||
   pathname.startsWith('/settings/billing') ||
+  pathname.startsWith('/orgs/') ||
   pathname === '/auth' ||
   pathname.startsWith('/auth/');
 

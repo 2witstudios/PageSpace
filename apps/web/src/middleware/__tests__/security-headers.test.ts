@@ -686,6 +686,16 @@ describe('Security Headers', () => {
       expect(shouldDisableCOEP('/auth-callback')).toBe(false);
     });
 
+    it('UI-6 (partial): the org pages and Settings carry the Stripe Payment Element (create, reactivate), so they disable COEP too', () => {
+      // Settings hosts the create-organization dialog's payment step; every org settings page hosts the
+      // lapse banner's Reactivate payment. Under COEP credentialless the js.stripe.com frames do not load.
+      expect(shouldDisableCOEP('/settings')).toBe(true);
+      expect(shouldDisableCOEP('/orgs/org_1/settings')).toBe(true);
+      expect(shouldDisableCOEP('/orgs/org_1/settings/billing')).toBe(true);
+      expect(shouldDisableCOEP('/settings/account')).toBe(false);
+      expect(shouldDisableCOEP('/organizations')).toBe(false);
+    });
+
     it('isPublishedSiteHost identifies *.pagespace.site published hosts', () => {
       // Published-page hosts: must be treated as public (caller returns 404, never auth)
       expect(isPublishedSiteHost('getting-started.pagespace.site')).toBe(true);
