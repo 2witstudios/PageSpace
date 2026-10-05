@@ -90,6 +90,20 @@ export async function loadImagoAgentContext(input: {
   return { homeDriveId: pointer.homeDriveId, grants };
 }
 
+/**
+ * The user whose built-in (Imago) agent `agentPageId` is, or null for any other
+ * page. Unlike `loadImagoAgentContext` this answers for every user's agents, so
+ * a caller can refuse to treat someone else's Imago agent as an ordinary one.
+ */
+export async function findBuiltinAgentOwner(agentPageId: string): Promise<string | null> {
+  const [row] = await db
+    .select({ userId: userBuiltinAgents.userId })
+    .from(userBuiltinAgents)
+    .where(eq(userBuiltinAgents.pageId, agentPageId))
+    .limit(1);
+  return row?.userId ?? null;
+}
+
 /** The stable system-prompt block. Names and roles only — no ids. */
 export function buildGrantedDrivesPrompt(context: ImagoAgentContext): string {
   const header = '\n\n## GRANTED WORKSPACES\n\n';

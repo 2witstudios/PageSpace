@@ -629,6 +629,9 @@ async function runExecution(
         userId: input.createdBy,
         driveId: input.driveId,
         currentTools: availableTools,
+        // The workflow's drive is where it works; an Imago agent draws that
+        // drive's integrations only when it is Home or granted.
+        contextDriveId: input.driveId,
       });
 
       if (Object.keys(integrationTools).length > 0) {

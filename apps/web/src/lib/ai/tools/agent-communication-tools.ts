@@ -739,6 +739,8 @@ export async function executeAskAgent(
             userId,
             driveId: targetAgent.driveId,
             currentTools: agentTools,
+            contextDriveId: executionContext.locationContext?.currentDrive?.id ?? null,
+            allowedDriveIds: executionContext.mcpAllowedDriveIds ?? [],
           });
         } catch (error) {
           loggers.ai.error('ask_agent: failed to resolve integration tools, falling back to built-in tools only', error as Error);
