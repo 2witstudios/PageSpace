@@ -43,7 +43,7 @@ import {
   type OrgSeatCapsRead,
 } from '@/lib/orgs/org-api';
 import { orgErrorMessage } from '@/lib/orgs/org-error-copy';
-import { filterMembers, inviteStatusLine, liveInvitations, memberTabCounts, seatCapsLabel, type MemberTab } from '@/lib/orgs/org-members';
+import { filterMembers, guestAccessLine, inviteStatusLine, liveInvitations, memberTabCounts, seatCapsLabel, type MemberTab } from '@/lib/orgs/org-members';
 import { cn } from '@/lib/utils/index';
 
 const initials = (name: string | null, email: string | null) =>
@@ -123,7 +123,7 @@ function MembersPageBody({ orgId, orgName, role, lapsed }: OrgSettingsContext) {
           suffix={showBilling && seats ? `of ${seats.purchased} seats` : 'members'}
           label={`Seats in use · ${pendingCount} reserved by pending invites`}
         />
-        <Stat value={String(guests?.length ?? 0)} label="Guests · no seat, limited to the drives they were invited to" />
+        <Stat value={String(guests?.length ?? 0)} label="Guests · no seat, limited to the drives and pages they were given" />
         <Stat value={String(counts.admins)} label="Admins · can manage every org drive and these settings" />
       </div>
 
@@ -274,7 +274,7 @@ function MembersPageBody({ orgId, orgName, role, lapsed }: OrgSettingsContext) {
           <div className="mb-3 flex flex-col">
             <h2 className="text-lg font-semibold">Guests ({guests?.length ?? 0})</h2>
             <p className="text-xs text-muted-foreground">
-              People outside {orgName} who were invited to a drive. Allowed by the <a className="text-primary hover:underline" href={`/orgs/${orgId}/settings/policies`}>Guests policy</a>.
+              Everyone outside {orgName} with access to its drives: invited to a drive, or holding pages through a page link. Allowed by the <a className="text-primary hover:underline" href={`/orgs/${orgId}/settings/policies`}>Guests policy</a>.
             </p>
           </div>
           <div className="overflow-hidden rounded-lg border bg-card">
@@ -293,7 +293,7 @@ function MembersPageBody({ orgId, orgName, role, lapsed }: OrgSettingsContext) {
                       <OrgBadge tone="guest">Guest</OrgBadge>
                     </div>
                     <span className="truncate text-[13px] text-muted-foreground">
-                      {[g.email, `in ${g.drives.map((d) => (d.pending ? `${d.name} (invited)` : d.name)).join(', ')}`].filter(Boolean).join(' · ')}
+                      {[g.email, guestAccessLine(g.drives)].filter(Boolean).join(' · ')}
                     </span>
                   </div>
                   <Button

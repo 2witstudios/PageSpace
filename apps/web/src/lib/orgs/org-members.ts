@@ -1,7 +1,7 @@
 /** Members & seats (UI-7, canvas Members): the page's pure pieces. Credits are counts (UI-12). */
 import { centsFromCredits, formatCreditCount } from '@pagespace/lib/billing/money-model';
 import { orgRoleAtLeast } from '@pagespace/lib/organizations/org-roles';
-import type { OrgInvitation, OrgMember } from './org-api';
+import type { OrgGuest, OrgInvitation, OrgMember } from './org-api';
 
 export function seatCapsLabel(caps: { dailyCapCents: number | null; monthlyCapCents: number | null }): string {
   const parts: string[] = [];
@@ -48,4 +48,24 @@ export function inviteStatusLine(invitation: OrgInvitation, inviterName: string 
   const days = Math.max(1, Math.ceil((Date.parse(invitation.expiresAt) - nowMs) / DAY_MS));
   const by = inviterName ? `Invited by ${inviterName}` : 'Invited';
   return `${by} · expires in ${days} ${days === 1 ? 'day' : 'days'} · seat reserved`;
+}
+
+const countOf = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`;
+
+/**
+ * DRV-8: how a guest reaches the org, for the Guests list. Each drive says its source ("invited", marked pending
+ * until accepted, or "page link") and any pages held there; the summary counts drives and pages.
+ */
+export function guestAccessLine(drives: OrgGuest['drives']): string {
+  const pages = drives.reduce((sum, d) => sum + d.pageCount, 0);
+  const summary = [countOf(drives.length, 'drive'), pages > 0 ? countOf(pages, 'page') : null].filter(Boolean).join(' · ');
+  const each = drives.map((d) => {
+    const how = [
+      d.source === 'page_link' ? 'page link' : 'invited',
+      d.pending ? 'pending' : null,
+      d.pageCount > 0 ? countOf(d.pageCount, 'page') : null,
+    ].filter(Boolean);
+    return `${d.name} (${how.join(', ')})`;
+  });
+  return `${summary} · in ${each.join(', ')}`;
 }

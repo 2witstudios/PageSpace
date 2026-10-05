@@ -60,7 +60,7 @@ beforeEach(() => {
   mocks.reads = {
     '/api/orgs/org_nw/members': { members: [member('u_jono', 'OWNER', 'Jono Woodall'), member('u_priya', 'ADMIN', 'Priya Nair'), member('u_marcus', 'MEMBER', 'Marcus Oyelaran')] },
     '/api/orgs/org_nw/invitations': { invitations: [{ id: 'inv_sam', orgId: 'org_nw', email: 'sam@northwind.com', role: 'MEMBER', invitedBy: 'u_priya', expiresAt: future, acceptedAt: null, createdAt: '' }] },
-    '/api/orgs/org_nw/guests': { guests: [{ userId: 'u_chris', name: 'Chris Rowe', email: 'chris@partner.co', image: null, drives: [{ id: 'd_mkt', name: 'Marketing Site', pending: false }] }] },
+    '/api/orgs/org_nw/guests': { guests: [{ userId: 'u_chris', name: 'Chris Rowe', email: 'chris@partner.co', image: null, drives: [{ id: 'd_mkt', name: 'Marketing Site', pending: false, source: 'invited', pageCount: 0 }] }, { userId: 'u_gail', name: 'Gail Link', email: 'gail@partner.co', image: null, drives: [{ id: 'd_prod', name: 'Product', pending: false, source: 'page_link', pageCount: 2 }] }] },
     '/api/orgs/org_nw/members/activity': { activity: [{ userId: 'u_jono', driveCount: 6, lastActiveAt: new Date().toISOString() }, { userId: 'u_marcus', driveCount: 3, lastActiveAt: null }] },
     '/api/orgs/org_nw/seat-caps': {
       walletId: 'w_pool',
@@ -100,8 +100,10 @@ describe('Members & seats', () => {
   it('UI-7 (partial): a pending invitation shows who invited, when it expires and the reserved seat; guests list their drives', () => {
     render(<OrgMembersPage />);
     expect(screen.getByText('Invited by Priya Nair · expires in 6 days · seat reserved')).toBeTruthy();
-    expect(screen.getByText('chris@partner.co · in Marketing Site')).toBeTruthy();
-    expect(screen.getByRole('heading', { name: 'Guests (1)' })).toBeTruthy();
+    expect(screen.getByText('chris@partner.co · 1 drive · in Marketing Site (invited)')).toBeTruthy();
+    // A page-link guest is on the org-wide list too, by source, with the pages they hold.
+    expect(screen.getByText('gail@partner.co · 1 drive · 2 pages · in Product (page link, 2 pages)')).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Guests (2)' })).toBeTruthy();
   });
 
   it('tabs filter to admins, to pending invitations, and to guests', async () => {
@@ -127,7 +129,7 @@ describe('Members & seats', () => {
 
   it('Give a seat invites the guest by email', async () => {
     render(<OrgMembersPage />);
-    await userEvent.click(screen.getByRole('button', { name: 'Give a seat' }));
+    await userEvent.click(screen.getAllByRole('button', { name: 'Give a seat' })[0]);
     await waitFor(() => expect(mocks.inviteToOrg).toHaveBeenCalledWith('org_nw', { email: 'chris@partner.co' }));
   });
 
@@ -167,7 +169,7 @@ describe('Members & seats', () => {
     render(<OrgMembersPage />);
     expect(screen.getByText('Northwind Labs is unpaid and read-only')).toBeTruthy();
     expect((screen.getByRole('button', { name: /Invite people/ }) as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByRole('button', { name: 'Give a seat' }) as HTMLButtonElement).disabled).toBe(true);
+    for (const button of screen.getAllByRole('button', { name: 'Give a seat' })) expect((button as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByRole('button', { name: 'Revoke' }) as HTMLButtonElement).disabled).toBe(false);
     await userEvent.click(screen.getByRole('button', { name: 'Actions for Marcus Oyelaran' }));
     await userEvent.click(await screen.findByRole('menuitem', { name: 'Seat caps' }));

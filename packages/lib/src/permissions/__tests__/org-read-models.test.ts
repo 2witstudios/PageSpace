@@ -7,31 +7,46 @@ describe('summarizeOrgGuests', () => {
   it('UI-7 (partial) DRV-8 (partial): a guest is a person in an org drive who is not an org member, listed once with each drive', () => {
     const guests = summarizeOrgGuests(
       [
-        { userId: 'u_chris', name: 'Chris Rowe', email: 'chris@partner.co', image: null, driveId: 'd_mkt', driveName: 'Marketing Site', acceptedAt: new Date('2026-09-01'), source: 'invite' as const },
-        { userId: 'u_aisha', name: 'Aisha Bello', email: 'aisha@studio.example', image: null, driveId: 'd_ds', driveName: 'Design System', acceptedAt: new Date('2026-09-01'), source: 'invite' as const },
-        { userId: 'u_aisha', name: 'Aisha Bello', email: 'aisha@studio.example', image: null, driveId: 'd_prod', driveName: 'Product', acceptedAt: null, source: 'invite' as const },
-        { userId: 'u_marcus', name: 'Marcus', email: 'marcus@northwind.com', image: null, driveId: 'd_mkt', driveName: 'Marketing Site', acceptedAt: new Date('2026-09-01'), source: 'invite' as const },
+        { userId: 'u_chris', name: 'Chris Rowe', email: 'chris@partner.co', image: null, driveId: 'd_mkt', driveName: 'Marketing Site', acceptedAt: new Date('2026-09-01'), source: 'invite' as const, role: 'MEMBER', pageCount: 0 },
+        { userId: 'u_aisha', name: 'Aisha Bello', email: 'aisha@studio.example', image: null, driveId: 'd_ds', driveName: 'Design System', acceptedAt: new Date('2026-09-01'), source: 'invite' as const, role: 'MEMBER', pageCount: 0 },
+        { userId: 'u_aisha', name: 'Aisha Bello', email: 'aisha@studio.example', image: null, driveId: 'd_prod', driveName: 'Product', acceptedAt: null, source: 'invite' as const, role: 'MEMBER', pageCount: 0 },
+        { userId: 'u_marcus', name: 'Marcus', email: 'marcus@northwind.com', image: null, driveId: 'd_mkt', driveName: 'Marketing Site', acceptedAt: new Date('2026-09-01'), source: 'invite' as const, role: 'MEMBER', pageCount: 0 },
       ],
       members,
     );
     expect(guests).toEqual([
-      { userId: 'u_aisha', name: 'Aisha Bello', email: 'aisha@studio.example', image: null, drives: [{ id: 'd_ds', name: 'Design System', pending: false }, { id: 'd_prod', name: 'Product', pending: true }] },
-      { userId: 'u_chris', name: 'Chris Rowe', email: 'chris@partner.co', image: null, drives: [{ id: 'd_mkt', name: 'Marketing Site', pending: false }] },
+      { userId: 'u_aisha', name: 'Aisha Bello', email: 'aisha@studio.example', image: null, drives: [{ id: 'd_ds', name: 'Design System', pending: false, source: 'invited', pageCount: 0 }, { id: 'd_prod', name: 'Product', pending: true, source: 'invited', pageCount: 0 }] },
+      { userId: 'u_chris', name: 'Chris Rowe', email: 'chris@partner.co', image: null, drives: [{ id: 'd_mkt', name: 'Marketing Site', pending: false, source: 'invited', pageCount: 0 }] },
     ]);
   });
 
   it("never lists a departed member's stale org row as a guest (it grants nothing)", () => {
-    expect(summarizeOrgGuests([{ userId: 'u_left', name: 'Lou', email: 'lou@x', image: null, driveId: 'd', driveName: 'D', acceptedAt: new Date(), source: 'org' }], members)).toEqual([]);
+    expect(summarizeOrgGuests([{ userId: 'u_left', name: 'Lou', email: 'lou@x', image: null, driveId: 'd', driveName: 'D', acceptedAt: new Date(), source: 'org' as const, role: 'MEMBER', pageCount: 0 }], members)).toEqual([]);
   });
 
   it('sorts a guest with no name by address, and one with neither by id', () => {
-    const row = (userId: string, name: string | null, email: string | null) => ({ userId, name, email, image: null, driveId: 'd', driveName: 'D', acceptedAt: new Date(), source: 'invite' as const });
+    const row = (userId: string, name: string | null, email: string | null) => ({ userId, name, email, image: null, driveId: 'd', driveName: 'D', acceptedAt: new Date(), source: 'invite' as const, role: 'MEMBER', pageCount: 0 });
     const order = summarizeOrgGuests([row('u_zed', 'Zed', 'zed@x'), row('u_b', null, 'bea@x'), row('a_anon', null, null)], members).map((g) => g.userId);
     expect(order).toEqual(['a_anon', 'u_b', 'u_zed']);
   });
 
+  it('DRV-8 (partial): a page-link guest is listed with its source and pages, beside an invited drive', () => {
+    const base = { userId: 'u_gail', name: 'Gail Link', email: 'gail@partner.co', image: null, source: 'invite' as const };
+    const [gail] = summarizeOrgGuests(
+      [
+        { ...base, driveId: 'd_prod', driveName: 'Product', acceptedAt: new Date(), role: 'GUEST', pageCount: 2 },
+        { ...base, driveId: 'd_fin', driveName: 'Finance', acceptedAt: null, role: 'MEMBER', pageCount: 0 },
+      ],
+      members,
+    );
+    expect(gail.drives).toEqual([
+      { id: 'd_prod', name: 'Product', pending: false, source: 'page_link', pageCount: 2 },
+      { id: 'd_fin', name: 'Finance', pending: true, source: 'invited', pageCount: 0 },
+    ]);
+  });
+
   it('is empty when every person in the drives is an org member', () => {
-    expect(summarizeOrgGuests([{ userId: 'u_admin', name: 'A', email: 'a@x', image: null, driveId: 'd', driveName: 'D', acceptedAt: new Date(), source: 'org' as const }], members)).toEqual([]);
+    expect(summarizeOrgGuests([{ userId: 'u_admin', name: 'A', email: 'a@x', image: null, driveId: 'd', driveName: 'D', acceptedAt: new Date(), source: 'org' as const, role: 'MEMBER', pageCount: 0 }], members)).toEqual([]);
   });
 });
 

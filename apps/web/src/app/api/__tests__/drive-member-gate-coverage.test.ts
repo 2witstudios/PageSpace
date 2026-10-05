@@ -138,7 +138,7 @@ const EXEMPT = new Map<string, Exemption>([
   }],
   ['packages/lib/src/permissions/org-read-models.ts', {
     ormReads: 1,
-    reason: 'The org Guests list (listOrgGuests, DRV-8) shows pending invitations on purpose, each drive marked pending, so an admin sees every outsider invited into org content before they accept. It is a display behind the Admin+ route and grants nothing. The other read (memberRowsIn, behind drive usage and member drive counts) is gated: a pending invitee is not counted as a member.',
+    reason: 'The org Guests list (listOrgGuests, DRV-8) is the org admin\'s one view of every outsider with access, so it shows pending invitations on purpose, each drive marked pending. It is a display behind the Admin+ route and grants nothing. The other read (memberRowsIn, behind drive usage and member drive counts) is gated: a pending invitee is not counted as a member.',
   }],
   ['packages/lib/src/permissions/org-guest-footprint.ts', {
     ormReads: 1,

@@ -10,8 +10,8 @@
 import { db } from '@pagespace/db/db';
 import { and, eq, inArray, isNotNull, isNull, max, sql } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
-import { drives } from '@pagespace/db/schema/core';
-import { driveMembers } from '@pagespace/db/schema/members';
+import { drives, pages } from '@pagespace/db/schema/core';
+import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
 import { orgMembers, type OrgRole } from '@pagespace/db/schema/organizations';
 import { sessions } from '@pagespace/db/schema/sessions';
 import { files } from '@pagespace/db/schema/storage';
@@ -19,6 +19,7 @@ import { decryptUserRows } from '../auth/user-repository';
 import { orgRoleAtLeast } from '../organizations/org-roles';
 import { isStaleOrgRow } from './drive-member-labels';
 import { DRIVE_MEMBERSHIP_ROLES } from './drive-member-role';
+import { isGuestRole } from './guest-role';
 
 // ---------------------------------------------------------------------------
 // Pure aggregation
@@ -42,17 +43,28 @@ export interface GuestRow extends DriveMemberRow {
   email: string | null;
   image: string | null;
   driveName: string;
+  /** The stored drive_members role: GUEST is a redeemed page share link (D-OW-24), anything else a drive invitation. */
+  role: string;
+  /** Live page grants (page_permissions, unexpired) the person holds on this drive's pages. */
+  pageCount: number;
 }
+
+/** How an outsider reaches an org drive: invited to it, or holding pages through a page share link. */
+export type OrgGuestSource = 'invited' | 'page_link';
 
 export interface OrgGuest {
   userId: string;
   name: string | null;
   email: string | null;
   image: string | null;
-  drives: { id: string; name: string; pending: boolean }[];
+  drives: { id: string; name: string; pending: boolean; source: OrgGuestSource; pageCount: number }[];
 }
 
-/** DRV-8: people in the org's drives who are not org members, once each, with every drive they are in. */
+/**
+ * DRV-8: every outsider with access to the org's drives, once each, with every drive they reach and how: invited
+ * to it (pending or accepted) or holding pages through a page share link. The org admin's one view of all external
+ * access, so page-link guests are on it even though they are not drive members (they are never counted as such).
+ */
 export function summarizeOrgGuests(rows: readonly GuestRow[], orgMemberIds: ReadonlySet<string>): OrgGuest[] {
   const byUser = new Map<string, OrgGuest>();
   for (const row of rows) {
@@ -63,7 +75,13 @@ export function summarizeOrgGuests(rows: readonly GuestRow[], orgMemberIds: Read
       byUser.set(row.userId, guest);
     }
     if (!guest.drives.some((d) => d.id === row.driveId)) {
-      guest.drives.push({ id: row.driveId, name: row.driveName, pending: row.acceptedAt === null });
+      guest.drives.push({
+        id: row.driveId,
+        name: row.driveName,
+        pending: row.acceptedAt === null,
+        source: isGuestRole(row.role) ? 'page_link' : 'invited',
+        pageCount: row.pageCount,
+      });
     }
   }
   const label = (g: OrgGuest) => (g.name ?? g.email ?? g.userId).toLowerCase();
@@ -182,6 +200,8 @@ export async function listOrgGuests(orgId: string): Promise<OrgGuest[]> {
         userId: driveMembers.userId,
         acceptedAt: driveMembers.acceptedAt,
         source: driveMembers.source,
+        role: driveMembers.role,
+        pageCount: sql<number>`(SELECT count(*)::int FROM ${pagePermissions} pp JOIN ${pages} p ON pp."pageId" = p.id WHERE p."driveId" = ${driveMembers.driveId} AND pp."userId" = ${driveMembers.userId} AND (pp."expiresAt" IS NULL OR pp."expiresAt" > now()))`,
         name: users.name,
         email: users.email,
         image: users.image,
@@ -189,13 +209,12 @@ export async function listOrgGuests(orgId: string): Promise<OrgGuest[]> {
       .from(driveMembers)
       .innerJoin(users, eq(users.id, driveMembers.userId))
       .innerJoin(drives, eq(drives.id, driveMembers.driveId))
-      // Pending invitations are part of the Guests list on purpose (each shows as pending, DRV-8); GUEST rows
-      // (page share links, D-OW-24) are not: they hold one page, not the drive, and the drive's Members page
-      // lists them apart.
-      .where(and(inArray(driveMembers.driveId, ids.slice(i, i + 500)), inArray(driveMembers.role, [...DRIVE_MEMBERSHIP_ROLES])))
+      // Every outsider row on purpose (DRV-8, the org admin's one view of external access): pending invitations
+      // (shown as pending) and GUEST rows (page share links, D-OW-24, shown as "page link" with their pages).
+      .where(inArray(driveMembers.driveId, ids.slice(i, i + 500)))
       .limit(MAX_ROWS);
     const outsiders = chunk.filter((r) => !memberIds.has(r.userId));
-    rows.push(...(await decryptUserRows(outsiders)));
+    rows.push(...(await decryptUserRows(outsiders)).map((r) => ({ ...r, pageCount: Number(r.pageCount) })));
   }
   return summarizeOrgGuests(rows, memberIds);
 }

@@ -13,7 +13,7 @@ import { db, pool } from '@pagespace/db/db';
 import { eq, inArray } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { drives } from '@pagespace/db/schema/core';
-import { driveMembers } from '@pagespace/db/schema/members';
+import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
 import { organizations, orgMembers } from '@pagespace/db/schema/organizations';
 import { sessions } from '@pagespace/db/schema/sessions';
 import { files } from '@pagespace/db/schema/storage';
@@ -71,6 +71,12 @@ describe.skipIf(!ok)('org read models (real Postgres)', () => {
     // Marcus is invited to Finance but has not accepted; Gail redeemed a page share link on Product (a GUEST row).
     await factories.createDriveMember(finance.id, marcus.id, { source: 'invite', acceptedAt: null });
     await factories.createDriveMember(product.id, gail.id, { source: 'invite', role: 'GUEST' });
+    // Gail's link gave her one live page on Product; an expired grant there counts for nothing.
+    const [spec, old] = await Promise.all([factories.createPage(product.id, { title: 'Spec' }), factories.createPage(product.id, { title: 'Old notes' })]);
+    await db.insert(pagePermissions).values([
+      { pageId: spec.id, userId: gail.id, canView: true },
+      { pageId: old.id, userId: gail.id, canView: true, expiresAt: new Date('2020-01-01T00:00:00Z') },
+    ]);
     await factories.createDriveMember(trashed.id, chris.id, { source: 'invite' });
     ids.files = [createId(), createId(), createId()];
     await db.insert(files).values([
@@ -95,11 +101,12 @@ describe.skipIf(!ok)('org read models (real Postgres)', () => {
     await pool.end();
   });
 
-  it('UI-7 (partial) DRV-8 (partial): guests are the outsiders in live org drives, with each drive; stale rows and org members never appear', async () => {
+  it('UI-7 (partial) DRV-8 (partial): guests are the outsiders in live org drives, invited or by page link, with each drive; stale rows and org members never appear', async () => {
     const guests = await listOrgGuests(ids.orgId);
     expect(guests.map((g) => ({ userId: g.userId, name: g.name, drives: g.drives }))).toEqual([
-      { userId: u.chris, name: 'Chris Rowe', drives: [{ id: d.product, name: 'Product', pending: false }] },
-      { userId: u.pia, name: 'Pia Pending', drives: [{ id: d.finance, name: 'Finance', pending: true }] },
+      { userId: u.chris, name: 'Chris Rowe', drives: [{ id: d.product, name: 'Product', pending: false, source: 'invited', pageCount: 0 }] },
+      { userId: u.gail, name: 'Gail Link', drives: [{ id: d.product, name: 'Product', pending: false, source: 'page_link', pageCount: 1 }] },
+      { userId: u.pia, name: 'Pia Pending', drives: [{ id: d.finance, name: 'Finance', pending: true, source: 'invited', pageCount: 0 }] },
     ]);
     expect(guests[0].email).toMatch(/^chris-.*@partner\.test$/);
   });
@@ -122,7 +129,7 @@ describe.skipIf(!ok)('org read models (real Postgres)', () => {
     expect(activity[u.lou]).toBeUndefined();
   });
 
-  it('UI-7 (partial): a pending invitee is not counted as a member, and a page-link guest is neither a member nor a listed guest', async () => {
+  it('UI-7 (partial) DRV-8 (partial): a pending invitee is not counted as a member; a page-link guest is listed as a guest by its link, never counted as a member', async () => {
     const usage = Object.fromEntries((await listOrgDriveUsage(ids.orgId)).map((x) => [x.driveId, x]));
     // Finance holds only pending invitations (Pia, Marcus): nobody is in it yet.
     expect(usage[d.finance]).toMatchObject({ memberCount: 0, guestCount: 0 });
@@ -130,7 +137,8 @@ describe.skipIf(!ok)('org read models (real Postgres)', () => {
     expect(usage[d.product]).toMatchObject({ memberCount: 2, guestCount: 1 });
     const activity = (await listOrgMemberActivity(ids.orgId)).find((a) => a.userId === u.marcus);
     expect(activity?.driveCount).toBe(1);
-    expect((await listOrgGuests(ids.orgId)).map((g) => g.userId)).not.toContain(u.gail);
+    const gail = (await listOrgGuests(ids.orgId)).find((g) => g.userId === u.gail);
+    expect(gail?.drives).toEqual([{ id: d.product, name: 'Product', pending: false, source: 'page_link', pageCount: 1 }]);
   });
 
   it('UI-7 (partial): trashed org drives, Private ones included, whoever the viewer is (the admin Trashed tab)', async () => {

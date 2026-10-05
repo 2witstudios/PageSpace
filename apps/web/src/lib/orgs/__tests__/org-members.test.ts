@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { filterMembers, inviteStatusLine, memberTabCounts, parseCreditsInput, seatCapsLabel, liveInvitations } from '../org-members';
+import { filterMembers, guestAccessLine, inviteStatusLine, memberTabCounts, parseCreditsInput, seatCapsLabel, liveInvitations } from '../org-members';
 import type { OrgInvitation, OrgMember } from '../org-api';
 
 const member = (userId: string, role: OrgMember['role'], name: string, email = `${userId}@x.io`): OrgMember => ({ userId, role, name, email, image: null, joinedAt: '2026-09-01T00:00:00Z' });
@@ -51,5 +51,21 @@ describe('inviteStatusLine', () => {
   it('names the inviter, the expiry and the reserved seat', () => {
     expect(inviteStatusLine(invite('i', 'sam@x.io', '2026-10-11T12:00:00Z'), 'Priya Nair', now)).toBe('Invited by Priya Nair · expires in 6 days · seat reserved');
     expect(inviteStatusLine(invite('i', 'sam@x.io', '2026-10-06T00:00:00Z'), null, now)).toBe('Invited · expires in 1 day · seat reserved');
+  });
+});
+
+describe('guestAccessLine', () => {
+  it('DRV-8 (partial): names each drive with how the guest got in, and counts drives and pages', () => {
+    expect(
+      guestAccessLine([
+        { id: 'd1', name: 'Product', pending: false, source: 'page_link', pageCount: 1 },
+        { id: 'd2', name: 'Finance', pending: true, source: 'invited', pageCount: 0 },
+        { id: 'd3', name: 'Design', pending: false, source: 'invited', pageCount: 2 },
+      ]),
+    ).toBe('3 drives · 3 pages · in Product (page link, 1 page), Finance (invited, pending), Design (invited, 2 pages)');
+  });
+
+  it('leaves pages out when the guest holds none', () => {
+    expect(guestAccessLine([{ id: 'd1', name: 'Product', pending: false, source: 'invited', pageCount: 0 }])).toBe('1 drive · in Product (invited)');
   });
 });
