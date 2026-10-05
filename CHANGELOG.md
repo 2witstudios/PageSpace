@@ -29,7 +29,9 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   can no longer use hands the chat back to Imago with a note saying so. Files shows a drive's pages
   as a live tree: open a folder in place with its caret, filter by name (the folders on the way to a
   match stay in view), and press + to create a document in the open folder, which appears at once
-  and opens. An empty drive, a section that fails to load and an address that names nothing you can
+  and opens. Opening a document reads it in a centred column, with its title and the path of pages
+  above it in the header; it is read-only for now, and a page you cannot view shows "not found".
+  An empty drive, a section that fails to load and an address that names nothing you can
   open each get their own designed screen inside the frame: a note about what will show up, a "Try
   again" button that never shows the server's error text, or "not found" with a link back. Press ⌘K
   (Ctrl-K on Windows and Linux) anywhere to search the open drive's pages by name, or tick "Include
