@@ -1,6 +1,6 @@
 import { existsSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
-import { beforeEach, describe, test, vi } from 'vitest';
+import { beforeAll, beforeEach, describe, test, vi } from 'vitest';
 import { assert } from 'riteway/vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { ReactElement, ReactNode } from 'react';
@@ -76,6 +76,24 @@ const driveRow = (id: string, name: string, kind: 'HOME' | 'STANDARD') => ({
   lastAccessedAt: null,
   homePageId: null,
 });
+
+const loadTaskPage = () => import('./[driveId]/tasks/[pageId]/page');
+
+// The first import of the layout pulls in the whole Shell tree (and each
+// route its own): ~0.5s locally, past vitest's 5s test timeout on a loaded
+// CI runner. Pay that once here so each test times only its own render.
+const WARM_UP_TIMEOUT_MS = 60_000;
+
+beforeAll(async () => {
+  await Promise.all([
+    import('./layout'),
+    import('./[driveId]/layout'),
+    import('@/ui/frame/shell/shell'),
+    import('@/ui/tasks/task-object/task-object'),
+    loadTaskPage(),
+    ...routes.map((route) => route.load()),
+  ]);
+}, WARM_UP_TIMEOUT_MS);
 
 beforeEach(() => {
   getViewer.mockReset();
@@ -276,11 +294,9 @@ describe('the stage routes', () => {
 });
 
 describe('an open task list or task', () => {
-  const load = () => import('./[driveId]/tasks/[pageId]/page');
-
   test('renders the task object for the viewer', async () => {
     getViewer.mockResolvedValue(viewer);
-    const { default: Page } = await load();
+    const { default: Page } = await loadTaskPage();
     const element = await Page(props());
     const { TaskObject } = await import('@/ui/tasks/task-object/task-object');
 
@@ -298,7 +314,7 @@ describe('an open task list or task', () => {
 
   test('keeps the auth gate', async () => {
     getViewer.mockRejectedValue(redirect);
-    const { default: Page } = await load();
+    const { default: Page } = await loadTaskPage();
     const thrown = await Page(props()).then(
       () => null,
       (error: unknown) => error,
