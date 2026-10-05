@@ -301,6 +301,54 @@ describe('ChatHistory', () => {
     });
   });
 
+  test('Send while a reply streams into another chat', async () => {
+    const stream = fakeTurnStream();
+    const web = historyWeb(stream, {
+      [NEW_CONVERSATION]: () => Response.json({ conversationId: 'c-new', title: 'New conversation', createdAt: '2026-10-05T15:31:00.000Z' }),
+    });
+    const container = mountChat(web);
+    await settle(showing(container, 'When does Q3 launch?'));
+    act(() => dispatch(transactions.setChatDraft, 'And Q4?'));
+    act(() => {
+      composer(container).form?.requestSubmit();
+    });
+    stream.push({ type: 'start', messageId: 'live-1' });
+    stream.push({ type: 'text-start', id: 't1' });
+    stream.push({ type: 'text-delta', id: 't1', delta: 'Q4 follows' });
+    await settle(showing(container, 'Q4 follows'));
+
+    const send = () => container.querySelector<HTMLButtonElement>('[data-slot="chat"] button[aria-label="Send"]');
+    const notice = () => container.querySelector('[data-slot="chat"] [role="alert"]')?.textContent ?? null;
+    const look = () => ({ disabled: send()?.disabled ?? null, notice: notice() });
+
+    click(control(container, 'New chat'));
+    act(() => dispatch(transactions.setChatDraft, 'Plan the offsite'));
+    act(() => {
+      composer(container).form?.requestSubmit();
+    });
+    const inNewChat = look();
+    click(row(container, 'Roadmap review'));
+    await settle(showing(container, 'Review the roadmap'));
+    const inOtherThread = look();
+
+    stream.close();
+    await settle(() => {
+      if (send()?.disabled !== false) throw new Error('Send still disabled after the turn');
+    });
+    const after = { ...look(), writes: web.writes().map((request) => `${request.method} ${request.url}`), draft: composer(container).value };
+
+    assert({
+      given: 'a reply streaming into one chat while the viewer types in a New chat, then in another thread, then the reply ends',
+      should: 'disable Send and say why in both, send nothing meanwhile and keep the draft, then enable Send with no notice',
+      actual: [inNewChat, inOtherThread, after],
+      expected: [
+        { disabled: true, notice: 'A reply is still coming in another chat.' },
+        { disabled: true, notice: 'A reply is still coming in another chat.' },
+        { disabled: false, notice: null, writes: [TURN], draft: 'Plan the offsite' },
+      ],
+    });
+  });
+
   test('a list that failed to load', async () => {
     let fail = true;
     const web = historyWeb(fakeTurnStream(), {

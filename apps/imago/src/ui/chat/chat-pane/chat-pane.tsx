@@ -38,6 +38,7 @@ export type ChatPaneProps = {
 const selectDraft = (state: UiState) => state.resources.chatDraft;
 const selectConversation = (state: UiState) => state.resources.chatConversationId;
 const selectNew = (state: UiState) => state.resources.chatNew;
+const selectStreamingInto = (state: UiState) => state.resources.streaming?.conversationId ?? null;
 const selectHistoryHidden = (state: UiState) => state.resources.collapsedSections.includes('chat');
 const selectLost = (state: UiState) => state.resources.chatAgentLost;
 
@@ -47,6 +48,7 @@ const lostAccess = (error: unknown): boolean => error instanceof ApiError && (er
 const NOTICES = {
   lost: (name: string) => `You no longer have access to ${name}, so Imago is answering.`,
   setup: 'Imago is still being set up. Try again in a moment.',
+  elsewhere: 'A reply is still coming in another chat.',
   load: 'This chat could not load. Try again in a moment.',
   reply: 'The reply failed. Try again.',
   stop: 'The reply could not be stopped.',
@@ -90,10 +92,14 @@ export function ChatPane({ stage, driveName, homeDriveId }: ChatPaneProps) {
   // A new chat needs no list: its conversation is created by the send.
   const resolving = !chatNew && chosen === null && conversations === undefined && conversationsError === undefined;
   const streaming = chat.status === 'submitted' || chat.status === 'streaming';
+  // One turn at a time: while a reply streams into a chat other than this one
+  // (another thread, or before a New chat has one), a send here would be refused.
+  const streamingInto = useUiState(selectStreamingInto);
+  const busyElsewhere = streamingInto !== null && streamingInto !== conversationId;
 
   const send = async () => {
     const text = draft;
-    if (agentId === null || resolving || text.trim() === '' || sending.current) return;
+    if (agentId === null || resolving || busyElsewhere || text.trim() === '' || sending.current) return;
     sending.current = true;
     setFailed(false);
     dispatch(transactions.setChatDraft, '');
@@ -123,6 +129,7 @@ export function ChatPane({ stage, driveName, homeDriveId }: ChatPaneProps) {
     if (lost !== null) return NOTICES.lost(lost);
     if (unprovisioned) return NOTICES.setup;
     if (agentsError !== undefined || conversationsError !== undefined || chat.loadError !== undefined) return NOTICES.load;
+    if (busyElsewhere) return NOTICES.elsewhere;
     if (failed || chat.status === 'error') return NOTICES.reply;
     if (chat.error !== undefined) return NOTICES.stop;
     return null;
@@ -168,7 +175,7 @@ export function ChatPane({ stage, driveName, homeDriveId }: ChatPaneProps) {
       placeholder: context.placeholder,
       density: context.density,
       streaming,
-      disabled: agentId === null || resolving,
+      disabled: agentId === null || resolving || busyElsewhere,
       typeDraft: (next) => dispatch(transactions.setChatDraft, next),
       send: () => void send(),
       stop: () => void chat.stop(),
