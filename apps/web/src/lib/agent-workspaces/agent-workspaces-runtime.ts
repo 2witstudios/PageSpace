@@ -22,6 +22,7 @@ import { and, eq, inArray, sql } from '@pagespace/db/operators';
 import { conversations } from '@pagespace/db/schema/conversations';
 import { agentWorkspaceNodes } from '@pagespace/db/schema/agent-workspace-nodes';
 import { users } from '@pagespace/db/schema/auth';
+import { drives } from '@pagespace/db/schema/core';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { checkAgentSessionConcurrency } from '@pagespace/lib/services/sandbox/quota';
 import {
@@ -76,7 +77,10 @@ import {
   nextUniqueSessionName,
   type AgentSessionDTO,
 } from '@pagespace/lib/agent-workspaces/session-contract';
-import { decideAgentSessionAccess } from '@pagespace/lib/agent-workspaces/decide-workspace-access';
+import {
+  decideAgentSessionAccess,
+  sessionHostsAgentsFromAnyDrive,
+} from '@pagespace/lib/agent-workspaces/decide-workspace-access';
 import { MAX_SESSION_CONVERSATIONS } from '@pagespace/lib/agent-workspaces/plan-spawn-worker';
 import { resolveDevPreviewHolder } from '@pagespace/lib/services/sandbox/preview/dev-preview-core';
 import { provisionHomeDriveIfNeeded } from '@pagespace/lib/onboarding/home-drive';
@@ -354,7 +358,19 @@ function buildClaimDeps(actingUserId: string): ClaimConversationInSessionDeps<Db
     },
     findSession: async (workspaceId) => {
       const row = await findSessionRecord(workspaceId);
-      return row ? { driveId: row.driveId, endedAt: row.endedAt } : null;
+      if (!row) return null;
+      const drive =
+        row.driveId === null
+          ? null
+          : ((await db.query.drives.findFirst({
+              where: eq(drives.id, row.driveId),
+              columns: { kind: true, ownerId: true },
+            })) ?? null);
+      return {
+        driveId: row.driveId,
+        endedAt: row.endedAt,
+        hostsAgentsFromAnyDrive: sessionHostsAgentsFromAnyDrive({ session: row, drive }),
+      };
     },
     admitConversation: (input) => admitConversationNode({ ...input, actingUserId }),
   };
