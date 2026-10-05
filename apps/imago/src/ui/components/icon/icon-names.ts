@@ -1,6 +1,8 @@
 import {
+  Activity,
   ArrowUpRight,
   Bot,
+  Cable,
   Calendar,
   Check,
   ChevronDown,
@@ -65,6 +67,9 @@ export const icons = {
   sun: Sun,
   moon: Moon,
   monitor: Monitor,
+  // The rail's ⋯ overflow (DEC-6).
+  activity: Activity,
+  connections: Cable,
 } as const satisfies Readonly<Record<string, LucideIcon>>;
 
 export type IconName = keyof typeof icons;

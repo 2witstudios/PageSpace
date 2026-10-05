@@ -3,8 +3,10 @@ import { createElement as h } from 'react';
 import { describe, test } from 'vitest';
 import { assert } from 'riteway/vitest';
 import {
+  Activity,
   ArrowUpRight,
   Bot,
+  Cable,
   Calendar,
   Check,
   ChevronDown,
@@ -73,6 +75,8 @@ describe('icon names', () => {
         sun: Sun,
         moon: Moon,
         monitor: Monitor,
+        activity: Activity,
+        connections: Cable,
       },
     });
   });
