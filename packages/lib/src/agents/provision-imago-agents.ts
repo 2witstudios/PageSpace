@@ -44,7 +44,7 @@ import { computePageStateHash } from '../services/page-version-service';
 import { hashWithPrefix } from '../utils/hash-utils';
 import { PageType } from '../utils/enums';
 import { BUILTIN_AGENTS, type BuiltinAgentDefinition, type BuiltinAgentKey } from './builtin-agents';
-import { grantImagoAgentsToOwnedDrives } from './grant-imago-agents';
+import { grantNewImagoAgents } from './grant-imago-agents';
 
 export const IMAGO_FOLDER_TITLE = 'Imago';
 
@@ -60,6 +60,11 @@ export interface ProvisionImagoAgentsResult {
   agents: Record<BuiltinAgentKey, string>;
   /** Keys whose page this call created (empty when everything was already there). */
   created: BuiltinAgentKey[];
+  /**
+   * The trashed pages the created ones replace (their pointers were repointed).
+   * They keep their drive memberships, so they still record where Imago was on.
+   */
+  replacedPageIds: string[];
 }
 
 export interface ProvisionImagoAgentsInTransactionResult extends ProvisionImagoAgentsResult {
@@ -119,10 +124,16 @@ export async function provisionImagoAgentsInTransaction(
 
   const agents: Partial<Record<BuiltinAgentKey, string>> = {};
   const missing: BuiltinAgentDefinition[] = [];
+  const replacedPageIds: string[] = [];
   for (const definition of BUILTIN_AGENTS) {
     const pointer = pointers.find((candidate) => candidate.key === definition.key);
     if (pointer && liveIds.has(pointer.pageId)) agents[definition.key] = pointer.pageId;
-    else missing.push(definition);
+    else {
+      missing.push(definition);
+      // A pointer still here means its page is trashed, not gone (deleting the
+      // page cascades the pointer away).
+      if (pointer) replacedPageIds.push(pointer.pageId);
+    }
   }
 
   const creator = new PageCreator(tx, userId, homeDriveId);
@@ -156,22 +167,33 @@ export async function provisionImagoAgentsInTransaction(
     folderId,
     agents: agents as Record<BuiltinAgentKey, string>,
     created: missing.map((definition) => definition.key),
+    replacedPageIds,
     deferredTriggers: creator.deferredTriggers,
   };
 }
 
 /**
  * After the provisioning transaction commits — never while it holds the
- * user-row lock — grant the agents this call created in the user's owned
- * STANDARD drives (`grant-imago-agents.ts`). Agents that already existed are
- * left alone, so a grant the user removed is not re-added on the next sign-in.
+ * user-row lock — grant the agents this call created (`grant-imago-agents.ts`).
+ * Agents that already existed are left alone, so a grant the user removed is
+ * not re-added on the next sign-in; a recreated agent joins only the drives
+ * where Imago is still on, read from its live siblings and the trashed page it
+ * replaces (`grantNewImagoAgents`).
  */
 export async function grantCreatedImagoAgents(
   userId: string,
-  result: Pick<ProvisionImagoAgentsResult, 'agents' | 'created'>,
+  result: Pick<ProvisionImagoAgentsResult, 'agents' | 'created' | 'replacedPageIds'>,
 ): Promise<void> {
   if (result.created.length === 0) return;
-  await grantImagoAgentsToOwnedDrives(userId, { agentPageIds: result.created.map((key) => result.agents[key]) });
+  const created = new Set<BuiltinAgentKey>(result.created);
+  const createdIds = result.created.map((key) => result.agents[key]);
+  const siblingIds = BUILTIN_AGENTS
+    .filter((definition) => !created.has(definition.key))
+    .map((definition) => result.agents[definition.key]);
+  await grantNewImagoAgents(userId, {
+    agentPageIds: createdIds,
+    referencePageIds: [...siblingIds, ...result.replacedPageIds],
+  });
 }
 
 async function lockUser(tx: TransactionType, userId: string): Promise<void> {

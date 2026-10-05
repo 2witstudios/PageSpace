@@ -303,6 +303,16 @@ echo "----------------------"
 run_test_suite "Built-in Agent Pointers (viewer only, no cross-user leakage)" "web" "src/app/api/user/builtin-agents"
 
 # =============================================================================
+# Imago Agent Grants (DEC-2: the agents reach a drive only through memberships)
+# =============================================================================
+echo "🪪 Imago Agent Grants"
+echo "---------------------"
+
+run_test_suite "Imago Access Toggle Route (owner/admin only, CSRF + origin, off stays off)" "web" "src/app/api/drives/[driveId]/imago-access"
+run_db_test_suite "Imago Access Toggle Service (grant rights, Home refused, authoritative off)" "@pagespace/lib" "src/agents/__tests__/imago-drive-access.integration.test.ts"
+run_test_suite "Drive Ownership Rollback/Redo (revokes the outgoing owner's Imago grants)" "web" "src/services/api/rollback/__tests__/drive-ownership.integration.test.ts"
+
+# =============================================================================
 # AI Tool Security Tests
 # =============================================================================
 echo "🤖 AI Tool Security"

@@ -109,6 +109,11 @@
       "import": "./dist/agents/grant-imago-agents.js",
       "require": "./dist/agents/grant-imago-agents.js"
     },
+    "./agents/imago-drive-access": {
+      "types": "./dist/agents/imago-drive-access.d.ts",
+      "import": "./dist/agents/imago-drive-access.js",
+      "require": "./dist/agents/imago-drive-access.js"
+    },
     "./agents/provision-imago-agents": {
       "types": "./dist/agents/provision-imago-agents.d.ts",
       "import": "./dist/agents/provision-imago-agents.js",
