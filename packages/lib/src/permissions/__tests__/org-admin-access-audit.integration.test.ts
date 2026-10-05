@@ -151,9 +151,14 @@ describe('ORG-4 (partial) audit dedupe (integration)', () => {
 
   it('ORG-4 (partial) the SQL twin (pulse, activity summary, page payloads) writes the same event when org power opens a PRIVATE drive, and none for a joined Admin or an OPEN drive', async () => {
     const f = await northwind();
-    const { priya, omar } = f.people;
+    const { priya, omar, jono } = f.people;
     const finance = f.drives.finance.id;
     const salaries = f.pages.financePrivatePage.id;
+
+    // A page payload on its own is an access: Jono (org Owner; his leftover OWNER row on Finance counts for
+    // nothing) opens Salaries through org power, and the payload alone writes the event.
+    expect((await loadPagePayload(jono.id, salaries)).page.id).toBe(salaries);
+    expect(await settledCount(jono.id, finance, 1)).toBe(1);
 
     // Priya (org Admin, no valid Finance row) reaches the PRIVATE Finance drive through org power in SQL too.
     expect(await accessiblePageIds(priya.id)).toEqual(expect.arrayContaining([salaries, f.pages.financePage.id, f.pages.productPage.id]));
