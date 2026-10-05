@@ -148,7 +148,15 @@ describe('provisionImagoAgents (real Postgres)', () => {
       .where(and(eq(activityLogs.operation, 'create'), inArray(activityLogs.pageId, [...agentIds, folderOf(result)])));
     expect(logs.map((log) => log.pageId).sort()).toEqual([...agentIds, folderOf(result)].sort());
     for (const log of logs) {
-      expect(log).toMatchObject({ userId: user.id, driveId: home.id, resourceType: 'page' });
+      // The actor is a permanent, hash-chained audit fact: it must be the user,
+      // never the 'unknown@system' fallback a failed actor lookup writes.
+      expect(log).toMatchObject({
+        userId: user.id,
+        driveId: home.id,
+        resourceType: 'page',
+        actorEmail: user.email,
+        actorDisplayName: user.name,
+      });
     }
   });
 

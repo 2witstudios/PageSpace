@@ -295,7 +295,9 @@ class PageCreator {
   }
 
   private resolveActor() {
-    this.actor ??= getActorInfo(this.userId);
+    // Through the transaction, never the global pool: this runs while the
+    // transaction holds a connection and the user-row lock (see getActorInfo).
+    this.actor ??= getActorInfo(this.userId, this.tx);
     return this.actor;
   }
 
