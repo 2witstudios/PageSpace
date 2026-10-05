@@ -122,14 +122,30 @@ async function linkUsableNow(driveId: string, link: { suspendedByPolicy: Suspens
  * Create (or refresh) the drive membership a drive share link grants. Shared by redemption and by the approval of a
  * queued redeemer, so a person admitted after approval gets exactly what an immediate redeemer gets.
  */
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+/**
+ * POL-2, again at the write: the caller asked the guests policy before, but it may have been turned OFF since. Run
+ * the write in a transaction that first re-asks under the org row's share lock (guest-admission.ts), so the write
+ * either commits before the policy change parks it, or sees "off" and writes nothing (null).
+ */
+async function admittedWrite<T>(driveId: string, userId: string, write: (tx: Tx) => Promise<T>): Promise<T | null> {
+  return db.transaction(async (tx) => {
+    const admission = await decideOrgDriveAdmission({ driveId, userId }, tx);
+    if (admission.decision === 'refuse') return null;
+    return write(tx);
+  });
+}
+
 async function insertDriveLinkMember(
+  tx: Tx,
   userId: string,
   link: { driveId: string; role: DriveShareLink['role']; customRoleId: string | null },
 ): Promise<{ memberId: string; customRoleId: string | null }> {
   // Defense-in-depth: older links may pre-date the ADMIN gate; keep ADMIN+null invariant.
   const customRoleId = link.role === 'ADMIN' ? null : link.customRoleId;
 
-  const [inserted] = await db.insert(driveMembers).values({
+  const [inserted] = await tx.insert(driveMembers).values({
     id: createId(),
     driveId: link.driveId,
     userId,
@@ -155,10 +171,11 @@ async function insertDriveLinkMember(
  * row — is left exactly as it is: redeeming a page link must never accept an invite nor change a role.
  */
 async function insertPageLinkGuest(
+  tx: Tx,
   userId: string,
   link: { driveId: string; pageId: string; permissions: ShareLinkPermission[] },
-): Promise<void> {
-  await db.insert(driveMembers).values({
+): Promise<true> {
+  await tx.insert(driveMembers).values({
     id: createId(),
     driveId: link.driveId,
     userId,
@@ -173,7 +190,7 @@ async function insertPageLinkGuest(
   const canShare  = link.permissions.includes('SHARE');
   const canDelete = link.permissions.includes('DELETE');
 
-  await db
+  await tx
     .insert(pagePermissions)
     .values({
       id: createId(),
@@ -196,6 +213,7 @@ async function insertPageLinkGuest(
         grantedAt: new Date(),
       },
     });
+  return true;
 }
 
 // ============================================================================
@@ -363,7 +381,9 @@ export async function redeemDriveShareLink(
     return { ok: false, error: 'PENDING_APPROVAL', driveId: link.driveId };
   }
 
-  const { memberId, customRoleId } = await insertDriveLinkMember(ctx.userId, link);
+  const inserted = await admittedWrite(link.driveId, ctx.userId, (tx) => insertDriveLinkMember(tx, ctx.userId, link));
+  if (!inserted) return { ok: false, error: 'NOT_FOUND' };
+  const { memberId, customRoleId } = inserted;
 
   await db
     .update(driveShareLinks)
@@ -538,7 +558,7 @@ export async function redeemPageShareLink(
   }
 
   // A page link makes the redeemer a GUEST: a row that carries the page grant and nothing drive-wide.
-  await insertPageLinkGuest(ctx.userId, link);
+  if (!(await admittedWrite(link.driveId, ctx.userId, (tx) => insertPageLinkGuest(tx, ctx.userId, link)))) return { ok: false, error: 'NOT_FOUND' };
 
   if (!alreadyHasAccess) {
     await db
@@ -583,7 +603,10 @@ export async function completeApprovedLinkAdmission(claim: ClaimedGuestApproval)
       .where(and(eq(driveShareLinks.id, linkId), eq(driveShareLinks.driveId, claim.driveId)))
       .limit(1);
     if (!link || !isValidShareLink(link) || !shareLinkUsable(policies, link)) return { ok: false, error: 'LINK_GONE' };
-    const { memberId, customRoleId } = await insertDriveLinkMember(claim.userId, link);
+    const userId = claim.userId;
+    const inserted = await admittedWrite(link.driveId, userId, (tx) => insertDriveLinkMember(tx, userId, link));
+    if (!inserted) return { ok: false, error: 'POLICY_OFF' };
+    const { memberId, customRoleId } = inserted;
     await db.update(driveShareLinks).set({ useCount: sql`${driveShareLinks.useCount} + 1` }).where(eq(driveShareLinks.id, link.id));
     return { ok: true, driveId: link.driveId, userId: claim.userId, memberId, role: link.role, customRoleId, driveName: link.driveName, createdBy: link.createdBy };
   }
@@ -600,7 +623,8 @@ export async function completeApprovedLinkAdmission(claim: ClaimedGuestApproval)
     .where(and(eq(pageShareLinks.id, linkId), eq(pages.driveId, claim.driveId)))
     .limit(1);
   if (!link || !isValidShareLink(link) || !shareLinkUsable(policies, link)) return { ok: false, error: 'LINK_GONE' };
-  await insertPageLinkGuest(claim.userId, link);
+  const userId = claim.userId;
+  if (!(await admittedWrite(link.driveId, userId, (tx) => insertPageLinkGuest(tx, userId, link)))) return { ok: false, error: 'POLICY_OFF' };
   await db.update(pageShareLinks).set({ useCount: sql`${pageShareLinks.useCount} + 1` }).where(eq(pageShareLinks.id, link.id));
   return { ok: true, driveId: link.driveId, userId: claim.userId, memberId: null, role: 'GUEST', customRoleId: null, driveName: link.driveName, createdBy: null };
 }

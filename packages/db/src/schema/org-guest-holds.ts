@@ -22,13 +22,16 @@ const utcNow = sql`(now() at time zone 'utc')`;
  */
 export const GUEST_HOLD_STATES = ['pending_approval', 'suspended'] as const;
 export type GuestHoldState = (typeof GUEST_HOLD_STATES)[number];
-export const GUEST_HOLD_ORIGINS = ['invite', 'drive_link', 'page_link'] as const;
+// `page_invite`: a page share-invite by email to an address with no verified account; `page_grant`: a direct page
+// grant (the page Share dialog, or a share-invite to an existing account) — queued, or parked when that grant was
+// the person's only access to the drive.
+export const GUEST_HOLD_ORIGINS = ['invite', 'drive_link', 'page_link', 'page_invite', 'page_grant'] as const;
 export type GuestHoldOrigin = (typeof GUEST_HOLD_ORIGINS)[number];
 
 export interface GuestHoldRequest {
   role?: 'MEMBER' | 'ADMIN';
   customRoleId?: string | null;
-  permissions?: Array<{ pageId: string; canView: boolean; canEdit: boolean; canShare: boolean }>;
+  permissions?: Array<{ pageId: string; canView: boolean; canEdit: boolean; canShare: boolean; canDelete?: boolean }>;
   expiryDays?: number | null;
   linkId?: string;
   pageId?: string;

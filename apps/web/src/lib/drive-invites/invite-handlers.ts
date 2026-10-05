@@ -193,6 +193,10 @@ export async function handleUserIdPath(args: {
       grantedBy: inviterUserId,
       validPageIds,
     });
+    if ('refused' in result) {
+      const refusal = guestsOffRefusal();
+      return NextResponse.json({ error: refusal.message, code: refusal.code, policy: refusal.policy }, { status: refusal.status });
+    }
     memberId = result.memberId;
     permissionsGranted = result.permissionsGranted;
   } else {

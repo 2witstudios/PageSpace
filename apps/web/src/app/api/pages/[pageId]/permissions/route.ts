@@ -111,6 +111,12 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
           return NextResponse.json({ error: 'Target user not found' }, { status: 404 });
         case 'INSUFFICIENT_PERMISSION':
           return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 });
+        // POL-2: the org's guests policy decided the grant. Off refuses naming the policy; approve queued it and
+        // granted nothing (202), so no notification or broadcast follows.
+        case 'GUEST_POLICY_OFF':
+          return NextResponse.json({ error: result.error.message, code: 'org_policy', policy: 'guests' }, { status: 403 });
+        case 'GUEST_APPROVAL_PENDING':
+          return NextResponse.json({ kind: 'pending_approval', holdId: result.error.holdId, message: result.error.message }, { status: 202 });
         default:
           return NextResponse.json({ error: 'Permission operation failed' }, { status: 500 });
       }
@@ -186,6 +192,12 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ pageI
           return NextResponse.json({ error: 'You do not have permission to manage this page' }, { status: 403 });
         case 'INSUFFICIENT_PERMISSION':
           return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 });
+        // POL-2: the org's guests policy decided the grant. Off refuses naming the policy; approve queued it and
+        // granted nothing (202), so no notification or broadcast follows.
+        case 'GUEST_POLICY_OFF':
+          return NextResponse.json({ error: result.error.message, code: 'org_policy', policy: 'guests' }, { status: 403 });
+        case 'GUEST_APPROVAL_PENDING':
+          return NextResponse.json({ kind: 'pending_approval', holdId: result.error.holdId, message: result.error.message }, { status: 202 });
         default:
           return NextResponse.json({ error: 'Permission operation failed' }, { status: 500 });
       }

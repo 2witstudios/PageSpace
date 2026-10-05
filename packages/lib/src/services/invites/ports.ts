@@ -118,7 +118,7 @@ export interface RevokePorts {
 
 export type ConsumePagePermissionReason = Extract<
   InviteAcceptanceErrorCode,
-  'TOKEN_CONSUMED'
+  'TOKEN_CONSUMED' | 'GUEST_POLICY'
 > | 'ALREADY_HAS_PERMISSION';
 
 export type ConsumePagePermissionResult =

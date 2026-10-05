@@ -2928,6 +2928,11 @@
       "types": "./dist/permissions/guest-admission.d.ts",
       "import": "./dist/permissions/guest-admission.js",
       "require": "./dist/permissions/guest-admission.js"
+    },
+    "./permissions/page-grant-admission": {
+      "types": "./dist/permissions/page-grant-admission.d.ts",
+      "import": "./dist/permissions/page-grant-admission.js",
+      "require": "./dist/permissions/page-grant-admission.js"
     }
   },
   "typesVersions": {
@@ -3813,6 +3818,9 @@
       ],
       "permissions/guest-admission": [
         "./dist/permissions/guest-admission.d.ts"
+      ],
+      "permissions/page-grant-admission": [
+        "./dist/permissions/page-grant-admission.d.ts"
       ]
     }
   },

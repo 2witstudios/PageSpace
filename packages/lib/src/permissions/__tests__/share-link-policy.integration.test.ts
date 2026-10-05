@@ -215,7 +215,7 @@ describe('guests policy at redemption', () => {
   };
   const memberRow = (userId: string) => db.select().from(driveMembers).where(and(eq(driveMembers.driveId, w.orgDrive), eq(driveMembers.userId, userId)));
 
-  it('POL-2 X-6 (partial) guests OFF: an outsider redeeming either link kind is refused like a missing link and nothing is created', async () => {
+  it('POL-2 (partial) X-6 (partial) guests OFF: an outsider redeeming either link kind is refused like a missing link and nothing is created', async () => {
     const { drive, page } = await makeLinks();
     await setGuests('off');
     const outsider = await newUser();
@@ -233,7 +233,7 @@ describe('guests policy at redemption', () => {
     expect((await redeemPageShareLink(ctxFor(await orgMemberUser()), page.rawToken)).ok).toBe(true);
   });
 
-  it('POL-2 guests APPROVE: the outsider is queued, told so, and holds NO access — no row, no grant, no page access', async () => {
+  it('POL-2 (partial) guests APPROVE: the outsider is queued, told so, and holds NO access — no row, no grant, no page access', async () => {
     const { drive, page } = await makeLinks();
     await setGuests('approve');
     const outsider = await newUser();
@@ -294,7 +294,7 @@ describe('guests policy at redemption', () => {
     expect(await memberRow(b)).toEqual([]);
   });
 
-  it('POL-2 guests ON admits an outsider at once, as before', async () => {
+  it('POL-2 (partial) guests ON admits an outsider at once, as before', async () => {
     const { drive } = await makeLinks();
     expect((await redeemDriveShareLink(ctxFor(await newUser()), drive.rawToken)).ok).toBe(true);
   });

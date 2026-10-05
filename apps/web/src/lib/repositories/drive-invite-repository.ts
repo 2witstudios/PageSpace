@@ -189,8 +189,13 @@ export const driveInviteRepository = {
     permissions: Array<{ pageId: string; canView: boolean; canEdit: boolean; canShare: boolean }>;
     grantedBy: string;
     validPageIds: Set<string>;
-  }): Promise<{ memberId: string; permissionsGranted: number }> {
+  }): Promise<{ memberId: string; permissionsGranted: number } | { refused: 'GUEST_POLICY' }> {
     return db.transaction(async (tx) => {
+      // POL-2, again at the write and under the org row's share lock: the caller asked the policy before, but guests
+      // may have been turned OFF since; then nothing is written (the change's suspension could not have seen it).
+      const admission = await decideOrgDriveAdmission({ driveId: input.driveId, userId: input.userId }, tx);
+      if (admission.decision === 'refuse') return { refused: 'GUEST_POLICY' } as const;
+
       const [member] = await tx
         .insert(driveMembers)
         .values({

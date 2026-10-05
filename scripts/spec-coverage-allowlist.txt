@@ -80,6 +80,17 @@ ORG-4
 # ORG-5 (one shared org permission function used by web routes, CLI, and MCP): B3 routes all go
 # through requireOrgRole, titled "ORG-5 (partial)"; CLI and MCP use it in Wave G (X-1).
 ORG-5
+# POL-2 (guests from outside: off, admins approve, on) re-added per Review 3+4 (page v3pbwr7hy45eu1t2w6qbxm3e,
+# P1-3 "removed but not proven"): with guests off an outsider still got in through a page share-invite, a direct
+# page grant (grantPagePermission) and page-invite acceptance, none of which asked decideOrgDriveAdmission, and
+# guests off did not park an outsider whose only access was a page grant. ow-policy-integrity routes every one of
+# those writes through decideOrgDriveAdmission (re-asked inside the write's transaction under the org row's share
+# lock, so a write racing a switch to off either is parked or sees off), parks page-grant-only outsiders, and
+# replays approved page grants and page invitations. Each bypass has a test that failed before the fix, titled
+# "POL-2 (partial)". It stays listed until a reviewer agrees every clause is proven: the apps/web paths are
+# proven against a mocked decision (apps/web cannot turn ORGS_ENABLED on inside lib's dist), the decision itself
+# against real Postgres in packages/lib.
+POL-2
 POL-6
 # POL-8 (models available and provider allowlist): every model call is refused by the org allowlists in the one
 # provider factory and saving a disallowed model is refused, titled "POL-8 (partial)". Not claimed: the model

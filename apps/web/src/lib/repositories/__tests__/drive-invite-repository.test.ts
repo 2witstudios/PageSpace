@@ -704,3 +704,41 @@ describe('driveInviteRepository — inviter name PII decryption at the read edge
   });
 });
 
+
+describe('driveInviteRepository.createAcceptedMemberWithPermissions and the guests policy', () => {
+  const input = {
+    driveId: 'drive_1',
+    userId: 'user_outside',
+    role: 'MEMBER' as const,
+    customRoleId: null,
+    invitedBy: 'inviter_1',
+    permissions: [{ pageId: 'page_1', canView: true, canEdit: false, canShare: false }],
+    grantedBy: 'inviter_1',
+    validPageIds: new Set(['page_1']),
+  };
+  const setupTx = () => {
+    const memberValues = vi.fn().mockReturnValue({ returning: vi.fn().mockResolvedValue([{ id: 'mem_1' }]) });
+    const grantValues = vi.fn().mockResolvedValue(undefined);
+    const insert = vi.fn().mockReturnValueOnce({ values: memberValues }).mockReturnValueOnce({ values: grantValues });
+    const tx = { insert };
+    mockTransaction.mockImplementation(async (cb: (t: unknown) => Promise<unknown>) => cb(tx));
+    return { tx, insert };
+  };
+
+  it('POL-2 (partial) guests turned OFF after the route asked: the write asks again inside its transaction and creates nothing', async () => {
+    const { tx, insert } = setupTx();
+    decideOrgDriveAdmission.mockResolvedValue({ decision: 'refuse', orgId: 'org_1' });
+
+    expect(await driveInviteRepository.createAcceptedMemberWithPermissions(input)).toEqual({ refused: 'GUEST_POLICY' });
+    expect(decideOrgDriveAdmission).toHaveBeenCalledWith({ driveId: 'drive_1', userId: 'user_outside' }, tx);
+    expect(insert).not.toHaveBeenCalled();
+  });
+
+  it('POL-2 (partial) allowed (or approved and replayed): the member row and its grants are written', async () => {
+    const { insert } = setupTx();
+    decideOrgDriveAdmission.mockResolvedValue({ decision: 'hold', orgId: 'org_1' });
+
+    expect(await driveInviteRepository.createAcceptedMemberWithPermissions(input)).toEqual({ memberId: 'mem_1', permissionsGranted: 1 });
+    expect(insert).toHaveBeenCalledTimes(2);
+  });
+});

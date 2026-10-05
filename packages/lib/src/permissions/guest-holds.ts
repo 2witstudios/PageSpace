@@ -85,11 +85,35 @@ const guestRowsOf = (executor: Executor, orgId: string) =>
 // ---------------------------------------------------------------------------
 
 /**
+ * People outside the org who hold page grants in one of its drives with NO member row there (a direct page grant
+ * from the Share dialog or a share-invite), as distinct (driveId, userId) pairs. The drive lead is never one.
+ */
+const grantOnlyOutsiders = (executor: Executor, orgId: string) =>
+  executor
+    .selectDistinct({ driveId: pages.driveId, userId: pagePermissions.userId })
+    .from(pagePermissions)
+    .innerJoin(pages, eq(pages.id, pagePermissions.pageId))
+    .where(and(
+      inArray(pages.driveId, orgDriveIds(executor, orgId)),
+      sql`not exists (select 1 from ${orgMembers} where ${orgMembers.orgId} = ${orgId} and ${orgMembers.userId} = ${pagePermissions.userId})`,
+      sql`not exists (select 1 from ${drives} d where d.id = ${pages.driveId} and d."ownerId" = ${pagePermissions.userId})`,
+      sql`not exists (select 1 from ${driveMembers} m where m."driveId" = ${pages.driveId} and m."userId" = ${pagePermissions.userId})`,
+    ))
+    .orderBy(asc(pages.driveId), asc(pagePermissions.userId))
+    .limit(GUEST_HOLD_BATCH);
+
+/**
  * Park every guest of the org's drives: snapshot their member row and page grants into a `suspended` hold, then
- * remove both from the live tables. Idempotent (a second run finds no guests) and bounded (batches of
- * GUEST_HOLD_BATCH). Returns what it parked. Call inside the transaction that stored the policy.
+ * remove both from the live tables. A guest whose only access is a page grant (no member row) is parked the same
+ * way, with `member: null`. Idempotent (a second run finds no guests) and bounded (batches of GUEST_HOLD_BATCH).
+ * Returns what it parked. Call inside the transaction that stored the policy.
  */
 export async function suspendOrgGuests(executor: Executor, orgId: string): Promise<GuestHoldItem[]> {
+  const parked = await suspendGuestMembers(executor, orgId);
+  return [...parked, ...(await suspendGrantOnlyGuests(executor, orgId))];
+}
+
+async function suspendGuestMembers(executor: Executor, orgId: string): Promise<GuestHoldItem[]> {
   const parked: GuestHoldItem[] = [];
   // Each row is handled once: if a removal ever did not take, the loop must end rather than re-read the same
   // rows forever.
@@ -122,6 +146,44 @@ export async function suspendOrgGuests(executor: Executor, orgId: string): Promi
       // The snapshot is stored before anything is removed, in the same transaction: no state loses a row.
       if (grants.length > 0) await executor.delete(pagePermissions).where(inArray(pagePermissions.id, grants.map((g) => g.id)));
       await executor.delete(driveMembers).where(eq(driveMembers.id, row.id));
+      parked.push(toItem(hold));
+    }
+  }
+}
+
+async function suspendGrantOnlyGuests(executor: Executor, orgId: string): Promise<GuestHoldItem[]> {
+  const parked: GuestHoldItem[] = [];
+  const handled = new Set<string>();
+  for (;;) {
+    const pairs = (await grantOnlyOutsiders(executor, orgId)).filter((p) => !handled.has(`${p.driveId}:${p.userId}`));
+    if (pairs.length === 0) return parked;
+    for (const { driveId, userId } of pairs) {
+      handled.add(`${driveId}:${userId}`);
+      const grants = await executor
+        .select()
+        .from(pagePermissions)
+        .where(and(
+          eq(pagePermissions.userId, userId),
+          inArray(pagePermissions.pageId, executor.select({ id: pages.id }).from(pages).where(eq(pages.driveId, driveId))),
+        ));
+      // A hold this person already has on this drive keeps what it parked: the new grants are added to it, never
+      // written over it.
+      const [existing] = await executor
+        .select()
+        .from(orgGuestHolds)
+        .where(and(eq(orgGuestHolds.driveId, driveId), eq(orgGuestHolds.userId, userId), eq(orgGuestHolds.state, 'suspended')))
+        .limit(1);
+      const snapshot: GuestHoldParked = {
+        member: existing?.parked?.member ?? null,
+        grants: [...(existing?.parked?.grants ?? []), ...(JSON.parse(JSON.stringify(grants)) as Array<Record<string, unknown>>)],
+      };
+      const [hold] = existing
+        ? await executor.update(orgGuestHolds).set({ parked: snapshot }).where(eq(orgGuestHolds.id, existing.id)).returning()
+        : await executor
+          .insert(orgGuestHolds)
+          .values({ orgId, driveId, userId, state: 'suspended', origin: 'page_grant', request: {}, parked: snapshot })
+          .returning();
+      await executor.delete(pagePermissions).where(inArray(pagePermissions.id, grants.map((g) => g.id)));
       parked.push(toItem(hold));
     }
   }
@@ -301,7 +363,7 @@ export async function listPendingGuestApprovalViews(orgId: string, limit: number
       ...toItem(r.hold),
       driveName: r.driveName,
       requesterName: r.hold.userId ? ((await decryptField(r.userName)) ?? null) : null,
-      request: { role: req.role ?? null, pageGrants: req.permissions?.length ?? (req.pageId ? 1 : 0), viaLink: r.hold.origin !== 'invite' },
+      request: { role: req.role ?? null, pageGrants: req.permissions?.length ?? (req.pageId ? 1 : 0), viaLink: r.hold.origin === 'drive_link' || r.hold.origin === 'page_link' },
     });
   }
   return { total: counted?.total ?? 0, items };
