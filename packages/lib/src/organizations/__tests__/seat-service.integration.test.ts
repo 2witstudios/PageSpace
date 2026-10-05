@@ -555,6 +555,16 @@ describe('seat accounting (real Postgres)', () => {
       expect(freshRow.extraSeatQuantity).toBe(1);
     });
 
+    it('SEAT-5 (partial) review #2761 P3-9: a row with no known period is not re-scanned on every tick (it can never be reconciled until it has one)', async () => {
+      const stripe = new RecordingSeatStripe(0);
+      await releaseDueSeats({ now: new Date() }, stripe); // baselines every row that can be
+      const steady = (await releaseDueSeats({ now: new Date() }, stripe)).scanned;
+      const f = await buildOrg({ members: 6, extra: 1, autoAdd: false });
+      await db.update(orgSubscriptions).set({ currentPeriodStart: null, currentPeriodEnd: null, seatsReconciledThrough: null }).where(eq(orgSubscriptions.orgId, f.orgId));
+      expect((await releaseDueSeats({ now: new Date() }, stripe)).scanned).toBe(steady);
+      expect(stripe.calls.filter((c) => c.itemId === f.itemId)).toEqual([]);
+    });
+
     it('SEAT-5 (partial) a seat that is held again before the boundary is never released', async () => {
       const f = await buildOrg({ members: 6, extra: 1, autoAdd: false, periodEnd: new Date(Date.now() + SEAT_RELEASE_LEAD_MS / 2) });
       const stripe = new RecordingSeatStripe(0);

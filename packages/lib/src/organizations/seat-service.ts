@@ -35,7 +35,7 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { and, eq, isNull, lt, lte, or, sql } from '@pagespace/db/operators';
+import { and, eq, isNotNull, isNull, lt, lte, or, sql } from '@pagespace/db/operators';
 import { organizations, orgSubscriptions, type OrgRole } from '@pagespace/db/schema/organizations';
 import { isBillingEnabled } from '../deployment-mode';
 import { isLiveOrgSubscriptionStatus, orgBillingLockKey, planSeatQuantitySync } from '../billing/org-subscription-core';
@@ -284,7 +284,8 @@ export async function releaseDueSeats(input: { now: Date; leadMs?: number }, por
         and(
           or(
             lte(orgSubscriptions.currentPeriodEnd, horizon),
-            isNull(orgSubscriptions.seatsReconciledThrough),
+            // Never reconciled: baselined once — but only a row with a known period can be (review #2761 P3-9).
+            and(isNull(orgSubscriptions.seatsReconciledThrough), isNotNull(orgSubscriptions.currentPeriodStart), isNotNull(orgSubscriptions.currentPeriodEnd)),
             lt(orgSubscriptions.seatsReconciledThrough, orgSubscriptions.currentPeriodStart),
           ),
           eq(orgSubscriptions.cancelAtPeriodEnd, false),
