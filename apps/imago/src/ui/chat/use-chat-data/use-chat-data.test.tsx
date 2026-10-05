@@ -6,6 +6,9 @@ import { assert } from 'riteway/vitest';
 import { ImagoSWRProvider } from '@/api/swr-provider';
 import { ApiError } from '@/api/errors';
 import { fakeWeb, type FakeRoute } from '@/ui/test-support/fake-web';
+import { setUiState } from '@/ui/store/store';
+import { createInitialState } from '@/ui/store/state';
+import { dispatch, transactions } from '@/ui/store/transactions';
 import { useAgentConversations, useConversationMessages, useImagoAgents } from './use-chat-data';
 import { chatPaths, CONVERSATIONS_PAGE_SIZE } from '../chat-api/chat-api';
 import {
@@ -221,6 +224,48 @@ describe('useConversationMessages()', () => {
       should: 'load its newest messages oldest first, parts exactly as sent, with the rev and an older page on offer',
       actual: [seen.thread?.messages, seen.thread?.hasOlder, seen.thread?.rev, web.count(messagesAt()), offGlobal(web.requests.map((r) => r.url))],
       expected: [newest, true, 4, 1, []],
+    });
+  });
+
+  test('moving to another conversation while one streams', async () => {
+    setUiState(createInitialState());
+    const seen: Seen = {};
+    const other = `GET ${chatPaths.messages('p-imago', 'c2')}`;
+    const web = fakeWeb({
+      [messagesAt()]: () => Response.json(messagesPage([userMessage('m1', 'Streaming here')])),
+      [other]: () => Response.json(messagesPage([userMessage('m9', 'Another thread')], { conversationId: 'c2' })),
+    });
+    const root = createRoot(document.createElement('div'));
+    roots.push(root);
+    const show = (conversationId: string) =>
+      act(() => {
+        root.render(
+          <ImagoSWRProvider client={web.client}>
+            <Probe seen={seen} conversationId={conversationId} />
+          </ImagoSWRProvider>,
+        );
+      });
+    show('c1');
+    await settle(() => {
+      if (seen.thread?.messages === undefined) throw new Error('not loaded');
+    });
+    act(() => dispatch(transactions.startStreaming, 'c1'));
+    show('c2');
+    try {
+      await settle(() => {
+        if (seen.thread?.messages?.[0]?.id !== 'm9') throw new Error('c2 not loaded');
+      });
+    } catch {
+      // Asserted below, once the stream has ended for the next test.
+    }
+    const actual = [ids(seen.thread?.messages), web.count(other), web.count(messagesAt())];
+    act(() => dispatch(transactions.endStreaming, 'c1'));
+
+    assert({
+      given: 'a turn streaming into c1 when the hook moves to c2',
+      should: 'load c2 (only the streaming conversation is paused), and leave c1 alone',
+      actual,
+      expected: [['m9'], 1, 1],
     });
   });
 

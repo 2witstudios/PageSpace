@@ -1,6 +1,6 @@
 import { describe, test } from 'vitest';
 import { assert } from 'riteway/vitest';
-import { chatContextFor, paneLayout, stageFor, type ListSection } from './stage';
+import { chatContextFor, paneLayout, stageFor, type HideableSection } from './stage';
 
 const page = (pageId: string) => ({ kind: 'page', pageId }) as const;
 
@@ -8,18 +8,18 @@ describe('stageFor() chat', () => {
   test('a drive', () => {
     assert({
       given: 'a drive path',
-      should: 'open that drive’s chat with the list closed and no object',
+      should: 'open that drive’s chat beside its history (the chat’s list) and no object',
       actual: stageFor('/drive-1'),
-      expected: { driveId: 'drive-1', section: 'chat', list: 'closed', object: null },
+      expected: { driveId: 'drive-1', section: 'chat', list: 'list', object: null },
     });
   });
 
   test('no drive', () => {
     assert({
       given: 'the bare root (the server sends it on to the Home drive)',
-      should: 'open the chat with no drive, no list and no object',
+      should: 'open the chat beside its history, with no drive and no object',
       actual: stageFor('/'),
-      expected: { driveId: null, section: 'chat', list: 'closed', object: null },
+      expected: { driveId: null, section: 'chat', list: 'list', object: null },
     });
   });
 });
@@ -220,7 +220,7 @@ describe('stageFor() unknown and malformed paths', () => {
 });
 
 describe('paneLayout()', () => {
-  const none: readonly ListSection[] = [];
+  const none: readonly HideableSection[] = [];
 
   test('nothing collapsed', () => {
     assert({
@@ -233,7 +233,7 @@ describe('paneLayout()', () => {
         paneLayout(stageFor('/drive-1/settings'), { collapsedSections: none }),
       ],
       expected: [
-        { list: 'closed', listHidden: false, object: false },
+        { list: 'list', listHidden: false, object: false },
         { list: 'list', listHidden: false, object: false },
         { list: 'tree', listHidden: false, object: true },
         { list: 'closed', listHidden: false, object: true },
@@ -276,6 +276,36 @@ describe('paneLayout()', () => {
     });
   });
 
+  test('the chat history hides', () => {
+    assert({
+      given: 'the chat stage with the chat collapsed, and with every other section collapsed',
+      should: 'hide the history only when the chat itself is collapsed (there is nowhere to step back to)',
+      actual: [
+        paneLayout(stageFor('/drive-1'), { collapsedSections: ['chat'] }),
+        paneLayout(stageFor('/'), { collapsedSections: ['chat'] }),
+        paneLayout(stageFor('/drive-1'), { collapsedSections: ['files', 'messages', 'tasks'] }),
+      ],
+      expected: [
+        { list: 'closed', listHidden: true, object: false },
+        { list: 'closed', listHidden: true, object: false },
+        { list: 'list', listHidden: false, object: false },
+      ],
+    });
+  });
+
+  test('a hidden chat history hides no other list', () => {
+    assert({
+      given: 'the chat collapsed and a stage 3 in each list section',
+      should: 'leave every tree open',
+      actual: [
+        paneLayout(stageFor('/drive-1/files/page-1'), { collapsedSections: ['chat'] }).list,
+        paneLayout(stageFor('/drive-1/messages/channel-1'), { collapsedSections: ['chat'] }).list,
+        paneLayout(stageFor('/drive-1/tasks/list-1'), { collapsedSections: ['chat'] }).list,
+      ],
+      expected: ['tree', 'tree', 'tree'],
+    });
+  });
+
   test('the stage 2 list never hides', () => {
     assert({
       given: 'stage 2 with its section collapsed',
@@ -292,28 +322,27 @@ describe('paneLayout()', () => {
   });
 
   test('stages with no list', () => {
-    const every: readonly ListSection[] = ['files', 'messages', 'tasks'];
+    const every: readonly HideableSection[] = ['chat', 'files', 'messages', 'tasks'];
     assert({
-      given: 'the chat, settings and account with every list section collapsed',
+      given: 'settings and account with every section collapsed',
       should: 'have no list to hide, so report none hidden',
       actual: [
-        paneLayout(stageFor('/drive-1'), { collapsedSections: every }).listHidden,
         paneLayout(stageFor('/drive-1/settings'), { collapsedSections: every }).listHidden,
         paneLayout(stageFor('/account'), { collapsedSections: every }).listHidden,
       ],
-      expected: [false, false, false],
+      expected: [false, false],
     });
   });
 
-  test('only list sections collapse', () => {
+  test('only sections with a list collapse', () => {
     // Type-level: a section with no list is not a collapsible section, so
     // tsc rejects it (bun run typecheck fails if the type widens again).
-    // @ts-expect-error chat has no list to collapse
-    const chat: readonly ListSection[] = ['chat'];
+    // @ts-expect-error settings has no list to collapse
+    const settings: readonly HideableSection[] = ['settings'];
     assert({
-      given: 'a collapsed-sections value naming the chat',
+      given: 'a collapsed-sections value naming settings',
       should: 'be rejected by the type (the value never reaches a layout)',
-      actual: chat.length,
+      actual: settings.length,
       expected: 1,
     });
   });

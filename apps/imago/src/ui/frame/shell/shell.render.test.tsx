@@ -2,10 +2,10 @@ import { describe, test } from 'vitest';
 import { assert } from 'riteway/vitest';
 import { createElement as h } from 'react';
 import { renderToString } from 'react-dom/server';
-import { paneLayout, stageFor, type ListSection } from '../stage/stage';
+import { paneLayout, stageFor, type HideableSection } from '../stage/stage';
 import { renderShell } from './shell.render';
 
-const markup = (pathname: string, collapsedSections: readonly ListSection[] = [], hydrated = false): string => {
+const markup = (pathname: string, collapsedSections: readonly HideableSection[] = [], hydrated = false): string => {
   const stage = stageFor(pathname);
   return renderToString(
     renderShell({
@@ -66,7 +66,8 @@ describe('renderShell()', () => {
       given: 'stages from the URL and the collapsed sections',
       should: 'name the section, list state and open object as data attributes',
       actual: [
-        /data-section="chat" data-list="closed" data-list-hidden="false"/.test(markup('/drive-1')),
+        /data-section="chat" data-list="list" data-list-hidden="false"/.test(markup('/drive-1')),
+        /data-section="chat" data-list="closed" data-list-hidden="true"/.test(markup('/drive-1', ['chat'])),
         markup('/drive-1').includes('data-object='),
         /data-section="files" data-list="tree" data-list-hidden="false" data-object="page"/.test(
           markup('/drive-1/files/page-1'),
@@ -75,17 +76,16 @@ describe('renderShell()', () => {
         markup('/dm/conversation-1').includes('data-object="conversation"'),
         markup('/account').includes('data-object="account"'),
       ],
-      expected: [true, false, true, true, true, true],
+      expected: [true, true, false, true, true, true, true],
     });
   });
 
   test('closed panes', () => {
-    const html = markup('/drive-1');
     assert({
-      given: 'the drive chat',
-      should: 'mark the closed list and object panes inert and aria-hidden, the chat reachable',
-      actual: (html.match(/inert=""/g) ?? []).length,
-      expected: 2,
+      given: 'the drive chat beside its history, then with the history hidden',
+      should: 'mark only the closed panes inert and aria-hidden: the object, then the list too; the chat stays reachable',
+      actual: [(markup('/drive-1').match(/inert=""/g) ?? []).length, (markup('/drive-1', ['chat']).match(/inert=""/g) ?? []).length],
+      expected: [1, 2],
     });
   });
 

@@ -115,6 +115,26 @@ describe('stage transactions through the store', () => {
     });
   });
 
+  test('hide then show the chat history', () => {
+    const stage = stageFor('/drive-1');
+    dispatch(transactions.collapseSection, 'chat');
+    const hidden = paneLayout(stage, getUiState().resources);
+    const files = paneLayout(stageFor('/drive-1/files/page-1'), getUiState().resources);
+    dispatch(transactions.expandSection, 'chat');
+    const shown = paneLayout(stage, getUiState().resources);
+
+    assert({
+      given: 'the chat history hidden and then shown again through the store',
+      should: 'close the chat’s list and reopen it, never touching the files tree',
+      actual: [hidden, files.list, shown],
+      expected: [
+        { list: 'closed', listHidden: true, object: false },
+        'tree',
+        { list: 'list', listHidden: false, object: false },
+      ],
+    });
+  });
+
   test('repeat collapse notifies once', () => {
     let notifications = 0;
     const unsubscribe = subscribeUiState(() => {

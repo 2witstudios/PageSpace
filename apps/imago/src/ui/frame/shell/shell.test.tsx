@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, test, vi } from 'vitest';
 import { assert } from 'riteway/vitest';
 import { createInitialState } from '../../store/state';
 import { getUiState, setUiState } from '../../store/store';
+import { dispatch, transactions } from '../../store/transactions';
 import type { Stage } from '../stage/stage';
 import { RealtimeProvider } from '@/realtime/realtime-provider';
 import { fakeRealtime } from '../../test-support/fake-realtime';
@@ -105,6 +106,28 @@ vi.mock('@/ui/chat/chat-pane/chat-pane', async () => {
   };
 });
 
+// The chat history loads through SWR; its own suite proves it beside the real
+// chat pane. Here it only has to be in the list slot, with its × wired to the
+// store as the real one is.
+const historyMounts = vi.hoisted(() => ({ count: 0 }));
+vi.mock('@/ui/chat/chat-history/chat-history', async () => {
+  const { useState } = await import('react');
+  const { dispatch, transactions } = await import('../../store/transactions');
+  return {
+    ChatHistory: () => {
+      useState(() => {
+        historyMounts.count += 1;
+        return historyMounts.count;
+      });
+      return h(
+        'section',
+        { 'aria-label': 'Chat history' },
+        h('button', { type: 'button', 'aria-label': 'Hide Chat history', onClick: () => dispatch(transactions.collapseSection, 'chat') }),
+      );
+    },
+  };
+});
+
 const { Shell } = await import('./shell');
 
 let root: Root | null = null;
@@ -167,6 +190,7 @@ beforeEach(() => {
   setUiState(createInitialState());
   routeMounts = 0;
   chatMounts.count = 0;
+  historyMounts.count = 0;
   navigation.pathname = '/drive-1';
   container = document.createElement('div');
   document.body.append(container);
@@ -288,10 +312,65 @@ describe('Shell', () => {
       should: 'move the panes from chat alone to tree + object + chat',
       actual: [chat, tree, slot('object').className.endsWith('w-stage-object-tree')],
       expected: [
-        ['chat', 'closed', true],
+        ['chat', 'list', false],
         ['files', 'tree', false],
         true,
       ],
+    });
+  });
+
+  test('the chat section fills its list with the history', () => {
+    render();
+    const history = () => slot('list').querySelector('section[aria-label="Chat history"]');
+    const onChat = history() !== null;
+    navigate('/drive-1/files');
+    const onFiles = history() !== null;
+    navigate('/drive-2');
+
+    assert({
+      given: 'the drive chat, then Files, then another drive’s chat',
+      should: 'hold the chat history in the list slot on the chat stages only',
+      actual: [onChat, onFiles, history() !== null, slot('list').hasAttribute('inert')],
+      expected: [true, false, true, false],
+    });
+  });
+
+  test('switching chats remounts nothing', () => {
+    render();
+    const before = ['rail', 'list', 'object', 'chat'].map(slot);
+    const shell = frame();
+    const history = slot('list').querySelector('section[aria-label="Chat history"]');
+    act(() => dispatch(transactions.openConversation, 'c1'));
+    act(() => dispatch(transactions.startNewChat, undefined));
+    act(() => dispatch(transactions.openConversation, 'c2'));
+
+    assert({
+      given: 'a past chat picked, then New chat, then another past chat',
+      should: 'keep the frame, rail, list, object and chat nodes, the history and the chat pane each mounted once',
+      actual: [
+        frame() === shell && ['rail', 'list', 'object', 'chat'].every((name, index) => slot(name) === before[index]),
+        slot('list').querySelector('section[aria-label="Chat history"]') === history,
+        chatMounts.count,
+        historyMounts.count,
+      ],
+      expected: [true, true, 1, 1],
+    });
+  });
+
+  test('× on the chat history hides it, and the rail brings it back', () => {
+    render();
+    click('[data-slot="list"] button[aria-label="Hide Chat history"]');
+    const hidden = [getUiState().resources.collapsedSections, frame().dataset.list, frame().dataset.listHidden, slot('list').hasAttribute('inert')];
+    navigate('/drive-1/files/page-1');
+    const files = frame().dataset.list;
+    navigate('/drive-1');
+    click('[data-slot="rail"] a[aria-label="Chat"]');
+
+    assert({
+      given: 'the history hidden, a visit to an open page, then Chat clicked on the rail',
+      should: 'hide only the chat’s list (the files tree stays), then slide the history back',
+      actual: [hidden, files, getUiState().resources.collapsedSections, frame().dataset.list, slot('list').hasAttribute('inert')],
+      expected: [[['chat'], 'closed', 'true', true], 'tree', [], 'list', false],
     });
   });
 

@@ -2,7 +2,7 @@
 
 import type { ReactNode } from 'react';
 import { dispatch, transactions } from '../../store/transactions';
-import type { ListPane as ListPaneVariant, ListSection } from '../stage/stage';
+import type { HideableSection, ListPane as ListPaneVariant, ListSection } from '../stage/stage';
 import { renderListOpener, renderListPane } from './list-pane.render';
 
 export type ListPaneProps = {
@@ -28,7 +28,7 @@ export function ListPane({ section, variant, title, closeHref, actions = null, c
 }
 
 export type ListOpenerProps = {
-  readonly section: ListSection;
+  readonly section: HideableSection;
   readonly title: string;
 };
 

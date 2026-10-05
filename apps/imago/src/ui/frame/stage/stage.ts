@@ -46,6 +46,15 @@ const listSections: readonly string[] = ['files', 'messages', 'tasks'];
 export const isListSection = (section: string): section is ListSection =>
   listSections.includes(section);
 
+/**
+ * The sections whose list the viewer can hide: the list sections' trees and
+ * the chat's history (the chat's own list, myimago ADR 0029 decision 2).
+ */
+export type HideableSection = ListSection | 'chat';
+
+export const isHideableSection = (section: string): section is HideableSection =>
+  section === 'chat' || isListSection(section);
+
 /** First segments that name a route, never a drive. */
 const reserved: readonly string[] = ['dm', 'account', 'chat', 'settings', ...listSections];
 
@@ -57,12 +66,13 @@ const reserved: readonly string[] = ['dm', 'account', 'chat', 'settings', ...lis
 const isId = (segment: string | undefined): segment is string =>
   segment !== undefined && /^[A-Za-z0-9_-]{1,128}$/.test(segment);
 
-const root: Stage = { driveId: null, section: 'chat', list: 'closed', object: null };
+/** The chat's own list is its history of past chats. */
+const root: Stage = { driveId: null, section: 'chat', list: 'list', object: null };
 
 const driveChat = (driveId: string): Stage => ({
   driveId,
   section: 'chat',
-  list: 'closed',
+  list: 'list',
   object: null,
 });
 
@@ -120,11 +130,12 @@ export const stageFor = (pathname: string): Stage => {
 };
 
 /**
- * Only the narrow tree beside an object hides; the object stays open. The
- * stage-2 list is the whole stage, so closing it leaves the section instead,
- * and the chat, settings and account have no list.
+ * A list hides rather than steps back where there is nowhere to step back to
+ * (the chat history: the chat is home) or the object stays open (the narrow
+ * tree beside an object). The stage-2 list is the whole stage, so closing it
+ * leaves the section instead; settings and account have no list.
  */
-const collapsible = (stage: Stage): boolean => stage.list === 'tree';
+const collapsible = (stage: Stage): boolean => stage.section === 'chat' || stage.list === 'tree';
 
 /**
  * The panes to show, from the stage and the one piece of view state the URL
@@ -133,10 +144,10 @@ const collapsible = (stage: Stage): boolean => stage.list === 'tree';
  */
 export const paneLayout = (
   stage: Stage,
-  { collapsedSections }: { readonly collapsedSections: readonly ListSection[] },
+  { collapsedSections }: { readonly collapsedSections: readonly HideableSection[] },
 ): PaneLayout => {
   const listHidden =
-    collapsible(stage) && isListSection(stage.section) && collapsedSections.includes(stage.section);
+    collapsible(stage) && isHideableSection(stage.section) && collapsedSections.includes(stage.section);
   return {
     list: listHidden ? 'closed' : stage.list,
     listHidden,

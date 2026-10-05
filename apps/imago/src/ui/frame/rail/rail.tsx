@@ -3,7 +3,7 @@
 import type { ReactNode } from 'react';
 import { dispatch, transactions } from '../../store/transactions';
 import { useDisclosure } from '../disclosure/use-disclosure';
-import { isListSection, type PaneLayout, type Stage } from '../stage/stage';
+import { isHideableSection, type PaneLayout, type Stage } from '../stage/stage';
 import { useUnreadBadges } from '../../messages/use-messages/use-messages';
 import {
   activeRailItem,
@@ -46,7 +46,7 @@ export function Rail({ stage, layout, homeDriveId, brand, footer }: RailProps) {
     activeAt: activeRailPlace(stage),
     unread: { messages: messagesUnread(badges) },
     onReopen:
-      layout.listHidden && isListSection(section)
+      layout.listHidden && isHideableSection(section)
         ? () => dispatch(transactions.expandSection, section)
         : undefined,
     overflow: driveId === null ? null : overflowItems(driveId),

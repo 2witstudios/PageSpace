@@ -47,7 +47,7 @@ const uniqueById = <T extends { readonly id: string }>(rows: readonly T[]): read
 /** The viewer's conversations with an agent page, most recent first; more pages on `loadMore`. */
 export const useAgentConversations = (agentId: string | null) => {
   const client = useApiClient();
-  const { data, error, isLoading, isValidating, size, setSize } = useSWRInfinite(
+  const { data, error, isLoading, isValidating, size, setSize, mutate } = useSWRInfinite(
     (page: number, previous: ConversationsPage | null) =>
       agentId === null || (previous !== null && !previous.hasMore)
         ? null
@@ -62,6 +62,10 @@ export const useAgentConversations = (agentId: string | null) => {
     hasMore,
     loadMore: async (): Promise<void> => {
       if (hasMore) await setSize(size + 1);
+    },
+    /** Reads the loaded pages again: a new conversation, or one that moved to the top. */
+    revalidate: async (): Promise<void> => {
+      await mutate();
     },
     isLoading,
     isLoadingMore: isValidating && data !== undefined && data.length < size,
@@ -80,6 +84,12 @@ export const useAgentConversations = (agentId: string | null) => {
  */
 export const useConversationMessages = (agentId: string | null, conversationId: string | null) => {
   const client = useApiClient();
+  // SWR asks isPaused about a new key during the render that brings it, before
+  // it takes this render's options: a closure over the id would answer for the
+  // previous conversation, and moving off a streaming one would never load the
+  // next. The ref names this render's conversation.
+  const shown = useRef(conversationId);
+  shown.current = conversationId;
   const { data, error, isLoading, isValidating, size, setSize, mutate } = useSWRInfinite(
     (page: number, newer: MessagesPage | null) => {
       if (agentId === null || conversationId === null) return null;
@@ -88,7 +98,7 @@ export const useConversationMessages = (agentId: string | null, conversationId: 
     },
     ([, agent, conversation, cursor]) => fetchConversationMessages(client, agent, conversation, cursor ?? undefined),
     // Read at call time: the store, not a render, says whether a turn is live.
-    { isPaused: () => isStreaming(getUiState(), conversationId) },
+    { isPaused: () => isStreaming(getUiState(), shown.current) },
   );
   const streaming = useUiState((state) => isStreaming(state, conversationId));
   const seen = useRef({ conversationId, streaming });

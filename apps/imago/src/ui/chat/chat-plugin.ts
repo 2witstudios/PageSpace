@@ -20,10 +20,20 @@ const withResources = (state: UiState, resources: Partial<UiState['resources']>)
 
 const sameAgent = (a: ChatAgent | null, b: ChatAgent | null): boolean => a?.id === b?.id;
 
+type ChatResources = Pick<UiState['resources'], 'chatConversationId' | 'chatNew'>;
+
+/**
+ * The conversation the chat pane shows: none in a new chat, else the one
+ * chosen, else the agent's latest (`latest`, null while it has none).
+ */
+export const shownConversationId = ({ chatConversationId, chatNew }: ChatResources, latest: string | null): string | null =>
+  chatNew ? null : (chatConversationId ?? latest);
+
 /**
  * The Chat section's shell state: which conversation a turn is streaming
  * into, the composer's draft, the agent the pane talks to and the
- * conversation it shows. The
+ * conversation it shows (or a new chat, which has no conversation until its
+ * first send). The
  * messages themselves live in SWR and the turn hook, not here. Each
  * transaction returns the same snapshot when nothing changes.
  */
@@ -39,7 +49,9 @@ export const chatPlugin = {
     readonly chatAgent: ChatAgent | null;
     /** The name of the agent the viewer lost access to, for the notice; null when none was. */
     readonly chatAgentLost: string | null;
-  } => ({ streaming: null, chatDraft: '', chatConversationId: null, chatAgent: null, chatAgentLost: null }),
+    /** New chat is open: an empty thread, its conversation created by the first send. */
+    readonly chatNew: boolean;
+  } => ({ streaming: null, chatDraft: '', chatConversationId: null, chatAgent: null, chatAgentLost: null, chatNew: false }),
   transactions: {
     startStreaming: (state: UiState, conversationId: string): UiState =>
       isStreaming(state, conversationId) ? state : withStreaming(state, { conversationId }),
@@ -48,18 +60,23 @@ export const chatPlugin = {
     setChatDraft: (state: UiState, chatDraft: string): UiState =>
       state.resources.chatDraft === chatDraft ? state : withResources(state, { chatDraft }),
     openConversation: (state: UiState, chatConversationId: string): UiState =>
-      state.resources.chatConversationId === chatConversationId ? state : withResources(state, { chatConversationId }),
-    /** Talks to another agent (null: Imago) in its latest conversation; the draft stays. */
+      state.resources.chatConversationId === chatConversationId && !state.resources.chatNew
+        ? state
+        : withResources(state, { chatConversationId, chatNew: false }),
+    /** Opens an empty thread; the draft stays, and nothing is created until it is sent. */
+    startNewChat: (state: UiState): UiState =>
+      state.resources.chatNew ? state : withResources(state, { chatConversationId: null, chatNew: true }),
+    /** Talks to another agent (null: Imago) in its latest conversation, leaving a new chat; the draft stays. */
     selectAgent: (state: UiState, chatAgent: ChatAgent | null): UiState =>
       sameAgent(state.resources.chatAgent, chatAgent) && state.resources.chatAgentLost === null
         ? state
-        : withResources(state, { chatAgent, chatConversationId: null, chatAgentLost: null }),
+        : withResources(state, { chatAgent, chatConversationId: null, chatAgentLost: null, chatNew: false }),
     /** The server refused the chosen agent: Imago answers instead, and the pane says why. */
     loseAgent: (state: UiState, agentId: string): UiState => {
       const lost = state.resources.chatAgent;
       return lost?.id !== agentId
         ? state
-        : withResources(state, { chatAgent: null, chatConversationId: null, chatAgentLost: lost.title });
+        : withResources(state, { chatAgent: null, chatConversationId: null, chatAgentLost: lost.title, chatNew: false });
     },
   },
 } satisfies UiSlice;
