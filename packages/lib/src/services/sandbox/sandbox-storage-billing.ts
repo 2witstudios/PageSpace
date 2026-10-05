@@ -63,6 +63,7 @@ import { AIMonitoring } from '../../monitoring/ai-monitoring';
 import { computeSettleWalletId, UNSETTLED_COMPUTE } from '../../billing/compute-gate';
 import { computeSpendKind } from '../../billing/compute-charge';
 import { stampOrgComputeBillingEpoch } from '../../billing/org-compute-epoch';
+import { isOrgActive } from '../../organizations/status';
 import { SANDBOX_STORAGE_MODELS } from '../../monitoring/usage-source';
 import {
   reconcileSandboxStorage,
@@ -191,6 +192,10 @@ export const defaultReconcileSandboxStorageDeps: ReconcileSandboxStorageDeps = {
   },
 
   lookupDriveBillingFacts,
+
+  // D-OW-32: a lapsed org's storage is not charged (the org status read every lapse gate uses, so
+  // onprem and tenant orgs are always active).
+  isOrgLapsed: async (orgId: string) => !(await isOrgActive(orgId)),
 
   /**
    * REPORTS ITS FAILURE. `AIMonitoring.trackUsage` still never throws (a throw
