@@ -36,6 +36,12 @@ vi.mock('@pagespace/lib/integrations/repositories/grant-repository', () => ({
 vi.mock('@pagespace/lib/integrations/repositories/config-repository', () => ({
   getConfig: vi.fn(),
 }));
+vi.mock('@pagespace/lib/services/drive-service', () => ({
+  getDriveAccess: vi.fn(),
+}));
+vi.mock('@pagespace/lib/deployment-mode', () => ({
+  isOnPrem: vi.fn(() => false),
+}));
 
 import {
   resolveAgentIntegrations,
@@ -46,12 +52,29 @@ import {
   type GrantWithConnectionAndProvider,
 } from '@pagespace/lib/integrations/converter/ai-sdk';
 import { createConfiguredToolExecutor } from '@pagespace/lib/integrations/saga/create-configured-executor';
-import { resolvePageAgentIntegrationTools, resolveGlobalAssistantIntegrationTools } from '../integration-tool-resolver';
+import { getDriveAccess } from '@pagespace/lib/services/drive-service';
+import { isOnPrem } from '@pagespace/lib/deployment-mode';
+import {
+  resolvePageAgentIntegrationTools,
+  resolveGlobalAssistantIntegrationTools,
+  resolveImagoAgentIntegrationTools,
+  resolveIntegrationDriveScope,
+} from '../integration-tool-resolver';
 
 const mockResolveAgentIntegrations = vi.mocked(resolveAgentIntegrations);
 const mockResolveGlobalIntegrations = vi.mocked(resolveGlobalAssistantIntegrations);
 const mockConvert = vi.mocked(convertIntegrationToolsToAISDK);
 const mockCreateExecutor = vi.mocked(createConfiguredToolExecutor);
+const mockGetDriveAccess = vi.mocked(getDriveAccess);
+const mockIsOnPrem = vi.mocked(isOnPrem);
+
+const access = (role: 'OWNER' | 'ADMIN' | 'MEMBER' | null) => ({
+  isOwner: role === 'OWNER',
+  isAdmin: role === 'OWNER' || role === 'ADMIN',
+  isMember: role !== null,
+  role,
+  customRoleId: null,
+});
 
 describe('resolvePageAgentIntegrationTools', () => {
   beforeEach(() => {
@@ -196,6 +219,86 @@ describe('resolveGlobalAssistantIntegrationTools', () => {
 
     expect(result).not.toHaveProperty('int__github__list_repos');
     expect(result).toHaveProperty('int__slack__send_message');
+  });
+});
+
+describe('resolveIntegrationDriveScope', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('given no drive, should scope to no drive without a lookup', async () => {
+    expect(await resolveIntegrationDriveScope('user-1', null)).toEqual({ driveId: null, userDriveRole: null });
+    expect(mockGetDriveAccess).not.toHaveBeenCalled();
+  });
+
+  it("given a drive the user is a member of, should keep it with the user's role", async () => {
+    mockGetDriveAccess.mockResolvedValue(access('ADMIN'));
+
+    expect(await resolveIntegrationDriveScope('user-1', 'drive-1')).toEqual({ driveId: 'drive-1', userDriveRole: 'ADMIN' });
+    expect(mockGetDriveAccess).toHaveBeenCalledWith('drive-1', 'user-1');
+  });
+
+  it('given a drive the user is not a member of, should drop it', async () => {
+    mockGetDriveAccess.mockResolvedValue(access(null));
+
+    expect(await resolveIntegrationDriveScope('user-1', 'drive-1')).toEqual({ driveId: null, userDriveRole: null });
+  });
+});
+
+describe('resolveImagoAgentIntegrationTools', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockIsOnPrem.mockReturnValue(false);
+  });
+
+  it('given onprem mode, should resolve nothing', async () => {
+    mockIsOnPrem.mockReturnValue(true);
+
+    const result = await resolveImagoAgentIntegrationTools({
+      agentId: 'imago-1',
+      userId: 'user-1',
+      grantedDriveId: 'drive-1',
+      currentTools: {},
+    });
+
+    expect(result).toEqual({});
+    expect(mockResolveGlobalIntegrations).not.toHaveBeenCalled();
+  });
+
+  it("given a granted drive, should resolve the user's integrations there and audit as the agent", async () => {
+    mockGetDriveAccess.mockResolvedValue(access('OWNER'));
+    mockResolveGlobalIntegrations.mockResolvedValue([{ id: 'grant-1' }] as never);
+    mockCreateExecutor.mockReturnValue(vi.fn());
+    mockConvert.mockReturnValue({
+      'int__slack__send_message': { description: 'x', inputSchema: {} as never, execute: vi.fn() },
+    });
+
+    const result = await resolveImagoAgentIntegrationTools({
+      agentId: 'imago-1',
+      userId: 'user-1',
+      grantedDriveId: 'drive-1',
+      currentTools: {},
+    });
+
+    expect(mockResolveGlobalIntegrations).toHaveBeenCalledWith(expect.anything(), 'user-1', 'drive-1', 'OWNER');
+    expect(mockCreateExecutor).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1', agentId: 'imago-1', driveId: 'drive-1' }));
+    expect(result).toHaveProperty('int__slack__send_message');
+  });
+
+  it('given no granted drive, should resolve user-level integrations only', async () => {
+    mockResolveGlobalIntegrations.mockResolvedValue([]);
+
+    const result = await resolveImagoAgentIntegrationTools({
+      agentId: 'imago-1',
+      userId: 'user-1',
+      grantedDriveId: null,
+      currentTools: {},
+    });
+
+    expect(result).toEqual({});
+    expect(mockResolveGlobalIntegrations).toHaveBeenCalledWith(expect.anything(), 'user-1', null, null);
+    expect(mockGetDriveAccess).not.toHaveBeenCalled();
   });
 });
 

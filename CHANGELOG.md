@@ -30,6 +30,11 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   them. Asked to work somewhere it has not been added, it says so and tells you how to give it
   access instead of trying and failing. It is never told about drives it has not been added to, and
   a page you cannot open is never passed to it as your location.
+- **Imago agents can use your integrations** — Imago agents get the same connected integrations
+  your global assistant uses, following the same settings (which integrations are enabled, per-drive
+  overrides, visibility). A drive's own integrations are available only in your Home drive and in
+  drives the agent has been added to, never in a drive it has not been added to. Self-hosted
+  (on-prem) installs expose no external integrations to Imago agents.
 - **Give an agent its own account** — in an agent's settings (Accounts), or in your personal
   settings for your global assistant, add an API key for a site so the agent can call that site's
   API for you. The agent refers to the account by name and never sees the key: PageSpace keeps it in

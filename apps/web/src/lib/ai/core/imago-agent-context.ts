@@ -111,3 +111,16 @@ export function resolveImagoLocationAccess(
   const grant = context.grants.find((g) => g.driveId === driveId);
   return grant ? { kind: 'granted', role: grant.role } : { kind: 'not-granted' };
 }
+
+/**
+ * The drive whose drive-level integrations the agent may use this turn: the
+ * drive in view when it is the Home drive or a granted one, else null — an
+ * ungranted drive's integrations never reach the agent (IMG-4.8).
+ */
+export function resolveImagoIntegrationDriveId(
+  location: LocationContext | null,
+  context: ImagoAgentContext,
+): string | null {
+  const access = resolveImagoLocationAccess(location, context);
+  return access?.kind === 'home' || access?.kind === 'granted' ? location?.currentDrive?.id ?? null : null;
+}

@@ -95,6 +95,7 @@ import { resolveHomeDriveHint } from '@/lib/ai/core/home-drive-hint';
 import {
   buildGrantedDrivesPrompt,
   loadImagoAgentContext,
+  resolveImagoIntegrationDriveId,
   resolveImagoLocationAccess,
   type ImagoAgentContext,
 } from '@/lib/ai/core/imago-agent-context';
@@ -1403,16 +1404,25 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
       enabledToolsAllowlist: agentEnabledTools?.length ?? 'unrestricted',
     });
 
-    // INTEGRATION TOOLS: Resolve and merge integration tools for this agent
+    // INTEGRATION TOOLS: Resolve and merge integration tools for this agent.
+    // A built-in Imago agent gets the user's integrations (as the Global
+    // Assistant does), with drive integrations only from a drive it may work in.
     try {
-      const { resolvePageAgentIntegrationTools } = await import('@/lib/ai/core/integration-tool-resolver');
+      const resolver = await import('@/lib/ai/core/integration-tool-resolver');
       turnTimer.mark('integrations_import');
-      const integrationTools = await resolvePageAgentIntegrationTools({
-        agentId: chatId,
-        userId,
-        driveId: page.driveId,
-        currentTools: preExposureTools,
-      });
+      const integrationTools = imagoContext
+        ? await resolver.resolveImagoAgentIntegrationTools({
+          agentId: chatId,
+          userId,
+          grantedDriveId: resolveImagoIntegrationDriveId(turnLocation, imagoContext),
+          currentTools: preExposureTools,
+        })
+        : await resolver.resolvePageAgentIntegrationTools({
+          agentId: chatId,
+          userId,
+          driveId: page.driveId,
+          currentTools: preExposureTools,
+        });
       turnTimer.mark('integrations_ready');
       if (Object.keys(integrationTools).length > 0) {
         filteredTools = mergeToolSets(filteredTools, integrationTools);

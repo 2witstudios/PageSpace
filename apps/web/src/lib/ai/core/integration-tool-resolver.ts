@@ -6,6 +6,8 @@
  */
 
 import { db } from '@pagespace/db/db';
+import { isOnPrem } from '@pagespace/lib/deployment-mode';
+import { getDriveAccess } from '@pagespace/lib/services/drive-service';
 import {
   resolveAgentIntegrations,
   resolveGlobalAssistantIntegrations,
@@ -42,10 +44,39 @@ function createResolutionDeps(): ResolutionDependencies {
 }
 
 /**
- * Create a configured tool executor wired to database dependencies.
+ * Convert resolved grants into AI SDK tools executed (and audited) as
+ * `context`, minus GitHub OAuth tools the sandbox toolkit already covers.
  */
-function createConfiguredExecutor(userId: string, agentId: string | null, driveId: string | null) {
-  return createConfiguredToolExecutor({ db, userId, agentId, driveId });
+function toSortedAISDKTools(
+  grants: GrantWithConnectionAndProvider[],
+  context: { userId: string; agentId: string | null; driveId: string | null },
+  currentTools: Record<string, unknown>
+): Record<string, CoreTool> {
+  if (grants.length === 0) return {};
+
+  const executor = createConfiguredToolExecutor({ db, ...context });
+
+  const tools = suppressGithubIntegrationTools(
+    convertIntegrationToolsToAISDK(grants, context, executor),
+    currentTools
+  );
+  // Sort keys so tool array order is deterministic across requests (only real config
+  // changes — webSearch/readOnly/MCP/exposure-mode — may change the tool array).
+  return Object.fromEntries(Object.keys(tools).sort().map(k => [k, tools[k]]));
+}
+
+/**
+ * The drive whose integrations a user-level assistant may draw on, and the
+ * user's role there: `driveId` only when the user is a member of it (a page
+ * share alone grants no drive integrations), else `null` with no role.
+ */
+export async function resolveIntegrationDriveScope(
+  userId: string,
+  driveId: string | null
+): Promise<{ driveId: string | null; userDriveRole: DriveRole | null }> {
+  if (!driveId) return { driveId: null, userDriveRole: null };
+  const access = await getDriveAccess(driveId, userId);
+  return access.isMember ? { driveId, userDriveRole: access.role } : { driveId: null, userDriveRole: null };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -76,17 +107,7 @@ export async function resolvePageAgentIntegrationTools(params: {
 
   const grants = await resolveAgentIntegrations(deps, agentId);
 
-  if (grants.length === 0) return {};
-
-  const executor = createConfiguredExecutor(userId, agentId, driveId);
-
-  const tools = suppressGithubIntegrationTools(
-    convertIntegrationToolsToAISDK(grants, { userId, agentId, driveId }, executor),
-    currentTools
-  );
-  // Sort keys so tool array order is deterministic across requests (only real config
-  // changes — webSearch/readOnly/MCP/exposure-mode — may change the tool array).
-  return Object.fromEntries(Object.keys(tools).sort().map(k => [k, tools[k]]));
+  return toSortedAISDKTools(grants, { userId, agentId, driveId }, currentTools);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -123,15 +144,50 @@ export async function resolveGlobalAssistantIntegrationTools(params: {
     userDriveRole
   );
 
-  if (grants.length === 0) return {};
+  return toSortedAISDKTools(grants, { userId, agentId: null, driveId }, currentTools);
+}
 
-  const executor = createConfiguredExecutor(userId, null, driveId);
+// ═══════════════════════════════════════════════════════════════════════════════
+// IMAGO AGENT RESOLVER
+// ═══════════════════════════════════════════════════════════════════════════════
 
-  const tools = suppressGithubIntegrationTools(
-    convertIntegrationToolsToAISDK(grants, { userId, agentId: null, driveId }, executor),
-    currentTools
+/**
+ * Resolve integration tools for a built-in Imago agent (IMG-4.8).
+ *
+ * An Imago agent is the user's assistant, so it gets what the Global Assistant
+ * resolves — the user's integrations per `global_assistant_config`
+ * (`enabledUserIntegrations`, `driveOverrides`, `inheritDriveIntegrations`,
+ * connection visibility) — with one difference in reach: drive-level
+ * integrations come only from `grantedDriveId`, which the caller must pass
+ * only for the Home drive or a drive the agent holds a `drive_agent_members`
+ * grant on (see `resolveImagoIntegrationDriveId`). A drive in view without a
+ * grant contributes nothing; user-level integrations are resolved as on the
+ * dashboard.
+ *
+ * Onprem exposes no external integration at all.
+ *
+ * @param params.agentId - The Imago agent's page ID (recorded on audit entries)
+ * @param params.userId - The authenticated user's ID
+ * @param params.grantedDriveId - The drive in view, when the agent may work in it
+ * @param params.currentTools - The pre-exposure-mode tool set (see
+ *   `resolvePageAgentIntegrationTools`)
+ */
+export async function resolveImagoAgentIntegrationTools(params: {
+  agentId: string;
+  userId: string;
+  grantedDriveId: string | null;
+  currentTools: Record<string, unknown>;
+}): Promise<Record<string, CoreTool>> {
+  const { agentId, userId, grantedDriveId, currentTools } = params;
+  if (isOnPrem()) return {};
+
+  const { driveId, userDriveRole } = await resolveIntegrationDriveScope(userId, grantedDriveId);
+  const grants = await resolveGlobalAssistantIntegrations(
+    createResolutionDeps(),
+    userId,
+    driveId,
+    userDriveRole
   );
-  // Sort keys so tool array order is deterministic across requests (only real config
-  // changes — webSearch/readOnly/MCP/exposure-mode — may change the tool array).
-  return Object.fromEntries(Object.keys(tools).sort().map(k => [k, tools[k]]));
+
+  return toSortedAISDKTools(grants, { userId, agentId, driveId }, currentTools);
 }
