@@ -17,20 +17,32 @@ import { driveAgentMembers, driveMembers } from '@pagespace/db/schema/members';
 import { factories } from '@pagespace/db/test/factories';
 import { provisionImagoAgents } from '@pagespace/lib/agents/provision-imago-agents';
 import { setImagoDriveAccess } from '@pagespace/lib/agents/imago-drive-access';
+import { sessionService } from '@pagespace/lib/auth/session-service';
+import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
+import { updateDriveLastAccessed } from '@pagespace/lib/services/drive-service';
+import { COOKIE_CONFIG } from '@/lib/auth/cookie-config';
 import { ensureTestDb } from '@/test/ensure-test-db';
+import { createDriveBackup } from '@/services/api/drive-backup-service';
+import { POST as restoreBackup } from '@/app/api/drives/[driveId]/backups/[backupId]/restore/route';
 import { defaultRollbackDeps } from '../deps';
 import { rollbackMemberChange } from '../rollback-executors';
 import { redoMemberChange } from '../redo-executors';
 import { planMemberRestoreOps, revokeAgentGrantsOfRemovedMembers } from '../../restore-permissions-service';
 import type { ActivityLogForRollback } from '../types';
 
+const APP_ORIGIN = 'http://localhost:3000';
 const seededUserIds: string[] = [];
+let previousWebAppUrl: string | undefined;
 
 beforeAll(async () => {
   await ensureTestDb();
+  previousWebAppUrl = process.env.WEB_APP_URL;
+  process.env.WEB_APP_URL = APP_ORIGIN;
 });
 
 afterAll(async () => {
+  if (previousWebAppUrl === undefined) delete process.env.WEB_APP_URL;
+  else process.env.WEB_APP_URL = previousWebAppUrl;
   if (seededUserIds.length === 0) return;
   await db.delete(users).where(inArray(users.id, seededUserIds));
 });
@@ -126,6 +138,66 @@ describe('member removal outside the member route revokes the agent grants the m
     const memberOps = planMemberRestoreOps([{ userId: admin.id, role: 'ADMIN' }] as never[], [{ userId: admin.id }] as never[]);
 
     await db.transaction((tx) => revokeAgentGrantsOfRemovedMembers(tx, drive.id, memberOps, []));
+
+    expect(await agentsIn(drive.id, agents)).toHaveLength(agents.length);
+  });
+});
+
+describe('backup restore through the route (real Postgres, real session and CSRF)', () => {
+  async function restoreAs(userId: string, driveId: string, backupId: string) {
+    const token = await sessionService.createSession({ userId, type: 'user', scopes: ['*'], expiresInMs: 60 * 60 * 1000 });
+    const claims = await sessionService.validateSession(token);
+    if (!claims) throw new Error('session did not validate');
+    const response = await restoreBackup(
+      new Request(`http://localhost/api/drives/${driveId}/backups/${backupId}/restore`, {
+        method: 'POST',
+        headers: {
+          cookie: `${COOKIE_CONFIG.session.name}=${token}`,
+          'x-csrf-token': generateCSRFToken(claims.sessionId),
+          origin: APP_ORIGIN,
+        },
+      }),
+      { params: Promise.resolve({ driveId, backupId }) },
+    );
+    expect(response.status).toBe(200);
+  }
+
+  async function backupOf(driveId: string, userId: string) {
+    const backup = await createDriveBackup(driveId, userId, { label: 'before' });
+    if (!backup.success || !backup.backupId) throw new Error('backup failed');
+    return backup.backupId;
+  }
+
+  it('given a restore that drops a member, should revoke their Imago agents', async () => {
+    const owner = await factories.createUser();
+    const admin = await factories.createUser();
+    seededUserIds.push(owner.id, admin.id);
+    await factories.createDrive(admin.id, { kind: 'HOME', name: 'Home', slug: 'home' });
+    const drive = await factories.createDrive(owner.id, { name: 'Shared' });
+    const backupId = await backupOf(drive.id, owner.id);
+    await factories.createDriveMember(drive.id, admin.id, { role: 'ADMIN', acceptedAt: new Date() });
+    const agents = Object.values((await provisionImagoAgents(admin.id)).agents);
+    expect((await setImagoDriveAccess(admin.id, drive.id, true)).ok).toBe(true);
+    expect(await agentsIn(drive.id, agents)).toHaveLength(agents.length);
+
+    await restoreAs(owner.id, drive.id, backupId);
+
+    expect(await db.select().from(driveMembers).where(and(eq(driveMembers.driveId, drive.id), eq(driveMembers.userId, admin.id)))).toEqual([]);
+    expect(await agentsIn(drive.id, agents)).toEqual([]);
+  });
+
+  it("given a backup taken before the owner's lazily created member row, should keep the owner's own Imago agents", async () => {
+    const owner = await factories.createUser();
+    seededUserIds.push(owner.id);
+    await factories.createDrive(owner.id, { kind: 'HOME', name: 'Home', slug: 'home' });
+    const drive = await factories.createDrive(owner.id, { name: 'Owned' });
+    const agents = Object.values((await provisionImagoAgents(owner.id)).agents);
+    expect(await agentsIn(drive.id, agents)).toHaveLength(agents.length);
+    const backupId = await backupOf(drive.id, owner.id);
+    // The owner's first visit creates their OWNER row, after the backup.
+    await updateDriveLastAccessed(owner.id, drive.id);
+
+    await restoreAs(owner.id, drive.id, backupId);
 
     expect(await agentsIn(drive.id, agents)).toHaveLength(agents.length);
   });
