@@ -127,12 +127,14 @@ describe('org read models (real Postgres)', () => {
     expect(trashed.map((t) => ({ id: t.id, name: t.name, lead: t.lead.name }))).toEqual([{ id: d.trashed, name: 'Old', lead: 'Jono Woodall' }]);
   });
 
-  it('an org with no drives has no guests and no usage', async () => {
+  it('an org with no drives or members has no guests, usage, activity or trash', async () => {
     if (!ok) return;
     const [empty] = await db.insert(organizations).values({ name: 'Empty', slug: `e-${createId()}`, ownerId: u.jono }).returning();
     try {
       expect(await listOrgGuests(empty.id)).toEqual([]);
       expect(await listOrgDriveUsage(empty.id)).toEqual([]);
+      expect(await listOrgMemberActivity(empty.id)).toEqual([]);
+      expect(await listOrgTrashedDrives(empty.id)).toEqual([]);
     } finally {
       await db.delete(organizations).where(eq(organizations.id, empty.id));
     }

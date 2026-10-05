@@ -53,7 +53,7 @@ describe('summarizeDriveUsage', () => {
 
 describe('summarizeMemberActivity', () => {
   const now = new Date('2026-10-05T12:00:00Z');
-  it('UI-7 (partial): an Owner or Admin reaches every org drive (ORG-4); a Member the drives they hold a row in', () => {
+  it('UI-7 (partial) ORG-4 (partial): an Owner or Admin reaches every org drive; a Member the drives they hold a row in', () => {
     const activity = summarizeMemberActivity({
       members: [{ userId: 'u_owner', role: 'OWNER' }, { userId: 'u_admin', role: 'ADMIN' }, { userId: 'u_marcus', role: 'MEMBER' }, { userId: 'u_new', role: 'MEMBER' }],
       orgDriveCount: 6,
