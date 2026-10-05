@@ -3,7 +3,7 @@ import { assert } from 'riteway/vitest';
 import { createInitialState, type UiState } from '../../store/state';
 import { getUiState, setUiState } from '../../store/store';
 import { dispatch, transactions } from '../../store/transactions';
-import { filesPlugin, type PendingFile } from './files-plugin';
+import { filesPlugin, isEditingDocument, type PendingFile } from './files-plugin';
 
 const {
   toggleFileFolder,
@@ -181,10 +181,10 @@ describe('filesPlugin slice', () => {
   test('its own resources and transactions', () => {
     assert({
       given: 'the files slice',
-      should: 'start with nothing expanded, filtered, pending or failed, and own the files transactions',
+      should: 'start with nothing expanded, filtered, pending, failed or being edited, and own the files transactions',
       actual: [filesPlugin.resources(), Object.keys(filesPlugin.transactions)],
       expected: [
-        { expandedFileIds: [], fileFilter: '', pendingFiles: [], fileCreateError: null },
+        { expandedFileIds: [], fileFilter: '', pendingFiles: [], fileCreateError: null, editingDocumentIds: [] },
         [
           'toggleFileFolder',
           'expandFileFolder',
@@ -193,8 +193,45 @@ describe('filesPlugin slice', () => {
           'fileCreated',
           'fileCreateFailed',
           'fileCreateSettled',
+          'beginDocumentEdit',
+          'endDocumentEdit',
         ],
       ],
+    });
+  });
+});
+
+describe('documents being edited', () => {
+  test('beginning and ending an edit', () => {
+    const { beginDocumentEdit, endDocumentEdit } = filesPlugin.transactions;
+    const fresh = createInitialState();
+    const editing = beginDocumentEdit(fresh, 'p1');
+    const again = beginDocumentEdit(editing, 'p1');
+    const ended = endDocumentEdit(editing, 'p1');
+    assert({
+      given: 'a new shell, a document edit begun twice, then ended',
+      should: 'mark the page as edited once, keep the snapshot when nothing changes, and clear it at the end',
+      actual: [
+        isEditingDocument(fresh, 'p1'),
+        isEditingDocument(editing, 'p1'),
+        isEditingDocument(editing, 'p2'),
+        again === editing,
+        isEditingDocument(ended, 'p1'),
+        endDocumentEdit(fresh, 'p1') === fresh,
+      ],
+      expected: [false, true, false, true, false, true],
+    });
+  });
+
+  test('through the shell store', () => {
+    dispatch(transactions.beginDocumentEdit, 'p1');
+    const during = isEditingDocument(getUiState(), 'p1');
+    dispatch(transactions.endDocumentEdit, 'p1');
+    assert({
+      given: 'the edit transactions dispatched to the shell store',
+      should: 'reach the files slice',
+      actual: [during, isEditingDocument(getUiState(), 'p1')],
+      expected: [true, false],
     });
   });
 });

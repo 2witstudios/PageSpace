@@ -30,12 +30,18 @@ type FilesResources = {
   readonly pendingFiles: readonly PendingFile[];
   /** Why the last create failed; null once another starts. */
   readonly fileCreateError: string | null;
+  /** Documents holding text the server does not have yet: SWR leaves their page alone meanwhile. */
+  readonly editingDocumentIds: readonly string[];
 };
 
 const withFiles = (state: UiState, files: Partial<FilesResources>): UiState => ({
   ...state,
   resources: { ...state.resources, ...files },
 });
+
+/** Whether a document holds unsaved text: its page must not be revalidated over it. */
+export const isEditingDocument = (state: UiState, pageId: string): boolean =>
+  state.resources.editingDocumentIds.includes(pageId);
 
 const without = (pending: readonly PendingFile[], key: string): readonly PendingFile[] =>
   pending.filter((file) => file.key !== key);
@@ -51,6 +57,7 @@ export const filesPlugin = {
     fileFilter: '',
     pendingFiles: [],
     fileCreateError: null,
+    editingDocumentIds: [],
   }),
   transactions: {
     toggleFileFolder: (state: UiState, pageId: string): UiState => {
@@ -80,6 +87,16 @@ export const filesPlugin = {
     fileCreateSettled: (state: UiState, key: string): UiState =>
       state.resources.pendingFiles.some((file) => file.key === key)
         ? withFiles(state, { pendingFiles: without(state.resources.pendingFiles, key) })
+        : state,
+    /** A document now holds text the server does not have (classic's useEditingStore.startEditing). */
+    beginDocumentEdit: (state: UiState, pageId: string): UiState =>
+      isEditingDocument(state, pageId)
+        ? state
+        : withFiles(state, { editingDocumentIds: [...state.resources.editingDocumentIds, pageId] }),
+    /** The server has everything the document holds again. */
+    endDocumentEdit: (state: UiState, pageId: string): UiState =>
+      isEditingDocument(state, pageId)
+        ? withFiles(state, { editingDocumentIds: state.resources.editingDocumentIds.filter((id) => id !== pageId) })
         : state,
   },
 } satisfies UiSlice;

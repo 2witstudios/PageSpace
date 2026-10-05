@@ -4,6 +4,20 @@ import type { ReactNode } from 'react';
 import useSWR from 'swr';
 import { edgeOf, renderErrorState, renderLoadingState } from '../../frame/edge-state/edge-state.render';
 import { PAGE_NOT_FOUND, renderNotFound } from '../../frame/not-found/not-found.render';
+import { getUiState } from '../../store/store';
+import { isEditingDocument } from '../files-plugin/files-plugin';
+
+/** The SWR key of a page as GET /api/pages/[pageId] answers it. */
+export const pageKey = (pageId: string): string => `/api/pages/${encodeURIComponent(pageId)}`;
+
+/**
+ * The page from GET /api/pages/[pageId], one SWR entry for the object gate
+ * and the page's view. While its document holds unsaved text, SWR does not
+ * revalidate it (as classic's useEditingStore holds SWR off an edit), so no
+ * focus or reconnect refetch lands over what the viewer is typing.
+ */
+export const usePage = (pageId: string) =>
+  useSWR<unknown>(pageKey(pageId), { isPaused: () => isEditingDocument(getUiState(), pageId) });
 
 export type PageObjectProps = {
   /** The drive the address names. */
@@ -38,7 +52,7 @@ export const pageEdgeOf = (data: unknown, error: unknown, driveId: string): Page
  * request a way to ask again.
  */
 export function PageObject({ driveId, pageId, children }: PageObjectProps) {
-  const { data, error, mutate } = useSWR<unknown>(`/api/pages/${encodeURIComponent(pageId)}`);
+  const { data, error, mutate } = usePage(pageId);
   const edge = pageEdgeOf(data, error, driveId);
   if (edge === 'loading') return renderLoadingState('Loading page…');
   if (edge === 'not-found') {

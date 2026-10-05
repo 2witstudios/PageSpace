@@ -20,7 +20,7 @@ import { dispatch, transactions } from '../../store/transactions';
 import { fileNodesFrom } from '../file-model/from-api';
 import type { FileNode, PageResponse, PageTreeResponse } from '../file-model/file-node';
 import { listedIdsFrom } from '../tree-view/tree-view';
-import { composeTree, type LoadedChildren, type TreeAnswer } from '../file-tree/file-tree';
+import { composeTree, renamePage, type LoadedChildren, type TreeAnswer } from '../file-tree/file-tree';
 
 /**
  * The page events realtime sends a drive's room that change its tree
@@ -55,6 +55,8 @@ export type FileTree = {
   readonly loadChildren: (pageId: string) => Promise<LoadResult>;
   /** Void action: asks the server for the tree again (after a failure, or once a create answers). */
   readonly retry: () => void;
+  /** Shows a page under a new title at once, until the server's tree says otherwise. */
+  readonly rename: (pageId: string, title: string) => void;
   /**
    * Every page the drive tree answer lists. A children load may name pages it
    * does not (apps/web's children route checks only the parent); a view
@@ -181,6 +183,23 @@ export const useFileTree = (driveId: string | null): FileTree => {
   );
 
   const retry = useCallback(() => void mutate(), [mutate]);
+  const rename = useCallback(
+    (pageId: string, title: string) => {
+      void mutate((answer) => answer && { ...answer, pages: renamePage(answer.pages, pageId, title) }, {
+        revalidate: false,
+      });
+      setLoaded((prev) => ({
+        ...prev,
+        byParent: Object.fromEntries(
+          Object.entries(prev.byParent).map(([parentId, load]) => [
+            parentId,
+            { ...load, children: renamePage(load.children, pageId, title) },
+          ]),
+        ),
+      }));
+    },
+    [mutate],
+  );
   const listedIds = useMemo(() => (data === undefined ? NOTHING_LISTED : listedIdsFrom(data.pages)), [data]);
 
   return {
@@ -192,6 +211,7 @@ export const useFileTree = (driveId: string | null): FileTree => {
     toggle,
     loadChildren,
     retry,
+    rename,
     listedIds,
   };
 };

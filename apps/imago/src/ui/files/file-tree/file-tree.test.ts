@@ -1,6 +1,6 @@
 import { describe, test } from 'vitest';
 import { assert } from 'riteway/vitest';
-import { composeTree, mergeChildren } from './file-tree';
+import { composeTree, mergeChildren, renamePage } from './file-tree';
 import { pageRow, treeRow } from '../file-model/fixtures';
 import type { PageTreeResponse } from '../file-model/file-node';
 
@@ -137,6 +137,38 @@ describe('composeTree()', () => {
       given: 'no children loaded',
       should: 'give the drive tree itself',
       actual: composeTree({ pages, at: 1 }, {}) === pages,
+      expected: true,
+    });
+  });
+});
+
+describe('renamePage()', () => {
+  const titles = (pages: readonly PageTreeResponse[]): unknown[] =>
+    pages.map((page) => [page.title, titles(page.children ?? [])]);
+
+  test('a page deep in the tree', () => {
+    const before = drive();
+    const after = renamePage(before, 'a1', 'Plan');
+    assert({
+      given: 'a page two levels down renamed',
+      should: 'give it the new title and leave every branch it is not on untouched',
+      actual: [titles(after), after[1] === before[1]],
+      expected: [
+        [
+          ['Title f1', [['Title a', [['Plan', []]]], ['Title b', []]]],
+          ['Title f2', [['Title n', []]]],
+        ],
+        true,
+      ],
+    });
+  });
+
+  test('a page the tree does not hold', () => {
+    const before = drive();
+    assert({
+      given: 'a rename of a page the tree does not list',
+      should: 'answer the same tree',
+      actual: renamePage(before, 'zz', 'Plan') === before,
       expected: true,
     });
   });
