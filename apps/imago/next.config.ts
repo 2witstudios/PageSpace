@@ -48,11 +48,20 @@ export default function nextConfig(phase: string): NextConfig {
     basePath: "/imago",
     output: "standalone",
     outputFileTracingRoot: path.join(__dirname, "../.."),
-    // getViewer() validates sessions with @pagespace/lib's session-service.
+    // getViewer() validates sessions with @pagespace/lib's session-service;
+    // a task's description is edited on @pagespace/editor's document schema.
     // Compiled from source so the build never depends on a prebuilt dist/.
-    transpilePackages: ["@pagespace/db", "@pagespace/lib"],
+    transpilePackages: ["@pagespace/db", "@pagespace/lib", "@pagespace/editor"],
     serverExternalPackages: ["pg"],
     webpack: (config, { isServer, nextRuntime }) => {
+      // @pagespace/editor is compiled from source through the tsconfig paths,
+      // and its ESM source imports siblings as `./x.js`: those must resolve to
+      // the `.ts` file, as apps/web resolves them. `.js` stays first so a real
+      // `.js` under node_modules resolves on the first try.
+      config.resolve.extensionAlias = {
+        ...(config.resolve.extensionAlias ?? {}),
+        ".js": [".js", ".ts", ".tsx"],
+      };
       // The edge (middleware) compile has no require(), so it is left alone:
       // middleware imports only the dependency-free sign-in-url module.
       if (isServer && nextRuntime === "nodejs") {

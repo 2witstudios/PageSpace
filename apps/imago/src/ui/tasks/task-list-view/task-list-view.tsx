@@ -12,6 +12,7 @@ import { renderFocusView } from '../focus-view/focus-view.render';
 import { useTaskView } from '../task-view/use-task-view';
 import type { TaskViewName } from '../task-view/task-view';
 import { useDriveTaskLists, useTaskList, type ActionResult, type TaskActions } from '../use-tasks/use-tasks';
+import { taskHref } from '../task-object/task-route';
 import { renderTaskListMessage, renderTaskListView } from './task-list-view.render';
 
 export type TaskListViewProps = {
@@ -32,6 +33,7 @@ const comingBoard = 'Board view is not available yet. Switch to Tree to work on 
 const systemClock = (): Date => new Date();
 
 type Body = {
+  readonly driveId: string;
   readonly list: TaskList | undefined;
   readonly error: unknown;
   readonly view: TaskViewName;
@@ -42,7 +44,7 @@ type Body = {
   readonly clock: () => Date;
 };
 
-const bodyFor = ({ list, error, view, expandedIds, notice, actions, report, clock }: Body): ReactNode => {
+const bodyFor = ({ driveId, list, error, view, expandedIds, notice, actions, report, clock }: Body): ReactNode => {
   if (list === undefined) {
     return error === undefined
       ? renderTaskListMessage('Loading tasks…', 'status')
@@ -75,6 +77,7 @@ const bodyFor = ({ list, error, view, expandedIds, notice, actions, report, cloc
     addTask: (listPageId, at, title) => {
       void actions.create(listPageId, { title }).then(report(at));
     },
+    taskHref: (task) => taskHref(driveId, task.pageId),
   });
 };
 
@@ -97,6 +100,6 @@ export function TaskListView({ driveId, pageId, viewerId, clock = systemClock }:
     progress: list === undefined ? undefined : listProgress(list),
     view,
     switchView,
-    body: bodyFor({ list, error, view, expandedIds, notice, actions, report, clock }),
+    body: bodyFor({ driveId, list, error, view, expandedIds, notice, actions, report, clock }),
   });
 }

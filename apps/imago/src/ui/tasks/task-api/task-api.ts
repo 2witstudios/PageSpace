@@ -5,8 +5,11 @@
 
 import type { ApiClient } from '@/api/client';
 import type {
+  AssignablesResponse,
   Assignee,
+  BreadcrumbResponse,
   DrivePagesLsResponse,
+  PageContentResponse,
   Priority,
   TaskItemResponse,
   TaskList,
@@ -17,7 +20,7 @@ import type {
 } from '../task-model/task';
 import { driveTaskLists, statusesFrom, taskListFrom } from '../task-model/from-api';
 import { MAX_LEVELS, withSubtasks } from '../task-tree/task-tree';
-import type { ReorderPlan, TaskPatch } from '../task-edit/task-edit';
+import { uniqueAssignees, type ReorderPlan, type TaskPatch } from '../task-edit/task-edit';
 
 const segment = encodeURIComponent;
 
@@ -28,6 +31,14 @@ export const taskPaths = {
   statuses: (pageId: string) => `/api/pages/${segment(pageId)}/tasks/statuses`,
   /** Every page of a drive, flat, with isTaskLinked. */
   drivePages: (driveId: string) => `/api/drives/${segment(driveId)}/pages?ls=true&recursive=true`,
+  /** A drive's members and the agents the viewer can see: who a task can go to. */
+  assignees: (driveId: string) => `/api/drives/${segment(driveId)}/assignees`,
+  /** A page's ancestors, top first, ending with the page. */
+  breadcrumbs: (pageId: string) => `/api/pages/${segment(pageId)}/breadcrumbs`,
+  /** What the viewer may do on a page. */
+  permissions: (pageId: string) => `/api/pages/${segment(pageId)}/permissions/check`,
+  /** A page itself: a task's description is its own page's content. */
+  page: (pageId: string) => `/api/pages/${segment(pageId)}`,
 };
 
 /** The most GET /tasks returns in one page (query-spec.ts MAX_LIMIT). */
@@ -86,7 +97,12 @@ export const loadTaskTree = async (client: ApiClient, pageId: string, title: str
   return load(pageId, title, 1);
 };
 
-const assigneeIds = (assignees: readonly Assignee[]) => assignees.map(({ type, id }) => ({ type, id }));
+/**
+ * Everyone on a task, each person or agent once. task_assignees is unique per
+ * (task, user) and per (task, agent), so a repeat the server is sent fails
+ * the whole write instead of being ignored.
+ */
+const assigneeIds = (assignees: readonly Assignee[]) => uniqueAssignees(assignees).map(({ type, id }) => ({ type, id }));
 
 export type CreateTaskInput = {
   readonly title: string;
@@ -134,3 +150,41 @@ export const reorderTasks = (client: ApiClient, plan: ReorderPlan) =>
     method: 'PATCH',
     json: { tasks: plan.tasks },
   });
+
+/** Who can be put on a drive's tasks: its members, then the agents the viewer can see. */
+export const fetchAssignable = async (client: ApiClient, driveId: string): Promise<readonly Assignee[]> =>
+  (await client.apiFetch<AssignablesResponse>(taskPaths.assignees(driveId))).assignees.map(({ type, id, name }) => ({
+    type,
+    id,
+    name,
+  }));
+
+/** One step of where a page sits. */
+export type TrailEntry = { readonly id: string; readonly title: string };
+
+/** Where a page sits: its ancestors from the top of the drive, ending with the page itself. */
+export const fetchPageTrail = async (client: ApiClient, pageId: string): Promise<readonly TrailEntry[]> =>
+  (await client.apiFetch<readonly BreadcrumbResponse[]>(taskPaths.breadcrumbs(pageId))).map(({ id, title }) => ({
+    id,
+    title,
+  }));
+
+/** A task's description: its own page's content, empty when it has none. */
+export const fetchPageContent = async (client: ApiClient, pageId: string): Promise<string> =>
+  (await client.apiFetch<PageContentResponse>(taskPaths.page(pageId))).content ?? '';
+
+/** PATCH a task's own page with a new description. */
+export const savePageContent = (client: ApiClient, pageId: string, content: string) =>
+  client.apiFetch<unknown>(taskPaths.page(pageId), { method: 'PATCH', json: { content } });
+
+/** What GET /api/pages/[pageId]/permissions/check answers. */
+export type PagePermissions = {
+  readonly canView: boolean;
+  readonly canEdit: boolean;
+  readonly canShare: boolean;
+  readonly canDelete: boolean;
+};
+
+/** What the viewer may do on a page. */
+export const fetchPagePermissions = (client: ApiClient, pageId: string) =>
+  client.apiFetch<PagePermissions>(taskPaths.permissions(pageId));

@@ -99,6 +99,34 @@ export type DrivePagesLsResponse = {
   readonly pages: readonly DrivePageLsEntry[];
 };
 
+/** One of GET /api/drives/[driveId]/assignees: a drive member, or an agent page the viewer can see. */
+export type AssignableResponse = {
+  readonly id: string;
+  readonly type: 'user' | 'agent';
+  readonly name: string;
+  readonly image: string | null;
+  readonly agentTitle?: string;
+};
+
+/** GET /api/drives/[driveId]/assignees. */
+export type AssignablesResponse = {
+  readonly assignees: readonly AssignableResponse[];
+};
+
+/** One ancestor in GET /api/pages/[pageId]/breadcrumbs, top of the drive first, the page itself last. */
+export type BreadcrumbResponse = {
+  readonly id: string;
+  readonly title: string;
+  readonly type: string;
+  readonly parentId: string | null;
+};
+
+/** The part of GET /api/pages/[pageId] a task's description reads: its page's content. */
+export type PageContentResponse = {
+  readonly id: string;
+  readonly content: string | null;
+};
+
 // ---------------------------------------------------------------------------
 // The model views read.
 

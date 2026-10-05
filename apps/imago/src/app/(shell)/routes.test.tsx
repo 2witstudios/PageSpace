@@ -275,21 +275,21 @@ describe('the stage routes', () => {
   });
 });
 
-describe('an open task list', () => {
+describe('an open task list or task', () => {
   const load = () => import('./[driveId]/tasks/[pageId]/page');
 
-  test('renders the list for the viewer', async () => {
+  test('renders the task object for the viewer', async () => {
     getViewer.mockResolvedValue(viewer);
     const { default: Page } = await load();
     const element = await Page(props());
-    const { TaskListView } = await import('@/ui/tasks/task-list-view/task-list-view');
+    const { TaskObject } = await import('@/ui/tasks/task-object/task-object');
 
     assert({
       given: '/[driveId]/tasks/[pageId] for a signed-in viewer',
-      should: 'render the task list named by the awaited params, saving views under the viewer',
+      should: 'open the list or task named by the awaited params, saving views under the viewer',
       actual: [
         getViewer.mock.calls.length,
-        element !== null && typeof element === 'object' && 'type' in element ? element.type === TaskListView : false,
+        element !== null && typeof element === 'object' && 'type' in element ? element.type === TaskObject : false,
         element !== null && typeof element === 'object' && 'props' in element ? element.props : null,
       ],
       expected: [1, true, { driveId: 'drive-1', pageId: 'page-1', viewerId: 'user-1' }],

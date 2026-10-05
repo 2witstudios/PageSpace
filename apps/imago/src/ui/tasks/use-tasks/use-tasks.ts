@@ -31,7 +31,11 @@ import {
 import {
   createTask,
   deleteTask,
+  fetchAssignable,
   fetchDriveTaskLists,
+  fetchPageContent,
+  fetchPagePermissions,
+  fetchPageTrail,
   fetchTaskStatuses,
   loadTaskTree,
   reorderTasks,
@@ -50,6 +54,47 @@ export const useDriveTaskLists = (driveId: string | null) => {
     ([, id]) => fetchDriveTaskLists(client, id),
   );
   return { lists: data, error: error as unknown, isLoading };
+};
+
+/**
+ * Whether the viewer may edit a page: true only on a definite yes. Read
+ * before anything that saves on its own, so nothing is typed into a field
+ * the server would refuse.
+ */
+export const usePageEditable = (pageId: string) => {
+  const client = useApiClient();
+  const { data } = useSWR(['imago:page-permissions', pageId] as const, ([, id]) => fetchPagePermissions(client, id));
+  return data?.canEdit === true;
+};
+
+/** Who can be put on the drive's tasks, for the assignee picker. */
+export const useAssignable = (driveId: string) => {
+  const client = useApiClient();
+  const { data, error } = useSWR(['imago:assignable', driveId] as const, ([, id]) => fetchAssignable(client, id));
+  return { assignable: data, error: error as unknown };
+};
+
+/** Where a page sits in its drive; null asks nothing. */
+export const usePageTrail = (pageId: string | null) => {
+  const client = useApiClient();
+  const { data, error } = useSWR(pageId === null ? null : (['imago:page-trail', pageId] as const), ([, id]) =>
+    fetchPageTrail(client, id),
+  );
+  return { trail: data, error: error as unknown };
+};
+
+/**
+ * A task's description, read once: the editor owns it after that, so a
+ * revalidation never replaces what is being typed.
+ */
+export const usePageContent = (pageId: string) => {
+  const client = useApiClient();
+  const { data, error } = useSWR(
+    ['imago:page-content', pageId] as const,
+    ([, id]) => fetchPageContent(client, id),
+    { revalidateOnFocus: false, revalidateOnReconnect: false, revalidateIfStale: false },
+  );
+  return { content: data, error: error as unknown };
 };
 
 /** A list's own statuses, read without GET /tasks' lazy writes. */
@@ -137,6 +182,7 @@ const createActions = (
 
   const assignees = (taskId: string, next: (current: readonly Assignee[]) => readonly Assignee[]) =>
     onTask(taskId, (tree, at, found) => {
+      // setAssignees and the request body (task-api assigneeIds) each keep every person or agent once.
       const chosen = next(found.task.assignees);
       return { list: setAssignees(tree, taskId, chosen), send: () => setTaskAssignees(client, at, chosen) };
     });
