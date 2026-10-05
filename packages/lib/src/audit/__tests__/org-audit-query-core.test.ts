@@ -12,7 +12,7 @@ import {
 describe('the org audit catalog', () => {
   it('AUD-1 (partial) names a category for every kind of org-scoped event the Spec lists', () => {
     expect(Object.keys(ORG_AUDIT_CATEGORIES).sort()).toEqual([
-      'billing', 'domains', 'donations', 'drive_moves', 'invites', 'membership', 'policies', 'private_drive_access', 'seats', 'visibility', 'wallets',
+      'billing', 'compute', 'domains', 'donations', 'drive_moves', 'invites', 'membership', 'policies', 'private_drive_access', 'seats', 'visibility', 'wallets',
     ].sort());
     for (const types of Object.values(ORG_AUDIT_CATEGORIES)) expect(types.length).toBeGreaterThan(0);
   });

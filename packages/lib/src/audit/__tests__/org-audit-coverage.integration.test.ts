@@ -50,6 +50,10 @@ import { applyOrgPoolRefill } from '../../billing/wallet-funding-shell';
 import { hashToken } from '../../auth/token-utils';
 import { accountRepository } from '../../repositories/account-repository';
 import { clearDepartureSuppression } from '../../organizations/departure-suppression';
+import { recordComputeReattributions } from '../../organizations/leave';
+import { defaultAppUnparkDeps, unparkPublishedApp } from '../../services/app-hosting/app-unpark';
+import { driveEnvs } from '@pagespace/db/schema/drive-envs';
+import { publishedApps } from '@pagespace/db/schema/published-apps';
 
 vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 
@@ -246,6 +250,22 @@ describe('every org mutation writes its event', () => {
     await factories.createPage(productId, { type: 'AI_CHAT', aiProvider: 'openai', aiModel: 'gpt-old' });
     expect((await updateOrgPolicies({ orgId, actorId: jono.id, patch: { modelAllowlist: ['gpt-new'] } })).ok).toBe(true);
     expect(await redeemDriveShareLink(ctxFor(chris.id), link.data.rawToken)).toMatchObject({ ok: false, error: 'PENDING_APPROVAL' });
+
+    // ── compute (D-OW-28): an env handed to the lead, a parked app taken back ───────
+    const envId = createId();
+    await db.insert(driveEnvs).values({ id: envId, driveId: productId, name: `env-${envId}`, createdBy: tomas.id, costOwnerId: null, sandboxId: `sbx-${envId}` });
+    await recordComputeReattributions([{ orgId, kind: 'drive_env', id: envId, driveId: productId, formerCostOwnerId: tomas.id }], jono.id);
+    const appId = createId();
+    await db.insert(publishedApps).values({
+      id: appId, envId, driveId: productId, ownerId: tomas.id, costOwnerId: tomas.id, flyAppName: `pgs-${appId}`, networkName: 'published-apps',
+      subdomain: `cov-${appId}`.toLowerCase(), machineId: `m-${appId}`, imageDigest: 'sha256:abc', status: 'parked', lastError: 'parked: test', tier: 'metered', updatedAt: new Date(),
+    });
+    expect(await unparkPublishedApp({ publishedAppId: appId, actorId: jono.id }, {
+      ...defaultAppUnparkDeps,
+      isEnabled: () => true,
+      // The real payer resolution; the wallet gate is not what this story audits, so it admits the wake.
+      billing: { ...defaultAppUnparkDeps.billing, gate: async () => ({ allowed: true }) },
+    })).toMatchObject({ outcome: 'unparked' });
 
     // ── wallets, donations, the pool refill ───────────────────────────────────────
     await db.update(organizations).set({ stripeCustomerId: `cus_${createId()}` }).where(eq(organizations.id, orgId));

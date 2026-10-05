@@ -21,6 +21,12 @@
 #     test names it WITHOUT the marker, and only those hits make an entry here STALE-ALLOW. So a
 #     partially proven ID stays on this list, with a comment naming what is still unproven.
 # One ID per line; `#` starts a comment.
+# AUD-1 (org-scoped events): ow-policy-integrity (Review 3+4 P2-10) catalogues org.compute.reattributed and
+# org.app.unparked, adds the EMITTER -> CATALOG guard (org-audit-emitters.test.ts: every org.* member of
+# SecurityEventType and every org.* literal in source is catalogued), and audits a refused re-join by a departed or
+# suppressed person (org.member.auto_join_refused, no address). Still unproven, so titles stay "AUD-1 (partial)": a
+# seat quantity changed on Stripe's side writes no event, and org events are appended after commit and a failed
+# append is logged, not retried (org-audit.ts).
 AUD-1
 DRV-3
 # DRV-5 (Open: every org member resolves as an implicit member with the drive's default role; sidebar,

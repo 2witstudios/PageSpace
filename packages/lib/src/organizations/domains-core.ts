@@ -159,6 +159,15 @@ export type AutoJoinDecision =
   | { action: 'refuse'; reason: 'org_lapsed' };
 
 /**
+ * AUD-1, [D-OW-27]: a skip because the person LEFT this org (removed or left, keeping the account; or a new account
+ * whose address matches a departed member's suppression) is a refused attempt to come back, which the org's Owner and
+ * Admins must be able to see. Every other skip is ordinary (not verified, already in, invited...) and writes nothing.
+ */
+export function isAuditedRejoinSkip(reason: AutoJoinSkipReason): boolean {
+  return reason === 'previously_departed' || reason === 'departure_suppressed';
+}
+
+/**
  * Should this account join the org that verified its address's domain? A `join` still needs a seat:
  * the caller admits one under the org's billing lock (seat-service admitSeat) and refuses with the
  * SEAT-4 message when none can be granted.

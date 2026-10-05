@@ -37,6 +37,8 @@ export const ORG_AUDIT_CATEGORIES = {
   wallets: ['org.wallet.allocation_changed', 'org.wallet.topped_up'],
   donations: ['org.wallet.donated'],
   billing: ['org.billing.subscription_changed', 'org.billing.pool_refilled'],
+  // [D-OW-28] Compute handed to the drive lead when its creator leaves or loses the drive; a parked app taken back.
+  compute: ['org.compute.reattributed', 'org.app.unparked'],
 } as const satisfies Record<string, readonly OrgAuditCatalogType[]>;
 
 export type OrgAuditCategory = keyof typeof ORG_AUDIT_CATEGORIES;

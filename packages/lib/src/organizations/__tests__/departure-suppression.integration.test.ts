@@ -118,6 +118,40 @@ describe('[D-OW-27] departed members stay suppressed after deleting their accoun
     expect(await db.select().from(orgMembers).where(eq(orgMembers.userId, shouted.id))).toEqual([]);
   });
 
+  it('AUD-1 (partial) a refused re-join by a suppressed address leaves an org event the Owner can see, without the address', async () => {
+    const w = await northwind();
+    const { email } = await danaRemovedThenDeleted(w);
+    audit.events.length = 0;
+    const again = await person(email);
+    expect(await autoJoinVerifiedDomainOrg({ userId: again.id, now: new Date() })).toEqual({ kind: 'skipped', reason: 'departure_suppressed' });
+    const refused = audit.events.filter((e) => e.eventType === 'org.member.auto_join_refused');
+    expect(refused).toEqual([expect.objectContaining({
+      orgId: w.orgId,
+      actorId: again.id,
+      resourceType: 'user',
+      resourceId: again.id,
+      details: { domain: w.domain, reason: 'departure_suppressed' },
+    })]);
+    expect(JSON.stringify(refused)).not.toContain(email);
+    expect(JSON.stringify(refused)).not.toContain('dana');
+  });
+
+  it('AUD-1 (partial) a removed member who kept the account and signs in again leaves the same event (previously departed); an ordinary skip leaves none', async () => {
+    const w = await northwind();
+    const dana = await danaRemoved(w);
+    audit.events.length = 0;
+    expect(await autoJoinVerifiedDomainOrg({ userId: dana.id, now: new Date() })).toEqual({ kind: 'skipped', reason: 'previously_departed' });
+    expect(audit.events.filter((e) => e.eventType === 'org.member.auto_join_refused')).toEqual([
+      expect.objectContaining({ orgId: w.orgId, resourceId: dana.id, details: { domain: w.domain, reason: 'previously_departed' } }),
+    ]);
+
+    audit.events.length = 0;
+    const lena = await person(`lena@${w.domain}`);
+    expect((await autoJoinVerifiedDomainOrg({ userId: lena.id, now: new Date() })).kind).toBe('joined');
+    expect(await autoJoinVerifiedDomainOrg({ userId: lena.id, now: new Date() })).toEqual({ kind: 'skipped', reason: 'already_member' });
+    expect(audit.events.filter((e) => e.eventType === 'org.member.auto_join_refused')).toEqual([]);
+  });
+
   it('SEC-1 (partial) a different person on the domain is admitted', async () => {
     const w = await northwind();
     await danaRemovedThenDeleted(w);
