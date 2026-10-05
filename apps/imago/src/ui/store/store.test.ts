@@ -74,17 +74,20 @@ describe('setUiState()', () => {
 });
 
 function Probe() {
-  const keys = useUiState((state) => Object.keys(state.resources).length);
-  return h('p', null, `resources:${keys}`);
+  const collapsed = useUiState((state) => state.resources.collapsedSections);
+  return h('p', null, `collapsed:${collapsed.join(',')}`);
 }
 
 describe('useUiState() on the server', () => {
   test('server snapshot', () => {
+    const initial = createInitialState();
+    setUiState({ ...initial, resources: { collapsedSections: ['files'] } });
+
     assert({
       given: 'a component reading the store rendered to string',
       should: 'render the current snapshot through getServerSnapshot',
       actual: renderToString(h(Probe)),
-      expected: '<p>resources:0</p>',
+      expected: '<p>collapsed:files</p>',
     });
   });
 });

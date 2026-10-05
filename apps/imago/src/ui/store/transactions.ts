@@ -1,3 +1,4 @@
+import { stagePlugin } from '../frame/stage/stage-plugin';
 import type { UiState } from './state';
 import { getUiState, setUiState } from './store';
 
@@ -35,7 +36,7 @@ export const mergePlugins = <const P extends readonly UiPlugin[]>(
 };
 
 /** The shell's transactions. Section plugins join here as their leaves land. */
-export const transactions = mergePlugins();
+export const transactions = mergePlugins(stagePlugin);
 
 /** Runs a transaction over the current snapshot and stores the result. */
 export const dispatch = <A>(run: UiTransaction<A>, arg: A): void => {

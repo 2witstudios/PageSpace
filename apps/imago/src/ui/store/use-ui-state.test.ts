@@ -88,13 +88,35 @@ describe('useUiState() stable references', () => {
     const reader = mount((state) => [state.resources, state.collections]);
     const [first] = reader.seen();
 
-    act(() => setUiState(getUiState()));
-
     assert({
       given: 'a selector deriving a fresh array from one snapshot',
       should: 'render once, return one reference and raise no React warning',
       actual: [reader.renders(), reader.seen().every((value) => value === first), consoleError.mock.calls.length],
       expected: [1, true, 0],
+    });
+  });
+});
+
+describe('useUiState() selector identity', () => {
+  test('a prop-dependent selector', () => {
+    const seen: unknown[] = [];
+    function Reader({ slice }: { readonly slice: 'resources' | 'collections' }) {
+      const value = useUiState((state) => state[slice]);
+      seen.push(value);
+      return null;
+    }
+    const root = createRoot(document.createElement('div'));
+    mounted.push({ root, renders: () => seen.length, seen: () => seen });
+    const snapshot = getUiState();
+
+    act(() => root.render(h(Reader, { slice: 'resources' })));
+    act(() => root.render(h(Reader, { slice: 'collections' })));
+
+    assert({
+      given: 'a selector that changes with a prop while the store stays on one snapshot',
+      should: 'return the new selector’s slice, not the cached one',
+      actual: [getUiState() === snapshot, seen.at(0) === snapshot.resources, seen.at(-1) === snapshot.collections],
+      expected: [true, true, true],
     });
   });
 });
