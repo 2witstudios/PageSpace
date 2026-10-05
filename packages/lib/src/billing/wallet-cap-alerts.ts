@@ -23,7 +23,6 @@ import { notifications } from '@pagespace/db/schema/notifications';
 import { organizations } from '@pagespace/db/schema/organizations';
 import { walletCapAlerts, wallets } from '@pagespace/db/schema/wallets';
 import { loggers } from '../logging/logger-config';
-import { decryptUserRow } from '../auth/user-repository';
 import { walletFunderUserIds } from '../permissions/wallet-funders';
 import { readOrgSpendPolicy } from '../organizations/policy-reader';
 import { capAlertCopy, capAlertsDue, type CapWindowSpend } from './cap-alerts-core';
@@ -105,6 +104,10 @@ export async function notifyCapAlerts(input: { walletId: string; userId: string;
     const recipients = await walletFunderUserIds(db, wallet);
     if (recipients.length === 0) return 0;
     const [consumerRow] = await db.select({ name: users.name }).from(users).where(eq(users.id, input.userId));
+    // Loaded on use, never at module load: this module sits in credit-consume's static import graph,
+    // which a client hook reaches through monitoring/ai-monitoring, and the field-crypto it brings
+    // (promisify(scrypt)) throws when evaluated in a browser bundle (#2763 E2E).
+    const { decryptUserRow } = await import('../auth/user-repository');
     const consumer = consumerRow ? await decryptUserRow(consumerRow) : undefined;
     const byWindow = new Map<CapWindow, CapWindowSpend & { periodStart: Date }>(leg.windows.map((w) => [w.window, w]));
 
