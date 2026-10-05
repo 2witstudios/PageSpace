@@ -10,7 +10,7 @@ import { db, pool } from '@pagespace/db/db';
 import { eq, inArray, or } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { drives } from '@pagespace/db/schema/core';
-import { organizations, orgMembers } from '@pagespace/db/schema/organizations';
+import { organizations, orgMembers, orgSubscriptions } from '@pagespace/db/schema/organizations';
 
 vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 vi.mock('../../audit/org-audit', () => ({ recordOrgAuditEvent: vi.fn(async () => {}), recordOrgAuditEventAfterCommit: vi.fn(async () => true) }));
@@ -28,6 +28,7 @@ async function cleanup() {
   if (created.orgId) {
     await db.delete(drives).where(or(eq(drives.orgId, created.orgId), inArray(drives.ownerId, created.userIds)));
     await db.delete(orgMembers).where(eq(orgMembers.orgId, created.orgId));
+    await db.delete(orgSubscriptions).where(eq(orgSubscriptions.orgId, created.orgId));
     await db.delete(organizations).where(eq(organizations.id, created.orgId));
   }
   if (created.userIds.length) await db.delete(users).where(inArray(users.id, created.userIds));
@@ -42,6 +43,8 @@ beforeEach(async () => {
   const orgId = createId();
   created.orgId = orgId;
   await db.insert(organizations).values({ id: orgId, name: 'Northwind', slug: `nw-${createId()}`, ownerId: owner });
+  // Paid: there is no org trial, and an unpaid org is lapsed from creation (D-OW-30).
+  await factories.createOrgSubscription(orgId);
   await db.insert(orgMembers).values([{ orgId, userId: owner, role: 'OWNER' }, { orgId, userId: admin, role: 'ADMIN' }, { orgId, userId: member, role: 'MEMBER' }]);
   w = { orgId, owner, admin, member, outsider };
 });

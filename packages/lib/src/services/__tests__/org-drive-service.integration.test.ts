@@ -18,7 +18,8 @@ import { users } from '@pagespace/db/schema/auth';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { driveMembers, driveRoles } from '@pagespace/db/schema/members';
 import { driveEnvs } from '@pagespace/db/schema/drive-envs';
-import { organizations, orgMembers, orgInvitations, type OrgRole } from '@pagespace/db/schema/organizations';
+import { organizations, orgMembers, orgInvitations, orgSubscriptions, type OrgRole } from '@pagespace/db/schema/organizations';
+import { factories } from '@pagespace/db/test/factories';
 import {
   moveDriveToOrg,
   moveDriveOutOfOrg,
@@ -94,6 +95,7 @@ async function cleanup() {
   await db.delete(drives).where(or(eq(drives.orgId, northwind), inArray(drives.ownerId, userIds)));
   await db.delete(orgInvitations).where(eq(orgInvitations.orgId, northwind));
   await db.delete(orgMembers).where(eq(orgMembers.orgId, northwind));
+  await db.delete(orgSubscriptions).where(eq(orgSubscriptions.orgId, northwind));
   await db.delete(organizations).where(eq(organizations.id, northwind));
   await db.delete(users).where(inArray(users.id, userIds));
 }
@@ -111,6 +113,8 @@ beforeEach(async () => {
     { id: chris, email: `chris-${run}@outside.test`, name: 'Chris Rowe', updatedAt: new Date() },
   ]);
   await db.insert(organizations).values({ id: northwind, name: 'Northwind Labs', slug: `northwind-${run}`, ownerId: jono });
+  // Paid: there is no org trial, and an unpaid org is lapsed from creation (D-OW-30).
+  await factories.createOrgSubscription(northwind);
   await db.insert(orgMembers).values([
     { orgId: northwind, userId: jono, role: 'OWNER' },
     { orgId: northwind, userId: priya, role: 'ADMIN' },

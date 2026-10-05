@@ -16,7 +16,7 @@ import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
 import { users } from '@pagespace/db/schema/auth';
 import { drives } from '@pagespace/db/schema/core';
-import { organizations, orgMembers } from '@pagespace/db/schema/organizations';
+import { organizations, orgMembers, orgSubscriptions } from '@pagespace/db/schema/organizations';
 import { wallets } from '@pagespace/db/schema/wallets';
 import { createDriveWallet, donateToDrive, updateDriveWallet } from '../drive-wallet-service';
 import { moveDriveOutOfOrg, type OrgDriveServiceDeps } from '../org-drive-service';
@@ -43,6 +43,8 @@ async function northwind() {
   const [jono, marcus] = await Promise.all(['Jono', 'Marcus Oyelaran'].map((name) => factories.createUser({ name, subscriptionTier: 'free' })));
   created.users.push(jono.id, marcus.id);
   const [org] = await db.insert(organizations).values({ name: 'Northwind Labs', slug: `northwind-${createId()}`, ownerId: jono.id }).returning();
+  // Paid: there is no org trial, and an unpaid org is lapsed from creation (D-OW-30).
+  await factories.createOrgSubscription(org.id);
   created.orgs.push(org.id);
   await db.insert(orgMembers).values([
     { orgId: org.id, userId: jono.id, role: 'OWNER' },
@@ -83,6 +85,7 @@ describe('drive wallet events follow the drive\'s org at commit', () => {
       }
       await db.delete(wallets).where(inArray(wallets.orgId, orgIds));
       await db.delete(orgMembers).where(inArray(orgMembers.orgId, orgIds));
+      await db.delete(orgSubscriptions).where(inArray(orgSubscriptions.orgId, orgIds));
       await db.delete(organizations).where(inArray(organizations.id, orgIds));
     }
     if (userIds.length > 0) {

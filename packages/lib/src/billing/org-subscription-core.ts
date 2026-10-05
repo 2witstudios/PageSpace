@@ -8,8 +8,12 @@
  *     seat, billed as a SECOND subscription item whose quantity is max(0, seats − 5).
  *     The seat item is always present (quantity 0 at 5 or fewer seats), so adding a
  *     6th seat is a quantity change, never a new item.
- *   - SEAT-8: creating the org starts Business with a trial; a trial that ends with no
- *     card on file CANCELS, so there is no free org tier.
+ *   - SEAT-8 as amended by [D-OW-30]: there is no free org tier and NO org trial.
+ *     Creating an org asks for a card at checkout: the subscription starts `incomplete`
+ *     and its first invoice waits for the client to confirm a payment
+ *     ({@link orgPaymentStep}); the pool is funded from that first real payment. A
+ *     trial invoice paid $0 and granted $50 of pool credit, which was farmable by
+ *     creating orgs over and over.
  *
  * Money amounts never come from here: the price ids are configuration handed in by
  * the caller, and what a credit is stays in money-model (MON-5). The seat count this
@@ -26,9 +30,6 @@
 
 import { createHash } from 'node:crypto';
 import { TIER_PLAN_LIMITS } from './subscription-tiers';
-
-/** The org plan's trial on creation (SEAT-8). The design canvas: "Nothing is charged for 14 days." */
-export const ORG_BUSINESS_TRIAL_DAYS = 14;
 
 /** Metadata key stamped on the org's Stripe customer and subscription. */
 export const ORG_ID_METADATA_KEY = 'pagespace_org_id';
@@ -91,11 +92,6 @@ export function orgStripeIdempotencyKey(orgId: string, operation: OrgStripeOpera
   return `pagespace-org:${orgPart}:${operation}:${digest}`;
 }
 
-/** SEAT-8: the trial is for the org's FIRST Business subscription only. */
-export function orgTrialDays(input: { hadSubscription: boolean }): number {
-  return input.hadSubscription ? 0 : ORG_BUSINESS_TRIAL_DAYS;
-}
-
 /** Statuses after which a Stripe subscription is over and a new one may be created. */
 const ENDED_STATUSES: ReadonlySet<string> = new Set(['canceled', 'incomplete_expired']);
 
@@ -144,28 +140,24 @@ export interface OrgBusinessSubscriptionParams {
   customer: string;
   items: [{ price: string; quantity: 1 }, { price: string; quantity: number }];
   metadata: Record<string, string>;
-  trial_period_days?: number;
-  trial_settings?: { end_behavior: { missing_payment_method: 'cancel' } };
-  payment_behavior?: 'default_incomplete';
+  payment_behavior: 'default_incomplete';
   payment_settings: { save_default_payment_method: 'on_subscription' };
 }
 
 /**
  * The Business subscription Stripe is asked for (SEAT-1, SEAT-2, A-8, SEAT-8): the
  * base price once and the extra-seat price at {@link orgExtraSeatQuantity}, on the
- * org's customer, stamped with the org id. With a trial, a trial that ends with no
- * payment method CANCELS (SEAT-8: a card is required before the trial ends). Without
- * one, the first invoice waits for payment (`default_incomplete`) rather than failing
- * the create for want of a card.
+ * org's customer, stamped with the org id. There is no trial ([D-OW-30]): the first
+ * invoice waits for payment (`default_incomplete`) rather than failing the create for
+ * want of a card, and the card the client confirms it with is saved on the
+ * subscription for every renewal.
  */
 export function orgBusinessSubscriptionParams(input: {
   orgId: string;
   customerId: string;
   seats: number;
   prices: OrgBusinessPrices;
-  trialDays: number;
 }): OrgBusinessSubscriptionParams {
-  const trial = Number.isInteger(input.trialDays) && input.trialDays > 0;
   return {
     customer: input.customerId,
     items: [
@@ -173,9 +165,7 @@ export function orgBusinessSubscriptionParams(input: {
       { price: input.prices.seatPriceId, quantity: orgExtraSeatQuantity(input.seats) },
     ],
     metadata: { [ORG_ID_METADATA_KEY]: input.orgId, kind: ORG_SUBSCRIPTION_KIND },
-    ...(trial
-      ? { trial_period_days: input.trialDays, trial_settings: { end_behavior: { missing_payment_method: 'cancel' as const } } }
-      : { payment_behavior: 'default_incomplete' as const }),
+    payment_behavior: 'default_incomplete',
     payment_settings: { save_default_payment_method: 'on_subscription' },
   };
 }
@@ -228,17 +218,52 @@ export function pickAdoptableOrgSubscription<C extends OrgSubscriptionCandidate>
 
 /**
  * The org's subscription history in Stripe: every subscription stamped with the org,
- * ENDED ones included. Any at all means the org already had its trial (SEAT-8); the
- * newest is the generation a new subscription follows.
+ * ENDED ones included. The newest is the generation a new subscription follows.
  */
 export function orgSubscriptionHistory(
   candidates: ReadonlyArray<OrgSubscriptionCandidate>,
   input: { orgId: string },
-): { hadSubscription: boolean; previousSubscriptionId: string | null } {
+): { previousSubscriptionId: string | null } {
   const mine = candidates
     .filter((s) => s.metadata?.[ORG_ID_METADATA_KEY] === input.orgId)
     .sort((a, b) => b.created - a.created || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0));
-  return { hadSubscription: mine.length > 0, previousSubscriptionId: mine[0]?.id ?? null };
+  return { previousSubscriptionId: mine[0]?.id ?? null };
+}
+
+/** The subscription's latest invoice, narrowed to what paying it needs. */
+export interface OrgLatestInvoice {
+  /** Stripe invoice.status: draft | open | paid | uncollectible | void. */
+  status: string | null;
+  /** Stripe invoice.amount_due, minor units. Read only to know whether anything is owed. */
+  amountDueCents: number;
+  /** invoice.confirmation_secret.client_secret: what the client confirms the card with. */
+  clientSecret: string | null;
+}
+
+export type OrgPaymentStep = { kind: 'none' } | { kind: 'confirm_payment'; clientSecret: string };
+
+/** Subscription statuses whose open invoice the org can still pay to become (or stay) active. */
+const PAYABLE_STATUSES: ReadonlySet<string> = new Set(['incomplete', 'past_due', 'unpaid']);
+
+/** Whether a subscription in `status` can owe a payment the client may still make (only then is its invoice read). */
+export function orgSubscriptionMayOwePayment(status: string): boolean {
+  return PAYABLE_STATUSES.has(status);
+}
+
+/**
+ * SEAT-8 / SEAT-9 recovery: what the client must do to pay for the org's subscription.
+ * A subscription waiting on its first payment (`incomplete`, a new org or a re-subscribe
+ * after a lapse) or behind on one (`past_due`, `unpaid`) whose latest invoice is OPEN
+ * and owes something hands the client that invoice's confirmation secret; the client
+ * confirms a card with it (Stripe's Payment Element), Stripe pays the invoice, and the
+ * webhook mirror lifts the lapse and funds the pool from what was paid. Nothing else
+ * ever needs a payment step, and an ended subscription never hands out a secret.
+ */
+export function orgPaymentStep(input: { subscriptionStatus: string; latestInvoice: OrgLatestInvoice | null }): OrgPaymentStep {
+  const invoice = input.latestInvoice;
+  if (!orgSubscriptionMayOwePayment(input.subscriptionStatus) || invoice === null) return { kind: 'none' };
+  if (invoice.status !== 'open' || !(invoice.amountDueCents > 0) || !invoice.clientSecret) return { kind: 'none' };
+  return { kind: 'confirm_payment', clientSecret: invoice.clientSecret };
 }
 
 export interface OrgSubscriptionItemLinkage {

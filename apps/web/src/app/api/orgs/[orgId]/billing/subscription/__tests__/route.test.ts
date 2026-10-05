@@ -1,5 +1,5 @@
 /**
- * POST /api/orgs/[orgId]/billing/subscription (Spec SEAT-1, SEAT-6, SEAT-8). The shell
+ * POST /api/orgs/[orgId]/billing/subscription (Spec SEAT-1, SEAT-6, SEAT-8, SEAT-9 recovery). The shell
  * is faked; authorization is NOT: the real requireOrgRole runs over a faked membership
  * lookup, so a route that skipped it or asked for the wrong role fails here.
  */
@@ -29,7 +29,7 @@ vi.mock('@/lib/org-billing/org-subscription', async () => {
   }
   return {
     OrgBillingError,
-    ensureOrgBusinessSubscription: vi.fn(),
+    provisionOrgSubscription: vi.fn(),
     orgSubscriptionSummary: (l: { status: string; trialEnd: Date | null; currentPeriodEnd: Date | null; extraSeatQuantity: number }) => ({
       status: l.status,
       trialEnd: l.trialEnd?.toISOString() ?? null,
@@ -42,22 +42,23 @@ vi.mock('@/lib/org-billing/org-subscription', async () => {
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { findMembershipRole } from '@pagespace/lib/organizations/repository';
-import { ensureOrgBusinessSubscription, OrgBillingError } from '@/lib/org-billing/org-subscription';
+import { provisionOrgSubscription, OrgBillingError } from '@/lib/org-billing/org-subscription';
 import { POST } from '../route';
 
 const ORG_ID = 'org_northwind';
-const TRIAL_END = new Date('2026-10-10T12:00:00.000Z');
+const PERIOD_END = new Date('2026-11-10T12:00:00.000Z');
 const linkage = {
   orgId: ORG_ID,
-  stripeCustomerId: 'cus_secret',
-  stripeSubscriptionId: 'sub_secret',
-  stripeBaseItemId: 'si_base_secret',
-  stripeSeatItemId: 'si_seat_secret',
+  stripeCustomerId: 'cus_hidden',
+  stripeSubscriptionId: 'sub_hidden',
+  stripeBaseItemId: 'si_base_hidden',
+  stripeSeatItemId: 'si_seat_hidden',
   extraSeatQuantity: 0,
-  status: 'trialing',
-  trialEnd: TRIAL_END,
-  currentPeriodEnd: TRIAL_END,
+  status: 'incomplete',
+  trialEnd: null,
+  currentPeriodEnd: PERIOD_END,
 };
+const PAY = { kind: 'confirm_payment' as const, clientSecret: 'pi_123_secret_abc' };
 
 const session = (userId: string): SessionAuthResult => ({
   userId,
@@ -82,22 +83,23 @@ beforeEach(() => {
   flags.billingEnabled = true;
   vi.mocked(isAuthError).mockImplementation((result) => 'error' in result);
   vi.mocked(authenticateRequestWithOptions).mockResolvedValue(session('user_priya'));
-  vi.mocked(ensureOrgBusinessSubscription).mockResolvedValue({ kind: 'created', linkage });
+  vi.mocked(provisionOrgSubscription).mockResolvedValue({ result: { kind: 'created', linkage }, payment: PAY });
 });
 
 describe('POST /api/orgs/[orgId]/billing/subscription', () => {
-  it('SEAT-1 (partial) SEAT-6 (partial) an Owner or Admin provisions the org subscription and sees its state, never a Stripe id', async () => {
+  it('SEAT-1 (partial) SEAT-6 (partial) SEAT-8 (partial) an Owner or Admin provisions the org subscription and gets its state plus the client secret to pay its open invoice, never a Stripe customer or subscription id', async () => {
     for (const role of ['OWNER', 'ADMIN'] as const) {
       as(role);
       const res = await call();
       expect(res.status).toBe(201);
       const body = await res.json();
       expect(body).toEqual({
-        subscription: { status: 'trialing', trialEnd: TRIAL_END.toISOString(), currentPeriodEnd: TRIAL_END.toISOString(), extraSeatQuantity: 0 },
+        subscription: { status: 'incomplete', trialEnd: null, currentPeriodEnd: PERIOD_END.toISOString(), extraSeatQuantity: 0 },
+        payment: { kind: 'confirm_payment', clientSecret: 'pi_123_secret_abc' },
       });
-      expect(JSON.stringify(body)).not.toMatch(/secret/);
+      expect(JSON.stringify(body)).not.toMatch(/cus_|sub_|si_/);
     }
-    expect(ensureOrgBusinessSubscription).toHaveBeenCalledWith(ORG_ID);
+    expect(provisionOrgSubscription).toHaveBeenCalledWith(ORG_ID);
     expect(auditRequest).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ eventType: 'data.write', resourceId: ORG_ID, details: expect.objectContaining({ operation: 'provision_org_subscription' }) }),
@@ -109,13 +111,15 @@ describe('POST /api/orgs/[orgId]/billing/subscription', () => {
     expect((await call()).status).toBe(403);
     as(null);
     expect((await call()).status).toBe(404);
-    expect(ensureOrgBusinessSubscription).not.toHaveBeenCalled();
+    expect(provisionOrgSubscription).not.toHaveBeenCalled();
   });
 
-  it('SEAT-1 (partial) a replay on a subscribed org answers 200 with the same subscription', async () => {
+  it('SEAT-1 (partial) a replay on a subscribed org answers 200 with the same subscription; a paid-up org gets no payment step', async () => {
     as('OWNER');
-    vi.mocked(ensureOrgBusinessSubscription).mockResolvedValue({ kind: 'existing', linkage });
-    expect((await call()).status).toBe(200);
+    vi.mocked(provisionOrgSubscription).mockResolvedValue({ result: { kind: 'existing', linkage: { ...linkage, status: 'active' } }, payment: { kind: 'none' } });
+    const res = await call();
+    expect(res.status).toBe(200);
+    expect((await res.json()).payment).toEqual({ kind: 'none' });
   });
 
   it('SEAT-6 (partial) is absent where billing is off (onprem, tenant) and while orgs are dark', async () => {
@@ -125,18 +129,18 @@ describe('POST /api/orgs/[orgId]/billing/subscription', () => {
     flags.billingEnabled = true;
     flags.orgsEnabled = false;
     expect((await call()).status).toBe(404);
-    expect(ensureOrgBusinessSubscription).not.toHaveBeenCalled();
+    expect(provisionOrgSubscription).not.toHaveBeenCalled();
   });
 
   it('a Stripe failure is a retryable 502, unconfigured prices a 503, a vanished org a 404', async () => {
     as('OWNER');
-    vi.mocked(ensureOrgBusinessSubscription).mockRejectedValueOnce(new Error('Stripe is unavailable'));
+    vi.mocked(provisionOrgSubscription).mockRejectedValueOnce(new Error('Stripe is unavailable'));
     const failed = await call();
     expect(failed.status).toBe(502);
     expect((await failed.json()).error).toMatch(/try again/);
-    vi.mocked(ensureOrgBusinessSubscription).mockRejectedValueOnce(new OrgBillingError('prices_not_configured', 'x'));
+    vi.mocked(provisionOrgSubscription).mockRejectedValueOnce(new OrgBillingError('prices_not_configured', 'x'));
     expect((await call()).status).toBe(503);
-    vi.mocked(ensureOrgBusinessSubscription).mockRejectedValueOnce(new OrgBillingError('org_not_found', 'x'));
+    vi.mocked(provisionOrgSubscription).mockRejectedValueOnce(new OrgBillingError('org_not_found', 'x'));
     expect((await call()).status).toBe(404);
   });
 });

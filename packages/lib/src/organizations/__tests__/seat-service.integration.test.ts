@@ -286,12 +286,12 @@ describe('seat accounting (real Postgres)', () => {
       expect(stripe.calls.map((c) => c.quantity)).toEqual([1]);
     });
 
-    it('SEAT-4 (partial) an org whose subscription is not provisioned yet takes seats without a Stripe call: provisioning prices the real count', async () => {
+    it('SEAT-4 (partial) SEAT-9 (partial) D-OW-30 an org whose subscription is not provisioned yet has not paid, so it is lapsed: an invite takes no seat and makes no Stripe call', async () => {
       const f = await buildOrg({ members: 5, autoAdd: true, subscription: false });
       const stripe = new RecordingSeatStripe(0);
-      expect((await invite(f, stripe)).ok).toBe(true);
+      expect(await invite(f, stripe)).toMatchObject({ ok: false, reason: 'org_lapsed' });
       expect(stripe.calls).toEqual([]);
-      expect((await getSeatSummary(f.orgId)).held).toBe(6);
+      expect((await getSeatSummary(f.orgId)).held).toBe(5);
     });
 
     it('SEAT-4 (partial) accepting an invite changes nothing in Stripe: the invite already held the seat', async () => {

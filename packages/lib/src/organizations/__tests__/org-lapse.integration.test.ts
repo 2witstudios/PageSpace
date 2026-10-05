@@ -25,7 +25,6 @@ import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
 import { createOrRotateInvitation, resendInvitation } from '../invitations';
 import { ORG_LAPSED_MESSAGE, getOrgBillingNotice, getOrgStatus, isOrgActive } from '../status';
-import { ORG_UNSUBSCRIBED_TRIAL_MS } from '../status-core';
 import { createOrgDrive, moveDriveOutOfOrg, moveDriveToOrg, type OrgDriveServiceDeps } from '../../services/org-drive-service';
 import { createDriveWallet, getDriveWallet, updateDriveWallet, topUpDriveWallet } from '../../services/drive-wallet-service';
 import { resolveCallSpend } from '../../billing/spend-resolution';
@@ -79,6 +78,9 @@ async function build(): Promise<World> {
     .returning();
   // Marcus's own credits, funded: the source he may still choose while the org is lapsed.
   await db.insert(wallets).values({ userId: marcus.id, monthlyRemainingCents: 5_000, monthlyPeriodStart: new Date(), monthlyPeriodEnd: new Date(Date.now() + 20 * 86_400_000) });
+
+  // Northwind has paid (D-OW-30: an org nobody paid for is lapsed from creation); each test lapses it as it needs.
+  await setSubscription(org.id, 'active');
 
   const ids = { jono: jono.id, priya: priya.id, dana: dana.id, marcus: marcus.id };
   return { orgId: org.id, productId: product.id, pageId: page.id, personalDriveId: personal.id, poolId: pool.id, productWalletId: productWallet.id, ids, userIds: Object.values(ids) };
@@ -295,18 +297,16 @@ describe('org lapse gates (orgs on, real Postgres)', () => {
     expect(stored.status).toBe('active');
   });
 
-  it('SEAT-9 (partial) SEAT-6 (partial) the banner data: Owner and Admins see why and can reactivate, a member sees only read-only; a new unsubscribed org shows its trial to managers only', async () => {
+  it('SEAT-9 (partial) SEAT-6 (partial) SEAT-8 (partial) the banner data: Owner and Admins see why and can reactivate, a member sees only read-only; a new org that has not paid yet (D-OW-30: no trial) is lapsed from creation', async () => {
     if (!world) return;
     const w = world;
-    const [org] = await db.select({ createdAt: organizations.createdAt }).from(organizations).where(eq(organizations.id, w.orgId));
-    // No subscription row yet (Stripe was unreachable at creation): on the creation trial.
-    expect(await getOrgStatus(w.orgId)).toEqual({ status: 'trialing', reason: null });
-    expect(await getOrgBillingNotice(w.orgId, 'OWNER')).toEqual({
-      kind: 'trial',
-      trialEnd: new Date(org.createdAt.getTime() + ORG_UNSUBSCRIBED_TRIAL_MS).toISOString(),
-      canManageBilling: true,
-    });
-    expect(await getOrgBillingNotice(w.orgId, 'MEMBER')).toBeNull();
+    // No subscription row yet (not paid, or Stripe was unreachable at creation): lapsed, with no trial clock.
+    await db.delete(orgSubscriptions).where(eq(orgSubscriptions.orgId, w.orgId));
+    expect(await getOrgStatus(w.orgId)).toEqual({ status: 'lapsed', reason: 'no_subscription' });
+    expect(await getOrgBillingNotice(w.orgId, 'OWNER')).toEqual({ kind: 'reactivate', reason: 'no_subscription', canManageBilling: true });
+    expect(await getOrgBillingNotice(w.orgId, 'MEMBER')).toEqual({ kind: 'read_only', canManageBilling: false });
+    await setSubscription(w.orgId, 'incomplete');
+    expect(await getOrgBillingNotice(w.orgId, 'ADMIN')).toEqual({ kind: 'reactivate', reason: 'incomplete', canManageBilling: true });
 
     await setSubscription(w.orgId, 'unpaid');
     expect(await getOrgBillingNotice(w.orgId, 'OWNER')).toEqual({ kind: 'reactivate', reason: 'unpaid', canManageBilling: true });

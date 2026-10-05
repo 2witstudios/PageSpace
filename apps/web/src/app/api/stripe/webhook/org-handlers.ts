@@ -136,11 +136,9 @@ export async function mirrorOrgSubscription(
       currentPeriodEnd: fetched.currentPeriodEnd === null ? null : new Date(fetched.currentPeriodEnd * 1000),
       cancelAtPeriodEnd: fetched.cancelAtPeriodEnd,
     };
-    // orgCreatedAt only matters with no subscription row; here there always is one.
-    const orgCreatedAt = stored.createdAt;
-    const before = deriveOrgStatus({ billingEnabled, subscription: stored, orgCreatedAt, now }).status;
+    const before = deriveOrgStatus({ billingEnabled, subscription: stored, now }).status;
     await tx.update(orgSubscriptions).set(next).where(eq(orgSubscriptions.id, stored.id));
-    const after = deriveOrgStatus({ billingEnabled, subscription: next, orgCreatedAt, now }).status;
+    const after = deriveOrgStatus({ billingEnabled, subscription: next, now }).status;
     return {
       kind: 'applied',
       orgId,
@@ -207,7 +205,7 @@ export type OrgInvoicePaidOutcome = { refill: OrgPoolRefillOutcome; mirror: OrgM
 /**
  * invoice.paid for an org-routed event: refill the org's pool through the one funding
  * path (applyOrgPoolRefill: what was PAID net of discounts × ratio, or list × ratio for
- * a trial or gift, [D-OW-23]; once per invoice), then mirror the subscription — a paid
+ * an admin gift, [D-OW-23]; a $0 non-gift invoice grants nothing, [D-OW-30]; once per invoice), then mirror the subscription — a paid
  * invoice is usually what lifts past_due or lapse. A paid invoice funds the pool even
  * while the org is lapsed: money that was paid is never dropped.
  */
@@ -244,7 +242,7 @@ export async function handleOrgInvoicePaymentFailed(
 }
 
 /**
- * The extra seats the invoice billed, for sizing a trial or gift at list price: the
+ * The extra seats the invoice billed, for sizing a gift at list price: the
  * invoice's own seat line (a count), else the stored subscription's quantity, else 0.
  */
 async function invoiceExtraSeats(orgId: string, invoice: Stripe.Invoice, deps: OrgWebhookDeps): Promise<number> {

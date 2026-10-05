@@ -127,7 +127,7 @@ function hasSubscriptionParent(invoice: OrgInvoice): boolean {
 }
 
 export interface OrgPoolRefillOptions {
-  /** Extra seats on the subscription, for a trial or gift funded at list price ([D-OW-23]). */
+  /** Extra seats on the subscription, for a gift funded at list price ([D-OW-23]). */
   extraSeats?: number;
   /** D-OW-17 test seam only; production callers never pass it. */
   active?: boolean;

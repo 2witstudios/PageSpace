@@ -48,7 +48,7 @@ export interface OrgInvoiceSeatLine {
 /**
  * The extra seats an org invoice billed: the quantity on its extra-seat price line — a
  * COUNT, never an amount (amounts come only from the money model). Sizes the pool of a
- * trial or gift at list price ([D-OW-23]) from the invoice itself, so an invoice.paid
+ * gift at list price ([D-OW-23]; there is no org trial, [D-OW-30]) from the invoice itself, so an invoice.paid
  * that beats the provisioning commit still funds the seats it billed. With several
  * lines for the seat price (prorations), the largest positive quantity is the period's
  * count. Null when the invoice has no seat line or the seat price is not configured.
