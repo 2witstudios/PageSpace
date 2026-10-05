@@ -28,6 +28,7 @@ import { chargeMillicents, accruePending, allocateSpend, applyPaymentToDebt } fr
 import { allocateWalletSpend, settleOvershoot, seatOvershootDeltaMillicents, chosenSourceCharge, walletSourceKind, DEFAULT_OVERSHOOT_CHOICE, type ChosenSourceCharge, type OvershootFunderChoice } from './wallet-core';
 import { childWalletFunds, type WalletBalanceFacts } from './spend-target';
 import { readOrgSpendPolicy } from '../organizations/policy-reader';
+import { isOrgActive } from '../organizations/status';
 import { isSeatCountedSpendKind, loadSeatCapFacts, SEAT_OVERSHOOT_ENTRY } from './seat-allowance';
 import { drawWalletFundingLegs, creditWalletFundingLegs } from './wallet-legs';
 import { parseWalletDraws, addWalletDraws, planWalletRefund, type WalletDraws } from './wallet-draws';
@@ -322,8 +323,16 @@ async function holdFallbackFromWalletId(tx: Tx, holdId: string): Promise<string 
  */
 async function lockFallbackFrom(tx: Tx, fallbackFromWalletId: string | null, chargedWalletId: string): Promise<ChosenSourceCharge | null> {
   if (fallbackFromWalletId === null) return null;
-  const [peek] = await tx.select({ parentWalletId: wallets.parentWalletId }).from(wallets).where(eq(wallets.id, fallbackFromWalletId));
+  const [peek] = await tx
+    .select({ parentWalletId: wallets.parentWalletId, status: wallets.status, orgId: wallets.orgId })
+    .from(wallets)
+    .where(eq(wallets.id, fallbackFromWalletId));
   if (!peek) return null;
+  // [D-OW-32] a paused leg absorbs nothing, nor does any leg of a lapsed org — checked again at
+  // settle, so a turn whose org lapsed after its gate carries nothing back either. The overshoot
+  // then lands where any own-credits overshoot lands.
+  if (peek.status === 'paused') return null;
+  if (peek.orgId !== null && !(await isOrgActive(peek.orgId, { executor: tx }))) return null;
   let chosen: LockedWallet | null = null;
   if (peek.parentWalletId) chosen = await lockWallet(tx, fallbackFromWalletId);
   const roots = [...new Set([peek.parentWalletId ?? fallbackFromWalletId, chargedWalletId])].sort();

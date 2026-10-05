@@ -1920,6 +1920,51 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
     expect((await walletRow(w.poolId)).monthlyRemainingCents).toBe(900_000 - 225);
   });
 
+  it('WAL-6 (partial) SEAT-9 (partial) [D-OW-32] a LAPSED org pays nothing for a member\'s own-credits fallback: the fallback is shown, the overshoot stays on the member, the pool\'s debt does not move', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 900_000 });
+    const w = world;
+    await setPolicies(w, { walletFallback: 'own_credits' });
+    await db.update(orgSubscriptions).set({ status: 'canceled' }).where(eq(orgSubscriptions.orgId, w.orgId));
+    await db.update(wallets).set({ debtCents: 53 }).where(eq(wallets.id, w.poolId));
+    await db.update(wallets).set({ monthlyRemainingCents: 40, topupRemainingCents: 0 }).where(eq(wallets.id, w.marcusWalletId));
+
+    const gate = await canConsumeAI(w.marcusId, 'free', { spend: driveSpend(w.productId, 'drive_wallet'), estCostCents: 5 });
+    expect(gate).toMatchObject({ allowed: true, walletId: w.marcusWalletId, spendSource: 'own_credits', fallback: { from: 'drive_wallet', to: 'own_credits' } });
+    expect(gate.fallbackFromWalletId).toBeUndefined();
+    expect((await holdsOf(w.marcusId)).map((h) => h.fallbackFromWalletId)).toEqual([null]);
+
+    const [log] = await db.insert(aiUsageLogs).values({ userId: w.marcusId, provider: 'openrouter', model: 'm', cost: 1 }).returning({ id: aiUsageLogs.id });
+    expect(await consumeCredits({ aiUsageLogId: log.id, userId: w.marcusId, costDollars: 1, holdId: gate.holdId, walletId: gate.walletId })).toBe('settled');
+
+    const pool = await walletRow(w.poolId);
+    const product = await walletRow(w.productWalletId);
+    const marcus = await walletRow(w.marcusWalletId);
+    expect([pool.debtCents, pool.monthlyRemainingCents]).toEqual([53, 900_000]);
+    expect([product.spentCents, product.debtCents]).toEqual([0, 0]);
+    // The money invariant: the 150¢ charge = what left Marcus's wallet + the debt it carries.
+    expect([marcus.monthlyRemainingCents, marcus.debtCents]).toEqual([0, 110]);
+    const rows = await ledgerOf(w.marcusId);
+    const usage = rows.find((r) => r.entryType === 'usage');
+    const debt = rows.filter((r) => r.entryType === 'adjustment');
+    expect(-(usage?.appliedCents ?? 0) + debt.reduce((s, r) => s - r.amountCents, 0)).toBe(150);
+    expect(debt.map((r) => r.walletId)).toEqual([w.marcusWalletId]);
+  });
+
+  it('WAL-6 (partial) [D-OW-32] a fallback whose chosen leg is paused by the time it settles (the org lapsed mid-turn) still lands nothing on the paused leg', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 900_000 });
+    const w = world;
+    await db.update(wallets).set({ debtCents: 53 }).where(eq(wallets.id, w.poolId));
+    await db.update(wallets).set({ monthlyRemainingCents: 40, topupRemainingCents: 0 }).where(eq(wallets.id, w.marcusWalletId));
+    // A follow-on of a turn that fell back off Product: then the org lapses before it settles.
+    await db.update(orgSubscriptions).set({ status: 'canceled' }).where(eq(orgSubscriptions.orgId, w.orgId));
+    const [log] = await db.insert(aiUsageLogs).values({ userId: w.marcusId, provider: 'openrouter', model: 'm', cost: 1 }).returning({ id: aiUsageLogs.id });
+    await consumeCredits({ aiUsageLogId: log.id, userId: w.marcusId, costDollars: 1, walletId: w.marcusWalletId, fallbackFromWalletId: w.productWalletId });
+    expect((await walletRow(w.poolId)).debtCents).toBe(53);
+    expect((await walletRow(w.marcusWalletId)).debtCents).toBe(110);
+  });
+
   it('POL-7 an org fallback rule of own credits moves an empty drive wallet onto the person\'s own credits, shows it, and a drive swapping it back to seat allowance refuses', async () => {
     if (!dbAvailable) return;
     world = await build({ productAllocationCents: 0, poolCents: 900_000 });

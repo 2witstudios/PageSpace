@@ -234,7 +234,9 @@ export function resolveSpendSource(input: ResolveSpendSourceInput): SpendResolut
         walletId: fallbackLeg.walletId,
         fallbackApplied: true,
         fallbackFrom: chosen,
-        fallbackFromWalletId: found.leg.walletId,
+        // [D-OW-32] a PAUSED leg (its kill switch, or a lapsed org's legs) absorbs nothing: the
+        // fallback is still reported, but no overshoot is carried back onto it.
+        fallbackFromWalletId: found.leg.status === 'paused' ? null : found.leg.walletId,
       };
     }
   }

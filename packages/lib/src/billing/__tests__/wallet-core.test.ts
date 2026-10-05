@@ -191,6 +191,13 @@ describe('resolveSpendSource — an empty chosen source', () => {
     ).toEqual(spend(fallback, walletId, 'drive_wallet', 'w-product'));
   });
 
+  it('WAL-6 (partial) [D-OW-32] a fallback off a PAUSED leg (a kill switch, a lapsed org) carries no wallet: a paused leg absorbs nothing, so the overshoot is a plain own-credits one', () => {
+    const result = resolveSpendSource(
+      base({ driveWallet: productWallet(c(1200), 'paused'), driveRule: { fallback: 'own_credits', guestsMaySpendDriveWallet: false } }),
+    );
+    expect(result).toEqual(spend('own_credits', 'w-marcus', 'drive_wallet', null));
+  });
+
   it('WAL-6 (partial) a fallback names the wallet it moved off, so the settle can land overshoot where that choice would have', () => {
     const result = resolveSpendSource(
       base({ chosen: 'seat_allowance', seatAllowance: marcusSeat(0), driveRule: { fallback: 'own_credits', guestsMaySpendDriveWallet: false } }),
