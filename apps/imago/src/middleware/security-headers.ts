@@ -104,12 +104,14 @@ const applySecurityHeaders = (
 
 type CreateSecureResponseOptions = {
   isAPIRoute?: boolean;
+  /** Extra request headers for the render; each overwrites any client value. */
+  forwardHeaders?: Record<string, string>;
 };
 
 export const createSecureResponse = (
   isProduction: boolean,
   request?: Request,
-  { isAPIRoute = false }: CreateSecureResponseOptions = {},
+  { isAPIRoute = false, forwardHeaders = {} }: CreateSecureResponseOptions = {},
 ): { response: NextResponse; nonce: string } => {
   const nonce = generateNonce();
   const isSecure = isSecureRequest(request);
@@ -117,6 +119,9 @@ export const createSecureResponse = (
   // CSP in the request headers lets Next.js parse the nonce during SSR and
   // apply it to framework scripts (getScriptNonceFromHeader).
   const requestHeaders = new Headers(request?.headers);
+  for (const [name, value] of Object.entries(forwardHeaders)) {
+    requestHeaders.set(name, value);
+  }
   requestHeaders.set(NONCE_HEADER, nonce);
   if (!isAPIRoute) {
     requestHeaders.set('Content-Security-Policy', buildCSPPolicy(nonce));
