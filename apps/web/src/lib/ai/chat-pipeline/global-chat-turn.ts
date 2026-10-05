@@ -1049,15 +1049,15 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
 
     // INTEGRATION TOOLS: Resolve and merge integration tools for global assistant
     try {
-      const { resolveGlobalAssistantIntegrationTools, resolveIntegrationDriveScope } = await import('@/lib/ai/core/integration-tool-resolver');
+      const integrationResolver = await import('@/lib/ai/core/integration-tool-resolver');
       turnTimer.mark('integrations_import');
       // A drive the user is not a member of resolves no drive-scoped integrations.
-      const { driveId: currentDriveId, userDriveRole } = await resolveIntegrationDriveScope(
+      const { driveId: currentDriveId, userDriveRole } = await integrationResolver.resolveIntegrationDriveScope(
         userId,
         locationContext?.currentDrive?.id || null,
       );
       if (currentDriveId) turnTimer.mark('drive_access_checked');
-      const integrationTools = await resolveGlobalAssistantIntegrationTools({
+      const integrationTools = await integrationResolver.resolveGlobalAssistantIntegrationTools({
         userId,
         driveId: currentDriveId,
         userDriveRole,

@@ -1408,16 +1408,16 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     // A built-in Imago agent gets the user's integrations (as the Global
     // Assistant does), with drive integrations only from a drive it may work in.
     try {
-      const { resolvePageAgentIntegrationTools, resolveImagoAgentIntegrationTools } = await import('@/lib/ai/core/integration-tool-resolver');
+      const resolver = await import('@/lib/ai/core/integration-tool-resolver');
       turnTimer.mark('integrations_import');
       const integrationTools = imagoContext
-        ? await resolveImagoAgentIntegrationTools({
+        ? await resolver.resolveImagoAgentIntegrationTools({
           agentId: chatId,
           userId,
           grantedDriveId: resolveImagoIntegrationDriveId(turnLocation, imagoContext),
           currentTools: preExposureTools,
         })
-        : await resolvePageAgentIntegrationTools({
+        : await resolver.resolvePageAgentIntegrationTools({
           agentId: chatId,
           userId,
           driveId: page.driveId,

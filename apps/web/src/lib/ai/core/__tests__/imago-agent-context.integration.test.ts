@@ -20,6 +20,7 @@ import { ensureTestDb } from '@/test/ensure-test-db';
 import {
   buildGrantedDrivesPrompt,
   loadImagoAgentContext,
+  resolveImagoIntegrationDriveId,
   resolveImagoLocationAccess,
 } from '../imago-agent-context';
 
@@ -183,5 +184,23 @@ describe('resolveImagoLocationAccess', () => {
   it('given no drive in view, should say nothing', () => {
     expect(resolveImagoLocationAccess(null, context)).toBeUndefined();
     expect(resolveImagoLocationAccess({ currentPage: null, currentDrive: null }, context)).toBeUndefined();
+  });
+});
+
+describe('resolveImagoIntegrationDriveId', () => {
+  const context = {
+    homeDriveId: 'home_1',
+    grants: [{ driveId: 'drive_a', name: 'Acme', role: 'MEMBER' as const }],
+  };
+  const at = (id: string) => ({ currentDrive: { id, name: 'X', slug: 'x' }, currentPage: null, breadcrumbs: [] });
+
+  it('given the Home drive or a granted drive in view, should use it for drive integrations', () => {
+    expect(resolveImagoIntegrationDriveId(at('home_1'), context)).toBe('home_1');
+    expect(resolveImagoIntegrationDriveId(at('drive_a'), context)).toBe('drive_a');
+  });
+
+  it('given an ungranted drive or no drive in view, should use no drive', () => {
+    expect(resolveImagoIntegrationDriveId(at('drive_z'), context)).toBeNull();
+    expect(resolveImagoIntegrationDriveId(null, context)).toBeNull();
   });
 });
