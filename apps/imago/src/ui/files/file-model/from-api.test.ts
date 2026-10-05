@@ -1,0 +1,150 @@
+import { describe, test } from 'vitest';
+import { assert } from 'riteway/vitest';
+import { PAGE_TYPE_VALUES } from '@pagespace/lib/client-safe';
+import { fileNodesFrom } from './from-api';
+import { pageRow, treeRow } from './fixtures';
+
+describe('fileNodesFrom()', () => {
+  test('a folder and its pages', () => {
+    const tree = [
+      treeRow('f1', 'FOLDER', [treeRow('doc', 'DOCUMENT'), treeRow('sheet', 'SHEET')], { title: 'Specs' }),
+    ];
+
+    assert({
+      given: 'a drive tree with a folder holding a document and a sheet',
+      should: 'map it to a folder node counting its pages, each keeping its title and page type',
+      actual: fileNodesFrom(tree),
+      expected: [
+        {
+          id: 'f1',
+          name: 'Specs',
+          kind: 'folder',
+          pageType: 'FOLDER',
+          count: 2,
+          children: [
+            { id: 'doc', name: 'Title doc', kind: 'page', pageType: 'DOCUMENT' },
+            { id: 'sheet', name: 'Title sheet', kind: 'page', pageType: 'SHEET' },
+          ],
+        },
+      ],
+    });
+  });
+
+  test('every page type', () => {
+    const tree = PAGE_TYPE_VALUES.map((type) => treeRow(type, type));
+
+    assert({
+      given: 'one page of each PageSpace page type',
+      should: 'open only FOLDER as a folder and keep every page type on its node',
+      actual: fileNodesFrom(tree).map(({ kind, pageType }) => [pageType, kind]),
+      expected: [
+        ['FOLDER', 'folder'],
+        ['DOCUMENT', 'page'],
+        ['CHANNEL', 'page'],
+        ['AI_CHAT', 'page'],
+        ['CANVAS', 'page'],
+        ['FILE', 'page'],
+        ['SHEET', 'page'],
+        ['TASK_LIST', 'page'],
+        ['CODE', 'page'],
+      ],
+    });
+  });
+
+  test('an empty folder', () => {
+    assert({
+      given: 'a folder the tree shows with no children',
+      should: 'carry an empty children list and a zero count',
+      actual: fileNodesFrom([treeRow('f1', 'FOLDER')]),
+      expected: [{ id: 'f1', name: 'Title f1', kind: 'folder', pageType: 'FOLDER', count: 0, children: [] }],
+    });
+  });
+
+  test('pages under a page', () => {
+    const tree = [treeRow('doc', 'DOCUMENT', [treeRow('sub', 'CANVAS', [treeRow('deep', 'CODE')])])];
+
+    assert({
+      given: 'a document holding a canvas that holds a code page',
+      should: 'nest them under the document without making it a folder',
+      actual: fileNodesFrom(tree),
+      expected: [
+        {
+          id: 'doc',
+          name: 'Title doc',
+          kind: 'page',
+          pageType: 'DOCUMENT',
+          children: [
+            {
+              id: 'sub',
+              name: 'Title sub',
+              kind: 'page',
+              pageType: 'CANVAS',
+              children: [{ id: 'deep', name: 'Title deep', kind: 'page', pageType: 'CODE' }],
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  test('children not known yet', () => {
+    const rows = [pageRow('f2', 'FOLDER'), pageRow('doc', 'DOCUMENT')];
+
+    assert({
+      given: 'rows from the children route, which carry no children of their own',
+      should: 'leave children and count off, so a view knows to load them rather than show an empty folder',
+      actual: fileNodesFrom(rows),
+      expected: [
+        { id: 'f2', name: 'Title f2', kind: 'folder', pageType: 'FOLDER' },
+        { id: 'doc', name: 'Title doc', kind: 'page', pageType: 'DOCUMENT' },
+      ],
+    });
+  });
+
+  test('trashed pages', () => {
+    const tree = [
+      treeRow('f1', 'FOLDER', [treeRow('kept', 'DOCUMENT'), treeRow('gone', 'DOCUMENT', [], { isTrashed: true })]),
+      treeRow('binned', 'SHEET', [], { isTrashed: true }),
+    ];
+
+    assert({
+      given: 'trashed rows at the top and inside a folder',
+      should: 'leave them out, as the server does, and count only what is left',
+      actual: fileNodesFrom(tree),
+      expected: [
+        {
+          id: 'f1',
+          name: 'Title f1',
+          kind: 'folder',
+          pageType: 'FOLDER',
+          count: 1,
+          children: [{ id: 'kept', name: 'Title kept', kind: 'page', pageType: 'DOCUMENT' }],
+        },
+      ],
+    });
+  });
+
+  test('order', () => {
+    const tree = [
+      treeRow('b', 'DOCUMENT', [], { position: 1 }),
+      treeRow('a', 'DOCUMENT', [], { position: 2 }),
+      treeRow('c', 'DOCUMENT', [], { position: 0 }),
+    ];
+
+    assert({
+      given: 'siblings out of position order',
+      should: 'order them by position, as the sidebar shows them',
+      actual: fileNodesFrom(tree).map((node) => node.id),
+      expected: ['c', 'b', 'a'],
+    });
+  });
+
+  test('an empty drive', () => {
+    assert({
+      given: 'a drive with no pages the viewer can see',
+      should: 'give no nodes',
+      actual: fileNodesFrom([]),
+      expected: [],
+    });
+  });
+});
