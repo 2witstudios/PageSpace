@@ -11,11 +11,12 @@ import { fakeRealtime } from '../../test-support/fake-realtime';
 import { fakeWeb, type FakeRoute, type Recorded } from '../../test-support/fake-web';
 import { createInitialState } from '../../store/state';
 import { getUiState, setUiState } from '../../store/store';
-import { isEditingDocument } from '../files-plugin/files-plugin';
+import { documentDraftOf, isEditingDocument } from '../files-plugin/files-plugin';
 import { pageRow, treeRow } from '../file-model/fixtures';
 import { useFileTree } from '../use-file-tree/use-file-tree';
 import { DOCUMENT_SAVE_DELAY_MS } from '../document-edit/document-saver';
-import { CONFLICT_NOTICE, REFUSED_NOTICE } from '../document-edit/document-notice.render';
+import { CONFLICT_NOTICE, DRAFT_RESTORED_NOTICE, REFUSED_NOTICE } from '../document-edit/document-notice.render';
+import { reloadsOn } from './document-view';
 
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push: () => {} }) }));
 
@@ -600,6 +601,253 @@ describe('editing the title', () => {
         ],
         null,
       ],
+    });
+  });
+});
+
+describe('leaving with text the server does not have', () => {
+  /** The viewer opens another page, then comes back to this one. */
+  const leaveAndReturn = async (routes: Record<string, FakeRoute>, whileAway: () => void = () => {}) => {
+    unmountAll();
+    await settle(() => {
+      if (documentDraftOf(getUiState(), 'notes') === undefined) throw new Error('no draft kept');
+    });
+    const kept = documentDraftOf(getUiState(), 'notes');
+    whileAway();
+    const back = show(routes);
+    await settle(() => {
+      if (textOf(back.container) !== 'Mine') throw new Error('draft not restored');
+    });
+    return { kept, ...back };
+  };
+
+  test('in a conflict', async () => {
+    const { container } = show({});
+    await editable(container);
+    stored.content = '<p>Theirs</p>';
+    stored.revision = 4;
+    await type(container, '<p>Mine</p>');
+    await settle(() => {
+      if (!container.querySelector('[data-save-conflict]')) throw new Error('no conflict');
+    });
+    const back = await leaveAndReturn({});
+    await settle(() => {
+      if (!back.container.querySelector('[data-save-conflict]')) throw new Error('conflict not surfaced again');
+    });
+    assert({
+      given: 'a conflict notice the viewer leaves by opening another page, then comes back',
+      should: 'keep their text as a draft, restore it into the editor, and surface the conflict again',
+      actual: {
+        kept: back.kept,
+        text: textOf(back.container),
+        restored: back.container.querySelector('[data-draft-restored]')?.textContent,
+        stored: stored.content,
+        draftLeft: documentDraftOf(getUiState(), 'notes'),
+      },
+      expected: {
+        kept: { patch: { content: '<p>Mine</p>' }, revision: 3 },
+        text: 'Mine',
+        restored: DRAFT_RESTORED_NOTICE,
+        stored: '<p>Theirs</p>',
+        draftLeft: undefined,
+      },
+    });
+  });
+
+  test('after a failed save', async () => {
+    let failing = true;
+    const routes: Record<string, FakeRoute> = {
+      [SAVE]: (request) =>
+        failing ? Response.json({ error: 'Failed to update page' }, { status: 500 }) : savePage(request),
+    };
+    const { container } = show(routes);
+    await editable(container);
+    await type(container, '<p>Mine</p>');
+    await settle(() => {
+      if (!container.querySelector('[data-save-failed]')) throw new Error('not failed');
+    });
+    // The last save as it closes fails too; the server answers again only once the viewer is away.
+    const back = await leaveAndReturn(routes, () => {
+      failing = false;
+    });
+    await settle(() => {
+      if (stored.content !== '<p>Mine</p>') throw new Error('not saved');
+    });
+    assert({
+      given: 'a failed save the viewer leaves, then comes back once the server answers again',
+      should: 'restore the text and save it',
+      actual: [back.kept, stored.content, saves(back.web).map((request) => request.body)],
+      expected: [
+        { patch: { content: '<p>Mine</p>' }, revision: 3 },
+        '<p>Mine</p>',
+        [{ content: '<p>Mine</p>', expectedRevision: 3 }],
+      ],
+    });
+  });
+
+  test('after edit rights were refused', async () => {
+    const routes: Record<string, FakeRoute> = {
+      [SAVE]: () => Response.json({ error: 'You need edit permission to modify this page' }, { status: 403 }),
+    };
+    const { container } = show(routes);
+    await editable(container);
+    await type(container, '<p>Mine</p>');
+    await settle(() => {
+      if (!container.querySelector('[data-save-refused]')) throw new Error('not refused');
+    });
+    const back = await leaveAndReturn(routes);
+    await settle(() => {
+      if (!back.container.querySelector('[data-save-refused]')) throw new Error('not refused again');
+    });
+    assert({
+      given: 'a refused save the viewer leaves, then comes back',
+      should: 'still show their text, read-only, with the refusal, so it can be copied',
+      actual: [textOf(back.container), bodyOf(back.container)?.getAttribute('contenteditable')],
+      expected: ['Mine', 'false'],
+    });
+  });
+
+  test('a document closed saved keeps no draft', async () => {
+    const { container } = show({});
+    await editable(container);
+    await type(container, '<p>Mine</p>');
+    unmountAll();
+    await settle(() => {
+      if (stored.content !== '<p>Mine</p>') throw new Error('not saved');
+    });
+    await pass(20);
+    assert({
+      given: 'text saved as the document closed',
+      should: 'keep no draft',
+      actual: documentDraftOf(getUiState(), 'notes'),
+      expected: undefined,
+    });
+  });
+});
+
+describe('a CSRF rejection on save', () => {
+  test('is a session failure the viewer can retry, not lost rights', async () => {
+    let rejecting = true;
+    const { container, web } = show({
+      [SAVE]: (request) =>
+        rejecting
+          ? Response.json({ error: 'CSRF token invalid', code: 'CSRF_TOKEN_INVALID' }, { status: 403 })
+          : savePage(request),
+    });
+    await editable(container);
+    await type(container, '<p>Mine</p>');
+    await settle(() => {
+      if (!container.querySelector('[data-save-failed]')) throw new Error('not failed');
+    });
+    const shown = [
+      container.querySelector('[data-save-failed] p')?.textContent,
+      container.querySelector('[data-save-refused]'),
+      bodyOf(container)?.getAttribute('contenteditable'),
+      saves(web).length,
+    ];
+    rejecting = false;
+    click(container.querySelector('[data-save-failed] button') as HTMLButtonElement);
+    await settle(() => {
+      if (stored.content !== '<p>Mine</p>') throw new Error('not saved');
+    });
+    assert({
+      given: 'a save whose CSRF token is refused even after the client fetched a new one, then Try again',
+      should: 'say the session could not be confirmed, stay editable, and save on retry',
+      actual: shown,
+      expected: [
+        'Your session could not be confirmed. Your text is kept here: try again, or reload the page.',
+        null,
+        'true',
+        2,
+      ],
+    });
+  });
+});
+
+describe('leaving the tab', () => {
+  test('the window losing focus, and the page being hidden', async () => {
+    const counts: number[] = [];
+    for (const event of ['blur', 'pagehide']) {
+      const { container, web } = show({});
+      await editable(container);
+      await type(container, `<p>${event}</p>`);
+      await act(() => {
+        window.dispatchEvent(new Event(event));
+      });
+      await settle(() => {
+        if (saves(web).length === 0) throw new Error(`${event}: not sent`);
+      }, DOCUMENT_SAVE_DELAY_MS / 2);
+      counts.push(saves(web).length);
+      unmountAll();
+      await pass(20);
+    }
+    assert({
+      given: 'text typed, then the window blurred or the page hidden before the pause',
+      should: 'save it at once each time',
+      actual: counts,
+      expected: [1, 1],
+    });
+  });
+
+  test('closing the tab with unsaved text', async () => {
+    const { container } = show({});
+    await editable(container);
+    const ask = () => {
+      const event = new Event('beforeunload', { cancelable: true });
+      window.dispatchEvent(event);
+      return event.defaultPrevented;
+    };
+    const clean = ask();
+    await type(container, '<p>Mine</p>');
+    const dirty = ask();
+    await settle(() => {
+      if (container.querySelector('[data-save-state]')?.getAttribute('data-save-state') !== 'saved') throw new Error('not saved');
+    });
+    assert({
+      given: 'the tab closing with nothing unsaved, with unsaved text, then once it saved',
+      should: 'ask the browser to warn only while text is unsaved',
+      actual: [clean, dirty, ask()],
+      expected: [false, true, false],
+    });
+  });
+});
+
+describe('edit rights', () => {
+  test('only a definite yes', async () => {
+    const actual: unknown[] = [];
+    for (const answer of [{}, { canEdit: 'yes' }, { canEdit: 1 }]) {
+      const { container, web } = show({ [RIGHTS]: () => Response.json(answer) });
+      await settle(() => {
+        if (web.count(RIGHTS) === 0 || !textOf(container)) throw new Error('not asked yet');
+      });
+      await pass(30);
+      actual.push(bodyOf(container)?.getAttribute('contenteditable'));
+      unmountAll();
+    }
+    assert({
+      given: 'a rights answer with no canEdit, or one that is not the boolean true',
+      should: 'keep the document read-only',
+      actual,
+      expected: ['false', 'false', 'false'],
+    });
+  });
+});
+
+describe('reloadsOn()', () => {
+  const page = { pageId: 'notes', ownSocketId: 'sock-me' };
+  test('which content events reload the document', () => {
+    assert({
+      given: 'content events for this page from another tab, from this tab, for another page, and while editing',
+      should: 'reload only for another tab’s save while the viewer holds nothing unsaved',
+      actual: [
+        reloadsOn({ pageId: 'notes', socketId: 'sock-other' }, { ...page, editing: false }),
+        reloadsOn({ pageId: 'notes' }, { ...page, editing: false }),
+        reloadsOn({ pageId: 'notes', socketId: 'sock-me' }, { ...page, editing: false }),
+        reloadsOn({ pageId: 'other', socketId: 'sock-other' }, { ...page, editing: false }),
+        reloadsOn({ pageId: 'notes', socketId: 'sock-other' }, { ...page, editing: true }),
+        reloadsOn(null, { ...page, editing: false }),
+      ],
+      expected: [true, true, false, false, false, false],
     });
   });
 });

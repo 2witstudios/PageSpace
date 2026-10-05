@@ -30,9 +30,11 @@ import {
   type StoredDocument,
 } from '../document-edit/document-api';
 import { documentTitleInputClass } from '../document-edit/document-edit-class';
-import { renderDocumentNotice } from '../document-edit/document-notice.render';
+import { renderDocumentNotice, renderDraftRestored } from '../document-edit/document-notice.render';
 import { createDocumentSaver, type SaverState } from '../document-edit/document-saver';
 import type { FileNode } from '../file-model/file-node';
+import { documentDraftOf } from '../files-plugin/files-plugin';
+import { getUiState } from '../../store/store';
 import { usePage } from '../page-object/page-object';
 import { onlyListed, pathTo } from '../tree-view/tree-view';
 import { useFileTree } from '../use-file-tree/use-file-tree';
@@ -87,9 +89,21 @@ const bodyAttributes = (title: string, editable: boolean): Record<string, string
   ...(editable ? { role: 'textbox', 'aria-multiline': 'true' } : { 'aria-readonly': 'true' }),
 });
 
-/** Whether a realtime page event names this page. */
-const isEventFor = (payload: unknown, pageId: string): payload is { readonly socketId?: unknown } =>
-  typeof payload === 'object' && payload !== null && (payload as { pageId?: unknown }).pageId === pageId;
+/**
+ * Whether a `page:content-updated` event reloads the document: someone
+ * else's save (not one this tab's socket made) of this page, while the
+ * viewer holds nothing unsaved.
+ */
+export const reloadsOn = (
+  payload: unknown,
+  { pageId, ownSocketId, editing }: { readonly pageId: string; readonly ownSocketId: string | undefined; readonly editing: boolean },
+): boolean => {
+  if (typeof payload !== 'object' || payload === null) return false;
+  const { pageId: named, socketId } = payload as { pageId?: unknown; socketId?: unknown };
+  if (named !== pageId) return false;
+  if (typeof socketId === 'string' && socketId === ownSocketId) return false;
+  return !editing;
+};
 
 const shownTitleOf = (title: string): string => (title.trim() === '' ? UNTITLED : title);
 
@@ -114,6 +128,7 @@ export function DocumentView({ driveId, page }: DocumentViewProps): ReactNode {
   const [titleDraft, setTitleDraft] = useState(page.title);
   const [saveState, setSaveState] = useState<SaverState>(SAVED);
   const [resolveError, setResolveError] = useState<string | null>(null);
+  const [draftRestored, setDraftRestored] = useState(false);
 
   /**
    * The page's SWR entry takes a stored copy, without asking the server
@@ -183,15 +198,44 @@ export function DocumentView({ driveId, page }: DocumentViewProps): ReactNode {
     dispatch(saveState.editing ? transactions.beginDocumentEdit : transactions.endDocumentEdit, page.id);
   }, [saveState.editing, page.id]);
 
-  // Leaving the document saves what is waiting, then lets SWR have the page again.
+  // Leaving the document saves what is waiting. Text that still did not
+  // reach the server (a conflict, a refusal, a failure) is never dropped with
+  // the view: it is kept as the page's draft and restored when it opens again.
+  // Then SWR has the page again.
   useEffect(
     () => () => {
       void saver.flush().finally(() => {
-        if (!saver.isEditing()) dispatch(transactions.endDocumentEdit, page.id);
+        const unsaved = saver.unsaved();
+        if (unsaved !== null) {
+          dispatch(transactions.keepDocumentDraft, {
+            pageId: page.id,
+            draft: { patch: unsaved, revision: saver.revision() },
+          });
+        }
+        dispatch(transactions.endDocumentEdit, page.id);
       });
     },
     [saver, page.id],
   );
+
+  // A document that closed with unsaved text opens with it again, and saves
+  // it against the revision it was made on: a conflict or refusal surfaces anew.
+  const draftTaken = useRef(false);
+  useEffect(() => {
+    if (editor === null || draftTaken.current) return;
+    draftTaken.current = true;
+    const draft = documentDraftOf(getUiState(), page.id);
+    if (draft === undefined) return;
+    dispatch(transactions.dropDocumentDraft, page.id);
+    const { content, title: draftTitle } = draft.patch;
+    if (content !== undefined) editor.commands.setContent(content, { emitUpdate: false });
+    if (draftTitle !== undefined) {
+      setTitle(draftTitle);
+      setTitleDraft(draftTitle);
+    }
+    saver.restore(draft.patch, draft.revision);
+    setDraftRestored(true);
+  }, [editor, saver, page.id]);
 
   // Leaving the tab saves too; closing it with text the server lacks asks first.
   useEffect(() => {
@@ -231,11 +275,10 @@ export function DocumentView({ driveId, page }: DocumentViewProps): ReactNode {
   }, [editor, saver, adopt, page.revision, page.title, page.content]);
 
   // Someone else saved this page: reload it, unless the viewer is editing.
+  // The editing check is the first of three layers (with SWR's pause and the
+  // revision guard above) and the only one that asks nothing of the server.
   useSocketEvent('page:content-updated', (payload: unknown) => {
-    if (!isEventFor(payload, page.id)) return;
-    if (typeof payload.socketId === 'string' && payload.socketId === socketId()) return;
-    if (saver.isEditing()) return;
-    void mutatePage();
+    if (reloadsOn(payload, { pageId: page.id, ownSocketId: socketId(), editing: saver.isEditing() })) void mutatePage();
   });
 
   const resolve = async (settle: (stored: StoredDocument) => Promise<unknown> | void) => {
@@ -297,14 +340,19 @@ export function DocumentView({ driveId, page }: DocumentViewProps): ReactNode {
     crumbs,
     hrefFor,
     heading,
-    notice: renderDocumentNotice({
+    notice: (
+      <>
+        {draftRestored ? renderDraftRestored() : null}
+        {renderDocumentNotice({
       status: saveState.status,
       editable,
       onKeepMine: keepMine,
       onUseStored: takeStored,
-      onRetry: () => void saver.flush(),
-      resolveError,
-    }),
+          onRetry: () => void saver.flush(),
+          resolveError,
+        })}
+      </>
+    ),
     body: <EditorContent editor={editor} />,
   });
 }

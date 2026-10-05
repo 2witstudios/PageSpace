@@ -22,6 +22,17 @@ export const CONFLICT_NOTICE =
 export const REFUSED_NOTICE =
   'You can no longer edit this page, so your last changes were not saved. Copy anything you want to keep.';
 
+export const DRAFT_RESTORED_NOTICE = 'The changes you had not saved when you left this page are back.';
+
+/** Said once a document reopens with the draft it closed with. */
+export function renderDraftRestored(): ReactNode {
+  return (
+    <p role="status" data-draft-restored="" className={documentSaveStateClass}>
+      {DRAFT_RESTORED_NOTICE}
+    </p>
+  );
+}
+
 const SAVE_STATE: Readonly<Record<'saved' | 'unsaved' | 'saving', string>> = {
   saved: 'Saved',
   unsaved: 'Unsaved changes',

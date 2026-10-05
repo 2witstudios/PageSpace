@@ -14,7 +14,10 @@ export const pageKey = (pageId: string): string => `/api/pages/${encodeURICompon
  * The page from GET /api/pages/[pageId], one SWR entry for the object gate
  * and the page's view. While its document holds unsaved text, SWR does not
  * revalidate it (as classic's useEditingStore holds SWR off an edit), so no
- * focus or reconnect refetch lands over what the viewer is typing.
+ * focus or reconnect refetch lands over what the viewer is typing. SWR's
+ * focus revalidation calls the first hook registered for a key, which today
+ * is PageObject's (PageView mounts only once the page has loaded); PageView
+ * carries the same pause so that holds whichever registers first.
  */
 export const usePage = (pageId: string) =>
   useSWR<unknown>(pageKey(pageId), { isPaused: () => isEditingDocument(getUiState(), pageId) });

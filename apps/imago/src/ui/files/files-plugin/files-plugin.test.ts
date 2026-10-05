@@ -3,7 +3,7 @@ import { assert } from 'riteway/vitest';
 import { createInitialState, type UiState } from '../../store/state';
 import { getUiState, setUiState } from '../../store/store';
 import { dispatch, transactions } from '../../store/transactions';
-import { filesPlugin, isEditingDocument, type PendingFile } from './files-plugin';
+import { documentDraftOf, filesPlugin, isEditingDocument, type PendingFile } from './files-plugin';
 
 const {
   toggleFileFolder,
@@ -181,10 +181,17 @@ describe('filesPlugin slice', () => {
   test('its own resources and transactions', () => {
     assert({
       given: 'the files slice',
-      should: 'start with nothing expanded, filtered, pending, failed or being edited, and own the files transactions',
+      should: 'start with nothing expanded, filtered, pending, failed, being edited or kept, and own the files transactions',
       actual: [filesPlugin.resources(), Object.keys(filesPlugin.transactions)],
       expected: [
-        { expandedFileIds: [], fileFilter: '', pendingFiles: [], fileCreateError: null, editingDocumentIds: [] },
+        {
+          expandedFileIds: [],
+          fileFilter: '',
+          pendingFiles: [],
+          fileCreateError: null,
+          editingDocumentIds: [],
+          documentDrafts: {},
+        },
         [
           'toggleFileFolder',
           'expandFileFolder',
@@ -195,6 +202,8 @@ describe('filesPlugin slice', () => {
           'fileCreateSettled',
           'beginDocumentEdit',
           'endDocumentEdit',
+          'keepDocumentDraft',
+          'dropDocumentDraft',
         ],
       ],
     });
@@ -232,6 +241,28 @@ describe('documents being edited', () => {
       should: 'reach the files slice',
       actual: [during, isEditingDocument(getUiState(), 'p1')],
       expected: [true, false],
+    });
+  });
+});
+
+describe('drafts kept for documents that closed unsaved', () => {
+  test('keeping and dropping a draft', () => {
+    const { keepDocumentDraft, dropDocumentDraft } = filesPlugin.transactions;
+    const fresh = createInitialState();
+    const draft = { patch: { content: '<p>mine</p>' }, revision: 3 };
+    const kept = keepDocumentDraft(fresh, { pageId: 'p1', draft });
+    const dropped = dropDocumentDraft(kept, 'p1');
+    assert({
+      given: 'a document closed with text the server never got, then reopened',
+      should: 'keep its draft under its page until the reopened document takes it',
+      actual: [
+        documentDraftOf(fresh, 'p1'),
+        documentDraftOf(kept, 'p1'),
+        documentDraftOf(kept, 'p2'),
+        documentDraftOf(dropped, 'p1'),
+        dropDocumentDraft(fresh, 'p1') === fresh,
+      ],
+      expected: [undefined, draft, undefined, undefined, true],
     });
   });
 });
