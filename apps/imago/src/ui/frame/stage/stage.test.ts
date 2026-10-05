@@ -1,6 +1,6 @@
 import { describe, test } from 'vitest';
 import { assert } from 'riteway/vitest';
-import { chatContextFor, paneLayout, stageFor, type Section } from './stage';
+import { chatContextFor, paneLayout, stageFor, type ListSection, type Section } from './stage';
 
 const page = (pageId: string) => ({ kind: 'page', pageId }) as const;
 
@@ -220,7 +220,7 @@ describe('stageFor() unknown and malformed paths', () => {
 });
 
 describe('paneLayout()', () => {
-  const none: readonly Section[] = [];
+  const none: readonly ListSection[] = [];
 
   test('nothing collapsed', () => {
     assert({
@@ -269,7 +269,7 @@ describe('paneLayout()', () => {
         paneLayout(stageFor('/drive-1/tasks/list-1'), { collapsedSections: ['files'] }).list,
         paneLayout(stageFor('/drive-1/files/page-1'), { collapsedSections: ['tasks'] }).list,
         paneLayout(stageFor('/drive-1/files/page-1'), {
-          collapsedSections: ['chat', 'messages', 'tasks', 'settings', 'account'],
+          collapsedSections: ['messages', 'tasks'],
         }).list,
       ],
       expected: ['tree', 'tree', 'tree', 'tree'],
@@ -292,15 +292,29 @@ describe('paneLayout()', () => {
   });
 
   test('stages with no list', () => {
+    const every: readonly ListSection[] = ['files', 'messages', 'tasks'];
     assert({
-      given: 'the chat, settings and account with their own section collapsed',
+      given: 'the chat, settings and account with every list section collapsed',
       should: 'have no list to hide, so report none hidden',
       actual: [
-        paneLayout(stageFor('/drive-1'), { collapsedSections: ['chat'] }).listHidden,
-        paneLayout(stageFor('/drive-1/settings'), { collapsedSections: ['settings'] }).listHidden,
-        paneLayout(stageFor('/account'), { collapsedSections: ['account'] }).listHidden,
+        paneLayout(stageFor('/drive-1'), { collapsedSections: every }).listHidden,
+        paneLayout(stageFor('/drive-1/settings'), { collapsedSections: every }).listHidden,
+        paneLayout(stageFor('/account'), { collapsedSections: every }).listHidden,
       ],
       expected: [false, false, false],
+    });
+  });
+
+  test('only list sections collapse', () => {
+    // Type-level: a section with no list is not a collapsible section, so
+    // tsc rejects it (bun run typecheck fails if the type widens again).
+    // @ts-expect-error chat has no list to collapse
+    const chat: readonly ListSection[] = ['chat'];
+    assert({
+      given: 'a collapsed-sections value naming the chat',
+      should: 'be rejected by the type (the value never reaches a layout)',
+      actual: chat.length,
+      expected: 1,
     });
   });
 });

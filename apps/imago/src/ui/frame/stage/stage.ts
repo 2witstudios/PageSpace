@@ -38,11 +38,12 @@ export type PaneLayout = {
   readonly object: boolean;
 };
 
-type ListSection = 'files' | 'messages' | 'tasks';
+/** The sections whose stage has a list pane, and so the only ones that collapse. */
+export type ListSection = 'files' | 'messages' | 'tasks';
 
 const listSections: readonly string[] = ['files', 'messages', 'tasks'];
 
-const isListSection = (section: string): section is ListSection =>
+export const isListSection = (section: string): section is ListSection =>
   listSections.includes(section);
 
 /** First segments that name a route, never a drive. */
@@ -132,9 +133,10 @@ const collapsible = (stage: Stage): boolean => stage.list === 'tree';
  */
 export const paneLayout = (
   stage: Stage,
-  { collapsedSections }: { readonly collapsedSections: readonly Section[] },
+  { collapsedSections }: { readonly collapsedSections: readonly ListSection[] },
 ): PaneLayout => {
-  const listHidden = collapsible(stage) && collapsedSections.includes(stage.section);
+  const listHidden =
+    collapsible(stage) && isListSection(stage.section) && collapsedSections.includes(stage.section);
   return {
     list: listHidden ? 'closed' : stage.list,
     listHidden,
@@ -149,13 +151,10 @@ const sectionNames: Readonly<Record<ListSection, string>> = {
 };
 
 /** What a page is called before its name loads, by the section that opened it. */
-const unnamedPage: Readonly<Record<Section, string>> = {
-  chat: 'this page',
+const unnamedPage: Readonly<Record<ListSection, string>> = {
   files: 'this page',
   messages: 'this channel',
   tasks: 'this task list',
-  settings: 'this page',
-  account: 'this page',
 };
 
 const capitalise = (text: string): string => `${text.charAt(0).toUpperCase()}${text.slice(1)}`;
@@ -163,9 +162,9 @@ const capitalise = (text: string): string => `${text.charAt(0).toUpperCase()}${t
 const named = (name: string | undefined): string | undefined =>
   name !== undefined && name.trim() !== '' ? name : undefined;
 
-const objectName = (stage: Stage, object: StageObject, name: string | undefined): string => {
+const objectName = (section: ListSection, object: StageObject, name: string | undefined): string => {
   if (name !== undefined) return name;
-  return object.kind === 'conversation' ? 'this conversation' : unnamedPage[stage.section];
+  return object.kind === 'conversation' ? 'this conversation' : unnamedPage[section];
 };
 
 /**
@@ -189,8 +188,9 @@ export const chatContextFor = (
   if (object?.kind === 'account') {
     return { density: 'dense', contextLabel: 'Account in context', placeholder: 'Ask anything…' };
   }
-  if (object !== null) {
-    const name = objectName(stage, object, named(names.object));
+  // Only the list sections open pages and conversations (stageFor).
+  if (object !== null && isListSection(stage.section)) {
+    const name = objectName(stage.section, object, named(names.object));
     return {
       density: 'dense',
       contextLabel: `${capitalise(name)} in context`,
