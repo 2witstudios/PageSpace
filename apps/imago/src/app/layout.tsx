@@ -6,6 +6,7 @@ import { Geist, Geist_Mono } from 'next/font/google';
 import { getRequestNonce } from '@/lib/request-nonce';
 import { isImagoEnabled } from '@/lib/imago-enabled';
 import { ImagoSWRProvider } from '@/api/swr-provider';
+import { RealtimeProvider } from '@/realtime/realtime-provider';
 import {
   THEME_COOKIE_NAME,
   parseThemePreference,
@@ -61,8 +62,12 @@ export default async function RootLayout({
             __html: `__webpack_nonce__ = ${JSON.stringify(nonce)};`,
           }}
         />
-        {/* One SWR cache for the whole app; the shell layout never remounts. */}
-        <ImagoSWRProvider>{children}</ImagoSWRProvider>
+        {/* One SWR cache and one realtime socket for the whole app; the shell
+            layout never remounts. Every imago page is behind the session
+            middleware, so the tab is signed in when the socket connects. */}
+        <ImagoSWRProvider>
+          <RealtimeProvider>{children}</RealtimeProvider>
+        </ImagoSWRProvider>
       </body>
     </html>
   );
