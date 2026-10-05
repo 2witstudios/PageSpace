@@ -43,11 +43,13 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   drives you only belong to. When you hand a drive to a new owner — or undo or redo that handover
   from the drive's history — your Imago agents leave it; the new owner decides which agents get in.
 - **Turn Imago's access to a drive on or off** — drive owners and admins can switch their own Imago
-  agents into or out of a drive (`/api/drives/{driveId}/imago-access`). A drive you switch off
-  stays off through later sign-ins, and an Imago agent you delete and that comes back joins only the
-  drives where Imago is still on. The one exception: if all three Imago agents are deleted
-  permanently (emptied from the trash), they come back as on a first sign-in, in every regular drive
-  you own. Your Home drive is where the agents live, so it cannot be switched off.
+  agents into or out of a drive (`/api/drives/{driveId}/imago-access`). Your choice is saved for
+  each drive, so a drive you switch off stays off for good: through later sign-ins, when an Imago
+  agent you delete comes back, and even after all three are deleted permanently (emptied from the
+  trash). Older copies of your Imago agents left in the trash keep no access to other drives, so
+  restoring one cannot bring it back into a drive you switched off. In a drive you administer but do not own,
+  turning Imago on keeps all three agents in it, including any that come back after being deleted.
+  Your Home drive is where the agents live, so it cannot be switched off.
 - **Imago agents know where they can work** — each Imago agent is told which drives it has been
   added to (by name and role) and, each turn, whether the drive or page you are looking at is one of
   them. Asked to work somewhere it has not been added, it says so and tells you how to give it
@@ -68,7 +70,9 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   The same limits hold wherever an Imago agent runs — chat, @-mentions in a channel, consulted
   through the API, or a workflow: it never uses integrations from a drive it has not been added to,
   and run by someone else it gets none of yours. When you leave a drive because a member change is
-  undone or redone from its history, or a backup is restored, your Imago agents leave it too.
+  undone or redone from its history, or a backup is restored, your Imago agents leave it too. A
+  restore never removes the drive owner's own agents, even when the backup predates the owner's
+  first visit to the drive.
 - **Give an agent its own account** — in an agent's settings (Accounts), or in your personal
   settings for your global assistant, add an API key for a site so the agent can call that site's
   API for you. The agent refers to the account by name and never sees the key: PageSpace keeps it in
