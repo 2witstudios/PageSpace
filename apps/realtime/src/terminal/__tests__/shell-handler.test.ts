@@ -14,7 +14,7 @@ const mockRealtimeLogger = vi.hoisted(() => ({
 }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({ loggers: { realtime: mockRealtimeLogger } }));
 
-import { buildShellHandlers, MAX_INPUT_BYTES, SETTLE_HEARTBEAT_MS, resolveShellCommand, planConnect, ensureShellSession, connectFailureMessage, armIdleReap, planColdTailPersist, latestActivityAt } from '../shell-handler';
+import { buildShellHandlers, regateResumedWindow, resumeBillingClock, MAX_INPUT_BYTES, SETTLE_HEARTBEAT_MS, resolveShellCommand, planConnect, ensureShellSession, connectFailureMessage, armIdleReap, planColdTailPersist, latestActivityAt } from '../shell-handler';
 import { createTerminalSessionMap, DETACHED_IDLE_MS } from '../terminal-session-map';
 import type { ShellCheckAuthFn, OpenShellFn, SocketLike } from '../shell-handler';
 import type { TerminalSession } from '../terminal-session-map';
@@ -1879,6 +1879,88 @@ describe('buildShellHandlers', () => {
       expect(session.connectedAt).toBeTypeOf('number'); // clock running again
     });
 
+    // Review #2761 P3-1: a window restarted at resume is RE-GATED at once — a fresh hold, or the
+    // session ends — never left running unheld until the next heartbeat.
+    it('given a keystroke resumes a quiesced shell, re-gates the payer AT THE KEYSTROKE and holds again', async () => {
+      const billing = makeBilling();
+      const handlers = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId, billing });
+      await handlers.onConnect(validPayload);
+      shell.setQuiesced(true);
+      await vi.advanceTimersByTimeAsync(SETTLE_HEARTBEAT_MS); // clock stops, no hold
+      const gatesWhileQuiet = billing.gate.mock.calls.length;
+      billing.gate.mockResolvedValueOnce({ allowed: true, holdId: 'hold-resume' });
+
+      shell.setQuiesced(false);
+      handlers.onInput({ data: 'ls\n' });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(billing.gate).toHaveBeenCalledTimes(gatesWhileQuiet + 1);
+      expect(sessionMap.getByKey('shell:shl-1')).toMatchObject({ holdId: 'hold-resume' });
+    });
+
+    it('given a keystroke resumes a quiesced shell whose payer now REFUSES (a lapsed org), ends the session at once — no unheld tail', async () => {
+      const billing = makeBilling();
+      const handlers = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId, billing });
+      await handlers.onConnect(validPayload);
+      shell.setQuiesced(true);
+      await vi.advanceTimersByTimeAsync(SETTLE_HEARTBEAT_MS);
+      billing.gate.mockResolvedValue({ allowed: false, reason: 'org_lapsed', orgRefusal: 'org_lapsed' });
+
+      shell.setQuiesced(false);
+      handlers.onInput({ data: 'ls\n' });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(sessionMap.getByKey('shell:shl-1')).toBeUndefined();
+    });
+
+    it('given a viewer returns to a quiesced shell whose payer now REFUSES, ends the session on the reattach', async () => {
+      const billing = makeBilling();
+      const handlers = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId, billing });
+      await handlers.onConnect(validPayload);
+      shell.setQuiesced(true);
+      await vi.advanceTimersByTimeAsync(SETTLE_HEARTBEAT_MS);
+      handlers.onDisconnect();
+      shell.setQuiesced(false);
+      billing.gate.mockResolvedValue({ allowed: false, reason: 'org_lapsed', orgRefusal: 'org_lapsed' });
+
+      const handlers2 = buildShellHandlers({ sessionMap, openShell, checkAuth, socket: makeSocket('sock2'), persistSpriteExecId, billing });
+      await handlers2.onConnect(validPayload); // tab-back -> attachToLiveSession -> resume -> re-gate
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(sessionMap.getByKey('shell:shl-1')).toBeUndefined();
+    });
+
+    it('given a viewer returns to a quiesced shell, re-gates on the reattach and holds again', async () => {
+      const billing = makeBilling();
+      const handlers = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId, billing });
+      await handlers.onConnect(validPayload);
+      shell.setQuiesced(true);
+      await vi.advanceTimersByTimeAsync(SETTLE_HEARTBEAT_MS);
+      handlers.onDisconnect();
+      shell.setQuiesced(false);
+      billing.gate.mockResolvedValueOnce({ allowed: true, holdId: 'hold-rejoin' });
+
+      const handlers2 = buildShellHandlers({ sessionMap, openShell, checkAuth, socket: makeSocket('sock2'), persistSpriteExecId, billing });
+      await handlers2.onConnect(validPayload);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(sessionMap.getByKey('shell:shl-1')).toMatchObject({ holdId: 'hold-rejoin' });
+    });
+
+    it('given a shell resumed through a path that did not restart the clock, the heartbeat backstop restarts it AND re-gates (a refusing payer is ended)', async () => {
+      const billing = makeBilling();
+      const handlers = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId, billing });
+      await handlers.onConnect(validPayload);
+      shell.setQuiesced(true);
+      await vi.advanceTimersByTimeAsync(SETTLE_HEARTBEAT_MS);
+      billing.gate.mockResolvedValue({ allowed: false, reason: 'org_lapsed', orgRefusal: 'org_lapsed' });
+
+      shell.setQuiesced(false); // woke without a keystroke or a join
+      await vi.advanceTimersByTimeAsync(SETTLE_HEARTBEAT_MS);
+
+      expect(sessionMap.getByKey('shell:shl-1')).toBeUndefined();
+    });
+
     it('given the END-of-session settle rejects, should log and still tear the session down (billing never blocks cleanup)', async () => {
       // The last settle is fire-and-forget: a billing/DB outage at the moment a
       // terminal closes must not strand the session in the map (leaking its slot
@@ -3521,5 +3603,75 @@ describe('latestActivityAt', () => {
 
   it('given neither, should report undefined rather than 0', () => {
     expect(latestActivityAt({ lastOutputAt: undefined, lastInputAt: undefined })).toBeUndefined();
+  });
+});
+
+describe('regateResumedWindow — a resumed window is re-held at once (review #2761 P3-1)', () => {
+  const CHARGE = { kind: 'org' as const, orgId: 'org-1', userId: 'user1' };
+  const stub = (over: Partial<TerminalSession> = {}) => ({ sessionKey: 'k1', charge: CHARGE, holdId: undefined, connectedAt: undefined, ...over }) as unknown as TerminalSession;
+  const mapOf = (session: TerminalSession | undefined) => ({ getByKey: (key: string) => (key === 'k1' ? session : undefined) }) as unknown as TerminalSessionMapLike;
+  type TerminalSessionMapLike = Parameters<typeof regateResumedWindow>[1];
+
+  it('resumeBillingClock restarts only a stopped, metered clock and says so', () => {
+    expect(resumeBillingClock(stub())).toBe(true);
+    expect(resumeBillingClock(stub({ connectedAt: 5 }))).toBe(false);
+    expect(resumeBillingClock(stub({ charge: undefined }))).toBe(false);
+  });
+
+  it('is inert without billing, for an unmetered session, or while a hold is already held', async () => {
+    const billing = makeBilling();
+    const end = vi.fn();
+    await regateResumedWindow({}, mapOf(stub()), stub(), 'k1', end);
+    await regateResumedWindow({ billing }, mapOf(stub()), stub({ charge: undefined }), 'k1', end);
+    await regateResumedWindow({ billing }, mapOf(stub()), stub({ holdId: 'held' }), 'k1', end);
+    expect(billing.gate).not.toHaveBeenCalled();
+    expect(end).not.toHaveBeenCalled();
+  });
+
+  it('holds on an allowed gate; ends the session on a refusal', async () => {
+    const session = stub();
+    const end = vi.fn();
+    await regateResumedWindow({ billing: makeBilling() }, mapOf(session), session, 'k1', end);
+    expect(session.holdId).toBe('hold-1');
+    expect(end).not.toHaveBeenCalled();
+
+    const refused = stub();
+    await regateResumedWindow({ billing: makeBilling({ gate: vi.fn().mockResolvedValue({ allowed: false, reason: 'org_lapsed' }) }) }, mapOf(refused), refused, 'k1', end);
+    expect(end).toHaveBeenCalledTimes(1);
+    expect(refused.holdId).toBeUndefined();
+  });
+
+  it('releases a hold taken for a session that ended while the gate ran, and ends nothing', async () => {
+    const billing = makeBilling();
+    const end = vi.fn();
+    const session = stub();
+    await regateResumedWindow({ billing }, mapOf(undefined), session, 'k1', end);
+    expect(billing.releaseHold).toHaveBeenCalledWith('hold-1');
+    expect(session.holdId).toBeUndefined();
+    expect(end).not.toHaveBeenCalled();
+    // A refusal for a session already gone releases nothing and ends nothing.
+    const refusing = makeBilling({ gate: vi.fn().mockResolvedValue({ allowed: false, reason: 'org_lapsed' }) });
+    await regateResumedWindow({ billing: refusing }, mapOf(undefined), stub(), 'k1', end);
+    expect(refusing.releaseHold).not.toHaveBeenCalled();
+    expect(end).not.toHaveBeenCalled();
+  });
+
+  it('keeps the session when the billing read fails (the heartbeat re-gates it), for an Error and a non-Error alike', async () => {
+    const end = vi.fn();
+    for (const thrown of [new Error('ledger unreachable'), 'boom']) {
+      const session = stub();
+      await regateResumedWindow({ billing: makeBilling({ gate: vi.fn().mockRejectedValue(thrown) }) }, mapOf(session), session, 'k1', end);
+      expect(session.holdId).toBeUndefined();
+    }
+    expect(end).not.toHaveBeenCalled();
+  });
+
+  it('by default ends a refused session through the real teardown (removes it from the map)', async () => {
+    const map = createTerminalSessionMap();
+    const billing = makeBilling({ gate: vi.fn().mockResolvedValue({ allowed: false, reason: 'org_lapsed' }) });
+    const session = stub({ viewers: new Map(), command: { kill: vi.fn(), isQuiesced: () => false } } as unknown as Partial<TerminalSession>);
+    const getByKey = vi.spyOn(map, 'getByKey').mockReturnValue(session);
+    await regateResumedWindow({ billing }, map, session, 'k1');
+    expect(getByKey).toHaveBeenCalled();
   });
 });
