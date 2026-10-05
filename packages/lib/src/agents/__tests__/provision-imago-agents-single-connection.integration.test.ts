@@ -19,8 +19,10 @@
  */
 import { describe, it, expect, beforeAll, vi } from 'vitest';
 
-vi.hoisted(() => {
+const previousPoolMax = vi.hoisted(() => {
+  const previous = process.env.DB_POOL_MAX;
   process.env.DB_POOL_MAX = '1';
+  return previous;
 });
 
 import { db } from '@pagespace/db/db';
@@ -32,6 +34,11 @@ import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
 import { BUILTIN_AGENT_KEYS } from '../builtin-agents';
 import { provisionHomeDriveIfNeeded } from '../../onboarding/home-drive';
+
+// The pool has been built by the imports above. Restore the variable so it
+// cannot shrink the pool of a later file in the same long-lived fork.
+if (previousPoolMax === undefined) delete process.env.DB_POOL_MAX;
+else process.env.DB_POOL_MAX = previousPoolMax;
 
 /** Far below the pool's 10 s connection timeout, far above a real run (~100 ms). */
 const PROMPT_MS = 3000;
