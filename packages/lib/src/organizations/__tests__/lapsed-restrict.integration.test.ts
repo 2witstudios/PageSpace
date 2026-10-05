@@ -36,7 +36,7 @@ import { DEFAULT_ORG_POLICIES } from '../policies-core';
 import { ORG_LAPSED_MESSAGE, isOrgActive } from '../status';
 import { removeMember } from '../membership';
 import { revokeInvitation } from '../invitations';
-import { claimPendingGuestApproval, requestGuestApproval } from '../../permissions/guest-holds';
+import { claimGuestApprovalDecision, claimPendingGuestApproval, requestGuestApproval } from '../../permissions/guest-holds';
 import { revokeDriveShareLink } from '../../permissions/share-link-service';
 import { EnforcedAuthContext } from '../../permissions/enforced-context';
 import { getUserAccessLevel } from '../../permissions/permissions';
@@ -224,6 +224,26 @@ describe('a lapsed org may still restrict (orgs on, real Postgres)', () => {
     // Declining is the claim the route takes before it records the decline: the request leaves the queue.
     expect(await claimPendingGuestApproval({ orgId: w.orgId, holdId: hold.holdId })).toMatchObject({ holdId: hold.holdId, userId: w.ids.omar });
     expect(await db.select().from(orgGuestHolds).where(eq(orgGuestHolds.id, hold.holdId))).toHaveLength(0);
+  });
+
+  it('SEAT-9 (partial) POL-2 (partial) while lapsed an Admin can DECLINE a guest request but not APPROVE one (it admits an outsider): approve is refused org_lapsed and the request stays queued (review #2817 P3-1)', async () => {
+    if (!world) return;
+    const w = world;
+    const hold = await requestGuestApproval({ orgId: w.orgId, driveId: w.productId, userId: w.ids.omar, origin: 'invite', request: { role: 'MEMBER' }, requestedBy: w.ids.dana });
+    await setSubscription(w.orgId, 'canceled');
+
+    expect(await claimGuestApprovalDecision({ orgId: w.orgId, holdId: hold.holdId, decision: 'approve' })).toEqual(lapsedPolicyRefusal);
+    expect(await db.select({ id: orgGuestHolds.id }).from(orgGuestHolds).where(eq(orgGuestHolds.id, hold.holdId))).toHaveLength(1);
+
+    // Paid again, the same request can be approved: it is claimed off the queue for the invite handlers to admit.
+    await setSubscription(w.orgId, 'active');
+    expect(await claimGuestApprovalDecision({ orgId: w.orgId, holdId: hold.holdId, decision: 'approve' })).toMatchObject({ ok: true, claim: { holdId: hold.holdId, userId: w.ids.omar } });
+
+    // Declining needs no paid org.
+    const second = await requestGuestApproval({ orgId: w.orgId, driveId: w.productId, userId: w.ids.gita, origin: 'invite', request: { role: 'MEMBER' }, requestedBy: w.ids.dana });
+    await setSubscription(w.orgId, 'unpaid');
+    expect(await claimGuestApprovalDecision({ orgId: w.orgId, holdId: second.holdId, decision: 'decline' })).toMatchObject({ ok: true, claim: { holdId: second.holdId } });
+    expect(await claimGuestApprovalDecision({ orgId: w.orgId, holdId: 'nope', decision: 'decline' })).toEqual({ ok: false, reason: 'not_found' });
   });
 
   it('SEAT-9 (partial) WAL-7 (partial) while lapsed a drive wallet can be PAUSED (the kill switch) but not resumed; money-moving writes stay refused', async () => {

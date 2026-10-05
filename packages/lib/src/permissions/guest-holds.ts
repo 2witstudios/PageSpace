@@ -20,6 +20,8 @@ import { decryptField } from '../encryption/field-crypto';
 import { driveMembers, driveRoles, mcpTokenDrives, pagePermissions } from '@pagespace/db/schema/members';
 import { orgMembers } from '@pagespace/db/schema/organizations';
 import { getOrgPolicies } from '../organizations/policy-reader';
+import { isOrgActive } from '../organizations/status';
+import { ORG_LAPSED_CODE, ORG_LAPSED_MESSAGE } from '../organizations/status-core';
 import {
   orgGuestHolds,
   type GuestHoldOrigin,
@@ -605,6 +607,27 @@ export async function claimPendingGuestApproval(input: { orgId: string; holdId: 
     .where(and(eq(orgGuestHolds.id, input.holdId), eq(orgGuestHolds.orgId, input.orgId), eq(orgGuestHolds.state, 'pending_approval')))
     .returning();
   return row ? { ...toItem(row), orgId: row.orgId, request: row.request, requestedBy: row.requestedBy } : null;
+}
+
+export type GuestApprovalDecisionClaim =
+  | { ok: true; claim: ClaimedGuestApproval }
+  | { ok: false; reason: 'not_found' }
+  | { ok: false; reason: typeof ORG_LAPSED_CODE; message: string };
+
+/**
+ * An Owner's or Admin's decision on a queued guest request. APPROVING admits an outsider, which loosens access, so a
+ * LAPSED org may not ([D-OW-33], review #2817 P3-1): it is refused with the lapse refusal and the request stays
+ * queued. DECLINING only restricts and works whatever the org's billing. The lapse is read in the same transaction
+ * as the claim, so an approval never takes a request off the queue it then cannot act on.
+ */
+export async function claimGuestApprovalDecision(input: { orgId: string; holdId: string; decision: 'approve' | 'decline' }): Promise<GuestApprovalDecisionClaim> {
+  return db.transaction(async (tx): Promise<GuestApprovalDecisionClaim> => {
+    if (input.decision === 'approve' && !(await isOrgActive(input.orgId, { executor: tx }))) {
+      return { ok: false, reason: ORG_LAPSED_CODE, message: ORG_LAPSED_MESSAGE };
+    }
+    const claim = await claimPendingGuestApproval({ orgId: input.orgId, holdId: input.holdId }, tx);
+    return claim ? { ok: true, claim } : { ok: false, reason: 'not_found' };
+  });
 }
 
 export interface PendingGuestApprovalView extends GuestHoldItem {
