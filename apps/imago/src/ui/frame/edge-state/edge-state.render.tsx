@@ -13,17 +13,20 @@ export const ERROR_DETAIL = 'Something went wrong on the way. Check your connect
 export type EmptyStateProps = {
   readonly title: string;
   readonly detail: string;
+  /** A way to fill it, e.g. a folder's New page; under the two lines. */
+  readonly action?: ReactNode;
 };
 
 /**
  * A section with nothing in it yet, drawn as the not-found object is:
  * centred where its rows would be, quiet, and saying what will show up.
  */
-export function renderEmptyState({ title, detail }: EmptyStateProps): ReactNode {
+export function renderEmptyState({ title, detail, action }: EmptyStateProps): ReactNode {
   return (
     <div className={notFoundClass} data-empty="">
       <h2 className={notFoundTitleClass}>{title}</h2>
       <p className={notFoundDetailClass}>{detail}</p>
+      {action}
     </div>
   );
 }

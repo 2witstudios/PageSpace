@@ -1,6 +1,6 @@
 import { describe, test } from 'vitest';
 import { assert } from 'riteway/vitest';
-import { dayLabel, dayOf, formatTime, todayOf } from './time';
+import { dayLabel, dayOf, formatTime, modifiedLabel, todayOf } from './time';
 
 describe('formatTime()', () => {
   test('a time of day in UTC', () => {
@@ -53,6 +53,23 @@ describe('dayLabel()', () => {
         '2025-12-31T10:00:00.000Z',
       ].map((at) => dayLabel(at, today)),
       expected: ['Today', 'Yesterday', 'Sep 18', 'Dec 31'],
+    });
+  });
+});
+
+describe('modifiedLabel()', () => {
+  test('when a file last changed, relative to today', () => {
+    const today = '2026-10-05';
+    assert({
+      given: 'changes today, yesterday, earlier this year and in another year',
+      should: 'give the time for today and yesterday, the month and day this year, and add the year otherwise',
+      actual: [
+        '2026-10-05T09:12:00.000Z',
+        '2026-10-04T23:00:00.000Z',
+        '2026-09-18T10:00:00.000Z',
+        '2025-12-31T10:00:00.000Z',
+      ].map((at) => modifiedLabel(at, today)),
+      expected: ['Today, 9:12 AM', 'Yesterday, 11:00 PM', 'Sep 18', 'Dec 31, 2025'],
     });
   });
 });

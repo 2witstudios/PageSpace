@@ -69,6 +69,9 @@ const fakeRealtime = () => {
 };
 
 const TREE = 'GET /api/drives/d1/pages';
+
+/** When every fixture row last changed. */
+const AT = '2026-10-01T00:00:00.000Z';
 const F1_CHILDREN = 'GET /api/pages/f1/children';
 
 /** Drive d1: folder f1 holding a document, and a sheet at the top. */
@@ -145,10 +148,11 @@ describe('useFileTree() loading', () => {
             name: 'Title f1',
             kind: 'folder',
             pageType: 'FOLDER',
+            updatedAt: AT,
             count: 1,
-            children: [{ id: 'doc', name: 'Title doc', kind: 'page', pageType: 'DOCUMENT' }],
+            children: [{ id: 'doc', name: 'Title doc', kind: 'page', pageType: 'DOCUMENT', updatedAt: AT }],
           },
-          { id: 'sheet', name: 'Title sheet', kind: 'page', pageType: 'SHEET' },
+          { id: 'sheet', name: 'Title sheet', kind: 'page', pageType: 'SHEET', updatedAt: AT },
         ],
       ],
     });

@@ -10,13 +10,15 @@
 // then draws it alone. A refused or failed create removes the row and says
 // why.
 
-import { useCallback, useRef } from 'react';
+import { useCallback } from 'react';
 import { getPageTypeConfig, PageType } from '@pagespace/lib/client-safe';
 import type { ApiClient } from '@/api/client';
 import { ApiError } from '@/api/errors';
 import { useApiClient } from '@/api/swr-provider';
+import { getUiState } from '../../store/store';
 import { dispatch, transactions } from '../../store/transactions';
 import type { FileNode, PageResponse } from '../file-model/file-node';
+import type { PendingFile } from '../files-plugin/files-plugin';
 import { childIdsOf, createParentFor } from '../tree-view/tree-view';
 
 /** apps/web's page create route (apps/web/src/app/api/pages/route.ts). */
@@ -57,17 +59,23 @@ export type CreateFileOptions = {
 /** A fresh key per create: several can start in one millisecond. */
 const mintKey = (): string => `new-${crypto.randomUUID()}`;
 
+/** Whether a create in this drive is still waiting for the server to name its page. */
+export const isCreatingIn = (pending: readonly PendingFile[], driveId: string): boolean =>
+  pending.some((file) => file.driveId === driveId && file.pageId === null);
+
 /**
  * The + action: creates a document where the selection says, and opens it.
- * One create at a time: a press while one is in flight does nothing. The
- * filter clears, so the new row shows wherever it lands.
+ * One create per drive at a time: a press while one is in flight in that
+ * drive does nothing, from whichever surface (the tree pane's +, a folder
+ * browser's New page) either was pressed. The guard is the shell store's
+ * pending create, which every surface shares and which begins in the same
+ * tick as the press. The filter clears, so the new row shows wherever it
+ * lands.
  */
 export const useCreateFile = ({ driveId, nodes, selectedId, revalidate, open }: CreateFileOptions) => {
   const client = useApiClient();
-  const creating = useRef(false);
   return useCallback(async (): Promise<void> => {
-    if (creating.current) return;
-    creating.current = true;
+    if (isCreatingIn(getUiState().resources.pendingFiles, driveId)) return;
     const parentId = createParentFor(nodes, selectedId);
     const key = mintKey();
     dispatch(transactions.beginFileCreate, {
@@ -90,8 +98,6 @@ export const useCreateFile = ({ driveId, nodes, selectedId, revalidate, open }: 
         key,
         error: error instanceof ApiError ? `${CREATE_FAILED} ${error.message}` : `${CREATE_FAILED} ${OFFLINE}`,
       });
-    } finally {
-      creating.current = false;
     }
   }, [client, driveId, nodes, selectedId, revalidate, open]);
 };
