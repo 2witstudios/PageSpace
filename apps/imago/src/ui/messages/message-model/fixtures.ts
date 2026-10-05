@@ -1,6 +1,7 @@
 // Route answers for the messages tests, shaped like apps/web's handlers.
 
 import type { ConversationResponse, InboxItem, SidebarBadges } from './message';
+import type { ChannelMessageResponse, ChannelReactionResponse } from './post';
 
 export const inboxChannel = (id: string, overrides: Partial<InboxItem> = {}): InboxItem => ({
   id,
@@ -50,3 +51,29 @@ export const badges = (overrides: Partial<SidebarBadges> = {}): SidebarBadges =>
   calendar: 0,
   ...overrides,
 });
+
+/** A top-level channel post as GET /api/channels/[pageId]/messages returns it. */
+export const channelMessage = (
+  id: string,
+  overrides: Partial<ChannelMessageResponse> = {},
+): ChannelMessageResponse => ({
+  id,
+  content: `post ${id}`,
+  createdAt: '2026-10-05T09:00:00.000Z',
+  pageId: 'c1',
+  userId: 'u2',
+  editedAt: null,
+  aiMeta: null,
+  parentId: null,
+  replyCount: 0,
+  user: { id: 'u2', name: 'Grace Hopper', image: null },
+  reactions: [],
+  ...overrides,
+});
+
+export const channelReaction = (
+  id: string,
+  emoji: string,
+  user: { readonly id: string; readonly name: string | null },
+  createdAt = '2026-10-05T09:01:00.000Z',
+): ChannelReactionResponse => ({ id, messageId: 'm', userId: user.id, emoji, createdAt, user });
