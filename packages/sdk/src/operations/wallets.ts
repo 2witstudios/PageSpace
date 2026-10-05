@@ -183,6 +183,8 @@ const callSpendDecisionSchema = z.discriminatedUnion('kind', [
     walletId: z.string(),
     fallbackApplied: z.boolean(),
     fallbackFrom: spendSourceKindSchema.nullable(),
+    /** The chosen source's wallet a fallback moved the call off, else null (WAL-6b). */
+    fallbackFromWalletId: z.string().nullable(),
     /** The tier whose entitlements (the pro-model gate) apply to the call (WAL-8). */
     entitlementTier: subscriptionTierSchema,
   }),
