@@ -24,7 +24,6 @@ vi.mock('@pagespace/lib/organizations/policies', () => ({ getOrgPolicies: vi.fn(
 vi.mock('@pagespace/lib/organizations/policy-suspension', () => ({ listPolicySuspensions: vi.fn() }));
 vi.mock('@pagespace/lib/organizations/org-change-events', () => ({ announceOrgChange: vi.fn() }));
 vi.mock('@pagespace/lib/organizations/policy-suspension-names', () => ({ nameSuspensions: vi.fn(async (_orgId: string, _viewerId: string, listings: unknown) => listings) }));
-vi.mock('@pagespace/lib/organizations/status', () => ({ checkOrgActive: vi.fn() }));
 vi.mock('@pagespace/lib/organizations/published-visibility', () => ({ reconcileOrgPublishedVisibility: vi.fn() }));
 vi.mock('@/lib/canvas/published-storage', () => ({ createPublishedObjectStore: () => ({ store: true }), isPublishConfigured: vi.fn() }));
 
@@ -33,7 +32,6 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { findMembershipRole } from '@pagespace/lib/organizations/repository';
 import { getOrgPolicies, updateOrgPolicies } from '@pagespace/lib/organizations/policies';
 import { listPolicySuspensions } from '@pagespace/lib/organizations/policy-suspension';
-import { checkOrgActive } from '@pagespace/lib/organizations/status';
 import { reconcileOrgPublishedVisibility } from '@pagespace/lib/organizations/published-visibility';
 import { isPublishConfigured } from '@/lib/canvas/published-storage';
 import { DEFAULT_ORG_POLICIES } from '@pagespace/lib/organizations/policies-core';
@@ -57,7 +55,6 @@ beforeEach(() => {
   vi.mocked(isAuthError).mockImplementation((result) => 'error' in result);
   vi.mocked(authenticateRequestWithOptions).mockResolvedValue(session('user_priya'));
   vi.mocked(getOrgPolicies).mockResolvedValue({ ...DEFAULT_ORG_POLICIES });
-  vi.mocked(checkOrgActive).mockResolvedValue({ ok: true });
   vi.mocked(isPublishConfigured).mockReturnValue(true);
   vi.mocked(reconcileOrgPublishedVisibility).mockResolvedValue([]);
   vi.mocked(listPolicySuspensions).mockResolvedValue([]);
@@ -143,12 +140,20 @@ describe('policies routes', () => {
     expect(updateOrgPolicies).not.toHaveBeenCalled();
   });
 
-  it('POL-1 (partial) SEAT-9 (partial) a lapsed org cannot change policies', async () => {
+  it('POL-1 (partial) SEAT-9 (partial) a loosening change to a lapsed org gets the lapse refusal; nothing else runs', async () => {
     as('OWNER');
-    vi.mocked(checkOrgActive).mockResolvedValue({ ok: false, code: 'org_lapsed', status: 402, message: 'lapsed' });
-    const res = await PATCH(req('PATCH', '', { guests: 'off' }), ctx);
+    vi.mocked(updateOrgPolicies).mockResolvedValue({ ok: false, reason: 'org_lapsed', message: 'Reactivate to continue.' });
+    const res = await PATCH(req('PATCH', '', { guests: 'on' }), ctx);
     expect(res.status).toBe(402);
-    expect(updateOrgPolicies).not.toHaveBeenCalled();
+    expect(await res.json()).toEqual({ error: 'Reactivate to continue.', code: 'org_lapsed' });
+    expect(reconcileOrgPublishedVisibility).not.toHaveBeenCalled();
+  });
+
+  it('SEAT-9 (partial) the route does not pre-refuse a lapsed org: lib judges restricting vs loosening under the org lock ([D-OW-33])', async () => {
+    as('ADMIN');
+    const res = await PATCH(req('PATCH', '', { guests: 'off' }), ctx);
+    expect(res.status).toBe(200);
+    expect(updateOrgPolicies).toHaveBeenCalledWith({ orgId: ORG_ID, actorId: 'user_priya', patch: { guests: 'off' } });
   });
 
   it('POL-1 (partial) a change that committed but was not audited is reported, not hidden', async () => {

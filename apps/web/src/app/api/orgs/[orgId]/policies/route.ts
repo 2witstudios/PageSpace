@@ -4,10 +4,10 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getOrgPolicies, updateOrgPolicies } from '@pagespace/lib/organizations/policies';
 import { OPEN_ROLE_FLOOR_RAISE_MESSAGE, validateOrgPoliciesPatch } from '@pagespace/lib/organizations/policies-core';
-import { checkOrgActive } from '@pagespace/lib/organizations/status';
 import { reconcileOrgPublishedVisibility } from '@pagespace/lib/organizations/published-visibility';
 import { createPublishedObjectStore, isPublishConfigured } from '@/lib/canvas/published-storage';
 import { authorizeOrgRequest, ORG_READ_AUTH, ORG_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
+import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
 
 type Context = { params: Promise<{ orgId: string }> };
 
@@ -39,7 +39,8 @@ const countByKind = (items: readonly { kind: string }[]): Record<string, number>
 /**
  * PATCH /api/orgs/[orgId]/policies — Owner and Admins change policies. A change applies immediately;
  * anything it newly forbids is suspended, never deleted, and listed (GET .../policies/suspended and the
- * audit log); what it forbids that cannot be suspended is blocked where it is used and listed in the audit log. A lapsed org cannot change policies (SEAT-9). The change itself is audited in lib
+ * audit log); what it forbids that cannot be suspended is blocked where it is used and listed in the audit log. A lapsed org may only RESTRICT ([D-OW-33], amending SEAT-9: billing never blocks security):
+ * lib refuses any change that loosens a policy with the lapse refusal, judged under the org row's lock. The change itself is audited in lib
  * (updateOrgPolicies writes org.policy.changed with the org dimension), not here, so it is written once.
  */
 export async function PATCH(request: Request, context: Context) {
@@ -51,10 +52,8 @@ export async function PATCH(request: Request, context: Context) {
     if (!parsed.ok) {
       return NextResponse.json({ error: 'Invalid request body', issues: parsed.issues, code: 'invalid_request' }, { status: 400 });
     }
-    const active = await checkOrgActive(orgId);
-    if (!active.ok) return NextResponse.json({ error: active.message, code: active.code }, { status: active.status });
-
     const result = await updateOrgPolicies({ orgId, actorId: gate.userId, patch: parsed.patch });
+    if (!result.ok && result.reason === 'org_lapsed') return orgLapsedResponse(result.message);
     if (!result.ok && result.reason === 'open_role_floor') {
       return NextResponse.json({ error: OPEN_ROLE_FLOOR_RAISE_MESSAGE, code: 'org_policy', policy: 'openDriveRoleFloor', drives: result.drives }, { status: 403 });
     }

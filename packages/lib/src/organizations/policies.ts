@@ -16,6 +16,7 @@ import {
   newlyBlockedKinds,
   ORG_POLICY_KEYS,
   parseOrgPolicies,
+  policyChangeOnlyRestricts,
   suspensionKindsChanged,
   type OrgPolicies,
   type OrgPoliciesPatch,
@@ -28,6 +29,8 @@ import { listPolicyBlockedItems, type PolicyBlockedItems } from './policy-blocke
 import { openDrivesBelowFloor } from './open-role-floor';
 import type { OpenRoleFloor } from './policies-core';
 import { kickSuspendedGuests } from '../permissions/guest-holds';
+import { isOrgActive } from './status';
+import { ORG_LAPSED_CODE, ORG_LAPSED_MESSAGE } from './status-core';
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type Executor = typeof db | Tx;
@@ -54,6 +57,11 @@ export type UpdateOrgPoliciesResult =
     }
   | { ok: false; reason: 'not_found' }
   /**
+   * SEAT-9 as amended by [D-OW-33]: a LAPSED org may only restrict (billing never blocks security). A change that
+   * loosens any policy is refused whole and nothing is stored until the org pays.
+   */
+  | { ok: false; reason: typeof ORG_LAPSED_CODE; message: string }
+  /**
    * POL-6: raising the Open-drive role floor while some Open drive's default role is below it would leave those
    * drives' members under the floor; refused, nothing stored, and the drives named (bounded) so they can be fixed.
    */
@@ -71,7 +79,7 @@ function countsByKind(items: readonly PolicySuspensionItem[]): Record<string, nu
 }
 
 /**
- * Apply a validated patch. The row lock, the stored policies and every suspension or restore commit in
+ * Apply a validated patch. While the org is lapsed only a change that restricts applies ([D-OW-33]). The row lock, the stored policies and every suspension or restore commit in
  * ONE transaction, so there is no moment where the policy says off and an existing link is still live
  * for lack of a marker. The audit rows are written after commit (the audit chain is a different store).
  */
@@ -85,9 +93,11 @@ export async function updateOrgPolicies(input: { orgId: string; actorId: string;
     const before = parseOrgPolicies(row.policies);
     const stored = mergeOrgPolicies(row.policies, patch);
     const after = parseOrgPolicies(stored);
+    // [D-OW-33] read under the org row's lock, so the change judged is the one stored.
+    if (!policyChangeOnlyRestricts(before, after) && !(await isOrgActive(orgId, { executor: tx }))) return { lapsed: true as const };
     if (after.openDriveRoleFloor !== before.openDriveRoleFloor) {
       const below = await openDrivesBelowFloor(tx, orgId, after.openDriveRoleFloor);
-      if (below.length > 0) return { refused: true as const, floor: after.openDriveRoleFloor, drives: below };
+      if (below.length > 0) return { lapsed: false as const, refused: true as const, floor: after.openDriveRoleFloor, drives: below };
     }
     const kinds = suspensionKindsChanged(before, after);
     const outcome = await applySuspension(tx, orgId, after, kinds);
@@ -95,9 +105,10 @@ export async function updateOrgPolicies(input: { orgId: string; actorId: string;
     const blocked = await listPolicyBlockedItems(tx, orgId, after, newlyBlockedKinds(before, after), AUDIT_LISTED_IDS);
     await tx.update(organizations).set({ policies: stored }).where(eq(organizations.id, orgId));
     const changes: PolicyChange[] = ORG_POLICY_KEYS.filter((k) => !same(before[k], after[k])).map((key) => ({ key, from: before[key], to: after[key] }));
-    return { refused: false as const, after, changes, outcome, blocked };
+    return { lapsed: false as const, refused: false as const, after, changes, outcome, blocked };
   }));
   if (!done) return { ok: false, reason: 'not_found' };
+  if (done.lapsed) return { ok: false, reason: ORG_LAPSED_CODE, message: ORG_LAPSED_MESSAGE };
   if (done.refused) return { ok: false, reason: 'open_role_floor', floor: done.floor, drives: done.drives };
 
   const { after, changes, outcome, blocked } = done;

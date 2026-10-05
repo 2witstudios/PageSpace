@@ -16,7 +16,7 @@ import { users } from '@pagespace/db/schema/auth';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { customDomains } from '@pagespace/db/schema/custom-domains';
 import { integrationConnections, integrationProviders } from '@pagespace/db/schema/integrations';
-import { organizations, orgMembers } from '@pagespace/db/schema/organizations';
+import { organizations, orgMembers, orgSubscriptions } from '@pagespace/db/schema/organizations';
 import { publishedPages } from '@pagespace/db/schema/published-pages';
 import { driveShareLinks, pageShareLinks } from '@pagespace/db/schema/share-links';
 
@@ -63,6 +63,7 @@ async function cleanup() {
   if (driveIds.length) await db.delete(drives).where(inArray(drives.id, driveIds));
   await db.delete(integrationProviders).where(inArray(integrationProviders.id, created.providerIds.length ? created.providerIds : ['-']));
   await db.delete(orgMembers).where(or(eq(orgMembers.orgId, orgId), eq(orgMembers.orgId, otherOrgId)));
+  await db.delete(orgSubscriptions).where(or(eq(orgSubscriptions.orgId, orgId), eq(orgSubscriptions.orgId, otherOrgId)));
   await db.delete(organizations).where(or(eq(organizations.id, orgId), eq(organizations.id, otherOrgId)));
   if (created.userIds.length) await db.delete(users).where(inArray(users.id, created.userIds));
   created.userIds = [];
@@ -78,6 +79,8 @@ beforeEach(async () => {
     { id: orgId, name: 'Northwind', slug: `nw-${run}`, ownerId: owner.id },
     { id: otherOrgId, name: 'Other', slug: `ot-${run}`, ownerId: otherOwner.id },
   ]);
+  // A paying org (D-OW-30: no subscription is lapsed, and a lapsed org may only restrict, [D-OW-33]).
+  await factories.createOrgSubscription(orgId);
   await db.insert(orgMembers).values([
     { orgId, userId: owner.id, role: 'OWNER' },
     { orgId, userId: member.id, role: 'MEMBER' },

@@ -312,6 +312,62 @@ export function newlyBlockedKinds(before: OrgPolicies, after: OrgPolicies): Bloc
 }
 
 // ---------------------------------------------------------------------------
+// [D-OW-33] restricting vs loosening: what a LAPSED org may still change
+// ---------------------------------------------------------------------------
+
+/** Rank of each ordered value, lowest = strictest. */
+const GUEST_RANK: Record<GuestPolicy, number> = { off: 0, approve: 1, on: 2 };
+const ACTOR_RANK: Record<ActorPolicy, number> = { admins: 0, members: 1 };
+// A floor is a minimum grant: a higher floor gives members MORE (see SPECS.openDriveRoleFloor).
+const FLOOR_RANK: Record<OpenRoleFloor, number> = { view: 0, edit: 1 };
+
+/** `after` allows nothing `before` did not (null = everything allowed). */
+const subsetOf = (after: readonly string[] | null, before: readonly string[] | null): boolean =>
+  before === null || (after !== null && after.every((v) => before.includes(v)));
+
+const notLooser = (before: boolean, after: boolean): boolean => before || !after;
+
+/**
+ * Per key: does `after` give no more than `before`? One entry per policy, so a new key cannot be added without
+ * being classified. Equal values are not looser.
+ */
+const NO_LOOSER: { [K in OrgPolicyKey]: (before: OrgPolicies[K], after: OrgPolicies[K]) => boolean } = {
+  guests: (b, a) => GUEST_RANK[a] <= GUEST_RANK[b],
+  publicShareLinks: notLooser,
+  publishWeb: notLooser,
+  customDomains: notLooser,
+  whoCanInvite: (b, a) => ACTOR_RANK[a] <= ACTOR_RANK[b],
+  whoCanCreateDrives: (b, a) => ACTOR_RANK[a] <= ACTOR_RANK[b],
+  openDriveRoleFloor: (b, a) => FLOOR_RANK[a] <= FLOOR_RANK[b],
+  seatAllowanceCents: (b, a) => a <= b,
+  // Refuse is the only fallback strictly below the others: seat allowance spends org money, own credits a
+  // person's, so neither is a subset of the other and a move between them is not a restriction.
+  walletFallback: (b, a) => a === b || a === 'refuse',
+  modelAllowlist: (b, a) => subsetOf(a, b),
+  providerAllowlist: (b, a) => subsetOf(a, b),
+  agentsAutonomous: notLooser,
+  crossDriveAgents: notLooser,
+  cloudSandbox: notLooser,
+  persistentEnvironments: notLooser,
+  publishedApps: notLooser,
+  integrationsAllowlist: (b, a) => subsetOf(a, b),
+};
+
+/** The keys a change from `before` to `after` loosens (grants or spends more), in ORG_POLICY_KEYS order. */
+export function loosenedPolicyKeys(before: OrgPolicies, after: OrgPolicies): OrgPolicyKey[] {
+  return ORG_POLICY_KEYS.filter((key) => !(NO_LOOSER[key] as (b: unknown, a: unknown) => boolean)(before[key], after[key]));
+}
+
+/**
+ * [D-OW-33] billing never blocks security: while an org is lapsed, an Owner or Admin may still make a change that
+ * only RESTRICTS (turn guests off, tighten sharing, lower the allowance, narrow an allowlist). A change that loosens
+ * any key — including a mixed change that also restricts others — stays refused until the org pays (SEAT-9).
+ */
+export function policyChangeOnlyRestricts(before: OrgPolicies, after: OrgPolicies): boolean {
+  return loosenedPolicyKeys(before, after).length === 0;
+}
+
+// ---------------------------------------------------------------------------
 // POL-7: what the credit gate reads
 // ---------------------------------------------------------------------------
 
