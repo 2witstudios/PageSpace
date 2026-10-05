@@ -43,6 +43,13 @@ vi.mock('@/ui/messages/messages-pane/messages-pane', () => ({
     }),
 }));
 
+// The tasks pane loads through SWR; its own suite proves it against the real
+// client. Here it only shows what the shell handed it.
+vi.mock('@/ui/tasks/tasks-pane/tasks-pane', () => ({
+  TasksPane: ({ driveId, selectedPageId }: { driveId: string; selectedPageId: string | null }) =>
+    h('div', { 'data-tasks-pane': driveId, 'data-selected': selectedPageId ?? '' }),
+}));
+
 const { Shell } = await import('./shell');
 
 let root: Root | null = null;
@@ -162,6 +169,23 @@ describe('Shell', () => {
         ['', '', 'conversation-1'],
         null,
       ],
+    });
+  });
+
+  test('the tasks section fills its list', () => {
+    render();
+    const pane = () => slot('list').querySelector<HTMLElement>('[data-tasks-pane]');
+    const seen = ['/drive-1/tasks', '/drive-1/tasks/list-1', '/drive-1/files'].map((pathname) => {
+      navigate(pathname);
+      const found = pane();
+      return found === null ? null : [found.dataset.tasksPane, found.dataset.selected];
+    });
+
+    assert({
+      given: 'the Tasks list, an open task list, then Files',
+      should: 'put the drive’s task lists in the list slot, marking the open one, and only in Tasks',
+      actual: seen,
+      expected: [['drive-1', ''], ['drive-1', 'list-1'], null],
     });
   });
 

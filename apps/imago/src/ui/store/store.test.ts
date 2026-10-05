@@ -81,7 +81,7 @@ function Probe() {
 describe('useUiState() on the server', () => {
   test('server snapshot', () => {
     const initial = createInitialState();
-    setUiState({ ...initial, resources: { collapsedSections: ['files'] } });
+    setUiState({ ...initial, resources: { ...initial.resources, collapsedSections: ['files'] } });
 
     assert({
       given: 'a component reading the store rendered to string',

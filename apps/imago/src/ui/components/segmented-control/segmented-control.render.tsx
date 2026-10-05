@@ -19,8 +19,10 @@ export type SegmentedControlRenderProps<T extends string> = {
 
 /**
  * The segment a radiogroup key moves to (WAI-ARIA radio pattern): the
- * arrows step and wrap, Home and End jump to the ends. Undefined for a key
- * the group does not own.
+ * arrows step and wrap, Home and End jump to the ends. `current` is the
+ * radio that has focus; one that matches no segment is read as the first,
+ * which is where the tab stop puts focus when nothing is checked. Undefined
+ * for a key the group does not own.
  */
 export const segmentAfterKey = <T extends string>(
   values: readonly T[],
@@ -28,15 +30,15 @@ export const segmentAfterKey = <T extends string>(
   key: string,
 ): T | undefined => {
   if (values.length === 0) return undefined;
-  const index = values.indexOf(current);
+  const index = Math.max(0, values.indexOf(current));
   const last = values.length - 1;
   switch (key) {
     case 'ArrowRight':
     case 'ArrowDown':
-      return values[index === -1 || index === last ? 0 : index + 1];
+      return values[index === last ? 0 : index + 1];
     case 'ArrowLeft':
     case 'ArrowUp':
-      return values[index <= 0 ? last : index - 1];
+      return values[index === 0 ? last : index - 1];
     case 'Home':
       return values[0];
     case 'End':
@@ -61,11 +63,14 @@ export function renderSegmentedControl<T extends string>({
   const values = segments.map((segment) => segment.value);
   const tabStop = values.includes(value) ? value : values[0];
 
+  // Arrows step from the radio that has focus, not from `value`: with
+  // nothing checked, or a parent that ignores `select`, they differ.
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    const next = segmentAfterKey(values, value, event.key);
+    const radios = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="radio"]')];
+    const focused = values[radios.findIndex((radio) => radio === event.target)] ?? tabStop ?? value;
+    const next = segmentAfterKey(values, focused, event.key);
     if (next === undefined) return;
     event.preventDefault();
-    const radios = event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="radio"]');
     radios[values.indexOf(next)]?.focus();
     select(next);
   };

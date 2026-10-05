@@ -23,7 +23,12 @@ const redirect = Object.assign(new Error('NEXT_REDIRECT'), {
   digest: 'NEXT_REDIRECT;replace;https://pagespace.ai/auth/signin?next=%2Fimago;307;',
 });
 
-type Page = () => Promise<ReactNode>;
+type Params = Promise<Record<string, string>>;
+
+type Page = (props: { readonly params: Params }) => Promise<ReactNode>;
+
+/** What Next hands a dynamic route: its segments, as a Promise (Next 15). */
+const props = () => ({ params: Promise.resolve({ driveId: 'drive-1', pageId: 'page-1', conversationId: 'c-1' }) });
 
 /** Every stage route below the shell, and what it renders into the object slot. */
 const routes: readonly { readonly path: string; readonly load: () => Promise<{ default: Page }>; readonly object: string | null }[] = [
@@ -33,7 +38,6 @@ const routes: readonly { readonly path: string; readonly load: () => Promise<{ d
   { path: '[driveId]/messages', load: () => import('./[driveId]/messages/page'), object: null },
   { path: '[driveId]/messages/[pageId]', load: () => import('./[driveId]/messages/[pageId]/page'), object: 'Channel' },
   { path: '[driveId]/tasks', load: () => import('./[driveId]/tasks/page'), object: null },
-  { path: '[driveId]/tasks/[pageId]', load: () => import('./[driveId]/tasks/[pageId]/page'), object: 'Task list' },
   { path: '[driveId]/settings', load: () => import('./[driveId]/settings/page'), object: 'Drive settings' },
   { path: 'dm', load: () => import('./dm/page'), object: null },
   { path: 'dm/[conversationId]', load: () => import('./dm/[conversationId]/page'), object: 'Conversation' },
@@ -117,7 +121,7 @@ describe('the stage routes', () => {
       given: 'the app directory',
       should: 'put every page except the bare /imago redirect inside (shell), so no navigation leaves the layout',
       actual: pages,
-      expected: ['page.tsx', ...routes.map((route) => `(shell)/${route.path}/page.tsx`)].sort(),
+      expected: ['page.tsx', '(shell)/[driveId]/tasks/[pageId]/page.tsx', ...routes.map((route) => `(shell)/${route.path}/page.tsx`)].sort(),
     });
   });
 
@@ -126,7 +130,7 @@ describe('the stage routes', () => {
     const rendered = await Promise.all(
       routes.map(async (route) => {
         const { default: Page } = await route.load();
-        const element = await Page();
+        const element = await Page(props());
         return element === null ? null : renderToStaticMarkup(element);
       }),
     );
@@ -153,7 +157,7 @@ describe('the stage routes', () => {
     const thrown = await Promise.all(
       routes.map(async (route) => {
         const { default: Page } = await route.load();
-        return Page().then(
+        return Page(props()).then(
           () => null,
           (error: unknown) => error,
         );
@@ -165,6 +169,44 @@ describe('the stage routes', () => {
       should: 'render nothing and let the sign-in redirect through',
       actual: thrown,
       expected: routes.map(() => redirect),
+    });
+  });
+});
+
+describe('an open task list', () => {
+  const load = () => import('./[driveId]/tasks/[pageId]/page');
+
+  test('renders the list for the viewer', async () => {
+    getViewer.mockResolvedValue(viewer);
+    const { default: Page } = await load();
+    const element = await Page(props());
+    const { TaskListView } = await import('@/ui/tasks/task-list-view/task-list-view');
+
+    assert({
+      given: '/[driveId]/tasks/[pageId] for a signed-in viewer',
+      should: 'render the task list named by the awaited params, saving views under the viewer',
+      actual: [
+        getViewer.mock.calls.length,
+        element !== null && typeof element === 'object' && 'type' in element ? element.type === TaskListView : false,
+        element !== null && typeof element === 'object' && 'props' in element ? element.props : null,
+      ],
+      expected: [1, true, { driveId: 'drive-1', pageId: 'page-1', viewerId: 'user-1' }],
+    });
+  });
+
+  test('keeps the auth gate', async () => {
+    getViewer.mockRejectedValue(redirect);
+    const { default: Page } = await load();
+    const thrown = await Page(props()).then(
+      () => null,
+      (error: unknown) => error,
+    );
+
+    assert({
+      given: 'no valid session',
+      should: 'render nothing and let the sign-in redirect through',
+      actual: thrown,
+      expected: redirect,
     });
   });
 });

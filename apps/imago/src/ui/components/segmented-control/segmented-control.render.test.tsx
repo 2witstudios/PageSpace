@@ -149,13 +149,13 @@ describe('segmentAfterKey', () => {
 
   test('no current segment', () => {
     assert({
-      given: 'a current value that matches no segment',
-      should: 'move forward to the first and backward to the last',
+      given: 'a current value that matches no segment (focus rests on the first radio, the tab stop)',
+      should: 'step from the first: forward to the second, backward wrapping to the last',
       actual: [
         segmentAfterKey<string>(values, 'missing', 'ArrowRight'),
         segmentAfterKey<string>(values, 'missing', 'ArrowLeft'),
       ],
-      expected: ['focus', 'board'],
+      expected: ['tree', 'board'],
     });
   });
 

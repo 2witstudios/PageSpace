@@ -79,6 +79,25 @@ const loaded = async (seen: Seen) => {
 const statusIn = (list: TaskList | undefined, id: string) =>
   list ? locate(list, id)?.path.at(-1)?.status : undefined;
 
+/**
+ * A route that answers its first request at once and holds every later one
+ * until released, so a test can read the tree after a refused write but
+ * before the revalidation that follows it answers.
+ */
+const heldAfterFirst = (answer: () => Response) => {
+  let calls = 0;
+  let release: () => void = () => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const route: FakeRoute = async () => {
+    calls += 1;
+    if (calls > 1) await held;
+    return answer();
+  };
+  return { route, release: () => release(), calls: () => calls };
+};
+
 describe('useDriveTaskLists()', () => {
   test('loading', async () => {
     const web = fakeWeb({
@@ -239,9 +258,12 @@ describe('useTaskList()', () => {
   });
 
   test('a completion the server refuses', async () => {
+    const list = heldAfterFirst(() =>
+      Response.json(taskListResponse([taskItem('p', { subTaskCount: 0 })])),
+    );
     const { web, seen } = mountList(
       listRoutes({
-        [L1]: () => Response.json(taskListResponse([taskItem('p', { subTaskCount: 0 })])),
+        [L1]: list.route,
         'PATCH /api/pages/l1/tasks/p': () =>
           Response.json(
             { code: 'SUBTASKS_INCOMPLETE', error: 'Complete all sub-tasks first (1 of 1 remaining)', pending: 1, total: 1 },
@@ -252,9 +274,19 @@ describe('useTaskList()', () => {
     await loaded(seen);
 
     let result: unknown;
-    await act(async () => {
-      result = await seen.actions?.toggleComplete('p');
+    let done: Promise<void> = Promise.resolve();
+    act(() => {
+      done = (async () => {
+        result = await seen.actions?.toggleComplete('p');
+      })();
     });
+    // The refusal has landed and the revalidating GET is waiting on the server.
+    await settle(() => {
+      if (list.calls() < 2) throw new Error('not revalidating yet');
+    });
+    const beforeServerAnswers = statusIn(seen.list, 'p');
+    list.release();
+    await act(() => done);
 
     assert({
       given: 'a completion the server refuses (a subtask added elsewhere)',
@@ -264,16 +296,22 @@ describe('useTaskList()', () => {
     });
 
     assert({
-      given: 'a refused write',
-      should: 'roll the list back',
-      actual: statusIn(seen.list, 'p'),
+      given: 'a refused write, before the server has answered the revalidation',
+      should: 'have rolled the list back already',
+      actual: beforeServerAnswers,
       expected: 'pending',
     });
   });
 
   test('a network failure', async () => {
+    const list = heldAfterFirst(() =>
+      Response.json(
+        taskListResponse([taskItem('p', { subTaskCount: 1, position: 0 }), taskItem('z', { position: 1 })]),
+      ),
+    );
     const { seen } = mountList(
       listRoutes({
+        [L1]: list.route,
         'PATCH /api/pages/l1/tasks/z': () => {
           throw new TypeError('Failed to fetch');
         },
@@ -282,14 +320,23 @@ describe('useTaskList()', () => {
     await loaded(seen);
 
     let result: unknown;
-    await act(async () => {
-      result = await seen.actions?.update('z', { priority: 'high' });
+    let done: Promise<void> = Promise.resolve();
+    act(() => {
+      done = (async () => {
+        result = await seen.actions?.update('z', { priority: 'high' });
+      })();
     });
+    await settle(() => {
+      if (list.calls() < 2) throw new Error('not revalidating yet');
+    });
+    const beforeServerAnswers = seen.list?.tasks[1]?.priority;
+    list.release();
+    await act(() => done);
 
     assert({
       given: 'a write that never reaches the server',
-      should: 'say so and roll back',
-      actual: [result, seen.list?.tasks[1]?.priority],
+      should: 'say so and roll back before the revalidation answers',
+      actual: [result, beforeServerAnswers],
       expected: [{ ok: false, refusal: 'Could not reach PageSpace' }, 'medium'],
     });
   });
