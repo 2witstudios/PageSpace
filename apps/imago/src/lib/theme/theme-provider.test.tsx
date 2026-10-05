@@ -161,4 +161,66 @@ describe('ThemeProvider in the browser', () => {
       expected: { dataTheme: 'dark', checked: ['Dark'], storage: null },
     });
   });
+
+  test('a page restored from the back/forward cache catches up', () => {
+    mount('dark');
+    document.cookie = 'theme=light; path=/; max-age=31536000; SameSite=Lax';
+    act(() => {
+      window.dispatchEvent(new Event('pageshow'));
+    });
+
+    assert({
+      given: 'the cookie switched to light while this page sat in the bfcache',
+      should: 'apply light and check it on pageshow',
+      actual: {
+        dataTheme: document.documentElement.dataset.theme,
+        checked: checked(),
+      },
+      expected: { dataTheme: 'light', checked: ['Light'] },
+    });
+  });
+
+  test('an unmounted provider stops listening', () => {
+    mount('dark');
+    act(() => root?.unmount());
+    root = undefined;
+    document.cookie = 'theme=light; path=/; max-age=31536000; SameSite=Lax';
+    window.dispatchEvent(new Event('pageshow'));
+    document.dispatchEvent(new Event('visibilitychange'));
+
+    assert({
+      given: 'a cookie change after the provider unmounted',
+      should: 'leave data-theme alone on pageshow and visibilitychange',
+      actual: document.documentElement.dataset.theme,
+      expected: 'dark',
+    });
+  });
+
+  test('a view transition snapshots the switcher already switched', () => {
+    const insideTransition: (string | null)[][] = [];
+    // jsdom has no view transitions: stand one in that runs the update and
+    // records what the switcher shows when it returns.
+    Object.defineProperty(document, 'startViewTransition', {
+      configurable: true,
+      value: (update: () => void) => {
+        update();
+        insideTransition.push(checked());
+      },
+    });
+    try {
+      mount('system');
+      act(() => radio('Light').click());
+    } finally {
+      Reflect.deleteProperty(document, 'startViewTransition');
+    }
+
+    assert({
+      given: 'a browser with view transitions and a click on Light',
+      should:
+        'commit the checked radio inside the transition update (flushSync), so the new snapshot shows it',
+      actual: insideTransition,
+      expected: [['Light']],
+    });
+  });
 });
+

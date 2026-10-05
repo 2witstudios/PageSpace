@@ -62,7 +62,9 @@ export function ThemeProvider({
       apply: (chosen) => {
         applyTheme(document.documentElement, chosen);
         // Commit synchronously so the view transition snapshots the
-        // switcher's new state too.
+        // switcher's new state too. jsdom has no view transitions: the test
+        // stubs startViewTransition to check the commit lands inside the
+        // update; real snapshotting is only exercised in a browser.
         flushSync(() => setPreference(chosen));
       },
       writeCookie: (cookie) => {
@@ -70,6 +72,11 @@ export function ThemeProvider({
         document.cookie = cookie;
       },
       readCookies: () => document.cookie,
+      // Same-origin in production (pagespace.ai/imago), so classic's
+      // next-themes sees this key. In dev imago (:3006) and classic (:3000)
+      // are separate origins: the cookie is shared (localhost ignores the
+      // port) but this storage is not, so a classic tab can restore its own
+      // stored theme and write it back over imago's choice. Dev only.
       writeStorage: (chosen) => {
         try {
           localStorage.setItem(THEME_STORAGE_KEY, chosen);
