@@ -38,6 +38,7 @@ import {
 import { getAgentAccessLevel, hasAgentDriveMembership } from '../agent-permissions';
 import { getAppAccessLevel, hasAppDriveMembership, hasScopedDriveMembership } from '../app-permissions';
 import { getMemberCustomRoleId } from '../membership-queries';
+import { accessiblePageIds } from '../accessible-page-ids';
 import { EnforcedAuthContext } from '../enforced-context';
 import { revokePagePermission } from '../permission-mutations';
 import { getDriveAccess, listAccessibleDrives } from '../../services/drive-service';
@@ -205,6 +206,7 @@ async function disagreementsFor(m: Matrix, personName: string, userId: string, d
   const batch = await getBatchPagePermissions(userId, pageIds);
   const tree = new Set(await getUserAccessiblePagesInDrive(userId, drive.id));
   const treeWithDetails = new Map((await getUserAccessiblePagesInDriveWithDetails(userId, drive.id)).map((p) => [p.id, p.permissions]));
+  const sqlVisible = new Set(await accessiblePageIds(userId));
   for (const pageId of pageIds) {
     const canonical = (await getUserAccessLevel(userId, pageId)) ?? DENY;
     const page = `${where} page ${pageId}`;
@@ -218,6 +220,7 @@ async function disagreementsFor(m: Matrix, personName: string, userId: string, d
     checkPage('getUsersWhoCanViewPage', (await getUsersWhoCanViewPage(pageId, [userId])).has(userId), canonical.canView);
     checkPage('getUserAccessiblePagesInDrive', tree.has(pageId), canonical.canView);
     checkPage('getUserAccessiblePagesInDriveWithDetails', treeWithDetails.get(pageId)?.canView ?? false, canonical.canView);
+    checkPage('accessiblePageIds (SQL twin)', sqlVisible.has(pageId), canonical.canView);
     const revoke = await revokePagePermission(ctxFor(userId), { pageId, targetUserId: m.zed.id });
     checkPage('getPageIfCanShare (revokePagePermission gate)', revoke.ok, canonical.canShare);
   }

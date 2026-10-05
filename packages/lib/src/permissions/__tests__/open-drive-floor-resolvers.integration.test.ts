@@ -36,6 +36,7 @@ import {
   getUsersWhoCanViewPage,
 } from '../permissions';
 import { getAppAccessLevel, getAppAccessiblePagesInDrive } from '../app-permissions';
+import { accessiblePageIds } from '../accessible-page-ids';
 import { getDriveWithAccess, listAccessibleDrives } from '../../services/drive-service';
 import { updateOrgPolicies } from '../../organizations/policies';
 
@@ -221,6 +222,8 @@ async function disagreements(h: Harbor, floor: OpenRoleFloor): Promise<{ lines: 
   for (const [personKey, person] of Object.entries(h.people) as Array<[PersonKey, Harbor['people'][PersonKey]]>) {
     const token = h.tokens.get(person.id) as string;
     const listed = new Map((await listAccessibleDrives(person.id)).map((d) => [d.id, d.canCreatePages]));
+    // The SQL twin (pulse, activity summary, page payloads): view only, and trashed pages are out of it by design.
+    const sqlVisible = new Set(await accessiblePageIds(person.id));
     for (const driveKey of Object.keys(h.drives) as DriveKey[]) {
       const drive = h.drives[driveKey];
       const at = `${personKey}@${driveKey}`;
@@ -249,6 +252,7 @@ async function disagreements(h: Harbor, floor: OpenRoleFloor): Promise<{ lines: 
         check('getUserAccessiblePagesInDriveWithDetails', pageAt, ve(details.get(pageId)), [view, edit]);
         check('getAppAccessLevel (inheriting key)', pageAt, ve(await getAppAccessLevel(token, pageId)), [view, edit]);
         check('getAppAccessiblePagesInDrive (inheriting key)', pageAt, ve(appDetails.get(pageId)), [view, edit]);
+        check('accessiblePageIds (SQL twin)', pageAt, sqlVisible.has(pageId), view);
       }
     }
   }
@@ -365,5 +369,25 @@ describe('the Open-drive role floor is read by every implicit-membership resolve
     await db.update(organizations).set({ policies: { openDriveRoleFloor: 'admin' } }).where(eq(organizations.id, h.org.id));
     expect(await getUserAccessLevel(gil.id, h.pages.open.roadmap.id)).toEqual({ canView: true, canEdit: false, canShare: false, canDelete: false });
     expect(await getUserAccessLevel(ivy.id, h.pages.open.secret.id)).toEqual({ canView: true, canEdit: false, canShare: false, canDelete: false });
+  }, 180_000);
+
+  it('POL-6 (partial) DRV-6 (partial) dark, the SQL twin still answers exactly what getUserAccessLevel answers, cell by cell (the org rules switch on with ORGS_ENABLED, never before)', async () => {
+    const h = await harbor();
+    await setFloor(h.org.id, 'edit');
+    flags.orgsEnabled = false;
+    const lines: string[] = [];
+    for (const [personKey, person] of Object.entries(h.people)) {
+      const sqlVisible = new Set(await accessiblePageIds(person.id));
+      for (const [driveKey, drivePages] of Object.entries(h.pages)) {
+        for (const [pageKey, page] of Object.entries(drivePages)) {
+          const ts = (await getUserAccessLevel(person.id, page.id))?.canView === true;
+          if (sqlVisible.has(page.id) !== ts) lines.push(`${personKey}@${driveKey}/${pageKey}: sql ${sqlVisible.has(page.id)}, ts ${ts}`);
+        }
+      }
+    }
+    expect(lines).toEqual([]);
+    // Not vacuous: dark, Sam's stale org row on the PRIVATE Ledger still opens it in both, as before orgs.
+    expect(await getUserAccessLevel(h.people.sam.id, h.pages.priv.roadmap.id)).not.toBeNull();
+    expect(await accessiblePageIds(h.people.sam.id)).toContain(h.pages.priv.roadmap.id);
   }, 180_000);
 });

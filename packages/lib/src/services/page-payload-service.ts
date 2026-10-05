@@ -27,6 +27,7 @@ import type {
 } from '../types';
 import { PageType } from '../utils/enums';
 import { readSheetDocument } from '../sheets/store';
+import { accessiblePageIdsSource } from '../permissions/accessible-page-ids';
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type Runner = typeof db | Tx;
@@ -47,7 +48,7 @@ async function ensurePageAccessible(
   pageId: string,
 ): Promise<void> {
   const result = await runner.execute<{ allowed: boolean }>(
-    sql`SELECT EXISTS(SELECT 1 FROM accessible_page_ids_for_user(${userId}) WHERE page_id = ${pageId}) AS allowed`,
+    sql`SELECT EXISTS(SELECT 1 FROM ${accessiblePageIdsSource(userId)} WHERE page_id = ${pageId}) AS allowed`,
   );
   const allowed = result.rows[0]?.allowed ?? false;
   if (!allowed) {
@@ -130,7 +131,7 @@ async function fetchBreadcrumb(
       WHERE c.depth < 128
     ),
     allowed AS (
-      SELECT page_id FROM accessible_page_ids_for_user(${userId})
+      SELECT page_id FROM ${accessiblePageIdsSource(userId)}
     )
     SELECT
       c.id,
