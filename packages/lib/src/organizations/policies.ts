@@ -13,6 +13,7 @@ import { recordOrgAuditEvent } from '../audit/org-audit';
 import { loggers } from '../logging/logger-config';
 import {
   mergeOrgPolicies,
+  newlyBlockedKinds,
   ORG_POLICY_KEYS,
   parseOrgPolicies,
   suspensionKindsChanged,
@@ -22,6 +23,7 @@ import {
 } from './policies-core';
 import { getOrgPolicies } from './policy-reader';
 import { applySuspension, type PolicySuspensionItem } from './policy-suspension';
+import { listPolicyBlockedItems, type PolicyBlockedItems } from './policy-blocked-items';
 import { kickSuspendedGuests } from '../permissions/guest-holds';
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -42,6 +44,8 @@ export type UpdateOrgPoliciesResult =
       changes: PolicyChange[];
       suspended: PolicySuspensionItem[];
       restored: PolicySuspensionItem[];
+      /** What the change newly forbids that is blocked where it is used rather than suspended (counts, a bounded list). */
+      blocked: PolicyBlockedItems;
       /** False when the change committed but the audit chain rejected an append; the caller must surface it. */
       auditRecorded: boolean;
     }
@@ -73,13 +77,15 @@ export async function updateOrgPolicies(input: { orgId: string; actorId: string;
     const after = parseOrgPolicies(stored);
     const kinds = suspensionKindsChanged(before, after);
     const outcome = await applySuspension(tx, orgId, after, kinds);
+    // Read in the same snapshot as the change: the existing items a newly forbidden, non-suspendable kind reaches.
+    const blocked = await listPolicyBlockedItems(tx, orgId, after, newlyBlockedKinds(before, after), AUDIT_LISTED_IDS);
     await tx.update(organizations).set({ policies: stored }).where(eq(organizations.id, orgId));
     const changes: PolicyChange[] = ORG_POLICY_KEYS.filter((k) => !same(before[k], after[k])).map((key) => ({ key, from: before[key], to: after[key] }));
-    return { after, changes, outcome };
+    return { after, changes, outcome, blocked };
   });
   if (!done) return { ok: false, reason: 'not_found' };
 
-  const { after, changes, outcome } = done;
+  const { after, changes, outcome, blocked } = done;
   // Realtime: a parked guest must stop receiving events in the drive's rooms now, not at their next reconnect.
   // Best effort and never throws; the per-event permission recheck is the enforcement either way.
   await kickSuspendedGuests(
@@ -112,12 +118,28 @@ export async function updateOrgPolicies(input: { orgId: string; actorId: string;
           },
         });
       }
+      // POL-1: what the change forbids but does not suspend is listed too, so the log shows everything it reached.
+      if (blocked.total > 0) {
+        await recordOrgAuditEvent({
+          orgId,
+          eventType: 'org.policy.blocked',
+          actorId,
+          resourceType: 'organization',
+          resourceId: orgId,
+          details: {
+            counts: blocked.counts,
+            total: blocked.total,
+            listed: blocked.items.slice(0, AUDIT_LISTED_IDS).map((i) => ({ kind: i.kind, type: i.resourceType, id: i.id, driveId: i.driveId })),
+            truncated: blocked.items.length < blocked.total || blocked.items.length > AUDIT_LISTED_IDS,
+          },
+        });
+      }
     } catch (error) {
       auditRecorded = false;
       loggers.security.error('Org policy change committed but its audit event was not recorded', error as Error, { orgId });
     }
   }
-  return { ok: true, policies: after, changes, suspended: outcome.suspended, restored: outcome.restored, auditRecorded };
+  return { ok: true, policies: after, changes, suspended: outcome.suspended, restored: outcome.restored, blocked, auditRecorded };
 }
 
 export type { SuspensionKind };
