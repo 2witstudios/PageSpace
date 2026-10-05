@@ -40,7 +40,7 @@ async function write(request: Request, context: Context, clear: boolean) {
     return NextResponse.json({ walletId: result.walletId, caps: result.caps });
   } catch (error) {
     loggers.api.error('Error writing a seat cap:', error as Error);
-    return NextResponse.json({ error: 'Failed to write the seat cap' }, { status: 500 });
+    return NextResponse.json({ error: 'Failed to write the seat cap', code: 'internal_error' }, { status: 500 });
   }
 }
 

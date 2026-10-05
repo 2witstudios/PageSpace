@@ -21,10 +21,10 @@ export async function GET(request: Request, context: Context) {
   if (!gate.ok) return gate.response;
   try {
     const parsed = parseOrgAuditFilter({ ...orgAuditFilterInput(new URL(request.url)), limit: null, before: null });
-    if (!parsed.ok) return NextResponse.json({ error: parsed.error }, { status: 400 });
+    if (!parsed.ok) return NextResponse.json({ error: parsed.error, code: 'invalid_request' }, { status: 400 });
     const limit = await checkDistributedRateLimit(`org_audit_export:${orgId}:${gate.userId}`, DISTRIBUTED_RATE_LIMITS.EMAIL_RESEND);
     if (!limit.allowed) {
-      return NextResponse.json({ error: 'Too many exports. Please try again later.' }, { status: 429, headers: { 'Retry-After': String(limit.retryAfter ?? 900) } });
+      return NextResponse.json({ error: 'Too many exports. Please try again later.', code: 'rate_limited' }, { status: 429, headers: { 'Retry-After': String(limit.retryAfter ?? 900) } });
     }
     const { limit: _limit, before: _before, ...filter } = parsed.filter;
     auditRequest(request, { eventType: 'data.export', userId: gate.userId, resourceType: 'organization_audit_log', resourceId: orgId, details: { orgId, eventTypes: filter.eventTypes.length, driveId: filter.driveId } });
@@ -58,6 +58,6 @@ export async function GET(request: Request, context: Context) {
     });
   } catch (error) {
     loggers.api.error('Error exporting organization audit log:', error as Error);
-    return NextResponse.json({ error: 'Failed to export the audit log' }, { status: 500 });
+    return NextResponse.json({ error: 'Failed to export the audit log', code: 'internal_error' }, { status: 500 });
   }
 }

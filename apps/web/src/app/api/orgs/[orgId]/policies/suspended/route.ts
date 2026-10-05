@@ -22,6 +22,6 @@ export async function GET(request: Request, context: Context) {
     return NextResponse.json({ suspended });
   } catch (error) {
     loggers.api.error('Error listing policy suspensions:', error as Error);
-    return NextResponse.json({ error: 'Failed to list suspensions' }, { status: 500 });
+    return NextResponse.json({ error: 'Failed to list suspensions', code: 'internal_error' }, { status: 500 });
   }
 }

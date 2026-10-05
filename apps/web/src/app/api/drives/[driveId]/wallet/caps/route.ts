@@ -26,6 +26,6 @@ export async function GET(request: Request, context: RouteContext) {
     return NextResponse.json({ walletId: result.walletId, caps: result.caps });
   } catch (error) {
     loggers.api.error('Error listing the drive wallet caps:', error as Error);
-    return NextResponse.json({ error: 'Failed to list the caps' }, { status: 500 });
+    return NextResponse.json({ error: 'Failed to list the caps', code: 'internal_error' }, { status: 500 });
   }
 }

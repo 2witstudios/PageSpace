@@ -4,6 +4,7 @@
  * ORG-5). A denial is audited here; route files audit what they do.
  */
 import { NextResponse } from 'next/server';
+import { apiError } from '@/lib/api/api-error';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { ORGS_ENABLED } from '@pagespace/lib/organizations/orgs-enabled';
@@ -24,6 +25,14 @@ export type OrgGate =
 
 /** 404 exactly as an unknown route would answer, so dark orgs reveal nothing. */
 export const orgsDisabledResponse = (): Response => NextResponse.json({ error: 'Not found' }, { status: 404 });
+
+/**
+ * Billing is off on this deployment (onprem, tenant): the org exists but has no plan, seats or
+ * subscription. Distinguishable from orgs being dark by its code, and only answered to a caller
+ * the org gate already admitted, so it reveals nothing to an outsider.
+ */
+export const billingUnavailableResponse = (): Response =>
+  apiError(404, 'billing_unavailable', 'Organization billing is not available on this deployment');
 
 /** Dark check and authentication, for routes that have no org yet (create, list, accept). */
 export async function authenticateOrgRequest(request: Request, options: AuthOptions): Promise<OrgGate> {
@@ -47,6 +56,7 @@ export async function authorizeOrgRequest(
   const decision = await requireOrgRole(gate.userId, orgId, minRole, { findMembershipRole });
   if (!decision.ok) {
     const error = decision.status === 404 ? 'Organization not found' : 'Insufficient organization role';
+    const code = decision.status === 404 ? 'org_not_found' as const : 'insufficient_role' as const;
     auditRequest(request, {
       eventType: 'authz.access.denied',
       userId: gate.userId,
@@ -54,7 +64,7 @@ export async function authorizeOrgRequest(
       resourceId: orgId,
       details: { reason: decision.reason, minRole },
     });
-    return { ok: false, response: NextResponse.json({ error }, { status: decision.status }) };
+    return { ok: false, response: apiError(decision.status, code, error) };
   }
   return { ok: true, userId: gate.userId, role: decision.role };
 }

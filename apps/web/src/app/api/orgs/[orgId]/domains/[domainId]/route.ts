@@ -16,12 +16,12 @@ export async function DELETE(request: Request, context: Context) {
   if (!gate.ok) return gate.response;
   try {
     const removed = await removeOrgDomain({ orgId, domainId, actorId: gate.userId });
-    if (!removed) return NextResponse.json({ error: 'Domain not found' }, { status: 404 });
+    if (!removed) return NextResponse.json({ error: 'Domain not found', code: 'not_found' }, { status: 404 });
     // The org event (org.domain.removed) is written in lib; this row carries the request context.
     auditRequest(request, { eventType: 'data.delete', userId: gate.userId, resourceType: 'org_domain', resourceId: domainId, details: { orgId } });
     return NextResponse.json({ removed: true });
   } catch (error) {
     loggers.api.error('Error removing organization domain:', error as Error);
-    return NextResponse.json({ error: 'Failed to remove domain' }, { status: 500 });
+    return NextResponse.json({ error: 'Failed to remove domain', code: 'internal_error' }, { status: 500 });
   }
 }

@@ -27,11 +27,11 @@ export async function PATCH(request: Request, context: Context) {
   try {
     const parsed = memberRoleUpdateSchema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) {
-      return NextResponse.json({ error: 'Invalid request body', issues: parsed.error.issues }, { status: 400 });
+      return NextResponse.json({ error: 'Invalid request body', issues: parsed.error.issues, code: 'invalid_request' }, { status: 400 });
     }
     const result = await changeMemberRole({ orgId, actorId: gate.userId, targetId, newRole: parsed.data.role });
     if (!result.ok) {
-      return NextResponse.json({ error: REFUSAL_MESSAGES[result.reason], reason: result.reason }, { status: result.status });
+      return NextResponse.json({ error: REFUSAL_MESSAGES[result.reason], code: result.reason }, { status: result.status });
     }
     auditRequest(request, {
       eventType: 'authz.role.assigned',
@@ -43,7 +43,7 @@ export async function PATCH(request: Request, context: Context) {
     return NextResponse.json({ userId: targetId, role: parsed.data.role });
   } catch (error) {
     loggers.api.error('Error changing organization role:', error as Error);
-    return NextResponse.json({ error: 'Failed to change role' }, { status: 500 });
+    return NextResponse.json({ error: 'Failed to change role', code: 'internal_error' }, { status: 500 });
   }
 }
 
@@ -58,7 +58,7 @@ export async function DELETE(request: Request, context: Context) {
   try {
     const result = await removeMember({ orgId, actorId: gate.userId, targetId });
     if (!result.ok) {
-      return NextResponse.json({ error: REFUSAL_MESSAGES[result.reason], reason: result.reason }, { status: result.status });
+      return NextResponse.json({ error: REFUSAL_MESSAGES[result.reason], code: result.reason }, { status: result.status });
     }
     auditRequest(request, {
       eventType: 'authz.role.removed',
@@ -70,6 +70,6 @@ export async function DELETE(request: Request, context: Context) {
     return NextResponse.json({ removed: true });
   } catch (error) {
     loggers.api.error('Error removing organization member:', error as Error);
-    return NextResponse.json({ error: 'Failed to remove member' }, { status: 500 });
+    return NextResponse.json({ error: 'Failed to remove member', code: 'internal_error' }, { status: 500 });
   }
 }

@@ -14,7 +14,7 @@ const { mockGate, mockSummary, mockSet, mockBilling, mockAudit } = vi.hoisted(()
 
 vi.mock('@/lib/orgs/org-route-auth', () => ({
   authorizeOrgRequest: mockGate,
-  orgsDisabledResponse: () => new Response(JSON.stringify({ error: 'Not found' }), { status: 404 }),
+  billingUnavailableResponse: () => new Response(JSON.stringify({ error: 'Organization billing is not available on this deployment', code: 'billing_unavailable' }), { status: 404 }),
   ORG_READ_AUTH: {},
   ORG_WRITE_AUTH: {},
 }));
@@ -60,9 +60,11 @@ describe('/api/orgs/[orgId]/billing/seats', () => {
     expect((await PATCH(patch({ autoAdd: true, extra: 1 }), ctx)).status).toBe(400);
   });
 
-  it('SEAT-4 (partial) where billing is off the route does not exist', async () => {
+  it('SEAT-4 (partial) where billing is off the route answers 404 billing_unavailable — distinguishable from organizations being dark', async () => {
     mockBilling.mockReturnValue(false);
-    expect((await GET(get(), ctx)).status).toBe(404);
+    const read = await GET(get(), ctx);
+    expect(read.status).toBe(404);
+    expect(await read.json()).toMatchObject({ code: 'billing_unavailable' });
     expect((await PATCH(patch({ autoAdd: true }), ctx)).status).toBe(404);
     expect(mockSet).not.toHaveBeenCalled();
   });

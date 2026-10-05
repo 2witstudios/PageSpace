@@ -24,6 +24,6 @@ export async function GET(request: Request, context: Context) {
     return NextResponse.json(queue);
   } catch (error) {
     loggers.api.error('Error listing guest approvals:', error as Error);
-    return NextResponse.json({ error: 'Failed to list guest approvals' }, { status: 500 });
+    return NextResponse.json({ error: 'Failed to list guest approvals', code: 'internal_error' }, { status: 500 });
   }
 }
