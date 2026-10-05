@@ -36,7 +36,8 @@ describe('drive Members labels and page-link guests (real Postgres)', () => {
     const marcus = await factories.createUser({ name: 'Marcus Oyelaran' });
     const chris = await factories.createUser({ name: 'Chris Rowe' });
     const pia = await factories.createUser({ name: 'Pia Page' });
-    ids.users = [jono.id, marcus.id, chris.id, pia.id];
+    const leaver = await factories.createUser({ name: 'Lou Left' });
+    ids.users = [jono.id, marcus.id, chris.id, pia.id, leaver.id];
     const [org] = await db.insert(organizations).values({ name: 'Northwind Labs', slug: `nw-${createId()}`, ownerId: jono.id }).returning();
     ids.orgId = org.id;
     await db.insert(orgMembers).values([{ orgId: org.id, userId: jono.id, role: 'OWNER' }, { orgId: org.id, userId: marcus.id, role: 'MEMBER' }]);
@@ -44,6 +45,8 @@ describe('drive Members labels and page-link guests (real Postgres)', () => {
     ids.driveId = product.id;
     await factories.createDriveMember(product.id, marcus.id, { source: 'org' });
     await factories.createDriveMember(product.id, chris.id, { source: 'invite' });
+    // Lou's row was materialized from org membership; Lou has since left the org (no org_members row).
+    await factories.createDriveMember(product.id, leaver.id, { source: 'org' });
     await db.insert(driveMembers).values({ driveId: product.id, userId: pia.id, role: 'GUEST', source: 'invite', acceptedAt: new Date() });
     const page = await factories.createPage(product.id, { title: 'Roadmap' });
     ids.pageId = page.id;
@@ -66,7 +69,7 @@ describe('drive Members labels and page-link guests (real Postgres)', () => {
     await pool.end();
   });
 
-  it('DRV-8 (partial) UI-5 (partial) on an org drive each member carries its source, and the invited outsider is labeled a guest; the org member is not', async () => {
+  it('DRV-8 (partial) UI-5 (partial) on an org drive each member carries its source, and the invited outsider is labeled a guest; the org member is not; a departed member\'s stale row is not listed at all', async () => {
     if (!ok) return;
     const members = await listDriveMembers(ids.driveId);
     const byName = Object.fromEntries(members.map((m) => [m.user?.name, { source: m.source, isGuest: m.isGuest }]));

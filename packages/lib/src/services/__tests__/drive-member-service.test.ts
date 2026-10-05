@@ -65,6 +65,7 @@ vi.mock('../../permissions/drive-member-labels', () => ({
   driveOrgIdOf: vi.fn().mockResolvedValue(null),
   acceptedOrgMemberIds: vi.fn().mockResolvedValue(new Set()),
   isDriveGuest: (input: { driveOrgId: string | null; isOrgMember: boolean }) => input.driveOrgId !== null && !input.isOrgMember,
+  isStaleOrgRow: () => false,
 }));
 vi.mock('../../permissions/drive-audience', () => ({
   listDriveAudience: vi.fn(async () => []),

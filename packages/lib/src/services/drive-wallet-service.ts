@@ -69,13 +69,15 @@ import {
 } from '../billing/wallet-views';
 import { recordOrgAuditEventAfterCommit } from '../audit/org-audit';
 import { decryptUserRow } from '../auth/user-repository';
+import type { OrgApiErrorCode } from '../organizations/api-error-codes';
 import { announceDriveWalletChange, announceWalletChange } from '../billing/wallet-change-events';
 import { announceOrgChange } from '../organizations/org-change-events';
 
 export interface WalletServiceError {
   ok: false;
   status: 400 | 402 | 403 | 404 | 409;
-  code: string;
+  /** One of the org/wallet API codes (organizations/api-error-codes): a compile error otherwise. */
+  code: OrgApiErrorCode;
   message: string;
   blockers?: DeleteBlocker[];
 }
@@ -607,7 +609,7 @@ export async function topUpDriveWallet(
     }
     const payer = locked.get(payerId);
     const drive = locked.get(target.id);
-    if (!payer || !drive) return { ok: false as const, status: 404 as const, code: 'no_wallet', message: 'The wallet was removed' };
+    if (!payer || !drive) return { ok: false as const, status: 404 as const, code: 'no_wallet' as const, message: 'The wallet was removed' };
     // A replay is a duplicate, checked AFTER the drive wallet's lock: a request racing the same
     // key waits on that lock and then sees the other's committed leg (the insert's ON CONFLICT
     // below stays as the backstop), so a retry never fails and never moves money twice.

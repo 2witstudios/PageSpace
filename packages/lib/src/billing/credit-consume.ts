@@ -313,17 +313,25 @@ async function holdFallbackFromWalletId(tx: Tx, holdId: string): Promise<string 
 }
 
 /**
- * WAL-6b: the chosen source a drive rule moved this call off, locked in the global order —
- * the chosen wallet, then its parent — BEFORE the charged root is locked, so a settle that
- * fell back and one spending that drive wallet take their locks in the same order. Null when
- * the call did not fall back, or the chosen wallet is gone.
+ * WAL-6b: the chosen source a drive rule moved this call off, locked BEFORE the charged root in
+ * ONE order: a child wallet before any root, then the roots involved (the chosen wallet's parent,
+ * or the chosen root itself, and the charged root) in ascending id order. Every other settle and
+ * gate locks a child then its parent, or one root alone, so no two paths can wait on each other in
+ * a cycle — including seat→own and own→seat fallbacks of the same person, which lock the same two
+ * roots in the same order. Null when the call did not fall back, or the chosen wallet is gone.
  */
-async function lockFallbackFrom(tx: Tx, fallbackFromWalletId: string | null): Promise<ChosenSourceCharge | null> {
+async function lockFallbackFrom(tx: Tx, fallbackFromWalletId: string | null, chargedWalletId: string): Promise<ChosenSourceCharge | null> {
   if (fallbackFromWalletId === null) return null;
-  const chosen = await lockWallet(tx, fallbackFromWalletId);
-  if (!chosen) return null;
-  if (chosen.parentWalletId) await lockWallet(tx, chosen.parentWalletId);
-  return chosenSourceCharge(chosen);
+  const [peek] = await tx.select({ parentWalletId: wallets.parentWalletId }).from(wallets).where(eq(wallets.id, fallbackFromWalletId));
+  if (!peek) return null;
+  let chosen: LockedWallet | null = null;
+  if (peek.parentWalletId) chosen = await lockWallet(tx, fallbackFromWalletId);
+  const roots = [...new Set([peek.parentWalletId ?? fallbackFromWalletId, chargedWalletId])].sort();
+  for (const id of roots) {
+    const locked = await lockWallet(tx, id);
+    if (id === fallbackFromWalletId) chosen = locked;
+  }
+  return chosen ? chosenSourceCharge(chosen) : null;
 }
 
 async function lockWallet(tx: Tx, walletId: string): Promise<LockedWallet | null> {
@@ -348,7 +356,7 @@ export async function chargeWallet(
   // WAL-6b: the chosen wallet a drive rule moved this call off (the hold's fallbackFromWalletId).
   fallbackFromWalletId: string | null = null,
 ): Promise<WalletSettlement | null> {
-  const fallbackFrom = await lockFallbackFrom(tx, fallbackFromWalletId === walletId ? null : fallbackFromWalletId);
+  const fallbackFrom = await lockFallbackFrom(tx, fallbackFromWalletId === walletId ? null : fallbackFromWalletId, walletId);
   const bal = await lockWallet(tx, walletId);
   if (!bal) return null;
   // Fold the sub-cent charge into the charged wallet's carried remainder, then spend the

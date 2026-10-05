@@ -71,8 +71,9 @@ const spendChoiceSchema = spendOptionSchema.extend({
   label: z.string().optional(),
   driveName: z.string().nullable().optional(),
   orgName: z.string().nullable().optional(),
-  remainingCents: z.number().optional(),
-  remainingCredits: z.string().optional(),
+  /** Null when the source sets no limit of its own on this person. */
+  remainingCents: z.number().nullable().optional(),
+  remainingCredits: z.string().nullable().optional(),
 });
 
 /** The two viewers a token can ever be ([D-OW-26]); `lead`/`org_admin` is a contract violation. */

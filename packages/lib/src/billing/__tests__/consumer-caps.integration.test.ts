@@ -28,6 +28,7 @@ import { consumeCredits, settlePendingLedgerRow } from '../credit-consume';
 import { automationSpend, driveSpend, personTriggeredSpend } from '../spend-target';
 import { notifyCapAlerts } from '../wallet-cap-alerts';
 import { listDriveWalletCaps, setDriveWalletCap, setSeatCap } from '../../services/drive-wallet-service';
+import { leaveOrganization } from '../../organizations/leave';
 
 vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 
@@ -205,6 +206,19 @@ describe('per-consumer caps on drive-wallet and seat legs (orgs on, real Postgre
     w.userIds.push(outsider.id);
     expect(await setSeatCap(outsider.id, w.orgId, w.marcusId, { dailyCents: 1 })).toMatchObject({ ok: false, status: 404, code: 'org_not_found' });
     expect(await capRow(w.poolId, w.marcusId)).toMatchObject({ dailyCapCents: 50 });
+  });
+
+  it('WAL-7 (partial) a member who leaves the org takes their caps on its legs with them; caps on a personal drive stay', async () => {
+    if (!dbAvailable) return;
+    world = await build();
+    const w = world;
+    await setDriveWalletCap(w.anaId, w.productId, w.marcusId, { dailyCents: 30 }, 'session');
+    await setSeatCap(w.jonoId, w.orgId, w.marcusId, { dailyCents: 40 });
+    await setDriveWalletCap(w.jonoId, w.sideId, w.marcusId, { dailyCents: 50 }, 'session');
+    expect(await leaveOrganization(w.marcusId, w.orgId)).toMatchObject({ ok: true });
+    expect(await capRow(w.productWalletId, w.marcusId)).toBeNull();
+    expect(await capRow(w.poolId, w.marcusId)).toBeNull();
+    expect(await capRow(w.sideWalletId, w.marcusId)).toMatchObject({ dailyCapCents: 50 });
   });
 
   it('WAL-7 (partial) a cap binds the drive-wallet leg: past it the wallet is refused by name and nothing is reserved, while the wallet still holds money', async () => {

@@ -84,6 +84,8 @@ export const WALLET_ERROR_CODES = [
   'invalid_amount',
   'nothing_to_change',
   'same_wallet',
+  'not_a_drive_wallet',
+  'not_personal_wallet',
   'insufficient_funds',
   'donations_disabled',
   'billing_disabled',

@@ -418,10 +418,11 @@ export interface SpendChoice {
   /**
    * What THIS person can still spend from it now, whole cents and as a credit count (SPEND-9):
    * a drive wallet's remaining amount bounded by their own caps; a seat's remaining allowance
-   * (their own cap, never the pool); their own credits.
+   * (their own cap, never the pool); their own credits. `null` (both) when the source sets no
+   * limit of its own on this person — never a sentinel number.
    */
-  remainingCents: number;
-  remainingCredits: string;
+  remainingCents: number | null;
+  remainingCredits: string | null;
 }
 
 /**
@@ -436,13 +437,13 @@ export async function listSpendChoices(userId: string, driveId: string | null): 
   const personalId = await ensurePersonalRootWalletId(db, userId);
   const personal = await personalRootOf(userId);
   const ownRemaining = Math.max(0, spendableCentsFor(personal, await tierOf(userId)));
-  const choice = (source: SpendSourceKind, walletId: string, names: { driveName: string | null; orgName: string | null }, remainingCents: number): SpendChoice => ({
+  const choice = (source: SpendSourceKind, walletId: string, names: { driveName: string | null; orgName: string | null }, remainingCents: number | null): SpendChoice => ({
     source,
     walletId,
     label: spendChoiceLabel({ source, ...names }),
     ...names,
     remainingCents,
-    remainingCredits: formatCreditCount(remainingCents),
+    remainingCredits: remainingCents === null ? null : formatCreditCount(remainingCents),
   });
   const own = choice('own_credits', personalId, { driveName: null, orgName: null }, ownRemaining);
   if (!ORGS_ENABLED || driveId === null) return [own];
@@ -480,8 +481,8 @@ export async function listSpendChoices(userId: string, driveId: string | null): 
       const policy = await readOrgSpendPolicy(db, standing.orgId);
       const seat = await loadSeatCapFacts(db, { poolId: pool.id, poolPeriodStart: pool.monthlyPeriodStart, userId, policySeatAllowanceCents: policy.seatAllowanceCents, now });
       const cap = seatCapCheck({ capCents: seat.capCents, dailyCapCents: seat.dailyCapCents, usage: seat.usage, reservationCents: 0 });
-      const remaining = Math.min(cap.monthlyRemainingCents ?? Number.MAX_SAFE_INTEGER, cap.dailyRemainingCents ?? Number.MAX_SAFE_INTEGER);
-      out.push(choice('seat_allowance', pool.id, names, remaining));
+      const windows = [cap.monthlyRemainingCents, cap.dailyRemainingCents].filter((c): c is number => c !== null);
+      out.push(choice('seat_allowance', pool.id, names, windows.length === 0 ? null : Math.min(...windows)));
     }
   }
   return out;

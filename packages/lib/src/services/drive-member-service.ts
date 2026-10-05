@@ -10,7 +10,7 @@ import { eq, and, sql, isNotNull } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { driveMembers, userProfiles, driveRoles, pagePermissions } from '@pagespace/db/schema/members';
-import { acceptedOrgMemberIds, driveOrgIdOf, isDriveGuest, type DriveMemberSource } from '../permissions/drive-member-labels';
+import { acceptedOrgMemberIds, driveOrgIdOf, isDriveGuest, isStaleOrgRow, type DriveMemberSource } from '../permissions/drive-member-labels';
 import { decryptUserRow, decryptUsersByIdOnce } from '../auth/user-repository';
 import { loadEffectiveDriveMembership } from '../permissions/org-drive-membership';
 import { isDriveLead } from '../permissions/drive-relationship';
@@ -234,7 +234,8 @@ export async function listDriveMembers(driveId: string): Promise<MemberWithDetai
   const driveOrgId = await driveOrgIdOf(driveId);
   const orgMemberIds = driveOrgId ? await acceptedOrgMemberIds(driveOrgId, memberUserIds) : new Set<string>();
 
-  return members.map((member) => ({
+  // A departed org member's materialized row is stale: not a member, not a guest (DRV-8).
+  return members.filter((member) => !isStaleOrgRow({ driveOrgId, isOrgMember: orgMemberIds.has(member.userId), source: member.source })).map((member) => ({
     ...member,
     isGuest: isDriveGuest({ driveOrgId, isOrgMember: orgMemberIds.has(member.userId) }),
     user: member.user ? decryptedUsersById.get(member.user.id) ?? member.user : member.user,
@@ -356,6 +357,7 @@ export async function getDriveMemberDetails(
 
   const driveOrgId = await driveOrgIdOf(driveId);
   const isOrgMember = driveOrgId ? (await acceptedOrgMemberIds(driveOrgId, [targetUserId])).has(targetUserId) : false;
+  if (isStaleOrgRow({ driveOrgId, isOrgMember, source: memberData[0].source })) return null;
   return {
     ...memberData[0],
     isGuest: isDriveGuest({ driveOrgId, isOrgMember }),

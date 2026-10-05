@@ -356,7 +356,7 @@ describe('drive-wallet service (orgs on, real Postgres)', () => {
     if (!before.ok) throw new Error('expected a read');
     expect(before.options.map((o) => o.source)).toEqual(['drive_wallet', 'seat_allowance', 'own_credits']);
     // UI-8: each choice is named and says what this person can still spend from it, as a credit count.
-    expect(before.options.map((o) => [o.label, o.driveName, o.orgName, typeof o.remainingCents, o.remainingCredits === o.remainingCents.toLocaleString('en-US')])).toEqual([
+    expect(before.options.map((o) => [o.label, o.driveName, o.orgName, typeof o.remainingCents, o.remainingCredits === o.remainingCents?.toLocaleString('en-US')])).toEqual([
       ['Product wallet', 'Product', 'Northwind Labs', 'number', true],
       ['Northwind Labs seat', 'Product', 'Northwind Labs', 'number', true],
       ['Your credits', null, null, 'number', true],

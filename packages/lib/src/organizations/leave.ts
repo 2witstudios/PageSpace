@@ -25,6 +25,8 @@ import { driveShareLinks, pageShareLinks } from '@pagespace/db/schema/share-link
 import { orgMemberDepartures, orgMembers, organizations, type OrgDepartureReason, type OrgRole } from '@pagespace/db/schema/organizations';
 import { driveEnvs } from '@pagespace/db/schema/drive-envs';
 import { publishedApps } from '@pagespace/db/schema/published-apps';
+import { walletConsumerCaps, wallets } from '@pagespace/db/schema/wallets';
+import { userConsumerKey } from '../billing/wallet-core';
 import { recordOrgAuditEvent } from '../audit/org-audit';
 import { getActorInfo, logActivityWithTx } from '../monitoring/activity-logger';
 import { parseScopeList } from '../auth/oauth/scopes';
@@ -478,6 +480,12 @@ export async function leaveOrganization(
   // DRV-6: the leaver's pending join requests on the org's drives ask for nothing now (nor does one
   // by a reassigned drive's new lead); approvers stop seeing them.
   await closeStaleDriveJoinRequests(tx, driveRows.map((d) => d.id));
+  // WAL-7: the leaver's per-consumer caps on the org's legs (the pool's seat leg and its drive
+  // wallets) go with the membership, so a later re-join starts from the org's defaults.
+  await tx.delete(walletConsumerCaps).where(and(
+    eq(walletConsumerCaps.consumerKey, userConsumerKey(userId)),
+    inArray(walletConsumerCaps.walletId, tx.select({ id: wallets.id }).from(wallets).where(eq(wallets.orgId, orgId))),
+  ));
 
   return {
     ok: true,

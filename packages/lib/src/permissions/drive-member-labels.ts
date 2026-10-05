@@ -26,6 +26,15 @@ export function isDriveGuest(input: { driveOrgId: string | null; isOrgMember: bo
   return input.driveOrgId !== null && !input.isOrgMember;
 }
 
+/**
+ * A row materialized FROM org membership (`source: 'org'`) whose person has since left the org is
+ * stale: it grants nothing (the one access model reads it as none), so the Members page does not
+ * list it at all — and it is never labelled a guest. An INVITED outsider is a guest.
+ */
+export function isStaleOrgRow(input: { driveOrgId: string | null; isOrgMember: boolean; source: 'invite' | 'org' }): boolean {
+  return input.source === 'org' && input.driveOrgId !== null && !input.isOrgMember;
+}
+
 /** The drive's org (null for a personal drive). */
 export async function driveOrgIdOf(driveId: string): Promise<string | null> {
   const [row] = await db.select({ orgId: drives.orgId }).from(drives).where(eq(drives.id, driveId));
