@@ -166,6 +166,21 @@ describe('imago-image.yml (PR proof that the image builds and boots)', () => {
     expect(buildStep!.with?.['cache-to']).toBeDefined();
   });
 
+  it('given a sentinel NEXT_PUBLIC_COOKIE_DOMAIN build arg, should require it in the built client bundle (IMG-1.7a)', () => {
+    const args = String(buildStep!.with?.['build-args'] ?? '')
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean);
+    const arg = args.find((a) => a.startsWith('NEXT_PUBLIC_COOKIE_DOMAIN='));
+    expect(arg).toBeDefined();
+    const sentinel = arg!.slice('NEXT_PUBLIC_COOKIE_DOMAIN='.length);
+    // A value no source file contains, so finding it proves the build inlined it.
+    expect(sentinel).toMatch(/^\.[a-z0-9.-]+\.test$/);
+    expect(read('apps/imago/src/lib/theme/theme-provider.tsx')).not.toContain(sentinel);
+    const runs = steps.map((s) => s.run ?? '').join('\n');
+    expect(runs).toContain(`grep -rqF -- '${sentinel}' apps/imago/.next/static`);
+  });
+
   it('should never log in to a registry or deploy', () => {
     expect(steps.some((s) => s.uses?.startsWith('docker/login-action'))).toBe(false);
     expect(JSON.stringify(workflow)).not.toMatch(/flyctl|secrets\./);
