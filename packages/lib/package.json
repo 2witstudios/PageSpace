@@ -99,6 +99,11 @@
       "import": "./dist/ai/global-channel-id.js",
       "require": "./dist/ai/global-channel-id.js"
     },
+    "./agents/builtin-agents": {
+      "types": "./dist/agents/builtin-agents.d.ts",
+      "import": "./dist/agents/builtin-agents.js",
+      "require": "./dist/agents/builtin-agents.js"
+    },
     "./agent-workspaces/workspace-fractions": {
       "types": "./dist/agent-workspaces/workspace-fractions.d.ts",
       "import": "./dist/agent-workspaces/workspace-fractions.js",
