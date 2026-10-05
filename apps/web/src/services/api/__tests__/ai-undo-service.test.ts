@@ -62,6 +62,12 @@ vi.mock('@pagespace/db/schema/conversations', () => ({
   conversations: { id: 'id', type: 'type', contextId: 'contextId' },
 }));
 
+// The up-front org share lock (re-verify N6): spied, so a test can pin that it is taken first, on the undo's tx.
+vi.mock('@pagespace/lib/organizations/policy-reader', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@pagespace/lib/organizations/policy-reader')>()),
+  lockOrgsOfDrivesForShare: vi.fn(async () => {}),
+}));
+
 // Mock the rollback service
 vi.mock('../rollback-service', () => ({
   executeRollback: vi.fn(),
@@ -94,6 +100,7 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 import { db } from '@pagespace/db/db';
 import { executeRollback, previewRollback } from '../rollback-service';
 import { logConversationUndo } from '@pagespace/lib/monitoring/activity-logger';
+import { lockOrgsOfDrivesForShare } from '@pagespace/lib/organizations/policy-reader';
 
 /** Matches the mock shape defined in vi.mock('@pagespace/db/db') above */
 type MockFn = ReturnType<typeof vi.fn>;
@@ -529,6 +536,41 @@ describe('ai-undo-service', () => {
   // ============================================
 
   describe('executeAiUndo - messages_and_changes mode', () => {
+    it('POL-2 (partial) share-locks the org rows of every touched drive and page on the undo\'s tx BEFORE any activity is rolled back (review #2762 P3-3, N6)', async () => {
+      const mockActivities = [
+        createMockActivity({ id: 'act_1', driveId: 'drive_product', pageId: 'page_roadmap' }),
+        createMockActivity({ id: 'act_2', driveId: 'drive_ops', pageId: null }),
+      ];
+      mockDb.query.messages.findFirst.mockResolvedValue(createMockMessage());
+      mockDb.query.pages.findFirst.mockResolvedValue({ driveId: mockDriveId });
+      let selectCallCount = 0;
+      mockDb.select.mockImplementation(() => ({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockImplementation(() => {
+            selectCallCount++;
+            if (selectCallCount === 1 || selectCallCount === 3) return [{ id: 'msg_1' }];
+            return { orderBy: vi.fn().mockResolvedValue(mockActivities) };
+          }),
+        }),
+      }));
+      mockPreviewRollback.mockResolvedValue(createMockPreview({ canExecute: true }));
+      mockExecuteRollback.mockResolvedValue(createMockRollbackResult());
+      let undoTx: Record<string, unknown> | null = null;
+      mockDb.transaction.mockImplementation(async (callback: (tx: Record<string, unknown>) => Promise<void>) => {
+        undoTx = makeUndoTx();
+        await callback(undoTx);
+      });
+
+      const result = await executeAiUndo(mockMessageId, mockUserId, 'messages_and_changes');
+
+      expect(result.success).toBe(true);
+      const lock = vi.mocked(lockOrgsOfDrivesForShare);
+      expect(lock).toHaveBeenCalledTimes(1);
+      expect(lock).toHaveBeenCalledWith(undoTx, { driveIds: ['drive_product', 'drive_ops'], pageIds: ['page_roadmap', null] });
+      expect(mockExecuteRollback).toHaveBeenCalledTimes(2);
+      expect(lock.mock.invocationCallOrder[0]).toBeLessThan(Math.min(...mockExecuteRollback.mock.invocationCallOrder));
+    });
+
     it('rolls back all activities in addition to deleting messages', async () => {
       const mockMessage = createMockMessage();
       const mockActivities = [

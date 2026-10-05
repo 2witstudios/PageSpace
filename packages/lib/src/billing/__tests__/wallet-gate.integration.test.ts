@@ -1965,6 +1965,56 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
     expect((await walletRow(w.marcusWalletId)).debtCents).toBe(110);
   });
 
+  /**
+   * #2763 review P2-1: the settle-time re-check of the D-OW-32 ruling (credit-consume lockFallbackFrom). A turn ADMITTED
+   * while its org was paid fell back off an empty Product leg onto Marcus's own credits, so its hold carries
+   * fallbackFromWalletId = Product. Between admission and settle the leg stops absorbing: the org lapses, or an admin
+   * hits the kill switch. The overshoot must stay on Marcus, never reach the pool's debt, and the money adds up.
+   */
+  const admitFallbackThen = async (w: World, between: () => Promise<unknown>) => {
+    await setPolicies(w, { walletFallback: 'own_credits' });
+    await db.update(wallets).set({ debtCents: 53 }).where(eq(wallets.id, w.poolId));
+    await db.update(wallets).set({ monthlyRemainingCents: 40, topupRemainingCents: 0 }).where(eq(wallets.id, w.marcusWalletId));
+    const gate = await canConsumeAI(w.marcusId, 'free', { spend: driveSpend(w.productId, 'drive_wallet'), estCostCents: 5 });
+    expect(gate).toMatchObject({ allowed: true, walletId: w.marcusWalletId, spendSource: 'own_credits', fallback: { from: 'drive_wallet', to: 'own_credits' }, fallbackFromWalletId: w.productWalletId });
+    expect((await holdsOf(w.marcusId)).map((h) => h.fallbackFromWalletId)).toEqual([w.productWalletId]);
+    await between();
+    const [log] = await db.insert(aiUsageLogs).values({ userId: w.marcusId, provider: 'openrouter', model: 'm', cost: 1 }).returning({ id: aiUsageLogs.id });
+    expect(await consumeCredits({ aiUsageLogId: log.id, userId: w.marcusId, costDollars: 1, holdId: gate.holdId, walletId: gate.walletId })).toBe('settled');
+  };
+
+  const expectOvershootStaysOnMarcus = async (w: World) => {
+    const pool = await walletRow(w.poolId);
+    const product = await walletRow(w.productWalletId);
+    const marcus = await walletRow(w.marcusWalletId);
+    expect([pool.debtCents, pool.monthlyRemainingCents]).toEqual([53, 900_000]);
+    expect([product.spentCents, product.debtCents]).toEqual([0, 0]);
+    // The money invariant: the 150¢ charge = what left Marcus's wallet + the debt it carries, all on Marcus.
+    expect([marcus.monthlyRemainingCents, marcus.debtCents]).toEqual([0, 110]);
+    const rows = await ledgerOf(w.marcusId);
+    const usage = rows.find((r) => r.entryType === 'usage');
+    const debt = rows.filter((r) => r.entryType === 'adjustment');
+    expect(-(usage?.appliedCents ?? 0) + debt.reduce((sum, r) => sum - r.amountCents, 0)).toBe(150);
+    expect(debt.map((r) => r.walletId)).toEqual([w.marcusWalletId]);
+    expect(await holdsOf(w.marcusId)).toEqual([]);
+  };
+
+  it('WAL-6 (partial) SEAT-9 (partial) [D-OW-32] the org LAPSES between admission and settle: a fallback admitted while paid carries nothing back to the pool', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 0, poolCents: 900_000 });
+    const w = world;
+    await admitFallbackThen(w, () => db.update(orgSubscriptions).set({ status: 'canceled' }).where(eq(orgSubscriptions.orgId, w.orgId)));
+    await expectOvershootStaysOnMarcus(w);
+  });
+
+  it('WAL-6 (partial) WAL-7 (partial) [D-OW-32] the chosen leg is KILL-SWITCHED between admission and settle (org still paid): the paused leg absorbs nothing', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 0, poolCents: 900_000 });
+    const w = world;
+    await admitFallbackThen(w, () => db.update(wallets).set({ status: 'paused' }).where(eq(wallets.id, w.productWalletId)));
+    await expectOvershootStaysOnMarcus(w);
+  });
+
   it('POL-7 an org fallback rule of own credits moves an empty drive wallet onto the person\'s own credits, shows it, and a drive swapping it back to seat allowance refuses', async () => {
     if (!dbAvailable) return;
     world = await build({ productAllocationCents: 0, poolCents: 900_000 });
