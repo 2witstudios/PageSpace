@@ -4,20 +4,22 @@ import { afterEach, beforeEach, describe, test, vi } from 'vitest';
 import { assert } from 'riteway/vitest';
 import { createApiClient } from '@/api/client';
 import { ImagoSWRProvider } from '@/api/swr-provider';
+import { RealtimeProvider } from '@/realtime/realtime-provider';
 import { createInitialState } from '../../store/state';
 import { getUiState, setUiState } from '../../store/store';
 import { dispatch, transactions } from '../../store/transactions';
 import { mount, unmountAll } from '../../test-support/dom';
+import { fakeRealtime } from '../../test-support/fake-realtime';
 import { paneLayout, stageFor } from '../stage/stage';
 import { Rail } from './rail';
 
 /** apps/web's badges route as the browser sees it: a fake fetch behind the real imago client. */
-const badgesClient = (body: unknown, status = 200) => {
+const badgesClient = (body: unknown | (() => unknown), status = 200) => {
   const requests: string[] = [];
   const client = createApiClient({
     fetch: async (input) => {
       requests.push(input);
-      return Response.json(body, { status });
+      return Response.json(typeof body === 'function' ? body() : body, { status });
     },
     navigate: () => {},
     location: () => ({ origin: 'http://localhost:3006', pathname: '/imago/drive-1' }),
@@ -25,16 +27,22 @@ const badgesClient = (body: unknown, status = 200) => {
   return { client, requests };
 };
 
-const railAt = (pathname: string, body: unknown = { dms: 0, channels: 0, files: 0, tasks: 0, calendar: 0 }) => {
+const railAt = (
+  pathname: string,
+  body: unknown | (() => unknown) = { dms: 0, channels: 0, files: 0, tasks: 0, calendar: 0 },
+) => {
   const api = badgesClient(body);
+  const rt = fakeRealtime();
   const stage = stageFor(pathname);
   const layout = paneLayout(stage, getUiState().resources);
   const container = mount(
     <ImagoSWRProvider client={api.client}>
-      <Rail stage={stage} layout={layout} homeDriveId="home-1" brand={null} footer={null} />
+      <RealtimeProvider client={rt.client}>
+        <Rail stage={stage} layout={layout} homeDriveId="home-1" brand={null} footer={null} />
+      </RealtimeProvider>
     </ImagoSWRProvider>,
   );
-  return { container, requests: api.requests };
+  return { container, requests: api.requests, rt };
 };
 
 const settle = (check: () => void): Promise<void> =>
@@ -83,12 +91,40 @@ describe('Rail', () => {
     });
   });
 
+  test('the Messages unread count, live', async () => {
+    let channels = 0;
+    const { container, requests, rt } = railAt('/drive-1/files', () => ({ dms: 0, channels, files: 0, tasks: 0, calendar: 0 }));
+    await settle(() => {
+      control(container, 'Messages');
+    });
+    channels = 1;
+    rt.emit('inbox:channel_updated', { operation: 'channel_updated', type: 'channel', id: 'c1', driveId: 'drive-1' });
+    await settle(() => {
+      control(container, 'Messages, 1 unread');
+    });
+    const afterPost = requests.length;
+    channels = 0;
+    rt.emit('inbox:read_status_changed', { operation: 'read_status_changed', type: 'channel', id: 'c1', unreadCount: 0 });
+    await settle(() => {
+      control(container, 'Messages');
+    });
+
+    assert({
+      given: 'the rail open away from Messages, a post in a channel, then the channel read',
+      should: 'refetch the counts on each inbox event and show 1, then none, without a reload',
+      actual: [afterPost, requests.length],
+      expected: [2, 3],
+    });
+  });
+
   test('a failed badges request', async () => {
     const api = badgesClient({ error: 'Failed to fetch sidebar badges' }, 500);
     const stage = stageFor('/drive-1');
     const container = mount(
       <ImagoSWRProvider client={api.client}>
-        <Rail stage={stage} layout={paneLayout(stage, getUiState().resources)} homeDriveId={null} brand={null} footer={null} />
+        <RealtimeProvider client={fakeRealtime().client}>
+          <Rail stage={stage} layout={paneLayout(stage, getUiState().resources)} homeDriveId={null} brand={null} footer={null} />
+        </RealtimeProvider>
       </ImagoSWRProvider>,
     );
     await settle(() => {

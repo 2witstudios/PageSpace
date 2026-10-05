@@ -99,12 +99,14 @@ export const DM_ROOM: RoomEvents = { join: 'join_dm_conversation', leave: 'leave
  * connected and again after every reconnect, since realtime forgets a
  * socket's rooms when it drops, and leaves when the room closes or changes,
  * as classic's channel and DM views do. Realtime checks the viewer may join.
+ * A null id names no room yet: nothing is joined until it does.
  */
-export function useRoom({ join, leave }: RoomEvents, id: string): void {
+export function useRoom({ join, leave }: RoomEvents, id: string | null): void {
   const realtime = useContext(RealtimeContext);
   if (!realtime) throw new Error('useRoom must be used inside <RealtimeProvider>');
 
   useEffect(() => {
+    if (id === null) return;
     const socket = realtime.socket();
     const enter = () => {
       socket.emit(join, id);

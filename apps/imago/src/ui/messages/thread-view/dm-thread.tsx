@@ -31,8 +31,14 @@ const systemNow = () => new Date();
  */
 export function DmThread({ conversationId, viewerId, now = systemNow, markReadDelayMs }: DmThreadProps) {
   const { threads } = useDirectThreads();
-  const { state, loadOlder, send, retry } = useDmThread({ conversationId, viewerId, markReadDelayMs, now });
   const other = threads?.find((thread) => thread.id === conversationId);
+  const { state, loadOlder, send, retry } = useDmThread({
+    conversationId,
+    viewerId,
+    markReadDelayMs,
+    now,
+    listed: other !== undefined,
+  });
 
   const people = useMemo((): Readonly<Record<string, DmPerson>> => {
     if (!other?.otherUserId || other.name === '') return {};

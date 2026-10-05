@@ -290,6 +290,30 @@ describe('DmThread', () => {
     });
   });
 
+  test('a DM the viewer’s list does not name', async () => {
+    // Mounted outside the route's gate: the thread's own guard must hold,
+    // because apps/web's GET of a DM marks it read.
+    const { web, rt, container } = show({
+      [CONVERSATIONS]: () => Response.json({ conversations: [], pagination: { hasMore: false, nextCursor: null } }),
+    });
+    await settle(() => {
+      if (web.count(CONVERSATIONS) === 0) throw new Error('list not asked for');
+    });
+    await idle(80);
+
+    assert({
+      given: 'a conversation id the viewer’s DM list does not name, past the read debounce',
+      should: 'never GET its messages (which marks it read), join its room or write',
+      actual: [
+        web.count(MESSAGES),
+        rt.sockets.some((socket) => socket.emitted.some(([event]) => event === 'join_dm_conversation')),
+        web.writes(),
+        container.querySelectorAll('ol > li').length,
+      ],
+      expected: [0, false, [], 0],
+    });
+  });
+
   test('a DM the viewer is not in', async () => {
     // The list still names the conversation (a stale list, or a link opened
     // past the gate), but apps/web refuses it: only the thread can tell.

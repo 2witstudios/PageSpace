@@ -1,6 +1,7 @@
 import { test, expect, type APIRequestContext, type Locator, type Page } from '@playwright/test';
-import { provisionHomeDriveIfNeeded } from '../../../packages/lib/src/onboarding/home-drive';
+import { provisionHomeDriveIfNeeded } from '@pagespace/lib/onboarding/home-drive';
 import { seedUser, type SeededUser } from '../support/db';
+import { deleteUsers } from '../fixtures/imago.fixture';
 
 /**
  * # Imago dev /api proxy — same-origin cookies and CSRF against a running web (IMG-1.3)
@@ -28,11 +29,11 @@ import { seedUser, type SeededUser } from '../support/db';
  *
  * React's development build needs eval, so imago's CSP adds 'unsafe-eval' to script-src under
  * `next dev` only. The last describe block opens /imago on the dev server in a real browser and
- * proves the shell hydrates: React props land on a rail link, and clicking it navigates on the
+ * proves the shell hydrates: the shell marks itself data-hydrated, and clicking a rail link navigates on the
  * client (a JS property tagged on the rail survives, which a document load cannot keep). That
  * needs the dev server started with `IMAGO_ENABLED=true`. Drop the dev rule from
  * apps/imago/src/middleware/security-headers.ts and it fails: Chromium reports
- * `'unsafe-eval' is not an allowed source` and the link never gets React props.
+ * `'unsafe-eval' is not an allowed source` and the shell never marks itself hydrated.
  */
 
 const IMAGO_DEV_URL = process.env.IMAGO_DEV_URL ?? 'http://localhost:3006';
@@ -49,6 +50,10 @@ test.describe('imago dev /api proxy', () => {
 
   test.beforeAll(async () => {
     user = await seedUser();
+  });
+
+  test.afterAll(async () => {
+    await deleteUsers([user.userId]);
   });
 
   /** The CSRF token, minted by web through the imago proxy for this session. */
@@ -123,6 +128,10 @@ test.describe('imago under next dev in a browser', () => {
     ({ driveId: homeDriveId } = await provisionHomeDriveIfNeeded(user.userId));
   });
 
+  test.afterAll(async () => {
+    await deleteUsers([user.userId]);
+  });
+
   test('/imago hydrates and navigates on the client', async ({ browser }) => {
     // The dev server compiles the shell on its first request.
     test.setTimeout(120_000);
@@ -147,12 +156,8 @@ test.describe('imago under next dev in a browser', () => {
       const files = railLink(page, 'Files');
       await expect(files).toBeVisible();
 
-      // Server-rendered markup is visible before hydration; React props mean it hydrated.
-      await page.waitForFunction(
-        (node) => node !== null && Object.keys(node).some((key) => key.startsWith('__reactProps$')),
-        await files.elementHandle(),
-        { timeout: 60_000 },
-      );
+      // Server-rendered markup is visible before hydration; the shell says when React has it.
+      await expect(page.locator('[data-section][data-hydrated]')).toHaveCount(1, { timeout: 60_000 });
       const rail = page.getByRole('navigation', { name: 'Primary' });
       await rail.evaluate((node) => {
         (node as Probed).__probe = 'rail';

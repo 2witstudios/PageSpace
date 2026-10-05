@@ -60,8 +60,9 @@ export type UseThreadOptions = ThreadAddress & {
   readonly markReadDelayMs?: number;
   /**
    * Whether the list that names the thread names this one. Until it does
-   * (still loading, or the id is not one of them), nothing is marked read: an
-   * address that names no thread is never viewed.
+   * (still loading, or the id is not one of them), the thread is not loaded,
+   * its room not joined and nothing marked read: an address that names no
+   * thread is never opened. Each caller says; absent means not listed.
    */
   readonly listed?: boolean;
   /** The clock a sending post is stamped with until apps/web stores it. */
@@ -87,7 +88,7 @@ const viewerAuthor = (posts: readonly Post[], viewerId: string): Pick<Post, 'aut
 
 export const useThread = (
   kind: ThreadKind,
-  { threadId, viewerId, markReadDelayMs = MARK_READ_DEBOUNCE_MS, now = systemNow, listed = true }: UseThreadOptions,
+  { threadId, viewerId, markReadDelayMs = MARK_READ_DEBOUNCE_MS, now = systemNow, listed = false }: UseThreadOptions,
 ) => {
   const client = useApiClient();
   const [stored, dispatch] = useReducer(threadReducer, threadId, initialThreadState);
@@ -100,6 +101,7 @@ export const useThread = (
   const retry = useCallback(() => setAttempt((count) => count + 1), []);
 
   useEffect(() => {
+    if (!listed) return;
     let live = true;
     dispatch({ type: 'opened', threadId });
     kind.fetchPage(client, { threadId, viewerId }).then(
@@ -113,13 +115,14 @@ export const useThread = (
     return () => {
       live = false;
     };
-  }, [kind, client, threadId, viewerId, attempt]);
+  }, [kind, client, threadId, viewerId, attempt, listed]);
 
   // Each send in flight, and whether realtime has echoed it stored yet.
   const inFlight = useRef(new Map<string, boolean>());
 
-  useRoom(kind.room, threadId);
+  useRoom(kind.room, listed ? threadId : null);
   useSocketEvent(kind.event, (payload: unknown) => {
+    if (!listed) return;
     const live = kind.live(payload, { threadId, viewerId });
     if (!live) return;
     if (live.mine && live.nonce !== undefined && inFlight.current.has(live.nonce)) inFlight.current.set(live.nonce, true);

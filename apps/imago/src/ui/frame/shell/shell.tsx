@@ -27,6 +27,7 @@ import {
 } from '../stage/stage';
 import { columnClass } from './shell-class';
 import { renderShell } from './shell.render';
+import { useHydrated } from './use-hydrated';
 
 export type ShellProps = {
   /** The route's page: it renders only the object's content. */
@@ -124,9 +125,11 @@ export function Shell({ children, homeDriveId, initialDrives }: ShellProps) {
   const opener = missing ? null : openerFor(stage, layout);
   const drive = drives?.find((entry) => entry.id === stage.driveId);
   const title = missing ? 'Not found' : titles[stage.section];
+  const hydrated = useHydrated();
   return renderShell({
     stage,
     layout,
+    hydrated,
     rail: (
       <Rail
         stage={stage}

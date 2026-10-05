@@ -28,7 +28,7 @@ const systemNow = () => new Date();
  * drive's channel list the messages pane has already loaded.
  */
 export function ChannelThread({ driveId, pageId, viewerId, now = systemNow, markReadDelayMs }: ChannelThreadProps) {
-  const { channels } = useDriveChannels(driveId);
+  const { channels, error: channelsError, retry: retryChannels } = useDriveChannels(driveId);
   const listed = channels?.find((candidate) => candidate.id === pageId);
   const { state, loadOlder, send, retry } = useChannelThread({
     pageId,
@@ -48,6 +48,9 @@ export function ChannelThread({ driveId, pageId, viewerId, now = systemNow, mark
       linkLabel: 'Back to Messages',
     });
   }
+  // Without the list nothing says this id is a channel, so nothing of it loads.
+  if (channels === undefined && channelsError !== undefined)
+    return renderErrorState({ title: 'Could not load this channel', retry: retryChannels });
   if (state.status === 'error') return renderErrorState({ title: 'Could not load this channel', retry });
 
   return (

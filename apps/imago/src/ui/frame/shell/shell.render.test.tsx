@@ -5,11 +5,12 @@ import { renderToString } from 'react-dom/server';
 import { paneLayout, stageFor, type ListSection } from '../stage/stage';
 import { renderShell } from './shell.render';
 
-const markup = (pathname: string, collapsedSections: readonly ListSection[] = []): string => {
+const markup = (pathname: string, collapsedSections: readonly ListSection[] = [], hydrated = false): string => {
   const stage = stageFor(pathname);
   return renderToString(
     renderShell({
       stage,
+      hydrated,
       layout: paneLayout(stage, { collapsedSections }),
       rail: h('p', null, 'rail'),
       list: h('p', null, 'list'),
@@ -34,6 +35,15 @@ describe('renderShell()', () => {
         (html.match(/pane-motion/g) ?? []).length,
       ],
       expected: [true, true, true, true, true, 3],
+    });
+  });
+
+  test('whether the client has hydrated', () => {
+    assert({
+      given: 'the server render, then the hydrated client',
+      should: 'mark the frame data-hydrated only once hydrated',
+      actual: [markup('/drive-1').includes('data-hydrated'), markup('/drive-1', [], true).includes('data-hydrated=""')],
+      expected: [false, true],
     });
   });
 

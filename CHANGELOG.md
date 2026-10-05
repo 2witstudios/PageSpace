@@ -15,7 +15,9 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   menu); otherwise every `/imago` address answers not found. One frame stays put as you move around:
   a rail of sections, a drive switcher with your Home drive first, and an avatar menu with theme,
   "Classic PageSpace" and sign out. Messages lists a drive's channels and your direct messages with
-  unread counts, and opens a channel to read and post in, with new posts arriving live. Tasks lists
+  unread counts, and opens a channel or a direct message to read and post in, with new posts
+  arriving live; the unread count on the rail's Messages button keeps up too, wherever you are in
+  the frame. Tasks lists
   a drive's task lists with progress and opens one in Tree or Focus view, where you can tick and add
   tasks, or open a task to edit its title, status, priority, due date, assignees, description and
   subtasks. Settings shows a drive's name (owners and admins can rename it), its members, and an
@@ -27,7 +29,7 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   can no longer use hands the chat back to Imago with a note saying so. An empty drive, a section that fails to load and an address that names nothing you can
   open each get their own designed screen inside the frame: a note about what will show up, a "Try
   again" button that never shows the server's error text, or "not found" with a link back. Imago is
-  a preview: chat, page editing and direct-message threads are still on their way, and classic
+  a preview: chat and page editing are still on their way, and classic
   PageSpace is unchanged.
 
 - **Imago agents in your Home drive** — every account now gets three assistants, Imago, Imago
