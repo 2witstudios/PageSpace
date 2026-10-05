@@ -1,5 +1,23 @@
+import { EventEmitter } from 'node:events';
 import { describe, it, expect, vi } from 'vitest';
 import { withAdvisoryLock, type AdvisoryLockPool } from './advisory-lock';
+
+/** A mock client that, like pg.Client, is an EventEmitter — and records the listener count at each release. */
+function makeEmittingClient(query: ReturnType<typeof vi.fn>) {
+  const emitter = new EventEmitter();
+  const listenersAtRelease: number[] = [];
+  const client = {
+    query,
+    release: vi.fn((_destroyWithError?: Error) => {
+      listenersAtRelease.push(emitter.listenerCount('error'));
+    }),
+    on: (event: 'error', listener: (error: Error) => void) => emitter.on(event, listener),
+    removeListener: (event: 'error', listener: (error: Error) => void) => emitter.removeListener(event, listener),
+    emit: (error: Error) => emitter.emit('error', error),
+    listenerCount: () => emitter.listenerCount('error'),
+  };
+  return { client, listenersAtRelease };
+}
 
 function makeClient(overrides: Partial<{ query: ReturnType<typeof vi.fn>; release: ReturnType<typeof vi.fn> }> = {}) {
   return {
@@ -258,5 +276,71 @@ describe('withAdvisoryLock', () => {
     expect(client.query).toHaveBeenCalledTimes(2);
     expect(client.release).toHaveBeenCalledTimes(1);
     expect(client.release.mock.calls[0][0]).toBeUndefined();
+  });
+
+  describe('the checked-out connection\'s \'error\' event (pg-pool drops its idle listener on checkout)', () => {
+    it('given the backend drops while fn runs, should absorb the error, skip the unlock query, and destroy the connection with that error', async () => {
+      const { client, listenersAtRelease } = makeEmittingClient(vi.fn().mockResolvedValueOnce({ rows: [{ acquired: true }] }));
+      const pool: AdvisoryLockPool = { connect: vi.fn(async () => client) };
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const dropped = new Error('terminating connection due to administrator command');
+
+      const result = await withAdvisoryLock(pool, 'my-lock', async () => {
+        // Without a listener this emit throws synchronously — the process-crashing path.
+        expect(() => client.emit(dropped)).not.toThrow();
+        return 'ok';
+      });
+
+      expect(result).toEqual({ outcome: 'acquired', result: 'ok' });
+      expect(client.query).toHaveBeenCalledTimes(1); // try-lock only; no unlock on a dead backend
+      expect(client.release).toHaveBeenCalledTimes(1);
+      expect(client.release.mock.calls[0][0]).toBe(dropped);
+      expect(listenersAtRelease).toEqual([0]);
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Lock connection errored while held'),
+        JSON.stringify('my-lock'),
+        dropped.message,
+      );
+      errorSpy.mockRestore();
+    });
+
+    it('given the backend drops while the unlock query is in flight, should absorb the error and destroy the connection', async () => {
+      const dropped = new Error('Connection terminated unexpectedly');
+      const query = vi.fn().mockResolvedValueOnce({ rows: [{ acquired: true }] });
+      const { client, listenersAtRelease } = makeEmittingClient(query);
+      query.mockImplementationOnce(async () => {
+        // pg emits 'error' on an unexpected close even while a query is active, then fails the query.
+        client.emit(dropped);
+        throw dropped;
+      });
+      const pool: AdvisoryLockPool = { connect: vi.fn(async () => client) };
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      await expect(withAdvisoryLock(pool, 'my-lock', async () => 'ok')).resolves.toEqual({ outcome: 'acquired', result: 'ok' });
+
+      expect(client.release).toHaveBeenCalledTimes(1);
+      expect(client.release.mock.calls[0][0]).toBe(dropped);
+      expect(listenersAtRelease).toEqual([0]);
+      errorSpy.mockRestore();
+    });
+
+    it('given the connection stays healthy, should attach exactly one listener while held and remove it before every release', async () => {
+      const acquired = makeEmittingClient(vi.fn().mockResolvedValueOnce({ rows: [{ acquired: true }] }).mockResolvedValueOnce({ rows: [] }));
+      let listenersDuringFn = -1;
+      await withAdvisoryLock({ connect: async () => acquired.client }, 'my-lock', async () => {
+        listenersDuringFn = acquired.client.listenerCount();
+      });
+      expect(listenersDuringFn).toBe(1);
+      expect(acquired.listenersAtRelease).toEqual([0]);
+      expect(acquired.client.release.mock.calls[0][0]).toBeUndefined();
+
+      const busy = makeEmittingClient(vi.fn().mockResolvedValueOnce({ rows: [{ acquired: false }] }));
+      await withAdvisoryLock({ connect: async () => busy.client }, 'my-lock', async () => 'unreachable');
+      expect(busy.listenersAtRelease).toEqual([0]);
+
+      const failed = makeEmittingClient(vi.fn().mockRejectedValueOnce(new Error('reset')));
+      await withAdvisoryLock({ connect: async () => failed.client }, 'my-lock', async () => 'unreachable');
+      expect(failed.listenersAtRelease).toEqual([0]);
+    });
   });
 });
