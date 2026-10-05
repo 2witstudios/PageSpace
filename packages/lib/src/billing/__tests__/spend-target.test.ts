@@ -6,6 +6,7 @@ import {
   PERSONAL_SPEND,
   driveSpend,
   automationSpend,
+  personTriggeredSpend,
   automationSpendInput,
   automationRunUnreserved,
   resolvesDriveWallets,
@@ -496,6 +497,14 @@ describe('spend-target: what a source is called', () => {
     expect(spendChoiceLabel({ source: 'seat_allowance', driveName: 'Product', orgName: 'Northwind Labs' })).toBe('Northwind Labs seat');
     expect(spendChoiceLabel({ source: 'own_credits', driveName: 'Product', orgName: null })).toBe('Your credits');
     expect(spendChoiceLabel({ source: 'drive_wallet', driveName: null, orgName: null })).toBe('Drive wallet');
+  });
+});
+
+describe('spend-target: a run a person triggers', () => {
+  it('WAL-7 (partial) a channel @mention is an automation target that names a person present, so their caps bind; a plain automation names none', () => {
+    expect(personTriggeredSpend('d-product')).toEqual({ kind: 'automation', driveId: 'd-product', personPresent: true });
+    expect(automationSpend('d-product')).toEqual({ kind: 'automation', driveId: 'd-product' });
+    expect(resolvedSpend(personTriggeredSpend('d-product'), 'drive_wallet')).toEqual(personTriggeredSpend('d-product'));
   });
 });
 

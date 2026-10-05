@@ -25,7 +25,7 @@ import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
 import { canConsumeAI } from '../credit-gate';
 import { consumeCredits } from '../credit-consume';
-import { driveSpend } from '../spend-target';
+import { automationSpend, driveSpend, personTriggeredSpend } from '../spend-target';
 import { notifyCapAlerts } from '../wallet-cap-alerts';
 import { listDriveWalletCaps, setDriveWalletCap, setSeatCap } from '../../services/drive-wallet-service';
 
@@ -207,6 +207,23 @@ describe('per-consumer caps on drive-wallet and seat legs (orgs on, real Postgre
     // Another member with no cap still spends the same wallet.
     await factories.createDriveMember(w.productId, w.anaId, { source: 'org' });
     expect(await canConsumeAI(w.anaId, 'free', { spend: driveSpend(w.productId, 'drive_wallet'), estCostCents: 5 })).toMatchObject({ allowed: true, walletId: w.productWalletId });
+  });
+
+  it('WAL-7 (partial) a channel @mention a capped member sends is the member spending: refused source_cap_reached once their cap is spent, holding nothing', async () => {
+    if (!dbAvailable) return;
+    world = await build();
+    const w = world;
+    await setDriveWalletCap(w.anaId, w.productId, w.marcusId, { dailyCents: 30, monthlyCents: null }, 'session');
+    await settledCall(w, w.productId, 0.2); // 30¢: the day's cap is spent
+
+    const mention = await canConsumeAI(w.marcusId, 'free', { spend: personTriggeredSpend(w.productId), estCostCents: 5 });
+    expect(mention).toMatchObject({ allowed: false, reason: 'source_refused', refusal: { source: 'drive_wallet', reason: 'source_cap_reached' } });
+    expect(await db.select().from(creditHolds).where(eq(creditHolds.userId, w.marcusId))).toEqual([]);
+
+    // SPEND-6 stands for a run no person is present for (a cron, a trigger, a scheduled workflow):
+    // it is the drive spending, recorded under its creator, and no person's cap applies.
+    const unattended = await canConsumeAI(w.marcusId, 'free', { spend: automationSpend(w.productId), estCostCents: 5 });
+    expect(unattended).toMatchObject({ allowed: true, walletId: w.productWalletId });
   });
 
   it('WAL-7 (partial) the cap is decided under the wallet lock: spend landing after the unlocked resolution saw room is still refused, reserving nothing', async () => {

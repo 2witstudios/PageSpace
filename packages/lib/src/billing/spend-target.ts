@@ -73,7 +73,17 @@ export type SpendTarget =
        */
       followOn?: true;
     }
-  | { kind: 'automation'; driveId: string };
+  | {
+      kind: 'automation';
+      driveId: string;
+      /**
+       * A person caused this run — a channel @mention they sent — so it is THEIR spend on the
+       * drive wallet and their per-consumer caps bind (WAL-7; the actor pays, as for compute,
+       * [D-OW-28]). Absent for a run no person is present for (a cron, a trigger, a scheduled
+       * workflow): the drive spends and no person's cap applies (SPEND-6).
+       */
+      personPresent?: true;
+    };
 
 /** The personal root wallet: no drive (SPEND-8). */
 export const PERSONAL_SPEND: SpendTarget = Object.freeze({ kind: 'personal' });
@@ -110,6 +120,15 @@ export function conversationSpend(driveId: string | null | undefined, conversati
  */
 export function automationSpend(driveId: string): SpendTarget {
   return { kind: 'automation', driveId };
+}
+
+/**
+ * The target for a run a PERSON triggers in `driveId` with no conversation of their own — a
+ * channel @mention: it spends the drive wallet or is skipped like an automation (never the
+ * person's own credits or seat), but the person's caps on that wallet bind.
+ */
+export function personTriggeredSpend(driveId: string): SpendTarget {
+  return { kind: 'automation', driveId, personPresent: true };
 }
 
 /**

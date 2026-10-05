@@ -732,10 +732,12 @@ async function gateSharedWallet(
     }
 
     // WAL-7: a person's own caps on a drive-wallet leg, decided here under the wallet's row lock
-    // in the hold's transaction, so their simultaneous calls serialize like a seat's. An
-    // automation is the drive spending (SPEND-6), never the person it is recorded under.
+    // in the hold's transaction, so their simultaneous calls serialize like a seat's. A run no
+    // person is present for is the drive spending (SPEND-6), never the person it is recorded
+    // under; a run a person triggered (a channel @mention) is theirs, and their caps bind.
     let consumerRemainingCents: number | null = null;
-    if (chosen.source === 'drive_wallet' && opts.spend.kind !== 'automation') {
+    const personSpends = opts.spend.kind !== 'automation' || opts.spend.personPresent === true;
+    if (chosen.source === 'drive_wallet' && personSpends) {
       const capFacts = await loadConsumerCapFacts(tx, { walletId: wallet.id, userId, now });
       if (capFacts) {
         const cap = evaluateCaps({ caps: capFacts.caps, usage: capFacts.usage, reservationCents: estCost });

@@ -4,7 +4,7 @@ import { users } from '@pagespace/db/schema/auth';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import { MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
-import { automationSpend } from '@pagespace/lib/billing/spend-target';
+import { personTriggeredSpend } from '@pagespace/lib/billing/spend-target';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import type { ToolExecutionContext } from '@/lib/ai/core/types';
 import { creditDeniedError } from '@/lib/workflows/workflow-credit-gate';
@@ -19,9 +19,11 @@ export type MentionCreditHold =
  * The credit gate for one mentioned agent's reply, taken before its model call.
  *
  * A channel mention spends the channel's drive wallet only, never the sender's credits
- * or allowance (SPEND-6): the consumer is the drive, and an uncovered wallet skips the
- * reply. The sender is who the hold is recorded against, and bounds the fan-out: a
- * person sending mention after mention is capped in flight like chat.
+ * or allowance (SPEND-6): an uncovered wallet skips the reply. But the SENDER caused the
+ * spend, so their per-consumer caps on that wallet bind (WAL-7, personTriggeredSpend): a
+ * capped member cannot drain the wallet through mentions. The sender is who the hold is
+ * recorded against, and bounds the fan-out: mention after mention is capped in flight
+ * like chat.
  *
  * The reply is billed inside executeAskAgent (trackUsage, no holdId) on
  * `creditSpend.walletId`, so the hold only reserves headroom while the reply runs;
@@ -40,7 +42,7 @@ export async function acquireMentionCreditHold(input: {
     .from(users)
     .where(eq(users.id, input.userId));
 
-  const spend = automationSpend(input.driveId);
+  const spend = personTriggeredSpend(input.driveId);
   const gate = await canConsumeAI(
     input.userId,
     (sender?.subscriptionTier ?? 'free') as SubscriptionTier,
