@@ -91,6 +91,6 @@ describe('user_builtin_agents migration', () => {
     const entries = journal.entries.filter((entry) => entry.tag === tag);
     expect(entries).toHaveLength(1);
     // Generated last on the base journal: nothing was appended after it by hand.
-    expect(journal.entries.at(-1)?.tag).toBe(tag);
+    expect(journal.entries[journal.entries.length - 1]?.tag).toBe(tag);
   });
 });
