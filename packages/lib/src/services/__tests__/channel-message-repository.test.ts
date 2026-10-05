@@ -508,6 +508,41 @@ describe('channelMessageRepository.upsertChannelReadStatus', () => {
   });
 });
 
+describe('channelMessageRepository.findChannelLastReadAt', () => {
+  it('returns the viewer\'s own read watermark for the channel, never another user\'s or another channel\'s', async () => {
+    const mine = new Date('2026-05-04T11:00:00Z');
+    testDbState.seed('channelReadStatus', [
+      { userId: 'user-other', channelId: 'page-1', lastReadAt: new Date('2026-05-04T12:00:00Z') },
+      { userId: 'user-1', channelId: 'page-other', lastReadAt: new Date('2026-05-04T13:00:00Z') },
+      { userId: 'user-1', channelId: 'page-1', lastReadAt: mine },
+    ]);
+
+    const result = await channelMessageRepository.findChannelLastReadAt({ userId: 'user-1', channelId: 'page-1' });
+
+    assert({
+      given: 'read rows for the viewer in this channel, another user here, and the viewer elsewhere',
+      should: 'return only the viewer\'s watermark in this channel',
+      actual: result,
+      expected: mine,
+    });
+  });
+
+  it('returns null when the viewer has never read the channel', async () => {
+    testDbState.seed('channelReadStatus', [
+      { userId: 'user-other', channelId: 'page-1', lastReadAt: new Date('2026-05-04T12:00:00Z') },
+    ]);
+
+    const result = await channelMessageRepository.findChannelLastReadAt({ userId: 'user-1', channelId: 'page-1' });
+
+    assert({
+      given: 'no read row for the viewer in the channel',
+      should: 'return null, so every post by someone else reads as unread',
+      actual: result,
+      expected: null,
+    });
+  });
+});
+
 describe('channelMessageRepository.updateChannelMessageContent', () => {
   it('writes content + editedAt and scopes the update to the message id', async () => {
     const editedAt = new Date('2026-05-04T13:00:00Z');
@@ -1275,6 +1310,7 @@ describe('channelMessageRepository surface', () => {
       expected: [
         'addChannelReaction',
         'addChannelThreadFollower',
+        'findChannelLastReadAt',
         'findChannelMessageInPage',
         'insertChannelMessageWithAttachment',
         'insertChannelThreadReply',

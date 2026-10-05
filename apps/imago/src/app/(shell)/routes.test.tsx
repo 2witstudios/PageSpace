@@ -3,7 +3,8 @@ import { join, relative } from 'node:path';
 import { beforeEach, describe, test, vi } from 'vitest';
 import { assert } from 'riteway/vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
-import type { ReactNode } from 'react';
+import type { ReactElement, ReactNode } from 'react';
+import { ChannelThread } from '@/ui/messages/thread-view/channel-thread';
 
 // getViewer() itself is proven against Postgres in
 // lib/auth/get-viewer.integration.test.ts; here it is every route's seam.
@@ -23,7 +24,7 @@ const redirect = Object.assign(new Error('NEXT_REDIRECT'), {
   digest: 'NEXT_REDIRECT;replace;https://pagespace.ai/auth/signin?next=%2Fimago;307;',
 });
 
-type Params = Promise<Record<string, string>>;
+type Params = Promise<{ readonly driveId: string; readonly pageId: string; readonly conversationId: string }>;
 
 type Page = (props: { readonly params: Params }) => Promise<ReactNode>;
 
@@ -36,7 +37,7 @@ const routes: readonly { readonly path: string; readonly load: () => Promise<{ d
   { path: '[driveId]/files', load: () => import('./[driveId]/files/page'), object: null },
   { path: '[driveId]/files/[pageId]', load: () => import('./[driveId]/files/[pageId]/page'), object: 'Page' },
   { path: '[driveId]/messages', load: () => import('./[driveId]/messages/page'), object: null },
-  { path: '[driveId]/messages/[pageId]', load: () => import('./[driveId]/messages/[pageId]/page'), object: 'Channel' },
+  { path: '[driveId]/messages/[pageId]', load: () => import('./[driveId]/messages/[pageId]/page'), object: 'channel-thread' },
   { path: '[driveId]/tasks', load: () => import('./[driveId]/tasks/page'), object: null },
   { path: '[driveId]/settings', load: () => import('./[driveId]/settings/page'), object: 'Drive settings' },
   { path: 'dm', load: () => import('./dm/page'), object: null },
@@ -131,17 +132,24 @@ describe('the stage routes', () => {
       routes.map(async (route) => {
         const { default: Page } = await route.load();
         const element = await Page(props());
+        if (route.object === 'channel-thread') {
+          const thread = element as ReactElement;
+          return [thread.type === ChannelThread, thread.props];
+        }
         return element === null ? null : renderToStaticMarkup(element);
       }),
     );
 
     assert({
       given: 'each stage route for a signed-in viewer',
-      should: 'render nothing for the stages with no object and only the object’s placeholder otherwise',
+      should: 'render nothing for the stages with no object, the channel thread for the viewer on a channel, and only the object’s placeholder otherwise',
       actual: rendered,
-      expected: routes.map((route) =>
-        route.object === null ? null : `<div class="p-4 text-ink-muted" data-object-placeholder="">${route.object}</div>`,
-      ),
+      expected: routes.map((route) => {
+        if (route.object === 'channel-thread') {
+          return [true, { driveId: 'drive-1', pageId: 'page-1', viewerId: 'user-1' }];
+        }
+        return route.object === null ? null : `<div class="p-4 text-ink-muted" data-object-placeholder="">${route.object}</div>`;
+      }),
     });
 
     assert({
