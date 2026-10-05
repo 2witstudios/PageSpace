@@ -53,6 +53,7 @@ const EXPECTED_SERVICES: Record<string, { dockerfile: string; context: string }>
   cron: { dockerfile: 'docker/cron/Dockerfile', context: 'docker/cron' },
   admin: { dockerfile: 'apps/admin/Dockerfile', context: '.' },
   marketing: { dockerfile: 'apps/marketing/Dockerfile', context: '.' },
+  imago: { dockerfile: 'apps/imago/Dockerfile', context: '.' },
 };
 
 describe('Docker Images CI workflow', () => {

@@ -189,6 +189,38 @@ services:
       - frontend
 
 
+  # Imago (IMG-1.7): the new app shell, served under /imago on :3006. Browser
+  # /api/* calls go to web (WEB_APP_INTERNAL_URL) and sockets to realtime.
+  imago:
+    build:
+      context: .
+      dockerfile: apps/imago/Dockerfile
+      args:
+        - NEXT_PUBLIC_REALTIME_URL=${NEXT_PUBLIC_REALTIME_URL}
+    ports:
+      - "3006:3006"
+    depends_on:
+      web:
+        condition: service_started
+      realtime:
+        condition: service_started
+    env_file: .env
+    environment:
+      - DATABASE_URL=postgresql://user:password@postgres:5432/pagespace
+      - WEB_APP_INTERNAL_URL=http://web:3000
+      - NEXT_PUBLIC_REALTIME_URL=${NEXT_PUBLIC_REALTIME_URL}
+      - PORT=3006
+      - HOSTNAME=0.0.0.0
+      - NODE_OPTIONS=--max-old-space-size=512
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    networks:
+      - internal
+      - frontend
+
+
   processor:
     # @tensorflow/tfjs-node has no Linux-arm64 prebuild. CI + prod build on
     # ubuntu-latest (amd64); pin here so local builds on Apple Silicon
