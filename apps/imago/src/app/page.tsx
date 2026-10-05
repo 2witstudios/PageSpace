@@ -1,15 +1,20 @@
+import { headers } from 'next/headers';
+import { redirect } from 'next/navigation';
+import { getHomeDrive } from '@pagespace/lib/services/drive-service';
 import { getViewer } from '@/lib/auth/get-viewer';
-import { SignOutButton } from '@/components/SignOutButton';
+import { requestOrigin } from '@/lib/auth/sign-in-url';
 
-// Placeholder index until the shell lands: it renders the root layout (fonts,
-// CSP nonce) behind the auth gate and offers sign-out. No other UI belongs here.
-export default async function Home() {
-  await getViewer();
+/** Classic's landing page, outside imago's basePath. */
+const CLASSIC_HOME = '/dashboard';
 
-  return (
-    <main>
-      <p>Imago</p>
-      <SignOutButton />
-    </main>
-  );
+// Bare /imago has no stage of its own: chat replaces Home (D3), so it opens
+// the viewer's Home drive chat. A relative redirect gets the /imago basePath
+// from Next; classic is outside it, so that one is absolute.
+export default async function ImagoIndex(): Promise<never> {
+  const viewer = await getViewer();
+  const home = await getHomeDrive(viewer.userId);
+  if (home) redirect(`/${encodeURIComponent(home.id)}`);
+  // Only until the Home backfill (IMG-4.3/4.4) reaches every user: classic
+  // works without a Home drive, imago's stages all need a drive.
+  redirect(`${requestOrigin(await headers())}${CLASSIC_HOME}`);
 }
