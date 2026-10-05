@@ -51,6 +51,12 @@ vi.mock('../../organizations/leave', () => ({
 vi.mock('../../organizations/departure-suppression', () => ({
   recordDepartureSuppressions: vi.fn().mockResolvedValue(0),
 }));
+// [D-OW-36] The automation step is proven against Postgres in organizations/__tests__/
+// automation-ownership.integration.test.ts; here only its place in deleteUser.
+vi.mock('../../organizations/automation-ownership', () => ({
+  prepareAutomationsForAccountDeletion: vi.fn().mockResolvedValue([]),
+  recordOwnerLeftAutomations: vi.fn().mockResolvedValue(undefined),
+}));
 vi.mock('../conversation-cleanup', () => ({
   deleteConversationsForDrive: vi.fn().mockResolvedValue({ conversations: 0, messages: 0 }),
 }));
@@ -62,6 +68,7 @@ vi.mock('../conversation-cleanup', () => ({
 import { accountRepository } from '../account-repository';
 import { db } from '@pagespace/db/db';
 import { deleteConversationsForDrive } from '../conversation-cleanup';
+import { prepareAutomationsForAccountDeletion, recordOwnerLeftAutomations } from '../../organizations/automation-ownership';
 import { leaveAllOrganizations, reassignLedOrgDrives } from '../../organizations/leave';
 import { recordDepartureSuppressions } from '../../organizations/departure-suppression';
 
@@ -239,6 +246,21 @@ describe('accountRepository.deleteUser', () => {
     expect(recordDepartureSuppressions).toHaveBeenCalledWith(tx, 'user-1');
     expect(vi.mocked(leaveAllOrganizations).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(recordDepartureSuppressions).mock.invocationCallOrder[0]);
     expect(vi.mocked(recordDepartureSuppressions).mock.invocationCallOrder[0]).toBeLessThan(deleteOrder);
+  });
+
+  it('SPEND-6 (partial) the org automations are flagged in the same transaction, after leaving and reassigning, before the users row goes; audited once committed ([D-OW-36])', async () => {
+    const tx = setupTxDelete(vi.fn().mockResolvedValue(undefined));
+    const flagged = [{ orgId: 'org-1', kind: 'workflow' as const, id: 'wf-1', driveId: 'drive-1', formerOwnerId: 'user-1', reason: 'account_deleted' as const }];
+    vi.mocked(prepareAutomationsForAccountDeletion).mockResolvedValueOnce(flagged);
+
+    await accountRepository.deleteUser('user-1');
+
+    expect(prepareAutomationsForAccountDeletion).toHaveBeenCalledWith(tx, 'user-1');
+    const prepareOrder = vi.mocked(prepareAutomationsForAccountDeletion).mock.invocationCallOrder[0];
+    expect(vi.mocked(reassignLedOrgDrives).mock.invocationCallOrder[0]).toBeLessThan(prepareOrder);
+    expect(prepareOrder).toBeLessThan(tx.delete.mock.invocationCallOrder[0]);
+    expect(recordOwnerLeftAutomations).toHaveBeenCalledWith(flagged);
+    expect(vi.mocked(recordOwnerLeftAutomations).mock.invocationCallOrder[0]).toBeGreaterThan(tx.delete.mock.invocationCallOrder[0]);
   });
 
   it('O-7 does not delete the users row when leaving an org is refused', async () => {
