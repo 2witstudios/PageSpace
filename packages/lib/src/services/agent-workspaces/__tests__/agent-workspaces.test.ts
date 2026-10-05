@@ -40,6 +40,8 @@ function makeSpawnDeps(
     gateLocalEnvBind: async () => {
       throw new Error('gateLocalEnvBind must not be consulted for a Sprite env');
     },
+    // Only consulted for a global-assistant (driveless) spawn.
+    resolveHomeDriveId: async (ownerId) => `home-of-${ownerId}`,
     ...over,
   };
 }
@@ -76,11 +78,66 @@ describe('spawnAgentSession', () => {
     expect(store.rows.size).toBe(2);
   });
 
-  it('given a null driveId, should spawn a user-scoped global-assistant session', async () => {
+  it("given a null driveId, should create the global-assistant session in the owner's Home drive", async () => {
     const store = makeAgentSessionStore();
-    const result = await spawnAgentSession({ ownerId: OWNER_ID, driveId: null, deps: makeSpawnDeps(store) });
+    const asked: string[] = [];
+    const result = await spawnAgentSession({
+      ownerId: OWNER_ID,
+      driveId: null,
+      deps: makeSpawnDeps(store, {
+        resolveHomeDriveId: async (ownerId) => {
+          asked.push(ownerId);
+          return 'home-drive-1';
+        },
+      }),
+    });
     if (!result.ok) throw new Error('expected ok');
-    expect(result.session.driveId).toBeNull();
+    expect(asked).toEqual([OWNER_ID]);
+    expect(result.session.driveId).toBe('home-drive-1');
+    expect(store.rows.get(result.session.id)?.driveId).toBe('home-drive-1');
+  });
+
+  it('given a drive, should never consult the Home drive resolver', async () => {
+    const store = makeAgentSessionStore();
+    const result = await spawnAgentSession({
+      ownerId: OWNER_ID,
+      driveId: DRIVE_ID,
+      deps: makeSpawnDeps(store, {
+        resolveHomeDriveId: async () => {
+          throw new Error('resolveHomeDriveId must not be consulted for a drive spawn');
+        },
+      }),
+    });
+    if (!result.ok) throw new Error('expected ok');
+    expect(result.session.driveId).toBe(DRIVE_ID);
+  });
+
+  it('given the Home drive cannot be resolved, should report spawn_failed and insert nothing', async () => {
+    const store = makeAgentSessionStore();
+    const result = await spawnAgentSession({
+      ownerId: OWNER_ID,
+      driveId: null,
+      deps: makeSpawnDeps(store, {
+        resolveHomeDriveId: async () => {
+          throw new Error('home drive provisioning failed');
+        },
+      }),
+    });
+    expect(result).toMatchObject({ ok: false, reason: 'spawn_failed' });
+    expect(store.rows.size).toBe(0);
+  });
+
+  it('given any spawn shape, should never hand the store a null driveId', async () => {
+    const store = makeAgentSessionStore();
+    const seen: Array<string | null> = [];
+    const createIfUnderLimit = store.store.createIfUnderLimit;
+    store.store.createIfUnderLimit = async (input) => {
+      seen.push(input.driveId);
+      return createIfUnderLimit(input);
+    };
+    await spawnAgentSession({ ownerId: OWNER_ID, driveId: null, deps: makeSpawnDeps(store) });
+    await spawnAgentSession({ ownerId: OWNER_ID, driveId: DRIVE_ID, deps: makeSpawnDeps(store) });
+    expect(seen).toEqual([`home-of-${OWNER_ID}`, DRIVE_ID]);
   });
 
   it('should carry the display name as a LABEL, defaulting to null', async () => {
@@ -586,6 +643,27 @@ describe('spawnAgentSession — inside an environment', () => {
     });
 
     expect(result).toEqual({ ok: false, reason: 'env_not_found' });
+    expect(store.calls.create).toBe(0);
+  });
+
+  it("given a GLOBAL-assistant spawn naming an env in the owner's HOME drive, should still refuse — the Home drive must not enable env binding", async () => {
+    const store = makeAgentSessionStore();
+    let resolved = 0;
+    const result = await spawnAgentSession({
+      ownerId: OWNER_ID,
+      driveId: null,
+      envId: ENV_ID,
+      deps: makeSpawnDeps(store, {
+        findEnv: async () => ({ driveId: `home-of-${OWNER_ID}`, substrate: 'sprite' }),
+        resolveHomeDriveId: async (ownerId) => {
+          resolved += 1;
+          return `home-of-${ownerId}`;
+        },
+      }),
+    });
+
+    expect(result).toEqual({ ok: false, reason: 'env_not_found' });
+    expect(resolved).toBe(0);
     expect(store.calls.create).toBe(0);
   });
 

@@ -29,8 +29,9 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db';
 import { eq, and, isNull, count } from '@pagespace/db/operators';
-import { pages } from '@pagespace/db/schema/core';
+import { drives, pages } from '@pagespace/db/schema/core';
 import { agentWorkspaces } from '@pagespace/db/schema/agent-workspaces';
+import { driveEnvs } from '@pagespace/db/schema/drive-envs';
 import { agentWorkspaceNodes } from '@pagespace/db/schema/agent-workspace-nodes';
 import { conversations } from '@pagespace/db/schema/conversations';
 import { factories } from '@pagespace/db/test/factories';
@@ -43,6 +44,7 @@ import {
   reopenConversationInSession,
   ensureGlobalSandboxSession,
   renameSession,
+  spawnSession,
   MAX_ACTIVE_SESSIONS_PER_OWNER,
 } from '../agent-workspaces-runtime';
 import { SessionFullError } from '../create-conversation-in-workspace';
@@ -657,10 +659,74 @@ describe('renameSession — the ONE wrapper both rename surfaces call', () => {
   });
 });
 
+/** The owner's Home drive id, or null when they have none. */
+async function homeDriveIdOf(ownerId: string): Promise<string | null> {
+  const rows = await db
+    .select({ id: drives.id })
+    .from(drives)
+    .where(and(eq(drives.ownerId, ownerId), eq(drives.kind, 'HOME')));
+  expect(rows.length).toBeLessThanOrEqual(1);
+  return rows[0]?.id ?? null;
+}
+
+describe("spawnSession — a driveless spawn lands in the owner's Home drive (IMG-5.1)", () => {
+  beforeAll(connect);
+
+  it('given an owner with no Home drive, should provision it and create the workspace there', async () => {
+    if (!dbAvailable) return;
+
+    const owner = await factories.createUser();
+    expect(await homeDriveIdOf(owner.id)).toBeNull();
+
+    // The exact call the spawn route makes for its assistant-first branch.
+    const spawned = await spawnSession({ userId: owner.id, driveId: null, name: 'Global Assistant' });
+
+    expect(spawned.ok).toBe(true);
+    if (!spawned.ok) return;
+    const homeId = await homeDriveIdOf(owner.id);
+    expect(homeId).not.toBeNull();
+    const [row] = await db.select().from(agentWorkspaces).where(eq(agentWorkspaces.id, spawned.session.id));
+    expect(row.driveId).toBe(homeId);
+  });
+
+  it('given an owner with a Home drive, should reuse it', async () => {
+    if (!dbAvailable) return;
+
+    const owner = await factories.createUser();
+    const first = await spawnSession({ userId: owner.id, driveId: null });
+    const second = await spawnSession({ userId: owner.id, driveId: null });
+
+    if (!first.ok || !second.ok) throw new Error('expected both spawns to succeed');
+    expect(first.session.driveId).toBe(await homeDriveIdOf(owner.id));
+    expect(second.session.driveId).toBe(first.session.driveId);
+  });
+
+  it("given a driveless spawn naming an env in the owner's own Home drive, should refuse it — Home does not make a global session env-bindable", async () => {
+    if (!dbAvailable) return;
+
+    const owner = await factories.createUser();
+    const first = await spawnSession({ userId: owner.id, driveId: null });
+    if (!first.ok || first.session.driveId === null) throw new Error('expected a Home-drive session');
+    const [env] = await db
+      .insert(driveEnvs)
+      .values({ driveId: first.session.driveId, name: `home-env-${createId()}`, updatedAt: new Date() })
+      .returning();
+
+    const spawned = await spawnSession({ userId: owner.id, driveId: null, envId: env.id });
+
+    expect(spawned).toEqual({ ok: false, reason: 'env_not_found' });
+    const [{ n }] = await db
+      .select({ n: count() })
+      .from(agentWorkspaces)
+      .where(and(eq(agentWorkspaces.ownerId, owner.id), eq(agentWorkspaces.envId, env.id)));
+    expect(n).toBe(0);
+  });
+});
+
 describe('ensureGlobalSandboxSession — auto-provisioning the default Global Assistant conversation', () => {
   beforeAll(connect);
 
-  it('mints a real, ordinary workspace (driveId null) and admits a never-claimed global conversation', async () => {
+  it("mints a real, ordinary workspace in the owner's Home drive and admits a never-claimed global conversation", async () => {
     if (!dbAvailable) return;
 
     const owner = await factories.createUser();
@@ -678,7 +744,9 @@ describe('ensureGlobalSandboxSession — auto-provisioning the default Global As
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.session.ownerId).toBe(owner.id);
-    expect(result.session.driveId).toBeNull();
+    // IMG-5.1: no longer a null-drive row — the owner's Home drive, provisioned
+    // on the spot because a factory user starts without one.
+    expect(result.session.driveId).toBe(await homeDriveIdOf(owner.id));
     expect((await nodeFor(conversationId))?.rootId).toBe(result.session.id);
     // BORN NAMED. This is the DEFAULT minting path — a plain `spawn_session`
     // and the first sandbox tool call in a global chat both reach it — and it
