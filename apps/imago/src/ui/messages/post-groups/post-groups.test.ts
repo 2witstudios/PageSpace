@@ -89,6 +89,20 @@ describe('groupPosts()', () => {
     });
   });
 
+  test('a post exactly at the watermark', () => {
+    assert({
+      given: 'a post stamped exactly at the read watermark, then one after it',
+      should: 'count only the later one as new, as apps/web’s unread count does (createdAt > lastReadAt)',
+      actual: shape(
+        groupPosts([post('a', '2026-10-05T09:00:00.000Z'), post('b', '2026-10-05T09:00:00.001Z')], {
+          today,
+          lastReadAt: '2026-10-05T09:00:00.000Z',
+        }),
+      ),
+      expected: ['day:Today', 'lead:a', 'new', 'lead:b'],
+    });
+  });
+
   test('New on a new day', () => {
     assert({
       given: 'unread beginning with the first post of a day',

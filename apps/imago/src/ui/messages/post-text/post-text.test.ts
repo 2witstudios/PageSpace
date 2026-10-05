@@ -39,6 +39,18 @@ describe('postParts()', () => {
     });
   });
 
+  test('a role mention', () => {
+    assert({
+      given: 'a role mention as expand-group-mentions stores it',
+      should: 'be a mention in accent ink, not yet marked as the viewer’s (role membership is not resolved client-side)',
+      actual: postParts('@[Admins](ADMIN:role) please', 'u1'),
+      expected: [
+        { kind: 'mention', label: 'Admins', id: 'ADMIN', type: 'role', you: false },
+        { kind: 'text', text: ' please' },
+      ],
+    });
+  });
+
   test('a page id equal to the viewer’s', () => {
     assert({
       given: 'a page mention whose id happens to be the viewer’s user id',

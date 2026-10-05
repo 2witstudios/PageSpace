@@ -182,6 +182,30 @@ describe('useChannelThread', () => {
     });
   });
 
+  test('hiding and showing the tab after the mark', async () => {
+    const { seen, web } = show({
+      [`GET ${channelPaths.messages('c1')}`]: messagesRoute([channelMessage('m1')]),
+      [READ_C1]: readRoute,
+    });
+    await ready(seen);
+    await settle(() => {
+      if (web.count(READ_C1) === 0) throw new Error('not marked');
+    });
+    for (const state of ['hidden', 'visible', 'hidden', 'visible'] as const) {
+      setVisibility(state);
+      act(() => {
+        document.dispatchEvent(new Event('visibilitychange'));
+      });
+    }
+    await idle(DELAY * 3);
+    assert({
+      given: 'a channel already marked read, then the tab hidden and shown twice in the same open',
+      should: 'not mark it read again: once per open',
+      actual: web.count(READ_C1),
+      expected: 1,
+    });
+  });
+
   test('a channel that fails to load', async () => {
     const { seen, web } = show({
       [`GET ${channelPaths.messages('c1')}`]: () => Response.json({ error: 'Access denied' }, { status: 403 }),
