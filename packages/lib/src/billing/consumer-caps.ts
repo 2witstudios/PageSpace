@@ -7,6 +7,13 @@
  * What a cap judges: the consumer's settled spend on THIS wallet in the window (usage plus
  * reconcile corrections, each dated by its call, summed per call and never below zero) plus their
  * live holds on it. The decision itself is wallet-core's `evaluateCaps`.
+ *
+ * Contract (identical to the seat cap, WAL-2): a cap bounds ADMISSION. A call is admitted
+ * against its reservation; its actual cost settles in full on the wallet even when that passes
+ * the cap (it cannot be refused after the model ran), the overshoot lands where WAL-6 says —
+ * never on the consumer — and every later call in the window is refused source_cap_reached.
+ * Page and global chat also bound each stream by what is left (netSpendableCents); v1, /btw,
+ * consult and voice have no stream budget, so there one call may pass the cap by its own cost.
  */
 import type { db } from '@pagespace/db/db';
 import { and, eq, gt, gte, inArray, sql } from '@pagespace/db/operators';

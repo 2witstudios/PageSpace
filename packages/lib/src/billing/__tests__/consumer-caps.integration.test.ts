@@ -266,6 +266,22 @@ describe('per-consumer caps on drive-wallet and seat legs (orgs on, real Postgre
     expect(await db.select().from(creditHolds).where(eq(creditHolds.userId, w.marcusId))).toEqual([]);
   });
 
+  it('WAL-7 (partial) a cap bounds ADMISSION, as the seat cap does: one admitted call may settle past it (the wallet pays, never the consumer), and the next is refused', async () => {
+    if (!dbAvailable) return;
+    world = await build();
+    const w = world;
+    await setDriveWalletCap(w.anaId, w.productId, w.marcusId, { dailyCents: 30, monthlyCents: null }, 'session');
+    const marcusBefore = (await db.select().from(wallets).where(inArray(wallets.userId, [w.marcusId])))[0];
+    await settledCall(w, w.productId, 1); // admitted at a 5¢ hold, settles at 150¢ — past the 30¢ cap
+    const usage = (await db.select().from(creditLedger).where(and(eq(creditLedger.userId, w.marcusId), eq(creditLedger.entryType, 'usage'))))[0];
+    expect(usage).toMatchObject({ walletId: w.productWalletId, appliedCents: -150 });
+    // The consumer's own credits are untouched; the drive wallet (and its funder) carried it.
+    const marcusAfter = (await db.select().from(wallets).where(inArray(wallets.userId, [w.marcusId])))[0];
+    expect(marcusAfter?.debtCents ?? 0).toBe(marcusBefore?.debtCents ?? 0);
+    expect(await canConsumeAI(w.marcusId, 'free', { spend: driveSpend(w.productId, 'drive_wallet'), estCostCents: 5 }))
+      .toMatchObject({ allowed: false, refusal: { reason: 'source_cap_reached' } });
+  });
+
   it('WAL-7 (partial) the funder is alerted in-app at 80% and at 100%, each exactly once per window per period — never the consumer', async () => {
     if (!dbAvailable) return;
     world = await build();
