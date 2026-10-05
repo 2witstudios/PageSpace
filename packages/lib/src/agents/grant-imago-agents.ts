@@ -178,7 +178,7 @@ export async function grantImagoAgents(
 }
 
 /** `authorizeAgentDriveGrant` at MEMBER, folded to the outcome when it says no. */
-export async function authorizeImagoGrant(
+async function authorizeImagoGrant(
   userId: string,
   agentPageId: string,
   driveId: string,
