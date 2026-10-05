@@ -7,12 +7,10 @@
  * handles actual blocking, this module provides explicit logging for
  * unexpected origins.
  *
- * @REVIEW The origin validation functions (normalizeOrigin, getAllowedOrigins,
- * isOriginAllowed, validateWebSocketOrigin, validateAndLogWebSocketOrigin) are
- * defined inline in index.ts and not exported. The functions below are LOCAL
- * REIMPLEMENTATIONS — they characterize expected behavior but do not prove the
- * production code works. To fix: extract origin validation into a separate
- * origin-validation.ts module with exports, then test the real functions.
+ * @REVIEW The functions below are LOCAL REIMPLEMENTATIONS — they characterize
+ * expected behavior but do not prove the production code works. The real ones
+ * now live in src/origin-allowlist.ts and are tested, including a real
+ * Socket.IO handshake, in origin-allowlist.test.ts.
  *
  * Suggested integration tests:
  * - Socket.IO client test: connect from allowed origin, verify connection succeeds
