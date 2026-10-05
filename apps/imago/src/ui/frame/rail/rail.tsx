@@ -1,12 +1,11 @@
 'use client';
 
 import type { ReactNode } from 'react';
-import useSWR from 'swr';
 import { dispatch, transactions } from '../../store/transactions';
 import { useDisclosure } from '../disclosure/use-disclosure';
 import { isListSection, type PaneLayout, type Stage } from '../stage/stage';
+import { useUnreadBadges } from '../../messages/use-messages/use-messages';
 import {
-  SIDEBAR_BADGES,
   activeRailItem,
   activeRailPlace,
   messagesUnread,
@@ -29,12 +28,13 @@ export type RailProps = {
 };
 
 /**
- * Binds the rail to the URL's stage, the store and apps/web's badge counts.
- * The shell mounts it once, so the overflow's open state and the badge
- * request survive every navigation.
+ * Binds the rail to the URL's stage, the store and apps/web's badge counts,
+ * which inbox events keep live on every stage, not only in Messages. The
+ * shell mounts it once, so the overflow's open state and the badge request
+ * survive every navigation.
  */
 export function Rail({ stage, layout, homeDriveId, brand, footer }: RailProps) {
-  const { data: badges } = useSWR<unknown>(SIDEBAR_BADGES);
+  const { badges } = useUnreadBadges();
   const more = useDisclosure();
   const driveId = railDrive(stage, homeDriveId);
   const { section } = stage;

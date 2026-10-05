@@ -107,6 +107,3 @@ export const messagesUnread = (badges: unknown): number => {
   const { dms, channels } = badges as { readonly dms?: unknown; readonly channels?: unknown };
   return count(dms) + count(channels);
 };
-
-/** apps/web's badge counts route (apps/web/src/app/api/sidebar/badges/route.ts). */
-export const SIDEBAR_BADGES = '/api/sidebar/badges';

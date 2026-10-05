@@ -6,6 +6,8 @@ import { assert } from 'riteway/vitest';
 import { createInitialState } from '../../store/state';
 import { getUiState, setUiState } from '../../store/store';
 import type { Stage } from '../stage/stage';
+import { RealtimeProvider } from '@/realtime/realtime-provider';
+import { fakeRealtime } from '../../test-support/fake-realtime';
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean | undefined;
@@ -102,9 +104,17 @@ const initialDrives = [
   { id: 'drive-1', name: 'Alpha', kind: 'STANDARD' as const },
 ];
 
+/** The rail's live badge count listens on the tab's realtime connection. */
+const realtime = fakeRealtime();
+
 const render = () =>
   act(() => {
-    root?.render(h(Shell, { homeDriveId: 'home-1', initialDrives, children: h(Route) }));
+    root?.render(
+      h(RealtimeProvider, {
+        client: realtime.client,
+        children: h(Shell, { homeDriveId: 'home-1', initialDrives, children: h(Route) }),
+      }),
+    );
   });
 
 const navigate = (pathname: string) => {
