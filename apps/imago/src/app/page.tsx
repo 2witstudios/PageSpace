@@ -1,5 +1,15 @@
-// Placeholder index until the shell lands; it exists so the root layout (fonts,
-// CSP nonce) renders on a real request. No UI belongs here.
-export default function Home() {
-  return <p>Imago</p>;
+import { getViewer } from '@/lib/auth/get-viewer';
+import { SignOutButton } from '@/components/SignOutButton';
+
+// Placeholder index until the shell lands: it renders the root layout (fonts,
+// CSP nonce) behind the auth gate and offers sign-out. No other UI belongs here.
+export default async function Home() {
+  await getViewer();
+
+  return (
+    <main>
+      <p>Imago</p>
+      <SignOutButton />
+    </main>
+  );
 }

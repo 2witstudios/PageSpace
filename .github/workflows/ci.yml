@@ -231,6 +231,14 @@ jobs:
           ADMIN_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_admin_test
         run: bun run --filter '@pagespace/lib' test:integration
 
+      # apps/imago's getViewer() is proven against the real session-service and
+      # Postgres (revoked, expired and replayed tokens), so it lives outside the
+      # hermetic unit run like the packages above.
+      - name: Run apps/imago integration suites
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
+        run: bun run --filter '@pagespace/imago' test:integration
+
       # store-adapter-infisical.integration.test.ts is included in the general
       # test:integration glob above too, but that step has no Infisical service, so its own
       # describe.skipIf(!reachable) lets it skip quietly there — correct for a plain local run
