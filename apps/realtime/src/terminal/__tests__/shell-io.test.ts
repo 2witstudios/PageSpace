@@ -320,6 +320,26 @@ describe('handleShellSendRequest — whose compute a send is (review #2760 P1)',
   });
 });
 
+describe('handleShellSendRequest — a send that resumes a quiesced, metered shell (review #2761 P3-1)', () => {
+  it('re-gates the restarted window at once through the regateResumedWindow dep, and only when the clock was stopped', async () => {
+    const { session, written } = writableSession();
+    session.charge = { kind: 'org', orgId: 'org-1', userId: 'user1' };
+    session.connectedAt = undefined; // quiesced: the clock stopped
+    const regated: TerminalSession[] = [];
+    const io: ShellIoDeps = { ...deps({ 'k:sh': session }), regateResumedWindow: (s) => { regated.push(s); } };
+
+    await handleShellSendRequest(io, sendBody());
+    await handleShellSendRequest(io, sendBody()); // clock already running: nothing to re-gate
+
+    assert({
+      given: 'two sends to a quiesced, metered shell',
+      should: 're-gate on the first (it restarted the clock) and not on the second, and deliver both',
+      actual: { regated: regated.length, running: session.connectedAt !== undefined, written },
+      expected: { regated: 1, running: true, written: ['ls\n', 'ls\n'] },
+    });
+  });
+});
+
 describe('handleShellSendRequest', () => {
   it('given a live PTY, should write the input to it and bump lastInputAt', async () => {
     const { session, written } = writableSession();

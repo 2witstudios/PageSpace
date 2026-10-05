@@ -18,7 +18,8 @@
 
 import type { BillingPayer } from './sandbox-payer';
 import type { CreditGateResult } from './credit-gate';
-import { ORG_ENTITLEMENT_TIER } from './spend-target';
+import { orgEntitlementTier } from './spend-target';
+import { ORG_LAPSED_MESSAGE } from '../organizations/status-core';
 import type { SubscriptionTier } from './subscription-tiers';
 import type { SpendKind } from '@pagespace/db/schema/credits';
 
@@ -83,17 +84,21 @@ export function sameCharge(a: ComputeCharge, b: ComputeCharge): boolean {
  * The tier a compute charge's entitlements and ceilings follow: the org's (SEAT-8: there is no
  * free org tier) for an org charge, the paying person's own otherwise. `personalTier` is the
  * tier read for `charge.userId`; it is ignored for an org charge, so a free-tier member running
- * compute in an org drive gets the org's machines and ceilings, not their own.
+ * compute in an org drive gets the org's machines and ceilings, not their own. A LAPSED org
+ * confers no paid tier (SEAT-9, WAL-8: {@link orgEntitlementTier}). `orgLapsed` is REQUIRED (review
+ * #2761): every caller states the org's status, so no site defaults a lapsed org to Business. It is
+ * ignored for a personal charge.
  */
-export function computeChargeTier(charge: ComputeCharge, personalTier: SubscriptionTier): SubscriptionTier {
-  return charge.kind === 'org' ? ORG_ENTITLEMENT_TIER : personalTier;
+export function computeChargeTier(charge: ComputeCharge, personalTier: SubscriptionTier, orgLapsed: boolean): SubscriptionTier {
+  return charge.kind === 'org' ? orgEntitlementTier(orgLapsed) : personalTier;
 }
 
 /**
- * Why an org pool refused a compute hold: missing, paused, unable to cover it, or the member who
- * asked has used their allowance of it (WAL-2: one per-consumer cap on AI and compute, fe9db1nm).
+ * Why an org pool refused a compute hold: missing, paused, unable to cover it, the org is LAPSED
+ * (SEAT-9: its pool spends nothing until it reactivates), or the member who asked has used their
+ * allowance of it (WAL-2: one per-consumer cap on AI and compute, fe9db1nm).
  */
-export type OrgComputeRefusal = 'org_wallet_unavailable' | 'org_wallet_paused' | 'org_wallet_empty' | 'org_member_cap_reached';
+export type OrgComputeRefusal = 'org_wallet_unavailable' | 'org_wallet_paused' | 'org_wallet_empty' | 'org_lapsed' | 'org_member_cap_reached';
 
 /** What the person who asked sees for each org pool refusal. Nothing was started or charged. */
 export const ORG_COMPUTE_REFUSAL_MESSAGES: Readonly<Record<OrgComputeRefusal, string>> = Object.freeze({
@@ -103,6 +108,7 @@ export const ORG_COMPUTE_REFUSAL_MESSAGES: Readonly<Record<OrgComputeRefusal, st
     "This drive belongs to an organization whose wallet is paused, so compute here is stopped and nothing was started. An org Owner or Admin can resume it.",
   org_wallet_empty:
     "This drive belongs to an organization whose wallet can't cover this run, so nothing was started. An org Owner or Admin can add credits.",
+  org_lapsed: ORG_LAPSED_MESSAGE,
   org_member_cap_reached:
     "You've used your allowance of this organization's credits for now, so nothing was started. A daily allowance renews at midnight UTC and a monthly one with the organization's next billing period; an org Owner or Admin can raise your allowance.",
 });
@@ -122,6 +128,7 @@ export type OrgComputeGateRefusal = OrgComputeRefusal | 'concurrency_limit' | 'd
  */
 export function orgComputeRefusalOf(answer: CreditGateResult): OrgComputeGateRefusal | null {
   if (answer.allowed) return null;
+  if (answer.orgLapsed === true) return 'org_lapsed';
   if (answer.reason === 'too_many_in_flight') return 'concurrency_limit';
   if (answer.reason === 'daily_cap_exceeded') return 'daily_cap_exceeded';
   if (answer.refusal?.reason === 'source_unavailable') return 'org_wallet_unavailable';

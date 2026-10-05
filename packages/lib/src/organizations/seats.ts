@@ -22,7 +22,11 @@
  * WHEN A FREED SEAT IS HANDED BACK (SEAT-5): only at the period boundary. Inside the lead
  * window before the period's end, the quantity is lowered to what is held, with no proration
  * credit (the period it belongs to was paid for in full). Never mid-period, never below the
- * seats held.
+ * seats held. Each boundary reconciled is RECORDED (org_subscriptions.seatsReconciledThrough),
+ * so a boundary that passed with no run — the cron missed its window, or the row was stale —
+ * is caught up on the next run WITH prorations: Stripe already billed the renewal at the old
+ * quantity, and the proration credits the unused seats back instead of billing a full extra
+ * period (review 3+4 P2-8). Recorded once, so the catch-up never repeats.
  *
  * INVARIANT: zero I/O. The service (seat-service.ts) reads, locks and calls Stripe.
  */
@@ -80,37 +84,75 @@ export function decideSeatAdmission(input: {
   return { action: 'raise', toExtra: Math.max(0, after - input.included) };
 }
 
+export type SeatReleaseProration = 'none' | 'create_prorations';
+
 export type SeatReleaseDecision =
-  | { action: 'release'; toExtra: number }
-  /** Stripe bills fewer extra seats than are held (a lost write, or seats granted before the subscription existed): bring it up before the renewal. */
-  | { action: 'restore'; toExtra: number }
-  | { action: 'keep'; reason: 'mid_period' | 'nothing_unused' | 'ending' | 'no_period' };
+  /** `boundary` is the period boundary this reconciles; the service records it once applied. */
+  | { action: 'release'; toExtra: number; proration: SeatReleaseProration; boundary: Date }
+  /** Stripe bills fewer extra seats than are held (a lost write, or seats granted before the subscription existed): bring it up, prorated. */
+  | { action: 'restore'; toExtra: number; proration: 'create_prorations'; boundary: Date }
+  /** Nothing to change in Stripe, but the boundary is reconciled (or, for `baseline`, first recorded). */
+  | { action: 'keep'; reason: 'nothing_unused' | 'baseline'; boundary: Date }
+  | { action: 'keep'; reason: 'mid_period' | 'ending' | 'no_period' };
 
 /**
  * SEAT-5: hand back paid-for seats nobody holds, but only at the period boundary. Also the
  * boundary's reconciliation: `purchasedExtra` here is what STRIPE bills (the service reads
  * it), so a quantity below the seats actually held is restored rather than left as a free seat.
+ *
+ * WHICH boundary (review 3+4 P2-8): the period END inside the lead window (no proration: the
+ * period was paid in full); otherwise a boundary that already PASSED unreconciled — the
+ * current period's start after a missed window, or a stale row's end — caught up with
+ * prorations. `reconciledThrough` is the last boundary recorded; null means never, and the
+ * first sight records the current period's start as a baseline without touching Stripe.
  */
 export function decideSeatRelease(input: {
   held: number;
   included: number;
   purchasedExtra: number;
+  currentPeriodStart?: Date | null;
   currentPeriodEnd: Date | null;
   cancelAtPeriodEnd: boolean;
+  reconciledThrough?: Date | null;
   now: Date;
   leadMs?: number;
 }): SeatReleaseDecision {
   assertCount('held', input.held);
   assertCount('purchasedExtra', input.purchasedExtra);
   if (input.cancelAtPeriodEnd) return { action: 'keep', reason: 'ending' };
-  if (input.currentPeriodEnd === null) return { action: 'keep', reason: 'no_period' };
+  const end = input.currentPeriodEnd;
+  if (end === null) return { action: 'keep', reason: 'no_period' };
+  const start = input.currentPeriodStart ?? null;
+  const reconciled = input.reconciledThrough ?? null;
+  const done = (boundary: Date): boolean => reconciled !== null && reconciled.getTime() >= boundary.getTime();
   const lead = input.leadMs ?? SEAT_RELEASE_LEAD_MS;
-  // A period end already behind us is a row the webhook has not caught up on: the boundary
-  // has passed, so the release is for the period that follows.
-  if (input.currentPeriodEnd.getTime() - input.now.getTime() > lead) return { action: 'keep', reason: 'mid_period' };
+  const nowMs = input.now.getTime();
+
+  let boundary: Date;
+  let proration: SeatReleaseProration;
+  if (end.getTime() <= nowMs) {
+    // The end already passed (the webhook has not rolled the row on): Stripe billed the renewal.
+    if (done(end)) return { action: 'keep', reason: 'mid_period' };
+    boundary = end;
+    proration = 'create_prorations';
+  } else if (end.getTime() - nowMs <= lead) {
+    boundary = end;
+    proration = 'none';
+  } else if (start !== null && reconciled === null) {
+    return { action: 'keep', reason: 'baseline', boundary: start };
+  } else if (start !== null && !done(start)) {
+    // The window before this period's start was missed: catch up now, prorated.
+    boundary = start;
+    proration = 'create_prorations';
+  } else {
+    return { action: 'keep', reason: 'mid_period' };
+  }
+
   const needed = Math.max(0, input.held - input.included);
-  if (needed === input.purchasedExtra) return { action: 'keep', reason: 'nothing_unused' };
-  return needed < input.purchasedExtra ? { action: 'release', toExtra: needed } : { action: 'restore', toExtra: needed };
+  if (needed === input.purchasedExtra) return { action: 'keep', reason: 'nothing_unused', boundary };
+  return needed < input.purchasedExtra
+    ? { action: 'release', toExtra: needed, proration, boundary }
+    : { action: 'restore', toExtra: needed, proration: 'create_prorations', boundary };
 }
 
 /**

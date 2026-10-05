@@ -65,6 +65,7 @@ import {
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
 import type { ToolExecutionContext } from '../core/types';
 import { notifyShellAgentActivity } from '@/lib/websocket/socket-utils';
+import { isOrgLapsedForDrive } from '@pagespace/lib/organizations/status';
 
 // The Sprites client is a process-wide stateless singleton, built lazily so
 // importing this module does no SDK work at load.
@@ -542,7 +543,7 @@ export function createResolveSandboxActorContext(
       aiProvider: context?.aiProvider,
       aiModel: context?.aiModel,
       // WAL-9: an org drive's compute runs on the org's tier, not the lead's own plan.
-      tier: computeTierForDrive(drive, toSubscriptionTier(payerRow?.subscriptionTier)),
+      tier: computeTierForDrive(drive, toSubscriptionTier(payerRow?.subscriptionTier), await isOrgLapsedForDrive(drive)),
       turnId,
     };
 

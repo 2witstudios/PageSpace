@@ -2,6 +2,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const mockDb = vi.hoisted(() => ({ select: vi.fn() }));
 vi.mock('@pagespace/db/db', () => ({ db: mockDb }));
+// SEAT-9: the org's billing status is read before any org pool charge; paid unless a test lapses it.
+const orgStatus = vi.hoisted(() => ({ active: true }));
+vi.mock('../../organizations/status', () => ({ isOrgActive: vi.fn(async () => orgStatus.active) }));
 vi.mock('@pagespace/db/operators', () => ({ eq: vi.fn((a, b) => ({ op: 'eq', a, b })) }));
 vi.mock('@pagespace/db/schema/auth', () => ({ users: { id: 'users.id', subscriptionTier: 'users.subscriptionTier' } }));
 
@@ -128,10 +131,19 @@ describe('hasSpendableComputeBalance', () => {
 });
 
 describe('resolveComputeChargeTier', () => {
-  it("an org charge is the org's tier with no read; a personal charge reads the person's", async () => {
+  it("an org charge is the org's tier with no person read; a personal charge reads the person's", async () => {
     expect(await resolveComputeChargeTier(ORG)).toBe('business');
     expect(mockDb.select).not.toHaveBeenCalled();
     tierRow(null);
     expect(await resolveComputeChargeTier(PERSON)).toBe('free');
+  });
+
+  it('WAL-8 (partial) SEAT-9 (partial) a LAPSED org charge carries no paid tier', async () => {
+    orgStatus.active = false;
+    try {
+      expect(await resolveComputeChargeTier(ORG)).toBe('free');
+    } finally {
+      orgStatus.active = true;
+    }
   });
 });

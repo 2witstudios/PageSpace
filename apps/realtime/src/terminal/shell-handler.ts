@@ -860,10 +860,45 @@ async function claimBillingWindowLocked(
  * clock is already running — `connectedAt` is only ever `undefined` here because
  * a quiesce stopped it.
  */
-export function resumeBillingClock(session: TerminalSession): void {
-  if (!session.charge) return;
-  if (session.connectedAt !== undefined) return;
+export function resumeBillingClock(session: TerminalSession): boolean {
+  if (!session.charge) return false;
+  if (session.connectedAt !== undefined) return false;
   session.connectedAt = Date.now();
+  return true;
+}
+
+/**
+ * Review #2761 (P3-1): a window restarted at resume is RE-GATED at once — a fresh hold on the
+ * payer's charge — rather than running unheld until the next heartbeat (up to SETTLE_HEARTBEAT_MS).
+ * A payer that can no longer pay (an org that lapsed while the shell sat quiesced, an empty pool, a
+ * member at their cap) is torn down here, exactly as the heartbeat would, so nothing runs on a
+ * refused payer. Inert without billing, for an unmetered session, or while a hold is already held.
+ * A billing READ failure keeps the session (the heartbeat re-gates it), as the heartbeat does.
+ */
+export async function regateResumedWindow(
+  deps: SessionEndDeps,
+  sessionMap: TerminalSessionMap,
+  session: TerminalSession,
+  sessionKey: string,
+  endSession: () => void = () => teardownShellSession(deps, sessionMap, session, sessionKey, -2),
+): Promise<void> {
+  const billing = deps.billing;
+  if (!billing || !session.charge || session.holdId !== undefined) return;
+  try {
+    const gate = await billing.gate({ charge: session.charge });
+    if (sessionMap.getByKey(sessionKey) !== session) {
+      if (gate.allowed && gate.holdId) void billing.releaseHold(gate.holdId).catch(() => {});
+      return;
+    }
+    if (!gate.allowed) {
+      loggers.realtime.info('Shell session ended (payer refused at resume)', { sessionKey, sandboxId: session.sandboxId });
+      endSession();
+      return;
+    }
+    session.holdId = gate.holdId;
+  } catch (error) {
+    loggers.realtime.error('Shell resume re-hold failed', error instanceof Error ? error : new Error(String(error)), { sessionKey });
+  }
 }
 
 /**
@@ -894,7 +929,8 @@ function startSettleHeartbeat(
       // sites: if a socket came back through some path that did not restart the
       // clock, this beat notices and restarts it rather than letting the session
       // run on free forever.
-      if (!quiesced) resumeBillingClock(session);
+      if (!quiesced && resumeBillingClock(session)) await regateResumedWindow({ billing, persistColdTail }, sessionMap, session, sessionKey);
+      if (sessionMap.getByKey(sessionKey) !== session) return;
       const solvent = await settleAccruedWindow(billing, sessionMap, session, sessionKey, { stopClock: quiesced });
       if (!solvent && sessionMap.getByKey(sessionKey) === session) {
         loggers.realtime.info('Shell session ended (payer out of credits at heartbeat)', {
@@ -1796,8 +1832,9 @@ export function buildShellHandlers({
     // wakes the Sprite — so the payer is consuming a sandbox again and the
     // billing clock (stopped at the quiesce — see `settleAccruedWindow`'s
     // `stopClock`) restarts HERE, not at the next ten-minute heartbeat. A no-op
-    // for a session that never quiesced: its clock never stopped.
-    resumeBillingClock(session);
+    // for a session that never quiesced: its clock never stopped. A restarted window is re-gated at
+    // once (review #2761): a payer that cannot pay now — a lapsed org — gets no unheld tail.
+    if (resumeBillingClock(session)) void regateResumedWindow(sessionEndDeps, sessionMap, session, session.sessionKey);
     // A viewer is back AND the `setViewerAttached(true)` above has just resumed
     // the shell's socket, so the hold (deleted while idle) is re-created
     // immediately rather than waiting out a heartbeat interval. Derived, not
@@ -1841,8 +1878,9 @@ export function buildShellHandlers({
     // again, and the billing clock has to start with it. Done here, at the
     // instant of the keystroke, rather than at the next heartbeat: that is
     // ten minutes away (`SETTLE_HEARTBEAT_MS`), and every one of those
-    // minutes would otherwise be billed as free.
-    resumeBillingClock(session);
+    // minutes would otherwise be billed as free. A restarted window is re-gated at once
+    // (review #2761), so a payer that cannot pay now gets no unheld tail.
+    if (resumeBillingClock(session)) void regateResumedWindow(sessionEndDeps, sessionMap, session, session.sessionKey);
     session.command.write(data);
   }
 

@@ -18,7 +18,7 @@ import { users } from '@pagespace/db/schema/auth';
 import { drives } from '@pagespace/db/schema/core';
 import { creditHolds, creditLedger } from '@pagespace/db/schema/credits';
 import { driveEnvs } from '@pagespace/db/schema/drive-envs';
-import { organizations, orgMembers } from '@pagespace/db/schema/organizations';
+import { organizations, orgMembers, orgSubscriptions } from '@pagespace/db/schema/organizations';
 import { appHostingReclaims, publishedApps } from '@pagespace/db/schema/published-apps';
 import { walletConsumerCaps, wallets } from '@pagespace/db/schema/wallets';
 import { factories } from '@pagespace/db/test/factories';
@@ -70,6 +70,8 @@ async function build(): Promise<World> {
   const orgAdmin = await factories.createUser({ name: 'Ada (org admin)', subscriptionTier: 'free' });
   const member = await factories.createUser({ name: 'Pat (member)', subscriptionTier: 'free' });
   const [org] = await db.insert(organizations).values({ name: 'Northwind Labs', slug: `northwind-${createId()}`, ownerId: lead.id }).returning();
+  // Paid: there is no org trial, and an unpaid org is lapsed from creation (D-OW-30).
+  await factories.createOrgSubscription(org.id);
   await db.insert(orgMembers).values([
     { orgId: org.id, userId: lead.id, role: 'OWNER' },
     { orgId: org.id, userId: creator.id, role: 'MEMBER' },
@@ -118,6 +120,7 @@ async function teardown(w: World): Promise<void> {
   await db.delete(wallets).where(eq(wallets.id, w.poolId));
   await db.delete(drives).where(eq(drives.orgId, w.orgId));
   await db.delete(orgMembers).where(eq(orgMembers.orgId, w.orgId));
+  await db.delete(orgSubscriptions).where(eq(orgSubscriptions.orgId, w.orgId));
   await db.delete(organizations).where(eq(organizations.id, w.orgId));
   await db.delete(users).where(inArray(users.id, w.userIds));
 }

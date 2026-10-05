@@ -439,6 +439,13 @@ export interface ReconcileSandboxStorageDeps {
    * bill an org. Asked only when an org row is met, at most once per tick.
    */
   orgComputeBillingEpoch: (tickStart: Date) => Promise<Date>;
+  /**
+   * D-OW-32 (SEAT-9): whether an org is LAPSED now. A lapsed org is charged nothing for storage —
+   * its data is kept, never deleted — and the watermark still advances, so the lapsed span is never
+   * billed after a re-subscribe. Asked at most once per org per tick. The production composition
+   * (sandbox-storage-billing) binds the org status read; a deps object without it bills every org.
+   */
+  isOrgLapsed?: (orgId: string) => Promise<boolean>;
 }
 
 export interface ReconcileSandboxStorageResult {
@@ -567,6 +574,11 @@ export interface ReconcileSandboxStorageResult {
    * behind ever count here — a row created or moved into an org later bills normally.
    */
   orgBacklogForgiven: number;
+  /**
+   * D-OW-32: org-drive rows NOT charged this tick because their org is lapsed. Their watermark moved
+   * to the tick (the span is forgiven, not deferred), so a re-subscribe bills from then on only.
+   */
+  orgLapsedForgiven: number;
   /**
    * Rows that had something to charge this tick — a positive accrual, before any
    * attempt to resolve a payer or move money.
@@ -879,6 +891,16 @@ export async function reconcileSandboxStorage(
 
   let watermarkSuperseded = 0;
   let orgBacklogForgiven = 0;
+  let orgLapsedForgiven = 0;
+  const orgLapsedThisTick = new Map<string, Promise<boolean>>();
+  const orgLapsedOnce = (orgId: string): Promise<boolean> => {
+    let known = orgLapsedThisTick.get(orgId);
+    if (!known) {
+      known = deps.isOrgLapsed ? deps.isOrgLapsed(orgId) : Promise.resolve(false);
+      orgLapsedThisTick.set(orgId, known);
+    }
+    return known;
+  };
   // Read at most once per tick, and only if an org row is met (see the deps' doc).
   let orgEpoch: Promise<Date> | undefined;
   const orgComputeBillingEpochOnce = (): Promise<Date> => (orgEpoch ??= deps.orgComputeBillingEpoch(now));
@@ -996,6 +1018,22 @@ export async function reconcileSandboxStorage(
         // half of the exposure the cap closes for envs, and it is why extending
         // the cap is a follow-up rather than a nicety.
         billingByKind[subject.kind].skipped += 1;
+        continue;
+      }
+      // D-OW-32 (SEAT-9): a LAPSED org is charged nothing for storage. The data is kept; the
+      // watermark moves to this tick, so the lapsed span is forgiven — never billed after a
+      // re-subscribe (at most one tick of it can fall before the re-subscribe is seen).
+      if (charge.kind === 'org' && (await orgLapsedOnce(charge.orgId))) {
+        orgLapsedForgiven += 1;
+        if (knownBillable) billingByKind[subject.kind].billable -= 1;
+        knownBillable = false;
+        loggers.ai.info('Sandbox storage: org is lapsed — storage not charged (D-OW-32)', {
+          driveId: attributionDriveId,
+          subjectKind: subject.kind,
+          subjectId: subject.subjectId,
+          orgId: charge.orgId,
+        });
+        if ((await subject.advanceWatermark(now)) === 'superseded') watermarkSuperseded += 1;
         continue;
       }
       // WAL-9: an org row charges the org pool — but never for accrual from BEFORE org
@@ -1164,6 +1202,7 @@ export async function reconcileSandboxStorage(
     neverMeasured: sumHealth((of) => of.neverMeasured),
     watermarkSuperseded,
     orgBacklogForgiven,
+    orgLapsedForgiven,
     spanClamped,
     billableRows: sumBilling((of) => of.billable),
     billingByKind,

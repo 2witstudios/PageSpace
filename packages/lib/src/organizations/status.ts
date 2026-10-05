@@ -19,7 +19,6 @@ import {
   orgBillingNotice,
   orgStatusAllows,
   type OrgBillingNotice,
-  unsubscribedTrialEnd,
   type OrgCapabilityCheck,
   type OrgStatusResult,
   type OrgSubscriptionState,
@@ -42,7 +41,7 @@ type Executor = typeof db | Tx;
 export type OrgStatusRead = Readonly<{
   result: OrgStatusResult;
   subscription: OrgSubscriptionState | null;
-  /** When the trial ends: the subscription's, or the creation trial's while there is no subscription. */
+  /** When a Stripe-side trial ends; null with no subscription (there is no creation trial, [D-OW-30]). */
   trialEnd: Date | null;
 }>;
 
@@ -56,7 +55,7 @@ export async function readOrgStatus(orgId: string, opts: { now?: Date; executor?
   const executor = opts.executor ?? db;
   const [row] = await executor
     .select({
-      orgCreatedAt: organizations.createdAt,
+      orgId: organizations.id,
       status: orgSubscriptions.status,
       trialEnd: orgSubscriptions.trialEnd,
       currentPeriodStart: orgSubscriptions.currentPeriodStart,
@@ -72,13 +71,21 @@ export async function readOrgStatus(orgId: string, opts: { now?: Date; executor?
     row.status === null
       ? null
       : { status: row.status, trialEnd: row.trialEnd, currentPeriodStart: row.currentPeriodStart, currentPeriodEnd: row.currentPeriodEnd, cancelAtPeriodEnd: row.cancelAtPeriodEnd ?? false };
-  const result = deriveOrgStatus({ billingEnabled, subscription, orgCreatedAt: row.orgCreatedAt, now: opts.now ?? new Date() });
-  return { result, subscription, trialEnd: subscription ? subscription.trialEnd : unsubscribedTrialEnd(row.orgCreatedAt) };
+  const result = deriveOrgStatus({ billingEnabled, subscription, now: opts.now ?? new Date() });
+  return { result, subscription, trialEnd: subscription ? subscription.trialEnd : null };
 }
 
 /** The org's status: active | trialing | past_due | lapsed (with why). */
 export async function getOrgStatus(orgId: string, opts: { now?: Date; executor?: Executor } = {}): Promise<OrgStatusResult> {
   return (await readOrgStatus(orgId, opts)).result;
+}
+
+/**
+ * SEAT-9 / WAL-8: whether a drive's org is lapsed right now — false for a personal drive (or none)
+ * with no read. What every compute-tier caller passes as `orgLapsed` (review #2761).
+ */
+export async function isOrgLapsedForDrive(drive: { orgId: string | null } | null | undefined): Promise<boolean> {
+  return drive?.orgId ? !(await isOrgActive(drive.orgId)) : false;
 }
 
 /** SEAT-9: may the org use its org-only capabilities right now? False only while lapsed. */

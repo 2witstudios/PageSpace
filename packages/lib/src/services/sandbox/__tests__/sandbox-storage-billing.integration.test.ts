@@ -46,6 +46,11 @@ import { users } from '@pagespace/db/schema/auth';
 import { drives } from '@pagespace/db/schema/core';
 import { driveEnvs } from '@pagespace/db/schema/drive-envs';
 import { agentWorkspaces } from '@pagespace/db/schema/agent-workspaces';
+import { organizations, orgSubscriptions } from '@pagespace/db/schema/organizations';
+import { wallets } from '@pagespace/db/schema/wallets';
+import { creditLedger } from '@pagespace/db/schema/credits';
+import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
+import { factories } from '@pagespace/db/test/factories';
 import { assert } from './riteway';
 import { createDbDriveEnvStore, type DriveEnvStore } from '../../drive-envs/drive-envs-store';
 import { defaultReconcileSandboxStorageDeps } from '../sandbox-storage-billing';
@@ -824,3 +829,74 @@ describe.skipIf(dbSkipExplicitlyAllowed())('watermark round-trip is timezone-ind
   });
 });
 
+
+// D-OW-32 (SEAT-9): a LAPSED org is charged nothing for storage, and nothing is back-billed after it
+// re-subscribes. The REAL charge path (trackUsage onto the org pool) runs here, against real rows.
+describe.skipIf(dbSkipExplicitlyAllowed())('org storage while the org is lapsed (D-OW-32)', () => {
+  const orgId = createId();
+  const orgDriveId = createId();
+  let poolId = '';
+
+  const orgDeps = (now: Date, charges: ChargeCall[]) => ({
+    ...defaultReconcileSandboxStorageDeps,
+    listAgentSessionSprites: async () => [],
+    listPublishedAppRootfs: async () => [],
+    listDriveEnvSprites: async () => (await defaultReconcileSandboxStorageDeps.listDriveEnvSprites()).filter((row) => row.driveId === orgDriveId),
+    chargeStorage: async (input: ChargeCall) => {
+      charges.push(input);
+      return defaultReconcileSandboxStorageDeps.chargeStorage(input);
+    },
+    // Org compute billing went live long ago here: no pre-epoch backlog to forgive.
+    orgComputeBillingEpoch: async () => new Date(0),
+    now: () => now,
+  });
+
+  beforeAll(async () => {
+    if (!dbAvailable) return;
+    await db.insert(organizations).values({ id: orgId, name: 'Northwind Labs', slug: `nw-storage-${orgId}`, ownerId: driveOwnerId });
+    await db.insert(drives).values({ id: orgDriveId, name: 'Product', slug: `product-${orgDriveId}`, ownerId: driveOwnerId, orgId, updatedAt: new Date() });
+    const [pool] = await db.insert(wallets).values({ ownerType: 'org', orgId, monthlyRemainingCents: 10_000 }).returning();
+    poolId = pool.id;
+  });
+
+  afterAll(async () => {
+    if (!dbAvailable) return;
+    await db.delete(driveEnvs).where(eq(driveEnvs.driveId, orgDriveId));
+    await db.delete(creditLedger).where(eq(creditLedger.walletId, poolId));
+    await db.delete(aiUsageLogs).where(eq(aiUsageLogs.driveId, orgDriveId));
+    await db.delete(wallets).where(eq(wallets.id, poolId));
+    await db.delete(drives).where(eq(drives.id, orgDriveId));
+    await db.delete(orgSubscriptions).where(eq(orgSubscriptions.orgId, orgId));
+    await db.delete(organizations).where(eq(organizations.id, orgId));
+  });
+
+  it('SEAT-9 (partial) D-OW-32 lapsed: no charge, no pool debt, the watermark moves to the tick; re-subscribed: charged from then on only — the lapsed span is never back-billed', async () => {
+    process.env.DEPLOYMENT_MODE = 'cloud';
+    await factories.createOrgSubscription(orgId, { status: 'canceled' });
+    const envId = await seedEnv({ driveId: orgDriveId });
+    const poolBefore = (await db.select().from(wallets).where(eq(wallets.id, poolId)))[0];
+
+    const lapsedCharges: ChargeCall[] = [];
+    const lapsed = await reconcileSandboxStorage(orgDeps(NOW, lapsedCharges));
+    expect(lapsedCharges).toEqual([]);
+    expect(lapsed).toMatchObject({ charged: 0, orgLapsedForgiven: 1 });
+    expect(await readBilledAt(envId)).toEqual(NOW);
+    const poolLapsed = (await db.select().from(wallets).where(eq(wallets.id, poolId)))[0];
+    expect({ remaining: poolLapsed.monthlyRemainingCents, debt: poolLapsed.debtCents, pending: poolLapsed.pendingMillicents }).toEqual({
+      remaining: poolBefore.monthlyRemainingCents,
+      debt: 0,
+      pending: poolBefore.pendingMillicents,
+    });
+    expect(await db.select().from(creditLedger).where(eq(creditLedger.walletId, poolId))).toEqual([]);
+
+    // Re-subscribed: the next tick, an hour later, bills that hour — not the lapsed day before it.
+    await db.update(orgSubscriptions).set({ status: 'active' }).where(eq(orgSubscriptions.orgId, orgId));
+    const later = new Date(NOW.getTime() + 60 * 60 * 1000);
+    const paidCharges: ChargeCall[] = [];
+    const paid = await reconcileSandboxStorage(orgDeps(later, paidCharges));
+    expect(paid).toMatchObject({ charged: 1, orgLapsedForgiven: 0 });
+    expect(paidCharges.map((c) => [c.subjectId, c.charge.kind])).toEqual([[envId, 'org']]);
+    expect(paidCharges[0].gbMonths).toBeCloseTo((60 * 60 * 1000) / MS_PER_STORAGE_MONTH, 9);
+    expect(await readBilledAt(envId)).toEqual(later);
+  });
+});

@@ -71,7 +71,9 @@ describe('decideSeatAdmission', () => {
 });
 
 describe('decideSeatRelease', () => {
-  const base = { held: 5, included: INCLUDED, purchasedExtra: 2, cancelAtPeriodEnd: false };
+  // The period started 25 days ago and its start boundary was reconciled (the last release ran).
+  const periodStart = new Date(NOW.getTime() - 25 * 24 * HOUR);
+  const base = { held: 5, included: INCLUDED, purchasedExtra: 2, cancelAtPeriodEnd: false, currentPeriodStart: periodStart, reconciledThrough: periodStart };
   const inWindow = new Date(NOW.getTime() + SEAT_RELEASE_LEAD_MS / 2);
 
   it('SEAT-5 (partial) mid-period nothing is released, however many seats are unused', () => {
@@ -79,21 +81,41 @@ describe('decideSeatRelease', () => {
     expect(decideSeatRelease({ ...base, currentPeriodEnd: farEnd, now: NOW })).toEqual({ action: 'keep', reason: 'mid_period' });
   });
 
-  it('SEAT-5 (partial) inside the lead window before the renewal, unused seats are handed back down to what is held', () => {
-    expect(decideSeatRelease({ ...base, currentPeriodEnd: inWindow, now: NOW })).toEqual({ action: 'release', toExtra: 0 });
-    expect(decideSeatRelease({ ...base, held: 6, currentPeriodEnd: inWindow, now: NOW })).toEqual({ action: 'release', toExtra: 1 });
+  it('SEAT-5 (partial) inside the lead window before the renewal, unused seats are handed back down to what is held, with no proration, and the boundary is recorded', () => {
+    expect(decideSeatRelease({ ...base, currentPeriodEnd: inWindow, now: NOW })).toEqual({ action: 'release', toExtra: 0, proration: 'none', boundary: inWindow });
+    expect(decideSeatRelease({ ...base, held: 6, currentPeriodEnd: inWindow, now: NOW })).toEqual({ action: 'release', toExtra: 1, proration: 'none', boundary: inWindow });
   });
 
-  it('SEAT-5 (partial) never lowers below the seats held: exactly what is held is left alone', () => {
-    expect(decideSeatRelease({ ...base, held: 7, currentPeriodEnd: inWindow, now: NOW })).toEqual({ action: 'keep', reason: 'nothing_unused' });
+  it('SEAT-5 (partial) never lowers below the seats held: exactly what is held is left alone, and the boundary is still recorded', () => {
+    expect(decideSeatRelease({ ...base, held: 7, currentPeriodEnd: inWindow, now: NOW })).toEqual({ action: 'keep', reason: 'nothing_unused', boundary: inWindow });
   });
 
-  it('SEAT-5 (partial) a Stripe quantity BELOW the seats held is restored at the boundary, never left as a free seat', () => {
-    expect(decideSeatRelease({ ...base, held: 9, currentPeriodEnd: inWindow, now: NOW })).toEqual({ action: 'restore', toExtra: 4 });
+  it('SEAT-5 (partial) a Stripe quantity BELOW the seats held is restored at the boundary (prorated), never left as a free seat', () => {
+    expect(decideSeatRelease({ ...base, held: 9, currentPeriodEnd: inWindow, now: NOW })).toEqual({ action: 'restore', toExtra: 4, proration: 'create_prorations', boundary: inWindow });
   });
 
-  it('SEAT-5 (partial) a period end already passed (stale row) still releases, for the period that follows', () => {
-    expect(decideSeatRelease({ ...base, currentPeriodEnd: new Date(NOW.getTime() - HOUR), now: NOW })).toEqual({ action: 'release', toExtra: 0 });
+  it('SEAT-5 (partial) review 3+4 P2-8: a period end already passed and never reconciled (stale row) is caught up WITH prorations — Stripe already billed the renewal, so the org is credited, not billed a full extra period', () => {
+    const passed = new Date(NOW.getTime() - HOUR);
+    expect(decideSeatRelease({ ...base, currentPeriodEnd: passed, now: NOW })).toEqual({ action: 'release', toExtra: 0, proration: 'create_prorations', boundary: passed });
+    // Already reconciled through that end: nothing more to do.
+    expect(decideSeatRelease({ ...base, reconciledThrough: passed, currentPeriodEnd: passed, now: NOW })).toEqual({ action: 'keep', reason: 'mid_period' });
+  });
+
+  it('SEAT-5 (partial) review 3+4 P2-8: a MISSED release window (the new period began, its start boundary never reconciled) is caught up on the next run, prorated, and only once', () => {
+    const newStart = new Date(NOW.getTime() - 2 * HOUR);
+    const newEnd = new Date(NOW.getTime() + 28 * 24 * HOUR);
+    const missed = { ...base, currentPeriodStart: newStart, currentPeriodEnd: newEnd, reconciledThrough: periodStart };
+    expect(decideSeatRelease({ ...missed, now: NOW })).toEqual({ action: 'release', toExtra: 0, proration: 'create_prorations', boundary: newStart });
+    expect(decideSeatRelease({ ...missed, held: 9, now: NOW })).toEqual({ action: 'restore', toExtra: 4, proration: 'create_prorations', boundary: newStart });
+    expect(decideSeatRelease({ ...missed, held: 7, now: NOW })).toEqual({ action: 'keep', reason: 'nothing_unused', boundary: newStart });
+    // Once recorded, the same period is mid-period again: a seat freed in it waits for its end (SEAT-5).
+    expect(decideSeatRelease({ ...missed, reconciledThrough: newStart, now: NOW })).toEqual({ action: 'keep', reason: 'mid_period' });
+  });
+
+  it('SEAT-5 (partial) a subscription never reconciled before records a baseline at its period start and changes nothing in Stripe', () => {
+    const farEnd = new Date(NOW.getTime() + 10 * 24 * HOUR);
+    expect(decideSeatRelease({ ...base, reconciledThrough: null, currentPeriodEnd: farEnd, now: NOW })).toEqual({ action: 'keep', reason: 'baseline', boundary: periodStart });
+    expect(decideSeatRelease({ ...base, reconciledThrough: null, currentPeriodStart: null, currentPeriodEnd: farEnd, now: NOW })).toEqual({ action: 'keep', reason: 'mid_period' });
   });
 
   it('SEAT-5 (partial) a subscription ending at period end, or with no known period, releases nothing', () => {
@@ -101,6 +123,7 @@ describe('decideSeatRelease', () => {
     expect(decideSeatRelease({ ...base, currentPeriodEnd: null, now: NOW })).toEqual({ action: 'keep', reason: 'no_period' });
   });
 });
+
 
 describe('seatRefusalMessage', () => {
   it('SEAT-4 (partial) tells the person what happened and what to do, with no price or credit figure', () => {

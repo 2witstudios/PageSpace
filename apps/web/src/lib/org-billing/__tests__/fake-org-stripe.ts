@@ -13,13 +13,33 @@
  *     refused, as Stripe refuses it ("another request with this key is in progress").
  *
  * Every write is counted, so a test can assert that a replay created nothing.
+ *
+ * INVOICES: a subscription is created `incomplete` with an OPEN first invoice carrying a
+ * confirmation secret, as Stripe does under `default_incomplete`; `payLatestInvoice`
+ * stands in for the client confirming a card with that secret.
  */
-import type { OrgBillingStripe, OrgStripeSubscription } from '../org-subscription';
+import type { OrgBillingStripe, OrgInvoiceSummary, OrgStripeSubscription } from '../org-subscription';
 import type {
   OrgBusinessSubscriptionParams,
   OrgCustomerCreateParams,
   OrgCustomerDetails,
+  OrgLatestInvoice,
 } from '@pagespace/lib/billing/org-subscription-core';
+
+interface FakeInvoice {
+  id: string;
+  customerId: string;
+  subscriptionId: string;
+  status: 'open' | 'paid';
+  amountDueCents: number;
+  amountPaidCents: number;
+  clientSecret: string;
+  created: number;
+}
+
+/** The fake's list prices, minor units: the test Business base and extra seat. */
+const FAKE_BASE_CENTS = 5000;
+const FAKE_SEAT_CENTS = 1000;
 
 type WriteOp =
   | 'createCustomer'
@@ -47,7 +67,11 @@ export class FakeOrgStripe implements OrgBillingStripe {
     updateSubscriptionItemQuantity: 0,
     cancelSubscription: 0,
   };
-  reads = { findCustomerByOrgId: 0, listCustomerSubscriptions: 0, retrieveSubscription: 0 };
+  reads = { findCustomerByOrgId: 0, listCustomerSubscriptions: 0, retrieveSubscription: 0, latestInvoice: 0 };
+  /** Each subscription's invoices, newest last. */
+  invoices = new Map<string, FakeInvoice[]>();
+  portalSessions: Array<{ customerId: string; returnUrl: string }> = [];
+  invoiceListCalls: Array<{ customerId: string; limit: number; startingAfter: string | undefined }> = [];
   /** Every idempotency key a write was sent with, in order. */
   keysSeen: string[] = [];
   searchLag = false;
@@ -177,22 +201,97 @@ export class FakeOrgStripe implements OrgBillingStripe {
     return this.write('createSubscription', idempotencyKey, params, () => {
       if (!this.customers.has(params.customer)) throw new Error(`No such customer: '${params.customer}'`);
       const created = (this.clock += 1);
-      const trialing = typeof params.trial_period_days === 'number' && params.trial_period_days > 0;
+      // default_incomplete: the first invoice waits for the client's card.
       const sub: OrgStripeSubscription = {
         id: this.nextId('sub'),
         customerId: params.customer,
-        status: trialing ? 'trialing' : 'incomplete',
+        status: 'incomplete',
         created,
         metadata: { ...params.metadata },
         items: params.items.map((item) => ({ id: this.nextId('si'), priceId: item.price, quantity: item.quantity })),
-        trialEnd: trialing ? created + (params.trial_period_days ?? 0) * 86_400 : null,
+        trialEnd: null,
         currentPeriodStart: created,
         currentPeriodEnd: created + 30 * 86_400,
         cancelAtPeriodEnd: false,
       };
       this.subscriptions.set(sub.id, sub);
+      const extra = params.items[1].quantity;
+      this.addInvoice(sub, FAKE_BASE_CENTS + FAKE_SEAT_CENTS * extra);
       return structuredClone(sub);
     });
+  }
+
+  private addInvoice(sub: OrgStripeSubscription, amountDueCents: number): FakeInvoice {
+    const id = this.nextId('in');
+    const invoice: FakeInvoice = {
+      id,
+      customerId: sub.customerId,
+      subscriptionId: sub.id,
+      status: 'open',
+      amountDueCents,
+      amountPaidCents: 0,
+      clientSecret: `pi_${id.slice(3)}_secret_fake`,
+      created: (this.clock += 1),
+    };
+    this.invoices.set(sub.id, [...(this.invoices.get(sub.id) ?? []), invoice]);
+    return invoice;
+  }
+
+  /** Test helper: the subscription's latest invoice. */
+  invoiceFor(subscriptionId: string): FakeInvoice | undefined {
+    return this.invoices.get(subscriptionId)?.at(-1);
+  }
+
+  /** Test helper: the client confirmed a card with the secret — Stripe pays the latest invoice and the subscription goes active. */
+  payLatestInvoice(subscriptionId: string): void {
+    const invoice = this.invoiceFor(subscriptionId);
+    const sub = this.subscriptions.get(subscriptionId);
+    if (!invoice || !sub) throw new Error(`No invoice to pay on '${subscriptionId}'`);
+    invoice.status = 'paid';
+    invoice.amountPaidCents = invoice.amountDueCents;
+    sub.status = 'active';
+  }
+
+  /** Test helper: a renewal invoice the card failed to pay; the subscription goes `status`. */
+  openRenewalInvoice(subscriptionId: string, status: 'past_due' | 'unpaid'): FakeInvoice {
+    const sub = this.subscriptions.get(subscriptionId);
+    if (!sub) throw new Error(`No such subscription: '${subscriptionId}'`);
+    sub.status = status;
+    return this.addInvoice(sub, FAKE_BASE_CENTS);
+  }
+
+  async latestInvoice(subscriptionId: string): Promise<OrgLatestInvoice | null> {
+    this.reads.latestInvoice += 1;
+    const invoice = this.invoiceFor(subscriptionId);
+    return invoice ? { status: invoice.status, amountDueCents: invoice.status === 'paid' ? 0 : invoice.amountDueCents, clientSecret: invoice.clientSecret } : null;
+  }
+
+  async createBillingPortalSession(customerId: string, returnUrl: string): Promise<{ url: string }> {
+    this.portalSessions.push({ customerId, returnUrl });
+    return { url: `https://billing.stripe.test/p/session/${customerId}` };
+  }
+
+  async listInvoices(customerId: string, opts: { limit: number; startingAfter?: string }): Promise<{ invoices: OrgInvoiceSummary[]; hasMore: boolean }> {
+    this.invoiceListCalls.push({ customerId, limit: opts.limit, startingAfter: opts.startingAfter });
+    const all = [...this.invoices.values()].flat().filter((i) => i.customerId === customerId).sort((a, b) => b.created - a.created);
+    const from = opts.startingAfter ? all.findIndex((i) => i.id === opts.startingAfter) + 1 : 0;
+    const page = all.slice(from, from + opts.limit);
+    return {
+      invoices: page.map((i) => ({
+        id: i.id,
+        number: null,
+        status: i.status,
+        amountDue: i.amountDueCents,
+        amountPaid: i.amountPaidCents,
+        currency: 'usd',
+        created: new Date(i.created * 1000).toISOString(),
+        periodStart: null,
+        periodEnd: null,
+        hostedInvoiceUrl: null,
+        invoicePdf: null,
+      })),
+      hasMore: from + opts.limit < all.length,
+    };
   }
 
   async listCustomerSubscriptions(customerId: string): Promise<OrgStripeSubscription[]> {
