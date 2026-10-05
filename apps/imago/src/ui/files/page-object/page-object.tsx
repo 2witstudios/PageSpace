@@ -1,6 +1,6 @@
 'use client';
 
-import type { ReactNode } from 'react';
+import { useRef, type ReactNode } from 'react';
 import useSWR from 'swr';
 import { edgeOf, renderErrorState, renderLoadingState } from '../../frame/edge-state/edge-state.render';
 import { PAGE_NOT_FOUND, renderNotFound } from '../../frame/not-found/not-found.render';
@@ -19,8 +19,16 @@ export const pageKey = (pageId: string): string => `/api/pages/${encodeURICompon
  * is PageObject's (PageView mounts only once the page has loaded); PageView
  * carries the same pause so that holds whichever registers first.
  */
-export const usePage = (pageId: string) =>
-  useSWR<unknown>(pageKey(pageId), { isPaused: () => isEditingDocument(getUiState(), pageId) });
+export const usePage = (pageId: string) => {
+  // Only revalidation waits: a page with nothing loaded yet (a view reopened
+  // while its closing save is still out) is always fetched.
+  const loaded = useRef(false);
+  const page = useSWR<unknown>(pageKey(pageId), {
+    isPaused: () => loaded.current && isEditingDocument(getUiState(), pageId),
+  });
+  loaded.current = page.data !== undefined;
+  return page;
+};
 
 export type PageObjectProps = {
   /** The drive the address names. */

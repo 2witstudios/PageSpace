@@ -12,12 +12,12 @@
 // typing, at once on blur, rename, leaving the page or the tab, and always
 // against the revision the editor last knew. Text the server does not have
 // yet is never replaced: SWR is held off the page meanwhile (the files
-// slice's editingDocumentIds, imago's useEditingStore), and someone else's
+// slice's editingDocuments, imago's useEditingStore), and someone else's
 // save reloads the document only when the viewer holds nothing unsaved.
 
 import { EditorContent, useEditor, type Editor } from '@tiptap/react';
 import { useRouter } from 'next/navigation';
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ApiError } from '@/api/errors';
 import { useApiClient } from '@/api/swr-provider';
 import { useSocketEvent, useSocketId } from '@/realtime/realtime-provider';
@@ -129,6 +129,8 @@ export function DocumentView({ driveId, page }: DocumentViewProps): ReactNode {
   const [saveState, setSaveState] = useState<SaverState>(SAVED);
   const [resolveError, setResolveError] = useState<string | null>(null);
   const [draftRestored, setDraftRestored] = useState(false);
+  // This view's own claim on the page's pause: a closing view's late save ends only its own.
+  const viewId = useId();
 
   /**
    * The page's SWR entry takes a stored copy, without asking the server
@@ -159,7 +161,11 @@ export function DocumentView({ driveId, page }: DocumentViewProps): ReactNode {
           storeInCache(stored);
           return stored;
         },
-        onState: setSaveState,
+        onState: (state) => {
+          setSaveState(state);
+          // Restored changes that are saved (or set aside for the stored copy) need no more saying.
+          if (state.status.kind === 'saved') setDraftRestored(false);
+        },
       }),
     [client, page.id, socketId, storeInCache],
   );
@@ -195,8 +201,11 @@ export function DocumentView({ driveId, page }: DocumentViewProps): ReactNode {
 
   // Unsaved text holds SWR off the page (and is what a reload must not replace).
   useEffect(() => {
-    dispatch(saveState.editing ? transactions.beginDocumentEdit : transactions.endDocumentEdit, page.id);
-  }, [saveState.editing, page.id]);
+    dispatch(saveState.editing ? transactions.beginDocumentEdit : transactions.endDocumentEdit, {
+      pageId: page.id,
+      viewId,
+    });
+  }, [saveState.editing, page.id, viewId]);
 
   // Leaving the document saves what is waiting. Text that still did not
   // reach the server (a conflict, a refusal, a failure) is never dropped with
@@ -212,10 +221,10 @@ export function DocumentView({ driveId, page }: DocumentViewProps): ReactNode {
             draft: { patch: unsaved, revision: saver.revision() },
           });
         }
-        dispatch(transactions.endDocumentEdit, page.id);
+        dispatch(transactions.endDocumentEdit, { pageId: page.id, viewId });
       });
     },
-    [saver, page.id],
+    [saver, page.id, viewId],
   );
 
   // A document that closed with unsaved text opens with it again, and saves

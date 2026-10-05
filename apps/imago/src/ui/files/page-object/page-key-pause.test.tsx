@@ -60,13 +60,13 @@ const revalidations = async (hook: () => ReactNode): Promise<[number, number]> =
   await pass(30);
   const asked = () => web.count(PAGE);
   const before = asked();
-  dispatch(transactions.beginDocumentEdit, 'notes');
+  dispatch(transactions.beginDocumentEdit, { pageId: 'notes', viewId: 'v1' });
   await act(async () => {
     await swr.mutate?.('/api/pages/notes');
   });
   await pass(20);
   const whileEditing = asked() - before;
-  dispatch(transactions.endDocumentEdit, 'notes');
+  dispatch(transactions.endDocumentEdit, { pageId: 'notes', viewId: 'v1' });
   await act(async () => {
     await swr.mutate?.('/api/pages/notes');
   });

@@ -189,7 +189,7 @@ describe('filesPlugin slice', () => {
           fileFilter: '',
           pendingFiles: [],
           fileCreateError: null,
-          editingDocumentIds: [],
+          editingDocuments: [],
           documentDrafts: {},
         },
         [
@@ -211,14 +211,17 @@ describe('filesPlugin slice', () => {
 });
 
 describe('documents being edited', () => {
+  const v1 = { pageId: 'p1', viewId: 'v1' };
+  const v2 = { pageId: 'p1', viewId: 'v2' };
+
   test('beginning and ending an edit', () => {
     const { beginDocumentEdit, endDocumentEdit } = filesPlugin.transactions;
     const fresh = createInitialState();
-    const editing = beginDocumentEdit(fresh, 'p1');
-    const again = beginDocumentEdit(editing, 'p1');
-    const ended = endDocumentEdit(editing, 'p1');
+    const editing = beginDocumentEdit(fresh, v1);
+    const again = beginDocumentEdit(editing, v1);
+    const ended = endDocumentEdit(editing, v1);
     assert({
-      given: 'a new shell, a document edit begun twice, then ended',
+      given: 'a new shell, a document edit begun twice by one view, then ended',
       should: 'mark the page as edited once, keep the snapshot when nothing changes, and clear it at the end',
       actual: [
         isEditingDocument(fresh, 'p1'),
@@ -226,16 +229,28 @@ describe('documents being edited', () => {
         isEditingDocument(editing, 'p2'),
         again === editing,
         isEditingDocument(ended, 'p1'),
-        endDocumentEdit(fresh, 'p1') === fresh,
+        endDocumentEdit(fresh, v1) === fresh,
       ],
       expected: [false, true, false, true, false, true],
     });
   });
 
+  test('two views of one page', () => {
+    const { beginDocumentEdit, endDocumentEdit } = filesPlugin.transactions;
+    const both = beginDocumentEdit(beginDocumentEdit(createInitialState(), v1), v2);
+    const oldEnded = endDocumentEdit(both, v1);
+    assert({
+      given: 'a closed view of a page ending its edit while a reopened view of it still edits',
+      should: 'keep the page edited until the reopened view ends too',
+      actual: [isEditingDocument(oldEnded, 'p1'), isEditingDocument(endDocumentEdit(oldEnded, v2), 'p1')],
+      expected: [true, false],
+    });
+  });
+
   test('through the shell store', () => {
-    dispatch(transactions.beginDocumentEdit, 'p1');
+    dispatch(transactions.beginDocumentEdit, v1);
     const during = isEditingDocument(getUiState(), 'p1');
-    dispatch(transactions.endDocumentEdit, 'p1');
+    dispatch(transactions.endDocumentEdit, v1);
     assert({
       given: 'the edit transactions dispatched to the shell store',
       should: 'reach the files slice',

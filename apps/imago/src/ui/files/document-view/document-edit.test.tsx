@@ -673,14 +673,21 @@ describe('leaving with text the server does not have', () => {
     await settle(() => {
       if (stored.content !== '<p>Mine</p>') throw new Error('not saved');
     });
+    await pass(20);
     assert({
       given: 'a failed save the viewer leaves, then comes back once the server answers again',
-      should: 'restore the text and save it',
-      actual: [back.kept, stored.content, saves(back.web).map((request) => request.body)],
+      should: 'restore the text, save it, and stop saying the changes are back once they are saved',
+      actual: [
+        back.kept,
+        stored.content,
+        saves(back.web).map((request) => request.body),
+        back.container.querySelector('[data-draft-restored]'),
+      ],
       expected: [
         { patch: { content: '<p>Mine</p>' }, revision: 3 },
         '<p>Mine</p>',
         [{ content: '<p>Mine</p>', expectedRevision: 3 }],
+        null,
       ],
     });
   });
@@ -848,6 +855,41 @@ describe('reloadsOn()', () => {
         reloadsOn(null, { ...page, editing: false }),
       ],
       expected: [true, true, false, false, false, false],
+    });
+  });
+});
+
+describe('a closing save that answers after the page reopened', () => {
+  test('does not lift the reopened document’s pause', async () => {
+    let release: () => void = () => {};
+    let first = true;
+    const routes: Record<string, FakeRoute> = {
+      [SAVE]: (request) => {
+        if (!first) return savePage(request);
+        first = false;
+        return new Promise<Response>((resolve) => {
+          release = () => resolve(savePage(request) as Response);
+        });
+      },
+    };
+    const { container } = show(routes);
+    await editable(container);
+    await type(container, '<p>Leaving</p>');
+    unmountAll();
+    // The closing save is still out when the viewer opens the page again and types.
+    const back = show(routes);
+    await editable(back.container);
+    await type(back.container, '<p>Back again</p>');
+    const before = isEditingDocument(getUiState(), 'notes');
+    await act(async () => {
+      release();
+    });
+    await pass(30);
+    assert({
+      given: 'a document closed with its save still out, reopened and typed in before that save answered',
+      should: 'keep SWR held off the reopened document when the old save finally lands',
+      actual: [before, isEditingDocument(getUiState(), 'notes')],
+      expected: [true, true],
     });
   });
 });

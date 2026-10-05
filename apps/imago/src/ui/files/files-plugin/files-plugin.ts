@@ -25,6 +25,15 @@ export type PendingFile = {
 /** Text a document held when it closed and the server never got, with the revision it was made on. */
 export type DocumentDraft = { readonly patch: DocumentPatch; readonly revision: number };
 
+/**
+ * One open view of a document that holds unsaved text. A page can have two
+ * for a moment (a closing view's last save still out while it is reopened),
+ * and each ends only its own.
+ */
+export type DocumentEditor = { readonly pageId: string; readonly viewId: string };
+
+const sameEditor = (a: DocumentEditor, b: DocumentEditor): boolean => a.pageId === b.pageId && a.viewId === b.viewId;
+
 type FilesResources = {
   /** Pages expanded in the files tree. */
   readonly expandedFileIds: readonly string[];
@@ -34,8 +43,8 @@ type FilesResources = {
   readonly pendingFiles: readonly PendingFile[];
   /** Why the last create failed; null once another starts. */
   readonly fileCreateError: string | null;
-  /** Documents holding text the server does not have yet: SWR leaves their page alone meanwhile. */
-  readonly editingDocumentIds: readonly string[];
+  /** Document views holding text the server does not have yet: SWR leaves their page alone meanwhile. */
+  readonly editingDocuments: readonly DocumentEditor[];
   /** Unsaved text of documents that closed, by page id, restored when each opens again. */
   readonly documentDrafts: Readonly<Record<string, DocumentDraft>>;
 };
@@ -47,7 +56,7 @@ const withFiles = (state: UiState, files: Partial<FilesResources>): UiState => (
 
 /** Whether a document holds unsaved text: its page must not be revalidated over it. */
 export const isEditingDocument = (state: UiState, pageId: string): boolean =>
-  state.resources.editingDocumentIds.includes(pageId);
+  state.resources.editingDocuments.some((editor) => editor.pageId === pageId);
 
 /** The draft a document closed with; undefined when it closed saved. */
 export const documentDraftOf = (state: UiState, pageId: string): DocumentDraft | undefined =>
@@ -67,7 +76,7 @@ export const filesPlugin = {
     fileFilter: '',
     pendingFiles: [],
     fileCreateError: null,
-    editingDocumentIds: [],
+    editingDocuments: [],
     documentDrafts: {},
   }),
   transactions: {
@@ -100,14 +109,16 @@ export const filesPlugin = {
         ? withFiles(state, { pendingFiles: without(state.resources.pendingFiles, key) })
         : state,
     /** A document now holds text the server does not have (classic's useEditingStore.startEditing). */
-    beginDocumentEdit: (state: UiState, pageId: string): UiState =>
-      isEditingDocument(state, pageId)
+    beginDocumentEdit: (state: UiState, editor: DocumentEditor): UiState =>
+      state.resources.editingDocuments.some((open) => sameEditor(open, editor))
         ? state
-        : withFiles(state, { editingDocumentIds: [...state.resources.editingDocumentIds, pageId] }),
-    /** The server has everything the document holds again. */
-    endDocumentEdit: (state: UiState, pageId: string): UiState =>
-      isEditingDocument(state, pageId)
-        ? withFiles(state, { editingDocumentIds: state.resources.editingDocumentIds.filter((id) => id !== pageId) })
+        : withFiles(state, { editingDocuments: [...state.resources.editingDocuments, editor] }),
+    /** The server has everything this view of the document holds again. */
+    endDocumentEdit: (state: UiState, editor: DocumentEditor): UiState =>
+      state.resources.editingDocuments.some((open) => sameEditor(open, editor))
+        ? withFiles(state, {
+            editingDocuments: state.resources.editingDocuments.filter((open) => !sameEditor(open, editor)),
+          })
         : state,
     /** A document closed holding text the server never got: keep it for when it opens again. */
     keepDocumentDraft: (
