@@ -87,6 +87,67 @@ describe('middleware()', () => {
   });
 });
 
+describe('middleware() CSP by NODE_ENV', () => {
+  enableImago();
+
+  const documentCSP = (): { enforced: string | null; nonce: string } => {
+    const response = middleware(imagoRequest('/imago/drive-1/files'));
+    return {
+      enforced: response.headers.get('Content-Security-Policy'),
+      nonce: response.headers.get(`x-middleware-request-${NONCE_HEADER}`) ?? '',
+    };
+  };
+
+  test('next dev', () => {
+    vi.stubEnv('NODE_ENV', 'development');
+    const { enforced, nonce } = documentCSP();
+
+    assert({
+      given: 'NODE_ENV=development',
+      should: "enforce the development CSP, with 'unsafe-eval'",
+      actual: enforced,
+      expected: buildCSPPolicy(nonce, { isDevelopment: true }),
+    });
+
+    assert({
+      given: 'NODE_ENV=development',
+      should: "allow eval in script-src for React's dev build",
+      actual: enforced?.split('; ').find((entry) => entry.startsWith('script-src '))?.endsWith(" 'unsafe-eval'"),
+      expected: true,
+    });
+  });
+
+  test('production', () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    const { enforced, nonce } = documentCSP();
+
+    assert({
+      given: 'NODE_ENV=production',
+      should: "enforce the strict CSP, with no 'unsafe-eval'",
+      actual: enforced,
+      expected: buildCSPPolicy(nonce),
+    });
+
+    assert({
+      given: 'NODE_ENV=production',
+      should: "never carry 'unsafe-eval'",
+      actual: enforced?.includes("'unsafe-eval'"),
+      expected: false,
+    });
+  });
+
+  test('anything but development', () => {
+    vi.stubEnv('NODE_ENV', 'test');
+
+    assert({
+      given: 'NODE_ENV=test',
+      should: "fail closed, with no 'unsafe-eval'",
+      actual: documentCSP().enforced?.includes("'unsafe-eval'"),
+      expected: false,
+    });
+  });
+});
+
 describe('middleware() auth gate', () => {
   enableImago();
 

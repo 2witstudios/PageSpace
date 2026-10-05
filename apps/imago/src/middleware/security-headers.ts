@@ -47,7 +47,15 @@ const buildCSPString = (directives: CSPDirectives): string =>
     .map(([key, values]) => `${key} ${values.join(' ')}`)
     .join('; ');
 
-export const buildCSPPolicy = (nonce: string): string =>
+type CSPPolicyOptions = {
+  /** `next dev` only: never set for a production build. */
+  isDevelopment?: boolean;
+};
+
+export const buildCSPPolicy = (
+  nonce: string,
+  { isDevelopment = false }: CSPPolicyOptions = {},
+): string =>
   buildCSPString({
     'default-src': ["'self'"],
     'script-src': [
@@ -55,6 +63,10 @@ export const buildCSPPolicy = (nonce: string): string =>
       `'nonce-${nonce}'`,
       "'strict-dynamic'",
       "'unsafe-inline'", // Fallback for older browsers (ignored when strict-dynamic present)
+      // React's development build rebuilds server component stacks with eval,
+      // and without it hydration fails under `next dev`. Next's CSP guide adds
+      // it for development only; a production build never gets it.
+      ...(isDevelopment ? ["'unsafe-eval'"] : []),
     ],
     'style-src': ["'self'", "'unsafe-inline'"],
     'img-src': ["'self'", 'data:', 'blob:', 'https:'],
@@ -76,6 +88,7 @@ export const buildAPICSPPolicy = (): string =>
 
 type SecurityHeadersOptions = {
   nonce: string;
+  isDevelopment: boolean;
   isProduction: boolean;
   isSecure: boolean;
   isAPIRoute: boolean;
@@ -83,11 +96,11 @@ type SecurityHeadersOptions = {
 
 const applySecurityHeaders = (
   response: NextResponse,
-  { nonce, isProduction, isSecure, isAPIRoute }: SecurityHeadersOptions,
+  { nonce, isDevelopment, isProduction, isSecure, isAPIRoute }: SecurityHeadersOptions,
 ): NextResponse => {
   response.headers.set(
     'Content-Security-Policy',
-    isAPIRoute ? buildAPICSPPolicy() : buildCSPPolicy(nonce),
+    isAPIRoute ? buildAPICSPPolicy() : buildCSPPolicy(nonce, { isDevelopment }),
   );
   response.headers.set('X-Frame-Options', 'DENY');
   response.headers.set('X-Content-Type-Options', 'nosniff');
@@ -104,6 +117,8 @@ const applySecurityHeaders = (
 
 type CreateSecureResponseOptions = {
   isAPIRoute?: boolean;
+  /** The `next dev` server: adds 'unsafe-eval' to the document CSP. */
+  isDevelopment?: boolean;
   /** Extra request headers for the render; each overwrites any client value. */
   forwardHeaders?: Record<string, string>;
 };
@@ -111,7 +126,7 @@ type CreateSecureResponseOptions = {
 export const createSecureResponse = (
   isProduction: boolean,
   request?: Request,
-  { isAPIRoute = false, forwardHeaders = {} }: CreateSecureResponseOptions = {},
+  { isAPIRoute = false, isDevelopment = false, forwardHeaders = {} }: CreateSecureResponseOptions = {},
 ): { response: NextResponse; nonce: string } => {
   const nonce = generateNonce();
   const isSecure = isSecureRequest(request);
@@ -124,11 +139,11 @@ export const createSecureResponse = (
   }
   requestHeaders.set(NONCE_HEADER, nonce);
   if (!isAPIRoute) {
-    requestHeaders.set('Content-Security-Policy', buildCSPPolicy(nonce));
+    requestHeaders.set('Content-Security-Policy', buildCSPPolicy(nonce, { isDevelopment }));
   }
 
   const response = NextResponse.next({ request: { headers: requestHeaders } });
-  applySecurityHeaders(response, { nonce, isProduction, isSecure, isAPIRoute });
+  applySecurityHeaders(response, { nonce, isDevelopment, isProduction, isSecure, isAPIRoute });
 
   return { response, nonce };
 };
