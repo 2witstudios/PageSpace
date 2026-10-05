@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, test } from 'vitest';
 import { assert } from 'riteway/vitest';
 import type { RealtimeClient, RealtimeSocket } from './realtime-client';
-import { CHANNEL_ROOM, DM_ROOM, RealtimeProvider, useDriveRoom, useRoom, useSocketEvent } from './realtime-provider';
+import { CHANNEL_ROOM, DM_ROOM, RealtimeProvider, useDriveRoom, useRoom, useSocketEvent, useSocketId } from './realtime-provider';
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean | undefined;
@@ -462,6 +462,31 @@ describe('useRoom', () => {
         ['join_dm_conversation', 'dm1'],
         ['leave_dm_conversation', 'dm1'],
       ],
+    });
+  });
+});
+
+describe('useSocketId', () => {
+  test('reads the socket’s id when asked', () => {
+    let read: () => string | undefined = () => 'never';
+    function Writer() {
+      read = useSocketId();
+      return null;
+    }
+    const fake = fakeClient();
+    mount(
+      <RealtimeProvider client={fake.client}>
+        <Writer />
+      </RealtimeProvider>,
+    );
+    const before = read();
+    fake.socket.id = 'sock-7';
+
+    assert({
+      given: 'a socket with no id yet, then one socket.io named',
+      should: 'answer undefined, then the id it has at the time of asking',
+      actual: [before, read()],
+      expected: [undefined, 'sock-7'],
     });
   });
 });
