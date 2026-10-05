@@ -295,6 +295,14 @@ echo "-------------------------"
 run_test_suite "MCP WebSocket Route Security" "web" "src/app/api/mcp-ws/__tests__/route.security.test.ts"
 
 # =============================================================================
+# Viewer-Scoped Read Tests
+# =============================================================================
+echo "👤 Viewer-Scoped Reads"
+echo "----------------------"
+
+run_test_suite "Built-in Agent Pointers (viewer only, no cross-user leakage)" "web" "src/app/api/user/builtin-agents"
+
+# =============================================================================
 # AI Tool Security Tests
 # =============================================================================
 echo "🤖 AI Tool Security"
