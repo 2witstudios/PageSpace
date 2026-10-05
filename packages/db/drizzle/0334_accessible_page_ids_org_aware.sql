@@ -38,6 +38,12 @@
 --   7. ...custom role has a drive-wide default             -> hidden if private, else its canView.
 --   8. Otherwise                                           -> visible iff not private.
 --
+-- ORG-4: a page reached through org Owner/Admin power on a PRIVATE drive (not
+-- through the user's own ADMIN row, not as the drive's lead) carries that drive,
+-- its org and the org role in the org_power_* columns, NULL otherwise, so the
+-- TS wrapper writes the same deduplicated audit event getUserAccessLevel writes
+-- (auditOrgAdminPrivateAccess). Callers that only need the set select page_id.
+--
 -- Custom migration (`drizzle-kit generate --custom`), DROP-then-CREATE,
 -- SECURITY DEFINER with a pinned search_path, as 0102/0133/0296/0309. The old
 -- one-argument signature is dropped; a one-argument call still resolves (the
@@ -48,14 +54,18 @@ DROP FUNCTION IF EXISTS accessible_page_ids_for_user(text);
 DROP FUNCTION IF EXISTS accessible_page_ids_for_user(text, boolean);
 --> statement-breakpoint
 CREATE FUNCTION accessible_page_ids_for_user(uid text, orgs_enabled boolean DEFAULT false)
-RETURNS TABLE(page_id text)
+RETURNS TABLE(page_id text, org_power_drive_id text, org_power_org_id text, org_power_role text)
 LANGUAGE sql
 SECURITY DEFINER
 STABLE
 PARALLEL SAFE
 SET search_path = pg_catalog, public
 AS $$
-  SELECT p.id
+  SELECT
+    p.id,
+    CASE WHEN m.org_power_private THEN d.id END,
+    CASE WHEN m.org_power_private THEN d."orgId" END,
+    CASE WHEN m.org_power_private THEN om.role::text END
   FROM pages p
   JOIN drives d
     ON d.id = p."driveId"
@@ -109,7 +119,13 @@ AS $$
       o.org_drive
         AND om.role = 'MEMBER'
         AND d."orgVisibility" = 'OPEN'
-        AND (r.row_role IS NULL OR (dm.source = 'org' AND r.row_role = 'MEMBER')) AS floored
+        AND (r.row_role IS NULL OR (dm.source = 'org' AND r.row_role = 'MEMBER')) AS floored,
+      -- ORG-4: org power (not the user's own ADMIN row, not the lead) opened a PRIVATE drive.
+      o.org_drive
+        AND d."ownerId" <> uid
+        AND om.role IN ('OWNER', 'ADMIN')
+        AND r.row_role IS DISTINCT FROM 'ADMIN'
+        AND d."orgVisibility" = 'PRIVATE' AS org_power_private
   ) m
   LEFT JOIN drive_roles dr
     ON dr.id = m.custom_role_id

@@ -247,8 +247,9 @@ async function disagreements(h: Harbor, floor: OpenRoleFloor): Promise<{ lines: 
       const tree = new Set(await getUserAccessiblePagesInDrive(person.id, drive.id));
       const details = new Map((await getUserAccessiblePagesInDriveWithDetails(person.id, drive.id)).map((p) => [p.id, p.permissions]));
       const appDetails = new Map((await getAppAccessiblePagesInDrive(token, drive.id)).map((p) => [p.id, p.permissions]));
-      for (const pageKey of Object.keys(drivePages) as PageKey[]) {
-        const pageId = drivePages[pageKey].id;
+      for (const [key, page] of Object.entries(drivePages)) {
+        const pageKey = key as PageKey;
+        const pageId = page.id;
         const pageAt = `${at}/${pageKey}`;
         const [view, edit] = expectedPage(personKey, driveKey, pageKey, floor);
         check('getUserAccessLevel', pageAt, ve(await getUserAccessLevel(person.id, pageId)), [view, edit]);
