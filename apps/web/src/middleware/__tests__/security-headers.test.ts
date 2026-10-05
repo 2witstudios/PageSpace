@@ -767,6 +767,13 @@ describe('Security Headers', () => {
       expect(exposed).toContain('Retry-After');
     });
 
+    it('SPEND-4 (partial) exposes the spend-fallback headers, so a browser caller of v1 can read a fallback', () => {
+      const response = NextResponse.next();
+      applyApiCorsHeaders(response);
+      const exposed = response.headers.get('Access-Control-Expose-Headers') ?? '';
+      for (const header of ['X-Spend-Fallback-From', 'X-Spend-Fallback-To', 'X-Spend-Fallback-Wallet']) expect(exposed).toContain(header);
+    });
+
     it('allows Authorization in preflight — the one header a Bearer-token caller must send', () => {
       const response = NextResponse.next();
       applyApiCorsHeaders(response);

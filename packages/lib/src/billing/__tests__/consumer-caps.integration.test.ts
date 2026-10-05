@@ -24,7 +24,7 @@ import { walletCapAlerts, walletConsumerCaps, wallets } from '@pagespace/db/sche
 import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
 import { canConsumeAI } from '../credit-gate';
-import { consumeCredits } from '../credit-consume';
+import { consumeCredits, settlePendingLedgerRow } from '../credit-consume';
 import { automationSpend, driveSpend, personTriggeredSpend } from '../spend-target';
 import { notifyCapAlerts } from '../wallet-cap-alerts';
 import { listDriveWalletCaps, setDriveWalletCap, setSeatCap } from '../../services/drive-wallet-service';
@@ -334,6 +334,19 @@ describe('per-consumer caps on drive-wallet and seat legs (orgs on, real Postgre
       if (prevUrl === undefined) delete process.env.INTERNAL_REALTIME_URL;
       else process.env.INTERNAL_REALTIME_URL = prevUrl;
     }
+  });
+
+  it('WAL-7 (partial) a call the backfill cron settles late still alerts the funder', async () => {
+    if (!dbAvailable) return;
+    world = await build();
+    const w = world;
+    await setDriveWalletCap(w.anaId, w.productId, w.marcusId, { dailyCents: 20, monthlyCents: null }, 'session');
+    const [pending] = await db.insert(creditLedger).values({
+      userId: w.marcusId, walletId: w.productWalletId, entryType: 'usage', bucket: 'monthly',
+      amountCents: -30, chargeMillicents: 30_000, consumeStatus: 'pending',
+    }).returning({ id: creditLedger.id });
+    await settlePendingLedgerRow(pending.id);
+    expect((await capAlertsFor(w.jonoId)).map((n) => n.title).sort()).toEqual(['A spending cap is at 80%', 'A spending cap was reached']);
   });
 
   it('WAL-7 (partial) a new period re-arms the alert: the same threshold tomorrow is sent again', async () => {

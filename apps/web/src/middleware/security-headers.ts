@@ -278,7 +278,8 @@ export const API_CORS_HEADERS: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, PATCH, DELETE, PUT, OPTIONS',
   'Access-Control-Allow-Headers': 'Authorization, Content-Type, X-PageSpace-API-Version',
-  'Access-Control-Expose-Headers': 'X-PageSpace-API-Version, Retry-After',
+  // SPEND-4: a browser SDK caller must be able to read the spend-fallback notice (v1 is SSE: the headers are its only report).
+  'Access-Control-Expose-Headers': 'X-PageSpace-API-Version, Retry-After, X-Spend-Fallback-From, X-Spend-Fallback-To, X-Spend-Fallback-Wallet',
 };
 
 export const applyApiCorsHeaders = (response: NextResponse): NextResponse => {

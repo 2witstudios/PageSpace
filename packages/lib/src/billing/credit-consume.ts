@@ -725,6 +725,8 @@ export async function consumeCredits(input: ConsumeCreditsInput): Promise<Credit
   // as debt, which their first grant then nets (see personal-wallet).
   let ledgerId: string;
   let walletId: string;
+  // The claim row's time: the window its call counts in (consumer-caps dates calls by it).
+  let claimedAt = new Date();
   try {
     const resolved = await settleWalletId(input);
     if ('mismatch' in resolved) return await refuseMismatchedSettle(input, resolved.mismatch, realCostCents, markupBps);
@@ -752,9 +754,10 @@ export async function consumeCredits(input: ConsumeCreditsInput): Promise<Credit
         target: creditLedger.aiUsageLogId,
         where: sql`${creditLedger.aiUsageLogId} IS NOT NULL AND ${creditLedger.entryType} = 'usage'`,
       })
-      .returning({ id: creditLedger.id });
+      .returning({ id: creditLedger.id, createdAt: creditLedger.createdAt });
     if (claimed.length === 0) return 'settled'; // already consumed — idempotent no-op
     ledgerId = claimed[0].id;
+    claimedAt = claimed[0].createdAt;
   } catch (error) {
     // No ledger row persisted; the cron's orphan sweep will reconcile.
     loggers.ai.warn('credit claim failed', {
@@ -835,7 +838,7 @@ export async function consumeCredits(input: ConsumeCreditsInput): Promise<Credit
     await noticeDebt(applied, walletId);
     // WAL-7: tell the leg's funder when this consumer's spend reached 80% / 100% of a cap,
     // once per threshold per period. After the commit; never throws.
-    await notifyCapAlerts({ walletId, userId: input.userId });
+    await notifyCapAlerts({ walletId, userId: input.userId, now: claimedAt });
     // X-4: a drive wallet's balance moved — its drive room refetches (no amount in the event).
     void announceWalletChange(walletId, 'balance');
   } catch (error) {
@@ -881,7 +884,7 @@ export async function releaseHold(holdId: string): Promise<void> {
  */
 export async function settlePendingLedgerRow(ledgerId: string): Promise<void> {
   // Assigned inside the transaction callback; declared through `as` so the read after it is not narrowed to null.
-  let settled = null as { userId: string; walletId: string; outcome: SettleOutcome } | null;
+  let settled = null as { userId: string; walletId: string; outcome: SettleOutcome; at: Date } | null;
   await db.transaction(async (tx) => {
     const rows = await tx
       .select()
@@ -897,6 +900,7 @@ export async function settlePendingLedgerRow(ledgerId: string): Promise<void> {
           aiUsageLogId: string | null;
           consumeStatus: string;
           spendKind: SpendKind;
+          createdAt: Date;
         }
       | undefined;
     if (!row || row.consumeStatus !== 'pending') return;
@@ -907,12 +911,15 @@ export async function settlePendingLedgerRow(ledgerId: string): Promise<void> {
     // Settle against the wallet the claim named (WAL-5), never re-derived from the user.
     // The debt row keeps the claim's kind, so compute debt never reads as a seat draw.
     const outcome = await decrementAndSettle(tx, ledgerId, row.userId, row.walletId, chargeMc, row.aiUsageLogId, null, row.spendKind);
-    if (outcome) settled = { userId: row.userId, walletId: row.walletId, outcome };
+    if (outcome) settled = { userId: row.userId, walletId: row.walletId, outcome, at: row.createdAt };
   });
   // A pending row settled this run (cron retry): push the user's fresh balance so a
   // call that never emitted at its own finish still reaches the navbar live.
   if (settled) {
     void emitCreditsUpdated(settled.userId);
     await noticeDebt(settled.outcome, settled.walletId);
+    // WAL-7: a row settled late still alerts, judged in the window of its call (the claim's time).
+    await notifyCapAlerts({ walletId: settled.walletId, userId: settled.userId, now: settled.at });
+    void announceWalletChange(settled.walletId, 'balance');
   }
 }
