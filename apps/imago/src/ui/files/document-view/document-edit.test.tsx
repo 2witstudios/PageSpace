@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, type ReactNode } from 'react';
+import { act, useState, type ReactNode } from 'react';
 import { useSWRConfig, type ScopedMutator } from 'swr';
 import type { Editor } from '@tiptap/react';
 import { afterEach, beforeEach, describe, test, vi } from 'vitest';
@@ -118,24 +118,36 @@ function SWRProbe(): ReactNode {
   return null;
 }
 
-const show = (routes: Record<string, FakeRoute>, { withObject = true } = {}) => {
-  const web = fakeWeb({ [PAGE]: getPage, [SAVE]: savePage, [RIGHTS]: rights(true), [TREE]: tree, ...routes });
-  const realtime = fakeRealtime();
-  const object = (
+/** The document as the object slot holds it; the shell's SWR cache outlives it, as navigation leaves it. */
+const objectSlot: { setOpen: (open: boolean) => void } = { setOpen: () => {} };
+function ObjectSlot({ initiallyOpen }: { readonly initiallyOpen: boolean }): ReactNode {
+  const [open, setOpen] = useState(initiallyOpen);
+  objectSlot.setOpen = setOpen;
+  return open ? (
     <PageObject driveId="d1" pageId="notes">
       <PageView driveId="d1" pageId="notes" />
     </PageObject>
-  );
+  ) : null;
+}
+
+const show = (routes: Record<string, FakeRoute>, { withObject = true } = {}) => {
+  const web = fakeWeb({ [PAGE]: getPage, [SAVE]: savePage, [RIGHTS]: rights(true), [TREE]: tree, ...routes });
+  const realtime = fakeRealtime();
   const container = mount(
     <ImagoSWRProvider client={web.client}>
       <RealtimeProvider client={realtime.client}>
         <SWRProbe />
         <TreeProbe />
-        {withObject ? object : null}
+        <ObjectSlot initiallyOpen={withObject} />
       </RealtimeProvider>
     </ImagoSWRProvider>,
   );
-  return { web, realtime, container };
+  /** The viewer opens another page (the document closes) or comes back to it, in the same shell. */
+  const setOpen = (open: boolean) =>
+    act(() => {
+      objectSlot.setOpen(open);
+    });
+  return { web, realtime, container, close: () => setOpen(false), reopen: () => setOpen(true) };
 };
 
 type EditorElement = HTMLElement & { editor?: Editor };
@@ -890,23 +902,27 @@ describe('a closing save that answers after the page reopened', () => {
         });
       },
     };
-    const { container } = show(routes);
+    const { container, close, reopen } = show(routes);
     await editable(container);
     await type(container, '<p>Leaving</p>');
-    unmountAll();
-    // The closing save is still out when the viewer opens the page again and types.
-    const back = show(routes);
-    await editable(back.container);
-    await type(back.container, '<p>Back again</p>');
+    close();
+    // The closing save is still out when the viewer opens the page again (from the shell's
+    // cache, at the revision before that save) and types.
+    reopen();
+    await editable(container);
+    await type(container, '<p>Back again</p>');
     const before = isEditingDocument(getUiState(), 'notes');
     await act(async () => {
       release();
     });
+    await settle(() => {
+      if (stored.revision !== 4) throw new Error('closing save not stored');
+    });
     await pass(30);
     assert({
       given: 'a document closed with its save still out, reopened and typed in before that save answered',
-      should: 'keep SWR held off the reopened document, and its text on screen, when the old save finally lands',
-      actual: [before, isEditingDocument(getUiState(), 'notes'), textOf(back.container), stored.content],
+      should: 'keep SWR held off the reopened document, and its text on screen, when the old save lands in the cache',
+      actual: [before, isEditingDocument(getUiState(), 'notes'), textOf(container), stored.content],
       expected: [true, true, 'Back again', '<p>Leaving</p>'],
     });
   });
