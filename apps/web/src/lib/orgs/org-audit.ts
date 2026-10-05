@@ -51,9 +51,9 @@ export const AUDIT_EVENT_SENTENCES: Record<OrgAuditCatalogType, string> = {
   'org.billing.pool_refilled': 'the credits pool was refilled',
   'org.compute.reattributed': 'handed compute costs to a drive lead',
   'org.app.unparked': 'took back a parked app',
-  'org.automation.owner_left': 'paused an automation whose owner left',
+  'org.automation.owner_left': 'paused an automation whose owner is no longer here',
   'org.automation.reassigned': 'handed an automation to a new owner',
-  'org.automation.deleted': 'deleted an automation whose owner left',
+  'org.automation.deleted': 'deleted an automation whose owner is no longer here',
 };
 
 export const AUDIT_CATEGORY_LABELS: Record<OrgAuditCategory, string> = {
