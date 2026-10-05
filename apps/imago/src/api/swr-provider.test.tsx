@@ -58,7 +58,10 @@ const reader = (key: string) => {
   return { Reader, seen };
 };
 
-const settle = (check: () => void) => vi.waitFor(check, { timeout: 1000, interval: 5 });
+// SWR resolves outside React's event loop; waiting inside act() flushes the
+// state updates it causes.
+const settle = (check: () => void): Promise<void> =>
+  act(() => vi.waitFor(check, { timeout: 1000, interval: 5 }));
 
 describe('ImagoSWRProvider', () => {
   test('fetches through the imago client', async () => {
