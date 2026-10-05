@@ -7,6 +7,8 @@ import { dispatch, transactions } from '../../store/transactions';
 import type { TaskList } from '../task-model/task';
 import { listProgress } from '../task-tree/task-tree';
 import { renderTreeView, type TaskNotice } from '../tree-view/tree-view.render';
+import { doneToday, frontier } from '../focus-view/focus';
+import { renderFocusView } from '../focus-view/focus-view.render';
 import { useTaskView } from '../task-view/use-task-view';
 import type { TaskViewName } from '../task-view/task-view';
 import { useDriveTaskLists, useTaskList, type ActionResult, type TaskActions } from '../use-tasks/use-tasks';
@@ -18,15 +20,16 @@ export type TaskListViewProps = {
   readonly pageId: string;
   /** Whose view choice to restore and save. */
   readonly viewerId: string;
+  /** What "today" is for Done today; the machine's clock unless a test injects one. */
+  readonly clock?: () => Date;
 };
 
 const selectExpanded = (state: UiState) => state.resources.expandedTasks;
 
-/** Focus and Board are their own leaves (IMG-9.3, IMG-9.4); until they land, they say so. */
-const comingViews: Readonly<Record<Exclude<TaskViewName, 'tree'>, string>> = {
-  focus: 'Focus view is not available yet. Switch to Tree to work on this list.',
-  board: 'Board view is not available yet. Switch to Tree to work on this list.',
-};
+/** Board is its own leaf (IMG-9.4); until it lands, it says so. */
+const comingBoard = 'Board view is not available yet. Switch to Tree to work on this list.';
+
+const systemClock = (): Date => new Date();
 
 type Body = {
   readonly list: TaskList | undefined;
@@ -36,15 +39,31 @@ type Body = {
   readonly notice: TaskNotice | null;
   readonly actions: TaskActions;
   readonly report: (at: string) => (result: ActionResult) => void;
+  readonly clock: () => Date;
 };
 
-const bodyFor = ({ list, error, view, expandedIds, notice, actions, report }: Body): ReactNode => {
+const bodyFor = ({ list, error, view, expandedIds, notice, actions, report, clock }: Body): ReactNode => {
   if (list === undefined) {
     return error === undefined
       ? renderTaskListMessage('Loading tasks…', 'status')
       : renderTaskListMessage('Could not load this task list.', 'alert');
   }
-  if (view !== 'tree') return renderTaskListMessage(comingViews[view], 'status');
+  if (view === 'board') return renderTaskListMessage(comingBoard, 'status');
+  if (view === 'focus') {
+    return renderFocusView({
+      title: list.title,
+      listPageId: list.pageId,
+      groups: frontier(list),
+      done: doneToday(list, clock()),
+      notice,
+      toggleComplete: (taskId) => {
+        void actions.toggleComplete(taskId).then(report(taskId));
+      },
+      capture: (title) => {
+        void actions.create(list.pageId, { title }).then(report(list.pageId));
+      },
+    });
+  }
   return renderTreeView({
     list,
     expandedIds,
@@ -64,7 +83,7 @@ const bodyFor = ({ list, error, view, expandedIds, notice, actions, report }: Bo
  * refusals come from useTaskList over the real task routes; the view choice
  * and which tasks are open are store resources.
  */
-export function TaskListView({ driveId, pageId, viewerId }: TaskListViewProps) {
+export function TaskListView({ driveId, pageId, viewerId, clock = systemClock }: TaskListViewProps) {
   const { lists } = useDriveTaskLists(driveId);
   const title = lists?.find((entry) => entry.pageId === pageId)?.title ?? '';
   const { list, error, actions } = useTaskList(pageId, title);
@@ -78,6 +97,6 @@ export function TaskListView({ driveId, pageId, viewerId }: TaskListViewProps) {
     progress: list === undefined ? undefined : listProgress(list),
     view,
     switchView,
-    body: bodyFor({ list, error, view, expandedIds, notice, actions, report }),
+    body: bodyFor({ list, error, view, expandedIds, notice, actions, report, clock }),
   });
 }
