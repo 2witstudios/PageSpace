@@ -88,6 +88,8 @@ vi.mock('../actor-permissions', async (importOriginal) => {
     ...actual,
     canActorManageDrive: vi.fn().mockResolvedValue(true),
     resolveActingAgentId: vi.fn().mockResolvedValue(undefined),
+    // Its Imago ceiling is covered in actor-permissions.test.ts; here it only passes the agent's drives through.
+    filterAgentDriveIdsByActorReach: vi.fn(async (_context: unknown, driveIds: string[]) => driveIds),
   };
 });
 

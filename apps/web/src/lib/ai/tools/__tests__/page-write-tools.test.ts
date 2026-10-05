@@ -182,7 +182,10 @@ vi.mock('@/lib/canvas/publish-page', () => ({
 // are real agent pages, so they keep the agent-scoped path.
 vi.mock('@pagespace/db/db', () => ({
   db: {
-    select: () => ({ from: () => ({ where: () => Promise.resolve([{ type: 'AI_CHAT', userScopedAccess: false }]) }) }),
+    select: () => {
+      const actingPageRow = { where: () => Promise.resolve([{ type: 'AI_CHAT', userScopedAccess: false }]) };
+      return { from: () => ({ ...actingPageRow, leftJoin: () => actingPageRow }) };
+    },
     transaction: vi.fn(async (fn: (tx: unknown) => Promise<unknown>) => fn({})),
   },
 }));

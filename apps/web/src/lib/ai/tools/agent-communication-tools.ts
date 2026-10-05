@@ -10,7 +10,7 @@ import { conversations as conversationsTable, messages as unifiedMessages } from
 import { users } from '@pagespace/db/schema/auth';
 import { prepareHistoryForModel, finishModelRequest } from '@/lib/ai/core/context-assembly';
 import { runCompaction } from '@/lib/ai/core/compaction/compaction-service';
-import { canActorViewPage, canActorAccessDrive, canActorConsultAgent, filterDriveIdsByAppTokenScope, filterDriveIdsByMcpScope, isMcpScoped, resolveActingAgentId } from './actor-permissions';
+import { canActorViewPage, canActorAccessDrive, canActorConsultAgent, filterAgentDriveIdsByActorReach, filterDriveIdsByAppTokenScope, filterDriveIdsByMcpScope, isMcpScoped, resolveActingAgentId } from './actor-permissions';
 import { listAgentDrives, getAgentContextDrives } from '@pagespace/lib/services/drive-agent-service';
 import { listAccessibleDrives } from '@pagespace/lib/services/drive-service';
 import { filterToolsForMcpScope, filterToolsForSandboxEnablement } from '@/lib/ai/core/tool-filtering';
@@ -296,7 +296,7 @@ export const agentCommunicationTools = {
         if (agentPageId) {
           const allAgentDrives = await listAgentDrives(agentPageId);
           const scopedIds = new Set(
-            await filterDriveIdsByAppTokenScope(executionContext, allAgentDrives.map((d) => d.driveId)),
+            await filterAgentDriveIdsByActorReach(executionContext, allAgentDrives.map((d) => d.driveId)),
           );
           userDrives = allAgentDrives
             .filter((d) => scopedIds.has(d.driveId))
