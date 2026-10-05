@@ -168,7 +168,7 @@ export async function fetchDriveMemberEmails(driveId: string): Promise<string[]>
 // ---------------------------------------------------------------------------
 
 export type { OrgGuest, OrgDriveUsage, OrgMemberActivity } from '@pagespace/lib/permissions/org-read-models';
-export type { OrgSeatCapView, OrgSeatCapsRead } from '@pagespace/lib/services/drive-wallet-service';
+export type { OrgSeatCapView, OrgSeatCapsRead, OrgPoolSplit } from '@pagespace/lib/services/drive-wallet-service';
 export type { OrgPolicies, OrgPoliciesPatch } from '@pagespace/lib/organizations/policies-core';
 
 export interface OrgDriveDirectoryEntry {
@@ -187,6 +187,8 @@ export const orgReadKeys = {
   seatCaps: (orgId: string) => `/api/orgs/${orgId}/seat-caps`,
   driveUsage: (orgId: string) => `/api/orgs/${orgId}/drives/usage`,
   policies: (orgId: string) => `/api/orgs/${orgId}/policies`,
+  pool: (orgId: string) => `/api/orgs/${orgId}/pool`,
+  invoices: (orgId: string) => `/api/orgs/${orgId}/billing/invoices`,
 } as const;
 
 export const changeOrgMemberRole = (orgId: string, userId: string, role: 'ADMIN' | 'MEMBER') =>
