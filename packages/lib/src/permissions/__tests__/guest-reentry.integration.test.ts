@@ -344,3 +344,21 @@ describe('approve mode replays exactly what was held (independent re-verify of #
     expect(policySettled).toBe(true);
   });
 });
+
+describe('who counts as an admitted guest when access re-enters', () => {
+  it('POL-2 (partial) X-6 (partial) under approve, a member upsert over a PENDING invitation row is an admission (queued), not a role change; over an accepted row it is a role change', async () => {
+    await setGuests('approve');
+    await db.insert(driveMembers).values({ driveId: w.orgDrive, userId: w.outsider, role: 'MEMBER', acceptedAt: null, invitedBy: w.owner });
+    const upsert = () => db.transaction((tx) => admitReentry(tx, { driveId: w.orgDrive, userId: w.outsider, member: { role: 'ADMIN', acceptedAt: new Date() }, requestedBy: null, memberRowIsRoleChange: true }));
+    expect(await upsert()).toMatchObject({ outcome: 'held' });
+    await db.update(driveMembers).set({ acceptedAt: new Date() }).where(and(eq(driveMembers.driveId, w.orgDrive), eq(driveMembers.userId, w.outsider)));
+    expect(await upsert()).toEqual({ outcome: 'admit' });
+  });
+
+  it('POL-2 (partial) a page-link GUEST row is not an admitted guest of the drive: a re-entering grant on another page is queued under approve', async () => {
+    await setGuests('approve');
+    await db.insert(driveMembers).values({ driveId: w.orgDrive, userId: w.outsider, role: 'GUEST', acceptedAt: new Date() });
+    const outcome = await db.transaction((tx) => admitReentry(tx, { driveId: w.orgDrive, userId: w.outsider, grants: [{ pageId: w.orgPage, ...EDIT }], requestedBy: w.owner }));
+    expect(outcome).toMatchObject({ outcome: 'held' });
+  });
+});

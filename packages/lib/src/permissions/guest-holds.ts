@@ -13,7 +13,7 @@
  * snapshot. Nothing is destroyed: the hold holds every column of both.
  */
 import { db } from '@pagespace/db/db';
-import { and, asc, eq, inArray, isNotNull, sql, type SQL } from '@pagespace/db/operators';
+import { and, asc, eq, inArray, isNotNull, ne, sql, type SQL } from '@pagespace/db/operators';
 import { mcpTokens, users } from '@pagespace/db/schema/auth';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { decryptField } from '../encryption/field-crypto';
@@ -120,8 +120,9 @@ const grantOutsiders = (executor: Executor, scope: GuestScope): Promise<Pair[]> 
       inArray(pages.driveId, scopeDriveIds(executor, scope)),
       scope.userId ? eq(pagePermissions.userId, scope.userId) : undefined,
       scope.pageIds ? inArray(pagePermissions.pageId, scope.pageIds) : undefined,
-      // Only an ACCEPTED member row exempts (an admitted guest); a pending invitation admits nobody (re-verify N2).
-      scope.pageIds ? sql`not exists (select 1 from ${driveMembers} m where m."driveId" = ${pages.driveId} and m."userId" = ${pagePermissions.userId} and m."acceptedAt" is not null)` : undefined,
+      // Only an ACCEPTED, non-GUEST member row exempts (an admitted guest of the drive); a pending invitation admits
+      // nobody (re-verify N2) and a page-link GUEST row holds one page, not the drive.
+      scope.pageIds ? sql`not exists (select 1 from ${driveMembers} m where m."driveId" = ${pages.driveId} and m."userId" = ${pagePermissions.userId} and m."acceptedAt" is not null and m.role <> 'GUEST')` : undefined,
       outsiderOf(scope.orgId, sql`${pagePermissions.userId}`, sql`${pages.driveId}`),
     ))
     .orderBy(asc(pages.driveId), asc(pagePermissions.userId))
@@ -348,22 +349,21 @@ export async function admitReentry(
 ): Promise<ReentryDecision> {
   const admission = await decideOrgDriveAdmission({ driveId: input.driveId, userId: input.userId }, executor);
   if (admission.decision === 'allow' || !admission.orgId) return { outcome: 'admit' };
-  if (input.member && input.memberRowIsRoleChange) {
-    // Writing over a member row that is already there changes a role; it admits nobody.
-    const [row] = await executor
+  // An ADMITTED guest of the drive is one who holds an ACCEPTED, non-GUEST member row there: a grant for them is not a
+  // new admission, and writing over that row only changes a role. A pending invitation admits nobody (it is theirs
+  // to accept, and approve-mode acceptance asks then), and a page-link GUEST row holds one page, not the drive.
+  if (!input.member || input.memberRowIsRoleChange) {
+    const [admitted] = await executor
       .select({ id: driveMembers.id })
       .from(driveMembers)
-      .where(and(eq(driveMembers.driveId, input.driveId), eq(driveMembers.userId, input.userId)))
+      .where(and(
+        eq(driveMembers.driveId, input.driveId),
+        eq(driveMembers.userId, input.userId),
+        isNotNull(driveMembers.acceptedAt),
+        ne(driveMembers.role, 'GUEST'),
+      ))
       .limit(1);
-    if (row) return { outcome: 'admit' };
-  }
-  if (!input.member) {
-    const [row] = await executor
-      .select({ id: driveMembers.id })
-      .from(driveMembers)
-      .where(and(eq(driveMembers.driveId, input.driveId), eq(driveMembers.userId, input.userId), isNotNull(driveMembers.acceptedAt)))
-      .limit(1);
-    if (row) return { outcome: 'admit' };
+    if (admitted) return { outcome: 'admit' };
   }
   if (admission.decision === 'refuse') return { outcome: 'refused' };
   const hold = await queueHeldAccess(executor, {
