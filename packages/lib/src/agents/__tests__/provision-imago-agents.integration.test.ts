@@ -47,6 +47,11 @@ async function userWithHome() {
   return { user, home };
 }
 
+function folderOf(result: { folderId: string | null }): string {
+  if (!result.folderId) throw new Error('expected provisioning to report an Imago folder');
+  return result.folderId;
+}
+
 async function pointersFor(userId: string) {
   return db.select().from(userBuiltinAgents).where(eq(userBuiltinAgents.userId, userId));
 }
@@ -85,7 +90,7 @@ describe('provisionImagoAgents (real Postgres)', () => {
     expect(result.homeDriveId).toBe(home.id);
     expect([...result.created].sort()).toEqual([...BUILTIN_AGENT_KEYS].sort());
 
-    const [folder] = await db.select().from(pages).where(eq(pages.id, result.folderId));
+    const [folder] = await db.select().from(pages).where(eq(pages.id, folderOf(result)));
     expect(folder).toMatchObject({
       title: IMAGO_FOLDER_TITLE,
       type: 'FOLDER',
@@ -140,8 +145,8 @@ describe('provisionImagoAgents (real Postgres)', () => {
     const logs = await db
       .select()
       .from(activityLogs)
-      .where(and(eq(activityLogs.operation, 'create'), inArray(activityLogs.pageId, [...agentIds, result.folderId])));
-    expect(logs.map((log) => log.pageId).sort()).toEqual([...agentIds, result.folderId].sort());
+      .where(and(eq(activityLogs.operation, 'create'), inArray(activityLogs.pageId, [...agentIds, folderOf(result)])));
+    expect(logs.map((log) => log.pageId).sort()).toEqual([...agentIds, folderOf(result)].sort());
     for (const log of logs) {
       expect(log).toMatchObject({ userId: user.id, driveId: home.id, resourceType: 'page' });
     }
@@ -156,7 +161,7 @@ describe('provisionImagoAgents (real Postgres)', () => {
 
     expect(second.created).toEqual([]);
     expect(second.agents).toEqual(first.agents);
-    expect(second.folderId).toBe(first.folderId);
+    expect(folderOf(second)).toBe(folderOf(first));
     expect(await agentPagesIn(home.id)).toHaveLength(BUILTIN_AGENT_KEYS.length);
     const folders = await db
       .select()
@@ -183,7 +188,7 @@ describe('provisionImagoAgents (real Postgres)', () => {
     const pointer = (await pointersFor(user.id)).find((p) => p.key === 'imago-planner');
     expect(pointer?.pageId).toBe(second.agents['imago-planner']);
     const [page] = await db.select().from(pages).where(eq(pages.id, second.agents['imago-planner']));
-    expect(page).toMatchObject({ title: 'Imago Planner', parentId: first.folderId, driveId: home.id, isTrashed: false });
+    expect(page).toMatchObject({ title: 'Imago Planner', parentId: folderOf(first), driveId: home.id, isTrashed: false });
   });
 
   it('given a user who trashed an agent page, should recreate it and repoint the key', async () => {
@@ -212,15 +217,34 @@ describe('provisionImagoAgents (real Postgres)', () => {
     await db
       .update(pages)
       .set({ isTrashed: true, trashedAt: new Date() })
-      .where(inArray(pages.id, [first.folderId, ...Object.values(first.agents)]));
+      .where(inArray(pages.id, [folderOf(first), ...Object.values(first.agents)]));
 
     const second = await provisionImagoAgents(user.id);
 
-    expect(second.folderId).not.toBe(first.folderId);
+    expect(folderOf(second)).not.toBe(folderOf(first));
     expect([...second.created].sort()).toEqual([...BUILTIN_AGENT_KEYS].sort());
     const live = await agentPagesIn(home.id);
     expect(live).toHaveLength(BUILTIN_AGENT_KEYS.length);
-    for (const page of live) expect(page.parentId).toBe(second.folderId);
+    for (const page of live) expect(page.parentId).toBe(folderOf(second));
+  });
+
+  it('given live agents moved out of a deleted Imago folder, should not recreate the empty folder', async () => {
+    if (!dbAvailable) return;
+    const { user, home } = await userWithHome();
+    const first = await provisionImagoAgents(user.id);
+    await db.update(pages).set({ parentId: null }).where(inArray(pages.id, Object.values(first.agents)));
+    await db.delete(pages).where(eq(pages.id, folderOf(first)));
+
+    const second = await provisionImagoAgents(user.id);
+
+    expect(second.created).toEqual([]);
+    expect(second.folderId).toBeNull();
+    expect(second.agents).toEqual(first.agents);
+    const folders = await db
+      .select()
+      .from(pages)
+      .where(and(eq(pages.driveId, home.id), eq(pages.title, IMAGO_FOLDER_TITLE), eq(pages.type, 'FOLDER')));
+    expect(folders).toHaveLength(0);
   });
 
   it('given a user without a Home drive, should refuse rather than invent one', async () => {
