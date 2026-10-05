@@ -141,16 +141,24 @@ test('a channel post from one member reaches the other live, with the unread bad
 });
 
 test('a DM round-trips a message both ways', async ({ browser, baseURL }) => {
-  // The poster starts the conversation through apps/web, as classic's "Message" button does.
+  // The poster starts the conversation through apps/web, as classic's "Message" button does:
+  // from inside their signed-in page. Not `page.request`: in production web sets the session
+  // cookie Secure, and Playwright's request context withholds Secure cookies over http while
+  // Chromium (which trusts 127.0.0.1) sends them — so only the browser's own fetch is the
+  // signed-in path on the CI origin.
   const mine = await open(browser, baseURL);
   await signIn(mine.page, poster, '/imago/dm');
-  const { csrfToken } = (await (await mine.page.request.get('/api/auth/csrf')).json()) as { csrfToken: string };
-  const started = await mine.page.request.post('/api/messages/conversations', {
-    headers: { 'X-CSRF-Token': csrfToken },
-    data: { recipientId: reader.id },
-  });
-  expect(started.status(), await started.text()).toBe(200);
-  const { conversation } = (await started.json()) as { conversation: { id: string } };
+  const started = await mine.page.evaluate(async (recipientId) => {
+    const { csrfToken } = (await (await fetch('/api/auth/csrf')).json()) as { csrfToken: string };
+    const response = await fetch('/api/messages/conversations', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+      body: JSON.stringify({ recipientId }),
+    });
+    return { status: response.status, body: await response.text() };
+  }, reader.id);
+  expect(started.status, started.body).toBe(200);
+  const { conversation } = JSON.parse(started.body) as { conversation: { id: string } };
   const dm = `/imago/dm/${conversation.id}`;
 
   // The reader opens it, empty, named for the poster.
