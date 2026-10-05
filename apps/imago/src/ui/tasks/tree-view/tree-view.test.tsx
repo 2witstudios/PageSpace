@@ -160,20 +160,26 @@ describe('renderTreeView()', () => {
   });
 
   test('five levels deep', () => {
+    // Level 5 holds a sixth-level task, as a tree from elsewhere might, so a
+    // level-5 "Add subtask" would render if the depth guard were missing.
     const deep = (level: number): TaskList =>
       taskList(`page-${level - 1}`, [
-        task(`t${level}`, level < 5 ? { subTaskCount: 1, subtasks: deep(level + 1) } : {}),
+        task(`t${level}`, level < 6 ? { subTaskCount: 1, subtasks: deep(level + 1) } : {}),
       ]);
     const list = { ...deep(1), pageId: 'l1' };
     const { container } = setup({ list, expandedIds: ['t1', 't2', 't3', 't4', 't5'] });
-    const subtaskAdders = [...container.querySelectorAll('button')].filter(
-      (button) => button.textContent === 'Add subtask',
-    ).length;
+    const adders = [...container.querySelectorAll('li[data-task]')]
+      .filter((row) =>
+        [...(row.querySelector(':scope > ul')?.children ?? [])].some(
+          (child) => child.querySelector(':scope > button')?.textContent === 'Add subtask',
+        ),
+      )
+      .map((row) => row.getAttribute('data-task'));
     assert({
-      given: 'a chain five levels deep, all expanded',
-      should: 'offer Add subtask under levels one to four only (PageSpace nests five deep)',
-      actual: { rows: rows(container), subtaskAdders },
-      expected: { rows: ['t1', 't2', 't3', 't4', 't5'], subtaskAdders: 4 },
+      given: 'a chain six levels deep, all expanded',
+      should: 'offer Add subtask under levels one to four and refuse it under level five (PageSpace nests five deep)',
+      actual: { rows: rows(container), adders },
+      expected: { rows: ['t1', 't2', 't3', 't4', 't5', 't6'], adders: ['t1', 't2', 't3', 't4'] },
     });
   });
 
