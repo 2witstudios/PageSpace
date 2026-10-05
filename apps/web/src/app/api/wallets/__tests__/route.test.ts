@@ -55,7 +55,7 @@ const req = (method: string, url: string, body?: unknown) =>
 const myWallets: MyWallets = {
   personal: { walletId: 'w-marcus', remainingCents: 5_000, remainingCredits: '5,000', defaultSpendSource: null },
   driveWallets: [{ driveId: 'd-product', driveName: 'Product', walletId: 'w-product', status: 'active', remainingCents: 116_442, remainingCredits: '116,442' }],
-  seats: [{ orgId: 'o-northwind', orgName: 'Northwind Labs', walletId: 'w-pool' }],
+  seats: [{ orgId: 'o-northwind', orgName: 'Northwind Labs', walletId: 'w-pool', allowanceCents: 15_000, allowanceCredits: '15,000', spentCents: 9_600, spentCredits: '9,600', remainingCents: 5_400, remainingCredits: '5,400' }],
   funds: { driveWallets: [], pools: [], donations: [] },
 };
 

@@ -5,7 +5,8 @@ import { useEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
-import { ChevronLeft, Shield, Users, Brain, Cable, HardDrive, Trash2, SlashSquare, Globe } from 'lucide-react';
+import { ChevronLeft, Shield, Users, Brain, Cable, HardDrive, Trash2, SlashSquare, Globe, Wallet } from 'lucide-react';
+import { ORGS_ENABLED } from '@pagespace/lib/organizations/orgs-enabled';
 import { useDriveStore } from '@/hooks/useDrive';
 import { SettingsRow, type SettingsItem } from '@/app/settings/SettingsRow';
 
@@ -39,6 +40,18 @@ export default function DriveSettingsPage() {
     },
   ];
 
+  // UI-9: every member reads the wallet (their remaining amount and cap); the page itself
+  // shows each person only what their role's projection carries. Dark while orgs are off.
+  const walletItems: SettingsItem[] = ORGS_ENABLED
+    ? [{
+        title: 'Wallet',
+        description: 'What AI usage here spends from, and who funds it',
+        icon: Wallet,
+        href: `/dashboard/${driveId}/settings/wallet`,
+        available: true,
+      }]
+    : [];
+
   if (isLoading) {
     return (
       <div className="container mx-auto px-4 py-10 sm:px-6 lg:px-10 max-w-2xl">
@@ -59,7 +72,7 @@ export default function DriveSettingsPage() {
 
   // Plain members see only the Commands row; everything else is owner/admin-only.
   const settingsSections: SettingsSection[] = !canManage
-    ? [{ title: 'Drive', items: commandsItems }]
+    ? [{ title: 'Drive', items: [...walletItems, ...commandsItems] }]
     : [
         {
           title: 'Drive',
@@ -85,6 +98,7 @@ export default function DriveSettingsPage() {
               href: `/dashboard/${driveId}/settings/roles`,
               available: true,
             },
+            ...walletItems,
             {
               title: 'Context',
               description: 'Workspace memory for AI',

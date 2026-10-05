@@ -709,6 +709,11 @@
       "import": "./dist/billing/automation-run-record.js",
       "require": "./dist/billing/automation-run-record.js"
     },
+    "./billing/wallet-surface": {
+      "types": "./dist/billing/wallet-surface.d.ts",
+      "import": "./dist/billing/wallet-surface.js",
+      "require": "./dist/billing/wallet-surface.js"
+    },
     "./billing/spend-target": {
       "types": "./dist/billing/spend-target.d.ts",
       "import": "./dist/billing/spend-target.js",
