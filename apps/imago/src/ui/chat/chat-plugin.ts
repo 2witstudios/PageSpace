@@ -27,7 +27,11 @@ export const chatPlugin = {
   resources: (): {
     /** The conversation an agent turn is streaming into; SWR leaves it alone meanwhile. */
     readonly streaming: StreamingTurn | null;
-  } => ({ streaming: null }),
+    /** What the viewer has typed in the chat composer; kept across navigation. */
+    readonly chatDraft: string;
+    /** The conversation the chat pane shows; null until one is chosen (the agent's latest). */
+    readonly chatConversationId: string | null;
+  } => ({ streaming: null, chatDraft: '', chatConversationId: null }),
   transactions: {
     startStreaming: (state: UiState, conversationId: string): UiState =>
       isStreaming(state, conversationId) ? state : withStreaming(state, { conversationId }),

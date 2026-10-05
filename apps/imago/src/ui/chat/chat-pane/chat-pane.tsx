@@ -65,11 +65,15 @@ export function ChatPane({ stage, driveName, homeDriveId }: ChatPaneProps) {
   const sending = useRef(false);
 
   const unprovisioned = agents !== undefined && agentId === null;
+  // Which conversation is latest is unknown until the list loads: a send then
+  // would start a new one instead of continuing it. A list that failed to load
+  // leaves only a new conversation to send into.
+  const resolving = chosen === null && conversations === undefined && conversationsError === undefined;
   const streaming = chat.status === 'submitted' || chat.status === 'streaming';
 
   const send = async () => {
     const text = draft;
-    if (agentId === null || text.trim() === '' || sending.current) return;
+    if (agentId === null || resolving || text.trim() === '' || sending.current) return;
     sending.current = true;
     setFailed(false);
     dispatch(transactions.setChatDraft, '');
@@ -131,7 +135,7 @@ export function ChatPane({ stage, driveName, homeDriveId }: ChatPaneProps) {
       placeholder: context.placeholder,
       density: context.density,
       streaming,
-      disabled: agentId === null,
+      disabled: agentId === null || resolving,
       typeDraft: (next) => dispatch(transactions.setChatDraft, next),
       send: () => void send(),
       stop: () => void chat.stop(),

@@ -16,6 +16,20 @@ describe('chatPlugin', () => {
     });
   });
 
+  test('resources', () => {
+    const first = chatPlugin.resources();
+    assert({
+      given: 'the chat slice’s resources, built twice, and a fresh UI state',
+      should: 'stream nothing, draft nothing and open no conversation, fresh each time and composed into the initial state',
+      actual: [
+        first,
+        first === chatPlugin.resources(),
+        [createInitialState().resources.streaming, createInitialState().resources.chatDraft, createInitialState().resources.chatConversationId],
+      ],
+      expected: [{ streaming: null, chatDraft: '', chatConversationId: null }, false, [null, '', null]],
+    });
+  });
+
   test('startStreaming', () => {
     const streaming = startStreaming(createInitialState(), 'c1');
     assert({
