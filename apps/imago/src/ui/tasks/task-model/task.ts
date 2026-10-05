@@ -99,9 +99,6 @@ export type DrivePagesLsResponse = {
   readonly pages: readonly DrivePageLsEntry[];
 };
 
-/** The 422 PATCH answers with when a parent still has open subtasks. */
-export const SUBTASKS_INCOMPLETE = 'SUBTASKS_INCOMPLETE';
-
 // ---------------------------------------------------------------------------
 // The model views read.
 
