@@ -114,6 +114,7 @@ function agentsResult(deferredTriggers: Array<() => void> = []) {
     folderId: 'imago-folder',
     agents: { imago: 'a1', 'imago-planner': 'a2', 'imago-researcher': 'a3' },
     created: [],
+    replacedPageIds: [],
     deferredTriggers,
   };
 }
