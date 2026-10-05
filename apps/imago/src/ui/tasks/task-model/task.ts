@@ -139,6 +139,12 @@ export type TaskStatus = {
   /** The group, not the slug, decides whether a task is done. */
   readonly group: StatusGroup;
   readonly position: number;
+  /**
+   * How many tasks the Board's column for this status should hold. PageSpace
+   * stores none yet (task_status_configs has no such column), so statuses
+   * read from the server never carry one.
+   */
+  readonly wipLimit?: number;
 };
 
 /** A person or an agent on a task. */
