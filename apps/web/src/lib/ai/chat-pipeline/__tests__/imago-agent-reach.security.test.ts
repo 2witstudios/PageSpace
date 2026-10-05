@@ -321,6 +321,10 @@ const readPathsInto = (driveId: string, pageId: string): ScriptedCall[] => [
   { toolName: 'glob_search', input: { driveId, pattern: '**' } },
 ];
 
+// Each test runs one or more real turns (route, tool loop, every executor);
+// the first one in a worker also pays the cold import of the whole route.
+vi.setConfig({ testTimeout: 30_000 });
+
 beforeAll(async () => {
   await ensureTestDb();
   world = await seedWorld();

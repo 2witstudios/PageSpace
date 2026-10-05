@@ -625,17 +625,15 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     // user's: tell it which drives those are, and below, whether the drive in
     // view is one of them. Null for every other agent, whose prompt this
     // leaves byte-identical. See imago-agent-context.ts for the trust boundary.
-    let imagoContext: ImagoAgentContext | null = null;
-    try {
-      imagoContext = await loadImagoAgentContext({
-        userId,
-        agentPageId: chatId,
-        allowedDriveIds: getAllowedDriveIds(authResult),
-      });
-    } catch (error) {
-      loggers.ai.error('AI Page Chat API: Failed to load Imago agent context', error as Error);
-      // Continue without it, as for member-drive context above.
-    }
+    // Fails closed, unlike the member-drive context above: without it an Imago
+    // page would run as an ordinary agent and pick up per-agent integration
+    // grants, which may name drives it holds no grant on (IMG-4.9). A failed
+    // load fails the turn.
+    const imagoContext: ImagoAgentContext | null = await loadImagoAgentContext({
+      userId,
+      agentPageId: chatId,
+      allowedDriveIds: getAllowedDriveIds(authResult),
+    });
     turnTimer.mark('imago_context_loaded');
 
     loggers.ai.debug('AI Page Chat API: Using custom agent configuration', {

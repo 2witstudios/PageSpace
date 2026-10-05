@@ -22,6 +22,22 @@ type CallOptions = Parameters<MockLanguageModelV3['doStream']>[0];
 
 const capturedToolNames: string[][] = [];
 
+/** Set to make the next Imago context load throw, as a failing query would. */
+const imagoContextFailure = vi.hoisted(() => ({ next: null as Error | null }));
+
+vi.mock('@/lib/ai/core/imago-agent-context', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/ai/core/imago-agent-context')>();
+  return {
+    ...actual,
+    loadImagoAgentContext: vi.fn(async (input: Parameters<typeof actual.loadImagoAgentContext>[0]) => {
+      const failure = imagoContextFailure.next;
+      imagoContextFailure.next = null;
+      if (failure) throw failure;
+      return actual.loadImagoAgentContext(input);
+    }),
+  };
+});
+
 vi.mock('@/lib/ai/core/provider-factory', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/ai/core/provider-factory')>();
   const { MockLanguageModelV3: Mock } = await import('ai/test');
@@ -89,6 +105,7 @@ type ProviderKey =
   | 'grantedDrive'
   | 'ungrantedDrive'
   | 'memberDrive'
+  | 'shareOnlyDrive'
   | 'homeDrive';
 
 interface World {
@@ -100,6 +117,8 @@ interface World {
   granted: { driveId: string; pageId: string };
   ungranted: { driveId: string };
   memberOnly: { driveId: string };
+  shareOnly: { driveId: string; pageId: string };
+  ungrantedDriveConnectionId: string;
   slugs: Record<ProviderKey, string>;
   enabledUserIntegrations: string[];
 }
@@ -152,10 +171,12 @@ async function connect(
 /**
  * IMG-4.7's world — Home, "Acme Plans" (granted), "Private Journal" (owned,
  * grant removed), "Partner Ops" (the user is an ADMIN member, never granted)
- * and an ordinary agent in Acme — plus integrations:
+ * and an ordinary agent in Acme — plus "Shared Ops", another user's drive the
+ * user reaches only through a page share, where the Imago agent nonetheless
+ * holds a grant — plus integrations:
  *   - three user connections: one enabled (all drives), one enabled but
  *     private, one the user left out of `enabledUserIntegrations`;
- *   - a drive connection on Home, on Acme, on Journal and on Partner;
+ *   - a drive connection on Home, on Acme, on Journal, on Partner and on Shared Ops;
  *   - the ordinary agent's own per-agent grant on the enabled user connection.
  */
 async function seedWorld(): Promise<World> {
@@ -168,6 +189,9 @@ async function seedWorld(): Promise<World> {
   const journal = await factories.createDrive(user.id, { name: 'Private Journal', slug: `journal-${createId()}` });
   const partner = await factories.createDrive(other.id, { name: 'Partner Ops', slug: `partner-${createId()}` });
   await factories.createDriveMember(partner.id, user.id, { role: 'ADMIN', acceptedAt: new Date() });
+  const sharedOps = await factories.createDrive(other.id, { name: 'Shared Ops', slug: `shared-ops-${createId()}` });
+  const sharedPage = await factories.createPage(sharedOps.id, { title: 'Shared Brief', type: 'DOCUMENT' });
+  await factories.createPagePermission(sharedPage.id, user.id);
 
   const launch = await factories.createPage(acme.id, { title: 'Q4 Launch', type: 'DOCUMENT' });
   const ordinary = await factories.createPage(acme.id, {
@@ -182,17 +206,23 @@ async function seedWorld(): Promise<World> {
   await db
     .delete(driveAgentMembers)
     .where(and(inArray(driveAgentMembers.agentPageId, Object.values(agents)), eq(driveAgentMembers.driveId, journal.id)));
+  // A grant on a drive the user only reaches through a page share. No toggle
+  // makes one (it needs owner/admin), but a grant outlives the membership it
+  // was made under when a member rollback or permissions restore removes the
+  // user — the same state, so the integration scope must not trust the grant.
+  await db.insert(driveAgentMembers).values({ driveId: sharedOps.id, agentPageId: agents.imago, role: 'MEMBER', addedBy: user.id });
 
   const slugs = {} as Record<ProviderKey, string>;
-  for (const key of ['userEnabled', 'userPrivate', 'userNotEnabled', 'grantedDrive', 'ungrantedDrive', 'memberDrive', 'homeDrive'] as const) {
+  for (const key of ['userEnabled', 'userPrivate', 'userNotEnabled', 'grantedDrive', 'ungrantedDrive', 'memberDrive', 'shareOnlyDrive', 'homeDrive'] as const) {
     slugs[key] = await createProvider(key);
   }
   const userEnabled = await connect(slugs.userEnabled, { userId: user.id });
   const userPrivate = await connect(slugs.userPrivate, { userId: user.id }, 'private');
   await connect(slugs.userNotEnabled, { userId: user.id });
   await connect(slugs.grantedDrive, { driveId: acme.id });
-  await connect(slugs.ungrantedDrive, { driveId: journal.id });
+  const ungrantedDriveConnectionId = await connect(slugs.ungrantedDrive, { driveId: journal.id });
   await connect(slugs.memberDrive, { driveId: partner.id });
+  await connect(slugs.shareOnlyDrive, { driveId: sharedOps.id });
   await connect(slugs.homeDrive, { driveId: home.id });
 
   const enabledUserIntegrations = [userEnabled, userPrivate];
@@ -215,15 +245,16 @@ async function seedWorld(): Promise<World> {
     granted: { driveId: acme.id, pageId: launch.id },
     ungranted: { driveId: journal.id },
     memberOnly: { driveId: partner.id },
+    shareOnly: { driveId: sharedOps.id, pageId: sharedPage.id },
+    ungrantedDriveConnectionId,
     slugs,
     enabledUserIntegrations,
   };
 }
 
-/** Run one real turn and return the integration providers the model was handed tools for. */
-async function integrationsSent(chatId: string, contextRef?: ContextRef): Promise<string[]> {
-  capturedToolNames.length = 0;
-  const response = await POST(
+/** POST one real turn to the page-chat route. */
+function postTurn(chatId: string, contextRef?: ContextRef): Promise<Response> {
+  return POST(
     new Request('http://localhost/api/ai/chat', {
       method: 'POST',
       headers: {
@@ -241,6 +272,12 @@ async function integrationsSent(chatId: string, contextRef?: ContextRef): Promis
       }),
     }),
   );
+}
+
+/** Run one real turn and return the integration providers the model was handed tools for. */
+async function integrationsSent(chatId: string, contextRef?: ContextRef): Promise<string[]> {
+  capturedToolNames.length = 0;
+  const response = await postTurn(chatId, contextRef);
   expect(response.status, await response.clone().text().catch(() => '')).toBe(200);
   await response.text();
   await vi.waitFor(() => expect(capturedToolNames.length).toBeGreaterThan(0), { timeout: 10_000 });
@@ -260,8 +297,14 @@ beforeAll(async () => {
   world = await seedWorld();
 }, 60_000);
 
+/** Give the Imago page itself a per-agent grant on the ungranted drive's connection. */
+const grantImagoPagePerAgent = () =>
+  db.insert(integrationToolGrants).values({ agentId: world.imagoPageId, connectionId: world.ungrantedDriveConnectionId });
+
 afterEach(async () => {
   vi.unstubAllEnvs();
+  imagoContextFailure.next = null;
+  await db.delete(integrationToolGrants).where(eq(integrationToolGrants.agentId, world.imagoPageId));
   await setConfig({ enabledUserIntegrations: world.enabledUserIntegrations, driveOverrides: {}, inheritDriveIntegrations: true });
 });
 
@@ -324,6 +367,44 @@ describe('runPageChatTurn — Imago agent user integrations (IMG-4.8)', () => {
 
     expect(sent).not.toContain('memberDrive');
     expect(sent).toEqual(['userEnabled', 'userPrivate']);
+  });
+
+  it("given a per-agent integration grant on the Imago page, should ignore it — with or without a drive in view", async () => {
+    await grantImagoPagePerAgent();
+
+    expect(await integrationsSent(world.imagoPageId)).toEqual(['userEnabled', 'userPrivate']);
+    expect(await integrationsSent(world.imagoPageId, { routeType: 'drive', driveId: world.granted.driveId })).toEqual([
+      'grantedDrive',
+      'userEnabled',
+    ]);
+    expect(await integrationsSent(world.imagoPageId, { routeType: 'drive', driveId: world.ungranted.driveId })).toEqual([
+      'userEnabled',
+      'userPrivate',
+    ]);
+  });
+
+  it('given a granted drive the user reaches only through a page share, should hand it none of that drive’s integrations', async () => {
+    const sent = await integrationsSent(world.imagoPageId, {
+      routeType: 'page',
+      pageId: world.shareOnly.pageId,
+      driveId: world.shareOnly.driveId,
+    });
+
+    // No drive membership, so no drive context: user integrations follow the dashboard rules.
+    expect(sent).toEqual(['userEnabled', 'userPrivate']);
+  });
+
+  it('given the Imago context fails to load, should fail the turn closed instead of falling back to per-agent grants', async () => {
+    await grantImagoPagePerAgent();
+    imagoContextFailure.next = new Error('connection reset');
+    capturedToolNames.length = 0;
+
+    const response = await postTurn(world.imagoPageId);
+
+    expect(response.status).toBe(500);
+    await response.text();
+    // The model was never called, so it was never handed the ungranted drive's tools.
+    expect(capturedToolNames).toEqual([]);
   });
 
   it('given onprem mode, should hand the Imago agent no external integration at all', async () => {
