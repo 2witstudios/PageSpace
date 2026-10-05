@@ -69,11 +69,16 @@ export const useAgentChat = (
   const latest = useRef({ contextRef });
   latest.current = { contextRef };
 
+  /**
+   * Sends a prompt into this conversation, or into `into` (one the caller has
+   * just created and is switching to). Answers whether the turn was taken: false
+   * when nothing was sent or the server refused it before replying.
+   */
   const send = useCallback(
-    async (text: string): Promise<void> => {
+    async (text: string, into?: string): Promise<boolean> => {
       const prompt = text.trim();
-      if (prompt === '' || agentId === null || conversationId === null || inFlight.current !== null) return;
-      const target = conversationId;
+      const target = into ?? conversationId;
+      if (prompt === '' || agentId === null || target === null || inFlight.current !== null) return false;
       const message = userTurnMessage(generateId(), prompt);
       const live: InFlight = { conversationId: target, messageId: null, stopping: false, reader: new AbortController() };
       inFlight.current = live;
@@ -110,9 +115,10 @@ export const useAgentChat = (
         // Refused before a reply began: nothing was said, so the prompt goes too.
         setTurn(null);
         report('error', failure);
-        return;
+        return false;
       }
       report(failure === null ? 'ready' : 'error', failure ?? undefined);
+      return true;
     },
     [agentId, client, conversationId],
   );
@@ -133,11 +139,13 @@ export const useAgentChat = (
     live.reader.abort();
   }, [client]);
 
+  // A conversation created for this turn has no thread yet (its read waits
+  // for the turn to end), so the live turn stands alone until it loads.
   const messages = useMemo(
     () =>
-      thread.messages === undefined || turn === null || turn.conversationId !== conversationId
+      turn === null || turn.conversationId !== conversationId
         ? thread.messages
-        : withLiveTurn(thread.messages, turn),
+        : withLiveTurn(thread.messages ?? [], turn),
     [conversationId, thread.messages, turn],
   );
 

@@ -1,10 +1,16 @@
 // @vitest-environment jsdom
 import { renderToString } from 'react-dom/server';
-import { describe, test } from 'vitest';
+import { act } from 'react';
+import { afterEach, describe, test, vi } from 'vitest';
 import { assert } from 'riteway/vitest';
+import { mount, unmountAll } from '@/ui/test-support/dom';
 import { citationChipClass } from '../citation-chip/citation-chip-class';
 import { proseClasses } from './chat-prose-class';
 import { ChatProse } from './chat-prose';
+
+afterEach(() => {
+  unmountAll();
+});
 
 /** The markup in a detached container, to query like the browser would. */
 const dom = (text: string, citationDriveId: string | null = 'd1'): HTMLElement => {
@@ -100,15 +106,18 @@ describe('ChatProse', () => {
     });
   });
 
-  test('streaming', () => {
+  test('streaming', async () => {
     const view = dom('Half **bold');
-    const container = document.createElement('div');
-    container.innerHTML = renderToString(<ChatProse text="Half **bold" streaming citationDriveId="d1" />);
+    const live = mount(<ChatProse text="Half **bold" streaming citationDriveId="d1" />);
+    await vi.waitFor(async () => {
+      await act(async () => {});
+      if (live.querySelector('strong') === null) throw new Error('not rendered');
+    });
     assert({
-      given: 'an unfinished bold span, static and while streaming',
-      should: 'complete the span while streaming so no stray asterisks show',
-      actual: [view.textContent?.includes('**'), container.querySelector('strong')?.textContent],
-      expected: [true, 'bold'],
+      given: 'an unfinished bold span, finished and while streaming',
+      should: 'show it as written once finished, and complete the span while streaming so no stray asterisks show',
+      actual: [view.textContent?.includes('**'), live.querySelector('strong')?.textContent, live.textContent?.includes('**')],
+      expected: [true, 'bold', false],
     });
   });
 });

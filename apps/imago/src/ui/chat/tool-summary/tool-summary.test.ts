@@ -2,8 +2,9 @@ import { describe, test } from 'vitest';
 import { assert } from 'riteway/vitest';
 import { DETAIL_LIMIT, toolLabel, toolSummary, type ToolPart } from './tool-summary';
 
-const part = (overrides: Partial<ToolPart> & Pick<ToolPart, 'state'>): ToolPart =>
-  ({ type: 'tool-read_page', toolCallId: 'call-1', input: { pageId: 'p1', title: 'Roadmap' }, ...overrides }) as ToolPart;
+/** A read_page call in any state; the test names only the fields it is about. */
+const part = (fields: Readonly<Record<string, unknown>> & { readonly state: ToolPart['state'] }): ToolPart =>
+  ({ type: 'tool-read_page', toolCallId: 'call-1', input: { pageId: 'p1', title: 'Roadmap' }, ...fields }) as unknown as ToolPart;
 
 describe('toolLabel()', () => {
   test('sentence case', () => {
@@ -22,7 +23,7 @@ describe('toolSummary()', () => {
       given: 'a call streaming its input, running, done, failed and denied',
       should: 'say running, running, done, failed and denied',
       actual: (['input-streaming', 'input-available', 'output-available', 'output-error', 'output-denied'] as const).map(
-        (state) => toolSummary(part({ state, output: {}, errorText: 'boom' } as Partial<ToolPart> & Pick<ToolPart, 'state'>)).state,
+        (state) => toolSummary(part({ state, output: {}, errorText: 'boom' })).state,
       ),
       expected: ['running', 'running', 'done', 'failed', 'denied'],
     });

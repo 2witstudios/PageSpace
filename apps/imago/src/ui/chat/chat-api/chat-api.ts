@@ -34,6 +34,8 @@ export const chatPaths = {
   /** One page of the viewer's conversations with an agent page, most recent first. */
   conversations: (agentId: string, page: number) =>
     `${agentConversations(agentId)}?page=${page}&pageSize=${CONVERSATIONS_PAGE_SIZE}`,
+  /** Creates a conversation with an agent page; the server picks its id. */
+  newConversation: (agentId: string) => agentConversations(agentId),
   /** A conversation's newest messages, or those before `cursor` (a message id). */
   messages: (agentId: string, conversationId: string, cursor?: string) =>
     `${agentConversations(agentId)}/${segment(conversationId)}/messages?limit=${MESSAGES_PAGE_SIZE}` +
@@ -84,4 +86,19 @@ export const fetchConversationMessages = async (
     olderCursor: hasMore ? nextCursor : null,
     rev: typeof body.rev === 'number' ? body.rev : null,
   };
+};
+
+/** What POST .../conversations answers. */
+type NewConversationResponse = { readonly conversationId?: unknown };
+
+/** Starts a conversation with an agent page and answers its id (the server's cuid2). */
+export const createConversation = async (client: ApiClient, agentId: string): Promise<string> => {
+  const body = await client.apiFetch<NewConversationResponse>(chatPaths.newConversation(agentId), {
+    method: 'POST',
+    json: {},
+  });
+  if (typeof body?.conversationId !== 'string' || body.conversationId === '') {
+    throw invalid('Conversation response carried no id');
+  }
+  return body.conversationId;
 };

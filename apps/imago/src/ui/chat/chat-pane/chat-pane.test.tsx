@@ -113,7 +113,7 @@ const type = (container: HTMLElement, text: string): void => {
   });
 };
 
-const items = (container: HTMLElement) => [...container.querySelectorAll('ol > li[data-role]')];
+const items = (container: HTMLElement) => [...container.querySelectorAll<HTMLElement>('ol > li[data-role]')];
 
 const threadLoaded = (container: HTMLElement, count = 2) => () => {
   if (items(container).length !== count) throw new Error(`thread has ${items(container).length} messages`);

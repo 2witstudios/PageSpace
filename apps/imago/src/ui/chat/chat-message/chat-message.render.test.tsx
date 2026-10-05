@@ -83,10 +83,10 @@ describe('renderChatMessage()', () => {
   test('streaming reply', () => {
     const message: ChatMessage = { id: 'm4', role: 'assistant', parts: [{ type: 'text', text: 'Half **bold' }] };
     assert({
-      given: 'the reply still streaming',
-      should: 'mark it busy and render its unfinished markdown completed',
-      actual: [dom(message, 'roomy', true).querySelector('li')?.getAttribute('aria-busy'), dom(message, 'roomy', true).querySelector('strong')?.textContent],
-      expected: ['true', 'bold'],
+      given: 'a reply still streaming, and the same reply finished',
+      should: 'mark only the streaming one busy',
+      actual: [dom(message, 'roomy', true).querySelector('li')?.getAttribute('aria-busy'), dom(message).querySelector('li')?.getAttribute('aria-busy')],
+      expected: ['true', null],
     });
   });
 });
