@@ -55,3 +55,32 @@ export function useSocketEvent<Args extends unknown[] = unknown[]>(
     };
   }, [realtime, event]);
 }
+
+/** realtime's event for joining a drive's room (apps/realtime/src/index.ts). */
+export const JOIN_DRIVE = 'join_drive';
+
+/**
+ * Keeps this tab in `driveId`'s realtime room while mounted, where page
+ * events for the drive are sent: joins once the socket is connected and again
+ * after every reconnect, since realtime forgets a socket's rooms when it
+ * drops. Realtime checks drive access itself. Like classic, the room is not
+ * left on unmount or on a drive switch: other hooks may share it, and handlers
+ * filter events by drive.
+ */
+export function useDriveRoom(driveId: string | null): void {
+  const realtime = useContext(RealtimeContext);
+  if (!realtime) throw new Error('useDriveRoom must be used inside <RealtimeProvider>');
+
+  useEffect(() => {
+    if (driveId === null) return;
+    const socket = realtime.socket();
+    const join = () => {
+      socket.emit(JOIN_DRIVE, driveId);
+    };
+    if (socket.connected) join();
+    socket.on('connect', join);
+    return () => {
+      socket.off('connect', join);
+    };
+  }, [realtime, driveId]);
+}
