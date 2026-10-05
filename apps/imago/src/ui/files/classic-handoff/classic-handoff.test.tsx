@@ -11,7 +11,9 @@ import { stageFor } from '../../frame/stage/stage';
 import { chatPaths } from '../../chat/chat-api/chat-api';
 import { agentConversation, conversationsPage, driveAgentsBody, messagesPage, pointers, userMessage } from '../../chat/chat-model/fixtures';
 import { ChatPane } from '../../chat/chat-pane/chat-pane';
+import { FileObject } from '../file-object/file-object';
 import { PageObject } from '../page-object/page-object';
+import { PageView } from '../page-view/page-view';
 
 // The router is Next's seam: switching to the chat is a push to the drive's chat address.
 const router = vi.hoisted(() => ({ pushed: [] as string[] }));
@@ -139,7 +141,36 @@ describe('ClassicHandoff', () => {
   });
 });
 
+/** The object slot exactly as the files/[pageId] route nests it. */
+const showRoute = (route: FakeRoute) => {
+  const web = fakeWeb({ [PAGE]: route });
+  return mount(
+    <ImagoSWRProvider client={web.client}>
+      <PageObject driveId="d1" pageId="p1">
+        <FileObject driveId="d1" pageId="p1">
+          <ClassicHandoff driveId="d1" pageId="p1">
+            <PageView driveId="d1" pageId="p1" />
+          </ClassicHandoff>
+        </FileObject>
+      </PageObject>
+    </ImagoSWRProvider>,
+  );
+};
+
 describe('behind the page gate', () => {
+  test('a page of this drive imago does not render', async () => {
+    const container = showRoute(page('SHEET'));
+    await settle(() => {
+      if (!card(container)) throw new Error('no card');
+    });
+    assert({
+      given: 'a sheet of this drive, as the route nests the object slot',
+      should: 'draw the hand-off card and neither the folder browser nor the page placeholder',
+      actual: [cardParts(container), container.querySelector('[data-object-placeholder]')],
+      expected: [['Sheet', 'Q3 numbers', 'Open in classic', '/dashboard/d1/p1', []], null],
+    });
+  });
+
   test('a page the address does not own', async () => {
     const cases: readonly [string, FakeRoute][] = [
       ['an unknown id (404)', () => Response.json({ error: 'Page not found' }, { status: 404 })],
@@ -149,16 +180,7 @@ describe('behind the page gate', () => {
     ];
     const actual: unknown[] = [];
     for (const [name, route] of cases) {
-      const web = fakeWeb({ [PAGE]: route });
-      const container = mount(
-        <ImagoSWRProvider client={web.client}>
-          <PageObject driveId="d1" pageId="p1">
-            <ClassicHandoff driveId="d1" pageId="p1">
-              <p data-page-content="">the page</p>
-            </ClassicHandoff>
-          </PageObject>
-        </ImagoSWRProvider>,
-      );
+      const container = showRoute(route);
       await settle(() => {
         if (!container.querySelector('[data-not-found]')) throw new Error(`${name}: no not-found`);
       });
