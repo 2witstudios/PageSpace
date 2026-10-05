@@ -1961,6 +1961,23 @@ describe('buildShellHandlers', () => {
       expect(sessionMap.getByKey('shell:shl-1')).toBeUndefined();
     });
 
+    it('given the backstop beat\'s settle FAILS, the backstop re-gate still ends a refusing payer on that beat — no unheld tail (review #2761 r3 P1)', async () => {
+      // The settle's failure branch returns before it gates the next window, so only the backstop's
+      // own re-gate refuses the payer on this beat; without it the session runs one more heartbeat unheld.
+      const billing = makeBilling();
+      const handlers = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId, billing });
+      await handlers.onConnect(validPayload);
+      shell.setQuiesced(true);
+      await vi.advanceTimersByTimeAsync(SETTLE_HEARTBEAT_MS); // clock stops, no hold
+      billing.gate.mockResolvedValue({ allowed: false, reason: 'org_lapsed', orgRefusal: 'org_lapsed' });
+      billing.trackUsage.mockRejectedValueOnce(new Error('ledger unreachable'));
+
+      shell.setQuiesced(false); // woke without a keystroke or a join
+      await vi.advanceTimersByTimeAsync(SETTLE_HEARTBEAT_MS);
+
+      expect(sessionMap.getByKey('shell:shl-1')).toBeUndefined();
+    });
+
     it('given the END-of-session settle rejects, should log and still tear the session down (billing never blocks cleanup)', async () => {
       // The last settle is fire-and-forget: a billing/DB outage at the moment a
       // terminal closes must not strand the session in the map (leaking its slot
