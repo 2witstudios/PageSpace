@@ -30,6 +30,8 @@ import { ensurePersonalRootWalletId } from './personal-wallet';
 import { isBillingEnabled } from '../deployment-mode';
 import { toSubscriptionTier, type SubscriptionTier } from './subscription-tiers';
 import type { UsageTrackingOutcome } from '../monitoring/ai-monitoring';
+import { isOrgActive } from '../organizations/status';
+import { ORG_LAPSED_MESSAGE } from '../organizations/status-core';
 import { ORG_COMPUTE_REFUSAL_MESSAGES, computeChargeTier, computeSpendKind, orgComputeRefusalOf, type ComputeCharge, type OrgComputeGateRefusal } from './compute-charge';
 
 /** A compute site's reservation bounds; `maxInFlight` may follow the charge's tier. */
@@ -56,11 +58,11 @@ async function personalTier(userId: string): Promise<SubscriptionTier> {
 }
 
 /**
- * The tier a charge's entitlements and ceilings follow — the org's for an org charge (no read),
- * the paying person's own otherwise.
+ * The tier a charge's entitlements and ceilings follow — the org's for an org charge (Business
+ * while paid, none while LAPSED: SEAT-9, WAL-8), the paying person's own otherwise.
  */
 export async function resolveComputeChargeTier(charge: ComputeCharge): Promise<SubscriptionTier> {
-  return charge.kind === 'org' ? computeChargeTier(charge, 'free') : personalTier(charge.userId);
+  return charge.kind === 'org' ? computeChargeTier(charge, 'free', !(await isOrgActive(charge.orgId))) : personalTier(charge.userId);
 }
 
 /** Reserve for one compute run on the charge's wallet, before the run starts. */
@@ -128,9 +130,10 @@ export async function hasSpendableComputeBalance(charge: ComputeCharge): Promise
  * add a resource that would only ever be refused or overshoot. Decided the way every compute
  * admission is — a real hold for the creator's charge, taken under the pool row's lock in the
  * gate's transaction (gateSharedWallet), then released at once: creating starts no machine, so
- * nothing is reserved past the decision. Only the member's own cap refuses here (an empty or paused
- * pool refuses the resource's first wake, as before). A personal drive, a deployment without
- * billing, or an unresolvable drive admits: there is no per-member cap to apply.
+ * nothing is reserved past the decision. The member's own cap refuses here, and so does a LAPSED org
+ * (SEAT-9, review 3+4 P1-2: no new environment or published app while the org has not paid); an
+ * empty or paused pool refuses the resource's first wake, as before. A personal drive, a deployment
+ * without billing, or an unresolvable drive admits: there is no per-member cap to apply.
  */
 export async function admitDriveComputeCreator(input: { driveId: string; userId: string }): Promise<{ allowed: true } | { allowed: false; message: string }> {
   if (!isBillingEnabled()) return { allowed: true };
@@ -141,6 +144,7 @@ export async function admitDriveComputeCreator(input: { driveId: string; userId:
     if (gate.holdId) await releaseHold(gate.holdId);
     return { allowed: true };
   }
+  if (gate.orgRefusal === 'org_lapsed') return { allowed: false, message: ORG_LAPSED_MESSAGE };
   return gate.orgRefusal === 'org_member_cap_reached'
     ? { allowed: false, message: ORG_COMPUTE_REFUSAL_MESSAGES.org_member_cap_reached }
     : { allowed: true };

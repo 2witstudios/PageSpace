@@ -255,6 +255,18 @@ describe('canRunCode', () => {
     expect(tierLookups).toEqual([]);
   });
 
+  it("SEAT-9 (partial) WAL-8 (partial) a LAPSED org's drive confers no tier: the sandbox is refused tier_ineligible, whatever the lead's or actor's plan; paid again, it is allowed", async () => {
+    const lapsed = { value: true };
+    const deps = makeDeps({
+      lookupDriveBillingFacts: async () => ({ ownerId: 'pro-lead', orgId: 'org-northwind' }),
+      getUserSubscriptionTier: async () => 'pro',
+      isOrgLapsed: async (orgId) => (orgId === 'org-northwind' ? lapsed.value : false),
+    });
+    expect(await canRunCode({ userId: 'pro-actor', driveId: 'd1', deps })).toEqual({ ok: false, reason: 'tier_ineligible' });
+    lapsed.value = false;
+    expect(await canRunCode({ userId: 'pro-actor', driveId: 'd1', deps })).toEqual({ ok: true });
+  });
+
   it('WAL-9 (partial) an ORG drive still enforces drive edit access — the org tier grants the machine, not the membership', async () => {
     const result = await canRunCode({
       userId: 'viewer',

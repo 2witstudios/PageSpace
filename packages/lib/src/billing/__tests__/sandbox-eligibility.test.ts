@@ -148,6 +148,12 @@ describe('computeTierForDrive', () => {
     expect(computeTierForDrive({ orgId: null }, 'pro')).toBe('pro');
     expect(computeTierForDrive(undefined, 'free')).toBe('free');
   });
+
+  it("WAL-8 (partial) SEAT-9 (partial) a LAPSED org drive's compute has no Business entitlement: free, so no sandbox, whatever the lead's plan", () => {
+    expect(computeTierForDrive({ orgId: 'org-1' }, 'pro', true)).toBe('free');
+    expect(isSandboxAvailable(computeTierForDrive({ orgId: 'org-1' }, 'pro', true))).toBe(false);
+    expect(computeTierForDrive({ orgId: null }, 'pro', true)).toBe('pro');
+  });
 });
 
 /**

@@ -20,6 +20,8 @@ import { creditHolds, creditLedger, type SpendKind } from '@pagespace/db/schema/
 import { wallets, personalRootWalletOf, PERSONAL_ROOT_WALLET_ARBITER } from '@pagespace/db/schema/wallets';
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { and, eq, gt, gte, inArray, or, sql } from '@pagespace/db/operators';
+import { isOrgActive } from '../organizations/status';
+import { orgLegStatus } from '../organizations/status-core';
 import { isBillingEnabled } from '../deployment-mode';
 import { loggers } from '../logging/logger-config';
 import {
@@ -189,6 +191,8 @@ export interface CreditGateResult extends GateResult {
   refusal?: SpendRefusal;
   /** Set only when a drive rule moved the call to another source (SPEND-4): never silent. */
   fallback?: SpendFallback;
+  /** Set only on an org pool refusal because the org is LAPSED (SEAT-9): the pool reads paused, and the org must reactivate. */
+  orgLapsed?: true;
 }
 
 /** Normalize the caller-supplied daily ceiling: zero/negative/absent → null (off). */
@@ -872,6 +876,10 @@ export async function findOrgPoolPeriodEnd(orgId: string): Promise<Date | null> 
  * the hold's transaction (gateSharedWallet), and again at settlement — refused
  * `source_cap_reached` when that person's allowance cannot cover the reservation.
  *
+ * SEAT-9 / review 3+4 P1-2: a LAPSED org's pool spends nothing. It reads as paused
+ * (orgLegStatus, the same read the spend legs take) and the refusal is marked `orgLapsed`, so the
+ * person is told the org must reactivate billing; no hold is taken and nothing is charged.
+ *
  * The org's entitlement tier (SEAT-8, business) sets the per-call bounds, as the org is the
  * payer; the per-person daily cap still binds `userId`, as it does whichever wallet pays.
  *
@@ -890,6 +898,9 @@ export async function canConsumeOrgPool(
   if (walletId === null) {
     return { allowed: false, reason: 'source_refused', refusal: { source: null, reason: 'source_unavailable', options: [] } };
   }
+  if (!(await isOrgActive(orgId))) {
+    return { allowed: false, reason: 'source_refused', refusal: { source: null, reason: 'source_paused', options: [] }, orgLapsed: true };
+  }
   return gateSharedWallet(userId, ORG_ENTITLEMENT_TIER, { ...opts, spend: { kind: 'personal' } }, {
     walletId,
     source: null,
@@ -900,13 +911,13 @@ export async function canConsumeOrgPool(
 /**
  * The READ-ONLY twin of {@link canConsumeOrgPool}, for the published-app serving edge's
  * balance-check-before-wake (see {@link hasSpendableBalance} for why that edge must never hold):
- * could the org pool fund a wake right now? A missing or paused pool cannot; otherwise the pool's
- * monthly + top-up − debt must clear the reserve floor. In-flight holds are not netted, exactly
- * as the personal read does not net them.
+ * could the org pool fund a wake right now? A missing or paused pool cannot, nor can a LAPSED
+ * org's (SEAT-9: it reads as paused); otherwise the pool's monthly + top-up − debt must clear the
+ * reserve floor. In-flight holds are not netted, exactly as the personal read does not net them.
  */
 export async function hasSpendableOrgPool(orgId: string): Promise<boolean> {
   if (!isBillingEnabled()) return true;
   const [pool] = await db.select(SHARED_WALLET_FACTS).from(wallets).where(orgPoolWhere(orgId)).limit(1);
-  if (!pool || pool.status === 'paused') return false;
+  if (!pool || orgLegStatus(pool.status, !(await isOrgActive(orgId))) === 'paused') return false;
   return rootAvailableCents(pool, 0) > RESERVE_FLOOR_CENTS;
 }

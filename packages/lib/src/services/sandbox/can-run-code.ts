@@ -77,6 +77,8 @@ export interface CanRunCodeDeps {
   isCodeExecutionEnabled: () => boolean;
   /** POL-10: the drive's org policies, read live; null when the drive has no org (unrestricted). */
   getDriveOrgPolicies: (driveId: string) => Promise<OrgPolicies | null>;
+  /** SEAT-9 / WAL-8: whether the paying org is lapsed (then it confers no tier, so no sandbox). Absent: read as paid. */
+  isOrgLapsed?: (orgId: string) => Promise<boolean>;
 }
 
 export interface CanRunCodeInput {
@@ -112,6 +114,7 @@ export function isCodeExecutionEnabled(): boolean {
 // The real authz helpers pull in the database; import them lazily so callers
 // that inject fakes (and the unit tests) never load the DB module graph.
 const defaultDeps: CanRunCodeDeps = {
+  isOrgLapsed: async (orgId) => !(await import('../../organizations/status').then((m) => m.isOrgActive(orgId))),
   getUserDrivePermissions: (userId, driveId) =>
     import('../../permissions/permissions').then((m) =>
       m.getUserDrivePermissions(userId, driveId),
@@ -184,7 +187,7 @@ async function authorizeSandboxTierEligibility(
 ): Promise<CanRunCodeResult> {
   const payerTier = await resolveSandboxPayerTier(
     { driveId: driveId ?? null, ownerId: ownerId ?? userId },
-    { lookupDriveBillingFacts: deps.lookupDriveBillingFacts, getUserSubscriptionTier: deps.getUserSubscriptionTier },
+    { lookupDriveBillingFacts: deps.lookupDriveBillingFacts, getUserSubscriptionTier: deps.getUserSubscriptionTier, isOrgLapsed: deps.isOrgLapsed },
   );
   // WAL-9: an org drive's session runs on the org's tier and bills the org pool; whether the
   // pool can pay is the charge site's hold, not eligibility.

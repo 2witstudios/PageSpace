@@ -28,6 +28,10 @@ import { ORG_LAPSED_MESSAGE, getOrgBillingNotice, getOrgStatus, isOrgActive } fr
 import { createOrgDrive, moveDriveOutOfOrg, moveDriveToOrg, type OrgDriveServiceDeps } from '../../services/org-drive-service';
 import { createDriveWallet, getDriveWallet, updateDriveWallet, topUpDriveWallet } from '../../services/drive-wallet-service';
 import { resolveCallSpend } from '../../billing/spend-resolution';
+import { admitDriveComputeCreator, gateComputeCharge, hasSpendableComputeBalance, resolveComputeChargeTier } from '../../billing/compute-gate';
+import { releaseHold } from '../../billing/credit-consume';
+import { resolveSandboxPayerTier } from '../../billing/sandbox-eligibility';
+import { lookupDriveBillingFacts } from '../../billing/sandbox-payer';
 import { getUserDriveAccess, canUserViewPage } from '../../permissions/permissions';
 
 vi.mock('../orgs-enabled', () => ({ ORGS_ENABLED: true }));
@@ -295,6 +299,47 @@ describe('org lapse gates (orgs on, real Postgres)', () => {
     // The drive wallet's stored status is untouched: the pause is a read of the lapse, not a write.
     const [stored] = await db.select({ status: wallets.status }).from(wallets).where(eq(wallets.id, w.productWalletId));
     expect(stored.status).toBe('active');
+  });
+
+  it('SEAT-9 (partial) WAL-8 (partial) review 3+4 P1-2, scenario step 10: a lapsed org spends NOTHING on compute — a sandbox run on the pool is refused by name with no hold and the pool untouched, a wake check says no, creating an env or app is refused, and its tier is free; reactivated, all of it works again', async () => {
+    if (!world) return;
+    const w = world;
+    const charge = { kind: 'org' as const, orgId: w.orgId, userId: w.ids.dana };
+    const sandboxTier = () => resolveSandboxPayerTier({ driveId: w.productId, ownerId: w.ids.dana }, { lookupDriveBillingFacts, getUserSubscriptionTier: async () => 'pro', isOrgLapsed: async (orgId) => !(await isOrgActive(orgId)) });
+    const holdsOf = async () => db.select().from(creditHolds).where(eq(creditHolds.userId, w.ids.dana));
+
+    // Paid: Dana's sandbox run is admitted on the org pool (and released: nothing ran here).
+    const admitted = await gateComputeCharge(charge, { estCostCents: 50 });
+    expect(admitted).toMatchObject({ allowed: true, walletId: w.poolId });
+    if (admitted.allowed && admitted.holdId) await releaseHold(admitted.holdId);
+    expect(await hasSpendableComputeBalance(charge)).toBe(true);
+    expect(await admitDriveComputeCreator({ driveId: w.productId, userId: w.ids.dana })).toEqual({ allowed: true });
+    expect(await resolveComputeChargeTier(charge)).toBe('business');
+    expect(await sandboxTier()).toBe('business');
+
+    await setSubscription(w.orgId, 'canceled');
+    const before = await footprint(w);
+    const refused = await gateComputeCharge(charge, { estCostCents: 50 });
+    expect(refused).toEqual({ allowed: false, reason: 'org_lapsed', orgRefusal: 'org_lapsed' });
+    expect(await holdsOf()).toHaveLength(0);
+    expect(await hasSpendableComputeBalance(charge)).toBe(false);
+    expect(await admitDriveComputeCreator({ driveId: w.productId, userId: w.ids.dana })).toEqual({ allowed: false, message: ORG_LAPSED_MESSAGE });
+    expect(await resolveComputeChargeTier(charge)).toBe('free');
+    expect(await sandboxTier()).toBe('free');
+    // The pool and every leg are exactly as they were: lapse wrote nothing and charged nothing.
+    expect(await footprint(w)).toEqual(before);
+    expect(await db.select().from(creditLedger).where(eq(creditLedger.walletId, w.poolId))).toHaveLength(0);
+    // Drives stay readable while lapsed (scenario step 10).
+    expect(await canUserViewPage(w.ids.dana, w.pageId)).toBe(true);
+
+    // Reactivated (the webhook mirror reports active): no other step, everything is back.
+    await setSubscription(w.orgId, 'active');
+    const again = await gateComputeCharge(charge, { estCostCents: 50 });
+    expect(again).toMatchObject({ allowed: true, walletId: w.poolId });
+    if (again.allowed && again.holdId) await releaseHold(again.holdId);
+    expect(await hasSpendableComputeBalance(charge)).toBe(true);
+    expect(await admitDriveComputeCreator({ driveId: w.productId, userId: w.ids.dana })).toEqual({ allowed: true });
+    expect(await resolveComputeChargeTier(charge)).toBe('business');
   });
 
   it('SEAT-9 (partial) SEAT-6 (partial) SEAT-8 (partial) the banner data: Owner and Admins see why and can reactivate, a member sees only read-only; a new org that has not paid yet (D-OW-30: no trial) is lapsed from creation', async () => {
