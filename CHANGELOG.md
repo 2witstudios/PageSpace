@@ -631,6 +631,13 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **A dropped database connection no longer takes the server down** — if the database restarted,
+  failed over or closed an idle connection while PageSpace held a background lock (starting an AI
+  reply, storage usage corrections, sandbox storage billing, agent account credentials and usage
+  limits), the whole server process could crash. The lost connection is now logged and discarded
+  and the server keeps running; an affected request may fail and can be retried. Billing and
+  storage-correction runs that lose their lock part-way stop before their next charge or
+  correction and leave the rest to the next run instead of repeating it.
 - **Memory now checks your AI credits before it learns** — the nightly Memory pass (learning
   from your conversations and tidying your profile pages) used to run and charge you even when
   your balance was used up, so you could go into debt without opening PageSpace. Now each step
