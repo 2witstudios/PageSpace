@@ -200,10 +200,12 @@ const eslintConfig = [
               // constant, security-headers.ts) and the two dev-preview leaves
               // middleware.ts / security-headers.ts read to recognise a
               // preview host — preview-host (string functions only) and
-              // dev-preview-env (process.env reads only; no logger, no db).
+              // dev-preview-env (process.env reads only; no logger, no db), and
+              // organizations/orgs-enabled (one exported constant, no imports;
+              // security-headers.ts keeps the org payment routes' COEP opt-out dark).
               // Anything new added here must stay import-free of Node APIs;
               // next.config.ts's edgeNodeOnlyGuard is the build-time backstop.
-              regex: "^@pagespace/lib(?!/api-contract-version$)(?!/services/sandbox/preview/preview-host$)(?!/services/sandbox/preview/dev-preview-env$)(/.*)?$",
+              regex: "^@pagespace/lib(?!/api-contract-version$)(?!/services/sandbox/preview/preview-host$)(?!/services/sandbox/preview/dev-preview-env$)(?!/organizations/orgs-enabled$)(/.*)?$",
               message:
                 "Edge-runtime middleware graph: @pagespace/lib is Node-only (logger uses os/process.on; many leaves import the db). Use edge-safe leaf modules under apps/web/src, e.g. @/lib/logging/edge-logger.",
             },
