@@ -65,15 +65,31 @@ type DbLike = {
   select: () => { from: (table: unknown) => { where: (cond: unknown) => Promise<{ id: string }[]> } };
 };
 
+/**
+ * POL-2 for a restore (independent review of #2762, P1-3): may this person's restored access go back in? Asked once
+ * per person with everything the backup would give them on the drive. `admit` writes it; `refused` (the org has
+ * guests off) skips it and reports it; `held` (approve) queued it for an Owner or Admin and writes nothing.
+ */
+export type RestoreAdmission = (input: {
+  userId: string;
+  member: Record<string, unknown> | null;
+  grants: BackupPerm[];
+}) => Promise<'admit' | 'refused' | 'held'>;
+
+export const admitEveryone: RestoreAdmission = async () => 'admit';
+
 export async function applyPermRestoreOps(
   permOps: PermOps,
   memberOps: MemberOps,
   roleOps: RoleOps,
   driveId: string,
   tx: DbLike,
-): Promise<{ skippedMembers: string[]; skippedPermissions: string[] }> {
+  admit: RestoreAdmission = admitEveryone,
+): Promise<{ skippedMembers: string[]; skippedPermissions: string[]; refusedByGuestPolicy: string[]; queuedForApproval: string[] }> {
   const skippedMembers: string[] = [];
   const skippedPermissions: string[] = [];
+  const refusedByGuestPolicy: string[] = [];
+  const queuedForApproval: string[] = [];
 
   // 1. Delete current page permissions for affected pages
   for (const del of permOps.toDelete) {
@@ -82,24 +98,38 @@ export async function applyPermRestoreOps(
     );
   }
 
-  // 2. Insert backup permissions (skip if user no longer exists)
-  for (const perm of permOps.toInsert) {
-    const existing = await tx.select().from(users).where(eq(users.id, perm.userId));
-    if (!existing || existing.length === 0) {
-      skippedPermissions.push(perm.userId);
-      continue;
-    }
-    await tx.insert(pagePermissions).values(perm);
-  }
-
-  // 3. Delete current drive members (releases FK dep on driveRoles.customRoleId)
+  // 2. Delete current drive members (releases FK dep on driveRoles.customRoleId). Before the admission questions
+  //    below, so a member row the restore removes is not taken as the person's standing on the drive.
   if (memberOps.toDelete.length > 0) {
     await tx.delete(driveMembers).where(
       and(eq(driveMembers.driveId, driveId), inArray(driveMembers.userId, memberOps.toDelete)),
     );
   }
 
-  // 4. Delete current drive roles — done before inserting backup members so that
+  // 3. Ask the org's guests policy once per person the restore would put back (skip anyone whose account is gone).
+  const membersByUser = new Map(memberOps.toInsert.map((m) => [m.userId, m]));
+  const grantsByUser = new Map<string, BackupPerm[]>();
+  for (const perm of permOps.toInsert) grantsByUser.set(perm.userId, [...(grantsByUser.get(perm.userId) ?? []), perm]);
+  const admitted = new Set<string>();
+  for (const userId of new Set([...membersByUser.keys(), ...grantsByUser.keys()])) {
+    const existing = await tx.select().from(users).where(eq(users.id, userId));
+    if (!existing || existing.length === 0) {
+      if (membersByUser.has(userId)) skippedMembers.push(userId);
+      for (let i = 0; i < (grantsByUser.get(userId)?.length ?? 0); i += 1) skippedPermissions.push(userId);
+      continue;
+    }
+    const decision = await admit({ userId, member: membersByUser.get(userId) ?? null, grants: grantsByUser.get(userId) ?? [] });
+    if (decision === 'admit') admitted.add(userId);
+    else if (decision === 'refused') refusedByGuestPolicy.push(userId);
+    else queuedForApproval.push(userId);
+  }
+
+  // 4. Insert backup permissions of the admitted
+  for (const perm of permOps.toInsert) {
+    if (admitted.has(perm.userId)) await tx.insert(pagePermissions).values(perm);
+  }
+
+  // 5. Delete current drive roles — done before inserting backup members so that
   //    members with a customRoleId referencing restored roles can be inserted safely.
   if (roleOps.toDelete.length > 0) {
     await tx.delete(driveRoles).where(
@@ -107,21 +137,16 @@ export async function applyPermRestoreOps(
     );
   }
 
-  // 5. Insert backup roles — map roleId → id to match the live driveRoles schema
+  // 6. Insert backup roles — map roleId → id to match the live driveRoles schema
   for (const role of roleOps.toInsert) {
     const { roleId, ...rest } = role as { roleId: string; [key: string]: unknown };
     await tx.insert(driveRoles).values({ id: roleId, driveId, ...rest });
   }
 
-  // 6. Insert backup members — roles are present now, so customRoleId FKs resolve
+  // 7. Insert backup members of the admitted — roles are present now, so customRoleId FKs resolve
   for (const member of memberOps.toInsert) {
-    const existing = await tx.select().from(users).where(eq(users.id, member.userId));
-    if (!existing || existing.length === 0) {
-      skippedMembers.push(member.userId);
-      continue;
-    }
-    await tx.insert(driveMembers).values({ driveId, ...member });
+    if (admitted.has(member.userId)) await tx.insert(driveMembers).values({ driveId, ...member });
   }
 
-  return { skippedMembers, skippedPermissions };
+  return { skippedMembers, skippedPermissions, refusedByGuestPolicy, queuedForApproval };
 }

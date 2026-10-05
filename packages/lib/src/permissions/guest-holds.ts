@@ -306,7 +306,7 @@ export type ReentryDecision = { outcome: 'admit' } | { outcome: 'refused' } | { 
  * guest's, so it is written.
  */
 export async function admitReentry(
-  executor: Tx,
+  executor: Executor,
   input: {
     driveId: string;
     userId: string;

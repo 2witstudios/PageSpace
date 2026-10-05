@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { OpenRoleFloorError, guardOpenRoleFloor } from '@pagespace/lib/organizations/open-role-floor';
+import { admitReentry } from '@pagespace/lib/permissions/guest-holds';
 import { db } from '@pagespace/db/db';
 import { eq, inArray } from '@pagespace/db/operators';
 import { driveBackups, driveBackupPermissions, driveBackupMembers, driveBackupRoles } from '@pagespace/db/schema/versioning';
@@ -16,6 +17,7 @@ import {
   planMemberRestoreOps,
   planRoleRestoreOps,
   applyPermRestoreOps,
+  type RestoreAdmission,
 } from '@/services/api/restore-permissions-service';
 import { runPreRestoreSnapshot } from '@/services/api/restore-backup-service';
 
@@ -137,12 +139,17 @@ export async function POST(
 
       // POL-6: restoring roles may change an Open org drive's default role; judged against the org's floor, and a
       // refusal rolls the whole restore back.
-      const { skippedMembers, skippedPermissions } = await guardOpenRoleFloor(tx, driveId, () => applyPermRestoreOps(
+      // POL-2 (independent review of #2762, P1-3): a backup taken while the org allowed guests must not bring an
+      // outsider back once it does not; each person the restore puts back is asked in this transaction.
+      const admit: RestoreAdmission = async ({ userId, member, grants }) =>
+        (await admitReentry(tx, { driveId, userId, member, grants, requestedBy: auth.userId })).outcome;
+      const { skippedMembers, skippedPermissions, refusedByGuestPolicy, queuedForApproval } = await guardOpenRoleFloor(tx, driveId, () => applyPermRestoreOps(
         permOps,
         memberOps,
         roleOps,
         driveId,
         tx as never,
+        admit,
       ));
 
       return {
@@ -151,6 +158,8 @@ export async function POST(
         pagesOrphaned: diff.toOrphan.length,
         skippedMembers,
         skippedPermissions,
+        refusedByGuestPolicy,
+        queuedForApproval,
       };
     });
 

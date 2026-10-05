@@ -18,6 +18,7 @@ import { drives, pages } from '@pagespace/db/schema/core'
 import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
 import { createId } from '@paralleldrive/cuid2';
 import { decideOrgDriveAdmission } from '@pagespace/lib/permissions/guest-admission';
+import { consumeApprovedInvitation, requestGuestApproval } from '@pagespace/lib/permissions/guest-holds';
 import {
   pendingPageInvites,
   type PendingPagePermission,
@@ -184,17 +185,40 @@ export const pageInviteRepository = {
     grantedAt: Date;
   }): Promise<
     | { ok: true; memberId: string | null }
-    | { ok: false; reason: 'TOKEN_CONSUMED' | 'ALREADY_HAS_PERMISSION' | 'GUEST_POLICY' }
+    | { ok: false; reason: 'TOKEN_CONSUMED' | 'ALREADY_HAS_PERMISSION' | 'GUEST_POLICY' | 'GUEST_APPROVAL_PENDING' }
   > {
     const ALREADY_HAS_PERMISSION = Symbol('ALREADY_HAS_PERMISSION');
+    const HELD = Symbol('GUEST_APPROVAL_PENDING');
     try {
-      const memberId = await db.transaction(async (tx) => {
+      const memberId = await db.transaction(async (tx): Promise<string | null | typeof HELD> => {
         // POL-2, at the moment the grant would be written: an org that has turned guests OFF admits no outsider,
         // whenever the invitation was sent. Asked BEFORE the token is consumed, so a refusal burns nothing and the
-        // invitation works again if the policy is turned back on. Under `approve` the invitation was approved when
-        // it was sent (the share-invite route queues it), so it is not asked twice.
+        // invitation works again if the policy is turned back on. Under `approve`, only an invitation an Owner or
+        // Admin approved (an `approved` marker) admits; one sent while guests were on, or before the drive joined the
+        // org, is queued for approval instead (independent review of #2762, P2-6).
         const admission = await decideOrgDriveAdmission({ driveId: input.driveId, userId: input.userId }, tx);
         if (admission.decision === 'refuse') throw 'GUEST_POLICY';
+        if (admission.decision === 'hold' && admission.orgId) {
+          const [invite] = await tx.select({ email: pendingPageInvites.email }).from(pendingPageInvites).where(eq(pendingPageInvites.id, input.inviteId)).limit(1);
+          const approved = invite ? await consumeApprovedInvitation(tx, { driveId: input.driveId, email: invite.email }) : false;
+          if (!approved) {
+            const spent = await tx
+              .update(pendingPageInvites)
+              .set({ consumedAt: input.grantedAt })
+              .where(and(eq(pendingPageInvites.id, input.inviteId), isNull(pendingPageInvites.consumedAt)))
+              .returning({ id: pendingPageInvites.id });
+            if (spent.length === 0) throw 'TOKEN_CONSUMED';
+            await requestGuestApproval({
+              orgId: admission.orgId,
+              driveId: input.driveId,
+              userId: input.userId,
+              origin: 'page_grant',
+              request: { permissions: [{ pageId: input.pageId, ...PAGE_PERMISSION_FLAGS(input.permissions), canDelete: false }], invitedBy: input.invitedBy },
+              requestedBy: input.invitedBy,
+            }, tx);
+            return HELD;
+          }
+        }
 
         const consumed = await tx
           .update(pendingPageInvites)
@@ -273,6 +297,8 @@ export const pageInviteRepository = {
 
         return createdMemberId;
       });
+      // The invitation was answered by the approval queue: nothing granted, the token spent.
+      if (memberId === HELD) return { ok: false, reason: 'GUEST_APPROVAL_PENDING' };
       return { ok: true, memberId };
     } catch (error) {
       if (error === 'TOKEN_CONSUMED') {

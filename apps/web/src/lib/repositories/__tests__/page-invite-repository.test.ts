@@ -11,6 +11,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const mockTransaction = vi.hoisted(() => vi.fn());
 const decideOrgDriveAdmission = vi.hoisted(() => vi.fn());
 vi.mock('@pagespace/lib/permissions/guest-admission', () => ({ decideOrgDriveAdmission }));
+const consumeApprovedInvitation = vi.hoisted(() => vi.fn());
+const requestGuestApproval = vi.hoisted(() => vi.fn());
+vi.mock('@pagespace/lib/permissions/guest-holds', () => ({ consumeApprovedInvitation, requestGuestApproval }));
 
 vi.mock('@pagespace/db/db', () => ({ db: { transaction: mockTransaction } }));
 vi.mock('@pagespace/db/operators', () => ({
@@ -28,14 +31,20 @@ vi.mock('@pagespace/db/schema/members', () => ({
   pagePermissions: { id: 'pagePermissions.id', pageId: 'pagePermissions.pageId', userId: 'pagePermissions.userId' },
 }));
 vi.mock('@pagespace/db/schema/pending-page-invites', () => ({
-  pendingPageInvites: { id: 'ppi.id', consumedAt: 'ppi.consumedAt' },
+  pendingPageInvites: { id: 'ppi.id', consumedAt: 'ppi.consumedAt', email: 'ppi.email' },
 }));
 
 import { pageInviteRepository } from '../page-invite-repository';
 
+let lookups = 0;
+let holding = false;
 function setupTx() {
+  lookups = 0;
   const consumeSet = vi.fn().mockReturnValue({ where: vi.fn().mockReturnValue({ returning: vi.fn().mockResolvedValue([{ id: 'inv_1' }]) }) });
-  const memberLookup = vi.fn().mockReturnValue({ from: vi.fn().mockReturnValue({ where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) }) }) });
+  // First select: the invitation's email (asked only under approve); then the member-row lookup.
+  const memberLookup = vi.fn().mockImplementation(() => ({
+    from: vi.fn().mockReturnValue({ where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue(holding && lookups++ === 0 ? [{ email: 'guest@example.com' }] : []) }) }),
+  }));
   const memberValues = vi.fn().mockReturnValue({ returning: vi.fn().mockResolvedValue([{ id: 'mem_1' }]) });
   const grantValues = vi.fn().mockResolvedValue(undefined);
   const insert = vi.fn()
@@ -72,12 +81,32 @@ describe('pageInviteRepository.consumeInviteAndGrantPage and the guests policy',
     expect(insert).not.toHaveBeenCalled();
   });
 
-  it('POL-2 (partial) guests APPROVE: an invitation approved when it was sent is not asked twice and is accepted', async () => {
+  it('POL-2 (partial) guests APPROVE: an invitation an Owner or Admin approved (its marker consumed) is accepted', async () => {
+    holding = true;
     const { insert } = setupTx();
     decideOrgDriveAdmission.mockResolvedValue({ decision: 'hold', orgId: 'org_1' });
+    consumeApprovedInvitation.mockResolvedValue(true);
 
     expect(await pageInviteRepository.consumeInviteAndGrantPage(input)).toEqual({ ok: true, memberId: 'mem_1' });
+    expect(consumeApprovedInvitation).toHaveBeenCalledWith(expect.anything(), { driveId: 'drive_1', email: 'guest@example.com' });
     expect(insert).toHaveBeenCalledTimes(2);
+    holding = false;
+  });
+
+  it('POL-2 (partial) guests APPROVE: an invitation nobody approved is queued as a page grant, spent, and grants nothing', async () => {
+    holding = true;
+    const { consumeSet, insert } = setupTx();
+    decideOrgDriveAdmission.mockResolvedValue({ decision: 'hold', orgId: 'org_1' });
+    consumeApprovedInvitation.mockResolvedValue(false);
+
+    expect(await pageInviteRepository.consumeInviteAndGrantPage(input)).toEqual({ ok: false, reason: 'GUEST_APPROVAL_PENDING' });
+    expect(consumeSet).toHaveBeenCalledWith({ consumedAt: input.grantedAt });
+    expect(insert).not.toHaveBeenCalled();
+    expect(requestGuestApproval).toHaveBeenCalledWith(expect.objectContaining({
+      orgId: 'org_1', driveId: 'drive_1', userId: 'user_outside', origin: 'page_grant',
+      request: { permissions: [{ pageId: 'page_1', canView: true, canEdit: false, canShare: false, canDelete: false }], invitedBy: 'inviter_1' },
+    }), expect.anything());
+    holding = false;
   });
 
   it('POL-2 (partial) guests ON or a personal drive: the invitation is consumed and the page granted as before', async () => {

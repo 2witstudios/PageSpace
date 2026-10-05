@@ -20,7 +20,11 @@ vi.mock('@pagespace/lib/permissions/guest-holds', () => ({
   listPendingGuestApprovalViews: vi.fn(),
   claimPendingGuestApproval: vi.fn(),
   requestGuestApproval: vi.fn(),
+  markApprovedInvitation: vi.fn(async () => {}),
 }));
+vi.mock('@pagespace/lib/notifications/notifications', () => ({ createPermissionNotification: vi.fn(async () => {}) }));
+vi.mock('@/lib/websocket', () => ({ broadcastPageEvent: vi.fn(async () => {}), createPageEventPayload: vi.fn((driveId: string, pageId: string, operation: string) => ({ driveId, pageId, operation })) }));
+vi.mock('@pagespace/db/db', () => ({ db: {} }));
 vi.mock('@pagespace/lib/permissions/share-link-service', () => ({ completeApprovedLinkAdmission: vi.fn() }));
 vi.mock('@pagespace/lib/organizations/policy-reader', () => ({ getOrgPolicies: vi.fn() }));
 vi.mock('@pagespace/lib/audit/org-audit', () => ({ recordOrgAuditEvent: vi.fn(async () => {}) }));
@@ -34,7 +38,9 @@ vi.mock('@/lib/page-invites/share-invite-handlers', () => ({ sendPendingPageInvi
 
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { findMembershipRole } from '@pagespace/lib/organizations/repository';
-import { claimPendingGuestApproval, listPendingGuestApprovalViews, requestGuestApproval } from '@pagespace/lib/permissions/guest-holds';
+import { claimPendingGuestApproval, listPendingGuestApprovalViews, markApprovedInvitation, requestGuestApproval } from '@pagespace/lib/permissions/guest-holds';
+import { createPermissionNotification } from '@pagespace/lib/notifications/notifications';
+import { broadcastPageEvent } from '@/lib/websocket';
 import { completeApprovedLinkAdmission } from '@pagespace/lib/permissions/share-link-service';
 import { getOrgPolicies } from '@pagespace/lib/organizations/policy-reader';
 import { recordOrgAuditEvent } from '@pagespace/lib/audit/org-audit';
@@ -239,5 +245,29 @@ describe('the approval queue routes', () => {
     vi.mocked(sendPendingPageInvite).mockResolvedValue(new Response(JSON.stringify({ error: 'pending' }), { status: 409 }));
     expect((await decide({ decision: 'approve' })).status).toBe(409);
     expect(requestGuestApproval).toHaveBeenCalledWith(expect.objectContaining({ email: 'new@example.com', origin: 'page_invite' }));
+  });
+
+  it('POL-2 (partial) approving an emailed invitation records that it was approved, so its acceptance under approve is not queued again', async () => {
+    as('ADMIN');
+    vi.mocked(claimPendingGuestApproval).mockResolvedValue(claim({ userId: null, email: 'new@example.com' }) as never);
+    expect((await decide({ decision: 'approve' })).status).toBe(200);
+    expect(markApprovedInvitation).toHaveBeenCalledWith(expect.anything(), { orgId: ORG_ID, driveId: 'drive_1', email: 'new@example.com', approvedBy: 'user_priya' });
+  });
+
+  it('POL-2 (partial) an approved page grant tells the person and refreshes open clients, like an immediate grant', async () => {
+    as('ADMIN');
+    vi.mocked(claimPendingGuestApproval).mockResolvedValue(claim({ origin: 'page_grant', request: { permissions: [{ pageId: 'p1', canView: true, canEdit: true, canShare: false }], invitedBy: 'user_marcus' } }) as never);
+    vi.mocked(completeApprovedPageGrant).mockResolvedValue({ ok: true, driveId: 'drive_1', userId: 'user_chris', pageIds: ['p1'] });
+    expect((await decide({ decision: 'approve' })).status).toBe(200);
+    expect(createPermissionNotification).toHaveBeenCalledWith('user_chris', 'p1', 'granted', { canView: true, canEdit: true, canShare: false, canDelete: false }, 'user_marcus');
+    expect(broadcastPageEvent).toHaveBeenCalledWith({ driveId: 'drive_1', pageId: 'p1', operation: 'updated' });
+  });
+
+  it('POL-2 (partial) a page grant whose approval lost a race with guests turning off goes back on the queue instead of vanishing', async () => {
+    as('ADMIN');
+    vi.mocked(claimPendingGuestApproval).mockResolvedValue(claim({ origin: 'page_grant' }) as never);
+    vi.mocked(completeApprovedPageGrant).mockResolvedValue({ ok: false, error: 'POLICY_OFF' });
+    expect((await decide({ decision: 'approve' })).status).toBe(409);
+    expect(requestGuestApproval).toHaveBeenCalledWith(expect.objectContaining({ origin: 'page_grant', driveId: 'drive_1' }));
   });
 });

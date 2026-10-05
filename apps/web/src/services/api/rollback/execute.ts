@@ -106,6 +106,9 @@ export async function executeRollback(
 
   const warnings: string[] = [...preview.warnings];
   const txDeps = withTx(deps, tx);
+  /** Run a write in the caller's transaction, or in one of its own when there is none. */
+  const inTransaction = <T>(run: (d: RollbackDeps) => Promise<T>): Promise<T> =>
+    tx ? run(txDeps) : deps.db.transaction((t) => run(withTx(deps, t as unknown as typeof db)));
   const changeGroupId = deps.genChangeGroupId();
   const changeGroupType = deps.inferChangeGroupType({ isAiGenerated: false });
 
@@ -168,9 +171,10 @@ export async function executeRollback(
         break;
 
       case 'permission':
-        restoredValues = rollingBackRollback
-          ? await redoPermissionChange(txDeps, activity, preview.targetValues, effectiveSourceOperation)
-          : await rollbackPermissionChange(txDeps, activity);
+        // POL-2: a re-entering grant is decided by the org's guests policy inside a transaction (deps.admitReentry).
+        restoredValues = await inTransaction((d) => rollingBackRollback
+          ? redoPermissionChange(d, activity, preview.targetValues, effectiveSourceOperation)
+          : rollbackPermissionChange(d, activity));
         break;
 
       case 'agent': {
@@ -183,9 +187,10 @@ export async function executeRollback(
       }
 
       case 'member':
-        restoredValues = rollingBackRollback
-          ? await redoMemberChange(txDeps, activity, preview.targetValues, effectiveSourceOperation)
-          : await rollbackMemberChange(txDeps, activity);
+        // POL-2: a re-entering member row is decided by the org's guests policy inside a transaction.
+        restoredValues = await inTransaction((d) => rollingBackRollback
+          ? redoMemberChange(d, activity, preview.targetValues, effectiveSourceOperation)
+          : rollbackMemberChange(d, activity));
         break;
 
       case 'role': {

@@ -32,6 +32,10 @@ import {
 import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { createChangeGroupId } from '@pagespace/lib/monitoring/change-group';
 import { syncTaskItemOnMove, scrubDriveScopedTaskAssociations } from '@/services/api/task-sync-service';
+import { holdOrgGuestsUnderPolicy, kickSuspendedGuests, type GuestHoldItem } from '@pagespace/lib/permissions/guest-holds';
+
+/** Pages per POL-2 guest check: bounds each statement's bind list. */
+const GUEST_PAGE_CHUNK = 500;
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -299,6 +303,7 @@ export async function movePagesToDrive(
   const clearedHomePageDriveIds: string[] = [];
   const moved: MovedPageSummary[] = [];
   let descendantCount = 0;
+  const heldGuests: GuestHoldItem[] = [];
 
   try {
     await db.transaction(async (tx) => {
@@ -344,8 +349,9 @@ export async function movePagesToDrive(
         nextPosition += 1;
       }
 
+      let movedDescendants: string[] = [];
       if (cascadeRoots.length > 0) {
-        const movedDescendants = await cascadeDriveIdToDescendants(tx, cascadeRoots, targetDriveId);
+        movedDescendants = await cascadeDriveIdToDescendants(tx, cascadeRoots, targetDriveId);
         descendantCount = movedDescendants.length;
 
         // The roots' membership change is handled by syncTaskItemOnMove above, but a
@@ -357,6 +363,20 @@ export async function movePagesToDrive(
           pageIds: [...cascadeRoots, ...movedDescendants],
           targetDriveId,
         });
+      }
+
+      // POL-2 (independent review of #2762, P1-2): page grants travel with their pages, so pages moved INTO an org
+      // drive bring the outsiders they were shared with. The org's guests policy decides them here, under the org
+      // row's share lock: off parks those grants, approve queues them for an Owner or Admin, on keeps them. An
+      // admitted guest of the drive (a member row there) keeps what the move brought.
+      const crossed = [...cascadeRoots, ...movedDescendants];
+      if (crossed.length > 0) {
+        const target = await tx.query.drives.findFirst({ where: eq(drives.id, targetDriveId), columns: { orgId: true } });
+        if (target?.orgId) {
+          for (let i = 0; i < crossed.length; i += GUEST_PAGE_CHUNK) {
+            heldGuests.push(...await holdOrgGuestsUnderPolicy(tx, { orgId: target.orgId, driveId: targetDriveId, pageIds: crossed.slice(i, i + GUEST_PAGE_CHUNK) }));
+          }
+        }
       }
 
       // A drive's home page must live in that drive. Clearing here (after the
@@ -386,6 +406,8 @@ export async function movePagesToDrive(
     }
     throw error;
   }
+
+  await kickSuspendedGuests(heldGuests);
 
   const actorInfo = await getActorInfo(userId);
   const changeGroupId = createChangeGroupId();

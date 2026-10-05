@@ -20,7 +20,44 @@ import {
   planMessageRollback,
 } from './rollback-plans';
 import type { RollbackDeps, PageUpdateContext, PageChangeResult } from './deps';
+import type { ReentryDecision } from '@pagespace/lib/permissions/guest-holds';
+import { assertRestoredLeadEligible } from './lead-eligibility';
 import type { ActivityLogForRollback } from './types';
+
+/** POL-2: the result of a rollback or redo write the org's guests policy did not let through (nothing was written). */
+function guestPolicySkip(decision: ReentryDecision, ids: Record<string, string>): Record<string, unknown> {
+  return { skipped: true, reason: decision.outcome === 'refused' ? 'guest_policy_off' : 'guest_approval_pending', ...ids };
+}
+
+const grantFlags = (v: { canView?: unknown; canEdit?: unknown; canShare?: unknown; canDelete?: unknown }) => ({
+  canView: v.canView === true,
+  canEdit: v.canEdit === true,
+  canShare: v.canShare === true,
+  canDelete: v.canDelete === true,
+});
+
+/** The drive a page lives in (a page permission's drive), or null when the page is gone. */
+async function pageDriveId(deps: RollbackDeps, pageId: string): Promise<string | null> {
+  const [row] = await deps.db.select({ driveId: pages.driveId }).from(pages).where(eq(pages.id, pageId)).limit(1);
+  return row?.driveId ?? null;
+}
+
+/** POL-2: may this page grant (re-)enter? Asked only when it gives some access. */
+async function admitGrant(deps: RollbackDeps, pageId: string, userId: string, values: { canView?: unknown; canEdit?: unknown; canShare?: unknown; canDelete?: unknown }): Promise<ReentryDecision> {
+  const flags = grantFlags(values);
+  if (!flags.canView && !flags.canEdit && !flags.canShare && !flags.canDelete) return { outcome: 'admit' };
+  const driveId = await pageDriveId(deps, pageId);
+  if (!driveId) return { outcome: 'admit' };
+  return deps.admitReentry(deps.db, { driveId, userId, grants: [{ pageId, ...flags }], requestedBy: null });
+}
+
+/** POL-2: may this member row (re-)enter? A row that already exists is a role change, not an admission. */
+async function admitMember(deps: RollbackDeps, driveId: string, userId: string, values: object): Promise<ReentryDecision> {
+  const [row] = await deps.db.select({ id: driveMembers.id }).from(driveMembers).where(and(eq(driveMembers.driveId, driveId), eq(driveMembers.userId, userId))).limit(1);
+  if (row) return { outcome: 'admit' };
+  return deps.admitReentry(deps.db, { driveId, userId, member: JSON.parse(JSON.stringify(values)) as Record<string, unknown>, requestedBy: null });
+}
+
 
 /** Execute a page rollback: trash-created cascade (orphan children to grandparent) or field restore + orphaned-child re-parenting. */
 export async function rollbackPageChange(
@@ -113,6 +150,7 @@ export async function rollbackDriveChange(
     return { trashed: true, driveId: activity.driveId, pagesTrashed: true };
   }
 
+  await assertRestoredLeadEligible(deps, activity.driveId, plan.updateData);
   await deps.db
     .update(drives)
     .set({ ...plan.updateData, updatedAt: deps.clock() })
@@ -137,11 +175,15 @@ export async function rollbackPermissionChange(
       return { deleted: true, pageId: plan.pageId, userId: plan.userId };
     }
     case 'insert': {
+      const decision = await admitGrant(deps, plan.values.pageId, plan.values.userId, plan.values);
+      if (decision.outcome !== 'admit') return guestPolicySkip(decision, { pageId: plan.values.pageId, userId: plan.values.userId });
       await deps.db.insert(pagePermissions).values(plan.values);
       deps.logger.info('[RollbackService] Re-created revoked permission', { pageId: plan.values.pageId, userId: plan.values.userId });
       return { ...plan.values };
     }
     case 'update': {
+      const decision = await admitGrant(deps, plan.pageId, plan.userId, plan.set);
+      if (decision.outcome !== 'admit') return guestPolicySkip(decision, { pageId: plan.pageId, userId: plan.userId });
       await deps.db
         .update(pagePermissions)
         .set(plan.set)
@@ -180,6 +222,8 @@ export async function rollbackMemberChange(
       return { deleted: true, driveId: plan.driveId, userId: plan.userId };
     }
     case 'insert': {
+      const decision = await admitMember(deps, plan.values.driveId, plan.values.userId, plan.values);
+      if (decision.outcome !== 'admit') return guestPolicySkip(decision, { driveId: plan.values.driveId, userId: plan.values.userId });
       await deps.db.insert(driveMembers).values(plan.values);
       deps.logger.info('[RollbackService] Re-added removed member', { driveId: plan.values.driveId, userId: plan.values.userId, role: plan.values.role });
       return { ...plan.values };
