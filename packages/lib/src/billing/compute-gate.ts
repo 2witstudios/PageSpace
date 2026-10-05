@@ -124,6 +124,9 @@ export async function hasSpendableComputeBalance(charge: ComputeCharge): Promise
   return hasSpendableBalance(charge.userId, await personalTier(charge.userId));
 }
 
+/** Why a drive's new billable compute is refused: the org lapsed (SEAT-9), or the member's cap is spent (WAL-2). */
+export type DriveComputeAdmissionRefusal = { allowed: false; code: 'org_lapsed' | 'org_member_cap_reached'; message: string };
+
 /**
  * [D-OW-28] Whether `userId` may CREATE a billable environment or published app in `driveId`. Its
  * compute will be recorded under, and capped against, them; a member already at their cap cannot
@@ -135,7 +138,7 @@ export async function hasSpendableComputeBalance(charge: ComputeCharge): Promise
  * empty or paused pool refuses the resource's first wake, as before. A personal drive, a deployment
  * without billing, or an unresolvable drive admits: there is no per-member cap to apply.
  */
-export async function admitDriveComputeCreator(input: { driveId: string; userId: string }): Promise<{ allowed: true } | { allowed: false; message: string }> {
+export async function admitDriveComputeCreator(input: { driveId: string; userId: string }): Promise<{ allowed: true } | DriveComputeAdmissionRefusal> {
   if (!isBillingEnabled()) return { allowed: true };
   const charge = await resolveEnvCharge({ driveId: input.driveId, costOwnerId: input.userId, lookupDriveBillingFacts: (id) => lookupDriveBillingFacts(id) });
   if (!charge || charge.kind !== 'org') return { allowed: true };
@@ -144,8 +147,21 @@ export async function admitDriveComputeCreator(input: { driveId: string; userId:
     if (gate.holdId) await releaseHold(gate.holdId);
     return { allowed: true };
   }
-  if (gate.orgRefusal === 'org_lapsed') return { allowed: false, message: ORG_LAPSED_MESSAGE };
+  if (gate.orgRefusal === 'org_lapsed') return { allowed: false, code: 'org_lapsed', message: ORG_LAPSED_MESSAGE };
   return gate.orgRefusal === 'org_member_cap_reached'
-    ? { allowed: false, message: ORG_COMPUTE_REFUSAL_MESSAGES.org_member_cap_reached }
+    ? { allowed: false, code: 'org_member_cap_reached', message: ORG_COMPUTE_REFUSAL_MESSAGES.org_member_cap_reached }
     : { allowed: true };
+}
+
+/**
+ * SEAT-9 (review #2761 P2-1): whether a drive's org is paid up, for actions that re-start compute on
+ * an EXISTING resource — re-publishing an app, rebuilding an environment — where no new per-member
+ * cost is created (so the creator cap does not apply) but a lapsed org must still start nothing. A
+ * personal drive, a deployment without billing, or an unresolvable drive admits.
+ */
+export async function admitDriveOrgActive(input: { driveId: string }): Promise<{ allowed: true } | { allowed: false; code: 'org_lapsed'; message: string }> {
+  if (!isBillingEnabled()) return { allowed: true };
+  const facts = await lookupDriveBillingFacts(input.driveId);
+  if (!facts?.orgId) return { allowed: true };
+  return (await isOrgActive(facts.orgId)) ? { allowed: true } : { allowed: false, code: 'org_lapsed', message: ORG_LAPSED_MESSAGE };
 }

@@ -28,7 +28,7 @@ import { ORG_LAPSED_MESSAGE, getOrgBillingNotice, getOrgStatus, isOrgActive } fr
 import { createOrgDrive, moveDriveOutOfOrg, moveDriveToOrg, type OrgDriveServiceDeps } from '../../services/org-drive-service';
 import { createDriveWallet, getDriveWallet, updateDriveWallet, topUpDriveWallet } from '../../services/drive-wallet-service';
 import { resolveCallSpend } from '../../billing/spend-resolution';
-import { admitDriveComputeCreator, gateComputeCharge, hasSpendableComputeBalance, resolveComputeChargeTier } from '../../billing/compute-gate';
+import { admitDriveComputeCreator, admitDriveOrgActive, gateComputeCharge, hasSpendableComputeBalance, resolveComputeChargeTier } from '../../billing/compute-gate';
 import { releaseHold } from '../../billing/credit-consume';
 import { resolveSandboxPayerTier } from '../../billing/sandbox-eligibility';
 import { lookupDriveBillingFacts } from '../../billing/sandbox-payer';
@@ -323,7 +323,9 @@ describe('org lapse gates (orgs on, real Postgres)', () => {
     expect(refused).toEqual({ allowed: false, reason: 'org_lapsed', orgRefusal: 'org_lapsed' });
     expect(await holdsOf()).toHaveLength(0);
     expect(await hasSpendableComputeBalance(charge)).toBe(false);
-    expect(await admitDriveComputeCreator({ driveId: w.productId, userId: w.ids.dana })).toEqual({ allowed: false, message: ORG_LAPSED_MESSAGE });
+    expect(await admitDriveComputeCreator({ driveId: w.productId, userId: w.ids.dana })).toEqual({ allowed: false, code: 'org_lapsed', message: ORG_LAPSED_MESSAGE });
+    expect(await admitDriveOrgActive({ driveId: w.productId })).toEqual({ allowed: false, code: 'org_lapsed', message: ORG_LAPSED_MESSAGE });
+    expect(await admitDriveOrgActive({ driveId: w.personalDriveId })).toEqual({ allowed: true });
     expect(await resolveComputeChargeTier(charge)).toBe('free');
     expect(await sandboxTier()).toBe('free');
     // The pool and every leg are exactly as they were: lapse wrote nothing and charged nothing.
@@ -339,7 +341,20 @@ describe('org lapse gates (orgs on, real Postgres)', () => {
     if (again.allowed && again.holdId) await releaseHold(again.holdId);
     expect(await hasSpendableComputeBalance(charge)).toBe(true);
     expect(await admitDriveComputeCreator({ driveId: w.productId, userId: w.ids.dana })).toEqual({ allowed: true });
+    expect(await admitDriveOrgActive({ driveId: w.productId })).toEqual({ allowed: true });
     expect(await resolveComputeChargeTier(charge)).toBe('business');
+  });
+
+  it('SEAT-9 (partial) review #2761 Codex: a lapsed org that never got a pool (never paid) is refused as LAPSED, not as a missing wallet — so env/app creation is refused too', async () => {
+    if (!world) return;
+    const w = world;
+    // Never paid: no pool wallet at all (children first), and no subscription row.
+    await db.delete(wallets).where(eq(wallets.parentWalletId, w.poolId));
+    await db.delete(wallets).where(eq(wallets.id, w.poolId));
+    await db.delete(orgSubscriptions).where(eq(orgSubscriptions.orgId, w.orgId));
+    const charge = { kind: 'org' as const, orgId: w.orgId, userId: w.ids.dana };
+    expect(await gateComputeCharge(charge, { estCostCents: 50 })).toEqual({ allowed: false, reason: 'org_lapsed', orgRefusal: 'org_lapsed' });
+    expect(await admitDriveComputeCreator({ driveId: w.productId, userId: w.ids.dana })).toEqual({ allowed: false, code: 'org_lapsed', message: ORG_LAPSED_MESSAGE });
   });
 
   it('SEAT-9 (partial) SEAT-6 (partial) SEAT-8 (partial) the banner data: Owner and Admins see why and can reactivate, a member sees only read-only; a new org that has not paid yet (D-OW-30: no trial) is lapsed from creation', async () => {

@@ -894,12 +894,14 @@ export async function canConsumeOrgPool(
   if (!isBillingEnabled()) {
     return canConsumeAI(userId, ORG_ENTITLEMENT_TIER, { ...opts, spend: { kind: 'personal' } });
   }
+  // Lapse first: a lapsed org that never got a pool (never paid) is refused as LAPSED, not as a
+  // missing wallet — callers that admit on a missing pool must still refuse it (review #2761).
+  if (!(await isOrgActive(orgId))) {
+    return { allowed: false, reason: 'source_refused', refusal: { source: null, reason: 'source_paused', options: [] }, orgLapsed: true };
+  }
   const walletId = await findOrgPoolWalletId(orgId);
   if (walletId === null) {
     return { allowed: false, reason: 'source_refused', refusal: { source: null, reason: 'source_unavailable', options: [] } };
-  }
-  if (!(await isOrgActive(orgId))) {
-    return { allowed: false, reason: 'source_refused', refusal: { source: null, reason: 'source_paused', options: [] }, orgLapsed: true };
   }
   return gateSharedWallet(userId, ORG_ENTITLEMENT_TIER, { ...opts, spend: { kind: 'personal' } }, {
     walletId,

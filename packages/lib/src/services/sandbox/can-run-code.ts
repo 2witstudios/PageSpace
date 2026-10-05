@@ -49,6 +49,8 @@ import { sandboxDecision } from '../../organizations/org-action-decisions';
 export type CodeExecutionDenialReason =
   | 'kill_switch_off'
   | 'tier_ineligible'
+  /** SEAT-9: the paying org is lapsed — it starts no sandbox until it reactivates (named apart from a plan that lacks sandboxes). */
+  | 'org_lapsed'
   | 'no_drive_access'
   | 'insufficient_role'
   | 'no_agent_access'
@@ -185,10 +187,25 @@ async function authorizeSandboxTierEligibility(
   ownerId: string | undefined,
   deps: CanRunCodeDeps,
 ): Promise<CanRunCodeResult> {
+  // SEAT-9 (review #2761): a lapsed paying org is refused AS lapsed — not as a plan without sandboxes.
+  let orgLapsed = false;
+  const isOrgLapsed = deps.isOrgLapsed;
   const payerTier = await resolveSandboxPayerTier(
     { driveId: driveId ?? null, ownerId: ownerId ?? userId },
-    { lookupDriveBillingFacts: deps.lookupDriveBillingFacts, getUserSubscriptionTier: deps.getUserSubscriptionTier, isOrgLapsed: deps.isOrgLapsed },
+    {
+      lookupDriveBillingFacts: deps.lookupDriveBillingFacts,
+      getUserSubscriptionTier: deps.getUserSubscriptionTier,
+      ...(isOrgLapsed
+        ? {
+            isOrgLapsed: async (orgId: string) => {
+              orgLapsed = await isOrgLapsed(orgId);
+              return orgLapsed;
+            },
+          }
+        : {}),
+    },
   );
+  if (orgLapsed) return deny('org_lapsed');
   // WAL-9: an org drive's session runs on the org's tier and bills the org pool; whether the
   // pool can pay is the charge site's hold, not eligibility.
   return isSandboxAvailable(payerTier) ? { ok: true } : deny('tier_ineligible');

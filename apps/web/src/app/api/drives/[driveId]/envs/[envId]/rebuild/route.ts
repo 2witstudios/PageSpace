@@ -60,6 +60,10 @@ export async function POST(request: Request, context: { params: Promise<{ driveI
       // A LOCAL env is the user's own machine: there is no Sprite to replace, so
       // the verb does not apply (409 — a conflict with the resource's state,
       // not a transient failure the client should retry).
+      if (result.reason === 'org_lapsed') {
+        // SEAT-9: a lapsed org rebuilds nothing; the env and its data stay as they are.
+        return NextResponse.json({ error: result.message, code: 'org_lapsed' }, { status: 402 });
+      }
       if (result.reason === 'substrate_unsupported') {
         return NextResponse.json({ error: 'Local environments have no machine to rebuild', reason: result.reason }, { status: 409 });
       }

@@ -256,7 +256,7 @@ describe.skipIf(!TEST_KEY)('Stripe webhook org branch with real Stripe TEST even
     expect(await deliver(deleted)).toBe(200);
     expect((await getOrgStatus(orgId)).status).toBe('lapsed');
     expect(await gateComputeCharge(charge, { estCostCents: 50 })).toEqual({ allowed: false, reason: 'org_lapsed', orgRefusal: 'org_lapsed' });
-    expect(await admitDriveComputeCreator({ driveId: product.id, userId: owner.id })).toEqual({ allowed: false, message: ORG_LAPSED_MESSAGE });
+    expect(await admitDriveComputeCreator({ driveId: product.id, userId: owner.id })).toEqual({ allowed: false, code: 'org_lapsed', message: ORG_LAPSED_MESSAGE });
     expect(await db.select().from(creditHolds).where(eq(creditHolds.userId, owner.id))).toHaveLength(0);
     expect((await poolOf(orgId))?.monthlyRemainingCents).toBe(poolAfterFirst?.monthlyRemainingCents);
     expect(await canUserViewPage(owner.id, roadmap.id)).toBe(true);

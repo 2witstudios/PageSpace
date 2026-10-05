@@ -67,7 +67,7 @@ import {
   type RedeemLocalEnvChallengeResult,
   type ReissueLocalEnvEnrollmentCodeResult,
 } from '@pagespace/lib/services/drive-envs/drive-envs';
-import { admitDriveComputeCreator } from '@pagespace/lib/billing/compute-gate';
+import { admitDriveComputeCreator, admitDriveOrgActive } from '@pagespace/lib/billing/compute-gate';
 
 export { toDriveEnvDTO };
 export type { DriveEnvDTO };
@@ -372,6 +372,7 @@ export async function rebuildEnv(input: { envId: string; requesterId: string }):
       store,
       host,
       now: () => new Date(),
+      admitOrgActive: admitDriveOrgActive,
       ensureSandbox: async (row) =>
         ensureDriveEnvSandbox({
           envId: row.id,

@@ -113,7 +113,7 @@ describe('orgBusinessSubscriptionParams — the Business subscription Stripe is 
   });
 });
 
-describe('orgPaymentStep — what the client must do to pay for the org subscription (SEAT-8, SEAT-9 recovery)', () => {
+describe('orgPaymentStep — what the client must do to pay for the org subscription (a new org, or recovery from a lapse)', () => {
   const openInvoice = { status: 'open', amountDueCents: 5000, clientSecret: 'pi_123_secret_abc' };
 
   it('SEAT-8 (partial) SEAT-9 (partial) a new or re-subscribed org whose subscription is incomplete gets the open invoice\'s client secret to confirm the card', () => {

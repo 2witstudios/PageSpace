@@ -170,7 +170,7 @@ describe('environments and apps are capped against the member who created them (
     expect(await db.select().from(creditHolds).where(eq(creditHolds.userId, w.marcusId))).toEqual([]);
 
     await atCap(w, w.marcusId);
-    expect(await admitDriveComputeCreator({ driveId: w.driveId, userId: w.marcusId })).toEqual({ allowed: false, message: expect.stringMatching(/used your allowance/) });
+    expect(await admitDriveComputeCreator({ driveId: w.driveId, userId: w.marcusId })).toEqual({ allowed: false, code: 'org_member_cap_reached', message: expect.stringMatching(/used your allowance/) });
     // The lead, whose allowance is whole, still can.
     expect(await admitDriveComputeCreator({ driveId: w.driveId, userId: w.leadId })).toEqual({ allowed: true });
   });
