@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { isPaymentElementRoute } from '@/lib/orgs/payment-routes';
 import { API_CONTRACT_VERSION } from '@pagespace/lib/api-contract-version';
 import { isDevPreviewEnabled, resolveDevPreviewApex } from '@pagespace/lib/services/sandbox/preview/dev-preview-env';
 import { previewFrameSrcEntry } from '@pagespace/lib/services/sandbox/preview/preview-host';
@@ -348,15 +349,14 @@ export const routeOwnsItsOwnCsp = (pathname: string): boolean =>
   isHandoffBridgeRoute(pathname) || pathname === APP_ROUTER_ROUTE_PATH;
 
 /**
- * Pages that embed Stripe's Payment Element: under COEP credentialless its js.stripe.com frames do not
- * load. That includes Settings (the create-organization dialog's payment step) and every org settings
- * page (the lapse banner's Reactivate payment).
+ * Routes that skip COEP: the Stripe checkout pages (plan, billing), the org Payment Element routes
+ * (path-exact, isPaymentElementRoute: Settings for create-organization, an org's Plan & seats for
+ * Reactivate), and auth.
  */
 export const shouldDisableCOEP = (pathname: string): boolean =>
-  pathname === '/settings' ||
   pathname.startsWith('/settings/plan') ||
   pathname.startsWith('/settings/billing') ||
-  pathname.startsWith('/orgs/') ||
+  isPaymentElementRoute(pathname) ||
   pathname === '/auth' ||
   pathname.startsWith('/auth/');
 

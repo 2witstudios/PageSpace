@@ -1,13 +1,14 @@
 'use client';
 
 import Link from 'next/link';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ChevronRight, Plus } from 'lucide-react';
 import { ORGS_ENABLED } from '@pagespace/lib/organizations/orgs-enabled';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useMyOrgs, useOrgRealtime } from '@/hooks/useOrgs';
 import { useBillingVisibility } from '@/hooks/useBillingVisibility';
 import { isBillingEnabled } from '@/lib/deployment-mode';
+import { documentAllowsPaymentElement, paymentRouteFor } from '@/lib/orgs/payment-routes';
 import { CreateOrganizationDialog } from './CreateOrganizationDialog';
 import { OrgMark } from './OrgMark';
 import { OrgRoleBadge } from './OrgBadge';
@@ -21,6 +22,20 @@ export function AccountOrganizationsSection() {
   const { showBilling } = useBillingVisibility();
   const [creating, setCreating] = useState(false);
   useOrgRealtime();
+
+  // Arrived by a full load from elsewhere to create one (see openCreate): open the dialog here.
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get('createOrg') === '1') setCreating(true);
+  }, []);
+
+  /**
+   * The dialog's payment step mounts the Stripe Payment Element, which only loads on a document served
+   * without COEP. A client-side visit to Settings keeps the previous page's COEP, so load it fresh.
+   */
+  const openCreate = () => {
+    if (isBillingEnabled() && !documentAllowsPaymentElement()) window.location.assign(paymentRouteFor({ kind: 'create_org' }));
+    else setCreating(true);
+  };
 
   if (!ORGS_ENABLED) return null;
   const canCreate = !isBillingEnabled() || showBilling;
@@ -49,7 +64,7 @@ export function AccountOrganizationsSection() {
           ))
         )}
         {canCreate ? (
-          <button type="button" className="block w-full text-left" onClick={() => setCreating(true)}>
+          <button type="button" className="block w-full text-left" onClick={openCreate}>
             <div className={`group flex items-center gap-4 px-4 py-3 transition-colors hover:bg-accent hover:text-accent-foreground ${(orgs?.length ?? 0) > 0 || isLoading ? 'border-t' : ''}`}>
               <Plus className="h-5 w-5 text-muted-foreground group-hover:text-accent-foreground" />
               <div className="min-w-0 flex-1">

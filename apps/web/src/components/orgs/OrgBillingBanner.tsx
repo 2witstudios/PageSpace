@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTheme } from 'next-themes';
 import { AlertTriangle, CreditCard, Info, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -11,6 +11,7 @@ import { StripeProvider } from '@/components/billing/StripeProvider';
 import { openOrgBillingPortal, startOrgSubscription } from '@/lib/orgs/org-api';
 import { orgErrorMessage } from '@/lib/orgs/org-error-copy';
 import { cn } from '@/lib/utils/index';
+import { documentAllowsPaymentElement, paymentRouteFor } from '@/lib/orgs/payment-routes';
 import { OrgPaymentForm } from './OrgPaymentForm';
 
 /** Opens the org's Stripe billing portal (it returns to /orgs/[orgId]/settings). */
@@ -42,9 +43,14 @@ export function OrgBillingBanner({ orgId, orgName, notice, onReactivated }: {
     [clientSecret, resolvedTheme],
   );
 
-  if (!notice || notice.kind === 'trial') return null;
+  const autoStarted = useRef(false);
 
   const reactivate = async () => {
+    // The Payment Element only loads on a document served without COEP (an org's Plan & seats page).
+    if (!documentAllowsPaymentElement()) {
+      window.location.assign(paymentRouteFor({ kind: 'reactivate', orgId }));
+      return;
+    }
     setBusy(true);
     try {
       const res = await startOrgSubscription(orgId);
@@ -59,6 +65,17 @@ export function OrgBillingBanner({ orgId, orgName, notice, onReactivated }: {
       setBusy(false);
     }
   };
+
+  // Arrived from Reactivate on another org page: start paying here.
+  useEffect(() => {
+    if (autoStarted.current || notice?.kind !== 'reactivate') return;
+    if (new URLSearchParams(window.location.search).get('reactivate') !== '1') return;
+    autoStarted.current = true;
+    void reactivate();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [notice?.kind]);
+
+  if (!notice || notice.kind === 'trial') return null;
 
   const tone =
     notice.kind === 'reactivate'

@@ -8,6 +8,8 @@ const mocks = vi.hoisted(() => ({
   useOrgRealtime: vi.fn(),
   showBilling: true,
   billingEnabled: true,
+  paymentHere: true,
+  assign: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/organizations/orgs-enabled', () => ({
@@ -18,6 +20,10 @@ vi.mock('@pagespace/lib/organizations/orgs-enabled', () => ({
 vi.mock('@/hooks/useOrgs', () => ({ useMyOrgs: mocks.useMyOrgs, useOrgRealtime: mocks.useOrgRealtime }));
 vi.mock('@/hooks/useBillingVisibility', () => ({ useBillingVisibility: () => ({ showBilling: mocks.showBilling }) }));
 vi.mock('@/lib/deployment-mode', () => ({ isBillingEnabled: () => mocks.billingEnabled }));
+vi.mock('@/lib/orgs/payment-routes', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/orgs/payment-routes')>()),
+  documentAllowsPaymentElement: () => mocks.paymentHere,
+}));
 vi.mock('../CreateOrganizationDialog', () => ({
   CreateOrganizationDialog: ({ open }: { open: boolean }) => (open ? <div role="dialog">create dialog</div> : null),
 }));
@@ -29,6 +35,8 @@ beforeEach(() => {
   mocks.orgsEnabled = true;
   mocks.showBilling = true;
   mocks.billingEnabled = true;
+  mocks.paymentHere = true;
+  Object.defineProperty(window, 'location', { value: { ...window.location, search: '', assign: mocks.assign }, writable: true });
   mocks.useMyOrgs.mockReturnValue({
     orgs: [
       { id: 'o1', name: 'Northwind Labs', slug: 'northwind', avatarUrl: null, role: 'OWNER' },
@@ -52,6 +60,20 @@ describe('Account › Organizations', () => {
     render(<AccountOrganizationsSection />);
     expect(screen.queryByRole('dialog')).toBeNull();
     await userEvent.click(screen.getByRole('button', { name: /Create organization/ }));
+    expect(screen.getByRole('dialog')).toBeTruthy();
+  });
+
+  it('UI-6 (partial): from a page served with COEP, Create loads Settings fresh so the Payment Element can mount', async () => {
+    mocks.paymentHere = false;
+    render(<AccountOrganizationsSection />);
+    await userEvent.click(screen.getByRole('button', { name: /Create organization/ }));
+    expect(mocks.assign).toHaveBeenCalledWith('/settings?createOrg=1');
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('arriving with ?createOrg=1 opens the dialog', () => {
+    window.location.search = '?createOrg=1';
+    render(<AccountOrganizationsSection />);
     expect(screen.getByRole('dialog')).toBeTruthy();
   });
 
