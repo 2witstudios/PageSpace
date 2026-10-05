@@ -42,6 +42,79 @@ function sourceFiles(dir: string, out: string[] = []): string[] {
   return out;
 }
 
+/**
+ * The IMPORT seam (independent review of #2762, P2-5): regexes over code can always be dodged (a raw SQL string, a
+ * join's whole-row result, getTableColumns, an alias), so the guarantee is structural. The `organizations` table
+ * object may be imported only by these modules. Each selects named columns (the reader and the writer the only ones
+ * naming `policies`), and the repository hands the rest of the app an `OrgRecord` without them. Any other import
+ * fails here, and so does a namespace or barrel import of the schema that would reach the table without naming it.
+ * Adding a file to this list is a reviewed decision.
+ */
+const ORGANIZATIONS_IMPORTERS = [
+  'apps/web/src/lib/org-billing/org-subscription.ts',
+  'packages/lib/src/billing/wallet-funding-shell.ts',
+  'packages/lib/src/organizations/deletion.ts',
+  'packages/lib/src/organizations/domains.ts',
+  'packages/lib/src/organizations/invitations.ts',
+  'packages/lib/src/organizations/leave.ts',
+  'packages/lib/src/organizations/membership.ts',
+  'packages/lib/src/organizations/open-role-floor.ts',
+  'packages/lib/src/organizations/policies.ts',
+  'packages/lib/src/organizations/policy-reader.ts',
+  'packages/lib/src/organizations/repository.ts',
+  'packages/lib/src/organizations/seat-service.ts',
+  'packages/lib/src/organizations/status.ts',
+  'packages/lib/src/repositories/account-repository.ts',
+  'packages/lib/src/services/drive-join-request-service.ts',
+  'packages/lib/src/services/org-drive-service.ts',
+].sort();
+const IMPORT_ROOTS = ['packages/lib/src', 'apps'];
+/** A named import of the schema module: its specifier list and the module path. */
+const NAMED_SCHEMA_IMPORT = /import\s+(type\s+)?\{([^}]*)\}\s+from\s+['"](@pagespace\/db\/schema(?:\/organizations)?)['"]/g;
+/** A namespace import of the schema reaches `organizations` without naming it. */
+const WHOLE_SCHEMA_IMPORT = /import\s+\*\s+as\s+\w+\s+from\s+['"]@pagespace\/db(?:\/schema(?:\/organizations)?)?['"]/;
+/**
+ * The namespace importers, each reviewed: page-content-store walks every table object for its content-reference
+ * columns (Object.values of the schema) and never selects from organizations.
+ */
+const SCHEMA_NAMESPACE_IMPORTERS = ['packages/lib/src/services/page-content-store.ts'];
+
+function importsOrganizationsTable(code: string): boolean {
+  for (const m of code.matchAll(NAMED_SCHEMA_IMPORT)) {
+    if (m[1]) continue; // `import type { … }` brings no value
+    const names = m[2].split(',').map((n) => n.trim().replace(/^type\s+/, '').split(/\s+as\s+/)[0].trim());
+    if (names.includes('organizations')) return true;
+  }
+  return false;
+}
+
+describe('the organizations table import seam', () => {
+  it('POL-1 (partial) only the allowlisted modules import the organizations table object; no file reaches it through a namespace or barrel import', () => {
+    const importers: string[] = [];
+    const wholeSchema: string[] = [];
+    for (const root of IMPORT_ROOTS) {
+      for (const file of sourceFiles(join(REPO_ROOT, root))) {
+        const rel = relative(REPO_ROOT, file);
+        const code = stripComments(readFileSync(file, 'utf8'));
+        if (importsOrganizationsTable(code)) importers.push(rel);
+        if (WHOLE_SCHEMA_IMPORT.test(code)) wholeSchema.push(rel);
+      }
+    }
+    expect(importers.sort()).toEqual(ORGANIZATIONS_IMPORTERS);
+    expect(wholeSchema.sort()).toEqual(SCHEMA_NAMESPACE_IMPORTERS);
+  });
+
+  it('the import patterns match the shapes they exist to catch (so they cannot pass by matching nothing)', () => {
+    expect(importsOrganizationsTable("import { organizations, orgMembers } from '@pagespace/db/schema/organizations';")).toBe(true);
+    expect(importsOrganizationsTable("import { orgMembers, organizations as orgs } from '@pagespace/db/schema/organizations';")).toBe(true);
+    expect(importsOrganizationsTable("import { orgMembers, type Organization } from '@pagespace/db/schema/organizations';")).toBe(false);
+    expect(importsOrganizationsTable("import type { organizations } from '@pagespace/db/schema/organizations';")).toBe(false);
+    expect(WHOLE_SCHEMA_IMPORT.test("import * as orgs from '@pagespace/db/schema/organizations';")).toBe(true);
+    expect(importsOrganizationsTable("import { organizations } from '@pagespace/db/schema';")).toBe(true);
+    expect(WHOLE_SCHEMA_IMPORT.test("import { sheetRows } from '@pagespace/db/schema';")).toBe(false);
+  });
+});
+
 describe('the org policy reader seam', () => {
   it('POL-1 (partial) no source file outside the reader and the writer reads the organizations.policies column', () => {
     const offenders: string[] = [];
