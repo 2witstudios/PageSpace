@@ -35,6 +35,8 @@ const WORKFLOW = {
   id: 'workflow-1',
   driveId: 'drive-1',
   createdBy: 'user-1',
+  // [D-OW-36] The row shape: an owner who has not left. A missing key reads as owner-left (fail closed).
+  ownerLeftAt: null,
   agentPageId: 'agent-page-1',
   prompt: 'Summarize the delivery',
   contextPageIds: [],

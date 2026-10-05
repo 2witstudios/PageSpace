@@ -41,7 +41,7 @@ export async function loadDriveRelationships(
   for (const drive of driveList) if (isDriveLead(userId, drive)) out.set(drive.id, LEAD_RELATIONSHIP);
   if (notLed.length === 0) return out;
 
-  const rows = await loadAcceptedRowsInDrives(db, userId, notLed.map((drive) => drive.id));
+  const rows = await loadAcceptedRowsInDrives(options.executor ?? db, userId, notLed.map((drive) => drive.id));
   const effective = await resolveEffectiveDriveMemberships(
     notLed.map((drive) => ({ userId, drive, row: rows.get(drive.id) ?? null })),
     options,

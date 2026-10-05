@@ -67,6 +67,8 @@ export function planDemotionRevocation({
       orgRole,
       row: d.row,
       driveDefaultRole: { role: 'MEMBER', customRoleId: d.defaultCustomRoleId },
+      // Membership only (who loses a drive on demotion); the floor changes what a member may do, never who is one.
+      openDriveRoleFloor: null,
     });
     const before = resolve(fromRole);
     const after = resolve(toRole);

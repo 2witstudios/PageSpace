@@ -9,6 +9,17 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Changed
 
+- **New organizations ask before letting outsiders in** — a new organization's "guests from outside"
+  setting now starts at "Admins approve" instead of "On": inviting or sharing with someone outside the
+  organization waits for an Owner or Admin to approve it. Owners can change the setting at any time.
+- **An organization's automations outlive the person who made them** — when someone leaves an
+  organization, is removed from it, or deletes their account, the workflows, task and calendar triggers
+  and page webhooks they set up in its drives are no longer deleted. They are switched off and marked
+  "owner left", and nothing runs under the missing person, including a manual Run. An Owner or Admin can
+  hand each one to another member who can reach its drive (it then runs as that person and counts against
+  their spending cap) or delete it; both are recorded in the organization's audit log. An automation whose
+  creator deleted their account keeps nothing that identifies them. Automations in personal drives still
+  go with the account, as before.
 - **A lapsed organization can still lock things down** — while an organization's plan is unpaid or
   canceled, its Owner and Admins can still make any change that restricts: turn guests from outside off
   or to approval (guests are removed from its drives at once, as when the plan is active), turn off share
@@ -30,7 +41,14 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   need approval, sharing a page with someone outside waits for an Owner or Admin just like a drive invite.
   An organization's minimum default role for its Open drives is now enforced: a drive's default role, a
   drive becoming Open, or a raise of the minimum is refused with a message naming the policy when the
-  role would fall below it. A policy change that turns off published apps, environments, agents from
+  role would fall below it. The minimum also holds when access is checked, not only when roles are saved:
+  every member of the organization in one of its Open drives can always view (or, under an edit minimum,
+  edit) its non-private pages, even if an older role or a page-specific setting says less. People invited
+  with a specific role, guests and other outsiders keep exactly the access they were given, and private
+  pages stay private. Pulse, the activity summary and opened pages follow exactly the same organization
+  access as everywhere else: a member who has lost access to a Restricted or Private drive no longer sees
+  its pages there, and an Owner or Admin opening a Private drive this way is recorded in the audit log.
+  A policy change that turns off published apps, environments, agents from
   other drives, autonomous agents or some models lists what it affected in the organization's audit log,
   and the log now also shows compute handed to a drive's lead, resumed apps, and a former member's
   turned-away attempt to rejoin (without their email address).

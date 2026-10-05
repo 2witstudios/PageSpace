@@ -23,6 +23,8 @@ import {
 } from '../org-admin-access-audit';
 import { checkDriveAccessForSearch, globSearchPages } from '../../services/drive-search-service';
 import { getDriveAccess } from '../../services/drive-service';
+import { loadPagePayload } from '../../services/page-payload-service';
+import { accessiblePageIds } from '../accessible-page-ids';
 import { cleanupNorthwind, northwind } from './fixtures/northwind-org-drives';
 
 const flags = vi.hoisted(() => ({ orgsEnabled: true }));
@@ -145,6 +147,30 @@ describe('ORG-4 (partial) audit dedupe (integration)', () => {
     await getUserAccessLevel(f.people.omar.id, salaries);
     expect(await accessRows(priya.id, f.drives.product.id)).toEqual([]);
     expect(await accessRows(f.people.omar.id, finance)).toEqual([]);
+  }, 60_000);
+
+  it('ORG-4 (partial) the SQL twin (pulse, activity summary, page payloads) writes the same event when org power opens a PRIVATE drive, and none for a joined Admin or an OPEN drive', async () => {
+    const f = await northwind();
+    const { priya, omar, jono } = f.people;
+    const finance = f.drives.finance.id;
+    const salaries = f.pages.financePrivatePage.id;
+
+    // A page payload on its own is an access: Jono (org Owner; his leftover OWNER row on Finance counts for
+    // nothing) opens Salaries through org power, and the payload alone writes the event.
+    expect((await loadPagePayload(jono.id, salaries)).page.id).toBe(salaries);
+    expect(await settledCount(jono.id, finance, 1)).toBe(1);
+
+    // Priya (org Admin, no valid Finance row) reaches the PRIVATE Finance drive through org power in SQL too.
+    expect(await accessiblePageIds(priya.id)).toEqual(expect.arrayContaining([salaries, f.pages.financePage.id, f.pages.productPage.id]));
+    expect(await settledCount(priya.id, finance, 1)).toBe(1);
+    // A page payload in the same window is the same access: still one row.
+    expect((await loadPagePayload(priya.id, salaries)).page.id).toBe(salaries);
+    expect(await settledCount(priya.id, finance, 1)).toBe(1);
+    // Omar's own invited ADMIN row opens Finance: org power was not used, so nothing is owed; nor on OPEN Product.
+    expect(await accessiblePageIds(omar.id)).toContain(salaries);
+    await new Promise((resolve) => setTimeout(resolve, 750));
+    expect(await accessRows(omar.id, finance)).toEqual([]);
+    expect(await accessRows(priya.id, f.drives.product.id)).toEqual([]);
   }, 60_000);
 
   it('ORG-4 (partial) a failed audit write releases the window, so the next access in the same window still writes the record', async () => {

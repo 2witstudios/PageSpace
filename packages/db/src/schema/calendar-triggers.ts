@@ -29,8 +29,9 @@ export const calendarTriggers = pgTable('calendar_triggers', {
   // Drive context for execution and access checks
   driveId: text('driveId').notNull().references(() => drives.id, { onDelete: 'cascade' }),
 
-  // Human responsible for cost (rate-limit / API key resolution)
-  scheduledById: text('scheduledById').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  // Human responsible for cost (rate-limit / API key resolution). [D-OW-36] Cleared when their account is
+  // deleted: the trigger's workflow is then flagged owner-left and nothing fires until an admin reassigns it.
+  scheduledById: text('scheduledById').references(() => users.id, { onDelete: 'set null' }),
 
   triggerAt: timestamp('triggerAt', { mode: 'date', withTimezone: true }).notNull(),
 

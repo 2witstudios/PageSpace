@@ -115,8 +115,9 @@ const wholeCents = (raw: unknown): number | undefined =>
   typeof raw === 'number' && Number.isSafeInteger(raw) && raw >= 0 && raw <= MAX_SEAT_ALLOWANCE_CENTS ? raw : undefined;
 
 const SPECS: { [K in OrgPolicyKey]: FieldSpec<OrgPolicies[K]> } = {
-  // The default keeps org-drive invites working as they do today; a drive admin can already invite anyone.
-  guests: { default: 'on', strictest: 'off', normalize: oneOf(GUEST_POLICIES) },
+  // [D-OW-41] Outsiders wait for an Owner or Admin unless the org chooses otherwise. New orgs also store it
+  // explicitly (NEW_ORG_POLICIES), so a later change of this default never silently moves an existing org.
+  guests: { default: 'approve', strictest: 'off', normalize: oneOf(GUEST_POLICIES) },
   publicShareLinks: { default: true, strictest: false, normalize: bool },
   publishWeb: { default: true, strictest: false, normalize: bool },
   customDomains: { default: true, strictest: false, normalize: bool },
@@ -144,6 +145,12 @@ export const ORG_POLICY_KEYS = Object.keys(SPECS) as OrgPolicyKey[];
 export const DEFAULT_ORG_POLICIES: Readonly<OrgPolicies> = Object.freeze(
   Object.fromEntries(ORG_POLICY_KEYS.map((k) => [k, SPECS[k].default])) as unknown as OrgPolicies,
 );
+
+/**
+ * [D-OW-41] What a new org stores at creation. Policies are stored sparse and defaults fill in on read, so the
+ * guests choice is written explicitly too: the org keeps `approve` even if the read default ever changes.
+ */
+export const NEW_ORG_POLICIES: Readonly<Partial<OrgPolicies>> = Object.freeze({ guests: 'approve' });
 
 const isRecord = (raw: unknown): raw is Record<string, unknown> =>
   raw !== null && typeof raw === 'object' && !Array.isArray(raw);

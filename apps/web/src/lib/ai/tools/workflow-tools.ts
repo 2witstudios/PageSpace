@@ -9,6 +9,7 @@ import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket/so
 import type { ToolExecutionContext } from '../core/types';
 import { canActorManageDrive } from './actor-permissions';
 import { agentTriggerBaseSchema, validateAgentTrigger } from '@/lib/workflows/agent-trigger-shared';
+import { AUTOMATION_OWNER_LEFT_ERROR } from '@pagespace/lib/permissions/automation-ownership';
 import {
   validateCronExpression,
   validateTimezone,
@@ -187,6 +188,10 @@ The cron expression must not fire more often than every 5 minutes (the polling c
       }
       if (!workflow.cronExpression) {
         throw new Error('This workflow is managed by a task or calendar event; edit it there.');
+      }
+      // [D-OW-36] An owner-left workflow stays off until an Owner or Admin reassigns it (as PATCH answers 409).
+      if (workflow.ownerLeftAt && isEnabled === true) {
+        throw new Error(AUTOMATION_OWNER_LEFT_ERROR);
       }
 
       const updates: Partial<typeof workflows.$inferInsert> = {};

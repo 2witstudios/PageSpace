@@ -1160,6 +1160,49 @@ describe('agent-communication-tools', () => {
         expect(runCompaction).toHaveBeenCalledWith(pendingCompaction);
       });
 
+      it('SPEND-6 (partial) WAL-7 (partial) inside a manual Run, ask_agent records its usage AND schedules its compaction as the person who pressed Run, not the workflow\'s creator (review #2817 P3-A)', async () => {
+        const pendingCompaction = {
+          conversationId: 'conv-sub',
+          source: 'page' as const,
+          pageId: 'agent-1',
+          userId: 'user-creator',
+          provider: 'openai',
+          model: 'openai/gpt-5.4-nano',
+          spend: { kind: 'automation' as const, driveId: 'drive-1' },
+          plan: {
+            reason: 'over-soft-threshold' as const,
+            cutBeforeIndex: 0,
+            estimatedTailTokens: 100,
+            messagesToSummarize: [],
+            compactedUpToMessageId: null,
+            compactedUpToCreatedAt: null,
+            currentSummaryVersion: null,
+            previousSummary: null,
+          },
+        };
+        vi.mocked(prepareHistoryForModel).mockResolvedValueOnce({
+          messages: [] as never,
+          summaryText: '',
+          stableBoundaryIndex: 0,
+          pendingCompaction,
+          scheduleCompaction: vi.fn(),
+        });
+
+        await executeAskAgent(
+          { agentPath: '/test/agent', agentId: 'agent-1', question: 'Test question' },
+          {
+            toolCallId: '1', messages: [],
+            experimental_context: {
+              userId: 'user-creator',
+              creditSpend: { spend: { kind: 'automation', driveId: 'drive-1' }, walletId: 'w-drive-1', userId: 'user-presser' },
+            } as ToolExecutionContext,
+          },
+        );
+
+        expect(runCompaction).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-creator', billedUserId: 'user-presser' }));
+        expect(AIMonitoring.trackUsage).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-presser', walletId: 'w-drive-1' }));
+      });
+
       it('SPEND-8 (partial) an ask_agent call with no gated caller plans its compaction on personal credits', async () => {
         await executeAskAgent(
           { agentPath: '/test/agent', agentId: 'agent-1', question: 'Test question' },

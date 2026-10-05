@@ -5,6 +5,7 @@ import { driveMembers, driveRoles } from '@pagespace/db/schema/members';
 import { orgMembers, type OrgRole } from '@pagespace/db/schema/organizations';
 import { auditOrgAdminPrivateDriveAccess } from './org-admin-access-audit';
 import { ORGS_ENABLED } from '../organizations/orgs-enabled';
+import { getOpenDriveRoleFloors } from '../organizations/policy-reader';
 import type { DriveRoleGrant, OrgDriveMembership } from './org-access';
 import { driveMembershipRole, driveMembershipRow } from './drive-member-role';
 import type { RequesterRow } from './drive-join-requests';
@@ -71,14 +72,20 @@ export interface ResolveMembershipsOptions {
    * computes an audience (which OTHER users can see a page): nobody accessed anything.
    */
   audit: boolean;
+  /**
+   * Read through this executor (a transaction) instead of the pool, so a caller holding locks sees the
+   * rows it locked ([D-OW-36] reassignment, review #2831 P2-2). Defaults to the pool.
+   */
+  executor?: Pick<typeof db, 'select'>;
 }
 
 /**
  * The effective membership of many (user, drive) pairs whose accepted rows the caller already read,
  * in the order given. The ONE IO edge every human drive resolver goes through, single or batched:
  * while ORGS_ENABLED is false, or for a personal drive, it runs no query and returns the row.
- * Otherwise it reads the org roles (one query) and the default roles of the OPEN drives a row-less
- * member needs (one query), then applies resolveEffectiveDriveMembership to each pair.
+ * Otherwise it reads the org roles (one query), the default roles of the OPEN drives a row-less
+ * member needs (one query) and the Open-drive role floor of the orgs whose OPEN drives an org MEMBER
+ * resolves (one query, POL-6), then applies resolveEffectiveDriveMembership to each pair.
  */
 export async function resolveEffectiveDriveMemberships(
   candidates: MembershipCandidate[],
@@ -96,10 +103,12 @@ export async function resolveEffectiveDriveMemberships(
       orgRole: null,
       row,
       driveDefaultRole: NO_DEFAULT_ROLE,
+      openDriveRoleFloor: null,
     }));
   }
 
-  const orgRoles = await findOrgRoles(candidates.flatMap(({ userId }, i) => {
+  const executor = options.executor ?? db;
+  const orgRoles = await findOrgRoles(executor, candidates.flatMap(({ userId }, i) => {
     const orgId = facts[i].orgId;
     return orgId === null ? [] : [{ orgId, userId }];
   }));
@@ -118,14 +127,20 @@ export async function resolveEffectiveDriveMemberships(
       && validOrgDriveRow(row, facts[i], orgRole) === null;
   });
   const defaultRoles = await findDefaultCustomRoleIds(
+    executor,
     candidates.filter((_, i) => needsDefaultRole[i]).map(({ drive }) => drive.id),
   );
+  // POL-6: read once per org, only where an org MEMBER resolves an OPEN drive (the only place a floor can apply).
+  const floors = await getOpenDriveRoleFloors(candidates.flatMap((_, i) => {
+    const orgId = facts[i].orgId;
+    return orgId !== null && orgRoleOf(i) === 'MEMBER' && facts[i].orgVisibility === 'OPEN' ? [orgId] : [];
+  }));
 
   return candidates.map(({ userId, drive, row }, i) => {
     const orgId = facts[i].orgId;
     if (orgId === null) {
       return resolveEffectiveDriveMembership({
-        orgsEnabled: false, drive: facts[i], orgRole: null, row, driveDefaultRole: NO_DEFAULT_ROLE,
+        orgsEnabled: false, drive: facts[i], orgRole: null, row, driveDefaultRole: NO_DEFAULT_ROLE, openDriveRoleFloor: null,
       });
     }
     const orgRole = orgRoleOf(i);
@@ -137,6 +152,7 @@ export async function resolveEffectiveDriveMemberships(
       driveDefaultRole: needsDefaultRole[i]
         ? { role: 'MEMBER', customRoleId: defaultRoles.get(drive.id) ?? null }
         : NO_DEFAULT_ROLE,
+      openDriveRoleFloor: floors.get(orgId) ?? null,
     });
     if (options.audit && effective?.auditOrgAdminPrivateAccess && orgRole !== null) {
       void auditOrgAdminPrivateDriveAccess({ userId, driveId: drive.id, orgId, orgRole });
@@ -241,12 +257,12 @@ function chunks<T>(items: T[]): T[][] {
   return out;
 }
 
-async function findOrgRoles(pairs: Array<{ orgId: string; userId: string }>): Promise<Map<string, OrgRole>> {
+async function findOrgRoles(executor: Pick<typeof db, 'select'>, pairs: Array<{ orgId: string; userId: string }>): Promise<Map<string, OrgRole>> {
   const roles = new Map<string, OrgRole>();
   if (pairs.length === 0) return roles;
   const orgIds = [...new Set(pairs.map((p) => p.orgId))];
   for (const userIds of chunks([...new Set(pairs.map((p) => p.userId))])) {
-    const rows = await db
+    const rows = await executor
       .select({ orgId: orgMembers.orgId, userId: orgMembers.userId, role: orgMembers.role })
       .from(orgMembers)
       .where(and(inArray(orgMembers.orgId, orgIds), inArray(orgMembers.userId, userIds)));
@@ -256,10 +272,10 @@ async function findOrgRoles(pairs: Array<{ orgId: string; userId: string }>): Pr
 }
 
 /** Each drive's default custom role (drive_roles.isDefault), for the drives given. */
-async function findDefaultCustomRoleIds(driveIds: string[]): Promise<Map<string, string>> {
+async function findDefaultCustomRoleIds(executor: Pick<typeof db, 'select'>, driveIds: string[]): Promise<Map<string, string>> {
   const defaults = new Map<string, string>();
   for (const ids of chunks([...new Set(driveIds)])) {
-    const rows = await db
+    const rows = await executor
       .select({ driveId: driveRoles.driveId, id: driveRoles.id })
       .from(driveRoles)
       .where(and(inArray(driveRoles.driveId, ids), eq(driveRoles.isDefault, true)))

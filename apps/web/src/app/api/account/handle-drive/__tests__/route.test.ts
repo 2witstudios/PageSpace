@@ -7,7 +7,7 @@ import { loadDriveRelationship } from '@pagespace/lib/permissions/drive-relation
 const NONE: DriveRelationship = { isOwner: false, membership: null };
 const asMember = (role: 'OWNER' | 'ADMIN' | 'MEMBER', source: 'invite' | 'org' = 'invite'): DriveRelationship => ({
   isOwner: false,
-  membership: { role, customRoleId: null, source, auditOrgAdminPrivateAccess: false },
+  membership: { role, customRoleId: null, source, auditOrgAdminPrivateAccess: false, openDriveFloor: null },
 });
 /** What loadDriveRelationship answers for the transfer target (the lead is always the lead). */
 let targetRelationship: DriveRelationship = NONE;

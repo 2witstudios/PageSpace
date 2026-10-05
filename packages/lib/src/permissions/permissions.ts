@@ -17,7 +17,9 @@ import { decideListedDriveRole } from './org-drive-resolution';
 import type { OrgDriveMembership } from './org-access';
 import { driveMembershipRow } from './drive-member-role';
 import { isGuestRole } from './guest-role';
+import { applyOpenDriveFloor } from './open-drive-floor';
 import { ORGS_ENABLED } from '../organizations/orgs-enabled';
+import type { OpenRoleFloor } from '../organizations/policies-core';
 
 /**
  * Permission level for a single page.
@@ -167,6 +169,12 @@ async function getDriveIdsForUserWithOrgs(userId: string): Promise<string[]> {
 /** Chunk size for id IN lists (Postgres bind parameter limit). */
 const ID_CHUNK = 500;
 
+/** The drive as the root node: never private, and its canEdit is the drive-wide edit question (#2627). */
+const DRIVE_ROOT = { isPrivate: false } as const;
+
+/** A page a listing shows, as the access the floor is applied to. */
+const VIEW_ONLY: PermissionLevel = { canView: true, canEdit: false, canShare: false, canDelete: false };
+
 /**
  * Get user access level for a page or drive (drive-as-root-node).
  *
@@ -258,7 +266,7 @@ export async function getUserAccessLevel(
         // MEMBER to what its driveWidePermissions grant; an unresolvable or
         // foreign-drive role fails closed.
         const canEditMap = await resolveDriveWideCanEdit([
-          { driveId: drive[0].id, role: isAdmin ? 'ADMIN' : 'MEMBER', customRoleId: membership.customRoleId },
+          { driveId: drive[0].id, role: isAdmin ? 'ADMIN' : 'MEMBER', customRoleId: membership.customRoleId, openDriveFloor: membership.openDriveFloor },
         ]);
         return {
           canView: true,
@@ -291,6 +299,7 @@ export async function getUserAccessLevel(
 
     let memberRole: string | null = null;
     let memberCustomRoleId: string | null = null;
+    let memberFloor: OpenRoleFloor | null = null;
 
     if (pageData.driveId) {
       // Beside the drive-admin branch: an org Owner/Admin resolves ADMIN on an org drive (ORG-4).
@@ -303,6 +312,7 @@ export async function getUserAccessLevel(
       if (memberRow) {
         memberRole = memberRow.role;
         memberCustomRoleId = memberRow.customRoleId;
+        memberFloor = memberRow.openDriveFloor;
 
         if (memberRole === 'ADMIN') {
           if (!silent) {
@@ -317,52 +327,16 @@ export async function getUserAccessLevel(
       loggers.api.debug(`[PERMISSIONS] User is NOT drive owner or admin - checking explicit permissions`);
     }
 
-    const permission = await db.select()
-      .from(pagePermissions)
-      .where(and(
-        eq(pagePermissions.pageId, validPageId),
-        eq(pagePermissions.userId, validUserId),
-        or(isNull(pagePermissions.expiresAt), gt(pagePermissions.expiresAt, new Date()))
-      ))
-      .limit(1);
-
-    if (permission.length === 0) {
-      if (memberCustomRoleId && pageData.driveId) {
-        const role = await fetchCustomRolePermissions(memberCustomRoleId, pageData.driveId);
-        if (role) {
-          const resolved = resolveCustomRolePermissions(role, validPageId);
-          if (resolved !== null) {
-            // driveWidePermissions fallback must not grant access to private pages
-            if (pageData.isPrivate && role.permissions[validPageId] === undefined) return null;
-            return resolved.canView ? { ...resolved, canDelete: false } : null;
-          }
-        }
-      }
-
-      if (memberRole !== null && pageData.driveId && !pageData.isPrivate) {
-        if (!silent) {
-          loggers.api.debug(`[PERMISSIONS] User is drive member, page is not private - granting read access`);
-        }
-        const canEdit = pageData.type === 'CHANNEL';
-        return { canView: true, canEdit, canShare: false, canDelete: false };
-      }
-
-      if (!silent) {
-        loggers.api.debug(`[PERMISSIONS] No explicit permissions found (or expired) - denying access`);
-      }
-      return null;
-    }
-
-    if (!silent) {
-      loggers.api.debug(`[PERMISSIONS] Found explicit permissions - canView: ${permission[0].canView}, canEdit: ${permission[0].canEdit}`);
-    }
-
-    return {
-      canView: permission[0].canView,
-      canEdit: permission[0].canEdit,
-      canShare: permission[0].canShare,
-      canDelete: permission[0].canDelete,
-    };
+    // POL-6: whatever the grants decide, an implicit Open-drive member holds at least the org's floor.
+    const resolved = await resolveNonAdminPageAccess({
+      userId: validUserId,
+      pageId: validPageId,
+      page: pageData,
+      memberRole,
+      memberCustomRoleId,
+      silent,
+    });
+    return applyOpenDriveFloor(resolved, memberFloor, { isPrivate: pageData.isPrivate ?? false });
 
   } catch (error) {
     loggers.api.error('[PERMISSIONS] Error checking user access level', {
@@ -372,6 +346,73 @@ export async function getUserAccessLevel(
     });
     return null;
   }
+}
+
+/**
+ * getUserAccessLevel past the owner and admin branches: an explicit page grant, then the member's custom role,
+ * then rule 4 (any member reads a non-private page). The caller applies the POL-6 floor to the answer.
+ */
+async function resolveNonAdminPageAccess({
+  userId,
+  pageId,
+  page,
+  memberRole,
+  memberCustomRoleId,
+  silent,
+}: {
+  userId: string;
+  pageId: string;
+  page: { driveId: string | null; isPrivate: boolean | null; type: string | null };
+  memberRole: string | null;
+  memberCustomRoleId: string | null;
+  silent: boolean;
+}): Promise<PermissionLevel | null> {
+  const permission = await db.select()
+    .from(pagePermissions)
+    .where(and(
+      eq(pagePermissions.pageId, pageId),
+      eq(pagePermissions.userId, userId),
+      or(isNull(pagePermissions.expiresAt), gt(pagePermissions.expiresAt, new Date()))
+    ))
+    .limit(1);
+
+  if (permission.length === 0) {
+    if (memberCustomRoleId && page.driveId) {
+      const role = await fetchCustomRolePermissions(memberCustomRoleId, page.driveId);
+      if (role) {
+        const resolved = resolveCustomRolePermissions(role, pageId);
+        if (resolved !== null) {
+          // driveWidePermissions fallback must not grant access to private pages
+          if (page.isPrivate && role.permissions[pageId] === undefined) return null;
+          return resolved.canView ? { ...resolved, canDelete: false } : null;
+        }
+      }
+    }
+
+    if (memberRole !== null && page.driveId && !page.isPrivate) {
+      if (!silent) {
+        loggers.api.debug(`[PERMISSIONS] User is drive member, page is not private - granting read access`);
+      }
+      const canEdit = page.type === 'CHANNEL';
+      return { canView: true, canEdit, canShare: false, canDelete: false };
+    }
+
+    if (!silent) {
+      loggers.api.debug(`[PERMISSIONS] No explicit permissions found (or expired) - denying access`);
+    }
+    return null;
+  }
+
+  if (!silent) {
+    loggers.api.debug(`[PERMISSIONS] Found explicit permissions - canView: ${permission[0].canView}, canEdit: ${permission[0].canEdit}`);
+  }
+
+  return {
+    canView: permission[0].canView,
+    canEdit: permission[0].canEdit,
+    canShare: permission[0].canShare,
+    canDelete: permission[0].canDelete,
+  };
 }
 
 /**
@@ -475,9 +516,10 @@ export async function getUserAccessiblePagesInDrive(
   }
 
   const pageIdSet = new Set<string>();
+  let nonPrivatePages: Array<{ id: string }> = [];
 
   if (memberRow) {
-    const nonPrivatePages = await db.select({ id: pages.id })
+    nonPrivatePages = await db.select({ id: pages.id })
       .from(pages)
       .where(and(
         eq(pages.driveId, driveId),
@@ -532,6 +574,13 @@ export async function getUserAccessiblePagesInDrive(
     ));
 
   for (const entry of explicitPermissions) pageIdSet.add(entry.pageId);
+
+  // POL-6: an implicit Open-drive member views at least every non-private page, whatever a role hid.
+  const floor = memberRow?.openDriveFloor ?? null;
+  for (const p of nonPrivatePages) {
+    const viewed = pageIdSet.has(p.id) ? VIEW_ONLY : null;
+    if (applyOpenDriveFloor(viewed, floor, { isPrivate: false })?.canView) pageIdSet.add(p.id);
+  }
 
   return Array.from(pageIdSet);
 }
@@ -605,10 +654,11 @@ export async function getUserAccessiblePagesInDriveWithDetails(
   const isMember = membership !== null;
 
   const pageMap = new Map<string, PageWithPermissions>();
+  let nonPrivatePages: Array<Omit<PageWithPermissions, 'permissions'>> = [];
 
   // Rule 4: MEMBER gets implicit canView on non-private pages
   if (isMember) {
-    const nonPrivatePages = await db.select({
+    nonPrivatePages = await db.select({
       id: pages.id,
       title: pages.title,
       type: pages.type,
@@ -729,6 +779,14 @@ export async function getUserAccessiblePagesInDriveWithDetails(
         canDelete: page.canDelete,
       },
     });
+  }
+
+  // POL-6: an implicit Open-drive member holds at least the org's floor on every non-private page, whatever a
+  // role or an explicit grant above decided.
+  const floor = membership?.openDriveFloor ?? null;
+  for (const page of nonPrivatePages) {
+    const floored = applyOpenDriveFloor(pageMap.get(page.id)?.permissions ?? null, floor, { isPrivate: false });
+    if (floored) pageMap.set(page.id, { ...page, permissions: floored });
   }
 
   return Array.from(pageMap.values());
@@ -885,6 +943,12 @@ export async function getUserDrivePermissions(
         const customRole = await fetchCustomRolePermissions(customRoleId, driveId);
         canEdit = customRole?.driveWidePermissions?.canEdit === true;
       }
+      // POL-6: an implicit Open-drive member edits drive-wide when the org's floor is edit.
+      canEdit = applyOpenDriveFloor(
+        { canView: true, canEdit, canShare: isAdmin, canDelete: isAdmin },
+        membership.openDriveFloor,
+        DRIVE_ROOT,
+      )?.canEdit === true;
 
       if (!silent) {
         loggers.api.debug(
@@ -1007,6 +1071,11 @@ export interface PagePermissionRow {
   // leftJoin. Declaring them here keeps the decision function free of casts.
   customRolePerms: CustomRolePerms | null;
   customRoleDriveWidePerms: PagePerm | null;
+  /**
+   * POL-6: the effective membership's floor (withEffectiveMembership sets it from resolveEffectiveDriveMembership).
+   * Absent on a row read straight from the database, which carries no org resolution: no floor.
+   */
+  openDriveFloor?: OpenRoleFloor | null;
 }
 
 /**
@@ -1027,7 +1096,12 @@ export function resolvePagePermissionRow(
   userId: string
 ): PermissionLevel | null {
   if (row.isTrashed) return null;
+  // POL-6: whatever the row's grants decide, an implicit Open-drive member holds at least the org's floor.
+  return applyOpenDriveFloor(resolveRowGrants(row, userId), row.openDriveFloor ?? null, { isPrivate: row.isPrivate === true });
+}
 
+/** resolvePagePermissionRow's grants on a live page: owner and admin, the explicit grant, the custom role, rule 4. */
+function resolveRowGrants(row: PagePermissionRow, userId: string): PermissionLevel | null {
   const isOwner = row.driveOwnerId === userId;
   const isAdmin = row.memberRole === 'ADMIN';
   // A GUEST row (a redeemed page share link) is not a drive-wide membership:
@@ -1152,6 +1226,7 @@ async function withEffectiveMembership<R extends PagePermissionRow & OrgMembersh
       memberCustomRoleId: customRoleId,
       customRolePerms: sameRole ? row.customRolePerms : belongs ? role.permissions : null,
       customRoleDriveWidePerms: sameRole ? row.customRoleDriveWidePerms : belongs ? role.driveWidePermissions : null,
+      openDriveFloor: membership?.openDriveFloor ?? null,
     };
   });
 }

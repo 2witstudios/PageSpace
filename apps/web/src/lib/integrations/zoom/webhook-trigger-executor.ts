@@ -7,6 +7,7 @@ import type { ZoomConnection } from '@pagespace/db/schema/zoom';
 import type { WebhookTrigger } from '@pagespace/db/schema/webhook-triggers';
 import { executeWorkflow, type WorkflowExecutionResult, type WorkflowExecutionInput } from '@/lib/workflows/workflow-executor';
 import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
+import { automationRunOwner } from '@pagespace/lib/permissions/automation-ownership';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
 import { automationSpend } from '@pagespace/lib/billing/spend-target';
 import { creditDeniedError } from '@/lib/workflows/workflow-credit-gate';
@@ -49,6 +50,14 @@ export async function executeWebhookTrigger(
       return { success: false, durationMs: Date.now() - startTime, error };
     }
 
+    // [D-OW-36] Nothing runs under a missing person: a workflow whose creator left the org (flagged
+    //    owner-left) or deleted their account is skipped before any check, gate or hold.
+    const owner = automationRunOwner(workflow);
+    if (!owner.runs) {
+      logger.info('Webhook trigger: skipped (owner left)', { triggerId: trigger.id, workflowId: workflow.id });
+      return { success: false, skipped: true, durationMs: Date.now() - startTime, error: owner.error };
+    }
+
     // 2. Verify the connection owner still has access to the workflow's drive
     const hasDriveAccess = await isUserDriveMember(connection.userId, workflow.driveId);
     if (!hasDriveAccess) {
@@ -74,16 +83,20 @@ export async function executeWebhookTrigger(
 
     // 4. Credit gate — blocks out-of-credits users before the model is invoked.
     //    skipDailyCap: server-triggered, not interactive fan-out.
-    const [connectionOwner] = await db
+    //    The run is the workflow OWNER's ([D-OW-34]): its gate, tier, caps and identity follow the
+    //    workflow, so a reassignment ([D-OW-36]) moves it to the new owner. The connection is only the
+    //    trigger source; step 2 checks it can still reach the drive (review #2831 P2-1).
+    const ownerId = owner.ownerId;
+    const [workflowOwner] = await db
       .select({ subscriptionTier: users.subscriptionTier })
       .from(users)
-      .where(eq(users.id, connection.userId));
+      .where(eq(users.id, ownerId));
     //    SPEND-6: a trigger has no person present; it spends the workflow's drive wallet
-    //    or is skipped, never the connection owner's credits or allowance.
+    //    or is skipped, never anyone's own credits or allowance.
     const spend = automationSpend(workflow.driveId);
     const gate = await canConsumeAI(
-      connection.userId,
-      (connectionOwner?.subscriptionTier ?? 'free') as SubscriptionTier,
+      ownerId,
+      (workflowOwner?.subscriptionTier ?? 'free') as SubscriptionTier,
       { spend, skipDailyCap: true },
     );
     if (!gate.allowed) {
@@ -104,7 +117,7 @@ export async function executeWebhookTrigger(
       workflowId: workflow.id,
       workflowName: `webhook-trigger-${trigger.id}`,
       driveId: workflow.driveId,
-      createdBy: connection.userId,
+      createdBy: ownerId,
       agentPageId: workflow.agentPageId,
       prompt: workflow.prompt,
       contextPageIds: (workflow.contextPageIds as string[] | null) ?? [],

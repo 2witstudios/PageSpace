@@ -139,6 +139,10 @@ export type SecurityEventType =
   | 'org.compute.reattributed'
   // A parked published app taken back to `stopped` by its creator, the drive lead or an org Owner/Admin.
   | 'org.app.unparked'
+  // [D-OW-36] An org drive's automation disabled because its creator left; reassigned or deleted by an Owner/Admin.
+  | 'org.automation.owner_left'
+  | 'org.automation.reassigned'
+  | 'org.automation.deleted'
   // Verified email domains and auto-join (SEC-1).
   | 'org.domain.added'
   | 'org.domain.verification_sent'
