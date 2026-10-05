@@ -374,7 +374,7 @@ describe('B7b: every human drive resolver answers with one org-aware membership 
     expect(await isUserDriveMember(m.people.priya.id, m.drives.research.id)).toBe(false);
   }, 180_000);
 
-  it('ORG-4 (partial) DRV-5 (partial) DRV-6 (partial) X-6 (partial) the consistency matrix: for every person and drive, every sibling resolver agrees with getDriveAccess and getUserAccessLevel', async () => {
+  it('ORG-4 (partial) DRV-5 (partial) DRV-6 (partial) X-6 (partial) POL-6 (partial) the consistency matrix: for every person and drive, every sibling resolver agrees with getDriveAccess and getUserAccessLevel', async () => {
     const m = await matrixFixture();
     flags.orgsEnabled = true;
 
@@ -393,13 +393,16 @@ describe('B7b: every human drive resolver answers with one org-aware membership 
     expect(await getDriveAccess(m.drives.finance.id, tomas.id)).toMatchObject({ isMember: false });
     expect(await getUserAccessLevel(m.people.lu.id, m.pages.personalPage.id)).toBeNull();
     // The Board deck's role entry sets canEdit without canView: every implicit Open member (Nina, Kai)
-    // and Marcus's synced row resolve it through the default role, and it grants none of them anything.
+    // and Marcus's synced row resolve it through the default role. The entry itself grants nothing (#2672):
+    // its canEdit never leaks. What they hold there is Northwind's Open-drive floor (POL-6, the default view):
+    // a default role hiding a page is below that floor, so the resolver reads the floor and they view it.
     const [role] = await db.select({ permissions: driveRoles.permissions }).from(driveRoles).where(eq(driveRoles.id, m.productDefaultRoleId));
     expect(role.permissions[m.boardDeck.id]).toEqual({ canView: false, canEdit: true, canShare: false });
+    const viewFloor = { canView: true, canEdit: false, canShare: false, canDelete: false };
     for (const person of [nina, kai, marcus]) {
       expect(await getMemberCustomRoleId(m.drives.product.id, person.id), person.name).toBe(m.productDefaultRoleId);
-      expect(await getUserAccessLevel(person.id, m.boardDeck.id), person.name).toBeNull();
-      expect((await getBatchPagePermissions(person.id, [m.boardDeck.id])).get(m.boardDeck.id), person.name).toEqual(DENY);
+      expect(await getUserAccessLevel(person.id, m.boardDeck.id), person.name).toEqual(viewFloor);
+      expect((await getBatchPagePermissions(person.id, [m.boardDeck.id])).get(m.boardDeck.id), person.name).toEqual(viewFloor);
     }
   }, 180_000);
 

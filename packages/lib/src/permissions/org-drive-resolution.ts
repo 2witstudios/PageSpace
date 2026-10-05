@@ -1,5 +1,6 @@
 import type { OrgRole } from '@pagespace/db/schema/organizations';
 import type { OrgDriveVisibility } from '@pagespace/db/schema/core';
+import type { OpenRoleFloor } from '../organizations/policies-core';
 import {
   resolveOrgDriveAccess,
   type DriveMemberRole,
@@ -34,11 +35,24 @@ export interface EffectiveDriveMembershipInput {
   row: OrgDriveMembership | null;
   /** The role an org member holds implicitly on an OPEN drive (DRV-5, POL-6). */
   driveDefaultRole: DriveRoleGrant;
+  /**
+   * The org's Open-drive role floor (POL-6), read through the policy reader; null when the caller did not read it
+   * (it computes only membership, not access), which never yields a floor.
+   */
+  openDriveRoleFloor: OpenRoleFloor | null;
 }
 
 export interface EffectiveDriveMembership extends OrgDriveAccess {
   /** Org Owner/Admin power, not a row, opened a PRIVATE drive: the caller writes the audit event (ORG-4). */
   auditOrgAdminPrivateAccess: boolean;
+  /**
+   * POL-6: the floor every resolver applies to this membership's answer (applyOpenDriveFloor), or null. Set only
+   * when the access comes from the IMPLICIT org membership: an org MEMBER on an OPEN drive whose membership is the
+   * org's (source `org`, role MEMBER): no row, or an org-materialized row whatever role it now carries (a row frozen
+   * on a former default, P2-3). Never for org power (already ADMIN), an invited or approved row (an explicit role),
+   * a guest, a RESTRICTED or PRIVATE drive, a personal drive, or while dark.
+   */
+  openDriveFloor: OpenRoleFloor | null;
 }
 
 /**
@@ -68,15 +82,16 @@ export function resolveEffectiveDriveMembership({
   orgRole,
   row,
   driveDefaultRole,
+  openDriveRoleFloor,
 }: EffectiveDriveMembershipInput): EffectiveDriveMembership | null {
   if (!orgsEnabled || drive.orgId === null) {
-    return row ? { ...row, auditOrgAdminPrivateAccess: false } : null;
+    return row ? { ...row, auditOrgAdminPrivateAccess: false, openDriveFloor: null } : null;
   }
 
   if (orgRole === null) {
     // A guest (DRV-8) resolves through their own invited row; the org path never widens them.
     const guestRow = validOrgDriveRow(row, drive, orgRole);
-    return guestRow ? { ...guestRow, auditOrgAdminPrivateAccess: false } : null;
+    return guestRow ? { ...guestRow, auditOrgAdminPrivateAccess: false, openDriveFloor: null } : null;
   }
 
   const access = resolveOrgDriveAccess({
@@ -87,9 +102,11 @@ export function resolveEffectiveDriveMembership({
   });
   if (access === null) return null;
 
+  const implicitOpenMember = orgRole === 'MEMBER' && drive.orgVisibility === 'OPEN' && access.source === 'org' && access.role === 'MEMBER';
   return {
     ...access,
     auditOrgAdminPrivateAccess: access.source === 'org-admin' && drive.orgVisibility === 'PRIVATE',
+    openDriveFloor: implicitOpenMember ? openDriveRoleFloor : null,
   };
 }
 
@@ -257,6 +274,8 @@ export function decideDriveAudience({
       orgRole: drive.orgId !== null ? orgRoles.get(userId) ?? null : null,
       row: row ? { role: row.role, customRoleId: row.customRoleId, source: row.source } : null,
       driveDefaultRole,
+      // An audience is who is a member; the floor changes what a member may do, never who is one.
+      openDriveRoleFloor: null,
     });
     if (effective) {
       members.set(userId, { userId, isOwner: false, role: effective.role, customRoleId: effective.customRoleId });

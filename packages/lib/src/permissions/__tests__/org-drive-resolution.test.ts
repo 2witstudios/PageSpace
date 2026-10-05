@@ -23,54 +23,54 @@ describe('resolveEffectiveDriveMembership', () => {
   describe('while ORGS_ENABLED is false', () => {
     it('returns the accepted row exactly as today for a personal drive, and null without one', () => {
       expect(resolveEffectiveDriveMembership({
-        orgsEnabled: false, drive: PERSONAL, orgRole: null, row: inviteAdmin, driveDefaultRole: DEFAULT_ROLE,
-      })).toEqual({ ...inviteAdmin, auditOrgAdminPrivateAccess: false });
+        orgsEnabled: false, drive: PERSONAL, orgRole: null, row: inviteAdmin, driveDefaultRole: DEFAULT_ROLE, openDriveRoleFloor: 'edit',
+      })).toEqual({ ...inviteAdmin, auditOrgAdminPrivateAccess: false, openDriveFloor: null });
       expect(resolveEffectiveDriveMembership({
-        orgsEnabled: false, drive: PERSONAL, orgRole: 'OWNER', row: null, driveDefaultRole: DEFAULT_ROLE,
+        orgsEnabled: false, drive: PERSONAL, orgRole: 'OWNER', row: null, driveDefaultRole: DEFAULT_ROLE, openDriveRoleFloor: 'edit',
       })).toBeNull();
     });
 
     it('ignores org roles and visibility on an org drive: an org Admin without a row gets nothing, a stale org row still counts as today', () => {
       expect(resolveEffectiveDriveMembership({
-        orgsEnabled: false, drive: PRIVATE, orgRole: 'ADMIN', row: null, driveDefaultRole: DEFAULT_ROLE,
+        orgsEnabled: false, drive: PRIVATE, orgRole: 'ADMIN', row: null, driveDefaultRole: DEFAULT_ROLE, openDriveRoleFloor: 'edit',
       })).toBeNull();
       expect(resolveEffectiveDriveMembership({
-        orgsEnabled: false, drive: OPEN, orgRole: 'MEMBER', row: null, driveDefaultRole: DEFAULT_ROLE,
+        orgsEnabled: false, drive: OPEN, orgRole: 'MEMBER', row: null, driveDefaultRole: DEFAULT_ROLE, openDriveRoleFloor: 'edit',
       })).toBeNull();
       expect(resolveEffectiveDriveMembership({
-        orgsEnabled: false, drive: RESTRICTED, orgRole: null, row: orgRow, driveDefaultRole: DEFAULT_ROLE,
-      })).toEqual({ ...orgRow, auditOrgAdminPrivateAccess: false });
+        orgsEnabled: false, drive: RESTRICTED, orgRole: null, row: orgRow, driveDefaultRole: DEFAULT_ROLE, openDriveRoleFloor: 'edit',
+      })).toEqual({ ...orgRow, auditOrgAdminPrivateAccess: false, openDriveFloor: null });
     });
   });
 
   describe('while ORGS_ENABLED is true', () => {
-    const on = { orgsEnabled: true, driveDefaultRole: DEFAULT_ROLE } as const;
+    const on = { orgsEnabled: true, driveDefaultRole: DEFAULT_ROLE, openDriveRoleFloor: 'edit' } as const;
 
     it('leaves a personal drive exactly row-based: an org role never applies to a drive with no org', () => {
       expect(resolveEffectiveDriveMembership({ ...on, drive: PERSONAL, orgRole: 'OWNER', row: null })).toBeNull();
       expect(resolveEffectiveDriveMembership({ ...on, drive: PERSONAL, orgRole: null, row: orgRow }))
-        .toEqual({ ...orgRow, auditOrgAdminPrivateAccess: false });
+        .toEqual({ ...orgRow, auditOrgAdminPrivateAccess: false, openDriveFloor: null });
     });
 
     it('ORG-4 (partial) org Owner and Admin resolve ADMIN on every visibility, and only PRIVATE asks for the audit event', () => {
       for (const orgRole of ['OWNER', 'ADMIN'] as const) {
         expect(resolveEffectiveDriveMembership({ ...on, drive: OPEN, orgRole, row: null }))
-          .toEqual({ role: 'ADMIN', customRoleId: null, source: 'org-admin', auditOrgAdminPrivateAccess: false });
+          .toEqual({ role: 'ADMIN', customRoleId: null, source: 'org-admin', auditOrgAdminPrivateAccess: false, openDriveFloor: null });
         expect(resolveEffectiveDriveMembership({ ...on, drive: RESTRICTED, orgRole, row: null }))
-          .toEqual({ role: 'ADMIN', customRoleId: null, source: 'org-admin', auditOrgAdminPrivateAccess: false });
+          .toEqual({ role: 'ADMIN', customRoleId: null, source: 'org-admin', auditOrgAdminPrivateAccess: false, openDriveFloor: null });
         expect(resolveEffectiveDriveMembership({ ...on, drive: PRIVATE, orgRole, row: null }))
-          .toEqual({ role: 'ADMIN', customRoleId: null, source: 'org-admin', auditOrgAdminPrivateAccess: true });
+          .toEqual({ role: 'ADMIN', customRoleId: null, source: 'org-admin', auditOrgAdminPrivateAccess: true, openDriveFloor: null });
       }
     });
 
     it('ORG-4 (partial) an org Admin whose own invited ADMIN row opens a PRIVATE drive owes no org-admin audit', () => {
       expect(resolveEffectiveDriveMembership({ ...on, drive: PRIVATE, orgRole: 'ADMIN', row: inviteAdmin }))
-        .toEqual({ ...inviteAdmin, auditOrgAdminPrivateAccess: false });
+        .toEqual({ ...inviteAdmin, auditOrgAdminPrivateAccess: false, openDriveFloor: null });
     });
 
     it('DRV-5 (partial) an org MEMBER with no row resolves on an OPEN drive with the drive default role', () => {
       expect(resolveEffectiveDriveMembership({ ...on, drive: OPEN, orgRole: 'MEMBER', row: null }))
-        .toEqual({ role: 'MEMBER', customRoleId: 'role_default', source: 'org', auditOrgAdminPrivateAccess: false });
+        .toEqual({ role: 'MEMBER', customRoleId: 'role_default', source: 'org', auditOrgAdminPrivateAccess: false, openDriveFloor: 'edit' });
     });
 
     it('DRV-6 (partial) an org MEMBER with no row resolves nothing on a RESTRICTED or PRIVATE drive', () => {
@@ -98,27 +98,67 @@ describe('resolveEffectiveDriveMembership', () => {
       // An org MEMBER with the leftover row resolves as if they had no row.
       expect(resolveEffectiveDriveMembership({ ...on, drive: PRIVATE, orgRole: 'MEMBER', row: staleOwnerRow })).toBeNull();
       expect(resolveEffectiveDriveMembership({ ...on, drive: OPEN, orgRole: 'MEMBER', row: staleOwnerRow }))
-        .toEqual({ role: 'MEMBER', customRoleId: 'role_default', source: 'org', auditOrgAdminPrivateAccess: false });
+        .toEqual({ role: 'MEMBER', customRoleId: 'role_default', source: 'org', auditOrgAdminPrivateAccess: false, openDriveFloor: 'edit' });
     });
 
     it('ORG-4 (partial) an org Admin with a leftover OWNER row, or a stale source org row, on a PRIVATE drive still resolves through org power and owes the audit', () => {
       const staleOwnerRow: OrgDriveMembership = { role: 'OWNER', customRoleId: null, source: 'invite' };
       for (const row of [staleOwnerRow, orgRow]) {
         expect(resolveEffectiveDriveMembership({ ...on, drive: PRIVATE, orgRole: 'ADMIN', row }))
-          .toEqual({ role: 'ADMIN', customRoleId: null, source: 'org-admin', auditOrgAdminPrivateAccess: true });
+          .toEqual({ role: 'ADMIN', customRoleId: null, source: 'org-admin', auditOrgAdminPrivateAccess: true, openDriveFloor: null });
       }
     });
 
     it('DRV-7 (partial) an org MEMBER invited to a PRIVATE drive resolves exactly their row', () => {
       expect(resolveEffectiveDriveMembership({ ...on, drive: PRIVATE, orgRole: 'MEMBER', row: inviteMember }))
-        .toEqual({ ...inviteMember, auditOrgAdminPrivateAccess: false });
+        .toEqual({ ...inviteMember, auditOrgAdminPrivateAccess: false, openDriveFloor: null });
     });
 
     it('DRV-8 (partial) a guest (not in the org) keeps exactly their invited row on any visibility', () => {
       for (const drive of [OPEN, RESTRICTED, PRIVATE]) {
         expect(resolveEffectiveDriveMembership({ ...on, drive, orgRole: null, row: inviteMember }))
-          .toEqual({ ...inviteMember, auditOrgAdminPrivateAccess: false });
+          .toEqual({ ...inviteMember, auditOrgAdminPrivateAccess: false, openDriveFloor: null });
       }
+    });
+
+    describe('POL-6: which membership the org floor governs at resolution', () => {
+      it('POL-6 (partial) an org MEMBER implicit on an OPEN drive carries the org floor, with no row and through an org-materialized row', () => {
+        for (const floor of ['view', 'edit'] as const) {
+          const input = { ...on, openDriveRoleFloor: floor, drive: OPEN, orgRole: 'MEMBER' } as const;
+          expect(resolveEffectiveDriveMembership({ ...input, row: null })?.openDriveFloor).toBe(floor);
+          expect(resolveEffectiveDriveMembership({ ...input, row: orgRow })?.openDriveFloor).toBe(floor);
+          // An org row frozen on a FORMER default, or given a role by hand, is still the implicit membership (P2-3).
+          const frozenRow: OrgDriveMembership = { role: 'MEMBER', customRoleId: 'role_former_default', source: 'org' };
+          expect(resolveEffectiveDriveMembership({ ...input, row: frozenRow }))
+            .toEqual({ ...frozenRow, auditOrgAdminPrivateAccess: false, openDriveFloor: floor });
+        }
+      });
+
+      it('POL-6 (partial) the floor governs no explicit membership: an invited row, an org-power ADMIN, or an org row promoted to ADMIN', () => {
+        expect(resolveEffectiveDriveMembership({ ...on, drive: OPEN, orgRole: 'MEMBER', row: inviteMember })?.openDriveFloor).toBeNull();
+        expect(resolveEffectiveDriveMembership({ ...on, drive: OPEN, orgRole: 'MEMBER', row: inviteAdmin })?.openDriveFloor).toBeNull();
+        for (const orgRole of ['OWNER', 'ADMIN'] as const) {
+          expect(resolveEffectiveDriveMembership({ ...on, drive: OPEN, orgRole, row: null })?.openDriveFloor).toBeNull();
+        }
+        const adminOrgRow: OrgDriveMembership = { role: 'ADMIN', customRoleId: null, source: 'org' };
+        expect(resolveEffectiveDriveMembership({ ...on, drive: OPEN, orgRole: 'MEMBER', row: adminOrgRow })?.openDriveFloor).toBeNull();
+      });
+
+      it('POL-6 (partial) the floor never reaches a guest, a departed member, a RESTRICTED or PRIVATE drive, a personal drive, or a dark resolver', () => {
+        for (const drive of [OPEN, RESTRICTED, PRIVATE]) {
+          expect(resolveEffectiveDriveMembership({ ...on, drive, orgRole: null, row: inviteMember })?.openDriveFloor ?? null).toBeNull();
+          expect(resolveEffectiveDriveMembership({ ...on, drive, orgRole: null, row: orgRow })).toBeNull();
+        }
+        for (const drive of [RESTRICTED, PRIVATE]) {
+          expect(resolveEffectiveDriveMembership({ ...on, drive, orgRole: 'MEMBER', row: inviteMember })?.openDriveFloor).toBeNull();
+        }
+        expect(resolveEffectiveDriveMembership({ ...on, drive: PERSONAL, orgRole: null, row: orgRow })?.openDriveFloor).toBeNull();
+        expect(resolveEffectiveDriveMembership({ ...on, orgsEnabled: false, drive: OPEN, orgRole: 'MEMBER', row: orgRow })?.openDriveFloor).toBeNull();
+      });
+
+      it('POL-6 (partial) a caller that did not read the floor (null) gets no floor, never a guessed one', () => {
+        expect(resolveEffectiveDriveMembership({ ...on, openDriveRoleFloor: null, drive: OPEN, orgRole: 'MEMBER', row: null })?.openDriveFloor).toBeNull();
+      });
     });
   });
 });

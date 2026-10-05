@@ -106,7 +106,7 @@ const LEAD: DriveRelationship = { isOwner: true, membership: null };
 const NONE: DriveRelationship = { isOwner: false, membership: null };
 const asMember = (role: 'ADMIN' | 'MEMBER'): DriveRelationship => ({
   isOwner: false,
-  membership: { role, customRoleId: null, source: 'invite', auditOrgAdminPrivateAccess: false },
+  membership: { role, customRoleId: null, source: 'invite', auditOrgAdminPrivateAccess: false, openDriveFloor: null },
 });
 
 // ---------- helpers ----------

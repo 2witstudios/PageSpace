@@ -2494,6 +2494,11 @@
       "import": "./dist/permissions/permissions.js",
       "require": "./dist/permissions/permissions.js"
     },
+    "./permissions/open-drive-floor": {
+      "types": "./dist/permissions/open-drive-floor.d.ts",
+      "import": "./dist/permissions/open-drive-floor.js",
+      "require": "./dist/permissions/open-drive-floor.js"
+    },
     "./permissions/app-unpark-authority": {
       "types": "./dist/permissions/app-unpark-authority.d.ts",
       "import": "./dist/permissions/app-unpark-authority.js",

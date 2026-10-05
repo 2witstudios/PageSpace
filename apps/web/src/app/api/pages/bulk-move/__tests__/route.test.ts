@@ -213,7 +213,7 @@ const validBody = {
 const NONE: DriveRelationship = { isOwner: false, membership: null };
 const asMember = (role: 'OWNER' | 'ADMIN' | 'MEMBER', source: 'invite' | 'org' = 'invite'): DriveRelationship => ({
   isOwner: false,
-  membership: { role, customRoleId: null, source, auditOrgAdminPrivateAccess: false },
+  membership: { role, customRoleId: null, source, auditOrgAdminPrivateAccess: false, openDriveFloor: null },
 });
 /** The non-lead relationship loadDriveRelationship answers; the lead (drives.ownerId) is always LEAD. */
 let nonLead: DriveRelationship = NONE;
