@@ -63,9 +63,8 @@ const homeHref = (homeDriveId: string | null): string | null =>
 const chatHref = (stage: Stage): string =>
   stage.driveId === null ? '/' : `/${encodeURIComponent(stage.driveId)}`;
 
-/** A section's rows: the drive's pages in Files, channels and DMs in Messages, the drive's task lists in Tasks. */
+/** A section's rows: channels and DMs in Messages, the drive's task lists in Tasks. */
 const rowsFor = (stage: Stage): ReactNode => {
-  if (stage.section === 'files' && stage.driveId !== null) return <FilesPane driveId={stage.driveId} />;
   if (stage.section === 'messages') {
     return (
       <MessagesPane
@@ -86,9 +85,24 @@ const rowsFor = (stage: Stage): ReactNode => {
   return null;
 };
 
-/** The list slot holds the section's list. */
-const listFor = (stage: Stage, layout: PaneLayout): ReactNode =>
-  isListSection(stage.section) && layout.list !== 'closed' ? (
+/**
+ * The list slot holds the section's list. Files draws its own pane, since
+ * its header carries New page beside the close.
+ */
+const listFor = (stage: Stage, layout: PaneLayout): ReactNode => {
+  if (!isListSection(stage.section) || layout.list === 'closed') return null;
+  if (stage.section === 'files' && stage.driveId !== null) {
+    return (
+      <FilesPane
+        driveId={stage.driveId}
+        selectedPageId={stage.object?.kind === 'page' ? stage.object.pageId : null}
+        variant={layout.list}
+        title={titles.files}
+        closeHref={chatHref(stage)}
+      />
+    );
+  }
+  return (
     <ListPane
       section={stage.section}
       variant={layout.list}
@@ -97,7 +111,8 @@ const listFor = (stage: Stage, layout: PaneLayout): ReactNode =>
     >
       {rowsFor(stage)}
     </ListPane>
-  ) : null;
+  );
+};
 
 /**
  * The hamburger, while this section's list is hidden. Only the tree beside an

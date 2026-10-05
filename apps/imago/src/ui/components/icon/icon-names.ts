@@ -8,6 +8,10 @@ import {
   ChevronDown,
   ChevronRight,
   Ellipsis,
+  File,
+  FileCode,
+  FileImage,
+  FileSpreadsheet,
   FileText,
   Files,
   Flag,
@@ -78,6 +82,12 @@ export const icons = {
   // The chat composer's Stop and a tool call's line.
   stop: Square,
   tool: Wrench,
+  // Page types imago opens in classic (DEC-9), as classic draws them
+  // (page-types.config iconName).
+  canvas: FileImage,
+  sheet: FileSpreadsheet,
+  code: FileCode,
+  file: File,
 } as const satisfies Readonly<Record<string, LucideIcon>>;
 
 export type IconName = keyof typeof icons;

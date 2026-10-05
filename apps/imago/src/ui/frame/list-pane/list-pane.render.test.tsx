@@ -23,6 +23,29 @@ describe('renderListPane()', () => {
     });
   });
 
+  test('a section’s own controls', () => {
+    const html = renderToString(
+      renderListPane({
+        variant: 'list',
+        title: 'Files',
+        closeHref: '/drive-1',
+        onCollapse: noop,
+        actions: <button type="button" aria-label="New page" />,
+        children: null,
+      }),
+    );
+    assert({
+      given: 'a list with its own header control',
+      should: 'put it in the header ahead of the close',
+      actual: [
+        html.includes('aria-label="New page"'),
+        html.indexOf('aria-label="New page"') < html.indexOf('aria-label="Close Files"'),
+        html.indexOf('aria-label="New page"') < html.indexOf('</header>'),
+      ],
+      expected: [true, true, true],
+    });
+  });
+
   test('the narrow tree', () => {
     const html = renderToString(
       renderListPane({ variant: 'tree', title: 'Files', closeHref: '/drive-1', onCollapse: noop, children: null }),

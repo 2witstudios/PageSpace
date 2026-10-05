@@ -3,9 +3,17 @@ import { assert } from 'riteway/vitest';
 import { createInitialState, type UiState } from '../../store/state';
 import { getUiState, setUiState } from '../../store/store';
 import { dispatch, transactions } from '../../store/transactions';
-import { filesPlugin } from './files-plugin';
+import { filesPlugin, type PendingFile } from './files-plugin';
 
-const { toggleFileFolder } = filesPlugin.transactions;
+const {
+  toggleFileFolder,
+  expandFileFolder,
+  setFileFilter,
+  beginFileCreate,
+  fileCreated,
+  fileCreateFailed,
+  fileCreateSettled,
+} = filesPlugin.transactions;
 
 const withExpanded = (expandedFileIds: readonly string[]): UiState => {
   const state = createInitialState();
@@ -68,13 +76,125 @@ describe('toggleFileFolder()', () => {
   });
 });
 
+const pending = (key: string, overrides: Partial<PendingFile> = {}): PendingFile => ({
+  key,
+  driveId: 'd1',
+  parentId: 'f1',
+  title: 'Untitled Document',
+  pageId: null,
+  knownIds: ['doc'],
+  ...overrides,
+});
+
+describe('expandFileFolder()', () => {
+  test('opening a closed page', () => {
+    assert({
+      given: 'f1 expanded and f2 opened',
+      should: 'expand f2 too',
+      actual: expandFileFolder(withExpanded(['f1']), 'f2').resources.expandedFileIds,
+      expected: ['f1', 'f2'],
+    });
+  });
+
+  test('an open page stays open', () => {
+    const state = withExpanded(['f1']);
+    assert({
+      given: 'f1 already expanded and opened again',
+      should: 'leave the snapshot as it is',
+      actual: expandFileFolder(state, 'f1') === state,
+      expected: true,
+    });
+  });
+});
+
+describe('setFileFilter()', () => {
+  test('typing a filter', () => {
+    assert({
+      given: 'the empty shell and a typed filter',
+      should: 'start with no filter and hold what was typed',
+      actual: [createInitialState().resources.fileFilter, setFileFilter(createInitialState(), 'road').resources.fileFilter],
+      expected: ['', 'road'],
+    });
+  });
+});
+
+describe('file creates', () => {
+  test('a create starts', () => {
+    const failed = { ...createInitialState(), resources: { ...createInitialState().resources, fileCreateError: 'No' } };
+    const next = beginFileCreate(failed, pending('tmp-1'));
+    assert({
+      given: 'a failed create, then a new one',
+      should: 'hold the new create and clear the old failure',
+      actual: [next.resources.pendingFiles, next.resources.fileCreateError],
+      expected: [[pending('tmp-1')], null],
+    });
+  });
+
+  test('the server names the page', () => {
+    const started = beginFileCreate(beginFileCreate(createInitialState(), pending('tmp-1')), pending('tmp-2'));
+    assert({
+      given: 'two creates in flight and the first answered as p9',
+      should: 'name only the first',
+      actual: fileCreated(started, { key: 'tmp-1', pageId: 'p9' }).resources.pendingFiles,
+      expected: [pending('tmp-1', { pageId: 'p9' }), pending('tmp-2')],
+    });
+  });
+
+  test('a create fails', () => {
+    const started = beginFileCreate(createInitialState(), pending('tmp-1'));
+    const next = fileCreateFailed(started, { key: 'tmp-1', error: 'You cannot add pages here.' });
+    assert({
+      given: 'a create the server refused',
+      should: 'drop its row and keep why',
+      actual: [next.resources.pendingFiles, next.resources.fileCreateError],
+      expected: [[], 'You cannot add pages here.'],
+    });
+  });
+
+  test('the tree lists the page', () => {
+    const started = beginFileCreate(createInitialState(), pending('tmp-1', { pageId: 'p9' }));
+    const settled = createInitialState();
+    assert({
+      given: 'a create the drive tree now lists, and one already settled',
+      should: 'drop it once, and leave the snapshot alone the second time',
+      actual: [
+        fileCreateSettled(started, 'tmp-1').resources.pendingFiles,
+        fileCreateSettled(settled, 'tmp-1') === settled,
+      ],
+      expected: [[], true],
+    });
+  });
+
+  test('through the shell', () => {
+    dispatch(transactions.beginFileCreate, pending('tmp-1'));
+    dispatch(transactions.fileCreated, { key: 'tmp-1', pageId: 'p9' });
+    assert({
+      given: 'a create begun and answered through the shell store',
+      should: 'record the named create in the store',
+      actual: getUiState().resources.pendingFiles,
+      expected: [pending('tmp-1', { pageId: 'p9' })],
+    });
+  });
+});
+
 describe('filesPlugin slice', () => {
   test('its own resources and transactions', () => {
     assert({
       given: 'the files slice',
-      should: 'start with no folder expanded and own the folder toggle',
+      should: 'start with nothing expanded, filtered, pending or failed, and own the files transactions',
       actual: [filesPlugin.resources(), Object.keys(filesPlugin.transactions)],
-      expected: [{ expandedFileIds: [] }, ['toggleFileFolder']],
+      expected: [
+        { expandedFileIds: [], fileFilter: '', pendingFiles: [], fileCreateError: null },
+        [
+          'toggleFileFolder',
+          'expandFileFolder',
+          'setFileFilter',
+          'beginFileCreate',
+          'fileCreated',
+          'fileCreateFailed',
+          'fileCreateSettled',
+        ],
+      ],
     });
   });
 });

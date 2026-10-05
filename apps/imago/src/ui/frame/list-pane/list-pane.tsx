@@ -10,15 +10,18 @@ export type ListPaneProps = {
   readonly variant: Exclude<ListPaneVariant, 'closed'>;
   readonly title: string;
   readonly closeHref: string;
+  /** The section's own header controls, ahead of the close. */
+  readonly actions?: ReactNode;
   readonly children?: ReactNode;
 };
 
 /** Binds the tree's × to the store: hiding is per section, never a route. */
-export function ListPane({ section, variant, title, closeHref, children = null }: ListPaneProps) {
+export function ListPane({ section, variant, title, closeHref, actions = null, children = null }: ListPaneProps) {
   return renderListPane({
     variant,
     title,
     closeHref,
+    actions,
     onCollapse: () => dispatch(transactions.collapseSection, section),
     children,
   });

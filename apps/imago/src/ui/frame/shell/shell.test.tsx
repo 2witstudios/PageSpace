@@ -53,11 +53,32 @@ vi.mock('@/ui/tasks/tasks-pane/tasks-pane', () => ({
     h('div', { 'data-tasks-pane': driveId, 'data-selected': selectedPageId ?? '' }),
 }));
 
-// The files pane loads the drive's tree through SWR and realtime; its own
-// suite proves its edge states. Here it only shows what the shell handed it.
-vi.mock('@/ui/files/files-pane/files-pane', () => ({
-  FilesPane: ({ driveId }: { driveId: string }) => h('div', { 'data-files-pane': driveId }),
-}));
+// The files pane loads its tree through SWR and realtime; its own suite
+// proves it against the real hooks. Here it draws the real list pane (so ×
+// and the hamburger behave as in the app) around what the shell handed it.
+vi.mock('@/ui/files/files-pane/files-pane', async () => {
+  const { ListPane } = await import('@/ui/frame/list-pane/list-pane');
+  return {
+    FilesPane: ({
+      driveId,
+      selectedPageId,
+      variant,
+      title,
+      closeHref,
+    }: {
+      driveId: string;
+      selectedPageId: string | null;
+      variant: 'list' | 'tree';
+      title: string;
+      closeHref: string;
+    }) =>
+      h(
+        ListPane,
+        { section: 'files', variant, title, closeHref },
+        h('div', { 'data-files-pane': driveId, 'data-selected': selectedPageId ?? '' }),
+      ),
+  };
+});
 
 // The chat pane loads agents, conversations and turns through SWR; its own
 // suite proves it against the real hooks. Here it shows what the shell handed
@@ -220,21 +241,6 @@ describe('Shell', () => {
     });
   });
 
-  test('the files section fills its list', () => {
-    render();
-    const seen = ['/drive-1/files', '/drive-1/files/page-1', '/drive-1/tasks'].map((pathname) => {
-      navigate(pathname);
-      return slot('list').querySelector<HTMLElement>('[data-files-pane]')?.dataset.filesPane ?? null;
-    });
-
-    assert({
-      given: 'the Files list, an open page, then Tasks',
-      should: 'put the drive’s files pane in the list slot, and only in Files',
-      actual: seen,
-      expected: ['drive-1', 'drive-1', null],
-    });
-  });
-
   test('the tasks section fills its list', () => {
     render();
     const pane = () => slot('list').querySelector<HTMLElement>('[data-tasks-pane]');
@@ -249,6 +255,23 @@ describe('Shell', () => {
       should: 'put the drive’s task lists in the list slot, marking the open one, and only in Tasks',
       actual: seen,
       expected: [['drive-1', ''], ['drive-1', 'list-1'], null],
+    });
+  });
+
+  test('the files section fills its list', () => {
+    render();
+    const pane = () => slot('list').querySelector<HTMLElement>('[data-files-pane]');
+    const seen = ['/drive-1/files', '/drive-1/files/page-1', '/drive-1/tasks'].map((pathname) => {
+      navigate(pathname);
+      const found = pane();
+      return found === null ? null : [found.dataset.filesPane, found.dataset.selected];
+    });
+
+    assert({
+      given: 'the Files list, an open page, then Tasks',
+      should: 'put the drive’s page tree in the list slot, marking the open page, and only in Files',
+      actual: seen,
+      expected: [['drive-1', ''], ['drive-1', 'page-1'], null],
     });
   });
 

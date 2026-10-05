@@ -14,6 +14,8 @@ export type ListPaneRenderProps = {
   readonly closeHref: string;
   /** Void action: hides the stage-3 tree so the object gets the room. */
   readonly onCollapse: () => void;
+  /** The section's own header controls, ahead of the close: Files' New page. */
+  readonly actions?: ReactNode;
   readonly children: ReactNode;
 };
 
@@ -26,7 +28,7 @@ const icon = { size: 16, strokeWidth: 1.5, 'aria-hidden': true } as const;
  * state (a store transaction).
  */
 export function renderListPane(props: ListPaneRenderProps): ReactNode {
-  const { variant, title, closeHref, onCollapse, children } = props;
+  const { variant, title, closeHref, onCollapse, actions = null, children } = props;
   const close =
     variant === 'list' ? (
       <Link href={closeHref} prefetch aria-label={`Close ${title}`} className={paneControlClass}>
@@ -39,7 +41,18 @@ export function renderListPane(props: ListPaneRenderProps): ReactNode {
     );
   return (
     <section className={listPaneClass(variant)} aria-label={title}>
-      {renderPaneHeader({ title, actions: close })}
+      {renderPaneHeader({
+        title,
+        actions:
+          actions === null ? (
+            close
+          ) : (
+            <span className="flex flex-none items-center gap-1">
+              {actions}
+              {close}
+            </span>
+          ),
+      })}
       <div className={listBodyClass}>{children}</div>
     </section>
   );
