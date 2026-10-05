@@ -99,11 +99,10 @@ export const useFileTree = (driveId: string | null): FileTree => {
     (pageId: string): Promise<LoadResult> => {
       const drive = currentDrive.current;
       if (drive === null) return Promise.resolve({ ok: false, refusal: NO_DRIVE });
-      const key = `${drive}/${pageId}`;
-      const pending = inFlight.current.get(key);
+      const pending = inFlight.current.get(pageId);
       if (pending) return pending;
 
-      setLoadingIds((ids) => (ids.includes(pageId) ? ids : [...ids, pageId]));
+      setLoadingIds((ids) => [...ids, pageId]);
       const at = tick();
       const request = client
         .apiFetch<readonly PageResponse[]>(childrenPath(pageId))
@@ -122,10 +121,10 @@ export const useFileTree = (driveId: string | null): FileTree => {
           }),
         )
         .finally(() => {
-          inFlight.current.delete(key);
+          inFlight.current.delete(pageId);
           setLoadingIds((ids) => ids.filter((id) => id !== pageId));
         });
-      inFlight.current.set(key, request);
+      inFlight.current.set(pageId, request);
       return request;
     },
     [client],

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, type ReactNode } from 'react';
+import { act, useState, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, test, vi } from 'vitest';
 import { assert } from 'riteway/vitest';
@@ -77,11 +77,14 @@ const driveTree = (title = 'Title doc'): readonly PageTreeResponse[] => [
   treeRow('sheet', 'SHEET', [], { position: 1 }),
 ];
 
-const mountTree = (routes: Record<string, FakeRoute>, driveId: string | null = 'd1') => {
+const mountTree = (routes: Record<string, FakeRoute>, initialDrive: string | null = 'd1') => {
   const web = fakeWeb(routes);
   const rt = fakeRealtime();
   const seen: { tree: FileTree | null } = { tree: null };
+  let setDrive: (driveId: string | null) => void = () => {};
   function Probe() {
+    const [driveId, set] = useState(initialDrive);
+    setDrive = set;
     seen.tree = useFileTree(driveId);
     return null;
   }
@@ -101,7 +104,8 @@ const mountTree = (routes: Record<string, FakeRoute>, driveId: string | null = '
     if (seen.tree === null) throw new Error('not rendered');
     return seen.tree;
   };
-  return { web, rt, current };
+  const switchDrive = (driveId: string | null) => act(() => setDrive(driveId));
+  return { web, rt, current, switchDrive, unmount: () => act(() => root.unmount()) };
 };
 
 const loaded = async (current: () => FileTree): Promise<readonly FileNode[]> => {
@@ -267,6 +271,108 @@ describe('useFileTree() lazy children', () => {
     });
   });
 
+  test('asked twice at once', async () => {
+    let answer: (response: Response) => void = () => {};
+    const { web, current } = mountTree({
+      [TREE]: () => Response.json(driveTree()),
+      [F1_CHILDREN]: () =>
+        new Promise<Response>((resolve) => {
+          answer = resolve;
+        }),
+    });
+    await loaded(current);
+
+    let results: unknown[] = [];
+    await act(async () => {
+      const both = Promise.all([current().loadChildren('f1'), current().loadChildren('f1')]);
+      answer(Response.json([pageRow('doc', 'DOCUMENT', { parentId: 'f1' })]));
+      results = await both;
+    });
+
+    assert({
+      given: 'the same children asked for again while on their way',
+      should: 'share the one request',
+      actual: [web.count(F1_CHILDREN), results],
+      expected: [1, [{ ok: true }, { ok: true }]],
+    });
+  });
+
+  test('no drive open', async () => {
+    const { web, current, switchDrive } = mountTree(
+      {
+        [TREE]: () => Response.json(driveTree()),
+        [F1_CHILDREN]: () => Response.json([pageRow('only', 'DOCUMENT', { parentId: 'f1' })]),
+      },
+      null,
+    );
+
+    let result: unknown;
+    await act(async () => {
+      result = await current().loadChildren('f1');
+    });
+
+    assert({
+      given: 'children asked for with no drive open',
+      should: 'refuse without a request',
+      actual: [result, web.requests.length],
+      expected: [{ ok: false, refusal: 'No drive is open' }, 0],
+    });
+
+    switchDrive('d1');
+    await loaded(current);
+    await act(async () => {
+      result = await current().loadChildren('f1');
+    });
+
+    assert({
+      given: 'a drive opened afterwards',
+      should: 'load and show its children',
+      actual: [result, outline(current().nodes)],
+      expected: [{ ok: true }, [['f1', ['only']], 'sheet']],
+    });
+  });
+
+  test('another drive opened', async () => {
+    let answer: (response: Response) => void = () => {};
+    const { current, switchDrive } = mountTree({
+      [TREE]: () => Response.json(driveTree()),
+      'GET /api/drives/d2/pages': () => Response.json([treeRow('other', 'DOCUMENT', [], { driveId: 'd2' })]),
+      [F1_CHILDREN]: () => Response.json([pageRow('loaded', 'DOCUMENT', { parentId: 'f1' })]),
+      'GET /api/pages/sheet/children': () =>
+        new Promise<Response>((resolve) => {
+          answer = resolve;
+        }),
+    });
+    await loaded(current);
+    await act(async () => {
+      await current().loadChildren('f1');
+    });
+    let late: Promise<unknown> = Promise.resolve();
+    act(() => {
+      late = current().loadChildren('sheet');
+    });
+
+    switchDrive('d2');
+    await settle(() => {
+      if (nameOf(current().nodes, 'other') === undefined) throw new Error('d2 not loaded');
+    });
+    await act(async () => {
+      answer(Response.json([pageRow('late', 'DOCUMENT', { parentId: 'sheet' })]));
+      await late;
+    });
+    const onD2 = outline(current().nodes);
+
+    switchDrive('d1');
+    const backOnD1 = outline(current().nodes);
+
+    assert({
+      given: 'another drive opened while children were loading, then the first drive again',
+      should: 'show each drive’s own tree, with the first drive’s own loads but not the answer that landed meanwhile',
+      actual: [onD2, backOnD1],
+      expected: [['other'], [['f1', ['loaded']], 'sheet']],
+    });
+  });
+
   test('a failed load', async () => {
     const { current } = mountTree({
       [TREE]: () => Response.json(driveTree()),
@@ -397,6 +503,22 @@ describe('useFileTree() live', () => {
       should: 'revalidate once for all of them',
       actual: web.count(TREE),
       expected: 2,
+    });
+  });
+
+  test('unmounting mid-burst', async () => {
+    const { web, rt, current, unmount } = mountTree({ [TREE]: () => Response.json(driveTree()) });
+    await loaded(current);
+    await rt.deliver('page:created', { driveId: 'd1', pageId: 'a', operation: 'created' });
+    unmount();
+    roots = [];
+    await act(() => new Promise((resolve) => setTimeout(resolve, 250)));
+
+    assert({
+      given: 'the tree unmounted before its burst settled',
+      should: 'not refetch',
+      actual: web.count(TREE),
+      expected: 1,
     });
   });
 

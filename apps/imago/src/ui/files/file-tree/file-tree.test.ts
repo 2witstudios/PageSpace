@@ -54,6 +54,17 @@ describe('mergeChildren()', () => {
     });
   });
 
+  test('a parent whose children were not known', () => {
+    const pages = mergeChildren(drive(), 'f1', [pageRow('c', 'FOLDER', { parentId: 'f1' })]);
+
+    assert({
+      given: 'children loaded for a page whose own children were not known yet',
+      should: 'place them under it',
+      actual: outline(mergeChildren(pages, 'c', [pageRow('x', 'DOCUMENT', { parentId: 'c' })]))[0],
+      expected: ['f1', [['c', ['x?']]]],
+    });
+  });
+
   test('a parent the tree does not hold', () => {
     const pages = drive();
 
