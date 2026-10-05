@@ -15,9 +15,10 @@ const REFUSALS: Record<LeaveRefusal, { status: number; code: 'not_member' | 'own
 
 /**
  * POST /api/orgs/[orgId]/leave — the caller leaves (ORG-2; UI-11: the one org action a plain Member
- * has). Any role may call it, and it only ever acts on the session's own user. The cascade (O-7 lead
- * reassignment, O-8 revocations, D-OW-28 re-attribution, D-OW-36 automation disable) is
- * leaveOrganization's, which also writes org.member.left. The Owner must transfer ownership first.
+ * has). Any role may call it, and it only ever acts on the session's own user. Everything leaving does
+ * (O-7 lead reassignment, O-8 revocations, D-OW-28 re-attribution, and whatever leaveOrganization adds
+ * later, such as D-OW-36's automation disable) is leaveOrganization's, which also writes org.member.left;
+ * this route adds nothing to it. The Owner must transfer ownership first.
  */
 export async function POST(request: Request, context: Context) {
   const { orgId } = await context.params;
