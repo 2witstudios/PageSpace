@@ -54,6 +54,9 @@ const NOTICES = {
   stop: 'The reply could not be stopped.',
 } as const;
 
+/** A modal dialog is open, so the caret belongs to it. */
+const modalOpen = (): boolean => document.querySelector('[aria-modal="true"], dialog[open]') !== null;
+
 /** Within this many pixels of the end, the thread follows a growing reply. */
 const FOLLOW_SLACK = 80;
 
@@ -138,13 +141,14 @@ export function ChatPane({ stage, driveName, homeDriveId }: ChatPaneProps) {
   })();
 
   // Back in the chat from another section, the caret is back in the composer,
-  // with whatever draft was left there.
+  // with whatever draft was left there; not while a dialog (the ⌘K palette,
+  // say) is open over it, which keeps the caret until it closes.
   const field = useRef<HTMLTextAreaElement>(null);
   const section = useRef(stage.section);
   useEffect(() => {
     const returned = stage.section === 'chat' && section.current !== 'chat';
     section.current = stage.section;
-    if (returned) field.current?.focus();
+    if (returned && !modalOpen()) field.current?.focus();
   }, [stage.section]);
 
   // Keep the newest message in view while the viewer is reading the end.

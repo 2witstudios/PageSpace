@@ -598,6 +598,35 @@ describe('ChatPane', () => {
     });
   });
 
+  test('coming back to the chat under an open dialog', async () => {
+    const web = chatWeb(fakeTurnStream());
+    const { container, control: host } = mountPane(web);
+    await settle(threadLoaded(container));
+    act(() => host.go?.('/d1/files'));
+    // The ⌘K palette, open over Files: a modal holding the caret in its field.
+    const modal = document.createElement('div');
+    modal.setAttribute('role', 'dialog');
+    modal.setAttribute('aria-modal', 'true');
+    const search = document.createElement('input');
+    modal.append(search);
+    document.body.append(modal);
+    search.focus();
+
+    act(() => host.go?.('/d1'));
+    const underModal = [document.activeElement === search, document.activeElement === field(container)];
+    modal.remove();
+
+    act(() => host.go?.('/d1/files'));
+    act(() => host.go?.('/d1'));
+
+    assert({
+      given: 'a modal dialog open over Files with the caret in it, then Back to the chat; then the same with no dialog',
+      should: 'leave the caret in the dialog rather than move it behind the modal, and refocus the composer once none is open',
+      actual: [underModal, document.activeElement === field(container)],
+      expected: [[true, false], true],
+    });
+  });
+
   test('a failure after losing an agent', async () => {
     const web = chatWeb(fakeTurnStream(), {
       [SUPPORT_CONVERSATIONS]: () => Response.json({ error: 'Insufficient permissions to view this agent' }, { status: 403 }),
