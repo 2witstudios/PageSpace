@@ -22,6 +22,7 @@ import { displayPreferences } from '@pagespace/db/schema/display-preferences';
 import { userPersonalization, personalizationCandidates } from '@pagespace/db/schema/personalization';
 import { userHotkeyPreferences } from '@pagespace/db/schema/hotkeys';
 import { userAutomationPreferences } from '@pagespace/db/schema/automation-preferences';
+import { imagoDriveAccess } from '@pagespace/db/schema/imago-drive-access';
 import { userToastNotificationPreferences } from '@pagespace/db/schema/toast-notification-preferences';
 import { emailNotificationPreferences } from '@pagespace/db/schema/email-notifications';
 import { decryptUserRow } from '../../auth/user-repository';
@@ -271,6 +272,8 @@ export interface UserSettingsExport {
   automation: { pulseEnabled: boolean; updatedAt: Date } | null;
   toastNotifications: { level: string; updatedAt: Date } | null;
   emailNotifications: { notificationType: string; emailEnabled: boolean; updatedAt: Date }[];
+  /** The subject's per-drive Imago access choices (the toggle), one row per drive they set it for. */
+  imagoDriveAccess: { driveId: string; enabled: boolean; updatedAt: Date }[];
 }
 
 export interface UserPersonalizationExport {
@@ -1249,7 +1252,7 @@ export async function collectUserDisplayPreferences(database: DB, userId: string
 
 /** Every settings row the subject owns, in one Art 15 category. */
 export async function collectUserSettings(database: DB, userId: string): Promise<UserSettingsExport> {
-  const [hotkeys, automation, toast, email] = await Promise.all([
+  const [hotkeys, automation, toast, email, imagoAccess] = await Promise.all([
     database
       .select({ hotkeyId: userHotkeyPreferences.hotkeyId, binding: userHotkeyPreferences.binding, updatedAt: userHotkeyPreferences.updatedAt })
       .from(userHotkeyPreferences)
@@ -1266,6 +1269,10 @@ export async function collectUserSettings(database: DB, userId: string): Promise
       .select({ notificationType: emailNotificationPreferences.notificationType, emailEnabled: emailNotificationPreferences.emailEnabled, updatedAt: emailNotificationPreferences.updatedAt })
       .from(emailNotificationPreferences)
       .where(eq(emailNotificationPreferences.userId, userId)),
+    database
+      .select({ driveId: imagoDriveAccess.driveId, enabled: imagoDriveAccess.enabled, updatedAt: imagoDriveAccess.updatedAt })
+      .from(imagoDriveAccess)
+      .where(eq(imagoDriveAccess.userId, userId)),
   ]);
   return {
     hotkeys,
@@ -1274,6 +1281,7 @@ export async function collectUserSettings(database: DB, userId: string): Promise
     automation: automation[0] ?? null,
     toastNotifications: toast[0] ?? null,
     emailNotifications: email,
+    imagoDriveAccess: imagoAccess,
   };
 }
 
