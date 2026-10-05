@@ -55,7 +55,7 @@ export function useOrgHubCounts(orgId: string, role: OrgRole | undefined): OrgHu
   const invitations = useManagerSWR<{ invitations: OrgInvitation[] }>(orgKeys.invitations(orgId), role);
   const drives = useManagerSWR<{ drives: unknown[] }>(orgKeys.drives(orgId), role);
   const approvals = useManagerSWR<{ total: number; items: GuestApproval[] }>(orgKeys.guestApprovals(orgId), role);
-  const automations = useManagerSWR<{ items: unknown[] }>(orgKeys.automations(orgId), role);
+  const automations = useManagerSWR<{ automations: unknown[] }>(orgKeys.automations(orgId), role);
   const guests = useManagerSWR<{ guests: unknown[] }>(orgKeys.guests(orgId), role);
   const now = Date.now();
   return {
@@ -64,7 +64,7 @@ export function useOrgHubCounts(orgId: string, role: OrgRole | undefined): OrgHu
     guests: guests.data?.guests.length,
     drives: drives.data?.drives.length,
     guestApprovals: approvals.data?.total,
-    ownerLeftAutomations: automations.data?.items.length,
+    ownerLeftAutomations: automations.data?.automations.length,
   };
 }
 

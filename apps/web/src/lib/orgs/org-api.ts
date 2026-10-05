@@ -210,3 +210,24 @@ export const patchOrgPolicies = (orgId: string, body: Record<string, unknown>) =
 
 export const changeDriveVisibility = (driveId: string, orgVisibility: OrgDriveDirectoryEntry['orgVisibility']) =>
   patch<{ drive: { id: string } }>(`/api/drives/${driveId}/org`, { orgVisibility });
+
+// ---------------------------------------------------------------------------
+// Needs your attention (M3): guest approvals and owner-left automations (D-OW-36, PR #2831)
+// ---------------------------------------------------------------------------
+
+export interface OwnerLeftAutomation {
+  kind: 'workflow' | 'page_webhook';
+  id: string;
+  driveId: string;
+  name: string;
+  ownerLeftAt: string;
+}
+
+export const decideGuestApproval = (orgId: string, holdId: string, decision: 'approve' | 'decline') =>
+  post<{ decided: 'approved' | 'declined' }>(`${orgKeys.guestApprovals(orgId)}/${holdId}`, { decision });
+
+export const reassignAutomation = (orgId: string, automation: Pick<OwnerLeftAutomation, 'kind' | 'id'>, newOwnerId: string) =>
+  post<{ reassigned: true }>(`${orgKeys.automations(orgId)}/${automation.kind}/${automation.id}/reassign`, { newOwnerId });
+
+export const deleteAutomation = (orgId: string, automation: Pick<OwnerLeftAutomation, 'kind' | 'id'>) =>
+  del<{ deleted: true }>(`${orgKeys.automations(orgId)}/${automation.kind}/${automation.id}`);
