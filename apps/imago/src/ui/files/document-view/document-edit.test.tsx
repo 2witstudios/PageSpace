@@ -236,9 +236,7 @@ describe('editing a document in the Files object', () => {
     const { container, web } = show({});
     await editable(container);
     await type(container, '<p>Quick</p>');
-    await act(() => {
-      bodyOf(container)?.editor?.commands.focus();
-    });
+    // The editor loses focus. (Only the event: focusing first makes ProseMirror scroll, which jsdom cannot measure.)
     await act(() => {
       bodyOf(container)?.editor?.view.dom.dispatchEvent(new FocusEvent('blur'));
     });
