@@ -41,7 +41,7 @@ const read = (viewer: 'org_admin' | 'lead' | 'member' | 'guest', orgDrive = true
 });
 
 describe('driveWalletPanels: which parts of Drive Settings › Wallet a viewer gets', () => {
-  it('UI-9 (partial) a member or guest sees only the remaining amount, their own cap and donate: never the pool or others\' spend (SPEND-9)', () => {
+  it('UI-9 (partial) a member or guest sees only the remaining amount, their own cap and donate: never the pool or others\' spend (SPEND-9 (partial))', () => {
     for (const viewer of ['member', 'guest'] as const) {
       const panels = driveWalletPanels(read(viewer));
       expect(panels).toMatchObject({ balance: true, myCap: true, donate: true, allocation: false, topUp: false, pause: false, rules: false, caps: false, spendByMember: false, pool: false, create: false });
@@ -56,7 +56,7 @@ describe('driveWalletPanels: which parts of Drive Settings › Wallet a viewer g
     expect(panels.allocation).toBe(false);
   });
 
-  it('SPEND-10 (partial) an org drive\'s lead runs it (pause, rules) and sees spend by member, but moves no org money and sets no caps (WAL-7)', () => {
+  it('SPEND-10 (partial) an org drive\'s lead runs it (pause, rules) and sees spend by member, but moves no org money and sets no caps (WAL-7 (partial))', () => {
     expect(driveWalletPanels(read('lead'))).toMatchObject({ allocation: true, editAllocation: false, topUp: false, pause: true, rules: true, editRules: true, caps: true, editCaps: false, spendByMember: true, pool: false });
   });
 
@@ -145,7 +145,7 @@ describe('orgDriveSummaryCopy: the Organization card on Drive Settings › Gener
     );
   });
 
-  it('UI-4 (partial) without a wallet AI runs on seat allowances; a consumer is not shown the allocation (SPEND-9)', () => {
+  it('UI-4 (partial) without a wallet AI runs on seat allowances; a consumer is not shown the allocation (SPEND-9 (partial))', () => {
     expect(orgDriveSummaryCopy({ orgName: 'Northwind Labs', wallet: null })).toBe(
       "Storage and sandbox time are billed to Northwind Labs. AI runs on each member's seat allowance or their own credits. Org policies apply, and org admins can manage this drive.",
     );

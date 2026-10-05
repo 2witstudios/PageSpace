@@ -48,7 +48,7 @@ const spends = (choice: SurfaceChoice, fallbackFrom: SurfaceChoice['source'] | n
 
 
 describe('spendChipModel: the header chip', () => {
-  it('UI-8 (partial) the chip replaces the personal chip only where more than one source exists (SPEND-2, D20.8)', () => {
+  it('UI-8 (partial) the chip replaces the personal chip only where more than one source exists (SPEND-2 (partial), D20.8)', () => {
     expect(spendChipModel({ orgsEnabled: true, options: [own], resolved: spends(own) })).toBeNull();
     expect(spendChipModel({ orgsEnabled: true, options: [], resolved: spends(own) })).toBeNull();
     expect(spendChipModel({ orgsEnabled: true, options: [product, seat, own], resolved: spends(product) })).not.toBeNull();
@@ -64,7 +64,7 @@ describe('spendChipModel: the header chip', () => {
     expect(chip?.text).not.toContain('Product');
   });
 
-  it('UI-8 (partial) the chip names what the gate will actually spend, so a fallback shows the new source (SPEND-4)', () => {
+  it('UI-8 (partial) the chip names what the gate will actually spend, so a fallback shows the new source (SPEND-4 (partial))', () => {
     const chip = spendChipModel({ orgsEnabled: true, options: [product, seat, own], resolved: spends(seat, 'drive_wallet') });
     expect(chip?.source).toBe('seat_allowance');
     expect(chip?.text).toBe('54 credits');

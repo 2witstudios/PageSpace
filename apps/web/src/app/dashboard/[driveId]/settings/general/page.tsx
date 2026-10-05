@@ -25,6 +25,8 @@ interface DriveMember {
   userId: string;
   /** DRV-8: on an org drive, a member who is not in its org. */
   isGuest?: boolean;
+  /** Where this member's access comes from, as the server decided it ('lead' = the drive lead). */
+  source?: 'invite' | 'org' | 'lead';
   user: { id: string; email: string; name?: string };
   profile?: { username?: string; avatar?: string | null };
 }
@@ -207,7 +209,7 @@ export default function GeneralSettingsPage() {
       {ORGS_ENABLED && drive && (
         <OrgDriveCard
           drive={drive}
-          leadName={membersData?.members?.find((m) => m.userId === drive.ownerId)?.user?.name ?? null}
+          leadName={membersData?.members?.find((m) => m.source === 'lead')?.user?.name ?? null}
           onChanged={() => void fetchDrives(false, true)}
         />
       )}

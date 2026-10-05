@@ -107,7 +107,7 @@ describe('SpendSourcePopover: the header chip', () => {
 });
 
 describe('AiBalanceWidget: which chip the header shows', () => {
-  it('UI-8 (partial) the personal chip stays where the conversation in view has one source (SPEND-2, D20.8)', () => {
+  it('UI-8 (partial) the personal chip stays where the conversation in view has one source (SPEND-2 (partial), D20.8)', () => {
     useSpendContextStore.setState({ active: { conversationId: 'c1', driveId: 'd-product', isGlobal: false } });
     spendState.spend = conversation([own], spends(own));
     render(<AiBalanceWidget />);

@@ -5,6 +5,8 @@ import useSWR from 'swr';
 import { toast } from 'sonner';
 import { Bell } from 'lucide-react';
 import { parseCreditInput } from '@pagespace/lib/billing/wallet-surface';
+import { DEFAULT_CONSUMER_CAPS } from '@pagespace/lib/billing/wallet-core';
+import { formatCreditCount } from '@pagespace/lib/billing/money-model';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -45,8 +47,12 @@ interface WalletCapsCardProps {
  * Member caps (Spec WAL-7; canvas v9 DriveWallet "Member caps"): the daily and monthly limit one
  * person can spend from this wallet. Org Owner/Admins set them on an org drive, the wallet's
  * owner on a personal drive; an org drive's lead sees them read-only. Enabling a cap without
- * values takes the defaults (D-OW-31: 50 a day, 1,000 a month); "No cap" is unlimited here.
+ * values takes the defaults (D-OW-31, DEFAULT_CONSUMER_CAPS); "No cap" is unlimited here.
  */
+/** The defaults a cap turned on without values takes (D-OW-31), from the one constant (MON-1: no copy states a figure). */
+const DEFAULT_DAILY_CREDITS = formatCreditCount(DEFAULT_CONSUMER_CAPS.dailyCents ?? 0);
+const DEFAULT_MONTHLY_CREDITS = formatCreditCount(DEFAULT_CONSUMER_CAPS.monthlyCents ?? 0);
+
 export function WalletCapsCard({ driveId, orgName, memberNames, editable, revision }: WalletCapsCardProps) {
   const { data, mutate } = useSWR(`/api/drives/${encodeURIComponent(driveId)}/wallet/caps`, fetcher, { revalidateOnFocus: false });
   const [editing, setEditing] = useState<{ userId: string; name: string } | null>(null);
@@ -98,7 +104,7 @@ export function WalletCapsCard({ driveId, orgName, memberNames, editable, revisi
           </table>
         </div>
         <p className="text-xs text-muted-foreground">
-          Turning a cap on without values sets 50 credits a day and 1,000 credits a month. No cap means no limit inside this wallet. A person who reaches a cap is offered their other sources.
+          Turning a cap on without values sets {DEFAULT_DAILY_CREDITS} credits a day and {DEFAULT_MONTHLY_CREDITS} credits a month. No cap means no limit inside this wallet. A person who reaches a cap is offered their other sources.
         </p>
         <div className="flex gap-2.5 rounded-lg bg-muted px-3.5 py-3 text-xs">
           <Bell className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
@@ -198,7 +204,7 @@ function CapEditDialog({ driveId, person, cap, onClose, onSaved }: {
                     inputMode="numeric"
                     value={none ? '' : value}
                     disabled={none || pending}
-                    placeholder={key === 'daily' ? '50' : '1,000'}
+                    placeholder={key === 'daily' ? DEFAULT_DAILY_CREDITS : DEFAULT_MONTHLY_CREDITS}
                     onChange={(e) => {
                       setInvalid(false);
                       setValue(e.target.value);
