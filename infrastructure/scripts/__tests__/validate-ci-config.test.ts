@@ -9,6 +9,7 @@ interface MatrixEntry {
   service: string;
   dockerfile: string;
   context: string;
+  build_args?: string;
 }
 
 interface Workflow {
@@ -83,6 +84,23 @@ describe('Docker Images CI workflow', () => {
         expect(entry!.context).toBe(expected.context);
       },
     );
+  });
+
+  describe('shared cookie domain', () => {
+    const buildArgs = (service: string): string[] =>
+      (matrix.find((e) => e.service === service)?.build_args ?? '')
+        .split('\n')
+        .map((line) => line.trim())
+        .filter(Boolean);
+    const cookieDomainArg = (service: string): string | undefined =>
+      buildArgs(service).find((arg) => arg.startsWith('NEXT_PUBLIC_COOKIE_DOMAIN='));
+
+    it('given web bakes NEXT_PUBLIC_COOKIE_DOMAIN, should bake the same value into imago (IMG-1.7a)', () => {
+      // Both apps write the `theme` cookie; a different (or missing) domain in
+      // imago would leave a host-only cookie beside classic's shared one.
+      expect(cookieDomainArg('web')).toBe('NEXT_PUBLIC_COOKIE_DOMAIN=.pagespace.ai');
+      expect(cookieDomainArg('imago')).toBe(cookieDomainArg('web'));
+    });
   });
 
   describe('trigger configuration', () => {

@@ -37,6 +37,18 @@ describe('apps/imago/Dockerfile', () => {
     expect(dockerfile).toMatch(/^RUN cd apps\/imago && .*bun run build$/m);
   });
 
+  it('given NEXT_PUBLIC_COOKIE_DOMAIN, should accept it as a build ARG (empty default) baked into the bundle before next build, as apps/web does (IMG-1.7a)', () => {
+    const builder = dockerfile.slice(dockerfile.indexOf(' AS builder'), dockerfile.indexOf(' AS runner'));
+    const arg = builder.indexOf('ARG NEXT_PUBLIC_COOKIE_DOMAIN=""\n');
+    const env = builder.indexOf('ENV NEXT_PUBLIC_COOKIE_DOMAIN=$NEXT_PUBLIC_COOKIE_DOMAIN\n');
+    const build = builder.search(/^RUN cd apps\/imago && .*bun run build$/m);
+    expect(arg).toBeGreaterThan(-1);
+    expect(env).toBeGreaterThan(arg);
+    expect(build).toBeGreaterThan(env);
+    // Same declaration as classic, so one build arg drives both apps.
+    expect(read('apps/web/Dockerfile')).toContain('ARG NEXT_PUBLIC_COOKIE_DOMAIN=""\n');
+  });
+
   it('given the runner stage, should ship the standalone server and its static assets', () => {
     expect(dockerfile).toContain('COPY --from=builder /app/apps/imago/.next/standalone .');
     expect(dockerfile).toContain('COPY --from=builder /app/apps/imago/.next/static ./apps/imago/.next/static');
@@ -87,6 +99,14 @@ describe('docker-compose.yml imago service', () => {
     expect(imago.environment).toContain('NEXT_PUBLIC_REALTIME_URL=${NEXT_PUBLIC_REALTIME_URL}');
     expect(imago.build?.args).toContain('NEXT_PUBLIC_REALTIME_URL=${NEXT_PUBLIC_REALTIME_URL}');
     expect(imago.networks).toEqual(expect.arrayContaining(['internal', 'frontend']));
+  });
+
+  it('should bake the same cookie domain as the web service (IMG-1.7a)', () => {
+    const web = compose.services.web;
+    const cookieDomain = (args: string[] | undefined) =>
+      args?.find((a) => a.startsWith('NEXT_PUBLIC_COOKIE_DOMAIN='));
+    expect(cookieDomain(web.build?.args)).toBeDefined();
+    expect(cookieDomain(imago.build?.args)).toBe(cookieDomain(web.build?.args));
   });
 });
 
