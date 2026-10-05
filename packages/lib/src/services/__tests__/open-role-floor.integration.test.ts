@@ -19,7 +19,7 @@ import { eq, inArray } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { drives } from '@pagespace/db/schema/core';
 import { driveMembers, driveRoles } from '@pagespace/db/schema/members';
-import { organizations, orgMembers } from '@pagespace/db/schema/organizations';
+import { organizations, orgMembers, orgSubscriptions } from '@pagespace/db/schema/organizations';
 
 vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 vi.mock('../../audit/org-audit', () => ({ recordOrgAuditEvent: vi.fn(async () => {}), recordOrgAuditEventAfterCommit: vi.fn(async () => true) }));
@@ -39,6 +39,7 @@ async function cleanup() {
   // Roles go with their drive; then org rows; users last.
   if (created.driveIds.length) await db.delete(drives).where(inArray(drives.id, created.driveIds));
   if (created.orgIds.length) {
+    await db.delete(orgSubscriptions).where(inArray(orgSubscriptions.orgId, created.orgIds));
     await db.delete(orgMembers).where(inArray(orgMembers.orgId, created.orgIds));
     await db.delete(organizations).where(inArray(organizations.id, created.orgIds));
   }
@@ -56,6 +57,8 @@ beforeEach(async () => {
   created.orgIds.push(orgId);
   await db.insert(organizations).values({ id: orgId, name: 'Northwind', slug: `nw-${createId()}`, ownerId: owner });
   await db.insert(orgMembers).values({ orgId, userId: owner, role: 'OWNER' });
+  // [D-OW-30] an org with no subscription row is lapsed and refuses moves and new drives: this org is active.
+  await factories.createOrgSubscription(orgId);
   const orgDrive = (await factories.createDrive(owner)).id;
   const personalDrive = (await factories.createDrive(outsider)).id;
   created.driveIds.push(orgDrive, personalDrive);

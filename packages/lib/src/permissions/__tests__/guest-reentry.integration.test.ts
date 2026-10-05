@@ -20,7 +20,7 @@ import { and, eq, inArray } from '@pagespace/db/operators';
 import { mcpTokens, users } from '@pagespace/db/schema/auth';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { driveMembers, driveRoles, mcpTokenDrives, pagePermissions } from '@pagespace/db/schema/members';
-import { organizations, orgMembers } from '@pagespace/db/schema/organizations';
+import { organizations, orgMembers, orgSubscriptions } from '@pagespace/db/schema/organizations';
 import { orgGuestHolds } from '@pagespace/db/schema/org-guest-holds';
 
 vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
@@ -55,6 +55,7 @@ async function cleanup() {
   if (created.driveIds.length) await db.delete(drives).where(inArray(drives.id, created.driveIds));
   if (created.orgIds.length) {
     await db.delete(orgGuestHolds).where(inArray(orgGuestHolds.orgId, created.orgIds));
+    await db.delete(orgSubscriptions).where(inArray(orgSubscriptions.orgId, created.orgIds));
     await db.delete(orgMembers).where(inArray(orgMembers.orgId, created.orgIds));
     await db.delete(organizations).where(inArray(organizations.id, created.orgIds));
   }
@@ -81,6 +82,8 @@ beforeEach(async () => {
   created.orgIds.push(orgId);
   await db.insert(organizations).values({ id: orgId, name: 'Northwind', slug: `nw-${createId()}`, ownerId: owner });
   await db.insert(orgMembers).values([{ orgId, userId: owner, role: 'OWNER' }, { orgId, userId: member, role: 'MEMBER' }]);
+  // [D-OW-30] an org with no subscription row is lapsed and refuses moves and new drives: this org is active.
+  await factories.createOrgSubscription(orgId);
   const orgDrive = await mkDrive(owner);
   await db.update(drives).set({ orgId, orgVisibility: 'RESTRICTED' }).where(eq(drives.id, orgDrive));
   const orgPage = (await factories.createPage(orgDrive)).id;
