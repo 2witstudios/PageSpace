@@ -121,7 +121,7 @@ describe('resolveEffectiveDriveMembership', () => {
       }
     });
 
-    describe('POL-6: which membership the org floor governs at resolution', () => {
+    describe('which membership the org Open-drive floor governs at resolution', () => {
       it('POL-6 (partial) an org MEMBER implicit on an OPEN drive carries the org floor, with no row and through an org-materialized row', () => {
         for (const floor of ['view', 'edit'] as const) {
           const input = { ...on, openDriveRoleFloor: floor, drive: OPEN, orgRole: 'MEMBER' } as const;

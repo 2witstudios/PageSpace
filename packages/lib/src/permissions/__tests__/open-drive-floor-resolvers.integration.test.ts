@@ -255,7 +255,7 @@ async function disagreements(h: Harbor, floor: OpenRoleFloor): Promise<{ lines: 
   return { lines, compared };
 }
 
-describe('POL-6: the Open-drive role floor is read by every implicit-membership resolver (integration)', () => {
+describe('the Open-drive role floor is read by every implicit-membership resolver (integration)', () => {
   const AUDIT_ENV = ['ADMIN_DATABASE_URL', 'ADMIN_DB_BREAK_GLASS', 'AUDIT_TRUST_PLANE_REQUIRED'] as const;
   const savedAuditEnv = new Map<string, string | undefined>();
   const resetAuditBinding = () => {
