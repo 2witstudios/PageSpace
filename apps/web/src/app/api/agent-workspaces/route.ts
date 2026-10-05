@@ -67,6 +67,7 @@ import {
   nextUniqueSessionName,
 } from '@pagespace/lib/agent-workspaces/session-contract';
 import type { LocalEnvRefusal } from '@pagespace/lib/services/drive-envs/local-env-gate';
+import { ORG_LAPSED_MESSAGE } from '@pagespace/lib/organizations/status-core';
 
 /** C1: how a LOCAL env's typed bind refusal maps to a status. Policy ⇒ 403, machine state ⇒ 409. */
 const LOCAL_BIND_REFUSAL_STATUS = {
@@ -609,6 +610,10 @@ export async function POST(request: Request) {
           },
           riskScore: 0.5,
         });
+        // SEAT-9: a lapsed org's sandbox is paused until billing is reactivated.
+        if (provisioned.detail === 'org_lapsed') {
+          return NextResponse.json({ error: ORG_LAPSED_MESSAGE, code: 'org_lapsed' }, { status: 402 });
+        }
         return NextResponse.json(
           {
             error:

@@ -23,6 +23,7 @@ import {
 } from '@pagespace/lib/services/sandbox/tool-runners';
 import type { AgentSessionRecord } from '@pagespace/lib/services/agent-workspaces/agent-workspaces-store';
 import { buildRealSandboxRunDeps, productionSandboxGate } from '@/lib/ai/tools/sandbox-tools-runtime';
+import { isOrgLapsedForDrive } from '@pagespace/lib/organizations/status';
 
 /** The opaque conversation scope key an exec run carries (it has no chat conversation). */
 const workspaceExecScopeKey = (workspaceId: string): string => `workspace-exec:${workspaceId}`;
@@ -61,7 +62,7 @@ export async function resolveWorkspaceExecActorContext(
     actorEmail: actorInfo.actorEmail,
     actorDisplayName: actorInfo.actorDisplayName,
     // WAL-9: an org drive's compute runs on the org's tier, not the lead's own plan.
-    tier: computeTierForDrive(drive, toSubscriptionTier(payer?.subscriptionTier)),
+    tier: computeTierForDrive(drive, toSubscriptionTier(payer?.subscriptionTier), await isOrgLapsedForDrive(drive)),
   };
 }
 

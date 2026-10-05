@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { TIER_PLAN_LIMITS } from '../subscription-tiers';
 import {
-  ORG_BUSINESS_TRIAL_DAYS,
   ORG_ID_METADATA_KEY,
   ORG_SUBSCRIPTION_KIND,
   isLiveOrgSubscriptionStatus,
@@ -15,7 +14,8 @@ import {
   orgExtraSeatQuantity,
   orgStripeIdempotencyKey,
   orgSubscriptionItems,
-  orgTrialDays,
+  orgPaymentStep,
+  orgSubscriptionMayOwePayment,
   pickAdoptableOrgSubscription,
   planSeatQuantitySync,
   type OrgBusinessPrices,
@@ -28,7 +28,7 @@ const ORG = 'org_northwind';
 function candidate(overrides: Partial<OrgSubscriptionCandidate> = {}): OrgSubscriptionCandidate {
   return {
     id: 'sub_1',
-    status: 'trialing',
+    status: 'active',
     created: 100,
     metadata: { [ORG_ID_METADATA_KEY]: ORG, kind: ORG_SUBSCRIPTION_KIND },
     items: [
@@ -86,20 +86,9 @@ describe('orgStripeIdempotencyKey — derived from the org, the operation and th
   });
 });
 
-describe('orgTrialDays — SEAT-8 (partial) trial on creation, never a second trial', () => {
-  it('SEAT-8 (partial) a first Business subscription for the org starts with the trial', () => {
-    expect(orgTrialDays({ hadSubscription: false })).toBe(ORG_BUSINESS_TRIAL_DAYS);
-    expect(ORG_BUSINESS_TRIAL_DAYS).toBe(14);
-  });
-
-  it('SEAT-8 (partial) an org that already had a subscription gets no new trial', () => {
-    expect(orgTrialDays({ hadSubscription: true })).toBe(0);
-  });
-});
-
 describe('orgBusinessSubscriptionParams — the Business subscription Stripe is asked for', () => {
   it('SEAT-1 (partial) SEAT-2 (partial) A-8 base price once plus the extra-seat item at max(0, seats − 5), on the org customer', () => {
-    const params = orgBusinessSubscriptionParams({ orgId: ORG, customerId: 'cus_org', seats: 7, prices: PRICES, trialDays: 14 });
+    const params = orgBusinessSubscriptionParams({ orgId: ORG, customerId: 'cus_org', seats: 7, prices: PRICES });
     expect(params.customer).toBe('cus_org');
     expect(params.items).toEqual([
       { price: 'price_base', quantity: 1 },
@@ -109,22 +98,55 @@ describe('orgBusinessSubscriptionParams — the Business subscription Stripe is 
   });
 
   it('A-8 an org with 5 or fewer seats still carries the seat item, at quantity 0, so adding a 6th seat is a quantity change', () => {
-    const params = orgBusinessSubscriptionParams({ orgId: ORG, customerId: 'cus_org', seats: 1, prices: PRICES, trialDays: 14 });
+    const params = orgBusinessSubscriptionParams({ orgId: ORG, customerId: 'cus_org', seats: 1, prices: PRICES });
     expect(params.items[1]).toEqual({ price: 'price_seat', quantity: 0 });
   });
 
-  it('SEAT-8 (partial) with a trial: trial days set, and a trial that ends without a card cancels rather than running free', () => {
-    const params = orgBusinessSubscriptionParams({ orgId: ORG, customerId: 'cus_org', seats: 1, prices: PRICES, trialDays: 14 });
-    expect(params.trial_period_days).toBe(14);
-    expect(params.trial_settings).toEqual({ end_behavior: { missing_payment_method: 'cancel' } });
-    expect(params.payment_settings).toEqual({ save_default_payment_method: 'on_subscription' });
+  it('SEAT-8 (partial) D-OW-30 there is no org trial: no trial field ever, the first invoice waits for a card (default_incomplete), and the card is saved on the subscription', () => {
+    for (const seats of [1, 5, 7]) {
+      const params = orgBusinessSubscriptionParams({ orgId: ORG, customerId: 'cus_org', seats, prices: PRICES });
+      expect(params).not.toHaveProperty('trial_period_days');
+      expect(params).not.toHaveProperty('trial_settings');
+      expect(params.payment_behavior).toBe('default_incomplete');
+      expect(params.payment_settings).toEqual({ save_default_payment_method: 'on_subscription' });
+    }
+  });
+});
+
+describe('orgPaymentStep — what the client must do to pay for the org subscription (a new org, or recovery from a lapse)', () => {
+  const openInvoice = { status: 'open', amountDueCents: 5000, clientSecret: 'pi_123_secret_abc' };
+
+  it('SEAT-8 (partial) SEAT-9 (partial) a new or re-subscribed org whose subscription is incomplete gets the open invoice\'s client secret to confirm the card', () => {
+    expect(orgPaymentStep({ subscriptionStatus: 'incomplete', latestInvoice: openInvoice })).toEqual({
+      kind: 'confirm_payment',
+      clientSecret: 'pi_123_secret_abc',
+    });
   });
 
-  it('SEAT-8 (partial) without a trial there is no trial field and the first invoice waits for payment', () => {
-    const params = orgBusinessSubscriptionParams({ orgId: ORG, customerId: 'cus_org', seats: 1, prices: PRICES, trialDays: 0 });
-    expect(params.trial_period_days).toBeUndefined();
-    expect(params.trial_settings).toBeUndefined();
-    expect(params.payment_behavior).toBe('default_incomplete');
+  it('SEAT-9 (partial) a past_due or unpaid org with an open invoice gets the client secret too, so a new card pays what is owed', () => {
+    for (const subscriptionStatus of ['past_due', 'unpaid']) {
+      expect(orgPaymentStep({ subscriptionStatus, latestInvoice: openInvoice })).toEqual({ kind: 'confirm_payment', clientSecret: 'pi_123_secret_abc' });
+    }
+  });
+
+  it('an active subscription, a paid or zero invoice, a missing secret or no invoice needs no payment step', () => {
+    expect(orgPaymentStep({ subscriptionStatus: 'active', latestInvoice: openInvoice })).toEqual({ kind: 'none' });
+    expect(orgPaymentStep({ subscriptionStatus: 'incomplete', latestInvoice: { ...openInvoice, status: 'paid' } })).toEqual({ kind: 'none' });
+    expect(orgPaymentStep({ subscriptionStatus: 'incomplete', latestInvoice: { ...openInvoice, amountDueCents: 0 } })).toEqual({ kind: 'none' });
+    expect(orgPaymentStep({ subscriptionStatus: 'incomplete', latestInvoice: { ...openInvoice, clientSecret: null } })).toEqual({ kind: 'none' });
+    expect(orgPaymentStep({ subscriptionStatus: 'incomplete', latestInvoice: { ...openInvoice, clientSecret: '' } })).toEqual({ kind: 'none' });
+    expect(orgPaymentStep({ subscriptionStatus: 'incomplete', latestInvoice: null })).toEqual({ kind: 'none' });
+  });
+
+  it('only incomplete, past_due and unpaid subscriptions may owe a payment (so only they read the invoice)', () => {
+    for (const s of ['incomplete', 'past_due', 'unpaid']) expect(orgSubscriptionMayOwePayment(s)).toBe(true);
+    for (const s of ['active', 'trialing', 'canceled', 'incomplete_expired', 'paused']) expect(orgSubscriptionMayOwePayment(s)).toBe(false);
+  });
+
+  it('an ended subscription never hands out a secret: the org subscribes again instead', () => {
+    for (const subscriptionStatus of ['canceled', 'incomplete_expired']) {
+      expect(orgPaymentStep({ subscriptionStatus, latestInvoice: openInvoice })).toEqual({ kind: 'none' });
+    }
   });
 });
 
@@ -150,7 +172,7 @@ describe('the org customer — the org\'s, never a person\'s, and never two', ()
 });
 
 describe('the subscription generation — a new subscription after an ended one is a new request (P1-B)', () => {
-  const params = orgBusinessSubscriptionParams({ orgId: ORG, customerId: 'cus_org', seats: 1, prices: PRICES, trialDays: 0 });
+  const params = orgBusinessSubscriptionParams({ orgId: ORG, customerId: 'cus_org', seats: 1, prices: PRICES });
 
   it('SEAT-1 (partial) the same attempt replays: same params and same previous subscription derive the same key', () => {
     expect(orgSubscriptionCreateKey(ORG, params, 'sub_b')).toBe(orgSubscriptionCreateKey(ORG, params, 'sub_b'));
@@ -161,7 +183,7 @@ describe('the subscription generation — a new subscription after an ended one 
     expect(orgSubscriptionCreateKey(ORG, params, null)).not.toBe(orgSubscriptionCreateKey(ORG, params, 'sub_a'));
   });
 
-  it('SEAT-8 (partial) the org\'s Stripe history counts every subscription stamped with it, ended ones included; the newest is the previous generation', () => {
+  it('SEAT-1 (partial) the org\'s Stripe history counts every subscription stamped with it, ended ones included; the newest is the previous generation', () => {
     const history = orgSubscriptionHistory(
       [
         candidate({ id: 'sub_old', status: 'canceled', created: 100 }),
@@ -170,8 +192,8 @@ describe('the subscription generation — a new subscription after an ended one 
       ],
       { orgId: ORG },
     );
-    expect(history).toEqual({ hadSubscription: true, previousSubscriptionId: 'sub_new' });
-    expect(orgSubscriptionHistory([], { orgId: ORG })).toEqual({ hadSubscription: false, previousSubscriptionId: null });
+    expect(history).toEqual({ previousSubscriptionId: 'sub_new' });
+    expect(orgSubscriptionHistory([], { orgId: ORG })).toEqual({ previousSubscriptionId: null });
   });
 });
 

@@ -33,7 +33,7 @@ import { requireDb } from '@pagespace/db/test/require-db';
 import { createOrganization } from '@pagespace/lib/organizations/repository';
 import { getOrgStatus } from '@pagespace/lib/organizations/status';
 import { ORG_ID_METADATA_KEY, ORG_SUBSCRIPTION_KIND, type OrgBusinessPrices } from '@pagespace/lib/billing/org-subscription-core';
-import { orgPoolRefillGrant } from '@pagespace/lib/billing/wallet-funding';
+import { orgPoolListPriceGrantCents, orgPoolRefillGrant } from '@pagespace/lib/billing/wallet-funding';
 import { centsFromDollars, tierListPriceCents } from '@pagespace/lib/billing/money-model';
 import { TIER_PLAN_LIMITS } from '@pagespace/lib/billing/subscription-tiers';
 import { stripeConfig } from '@/lib/stripe-config';
@@ -97,7 +97,7 @@ interface Org {
   deps: OrgBillingDeps;
 }
 
-/** Northwind Labs with its own customer and trialing Business subscription (D1's path). */
+/** Northwind Labs with its own customer and Business subscription awaiting its first payment (D1's path; no trial, D-OW-30). */
 async function northwind(seats = 7): Promise<Org> {
   const owner = await factories.createUser({ email: `jono+d3${Date.now()}${Math.random().toString(36).slice(2, 8)}@northwind.test`, name: 'Jono' });
   userIds.push(owner.id);
@@ -352,7 +352,7 @@ describe('Stripe webhook — org routing, idempotency, lapse (real Postgres, in-
       return (await queryOrgAuditEvents(org.orgId, parsed.filter)).entries.map((e) => [e.eventType, e.details.to ?? null]);
     };
     // Provisioning wrote the subscription's start.
-    expect(await billingTypes()).toEqual([['org.billing.subscription_changed', 'trialing']]);
+    expect(await billingTypes()).toEqual([['org.billing.subscription_changed', 'incomplete']]);
 
     setStripeStatus(org, 'active');
     const updated = eventPayload('customer.subscription.updated', { id: org.subscriptionId, object: 'subscription', customer: org.customerId, status: 'active', metadata: orgMetadata(org.orgId) });
@@ -372,8 +372,78 @@ describe('Stripe webhook — org routing, idempotency, lapse (real Postgres, in-
       ['org.billing.subscription_changed', 'canceled'],
       ['org.billing.pool_refilled', null],
       ['org.billing.subscription_changed', 'active'],
-      ['org.billing.subscription_changed', 'trialing'],
+      ['org.billing.subscription_changed', 'incomplete'],
     ]);
+  });
+
+  it('MON-3 (partial) SEAT-8 (partial) D-OW-30 creating N orgs grants NOTHING until each has paid: a $0 first invoice funds no pool; each first real payment funds its pool from exactly what it paid', async () => {
+    if (!dbAvailable) return;
+    const orgs = [await northwind(5), await northwind(6), await northwind(7)];
+    // A farmer's $0 first invoices (what a trial used to send) are delivered for every org.
+    for (const org of orgs) {
+      fakeHolder.current = org.stripe; // each org has its own in-memory Stripe
+      const free = invoiceObject({ customer: org.customerId, subscriptionId: org.subscriptionId, metadata: orgMetadata(org.orgId), seats: 0, paid: false, billingReason: 'subscription_create', periodStart: 1_800_000_000 });
+      expect(await deliver(eventPayload('invoice.paid', free))).toBe(200);
+    }
+    for (const org of orgs) {
+      const pool = await poolOf(org.orgId);
+      expect(pool === null ? 0 : pool.monthlyRemainingCents + pool.topupRemainingCents).toBe(0);
+      if (pool) expect(await ledgerRows(pool.id)).toHaveLength(0);
+    }
+    // Each org's first REAL payment: base + its extra seats, paid in full.
+    for (const [i, org] of orgs.entries()) {
+      const seats = i; // 5, 6, 7 seats → 0, 1, 2 extra
+      const firstPaid = invoiceObject({ customer: org.customerId, subscriptionId: org.subscriptionId, metadata: orgMetadata(org.orgId), seats, paid: true, billingReason: 'subscription_create', periodStart: 1_800_000_000 + DAY });
+      setStripeStatus(org, 'active');
+      fakeHolder.current = org.stripe;
+      expect(await deliver(eventPayload('invoice.paid', firstPaid))).toBe(200);
+      const expected = orgPoolRefillGrant({ lines: firstPaid.lines.data, amountPaidCents: firstPaid.amount_paid, hasSubscriptionParent: true, billingReason: 'subscription_create', subtotalCents: firstPaid.subtotal, extraSeats: seats }).allowanceCents;
+      expect(expected).toBeGreaterThan(0);
+      const pool = await poolOf(org.orgId);
+      expect(pool?.monthlyRemainingCents).toBe(expected);
+      expect(await ledgerRows(pool!.id)).toHaveLength(1);
+      expect((await storedSub(org.orgId)).status).toBe('active');
+    }
+  });
+
+  it('SEAT-7 (partial) review 3+4 P2-8: a seat quantity changed in Stripe outside the app (stored 2, Stripe 3) is mirrored by the next subscription event, with a new seat revision; a replay changes nothing more', async () => {
+    if (!dbAvailable) return;
+    const org = await northwind(7);
+    const before = await storedSub(org.orgId);
+    expect(before.extraSeatQuantity).toBe(2);
+    // A support edit in the Stripe dashboard: the seat item goes to 3.
+    const sub = org.stripe.subscriptions.get(org.subscriptionId);
+    if (!sub) throw new Error('no fake subscription');
+    sub.items = sub.items.map((i) => (i.priceId === PRICES.seatPriceId ? { ...i, quantity: 3 } : i));
+    const updated = eventPayload('customer.subscription.updated', { id: org.subscriptionId, object: 'subscription', customer: org.customerId, status: sub.status, metadata: orgMetadata(org.orgId) });
+    expect(await deliver(updated)).toBe(200);
+    const after = await storedSub(org.orgId);
+    expect(after).toMatchObject({ extraSeatQuantity: 3, seatRevision: before.seatRevision + 1, stripeSeatItemId: before.stripeSeatItemId, stripeBaseItemId: before.stripeBaseItemId });
+    expect(await deliver(updated)).toBe(200);
+    expect(await storedSub(org.orgId)).toMatchObject({ extraSeatQuantity: 3, seatRevision: before.seatRevision + 1 });
+  });
+
+  it('D-OW-23 review #2761 P2-4: a GIFT funds the pool at list × ratio only on the org\'s OWN subscription; a gift on a separately created subscription (never mirrored, so the org stays lapsed) funds nothing', async () => {
+    if (!dbAvailable) return;
+    const giftMeta = (orgId: string) => ({ ...orgMetadata(orgId), type: 'gift_subscription' });
+
+    // An operator's separate gift subscription on the org's customer: refused, nothing lands.
+    const stray = await northwind(7);
+    const strayGift = invoiceObject({ customer: stray.customerId, subscriptionId: 'sub_owd3_separate_gift', metadata: giftMeta(stray.orgId), seats: 2, paid: false, billingReason: 'subscription_cycle', periodStart: 1_800_000_000 });
+    expect(await deliver(eventPayload('invoice.paid', strayGift))).toBe(200);
+    const strayPool = await poolOf(stray.orgId);
+    expect(strayPool === null ? 0 : strayPool.monthlyRemainingCents).toBe(0);
+    if (strayPool) expect(await ledgerRows(strayPool.id)).toHaveLength(0);
+
+    // The gift coupon on the org's OWN subscription (the runbook procedure): funded at list × ratio.
+    const own = await northwind(7);
+    fakeHolder.current = own.stripe;
+    const ownGift = invoiceObject({ customer: own.customerId, subscriptionId: own.subscriptionId, metadata: giftMeta(own.orgId), seats: 2, paid: false, billingReason: 'subscription_cycle', periodStart: 1_800_000_000 });
+    expect(await deliver(eventPayload('invoice.paid', ownGift))).toBe(200);
+    const ownPool = await poolOf(own.orgId);
+    expect(ownPool?.monthlyRemainingCents).toBe(orgPoolListPriceGrantCents(2));
+    expect(ownPool?.monthlyRemainingCents).toBeGreaterThan(0);
+    expect(await ledgerRows(ownPool!.id)).toHaveLength(1);
   });
 
   it('SEAT-7 (partial) MON-3 (partial) replaying the same org invoice.paid event is a no-op: one grant, no second Stripe read, no second write', async () => {
@@ -384,18 +454,18 @@ describe('Stripe webhook — org routing, idempotency, lapse (real Postgres, in-
       subscriptionId: org.subscriptionId,
       metadata: orgMetadata(org.orgId),
       seats: 2,
-      paid: false,
+      paid: true,
       billingReason: 'subscription_create',
       periodStart: 1_800_000_000,
     });
     const payload = eventPayload('invoice.paid', invoice);
-    // The grant the one funding path makes for this invoice: a trial at list price × ratio for the 2 seats it billed ([D-OW-23]).
+    // The grant the one funding path makes for this invoice: the first real payment, what it paid × ratio ([D-OW-30]).
     const expected = orgPoolRefillGrant({
       lines: invoice.lines.data,
-      amountPaidCents: 0,
+      amountPaidCents: invoice.amount_paid,
       hasSubscriptionParent: true,
       billingReason: 'subscription_create',
-      subtotalCents: 0,
+      subtotalCents: invoice.subtotal,
       extraSeats: 2,
     }).allowanceCents;
     expect(expected).toBeGreaterThan(0);
@@ -676,7 +746,7 @@ describe('Stripe webhook — org routing, idempotency, lapse (real Postgres, in-
     expect(await deliver(eventPayload('customer.subscription.deleted', deleted))).toBe(200);
     expect((await getOrgStatus(org.orgId)).status).toBe('lapsed');
 
-    // Reactivate: D1's path creates the replacement (no second trial) and stores it.
+    // Reactivate: D1's path creates the replacement (awaiting its payment) and stores it.
     const { linkage } = await ensureOrgBusinessSubscription(org.orgId, org.deps);
     expect(linkage.stripeSubscriptionId).not.toBe(oldId);
     const replacement = org.stripe.subscriptions.get(linkage.stripeSubscriptionId)!;

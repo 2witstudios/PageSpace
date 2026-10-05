@@ -2,6 +2,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const mockDb = vi.hoisted(() => ({ select: vi.fn() }));
 vi.mock('@pagespace/db/db', () => ({ db: mockDb }));
+// SEAT-9: the org's billing status is read before any org pool charge; paid unless a test lapses it.
+const orgStatus = vi.hoisted(() => ({ active: true }));
+vi.mock('../../../organizations/status', () => ({ isOrgActive: vi.fn(async () => orgStatus.active) }));
 vi.mock('@pagespace/db/operators', () => ({ eq: vi.fn((a, b) => ({ op: 'eq', a, b })) }));
 vi.mock('@pagespace/db/schema/auth', () => ({ users: { id: 'users.id', subscriptionTier: 'users.subscriptionTier' } }));
 vi.mock('@pagespace/db/schema/core', () => ({

@@ -12,7 +12,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 vi.mock('@pagespace/lib/organizations/policy-reader', () => ({ getDrivePolicies: vi.fn() }));
-vi.mock('@pagespace/lib/billing/compute-gate', () => ({ admitDriveComputeCreator: vi.fn() }));
+vi.mock('@pagespace/lib/billing/compute-gate', () => ({ admitDriveComputeCreator: vi.fn(), admitDriveOrgActive: vi.fn() }));
 vi.mock('@pagespace/lib/permissions/app-unpark-authority', () => ({ canUnparkPublishedApp: vi.fn() }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ audit: vi.fn(), auditRequest: vi.fn() }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -71,7 +71,7 @@ vi.mock('@/lib/app-hosting/published-app-dto', () => ({
 
 import { GET, POST } from '../route';
 import { canUnparkPublishedApp } from '@pagespace/lib/permissions/app-unpark-authority';
-import { admitDriveComputeCreator } from '@pagespace/lib/billing/compute-gate';
+import { admitDriveComputeCreator, admitDriveOrgActive } from '@pagespace/lib/billing/compute-gate';
 import { getDrivePolicies } from '@pagespace/lib/organizations/policy-reader';
 import { DEFAULT_ORG_POLICIES } from '@pagespace/lib/organizations/policies-core';
 import { authenticateRequestWithOptions, isPrincipalDriveMember, isPrincipalDriveOwnerOrAdmin } from '@/lib/auth';
@@ -104,6 +104,7 @@ beforeEach(() => {
   vi.mocked(resolveEnvInDrive).mockResolvedValue(envRow as never);
   vi.mocked(findPublishedAppByEnvId).mockResolvedValue(null);
   vi.mocked(admitDriveComputeCreator).mockResolvedValue({ allowed: true });
+  vi.mocked(admitDriveOrgActive).mockResolvedValue({ allowed: true });
   vi.mocked(createPublishedApp).mockResolvedValue({ ok: true, app: appRow } as never);
   updateReturning.mockReset().mockResolvedValue([{ id: PUBLISHED_APP_ID, status: 'building' }]);
 });
@@ -270,7 +271,7 @@ describe('POST /app — the up-front buildability refusal (D1)', () => {
 
 describe('POST /app — the publisher\'s per-member cap ([D-OW-28])', () => {
   it('WAL-2 (partial) a FIRST publish by a member at their cap is refused 402 before any snapshot, and no app is created', async () => {
-    vi.mocked(admitDriveComputeCreator).mockResolvedValue({ allowed: false, message: 'You have used your allowance' });
+    vi.mocked(admitDriveComputeCreator).mockResolvedValue({ allowed: false, code: 'org_member_cap_reached', message: 'You have used your allowance' });
 
     const response = await POST(postReq(), envParams);
 
@@ -283,11 +284,40 @@ describe('POST /app — the publisher\'s per-member cap ([D-OW-28])', () => {
 
   it('a RE-publish creates nothing new, so it is not re-admitted', async () => {
     vi.mocked(findPublishedAppByEnvId).mockResolvedValue({ ...appRow, status: 'running' } as never);
-    vi.mocked(admitDriveComputeCreator).mockResolvedValue({ allowed: false, message: 'cap' });
+    vi.mocked(admitDriveComputeCreator).mockResolvedValue({ allowed: false, code: 'org_member_cap_reached', message: 'cap' });
 
     await POST(postReq(), envParams);
 
     expect(admitDriveComputeCreator).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /app — a lapsed org publishes nothing (review #2761 P2-1)', () => {
+  const LAPSED = { allowed: false as const, code: 'org_lapsed' as const, message: 'This organization\'s subscription has lapsed.' };
+
+  it('SEAT-9 (partial) a RE-publish of an existing app in a lapsed org is refused 402 org_lapsed before any snapshot, upload or build', async () => {
+    vi.mocked(findPublishedAppByEnvId).mockResolvedValue({ ...appRow, status: 'running' } as never);
+    vi.mocked(admitDriveOrgActive).mockResolvedValue(LAPSED);
+
+    const response = await POST(postReq(), envParams);
+
+    expect(response.status).toBe(402);
+    expect(await response.json()).toEqual({ error: LAPSED.message, code: 'org_lapsed' });
+    expect(admitDriveOrgActive).toHaveBeenCalledWith({ driveId: DRIVE_ID });
+    expect(ensureBuildableSource).not.toHaveBeenCalled();
+    expect(snapshotEnvFilesystem).not.toHaveBeenCalled();
+    expect(enqueuePublishBuild).not.toHaveBeenCalled();
+  });
+
+  it('SEAT-9 (partial) a FIRST publish in a lapsed org is refused with code org_lapsed, not the member-cap code', async () => {
+    vi.mocked(admitDriveOrgActive).mockResolvedValue(LAPSED);
+    vi.mocked(admitDriveComputeCreator).mockResolvedValue(LAPSED);
+
+    const response = await POST(postReq(), envParams);
+
+    expect(response.status).toBe(402);
+    expect((await response.json()).code).toBe('org_lapsed');
+    expect(createPublishedApp).not.toHaveBeenCalled();
   });
 });
 

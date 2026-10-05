@@ -68,7 +68,7 @@ vi.mock('@pagespace/lib/organizations/status', async (importOriginal) => ({
 }));
 vi.mock('@/lib/orgs/org-invite-delivery', () => ({ deliverOrgInvite: vi.fn() }));
 vi.mock('@/lib/org-billing/seat-billing', () => ({ defaultSeatBilling: vi.fn(() => ({ setSeatQuantity: vi.fn(), readSeatQuantity: vi.fn() })) }));
-vi.mock('@/lib/org-billing/org-subscription', () => ({ startOrgBusinessTrial: vi.fn(), endOrgSubscriptionPort: vi.fn(() => endSubscriptionPort) }));
+vi.mock('@/lib/org-billing/org-subscription', () => ({ startOrgBusinessSubscription: vi.fn(), endOrgSubscriptionPort: vi.fn(() => endSubscriptionPort) }));
 
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -80,7 +80,7 @@ import * as invitations from '@pagespace/lib/organizations/invitations';
 import { deleteOrganization } from '@pagespace/lib/organizations/deletion';
 import { getOrgBillingNotice } from '@pagespace/lib/organizations/status';
 import { deliverOrgInvite } from '@/lib/orgs/org-invite-delivery';
-import { startOrgBusinessTrial } from '@/lib/org-billing/org-subscription';
+import { startOrgBusinessSubscription } from '@/lib/org-billing/org-subscription';
 
 import * as orgsRoute from '../route';
 import * as orgRoute from '../[orgId]/route';
@@ -172,9 +172,10 @@ function setServiceDefaults() {
   vi.mocked(invitations.acceptInvitation).mockResolvedValue({ ok: true, orgId: ORG_ID, role: 'MEMBER', joined: true });
   vi.mocked(deleteOrganization).mockResolvedValue({ ok: true, steps: [] });
   vi.mocked(deliverOrgInvite).mockResolvedValue(undefined);
-  vi.mocked(startOrgBusinessTrial).mockResolvedValue({
-    state: 'subscribed',
-    subscription: { status: 'trialing', trialEnd: '2026-10-01T12:00:00.000Z', currentPeriodEnd: '2026-10-01T12:00:00.000Z', extraSeatQuantity: 0 },
+  vi.mocked(startOrgBusinessSubscription).mockResolvedValue({
+    state: 'payment_required',
+    subscription: { status: 'incomplete', trialEnd: null, currentPeriodEnd: '2026-10-01T12:00:00.000Z', extraSeatQuantity: 0 },
+    payment: { kind: 'confirm_payment', clientSecret: 'pi_1_secret_x' },
   });
   vi.mocked(isEmailVerified).mockResolvedValue(true);
   vi.mocked(checkDistributedRateLimit).mockResolvedValue({ allowed: true, attemptsRemaining: 2 });
@@ -333,28 +334,30 @@ describe('org route behaviour', () => {
     expect(body.organization).not.toHaveProperty('policies');
   });
 
-  it('SEAT-8 (partial) POST /api/orgs starts the new org on the Business trial and reports it, with no Stripe id', async () => {
+  it('SEAT-8 (partial) D-OW-30 POST /api/orgs starts the new org on Business with no trial: payment is required, with the client secret to confirm a card and no Stripe id', async () => {
     const res = await orgsRoute.POST(req('POST', { name: 'Northwind Labs', slug: 'northwind' }));
     expect(res.status).toBe(201);
-    expect(startOrgBusinessTrial).toHaveBeenCalledWith(ORG_ID);
+    expect(startOrgBusinessSubscription).toHaveBeenCalledWith(ORG_ID);
     const body = await res.json();
     expect(body.billing).toEqual({
-      state: 'subscribed',
-      subscription: { status: 'trialing', trialEnd: '2026-10-01T12:00:00.000Z', currentPeriodEnd: '2026-10-01T12:00:00.000Z', extraSeatQuantity: 0 },
+      state: 'payment_required',
+      subscription: { status: 'incomplete', trialEnd: null, currentPeriodEnd: '2026-10-01T12:00:00.000Z', extraSeatQuantity: 0 },
+      payment: { kind: 'confirm_payment', clientSecret: 'pi_1_secret_x' },
     });
+    expect(JSON.stringify(body)).not.toMatch(/cus_|sub_|si_/);
   });
 
-  it('SEAT-8 (partial) POST /api/orgs still creates the org when the trial could not start, and says billing is pending', async () => {
-    vi.mocked(startOrgBusinessTrial).mockResolvedValue({ state: 'pending' });
+  it('SEAT-8 (partial) POST /api/orgs still creates the org when its subscription could not start, and says billing is pending', async () => {
+    vi.mocked(startOrgBusinessSubscription).mockResolvedValue({ state: 'pending' });
     const res = await orgsRoute.POST(req('POST', { name: 'Northwind Labs', slug: 'northwind' }));
     expect(res.status).toBe(201);
     expect((await res.json()).billing).toEqual({ state: 'pending' });
   });
 
-  it('SEAT-8 (partial) POST /api/orgs starts no trial when the org was not created', async () => {
+  it('SEAT-8 (partial) POST /api/orgs starts no subscription when the org was not created', async () => {
     vi.mocked(repository.createOrganization).mockResolvedValue({ ok: false, reason: 'slug_taken' });
     expect((await orgsRoute.POST(req('POST', { name: 'N', slug: 'northwind' }))).status).toBe(409);
-    expect(startOrgBusinessTrial).not.toHaveBeenCalled();
+    expect(startOrgBusinessSubscription).not.toHaveBeenCalled();
   });
 
   it('ORG-1 (partial) POST /api/orgs refuses a malformed slug and reports a taken one', async () => {

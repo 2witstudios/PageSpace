@@ -25,10 +25,13 @@ import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
 import { createOrRotateInvitation, resendInvitation } from '../invitations';
 import { ORG_LAPSED_MESSAGE, getOrgBillingNotice, getOrgStatus, isOrgActive } from '../status';
-import { ORG_UNSUBSCRIBED_TRIAL_MS } from '../status-core';
 import { createOrgDrive, moveDriveOutOfOrg, moveDriveToOrg, type OrgDriveServiceDeps } from '../../services/org-drive-service';
 import { createDriveWallet, getDriveWallet, updateDriveWallet, topUpDriveWallet } from '../../services/drive-wallet-service';
 import { resolveCallSpend } from '../../billing/spend-resolution';
+import { admitDriveComputeCreator, admitDriveOrgActive, gateComputeCharge, hasSpendableComputeBalance, resolveComputeChargeTier } from '../../billing/compute-gate';
+import { releaseHold } from '../../billing/credit-consume';
+import { resolveSandboxPayerTier } from '../../billing/sandbox-eligibility';
+import { lookupDriveBillingFacts } from '../../billing/sandbox-payer';
 import { getUserDriveAccess, canUserViewPage } from '../../permissions/permissions';
 
 vi.mock('../orgs-enabled', () => ({ ORGS_ENABLED: true }));
@@ -79,6 +82,9 @@ async function build(): Promise<World> {
     .returning();
   // Marcus's own credits, funded: the source he may still choose while the org is lapsed.
   await db.insert(wallets).values({ userId: marcus.id, monthlyRemainingCents: 5_000, monthlyPeriodStart: new Date(), monthlyPeriodEnd: new Date(Date.now() + 20 * 86_400_000) });
+
+  // Northwind has paid (D-OW-30: an org nobody paid for is lapsed from creation); each test lapses it as it needs.
+  await setSubscription(org.id, 'active');
 
   const ids = { jono: jono.id, priya: priya.id, dana: dana.id, marcus: marcus.id };
   return { orgId: org.id, productId: product.id, pageId: page.id, personalDriveId: personal.id, poolId: pool.id, productWalletId: productWallet.id, ids, userIds: Object.values(ids) };
@@ -295,18 +301,72 @@ describe('org lapse gates (orgs on, real Postgres)', () => {
     expect(stored.status).toBe('active');
   });
 
-  it('SEAT-9 (partial) SEAT-6 (partial) the banner data: Owner and Admins see why and can reactivate, a member sees only read-only; a new unsubscribed org shows its trial to managers only', async () => {
+  it('SEAT-9 (partial) WAL-8 (partial) review 3+4 P1-2, scenario step 10: a lapsed org spends NOTHING on compute — a sandbox run on the pool is refused by name with no hold and the pool untouched, a wake check says no, creating an env or app is refused, and its tier is free; reactivated, all of it works again', async () => {
     if (!world) return;
     const w = world;
-    const [org] = await db.select({ createdAt: organizations.createdAt }).from(organizations).where(eq(organizations.id, w.orgId));
-    // No subscription row yet (Stripe was unreachable at creation): on the creation trial.
-    expect(await getOrgStatus(w.orgId)).toEqual({ status: 'trialing', reason: null });
-    expect(await getOrgBillingNotice(w.orgId, 'OWNER')).toEqual({
-      kind: 'trial',
-      trialEnd: new Date(org.createdAt.getTime() + ORG_UNSUBSCRIBED_TRIAL_MS).toISOString(),
-      canManageBilling: true,
-    });
-    expect(await getOrgBillingNotice(w.orgId, 'MEMBER')).toBeNull();
+    const charge = { kind: 'org' as const, orgId: w.orgId, userId: w.ids.dana };
+    const sandboxTier = () => resolveSandboxPayerTier({ driveId: w.productId, ownerId: w.ids.dana }, { lookupDriveBillingFacts, getUserSubscriptionTier: async () => 'pro', isOrgLapsed: async (orgId) => !(await isOrgActive(orgId)) });
+    const holdsOf = async () => db.select().from(creditHolds).where(eq(creditHolds.userId, w.ids.dana));
+
+    // Paid: Dana's sandbox run is admitted on the org pool (and released: nothing ran here).
+    const admitted = await gateComputeCharge(charge, { estCostCents: 50 });
+    expect(admitted).toMatchObject({ allowed: true, walletId: w.poolId });
+    if (admitted.allowed && admitted.holdId) await releaseHold(admitted.holdId);
+    expect(await hasSpendableComputeBalance(charge)).toBe(true);
+    expect(await admitDriveComputeCreator({ driveId: w.productId, userId: w.ids.dana })).toEqual({ allowed: true });
+    expect(await resolveComputeChargeTier(charge)).toBe('business');
+    expect(await sandboxTier()).toBe('business');
+
+    await setSubscription(w.orgId, 'canceled');
+    const before = await footprint(w);
+    const refused = await gateComputeCharge(charge, { estCostCents: 50 });
+    expect(refused).toEqual({ allowed: false, reason: 'org_lapsed', orgRefusal: 'org_lapsed' });
+    expect(await holdsOf()).toHaveLength(0);
+    expect(await hasSpendableComputeBalance(charge)).toBe(false);
+    expect(await admitDriveComputeCreator({ driveId: w.productId, userId: w.ids.dana })).toEqual({ allowed: false, code: 'org_lapsed', message: ORG_LAPSED_MESSAGE });
+    expect(await admitDriveOrgActive({ driveId: w.productId })).toEqual({ allowed: false, code: 'org_lapsed', message: ORG_LAPSED_MESSAGE });
+    expect(await admitDriveOrgActive({ driveId: w.personalDriveId })).toEqual({ allowed: true });
+    expect(await resolveComputeChargeTier(charge)).toBe('free');
+    expect(await sandboxTier()).toBe('free');
+    // The pool and every leg are exactly as they were: lapse wrote nothing and charged nothing.
+    expect(await footprint(w)).toEqual(before);
+    expect(await db.select().from(creditLedger).where(eq(creditLedger.walletId, w.poolId))).toHaveLength(0);
+    // Drives stay readable while lapsed (scenario step 10).
+    expect(await canUserViewPage(w.ids.dana, w.pageId)).toBe(true);
+
+    // Reactivated (the webhook mirror reports active): no other step, everything is back.
+    await setSubscription(w.orgId, 'active');
+    const again = await gateComputeCharge(charge, { estCostCents: 50 });
+    expect(again).toMatchObject({ allowed: true, walletId: w.poolId });
+    if (again.allowed && again.holdId) await releaseHold(again.holdId);
+    expect(await hasSpendableComputeBalance(charge)).toBe(true);
+    expect(await admitDriveComputeCreator({ driveId: w.productId, userId: w.ids.dana })).toEqual({ allowed: true });
+    expect(await admitDriveOrgActive({ driveId: w.productId })).toEqual({ allowed: true });
+    expect(await resolveComputeChargeTier(charge)).toBe('business');
+  });
+
+  it('SEAT-9 (partial) review #2761 Codex: a lapsed org that never got a pool (never paid) is refused as LAPSED, not as a missing wallet — so env/app creation is refused too', async () => {
+    if (!world) return;
+    const w = world;
+    // Never paid: no pool wallet at all (children first), and no subscription row.
+    await db.delete(wallets).where(eq(wallets.parentWalletId, w.poolId));
+    await db.delete(wallets).where(eq(wallets.id, w.poolId));
+    await db.delete(orgSubscriptions).where(eq(orgSubscriptions.orgId, w.orgId));
+    const charge = { kind: 'org' as const, orgId: w.orgId, userId: w.ids.dana };
+    expect(await gateComputeCharge(charge, { estCostCents: 50 })).toEqual({ allowed: false, reason: 'org_lapsed', orgRefusal: 'org_lapsed' });
+    expect(await admitDriveComputeCreator({ driveId: w.productId, userId: w.ids.dana })).toEqual({ allowed: false, code: 'org_lapsed', message: ORG_LAPSED_MESSAGE });
+  });
+
+  it('SEAT-9 (partial) SEAT-6 (partial) SEAT-8 (partial) the banner data: Owner and Admins see why and can reactivate, a member sees only read-only; a new org that has not paid yet (D-OW-30: no trial) is lapsed from creation', async () => {
+    if (!world) return;
+    const w = world;
+    // No subscription row yet (not paid, or Stripe was unreachable at creation): lapsed, with no trial clock.
+    await db.delete(orgSubscriptions).where(eq(orgSubscriptions.orgId, w.orgId));
+    expect(await getOrgStatus(w.orgId)).toEqual({ status: 'lapsed', reason: 'no_subscription' });
+    expect(await getOrgBillingNotice(w.orgId, 'OWNER')).toEqual({ kind: 'reactivate', reason: 'no_subscription', canManageBilling: true });
+    expect(await getOrgBillingNotice(w.orgId, 'MEMBER')).toEqual({ kind: 'read_only', canManageBilling: false });
+    await setSubscription(w.orgId, 'incomplete');
+    expect(await getOrgBillingNotice(w.orgId, 'ADMIN')).toEqual({ kind: 'reactivate', reason: 'incomplete', canManageBilling: true });
 
     await setSubscription(w.orgId, 'unpaid');
     expect(await getOrgBillingNotice(w.orgId, 'OWNER')).toEqual({ kind: 'reactivate', reason: 'unpaid', canManageBilling: true });

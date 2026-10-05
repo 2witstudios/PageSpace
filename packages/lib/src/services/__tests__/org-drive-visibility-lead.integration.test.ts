@@ -20,7 +20,8 @@ import { users } from '@pagespace/db/schema/auth';
 import { drives, type OrgDriveVisibility } from '@pagespace/db/schema/core';
 import { driveMembers } from '@pagespace/db/schema/members';
 import { activityLogs } from '@pagespace/db/schema/monitoring';
-import { organizations, orgMembers } from '@pagespace/db/schema/organizations';
+import { organizations, orgMembers, orgSubscriptions } from '@pagespace/db/schema/organizations';
+import { factories } from '@pagespace/db/test/factories';
 import { changeDriveVisibility, changeOrgDriveLead } from '../org-drive-service';
 import { orgDriveServiceDeps, publishLeadChangeEvents } from '../org-drive-service-deps';
 import { syncDriveOrgMembership, type OrgMembershipSyncPorts } from '../org-membership-sync';
@@ -51,6 +52,7 @@ async function cleanup() {
   if (ours.length > 0) await db.delete(activityLogs).where(inArray(activityLogs.resourceId, ours.map((d) => d.id)));
   await db.delete(drives).where(or(eq(drives.orgId, northwind), inArray(drives.ownerId, userIds)));
   await db.delete(orgMembers).where(eq(orgMembers.orgId, northwind));
+  await db.delete(orgSubscriptions).where(eq(orgSubscriptions.orgId, northwind));
   await db.delete(organizations).where(eq(organizations.id, northwind));
   await db.delete(users).where(inArray(users.id, userIds));
 }
@@ -70,6 +72,8 @@ beforeEach(async () => {
   await cleanup();
   await db.insert(users).values(userIds.map((id, i) => ({ id, email: `u${i}-${run}@northwind.test`, name: `User ${i}`, updatedAt: new Date() })));
   await db.insert(organizations).values({ id: northwind, name: 'Northwind Labs', slug: `northwind-${run}`, ownerId: jono });
+  // Paid: there is no org trial, and an unpaid org is lapsed from creation (D-OW-30).
+  await factories.createOrgSubscription(northwind);
   await db.insert(orgMembers).values([
     { orgId: northwind, userId: jono, role: 'OWNER' },
     { orgId: northwind, userId: priya, role: 'ADMIN' },

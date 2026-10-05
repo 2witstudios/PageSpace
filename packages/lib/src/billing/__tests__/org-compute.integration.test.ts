@@ -28,7 +28,7 @@ import { driveEnvs } from '@pagespace/db/schema/drive-envs';
 import { publishedApps, publishedAppMachineEvents } from '@pagespace/db/schema/published-apps';
 import { billingEpochs, creditHolds, creditLedger } from '@pagespace/db/schema/credits';
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
-import { organizations, orgMembers } from '@pagespace/db/schema/organizations';
+import { organizations, orgMembers, orgSubscriptions } from '@pagespace/db/schema/organizations';
 import { wallets } from '@pagespace/db/schema/wallets';
 import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
@@ -86,6 +86,8 @@ async function build(input: { poolCents: number | null; poolStatus?: 'active' | 
   const member = await factories.createUser({ name: 'Marcus Oyelaran', subscriptionTier: 'free' });
   const solo = await factories.createUser({ name: 'Priya (personal)', subscriptionTier: 'pro' });
   const [org] = await db.insert(organizations).values({ name: 'Northwind Labs', slug: `northwind-${createId()}`, ownerId: lead.id }).returning();
+  // Paid: there is no org trial, and an unpaid org is lapsed from creation (D-OW-30).
+  await factories.createOrgSubscription(org.id);
   await db.insert(orgMembers).values([
     { orgId: org.id, userId: lead.id, role: 'OWNER' },
     { orgId: org.id, userId: member.id, role: 'MEMBER' },
@@ -132,6 +134,7 @@ async function teardown(w: World): Promise<void> {
   await db.delete(wallets).where(inArray(wallets.userId, w.userIds));
   await db.delete(drives).where(inArray(drives.id, [w.orgDriveId, w.soloDriveId]));
   await db.delete(orgMembers).where(eq(orgMembers.orgId, w.orgId));
+  await db.delete(orgSubscriptions).where(eq(orgSubscriptions.orgId, w.orgId));
   await db.delete(organizations).where(eq(organizations.id, w.orgId));
   await db.delete(users).where(inArray(users.id, w.userIds));
 }

@@ -22,7 +22,7 @@ import { drives } from '@pagespace/db/schema/core';
 import { driveMembers } from '@pagespace/db/schema/members';
 import { creditHolds, creditLedger, type SpendKind } from '@pagespace/db/schema/credits';
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
-import { organizations, orgMembers } from '@pagespace/db/schema/organizations';
+import { organizations, orgMembers, orgSubscriptions } from '@pagespace/db/schema/organizations';
 import { driveSpendOverrides, personalRootWalletOf, walletConsumerCaps, walletDebtNotices, wallets } from '@pagespace/db/schema/wallets';
 import { notifications } from '@pagespace/db/schema/notifications';
 import { factories } from '@pagespace/db/test/factories';
@@ -79,6 +79,8 @@ async function build(input: { productAllocationCents: number; poolCents: number;
   const marcus = await factories.createUser({ name: 'Marcus Oyelaran', subscriptionTier: 'free' });
   const chris = await factories.createUser({ name: 'Chris Rowe', subscriptionTier: 'free' });
   const [org] = await db.insert(organizations).values({ name: 'Northwind Labs', slug: `northwind-${createId()}`, ownerId: jono.id, stripeCustomerId: `cus_${createId()}` }).returning();
+  // Northwind has paid: there is no org trial (D-OW-30), and an unpaid org's legs read as paused.
+  await factories.createOrgSubscription(org.id);
   await db.insert(orgMembers).values([
     { orgId: org.id, userId: jono.id, role: 'OWNER' },
     { orgId: org.id, userId: marcus.id, role: 'MEMBER' },
@@ -138,6 +140,7 @@ async function teardown(w: World): Promise<void> {
   await db.delete(wallets).where(eq(wallets.id, w.poolId));
   await db.delete(wallets).where(inArray(wallets.userId, w.userIds));
   await db.delete(drives).where(eq(drives.orgId, w.orgId));
+  await db.delete(orgSubscriptions).where(eq(orgSubscriptions.orgId, w.orgId));
   await db.delete(organizations).where(eq(organizations.id, w.orgId));
   await db.delete(users).where(inArray(users.id, w.userIds));
 }
@@ -1575,6 +1578,8 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
     const [acme] = await db.insert(organizations).values({ name: 'Acme', slug: `acme-${createId()}`, ownerId: w.jonoId, stripeCustomerId: `cus_${createId()}` }).returning();
     const drivesMade: string[] = [];
     try {
+      // Acme has paid (the refill below is its paid invoice): no org trial, D-OW-30.
+      await factories.createOrgSubscription(acme.id);
       await db.insert(orgMembers).values([
         { orgId: acme.id, userId: w.jonoId, role: 'OWNER' },
         { orgId: acme.id, userId: w.marcusId, role: 'MEMBER' },
@@ -1631,6 +1636,7 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
       await db.delete(wallets).where(and(eq(wallets.subjectType, 'drive'), inArray(wallets.subjectId, drivesMade)));
       await db.delete(wallets).where(eq(wallets.orgId, acme.id));
       await db.delete(drives).where(inArray(drives.id, drivesMade));
+      await db.delete(orgSubscriptions).where(eq(orgSubscriptions.orgId, acme.id));
       await db.delete(organizations).where(eq(organizations.id, acme.id));
     }
   });

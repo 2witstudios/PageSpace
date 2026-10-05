@@ -24,6 +24,8 @@ const {
 }));
 
 vi.mock('@pagespace/db/db', () => ({ db: {} }));
+// SEAT-9: the org's billing status is read for an org drive's tier; paid here (review #2761).
+vi.mock('@pagespace/lib/organizations/status', () => ({ isOrgLapsedForDrive: vi.fn(async () => false) }));
 vi.mock('@/lib/agent-workspaces/agent-workspaces-runtime', () => ({
   findSessionForConversation: mockFindSessionForConversation,
   provisionSessionSandbox: mockProvisionSessionSandbox,
