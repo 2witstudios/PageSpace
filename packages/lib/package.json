@@ -2519,6 +2519,11 @@
       "import": "./dist/permissions/org-drive-directory.js",
       "require": "./dist/permissions/org-drive-directory.js"
     },
+    "./permissions/org-read-models": {
+      "types": "./dist/permissions/org-read-models.d.ts",
+      "import": "./dist/permissions/org-read-models.js",
+      "require": "./dist/permissions/org-read-models.js"
+    },
     "./permissions/member-drives": {
       "types": "./dist/permissions/member-drives.d.ts",
       "import": "./dist/permissions/member-drives.js",
