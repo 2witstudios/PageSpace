@@ -34,7 +34,10 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   every member of the organization in one of its Open drives can always view (or, under an edit minimum,
   edit) its non-private pages, even if an older role or a page-specific setting says less. People invited
   with a specific role, guests and other outsiders keep exactly the access they were given, and private
-  pages stay private. A policy change that turns off published apps, environments, agents from
+  pages stay private. Pulse, the activity summary and opened pages follow exactly the same organization
+  access as everywhere else: a member who has lost access to a Restricted or Private drive no longer sees
+  its pages there, and an Owner or Admin opening a Private drive this way is recorded in the audit log.
+  A policy change that turns off published apps, environments, agents from
   other drives, autonomous agents or some models lists what it affected in the organization's audit log,
   and the log now also shows compute handed to a drive's lead, resumed apps, and a former member's
   turned-away attempt to rejoin (without their email address).

@@ -308,7 +308,7 @@ describe('the Open-drive role floor is read by every implicit-membership resolve
   });
 
   for (const floor of ['view', 'edit'] as const) {
-    it(`POL-6 (partial) the consistency matrix under a ${floor} floor: every resolver path answers the floored table for every person, drive and page`, async () => {
+    it(`POL-6 the consistency matrix under a ${floor} floor: every resolver path answers the floored table for every person, drive and page`, async () => {
       const h = await harbor();
       await setFloor(h.org.id, floor);
 
