@@ -555,7 +555,7 @@ jobs:
             fi
             sleep 2
           done
-          echo "stack did not come up"; tail -50 /tmp/web.log /tmp/realtime.log /tmp/proxy.log /tmp/imago.log /tmp/imago-prod.log; exit 1
+          echo "stack did not come up"; tail -n 50 /tmp/web.log /tmp/realtime.log /tmp/proxy.log /tmp/imago.log /tmp/imago-prod.log; exit 1
 
       # Playwright starts the OpenRouter mock itself on :4998 via its `webServer` config.
       - name: Run agent-session e2e specs
@@ -578,7 +578,7 @@ jobs:
       # the CSP path broke rather than the feature.
       - name: Server logs (on failure)
         if: failure()
-        run: tail -200 /tmp/web.log /tmp/realtime.log /tmp/proxy.log /tmp/imago.log /tmp/imago-prod.log
+        run: tail -n 200 /tmp/web.log /tmp/realtime.log /tmp/proxy.log /tmp/imago.log /tmp/imago-prod.log
 
   lint:
     name: Lint & TypeScript Check

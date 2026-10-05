@@ -171,10 +171,11 @@ test('Stop mid-stream keeps the partial reply, after a reload too', async ({ bro
   await expect(reply).toContainText('chunk-0');
   await expect(chat(page).getByRole('alert')).toHaveCount(0);
 
-  // Nothing more ever arrives: a release now has no stream to flush into the reply.
-  await releaseStreams(request);
+  // Nothing is left at the model to finish the reply: a release finds no held stream (a
+  // generation web kept, or one a retry opened after Stop, would be released here and its
+  // chunk-1… stored into the reply, which the reload below would show).
+  expect(await releaseStreams(request), 'held streams still open after Stop').toBe(0);
   await expect(sendButton(page)).toBeVisible();
-  expect(await reply.textContent()).not.toContain('chunk-1');
 
   // The partial reply was stored as it stood.
   await page.reload();
@@ -211,6 +212,18 @@ test('a typed draft survives chat → files → chat, with the caret back in the
   // Typing goes straight on from where it was: the caret is in the field, not merely on it.
   await page.keyboard.type(', continued');
   await expect(composer(page)).toHaveValue('Half a thought about the roadmap, continued');
+
+  // Back to the chat under the ⌘K palette: the palette keeps the caret, nothing moves it behind the modal.
+  await railLink(page, 'Files').click();
+  await page.waitForURL(pathnameIs(files));
+  await page.keyboard.press('ControlOrMeta+k');
+  const search = page.getByRole('dialog', { name: 'Search' }).getByRole('combobox');
+  await expect(search).toBeFocused();
+  await page.goBack();
+  await page.waitForURL(pathnameIs(home));
+  await expect(page.locator('[data-section]')).toHaveAttribute('data-section', 'chat');
+  await expect(search).toBeFocused();
+  await expect(composer(page)).not.toBeFocused();
   expect(await probeOf(page), 'the page reloaded').toBe('same document');
 });
 
