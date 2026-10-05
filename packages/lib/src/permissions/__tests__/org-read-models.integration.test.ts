@@ -32,7 +32,7 @@ const ok = await db.select({ id: users.id }).from(users).limit(1).then(
   },
 );
 const ids = { users: [] as string[], orgId: '', drives: [] as string[], files: [] as string[], sessions: [] as string[] };
-const u = { jono: '', priya: '', marcus: '', chris: '', pia: '', lou: '' };
+const u = { jono: '', priya: '', marcus: '', chris: '', pia: '', lou: '', gail: '' };
 const d = { product: '', finance: '', trashed: '', archive: '' };
 const archivedAt = new Date('2026-09-20T12:00:00Z');
 const marcusSeen = new Date('2026-10-04T09:30:00Z');
@@ -40,15 +40,16 @@ const marcusSeen = new Date('2026-10-04T09:30:00Z');
 describe.skipIf(!ok)('org read models (real Postgres)', () => {
   beforeAll(async () => {
     const make = (name: string, email: string) => factories.createUser({ name, email });
-    const [jono, priya, marcus, chris, pia, lou] = await Promise.all([
+    const [jono, priya, marcus, chris, pia, lou, gail] = await Promise.all([
       make('Jono Woodall', `jono-${createId()}@northwind.test`),
       make('Priya Nair', `priya-${createId()}@northwind.test`),
       make('Marcus Oyelaran', `marcus-${createId()}@northwind.test`),
       make('Chris Rowe', `chris-${createId()}@partner.test`),
       make('Pia Pending', `pia-${createId()}@partner.test`),
       make('Lou Left', `lou-${createId()}@northwind.test`),
+      make('Gail Link', `gail-${createId()}@partner.test`),
     ]);
-    Object.assign(u, { jono: jono.id, priya: priya.id, marcus: marcus.id, chris: chris.id, pia: pia.id, lou: lou.id });
+    Object.assign(u, { jono: jono.id, priya: priya.id, marcus: marcus.id, chris: chris.id, pia: pia.id, lou: lou.id, gail: gail.id });
     ids.users = Object.values(u);
     const [org] = await db.insert(organizations).values({ name: 'Northwind Labs', slug: `nw-${createId()}`, ownerId: jono.id }).returning();
     ids.orgId = org.id;
@@ -67,6 +68,9 @@ describe.skipIf(!ok)('org read models (real Postgres)', () => {
     await factories.createDriveMember(product.id, chris.id, { source: 'invite' });
     await factories.createDriveMember(product.id, lou.id, { source: 'org' });
     await factories.createDriveMember(finance.id, pia.id, { source: 'invite', acceptedAt: null });
+    // Marcus is invited to Finance but has not accepted; Gail redeemed a page share link on Product (a GUEST row).
+    await factories.createDriveMember(finance.id, marcus.id, { source: 'invite', acceptedAt: null });
+    await factories.createDriveMember(product.id, gail.id, { source: 'invite', role: 'GUEST' });
     await factories.createDriveMember(trashed.id, chris.id, { source: 'invite' });
     ids.files = [createId(), createId(), createId()];
     await db.insert(files).values([
@@ -116,6 +120,17 @@ describe.skipIf(!ok)('org read models (real Postgres)', () => {
     expect(activity[u.priya]).toEqual({ userId: u.priya, driveCount: 2, lastActiveAt: null });
     expect(activity[u.marcus]).toEqual({ userId: u.marcus, driveCount: 1, lastActiveAt: marcusSeen.toISOString() });
     expect(activity[u.lou]).toBeUndefined();
+  });
+
+  it('UI-7 (partial): a pending invitee is not counted as a member, and a page-link guest is neither a member nor a listed guest', async () => {
+    const usage = Object.fromEntries((await listOrgDriveUsage(ids.orgId)).map((x) => [x.driveId, x]));
+    // Finance holds only pending invitations (Pia, Marcus): nobody is in it yet.
+    expect(usage[d.finance]).toMatchObject({ memberCount: 0, guestCount: 0 });
+    // Product: Marcus and Chris; Gail's page-link row is not a person in the drive.
+    expect(usage[d.product]).toMatchObject({ memberCount: 2, guestCount: 1 });
+    const activity = (await listOrgMemberActivity(ids.orgId)).find((a) => a.userId === u.marcus);
+    expect(activity?.driveCount).toBe(1);
+    expect((await listOrgGuests(ids.orgId)).map((g) => g.userId)).not.toContain(u.gail);
   });
 
   it('UI-7 (partial): trashed org drives, Private ones included, whoever the viewer is (the admin Trashed tab)', async () => {

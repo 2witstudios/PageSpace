@@ -8,7 +8,7 @@
  * row is listed as pending and never counted as a member.
  */
 import { db } from '@pagespace/db/db';
-import { and, eq, inArray, isNull, max, sql } from '@pagespace/db/operators';
+import { and, eq, inArray, isNotNull, isNull, max, sql } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { drives } from '@pagespace/db/schema/core';
 import { driveMembers } from '@pagespace/db/schema/members';
@@ -18,6 +18,7 @@ import { files } from '@pagespace/db/schema/storage';
 import { decryptUserRows } from '../auth/user-repository';
 import { orgRoleAtLeast } from '../organizations/org-roles';
 import { isStaleOrgRow } from './drive-member-labels';
+import { DRIVE_MEMBERSHIP_ROLES } from './drive-member-role';
 
 // ---------------------------------------------------------------------------
 // Pure aggregation
@@ -157,7 +158,9 @@ async function memberRowsIn(driveIds: string[]): Promise<DriveMemberRow[]> {
       ...(await db
         .select({ driveId: driveMembers.driveId, userId: driveMembers.userId, acceptedAt: driveMembers.acceptedAt, source: driveMembers.source })
         .from(driveMembers)
-        .where(inArray(driveMembers.driveId, chunk))
+        // People in a drive: accepted memberships only. A pending invitation is not in the drive yet, and a
+        // GUEST row (a redeemed page share link, D-OW-24) holds one page, not the drive.
+        .where(and(inArray(driveMembers.driveId, chunk), isNotNull(driveMembers.acceptedAt), inArray(driveMembers.role, [...DRIVE_MEMBERSHIP_ROLES])))
         .limit(MAX_ROWS)),
     );
   }
@@ -186,7 +189,10 @@ export async function listOrgGuests(orgId: string): Promise<OrgGuest[]> {
       .from(driveMembers)
       .innerJoin(users, eq(users.id, driveMembers.userId))
       .innerJoin(drives, eq(drives.id, driveMembers.driveId))
-      .where(inArray(driveMembers.driveId, ids.slice(i, i + 500)))
+      // Pending invitations are part of the Guests list on purpose (each shows as pending, DRV-8); GUEST rows
+      // (page share links, D-OW-24) are not: they hold one page, not the drive, and the drive's Members page
+      // lists them apart.
+      .where(and(inArray(driveMembers.driveId, ids.slice(i, i + 500)), inArray(driveMembers.role, [...DRIVE_MEMBERSHIP_ROLES])))
       .limit(MAX_ROWS);
     const outsiders = chunk.filter((r) => !memberIds.has(r.userId));
     rows.push(...(await decryptUserRows(outsiders)));
