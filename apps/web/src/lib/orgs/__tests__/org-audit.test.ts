@@ -36,3 +36,42 @@ describe('auditQueryString', () => {
     expect(auditQueryString({ category: 'all', driveId: 'any', days: 7, before: 123 }, now)).toBe('from=2026-09-28T12%3A00%3A00.000Z&before=123');
   });
 });
+
+import { auditDetailLine } from '../org-audit';
+
+describe('auditDetailLine', () => {
+  it('AUD-1 (partial) AUD-3 (partial): a policy change names each field and its old and new value', () => {
+    expect(auditDetailLine('org.policy.changed', { changes: [
+      { key: 'publicShareLinks', from: true, to: false },
+      { key: 'guests', from: 'on', to: 'approve' },
+      { key: 'seatAllowanceCents', from: 100, to: 150 },
+      { key: 'providerAllowlist', from: null, to: ['anthropic', 'openai'] },
+    ] })).toBe('Public share links: on → off · Guests: On → Admins approve · Seat allowance: 100 → 150 credits a month · AI providers: Unrestricted → 2 allowed');
+  });
+
+  it('names what a policy change suspended, restored or blocked', () => {
+    expect(auditDetailLine('org.policy.suspended', { counts: { publicShareLinks: 4 }, total: 4 })).toBe('4 existing share links suspended');
+    expect(auditDetailLine('org.policy.restored', { counts: { guests: 1 }, total: 1 })).toBe('1 guest restored');
+    expect(auditDetailLine('org.policy.blocked', { counts: { publishedApps: 2 }, total: 2 })).toBe('2 published apps now blocked');
+  });
+
+  it('roles and visibility read from → to', () => {
+    expect(auditDetailLine('org.member.role_changed', { from: 'MEMBER', to: 'ADMIN' })).toBe('Member → Admin');
+    expect(auditDetailLine('org.drive.visibility_changed', { from: 'OPEN', to: 'RESTRICTED' })).toBe('Open → Restricted');
+    expect(auditDetailLine('org.drive.moved_in', { orgVisibility: 'PRIVATE' })).toBe('as Private');
+  });
+
+  it('seats and billing: counts in credits, payments in dollars', () => {
+    expect(auditDetailLine('org.seat.auto_add_changed', { autoAdd: true })).toBe('Automatic seats on');
+    expect(auditDetailLine('org.seat.refused', { purchased: 15, held: 15 })).toBe('15 of 15 seats in use');
+    expect(auditDetailLine('org.billing.pool_refilled', { allowanceCents: 9000, paidCents: 15000 })).toBe('$150 paid · 9,000 credits added to the pool');
+    expect(auditDetailLine('org.domain.verified', { domain: 'northwind.com', method: 'dns' })).toBe('northwind.com · by DNS');
+  });
+
+  it('never prints identifiers or addresses, and says nothing it does not know', () => {
+    expect(auditDetailLine('org.ownership.transferred', { fromUserId: 'u_1', toUserId: 'u_2' })).toBe('');
+    expect(auditDetailLine('org.invite.created', { role: 'ADMIN', email: 'sam@x.io' })).toBe('as Admin');
+    expect(auditDetailLine('org.future.event', { anything: 1 })).toBe('');
+    expect(auditDetailLine('org.policy.changed', { changes: 'nope' })).toBe('');
+  });
+});

@@ -1,3 +1,5 @@
+import type { OrgPolicyKey } from '@pagespace/lib/organizations/policies-core';
+import { formatCreditCount } from '@pagespace/lib/billing/money-model';
 /** The org Policies page (UI-7, canvas Policies): pure pieces. */
 
 /**
@@ -33,7 +35,8 @@ const NOUNS: Record<string, [string, string]> = {
   models: ['agent using a model', 'agents using models'],
 };
 
-const phrase = (counts: Record<string, number | undefined>, verb: string): string[] =>
+/** "4 existing share links suspended", one phrase per kind with a count. */
+export const countPhrases = (counts: Record<string, number | undefined>, verb: string): string[] =>
   Object.entries(counts).flatMap(([kind, n]) => {
     if (!n) return [];
     const [one, many] = NOUNS[kind] ?? [kind, kind];
@@ -46,10 +49,46 @@ export function policyChangeSummary(result: {
   restored: Record<string, number | undefined>;
   blocked: Record<string, number | undefined>;
 }): string {
-  const changed = [...phrase(result.suspended, 'suspended'), ...phrase(result.restored, 'restored')];
-  const blocked = phrase(result.blocked, 'now blocked');
+  const changed = [...countPhrases(result.suspended, 'suspended'), ...countPhrases(result.restored, 'restored')];
+  const blocked = countPhrases(result.blocked, 'now blocked');
   const parts = ['Saved.'];
   if (changed.length > 0) parts.push(`${changed.join(', ')}.`);
   if (blocked.length > 0) parts.push(`${blocked.join(', ')}.`);
   return parts.join(' ');
+}
+
+/** Each policy's name as the Policies page shows it. Exhaustive: a new policy without a label fails tsc. */
+export const POLICY_LABELS: Record<OrgPolicyKey, string> = {
+  guests: 'Guests',
+  publicShareLinks: 'Public share links',
+  publishWeb: 'Publish pages to the web',
+  customDomains: 'Custom domains',
+  whoCanInvite: 'Who can invite',
+  whoCanCreateDrives: 'Who can create org drives',
+  openDriveRoleFloor: 'Lowest default role in Open drives',
+  seatAllowanceCents: 'Seat allowance',
+  walletFallback: 'When a drive wallet runs out',
+  modelAllowlist: 'Models',
+  providerAllowlist: 'AI providers',
+  agentsAutonomous: 'Agents can run on their own',
+  crossDriveAgents: 'Agents from other drives',
+  cloudSandbox: 'Cloud sandbox',
+  persistentEnvironments: 'Persistent environments',
+  publishedApps: 'Published apps',
+  integrationsAllowlist: 'Service connections',
+};
+
+const VALUE_WORDS: Record<string, string> = {
+  on: 'On', approve: 'Admins approve', off: 'Off', admins: 'Owner & admins', members: 'Members', view: 'View', edit: 'Edit',
+  refuse: 'Refuse', seat_allowance: 'Use seat allowance', own_credits: 'Use own credits',
+};
+
+/** One policy value in words (allowlists as a count, the allowance in credits). Unknown shapes read as ''. */
+export function policyValueWords(key: string, value: unknown): string {
+  if (typeof value === 'boolean') return value ? 'on' : 'off';
+  if (value === null && key.endsWith('Allowlist')) return 'Unrestricted';
+  if (Array.isArray(value)) return value.length === 0 ? 'None allowed' : `${value.length} allowed`;
+  if (typeof value === 'number' && key === 'seatAllowanceCents') return formatCreditCount(value);
+  if (typeof value === 'string') return VALUE_WORDS[value] ?? '';
+  return '';
 }

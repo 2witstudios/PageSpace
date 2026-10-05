@@ -13,7 +13,7 @@ import { OrgBadge } from '@/components/orgs/OrgBadge';
 import { OrgSettingsShell, type OrgSettingsContext } from '@/components/orgs/OrgSettingsShell';
 import { ApiRequestError, fetchJSON, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { orgKeys, type OrgDriveDirectoryEntry } from '@/lib/orgs/org-api';
-import { AUDIT_CATEGORY_LABELS, auditQueryString, auditSentence, type AuditFilters } from '@/lib/orgs/org-audit';
+import { AUDIT_CATEGORY_LABELS, auditDetailLine, auditQueryString, auditSentence, type AuditFilters } from '@/lib/orgs/org-audit';
 import { orgErrorMessage } from '@/lib/orgs/org-error-copy';
 
 interface AuditEntry {
@@ -140,6 +140,7 @@ function AuditBody({ orgId, role }: OrgSettingsContext) {
         ) : (
           entries.map((e, i) => {
             const drive = e.driveId ? driveName.get(e.driveId) : undefined;
+            const detail = auditDetailLine(e.eventType, e.details ?? {});
             return (
               <div key={`${e.timestamp}-${e.eventType}-${i}`} className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t px-4 py-3 first:border-t-0 md:flex-nowrap">
                 <Avatar className="h-6 w-6"><AvatarFallback className="text-[10px]">{initials(e.actorName)}</AvatarFallback></Avatar>
@@ -148,7 +149,7 @@ function AuditBody({ orgId, role }: OrgSettingsContext) {
                     <span className="font-medium">{e.actorName ?? 'PageSpace'}</span> {auditSentence(e.eventType)}
                     {drive ? <> · <b>{drive}</b></> : null}
                   </span>
-                  <span className="text-[13px] text-muted-foreground">{AUDIT_CATEGORY_LABELS[e.category] ?? e.category}</span>
+                  {detail ? <span className="text-[13px] text-muted-foreground">{detail}</span> : null}
                 </div>
                 <OrgBadge tone="outline">{AUDIT_CATEGORY_LABELS[e.category] ?? e.category}</OrgBadge>
                 <span className="w-24 text-right text-xs tabular-nums text-muted-foreground">{formatDistanceToNowStrict(Date.parse(e.timestamp))} ago</span>

@@ -26,7 +26,7 @@ vi.mock('@/hooks/useOrgs', () => ({
     return {
       data: {
         entries: [
-          { timestamp: new Date(Date.now() - 2 * 3_600_000).toISOString(), category: 'visibility', eventType: 'org.drive.visibility_changed', actorId: 'u_priya', actorName: 'Priya Nair', resourceType: 'drive', resourceId: 'd_cr', driveId: 'd_cr', details: {} },
+          { timestamp: new Date(Date.now() - 2 * 3_600_000).toISOString(), category: 'visibility', eventType: 'org.drive.visibility_changed', actorId: 'u_priya', actorName: 'Priya Nair', resourceType: 'drive', resourceId: 'd_cr', driveId: 'd_cr', details: { from: 'OPEN', to: 'RESTRICTED' } },
           { timestamp: new Date(Date.now() - 86_400_000).toISOString(), category: 'private_drive_access', eventType: 'authz.access.granted', actorId: 'u_dana', actorName: 'Dana Kim', resourceType: 'drive', resourceId: 'd_fin', driveId: null, details: {} },
         ],
         nextCursor: 42,
@@ -55,6 +55,8 @@ describe('org Audit log', () => {
     expect(screen.getByText(/opened a Private drive as an org admin/)).toBeTruthy();
     expect(screen.getAllByText('Admin access').length).toBeGreaterThan(0);
     expect(screen.getByText('2 hours ago')).toBeTruthy();
+    // AUD-1: what changed, from what to what (review P2-8).
+    expect(screen.getByText('Open → Restricted')).toBeTruthy();
   });
 
   it('AUD-3 (partial): starts on the last 30 days and refetches with a category filter', async () => {
