@@ -105,7 +105,7 @@ function makeDeps(over: Partial<AppLifecycleMeteringDeps> = {}): {
   const stopMachine = vi.fn(async () => {});
   // Acquires by default. A test that wants the meter to be mid-tick overrides it
   // with `{ locked: false }`.
-  const serializeSettle = vi.fn(async (fn: () => Promise<unknown>) => ({ locked: true as const, result: await fn() }));
+  const serializeSettle = vi.fn(async (fn: (signal: AbortSignal) => Promise<unknown>) => ({ locked: true as const, result: await fn(new AbortController().signal) }));
   const deps: AppLifecycleMeteringDeps = {
     isEnabled: () => true,
     billing: {
@@ -629,6 +629,27 @@ describe('stopPublishedApp', () => {
     });
   });
 
+  it('given the meter lock was lost before the settle, should NOT charge, and should keep the window open for the next heartbeat', async () => {
+    // From the moment the lock is lost a heartbeat can price this same window from the same
+    // watermark; charging here too would bill it twice.
+    const { deps, trackUsage } = makeDeps();
+    const lost = new AbortController();
+    lost.abort(new Error('Connection terminated unexpectedly'));
+    const serializeSettle: AppLifecycleMeteringDeps['serializeSettle'] = async (fn) => ({ locked: true, result: await fn(lost.signal) });
+    seed(running());
+
+    const result = await stopPublishedApp('app-1', 'idle', { ...deps, serializeSettle });
+
+    expect(result).toMatchObject({ outcome: 'stopped', billedSeconds: 0 });
+    const written = mockDb.__state.updateSets[0];
+    assert({
+      given: 'a stop whose meter lock was lost before the settle',
+      should: 'charge nothing and move the status without clearing the billing watermark',
+      actual: { charges: trackUsage.mock.calls.length, status: written.status, clearedWatermark: 'awakeBilledThrough' in written },
+      expected: { charges: 0, status: 'stopped', clearedWatermark: false },
+    });
+  });
+
   // ── The persistence CONTRACT (issue: trackUsage must report its outcome) ────
   // The default binding runs through `AIMonitoring.trackUsage`, which never throws.
   // Before it reported an outcome, a settle whose `ai_usage_logs` write failed
@@ -811,7 +832,7 @@ describe('stopPublishedApp — the awake meter’s advisory lock', () => {
     });
     const serializeSettle: AppLifecycleMeteringDeps['serializeSettle'] = async (fn) => {
       order.push('lock');
-      const result = await fn();
+      const result = await fn(new AbortController().signal);
       order.push('unlock');
       return { locked: true, result };
     };

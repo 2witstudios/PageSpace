@@ -262,7 +262,7 @@ describe('meterAwakePublishedApps — the repair path', () => {
       actual: { repaired: run.repaired, seconds: run.totalAwakeSeconds },
       expected: { repaired: 1, seconds: 600 },
     });
-    expect(closeAtBoundary).toHaveBeenCalledWith(expect.objectContaining({ id: 'app-1' }), boundary);
+    expect(closeAtBoundary).toHaveBeenCalledWith(expect.objectContaining({ id: 'app-1' }), boundary, undefined);
     // The ordinary settle path must NOT also run for this row.
     expect(trackUsage).not.toHaveBeenCalled();
   });
@@ -323,7 +323,7 @@ describe('meterAwakePublishedApps — a running row with no window', () => {
     const run = await meter(deps);
 
     expect(run.parked).toBe(1);
-    expect(park).toHaveBeenCalledWith('app-1', 'insolvent');
+    expect(park).toHaveBeenCalledWith('app-1', 'insolvent', undefined);
     expect(stampWindowStart).not.toHaveBeenCalled();
   });
 
@@ -335,7 +335,7 @@ describe('meterAwakePublishedApps — a running row with no window', () => {
 
     await meter(deps);
 
-    expect(park).toHaveBeenCalledWith('app-1', 'member_cap');
+    expect(park).toHaveBeenCalledWith('app-1', 'member_cap', undefined);
   });
 
   it('given an unresolvable drive, should count it and open no window', async () => {
@@ -390,7 +390,7 @@ describe('meterAwakePublishedApps — attribution and isolation', () => {
     await meter(deps);
 
     expect(writeSettle).toHaveBeenCalled();
-    expect(park).toHaveBeenCalledWith('app-1', 'insolvent');
+    expect(park).toHaveBeenCalledWith('app-1', 'insolvent', undefined);
   });
 
   it("WAL-9 (partial) an org app's awake backlog from before org billing is forgiven on its first org-billed tick — nothing charged, the watermark moves to now, counted by name", async () => {
@@ -583,7 +583,7 @@ describe('meterAwakePublishedApps — the per-app daily awake cap', () => {
       actual: { cappedParked: run.cappedParked, parked: run.parked, order },
       expected: { cappedParked: 1, parked: 0, order: ['advance', 'park'] },
     });
-    expect(park).toHaveBeenCalledWith('app-1', 'daily_cap');
+    expect(park).toHaveBeenCalledWith('app-1', 'daily_cap', undefined);
   });
 
   it('given the settle leaves the app UNDER its budget, should keep it running', async () => {
@@ -729,7 +729,56 @@ describe('meterAwakePublishedApps — a park never follows a watermark advance t
 
     const run = await meter(deps);
 
-    expect(park).toHaveBeenCalledWith('app-1', 'insolvent');
+    expect(park).toHaveBeenCalledWith('app-1', 'insolvent', undefined);
     expect(run.parked).toBe(1);
+  });
+});
+
+describe('meterAwakePublishedApps — the meter lock is lost mid-tick', () => {
+  it('given the lock is lost while a row is being priced, should NOT charge it and should stop before the remaining rows', async () => {
+    // Another tick can hold the lock from the moment it is lost, pricing the same windows from
+    // the same watermarks — so no further charge may happen in this tick.
+    const lost = new AbortController();
+    const resolveCharge = vi.fn(async () => {
+      lost.abort(new Error('terminating connection due to administrator command'));
+      return { kind: 'user' as const, userId: 'payer-1' };
+    });
+    const { deps, trackUsage, writeSettle } = makeDeps({
+      listRunningApps: async () => [runningApp({ id: 'app-1' }), runningApp({ id: 'app-2' })],
+    });
+    deps.billing = { ...deps.billing, resolveCharge };
+
+    const run = await meterAwakePublishedApps(deps, lost.signal);
+    if (run.outcome !== 'metered') throw new Error('expected a metered run');
+
+    assert({
+      given: 'the lock lost while the first row was being priced',
+      should: 'charge nothing, advance no watermark, and never reach the second row',
+      actual: { charges: trackUsage.mock.calls.length, advances: writeSettle.mock.calls.length, priceLookups: resolveCharge.mock.calls.length, settled: run.settled },
+      expected: { charges: 0, advances: 0, priceLookups: 1, settled: 0 },
+    });
+  });
+
+  it('given a healthy lock, should charge every row (the guard is inert)', async () => {
+    const { deps, trackUsage } = makeDeps({
+      listRunningApps: async () => [runningApp({ id: 'app-1' }), runningApp({ id: 'app-2' })],
+    });
+
+    await meter(deps);
+    const withSignal = makeDeps({ listRunningApps: async () => [runningApp({ id: 'app-1' }), runningApp({ id: 'app-2' })] });
+    await meterAwakePublishedApps(withSignal.deps, new AbortController().signal);
+
+    expect(trackUsage).toHaveBeenCalledTimes(2);
+    expect(withSignal.trackUsage).toHaveBeenCalledTimes(2);
+  });
+
+  it('given the lock is lost, should hand the lost signal to the boundary close and the park so their own settles stop too', async () => {
+    const lost = new AbortController();
+    const boundary = ago(300_000);
+    const { deps, closeAtBoundary } = makeDeps({ findStopBoundary: vi.fn(async () => boundary) });
+
+    await meterAwakePublishedApps(deps, lost.signal);
+
+    expect(closeAtBoundary).toHaveBeenCalledWith(expect.objectContaining({ id: 'app-1' }), boundary, lost.signal);
   });
 });

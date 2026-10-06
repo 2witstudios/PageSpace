@@ -1,3 +1,4 @@
+import { EventEmitter } from 'node:events';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const { mockLoggerWarn, mockLogPerformance, mockGetAdvisoryLockPool } = vi.hoisted(() => ({
@@ -131,6 +132,32 @@ describe('startGenerationExclusive', () => {
 
     expect(mockLoggerWarn).not.toHaveBeenCalled();
     expect(mockLogPerformance).not.toHaveBeenCalled();
+  });
+
+  it('given the lock connection drops while run executes, should report degraded with reason lock_lost and NOT invoke run again', async () => {
+    const emitter = new EventEmitter();
+    const client = {
+      query: vi.fn().mockResolvedValueOnce({ rows: [{ acquired: true }] }),
+      release: vi.fn(),
+      on: (event: 'error', listener: (error: Error) => void) => emitter.on(event, listener),
+      removeListener: (event: 'error', listener: (error: Error) => void) => emitter.removeListener(event, listener),
+    } satisfies AdvisoryLockClient;
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const run = vi.fn(async () => {
+      emitter.emit('error', new Error('terminating connection due to administrator command'));
+      return 'lifecycle-handle';
+    });
+
+    const outcome = await startGenerationExclusive({ conversationId: 'conv-lost', run, pool: makePool(client), sleep: vi.fn(async () => {}) });
+
+    expect(outcome).toEqual({ outcome: 'degraded', result: 'lifecycle-handle' });
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(mockLogPerformance).toHaveBeenCalledWith('ai_send.advisory_lock_degraded', 1, 'count', {
+      conversationId: 'conv-lost',
+      attemptsMade: 0,
+      reason: 'lock_lost',
+    });
+    errorSpy.mockRestore();
   });
 
   it('should scope the advisory lock key to the conversation, distinguishing it from other lock consumers', async () => {

@@ -154,6 +154,14 @@ on:
     # Run at 6:00 UTC every day
     - cron: '0 6 * * *'
 
+# A newer push to the same PR makes the older run irrelevant, so cancel it.
+# Only pull_request runs share a group (keyed on the PR number). Every push,
+# schedule and manual run gets its own group (run_id), so a master run is never
+# cancelled or replaced by a later one.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   security-tests:
     name: Security Test Suite

@@ -367,8 +367,8 @@ export async function reconcileSandboxStorageSerialized(
   deps: ReconcileSandboxStorageDeps,
   pgPool: AdvisoryLockPool = getAdvisoryLockPool(),
 ): Promise<ReconcileSandboxStorageRunResult> {
-  const locked = await withAdvisoryLock(pgPool, RECONCILE_SANDBOX_STORAGE_LOCK_KEY, () =>
-    reconcileSandboxStorage(deps),
+  const locked = await withAdvisoryLock(pgPool, RECONCILE_SANDBOX_STORAGE_LOCK_KEY, (signal) =>
+    reconcileSandboxStorage(deps, signal),
   );
   if (locked.outcome === 'lock_busy') {
     return { outcome: 'lock_busy' };

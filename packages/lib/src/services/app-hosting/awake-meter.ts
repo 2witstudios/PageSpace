@@ -38,7 +38,7 @@
 
 import { and, eq, isNotNull, isNull, sql, type SQL } from '@pagespace/db/operators';
 import { db, getAdvisoryLockPool } from '@pagespace/db/db';
-import { withAdvisoryLock, type AdvisoryLockPool } from '@pagespace/db/advisory-lock';
+import { throwIfLockLost, withAdvisoryLock, type AdvisoryLockPool } from '@pagespace/db/advisory-lock';
 import { publishedApps, type PublishedApp } from '@pagespace/db/schema/published-apps';
 import { loggers } from '../../logging/logger-config';
 import { isAppHostingEnabled, resolveDailyAwakeSecondsCap } from './app-hosting-env';
@@ -57,6 +57,7 @@ import {
   closeAppWindowAtBoundary,
   defaultAppLifecycleMeteringDeps,
   passThroughSettleLock,
+  passThroughSettleLockUnder,
   stopPublishedApp,
   type AppLifecycleMeteringDeps,
   type SettleAndCloseResult,
@@ -114,7 +115,7 @@ export interface AwakeMeterDeps {
     holdId: string | null;
   }) => Promise<'stamped' | 'superseded'>;
   /** Settle the tail and close the window at a boundary the mirror already knows. */
-  closeAtBoundary: (row: PublishedApp, boundary: Date) => Promise<SettleAndCloseResult>;
+  closeAtBoundary: (row: PublishedApp, boundary: Date, signal?: AbortSignal) => Promise<SettleAndCloseResult>;
   /**
    * Stop + park an app the enforcement rules refuse to keep awake — the payer is
    * out of credits, or the app has spent its daily awake budget.
@@ -123,7 +124,7 @@ export interface AwakeMeterDeps {
    * inside the meter's own locked region; the default binding hands
    * `stopPublishedApp` a pass-through serializer for exactly that reason.
    */
-  park: (publishedAppId: string, reason: Extract<StopReason, 'insolvent' | 'daily_cap' | 'member_cap'>) => Promise<void>;
+  park: (publishedAppId: string, reason: Extract<StopReason, 'insolvent' | 'daily_cap' | 'member_cap'>, signal?: AbortSignal) => Promise<void>;
   /** The per-app daily awake budget in seconds, read at call time. 0 disables it. */
   dailyAwakeCapSeconds: () => number;
   now: () => Date;
@@ -240,15 +241,16 @@ export const defaultAwakeMeterDeps: AwakeMeterDeps = {
     return row ? 'stamped' : 'superseded';
   },
 
-  closeAtBoundary: (row, boundary) => closeAppWindowAtBoundary(row, boundary, defaultAppLifecycleMeteringDeps),
+  closeAtBoundary: (row, boundary, signal) => closeAppWindowAtBoundary(row, boundary, defaultAppLifecycleMeteringDeps, signal),
 
-  async park(publishedAppId, reason) {
+  async park(publishedAppId, reason, signal) {
     // `passThroughSettleLock`: this runs INSIDE the meter's locked region. A stop
     // that tried to take the lock again would get a fresh connection, see the lock
-    // held by us, and skip the park while reporting success.
+    // held by us, and skip the park while reporting success. The meter's lock-lost
+    // signal goes with it, so the park's own settle stops if the meter lost its lock.
     await stopPublishedApp(publishedAppId, reason, {
       ...defaultAppLifecycleMeteringDeps,
-      serializeSettle: passThroughSettleLock,
+      serializeSettle: signal ? passThroughSettleLockUnder(signal) : passThroughSettleLock,
     });
   },
 
@@ -345,6 +347,7 @@ export type MeterAwakeRun = { outcome: 'disabled' } | ({ outcome: 'metered' } & 
  */
 export async function meterAwakePublishedApps(
   deps: AwakeMeterDeps = defaultAwakeMeterDeps,
+  signal?: AbortSignal,
 ): Promise<MeterAwakeRun> {
   if (!deps.isEnabled()) return { outcome: 'disabled' };
 
@@ -366,9 +369,18 @@ export async function meterAwakePublishedApps(
   const now = deps.now();
   result.processed = rows.length;
 
-  for (const row of rows) {
+  for (const [index, row] of rows.entries()) {
+    // The meter lock is what stops two ticks pricing the same window from the same watermark.
+    // Once it is lost, another tick may already be running: stop here, and leave every
+    // remaining row's window open for the next tick to bill exactly once.
+    if (signal?.aborted) {
+      loggers.ai.warn('Published-app awake meter lost its advisory lock — stopping this tick; the remaining apps are billed next tick', {
+        remaining: rows.length - index,
+      });
+      break;
+    }
     try {
-      await meterOneApp(row, now, deps, result);
+      await meterOneApp(row, now, deps, result, signal);
     } catch (error) {
       result.failed += 1;
       loggers.ai.error(
@@ -386,6 +398,7 @@ async function meterOneApp(
   now: Date,
   deps: AwakeMeterDeps,
   result: MeterAwakeResult,
+  signal: AbortSignal | undefined,
 ): Promise<void> {
   // 1. NO WINDOW. The row says running and carries no watermark — a wake whose
   // stamp was lost, or a machine started outside the wake seam. Start the clock at
@@ -402,7 +415,7 @@ async function meterOneApp(
     const gate = await deps.billing.gate({ charge });
     if (!gate.allowed) {
       // [D-OW-28] The publisher's per-member cap refused, not the pool: parked and said so.
-      await deps.park(row.id, gate.orgRefusal === 'org_member_cap_reached' ? 'member_cap' : 'insolvent');
+      await deps.park(row.id, gate.orgRefusal === 'org_member_cap_reached' ? 'member_cap' : 'insolvent', signal);
       result.parked += 1;
       return;
     }
@@ -431,7 +444,7 @@ async function meterOneApp(
     ? await deps.findStopBoundary(row.machineId, row.awakeBilledThrough, now)
     : null;
   if (boundary) {
-    const closed = await deps.closeAtBoundary(row, boundary);
+    const closed = await deps.closeAtBoundary(row, boundary, signal);
     result.repaired += 1;
     if (closed.failed) result.failed += 1;
     else {
@@ -490,6 +503,9 @@ async function meterOneApp(
   }
   // Nothing after a forgiven backlog to bill yet: nothing is charged, and the wake's hold is
   // returned (a settle would have consumed it); the watermark still moves past the backlog below.
+  // Last check before the money moves. Never placed between the charge and the watermark
+  // advance below: skipping that write after a charge is exactly what re-bills a window.
+  throwIfLockLost(signal, 'the published-app heartbeat settle');
   const settle = plan.activeSeconds > 0
     ? await deps.billing.trackUsage({
         charge,
@@ -577,7 +593,7 @@ async function meterOneApp(
     // watermark and bill this span again. Counted under `settledButUnadvanced`
     // already; the next tick finds the app still awake and still over its budget.
     if (!mayParkAfter(advanced)) return;
-    await deps.park(row.id, 'daily_cap');
+    await deps.park(row.id, 'daily_cap', signal);
     result.cappedParked += 1;
     return;
   }
@@ -604,7 +620,7 @@ async function meterOneApp(
       // Same rule as the cap park above, and for the same reason: parking on a
       // watermark that never moved double-charges the span already billed.
       if (!mayParkAfter(advanced)) return;
-      await deps.park(row.id, gate.orgRefusal === 'org_member_cap_reached' ? 'member_cap' : 'insolvent');
+      await deps.park(row.id, gate.orgRefusal === 'org_member_cap_reached' ? 'member_cap' : 'insolvent', signal);
       result.parked += 1;
       return;
     }
@@ -702,7 +718,7 @@ export async function meterAwakePublishedAppsSerialized(
   deps: AwakeMeterDeps = defaultAwakeMeterDeps,
   pgPool: AdvisoryLockPool = getAdvisoryLockPool(),
 ): Promise<MeterAwakeRunResult> {
-  const locked = await withAdvisoryLock(pgPool, METER_AWAKE_LOCK_KEY, () => meterAwakePublishedApps(deps));
+  const locked = await withAdvisoryLock(pgPool, METER_AWAKE_LOCK_KEY, (signal) => meterAwakePublishedApps(deps, signal));
   if (locked.outcome === 'lock_busy') return { outcome: 'lock_busy' };
   if (locked.outcome === 'connection_error') throw locked.error;
   return locked.result;

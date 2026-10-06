@@ -1,3 +1,5 @@
+import { EventEmitter } from 'node:events';
+import { AdvisoryLockLostError } from '@pagespace/db/advisory-lock';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('../storage-repository', () => ({
@@ -391,6 +393,30 @@ describe('storage-limits', () => {
 
       expect(storageRepository.updateStorageInTx).toHaveBeenCalledWith(expect.anything(), 'user-1', 500);
       expect(result).toEqual({ outcome: 'reconciled', previousUsage: 1000, actualUsage: 1500, difference: 500 });
+    });
+
+    it('reconcileStorageUsage_whenTheLockIsLostBeforeTheCorrection_appliesNothingAndRejects', async () => {
+      // Once the reconcile lock's backend dies, the cron sweep can read and apply this same drift;
+      // applying it here too would double-count it. The admin can simply retry.
+      const lockClient = Object.assign(new EventEmitter(), {
+        query: vi.fn(async (text: string) => (text.includes('pg_try_advisory_lock') ? { rows: [{ acquired: true }] } : { rows: [] })),
+        release: vi.fn(),
+      });
+      const pool = { connect: vi.fn(async () => lockClient) };
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      vi.mocked(storageRepository.findUserForStorage).mockResolvedValue({
+        id: 'user-1', storageUsedBytes: 1000, subscriptionTier: 'free',
+      });
+      vi.mocked(storageRepository.findFilesByCreator).mockImplementation(async () => {
+        lockClient.emit('error', new Error('terminating connection due to administrator command'));
+        return [{ sizeBytes: 1500 }];
+      });
+      vi.mocked(storageRepository.runTransaction).mockImplementation(async (fn) => fn({} as never));
+
+      await expect(reconcileStorageUsage('user-1', pool)).rejects.toBeInstanceOf(AdvisoryLockLostError);
+      expect(storageRepository.runTransaction).not.toHaveBeenCalled();
+      expect(storageRepository.updateStorageInTx).not.toHaveBeenCalled();
+      errorSpy.mockRestore();
     });
 
     it('reconcileStorageUsage_withDriftBeyondTolerance_writesReconcileAuditEvent', async () => {
