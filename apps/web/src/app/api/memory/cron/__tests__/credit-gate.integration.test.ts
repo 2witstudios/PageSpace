@@ -168,24 +168,48 @@ async function usageRowsOf(userId: string) {
 }
 
 /**
- * The services debit fire-and-forget (discardUsageOutcome), so the route can
- * return before a charge lands. Wait until every usage row these users have
- * is settled in the ledger — trivially immediate when no model ran.
+ * The services settle fire-and-forget (discardUsageOutcome), so the route can return
+ * before a settle has even started. Wait on every settle the run started (not on the usage
+ * rows: a settle that has not written its row yet is invisible to them, and its hold is
+ * still live), then require each usage row these users have to be applied in the ledger.
  */
 async function settled(userIds: string[]): Promise<void> {
-  await vi.waitFor(async () => {
-    const usage = await db.select({ id: aiUsageLogs.id }).from(aiUsageLogs).where(inArray(aiUsageLogs.userId, userIds));
-    if (usage.length === 0) return;
-    const ledger = await db
-      .select({ aiUsageLogId: creditLedger.aiUsageLogId })
-      .from(creditLedger)
-      .where(and(
-        inArray(creditLedger.aiUsageLogId, usage.map((u) => u.id)),
-        eq(creditLedger.entryType, 'usage'),
-        eq(creditLedger.consumeStatus, 'applied'),
-      ));
-    expect(ledger).toHaveLength(usage.length);
-  }, { timeout: 5000, interval: 50 });
+  await settles?.drain();
+  const usage = await db.select({ id: aiUsageLogs.id }).from(aiUsageLogs).where(inArray(aiUsageLogs.userId, userIds));
+  if (usage.length === 0) return;
+  const ledger = await db
+    .select({ aiUsageLogId: creditLedger.aiUsageLogId })
+    .from(creditLedger)
+    .where(and(
+      inArray(creditLedger.aiUsageLogId, usage.map((u) => u.id)),
+      eq(creditLedger.entryType, 'usage'),
+      eq(creditLedger.consumeStatus, 'applied'),
+    ));
+  expect(ledger).toHaveLength(usage.length);
+}
+
+/** Every usage row these users have is applied: all a wait on the rows alone can see. */
+async function usageRowsApplied(userIds: string[]): Promise<boolean> {
+  const usage = await db.select({ id: aiUsageLogs.id }).from(aiUsageLogs).where(inArray(aiUsageLogs.userId, userIds));
+  if (usage.length === 0) return true;
+  const ledger = await db
+    .select({ aiUsageLogId: creditLedger.aiUsageLogId })
+    .from(creditLedger)
+    .where(and(
+      inArray(creditLedger.aiUsageLogId, usage.map((u) => u.id)),
+      eq(creditLedger.entryType, 'usage'),
+      eq(creditLedger.consumeStatus, 'applied'),
+    ));
+  return ledger.length === usage.length;
+}
+
+const liveHolds = (userId: string) => db.select().from(creditHolds).where(eq(creditHolds.userId, userId));
+
+/** A gate the test opens by hand: a settle chained on it cannot start before then. */
+function manualGate(): { opened: Promise<void>; open: () => void } {
+  let open: () => void = () => {};
+  const opened = new Promise<void>((resolve) => { open = resolve; });
+  return { opened, open };
 }
 
 /**
@@ -298,20 +322,48 @@ describe('memory cron credit gate (Postgres)', () => {
     const funded = await activeProUser({ monthlyRemainingCents: 10_000, debtCents: 0 });
     // The evaluator's settle is held until the gate opens: the ordering in which CI read
     // four holds placed and three removed (the route returned, that settle had not started).
-    let openGate: () => void = () => {};
-    const gate = new Promise<void>((resolve) => { openGate = resolve; });
+    const gate = manualGate();
     settles?.restore();
     settles = captureUsageSettles((data, settle) =>
-      data.metadata?.feature === 'memory_integration' ? gate.then(settle) : settle());
+      data.metadata?.feature === 'memory_integration' ? gate.opened.then(settle) : settle());
 
     const { audit } = await withHoldAudit([exhausted, funded], () => POST(new Request('http://web:3000/api/memory/cron', { method: 'POST' })), async () => {
+      // The state CI read: every usage row there is, applied, and the evaluator's hold
+      // still live, because its settle has not written anything yet.
+      expect(await usageRowsApplied([exhausted, funded])).toBe(true);
+      expect(await usageRowsOf(funded)).toHaveLength(3);
+      expect(await liveHolds(funded)).toHaveLength(1);
+      gate.open();
       await settled([exhausted, funded]);
-      openGate();
     });
 
+    // Once that settle runs it takes its hold like the others: nothing is orphaned.
     expectOneHoldPerCall(audit, funded, 4);
     expectOneHoldPerCall(audit, exhausted, 0);
-    expect(await db.select().from(creditHolds).where(eq(creditHolds.userId, funded))).toEqual([]);
+    expect(await usageRowsOf(funded)).toHaveLength(4);
+    expect(await liveHolds(funded)).toEqual([]);
+  }, TEST_TIMEOUT_MS);
+
+  it('guard: a call whose settle never takes its hold is reported as a hold placed and not removed', async () => {
+    if (!dbAvailable) return;
+    const funded = await activeProUser({ monthlyRemainingCents: 10_000, debtCents: 0 });
+    // A real leak, injected: the evaluator's settle reports done without touching its hold.
+    settles?.restore();
+    settles = captureUsageSettles((data, settle) =>
+      data.metadata?.feature === 'memory_integration'
+        ? Promise.resolve({ persisted: false, creditsSettled: false })
+        : settle());
+
+    const { audit } = await withHoldAudit([funded], () => POST(new Request('http://web:3000/api/memory/cron', { method: 'POST' })), () => settled([funded]));
+
+    // The usage rows alone look clean (three calls, three applied): only the hold audit sees it.
+    expect(await usageRowsOf(funded)).toHaveLength(3);
+    const placed = audit.placed.get(funded) ?? [];
+    const removed = new Set(audit.removed.get(funded) ?? []);
+    expect(placed).toHaveLength(4);
+    expect(placed.filter((id) => !removed.has(id))).toHaveLength(1);
+    expect(() => expectOneHoldPerCall(audit, funded, 4)).toThrow();
+    expect((await liveHolds(funded)).map((h) => h.id)).toEqual(placed.filter((id) => !removed.has(id)));
   }, TEST_TIMEOUT_MS);
 
   it('a funded user with an over-budget page: compaction reserves per call and each call settles once', async () => {
