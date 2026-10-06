@@ -36,8 +36,12 @@ describe('orgErrorMessage', () => {
     expect(orgErrorMessage(refusal('seats_full'), 'fallback')).toBe(ORG_ERROR_COPY.seats_full);
   });
 
-  it("says an automation's owner left, and who can hand it on, for the owner-left refusals", () => {
-    expect(orgErrorMessage(new ApiRequestError('raw', 409, { error: 'raw', code: 'owner_left' }), 'fallback')).toMatch(/owner left the organization.*Owner or Admin must reassign/);
+  it("says an automation's owner is gone without claiming why, and who can act, for the owner-left refusals", () => {
+    // owner_left also covers a deleted account and a drive guest who was never an org member.
+    expect(ORG_ERROR_COPY.owner_left).not.toMatch(/left the organization/);
+    // owner_present answers DELETE as well as reassign.
+    expect(ORG_ERROR_COPY.owner_present).toMatch(/reassigned or deleted/);
+    expect(orgErrorMessage(new ApiRequestError('raw', 409, { error: 'raw', code: 'owner_left' }), 'fallback')).toMatch(/owner is no longer here.*Owner or Admin must reassign or delete/);
     expect(orgErrorMessage(refusal('new_owner_no_drive_access'), 'fallback')).toMatch(/cannot reach this automation's drive/);
   });
 

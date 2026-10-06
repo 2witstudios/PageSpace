@@ -98,6 +98,10 @@ const LEDGER = new Map<string, Entry>([
     reads: 1, decision: 'neutral',
     reason: 'isOrgGuest exists to FIND guest and outside-member rows on an org\'s drives, so it must not exclude them; it only withholds verified-domain auto-join (SEC-1) from a guest and grants nothing.',
   }],
+  ['packages/lib/src/permissions/org-read-models.ts', {
+    reads: 2, decision: 'excludes',
+    reason: 'Member counts exclude GUEST: memberRowsIn (drive usage, member drive counts) keeps DRIVE_MEMBERSHIP_ROLES only, because a GUEST row holds pages, not the drive (D-OW-24). The org Guests list (listOrgGuests) reads GUEST rows ON PURPOSE: it is the org admin\'s one view of every outsider with access (DRV-8), so a page-link guest is listed by source (isGuestRole: "page link", with its live page count) beside invited guests. It is a display behind the Admin+ route and grants nothing.',
+  }],
   ['packages/lib/src/permissions/org-drive-directory.ts', {
     reads: 1, decision: 'excludes',
     reason: 'The org Drives directory reads each row through driveMembershipRole: a GUEST drive is not joined and stays requestable.',

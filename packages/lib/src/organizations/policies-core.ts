@@ -281,6 +281,16 @@ export function openDefaultRoleMeetsFloor(
   return grantMeetsFloor(floor, driveWide ?? MEMBER_VIEW) && Object.values(pages).every((grant) => grantMeetsFloor(floor, grant));
 }
 
+/**
+ * The visibility a drive should take when it is created in, or moved into, an org (DRV-4, POL-6). Open is the
+ * default, but a new drive has no default role (it holds the plain member view) and a moved-in drive may not
+ * have an Edit one, so under an Edit floor Open would be refused: start Restricted, give it an Edit default
+ * role, then switch it to Open.
+ */
+export function defaultOrgDriveVisibility(floor: OpenRoleFloor): 'OPEN' | 'RESTRICTED' {
+  return floor === 'edit' ? 'RESTRICTED' : 'OPEN';
+}
+
 export const OPEN_ROLE_FLOOR_MESSAGES: Record<OpenRoleFloor, string> = {
   view: "This organization requires the default role in its drives to let members view the drive. Give the role drive-wide view, or choose another default.",
   edit: "This organization requires the default role in its drives to let members edit the drive. Give the role drive-wide edit, or choose another default.",

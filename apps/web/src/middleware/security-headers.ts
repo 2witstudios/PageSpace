@@ -1,4 +1,6 @@
 import { NextResponse } from 'next/server';
+import { isPaymentElementRoute } from '@/lib/orgs/payment-routes';
+import { ORGS_ENABLED } from '@pagespace/lib/organizations/orgs-enabled';
 import { API_CONTRACT_VERSION } from '@pagespace/lib/api-contract-version';
 import { isDevPreviewEnabled, resolveDevPreviewApex } from '@pagespace/lib/services/sandbox/preview/dev-preview-env';
 import { previewFrameSrcEntry } from '@pagespace/lib/services/sandbox/preview/preview-host';
@@ -347,9 +349,15 @@ export const APP_ROUTER_ROUTE_PATH = '/api/app-hosting/router';
 export const routeOwnsItsOwnCsp = (pathname: string): boolean =>
   isHandoffBridgeRoute(pathname) || pathname === APP_ROUTER_ROUTE_PATH;
 
+/**
+ * Routes that skip COEP: the Stripe checkout pages (plan, billing), the org Payment Element routes
+ * (path-exact, isPaymentElementRoute: Settings for create-organization, an org's Plan & seats for
+ * Reactivate; only while ORGS_ENABLED, since nothing mounts them while orgs are dark), and auth.
+ */
 export const shouldDisableCOEP = (pathname: string): boolean =>
   pathname.startsWith('/settings/plan') ||
   pathname.startsWith('/settings/billing') ||
+  (ORGS_ENABLED && isPaymentElementRoute(pathname)) ||
   pathname === '/auth' ||
   pathname.startsWith('/auth/');
 

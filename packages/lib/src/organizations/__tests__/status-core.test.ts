@@ -127,6 +127,11 @@ describe('orgStatusAllows', () => {
     expect(ORG_LAPSED_MESSAGE).toMatch(/nothing (has been|is) deleted/i);
     expect(ORG_LAPSED_MESSAGE).not.toMatch(/\$/);
   });
+  it('SEAT-9 (partial): the refusal says loosening is paused and restricting still works (D-OW-33)', () => {
+    expect(ORG_LAPSED_MESSAGE).toMatch(/loosening/i);
+    expect(ORG_LAPSED_MESSAGE).toMatch(/restricting access still works/i);
+    expect(ORG_LAPSED_MESSAGE).not.toMatch(/policy changes/i);
+  });
 });
 
 describe('orgLapseTransition', () => {

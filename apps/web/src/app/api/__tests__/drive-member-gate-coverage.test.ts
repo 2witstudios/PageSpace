@@ -136,6 +136,10 @@ const EXEMPT = new Map<string, Exemption>([
     ormReads: 2,
     reason: 'Both ungated reads find an outsider\'s rows (pending included, on purpose) to TAKE THEM OUT of the live tables: memberOutsiders lists the outsiders of an org\'s drives, and takeOutsider reads one person\'s row to snapshot it into org_guest_holds (parked, or queued for approval) before deleting it. Writers that REMOVE access, inside the transaction that changed the policy or brought the access in; they grant nothing. The admission read (admitReentry) and the page-move exemption in grantOutsiders are gated: only an accepted, non-GUEST row counts as an admitted guest.',
   }],
+  ['packages/lib/src/permissions/org-read-models.ts', {
+    ormReads: 1,
+    reason: 'The org Guests list (listOrgGuests, DRV-8) is the org admin\'s one view of every outsider with access, so it shows pending invitations on purpose, each drive marked pending. It is a display behind the Admin+ route and grants nothing. The other read (memberRowsIn, behind drive usage and member drive counts) is gated: a pending invitee is not counted as a member.',
+  }],
   ['packages/lib/src/permissions/org-guest-footprint.ts', {
     ormReads: 1,
     reason: 'isOrgGuest asks whether a NON-member holds any row on the org\'s drives (pending included, on purpose: an invited outsider is a guest too) so verified-domain auto-join (SEC-1) can REFUSE to make them a member. It only ever withholds; it grants nothing.',

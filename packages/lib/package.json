@@ -829,6 +829,16 @@
       "import": "./dist/billing/org-subscription-core.js",
       "require": "./dist/billing/org-subscription-core.js"
     },
+    "./billing/org-plan-quote": {
+      "types": "./dist/billing/org-plan-quote.d.ts",
+      "import": "./dist/billing/org-plan-quote.js",
+      "require": "./dist/billing/org-plan-quote.js"
+    },
+    "./billing/wallet-admin": {
+      "types": "./dist/billing/wallet-admin.d.ts",
+      "import": "./dist/billing/wallet-admin.js",
+      "require": "./dist/billing/wallet-admin.js"
+    },
     "./test/wallet-leg-invariant": {
       "types": "./dist/test/wallet-leg-invariant.d.ts",
       "import": "./dist/test/wallet-leg-invariant.js",
@@ -2554,6 +2564,11 @@
       "import": "./dist/permissions/org-drive-directory.js",
       "require": "./dist/permissions/org-drive-directory.js"
     },
+    "./permissions/org-read-models": {
+      "types": "./dist/permissions/org-read-models.d.ts",
+      "import": "./dist/permissions/org-read-models.js",
+      "require": "./dist/permissions/org-read-models.js"
+    },
     "./permissions/member-drives": {
       "types": "./dist/permissions/member-drives.d.ts",
       "import": "./dist/permissions/member-drives.js",
@@ -3120,6 +3135,9 @@
       ],
       "billing/org-subscription-core": [
         "./dist/billing/org-subscription-core.d.ts"
+      ],
+      "billing/org-plan-quote": [
+        "./dist/billing/org-plan-quote.d.ts"
       ],
       "test/wallet-leg-invariant": [
         "./dist/test/wallet-leg-invariant.d.ts"

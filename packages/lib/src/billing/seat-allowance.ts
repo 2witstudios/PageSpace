@@ -72,6 +72,8 @@ export interface SeatCapFacts {
    * D20.5's 10-credit day is below one call's reservation and would refuse every seat call.
    */
   dailyCapCents: number | null;
+  /** Their own monthly cap on the pool leg when one is set; null = the org's seat allowance applies. */
+  consumerMonthlyCapCents: number | null;
   /**
    * What the caps judge: each window's GROSS settled spend counted as min(gross, the cap in force
    * now), plus live holds. The seat-overshoot rows are attribution only and never read here.
@@ -81,24 +83,41 @@ export interface SeatCapFacts {
   windows: { period: SeatWindowCharge; day: SeatWindowCharge };
 }
 
-export async function loadSeatCapFacts(
+export interface SeatCapFactsInput {
+  poolId: string;
+  /** The pool's monthlyPeriodStart: the date its last refill started (D-OW-12). */
+  poolPeriodStart: Date | null;
+  /** The org's seat allowance (POL-7); null falls to the default. */
+  policySeatAllowanceCents: number | null;
+  now: Date;
+}
+
+/** One consumer's seat facts: the gate's read (its transaction holds the pool's row lock). */
+export async function loadSeatCapFacts(executor: Reader, input: SeatCapFactsInput & { userId: string }): Promise<SeatCapFacts> {
+  const facts = (await loadSeatCapFactsForUsers(executor, { ...input, userIds: [input.userId] })).get(input.userId);
+  if (!facts) throw new Error('loadSeatCapFacts: no facts for the requested consumer');
+  return facts;
+}
+
+/**
+ * Many consumers' seat facts on one pool in a fixed four queries, whatever the member count: the same
+ * reads as loadSeatCapFacts (which is this, for one consumer), grouped by consumer. Members & seats reads
+ * every seat through it, so the page and the gate share one computation without a query per member.
+ * Every requested consumer gets an entry (no spend reads as zero).
+ */
+export async function loadSeatCapFactsForUsers(
   executor: Reader,
-  input: {
-    poolId: string;
-    /** The pool's monthlyPeriodStart: the date its last refill started (D-OW-12). */
-    poolPeriodStart: Date | null;
-    userId: string;
-    /** The org's seat allowance (POL-7); null falls to the default. */
-    policySeatAllowanceCents: number | null;
-    now: Date;
-  },
-): Promise<SeatCapFacts> {
+  input: SeatCapFactsInput & { userIds: readonly string[] },
+): Promise<Map<string, SeatCapFacts>> {
+  const out = new Map<string, SeatCapFacts>();
+  const userIds = [...new Set(input.userIds)];
+  if (userIds.length === 0) return out;
   const periodStart = new Date(seatPeriodStartMs({ poolPeriodStartMs: input.poolPeriodStart?.getTime() ?? null, nowMs: input.now.getTime() }));
-  const [cap] = await executor
-    .select({ monthlyCapCents: walletConsumerCaps.monthlyCapCents, dailyCapCents: walletConsumerCaps.dailyCapCents })
+  const caps = await executor
+    .select({ consumerKey: walletConsumerCaps.consumerKey, monthlyCapCents: walletConsumerCaps.monthlyCapCents, dailyCapCents: walletConsumerCaps.dailyCapCents })
     .from(walletConsumerCaps)
-    .where(and(eq(walletConsumerCaps.walletId, input.poolId), eq(walletConsumerCaps.consumerKey, userConsumerKey(input.userId))))
-    .limit(1);
+    .where(and(eq(walletConsumerCaps.walletId, input.poolId), inArray(walletConsumerCaps.consumerKey, userIds.map(userConsumerKey))));
+  const capByKey = new Map(caps.map((c) => [c.consumerKey, c]));
   // The day is the UTC day, whatever the period (WAL-7: daily caps are UTC). A refill lands at
   // any time of day and restarts only the PERIOD; spend earlier the same UTC day still counts
   // against the daily cap, so a refill never grants a second daily allowance (point-guard
@@ -114,70 +133,84 @@ export async function loadSeatCapFacts(
   const callAt = sql`coalesce((SELECT u."createdAt" FROM ${creditLedger} u WHERE u."aiUsageLogId" = ${creditLedger.aiUsageLogId} AND u."entryType" = 'usage' LIMIT 1), ${creditLedger.createdAt})`;
   const calls = executor
     .select({
+      userId: sql<string>`${creditLedger.userId}`.as('call_user_id'),
       at: sql<Date>`min(${callAt})`.as('call_at'),
       millicents: sql<string>`greatest(0, coalesce(sum(${creditLedger.chargeMillicents}), 0))`.as('call_millicents'),
     })
     .from(creditLedger)
     .where(and(
-      eq(creditLedger.userId, input.userId),
+      inArray(creditLedger.userId, userIds),
       eq(creditLedger.walletId, input.poolId),
       inArray(creditLedger.entryType, ['usage', 'adjustment']),
       // Every kind is a seat draw for the person the row is recorded under — see SEAT_COUNTED_SPEND_KINDS.
       inArray(creditLedger.spendKind, [...SEAT_COUNTED_SPEND_KINDS]),
       gte(creditLedger.createdAt, rowsFrom),
     ))
-    .groupBy(sql`coalesce(${creditLedger.aiUsageLogId}, ${creditLedger.id})`)
+    .groupBy(creditLedger.userId, sql`coalesce(${creditLedger.aiUsageLogId}, ${creditLedger.id})`)
     .as('calls');
-  const [gross] = await executor
+  const gross = await executor
     .select({
+      userId: calls.userId,
       period: sql<string>`coalesce(sum(${calls.millicents}) FILTER (WHERE ${calls.at} >= ${periodStart}), 0)`,
       day: sql<string>`coalesce(sum(${calls.millicents}) FILTER (WHERE ${calls.at} >= ${dayStart}), 0)`,
     })
-    .from(calls);
+    .from(calls)
+    .groupBy(calls.userId);
+  const grossBy = new Map(gross.map((g) => [g.userId, g]));
   // What the pool absorbed per window: attribution records only. The caps never read them
   // (see below), so a stale or wrong one can never widen admission.
   const inDay = sql`${creditLedger.createdAt} >= ${dayStart}`;
-  const [absorbed] = await executor
+  const absorbed = await executor
     .select({
+      userId: creditLedger.userId,
       period: sql<string>`coalesce(sum(${creditLedger.chargeMillicents}) FILTER (WHERE ${creditLedger.entryType} = ${SEAT_OVERSHOOT_ENTRY.month} AND ${creditLedger.createdAt} >= ${periodStart}), 0)`,
       day: sql<string>`coalesce(sum(${creditLedger.chargeMillicents}) FILTER (WHERE ${creditLedger.entryType} = ${SEAT_OVERSHOOT_ENTRY.day} AND ${inDay}), 0)`,
     })
     .from(creditLedger)
     .where(and(
-      eq(creditLedger.userId, input.userId),
+      inArray(creditLedger.userId, userIds),
       eq(creditLedger.walletId, input.poolId),
       inArray(creditLedger.entryType, [SEAT_OVERSHOOT_ENTRY.month, SEAT_OVERSHOOT_ENTRY.day]),
       gte(creditLedger.createdAt, rowsFrom),
-    ));
-  const [held] = await executor
-    .select({ cents: sql<string>`coalesce(sum(${creditHolds.estCents}), 0)` })
+    ))
+    .groupBy(creditLedger.userId);
+  const absorbedBy = new Map(absorbed.map((a) => [a.userId, a]));
+  const held = await executor
+    .select({ userId: creditHolds.userId, cents: sql<string>`coalesce(sum(${creditHolds.estCents}), 0)` })
     .from(creditHolds)
     .where(and(
-      eq(creditHolds.userId, input.userId),
+      inArray(creditHolds.userId, userIds),
       eq(creditHolds.walletId, input.poolId),
       // A hold in flight is a seat draw too, whatever it reserves for — see SEAT_COUNTED_SPEND_KINDS.
       inArray(creditHolds.spendKind, [...SEAT_COUNTED_SPEND_KINDS]),
       gt(creditHolds.expiresAt, input.now),
-    ));
-  const period = { grossMillicents: Number(gross?.period ?? 0), absorbedMillicents: Number(absorbed?.period ?? 0) };
-  const day = { grossMillicents: Number(gross?.day ?? 0), absorbedMillicents: Number(absorbed?.day ?? 0) };
-  const capCents = seatAllowanceCents({
-    consumerMonthlyCapCents: cap?.monthlyCapCents ?? null,
-    policySeatAllowanceCents: input.policySeatAllowanceCents,
-  });
-  const dailyCapCents = cap?.dailyCapCents ?? null;
-  return {
-    capCents,
-    dailyCapCents,
-    // The caps judge GROSS against the cap in force NOW, shown as min(gross, cap): the same
-    // decision as gross (both refuse at gross >= cap), and never computed from a stored
-    // absorbed figure, so raising or lowering a cap takes effect at once (review 5340856661
-    // P2-2, IRV-C3). A cap lowered below what is spent reads as full: no room, never negative.
-    usage: {
-      periodChargedMillicents: seatCountedMillicents({ capCents, grossMillicents: period.grossMillicents }),
-      periodReservedCents: Number(held?.cents ?? 0),
-      dayChargedMillicents: seatCountedMillicents({ capCents: dailyCapCents, grossMillicents: day.grossMillicents }),
-    },
-    windows: { period, day },
-  };
+    ))
+    .groupBy(creditHolds.userId);
+  const heldBy = new Map(held.map((h) => [h.userId, h]));
+  for (const userId of userIds) {
+    const cap = capByKey.get(userConsumerKey(userId));
+    const period = { grossMillicents: Number(grossBy.get(userId)?.period ?? 0), absorbedMillicents: Number(absorbedBy.get(userId)?.period ?? 0) };
+    const day = { grossMillicents: Number(grossBy.get(userId)?.day ?? 0), absorbedMillicents: Number(absorbedBy.get(userId)?.day ?? 0) };
+    const capCents = seatAllowanceCents({
+      consumerMonthlyCapCents: cap?.monthlyCapCents ?? null,
+      policySeatAllowanceCents: input.policySeatAllowanceCents,
+    });
+    const dailyCapCents = cap?.dailyCapCents ?? null;
+    out.set(userId, {
+      capCents,
+      dailyCapCents,
+      consumerMonthlyCapCents: cap?.monthlyCapCents ?? null,
+      // The caps judge GROSS against the cap in force NOW, shown as min(gross, cap): the same
+      // decision as gross (both refuse at gross >= cap), and never computed from a stored
+      // absorbed figure, so raising or lowering a cap takes effect at once (review 5340856661
+      // P2-2, IRV-C3). A cap lowered below what is spent reads as full: no room, never negative.
+      usage: {
+        periodChargedMillicents: seatCountedMillicents({ capCents, grossMillicents: period.grossMillicents }),
+        periodReservedCents: Number(heldBy.get(userId)?.cents ?? 0),
+        dayChargedMillicents: seatCountedMillicents({ capCents: dailyCapCents, grossMillicents: day.grossMillicents }),
+      },
+      windows: { period, day },
+    });
+  }
+  return out;
 }

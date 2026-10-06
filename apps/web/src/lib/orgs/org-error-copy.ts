@@ -41,6 +41,7 @@ export const ORG_ERROR_COPY: Record<OrgApiErrorCode, string> = {
   use_leave: 'To remove yourself, leave the organization instead.',
   already_owner: 'That person is already the Owner.',
   not_member: 'You are not a member of this organization.',
+  owner_must_transfer: 'Transfer ownership to another member before you leave.',
 
   // invitations and seats
   already_member: 'That person is already a member.',
@@ -71,11 +72,11 @@ export const ORG_ERROR_COPY: Record<OrgApiErrorCode, string> = {
   not_a_page_grant: 'This request can no longer be approved here.',
   page_gone: 'The page for this request no longer exists.',
 
-  // automations whose owner left
-  owner_present: 'This automation still has its owner, so there is nothing to reassign.',
+  // automations whose owner is gone (left the org, deleted their account, or was a drive guest, never an org member)
+  owner_present: 'This automation still has its owner, so it cannot be reassigned or deleted here.',
   new_owner_not_member: 'Automations can only be handed to a member of this organization.',
   new_owner_no_drive_access: "That person cannot reach this automation's drive. Add them to the drive first, or choose someone else.",
-  owner_left: "This automation's owner left the organization. An Owner or Admin must reassign it before it can run again.",
+  owner_left: "This automation's owner is no longer here. An Owner or Admin must reassign or delete it before it can run again.",
 
   // wallets, caps and spend sources
   mcp_token_cannot_move_money: 'Moving credits can only be done from the PageSpace app.',
@@ -86,7 +87,7 @@ export const ORG_ERROR_COPY: Record<OrgApiErrorCode, string> = {
   wallet_exists: 'This drive already has a wallet.',
   wallet_in_use: 'This wallet has been used, so it cannot be deleted. Pause it instead.',
   wallet_not_available: 'That wallet is not available to you.',
-  invalid_amount: 'Enter a whole number of credits, zero or more, within the allowed range for this action.',
+  invalid_amount: 'Enter a whole number of credits within the allowed range for this action.',
   nothing_to_change: 'Nothing changed.',
   same_wallet: 'You cannot move credits from a wallet into itself.',
   not_a_drive_wallet: 'That is not a drive wallet.',

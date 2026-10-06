@@ -47,6 +47,7 @@ export const ORG_DOMAIN_ERROR_CODES = [
   'use_leave',
   'already_owner',
   'not_member',
+  'owner_must_transfer',
   // invitations and seats
   'already_member',
   'already_invited',

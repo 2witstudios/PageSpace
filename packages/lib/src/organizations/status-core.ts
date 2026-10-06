@@ -73,11 +73,11 @@ function endedInTrial(sub: OrgSubscriptionState, now: Date): boolean {
  */
 export const ORG_TRIAL_GRACE_MS = 24 * 60 * 60 * 1000;
 
-/** The SEAT-9 refusal, shown wherever an org-only capability is refused. No credit or price figure. */
+/** The SEAT-9 refusal, shown wherever an org-only capability is refused; restricting stays allowed (D-OW-33). No credit or price figure. */
 export const ORG_LAPSED_MESSAGE =
   "This organization's subscription has lapsed. Its drives stay readable and nothing has been deleted, " +
-  'but inviting, creating org drives, the org pool and allocations, policy changes, publishing and ' +
-  'sandboxes are paused until an Owner or Admin reactivates billing.';
+  'but inviting, creating org drives, the org pool and allocations, loosening policies or caps, approving ' +
+  'guests, publishing and sandboxes are paused until an Owner or Admin reactivates billing. Restricting access still works.';
 
 export const ORG_LAPSED_CODE = 'org_lapsed' as const;
 

@@ -7,6 +7,18 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 - /btw side questions now work on every chat surface (dashboard assistant, right-sidebar chat, agent console) and /btw appears in the / command picker on all of them.
 
+### Added
+
+- **Organization settings** (shown once organizations are switched on) — Settings › Organizations lists the
+  organizations you belong to and lets you create one: name it, choose the drives you own to move in (Home
+  stays personal), invite people, see the price, and pay with a card; the organization is ready once that
+  first payment goes through. Each organization has a settings page for its Owner and Admins: Members &
+  seats (roles, invitations, guests, per-person seat caps), Drives, Policies, Security (verified domains),
+  Plan & seats (seats, the credits pool, drive wallets and invoices), an Audit log with CSV export, a
+  Needs your attention list (guest requests to approve, automations whose owner left), and the Owner's
+  Danger Zone. A member who is not an Admin sees only the option to leave. While an organization is
+  unpaid, every page says so, offers to reactivate it, and allows only changes that restrict access.
+
 ### Changed
 
 - **New organizations ask before letting outsiders in** — a new organization's "guests from outside"

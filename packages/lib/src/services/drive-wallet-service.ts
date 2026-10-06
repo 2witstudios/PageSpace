@@ -48,20 +48,22 @@ import {
   type WalletWrite,
 } from '../permissions/wallet-access';
 import { ensurePersonalRootWalletId } from '../billing/personal-wallet';
-import { listSpendChoices, resolveCallSpend, seatAllowanceFor, type SpendChoice } from '../billing/spend-resolution';
+import { listSpendChoices, resolveCallSpend, seatAllowanceFor, seatAllowancesFor, type SpendChoice } from '../billing/spend-resolution';
 import { conversationSpend, type CallSpendDecision } from '../billing/spend-target';
 import { formatCreditCount } from '../billing/money-model';
 import { toSubscriptionTier } from '../billing/subscription-tiers';
 import { capChangeOnlyRestricts, planDeleteWallet, planTopUp, planWalletPatch, walletPatchOnlyRestricts, type DeleteBlocker, type WalletPatchInput } from '../billing/wallet-admin';
 import { donateToDriveWallet } from '../billing/wallet-funding-shell';
 import { checkOrgActive } from '../organizations/status';
-import { findMembershipRole, findOrganizationNames } from '../organizations/repository';
-import { planConsumerCapWrite, userConsumerKey, utcDayStartMs, utcMonthStartMs, type ConsumerCapWriteInput, type ConsumerCaps, type SpendSourceKind } from '../billing/wallet-core';
-import { getOrgPolicies } from '../organizations/policy-reader';
+import { findMembershipRole, findOrganizationNames, listOrgMembers } from '../organizations/repository';
+import { loadSeatCapFactsForUsers } from '../billing/seat-allowance';
+import { planConsumerCapWrite, seatCapCheck, seatSpentCents, userConsumerKey, utcDayStartMs, utcMonthStartMs, type ConsumerCapWriteInput, type ConsumerCaps, type SpendSourceKind } from '../billing/wallet-core';
+import { getOrgPolicies, readOrgSpendPolicy } from '../organizations/policy-reader';
 import {
   capRemainingCents,
   displayedWalletStatus,
   projectDriveWallet,
+  poolUnallocatedCents,
   walletRemainingCents,
   type ConsumerSpend,
   type DriveWalletFacts,
@@ -897,6 +899,130 @@ export async function setSeatCap(
   });
   void announceOrgChange(orgId, 'seat_caps');
   return { ok: true, walletId: pool.id, caps: await capsOnWallet(pool.id) };
+}
+
+/** One member's seat as Members & seats shows it (WAL-7, D-OW-38 "seat allowance remaining"). */
+export interface OrgSeatCapView {
+  userId: string;
+  displayName: string;
+  /** The member's own caps on their seat; null = none set. */
+  dailyCapCents: number | null;
+  monthlyCapCents: number | null;
+  /** The monthly limit in force: their monthly cap, else the org's seat allowance (WAL-2: never unlimited). */
+  monthlyLimitCents: number;
+  /** What is left this period and today, after settled spend and holds in flight; daily null = no daily limit. */
+  monthlyRemainingCents: number;
+  dailyRemainingCents: number | null;
+}
+
+export interface OrgSeatCapsRead {
+  /** The org pool, or null before the org has one. */
+  walletId: string | null;
+  seatAllowanceCents: number;
+  seats: OrgSeatCapView[];
+}
+
+/** Each accepted member's seat facts on the org pool, read exactly as the credit gate reads them (one batch, no query per member). */
+async function memberSeatFacts(orgId: string, pool: NonNullable<Awaited<ReturnType<typeof orgPoolRow>>>, seatAllowanceCents: number, now: Date) {
+  const members = await listOrgMembers(orgId);
+  const facts = await loadSeatCapFactsForUsers(db, {
+    poolId: pool.id,
+    poolPeriodStart: pool.monthlyPeriodStart,
+    userIds: members.map((m) => m.userId),
+    policySeatAllowanceCents: seatAllowanceCents,
+    now,
+  });
+  return members.flatMap((member) => {
+    const f = facts.get(member.userId);
+    return f ? [{ member, facts: f }] : [];
+  });
+}
+
+/**
+ * Every member's seat caps and what is left of them, through the ONE seat-remaining computation
+ * (seatAllowancesFor: the gate's facts and cap check, the policy through readOrgSpendPolicy), so this page,
+ * GET /api/wallets, the spending-from popover and the gate agree on one figure. Fixed cost: the members, the
+ * pool, the policy and four seat-fact queries, whatever the member count.
+ * Callers authorize (Owner or Admin: the org gate on GET /api/orgs/[orgId]/seat-caps).
+ */
+export async function listOrgSeatCaps(orgId: string, now: Date = new Date()): Promise<OrgSeatCapsRead> {
+  const pool = await orgPoolRow(db, orgId);
+  if (!pool) return { walletId: null, seatAllowanceCents: (await readOrgSpendPolicy(db, orgId)).seatAllowanceCents, seats: [] };
+  const members = await listOrgMembers(orgId);
+  const read = await seatAllowancesFor(db, { orgId, poolId: pool.id, poolPeriodStart: pool.monthlyPeriodStart, userIds: members.map((m) => m.userId), now });
+  const seats: OrgSeatCapView[] = members.flatMap((member) => {
+    const seat = read.seats.get(member.userId);
+    if (!seat) return [];
+    return [{
+      userId: member.userId,
+      displayName: member.name || member.email,
+      dailyCapCents: seat.dailyCapCents,
+      monthlyCapCents: seat.monthlyCapCents,
+      monthlyLimitCents: seat.allowanceCents,
+      monthlyRemainingCents: seat.monthlyRemainingCents,
+      dailyRemainingCents: seat.dailyRemainingCents,
+    }];
+  });
+  return { walletId: pool.id, seatAllowanceCents: read.seatAllowanceCents, seats };
+}
+
+/** The org pool and where it goes (D-OW-38 "pool split"; SPEND-10; canvas Plan & seats "Credits pool"). */
+export interface OrgPoolSplit {
+  /** The org pool, or null before the first payment funds one. */
+  walletId: string | null;
+  /** What the pool can still spend this period (refill + top-ups − debt − holds). */
+  availableCents: number;
+  /** Of that, what no drive wallet's allocation still claims (poolUnallocatedCents). May be negative. */
+  unallocatedCents: number;
+  /** When the pool refills (its period end), ISO. */
+  periodEnd: string | null;
+  /** Seat allowances: members, each one's monthly allowance (POL-7), and what seats drew this period. */
+  /** allocatedCents = members × allowance; spentCents = each member's gross seat spend this period, as the gate reads it. */
+  seats: { memberCount: number; allowanceCents: number; allocatedCents: number; spentCents: number };
+  /** Every drive wallet the pool funds, by drive name. */
+  driveWallets: { driveId: string; driveName: string; walletId: string; allocationCents: number; spentCents: number; status: 'active' | 'over' | 'paused' }[];
+  /** Live org drives without a wallet: they spend seat allowances only. */
+  drivesWithoutWallet: { id: string; name: string }[];
+}
+
+/** The pool split for Owner and Admins (callers authorize: GET /api/orgs/[orgId]/pool, Admin+). */
+export async function getOrgPoolSplit(orgId: string, now: Date = new Date()): Promise<OrgPoolSplit> {
+  const policies = await getOrgPolicies(orgId);
+  const [{ memberCount }] = await db.select({ memberCount: sql<number>`count(*)::int` }).from(orgMembers).where(eq(orgMembers.orgId, orgId));
+  const pool = await orgPoolRow(db, orgId);
+  const facts = await poolFacts(orgId);
+  if (!pool || !facts) {
+    return { walletId: null, availableCents: 0, unallocatedCents: 0, periodEnd: null, seats: { memberCount: Number(memberCount), allowanceCents: policies.seatAllowanceCents, allocatedCents: Number(memberCount) * policies.seatAllowanceCents, spentCents: 0 }, driveWallets: [], drivesWithoutWallet: [] };
+  }
+  // The gate's own seat facts per member (windowed by the seat period, each call netted to >= 0): never a
+  // second ledger sum (review P2-4).
+  const seatFacts = await memberSeatFacts(orgId, pool, policies.seatAllowanceCents, now);
+  const seatSpentTotal = seatFacts.reduce((sum, { facts }) => sum + seatSpentCents(facts.windows.period.grossMillicents), 0);
+  const children = await db
+    .select({ id: wallets.id, driveId: wallets.subjectId, allocationCents: wallets.monthlyAllowanceCents, spentCents: wallets.spentCents, status: wallets.status, debtCents: wallets.debtCents })
+    .from(wallets)
+    .where(and(eq(wallets.parentWalletId, pool.id), eq(wallets.subjectType, 'drive')));
+  const orgDrives = await db
+    .select({ id: drives.id, name: drives.name })
+    .from(drives)
+    .where(and(eq(drives.orgId, orgId), eq(drives.isTrashed, false)))
+    .limit(5000);
+  const names = new Map(orgDrives.map((d) => [d.id, d.name]));
+  const withWallet = new Set(children.flatMap((c) => (c.driveId ? [c.driveId] : [])));
+  const driveWallets = children
+    .flatMap((c) => (c.driveId && names.has(c.driveId)
+      ? [{ driveId: c.driveId, driveName: names.get(c.driveId) as string, walletId: c.id, allocationCents: c.allocationCents, spentCents: c.spentCents, status: displayedWalletStatus(c) }]
+      : []))
+    .sort((a, b) => a.driveName.localeCompare(b.driveName));
+  return {
+    walletId: pool.id,
+    availableCents: facts.availableCents,
+    unallocatedCents: poolUnallocatedCents(facts),
+    periodEnd: pool.monthlyPeriodEnd?.toISOString() ?? null,
+    seats: { memberCount: Number(memberCount), allowanceCents: policies.seatAllowanceCents, allocatedCents: Number(memberCount) * policies.seatAllowanceCents, spentCents: seatSpentTotal },
+    driveWallets,
+    drivesWithoutWallet: orgDrives.filter((d) => !withWallet.has(d.id)).sort((a, b) => a.name.localeCompare(b.name)),
+  };
 }
 
 /** Donate from the caller's own balance to the drive's wallet (WAL-4); the donation shell re-checks visibility. */

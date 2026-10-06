@@ -22,6 +22,13 @@ import {
   NONCE_HEADER,
 } from '../security-headers';
 
+const orgsFlag = vi.hoisted(() => ({ enabled: true }));
+vi.mock('@pagespace/lib/organizations/orgs-enabled', () => ({
+  get ORGS_ENABLED() {
+    return orgsFlag.enabled;
+  },
+}));
+
 vi.mock('next/server', () => {
   // Create a class-like constructor for NextResponse
   const MockNextResponse = vi.fn((body?: string | null, init?: ResponseInit) => {
@@ -684,6 +691,26 @@ describe('Security Headers', () => {
       expect(shouldDisableCOEP('/dashboard')).toBe(false);
       expect(shouldDisableCOEP('/authentication')).toBe(false);
       expect(shouldDisableCOEP('/auth-callback')).toBe(false);
+    });
+
+    it('UI-6 (partial): only the routes that mount the Stripe Payment Element skip COEP, path-exact', () => {
+      // /settings mounts the create-organization dialog's payment step; an org's Plan & seats page mounts Reactivate.
+      expect(shouldDisableCOEP('/settings')).toBe(true);
+      expect(shouldDisableCOEP('/orgs/org_1/settings/billing')).toBe(true);
+      for (const path of ['/settings/account', '/settings/', '/orgs/org_1/settings', '/orgs/org_1/settings/members', '/orgs/org_1/settings/billing/x', '/organizations']) {
+        expect(shouldDisableCOEP(path), path).toBe(false);
+      }
+    });
+
+    it('UI-6 (partial): while orgs are dark the org payment routes keep COEP (nothing there mounts the Payment Element)', () => {
+      orgsFlag.enabled = false;
+      try {
+        expect(shouldDisableCOEP('/settings')).toBe(false);
+        expect(shouldDisableCOEP('/orgs/org_1/settings/billing')).toBe(false);
+        expect(shouldDisableCOEP('/settings/plan')).toBe(true);
+      } finally {
+        orgsFlag.enabled = true;
+      }
     });
 
     it('isPublishedSiteHost identifies *.pagespace.site published hosts', () => {
