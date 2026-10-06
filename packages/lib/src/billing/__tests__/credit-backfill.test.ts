@@ -7,12 +7,12 @@ const mockIsBillingEnabled = vi.hoisted(() => vi.fn(() => true));
 const mockConsumeCredits = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const mockSettlePending = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const mockDb = vi.hoisted(() => ({ select: vi.fn(), transaction: vi.fn(), delete: vi.fn() }));
-const mockAiLogger = vi.hoisted(() => ({ debug: vi.fn(), error: vi.fn() }));
+const mockAiLogger = vi.hoisted(() => ({ debug: vi.fn(), error: vi.fn(), warn: vi.fn() }));
 
 vi.mock('@pagespace/db/db', () => ({ db: mockDb }));
 vi.mock('@pagespace/db/schema/credits', () => ({
   creditLedger: { id: 'cl.id', aiUsageLogId: 'cl.aiUsageLogId', consumeStatus: 'cl.consumeStatus', createdAt: 'cl.createdAt' },
-  creditHolds: { id: 'ch.id', expiresAt: 'ch.expiresAt' },
+  creditHolds: { id: 'ch.id', expiresAt: 'ch.expiresAt', userId: 'ch.userId' },
 }));
 vi.mock('@pagespace/db/schema/monitoring', () => ({
   aiUsageLogs: { id: 'aul.id', userId: 'aul.userId', cost: 'aul.cost', success: 'aul.success', timestamp: 'aul.timestamp', source: 'aul.source', walletId: 'aul.walletId', metadata: 'aul.metadata' },
@@ -26,6 +26,7 @@ vi.mock('@pagespace/db/operators', () => ({
   gt: mockGt,
   isNull: vi.fn((a) => ({ op: 'isNull', a })),
   notInArray: vi.fn((a, b) => ({ op: 'notInArray', a, b })),
+  inArray: vi.fn((a, b) => ({ op: 'inArray', a, b })),
 }));
 vi.mock('../../deployment-mode', () => ({ isBillingEnabled: mockIsBillingEnabled }));
 vi.mock('../../logging/logger-config', () => ({ loggers: { ai: mockAiLogger } }));
@@ -36,7 +37,7 @@ vi.mock('../credit-consume', () => ({
 const mockEmitCreditsUpdated = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('../credit-emit', () => ({ emitCreditsUpdated: mockEmitCreditsUpdated }));
 
-import { backfillCredits } from '../credit-backfill';
+import { backfillCredits, sweepExpiredHolds } from '../credit-backfill';
 import { MACHINE_MARKUP_BPS } from '../credit-pricing';
 
 // Captures the WHERE clause handed to the orphan sweep so tests can assert the
@@ -249,5 +250,73 @@ describe('backfillCredits', () => {
     const src = readFileSync(fileURLToPath(new URL('../credit-backfill.ts', import.meta.url)), 'utf8');
     expect(src).not.toMatch(/from ['"]stripe['"]/);
     expect(src).not.toMatch(/stripe\./i);
+  });
+});
+
+/** The WHERE clause each hold-sweep DELETE was given, in call order. */
+function captureHoldSweeps(swept: { id: string; userId: string }[] = []): unknown[] {
+  const wheres: unknown[] = [];
+  mockDb.delete.mockReturnValue({
+    where: (w: unknown) => {
+      wheres.push(w);
+      return { returning: () => Promise.resolve(swept) };
+    },
+  });
+  return wheres;
+}
+
+describe('sweepExpiredHolds', () => {
+  const now = new Date('2026-10-05T12:00:00Z');
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockDb.select.mockReset();
+    mockIsBillingEnabled.mockReturnValue(true);
+  });
+
+  it('the cron sweep (backfillCredits) deletes every expired hold, unscoped', async () => {
+    const wheres = captureHoldSweeps();
+    mockSelects([], []);
+
+    await backfillCredits();
+
+    expect(wheres).toHaveLength(1);
+    expect(wheres[0]).toMatchObject({ op: 'lt', a: 'ch.expiresAt' });
+  });
+
+  it('scoped to some users, deletes only their expired holds and reports the count', async () => {
+    const wheres = captureHoldSweeps([{ id: 'h1', userId: 'u1' }]);
+
+    const count = await sweepExpiredHolds({ now, userIds: ['u1'] });
+
+    expect(count).toBe(1);
+    expect(wheres).toEqual([{
+      op: 'and',
+      a: [{ op: 'lt', a: 'ch.expiresAt', b: now }, { op: 'inArray', a: 'ch.userId', b: ['u1'] }],
+    }]);
+    expect(mockEmitCreditsUpdated).toHaveBeenCalledWith('u1');
+  });
+
+  it('scoped to no users, deletes nothing (an empty scope never widens to every hold)', async () => {
+    const wheres = captureHoldSweeps();
+
+    expect(await sweepExpiredHolds({ now, userIds: [] })).toBe(0);
+    expect(wheres).toEqual([]);
+    expect(mockDb.delete).not.toHaveBeenCalled();
+  });
+
+  it('deletes nothing when billing is disabled, as the cron sweep does', async () => {
+    mockIsBillingEnabled.mockReturnValue(false);
+    captureHoldSweeps();
+
+    expect(await sweepExpiredHolds({ now, userIds: ['u1'] })).toBe(0);
+    expect(mockDb.delete).not.toHaveBeenCalled();
+  });
+
+  it('a failed delete is logged and reports zero, never throws into the cron', async () => {
+    mockDb.delete.mockReturnValue({ where: () => ({ returning: () => Promise.reject(new Error('db down')) }) });
+
+    expect(await sweepExpiredHolds({ now })).toBe(0);
+    expect(mockAiLogger.warn).toHaveBeenCalledWith('credit hold expiry sweep failed', expect.anything());
   });
 });

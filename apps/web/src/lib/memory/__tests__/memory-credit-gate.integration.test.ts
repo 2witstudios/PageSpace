@@ -28,7 +28,10 @@ vi.mock('@/lib/ai/core/provider-factory', () => ({
   isProviderError: (p: unknown) => typeof p === 'object' && p !== null && 'error' in p,
 }));
 
+import { sweepExpiredHolds } from '@pagespace/lib/billing/credit-backfill';
+import { getCreditBalance } from '@pagespace/lib/billing/credit-balance';
 import { compactField } from '../compaction-service';
+import { reserveMemoryCall } from '../memory-credit';
 import { withHoldAudit } from '@/test/hold-audit';
 
 const FUNDED_CENTS = 5_000;
@@ -134,5 +137,47 @@ describe('memory cron model calls reserve first (real Postgres)', () => {
     expect(audit.removed.get(world.userId)).toEqual(placed);
     expect(await usageRows(world)).toEqual([]);
     expect(await walletCents(world)).toBe(FUNDED_CENTS);
+  });
+  it('a reservation whose settle never runs (the process died mid-call) stops counting at its expiry, and the reconcile sweep removes it without touching the wallet', async () => {
+    world = await build(FUNDED_CENTS);
+    const w = world;
+    const reservation = await reserveMemoryCall(w.userId, { provider: 'anthropic', model: 'claude-3-haiku-20240307', inputChars: ORIGINAL.length });
+    if (!reservation.allowed || !reservation.holdId) throw new Error('expected the funded call to reserve a hold');
+    const [hold] = await liveHolds(w);
+    expect(hold.id).toBe(reservation.holdId);
+    expect(hold.estCents).toBeGreaterThan(0);
+    // The reservation is what holds the person's credits back (the gate subtracts it).
+    const held = await getCreditBalance(w.userId, 'pro');
+    expect(held.reserved).toBe(hold.estCents);
+    expect(held.spendable).toBe(FUNDED_CENTS);
+
+    // The settle never runs and release is never called. Time passes: the hold was placed one
+    // TTL ago and its expiry is behind us. (The row is aged rather than the clock moved.)
+    const ttlMs = hold.expiresAt.getTime() - hold.createdAt.getTime();
+    const expiredAt = new Date(Date.now() - 1_000);
+    await db.update(creditHolds)
+      .set({ createdAt: new Date(expiredAt.getTime() - ttlMs), expiresAt: expiredAt })
+      .where(eq(creditHolds.id, hold.id));
+
+    // Expired, it no longer reserves anything, before any sweep has run.
+    const expired = await getCreditBalance(w.userId, 'pro');
+    expect(expired.reserved).toBe(0);
+    expect(expired.spendable).toBe(FUNDED_CENTS);
+
+    // The cron's own sweep (backfillCredits → sweepExpiredHolds), scoped to this person so a
+    // shared CI database's other workers keep their holds. A bystander's expired hold proves it.
+    const bystander = await build(FUNDED_CENTS);
+    try {
+      await db.insert(creditHolds).values({ userId: bystander.userId, walletId: bystander.walletId, estCents: 1, expiresAt: expiredAt });
+      expect(await sweepExpiredHolds({ userIds: [w.userId] })).toBe(1);
+      expect(await liveHolds(w)).toEqual([]);
+      expect(await liveHolds(bystander)).toHaveLength(1);
+    } finally {
+      await teardown(bystander);
+    }
+    // Money invariant: a hold never moved money, so the wallet and the ledger are as they were.
+    expect(await walletCents(w)).toBe(FUNDED_CENTS);
+    expect(await db.select().from(creditLedger).where(eq(creditLedger.userId, w.userId))).toEqual([]);
+    expect(await getCreditBalance(w.userId, 'pro')).toMatchObject({ spendable: FUNDED_CENTS, reserved: 0 });
   });
 });
