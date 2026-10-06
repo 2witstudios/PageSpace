@@ -1308,6 +1308,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
         imageGen: imageGenEnabled === true,
         isAdmin: isAdminUser,
         sandboxTierEligible,
+        driveScoped: isDriveScopedPrincipal(authResult),
         commandDriveId: resolveImagoDriveInView(turnLocation, imagoContext),
         timer: turnTimer,
       });

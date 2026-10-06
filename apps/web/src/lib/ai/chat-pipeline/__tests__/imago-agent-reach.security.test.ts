@@ -33,6 +33,7 @@
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { createId } from '@paralleldrive/cuid2';
+import { randomBytes } from 'node:crypto';
 import type { MockLanguageModelV3 } from 'ai/test';
 
 type CallOptions = Parameters<MockLanguageModelV3['doStream']>[0];
@@ -115,6 +116,8 @@ import { users } from '@pagespace/db/schema/auth';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { factories } from '@pagespace/db/test/factories';
 import { sessionService } from '@pagespace/lib/auth/session-service';
+import { hashToken } from '@pagespace/lib/auth/token-utils';
+import { sessionRepository } from '@/lib/repositories/session-repository';
 import { provisionImagoAgents } from '@pagespace/lib/agents/provision-imago-agents';
 import { setImagoDriveAccess } from '@pagespace/lib/agents/imago-drive-access';
 import { logActivity } from '@pagespace/lib/monitoring/activity-logger';
@@ -137,6 +140,8 @@ interface World {
   ownerId: string;
   ownerToken: string;
   visitorToken: string;
+  /** A drive-scoped MCP token of the OWNER, scoped to the Home drive. */
+  scopedMcpToken: string;
   imagoPageId: string;
   home: { driveId: string; note: Seeded };
   acme: { driveId: string; roadmap: Seeded; minutes: Seeded };
@@ -219,10 +224,23 @@ async function seedWorld(): Promise<World> {
   const session = (userId: string) =>
     sessionService.createSession({ userId, type: 'user', scopes: ['*'], expiresInMs: 60 * 60 * 1000 });
 
+  // An MCP key of the owner's, scoped to the Home drive — the drive Imago
+  // lives in, so the token can drive the owner's Imago page.
+  const scopedMcpToken = `mcp_${randomBytes(24).toString('hex')}`;
+  await sessionRepository.createMcpTokenWithDriveScopes({
+    userId: owner.id,
+    tokenHash: hashToken(scopedMcpToken),
+    tokenPrefix: scopedMcpToken.slice(0, 12),
+    name: `${MARK} home-scoped`,
+    isScoped: true,
+    drives: [{ id: home.id, role: null }],
+  });
+
   return {
     ownerId: owner.id,
     ownerToken: await session(owner.id),
     visitorToken: await session(visitor.id),
+    scopedMcpToken,
     imagoPageId: agents.imago,
     home: { driveId: home.id, note: await seedPage(home.id, 'home-note') },
     acme: {
@@ -523,5 +541,31 @@ describe('IMG-10.10 — run by anyone but its owner, Imago gets nothing', () => 
     const { toolNames } = await runTools([]);
 
     expect(toolNames).toEqual(expect.arrayContaining(['read_page', 'multi_drive_search', 'tool_search', 'execute_tool']));
+  });
+});
+
+describe("IMG-10.10 — a drive-scoped token on its owner's Imago page is not advertised account-level tools", () => {
+  // Listing invariant (review finding): the non-Imago branch hides
+  // account-level-only tools (create_drive) from a drive-scoped principal's
+  // tool list; the Imago branch must advertise the same narrowed set. The
+  // execution-time gates were never the gap — this is what the model is told
+  // exists, in the prompt's non-core catalog and behind execute_tool.
+  it('given execute_tool(create_drive), should answer unknown tool and keep the name out of the prompt', async () => {
+    const { outputs, prompt } = await runTools(
+      [call('create_drive', { name: `${MARK}-scoped-token-drive` })],
+      undefined,
+      world.scopedMcpToken,
+    );
+
+    // The output is a serialized tool result, so the quoted name arrives escaped.
+    expect(outputs[0]).toContain('Unknown tool');
+    expect(outputs[0]).toContain('create_drive');
+    expect(prompt).not.toMatch(/\bcreate_drive\b/);
+  });
+
+  it("control: the owner's own session turn still advertises create_drive", async () => {
+    const { prompt } = await runTools([], undefined, world.ownerToken);
+
+    expect(prompt).toMatch(/\bcreate_drive\b/);
   });
 });

@@ -32,6 +32,7 @@ import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
 import {
   filterToolsForAgentAccounts,
   filterToolsForImageGen,
+  filterToolsForMcpScope,
   filterToolsForReadOnly,
   filterToolsForSandboxTier,
   filterToolsForWebSearch,
@@ -65,6 +66,15 @@ export interface AssistantToolSelectionInput {
   isAdmin: boolean;
   /** The payer's sandbox eligibility for this conversation (`resolveSandboxToolEligibilityForConversation`). */
   sandboxTierEligible: boolean;
+  /**
+   * Whether the caller is confined to a drive set (`isDriveScopedPrincipal` —
+   * a drive-scoped MCP token, or a dispatched worker carrying its ceiling).
+   * Account-level-only tools (create_drive) are stripped BEFORE the split, so
+   * every advertised surface — the core tools, tool_search's corpus,
+   * execute_tool's dispatch map and the non-core catalog — agrees with the
+   * listing invariant the non-Imago page branch upholds with the same filter.
+   */
+  driveScoped: boolean;
   /** The drive whose commands join the catalog: the drive in view, or null. */
   commandDriveId: string | null;
   timer?: TurnTimer;
@@ -93,7 +103,12 @@ export async function selectAssistantTools(input: AssistantToolSelectionInput): 
   const allTools = filterToolsForImageGen(
     filterToolsForWebSearch(
       filterToolsForReadOnly(
-        filterToolsForAgentAccounts(filterToolsForSandboxTier(pageSpaceTools, input.sandboxTierEligible)),
+        filterToolsForAgentAccounts(
+          filterToolsForSandboxTier(
+            filterToolsForMcpScope(pageSpaceTools, input.driveScoped),
+            input.sandboxTierEligible,
+          ),
+        ),
         input.readOnly,
       ),
       input.webSearch,

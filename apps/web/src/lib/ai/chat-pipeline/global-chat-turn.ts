@@ -43,7 +43,7 @@ import { startChatGeneration } from './start-chat-generation';
 import { takeOverConversationStreams } from '@/lib/ai/core/stream-takeover';
 import { startGenerationExclusive } from '@/lib/ai/core/start-generation-exclusive';
 import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
-import { getAllowedDriveIds, authSessionIdOf, type AuthResult } from '@/lib/auth';
+import { getAllowedDriveIds, authSessionIdOf, isDriveScopedPrincipal, type AuthResult } from '@/lib/auth';
 import { createAIProvider, updateUserProviderSettings, createProviderErrorResponse, isProviderError, type ProviderRequest } from '@/lib/ai/core/provider-factory';
 import { extractMessageContent, extractToolCalls, extractToolResults, sanitizeMessagesForModel, convertGlobalAssistantMessageToUIMessage } from '@/lib/ai/core/message-utils';
 import { messageRepository } from '@/lib/repositories/message-repository';
@@ -860,6 +860,10 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
       imageGen: imageGenEnabled === true,
       isAdmin: auth.role === 'admin',
       sandboxTierEligible,
+      // Session-only surface (AUTH_OPTIONS_WRITE allows 'session' only), so
+      // this is always false today; passed explicitly like allowedDriveIds
+      // above so the surface stays correct if the auth methods ever widen.
+      driveScoped: isDriveScopedPrincipal(auth),
       commandDriveId: locationContext?.currentDrive?.id ?? null,
       timer: turnTimer,
     });
