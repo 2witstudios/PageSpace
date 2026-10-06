@@ -54,7 +54,7 @@ import {
 } from './spend-target';
 import { toSubscriptionTier, type SubscriptionTier } from './subscription-tiers';
 import { ensurePersonalRootWalletId } from './personal-wallet';
-import { loadSeatCapFacts } from './seat-allowance';
+import { loadSeatCapFacts, loadSeatCapFactsForUsers } from './seat-allowance';
 import { readOrgSpendPolicy } from '../organizations/policy-reader';
 import { findOrganizationNames } from '../organizations/repository';
 
@@ -505,25 +505,56 @@ export interface SeatAllowanceView {
   remainingCents: number;
 }
 
+/** One seat in full, for the org's Members & seats (its Owner and Admins see each window and the caps set). */
+export interface SeatAllowanceDetail extends SeatAllowanceView {
+  /** What is left this period and today; daily null = no daily limit. */
+  monthlyRemainingCents: number;
+  dailyRemainingCents: number | null;
+  /** The member's own caps on their seat; null = none set (the monthly then falls to the org's allowance). */
+  dailyCapCents: number | null;
+  monthlyCapCents: number | null;
+}
+
 /**
- * The ONE read of a member's seat allowance (D-OW-38 read model: "seat allowance remaining"),
- * for the spending-from popover (listSpendChoices) and Settings › Usage › Wallets
- * (listMyWallets): the same facts and the same cap check the gate admits a seat call on.
+ * The ONE computation of seat allowance remaining (D-OW-38 read model), for any number of members of one
+ * org pool: the policy through its one reader (readOrgSpendPolicy), the gate's own facts
+ * (loadSeatCapFactsForUsers: four queries whatever the member count) and the gate's own cap check at a
+ * zero reservation. seatAllowanceFor (the spending-from popover, Settings › Usage › Wallets) and
+ * listOrgSeatCaps (Members & seats) both read through it, so every surface and the gate agree.
  */
+export async function seatAllowancesFor(
+  executor: typeof db,
+  input: { orgId: string; poolId: string; poolPeriodStart: Date | null; userIds: readonly string[]; now: Date },
+): Promise<{ seatAllowanceCents: number; seats: Map<string, SeatAllowanceDetail> }> {
+  const policy = await readOrgSpendPolicy(executor, input.orgId);
+  const facts = await loadSeatCapFactsForUsers(executor, { poolId: input.poolId, poolPeriodStart: input.poolPeriodStart, userIds: input.userIds, policySeatAllowanceCents: policy.seatAllowanceCents, now: input.now });
+  const seats = new Map<string, SeatAllowanceDetail>();
+  for (const [userId, seat] of facts) {
+    const cap = seatCapCheck({ capCents: seat.capCents, dailyCapCents: seat.dailyCapCents, usage: seat.usage, reservationCents: 0 });
+    // The monthly window always exists on a seat (WAL-2: never unlimited), so it is always a number.
+    const monthlyRemainingCents = cap.monthlyRemainingCents ?? seat.capCents;
+    seats.set(userId, {
+      allowanceCents: seat.capCents,
+      spentCents: seatSpentCents(seat.usage.periodChargedMillicents),
+      monthlyRemainingCents,
+      dailyRemainingCents: cap.dailyRemainingCents,
+      remainingCents: Math.min(monthlyRemainingCents, cap.dailyRemainingCents ?? monthlyRemainingCents),
+      dailyCapCents: seat.dailyCapCents,
+      monthlyCapCents: seat.consumerMonthlyCapCents,
+    });
+  }
+  return { seatAllowanceCents: policy.seatAllowanceCents, seats };
+}
+
+/** One member's seat allowance as they see it (seatAllowancesFor, for one member). */
 export async function seatAllowanceFor(
   executor: typeof db,
   input: { orgId: string; poolId: string; poolPeriodStart: Date | null; userId: string; now: Date },
 ): Promise<SeatAllowanceView> {
-  const policy = await readOrgSpendPolicy(executor, input.orgId);
-  const seat = await loadSeatCapFacts(executor, { poolId: input.poolId, poolPeriodStart: input.poolPeriodStart, userId: input.userId, policySeatAllowanceCents: policy.seatAllowanceCents, now: input.now });
-  const cap = seatCapCheck({ capCents: seat.capCents, dailyCapCents: seat.dailyCapCents, usage: seat.usage, reservationCents: 0 });
-  const windows = [cap.monthlyRemainingCents, cap.dailyRemainingCents].filter((c): c is number => c !== null);
-  return {
-    allowanceCents: seat.capCents,
-    spentCents: seatSpentCents(seat.usage.periodChargedMillicents),
-    // The monthly window always exists on a seat, so there is always a number.
-    remainingCents: Math.min(...windows),
-  };
+  const { seats } = await seatAllowancesFor(executor, { ...input, userIds: [input.userId] });
+  const seat = seats.get(input.userId);
+  if (!seat) throw new Error('seatAllowanceFor: no seat for the requested member');
+  return { allowanceCents: seat.allowanceCents, spentCents: seat.spentCents, remainingCents: seat.remainingCents };
 }
 
 /** The drive's and the org's names, for labels (UI-8). */

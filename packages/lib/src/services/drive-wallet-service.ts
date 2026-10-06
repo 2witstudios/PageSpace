@@ -48,7 +48,7 @@ import {
   type WalletWrite,
 } from '../permissions/wallet-access';
 import { ensurePersonalRootWalletId } from '../billing/personal-wallet';
-import { listSpendChoices, resolveCallSpend, seatAllowanceFor, type SpendChoice } from '../billing/spend-resolution';
+import { listSpendChoices, resolveCallSpend, seatAllowanceFor, seatAllowancesFor, type SpendChoice } from '../billing/spend-resolution';
 import { conversationSpend, type CallSpendDecision } from '../billing/spend-target';
 import { formatCreditCount } from '../billing/money-model';
 import { toSubscriptionTier } from '../billing/subscription-tiers';
@@ -56,9 +56,9 @@ import { capChangeOnlyRestricts, planDeleteWallet, planTopUp, planWalletPatch, w
 import { donateToDriveWallet } from '../billing/wallet-funding-shell';
 import { checkOrgActive } from '../organizations/status';
 import { findMembershipRole, findOrganizationNames, listOrgMembers } from '../organizations/repository';
-import { loadSeatCapFacts } from '../billing/seat-allowance';
+import { loadSeatCapFactsForUsers } from '../billing/seat-allowance';
 import { planConsumerCapWrite, seatCapCheck, seatSpentCents, userConsumerKey, utcDayStartMs, utcMonthStartMs, type ConsumerCapWriteInput, type ConsumerCaps, type SpendSourceKind } from '../billing/wallet-core';
-import { getOrgPolicies } from '../organizations/policy-reader';
+import { getOrgPolicies, readOrgSpendPolicy } from '../organizations/policy-reader';
 import {
   capRemainingCents,
   displayedWalletStatus,
@@ -922,51 +922,48 @@ export interface OrgSeatCapsRead {
   seats: OrgSeatCapView[];
 }
 
-/** Each accepted member's seat facts on the org pool, read exactly as the credit gate reads them. */
+/** Each accepted member's seat facts on the org pool, read exactly as the credit gate reads them (one batch, no query per member). */
 async function memberSeatFacts(orgId: string, pool: NonNullable<Awaited<ReturnType<typeof orgPoolRow>>>, seatAllowanceCents: number, now: Date) {
   const members = await listOrgMembers(orgId);
-  const out: { member: (typeof members)[number]; facts: Awaited<ReturnType<typeof loadSeatCapFacts>> }[] = [];
-  for (const member of members) {
-    const facts = await loadSeatCapFacts(db, {
-      poolId: pool.id,
-      poolPeriodStart: pool.monthlyPeriodStart,
-      userId: member.userId,
-      policySeatAllowanceCents: seatAllowanceCents,
-      now,
-    });
-    out.push({ member, facts });
-  }
-  return out;
+  const facts = await loadSeatCapFactsForUsers(db, {
+    poolId: pool.id,
+    poolPeriodStart: pool.monthlyPeriodStart,
+    userIds: members.map((m) => m.userId),
+    policySeatAllowanceCents: seatAllowanceCents,
+    now,
+  });
+  return members.flatMap((member) => {
+    const f = facts.get(member.userId);
+    return f ? [{ member, facts: f }] : [];
+  });
 }
 
 /**
- * Every member's seat caps and what is left of them, read with the credit gate's own facts and check
- * (loadSeatCapFacts, seatCapCheck at a zero reservation), so the page and the gate agree on one figure.
+ * Every member's seat caps and what is left of them, through the ONE seat-remaining computation
+ * (seatAllowancesFor: the gate's facts and cap check, the policy through readOrgSpendPolicy), so this page,
+ * GET /api/wallets, the spending-from popover and the gate agree on one figure. Fixed cost: the members, the
+ * pool, the policy and four seat-fact queries, whatever the member count.
  * Callers authorize (Owner or Admin: the org gate on GET /api/orgs/[orgId]/seat-caps).
  */
 export async function listOrgSeatCaps(orgId: string, now: Date = new Date()): Promise<OrgSeatCapsRead> {
-  const policies = await getOrgPolicies(orgId);
   const pool = await orgPoolRow(db, orgId);
-  if (!pool) return { walletId: null, seatAllowanceCents: policies.seatAllowanceCents, seats: [] };
-  const seats: OrgSeatCapView[] = [];
-  for (const { member, facts } of await memberSeatFacts(orgId, pool, policies.seatAllowanceCents, now)) {
-    const [own] = await db
-      .select({ dailyCapCents: walletConsumerCaps.dailyCapCents, monthlyCapCents: walletConsumerCaps.monthlyCapCents })
-      .from(walletConsumerCaps)
-      .where(and(eq(walletConsumerCaps.walletId, pool.id), eq(walletConsumerCaps.consumerKey, userConsumerKey(member.userId))))
-      .limit(1);
-    const left = seatCapCheck({ capCents: facts.capCents, dailyCapCents: facts.dailyCapCents, usage: facts.usage, reservationCents: 0 });
-    seats.push({
+  if (!pool) return { walletId: null, seatAllowanceCents: (await readOrgSpendPolicy(db, orgId)).seatAllowanceCents, seats: [] };
+  const members = await listOrgMembers(orgId);
+  const read = await seatAllowancesFor(db, { orgId, poolId: pool.id, poolPeriodStart: pool.monthlyPeriodStart, userIds: members.map((m) => m.userId), now });
+  const seats: OrgSeatCapView[] = members.flatMap((member) => {
+    const seat = read.seats.get(member.userId);
+    if (!seat) return [];
+    return [{
       userId: member.userId,
       displayName: member.name || member.email,
-      dailyCapCents: own?.dailyCapCents ?? null,
-      monthlyCapCents: own?.monthlyCapCents ?? null,
-      monthlyLimitCents: facts.capCents,
-      monthlyRemainingCents: left.monthlyRemainingCents ?? facts.capCents,
-      dailyRemainingCents: left.dailyRemainingCents,
-    });
-  }
-  return { walletId: pool.id, seatAllowanceCents: policies.seatAllowanceCents, seats };
+      dailyCapCents: seat.dailyCapCents,
+      monthlyCapCents: seat.monthlyCapCents,
+      monthlyLimitCents: seat.allowanceCents,
+      monthlyRemainingCents: seat.monthlyRemainingCents,
+      dailyRemainingCents: seat.dailyRemainingCents,
+    }];
+  });
+  return { walletId: pool.id, seatAllowanceCents: read.seatAllowanceCents, seats };
 }
 
 /** The org pool and where it goes (D-OW-38 "pool split"; SPEND-10; canvas Plan & seats "Credits pool"). */

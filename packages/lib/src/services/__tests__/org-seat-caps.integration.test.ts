@@ -17,7 +17,8 @@ import { organizations, orgMembers, orgSubscriptions } from '@pagespace/db/schem
 import { walletConsumerCaps, wallets } from '@pagespace/db/schema/wallets';
 import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
-import { listOrgSeatCaps } from '../drive-wallet-service';
+import { listMyWallets, listOrgSeatCaps } from '../drive-wallet-service';
+import { loadSeatCapFacts, loadSeatCapFactsForUsers } from '../../billing/seat-allowance';
 import { listSpendChoices } from '../../billing/spend-resolution';
 import { drives } from '@pagespace/db/schema/core';
 import { driveMembers } from '@pagespace/db/schema/members';
@@ -111,6 +112,28 @@ describe.skipIf(!ok)('org seat caps read model (real Postgres)', () => {
     assert(mine && seat, JSON.stringify({ mine, choices }));
     const caps = [mine.monthlyRemainingCents, mine.dailyRemainingCents].filter((n): n is number => n !== null);
     expect(seat.remainingCents).toBe(Math.min(...caps));
+  });
+
+  it('WAL-7 (partial): the seat-caps route and GET /api/wallets give every member the same seat remaining (one computation, seatAllowancesFor)', async () => {
+    const read = await listOrgSeatCaps(w.orgId);
+    for (const userId of w.userIds) {
+      const row = read.seats.find((s) => s.userId === userId);
+      const mine = (await listMyWallets(userId, 'session')).seats.find((s) => s.orgId === w.orgId);
+      assert(row && mine, JSON.stringify({ userId, row, mine }));
+      expect(mine.allowanceCents).toBe(row.monthlyLimitCents);
+      expect(mine.remainingCents).toBe(Math.min(row.monthlyRemainingCents, row.dailyRemainingCents ?? row.monthlyRemainingCents));
+    }
+  });
+
+  it('the batched seat facts (one read for every member) equal the gate\'s one-member read for each', async () => {
+    const [poolRow] = await db.select({ start: wallets.monthlyPeriodStart }).from(wallets).where(eq(wallets.id, w.poolId));
+    const input = { poolId: w.poolId, poolPeriodStart: poolRow.start, policySeatAllowanceCents: 150, now: new Date() };
+    const batch = await loadSeatCapFactsForUsers(db, { ...input, userIds: [...w.userIds, w.marcus] });
+    expect([...batch.keys()].sort()).toEqual([...w.userIds].sort());
+    for (const userId of w.userIds) {
+      expect(batch.get(userId)).toEqual(await loadSeatCapFacts(db, { ...input, userId }));
+    }
+    expect((await loadSeatCapFactsForUsers(db, { ...input, userIds: [] })).size).toBe(0);
   });
 
   it('an org with no pool yet has no seat figures to show', async () => {
