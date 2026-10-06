@@ -22,6 +22,8 @@ import { renderDomainNotFoundOverride } from '@/lib/canvas/publish-page';
 import { CUSTOM_DOMAINS_UNAVAILABLE_MESSAGE } from '@/lib/subscription/plan-refusal-copy';
 import { getDrivePolicies } from '@pagespace/lib/organizations/policy-reader';
 import { customDomainsDecision, publishingDecision } from '@pagespace/lib/organizations/sharing-decisions';
+import { OrgLapsedError, checkDriveMayLoosen, isOrgLapsedError } from '@pagespace/lib/permissions/org-lapse-guard';
+import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
 
 /** Statuses whose cert is still advancing — worth a lazy reconcile on read. */
 const CERT_NON_TERMINAL = new Set(['verified', 'provisioning']);
@@ -164,12 +166,17 @@ export async function POST(
 
     if (wantsPlatformDomain) {
       try {
-        const rows = await db
-          .insert(customDomains)
-          .values({ driveId, hostname, status: 'active', platformOwned: true })
-          .returning();
+        // [D-OW-33] a new host for published content loosens access: refused while the drive's org is lapsed.
+        const rows = await db.transaction(async (tx) => {
+          if (await checkDriveMayLoosen(tx, driveId, true)) throw new OrgLapsedError();
+          return tx
+            .insert(customDomains)
+            .values({ driveId, hostname, status: 'active', platformOwned: true })
+            .returning();
+        });
         inserted = rows[0];
       } catch (err) {
+        if (isOrgLapsedError(err)) return orgLapsedResponse();
         const anyErr = err as { code?: string };
         if (anyErr.code === '23505') {
           return NextResponse.json({ error: 'Domain is already registered' }, { status: 409 });
@@ -204,6 +211,8 @@ export async function POST(
       try {
         const rows = await db.transaction(async (tx) => {
           await tx.select({ id: drives.id }).from(drives).where(eq(drives.id, driveId)).for('update');
+          // [D-OW-33] a new host for published content loosens access: refused while the drive's org is lapsed.
+          if (await checkDriveMayLoosen(tx, driveId, true)) throw new OrgLapsedError();
 
           const [countRow] = await tx.select({ n: count() }).from(customDomains).where(eq(customDomains.driveId, driveId));
           const existingCount = countRow?.n ?? 0;
@@ -217,6 +226,7 @@ export async function POST(
         });
         inserted = rows[0];
       } catch (err) {
+        if (isOrgLapsedError(err)) return orgLapsedResponse();
         const anyErr = err as { code?: string; maxAllowed?: number };
         if (anyErr.code === 'cap_exceeded') {
           const max = anyErr.maxAllowed!;

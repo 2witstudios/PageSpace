@@ -128,22 +128,6 @@ const setupSelectAll = (rows: unknown[]) => {
   return { where };
 };
 
-const setupInsert = (rows: unknown[]) => {
-  const returning = vi.fn().mockResolvedValue(rows);
-  const values = vi.fn().mockReturnValue({ returning });
-  mockInsertChain.values = values;
-  return { values, returning };
-};
-
-const setupUpdate = (returnRows?: unknown[]) => {
-  const where = returnRows
-    ? vi.fn().mockReturnValue({ returning: vi.fn().mockResolvedValue(returnRows) })
-    : vi.fn().mockResolvedValue(undefined);
-  const set = vi.fn().mockReturnValue({ where });
-  mockUpdateChain.set = set;
-  return { set, where };
-};
-
 beforeEach(() => {
   vi.clearAllMocks();
   checkDriveMayLoosen.mockResolvedValue(null);

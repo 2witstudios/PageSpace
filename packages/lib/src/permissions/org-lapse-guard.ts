@@ -120,7 +120,7 @@ export async function snapshotDriveAccess(executor: Executor, driveId: string, s
   }
 
   return {
-    drive: drive ? { ownerId: drive.ownerId, orgId: drive.orgId, orgVisibility: drive.orgVisibility } : null,
+    drive: drive ? { leadId: drive.ownerId, orgId: drive.orgId, orgVisibility: drive.orgVisibility } : null,
     members,
     grants,
     roles,

@@ -101,7 +101,8 @@ const OPENNESS: Readonly<Record<OrgDriveVisibilityName, number>> = { PRIVATE: 0,
  * same scope.
  */
 export interface DriveAccessSnapshot {
-  drive: { ownerId: string; orgId: string | null; orgVisibility: OrgDriveVisibilityName } | null;
+  /** `leadId` is drives.ownerId: who leads the drive. */
+  drive: { leadId: string; orgId: string | null; orgVisibility: OrgDriveVisibilityName } | null;
   /** By user id. `accepted: false` is a pending invitation, which grants nothing. */
   members: Record<string, { role: DriveMemberRoleName; customRoleId: string | null; accepted: boolean }>;
   /** By `${pageId}:${userId}`. */
@@ -133,7 +134,7 @@ export function driveAccessWidens(before: DriveAccessSnapshot, after: DriveAcces
   const b = before.drive;
   const a = after.drive;
   if (a && b) {
-    if (a.ownerId !== b.ownerId || a.orgId !== b.orgId) return true;
+    if (a.leadId !== b.leadId || a.orgId !== b.orgId) return true;
     if (OPENNESS[a.orgVisibility] > OPENNESS[b.orgVisibility]) return true;
   } else if (a && !b) {
     return true;

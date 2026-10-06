@@ -9,6 +9,8 @@
  * every handler, createPageVersion, and logRollbackActivity.
  */
 import type { db } from '@pagespace/db/db';
+import { eq } from '@pagespace/db/operators';
+import { pages } from '@pagespace/db/schema/core';
 import type { ActivityAction, ActivityActionResult, ActivityActionPreview } from '@/types/activity-actions';
 import type { DeferredWorkflowTrigger, ActivityOperation } from '@pagespace/lib/monitoring/activity-logger';
 import type { RollbackContext } from '@pagespace/lib/permissions/rollback-permissions';
@@ -56,6 +58,19 @@ export async function previewRollback(
   options?: { force?: boolean; undoGroupActivityIds?: string[] }
 ): Promise<ActivityActionPreview> {
   return previewActivityAction(deps, 'rollback', activityId, userId, context, options);
+}
+
+/** POL-6's floor guard around a role write, when the role belongs to a drive. */
+function guardOpenRoleFloorIfDrive<T>(d: RollbackDeps, driveId: string | null, write: () => Promise<T>): Promise<T> {
+  return driveId === null ? write() : guardOpenRoleFloor(d.db, driveId, write);
+}
+
+/** The drive an access write lands in: the activity's, or (a page permission) its page's drive. */
+async function accessDriveId(deps: RollbackDeps, activity: { driveId: string | null; pageId?: string | null }): Promise<string | null> {
+  if (activity.driveId) return activity.driveId;
+  if (!activity.pageId) return null;
+  const [row] = await deps.db.select({ driveId: pages.driveId }).from(pages).where(eq(pages.id, activity.pageId)).limit(1);
+  return row?.driveId ?? null;
 }
 
 export async function executeRollback(
@@ -109,6 +124,15 @@ export async function executeRollback(
   /** Run a write in the caller's transaction, or in one of its own when there is none. */
   const inTransaction = <T>(run: (d: RollbackDeps) => Promise<T>): Promise<T> =>
     tx ? run(txDeps) : deps.db.transaction((t) => run(withTx(deps, t as unknown as typeof db)));
+  /**
+   * [D-OW-33] Run an access write (member, permission, role, drive) under the lapse guard: in a savepoint of the
+   * caller's transaction (or a transaction of its own), undone with OrgLapsedError when it gave anyone more on the
+   * drive while the drive's org is lapsed. Restoring LESS access (undoing a grant, re-removing a member) still applies.
+   */
+  const guardedAccessWrite = <T>(driveId: string | null, run: (d: RollbackDeps) => Promise<T>): Promise<T> =>
+    driveId === null
+      ? inTransaction(run)
+      : deps.guardDriveAccess(tx ?? deps.db, driveId, {}, (t) => run(withTx(deps, t)));
   const changeGroupId = deps.genChangeGroupId();
   const changeGroupType = deps.inferChangeGroupType({ isAiGenerated: false });
 
@@ -165,14 +189,14 @@ export async function executeRollback(
       }
 
       case 'drive':
-        restoredValues = rollingBackRollback
-          ? await redoDriveChange(txDeps, activity, preview.targetValues, effectiveSourceOperation, pageUpdateContext)
-          : await rollbackDriveChange(txDeps, activity, pageUpdateContext);
+        restoredValues = await guardedAccessWrite(activity.driveId, (d) => rollingBackRollback
+          ? redoDriveChange(d, activity, preview.targetValues, effectiveSourceOperation, pageUpdateContext)
+          : rollbackDriveChange(d, activity, pageUpdateContext));
         break;
 
       case 'permission':
         // POL-2: a re-entering grant is decided by the org's guests policy inside a transaction (deps.admitReentry).
-        restoredValues = await inTransaction((d) => rollingBackRollback
+        restoredValues = await guardedAccessWrite(await accessDriveId(deps, activity), (d) => rollingBackRollback
           ? redoPermissionChange(d, activity, preview.targetValues, effectiveSourceOperation)
           : rollbackPermissionChange(d, activity));
         break;
@@ -188,23 +212,20 @@ export async function executeRollback(
 
       case 'member':
         // POL-2: a re-entering member row is decided by the org's guests policy inside a transaction.
-        restoredValues = await inTransaction((d) => rollingBackRollback
+        restoredValues = await guardedAccessWrite(activity.driveId, (d) => rollingBackRollback
           ? redoMemberChange(d, activity, preview.targetValues, effectiveSourceOperation)
           : rollbackMemberChange(d, activity));
         break;
 
       case 'role': {
-        const runRole = (d: RollbackDeps) => rollingBackRollback
-          ? redoRoleChange(d, activity, preview.targetValues, effectiveSourceOperation)
-          : rollbackRoleChange(d, activity);
         // POL-6: undoing or redoing a role change may change an Open org drive's default role; it is judged against
-        // the org's floor like any role write, inside a transaction so a refusal writes nothing.
+        // the org's floor like any role write, inside a transaction so a refusal writes nothing. [D-OW-33] and under
+        // the lapse guard, like every access write.
         const roleDriveId = activity.driveId;
-        restoredValues = roleDriveId === null
-          ? await runRole(txDeps)
-          : tx
-            ? await guardOpenRoleFloor(tx, roleDriveId, () => runRole(txDeps))
-            : await deps.db.transaction((t) => guardOpenRoleFloor(t, roleDriveId, () => runRole(withTx(deps, t as unknown as typeof db))));
+        restoredValues = await guardedAccessWrite(roleDriveId, (d) =>
+          guardOpenRoleFloorIfDrive(d, roleDriveId, () => rollingBackRollback
+            ? redoRoleChange(d, activity, preview.targetValues, effectiveSourceOperation)
+            : rollbackRoleChange(d, activity)));
         break;
       }
 

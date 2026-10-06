@@ -20,6 +20,8 @@ import {
   type RestoreAdmission,
 } from '@/services/api/restore-permissions-service';
 import { runPreRestoreSnapshot } from '@/services/api/restore-backup-service';
+import { guardDriveAccess, isOrgLapsedError } from '@pagespace/lib/permissions/org-lapse-guard';
+import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -150,14 +152,18 @@ export async function POST(
           grants: grants.map((g) => ({ ...g, expiresAt: g.expiresAt instanceof Date || typeof g.expiresAt === 'string' ? g.expiresAt : null })),
           requestedBy: auth.userId,
         })).outcome;
-      const { skippedMembers, skippedPermissions, refusedByGuestPolicy, queuedForApproval } = await guardOpenRoleFloor(tx, driveId, () => applyPermRestoreOps(
-        permOps,
-        memberOps,
-        roleOps,
-        driveId,
-        tx as never,
-        admit,
-      ));
+      // [D-OW-33] while the drive's org is lapsed a restore may only restrict: if putting the backup's members, grants
+      // and roles back gives anyone more than they hold now, guardDriveAccess refuses (OrgLapsedError) and the whole
+      // restore rolls back (402).
+      const { skippedMembers, skippedPermissions, refusedByGuestPolicy, queuedForApproval } = await guardDriveAccess(tx, driveId, {}, (sp) =>
+        guardOpenRoleFloor(sp, driveId, () => applyPermRestoreOps(
+          permOps,
+          memberOps,
+          roleOps,
+          driveId,
+          sp as never,
+          admit,
+        )));
 
       return {
         pagesCreated: diff.toCreate.length,
@@ -184,6 +190,7 @@ export async function POST(
       counts,
     });
   } catch (error) {
+    if (isOrgLapsedError(error)) return orgLapsedResponse();
     if (error instanceof OpenRoleFloorError) {
       return NextResponse.json({ error: error.message, code: error.code, policy: error.policy }, { status: error.status });
     }

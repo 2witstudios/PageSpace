@@ -16,7 +16,7 @@ const role = (driveWide: RoleGrant['driveWidePermissions'], permissions: RoleGra
 
 function snapshot(over: Partial<DriveAccessSnapshot> = {}): DriveAccessSnapshot {
   return {
-    drive: { ownerId: 'lead', orgId: 'org', orgVisibility: 'RESTRICTED' },
+    drive: { leadId: 'lead', orgId: 'org', orgVisibility: 'RESTRICTED' },
     members: {},
     grants: {},
     roles: {},
@@ -97,7 +97,7 @@ describe('driveAccessWidens', () => {
       roles: { r1: { grant: role(VIEW), isDefault: false } },
       agents: { a1: { role: 'MEMBER', customRoleId: null, includeContext: false } },
     }))).toBe(false);
-    expect(driveAccessWidens(snapshot({ drive: { ownerId: 'lead', orgId: 'org', orgVisibility: 'OPEN' } }), snapshot({ drive: { ownerId: 'lead', orgId: 'org', orgVisibility: 'PRIVATE' } }))).toBe(false);
+    expect(driveAccessWidens(snapshot({ drive: { leadId: 'lead', orgId: 'org', orgVisibility: 'OPEN' } }), snapshot({ drive: { leadId: 'lead', orgId: 'org', orgVisibility: 'PRIVATE' } }))).toBe(false);
   });
 
   it('SEAT-9 (partial) [D-OW-33] a new or newly accepted member, a promotion, a wider held role, a wider grant, a new or wider agent, a lead change and a more open drive each widen', () => {
@@ -115,7 +115,7 @@ describe('driveAccessWidens', () => {
     expect(widened({ agents: { ...base.agents, a2: { role: 'MEMBER', customRoleId: null, includeContext: false } } })).toBe(true);
     expect(widened({ agents: { a1: { role: 'MEMBER', customRoleId: null, includeContext: true } } })).toBe(true);
     expect(widened({ agents: { a1: { role: 'ADMIN', customRoleId: null, includeContext: false } } })).toBe(true);
-    expect(widened({ drive: { ...base.drive, ownerId: 'someone-else' } })).toBe(true);
+    expect(widened({ drive: { ...base.drive, leadId: 'someone-else' } })).toBe(true);
     expect(widened({ drive: { ...base.drive, orgVisibility: 'OPEN' } })).toBe(true);
     expect(widened({ drive: { ...base.drive, orgId: 'other-org' } })).toBe(true);
   });

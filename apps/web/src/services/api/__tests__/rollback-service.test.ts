@@ -90,6 +90,11 @@ vi.mock('@pagespace/db/schema/members', () => ({
 // POL-2: a re-entering grant or member asks the org's guests policy (proven against real Postgres in
 // guest-policy-reentry.integration.test.ts); these tests are about drives with no org, which it admits.
 vi.mock('@pagespace/lib/permissions/guest-holds', () => ({ admitReentry: vi.fn(async () => ({ outcome: 'admit' })) }));
+// [D-OW-33] the lapse guard (proven against real Postgres in org-lapse-loosening.integration.test.ts): these drives
+// have no org, so it runs the write with the handle it is given.
+vi.mock('@pagespace/lib/permissions/org-lapse-guard', () => ({
+  guardDriveAccess: vi.fn(async (handle: unknown, _driveId: string, _scope: unknown, write: (tx: unknown) => Promise<unknown>) => write(handle)),
+}));
 
 vi.mock('@pagespace/lib/permissions/rollback-permissions', () => ({
     canUserRollback: vi.fn(),
@@ -144,6 +149,7 @@ vi.mock('@/services/api/page-mention-service', () => ({
 import { db } from '@pagespace/db/db';
 import { canUserRollback, isRollbackableOperation } from '@pagespace/lib/permissions/rollback-permissions';
 import { logRollbackActivity } from '@pagespace/lib/monitoring/activity-logger';
+import { ORG_LAPSED_MESSAGE } from '@pagespace/lib/organizations/status-core';
 
 /** Matches the mock shape defined in vi.mock('@pagespace/db/db') above */
 type MockFn = ReturnType<typeof vi.fn>;
@@ -806,6 +812,38 @@ describe('rollback-service', () => {
       expect(result.success).toBe(true);
       expect(db.delete).toHaveBeenCalled();
       expect((result.restoredValues as Record<string, unknown>).deleted).toBe(true);
+    });
+
+    it('SEAT-9 (partial) [D-OW-33] undoing a revoke runs under the drive lapse guard; a refusal (lapsed org) fails the rollback with the lapse copy', async () => {
+      const mockActivity = createMockActivity({
+        resourceType: 'permission',
+        operation: 'permission_revoke',
+        previousValues: { canView: true, canEdit: false, canShare: false, canDelete: false },
+        metadata: { targetUserId: 'target_user' },
+      });
+      let selectCallCount = 0;
+      mockDb.select.mockImplementation(() => ({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({
+            limit: vi.fn().mockImplementation(() => {
+              selectCallCount++;
+              return Promise.resolve(selectCallCount === 1 || selectCallCount === 3 ? [mockActivity] : []);
+            }),
+          }),
+        }),
+      }));
+      mockDb.insert.mockReturnValue({ values: vi.fn().mockResolvedValue(undefined) });
+      mockIsRollbackableOperation.mockReturnValue(true);
+      mockCanUserRollback.mockResolvedValue({ canRollback: true });
+      const { guardDriveAccess } = await import('@pagespace/lib/permissions/org-lapse-guard');
+      // OrgLapsedError carries the SEAT-9 copy as its message; the rollback reports that message.
+      vi.mocked(guardDriveAccess).mockImplementationOnce(async () => { throw new Error(ORG_LAPSED_MESSAGE); });
+
+      const result = await executeRollback(mockActivityId, mockUserId, 'page');
+
+      expect(guardDriveAccess).toHaveBeenCalledWith(expect.anything(), mockDriveId, {}, expect.any(Function));
+      expect(result.success).toBe(false);
+      expect(result.message).toBe(ORG_LAPSED_MESSAGE);
     });
 
     it('recreates permission on permission_revoke rollback', async () => {

@@ -136,6 +136,10 @@ const EXEMPT = new Map<string, Exemption>([
     ormReads: 2,
     reason: 'Both ungated reads find an outsider\'s rows (pending included, on purpose) to TAKE THEM OUT of the live tables: memberOutsiders lists the outsiders of an org\'s drives, and takeOutsider reads one person\'s row to snapshot it into org_guest_holds (parked, or queued for approval) before deleting it. Writers that REMOVE access, inside the transaction that changed the policy or brought the access in; they grant nothing. The admission read (admitReentry) and the page-move exemption in grantOutsiders are gated: only an accepted, non-GUEST row counts as an admitted guest.',
   }],
+  ['packages/lib/src/permissions/org-lapse-guard.ts', {
+    ormReads: 1,
+    reason: '[D-OW-33] snapshotDriveAccess reads every row, pending included, on purpose: it compares who reaches a drive before and after a write, and a pending row turning accepted is a loosening it must see. It decides nothing from a row by itself (driveAccessWidens treats a pending row as no access) and grants nothing.',
+  }],
   ['packages/lib/src/permissions/org-read-models.ts', {
     ormReads: 1,
     reason: 'The org Guests list (listOrgGuests, DRV-8) is the org admin\'s one view of every outsider with access, so it shows pending invitations on purpose, each drive marked pending. It is a display behind the Admin+ route and grants nothing. The other read (memberRowsIn, behind drive usage and member drive counts) is gated: a pending invitee is not counted as a member.',

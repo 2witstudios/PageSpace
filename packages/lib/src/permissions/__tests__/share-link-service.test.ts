@@ -19,6 +19,9 @@ const { mockDb } = vi.hoisted(() => {
 });
 
 vi.mock('@pagespace/db/db', () => ({ db: mockDb }));
+// [D-OW-33] the lapse guard: no org (null) unless a test lapses the drive.
+const checkDriveMayLoosen = vi.hoisted(() => vi.fn(async (): Promise<unknown> => null));
+vi.mock('../org-lapse-guard', () => ({ checkDriveMayLoosen }));
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((a, b) => ({ op: 'eq', a, b })),
   and: vi.fn((...args) => ({ op: 'and', args })),
@@ -194,6 +197,18 @@ describe('createDriveShareLink', () => {
       expect(result.data.id).toBe(LINK_ID);
       expect(result.data.rawToken).toBe('ps_share_testtoken');
     }
+  });
+
+  it('SEAT-9 (partial) [D-OW-33] while the drive\'s org is lapsed no link is created: ORG_LAPSED with the SEAT-9 copy, nothing inserted', async () => {
+    vi.mocked(isDriveOwnerOrAdmin).mockResolvedValue(true);
+    makeInsertChain([{ id: LINK_ID }]);
+    checkDriveMayLoosen.mockResolvedValueOnce({ ok: false, code: 'org_lapsed', status: 402, message: 'lapsed copy' });
+
+    const result = await createDriveShareLink(makeCtx(), DRIVE_ID, { role: 'MEMBER' });
+
+    expect(result).toEqual({ ok: false, error: 'ORG_LAPSED', message: 'lapsed copy' });
+    expect(checkDriveMayLoosen).toHaveBeenCalledWith(expect.anything(), DRIVE_ID, true);
+    expect(mockDb.insert).not.toHaveBeenCalled();
   });
 
   it('returns NOT_FOUND when customRoleId does not belong to the drive', async () => {

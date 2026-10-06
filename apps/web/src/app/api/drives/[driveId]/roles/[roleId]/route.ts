@@ -5,6 +5,8 @@ import { checkDriveAccessForRoles, getRoleById, roleNotFoundMessage, updateDrive
 import { getActorInfo, logRoleActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
+import { isOrgLapsedError } from '@pagespace/lib/permissions/org-lapse-guard';
+import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -170,6 +172,8 @@ export async function PATCH(
     return NextResponse.json({ role: updatedRole });
   } catch (error) {
     console.error('Error updating role:', error);
+    // [D-OW-33] the write would give a role's holders more while the drive's org is lapsed.
+    if (isOrgLapsedError(error)) return orgLapsedResponse();
     if (error instanceof OpenRoleFloorError) {
       return NextResponse.json({ error: error.message, code: error.code, policy: error.policy }, { status: error.status });
     }
@@ -237,6 +241,8 @@ export async function DELETE(
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error('Error deleting role:', error);
+    // [D-OW-33] the write would give a role's holders more while the drive's org is lapsed.
+    if (isOrgLapsedError(error)) return orgLapsedResponse();
     if (error instanceof OpenRoleFloorError) {
       return NextResponse.json({ error: error.message, code: error.code, policy: error.policy }, { status: error.status });
     }

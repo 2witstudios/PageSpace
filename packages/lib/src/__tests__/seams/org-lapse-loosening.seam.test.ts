@@ -38,6 +38,7 @@ type Verdict = { guard: 'self' } | { guard: 'caller'; by: readonly string[] } | 
 
 const SELF = { guard: 'self' } as const;
 const ROLLBACK = ['apps/web/src/services/api/rollback/execute.ts#executeRollback'];
+const MEMBER_ACCESS = 'packages/lib/src/services/drive-member-service.ts#updateMemberAccess';
 const NEW_AGENT_IN_ITS_OWN_DRIVE =
   'a new AI_CHAT page joins its OWN drive as a plain MEMBER: the page is new, so only people who already reach the drive reach the agent';
 
@@ -47,8 +48,8 @@ const NEW_AGENT_IN_ITS_OWN_DRIVE =
  */
 export const LOOSENING_WRITE_LEDGER: Readonly<Record<string, Verdict>> = {
   // ── drive members, re-invites, invitations (inventory #1-#10) ──────────────────────────────────────────────
-  'packages/lib/src/services/drive-member-service.ts#updateMemberRole': SELF,
-  'packages/lib/src/services/drive-member-service.ts#updateMemberPermissions': SELF,
+  'packages/lib/src/services/drive-member-service.ts#updateMemberRole': { guard: 'caller', by: [MEMBER_ACCESS] },
+  'packages/lib/src/services/drive-member-service.ts#updateMemberPermissions': { guard: 'caller', by: [MEMBER_ACCESS] },
   'apps/web/src/lib/repositories/drive-invite-repository.ts#driveInviteRepository.createAcceptedMemberWithPermissions': SELF,
   'apps/web/src/lib/repositories/drive-invite-repository.ts#driveInviteRepository.upgradeMemberWithPermissions': SELF,
   'apps/web/src/lib/repositories/drive-invite-repository.ts#driveInviteRepository.createPendingInvite': SELF,
