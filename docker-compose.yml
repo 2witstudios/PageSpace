@@ -134,6 +134,8 @@ services:
         # host-only ps_consent while marketing bakes Domain=localhost — the duplicate
         # host-only/domain-scoped cookie state that persistConsentToCookie deletes around.
         - NEXT_PUBLIC_COOKIE_DOMAIN=${NEXT_PUBLIC_COOKIE_DOMAIN:-localhost}
+        # Imago's "Try Imago" link; only 'true' shows it. Set with IMAGO_ENABLED.
+        - NEXT_PUBLIC_IMAGO_ENABLED=${NEXT_PUBLIC_IMAGO_ENABLED:-false}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
@@ -212,6 +214,8 @@ services:
       # Server redirects (sign-in, classic) are built on this, never on Host.
       - WEB_APP_URL=${WEB_APP_URL:-http://localhost:3000}
       - NEXT_PUBLIC_REALTIME_URL=${NEXT_PUBLIC_REALTIME_URL}
+      # Read at request time; anything but 'true' answers 404 (health excepted).
+      - IMAGO_ENABLED=${IMAGO_ENABLED:-false}
       - PORT=3006
       - HOSTNAME=0.0.0.0
       - NODE_OPTIONS=--max-old-space-size=512

@@ -49,6 +49,17 @@ describe('apps/imago/Dockerfile', () => {
     expect(read('apps/web/Dockerfile')).toContain('ARG NEXT_PUBLIC_COOKIE_DOMAIN=""\n');
   });
 
+  it('given NEXT_PUBLIC_IMAGO_ENABLED, should be a web build ARG (default false) baked in before next build, like NEXT_PUBLIC_COOKIE_DOMAIN (IMG-10.7)', () => {
+    const web = read('apps/web/Dockerfile');
+    const builder = web.slice(web.indexOf(' AS builder'), web.indexOf(' AS runner'));
+    const arg = builder.indexOf('ARG NEXT_PUBLIC_IMAGO_ENABLED="false"\n');
+    const env = builder.indexOf('ENV NEXT_PUBLIC_IMAGO_ENABLED=$NEXT_PUBLIC_IMAGO_ENABLED\n');
+    const build = builder.search(/^RUN .*bun run build/m);
+    expect(arg).toBeGreaterThan(-1);
+    expect(env).toBeGreaterThan(arg);
+    expect(build).toBeGreaterThan(env);
+  });
+
   it('given the runner stage, should ship the standalone server and its static assets', () => {
     expect(dockerfile).toContain('COPY --from=builder /app/apps/imago/.next/standalone .');
     expect(dockerfile).toContain('COPY --from=builder /app/apps/imago/.next/static ./apps/imago/.next/static');
@@ -101,6 +112,14 @@ describe('docker-compose.yml imago service', () => {
     expect(imago.networks).toEqual(expect.arrayContaining(['internal', 'frontend']));
   });
 
+  it('given IMAGO_ENABLED in .env, should pass it to imago at runtime, off by default (IMG-10.7)', () => {
+    expect(imago.environment).toContain('IMAGO_ENABLED=${IMAGO_ENABLED:-false}');
+  });
+
+  it('given NEXT_PUBLIC_IMAGO_ENABLED in .env, should bake it into the web build, off by default (IMG-10.7)', () => {
+    expect(compose.services.web.build?.args).toContain('NEXT_PUBLIC_IMAGO_ENABLED=${NEXT_PUBLIC_IMAGO_ENABLED:-false}');
+  });
+
   it('should bake the same cookie domain as the web service (IMG-1.7a)', () => {
     const web = compose.services.web;
     const cookieDomain = (args: string[] | undefined) =>
@@ -118,7 +137,7 @@ interface WorkflowStep {
 }
 
 interface Workflow {
-  on: Record<string, { branches?: string[]; paths?: string[] } | null>;
+  on: Record<string, { branches?: string[]; paths?: string[]; tags?: string[] } | null>;
   jobs: Record<string, { steps?: WorkflowStep[] } & Record<string, unknown>>;
 }
 
@@ -145,18 +164,48 @@ describe('imago-image.yml (PR proof that the image builds and boots)', () => {
   const steps = Object.values(workflow.jobs).flatMap((job) => job.steps ?? []);
   const buildStep = steps.find((s) => s.uses?.startsWith('docker/build-push-action'));
 
-  it('given a pull request to pu/imago touching an imago build input, should run', () => {
-    expect(pr?.branches).toContain('pu/imago');
-    expect(pr?.paths).toEqual(
-      expect.arrayContaining([
-        'apps/imago/**',
-        'apps/*/Dockerfile*',
-        'packages/**',
-        'package.json',
-        'bun.lock',
-        '.github/workflows/imago-image.yml',
-      ]),
-    );
+  const push = workflow.on.push;
+  // Everything apps/imago/Dockerfile COPYs, plus this workflow.
+  const buildInputs = [
+    'apps/imago/**',
+    'apps/*/Dockerfile*',
+    'apps/*/package.json',
+    'packages/**',
+    'package.json',
+    'bun.lock',
+    'tsconfig.json',
+    'types/**',
+    '.github/workflows/imago-image.yml',
+  ];
+
+  it('given a pull request to a pu/* integration branch (pu/imago until it merges) touching an imago build input, should run', () => {
+    expect(pr?.branches).toContain('pu/**');
+    expect(pr?.branches).not.toContain('pu/imago');
+    expect(pr?.paths).toEqual(expect.arrayContaining(buildInputs));
+  });
+
+  it('given a pull request to master touching an imago build input, should run, so a broken image fails the PR instead of skipping every deploy (IMG-10.7)', () => {
+    expect(pr?.branches).toContain('master');
+  });
+
+  it('given a push to master touching an imago build input, should run (IMG-10.7)', () => {
+    expect(push?.branches).toEqual(['master']);
+    expect(push?.paths).toEqual(expect.arrayContaining(buildInputs));
+    expect(push).not.toHaveProperty('tags');
+  });
+
+  it('given apps/imago/Dockerfile, should list every path it COPYs from the context as a trigger (IMG-10.7)', () => {
+    const copied = read('apps/imago/Dockerfile')
+      .split('\n')
+      .filter((line) => line.startsWith('COPY ') && !line.includes('--from='))
+      .flatMap((line) => line.slice('COPY '.length).trim().split(/\s+/).slice(0, -1));
+    const matchesTrigger = (path: string) =>
+      (pr?.paths ?? []).some((glob) => {
+        const re = new RegExp(`^${glob.replace(/[.+]/g, '\\$&').replace(/\*\*/g, '\u0000').replace(/\*/g, '[^/]*').replace(/\u0000/g, '.*')}$`);
+        return re.test(path) || re.test(`${path}/x`);
+      });
+    expect(copied.length).toBeGreaterThan(0);
+    expect(copied.filter((path) => !matchesTrigger(path))).toEqual([]);
   });
 
   it('should build apps/imago/Dockerfile from the repo root, cached, without pushing', () => {
@@ -190,5 +239,25 @@ describe('imago-image.yml (PR proof that the image builds and boots)', () => {
     const runs = steps.map((s) => s.run ?? '').join('\n');
     expect(runs).toMatch(/docker run [^\n]*-p 3006:3006/);
     expect(runs).toMatch(/curl [^\n]*--fail[^\n]*http:\/\/localhost:3006\/imago\/api\/health/);
+  });
+});
+
+describe('test.yml after pu/imago merges (IMG-10.7)', () => {
+  const workflow = readWorkflow('test.yml');
+
+  it('should name no branch that is deleted at the final merge', () => {
+    expect(workflow.on.push?.branches).not.toContain('pu/imago');
+    expect(workflow.on.pull_request?.branches).not.toContain('pu/imago');
+  });
+
+  it('given a PR into any pu/* integration branch (pu/imago until it merges), should still run the full suite', () => {
+    expect(workflow.on.pull_request?.branches).toContain('pu/**');
+  });
+});
+
+describe('imago-image.yml concurrency (IMG-10.7)', () => {
+  it('should cancel superseded PR runs but never a master push run', () => {
+    const raw = read('.github/workflows/imago-image.yml');
+    expect(raw).toContain("group: imago-image-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}");
   });
 });

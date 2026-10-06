@@ -1,27 +1,46 @@
 name: Imago Image
 
-# Proves apps/imago/Dockerfile builds and the image boots BEFORE pu/imago
-# reaches master. docker-images.yml only runs on master/tags, and its deploy
+# Proves apps/imago/Dockerfile builds and the image boots on every PR into
+# master or a pu/* integration branch (pu/imago until it merges), and on every push to master. docker-images.yml's deploy
 # job needs every build-and-push leg — so an imago image that first fails to
-# build there would skip the production deploy of every service.
+# build there would skip the production deploy of every service. Running here
+# first turns that into a red check on the PR that broke it.
 #
 # Build only: no registry login, no push, no deploy (IMG-11.1 is human-only).
 on:
   pull_request:
-    branches: [pu/imago]
+    branches: [master, 'pu/**']
     paths:
       - 'apps/imago/**'
       # Every Dockerfile shares the workspace manifest block imago depends on.
       - 'apps/*/Dockerfile*'
+      - 'apps/*/package.json'
       # The image builds db, lib and editor and installs from the root lockfile.
       - 'packages/**'
       - 'package.json'
       - 'bun.lock'
+      - 'tsconfig.json'
+      - 'types/**'
+      - '.github/workflows/imago-image.yml'
+  push:
+    branches: [master]
+    # Same inputs as pull_request above.
+    paths:
+      - 'apps/imago/**'
+      - 'apps/*/Dockerfile*'
+      - 'apps/*/package.json'
+      - 'packages/**'
+      - 'package.json'
+      - 'bun.lock'
+      - 'tsconfig.json'
+      - 'types/**'
       - '.github/workflows/imago-image.yml'
   workflow_dispatch:
 
+# Superseded PR runs are cancelled; every push (master) gets its own group so
+# one master run is never cancelled by the next.
 concurrency:
-  group: imago-image-${{ github.ref }}
+  group: imago-image-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: true
 
 permissions:
