@@ -12,7 +12,7 @@ import { and, asc, eq, inArray } from '@pagespace/db/operators';
 import { organizations, orgMembers, type OrgRole } from '@pagespace/db/schema/organizations';
 import { decideOrgRole } from './authorize';
 import { roleChangeOnlyRestricts } from './org-roles';
-import { ORG_LAPSED_CODE, isOrgActive } from './status';
+import { decideOrgMayLoosen, readOrgLapsed, type ORG_LAPSED_CODE } from './status';
 import { loadOrgPrincipalKind, type OrgPrincipalKind } from './owner-candidate';
 import { leaveOrganization, recordComputeReattributions, type ComputeReattribution, type LeadReassignment } from './leave';
 import { recordOwnerLeftAutomations, type OwnerLeftAutomation } from './automation-ownership';
@@ -66,7 +66,8 @@ export const decideRoleChange = ({
   if (newRole === 'OWNER' || targetRole === 'OWNER') {
     return { ok: false, status: 400, reason: 'use_ownership_transfer' };
   }
-  if (orgLapsed && !roleChangeOnlyRestricts(targetRole, newRole)) return { ok: false, status: 402, reason: ORG_LAPSED_CODE };
+  const lapsed = decideOrgMayLoosen({ orgLapsed, loosens: !roleChangeOnlyRestricts(targetRole, newRole) });
+  if (lapsed) return { ok: false, status: lapsed.status, reason: lapsed.code };
   return { ok: true };
 };
 
@@ -156,7 +157,7 @@ export async function changeMemberRole(input: {
   const result = await db.transaction(async (tx) => {
     const roles = await lockActorAndTargetRoles(tx, input.orgId, input.actorId, input.targetId);
     // [D-OW-33] the lapse is read in this transaction, after the row locks, like every lapse-gated write.
-    const orgLapsed = !(await isOrgActive(input.orgId, { executor: tx }));
+    const orgLapsed = await readOrgLapsed(input.orgId, tx);
     const decision = decideRoleChange({ ...input, ...roles, orgLapsed });
     if (!decision.ok) return decision;
     fromRole = roles.targetRole;

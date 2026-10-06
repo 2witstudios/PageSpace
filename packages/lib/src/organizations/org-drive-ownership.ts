@@ -2,7 +2,7 @@ import type { OrgRole } from '@pagespace/db/schema/organizations';
 import type { OrgDriveVisibility } from '@pagespace/db/schema/core';
 import { homeDriveActionError, isHomeDrive } from '../services/drive-guards';
 import { isDriveLead } from '../permissions/drive-relationship';
-import { ORG_LAPSED_REFUSAL, type OrgLapsedRefusal } from './status-core';
+import { decideOrgMayLoosen, type OrgLapsedRefusal } from './status-core';
 
 /**
  * Org-owned drives: who may move a drive into or out of an org, who may create one
@@ -217,7 +217,8 @@ export function decideChangeDriveVisibility({
   if (drive.isTrashed) {
     return refuse('DRIVE_TRASHED', 409, "Restore this drive from trash before changing its visibility.");
   }
-  if (orgLapsed && !visibilityChangeOnlyRestricts(drive.orgVisibility, visibility)) return ORG_LAPSED_REFUSAL;
+  const lapsed = decideOrgMayLoosen({ orgLapsed, loosens: !visibilityChangeOnlyRestricts(drive.orgVisibility, visibility) });
+  if (lapsed) return lapsed;
   return { ok: true, changed: drive.orgVisibility !== visibility, from: drive.orgVisibility, to: visibility };
 }
 

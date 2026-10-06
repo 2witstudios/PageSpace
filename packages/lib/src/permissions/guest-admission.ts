@@ -23,7 +23,7 @@ import { drives } from '@pagespace/db/schema/core';
 import { orgMembers } from '@pagespace/db/schema/organizations';
 import { getDrivePolicies } from '../organizations/policy-reader';
 import { decideGuestAdmission, type GuestAdmissionVerdict } from '../organizations/sharing-decisions';
-import { isOrgActive } from '../organizations/status';
+import { readOrgLapsed } from '../organizations/status';
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type Executor = typeof db | Tx;
@@ -49,6 +49,6 @@ export async function decideOrgDriveAdmission(input: { driveId: string; userId?:
   }
   // [D-OW-33] only an outsider's admission depends on the lapse, read with the same executor (in the write's
   // transaction when there is one).
-  const orgLapsed = !isOrgMember && !(await isOrgActive(context.orgId, { executor }));
+  const orgLapsed = !isOrgMember && (await readOrgLapsed(context.orgId, executor));
   return { ...decideGuestAdmission(context.policies, { isOrgMember, orgLapsed }), orgId: context.orgId };
 }

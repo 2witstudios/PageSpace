@@ -8,6 +8,7 @@
  */
 import type { SuspensionKind } from '@pagespace/db/schema/organizations';
 import type { OrgPolicies, OrgPolicyKey } from './policies-core';
+import { decideOrgMayLoosen } from './status-core';
 
 export const ORG_POLICY_CODE = 'org_policy' as const;
 
@@ -91,7 +92,8 @@ export function decideGuestAdmission(policies: OrgPolicies | null, who: { isOrgM
     case 'approve':
       return { decision: 'hold' };
     case 'on':
-      return who.orgLapsed ? { decision: 'refuse', refusal: 'org_lapsed' } : { decision: 'allow' };
+      // Adding a guest loosens access: the one lapse guard decides.
+      return decideOrgMayLoosen({ orgLapsed: who.orgLapsed, loosens: true }) ? { decision: 'refuse', refusal: 'org_lapsed' } : { decision: 'allow' };
   }
 }
 

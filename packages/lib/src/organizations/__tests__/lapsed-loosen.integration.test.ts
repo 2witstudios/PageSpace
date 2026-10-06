@@ -6,7 +6,8 @@
  *   (b) a member's role: a promotion is refused, a demotion applies;
  *   (c) an outside guest under guests=on: refused at the one admission every path asks (decideOrgDriveAdmission),
  *       so a share-link redemption writes nothing; an org member is still admitted.
- * Paid again, each loosening change goes through.
+ * Paid again, each loosening change goes through. All three go through the one guard (decideOrgMayLoosen;
+ * checkOrgMayLoosen at a write site), tested here too.
  *
  * Northwind Labs (Sequence Spec Part 2): Jono Owner, Priya Admin, Dana member and Product's lead, Marcus member,
  * Gita an outsider. ORGS_ENABLED on, billing on (cloud). Deletes every row it creates, children before parents,
@@ -36,7 +37,7 @@ vi.mock('../../audit/org-audit', () => ({
   recordOrgAuditEventAfterCommit: vi.fn(async () => true),
 }));
 
-import { ORG_LAPSED_REFUSAL, isOrgActive } from '../status';
+import { ORG_LAPSED_REFUSAL, checkOrgMayLoosen, isOrgActive } from '../status';
 import { changeMemberRole } from '../membership';
 import { changeDriveVisibility } from '../../services/org-drive-service';
 import { orgDriveServiceDeps } from '../../services/org-drive-service-deps';
@@ -139,6 +140,16 @@ describe('a lapsed org cannot loosen access (orgs on, real Postgres)', () => {
   });
 
   afterAll(async () => { await pool.end(); });
+
+  it('SEAT-9 (partial) [D-OW-33] checkOrgMayLoosen, the shared guard, reads the lapse in the caller\'s transaction: paid, nothing is refused; lapsed, only a loosening change is', async () => {
+    if (!world) return;
+    const w = world;
+    expect(await db.transaction((tx) => checkOrgMayLoosen(tx, w.orgId, true))).toBeNull();
+    await setSubscription(w.orgId, 'canceled');
+    expect(await db.transaction((tx) => checkOrgMayLoosen(tx, w.orgId, true))).toEqual(ORG_LAPSED_REFUSAL);
+    expect(await db.transaction((tx) => checkOrgMayLoosen(tx, w.orgId, false))).toBeNull();
+    expect(await checkOrgMayLoosen(db, w.orgId, true)).toEqual(ORG_LAPSED_REFUSAL);
+  });
 
   it('SEAT-9 (partial) DRV-4 (partial) [D-OW-33] while lapsed a drive cannot be made more open (Private→Restricted, Private→Open, Restricted→Open) and nothing is stored; it can be made less open; paid again, it can be opened', async () => {
     if (!world) return;

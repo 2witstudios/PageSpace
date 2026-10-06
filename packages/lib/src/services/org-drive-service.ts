@@ -35,7 +35,7 @@ import {
 import { retryOnDeadlock } from '../organizations/repository';
 import { openDriveFloorRefusal } from '../organizations/open-role-floor';
 import { holdOrgGuestsUnderPolicy, kickSuspendedGuests } from '../permissions/guest-holds';
-import { checkOrgActive, isOrgActive, type OrgLapsedRefusal } from '../organizations/status';
+import { checkOrgActive, readOrgLapsed, type OrgLapsedRefusal } from '../organizations/status';
 import { removeFormerLeadOwnerRow } from '../permissions/org-drive-membership';
 import { getActorInfo, logActivityWithTx } from '../monitoring/activity-logger';
 import { reattributeDriveStorageInTx, type StorageReattributionResult } from './storage-limits';
@@ -349,7 +349,7 @@ export async function changeDriveVisibility(
     const { drive, actorOrgRole } = locked;
 
     // [D-OW-33] the lapse is read here, under the org's share lock, like every lapse-gated write.
-    const orgLapsed = drive.orgId !== null && !(await isOrgActive(drive.orgId, { executor: tx }));
+    const orgLapsed = drive.orgId !== null && (await readOrgLapsed(drive.orgId, tx));
     const verdict = decideChangeDriveVisibility({ drive, actorId, actorOrgRole, orgLapsed, visibility: input.orgVisibility });
     if (!verdict.ok) return verdict;
     if (drive.orgId === null) throw new Error('Unreachable: a visibility change was admitted for a drive with no org');
