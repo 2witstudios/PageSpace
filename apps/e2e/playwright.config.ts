@@ -21,6 +21,28 @@ export default defineConfig({
     baseURL,
     trace: 'on-first-retry',
   },
+  // Imago's visual baselines (tests/34-imago-visual.spec.ts, IMG-10.4). One directory for every
+  // spec, so the token negative control (35) compares against the very files 34 locks. The
+  // platform is in the name: macOS and Linux rasterise fonts differently, and only the Linux
+  // files, made on the CI runner, are committed.
+  //
+  // The tolerances are tight on purpose. pixelmatch counts a pixel as different only when its
+  // colour distance passes `threshold`; at Playwright's default of 0.2 a pixel's luma can move by
+  // about 50 of 255 unnoticed, so a design token one tonal step darker (oklch 0.17 → 0.19 on the
+  // dark canvas is ~5 levels) would pass every baseline. At 0.01 a move of ~3 levels counts. A
+  // baseline is re-shot on the same runner image, browser build and fonts, so the only noise
+  // left is anti-aliasing, which pixelmatch already skips; `maxDiffPixelRatio` allows 0.1% of
+  // the frame besides.
+  expect: {
+    toHaveScreenshot: {
+      pathTemplate: '{testDir}/__screenshots__/{arg}-{projectName}-{platform}{ext}',
+      threshold: 0.01,
+      maxDiffPixelRatio: 0.001,
+      animations: 'disabled',
+      caret: 'hide',
+      scale: 'css',
+    },
+  },
   // The metering specs need the web app to be running with its AI provider pointed at
   // the mock below. Start the app separately with (at least):
   //   OPENROUTER_DEFAULT_API_KEY=sk-e2e
