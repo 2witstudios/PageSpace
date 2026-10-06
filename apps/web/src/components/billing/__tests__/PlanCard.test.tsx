@@ -3,6 +3,7 @@ import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { PlanCard } from '../PlanCard';
 import { PLANS, withCreditsCents } from '@/lib/subscription/plans';
+import { planFacts } from '@pagespace/lib/billing/credit-copy';
 
 describe('PlanCard (MON-6, SEAT-2 (partial), A-9)', () => {
   it('MON-6 shows price, included credits, and the top-up rate as three separate facts, credits as a count with no dollar sign', () => {
@@ -21,10 +22,32 @@ describe('PlanCard (MON-6, SEAT-2 (partial), A-9)', () => {
     expect(screen.getByTestId('plan-included-credits').textContent).toMatch(/^[0-9,]+ credits to start$/);
   });
 
-  it('SEAT-2 (partial) the Business card states the org terms: $50 a month, 5 seats included, $10 per extra seat', () => {
+  it('SEAT-2 (partial) the Business card states the org terms from planFacts: $50 a month, 5 seats included, $10 per extra seat a month', () => {
     render(<PlanCard plan={PLANS.business} currentTier="pro" />);
+    const org = planFacts('business').org;
+    expect(screen.getByTestId('plan-price').textContent).toBe(planFacts('business').price);
     expect(screen.getByTestId('plan-price').textContent).toBe('$50');
-    expect(screen.getByTestId('plan-seats').textContent).toBe('per organization · 5 seats included · $10 per extra seat');
+    expect(screen.getByTestId('plan-seats').textContent).toBe(org?.seatTerms);
+    expect(screen.getByTestId('plan-seats').textContent).toBe('per organization · 5 seats included · $10 per extra seat a month');
+    expect(screen.getByTestId('plan-seat-credits').textContent).toBe(org?.extraSeatCredits);
+    expect(screen.getByTestId('plan-seat-credits').textContent).not.toContain('$');
+  });
+
+  it('A-7 (partial) the Business card states no trial and a card at checkout; personal cards carry no org facts', () => {
+    render(<PlanCard plan={PLANS.business} currentTier="pro" />);
+    expect(screen.getByTestId('plan-checkout').textContent).toBe('No trial · card required at checkout');
+    render(<PlanCard plan={PLANS.pro} currentTier="free" />);
+    expect(screen.getAllByTestId('plan-seats')).toHaveLength(1);
+  });
+
+  it('MON-6 (partial) the in-app card states the same price and top-up facts as the marketing page, from the same source', () => {
+    for (const tier of ['pro', 'business'] as const) {
+      const { unmount } = render(<PlanCard plan={PLANS[tier]} currentTier="free" />);
+      expect(screen.getByTestId('plan-price').textContent, tier).toBe(planFacts(tier).price);
+      expect(screen.getByTestId('plan-topup-rate').textContent, tier).toBe(planFacts(tier).topUpRate);
+      expect(screen.getByTestId('plan-included-credits').textContent, tier).toBe(planFacts(tier).includedCredits);
+      unmount();
+    }
   });
 
   it('A-9 a grandfathered Business subscriber sees their current plan at their current price, not the $50 list price', () => {
