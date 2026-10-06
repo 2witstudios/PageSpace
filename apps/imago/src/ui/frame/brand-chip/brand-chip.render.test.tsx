@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, test } from 'vitest';
 import { assert } from 'riteway/vitest';
@@ -22,11 +23,14 @@ const props = (overrides: Partial<BrandChipRenderProps> = {}): BrandChipRenderPr
 
 const markup = (overrides: Partial<BrandChipRenderProps> = {}) => renderToStaticMarkup(renderBrandChip(props(overrides)));
 
-const links = (html: string) =>
-  [...html.matchAll(/<a\b[^>]*href="([^"]+)"[^>]*>(.*?)<\/a>/g)].map(([, href, inner]) => [
-    href,
-    (inner ?? '').replace(/<[^>]+>/g, ''),
+const links = (html: string) => {
+  const parsed = document.createElement('template');
+  parsed.innerHTML = html;
+  return [...parsed.content.querySelectorAll('a[href]')].map((anchor) => [
+    anchor.getAttribute('href'),
+    anchor.textContent ?? '',
   ]);
+};
 
 describe('renderBrandChip()', () => {
   test('the drive list', () => {

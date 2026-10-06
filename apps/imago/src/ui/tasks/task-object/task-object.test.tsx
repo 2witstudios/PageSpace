@@ -425,12 +425,12 @@ describe('TaskObject: the description', () => {
         handlers: [...description.querySelectorAll('*')].some((node) =>
           [...node.attributes].some((attribute) => attribute.name.startsWith('on')),
         ),
-        javascriptLinks: [...description.querySelectorAll('a')].filter((anchor) =>
-          (anchor.getAttribute('href') ?? '').trim().toLowerCase().startsWith('javascript:'),
+        scriptUrlLinks: [...description.querySelectorAll('a')].filter((anchor) =>
+          /^(?:javascript|vbscript|data):/i.test((anchor.getAttribute('href') ?? '').trim()),
         ).length,
         pwned: (window as unknown as { pwned?: number }).pwned,
       },
-      expected: { script: null, handlers: false, javascriptLinks: 0, pwned: undefined },
+      expected: { script: null, handlers: false, scriptUrlLinks: 0, pwned: undefined },
     });
   });
 

@@ -135,7 +135,9 @@ export function createMockS3(): http.Server {
 
       xml(res, 405, '<Error><Code>MethodNotAllowed</Code><Message>Not supported.</Message></Error>');
     })().catch((error: unknown) => {
-      xml(res, 500, `<Error><Code>InternalError</Code><Message>${String(error)}</Message></Error>`);
+      // The cause goes to the log, never into the response body.
+      console.error('[mock-s3] request failed:', error);
+      xml(res, 500, '<Error><Code>InternalError</Code><Message>We encountered an internal error.</Message></Error>');
     });
   });
 }
