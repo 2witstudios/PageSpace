@@ -7,10 +7,10 @@ import type { Drive } from '@pagespace/lib/types';
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 const api = vi.hoisted(() => ({ patch: vi.fn(async () => ({})), put: vi.fn(async () => ({})), del: vi.fn(async () => ({})), fetchWithAuth: vi.fn() }));
 vi.mock('@/lib/auth/auth-fetch', async (importOriginal) => ({ ...(await importOriginal<object>()), ...api }));
-const orgs = vi.hoisted(() => ({ role: 'MEMBER' as 'OWNER' | 'ADMIN' | 'MEMBER' }));
+const orgs = vi.hoisted(() => ({ role: 'MEMBER' as 'OWNER' | 'ADMIN' | 'MEMBER', lapsed: false }));
 vi.mock('@/hooks/useMyOrganizations', () => ({
   useMyOrganizations: () => {
-    const list = [{ id: 'o-northwind', name: 'Northwind Labs', slug: 'nw', avatarUrl: null, role: orgs.role }];
+    const list = [{ id: 'o-northwind', name: 'Northwind Labs', slug: 'nw', avatarUrl: null, role: orgs.role, lapsed: orgs.lapsed }];
     return { organizations: list, orgById: (id: string | null) => list.find((o) => o.id === id) ?? null };
   },
 }));
@@ -29,6 +29,7 @@ const renderCard = (d: Drive) =>
 beforeEach(() => {
   vi.clearAllMocks();
   orgs.role = 'MEMBER';
+  orgs.lapsed = false;
   walletState.wallet = null;
   api.fetchWithAuth.mockResolvedValue({ ok: true, json: async () => ({ members: [{ userId: 'u-priya', name: 'Priya Nair', email: 'p@n.co' }, { userId: 'u-lena', name: 'Lena Schulz', email: 'l@n.co' }] }) });
 });
@@ -49,6 +50,23 @@ describe('OrgDriveCard on Drive Settings › General', () => {
     const { rerender } = renderCard(drive({ isOwned: true }));
     rerender(<SWRConfig value={{ provider: () => new Map() }}><OrgDriveCard drive={drive({ isOwned: true, orgVisibility: 'PRIVATE' })} leadName="Priya Nair" onChanged={vi.fn()} /></SWRConfig>);
     expect(screen.getByRole('radio', { name: /Private/ }).getAttribute('aria-checked')).toBe('true');
+  });
+
+  it('SEAT-9 (partial) DRV-4 (partial) [D-OW-33] while the org is lapsed the lead may only make the drive less open and cannot change its lead; paid, both are offered', async () => {
+    orgs.lapsed = true;
+    const { unmount } = renderCard(drive({ isOwned: true, orgVisibility: 'RESTRICTED' }));
+    expect(screen.getByRole('radio', { name: /Open/ }).hasAttribute('disabled')).toBe(true);
+    expect(screen.getByRole('radio', { name: /Private/ }).hasAttribute('disabled')).toBe(false);
+    expect(screen.getByTestId('lapsed-loosen-note').textContent).toContain('Making it less open still works');
+    expect(await screen.findByRole('combobox', { name: 'Drive lead' })).toHaveProperty('disabled', true);
+    fireEvent.click(screen.getByRole('radio', { name: /Private/ }));
+    await waitFor(() => expect(api.patch).toHaveBeenCalledWith('/api/drives/d-product/org', { orgVisibility: 'PRIVATE' }));
+    unmount();
+
+    orgs.lapsed = false;
+    renderCard(drive({ isOwned: true, orgVisibility: 'RESTRICTED' }));
+    expect(screen.getByRole('radio', { name: /Open/ }).hasAttribute('disabled')).toBe(false);
+    expect(await screen.findByRole('combobox', { name: 'Drive lead' })).toHaveProperty('disabled', false);
   });
 
   it('UI-4 (partial) a plain org member reads the card but cannot change visibility, the lead, or move the drive', () => {

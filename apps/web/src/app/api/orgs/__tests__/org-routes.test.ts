@@ -65,6 +65,7 @@ vi.mock('@pagespace/lib/organizations/deletion', () => ({ deleteOrganization: vi
 vi.mock('@pagespace/lib/organizations/status', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@pagespace/lib/organizations/status')>()),
   getOrgBillingNotice: vi.fn(async () => null),
+  isOrgActive: vi.fn(async () => true),
 }));
 vi.mock('@/lib/orgs/org-invite-delivery', () => ({ deliverOrgInvite: vi.fn() }));
 vi.mock('@/lib/org-billing/seat-billing', () => ({ defaultSeatBilling: vi.fn(() => ({ setSeatQuantity: vi.fn(), readSeatQuantity: vi.fn() })) }));
@@ -78,7 +79,7 @@ import * as repository from '@pagespace/lib/organizations/repository';
 import * as membership from '@pagespace/lib/organizations/membership';
 import * as invitations from '@pagespace/lib/organizations/invitations';
 import { deleteOrganization } from '@pagespace/lib/organizations/deletion';
-import { getOrgBillingNotice } from '@pagespace/lib/organizations/status';
+import { getOrgBillingNotice, isOrgActive } from '@pagespace/lib/organizations/status';
 import { deliverOrgInvite } from '@/lib/orgs/org-invite-delivery';
 import { startOrgBusinessSubscription } from '@/lib/org-billing/org-subscription';
 
@@ -301,6 +302,17 @@ describe('org route role matrix', () => {
 
 describe('org route behaviour', () => {
   const asRole = (role: OrgRole | null) => vi.mocked(repository.findMembershipRole).mockResolvedValue(role);
+
+  it('SEAT-9 (partial) [D-OW-33] GET /api/orgs flags each org the caller belongs to as lapsed or not, for the drive-side restrict-only controls', async () => {
+    vi.mocked(repository.listOrganizationsForUser).mockResolvedValue([
+      { id: 'org_paid', name: 'Paid', slug: 'paid', avatarUrl: null, role: 'MEMBER' },
+      { id: 'org_lapsed', name: 'Lapsed', slug: 'lapsed', avatarUrl: null, role: 'ADMIN' },
+    ]);
+    vi.mocked(isOrgActive).mockImplementation(async (orgId: string) => orgId === 'org_paid');
+    const res = await orgsRoute.GET(req('GET'));
+    expect(res.status).toBe(200);
+    expect((await res.json()).organizations.map((o: { id: string; lapsed: boolean }) => [o.id, o.lapsed])).toEqual([['org_paid', false], ['org_lapsed', true]]);
+  });
 
   it('SEAT-9 (partial) SEAT-6 (partial) GET /api/orgs/[orgId] carries the billing notice for the caller\'s own role, and nothing when there is none', async () => {
     asRole('ADMIN');

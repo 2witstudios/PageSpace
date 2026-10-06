@@ -19,6 +19,7 @@ import { inviteeStanding } from '@pagespace/lib/organizations/invite-choice';
 import { InviteJoinChoice, defaultJoinChoice, useInviteOrgContext, type JoinChoice } from '@/components/members/InviteJoinChoice';
 import { useDriveStore } from '@/hooks/useDrive';
 import { useMyOrganizations } from '@/hooks/useMyOrganizations';
+import { LAPSED_LOOSEN_NOTE } from '@/hooks/useOrgLapsed';
 import { orgErrorCode, orgErrorMessage, orgErrorPolicy } from '@/lib/orgs/org-error-copy';
 
 interface SelectedUser {
@@ -63,6 +64,8 @@ export default function InviteMemberPage() {
   const driveOrgId = drive?.orgId ?? null;
   const { orgById } = useMyOrganizations();
   const orgName = orgById(driveOrgId)?.name ?? 'the organization';
+  // [D-OW-33] a lapsed org invites nobody, to the drive or to the org, until it pays.
+  const lapsed = orgById(driveOrgId)?.lapsed === true;
   const orgContext = useInviteOrgContext(driveOrgId);
   const [joinChoice, setJoinChoice] = useState<JoinChoice | null>(null);
   // POL-2: an inviter who cannot read the policy learns it from a refusal naming `guests`.
@@ -268,6 +271,11 @@ export default function InviteMemberPage() {
   return (
     <div className="h-full overflow-auto">
       <div className="max-w-6xl mx-auto p-6">
+        {lapsed && (
+          <p className="mb-4 text-sm text-muted-foreground" data-testid="lapsed-loosen-note">
+            Inviting is paused while {orgName} is unpaid. {LAPSED_LOOSEN_NOTE}
+          </p>
+        )}
         {/* Header with back button */}
         <div className="mb-6">
           <Button
@@ -531,7 +539,7 @@ export default function InviteMemberPage() {
               >
                 Cancel
               </Button>
-              <Button onClick={handleInvite} disabled={saving}>
+              <Button onClick={handleInvite} disabled={saving || lapsed}>
                 <UserPlus className="w-4 h-4 mr-2" />
                 {saving ? 'Inviting...' : 'Invite Member'}
               </Button>
@@ -544,7 +552,7 @@ export default function InviteMemberPage() {
             <Button variant="outline" onClick={() => router.push(`/dashboard/${driveId}/members`)} disabled={saving}>
               Cancel
             </Button>
-            <Button onClick={handleInvite} disabled={saving}>
+            <Button onClick={handleInvite} disabled={saving || lapsed}>
               <UserPlus className="w-4 h-4 mr-2" />
               {saving ? 'Inviting...' : `Invite to ${orgName}`}
             </Button>

@@ -15,6 +15,7 @@ import { toast } from 'sonner';
 import { useSocket } from '@/hooks/useSocket';
 import { del, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { isHomeDrive } from '@pagespace/lib/services/drive-guards';
+import { LAPSED_LOOSEN_NOTE, useOrgLapsed } from '@/hooks/useOrgLapsed';
 import { ORGS_ENABLED } from '@pagespace/lib/organizations/orgs-enabled';
 import { useDriveStore } from '@/hooks/useDrive';
 import { useMyOrganizations } from '@/hooks/useMyOrganizations';
@@ -83,6 +84,8 @@ export function DriveMembers({ driveId, driveKind }: DriveMembersProps) {
   const [pageLinkGuests, setPageLinkGuests] = useState<PageLinkGuest[]>([]);
   // UI-5 / DRV-8: an org drive labels each member's source and its guests (orgs on only).
   const driveOrgId = useDriveStore((state) => state.drives.find((d) => d.id === driveId)?.orgId ?? null);
+  // [D-OW-33] a lapsed org's drive may only restrict: inviting, new links and new agents wait until it pays.
+  const lapsed = useOrgLapsed(driveOrgId);
   const { orgById } = useMyOrganizations();
   const orgLabels = ORGS_ENABLED && driveOrgId !== null;
   const orgName = orgById(driveOrgId)?.name ?? null;
@@ -223,12 +226,18 @@ export function DriveMembers({ driveId, driveKind }: DriveMembersProps) {
           </p>
         </div>
         {!isHome && (currentUserRole === 'OWNER' || currentUserRole === 'ADMIN') && (
-          <Button onClick={() => router.push(`/dashboard/${driveId}/members/invite`)}>
+          <Button onClick={() => router.push(`/dashboard/${driveId}/members/invite`)} disabled={lapsed}>
             <UserPlus className="w-4 h-4 mr-2" />
             Invite Member
           </Button>
         )}
       </div>
+
+      {lapsed && !isHome && (currentUserRole === 'OWNER' || currentUserRole === 'ADMIN') && (
+        <p className="text-xs text-muted-foreground" data-testid="lapsed-loosen-note">
+          Inviting, new invite links and new agents are paused. {LAPSED_LOOSEN_NOTE}
+        </p>
+      )}
 
       {isHome && (
         <p className="text-sm text-muted-foreground">
@@ -237,7 +246,7 @@ export function DriveMembers({ driveId, driveKind }: DriveMembersProps) {
       )}
 
       {!isHome && (currentUserRole === 'OWNER' || currentUserRole === 'ADMIN') && (
-        <DriveShareLinkSection driveId={driveId} />
+        <DriveShareLinkSection driveId={driveId} lapsed={lapsed} />
       )}
 
       <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 divide-y divide-gray-200 dark:divide-gray-700">
@@ -272,7 +281,7 @@ export function DriveMembers({ driveId, driveKind }: DriveMembersProps) {
             </p>
           </div>
           {!isHome && (currentUserRole === 'OWNER' || currentUserRole === 'ADMIN') && (
-            <Button variant="outline" size="sm" onClick={() => setInviteAgentOpen(true)}>
+            <Button variant="outline" size="sm" onClick={() => setInviteAgentOpen(true)} disabled={lapsed}>
               <UserPlus className="h-4 w-4 mr-2" />
               Invite Agent
             </Button>

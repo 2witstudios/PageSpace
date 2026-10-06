@@ -12,7 +12,7 @@ vi.mock('@pagespace/db/db', () => {
 });
 // [D-OW-33] the lapse guard: no org (null) unless a test lapses the drive (proven against real Postgres in
 // org-lapse-loosening.integration.test.ts).
-const checkDriveMayLoosen = vi.hoisted(() => vi.fn(async (): Promise<unknown> => null));
+const checkDriveMayLoosen = vi.hoisted(() => vi.fn(async (_tx?: unknown, _driveId?: unknown, _loosens?: unknown): Promise<unknown> => null));
 vi.mock('../../permissions/org-lapse-guard', () => ({ checkDriveMayLoosen }));
 vi.mock('../../organizations/policy-reader', () => ({ getDrivePolicies: vi.fn() }));
 vi.mock('@pagespace/db/operators', () => ({

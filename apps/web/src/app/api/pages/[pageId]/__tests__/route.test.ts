@@ -60,6 +60,9 @@ vi.mock('@pagespace/lib/services/drive-member-service', () => ({
   getDriveRecipientUserIds: vi.fn(async () => []),
 }));
 
+// [D-OW-33] the lapse guard: no org (null) unless a test lapses the page's drive.
+const checkPageMayLoosen = vi.hoisted(() => vi.fn(async (): Promise<unknown> => null));
+vi.mock('@pagespace/lib/permissions/org-lapse-guard', () => ({ checkPageMayLoosen }));
 vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
@@ -621,6 +624,24 @@ describe('PATCH /api/pages/[pageId]', () => {
         expect.objectContaining({ isPrivate: true })
       );
       expect(broadcastPageEvent).toHaveBeenCalledTimes(1);
+    });
+
+    it('SEAT-9 (partial) [D-OW-33] making a private page visible to the drive answers 402 org_lapsed while the drive\'s org is lapsed, and nothing is written; making it private still works', async () => {
+      // @ts-expect-error - partial mock: the page row carries only isPrivate
+      vi.mocked(db.query.pages.findFirst).mockResolvedValue({ isPrivate: true });
+      checkPageMayLoosen.mockResolvedValueOnce({ ok: false, code: 'org_lapsed', status: 402, message: 'lapsed' });
+      const res = await PATCH(createRequest({ isPrivate: false }), { params: mockParams });
+      expect(res.status).toBe(402);
+      expect(await res.json()).toMatchObject({ code: 'org_lapsed' });
+      expect(pageService.updatePage).not.toHaveBeenCalled();
+      expect(checkPageMayLoosen).toHaveBeenCalledWith(db, mockPageId, true);
+
+      // @ts-expect-error - partial mock: the page row carries only isPrivate
+      vi.mocked(db.query.pages.findFirst).mockResolvedValue({ isPrivate: false });
+      checkPageMayLoosen.mockClear();
+      await PATCH(createRequest({ isPrivate: true }), { params: mockParams });
+      expect(checkPageMayLoosen).not.toHaveBeenCalled();
+      expect(pageService.updatePage).toHaveBeenCalled();
     });
 
     it('broadcasts page:updated event when isPrivate changes to false', async () => {

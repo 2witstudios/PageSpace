@@ -7,9 +7,12 @@ const del = vi.hoisted(() => vi.fn(async () => ({})));
 vi.mock('@/lib/auth/auth-fetch', () => ({ fetchWithAuth, del, post: vi.fn() }));
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 vi.mock('@/hooks/useSocket', () => ({ useSocket: () => null }));
-vi.mock('@/hooks/useMyOrganizations', () => ({ useMyOrganizations: () => ({ orgById: (id: string | null) => (id ? { id, name: 'Northwind Labs' } : null) }) }));
+// [D-OW-33] each test says whether Northwind is lapsed.
+const orgLapsed = vi.hoisted(() => ({ current: false }));
+vi.mock('@/hooks/useMyOrganizations', () => ({ useMyOrganizations: () => ({ orgById: (id: string | null) => (id ? { id, name: 'Northwind Labs', lapsed: orgLapsed.current } : null) }) }));
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push: vi.fn() }) }));
-vi.mock('../DriveShareLinkSection', () => ({ DriveShareLinkSection: () => null }));
+const shareLinkSection = vi.hoisted(() => vi.fn((_props: { driveId: string; lapsed?: boolean }) => null));
+vi.mock('../DriveShareLinkSection', () => ({ DriveShareLinkSection: shareLinkSection }));
 
 import { DriveMembers } from '../DriveMembers';
 import { useDriveStore } from '@/hooks/useDrive';
@@ -42,6 +45,7 @@ const serve = (body: unknown) => fetchWithAuth.mockImplementation((url: string) 
 
 beforeEach(() => {
   vi.clearAllMocks();
+  orgLapsed.current = false;
   useDriveStore.setState({ drives: [{ id: 'd-product', name: 'Product', slug: 'p', ownerId: 'u-priya', isTrashed: false, trashedAt: null, createdAt: '', updatedAt: '', isOwned: true, orgId: 'o-northwind' }], currentDriveId: null, isLoading: false, lastFetched: Date.now() });
 });
 
@@ -75,5 +79,24 @@ describe('DriveMembers on an org drive', () => {
     render(<DriveMembers driveId="d-product" />);
     await waitFor(() => expect(screen.getByText('Chris Rowe')).toBeTruthy());
     expect(screen.queryByTestId('page-link-guests')).toBeNull();
+  });
+
+  it('SEAT-9 (partial) [D-OW-33] while the org is lapsed, inviting a member, inviting an agent and new invite links are disabled with the restrict-only note; paid, they are enabled', async () => {
+    orgLapsed.current = true;
+    serve(membersBody('OWNER', []));
+    const { unmount } = render(<DriveMembers driveId="d-product" />);
+    await waitFor(() => expect(screen.getByText('Chris Rowe')).toBeTruthy());
+    expect((screen.getByRole('button', { name: /Invite Member/ }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: /Invite Agent/ }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByTestId('lapsed-loosen-note').textContent).toContain('Removing access and lowering roles still work');
+    expect(shareLinkSection.mock.calls.at(-1)?.[0]).toMatchObject({ driveId: 'd-product', lapsed: true });
+    unmount();
+
+    orgLapsed.current = false;
+    render(<DriveMembers driveId="d-product" />);
+    await waitFor(() => expect(screen.getByText('Chris Rowe')).toBeTruthy());
+    expect((screen.getByRole('button', { name: /Invite Member/ }) as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.queryByTestId('lapsed-loosen-note')).toBeNull();
+    expect(shareLinkSection.mock.calls.at(-1)?.[0]).toMatchObject({ lapsed: false });
   });
 });

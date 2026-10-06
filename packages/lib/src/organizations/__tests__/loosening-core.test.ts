@@ -14,9 +14,11 @@ const ALL = { canView: true, canEdit: true, canShare: true };
 
 const role = (driveWide: RoleGrant['driveWidePermissions'], permissions: RoleGrant['permissions'] = {}): RoleGrant => ({ driveWidePermissions: driveWide, permissions });
 
+const DRIVE = { leadId: 'lead', orgId: 'org' as string | null, orgVisibility: 'RESTRICTED' as const };
+
 function snapshot(over: Partial<DriveAccessSnapshot> = {}): DriveAccessSnapshot {
   return {
-    drive: { leadId: 'lead', orgId: 'org', orgVisibility: 'RESTRICTED' },
+    drive: DRIVE,
     members: {},
     grants: {},
     roles: {},
@@ -115,9 +117,9 @@ describe('driveAccessWidens', () => {
     expect(widened({ agents: { ...base.agents, a2: { role: 'MEMBER', customRoleId: null, includeContext: false } } })).toBe(true);
     expect(widened({ agents: { a1: { role: 'MEMBER', customRoleId: null, includeContext: true } } })).toBe(true);
     expect(widened({ agents: { a1: { role: 'ADMIN', customRoleId: null, includeContext: false } } })).toBe(true);
-    expect(widened({ drive: { ...base.drive, leadId: 'someone-else' } })).toBe(true);
-    expect(widened({ drive: { ...base.drive, orgVisibility: 'OPEN' } })).toBe(true);
-    expect(widened({ drive: { ...base.drive, orgId: 'other-org' } })).toBe(true);
+    expect(widened({ drive: { ...DRIVE, leadId: 'someone-else' } })).toBe(true);
+    expect(widened({ drive: { ...DRIVE, orgVisibility: 'OPEN' } })).toBe(true);
+    expect(widened({ drive: { ...DRIVE, orgId: 'other-org' } })).toBe(true);
   });
 
   it('SEAT-9 (partial) [D-OW-33] widening a role nobody holds does not widen the drive; a pending row stays pending without widening', () => {

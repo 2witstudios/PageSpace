@@ -20,7 +20,8 @@ interface PageShareLinkSectionProps {
   permissions: ShareLinkPermissions;
 }
 
-export function PageShareLinkSection({ pageId, permissions }: PageShareLinkSectionProps) {
+/** `lapsed` ([D-OW-33]): no new link while the drive's org is unpaid; existing links can still be revoked. */
+export function PageShareLinkSection({ pageId, permissions, lapsed = false }: PageShareLinkSectionProps & { lapsed?: boolean }) {
   const { links, isLoading, isGenerating, revokingId, handleGenerate, handleCopy, handleRevoke } =
     usePageShareLink(pageId);
 
@@ -86,7 +87,7 @@ export function PageShareLinkSection({ pageId, permissions }: PageShareLinkSecti
               size="sm"
               className="w-full"
               onClick={() => handleGenerate(permissions)}
-              disabled={isGenerating || !permissions.canView}
+              disabled={isGenerating || !permissions.canView || lapsed}
               title={!permissions.canView ? 'Select at least View permission to generate a link' : undefined}
             >
               <Link2 className="mr-1.5 h-3.5 w-3.5" />
