@@ -86,6 +86,31 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **See what your AI usage spends from, before you send** (organizations; off until organizations
+  launch) — inside a drive with more than one source, the credit chip in the header shows which one a
+  conversation will spend (the drive's wallet, your seat allowance from the organization, or your own
+  credits) and how much is left, and lets you switch for that conversation. A new conversation names its
+  source above the message box. When the source cannot pay, the message is not sent and nothing is
+  charged: a card says what happened (the wallet is empty, paused, or you reached your cap) and who
+  controls that budget, and offers your other sources. When a drive's rule moves a reply to another
+  source, a note under the reply (and on side questions and voice calls) says so.
+- **Drive Settings › Wallet** — a drive's wallet in one place: what is left this month, and for its lead
+  and the organization's Owner and Admins the monthly allocation, top-ups, the pause switch, what spends
+  from it and what happens when it runs out, per-person daily and monthly caps, and spend this month by
+  person. Members see only what is left and their own cap, and can add credits from their own balance.
+- **Settings › Usage › Wallets** — everything you spend from (your credits, your seat allowance with what
+  is left, drive wallets, including paused or over-budget ones) and everything you fund, plus what a new
+  conversation starts on.
+- **Organizations in your drives** — an organization's drive shows the organization's mark in the header,
+  the drive picker groups drives under each organization and Personal, a drive's General settings show
+  who owns and pays for it, who in the organization can see it, its lead and moving it in or out, and its
+  Members page labels guests and where each person's access comes from, with the people who joined a
+  single page by link listed apart. Inviting someone from outside lets you choose: a guest of this drive
+  or a member of the organization.
+- **Spending cap alerts in your notifications** — when someone reaches 80% or 100% of a cap on a wallet
+  you fund, the notification opens that wallet's settings. Workflows and triggers show who they spend as
+  and why a run was skipped, and flag an automation whose creator left the organization.
+
 - **Spending caps per person, with alerts** — an organization Owner or Admin can set a daily and a
   monthly spending cap for a person on an organization drive's wallet or on their organization seat, and
   the owner of a personal drive can do the same on that drive's wallet. A person who reaches a cap is told

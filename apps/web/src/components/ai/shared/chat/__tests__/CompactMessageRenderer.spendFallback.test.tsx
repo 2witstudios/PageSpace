@@ -25,7 +25,7 @@ describe('CompactMessageRenderer — a reply that fell back to another source', 
   it('SPEND-4 (partial) shows the source it moved to and from, above the reply', () => {
     render(<CompactMessageRenderer message={message} />);
 
-    expect(screen.getByRole('status').textContent).toBe("Spent from your own credits — the drive wallet couldn't cover this call.");
+    expect(screen.getByRole('status').textContent).toBe("Used your own credits because the drive wallet couldn't cover this.");
     expect(screen.getByText('The answer')).toBeInTheDocument();
   });
 });

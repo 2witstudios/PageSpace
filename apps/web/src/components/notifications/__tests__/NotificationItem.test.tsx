@@ -27,7 +27,7 @@ describe('NotificationItem', () => {
     const ALL_TYPES = Object.keys(NOTIFICATION_ICONS) as NotificationType[];
 
     it('covers every type in the NotificationType enum', () => {
-      expect(ALL_TYPES.length).toBe(15);
+      expect(ALL_TYPES.length).toBe(18);
     });
 
     it.each(ALL_TYPES)('renders type %s with title, message, and icon slot', (type) => {

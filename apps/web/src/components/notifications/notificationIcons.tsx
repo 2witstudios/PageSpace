@@ -1,6 +1,9 @@
 import type { LucideIcon } from 'lucide-react';
 import {
   AtSign,
+  BotOff,
+  Gauge,
+  WalletMinimal,
   FileText,
   ListTodo,
   Mail,
@@ -30,6 +33,9 @@ export const NOTIFICATION_ICONS: Record<NotificationType, LucideIcon> = {
   TOS_PRIVACY_UPDATED: FileText,
   MENTION: AtSign,
   TASK_ASSIGNED: ListTodo,
+  WALLET_CAP_ALERT: Gauge,
+  WALLET_DEBT: WalletMinimal,
+  AUTOMATION_SKIPPED: BotOff,
 };
 
 export function getNotificationIcon(type: string): LucideIcon {

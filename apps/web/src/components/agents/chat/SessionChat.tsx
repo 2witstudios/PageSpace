@@ -35,6 +35,8 @@ import { useSideQuestion, parseSideQuestionInput } from '@/components/ai/btw/use
 import { SideQuestionCard } from '@/components/ai/btw/SideQuestionCard';
 import type { AgentInfo } from '@/types/agent';
 import { useAgentSessionChat, type UseAgentSessionChatReturn } from './useAgentSessionChat';
+import { ComposerSpendStrip } from '@/components/wallets/ComposerSpendStrip';
+import { SpendSurfaceProvider } from '@/components/wallets/SpendSurface';
 
 export interface SessionChatProps {
   /** This conversation's pane-hosting session — null (the default) for a plain, session-less conversation. See `SessionChatViewProps.sessionId`. */
@@ -67,6 +69,7 @@ export default function SessionChat({
       // turn's command chips against the agent page's `page.driveId`, so any
       // other scope would offer commands that fail as `not_found` on send.
       commandDriveId={agent.driveId}
+      spendScope={{ driveId: agent.driveId, isGlobal: false }}
       name={agent.title}
       visionModel={agent.aiModel || ''}
       context={context}
@@ -101,6 +104,11 @@ export interface SessionChatViewProps {
    * view cannot silently reintroduce the unscoped-picker bug.
    */
   commandDriveId: string | null;
+  /**
+   * Where this conversation spends (Spec SPEND-2): the drive its turns resolve and whether it is
+   * a global conversation, which names that drive on the spend preview. Omitted: no strip.
+   */
+  spendScope?: { driveId: string | null; isGlobal: boolean };
   context: 'page' | 'console';
   isReadOnly?: boolean;
 }
@@ -112,6 +120,7 @@ export function SessionChatView({
   name,
   visionModel,
   commandDriveId,
+  spendScope,
   context,
   isReadOnly = false,
 }: SessionChatViewProps) {
@@ -164,6 +173,8 @@ export function SessionChatView({
     // isReadOnly viewers get no answer plumbing at all — same as rendering
     // outside a chat surface entirely — so AskUserQuestionCard's options and
     // Submit stay disabled instead of letting a viewer attempt a 403'd resume.
+    // SpendSurfaceProvider: every spend control inside acts on THIS conversation (SPEND-3).
+    <SpendSurfaceProvider conversationId={spendScope ? conversationId : null} driveId={spendScope?.driveId ?? null} isGlobal={spendScope?.isGlobal ?? false}>
     <AskUserAnswerProvider value={isReadOnly ? null : chat.askUserAnswering}>
     <div
       data-testid="session-chat"
@@ -229,6 +240,14 @@ export function SessionChatView({
 
       <div className="shrink-0 space-y-1.5 border-t border-border p-2">
         {sideQuestion.state && <SideQuestionCard state={sideQuestion.state} onDismiss={sideQuestion.dismiss} />}
+        {spendScope && !isReadOnly && (
+          <ComposerSpendStrip
+            conversationId={conversationId}
+            driveId={spendScope.driveId}
+            isGlobal={spendScope.isGlobal}
+            hasMessages={chat.messages.length > 0}
+          />
+        )}
         <ChatErrorBanner
           cause={chat.errorCause}
           show={showError}
@@ -273,5 +292,6 @@ export function SessionChatView({
       )}
     </div>
     </AskUserAnswerProvider>
+    </SpendSurfaceProvider>
   );
 }

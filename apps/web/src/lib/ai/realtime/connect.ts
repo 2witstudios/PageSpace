@@ -22,6 +22,7 @@
  * handshake runs against fakes with no live network and no real microphone.
  */
 
+import { readSpendFallbackBody, type SpendFallbackNotice } from '@pagespace/lib/billing/spend-fallback';
 import { REALTIME_DATA_CHANNEL } from './session';
 import type { VoiceTarget } from './voice-target';
 import { parseEvent } from '@pagespace/lib/realtime/voice-events';
@@ -78,6 +79,8 @@ export type VoiceConnection = {
   readonly attached: boolean;
   /** The server-enforced ceiling on this call, for chaining ahead of it. */
   readonly maxDurationMs: number | undefined;
+  /** SPEND-4: the call's opening gate moved it to another source (the route's `spendFallback`); null otherwise. */
+  readonly spendFallback: SpendFallbackNotice | null;
   /** The stream this connection OWNS. Stopped by `stop`, and only by `stop`. */
   readonly microphone: MediaStream;
   /** Silence or unsilence the mic without renegotiating or dropping the call. */
@@ -400,12 +403,14 @@ export const connectVoiceCall = async (
   let callId: string;
   let attached: boolean;
   let maxDurationMs: number | undefined;
+  let spendFallback: SpendFallbackNotice | null = null;
   try {
     const body = (await response.json()) as {
       callId?: unknown;
       answerSdp?: unknown;
       attached?: unknown;
       maxDurationMs?: unknown;
+      spendFallback?: unknown;
     };
     if (typeof body.callId !== 'string' || body.callId.length === 0) {
       stop();
@@ -427,6 +432,7 @@ export const connectVoiceCall = async (
     attached = body.attached === true;
     maxDurationMs =
       typeof body.maxDurationMs === 'number' ? body.maxDurationMs : undefined;
+    spendFallback = readSpendFallbackBody(body.spendFallback);
 
     await peer.setRemoteDescription({ type: 'answer', sdp: body.answerSdp });
   } catch (error) {
@@ -444,6 +450,7 @@ export const connectVoiceCall = async (
       callId,
       attached,
       maxDurationMs,
+      spendFallback,
       microphone,
       setMicrophoneEnabled,
       stop,

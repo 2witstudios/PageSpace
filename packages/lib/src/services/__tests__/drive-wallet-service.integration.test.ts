@@ -25,6 +25,7 @@ import { wallets, walletFundingLegs, driveSpendOverrides, personalRootWalletOf }
 import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
 import { CONSUMER_WALLET_FIELDS } from '../../billing/wallet-views';
+import { DEFAULT_SEAT_ALLOWANCE_CENTS } from '../../billing/wallet-core';
 import {
   getDriveWallet,
   createDriveWallet,
@@ -303,13 +304,39 @@ describe('drive-wallet service (orgs on, real Postgres)', () => {
     if (!world) return;
     const marcus = await listMyWallets(world.ids.marcus, 'session');
     expect(marcus.driveWallets).toEqual([{ driveId: world.productId, driveName: 'Product', walletId: world.productWalletId, status: 'active', remainingCents: 120_000 - LENA_SPEND - MARCUS_SPEND, remainingCredits: (120_000 - LENA_SPEND - MARCUS_SPEND).toLocaleString('en-US') }]);
-    expect(marcus.seats).toEqual([{ orgId: world.orgId, orgName: 'Northwind Labs', walletId: world.poolId }]);
+    expect(marcus.seats).toEqual([expect.objectContaining({ orgId: world.orgId, orgName: 'Northwind Labs', walletId: world.poolId })]);
     expect(marcus.funds.pools).toEqual([]);
     expect(JSON.stringify(marcus)).not.toContain(String(POOL_CENTS));
 
     const priya = await listMyWallets(world.ids.priya, 'session');
     expect(priya.funds.pools).toEqual([expect.objectContaining({ orgId: world.orgId, orgName: 'Northwind Labs', walletId: world.poolId, availableCents: POOL_CENTS, availableCredits: POOL_CENTS.toLocaleString('en-US') })]);
     expect(JSON.stringify([marcus, priya])).not.toContain('$');
+  });
+
+  it('UI-10 (partial) SPEND-9 (partial) a member\'s seat shows their own allowance, what they spent of it and what is left, never the pool (D-OW-38 read model)', async () => {
+    if (!world) return;
+    await db.insert(creditLedger).values({
+      userId: world.ids.marcus, walletId: world.poolId, entryType: 'usage', bucket: 'monthly', amountCents: -30, appliedCents: -30, chargeMillicents: 30_000, consumeStatus: 'applied',
+    });
+    const [seat] = (await listMyWallets(world.ids.marcus, 'session')).seats;
+    expect(seat).toEqual({
+      orgId: world.orgId,
+      orgName: 'Northwind Labs',
+      walletId: world.poolId,
+      allowanceCents: DEFAULT_SEAT_ALLOWANCE_CENTS,
+      allowanceCredits: DEFAULT_SEAT_ALLOWANCE_CENTS.toLocaleString('en-US'),
+      spentCents: 30,
+      spentCredits: '30',
+      remainingCents: DEFAULT_SEAT_ALLOWANCE_CENTS - 30,
+      remainingCredits: (DEFAULT_SEAT_ALLOWANCE_CENTS - 30).toLocaleString('en-US'),
+    });
+    // The same figure the spending-from popover shows for the seat: one source (seatAllowanceFor).
+    const conversationId = createId();
+    await db.insert(conversations).values({ id: conversationId, userId: world.ids.marcus, type: 'drive', contextId: world.productId, updatedAt: new Date() });
+    const read = await getConversationSpend(world.ids.marcus, conversationId);
+    if (!read.ok) throw new Error('conversation read refused');
+    expect(read.options.find((o) => o.source === 'seat_allowance')?.remainingCents).toBe(seat.remainingCents);
+    expect(JSON.stringify(seat)).not.toContain(String(POOL_CENTS));
   });
 
   it('SPEND-3 (partial) UI-10 (partial) the person sets and clears their own default source', async () => {

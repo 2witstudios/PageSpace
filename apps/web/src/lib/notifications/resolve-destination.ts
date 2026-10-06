@@ -35,6 +35,17 @@ export function resolveDestination(notification: StoredNotification): string | n
     return `/dashboard/${notification.driveId}/${notification.pageId}`;
   }
 
+  // WAL-7 / WAL-6e: a cap alert or a debt notice opens the wallet it is about — a drive's
+  // Wallet settings, or (a seat or pool, no drive) Settings › Usage › Wallets.
+  if (notification.type === 'WALLET_CAP_ALERT' || notification.type === 'WALLET_DEBT') {
+    return notification.driveId ? `/dashboard/${notification.driveId}/settings/wallet` : '/settings/usage/wallets';
+  }
+
+  // SPEND-6: a skipped automation opens the drive's workflows, where the run says why.
+  if (notification.type === 'AUTOMATION_SKIPPED' && notification.driveId) {
+    return `/dashboard/${notification.driveId}/workflows`;
+  }
+
   if (notification.drive?.id) {
     return `/dashboard/${notification.drive.id}`;
   }

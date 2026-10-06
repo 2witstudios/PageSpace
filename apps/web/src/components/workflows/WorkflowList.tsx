@@ -17,11 +17,18 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '@/components/ui/tooltip';
+import { automationRunState } from '@pagespace/lib/billing/automation-run-record';
+import { AutomationSkippedBadge, AutomationSpendLine, type AutomationSpendContext } from '@/components/wallets/AutomationSpendState';
 import { WorkflowStatusBadge } from './WorkflowStatusBadge';
 import type { Workflow } from './types';
 
+/** [D-OW-36] `ownerLeftAt` arrives with the owner-left contract; read defensively until then. */
+type ListedWorkflow = Workflow & { ownerLeftAt?: string | null };
+
 interface WorkflowListProps {
-  workflows: Workflow[];
+  workflows: ListedWorkflow[];
+  /** Where these automations spend (orgs on): each row says whom it spends as and why a run was skipped. */
+  spendContext?: AutomationSpendContext;
   onRun: (id: string) => Promise<void> | void;
   onToggle: (id: string, enabled: boolean) => Promise<void> | void;
   onEdit: (workflow: Workflow) => void;
@@ -39,7 +46,7 @@ function formatDate(dateStr: string | null): string {
   });
 }
 
-export function WorkflowList({ workflows, onRun, onToggle, onEdit, onDelete }: WorkflowListProps) {
+export function WorkflowList({ workflows, spendContext, onRun, onToggle, onEdit, onDelete }: WorkflowListProps) {
   const [runningIds, setRunningIds] = useState<Set<string>>(new Set());
 
   const handleRun = async (id: string) => {
@@ -78,9 +85,21 @@ export function WorkflowList({ workflows, onRun, onToggle, onEdit, onDelete }: W
           </TableRow>
         </TableHeader>
         <TableBody>
-          {workflows.map(workflow => (
+          {workflows.map(workflow => {
+            const runState = spendContext
+              ? automationRunState({ ownerLeftAt: workflow.ownerLeftAt, lastRunStatus: workflow.lastRun?.status ?? null, lastRunError: workflow.lastRun?.error ?? null })
+              : { kind: 'normal' as const };
+            const creatorName = workflow.createdBy ? spendContext?.creatorNames[workflow.createdBy] ?? null : null;
+            return (
             <TableRow key={workflow.id}>
-              <TableCell className="font-medium">{workflow.name}</TableCell>
+              <TableCell className="font-medium">
+                <div className="flex flex-col">
+                  <span>{workflow.name}</span>
+                  {spendContext && (
+                    <AutomationSpendLine creatorName={creatorName} walletLabel={spendContext.walletLabel} ownerLeft={runState.kind === 'owner_left'} />
+                  )}
+                </div>
+              </TableCell>
               <TableCell className="text-muted-foreground text-sm">
                 <div className="flex items-center gap-1.5">
                   <Clock className="h-3.5 w-3.5 flex-shrink-0" />
@@ -88,6 +107,9 @@ export function WorkflowList({ workflows, onRun, onToggle, onEdit, onDelete }: W
                 </div>
               </TableCell>
               <TableCell>
+                {runState.kind === 'skipped' && spendContext ? (
+                  <AutomationSkippedBadge state={runState} creatorName={creatorName} context={spendContext} />
+                ) : (
                 <Tooltip>
                   <TooltipTrigger>
                     <WorkflowStatusBadge status={workflow.lastRun?.status ?? 'never_run'} />
@@ -98,6 +120,7 @@ export function WorkflowList({ workflows, onRun, onToggle, onEdit, onDelete }: W
                     </TooltipContent>
                   )}
                 </Tooltip>
+                )}
               </TableCell>
               <TableCell className="text-sm text-muted-foreground">
                 {formatDate(workflow.lastRun?.startedAt ?? null)}
@@ -107,7 +130,8 @@ export function WorkflowList({ workflows, onRun, onToggle, onEdit, onDelete }: W
               </TableCell>
               <TableCell className="text-center">
                 <Switch
-                  checked={workflow.isEnabled}
+                  checked={workflow.isEnabled && runState.kind !== 'owner_left'}
+                  disabled={runState.kind === 'owner_left'}
                   onCheckedChange={(checked) => onToggle(workflow.id, checked)}
                 />
               </TableCell>
@@ -148,7 +172,8 @@ export function WorkflowList({ workflows, onRun, onToggle, onEdit, onDelete }: W
                 </div>
               </TableCell>
             </TableRow>
-          ))}
+            );
+          })}
         </TableBody>
       </Table>
     </div>

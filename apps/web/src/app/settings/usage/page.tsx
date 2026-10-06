@@ -4,7 +4,9 @@ import { useEffect } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { ArrowLeft, CheckCircle, AlertTriangle } from 'lucide-react';
+import Link from 'next/link';
+import { ArrowLeft, CheckCircle, AlertTriangle, ChevronRight, Wallet } from 'lucide-react';
+import { ORGS_ENABLED } from '@pagespace/lib/organizations/orgs-enabled';
 import { useBillingVisibility } from '@/hooks/useBillingVisibility';
 import { CreditBalanceCard } from '@/components/billing/CreditBalanceCard';
 import { UsageBreakdownCard } from '@/components/billing/UsageBreakdownCard';
@@ -64,6 +66,21 @@ export default function UsagePage() {
             Credit purchase canceled. You can buy credits anytime.
           </AlertDescription>
         </Alert>
+      )}
+
+      {ORGS_ENABLED && (
+        // UI-10: everything you spend from and fund, and your default source.
+        <Link
+          href="/settings/usage/wallets"
+          className="flex items-center gap-3 rounded-lg border bg-card px-4 py-3.5 hover:bg-accent/50"
+        >
+          <Wallet className="h-5 w-5 text-muted-foreground" />
+          <span className="flex flex-1 flex-col">
+            <span className="text-sm font-medium">Wallets</span>
+            <span className="text-xs text-muted-foreground">What you spend from, what you fund, and your default source</span>
+          </span>
+          <ChevronRight className="h-4 w-4 text-muted-foreground" />
+        </Link>
       )}
 
       <CreditBalanceCard />

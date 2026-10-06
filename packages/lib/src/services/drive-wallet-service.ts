@@ -48,7 +48,7 @@ import {
   type WalletWrite,
 } from '../permissions/wallet-access';
 import { ensurePersonalRootWalletId } from '../billing/personal-wallet';
-import { listSpendChoices, resolveCallSpend, type SpendChoice } from '../billing/spend-resolution';
+import { listSpendChoices, resolveCallSpend, seatAllowanceFor, type SpendChoice } from '../billing/spend-resolution';
 import { conversationSpend, type CallSpendDecision } from '../billing/spend-target';
 import { formatCreditCount } from '../billing/money-model';
 import { toSubscriptionTier } from '../billing/subscription-tiers';
@@ -1090,8 +1090,21 @@ export interface MyWallets {
   personal: { walletId: string; remainingCents: number; remainingCredits: string; defaultSpendSource: SpendSourceKind | null };
   /** Drive wallets of drives I can open: the consumer amount only (SPEND-9), by drive name. */
   driveWallets: { driveId: string; driveName: string | null; walletId: string; status: string; remainingCents: number; remainingCredits: string }[];
-  /** A seat on each org I belong to: my own cap only, never the pool (SPEND-9), by org name. */
-  seats: { orgId: string; orgName: string | null; walletId: string }[];
+  /**
+   * A seat on each org I belong to: my own allowance only, never the pool (SPEND-9), by org name.
+   * The allowance, what I spent of it and what is left (D-OW-38 read model, seatAllowanceFor).
+   */
+  seats: {
+    orgId: string;
+    orgName: string | null;
+    walletId: string;
+    allowanceCents: number;
+    allowanceCredits: string;
+    spentCents: number;
+    spentCredits: string;
+    remainingCents: number;
+    remainingCredits: string;
+  }[];
   /** What I fund: drive wallets my personal wallet parents, pools I administer (SPEND-10), my donations. */
   funds: {
     driveWallets: { driveId: string; driveName: string | null; walletId: string; status: string; remainingCents: number; remainingCredits: string }[];
@@ -1177,7 +1190,18 @@ export async function listMyWallets(userId: string, credential: WalletCredential
     const pool = await orgPoolRow(db, m.orgId);
     if (!pool) continue;
     const orgName = orgNames.get(m.orgId) ?? null;
-    result.seats.push({ orgId: m.orgId, orgName, walletId: pool.id });
+    const seat = await seatAllowanceFor(db, { orgId: m.orgId, poolId: pool.id, poolPeriodStart: pool.monthlyPeriodStart, userId, now: new Date() });
+    result.seats.push({
+      orgId: m.orgId,
+      orgName,
+      walletId: pool.id,
+      allowanceCents: seat.allowanceCents,
+      allowanceCredits: formatCreditCount(seat.allowanceCents),
+      spentCents: seat.spentCents,
+      spentCredits: formatCreditCount(seat.spentCents),
+      remainingCents: seat.remainingCents,
+      remainingCredits: formatCreditCount(seat.remainingCents),
+    });
     if (credential === 'session' && (m.role === 'OWNER' || m.role === 'ADMIN')) {
       const facts = await poolFacts(m.orgId);
       if (facts) {

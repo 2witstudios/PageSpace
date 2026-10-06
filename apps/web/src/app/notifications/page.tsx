@@ -24,6 +24,9 @@ import { PullToRefresh } from '@/components/ui/pull-to-refresh';
 import { CustomScrollArea } from '@/components/ui/custom-scroll-area';
 import { NotificationItem } from '@/components/notifications/NotificationItem';
 import { getNotificationIcon } from '@/components/notifications/notificationIcons';
+import { resolveDestination } from '@/lib/notifications/resolve-destination';
+
+const WALLET_NOTICE_TYPES: ReadonlySet<string> = new Set(['WALLET_CAP_ALERT', 'WALLET_DEBT', 'AUTOMATION_SKIPPED']);
 
 type StoredNotification = LegacyNotification & { title: string; message: string };
 
@@ -115,6 +118,12 @@ export default function NotificationsPage() {
   const handleSelect = (notification: StoredNotification) => {
     if (!notification.isRead) {
       handleNotificationRead(notification.id);
+    }
+    // A wallet notice opens the wallet it is about (WAL-7, WAL-6e, SPEND-6), as the dropdown does.
+    if (WALLET_NOTICE_TYPES.has(notification.type)) {
+      const destination = resolveDestination(notification);
+      if (destination) router.push(destination);
+      return;
     }
     if (notification.drive?.id) {
       router.push(`/dashboard/${notification.drive.id}`);
