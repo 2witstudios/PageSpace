@@ -87,6 +87,8 @@ const SCOPE_GRAMMAR = notAccess('the OAuth scope grammar (parse, format, shape t
 const CAPABILITY_SCOPES = notAccess("a session token's CAPABILITY scopes (e.g. mcp:*, env:bridge), not a key's drive scope: the type rule flags any scopes: string[] and fails closed");
 const KEY_SETTINGS = notAccess("the owner's own key settings: shows the key's configured scope");
 const LEGACY_SCOPE_CHECKS = ceiling('the scope check helpers: refuse or narrow a drive/page/list the owner already reaches');
+const ORG_GATE = ceiling("copies the credential's drive ceiling onto the org gate (empty = unrestricted); every consumer refuses or narrows by it");
+const ORG_REFUSAL = ceiling('refuses an org-wide org read to a drive-scoped token (the wallets.list rule); grants nothing');
 
 /** Every function in the tree that reads a key's drive scope. Keyed `file#function`. */
 const KEY_SCOPE_READ_LEDGER: Readonly<Record<string, Verdict>> = {
@@ -151,6 +153,13 @@ const KEY_SCOPE_READ_LEDGER: Readonly<Record<string, Verdict>> = {
   'apps/web/src/app/api/v1/conversations/[id]/route.ts#DELETE': OWN_CONVERSATION,
   'apps/web/src/app/api/v1/models/route.ts#GET': ceiling('narrows AI_CHAT pages to the scope; each page is then filtered by getPrincipalBatchPagePermissions (owner-bound)'),
   'apps/web/src/lib/wallets/wallet-route.ts#refuseScopedTokenForAccountRead': SCOPE_REFUSAL,
+  // ── org reads (X-1): the scope rides the org gate; consumers only refuse or narrow ──────────────────────
+  'apps/web/src/lib/orgs/org-route-auth.ts#tokenAllowedDriveIds': ORG_GATE,
+  'apps/web/src/lib/orgs/org-route-auth.ts#refuseDriveScopedToken': ORG_REFUSAL,
+  'apps/web/src/lib/orgs/org-route-auth.ts#authorizeOrgRequest': ORG_GATE,
+  'apps/web/src/app/api/orgs/[orgId]/drives/route.ts#GET': ceiling(
+    "filters the OWNER's org drive directory (listOrgDriveDirectory) to the token's scope; nothing outside the scope is added",
+  ),
   'apps/web/src/lib/agent-workspaces/credential-scope.ts#isWorkspaceInCredentialScope': AGENT_RUNTIME,
   // ── key administration and display ──────────────────────────────────────────────────────────────────────
   'apps/web/src/app/api/drives/[driveId]/apps/[tokenId]/route.ts#PATCH': KEY_ADMIN,
