@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import type { KeyboardEvent } from "react";
 import { formatDistanceToNow } from "date-fns";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Check, Folder, Layers, Plus, Settings, Star } from "lucide-react";
 
 import {
@@ -108,6 +109,7 @@ function DrivePickerBody({ onClose, onCreate }: DrivePickerBodyProps) {
     toggleFavorite,
   } = useDrivePicker(query);
 
+  const router = useRouter();
   // The query needs no reset: this body unmounts with the dialog.
   const close = () => onClose();
 
@@ -231,9 +233,9 @@ function DrivePickerBody({ onClose, onCreate }: DrivePickerBodyProps) {
 
         {/*
           DRV-9: with orgs on, the same drives under org headers and a Personal group. cmdk hides
-          group headings from assistive tech, so the header's settings icon is a pointer affordance
-          like the star; the org hub is also reached from Account › Organizations and the drive's
-          General page (UI-1).
+          group headings from assistive tech, so the header's settings icon is only a pointer
+          shortcut; the group's last option, "<org> settings", is the way to the org hub for the
+          keyboard and screen readers (UI-1).
         */}
         {allDrives.length > 0 && ownerGroups && !isSearching ? (
           ownerGroups.map((group) => (
@@ -259,6 +261,19 @@ function DrivePickerBody({ onClose, onCreate }: DrivePickerBodyProps) {
               }
             >
               {group.drives.map((drive) => renderItem(drive, group.key))}
+              {group.kind === "org" && (
+                <CommandItem
+                  value={`org-settings:${group.orgId}`}
+                  onSelect={() => {
+                    close();
+                    router.push(`/orgs/${group.orgId}/settings`);
+                  }}
+                  className="cursor-pointer gap-2.5 text-muted-foreground"
+                >
+                  <Settings className="h-4 w-4 shrink-0" aria-hidden="true" />
+                  <span className="min-w-0 flex-1 truncate">{group.label} settings</span>
+                </CommandItem>
+              )}
             </CommandGroup>
           ))
         ) : allDrives.length > 0 && (
