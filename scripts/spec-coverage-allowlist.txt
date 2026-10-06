@@ -199,6 +199,9 @@ SPEND-9
 # unallocated balance; automation spend is labeled per person until C4 names the drive consumer.
 SPEND-10
 UI-1
+# UI-3 (partial, phase5-fixes): the drive chip (org mark, org in the tooltip) and the org chip on /orgs/* pages
+# (Main.dc.html:146) are tested in DashboardCrumb.org.test; back on the list until a reviewer agrees every clause is proven.
+UI-3
 UI-4
 UI-5
 UI-7
