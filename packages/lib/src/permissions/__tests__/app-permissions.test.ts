@@ -280,10 +280,14 @@ describe('hasAppDriveMembership', () => {
     expect(await hasAppDriveMembership(TOKEN_ID, DRIVE_ID)).toBe(false);
   });
 
-  it('explicit role row → true regardless of owner membership', async () => {
-    vi.mocked(db.select).mockReturnValueOnce(stubSelectJoin([membershipRow('MEMBER')]));
+  it('review #2849 r4 P1: an explicit role row counts ONLY while the owner is a current drive member; dangling → false', async () => {
+    vi.mocked(db.select).mockReturnValueOnce(stubSelectJoin([membershipRow('ADMIN')]));
+    vi.mocked(isUserDriveMember).mockResolvedValueOnce(true);
     expect(await hasAppDriveMembership(TOKEN_ID, DRIVE_ID)).toBe(true);
-    expect(isUserDriveMember).not.toHaveBeenCalled();
+    expect(isUserDriveMember).toHaveBeenCalledWith(OWNER_ID, DRIVE_ID);
+    vi.mocked(db.select).mockReturnValueOnce(stubSelectJoin([membershipRow('MEMBER')]));
+    vi.mocked(isUserDriveMember).mockResolvedValueOnce(false);
+    expect(await hasAppDriveMembership(TOKEN_ID, DRIVE_ID)).toBe(false);
   });
 
   it('inherit row counts ONLY while the owner still has drive access', async () => {
@@ -482,9 +486,12 @@ describe('hasScopedDriveMembership', () => {
     expect(await hasScopedDriveMembership([scopeRow('other-drive', null)], OWNER_ID, DRIVE_ID)).toBe(false);
   });
 
-  it('explicit role row → true regardless of owner membership', async () => {
-    expect(await hasScopedDriveMembership([scopeRow(DRIVE_ID, 'MEMBER')], OWNER_ID, DRIVE_ID)).toBe(true);
-    expect(isUserDriveMember).not.toHaveBeenCalled();
+  it('review #2849 r4 P1: an explicit OAuth scope counts ONLY while the owner is a current drive member; dangling → false', async () => {
+    vi.mocked(isUserDriveMember).mockResolvedValueOnce(true);
+    expect(await hasScopedDriveMembership([scopeRow(DRIVE_ID, 'ADMIN')], OWNER_ID, DRIVE_ID)).toBe(true);
+    expect(isUserDriveMember).toHaveBeenCalledWith(OWNER_ID, DRIVE_ID);
+    vi.mocked(isUserDriveMember).mockResolvedValueOnce(false);
+    expect(await hasScopedDriveMembership([scopeRow(DRIVE_ID, 'MEMBER')], OWNER_ID, DRIVE_ID)).toBe(false);
   });
 
   it('inherit row counts ONLY while the owner still has drive access', async () => {

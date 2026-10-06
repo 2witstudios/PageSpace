@@ -16,10 +16,10 @@ import { db } from '@pagespace/db/db';
 import { and, eq, inArray, isNull } from '@pagespace/db/operators';
 import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
-import { users } from '@pagespace/db/schema/auth';
+import { mcpTokens, users } from '@pagespace/db/schema/auth';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { calendarEvents, eventAttendees } from '@pagespace/db/schema/calendar';
-import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
+import { driveMembers, mcpTokenDrives, pagePermissions } from '@pagespace/db/schema/members';
 import { organizations, orgMembers, orgSubscriptions } from '@pagespace/db/schema/organizations';
 import { orgGuestHolds } from '@pagespace/db/schema/org-guest-holds';
 import { pendingInvites } from '@pagespace/db/schema/pending-invites';
@@ -37,13 +37,17 @@ vi.mock('@pagespace/lib/services/page-content-store', async (importOriginal) => 
 // Calendar writers broadcast and push to Google after the write; neither is what these tests assert. The routes'
 // authentication is stubbed to the drive lead (the event creator).
 vi.mock('@/lib/websocket/calendar-events', () => ({ broadcastCalendarEvent: vi.fn(async () => undefined) }));
-const authed = vi.hoisted(() => ({ userId: '' }));
-vi.mock('@/lib/auth', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@/lib/auth')>()),
-  authenticateRequestWithOptions: vi.fn(async () => ({ userId: authed.userId, tokenVersion: 0, tokenType: 'session', sessionId: 's', role: 'user', adminRoleVersion: 0 })),
-  isAuthError: vi.fn(() => false),
-  getAllowedDriveIds: vi.fn(() => []),
-}));
+const authed = vi.hoisted(() => ({ userId: '', principal: null as null | Record<string, unknown> }));
+vi.mock('@/lib/auth', async (importOriginal) => {
+  const real = await importOriginal<typeof import('@/lib/auth')>();
+  return {
+    ...real,
+    // A session for the drive lead, unless a test hands in a principal (an MCP key) to act as.
+    authenticateRequestWithOptions: vi.fn(async () => authed.principal ?? ({ userId: authed.userId, tokenVersion: 0, tokenType: 'session', sessionId: 's', role: 'user', adminRoleVersion: 0 })),
+    isAuthError: vi.fn(() => false),
+    getAllowedDriveIds: vi.fn((auth: Parameters<typeof real.getAllowedDriveIds>[0]) => (authed.principal ? real.getAllowedDriveIds(auth) : [])),
+  };
+});
 vi.mock('@pagespace/lib/monitoring/activity-logger', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@pagespace/lib/monitoring/activity-logger')>()),
   getActorInfo: vi.fn(async () => ({ actorEmail: 'a@x', actorDisplayName: 'A' })),
@@ -62,6 +66,10 @@ import { pageService } from '../page-service';
 import { movePagesToDrive } from '../page-cross-drive-move-service';
 import { POST as addAttendees } from '@/app/api/calendar/events/[eventId]/attendees/route';
 import { calendarWriteTools } from '@/lib/ai/tools/calendar-write-tools';
+import { GET as driveActivities } from '@/app/api/activities/route';
+import { GET as publishedApps } from '@/app/api/drives/[driveId]/published-apps/route';
+import { getPrincipalDriveAccess, isPrincipalDriveMember } from '@/lib/auth';
+import { mapAttendeesToUsers } from '@/lib/integrations/google-calendar/sync-service';
 import type { ActivityLogForRollback } from '../rollback/types';
 
 const created = { userIds: [] as string[], driveIds: [] as string[], orgIds: [] as string[] };
@@ -404,5 +412,52 @@ describe('calendar events in a lapsed org drive (review #2849 r3: P1-A, P2 rulin
     await pay();
     expect((await post()).status).toBe(200);
     expect(await attendeesOf(event.id)).toContain(w.member);
+  });
+});
+
+describe('Google Calendar sync attendees in a lapsed org drive (review #2849 r4 P3, P2 ruling)', () => {
+  it('SEAT-9 (partial) [D-OW-33] review r4 P3: while lapsed the sync updates an existing attendee but adds no new one; paid, it adds them', async () => {
+    const ownerEmail = (await db.select({ email: users.email }).from(users).where(eq(users.id, w.owner)))[0].email;
+    const [event] = await db.insert(calendarEvents).values({ driveId: w.orgDrive, createdById: w.owner, title: 'Synced', startAt: new Date(), endAt: new Date(Date.now() + 3_600_000), visibility: 'ATTENDEES_ONLY', updatedAt: new Date() }).returning();
+    await db.insert(eventAttendees).values({ eventId: event.id, userId: w.owner, status: 'PENDING', isOrganizer: true });
+    const google = [{ email: ownerEmail, responseStatus: 'accepted' }, { email: w.memberEmail, responseStatus: 'needsAction' }];
+    const rows = async () => db.select({ userId: eventAttendees.userId, status: eventAttendees.status }).from(eventAttendees).where(eq(eventAttendees.eventId, event.id));
+
+    await lapse();
+    await mapAttendeesToUsers(event.id, google as never);
+    expect(await rows()).toEqual([{ userId: w.owner, status: 'ACCEPTED' }]);
+
+    await pay();
+    await mapAttendeesToUsers(event.id, google as never);
+    expect((await rows()).map((r) => r.userId).sort()).toEqual([w.owner, w.member].sort());
+  });
+});
+
+describe('a key whose owner left the drive (review #2849 r4 P1)', () => {
+  afterEach(() => { authed.principal = null; });
+
+  it('SEAT-9 (partial) [D-OW-33] review r4 P1: an explicit-role MCP key stops being a drive member when its owner\'s row is deleted: the member gates say no and the drive activity feed and published apps answer 403; re-adding the row restores access', async () => {
+    await factories.createDriveMember(w.orgDrive, w.member, { role: 'MEMBER', acceptedAt: new Date() });
+    const [token] = await db.insert(mcpTokens).values({ userId: w.member, tokenHash: `h_${createId()}`, tokenPrefix: 'mcp_', name: 'k' }).returning();
+    await db.insert(mcpTokenDrives).values({ tokenId: token.id, driveId: w.orgDrive, role: 'MEMBER', customRoleId: null });
+    const key = { tokenType: 'mcp' as const, tokenId: token.id, allowedDriveIds: [w.orgDrive], userId: w.member, role: 'user' as const, tokenVersion: 0, adminRoleVersion: 0 };
+    authed.principal = key;
+    const feed = () => driveActivities(new Request(`http://localhost/api/activities?context=drive&driveId=${w.orgDrive}`));
+    const apps = () => publishedApps(new Request(`http://localhost/api/drives/${w.orgDrive}/published-apps`), { params: Promise.resolve({ driveId: w.orgDrive }) });
+
+    expect(await isPrincipalDriveMember(key as never, w.orgDrive)).toBe(true);
+    expect((await feed()).status).toBe(200);
+    expect((await apps()).status).toBe(200);
+
+    const [row] = await db.select().from(driveMembers).where(and(eq(driveMembers.driveId, w.orgDrive), eq(driveMembers.userId, w.member)));
+    await db.delete(driveMembers).where(eq(driveMembers.id, row.id));
+    expect(await isPrincipalDriveMember(key as never, w.orgDrive)).toBe(false);
+    expect(await getPrincipalDriveAccess(key as never, w.orgDrive)).toBe(false);
+    expect((await feed()).status).toBe(403);
+    expect((await apps()).status).toBe(403);
+
+    await db.insert(driveMembers).values(row);
+    expect(await isPrincipalDriveMember(key as never, w.orgDrive)).toBe(true);
+    expect((await feed()).status).toBe(200);
   });
 });

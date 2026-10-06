@@ -178,17 +178,16 @@ export async function getAppAccessLevel(
 }
 
 /**
- * Whether the token has usable access to the drive. An inherit row counts only
- * while its OWNER still has drive access — a dangling inherit row (owner
- * removed/demoted out of the drive) grants nothing.
+ * Whether the token has usable access to the drive. Any row, inherit or explicit, counts only while its OWNER still
+ * has drive access — a dangling row (owner removed from the drive) grants nothing.
  */
 export async function hasAppDriveMembership(tokenId: string, driveId: string): Promise<boolean> {
   const membership = await fetchAppMembershipContext(tokenId, driveId);
   if (!membership) return false;
-  if (membership.role === null) {
-    return isUserDriveMember(membership.ownerUserId, driveId);
-  }
-  return true;
+  // Review #2849 r4 (P1): EVERY key, inherit or explicit, is a drive member only while its owner is a CURRENT member
+  // of the drive (a direct row or org-derived). An owner who left takes their keys' membership with them, so no
+  // scope revocation on member removal is needed.
+  return isUserDriveMember(membership.ownerUserId, driveId);
 }
 
 export interface AppDriveMembership {
@@ -481,8 +480,8 @@ export async function hasScopedDriveMembership(
 ): Promise<boolean> {
   const row = findScopeRow(driveScopes, driveId);
   if (!row) return false;
-  if (row.role === null) return isUserDriveMember(ownerUserId, driveId);
-  return true;
+  // Review #2849 r4 (P1): inherit or explicit, the scope counts only while its owner is a current member.
+  return isUserDriveMember(ownerUserId, driveId);
 }
 
 /**

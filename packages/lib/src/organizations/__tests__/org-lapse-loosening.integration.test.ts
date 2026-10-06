@@ -47,7 +47,7 @@ import { orgDriveServiceDeps } from '../../services/org-drive-service-deps';
 import { createDriveRole, deleteDriveRole, updateDriveRole } from '../../services/drive-role-service';
 import { changeDriveVisibility } from '../../services/org-drive-service';
 import { validateDriveScopeAccess } from '../../services/drive-service';
-import { getAppAccessLevel, getAppAccessiblePagesInDrive, getAppDriveMembership, getEffectiveScopedDriveMembership } from '../../permissions/app-permissions';
+import { getAppAccessLevel, getAppAccessiblePagesInDrive, getAppDriveMembership, getEffectiveScopedDriveMembership, hasAppDriveMembership, hasScopedDriveMembership } from '../../permissions/app-permissions';
 import { calendarEvents, calendarEventDrives } from '@pagespace/db/schema/calendar';
 import { shareEventWithDrive, unshareEventFromDrive } from '../../services/calendar-event-drive-service';
 import { getUserAccessLevel } from '../../permissions/permissions';
@@ -583,5 +583,40 @@ describe('[D-OW-33] a lapsed org may only restrict, on every guarded write (orgs
     await lapse(w);
     expect(await unshareEventFromDrive({ actingUserId: w.ids.dana, eventId: event.id, driveId: w.ops })).toMatchObject({ ok: true });
     expect(await shares()).toHaveLength(0);
+  });
+
+  it('SEAT-9 (partial) [D-OW-33] review r4 P1: a key (MCP or OAuth, explicit role) is a drive member only while its owner is; delete the owner\'s row and both keys lose membership; re-add it and membership returns', async () => {
+    if (!world) return;
+    const w = world;
+    const [token] = await db.insert(mcpTokens).values({ userId: w.ids.marcus, tokenHash: `h_${createId()}`, tokenPrefix: 'mcp_', name: 'k' }).returning();
+    await db.insert(mcpTokenDrives).values({ tokenId: token.id, driveId: w.product, role: 'MEMBER', customRoleId: null });
+    const oauth = [{ driveId: w.product, role: 'MEMBER' as const, customRoleId: null }];
+    expect(await hasAppDriveMembership(token.id, w.product)).toBe(true);
+    expect(await hasScopedDriveMembership(oauth, w.ids.marcus, w.product)).toBe(true);
+    const [row] = await db.select().from(driveMembers).where(and(eq(driveMembers.driveId, w.product), eq(driveMembers.userId, w.ids.marcus)));
+    await db.delete(driveMembers).where(eq(driveMembers.id, row.id));
+    for (const state of ['paid', 'lapsed'] as const) {
+      if (state === 'lapsed') await lapse(w);
+      expect(await hasAppDriveMembership(token.id, w.product)).toBe(false);
+      expect(await hasScopedDriveMembership(oauth, w.ids.marcus, w.product)).toBe(false);
+    }
+    await db.insert(driveMembers).values(row);
+    expect(await hasAppDriveMembership(token.id, w.product)).toBe(true);
+    expect(await hasScopedDriveMembership(oauth, w.ids.marcus, w.product)).toBe(true);
+  });
+
+  it('SEAT-9 (partial) [D-OW-33] review r4 P3: the calendar visibility guard holds the event row FOR UPDATE until its transaction ends (a concurrent locker cannot take it)', async () => {
+    if (!world) return;
+    const w = world;
+    const [event] = await db.insert(calendarEvents).values({ driveId: w.product, createdById: w.ids.dana, title: 'Locked', startAt: new Date(), endAt: new Date(Date.now() + 3_600_000), visibility: 'PRIVATE', updatedAt: new Date() }).returning();
+    await db.transaction(async (tx) => {
+      await checkCalendarVisibilityMayLoosen(tx, event.id, 'PRIVATE');
+      const other = await pool.connect();
+      try {
+        await expect(other.query('SELECT id FROM calendar_events WHERE id = $1 FOR UPDATE NOWAIT', [event.id])).rejects.toMatchObject({ code: '55P03' });
+      } finally {
+        other.release();
+      }
+    });
   });
 });

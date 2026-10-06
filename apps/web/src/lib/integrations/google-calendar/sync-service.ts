@@ -867,7 +867,7 @@ export const unregisterWebhookChannels = async (
  * Map Google event attendees to PageSpace users by email and persist as eventAttendees.
  * Only maps attendees that have a matching PageSpace user account.
  */
-const mapAttendeesToUsers = async (
+export const mapAttendeesToUsers = async (
   eventId: string,
   googleAttendees: GoogleEventAttendee[] | undefined
 ): Promise<void> => {
