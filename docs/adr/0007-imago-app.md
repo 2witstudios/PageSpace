@@ -23,7 +23,7 @@ From the decision record (2026-09-20 … 2026-09-29):
 | # | Decision |
 |---|---|
 | D1 | The brand keeps the existing blue `--primary` (`oklch(0.50 0.16 235)`); the violet→cyan gradient is retired. |
-| D2 | "Imago" is the assistant family. The chat-header selector picks an **agent**, not a model: Imago Planner, Imago Researcher, plus the user's own `AI_CHAT` agents. |
+| D2 | "Imago" is the assistant family. The chat-header selector picks an **agent**, not a model: Imago Planner, Imago Researcher, plus the user's own `AI_CHAT` agents. (Planner and Researcher retired by the owner on 2026-10-06 — see §5.) |
 | D3 | Chat replaces Home as a rail destination. |
 | D4 | No global/dashboard level. Everything is drive-scoped; there is a Home drive. |
 | D5 | A `⋯` overflow in the rail below Plugins holds Workflows, Activity, Connections and similar. (Departed from by DEC-6, §6.) |
@@ -60,12 +60,13 @@ One deliberate difference from myimago: icons are `lucide-react` at stroke 1.5 /
 
 ## 5. Decision D-D — built-in Imago agents live in the Home drive
 
-- A `user_builtin_agents(userId, key, pageId)` pointer table and a pure registry define the Imago agents (`imago`, `imago-planner`, `imago-researcher`). They are provisioned as `AI_CHAT` pages in the user's Home drive by `provisionHomeDriveIfNeeded` (`packages/lib/src/onboarding/home-drive.ts`) and backfilled for existing users, Home drive first.
-- They run on the page-chat pipeline (`runPageChatTurn`, `apps/web/src/lib/ai/chat-pipeline/page-chat-turn.ts`). For built-in agents the turn adds a granted-drive summary, the location hint from the request's context ref, and the user's integrations (still gated by `isOnPrem()`).
-- **Reach is explicit.** The global assistant's implicit reach into every drive becomes `drive_agent_members` grants through the existing `addAgentToDrive` (`packages/lib/src/services/drive-agent-service.ts`), capped at the granted role by `packages/lib/src/permissions/`. Default (DEC-2): auto-grant on STANDARD drives the user owns; any other drive only through the per-drive Imago access toggle.
+- A `user_builtin_agents(userId, key, pageId)` pointer table and a pure registry define the built-in agent. Since the owner decision of 2026-10-06 (IMG-10.10) there is **one, `imago`**: it replaces the global assistant one for one. The earlier `imago-planner` and `imago-researcher` are retired — provisioning trashes their pages and drops their pointers. Imago is provisioned as an `AI_CHAT` page in the user's Home drive by `provisionHomeDriveIfNeeded` (`packages/lib/src/onboarding/home-drive.ts`) and backfilled for existing users, Home drive first.
+- It runs on the page-chat pipeline (`runPageChatTurn`, `apps/web/src/lib/ai/chat-pipeline/page-chat-turn.ts`), and for its owner that turn hands it the **global assistant's tool set and context through shared code** (`apps/web/src/lib/ai/chat-pipeline/assistant-surface.ts`, run by `runGlobalChatTurn` too): the full tool registry under the same filters (sandbox tier, agent-account tools, read-only, web search, image generation), the user's and the in-view drive's integrations through the one assistant resolver (still gated by `isOnPrem()`), desktop MCP, `finish`/`ask_user`, and the same location, Home-drive hint, drive prompt, drive tree or all-drives summary, personalization and agent awareness — plus a short Imago persona and its Agent Memory. An owner's Imago conversation gets a sandbox session in their Home drive on first use, as the global assistant's gets a driveless one.
+- **Reach is the user's** (superseding DEC-2's grant model). The Imago page carries `pages.userScopedAccess`, and `apps/web/src/lib/ai/tools/actor-permissions.ts` resolves it as the invoking user's own access — every drive, member-only drives, shared and private pages, delete — exactly like the global assistant, but **only when the invoking user is the agent's owner**. Run by anyone else (consult, @mention, workflows, `ask_agent`, a page chat on a shared page) it reaches nothing and its turn gets no tools. No `drive_agent_members` grants are made for it; the ones the earlier model made are removed on sign-in and by the backfill.
+- **The per-drive setting is an exclusion.** `imago_drive_access` off keeps the user's Imago out of that drive even though the user can open it — its pages, search results (including cross-drive), tree, activity, drive-level integrations, commands and sessions there — enforced centrally in `actor-permissions.ts` and the shared context builder. It defaults to on in every drive the user can access, any user who can access a drive sets only their own choice there, the user's own Home drive is refused, and an off stored by the earlier model keeps its meaning.
 - The model is a per-agent setting; Imago's composer has no model picker (DEC-5).
 
-This is what makes the second chat strategy unnecessary for Imago: a built-in agent is an ordinary agent inside a drive.
+This is what makes the second chat strategy unnecessary for Imago: a built-in agent is an ordinary `AI_CHAT` page that, for its owner, assembles the global assistant's surface from the same code.
 
 ## 6. Decision D-E — agent workspaces become drive-scoped
 
@@ -114,6 +115,6 @@ From the decision record, still open:
 
 - The monorepo gains a new service (`apps/imago`, port 3006, its own Docker image and CI matrix entry); production routes `/imago*` to it ahead of `apps/web`.
 - `apps/web` stays the API and the classic UI; imago is a client of its routes. Two routes are added; no route is removed.
-- Every user gains three `AI_CHAT` pages in their Home drive and pointer rows in `user_builtin_agents`; owners of STANDARD drives see those agents as drive members.
+- Every user gains one `AI_CHAT` page (Imago) in their Home drive and a pointer row in `user_builtin_agents`; it is a member of the Home drive only, and reaches every other drive through the user.
 - `agent_workspaces.driveId` becomes `NOT NULL` after two releases, and the global-assistant branches in access, billing, storage, realtime and tools are deleted.
 - The global chat pipeline remains in service for classic and the wire contract until the cutover epic.
