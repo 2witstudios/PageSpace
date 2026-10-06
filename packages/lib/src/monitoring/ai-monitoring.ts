@@ -56,7 +56,7 @@ export const AI_PRICING = {
   'anthropic/claude-3-haiku': { input: 0.25, output: 1.25 },
 
   // OpenRouter - OpenAI (source: openrouter.ai/api/v1/models)
-  'openai/gpt-5.6-sol-pro': { input: 2, output: 10 },
+  'openai/gpt-5.6-sol-pro': { input: 4, output: 20 },
   'openai/gpt-5.6-sol': { input: 2, output: 10 },
   'openai/gpt-5.6-terra-pro': { input: 2, output: 12 },
   'openai/gpt-5.6-terra': { input: 2, output: 12 },
@@ -92,10 +92,10 @@ export const AI_PRICING = {
   'openai/gpt-5-mini': { input: 0.25, output: 2 },
   'openai/gpt-5-nano': { input: 0.05, output: 0.4 },
   'openai/gpt-oss-120b': { input: 0.037, output: 0.17 },
-  'openai/gpt-oss-20b': { input: 0.03, output: 0.13 },
+  'openai/gpt-oss-20b': { input: 0.018, output: 0.09 },
 
   // OpenRouter - Google (source: openrouter.ai/api/v1/models)
-  'google/gemini-3.7-flash': { input: 0.375, output: 1.875 },
+  'google/gemini-3.7-flash': { input: 0.75, output: 3.75 },
   'google/gemini-3.6-flash': { input: 0.75, output: 3.75 },
   'google/gemini-3.5-flash-lite': { input: 0.3, output: 2.5 },
   'google/gemini-3.5-flash': { input: 1.5, output: 9 },
@@ -114,23 +114,23 @@ export const AI_PRICING = {
   'google/gemini-2.5-flash-lite-preview-06-17': { input: 0.10, output: 0.40 },
   'google/gemini-2.0-pro': { input: 1.25, output: 5.00 },
   'google/gemma-4-31b-it': { input: 0.09, output: 0.34 },
-  'google/gemma-4-26b-a4b-it': { input: 0.07, output: 0.34 },
+  'google/gemma-4-26b-a4b-it': { input: 0.09, output: 0.3 },
 
   // OpenRouter - Meta (source: openrouter.ai/api/v1/models)
   'meta/muse-spark-1.1': { input: 1.25, output: 4.25 },
-  'meta-llama/llama-4-maverick': { input: 0.2, output: 0.8 },
-  'meta-llama/llama-4-scout': { input: 0.11, output: 0.34 },
-  'meta-llama/llama-3.3-70b-instruct': { input: 0.71, output: 0.71 },
+  'meta-llama/llama-4-maverick': { input: 0.1875, output: 0.6525 },
+  'meta-llama/llama-4-scout': { input: 0.1, output: 0.3 },
+  'meta-llama/llama-3.3-70b-instruct': { input: 0.1, output: 0.32 },
   'meta-llama/llama-3.1-405b-instruct': { input: 3.00, output: 3.00 },
 
   // OpenRouter - Mistral (source: openrouter.ai/api/v1/models)
   'mistralai/mistral-large-2512': { input: 0.5, output: 1.5 },
   'mistralai/mistral-medium-3-5': { input: 1.5, output: 7.5 },
   'mistralai/mistral-medium-3': { input: 0.4, output: 2 },
-  'mistralai/devstral-2512': { input: 0.44, output: 2.2 },
+  'mistralai/devstral-2512': { input: 0.4, output: 2 },
   'mistralai/mistral-small-2603': { input: 0.15, output: 0.6 },
   'mistralai/mistral-medium-3.1': { input: 0.4, output: 2 },
-  'mistralai/mistral-small-3.2-24b-instruct': { input: 0.075, output: 0.2 },
+  'mistralai/mistral-small-3.2-24b-instruct': { input: 0.09375, output: 0.25 },
   'mistralai/codestral-2508': { input: 0.3, output: 0.9 },
   'mistralai/devstral-medium': { input: 0.40, output: 2.00 },
   'mistralai/devstral-small': { input: 0.10, output: 0.30 },
@@ -149,12 +149,12 @@ export const AI_PRICING = {
   'glm-5':       { input: 1.00, output: 3.20 },
 
   // OpenRouter - Chinese/Asian (source: openrouter.ai/api/v1/models)
-  'z-ai/glm-5.2': { input: 1.19, output: 3.74 },
-  'z-ai/glm-5.1': { input: 1.26, output: 3.96 },
+  'z-ai/glm-5.2': { input: 0.41, output: 3.99 },
+  'z-ai/glm-5.1': { input: 0.9646, output: 3.032 },
   'z-ai/glm-5-turbo': { input: 1.2, output: 4 },
   'z-ai/glm-5': { input: 0.6, output: 1.92 },
   'z-ai/glm-4.7-flash': { input: 0.06, output: 0.4 },
-  'z-ai/glm-4.7': { input: 0.4, output: 1.75 },
+  'z-ai/glm-4.7': { input: 0.6, output: 2.2 },
   'z-ai/glm-4.6': { input: 0.43, output: 1.75 },
   'z-ai/glm-4.5v': { input: 0.6, output: 1.8 },
   'z-ai/glm-4.5': { input: 0.6, output: 2.2 },
@@ -165,26 +165,26 @@ export const AI_PRICING = {
   'qwen/qwen3.6-max-preview': { input: 1.027, output: 6.162 },
   'qwen/qwen3.6-plus': { input: 0.325, output: 1.95 },
   'qwen/qwen3.6-flash': { input: 0.1875, output: 1.125 },
-  'qwen/qwen3.6-35b-a3b': { input: 0.1, output: 0.9 },
-  'qwen/qwen3.6-27b': { input: 0.6, output: 3.6 },
+  'qwen/qwen3.6-35b-a3b': { input: 0.15, output: 1 },
+  'qwen/qwen3.6-27b': { input: 0.32, output: 3.2 },
   'qwen/qwen3.5-plus-20260420': { input: 0.3, output: 1.8 },
   'qwen/qwen3.5-flash-02-23': { input: 0.065, output: 0.26 },
-  'qwen/qwen3.5-397b-a17b': { input: 0.39, output: 2.34 },
-  'qwen/qwen3.5-122b-a10b': { input: 0.29, output: 2.4 },
-  'qwen/qwen3.5-35b-a3b': { input: 0.25, output: 1.25 },
+  'qwen/qwen3.5-397b-a17b': { input: 0.55, output: 3.5 },
+  'qwen/qwen3.5-122b-a10b': { input: 0.26, output: 2.08 },
+  'qwen/qwen3.5-35b-a3b': { input: 0.15, output: 1 },
   'qwen/qwen3.5-27b': { input: 0.195, output: 1.56 },
   'qwen/qwen3-max-thinking': { input: 0.78, output: 3.9 },
   'qwen/qwen3-max': { input: 0.78, output: 3.9 },
   'qwen/qwen3-235b-a22b-thinking-2507': { input: 0.23, output: 2.3 },
   'qwen/qwen3-235b-a22b-2507': { input: 0.0875, output: 0.35 },
   'qwen/qwen3-coder': { input: 0.3, output: 1 },
-  'moonshotai/kimi-k3': { input: 3, output: 15 },
-  'moonshotai/kimi-k2.7-code': { input: 0.66, output: 3.4 },
-  'moonshotai/kimi-k2.6': { input: 0.95, output: 4 },
+  'moonshotai/kimi-k3': { input: 2.7, output: 13.5 },
+  'moonshotai/kimi-k2.7-code': { input: 0.6712, output: 3.35 },
+  'moonshotai/kimi-k2.6': { input: 0.4341, output: 1.828 },
   'moonshotai/kimi-k2-thinking': { input: 0.6, output: 2.5 },
   'moonshotai/kimi-k2': { input: 0.57, output: 2.3 },
   'minimax/minimax-m3': { input: 0.3, output: 1.2 },
-  'minimax/minimax-m2.7': { input: 0.3, output: 1.2 },
+  'minimax/minimax-m2.7': { input: 0.21, output: 0.84 },
   'minimax/minimax-m2.5': { input: 0.27, output: 1.08 },
   'minimax/minimax-m2.1': { input: 0.3, output: 1.2 },
   'minimax/minimax-m1': { input: 0.55, output: 2.2 },
@@ -192,10 +192,10 @@ export const AI_PRICING = {
   'bytedance-seed/seed-2.0-mini': { input: 0.1, output: 0.4 },
 
   // OpenRouter - DeepSeek (source: openrouter.ai/api/v1/models)
-  'deepseek/deepseek-v4-pro': { input: 0.87, output: 1.74 },
-  'deepseek/deepseek-v4-flash': { input: 0.0871, output: 0.1742 },
-  'deepseek/deepseek-v3.2': { input: 0.269, output: 0.4 },
-  'deepseek/deepseek-v3.1-terminus': { input: 0.27, output: 1 },
+  'deepseek/deepseek-v4-pro': { input: 0.2088, output: 0.4176 },
+  'deepseek/deepseek-v4-flash': { input: 0.042, output: 0.084 },
+  'deepseek/deepseek-v3.2': { input: 0.28, output: 0.42 },
+  'deepseek/deepseek-v3.1-terminus': { input: 0.3, output: 1 },
   'deepseek/deepseek-r1-0528': { input: 0.5, output: 2.15 },
 
   // OpenRouter - AI21
@@ -351,7 +351,7 @@ export const AI_PRICING = {
   'qwen/qwen3-next-80b-a3b-thinking': { input: 0.15, output: 1.2 },
   'qwen/qwen3-vl-235b-a22b-instruct': { input: 0.21, output: 1.9 },
   'qwen/qwen3-vl-235b-a22b-thinking': { input: 0.4, output: 4 },
-  'qwen/qwen3-vl-30b-a3b-instruct': { input: 0.13, output: 0.52 },
+  'qwen/qwen3-vl-30b-a3b-instruct': { input: 0.15, output: 0.6 },
   'qwen/qwen3-vl-30b-a3b-thinking': { input: 0.2, output: 2.4 },
   'qwen/qwen3-vl-32b-instruct': { input: 0.104, output: 0.416 },
   'qwen/qwen3-vl-8b-instruct': { input: 0.117, output: 0.455 },
@@ -360,14 +360,14 @@ export const AI_PRICING = {
   'qwen/qwen3.5-plus-02-15': { input: 0.26, output: 1.56 },
   'qwen/qwen3.7-flash': { input: 0.03, output: 0.13 },
   'qwen/qwen3.8-2.4t-a95b': { input: 2, output: 6 },
-  'qwen/qwen3.8-27b': { input: 0.425, output: 2.55 },
+  'qwen/qwen3.8-27b': { input: 0.42, output: 3 },
   'qwen/qwen3.8-flash': { input: 0.15, output: 0.47 },
   'qwen/qwen3.8-max': { input: 2, output: 6 },
   // Z.ai
   'z-ai/glm-4.6v': { input: 0.3, output: 0.9 },
   'z-ai/glm-5.2:free': { input: 0, output: 0 },
   'z-ai/glm-5.3': { input: 1.4, output: 4.4 },
-  'z-ai/glm-5.3-flash': { input: 0.075, output: 0.25 },
+  'z-ai/glm-5.3-flash': { input: 0.15, output: 0.5 },
   'z-ai/glm-5v-turbo': { input: 1.2, output: 4 },
   // Meta
   'meta-llama/llama-3.1-70b-instruct': { input: 0.4, output: 0.4 },
@@ -377,12 +377,12 @@ export const AI_PRICING = {
   'meta/muse-spark-1.2-contributor': { input: 0.1, output: 0.2 },
   // DeepSeek
   'deepseek/deepseek-chat': { input: 0.2574, output: 1.0287 },
-  'deepseek/deepseek-chat-v3-0324': { input: 0.25, output: 1 },
-  'deepseek/deepseek-chat-v3.1': { input: 0.55, output: 1.65 },
+  'deepseek/deepseek-chat-v3-0324': { input: 0.29, output: 1.14 },
+  'deepseek/deepseek-chat-v3.1': { input: 0.25, output: 0.95 },
   'deepseek/deepseek-r1': { input: 0.7, output: 2.5 },
   'deepseek/deepseek-v3.2-exp': { input: 0.27, output: 0.41 },
-  'deepseek/deepseek-v4-flash-0731': { input: 0.07, output: 0.14 },
-  'deepseek/deepseek-v4-flash-vision-exp': { input: 0.22, output: 0.66 },
+  'deepseek/deepseek-v4-flash-0731': { input: 0.0171, output: 1.28 },
+  'deepseek/deepseek-v4-flash-vision-exp': { input: 0.2156, output: 0.6468 },
   'deepseek/deepseek-v4-pro-0813': { input: 0.66, output: 1.98 },
   // Google
   'google/gemini-2.5-flash-image': { input: 0.3, output: 2.5 },
@@ -402,7 +402,7 @@ export const AI_PRICING = {
   'x-ai/grok-4.6': { input: 2, output: 6 },
   // MoonshotAI
   'moonshotai/kimi-k2-0905': { input: 0.6, output: 2.5 },
-  'moonshotai/kimi-k2.5': { input: 0.6, output: 3 },
+  'moonshotai/kimi-k2.5': { input: 0.45, output: 2.25 },
   // OpenAI
   'openai/gpt-3.5-turbo': { input: 0.5, output: 1.5 },
   'openai/gpt-3.5-turbo-0613': { input: 1, output: 2 },
@@ -427,7 +427,7 @@ export const AI_PRICING = {
   'openai/o3-mini-high': { input: 1.1, output: 4.4 },
   'openai/o4-mini-high': { input: 1.1, output: 4.4 },
   // MiniMax
-  'minimax/minimax-m2': { input: 0.255, output: 1.02 },
+  'minimax/minimax-m2': { input: 0.3, output: 1.2 },
   'minimax/minimax-m2.7:free': { input: 0, output: 0 },
   'minimax/minimax-m3:free': { input: 0, output: 0 },
   // Mistral
@@ -454,7 +454,7 @@ export const AI_PRICING = {
   'amazon/nova-premier-v1': { input: 2.5, output: 12.5 },
   'amazon/nova-pro-v1': { input: 0.8, output: 3.2 },
   // Arcee AI
-  'arcee-ai/trinity-large-thinking': { input: 0.22, output: 0.85 },
+  'arcee-ai/trinity-large-thinking': { input: 0.25, output: 0.8 },
   'arcee-ai/virtuoso-large': { input: 0.75, output: 1.2 },
   // Cohere
   'cohere/command-r-08-2024': { input: 0.15, output: 0.6 },
@@ -481,11 +481,11 @@ export const AI_PRICING = {
   // NVIDIA
   'nvidia/nemotron-3-nano-30b-a3b': { input: 0.05, output: 0.2 },
   'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free': { input: 0, output: 0 },
-  'nvidia/nemotron-3-super-120b-a12b': { input: 0.085, output: 0.4 },
+  'nvidia/nemotron-3-super-120b-a12b': { input: 0.08, output: 0.45 },
   'nvidia/nemotron-3-super-120b-a12b:free': { input: 0, output: 0 },
   'nvidia/nemotron-3-ultra-550b-a55b': { input: 0.5, output: 2.2 },
   'nvidia/nemotron-3-ultra-550b-a55b:free': { input: 0, output: 0 },
-  'nvidia/nemotron-3.5-lightning': { input: 0.1, output: 0.25 },
+  'nvidia/nemotron-3.5-lightning': { input: 0.06, output: 0.16 },
   'nvidia/nemotron-3.5-lightning:free': { input: 0, output: 0 },
   // Poolside
   'poolside/laguna-s-2.1': { input: 0.09, output: 0.18 },
@@ -516,10 +516,66 @@ export const AI_PRICING = {
   'thinkingmachines/inkling:free': { input: 0, output: 0 },
   // Upstage
   'upstage/solar-pro-3': { input: 0.15, output: 0.6 },
-  'upstage/solar-pro4': { input: 0.03, output: 0.12 },
+  'upstage/solar-pro4': { input: 0.09, output: 0.36 },
   // Xiaomi
   'xiaomi/mimo-v2.5': { input: 0.14, output: 0.28 },
   'xiaomi/mimo-v2.5-pro': { input: 0.435, output: 0.87 },
+
+  'openai/gpt-6-luna': { input: 0.1, output: 0.5 },
+
+  'openai/gpt-6-luna-pro': { input: 0.1, output: 0.5 },
+
+  'openai/gpt-6-sol': { input: 2, output: 10 },
+
+  'openai/gpt-6-sol-pro': { input: 2, output: 10 },
+
+  'openai/gpt-6.1-sol': { input: 2, output: 10 },
+
+  'openai/gpt-6.1-sol-pro': { input: 2, output: 10 },
+
+  'openai/gpt-6-astra': { input: 10, output: 50 },
+
+  'openai/gpt-6-astra-pro': { input: 10, output: 50 },
+
+  'anthropic/claude-opus-5.5': { input: 4, output: 20 },
+
+  'anthropic/claude-sonnet-5.5': { input: 2, output: 10 },
+
+  'anthropic/claude-fable-5.1': { input: 10, output: 50 },
+
+  'google/gemini-3.8-flash': { input: 0.75, output: 3.75 },
+
+  'x-ai/grok-4.7': { input: 2, output: 6 },
+
+  'deepseek/deepseek-v4.1-flash': { input: 0.3, output: 1.2 },
+
+  'qwen/qwen3.8-max-prime': { input: 4, output: 12 },
+
+  'qwen/qwen3.8-max-0902': { input: 2, output: 6 },
+
+  'qwen/qwen3.8-omni-flash': { input: 0.15, output: 0.47 },
+
+  'qwen/qwen3.8-27b:free': { input: 0, output: 0 },
+
+  'meta/muse-spark-1.3': { input: 1.25, output: 4.25 },
+
+  'meta/muse-spark-1.3-contributor': { input: 0.1, output: 0.2 },
+
+  'inception/mercury-2.5': { input: 0.04, output: 0.15 },
+
+  'z-ai/glm-5.3-prime': { input: 2.8, output: 8.8 },
+
+  'z-ai/glm-5.3-flashx': { input: 0.37, output: 1.25 },
+
+  'cohere/command-a-plus': { input: 0.3, output: 1.5 },
+
+  'cohere/command-a': { input: 2.5, output: 10 },
+
+  'inclusionai/ling-3.0-flash-sante:free': { input: 0, output: 0 },
+
+  'xiaomi/mimo-v2.6-pro': { input: 0.435, output: 0.87 },
+
+  'xiaomi/mimo-v2.6-flash': { input: 0.14, output: 0.28 },
 
   // Default/Unknown models
   'default': { input: 0, output: 0 }
@@ -1012,6 +1068,35 @@ export const MODEL_CONTEXT_WINDOWS = {
   // Xiaomi
   'xiaomi/mimo-v2.5': 1050000,
   'xiaomi/mimo-v2.5-pro': 1050000,
+
+  'openai/gpt-6-luna': 1050000,
+  'openai/gpt-6-luna-pro': 1050000,
+  'openai/gpt-6-sol': 1050000,
+  'openai/gpt-6-sol-pro': 1050000,
+  'openai/gpt-6.1-sol': 1050000,
+  'openai/gpt-6.1-sol-pro': 1050000,
+  'openai/gpt-6-astra': 1050000,
+  'openai/gpt-6-astra-pro': 1050000,
+  'anthropic/claude-opus-5.5': 1000000,
+  'anthropic/claude-sonnet-5.5': 1000000,
+  'anthropic/claude-fable-5.1': 1000000,
+  'google/gemini-3.8-flash': 1048576,
+  'x-ai/grok-4.7': 500000,
+  'deepseek/deepseek-v4.1-flash': 1048576,
+  'qwen/qwen3.8-max-prime': 1000000,
+  'qwen/qwen3.8-max-0902': 1000000,
+  'qwen/qwen3.8-omni-flash': 1000000,
+  'qwen/qwen3.8-27b:free': 262144,
+  'meta/muse-spark-1.3': 1048576,
+  'meta/muse-spark-1.3-contributor': 1048576,
+  'inception/mercury-2.5': 260000,
+  'z-ai/glm-5.3-prime': 1000000,
+  'z-ai/glm-5.3-flashx': 1048576,
+  'cohere/command-a-plus': 192000,
+  'cohere/command-a': 256000,
+  'inclusionai/ling-3.0-flash-sante:free': 262144,
+  'xiaomi/mimo-v2.6-pro': 1050000,
+  'xiaomi/mimo-v2.6-flash': 1050000,
 
   // Default
   'default': 200000 // Updated default for newer models

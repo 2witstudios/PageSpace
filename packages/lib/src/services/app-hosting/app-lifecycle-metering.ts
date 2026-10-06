@@ -30,7 +30,7 @@
 
 import { and, eq, sql } from '@pagespace/db/operators';
 import { db, getAdvisoryLockPool } from '@pagespace/db/db';
-import { withAdvisoryLock, type AdvisoryLockPool } from '@pagespace/db/advisory-lock';
+import { throwIfLockLost, withAdvisoryLock, type AdvisoryLockPool } from '@pagespace/db/advisory-lock';
 import { publishedApps, type PublishedApp } from '@pagespace/db/schema/published-apps';
 import { loggers } from '../../logging/logger-config';
 import {
@@ -81,7 +81,7 @@ export interface AppLifecycleMeteringDeps {
    * skip the park (a session-level advisory lock is re-entrant only within the
    * SAME session, and this helper takes a fresh connection every time).
    */
-  serializeSettle: <T>(fn: () => Promise<T>) => Promise<{ locked: false } | { locked: true; result: T }>;
+  serializeSettle: <T>(fn: (signal: AbortSignal) => Promise<T>) => Promise<{ locked: false } | { locked: true; result: T }>;
   /** The per-app daily awake budget in seconds, read at call time. 0 disables it. */
   dailyAwakeCapSeconds: () => number;
   now: () => Date;
@@ -95,13 +95,21 @@ export interface AppLifecycleMeteringDeps {
  * the lock" would present an outage as an ordinary, self-correcting skip.
  */
 export function serializeUnderMeterLock(pgPool: AdvisoryLockPool = getAdvisoryLockPool()) {
-  return async <T>(fn: () => Promise<T>): Promise<{ locked: false } | { locked: true; result: T }> => {
+  return async <T>(fn: (signal: AbortSignal) => Promise<T>): Promise<{ locked: false } | { locked: true; result: T }> => {
     const locked = await withAdvisoryLock(pgPool, METER_AWAKE_LOCK_KEY, fn);
     if (locked.outcome === 'lock_busy') return { locked: false };
     if (locked.outcome === 'connection_error') throw locked.error;
+    if (locked.lockLost) {
+      // `fn` was handed the aborted signal and skipped its charge (see settleAndClose); the
+      // window it left open is billed by the next heartbeat under a fresh lock.
+      loggers.ai.warn('Published-app settle lost the awake-meter lock mid-run — any unbilled window is left for the next heartbeat');
+    }
     return { locked: true, result: locked.result };
   };
 }
+
+/** A signal for code that runs inside no advisory lock of its own and so can never lose one. */
+const NEVER_LOST = new AbortController().signal;
 
 /**
  * A serializer for a caller that is ALREADY inside the meter's locked region: run
@@ -112,8 +120,20 @@ export function serializeUnderMeterLock(pgPool: AdvisoryLockPool = getAdvisoryLo
  * `lock_busy`, the park is skipped, and an insolvent app stays awake while the
  * counters report a clean tick.
  */
-export async function passThroughSettleLock<T>(fn: () => Promise<T>): Promise<{ locked: true; result: T }> {
-  return { locked: true, result: await fn() };
+export async function passThroughSettleLock<T>(fn: (signal: AbortSignal) => Promise<T>): Promise<{ locked: true; result: T }> {
+  return { locked: true, result: await fn(NEVER_LOST) };
+}
+
+/**
+ * {@link passThroughSettleLock} for a caller inside the meter's locked region that holds the
+ * region's lock-lost signal: the settle it runs stops on the SAME signal, so a meter tick that loses
+ * its lock does not go on to charge through a park.
+ */
+export function passThroughSettleLockUnder(signal: AbortSignal) {
+  return async <T>(fn: (signal: AbortSignal) => Promise<T>): Promise<{ locked: true; result: T }> => ({
+    locked: true,
+    result: await fn(signal),
+  });
 }
 
 function defaultTransport(): FlapsTransport {
@@ -467,7 +487,7 @@ export async function stopPublishedApp(
   // can delay a heartbeat tick by the length of one `POST /stop`; the heartbeat is
   // a ten-minute cadence and skips cleanly when the lock is held, so a delayed tick
   // bills the same seconds one tick later. A double charge cannot be undone.
-  const run = await deps.serializeSettle(() => stopPublishedAppSerialized(publishedAppId, reason, deps, options));
+  const run = await deps.serializeSettle((signal) => stopPublishedAppSerialized(publishedAppId, reason, deps, options, signal));
   if (!run.locked) return { outcome: 'lock_busy' };
   return run.result;
 }
@@ -478,6 +498,7 @@ async function stopPublishedAppSerialized(
   reason: StopReason,
   deps: AppLifecycleMeteringDeps,
   options: StopPublishedAppOptions,
+  signal: AbortSignal,
 ): Promise<StopPublishedAppResult> {
   const [row] = await db
     .select()
@@ -535,7 +556,7 @@ async function stopPublishedAppSerialized(
   // concurrent stop can touch `row.awakeBilledThrough` between the read at the top
   // of this function and the settle below — the lock is what makes the snapshot
   // safe to settle against, not a fresh read racing to catch up with it.
-  const settled = await settleAndClose(row, stoppedAt, nextStatus, stoppedAt, deps, reason);
+  const settled = await settleAndClose(row, stoppedAt, nextStatus, stoppedAt, deps, reason, signal);
   if (reason === 'daily_cap') reportDailyCapPark(row);
   return { outcome: 'stopped', status: nextStatus, billedSeconds: settled.billedSeconds };
 }
@@ -600,6 +621,7 @@ async function settleAndClose(
   stampedStopAt: Date,
   deps: AppLifecycleMeteringDeps,
   reason?: StopReason,
+  signal?: AbortSignal,
 ): Promise<SettleAndCloseResult> {
   const plan = planAwakeSettle({ billedThrough: row.awakeBilledThrough, now: billedThrough });
   let billedSeconds = 0;
@@ -631,6 +653,11 @@ async function settleAndClose(
       // window for it would bill the payer twice for the same span.
       let settled = false;
       try {
+        // The meter lock serializes this read-then-charge against every heartbeat and stop. Once
+        // it is lost, another holder may price this same window from the same watermark: skip the
+        // charge and take the failed-settle path (window left open, re-billed exactly once by the
+        // next heartbeat under a fresh lock).
+        throwIfLockLost(signal, 'the published-app final settle');
         const settle = await deps.billing.trackUsage({
           payerId,
           holdId: row.awakeHoldId ?? undefined,
@@ -881,8 +908,9 @@ export async function closeAppWindowAtBoundary(
   row: PublishedApp,
   boundary: Date,
   deps: AppLifecycleMeteringDeps,
+  signal?: AbortSignal,
 ): Promise<SettleAndCloseResult> {
-  return settleAndClose(row, boundary, 'stopped', boundary, deps);
+  return settleAndClose(row, boundary, 'stopped', boundary, deps, undefined, signal);
 }
 
 /** Best-effort mirroring of Fly's last-20 window; a failure is logged inside and never propagates. */

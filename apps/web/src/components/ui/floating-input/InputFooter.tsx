@@ -68,6 +68,12 @@ export interface InputFooterProps {
   hideModelSelector?: boolean;
   /** Disable the selector (e.g., during streaming) */
   disabled?: boolean;
+  /** Compact toolbar: icon-only Tools, tighter padding, shrinkable model selector */
+  compact?: boolean;
+  /** Rendered before the Tools button (e.g. attach) — compact toolbar only */
+  leading?: React.ReactNode;
+  /** Rendered at the far right (e.g. the send/stop action) — compact toolbar only */
+  trailing?: React.ReactNode;
   /** Additional class names */
   className?: string;
 }
@@ -108,19 +114,24 @@ export function InputFooter({
   onProviderModelChange,
   hideModelSelector = false,
   disabled = false,
+  compact = false,
+  leading,
+  trailing,
   className,
 }: InputFooterProps) {
   return (
     <div
       className={cn(
         'flex items-center justify-between',
-        'px-3 py-2',
+        compact ? 'gap-1 px-2.5 pb-2.5 pt-1.5' : 'px-3 py-2',
         className
       )}
     >
       {/* Left group - Tools popover */}
-      <div className="flex items-center gap-1">
+      <div className="flex items-center gap-0.5 shrink-0">
+        {leading}
         <ToolsPopover
+          iconOnly={compact}
           webSearchEnabled={webSearchEnabled}
           onWebSearchToggle={onWebSearchToggle}
           imageGenEnabled={imageGenEnabled}
@@ -143,9 +154,10 @@ export function InputFooter({
       </div>
 
       {/* Right group - Provider/Model Selector + Mic */}
-      <div className="flex items-center gap-1 min-w-0">
+      <div className={cn('flex items-center gap-1 min-w-0', compact && 'flex-1 justify-end')}>
         {!hideModelSelector && (
           <ProviderModelSelector
+            className="min-w-0 overflow-hidden"
             provider={selectedProvider}
             model={selectedModel}
             onChange={onProviderModelChange}
@@ -195,6 +207,7 @@ export function InputFooter({
                   : 'Voice input'}
           </TooltipContent>
         </Tooltip>
+        {trailing}
       </div>
     </div>
   );
