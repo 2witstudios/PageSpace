@@ -106,7 +106,7 @@ interface World {
   keptPageId: string;
   laterPageId: string;
   driveWalletId: string;
-  walletBefore: { id: string; topupRemainingCents: number; monthlyRemainingCents: number } | null;
+  walletBefore: typeof wallets.$inferSelect | null;
 }
 let w: World;
 
@@ -299,20 +299,23 @@ describe('backups and restore preserve org context and wallet rows (X-3 partial,
   });
 
   it('X-3 (partial) a drive wallet\'s row survives a restore round-trip byte-identical', async () => {
+    // The WHOLE row, not a cherry-picked subset: comparing a few hand-picked
+    // columns would let a restore that reset `spentCents` (free money), the
+    // status, the period fields or the allowance pass unnoticed. Every column
+    // the wallets table carries is compared; a difference must show here.
     const [before] = await db.select().from(wallets).where(eq(wallets.id, w.driveWalletId));
-    w.walletBefore = { id: before.id, topupRemainingCents: before.topupRemainingCents, monthlyRemainingCents: before.monthlyRemainingCents };
+    w.walletBefore = before;
+    const [legBefore] = await db.select().from(walletFundingLegs).where(eq(walletFundingLegs.walletId, w.driveWalletId));
 
     const backup = await createDriveBackup(w.orgDriveId, w.ownerId, { source: 'manual' });
     await restoreBackup(backup.backupId!);
 
     const [after] = await db.select().from(wallets).where(eq(wallets.id, w.driveWalletId));
-    expect(after.id).toBe(w.walletBefore.id);
-    expect(after.topupRemainingCents).toBe(w.walletBefore.topupRemainingCents);
-    expect(after.monthlyRemainingCents).toBe(w.walletBefore.monthlyRemainingCents);
-    expect(after.subjectId).toBe(w.orgDriveId);
-    // The leg behind it too: the restore's ACL writes never moved money.
+    expect(after).toEqual(before);
+    // The leg behind it too — its whole row, not just the balance: the
+    // restore's ACL writes never moved money.
     const legs = await db.select().from(walletFundingLegs).where(eq(walletFundingLegs.walletId, w.driveWalletId));
     expect(legs).toHaveLength(1);
-    expect(legs[0].remainingCents).toBe(300);
+    expect(legs[0]).toEqual(legBefore);
   });
 });
