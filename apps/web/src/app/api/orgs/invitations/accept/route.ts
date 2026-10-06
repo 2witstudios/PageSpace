@@ -5,12 +5,15 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { acceptInvitation } from '@pagespace/lib/organizations/invitations';
 import { authenticateOrgRequest, ORG_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
 import { inviteAcceptSchema } from '@/lib/orgs/org-schemas';
+import { ORG_LAPSED_MESSAGE } from '@pagespace/lib/organizations/status-core';
 
 const REFUSALS = {
   not_found: 'This invitation link is not valid',
   expired: 'This invitation has expired; ask for a new one',
   already_accepted: 'This invitation has already been used',
   email_mismatch: 'This invitation was sent to a different email address',
+  // [D-OW-33] the org is lapsed: joining waits until it pays; the invitation stays open.
+  org_lapsed: ORG_LAPSED_MESSAGE,
 } as const;
 
 /**

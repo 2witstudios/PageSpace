@@ -22,6 +22,8 @@ import { loadEffectiveDriveMembership } from './org-drive-membership';
 import { decideOrgDriveAdmission } from './guest-admission';
 import { requestGuestApproval } from './guest-holds';
 import { GUESTS_HELD_MESSAGE, GUESTS_OFF_MESSAGE, pageGrantWidensAccess } from '../organizations/sharing-decisions';
+import { ORG_LAPSED_MESSAGE } from '../organizations/status-core';
+import { checkDriveMayLoosen } from './org-lapse-guard';
 import { recordOrgAuditEvent } from '../audit/org-audit';
 import { loggers } from '../logging/logger-config';
 
@@ -40,7 +42,9 @@ export type PermissionMutationError =
   // POL-2: the org's guests policy is OFF and the grant would admit an outsider. Nothing is written.
   | { code: 'GUEST_POLICY_OFF'; message: string }
   // POL-2: the policy is APPROVE; the grant waits for an Owner or Admin (holdId) and nothing is written yet.
-  | { code: 'GUEST_APPROVAL_PENDING'; holdId: string; message: string };
+  | { code: 'GUEST_APPROVAL_PENDING'; holdId: string; message: string }
+  // [D-OW-33] the drive's org is lapsed and the grant would give someone more. Nothing is written.
+  | { code: 'ORG_LAPSED'; message: string };
 
 // ============================================================================
 // Result Types
@@ -282,6 +286,7 @@ export async function grantPagePermission(
       .limit(1);
     if (pageGrantWidensAccess(current ?? null, permissions)) {
       const admission = await decideOrgDriveAdmission({ driveId: page.driveId, userId: targetUserId }, tx);
+      if (admission.decision === 'refuse' && admission.refusal === 'org_lapsed') return { kind: 'lapsed' } as const;
       if (admission.decision === 'refuse') return { kind: 'refused' } as const;
       if (admission.decision === 'hold' && admission.orgId) {
         const item = await requestGuestApproval({
@@ -294,6 +299,8 @@ export async function grantPagePermission(
         }, tx);
         return { kind: 'held', orgId: admission.orgId, holdId: item.holdId } as const;
       }
+      // [D-OW-33] a wider grant loosens access, for an org member too: refused while the drive's org is lapsed.
+      if (await checkDriveMayLoosen(tx, page.driveId, true)) return { kind: 'lapsed' } as const;
     }
 
     const newId = createId();
@@ -345,6 +352,7 @@ export async function grantPagePermission(
   });
 
   if (outcome.kind === 'refused') return { ok: false, error: { code: 'GUEST_POLICY_OFF', message: GUESTS_OFF_MESSAGE } };
+  if (outcome.kind === 'lapsed') return { ok: false, error: { code: 'ORG_LAPSED', message: ORG_LAPSED_MESSAGE } };
   if (outcome.kind === 'held') {
     await recordOrgAuditEvent({
       orgId: outcome.orgId,

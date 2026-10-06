@@ -604,4 +604,11 @@ describe('org route behaviour', () => {
     vi.mocked(invitations.acceptInvitation).mockResolvedValue({ ok: false, status: 410, reason: 'expired' });
     expect((await acceptRoute.POST(req('POST', { token: 'ps_orginv_t' }))).status).toBe(410);
   });
+
+  it('SEAT-9 (partial) [D-OW-33] accepting while the org is lapsed answers 402 org_lapsed with the lapse copy (the invitation stays open)', async () => {
+    vi.mocked(invitations.acceptInvitation).mockResolvedValue({ ok: false, status: 402, reason: 'org_lapsed' });
+    const res = await acceptRoute.POST(req('POST', { token: 'ps_orginv_t' }));
+    expect(res.status).toBe(402);
+    expect(await res.json()).toEqual({ error: ORG_LAPSED_MESSAGE, code: 'org_lapsed' });
+  });
 });

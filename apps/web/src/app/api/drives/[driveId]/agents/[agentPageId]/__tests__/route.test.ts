@@ -28,6 +28,20 @@ vi.mock('@pagespace/db/schema/members', () => ({
   },
   driveRoles: { id: 'col_roles_id', driveId: 'col_roles_driveId' },
 }));
+// [D-OW-33] the lapse guard runs the write with the db mock; a test makes it refuse (the write loosened a lapsed org).
+const guardRefuses = vi.hoisted(() => ({ current: false }));
+vi.mock('@pagespace/lib/permissions/org-lapse-guard', async (importOriginal) => {
+  const real = await importOriginal<typeof import('@pagespace/lib/permissions/org-lapse-guard')>();
+  const { db: mockDb } = await import('@pagespace/db/db');
+  return {
+    ...real,
+    guardDriveAccess: vi.fn(async (_e: unknown, _d: string, _s: unknown, write: (tx: unknown) => Promise<unknown>) => {
+      const result = await write(mockDb);
+      if (guardRefuses.current) throw new real.OrgLapsedError();
+      return result;
+    }),
+  };
+});
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(),
@@ -73,6 +87,7 @@ function stubUpdate(returning: unknown[]) {
 describe('PATCH /api/drives/[driveId]/agents/[agentPageId]', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    guardRefuses.current = false;
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(MOCK_USER_ID));
     vi.mocked(isAuthError).mockReturnValue(false);
     vi.mocked(checkDriveAccess).mockResolvedValue({
@@ -92,6 +107,19 @@ describe('PATCH /api/drives/[driveId]/agents/[agentPageId]', () => {
     expect(response.status).toBe(200);
     expect(body.member).toMatchObject({ includeContext: true });
     expect(set).toHaveBeenCalledWith({ includeContext: true });
+  });
+
+  it('SEAT-9 (partial) [D-OW-33] runs the update inside guardDriveAccess (agents only) and answers 402 org_lapsed when it loosened a lapsed org', async () => {
+    stubExistingMembership();
+    stubUpdate([{ id: 'member_1', includeContext: true }]);
+    guardRefuses.current = true;
+
+    const response = await PATCH(patchRequest({ includeContext: true }), createContext());
+
+    expect(response.status).toBe(402);
+    expect(await response.json()).toMatchObject({ code: 'org_lapsed' });
+    const { guardDriveAccess } = await import('@pagespace/lib/permissions/org-lapse-guard');
+    expect(guardDriveAccess).toHaveBeenCalledWith(db, MOCK_DRIVE_ID, { members: false, grants: false }, expect.any(Function));
   });
 
   it('403s when the caller is not a drive owner/admin', async () => {
