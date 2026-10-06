@@ -15,7 +15,6 @@ import {
   boardMenuItemClass,
   boardMoveClass,
   boardMoveTriggerClass,
-  boardWipClass,
 } from './board-view-class';
 
 describe('board view classes', () => {
@@ -43,18 +42,6 @@ describe('board view classes', () => {
         'size-live-dot flex-none rounded-round bg-ink-faint',
         'size-live-dot flex-none rounded-round bg-accent',
         'size-live-dot flex-none rounded-round bg-online',
-      ],
-    });
-  });
-
-  test('WIP limits', () => {
-    assert({
-      given: 'a column within its limit and one over it',
-      should: 'badge the count quietly, and in the live tone once over',
-      actual: [boardWipClass(false), boardWipClass(true)],
-      expected: [
-        'ml-auto rounded-sm px-badge-x text-2xs font-medium tabular-nums bg-background text-ink-muted',
-        'ml-auto rounded-sm px-badge-x text-2xs font-medium tabular-nums bg-live-soft text-live',
       ],
     });
   });

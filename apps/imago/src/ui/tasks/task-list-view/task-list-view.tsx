@@ -45,7 +45,9 @@ type Body = {
 
 const bodyFor = ({ driveId, list, view, expandedIds, notice, actions, report, clock }: Body): ReactNode => {
   if (list === undefined) return renderTaskListMessage('Loading tasks…', 'status');
-  if (view === 'board') return <BoardView list={list} actions={actions} />;
+  if (view === 'board') {
+    return <BoardView list={list} actions={actions} taskHref={(task) => taskHref(driveId, task.pageId)} />;
+  }
   if (view === 'focus') {
     return renderFocusView({
       title: list.title,

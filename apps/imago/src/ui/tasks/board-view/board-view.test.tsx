@@ -104,6 +104,10 @@ const board = (container: HTMLElement) =>
     [...column.querySelectorAll('li[data-task]')].map((card) => card.getAttribute('data-task')),
   ]);
 
+/** Each column header's read-out name and count. */
+const counts = (container: HTMLElement) =>
+  [...container.querySelectorAll('section[data-column] > h3')].map((heading) => heading.getAttribute('aria-label'));
+
 const columnOf = (container: HTMLElement, id: string) =>
   container.querySelector(`li[data-task="${id}"]`)?.closest('section')?.getAttribute('aria-label');
 
@@ -167,6 +171,18 @@ describe('Board view', () => {
         ['Done', []],
       ],
     });
+    assert({
+      given: 'the same board',
+      should: 'show each column’s card count in its header',
+      actual: counts(container),
+      expected: ['To Do, 1 task', 'In Progress, 1 task', 'Blocked, 0 tasks', 'Done, 0 tasks'],
+    });
+    assert({
+      given: 'the same board',
+      should: 'link each card’s title to its task',
+      actual: [...container.querySelectorAll('li[data-task] a[data-title]')].map((link) => link.getAttribute('href')),
+      expected: ['/d1/tasks/page-z', '/d1/tasks/page-p'],
+    });
   });
 
   test('Move to… from the keyboard', async () => {
@@ -187,6 +203,7 @@ describe('Board view', () => {
       if (web.writes().length === 0) throw new Error('not sent');
     });
     const whileSaving = { column: columnOf(container, 'z'), menu: container.querySelector('[role="menu"]') };
+    const countsWhileSaving = counts(container);
     answer.open();
     await settle(() => {
       if (announced(container) === '') throw new Error('not announced');
@@ -214,6 +231,15 @@ describe('Board view', () => {
         focus: true,
       },
     });
+    assert({
+      given: 'the same move',
+      should: 'move one off To Do’s count and onto Done’s at once, and keep them once saved',
+      actual: { countsWhileSaving, after: counts(container) },
+      expected: {
+        countsWhileSaving: ['To Do, 0 tasks', 'In Progress, 1 task', 'Blocked, 0 tasks', 'Done, 1 task'],
+        after: ['To Do, 0 tasks', 'In Progress, 1 task', 'Blocked, 0 tasks', 'Done, 1 task'],
+      },
+    });
   });
 
   test('a move the server refuses rolls back', async () => {
@@ -226,11 +252,13 @@ describe('Board view', () => {
     );
     moveByKeyboard(container, 'z');
     const whileSaving = columnOf(container, 'z');
+    const countsWhileSaving = counts(container);
     // Refused, and the revalidating GET is held: only a rollback can have moved it back.
     await settle(() => {
       if (list.calls() < 2) throw new Error('not revalidating yet');
     });
     const beforeServerAnswers = columnOf(container, 'z');
+    const countsBeforeServerAnswers = counts(container);
     list.release();
     await settle(() => {
       if (announced(container) === '') throw new Error('not announced');
@@ -240,6 +268,15 @@ describe('Board view', () => {
       should: 'show it in Done at once, send it, then put it back in To Do before the server answers again',
       actual: { whileSaving, writes: web.writes().length, beforeServerAnswers },
       expected: { whileSaving: 'Done', writes: 1, beforeServerAnswers: 'To Do' },
+    });
+    assert({
+      given: 'the same refused move',
+      should: 'count it in Done while saving, then count it back in To Do on the rollback',
+      actual: { countsWhileSaving, countsBeforeServerAnswers },
+      expected: {
+        countsWhileSaving: ['To Do, 0 tasks', 'In Progress, 1 task', 'Blocked, 0 tasks', 'Done, 1 task'],
+        countsBeforeServerAnswers: ['To Do, 1 task', 'In Progress, 1 task', 'Blocked, 0 tasks', 'Done, 0 tasks'],
+      },
     });
     assert({
       given: 'the refusal',

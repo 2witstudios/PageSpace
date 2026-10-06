@@ -36,6 +36,8 @@ import {
 export type BoardViewProps = {
   readonly list: TaskList;
   readonly actions: TaskActions;
+  /** Where a card's task opens; titles are plain text without it. */
+  readonly taskHref?: (task: Task) => string;
 };
 
 /** Left and Right carry a held card a whole column; Up and Down do nothing. */
@@ -103,15 +105,17 @@ function Column({ column, target, children }: ColumnProps) {
 type CardProps = {
   readonly task: Task;
   readonly done: boolean;
+  readonly href: string | undefined;
   readonly move: MoveMenuRenderProps;
   readonly notice: string | null;
 };
 
-function Card({ task, done, move, notice }: CardProps) {
+function Card({ task, done, href, move, notice }: CardProps) {
   const { setNodeRef, attributes, listeners, isDragging } = useDraggable({ id: task.id });
   return renderBoardCard({
     task,
     done,
+    href,
     drag: { ref: setNodeRef, handle: { ...attributes, ...listeners }, dragging: isDragging },
     move,
     notice,
@@ -123,7 +127,7 @@ function Card({ task, done, move, notice }: CardProps) {
  * Which card's menu is open, which card is in flight, the last refusal and
  * the last announcement are its own state; the tasks are useTaskList's.
  */
-export function BoardView({ list, actions }: BoardViewProps) {
+export function BoardView({ list, actions, taskHref }: BoardViewProps) {
   const columns = useMemo(() => boardColumns(list), [list]);
   const [menuFor, setMenuFor] = useState<string | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -224,6 +228,7 @@ export function BoardView({ list, actions }: BoardViewProps) {
                   key={task.id}
                   task={task}
                   done={isDoneStatus(list.statuses, column.status.slug)}
+                  href={taskHref?.(task)}
                   move={menuOf(task)}
                   notice={notice?.at === task.id ? notice.message : null}
                 />

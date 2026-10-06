@@ -1,9 +1,9 @@
+import Link from 'next/link';
 import type { HTMLAttributes, KeyboardEvent, ReactNode } from 'react';
 import { renderIcon } from '../../components/icon/icon.render';
 import { renderProgressMeter } from '../../components/progress-meter/progress-meter.render';
 import type { Task, TaskStatus } from '../task-model/task';
 import { taskNoticeClass, taskTitleClass } from '../task-row/task-row-class';
-import { wipOf } from './board';
 import {
   boardCardClass,
   boardCardRowClass,
@@ -19,7 +19,6 @@ import {
   boardMenuItemClass,
   boardMoveClass,
   boardMoveTriggerClass,
-  boardWipClass,
 } from './board-view-class';
 
 export type BoardRenderProps = {
@@ -57,26 +56,23 @@ export type BoardColumnRenderProps = {
   readonly cards: ReactNode;
 };
 
-const wipBadge = (status: TaskStatus, count: number): ReactNode => {
-  const wip = wipOf(status, count);
-  if (wip === null) return null;
-  const label = `Work in progress: ${wip.count} of ${wip.limit}${wip.over ? ', over the limit' : ''}`;
-  return (
-    <span data-wip="" className={boardWipClass(wip.over)} aria-label={label} title="Work-in-progress limit">
-      {`WIP ${wip.count}/${wip.limit}`}
-    </span>
-  );
-};
+/** How a column's header reads out: its name and how many cards it holds. */
+const headingLabel = (status: TaskStatus, count: number): string =>
+  `${status.name}, ${count} ${count === 1 ? 'task' : 'tasks'}`;
 
-/** One status's column: its dot, name, count and WIP limit, then its cards. */
+/**
+ * One status's column: its dot, name and card count, then its cards. The
+ * count is the work in progress shown; PageSpace stores no limit to hold it to.
+ */
 export function renderBoardColumn({ status, count, target, dropRef, cards }: BoardColumnRenderProps): ReactNode {
   return (
     <section ref={dropRef} data-column={status.slug} aria-label={status.name} className={boardColumnClass(target)}>
-      <h3 className={boardColumnHeadClass}>
+      <h3 className={boardColumnHeadClass} aria-label={headingLabel(status, count)}>
         <span className={boardDotClass(status.group)} aria-hidden="true" />
         {status.name}
-        <span className={boardCountClass}>{count}</span>
-        {wipBadge(status, count)}
+        <span data-count="" className={boardCountClass}>
+          {count}
+        </span>
       </h3>
       {count === 0 ? <p className={boardEmptyClass}>No tasks</p> : null}
       <ul className={boardCardsClass} aria-label={`${status.name} tasks`}>
@@ -185,6 +181,8 @@ export type BoardCardRenderProps = {
   readonly task: Task;
   /** Done by the status group of the list. */
   readonly done: boolean;
+  /** Where the task's detail opens; the title is plain text without one. */
+  readonly href?: string;
   readonly drag: CardDrag;
   readonly move: MoveMenuRenderProps;
   /** Why the card's last move was refused. */
@@ -195,7 +193,7 @@ export type BoardCardRenderProps = {
  * A task's card: a drag handle, its title and subtask progress, and Move
  * to…; a refused move's reason sits under it.
  */
-export function renderBoardCard({ task, done, drag, move, notice }: BoardCardRenderProps): ReactNode {
+export function renderBoardCard({ task, done, href, drag, move, notice }: BoardCardRenderProps): ReactNode {
   return (
     <li data-task={task.id}>
       <article ref={drag.ref} aria-label={task.title} className={boardCardClass(drag.dragging)}>
@@ -203,9 +201,15 @@ export function renderBoardCard({ task, done, drag, move, notice }: BoardCardRen
           <button type="button" data-drag={task.id} className={boardHandleClass} {...drag.handle} aria-label={`Drag ${task.title}`}>
             {renderIcon({ name: 'grip', size: 14 })}
           </button>
-          <span className={taskTitleClass(done)} data-title="">
-            {task.title}
-          </span>
+          {href === undefined ? (
+            <span className={taskTitleClass(done)} data-title="">
+              {task.title}
+            </span>
+          ) : (
+            <Link href={href} prefetch className={taskTitleClass(done)} data-title="">
+              {task.title}
+            </Link>
+          )}
           {renderMoveMenu(move)}
         </div>
         {task.subTaskCount > 0 ? (

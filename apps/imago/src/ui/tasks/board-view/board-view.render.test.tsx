@@ -45,43 +45,39 @@ describe('renderBoardColumn()', () => {
       renderBoardColumn({ status: doing, count: 2, target: false, dropRef: () => undefined, cards: null }),
     );
     const column = container.querySelector('section');
+    const heading = column?.querySelector('h3');
     assert({
-      given: 'the In Progress status holding two tasks, with no limit',
-      should: 'name the column by its status, count its tasks and show no limit',
+      given: 'the In Progress status holding two tasks',
+      should: 'name the column by its status and show its card count, read out with the name',
       actual: {
         name: column?.getAttribute('aria-label'),
         column: column?.getAttribute('data-column'),
-        heading: column?.querySelector('h3')?.textContent,
+        heading: heading?.textContent,
+        label: heading?.getAttribute('aria-label'),
+        count: heading?.querySelector('[data-count]')?.textContent,
         cards: column?.querySelector('ul')?.getAttribute('aria-label'),
-        wip: container.querySelector('[data-wip]'),
       },
       expected: {
         name: 'In Progress',
         column: 'in_progress',
         heading: 'In Progress2',
+        label: 'In Progress, 2 tasks',
+        count: '2',
         cards: 'In Progress tasks',
-        wip: null,
       },
     });
   });
 
-  test('WIP limits', () => {
-    const limited = { ...doing, wipLimit: 2 };
-    const within = mount(renderBoardColumn({ status: limited, count: 2, target: false, dropRef: () => undefined, cards: null }));
-    const over = mount(renderBoardColumn({ status: limited, count: 3, target: false, dropRef: () => undefined, cards: null }));
-    const badge = (container: HTMLElement) => container.querySelector('[data-wip]');
+  test('the count read out', () => {
+    const label = (count: number) =>
+      mount(renderBoardColumn({ status: todo, count, target: false, dropRef: () => undefined, cards: null }))
+        .querySelector('h3')
+        ?.getAttribute('aria-label');
     assert({
-      given: 'a column limited to two holding two, then three',
-      should: 'show its count against the limit, in the live tone once over it',
-      actual: [within, over].map((container) => ({
-        text: badge(container)?.textContent,
-        label: badge(container)?.getAttribute('aria-label'),
-        over: badge(container)?.className.includes('text-live'),
-      })),
-      expected: [
-        { text: 'WIP 2/2', label: 'Work in progress: 2 of 2', over: false },
-        { text: 'WIP 3/2', label: 'Work in progress: 3 of 2, over the limit', over: true },
-      ],
+      given: 'a column holding none, one and three tasks',
+      should: 'read out its name and count, singular for one',
+      actual: [0, 1, 3].map(label),
+      expected: ['To Do, 0 tasks', 'To Do, 1 task', 'To Do, 3 tasks'],
     });
   });
 
@@ -128,6 +124,17 @@ describe('renderBoardCard()', () => {
         handle: 'Drag Plan launch',
         move: 'Move Plan launch to…',
       },
+    });
+  });
+
+  test('a card that opens its task', () => {
+    const container = mount(renderBoardCard(card({ href: '/d1/tasks/page-z' })));
+    const title = container.querySelector('[data-title]');
+    assert({
+      given: 'a card with a link to its task',
+      should: 'make its title the link to the task’s detail',
+      actual: [title?.tagName, title?.getAttribute('href'), title?.textContent],
+      expected: ['A', '/d1/tasks/page-z', 'Book venue'],
     });
   });
 

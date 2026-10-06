@@ -8,7 +8,6 @@ import {
   dropStatus,
   moveAnnouncement,
   moveTargets,
-  wipOf,
   type ColumnRect,
 } from './board';
 
@@ -63,50 +62,24 @@ describe('boardColumns()', () => {
   });
 });
 
-describe('wipOf()', () => {
-  const doing: TaskStatus = { ...(seededStatuses[1] as TaskStatus), wipLimit: 2 };
-
-  test('a status with a limit', () => {
-    assert({
-      given: 'a column limited to two holding one, two and three tasks',
-      should: 'count against the limit and flag only the column over it',
-      actual: [1, 2, 3].map((count) => wipOf(doing, count)),
-      expected: [
-        { count: 1, limit: 2, over: false },
-        { count: 2, limit: 2, over: false },
-        { count: 3, limit: 2, over: true },
-      ],
-    });
-  });
-
-  test('a status without one', () => {
-    assert({
-      given: 'a status with no limit',
-      should: 'have no WIP limit to show',
-      actual: wipOf(seededStatuses[1] as TaskStatus, 5),
-      expected: null,
-    });
-  });
-});
-
 describe('moveTargets()', () => {
   test('every other column', () => {
     const board = list('l1', [task('a', { status: 'in_progress' }), task('b', { status: 'archived' })]);
     const columns = boardColumns(board);
     assert({
       given: 'a task in In Progress, and one shown in the first column for an unknown slug',
-      should: 'offer every column but the one it is shown in',
+      should: 'offer every status but the one it is in, so the unknown one can still move to the first',
       actual: [moveTargets(columns, 'a').map((status) => status.slug), moveTargets(columns, 'b').map((s) => s.slug)],
       expected: [
         ['pending', 'blocked', 'completed'],
-        ['in_progress', 'blocked', 'completed'],
+        ['pending', 'in_progress', 'blocked', 'completed'],
       ],
     });
   });
 });
 
 describe('dropStatus()', () => {
-  const columns = boardColumns(list('l1', [task('a', { status: 'pending' })]));
+  const columns = boardColumns(list('l1', [task('a', { status: 'pending' }), task('b', { status: 'archived' })]));
 
   test('a drop on another column', () => {
     assert({
@@ -114,6 +87,15 @@ describe('dropStatus()', () => {
       should: 'move it to Done',
       actual: dropStatus(columns, 'a', 'completed'),
       expected: 'completed',
+    });
+  });
+
+  test('a drop of an unknown slug on the column it is shown in', () => {
+    assert({
+      given: 'a card shown in To Do for an unknown slug, dropped on To Do',
+      should: 'move it to To Do for real',
+      actual: dropStatus(columns, 'b', 'pending'),
+      expected: 'pending',
     });
   });
 

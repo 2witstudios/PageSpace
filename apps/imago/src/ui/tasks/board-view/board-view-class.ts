@@ -26,13 +26,6 @@ const dotTone: Readonly<Record<StatusGroup, string>> = {
 export const boardDotClass = (group: StatusGroup): string =>
   cn('size-live-dot flex-none rounded-round', dotTone[group]);
 
-/** The column's count against its WIP limit; the live tone once over it. */
-export const boardWipClass = (over: boolean): string =>
-  cn(
-    'ml-auto rounded-sm px-badge-x text-2xs font-medium tabular-nums',
-    over ? 'bg-live-soft text-live' : 'bg-background text-ink-muted',
-  );
-
 export const boardCardsClass = 'flex flex-col gap-2';
 
 /** A card, raised on its column; faded while it is the one being dragged. */

@@ -52,29 +52,26 @@ export const boardColumns = (list: TaskList): readonly BoardColumn[] => {
   }));
 };
 
-/** A column's count against its work-in-progress limit. */
-export type Wip = { readonly count: number; readonly limit: number; readonly over: boolean };
+const taskOf = (columns: readonly BoardColumn[], taskId: string): Task | undefined =>
+  columns.flatMap((column) => column.tasks).find((task) => task.id === taskId);
 
-/** The WIP limit to show on a status's column holding `count` tasks; null when it has none. */
-export const wipOf = (status: TaskStatus, count: number): Wip | null =>
-  status.wipLimit === undefined ? null : { count, limit: status.wipLimit, over: count > status.wipLimit };
-
-const columnOf = (columns: readonly BoardColumn[], taskId: string): BoardColumn | undefined =>
-  columns.find((column) => column.tasks.some((task) => task.id === taskId));
-
-/** The statuses "Move to…" offers a task: every column but the one it is shown in. */
+/**
+ * The statuses "Move to…" offers a task: every one but the status it is in.
+ * A task shown in the first column for an unknown slug is not in the first
+ * status, so it is offered that one too.
+ */
 export const moveTargets = (columns: readonly BoardColumn[], taskId: string): readonly TaskStatus[] => {
-  const from = columnOf(columns, taskId)?.status.slug;
+  const from = taskOf(columns, taskId)?.status;
   return columns.map((column) => column.status).filter((status) => status.slug !== from);
 };
 
 /**
  * The status a card dropped over `overId` moves to: the column's, when it is
- * another column than the card's own; null when the drop moves nothing.
+ * another status than the card's own; null when the drop moves nothing.
  */
 export const dropStatus = (columns: readonly BoardColumn[], taskId: string, overId: string | null): string | null => {
-  const from = columnOf(columns, taskId);
-  if (from === undefined || overId === null || overId === from.status.slug) return null;
+  const from = taskOf(columns, taskId);
+  if (from === undefined || overId === null || overId === from.status) return null;
   return columns.some((column) => column.status.slug === overId) ? overId : null;
 };
 
