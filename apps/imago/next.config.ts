@@ -19,6 +19,22 @@ const webAppInternalOrigin = (): string => {
   }
 };
 
+// The /api proxy target for a production build with no edge in front of it
+// (Docker Compose publishes this server directly). Read at `next build`, which
+// bakes rewrites into the routes manifest; the server never re-reads it.
+// Unset behind Caddy, Fly and Traefik, which route /api to apps/web already.
+const apiProxyOrigin = (): string | undefined => {
+  const value = process.env.IMAGO_API_PROXY_ORIGIN;
+  if (!value) return undefined;
+  try {
+    const url = new URL(value);
+    if (url.protocol === "http:" || url.protocol === "https:") return url.origin;
+  } catch {
+    // reported below
+  }
+  throw new Error(`IMAGO_API_PROXY_ORIGIN is not an http(s) URL: "${value}"`);
+};
+
 // Served same-origin under pagespace.ai/imago, beside classic apps/web.
 // Dev runs on :3006 (package.json `dev`); production ships the standalone
 // server, traced from the monorepo root so workspace packages are included.
@@ -26,8 +42,9 @@ const webAppInternalOrigin = (): string => {
 // In production the edge routes /imago to this app and /api to apps/web, so
 // the browser already sees one origin. `next dev` has no edge, so it proxies
 // /api (outside basePath) to apps/web itself: the session cookie and CSRF
-// token then behave as in production. The proxy exists only in the dev
-// server phase, so `next build` never bakes it into the routes manifest.
+// token then behave as in production. Outside `next dev` the proxy exists
+// only when IMAGO_API_PROXY_ORIGIN is set, so the image the edge serves carries
+// none (a second /api route behind Caddy would double-route).
 //
 // Next renders any request carrying next-router-prefetch: 1 in prefetch mode,
 // and for a document (non-RSC) request that render throws on the server
@@ -41,6 +58,12 @@ const prefetchDocument = () => ({
   has: [{ type: "header" as const, key: "next-router-prefetch", value: "1" }],
   missing: [{ type: "header" as const, key: "rsc", value: "1" }],
   destination: "/api/prefetch-document",
+});
+
+const apiProxy = (origin: string) => ({
+  source: "/api/:path*",
+  destination: `${origin}/api/:path*`,
+  basePath: false as const,
 });
 
 export default function nextConfig(phase: string): NextConfig {
@@ -90,16 +113,11 @@ export default function nextConfig(phase: string): NextConfig {
         { source: "/", ...prefetchDocument() },
         { source: "/:path((?!api(?:/|$)|_next/).*)", ...prefetchDocument() },
       ],
-      afterFiles:
-        phase === PHASE_DEVELOPMENT_SERVER
-          ? [
-              {
-                source: "/api/:path*",
-                destination: `${webAppInternalOrigin()}/api/:path*`,
-                basePath: false,
-              },
-            ]
-          : [],
+      afterFiles: (() => {
+        const origin =
+          phase === PHASE_DEVELOPMENT_SERVER ? webAppInternalOrigin() : apiProxyOrigin();
+        return origin ? [apiProxy(origin)] : [];
+      })(),
       fallback: [{ source: "/api/:path*", ...prefetchDocument() }],
     }),
   };

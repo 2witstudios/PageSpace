@@ -99,6 +99,73 @@ describe('buildCSPPolicy() by mode', () => {
   });
 });
 
+// Docker Compose serves realtime on its own origin (:3001). socket.io opens
+// with HTTP long-polling, which ws:/wss: do not cover, so the configured
+// realtime origin has to be in connect-src or the socket never connects.
+describe('buildCSPPolicy() realtime origin', () => {
+  test('a cross-origin realtime server', () => {
+    assert({
+      given: 'NEXT_PUBLIC_REALTIME_URL on another origin',
+      should: "allow that origin in connect-src for socket.io's polling",
+      actual: directive(buildCSPPolicy('abc123', { realtimeUrl: 'http://localhost:3001' }), 'connect-src'),
+      expected: "connect-src 'self' ws: wss: http://localhost:3001",
+    });
+
+    assert({
+      given: 'a realtime URL with a path or trailing slash',
+      should: 'allow only its origin',
+      actual: directive(buildCSPPolicy('abc123', { realtimeUrl: 'https://rt.example.com/socket/' }), 'connect-src'),
+      expected: "connect-src 'self' ws: wss: https://rt.example.com",
+    });
+  });
+
+  test('no realtime origin to add', () => {
+    for (const realtimeUrl of [undefined, '', 'not a url', 'javascript:alert(1)', 'data:text/plain,x', "https://x.test'; script-src *"]) {
+      assert({
+        given: `realtimeUrl ${JSON.stringify(realtimeUrl)}`,
+        should: "keep connect-src at 'self' ws: wss:",
+        actual: directive(buildCSPPolicy('abc123', { realtimeUrl }), 'connect-src'),
+        expected: "connect-src 'self' ws: wss:",
+      });
+    }
+  });
+
+  test('only connect-src changes', () => {
+    const strip = (policy: string): string =>
+      policy
+        .split('; ')
+        .filter((entry) => !entry.startsWith('connect-src '))
+        .join('; ');
+
+    assert({
+      given: 'a realtime origin',
+      should: 'leave every other directive as without one',
+      actual: strip(buildCSPPolicy('abc123', { realtimeUrl: 'http://localhost:3001' })),
+      expected: strip(buildCSPPolicy('abc123')),
+    });
+  });
+
+  test('createSecureResponse()', () => {
+    const request = new NextRequest('http://localhost:3006/imago');
+    const { response, nonce } = createSecureResponse(true, request, { realtimeUrl: 'http://localhost:3001' });
+    const policy = buildCSPPolicy(nonce, { realtimeUrl: 'http://localhost:3001' });
+
+    assert({
+      given: 'a document request with a realtime URL',
+      should: 'enforce the policy that allows it in the browser',
+      actual: response.headers.get('Content-Security-Policy'),
+      expected: policy,
+    });
+
+    assert({
+      given: 'a document request with a realtime URL',
+      should: 'forward the same policy to the render',
+      actual: response.headers.get('x-middleware-request-content-security-policy'),
+      expected: policy,
+    });
+  });
+});
+
 describe('buildAPICSPPolicy()', () => {
   test('API policy', () => {
     assert({

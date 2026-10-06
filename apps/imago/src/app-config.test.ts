@@ -91,11 +91,12 @@ describe('apps/imago configuration', () => {
     });
   });
 
-  test('no proxy outside next dev', async () => {
+  test('no proxy outside next dev unless IMAGO_API_PROXY_ORIGIN is set', async () => {
     vi.stubEnv('WEB_APP_INTERNAL_URL', 'http://127.0.0.1:3100');
+    vi.stubEnv('IMAGO_API_PROXY_ORIGIN', '');
 
     assert({
-      given: 'next build',
+      given: 'next build without IMAGO_API_PROXY_ORIGIN (Caddy, Fly, Traefik)',
       should: 'bake no /api proxy into the production routes manifest',
       actual: await apiProxies(PHASE_PRODUCTION_BUILD),
       expected: [],
@@ -125,6 +126,77 @@ describe('apps/imago configuration', () => {
       should: 'rewrite only to imago itself, never to apps/web',
       actual: destinations.every((destination) => destination.startsWith('/')),
       expected: true,
+    });
+  });
+
+  // Docker Compose publishes imago's standalone server directly, with no edge
+  // in front of it to route /api to apps/web, so its build opts in.
+  test('production /api proxy with IMAGO_API_PROXY_ORIGIN', async () => {
+    vi.stubEnv('IMAGO_API_PROXY_ORIGIN', 'http://web:3000');
+
+    assert({
+      given: 'next build with IMAGO_API_PROXY_ORIGIN set (Docker Compose)',
+      should: 'bake an /api/:path* proxy outside basePath to that origin',
+      actual: await apiProxies(PHASE_PRODUCTION_BUILD),
+      expected: [
+        {
+          source: '/api/:path*',
+          destination: 'http://web:3000/api/:path*',
+          basePath: false,
+        },
+      ],
+    });
+
+    assert({
+      given: 'next start with IMAGO_API_PROXY_ORIGIN set',
+      should: 'proxy to the same origin the build baked',
+      actual: (await apiProxies(PHASE_PRODUCTION_SERVER))?.[0]?.destination,
+      expected: 'http://web:3000/api/:path*',
+    });
+
+    // The testing helper rebuilds the destination from its hostname alone
+    // (it drops a port), so this routing check uses a portless origin.
+    vi.stubEnv('IMAGO_API_PROXY_ORIGIN', 'https://web.internal');
+    const response = await unstable_getResponseFromNextConfig({
+      url: 'http://localhost:3006/api/auth/csrf',
+      nextConfig: nextConfig(PHASE_PRODUCTION_SERVER),
+    });
+    assert({
+      given: 'a browser request to /api/auth/csrf on the imago server',
+      should: 'be rewritten to apps/web at that origin',
+      actual: getRewrittenUrl(response),
+      expected: 'https://web.internal/api/auth/csrf',
+    });
+
+    vi.stubEnv('IMAGO_API_PROXY_ORIGIN', 'http://web:3000/');
+    assert({
+      given: 'an IMAGO_API_PROXY_ORIGIN with a trailing slash',
+      should: 'proxy to its origin without a doubled slash',
+      actual: (await apiProxies(PHASE_PRODUCTION_BUILD))?.[0]?.destination,
+      expected: 'http://web:3000/api/:path*',
+    });
+
+    vi.stubEnv('IMAGO_API_PROXY_ORIGIN', 'web:3000');
+    const error = await apiProxies(PHASE_PRODUCTION_BUILD).then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+    assert({
+      given: 'an IMAGO_API_PROXY_ORIGIN that is not an http(s) URL',
+      should: 'fail the build loudly naming the variable',
+      actual: error instanceof Error && error.message.includes('IMAGO_API_PROXY_ORIGIN'),
+      expected: true,
+    });
+  });
+
+  test('next dev ignores IMAGO_API_PROXY_ORIGIN', async () => {
+    vi.stubEnv('WEB_APP_INTERNAL_URL', 'http://127.0.0.1:3100');
+    vi.stubEnv('IMAGO_API_PROXY_ORIGIN', 'http://web:3000');
+    assert({
+      given: 'next dev with both variables set',
+      should: 'keep proxying to WEB_APP_INTERNAL_URL',
+      actual: (await devRewrites())?.[0]?.destination,
+      expected: 'http://127.0.0.1:3100/api/:path*',
     });
   });
 

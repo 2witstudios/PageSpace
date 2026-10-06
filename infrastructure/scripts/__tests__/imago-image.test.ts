@@ -60,6 +60,22 @@ describe('apps/imago/Dockerfile', () => {
     expect(build).toBeGreaterThan(env);
   });
 
+  it('given IMAGO_API_PROXY_ORIGIN, should accept it as a builder ARG (empty default) set before next build, which bakes rewrites into the routes manifest (IMG-10.9)', () => {
+    const builder = dockerfile.slice(dockerfile.indexOf(' AS builder'), dockerfile.indexOf(' AS runner'));
+    const arg = builder.indexOf('ARG IMAGO_API_PROXY_ORIGIN=""\n');
+    const env = builder.indexOf('ENV IMAGO_API_PROXY_ORIGIN=$IMAGO_API_PROXY_ORIGIN\n');
+    const build = builder.search(/^RUN cd apps\/imago && .*bun run build$/m);
+    expect(arg).toBeGreaterThan(-1);
+    expect(env).toBeGreaterThan(arg);
+    expect(build).toBeGreaterThan(env);
+  });
+
+  it("given turbo's strict env mode, should declare IMAGO_API_PROXY_ORIGIN for imago's build so it reaches next build and keys the cache (IMG-10.9)", () => {
+    const turbo = JSON.parse(read('apps/imago/turbo.json')) as { extends: string[]; tasks: { build?: { env?: string[] } } };
+    expect(turbo.extends).toEqual(['//']);
+    expect(turbo.tasks.build?.env).toContain('IMAGO_API_PROXY_ORIGIN');
+  });
+
   it('given the runner stage, should ship the standalone server and its static assets', () => {
     expect(dockerfile).toContain('COPY --from=builder /app/apps/imago/.next/standalone .');
     expect(dockerfile).toContain('COPY --from=builder /app/apps/imago/.next/static ./apps/imago/.next/static');
@@ -100,9 +116,33 @@ describe('docker-compose.yml imago service', () => {
     expect(Object.keys(imago.depends_on ?? {}).sort()).toEqual(['realtime', 'web']);
   });
 
-  it('should get no database credentials or .env (imago holds no state of its own)', () => {
+  // getViewer() validates the session and the drive services read pages
+  // straight from Postgres, so a signed-in render needs web's database.
+  const entry = (service: ComposeService, name: string) =>
+    (service.environment ?? []).find((e) => e.startsWith(`${name}=`));
+
+  it("given signed-in renders, should reach web's database (IMG-10.9)", () => {
+    const web = compose.services.web;
+    expect(entry(web, 'DATABASE_URL')).toBeDefined();
+    expect(entry(imago, 'DATABASE_URL')).toBe(entry(web, 'DATABASE_URL'));
+  });
+
+  it("given session and mode checks shared with web, should read the same .env values web does (IMG-10.9)", () => {
+    // web reads these from env_file: .env; Compose interpolates ${VAR} from
+    // the same project .env. Empty means the same default as unset.
+    for (const name of ['DATABASE_SSL', 'DEPLOYMENT_MODE', 'SESSION_IDLE_TIMEOUT_MS', 'LOG_LEVEL']) {
+      expect(entry(imago, name)).toBe(`${name}=\${${name}:-}`);
+    }
+    expect(compose.services.web.env_file).toBe('.env');
+  });
+
+  it('should get no other credentials or the whole .env (imago reads no secrets) (IMG-10.9)', () => {
     expect(imago).not.toHaveProperty('env_file');
-    expect((imago.environment ?? []).some((e) => e.startsWith('DATABASE_URL='))).toBe(false);
+    expect((imago.environment ?? []).filter((e) => /ADMIN_|SECRET|KEY|PASSWORD|TOKEN/.test(e.split('=')[0]))).toEqual([]);
+  });
+
+  it('given no edge in front of it, should build the /api proxy to web into the image (IMG-10.9)', () => {
+    expect(imago.build?.args).toContain('IMAGO_API_PROXY_ORIGIN=http://web:3000');
   });
 
   it('should reach web over the internal network and realtime at its public URL', () => {
@@ -148,6 +188,11 @@ describe('docker-images.yml imago', () => {
 
   it('should still carry the deploy-fly job the guard below inspects', () => {
     expect(Object.keys(workflow.jobs)).toContain('deploy-fly');
+  });
+
+  it('given the edge routes /api to web in production, should build the published imago image without the /api proxy (IMG-10.9)', () => {
+    expect(JSON.stringify(workflow)).not.toContain('IMAGO_API_PROXY_ORIGIN');
+    expect(read('.github/workflows/imago-image.yml')).not.toContain('IMAGO_API_PROXY_ORIGIN');
   });
 
   it('should mention imago only in build-and-push — no job deploys it (production routing is human-only, IMG-11.1)', () => {

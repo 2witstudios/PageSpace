@@ -192,7 +192,9 @@ services:
 
 
   # Imago (IMG-1.7): the new app shell, served under /imago on :3006. Browser
-  # /api/* calls go to web (WEB_APP_INTERNAL_URL) and sockets to realtime.
+  # /api/* calls are proxied to web (IMAGO_API_PROXY_ORIGIN) and sockets go to
+  # realtime. web and realtime must allow the imago origin:
+  # ADDITIONAL_ALLOWED_ORIGINS=http://localhost:3006 in .env.
   imago:
     build:
       context: .
@@ -200,6 +202,8 @@ services:
       args:
         - NEXT_PUBLIC_REALTIME_URL=${NEXT_PUBLIC_REALTIME_URL}
         - NEXT_PUBLIC_COOKIE_DOMAIN=${NEXT_PUBLIC_COOKIE_DOMAIN:-localhost}
+        # Nothing in front of :3006 routes /api to web, so the build proxies it.
+        - IMAGO_API_PROXY_ORIGIN=http://web:3000
     ports:
       - "3006:3006"
     depends_on:
@@ -207,9 +211,15 @@ services:
         condition: service_started
       realtime:
         condition: service_started
-    # No env_file or DATABASE_URL: imago holds no state of its own; a later
-    # leaf adds what it actually reads.
+    # No env_file: imago reads no secrets. It does read web's database
+    # (getViewer() validates the session, the drive services read pages), and
+    # the values below that web takes from .env, interpolated from that file.
     environment:
+      - DATABASE_URL=postgresql://user:password@postgres:5432/pagespace
+      - DATABASE_SSL=${DATABASE_SSL:-}
+      - DEPLOYMENT_MODE=${DEPLOYMENT_MODE:-}
+      - SESSION_IDLE_TIMEOUT_MS=${SESSION_IDLE_TIMEOUT_MS:-}
+      - LOG_LEVEL=${LOG_LEVEL:-}
       - WEB_APP_INTERNAL_URL=http://web:3000
       # Server redirects (sign-in, classic) are built on this, never on Host.
       - WEB_APP_URL=${WEB_APP_URL:-http://localhost:3000}
