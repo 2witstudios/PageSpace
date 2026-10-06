@@ -26,6 +26,23 @@ import type { DriveScopeRow } from '../auth/oauth/scopes';
 
 export type AppMemberRole = 'OWNER' | 'ADMIN' | 'MEMBER';
 
+/**
+ * A key never reaches past its OWNER (review #2849, P1): an explicit role is a narrowing, so what the key resolves
+ * to is the INTERSECTION of the role's access and the owner's own access to the same target. A key minted while the
+ * owner had more (or by an owner a custom role restricts) reads only what the owner can read now. Null when either
+ * side grants nothing. Pure.
+ */
+export function intersectPermissionLevels(role: PermissionLevel | null, owner: PermissionLevel | null): PermissionLevel | null {
+  if (!role || !owner) return null;
+  const both = {
+    canView: role.canView && owner.canView,
+    canEdit: role.canEdit && owner.canEdit,
+    canShare: role.canShare && owner.canShare,
+    canDelete: role.canDelete && owner.canDelete,
+  };
+  return both.canView || both.canEdit || both.canShare || both.canDelete ? both : null;
+}
+
 interface AppMembershipContext {
   role: AppMemberRole | null;
   customRoleId: string | null;
@@ -145,15 +162,18 @@ export async function getAppAccessLevel(
     ? await fetchCustomRolePermissions(membership.customRoleId, target.driveId)
     : null;
 
-  return resolveExplicitAppRoleAccess({
-    role: membership.role,
-    customRole,
-    customRoleUnresolved: !!membership.customRoleId && !customRole,
-    targetPageId,
-    pageType: target.pageType,
-    isPrivate: target.isPrivate,
-    isDriveRoot: target.isDriveRoot,
-  });
+  return intersectPermissionLevels(
+    resolveExplicitAppRoleAccess({
+      role: membership.role,
+      customRole,
+      customRoleUnresolved: !!membership.customRoleId && !customRole,
+      targetPageId,
+      pageType: target.pageType,
+      isPrivate: target.isPrivate,
+      isDriveRoot: target.isDriveRoot,
+    }),
+    await getUserAccessLevel(membership.ownerUserId, targetPageId),
+  );
 }
 
 /**
@@ -207,7 +227,10 @@ export async function getAppDriveAccessLevel(
   }
 
   const isAdminLike = membership.role === 'ADMIN' || membership.role === 'OWNER';
-  return { canView: true, canEdit: true, canShare: isAdminLike, canDelete: isAdminLike };
+  return intersectPermissionLevels(
+    { canView: true, canEdit: true, canShare: isAdminLike, canDelete: isAdminLike },
+    await getUserAccessLevel(membership.ownerUserId, driveId),
+  );
 }
 
 /**
@@ -242,7 +265,23 @@ async function resolveAccessiblePagesForMembership(
   if (membership.role === null) {
     return getUserAccessiblePagesInDriveWithDetails(membership.ownerUserId, driveId);
   }
+  // An explicit role never reaches past the owner: keep only the pages the owner reaches, at the weaker of the two.
+  const [rolePages, ownerPages] = await Promise.all([
+    resolveExplicitRolePages(membership, driveId),
+    getUserAccessiblePagesInDriveWithDetails(membership.ownerUserId, driveId),
+  ]);
+  const ownerById = new Map(ownerPages.map((p) => [p.id, p.permissions]));
+  return rolePages.flatMap((p) => {
+    const permissions = intersectPermissionLevels(p.permissions, ownerById.get(p.id) ?? null);
+    return permissions ? [{ ...p, permissions }] : [];
+  });
+}
 
+/** What an explicit role alone reaches in the drive, before the owner bound. */
+async function resolveExplicitRolePages(
+  membership: AppMembershipContext,
+  driveId: string,
+): Promise<PageWithPermissions[]> {
   const { role, customRoleId } = membership;
 
   if (role === 'ADMIN' || role === 'OWNER') {
@@ -398,15 +437,18 @@ export async function getScopedAccessLevel(
     ? await fetchCustomRolePermissions(row.customRoleId, target.driveId)
     : null;
 
-  return resolveExplicitAppRoleAccess({
-    role: row.role,
-    customRole,
-    customRoleUnresolved: !!row.customRoleId && !customRole,
-    targetPageId,
-    pageType: target.pageType,
-    isPrivate: target.isPrivate,
-    isDriveRoot: target.isDriveRoot,
-  });
+  return intersectPermissionLevels(
+    resolveExplicitAppRoleAccess({
+      role: row.role,
+      customRole,
+      customRoleUnresolved: !!row.customRoleId && !customRole,
+      targetPageId,
+      pageType: target.pageType,
+      isPrivate: target.isPrivate,
+      isDriveRoot: target.isDriveRoot,
+    }),
+    await getUserAccessLevel(ownerUserId, targetPageId),
+  );
 }
 
 /**
@@ -453,7 +495,10 @@ export async function getScopedDriveAccessLevel(
   }
 
   const isAdminLike = row.role === 'ADMIN';
-  return { canView: true, canEdit: true, canShare: isAdminLike, canDelete: isAdminLike };
+  return intersectPermissionLevels(
+    { canView: true, canEdit: true, canShare: isAdminLike, canDelete: isAdminLike },
+    await getUserAccessLevel(ownerUserId, driveId),
+  );
 }
 
 /**

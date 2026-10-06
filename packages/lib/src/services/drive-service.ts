@@ -12,7 +12,8 @@ import { drives, pages, type OrgDriveVisibility } from '@pagespace/db/schema/cor
 import { allocateUniqueSubdomainWithRetry } from './subdomain-allocation';
 import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
 import { slugify } from '../utils/utils';
-import { customRoleBelongsToDrive, getMemberCustomRoleId, resolveDriveWideCanEdit } from '../permissions/membership-queries';
+import { customRoleBelongsToDrive, fetchCustomRolePermissions, getMemberCustomRoleId, resolveDriveWideCanEdit } from '../permissions/membership-queries';
+import { memberAccessWidens } from '../organizations/loosening-core';
 import { loadEffectiveDriveMembership, loadExplicitScopeAuthority, loadOrgRolesForUser, resolveEffectiveDriveMemberships } from '../permissions/org-drive-membership';
 import { decideExplicitDriveScope, decideListedDriveRole, type ExplicitScopeAuthority } from '../permissions/org-drive-resolution';
 import { driveMembershipRow } from '../permissions/drive-member-role';
@@ -457,6 +458,19 @@ export interface DriveScopeValidationResult {
  * and edit (PATCH) routes, which each format their own error responses from
  * the returned categorized ID lists.
  */
+/** Would a MEMBER scope with `requestedRoleId` (null: the plain role) give more than the caller's own custom role? */
+async function scopeWidensCaller(driveId: string, callerRoleId: string, requestedRoleId: string | null): Promise<boolean> {
+  const grantOf = async (roleId: string) => {
+    const role = await fetchCustomRolePermissions(roleId, driveId);
+    // An unresolvable role grants nothing.
+    return { permissions: role?.permissions ?? {}, driveWidePermissions: role?.driveWidePermissions ?? null };
+  };
+  return memberAccessWidens(
+    { role: 'MEMBER', customRole: await grantOf(callerRoleId) },
+    { role: 'MEMBER', customRole: requestedRoleId === null ? null : await grantOf(requestedRoleId) },
+  );
+}
+
 export async function validateDriveScopeAccess(
   scopes: DriveScopeToValidate[],
   userId: string
@@ -499,6 +513,16 @@ export async function validateDriveScopeAccess(
     if (scope.customRoleId && !isAdmin && !access.isOwner) {
       const callerCustomRoleId = await getMemberCustomRoleId(scope.id, userId);
       if (scope.customRoleId !== callerCustomRoleId) {
+        unauthorizedCustomRoles.push(scope.id);
+        continue;
+      }
+    }
+    // Review #2849 P1: a key never reaches past its owner. A member whose custom role restricts them may not mint (or
+    // re-scope to) the plain MEMBER role, or any scope that gives more than their own role; refused, never stored.
+    // (Resolution also intersects every explicit key with the owner's access: app-permissions.)
+    if (scope.role === 'MEMBER' && !isAdmin && !access.isOwner) {
+      const callerCustomRoleId = await getMemberCustomRoleId(scope.id, userId);
+      if (callerCustomRoleId && (await scopeWidensCaller(scope.id, callerCustomRoleId, scope.customRoleId ?? null))) {
         unauthorizedCustomRoles.push(scope.id);
       }
     }

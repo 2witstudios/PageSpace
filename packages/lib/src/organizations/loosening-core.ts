@@ -214,3 +214,17 @@ export function driveAccessWidens(before: DriveAccessSnapshot, after: DriveAcces
   }
   return false;
 }
+
+export type CalendarVisibilityName = 'PRIVATE' | 'ATTENDEES_ONLY' | 'DRIVE';
+const CALENDAR_OPENNESS: Readonly<Record<CalendarVisibilityName, number>> = { PRIVATE: 0, ATTENDEES_ONLY: 1, DRIVE: 2 };
+
+/**
+ * [D-OW-33] orchestrator ruling (review #2849 r2): a drive calendar event made MORE visible (Private < Attendees only
+ * < Drive) loosens who reads it. Fails closed on an unknown value. Pure.
+ */
+export function calendarVisibilityWidens(from: string, to: string): boolean {
+  const a = CALENDAR_OPENNESS[from as CalendarVisibilityName];
+  const b = CALENDAR_OPENNESS[to as CalendarVisibilityName];
+  if (a === undefined || b === undefined) return from !== to;
+  return b > a;
+}

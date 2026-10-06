@@ -624,6 +624,49 @@ describe('rollback-service', () => {
       expect(logArgs[2].pageId).toBe(mockPageId);
       expect(logArgs[3]).toEqual({ actorEmail: 'test@example.com', actorDisplayName: 'Test User' });
       expect((logArgs[4] as Record<string, unknown>).restoredValues).toEqual({ title: 'Old Title' });
+
+      // [D-OW-33] review P1-2: the page branch runs under the drive lapse guard with THIS page's privacy in scope.
+      const { guardDriveAccess } = await import('@pagespace/lib/permissions/org-lapse-guard');
+      expect(guardDriveAccess).toHaveBeenCalledWith(
+        expect.anything(),
+        mockDriveId,
+        { members: false, grants: false, agents: false, tokens: false, pages: [mockPageId] },
+        expect.any(Function),
+      );
+    });
+
+    it('SEAT-9 (partial) [D-OW-33] review P1-2: a page undo the lapse guard refuses (e.g. making a private page public while lapsed) fails with the lapse copy and writes nothing', async () => {
+      // The guard (mocked to refuse here) judges the write; the activity's shape only has to pass the conflict check.
+      const mockActivity = createMockActivity({
+        previousValues: { title: 'Old Title' },
+        newValues: { title: 'New Title' },
+        updatedFields: ['title'],
+      });
+      let selectCallCount = 0;
+      mockDb.select.mockImplementation(() => ({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({
+            limit: vi.fn().mockImplementation(() => {
+              selectCallCount++;
+              if (selectCallCount === 1 || selectCallCount === 4) return Promise.resolve([mockActivity]);
+              if (selectCallCount === 2) return Promise.resolve([{ title: 'New Title', content: '<p>New content</p>', parentId: null, position: 0 }]);
+              return Promise.resolve([{ id: mockDriveId, isTrashed: false }]);
+            }),
+          }),
+        }),
+      }));
+      mockIsRollbackableOperation.mockReturnValue(true);
+      mockCanUserRollback.mockResolvedValue({ canRollback: true });
+      const { guardDriveAccess } = await import('@pagespace/lib/permissions/org-lapse-guard');
+      // OrgLapsedError carries the lapse copy as its message; the guard refuses BEFORE running the write here.
+      vi.mocked(guardDriveAccess).mockImplementationOnce(async () => { throw new Error(ORG_LAPSED_MESSAGE); });
+
+      const result = await executeRollback(mockActivityId, mockUserId, 'page');
+
+      expect(result.success).toBe(false);
+      expect(result.message).toBe(ORG_LAPSED_MESSAGE);
+      expect(mockDb.update).not.toHaveBeenCalled();
+      expect(guardDriveAccess).toHaveBeenCalledWith(expect.anything(), mockDriveId, expect.objectContaining({ pages: [mockPageId] }), expect.any(Function));
     });
 
     it('uses contentSnapshot when available for page content', async () => {

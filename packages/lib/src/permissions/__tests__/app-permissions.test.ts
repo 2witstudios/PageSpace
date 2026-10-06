@@ -46,6 +46,7 @@ import {
   hasScopedDriveMembership,
   getScopedDriveMembership,
   getScopedDriveAccessLevel,
+  intersectPermissionLevels,
   getScopedAccessiblePagesInDrive,
 } from '../app-permissions';
 import type { DriveScopeRow } from '../../auth/oauth/scopes';
@@ -65,6 +66,16 @@ const CUSTOM_ROLE_ID = 'role_dddddddddddddddddddddd';
 
 const FULL = { canView: true, canEdit: true, canShare: true, canDelete: true };
 const VIEW_ONLY = { canView: true, canEdit: false, canShare: false, canDelete: false };
+
+// Review #2849 P1: an explicit-role key resolves as the INTERSECTION with its owner's own access. By default the owner
+// reaches everything (full access, every page these tests list), so a test exercises the role; the owner-bound tests
+// below narrow it.
+beforeEach(() => {
+  vi.mocked(getUserAccessLevel).mockResolvedValue(FULL);
+  vi.mocked(getUserAccessiblePagesInDriveWithDetails).mockImplementation(async () =>
+    ['doc', 'chan', 'p1', 'id'].map((id) => ({ id, title: '', type: 'DOCUMENT', parentId: null, position: 0, isTrashed: false, permissions: FULL })),
+  );
+});
 const NONE = { canView: false, canEdit: false, canShare: false, canDelete: false };
 
 // select().from().where().limit() → rows  (page target, custom role)
@@ -217,7 +228,8 @@ describe('getAppAccessLevel', () => {
       .mockReturnValueOnce(stubSelectJoin([membershipRow('MEMBER')]));
 
     expect(await getAppAccessLevel(TOKEN_ID, PAGE_ID)).toEqual({ ...VIEW_ONLY, canEdit: true });
-    expect(getUserAccessLevel).not.toHaveBeenCalled();
+    // Review #2849 P1: an explicit key is bounded by its owner, whose access is read for the same page.
+    expect(getUserAccessLevel).toHaveBeenCalledWith(OWNER_ID, PAGE_ID);
   });
 
   it('explicit MEMBER on a private page → null', async () => {
@@ -438,7 +450,7 @@ describe('getScopedAccessLevel', () => {
     vi.mocked(db.select).mockReturnValueOnce(stubSelect([{ driveId: DRIVE_ID, isPrivate: false, type: 'CHANNEL' }]));
 
     expect(await getScopedAccessLevel([scopeRow(DRIVE_ID, 'MEMBER')], OWNER_ID, PAGE_ID)).toEqual({ ...VIEW_ONLY, canEdit: true });
-    expect(getUserAccessLevel).not.toHaveBeenCalled();
+    expect(getUserAccessLevel).toHaveBeenCalledWith(OWNER_ID, PAGE_ID);
   });
 
   it('explicit ADMIN on a private page → full (parity with a scoped MCP ADMIN token)', async () => {
@@ -555,5 +567,48 @@ describe('getScopedAccessiblePagesInDrive', () => {
     const result = await getScopedAccessiblePagesInDrive([scopeRow(DRIVE_ID, 'ADMIN')], OWNER_ID, DRIVE_ID);
     expect(result).toHaveLength(1);
     expect(result[0].permissions).toEqual(FULL);
+  });
+});
+
+describe('review #2849 P1: an explicit key never reaches past its owner', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('intersectPermissionLevels keeps only what both grant, and nothing when either side grants nothing', () => {
+    expect(intersectPermissionLevels(FULL, VIEW_ONLY)).toEqual(VIEW_ONLY);
+    expect(intersectPermissionLevels({ ...VIEW_ONLY, canEdit: true }, FULL)).toEqual({ ...VIEW_ONLY, canEdit: true });
+    expect(intersectPermissionLevels(FULL, null)).toBeNull();
+    expect(intersectPermissionLevels(null, FULL)).toBeNull();
+    expect(intersectPermissionLevels({ canView: false, canEdit: false, canShare: false, canDelete: false }, FULL)).toBeNull();
+  });
+
+  it('an explicit plain MEMBER key on a page its owner cannot read resolves to nothing; on a page the owner only views, to view', async () => {
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubSelect([{ driveId: DRIVE_ID, isPrivate: false, type: 'CHANNEL' }]))
+      .mockReturnValueOnce(stubSelectJoin([membershipRow('MEMBER')]));
+    vi.mocked(getUserAccessLevel).mockResolvedValueOnce(null);
+    expect(await getAppAccessLevel(TOKEN_ID, PAGE_ID)).toBeNull();
+
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubSelect([{ driveId: DRIVE_ID, isPrivate: false, type: 'CHANNEL' }]))
+      .mockReturnValueOnce(stubSelectJoin([membershipRow('MEMBER')]));
+    vi.mocked(getUserAccessLevel).mockResolvedValueOnce(VIEW_ONLY);
+    expect(await getAppAccessLevel(TOKEN_ID, PAGE_ID)).toEqual(VIEW_ONLY);
+  });
+
+  it('an explicit ADMIN key reaches only the pages its owner reaches, at the weaker of the two; drive level is bounded too', async () => {
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubSelectJoin([membershipRow('ADMIN')]))
+      .mockReturnValueOnce(stubSelectList([
+        { id: 'doc', title: 'Doc', type: 'DOCUMENT', parentId: null, position: 0, isTrashed: false },
+        { id: 'chan', title: 'General', type: 'CHANNEL', parentId: null, position: 1, isTrashed: false },
+      ]));
+    vi.mocked(getUserAccessiblePagesInDriveWithDetails).mockResolvedValueOnce([
+      { id: 'doc', title: 'Doc', type: 'DOCUMENT', parentId: null, position: 0, isTrashed: false, permissions: VIEW_ONLY },
+    ]);
+    const result = await getAppAccessiblePagesInDrive(TOKEN_ID, DRIVE_ID);
+    expect(result.map((p) => [p.id, p.permissions])).toEqual([['doc', VIEW_ONLY]]);
+
+    vi.mocked(getUserAccessLevel).mockResolvedValueOnce(VIEW_ONLY);
+    expect(await getScopedDriveAccessLevel([scopeRow(DRIVE_ID, 'ADMIN')], OWNER_ID, DRIVE_ID)).toEqual(VIEW_ONLY);
   });
 });

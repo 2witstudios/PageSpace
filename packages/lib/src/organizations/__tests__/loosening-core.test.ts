@@ -5,6 +5,7 @@ import {
   pageFlagsWiden,
   roleGrantWidens,
   tokenScopeWidens,
+  calendarVisibilityWidens,
   type DriveAccessSnapshot,
   type RoleGrant,
 } from '../loosening-core';
@@ -188,5 +189,17 @@ describe('page privacy and the Open drive default in a drive snapshot', () => {
     expect(driveAccessWidens(gone, { ...gone, agents: { a1: { role: 'MEMBER', customRoleId: null, includeContext: false } } })).toBe(true);
     expect(pageFlagsWiden(null, { canView: false, canEdit: false, canShare: false, canDelete: false })).toBe(false);
     expect(pageFlagsWiden({ canView: true, canEdit: false, canShare: false, canDelete: false }, { canView: true, canEdit: false, canShare: false, canDelete: true })).toBe(true);
+  });
+});
+
+describe('calendarVisibilityWidens', () => {
+  it('SEAT-9 (partial) [D-OW-33] ruling: an event made more visible widens (Private < Attendees only < Drive); less visible or unchanged does not; an unknown value fails closed', () => {
+    expect(calendarVisibilityWidens('PRIVATE', 'DRIVE')).toBe(true);
+    expect(calendarVisibilityWidens('PRIVATE', 'ATTENDEES_ONLY')).toBe(true);
+    expect(calendarVisibilityWidens('ATTENDEES_ONLY', 'DRIVE')).toBe(true);
+    expect(calendarVisibilityWidens('DRIVE', 'PRIVATE')).toBe(false);
+    expect(calendarVisibilityWidens('DRIVE', 'DRIVE')).toBe(false);
+    expect(calendarVisibilityWidens('SOMETHING', 'DRIVE')).toBe(true);
+    expect(calendarVisibilityWidens('SOMETHING', 'SOMETHING')).toBe(false);
   });
 });

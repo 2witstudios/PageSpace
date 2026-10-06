@@ -46,6 +46,9 @@ import { changeOrgDriveLead } from '../../services/org-drive-service';
 import { orgDriveServiceDeps } from '../../services/org-drive-service-deps';
 import { createDriveRole, deleteDriveRole, updateDriveRole } from '../../services/drive-role-service';
 import { changeDriveVisibility } from '../../services/org-drive-service';
+import { validateDriveScopeAccess } from '../../services/drive-service';
+import { getAppAccessLevel, getAppAccessiblePagesInDrive } from '../../permissions/app-permissions';
+import { getUserAccessLevel } from '../../permissions/permissions';
 import { addAgentToDrive, setAgentDriveIncludeContext } from '../../services/drive-agent-service';
 import { EnforcedAuthContext } from '../../permissions/enforced-context';
 import type { SessionClaims } from '../../auth/session-service';
@@ -467,5 +470,64 @@ describe('[D-OW-33] a lapsed org may only restrict, on every guarded write (orgs
     await lapse(w);
     await updateDriveRole(w.ops, def.id, { driveWidePermissions: READ });
     expect((await roleGrant(def.id))?.driveWide).toEqual(READ);
+  });
+
+  it('SEAT-9 (partial) [D-OW-33] review P1 (key never past its owner): a member a custom role restricts cannot mint or re-scope a plain MEMBER key (or another role); an existing over-wide key reads nothing the owner cannot, paid AND lapsed', async () => {
+    if (!world) return;
+    const w = world;
+    // Marcus holds "Locked": drive-wide view, but an explicit denial of the Plans page, so he cannot read Plans.
+    const secret = await factories.createPage(w.product, { title: 'Plans' });
+    const [locked] = await db.insert(driveRoles).values({
+      driveId: w.product, name: 'Locked', driveWidePermissions: READ,
+      permissions: { [secret.id]: { canView: false, canEdit: false, canShare: false } },
+    }).returning();
+    await db.update(driveMembers).set({ customRoleId: locked.id }).where(and(eq(driveMembers.driveId, w.product), eq(driveMembers.userId, w.ids.marcus)));
+    await db.delete(pagePermissions).where(eq(pagePermissions.userId, w.ids.marcus));
+    const [token] = await db.insert(mcpTokens).values({ userId: w.ids.marcus, tokenHash: `h_${createId()}`, tokenPrefix: 'mcp_', name: 'k' }).returning();
+    // An over-wide key, as minted before this fix: the plain MEMBER role, no custom role.
+    await db.insert(mcpTokenDrives).values({ tokenId: token.id, driveId: w.product, role: 'MEMBER', customRoleId: null });
+
+    for (const state of ['paid', 'lapsed'] as const) {
+      if (state === 'lapsed') await lapse(w);
+      expect(await getUserAccessLevel(w.ids.marcus, secret.id)).toBeNull();
+      // Mint / re-scope: the plain role and another custom role are refused; his own role passes.
+      expect((await validateDriveScopeAccess([{ id: w.product, role: 'MEMBER' }], w.ids.marcus)).unauthorizedCustomRoles).toEqual([w.product]);
+      expect((await validateDriveScopeAccess([{ id: w.product, role: 'MEMBER', customRoleId: w.readerRole }], w.ids.marcus)).unauthorizedCustomRoles).toEqual([w.product]);
+      expect((await validateDriveScopeAccess([{ id: w.product, role: 'MEMBER', customRoleId: locked.id }], w.ids.marcus)).unauthorizedCustomRoles).toEqual([]);
+      // Resolution: the existing key reads exactly what its owner reads, here nothing.
+      expect(await getAppAccessLevel(token.id, secret.id)).toBeNull();
+      expect((await getAppAccessiblePagesInDrive(token.id, w.product)).map((p) => p.id)).not.toContain(secret.id);
+    }
+
+    // The key never reads LESS than its role and the owner both allow: give Marcus a view grant, and the key sees it.
+    await pay(w);
+    await factories.createPagePermission(secret.id, w.ids.marcus, { canView: true });
+    expect(await getAppAccessLevel(token.id, secret.id)).toMatchObject({ canView: true, canEdit: false });
+  });
+
+  it('SEAT-9 (partial) [D-OW-33] review P3 (advisory lock): a role widened while unheld and a member moved onto that role, interleaved, cannot together loosen a lapsed drive; the member write waits on the drive lock and sees the wider role', async () => {
+    if (!world) return;
+    const w = world;
+    const [narrow] = await db.insert(driveRoles).values({ driveId: w.product, name: 'Narrow', permissions: {}, driveWidePermissions: READ }).returning();
+    const [target] = await db.insert(driveRoles).values({ driveId: w.product, name: 'Target', permissions: {}, driveWidePermissions: READ }).returning();
+    await db.update(driveMembers).set({ customRoleId: narrow.id }).where(and(eq(driveMembers.driveId, w.product), eq(driveMembers.userId, w.ids.marcus)));
+    await lapse(w);
+    // B: a role write mid-flight (it holds the per-drive lock every guarded write takes) widening Target, held by nobody.
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`drive-roles:${w.product}`]);
+      await client.query('UPDATE drive_roles SET drive_wide_permissions = $1 WHERE id = $2', [JSON.stringify(EDIT), target.id]);
+      // A: move Marcus from Narrow onto Target. Alone, Target equals Narrow (view), so it would pass.
+      const a = guardDriveAccess(db, w.product, { users: [w.ids.marcus] }, (tx) =>
+        tx.update(driveMembers).set({ customRoleId: target.id }).where(and(eq(driveMembers.driveId, w.product), eq(driveMembers.userId, w.ids.marcus))));
+      const settled = a.then(() => 'written', (e: unknown) => e);
+      await new Promise((r) => setTimeout(r, 300));
+      await client.query('COMMIT');
+      expect(await settled).toBeInstanceOf(OrgLapsedError);
+    } finally {
+      client.release();
+    }
+    expect((await memberRow(w.product, w.ids.marcus))?.customRoleId).toBe(narrow.id);
   });
 });

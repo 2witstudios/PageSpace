@@ -166,7 +166,7 @@ export const LOOSENING_WRITE_LEDGER: Readonly<Record<string, Verdict>> = {
   // re-role of a key loosens and is guarded (guardDriveAccess, which now snapshots token scopes).
   'apps/web/src/app/api/drives/[driveId]/apps/[tokenId]/route.ts#PATCH': SELF,
   'apps/web/src/lib/repositories/session-repository.ts#run': {
-    exempt: "the token OWNER's own mint and re-scope (createMcpTokenWithDriveScopes / rescope): bounded by the owner's own access to each drive (validateDriveScopeAccess in api/auth/mcp-tokens)",
+    exempt: "the token OWNER's own mint and re-scope: bounded by the owner. validateDriveScopeAccess refuses a scope wider than the owner's own role (an ADMIN scope for a member, another custom role, or the plain role for a member a custom role restricts: scopeWidensCaller), and every explicit key resolves as the INTERSECTION with its owner's current access (app-permissions intersectPermissionLevels), so it never reads past them, paid or lapsed",
     writes: ['insert(mcpTokenDrives)'],
   },
   // ── pages leaving a drive (review P2-4, orchestrator ruling) ───────────────────────────────────────────
@@ -177,6 +177,10 @@ export const LOOSENING_WRITE_LEDGER: Readonly<Record<string, Verdict>> = {
     guard: 'caller',
     by: ['apps/web/src/services/api/page-cross-drive-move-service.ts#movePagesToDrive'],
   },
+  // ── calendar event visibility (orchestrator ruling, review #2849 r2) ──────────────────────────────────
+  // An org-drive event made more visible (Private < Attendees only < Drive) loosens who reads it.
+  'apps/web/src/app/api/calendar/events/[eventId]/route.ts#PATCH': SELF,
+  'apps/web/src/lib/integrations/google-calendar/sync-service.ts#upsertEvent': SELF,
   // ── custom domains (#29) ────────────────────────────────────────────────────────────────────────────────
   'apps/web/src/app/api/drives/[driveId]/domains/route.ts#POST': SELF,
   // ── drives: other writers of ownerId / orgId / visibility ─────────────────────────────────────────────
@@ -346,6 +350,7 @@ describe('seam: [D-OW-33] every write that can loosen access passes the lapse gu
     expect(shapes('function p() { return db.update(pages).set({ isPrivate: false }); }')).toEqual(['p:update(pages).set({ isPrivate })']);
     expect(shapes('function q() { return db.update(pages).set({ driveId: d, defaultEnvId: null }); }')).toEqual(['q:update(pages).set({ driveId })']);
     expect(shapes('function r() { return db.update(pages).set({ title: "x" }); }')).toEqual([]);
+    expect(shapes('function c() { return db.update(calendarEvents).set({ visibility: "DRIVE" }); }')).toEqual(['c:update(calendarEvents).set({ visibility })']);
     expect(shapes('function i() { return sql`insert into drive_members (id) values (1)`; }')).toEqual(['i:raw sql']);
     expect(shapes('const tools = { create_page: tool({ execute: async () => db.insert(driveAgentMembers).values({}) }) };')).toEqual(['create_page.execute:insert(driveAgentMembers)']);
     // Restricting or unrelated: deletes, reads, a drives rename, a pending invite consumed.
