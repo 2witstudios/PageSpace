@@ -30,11 +30,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 const VIEWER = 'user_viewer';
 const DRIVE = 'drive_abc';
 
-const access = (enabled: boolean) => ({
-  driveId: DRIVE,
-  enabled,
-  agents: [{ key: 'imago' as const, agentPageId: 'agent_1', isMember: enabled }],
-});
+const access = (enabled: boolean) => ({ driveId: DRIVE, enabled });
 
 function signedIn(): SessionAuthResult {
   return { userId: VIEWER, tokenVersion: 0, tokenType: 'session', sessionId: 'sess', role: 'user', adminRoleVersion: 0 };
@@ -74,12 +70,12 @@ describe('GET /api/drives/[driveId]/imago-access', () => {
   });
 
   it('given a viewer without grant rights, should return 403', async () => {
-    vi.mocked(getImagoDriveAccess).mockResolvedValue({ ok: false, status: 403, error: 'Only drive owners and admins can manage Imago access' });
+    vi.mocked(getImagoDriveAccess).mockResolvedValue({ ok: false, status: 403, error: 'You can only set Imago access for a drive you can access' });
 
     const response = await GET(getRequest(), context());
 
     expect(response.status).toBe(403);
-    expect(await response.json()).toEqual({ error: 'Only drive owners and admins can manage Imago access' });
+    expect(await response.json()).toEqual({ error: 'You can only set Imago access for a drive you can access' });
   });
 
   it('given an auth failure, should return it without reading', async () => {
@@ -131,7 +127,7 @@ describe('PUT /api/drives/[driveId]/imago-access', () => {
       userId: VIEWER,
       resourceType: 'drive',
       resourceId: DRIVE,
-      details: { imagoAccess: enabled, agentPageIds: ['agent_1'] },
+      details: { imagoAccess: enabled },
     });
   });
 
@@ -154,20 +150,12 @@ describe('PUT /api/drives/[driveId]/imago-access', () => {
   });
 
   it('given a viewer without grant rights, should return 403 and audit nothing', async () => {
-    vi.mocked(setImagoDriveAccess).mockResolvedValue({ ok: false, status: 403, error: 'Only drive owners and admins can manage Imago access' });
+    vi.mocked(setImagoDriveAccess).mockResolvedValue({ ok: false, status: 403, error: 'You can only set Imago access for a drive you can access' });
 
     const response = await PUT(putRequest({ enabled: true }), context());
 
     expect(response.status).toBe(403);
     expect(auditRequest).not.toHaveBeenCalled();
-  });
-
-  it('given unprovisioned agents, should pass the 409 through', async () => {
-    vi.mocked(setImagoDriveAccess).mockResolvedValue({ ok: false, status: 409, error: 'Your Imago agents are not set up yet' });
-
-    const response = await PUT(putRequest({ enabled: true }), context());
-
-    expect(response.status).toBe(409);
   });
 
   it('given the service throws, should return 500', async () => {

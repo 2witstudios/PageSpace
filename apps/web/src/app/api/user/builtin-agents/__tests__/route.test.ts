@@ -99,20 +99,12 @@ describe('GET /api/user/builtin-agents', () => {
   });
 
   it('given a fully provisioned viewer, should return every registry key with its page id and registry title', async () => {
-    rows.value = [
-      { key: 'imago', pageId: 'page_imago', isTrashed: false },
-      { key: 'imago-planner', pageId: 'page_planner', isTrashed: false },
-      { key: 'imago-researcher', pageId: 'page_researcher', isTrashed: false },
-    ];
+    rows.value = [{ key: 'imago', pageId: 'page_imago', isTrashed: false }];
 
     const response = await GET(new Request('http://localhost/api/user/builtin-agents'));
 
     expect(response.status).toBe(200);
-    expect(await readAgents(response)).toEqual([
-      { key: 'imago', pageId: 'page_imago', title: 'Imago' },
-      { key: 'imago-planner', pageId: 'page_planner', title: 'Imago Planner' },
-      { key: 'imago-researcher', pageId: 'page_researcher', title: 'Imago Researcher' },
-    ]);
+    expect(await readAgents(response)).toEqual([{ key: 'imago', pageId: 'page_imago', title: 'Imago' }]);
   });
 
   it('given a viewer with no pointers, should return every registry key with pageId null', async () => {
@@ -124,23 +116,22 @@ describe('GET /api/user/builtin-agents', () => {
   });
 
   it('given a pointer whose page is trashed, should report that key as not provisioned', async () => {
+    rows.value = [{ key: 'imago', pageId: 'page_imago', isTrashed: true }];
+
+    const agents = await readAgents(await GET(new Request('http://localhost/api/user/builtin-agents')));
+
+    expect(agents).toEqual([{ key: 'imago', pageId: null, title: 'Imago' }]);
+  });
+
+  it('given a stored key the registry no longer defines (a retired Planner or Researcher), should leave it out', async () => {
     rows.value = [
-      { key: 'imago', pageId: 'page_imago', isTrashed: true },
       { key: 'imago-planner', pageId: 'page_planner', isTrashed: false },
+      { key: 'imago-researcher', pageId: 'page_researcher', isTrashed: false },
     ];
 
     const agents = await readAgents(await GET(new Request('http://localhost/api/user/builtin-agents')));
 
-    expect(agents.find((agent) => agent.key === 'imago')?.pageId).toBeNull();
-    expect(agents.find((agent) => agent.key === 'imago-planner')?.pageId).toBe('page_planner');
-  });
-
-  it('given a stored key the registry no longer defines, should leave it out', async () => {
-    rows.value = [{ key: 'retired-agent', pageId: 'page_retired', isTrashed: false }];
-
-    const agents = await readAgents(await GET(new Request('http://localhost/api/user/builtin-agents')));
-
-    expect(agents.map((agent) => agent.key)).toEqual(['imago', 'imago-planner', 'imago-researcher']);
+    expect(agents.map((agent) => agent.key)).toEqual(['imago']);
     expect(agents.every((agent) => agent.pageId === null)).toBe(true);
   });
 

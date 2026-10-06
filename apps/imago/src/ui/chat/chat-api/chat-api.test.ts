@@ -77,17 +77,13 @@ describe('chatPaths', () => {
 
 describe('fetchBuiltinAgents()', () => {
   test('pointers', async () => {
-    const web = fakeWeb({ [`GET ${chatPaths.builtinAgents}`]: () => Response.json(pointers({ 'imago-researcher': null })) });
+    const web = fakeWeb({ [`GET ${chatPaths.builtinAgents}`]: () => Response.json(pointers({ imago: null })) });
 
     assert({
-      given: "the viewer's pointers, one not provisioned yet",
-      should: 'give every key in registry order, keeping the null pageId',
+      given: "the viewer's pointer, not provisioned yet",
+      should: 'give the key, keeping the null pageId',
       actual: await fetchBuiltinAgents(web.client),
-      expected: [
-        { key: 'imago', pageId: 'p-imago', title: 'Imago' },
-        { key: 'imago-planner', pageId: 'p-planner', title: 'Planner' },
-        { key: 'imago-researcher', pageId: null, title: 'Researcher' },
-      ],
+      expected: [{ key: 'imago', pageId: null, title: 'Imago' }],
     });
   });
 

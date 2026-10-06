@@ -115,8 +115,7 @@ describe('renderChatPane()', () => {
           {
             label: 'Imago',
             options: [
-              { value: 'p-imago', title: 'Imago', disabled: false },
-              { value: 'pending:imago-planner', title: 'Planner', disabled: true },
+              { value: 'pending:imago', title: 'Imago', disabled: true },
             ],
           },
           { label: 'Alpha', options: [{ value: 'a1', title: 'Support', disabled: false }] },
@@ -141,7 +140,7 @@ describe('renderChatPane()', () => {
       expected: [
         ['Agent', chatAgentSelectClass, chatAgentPickerClass],
         [
-          ['Imago', [['p-imago', 'Imago', false, false], ['pending:imago-planner', 'Planner', true, false]]],
+          ['Imago', [['pending:imago', 'Imago', true, false]]],
           ['Alpha', [['a1', 'Support', false, true]]],
         ],
         [null, chatAgentNameClass, 'Imago'],

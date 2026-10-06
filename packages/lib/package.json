@@ -104,10 +104,10 @@
       "import": "./dist/agents/builtin-agents.js",
       "require": "./dist/agents/builtin-agents.js"
     },
-    "./agents/grant-imago-agents": {
-      "types": "./dist/agents/grant-imago-agents.d.ts",
-      "import": "./dist/agents/grant-imago-agents.js",
-      "require": "./dist/agents/grant-imago-agents.js"
+    "./agents/imago-reach": {
+      "types": "./dist/agents/imago-reach.d.ts",
+      "import": "./dist/agents/imago-reach.js",
+      "require": "./dist/agents/imago-reach.js"
     },
     "./agents/imago-drive-access": {
       "types": "./dist/agents/imago-drive-access.d.ts",

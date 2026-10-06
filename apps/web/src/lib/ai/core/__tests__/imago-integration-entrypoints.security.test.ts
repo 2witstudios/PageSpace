@@ -5,10 +5,11 @@
  * (`executeAskAgent`, behind channel @-mentions), `POST /api/ai/page-agents/consult`
  * and a workflow run (`executeWorkflow`). All three resolve through
  * `resolvePageAgentIntegrationTools`, which must never hand an Imago agent its
- * per-agent `integration_tool_grants` (they may name a drive it holds no grant
- * on) and must draw drive integrations only from a granted drive.
+ * per-agent `integration_tool_grants` (they may name a drive the user keeps it
+ * out of), must draw drive integrations only from a drive it is not kept out
+ * of (IMG-10.10), and must hand anyone but its owner nothing.
  *
- * Real: Postgres, the session, Imago provisioning and grants, connections,
+ * Real: Postgres, the session, Imago provisioning, the per-drive setting, connections,
  * `global_assistant_config`, each entry point and the AI SDK. Replaced: only
  * the language model, which records the tool names it is handed.
  *
@@ -68,10 +69,9 @@ vi.mock('@/lib/ai/core/provider-factory', async (importOriginal) => {
 });
 
 import { db } from '@pagespace/db/db';
-import { and, eq, inArray } from '@pagespace/db/operators';
+import { inArray } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { drives } from '@pagespace/db/schema/core';
-import { driveAgentMembers } from '@pagespace/db/schema/members';
 import { workflows } from '@pagespace/db/schema/workflows';
 import {
   globalAssistantConfig,
@@ -82,6 +82,7 @@ import {
 import { factories } from '@pagespace/db/test/factories';
 import { sessionService } from '@pagespace/lib/auth/session-service';
 import { provisionImagoAgents } from '@pagespace/lib/agents/provision-imago-agents';
+import { setImagoDriveAccess } from '@pagespace/lib/agents/imago-drive-access';
 import type { IntegrationProviderConfig } from '@pagespace/lib/integrations/types';
 import { ensureTestDb } from '@/test/ensure-test-db';
 import type { ToolExecutionContext } from '@/lib/ai/core/types';
@@ -90,7 +91,7 @@ import { executeWorkflow } from '@/lib/workflows/workflow-executor';
 import { executeAskAgent } from '@/lib/ai/tools/agent-communication-tools';
 import { POST as consult } from '@/app/api/ai/page-agents/consult/route';
 
-type ProviderKey = 'userEnabled' | 'grantedDrive' | 'ungrantedDrive';
+type ProviderKey = 'userEnabled' | 'ownedDrive' | 'excludedDrive' | 'memberDrive';
 
 const seededUserIds: string[] = [];
 const seededProviderIds: string[] = [];
@@ -102,8 +103,9 @@ interface World {
   otherToken: string;
   imagoPageId: string;
   homeDriveId: string;
-  grantedDriveId: string;
-  ungrantedDriveId: string;
+  ownedDriveId: string;
+  excludedDriveId: string;
+  memberDriveId: string;
   slugs: Record<ProviderKey, string>;
 }
 
@@ -141,8 +143,8 @@ async function connect(key: ProviderKey, scope: { userId: string } | { driveId: 
 }
 
 /**
- * The user's Home, "Acme" (owned, granted) and "Journal" (owned, grant
- * removed), a user integration, a drive integration on each of Acme and
+ * The user's Home, "Acme" (owned) and "Journal" (owned, Imago kept out of
+ * it), a user integration, a drive integration on each of Acme and
  * Journal, and — the trap — a per-agent grant on the Imago page itself for
  * Journal's connection, as `POST /api/agents/[agentId]/integrations` accepts.
  */
@@ -155,17 +157,20 @@ async function seedWorld(): Promise<World> {
   const acme = await factories.createDrive(user.id, { name: 'Acme', slug: `acme-${createId()}` });
   const journal = await factories.createDrive(user.id, { name: 'Journal', slug: `journal-${createId()}` });
   await factories.createDrive(other.id, { kind: 'HOME', name: 'Home', slug: `home-${createId()}` });
+  // Another user's drive the user is a member of, where no grant was ever made.
+  const team = await factories.createDrive(other.id, { name: 'Team', slug: `team-${createId()}` });
+  await factories.createDriveMember(team.id, user.id, { role: 'MEMBER', acceptedAt: new Date() });
 
   const { agents } = await provisionImagoAgents(user.id);
-  await db
-    .delete(driveAgentMembers)
-    .where(and(inArray(driveAgentMembers.agentPageId, Object.values(agents)), eq(driveAgentMembers.driveId, journal.id)));
+  // The user keeps Imago out of Journal (IMG-10.10).
+  expect((await setImagoDriveAccess(user.id, journal.id, false)).ok).toBe(true);
   // The other user can open the Imago page (a share), so they can consult it.
   await factories.createPagePermission(agents.imago, other.id);
 
   const userEnabled = await connect('userEnabled', { userId: user.id });
-  const grantedDrive = await connect('grantedDrive', { driveId: acme.id });
-  const ungrantedDrive = await connect('ungrantedDrive', { driveId: journal.id });
+  const ownedDrive = await connect('ownedDrive', { driveId: acme.id });
+  const excludedDrive = await connect('excludedDrive', { driveId: journal.id });
+  const memberDrive = await connect('memberDrive', { driveId: team.id });
 
   await db.insert(globalAssistantConfig).values({
     userId: user.id,
@@ -173,7 +178,7 @@ async function seedWorld(): Promise<World> {
     driveOverrides: {},
     inheritDriveIntegrations: true,
   });
-  await db.insert(integrationToolGrants).values({ agentId: agents.imago, connectionId: ungrantedDrive.connectionId });
+  await db.insert(integrationToolGrants).values({ agentId: agents.imago, connectionId: excludedDrive.connectionId });
 
   const session = (userId: string) =>
     sessionService.createSession({ userId, type: 'user', scopes: ['*'], expiresInMs: 60 * 60 * 1000 });
@@ -185,9 +190,10 @@ async function seedWorld(): Promise<World> {
     otherToken: await session(other.id),
     imagoPageId: agents.imago,
     homeDriveId: home.id,
-    grantedDriveId: acme.id,
-    ungrantedDriveId: journal.id,
-    slugs: { userEnabled: userEnabled.slug, grantedDrive: grantedDrive.slug, ungrantedDrive: ungrantedDrive.slug },
+    ownedDriveId: acme.id,
+    excludedDriveId: journal.id,
+    memberDriveId: team.id,
+    slugs: { userEnabled: userEnabled.slug, ownedDrive: ownedDrive.slug, excludedDrive: excludedDrive.slug, memberDrive: memberDrive.slug },
   };
 }
 
@@ -286,12 +292,16 @@ describe('Imago agent integrations outside page chat (IMG-4.9 AC4)', () => {
       expect(await viaAskAgent(world.userId, null)).toEqual(['userEnabled']);
     });
 
-    it("given the granted drive in view, should add that drive's integrations", async () => {
-      expect(await viaAskAgent(world.userId, world.grantedDriveId)).toEqual(['grantedDrive', 'userEnabled']);
+    it("given an owned drive in view, should add that drive's integrations", async () => {
+      expect(await viaAskAgent(world.userId, world.ownedDriveId)).toEqual(['ownedDrive', 'userEnabled']);
     });
 
-    it("given the ungranted drive in view, should never hand it that drive's integrations", async () => {
-      expect(await viaAskAgent(world.userId, world.ungrantedDriveId)).toEqual(['userEnabled']);
+    it("given a drive the user keeps Imago out of in view, should never hand it that drive's integrations", async () => {
+      expect(await viaAskAgent(world.userId, world.excludedDriveId)).toEqual(['userEnabled']);
+    });
+
+    it("given a drive the user is only a member of in view, should add that drive's integrations — the user's reach, no grant (IMG-10.10)", async () => {
+      expect(await viaAskAgent(world.userId, world.memberDriveId)).toEqual(['memberDrive', 'userEnabled']);
     });
   });
 
@@ -306,12 +316,12 @@ describe('Imago agent integrations outside page chat (IMG-4.9 AC4)', () => {
   });
 
   describe('executeWorkflow', () => {
-    it("given a workflow in the granted drive, should hand it that drive's integrations and the user ones", async () => {
-      expect(await viaWorkflow(world.grantedDriveId)).toEqual(['grantedDrive', 'userEnabled']);
+    it("given a workflow in an owned drive, should hand it that drive's integrations and the user ones", async () => {
+      expect(await viaWorkflow(world.ownedDriveId)).toEqual(['ownedDrive', 'userEnabled']);
     });
 
-    it("given a workflow in the ungranted drive, should never hand it that drive's integrations", async () => {
-      expect(await viaWorkflow(world.ungrantedDriveId)).toEqual(['userEnabled']);
+    it("given a workflow in a drive the user keeps Imago out of, should never hand it that drive's integrations", async () => {
+      expect(await viaWorkflow(world.excludedDriveId)).toEqual(['userEnabled']);
     });
   });
 });

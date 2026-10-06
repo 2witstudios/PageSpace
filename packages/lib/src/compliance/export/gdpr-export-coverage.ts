@@ -424,7 +424,7 @@ export const EXCLUDED_TABLES: Readonly<Record<string, string>> = {
   event_attendees:
     'Attendee list of a mirrored calendar event: it is a list of OTHER PEOPLE, which Art 15(4) puts outside the subject\'s access right.',
   user_builtin_agents:
-    'System pointers from a built-in agent key (imago, imago-planner, imago-researcher) to the AI_CHAT page provisioned for the subject; nothing in a row is authored by the subject. The agent pages are exported with the subject\'s Home drive like any other page (id, title, type, content); their system prompt and enabled tools are not exported — they are copied from the code registry, not authored by the subject.',
+    'System pointers from a built-in agent key (imago; the retired imago-planner and imago-researcher pointers are dropped at the subject\'s next provisioning) to the AI_CHAT page provisioned for the subject; nothing in a row is authored by the subject. The agent pages are exported with the subject\'s Home drive like any other page (id, title, type, content); their system prompt and enabled tools are not exported — they are copied from the code registry, not authored by the subject.',
 };
 
 /** Every table the registry has a decision for. */

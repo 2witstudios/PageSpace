@@ -103,8 +103,7 @@ describe('GET /api/user/builtin-agents (integration)', () => {
 
     const result = await agentsOf(await GET(requestAs(await sessionFor(user.id))));
 
-    expect(result.find((agent) => agent.key === 'imago')?.pageId).toBeNull();
-    expect(result.find((agent) => agent.key === 'imago-planner')?.pageId).toBe(agents['imago-planner']);
+    expect(result).toEqual([{ key: 'imago', pageId: null, title: 'Imago' }]);
   });
 
   it('given no session cookie, should return 401', async () => {

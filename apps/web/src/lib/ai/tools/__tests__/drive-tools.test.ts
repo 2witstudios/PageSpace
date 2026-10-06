@@ -69,10 +69,6 @@ vi.mock('@pagespace/lib/services/drive-service', () => ({
   listAccessibleDrives: vi.fn().mockResolvedValue([]),
 }));
 
-vi.mock('@pagespace/lib/agents/grant-imago-agents', () => ({
-  grantImagoAgents: vi.fn().mockResolvedValue([]),
-}));
-
 vi.mock('@pagespace/lib/services/drive-member-service', () => ({
   getDriveRecipientUserIds: vi.fn().mockResolvedValue([]),
 }));
@@ -88,8 +84,9 @@ vi.mock('../actor-permissions', async (importOriginal) => {
     ...actual,
     canActorManageDrive: vi.fn().mockResolvedValue(true),
     resolveActingAgentId: vi.fn().mockResolvedValue(undefined),
-    // Its Imago ceiling is covered in actor-permissions.test.ts; here it only passes the agent's drives through.
+    // Their token and Imago ceilings are covered in actor-permissions.test.ts; here they only pass drives through.
     filterAgentDriveIdsByActorReach: vi.fn(async (_context: unknown, driveIds: string[]) => driveIds),
+    filterDriveIdsByAppTokenScope: vi.fn(async (_context: unknown, driveIds: string[]) => driveIds),
   };
 });
 
@@ -103,7 +100,6 @@ import { listAgentDrives } from '@pagespace/lib/services/drive-agent-service';
 import { getDriveById, isValidDriveHomePage, updateDrive, listAccessibleDrives } from '@pagespace/lib/services/drive-service';
 import { syncPublishedHomeRoot } from '@/lib/canvas/publish-page';
 import { resolveActingAgentId } from '../actor-permissions';
-import { grantImagoAgents } from '@pagespace/lib/agents/grant-imago-agents';
 import type { ToolExecutionContext } from '../../core/types';
 
 const mockDb = vi.mocked(db);
@@ -278,17 +274,6 @@ describe('drive-tools', () => {
         id: 'drive-new',
         name: 'Test Drive',
       });
-    });
-
-    it('given a created workspace, should grant the user\'s Imago agents in it (DEC-2)', async () => {
-      const context = {
-        toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
-      };
-
-      await driveTools.create_drive.execute!({ name: 'Test Drive' }, context);
-
-      expect(grantImagoAgents).toHaveBeenCalledWith('user-123', { driveIds: ['drive-new'] });
     });
 
     it('does not block a plain user (non-agent) call at the agent gate', async () => {

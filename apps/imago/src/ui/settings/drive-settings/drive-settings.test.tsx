@@ -42,19 +42,20 @@ const membersBody = {
  */
 const server = (drive: DriveFixture = OWNER, overrides: Record<string, FakeRoute> = {}) => {
   let name = drive.kind === 'HOME' ? 'Home' : 'Launch';
-  let enabled = false;
+  let enabled = true;
   return {
     'GET /api/drives/d1': () => Response.json({ id: 'd1', name, ...drive }),
     'GET /api/drives': () => Response.json([{ id: 'd1', name, kind: drive.kind }]),
     'GET /api/drives/d1/members': () => Response.json(membersBody),
-    'GET /api/drives/d1/imago-access': () => Response.json({ driveId: 'd1', enabled, agents: [] }),
+    // On by default (IMG-10.10): the switch keeps Imago out when turned off.
+    'GET /api/drives/d1/imago-access': () => Response.json({ driveId: 'd1', enabled }),
     'PATCH /api/drives/d1': ({ body }) => {
       name = (body as { name: string }).name;
       return Response.json({ id: 'd1', name });
     },
     'PUT /api/drives/d1/imago-access': ({ body }) => {
       enabled = (body as { enabled: boolean }).enabled;
-      return Response.json({ driveId: 'd1', enabled, agents: [] });
+      return Response.json({ driveId: 'd1', enabled });
     },
     ...overrides,
   } satisfies Record<string, FakeRoute>;
@@ -136,7 +137,7 @@ describe('DriveSettingsObject: an owner', () => {
           ['Bo', 'bo@example.com', 'Member'],
         ],
         removable: 0,
-        switchState: 'false',
+        switchState: 'true',
         reads: ['GET /api/drives/d1', 'GET /api/drives/d1/imago-access', 'GET /api/drives/d1/members'],
       },
     });
@@ -207,7 +208,7 @@ describe('DriveSettingsObject: an owner', () => {
     });
   });
 
-  test('turning Imago access on', async () => {
+  test('keeping Imago out of the drive', async () => {
     const { root, web } = await open(server());
     await settle(() => {
       if (imagoSwitch(root) === null) throw new Error('no switch');
@@ -217,15 +218,15 @@ describe('DriveSettingsObject: an owner', () => {
       if (imagoSwitch(root)?.disabled !== false || web.writes().length === 0) throw new Error('pending');
     });
     assert({
-      given: 'a click on the switch',
-      should: "PUT { enabled: true } to the imago-access route with web's CSRF token and show it on",
+      given: 'a click on the switch, which is on by default',
+      should: "PUT { enabled: false } to the imago-access route with web's CSRF token and show it off",
       actual: {
         writes: web.writes().map(({ method, url, body, csrf }) => ({ method, url, body, csrf })),
         state: imagoSwitch(root)?.getAttribute('aria-checked'),
       },
       expected: {
-        writes: [{ method: 'PUT', url: '/api/drives/d1/imago-access', body: { enabled: true }, csrf: 'tok-1' }],
-        state: 'true',
+        writes: [{ method: 'PUT', url: '/api/drives/d1/imago-access', body: { enabled: false }, csrf: 'tok-1' }],
+        state: 'false',
       },
     });
   });
@@ -245,18 +246,18 @@ describe('DriveSettingsObject: an owner', () => {
     });
     click(imagoSwitch(root) as HTMLButtonElement);
     await settle(() => {
-      if (imagoSwitch(root)?.getAttribute('aria-checked') !== 'true') throw new Error('not optimistic');
+      if (imagoSwitch(root)?.getAttribute('aria-checked') !== 'false') throw new Error('not optimistic');
     });
     const during = { state: imagoSwitch(root)?.getAttribute('aria-checked'), disabled: imagoSwitch(root)?.disabled };
     await act(async () => {
-      answer(Response.json({ error: 'Your Imago agents are not set up yet' }, { status: 409 }));
+      answer(Response.json({ error: 'Failed to set Imago access' }, { status: 500 }));
     });
     await settle(() => {
       if (noticeText(root).length === 0) throw new Error('no notice');
     });
     assert({
-      given: 'a click the route answers 409 for',
-      should: 'show it on while it is sent, then roll back to off and say why',
+      given: 'a click the route answers 500 for',
+      should: 'show it off while it is sent, then roll back to on and say why',
       actual: {
         during,
         after: imagoSwitch(root)?.getAttribute('aria-checked'),
@@ -264,21 +265,21 @@ describe('DriveSettingsObject: an owner', () => {
         notices: noticeText(root),
       },
       expected: {
-        during: { state: 'true', disabled: true },
-        after: 'false',
+        during: { state: 'false', disabled: true },
+        after: 'true',
         disabled: false,
-        notices: ['Your Imago agents are not set up yet'],
+        notices: ['Failed to set Imago access'],
       },
     });
   });
 });
 
-describe('DriveSettingsObject: an admin who lost the right', () => {
+describe('DriveSettingsObject: a viewer who lost access', () => {
   test('403 from the toggle', async () => {
     const { root } = await open(
-      server({ kind: 'STANDARD', isOwned: false, role: 'ADMIN' }, {
+      server({ kind: 'STANDARD', isOwned: false, role: 'MEMBER' }, {
         'PUT /api/drives/d1/imago-access': () =>
-          Response.json({ error: 'Only drive owners and admins can manage Imago access' }, { status: 403 }),
+          Response.json({ error: 'You can only set Imago access for a drive you can access' }, { status: 403 }),
       }),
     );
     await settle(() => {
@@ -289,27 +290,30 @@ describe('DriveSettingsObject: an admin who lost the right', () => {
       if (noticeText(root).length === 0) throw new Error('no notice');
     });
     assert({
-      given: 'an admin whose role was revoked since the page loaded',
+      given: 'a viewer removed from the drive since the page loaded',
       should: 'roll the switch back and say the server refused',
       actual: { state: imagoSwitch(root)?.getAttribute('aria-checked'), notices: noticeText(root) },
-      expected: { state: 'false', notices: ['Only drive owners and admins can manage Imago access'] },
+      expected: { state: 'true', notices: ['You can only set Imago access for a drive you can access'] },
     });
   });
 });
 
 describe('DriveSettingsObject: a member', () => {
-  test('no actions', async () => {
+  test('their own Imago switch, no rename', async () => {
     const { root, web } = await open(server({ kind: 'STANDARD', isOwned: false, role: 'MEMBER' }));
+    await settle(() => {
+      if (imagoSwitch(root) === null) throw new Error('no switch');
+    });
     assert({
       given: 'a viewer who is only a member of the drive',
-      should: 'show the name as text, no switch, and never ask the admin-only imago-access route',
+      should: 'show the name as text and their own Imago switch, on by default',
       actual: {
         input: nameInput(root),
         name: root.querySelector('[data-drive-name]')?.textContent,
-        switch: imagoSwitch(root),
+        state: imagoSwitch(root)?.getAttribute('aria-checked'),
         asked: web.count('GET /api/drives/d1/imago-access'),
       },
-      expected: { input: null, name: 'Launch', switch: null, asked: 0 },
+      expected: { input: null, name: 'Launch', state: 'true', asked: 1 },
     });
   });
 });
@@ -325,7 +329,7 @@ describe('DriveSettingsObject: the Home drive', () => {
         switch: imagoSwitch(root),
         asked: web.count('GET /api/drives/d1/imago-access'),
         says: root.textContent?.includes(
-          'Your Imago agents live in your Home drive, so their access to it cannot be changed.',
+          'Imago lives in your Home drive, so it cannot be kept out of it.',
         ),
       },
       expected: { input: null, switch: null, asked: 0, says: true },

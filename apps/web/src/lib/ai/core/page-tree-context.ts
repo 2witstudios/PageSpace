@@ -125,13 +125,17 @@ export async function getPageTreeContext(
  * @param userId - The authenticated user's ID
  * @returns A formatted list of accessible drives
  */
-export async function getDriveListSummary(userId: string): Promise<string> {
+export async function getDriveListSummary(
+  userId: string,
+  options: { excludedDriveIds?: ReadonlySet<string> } = {},
+): Promise<string> {
   try {
-    // Get all non-trashed drives
-    const allDrives = await db
+    // Get all non-trashed drives, minus any the caller's agent is kept out of
+    const allDrives = (await db
       .select({ id: drives.id, name: drives.name })
       .from(drives)
-      .where(eq(drives.isTrashed, false));
+      .where(eq(drives.isTrashed, false)))
+      .filter((drive) => !options.excludedDriveIds?.has(drive.id));
 
     // Filter to drives the user has access to (parallel permission checks)
     const accessChecks = await Promise.all(

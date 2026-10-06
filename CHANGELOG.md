@@ -52,9 +52,10 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   their own screen inside the frame: a note about what will show up, a "Try again" button, or "not
   found" with a link back. Imago is a preview, and classic PageSpace is unchanged.
 
-- **Imago agents in your Home drive** — every account now gets three assistants, Imago, Imago
-  Planner and Imago Researcher, as ordinary agents in an `Imago` folder in your Home drive. They are
-  added when you sign in (including with a passkey), and one you delete comes back the next time
+- **Imago in your Home drive** — every account now gets Imago, the assistant that replaces the global
+  assistant: it works with your own access, the global assistant's tools and context, and its own
+  memory, everywhere except drives you keep it out of, in an `Imago` folder in your Home drive. It is
+  added when you sign in (including with a passkey), and if you delete it it comes back the next time
   you sign in. Existing accounts get them (and a Home drive, if they lack one) from a
   one-time backfill, without having to sign in.
 - **Imago agents can read the drives you own** — when your Imago agents are first set up, and

@@ -62,8 +62,7 @@ import { isOnPrem } from '@pagespace/lib/deployment-mode';
 import { findBuiltinAgentOwner, loadImagoAgentContext } from '../imago-agent-context';
 import {
   resolvePageAgentIntegrationTools,
-  resolveGlobalAssistantIntegrationTools,
-  resolveImagoAgentIntegrationTools,
+  resolveAssistantIntegrationTools,
   resolveIntegrationDriveScope,
 } from '../integration-tool-resolver';
 
@@ -87,35 +86,56 @@ describe('resolvePageAgentIntegrationTools', () => {
     vi.clearAllMocks();
   });
 
-  describe('given a built-in Imago agent (IMG-4.9)', () => {
-    const imagoContext = { homeDriveId: 'home-1', grants: [{ driveId: 'granted-1', name: 'Acme', role: 'MEMBER' as const }] };
+  describe('given a built-in Imago agent (IMG-4.9, IMG-10.10)', () => {
+    const imagoContext = { homeDriveId: 'home-1', excludedDriveIds: new Set(['excluded-1']) };
 
-    it('run by its owner, should resolve as the Imago agent and never load per-agent grants', async () => {
+    it('run by its owner, should resolve as the global assistant does in the drive in view and never load per-agent grants', async () => {
       vi.mocked(findBuiltinAgentOwner).mockResolvedValueOnce('user-1');
       vi.mocked(loadImagoAgentContext).mockResolvedValueOnce(imagoContext);
-      mockGetDriveAccess.mockResolvedValue(access('OWNER'));
+      mockGetDriveAccess.mockResolvedValue(access('MEMBER'));
       mockResolveGlobalIntegrations.mockResolvedValue([]);
 
       await resolvePageAgentIntegrationTools({
-        agentId: 'imago-1', userId: 'user-1', driveId: 'home-1', currentTools: {}, contextDriveId: 'granted-1', allowedDriveIds: ['granted-1'],
+        agentId: 'imago-1', userId: 'user-1', driveId: 'home-1', currentTools: {}, contextDriveId: 'team-1',
       });
 
       expect(mockResolveAgentIntegrations).not.toHaveBeenCalled();
-      expect(vi.mocked(loadImagoAgentContext)).toHaveBeenCalledWith({ userId: 'user-1', agentPageId: 'imago-1', allowedDriveIds: ['granted-1'] });
-      expect(mockResolveGlobalIntegrations).toHaveBeenCalledWith(expect.anything(), 'user-1', 'granted-1', 'OWNER');
+      expect(vi.mocked(loadImagoAgentContext)).toHaveBeenCalledWith({ userId: 'user-1', agentPageId: 'imago-1' });
+      expect(mockResolveGlobalIntegrations).toHaveBeenCalledWith(expect.anything(), 'user-1', 'team-1', 'MEMBER');
     });
 
-    it('run by its owner in an ungranted drive, should resolve with no drive', async () => {
+    it('run by its owner in a drive the owner keeps it out of, should resolve with no drive', async () => {
       vi.mocked(findBuiltinAgentOwner).mockResolvedValueOnce('user-1');
       vi.mocked(loadImagoAgentContext).mockResolvedValueOnce(imagoContext);
       mockResolveGlobalIntegrations.mockResolvedValue([]);
 
       await resolvePageAgentIntegrationTools({
-        agentId: 'imago-1', userId: 'user-1', driveId: 'home-1', currentTools: {}, contextDriveId: 'ungranted-1',
+        agentId: 'imago-1', userId: 'user-1', driveId: 'home-1', currentTools: {}, contextDriveId: 'excluded-1',
       });
 
       expect(mockResolveGlobalIntegrations).toHaveBeenCalledWith(expect.anything(), 'user-1', null, null);
-      expect(mockResolveAgentIntegrations).not.toHaveBeenCalled();
+      expect(mockGetDriveAccess).not.toHaveBeenCalled();
+    });
+
+    it('run by its owner under a token scope that excludes the drive in view, should resolve with no drive', async () => {
+      vi.mocked(findBuiltinAgentOwner).mockResolvedValueOnce('user-1');
+      vi.mocked(loadImagoAgentContext).mockResolvedValueOnce(imagoContext);
+      mockResolveGlobalIntegrations.mockResolvedValue([]);
+
+      await resolvePageAgentIntegrationTools({
+        agentId: 'imago-1', userId: 'user-1', driveId: 'home-1', currentTools: {}, contextDriveId: 'team-1', allowedDriveIds: ['other-1'],
+      });
+
+      expect(mockResolveGlobalIntegrations).toHaveBeenCalledWith(expect.anything(), 'user-1', null, null);
+    });
+
+    it('run by its owner on onprem, should resolve nothing', async () => {
+      vi.mocked(findBuiltinAgentOwner).mockResolvedValueOnce('user-1');
+      vi.mocked(loadImagoAgentContext).mockResolvedValueOnce(imagoContext);
+      mockIsOnPrem.mockReturnValueOnce(true);
+
+      expect(await resolvePageAgentIntegrationTools({ agentId: 'imago-1', userId: 'user-1', driveId: 'home-1', currentTools: {} })).toEqual({});
+      expect(mockResolveGlobalIntegrations).not.toHaveBeenCalled();
     });
 
     it('run by anyone else, should resolve nothing', async () => {
@@ -234,7 +254,7 @@ describe('resolvePageAgentIntegrationTools', () => {
   });
 });
 
-describe('resolveGlobalAssistantIntegrationTools', () => {
+describe('resolveAssistantIntegrationTools (the global assistant and Imago)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -242,10 +262,10 @@ describe('resolveGlobalAssistantIntegrationTools', () => {
   it('given no grants, should return empty tool set', async () => {
     mockResolveGlobalIntegrations.mockResolvedValue([]);
 
-    const result = await resolveGlobalAssistantIntegrationTools({
+    const result = await resolveAssistantIntegrationTools({
       userId: 'user-1',
-      driveId: null,
-      userDriveRole: null,
+      agentId: null,
+      driveInView: null,
       currentTools: {},
     });
 
@@ -260,10 +280,10 @@ describe('resolveGlobalAssistantIntegrationTools', () => {
       'int__slack__send_message': { description: 'x', inputSchema: {} as never, execute: vi.fn() },
     });
 
-    const result = await resolveGlobalAssistantIntegrationTools({
+    const result = await resolveAssistantIntegrationTools({
       userId: 'user-1',
-      driveId: null,
-      userDriveRole: null,
+      agentId: null,
+      driveInView: null,
       currentTools: { gh_pr_view: {} },
     });
 
@@ -296,27 +316,12 @@ describe('resolveIntegrationDriveScope', () => {
   });
 });
 
-describe('resolveImagoAgentIntegrationTools', () => {
+describe('resolveAssistantIntegrationTools — drive in view', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockIsOnPrem.mockReturnValue(false);
   });
 
-  it('given onprem mode, should resolve nothing', async () => {
-    mockIsOnPrem.mockReturnValue(true);
-
-    const result = await resolveImagoAgentIntegrationTools({
-      agentId: 'imago-1',
-      userId: 'user-1',
-      grantedDriveId: 'drive-1',
-      currentTools: {},
-    });
-
-    expect(result).toEqual({});
-    expect(mockResolveGlobalIntegrations).not.toHaveBeenCalled();
-  });
-
-  it("given a granted drive, should resolve the user's integrations there and audit as the agent", async () => {
+  it("given a drive the user is a member of, should resolve the user's integrations there and audit as the agent", async () => {
     mockGetDriveAccess.mockResolvedValue(access('OWNER'));
     mockResolveGlobalIntegrations.mockResolvedValue([{ id: 'grant-1' }] as never);
     mockCreateExecutor.mockReturnValue(vi.fn());
@@ -324,10 +329,10 @@ describe('resolveImagoAgentIntegrationTools', () => {
       'int__slack__send_message': { description: 'x', inputSchema: {} as never, execute: vi.fn() },
     });
 
-    const result = await resolveImagoAgentIntegrationTools({
-      agentId: 'imago-1',
+    const result = await resolveAssistantIntegrationTools({
       userId: 'user-1',
-      grantedDriveId: 'drive-1',
+      agentId: 'imago-1',
+      driveInView: 'drive-1',
       currentTools: {},
     });
 
@@ -336,15 +341,10 @@ describe('resolveImagoAgentIntegrationTools', () => {
     expect(result).toHaveProperty('int__slack__send_message');
   });
 
-  it('given no granted drive, should resolve user-level integrations only', async () => {
+  it('given no drive in view, should resolve user-level integrations only', async () => {
     mockResolveGlobalIntegrations.mockResolvedValue([]);
 
-    const result = await resolveImagoAgentIntegrationTools({
-      agentId: 'imago-1',
-      userId: 'user-1',
-      grantedDriveId: null,
-      currentTools: {},
-    });
+    const result = await resolveAssistantIntegrationTools({ userId: 'user-1', agentId: null, driveInView: null, currentTools: {} });
 
     expect(result).toEqual({});
     expect(mockResolveGlobalIntegrations).toHaveBeenCalledWith(expect.anything(), 'user-1', null, null);

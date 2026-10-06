@@ -9,7 +9,6 @@ import { describe, it, expect } from 'vitest';
 import { BUILTIN_AGENTS } from '@pagespace/lib/agents/builtin-agents';
 import { WORKSPACE_TOOL_NAMES } from '../../tools';
 import { RUNTIME_TOGGLE_TOOL_NAMES } from '../agent-tool-surface';
-import { WRITE_TOOLS } from '../tool-filtering';
 
 const registered = new Set(WORKSPACE_TOOL_NAMES);
 
@@ -20,12 +19,5 @@ describe.each(BUILTIN_AGENTS.map((agent) => [agent.key, agent] as const))('built
 
   it('should not list a runtime-toggle tool, which an allowlist cannot grant', () => {
     expect(agent.enabledTools.filter((tool) => RUNTIME_TOGGLE_TOOL_NAMES.has(tool))).toEqual([]);
-  });
-});
-
-describe('built-in agent imago-researcher', () => {
-  it('should hold no write tool (it searches and summarises)', () => {
-    const researcher = BUILTIN_AGENTS.find((agent) => agent.key === 'imago-researcher');
-    expect(researcher?.enabledTools.filter((tool) => WRITE_TOOLS.has(tool))).toEqual([]);
   });
 });

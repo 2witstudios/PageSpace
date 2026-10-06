@@ -93,12 +93,14 @@ import { buildLocationTurnPrompt } from '@/lib/ai/core/location-prompt';
 import { buildActivePlanPrompt, getActivePlan } from '@/lib/ai/core/plan-binding';
 import { resolveHomeDriveHint } from '@/lib/ai/core/home-drive-hint';
 import {
-  buildGrantedDrivesPrompt,
+  findBuiltinAgentOwner,
   loadImagoAgentContext,
-  resolveImagoIntegrationDriveId,
-  resolveImagoLocationAccess,
+  resolveImagoDriveInView,
   type ImagoAgentContext,
 } from '@/lib/ai/core/imago-agent-context';
+import { buildAssistantContext, selectAssistantTools, type AssistantContext } from '@/lib/ai/chat-pipeline/assistant-surface';
+import { pageDeniedForActor } from '@/lib/ai/tools/actor-permissions';
+import { isOnPrem } from '@pagespace/lib/deployment-mode';
 import {
   filterToolsForReadOnly,
   filterToolsForMcpScope,
@@ -117,7 +119,9 @@ import { convertMCPToolsToAISDKSchemas, parseMCPToolName, sanitizeToolNamesForPr
 import { getUserPersonalization } from '@/lib/ai/core/personalization-utils';
 import { applyToolExposureMode, ALWAYS_UPFRONT_TOOLS } from '@/lib/ai/tools/tool-exposure';
 import { buildBuiltinSkillCatalog, listEligibleSkills } from '@/lib/ai/core/skill-catalog';
-import { loadUserCommandCatalog } from '@/lib/commands/command-catalog-loader';
+import { buildNonCoreToolNamesPrompt } from '@/lib/ai/core/system-prompt';
+import { getBuiltinAgent } from '@pagespace/lib/agents/builtin-agents';
+import { loadUserCommandCatalog, type UserCommandCatalog } from '@/lib/commands/command-catalog-loader';
 import {
   buildAgentSystemPrompt,
   buildVolatileTurnContext,
@@ -621,19 +625,15 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     }
     turnTimer.mark('member_drive_context_loaded');
 
-    // A built-in Imago agent's reach is its explicit drive grants, not the
-    // user's: tell it which drives those are, and below, whether the drive in
-    // view is one of them. Null for every other agent, whose prompt this
-    // leaves byte-identical. See imago-agent-context.ts for the trust boundary.
-    // Fails closed, unlike the member-drive context above: without it an Imago
-    // page would run as an ordinary agent and pick up per-agent integration
-    // grants, which may name drives it holds no grant on (IMG-4.9). A failed
-    // load fails the turn.
-    const imagoContext: ImagoAgentContext | null = await loadImagoAgentContext({
-      userId,
-      agentPageId: chatId,
-      allowedDriveIds: getAllowedDriveIds(authResult),
-    });
+    // A built-in Imago agent replaces the Global Assistant one for one
+    // (IMG-10.10): run by its owner, this turn hands it the Global Assistant's
+    // tools and context (`assistant-surface.ts`) minus the drives the owner
+    // keeps it out of; run by anyone else it gets no tools at all. Null for
+    // every other agent, whose turn this leaves unchanged. Fails closed: a
+    // failed load fails the turn rather than running Imago as an ordinary
+    // agent with per-agent integration grants (IMG-4.9).
+    const imagoContext: ImagoAgentContext | null = await loadImagoAgentContext({ userId, agentPageId: chatId });
+    const foreignImago = imagoContext === null && (await findBuiltinAgentOwner(chatId)) !== null;
     turnTimer.mark('imago_context_loaded');
 
     loggers.ai.debug('AI Page Chat API: Using custom agent configuration', {
@@ -1274,124 +1274,170 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     const webSearchMode = webSearchEnabled === true;
     loggers.ai.debug('AI Page Chat API: Tool modes', { isReadOnly: readOnlyMode, webSearchEnabled: webSearchMode });
 
-    // Step 1: Apply isReadOnly filter, and hide account-level-only tools
-    // (e.g. create_drive) from drive-scoped MCP tokens' tool list. The session
-    // + shell families ride `pageSpaceTools` itself (registered behind the
-    // CODE_EXECUTION kill-switch alongside bash/git — see buildPageSpaceTools),
-    // so no per-request registration happens here anymore: a conversation IS a
-    // session, there is no binding to compose by.
-    const baseTools = filterToolsForReadOnly(
-      // Drive-scoped in the general sense, not "is an MCP result": a dispatched
-      // worker runs under service auth carrying an inherited ceiling and must
-      // get the same narrowed tool set the token that spawned it would.
-      filterToolsForMcpScope(pageSpaceTools, isDriveScopedPrincipal(authResult)),
-      readOnlyMode
-    );
-
-    // Step 2: Extract web_search + generate_image so they can be handled as
-    // runtime-toggle overrides independently of the per-agent allowlist.
-    const {
-      web_search: webSearchToolDef,
-      generate_image: imageGenToolDef,
-      ...baseToolsWithoutOverrides
-    } = baseTools as Record<string, ToolSet[string]>;
-
-    // Step 3: Apply per-agent PageSpace tool allowlist.
     // null/undefined = unconfigured page — no restriction (backwards compat).
     // []            = zero tools selected — block all PageSpace tools.
     // ['tool1', …]  = only those tools.
-    const agentEnabledTools = page.enabledTools as string[] | null;
-    let filteredTools = filterToolsForAgentAccounts(
-      filterToolsForAgentAllowlist(baseToolsWithoutOverrides, agentEnabledTools),
-    ) as ToolSet;
+    // Imago is unrestricted, as the Global Assistant is: its owner's turn gets
+    // that assistant's tool set below, and execute_tool must not re-narrow it.
+    const agentEnabledTools = imagoContext ? null : page.enabledTools as string[] | null;
+    let filteredTools: ToolSet;
+    let toolExposureMode: 'upfront' | 'search';
+    let allowedToolNames: string[];
+    let preExposureTools: ToolSet;
+    let userCommandCatalog: UserCommandCatalog;
+    let toolDiscoveryPrompt: string;
+    // The deferred-tool catalog, for Imago's Global-Assistant-shaped prompt.
+    let imagoNonCoreToolNames: string[] = [];
 
-    // Step 3b: the per-agent sandbox switch AND the payer's tier eligibility.
-    // An agent with sandboxEnabled off never sees the sandbox families
-    // (bash/files, git+gh, sessions/shells) — independent of the allowlist,
-    // which cannot re-grant them. A free-tier payer doesn't either: showing
-    // tools that would hard-fail with tier_ineligible the moment they're
-    // called is a UX bug, not a security concern (the env kill-switch and
-    // per-call canRunCode remain the real security boundaries underneath;
-    // this is agent configuration + UX, not authz). Short-circuited on
-    // sandboxEnabled first — most agents never touch the sandbox at all, so
-    // this skips the payer-tier DB round trip for the common case.
-    const sandboxEnabled = Boolean(page.sandboxEnabled);
-    // Bound-session first (review #2326): a page conversation hosted in a
-    // driveless Global session is paid for by the SESSION's owner, not the
-    // agent's drive owner — gate exposure on the payer provisioning will use.
-    // An UNBOUND page conversation is not eligible at all (codex round 14):
-    // the acquire path never lazily mints page conversations a session.
-    const sandboxTierEligible = sandboxEnabled
-      ? await resolveSandboxToolEligibilityForConversation(conversationId, 'page', userId)
-      : false;
-    turnTimer.mark('sandbox_eligibility');
-    filteredTools = filterToolsForSandboxEnablement(filteredTools, sandboxEnabled) as ToolSet;
-    // The tier gate strips only the COMPUTE tools — a free payer keeps the
-    // chat-only session family (sessions/chat are free on every plan).
-    filteredTools = filterToolsForSandboxTier(filteredTools, sandboxTierEligible) as ToolSet;
-    // spawn_session/send_session used to be stripped for MCP-authenticated
-    // requests, because dispatch worked by forwarding the caller's browser
-    // session cookie and an MCP request has none — so advertising them could
-    // only ever produce a refusal (codex round 9). Dispatch signs its own hop
-    // now (`session-tools-runtime.ts`), so a credential the caller does not have
-    // is no longer a precondition, and an SDK/CLI/MCP turn can drive a worker
-    // like any other. The ceiling that DID matter rides the dispatch instead:
-    // `mcpAllowedDriveIds` below flows into the signed payload and back out as
-    // service auth's `allowedDriveIds`.
-
-    // Step 4: webSearchEnabled is a runtime input toggle that overrides the allowlist.
-    // If the user toggled web search on in the composer, they get web_search regardless of enabledTools.
-    if (webSearchMode && webSearchToolDef) {
-      filteredTools = { ...filteredTools, web_search: webSearchToolDef };
-    }
-
-    // Step 4b: image generation is an ADMIN-ONLY runtime toggle (same override pattern as
-    // web_search). Only exposed when the composer toggle is on AND the user is an app admin.
-    if (
-      shouldExposeImageGen({
-        imageGenEnabled: imageGenEnabled === true,
+    if (imagoContext) {
+      // The owner's Imago: the Global Assistant's tools for this user and these
+      // toggles, from the ONE selection both turns run — the registry through
+      // the sandbox tier gate, agent-account, read-only, web_search and
+      // image-generation filters, split behind tool_search/execute_tool. The
+      // payer is the owner's Home-drive session (`resolveOrProvisionSession`).
+      const sandboxTierEligible = await resolveSandboxToolEligibilityForConversation(
+        conversationId,
+        { imagoHomeDriveId: imagoContext.homeDriveId },
+        userId,
+      );
+      turnTimer.mark('sandbox_eligibility');
+      const selection = await selectAssistantTools({
+        userId,
+        readOnly: readOnlyMode,
+        webSearch: webSearchMode,
+        imageGen: imageGenEnabled === true,
         isAdmin: isAdminUser,
-        hasToolDef: !!imageGenToolDef,
-      }) &&
-      imageGenToolDef
-    ) {
-      filteredTools = { ...filteredTools, generate_image: imageGenToolDef };
-    }
+        sandboxTierEligible,
+        driveScoped: isDriveScopedPrincipal(authResult),
+        commandDriveId: resolveImagoDriveInView(turnLocation, imagoContext),
+        timer: turnTimer,
+      });
+      filteredTools = selection.tools;
+      toolExposureMode = 'search';
+      allowedToolNames = Object.keys(selection.allTools);
+      preExposureTools = selection.allTools;
+      userCommandCatalog = selection.userCommandCatalog;
+      toolDiscoveryPrompt = '';
+      imagoNonCoreToolNames = selection.nonCoreToolNames;
+    } else {
+      // Step 1: Apply isReadOnly filter, and hide account-level-only tools
+      // (e.g. create_drive) from drive-scoped MCP tokens' tool list. The session
+      // + shell families ride `pageSpaceTools` itself (registered behind the
+      // CODE_EXECUTION kill-switch alongside bash/git — see buildPageSpaceTools),
+      // so no per-request registration happens here anymore: a conversation IS a
+      // session, there is no binding to compose by.
+      const baseTools = filterToolsForReadOnly(
+        // Drive-scoped in the general sense, not "is an MCP result": a dispatched
+        // worker runs under service auth carrying an inherited ceiling and must
+        // get the same narrowed tool set the token that spawned it would.
+        filterToolsForMcpScope(pageSpaceTools, isDriveScopedPrincipal(authResult)),
+        readOnlyMode
+      );
 
-    // Step 5: Tool exposure mode. 'upfront' (default) sends every allowed tool
-    // schema directly. 'search' mirrors the Global Assistant — only core tools go
-    // upfront; the rest are reached via tool_search/execute_tool. The allowlist has
-    // already been applied above, so search mode can never discover a blocked tool.
-    // web_search is a runtime override (added by the webSearchEnabled toggle above,
-    // independent of the saved allowlist), so it must stay directly callable in
-    // search mode too — routing it through execute_tool would hit that tool's
-    // allowlist check and be rejected whenever the agent's saved enabledTools omit it.
-    const toolExposureMode = (page.toolExposureMode as 'upfront' | 'search' | null) ?? 'upfront';
-    // Capture BEFORE exposure so capability sections (TASK_MANAGEMENT, AGENTS, etc.) are
-    // correctly included in search mode where non-core tools become callable via execute_tool
-    // and disappear from filteredTools.
-    const allowedToolNames = Object.keys(filteredTools);
-    // Captured before exposure-mode transforms filteredTools below — 'search' mode
-    // moves non-core tools (including all sandbox git/gh tools) behind execute_tool,
-    // hiding their names from a top-level key scan. Integration-tool suppression
-    // needs the pre-exposure set to correctly detect an active sandbox toolkit.
-    const preExposureTools = filteredTools;
-    // Capability catalog: built-in skills (stable, appended to the system prompt
-    // below) + the per-viewer user/drive command list (volatile, appended to the
-    // last user message). Both gated on the agent actually having load_skill —
-    // without the loader, advertising loadable capabilities is noise.
-    const eligibleSkills = listEligibleSkills(allowedToolNames);
-    const userCommandCatalog =
-      eligibleSkills.length > 0 || allowedToolNames.includes('load_skill')
-        ? await loadUserCommandCatalog(userId!, page.driveId ?? null, allowedToolNames)
-        : { catalogPrompt: '', searchEntries: [] };
-    turnTimer.mark('commands_loaded');
-    const exposure = applyToolExposureMode(filteredTools, toolExposureMode, ALWAYS_UPFRONT_TOOLS, [
-      ...eligibleSkills,
-      ...userCommandCatalog.searchEntries,
-    ]);
-    filteredTools = exposure.tools;
-    const toolDiscoveryPrompt = exposure.toolDiscoveryPrompt;
+      // Step 2: Extract web_search + generate_image so they can be handled as
+      // runtime-toggle overrides independently of the per-agent allowlist.
+      const {
+        web_search: webSearchToolDef,
+        generate_image: imageGenToolDef,
+        ...baseToolsWithoutOverrides
+      } = baseTools as Record<string, ToolSet[string]>;
+
+      // Step 3: Apply per-agent PageSpace tool allowlist.
+      // null/undefined = unconfigured page — no restriction (backwards compat).
+      // []            = zero tools selected — block all PageSpace tools.
+      // ['tool1', …]  = only those tools.
+      filteredTools = filterToolsForAgentAccounts(
+        filterToolsForAgentAllowlist(baseToolsWithoutOverrides, agentEnabledTools),
+      ) as ToolSet;
+
+      // Step 3b: the per-agent sandbox switch AND the payer's tier eligibility.
+      // An agent with sandboxEnabled off never sees the sandbox families
+      // (bash/files, git+gh, sessions/shells) — independent of the allowlist,
+      // which cannot re-grant them. A free-tier payer doesn't either: showing
+      // tools that would hard-fail with tier_ineligible the moment they're
+      // called is a UX bug, not a security concern (the env kill-switch and
+      // per-call canRunCode remain the real security boundaries underneath;
+      // this is agent configuration + UX, not authz). Short-circuited on
+      // sandboxEnabled first — most agents never touch the sandbox at all, so
+      // this skips the payer-tier DB round trip for the common case.
+      const sandboxEnabled = Boolean(page.sandboxEnabled);
+      // Bound-session first (review #2326): a page conversation hosted in a
+      // driveless Global session is paid for by the SESSION's owner, not the
+      // agent's drive owner — gate exposure on the payer provisioning will use.
+      // An UNBOUND page conversation is not eligible at all (codex round 14):
+      // the acquire path never lazily mints page conversations a session.
+      const sandboxTierEligible = sandboxEnabled
+        ? await resolveSandboxToolEligibilityForConversation(conversationId, 'page', userId)
+        : false;
+      turnTimer.mark('sandbox_eligibility');
+      filteredTools = filterToolsForSandboxEnablement(filteredTools, sandboxEnabled) as ToolSet;
+      // The tier gate strips only the COMPUTE tools — a free payer keeps the
+      // chat-only session family (sessions/chat are free on every plan).
+      filteredTools = filterToolsForSandboxTier(filteredTools, sandboxTierEligible) as ToolSet;
+      // spawn_session/send_session used to be stripped for MCP-authenticated
+      // requests, because dispatch worked by forwarding the caller's browser
+      // session cookie and an MCP request has none — so advertising them could
+      // only ever produce a refusal (codex round 9). Dispatch signs its own hop
+      // now (`session-tools-runtime.ts`), so a credential the caller does not have
+      // is no longer a precondition, and an SDK/CLI/MCP turn can drive a worker
+      // like any other. The ceiling that DID matter rides the dispatch instead:
+      // `mcpAllowedDriveIds` below flows into the signed payload and back out as
+      // service auth's `allowedDriveIds`.
+
+      // Step 4: webSearchEnabled is a runtime input toggle that overrides the allowlist.
+      // If the user toggled web search on in the composer, they get web_search regardless of enabledTools.
+      if (webSearchMode && webSearchToolDef) {
+        filteredTools = { ...filteredTools, web_search: webSearchToolDef };
+      }
+
+      // Step 4b: image generation is an ADMIN-ONLY runtime toggle (same override pattern as
+      // web_search). Only exposed when the composer toggle is on AND the user is an app admin.
+      if (
+        shouldExposeImageGen({
+          imageGenEnabled: imageGenEnabled === true,
+          isAdmin: isAdminUser,
+          hasToolDef: !!imageGenToolDef,
+        }) &&
+        imageGenToolDef
+      ) {
+        filteredTools = { ...filteredTools, generate_image: imageGenToolDef };
+      }
+
+      // Step 5: Tool exposure mode. 'upfront' (default) sends every allowed tool
+      // schema directly. 'search' mirrors the Global Assistant — only core tools go
+      // upfront; the rest are reached via tool_search/execute_tool. The allowlist has
+      // already been applied above, so search mode can never discover a blocked tool.
+      // web_search is a runtime override (added by the webSearchEnabled toggle above,
+      // independent of the saved allowlist), so it must stay directly callable in
+      // search mode too — routing it through execute_tool would hit that tool's
+      // allowlist check and be rejected whenever the agent's saved enabledTools omit it.
+      toolExposureMode = (page.toolExposureMode as 'upfront' | 'search' | null) ?? 'upfront';
+      // Capture BEFORE exposure so capability sections (TASK_MANAGEMENT, AGENTS, etc.) are
+      // correctly included in search mode where non-core tools become callable via execute_tool
+      // and disappear from filteredTools.
+      allowedToolNames = Object.keys(filteredTools);
+      // Captured before exposure-mode transforms filteredTools below — 'search' mode
+      // moves non-core tools (including all sandbox git/gh tools) behind execute_tool,
+      // hiding their names from a top-level key scan. Integration-tool suppression
+      // needs the pre-exposure set to correctly detect an active sandbox toolkit.
+      preExposureTools = filteredTools;
+      // Capability catalog: built-in skills (stable, appended to the system prompt
+      // below) + the per-viewer user/drive command list (volatile, appended to the
+      // last user message). Both gated on the agent actually having load_skill —
+      // without the loader, advertising loadable capabilities is noise.
+      const eligibleSkills = listEligibleSkills(allowedToolNames);
+      userCommandCatalog =
+        eligibleSkills.length > 0 || allowedToolNames.includes('load_skill')
+          ? await loadUserCommandCatalog(userId!, page.driveId ?? null, allowedToolNames)
+          : { catalogPrompt: '', searchEntries: [] };
+      turnTimer.mark('commands_loaded');
+      const exposure = applyToolExposureMode(filteredTools, toolExposureMode, ALWAYS_UPFRONT_TOOLS, [
+        ...eligibleSkills,
+        ...userCommandCatalog.searchEntries,
+      ]);
+      filteredTools = exposure.tools;
+      toolDiscoveryPrompt = exposure.toolDiscoveryPrompt;
+    }
 
     loggers.ai.debug('AI Page Chat API: Tools built from baseline + runtime toggles', {
       totalTools: Object.keys(pageSpaceTools).length,
@@ -1403,18 +1449,21 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     });
 
     // INTEGRATION TOOLS: Resolve and merge integration tools for this agent.
-    // A built-in Imago agent gets the user's integrations (as the Global
-    // Assistant does), with drive integrations only from a drive it may work in.
+    // The owner's Imago gets the Global Assistant's — the one shared resolver —
+    // with drive integrations only from a drive in view it is not kept out of.
+    // Onprem exposes no external integration to it at all.
     try {
       const resolver = await import('@/lib/ai/core/integration-tool-resolver');
       turnTimer.mark('integrations_import');
       const integrationTools = imagoContext
-        ? await resolver.resolveImagoAgentIntegrationTools({
-          agentId: chatId,
-          userId,
-          grantedDriveId: resolveImagoIntegrationDriveId(turnLocation, imagoContext),
-          currentTools: preExposureTools,
-        })
+        ? isOnPrem()
+          ? {}
+          : await resolver.resolveAssistantIntegrationTools({
+            userId,
+            agentId: chatId,
+            driveInView: resolveImagoDriveInView(turnLocation, imagoContext),
+            currentTools: preExposureTools,
+          })
         : await resolver.resolvePageAgentIntegrationTools({
           agentId: chatId,
           userId,
@@ -1546,6 +1595,14 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
       });
     }
 
+    // Someone else's Imago acts for its owner alone: whoever else runs it gets
+    // no tool at all (IMG-4.9, kept by IMG-10.10) — not the invoker's reach,
+    // which every PageSpace tool would otherwise fall back to.
+    if (foreignImago) {
+      filteredTools = {};
+      allowedToolNames.length = 0;
+    }
+
     // Always inject the finish tool so the model can signal task completion
     filteredTools = { ...filteredTools, ...finishTool } as ToolSet;
 
@@ -1571,34 +1628,60 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     // Build system prompt BEFORE history loading so its token estimate is
     // available for prepareConversationContext's context-window budget math.
 
-    // Fetch user personalization for AI system prompt injection
-    const personalization = await getUserPersonalization(userId);
-    turnTimer.mark('personalization');
-    if (personalization) {
-      loggers.ai.debug('AI Chat API: User personalization loaded', {
-        hasPersonalization: true,
-        hasBio: !!personalization.bio,
-        hasWritingStyle: !!personalization.writingStyle,
-        hasRules: !!personalization.rules,
+    const userTimezone = user?.timezone ?? undefined;
+    let personalization: Awaited<ReturnType<typeof getUserPersonalization>>;
+    let locationPrompt: string;
+    let timestampSystemPrompt: string;
+    // The owner's Imago: the Global Assistant's context — location with the
+    // Home-drive hint, drive prompt, the drive tree or all-drives summary,
+    // personalization and timezone, the agents it can consult — from the ONE
+    // builder both turns run, minus the drives its owner keeps it out of.
+    let assistantContext: AssistantContext | null = null;
+    if (imagoContext) {
+      assistantContext = await buildAssistantContext({
+        userId,
+        location: turnLocation,
+        readOnly: readOnlyMode,
+        showPageTree: page.includePageTree === true,
+        allowedDriveIds: getAllowedDriveIds(authResult),
+        excludedDriveIds: imagoContext.excludedDriveIds,
+        timer: turnTimer,
       });
+      personalization = assistantContext.personalization;
+      locationPrompt = assistantContext.locationPrompt;
+      timestampSystemPrompt = assistantContext.timestampPrompt;
+    } else {
+      // Fetch user personalization for AI system prompt injection
+      personalization = await getUserPersonalization(userId);
+      turnTimer.mark('personalization');
+      if (personalization) {
+        loggers.ai.debug('AI Chat API: User personalization loaded', {
+          hasPersonalization: true,
+          hasBio: !!personalization.bio,
+          hasWritingStyle: !!personalization.writingStyle,
+          hasRules: !!personalization.rules,
+        });
+      }
+
+      // The system prompt itself is assembled once, below, by
+      // `buildAgentSystemPrompt` — every input it needs is gathered first. Note
+      // that "current page/drive" is turn-volatile: it is built separately as
+      // `locationPrompt` and injected via buildVolatileTurnContext, NOT baked
+      // into the system prompt, so that string stays byte-identical across turns.
+      const hasTurnLocation = Boolean(turnLocation?.currentPage || turnLocation?.currentDrive);
+      const locationHomeDriveId = await resolveHomeDriveHint(userId, hasTurnLocation, getAllowedDriveIds(authResult));
+      turnTimer.mark('home_drive_resolved');
+
+      locationPrompt = buildLocationTurnPrompt(turnLocation ? {
+        currentPage: turnLocation.currentPage,
+        currentDrive: turnLocation.currentDrive,
+        breadcrumbs: turnLocation.breadcrumbs,
+        homeDriveId: locationHomeDriveId,
+      } : { homeDriveId: locationHomeDriveId });
+
+      // Build timestamp system prompt for temporal awareness
+      timestampSystemPrompt = buildTimestampSystemPrompt(userTimezone);
     }
-
-    // The system prompt itself is assembled once, below, by
-    // `buildAgentSystemPrompt` — every input it needs is gathered first. Note
-    // that "current page/drive" is turn-volatile: it is built separately as
-    // `locationPrompt` and injected via buildVolatileTurnContext, NOT baked
-    // into the system prompt, so that string stays byte-identical across turns.
-    const hasTurnLocation = Boolean(turnLocation?.currentPage || turnLocation?.currentDrive);
-    const locationHomeDriveId = await resolveHomeDriveHint(userId, hasTurnLocation, getAllowedDriveIds(authResult));
-    turnTimer.mark('home_drive_resolved');
-
-    const locationPrompt = buildLocationTurnPrompt(turnLocation ? {
-      currentPage: turnLocation.currentPage,
-      currentDrive: turnLocation.currentDrive,
-      breadcrumbs: turnLocation.breadcrumbs,
-      homeDriveId: locationHomeDriveId,
-      agentAccess: imagoContext ? resolveImagoLocationAccess(turnLocation, imagoContext) : undefined,
-    } : { homeDriveId: locationHomeDriveId });
 
     // Skill catalog applies uniformly — including to custom-systemPrompt
     // agents, which opt out of buildInlineInstructions and would otherwise
@@ -1619,20 +1702,19 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     // page in ANOTHER drive — so the principal-aware check is required here. A
     // user-level check would leak an out-of-scope plan's title and id to a token
     // that may not reach that drive.
-    const planPointer = await getActivePlan(conversationId, userId, (pageId) =>
-      canPrincipalViewPage(authResult, pageId),
+    // For Imago, also not a page in a drive its owner keeps it out of.
+    const imagoActor = { userId, chatSource: { type: 'page' as const, agentPageId: chatId } };
+    const planPointer = await getActivePlan(conversationId, userId, async (pageId) =>
+      (await canPrincipalViewPage(authResult, pageId)) &&
+      !(imagoContext && await pageDeniedForActor(imagoActor, pageId)),
     );
     turnTimer.mark('active_plan_loaded');
     const activePlanPrompt = buildActivePlanPrompt(planPointer);
 
 
-    // Build timestamp system prompt for temporal awareness
-    const userTimezone = user?.timezone ?? undefined;
-    const timestampSystemPrompt = buildTimestampSystemPrompt(userTimezone);
-
-    // Build page tree context if enabled
-    let pageTreePrompt = '';
-    if (page.includePageTree && page.driveId) {
+    // Build page tree context if enabled (Imago's came with its context above).
+    let pageTreePrompt = assistantContext?.pageTreePrompt ?? '';
+    if (!assistantContext && page.includePageTree && page.driveId) {
       const pageTreeContext = await getPageTreeContext(userId, {
         scope: (page.pageTreeScope as 'children' | 'drive') || 'children',
         pageId: chatId,
@@ -1659,25 +1741,49 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
       agentMemoryPrompt = buildAgentMemorySection(memoryContent);
     }
 
-    // One assembly, shared with the Global Assistant and with voice — see
-    // `buildAgentSystemPrompt`. A custom systemPrompt is a blank slate: it
-    // skips the default persona and the workspace-knowledge block, but not the
-    // capability metadata.
-    const systemPrompt = buildAgentSystemPrompt({
-      surface: 'page',
-      readOnly: readOnlyMode,
-      personalization,
-      allowedToolNames,
-      skillCatalog: skillCatalogPrompt,
-      activePlan: activePlanPrompt,
-      pageTree: pageTreePrompt,
-      customSystemPrompt,
-      drivePromptPrefix,
-      memberDriveContextPrefix,
-      grantedDrives: imagoContext ? buildGrantedDrivesPrompt(imagoContext) : undefined,
-      agentMemory: agentMemoryPrompt,
-      toolDiscovery: toolDiscoveryPrompt,
-    });
+    // Imago: the Global Assistant's prompt, with Imago's persona in place of
+    // that assistant's own line, plus its Agent Memory. Everyone else: the
+    // page agent's.
+    let systemPrompt: string;
+    if (assistantContext) {
+      const imagoToolNames = Object.keys(preExposureTools);
+      systemPrompt = buildAgentSystemPrompt({
+        surface: 'global',
+        readOnly: readOnlyMode,
+        personalization,
+        allowedToolNames: imagoToolNames,
+        skillCatalog: buildBuiltinSkillCatalog(imagoToolNames),
+        activePlan: activePlanPrompt,
+        pageTree: pageTreePrompt,
+        conversationType: 'page',
+        conversationContextId: chatId,
+        includeAskUser: true,
+        drivePromptSection: assistantContext.drivePromptSection,
+        agentAwareness: assistantContext.agentAwarenessPrompt,
+        nonCoreToolNames: buildNonCoreToolNamesPrompt(imagoNonCoreToolNames),
+        persona: getBuiltinAgent('imago').systemPrompt,
+        agentMemory: agentMemoryPrompt,
+      });
+    } else {
+      // One assembly, shared with the Global Assistant and with voice — see
+      // `buildAgentSystemPrompt`. A custom systemPrompt is a blank slate: it
+      // skips the default persona and the workspace-knowledge block, but not the
+      // capability metadata.
+      systemPrompt = buildAgentSystemPrompt({
+        surface: 'page',
+        readOnly: readOnlyMode,
+        personalization,
+        allowedToolNames,
+        skillCatalog: skillCatalogPrompt,
+        activePlan: activePlanPrompt,
+        pageTree: pageTreePrompt,
+        customSystemPrompt,
+        drivePromptPrefix,
+        memberDriveContextPrefix,
+        agentMemory: agentMemoryPrompt,
+        toolDiscovery: toolDiscoveryPrompt,
+      });
+    }
 
     turnTimer.mark('system_prompt');
 

@@ -1,26 +1,30 @@
 // @vitest-environment node
 /**
- * IMG-4.9 — a built-in Imago agent never reads beyond its grants (security).
+ * IMG-4.9, rewritten for IMG-10.10 — Imago's reach is its owner's, minus the
+ * drives the owner keeps it out of, never more than the owner, and nothing at
+ * all for anyone else (security).
  *
  * Driven through the REAL page-chat turn (`POST /api/ai/chat`) against a real
- * Postgres, on the IMG-4.7/4.8 harness. Real: the session, the database, Imago
- * provisioning, the per-drive Imago access toggle (IMG-4.6), the page shares
- * and memberships, the AI SDK's own tool loop and every tool executor. Replaced:
- * only the language model, by the SDK's `MockLanguageModelV3`, scripted to call
- * tools the way a model would. What the suite asserts on is the tool output
- * the AI SDK feeds back to the model — exactly what the model could read.
+ * Postgres. Real: the sessions, the database, Imago provisioning, the per-drive
+ * Imago setting through its real service, the page shares and memberships, the
+ * AI SDK's own tool loop and every tool executor — including `execute_tool`,
+ * behind which Imago's non-core tools sit exactly as the global assistant's do.
+ * Replaced: only the language model, by the SDK's `MockLanguageModelV3`,
+ * scripted to call tools the way a model would. What the suite asserts on is
+ * the tool output the AI SDK feeds back to the model, and the prompt it was
+ * sent — exactly what the model could read.
  *
- * The world, from the user's point of view:
- *   - Home: their own Home drive, where the Imago agents live.
- *   - Acme: a drive they own; the agents are granted it (DEC-2 default).
- *   - Journal: a drive they own, with Imago access switched off (IMG-4.6).
- *   - Partner: another user's drive; the user is ADMIN and switched Imago on.
+ * The world, from the owner's point of view:
+ *   - Home: their Home drive, where Imago lives.
+ *   - Acme: a drive they own, with a private page.
+ *   - Journal: a drive they own and keep Imago out of (with a drive prompt).
+ *   - Partner: another user's drive they administer, with a private page.
+ *   - Team: another user's drive they are a MEMBER of: an open page, a private
+ *     page shared with them, a private page not shared with them.
+ *   - Locked: another user's drive they are a MEMBER of and keep Imago out of.
  *   - Rival: another user's drive they have nothing to do with.
- *   - Former: another user's drive the user was removed from, keeping one page
- *     share. The agents' grant there outlived the membership (see seedWorld).
- *   - Gone: the same, without the page share: the user cannot see it at all.
- *   - Other Home: another user's Home drive; the user holds page shares on a
- *     few of its pages, so they can see those, but the agent must not.
+ *   - Other Home: another user's Home drive, where they hold one page share.
+ * And a visitor who can open the owner's Imago page through a page share.
  *
  * Every seeded title and body carries a run-unique marker, so "the marker of a
  * page X appears in any tool output" is a precise leak test.
@@ -29,6 +33,7 @@
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { createId } from '@paralleldrive/cuid2';
+import { randomBytes } from 'node:crypto';
 import type { MockLanguageModelV3 } from 'ai/test';
 
 type CallOptions = Parameters<MockLanguageModelV3['doStream']>[0];
@@ -40,12 +45,13 @@ interface ScriptedCall {
 
 interface TurnCapture {
   toolNames: string[];
+  prompt: string;
   outputs: Map<string, unknown>;
 }
 
 /** The tool calls the mock model makes on its first step of the next turn. */
 let script: ScriptedCall[] = [];
-let capture: TurnCapture = { toolNames: [], outputs: new Map() };
+let capture: TurnCapture = { toolNames: [], prompt: '', outputs: new Map() };
 
 const usage = {
   inputTokens: { total: 10, noCache: 10, cacheRead: 0, cacheWrite: 0 },
@@ -65,7 +71,10 @@ vi.mock('@/lib/ai/core/provider-factory', async (importOriginal) => {
           );
           // First step: call the scripted tools. Second step: record what they returned and stop.
           const firstStep = results.length === 0;
-          if (firstStep) capture.toolNames = (options.tools ?? []).map((tool) => tool.name);
+          if (firstStep) {
+            capture.toolNames = (options.tools ?? []).map((tool) => tool.name);
+            capture.prompt = JSON.stringify(options.prompt);
+          }
           for (const result of results) capture.outputs.set(result.toolCallId, result.output);
 
           return {
@@ -105,20 +114,20 @@ import { db } from '@pagespace/db/db';
 import { and, eq, inArray } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { drives, pages } from '@pagespace/db/schema/core';
-import { driveMembers } from '@pagespace/db/schema/members';
-import { taskItems, taskLists } from '@pagespace/db/schema/tasks';
 import { factories } from '@pagespace/db/test/factories';
 import { sessionService } from '@pagespace/lib/auth/session-service';
+import { hashToken } from '@pagespace/lib/auth/token-utils';
+import { sessionRepository } from '@/lib/repositories/session-repository';
 import { provisionImagoAgents } from '@pagespace/lib/agents/provision-imago-agents';
 import { setImagoDriveAccess } from '@pagespace/lib/agents/imago-drive-access';
 import { logActivity } from '@pagespace/lib/monitoring/activity-logger';
-import { BUILTIN_AGENTS, type BuiltinAgentKey } from '@pagespace/lib/agents/builtin-agents';
 import { getUserAccessLevel } from '@pagespace/lib/permissions/permissions';
+import { CORE_TOOL_NAMES } from '@/lib/ai/core/stub-tools';
 import { ensureTestDb } from '@/test/ensure-test-db';
 import type { ContextRef } from '@/lib/ai/shared/buildContextRef';
 import { POST } from '@/app/api/ai/chat/route';
 
-const MARK = `img49${createId().slice(0, 10)}`;
+const MARK = `img1010${createId().slice(0, 10)}`;
 const seededUserIds: string[] = [];
 
 /** A seeded page: its id and the marker its title and body carry. */
@@ -128,27 +137,20 @@ interface Seeded {
 }
 
 interface World {
-  userId: string;
-  token: string;
-  agents: Record<BuiltinAgentKey, string>;
+  ownerId: string;
+  ownerToken: string;
+  visitorToken: string;
+  /** A drive-scoped MCP token of the OWNER, scoped to the Home drive. */
+  scopedMcpToken: string;
+  imagoPageId: string;
   home: { driveId: string; note: Seeded };
   acme: { driveId: string; roadmap: Seeded; minutes: Seeded };
-  journal: { driveId: string; entry: Seeded };
+  journal: { driveId: string; entry: Seeded; sheet: Seeded };
   partner: { driveId: string; open: Seeded; restricted: Seeded };
-  rival: { driveId: string; open: Seeded; restricted: Seeded };
-  former: { driveId: string; shared: Seeded; unshared: Seeded; restricted: Seeded };
-  gone: { driveId: string; open: Seeded; agent: Seeded };
-  otherHome: {
-    driveId: string;
-    shared: Seeded;
-    unshared: Seeded;
-    sheet: Seeded;
-    agent: Seeded;
-    conversationId: string;
-    taskList: Seeded;
-    task: Seeded;
-    taskId: string;
-  };
+  team: { driveId: string; open: Seeded; sharedPrivate: Seeded; unsharedPrivate: Seeded };
+  locked: { driveId: string; entry: Seeded };
+  rival: { driveId: string; open: Seeded };
+  otherHome: { driveId: string; shared: Seeded; unshared: Seeded };
 }
 
 let world: World;
@@ -168,69 +170,48 @@ async function seedPage(
 }
 
 async function seedWorld(): Promise<World> {
-  const user = await factories.createUser();
+  const owner = await factories.createUser();
   const other = await factories.createUser();
   const stranger = await factories.createUser();
-  seededUserIds.push(user.id, other.id, stranger.id);
+  const visitor = await factories.createUser();
+  seededUserIds.push(owner.id, other.id, stranger.id, visitor.id);
 
-  const home = await factories.createDrive(user.id, { kind: 'HOME', name: 'Home', slug: `home-${createId()}` });
-  const acme = await factories.createDrive(user.id, { name: `${MARK} Acme`, slug: `acme-${createId()}` });
-  const journal = await factories.createDrive(user.id, {
+  const home = await factories.createDrive(owner.id, { kind: 'HOME', name: 'Home', slug: `home-${createId()}` });
+  const acme = await factories.createDrive(owner.id, { name: `${MARK} Acme`, slug: `acme-${createId()}` });
+  const journal = await factories.createDrive(owner.id, {
     name: `${MARK} Journal`,
     slug: `journal-${createId()}`,
     drivePrompt: `${MARK}-journal-prompt`,
   });
   const partner = await factories.createDrive(other.id, { name: `${MARK} Partner`, slug: `partner-${createId()}` });
+  const team = await factories.createDrive(other.id, { name: `${MARK} Team`, slug: `team-${createId()}` });
+  const locked = await factories.createDrive(other.id, { name: `${MARK} Locked`, slug: `locked-${createId()}` });
   const rival = await factories.createDrive(stranger.id, { name: `${MARK} Rival`, slug: `rival-${createId()}` });
-  const former = await factories.createDrive(other.id, { name: `${MARK} Former`, slug: `former-${createId()}` });
-  const gone = await factories.createDrive(other.id, { name: `${MARK} Gone`, slug: `gone-${createId()}` });
   const otherHome = await factories.createDrive(other.id, { kind: 'HOME', name: `${MARK} OtherHome`, slug: `other-home-${createId()}` });
 
-  await factories.createDriveMember(partner.id, user.id, { role: 'ADMIN', acceptedAt: new Date() });
-  await factories.createDriveMember(former.id, user.id, { role: 'ADMIN', acceptedAt: new Date() });
-  await factories.createDriveMember(gone.id, user.id, { role: 'ADMIN', acceptedAt: new Date() });
+  await factories.createDriveMember(partner.id, owner.id, { role: 'ADMIN', acceptedAt: new Date() });
+  await factories.createDriveMember(team.id, owner.id, { role: 'MEMBER', acceptedAt: new Date() });
+  await factories.createDriveMember(locked.id, owner.id, { role: 'MEMBER', acceptedAt: new Date() });
 
-  // Owned STANDARD drives (Acme, Journal) are granted here, as at sign-in.
-  const { agents } = await provisionImagoAgents(user.id);
+  const { agents } = await provisionImagoAgents(owner.id);
 
-  // The IMG-4.6 toggle, through its real service: Journal off, Partner and Former on.
-  expect((await setImagoDriveAccess(user.id, journal.id, false)).ok).toBe(true);
-  expect((await setImagoDriveAccess(user.id, partner.id, true)).ok).toBe(true);
-  expect((await setImagoDriveAccess(user.id, former.id, true)).ok).toBe(true);
-  expect((await setImagoDriveAccess(user.id, gone.id, true)).ok).toBe(true);
+  // The per-drive setting, through its real service: kept out of an owned
+  // drive and of a drive the owner is merely a member of.
+  expect((await setImagoDriveAccess(owner.id, journal.id, false)).ok).toBe(true);
+  expect((await setImagoDriveAccess(owner.id, locked.id, false)).ok).toBe(true);
 
-  // Former: the user then loses the membership, but the agents' grants stay.
-  // That is what a drive-member rollback, a redo of a member removal and a
-  // permissions restore do (rollbackMemberChange, redoMemberChange,
-  // restore-permissions-service): they delete the `drive_members` row and
-  // never call revokeAgentMembershipsGrantedBy. The user keeps one page share.
-  await db.delete(driveMembers).where(and(inArray(driveMembers.driveId, [former.id, gone.id]), eq(driveMembers.userId, user.id)));
-
-  const formerShared = await seedPage(former.id, 'former-shared');
-  await factories.createPagePermission(formerShared.id, user.id);
-
+  const teamShared = await seedPage(team.id, 'team-private-shared', { isPrivate: true });
+  await factories.createPagePermission(teamShared.id, owner.id);
   const otherShared = await seedPage(otherHome.id, 'otherhome-shared');
-  const otherSheet = await seedPage(otherHome.id, 'otherhome-sheet', { type: 'SHEET' });
-  const otherAgent = await seedPage(otherHome.id, 'otherhome-agent', { type: 'AI_CHAT', content: '' });
-  const message = await factories.createChatMessage(otherAgent.id, { userId: other.id, content: `${MARK}-otherhome-chat` });
-  const otherTaskList = await seedPage(otherHome.id, 'otherhome-tasklist', { type: 'TASK_LIST', content: '' });
-  const otherTask = await seedPage(otherHome.id, 'otherhome-task', { parentId: otherTaskList.id });
-  await db.insert(taskLists).values({ userId: other.id, pageId: otherTaskList.id, title: `${MARK}-otherhome-list` });
-  const [task] = await db
-    .insert(taskItems)
-    .values({ userId: other.id, pageId: otherTask.id, status: 'pending', assigneeAgentId: otherAgent.id })
-    .returning({ id: taskItems.id });
-  // The user can see — and edit — these pages of the other user's Home; the agent must not.
-  for (const page of [otherShared, otherSheet, otherAgent, otherTaskList, otherTask]) {
-    await factories.createPagePermission(page.id, user.id, { canEdit: true });
-  }
+  await factories.createPagePermission(otherShared.id, owner.id, { canEdit: true });
 
-  // Drive-level activity (no pageId): on the granted Acme (the control) and on
-  // drives the agent must not see — the ungranted Journal and the Gone drive
-  // the user lost.
-  for (const drive of [acme, journal, gone]) {
+  // The visitor can open the owner's Imago page, and nothing else of theirs.
+  await factories.createPagePermission(agents.imago, visitor.id, { canEdit: true });
+
+  // Drive-level activity (no pageId): Acme is the control; the excluded drives must not surface.
+  for (const drive of [acme, journal, locked]) {
     await logActivity({
-      userId: user.id,
+      userId: owner.id,
       actorEmail: 'someone@example.com',
       operation: 'update',
       resourceType: 'drive',
@@ -240,73 +221,87 @@ async function seedWorld(): Promise<World> {
     });
   }
 
-  const token = await sessionService.createSession({ userId: user.id, type: 'user', scopes: ['*'], expiresInMs: 60 * 60 * 1000 });
+  const session = (userId: string) =>
+    sessionService.createSession({ userId, type: 'user', scopes: ['*'], expiresInMs: 60 * 60 * 1000 });
+
+  // An MCP key of the owner's, scoped to the Home drive — the drive Imago
+  // lives in, so the token can drive the owner's Imago page.
+  const scopedMcpToken = `mcp_${randomBytes(24).toString('hex')}`;
+  await sessionRepository.createMcpTokenWithDriveScopes({
+    userId: owner.id,
+    tokenHash: hashToken(scopedMcpToken),
+    tokenPrefix: scopedMcpToken.slice(0, 12),
+    name: `${MARK} home-scoped`,
+    isScoped: true,
+    drives: [{ id: home.id, role: null }],
+  });
 
   return {
-    userId: user.id,
-    token,
-    agents,
+    ownerId: owner.id,
+    ownerToken: await session(owner.id),
+    visitorToken: await session(visitor.id),
+    scopedMcpToken,
+    imagoPageId: agents.imago,
     home: { driveId: home.id, note: await seedPage(home.id, 'home-note') },
     acme: {
       driveId: acme.id,
       roadmap: await seedPage(acme.id, 'acme-roadmap'),
       minutes: await seedPage(acme.id, 'acme-minutes', { isPrivate: true }),
     },
-    journal: { driveId: journal.id, entry: await seedPage(journal.id, 'journal-entry') },
+    journal: {
+      driveId: journal.id,
+      entry: await seedPage(journal.id, 'journal-entry'),
+      sheet: await seedPage(journal.id, 'journal-sheet', { type: 'SHEET' }),
+    },
     partner: {
       driveId: partner.id,
       open: await seedPage(partner.id, 'partner-open'),
       restricted: await seedPage(partner.id, 'partner-restricted', { isPrivate: true }),
     },
-    rival: {
-      driveId: rival.id,
-      open: await seedPage(rival.id, 'rival-open'),
-      restricted: await seedPage(rival.id, 'rival-restricted', { isPrivate: true }),
+    team: {
+      driveId: team.id,
+      open: await seedPage(team.id, 'team-open'),
+      sharedPrivate: teamShared,
+      unsharedPrivate: await seedPage(team.id, 'team-private-unshared', { isPrivate: true }),
     },
-    former: {
-      driveId: former.id,
-      shared: formerShared,
-      unshared: await seedPage(former.id, 'former-unshared'),
-      restricted: await seedPage(former.id, 'former-restricted', { isPrivate: true }),
-    },
-    gone: {
-      driveId: gone.id,
-      open: await seedPage(gone.id, 'gone-open'),
-      agent: await seedPage(gone.id, 'gone-agent', { type: 'AI_CHAT', content: '' }),
-    },
+    locked: { driveId: locked.id, entry: await seedPage(locked.id, 'locked-entry') },
+    rival: { driveId: rival.id, open: await seedPage(rival.id, 'rival-open') },
     otherHome: {
       driveId: otherHome.id,
       shared: otherShared,
       unshared: await seedPage(otherHome.id, 'otherhome-unshared'),
-      sheet: otherSheet,
-      agent: otherAgent,
-      conversationId: message.conversationId,
-      taskList: otherTaskList,
-      task: otherTask,
-      taskId: task.id,
     },
   };
 }
 
-/** Run one real turn in which the agent calls `calls`; returns each call's output, serialized. */
+/**
+ * A tool call as the model makes it on Imago's surface, which is the global
+ * assistant's: core tools directly, every other one through `execute_tool`.
+ */
+const call = (toolName: string, input: Record<string, unknown>): ScriptedCall =>
+  CORE_TOOL_NAMES.has(toolName)
+    ? { toolName, input }
+    : { toolName: 'execute_tool', input: { tool_name: toolName, parameters: input } };
+
+/** Run one real turn in which Imago calls `calls`; returns each call's output, serialized. */
 async function runTools(
-  agentPageId: string,
   calls: ScriptedCall[],
   contextRef?: ContextRef,
-): Promise<{ toolNames: string[]; outputs: string[] }> {
+  token = world.ownerToken,
+): Promise<{ toolNames: string[]; prompt: string; outputs: string[] }> {
   script = calls;
-  capture = { toolNames: [], outputs: new Map() };
+  capture = { toolNames: [], prompt: '', outputs: new Map() };
   const response = await POST(
     new Request('http://localhost/api/ai/chat', {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        authorization: `Bearer ${world.token}`,
-        'x-browser-session-id': 'browser-img-4-9',
+        authorization: `Bearer ${token}`,
+        'x-browser-session-id': 'browser-img-10-10',
       },
       body: JSON.stringify({
         messages: [{ id: createId(), role: 'user', parts: [{ type: 'text', text: 'Look around.' }] }],
-        chatId: agentPageId,
+        chatId: world.imagoPageId,
         conversationId: createId(),
         selectedProvider: 'openai',
         selectedModel: 'openai/gpt-5.4-nano',
@@ -316,9 +311,11 @@ async function runTools(
   );
   expect(response.status, await response.clone().text().catch(() => '')).toBe(200);
   await response.text();
+  await vi.waitFor(() => expect(capture.toolNames.length).toBeGreaterThan(0), { timeout: 15_000 });
   await vi.waitFor(() => expect(capture.outputs.size).toBe(calls.length), { timeout: 15_000 });
   return {
     toolNames: capture.toolNames,
+    prompt: capture.prompt,
     outputs: calls.map((_, index) => JSON.stringify(capture.outputs.get(`call-${index}`))),
   };
 }
@@ -335,15 +332,27 @@ function leaked(outputs: string[], pagesToHide: Seeded[]): string[] {
 
 /** Every tool path that reads a drive, aimed at `driveId` (and `pageId` in it). */
 const readPathsInto = (driveId: string, pageId: string): ScriptedCall[] => [
-  { toolName: 'read_page', input: { title: 'page', pageId } },
-  { toolName: 'list_pages', input: { driveId, recursive: true } },
-  { toolName: 'regex_search', input: { driveId, pattern: MARK, searchIn: 'both' } },
-  { toolName: 'glob_search', input: { driveId, pattern: '**' } },
+  call('read_page', { title: 'page', pageId }),
+  call('list_pages', { driveId, recursive: true }),
+  call('regex_search', { driveId, pattern: MARK, searchIn: 'both' }),
+  call('glob_search', { driveId, pattern: '**' }),
 ];
+
+/** Every page and drive name in the excluded drives, for before/after comparisons. */
+const excludedState = async () =>
+  db
+    .select({ id: pages.id, title: pages.title, content: pages.content, parentId: pages.parentId, isTrashed: pages.isTrashed })
+    .from(pages)
+    .where(inArray(pages.driveId, [world.journal.driveId, world.locked.driveId]))
+    .orderBy(pages.id);
+
+/** The ids of every page `outputs` names, for the "never more than the user" ground truth. */
+const pageIdsIn = (outputs: string[]) =>
+  [...new Set([...outputs.join('\n').matchAll(/"(?:pageId|id)":"([a-z0-9]{20,})"/g)].map((match) => match[1]))];
 
 // Each test runs one or more real turns (route, tool loop, every executor);
 // the first one in a worker also pays the cold import of the whole route.
-vi.setConfig({ testTimeout: 30_000 });
+vi.setConfig({ testTimeout: 45_000 });
 
 beforeAll(async () => {
   await ensureTestDb();
@@ -357,249 +366,206 @@ afterAll(async () => {
   }
 });
 
-describe('Imago agent reach — positive controls (the harness reads what it is granted)', () => {
-  it('given a granted drive, should read, list and search its pages', async () => {
-    const { outputs } = await runTools(world.agents.imago, readPathsInto(world.acme.driveId, world.acme.roadmap.id));
-
-    for (const output of outputs) expect(output).toContain(world.acme.roadmap.marker);
+describe("IMG-10.10 — Imago acts with its owner's full reach", () => {
+  it('given owned, administered and member-only drives, should read, list and search them — private pages the user can see included', async () => {
+    for (const [driveId, page] of [
+      [world.acme.driveId, world.acme.minutes],
+      [world.partner.driveId, world.partner.restricted],
+      [world.team.driveId, world.team.open],
+    ] as const) {
+      const { outputs } = await runTools(readPathsInto(driveId, page.id));
+      for (const output of outputs) expect(output, page.marker).toContain(page.marker);
+    }
   });
 
-  it('given cross-drive search, should find pages in the Home drive and every granted drive', async () => {
-    const { outputs } = await runTools(world.agents.imago, [
-      { toolName: 'multi_drive_search', input: { searchQuery: MARK } },
+  it('given a private page shared with the user, and a page shared from another Home, should read them', async () => {
+    const { outputs } = await runTools([
+      call('read_page', { title: 'page', pageId: world.team.sharedPrivate.id }),
+      call('read_page', { title: 'page', pageId: world.otherHome.shared.id }),
     ]);
 
-    expect(outputs[0]).toContain(world.home.note.marker);
-    expect(outputs[0]).toContain(world.acme.roadmap.marker);
-    expect(outputs[0]).toContain(world.partner.open.marker);
+    expect(outputs[0]).toContain(world.team.sharedPrivate.marker);
+    expect(outputs[1]).toContain(world.otherHome.shared.marker);
+  });
+
+  it('given cross-drive search, should find pages across every drive the user reaches', async () => {
+    const { outputs } = await runTools([call('multi_drive_search', { searchQuery: MARK })]);
+
+    for (const page of [world.home.note, world.acme.roadmap, world.acme.minutes, world.partner.restricted, world.team.open, world.team.sharedPrivate]) {
+      expect(outputs[0], page.marker).toContain(page.marker);
+    }
+  });
+
+  it('given a write, should create a page in a drive the user administers but does not own', async () => {
+    const { outputs } = await runTools([
+      call('create_page', { driveId: world.partner.driveId, title: `${MARK}-created-by-imago`, type: 'DOCUMENT' }),
+    ]);
+
+    const created = await db
+      .select({ id: pages.id })
+      .from(pages)
+      .where(and(eq(pages.driveId, world.partner.driveId), eq(pages.title, `${MARK}-created-by-imago`)));
+    expect(created, outputs[0]).toHaveLength(1);
   });
 });
 
-describe('IMG-4.9 AC1 — a drive without a grant: no page reads, search hits or tree listing', () => {
-  it('given an owned drive with Imago access switched off, should deny every read path', async () => {
-    const { outputs } = await runTools(world.agents.imago, readPathsInto(world.journal.driveId, world.journal.entry.id));
-
-    expect(leaked(outputs, [world.journal.entry])).toEqual([]);
-  });
-
-  it("given another user's drive the user cannot see, should deny every read path", async () => {
-    const { outputs } = await runTools(world.agents.imago, [
+describe('IMG-10.10 — never more than its owner', () => {
+  it("given pages the user cannot view (another user's drive, an unshared private page, an unshared page of another Home), should deny every read path", async () => {
+    const { outputs } = await runTools([
       ...readPathsInto(world.rival.driveId, world.rival.open.id),
-      { toolName: 'read_page', input: { title: 'page', pageId: world.rival.restricted.id } },
+      call('read_page', { title: 'page', pageId: world.team.unsharedPrivate.id }),
+      call('read_page', { title: 'page', pageId: world.otherHome.unshared.id }),
+      call('list_pages', { driveId: world.otherHome.driveId, recursive: true }),
     ]);
 
-    expect(leaked(outputs, [world.rival.open, world.rival.restricted])).toEqual([]);
+    expect(leaked(outputs, [world.rival.open, world.team.unsharedPrivate, world.otherHome.unshared])).toEqual([]);
   });
 
-  it('given the ungranted drive in view, should deny the read paths that default to it', async () => {
-    const { outputs } = await runTools(
-      world.agents.imago,
+  it('given cross-drive search, should return only pages the user can view', async () => {
+    const { outputs } = await runTools([
+      call('multi_drive_search', { searchQuery: MARK }),
+      call('multi_drive_search', { searchQuery: `${MARK}.*title`, searchType: 'regex' }),
+    ]);
+
+    expect(leaked(outputs, [world.rival.open, world.team.unsharedPrivate, world.otherHome.unshared])).toEqual([]);
+    // Ground truth: every page the search returned is one the user can view.
+    for (const pageId of pageIdsIn(outputs)) {
+      expect((await getUserAccessLevel(world.ownerId, pageId))?.canView, pageId).toBe(true);
+    }
+  });
+});
+
+describe('IMG-10.10 — a drive the owner keeps Imago out of is denied on every path', () => {
+  const excludedPages = () => [world.journal.entry, world.journal.sheet, world.locked.entry];
+  const excludedNames = () => [`${MARK} Journal`, `${MARK} Locked`, `${MARK}-journal-prompt`];
+
+  it('given read paths into an excluded drive (owned, or one the user is a member of), should deny them', async () => {
+    const { outputs } = await runTools([
+      ...readPathsInto(world.journal.driveId, world.journal.entry.id),
+      call('read_sheet', { pageId: world.journal.sheet.id }),
+      ...readPathsInto(world.locked.driveId, world.locked.entry.id),
+    ]);
+
+    expect(leaked(outputs, excludedPages())).toEqual([]);
+  });
+
+  it('given cross-drive search, drive discovery, agents and activity, should neither return nor name an excluded drive', async () => {
+    const { outputs } = await runTools([
+      call('multi_drive_search', { searchQuery: MARK }),
+      call('list_drives', {}),
+      call('list_agents', { driveId: world.journal.driveId }),
+      call('multi_drive_list_agents', {}),
+      call('get_activity', { since: '30d', excludeOwnActivity: false }),
+      call('get_activity', { since: '30d', excludeOwnActivity: false, driveIds: [world.journal.driveId, world.locked.driveId] }),
+    ]);
+
+    // Control: a drive Imago may use does come through discovery and activity.
+    expect(outputs[1]).toContain(`${MARK} Acme`);
+    expect(outputs[4]).toContain(`${MARK} Acme`);
+    expect(leaked(outputs, excludedPages())).toEqual([]);
+    const all = outputs.join('\n');
+    for (const name of excludedNames()) expect(all, name).not.toContain(name);
+  });
+
+  it('given an excluded drive in view, should deny the read paths that default to it and keep its tree and prompt out of the context', async () => {
+    const { outputs, prompt } = await runTools(
       [
-        { toolName: 'read_page', input: { title: 'current page' } },
-        { toolName: 'list_pages', input: { recursive: true } },
-        { toolName: 'regex_search', input: { pattern: MARK, searchIn: 'both' } },
-        { toolName: 'glob_search', input: { pattern: '**' } },
+        call('read_page', { title: 'current page' }),
+        call('list_pages', { recursive: true }),
+        call('regex_search', { pattern: MARK, searchIn: 'both' }),
+        call('glob_search', { pattern: '**' }),
       ],
       { routeType: 'page', pageId: world.journal.entry.id, driveId: world.journal.driveId },
     );
 
-    expect(leaked(outputs, [world.journal.entry])).toEqual([]);
+    expect(leaked(outputs, excludedPages())).toEqual([]);
+    expect(leaked([prompt], excludedPages())).toEqual([]);
+    expect(prompt).not.toContain(`${MARK}-journal-prompt`);
+    expect(prompt).toContain('a workspace they keep you out of');
   });
 
-  it('given cross-drive search and list_drives, should leave the ungranted drives out', async () => {
-    const { outputs } = await runTools(world.agents.imago, [
-      { toolName: 'multi_drive_search', input: { searchQuery: MARK } },
-      { toolName: 'list_drives', input: {} },
+  it('given write paths into an excluded drive, should change nothing', async () => {
+    const before = await excludedState();
+
+    const { outputs } = await runTools([
+      call('create_page', { driveId: world.journal.driveId, title: `${MARK}-created`, type: 'DOCUMENT' }),
+      call('replace_lines', { title: 'page', pageId: world.journal.entry.id, startLine: 1, content: `${MARK}-replaced` }),
+      call('insert_content', { title: 'page', pageId: world.locked.entry.id, anchor: 'line one', content: `${MARK}-inserted`, position: 'after' }),
+      call('rename_page', { currentTitle: 'page', pageId: world.journal.entry.id, title: `${MARK}-renamed` }),
+      call('move_page', { title: 'page', pageId: world.journal.entry.id, targetDriveId: world.acme.driveId, position: 1 }),
     ]);
 
-    expect(leaked(outputs, [world.journal.entry, world.rival.open, world.rival.restricted])).toEqual([]);
-    for (const name of [`${MARK} Journal`, `${MARK} Rival`]) expect(outputs.join('\n')).not.toContain(name);
+    expect(leaked(outputs, excludedPages())).toEqual([]);
+    // Refused for permission — not failing for some other reason after being allowed.
+    for (const output of outputs) expect(output).toMatch(/permission|not found/i);
+    expect(await excludedState()).toEqual(before);
+    const created = await db.select({ id: pages.id }).from(pages).where(and(eq(pages.driveId, world.journal.driveId), eq(pages.title, `${MARK}-created`)));
+    expect(created).toEqual([]);
   });
 
-  it('given a drive whose membership the user lost while the grant survived, should read only what the user can still view', async () => {
-    const { outputs } = await runTools(world.agents.imago, [
-      ...readPathsInto(world.former.driveId, world.former.unshared.id),
-      { toolName: 'read_page', input: { title: 'page', pageId: world.former.restricted.id } },
-      { toolName: 'multi_drive_search', input: { searchQuery: MARK } },
-    ]);
+  it('negative control: given the same drive let back in, should read it, name it and show its activity — so the denials above are the exclusion', async () => {
+    expect((await setImagoDriveAccess(world.ownerId, world.journal.driveId, true)).ok).toBe(true);
+    try {
+      const { outputs, prompt } = await runTools(
+        [
+          ...readPathsInto(world.journal.driveId, world.journal.entry.id),
+          call('multi_drive_search', { searchQuery: MARK }),
+          call('list_drives', {}),
+          call('get_activity', { since: '30d', excludeOwnActivity: false, driveIds: [world.journal.driveId] }),
+        ],
+        { routeType: 'page', pageId: world.journal.entry.id, driveId: world.journal.driveId },
+      );
 
-    expect(leaked(outputs, [world.former.unshared, world.former.restricted])).toEqual([]);
-  });
-
-  it('given a drive the user can no longer see at all while the grant survived, should not even name it', async () => {
-    const { outputs } = await runTools(world.agents.imago, [
-      ...readPathsInto(world.gone.driveId, world.gone.open.id),
-      { toolName: 'multi_drive_search', input: { searchQuery: MARK } },
-      { toolName: 'list_drives', input: {} },
-      { toolName: 'list_agents', input: { driveId: world.gone.driveId } },
-      { toolName: 'multi_drive_list_agents', input: {} },
-    ]);
-
-    expect(leaked(outputs, [world.gone.open, world.gone.agent])).toEqual([]);
-    expect(outputs.join('\n')).not.toContain(`${MARK} Gone`);
-  });
-
-  it("given get_activity, should neither name nor describe a drive the agent may not access", async () => {
-    for (const key of ['imago', 'imago-researcher'] as const) {
-      const { outputs } = await runTools(world.agents[key], [
-        { toolName: 'get_activity', input: { since: '30d', excludeOwnActivity: false } },
-        { toolName: 'get_activity', input: { since: '30d', excludeOwnActivity: false, driveIds: [world.journal.driveId, world.gone.driveId] } },
-      ]);
-
-      // Control: a granted drive's drive-level activity does come through.
-      expect(outputs[0], key).toContain(`${MARK} Acme`);
-      const all = outputs.join('\n');
-      for (const leak of [`${MARK} Journal`, `${MARK}-journal-prompt`, `${MARK} Gone`]) expect(all, `${key}: ${leak}`).not.toContain(leak);
-    }
-  });
-
-  it('given each Imago agent (planner, researcher), should deny the same read paths', async () => {
-    for (const key of ['imago-planner', 'imago-researcher'] as const) {
-      const { outputs } = await runTools(world.agents[key], [
-        ...readPathsInto(world.journal.driveId, world.journal.entry.id),
-        { toolName: 'multi_drive_search', input: { searchQuery: MARK } },
-      ]);
-
-      expect(leaked(outputs, [world.journal.entry, world.rival.open, world.former.unshared, world.gone.open]), key).toEqual([]);
+      for (const output of outputs.slice(0, 5)) expect(output).toContain(world.journal.entry.marker);
+      expect(outputs[5]).toContain(`${MARK} Journal`);
+      expect(outputs[6]).toContain(`${MARK} Journal`);
+      expect(prompt).toContain(`${MARK}-journal-prompt`);
+      expect(prompt).not.toContain('a workspace they keep you out of');
+    } finally {
+      expect((await setImagoDriveAccess(world.ownerId, world.journal.driveId, false)).ok).toBe(true);
     }
   });
 });
 
-describe("IMG-4.9 AC2 — another user's Home drive: every tool path denied", () => {
-  /** One call per tool any Imago agent holds, each aimed at the other user's Home. */
-  const otherHomeCalls = (): Record<string, ScriptedCall['input']> => {
-    const { driveId, shared, sheet, agent, conversationId, taskList, taskId } = world.otherHome;
-    return {
-      list_drives: {},
-      list_pages: { driveId, recursive: true },
-      read_page: { title: 'page', pageId: shared.id },
-      read_sheet: { pageId: sheet.id },
-      glob_search: { driveId, pattern: '**' },
-      regex_search: { driveId, pattern: MARK, searchIn: 'both' },
-      multi_drive_search: { searchQuery: MARK },
-      create_page: { driveId, title: `${MARK}-created`, type: 'DOCUMENT' },
-      rename_page: { currentTitle: 'page', pageId: shared.id, title: `${MARK}-renamed` },
-      replace_lines: { title: 'page', pageId: shared.id, startLine: 1, content: `${MARK}-replaced` },
-      insert_content: { title: 'page', pageId: shared.id, anchor: 'line one', content: `${MARK}-inserted`, position: 'after' },
-      move_page: { title: 'page', pageId: shared.id, targetDriveId: world.home.driveId, position: 1 },
-      get_assigned_tasks: { agentId: agent.id, driveId },
-      create_task: { pageId: taskList.id, title: `${MARK}-new-task` },
-      update_task: { taskId, title: `${MARK}-task-renamed` },
-      reorder_task: { taskId, position: 0 },
-      get_activity: { driveIds: [driveId] },
-      list_agents: { driveId },
-      multi_drive_list_agents: {},
-      list_conversations: { pageId: agent.id, title: 'agent' },
-      read_conversation: { pageId: agent.id, conversationId, title: 'agent' },
-    };
-  };
+describe('IMG-10.10 — run by anyone but its owner, Imago gets nothing', () => {
+  it('given a visitor who can open the Imago page, should offer no tool beyond finish and ask_user', async () => {
+    const { toolNames, prompt } = await runTools([], undefined, world.visitorToken);
 
-  /** Every page and task row in the other user's Home, for a before/after comparison. */
-  const otherHomeState = async () => ({
-    pages: await db
-      .select({ id: pages.id, title: pages.title, content: pages.content, parentId: pages.parentId, position: pages.position })
-      .from(pages)
-      .where(eq(pages.driveId, world.otherHome.driveId))
-      .orderBy(pages.id),
-    tasks: await db
-      .select({ id: taskItems.id, pageId: taskItems.pageId, status: taskItems.status, metadata: taskItems.metadata })
-      .from(taskItems)
-      .innerJoin(pages, eq(pages.id, taskItems.pageId))
-      .where(eq(pages.driveId, world.otherHome.driveId))
-      .orderBy(taskItems.id),
-    moved: await db.select({ id: pages.id }).from(pages).where(and(eq(pages.id, world.otherHome.shared.id), eq(pages.driveId, world.otherHome.driveId))),
+    expect(toolNames.filter((name) => name !== 'finish' && name !== 'ask_user')).toEqual([]);
+    // None of the owner's drives or pages reaches the visitor's prompt.
+    expect(prompt).not.toContain(`${MARK} Acme`);
+    expect(leaked([prompt], [world.home.note, world.acme.roadmap, world.team.open])).toEqual([]);
   });
 
-  const otherHomePages = () => {
-    const { shared, unshared, sheet, agent, taskList, task } = world.otherHome;
-    return [shared, unshared, sheet, agent, taskList, task];
-  };
+  it('negative control: given the owner, should offer the full assistant tool set', async () => {
+    const { toolNames } = await runTools([]);
 
-  it('given the page shares, should let the USER see those pages (so the agent is the one being refused)', async () => {
-    expect((await getUserAccessLevel(world.userId, world.otherHome.shared.id))?.canEdit).toBe(true);
+    expect(toolNames).toEqual(expect.arrayContaining(['read_page', 'multi_drive_search', 'tool_search', 'execute_tool']));
   });
+});
 
-  it('given the scripted calls, should cover every tool any Imago agent is given', () => {
-    const allTools = new Set(BUILTIN_AGENTS.flatMap((agent) => agent.enabledTools));
-
-    expect(Object.keys(otherHomeCalls()).sort()).toEqual([...allTools].sort());
-  });
-
-  it.each(BUILTIN_AGENTS.map((agent) => agent.key))(
-    'given the %s agent, should neither read nor change anything in it',
-    async (key) => {
-      const calls = Object.entries(otherHomeCalls())
-        .filter(([toolName]) => BUILTIN_AGENTS.find((agent) => agent.key === key)!.enabledTools.includes(toolName))
-        .map(([toolName, input]) => ({ toolName, input }));
-
-      const before = await otherHomeState();
-      const { toolNames, outputs } = await runTools(world.agents[key], calls, {
-        routeType: 'page',
-        pageId: world.otherHome.shared.id,
-        driveId: world.otherHome.driveId,
-      });
-
-      // Every scripted tool really was offered to the model and really ran.
-      for (const call of calls) expect(toolNames, call.toolName).toContain(call.toolName);
-      expect(leaked(outputs, otherHomePages())).toEqual([]);
-      expect(outputs.join('\n')).not.toContain(`${MARK} OtherHome`);
-      expect(outputs.join('\n')).not.toContain(`${MARK}-otherhome-chat`);
-
-      // Nothing changed: no page created, renamed, edited or moved; no task created, renamed or moved.
-      expect(await otherHomeState()).toEqual(before);
-    },
-  );
-
-  it('given the read paths that default to the page in view, should deny them too', async () => {
-    const { outputs } = await runTools(
-      world.agents.imago,
-      [
-        { toolName: 'read_page', input: { title: 'current page' } },
-        { toolName: 'list_pages', input: { recursive: true } },
-        { toolName: 'regex_search', input: { pattern: MARK, searchIn: 'both' } },
-        { toolName: 'glob_search', input: { pattern: '**' } },
-      ],
-      { routeType: 'page', pageId: world.otherHome.shared.id, driveId: world.otherHome.driveId },
+describe("IMG-10.10 — a drive-scoped token on its owner's Imago page is not advertised account-level tools", () => {
+  // Listing invariant (review finding): the non-Imago branch hides
+  // account-level-only tools (create_drive) from a drive-scoped principal's
+  // tool list; the Imago branch must advertise the same narrowed set. The
+  // execution-time gates were never the gap — this is what the model is told
+  // exists, in the prompt's non-core catalog and behind execute_tool.
+  it('given execute_tool(create_drive), should answer unknown tool and keep the name out of the prompt', async () => {
+    const { outputs, prompt } = await runTools(
+      [call('create_drive', { name: `${MARK}-scoped-token-drive` })],
+      undefined,
+      world.scopedMcpToken,
     );
 
-    expect(leaked(outputs, otherHomePages())).toEqual([]);
-  });
-});
-
-describe('IMG-4.9 AC3 — cross-drive search never returns titles the user cannot view', () => {
-  it('given every Imago agent, should return no page the user cannot view, in any drive', async () => {
-    for (const key of BUILTIN_AGENTS.map((agent) => agent.key)) {
-      const { outputs } = await runTools(world.agents[key], [
-        { toolName: 'multi_drive_search', input: { searchQuery: MARK } },
-        { toolName: 'multi_drive_search', input: { searchQuery: `${MARK}.*title`, searchType: 'regex' } },
-      ]);
-
-      const hits = outputs.join('\n');
-      const notViewable = [
-        world.journal.entry,
-        world.rival.open,
-        world.rival.restricted,
-        world.former.unshared,
-        world.former.restricted,
-        world.gone.open,
-        ...[world.otherHome.shared, world.otherHome.unshared, world.otherHome.sheet],
-      ];
-      // The user CAN view these through shares, but the agent holds no grant on Other Home.
-      expect(leaked([hits], notViewable), key).toEqual([]);
-      // Ground truth: every page the search did return is one the user can view.
-      for (const pageId of new Set([...hits.matchAll(/"pageId":"([a-z0-9]+)"/g)].map((match) => match[1]))) {
-        expect((await getUserAccessLevel(world.userId, pageId))?.canView, `${key} returned ${pageId}`).toBe(true);
-      }
-    }
+    // The output is a serialized tool result, so the quoted name arrives escaped.
+    expect(outputs[0]).toContain('Unknown tool');
+    expect(outputs[0]).toContain('create_drive');
+    expect(prompt).not.toMatch(/\bcreate_drive\b/);
   });
 
-  it('given private pages in a granted drive, should not return them to a MEMBER-granted agent', async () => {
-    const { outputs } = await runTools(world.agents.imago, [
-      { toolName: 'multi_drive_search', input: { searchQuery: MARK } },
-    ]);
+  it("control: the owner's own session turn still advertises create_drive", async () => {
+    const { prompt } = await runTools([], undefined, world.ownerToken);
 
-    // Partner: the user (ADMIN) can view the private page, the MEMBER-capped agent cannot.
-    expect(leaked(outputs, [world.partner.restricted])).toEqual([]);
-    expect(outputs[0]).toContain(world.partner.open.marker);
+    expect(prompt).toMatch(/\bcreate_drive\b/);
   });
 });

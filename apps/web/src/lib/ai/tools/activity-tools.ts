@@ -22,7 +22,7 @@ import {
 } from '@pagespace/lib/content/diff-generator';
 import { readPageContent } from '@pagespace/lib/services/page-content-store';
 import type { ToolExecutionContext } from '../core/types';
-import { filterDriveIdsByAppTokenScope, filterDriveIdsByImagoAgentReach, canActorViewPage } from './actor-permissions';
+import { filterDriveIdsByAppTokenScope, canActorViewPage } from './actor-permissions';
 
 /**
  * Activity tools for AI agents
@@ -493,12 +493,11 @@ When summarizing multiple changes, group them thematically and describe the over
           targetDriveIds = Array.from(driveIdSet);
         }
 
-        // Ceiling a scoped MCP token to its allowed drives (no-op otherwise),
-        // and an Imago agent to the drives it may access: drive-level rows
-        // (no pageId) skip the page filter below, so an excluded drive must
-        // not be in this set at all.
+        // Ceiling a scoped MCP token to its allowed drives, and an Imago agent
+        // to the drives its user has not kept it out of (no-op otherwise):
+        // drive-level rows (no pageId) skip the page filter below, so an
+        // excluded drive must not be in this set at all.
         targetDriveIds = await filterDriveIdsByAppTokenScope(context as ToolExecutionContext, targetDriveIds);
-        targetDriveIds = await filterDriveIdsByImagoAgentReach(context as ToolExecutionContext, targetDriveIds);
 
         if (targetDriveIds.length === 0) {
           return {

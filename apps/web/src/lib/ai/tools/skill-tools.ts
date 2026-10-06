@@ -31,6 +31,7 @@ import {
   type CommandExecutionPlan,
 } from '../core/command-processor';
 import type { ToolExecutionContext } from '../core/types';
+import { driveDeniedForActor, pageDeniedForActor } from './actor-permissions';
 
 const skillLogger = loggers.ai.child({ module: 'skill-tools' });
 
@@ -74,7 +75,9 @@ export const skillTools = {
         // chip resolver — loadAvailableCommands requires a verified id).
         const requestedDriveId = ctx?.locationContext?.currentDrive?.id ?? null;
         const driveId =
-          requestedDriveId && (await isUserDriveMember(userId, requestedDriveId))
+          requestedDriveId &&
+          !(ctx && await driveDeniedForActor(ctx, requestedDriveId)) &&
+          (await isUserDriveMember(userId, requestedDriveId))
             ? requestedDriveId
             : null;
 
@@ -97,6 +100,10 @@ export const skillTools = {
           const plan = await resolveBuiltinInjection(name, userId, { driveId });
           return planToResult(plan, name);
         }
+
+        // A personal command's entry page can sit in a drive the user keeps
+        // their Imago agent out of: the actor check, not only the user's.
+        if (ctx && winner.entryPageId && await pageDeniedForActor(ctx, winner.entryPageId)) return unavailable(name);
 
         const plan = await resolveCommandInjectionById(winner.id, userId, name);
         return planToResult(plan, name);

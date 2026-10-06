@@ -80,7 +80,7 @@ test.describe('drive settings', () => {
 
     await expect(page.getByRole('heading', { name: 'Imago access' })).toBeVisible();
     await expect(
-      page.getByText('Your Imago agents live in your Home drive, so their access to it cannot be changed.'),
+      page.getByText('Imago lives in your Home drive, so it cannot be kept out of it.'),
     ).toBeVisible();
     await expect(page.getByRole('textbox', { name: 'Drive name' })).toHaveCount(0);
     await expect(page.getByRole('switch', { name: 'Imago access' })).toHaveCount(0);

@@ -324,22 +324,24 @@ echo "----------------------"
 run_test_suite "Built-in Agent Pointers (viewer only, no cross-user leakage)" "web" "src/app/api/user/builtin-agents"
 
 # =============================================================================
-# Imago Agent Grants (DEC-2: the agents reach a drive only through memberships)
+# Imago's reach (IMG-10.10: the owner's reach, minus the drives they keep it
+# out of, never more than the owner, nothing for anyone else)
 # =============================================================================
-echo "🪪 Imago Agent Grants"
-echo "---------------------"
+echo "🪪 Imago Reach"
+echo "--------------"
 
-run_test_suite "Imago Access Toggle Route (owner/admin only, CSRF + origin, off stays off)" "web" "src/app/api/drives/[driveId]/imago-access"
-run_db_test_suite "Imago Access Toggle Service (grant rights, Home refused, authoritative off)" "@pagespace/lib" "src/agents/__tests__/imago-drive-access.integration.test.ts"
-run_test_suite "Drive Ownership Rollback/Redo (revokes the outgoing owner's Imago grants)" "web" "src/services/api/rollback/__tests__/drive-ownership.integration.test.ts"
-# IMG-4.9: real POST /api/ai/chat turns, only the model mocked, driving the tool executors.
-run_test_suite "Imago Agent Reach (ungranted drives, another user's Home, cross-drive search: never beyond grants or the user)" "web" "src/lib/ai/chat-pipeline/__tests__/imago-agent-reach.security.test.ts"
-run_test_suite "Imago Agent Integrations (drive ones only where granted and a member, per-agent grants ignored, fail closed)" "web" "src/lib/ai/chat-pipeline/__tests__/imago-turn-integrations.integration.test.ts"
-run_test_suite "Actor Permissions (agent/user/token ceilings, Imago agents capped by the invoking user)" "web" "src/lib/ai/tools/__tests__/actor-permissions.test.ts"
-run_test_suite "Imago Agent Integrations outside page chat (@-mention engine, consult route, workflows)" "web" "src/lib/ai/core/__tests__/imago-integration-entrypoints.security.test.ts"
+run_test_suite "Imago Access Route (own exclusion only, any accessor, CSRF + origin, off stays off)" "web" "src/app/api/drives/[driveId]/imago-access"
+run_db_test_suite "Imago Access Service (default on, own choice only, Home refused, never a grant)" "@pagespace/lib" "src/agents/__tests__/imago-drive-access.integration.test.ts"
+run_db_test_suite "Imago Provisioning (one agent at the user's reach, retired agents and grants cleaned up)" "@pagespace/lib" "src/agents/__tests__/provision-imago-agents.integration.test.ts"
+run_test_suite "Drive Ownership Rollback/Redo (each user's Imago choice kept)" "web" "src/services/api/rollback/__tests__/drive-ownership.integration.test.ts"
+# Real POST /api/ai/chat turns, only the model mocked, driving the tool executors.
+run_test_suite "Imago Reach (owner's reach, excluded drives denied on every path, nothing for anyone else)" "web" "src/lib/ai/chat-pipeline/__tests__/imago-agent-reach.security.test.ts"
+run_test_suite "Imago = Global Assistant (same tools and context for the same user and toggles)" "web" "src/lib/ai/chat-pipeline/__tests__/imago-global-parity.integration.test.ts"
+run_test_suite "Imago Integrations (the global assistant's, none from an excluded drive, per-agent grants ignored, fail closed)" "web" "src/lib/ai/chat-pipeline/__tests__/imago-turn-integrations.integration.test.ts"
+run_test_suite "Actor Permissions (agent/user/token ceilings, Imago at its owner's reach minus exclusions, nothing for others)" "web" "src/lib/ai/tools/__tests__/actor-permissions.test.ts"
+run_test_suite "Imago Integrations outside page chat (@-mention engine, consult route, workflows)" "web" "src/lib/ai/core/__tests__/imago-integration-entrypoints.security.test.ts"
 run_test_suite "Member removal by rollback/redo/restore revokes the member's agent grants" "web" "src/services/api/rollback/__tests__/member-removal-agent-grants.integration.test.ts"
-run_db_test_suite "Imago Agent Grants on sign-in (MEMBER in owned STANDARD drives, no other drive)" "@pagespace/lib" "src/agents/__tests__/grant-imago-agents.integration.test.ts"
-run_test_suite "Imago Agent Context (granted drives and location only)" "web" "src/lib/ai/core/__tests__/imago-agent-context.integration.test.ts"
+run_test_suite "Imago Agent Context (own Imago only, its exclusions)" "web" "src/lib/ai/core/__tests__/imago-agent-context.integration.test.ts"
 run_test_suite "Agent Session Access (drive members only, unknown is never a grant)" "@pagespace/lib" "src/agent-workspaces/__tests__/decide-workspace-access.test.ts"
 run_db_test_suite "GDPR Export of Imago Drive Access (the user's own rows only)" "@pagespace/lib" "src/compliance/export/__tests__/imago-drive-access-export.integration.test.ts"
 

@@ -41,6 +41,10 @@ export async function resolveSandboxToolEligibility(
  *
  *  - `'global'`: the first compute call auto-provisions a DRIVELESS session
  *    the requester pays for, so eligibility is the driveless coordinates.
+ *  - `{ imagoHomeDriveId }`: the owner's own Imago conversation, which
+ *    replaces the Global Assistant (IMG-10.10): the first compute call
+ *    auto-provisions a session in its Home drive the owner pays for, so
+ *    eligibility is those coordinates.
  *  - `'page'`: acquire answers `no_session` — page conversations are never
  *    lazily minted into a session (that per-conversation minting is the
  *    conflation the session model removed), so compute tools could only
@@ -49,7 +53,7 @@ export async function resolveSandboxToolEligibility(
  */
 export async function resolveSandboxToolEligibilityForConversation(
   conversationId: string | undefined,
-  surface: 'page' | 'global',
+  surface: 'page' | 'global' | { imagoHomeDriveId: string },
   userId: string,
 ): Promise<boolean> {
   const { findSessionForConversation } = await import('@/lib/agent-workspaces/agent-workspaces-runtime');
@@ -58,5 +62,8 @@ export async function resolveSandboxToolEligibilityForConversation(
     return canRunCodeForSession({ userId, driveId: session.driveId, ownerId: session.ownerId });
   }
   if (surface === 'page') return false;
+  if (typeof surface === 'object') {
+    return canRunCodeForSession({ userId, driveId: surface.imagoHomeDriveId, ownerId: userId });
+  }
   return canRunCodeForSession({ userId, driveId: null, ownerId: userId });
 }

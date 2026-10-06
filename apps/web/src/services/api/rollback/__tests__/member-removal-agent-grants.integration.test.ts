@@ -6,8 +6,10 @@
  * the drive (`revokeAgentMembershipsGrantedBy`). Three other paths delete a
  * `drive_members` row: rolling back a `member_add`, redoing a `member_remove`
  * and restoring a drive backup. Each must revoke the same grants, or the
- * removed user's Imago agents stay listed in — and consultable from — a drive
- * the user left, and come back silently if the user is ever re-added.
+ * removed user's agents stay listed in — and consultable from — a drive the
+ * user left, and come back silently if the user is ever re-added. (These used
+ * Imago's grants until IMG-10.10, when Imago stopped being granted into drives;
+ * an ordinary agent of the member's, granted through the same seam, stands in.)
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { db } from '@pagespace/db/db';
@@ -15,8 +17,7 @@ import { and, eq, inArray } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { driveAgentMembers, driveMembers } from '@pagespace/db/schema/members';
 import { factories } from '@pagespace/db/test/factories';
-import { provisionImagoAgents } from '@pagespace/lib/agents/provision-imago-agents';
-import { setImagoDriveAccess } from '@pagespace/lib/agents/imago-drive-access';
+import { addAgentToDrive } from '@pagespace/lib/services/drive-agent-service';
 import { sessionService } from '@pagespace/lib/auth/session-service';
 import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
 import { updateDriveLastAccessed } from '@pagespace/lib/services/drive-service';
@@ -47,16 +48,22 @@ afterAll(async () => {
   await db.delete(users).where(inArray(users.id, seededUserIds));
 });
 
-/** A drive owned by someone else where `admin` is an ADMIN and switched their Imago agents on. */
+/** One of `userId`'s own agents, granted into `driveId` by them through the membership seam. */
+async function grantOwnAgent(userId: string, driveId: string): Promise<string[]> {
+  const own = await factories.createDrive(userId, { name: 'Own' });
+  const agent = await factories.createPage(own.id, { title: 'My agent', type: 'AI_CHAT' });
+  expect((await addAgentToDrive({ actingUserId: userId, agentPageId: agent.id, driveId, requestedRole: 'MEMBER' })).ok).toBe(true);
+  return [agent.id];
+}
+
+/** A drive owned by someone else where `admin` is an ADMIN and granted one of their agents in. */
 async function adminWithImagoIn() {
   const owner = await factories.createUser();
   const admin = await factories.createUser();
   seededUserIds.push(owner.id, admin.id);
-  await factories.createDrive(admin.id, { kind: 'HOME', name: 'Home', slug: 'home' });
   const drive = await factories.createDrive(owner.id, { name: 'Shared' });
   await factories.createDriveMember(drive.id, admin.id, { role: 'ADMIN', acceptedAt: new Date() });
-  const agents = Object.values((await provisionImagoAgents(admin.id)).agents);
-  expect((await setImagoDriveAccess(admin.id, drive.id, true)).ok).toBe(true);
+  const agents = await grantOwnAgent(admin.id, drive.id);
   expect(await agentsIn(drive.id, agents)).toHaveLength(agents.length);
   return { owner, admin, drive, agents };
 }
@@ -107,7 +114,7 @@ function memberActivity(driveId: string, targetUserId: string, operation: 'membe
 }
 
 describe('member removal outside the member route revokes the agent grants the member made', () => {
-  it('given a rollback of the member_add, should remove the member and their Imago agents', async () => {
+  it('given a rollback of the member_add, should remove the member and their agents', async () => {
     const { admin, drive, agents } = await adminWithImagoIn();
 
     await rollbackMemberChange(defaultRollbackDeps(), memberActivity(drive.id, admin.id, 'member_add'));
@@ -116,7 +123,7 @@ describe('member removal outside the member route revokes the agent grants the m
     expect(await agentsIn(drive.id, agents)).toEqual([]);
   });
 
-  it('given a redo of a member_remove, should remove the member and their Imago agents', async () => {
+  it('given a redo of a member_remove, should remove the member and their agents', async () => {
     const { admin, drive, agents } = await adminWithImagoIn();
 
     await redoMemberChange(defaultRollbackDeps(), memberActivity(drive.id, admin.id, 'member_remove'), null, 'member_remove');
@@ -124,7 +131,7 @@ describe('member removal outside the member route revokes the agent grants the m
     expect(await agentsIn(drive.id, agents)).toEqual([]);
   });
 
-  it('given a backup restore that drops the member, should revoke their Imago agents', async () => {
+  it('given a backup restore that drops the member, should revoke their agents', async () => {
     const { admin, drive, agents } = await adminWithImagoIn();
     const memberOps = planMemberRestoreOps([], [{ userId: admin.id }] as never[]);
 
@@ -133,7 +140,7 @@ describe('member removal outside the member route revokes the agent grants the m
     expect(await agentsIn(drive.id, agents)).toEqual([]);
   });
 
-  it('given a backup restore that brings the member back, should keep their Imago agents', async () => {
+  it('given a backup restore that brings the member back, should keep their agents', async () => {
     const { admin, drive, agents } = await adminWithImagoIn();
     const memberOps = planMemberRestoreOps([{ userId: admin.id, role: 'ADMIN' }] as never[], [{ userId: admin.id }] as never[]);
 
@@ -168,16 +175,14 @@ describe('backup restore through the route (real Postgres, real session and CSRF
     return backup.backupId;
   }
 
-  it('given a restore that drops a member, should revoke their Imago agents', async () => {
+  it('given a restore that drops a member, should revoke their agents', async () => {
     const owner = await factories.createUser();
     const admin = await factories.createUser();
     seededUserIds.push(owner.id, admin.id);
-    await factories.createDrive(admin.id, { kind: 'HOME', name: 'Home', slug: 'home' });
     const drive = await factories.createDrive(owner.id, { name: 'Shared' });
     const backupId = await backupOf(drive.id, owner.id);
     await factories.createDriveMember(drive.id, admin.id, { role: 'ADMIN', acceptedAt: new Date() });
-    const agents = Object.values((await provisionImagoAgents(admin.id)).agents);
-    expect((await setImagoDriveAccess(admin.id, drive.id, true)).ok).toBe(true);
+    const agents = await grantOwnAgent(admin.id, drive.id);
     expect(await agentsIn(drive.id, agents)).toHaveLength(agents.length);
 
     await restoreAs(owner.id, drive.id, backupId);
@@ -186,12 +191,11 @@ describe('backup restore through the route (real Postgres, real session and CSRF
     expect(await agentsIn(drive.id, agents)).toEqual([]);
   });
 
-  it("given a backup taken before the owner's lazily created member row, should keep the owner's own Imago agents", async () => {
+  it("given a backup taken before the owner's lazily created member row, should keep the owner's own agents", async () => {
     const owner = await factories.createUser();
     seededUserIds.push(owner.id);
-    await factories.createDrive(owner.id, { kind: 'HOME', name: 'Home', slug: 'home' });
     const drive = await factories.createDrive(owner.id, { name: 'Owned' });
-    const agents = Object.values((await provisionImagoAgents(owner.id)).agents);
+    const agents = await grantOwnAgent(owner.id, drive.id);
     expect(await agentsIn(drive.id, agents)).toHaveLength(agents.length);
     const backupId = await backupOf(drive.id, owner.id);
     // The owner's first visit creates their OWNER row, after the backup.

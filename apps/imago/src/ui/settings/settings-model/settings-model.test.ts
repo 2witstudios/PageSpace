@@ -87,9 +87,9 @@ describe('driveActions', () => {
   test('a member', () => {
     assert({
       given: 'a standard drive the viewer is only a member of',
-      should: 'offer no action: the drive routes refuse non-admins',
+      should: 'offer only their own Imago switch: renaming is for admins',
       actual: driveActions({ ...standard, role: 'MEMBER' }),
-      expected: { rename: false, imagoAccess: false },
+      expected: { rename: false, imagoAccess: true },
     });
   });
 
@@ -151,9 +151,9 @@ describe('imagoAccessOf', () => {
       given: 'GET /api/drives/[driveId]/imago-access',
       should: 'read only whether access is on',
       actual: [
-        imagoAccessOf({ driveId: 'd1', enabled: true, agents: [] }),
-        imagoAccessOf({ driveId: 'd1', enabled: false, agents: [] }),
-        imagoAccessOf({ error: 'Only drive owners and admins can manage Imago access' }),
+        imagoAccessOf({ driveId: 'd1', enabled: true }),
+        imagoAccessOf({ driveId: 'd1', enabled: false }),
+        imagoAccessOf({ error: 'You can only set Imago access for a drive you can access' }),
       ],
       expected: [{ enabled: true }, { enabled: false }, null],
     });

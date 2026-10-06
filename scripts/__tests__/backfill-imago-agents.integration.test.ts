@@ -208,31 +208,32 @@ describe('backfill-imago-agents (Postgres)', () => {
     });
   });
 
-  it('given a Home drive with a deleted agent and a trashed agent, should provision only those', async () => {
-    await seedUser('bf_u_partial');
-    await provisionHomeDriveIfNeeded('bf_u_partial');
-    const before = await liveAgentsOf('bf_u_partial');
-    const [deletedKey, trashedKey, keptKey] = BUILTIN_AGENT_KEYS;
-    await db.execute(sql`DELETE FROM pages WHERE id = ${before[deletedKey]}`);
-    await db.execute(sql`UPDATE pages SET "isTrashed" = true WHERE id = ${before[trashedKey]}`);
+  it('given a Home drive with a deleted agent, should provision it again', async () => {
+    await seedUser('bf_u_deleted');
+    await provisionHomeDriveIfNeeded('bf_u_deleted');
+    const before = await liveAgentsOf('bf_u_deleted');
+    await db.execute(sql`DELETE FROM pages WHERE id = ${before.imago}`);
 
     const { result: summary } = await quietly(() => runBackfill());
 
-    const after = await liveAgentsOf('bf_u_partial');
-    expect(Object.keys(after).sort()).toEqual([...BUILTIN_AGENT_KEYS].sort());
-    expect(after[keptKey]).toBe(before[keptKey]);
-    expect(after[deletedKey]).not.toBe(before[deletedKey]);
-    expect(after[trashedKey]).not.toBe(before[trashedKey]);
-    expect(summary).toMatchObject({
-      scanned: 1,
-      missingHome: 0,
-      missingAgents: 1,
-      agentPagesMissing: 2,
-      homeDrivesProvisioned: 0,
-      usersProvisioned: 1,
-      agentPagesCreated: 2,
-      failed: 0,
-    });
+    const after = await liveAgentsOf('bf_u_deleted');
+    expect(Object.keys(after)).toEqual(['imago']);
+    expect(after.imago).not.toBe(before.imago);
+    expect(summary).toMatchObject({ scanned: 1, missingAgents: 1, agentPagesMissing: 1, agentPagesCreated: 1, failed: 0 });
+  });
+
+  it('given a Home drive with a trashed agent, should provision a fresh one and repoint the key', async () => {
+    await seedUser('bf_u_trashed');
+    await provisionHomeDriveIfNeeded('bf_u_trashed');
+    const before = await liveAgentsOf('bf_u_trashed');
+    await db.execute(sql`UPDATE pages SET "isTrashed" = true WHERE id = ${before.imago}`);
+
+    const { result: summary } = await quietly(() => runBackfill());
+
+    const after = await liveAgentsOf('bf_u_trashed');
+    expect(after.imago).toBeDefined();
+    expect(after.imago).not.toBe(before.imago);
+    expect(summary).toMatchObject({ scanned: 1, missingAgents: 1, agentPagesCreated: 1, failed: 0 });
   });
 
   it('given a completed run, should change nothing on a re-run', async () => {
@@ -409,6 +410,101 @@ describe('backfill-imago-agents (Postgres)', () => {
     expect(dry.output).toMatch(/missing a Home drive:\s+1\n/);
     expect(dry.output).toMatch(/of which own no drive \(get "Getting Started"\):\s+1\n/);
     expect(real.output).toMatch(/still missing a Home drive:\s+0\n/);
+  });
+});
+
+/**
+ * A user provisioned before IMG-10.10, every agent page live: Imago acting
+ * through memberships, the retired Planner and Researcher with pointers, and
+ * MEMBER grants for all three in a STANDARD drive — so only the cleanup
+ * predicate can put them on the work list.
+ */
+async function seedPre1010User(userId: string) {
+  await seedUser(userId, { home: true });
+  await seedStandardDrive(userId);
+  await provisionHomeDriveIfNeeded(userId);
+  const { imago } = await liveAgentsOf(userId);
+  await db.execute(sql`UPDATE pages SET "userScopedAccess" = false WHERE id = ${imago}`);
+  for (const key of ['imago-planner', 'imago-researcher']) {
+    const pageId = `${key}_${userId}`;
+    await db.execute(sql`
+      INSERT INTO pages (id, title, type, "driveId", position, "updatedAt")
+      VALUES (${pageId}, ${key}, 'AI_CHAT', ${`home_${userId}`}, 9, now())`);
+    await db.execute(sql`INSERT INTO user_builtin_agents (id, "userId", key, "pageId") VALUES (${`uba_${pageId}`}, ${userId}, ${key}, ${pageId})`);
+  }
+  for (const pageId of [imago, `imago-planner_${userId}`, `imago-researcher_${userId}`]) {
+    await db.execute(sql`
+      INSERT INTO drive_agent_members (id, "driveId", "agentPageId", role, "addedBy")
+      VALUES (${`dam_${pageId}`}, ${`std_${userId}`}, ${pageId}, 'MEMBER', ${userId})`);
+  }
+  return { imago };
+}
+
+async function cleanupStateOf(userId: string) {
+  const { rows } = await db.execute(sql`
+    SELECT
+      (SELECT array_agg(key ORDER BY key) FROM user_builtin_agents WHERE "userId" = ${userId}) AS keys,
+      (SELECT count(*)::int FROM pages WHERE id LIKE ${'imago-%_' + userId} AND "isTrashed" = false) AS "liveRetired",
+      (SELECT count(*)::int FROM drive_agent_members WHERE "driveId" = ${`std_${userId}`}) AS grants,
+      (SELECT bool_and(p."userScopedAccess") FROM user_builtin_agents u JOIN pages p ON p.id = u."pageId" WHERE u."userId" = ${userId}) AS "userScoped"
+  `);
+  return rows[0];
+}
+
+describe('backfill-imago-agents — IMG-10.10 cleanup (Postgres)', () => {
+  it('given --dry-run and a pre-10.10 user with every agent live, should list them for cleanup and write nothing', async () => {
+    await seedPre1010User('bf_u_old');
+    const before = await rowCounts();
+
+    const { result: summary, output } = await quietly(() => runBackfill({ dryRun: true }));
+
+    expect(summary).toMatchObject({ scanned: 1, missingHome: 0, missingAgents: 0 });
+    expect(output).toContain('user bf_u_old: would provision (0 agent(s) missing, cleanup due)');
+    expect(await rowCounts()).toEqual(before);
+  });
+
+  it('given a pre-10.10 user, should switch Imago to the user\'s reach, trash the retired agents, and drop their pointers and every grant', async () => {
+    await seedPre1010User('bf_u_old');
+
+    const { result: summary } = await quietly(() => runBackfill());
+
+    expect(await cleanupStateOf('bf_u_old')).toEqual({ keys: ['imago'], liveRetired: 0, grants: 0, userScoped: true });
+    expect(summary).toMatchObject({
+      scanned: 1,
+      usersProvisioned: 1,
+      agentPagesCreated: 0,
+      retiredPagesTrashed: 2,
+      agentPagesReconciled: 1,
+      grantsRemoved: 3,
+      failed: 0,
+      remainingMissingAgents: 0,
+    });
+  });
+
+  it('given the cleanup done, should find nobody on a re-run (idempotent)', async () => {
+    await seedPre1010User('bf_u_old');
+    await quietly(() => runBackfill());
+    const before = await rowCounts();
+
+    const { result: summary } = await quietly(() => runBackfill());
+
+    expect(summary).toMatchObject({ scanned: 0, usersProvisioned: 0, remainingMissingAgents: 0 });
+    expect(await rowCounts()).toEqual(before);
+  });
+
+  it('given only a leftover grant row, should still find the user and remove it', async () => {
+    await seedUser('bf_u_grant');
+    await seedStandardDrive('bf_u_grant');
+    await provisionHomeDriveIfNeeded('bf_u_grant');
+    const { imago } = await liveAgentsOf('bf_u_grant');
+    await db.execute(sql`
+      INSERT INTO drive_agent_members (id, "driveId", "agentPageId", role, "addedBy")
+      VALUES ('dam_leftover', 'std_bf_u_grant', ${imago}, 'MEMBER', 'bf_u_grant')`);
+
+    const { result: summary } = await quietly(() => runBackfill());
+
+    expect(summary).toMatchObject({ scanned: 1, grantsRemoved: 1, failed: 0 });
+    expect((await cleanupStateOf('bf_u_grant')).grants).toBe(0);
   });
 });
 

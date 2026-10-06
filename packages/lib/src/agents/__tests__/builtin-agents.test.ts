@@ -2,14 +2,24 @@ import { describe, it, expect } from 'vitest';
 import {
   BUILTIN_AGENTS,
   BUILTIN_AGENT_KEYS,
+  RETIRED_BUILTIN_AGENT_KEYS,
   getBuiltinAgent,
   isBuiltinAgentKey,
 } from '../builtin-agents';
 
 describe('built-in agent registry', () => {
-  it('given the registry, should define exactly the imago, imago-planner and imago-researcher keys', () => {
-    expect([...BUILTIN_AGENT_KEYS]).toEqual(['imago', 'imago-planner', 'imago-researcher']);
+  it('given owner decision 2026-10-06, should define exactly one agent: imago', () => {
+    expect([...BUILTIN_AGENT_KEYS]).toEqual(['imago']);
     expect(BUILTIN_AGENTS.map((agent) => agent.key)).toEqual([...BUILTIN_AGENT_KEYS]);
+  });
+
+  it('given the retired Planner and Researcher, should list their keys as retired and never as live', () => {
+    expect([...RETIRED_BUILTIN_AGENT_KEYS]).toEqual(['imago-planner', 'imago-researcher']);
+    for (const key of RETIRED_BUILTIN_AGENT_KEYS) expect(isBuiltinAgentKey(key)).toBe(false);
+  });
+
+  it('given imago replaces the global assistant, should act with the user\'s own reach (userScopedAccess)', () => {
+    expect(getBuiltinAgent('imago').userScopedAccess).toBe(true);
   });
 
   it('given the registry, should never repeat a key (one pointer row per user and key)', () => {
@@ -44,21 +54,17 @@ describe('built-in agent registry', () => {
     });
   });
 
-  it('given D2, the default imago agent should search across the drives it can reach', () => {
+  it('given the imago persona, should describe the user\'s reach and the drives kept out, never grants or the retired agents', () => {
     const imago = getBuiltinAgent('imago');
-    expect(imago.enabledTools).toEqual(expect.arrayContaining(['multi_drive_search', 'glob_search', 'regex_search', 'read_page']));
-    expect(imago.systemPrompt).toMatch(/permission/i);
+    expect(imago.systemPrompt).toMatch(/their own reach/);
+    expect(imago.systemPrompt).toMatch(/kept you out of/);
+    expect(imago.systemPrompt).not.toMatch(/grant|Planner|Researcher/);
   });
 
-  it('given D2, the planner should manage tasks and the researcher should not write', () => {
-    expect(getBuiltinAgent('imago-planner').enabledTools).toEqual(
-      expect.arrayContaining(['create_task', 'update_task', 'get_assigned_tasks']),
+  it('given stored tools for runs outside its own chat, the imago agent should still search across drives', () => {
+    expect(getBuiltinAgent('imago').enabledTools).toEqual(
+      expect.arrayContaining(['multi_drive_search', 'glob_search', 'regex_search', 'read_page']),
     );
-    const researcher = getBuiltinAgent('imago-researcher').enabledTools;
-    expect(researcher).toEqual(expect.arrayContaining(['multi_drive_search', 'read_page']));
-    for (const write of ['create_page', 'replace_lines', 'insert_content', 'create_task', 'update_task', 'trash_page']) {
-      expect(researcher).not.toContain(write);
-    }
   });
 
   it('given a key, getBuiltinAgent should return that key\'s definition', () => {
@@ -67,7 +73,6 @@ describe('built-in agent registry', () => {
 
   it('given an arbitrary string, isBuiltinAgentKey should accept only registry keys', () => {
     expect(isBuiltinAgentKey('imago')).toBe(true);
-    expect(isBuiltinAgentKey('imago-researcher')).toBe(true);
     expect(isBuiltinAgentKey('Imago')).toBe(false);
     expect(isBuiltinAgentKey('global')).toBe(false);
     expect(isBuiltinAgentKey('')).toBe(false);

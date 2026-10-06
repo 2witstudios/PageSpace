@@ -19,9 +19,7 @@ import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
 import { askUserTools, ASK_USER_TOOL_NAME } from '@/lib/ai/tools/ask-user-tools';
 import { resolveMessageId } from '@/lib/ai/streams/resolveMessageId';
 import { readAgentDispatchDepth } from '@/lib/ai/core/agent-dispatch-depth';
-import { buildLocationTurnPrompt } from '@/lib/ai/core/location-prompt';
 import { buildActivePlanPrompt, getActivePlan } from '@/lib/ai/core/plan-binding';
-import { resolveHomeDriveHint } from '@/lib/ai/core/home-drive-hint';
 import {
   extractClientAskUserResults,
   applyAskUserResultsToGlobalMessage,
@@ -45,9 +43,8 @@ import { startChatGeneration } from './start-chat-generation';
 import { takeOverConversationStreams } from '@/lib/ai/core/stream-takeover';
 import { startGenerationExclusive } from '@/lib/ai/core/start-generation-exclusive';
 import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
-import { getAllowedDriveIds, authSessionIdOf, type AuthResult } from '@/lib/auth';
+import { getAllowedDriveIds, authSessionIdOf, isDriveScopedPrincipal, type AuthResult } from '@/lib/auth';
 import { createAIProvider, updateUserProviderSettings, createProviderErrorResponse, isProviderError, type ProviderRequest } from '@/lib/ai/core/provider-factory';
-import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
 import { extractMessageContent, extractToolCalls, extractToolResults, sanitizeMessagesForModel, convertGlobalAssistantMessageToUIMessage } from '@/lib/ai/core/message-utils';
 import { messageRepository } from '@/lib/repositories/message-repository';
 import { buildAssistantPersistencePayload } from '@/lib/ai/core/persistAssistantParts';
@@ -61,21 +58,12 @@ import {
 } from '@/lib/ai/core/command-processor';
 import { planCommandExecutions } from '@/lib/ai/core/command-resolver';
 import { respondWithHelpAnswer } from '@/lib/ai/core/help-responder';
-import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
 import { buildNonCoreToolNamesPrompt } from '@/lib/ai/core/system-prompt';
-import { buildAgentAwarenessPrompt } from '@/lib/ai/core/agent-awareness';
-import { filterToolsForReadOnly, filterToolsForWebSearch, filterToolsForImageGen, filterToolsForSandboxTier, filterToolsForAgentAccounts } from '@/lib/ai/core/tool-filtering';
 import { resolveSandboxToolEligibilityForConversation } from '@/lib/ai/core/sandbox-tool-eligibility';
-import { shouldExposeImageGen } from '@/lib/ai/core/image-gen-access';
-import { getPageTreeContext, getDriveListSummary } from '@/lib/ai/core/page-tree-context';
 import { getModelCapabilities, DEFAULT_IMAGE_MODEL } from '@/lib/ai/core/model-capabilities';
 import { convertMCPToolsToAISDKSchemas, parseMCPToolName, sanitizeToolNamesForProvider } from '@/lib/ai/core/mcp-tool-converter';
-import { getUserPersonalization, getUserTimezone } from '@/lib/ai/core/personalization-utils';
-import { splitToolsForExposure, excludeAlwaysUpfront, ALWAYS_UPFRONT_TOOLS } from '@/lib/ai/tools/tool-exposure';
-import { createExecuteTool } from '@/lib/ai/tools/execute-tool';
 import { db } from '@pagespace/db/db'
 import { eq } from '@pagespace/db/operators'
-import { drives } from '@pagespace/db/schema/core'
 import { users } from '@pagespace/db/schema/auth';
 import { decryptField } from '@pagespace/lib/encryption/field-crypto';
 import { conversations } from '@pagespace/db/schema/conversations';
@@ -103,9 +91,8 @@ import { resolveRequestContext } from '@/lib/ai/core/resolve-request-context';
 import { validateUserMessageFileParts, hasFileParts } from '@/lib/ai/core/validate-image-parts';
 import { hasVisionCapability } from '@/lib/ai/core/model-capabilities';
 import { guardReadPageToolForVision } from '@/lib/ai/tools/read-page-vision-output';
-import { createToolSearchTool } from '@/lib/ai/tools/tool-search-tool';
-import { buildBuiltinSkillCatalog, listEligibleSkills } from '@/lib/ai/core/skill-catalog';
-import { loadUserCommandCatalog } from '@/lib/commands/command-catalog-loader';
+import { buildBuiltinSkillCatalog } from '@/lib/ai/core/skill-catalog';
+import { buildAssistantContext, selectAssistantTools } from '@/lib/ai/chat-pipeline/assistant-surface';
 import {
   buildAgentSystemPrompt,
   buildVolatileTurnContext,
@@ -821,77 +808,6 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
         return msg;
       });
 
-    // Fetch user personalization and timezone for AI system prompt injection
-    const [personalization, userTimezone] = await Promise.all([
-      getUserPersonalization(userId),
-      getUserTimezone(userId),
-    ]);
-    turnTimer.mark('personalization');
-    if (personalization) {
-      loggers.api.debug('Global Assistant: User personalization loaded', {
-        hasPersonalization: true,
-        hasBio: !!personalization.bio,
-        hasWritingStyle: !!personalization.writingStyle,
-        hasRules: !!personalization.rules,
-      });
-    }
-
-    // The system prompt itself is assembled once, below, by
-    // `buildAgentSystemPrompt` — every input it needs is gathered first. Note
-    // that "current page/drive" is turn-volatile: it is built separately as
-    // `locationPrompt` and injected via buildVolatileTurnContext, NOT baked
-    // into the system prompt, so that string stays byte-identical across turns
-    // regardless of where the user navigates.
-    const hasLocation = Boolean(locationContext?.currentPage || locationContext?.currentDrive);
-    // Session-only surface (AUTH_OPTIONS_WRITE allows 'session' only), so the scope
-    // ceiling is always empty here. Passed explicitly anyway so this stays correct
-    // by construction if the allowed auth methods ever widen.
-    const locationHomeDriveId = await resolveHomeDriveHint(userId, hasLocation, getAllowedDriveIds(auth));
-    turnTimer.mark('home_drive_resolved');
-
-    const locationPrompt = buildLocationTurnPrompt(locationContext ? {
-      currentPage: locationContext.currentPage,
-      currentDrive: locationContext.currentDrive,
-      breadcrumbs: locationContext.breadcrumbs,
-      homeDriveId: locationHomeDriveId,
-    } : { homeDriveId: locationHomeDriveId });
-
-    // Build timestamp system prompt for temporal awareness (using user's timezone)
-    const timestampSystemPrompt = buildTimestampSystemPrompt(userTimezone);
-
-    // Fetch drive prompt if user is within a drive
-    let drivePromptSection = '';
-    if (locationContext?.currentDrive?.id) {
-      try {
-        const [drive] = await db
-          .select({ drivePrompt: drives.drivePrompt })
-          .from(drives)
-          .where(eq(drives.id, locationContext.currentDrive.id))
-          .limit(1);
-
-        if (drive?.drivePrompt?.trim()) {
-          drivePromptSection = `\n\n## DRIVE INSTRUCTIONS\n\nThe following custom instructions have been set for this drive by the drive owner:\n\n${drive.drivePrompt}`;
-          loggers.api.debug('Global Assistant Chat API: Including drive prompt', {
-            driveId: locationContext.currentDrive.id,
-            promptLength: drive.drivePrompt.length
-          });
-        }
-      } catch (error) {
-        loggers.api.error('Global Assistant Chat API: Failed to fetch drive prompt', error as Error);
-        // Continue without drive prompt on error
-      }
-      turnTimer.mark('drive_prompt_loaded');
-    }
-
-    // The Global Assistant's own guidance — the exploration rules and the
-    // conversation-type report — now lives beside the page surface's assembly in
-    // `buildAgentSystemPrompt`, so the two can be read against each other.
-    // Workspace knowledge (page types, tasks, agents, automation, search,
-    // mentions) comes from the SHARED inline-instructions sections: this route
-    // previously carried a bespoke copy that drifted (it claimed tasks create
-    // linked DOCUMENT pages; they create TASK_LIST children), which is the
-    // reason there is one assembly now rather than three.
-
     // The PAYER's sandbox eligibility for this Global Assistant turn —
     // derived from the conversation's BOUND SESSION, never the location
     // drive (review #2326, two rounds): an unbound global conversation gets
@@ -912,86 +828,48 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
     );
     turnTimer.mark('sandbox_eligibility');
 
-    // Build agent awareness prompt - lists visible AI agents for consultation
-    // `canDelegate` mirrors the session-tool gate: spawn_session registers
-    // regardless of the CODE_EXECUTION kill-switch (the chat-only session
-    // family is free conversation orchestration, see `buildPageSpaceTools`),
-    // but `filterToolsForReadOnly` strips it as a write tool — and a prompt
-    // that names a tool the model does not have makes it attempt delegation
-    // that silently fails. The payer-tier filter does NOT remove the
-    // chat-only session family (sessions are free on every plan), so tier is
-    // deliberately not weighed here.
-    const agentAwarenessPrompt = await buildAgentAwarenessPrompt(userId, {
-      canDelegate: !readOnlyMode,
-    });
-    turnTimer.mark('agent_awareness_built');
-
-    // Build page tree context if enabled
-    let pageTreePrompt = '';
-    if (showPageTree) {
-      if (locationContext?.currentDrive?.id) {
-        // In drive context: show full drive tree
-        const treeContext = await getPageTreeContext(userId, {
-          scope: 'drive',
-          driveId: locationContext.currentDrive.id,
-        });
-        turnTimer.mark('page_tree_loaded');
-        if (treeContext) {
-          pageTreePrompt = `\n\n## WORKSPACE STRUCTURE\n\nHere is the complete workspace structure:\n\n${treeContext}`;
-          loggers.api.debug('Global Assistant: Page tree context included', {
-            driveId: locationContext.currentDrive.id,
-            contextLength: treeContext.length
-          });
-        }
-      } else {
-        // Dashboard context: show drive list summary
-        const driveSummary = await getDriveListSummary(userId);
-        turnTimer.mark('drive_summary_loaded');
-        if (driveSummary) {
-          pageTreePrompt = `\n\n## ACCESSIBLE WORKSPACES\n\n${driveSummary}`;
-          loggers.api.debug('Global Assistant: Drive list summary included', {
-            summaryLength: driveSummary.length
-          });
-        }
-      }
-    }
-
-    // Full filtered tool set. NOT sent to model directly; used as dispatch map for
-    // execute_tool and as tool_search catalog. The COMPUTE tools (bash/files,
-    // git+gh, PTY shells — not the free chat-session family) are stripped for a tier-ineligible payer BEFORE
-    // anything reads this set — including `resolveGlobalAssistantIntegrationTools`
-    // below, whose sandbox-git-overlap suppression keys on these tool NAMES.
-    const filteredAllTools = filterToolsForImageGen(
-      filterToolsForWebSearch(
-        filterToolsForReadOnly(
-          filterToolsForAgentAccounts(filterToolsForSandboxTier(pageSpaceTools, sandboxTierEligible)),
-          readOnlyMode
-        ),
-        webSearchMode
-      ),
-      shouldExposeImageGen({
-        imageGenEnabled: imageGenEnabled === true,
-        isAdmin: auth.role === 'admin',
-        hasToolDef: true,
-      })
-    ) as ToolSet;
-
-    // Core tools (plus the always-upfront runtime toggles) go to the model with full
-    // schemas; everything else is hidden from the model and reachable only via
-    // execute_tool.
-    const { coreTools, nonCoreTools } = splitToolsForExposure(filteredAllTools, ALWAYS_UPFRONT_TOOLS);
-
-    // Capability catalog: built-in skills join the stable prompt; the
-    // per-viewer command list rides the volatile turn context below. Both
-    // feed tool_search's corpus so discovery has one search surface.
-    const availableToolNames = Object.keys(filteredAllTools);
-    const eligibleSkills = listEligibleSkills(availableToolNames);
-    const userCommandCatalog = await loadUserCommandCatalog(
+    // Location, drive prompt, personalization and timezone, agent awareness and
+    // the drive tree: the ONE assembly Imago's turn runs too
+    // (`assistant-surface.ts`). Session-only surface (AUTH_OPTIONS_WRITE allows
+    // 'session' only), so the scope ceiling is always empty here; passed
+    // explicitly anyway so this stays correct if the auth methods ever widen.
+    const assistantContext = await buildAssistantContext({
       userId,
-      locationContext?.currentDrive?.id ?? null,
-      availableToolNames
-    );
-    turnTimer.mark('commands_loaded');
+      location: locationContext ?? null,
+      readOnly: readOnlyMode,
+      showPageTree: showPageTree === true,
+      allowedDriveIds: getAllowedDriveIds(auth),
+      timer: turnTimer,
+    });
+    const { personalization, locationPrompt, drivePromptSection, agentAwarenessPrompt, pageTreePrompt } = assistantContext;
+    const timestampSystemPrompt = assistantContext.timestampPrompt;
+    const userTimezone = assistantContext.timezone;
+
+    // The Global Assistant's own guidance — the exploration rules and the
+    // conversation-type report — lives beside the page surface's assembly in
+    // `buildAgentSystemPrompt`, so the two can be read against each other.
+
+    // The Global Assistant's tools — the selection Imago's turn shares
+    // (`selectAssistantTools`): core tools up front, the rest behind
+    // tool_search/execute_tool, the payer-tier compute gate applied before
+    // anything (integration suppression included) reads the set.
+    const toolSelection = await selectAssistantTools({
+      userId,
+      readOnly: readOnlyMode,
+      webSearch: webSearchMode,
+      imageGen: imageGenEnabled === true,
+      isAdmin: auth.role === 'admin',
+      sandboxTierEligible,
+      // Session-only surface (AUTH_OPTIONS_WRITE allows 'session' only), so
+      // this is always false today; passed explicitly like allowedDriveIds
+      // above so the surface stays correct if the auth methods ever widen.
+      driveScoped: isDriveScopedPrincipal(auth),
+      commandDriveId: locationContext?.currentDrive?.id ?? null,
+      timer: turnTimer,
+    });
+    const filteredAllTools = toolSelection.allTools;
+    const userCommandCatalog = toolSelection.userCommandCatalog;
+    const availableToolNames = Object.keys(filteredAllTools);
     const skillCatalogPrompt = buildBuiltinSkillCatalog(availableToolNames);
 
     // Active plan pointer. Same volatility class as the skill catalog: it
@@ -1003,7 +881,7 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
     turnTimer.mark('active_plan_loaded');
     const activePlanPrompt = buildActivePlanPrompt(activePlan);
 
-    const nonCoreToolNamesPrompt = buildNonCoreToolNamesPrompt(Object.keys(nonCoreTools));
+    const nonCoreToolNamesPrompt = buildNonCoreToolNamesPrompt(toolSelection.nonCoreToolNames);
     const finalSystemPrompt = buildAgentSystemPrompt({
       surface: 'global',
       readOnly: readOnlyMode,
@@ -1022,14 +900,7 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
 
     turnTimer.mark('system_prompt');
 
-    let finalTools: ToolSet = {
-      ...coreTools,
-      tool_search: createToolSearchTool(
-        excludeAlwaysUpfront(filteredAllTools, ALWAYS_UPFRONT_TOOLS),
-        [...eligibleSkills, ...userCommandCatalog.searchEntries]
-      ),
-      execute_tool: createExecuteTool(nonCoreTools),
-    };
+    let finalTools: ToolSet = toolSelection.tools;
 
     // Guard against a stale read_page tool-result (image bytes delivered on an
     // earlier turn when the model had vision) being re-embedded as an image when
@@ -1047,21 +918,14 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
       totalTools: Object.keys(finalTools).length
     });
 
-    // INTEGRATION TOOLS: Resolve and merge integration tools for global assistant
+    // INTEGRATION TOOLS: the shared assistant resolver (Imago runs it too).
     try {
       const integrationResolver = await import('@/lib/ai/core/integration-tool-resolver');
       turnTimer.mark('integrations_import');
-      // A drive the user is not a member of resolves no drive-scoped integrations.
-      const { driveId: currentDriveId, userDriveRole } = await integrationResolver.resolveIntegrationDriveScope(
+      const integrationTools = await integrationResolver.resolveAssistantIntegrationTools({
         userId,
-        locationContext?.currentDrive?.id || null,
-      );
-      // The lookup ran whenever a drive was in view, member or not.
-      if (locationContext?.currentDrive?.id) turnTimer.mark('drive_access_checked');
-      const integrationTools = await integrationResolver.resolveGlobalAssistantIntegrationTools({
-        userId,
-        driveId: currentDriveId,
-        userDriveRole,
+        agentId: null,
+        driveInView: locationContext?.currentDrive?.id || null,
         // filteredAllTools (not finalTools) carries raw tool names as top-level
         // keys — finalTools is always { ...coreTools, tool_search, execute_tool },
         // which never contains sandbox git/gh tool names directly.

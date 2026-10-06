@@ -117,7 +117,7 @@ describe('no-location Home drive hint', () => {
   });
 });
 
-describe('buildLocationTurnPrompt — agent access (IMG-4.7, built-in Imago agents)', () => {
+describe('buildLocationTurnPrompt — agent access (IMG-10.10, a drive the user keeps Imago out of)', () => {
   const drive = { name: 'Acme Plans', slug: 'acme', id: 'drive_acme' };
 
   it('given no agentAccess, should render exactly what it rendered before', () => {
@@ -126,27 +126,17 @@ describe('buildLocationTurnPrompt — agent access (IMG-4.7, built-in Imago agen
     );
   });
 
-  it('given a granted drive, should state the role and keep the act-here defaults', () => {
-    const result = buildLocationTurnPrompt({ currentDrive: drive, agentAccess: { kind: 'granted', role: 'MEMBER' } });
-    expect(result).toContain('• Your access here: granted (MEMBER)');
-    expect(result).toContain('to act on THIS workspace');
-  });
-
-  it("given the user's Home drive, should say it is where the agent lives", () => {
-    const result = buildLocationTurnPrompt({ currentDrive: drive, agentAccess: { kind: 'home' } });
-    expect(result).toContain("• Your access here: this is the user's Home drive, where you live");
-  });
-
-  it('given an ungranted drive, should say so and drop the defaults that would send the agent there', () => {
-    const result = buildLocationTurnPrompt({ currentDrive: drive, agentAccess: { kind: 'not-granted' } });
-    expect(result).toContain('• Your access here: not granted');
-    expect(result).toContain('• Current workspace: "Acme Plans"');
+  it('given a drive the user keeps Imago out of, should say so, name nothing in it, and drop the defaults that would send the agent there', () => {
+    const page = { title: 'Secret Plan', type: 'DOCUMENT', path: '/acme/secret', id: 'page_secret' };
+    const result = buildLocationTurnPrompt({ currentDrive: drive, currentPage: page, breadcrumbs: ['Acme Plans', 'Secret Plan'], agentAccess: { kind: 'excluded' } });
+    expect(result).toContain('a workspace they keep you out of');
+    for (const hidden of ['Acme Plans', 'Secret Plan', 'drive_acme', 'page_secret', '/acme/secret']) expect(result).not.toContain(hidden);
     expect(result).not.toContain('Default scope');
     expect(result).not.toContain('Start with list_pages on this drive');
     expect(result).not.toContain('to act on THIS workspace');
   });
 
   it('given no location at all, should ignore agentAccess', () => {
-    expect(buildLocationTurnPrompt({ agentAccess: { kind: 'not-granted' } })).toBe(buildLocationTurnPrompt({}));
+    expect(buildLocationTurnPrompt({ agentAccess: { kind: 'excluded' } })).toBe(buildLocationTurnPrompt({}));
   });
 });

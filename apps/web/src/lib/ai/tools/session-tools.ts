@@ -80,6 +80,7 @@ import type { ShellDTO } from '@pagespace/lib/agent-workspaces/shells-contract';
 import type { PaneTargetKind } from '@pagespace/lib/agent-workspaces/workspace-node';
 import { MAX_SIBLINGS } from '@pagespace/lib/agent-workspaces/workspace-node-validate';
 import type { ToolExecutionContext } from '../core/types';
+import { nullableDriveDeniedForActor } from './actor-permissions';
 import type { AgentToolSurface } from '../core/agent-tool-surface';
 
 /** Upper bound on one dispatched input — a task brief or a keystroke burst, not a file. */
@@ -859,11 +860,14 @@ function readDepth(context: ToolExecutionContext | undefined): number {
  * `@pagespace/lib/agent-workspaces/credential-scope`, single-sourced because
  * this layer and the production runtime both apply it and briefly disagreed.
  */
-function withinCredentialScope(
+async function withinCredentialScope(
   context: ToolExecutionContext | undefined,
   workspaceDriveId: string | null,
-): boolean {
-  return isDriveWithinCredentialScope(context?.mcpAllowedDriveIds, workspaceDriveId);
+): Promise<boolean> {
+  if (!isDriveWithinCredentialScope(context?.mcpAllowedDriveIds, workspaceDriveId)) return false;
+  // And the actor's: a drive the user keeps their Imago agent out of holds no
+  // session it can see or address (IMG-10.10). A no-op for every other actor.
+  return !(context && await nullableDriveDeniedForActor(context, workspaceDriveId));
 }
 
 /**
@@ -1152,7 +1156,7 @@ export function createSessionTools(deps: SessionToolsDeps): {
     // that subset must read as nonexistent to it even when the person behind it
     // could reach the worker perfectly well. This applies to the caller's OWN
     // workers too — ownership is not an escape from scope (PR review, P1).
-    if (!withinCredentialScope(context, row.workspaceDriveId)) {
+    if (!(await withinCredentialScope(context, row.workspaceDriveId))) {
       return { ok: false, error: notYourSession(conversationId) };
     }
     if (row.ownerId !== actor.userId) {
@@ -1227,7 +1231,7 @@ export function createSessionTools(deps: SessionToolsDeps): {
     // touch (see the note in `list_sessions`). Answers NO_GRID rather than
     // GRID_ACCESS_LOST: nothing was lost, it was never in scope, and the
     // less specific answer is the fail-closed one.
-    if (!withinCredentialScope(context, workspace.driveId)) return { ok: false, error: NO_GRID };
+    if (!(await withinCredentialScope(context, workspace.driveId))) return { ok: false, error: NO_GRID };
     const access = await deps.checkWorkspaceAccess(actor.userId, workspace.workspaceId);
     if (!access.allowed) return { ok: false, error: GRID_ACCESS_LOST };
     return { ok: true, workspaceId: workspace.workspaceId, viewerId: actor.userId };
@@ -1325,7 +1329,7 @@ export function createSessionTools(deps: SessionToolsDeps): {
     // The CREDENTIAL's ceiling first: a shell is live PTY access to a sandbox,
     // and a binding can point at a workspace in a drive this token may not
     // touch (see the note in `list_sessions`).
-    if (!withinCredentialScope(context, workspace.driveId)) {
+    if (!(await withinCredentialScope(context, workspace.driveId))) {
       return { ok: false, error: notYourShell(shellId) };
     }
     // Revocation check, before the shell row is read: a caller who may no
@@ -1379,7 +1383,7 @@ export function createSessionTools(deps: SessionToolsDeps): {
         // the bound workspace need not share a drive.
         const workspace =
           boundWorkspace &&
-          withinCredentialScope(context, boundWorkspace.driveId) &&
+          (await withinCredentialScope(context, boundWorkspace.driveId)) &&
           (await deps.checkWorkspaceAccess(actor.userId, boundWorkspace.workspaceId)).allowed
             ? boundWorkspace
             : null;
@@ -1410,12 +1414,12 @@ export function createSessionTools(deps: SessionToolsDeps): {
         //
         // The BOUND workspace above gets the same filter, for the same reason —
         // see the note there on why its drive can differ from the agent page's.
-        const otherWorkspaces = ownWorkspaces.filter((w) =>
-          withinCredentialScope(context, w.driveId),
-        );
-        const sharedWorkspaces = memberWorkspaces.filter((w) =>
-          withinCredentialScope(context, w.driveId),
-        );
+        const inScope = async <W extends { driveId: string | null }>(list: W[]) => {
+          const keep = await Promise.all(list.map((w) => withinCredentialScope(context, w.driveId)));
+          return list.filter((_w, index) => keep[index]);
+        };
+        const otherWorkspaces = await inScope(ownWorkspaces);
+        const sharedWorkspaces = await inScope(memberWorkspaces);
 
         if (!conversationId || !workspace) {
           // No conversation, or a plain one with no workspace: nothing HERE,
@@ -1868,7 +1872,7 @@ export function createSessionTools(deps: SessionToolsDeps): {
         // workspace in the agent's own drive, which the page-scope check
         // upstream has already admitted.
         const existing = await deps.findOwnWorkspace(conversationId);
-        if (existing && !withinCredentialScope(context, existing.driveId)) {
+        if (existing && !(await withinCredentialScope(context, existing.driveId))) {
           return { success: false, error: NO_SANDBOX_IN_SCOPE };
         }
 
@@ -1987,7 +1991,7 @@ export function createSessionTools(deps: SessionToolsDeps): {
         // into the already-gone answer below without telling them which it was.
         const workspace = await deps.findOwnWorkspace(conversationId);
         const stillAllowed =
-          workspace && withinCredentialScope(context, workspace.driveId)
+          workspace && (await withinCredentialScope(context, workspace.driveId))
             ? (await deps.checkWorkspaceAccess(actor.userId, workspace.workspaceId)).allowed
             : false;
         const shell = await deps.findShell(shellId);

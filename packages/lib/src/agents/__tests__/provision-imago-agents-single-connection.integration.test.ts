@@ -77,23 +77,34 @@ describe('Imago agent provisioning on a single-connection pool (real Postgres)',
     for (const log of logs) expect(log.actorEmail).toBe(user.email);
   }, 20_000);
 
-  it('given DB_POOL_MAX=1 and owned STANDARD drives, should grant the new agents there promptly, after the lock is released', async () => {
+  it('given DB_POOL_MAX=1 and a pre-10.10 user, should clean up promptly on the transaction, with the real actor on every row', async () => {
     if (!dbAvailable) return;
     const user = await factories.createUser();
     const owned = await factories.createDrive(user.id, { name: 'Owned' });
+    await provisionHomeDriveIfNeeded(user.id);
+    const [pointer] = await db.select().from(userBuiltinAgents).where(eq(userBuiltinAgents.userId, user.id));
+    const [imago] = await db.select({ driveId: pages.driveId }).from(pages).where(eq(pages.id, pointer.pageId));
+    // The earlier model's state: acting through memberships, a retired agent, a drive grant.
+    await db.update(pages).set({ userScopedAccess: false }).where(eq(pages.id, pointer.pageId));
+    const retired = await factories.createPage(imago.driveId, { title: 'Imago Planner', type: 'AI_CHAT' });
+    await db.insert(userBuiltinAgents).values({ userId: user.id, key: 'imago-planner', pageId: retired.id });
+    await db.insert(driveAgentMembers).values({ driveId: owned.id, agentPageId: pointer.pageId, role: 'MEMBER', addedBy: user.id });
 
-    // addAgentToDrive reads through the global pool. Run under the Home
-    // transaction it would wait 10 s for the pool's only connection (and could
-    // not see the uncommitted agent pages anyway).
+    // Every read the cleanup makes must ride the transaction: through the
+    // global pool it would wait 10 s for the pool's only connection.
     const started = Date.now();
     await provisionHomeDriveIfNeeded(user.id);
     expect(Date.now() - started).toBeLessThan(PROMPT_MS);
 
-    const pointers = await db.select().from(userBuiltinAgents).where(eq(userBuiltinAgents.userId, user.id));
-    const grants = await db
-      .select({ agentPageId: driveAgentMembers.agentPageId })
-      .from(driveAgentMembers)
-      .where(and(eq(driveAgentMembers.driveId, owned.id), inArray(driveAgentMembers.agentPageId, pointers.map((p) => p.pageId))));
-    expect(grants).toHaveLength(BUILTIN_AGENT_KEYS.length);
+    const grants = await db.select().from(driveAgentMembers).where(eq(driveAgentMembers.driveId, owned.id));
+    expect(grants).toEqual([]);
+    const [page] = await db.select({ userScopedAccess: pages.userScopedAccess }).from(pages).where(eq(pages.id, pointer.pageId));
+    expect(page.userScopedAccess).toBe(true);
+    const logs = await db
+      .select({ actorEmail: activityLogs.actorEmail })
+      .from(activityLogs)
+      .where(and(inArray(activityLogs.operation, ['update', 'trash']), inArray(activityLogs.pageId, [pointer.pageId, retired.id])));
+    expect(logs).toHaveLength(2);
+    for (const log of logs) expect(log.actorEmail).toBe(user.email);
   }, 20_000);
 });

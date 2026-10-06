@@ -10,13 +10,9 @@ import type {
   ConversationMessagesResponse,
 } from './chat';
 
-const PROVISIONED: readonly BuiltinAgentPointer[] = [
-  { key: 'imago', pageId: 'p-imago', title: 'Imago' },
-  { key: 'imago-planner', pageId: 'p-planner', title: 'Planner' },
-  { key: 'imago-researcher', pageId: 'p-researcher', title: 'Researcher' },
-];
+const PROVISIONED: readonly BuiltinAgentPointer[] = [{ key: 'imago', pageId: 'p-imago', title: 'Imago' }];
 
-/** GET /api/user/builtin-agents for a viewer with every agent provisioned, unless `pageIds` says otherwise. */
+/** GET /api/user/builtin-agents for a viewer with Imago provisioned, unless `pageIds` says otherwise. */
 export const pointers = (pageIds: Partial<Record<BuiltinAgentKey, string | null>> = {}): BuiltinAgentsResponse => ({
   agents: PROVISIONED.map((agent) => (agent.key in pageIds ? { ...agent, pageId: pageIds[agent.key] ?? null } : agent)),
 });
