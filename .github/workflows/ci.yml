@@ -442,7 +442,7 @@ jobs:
       AWS_ACCESS_KEY_ID: e2e
       AWS_SECRET_ACCESS_KEY: e2e-not-a-real-secret
       BUCKET_NAME: pagespace-e2e
-      E2E_SPECS: tests/15-chat-fixture-smoke.spec.ts tests/16-dispatch-multiplayer.spec.ts tests/17-agent-workspace-grid.spec.ts tests/18-sidebar-directory-live.spec.ts tests/19-channels-badge-live.spec.ts tests/20-pane-lifecycle.spec.ts tests/26-imago-api-proxy.spec.ts tests/27-imago-shell.spec.ts tests/28-imago-settings.spec.ts tests/29-imago-messages.spec.ts tests/30-imago-palette.spec.ts tests/31-imago-chat.spec.ts tests/32-imago-files.spec.ts tests/33-imago-tasks.spec.ts
+      E2E_SPECS: tests/15-chat-fixture-smoke.spec.ts tests/16-dispatch-multiplayer.spec.ts tests/17-agent-workspace-grid.spec.ts tests/18-sidebar-directory-live.spec.ts tests/19-channels-badge-live.spec.ts tests/20-pane-lifecycle.spec.ts tests/26-imago-api-proxy.spec.ts tests/27-imago-shell.spec.ts tests/28-imago-settings.spec.ts tests/29-imago-messages.spec.ts tests/30-imago-palette.spec.ts tests/31-imago-chat.spec.ts tests/32-imago-files.spec.ts tests/33-imago-tasks.spec.ts tests/34-imago-visual.spec.ts tests/35-imago-visual-control.spec.ts
 
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
