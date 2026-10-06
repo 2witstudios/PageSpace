@@ -30,6 +30,7 @@ import {
 } from '@/lib/orgs/org-api';
 import { post } from '@/lib/auth/auth-fetch';
 import { orgErrorMessage } from '@/lib/orgs/org-error-copy';
+import { visibilityChangeAllowed } from '@/lib/orgs/org-lapse';
 import { driveMembersLabel, movableDrives, VISIBILITY_COPY } from '@/lib/orgs/org-drives';
 import { formatBytes } from '@/lib/utils/utils';
 import { cn } from '@/lib/utils/index';
@@ -41,7 +42,7 @@ const VISIBILITIES = Object.keys(VISIBILITY_COPY) as Visibility[];
 const FLOOR_FALLBACK =
   "This organization's floor needs the drive's default role to allow editing before it can be Open. Keep it Restricted, give it an Edit default role in the drive's Roles, then switch it to Open.";
 
-function VisibilitySelect({ value, onChange, label, disabled, className }: { value: Visibility; onChange: (v: Visibility) => void; label: string; disabled?: boolean; className?: string }) {
+function VisibilitySelect({ value, onChange, label, disabled, offered, className }: { value: Visibility; onChange: (v: Visibility) => void; label: string; disabled?: boolean; offered?: (v: Visibility) => boolean; className?: string }) {
   return (
     <Select value={value} onValueChange={(v) => onChange(v as Visibility)} disabled={disabled}>
       <SelectTrigger aria-label={label} className={cn('h-8', className)}>
@@ -49,7 +50,7 @@ function VisibilitySelect({ value, onChange, label, disabled, className }: { val
       </SelectTrigger>
       <SelectContent>
         {VISIBILITIES.map((v) => (
-          <SelectItem key={v} value={v}>{VISIBILITY_COPY[v].label}</SelectItem>
+          <SelectItem key={v} value={v} disabled={offered ? !offered(v) : false}>{VISIBILITY_COPY[v].label}</SelectItem>
         ))}
       </SelectContent>
     </Select>
@@ -257,7 +258,7 @@ function DrivesPageBody({ orgId, orgName, role, lapsed }: OrgSettingsContext) {
           </Button>
         </div>
       </div>
-      {lapsed ? <div className="mb-3"><PausedWhileUnpaid>Moving drives in and creating org drives are paused while unpaid.</PausedWhileUnpaid></div> : null}
+      {lapsed ? <div className="mb-3"><PausedWhileUnpaid>Moving drives in and creating org drives are paused while unpaid. Making a drive more open is paused while unpaid; making one less open still works.</PausedWhileUnpaid></div> : null}
 
       <div className="overflow-hidden rounded-lg border bg-card">
         <div className="hidden items-center gap-4 bg-muted px-4 py-2 text-xs text-muted-foreground md:flex">
@@ -283,6 +284,7 @@ function DrivesPageBody({ orgId, orgName, role, lapsed }: OrgSettingsContext) {
                     onChange={(v) => void setVisibility(d, v)}
                     label={`Visibility of ${d.name}`}
                     disabled={changing !== null}
+                    offered={(v) => visibilityChangeAllowed(lapsed, d.orgVisibility, v)}
                     className="w-[120px]"
                   />
                   <span className="text-xs tabular-nums text-muted-foreground md:w-[90px]">{driveMembersLabel(u)}</span>
