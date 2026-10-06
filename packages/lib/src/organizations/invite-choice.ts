@@ -28,7 +28,8 @@ export function guestChoice(input: { driveName: string; orgName: string; guestPo
     case 'on':
       return { enabled: true, needsApproval: false, hint: base };
     default:
-      return { enabled: true, needsApproval: false, hint: `${base} May need approval from a ${input.orgName} admin.` };
+      // The inviter cannot read the policy (only Owner and Admins can): say what it may do, not a guess.
+      return { enabled: true, needsApproval: false, hint: `${base} Depends on the ${input.orgName} Guests policy: an admin may need to approve it, or guests may be turned off.` };
   }
 }
 

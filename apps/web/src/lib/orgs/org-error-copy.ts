@@ -113,3 +113,10 @@ export function orgErrorMessage(err: unknown, fallback: string): string {
   const code = orgErrorCode(err);
   return code ? ORG_ERROR_COPY[code] : fallback;
 }
+
+/** The org policy a refusal names (`org_policy` answers carry `policy`), or null. */
+export function orgErrorPolicy(err: unknown): string | null {
+  if (orgErrorCode(err) !== 'org_policy') return null;
+  const policy = (err as ApiRequestError & { body: { policy?: unknown } }).body.policy;
+  return typeof policy === 'string' ? policy : null;
+}

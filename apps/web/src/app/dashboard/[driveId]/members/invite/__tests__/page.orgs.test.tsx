@@ -19,14 +19,16 @@ vi.mock('@/hooks/useDebounce', () => ({ useDebounce: <T,>(v: T) => v }));
 vi.mock('@/hooks/useMyOrganizations', () => ({ useMyOrganizations: () => ({ orgById: (id: string | null) => (id ? { id, name: 'Northwind Labs' } : null) }) }));
 
 import InviteMemberPage from '../page';
+import { ApiRequestError } from '@/lib/auth/auth-fetch';
 import { useDriveStore } from '@/hooks/useDrive';
 
 const okJson = (d: unknown) => Promise.resolve({ ok: true, json: () => Promise.resolve(d) });
-const serve = (guests: 'on' | 'approve' | 'off') =>
+const serve = (guests: 'on' | 'approve' | 'off' | 'unreadable') =>
   mockFetchWithAuth.mockImplementation((url: string) => {
     if (url.includes('/roles')) return okJson({ roles: [] });
     if (url.endsWith('/api/orgs/o-northwind/members')) return okJson({ members: [{ userId: 'u-priya', email: 'priya@northwind.com' }] });
-    if (url.endsWith('/api/orgs/o-northwind/policies')) return okJson({ policies: { guests } });
+    // An inviter who is not an org Owner or Admin cannot read the policies.
+    if (url.endsWith('/api/orgs/o-northwind/policies')) return guests === 'unreadable' ? Promise.resolve({ ok: false, status: 403, json: () => Promise.resolve({ code: 'insufficient_role' }) }) : okJson({ policies: { guests } });
     return okJson({ users: [] });
   });
 
@@ -71,6 +73,19 @@ describe('Invite to an org drive', () => {
     serve('off');
     render(<SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}><InviteMemberPage /></SWRConfig>);
     await typeEmail('chris@partner.co');
+    await waitFor(() => expect(screen.getByRole('radio', { name: /As a guest of this drive/ }).hasAttribute('disabled')).toBe(true));
+    expect(screen.getByRole('radio', { name: /As a member of Northwind Labs/ }).getAttribute('aria-checked')).toBe('true');
+  });
+
+  it('UI-5 (partial) POL-2 (partial) an inviter who cannot read the Guests policy is told it may need approval or be off; a guests refusal names the policy and turns the guest choice off', async () => {
+    serve('unreadable');
+    mockPost.mockRejectedValue(new ApiRequestError('raw', 403, { error: 'raw', code: 'org_policy', policy: 'guests' }));
+    render(<SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}><InviteMemberPage /></SWRConfig>);
+    const user = await typeEmail('chris@partner.co');
+    expect(await screen.findByText(/Depends on the Northwind Labs Guests policy/)).toBeTruthy();
+    await user.click(await screen.findByRole('button', { name: /invite member/i }));
+    await waitFor(() => expect(mocks.toastError).toHaveBeenCalledWith('Guests are turned off for Northwind Labs, so they cannot join as a guest. Give them a seat instead.'));
+    expect(mocks.toastError).not.toHaveBeenCalledWith('An organization policy does not allow this.');
     await waitFor(() => expect(screen.getByRole('radio', { name: /As a guest of this drive/ }).hasAttribute('disabled')).toBe(true));
     expect(screen.getByRole('radio', { name: /As a member of Northwind Labs/ }).getAttribute('aria-checked')).toBe('true');
   });
