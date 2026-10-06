@@ -39,14 +39,21 @@ beforeEach(() => {
   setUiState(createInitialState());
 });
 
-// Waits end when the DOM reaches the state, not after a wall-clock budget: a
-// loaded CI runner renders slowly, and only vitest's own per-test timeout
-// bounds a wait. Teardown ends any wait still running.
+// Waits end when the DOM reaches the state, not after a budget of their own:
+// a loaded CI runner renders slowly, so a wait may take up nearly all of the
+// test's time. Just before vitest's per-test timeout (its default; this suite
+// sets none) a wait gives up with the check's own error, so a red run says
+// what was never reached rather than only that the test timed out. Teardown
+// ends any wait still running. performance.now is never faked here.
+const TEST_TIMEOUT_MS = 5000;
+const GIVE_UP_MS = TEST_TIMEOUT_MS - 250;
 const realSetTimeout = globalThis.setTimeout;
 let running = true;
+let testStarted = 0;
 
 beforeEach(() => {
   running = true;
+  testStarted = performance.now();
 });
 
 afterEach(() => {
@@ -63,7 +70,7 @@ const settle = async (check: () => void): Promise<void> => {
       check();
       return;
     } catch (error) {
-      if (!running) throw error;
+      if (!running || performance.now() - testStarted >= GIVE_UP_MS) throw error;
     }
     if (globalThis.setTimeout === realSetTimeout) await new Promise((resolve) => realSetTimeout(resolve, 5));
     else await act(async () => {
@@ -407,14 +414,22 @@ describe('ChatHistory', () => {
     });
     const afterWake = groups(container).map(([label]) => label);
 
+    // A desktop browser woken with the tab already visible fires focus, not visibilitychange.
+    vi.setSystemTime(new Date('2027-01-02T17:00:00.000Z')); // 09:00 on Jan 2, 2027
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    const afterFocus = groups(container).map(([label]) => label);
+
     assert({
-      given: 'the clock passing midnight with no timer firing, then any re-render, then the page shown again a day later',
+      given: 'the clock passing midnight with no timer firing, then any re-render, then the page shown again a day later, then the window focused in the next year',
       should: 'label by the current clock each time',
-      actual: [before, afterRender, afterWake],
+      actual: [before, afterRender, afterWake, afterFocus],
       expected: [
         ['Today', 'Yesterday', 'Sep 18'],
         ['Yesterday', 'Oct 4', 'Sep 18'],
         ['Oct 5', 'Oct 4', 'Sep 18'],
+        ['Oct 5, 2026', 'Oct 4, 2026', 'Sep 18, 2026'],
       ],
     });
   });

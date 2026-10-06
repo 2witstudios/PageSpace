@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import { createMockOpenRouter } from './mock-openrouter';
+import { createMockOpenRouter } from './mock-openrouter.ts';
 
 /**
  * Standalone entry point for the mock OpenRouter server, started by Playwright's
