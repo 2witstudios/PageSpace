@@ -59,6 +59,7 @@ export default defineConfig({
       'src/agent-accounts/__tests__/agent-account-repository.integration.test.ts',
       'src/agent-accounts/__tests__/plane-client.integration.test.ts',
       'src/agent-accounts/__tests__/adversarial/http-executor-end-to-end.integration.test.ts',
+      'src/organizations/__tests__/org-lapse-loosening.integration.test.ts',
       // Runs only armed (vitest.integration.config.ts sets the wallet-leg invariant GUC).
       'src/test/__tests__/wallet-leg-invariant-armed.integration.test.ts',
     ],
@@ -134,6 +135,7 @@ export default defineConfig({
       'src/agent-accounts/__tests__/agent-account-repository.integration.test.ts',
       'src/agent-accounts/__tests__/plane-client.integration.test.ts',
       'src/agent-accounts/__tests__/adversarial/http-executor-end-to-end.integration.test.ts',
+      'src/organizations/__tests__/org-lapse-loosening.integration.test.ts',
       ],
       thresholds: {
         lines: 85,
