@@ -14,6 +14,7 @@ import {
   decideAgentSessionAccess,
   decideAgentSessionEndAccess,
   decideAgentSessionRenameAccess,
+  sessionHostsAgentsFromAnyDrive,
   type AgentSessionAccessSubject,
 } from '../decide-workspace-access';
 
@@ -154,5 +155,44 @@ describe('decideAgentSessionRenameAccess — owner-only, and its own decision', 
     // category error. Proven structurally: the owner is allowed with no
     // capability or membership information supplied.
     expect(decideAgentSessionRenameAccess({ requesterId: 'u1', session: { ownerId: 'u1' } }).allowed).toBe(true);
+  });
+});
+
+describe('sessionHostsAgentsFromAnyDrive', () => {
+  const OWNER = 'user-owner';
+
+  it('given a null-drive (legacy global) session, should host agents from any drive', () => {
+    expect(sessionHostsAgentsFromAnyDrive({ session: { driveId: null, ownerId: OWNER }, drive: null })).toBe(true);
+  });
+
+  it("given a session in its owner's own Home drive, should host agents from any drive", () => {
+    expect(
+      sessionHostsAgentsFromAnyDrive({
+        session: { driveId: 'home-1', ownerId: OWNER },
+        drive: { kind: 'HOME', ownerId: OWNER },
+      }),
+    ).toBe(true);
+  });
+
+  it('given a session in a team drive, should stay drive-strict', () => {
+    expect(
+      sessionHostsAgentsFromAnyDrive({
+        session: { driveId: 'drive-1', ownerId: OWNER },
+        drive: { kind: 'STANDARD', ownerId: OWNER },
+      }),
+    ).toBe(false);
+  });
+
+  it('given a session in a Home drive someone else owns, should stay drive-strict', () => {
+    expect(
+      sessionHostsAgentsFromAnyDrive({
+        session: { driveId: 'home-2', ownerId: OWNER },
+        drive: { kind: 'HOME', ownerId: 'someone-else' },
+      }),
+    ).toBe(false);
+  });
+
+  it('given a session whose drive cannot be resolved, should stay drive-strict', () => {
+    expect(sessionHostsAgentsFromAnyDrive({ session: { driveId: 'gone', ownerId: OWNER }, drive: null })).toBe(false);
   });
 });

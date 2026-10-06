@@ -491,14 +491,17 @@ describe('POST /api/pages/bulk-move', () => {
       expect(body.error).toMatch(/permission.*move.*page/i);
     });
 
-    it('includes page title in permission error', async () => {
+    it('names the refused page by the id the caller sent, never by its title', async () => {
       vi.mocked(canUserEditPage).mockResolvedValue(false);
-      vi.mocked(db.query.pages.findMany).mockResolvedValue([mockSourcePage({ title: 'Protected Doc' })] as never);
+      const page = mockSourcePage({ title: 'Protected Doc' });
+      vi.mocked(db.query.pages.findMany).mockResolvedValue([page] as never);
 
       const response = await POST(createRequest(validBody));
       const body = await response.json();
 
-      expect(body.error).toContain('Protected Doc');
+      // A caller refused the edit may not be able to view the page either.
+      expect(body.error).toContain(page.id);
+      expect(body.error).not.toContain('Protected Doc');
     });
   });
 

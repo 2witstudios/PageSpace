@@ -134,6 +134,8 @@ services:
         # host-only ps_consent while marketing bakes Domain=localhost — the duplicate
         # host-only/domain-scoped cookie state that persistConsentToCookie deletes around.
         - NEXT_PUBLIC_COOKIE_DOMAIN=${NEXT_PUBLIC_COOKIE_DOMAIN:-localhost}
+        # Imago's "Try Imago" link; only 'true' shows it. Set with IMAGO_ENABLED.
+        - NEXT_PUBLIC_IMAGO_ENABLED=${NEXT_PUBLIC_IMAGO_ENABLED:-false}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
@@ -178,6 +180,53 @@ services:
       - NEXT_PUBLIC_WEB_APP_URL=${NEXT_PUBLIC_APP_URL:-http://localhost:3000}
       - WEB_APP_INTERNAL_URL=http://web:3000
       - PORT=3005
+      - HOSTNAME=0.0.0.0
+      - NODE_OPTIONS=--max-old-space-size=512
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    networks:
+      - internal
+      - frontend
+
+
+  # Imago (IMG-1.7): the new app shell, served under /imago on :3006. Browser
+  # /api/* calls are proxied to web (IMAGO_API_PROXY_ORIGIN) and sockets go to
+  # realtime. web and realtime must allow the imago origin:
+  # ADDITIONAL_ALLOWED_ORIGINS=http://localhost:3006 in .env.
+  imago:
+    build:
+      context: .
+      dockerfile: apps/imago/Dockerfile
+      args:
+        - NEXT_PUBLIC_REALTIME_URL=${NEXT_PUBLIC_REALTIME_URL}
+        - NEXT_PUBLIC_COOKIE_DOMAIN=${NEXT_PUBLIC_COOKIE_DOMAIN:-localhost}
+        # Nothing in front of :3006 routes /api to web, so the build proxies it.
+        - IMAGO_API_PROXY_ORIGIN=http://web:3000
+    ports:
+      - "3006:3006"
+    depends_on:
+      web:
+        condition: service_started
+      realtime:
+        condition: service_started
+    # No env_file: imago reads no secrets. It does read web's database
+    # (getViewer() validates the session, the drive services read pages), and
+    # the values below that web takes from .env, interpolated from that file.
+    environment:
+      - DATABASE_URL=postgresql://user:password@postgres:5432/pagespace
+      - DATABASE_SSL=${DATABASE_SSL:-}
+      - DEPLOYMENT_MODE=${DEPLOYMENT_MODE:-}
+      - SESSION_IDLE_TIMEOUT_MS=${SESSION_IDLE_TIMEOUT_MS:-}
+      - LOG_LEVEL=${LOG_LEVEL:-}
+      - WEB_APP_INTERNAL_URL=http://web:3000
+      # Server redirects (sign-in, classic) are built on this, never on Host.
+      - WEB_APP_URL=${WEB_APP_URL:-http://localhost:3000}
+      - NEXT_PUBLIC_REALTIME_URL=${NEXT_PUBLIC_REALTIME_URL}
+      # Read at request time; anything but 'true' answers 404 (health excepted).
+      - IMAGO_ENABLED=${IMAGO_ENABLED:-false}
+      - PORT=3006
       - HOSTNAME=0.0.0.0
       - NODE_OPTIONS=--max-old-space-size=512
     deploy:

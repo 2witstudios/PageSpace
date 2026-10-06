@@ -1,0 +1,114 @@
+name: Imago Image
+
+# Proves apps/imago/Dockerfile builds and the image boots on every PR into
+# master or a pu/* integration branch (pu/imago until it merges), and on every push to master. docker-images.yml's deploy
+# job needs every build-and-push leg — so an imago image that first fails to
+# build there would skip the production deploy of every service. Running here
+# first turns that into a red check on the PR that broke it.
+#
+# Build only: no registry login, no push, no deploy (IMG-11.1 is human-only).
+on:
+  pull_request:
+    branches: [master, 'pu/**']
+    paths:
+      - 'apps/imago/**'
+      # Every Dockerfile shares the workspace manifest block imago depends on.
+      - 'apps/*/Dockerfile*'
+      - 'apps/*/package.json'
+      # The image builds db, lib and editor and installs from the root lockfile.
+      - 'packages/**'
+      - 'package.json'
+      - 'bun.lock'
+      - 'tsconfig.json'
+      - 'types/**'
+      - '.github/workflows/imago-image.yml'
+  push:
+    branches: [master]
+    # Same inputs as pull_request above.
+    paths:
+      - 'apps/imago/**'
+      - 'apps/*/Dockerfile*'
+      - 'apps/*/package.json'
+      - 'packages/**'
+      - 'package.json'
+      - 'bun.lock'
+      - 'tsconfig.json'
+      - 'types/**'
+      - '.github/workflows/imago-image.yml'
+  workflow_dispatch:
+
+# Superseded PR runs are cancelled; every push (master) gets its own group so
+# one master run is never cancelled by the next.
+concurrency:
+  group: imago-image-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-boot:
+    name: Build & boot imago
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: apps/imago/Dockerfile
+          push: false
+          load: true
+          tags: pagespace-imago:ci
+          # A sentinel no source file contains: the bundle check below proves
+          # the Dockerfile ARG reaches the client bundle (IMG-1.7a).
+          build-args: |
+            NEXT_PUBLIC_COOKIE_DOMAIN=.cookie-domain.imago-ci.test
+          # Own scope so this never evicts docker-images.yml's cache.
+          cache-from: type=gha,scope=imago-image
+          cache-to: type=gha,scope=imago-image,mode=max
+
+      - name: Cookie domain baked into the client bundle
+        run: |
+          # Next inlines NEXT_PUBLIC_* at build time; the theme cookie writer
+          # must carry the domain the image was built with.
+          if docker run --rm --entrypoint sh pagespace-imago:ci -c \
+            "grep -rqF -- '.cookie-domain.imago-ci.test' apps/imago/.next/static"; then
+            echo "NEXT_PUBLIC_COOKIE_DOMAIN is in the client bundle"
+          else
+            echo "NEXT_PUBLIC_COOKIE_DOMAIN build arg did not reach apps/imago/.next/static"
+            exit 1
+          fi
+
+      - name: Boot and check /imago/api/health
+        run: |
+          docker run -d --name imago -p 3006:3006 pagespace-imago:ci
+          for i in $(seq 1 30); do
+            if curl --silent --show-error --fail http://localhost:3006/imago/api/health; then
+              echo
+              echo "imago answered on attempt $i"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "imago did not answer /imago/api/health within 60s"
+          docker logs imago
+          exit 1
+
+      - name: Container health status
+        run: |
+          for i in $(seq 1 20); do
+            status=$(docker inspect --format '{{.State.Health.Status}}' imago)
+            echo "health: $status"
+            [ "$status" = "healthy" ] && exit 0
+            [ "$status" = "unhealthy" ] && break
+            sleep 3
+          done
+          docker inspect --format '{{json .State.Health}}' imago
+          exit 1

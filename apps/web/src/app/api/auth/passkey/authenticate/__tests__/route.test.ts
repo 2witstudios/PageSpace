@@ -113,7 +113,12 @@ vi.mock('@/lib/auth/native-invite-acceptance', () => ({
   consumeAllInvitesForEmail: vi.fn().mockResolvedValue({ drivesAccepted: 0, pagesAccepted: 0, connectionsCreated: 0 }),
 }));
 
+vi.mock('@pagespace/lib/onboarding/home-drive', () => ({
+  provisionHomeDriveIfNeeded: vi.fn().mockResolvedValue({ driveId: 'home-1', created: false }),
+}));
+
 import { POST } from '../route';
+import { provisionHomeDriveIfNeeded } from '@pagespace/lib/onboarding/home-drive';
 import { verifyAuthentication, findUserIdByCredentialId } from '@pagespace/lib/auth/passkey-service';
 import {
   getAccountLockoutStatus,
@@ -532,6 +537,51 @@ describe('POST /api/auth/passkey/authenticate', () => {
           riskScore: 0.3,
         })
       );
+    });
+  });
+
+  // Passkey is the on-prem sign-in (password auth was removed in #861, and
+  // on-prem has no email delivery). Without this call a returning on-prem user
+  // would never reach Home-drive / Imago-agent provisioning.
+  describe('Home drive and Imago agent provisioning', () => {
+    it('given a successful sign-in, should provision the Home drive and Imago agents for the verified user', async () => {
+      const response = await POST(createRequest());
+
+      expect(response.status).toBe(200);
+      expect(provisionHomeDriveIfNeeded).toHaveBeenCalledTimes(1);
+      expect(provisionHomeDriveIfNeeded).toHaveBeenCalledWith('user-1');
+    });
+
+    it('given a desktop exchange sign-in, should provision too', async () => {
+      await POST(createRequest({ ...validPayload, platform: 'desktop', deviceId: 'device-1', desktopExchange: true }));
+
+      expect(provisionHomeDriveIfNeeded).toHaveBeenCalledWith('user-1');
+    });
+
+    it('given provisioning fails, should still sign the user in and log the failure', async () => {
+      vi.mocked(provisionHomeDriveIfNeeded).mockRejectedValueOnce(new Error('db blip'));
+
+      const response = await POST(createRequest());
+
+      expect(response.status).toBe(200);
+      expect(appendSessionCookie).toHaveBeenCalledTimes(1);
+      expect(loggers.auth.error).toHaveBeenCalledWith(
+        'Failed to provision Home drive during passkey sign-in',
+        expect.any(Error),
+        { userId: 'user-1' },
+      );
+    });
+
+    it('given a failed verification, should not provision anything', async () => {
+      vi.mocked(verifyAuthentication).mockResolvedValueOnce({
+        ok: false,
+        // @ts-expect-error - partial mock data
+        error: { code: 'VERIFICATION_FAILED' },
+      });
+
+      await POST(createRequest());
+
+      expect(provisionHomeDriveIfNeeded).not.toHaveBeenCalled();
     });
   });
 

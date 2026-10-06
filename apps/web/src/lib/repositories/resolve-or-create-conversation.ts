@@ -59,6 +59,14 @@ export async function resolveOrCreateConversation(
   opts?: {
     /** Display label for the new row (spawned workers are labeled at birth). Ignored for an existing row. */
     title?: string;
+    /**
+     * For a caller running this inside its own transaction: receives the
+     * `conversation:created` announcement instead of it being made here, so the
+     * caller can make it once that transaction commits. Announced from inside
+     * the transaction, a client re-reading on the event can get the listing
+     * from before the commit, and nothing prompts it to read again.
+     */
+    announceAfterCommit?: (announce: () => void) => void;
   },
 ): Promise<ResolveOrCreateResult> {
   if (!CUID2_RE.test(conversationId)) {
@@ -120,8 +128,10 @@ export async function resolveOrCreateConversation(
     // here, so emitting here is what makes a server-spawned worker appear in
     // the owner's sidebar without a poll. Only the actual-insert branch
     // emits; the race-loser fallback below resolved someone else's insert.
-    // No caller passes a transaction `db`, so this runs post-commit.
-    emitConversationLifecycle('created', { ...created, rev: Number(created.rev) });
+    // A caller that passed its transaction as `db` makes it after the commit.
+    const announce = () => emitConversationLifecycle('created', { ...created, rev: Number(created.rev) });
+    if (opts?.announceAfterCommit) opts.announceAfterCommit(announce);
+    else announce();
     return { conversation: created, isNew: true };
   }
 

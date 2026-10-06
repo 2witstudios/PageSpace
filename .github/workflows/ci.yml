@@ -5,6 +5,13 @@ name: CI
 # no duplicated job definitions.
 on:
   workflow_call:
+    inputs:
+      # test.yml's manual dispatch only. When true, the e2e job regenerates imago's Linux visual
+      # baselines and uploads them as an artifact INSTEAD of running the specs; when false (every
+      # push, PR and deploy gate) the baselines are only ever compared, never written.
+      update_visual_baselines:
+        type: boolean
+        default: false
 
 # Minimal permissions: read source only. No write access needed — artifact upload
 # uses the Actions API (not git), which is allowed under contents: read.
@@ -231,6 +238,14 @@ jobs:
           ADMIN_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_admin_test
         run: bun run --filter '@pagespace/lib' test:integration
 
+      # apps/imago's getViewer() is proven against the real session-service and
+      # Postgres (revoked, expired and replayed tokens), so it lives outside the
+      # hermetic unit run like the packages above.
+      - name: Run apps/imago integration suites
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
+        run: bun run --filter '@pagespace/imago' test:integration
+
       # store-adapter-infisical.integration.test.ts is included in the general
       # test:integration glob above too, but that step has no Infisical service, so its own
       # describe.skipIf(!reachable) lets it skip quietly there — correct for a plain local run
@@ -414,7 +429,20 @@ jobs:
       # NEXT_PUBLIC_REALTIME_URL is deliberately UNSET. See the proxy step.
       E2E_WEB_TARGET: http://127.0.0.1:3100
       E2E_REALTIME_TARGET: http://127.0.0.1:3001
-      E2E_SPECS: tests/15-chat-fixture-smoke.spec.ts tests/16-dispatch-multiplayer.spec.ts tests/17-agent-workspace-grid.spec.ts tests/18-sidebar-directory-live.spec.ts tests/19-channels-badge-live.spec.ts tests/20-pane-lifecycle.spec.ts
+      # apps/imago's dev server, whose /api rewrite spec 26 calls through (IMG-1.3).
+      IMAGO_DEV_URL: http://127.0.0.1:3006
+      # apps/imago's production server, which the proxy serves at /imago for spec 27 (IMG-3.5).
+      E2E_IMAGO_TARGET: http://127.0.0.1:3106
+      # apps/web stores every page version's content in S3, so a page create or save through
+      # /api/pages needs a bucket (spec 32, IMG-7.7), as does a task create, whose task is a page
+      # (spec 33, IMG-9.6). Playwright's mock server (support/
+      # mock-s3.ts) is that bucket, in memory, as it is the AI provider; the keys are not checked.
+      AWS_ENDPOINT_URL_S3: http://127.0.0.1:4997
+      AWS_REGION: auto
+      AWS_ACCESS_KEY_ID: e2e
+      AWS_SECRET_ACCESS_KEY: e2e-not-a-real-secret
+      BUCKET_NAME: pagespace-e2e
+      E2E_SPECS: tests/15-chat-fixture-smoke.spec.ts tests/16-dispatch-multiplayer.spec.ts tests/17-agent-workspace-grid.spec.ts tests/18-sidebar-directory-live.spec.ts tests/19-channels-badge-live.spec.ts tests/20-pane-lifecycle.spec.ts tests/26-imago-api-proxy.spec.ts tests/27-imago-shell.spec.ts tests/28-imago-settings.spec.ts tests/29-imago-messages.spec.ts tests/30-imago-palette.spec.ts tests/31-imago-chat.spec.ts tests/32-imago-files.spec.ts tests/33-imago-tasks.spec.ts tests/34-imago-visual.spec.ts tests/35-imago-visual-control.spec.ts
 
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -448,6 +476,17 @@ jobs:
       - name: Build web (production)
         run: bun run build --filter=web
 
+      # Spec 27 drives imago's shell in a browser, so imago needs a PRODUCTION build for the
+      # same CSP reason as web above. It runs as apps/imago/Dockerfile ships it: the standalone
+      # server. The standalone output is copied out of apps/imago before the dev server below
+      # starts, because `next dev` writes into the same .next directory.
+      - name: Build imago (production, standalone)
+        run: |
+          bun run build --filter=@pagespace/imago
+          rm -rf /tmp/imago-standalone
+          cp -R apps/imago/.next/standalone /tmp/imago-standalone
+          cp -R apps/imago/.next/static /tmp/imago-standalone/apps/imago/.next/static
+
       - name: Install Playwright browsers
         # Drops Google's Chrome apt source first — see the long comment on the
         # identical step in the unit-tests job for why.
@@ -468,6 +507,35 @@ jobs:
       - name: Start web (production server)
         run: nohup bun run start --port 3100 > /tmp/web.log 2>&1 &
         working-directory: apps/web
+        env:
+          # The imago dev origin, as apps/web/.env.example documents it. Spec 26 proves a
+          # mutation from it passes origin validation; without this line web rejects it.
+          ADDITIONAL_ALLOWED_ORIGINS: http://127.0.0.1:3006
+
+      # `next dev` is the only mode with the /api -> web rewrite (production routes /api at
+      # the edge), so this is the configuration spec 26 is meaningful in. It points straight
+      # at web on 3100: the browser-facing proxy below plays no part in imago's path.
+      - name: Start imago dev server (/api -> web)
+        run: nohup bun run dev > /tmp/imago.log 2>&1 &
+        working-directory: apps/imago
+        env:
+          WEB_APP_INTERNAL_URL: http://127.0.0.1:3100
+          # Spec 26 also opens /imago on this server in a browser to prove it hydrates under
+          # `next dev` (IMG-1.2a); switched off, imago serves 404s.
+          IMAGO_ENABLED: 'true'
+
+      # The proxy serves this at /imago, as the production edge does, so imago and classic's
+      # sign-in share one origin: the signed-out redirect reaches /auth/signin on it and sign-in
+      # returns to the /imago path it was given (spec 27). WEB_APP_URL (job env) is that
+      # origin, which imago builds its absolute redirects on.
+      - name: Start imago (production standalone server)
+        run: nohup node apps/imago/server.js > /tmp/imago-prod.log 2>&1 &
+        working-directory: /tmp/imago-standalone
+        env:
+          NODE_ENV: production
+          PORT: '3106'
+          HOSTNAME: 127.0.0.1
+          IMAGO_ENABLED: 'true'
 
       # THE PIECE THAT IS EASY TO GET WRONG AND FAILS SILENTLY.
       # The shipped CSP is `connect-src 'self' ws: wss:` and Socket.IO opens with an XHR
@@ -481,7 +549,7 @@ jobs:
       # web, and NEXT_PUBLIC_REALTIME_URL left unset so the socket store falls back to
       # same-origin. Do not "simplify" this by relaxing the CSP or setting bypassCSP — both
       # stop the run testing the shipped policy.
-      - name: Start same-origin proxy (/socket.io -> realtime, rest -> web)
+      - name: Start same-origin proxy (/socket.io -> realtime, /imago -> imago, rest -> web)
         run: nohup bun run support/e2e-proxy.ts > /tmp/proxy.log 2>&1 &
         working-directory: apps/e2e
         env:
@@ -496,17 +564,44 @@ jobs:
         run: |
           for i in $(seq 1 60); do
             if curl -sf http://127.0.0.1:3000/api/health > /dev/null \
-               && curl -sf "http://127.0.0.1:3000/socket.io/?EIO=4&transport=polling" | grep -q '"sid"'; then
-              echo "stack up: web + same-origin socket.io handshake"; exit 0
+               && curl -sf "http://127.0.0.1:3000/socket.io/?EIO=4&transport=polling" | grep -q '"sid"' \
+               && curl -sf http://127.0.0.1:3006/api/health > /dev/null \
+               && curl -sf http://127.0.0.1:3000/imago/api/health > /dev/null; then
+              echo "stack up: web + same-origin socket.io handshake + imago /api rewrite + /imago via proxy"; exit 0
             fi
             sleep 2
           done
-          echo "stack did not come up"; tail -50 /tmp/web.log /tmp/realtime.log /tmp/proxy.log; exit 1
+          echo "stack did not come up"; tail -n 50 /tmp/web.log /tmp/realtime.log /tmp/proxy.log /tmp/imago.log /tmp/imago-prod.log; exit 1
 
       # Playwright starts the OpenRouter mock itself on :4998 via its `webServer` config.
       - name: Run agent-session e2e specs
+        if: ${{ !inputs.update_visual_baselines }}
         run: bunx playwright test $E2E_SPECS
         working-directory: apps/e2e
+
+      # IMG-10.4. Screenshot baselines depend on the platform's font rasterisation, so imago's are
+      # made here, on the runner the comparisons run on, never on a laptop. Dispatch test.yml with
+      # `update_visual_baselines` to get them: spec 34 rewrites every baseline, then 34 and its
+      # token negative control (35) run again in compare mode against the new files, so an
+      # unstable frame or a control that cannot fail shows up before anything is committed. The
+      # PNGs leave as an artifact for a person to review and commit; this job has read-only
+      # contents permission and commits nothing.
+      - name: Regenerate imago visual baselines (manual dispatch only)
+        if: ${{ inputs.update_visual_baselines }}
+        run: |
+          rm -f tests/__screenshots__/*-linux.png
+          bunx playwright test tests/34-imago-visual.spec.ts --update-snapshots=all
+          bunx playwright test tests/34-imago-visual.spec.ts tests/35-imago-visual-control.spec.ts
+        working-directory: apps/e2e
+
+      - name: Upload imago visual baselines
+        if: ${{ inputs.update_visual_baselines }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: imago-visual-baselines
+          path: apps/e2e/tests/__screenshots__/*-linux.png
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Upload Playwright report and traces
         if: failure()
@@ -524,7 +619,7 @@ jobs:
       # the CSP path broke rather than the feature.
       - name: Server logs (on failure)
         if: failure()
-        run: tail -200 /tmp/web.log /tmp/realtime.log /tmp/proxy.log
+        run: tail -n 200 /tmp/web.log /tmp/realtime.log /tmp/proxy.log /tmp/imago.log /tmp/imago-prod.log
 
   lint:
     name: Lint & TypeScript Check

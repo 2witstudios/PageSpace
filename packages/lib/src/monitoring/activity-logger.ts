@@ -37,10 +37,15 @@ export interface ActorInfo {
  * Fetch actor info from database for audit logging.
  * Returns email and display name for the given user ID.
  * Falls back to 'unknown@system' if user not found (shouldn't happen).
+ *
+ * Pass `client` when calling from inside a transaction: reading through the
+ * global pool there needs a second connection while the transaction holds one,
+ * which under pool pressure times out and writes the fallback actor into the
+ * hash-chained log.
  */
-export async function getActorInfo(userId: string): Promise<ActorInfo> {
+export async function getActorInfo(userId: string, client: typeof db = db): Promise<ActorInfo> {
   try {
-    const user = await db.query.users.findFirst({
+    const user = await client.query.users.findFirst({
       where: eq(users.id, userId),
       columns: { email: true, name: true },
     });

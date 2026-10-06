@@ -78,6 +78,9 @@ jobs:
               NEXT_PUBLIC_PUBLISH_EDGE_IPV6=2a09:8280:1::118:198f:0
               NEXT_PUBLIC_PUBLISH_EDGE_CNAME_TARGET=pagespace-proxy.fly.dev
               NEXT_PUBLIC_COOKIE_DOMAIN=.pagespace.ai
+              # Imago rollout flag, inlined at build time: set true here (and
+              # IMAGO_ENABLED=true on the imago app) for the IMG-11.2 flip.
+              NEXT_PUBLIC_IMAGO_ENABLED=false
           - service: migrate
             dockerfile: apps/web/Dockerfile.migrate
             context: .
@@ -99,6 +102,14 @@ jobs:
             context: .
             build_args: |
               NEXT_PUBLIC_WEB_APP_URL=https://pagespace.ai
+          # Built and published only: /imago production routing (and so any
+          # deploy-fly step for it) is human-only, IMG-11.1.
+          - service: imago
+            dockerfile: apps/imago/Dockerfile
+            context: .
+            build_args: |
+              NEXT_PUBLIC_REALTIME_URL=https://pagespace.ai
+              NEXT_PUBLIC_COOKIE_DOMAIN=.pagespace.ai
           - service: marketing
             dockerfile: apps/marketing/Dockerfile
             context: .

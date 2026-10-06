@@ -99,6 +99,26 @@
       "import": "./dist/ai/global-channel-id.js",
       "require": "./dist/ai/global-channel-id.js"
     },
+    "./agents/builtin-agents": {
+      "types": "./dist/agents/builtin-agents.d.ts",
+      "import": "./dist/agents/builtin-agents.js",
+      "require": "./dist/agents/builtin-agents.js"
+    },
+    "./agents/imago-reach": {
+      "types": "./dist/agents/imago-reach.d.ts",
+      "import": "./dist/agents/imago-reach.js",
+      "require": "./dist/agents/imago-reach.js"
+    },
+    "./agents/imago-drive-access": {
+      "types": "./dist/agents/imago-drive-access.d.ts",
+      "import": "./dist/agents/imago-drive-access.js",
+      "require": "./dist/agents/imago-drive-access.js"
+    },
+    "./agents/provision-imago-agents": {
+      "types": "./dist/agents/provision-imago-agents.d.ts",
+      "import": "./dist/agents/provision-imago-agents.js",
+      "require": "./dist/agents/provision-imago-agents.js"
+    },
     "./agent-workspaces/workspace-fractions": {
       "types": "./dist/agent-workspaces/workspace-fractions.d.ts",
       "import": "./dist/agent-workspaces/workspace-fractions.js",

@@ -67,13 +67,15 @@ async function queryDriveAgents(driveId: string): Promise<DriveAgent[]> {
  */
 export async function buildAgentAwarenessPrompt(
   userId: string,
-  options: { canDelegate?: boolean } = {},
+  options: { canDelegate?: boolean; excludedDriveIds?: ReadonlySet<string> } = {},
 ): Promise<string> {
   try {
-    const allDrives = await db
+    // Every live drive, minus any the caller's agent is kept out of (Imago).
+    const allDrives = (await db
       .select({ id: drives.id, name: drives.name })
       .from(drives)
-      .where(eq(drives.isTrashed, false));
+      .where(eq(drives.isTrashed, false)))
+      .filter((drive) => !options.excludedDriveIds?.has(drive.id));
 
     const accessibleDrives: Array<{ id: string; name: string }> = [];
     for (const drive of allDrives) {

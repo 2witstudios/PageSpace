@@ -14,6 +14,7 @@ import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
 import { slugify } from '../utils/utils';
 import { customRoleBelongsToDrive, getMemberCustomRoleId, resolveDriveWideCanEdit } from '../permissions/membership-queries';
 import { isGuestRole } from '../permissions/guest-role';
+import { homeDriveActionError, isHomeDrive } from './drive-guards';
 
 // ============================================================================
 // Types
@@ -667,11 +668,19 @@ export async function allocatePublishSubdomain(
       // Conditional update: only set when still null, so a concurrent allocation
       // for this drive can't be overwritten. If zero rows update, the race winner
       // already set it — re-read and return that value.
-      const updated = await queryable
-        .update(drives)
-        .set({ publishSubdomain: candidate })
-        .where(and(eq(drives.id, driveId), isNull(drives.publishSubdomain)))
-        .returning({ subdomain: drives.publishSubdomain });
+      //
+      // The write runs in its own savepoint (a nested transaction inside the
+      // caller's tx). A unique violation aborts the enclosing Postgres
+      // transaction, so without the savepoint the retry's next query fails with
+      // "current transaction is aborted" — which is what concurrent first
+      // sign-ins hit when two Home drives race for the same "home-N".
+      const updated = await queryable.transaction((savepoint) =>
+        savepoint
+          .update(drives)
+          .set({ publishSubdomain: candidate })
+          .where(and(eq(drives.id, driveId), isNull(drives.publishSubdomain)))
+          .returning({ subdomain: drives.publishSubdomain }),
+      );
       if (updated.length === 0) {
         // Lost the race: another writer set it between our read and write.
         const reread = await queryable
@@ -685,5 +694,42 @@ export async function allocatePublishSubdomain(
         return reread[0].subdomain;
       }
     },
+  });
+}
+
+/**
+ * Hand a drive to a new owner.
+ *
+ * Imago needs nothing here (IMG-10.10): it acts with each user's own reach,
+ * and the per-drive setting is each user's own choice, so both users keep
+ * theirs — the previous owner's Imago follows their remaining access, the new
+ * owner's their new one.
+ *
+ * Every ownership change goes through here — the transfer route and the drive
+ * rollback/redo of an `ownership_transfer` — so pass `executor` to run inside a
+ * caller's transaction (it becomes a savepoint there). Throws, changing
+ * nothing, when `fromUserId` does not own the drive or the drive is a Home
+ * drive: Home stays bound to its owner.
+ */
+export async function transferDriveOwnership(
+  driveId: string,
+  fromUserId: string,
+  toUserId: string,
+  executor: DbOrTx | typeof db = db,
+): Promise<void> {
+  await executor.transaction(async (tx) => {
+    const [drive] = await tx
+      .select({ kind: drives.kind })
+      .from(drives)
+      .where(eq(drives.id, driveId))
+      .limit(1);
+    if (drive && isHomeDrive(drive)) throw new Error(homeDriveActionError(drive, 'transfer')!);
+
+    const updated = await tx
+      .update(drives)
+      .set({ ownerId: toUserId, updatedAt: new Date() })
+      .where(and(eq(drives.id, driveId), eq(drives.ownerId, fromUserId), eq(drives.kind, 'STANDARD')))
+      .returning({ id: drives.id });
+    if (updated.length === 0) throw new Error(`Drive ${driveId} is not owned by ${fromUserId}`);
   });
 }

@@ -9,6 +9,7 @@ interface MatrixEntry {
   service: string;
   dockerfile: string;
   context: string;
+  build_args?: string;
 }
 
 interface Workflow {
@@ -53,6 +54,7 @@ const EXPECTED_SERVICES: Record<string, { dockerfile: string; context: string }>
   cron: { dockerfile: 'docker/cron/Dockerfile', context: 'docker/cron' },
   admin: { dockerfile: 'apps/admin/Dockerfile', context: '.' },
   marketing: { dockerfile: 'apps/marketing/Dockerfile', context: '.' },
+  imago: { dockerfile: 'apps/imago/Dockerfile', context: '.' },
 };
 
 describe('Docker Images CI workflow', () => {
@@ -82,6 +84,38 @@ describe('Docker Images CI workflow', () => {
         expect(entry!.context).toBe(expected.context);
       },
     );
+  });
+
+  describe('shared cookie domain', () => {
+    const buildArgs = (service: string): string[] =>
+      (matrix.find((e) => e.service === service)?.build_args ?? '')
+        .split('\n')
+        .map((line) => line.trim())
+        .filter(Boolean);
+    const cookieDomainArg = (service: string): string | undefined =>
+      buildArgs(service).find((arg) => arg.startsWith('NEXT_PUBLIC_COOKIE_DOMAIN='));
+
+    it('given web bakes NEXT_PUBLIC_COOKIE_DOMAIN, should bake the same value into imago (IMG-1.7a)', () => {
+      // Both apps write the `theme` cookie; a different (or missing) domain in
+      // imago would leave a host-only cookie beside classic's shared one.
+      expect(cookieDomainArg('web')).toBe('NEXT_PUBLIC_COOKIE_DOMAIN=.pagespace.ai');
+      expect(cookieDomainArg('imago')).toBe(cookieDomainArg('web'));
+    });
+  });
+
+  describe('imago rollout flag', () => {
+    const buildArgs = (service: string): string[] =>
+      (matrix.find((e) => e.service === service)?.build_args ?? '')
+        .split('\n')
+        .map((line) => line.trim())
+        .filter(Boolean);
+
+    it('given NEXT_PUBLIC_IMAGO_ENABLED is inlined at build time, should pass it to web explicitly, off (IMG-10.7)', () => {
+      // A Fly runtime env cannot reach a NEXT_PUBLIC_* value: the "Try Imago"
+      // link only appears from a web image built with this arg set to true.
+      const args = buildArgs('web').filter((arg) => arg.startsWith('NEXT_PUBLIC_IMAGO_ENABLED='));
+      expect(args).toEqual(['NEXT_PUBLIC_IMAGO_ENABLED=false']);
+    });
   });
 
   describe('trigger configuration', () => {

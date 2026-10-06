@@ -164,6 +164,10 @@ async function trySpawn(input: { envId: string | null; driveId?: string | null }
       // The REAL store, so the drive-agreement check reads a real row rather
       // than a fixture that could disagree with one.
       findEnv: async (id) => envStore.findById(id),
+      // A global spawn into an env is refused before Home is ever resolved.
+      resolveHomeDriveId: async () => {
+        throw new Error('no driveless spawn reaches Home in this suite');
+      },
     },
   });
 }

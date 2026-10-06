@@ -13,6 +13,87 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **Imago preview at `/imago` (off by default)** — a first look at PageSpace's new interface, served
+  beside classic PageSpace and signed in with the same account. It is off unless the server sets
+  `IMAGO_ENABLED=true` (and `NEXT_PUBLIC_IMAGO_ENABLED=true` for the "Try Imago" link in the user
+  menu); until then every `/imago` address answers not found. One frame stays put as you move
+  around: a rail of sections, a drive switcher with your Home drive first, and an avatar menu with
+  theme, "Classic PageSpace" and sign out.
+  **Chat** talks to your agents. The header picks who you talk to: your Imago agents first, then the
+  agents you can use in the open drive; switching agent opens that agent's latest conversation, and
+  an agent you can no longer use hands the chat back to Imago with a note saying so. Replies stream
+  in as you watch, with one expandable line per tool the agent used and page citations as chips that
+  open the page in Files; Stop ends a reply and keeps what it had written so far. Whatever you open
+  elsewhere in the frame is what the agent answers about, and the draft in the composer waits for you
+  when you come back. The chat history lists the agent's conversations grouped by day, switches
+  between them in place, and starts a fresh one with New chat.
+  **Files** shows a drive's pages as a live tree: open a folder in place with its caret, filter by
+  name (the folders on the way to a match stay in view), and press + to create a document in the
+  open folder, which appears at once and opens. Opening a folder shows it Finder-style: the path back
+  up the drive, then each page in it with its type icon, kind and when it last changed; an empty
+  folder offers New page. Opening a document shows it in a centred column with the path of pages
+  above it; if you can edit it, you edit its title and text in place and it saves as you pause
+  ("Saving…", "Saved"). If someone else saved it while you were editing, your text stays put and you
+  choose "Keep my version" or "Use the saved version"; if you lose edit access, Imago says your
+  last changes were not saved. A sheet, canvas, code page, file or task list shows a card with an
+  "Open in classic" button; an agent page also offers "Chat with this agent".
+  **Messages** lists a drive's channels and your direct messages with unread counts, and opens a
+  channel or a direct message to read and post in, with new posts arriving live; the unread count on
+  the rail keeps up wherever you are. **Tasks** lists a drive's task lists with progress and opens one
+  in Tree or Focus view, where you can tick and add tasks, or open a task to edit its title, status,
+  priority, due date, assignees, description and subtasks. **Settings** shows a drive's name (owners
+  and admins can rename it), its members, and an "Imago access" switch that lets your Imago agents
+  work in that drive; your Home drive can't be renamed and your agents always have access to it.
+  Account links to your account, billing and connections settings in classic PageSpace.
+  Press ⌘K (Ctrl-K on Windows and Linux) anywhere to search the open drive's pages by name, or tick
+  "Include all workspaces" to search every drive you can open; move with the arrow keys, press Enter
+  to jump straight to a page, channel, task list or agent, and Escape to go back where you were. An
+  empty drive, a section that fails to load and an address that names nothing you can open each get
+  their own screen inside the frame: a note about what will show up, a "Try again" button, or "not
+  found" with a link back. Imago is a preview, and classic PageSpace is unchanged.
+
+- **Imago in your Home drive** — every account now gets Imago, the assistant that replaces the global
+  assistant: it works with your own access, the global assistant's tools and context, and its own
+  memory, everywhere except drives you keep it out of, in an `Imago` folder in your Home drive. It is
+  added when you sign in (including with a passkey), and if you delete it it comes back the next time
+  you sign in. Existing accounts get them (and a Home drive, if they lack one) from a
+  one-time backfill, without having to sign in.
+- **Imago agents can read the drives you own** — when your Imago agents are first set up, and
+  whenever you create a drive, they are added to each regular drive you own as members: they can
+  read its pages but not private ones, and cannot edit, share or delete. They are never added to
+  drives you only belong to. When you hand a drive to a new owner — or undo or redo that handover
+  from the drive's history — your Imago agents leave it; the new owner decides which agents get in.
+- **Turn Imago's access to a drive on or off** — drive owners and admins can switch their own Imago
+  agents into or out of a drive (`/api/drives/{driveId}/imago-access`). Your choice is saved for
+  each drive, so a drive you switch off stays off for good: through later sign-ins, when an Imago
+  agent you delete comes back, and even after all three are deleted permanently (emptied from the
+  trash). Older copies of your Imago agents left in the trash keep no access to other drives, so
+  restoring one cannot bring it back into a drive you switched off. In a drive you administer but do not own,
+  turning Imago on keeps all three agents in it, including any that come back after being deleted.
+  Your Home drive is where the agents live, so it cannot be switched off.
+- **Imago agents know where they can work** — each Imago agent is told which drives it has been
+  added to (by name and role) and, each turn, whether the drive or page you are looking at is one of
+  them. Asked to work somewhere it has not been added, it says so and tells you how to give it
+  access instead of trying and failing. It is never told about drives it has not been added to, and
+  a page you cannot open is never passed to it as your location.
+- **Imago agents can use your integrations** — Imago agents get the same connected integrations
+  your global assistant uses, following the same settings (which integrations are enabled, per-drive
+  overrides, visibility). A drive's own integrations are available only in your Home drive and in
+  drives the agent has been added to, never in a drive it has not been added to. Self-hosted
+  (on-prem) installs expose no external integrations to Imago agents.
+- **Imago agents never see more than you do** — an Imago agent can read, search, list or change
+  something only if it has been added to that drive AND you can still do the same yourself. If you
+  lose access to a drive while the agent is still in it (for example after a member change is
+  undone from the drive's history), the agent loses it too: it no longer finds, opens or even names
+  pages and drives you cannot see, and does not show their activity. If an Imago agent's setup
+  cannot be loaded, the chat fails with an error instead of running without its usual limits. An
+  Imago agent can manage a drive's scheduled workflows only where you are its owner or an admin.
+  The same limits hold wherever an Imago agent runs — chat, @-mentions in a channel, consulted
+  through the API, or a workflow: it never uses integrations from a drive it has not been added to,
+  and run by someone else it gets none of yours. When you leave a drive because a member change is
+  undone or redone from its history, or a backup is restored, your Imago agents leave it too. A
+  restore never removes the drive owner's own agents, even when the backup predates the owner's
+  first visit to the drive.
 - **Give an agent its own account** — in an agent's settings (Accounts), or in your personal
   settings for your global assistant, add an API key for a site so the agent can call that site's
   API for you. The agent refers to the account by name and never sees the key: PageSpace keeps it in
@@ -539,6 +620,11 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Changed
 
+- **New global assistant sessions live in your Home drive** — a sandbox session started from the
+  global assistant (or by its first sandbox tool call) is now created in your Home drive, which is
+  set up for you if you do not have one yet, so it is listed under Home rather than under "Global
+  Assistant". Only you can open it, and it is billed to you and runs in the same sandbox as before.
+  Existing assistant sessions stay where they are.
 - **The privacy policy now describes AI routing as it actually works** — every cloud AI request
   goes through OpenRouter to the provider of the model you picked, including Anthropic, OpenAI,
   Google and xAI models. The policy previously described those four as direct and said OpenRouter
@@ -630,6 +716,10 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   OpenRouter's live data, and a handful of models OpenRouter no longer serves were removed.
 
 ### Fixed
+
+- **Signing up at the same moment as someone else no longer fails to set up your Home drive** —
+  when several new accounts were created at once, all but one could end up without a Home drive
+  until their next sign-in.
 
 - **A dropped database connection no longer takes the server down** — if the database restarted,
   failed over or closed an idle connection while PageSpace held a background lock (starting an AI

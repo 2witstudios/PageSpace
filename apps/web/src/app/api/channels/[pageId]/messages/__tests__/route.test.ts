@@ -47,6 +47,7 @@ const mockInsertChannelThreadReply = vi.fn();
 const mockUpsertChannelReadStatus = vi.fn();
 const mockLoadChannelMessageWithRelations = vi.fn();
 const mockListChannelThreadFollowers = vi.fn();
+const mockFindChannelLastReadAt = vi.fn();
 vi.mock('@pagespace/lib/services/channel-message-repository', () => ({
   channelMessageRepository: {
     listChannelMessages: (...args: unknown[]) => mockListChannelMessages(...args),
@@ -57,6 +58,7 @@ vi.mock('@pagespace/lib/services/channel-message-repository', () => ({
     upsertChannelReadStatus: (...args: unknown[]) => mockUpsertChannelReadStatus(...args),
     loadChannelMessageWithRelations: (...args: unknown[]) => mockLoadChannelMessageWithRelations(...args),
     listChannelThreadFollowers: (...args: unknown[]) => mockListChannelThreadFollowers(...args),
+    findChannelLastReadAt: (...args: unknown[]) => mockFindChannelLastReadAt(...args),
   },
 }));
 
@@ -129,7 +131,7 @@ vi.mock('@/lib/channels/notify-mentioned-users', () => ({
 
 // --- Imports under test --------------------------------------------------------
 import { GET, POST } from '../route';
-import { authenticateRequestWithOptions } from '@/lib/auth';
+import { authenticateRequestWithOptions, canPrincipalViewPage } from '@/lib/auth';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
 
 // --- Fixtures ------------------------------------------------------------------
@@ -273,6 +275,35 @@ describe('GET /api/channels/[pageId]/messages', () => {
       expect.objectContaining({ pageId: PAGE_ID })
     );
     expect(mockListChannelThreadReplies).not.toHaveBeenCalled();
+  });
+
+  it('top-level GET returns the requesting user\'s read watermark as lastReadAt', async () => {
+    mockListChannelMessages.mockResolvedValueOnce([]);
+    mockFindChannelLastReadAt.mockResolvedValueOnce(new Date('2026-10-05T09:30:00.000Z'));
+
+    const res = await callGet();
+    const body = await res.json();
+
+    expect(mockFindChannelLastReadAt).toHaveBeenCalledWith({ userId: USER_ID, channelId: PAGE_ID });
+    expect(body).toEqual({ messages: [], nextCursor: null, hasMore: false, lastReadAt: '2026-10-05T09:30:00.000Z' });
+  });
+
+  it('top-level GET returns lastReadAt null when the user has never read the channel', async () => {
+    mockListChannelMessages.mockResolvedValueOnce([]);
+    mockFindChannelLastReadAt.mockResolvedValueOnce(null);
+
+    const body = await (await callGet()).json();
+
+    expect(body.lastReadAt).toBeNull();
+  });
+
+  it('top-level GET denied by view permission never reads the watermark', async () => {
+    vi.mocked(canPrincipalViewPage).mockResolvedValueOnce(false);
+
+    const res = await callGet();
+
+    expect(res.status).toBe(403);
+    expect(mockFindChannelLastReadAt).not.toHaveBeenCalled();
   });
 });
 

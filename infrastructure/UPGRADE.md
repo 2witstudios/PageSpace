@@ -674,6 +674,70 @@ roll, so once it has succeeded the table is gone.
 
 ---
 
+## Home drives and Imago agents for existing users (IMG-4.3)
+
+Every user now gets the built-in Imago agents (Imago, Imago Planner, Imago
+Researcher) as AI_CHAT pages in their Home drive, provisioned by
+`provisionHomeDriveIfNeeded` at sign-in. A user who never signs in again would
+never get them — nor a Home drive, if they predate it (the old Home-drive
+backfill was archived). Run once, after deploying the release that provisions
+the agents (its migrations, `0333_user_builtin_agents` and
+`0334_imago_drive_access`, are additive and apply first).
+
+**Where to run it.** On the migrate image or any host with the repository,
+with the production environment's **`DATABASE_URL` and `ENCRYPTION_KEY`**
+both set. `ENCRYPTION_KEY` is not optional: provisioning decrypts each user's
+email and name to record them as the actor of the agents' `create` entries.
+Without the key that decryption fails and is swallowed: the entries are
+written as `unknown@system`, the activity log is hash-chained so those rows
+cannot be corrected afterwards, and a clean exit does not prove the key was
+set.
+
+```bash
+bun scripts/backfill-imago-agents.ts --dry-run          # reports who is missing what, writes nothing
+bun scripts/backfill-imago-agents.ts --batch-size 100   # the real run; --limit N caps the users
+```
+
+Always do the `--dry-run` first and read its counts (`missing a Home drive`,
+`missing at least one agent`, `agent pages missing`). The dry run's `of which
+own no drive` line counts the users who will get the "Getting Started" seed.
+
+For each user without a Home drive it calls `provisionHomeDriveIfNeeded` (the
+sign-in path, so the drive gets its subdomain, starter skills and Memory pages;
+a user who owns no drive at all also gets the "Getting Started" folder), then
+`provisionImagoAgents` for every user missing an agent, recreating deleted or
+trashed agent pages. It never deletes anything.
+
+**Drive grants.** Every agent the run creates is also added as a **MEMBER of
+every STANDARD drive the user owns** (unless Imago access is switched off for
+that drive), exactly as at sign-in, so the drive's members will see the
+owner's agents in its member list. A grant that fails is logged
+(`Imago agent grants` / `Imago agent grant failed`) and not retried by a later
+run, which only grants newly created agents; check the logs after the run.
+
+**Contention.** Each user's provisioning writes its activity under the
+activity log's single global advisory lock, held until that user's transaction
+commits. Live writers of activity (page edits, sign-ins) queue behind it for
+that moment, so run it **off-peak**, and lower `--batch-size` (e.g. 25) if
+activity writes slow down while it runs.
+
+Safe to re-run and safe beside live sign-ins: the work list is re-derived each
+run, and both provisioners take the sign-in path's user-row lock. Output names
+users by id only, and a failure prints only its error class and SQLSTATE (never
+message text, which can carry row values).
+
+**Expected result.** The summary of a full run ends with
+
+```
+  still missing a Home drive:    0
+  still missing an agent:        0
+```
+
+Both must be 0. Any failed user makes the exit code 1 and is listed by id —
+re-run to retry, and record the final counts.
+
+---
+
 ## Starter skills for existing users (migration `0246_sticky_venus`)
 
 `0246_sticky_venus` adds `users.starterSkillsInstalledAt`. New signups get the

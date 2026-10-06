@@ -94,6 +94,8 @@ export const EXPORTED_TABLES: Readonly<Record<string, ExportCategory>> = {
   user_automation_preferences: 'settings',
   user_toast_notification_preferences: 'settings',
   email_notification_preferences: 'settings',
+  // The subject's own per-drive Imago access choices (IMG-4.6a).
+  imago_drive_access: 'settings',
   // Added with this guard — the omission that motivated it.
   agent_workspaces: 'agentWorkspaces',
   // L2·G2 agent accounts: the subject's own accounts (metadata only) and the decisions they gave.
@@ -421,6 +423,8 @@ export const EXCLUDED_TABLES: Readonly<Record<string, string>> = {
     'Binding rows between mirrored calendar events and drives — meaningless without the mirrored events, which are excluded above.',
   event_attendees:
     'Attendee list of a mirrored calendar event: it is a list of OTHER PEOPLE, which Art 15(4) puts outside the subject\'s access right.',
+  user_builtin_agents:
+    'System pointers from a built-in agent key (imago; the retired imago-planner and imago-researcher pointers are dropped at the subject\'s next provisioning) to the AI_CHAT page provisioned for the subject; nothing in a row is authored by the subject. The agent pages are exported with the subject\'s Home drive like any other page (id, title, type, content); their system prompt and enabled tools are not exported — they are copied from the code registry, not authored by the subject.',
 };
 
 /** Every table the registry has a decision for. */

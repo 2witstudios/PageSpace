@@ -312,13 +312,16 @@ describe('Schema definitions', () => {
     it('calculateVersionExpiresAt returns date 30 days in future by default', () => {
       const before = Date.now();
       const result = versioning.calculateVersionExpiresAt();
-      const after = Date.now();
 
       expect(result).toBeInstanceOf(Date);
-      const diffMs = result.getTime() - before;
-      const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000;
-      expect(diffMs).toBeGreaterThanOrEqual(thirtyDaysMs - 1000);
-      expect(diffMs).toBeLessThanOrEqual(thirtyDaysMs + (after - before) + 1000);
+      // setDate works in local calendar days, so when a DST transition falls
+      // inside the 30-day window the real-time difference is 30 days ±1h (CI
+      // runs in UTC and never sees this; local hosts do, every autumn).
+      // Compare at day level, like the custom-createdAt test below.
+      const diffDays = Math.round(
+        (result.getTime() - before) / (24 * 60 * 60 * 1000)
+      );
+      expect(diffDays).toBe(30);
     });
 
     it('calculateVersionExpiresAt respects custom createdAt date', () => {

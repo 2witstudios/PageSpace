@@ -493,7 +493,10 @@ When summarizing multiple changes, group them thematically and describe the over
           targetDriveIds = Array.from(driveIdSet);
         }
 
-        // Ceiling a scoped MCP token to its allowed drives (no-op otherwise).
+        // Ceiling a scoped MCP token to its allowed drives, and an Imago agent
+        // to the drives its user has not kept it out of (no-op otherwise):
+        // drive-level rows (no pageId) skip the page filter below, so an
+        // excluded drive must not be in this set at all.
         targetDriveIds = await filterDriveIdsByAppTokenScope(context as ToolExecutionContext, targetDriveIds);
 
         if (targetDriveIds.length === 0) {

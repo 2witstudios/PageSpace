@@ -36,6 +36,9 @@
   "include": [
     "collab-seed-audit.ts",
     "lib/seed-audit/**/*.ts",
-    "__tests__/collab-seed-audit*.test.ts"
+    "__tests__/collab-seed-audit*.test.ts",
+    "backfill-imago-agents.ts",
+    "__tests__/backfill-imago-agents*.test.ts",
+    "__tests__/setup.ts"
   ]
 }

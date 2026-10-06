@@ -11,7 +11,7 @@ import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { listAgentDrives } from '@pagespace/lib/services/drive-agent-service';
 import type { ToolExecutionContext } from '../core/types';
-import { resolveActingAgentId, filterDriveIdsByAppTokenScope, driveDeniedByAppToken, isMcpScoped, canActorManageDrive } from './actor-permissions';
+import { resolveActingAgentId, filterDriveIdsByAppTokenScope, filterAgentDriveIdsByActorReach, driveDeniedByAppToken, isMcpScoped, canActorManageDrive } from './actor-permissions';
 import { syncPublishedHomeRoot } from '@/lib/canvas/publish-page';
 
 // Helper: Extract AI attribution context with actor info for activity logging
@@ -58,9 +58,9 @@ export const driveTools = {
         try {
           const allAgentDrives = await listAgentDrives(agentPageId);
           // Ceiling a scoped MCP token to its allowed drives + its own role's
-          // view access (no-op otherwise).
+          // view access, and an Imago agent to the user's drives (no-op otherwise).
           const scopedIds = new Set(
-            await filterDriveIdsByAppTokenScope(context as ToolExecutionContext, allAgentDrives.map((d) => d.driveId)),
+            await filterAgentDriveIdsByActorReach(context as ToolExecutionContext, allAgentDrives.map((d) => d.driveId)),
           );
           const agentDrives = allAgentDrives.filter((d) => scopedIds.has(d.driveId));
           return {

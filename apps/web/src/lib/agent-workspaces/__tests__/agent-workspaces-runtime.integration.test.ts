@@ -25,12 +25,13 @@
  * silent skip would be a green, zero-assertion pass. Local runs without Docker
  * opt out explicitly with ALLOW_SKIP_DB_TESTS=1.
  */
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, vi } from 'vitest';
 import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db';
 import { eq, and, isNull, count } from '@pagespace/db/operators';
-import { pages } from '@pagespace/db/schema/core';
+import { drives, pages } from '@pagespace/db/schema/core';
 import { agentWorkspaces } from '@pagespace/db/schema/agent-workspaces';
+import { driveEnvs } from '@pagespace/db/schema/drive-envs';
 import { agentWorkspaceNodes } from '@pagespace/db/schema/agent-workspace-nodes';
 import { conversations } from '@pagespace/db/schema/conversations';
 import { factories } from '@pagespace/db/test/factories';
@@ -43,10 +44,54 @@ import {
   reopenConversationInSession,
   ensureGlobalSandboxSession,
   renameSession,
+  spawnSession,
   MAX_ACTIVE_SESSIONS_PER_OWNER,
 } from '../agent-workspaces-runtime';
-import { SessionFullError } from '../create-conversation-in-workspace';
+import { AgentNotInSessionDriveError, SessionFullError } from '../create-conversation-in-workspace';
 import { requireDb } from '@pagespace/db/test/require-db';
+
+/**
+ * Every `conversation:created` announcement, with what ANOTHER connection could
+ * read at the instant it was made. A client answers that event by re-reading the
+ * listing on its own connection, so the announcement is only true if both the
+ * row and its membership node are already committed when it fires.
+ */
+const announcements = vi.hoisted(
+  () => [] as Array<{ conversationId: string; visible: Promise<{ row: boolean; node: boolean }> }>,
+);
+
+vi.mock('@/lib/repositories/conversation-rev', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/repositories/conversation-rev')>();
+  const { db: pooled } = await import('@pagespace/db/db');
+  const ops = await import('@pagespace/db/operators');
+  const schema = await import('@pagespace/db/schema/conversations');
+  const nodes = await import('@pagespace/db/schema/agent-workspace-nodes');
+  return {
+    ...actual,
+    emitConversationLifecycle: (...args: Parameters<typeof actual.emitConversationLifecycle>) => {
+      const [kind, row] = args;
+      if (kind === 'created') {
+        announcements.push({
+          conversationId: row.id,
+          visible: Promise.all([
+            pooled.select({ id: schema.conversations.id }).from(schema.conversations).where(ops.eq(schema.conversations.id, row.id)),
+            pooled
+              .select({ id: nodes.agentWorkspaceNodes.id })
+              .from(nodes.agentWorkspaceNodes)
+              .where(ops.eq(nodes.agentWorkspaceNodes.targetId, row.id)),
+          ]).then(([rows, held]) => ({ row: rows.length > 0, node: held.length > 0 })),
+        });
+      }
+      actual.emitConversationLifecycle(...args);
+    },
+  };
+});
+
+async function announcedFor(conversationId: string) {
+  return Promise.all(
+    announcements.filter((entry) => entry.conversationId === conversationId).map((entry) => entry.visible),
+  );
+}
 
 let dbAvailable = false;
 
@@ -473,6 +518,62 @@ describe('a conversation and its membership are one transaction', () => {
   }, 20_000);
 });
 
+describe('conversation:created is announced only once the create has committed (IMG-10.8)', () => {
+  beforeAll(connect);
+
+  // A sidebar answers `conversation:created` by re-reading the session listing.
+  // Announced from inside the membership transaction, that re-read could run
+  // before the commit and get the old listing back, and nothing else would
+  // prompt another: the e2e spec 18 flake, where the row never appeared.
+  it('a page-agent create announces after its row and node are readable from another connection', async () => {
+    if (!dbAvailable) return;
+    const { owner, agentPage, workspace } = await seedWorkspace('Announce Agent');
+    const conversationId = createId();
+
+    await createConversationInSession({
+      conversationId,
+      userId: owner.id,
+      agentPageId: agentPage.id,
+      workspaceId: workspace.id,
+    });
+
+    expect(await announcedFor(conversationId)).toEqual([{ row: true, node: true }]);
+  }, 20_000);
+
+  it('a global-assistant create announces after its row and node are readable from another connection', async () => {
+    if (!dbAvailable) return;
+    const { owner, workspace } = await seedWorkspace('Announce Global');
+    const conversationId = createId();
+
+    await createConversationInSession({
+      conversationId,
+      userId: owner.id,
+      agentPageId: null,
+      workspaceId: workspace.id,
+    });
+
+    expect(await announcedFor(conversationId)).toEqual([{ row: true, node: true }]);
+  }, 20_000);
+
+  it('a create the transaction rolls back announces nothing', async () => {
+    if (!dbAvailable) return;
+    const { owner, agentPage, workspace } = await seedWorkspace('Announce Full');
+    await fillWorkspace(workspace.id, owner.id, agentPage.id, MAX_SESSION_CONVERSATIONS);
+    const conversationId = createId();
+
+    await expect(
+      createConversationInSession({
+        conversationId,
+        userId: owner.id,
+        agentPageId: agentPage.id,
+        workspaceId: workspace.id,
+      }),
+    ).rejects.toBeInstanceOf(SessionFullError);
+
+    expect(await announcedFor(conversationId)).toEqual([]);
+  }, 20_000);
+});
+
 describe('every admission is PLACED — there is no unplaced membership', () => {
   beforeAll(connect);
 
@@ -657,10 +758,195 @@ describe('renameSession — the ONE wrapper both rename surfaces call', () => {
   });
 });
 
+/** The owner's Home drive id, or null when they have none. */
+async function homeDriveIdOf(ownerId: string): Promise<string | null> {
+  const rows = await db
+    .select({ id: drives.id })
+    .from(drives)
+    .where(and(eq(drives.ownerId, ownerId), eq(drives.kind, 'HOME')));
+  expect(rows.length).toBeLessThanOrEqual(1);
+  return rows[0]?.id ?? null;
+}
+
+describe("spawnSession — a driveless spawn lands in the owner's Home drive (IMG-5.1)", () => {
+  beforeAll(connect);
+
+  it('given an owner with no Home drive, should provision it and create the workspace there', async () => {
+    if (!dbAvailable) return;
+
+    const owner = await factories.createUser();
+    expect(await homeDriveIdOf(owner.id)).toBeNull();
+
+    // The exact call the spawn route makes for its assistant-first branch.
+    const spawned = await spawnSession({ userId: owner.id, driveId: null, name: 'Global Assistant' });
+
+    expect(spawned.ok).toBe(true);
+    if (!spawned.ok) return;
+    const homeId = await homeDriveIdOf(owner.id);
+    expect(homeId).not.toBeNull();
+    const [row] = await db.select().from(agentWorkspaces).where(eq(agentWorkspaces.id, spawned.session.id));
+    expect(row.driveId).toBe(homeId);
+  });
+
+  it('given an owner with a Home drive, should reuse it', async () => {
+    if (!dbAvailable) return;
+
+    const owner = await factories.createUser();
+    const first = await spawnSession({ userId: owner.id, driveId: null });
+    const second = await spawnSession({ userId: owner.id, driveId: null });
+
+    if (!first.ok || !second.ok) throw new Error('expected both spawns to succeed');
+    expect(first.session.driveId).toBe(await homeDriveIdOf(owner.id));
+    expect(second.session.driveId).toBe(first.session.driveId);
+  });
+
+  it("given a driveless spawn naming an env in the owner's own Home drive, should refuse it — Home does not make a global session env-bindable", async () => {
+    if (!dbAvailable) return;
+
+    const owner = await factories.createUser();
+    const first = await spawnSession({ userId: owner.id, driveId: null });
+    if (!first.ok || first.session.driveId === null) throw new Error('expected a Home-drive session');
+    const [env] = await db
+      .insert(driveEnvs)
+      .values({ driveId: first.session.driveId, name: `home-env-${createId()}`, updatedAt: new Date() })
+      .returning();
+
+    const spawned = await spawnSession({ userId: owner.id, driveId: null, envId: env.id });
+
+    expect(spawned).toEqual({ ok: false, reason: 'env_not_found' });
+    const [{ n }] = await db
+      .select({ n: count() })
+      .from(agentWorkspaces)
+      .where(and(eq(agentWorkspaces.ownerId, owner.id), eq(agentWorkspaces.envId, env.id)));
+    expect(n).toBe(0);
+  });
+});
+
+/**
+ * IMG-5.1 review blocker: a global-assistant session moved into its owner's
+ * Home drive must keep hosting the owner's agents from OTHER drives, exactly
+ * as the null-drive session it replaces did. The cross-drive gate exists
+ * because a team drive's session bills and authorizes through THAT drive; an
+ * owner's Home session bills and authorizes through its owner alone, the same
+ * as a null-drive one.
+ */
+describe("a global session in the owner's Home drive hosts the owner's agents from other drives (IMG-5.1)", () => {
+  beforeAll(connect);
+
+  async function seedGlobalSessionAndTeamAgent() {
+    const owner = await factories.createUser();
+    const teamDrive = await factories.createDrive(owner.id);
+    const teamAgent = await factories.createPage(teamDrive.id, { type: 'AI_CHAT', title: 'Team Agent' });
+    const globalConversationId = createId();
+    await db.insert(conversations).values({
+      id: globalConversationId,
+      userId: owner.id,
+      type: 'global',
+      contextId: null,
+      isActive: true,
+    });
+    const ensured = await ensureGlobalSandboxSession(globalConversationId, owner.id);
+    if (!ensured.ok) throw new Error('expected a global session');
+    expect(ensured.session.driveId).toBe(await homeDriveIdOf(owner.id));
+    return { owner, teamDrive, teamAgent, globalConversationId, session: ensured.session };
+  }
+
+  it('given spawn_session from a global chat with a team-drive agent, should create the worker conversation in the Home session', async () => {
+    if (!dbAvailable) return;
+    const { owner, teamAgent, globalConversationId, session } = await seedGlobalSessionAndTeamAgent();
+    const workerConversationId = createId();
+
+    // The exact call `spawn_session` makes once `ensureGlobalSandboxSession`
+    // has resolved the caller's workspace.
+    await createConversationInSession({
+      conversationId: workerConversationId,
+      userId: owner.id,
+      agentPageId: teamAgent.id,
+      workspaceId: session.id,
+      excludeTargetId: globalConversationId,
+    });
+
+    expect((await nodeFor(workerConversationId))?.rootId).toBe(session.id);
+  });
+
+  it('given a team-drive agent conversation claimed into the Home session, should admit it', async () => {
+    if (!dbAvailable) return;
+    const { owner, teamAgent, session } = await seedGlobalSessionAndTeamAgent();
+    const pageConversationId = createId();
+    await db.insert(conversations).values({
+      id: pageConversationId,
+      userId: owner.id,
+      type: 'page',
+      contextId: teamAgent.id,
+      isActive: true,
+    });
+
+    expect(
+      await claimConversationInSession({ conversationId: pageConversationId, userId: owner.id, workspaceId: session.id }),
+    ).toBe('claimed');
+    expect((await nodeFor(pageConversationId))?.rootId).toBe(session.id);
+  });
+
+  it('given an ordinary session in a team drive, should still refuse an agent from another drive (negative control)', async () => {
+    if (!dbAvailable) return;
+    const owner = await factories.createUser();
+    const driveA = await factories.createDrive(owner.id);
+    const driveB = await factories.createDrive(owner.id);
+    const agentB = await factories.createPage(driveB.id, { type: 'AI_CHAT', title: 'Drive B Agent' });
+    const spawned = await spawnSession({ userId: owner.id, driveId: driveA.id });
+    if (!spawned.ok) throw new Error('expected a drive session');
+    const pageConversationId = createId();
+    await db.insert(conversations).values({
+      id: pageConversationId,
+      userId: owner.id,
+      type: 'page',
+      contextId: agentB.id,
+      isActive: true,
+    });
+
+    await expect(
+      createConversationInSession({
+        conversationId: createId(),
+        userId: owner.id,
+        agentPageId: agentB.id,
+        workspaceId: spawned.session.id,
+      }),
+    ).rejects.toBeInstanceOf(AgentNotInSessionDriveError);
+    expect(
+      await claimConversationInSession({ conversationId: pageConversationId, userId: owner.id, workspaceId: spawned.session.id }),
+    ).toBe('cross_drive_denied');
+  });
+
+  it("given a session in a Home drive its owner does not own, should refuse an agent from another drive (negative control)", async () => {
+    if (!dbAvailable) return;
+    const homeOwner = await factories.createUser();
+    const sessionOwner = await factories.createUser();
+    const homeSpawn = await spawnSession({ userId: homeOwner.id, driveId: null });
+    if (!homeSpawn.ok || homeSpawn.session.driveId === null) throw new Error('expected a Home session');
+    // Not reachable through any spawn path (Home is owner-only) — seeded so the
+    // exemption is shown to depend on OWNERSHIP, not on the drive being a Home.
+    const [foreignHomeSession] = await db
+      .insert(agentWorkspaces)
+      .values({ id: createId(), driveId: homeSpawn.session.driveId, ownerId: sessionOwner.id })
+      .returning();
+    const otherDrive = await factories.createDrive(sessionOwner.id);
+    const otherAgent = await factories.createPage(otherDrive.id, { type: 'AI_CHAT', title: 'Other Agent' });
+
+    await expect(
+      createConversationInSession({
+        conversationId: createId(),
+        userId: sessionOwner.id,
+        agentPageId: otherAgent.id,
+        workspaceId: foreignHomeSession.id,
+      }),
+    ).rejects.toBeInstanceOf(AgentNotInSessionDriveError);
+  });
+});
+
 describe('ensureGlobalSandboxSession — auto-provisioning the default Global Assistant conversation', () => {
   beforeAll(connect);
 
-  it('mints a real, ordinary workspace (driveId null) and admits a never-claimed global conversation', async () => {
+  it("mints a real, ordinary workspace in the owner's Home drive and admits a never-claimed global conversation", async () => {
     if (!dbAvailable) return;
 
     const owner = await factories.createUser();
@@ -678,7 +964,9 @@ describe('ensureGlobalSandboxSession — auto-provisioning the default Global As
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.session.ownerId).toBe(owner.id);
-    expect(result.session.driveId).toBeNull();
+    // IMG-5.1: no longer a null-drive row — the owner's Home drive, provisioned
+    // on the spot because a factory user starts without one.
+    expect(result.session.driveId).toBe(await homeDriveIdOf(owner.id));
     expect((await nodeFor(conversationId))?.rootId).toBe(result.session.id);
     // BORN NAMED. This is the DEFAULT minting path — a plain `spawn_session`
     // and the first sandbox tool call in a global chat both reach it — and it

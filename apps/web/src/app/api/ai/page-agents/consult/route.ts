@@ -573,6 +573,9 @@ export async function POST(request: Request) {
         userId,
         driveId: agent.driveId,
         currentTools: availableTools,
+        // A consult has no drive in view: an Imago agent gets user-level integrations only.
+        contextDriveId: null,
+        allowedDriveIds: getAllowedDriveIds(auth),
       });
       integrationToolCount = Object.keys(integrationTools).length;
       if (integrationToolCount > 0) {

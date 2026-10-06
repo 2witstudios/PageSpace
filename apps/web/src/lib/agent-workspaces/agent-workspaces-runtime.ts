@@ -22,6 +22,7 @@ import { and, eq, inArray, sql } from '@pagespace/db/operators';
 import { conversations } from '@pagespace/db/schema/conversations';
 import { agentWorkspaceNodes } from '@pagespace/db/schema/agent-workspace-nodes';
 import { users } from '@pagespace/db/schema/auth';
+import { drives } from '@pagespace/db/schema/core';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { checkAgentSessionConcurrency } from '@pagespace/lib/services/sandbox/quota';
 import {
@@ -76,9 +77,13 @@ import {
   nextUniqueSessionName,
   type AgentSessionDTO,
 } from '@pagespace/lib/agent-workspaces/session-contract';
-import { decideAgentSessionAccess } from '@pagespace/lib/agent-workspaces/decide-workspace-access';
+import {
+  decideAgentSessionAccess,
+  sessionHostsAgentsFromAnyDrive,
+} from '@pagespace/lib/agent-workspaces/decide-workspace-access';
 import { MAX_SESSION_CONVERSATIONS } from '@pagespace/lib/agent-workspaces/plan-spawn-worker';
 import { resolveDevPreviewHolder } from '@pagespace/lib/services/sandbox/preview/dev-preview-core';
+import { provisionHomeDriveIfNeeded } from '@pagespace/lib/onboarding/home-drive';
 import { requestDevPreviewWatch } from '@/lib/dev-preview/detection-trigger';
 import { broadcastSessionUpdated } from '@/lib/websocket/agent-workspace-events';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
@@ -353,7 +358,19 @@ function buildClaimDeps(actingUserId: string): ClaimConversationInSessionDeps<Db
     },
     findSession: async (workspaceId) => {
       const row = await findSessionRecord(workspaceId);
-      return row ? { driveId: row.driveId, endedAt: row.endedAt } : null;
+      if (!row) return null;
+      const drive =
+        row.driveId === null
+          ? null
+          : ((await db.query.drives.findFirst({
+              where: eq(drives.id, row.driveId),
+              columns: { kind: true, ownerId: true },
+            })) ?? null);
+      return {
+        driveId: row.driveId,
+        endedAt: row.endedAt,
+        hostsAgentsFromAnyDrive: sessionHostsAgentsFromAnyDrive({ session: row, drive }),
+      };
     },
     admitConversation: (input) => admitConversationNode({ ...input, actingUserId }),
   };
@@ -463,6 +480,15 @@ export async function createConversationInSession(input: {
   /** The pane a human picked into — see `AdmitConversationInput.activeNodeId`. */
   activeNodeId?: string;
 }): Promise<void> {
+  // The creators run inside the membership transaction, so their
+  // `conversation:created` is held here and made once it has committed: a
+  // sidebar re-reads its listing on that event, and a re-read racing the commit
+  // gets the listing without this thread and is never prompted again. One slot,
+  // overwritten, so a transaction that runs `within` again announces once.
+  const held: { announceCreated?: () => void } = {};
+  const holdAnnouncement = (announce: () => void) => {
+    held.announceCreated = announce;
+  };
   await createConversationInSessionWith<DbExecutor>(
     {
       ...buildClaimDeps(input.userId),
@@ -470,10 +496,12 @@ export async function createConversationInSession(input: {
         conversationRepository.createConversation(conversationId, userId, agentPageId, {
           title: title ?? undefined,
           executor: tx,
+          announceAfterCommit: holdAnnouncement,
         }),
       createGlobalConversation: async ({ conversationId, userId, title }, tx) => {
         await resolveOrCreateConversation(userId, conversationId, tx, {
           title: title ?? undefined,
+          announceAfterCommit: holdAnnouncement,
         });
       },
       findConversationIn: async (conversationId, tx) => {
@@ -491,6 +519,8 @@ export async function createConversationInSession(input: {
     },
     input,
   );
+  // Resolving means the transaction committed; a refusal threw past this.
+  held.announceCreated?.();
 }
 
 /**
@@ -798,6 +828,9 @@ export async function spawnSession(input: {
       // assembly the provisioner also runs; the service calls this only when
       // the env's substrate is `local`.
       gateLocalEnvBind,
+      // A driveless (global-assistant) spawn is created in the owner's Home
+      // drive, provisioned on the spot for a user who has none yet.
+      resolveHomeDriveId: async (ownerId) => (await provisionHomeDriveIfNeeded(ownerId)).driveId,
     },
   });
 }

@@ -139,6 +139,27 @@ run_db_test_suite() {
     fi
 }
 
+# apps/imago keeps its DB-backed suites (*.integration.test.ts) out of its
+# default vitest config; they run through its `test:integration` script, as
+# ci.yml runs them.
+run_integration_test_suite() {
+    local name="$1"
+    local filter="$2"
+    local path="$3"
+
+    TOTAL=$((TOTAL + 1))
+    echo -e "${YELLOW}▶ Running: ${name}${NC}"
+
+    if bun run --filter "$filter" test:integration -- "$path" --reporter=dot 2>&1; then
+        echo -e "${GREEN}✓ ${name} passed${NC}"
+        echo ""
+    else
+        echo -e "${RED}✗ ${name} failed${NC}"
+        echo ""
+        FAILED=$((FAILED + 1))
+    fi
+}
+
 # Some packages (@pagespace/cli, @pagespace/sdk) wire a `pretest: bun run
 # build` hook (tsc must run before vitest sees the compiled dist types).
 # `bun run --filter <pkg> test -- <args>` forwards trailing args to EVERY
@@ -293,6 +314,62 @@ echo "🔌 MCP WebSocket Security"
 echo "-------------------------"
 
 run_test_suite "MCP WebSocket Route Security" "web" "src/app/api/mcp-ws/__tests__/route.security.test.ts"
+
+# =============================================================================
+# Viewer-Scoped Read Tests
+# =============================================================================
+echo "👤 Viewer-Scoped Reads"
+echo "----------------------"
+
+run_test_suite "Built-in Agent Pointers (viewer only, no cross-user leakage)" "web" "src/app/api/user/builtin-agents"
+
+# =============================================================================
+# Imago's reach (IMG-10.10: the owner's reach, minus the drives they keep it
+# out of, never more than the owner, nothing for anyone else)
+# =============================================================================
+echo "🪪 Imago Reach"
+echo "--------------"
+
+run_test_suite "Imago Access Route (own exclusion only, any accessor, CSRF + origin, off stays off)" "web" "src/app/api/drives/[driveId]/imago-access"
+run_db_test_suite "Imago Access Service (default on, own choice only, Home refused, never a grant)" "@pagespace/lib" "src/agents/__tests__/imago-drive-access.integration.test.ts"
+run_db_test_suite "Imago Provisioning (one agent at the user's reach, retired agents and grants cleaned up)" "@pagespace/lib" "src/agents/__tests__/provision-imago-agents.integration.test.ts"
+run_test_suite "Drive Ownership Rollback/Redo (each user's Imago choice kept)" "web" "src/services/api/rollback/__tests__/drive-ownership.integration.test.ts"
+# Real POST /api/ai/chat turns, only the model mocked, driving the tool executors.
+run_test_suite "Imago Reach (owner's reach, excluded drives denied on every path, nothing for anyone else)" "web" "src/lib/ai/chat-pipeline/__tests__/imago-agent-reach.security.test.ts"
+run_test_suite "Imago = Global Assistant (same tools and context for the same user and toggles)" "web" "src/lib/ai/chat-pipeline/__tests__/imago-global-parity.integration.test.ts"
+run_test_suite "Imago Integrations (the global assistant's, none from an excluded drive, per-agent grants ignored, fail closed)" "web" "src/lib/ai/chat-pipeline/__tests__/imago-turn-integrations.integration.test.ts"
+run_test_suite "Actor Permissions (agent/user/token ceilings, Imago at its owner's reach minus exclusions, nothing for others)" "web" "src/lib/ai/tools/__tests__/actor-permissions.test.ts"
+run_test_suite "Imago Integrations outside page chat (@-mention engine, consult route, workflows)" "web" "src/lib/ai/core/__tests__/imago-integration-entrypoints.security.test.ts"
+run_test_suite "Member removal by rollback/redo/restore revokes the member's agent grants" "web" "src/services/api/rollback/__tests__/member-removal-agent-grants.integration.test.ts"
+run_test_suite "Imago Agent Context (own Imago only, its exclusions)" "web" "src/lib/ai/core/__tests__/imago-agent-context.integration.test.ts"
+run_test_suite "Agent Session Access (drive members only, unknown is never a grant)" "@pagespace/lib" "src/agent-workspaces/__tests__/decide-workspace-access.test.ts"
+run_db_test_suite "GDPR Export of Imago Drive Access (the user's own rows only)" "@pagespace/lib" "src/compliance/export/__tests__/imago-drive-access-export.integration.test.ts"
+
+# =============================================================================
+# Imago App Boundaries (apps/imago: same-origin app on classic's session)
+# =============================================================================
+echo "🖼️ Imago App"
+echo "------------"
+
+run_test_suite "Imago Middleware (flag gate, session-cookie gate, prefetch matcher, redirect origin)" "@pagespace/imago" "src/middleware.test.ts"
+run_test_suite "Imago CSP & Security Headers" "@pagespace/imago" "src/middleware/security-headers.test.ts"
+run_test_suite "Imago Sign-in URL (return-path sanitiser, configured origin)" "@pagespace/imago" "src/lib/auth/sign-in-url.test.ts"
+run_test_suite "Imago getViewer (session validation, redirect to sign-in)" "@pagespace/imago" "src/lib/auth/get-viewer.test.ts"
+run_integration_test_suite "Imago getViewer against the real session service" "@pagespace/imago" "src/lib/auth/get-viewer.integration.test.ts"
+run_test_suite "Imago API Client (CSRF token, sign-in on 401)" "@pagespace/imago" "src/api/client.test.ts"
+run_test_suite "Imago Socket Token" "@pagespace/imago" "src/realtime/socket-token.test.ts"
+run_test_suite "Classic Sign-in next= Allow-list (/imago only as a safe path)" "web" "src/lib/auth/__tests__/resolve-signin-next.test.ts"
+
+# =============================================================================
+# Realtime (Socket.IO) Security Tests
+# =============================================================================
+echo "📡 Realtime"
+echo "-----------"
+
+run_test_suite "Realtime Origin Allow-list" "realtime" "src/__tests__/origin-allowlist.test.ts"
+run_test_suite "Realtime Origin Validation" "realtime" "src/__tests__/origin-validation.test.ts"
+run_test_suite "Realtime Socket Auth" "realtime" "src/__tests__/auth.test.ts"
+run_test_suite "Realtime Per-Event Auth" "realtime" "src/__tests__/per-event-auth.test.ts"
 
 # =============================================================================
 # AI Tool Security Tests
