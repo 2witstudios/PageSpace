@@ -49,6 +49,7 @@ import {
   planPersonalRootRoll,
   planLegRefund,
   planDonation,
+  selectOrgPoolRefillLines,
   type DonationRefusal,
   type LegRefundPlan,
 } from './wallet-funding';
@@ -100,6 +101,8 @@ export interface OrgInvoice {
       amount?: number | null;
       discount_amounts?: ReadonlyArray<{ amount?: number | null } | null> | null;
       period?: { start?: number | null; end?: number | null } | null;
+      pricing?: { price_details?: { price?: string | { id?: string | null } | null } | null } | null;
+      parent?: { subscription_item_details?: { subscription_item?: string | null } | null } | null;
     } | null | undefined> | null;
   } | null;
 }
@@ -135,6 +138,13 @@ function hasSubscriptionParent(invoice: OrgInvoice): boolean {
 export interface OrgPoolRefillOptions {
   /** Extra seats on the subscription, for a gift funded at list price ([D-OW-23]). */
   extraSeats?: number;
+  /**
+   * MON-3: the configured org plan price ids (stripe-config orgPriceIds) — the Business
+   * base and the extra-seat item. Only lines on these prices (or on the subscription's
+   * own stored items) refill the pool; every other line is excluded and logged.
+   */
+  basePriceId?: string;
+  seatPriceId?: string;
   /** D-OW-17 test seam only; production callers never pass it. */
   active?: boolean;
 }
@@ -143,6 +153,8 @@ export interface OrgPoolRefillOptions {
  * invoice.paid for an ORG customer: refill that org's pool with (base + extra-seat
  * items) paid × ratio (MON-3), once per invoice, and roll the pool's period to the
  * invoice's service period — the date the org's allocations then reset on (D-OW-12).
+ * Only lines on the configured org plan prices (`basePriceId` / `seatPriceId`, or the
+ * subscription's own stored items) are summed; any other line is excluded and logged.
  * The ledger row is written under the org Owner's user id (the ledger is keyed on a
  * person) and the pool's wallet id. Throws on a genuine failure so Stripe redelivers.
  */
@@ -162,21 +174,42 @@ export async function applyOrgPoolRefill(invoice: OrgInvoice, opts: OrgPoolRefil
 
   const lines = invoice.lines?.data ?? [];
   const gifted = invoice.parent?.subscription_details?.metadata?.type === GIFT_SUBSCRIPTION_METADATA_TYPE;
-  // Review #2761 P2-4: a gift funds the pool only on the org's OWN stored subscription — the one its
-  // status is read from. Read only for a gift: every other invoice is sized from what it paid.
-  let onOrgSubscription = false;
-  if (gifted) {
-    const invoiceSubscriptionId = invoiceSubscriptionIdOf(invoice);
-    const [stored] = await db
-      .select({ stripeSubscriptionId: orgSubscriptions.stripeSubscriptionId })
-      .from(orgSubscriptions)
-      .where(eq(orgSubscriptions.orgId, org.id))
-      .limit(1);
-    onOrgSubscription = invoiceSubscriptionId !== null && stored?.stripeSubscriptionId === invoiceSubscriptionId;
+  // The org's stored subscription linkage: the gift gate below reads whether the invoice is on
+  // the org's OWN subscription (review #2761 P2-4), and the MON-3 line selection falls back to
+  // the stored item ids for a line whose price id is unreadable.
+  const [stored] = await db
+    .select({
+      stripeSubscriptionId: orgSubscriptions.stripeSubscriptionId,
+      stripeBaseItemId: orgSubscriptions.stripeBaseItemId,
+      stripeSeatItemId: orgSubscriptions.stripeSeatItemId,
+    })
+    .from(orgSubscriptions)
+    .where(eq(orgSubscriptions.orgId, org.id))
+    .limit(1);
+  const onOrgSubscription =
+    gifted && invoiceSubscriptionIdOf(invoice) !== null && stored?.stripeSubscriptionId === invoiceSubscriptionIdOf(invoice);
+
+  // MON-3: the pool refills only from the Business base and extra-seat lines. An ad-hoc
+  // invoice item (or any line on an unrecognized price) is excluded and logged with its
+  // price id and amount, so a misconfiguration is visible instead of silently funding the pool.
+  const selection = selectOrgPoolRefillLines(
+    lines,
+    { basePriceId: opts.basePriceId, seatPriceId: opts.seatPriceId },
+    { baseItemId: stored?.stripeBaseItemId, seatItemId: stored?.stripeSeatItemId },
+  );
+  for (const line of selection.unrecognized) {
+    loggers.api.warn('org pool refill: invoice line is not the Business base or an extra-seat item; excluded', {
+      orgId: org.id,
+      stripeRef,
+      priceId: line.priceId,
+      subscriptionItemId: line.subscriptionItemId,
+      amountCents: line.amountCents,
+    });
   }
+
   const grant = orgPoolRefillGrant(
     {
-      lines,
+      lines: selection.refillLines,
       amountPaidCents: invoice.amount_paid,
       hasSubscriptionParent: hasSubscriptionParent(invoice),
       billingReason: invoice.billing_reason,
@@ -200,7 +233,9 @@ export async function applyOrgPoolRefill(invoice: OrgInvoice, opts: OrgPoolRefil
     loggers.api.info('org pool refill: invoice grants nothing', { orgId: org.id, stripeRef, reason: grant.reason, paidCents: grant.paidCents });
     return { kind: 'nothing', orgId: org.id, reason: grant.reason };
   }
-  const period = invoiceServicePeriodMs({ lines, periodStart: invoice.period_start, periodEnd: invoice.period_end });
+  // The service period comes from the recognized lines too: an ad-hoc line's period must
+  // no more move the pool's reset date than its amount may fund the pool.
+  const period = invoiceServicePeriodMs({ lines: selection.refillLines, periodStart: invoice.period_start, periodEnd: invoice.period_end });
 
   const result = await db.transaction(async (tx) => {
     await tx.insert(wallets).values({ ownerType: 'org', orgId: org.id }).onConflictDoNothing(ORG_POOL_ARBITER);

@@ -6,6 +6,7 @@ import {
   orgPoolRefillGrant,
   orgPoolListPriceGrantCents,
   orgInvoicePaidCents,
+  selectOrgPoolRefillLines,
   currentGoverningPeriodMs,
   ORG_POOL_FUNDS_GIFTS,
   refillPool,
@@ -30,17 +31,17 @@ const seats = (n: number) => ({ amount: SEAT_CENTS * n });
 const giftedBase = { amount: BASE_CENTS, discount_amounts: [{ amount: BASE_CENTS }] };
 
 describe('wallet-funding: org pool refill', () => {
-  it('MON-3 (partial) base + 3 extra seats paid × the Business ratio, ratio on: 8000 paid → 4800', () => {
+  it('MON-3 base + 3 extra seats paid × the Business ratio, ratio on: 8000 paid → 4800', () => {
     const grant = orgPoolRefillGrant({ lines: [base, seats(3)], amountPaidCents: 8000, hasSubscriptionParent: true }, true);
     expect(grant).toEqual({ paidCents: 8000, allowanceCents: 4800, basis: 'paid', reason: 'paid' });
   });
 
-  it('MON-3 (partial) base + 3 extra seats with the ratio off grants the whole 8000 paid', () => {
+  it('MON-3 base + 3 extra seats with the ratio off grants the whole 8000 paid', () => {
     const grant = orgPoolRefillGrant({ lines: [base, seats(3)], amountPaidCents: 8000, hasSubscriptionParent: true }, false);
     expect(grant.allowanceCents).toBe(8000);
   });
 
-  it('MON-3 (partial) more seats means a bigger pool with no second constant: 10 seats vs 3 seats', () => {
+  it('MON-3 more seats means a bigger pool with no second constant: 10 seats vs 3 seats', () => {
     const three = orgPoolRefillGrant({ lines: [base, seats(3)], amountPaidCents: 8000, hasSubscriptionParent: true }, true);
     const ten = orgPoolRefillGrant({ lines: [base, seats(10)], amountPaidCents: 15000, hasSubscriptionParent: true }, true);
     expect(ten.allowanceCents - three.allowanceCents).toBe(Math.floor((SEAT_CENTS * 7 * 6000) / 10_000));
@@ -56,7 +57,7 @@ describe('wallet-funding: org pool refill', () => {
     expect(grant).toEqual({ paidCents: 8000, allowanceCents: 0, basis: 'none', reason: 'not_a_subscription_invoice' });
   });
 
-  it('MON-3 (partial) D-OW-30 a $0 trial-shaped org invoice (subscription_create, paid 0, subtotal 0) grants NOTHING: the pool is funded only from what was actually paid', () => {
+  it('MON-3 D-OW-30 a $0 trial-shaped org invoice (subscription_create, paid 0, subtotal 0) grants NOTHING: the pool is funded only from what was actually paid', () => {
     for (const active of [true, false]) {
       const grant = orgPoolRefillGrant(
         { lines: [{ amount: 0 }], amountPaidCents: 0, hasSubscriptionParent: true, billingReason: 'subscription_create', subtotalCents: 0, extraSeats: 3 },
@@ -66,7 +67,7 @@ describe('wallet-funding: org pool refill', () => {
     }
   });
 
-  it('MON-3 (partial) D-OW-30 the FIRST real payment funds the pool from what it actually paid: base + 2 seats, 7000 paid → 4200 (ratio on), 7000 (ratio off)', () => {
+  it('MON-3 D-OW-30 the FIRST real payment funds the pool from what it actually paid: base + 2 seats, 7000 paid → 4200 (ratio on), 7000 (ratio off)', () => {
     const first = { lines: [base, seats(2)], amountPaidCents: 7000, hasSubscriptionParent: true, billingReason: 'subscription_create', subtotalCents: 7000, extraSeats: 2 };
     expect(orgPoolRefillGrant(first, true)).toEqual({ paidCents: 7000, allowanceCents: 4200, basis: 'paid', reason: 'paid' });
     expect(orgPoolRefillGrant(first, false)).toEqual({ paidCents: 7000, allowanceCents: 7000, basis: 'paid', reason: 'paid' });
@@ -98,7 +99,7 @@ describe('wallet-funding: org pool refill', () => {
     expect(grant).toEqual({ paidCents: 0, allowanceCents: 0, basis: 'none', reason: 'zero_amount' });
   });
 
-  it('MON-3 (partial) a 50% coupon halves the pool: base + 3 seats list 8000, paid 4000 → 2400', () => {
+  it('MON-3 a 50% coupon halves the pool: base + 3 seats list 8000, paid 4000 → 2400', () => {
     const half = (amount: number) => ({ amount, discount_amounts: [{ amount: amount / 2 }] });
     const grant = orgPoolRefillGrant(
       { lines: [half(BASE_CENTS), half(SEAT_CENTS * 3)], amountPaidCents: 4000, hasSubscriptionParent: true, subtotalCents: 8000 },
@@ -107,7 +108,7 @@ describe('wallet-funding: org pool refill', () => {
     expect(grant).toEqual({ paidCents: 4000, allowanceCents: 2400, basis: 'paid', reason: 'paid' });
   });
 
-  it('MON-3 (partial) tax in amount_paid never grows the pool, and a short payment shrinks it', () => {
+  it('MON-3 tax in amount_paid never grows the pool, and a short payment shrinks it', () => {
     expect(orgInvoicePaidCents({ lines: [base, seats(3)], amountPaidCents: 8800 })).toBe(8000);
     expect(orgInvoicePaidCents({ lines: [base, seats(3)], amountPaidCents: 3000 })).toBe(3000);
     expect(orgInvoicePaidCents({ lines: [base, seats(3)], amountPaidCents: null })).toBe(0);
@@ -115,6 +116,59 @@ describe('wallet-funding: org pool refill', () => {
     // The discount is netted per line, so the tax cannot fill the gap back up.
     const half = (amount: number) => ({ amount, discount_amounts: [{ amount: amount / 2 }] });
     expect(orgInvoicePaidCents({ lines: [half(BASE_CENTS), half(SEAT_CENTS * 3)], amountPaidCents: 4400 })).toBe(4000);
+  });
+
+  describe('MON-3 line selection: only the Business base and extra-seat lines refill the pool', () => {
+    const BASE_PRICE_ID = 'price_org_base';
+    const SEAT_PRICE_ID = 'price_org_seat';
+    const priced = (priceId: string, amount: number) => ({ amount, pricing: { price_details: { price: priceId } } });
+    const PRICES = { basePriceId: BASE_PRICE_ID, seatPriceId: SEAT_PRICE_ID };
+
+    it('MON-3 an ad-hoc invoice line (a manually added item, no org price, no subscription item) does NOT refill the pool', () => {
+      const adHoc = { amount: 2500 };
+      const selection = selectOrgPoolRefillLines([priced(BASE_PRICE_ID, BASE_CENTS), priced(SEAT_PRICE_ID, SEAT_CENTS * 3), adHoc], PRICES);
+      expect(selection.refillLines).toEqual([priced(BASE_PRICE_ID, BASE_CENTS), priced(SEAT_PRICE_ID, SEAT_CENTS * 3)]);
+      expect(selection.unrecognized).toEqual([{ priceId: null, subscriptionItemId: null, amountCents: 2500 }]);
+      // The grant is sized from the recognized lines alone: 8000 paid × 60%, never 10500 × 60%.
+      const grant = orgPoolRefillGrant({ lines: selection.refillLines, amountPaidCents: 10500, hasSubscriptionParent: true }, true);
+      expect(grant).toEqual({ paidCents: 8000, allowanceCents: 4800, basis: 'paid', reason: 'paid' });
+    });
+
+    it('MON-3 a stranger price id is excluded and reported with its price id and amount', () => {
+      const stranger = priced('price_stranger', 900);
+      const selection = selectOrgPoolRefillLines([priced(BASE_PRICE_ID, BASE_CENTS), stranger], PRICES);
+      expect(selection.refillLines).toEqual([priced(BASE_PRICE_ID, BASE_CENTS)]);
+      expect(selection.unrecognized).toEqual([{ priceId: 'price_stranger', subscriptionItemId: null, amountCents: 900 }]);
+    });
+
+    it('MON-3 a line whose subscription item is the subscription\'s own base item is recognized when its price id is unreadable', () => {
+      const legacyBase = { amount: BASE_CENTS, parent: { subscription_item_details: { subscription_item: 'si_base' } } };
+      const selection = selectOrgPoolRefillLines([legacyBase, priced('price_unknown', 700)], {}, { baseItemId: 'si_base', seatItemId: 'si_seat' });
+      expect(selection.refillLines).toEqual([legacyBase]);
+      expect(selection.unrecognized).toEqual([{ priceId: 'price_unknown', subscriptionItemId: null, amountCents: 700 }]);
+    });
+
+    it('MON-3 an expanded price object and a recognized proration credit are read like plain lines', () => {
+      const expanded = { amount: BASE_CENTS, pricing: { price_details: { price: { id: BASE_PRICE_ID } } } };
+      const seatProration = priced(SEAT_PRICE_ID, -500);
+      const selection = selectOrgPoolRefillLines([expanded, seatProration], PRICES);
+      expect(selection.refillLines).toEqual([expanded, seatProration]);
+      const grant = orgPoolRefillGrant({ lines: selection.refillLines, amountPaidCents: 4500, hasSubscriptionParent: true }, true);
+      expect(grant.paidCents).toBe(4500);
+    });
+
+    it('MON-3 with nothing configured (no price ids, no stored items) nothing is recognized — the pool is never sized from unverified lines', () => {
+      const selection = selectOrgPoolRefillLines([priced(BASE_PRICE_ID, BASE_CENTS), { amount: SEAT_CENTS * 3 }]);
+      expect(selection.refillLines).toEqual([]);
+      expect(selection.unrecognized.map((l) => l.amountCents)).toEqual([BASE_CENTS, SEAT_CENTS * 3]);
+      expect(orgPoolRefillGrant({ lines: selection.refillLines, amountPaidCents: 8000, hasSubscriptionParent: true }, true))
+        .toEqual({ paidCents: 0, allowanceCents: 0, basis: 'none', reason: 'zero_amount' });
+    });
+
+    it('MON-3 empty configured price ids (live mode before the D1 prices are set) recognize nothing', () => {
+      const selection = selectOrgPoolRefillLines([priced(BASE_PRICE_ID, BASE_CENTS)], { basePriceId: '', seatPriceId: '' });
+      expect(selection.refillLines).toEqual([]);
+    });
   });
 
   it('D-OW-23 with gift funding OFF a gift grants nothing — the policy is one switch', () => {

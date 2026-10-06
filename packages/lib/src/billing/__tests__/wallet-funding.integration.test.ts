@@ -92,8 +92,15 @@ describe('wallet funding against Postgres', () => {
 
   const PERIOD_START_S = Date.UTC(2026, 8, 17) / 1000;
   const PERIOD_END_S = Date.UTC(2026, 9, 17) / 1000;
+  // MON-3: the refill recognizes only the Business base and extra-seat lines, by the
+  // configured price ids the webhook hands the shell (here: the test's own).
+  const PRICES = { basePriceId: 'price_test_org_base', seatPriceId: 'price_test_org_seat' };
+  const priced = (priceId: string, line: { amount: number; period: { start: number; end: number } }) => ({
+    ...line,
+    pricing: { price_details: { price: priceId } },
+  });
 
-  it('MON-3 (partial) an org invoice paid for base + 3 extra seats refills the org pool with paid × ratio, once, and stamps the refill date', async () => {
+  it('MON-3 an org invoice paid for base + 3 extra seats refills the org pool with paid × ratio, once, and stamps the refill date', async () => {
     if (!dbAvailable) return;
     const owner = await user();
     const [org] = await db
@@ -110,15 +117,15 @@ describe('wallet funding against Postgres', () => {
       parent: { subscription_details: { subscription: `sub_${createId()}` } },
       lines: {
         data: [
-          { amount: 5000, period: { start: PERIOD_START_S, end: PERIOD_END_S } },
-          { amount: 3000, period: { start: PERIOD_START_S, end: PERIOD_END_S } },
+          priced(PRICES.basePriceId, { amount: 5000, period: { start: PERIOD_START_S, end: PERIOD_END_S } }),
+          priced(PRICES.seatPriceId, { amount: 3000, period: { start: PERIOD_START_S, end: PERIOD_END_S } }),
         ],
       },
     };
 
-    const first = await applyOrgPoolRefill(invoice, { active: true });
+    const first = await applyOrgPoolRefill(invoice, { active: true, ...PRICES });
     expect(first).toMatchObject({ kind: 'granted', orgId: org.id, allowanceCents: 4800 });
-    const replay = await applyOrgPoolRefill(invoice, { active: true });
+    const replay = await applyOrgPoolRefill(invoice, { active: true, ...PRICES });
     expect(replay).toEqual({ kind: 'duplicate', orgId: org.id });
 
     const pools = await db.select().from(wallets).where(eq(wallets.orgId, org.id));
@@ -142,7 +149,7 @@ describe('wallet funding against Postgres', () => {
       id: `in_${createId()}`,
       lines: { data: invoice.lines.data.map((l) => ({ ...l, period: { start: PERIOD_START_S - 30 * 86_400, end: PERIOD_START_S } })) },
     };
-    expect(await applyOrgPoolRefill(lateOld, { active: true })).toMatchObject({ kind: 'granted', allowanceCents: 4800 });
+    expect(await applyOrgPoolRefill(lateOld, { active: true, ...PRICES })).toMatchObject({ kind: 'granted', allowanceCents: 4800 });
     const [afterLate] = await db.select().from(wallets).where(eq(wallets.id, pools[0].id));
     expect(afterLate.monthlyRemainingCents).toBe(9600);
     expect(afterLate.monthlyPeriodStart?.getTime()).toBe(PERIOD_START_S * 1000);
@@ -150,6 +157,44 @@ describe('wallet funding against Postgres', () => {
 
     // A customer that is no org's is left to the personal path.
     expect(await applyOrgPoolRefill({ ...invoice, customer: `cus_${createId()}` })).toEqual({ kind: 'not_org' });
+  });
+
+  it('MON-3 an ad-hoc invoice line does not refill the pool: the grant sizes only the recognized base + seat lines, whatever collected', async () => {
+    if (!dbAvailable) return;
+    const owner = await user();
+    const [org] = await db
+      .insert(organizations)
+      .values({ name: 'Adhoc Corp', slug: `adhoc-${createId()}`, ownerId: owner, stripeCustomerId: `cus_${createId()}` })
+      .returning();
+    created.orgs.push(org.id);
+    // Base + 3 seats (8000) plus a manually added invoice item of 2500 that is no plan line.
+    // Pre-fix behavior summed every line: 10500 paid × 60% would mint 6300 — the review's bug.
+    const invoice = {
+      id: `in_${createId()}`,
+      customer: org.stripeCustomerId,
+      billing_reason: 'subscription_cycle',
+      amount_paid: 10500,
+      subtotal: 10500,
+      parent: { subscription_details: { subscription: `sub_${createId()}` } },
+      lines: {
+        data: [
+          priced(PRICES.basePriceId, { amount: 5000, period: { start: PERIOD_START_S, end: PERIOD_END_S } }),
+          priced(PRICES.seatPriceId, { amount: 3000, period: { start: PERIOD_START_S, end: PERIOD_END_S } }),
+          { amount: 2500, period: { start: PERIOD_START_S, end: PERIOD_END_S } },
+        ],
+      },
+    };
+
+    expect(await applyOrgPoolRefill(invoice, { active: true, ...PRICES })).toMatchObject({
+      kind: 'granted',
+      orgId: org.id,
+      allowanceCents: 4800,
+    });
+    const [pool] = await db.select().from(wallets).where(eq(wallets.orgId, org.id));
+    expect(pool).toMatchObject({ monthlyRemainingCents: 4800, monthlyAllowanceCents: 4800 });
+    const grants = await db.select().from(creditLedger).where(eq(creditLedger.stripeRef, invoice.id));
+    expect(grants).toHaveLength(1);
+    expect(grants[0]).toMatchObject({ amountCents: 4800, paidCents: 8000 });
   });
 
   it('WAL-3 (partial) D-OW-12 org allocations reset on the pool refill date, personal ones on the personal renewal; running it twice resets once', async () => {
