@@ -108,10 +108,11 @@ const imagoSwitch = (access: ImagoAccess, pending: boolean, toggle: (enabled: bo
 );
 
 const imagoControl = (props: DriveSettingsRenderProps): ReactNode => {
-  const { drive, actions, access, accessFailed, retryAccess, accessPending, toggleImagoAccess } = props;
-  // The Home drive guard's own words: Imago lives there.
+  const { drive, access, accessFailed, retryAccess, accessPending, toggleImagoAccess } = props;
+  // The Home drive guard's own words: Imago lives there. `actions.imagoAccess`
+  // is this same guard's verdict, so the reason is the one thing to ask.
   const homeReason = homeDriveActionError(drive, 'imago-access');
-  if (homeReason !== null || !actions.imagoAccess) return <p className={settingsDetailClass}>{homeReason}</p>;
+  if (homeReason !== null) return <p className={settingsDetailClass}>{homeReason}</p>;
   if (access === undefined) {
     return accessFailed
       ? renderErrorState({ title: 'Could not load Imago access', retry: retryAccess })
