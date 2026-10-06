@@ -357,7 +357,7 @@ describe('storage-limits', () => {
     });
   });
 
-  describe('getOrgFileCount (WAL-9)', () => {
+  describe('WAL-9 (partial) getOrgFileCount', () => {
     it('getOrgFileCount_withNoOrgDrives_returnsZeroWithoutReadingFiles', async () => {
       vi.mocked(storageRepository.findOrgDriveIds).mockResolvedValue([]);
       expect(await getOrgFileCount('org-northwind')).toBe(0);
