@@ -12,8 +12,8 @@ const driveAgents = [
 describe('agentMenu()', () => {
   test('Imago agents first, then the drive’s', () => {
     assert({
-      given: "the viewer's Imago agents and the agents the server lists in the open drive, with Imago answering",
-      should: 'offer the Imago agents first in registry order, then the drive’s under its name, with Imago chosen',
+      given: "the viewer's Imago and the agents the server lists in the open drive, with Imago answering",
+      should: 'offer Imago first, then the drive’s agents under its name, with Imago chosen',
       actual: agentMenu({ builtins, driveAgents, driveName: 'Alpha', selected: null }),
       expected: {
         value: 'p-imago',
@@ -22,8 +22,6 @@ describe('agentMenu()', () => {
             label: 'Imago',
             options: [
               { value: 'p-imago', title: 'Imago', disabled: false },
-              { value: 'p-planner', title: 'Planner', disabled: false },
-              { value: 'p-researcher', title: 'Researcher', disabled: false },
             ],
           },
           {
@@ -39,30 +37,26 @@ describe('agentMenu()', () => {
   });
 
   test('in the Home drive', () => {
-    const home = [{ id: 'p-planner', title: 'Planner' }, { id: 'p-imago', title: 'Imago' }, { id: 'a9', title: 'Journal' }];
+    const home = [{ id: 'p-imago', title: 'Imago' }, { id: 'a9', title: 'Journal' }];
     assert({
-      given: 'the Home drive, whose agent list holds the Imago agents too',
-      should: 'list each Imago agent once, in the Imago group',
+      given: 'the Home drive, whose agent list holds Imago too',
+      should: 'list Imago once, in the Imago group',
       actual: agentMenu({ builtins, driveAgents: home, driveName: 'Home', selected: null }).groups.map((group) =>
         group.options.map((option) => option.value),
       ),
-      expected: [['p-imago', 'p-planner', 'p-researcher'], ['a9']],
+      expected: [['p-imago'], ['a9']],
     });
   });
 
-  test('an Imago agent not provisioned yet', () => {
+  test('Imago not provisioned yet', () => {
     assert({
-      given: 'a planner with no page yet',
+      given: 'Imago with no page yet',
       should: 'show it, but not as something to choose',
-      actual: agentMenu({ builtins: pointers({ 'imago-planner': null }).agents, driveAgents: [], selected: null }).groups,
+      actual: agentMenu({ builtins: pointers({ imago: null }).agents, driveAgents: [], selected: null }).groups,
       expected: [
         {
           label: 'Imago',
-          options: [
-            { value: 'p-imago', title: 'Imago', disabled: false },
-            { value: 'pending:imago-planner', title: 'Planner', disabled: true },
-            { value: 'p-researcher', title: 'Researcher', disabled: false },
-          ],
+          options: [{ value: 'pending:imago', title: 'Imago', disabled: true }],
         },
       ],
     });
@@ -97,16 +91,15 @@ describe('agentFor()', () => {
   test('a chosen option', () => {
     const lists = { builtins, driveAgents };
     assert({
-      given: 'Imago, another Imago agent, a drive agent, an unprovisioned agent and an unknown value',
-      should: 'answer null for Imago (the default), the agent for the others, and undefined for what cannot be chosen',
+      given: 'Imago, a drive agent, an unprovisioned Imago and an unknown value',
+      should: 'answer null for Imago (the default), the agent for the drive one, and undefined for what cannot be chosen',
       actual: [
         agentFor(lists, 'p-imago'),
-        agentFor(lists, 'p-researcher'),
         agentFor(lists, 'a1'),
-        agentFor({ builtins: pointers({ 'imago-planner': null }).agents }, 'pending:imago-planner'),
+        agentFor({ builtins: pointers({ imago: null }).agents }, 'pending:imago'),
         agentFor(lists, 'zz'),
       ],
-      expected: [null, { id: 'p-researcher', title: 'Researcher' }, { id: 'a1', title: 'Support' }, undefined, undefined],
+      expected: [null, { id: 'a1', title: 'Support' }, undefined, undefined],
     });
   });
 });

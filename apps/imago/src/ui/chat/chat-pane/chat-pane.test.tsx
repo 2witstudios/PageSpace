@@ -36,8 +36,8 @@ const DRIVE_AGENTS = `GET ${chatPaths.driveAgents('d1')}`;
 const SUPPORT_CONVERSATIONS = `GET ${chatPaths.conversations('a1', 0)}`;
 const SUPPORT_MESSAGES = `GET ${chatPaths.messages('a1', 'k1')}`;
 const NOTES_CONVERSATIONS = `GET ${chatPaths.conversations('a2', 0)}`;
-const PLANNER_CONVERSATIONS = `GET ${chatPaths.conversations('p-planner', 0)}`;
-const PLANNER_MESSAGES = `GET ${chatPaths.messages('p-planner', 'pc1')}`;
+const PLANNING_CONVERSATIONS = `GET ${chatPaths.conversations('a3', 0)}`;
+const PLANNING_MESSAGES = `GET ${chatPaths.messages('a3', 'pc1')}`;
 
 const HISTORY: ChatMessage[] = [
   userMessage('m1', 'What does the roadmap say?'),
@@ -77,13 +77,14 @@ const chatWeb = (stream: FakeTurnStream, extra: Record<string, FakeRoute> = {}) 
         driveAgentsBody([
           { id: 'a1', title: 'Support' },
           { id: 'a2', title: 'Release notes' },
+          { id: 'a3', title: 'Planning' },
         ]),
       ),
     [SUPPORT_CONVERSATIONS]: () => Response.json(conversationsPage([agentConversation('k1'), agentConversation('k0')])),
     [SUPPORT_MESSAGES]: () =>
       Response.json(messagesPage([userMessage('s1', 'Any open tickets?'), userMessage('s2', 'And the backlog?')], { conversationId: 'k1' })),
-    [PLANNER_CONVERSATIONS]: () => Response.json(conversationsPage([agentConversation('pc1')])),
-    [PLANNER_MESSAGES]: () =>
+    [PLANNING_CONVERSATIONS]: () => Response.json(conversationsPage([agentConversation('pc1')])),
+    [PLANNING_MESSAGES]: () =>
       Response.json(messagesPage([userMessage('q1', 'Plan my week'), userMessage('q2', 'And next week')], { conversationId: 'pc1' })),
     [TRAIL]: () =>
       Response.json([
@@ -422,13 +423,13 @@ describe('ChatPane', () => {
     await settle(threadLoaded(container));
     await settle(drivesListed(container));
     assert({
-      given: 'the chat header in a drive with two agents the server says the viewer can use',
-      should: 'offer the three Imago agents first, then the drive’s agents under its name, with Imago chosen',
+      given: 'the chat header in a drive with three agents the server says the viewer can use',
+      should: 'offer Imago first, then the drive’s agents under its name, with Imago chosen',
       actual: [pickerOffers(container), picker(container).value, web.count(DRIVE_AGENTS)],
       expected: [
         [
-          ['Imago', ['p-imago:Imago', 'p-planner:Planner', 'p-researcher:Researcher']],
-          ['Alpha', ['a1:Support', 'a2:Release notes']],
+          ['Imago', ['p-imago:Imago']],
+          ['Alpha', ['a1:Support', 'a2:Release notes', 'a3:Planning']],
         ],
         'p-imago',
         1,
@@ -455,9 +456,9 @@ describe('ChatPane', () => {
       field(container).getAttribute('aria-label'),
     ];
 
-    choose(container, 'p-planner');
+    choose(container, 'a3');
     await settle(() => {
-      if (items(container)[0]?.textContent?.includes('Plan my week') !== true) throw new Error('planner thread not open');
+      if (items(container)[0]?.textContent?.includes('Plan my week') !== true) throw new Error('planning thread not open');
     });
     press(field(container), 'Enter');
     await settle(() => {
@@ -470,7 +471,7 @@ describe('ChatPane', () => {
     });
 
     assert({
-      given: 'a draft typed with Imago, then Support chosen, then the planner chosen and the draft sent, then Imago again',
+      given: 'a draft typed with Imago, then Support chosen, then Planning chosen and the draft sent, then Imago again',
       should: 'open each agent’s latest conversation in the same pane with the draft kept, send to the chosen agent, and return to Imago’s latest',
       actual: [
         atSupport,
@@ -480,7 +481,7 @@ describe('ChatPane', () => {
       ],
       expected: [
         ['a1', { id: 'a1', title: 'Support' }, 'Half a thought', 'Message Support'],
-        ['p-planner', 'pc1'],
+        ['a3', 'pc1'],
         [null, 'p-imago'],
         [TURN],
       ],
@@ -558,13 +559,13 @@ describe('ChatPane', () => {
     });
     const gone = [container.querySelector('[role="alert"]')?.textContent, picker(container).value];
 
-    choose(container, 'p-planner');
+    choose(container, 'a3');
     await settle(() => {
-      if (items(container)[0]?.textContent?.includes('Plan my week') !== true) throw new Error('planner thread not open');
+      if (items(container)[0]?.textContent?.includes('Plan my week') !== true) throw new Error('planning thread not open');
     });
 
     assert({
-      given: 'an agent the server now refuses (403), then one it no longer has (404), then the planner chosen',
+      given: 'an agent the server now refuses (403), then one it no longer has (404), then Planning chosen',
       should: 'fall back to Imago with its latest conversation and a notice naming the lost agent each time, and clear the notice on the next choice',
       actual: [refused, gone, container.querySelector('[role="alert"]')],
       expected: [

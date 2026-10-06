@@ -65,15 +65,16 @@ export type DriveActions = {
 };
 
 /**
- * What the viewer may do here: the drive routes allow owners and admins
- * only, and the Home drive guards refuse rename and the Imago toggle
- * whoever asks. The server still has the last word on each request.
+ * What the viewer may do here: renaming is for owners and admins; the Imago
+ * switch is every viewer's own choice — whether their Imago may work in this
+ * drive (IMG-10.10) — so anyone who can open the drive may set it. The Home
+ * drive guards refuse both. The server still has the last word on each request.
  */
 export const driveActions = (drive: DriveSettings): DriveActions => {
   const admin = drive.role === 'OWNER' || drive.role === 'ADMIN';
   return {
     rename: admin && homeDriveActionError(drive, 'rename') === null,
-    imagoAccess: admin && homeDriveActionError(drive, 'imago-access') === null,
+    imagoAccess: homeDriveActionError(drive, 'imago-access') === null,
   };
 };
 

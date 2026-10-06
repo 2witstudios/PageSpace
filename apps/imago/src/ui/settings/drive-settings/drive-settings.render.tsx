@@ -109,12 +109,9 @@ const imagoSwitch = (access: ImagoAccess, pending: boolean, toggle: (enabled: bo
 
 const imagoControl = (props: DriveSettingsRenderProps): ReactNode => {
   const { drive, actions, access, accessFailed, retryAccess, accessPending, toggleImagoAccess } = props;
-  // The Home drive guard's own words: the agents live there.
+  // The Home drive guard's own words: Imago lives there.
   const homeReason = homeDriveActionError(drive, 'imago-access');
-  if (homeReason !== null) return <p className={settingsDetailClass}>{homeReason}</p>;
-  if (!actions.imagoAccess) {
-    return <p className={settingsDetailClass}>Only drive owners and admins can manage Imago access.</p>;
-  }
+  if (homeReason !== null || !actions.imagoAccess) return <p className={settingsDetailClass}>{homeReason}</p>;
   if (access === undefined) {
     return accessFailed
       ? renderErrorState({ title: 'Could not load Imago access', retry: retryAccess })
@@ -122,7 +119,10 @@ const imagoControl = (props: DriveSettingsRenderProps): ReactNode => {
   }
   return (
     <div className={settingsRowClass}>
-      <p className={settingsDetailClass}>Let your Imago agents read and work in this drive.</p>
+      <p className={settingsDetailClass}>
+        Let Imago work in this drive with your access. Turn it off to keep Imago out of it — its pages, search results
+        and integrations — for you only.
+      </p>
       {imagoSwitch(access, accessPending, toggleImagoAccess)}
     </div>
   );

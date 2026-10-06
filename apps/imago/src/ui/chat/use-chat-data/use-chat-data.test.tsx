@@ -67,7 +67,7 @@ describe('useImagoAgents()', () => {
 
   test('loading', async () => {
     const seen: Seen = {};
-    const web = mount({ [AGENTS]: () => Response.json(pointers({ 'imago-planner': null })) }, <Probe seen={seen} />, {
+    const web = mount({ [AGENTS]: () => Response.json(pointers({ imago: null })) }, <Probe seen={seen} />, {
       strict: true,
     });
     await settle(() => {
@@ -75,10 +75,10 @@ describe('useImagoAgents()', () => {
     });
 
     assert({
-      given: 'a viewer whose planner is not provisioned yet',
-      should: 'load every pointer once from /api/user/builtin-agents, keeping the null pageId',
+      given: 'a viewer whose Imago is not provisioned yet',
+      should: 'load the pointer once from /api/user/builtin-agents, keeping the null pageId',
       actual: [seen.agents?.agents?.map(({ key, pageId }) => `${key}:${pageId}`), web.count(AGENTS)],
-      expected: [['imago:p-imago', 'imago-planner:null', 'imago-researcher:p-researcher'], 1],
+      expected: [['imago:null'], 1],
     });
   });
 
