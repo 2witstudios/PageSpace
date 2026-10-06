@@ -191,8 +191,11 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      # Every workspace package, not just db and lib: the suites import others through their
+      # built exports (e.g. web's tool filtering loads @pagespace/browser-worker/browser-tool-name),
+      # and a package left unbuilt fails those suites at module load.
       - name: Build workspace packages
-        run: bun run --filter '@pagespace/db' build && bun run --filter '@pagespace/lib' build
+        run: bunx turbo run build --filter='./packages/*'
 
       - name: Run database migrations
         run: bun run db:migrate
