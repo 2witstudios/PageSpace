@@ -213,7 +213,8 @@ async function clampExplicitRoleToOwner(role: AppMemberRole | null, ownerUserId:
 /**
  * The key's membership on the drive, its explicit role CLAMPED to its owner's current authority (clampExplicitRoleToOwner).
  * Every authority check (owner/admin gates, the AI tools' manage ceiling, bulk move/copy, restore, agent create)
- * reads this, never the stored role.
+ * reads this, never the stored role. Review #2849 r6: null unless the owner is a CURRENT member of the drive (as
+ * hasAppDriveMembership), so no caller can read a dangling row's role as membership.
  */
 export async function getAppDriveMembership(
   tokenId: string,
@@ -221,6 +222,7 @@ export async function getAppDriveMembership(
 ): Promise<AppDriveMembership | null> {
   const membership = await fetchAppMembershipContext(tokenId, driveId);
   if (!membership) return null;
+  if (!(await isUserDriveMember(membership.ownerUserId, driveId))) return null;
   return {
     role: await clampExplicitRoleToOwner(membership.role, membership.ownerUserId, driveId),
     customRoleId: membership.customRoleId ?? null,
@@ -486,7 +488,8 @@ export async function hasScopedDriveMembership(
 
 /**
  * The OAuth scope's membership with its explicit role CLAMPED to the owner's current authority (review #2849 r3,
- * P1-B; see clampExplicitRoleToOwner). Authority checks read this, not the raw scope.
+ * P1-B; see clampExplicitRoleToOwner). Authority checks read this, not the raw scope. Review #2849 r6: null unless the
+ * owner is a CURRENT member of the drive (as hasScopedDriveMembership).
  */
 export async function getEffectiveScopedDriveMembership(
   driveScopes: DriveScopeRow[],
@@ -495,6 +498,7 @@ export async function getEffectiveScopedDriveMembership(
 ): Promise<{ role: 'ADMIN' | 'MEMBER' | null; customRoleId: string | null } | null> {
   const row = findScopeRow(driveScopes, driveId);
   if (!row) return null;
+  if (!(await isUserDriveMember(ownerUserId, driveId))) return null;
   if (row.role !== 'ADMIN') return { role: row.role, customRoleId: row.customRoleId };
   const clamped = await clampExplicitRoleToOwner(row.role, ownerUserId, driveId);
   return { role: clamped === 'MEMBER' ? 'MEMBER' : 'ADMIN', customRoleId: row.customRoleId };

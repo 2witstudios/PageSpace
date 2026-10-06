@@ -585,7 +585,7 @@ describe('[D-OW-33] a lapsed org may only restrict, on every guarded write (orgs
     expect(await shares()).toHaveLength(0);
   });
 
-  it('SEAT-9 (partial) [D-OW-33] review r4 P1: a key (MCP or OAuth, explicit role) is a drive member only while its owner is; delete the owner\'s row and both keys lose membership; re-add it and membership returns', async () => {
+  it('SEAT-9 (partial) [D-OW-33] review r4 P1 + r6: a key (MCP or OAuth, explicit role) is a drive member, and has a role, only while its owner is a member; delete the owner\'s row and both keys lose membership and role; re-add it and both return', async () => {
     if (!world) return;
     const w = world;
     const [token] = await db.insert(mcpTokens).values({ userId: w.ids.marcus, tokenHash: `h_${createId()}`, tokenPrefix: 'mcp_', name: 'k' }).returning();
@@ -599,10 +599,15 @@ describe('[D-OW-33] a lapsed org may only restrict, on every guarded write (orgs
       if (state === 'lapsed') await lapse(w);
       expect(await hasAppDriveMembership(token.id, w.product)).toBe(false);
       expect(await hasScopedDriveMembership(oauth, w.ids.marcus, w.product)).toBe(false);
+      // Review #2849 r6: the role readers answer null too, so no caller reads a dangling row's role as membership.
+      expect(await getAppDriveMembership(token.id, w.product)).toBeNull();
+      expect(await getEffectiveScopedDriveMembership(oauth, w.ids.marcus, w.product)).toBeNull();
     }
     await db.insert(driveMembers).values(row);
     expect(await hasAppDriveMembership(token.id, w.product)).toBe(true);
     expect(await hasScopedDriveMembership(oauth, w.ids.marcus, w.product)).toBe(true);
+    expect((await getAppDriveMembership(token.id, w.product))?.role).toBe('MEMBER');
+    expect((await getEffectiveScopedDriveMembership(oauth, w.ids.marcus, w.product))?.role).toBe('MEMBER');
   });
 
   it('SEAT-9 (partial) [D-OW-33] review r4 P3: the calendar visibility guard holds the event row FOR UPDATE until its transaction ends (a concurrent locker cannot take it)', async () => {

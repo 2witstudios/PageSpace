@@ -36,6 +36,10 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   restores that would give access back wait too. Invitations already sent stay open and work once the plan
   is paid. Removing people, revoking links, lowering roles, narrowing permissions and making pages private
   all still work, and each screen disables only what is paused and says so.
+- **A key never reaches further than the person who made it** — an MCP key or a connected app's access to
+  a drive now ends the moment its owner leaves that drive, and returns if they are added back: it no longer
+  lists the drive, its calendar events, tasks or search results, and a key's admin role counts only while
+  its owner is still an admin there.
 - **New conversations start on the drive's wallet** — if you have not chosen a default, a new conversation
   in a drive with a wallet you can spend now uses that wallet, and elsewhere your own credits, instead of
   asking you to choose first. Settings › Usage › Wallets shows this default as selected. In the right

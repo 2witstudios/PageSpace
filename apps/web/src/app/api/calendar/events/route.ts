@@ -370,7 +370,7 @@ export async function GET(request: Request) {
 
     // User context: aggregate events from all sources. User parity: any drive
     // member sees DRIVE-visible events, so the principal's membership universe
-    // is the gate (inherit rows require the owner to still be a member).
+    // is the gate (every scoped row requires the owner to still be a member: getPrincipalDriveIds).
     const driveIds = await getPrincipalDriveIds(auth);
 
     // Build conditions for user's visible events:

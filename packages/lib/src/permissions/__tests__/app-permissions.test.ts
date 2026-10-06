@@ -312,10 +312,26 @@ describe('getAppDriveMembership', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it('returns nullable role + ownerUserId', async () => {
+    vi.mocked(isUserDriveMember).mockResolvedValueOnce(true);
     vi.mocked(db.select).mockReturnValueOnce(stubSelectJoin([membershipRow(null)]));
     expect(await getAppDriveMembership(TOKEN_ID, DRIVE_ID)).toEqual({
       role: null, customRoleId: null, ownerUserId: OWNER_ID,
     });
+  });
+
+  it('review #2849 r6: null for any row (inherit or explicit) once its owner is no longer a drive member; the OAuth scope likewise', async () => {
+    for (const role of [null, 'MEMBER', 'ADMIN', 'OWNER'] as const) {
+      vi.mocked(isUserDriveMember).mockResolvedValueOnce(false);
+      vi.mocked(db.select).mockReturnValueOnce(stubSelectJoin([membershipRow(role)]));
+      expect(await getAppDriveMembership(TOKEN_ID, DRIVE_ID)).toBeNull();
+      expect(isUserDriveMember).toHaveBeenLastCalledWith(OWNER_ID, DRIVE_ID);
+    }
+    for (const role of [null, 'MEMBER', 'ADMIN'] as const) {
+      vi.mocked(isUserDriveMember).mockResolvedValueOnce(false);
+      expect(await getEffectiveScopedDriveMembership([scopeRow(DRIVE_ID, role)], OWNER_ID, DRIVE_ID)).toBeNull();
+    }
+    vi.mocked(isUserDriveMember).mockResolvedValueOnce(true);
+    expect(await getEffectiveScopedDriveMembership([scopeRow(DRIVE_ID, 'MEMBER')], OWNER_ID, DRIVE_ID)).toEqual({ role: 'MEMBER', customRoleId: null });
   });
 
   it('returns null when no membership row', async () => {
@@ -636,6 +652,7 @@ describe('review #2849 P1: an explicit key never reaches past its owner', () => 
   });
 
   it('review #2849 r3 P1-B: a key\'s stored ADMIN/OWNER role is authority only while its owner holds it now (MCP and OAuth)', async () => {
+    vi.mocked(isUserDriveMember).mockResolvedValue(true);
     // Owner demoted to a plain member: the ADMIN key is a MEMBER.
     vi.mocked(getUserDrivePermissions).mockResolvedValue({ hasAccess: true, isOwner: false, isAdmin: false, isMember: true, canEdit: false } as never);
     vi.mocked(db.select).mockReturnValueOnce(stubSelectJoin([membershipRow('ADMIN')]));
@@ -647,7 +664,7 @@ describe('review #2849 P1: an explicit key never reaches past its owner', () => 
     expect((await getAppDriveMembership(TOKEN_ID, DRIVE_ID))?.role).toBe('ADMIN');
     vi.mocked(db.select).mockReturnValueOnce(stubSelectJoin([membershipRow('ADMIN')]));
     expect((await getAppDriveMembership(TOKEN_ID, DRIVE_ID))?.role).toBe('ADMIN');
-    // Owner gone from the drive: MEMBER (and its access is bounded to nothing by the intersection).
+    // Owner still a member but with no drive authority read back: MEMBER (r6: an owner gone from the drive is null, above).
     vi.mocked(getUserDrivePermissions).mockResolvedValue(null);
     vi.mocked(db.select).mockReturnValueOnce(stubSelectJoin([membershipRow('ADMIN')]));
     expect((await getAppDriveMembership(TOKEN_ID, DRIVE_ID))?.role).toBe('MEMBER');

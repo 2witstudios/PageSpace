@@ -69,9 +69,10 @@ import { POST as addAttendees } from '@/app/api/calendar/events/[eventId]/attend
 import { calendarWriteTools } from '@/lib/ai/tools/calendar-write-tools';
 import { GET as listDrives } from '@/app/api/drives/route';
 import { GET as listMcpDrives } from '@/app/api/mcp/drives/route';
+import { GET as listEvents } from '@/app/api/calendar/events/route';
 import { GET as driveActivities } from '@/app/api/activities/route';
 import { GET as publishedApps } from '@/app/api/drives/[driveId]/published-apps/route';
-import { getPrincipalDriveAccess, isPrincipalDriveMember } from '@/lib/auth';
+import { getPrincipalDriveAccess, getPrincipalDriveIds, isPrincipalDriveMember } from '@/lib/auth';
 import { mapAttendeesToUsers } from '@/lib/integrations/google-calendar/sync-service';
 import type { ActivityLogForRollback } from '../rollback/types';
 
@@ -496,5 +497,36 @@ describe('drive listings for an explicit-role key whose owner left (review #2849
 
     await db.insert(driveMembers).values(row);
     for (const ids of await listings()) expect(ids).toContain(w.orgDrive);
+  });
+});
+
+describe('the user-context calendar for a key whose owner left (review #2849 r6 P1)', () => {
+  afterEach(() => { authed.principal = null; });
+
+  it('SEAT-9 (partial) [D-OW-33] review r6 P1: getPrincipalDriveIds drops a drive the key\'s owner left, so GET /api/calendar/events?context=user stops returning its DRIVE-visible event to an explicit-role MCP key and OAuth scope; re-adding the owner\'s row returns it', async () => {
+    await factories.createDriveMember(w.orgDrive, w.member, { role: 'MEMBER', acceptedAt: new Date() });
+    const [token] = await db.insert(mcpTokens).values({ userId: w.member, tokenHash: `h_${createId()}`, tokenPrefix: 'mcp_', name: 'k' }).returning();
+    await db.insert(mcpTokenDrives).values({ tokenId: token.id, driveId: w.orgDrive, role: 'MEMBER', customRoleId: null });
+    const mcpKey = { tokenType: 'mcp' as const, tokenId: token.id, allowedDriveIds: [w.orgDrive], userId: w.member, role: 'user' as const, tokenVersion: 0, adminRoleVersion: 0 };
+    const oauthKey = { tokenType: 'oauth' as const, userId: w.member, driveScopes: [{ driveId: w.orgDrive, role: 'MEMBER', customRoleId: null }], allowedDriveIds: [w.orgDrive], role: 'user' as const, tokenVersion: 0, adminRoleVersion: 0, scopes: ['calendar:read', 'drives:read'] };
+    const [event] = await db.insert(calendarEvents).values({ driveId: w.orgDrive, createdById: w.owner, title: 'Board', description: 'agenda', startAt: new Date(), endAt: new Date(Date.now() + 3_600_000), visibility: 'DRIVE', updatedAt: new Date() }).returning();
+    const from = encodeURIComponent(new Date(Date.now() - 86_400_000).toISOString());
+    const to = encodeURIComponent(new Date(Date.now() + 86_400_000).toISOString());
+    const seenBy = async (principal: Record<string, unknown>) => {
+      authed.principal = principal;
+      const res = await listEvents(new Request(`http://localhost/api/calendar/events?context=user&startDate=${from}&endDate=${to}`) as never);
+      expect(res.status).toBe(200);
+      const body = await res.json() as { events: Array<{ id: string }> };
+      return { sees: body.events.some((e) => e.id === event.id), driveIds: await getPrincipalDriveIds(principal as never) };
+    };
+
+    for (const key of [mcpKey, oauthKey]) expect(await seenBy(key)).toEqual({ sees: true, driveIds: [w.orgDrive] });
+
+    const [row] = await db.select().from(driveMembers).where(and(eq(driveMembers.driveId, w.orgDrive), eq(driveMembers.userId, w.member)));
+    await db.delete(driveMembers).where(eq(driveMembers.id, row.id));
+    for (const key of [mcpKey, oauthKey]) expect(await seenBy(key)).toEqual({ sees: false, driveIds: [] });
+
+    await db.insert(driveMembers).values(row);
+    for (const key of [mcpKey, oauthKey]) expect(await seenBy(key)).toEqual({ sees: true, driveIds: [w.orgDrive] });
   });
 });

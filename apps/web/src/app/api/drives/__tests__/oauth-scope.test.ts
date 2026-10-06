@@ -59,6 +59,9 @@ vi.mock('@pagespace/lib/permissions/app-permissions', async (importOriginal) => 
     ...actual,
     hasAppDriveMembership: vi.fn(),
     hasScopedDriveMembership: vi.fn(),
+    // The owner bound (review #2849 r6) is hasScopedDriveMembership's, stubbed above; the role is the scope row's.
+    getEffectiveScopedDriveMembership: vi.fn(async (scopes: Parameters<typeof actual.getScopedDriveMembership>[0], _ownerUserId: string, driveId: string) =>
+      actual.getScopedDriveMembership(scopes, driveId)),
   };
 });
 
