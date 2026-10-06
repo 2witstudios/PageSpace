@@ -5,7 +5,7 @@ import { PlanCard } from '../PlanCard';
 import { PLANS, withCreditsCents } from '@/lib/subscription/plans';
 import { planFacts } from '@pagespace/lib/billing/credit-copy';
 
-describe('PlanCard (MON-6, SEAT-2 (partial), A-9)', () => {
+describe('PlanCard', () => {
   it('MON-6 shows price, included credits, and the top-up rate as three separate facts, credits as a count with no dollar sign', () => {
     render(<PlanCard plan={PLANS.pro} currentTier="free" />);
 
@@ -33,7 +33,7 @@ describe('PlanCard (MON-6, SEAT-2 (partial), A-9)', () => {
     expect(screen.getByTestId('plan-seat-credits').textContent).not.toContain('$');
   });
 
-  it('A-7 (partial) the Business card states no trial and a card at checkout; personal cards carry no org facts', () => {
+  it('the Business card states no trial (Spec A-7, D-OW-30) and a card at checkout; personal cards carry no org facts', () => {
     render(<PlanCard plan={PLANS.business} currentTier="pro" />);
     expect(screen.getByTestId('plan-checkout').textContent).toBe('No trial · card required at checkout');
     render(<PlanCard plan={PLANS.pro} currentTier="free" />);

@@ -5,8 +5,8 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { ReactElement } from 'react';
 
-/** A "$" with only a figure (or nothing) between it and the word "credits", either side. */
-export const DOLLAR_BESIDE_CREDITS = /\$[\s\d,.]*credits\b|\bcredits[\s:]*\$/i;
+/** The one UI-12 pattern, shared with the lib's plan-facts test (and its self-test cases there). */
+export { DOLLAR_BESIDE_CREDITS } from '../../../../../../packages/lib/src/billing/__tests__/dollar-beside-credits';
 
 /** Rendered markup as the visible text a reader sees: tags and React text separators removed. */
 export const visibleText = (html: string) =>

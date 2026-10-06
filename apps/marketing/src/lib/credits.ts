@@ -17,3 +17,4 @@ export {
   planFacts,
   type PlanFacts,
 } from "@pagespace/lib/billing/credit-copy";
+export { formatDollars } from "@pagespace/lib/billing/money-model";

@@ -10,8 +10,7 @@ import {
 } from '../money-model';
 import { orgPlanQuote } from '../org-plan-quote';
 
-/** A "$" with only a figure (or nothing) between it and the word "credits", either side. */
-const DOLLAR_BESIDE_CREDITS = /\$[\s\d,.]*credits\b|\bcredits[\s:]*\$/i;
+import { DOLLAR_BESIDE_CREDITS } from './dollar-beside-credits';
 
 describe('planFacts: the three plan-card facts, one source for the marketing page and the in-app PlanCard', () => {
   it('MON-6 (partial) every tier states price, included credits, and the top-up rate as three separate facts', () => {
@@ -37,11 +36,26 @@ describe('planFacts: the three plan-card facts, one source for the marketing pag
     }
   });
 
-  it('UI-12 (partial) the dollar-beside-credits pattern catches a planted dollar figure', () => {
-    expect('$1,500 credits included each month').toMatch(DOLLAR_BESIDE_CREDITS);
-    expect('$ credits').toMatch(DOLLAR_BESIDE_CREDITS);
-    expect('credits: $15').toMatch(DOLLAR_BESIDE_CREDITS);
-    expect('1,000 credits per $10').not.toMatch(DOLLAR_BESIDE_CREDITS);
+  it.each([
+    ['a dollar figure before credits', '$1,500 credits included each month'],
+    ['a bare dollar sign', '$ credits'],
+    ['an abbreviated figure', '$1.5k credits'],
+    ['"of credits"', '$15 of credits'],
+    ['"in credits"', '$15 in credits'],
+    ['"worth of credits"', '$15 worth of credits'],
+    ['a colon after credits', 'credits: $15'],
+    ['"credits worth"', 'credits worth $15'],
+    ['a parenthesized price after credits', '1,500 credits ($15)'],
+  ])('dollar-beside-credits pattern self-test: catches %s', (_shape, text) => {
+    expect(text).toMatch(DOLLAR_BESIDE_CREDITS);
+  });
+
+  it.each([
+    ['the top-up purchase rate', '1,000 credits per $10'],
+    ['a plan price beside a count', '$15/month · 1,500 credits included each month'],
+    ['seat terms', 'per organization · 5 seats included · $10 per extra seat a month'],
+  ])('dollar-beside-credits pattern self-test: does not flag %s', (_shape, text) => {
+    expect(text).not.toMatch(DOLLAR_BESIDE_CREDITS);
   });
 
   it('SEAT-2 (partial) Business is the org plan: price, included seats, and the extra-seat price per month, all from the tier table', () => {
@@ -58,7 +72,7 @@ describe('planFacts: the three plan-card facts, one source for the marketing pag
     expect(org?.seatTerms).toBe('per organization · 5 seats included · $10 per extra seat a month');
   });
 
-  it('A-11 (partial) an extra seat adds the ratio of its price as credits, exactly what the org plan quote grants', () => {
+  it('an extra seat (Spec A-11 money-model numbers) adds the ratio of its price as credits, exactly what the org plan quote grants', () => {
     const org = planFacts('business').org;
     const seatCents = centsFromDollars(TIER_PLAN_LIMITS.business.extraSeatUsd);
     expect(org?.extraSeatCredits).toBe(`+${formatCreditCount(allowanceCentsForPaidCents(seatCents, 'business'))} credits a month per extra seat`);
@@ -68,7 +82,7 @@ describe('planFacts: the three plan-card facts, one source for the marketing pag
     );
   });
 
-  it('A-11 (partial) with the ratio active Pro includes 900, Business 3,000, and an extra seat adds 600 credits', () => {
+  it('with the ratio active (Spec A-11) Pro includes 900, Business 3,000, and an extra seat adds 600 credits', () => {
     const seatCents = centsFromDollars(TIER_PLAN_LIMITS.business.extraSeatUsd);
     expect(planFacts('business', true).org?.extraSeatCredits).toBe(
       `+${formatCreditCount(allowanceCentsForPaidCents(seatCents, 'business', true))} credits a month per extra seat`,
@@ -79,7 +93,7 @@ describe('planFacts: the three plan-card facts, one source for the marketing pag
     expect(planFacts('free', true).includedCredits).toBe('500 credits to start');
   });
 
-  it('A-7 (partial) the org plan states no trial and that a card is required at checkout; personal plans carry no org facts', () => {
+  it('the org plan (no org trial, Spec A-7 and D-OW-30) states no trial and that a card is required at checkout; personal plans carry no org facts', () => {
     expect(planFacts('business').org?.checkout).toBe('No trial · card required at checkout');
     expect(planFacts('free').org).toBeNull();
     expect(planFacts('pro').org).toBeNull();

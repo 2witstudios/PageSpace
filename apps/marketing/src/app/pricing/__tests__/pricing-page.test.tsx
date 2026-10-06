@@ -67,7 +67,7 @@ describe('marketing pricing page on the money model', () => {
     expect(cards.pro['plan-seats']).toBeUndefined();
   });
 
-  it('A-7 (partial) no org trial and no Founder tier: the org card says a card is required at checkout', async () => {
+  it('no org trial (Spec A-7, D-OW-30) and no Founder tier: the org card says a card is required at checkout', async () => {
     const { text, cards } = await renderPricing();
     expect(cards.business['plan-checkout']).toBe(planFacts('business').org?.checkout);
     expect(cards.business['plan-checkout']).toBe('No trial · card required at checkout');
