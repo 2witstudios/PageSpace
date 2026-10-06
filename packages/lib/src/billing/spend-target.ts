@@ -17,6 +17,7 @@ import {
   childSpendableCents,
   coveredSpendOptions,
   entitlementTierFor,
+  legCovers,
   resolveSpendSource,
   seatLegSpendableCents,
   legSpendableCents,
@@ -431,10 +432,11 @@ export type ChosenSource =
  *
  * A person who never SET a default gets the out-of-box one (SPEND-3, canvas v9 UsageWallets
  * "The drive's wallet, if it has one" selected): the drive's wallet when they may spend one
- * here, otherwise their own credits. Saving that same option behaves the same. Any other
+ * here and it can pay this call now, otherwise their own credits if they can; with neither,
+ * nothing is preselected. Saving that same option behaves the same. Any other
  * default they set is honoured or skipped, never replaced by this.
  */
-export function chooseSource(turnSource: SpendSourceKind | null, stored: StoredSpendChoice, legs: CallSpendLegs): ChosenSource {
+export function chooseSource(turnSource: SpendSourceKind | null, stored: StoredSpendChoice, legs: CallSpendLegs & { reservationCents: number }): ChosenSource {
   if (turnSource !== null) return { kind: 'source', source: turnSource, via: 'turn' };
   if (stored.chosenWalletId !== null) {
     const source = sourceOfWallet(stored.chosenWalletId, legs);
@@ -448,7 +450,13 @@ export function chooseSource(turnSource: SpendSourceKind | null, stored: StoredS
     return { kind: 'source', source: stored.personalDefault, via: 'personal_default' };
   }
   if (effectiveDefaultSpendSource(stored.personalDefault) === 'drive_wallet') {
-    const outOfBox = OUT_OF_BOX_SOURCES.find((source) => available.includes(source));
+    // Only a source that can pay this call NOW (not paused, not at the person's cap, not short of the
+    // reservation): an out-of-box pick never lands on a refusal or on a fallback nobody chose. With
+    // neither, nothing is preselected and the person is asked (SPEND-4 no_source_chosen).
+    const outOfBox = OUT_OF_BOX_SOURCES.find((source) => {
+      const leg = available.includes(source) ? legOf(legs, source) : null;
+      return leg !== null && legCovers(leg, legs.reservationCents);
+    });
     if (outOfBox) return { kind: 'source', source: outOfBox, via: 'out_of_box' };
   }
   return { kind: 'none' };
@@ -457,6 +465,11 @@ export function chooseSource(turnSource: SpendSourceKind | null, stored: StoredS
 /** SPEND-3: the default a person has, as Settings shows it selected: the stored one, else the drive's wallet. */
 export function effectiveDefaultSpendSource(personalDefault: SpendSourceKind | null): SpendSourceKind {
   return personalDefault ?? 'drive_wallet';
+}
+
+/** The leg of a source this person may spend (availableSources has already said they may). */
+function legOf(legs: CallSpendLegs, source: SpendSourceKind): SpendLeg | null {
+  return source === 'drive_wallet' ? legs.driveWallet : source === 'seat_allowance' ? legs.seatAllowance : legs.personal;
 }
 
 /** SPEND-3: what the "drive's wallet, if it has one" default spends from, in order. */

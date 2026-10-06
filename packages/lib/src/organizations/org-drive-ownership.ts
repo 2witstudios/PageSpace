@@ -2,7 +2,6 @@ import type { OrgRole } from '@pagespace/db/schema/organizations';
 import type { OrgDriveVisibility } from '@pagespace/db/schema/core';
 import { homeDriveActionError, isHomeDrive } from '../services/drive-guards';
 import { isDriveLead } from '../permissions/drive-relationship';
-import { decideOrgMayLoosen, type OrgLapsedRefusal } from './status-core';
 
 /**
  * Org-owned drives: who may move a drive into or out of an org, who may create one
@@ -195,30 +194,25 @@ export function visibilityChangeOnlyRestricts(from: OrgDriveVisibility, to: OrgD
 /**
  * Change an org drive's visibility (DRV-4). The service then runs the org membership sync so the
  * materialized rows follow: rows appear for an Open drive and go for Restricted or Private.
- * While the org is lapsed only a change toward Private is made ([D-OW-33], SEAT-9).
+ * The service then asks checkOrgMayLoosen for a change toward Open ([D-OW-33], SEAT-9).
  */
 export function decideChangeDriveVisibility({
   drive,
   actorId,
   actorOrgRole,
-  orgLapsed,
   visibility,
 }: {
   drive: OrgDriveFactsForChange;
   actorId: string;
   /** The actor's role in drive.orgId; null when not a member or the drive has no org. */
   actorOrgRole: OrgRole | null;
-  /** Whether drive.orgId is lapsed, read in the write's transaction. */
-  orgLapsed: boolean;
   visibility: OrgDriveVisibility;
-}): { ok: true; changed: boolean; from: OrgDriveVisibility; to: OrgDriveVisibility } | OrgDriveRefusal | OrgLapsedRefusal {
+}): { ok: true; changed: boolean; from: OrgDriveVisibility; to: OrgDriveVisibility } | OrgDriveRefusal {
   const refusal = authorizeOrgDriveChange(drive, actorId, actorOrgRole, "this drive's visibility");
   if (refusal) return refusal;
   if (drive.isTrashed) {
     return refuse('DRIVE_TRASHED', 409, "Restore this drive from trash before changing its visibility.");
   }
-  const lapsed = decideOrgMayLoosen({ orgLapsed, loosens: !visibilityChangeOnlyRestricts(drive.orgVisibility, visibility) });
-  if (lapsed) return lapsed;
   return { ok: true, changed: drive.orgVisibility !== visibility, from: drive.orgVisibility, to: visibility };
 }
 

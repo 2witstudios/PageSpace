@@ -8,7 +8,7 @@ const fetchWithAuth = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/auth/auth-fetch', () => ({ fetchWithAuth, put: vi.fn() }));
 vi.mock('@/stores/useSocketStore', () => ({ useSocketStore: (select: (s: { socket: null }) => unknown) => select({ socket: null }) }));
 
-import { PENDING_CONVERSATION_RETRY_MS, pendingConversationRetryMs, useConversationSpend } from '../useConversationSpend';
+import { PENDING_CONVERSATION_RETRY_LIMIT, PENDING_CONVERSATION_RETRY_MS, pendingConversationRetryMs, useConversationSpend } from '../useConversationSpend';
 
 const spend = {
   conversationId: 'c-new',
@@ -26,11 +26,13 @@ beforeEach(() => {
   fetchWithAuth.mockReset();
 });
 
-describe('a new conversation whose row is not saved yet (SPEND-2)', () => {
+describe('a new conversation whose row is not saved yet', () => {
   it('SPEND-2 (partial) the source is asked again while the conversation is not stored, a bounded number of times, then no more', () => {
     expect(pendingConversationRetryMs(1)).toBe(PENDING_CONVERSATION_RETRY_MS);
     expect(pendingConversationRetryMs(5)).toBe(PENDING_CONVERSATION_RETRY_MS);
-    expect(pendingConversationRetryMs(10)).toBe(0);
+    // The first read and ten retries have missed: stop.
+    expect(pendingConversationRetryMs(PENDING_CONVERSATION_RETRY_LIMIT)).toBe(PENDING_CONVERSATION_RETRY_MS);
+    expect(pendingConversationRetryMs(PENDING_CONVERSATION_RETRY_LIMIT + 1)).toBe(0);
     expect(pendingConversationRetryMs(0)).toBe(0);
   });
 
@@ -44,4 +46,19 @@ describe('a new conversation whose row is not saved yet (SPEND-2)', () => {
     await waitFor(() => expect(result.current.spend).toMatchObject({ resolved: { source: 'drive_wallet' } }), { timeout: PENDING_CONVERSATION_RETRY_MS * 4 });
     expect(fetchWithAuth).toHaveBeenCalledTimes(2);
   });
+
+  it('SPEND-2 (partial) a conversation that is never saved is asked exactly 1 + 10 times, then no more (no endless polling)', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      fetchWithAuth.mockImplementation(async () => notFound());
+      renderHook(() => useConversationSpend('c-never', { driveId: 'd-product', isGlobal: false }), { wrapper });
+      for (let i = 0; i < 20; i++) await vi.advanceTimersByTimeAsync(PENDING_CONVERSATION_RETRY_MS);
+      expect(fetchWithAuth).toHaveBeenCalledTimes(1 + PENDING_CONVERSATION_RETRY_LIMIT);
+      await vi.advanceTimersByTimeAsync(PENDING_CONVERSATION_RETRY_MS * 10);
+      expect(fetchWithAuth).toHaveBeenCalledTimes(1 + PENDING_CONVERSATION_RETRY_LIMIT);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
+

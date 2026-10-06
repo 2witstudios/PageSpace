@@ -5,7 +5,6 @@ import {
   visibilityChangeOnlyRestricts,
   type OrgDriveFactsForChange,
 } from '../org-drive-ownership';
-import { ORG_LAPSED_REFUSAL } from '../status-core';
 
 // Northwind Labs fixture (Sequence Spec Part 2): Jono owns the org, Priya is an Admin, Marcus
 // leads the drive, Lena is a member, Chris Rowe is outside the org.
@@ -26,37 +25,37 @@ const product = (over: Partial<OrgDriveFactsForChange> = {}): OrgDriveFactsForCh
 describe('decideChangeDriveVisibility', () => {
   it('DRV-4 (partial) the drive lead, the org Owner and an org Admin may change visibility', () => {
     for (const [actorId, actorOrgRole] of [[MARCUS, 'MEMBER'], [JONO, 'OWNER'], [PRIYA, 'ADMIN']] as const) {
-      expect(decideChangeDriveVisibility({ drive: product(), actorId, actorOrgRole, orgLapsed: false, visibility: 'RESTRICTED' }))
+      expect(decideChangeDriveVisibility({ drive: product(), actorId, actorOrgRole, visibility: 'RESTRICTED' }))
         .toEqual({ ok: true, changed: true, from: 'OPEN', to: 'RESTRICTED' });
     }
   });
 
   it('DRV-4 (partial) a plain org member who does not lead the drive cannot', () => {
-    expect(decideChangeDriveVisibility({ drive: product(), actorId: LENA, actorOrgRole: 'MEMBER', orgLapsed: false, visibility: 'PRIVATE' }))
+    expect(decideChangeDriveVisibility({ drive: product(), actorId: LENA, actorOrgRole: 'MEMBER', visibility: 'PRIVATE' }))
       .toMatchObject({ ok: false, code: 'NOT_DRIVE_LEAD_OR_ORG_ADMIN', status: 403 });
   });
 
   it('DRV-4 (partial) someone outside the org cannot, and a lead no longer in the org cannot either', () => {
-    expect(decideChangeDriveVisibility({ drive: product(), actorId: CHRIS, actorOrgRole: null, orgLapsed: false, visibility: 'PRIVATE' }))
+    expect(decideChangeDriveVisibility({ drive: product(), actorId: CHRIS, actorOrgRole: null, visibility: 'PRIVATE' }))
       .toMatchObject({ ok: false, code: 'NOT_DRIVE_LEAD_OR_ORG_ADMIN', status: 403 });
-    expect(decideChangeDriveVisibility({ drive: product(), actorId: MARCUS, actorOrgRole: null, orgLapsed: false, visibility: 'PRIVATE' }))
+    expect(decideChangeDriveVisibility({ drive: product(), actorId: MARCUS, actorOrgRole: null, visibility: 'PRIVATE' }))
       .toMatchObject({ ok: false, code: 'NOT_DRIVE_LEAD_OR_ORG_ADMIN', status: 403 });
   });
 
   it('DRV-4 (partial) a personal drive has no org visibility; its owner is told so, anyone else is refused', () => {
-    expect(decideChangeDriveVisibility({ drive: product({ orgId: null }), actorId: MARCUS, actorOrgRole: null, orgLapsed: false, visibility: 'PRIVATE' }))
+    expect(decideChangeDriveVisibility({ drive: product({ orgId: null }), actorId: MARCUS, actorOrgRole: null, visibility: 'PRIVATE' }))
       .toMatchObject({ ok: false, code: 'NOT_IN_ORG', status: 409 });
-    expect(decideChangeDriveVisibility({ drive: product({ orgId: null }), actorId: PRIYA, actorOrgRole: null, orgLapsed: false, visibility: 'PRIVATE' }))
+    expect(decideChangeDriveVisibility({ drive: product({ orgId: null }), actorId: PRIYA, actorOrgRole: null, visibility: 'PRIVATE' }))
       .toMatchObject({ ok: false, code: 'NOT_DRIVE_LEAD_OR_ORG_ADMIN', status: 403 });
   });
 
   it('DRV-4 (partial) a trashed drive keeps its visibility until restored', () => {
-    expect(decideChangeDriveVisibility({ drive: product({ isTrashed: true }), actorId: PRIYA, actorOrgRole: 'ADMIN', orgLapsed: false, visibility: 'PRIVATE' }))
+    expect(decideChangeDriveVisibility({ drive: product({ isTrashed: true }), actorId: PRIYA, actorOrgRole: 'ADMIN', visibility: 'PRIVATE' }))
       .toMatchObject({ ok: false, code: 'DRIVE_TRASHED', status: 409 });
   });
 
   it('DRV-4 (partial) setting the visibility a drive already has changes nothing', () => {
-    expect(decideChangeDriveVisibility({ drive: product({ orgVisibility: 'PRIVATE' }), actorId: PRIYA, actorOrgRole: 'ADMIN', orgLapsed: false, visibility: 'PRIVATE' }))
+    expect(decideChangeDriveVisibility({ drive: product({ orgVisibility: 'PRIVATE' }), actorId: PRIYA, actorOrgRole: 'ADMIN', visibility: 'PRIVATE' }))
       .toEqual({ ok: true, changed: false, from: 'PRIVATE', to: 'PRIVATE' });
   });
 });
@@ -72,21 +71,8 @@ describe('[D-OW-33] a lapsed org may only make a drive less open', () => {
     expect(visibilityChangeOnlyRestricts('RESTRICTED', 'OPEN')).toBe(false);
   });
 
-  it('SEAT-9 (partial) while lapsed, loosening is refused with the lapse refusal; tightening still goes through', () => {
-    for (const [from, to] of [['PRIVATE', 'RESTRICTED'], ['PRIVATE', 'OPEN'], ['RESTRICTED', 'OPEN']] as const) {
-      expect(decideChangeDriveVisibility({ drive: product({ orgVisibility: from }), actorId: PRIYA, actorOrgRole: 'ADMIN', orgLapsed: true, visibility: to }))
-        .toEqual(ORG_LAPSED_REFUSAL);
-    }
-    for (const [from, to] of [['OPEN', 'RESTRICTED'], ['OPEN', 'PRIVATE'], ['RESTRICTED', 'PRIVATE']] as const) {
-      expect(decideChangeDriveVisibility({ drive: product({ orgVisibility: from }), actorId: MARCUS, actorOrgRole: 'MEMBER', orgLapsed: true, visibility: to }))
-        .toEqual({ ok: true, changed: true, from, to });
-    }
-  });
-
-  it('SEAT-9 (partial) the lapse is asked only of someone allowed to change visibility at all: an outsider still learns nothing more than a refusal', () => {
-    expect(decideChangeDriveVisibility({ drive: product({ orgVisibility: 'PRIVATE' }), actorId: CHRIS, actorOrgRole: null, orgLapsed: true, visibility: 'OPEN' }))
-      .toMatchObject({ ok: false, code: 'NOT_DRIVE_LEAD_OR_ORG_ADMIN', status: 403 });
-  });
+  // The lapse itself is decided by the one guard (status-core decideOrgMayLoosen, read by checkOrgMayLoosen in
+  // changeDriveVisibility): lapsed-loosen.integration.test.ts proves both directions on real Postgres.
 });
 
 describe('decideChangeOrgDriveLead', () => {

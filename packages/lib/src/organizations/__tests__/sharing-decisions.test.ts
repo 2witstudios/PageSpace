@@ -64,23 +64,18 @@ describe('decideGuestAdmission', () => {
     ['approve', 'held', { decision: 'hold' }],
     ['on', 'allowed', { decision: 'allow' }],
   ] as const)('POL-2 (partial) an outsider under guests=%s is %s', (guests, _label, expected) => {
-    expect(decideGuestAdmission(policies({ guests }), { isOrgMember: false, orgLapsed: false })).toEqual(expected);
+    expect(decideGuestAdmission(policies({ guests }), { isOrgMember: false })).toEqual(expected);
   });
 
   it.each(['off', 'approve', 'on'] as const)('POL-2 (partial) an org member is never a guest, whatever the policy (%s)', (guests) => {
-    expect(decideGuestAdmission(policies({ guests }), { isOrgMember: true, orgLapsed: false })).toEqual({ decision: 'allow' });
+    expect(decideGuestAdmission(policies({ guests }), { isOrgMember: true })).toEqual({ decision: 'allow' });
   });
 
   it('POL-2 (partial) a personal drive has no guest policy: everyone is allowed', () => {
-    expect(decideGuestAdmission(null, { isOrgMember: false, orgLapsed: false })).toEqual({ decision: 'allow' });
+    expect(decideGuestAdmission(null, { isOrgMember: false })).toEqual({ decision: 'allow' });
   });
-
-  it('POL-2 (partial) SEAT-9 (partial) [D-OW-33] while the org is lapsed an outsider is not added as a guest even with guests on; off still names the policy, approve still only queues (approving is refused), and members are unaffected', () => {
-    expect(decideGuestAdmission(policies({ guests: 'on' }), { isOrgMember: false, orgLapsed: true })).toEqual({ decision: 'refuse', refusal: 'org_lapsed' });
-    expect(decideGuestAdmission(policies({ guests: 'off' }), { isOrgMember: false, orgLapsed: true })).toEqual({ decision: 'refuse', refusal: 'guests_off' });
-    expect(decideGuestAdmission(policies({ guests: 'approve' }), { isOrgMember: false, orgLapsed: true })).toEqual({ decision: 'hold' });
-    expect(decideGuestAdmission(policies({ guests: 'on' }), { isOrgMember: true, orgLapsed: true })).toEqual({ decision: 'allow' });
-  });
+  // A lapsed org's outsider (D-OW-33) is refused by decideOrgDriveAdmission through checkOrgMayLoosen, not here:
+  // lapsed-loosen.integration.test.ts proves it on real Postgres.
 });
 
 describe('pageGrantWidensAccess', () => {

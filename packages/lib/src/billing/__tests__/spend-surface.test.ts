@@ -162,7 +162,7 @@ describe('automationSpendCopy: who an automation spends as', () => {
     });
   });
 
-  it('SPEND-6 (partial) the copy never promises an automation a fallback it does not get (orchestrator ruling on UI-8)', () => {
+  it('SPEND-6 (partial) the copy never promises an automation a fallback it does not get (orchestrator ruling on the automation copy)', () => {
     for (const input of [{ creatorName: 'Priya Nair', walletLabel: 'Product wallet' }, { creatorName: null, walletLabel: null }]) {
       expect(automationSpendCopy(input).detail).not.toMatch(/fallback apply|caps and fallback|no source can pay/);
     }

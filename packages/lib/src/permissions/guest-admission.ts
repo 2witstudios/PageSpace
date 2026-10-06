@@ -23,7 +23,7 @@ import { drives } from '@pagespace/db/schema/core';
 import { orgMembers } from '@pagespace/db/schema/organizations';
 import { getDrivePolicies } from '../organizations/policy-reader';
 import { decideGuestAdmission, type GuestAdmissionVerdict } from '../organizations/sharing-decisions';
-import { readOrgLapsed } from '../organizations/status';
+import { checkOrgMayLoosen } from '../organizations/status';
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type Executor = typeof db | Tx;
@@ -47,8 +47,11 @@ export async function decideOrgDriveAdmission(input: { driveId: string; userId?:
     const [lead] = member ? [] : await executor.select({ id: drives.id }).from(drives).where(and(eq(drives.id, input.driveId), eq(drives.ownerId, input.userId))).limit(1);
     isOrgMember = Boolean(member || lead);
   }
-  // [D-OW-33] only an outsider's admission depends on the lapse, read with the same executor (in the write's
-  // transaction when there is one).
-  const orgLapsed = !isOrgMember && (await readOrgLapsed(context.orgId, executor));
-  return { ...decideGuestAdmission(context.policies, { isOrgMember, orgLapsed }), orgId: context.orgId };
+  const verdict = decideGuestAdmission(context.policies, { isOrgMember });
+  // [D-OW-33] admitting an outsider loosens access: the one guard, reading the lapse with the same executor (in the
+  // write's transaction when there is one). An org member, a hold or a refusal needs no read.
+  if (verdict.decision === 'allow' && !isOrgMember && (await checkOrgMayLoosen(executor, context.orgId, true))) {
+    return { decision: 'refuse', refusal: 'org_lapsed', orgId: context.orgId };
+  }
+  return { ...verdict, orgId: context.orgId };
 }

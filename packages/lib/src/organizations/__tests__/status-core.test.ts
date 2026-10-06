@@ -189,7 +189,7 @@ describe('orgLegStatus', () => {
 });
 
 describe('decideOrgMayLoosen — the one [D-OW-33] guard every loosening write asks', () => {
-  it('SEAT-9 (partial) a lapsed org is refused a change that loosens access, with the SEAT-9 lapse refusal; restricting, or any change while paid, goes through', () => {
+  it('SEAT-9 (partial) a lapsed org is refused a change that loosens access, with the lapse refusal; restricting, or any change while paid, goes through', () => {
     expect(decideOrgMayLoosen({ orgLapsed: true, loosens: true })).toEqual(ORG_LAPSED_REFUSAL);
     expect(decideOrgMayLoosen({ orgLapsed: true, loosens: false })).toBeNull();
     expect(decideOrgMayLoosen({ orgLapsed: false, loosens: true })).toBeNull();

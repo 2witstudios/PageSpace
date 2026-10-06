@@ -8,7 +8,6 @@
  */
 import type { SuspensionKind } from '@pagespace/db/schema/organizations';
 import type { OrgPolicies, OrgPolicyKey } from './policies-core';
-import { decideOrgMayLoosen } from './status-core';
 
 export const ORG_POLICY_CODE = 'org_policy' as const;
 
@@ -81,10 +80,11 @@ export type GuestAdmissionVerdict =
  * POL-2: an org MEMBER is never a guest. An outsider is refused when guests are off, held for an Owner or Admin
  * to approve when the policy is `approve`, and allowed when on. A drive with no org has no guest policy.
  *
- * [D-OW-33] a lapsed org may only restrict: an outsider it would ALLOW is refused instead (adding a guest loosens
- * access). A held request still queues, since it grants nothing and approving it is refused while lapsed.
+ * [D-OW-33] admitting an outsider loosens access: decideOrgDriveAdmission asks checkOrgMayLoosen for an `allow`
+ * here and refuses `org_lapsed` while the org is lapsed. A held request still queues (it grants nothing, and
+ * approving it is refused while lapsed).
  */
-export function decideGuestAdmission(policies: OrgPolicies | null, who: { isOrgMember: boolean; orgLapsed: boolean }): GuestAdmissionVerdict {
+export function decideGuestAdmission(policies: OrgPolicies | null, who: { isOrgMember: boolean }): GuestAdmissionVerdict {
   if (policies === null || who.isOrgMember) return { decision: 'allow' };
   switch (policies.guests) {
     case 'off':
@@ -92,8 +92,7 @@ export function decideGuestAdmission(policies: OrgPolicies | null, who: { isOrgM
     case 'approve':
       return { decision: 'hold' };
     case 'on':
-      // Adding a guest loosens access: the one lapse guard decides.
-      return decideOrgMayLoosen({ orgLapsed: who.orgLapsed, loosens: true }) ? { decision: 'refuse', refusal: 'org_lapsed' } : { decision: 'allow' };
+      return { decision: 'allow' };
   }
 }
 

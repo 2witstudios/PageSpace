@@ -33,9 +33,9 @@ const fetcher = async (url: string): Promise<ConversationSpend | null> => {
   return response.json();
 };
 
-/** How often, and how many times, a conversation not stored yet is asked again (SPEND-2). */
+/** How often, and how many times after the first read, a conversation not stored yet is asked again (SPEND-2). */
 export const PENDING_CONVERSATION_RETRY_MS = 1_000;
-const PENDING_CONVERSATION_RETRY_LIMIT = 10;
+export const PENDING_CONVERSATION_RETRY_LIMIT = 10;
 
 /**
  * SPEND-2: a new conversation in the right sidebar or the dashboard assistant gets its id before its
@@ -45,7 +45,8 @@ const PENDING_CONVERSATION_RETRY_LIMIT = 10;
  * saved; a wallet or credits event still refetches it).
  */
 export function pendingConversationRetryMs(misses: number): number {
-  return misses > 0 && misses < PENDING_CONVERSATION_RETRY_LIMIT ? PENDING_CONVERSATION_RETRY_MS : 0;
+  // `misses` counts the 404s so far, the first read's included: ask again until LIMIT retries have also missed.
+  return misses > 0 && misses <= PENDING_CONVERSATION_RETRY_LIMIT ? PENDING_CONVERSATION_RETRY_MS : 0;
 }
 
 /**

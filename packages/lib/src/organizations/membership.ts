@@ -12,7 +12,7 @@ import { and, asc, eq, inArray } from '@pagespace/db/operators';
 import { organizations, orgMembers, type OrgRole } from '@pagespace/db/schema/organizations';
 import { decideOrgRole } from './authorize';
 import { roleChangeOnlyRestricts } from './org-roles';
-import { decideOrgMayLoosen, readOrgLapsed, type ORG_LAPSED_CODE } from './status';
+import { checkOrgMayLoosen, type ORG_LAPSED_CODE } from './status';
 import { loadOrgPrincipalKind, type OrgPrincipalKind } from './owner-candidate';
 import { leaveOrganization, recordComputeReattributions, type ComputeReattribution, type LeadReassignment } from './leave';
 import { recordOwnerLeftAutomations, type OwnerLeftAutomation } from './automation-ownership';
@@ -46,19 +46,16 @@ export type MembershipRefusal =
   | 'insufficient_role'
   | typeof ORG_LAPSED_CODE;
 
-/** [D-OW-33] a lapsed org may demote but not promote: a promotion waits until the org pays (SEAT-9). */
 export const decideRoleChange = ({
   actorRole,
   targetRole,
   newRole,
-  orgLapsed,
 }: {
   actorId: string;
   actorRole: OrgRole | null;
   targetId: string;
   targetRole: OrgRole | null;
   newRole: OrgRole;
-  orgLapsed: boolean;
 }): MembershipDecision => {
   const actorRefusal = recheckActor(actorRole);
   if (actorRefusal) return actorRefusal;
@@ -66,8 +63,6 @@ export const decideRoleChange = ({
   if (newRole === 'OWNER' || targetRole === 'OWNER') {
     return { ok: false, status: 400, reason: 'use_ownership_transfer' };
   }
-  const lapsed = decideOrgMayLoosen({ orgLapsed, loosens: !roleChangeOnlyRestricts(targetRole, newRole) });
-  if (lapsed) return { ok: false, status: lapsed.status, reason: lapsed.code };
   return { ok: true };
 };
 
@@ -156,10 +151,13 @@ export async function changeMemberRole(input: {
   let fromRole = null as OrgRole | null;
   const result = await db.transaction(async (tx) => {
     const roles = await lockActorAndTargetRoles(tx, input.orgId, input.actorId, input.targetId);
-    // [D-OW-33] the lapse is read in this transaction, after the row locks, like every lapse-gated write.
-    const orgLapsed = await readOrgLapsed(input.orgId, tx);
-    const decision = decideRoleChange({ ...input, ...roles, orgLapsed });
+    const decision = decideRoleChange({ ...input, ...roles });
     if (!decision.ok) return decision;
+    // [D-OW-33] a lapsed org may demote but not promote: the one guard, reading the lapse after the row locks.
+    if (roles.targetRole !== null) {
+      const lapsed = await checkOrgMayLoosen(tx, input.orgId, !roleChangeOnlyRestricts(roles.targetRole, input.newRole));
+      if (lapsed) return { ok: false, status: lapsed.status, reason: lapsed.code };
+    }
     fromRole = roles.targetRole;
     await tx
       .update(orgMembers)
