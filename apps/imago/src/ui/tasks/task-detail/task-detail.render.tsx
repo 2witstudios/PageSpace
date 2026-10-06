@@ -5,6 +5,7 @@ import { Checkbox } from '../../components/checkbox/checkbox';
 import { Icon } from '../../components/icon/icon';
 import { defaultStatuses } from '../task-model/from-api';
 import type { Assignee, Priority, Task, TaskList, TaskListSummary } from '../task-model/task';
+import { isPriority, priorities } from '../task-meta/task-meta';
 import { isDone, progress } from '../task-tree/task-tree';
 import { renderTreeView, type TaskNotice } from '../tree-view/tree-view.render';
 import { dueDateFor, dueDay } from './due-date';
@@ -63,14 +64,6 @@ export type TaskDetailRenderProps = {
   readonly description: ReactNode;
   readonly actions: TaskDetailActions;
 };
-
-const priorities: readonly { readonly value: Priority; readonly label: string }[] = [
-  { value: 'high', label: 'High' },
-  { value: 'medium', label: 'Medium' },
-  { value: 'low', label: 'Low' },
-];
-
-const isPriority = (value: string): value is Priority => priorities.some((priority) => priority.value === value);
 
 const sameAssignee = (a: Assignee, b: Assignee): boolean => a.type === b.type && a.id === b.id;
 

@@ -1,7 +1,10 @@
 import { describe, test } from 'vitest';
 import { assert } from 'riteway/vitest';
 import {
+  boardAssigneesClass,
+  boardBlockedClass,
   boardCardClass,
+  boardCardMetaClass,
   boardCardRowClass,
   boardCardsClass,
   boardClass,
@@ -9,12 +12,15 @@ import {
   boardColumnHeadClass,
   boardCountClass,
   boardDotClass,
+  boardDueClass,
   boardEmptyClass,
   boardHandleClass,
   boardMenuClass,
   boardMenuItemClass,
   boardMoveClass,
   boardMoveTriggerClass,
+  boardPriorityClass,
+  boardSubtasksClass,
 } from './board-view-class';
 
 describe('board view classes', () => {
@@ -79,6 +85,35 @@ describe('board view classes', () => {
         'rounded-md px-2 py-1 text-xs font-medium text-ink-muted hover:bg-surface-overlay hover:text-ink',
         'absolute right-0 z-popover mt-1 flex w-menu flex-col gap-1 rounded-lg border border-hairline p-1 shadow-2 surface-glass-raised',
         'flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-row-y text-left text-sm text-ink hover:bg-surface-overlay focus-visible:bg-surface-overlay',
+      ],
+    });
+  });
+
+  test('what a card flags', () => {
+    assert({
+      given: 'the meta row, Blocked, a high and a low priority, and where the faces sit',
+      should: 'wrap the row, flag Blocked and high in the live red, low faint, and push the faces to the end',
+      actual: [boardCardMetaClass, boardBlockedClass, boardPriorityClass('high'), boardPriorityClass('low'), boardAssigneesClass],
+      expected: [
+        'flex flex-wrap items-center gap-2',
+        'flex-none text-2xs font-medium text-live',
+        'flex flex-none items-center gap-1 text-2xs text-live',
+        'flex flex-none items-center gap-1 text-2xs text-ink-faint',
+        'ml-auto',
+      ],
+    });
+  });
+
+  test('due dates and subtasks', () => {
+    assert({
+      given: 'an overdue, a soon and a later due date, and an open card’s subtasks',
+      should: 'grade the date red, full ink and faint, and rule the subtasks off under a hairline',
+      actual: [boardDueClass('overdue'), boardDueClass('soon'), boardDueClass('later'), boardSubtasksClass],
+      expected: [
+        'flex-none text-2xs tabular-nums font-medium text-live',
+        'flex-none text-2xs tabular-nums font-medium text-ink',
+        'flex-none text-2xs tabular-nums text-ink-faint',
+        'border-t border-hairline pt-2',
       ],
     });
   });

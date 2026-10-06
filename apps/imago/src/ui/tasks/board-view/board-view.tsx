@@ -22,20 +22,27 @@ import {
 } from '@dnd-kit/core';
 import type { Task, TaskList, TaskStatus } from '../task-model/task';
 import { isDoneStatus } from '../task-tree/task-tree';
-import type { TaskNotice } from '../tree-view/tree-view.render';
-import type { TaskActions } from '../use-tasks/use-tasks';
+import { renderTreeView, type TaskNotice } from '../tree-view/tree-view.render';
+import type { ActionResult, TaskActions } from '../use-tasks/use-tasks';
 import { boardColumns, columnJump, dropStatus, moveAnnouncement, moveTargets, type BoardColumn } from './board';
 import {
   renderBoard,
   renderBoardCard,
   renderBoardColumn,
   renderCardPreview,
+  type CardSubtasks,
   type MoveMenuRenderProps,
 } from './board-view.render';
 
 export type BoardViewProps = {
   readonly list: TaskList;
   readonly actions: TaskActions;
+  /** The viewer's own day, YYYY-MM-DD, that due dates read against. */
+  readonly today: string;
+  /** Which tasks have their subtasks open, shared with the Tree view. */
+  readonly expandedIds: readonly string[];
+  /** Void action: shows or hides a task's subtasks. */
+  readonly toggleExpanded: (taskId: string) => void;
   /** Where a card's task opens; titles are plain text without it. */
   readonly taskHref?: (task: Task) => string;
 };
@@ -88,10 +95,12 @@ const announcements = ({ title, statusName }: Lookup): Announcements => ({
 type ColumnProps = {
   readonly column: BoardColumn;
   readonly target: boolean;
+  readonly newCard: (title: string) => void;
+  readonly notice: string | null;
   readonly children: ReactNode;
 };
 
-function Column({ column, target, children }: ColumnProps) {
+function Column({ column, target, newCard, notice, children }: ColumnProps) {
   const { setNodeRef } = useDroppable({ id: column.status.slug });
   return renderBoardColumn({
     status: column.status,
@@ -99,35 +108,45 @@ function Column({ column, target, children }: ColumnProps) {
     target,
     dropRef: setNodeRef,
     cards: children,
+    newCard,
+    notice,
   });
 }
 
 type CardProps = {
   readonly task: Task;
   readonly done: boolean;
+  readonly today: string;
   readonly href: string | undefined;
   readonly move: MoveMenuRenderProps;
+  readonly subtasks: CardSubtasks | null;
   readonly notice: string | null;
 };
 
-function Card({ task, done, href, move, notice }: CardProps) {
+function Card({ task, done, today, href, move, subtasks, notice }: CardProps) {
   const { setNodeRef, attributes, listeners, isDragging } = useDraggable({ id: task.id });
   return renderBoardCard({
     task,
     done,
+    today,
     href,
     drag: { ref: setNodeRef, handle: { ...attributes, ...listeners }, dragging: isDragging },
     move,
+    subtasks,
     notice,
   });
 }
 
+/** Where a column's New card refusal is shown: apart from any task's. */
+const columnNotice = (slug: string) => `column:${slug}`;
+
 /**
- * The Board: a column per status of the list, holding its top-level tasks.
- * Which card's menu is open, which card is in flight, the last refusal and
- * the last announcement are its own state; the tasks are useTaskList's.
+ * The Board: a column per status of the list, holding its top-level tasks,
+ * each column ending in New card. Which card's menu is open, which card is
+ * in flight, the last refusal and the last announcement are its own state;
+ * the tasks are useTaskList's, and which cards are open is the Tree's.
  */
-export function BoardView({ list, actions, taskHref }: BoardViewProps) {
+export function BoardView({ list, actions, today, expandedIds, toggleExpanded, taskHref }: BoardViewProps) {
   const columns = useMemo(() => boardColumns(list), [list]);
   const [menuFor, setMenuFor] = useState<string | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -191,6 +210,40 @@ export function BoardView({ list, actions, taskHref }: BoardViewProps) {
     },
   });
 
+  const report = (at: string) => (result: ActionResult) =>
+    setNotice(result.ok ? null : { at, message: result.refusal });
+
+  /** A card's subtasks as the Tree's outline, a level down: tick, open and add them in place. */
+  const subtasksOf = (task: Task): CardSubtasks | null => {
+    const below = task.subtasks;
+    if (below === null || below.tasks.length === 0) return null;
+    return {
+      open: expandedIds.includes(task.id),
+      toggle: () => toggleExpanded(task.id),
+      list: renderTreeView({
+        list: below,
+        level: 1,
+        expandedIds,
+        notice,
+        toggleExpanded,
+        toggleComplete: (taskId) => {
+          void actions.toggleComplete(taskId).then(report(taskId));
+        },
+        addTask: (listPageId, at, title) => {
+          void actions.create(listPageId, { title }).then(report(at));
+        },
+        taskHref,
+        addLabel: 'Add subtask',
+        addPlaceholder: 'Subtask title',
+      }),
+    };
+  };
+
+  /** A New card goes to the end of the list in its column's status. */
+  const newCard = (status: TaskStatus) => (title: string) => {
+    void actions.create(list.pageId, { title, status: status.slug }).then(report(columnNotice(status.slug)));
+  };
+
   const active = activeId === null ? undefined : tasks.get(activeId);
 
   return (
@@ -222,14 +275,22 @@ export function BoardView({ list, actions, taskHref }: BoardViewProps) {
           label: `${list.title} board`,
           announcement,
           columns: columns.map((column) => (
-            <Column key={column.status.slug} column={column} target={activeId !== null && overId === column.status.slug}>
+            <Column
+              key={column.status.slug}
+              column={column}
+              target={activeId !== null && overId === column.status.slug}
+              newCard={newCard(column.status)}
+              notice={notice?.at === columnNotice(column.status.slug) ? notice.message : null}
+            >
               {column.tasks.map((task) => (
                 <Card
                   key={task.id}
                   task={task}
                   done={isDoneStatus(list.statuses, column.status.slug)}
+                  today={today}
                   href={taskHref?.(task)}
                   move={menuOf(task)}
+                  subtasks={subtasksOf(task)}
                   notice={notice?.at === task.id ? notice.message : null}
                 />
               ))}

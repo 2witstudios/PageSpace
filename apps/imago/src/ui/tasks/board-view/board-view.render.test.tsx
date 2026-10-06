@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { afterEach, describe, test } from 'vitest';
 import { assert } from 'riteway/vitest';
-import { click, mount, press, unmountAll } from '../../test-support/dom';
+import { click, mount, press, typeInto, unmountAll } from '../../test-support/dom';
+import { dueDateFor } from '../task-detail/due-date';
 import { seededStatuses, task } from '../task-model/fixtures';
 import type { TaskStatus } from '../task-model/task';
 import {
@@ -11,6 +12,7 @@ import {
   renderCardPreview,
   renderMoveMenu,
   type BoardCardRenderProps,
+  type BoardColumnRenderProps,
   type MoveMenuRenderProps,
 } from './board-view.render';
 
@@ -33,8 +35,21 @@ const menu = (overrides: Partial<MoveMenuRenderProps> = {}): MoveMenuRenderProps
 const card = (overrides: Partial<BoardCardRenderProps> = {}): BoardCardRenderProps => ({
   task: task('z', { title: 'Book venue' }),
   done: false,
+  today: '2026-10-05',
   drag: inertDrag,
   move: menu(),
+  subtasks: null,
+  notice: null,
+  ...overrides,
+});
+
+const columnProps = (overrides: Partial<BoardColumnRenderProps> = {}): BoardColumnRenderProps => ({
+  status: todo,
+  count: 0,
+  target: false,
+  dropRef: () => undefined,
+  cards: null,
+  newCard: () => undefined,
   notice: null,
   ...overrides,
 });
@@ -42,7 +57,7 @@ const card = (overrides: Partial<BoardCardRenderProps> = {}): BoardCardRenderPro
 describe('renderBoardColumn()', () => {
   test('a column', () => {
     const container = mount(
-      renderBoardColumn({ status: doing, count: 2, target: false, dropRef: () => undefined, cards: null }),
+      renderBoardColumn(columnProps({ status: doing, count: 2 })),
     );
     const column = container.querySelector('section');
     const heading = column?.querySelector('h3');
@@ -70,7 +85,7 @@ describe('renderBoardColumn()', () => {
 
   test('the count read out', () => {
     const label = (count: number) =>
-      mount(renderBoardColumn({ status: todo, count, target: false, dropRef: () => undefined, cards: null }))
+      mount(renderBoardColumn(columnProps({ count })))
         .querySelector('h3')
         ?.getAttribute('aria-label');
     assert({
@@ -83,7 +98,7 @@ describe('renderBoardColumn()', () => {
 
   test('an empty column and a drop target', () => {
     const container = mount(
-      renderBoardColumn({ status: todo, count: 0, target: true, dropRef: () => undefined, cards: null }),
+      renderBoardColumn(columnProps({ target: true })),
     );
     assert({
       given: 'an empty column a card is dragged over',
@@ -93,6 +108,35 @@ describe('renderBoardColumn()', () => {
         container.querySelector('section')?.className.includes('border-dashed'),
       ],
       expected: ['No tasks', true],
+    });
+  });
+});
+
+describe('a column’s New card', () => {
+  test('adding a card', () => {
+    const added: string[] = [];
+    const container = mount(renderBoardColumn(columnProps({ status: blocked, newCard: (title) => added.push(title) })));
+    const rest = [...container.querySelectorAll('button')].find((button) => button.textContent === 'New card');
+    const inColumn = rest?.closest('section')?.getAttribute('aria-label');
+    if (rest) click(rest);
+    const field = container.querySelector<HTMLInputElement>('input[aria-label="New card"]') as HTMLInputElement;
+    typeInto(field, '  Chase supplier  ');
+    press(field, 'Enter');
+    assert({
+      given: 'New card in the Blocked column, opened, typed into and committed with Enter',
+      should: 'offer the add under the cards and hand the trimmed title to the column',
+      actual: { rest: inColumn, placeholder: field.placeholder, added },
+      expected: { rest: 'Blocked', placeholder: 'Card title', added: ['Chase supplier'] },
+    });
+  });
+
+  test('a refused card', () => {
+    const container = mount(renderBoardColumn(columnProps({ notice: 'Title is required' })));
+    assert({
+      given: 'a column whose last New card was refused',
+      should: 'say why in the column',
+      actual: container.querySelector('section [role="status"]')?.textContent,
+      expected: 'Title is required',
     });
   });
 });
@@ -135,6 +179,108 @@ describe('renderBoardCard()', () => {
       should: 'make its title the link to the task’s detail',
       actual: [title?.tagName, title?.getAttribute('href'), title?.textContent],
       expected: ['A', '/d1/tasks/page-z', 'Book venue'],
+    });
+  });
+
+  test('what needs attention', () => {
+    const container = mount(
+      renderBoardCard(
+        card({
+          task: task('z', {
+            title: 'Book venue',
+            status: 'blocked',
+            priority: 'high',
+            dueDate: dueDateFor('2026-10-07'),
+            assignees: [
+              { type: 'user', id: 'u-1', name: 'Ada Lovelace' },
+              { type: 'agent', id: 'ag-1', name: 'Imago' },
+            ],
+          }),
+        }),
+      ),
+    );
+    const due = container.querySelector('time');
+    assert({
+      given: 'a blocked, high-priority card due 7 October with a person and an agent on it',
+      should: 'flag it Blocked and High priority, show its due day and everyone on it',
+      actual: {
+        blocked: container.querySelector('[data-blocked]')?.textContent,
+        priority: container.querySelector('[data-priority]')?.textContent,
+        priorityTone: container.querySelector('[data-priority]')?.className.includes('text-live'),
+        due: [due?.textContent, due?.getAttribute('dateTime'), due?.getAttribute('data-tone')],
+        assignees: container.querySelector('[role="img"]')?.getAttribute('aria-label'),
+      },
+      expected: {
+        blocked: 'Blocked',
+        priority: 'High priority',
+        priorityTone: true,
+        due: ['Oct 7', '2026-10-07', 'soon'],
+        assignees: 'Assigned to Ada Lovelace, Imago',
+      },
+    });
+  });
+
+  test('a quiet card', () => {
+    const container = mount(renderBoardCard(card({ task: task('z', { title: 'Book venue', priority: 'medium' }) })));
+    assert({
+      given: 'a medium-priority card with no due date and no one on it',
+      should: 'show no flags, no date and no faces',
+      actual: [
+        container.querySelector('[data-blocked]'),
+        container.querySelector('[data-priority]'),
+        container.querySelector('time'),
+        container.querySelector('[role="img"]'),
+      ],
+      expected: [null, null, null, null],
+    });
+  });
+
+  test('a low priority, overdue card', () => {
+    const container = mount(
+      renderBoardCard(card({ task: task('z', { priority: 'low', dueDate: dueDateFor('2026-10-04') }) })),
+    );
+    assert({
+      given: 'a low-priority open card due yesterday',
+      should: 'flag Low priority quietly and read the date as overdue',
+      actual: [
+        container.querySelector('[data-priority]')?.textContent,
+        container.querySelector('[data-priority]')?.className.includes('text-ink-faint'),
+        container.querySelector('time')?.textContent,
+        container.querySelector('time')?.getAttribute('data-tone'),
+      ],
+      expected: ['Low priority', true, 'Yesterday', 'overdue'],
+    });
+  });
+
+  test('a card with subtasks, closed and open', () => {
+    const toggled: number[] = [];
+    const closed = mount(
+      renderBoardCard(
+        card({ subtasks: { open: false, toggle: () => toggled.push(1), list: <ul aria-label="Book venue subtasks" /> } }),
+      ),
+    );
+    const caret = closed.querySelector<HTMLButtonElement>('button[aria-expanded]');
+    if (caret) click(caret);
+    const opened = mount(
+      renderBoardCard(card({ subtasks: { open: true, toggle: () => undefined, list: <ul aria-label="Book venue subtasks" /> } })),
+    );
+    assert({
+      given: 'a card with subtasks, closed then open',
+      should: 'offer a caret that toggles, and show the subtasks in the card only while open',
+      actual: {
+        caret: [caret?.getAttribute('aria-label'), caret?.getAttribute('aria-expanded')],
+        toggled: toggled.length,
+        closedList: closed.querySelector('ul[aria-label="Book venue subtasks"]'),
+        open: opened.querySelector('button[aria-expanded]')?.getAttribute('aria-expanded'),
+        inCard: opened.querySelector('article ul[aria-label="Book venue subtasks"]') !== null,
+      },
+      expected: {
+        caret: ['Toggle Book venue', 'false'],
+        toggled: 1,
+        closedList: null,
+        open: 'true',
+        inCard: true,
+      },
     });
   });
 

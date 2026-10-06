@@ -1,11 +1,18 @@
 import Link from 'next/link';
 import type { HTMLAttributes, KeyboardEvent, ReactNode } from 'react';
+import { renderAvatarGroup } from '../../components/avatar-group/avatar-group.render';
 import { renderIcon } from '../../components/icon/icon.render';
+import { InlineAdd } from '../../components/inline-add/inline-add';
 import { renderProgressMeter } from '../../components/progress-meter/progress-meter.render';
+import { dueDay } from '../task-detail/due-date';
+import { dueLabel, dueToneOf, isBlocked, priorityFlag } from '../task-meta/task-meta';
 import type { Task, TaskStatus } from '../task-model/task';
-import { taskNoticeClass, taskTitleClass } from '../task-row/task-row-class';
+import { taskCaretClass, taskNoticeClass, taskTitleClass, taskToggleClass } from '../task-row/task-row-class';
 import {
+  boardAssigneesClass,
+  boardBlockedClass,
   boardCardClass,
+  boardCardMetaClass,
   boardCardRowClass,
   boardCardsClass,
   boardClass,
@@ -13,12 +20,15 @@ import {
   boardColumnHeadClass,
   boardCountClass,
   boardDotClass,
+  boardDueClass,
   boardEmptyClass,
   boardHandleClass,
   boardMenuClass,
   boardMenuItemClass,
   boardMoveClass,
   boardMoveTriggerClass,
+  boardPriorityClass,
+  boardSubtasksClass,
 } from './board-view-class';
 
 export type BoardRenderProps = {
@@ -54,6 +64,10 @@ export type BoardColumnRenderProps = {
   /** Registers the column as a place to drop cards. */
   readonly dropRef: (element: HTMLElement | null) => void;
   readonly cards: ReactNode;
+  /** Void action: adds a card with this title to the column's status. */
+  readonly newCard: (title: string) => void;
+  /** Why the column's last New card was refused. */
+  readonly notice: string | null;
 };
 
 /** How a column's header reads out: its name and how many cards it holds. */
@@ -61,10 +75,19 @@ const headingLabel = (status: TaskStatus, count: number): string =>
   `${status.name}, ${count} ${count === 1 ? 'task' : 'tasks'}`;
 
 /**
- * One status's column: its dot, name and card count, then its cards. The
- * count is the work in progress shown; PageSpace stores no limit to hold it to.
+ * One status's column: its dot, name and card count, its cards, then New
+ * card. The count is the work in progress shown; PageSpace stores no limit
+ * to hold it to.
  */
-export function renderBoardColumn({ status, count, target, dropRef, cards }: BoardColumnRenderProps): ReactNode {
+export function renderBoardColumn({
+  status,
+  count,
+  target,
+  dropRef,
+  cards,
+  newCard,
+  notice,
+}: BoardColumnRenderProps): ReactNode {
   return (
     <section ref={dropRef} data-column={status.slug} aria-label={status.name} className={boardColumnClass(target)}>
       <h3 className={boardColumnHeadClass} aria-label={headingLabel(status, count)}>
@@ -78,6 +101,12 @@ export function renderBoardColumn({ status, count, target, dropRef, cards }: Boa
       <ul className={boardCardsClass} aria-label={`${status.name} tasks`}>
         {cards}
       </ul>
+      <InlineAdd label="New card" placeholder="Card title" add={newCard} />
+      {notice === null ? null : (
+        <p role="status" className={taskNoticeClass}>
+          {notice}
+        </p>
+      )}
     </section>
   );
 }
@@ -177,23 +206,80 @@ export function renderMoveMenu(props: MoveMenuRenderProps): ReactNode {
   );
 }
 
+/** A card's subtasks, for a task that has some loaded. */
+export type CardSubtasks = {
+  readonly open: boolean;
+  /** Void action: shows or hides them. */
+  readonly toggle: () => void;
+  /** The subtasks as the Tree view's outline; drawn only while open. */
+  readonly list: ReactNode;
+};
+
 export type BoardCardRenderProps = {
   readonly task: Task;
   /** Done by the status group of the list. */
   readonly done: boolean;
+  /** The viewer's own day, YYYY-MM-DD, that due dates read against. */
+  readonly today: string;
   /** Where the task's detail opens; the title is plain text without one. */
   readonly href?: string;
   readonly drag: CardDrag;
   readonly move: MoveMenuRenderProps;
+  readonly subtasks: CardSubtasks | null;
   /** Why the card's last move was refused. */
   readonly notice: string | null;
 };
 
+/** Blocked and a raised or lowered priority: what needs attention before the date. */
+const flags = (task: Task): ReactNode => {
+  const priority = priorityFlag(task);
+  return (
+    <>
+      {isBlocked(task) ? (
+        <span data-blocked="" className={boardBlockedClass}>
+          Blocked
+        </span>
+      ) : null}
+      {priority === null ? null : (
+        <span data-priority="" className={boardPriorityClass(priority.level)} title={priority.label}>
+          {renderIcon({ name: 'flag', size: 12 })}
+          <span className="sr-only">{priority.label}</span>
+        </span>
+      )}
+    </>
+  );
+};
+
+/** The due date by the viewer's own day, graded by how near it is. */
+const due = (task: Task, today: string, done: boolean): ReactNode => {
+  const tone = dueToneOf(task.dueDate, today, done);
+  return tone === null ? null : (
+    <time dateTime={dueDay(task.dueDate)} data-tone={tone} className={boardDueClass(tone)}>
+      {dueLabel(task.dueDate, today)}
+    </time>
+  );
+};
+
+const caret = (title: string, subtasks: CardSubtasks): ReactNode => (
+  <button
+    type="button"
+    className={taskToggleClass}
+    aria-expanded={subtasks.open}
+    aria-label={`Toggle ${title}`}
+    onClick={subtasks.toggle}
+  >
+    <span className={taskCaretClass(subtasks.open)} aria-hidden="true">
+      {renderIcon({ name: 'chevronRight', size: 12 })}
+    </span>
+  </button>
+);
+
 /**
- * A task's card: a drag handle, its title and subtask progress, and Move
- * to…; a refused move's reason sits under it.
+ * A task's card: a drag handle, its title and Move to…; under them its
+ * flags, subtask progress, due date and people. A card with subtasks opens
+ * them in place. A refused move's reason sits under it.
  */
-export function renderBoardCard({ task, done, href, drag, move, notice }: BoardCardRenderProps): ReactNode {
+export function renderBoardCard({ task, done, today, href, drag, move, subtasks, notice }: BoardCardRenderProps): ReactNode {
   return (
     <li data-task={task.id}>
       <article ref={drag.ref} aria-label={task.title} className={boardCardClass(drag.dragging)}>
@@ -210,11 +296,24 @@ export function renderBoardCard({ task, done, href, drag, move, notice }: BoardC
               {task.title}
             </Link>
           )}
+          {subtasks === null ? null : caret(task.title, subtasks)}
           {renderMoveMenu(move)}
         </div>
-        {task.subTaskCount > 0 ? (
-          renderProgressMeter({ done: task.subTaskCompletedCount, total: task.subTaskCount })
-        ) : null}
+        <div className={boardCardMetaClass}>
+          {flags(task)}
+          {task.subTaskCount > 0
+            ? renderProgressMeter({ done: task.subTaskCompletedCount, total: task.subTaskCount })
+            : null}
+          {due(task, today, done)}
+          <span className={boardAssigneesClass}>
+            {renderAvatarGroup({
+              names: task.assignees.map((entry) => entry.name),
+              agents: task.assignees.filter((entry) => entry.type === 'agent').map((entry) => entry.name),
+              label: 'Assigned to',
+            })}
+          </span>
+        </div>
+        {subtasks?.open === true ? <div className={boardSubtasksClass}>{subtasks.list}</div> : null}
       </article>
       {notice === null ? null : (
         <p role="status" className={taskNoticeClass}>

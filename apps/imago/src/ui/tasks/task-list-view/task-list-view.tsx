@@ -8,6 +8,7 @@ import type { UiState } from '../../store/state';
 import { dispatch, transactions } from '../../store/transactions';
 import { BoardView } from '../board-view/board-view';
 import type { TaskList } from '../task-model/task';
+import { localToday } from '../task-meta/task-meta';
 import { listProgress } from '../task-tree/task-tree';
 import { renderTreeView, type TaskNotice } from '../tree-view/tree-view.render';
 import { doneToday, frontier } from '../focus-view/focus';
@@ -24,7 +25,7 @@ export type TaskListViewProps = {
   readonly pageId: string;
   /** Whose view choice to restore and save. */
   readonly viewerId: string;
-  /** What "today" is for Done today; the machine's clock unless a test injects one. */
+  /** What "today" is for Done today and due dates; the machine's clock unless a test injects one. */
   readonly clock?: () => Date;
 };
 
@@ -46,7 +47,16 @@ type Body = {
 const bodyFor = ({ driveId, list, view, expandedIds, notice, actions, report, clock }: Body): ReactNode => {
   if (list === undefined) return renderTaskListMessage('Loading tasks…', 'status');
   if (view === 'board') {
-    return <BoardView list={list} actions={actions} taskHref={(task) => taskHref(driveId, task.pageId)} />;
+    return (
+      <BoardView
+        list={list}
+        actions={actions}
+        today={localToday(clock())}
+        expandedIds={expandedIds}
+        toggleExpanded={(taskId) => dispatch(transactions.toggleTaskExpanded, taskId)}
+        taskHref={(task) => taskHref(driveId, task.pageId)}
+      />
+    );
   }
   if (view === 'focus') {
     return renderFocusView({
