@@ -567,4 +567,24 @@ describe('planOrgAwakeSettle', () => {
     expect(result.plan).toMatchObject({ action: 'settle', activeSeconds: 300 });
     expect(result.forgiven).toBeNull();
   });
+
+  it('INVARIANT the meter relies on: never answers skip for a span the personal plan settles', () => {
+    // awake-meter's org branch resolves the charge only after the personal
+    // plan's skip check has passed, and then trusts org.plan to be a settle.
+    // This pins that trust: for every input where planAwakeSettle settles, the
+    // org planner answers a settle too (its skip arm mirrors the personal one).
+    const cases: [Date, Date, Date][] = [
+      [T('2026-09-28T12:00:00Z'), T('2026-09-28T12:05:00Z'), T('2026-09-28T12:00:00Z')], // at epoch, 300s span
+      [T('2026-09-28T11:00:00Z'), T('2026-09-28T12:05:00Z'), T('2026-09-28T12:00:00Z')], // pre-epoch backlog + post-epoch span
+      [T('2026-09-28T11:00:00Z'), T('2026-09-28T12:00:00Z'), T('2026-09-28T12:00:00Z')], // wholly pre-epoch, epoch at now
+      [T('2026-09-28T11:00:00Z'), T('2026-09-28T12:05:00Z'), T('2026-09-28T13:00:00Z')], // epoch in the future
+    ];
+    for (const [billedThrough, now, epoch] of cases) {
+      const personal = planAwakeSettle({ billedThrough, now });
+      const org = planOrgAwakeSettle({ billedThrough, now, epoch });
+      if (personal.action === 'settle') {
+        expect(org.plan.action, `billedThrough=${billedThrough.toISOString()} now=${now.toISOString()} epoch=${epoch.toISOString()}`).toBe('settle');
+      }
+    }
+  });
 });

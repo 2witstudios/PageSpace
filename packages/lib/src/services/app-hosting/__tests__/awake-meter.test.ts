@@ -1,9 +1,30 @@
 import { describe, it, expect, vi } from 'vitest';
 import { assert } from '../../sandbox/__tests__/riteway';
-import { meterAwakePublishedApps, type AwakeMeterDeps } from '../awake-meter';
+import { defaultAwakeMeterDeps, meterAwakePublishedApps, meterAwakePublishedAppsSerialized, type AwakeMeterDeps } from '../awake-meter';
 import type { AppBillingDeps } from '../app-billing';
 import { MAX_AWAKE_SETTLE_SPAN_MS } from '../app-metering-core';
 import type { PublishedApp } from '@pagespace/db/schema/published-apps';
+
+// The default park binding hands the real `stopPublishedApp`; only its WIRING is
+// under test here, never a real stop. Everything else from the module stays actual.
+vi.mock('../app-lifecycle-metering', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../app-lifecycle-metering')>();
+  return {
+    ...actual,
+    stopPublishedApp: vi.fn(
+      async (
+        publishedAppId: string,
+        reason: Parameters<typeof actual.stopPublishedApp>[1],
+        deps?: Parameters<typeof actual.stopPublishedApp>[2],
+      ) => {
+        void publishedAppId;
+        void reason;
+        void deps;
+        return { outcome: 'stopped', status: 'parked', billedSeconds: 0 } as const;
+      },
+    ),
+  };
+});
 
 const NOW = new Date('2026-08-20T12:00:00.000Z');
 const ago = (ms: number) => new Date(NOW.getTime() - ms);
@@ -780,5 +801,74 @@ describe('meterAwakePublishedApps — the meter lock is lost mid-tick', () => {
     await meterAwakePublishedApps(deps, lost.signal);
 
     expect(closeAtBoundary).toHaveBeenCalledWith(expect.objectContaining({ id: 'app-1' }), boundary, lost.signal);
+  });
+});
+
+describe('meterOneApp — an org app whose span has nothing to bill', () => {
+  it('WAL-9 (partial) a back-to-back tick on an org app (watermark AT the tick clock) is skipped — not charged, not forgiven, no watermark write', async () => {
+    // planOrgAwakeSettle answers `skip` when the watermark has reached the tick's
+    // clock already: the previous tick billed through `now`, so this one has zero
+    // active seconds. The org branch must fold that into the same quiet skip a
+    // personal app gets — no trackUsage, no releaseHold churn, no watermark write.
+    const { deps, trackUsage, writeSettle, releaseHold } = makeDeps({
+      listRunningApps: async () => [runningApp({ driveId: 'org-drive', awakeBilledThrough: NOW })],
+    });
+    deps.billing.resolveCharge = async () => ORG_CHARGE;
+    deps.orgComputeBillingEpoch = async () => EPOCH;
+
+    const run = await meter(deps);
+
+    expect(trackUsage).not.toHaveBeenCalled();
+    expect(releaseHold).not.toHaveBeenCalled();
+    expect(writeSettle).not.toHaveBeenCalled();
+    assert({
+      given: 'an org app whose watermark already equals the tick clock',
+      should: 'skip the row quietly',
+      actual: { skipped: run.skipped, charged: trackUsage.mock.calls.length, orgBacklogForgiven: run.orgBacklogForgiven },
+      expected: { skipped: 1, charged: 0, orgBacklogForgiven: 0 },
+    });
+  });
+});
+
+describe('defaultAwakeMeterDeps.park — the meter lock-lost signal rides with the stop', () => {
+  it('binds passThroughSettleLockUnder(signal) when the meter carries a signal and the plain pass-through when it does not', async () => {
+    // The default park runs INSIDE the meter's locked region, so it must never
+    // re-take the lock; when the meter's lock was lost, its settle must stop with
+    // the meter's own signal. This is the production wiring — unit tests above
+    // override `park`, so the two bindings are exercised directly here.
+    const { stopPublishedApp } = await import('../app-lifecycle-metering');
+    const signal = new AbortController().signal;
+
+    await defaultAwakeMeterDeps.park('app-1', 'insolvent', signal);
+    await defaultAwakeMeterDeps.park('app-2', 'daily_cap');
+
+    expect(stopPublishedApp).toHaveBeenCalledTimes(2);
+    const withSignal = vi.mocked(stopPublishedApp).mock.calls[0]![2];
+    const withoutSignal = vi.mocked(stopPublishedApp).mock.calls[1]![2];
+    if (!withSignal || !withoutSignal) throw new Error('the default park must always hand the stop its deps');
+    expect(withSignal.serializeSettle).toBeDefined();
+    expect(withSignal.serializeSettle).not.toBe(withoutSignal.serializeSettle);
+    // The signal-bound serializer runs fn and reports locked (it never takes the lock).
+    await expect(withSignal.serializeSettle(async () => 'settled')).resolves.toEqual({ locked: true, result: 'settled' });
+    await expect(withoutSignal.serializeSettle(async () => 'settled')).resolves.toEqual({ locked: true, result: 'settled' });
+  });
+});
+
+describe('meterAwakePublishedAppsSerialized', () => {
+  it('reports lock_busy without running the tick, and rethrows a pool connection failure', async () => {
+    const { deps, trackUsage } = makeDeps();
+    const busyClient = {
+      query: vi.fn(async () => ({ rows: [{ acquired: false }] })),
+      release: vi.fn(),
+    };
+    const busyPool = { connect: vi.fn(async () => busyClient) };
+
+    expect(await meterAwakePublishedAppsSerialized(deps, busyPool)).toEqual({ outcome: 'lock_busy' });
+    expect(trackUsage).not.toHaveBeenCalled();
+    expect(busyClient.release).toHaveBeenCalledWith(undefined);
+
+    const exhausted = { connect: vi.fn(async () => { throw new Error('pool exhausted'); }) };
+    await expect(meterAwakePublishedAppsSerialized(deps, exhausted)).rejects.toThrow('pool exhausted');
+    expect(trackUsage).not.toHaveBeenCalled();
   });
 });

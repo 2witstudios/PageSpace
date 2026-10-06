@@ -71,6 +71,7 @@ import {
   reserveConcurrentUploadSlot,
   updateStorageUsage,
   calculateActualStorageUsage,
+  getOrgFileCount,
   getUserFileCount,
   reconcileStorageUsage,
   userReferencesContentHash,
@@ -353,6 +354,37 @@ describe('storage-limits', () => {
 
       expect(result).toBe(true);
       expect(storageRepository.userReferencesContentHash).toHaveBeenCalledWith('user-1', 'a'.repeat(64), 'drive-1');
+    });
+  });
+
+  describe('getOrgFileCount (WAL-9)', () => {
+    it('getOrgFileCount_withNoOrgDrives_returnsZeroWithoutReadingFiles', async () => {
+      vi.mocked(storageRepository.findOrgDriveIds).mockResolvedValue([]);
+      expect(await getOrgFileCount('org-northwind')).toBe(0);
+      expect(storageRepository.countFiles).not.toHaveBeenCalled();
+    });
+
+    it('getOrgFileCount_withOrgDrives_returnsTheCountFromTheRepository', async () => {
+      vi.mocked(storageRepository.findOrgDriveIds).mockResolvedValue(['d-1', 'd-2']);
+      vi.mocked(storageRepository.countFiles).mockResolvedValue(7);
+      expect(await getOrgFileCount('org-northwind')).toBe(7);
+      expect(storageRepository.countFiles).toHaveBeenCalledWith(['d-1', 'd-2']);
+    });
+  });
+
+  describe('checkUploadQuotaTarget — the org payer arm', () => {
+    it('counts the ORG file count for an org payer, never the uploader personal count', async () => {
+      vi.mocked(storageRepository.findOrgDriveIds).mockResolvedValue(['d-1']);
+      vi.mocked(storageRepository.countFiles).mockResolvedValue(3);
+      const result = await checkUploadQuotaTarget(
+        {
+          payer: { kind: 'org', orgId: 'org-northwind' } as never,
+          quota: { orgId: 'org-northwind', quotaBytes: 1 << 30, usedBytes: 0, availableBytes: 1 << 30, utilizationPercent: 0, tier: 'business', warningLevel: 'none' as const },
+        },
+        1024 * 1024,
+      );
+      expect(result.allowed).toBe(true);
+      expect(storageRepository.countFiles).toHaveBeenCalledWith(['d-1']);
     });
   });
 
@@ -744,5 +776,27 @@ describe('storage-limits', () => {
     it('refuses a missing target as a missing uploader', async () => {
       expect(await checkUploadQuotaTarget(null, MB)).toEqual({ allowed: false, reason: 'User not found' });
     });
+
+    it('answers lock_busy as a clean no-op when another run holds the reconcile lock, and rethrows a pool connection failure', async () => {
+      // The admin trigger loses the race against a scheduled sweep: nothing runs,
+      // the caller retries or relies on the next sweep.
+      const busyPool = {
+        connect: vi.fn(async () => ({
+          query: vi.fn(async () => ({ rows: [{ acquired: false }] })),
+          release: vi.fn(),
+        })),
+      };
+      expect(await reconcileStorageUsage('user-1', busyPool)).toEqual({ outcome: 'lock_busy' });
+      expect(storageRepository.findUserForStorage).not.toHaveBeenCalled();
+
+      const exhaustedPool = {
+        connect: vi.fn(async () => {
+          throw new Error('pool exhausted');
+        }),
+      };
+      await expect(reconcileStorageUsage('user-1', exhaustedPool)).rejects.toThrow('pool exhausted');
+      expect(storageRepository.findUserForStorage).not.toHaveBeenCalled();
+    });
   });
+
 });
