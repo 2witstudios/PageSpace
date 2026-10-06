@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import useSWR from 'swr';
 import { ORGS_ENABLED } from '@pagespace/lib/organizations/orgs-enabled';
 import type { SurfaceChoice, SurfaceDecision } from '@pagespace/lib/billing/spend-surface';
@@ -25,13 +25,28 @@ export function conversationSpendKey(conversationId: string | null, driveId: str
   return isGlobal && driveId ? `${base}?driveId=${encodeURIComponent(driveId)}` : base;
 }
 
-/** A conversation the server has not stored yet (no first message) has no source to read: null, not an error. */
+/** A conversation the server has not stored yet has no source to read: null, not an error. */
 const fetcher = async (url: string): Promise<ConversationSpend | null> => {
   const response = await fetchWithAuth(url);
   if (response.status === 404) return null;
   if (!response.ok) throw new Error(`Failed to fetch: ${response.status}`);
   return response.json();
 };
+
+/** How often, and how many times, a conversation not stored yet is asked again (SPEND-2). */
+export const PENDING_CONVERSATION_RETRY_MS = 1_000;
+const PENDING_CONVERSATION_RETRY_LIMIT = 10;
+
+/**
+ * SPEND-2: a new conversation in the right sidebar or the dashboard assistant gets its id before its
+ * row is saved (the create runs in the background), so the first read can 404. That answer is not
+ * final: ask again shortly, a bounded number of times, so the strip shows the source as soon as the
+ * row exists. 0 stops: after a real read, or once the limit is spent (the conversation was never
+ * saved; a wallet or credits event still refetches it).
+ */
+export function pendingConversationRetryMs(misses: number): number {
+  return misses > 0 && misses < PENDING_CONVERSATION_RETRY_LIMIT ? PENDING_CONVERSATION_RETRY_MS : 0;
+}
 
 /**
  * The spend source of one conversation, kept current: refetched when its drive's wallet changes
@@ -41,8 +56,16 @@ const fetcher = async (url: string): Promise<ConversationSpend | null> => {
  */
 export function useConversationSpend(conversationId: string | null, options: { driveId: string | null; isGlobal: boolean }) {
   const key = conversationSpendKey(conversationId, options.driveId, options.isGlobal);
-  const { data, error, isLoading, mutate } = useSWR<ConversationSpend | null>(key, fetcher, {
-    refreshInterval: 0,
+  // 404s in a row for this key: while it is not stored yet, the read is retried (pendingConversationRetryMs).
+  const misses = useRef<{ key: string | null; count: number }>({ key: null, count: 0 });
+  const countingFetcher = useCallback(async (url: string) => {
+    const read = await fetcher(url);
+    misses.current = { key: url, count: read === null ? (misses.current.key === url ? misses.current.count : 0) + 1 : 0 };
+    return read;
+  }, []);
+  const { data, error, isLoading, mutate } = useSWR<ConversationSpend | null>(key, countingFetcher, {
+    refreshInterval: (latest) => (latest === null && misses.current.key === key ? pendingConversationRetryMs(misses.current.count) : 0),
+    dedupingInterval: PENDING_CONVERSATION_RETRY_MS / 2,
     revalidateOnFocus: false,
   });
   const socket = useSocketStore((state) => state.socket);
