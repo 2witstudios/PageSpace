@@ -14,6 +14,13 @@ import { computeReorderPlan, lockedBatchReorder } from './reorder';
 import { loadEffectiveDriveMembership } from '../permissions/org-drive-membership';
 import { isDriveLead } from '../permissions/drive-relationship';
 import { guardOpenRoleFloor } from '../organizations/open-role-floor';
+import { guardDriveAccess, type DriveAccessScope } from '../permissions/org-lapse-guard';
+
+/**
+ * [D-OW-33] what a role write can change: who holds which role (members and agents follow a default, a deleted role
+ * leaves its holders on the plain role). Page grants are untouched by role writes.
+ */
+const ROLE_WRITE_SCOPE: DriveAccessScope = { grants: false };
 
 // POL-6: a role write that leaves an Open org drive's default below the org floor throws this.
 export { OpenRoleFloorError } from '../organizations/open-role-floor';
@@ -275,8 +282,9 @@ export async function createDriveRole(
     throw new Error('Invalid driveWidePermissions structure');
   }
 
-  // POL-6: judged on the drive's state after the write (open-role-floor.ts).
-  return db.transaction(async (tx) => guardOpenRoleFloor(tx, driveId, async () => {
+  // POL-6: judged on the drive's state after the write (open-role-floor.ts). [D-OW-33] guardDriveAccess: while the
+  // drive's org is lapsed the write may not give a role's holders more (nor move them to a wider default).
+  return guardDriveAccess(db, driveId, ROLE_WRITE_SCOPE, (tx) => guardOpenRoleFloor(tx, driveId, async () => {
     // Read existing roles for the position computation; when creating as
     // default this doubles as the ordered drive-wide lock acquisition.
     const existingRoles = input.isDefault
@@ -342,8 +350,9 @@ export async function updateDriveRole(
     throw new Error('Cannot specify both permissions and permissionsPatch');
   }
 
-  // POL-6: judged on the drive's state after the write (open-role-floor.ts).
-  return db.transaction(async (tx) => guardOpenRoleFloor(tx, driveId, async () => {
+  // POL-6: judged on the drive's state after the write (open-role-floor.ts). [D-OW-33] guardDriveAccess: while the
+  // drive's org is lapsed the write may not give a role's holders more (nor move them to a wider default).
+  return guardDriveAccess(db, driveId, ROLE_WRITE_SCOPE, (tx) => guardOpenRoleFloor(tx, driveId, async () => {
     let existingRole: typeof driveRoles.$inferSelect | undefined;
     if (input.isDefault) {
       // Setting a default updates every role row in the drive, so acquire the
@@ -418,7 +427,7 @@ export async function deleteDriveRole(
 
   // POL-6: deleting an Open org drive's default leaves its members on the plain MEMBER role, which is below an
   // edit floor; judged on the state after the delete.
-  await db.transaction((tx) => guardOpenRoleFloor(tx, driveId, () =>
+  await guardDriveAccess(db, driveId, ROLE_WRITE_SCOPE, (tx) => guardOpenRoleFloor(tx, driveId, () =>
     tx.delete(driveRoles).where(and(eq(driveRoles.id, roleId), eq(driveRoles.driveId, driveId)))));
 }
 
@@ -440,7 +449,7 @@ export async function reorderDriveRoles(
 ): Promise<void> {
   // POL-6: through the floor guard like every role write, so its locks come in the same order and the default it
   // leaves (the lowest-positioned one wins) is judged against the org floor.
-  await db.transaction(async (tx) => guardOpenRoleFloor(tx, driveId, async () => {
+  await guardDriveAccess(db, driveId, ROLE_WRITE_SCOPE, (tx) => guardOpenRoleFloor(tx, driveId, async () => {
     const existingRoles = await lockDriveRolesInOrder(tx, driveId);
     const existingIds = new Set(existingRoles.map(r => r.id));
     const invalidIds = roleIds.filter(id => !existingIds.has(id));

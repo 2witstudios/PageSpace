@@ -10,7 +10,7 @@ import { inArray } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { drives } from '@pagespace/db/schema/core';
 import { driveRoles } from '@pagespace/db/schema/members';
-import { organizations, orgMembers } from '@pagespace/db/schema/organizations';
+import { organizations, orgMembers, orgSubscriptions } from '@pagespace/db/schema/organizations';
 
 const createdOrgIds: string[] = [];
 const createdUserIds: string[] = [];
@@ -148,11 +148,13 @@ export async function northwind() {
 
 export type Fixture = Awaited<ReturnType<typeof northwind>>;
 
-/** Org drives, then orgs (drives.orgId and organizations.ownerId RESTRICT), then users (cascading the rest). */
+/** Org drives, then subscriptions and orgs (drives.orgId, org_subscriptions and organizations.ownerId RESTRICT), then users. */
 export async function cleanupNorthwind(): Promise<void> {
   const orgIds = createdOrgIds.splice(0);
   if (orgIds.length > 0) {
     await db.delete(drives).where(inArray(drives.orgId, orgIds));
+    // A suite that pays an org (factories.createOrgSubscription) leaves a row that RESTRICTs its org's delete.
+    await db.delete(orgSubscriptions).where(inArray(orgSubscriptions.orgId, orgIds));
     await db.delete(organizations).where(inArray(organizations.id, orgIds));
   }
   const userIds = createdUserIds.splice(0);

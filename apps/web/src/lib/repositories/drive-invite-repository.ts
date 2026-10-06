@@ -15,6 +15,7 @@ import { decryptField } from '@pagespace/lib/encryption/field-crypto';
 import { decideOrgDriveAdmission } from '@pagespace/lib/permissions/guest-admission';
 import type { GuestAdmissionRefusal } from '@pagespace/lib/organizations/sharing-decisions';
 import { consumeApprovedInvitation, requestGuestApproval } from '@pagespace/lib/permissions/guest-holds';
+import { OrgLapsedError, checkDriveMayLoosen, guardDriveAccess } from '@pagespace/lib/permissions/org-lapse-guard';
 
 export const driveInviteRepository = {
   async findDriveById(driveId: string) {
@@ -40,86 +41,12 @@ export const driveInviteRepository = {
     return results.at(0) ?? null;
   },
 
-  async createDriveMember(data: {
-    driveId: string;
-    userId: string;
-    role: 'OWNER' | 'ADMIN' | 'MEMBER';
-    customRoleId: string | null;
-    invitedBy: string;
-    acceptedAt: Date | null;
-  }) {
-    const results = await db
-      .insert(driveMembers)
-      .values(data)
-      .returning();
-    return results[0];
-  },
-
-  async updateDriveMemberRole(
-    memberId: string,
-    role: 'OWNER' | 'ADMIN' | 'MEMBER',
-    customRoleId: string | null
-  ) {
-    await db
-      .update(driveMembers)
-      .set({ role, customRoleId })
-      .where(eq(driveMembers.id, memberId));
-  },
-
   async getValidPageIds(driveId: string): Promise<string[]> {
     const results = await db
       .select({ id: pages.id })
       .from(pages)
       .where(eq(pages.driveId, driveId));
     return results.map((p) => p.id);
-  },
-
-  async findPagePermission(pageId: string, userId: string) {
-    const results = await db
-      .select()
-      .from(pagePermissions)
-      .where(
-        and(
-          eq(pagePermissions.pageId, pageId),
-          eq(pagePermissions.userId, userId)
-        )
-      )
-      .limit(1);
-    return results.at(0) ?? null;
-  },
-
-  async createPagePermission(data: {
-    pageId: string;
-    userId: string;
-    canView: boolean;
-    canEdit: boolean;
-    canShare: boolean;
-    canDelete: boolean;
-    grantedBy: string;
-  }) {
-    const results = await db
-      .insert(pagePermissions)
-      .values(data)
-      .returning();
-    return results[0];
-  },
-
-  async updatePagePermission(
-    permId: string,
-    data: {
-      canView: boolean;
-      canEdit: boolean;
-      canShare: boolean;
-      grantedBy: string;
-      grantedAt: Date;
-    }
-  ) {
-    const results = await db
-      .update(pagePermissions)
-      .set(data)
-      .where(eq(pagePermissions.id, permId))
-      .returning();
-    return results[0];
   },
 
   async findUserEmail(userId: string): Promise<string | undefined> {
@@ -191,12 +118,18 @@ export const driveInviteRepository = {
     permissions: Array<{ pageId: string; canView: boolean; canEdit: boolean; canShare: boolean }>;
     grantedBy: string;
     validPageIds: Set<string>;
-  }): Promise<{ memberId: string; permissionsGranted: number } | { refused: 'GUEST_POLICY'; refusal: GuestAdmissionRefusal }> {
+  }): Promise<
+    | { memberId: string; permissionsGranted: number }
+    | { refused: 'GUEST_POLICY'; refusal: GuestAdmissionRefusal }
+    | { refused: 'ORG_LAPSED' }
+  > {
     return db.transaction(async (tx) => {
       // POL-2, again at the write and under the org row's share lock: the caller asked the policy before, but guests
       // may have been turned OFF since; then nothing is written (the change's suspension could not have seen it).
       const admission = await decideOrgDriveAdmission({ driveId: input.driveId, userId: input.userId }, tx);
       if (admission.decision === 'refuse') return { refused: 'GUEST_POLICY', refusal: admission.refusal } as const;
+      // [D-OW-33] a new member loosens access: refused while the drive's org is lapsed (an org member too).
+      if (await checkDriveMayLoosen(tx, input.driveId, true)) return { refused: 'ORG_LAPSED' } as const;
 
       const [member] = await tx
         .insert(driveMembers)
@@ -229,6 +162,60 @@ export const driveInviteRepository = {
     });
   },
 
+  /**
+   * Re-invite of a person who already holds a row: set the invited role and write the page grants, in one
+   * transaction. [D-OW-33] while the drive's org is lapsed this may only restrict: if it gives them more (a higher
+   * role, a wider custom role, a wider grant) guardDriveAccess throws OrgLapsedError and nothing is written.
+   */
+  async upgradeMemberWithPermissions(input: {
+    memberId: string;
+    driveId: string;
+    userId: string;
+    role: 'OWNER' | 'ADMIN' | 'MEMBER';
+    customRoleId: string | null;
+    permissions: Array<{ pageId: string; canView: boolean; canEdit: boolean; canShare: boolean }>;
+    grantedBy: string;
+    validPageIds: Set<string>;
+  }): Promise<{ permissionsGranted: number; skippedPageIds: string[] }> {
+    return guardDriveAccess(db, input.driveId, { users: [input.userId], agents: false }, async (tx) => {
+      await tx
+        .update(driveMembers)
+        .set({ role: input.role, customRoleId: input.customRoleId })
+        .where(eq(driveMembers.id, input.memberId));
+      let permissionsGranted = 0;
+      const skippedPageIds: string[] = [];
+      for (const perm of input.permissions) {
+        if (!input.validPageIds.has(perm.pageId)) {
+          skippedPageIds.push(perm.pageId);
+          continue;
+        }
+        const [existing] = await tx
+          .select({ id: pagePermissions.id })
+          .from(pagePermissions)
+          .where(and(eq(pagePermissions.pageId, perm.pageId), eq(pagePermissions.userId, input.userId)))
+          .limit(1);
+        if (existing) {
+          await tx
+            .update(pagePermissions)
+            .set({ canView: perm.canView, canEdit: perm.canEdit, canShare: perm.canShare, grantedBy: input.grantedBy, grantedAt: new Date() })
+            .where(eq(pagePermissions.id, existing.id));
+        } else {
+          await tx.insert(pagePermissions).values({
+            pageId: perm.pageId,
+            userId: input.userId,
+            canView: perm.canView,
+            canEdit: perm.canEdit,
+            canShare: perm.canShare,
+            canDelete: false,
+            grantedBy: input.grantedBy,
+          });
+        }
+        permissionsGranted += 1;
+      }
+      return { permissionsGranted, skippedPageIds };
+    });
+  },
+
   async createPendingInvite(input: {
     tokenHash: string;
     email: string;
@@ -241,6 +228,9 @@ export const driveInviteRepository = {
   }) {
     const { tokenHash, email, driveId, role, customRoleId, invitedBy, expiresAt, now } = input;
     return db.transaction(async (tx) => {
+      // [D-OW-33] an invitation is a token that admits whoever accepts it: none is issued while the drive's org is
+      // lapsed (acceptance refuses too, for one issued before the lapse).
+      if (await checkDriveMayLoosen(tx, driveId, true)) throw new OrgLapsedError();
       // Sweep any already-expired unconsumed row for this (driveId, email) pair
       // so the partial unique index does not block a legitimate re-invite.
       // Active (unexpired) rows are caught by the route's pre-check + the
@@ -482,7 +472,7 @@ export const driveInviteRepository = {
     acceptedAt: Date;
   }): Promise<
     | { ok: true; memberId: string }
-    | { ok: false; reason: 'TOKEN_CONSUMED' | 'ALREADY_MEMBER' | 'GUEST_POLICY' | 'GUEST_APPROVAL_PENDING' }
+    | { ok: false; reason: 'TOKEN_CONSUMED' | 'ALREADY_MEMBER' | 'GUEST_POLICY' | 'GUEST_APPROVAL_PENDING' | 'ORG_LAPSED' }
   > {
     const { inviteId, driveId, userId, role, customRoleId, invitedBy, acceptedAt } = input;
     // The ALREADY_MEMBER signal must roll back the consume — if the user is
@@ -521,6 +511,10 @@ export const driveInviteRepository = {
             return HELD;
           }
         }
+
+        // [D-OW-33] accepting adds access: refused while the drive's org is lapsed, BEFORE the token is consumed, so
+        // the invitation works again once the org pays.
+        if (await checkDriveMayLoosen(tx, driveId, true)) throw 'ORG_LAPSED';
 
         const consumed = await tx
           .update(pendingInvites)
@@ -576,6 +570,9 @@ export const driveInviteRepository = {
       }
       if (error === 'GUEST_POLICY') {
         return { ok: false, reason: 'GUEST_POLICY' };
+      }
+      if (error === 'ORG_LAPSED') {
+        return { ok: false, reason: 'ORG_LAPSED' };
       }
       if (error === ALREADY_MEMBER) {
         return { ok: false, reason: 'ALREADY_MEMBER' };

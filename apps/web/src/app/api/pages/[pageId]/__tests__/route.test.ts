@@ -623,6 +623,17 @@ describe('PATCH /api/pages/[pageId]', () => {
       expect(broadcastPageEvent).toHaveBeenCalledTimes(1);
     });
 
+    it('SEAT-9 (partial) [D-OW-33] when the page service refuses (the page was private and the drive\'s org is lapsed), the route answers 402 org_lapsed and broadcasts nothing', async () => {
+      // @ts-expect-error - partial mock: the page row carries only isPrivate
+      vi.mocked(db.query.pages.findFirst).mockResolvedValue({ isPrivate: true });
+      const { OrgLapsedError } = await import('@pagespace/lib/permissions/org-lapse-guard');
+      vi.mocked(pageService.updatePage).mockRejectedValueOnce(new OrgLapsedError());
+      const res = await PATCH(createRequest({ isPrivate: false }), { params: mockParams });
+      expect(res.status).toBe(402);
+      expect(await res.json()).toMatchObject({ code: 'org_lapsed' });
+      expect(broadcastPageEvent).not.toHaveBeenCalled();
+    });
+
     it('broadcasts page:updated event when isPrivate changes to false', async () => {
       // @ts-expect-error - partial mock: page was private
       vi.mocked(db.query.pages.findFirst).mockResolvedValue({ isPrivate: true });

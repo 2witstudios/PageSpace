@@ -52,12 +52,14 @@ vi.mock('@pagespace/db/operators', () => ({
 vi.mock('../../permissions/membership-queries', () => ({
   customRoleBelongsToDrive: vi.fn().mockResolvedValue(true),
   getMemberCustomRoleId: vi.fn().mockResolvedValue(null),
+  // Review #2849 P1: a role's grants, read to bound a key by its owner (null: no such role).
+  fetchCustomRolePermissions: vi.fn().mockResolvedValue(null),
   resolveDriveWideCanEdit: vi.fn(),
 }));
 
 import { db } from '@pagespace/db/db';
 import { eq, and } from '@pagespace/db/operators';
-import { customRoleBelongsToDrive, getMemberCustomRoleId, resolveDriveWideCanEdit } from '../../permissions/membership-queries';
+import { customRoleBelongsToDrive, fetchCustomRolePermissions, getMemberCustomRoleId, resolveDriveWideCanEdit } from '../../permissions/membership-queries';
 
 // Drizzle transaction callback receives a tx whose type is the inner parameter of db.transaction.
 type MockTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -505,6 +507,21 @@ describe('validateDriveScopeAccess', () => {
     );
 
     expect(result.unauthorizedCustomRoles).toEqual([]);
+  });
+
+  it('review #2849 P1: a MEMBER a custom role restricts cannot mint the plain MEMBER role (it would read more than they do); the same role passes', async () => {
+    mockMemberAccess('drive_123', 'MEMBER');
+    vi.mocked(getMemberCustomRoleId).mockResolvedValue('role-locked');
+    vi.mocked(fetchCustomRolePermissions).mockImplementation(async (roleId: string) =>
+      roleId === 'role-locked' ? { permissions: { secret: { canView: false, canEdit: false, canShare: false } }, driveWidePermissions: { canView: true, canEdit: false, canShare: false } } : null);
+
+    const plain = await validateDriveScopeAccess([{ id: 'drive_123', role: 'MEMBER' }], 'user_123');
+    expect(plain.unauthorizedCustomRoles).toEqual(['drive_123']);
+    const own = await validateDriveScopeAccess([{ id: 'drive_123', role: 'MEMBER', customRoleId: 'role-locked' }], 'user_123');
+    expect(own.unauthorizedCustomRoles).toEqual([]);
+    // A plain member (no custom role) may still mint the plain role.
+    vi.mocked(getMemberCustomRoleId).mockResolvedValue(null);
+    expect((await validateDriveScopeAccess([{ id: 'drive_123', role: 'MEMBER' }], 'user_123')).unauthorizedCustomRoles).toEqual([]);
   });
 
   it('allows an ADMIN to use any custom role without checking assignment', async () => {

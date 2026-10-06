@@ -18,15 +18,11 @@ vi.mock('@/lib/repositories/drive-invite-repository', () => ({
     findUserVerificationStatusById: vi.fn(),
     findActivePendingInviteByDriveAndEmail: vi.fn(),
     findInviterDisplay: vi.fn(),
-    createDriveMember: vi.fn(),
     createAcceptedMemberWithPermissions: vi.fn(),
+    upgradeMemberWithPermissions: vi.fn(),
     createPendingInvite: vi.fn(),
     deletePendingInvite: vi.fn(),
-    updateDriveMemberRole: vi.fn(),
     getValidPageIds: vi.fn(),
-    findPagePermission: vi.fn(),
-    createPagePermission: vi.fn(),
-    updatePagePermission: vi.fn(),
     findUserEmail: vi.fn(),
   },
 }));
@@ -127,6 +123,8 @@ import { sendPendingDriveInvitationEmail } from '@pagespace/lib/services/notific
 import { checkDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 import type { DriveRelationship } from '@pagespace/lib/permissions/drive-relationship';
 import { loadDriveRelationship } from '@pagespace/lib/permissions/drive-relationship-loader';
+import { OrgLapsedError } from '@pagespace/lib/permissions/org-lapse-guard';
+import { ORG_LAPSED_MESSAGE } from '@pagespace/lib/organizations/status-core';
 
 const NONE: DriveRelationship = { isOwner: false, membership: null };
 const asMember = (role: 'ADMIN' | 'MEMBER', source: 'invite' | 'org' = 'invite'): DriveRelationship => ({
@@ -205,18 +203,14 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
       name: 'Inviter Name',
       email: 'inviter@example.com',
     } as never);
-    vi.mocked(driveInviteRepository.createDriveMember).mockResolvedValue({ id: 'mem_pending' } as never);
     vi.mocked(driveInviteRepository.createAcceptedMemberWithPermissions).mockResolvedValue({
       memberId: 'mem_new',
       permissionsGranted: 1,
     } as never);
     vi.mocked(driveInviteRepository.createPendingInvite).mockResolvedValue({ id: 'inv_pending' } as never);
     vi.mocked(driveInviteRepository.deletePendingInvite).mockResolvedValue(undefined);
-    vi.mocked(driveInviteRepository.updateDriveMemberRole).mockResolvedValue(undefined);
+    vi.mocked(driveInviteRepository.upgradeMemberWithPermissions).mockResolvedValue({ permissionsGranted: 0, skippedPageIds: [] });
     vi.mocked(driveInviteRepository.getValidPageIds).mockResolvedValue(['page_1']);
-    vi.mocked(driveInviteRepository.findPagePermission).mockResolvedValue(null as never);
-    vi.mocked(driveInviteRepository.createPagePermission).mockResolvedValue({ id: 'perm_1' } as never);
-    vi.mocked(driveInviteRepository.updatePagePermission).mockResolvedValue({ id: 'perm_1' } as never);
     vi.mocked(driveInviteRepository.findUserEmail).mockResolvedValue('invited@example.com');
     vi.mocked(driveInviteRepository.findUserVerificationStatusById).mockResolvedValue({
       email: 'invited@example.com',
@@ -403,11 +397,9 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
           invitedBy: mockUserId,
         })
       );
-      // The non-transactional createDriveMember path is NOT used for the join.
-      expect(driveInviteRepository.createDriveMember).not.toHaveBeenCalled();
     });
 
-    it('updates existing member role via updateDriveMemberRole', async () => {
+    it('updates existing member role via upgradeMemberWithPermissions', async () => {
       vi.mocked(driveInviteRepository.findExistingMember).mockResolvedValue({
         id: 'mem_existing',
         userId: mockInvitedUserId,
@@ -423,10 +415,8 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
       expect(response.status).toBe(200);
       expect(json.kind).toBe('added');
       expect(json.memberId).toBe('mem_existing');
-      expect(driveInviteRepository.updateDriveMemberRole).toHaveBeenCalledWith(
-        'mem_existing',
-        'ADMIN',
-        null
+      expect(driveInviteRepository.upgradeMemberWithPermissions).toHaveBeenCalledWith(
+        expect.objectContaining({ memberId: 'mem_existing', role: 'ADMIN', customRoleId: null })
       );
     });
 
@@ -461,7 +451,6 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
         expect(response.status).toBe(200);
         expect(json.kind).toBe('invited');
         expect(driveInviteRepository.createAcceptedMemberWithPermissions).not.toHaveBeenCalled();
-        expect(driveInviteRepository.createDriveMember).not.toHaveBeenCalled();
         expect(driveInviteRepository.createPendingInvite).toHaveBeenCalledWith(
           expect.objectContaining({
             email: 'unverified@example.com',
@@ -489,7 +478,6 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
 
         expect(response.status).toBe(403);
         expect(driveInviteRepository.createAcceptedMemberWithPermissions).not.toHaveBeenCalled();
-        expect(driveInviteRepository.createDriveMember).not.toHaveBeenCalled();
       });
 
       it('returns 404 when invited userId resolves to no user record', async () => {
@@ -591,8 +579,6 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
           invitedBy: mockUserId,
         })
       );
-      // Critical: the legacy createDriveMember(acceptedAt:null) path is gone.
-      expect(driveInviteRepository.createDriveMember).not.toHaveBeenCalled();
       expect(sendPendingDriveInvitationEmail).toHaveBeenCalledWith(
         expect.objectContaining({
           recipientEmail: 'newbie@example.com',
@@ -647,7 +633,7 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
       expect(response.status).toBe(409);
       expect(json.existingMemberId).toBe('mem_already_accepted');
       expect(driveInviteRepository.createAcceptedMemberWithPermissions).not.toHaveBeenCalled();
-      expect(driveInviteRepository.updateDriveMemberRole).not.toHaveBeenCalled();
+      expect(driveInviteRepository.upgradeMemberWithPermissions).not.toHaveBeenCalled();
     });
 
     it('does not 409 an email that maps to a GUEST of the drive — the add path upgrades them', async () => {
@@ -669,7 +655,7 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
       );
 
       expect(response.status).toBe(200);
-      expect(driveInviteRepository.updateDriveMemberRole).toHaveBeenCalledWith('mem_guest', 'MEMBER', null);
+      expect(driveInviteRepository.upgradeMemberWithPermissions).toHaveBeenCalledWith(expect.objectContaining({ memberId: 'mem_guest', role: 'MEMBER', customRoleId: null }));
     });
 
     it('returns 409 with existingMemberId when active pending invite exists', async () => {
@@ -719,7 +705,6 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
       expect(response.status).toBe(403);
       // Critical: must NOT have inserted a member row for the suspended user.
       expect(driveInviteRepository.createAcceptedMemberWithPermissions).not.toHaveBeenCalled();
-      expect(driveInviteRepository.createDriveMember).not.toHaveBeenCalled();
     });
 
     it('returns 403 when email maps to a suspended unverified user', async () => {
@@ -946,7 +931,7 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
       const response = await POST(buildPost(mockDriveId, userIdBody), createContext(mockDriveId));
 
       expect(response.status).toBe(200);
-      expect(driveInviteRepository.updateDriveMemberRole).toHaveBeenCalledWith('mem_guest', 'MEMBER', null);
+      expect(driveInviteRepository.upgradeMemberWithPermissions).toHaveBeenCalledWith(expect.objectContaining({ memberId: 'mem_guest', role: 'MEMBER', customRoleId: null }));
       expect(broadcastDriveMemberEvent).toHaveBeenCalledTimes(1);
     });
 
@@ -1035,6 +1020,50 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
   // Transactional integrity (the gap PR #1229 missed)
   // ==========================================================================
 
+  describe('[D-OW-33] a lapsed org only restricts', () => {
+    const lapsedBody = { error: ORG_LAPSED_MESSAGE, code: 'org_lapsed' };
+
+    it('SEAT-9 (partial) [D-OW-33] a new member while the drive\'s org is lapsed answers 402 org_lapsed with no side effects', async () => {
+      vi.mocked(driveInviteRepository.createAcceptedMemberWithPermissions).mockResolvedValueOnce({ refused: 'ORG_LAPSED' });
+
+      const response = await POST(buildPost(mockDriveId, userIdBody), createContext(mockDriveId));
+
+      expect(response.status).toBe(402);
+      expect(await response.json()).toEqual(lapsedBody);
+      expect(broadcastDriveMemberEvent).not.toHaveBeenCalled();
+      expect(createDriveNotification).not.toHaveBeenCalled();
+    });
+
+    it('SEAT-9 (partial) [D-OW-33] a re-invite that would raise an existing member answers 402 org_lapsed', async () => {
+      vi.mocked(driveInviteRepository.findExistingMember).mockResolvedValue({
+        id: 'mem_existing',
+        userId: mockInvitedUserId,
+        acceptedAt: new Date(),
+      } as never);
+      vi.mocked(driveInviteRepository.upgradeMemberWithPermissions).mockRejectedValueOnce(new OrgLapsedError());
+
+      const response = await POST(buildPost(mockDriveId, { ...userIdBody, role: 'ADMIN' }), createContext(mockDriveId));
+
+      expect(response.status).toBe(402);
+      expect(await response.json()).toEqual(lapsedBody);
+      expect(auditRequest).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: 'authz.permission.granted' }));
+    });
+
+    it('SEAT-9 (partial) [D-OW-33] an emailed invitation is not issued (402 org_lapsed, no email) while the drive\'s org is lapsed', async () => {
+      vi.mocked(driveInviteRepository.findUserIdByEmail).mockResolvedValue(null as never);
+      vi.mocked(driveInviteRepository.createPendingInvite).mockRejectedValueOnce(new OrgLapsedError());
+
+      const response = await POST(
+        buildPost(mockDriveId, { email: 'new@example.com', role: 'MEMBER', permissions: [] }),
+        createContext(mockDriveId)
+      );
+
+      expect(response.status).toBe(402);
+      expect(await response.json()).toEqual(lapsedBody);
+      expect(sendPendingDriveInvitationEmail).not.toHaveBeenCalled();
+    });
+  });
+
   describe('transactional integrity', () => {
     it('does not return a memberId when the transactional insert throws', async () => {
       vi.mocked(driveInviteRepository.createAcceptedMemberWithPermissions).mockRejectedValueOnce(
@@ -1052,7 +1081,7 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
       await POST(buildPost(mockDriveId, userIdBody), createContext(mockDriveId));
 
       expect(driveInviteRepository.createAcceptedMemberWithPermissions).toHaveBeenCalledTimes(1);
-      expect(driveInviteRepository.createPagePermission).not.toHaveBeenCalled();
+      expect(driveInviteRepository.upgradeMemberWithPermissions).not.toHaveBeenCalled();
     });
   });
 
@@ -1125,8 +1154,6 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
       } as never);
 
       await POST(buildPost(mockDriveId, userIdBody), createContext(mockDriveId));
-
-      expect(driveInviteRepository.createDriveMember).not.toHaveBeenCalled();
       expect(driveInviteRepository.createAcceptedMemberWithPermissions).not.toHaveBeenCalled();
       expect(driveInviteRepository.createPendingInvite).not.toHaveBeenCalled();
     });

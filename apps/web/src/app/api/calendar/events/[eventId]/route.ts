@@ -17,6 +17,8 @@ import {
   upsertCalendarTriggerWorkflowInTx,
   validateCalendarAgentTrigger,
 } from '@/lib/workflows/calendar-trigger-helpers';
+import { OrgLapsedError, checkCalendarVisibilityMayLoosen, isOrgLapsedError } from '@pagespace/lib/permissions/org-lapse-guard';
+import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -294,6 +296,11 @@ export async function PATCH(
     // write where the title moved but the trigger didn't would be confusing
     // for the user and hard to retry safely.
     const [updatedEvent] = await db.transaction(async (tx) => {
+      // [D-OW-33] ruling: an org-drive event made more visible (e.g. Private → Drive) loosens who reads it; refused
+      // while the drive's org is lapsed, judged on the event row locked in this transaction. Narrowing still applies.
+      if (data.visibility !== undefined && (await checkCalendarVisibilityMayLoosen(tx, eventId, data.visibility))) {
+        throw new OrgLapsedError();
+      }
       const result = await tx
         .update(calendarEvents)
         .set({
@@ -401,6 +408,7 @@ export async function PATCH(
 
     return NextResponse.json(completeEvent);
   } catch (error) {
+    if (isOrgLapsedError(error)) return orgLapsedResponse();
     loggers.api.error('Error updating calendar event:', error as Error);
     return NextResponse.json(
       { error: 'Failed to update calendar event' },

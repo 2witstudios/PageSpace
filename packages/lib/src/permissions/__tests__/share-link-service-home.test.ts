@@ -5,15 +5,20 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('@pagespace/db/db', () => ({
-  db: {
+vi.mock('@pagespace/db/db', () => {
+  const db: Record<string, unknown> = {
     select: vi.fn(),
     insert: vi.fn(),
     query: {
       drives: { findFirst: vi.fn() },
     },
-  },
-}));
+  };
+  // A new link is inserted in a transaction (the [D-OW-33] lapse guard reads in it): the tx is the same mock.
+  db.transaction = vi.fn(async (fn: (tx: unknown) => Promise<unknown>) => fn(db));
+  return { db };
+});
+// [D-OW-33] the lapse guard: these drives have no org.
+vi.mock('../org-lapse-guard', () => ({ checkDriveMayLoosen: vi.fn(async () => null) }));
 
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((col, val) => ({ op: 'eq', col, val })),

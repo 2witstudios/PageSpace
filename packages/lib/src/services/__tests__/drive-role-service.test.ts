@@ -5,6 +5,11 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
+// [D-OW-33] guardDriveAccess opens the role write's transaction (tested against real Postgres in
+// org-lapse-loosening.integration.test.ts); here it is the transaction mock each test sets up.
+vi.mock('../../permissions/org-lapse-guard', () => ({
+  guardDriveAccess: vi.fn((executor: { transaction: (fn: unknown) => unknown }, _driveId: string, _scope: unknown, write: unknown) => executor.transaction(write)),
+}));
 vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {

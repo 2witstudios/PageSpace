@@ -22,6 +22,8 @@ import { requestGuestApproval } from '@pagespace/lib/permissions/guest-holds';
 import { GUESTS_HELD_MESSAGE, guestsOffRefusal, type GuestAdmissionRefusal } from '@pagespace/lib/organizations/sharing-decisions';
 import { ORG_LAPSED_REFUSAL } from '@pagespace/lib/organizations/status-core';
 import { recordOrgAuditEvent } from '@pagespace/lib/audit/org-audit';
+import { isOrgLapsedError } from '@pagespace/lib/permissions/org-lapse-guard';
+import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
 import type { GuestHoldRequest } from '@pagespace/db/schema/org-guest-holds';
 
 function resolveAppUrl(): string | null {
@@ -203,43 +205,34 @@ export async function handleUserIdPath(args: {
       grantedBy: inviterUserId,
       validPageIds,
     });
-    if ('refused' in result) return admissionRefusalResponse(result.refusal);
+    if ('refused' in result) {
+      return result.refused === 'ORG_LAPSED' ? orgLapsedResponse() : admissionRefusalResponse(result.refusal);
+    }
     memberId = result.memberId;
     permissionsGranted = result.permissionsGranted;
   } else {
-    await driveInviteRepository.updateDriveMemberRole(
-      existingMember.id,
-      role,
-      customRoleId ?? null
-    );
-    memberId = existingMember.id;
-    for (const perm of permissions) {
-      if (!validPageIds.has(perm.pageId)) {
-        loggers.api.warn(`Invalid page ID ${perm.pageId} for drive ${driveId}`);
-        continue;
-      }
-      const existing = await driveInviteRepository.findPagePermission(perm.pageId, invitedUserId);
-      if (existing) {
-        await driveInviteRepository.updatePagePermission(existing.id, {
-          canView: perm.canView,
-          canEdit: perm.canEdit,
-          canShare: perm.canShare,
-          grantedBy: inviterUserId,
-          grantedAt: new Date(),
-        });
-      } else {
-        await driveInviteRepository.createPagePermission({
-          pageId: perm.pageId,
-          userId: invitedUserId,
-          canView: perm.canView,
-          canEdit: perm.canEdit,
-          canShare: perm.canShare,
-          canDelete: false,
-          grantedBy: inviterUserId,
-        });
-      }
-      permissionsGranted += 1;
+    // [D-OW-33] a re-invite may raise the role or widen grants: guarded in its transaction (402 while lapsed).
+    let upgraded: { permissionsGranted: number; skippedPageIds: string[] };
+    try {
+      upgraded = await driveInviteRepository.upgradeMemberWithPermissions({
+        memberId: existingMember.id,
+        driveId,
+        userId: invitedUserId,
+        role,
+        customRoleId: customRoleId ?? null,
+        permissions,
+        grantedBy: inviterUserId,
+        validPageIds,
+      });
+    } catch (error) {
+      if (isOrgLapsedError(error)) return orgLapsedResponse();
+      throw error;
     }
+    for (const pageId of upgraded.skippedPageIds) {
+      loggers.api.warn(`Invalid page ID ${pageId} for drive ${driveId}`);
+    }
+    memberId = existingMember.id;
+    permissionsGranted = upgraded.permissionsGranted;
   }
 
   if (isFreshJoin) {
@@ -433,6 +426,8 @@ export async function handleEmailPath(args: {
       now,
     });
   } catch (insertError) {
+    // [D-OW-33] no invitation is issued while the drive's org is lapsed.
+    if (isOrgLapsedError(insertError)) return orgLapsedResponse();
     // The active-pending pre-check above filters out unexpired-unconsumed rows,
     // and createPendingInvite sweeps expired-unconsumed rows for the same
     // (driveId, email) pair inside its transaction. The only path to a unique

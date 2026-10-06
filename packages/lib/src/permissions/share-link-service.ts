@@ -16,6 +16,7 @@ import { decideOrgDriveAdmission } from './guest-admission';
 import { requestGuestApproval, type ClaimedGuestApproval } from './guest-holds';
 import { shareLinkCreationDecision, shareLinkUsable } from '../organizations/sharing-decisions';
 import { recordOrgAuditEventAfterCommit } from '../audit/org-audit';
+import { checkDriveMayLoosen } from './org-lapse-guard';
 
 // ============================================================================
 // Result types
@@ -47,10 +48,14 @@ export type ShareLinkError =
 /** POL-3: the org's public-share-links policy is off. Carries the policy's own message for the caller to show. */
 export type ShareLinkPolicyRefusal = { ok: false; error: 'POLICY_FORBIDDEN'; message: string };
 
+/** [D-OW-33] the drive's org is lapsed: a new link would loosen access (SEAT-9 copy in `message`). */
+export type ShareLinkLapseRefusal = { ok: false; error: 'ORG_LAPSED'; message: string };
+
 export type ShareLinkResult<T> =
   | { ok: true; data: T }
   | { ok: false; error: ShareLinkError }
-  | ShareLinkPolicyRefusal;
+  | ShareLinkPolicyRefusal
+  | ShareLinkLapseRefusal;
 
 export interface DriveShareLinkView {
   id: string;
@@ -133,6 +138,9 @@ async function admittedWrite<T>(driveId: string, userId: string, write: (tx: Tx)
   return db.transaction(async (tx) => {
     const admission = await decideOrgDriveAdmission({ driveId, userId }, tx);
     if (admission.decision === 'refuse') return null;
+    // [D-OW-33] a link redeemed while the org is lapsed admits nobody, an org member included (outsiders were already
+    // refused above): it answers like a link that does not exist, so the holder learns nothing about the org.
+    if (await checkDriveMayLoosen(tx, driveId, true)) return null;
     return write(tx);
   });
 }
@@ -253,20 +261,24 @@ export async function createDriveShareLink(
 
   const { token } = generateToken('ps_share');
 
-  const [inserted] = await db
-    .insert(driveShareLinks)
-    .values({
-      id: createId(),
-      driveId,
-      token,
-      role,
-      customRoleId,
-      createdBy: ctx.userId,
-      expiresAt: opts.expiresAt ?? null,
-    })
-    .returning({ id: driveShareLinks.id });
-
-  return { ok: true, data: { id: inserted.id, rawToken: token } };
+  // [D-OW-33] a new join link loosens access: refused while the drive's org is lapsed, read in the insert's transaction.
+  return db.transaction(async (tx): Promise<ShareLinkResult<{ id: string; rawToken: string }>> => {
+    const lapsed = await checkDriveMayLoosen(tx, driveId, true);
+    if (lapsed) return { ok: false, error: 'ORG_LAPSED', message: lapsed.message };
+    const [inserted] = await tx
+      .insert(driveShareLinks)
+      .values({
+        id: createId(),
+        driveId,
+        token,
+        role,
+        customRoleId,
+        createdBy: ctx.userId,
+        expiresAt: opts.expiresAt ?? null,
+      })
+      .returning({ id: driveShareLinks.id });
+    return { ok: true, data: { id: inserted.id, rawToken: token } };
+  });
 }
 
 export async function revokeDriveShareLink(
@@ -438,19 +450,23 @@ export async function createPageShareLink(
 
   const { token } = generateToken('ps_share');
 
-  const [inserted] = await db
-    .insert(pageShareLinks)
-    .values({
-      id: createId(),
-      pageId,
-      token,
-      permissions: perms,
-      createdBy: ctx.userId,
-      expiresAt: opts.expiresAt ?? null,
-    })
-    .returning({ id: pageShareLinks.id });
-
-  return { ok: true, data: { id: inserted.id, rawToken: token } };
+  // [D-OW-33] a new page link loosens access: refused while the page's drive's org is lapsed.
+  return db.transaction(async (tx): Promise<ShareLinkResult<{ id: string; rawToken: string }>> => {
+    const lapsed = pageRow ? await checkDriveMayLoosen(tx, pageRow.driveId, true) : null;
+    if (lapsed) return { ok: false, error: 'ORG_LAPSED', message: lapsed.message };
+    const [inserted] = await tx
+      .insert(pageShareLinks)
+      .values({
+        id: createId(),
+        pageId,
+        token,
+        permissions: perms,
+        createdBy: ctx.userId,
+        expiresAt: opts.expiresAt ?? null,
+      })
+      .returning({ id: pageShareLinks.id });
+    return { ok: true, data: { id: inserted.id, rawToken: token } };
+  });
 }
 
 export async function revokePageShareLink(

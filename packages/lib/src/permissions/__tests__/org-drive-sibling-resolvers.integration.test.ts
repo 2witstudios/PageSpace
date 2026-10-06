@@ -86,6 +86,9 @@ const DENY: PermissionLevel = { canView: false, canEdit: false, canShare: false,
  */
 async function matrixFixture() {
   const f = await northwind();
+  // Northwind is paid ([D-OW-30]: an org with no subscription is lapsed), so writes that loosen access go through
+  // ([D-OW-33]); this suite is about resolver parity, not the lapse.
+  await factories.createOrgSubscription(f.org.id, { status: 'active' });
   const tomas = await createUser('Tomás Alvarez');
   const zed = await createUser('Zed Stranger');
   await db.insert(orgMembers).values({ orgId: f.org.id, userId: tomas.id, role: 'MEMBER' });

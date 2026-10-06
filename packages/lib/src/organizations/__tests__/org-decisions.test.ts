@@ -12,7 +12,7 @@ import {
   inviteExpiryFrom,
   INVITE_EXPIRY_DAYS,
 } from '../invitations';
-import { decideRoleChange, decideMemberRemoval, decideOwnershipTransfer } from '../membership';
+import { decideRoleChange, decideMemberRemoval, decideOwnershipTransfer, ownershipTransferWidens } from '../membership';
 import { planOrgDeletion } from '../deletion';
 import { decideOrgOwnerCandidate } from '../owner-candidate';
 
@@ -317,5 +317,13 @@ describe('planOrgDeletion', () => {
         { driveId: 'd-product', action: 'transfer', toUserId: 'priya' },
       ] }),
     ).toEqual({ ok: false, reason: 'duplicate_choice', driveIds: ['d-product'] });
+  });
+});
+
+describe('ownershipTransferWidens', () => {
+  it('SEAT-9 (partial) [D-OW-33] #19: handing ownership to an Admin widens nothing (both reach every org drive); to a Member, or to no member, it would', () => {
+    expect(ownershipTransferWidens('ADMIN')).toBe(false);
+    expect(ownershipTransferWidens('MEMBER')).toBe(true);
+    expect(ownershipTransferWidens(null)).toBe(true);
   });
 });

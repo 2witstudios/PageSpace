@@ -16,7 +16,8 @@ vi.mock('@/lib/auth/auth-fetch', async (importOriginal) => ({
 }));
 vi.mock('@/components/members/PermissionsGrid', () => ({ PermissionsGrid: () => <div /> }));
 vi.mock('@/hooks/useDebounce', () => ({ useDebounce: <T,>(v: T) => v }));
-vi.mock('@/hooks/useMyOrganizations', () => ({ useMyOrganizations: () => ({ orgById: (id: string | null) => (id ? { id, name: 'Northwind Labs' } : null) }) }));
+const orgLapsed = vi.hoisted(() => ({ current: false }));
+vi.mock('@/hooks/useMyOrganizations', () => ({ useMyOrganizations: () => ({ orgById: (id: string | null) => (id ? { id, name: 'Northwind Labs', lapsed: orgLapsed.current } : null) }) }));
 
 import InviteMemberPage from '../page';
 import { ApiRequestError } from '@/lib/auth/auth-fetch';
@@ -41,6 +42,7 @@ const typeEmail = async (email: string) => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  orgLapsed.current = false;
   useDriveStore.setState({ drives: [{ id: 'd-product', name: 'Product', slug: 'p', ownerId: 'u-priya', isTrashed: false, trashedAt: null, createdAt: '', updatedAt: '', isOwned: true, orgId: 'o-northwind' }], currentDriveId: null, isLoading: false, lastFetched: Date.now() });
 });
 
@@ -67,6 +69,18 @@ describe('Invite to an org drive', () => {
     await user.click(await screen.findByRole('button', { name: /invite member/i }));
     await waitFor(() => expect(mockPost.mock.calls[0][0]).toBe('/api/drives/d-product/members/invite'));
     await waitFor(() => expect(mocks.toastSuccess).toHaveBeenCalledWith('Sent to the Northwind Labs Owner and Admins for approval. Nothing is shared until they approve.'));
+  });
+
+  it('SEAT-9 (partial) [D-OW-33] while the org is lapsed neither invite can be sent (both buttons disabled, the restrict-only note shown) and nothing is posted', async () => {
+    orgLapsed.current = true;
+    serve('on');
+    render(<SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}><InviteMemberPage /></SWRConfig>);
+    const user = await typeEmail('chris@partner.co');
+    expect(screen.getByTestId('lapsed-loosen-note').textContent).toContain('Inviting is paused while Northwind Labs is unpaid');
+    expect((await screen.findByRole('button', { name: /invite member/i }) as HTMLButtonElement).disabled).toBe(true);
+    await user.click(screen.getByRole('radio', { name: /As a member of Northwind Labs/ }));
+    expect((screen.getByRole('button', { name: 'Invite to Northwind Labs' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(mockPost).not.toHaveBeenCalled();
   });
 
   it('UI-5 (partial) with guests off, the guest choice is unavailable and member is preselected', async () => {

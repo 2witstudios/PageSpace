@@ -47,7 +47,7 @@ import {
   hasAppDriveMembership,
   getScopedAccessLevel,
   getScopedDriveAccessLevel,
-  getScopedDriveMembership,
+  getEffectiveScopedDriveMembership,
   getScopedAccessiblePagesInDrive,
   hasScopedDriveMembership,
 } from '@pagespace/lib/permissions/app-permissions';
@@ -230,6 +230,8 @@ export async function isPrincipalDriveOwnerOrAdmin(auth: AuthResult, driveId: st
   auth = resolveDispatchedPrincipal(auth);
   if (isManageKeysOnly(auth)) return false;
   if (isScopedMCPAuth(auth)) {
+    // getAppDriveMembership clamps an explicit role to the owner's CURRENT authority (review #2849 r3 P1-B), so a
+    // demoted admin's ADMIN key is not admin here.
     const membership = await getAppDriveMembership(auth.tokenId, driveId);
     if (!membership) return false;
     // Inherit: the key is its owner — the owner's own authority decides.
@@ -237,7 +239,8 @@ export async function isPrincipalDriveOwnerOrAdmin(auth: AuthResult, driveId: st
     return membership.role === 'OWNER' || membership.role === 'ADMIN';
   }
   if (isScopedOAuthAuth(auth)) {
-    const membership = getScopedDriveMembership(auth.driveScopes, driveId);
+    // Review #2849 r3 P1-B: an explicit ADMIN scope is admin only while its owner is (clamped).
+    const membership = await getEffectiveScopedDriveMembership(auth.driveScopes, auth.userId, driveId);
     if (!membership) return false;
     if (membership.role === null) return isDriveOwnerOrAdmin(auth.userId, driveId);
     return membership.role === 'ADMIN';
@@ -321,7 +324,7 @@ export async function getPrincipalDriveMembership(
     return membership && { role: membership.role, customRoleId: membership.customRoleId };
   }
   if (isScopedOAuthAuth(auth)) {
-    const membership = getScopedDriveMembership(auth.driveScopes, driveId);
+    const membership = await getEffectiveScopedDriveMembership(auth.driveScopes, auth.userId, driveId);
     return membership && { role: membership.role, customRoleId: membership.customRoleId };
   }
 
@@ -336,19 +339,28 @@ export async function getPrincipalDriveMembership(
 }
 
 /**
- * The principal's drive universe: a scoped token's mcp_token_drives memberships
- * (NOT intersected with the owning user's drives), otherwise the user's drives.
+ * The principal's drive universe: a scoped token's drive memberships (mcp_token_drives, or the OAuth grant's drive
+ * scopes), otherwise the user's drives. Review #2849 r6 (P1): a scoped drive counts only while the key's OWNER is a
+ * CURRENT member of it (hasAppDriveMembership / hasScopedDriveMembership), whatever role the row holds, so every
+ * reader of this universe (calendar, tasks, search, key introspection) inherits the owner bound.
  */
 export async function getPrincipalDriveIds(auth: AuthResult): Promise<string[]> {
   auth = resolveDispatchedPrincipal(auth);
   if (isManageKeysOnly(auth)) return [];
   if (isScopedMCPAuth(auth)) {
-    return auth.allowedDriveIds;
+    const { tokenId } = auth;
+    return keepDrives(auth.allowedDriveIds, (driveId) => hasAppDriveMembership(tokenId, driveId));
   }
   if (isScopedOAuthAuth(auth)) {
-    return auth.allowedDriveIds;
+    const { driveScopes, userId } = auth;
+    return keepDrives(auth.allowedDriveIds, (driveId) => hasScopedDriveMembership(driveScopes, userId, driveId));
   }
   return getDriveIdsForUser(auth.userId);
+}
+
+async function keepDrives(driveIds: readonly string[], isMember: (driveId: string) => Promise<boolean>): Promise<string[]> {
+  const kept = await Promise.all(driveIds.map(async (driveId) => ((await isMember(driveId)) ? driveId : null)));
+  return kept.filter((driveId): driveId is string => driveId !== null);
 }
 
 

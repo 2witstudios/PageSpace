@@ -13,7 +13,7 @@ import type {
 
 export type ConsumeMembershipReason = Extract<
   InviteAcceptanceErrorCode,
-  'TOKEN_CONSUMED' | 'ALREADY_MEMBER' | 'GUEST_POLICY' | 'GUEST_APPROVAL_PENDING'
+  'TOKEN_CONSUMED' | 'ALREADY_MEMBER' | 'GUEST_POLICY' | 'GUEST_APPROVAL_PENDING' | 'ORG_LAPSED'
 >;
 
 export type ConsumeMembershipResult =
@@ -118,7 +118,7 @@ export interface RevokePorts {
 
 export type ConsumePagePermissionReason = Extract<
   InviteAcceptanceErrorCode,
-  'TOKEN_CONSUMED' | 'GUEST_POLICY' | 'GUEST_APPROVAL_PENDING'
+  'TOKEN_CONSUMED' | 'GUEST_POLICY' | 'GUEST_APPROVAL_PENDING' | 'ORG_LAPSED'
 > | 'ALREADY_HAS_PERMISSION';
 
 export type ConsumePagePermissionResult =

@@ -143,6 +143,15 @@ describe('POST /api/drives/[driveId]/backups/[backupId]/restore', () => {
     expect(db.transaction).not.toHaveBeenCalled();
   });
 
+  it('SEAT-9 (partial) [D-OW-33] a restore that would give anyone more while the drive\'s org is lapsed answers 402 org_lapsed and audits nothing (the transaction rolled back)', async () => {
+    const { OrgLapsedError } = await import('@pagespace/lib/permissions/org-lapse-guard');
+    vi.mocked(db.transaction).mockRejectedValueOnce(new OrgLapsedError());
+    const res = await POST(makeRequest(driveId, backupId), makeParams(driveId, backupId));
+    expect(res.status).toBe(402);
+    expect(await res.json()).toMatchObject({ code: 'org_lapsed' });
+    expect(auditRequest).not.toHaveBeenCalled();
+  });
+
   it('returns 200 with correct shape on success', async () => {
     const res = await POST(makeRequest(driveId, backupId), makeParams(driveId, backupId));
     expect(res.status).toBe(200);

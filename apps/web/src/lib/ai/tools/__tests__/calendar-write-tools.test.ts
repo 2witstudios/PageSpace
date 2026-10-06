@@ -80,6 +80,13 @@ vi.mock('@pagespace/lib/services/drive-member-service', () => ({
     getDriveRecipientUserIds: vi.fn(),
 }));
 
+// [D-OW-33] the lapse guards: no org drive is lapsed in these tests (proven against real Postgres in
+// services/api/__tests__/org-lapse-loosening.integration.test.ts).
+vi.mock('@pagespace/lib/permissions/org-lapse-guard', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@pagespace/lib/permissions/org-lapse-guard')>()),
+  checkCalendarVisibilityMayLoosen: vi.fn(async () => null),
+  checkDriveMayLoosen: vi.fn(async () => null),
+}));
 vi.mock('@pagespace/lib/services/calendar-event-drive-service', () => ({
     getAllMemberUserIdsForEvent: vi.fn(),
 }));

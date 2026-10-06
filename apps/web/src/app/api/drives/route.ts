@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { listAccessibleDrives, createDrive, type DriveWithAccess } from '@pagespace/lib/services/drive-service';
 import { isReservedDriveName } from '@pagespace/lib/services/drive-guards';
-import { getAppDriveMembership, getScopedDriveMembership, hasAppDriveMembership, hasScopedDriveMembership } from '@pagespace/lib/permissions/app-permissions';
+import { getAppDriveMembership, getEffectiveScopedDriveMembership, hasAppDriveMembership, hasScopedDriveMembership } from '@pagespace/lib/permissions/app-permissions';
 import { resolveDriveWideCanEdit } from '@pagespace/lib/permissions/membership-queries';
 import { getUserAccessLevel } from '@pagespace/lib/permissions/permissions';
 import { db } from '@pagespace/db/db';
@@ -40,12 +40,13 @@ const createDriveSchema = z.object({
 });
 
 async function listScopedDrivesWithMembership({
-  allowedDriveIds,
+  scopedDriveIds,
   includeTrash,
   userId,
   getMembership,
 }: {
-  allowedDriveIds: string[];
+  /** The key's scoped drives; each is kept only when `getMembership` (owner-bound) answers a membership. */
+  scopedDriveIds: string[];
   includeTrash: boolean;
   userId: string;
   getMembership: (driveId: string) => ScopedDriveMembership | Promise<ScopedDriveMembership>;
@@ -53,8 +54,8 @@ async function listScopedDrivesWithMembership({
   // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
   const rows = await db.query.drives.findMany({
     where: includeTrash
-      ? inArray(drivesTable.id, allowedDriveIds)
-      : and(inArray(drivesTable.id, allowedDriveIds), eq(drivesTable.isTrashed, false)),
+      ? inArray(drivesTable.id, scopedDriveIds)
+      : and(inArray(drivesTable.id, scopedDriveIds), eq(drivesTable.isTrashed, false)),
   });
 
   const resolved = await Promise.all(
@@ -122,12 +123,13 @@ export async function GET(req: Request) {
       // A scoped MCP token is its own drive member: list exactly its member
       // drives (with the TOKEN's role), not the owning user's drive universe.
       drives = await listScopedDrivesWithMembership({
-        allowedDriveIds: auth.allowedDriveIds,
+        scopedDriveIds: auth.allowedDriveIds,
         includeTrash,
         userId,
         getMembership: async (driveId) => {
+          // Review #2849 r5 (P2): EVERY key row, inherit or explicit, lists only while its owner is a current member.
           const membership = await getAppDriveMembership(auth.tokenId, driveId);
-          if (!membership || membership.role !== null) return membership;
+          if (!membership) return null;
           return (await hasAppDriveMembership(auth.tokenId, driveId)) ? membership : null;
         },
       });
@@ -136,12 +138,12 @@ export async function GET(req: Request) {
         drives = await listAccessibleDrives(userId, { includeTrash, tokenScopable });
       } else if (auth.allowedDriveIds.length > 0) {
         drives = await listScopedDrivesWithMembership({
-          allowedDriveIds: auth.allowedDriveIds,
+          scopedDriveIds: auth.allowedDriveIds,
           includeTrash,
           userId,
           getMembership: async (driveId) => {
-            const membership = getScopedDriveMembership(auth.driveScopes, driveId);
-            if (!membership || membership.role !== null) return membership;
+            const membership = await getEffectiveScopedDriveMembership(auth.driveScopes, auth.userId, driveId);
+            if (!membership) return null;
             return (await hasScopedDriveMembership(auth.driveScopes, auth.userId, driveId)) ? membership : null;
           },
         });

@@ -13,6 +13,8 @@ import { eq } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
 import { getUsersWhoCanViewPage } from '@pagespace/lib/permissions/permissions';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
+import { isOrgLapsedError } from '@pagespace/lib/permissions/org-lapse-guard';
+import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -192,6 +194,8 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
 
     return jsonResponse(result.page);
   } catch (error) {
+    // [D-OW-33] the page was private and its drive's org is lapsed: making it readable by the drive is refused.
+    if (isOrgLapsedError(error)) return orgLapsedResponse();
     loggers.api.error('Error updating page:', error as Error);
     if (error instanceof z.ZodError) {
       return NextResponse.json({ error: error.issues }, { status: 400 });

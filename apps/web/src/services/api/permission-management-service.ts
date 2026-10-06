@@ -6,17 +6,6 @@ import { pagePermissions } from '@pagespace/db/schema/members';
 import { decryptUserRow } from '@pagespace/lib/auth/user-repository';
 import { getUserAccessLevel, isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
 import { listDriveRoles, getRoleById, updateDriveRole } from '@pagespace/lib/services/drive-role-service';
-import { createId } from '@paralleldrive/cuid2';
-
-/**
- * Permission flags
- */
-export interface PermissionFlags {
-  canView: boolean;
-  canEdit: boolean;
-  canShare: boolean;
-  canDelete: boolean;
-}
 
 /**
  * User info for permission display
@@ -59,20 +48,6 @@ export interface GetPermissionsError {
 }
 
 export type GetPermissionsResult = GetPermissionsSuccess | GetPermissionsError;
-
-export interface GrantPermissionSuccess {
-  success: true;
-  permission: PermissionEntry;
-  isUpdate: boolean;
-}
-
-export interface GrantPermissionError {
-  success: false;
-  error: string;
-  status: number;
-}
-
-export type GrantPermissionResult = GrantPermissionSuccess | GrantPermissionError;
 
 export interface RevokePermissionSuccess {
   success: true;
@@ -174,74 +149,6 @@ export const permissionManagementService = {
         grantedAt: p.grantedAt,
         user: (await decryptUserRow(p.user)) as PermissionUser | null,
       }))),
-    };
-  },
-
-  /**
-   * Grant or update permissions for a user on a page
-   */
-  async grantOrUpdatePermission(params: {
-    pageId: string;
-    targetUserId: string;
-    permissions: PermissionFlags;
-    grantedBy: string;
-  }): Promise<GrantPermissionResult> {
-    const { pageId, targetUserId, permissions, grantedBy } = params;
-
-    // Use transaction to prevent race conditions on concurrent requests
-    const result = await db.transaction(async (tx) => {
-      // Check if permission already exists within transaction
-      const existing = await tx.query.pagePermissions.findFirst({
-        where: and(
-          eq(pagePermissions.pageId, pageId),
-          eq(pagePermissions.userId, targetUserId)
-        )
-      });
-
-      if (existing) {
-        // Update existing permission
-        const updated = await tx.update(pagePermissions)
-          .set({
-            canView: permissions.canView,
-            canEdit: permissions.canEdit,
-            canShare: permissions.canShare,
-            canDelete: permissions.canDelete,
-          })
-          .where(eq(pagePermissions.id, existing.id))
-          .returning();
-
-        return {
-          permission: updated[0],
-          isUpdate: true,
-        };
-      }
-
-      // Create new permission
-      const newPermission = await tx.insert(pagePermissions).values({
-        id: createId(),
-        pageId,
-        userId: targetUserId,
-        canView: permissions.canView,
-        canEdit: permissions.canEdit,
-        canShare: permissions.canShare,
-        canDelete: permissions.canDelete,
-        grantedBy,
-        grantedAt: new Date(),
-      }).returning();
-
-      return {
-        permission: newPermission[0],
-        isUpdate: false,
-      };
-    });
-
-    return {
-      success: true,
-      permission: {
-        ...result.permission,
-        user: null, // User info not returned on create/update
-      },
-      isUpdate: result.isUpdate,
     };
   },
 

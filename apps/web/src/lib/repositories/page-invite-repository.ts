@@ -18,6 +18,7 @@ import { drives, pages } from '@pagespace/db/schema/core'
 import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
 import { createId } from '@paralleldrive/cuid2';
 import { decideOrgDriveAdmission } from '@pagespace/lib/permissions/guest-admission';
+import { OrgLapsedError, checkDriveMayLoosen, checkPageMayLoosen } from '@pagespace/lib/permissions/org-lapse-guard';
 import { consumeApprovedInvitation, requestGuestApproval } from '@pagespace/lib/permissions/guest-holds';
 import {
   pendingPageInvites,
@@ -85,6 +86,9 @@ export const pageInviteRepository = {
   }) {
     const { tokenHash, email, pageId, permissions, invitedBy, expiresAt, now } = input;
     return db.transaction(async (tx) => {
+      // [D-OW-33] an invitation is a token that admits whoever accepts it: none is issued while the page's drive's
+      // org is lapsed (acceptance refuses too, for one issued before the lapse).
+      if (await checkPageMayLoosen(tx, pageId, true)) throw new OrgLapsedError();
       // Sweep already-expired unconsumed rows for this (pageId, email) pair so
       // the partial unique index does not block a legitimate re-invite. The
       // route-level pre-check filters active rows.
@@ -185,7 +189,7 @@ export const pageInviteRepository = {
     grantedAt: Date;
   }): Promise<
     | { ok: true; memberId: string | null }
-    | { ok: false; reason: 'TOKEN_CONSUMED' | 'ALREADY_HAS_PERMISSION' | 'GUEST_POLICY' | 'GUEST_APPROVAL_PENDING' }
+    | { ok: false; reason: 'TOKEN_CONSUMED' | 'ALREADY_HAS_PERMISSION' | 'GUEST_POLICY' | 'GUEST_APPROVAL_PENDING' | 'ORG_LAPSED' }
   > {
     const ALREADY_HAS_PERMISSION = Symbol('ALREADY_HAS_PERMISSION');
     const HELD = Symbol('GUEST_APPROVAL_PENDING');
@@ -219,6 +223,9 @@ export const pageInviteRepository = {
             return HELD;
           }
         }
+
+        // [D-OW-33] accepting adds access: refused while the drive's org is lapsed, BEFORE the token is consumed.
+        if (await checkDriveMayLoosen(tx, input.driveId, true)) throw 'ORG_LAPSED';
 
         const consumed = await tx
           .update(pendingPageInvites)
@@ -307,6 +314,9 @@ export const pageInviteRepository = {
       if (error === 'GUEST_POLICY') {
         return { ok: false, reason: 'GUEST_POLICY' };
       }
+      if (error === 'ORG_LAPSED') {
+        return { ok: false, reason: 'ORG_LAPSED' };
+      }
       if (error === ALREADY_HAS_PERMISSION) {
         return { ok: false, reason: 'ALREADY_HAS_PERMISSION' };
       }
@@ -379,6 +389,8 @@ export const pageInviteRepository = {
 
       const admission = await decideOrgDriveAdmission({ driveId, userId: grant.userId }, tx);
       if (admission.decision === 'refuse') return null;
+      // [D-OW-33] a new grant loosens access: refused while the drive's org is lapsed (an org member too).
+      if (await checkDriveMayLoosen(tx, driveId, true)) throw new OrgLapsedError();
 
       const [row] = await tx
         .insert(pagePermissions)

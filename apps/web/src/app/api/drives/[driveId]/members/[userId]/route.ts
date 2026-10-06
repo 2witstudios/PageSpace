@@ -6,10 +6,11 @@ import {
   checkDriveAccess,
   getDriveMemberDetails,
   getMemberPermissions,
-  updateMemberRole,
-  updateMemberPermissions,
+  updateMemberAccess,
   getDriveRecipientUserIds,
 } from '@pagespace/lib/services/drive-member-service';
+import { isOrgLapsedError } from '@pagespace/lib/permissions/org-lapse-guard';
+import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
 import {
   revokeAgentMembershipsGrantedBy,
   recapAgentMembershipsGrantedBy,
@@ -129,14 +130,20 @@ export async function PATCH(
       return NextResponse.json({ error: 'Member not found' }, { status: 404 });
     }
 
-    // Update role and customRoleId if provided. `updateMemberRole` returns the
-    // pre-update values it read from the row (getDriveMemberDetails hardcodes
+    // Update role, customRoleId and page permissions in one transaction. It returns
+    // the pre-update values it read from the row (getDriveMemberDetails hardcodes
     // customRole: null, so it cannot be used to detect a custom-role change).
-    const { oldRole, oldCustomRoleId } = await updateMemberRole(driveId, userId, role, customRoleId);
+    // [D-OW-33] while the drive's org is lapsed a change that gives the member
+    // more is refused (402 org_lapsed) and nothing is written.
+    const { oldRole, oldCustomRoleId, permissionsUpdated } = await updateMemberAccess(driveId, userId, currentUserId, {
+      role,
+      customRoleId,
+      permissions,
+    });
 
     const roleChanged = Boolean(role) && role !== oldRole;
     // `customRoleId` is only meaningful when present in the request body;
-    // `updateMemberRole` coerces falsy values to null when clearing it, so a
+    // `updateMemberAccess` coerces falsy values to null when clearing it, so a
     // clear (customRoleId: null over a prior role) is a real change too.
     const customRoleChanged = customRoleId !== undefined && (customRoleId || null) !== oldCustomRoleId;
 
@@ -186,14 +193,6 @@ export async function PATCH(
       }
     }
 
-    // Update permissions
-    const permissionsUpdated = await updateMemberPermissions(
-      driveId,
-      userId,
-      currentUserId,
-      permissions
-    );
-
     if (permissions.length > 0) {
       auditRequest(request, { eventType: 'authz.permission.granted', userId: currentUserId, resourceType: 'drive', resourceId: driveId, details: { targetUserId: userId, permissionsUpdated: permissions.length } });
     }
@@ -204,6 +203,7 @@ export async function PATCH(
       permissionsUpdated
     });
   } catch (error) {
+    if (isOrgLapsedError(error)) return orgLapsedResponse();
     loggers.api.error('Error updating member permissions:', error as Error);
     return NextResponse.json(
       { error: 'Failed to update member permissions' },

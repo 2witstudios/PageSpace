@@ -18,7 +18,8 @@ import { and, eq, inArray, or } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { drives, type OrgDriveVisibility } from '@pagespace/db/schema/core';
 import { driveMembers, driveRoles } from '@pagespace/db/schema/members';
-import { organizations, orgMembers } from '@pagespace/db/schema/organizations';
+import { organizations, orgMembers, orgSubscriptions } from '@pagespace/db/schema/organizations';
+import { factories } from '@pagespace/db/test/factories';
 import { listOrgDriveDirectory } from '../org-drive-directory';
 import { usersShareDrive } from '../permissions';
 import { answerDriveJoinRequest, requestToJoinDrive } from '../../services/drive-join-request-service';
@@ -48,6 +49,7 @@ const d: Record<'product' | 'research' | 'finance' | 'archive', string> = { prod
 async function cleanup() {
   await db.delete(drives).where(or(eq(drives.orgId, northwind), inArray(drives.ownerId, userIds)));
   await db.delete(orgMembers).where(eq(orgMembers.orgId, northwind));
+  await db.delete(orgSubscriptions).where(eq(orgSubscriptions.orgId, northwind));
   await db.delete(organizations).where(eq(organizations.id, northwind));
   await db.delete(users).where(inArray(users.id, userIds));
 }
@@ -63,6 +65,8 @@ beforeEach(async () => {
   const names = ['Jono', 'Priya Nair', 'Marcus Oyelaran', 'Lena Park', 'Nina Brandt', 'Eve Santos', 'Chris Rowe', 'Olga Petrova'];
   await db.insert(users).values(userIds.map((id, i) => ({ id, email: `u${i}-${run}@northwind.test`, name: names[i], updatedAt: new Date() })));
   await db.insert(organizations).values({ id: northwind, name: 'Northwind Labs', slug: `northwind-${run}`, ownerId: jono });
+  // Northwind is paid ([D-OW-30]: no subscription = lapsed), so approving a join request admits ([D-OW-33]).
+  await factories.createOrgSubscription(northwind, { status: 'active' });
   await db.insert(orgMembers).values([
     { orgId: northwind, userId: jono, role: 'OWNER' },
     { orgId: northwind, userId: priya, role: 'ADMIN' },

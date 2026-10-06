@@ -11,6 +11,8 @@ export interface MyOrganization {
   slug: string;
   avatarUrl: string | null;
   role: 'OWNER' | 'ADMIN' | 'MEMBER';
+  /** [D-OW-33] the org's subscription has lapsed: its drives may only restrict access until it pays. */
+  lapsed?: boolean;
 }
 
 const fetcher = async (url: string): Promise<MyOrganization[]> => {

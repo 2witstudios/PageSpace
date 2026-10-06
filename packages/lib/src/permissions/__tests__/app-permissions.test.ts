@@ -31,6 +31,7 @@ vi.mock('@pagespace/db/operators', () => ({
 // User-side oracle, mocked: inherit MUST delegate to these with the OWNER's id.
 vi.mock('../permissions', () => ({
   getUserAccessLevel: vi.fn(),
+  getUserDrivePermissions: vi.fn(),
   isUserDriveMember: vi.fn(),
   getUserAccessiblePagesInDriveWithDetails: vi.fn(),
 }));
@@ -39,6 +40,7 @@ import {
   getAppAccessLevel,
   hasAppDriveMembership,
   getAppDriveMembership,
+  getEffectiveScopedDriveMembership,
   getAppDriveAccessLevel,
   getAppAccessiblePagesInDrive,
   resolveExplicitAppRoleAccess,
@@ -46,6 +48,7 @@ import {
   hasScopedDriveMembership,
   getScopedDriveMembership,
   getScopedDriveAccessLevel,
+  intersectPermissionLevels,
   getScopedAccessiblePagesInDrive,
 } from '../app-permissions';
 import type { DriveScopeRow } from '../../auth/oauth/scopes';
@@ -53,6 +56,7 @@ import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import {
   getUserAccessLevel,
+  getUserDrivePermissions,
   isUserDriveMember,
   getUserAccessiblePagesInDriveWithDetails,
 } from '../permissions';
@@ -65,6 +69,18 @@ const CUSTOM_ROLE_ID = 'role_dddddddddddddddddddddd';
 
 const FULL = { canView: true, canEdit: true, canShare: true, canDelete: true };
 const VIEW_ONLY = { canView: true, canEdit: false, canShare: false, canDelete: false };
+
+// Review #2849 P1: an explicit-role key resolves as the INTERSECTION with its owner's own access. By default the owner
+// reaches everything (full access, every page these tests list), so a test exercises the role; the owner-bound tests
+// below narrow it.
+beforeEach(() => {
+  vi.mocked(getUserAccessLevel).mockResolvedValue(FULL);
+  // The owner leads the drive by default, so an explicit role is not clamped; the r3 P1-B tests demote them.
+  vi.mocked(getUserDrivePermissions).mockResolvedValue({ hasAccess: true, isOwner: true, isAdmin: true, isMember: true, canEdit: true } as never);
+  vi.mocked(getUserAccessiblePagesInDriveWithDetails).mockImplementation(async () =>
+    ['doc', 'chan', 'p1', 'id'].map((id) => ({ id, title: '', type: 'DOCUMENT', parentId: null, position: 0, isTrashed: false, permissions: FULL })),
+  );
+});
 const NONE = { canView: false, canEdit: false, canShare: false, canDelete: false };
 
 // select().from().where().limit() → rows  (page target, custom role)
@@ -217,7 +233,8 @@ describe('getAppAccessLevel', () => {
       .mockReturnValueOnce(stubSelectJoin([membershipRow('MEMBER')]));
 
     expect(await getAppAccessLevel(TOKEN_ID, PAGE_ID)).toEqual({ ...VIEW_ONLY, canEdit: true });
-    expect(getUserAccessLevel).not.toHaveBeenCalled();
+    // Review #2849 P1: an explicit key is bounded by its owner, whose access is read for the same page.
+    expect(getUserAccessLevel).toHaveBeenCalledWith(OWNER_ID, PAGE_ID);
   });
 
   it('explicit MEMBER on a private page → null', async () => {
@@ -263,10 +280,14 @@ describe('hasAppDriveMembership', () => {
     expect(await hasAppDriveMembership(TOKEN_ID, DRIVE_ID)).toBe(false);
   });
 
-  it('explicit role row → true regardless of owner membership', async () => {
-    vi.mocked(db.select).mockReturnValueOnce(stubSelectJoin([membershipRow('MEMBER')]));
+  it('review #2849 r4 P1: an explicit role row counts ONLY while the owner is a current drive member; dangling → false', async () => {
+    vi.mocked(db.select).mockReturnValueOnce(stubSelectJoin([membershipRow('ADMIN')]));
+    vi.mocked(isUserDriveMember).mockResolvedValueOnce(true);
     expect(await hasAppDriveMembership(TOKEN_ID, DRIVE_ID)).toBe(true);
-    expect(isUserDriveMember).not.toHaveBeenCalled();
+    expect(isUserDriveMember).toHaveBeenCalledWith(OWNER_ID, DRIVE_ID);
+    vi.mocked(db.select).mockReturnValueOnce(stubSelectJoin([membershipRow('MEMBER')]));
+    vi.mocked(isUserDriveMember).mockResolvedValueOnce(false);
+    expect(await hasAppDriveMembership(TOKEN_ID, DRIVE_ID)).toBe(false);
   });
 
   it('inherit row counts ONLY while the owner still has drive access', async () => {
@@ -291,10 +312,26 @@ describe('getAppDriveMembership', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it('returns nullable role + ownerUserId', async () => {
+    vi.mocked(isUserDriveMember).mockResolvedValueOnce(true);
     vi.mocked(db.select).mockReturnValueOnce(stubSelectJoin([membershipRow(null)]));
     expect(await getAppDriveMembership(TOKEN_ID, DRIVE_ID)).toEqual({
       role: null, customRoleId: null, ownerUserId: OWNER_ID,
     });
+  });
+
+  it('review #2849 r6: null for any row (inherit or explicit) once its owner is no longer a drive member; the OAuth scope likewise', async () => {
+    for (const role of [null, 'MEMBER', 'ADMIN', 'OWNER'] as const) {
+      vi.mocked(isUserDriveMember).mockResolvedValueOnce(false);
+      vi.mocked(db.select).mockReturnValueOnce(stubSelectJoin([membershipRow(role)]));
+      expect(await getAppDriveMembership(TOKEN_ID, DRIVE_ID)).toBeNull();
+      expect(isUserDriveMember).toHaveBeenLastCalledWith(OWNER_ID, DRIVE_ID);
+    }
+    for (const role of [null, 'MEMBER', 'ADMIN'] as const) {
+      vi.mocked(isUserDriveMember).mockResolvedValueOnce(false);
+      expect(await getEffectiveScopedDriveMembership([scopeRow(DRIVE_ID, role)], OWNER_ID, DRIVE_ID)).toBeNull();
+    }
+    vi.mocked(isUserDriveMember).mockResolvedValueOnce(true);
+    expect(await getEffectiveScopedDriveMembership([scopeRow(DRIVE_ID, 'MEMBER')], OWNER_ID, DRIVE_ID)).toEqual({ role: 'MEMBER', customRoleId: null });
   });
 
   it('returns null when no membership row', async () => {
@@ -438,7 +475,7 @@ describe('getScopedAccessLevel', () => {
     vi.mocked(db.select).mockReturnValueOnce(stubSelect([{ driveId: DRIVE_ID, isPrivate: false, type: 'CHANNEL' }]));
 
     expect(await getScopedAccessLevel([scopeRow(DRIVE_ID, 'MEMBER')], OWNER_ID, PAGE_ID)).toEqual({ ...VIEW_ONLY, canEdit: true });
-    expect(getUserAccessLevel).not.toHaveBeenCalled();
+    expect(getUserAccessLevel).toHaveBeenCalledWith(OWNER_ID, PAGE_ID);
   });
 
   it('explicit ADMIN on a private page → full (parity with a scoped MCP ADMIN token)', async () => {
@@ -465,9 +502,12 @@ describe('hasScopedDriveMembership', () => {
     expect(await hasScopedDriveMembership([scopeRow('other-drive', null)], OWNER_ID, DRIVE_ID)).toBe(false);
   });
 
-  it('explicit role row → true regardless of owner membership', async () => {
-    expect(await hasScopedDriveMembership([scopeRow(DRIVE_ID, 'MEMBER')], OWNER_ID, DRIVE_ID)).toBe(true);
-    expect(isUserDriveMember).not.toHaveBeenCalled();
+  it('review #2849 r4 P1: an explicit OAuth scope counts ONLY while the owner is a current drive member; dangling → false', async () => {
+    vi.mocked(isUserDriveMember).mockResolvedValueOnce(true);
+    expect(await hasScopedDriveMembership([scopeRow(DRIVE_ID, 'ADMIN')], OWNER_ID, DRIVE_ID)).toBe(true);
+    expect(isUserDriveMember).toHaveBeenCalledWith(OWNER_ID, DRIVE_ID);
+    vi.mocked(isUserDriveMember).mockResolvedValueOnce(false);
+    expect(await hasScopedDriveMembership([scopeRow(DRIVE_ID, 'MEMBER')], OWNER_ID, DRIVE_ID)).toBe(false);
   });
 
   it('inherit row counts ONLY while the owner still has drive access', async () => {
@@ -555,5 +595,83 @@ describe('getScopedAccessiblePagesInDrive', () => {
     const result = await getScopedAccessiblePagesInDrive([scopeRow(DRIVE_ID, 'ADMIN')], OWNER_ID, DRIVE_ID);
     expect(result).toHaveLength(1);
     expect(result[0].permissions).toEqual(FULL);
+  });
+});
+
+describe('review #2849 P1: an explicit key never reaches past its owner', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('intersectPermissionLevels keeps only what both grant, and nothing when either side grants nothing', () => {
+    expect(intersectPermissionLevels(FULL, VIEW_ONLY)).toEqual(VIEW_ONLY);
+    expect(intersectPermissionLevels({ ...VIEW_ONLY, canEdit: true }, FULL)).toEqual({ ...VIEW_ONLY, canEdit: true });
+    expect(intersectPermissionLevels(FULL, null)).toBeNull();
+    expect(intersectPermissionLevels(null, FULL)).toBeNull();
+    expect(intersectPermissionLevels({ canView: false, canEdit: false, canShare: false, canDelete: false }, FULL)).toBeNull();
+  });
+
+  it('an explicit plain MEMBER key on a page its owner cannot read resolves to nothing; on a page the owner only views, to view', async () => {
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubSelect([{ driveId: DRIVE_ID, isPrivate: false, type: 'CHANNEL' }]))
+      .mockReturnValueOnce(stubSelectJoin([membershipRow('MEMBER')]));
+    vi.mocked(getUserAccessLevel).mockResolvedValueOnce(null);
+    expect(await getAppAccessLevel(TOKEN_ID, PAGE_ID)).toBeNull();
+
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubSelect([{ driveId: DRIVE_ID, isPrivate: false, type: 'CHANNEL' }]))
+      .mockReturnValueOnce(stubSelectJoin([membershipRow('MEMBER')]));
+    vi.mocked(getUserAccessLevel).mockResolvedValueOnce(VIEW_ONLY);
+    expect(await getAppAccessLevel(TOKEN_ID, PAGE_ID)).toEqual(VIEW_ONLY);
+  });
+
+  it('an explicit ADMIN key reaches only the pages its owner reaches, at the weaker of the two; drive level is bounded too', async () => {
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubSelectJoin([membershipRow('ADMIN')]))
+      .mockReturnValueOnce(stubSelectList([
+        { id: 'doc', title: 'Doc', type: 'DOCUMENT', parentId: null, position: 0, isTrashed: false },
+        { id: 'chan', title: 'General', type: 'CHANNEL', parentId: null, position: 1, isTrashed: false },
+      ]));
+    vi.mocked(getUserAccessiblePagesInDriveWithDetails).mockResolvedValueOnce([
+      { id: 'doc', title: 'Doc', type: 'DOCUMENT', parentId: null, position: 0, isTrashed: false, permissions: VIEW_ONLY },
+    ]);
+    const result = await getAppAccessiblePagesInDrive(TOKEN_ID, DRIVE_ID);
+    expect(result.map((p) => [p.id, p.permissions])).toEqual([['doc', VIEW_ONLY]]);
+
+    vi.mocked(getUserAccessLevel).mockResolvedValueOnce(VIEW_ONLY);
+    expect(await getScopedDriveAccessLevel([scopeRow(DRIVE_ID, 'ADMIN')], OWNER_ID, DRIVE_ID)).toEqual(VIEW_ONLY);
+  });
+
+  it('review #2849 r3 P3: an explicit OAuth MEMBER scope is bounded by its owner at page level too (owner reads nothing → nothing; owner views → view)', async () => {
+    vi.mocked(db.select).mockReturnValueOnce(stubSelect([{ driveId: DRIVE_ID, isPrivate: false, type: 'CHANNEL' }]));
+    vi.mocked(getUserAccessLevel).mockResolvedValueOnce(null);
+    expect(await getScopedAccessLevel([scopeRow(DRIVE_ID, 'MEMBER')], OWNER_ID, PAGE_ID)).toBeNull();
+
+    vi.mocked(db.select).mockReturnValueOnce(stubSelect([{ driveId: DRIVE_ID, isPrivate: false, type: 'CHANNEL' }]));
+    vi.mocked(getUserAccessLevel).mockResolvedValueOnce(VIEW_ONLY);
+    expect(await getScopedAccessLevel([scopeRow(DRIVE_ID, 'MEMBER')], OWNER_ID, PAGE_ID)).toEqual(VIEW_ONLY);
+    expect(getUserAccessLevel).toHaveBeenLastCalledWith(OWNER_ID, PAGE_ID);
+  });
+
+  it('review #2849 r3 P1-B: a key\'s stored ADMIN/OWNER role is authority only while its owner holds it now (MCP and OAuth)', async () => {
+    vi.mocked(isUserDriveMember).mockResolvedValue(true);
+    // Owner demoted to a plain member: the ADMIN key is a MEMBER.
+    vi.mocked(getUserDrivePermissions).mockResolvedValue({ hasAccess: true, isOwner: false, isAdmin: false, isMember: true, canEdit: false } as never);
+    vi.mocked(db.select).mockReturnValueOnce(stubSelectJoin([membershipRow('ADMIN')]));
+    expect((await getAppDriveMembership(TOKEN_ID, DRIVE_ID))?.role).toBe('MEMBER');
+    expect((await getEffectiveScopedDriveMembership([scopeRow(DRIVE_ID, 'ADMIN')], OWNER_ID, DRIVE_ID))?.role).toBe('MEMBER');
+    // Owner still an admin (not the lead): an OWNER key counts as ADMIN; an ADMIN key stays ADMIN.
+    vi.mocked(getUserDrivePermissions).mockResolvedValue({ hasAccess: true, isOwner: false, isAdmin: true, isMember: true, canEdit: true } as never);
+    vi.mocked(db.select).mockReturnValueOnce(stubSelectJoin([membershipRow('OWNER')]));
+    expect((await getAppDriveMembership(TOKEN_ID, DRIVE_ID))?.role).toBe('ADMIN');
+    vi.mocked(db.select).mockReturnValueOnce(stubSelectJoin([membershipRow('ADMIN')]));
+    expect((await getAppDriveMembership(TOKEN_ID, DRIVE_ID))?.role).toBe('ADMIN');
+    // Owner still a member but with no drive authority read back: MEMBER (r6: an owner gone from the drive is null, above).
+    vi.mocked(getUserDrivePermissions).mockResolvedValue(null);
+    vi.mocked(db.select).mockReturnValueOnce(stubSelectJoin([membershipRow('ADMIN')]));
+    expect((await getAppDriveMembership(TOKEN_ID, DRIVE_ID))?.role).toBe('MEMBER');
+    // Inherit and explicit MEMBER are never re-read.
+    vi.mocked(getUserDrivePermissions).mockClear();
+    vi.mocked(db.select).mockReturnValueOnce(stubSelectJoin([membershipRow('MEMBER')]));
+    expect((await getAppDriveMembership(TOKEN_ID, DRIVE_ID))?.role).toBe('MEMBER');
+    expect(getUserDrivePermissions).not.toHaveBeenCalled();
   });
 });

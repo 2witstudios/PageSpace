@@ -49,6 +49,10 @@ const LEDGER = new Map<string, Entry>([
     reads: 6, decision: 'excludes',
     reason: 'getDriveIdsForUser (a GUEST row reaches the drive only through its page grants) in both its dark and org-aware forms (the latter through driveMembershipRow), both usersShareDrive reads, and the batch page-permission and page-viewer joins, which resolvePagePermissionRow decides (no custom role, no rule 4 for a GUEST) after withEffectiveMembership re-reads each row through driveMembershipRow. Every other door (rule 4, custom roles, drive-root access, isUserDriveMember, getUserDriveAccess, getUserDrivePermissions, both accessible-pages listings) goes through loadEffectiveDriveMembership, which reads a GUEST row as none.',
   }],
+  ['packages/lib/src/permissions/org-lapse-guard.ts', {
+    reads: 1, decision: 'neutral',
+    reason: '[D-OW-33] snapshotDriveAccess compares a drive before and after a write; a GUEST row is compared as a GUEST (page grants only), so a guest made a member is a loosening and a member made a guest is not. It grants nothing.',
+  }],
   ['packages/lib/src/permissions/membership-queries.ts', {
     reads: 2, decision: 'excludes',
     reason: 'getMemberCustomRoleId returns null for a guest (a guest carries no custom role); holdsAcceptedGuestRow is the one read that asks for the GUEST row itself, for the callers that also admit page collaborators (the page-tree gate, the agent-binding granter).',

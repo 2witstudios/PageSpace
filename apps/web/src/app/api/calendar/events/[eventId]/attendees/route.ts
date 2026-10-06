@@ -8,6 +8,8 @@ import { getAllMemberUserIdsForEvent, isUserMemberOfAnyEventDrive, getAllDriveId
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError, getAllowedDriveIds } from '@/lib/auth';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
+import { checkDriveMayLoosen } from '@pagespace/lib/permissions/org-lapse-guard';
+import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -249,16 +251,22 @@ export async function POST(
       );
     }
 
-    // Add new attendees
-    await db.insert(eventAttendees).values(
-      newUserIds.map(attendeeId => ({
-        eventId,
-        userId: attendeeId,
-        status: 'PENDING' as const,
-        isOrganizer: false,
-        isOptional,
-      }))
-    );
+    // Add new attendees. [D-OW-33] ruling: adding attendees to an org-drive event widens who reads org content,
+    // refused while the drive's org is lapsed (read in the insert's transaction). Removing attendees still works.
+    const lapsed = await db.transaction(async (tx) => {
+      if (event.driveId && (await checkDriveMayLoosen(tx, event.driveId, true))) return true;
+      await tx.insert(eventAttendees).values(
+        newUserIds.map(attendeeId => ({
+          eventId,
+          userId: attendeeId,
+          status: 'PENDING' as const,
+          isOrganizer: false,
+          isOptional,
+        }))
+      );
+      return false;
+    });
+    if (lapsed) return orgLapsedResponse();
 
     // Fetch updated attendees
     // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)

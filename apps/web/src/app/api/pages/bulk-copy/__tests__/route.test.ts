@@ -75,6 +75,12 @@ vi.mock('@pagespace/lib/permissions/drive-relationship-loader', () => ({
   loadDriveRelationship: vi.fn(),
 }));
 
+// [D-OW-33] the lapse guard: no org (null) unless a test lapses the source drive.
+const checkDriveMayLoosen = vi.hoisted(() => vi.fn(async (_tx?: unknown, _driveId?: unknown, _loosens?: unknown): Promise<unknown> => null));
+vi.mock('@pagespace/lib/permissions/org-lapse-guard', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@pagespace/lib/permissions/org-lapse-guard')>()),
+  checkDriveMayLoosen,
+}));
 vi.mock('@pagespace/db/db', () => {
   const txInsertValues = vi.fn().mockResolvedValue(undefined);
   const txInsert = vi.fn().mockReturnValue({ values: txInsertValues });
@@ -518,6 +524,15 @@ describe('POST /api/pages/bulk-copy', () => {
   // ── Successful copy ─────────────────────────────────────────────────
 
   describe('successful copy', () => {
+    it('SEAT-9 (partial) [D-OW-33] review P2-4 ruling: copying out of a lapsed org\'s drive into another drive answers 402 org_lapsed, checked against the SOURCE drive in the copy transaction, and copies nothing', async () => {
+      checkDriveMayLoosen.mockResolvedValueOnce({ ok: false, code: 'org_lapsed', status: 402, message: 'lapsed' });
+      const response = await POST(createRequest(validBody));
+      expect(response.status).toBe(402);
+      expect(await response.json()).toMatchObject({ code: 'org_lapsed' });
+      expect(checkDriveMayLoosen).toHaveBeenCalledWith(expect.anything(), mockSourceDriveId, true);
+      expect(txInsert).not.toHaveBeenCalled();
+    });
+
     it('returns success with copiedCount', async () => {
       const response = await POST(createRequest(validBody));
       const body = await response.json();

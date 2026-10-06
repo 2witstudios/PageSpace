@@ -106,6 +106,16 @@ export const decideOwnershipTransfer = ({
   return { ok: true };
 };
 
+/**
+ * [D-OW-33] ruling on inventory #19: an ownership transfer stays possible while the org is lapsed (handing off and
+ * offboarding are never blocked by billing), on condition that it gives nobody new access. The recipient must already
+ * be an accepted org member (decideOwnershipTransfer refuses anyone else, lapsed or not) AND must already reach every
+ * drive the Owner reaches: org Owner and Admin both resolve ADMIN on every org drive (resolveOrgDriveAccess), so an
+ * Admin becoming Owner widens nothing, while a plain Member becoming Owner would gain every Restricted and Private
+ * drive. Pure.
+ */
+export const ownershipTransferWidens = (targetRole: OrgRole | null): boolean => targetRole !== 'ADMIN';
+
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 /** Locks the actor's and target's membership rows in id order (no deadlock) and returns both roles. */
@@ -250,6 +260,11 @@ export async function transferOwnership(input: {
     const targetKind = await loadOrgPrincipalKind(tx, input.targetId);
     const decision = decideOwnershipTransfer({ currentOwnerId: org.ownerId, ...input, targetRole, targetKind });
     if (!decision.ok) return decision;
+    // [D-OW-33] #19: while lapsed, only a transfer that widens nothing (to an Admin) goes through; read under the org
+    // row lock and the target's row lock taken above.
+    if (await checkOrgMayLoosen(tx, input.orgId, ownershipTransferWidens(targetRole))) {
+      return { ok: false, status: 402, reason: 'org_lapsed' } as const;
+    }
 
     await tx
       .update(orgMembers)

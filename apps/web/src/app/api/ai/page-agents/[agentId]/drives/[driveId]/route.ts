@@ -40,7 +40,8 @@ export async function PATCH(
     });
 
     if (!result.ok) {
-      return NextResponse.json({ error: result.error }, { status: result.status });
+      // `code` carries org_lapsed ([D-OW-33], 402) for the UI.
+      return NextResponse.json({ error: result.error, ...(result.code ? { code: result.code } : {}) }, { status: result.status });
     }
 
     auditRequest(request, {

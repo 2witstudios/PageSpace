@@ -446,6 +446,16 @@ describe('POST /api/pages/[pageId]/permissions', () => {
       expect(createPermissionNotification).not.toHaveBeenCalled();
     });
 
+    it('SEAT-9 (partial) [D-OW-33] a lapsed org: 402 org_lapsed with the lapse copy; nothing granted, nothing notified', async () => {
+      vi.mocked(grantPagePermission).mockResolvedValue({ ok: false, error: { code: 'ORG_LAPSED', message: 'lapsed copy' } });
+
+      const response = await POST(createRequest({ userId: mockTargetUserId, canView: true }), { params: mockParams });
+
+      expect(response.status).toBe(402);
+      expect(await response.json()).toEqual({ error: 'lapsed copy', code: 'org_lapsed' });
+      expect(createPermissionNotification).not.toHaveBeenCalled();
+    });
+
     it('POL-2 (partial) guests APPROVE: 202 pending approval with the request id; nothing is granted, so nothing is notified', async () => {
       vi.mocked(grantPagePermission).mockResolvedValue({ ok: false, error: { code: 'GUEST_APPROVAL_PENDING', holdId: 'hold_1', message: 'waiting' } });
 

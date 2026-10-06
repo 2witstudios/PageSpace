@@ -390,6 +390,7 @@ export async function changeDriveVisibility(
 export type ChangeLeadResult =
   | { ok: true; changed: boolean; drive: DriveRow; fromUserId: string; toUserId: string }
   | OrgDriveRefusal
+  | OrgLapsedRefusal
   | DriveNotFound;
 
 /**
@@ -420,6 +421,10 @@ export async function changeOrgDriveLead(
     if (!verdict.changed) {
       return { ok: true as const, changed: false, drive, fromUserId: verdict.fromUserId, toUserId: verdict.toUserId, publish: async () => {} };
     }
+    // [D-OW-33] a new lead gains lead authority over the drive: refused while the org is lapsed, read under the org's
+    // share lock. A departing lead's drives still pass on (leave.ts reassignLedOrgDrives): billing never blocks that.
+    const lapsed = await checkOrgMayLoosen(tx, drive.orgId, true);
+    if (lapsed) return lapsed;
 
     await removeFormerLeadOwnerRow(tx, driveId, verdict.fromUserId);
     const [updated] = await tx

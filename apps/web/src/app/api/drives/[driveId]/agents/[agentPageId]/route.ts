@@ -7,6 +7,8 @@ import { checkDriveAccess } from '@pagespace/lib/services/drive-member-service';
 import { db } from '@pagespace/db/db';
 import { eq, and } from '@pagespace/db/operators';
 import { driveAgentMembers, driveRoles } from '@pagespace/db/schema/members';
+import { guardDriveAccess, isOrgLapsedError } from '@pagespace/lib/permissions/org-lapse-guard';
+import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
 
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
@@ -79,11 +81,21 @@ export async function PATCH(
     if (customRoleId !== undefined) updateValues.customRoleId = customRoleId;
     if (includeContext !== undefined) updateValues.includeContext = includeContext;
 
-    const [updated] = await db
-      .update(driveAgentMembers)
-      .set(updateValues)
-      .where(and(eq(driveAgentMembers.driveId, driveId), eq(driveAgentMembers.agentPageId, agentPageId)))
-      .returning();
+    // [D-OW-33] a higher role, a wider custom role or the drive's context newly included loosens what the agent's
+    // users read: guardDriveAccess undoes it and answers 402 while the drive's org is lapsed. Narrowing still applies.
+    let updated: typeof driveAgentMembers.$inferSelect | undefined;
+    try {
+      [updated] = await guardDriveAccess(db, driveId, { members: false, grants: false }, (tx) =>
+        tx
+          .update(driveAgentMembers)
+          .set(updateValues)
+          .where(and(eq(driveAgentMembers.driveId, driveId), eq(driveAgentMembers.agentPageId, agentPageId)))
+          .returning(),
+      );
+    } catch (error) {
+      if (isOrgLapsedError(error)) return orgLapsedResponse();
+      throw error;
+    }
 
     auditRequest(request, {
       eventType: 'authz.role.assigned',

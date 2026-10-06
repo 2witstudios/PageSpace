@@ -21,6 +21,7 @@ import { isHomeDrive, homeDriveActionError } from './drive-guards';
 import { isDriveLead } from '../permissions/drive-relationship';
 import { getDrivePolicies } from '../organizations/policy-reader';
 import { crossDriveAgentsDecision } from '../organizations/org-action-decisions';
+import { checkDriveMayLoosen } from '../permissions/org-lapse-guard';
 
 export type AgentDriveRole = 'MEMBER' | 'ADMIN';
 
@@ -36,7 +37,8 @@ export interface AddAgentToDriveInput {
   includeContext?: boolean;
 }
 
-export type ServiceFailure = { ok: false; status: number; error: string };
+/** `code` is set for a refusal the UI keys on: `org_lapsed` ([D-OW-33], 402). */
+export type ServiceFailure = { ok: false; status: number; error: string; code?: string };
 
 export type AddAgentToDriveResult =
   | { ok: true; status: 201; member: typeof driveAgentMembers.$inferSelect }
@@ -171,18 +173,24 @@ export async function addAgentToDrive(input: AddAgentToDriveInput): Promise<AddA
   }
 
   try {
-    const [member] = await db
-      .insert(driveAgentMembers)
-      .values({
-        driveId,
-        agentPageId,
-        role: effectiveRole,
-        customRoleId: effectiveCustomRoleId,
-        includeContext: includeContext ?? false,
-        addedBy: actingUserId,
-      })
-      .returning();
-    return { ok: true, status: 201, member };
+    // [D-OW-33] everyone who can run the agent reads this drive through it: adding it loosens the drive's access,
+    // refused while the drive's org is lapsed (read in the insert's transaction).
+    return await db.transaction(async (tx): Promise<AddAgentToDriveResult> => {
+      const lapsed = await checkDriveMayLoosen(tx, driveId, true);
+      if (lapsed) return { ok: false, status: lapsed.status, error: lapsed.message, code: lapsed.code };
+      const [member] = await tx
+        .insert(driveAgentMembers)
+        .values({
+          driveId,
+          agentPageId,
+          role: effectiveRole,
+          customRoleId: effectiveCustomRoleId,
+          includeContext: includeContext ?? false,
+          addedBy: actingUserId,
+        })
+        .returning();
+      return { ok: true, status: 201, member };
+    });
   } catch (err) {
     if ((err as { code?: string }).code === '23505') {
       return { ok: false, status: 409, error: 'Agent is already a member of this drive' };
@@ -262,14 +270,26 @@ export async function setAgentDriveIncludeContext(input: {
     return { ok: false, status: 403, error: 'You cannot manage this agent membership' };
   }
 
-  const [updated] = await db
-    .update(driveAgentMembers)
-    .set({ includeContext })
-    .where(and(eq(driveAgentMembers.agentPageId, agentPageId), eq(driveAgentMembers.driveId, driveId)))
-    .returning();
+  return db.transaction(async (tx) => {
+    const [current] = await tx
+      .select({ includeContext: driveAgentMembers.includeContext })
+      .from(driveAgentMembers)
+      .where(and(eq(driveAgentMembers.agentPageId, agentPageId), eq(driveAgentMembers.driveId, driveId)))
+      .limit(1);
+    if (!current) return { ok: false as const, status: 404, error: 'Membership not found' };
+    // [D-OW-33] carrying the drive's prompt into the agent loosens what its users read; turning it off restricts.
+    const lapsed = await checkDriveMayLoosen(tx, driveId, includeContext && !current.includeContext);
+    if (lapsed) return { ok: false as const, status: lapsed.status, error: lapsed.message, code: lapsed.code };
 
-  if (!updated) return { ok: false, status: 404, error: 'Membership not found' };
-  return { ok: true, member: updated };
+    const [updated] = await tx
+      .update(driveAgentMembers)
+      .set({ includeContext })
+      .where(and(eq(driveAgentMembers.agentPageId, agentPageId), eq(driveAgentMembers.driveId, driveId)))
+      .returning();
+
+    if (!updated) return { ok: false as const, status: 404, error: 'Membership not found' };
+    return { ok: true as const, member: updated };
+  });
 }
 
 /** A Drizzle transaction handle, accepted alongside the module-level `db`. */

@@ -20,8 +20,7 @@ import { isEmailAMember, isUniqueViolation, retryOnDeadlock } from './repository
 import { getOrgPolicies } from './policy-reader';
 import { orgActorDecision } from './org-action-decisions';
 import { policyRefusal, type PolicyRefusal } from './sharing-decisions';
-import { checkOrgActive, type OrgLapsedRefusal } from './status';
-import type { ORG_LAPSED_CODE } from './status-core';
+import { checkOrgActive, checkOrgMayLoosen, ORG_LAPSED_CODE, type OrgLapsedRefusal } from './status';
 import { admitSeat, recordSeatAdmissionEvents, type SeatAdmission, type SeatBillingPort } from './seat-service';
 import { recordOrgAuditEventAfterCommit } from '../audit/org-audit';
 import {
@@ -391,7 +390,9 @@ export async function revokeInvitation(input: { orgId: string; invitationId: str
 
 export type AcceptInvitationResult =
   | { ok: true; orgId: string; role: OrgRole; joined: boolean }
-  | Extract<InviteAcceptanceDecision, { ok: false }>;
+  | Extract<InviteAcceptanceDecision, { ok: false }>
+  // [D-OW-33] the org is lapsed: joining would add a member (and sync them into Open drives). The invite stays open.
+  | { ok: false; status: 402; reason: typeof ORG_LAPSED_CODE };
 
 export interface AcceptInvitationDeps {
   /** Materializes the joiner on the org's Open drives inside the acceptance transaction (D-OW-6). */
@@ -473,6 +474,12 @@ export async function acceptInvitation(
 
     let sync: OrgMembershipSyncResult | null = null;
     if (decision.action === 'join') {
+      // [D-OW-33] a join adds access: refused while the org is lapsed, under the org row lock taken above. Nothing is
+      // written, so the invitation stays open and works once the org pays. (consume_only for an existing member
+      // grants nothing and still goes through.)
+      if (await checkOrgMayLoosen(tx, invite.orgId, true)) {
+        return { result: { ok: false, status: 402, reason: ORG_LAPSED_CODE }, sync: null };
+      }
       await tx.insert(orgMembers).values({
         orgId: invite.orgId,
         userId: input.userId,

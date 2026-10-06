@@ -4,12 +4,14 @@ import { calendarEvents, calendarEventDrives } from '@pagespace/db/schema/calend
 import { drives } from '@pagespace/db/schema/core';
 import { isDriveOwnerOrAdmin, isUserDriveMember } from '../permissions/permissions';
 import { listDriveAudiences } from '../permissions/drive-audience';
+import { checkDriveMayLoosen } from '../permissions/org-lapse-guard';
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
-export type ServiceFailure = { ok: false; status: number; error: string };
+/** `code` is set for a refusal the UI keys on: `org_lapsed` ([D-OW-33], 402). */
+export type ServiceFailure = { ok: false; status: number; error: string; code?: string };
 
 export interface EventDriveEntry {
   driveId: string;
@@ -158,8 +160,16 @@ export async function shareEventWithDrive(input: {
   if (!validation.ok) return validation;
 
   try {
-    const row = await insertCalendarEventDrive(db, { eventId, driveId, sharedBy: actingUserId });
-    return { ok: true, status: 201, row };
+    // [D-OW-33] ruling: sharing an org-drive event into ANOTHER drive widens who reads org content (the calendar
+    // analog of copying pages out): refused while the event's home drive's org is lapsed, read in the insert's
+    // transaction. Unsharing still works.
+    const homeDriveId = event.driveId;
+    return await db.transaction(async (tx) => {
+      const lapsed = await checkDriveMayLoosen(tx, homeDriveId, true);
+      if (lapsed) return { ok: false as const, status: lapsed.status, error: lapsed.message, code: lapsed.code };
+      const row = await insertCalendarEventDrive(tx, { eventId, driveId, sharedBy: actingUserId });
+      return { ok: true as const, status: 201 as const, row };
+    });
   } catch (err) {
     if ((err as { code?: string }).code === '23505') {
       return { ok: false, status: 409, error: 'Event is already shared with this drive' };

@@ -4,6 +4,8 @@ import { z } from 'zod/v4';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { permissionManagementService, rolePermissionService } from '@/services/api';
+import { isOrgLapsedError } from '@pagespace/lib/permissions/org-lapse-guard';
+import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -73,6 +75,8 @@ export async function PUT(req: Request, { params }: { params: Promise<{ pageId: 
 
     return NextResponse.json({ success: true });
   } catch (error) {
+    // [D-OW-33] widening a role its holders use, while the drive's org is lapsed.
+    if (isOrgLapsedError(error)) return orgLapsedResponse();
     loggers.api.error('Error setting role permission:', error as Error);
     return NextResponse.json({ error: 'Failed to set role permission' }, { status: 500 });
   }

@@ -854,6 +854,11 @@
       "import": "./dist/organizations/status-core.js",
       "require": "./dist/organizations/status-core.js"
     },
+    "./organizations/loosening-core": {
+      "types": "./dist/organizations/loosening-core.d.ts",
+      "import": "./dist/organizations/loosening-core.js",
+      "require": "./dist/organizations/loosening-core.js"
+    },
     "./billing/org-webhook-core": {
       "types": "./dist/billing/org-webhook-core.d.ts",
       "import": "./dist/billing/org-webhook-core.js",
@@ -3023,6 +3028,11 @@
       "types": "./dist/permissions/guest-admission.d.ts",
       "import": "./dist/permissions/guest-admission.js",
       "require": "./dist/permissions/guest-admission.js"
+    },
+    "./permissions/org-lapse-guard": {
+      "types": "./dist/permissions/org-lapse-guard.d.ts",
+      "import": "./dist/permissions/org-lapse-guard.js",
+      "require": "./dist/permissions/org-lapse-guard.js"
     },
     "./permissions/page-grant-admission": {
       "types": "./dist/permissions/page-grant-admission.d.ts",

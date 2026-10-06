@@ -8,6 +8,8 @@ import { driveRoles } from '@pagespace/db/schema/members';
 import { getActorInfo, logRoleActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
+import { isOrgLapsedError } from '@pagespace/lib/permissions/org-lapse-guard';
+import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -73,6 +75,8 @@ export async function PATCH(
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error('Error reordering roles:', error);
+    // [D-OW-33] a reorder that changes which default role members follow, to a wider one, while lapsed.
+    if (isOrgLapsedError(error)) return orgLapsedResponse();
     if (error instanceof Error && error.message === 'Invalid role IDs') {
       return NextResponse.json({ error: 'Invalid role IDs' }, { status: 400 });
     }

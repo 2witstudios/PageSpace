@@ -16,6 +16,10 @@ import { loadEffectiveDriveMembership } from '../permissions/org-drive-membershi
 import { isDriveLead } from '../permissions/drive-relationship';
 import { listDriveAudience } from '../permissions/drive-audience';
 import { isGuestRole } from '../permissions/guest-role';
+import { guardDriveAccess } from '../permissions/org-lapse-guard';
+
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+type Executor = typeof db | Tx;
 
 // ============================================================================
 // Types
@@ -294,28 +298,6 @@ export async function isMemberOfDrive(driveId: string, userId: string): Promise<
 }
 
 /**
- * Add a new member to a drive
- */
-export async function addDriveMember(
-  driveId: string,
-  invitedBy: string,
-  input: AddMemberInput
-): Promise<typeof driveMembers.$inferSelect> {
-  const [newMember] = await db
-    .insert(driveMembers)
-    .values({
-      driveId,
-      userId: input.userId,
-      role: input.role || 'MEMBER',
-      invitedBy,
-      acceptedAt: new Date(), // Auto-accept for now
-    })
-    .returning();
-
-  return newMember;
-}
-
-/**
  * Get a specific member's details with their permissions
  */
 export async function getDriveMemberDetails(
@@ -390,15 +372,16 @@ export async function getMemberPermissions(
 }
 
 /**
- * Update a member's role
+ * Update a member's role. Reached through updateMemberAccess, which guards the write ([D-OW-33]).
  */
 export async function updateMemberRole(
   driveId: string,
   targetUserId: string,
   role: 'ADMIN' | 'MEMBER',
-  customRoleId?: string | null
+  customRoleId?: string | null,
+  executor: Executor = db,
 ): Promise<{ oldRole: string; oldCustomRoleId: string | null }> {
-  const [existing] = await db
+  const [existing] = await executor
     .select({ role: driveMembers.role, customRoleId: driveMembers.customRoleId })
     .from(driveMembers)
     .where(and(eq(driveMembers.driveId, driveId), eq(driveMembers.userId, targetUserId)))
@@ -416,7 +399,7 @@ export async function updateMemberRole(
   }
 
   if (Object.keys(updateData).length > 0) {
-    await db
+    await executor
       .update(driveMembers)
       .set(updateData)
       .where(and(eq(driveMembers.driveId, driveId), eq(driveMembers.userId, targetUserId)));
@@ -426,21 +409,22 @@ export async function updateMemberRole(
 }
 
 /**
- * Update member's page permissions (replaces all existing permissions)
+ * Update member's page permissions (replaces all existing permissions). Reached through updateMemberAccess.
  */
 export async function updateMemberPermissions(
   driveId: string,
   targetUserId: string,
   grantedBy: string,
-  permissions: MemberPermission[]
+  permissions: MemberPermission[],
+  executor: Executor = db,
 ): Promise<number> {
   // Get all pages in the drive to validate pageIds
-  const drivePages = await db.select({ id: pages.id }).from(pages).where(eq(pages.driveId, driveId));
+  const drivePages = await executor.select({ id: pages.id }).from(pages).where(eq(pages.driveId, driveId));
 
   const validPageIds = new Set(drivePages.map((p) => p.id));
 
   // Get existing permissions for this user in this drive
-  const existingPermissions = await db
+  const existingPermissions = await executor
     .select({ pageId: pagePermissions.pageId })
     .from(pagePermissions)
     .innerJoin(pages, eq(pagePermissions.pageId, pages.id))
@@ -448,7 +432,7 @@ export async function updateMemberPermissions(
 
   // Delete existing permissions
   for (const perm of existingPermissions) {
-    await db
+    await executor
       .delete(pagePermissions)
       .where(and(eq(pagePermissions.userId, targetUserId), eq(pagePermissions.pageId, perm.pageId)));
   }
@@ -468,8 +452,26 @@ export async function updateMemberPermissions(
     }));
 
   if (newPermissions.length > 0) {
-    await db.insert(pagePermissions).values(newPermissions);
+    await executor.insert(pagePermissions).values(newPermissions);
   }
 
   return newPermissions.length;
+}
+
+/**
+ * The member settings PATCH: role, custom role and page grants, in ONE transaction. [D-OW-33] while the drive's org
+ * is lapsed the change may only restrict: if it gave the member more (a promotion, a wider custom role, a wider page
+ * grant), guardDriveAccess throws OrgLapsedError and nothing is written. Demoting and narrowing still apply.
+ */
+export async function updateMemberAccess(
+  driveId: string,
+  targetUserId: string,
+  grantedBy: string,
+  input: { role: 'ADMIN' | 'MEMBER'; customRoleId?: string | null; permissions: MemberPermission[] },
+): Promise<{ oldRole: string; oldCustomRoleId: string | null; permissionsUpdated: number }> {
+  return guardDriveAccess(db, driveId, { users: [targetUserId], agents: false }, async (tx) => {
+    const old = await updateMemberRole(driveId, targetUserId, input.role, input.customRoleId, tx);
+    const permissionsUpdated = await updateMemberPermissions(driveId, targetUserId, grantedBy, input.permissions, tx);
+    return { ...old, permissionsUpdated };
+  });
 }

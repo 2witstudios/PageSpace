@@ -76,6 +76,12 @@ vi.mock('@pagespace/lib/organizations/policy-reader', () => ({
 }));
 
 const reconcileCustomDomainCert = vi.fn();
+// [D-OW-33] the lapse guard: no org (null) unless a test lapses the drive.
+const checkDriveMayLoosen = vi.hoisted(() => vi.fn());
+vi.mock('@pagespace/lib/permissions/org-lapse-guard', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@pagespace/lib/permissions/org-lapse-guard')>()),
+  checkDriveMayLoosen,
+}));
 vi.mock('@/lib/canvas/reconcile-cert', () => ({
   reconcileCustomDomainCert: (...args: unknown[]) => reconcileCustomDomainCert(...args),
 }));
@@ -143,6 +149,7 @@ beforeEach(() => {
   }));
   mirrorDriveToCustomHost.mockResolvedValue(undefined);
   getDrivePolicies.mockResolvedValue(null);
+  checkDriveMayLoosen.mockResolvedValue(null);
   // Default reconcile: no-op echoing the input status (overridden per-test).
   reconcileCustomDomainCert.mockImplementation(async (d: { status: string }) => ({ status: d.status, action: null }));
   // Default transaction: pass a tx stub that delegates to the same dbSelect/dbInsert mocks.
@@ -401,6 +408,18 @@ describe('POST /api/drives/[driveId]/domains', () => {
     const body = await res.json();
     expect(res.status).toBe(201);
     expect(body.domain.hostname).toBe('acme.com');
+  });
+
+  it('SEAT-9 (partial) [D-OW-33] while the drive\'s org is lapsed a new domain is refused (402 org_lapsed) inside the insert transaction and nothing is inserted', async () => {
+    mockPostSelects({ ownerTier: 'pro', domainCount: 0 });
+    checkDriveMayLoosen.mockResolvedValue({ ok: false, code: 'org_lapsed', status: 402, message: 'lapsed' });
+
+    const res = await POST(makeReq({ hostname: 'acme.com' }), ctx());
+
+    expect(res.status).toBe(402);
+    expect(await res.json()).toMatchObject({ code: 'org_lapsed' });
+    expect(checkDriveMayLoosen).toHaveBeenCalledWith(expect.anything(), DRIVE_ID, true);
+    expect(dbInsert).not.toHaveBeenCalled();
   });
 
   it('calls auditRequest on success', async () => {

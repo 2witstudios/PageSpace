@@ -33,6 +33,7 @@ import { loadDriveMemberRowState } from '../permissions/org-drive-membership';
 import { findStaleDriveJoinRequests } from '../permissions/drive-join-request-closure';
 import { admitDriveJoiner, publishOrgMembershipSyncEvents, type OrgMembershipSyncResult } from './org-membership-sync';
 import { recordOrgAuditEventAfterCommit } from '../audit/org-audit';
+import { checkOrgMayLoosen, type OrgLapsedRefusal } from '../organizations/status';
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -159,7 +160,8 @@ export type JoinRequestAnswerResult =
       request: DriveJoinRequest;
       drive: AnsweredDrive;
     }
-  | JoinRequestRefusal;
+  | JoinRequestRefusal
+  | OrgLapsedRefusal;
 
 /**
  * Approve or deny a pending request. Approval admits the requester through the org membership
@@ -195,6 +197,10 @@ export async function answerDriveJoinRequest(
     let sync: OrgMembershipSyncResult | null = null;
     let admitted = false;
     if (verdict.action === 'approve' && verdict.admit) {
+      // [D-OW-33] approving admits the requester: refused while the org is lapsed (the request stays pending, and
+      // denying it still works).
+      const lapsed = await checkOrgMayLoosen(tx, drive.orgId, true);
+      if (lapsed) return { result: lapsed, sync: null };
       const admission = await admitDriveJoiner(driveId, request.userId, { tx, admittedBy: actorId });
       // The decision and the sync read the same facts under the same locks; disagreement is a bug,
       // and rolling back leaves the request pending rather than approved without a membership.

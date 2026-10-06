@@ -84,6 +84,12 @@ vi.mock('@pagespace/lib/permissions/drive-relationship-loader', () => ({
   loadDriveRelationship: vi.fn(),
 }));
 
+// [D-OW-33] the lapse guard: no org (null) unless a test lapses the source drive.
+const checkDriveMayLoosen = vi.hoisted(() => vi.fn(async (_tx?: unknown, _driveId?: unknown, _loosens?: unknown): Promise<unknown> => null));
+vi.mock('@pagespace/lib/permissions/org-lapse-guard', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@pagespace/lib/permissions/org-lapse-guard')>()),
+  checkDriveMayLoosen,
+}));
 vi.mock('@pagespace/db/db', () => {
   const txUpdateWhere = vi.fn().mockResolvedValue(undefined);
   const txUpdateSet = vi.fn().mockReturnValue({ where: txUpdateWhere });

@@ -18,6 +18,7 @@ import { orgErrorMessage } from '@/lib/orgs/org-error-copy';
 import { useDriveWallet } from '@/hooks/useDriveWallet';
 import { useMyOrganizations, type MyOrganization } from '@/hooks/useMyOrganizations';
 import { cn } from '@/lib/utils';
+import { visibilityChangeAllowed } from '@/lib/orgs/org-lapse';
 
 type Visibility = 'OPEN' | 'RESTRICTED' | 'PRIVATE';
 
@@ -58,6 +59,8 @@ export function OrgDriveCard({ drive, leadName, onChanged }: { drive: Drive; lea
 
 function OrgOwnedCard({ drive, org, leadName, onChanged }: { drive: Drive; org: MyOrganization; leadName: string | null; onChanged: () => void }) {
   const isOrgAdmin = org.role === 'OWNER' || org.role === 'ADMIN';
+  // [D-OW-33] while the org is unpaid this drive may only be made less open, and its lead stays as is.
+  const lapsed = org.lapsed === true;
   const mayEdit = isOrgAdmin || drive.isOwned;
   const { wallet } = useDriveWallet(drive.id);
   const { data: orgMembers } = useSWR(mayEdit ? `/api/orgs/${org.id}/members` : null, membersFetcher, { revalidateOnFocus: false });
@@ -133,7 +136,7 @@ function OrgOwnedCard({ drive, org, leadName, onChanged }: { drive: Drive; org: 
                 type="button"
                 role="radio"
                 aria-checked={visibility === v.value}
-                disabled={!mayEdit || pending}
+                disabled={!mayEdit || pending || !visibilityChangeAllowed(lapsed, visibility, v.value)}
                 onClick={() => visibility !== v.value && void run(() => patch(`/api/drives/${drive.id}/org`, { orgVisibility: v.value }), `${drive.name} is now ${v.label}`, 'The visibility could not be changed.')}
                 className={cn('flex flex-col gap-0.5 rounded-lg border px-3.5 py-3 text-left transition-colors disabled:cursor-default', visibility === v.value ? 'border-primary bg-primary/10' : 'hover:bg-accent disabled:hover:bg-transparent')}
               >
@@ -143,6 +146,11 @@ function OrgOwnedCard({ drive, org, leadName, onChanged }: { drive: Drive; org: 
             ))}
           </div>
         </div>
+        {lapsed && mayEdit && (
+          <p className="text-xs text-muted-foreground" data-testid="lapsed-loosen-note">
+            Opening this drive further and changing its lead are paused while {org.name} is unpaid. Making it less open still works.
+          </p>
+        )}
         <Separator />
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex flex-col gap-0.5">
@@ -152,7 +160,7 @@ function OrgOwnedCard({ drive, org, leadName, onChanged }: { drive: Drive; org: 
           {mayEdit && orgMembers && orgMembers.length > 0 ? (
             <Select
               value={drive.ownerId}
-              disabled={pending}
+              disabled={pending || lapsed}
               onValueChange={(userId) => void run(() => put(`/api/drives/${drive.id}/org/lead`, { userId }), 'Drive lead changed', 'The drive lead could not be changed.')}
             >
               <SelectTrigger className="w-full sm:w-56" aria-label="Drive lead"><SelectValue placeholder={leadName ?? 'Drive lead'} /></SelectTrigger>

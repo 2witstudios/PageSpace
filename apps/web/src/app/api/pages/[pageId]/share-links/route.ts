@@ -7,6 +7,7 @@ import {
 import type { ShareLinkPermission } from '@pagespace/db/schema/share-links';
 import { getShareUrl } from '@/lib/share-url';
 import { z } from 'zod/v4';
+import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
 
 const AUTH_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -83,6 +84,8 @@ export async function POST(
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
     // POL-3: the org has turned public share links off; the body names the rule.
+    // [D-OW-33] a new link loosens access while the drive's org is lapsed: 402 with the SEAT-9 copy.
+    if (result.error === 'ORG_LAPSED') return orgLapsedResponse(result.message);
     if (result.error === 'POLICY_FORBIDDEN') {
       return NextResponse.json({ error: result.message, code: 'org_policy', policy: 'publicShareLinks' }, { status: 403 });
     }

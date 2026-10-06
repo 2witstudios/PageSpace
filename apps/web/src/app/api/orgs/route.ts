@@ -2,16 +2,23 @@ import { NextResponse } from 'next/server';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { createOrganization, listOrganizationsForUser } from '@pagespace/lib/organizations/repository';
+import { isOrgActive } from '@pagespace/lib/organizations/status';
 import { authenticateOrgRequest, ORG_READ_AUTH, ORG_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
 import { orgCreateSchema } from '@/lib/orgs/org-schemas';
 import { startOrgBusinessSubscription } from '@/lib/org-billing/org-subscription';
 
-/** GET /api/orgs — the orgs the caller belongs to, with their role (ORG-2). */
+/**
+ * GET /api/orgs — the orgs the caller belongs to, with their role (ORG-2) and whether each is lapsed: the drive-side
+ * screens disable what a lapsed org may not loosen ([D-OW-33]). Every member already sees that the org is read-only
+ * while lapsed (SEAT-6), so the flag tells them nothing new.
+ */
 export async function GET(request: Request) {
   const gate = await authenticateOrgRequest(request, ORG_READ_AUTH);
   if (!gate.ok) return gate.response;
   try {
-    const organizations = await listOrganizationsForUser(gate.userId);
+    const organizations = await Promise.all(
+      (await listOrganizationsForUser(gate.userId)).map(async (org) => ({ ...org, lapsed: !(await isOrgActive(org.id)) })),
+    );
     auditRequest(request, {
       eventType: 'data.read',
       userId: gate.userId,

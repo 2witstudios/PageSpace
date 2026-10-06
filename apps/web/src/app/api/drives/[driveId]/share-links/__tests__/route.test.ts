@@ -22,6 +22,7 @@ vi.mock('@/lib/share-url', () => ({
 }));
 
 import { POST } from '../route';
+import { ORG_LAPSED_MESSAGE } from '@pagespace/lib/organizations/status-core';
 import { createDriveShareLink } from '@pagespace/lib/permissions/share-link-service';
 import { authenticateWithEnforcedContext, isEnforcedAuthError } from '@/lib/auth';
 
@@ -86,5 +87,14 @@ describe('POST /api/drives/[driveId]/share-links', () => {
 
     expect(res.status).toBe(403);
     expect(json).toEqual({ error: "This organization doesn't allow public share links.", code: 'org_policy', policy: 'publicShareLinks' });
+  });
+  it('SEAT-9 (partial) [D-OW-33] returns 402 org_lapsed (the lapse copy, nothing created) when the drive\'s org is lapsed', async () => {
+    vi.mocked(createDriveShareLink).mockResolvedValue({ ok: false, error: 'ORG_LAPSED', message: ORG_LAPSED_MESSAGE });
+
+    const res = await POST(buildPost('drive-org'), createContext('drive-org'));
+    const json = await res.json();
+
+    expect(res.status).toBe(402);
+    expect(json).toEqual({ error: ORG_LAPSED_MESSAGE, code: 'org_lapsed' });
   });
 });
