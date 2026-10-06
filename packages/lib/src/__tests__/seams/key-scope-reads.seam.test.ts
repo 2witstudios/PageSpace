@@ -15,8 +15,10 @@
  *     management or display, the scope grammar, revocation bookkeeping, the lapse guard's snapshot (the reason says
  *     which).
  *
- * Stated limit: a rest spread (`const { ...rest } = auth`) copies the scope without naming it; a later read of
- * `rest.allowedDriveIds` is still seen.
+ * Detection is by name (key-scope-read-scan.ts: tables, properties, accessors, through aliases, namespaces, holders)
+ * AND by type (key-scope-typed-scan.ts: a ScopeSet's `drives`, an OAuth token row's `scopes`, whatever the variable is
+ * called). Stated limits: a rest spread (`const { ...rest } = auth`) copies the scope without naming it (a later
+ * `rest.allowedDriveIds` read is still seen); a renamed barrel re-export of a tracked function is not followed.
  *
  * A new reader fails here until it is classified. A ledgered function that no longer reads must leave.
  */
@@ -27,6 +29,7 @@ import ts from 'typescript';
 import { REPO_ROOT, listSourceFiles } from './walk';
 import { enclosingFunction, functionName, functionText, stripComments } from './loosening-write-scan';
 import { scanScopeReads, scanScopeReadsInFile, type ScopeRead } from './key-scope-read-scan';
+import { scanTypedScopeReads, scanTypedSource } from './key-scope-typed-scan';
 
 const APP_PERMISSIONS = 'packages/lib/src/permissions/app-permissions.ts';
 const PRINCIPAL_PERMISSIONS = 'apps/web/src/lib/auth/principal-permissions.ts';
@@ -81,6 +84,7 @@ const KEY_LIST = notAccess("session only: a current drive member (checkDriveAcce
 const ISSUANCE = notAccess("token issuance: copies an approved, stored grant onto a token (a refresh may only narrow it: isScopeSubset); the token then resolves through the owner-bound helpers");
 const CONSENT_DISPLAY = notAccess("consent / grant display: names the drives and roles a grant asks for or holds; grants nothing");
 const SCOPE_GRAMMAR = notAccess('the OAuth scope grammar (parse, format, shape tests); grants nothing itself');
+const CAPABILITY_SCOPES = notAccess("a session token's CAPABILITY scopes (e.g. mcp:*, env:bridge), not a key's drive scope: the type rule flags any scopes: string[] and fails closed");
 const KEY_SETTINGS = notAccess("the owner's own key settings: shows the key's configured scope");
 const LEGACY_SCOPE_CHECKS = ceiling('the scope check helpers: refuse or narrow a drive/page/list the owner already reaches');
 
@@ -183,7 +187,9 @@ const KEY_SCOPE_READ_LEDGER: Readonly<Record<string, Verdict>> = {
   'packages/lib/src/agent-accounts/executor/expected-binding-for.ts#expectedBindingFor': AGENT_ACCOUNTS,
   'packages/lib/src/agent-accounts/executor/http-request-executor.ts#execute': AGENT_ACCOUNTS,
   'packages/lib/src/permissions/decide-account-access.ts#decideAccountAccess': AGENT_ACCOUNTS,
-  'apps/web/src/lib/repositories/session-repository.ts#run': notAccess("the key's own mint / re-scope transaction (each route bounds the scope by validateDriveScopeAccess, the owner's live access)"),
+  'apps/web/src/lib/repositories/session-repository.ts#run': notAccess(
+    "the key's own mint / re-scope transaction. Settings routes bound the scope by validateDriveScopeAccess (the owner's live access, scopeWidensCaller); the OAuth path (applyKeyGrant) by checkGrantAuthority at consent, which is weaker (no scopeWidensCaller), and resolution intersects with the owner's current access either way",
+  ),
   'apps/web/src/lib/repositories/oauth-repository.ts#toSessionRepoDrives': notAccess('shapes an approved key grant into key rows for the mint / re-scope above'),
   'apps/web/src/lib/repositories/oauth-repository.ts#applyKeyGrant': notAccess("mints or re-scopes the MCP key an approved grant names; the grant was authority-checked at consent and the key's rows resolve through owner-bound helpers"),
   // ── the OAuth grant (review r7): authentication, issuance, consent, grant-time authority ────────────────
@@ -200,6 +206,23 @@ const KEY_SCOPE_READ_LEDGER: Readonly<Record<string, Verdict>> = {
   'apps/web/src/app/oauth/consent/page.tsx#ConsentPage': CONSENT_DISPLAY,
   'apps/web/src/app/api/oauth/device_authorization/verify/route.ts#POST': CONSENT_DISPLAY,
   'packages/lib/src/auth/oauth/grant-scope-summary.ts#describeGrantScopes': CONSENT_DISPLAY,
+  'apps/web/src/app/api/account/oauth-grants/route.ts#GET': CONSENT_DISPLAY,
+  'apps/web/src/app/api/oauth/token/route.ts#handleAuthorizationCodeGrant': ISSUANCE,
+  'apps/web/src/app/api/oauth/token/route.ts#handleDeviceCodeGrant': ISSUANCE,
+  'apps/web/src/app/api/oauth/token/route.ts#handleRefreshTokenGrant': ISSUANCE,
+  'apps/web/src/app/api/oauth/token/route.ts#keyGrantSuccessResponse': ISSUANCE,
+  'apps/web/src/lib/repositories/oauth-repository.ts#createAuthorizationCode': notAccess('stores the requested grant on an authorization code (the authorize route authority-checks it first: checkGrantAuthority)'),
+  'apps/web/src/lib/repositories/oauth-repository.ts#createDeviceAuthorization': notAccess('stores the requested scope on a device code; approval is authority-checked later (device decision)'),
+  'apps/web/src/lib/repositories/oauth-repository.ts#toDeviceCodeRecord': notAccess('shapes a device-code row for the lifecycle decisions below'),
+  'packages/lib/src/auth/oauth/code-lifecycle.ts#decideCodeExchange': ISSUANCE,
+  'packages/lib/src/auth/oauth/code-lifecycle.ts#decideDevicePoll': ISSUANCE,
+  'packages/lib/src/auth/oauth/code-lifecycle.ts#decideDeviceApproval': ISSUANCE,
+  'apps/web/src/app/api/mcp-ws/route.ts#UPGRADE': CAPABILITY_SCOPES,
+  'apps/web/src/app/api/env-bridge/ws/route.ts#UPGRADE': CAPABILITY_SCOPES,
+  'packages/lib/src/auth/session-service.ts#SessionService.createSession': CAPABILITY_SCOPES,
+  'packages/lib/src/auth/session-service.ts#SessionService.validateSessionWithReason': CAPABILITY_SCOPES,
+  'packages/lib/src/permissions/enforced-context.ts#EnforcedAuthContext.fromSession': CAPABILITY_SCOPES,
+  'packages/lib/src/integrations/oauth/oauth-handler.ts#buildOAuthAuthorizationUrl': notAccess("a THIRD-PARTY provider's OAuth scopes (integrations), not a PageSpace key's"),
   'apps/web/src/app/api/oauth/device_authorization/route.ts#POST': notAccess('validates the requested scope string when a device code is issued; grants nothing'),
   'packages/lib/src/auth/oauth/authorize-request.ts#validateAuthorizeRequest': notAccess('validates the requested scope string of an authorize request; grants nothing'),
   'apps/web/src/app/api/oauth/device_authorization/decision/route.ts#POST': ceiling(
@@ -207,6 +230,7 @@ const KEY_SCOPE_READ_LEDGER: Readonly<Record<string, Verdict>> = {
   ),
   'apps/web/src/lib/auth/oauth-grant-authority.ts#resolveGrantAuthority': ceiling("reads the approving user's CURRENT standing on each requested drive (getDriveAccess)"),
   'packages/lib/src/auth/oauth/scopes.ts#checkGrantAuthority': ceiling('refuses a grant naming a drive (or role) the user does not hold now'),
+  'packages/lib/src/auth/oauth/scopes.ts#isScopeSubset': ceiling('a refresh may only NARROW its grant: every requested drive scope must already be granted, same role'),
   'packages/lib/src/auth/oauth/scopes.ts#formatScopeSet': SCOPE_GRAMMAR,
   'packages/lib/src/auth/oauth/scopes.ts#isPureDriveGrant': SCOPE_GRAMMAR,
   'packages/lib/src/auth/oauth/scopes.ts#scopeSetToDriveScopes': SCOPE_GRAMMAR,
@@ -223,8 +247,11 @@ const KEY_SCOPE_READ_LEDGER: Readonly<Record<string, Verdict>> = {
 
 const ROOTS = ['apps', 'packages/lib/src'];
 
-function allReads(): ScopeRead[] {
-  return listSourceFiles(ROOTS).flatMap((file) => scanScopeReadsInFile(file));
+/** Name-based reads over every file, plus the type-based reads (the checker's runtime is reported by a test below). */
+function allReads(): { reads: ScopeRead[]; typedMs: number } {
+  const files = listSourceFiles(ROOTS);
+  const typed = scanTypedScopeReads(files);
+  return { reads: [...files.flatMap((file) => scanScopeReadsInFile(file)), ...typed.reads], typedMs: typed.ms };
 }
 
 /** Code of `file#fn`, comments stripped. */
@@ -251,7 +278,7 @@ function referencersOf(file: string, name: string): string[] {
 }
 
 describe('key-scope reads: no key reaches past its owner (review #2849 r6)', () => {
-  const reads = allReads();
+  const { reads, typedMs } = allReads();
   const keys = new Set(reads.map((r) => `${r.file}#${r.fn}`));
 
   it('every read of a key\'s drive scope sits in a ledgered function', () => {
@@ -318,6 +345,8 @@ describe('key-scope reads: no key reaches past its owner (review #2849 r6)', () 
         'async function r() { return db.select({ s: oauthRefreshTokens.scopes }).from(oauthRefreshTokens); }',
         "function s(raw) { return parseScopeList(raw); }",
         'async function u() { await db.delete(mcpTokenDrives); }',
+        'function v(auth) { const { drives: d } = (auth as unknown as { scopes: { drives: Map<string, string> } }).scopes; return d; }',
+        'function w(auth) { const grant = (auth as unknown as { scopes: { drives: Map<string, string> } }).scopes; return grant.drives.has(1); }',
       ].join('\n'),
     );
     expect(found.map((r) => `${r.fn} ${r.what}`)).toEqual([
@@ -339,6 +368,49 @@ describe('key-scope reads: no key reaches past its owner (review #2849 r6)', () 
       'r oauthRefreshTokens.scopes',
       's parseScopeList',
       'u mcpTokenDrives',
+      'v { drives } of scopes',
+      'w scopes.drives',
+    ]);
+  });
+  it('the type-based scan resolves real types (a broken resolution, typing everything any, would see nothing and fail open)', () => {
+    const typed = new Set(reads.filter((r) => r.what.endsWith('(typed)')).map((r) => `${r.file}#${r.fn}`));
+    expect([
+      'packages/lib/src/auth/oauth/scopes.ts#isScopeSubset', // a ScopeSet parameter
+      'apps/web/src/lib/repositories/oauth-repository.ts#refreshTokenGrant', // a drizzle oauth_refresh_tokens row
+      'apps/web/src/lib/auth/index.ts#validateOAuthAccessToken', // a hand-written record from @pagespace/lib
+    ].filter((sentinel) => !typed.has(sentinel))).toEqual([]);
+  });
+
+  it('the type-based scan runs within budget (its runtime is printed)', () => {
+    console.log(`key-scope typed scan: ${typedMs} ms`);
+    expect(typedMs).toBeLessThan(120_000);
+  });
+
+  it('the type-based scan sees a ScopeSet and an OAuth row by TYPE, through renames the name rules cannot follow', () => {
+    const found = scanTypedSource(
+      'typed.ts',
+      [
+        'type Set1 = { account: boolean; manageKeys: boolean; drives: ReadonlyMap<string, unknown> };',
+        'type Row = { id: string; clientId: string; scopes: string[] };',
+        'type Rec = { id: string; scopes: string[]; expiresAt: Date };',
+        'export function a(x: Set1) { return x.drives; }',
+        'export function b(holder: { grant: Set1 }) { const g = holder.grant; return g.drives.size; }',
+        'export function c(x: Set1) { const { drives } = x; return drives; }',
+        "export function d(x: Set1 | null) { return x?.['drives']; }",
+        'export function e(row: Row) { return row.scopes; }',
+        'export function f(rec: Rec | undefined) { return rec?.scopes.length; }',
+        'export function g(row: Row) { const { scopes } = row; return scopes; }',
+        'export function h(other: { drives: string[]; scopes: number }) { return [other.drives, other.scopes]; }',
+      ].join('\n'),
+    );
+    expect(found.map((r) => `${r.fn} ${r.what}`)).toEqual([
+      'a ScopeSet.drives (typed)',
+      'b ScopeSet.drives (typed)',
+      'c ScopeSet.drives (typed)',
+      'd ScopeSet.drives (typed)',
+      'e oauth row.scopes (typed)',
+      'f oauth row.scopes (typed)',
+      'g oauth row.scopes (typed)',
     ]);
   });
 });

@@ -17,7 +17,9 @@
  *   - any reference to the raw scope accessor `getAllowedDriveIds`.
  *
  * Names are resolved through import aliases (`import { mcpTokenDrives as t }`), namespace imports (`ns.mcpTokenDrives`)
- * and one-step const aliases (`const t = mcpTokenDrives`), so a renamed reader is still seen.
+ * and one-step const aliases (`const t = mcpTokenDrives`); a value holding a scope set under another name
+ * (`const grant = auth.scopes`) and a destructure of its `drives` are followed too. The TYPE-based half
+ * (key-scope-typed-scan.ts) catches what names cannot: a ScopeSet or an OAuth token row by its type.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -69,6 +71,15 @@ function memberName(node: ts.Node): string | null {
   return null;
 }
 
+/** `x` of `(x)`, `x as T`, `x!`, `<T>x`, `x satisfies T`. */
+function unwrap(expr: ts.Expression): ts.Expression {
+  let cur = expr;
+  while (ts.isParenthesizedExpression(cur) || ts.isAsExpression(cur) || ts.isNonNullExpression(cur) || ts.isTypeAssertionExpression(cur) || ts.isSatisfiesExpression(cur)) {
+    cur = cur.expression;
+  }
+  return cur;
+}
+
 /** True when the identifier is a declaration or an import/export name, not a use. */
 function isDeclarationName(id: ts.Identifier): boolean {
   const p = id.parent;
@@ -96,7 +107,17 @@ export function scanScopeReads(file: string, source: string): ScopeRead[] {
     if (ts.isPropertyAccessExpression(expr) && ts.isIdentifier(expr.expression) && namespaces.has(expr.expression.text)) return expr.name.text;
     return null;
   };
+  // Values that hold a scope set under another name (`const grant = auth.scopes`), so `grant.drives` is seen too.
+  const scopeHolders = new Set<string>();
+  const isScopeSetExpr = (expr: ts.Expression): boolean => {
+    const e = unwrap(expr);
+    const name = memberName(e) ?? (ts.isIdentifier(e) ? e.text : null);
+    return name !== null && (SCOPE_SET_NAME.test(name) || scopeHolders.has(name));
+  };
   const collect = (node: ts.Node): void => {
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer && isScopeSetExpr(node.initializer)) {
+      scopeHolders.add(node.name.text);
+    }
     if (ts.isImportSpecifier(node) && node.propertyName) alias.set(node.name.text, node.propertyName.text);
     if (ts.isNamespaceImport(node)) namespaces.add(node.name.text);
     if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
@@ -121,14 +142,17 @@ export function scanScopeReads(file: string, source: string): ScopeRead[] {
         at(node, `.${member}`);
       } else if (member === 'scopes' && OAUTH_SCOPE_TABLES.has(canonical(receiver) ?? '')) {
         at(node, `${canonical(receiver)}.scopes`);
-      } else if (member === 'drives') {
-        const recv = memberName(receiver) ?? (ts.isIdentifier(receiver) ? receiver.text : null);
-        if (recv !== null && SCOPE_SET_NAME.test(recv)) at(node, `${recv}.drives`);
+      } else if (member === 'drives' && isScopeSetExpr(receiver)) {
+        at(node, 'scopes.drives');
       }
     }
     if (ts.isBindingElement(node) && ts.isObjectBindingPattern(node.parent)) {
       const key = node.propertyName ?? node.name;
-      if ((ts.isIdentifier(key) || ts.isStringLiteral(key)) && SCOPE_PROPERTIES.has(key.text)) at(node, `{ ${key.text} }`);
+      const keyText = ts.isIdentifier(key) || ts.isStringLiteral(key) ? key.text : null;
+      if (keyText !== null && SCOPE_PROPERTIES.has(keyText)) at(node, `{ ${keyText} }`);
+      // `const { drives } = auth.scopes` (or of a holder): the scope set's drives under a destructure.
+      const decl = node.parent.parent;
+      if (keyText === 'drives' && ts.isVariableDeclaration(decl) && decl.initializer && isScopeSetExpr(decl.initializer)) at(node, '{ drives } of scopes');
     }
     if (ts.isPropertyAssignment(node) && ts.isIdentifier(node.name) && node.name.text === 'driveScopes' && isRelationalWith(node)) {
       at(node, 'with: { driveScopes }');
