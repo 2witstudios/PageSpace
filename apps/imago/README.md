@@ -69,9 +69,13 @@ values `apps/web` reads from `.env`, but not `.env` itself: imago reads no secre
 
 In the repo-root `.env`, set `IMAGO_ENABLED=true` (and `NEXT_PUBLIC_IMAGO_ENABLED=true` for the
 "Try Imago" link), and add imago's origin to `ADDITIONAL_ALLOWED_ORIGINS=http://localhost:3006` so
-`apps/web` accepts its proxied mutating requests and `apps/realtime` its socket. Sign-in happens on
-classic (`http://localhost:3000`, `WEB_APP_URL`), whose cookie reaches `:3006` because localhost
-cookies ignore the port.
+`apps/web` accepts its proxied mutating requests and `apps/realtime` its socket. Realtime stays on
+its own origin (`NEXT_PUBLIC_REALTIME_URL`, `:3001`); imago's CSP allows that origin in
+`connect-src`, because socket.io opens with HTTP polling, which `ws:`/`wss:` do not cover.
+
+Sign-in happens on classic (`http://localhost:3000`, `WEB_APP_URL`), whose cookie reaches `:3006`
+because localhost cookies ignore the port. With no edge, classic cannot send you back to imago: after
+signing in, open `http://localhost:3006/imago` again.
 
 ## Tests
 

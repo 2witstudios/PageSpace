@@ -50,13 +50,34 @@ const buildCSPString = (directives: CSPDirectives): string =>
 type CSPPolicyOptions = {
   /** `next dev` only: never set for a production build. */
   isDevelopment?: boolean;
+  /** NEXT_PUBLIC_REALTIME_URL: its origin joins connect-src. */
+  realtimeUrl?: string;
+};
+
+/**
+ * The realtime server's origin as a connect-src source, or null when there is
+ * none to add. socket.io opens with HTTP long-polling, which ws:/wss: do not
+ * cover, so a realtime server on another origin (Docker Compose's :3001) is
+ * unreachable without it. Only a plain http(s) origin is emitted: anything
+ * else could smuggle extra sources or directives into the policy.
+ */
+const realtimeConnectSource = (realtimeUrl: string | undefined): string | null => {
+  if (!realtimeUrl) return null;
+  try {
+    const { protocol, origin } = new URL(realtimeUrl);
+    if (protocol !== 'http:' && protocol !== 'https:') return null;
+    return /^https?:\/\/[A-Za-z0-9.-]+(?::\d+)?$/.test(origin) ? origin : null;
+  } catch {
+    return null;
+  }
 };
 
 export const buildCSPPolicy = (
   nonce: string,
-  { isDevelopment = false }: CSPPolicyOptions = {},
-): string =>
-  buildCSPString({
+  { isDevelopment = false, realtimeUrl }: CSPPolicyOptions = {},
+): string => {
+  const realtimeSource = realtimeConnectSource(realtimeUrl);
+  return buildCSPString({
     'default-src': ["'self'"],
     'script-src': [
       "'self'",
@@ -70,8 +91,8 @@ export const buildCSPPolicy = (
     ],
     'style-src': ["'self'", "'unsafe-inline'"],
     'img-src': ["'self'", 'data:', 'blob:', 'https:'],
-    // ws:/wss: for the realtime socket.
-    'connect-src': ["'self'", 'ws:', 'wss:'],
+    // ws:/wss: for the realtime socket; its origin for socket.io's polling.
+    'connect-src': ["'self'", 'ws:', 'wss:', ...(realtimeSource ? [realtimeSource] : [])],
     'font-src': ["'self'", 'data:'],
     'worker-src': ["'self'", 'blob:'],
     'frame-ancestors': ["'none'"],
@@ -79,6 +100,7 @@ export const buildCSPPolicy = (
     'form-action': ["'self'"],
     'object-src': ["'none'"],
   });
+};
 
 export const buildAPICSPPolicy = (): string =>
   buildCSPString({
@@ -89,6 +111,7 @@ export const buildAPICSPPolicy = (): string =>
 type SecurityHeadersOptions = {
   nonce: string;
   isDevelopment: boolean;
+  realtimeUrl?: string;
   isProduction: boolean;
   isSecure: boolean;
   isAPIRoute: boolean;
@@ -96,11 +119,11 @@ type SecurityHeadersOptions = {
 
 const applySecurityHeaders = (
   response: NextResponse,
-  { nonce, isDevelopment, isProduction, isSecure, isAPIRoute }: SecurityHeadersOptions,
+  { nonce, isDevelopment, realtimeUrl, isProduction, isSecure, isAPIRoute }: SecurityHeadersOptions,
 ): NextResponse => {
   response.headers.set(
     'Content-Security-Policy',
-    isAPIRoute ? buildAPICSPPolicy() : buildCSPPolicy(nonce, { isDevelopment }),
+    isAPIRoute ? buildAPICSPPolicy() : buildCSPPolicy(nonce, { isDevelopment, realtimeUrl }),
   );
   response.headers.set('X-Frame-Options', 'DENY');
   response.headers.set('X-Content-Type-Options', 'nosniff');
@@ -119,6 +142,8 @@ type CreateSecureResponseOptions = {
   isAPIRoute?: boolean;
   /** The `next dev` server: adds 'unsafe-eval' to the document CSP. */
   isDevelopment?: boolean;
+  /** NEXT_PUBLIC_REALTIME_URL: its origin joins the document's connect-src. */
+  realtimeUrl?: string;
   /** Extra request headers for the render; each overwrites any client value. */
   forwardHeaders?: Record<string, string>;
 };
@@ -126,7 +151,7 @@ type CreateSecureResponseOptions = {
 export const createSecureResponse = (
   isProduction: boolean,
   request?: Request,
-  { isAPIRoute = false, isDevelopment = false, forwardHeaders = {} }: CreateSecureResponseOptions = {},
+  { isAPIRoute = false, isDevelopment = false, realtimeUrl, forwardHeaders = {} }: CreateSecureResponseOptions = {},
 ): { response: NextResponse; nonce: string } => {
   const nonce = generateNonce();
   const isSecure = isSecureRequest(request);
@@ -139,11 +164,11 @@ export const createSecureResponse = (
   }
   requestHeaders.set(NONCE_HEADER, nonce);
   if (!isAPIRoute) {
-    requestHeaders.set('Content-Security-Policy', buildCSPPolicy(nonce, { isDevelopment }));
+    requestHeaders.set('Content-Security-Policy', buildCSPPolicy(nonce, { isDevelopment, realtimeUrl }));
   }
 
   const response = NextResponse.next({ request: { headers: requestHeaders } });
-  applySecurityHeaders(response, { nonce, isDevelopment, isProduction, isSecure, isAPIRoute });
+  applySecurityHeaders(response, { nonce, isDevelopment, realtimeUrl, isProduction, isSecure, isAPIRoute });
 
   return { response, nonce };
 };
