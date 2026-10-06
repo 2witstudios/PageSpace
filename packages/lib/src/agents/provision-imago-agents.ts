@@ -86,7 +86,8 @@ export interface ProvisionImagoAgentsInTransactionResult extends ProvisionImagoA
 /**
  * Provision the Imago agents in the user's existing Home drive, in its own
  * transaction. Throws when the user has no Home drive: provisioning the drive
- * is `provisionHomeDriveIfNeeded`'s job, which calls this module itself.
+ * is `provisionHomeDriveIfNeeded`'s job, which calls this after its own
+ * transaction commits, so Home never depends on the agents.
  */
 export async function provisionImagoAgents(
   userId: string,
@@ -109,8 +110,8 @@ export async function provisionImagoAgents(
 }
 
 /**
- * Provision the Imago agents inside a caller's transaction (the Home-drive
- * provisioning transaction). Takes the user-row lock itself, so it is correct
+ * Provision the Imago agents inside a caller's transaction
+ * (`provisionImagoAgents`, the backfill). Takes the user-row lock itself, so it is correct
  * even when the caller has not; re-taking a lock the transaction holds is free.
  */
 export async function provisionImagoAgentsInTransaction(

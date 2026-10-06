@@ -8,13 +8,8 @@ import { allocatePublishSubdomain } from '../services/drive-service'
 import { populateUserDrive } from './drive-setup'
 import { installStarterSkills } from '../commands/starter-skill-installer'
 import { provisionMemoryPages } from '../memory/memory-pages'
-import {
-  grantCreatedImagoAgents,
-  provisionImagoAgentsInTransaction,
-  writeImagoAgentActivity,
-  type ProvisionImagoAgentsResult,
-} from '../agents/provision-imago-agents'
-import type { DeferredWorkflowTrigger } from '../monitoring/activity-logger'
+import { provisionImagoAgents } from '../agents/provision-imago-agents'
+import { loggers } from '../logging/logger-config'
 
 type TransactionType = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -40,24 +35,22 @@ export interface ProvisionHomeDriveResult {
  *
  * Imago agents: every call — including the existing-Home branch, so returning
  * users get them on their next sign-in — provisions the built-in Imago agents
- * in Home (`provisionImagoAgentsInTransaction`), recreating any the user
- * deleted. Their workflow triggers fire only after the transaction commits,
- * and so do the drive grants of the agents this call created
- * (`grantCreatedImagoAgents`), which must not run under the user-row lock.
+ * in Home (`provisionImagoAgents`), recreating any the user deleted. That runs
+ * in its own transaction AFTER the Home transaction commits, and a failure is
+ * logged, not thrown: Home never depends on the agents (closing review F8 — a
+ * persistent provisioning failure inside the Home transaction rolled Home back
+ * at every sign-in). The next sign-in retries, through the existing-Home branch.
  *
- * Contention: concurrent first sign-ins of different users share two things,
- * so both are the transaction's last steps, held only until its commit — not
- * across the seeding. The publish subdomain: a rival writing the same
- * candidate waits on this transaction's uncommitted entry. And the agents'
- * activity, whose hash chain takes one global advisory lock until commit
- * (`writeImagoAgentActivity`).
+ * Contention: concurrent first sign-ins of different users share the publish
+ * subdomain — a rival writing the same candidate waits on this transaction's
+ * uncommitted entry — so allocating it is the Home transaction's last step,
+ * held only until its commit, not across the seeding. The agents' activity,
+ * whose hash chain takes one global advisory lock until commit, is likewise
+ * the last step of the agents' own transaction (`writeImagoAgentActivity`).
  */
 export async function provisionHomeDriveIfNeeded(
   userId: string
 ): Promise<ProvisionHomeDriveResult> {
-  const deferredTriggers: DeferredWorkflowTrigger[] = [];
-  // Typed by assertion so the assignments inside the transaction callback are not narrowed away.
-  let agents = null as ProvisionImagoAgentsResult | null;
   const result = await db.transaction(async (tx: TransactionType) => {
     await tx.execute(sql`SELECT 1 FROM ${users} WHERE ${users.id} = ${userId} FOR UPDATE`);
 
@@ -68,12 +61,7 @@ export async function provisionHomeDriveIfNeeded(
     });
 
     const homeDrive = ownedDrives.find((d) => d.kind === 'HOME');
-    if (homeDrive) {
-      const { pendingActivity, ...provisioned } = await provisionImagoAgentsInTransaction(tx, userId, homeDrive.id);
-      agents = provisioned;
-      deferredTriggers.push(...await writeImagoAgentActivity(tx, pendingActivity));
-      return { driveId: homeDrive.id, created: false };
-    }
+    if (homeDrive) return { driveId: homeDrive.id, created: false };
 
     const isExistingUser = ownedDrives.length > 0;
     const existingSlugs = ownedDrives.map((d) => d.slug);
@@ -100,11 +88,6 @@ export async function provisionHomeDriveIfNeeded(
     // profile as editable markdown documents — About You, Communication, Rules.
     await provisionMemoryPages(userId, newDrive.id, tx);
 
-    // The Imago agents install on BOTH branches too: they are the user's
-    // assistants, not tutorial content.
-    const { pendingActivity, ...provisioned } = await provisionImagoAgentsInTransaction(tx, userId, newDrive.id);
-    agents = provisioned;
-
     if (!isExistingUser) {
       const [folder] = await tx
         .insert(pages)
@@ -126,13 +109,19 @@ export async function provisionHomeDriveIfNeeded(
 
     // Auto-allocate a globally-unique publish subdomain for the Home drive so it is
     // addressable at <sub>.pagespace.site from creation (participates in this tx).
-    // Last but one, and the activity last: see "Contention" above.
+    // Last: see "Contention" above.
     await allocatePublishSubdomain(newDrive.id, slug, tx);
-    deferredTriggers.push(...await writeImagoAgentActivity(tx, pendingActivity));
 
     return { driveId: newDrive.id, created: !isExistingUser };
   });
-  for (const trigger of deferredTriggers) trigger();
-  if (agents) await grantCreatedImagoAgents(userId, agents);
+
+  // The Imago agents install on BOTH branches, after Home has committed: they
+  // are the user's assistants, not tutorial content, and never a reason to
+  // lose Home.
+  try {
+    await provisionImagoAgents(userId)
+  } catch (error) {
+    loggers.ai.error('Imago agents: provisioning failed; retried at next sign-in', error as Error, { userId })
+  }
   return result;
 }

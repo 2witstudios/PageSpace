@@ -185,9 +185,10 @@ export async function runBackfill({
       try {
         let createdPages = 0;
         if (!hasHome) {
-          // The Home step provisions the agents itself (it calls the agent
-          // provisioner inside its transaction); the user had none when
-          // scanned, so whatever is live now came from that step.
+          // The Home step provisions the agents itself, after its own commit;
+          // the user had none when scanned, so whatever is live now came from
+          // that step. It only logs an agent failure (Home must not depend on
+          // the agents), so the provisioner call below is what reports it.
           await provisionHomeDriveIfNeeded(row.userId);
           summary.homeDrivesProvisioned++;
           createdPages += await liveAgentsOf(db, row.userId);

@@ -4,7 +4,7 @@ import {
   PATHNAME_HEADER,
   SESSION_COOKIE,
   signInLocation,
-  signInOrigin,
+  webAppOrigin,
 } from '@/lib/auth/sign-in-url';
 import { isImagoEnabled } from '@/lib/imago-enabled';
 
@@ -13,7 +13,7 @@ const PUBLIC_PATHS = new Set(['/api/health']);
 
 export function middleware(req: NextRequest): NextResponse {
   // nextUrl.pathname is relative to basePath: /imago/api/health → /api/health.
-  const { pathname, origin } = req.nextUrl;
+  const { pathname } = req.nextUrl;
   const isPublic = PUBLIC_PATHS.has(pathname);
 
   // Switched off, imago does not exist: no sign-in redirect, no render. Not
@@ -24,8 +24,10 @@ export function middleware(req: NextRequest): NextResponse {
 
   // Presence only: the edge cannot reach the database. getViewer() validates
   // the session in server code and sends invalid or revoked ones to sign-in.
+  // Built on the configured origin, as getViewer() does: nextUrl's origin is
+  // the Host header, which the client writes.
   if (!isPublic && !req.cookies.get(SESSION_COOKIE)?.value) {
-    return NextResponse.redirect(signInLocation({ origin: signInOrigin(origin), pathname }));
+    return NextResponse.redirect(signInLocation({ origin: webAppOrigin(), pathname }));
   }
 
   const isAPIRoute = pathname.startsWith('/api');

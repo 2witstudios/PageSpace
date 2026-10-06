@@ -150,6 +150,9 @@ describe('middleware() CSP by NODE_ENV', () => {
 
 describe('middleware() auth gate', () => {
   enableImago();
+  beforeEach(() => {
+    vi.stubEnv('WEB_APP_URL', 'http://localhost:3006');
+  });
 
   test('no session cookie', () => {
     const { status, location } = redirectOf(
@@ -179,9 +182,27 @@ describe('middleware() auth gate', () => {
 
     assert({
       given: 'a page request with no session cookie',
-      should: 'stay on the request origin',
+      should: 'stay on the configured app origin (WEB_APP_URL)',
       actual: location?.origin,
       expected: 'http://localhost:3006',
+    });
+  });
+
+  test('a spoofed Host header', () => {
+    vi.stubEnv('WEB_APP_URL', 'https://app.pagespace.test');
+    // Under a real server nextUrl is built from the Host header, which is the
+    // client's to write.
+    const spoofed = new NextRequest('http://evil.example/imago/drive-1/files', {
+      nextConfig: { basePath: '/imago' },
+      headers: { host: 'evil.example', 'x-forwarded-host': 'evil.example' },
+    });
+    const { status, location } = redirectOf(middleware(spoofed));
+
+    assert({
+      given: 'a signed-out request whose Host names another origin',
+      should: 'still send it to sign-in on the configured app origin, never the Host',
+      actual: { status, origin: location?.origin, pathname: location?.pathname },
+      expected: { status: 307, origin: 'https://app.pagespace.test', pathname: '/auth/signin' },
     });
   });
 

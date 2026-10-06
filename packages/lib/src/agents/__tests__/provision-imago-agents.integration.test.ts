@@ -376,7 +376,7 @@ describe('provisionHomeDriveIfNeeded → Imago agents (real Postgres)', () => {
     const agentPages = await db.select().from(pages).where(inArray(pages.id, pointers.map((p) => p.pageId)));
     for (const page of agentPages) expect(page.driveId).toBe(driveId);
 
-    // Written at the end of the Home transaction, not dropped.
+    // Written by the agents' own transaction after Home commits, not dropped.
     const logs = await db
       .select({ pageId: activityLogs.pageId })
       .from(activityLogs)
@@ -439,5 +439,60 @@ describe('provisionHomeDriveIfNeeded → Imago agents (real Postgres)', () => {
     const [home] = await db.select().from(drives).where(eq(drives.id, driveId));
     expect(home.kind).toBe('HOME');
     expect(await agentPagesIn(driveId)).toHaveLength(BUILTIN_AGENT_KEYS.length);
+  });
+
+  // F8 (closing review, IMG-10.7): a persistent provisioning failure must not
+  // cost the user their Home drive. The failure is real — a trigger refusing
+  // this one user's agent pointers, so every attempt fails in Postgres — and
+  // the next sign-in after it clears provisions the agents.
+  it('given Imago provisioning failing persistently for a new user, should still create Home, and a later sign-in should provision the agents', async () => {
+    if (!dbAvailable) return;
+    const user = await factories.createUser();
+    const fn = `imago_refuse_${user.id.replace(/[^a-z0-9]/gi, '_')}`;
+    await db.execute(sql.raw(`
+      CREATE FUNCTION ${fn}() RETURNS trigger AS $$
+      BEGIN
+        IF NEW."userId" = '${user.id}' THEN
+          RAISE EXCEPTION 'imago provisioning refused for this user (test)';
+        END IF;
+        RETURN NEW;
+      END $$ LANGUAGE plpgsql
+    `));
+    await db.execute(sql.raw(
+      `CREATE TRIGGER ${fn} BEFORE INSERT OR UPDATE ON user_builtin_agents FOR EACH ROW EXECUTE FUNCTION ${fn}()`,
+    ));
+    try {
+      const first = await provisionHomeDriveIfNeeded(user.id);
+      expect(first.created).toBe(true);
+      const [home] = await db.select().from(drives).where(eq(drives.id, first.driveId));
+      expect(home).toMatchObject({ kind: 'HOME', ownerId: user.id });
+      // The Home seeding committed; only the agents are missing.
+      const seeded = await db.select({ title: pages.title }).from(pages).where(eq(pages.driveId, first.driveId));
+      expect(seeded.map((page) => page.title)).toContain('Getting Started');
+      expect(await pointersFor(user.id)).toHaveLength(0);
+      const imagoTitles = [IMAGO_FOLDER_TITLE, ...BUILTIN_AGENTS.map((agent) => agent.title)];
+      expect(seeded.filter((page) => imagoTitles.includes(page.title))).toEqual([]);
+
+      // Still failing at the next sign-in: Home is kept, not recreated.
+      const second = await provisionHomeDriveIfNeeded(user.id);
+      expect(second).toEqual({ driveId: first.driveId, created: false });
+      expect(await pointersFor(user.id)).toHaveLength(0);
+    } finally {
+      await db.execute(sql.raw(`DROP TRIGGER IF EXISTS ${fn} ON user_builtin_agents`));
+      await db.execute(sql.raw(`DROP FUNCTION IF EXISTS ${fn}()`));
+    }
+
+    const third = await provisionHomeDriveIfNeeded(user.id);
+    expect(third.created).toBe(false);
+    const homes = await db
+      .select({ id: drives.id })
+      .from(drives)
+      .where(and(eq(drives.ownerId, user.id), eq(drives.kind, 'HOME')));
+    expect(homes).toEqual([{ id: third.driveId }]);
+    const pointers = await pointersFor(user.id);
+    expect(pointers.map((p) => p.key).sort()).toEqual([...BUILTIN_AGENT_KEYS].sort());
+    const agentPages = await db.select().from(pages).where(inArray(pages.id, pointers.map((p) => p.pageId)));
+    expect(agentPages).toHaveLength(BUILTIN_AGENT_KEYS.length);
+    for (const page of agentPages) expect(page).toMatchObject({ driveId: third.driveId, type: 'AI_CHAT', isTrashed: false });
   });
 });

@@ -139,6 +139,27 @@ run_db_test_suite() {
     fi
 }
 
+# apps/imago keeps its DB-backed suites (*.integration.test.ts) out of its
+# default vitest config; they run through its `test:integration` script, as
+# ci.yml runs them.
+run_integration_test_suite() {
+    local name="$1"
+    local filter="$2"
+    local path="$3"
+
+    TOTAL=$((TOTAL + 1))
+    echo -e "${YELLOW}▶ Running: ${name}${NC}"
+
+    if bun run --filter "$filter" test:integration -- "$path" --reporter=dot 2>&1; then
+        echo -e "${GREEN}✓ ${name} passed${NC}"
+        echo ""
+    else
+        echo -e "${RED}✗ ${name} failed${NC}"
+        echo ""
+        FAILED=$((FAILED + 1))
+    fi
+}
+
 # Some packages (@pagespace/cli, @pagespace/sdk) wire a `pretest: bun run
 # build` hook (tsc must run before vitest sees the compiled dist types).
 # `bun run --filter <pkg> test -- <args>` forwards trailing args to EVERY
@@ -317,6 +338,36 @@ run_test_suite "Imago Agent Integrations (drive ones only where granted and a me
 run_test_suite "Actor Permissions (agent/user/token ceilings, Imago agents capped by the invoking user)" "web" "src/lib/ai/tools/__tests__/actor-permissions.test.ts"
 run_test_suite "Imago Agent Integrations outside page chat (@-mention engine, consult route, workflows)" "web" "src/lib/ai/core/__tests__/imago-integration-entrypoints.security.test.ts"
 run_test_suite "Member removal by rollback/redo/restore revokes the member's agent grants" "web" "src/services/api/rollback/__tests__/member-removal-agent-grants.integration.test.ts"
+run_db_test_suite "Imago Agent Grants on sign-in (MEMBER in owned STANDARD drives, no other drive)" "@pagespace/lib" "src/agents/__tests__/grant-imago-agents.integration.test.ts"
+run_test_suite "Imago Agent Context (granted drives and location only)" "web" "src/lib/ai/core/__tests__/imago-agent-context.integration.test.ts"
+run_test_suite "Agent Session Access (drive members only, unknown is never a grant)" "@pagespace/lib" "src/agent-workspaces/__tests__/decide-workspace-access.test.ts"
+run_db_test_suite "GDPR Export of Imago Drive Access (the user's own rows only)" "@pagespace/lib" "src/compliance/export/__tests__/imago-drive-access-export.integration.test.ts"
+
+# =============================================================================
+# Imago App Boundaries (apps/imago: same-origin app on classic's session)
+# =============================================================================
+echo "🖼️ Imago App"
+echo "------------"
+
+run_test_suite "Imago Middleware (flag gate, session-cookie gate, prefetch matcher, redirect origin)" "@pagespace/imago" "src/middleware.test.ts"
+run_test_suite "Imago CSP & Security Headers" "@pagespace/imago" "src/middleware/security-headers.test.ts"
+run_test_suite "Imago Sign-in URL (return-path sanitiser, configured origin)" "@pagespace/imago" "src/lib/auth/sign-in-url.test.ts"
+run_test_suite "Imago getViewer (session validation, redirect to sign-in)" "@pagespace/imago" "src/lib/auth/get-viewer.test.ts"
+run_integration_test_suite "Imago getViewer against the real session service" "@pagespace/imago" "src/lib/auth/get-viewer.integration.test.ts"
+run_test_suite "Imago API Client (CSRF token, sign-in on 401)" "@pagespace/imago" "src/api/client.test.ts"
+run_test_suite "Imago Socket Token" "@pagespace/imago" "src/realtime/socket-token.test.ts"
+run_test_suite "Classic Sign-in next= Allow-list (/imago only as a safe path)" "web" "src/lib/auth/__tests__/resolve-signin-next.test.ts"
+
+# =============================================================================
+# Realtime (Socket.IO) Security Tests
+# =============================================================================
+echo "📡 Realtime"
+echo "-----------"
+
+run_test_suite "Realtime Origin Allow-list" "realtime" "src/__tests__/origin-allowlist.test.ts"
+run_test_suite "Realtime Origin Validation" "realtime" "src/__tests__/origin-validation.test.ts"
+run_test_suite "Realtime Socket Auth" "realtime" "src/__tests__/auth.test.ts"
+run_test_suite "Realtime Per-Event Auth" "realtime" "src/__tests__/per-event-auth.test.ts"
 
 # =============================================================================
 # AI Tool Security Tests

@@ -2,8 +2,8 @@
  * Imago agent provisioning with a ONE-connection `@pagespace/db` pool
  * (DB_POOL_MAX=1), against a real Postgres.
  *
- * Provisioning runs inside the Home transaction, which holds the pool's only
- * connection and the user-row lock. Any read that goes through the global pool
+ * Provisioning runs in its own transaction (after the Home transaction
+ * commits), which holds the pool's only connection and the user-row lock. Any read that goes through the global pool
  * instead of the transaction waits for a second connection that cannot come
  * until the transaction ends: the pool's 10 s connection timeout, then a
  * fallback. In production (pool 10) the same stall needs only ten concurrent
