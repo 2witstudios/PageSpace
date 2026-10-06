@@ -108,6 +108,19 @@ const mockUserData = {
   streamState: [{ messageId: 'sm-1', conversationId: 'c-1', status: 'complete', parts: [] }],
   contentTags: [{ tagName: 'risk', pageId: 'p-1', pageTitle: 'Page', targetKind: 'page', anchor: null, anchorStatus: null, channelMessageId: null, aiMessageId: null, source: 'user', confidence: null }],
   localEnvironments: [{ envId: 'env-1', driveId: 'd-1', envName: 'my-mac', label: 'jono-macstudio', machinePublicKey: 'pk', machineKeyFingerprint: 'sha256:abc', serverKeyId: 'k1', bindPolicy: 'owner', capabilities: null, enrolledAt: null, lastSeenAt: null, revokedAt: null, createdAt: new Date('2026-09-04T00:00:00.000Z'), updatedAt: new Date('2026-09-04T00:00:00.000Z') }],
+  // Spec X-2 (Organizations & Wallets): the subject's org life and their own money.
+  organizations: [{ id: 'org-1', name: 'Northwind', slug: 'northwind', createdAt: new Date('2026-09-04T00:00:00.000Z') }],
+  orgMembership: {
+    memberships: [{ orgId: 'org-1', orgName: 'Northwind', role: 'MEMBER', joinedAt: new Date('2026-09-04T00:00:00.000Z'), seatAllowanceCents: 3000 }],
+    departures: [],
+    joinRequests: [],
+    guestHolds: [],
+  },
+  wallet: {
+    wallet: { id: 'w-1', monthlyRemainingCents: 1234, monthlyAllowanceCents: 900, spentCents: 0, topupRemainingCents: 0, debtCents: 0, status: 'active', fallbackRule: null, defaultSpendSource: null, alwaysOwnCredits: false, monthlyPeriodStart: null, monthlyPeriodEnd: null, createdAt: new Date('2026-09-04T00:00:00.000Z') },
+    fundingLegs: [{ id: 'leg-1', walletId: 'w-drive', walletOwnerType: 'org', walletSubjectType: 'drive', walletSubjectDriveName: 'Product', funderKind: 'donation', originalCents: 500, remainingCents: 200, nonRefundable: true, createdAt: new Date('2026-09-04T00:00:00.000Z') }],
+    spendOverrides: [],
+  },
 };
 
 describe('GET /api/account/export', () => {

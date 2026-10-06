@@ -21,8 +21,13 @@ import type { AllUserData } from './gdpr-export';
  * consumer written against 1.0.0 keeps working — but one keyed on the version
  * can now tell a bundle that carries the subject's tags from one predating the
  * category, which is the whole point of the field being in the manifest.
+ *
+ * 1.2.0 adds `organizations.json`, `org-membership.json` and `wallet.json`
+ * (and the matching portable properties). Spec X-2: orgs the subject owns,
+ * their org membership/seat/departures/requests, and their own wallet — their
+ * personal root balance and the funding legs they gave. Additive like 1.1.0.
  */
-export const EXPORT_SCHEMA_VERSION = '1.1.0';
+export const EXPORT_SCHEMA_VERSION = '1.2.0';
 
 export type ExportFormat = 'native' | 'portable';
 
@@ -100,6 +105,16 @@ export function buildNativeExportFiles(data: AllUserData): ExportFile[] {
     // carries the quoted text they selected, which nothing else in the bundle
     // holds.
     { name: 'content-tags.json', description: 'Tags you applied to pages, passages, sheet cells and messages, with the text each one was anchored to', recordCount: data.contentTags.length, data: data.contentTags },
+    // Spec X-2: the subject's org life and their own money. The org categories
+    // carry the subject's OWN rows only — their memberships, their seat
+    // allowance, their departures and requests, the orgs they own; the org's
+    // roster, pool balance and ledger are the org's data and are carried in
+    // nobody's personal export. The wallet category carries their personal
+    // root balance and the funding legs THEY funded — never another person's
+    // spend (SPEND-9/D18).
+    { name: 'organizations.json', description: 'Organizations you own', recordCount: data.organizations.length, data: data.organizations },
+    { name: 'org-membership.json', description: 'Your organization memberships and seat allowances, the organizations you have left, your requests to join restricted drives, and any guest access an organization policy parked', recordCount: data.orgMembership.memberships.length + data.orgMembership.departures.length + data.orgMembership.joinRequests.length + data.orgMembership.guestHolds.length, data: data.orgMembership },
+    { name: 'wallet.json', description: 'Your personal wallet balance, every funding leg you paid into any wallet (including donations), and your per-drive spending switches', recordCount: data.wallet.fundingLegs.length + data.wallet.spendOverrides.length + (data.wallet.wallet ? 1 : 0), data: data.wallet },
   ];
   if (data.personalization) {
     files.push({ name: 'personalization.json', description: 'Personalization settings', recordCount: 1, data: data.personalization });
@@ -216,6 +231,9 @@ export function toPortableExport(data: AllUserData): Record<string, unknown> {
       { '@type': 'PropertyValue', name: 'streamState', value: data.streamState },
       { '@type': 'PropertyValue', name: 'contentTags', value: data.contentTags },
       { '@type': 'PropertyValue', name: 'localEnvironments', value: data.localEnvironments },
+      { '@type': 'PropertyValue', name: 'organizations', value: data.organizations },
+      { '@type': 'PropertyValue', name: 'orgMembership', value: data.orgMembership },
+      { '@type': 'PropertyValue', name: 'wallet', value: data.wallet },
     ],
   };
 }

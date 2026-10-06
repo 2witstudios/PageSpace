@@ -83,6 +83,9 @@ const EMPTY: AllUserData = {
   streamState: [],
   contentTags: [],
   localEnvironments: [],
+  organizations: [],
+  orgMembership: { memberships: [], departures: [], joinRequests: [], guestHolds: [] },
+  wallet: { wallet: null, fundingLegs: [], spendOverrides: [] },
 };
 
 describe('GDPR export table coverage', () => {
@@ -170,6 +173,9 @@ describe('GDPR export table coverage', () => {
       streamState: 'stream-state.json',
       localEnvironments: 'local-environments.json',
       contentTags: 'content-tags.json',
+      organizations: 'organizations.json',
+      orgMembership: 'org-membership.json',
+      wallet: 'wallet.json',
     };
 
     const unshipped = [...new Set(Object.values(EXPORTED_TABLES))].filter((category) => {

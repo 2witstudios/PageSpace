@@ -23,7 +23,7 @@ function makeData(overrides: Partial<AllUserData> = {}): AllUserData {
       createdAt: D1,
       updatedAt: D2,
     },
-    drives: [{ id: 'd1', name: 'Drive One', slug: 'drive-one', role: 'OWNER', createdAt: D1 }],
+    drives: [{ id: 'd1', name: 'Drive One', slug: 'drive-one', role: 'OWNER', orgId: null, createdAt: D1 }],
     pages: [
       { id: 'p1', title: 'Page One', type: 'DOCUMENT', content: 'hello', driveId: 'd1', createdAt: D1, updatedAt: D2 },
       { id: 'p2', title: 'Page Two', type: 'CANVAS', content: '{}', driveId: 'd1', createdAt: D1, updatedAt: D2 },
@@ -67,6 +67,9 @@ function makeData(overrides: Partial<AllUserData> = {}): AllUserData {
     streamState: [],
     contentTags: [],
     localEnvironments: [],
+    organizations: [],
+    orgMembership: { memberships: [], departures: [], joinRequests: [], guestHolds: [] },
+    wallet: { wallet: null, fundingLegs: [], spendOverrides: [] },
     ...overrides,
   };
 }
