@@ -1,4 +1,4 @@
-import { eq, inArray, or, and, ne, isNull, gte, asc } from 'drizzle-orm';
+import { eq, inArray, or, and, ne, isNull, gte, asc, sql } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { users } from '@pagespace/db/schema/auth';
 import { agentWorkspaces, agentWorkspaceShells } from '@pagespace/db/schema/agent-workspaces';
@@ -26,6 +26,10 @@ import { userToastNotificationPreferences } from '@pagespace/db/schema/toast-not
 import { emailNotificationPreferences } from '@pagespace/db/schema/email-notifications';
 import { decryptUserRow } from '../../auth/user-repository';
 import { agentAccounts, agentAccountApprovals, agentAccountBindings, agentAccountDelegations } from '@pagespace/db/schema/agent-accounts';
+import { organizations, orgMembers, orgMemberDepartures } from '@pagespace/db/schema/organizations';
+import { driveJoinRequests } from '@pagespace/db/schema/drive-join-requests';
+import { orgGuestHolds } from '@pagespace/db/schema/org-guest-holds';
+import { wallets, walletFundingLegs, driveSpendOverrides, walletConsumerCaps } from '@pagespace/db/schema/wallets';
 import { getClickHouseGdprClient } from '../../observability/clickhouse-client';
 import { isGuestRole } from '../../permissions/guest-role';
 import {
@@ -62,6 +66,16 @@ export interface UserDriveExport {
   name: string;
   slug: string;
   role: 'OWNER' | 'ADMIN' | 'MEMBER';
+  /**
+   * The org this drive belongs to (Spec X-2), or null for a personal drive.
+   * Which container a drive sits in is a fact about the subject's own
+   * membership map — a member of an org drive knows where they are — and it is
+   * what makes the rest of the bundle readable: `pages.json` and `sheets.json`
+   * key on driveId, and without the org pointer an org drive is
+   * indistinguishable from a personal one in the subject's own export.
+   * The org's OTHER facts (policies, billing, domains) stay the org's data.
+   */
+  orgId: string | null;
   createdAt: Date;
 }
 
@@ -498,6 +512,12 @@ export interface AllUserData {
   contentTags: UserContentTagExport[];
   /** Machines the subject enrolled as local environments — their own devices. */
   localEnvironments: UserLocalEnvironmentExport[];
+  /** Orgs the subject OWNS (X-2). */
+  organizations: UserOrganizationExport[];
+  /** The subject's org life: memberships, departures, join requests, guest holds (X-2). */
+  orgMembership: UserOrgMembershipExportFile;
+  /** The subject's wallet: personal root balance, legs they funded, spend switches (X-2). */
+  wallet: UserWalletExport;
 }
 
 /**
@@ -591,6 +611,7 @@ export async function collectUserDrives(database: DB, userId: string): Promise<U
       id: drives.id,
       name: drives.name,
       slug: drives.slug,
+      orgId: drives.orgId,
       createdAt: drives.createdAt,
     })
     .from(drives)
@@ -607,6 +628,7 @@ export async function collectUserDrives(database: DB, userId: string): Promise<U
       id: drives.id,
       name: drives.name,
       slug: drives.slug,
+      orgId: drives.orgId,
       role: driveMembers.role,
       createdAt: drives.createdAt,
     })
@@ -623,6 +645,7 @@ export async function collectUserDrives(database: DB, userId: string): Promise<U
       id: d.id,
       name: d.name,
       slug: d.slug,
+      orgId: d.orgId,
       role: d.role,
       createdAt: d.createdAt,
     }));
@@ -1728,6 +1751,358 @@ export async function collectUserLocalEnvironments(database: DB, userId: string)
     .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
 }
 
+/**
+ * An ORG the subject OWNS (Spec X-2). The org row is the founder's record —
+ * they named it, they own it — so its identity travels. Everything else about
+ * it (policies, subscription, domains) is the organisation's own record and
+ * stays excluded in the coverage registry: the other members' relationship to
+ * this org is THEIR data, disclosed to them in their own exports, not to its
+ * owner.
+ */
+export interface UserOrganizationExport {
+  id: string;
+  name: string;
+  slug: string;
+  createdAt: Date;
+}
+
+/**
+ * The subject's own seat in an org, with the seat allowance they hold on the
+ * org pool (WAL-7/POL-7: a `wallet_consumer_caps` row keyed `user:<id>` on the
+ * pool). `invitedBy` is deliberately absent: it names another person, the same
+ * Art 15(4) line that excludes `org_invitations` and `pending_invites` — a
+ * membership tells the subject where they stand, not who put them there.
+ *
+ * The POOL's balance is not here. The pool is the org's money (SPEND-9, D18):
+ * its ledger and balance belong to the org, and a member's export carries
+ * their seat, never the pool's full ledger.
+ */
+export interface UserOrgMembershipExport {
+  orgId: string;
+  orgName: string;
+  role: 'OWNER' | 'ADMIN' | 'MEMBER';
+  joinedAt: Date;
+  /** The subject's monthly seat allowance on the org pool, or null when none is set. */
+  seatAllowanceCents: number | null;
+}
+
+/**
+ * The record that the subject once belonged to an org and went (SEC-1: kept so
+ * a verified email domain never auto-joins them back). Their own departure,
+ * not the org's roster.
+ */
+export interface UserOrgDepartureExport {
+  orgId: string;
+  orgName: string;
+  reason: 'left' | 'removed' | 'account_deleted';
+  departedAt: Date;
+}
+
+/**
+ * The subject's own request to join a Restricted org drive (DRV-6), including
+ * the note they wrote — their words, which no other category carries.
+ * `decidedBy` is omitted: who decided is the approver's act, and the decision
+ * itself is carried by `status` + `decidedAt`.
+ */
+export interface UserOrgDriveJoinRequestExport {
+  id: string;
+  driveId: string;
+  driveName: string | null;
+  status: 'pending' | 'approved' | 'denied' | 'withdrawn';
+  message: string | null;
+  requestedAt: Date;
+  decidedAt: Date | null;
+}
+
+/**
+ * A guest hold that names the subject (POL-2): either their queued request to
+ * join an org drive as a guest (`request` — what was asked for them), or the
+ * snapshot of the access an org policy parked (`parked` — their own member row
+ * and page grants). The `request.invitedBy`/`request.linkId` fields inside the
+ * JSON blobs can name the inviter; the blobs are carried verbatim because they
+ * are the record of the subject's own queued/parked access, and the inviter of
+ * an invitation the subject received is already known to them.
+ */
+export interface UserOrgGuestHoldExport {
+  id: string;
+  orgId: string;
+  driveId: string;
+  state: 'pending_approval' | 'suspended' | 'approved';
+  origin: string;
+  request: unknown;
+  parked: unknown;
+  createdAt: Date;
+}
+
+/** Everything the export carries about the subject's org life, in one file. */
+export interface UserOrgMembershipExportFile {
+  memberships: UserOrgMembershipExport[];
+  departures: UserOrgDepartureExport[];
+  joinRequests: UserOrgDriveJoinRequestExport[];
+  guestHolds: UserOrgGuestHoldExport[];
+}
+
+/**
+ * The subject's PERSONAL ROOT WALLET (X-5: the row their `credit_balances` row
+ * became) — their balance, carried whole. Their money, their numbers.
+ *
+ * Org pools and drive wallets are NOT here: a pool is the org's money (its
+ * balance and ledger stay the org's), and a drive wallet's remaining amount is
+ * disclosed to a consumer only as "can I spend" at call time (D18, O-5) — not
+ * as a copy in their export. What IS here from those wallets are the legs the
+ * SUBJECT funded (donations, their own top-ups): money they gave away is their
+ * financial record.
+ */
+export interface UserWalletExport {
+  wallet: {
+    id: string;
+    monthlyRemainingCents: number;
+    monthlyAllowanceCents: number;
+    spentCents: number;
+    topupRemainingCents: number;
+    debtCents: number;
+    status: string;
+    fallbackRule: string | null;
+    defaultSpendSource: string | null;
+    alwaysOwnCredits: boolean;
+    monthlyPeriodStart: Date | null;
+    monthlyPeriodEnd: Date | null;
+    createdAt: Date;
+  } | null;
+  /**
+   * Every funding leg the subject funded, anywhere (WAL-3): owner top-ups of
+   * wallets they fund and donations (WAL-4) they made into drive/agent
+   * wallets. Keyed on `funderUserId = :subject` — never another person's legs,
+   * and never the org pool's refill legs, which are the org's record.
+   */
+  fundingLegs: UserFundingLegExport[];
+  /** The subject's SPEND-5 "always my own credits" switch, per drive. */
+  spendOverrides: { driveId: string; createdAt: Date }[];
+}
+
+/**
+ * One leg the subject funded. The destination is named readably: the wallet's
+ * owner/subject shape plus the drive's NAME for a drive wallet (the subject
+ * donated to that drive by name; an opaque id alone would not tell them where
+ * their money went — the same join-in-the-name move `contentTags` makes for
+ * the drive's vocabulary). `remainingCents` is how much of their leg is left.
+ */
+export interface UserFundingLegExport {
+  id: string;
+  walletId: string;
+  walletOwnerType: 'user' | 'org';
+  walletSubjectType: 'drive' | 'agent_page' | null;
+  walletSubjectDriveName: string | null;
+  funderKind: 'owner' | 'donation';
+  originalCents: number;
+  remainingCents: number;
+  nonRefundable: boolean;
+  createdAt: Date;
+}
+
+/** Bounded like every other collector's worst case; a person's legs are few. */
+const WALLET_EXPORT_LIMIT = 10_000;
+
+/**
+ * The ORGS the subject OWNS (X-2). Membership in orgs owned by OTHERS is
+ * carried by the orgMembership category; owning one is a different
+ * relationship and a different row (`organizations.ownerId`).
+ */
+export async function collectUserOrganizations(database: DB, userId: string): Promise<UserOrganizationExport[]> {
+  return database
+    .select({
+      id: organizations.id,
+      name: organizations.name,
+      slug: organizations.slug,
+      createdAt: organizations.createdAt,
+    })
+    .from(organizations)
+    .where(eq(organizations.ownerId, userId));
+}
+
+/**
+ * The subject's org life (X-2): their memberships with their seat allowances,
+ * their departures, their join requests, their guest holds.
+ *
+ * Every table here is read through the subject's OWN row — `org_members.userId`,
+ * `org_member_departures.userId`, `drive_join_requests.userId`,
+ * `org_guest_holds.userId` (or a hold keyed on their email for an invitation
+ * sent before they had linked the account). Another member's rows never enter:
+ * the org's roster is the org's data, disclosed to each member in their own
+ * export.
+ */
+export async function collectUserOrgMembership(database: DB, userId: string): Promise<UserOrgMembershipExportFile> {
+  const membershipRows = await database
+    .select({
+      orgId: orgMembers.orgId,
+      orgName: organizations.name,
+      role: orgMembers.role,
+      joinedAt: orgMembers.joinedAt,
+    })
+    .from(orgMembers)
+    .innerJoin(organizations, eq(orgMembers.orgId, organizations.id))
+    .where(eq(orgMembers.userId, userId));
+
+  // The seat allowance is the consumer cap the org pool holds for this person
+  // (WAL-7): one row per (pool, consumer), read off the pools of the orgs the
+  // subject belongs to. This is the ONLY piece of wallet state exported from
+  // an org wallet: the pool's balance and ledger are the org's (SPEND-9/D18).
+  const orgIds = membershipRows.map((row) => row.orgId);
+  const allowances = orgIds.length === 0
+    ? new Map<string, number>()
+    : new Map(
+        (
+          await database
+            .select({ orgId: wallets.orgId, monthlyCapCents: walletConsumerCaps.monthlyCapCents })
+            .from(walletConsumerCaps)
+            .innerJoin(wallets, eq(walletConsumerCaps.walletId, wallets.id))
+            .where(and(
+              eq(walletConsumerCaps.consumerKey, `user:${userId}`),
+              inArray(wallets.orgId, orgIds),
+            ))
+        ).filter((row): row is { orgId: string; monthlyCapCents: number } => row.monthlyCapCents !== null)
+          .map((row) => [row.orgId as string, row.monthlyCapCents]),
+      );
+
+  const memberships: UserOrgMembershipExport[] = membershipRows.map((row) => ({
+    ...row,
+    seatAllowanceCents: allowances.get(row.orgId) ?? null,
+  }));
+
+  const departures: UserOrgDepartureExport[] = await database
+    .select({
+      orgId: orgMemberDepartures.orgId,
+      orgName: organizations.name,
+      reason: orgMemberDepartures.reason,
+      departedAt: orgMemberDepartures.departedAt,
+    })
+    .from(orgMemberDepartures)
+    .innerJoin(organizations, eq(orgMemberDepartures.orgId, organizations.id))
+    .where(eq(orgMemberDepartures.userId, userId));
+
+  // The request's drive name is joined in (left, so a deleted drive cannot
+  // drop the row): the subject asked to join that drive BY NAME.
+  const joinRequests: UserOrgDriveJoinRequestExport[] = await database
+    .select({
+      id: driveJoinRequests.id,
+      driveId: driveJoinRequests.driveId,
+      driveName: drives.name,
+      status: driveJoinRequests.status,
+      message: driveJoinRequests.message,
+      requestedAt: driveJoinRequests.requestedAt,
+      decidedAt: driveJoinRequests.decidedAt,
+    })
+    .from(driveJoinRequests)
+    .leftJoin(drives, eq(driveJoinRequests.driveId, drives.id))
+    .where(eq(driveJoinRequests.userId, userId));
+
+  // A hold names the subject either by id or — for an emailed invitation that
+  // predates their account — by address. The email comes off the subject's own
+  // row, never from the hold.
+  const [subject] = await database
+    .select({ email: users.email })
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1);
+  const holds: UserOrgGuestHoldExport[] = await database
+    .select({
+      id: orgGuestHolds.id,
+      orgId: orgGuestHolds.orgId,
+      driveId: orgGuestHolds.driveId,
+      state: orgGuestHolds.state,
+      origin: orgGuestHolds.origin,
+      request: orgGuestHolds.request,
+      parked: orgGuestHolds.parked,
+      createdAt: orgGuestHolds.createdAt,
+    })
+    .from(orgGuestHolds)
+    .where(subject
+      ? or(eq(orgGuestHolds.userId, userId), sql`lower(${orgGuestHolds.email}) = lower(${subject.email})`)
+      : eq(orgGuestHolds.userId, userId));
+
+  return { memberships, departures, joinRequests, guestHolds: holds };
+}
+
+/**
+ * The subject's WALLET (X-2): their personal root wallet, every funding leg
+ * THEY funded, and their per-drive spend switches.
+ *
+ * The SPEND-9/D18 boundary, stated once: this collector answers "what is
+ * mine and what did I give", never "what does everyone else have". Legs are
+ * read on `funderUserId`, so another member's donation to the same drive is
+ * as invisible here as their balance; an org pool contributes only the seat
+ * allowance carried beside the membership in `orgMembership`, never its row.
+ * A deleted drive's name reads as null rather than dropping the leg — money
+ * movement outlives the container it moved into.
+ */
+export async function collectUserWallet(database: DB, userId: string): Promise<UserWalletExport> {
+  const walletRows = await database
+    .select({
+      id: wallets.id,
+      monthlyRemainingCents: wallets.monthlyRemainingCents,
+      monthlyAllowanceCents: wallets.monthlyAllowanceCents,
+      spentCents: wallets.spentCents,
+      topupRemainingCents: wallets.topupRemainingCents,
+      debtCents: wallets.debtCents,
+      status: wallets.status,
+      fallbackRule: wallets.fallbackRule,
+      defaultSpendSource: wallets.defaultSpendSource,
+      alwaysOwnCredits: wallets.alwaysOwnCredits,
+      monthlyPeriodStart: wallets.monthlyPeriodStart,
+      monthlyPeriodEnd: wallets.monthlyPeriodEnd,
+      createdAt: wallets.createdAt,
+    })
+    .from(wallets)
+    // The personal root wallet predicate, not a bare userId match: a drive
+    // wallet the subject owns is that drive's budget, not their balance.
+    .where(and(
+      eq(wallets.userId, userId),
+      isNull(wallets.subjectType),
+      isNull(wallets.parentWalletId),
+    ));
+
+  const legRows = await database
+    .select({
+      id: walletFundingLegs.id,
+      walletId: walletFundingLegs.walletId,
+      walletOwnerType: wallets.ownerType,
+      walletSubjectType: wallets.subjectType,
+      walletSubjectDriveName: drives.name,
+      funderKind: walletFundingLegs.funderKind,
+      originalCents: walletFundingLegs.originalCents,
+      remainingCents: walletFundingLegs.remainingCents,
+      nonRefundable: walletFundingLegs.nonRefundable,
+      createdAt: walletFundingLegs.createdAt,
+    })
+    .from(walletFundingLegs)
+    .innerJoin(wallets, eq(walletFundingLegs.walletId, wallets.id))
+    // `wallets.subjectId` is a soft link with no FK; the name join is a
+    // convenience left join and a missing drive row reads as null.
+    .leftJoin(drives, eq(drives.id, wallets.subjectId))
+    .where(eq(walletFundingLegs.funderUserId, userId))
+    .limit(WALLET_EXPORT_LIMIT);
+
+  const fundingLegs: UserFundingLegExport[] = legRows.map((row) => ({
+    id: row.id,
+    walletId: row.walletId,
+    walletOwnerType: row.walletOwnerType,
+    walletSubjectType: row.walletSubjectType,
+    walletSubjectDriveName: row.walletSubjectDriveName,
+    funderKind: row.funderKind,
+    originalCents: row.originalCents,
+    remainingCents: row.remainingCents,
+    nonRefundable: row.nonRefundable,
+    createdAt: row.createdAt,
+  }));
+
+  const spendOverrides: { driveId: string; createdAt: Date }[] = await database
+    .select({ driveId: driveSpendOverrides.driveId, createdAt: driveSpendOverrides.createdAt })
+    .from(driveSpendOverrides)
+    .where(eq(driveSpendOverrides.userId, userId));
+
+  return { wallet: walletRows[0] ?? null, fundingLegs, spendOverrides };
+}
+
 export async function collectAllUserData(database: DB, userId: string): Promise<AllUserData | null> {
   const profile = await collectUserProfile(database, userId);
   if (!profile) return null;
@@ -1738,7 +2113,7 @@ export async function collectAllUserData(database: DB, userId: string): Promise<
   // Positional: this destructuring order must exactly match the Promise.all array
   // order below (each collector returns a differently-shaped array, so TypeScript
   // cannot catch a reorder/insert mismatch here).
-  const [userPages, userSheets, userMessages, userFiles, activity, userSystemLogs, userApiMetrics, userErrorLogs, aiUsage, tasks, userSessions, userNotifications, userDisplayPreferences, userSettings, userPersonalizationData, userPersonalizationCandidates, userAgentWorkspaces, userAgentAccounts, userStreamState, userContentTags, userLocalEnvironments] = await Promise.all([
+  const [userPages, userSheets, userMessages, userFiles, activity, userSystemLogs, userApiMetrics, userErrorLogs, aiUsage, tasks, userSessions, userNotifications, userDisplayPreferences, userSettings, userPersonalizationData, userPersonalizationCandidates, userAgentWorkspaces, userAgentAccounts, userStreamState, userContentTags, userLocalEnvironments, userOrganizations, userOrgMembership, userWallet] = await Promise.all([
     collectUserPages(database, userId, driveIds),
     collectUserSheets(database, userId, driveIds),
     collectUserMessages(database, userId),
@@ -1760,6 +2135,9 @@ export async function collectAllUserData(database: DB, userId: string): Promise<
     collectUserStreamState(database, userId),
     collectUserContentTags(database, userId, driveIds),
     collectUserLocalEnvironments(database, userId),
+    collectUserOrganizations(database, userId),
+    collectUserOrgMembership(database, userId),
+    collectUserWallet(database, userId),
   ]);
 
   return {
@@ -1786,5 +2164,8 @@ export async function collectAllUserData(database: DB, userId: string): Promise<
     streamState: userStreamState,
     contentTags: userContentTags,
     localEnvironments: userLocalEnvironments,
+    organizations: userOrganizations,
+    orgMembership: userOrgMembership,
+    wallet: userWallet,
   };
 }

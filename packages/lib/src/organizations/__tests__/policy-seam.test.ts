@@ -53,6 +53,10 @@ function sourceFiles(dir: string, out: string[] = []): string[] {
 const ORGANIZATIONS_IMPORTERS = [
   'apps/web/src/lib/org-billing/org-subscription.ts',
   'packages/lib/src/billing/wallet-funding-shell.ts',
+  // The Art 15 export reads the orgs the subject OWNS (Spec X-2): a read-only
+  // select of identity columns for the subject's own bundle, never a policy
+  // decision.
+  'packages/lib/src/compliance/export/gdpr-export.ts',
   'packages/lib/src/organizations/deletion.ts',
   'packages/lib/src/organizations/domains.ts',
   'packages/lib/src/organizations/invitations.ts',

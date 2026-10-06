@@ -130,6 +130,25 @@ export const EXPORTED_TABLES: Readonly<Record<string, ExportCategory>> = {
   // belongs to the drive, the act of applying it belongs to the person — so the
   // collector joins the name in rather than exporting an opaque id.
   content_tags: 'contentTags',
+  // Organizations & Wallets (Spec X-2). The subject's org life and their own
+  // money, never another person's: `organizations` carries the orgs they OWN;
+  // `org_members` / `org_member_departures` / `drive_join_requests` /
+  // `org_guest_holds` are read on the subject's own rows (their seat in an
+  // org, that they left one, that they asked to join a drive, a hold parked
+  // their access); `wallets` carries their personal root balance;
+  // `wallet_funding_legs` and `drive_spend_overrides` are read on
+  // `funderUserId`/`userId`, so a leg or switch of theirs is carried and
+  // another person's never is (SPEND-9/D18). The org POOL's balance and
+  // ledger stay the org's — a member's export carries their seat allowance,
+  // carried beside the membership in `orgMembership`.
+  organizations: 'organizations',
+  org_members: 'orgMembership',
+  org_member_departures: 'orgMembership',
+  drive_join_requests: 'orgMembership',
+  org_guest_holds: 'orgMembership',
+  wallets: 'wallet',
+  wallet_funding_legs: 'wallet',
+  drive_spend_overrides: 'wallet',
 };
 
 /**
@@ -349,26 +368,32 @@ export const EXCLUDED_TABLES: Readonly<Record<string, string>> = {
     // the org and naming no person. The same answer as `subscriptions` — a billing
     // record whose Stripe-side copy is the org's to obtain from Stripe.
     'org_subscriptions',
-    // `wallets` is the table credit_balances became (X-5): the personal root wallet is
-    // the same billing row it always was, now alongside org and drive wallets.
-    'wallets',
+    // X-5 made this the single balance table. The subject's PERSONAL ROOT wallet
+    // is their money and is exported (the `wallet` category). What stays out is
+    // the rest of the table: an ORG pool's row is the org's money (SPEND-9/D18 —
+    // a member's export carries their seat allowance, with their membership),
+    // and a drive/agent wallet's row is the drive's budget, disclosed to a
+    // consumer only as "can I spend" at call time, not as a copy.
     'wallet_consumer_caps',
-    // Funds moved into a drive/agent wallet (0318): the wallet's own record, beside the
-    // ledger rows below. Whether a donor's legs join the export is X-2's decision.
-    'wallet_funding_legs',
+    // The per-consumer cap rows on org pools ARE disclosed — as the seat
+    // allowance beside the membership (the `orgMembership` category). The rest
+    // of the table is the funder's configuration of their own wallet: a cap
+    // another funder set, or one the subject set FOR someone else, is that
+    // relationship's record, not the subject's.
+    // Funds moved into a drive/agent wallet (0318): legs the SUBJECT funded are
+    // exported under `wallet` (their donations and their top-ups — the money is
+    // theirs and, on a donation, is now the drive's). An org pool's refill legs
+    // name the ORG as funder and stay the org's record.
+    'automation_skip_notices',
     // When a drive's lead was last told an automation skipped for want of wallet funds
     // (0319, SPEND-6): a per-drive throttle stamp. The notice itself is exported under
     // `notifications`.
-    'automation_skip_notices',
+    'wallet_debt_notices',
     // When a debt-carrying wallet's funder was last told it is over (0329, WAL-6e): a per-wallet
     // throttle stamp. The notice itself is exported under `notifications`.
-    'wallet_debt_notices',
+    'wallet_cap_alerts',
     // Which WAL-7 cap alert (80% / 100%) was sent for a consumer's window this period (0332): a
     // once-per-threshold throttle stamp. The alert itself is exported under `notifications`.
-    'wallet_cap_alerts',
-    // SPEND-5 "Always my own credits" in one drive (0322): a per-drive switch beside the
-    // global one on the personal root wallet (`wallets` above); decided with the wallets under X-2.
-    'drive_spend_overrides',
     'credit_holds',
     'credit_ledger',
   ),
@@ -446,26 +471,17 @@ export const EXCLUDED_TABLES: Readonly<Record<string, string>> = {
     'Binding rows between mirrored calendar events and drives — meaningless without the mirrored events, which are excluded above.',
   event_attendees:
     'Attendee list of a mirrored calendar event: it is a list of OTHER PEOPLE, which Art 15(4) puts outside the subject\'s access right.',
-  // Organizations & Wallets (Wave B1 schema). `organizations` and `org_members` are
-  // TEMPORARY exclusions under Spec X-2: the Phase 6 GDPR/backups leaf
-  // (yfmlkdchehmberwthwu6g7vt) replaces them with collectors before Wave F.
-  // `org_invitations` is a permanent exclusion on the Art 15(4) boundary.
-  organizations:
-    'Temporary under Spec X-2: removed by the Phase 6 GDPR/backups leaf yfmlkdchehmberwthwu6g7vt before Wave F, which adds the collector for organizations the subject owns; the lane that introduces the ORGS_ENABLED code constant adds a test that fails while this exclusion exists.',
-  org_members:
-    'Temporary under Spec X-2: removed by the Phase 6 GDPR/backups leaf yfmlkdchehmberwthwu6g7vt before Wave F, which adds the collector for the subject\'s own org memberships; the lane that introduces the ORGS_ENABLED code constant adds a test that fails while this exclusion exists.',
+  // Organizations & Wallets (Wave B1 schema). `organizations`, `org_members`,
+  // `org_member_departures`, `drive_join_requests` and `org_guest_holds` moved
+  // to EXPORTED_TABLES with the Phase 6 GDPR leaf (Spec X-2): the subject's own
+  // org rows are their data. `org_invitations` stays a permanent exclusion on
+  // the Art 15(4) boundary.
   org_invitations:
     'An org invitation naming the inviter and the invited address; the counterparty is another person, which is the same Art 15(4) boundary that excludes pending_invites. The invitation carries no content of the subject\'s own beyond an address and a role offered to it.',
-  drive_join_requests:
-    'Temporary under Spec X-2: the subject\'s own requests to join Restricted org drives (D-OW-22), with an optional note they wrote; removed by the Phase 6 GDPR/backups leaf yfmlkdchehmberwthwu6g7vt before Wave F, which adds the collector beside the one for org_members; the ORGS_ENABLED export precondition fails while this exclusion exists.',
   org_domains:
     'An org\'s domain claim (SEC-1): the domain, its public DNS challenge and the hash of a mailed proof link. Organization configuration, not the subject\'s data; the one personal field is createdBy, an attribution the org\'s audit trail also carries. Account deletion nulls it (ON DELETE SET NULL).',
   org_departure_suppressions:
     'PERMANENT, deliberate post-erasure suppression record [D-OW-27], like a do-not-contact list: when a member who left or was removed from an org deletes their account, the org keeps only a KEYED blind index (HMAC-SHA256 under the server index key) of their normalized email, so a new account with that address is not auto-joined back by a verified domain (SEC-1). It holds no user id and no recoverable email, so it cannot be tied to a data subject or exported to one; account deletion WRITES it (the retained minimum) rather than removing it. It goes with the org, and an org Admin can clear it by typing the address.',
-  org_member_departures:
-    'Temporary under Spec X-2: the record that the subject was once a member of an org and left or was removed (with how), kept so a verified email domain never auto-joins them back (SEC-1); removed by the Phase 6 GDPR/backups leaf yfmlkdchehmberwthwu6g7vt before Wave F, which adds the collector beside the one for org_members. Account deletion already removes it: userId cascades.',
-  org_guest_holds:
-    'Temporary under Spec X-2: the subject\'s own queued request to join an org drive as a guest, or the snapshot of the access an org policy parked (their own member row and page grants), plus an invitee address; removed by the Phase 6 GDPR/backups leaf yfmlkdchehmberwthwu6g7vt before Wave F, which adds the collector beside the one for org_members. Account deletion already removes it: userId cascades.',
 };
 
 /** Every table the registry has a decision for. */
