@@ -14,8 +14,6 @@ import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
 import { slugify } from '../utils/utils';
 import { customRoleBelongsToDrive, getMemberCustomRoleId, resolveDriveWideCanEdit } from '../permissions/membership-queries';
 import { isGuestRole } from '../permissions/guest-role';
-import { grantImagoAgents, revokeImagoAgentGrants } from '../agents/grant-imago-agents';
-import { imagoDriveAccess } from '@pagespace/db/schema/imago-drive-access';
 import { homeDriveActionError, isHomeDrive } from './drive-guards';
 
 // ============================================================================
@@ -221,9 +219,6 @@ export async function createDrive(
     await allocatePublishSubdomain(created.id, slug, tx);
     return created;
   });
-
-  // After commit: addAgentToDrive reads the drive on its own connection.
-  await grantImagoAgents(userId, { driveIds: [newDrive.id] });
 
   return {
     ...newDrive,
@@ -703,32 +698,26 @@ export async function allocatePublishSubdomain(
 }
 
 /**
- * Hand a drive to a new owner. In the same transaction the previous owner's
- * Imago agents lose the membership their ownership granted (DEC-2): which
- * agents reach the drive is now the new owner's decision, and the new owner's
- * own Imago agents are not granted here either. Explicit grants of other
- * agents stay for the new owner to review. Returns the agentPageIds revoked.
+ * Hand a drive to a new owner.
  *
- * The stored Imago choice (`imago_drive_access`) follows the same rule, so no
- * later grant path undoes it: the previous owner's choice is dropped (Imago is
- * off for them there unless they turn it on again as an admin), and the new
- * owner's is recorded as off unless they had made one — ownership alone would
- * otherwise turn it on at their next agent recreation.
+ * Imago needs nothing here (IMG-10.10): it acts with each user's own reach,
+ * and the per-drive setting is each user's own choice, so both users keep
+ * theirs — the previous owner's Imago follows their remaining access, the new
+ * owner's their new one.
  *
  * Every ownership change goes through here — the transfer route and the drive
  * rollback/redo of an `ownership_transfer` — so pass `executor` to run inside a
  * caller's transaction (it becomes a savepoint there). Throws, changing
  * nothing, when `fromUserId` does not own the drive or the drive is a Home
- * drive: Home stays bound to its owner, and only that refusal keeps the
- * agents' native Home membership out of the revoke.
+ * drive: Home stays bound to its owner.
  */
 export async function transferDriveOwnership(
   driveId: string,
   fromUserId: string,
   toUserId: string,
   executor: DbOrTx | typeof db = db,
-): Promise<string[]> {
-  return executor.transaction(async (tx) => {
+): Promise<void> {
+  await executor.transaction(async (tx) => {
     const [drive] = await tx
       .select({ kind: drives.kind })
       .from(drives)
@@ -742,14 +731,5 @@ export async function transferDriveOwnership(
       .where(and(eq(drives.id, driveId), eq(drives.ownerId, fromUserId), eq(drives.kind, 'STANDARD')))
       .returning({ id: drives.id });
     if (updated.length === 0) throw new Error(`Drive ${driveId} is not owned by ${fromUserId}`);
-    await tx
-      .delete(imagoDriveAccess)
-      .where(and(eq(imagoDriveAccess.userId, fromUserId), eq(imagoDriveAccess.driveId, driveId)));
-    // Never overwrite a choice the new owner made, even one committing now.
-    await tx
-      .insert(imagoDriveAccess)
-      .values({ userId: toUserId, driveId, enabled: false })
-      .onConflictDoNothing({ target: [imagoDriveAccess.userId, imagoDriveAccess.driveId] });
-    return revokeImagoAgentGrants(tx, fromUserId, driveId);
   });
 }

@@ -119,9 +119,12 @@ describe('provisionHomeDriveIfNeeded', () => {
     vi.mocked(provisionImagoAgents).mockResolvedValue({
       homeDriveId: 'drive',
       folderId: 'imago-folder',
-      agents: { imago: 'a1', 'imago-planner': 'a2', 'imago-researcher': 'a3' },
+      agents: { imago: 'a1' },
       created: [],
       replacedPageIds: [],
+      retiredPageIds: [],
+      reconciledPageIds: [],
+      removedGrants: 0,
     });
   });
 

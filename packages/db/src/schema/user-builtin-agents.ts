@@ -7,8 +7,9 @@ import { createId } from '@paralleldrive/cuid2';
 /**
  * Per-user pointers to the built-in Imago agents.
  *
- * Each built-in agent (`imago`, `imago-planner`, `imago-researcher` — see
- * `@pagespace/lib/agents/builtin-agents`) is an ordinary AI_CHAT page in the
+ * Each built-in agent (`imago` since IMG-10.10, which retired `imago-planner`
+ * and `imago-researcher` — see `@pagespace/lib/agents/builtin-agents`) is an
+ * ordinary AI_CHAT page in the
  * user's Home drive; this table records which page is which, the same way
  * `user_personalization` points at the memory pages. `key` is deliberately
  * plain text rather than an enum or CHECK: the registry is code, and adding an

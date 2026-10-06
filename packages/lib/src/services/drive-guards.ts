@@ -55,7 +55,7 @@ const HOME_DRIVE_ACTION_ERRORS: Record<HomeDriveAction, string> = {
   // defense in depth on the ownership-transfer path.
   transfer: 'Your Home drive cannot be transferred to another user.',
   // Imago agents live in Home: their access there is native, not a toggle.
-  'imago-access': 'Your Imago agents live in your Home drive, so their access to it cannot be changed.',
+  'imago-access': 'Imago lives in your Home drive, so it cannot be kept out of it.',
 };
 
 /**

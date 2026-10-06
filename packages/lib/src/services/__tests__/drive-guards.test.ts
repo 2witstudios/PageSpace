@@ -67,7 +67,7 @@ describe('homeDriveActionError', () => {
     share: 'Your Home drive is private and cannot be shared.',
     publish: 'Pages in your Home drive cannot be published.',
     transfer: 'Your Home drive cannot be transferred to another user.',
-    'imago-access': 'Your Imago agents live in your Home drive, so their access to it cannot be changed.',
+    'imago-access': 'Imago lives in your Home drive, so it cannot be kept out of it.',
   };
 
   it.each(actions)('returns the canonical message for %s on a Home drive', (action) => {

@@ -1,18 +1,24 @@
 /**
  * Imago agent provisioning.
  *
- * Puts the registry's agents (`builtin-agents.ts`) into the user's Home drive
- * as ordinary AI_CHAT pages under an `Imago` folder, and records which page is
- * which key in `user_builtin_agents`. Safe to call on every sign-in: a key
- * whose page is alive is left alone; a key whose page was deleted (the pointer
- * cascaded away) or trashed gets a fresh page and its pointer repointed.
+ * Puts the registry's agent (`builtin-agents.ts` — one, `imago`, since owner
+ * decision 2026-10-06) into the user's Home drive as an ordinary AI_CHAT page
+ * under an `Imago` folder, and records which page is which key in
+ * `user_builtin_agents`. Safe to call on every sign-in: a key whose page is
+ * alive is left alone; a key whose page was deleted (the pointer cascaded
+ * away) or trashed gets a fresh page and its pointer repointed.
+ *
+ * Every call also brings an existing user up to the current model, idempotently
+ * (IMG-10.10): the live Imago page acts with the user's reach
+ * (`userScopedAccess`), the retired Planner and Researcher pages are trashed
+ * with their pointers dropped, and the drive grants the earlier model made for
+ * any of the user's Imago pages are removed (`removeImagoDriveGrants`).
  *
  * Pages are created with the same invariants as the page service's
  * `createPage` (apps/web `pageService.createPage`): revision 0 with a state
  * hash, `createdBy`, the user's provider/model pair (else the product
- * default), the agent's MEMBER membership in its own drive — without which the
- * agent's tools cannot reach the drive it lives in — and a `create` activity
- * entry. That service lives in apps/web and opens its own transaction, so it
+ * default), the agent's MEMBER membership in its own drive (the native
+ * membership every agent page has) and a `create` activity entry. That service lives in apps/web and opens its own transaction, so it
  * cannot run inside the provisioning transaction that holds the user-row lock;
  * this module mirrors its insert path instead. Page content is the AI_CHAT
  * default (no messages), so no page version is written, as with the other
@@ -31,7 +37,7 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { and, desc, eq, inArray, isNull } from '@pagespace/db/operators';
+import { and, desc, eq, inArray, isNull, sql } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { driveAgentMembers } from '@pagespace/db/schema/members';
@@ -50,8 +56,13 @@ import {
 import { computePageStateHash } from '../services/page-version-service';
 import { hashWithPrefix } from '../utils/hash-utils';
 import { PageType } from '../utils/enums';
-import { BUILTIN_AGENTS, type BuiltinAgentDefinition, type BuiltinAgentKey } from './builtin-agents';
-import { grantImagoAgents, lockImagoUser, revokeCrossDriveMemberships } from './grant-imago-agents';
+import {
+  BUILTIN_AGENTS,
+  RETIRED_BUILTIN_AGENT_KEYS,
+  type BuiltinAgentDefinition,
+  type BuiltinAgentKey,
+} from './builtin-agents';
+import { lockImagoUser, removeImagoDriveGrants } from './imago-reach';
 
 export const IMAGO_FOLDER_TITLE = 'Imago';
 
@@ -67,12 +78,14 @@ export interface ProvisionImagoAgentsResult {
   agents: Record<BuiltinAgentKey, string>;
   /** Keys whose page this call created (empty when everything was already there). */
   created: BuiltinAgentKey[];
-  /**
-   * The trashed pages the created ones replace (their pointers were repointed).
-   * They lose every membership outside Home here, so restoring one from the
-   * trash cannot bring back access to a drive (IMG-4.6a).
-   */
+  /** The trashed pages the created ones replace (their pointers were repointed). */
   replacedPageIds: string[];
+  /** Retired agents' pages (Planner, Researcher) this call trashed; their pointers are gone. */
+  retiredPageIds: string[];
+  /** Live agent pages this call switched to the user's reach (`userScopedAccess`). */
+  reconciledPageIds: string[];
+  /** Drive grants of the user's Imago pages this call removed. */
+  removedGrants: number;
 }
 
 export interface ProvisionImagoAgentsInTransactionResult extends ProvisionImagoAgentsResult {
@@ -105,7 +118,6 @@ export async function provisionImagoAgents(
     return { ...provisioned, deferredTriggers: await writeImagoAgentActivity(tx, pendingActivity) };
   });
   for (const trigger of deferredTriggers) trigger();
-  await grantCreatedImagoAgents(userId, result);
   return result;
 }
 
@@ -121,10 +133,13 @@ export async function provisionImagoAgentsInTransaction(
 ): Promise<ProvisionImagoAgentsInTransactionResult> {
   await lockImagoUser(tx, userId);
 
-  const pointers = await tx
+  const allPointers = await tx
     .select({ key: userBuiltinAgents.key, pageId: userBuiltinAgents.pageId })
     .from(userBuiltinAgents)
     .where(eq(userBuiltinAgents.userId, userId));
+  const retiredKeys: readonly string[] = RETIRED_BUILTIN_AGENT_KEYS;
+  const retiredPointers = allPointers.filter((pointer) => retiredKeys.includes(pointer.key));
+  const pointers = allPointers.filter((pointer) => !retiredKeys.includes(pointer.key));
 
   const pointerIds = pointers.map((pointer) => pointer.pageId);
   const livePages = pointerIds.length === 0
@@ -150,6 +165,29 @@ export async function provisionImagoAgentsInTransaction(
   }
 
   const creator = new PageCreator(tx, userId, homeDriveId);
+
+  // Bring the live agents to the registry's reach: an agent provisioned before
+  // IMG-10.10 still acts through drive memberships.
+  const reconciledPageIds: string[] = [];
+  for (const definition of BUILTIN_AGENTS) {
+    const pageId = agents[definition.key];
+    if (pageId && await creator.setUserScopedAccess(pageId, definition.userScopedAccess)) {
+      reconciledPageIds.push(pageId);
+    }
+  }
+
+  // The retired agents: trash what is still live (with everything under it)
+  // and drop the pointers, so nothing reads them as built-in agents again.
+  const retiredPageIds: string[] = [];
+  for (const pointer of retiredPointers) retiredPageIds.push(...await creator.trashSubtree(pointer.pageId));
+  if (retiredPointers.length > 0) {
+    await tx
+      .delete(userBuiltinAgents)
+      .where(and(
+        eq(userBuiltinAgents.userId, userId),
+        inArray(userBuiltinAgents.key, retiredPointers.map((pointer) => pointer.key)),
+      ));
+  }
   // The folder is created only to hold a page being created: a user who moved
   // their agents out and deleted it does not get it back on every sign-in.
   const existingFolderId = await findImagoFolder(tx, homeDriveId);
@@ -174,8 +212,12 @@ export async function provisionImagoAgentsInTransaction(
       });
     agents[definition.key] = pageId;
   }
-  // The pointer no longer names them, so the toggle could not reach them.
-  await revokeCrossDriveMemberships(tx, replacedPageIds);
+  // Imago acts with the user's reach, so a drive grant is moot — and one left
+  // on a page no pointer names (replaced or retired) is a way into a drive.
+  const removedGrants = await removeImagoDriveGrants(tx, [
+    ...allPointers.map((pointer) => pointer.pageId),
+    ...Object.values(agents),
+  ]);
 
   return {
     homeDriveId,
@@ -183,6 +225,9 @@ export async function provisionImagoAgentsInTransaction(
     agents: agents as Record<BuiltinAgentKey, string>,
     created: missing.map((definition) => definition.key),
     replacedPageIds,
+    retiredPageIds,
+    reconciledPageIds,
+    removedGrants,
     pendingActivity: creator.pendingActivity,
   };
 }
@@ -202,21 +247,6 @@ export async function writeImagoAgentActivity(
     if (trigger) triggers.push(trigger);
   }
   return triggers;
-}
-
-/**
- * After the provisioning transaction commits — never while it holds the
- * user-row lock — grant the agents this call created wherever Imago is on for
- * the user (`grantImagoAgents`, which reads the stored choice). Agents that
- * already existed are left alone, so a grant removed by other means is not
- * re-added on the next sign-in.
- */
-export async function grantCreatedImagoAgents(
-  userId: string,
-  result: Pick<ProvisionImagoAgentsResult, 'agents' | 'created'>,
-): Promise<void> {
-  if (result.created.length === 0) return;
-  await grantImagoAgents(userId, { agentPageIds: result.created.map((key) => result.agents[key]) });
 }
 
 /** The live root `Imago` folder in Home, if there is one. */
@@ -292,6 +322,7 @@ class PageCreator {
       aiModel: model?.aiModel,
       systemPrompt: agent?.systemPrompt,
       enabledTools,
+      ...(agent && { userScopedAccess: agent.userScopedAccess }),
     });
 
     const now = new Date();
@@ -317,6 +348,7 @@ class PageCreator {
         agentDefinition: agent.agentDefinition,
         enabledTools,
         includePageTree: agent.includePageTree,
+        userScopedAccess: agent.userScopedAccess,
       }),
     });
 
@@ -351,6 +383,105 @@ class PageCreator {
     });
 
     return id;
+  }
+
+  /**
+   * Set `userScopedAccess` on a live agent page, the way the page service's
+   * mutation path does (revision + 1, state hash, an `update` activity entry).
+   * Returns whether the page changed.
+   */
+  async setUserScopedAccess(pageId: string, userScopedAccess: boolean): Promise<boolean> {
+    const [page] = await this.tx.select().from(pages).where(eq(pages.id, pageId)).limit(1);
+    if (!page || page.userScopedAccess === userScopedAccess) return false;
+    await this.mutate(page, 'update', { userScopedAccess });
+    return true;
+  }
+
+  /**
+   * Trash `rootId` and every live page under it, deepest first, the way the
+   * page service's trash does per page. Returns the ids trashed (none when the
+   * root is already trashed or gone).
+   */
+  async trashSubtree(rootId: string): Promise<string[]> {
+    const { rows } = await this.tx.execute<{ id: string; depth: number }>(sql`
+      WITH RECURSIVE subtree AS (
+        SELECT ${pages.id} AS id, 0 AS depth FROM ${pages}
+        WHERE ${pages.id} = ${rootId} AND ${pages.isTrashed} = false
+        UNION ALL
+        SELECT child."id", subtree.depth + 1 FROM "pages" child
+        INNER JOIN subtree ON child."parentId" = subtree.id
+        WHERE child."isTrashed" = false AND subtree.depth < 64
+      )
+      SELECT id, depth FROM subtree ORDER BY depth DESC`);
+    const trashed: string[] = [];
+    for (const { id } of rows) {
+      const [page] = await this.tx.select().from(pages).where(eq(pages.id, id)).limit(1);
+      if (!page) continue;
+      await this.mutate(page, 'trash', { isTrashed: true, trashedAt: new Date() });
+      trashed.push(id);
+    }
+    return trashed;
+  }
+
+  private async mutate(
+    page: typeof pages.$inferSelect,
+    operation: 'update' | 'trash',
+    updates: Partial<Pick<typeof pages.$inferSelect, 'userScopedAccess' | 'isTrashed' | 'trashedAt'>>,
+  ): Promise<void> {
+    const content = page.content ?? '';
+    const contentFormat = detectPageContentFormat(content);
+    const contentRef = hashWithPrefix(contentFormat, content);
+    const stateOf = (row: typeof pages.$inferSelect) => computePageStateHash({
+      title: row.title,
+      contentRef,
+      parentId: row.parentId,
+      position: row.position,
+      isTrashed: row.isTrashed,
+      type: row.type,
+      driveId: row.driveId,
+      aiProvider: row.aiProvider,
+      aiModel: row.aiModel,
+      systemPrompt: row.systemPrompt,
+      enabledTools: row.enabledTools,
+      isPaginated: row.isPaginated,
+      includeDrivePrompt: row.includeDrivePrompt,
+      agentDefinition: row.agentDefinition,
+      visibleToGlobalAssistant: row.visibleToGlobalAssistant,
+      includePageTree: row.includePageTree,
+      pageTreeScope: row.pageTreeScope,
+      toolExposureMode: row.toolExposureMode,
+      userScopedAccess: row.userScopedAccess,
+    });
+    const stateHashBefore = stateOf(page);
+    const stateHashAfter = stateOf({ ...page, ...updates });
+    const revision = page.revision + 1;
+    await this.tx
+      .update(pages)
+      .set({ ...updates, revision, stateHash: stateHashAfter, updatedAt: new Date() })
+      .where(eq(pages.id, page.id));
+
+    const fields = Object.keys(updates) as (keyof typeof updates)[];
+    const actor = await this.resolveActor();
+    this.pendingActivity.push({
+      userId: this.userId,
+      actorEmail: actor.actorEmail,
+      actorDisplayName: actor.actorDisplayName,
+      operation,
+      resourceType: 'page',
+      resourceId: page.id,
+      resourceTitle: page.title,
+      driveId: page.driveId,
+      pageId: page.id,
+      updatedFields: fields,
+      previousValues: Object.fromEntries(fields.map((field) => [field, page[field]])),
+      newValues: Object.fromEntries(fields.map((field) => [field, updates[field]])),
+      streamId: page.id,
+      streamSeq: revision,
+      changeGroupId: this.changeGroupId,
+      changeGroupType: 'system',
+      stateHashBefore,
+      stateHashAfter,
+    });
   }
 
   private resolveActor() {

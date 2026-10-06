@@ -3,13 +3,14 @@ import { getMigrationDb } from '@pagespace/db/db';
 import { users } from '@pagespace/db/schema/auth';
 import { drives } from '@pagespace/db/schema/core';
 import { and, asc, eq, gt, isNull, lt, or, sql } from '@pagespace/db/operators';
-import { BUILTIN_AGENT_KEYS } from '@pagespace/lib/agents/builtin-agents';
+import { BUILTIN_AGENT_KEYS, RETIRED_BUILTIN_AGENT_KEYS } from '@pagespace/lib/agents/builtin-agents';
 import { provisionImagoAgents } from '@pagespace/lib/agents/provision-imago-agents';
 import { provisionHomeDriveIfNeeded } from '@pagespace/lib/onboarding/home-drive';
 
 /**
  * One-shot backfill: give every existing user a Home drive and the Imago
- * agents (IMG-4.3; run in production by IMG-4.4).
+ * agent (IMG-4.3; run in production by IMG-4.4), and bring every existing
+ * user's Imago to the model of IMG-10.10.
  *
  * New and returning users get both from `provisionHomeDriveIfNeeded` at sign-in,
  * but a user who never signs in again would never pass through it. For each
@@ -20,15 +21,21 @@ import { provisionHomeDriveIfNeeded } from '@pagespace/lib/onboarding/home-drive
  *      starter skills and Memory pages exactly as a signing-in user's would
  *      (a user who owns no drive at all also gets the "Getting Started"
  *      folder, as a first sign-in would);
- *   2. then provisions the agents through `provisionImagoAgents`, which
- *      recreates any agent page that was deleted or trashed.
+ *   2. then provisions the agent through `provisionImagoAgents`, which
+ *      recreates an agent page that was deleted or trashed and, in the same
+ *      transaction, switches the live page to the user's reach
+ *      (`userScopedAccess`), trashes the retired Planner and Researcher pages
+ *      and drops their pointers, and removes the drive grants the earlier
+ *      model made for any of the user's Imago pages.
  *
  * Safe to re-run: the work list is re-derived from the database on every run
- * (no Home drive, or fewer live agent pages than the registry defines), and
+ * (no Home drive, fewer live agent pages than the registry defines, or
+ * IMG-10.10 cleanup still to do — see `needsCleanup`), and
  * both provisioners are idempotent. Safe to run beside live sign-ins: both
  * provisioners take the same `FOR UPDATE` lock on the user row that sign-in
  * takes, and the partial unique index on a user's Home drive and the unique
- * (userId, key) pointer index are the backstops. Nothing is ever deleted.
+ * (userId, key) pointer index are the backstops. Nothing is deleted but the
+ * retired pointers and the moot grant rows; retired pages go to the trash.
  *
  * Output names users by id only — never an email or name — and a failure
  * prints only the error's class, SQLSTATE and constraint/table names, never
@@ -52,7 +59,15 @@ export interface BackfillOptions {
   /** Stop after this many users needing work; unset = every user. */
   limit?: number;
   /** Seam for the failure-isolation test; defaults to `provisionImagoAgents`. */
-  provisionAgents?: (userId: string, client: MigrationDb) => Promise<{ created: readonly string[] }>;
+  provisionAgents?: (userId: string, client: MigrationDb) => Promise<ProvisionedAgents>;
+}
+
+/** What the backfill reads from a provisioning call. */
+export interface ProvisionedAgents {
+  created: readonly string[];
+  retiredPageIds?: readonly string[];
+  reconciledPageIds?: readonly string[];
+  removedGrants?: number;
 }
 
 export interface BackfillSummary {
@@ -80,11 +95,17 @@ export interface BackfillSummary {
   usersProvisioned: number;
   /** Agent pages created for the provisioned users (same racing-sign-in caveat). */
   agentPagesCreated: number;
+  /** Retired Planner/Researcher pages trashed (with the pages under them). */
+  retiredPagesTrashed: number;
+  /** Live Imago pages switched to the user's reach. */
+  agentPagesReconciled: number;
+  /** Drive grant rows of Imago pages removed. */
+  grantsRemoved: number;
   failed: number;
   failedUserIds: string[];
   /** After a real run: users still without a Home drive (null on a dry run). */
   remainingMissingHome: number | null;
-  /** After a real run: users still missing an agent (null on a dry run). */
+  /** After a real run: users still missing an agent or cleanup (null on a dry run). */
   remainingMissingAgents: number | null;
 }
 
@@ -110,7 +131,26 @@ async function liveAgentsOf(db: MigrationDb, userId: string): Promise<number> {
   return Number(row?.live ?? 0);
 }
 
-const needsWork = or(isNull(drives.id), lt(liveAgentCount, AGENT_COUNT));
+/**
+ * IMG-10.10 cleanup still to do for the user: a retired agent's pointer, a
+ * live agent page not yet acting with the user's reach, or a drive grant of
+ * any page one of their pointers names (qualified by hand, as above).
+ */
+const needsCleanup = sql<boolean>`EXISTS (
+  SELECT 1 FROM "user_builtin_agents" cu
+  INNER JOIN "pages" cp ON cp."id" = cu."pageId"
+  WHERE cu."userId" = "users"."id"
+    AND (
+      cu."key" IN (${sql.join(RETIRED_BUILTIN_AGENT_KEYS.map((key) => sql`${key}`), sql`, `)})
+      OR (cp."isTrashed" = false AND cp."userScopedAccess" = false)
+      OR EXISTS (
+        SELECT 1 FROM "drive_agent_members" cm
+        WHERE cm."agentPageId" = cu."pageId" AND cm."driveId" <> cp."driveId"
+      )
+    )
+)`;
+
+const needsWork = or(isNull(drives.id), lt(liveAgentCount, AGENT_COUNT), needsCleanup);
 
 const homeJoin = and(eq(drives.ownerId, users.id), eq(drives.kind, 'HOME'));
 
@@ -131,6 +171,9 @@ export async function runBackfill({
     homeDrivesProvisioned: 0,
     usersProvisioned: 0,
     agentPagesCreated: 0,
+    retiredPagesTrashed: 0,
+    agentPagesReconciled: 0,
+    grantsRemoved: 0,
     failed: 0,
     failedUserIds: [],
     remainingMissingHome: null,
@@ -176,7 +219,7 @@ export async function runBackfill({
       summary.agentPagesMissing += missing;
 
       const homeGap = hasHome ? '' : row.ownsAnyDrive ? 'no Home drive, ' : 'owns no drive, ';
-      const gap = `${homeGap}${missing} agent(s) missing`;
+      const gap = `${homeGap}${missing} agent(s) missing${missing === 0 ? ', cleanup due' : ''}`;
       if (dryRun) {
         console.log(`  user ${row.userId}: would provision (${gap})`);
         continue;
@@ -193,11 +236,20 @@ export async function runBackfill({
           summary.homeDrivesProvisioned++;
           createdPages += await liveAgentsOf(db, row.userId);
         }
-        const { created } = await provisionAgents(row.userId, db);
-        createdPages += created.length;
+        const provisioned = await provisionAgents(row.userId, db);
+        createdPages += provisioned.created.length;
+        const retired = provisioned.retiredPageIds?.length ?? 0;
+        const reconciled = provisioned.reconciledPageIds?.length ?? 0;
+        const grants = provisioned.removedGrants ?? 0;
         summary.agentPagesCreated += createdPages;
+        summary.retiredPagesTrashed += retired;
+        summary.agentPagesReconciled += reconciled;
+        summary.grantsRemoved += grants;
         summary.usersProvisioned++;
-        console.log(`  user ${row.userId}: provisioned (${gap}; created ${createdPages} agent page(s))`);
+        console.log(
+          `  user ${row.userId}: provisioned (${gap}; created ${createdPages} agent page(s), ` +
+            `trashed ${retired} retired page(s), reconciled ${reconciled}, removed ${grants} grant(s))`,
+        );
       } catch (error) {
         summary.failed++;
         summary.failedUserIds.push(row.userId);
@@ -239,6 +291,9 @@ function printSummary(summary: BackfillSummary): void {
       `  Home drives provisioned:       ${summary.homeDrivesProvisioned}`,
       `  users provisioned:             ${summary.usersProvisioned}`,
       `  agent pages created:           ${summary.agentPagesCreated}`,
+      `  retired pages trashed:         ${summary.retiredPagesTrashed}`,
+      `  agent pages reconciled:        ${summary.agentPagesReconciled}`,
+      `  grant rows removed:            ${summary.grantsRemoved}`,
       `  failed:                        ${summary.failed}`,
       `  still missing a Home drive:    ${summary.remainingMissingHome}`,
       `  still missing an agent:        ${summary.remainingMissingAgents}`,
