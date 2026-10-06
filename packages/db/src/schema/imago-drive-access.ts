@@ -4,15 +4,14 @@ import { users } from './auth';
 import { drives } from './core';
 
 /**
- * A user's stored Imago access choice for one drive (the per-drive toggle).
+ * A user's stored Imago choice for one drive (the per-drive toggle).
  *
- * Whether a user's Imago agents belong in a drive is the user's decision, and
- * it outlives the agent pages: an agent page can be trashed, emptied from the
- * trash and recreated, so the memberships alone cannot remember it. Every grant
- * path reads this row. With no row, Imago is on in a STANDARD drive the user
- * owns (the DEC-2 default) and off everywhere else; a row overrides that —
- * `enabled = false` is an opt-out, `enabled = true` turns Imago on in a drive
- * the user administers but does not own.
+ * The row is purely the user's own exclusion: with `enabled = false`, the
+ * user's Imago is kept out of that drive even though the user can open it.
+ * With no row, or a row that is on, Imago may work there — it defaults to on
+ * in every drive the user can access (superseding DEC-2's grant model; no
+ * grant paths read this row). Each user sets only their own rows, in any
+ * drive they can access.
  *
  * Both FKs cascade: the choice goes with the user and with the drive.
  */
