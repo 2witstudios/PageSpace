@@ -45,4 +45,15 @@ describe('decideResolveCaller', () => {
     const actual = decideResolveCaller({ aud: 'relay-runner', kind: 'api_key' });
     expect(actual).toEqual({ ok: true });
   });
+  it('given kind session and channel http-executor WITH sessionHttp, should return ok (the audited exception)', () => {
+    const actual = decideResolveCaller({ aud: 'http-executor', kind: 'session', sessionHttp: true });
+    expect(actual).toEqual({ ok: true });
+  });
+
+  it('given a channel assembled at runtime that the type never names, should return kind_not_resolvable', () => {
+    const aud = 'channel-from-the-future' as never as Parameters<typeof decideResolveCaller>[0]['aud'];
+    const actual = decideResolveCaller({ aud, kind: 'api_key' });
+    expect(actual).toEqual({ ok: false, reason: 'kind_not_resolvable' });
+  });
 });
+

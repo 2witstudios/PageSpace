@@ -51,6 +51,7 @@ import {
   planDailyAwakeCap,
   planOrgAwakeSettle,
   utcDayOf,
+  type AwakeSettlePlan,
 } from './app-metering-core';
 import {
   holdForCharge,
@@ -477,7 +478,7 @@ async function meterOneApp(
   // onto the lead's own wallet. Its awake time from BEFORE org compute billing went live
   // (the interim refusal left the watermark behind) is forgiven, logged with what it
   // would have cost, and never charged.
-  let plan = normalPlan;
+  let plan: Extract<AwakeSettlePlan, { action: 'settle' }> = normalPlan;
   if (charge.kind === 'org') {
     const org = planOrgAwakeSettle({ billedThrough: row.awakeBilledThrough, now, epoch: await deps.orgComputeBillingEpoch(now) });
     if (org.forgiven) {
@@ -495,11 +496,15 @@ async function meterOneApp(
         wouldHaveChargedCents: Math.round(wouldHaveChargedMillicents / 1000),
       });
     }
-    if (org.plan.action !== 'settle') {
-      result.skipped += 1;
-      return;
-    }
-    plan = org.plan;
+    // org.plan is `skip` only when the personal plan above already was — the same
+    // planAwakeSettle inputs answer both — and that case returned before the charge
+    // was resolved. So it is always `settle` here and the org block reuses the
+    // personal skip check wholesale; the invariant is pinned by planOrgAwakeSettle's
+    // own suite ("never answers skip for a span the personal plan settles"). If a
+    // future planner change breaks it, this cast would settle a plan with zero
+    // active seconds — which the `activeSeconds > 0` fold below already treats as
+    // "forgiven-only", charging nothing.
+    plan = org.plan as typeof normalPlan;
   }
   // Nothing after a forgiven backlog to bill yet: nothing is charged, and the wake's hold is
   // returned (a settle would have consumed it); the watermark still moves past the backlog below.
