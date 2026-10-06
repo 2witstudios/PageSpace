@@ -4,7 +4,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { findOrganizationById, updateOrganization } from '@pagespace/lib/organizations/repository';
 import { deleteOrganization } from '@pagespace/lib/organizations/deletion';
 import { getOrgBillingNotice } from '@pagespace/lib/organizations/status';
-import { authorizeOrgRequest, ORG_READ_AUTH, ORG_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
+import { authorizeOrgRequest, refuseDriveScopedToken, ORG_TOKEN_READ_AUTH, ORG_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
 import { orgDeleteSchema, orgUpdateSchema } from '@/lib/orgs/org-schemas';
 import { endOrgSubscriptionPort } from '@/lib/org-billing/org-subscription';
 
@@ -16,11 +16,14 @@ type Context = { params: Promise<{ orgId: string }> };
  * org surfaces (SEAT-9): Owner and Admins get plan detail (reactivate + reason, a failed
  * payment, the trial end), a member only the read-only notice while the org is lapsed
  * (SEAT-6). Absent where billing is off (onprem, tenant) and when there is nothing to say.
+ * Session or MCP token (X-1); a drive-scoped token is refused, since the org is wider than any drive scope.
  */
 export async function GET(request: Request, context: Context) {
   const { orgId } = await context.params;
-  const gate = await authorizeOrgRequest(request, orgId, 'MEMBER', ORG_READ_AUTH);
+  const gate = await authorizeOrgRequest(request, orgId, 'MEMBER', ORG_TOKEN_READ_AUTH);
   if (!gate.ok) return gate.response;
+  const scoped = refuseDriveScopedToken(gate);
+  if (scoped) return scoped;
   try {
     const org = await findOrganizationById(orgId);
     if (!org) return NextResponse.json({ error: 'Organization not found', code: 'org_not_found' }, { status: 404 });

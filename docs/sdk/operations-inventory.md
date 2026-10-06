@@ -294,6 +294,18 @@ New surface, not a port. READS ONLY: every wallet write route (`POST/PATCH/DELET
 | `wallets.list` | — | GET `wallets/route.ts` (`allow: session, mcp`) | `MyWallets` (`services/drive-wallet-service.ts`); `funds.pools` is always `[]` for a token. A drive-scoped token → 403 (`refuseScopedTokenForAccountRead`). |
 | `wallets.getConversationSource` | `conversationId*`, `driveId?` (query; only read for a global conversation) | GET `wallets/conversations/[conversationId]/route.ts` (`allow: session, mcp`) | `{conversationId, driveId (nullable), chosenWalletId (nullable), options: {source, walletId}[], resolved: CallSpendDecision}` (`billing/spend-target.ts`, `kind` ∈ `spend`/`refuse`/`skip`). Caller's own conversation only (else 404). A drive-scoped token → 403. |
 
+### 2.19 Organization reads (5 SDK operations — no v5.2.7 tool; Spec X-1)
+
+New surface, not a port. READS ONLY: every org write (create, rename, delete, invite, remove, role change, policy change, billing) is session-only on the server today, so none is an operation. All five go through the web's ONE org gate (`authorizeOrgRequest` → `requireOrgRole`, ORG-5) and are dark (404) while `ORGS_ENABLED` is false. Org reads are ORG-WIDE: a drive-scoped token is refused (403 `token_scope_refused`, `refuseDriveScopedToken`) on the org list, org detail, members and policies — the `wallets.list` rule; the one exception is the drive directory, which a scoped token may list but sees filtered to its own drives.
+
+| Operation | Input | Route | Response (route truth) |
+|---|---|---|---|
+| `organizations.list` | — | GET `orgs/route.ts` (`allow: session, mcp`) | `{organizations: [{id, name, slug, avatarUrl (nullable), role ∈ OWNER/ADMIN/MEMBER, lapsed}]}` (`OrgSummaryForUser` + the route's `lapsed` flag, ORG-2 / [DOW-33]). A drive-scoped token → 403. |
+| `organizations.get` | `orgId*` | GET `orgs/[orgId]/route.ts` (MEMBER; `allow: session, mcp`) | `{organization: {id, name, slug, avatarUrl, ownerId, createdAt}, viewer: {userId, role}, billingNotice?}` — `billingNotice` is the per-role SEAT-9 banner, left shape-open in the SDK. 404 for a non-member. A drive-scoped token → 403. |
+| `organizations.listMembers` | `orgId*` | GET `orgs/[orgId]/members/route.ts` (MEMBER; `allow: session, mcp`) | `{members: [{userId, role, joinedAt (ISO), name, email, image (nullable)}]}` (`OrgMemberDetail`, ORG-2). A drive-scoped token → 403. |
+| `organizations.listDrives` | `orgId*` | GET `orgs/[orgId]/drives/route.ts` (MEMBER; `allow: session, mcp`) | `{drives: [{id, name, slug, orgVisibility ∈ OPEN/RESTRICTED/PRIVATE, joined, joinRequest ∈ 'pending'/null, canRequest, lead: {id, name, image}}]}` — the org Drives directory (DRV-6), the only place a Restricted drive is discovered before joining; Private drives appear only where the caller can already open them (D-OW-25). A drive-scoped token sees only its own drives (filtered after the member gate). |
+| `organizations.getPolicies` | `orgId*` | GET `orgs/[orgId]/policies/route.ts` (ADMIN — SEAT-6; `allow: session, mcp`) | `{policies: OrgPolicies}` — every key present, defaults filled in (POL-1, `organizations/policies-core.ts`). A plain member → 403 `insufficient_role`; a non-member → 404; a drive-scoped Admin token → 403 `token_scope_refused`. |
+
 ---
 
 ## 3. MCP-only routes — the SDK's content-edit surface (documented fully)

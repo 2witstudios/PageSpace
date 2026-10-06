@@ -39,6 +39,13 @@ import { loginHandler } from '../commands/login.js';
 import { logoutHandler } from '../commands/logout.js';
 import { mcpHandler } from '../commands/mcp.js';
 import {
+  orgsDrivesHandler,
+  orgsGetHandler,
+  orgsListHandler,
+  orgsMembersHandler,
+  orgsPoliciesHandler,
+} from '../commands/orgs.js';
+import {
   rolesCreateHandler,
   rolesDeleteHandler,
   rolesGetHandler,
@@ -196,6 +203,14 @@ const OTHER_ROUTES: readonly RouteEntry[] = [
   { path: ['channels', 'send'], handler: channelsSendHandler, summary: 'Send a channel message' },
   { path: ['workspaces', 'list'], handler: workspacesListHandler, summary: 'List your agent workspaces (each has one sandbox)' },
   { path: ['workspaces', 'exec'], handler: workspacesExecHandler, summary: "Run a shell command in a workspace's sandbox" },
+  // Organization READS only (Spec X-1): every org write needs a signed-in session in the
+  // web app, so there is no org write to run. Org-wide reads need an unscoped key; the
+  // drive directory also serves a scoped key, filtered to the key's own drives.
+  { path: ['orgs', 'list'], handler: orgsListHandler, summary: 'List the organizations you belong to, with your role (unscoped key)' },
+  { path: ['orgs', 'get'], handler: orgsGetHandler, summary: 'Show one organization: identity, owner, your role (unscoped key)' },
+  { path: ['orgs', 'members'], handler: orgsMembersHandler, summary: 'List an organization\'s members and roles (unscoped key)' },
+  { path: ['orgs', 'drives'], handler: orgsDrivesHandler, summary: "List an organization's drive directory, incl. Restricted (unscoped key)" },
+  { path: ['orgs', 'policies'], handler: orgsPoliciesHandler, summary: "Read an organization's policies (Owner/Admin; unscoped key)" },
   // Wallet READS only ([D-OW-26]): a key never moves money or changes a spend source.
   { path: ['wallets', 'drive'], handler: walletsDriveHandler, summary: "Show a drive's wallet: remaining credits and your own cap" },
   { path: ['wallets', 'list'], handler: walletsListHandler, summary: 'List the wallets you spend from and fund (unscoped key)' },

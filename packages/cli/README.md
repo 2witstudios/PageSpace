@@ -216,6 +216,15 @@ workspaces list [--drive <driveId>]                # your agent workspaces; each
                 # one argument runs as a shell command line (-- 'ls | wc -l');
                 # several are separate words, quoting preserved (-- sh -c 'echo hi; exit 3')
 
+orgs      list                                     # the organizations you belong to, with your role (unscoped key)
+          get <orgId>                              # one organization: identity, owner, your role
+          members <orgId>                          # the member roster with roles (unscoped key)
+          drives <orgId>                           # the org drive directory, incl. Restricted (unscoped key;
+                                                   # a drive-scoped key sees only its own drives)
+          policies <orgId>                         # the org's policies — Owner/Admin only (unscoped key)
+                # read-only: creating, inviting, roles, policies and billing all need a
+                # signed-in session in the web app
+
 wallets   drive <driveId>                          # a drive's remaining credits and your own cap
           list                                     # what you spend from and fund (key with no drive restriction)
           source <conversationId> [--drive <driveId>]   # which wallet a conversation spends from
