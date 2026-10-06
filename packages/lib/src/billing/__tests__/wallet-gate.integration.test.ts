@@ -145,6 +145,8 @@ async function teardown(w: World): Promise<void> {
   await db.delete(users).where(inArray(users.id, w.userIds));
 }
 
+const REFILL_PRICE_ID = 'price_test_org_base';
+const REFILL_SEAT_PRICE_ID = 'price_test_org_seat';
 const walletRow = async (id: string) => (await db.select().from(wallets).where(eq(wallets.id, id)))[0];
 const holdsOf = (userId: string) => db.select().from(creditHolds).where(eq(creditHolds.userId, userId));
 const ledgerOf = (userId: string) => db.select().from(creditLedger).where(eq(creditLedger.userId, userId));
@@ -1234,8 +1236,8 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
       amount_paid: 5000,
       subtotal: 5000,
       parent: { subscription_details: { subscription: `sub_${createId()}` } },
-      lines: { data: [{ amount: 5000, period: { start: startS, end: startS + 30 * 86_400 } }] },
-    }, { active: true });
+      lines: { data: [{ amount: 5000, period: { start: startS, end: startS + 30 * 86_400 }, pricing: { price_details: { price: REFILL_PRICE_ID } } }] },
+    }, { active: true, basePriceId: REFILL_PRICE_ID, seatPriceId: REFILL_SEAT_PRICE_ID });
     expect(refill).toMatchObject({ kind: 'granted', walletId: w.poolId });
     expect((await walletRow(w.poolId)).monthlyPeriodStart?.getTime()).toBe(startS * 1000);
     // Wait out the one second to the new period's start, so the refill is in force.
@@ -1679,8 +1681,8 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
       expect(await applyOrgPoolRefill({
         id: `in_${createId()}`, customer: acme.stripeCustomerId, billing_reason: 'subscription_cycle', amount_paid: 5000, subtotal: 5000,
         parent: { subscription_details: { subscription: `sub_${createId()}` } },
-        lines: { data: [{ amount: 5000, period: { start: startS, end: startS + 30 * 86_400 } }] },
-      }, { active: true })).toMatchObject({ kind: 'granted' });
+        lines: { data: [{ amount: 5000, period: { start: startS, end: startS + 30 * 86_400 }, pricing: { price_details: { price: REFILL_PRICE_ID } } }] },
+      }, { active: true, basePriceId: REFILL_PRICE_ID, seatPriceId: REFILL_SEAT_PRICE_ID })).toMatchObject({ kind: 'granted' });
 
       // The org pool: owned by the org, no subject, no parent — one row.
       const acmeWallets = () => db.select().from(wallets).where(eq(wallets.orgId, acme.id));
