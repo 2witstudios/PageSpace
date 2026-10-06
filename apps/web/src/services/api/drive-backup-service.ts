@@ -180,11 +180,22 @@ export async function createDriveBackup(
   const changeGroupType = inferChangeGroupType({ isAiGenerated: false });
 
   return db.transaction(async (tx) => {
+    // [Spec X-3] The drive's org context at snapshot time: a backup says where
+    // the drive stood when it was taken. Snapshot values only — the restore
+    // never writes them back (a drive that moved orgs since the backup must
+    // not be pulled back by restoring).
+    const [drive] = await tx
+      .select({ orgId: drives.orgId, orgVisibility: drives.orgVisibility })
+      .from(drives)
+      .where(eq(drives.id, driveId));
+
     // Create backup record first to get the ID
     const [backup] = await tx
       .insert(driveBackups)
       .values({
         driveId,
+        orgId: drive?.orgId ?? null,
+        orgVisibility: drive?.orgVisibility ?? null,
         createdBy: userId,
         source: input.source ?? 'manual',
         status: 'pending',
