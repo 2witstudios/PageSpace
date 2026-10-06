@@ -1,9 +1,9 @@
 /**
  * Seam guard: review #2849 r6. No key reaches past its owner, by any reader of the key's drive scope.
  *
- * Reviews r4, r5 and r6 each found one more reader that took a key's drive scope (its `mcp_token_drives` rows, or
- * the scope on the authenticated principal) as membership without asking whether the key's OWNER is still a member
- * of the drive. This test finds EVERY read of that scope in the tree (key-scope-read-scan.ts) and requires the
+ * Reviews r4, r5 and r6 each found one more reader that took a key's drive scope (its `mcp_token_drives` rows, the
+ * stored OAuth grant, or the scope on the authenticated principal) as membership without asking whether the key's
+ * OWNER is still a member of the drive. This test finds EVERY read of that scope in the tree (key-scope-read-scan.ts) and requires the
  * function it sits in to be in the ledger below with one of five verdicts:
  *
  *   - `owner-bound`: the function IS one of the owner-bound helpers (OWNER_BOUND below); each one is checked to call
@@ -11,8 +11,12 @@
  *   - `gated`: it reads the scope and decides access only through an owner-bound helper (its code calls one);
  *   - `primitive`: the raw row read behind the owner-bound helpers, called only from inside them (checked);
  *   - `ceiling`: the scope only NARROWS what the owner already reaches, or refuses (the reason says how);
- *   - `not-access`: the read is not an access decision: authentication, key management or display, revocation
- *     bookkeeping, the lapse guard's snapshot (the reason says which).
+ *   - `not-access`: the read is not an access decision: authentication, token issuance, consent and grant display, key
+ *     management or display, the scope grammar, revocation bookkeeping, the lapse guard's snapshot (the reason says
+ *     which).
+ *
+ * Stated limit: a rest spread (`const { ...rest } = auth`) copies the scope without naming it; a later read of
+ * `rest.allowedDriveIds` is still seen.
  *
  * A new reader fails here until it is classified. A ledgered function that no longer reads must leave.
  */
@@ -72,7 +76,11 @@ const OWN_CONVERSATION = ceiling("the owner's OWN conversations, refused or narr
 const AGENT_RUNTIME = ceiling('forwards or applies the credential ceiling to an agent session/workspace: it only refuses or narrows');
 const AGENT_ACCOUNTS = ceiling('the agent-account caller ceiling: only ever narrows (isDriveWithinCredentialScope) or serializes it into the grant');
 const PREDICATE = notAccess('a yes/no "is this credential drive-scoped at all" test; grants nothing');
-const KEY_ADMIN = notAccess("a drive admin managing or listing the keys that hold a row in THEIR drive (the route requires drive admin)");
+const KEY_ADMIN = notAccess("session only: a drive lead or admin (checkDriveAccess, the caller's own live standing) managing a key's row in THEIR drive");
+const KEY_LIST = notAccess("session only: a current drive member (checkDriveAccess) sees which keys hold a row in the drive, with their stored role; display, resolution is owner-bound");
+const ISSUANCE = notAccess("token issuance: copies an approved, stored grant onto a token (a refresh may only narrow it: isScopeSubset); the token then resolves through the owner-bound helpers");
+const CONSENT_DISPLAY = notAccess("consent / grant display: names the drives and roles a grant asks for or holds; grants nothing");
+const SCOPE_GRAMMAR = notAccess('the OAuth scope grammar (parse, format, shape tests); grants nothing itself');
 const KEY_SETTINGS = notAccess("the owner's own key settings: shows the key's configured scope");
 const LEGACY_SCOPE_CHECKS = ceiling('the scope check helpers: refuse or narrow a drive/page/list the owner already reaches');
 
@@ -143,7 +151,7 @@ const KEY_SCOPE_READ_LEDGER: Readonly<Record<string, Verdict>> = {
   // ── key administration and display ──────────────────────────────────────────────────────────────────────
   'apps/web/src/app/api/drives/[driveId]/apps/[tokenId]/route.ts#PATCH': KEY_ADMIN,
   'apps/web/src/app/api/drives/[driveId]/apps/[tokenId]/route.ts#DELETE': KEY_ADMIN,
-  'apps/web/src/app/api/drives/[driveId]/apps/members/route.ts#GET': KEY_ADMIN,
+  'apps/web/src/app/api/drives/[driveId]/apps/members/route.ts#GET': KEY_LIST,
   'apps/web/src/lib/repositories/session-repository.ts#sessionRepository.findUserMcpTokensWithDrives': KEY_SETTINGS,
   'apps/web/src/components/layout/middle-content/page-views/settings/mcp/MCPSettingsView.tsx#MCPSettingsView': KEY_SETTINGS,
   'apps/web/src/components/layout/middle-content/page-views/settings/mcp/MCPSettingsView.tsx#openEditDialog': KEY_SETTINGS,
@@ -175,7 +183,38 @@ const KEY_SCOPE_READ_LEDGER: Readonly<Record<string, Verdict>> = {
   'packages/lib/src/agent-accounts/executor/expected-binding-for.ts#expectedBindingFor': AGENT_ACCOUNTS,
   'packages/lib/src/agent-accounts/executor/http-request-executor.ts#execute': AGENT_ACCOUNTS,
   'packages/lib/src/permissions/decide-account-access.ts#decideAccountAccess': AGENT_ACCOUNTS,
+  'apps/web/src/lib/repositories/session-repository.ts#run': notAccess("the key's own mint / re-scope transaction (each route bounds the scope by validateDriveScopeAccess, the owner's live access)"),
+  'apps/web/src/lib/repositories/oauth-repository.ts#toSessionRepoDrives': notAccess('shapes an approved key grant into key rows for the mint / re-scope above'),
+  'apps/web/src/lib/repositories/oauth-repository.ts#applyKeyGrant': notAccess("mints or re-scopes the MCP key an approved grant names; the grant was authority-checked at consent and the key's rows resolve through owner-bound helpers"),
+  // ── the OAuth grant (review r7): authentication, issuance, consent, grant-time authority ────────────────
+  'apps/web/src/lib/auth/index.ts#validateOAuthAccessToken': notAccess(
+    "authentication: parses the stored grant into the principal (driveScopes, allowedDriveIds); every decision reads them through this ledger",
+  ),
+  'apps/web/src/lib/repositories/oauth-repository.ts#exchangeAuthorizationCode': ISSUANCE,
+  'apps/web/src/lib/repositories/oauth-repository.ts#refreshTokenGrant': ISSUANCE,
+  'apps/web/src/lib/repositories/oauth-repository.ts#pollDeviceToken': ISSUANCE,
+  'apps/web/src/lib/repositories/oauth-repository.ts#recordDeviceApproval': ISSUANCE,
+  'apps/web/src/lib/repositories/oauth-repository.ts#verifyDeviceUserCode': CONSENT_DISPLAY,
+  'apps/web/src/lib/repositories/oauth-repository.ts#listActiveOAuthGrantsForUser': CONSENT_DISPLAY,
+  'apps/web/src/app/api/account/oauth-grants/route.ts#resolveScopeNames': CONSENT_DISPLAY,
+  'apps/web/src/app/oauth/consent/page.tsx#ConsentPage': CONSENT_DISPLAY,
+  'apps/web/src/app/api/oauth/device_authorization/verify/route.ts#POST': CONSENT_DISPLAY,
+  'packages/lib/src/auth/oauth/grant-scope-summary.ts#describeGrantScopes': CONSENT_DISPLAY,
+  'apps/web/src/app/api/oauth/device_authorization/route.ts#POST': notAccess('validates the requested scope string when a device code is issued; grants nothing'),
+  'packages/lib/src/auth/oauth/authorize-request.ts#validateAuthorizeRequest': notAccess('validates the requested scope string of an authorize request; grants nothing'),
+  'apps/web/src/app/api/oauth/device_authorization/decision/route.ts#POST': ceiling(
+    "approval refuses any drive scope the approving user does not hold NOW (resolveGrantAuthority → checkGrantAuthority)",
+  ),
+  'apps/web/src/lib/auth/oauth-grant-authority.ts#resolveGrantAuthority': ceiling("reads the approving user's CURRENT standing on each requested drive (getDriveAccess)"),
+  'packages/lib/src/auth/oauth/scopes.ts#checkGrantAuthority': ceiling('refuses a grant naming a drive (or role) the user does not hold now'),
+  'packages/lib/src/auth/oauth/scopes.ts#formatScopeSet': SCOPE_GRAMMAR,
+  'packages/lib/src/auth/oauth/scopes.ts#isPureDriveGrant': SCOPE_GRAMMAR,
+  'packages/lib/src/auth/oauth/scopes.ts#scopeSetToDriveScopes': SCOPE_GRAMMAR,
   // ── revocation bookkeeping and the lapse guard ──────────────────────────────────────────────────────────
+  'apps/web/src/app/api/drives/[driveId]/members/[userId]/route.ts#DELETE': notAccess("deletes the removed member's own key rows in the drive"),
+  'packages/lib/src/organizations/leave.ts#revokeOAuthFamiliesNamingDrives': notAccess('finds the OAuth grants a leave REVOKES'),
+  'packages/lib/src/organizations/leave.ts#scopesNameDrive': notAccess('whether a stored grant names a drive, for the revocation above'),
+  'packages/lib/src/permissions/guest-holds.ts#reinsertHeldAccess': notAccess("restores the key rows a guest hold removed when the hold is released; the rows resolve through owner-bound helpers"),
   'packages/lib/src/organizations/leave.ts#revokeOrgDriveGrantsForMembers': notAccess('selects the key rows a leave REVOKES'),
   'packages/lib/src/permissions/guest-holds.ts#tokenOutsiders': notAccess('finds outsider key rows to put on hold (removal), never grants'),
   'packages/lib/src/permissions/guest-holds.ts#takeOutsider': notAccess("takes an outsider's key rows off the drive for a hold"),
@@ -255,7 +294,7 @@ describe('key-scope reads: no key reaches past its owner (review #2849 r6)', () 
     expect(bare).toEqual([]);
   });
 
-  it('the scanner sees each kind of read (so the guard cannot pass by seeing nothing)', () => {
+  it('the scanner sees each kind of read, through aliases, namespaces, sql interpolation and brackets, and the OAuth store (so the guard cannot pass by seeing nothing)', () => {
     const found = scanScopeReads(
       'x.ts',
       [
@@ -268,18 +307,38 @@ describe('key-scope reads: no key reaches past its owner (review #2849 r6)', () 
         'function g(auth) { return getAllowedDriveIds(auth); }',
         'async function h() { return sql`select * from mcp_token_drives`; }',
         'function i(x) { x.allowedDriveIds = []; return { allowedDriveIds: [] }; }',
-        'async function j() { await db.delete(mcpTokenDrives); await db.insert(mcpTokenDrives).values({}); }',
+        'function j(x) { const { userId } = x; return userId; }',
+        "import { mcpTokenDrives as t, getAllowedDriveIds as g2 } from 'x'; async function k() { return db.select().from(t); }",
+        'function l(auth) { return g2(auth); }',
+        "import * as schema from 'y'; async function m() { return db.select().from(schema.mcpTokenDrives); }",
+        'async function n() { return db.execute(sql`select drive_id from ${mcpTokenDrives}`); }',
+        "function o(auth) { return auth['allowedDriveIds']; }",
+        'function p(auth) { return auth.scopes.drives.has(1); }',
+        "function q(parsed) { return parsed.scopes['drives']; }",
+        'async function r() { return db.select({ s: oauthRefreshTokens.scopes }).from(oauthRefreshTokens); }',
+        "function s(raw) { return parseScopeList(raw); }",
+        'async function u() { await db.delete(mcpTokenDrives); }',
       ].join('\n'),
     );
     expect(found.map((r) => `${r.fn} ${r.what}`)).toEqual([
-      'a from(mcpTokenDrives)',
-      'b query.mcpTokenDrives',
+      'a mcpTokenDrives',
+      'b .mcpTokenDrives',
       'c with: { driveScopes }',
       'd .allowedDriveIds',
       'e { driveScopes }',
       'f .mcpAllowedDriveIds',
-      'g getAllowedDriveIds()',
+      'g getAllowedDriveIds',
       'h raw sql',
+      'k mcpTokenDrives',
+      'l getAllowedDriveIds',
+      'm .mcpTokenDrives',
+      'n mcpTokenDrives',
+      'o .allowedDriveIds',
+      'p scopes.drives',
+      'q scopes.drives',
+      'r oauthRefreshTokens.scopes',
+      's parseScopeList',
+      'u mcpTokenDrives',
     ]);
   });
 });

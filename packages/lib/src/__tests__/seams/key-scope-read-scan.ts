@@ -1,18 +1,23 @@
 /**
- * Scanner for the key-scope read seam (key-scope-reads.seam.test.ts), review #2849 r6.
+ * Scanner for the key-scope read seam (key-scope-reads.seam.test.ts), review #2849 r6 (widened in r7).
  *
- * A key (an MCP token or an OAuth grant) carries a drive scope: its `mcp_token_drives` rows, and, once authenticated,
- * the scope on the principal (`allowedDriveIds`, `driveScopes`; for OAuth that IS the stored grant, parsed). A read of
- * that scope is where a key's drive universe or role comes from, so it is where the owner bound ("no key reaches past
- * its owner") must hold. This scanner finds every such read, by the TypeScript AST, and names the function it sits in:
+ * A key (an MCP token or an OAuth grant) carries a drive scope: its `mcp_token_drives` rows; for OAuth, the stored
+ * grant (the `scopes` column of the OAuth token tables, parsed into a ScopeSet whose `drives` it names); and, once
+ * authenticated, the scope on the principal (`allowedDriveIds`, `driveScopes`). A read of that scope is where a key's
+ * drive universe or role comes from, so it is where the owner bound ("no key reaches past its owner") must hold. This
+ * scanner finds every such read, by the TypeScript AST, and names the function it sits in. It FAILS CLOSED:
  *
- *   - a query of `mcpTokenDrives` (`.from` / a join / `db.query.mcpTokenDrives` / a relational `with: { driveScopes }`)
- *     or raw SQL reading `mcp_token_drives`;
- *   - a property read of `.allowedDriveIds`, `.driveScopes` or `.mcpAllowedDriveIds` (the scope as copied into an AI
- *     tool context), or a destructuring of one;
- *   - a call of `getAllowedDriveIds` (the raw scope accessor).
+ *   - ANY reference to the `mcpTokenDrives` table (a query, a join, a column in a where, `${mcpTokenDrives}` in a sql
+ *     template, `db.query.mcpTokenDrives`, `schema.mcpTokenDrives`, `x['mcpTokenDrives']`), writes included, or raw SQL
+ *     reading `mcp_token_drives`;
+ *   - a read of `.allowedDriveIds`, `.driveScopes` or `.mcpAllowedDriveIds` (the scope copied into an AI tool context),
+ *     by dot, by string-literal brackets, or by destructuring; a relational `with: { driveScopes }`;
+ *   - the OAuth store: `.scopes` of an OAuth token / code table, `.drives` of a scope set (`scopes.drives`,
+ *     `auth.scopes['drives']`), and any reference to the parsers of stored scope strings;
+ *   - any reference to the raw scope accessor `getAllowedDriveIds`.
  *
- * Writes of `mcpTokenDrives` (insert / update / delete) are the loosening seam's (loosening-write-scan.ts), not here.
+ * Names are resolved through import aliases (`import { mcpTokenDrives as t }`), namespace imports (`ns.mcpTokenDrives`)
+ * and one-step const aliases (`const t = mcpTokenDrives`), so a renamed reader is still seen.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -21,10 +26,14 @@ import { REPO_ROOT } from './walk';
 import { enclosingFunction, functionName } from './loosening-write-scan';
 
 const SCOPE_TABLE = 'mcpTokenDrives';
-const SCOPE_PROPERTIES = ['allowedDriveIds', 'driveScopes', 'mcpAllowedDriveIds'] as const;
-const RAW_SCOPE_ACCESSOR = 'getAllowedDriveIds';
+const SCOPE_PROPERTIES = new Set(['allowedDriveIds', 'driveScopes', 'mcpAllowedDriveIds']);
+/** Functions whose every reference is a scope read: the raw accessor and the parsers of stored OAuth scope strings. */
+const SCOPE_FUNCTIONS = new Set(['getAllowedDriveIds', 'parseScopeList', 'scopeSetToDriveScopes']);
+/** The OAuth tables whose `scopes` column is a key's stored grant. */
+const OAUTH_SCOPE_TABLES = new Set(['oauthAccessTokens', 'oauthRefreshTokens', 'oauthAuthorizationCodes', 'oauthDeviceCodes']);
+/** A receiver named like a scope set (`scopes`, `scopeSet`, `parsed.scopes`, `grantScopes`). */
+const SCOPE_SET_NAME = /scope/i;
 
-const READ_CALLS = new Set(['from', 'innerJoin', 'leftJoin', 'rightJoin', 'fullJoin']);
 const RAW_SQL_READ = /\b(?:from|join)\s+"?mcp_token_drives\b/i;
 
 export interface ScopeRead {
@@ -32,7 +41,7 @@ export interface ScopeRead {
   line: number;
   /** The enclosing named function (`Class.method`, `owner.member`), or `<module>` at top level. */
   fn: string;
-  /** e.g. `from(mcpTokenDrives)`, `.allowedDriveIds`, `getAllowedDriveIds()`, `raw sql`. */
+  /** e.g. `mcpTokenDrives`, `.allowedDriveIds`, `getAllowedDriveIds`, `oauthAccessTokens.scopes`, `scopes.drives`. */
   what: string;
 }
 
@@ -51,36 +60,75 @@ function isRelationalWith(prop: ts.PropertyAssignment): boolean {
   return !!holder && ts.isPropertyAssignment(holder) && ts.isIdentifier(holder.name) && holder.name.text === 'with';
 }
 
+/** The member name of `x.name` or `x['name']` (string literal), else null. */
+function memberName(node: ts.Node): string | null {
+  if (ts.isPropertyAccessExpression(node)) return node.name.text;
+  if (ts.isElementAccessExpression(node) && (ts.isStringLiteral(node.argumentExpression) || ts.isNoSubstitutionTemplateLiteral(node.argumentExpression))) {
+    return node.argumentExpression.text;
+  }
+  return null;
+}
+
+/** True when the identifier is a declaration or an import/export name, not a use. */
+function isDeclarationName(id: ts.Identifier): boolean {
+  const p = id.parent;
+  if (!p) return false;
+  if (ts.isImportSpecifier(p) || ts.isExportSpecifier(p) || ts.isNamespaceImport(p) || ts.isImportClause(p)) return true;
+  if ((ts.isFunctionDeclaration(p) || ts.isVariableDeclaration(p) || ts.isParameter(p) || ts.isBindingElement(p)) && p.name === id) return true;
+  if ((ts.isPropertyAccessExpression(p) && p.name === id) || (ts.isPropertyAssignment(p) && p.name === id)) return true;
+  if (ts.isMethodDeclaration(p) || ts.isPropertySignature(p) || ts.isPropertyDeclaration(p)) return p.name === id;
+  return false;
+}
+
 /** Every key-scope read in one parsed source file. */
 export function scanScopeReads(file: string, source: string): ScopeRead[] {
   const sf = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
   const out: ScopeRead[] = [];
   const at = (node: ts.Node, what: string) =>
     out.push({ file, line: sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1, fn: nameOf(enclosingFunction(node)), what });
-  const props = new Set<string>(SCOPE_PROPERTIES);
+
+  // Import aliases and namespaces, then one-step const aliases of a tracked name.
+  const alias = new Map<string, string>();
+  const namespaces = new Set<string>();
+  const tracked = (name: string) => name === SCOPE_TABLE || SCOPE_FUNCTIONS.has(name) || OAUTH_SCOPE_TABLES.has(name);
+  const canonical = (expr: ts.Node): string | null => {
+    if (ts.isIdentifier(expr)) return alias.get(expr.text) ?? expr.text;
+    if (ts.isPropertyAccessExpression(expr) && ts.isIdentifier(expr.expression) && namespaces.has(expr.expression.text)) return expr.name.text;
+    return null;
+  };
+  const collect = (node: ts.Node): void => {
+    if (ts.isImportSpecifier(node) && node.propertyName) alias.set(node.name.text, node.propertyName.text);
+    if (ts.isNamespaceImport(node)) namespaces.add(node.name.text);
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
+      const target = canonical(node.initializer);
+      if (target !== null && tracked(target)) alias.set(node.name.text, target);
+    }
+    ts.forEachChild(node, collect);
+  };
+  collect(sf);
 
   const visit = (node: ts.Node): void => {
-    if (ts.isCallExpression(node)) {
-      const callee = node.expression;
-      const arg = node.arguments[0];
-      if (ts.isPropertyAccessExpression(callee) && READ_CALLS.has(callee.name.text) && arg && ts.isIdentifier(arg) && arg.text === SCOPE_TABLE) {
-        at(node, `${callee.name.text}(${SCOPE_TABLE})`);
-      }
-      if ((ts.isIdentifier(callee) && callee.text === RAW_SCOPE_ACCESSOR) || (ts.isPropertyAccessExpression(callee) && callee.name.text === RAW_SCOPE_ACCESSOR)) {
-        at(node, `${RAW_SCOPE_ACCESSOR}()`);
-      }
+    if (ts.isIdentifier(node) && !isDeclarationName(node)) {
+      const name = alias.get(node.text) ?? node.text;
+      if (name === SCOPE_TABLE || SCOPE_FUNCTIONS.has(name)) at(node, name);
     }
-    if (ts.isPropertyAccessExpression(node)) {
-      const name = node.name.text;
-      if (name === SCOPE_TABLE && ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === 'query') {
-        at(node, `query.${SCOPE_TABLE}`);
-      } else if (props.has(name) && !isAssignmentTarget(node)) {
-        at(node, `.${name}`);
+    const member = memberName(node);
+    if (member !== null && (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node))) {
+      const receiver = node.expression;
+      if (member === SCOPE_TABLE || (namespaces.size > 0 && canonical(node) !== null && SCOPE_FUNCTIONS.has(canonical(node) as string))) {
+        at(node, `.${member}`);
+      } else if (SCOPE_PROPERTIES.has(member) && !isAssignmentTarget(node)) {
+        at(node, `.${member}`);
+      } else if (member === 'scopes' && OAUTH_SCOPE_TABLES.has(canonical(receiver) ?? '')) {
+        at(node, `${canonical(receiver)}.scopes`);
+      } else if (member === 'drives') {
+        const recv = memberName(receiver) ?? (ts.isIdentifier(receiver) ? receiver.text : null);
+        if (recv !== null && SCOPE_SET_NAME.test(recv)) at(node, `${recv}.drives`);
       }
     }
     if (ts.isBindingElement(node) && ts.isObjectBindingPattern(node.parent)) {
       const key = node.propertyName ?? node.name;
-      if (ts.isIdentifier(key) && props.has(key.text)) at(node, `{ ${key.text} }`);
+      if ((ts.isIdentifier(key) || ts.isStringLiteral(key)) && SCOPE_PROPERTIES.has(key.text)) at(node, `{ ${key.text} }`);
     }
     if (ts.isPropertyAssignment(node) && ts.isIdentifier(node.name) && node.name.text === 'driveScopes' && isRelationalWith(node)) {
       at(node, 'with: { driveScopes }');
