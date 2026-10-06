@@ -80,7 +80,7 @@ describe('Needs your attention', () => {
     expect(screen.getByText('Lead scoring')).toBeTruthy();
     expect(screen.getByText('Owner left')).toBeTruthy();
     expect(screen.getByText('Customer Research')).toBeTruthy();
-    expect(screen.getByText(/spends the drive's wallet only, under its new owner's caps/)).toBeTruthy();
+    expect(screen.getByText(/spends the drive’s wallet only, under its new owner’s caps/)).toBeTruthy();
     expect((screen.getByRole('button', { name: 'Reassign' }) as HTMLButtonElement).disabled).toBe(true);
     await userEvent.click(screen.getByRole('combobox', { name: 'New owner for Lead scoring' }));
     await userEvent.click(await screen.findByRole('option', { name: 'Lena Schulz' }));
