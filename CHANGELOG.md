@@ -9,6 +9,13 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **Organizations in the CLI and on MCP keys** (shown once organizations are switched on) — `pagespace orgs
+  list|get|members|drives|policies` and the matching `organizations.*` MCP tools read what the web already
+  shows: your organizations and your role in each, the member roster, the drive directory (including
+  Restricted drives, with join standing), and the org's policies for Owners and Admins. Reads only: creating,
+  inviting, roles, policies and billing still need a signed-in session. An access key scoped to specific
+  drives is refused on the org-wide reads and sees only its own drives in the directory.
+
 - **Organization settings** (shown once organizations are switched on) — Settings › Organizations lists the
   organizations you belong to and lets you create one: name it, choose the drives you own to move in (Home
   stays personal), invite people, see the price, and pay with a card; the organization is ready once that

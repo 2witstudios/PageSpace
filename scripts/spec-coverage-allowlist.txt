@@ -257,8 +257,11 @@ WAL-8
 # pool cannot stand in); cron storage accrual settles on the pool with no hold or gate, so it can put a
 # paused or empty pool into debt; the personal usage breakdown still lists org compute under the recorded person.
 WAL-9
-# X-1 (partial, ow-c6): wallet READS are mirrored for CLI/MCP; per [D-OW-26] a token may not move money or
-# change a spend source, so wallet writes are session-only by ruling. Orgs, members, drives, policies: Wave G.
+# X-1 (partial, ow-c6 + ow-p6-x1): wallet READS and the five org READS (orgs list/get, members,
+# drive directory, policies) are mirrored for CLI/MCP, gated by the same requireOrgRole the web
+# routes run; per [D-OW-26] a token may not move money or change a spend source, and every org
+# WRITE is session-only on the server today, so no write is mirrored. Whether X-1's "where the web
+# does" also demands write parity is a reviewer call; until then the bare ID stays here.
 X-1
 # X-2: B3's "X-2 (partial)" test blocks ORGS_ENABLED while org tables are excluded from the GDPR
 # export; the export and account-deletion handling itself is the Phase 6 leaf yfmlkdchehmberwthwu6g7vt.
