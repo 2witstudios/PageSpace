@@ -1,4 +1,4 @@
-import { expect, type Browser, type BrowserContext, type Page } from '@playwright/test';
+import { expect, type Browser, type BrowserContext, type Page, type Request } from '@playwright/test';
 import { factories } from '@pagespace/db/test/factories';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
@@ -41,6 +41,46 @@ export const visualUser = async (name: string): Promise<ImagoUser> => {
   return { id: user.id, name, homeDriveId: driveId };
 };
 
+/**
+ * The page's requests in flight, other than socket.io's. Playwright's `networkidle` cannot be
+ * used: socket.io's long-polling transport always has a request open until it upgrades to a
+ * websocket, and on the CI runner it may never upgrade, so the page is never idle by that
+ * measure. What a baseline needs is that nothing the frame draws is still being fetched.
+ */
+type Traffic = { inFlight: Set<Request>; lastChange: number };
+const traffic = new WeakMap<Page, Traffic>();
+
+const isSocketIo = (url: string): boolean => new URL(url).pathname.startsWith('/socket.io/');
+
+const watchRequests = (page: Page): void => {
+  const state: Traffic = { inFlight: new Set(), lastChange: Date.now() };
+  traffic.set(page, state);
+  page.on('request', (request) => {
+    if (isSocketIo(request.url())) return;
+    state.inFlight.add(request);
+    state.lastChange = Date.now();
+  });
+  const done = (request: Request) => {
+    if (state.inFlight.delete(request)) state.lastChange = Date.now();
+  };
+  page.on('requestfinished', done);
+  page.on('requestfailed', done);
+};
+
+/** No request but socket.io's has been in flight for QUIET_MS. */
+const QUIET_MS = 500;
+const quiet = async (page: Page): Promise<void> => {
+  const state = traffic.get(page);
+  if (state === undefined) throw new Error('requests are not watched on this page: open it with visualBrowser');
+  await expect
+    .poll(() => state.inFlight.size === 0 && Date.now() - state.lastChange >= QUIET_MS, {
+      message: 'requests still in flight',
+      timeout: 30_000,
+      intervals: [100],
+    })
+    .toBe(true);
+};
+
 /** A browser context in the pinned frame, theme and clock, not yet signed in. */
 export const visualBrowser = async (
   browser: Browser,
@@ -58,6 +98,7 @@ export const visualBrowser = async (
   });
   await setTheme(context, baseURL, theme);
   const page = await context.newPage();
+  watchRequests(page);
   await page.clock.setFixedTime(FIXED_NOW);
   return { context, page };
 };
@@ -99,7 +140,7 @@ export const settle = async (page: Page, theme: Theme): Promise<void> => {
     await document.fonts.ready;
   });
   expect(await page.evaluate(() => document.fonts.status)).toBe('loaded');
-  await page.waitForLoadState('networkidle');
+  await quiet(page);
 };
 
 /** Switches an open page to `theme`: the cookie, the emulated scheme, then a reload. */
