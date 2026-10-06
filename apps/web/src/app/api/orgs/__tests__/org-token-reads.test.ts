@@ -171,7 +171,7 @@ describe('X-1 (partial) the five org reads over an MCP token', () => {
     expect(listOrgMembers).toHaveBeenCalledTimes(1);
   });
 
-  it('policies: an Admin token reads them; a Member token hits the role gate; a drive-scoped Admin token is refused (SEAT-6)', async () => {
+  it('policies: an Admin token reads them; a Member token hits the role gate; a drive-scoped Admin token is refused (SEAT-6 (partial) — the onprem/tenant billing-gate clause is proven by the billing routes' own suites)', async () => {
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(token());
     vi.mocked(findMembershipRole).mockResolvedValue('ADMIN');
     const ok = await getPolicies(new Request(`https://x.test/api/orgs/${ORG}/policies`), context);

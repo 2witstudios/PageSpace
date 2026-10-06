@@ -71,7 +71,7 @@ const POLICIES = {
   },
 };
 
-describe('operations/organizations.ts — the five org reads (X-1)', () => {
+describe('operations/organizations.ts — the five org reads', () => {
   it('X-1 (partial) all five are GETs on the org routes with account scope', () => {
     expect(listMyOrganizations.method).toBe('GET');
     expect(listMyOrganizations.path).toBe('/api/orgs');
