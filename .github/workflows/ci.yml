@@ -427,14 +427,15 @@ jobs:
       # apps/imago's production server, which the proxy serves at /imago for spec 27 (IMG-3.5).
       E2E_IMAGO_TARGET: http://127.0.0.1:3106
       # apps/web stores every page version's content in S3, so a page create or save through
-      # /api/pages needs a bucket (spec 32, IMG-7.7). Playwright's mock server (support/
+      # /api/pages needs a bucket (spec 32, IMG-7.7), as does a task create, whose task is a page
+      # (spec 33, IMG-9.6). Playwright's mock server (support/
       # mock-s3.ts) is that bucket, in memory, as it is the AI provider; the keys are not checked.
       AWS_ENDPOINT_URL_S3: http://127.0.0.1:4997
       AWS_REGION: auto
       AWS_ACCESS_KEY_ID: e2e
       AWS_SECRET_ACCESS_KEY: e2e-not-a-real-secret
       BUCKET_NAME: pagespace-e2e
-      E2E_SPECS: tests/15-chat-fixture-smoke.spec.ts tests/16-dispatch-multiplayer.spec.ts tests/17-agent-workspace-grid.spec.ts tests/18-sidebar-directory-live.spec.ts tests/19-channels-badge-live.spec.ts tests/20-pane-lifecycle.spec.ts tests/26-imago-api-proxy.spec.ts tests/27-imago-shell.spec.ts tests/28-imago-settings.spec.ts tests/29-imago-messages.spec.ts tests/30-imago-palette.spec.ts tests/31-imago-chat.spec.ts tests/32-imago-files.spec.ts
+      E2E_SPECS: tests/15-chat-fixture-smoke.spec.ts tests/16-dispatch-multiplayer.spec.ts tests/17-agent-workspace-grid.spec.ts tests/18-sidebar-directory-live.spec.ts tests/19-channels-badge-live.spec.ts tests/20-pane-lifecycle.spec.ts tests/26-imago-api-proxy.spec.ts tests/27-imago-shell.spec.ts tests/28-imago-settings.spec.ts tests/29-imago-messages.spec.ts tests/30-imago-palette.spec.ts tests/31-imago-chat.spec.ts tests/32-imago-files.spec.ts tests/33-imago-tasks.spec.ts
 
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
