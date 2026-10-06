@@ -236,7 +236,13 @@ export async function handleOrgInvoicePaid(
     return null;
   }
   const extraSeats = await invoiceExtraSeats(route.orgId, invoice, deps);
-  const refill = await applyOrgPoolRefill(invoice, { extraSeats });
+  // MON-3: the refill sums only the Business base and extra-seat lines, recognized by the
+  // configured org price ids (with the stored item ids as fallback, read in the shell).
+  const refill = await applyOrgPoolRefill(invoice, {
+    extraSeats,
+    basePriceId: deps.basePriceId(),
+    seatPriceId: deps.seatPriceId(),
+  });
   const subscriptionId = invoiceSubscriptionId(invoice);
   const mirror = subscriptionId ? await mirrorOrgSubscription(route.orgId, subscriptionId, eventId, deps) : null;
   return { refill, mirror };

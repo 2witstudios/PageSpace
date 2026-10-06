@@ -91,6 +91,25 @@ describe('UI-12 credit figures on public pages come from the money-model module'
 
     expect(source('pricing/page.tsx')).not.toMatch(HARDCODED_CREDIT_FIGURE);
   });
+
+  it('UI-12 D-OW-18 the Terms of Service states no credit figure and refers readers to the pricing page', async () => {
+    const { default: TermsPage } = await import('../terms/page');
+    const html = renderToStaticMarkup(<TermsPage />);
+    const text = visibleText(html);
+
+    // The legal text states NO credit figure — not as a literal and not through the module
+    // (the module's figures change with D-OW-17's migration commit; legal copy must not move with it).
+    // The lookbehind keeps section ordinals ("11.3 Credits and Usage Limits") out of the scan:
+    // a number glued into a larger one is not a stated figure.
+    const statedCreditFigures = text.match(/(?<![\d.])\d[\d,]* (?:[A-Za-z]+ )?credits?\b/gi) ?? [];
+    expect(statedCreditFigures).toEqual([]);
+
+    // It refers readers to the pricing page for the figures instead.
+    expect(text).toContain('These Terms state no credit figures');
+    expect(html).toContain('href="/pricing"');
+
+    expect(source('terms/page.tsx')).not.toMatch(HARDCODED_CREDIT_FIGURE);
+  });
 });
 
 describe('plan and seat prices on the FAQ and Terms come from the tier table', () => {

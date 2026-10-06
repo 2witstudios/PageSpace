@@ -78,6 +78,8 @@ const resetAudit = () => {
   resetDefaultSecurityAuditForTests();
 };
 
+const REFILL_PRICE_ID = 'price_test_org_base';
+const REFILL_SEAT_PRICE_ID = 'price_test_org_seat';
 const created = { users: [] as string[], drives: [] as string[], orgs: [] as string[] };
 
 class FakeSeatStripe implements SeatBillingPort {
@@ -286,8 +288,8 @@ describe('every org mutation writes its event', () => {
       amount_paid: 5000,
       subtotal: 5000,
       parent: { subscription_details: { subscription: `sub_${createId()}` } },
-      lines: { data: [{ amount: 5000, period: { start: startS, end: startS + 30 * 86_400 } }] },
-    }, { active: true })).toMatchObject({ kind: 'granted' });
+      lines: { data: [{ amount: 5000, period: { start: startS, end: startS + 30 * 86_400 }, pricing: { price_details: { price: REFILL_PRICE_ID } } }] },
+    }, { active: true, basePriceId: REFILL_PRICE_ID, seatPriceId: REFILL_SEAT_PRICE_ID })).toMatchObject({ kind: 'granted' });
 
     // ── verified domains and auto-join (one refused while seats are full, one joined with auto-add) ──
     const claim = await addOrgDomain({ orgId, domain, actorId: jono.id });
