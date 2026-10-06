@@ -27,12 +27,7 @@ import { listGrantsByAgent } from '@pagespace/lib/integrations/repositories/gran
 import { getConfig } from '@pagespace/lib/integrations/repositories/config-repository';
 import { type DriveRole, type GlobalAssistantConfigData } from '@pagespace/lib/integrations/types';
 import { suppressGithubIntegrationTools } from './tool-filtering';
-import {
-  findBuiltinAgentOwner,
-  loadImagoAgentContext,
-  resolveImagoIntegrationDriveId,
-} from './imago-agent-context';
-import type { LocationContext } from '@/lib/ai/shared/chat-types';
+import { findBuiltinAgentOwner, loadImagoAgentContext } from './imago-agent-context';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // SHARED DEPENDENCIES
@@ -94,11 +89,11 @@ export async function resolveIntegrationDriveScope(
  * ONE entry point for every way an agent runs outside its own page chat
  * (ask_agent, the consult route, workflow and trigger runs).
  *
- * A built-in Imago agent never gets its per-agent `integration_tool_grants`:
- * those may name a drive the agent holds no grant on (IMG-4.8/4.9). Run by its
- * owner it resolves exactly as in page chat (`resolveImagoAgentIntegrationTools`,
- * drive integrations only from `contextDriveId` when that is the Home drive or
- * a granted one); run by anyone else it gets none.
+ * A built-in Imago agent never gets per-agent `integration_tool_grants`. Run by
+ * its owner it resolves exactly as in its own chat — the Global Assistant's
+ * integrations (`resolveAssistantIntegrationTools`), drive ones from
+ * `contextDriveId` unless the user keeps Imago out of that drive or the
+ * caller's token scope excludes it; run by anyone else it gets none.
  *
  * @param params.agentId - The page ID of the AI_CHAT agent
  * @param params.userId - The authenticated user's ID
@@ -111,7 +106,7 @@ export async function resolveIntegrationDriveScope(
  * @param params.contextDriveId - The drive the run is working in, if any
  *   (only an Imago agent reads it)
  * @param params.allowedDriveIds - The caller's token drive scope (empty =
- *   unscoped), applied to an Imago agent's grants
+ *   unscoped), applied to an Imago agent's drive in view
  * @returns AI SDK tool objects ready for merging into the tool set
  */
 export async function resolvePageAgentIntegrationTools(params: {
@@ -128,12 +123,15 @@ export async function resolvePageAgentIntegrationTools(params: {
   if (builtinOwnerId !== null) {
     if (builtinOwnerId !== userId) return {};
     // Throws on failure: callers degrade to no integration tools (fail closed).
-    const imagoContext = await loadImagoAgentContext({ userId, agentPageId: agentId, allowedDriveIds });
-    if (!imagoContext) return {};
-    return resolveImagoAgentIntegrationTools({
-      agentId,
+    const imagoContext = await loadImagoAgentContext({ userId, agentPageId: agentId });
+    if (!imagoContext || isOnPrem()) return {};
+    const inScope = contextDriveId !== null &&
+      !imagoContext.excludedDriveIds.has(contextDriveId) &&
+      (allowedDriveIds.length === 0 || allowedDriveIds.includes(contextDriveId));
+    return resolveAssistantIntegrationTools({
       userId,
-      grantedDriveId: contextDriveId ? resolveImagoIntegrationDriveId(driveInView(contextDriveId), imagoContext) : null,
+      agentId,
+      driveInView: inScope ? contextDriveId : null,
       currentTools,
     });
   }
@@ -145,83 +143,40 @@ export async function resolvePageAgentIntegrationTools(params: {
   return toSortedAISDKTools(grants, { userId, agentId, driveId }, currentTools);
 }
 
-/** A location with only the drive in view — all the Imago drive check reads. */
-function driveInView(driveId: string): LocationContext {
-  return { currentDrive: { id: driveId, name: '', slug: '' } };
-}
-
 // ═══════════════════════════════════════════════════════════════════════════════
-// GLOBAL ASSISTANT RESOLVER
+// GLOBAL ASSISTANT RESOLVER (shared with Imago)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /**
- * Resolve integration tools for the global assistant.
+ * Resolve the Global Assistant's integration tools — and Imago's, which
+ * replaces it one for one (IMG-10.10), through this same function: the user's
+ * integrations per `global_assistant_config` (`enabledUserIntegrations`,
+ * `driveOverrides`, `inheritDriveIntegrations`, connection visibility), plus
+ * the drive-level ones of `driveInView` when the user is a member there
+ * (`resolveIntegrationDriveScope`).
  *
  * @param params.userId - The authenticated user's ID
- * @param params.driveId - The current drive context (null when in dashboard)
- * @param params.userDriveRole - The user's role in the current drive
+ * @param params.agentId - The Imago agent's page ID (recorded on audit
+ *   entries), null for the Global Assistant
+ * @param params.driveInView - The drive in view (null on the dashboard). An
+ *   Imago caller passes null for a drive the user keeps Imago out of.
  * @param params.currentTools - The assistant's already-resolved tool set
  *   (before these integration tools are merged in), used to suppress GitHub
  *   OAuth integration tools when the sandbox git/gh CLI toolkit is already
  *   present. Pass the full pre-core/non-core-split filtered tool set — the
- *   Global Assistant's final tool set never carries raw tool names as
- *   top-level keys (core tools + tool_search/execute_tool only).
+ *   assistant's final tool set never carries raw tool names as top-level keys
+ *   (core tools + tool_search/execute_tool only).
  * @returns AI SDK tool objects ready for merging into the tool set
  */
-export async function resolveGlobalAssistantIntegrationTools(params: {
+export async function resolveAssistantIntegrationTools(params: {
   userId: string;
-  driveId: string | null;
-  userDriveRole: DriveRole | null;
+  agentId: string | null;
+  driveInView: string | null;
   currentTools: Record<string, unknown>;
 }): Promise<Record<string, CoreTool>> {
-  const { userId, driveId, userDriveRole, currentTools } = params;
-  const deps = createResolutionDeps();
-
-  const grants = await resolveGlobalAssistantIntegrations(
-    deps,
-    userId,
-    driveId,
-    userDriveRole
-  );
-
-  return toSortedAISDKTools(grants, { userId, agentId: null, driveId }, currentTools);
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// IMAGO AGENT RESOLVER
-// ═══════════════════════════════════════════════════════════════════════════════
-
-/**
- * Resolve integration tools for a built-in Imago agent (IMG-4.8).
- *
- * An Imago agent is the user's assistant, so it gets what the Global Assistant
- * resolves — the user's integrations per `global_assistant_config`
- * (`enabledUserIntegrations`, `driveOverrides`, `inheritDriveIntegrations`,
- * connection visibility) — with one difference in reach: drive-level
- * integrations come only from `grantedDriveId`, which the caller must pass
- * only for the Home drive or a drive the agent holds a `drive_agent_members`
- * grant on (see `resolveImagoIntegrationDriveId`). A drive in view without a
- * grant contributes nothing; user-level integrations are resolved as on the
- * dashboard.
- *
- * Onprem exposes no external integration at all.
- *
- * @param params.agentId - The Imago agent's page ID (recorded on audit entries)
- * @param params.userId - The authenticated user's ID
- * @param params.grantedDriveId - The drive in view, when the agent may work in it
- * @param params.currentTools - The pre-exposure-mode tool set (see
- *   `resolvePageAgentIntegrationTools`)
- */
-export async function resolveImagoAgentIntegrationTools(params: {
-  agentId: string;
-  userId: string;
-  grantedDriveId: string | null;
-  currentTools: Record<string, unknown>;
-}): Promise<Record<string, CoreTool>> {
-  const { agentId, userId, grantedDriveId, currentTools } = params;
-  if (isOnPrem()) return {};
-
-  const { driveId, userDriveRole } = await resolveIntegrationDriveScope(userId, grantedDriveId);
+  const { userId, agentId, driveInView, currentTools } = params;
+  // A drive the user is not a member of resolves no drive-scoped integrations.
+  const { driveId, userDriveRole } = await resolveIntegrationDriveScope(userId, driveInView);
   const grants = await resolveGlobalAssistantIntegrations(
     createResolutionDeps(),
     userId,

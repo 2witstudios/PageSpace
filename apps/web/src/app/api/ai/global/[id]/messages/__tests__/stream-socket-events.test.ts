@@ -1235,9 +1235,11 @@ describe('POST /api/ai/global/[id]/messages — lifecycle handoff', () => {
         'provider_ready',
         'history_loaded',
         'history_converted',
+        // The payer's eligibility first, then the context the shared
+        // assistant-surface builder assembles (IMG-10.10).
+        'sandbox_eligibility',
         'personalization',
         'home_drive_resolved',
-        'sandbox_eligibility',
         'agent_awareness_built',
         'commands_loaded',
         'active_plan_loaded',

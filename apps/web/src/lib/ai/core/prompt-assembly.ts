@@ -81,12 +81,6 @@ interface PageAgentPromptInput extends SharedAgentPromptInput {
   readonly drivePromptPrefix: string;
   /** Cross-drive membership context. Applies to both branches. */
   readonly memberDriveContextPrefix: string;
-  /**
-   * A built-in Imago agent's granted-drive summary (`buildGrantedDrivesPrompt`).
-   * Omitted for every other agent. Applies to both branches: the Imago agents
-   * carry their own prompt, and their reach is not persona.
-   */
-  readonly grantedDrives?: string;
   /** The agent's own memory page. */
   readonly agentMemory: string;
   /** `TOOL_DISCOVERY_PROMPT` + the deferred tool catalog, as one block. */
@@ -110,6 +104,14 @@ interface GlobalAssistantPromptInput extends SharedAgentPromptInput {
    * it, so the catalog arrives on its own later.
    */
   readonly nonCoreToolNames: string;
+  /**
+   * Imago (IMG-10.10), which replaces the Global Assistant one for one: its
+   * persona, in place of the Global Assistant's own one-line introduction.
+   * Omitted for the Global Assistant, whose prompt is then unchanged.
+   */
+  readonly persona?: string;
+  /** Imago's own memory page (`buildAgentMemorySection`); omitted for the Global Assistant. */
+  readonly agentMemory?: string;
 }
 
 /**
@@ -132,12 +134,15 @@ export type AgentSystemPromptInput = PageAgentPromptInput | GlobalAssistantPromp
  * reached from the dashboard with no page to anchor on and has to decide for
  * itself which drive "here" means.
  */
+const GLOBAL_ASSISTANT_PERSONA = 'You are the Global Assistant for PageSpace - accessible from both the dashboard and sidebar.';
+
 const globalAssistantGuidance = (
   conversationType: string,
   conversationContextId: string | null,
+  persona: string,
 ): string => `
 
-You are the Global Assistant for PageSpace - accessible from both the dashboard and sidebar.
+${persona}
 
 SMART EXPLORATION RULES:
 1. When in a drive context (see your current LOCATION context for the driveId) - ALWAYS explore it first:
@@ -202,7 +207,7 @@ export function buildAgentSystemPrompt(input: AgentSystemPromptInput): string {
     const persona =
       base +
       toolDiscovery +
-      globalAssistantGuidance(input.conversationType, input.conversationContextId) +
+      globalAssistantGuidance(input.conversationType, input.conversationContextId, input.persona ?? GLOBAL_ASSISTANT_PERSONA) +
       (input.includeAskUser ? `\n\n${ASK_USER_SECTION}` : '') +
       input.drivePromptSection;
 
@@ -214,7 +219,8 @@ export function buildAgentSystemPrompt(input: AgentSystemPromptInput): string {
       input.pageTree +
       (input.nonCoreToolNames ? '\n\n' + input.nonCoreToolNames : '') +
       input.skillCatalog +
-      input.activePlan
+      input.activePlan +
+      (input.agentMemory ?? '')
     );
   }
 
@@ -251,7 +257,6 @@ export function buildAgentSystemPrompt(input: AgentSystemPromptInput): string {
 
   // Cross-drive membership applies uniformly, unlike drivePromptPrefix above.
   systemPrompt = input.memberDriveContextPrefix + systemPrompt;
-  systemPrompt += input.grantedDrives ?? '';
   systemPrompt += input.skillCatalog;
   systemPrompt += input.activePlan;
 

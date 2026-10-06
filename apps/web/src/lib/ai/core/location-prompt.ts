@@ -38,30 +38,21 @@ export interface LocationPromptInput {
    */
   homeDriveId?: string | null;
   /**
-   * Whether the AGENT can work in the drive in view, for agents whose reach is
-   * narrower than the user's (built-in Imago agents: explicit drive grants).
-   * Absent for every other agent, whose block is unchanged. `not-granted`
-   * also drops the "act on this workspace" defaults, which would send the
-   * agent at a drive its tools will refuse.
+   * Set when the AGENT cannot work in the drive in view although the user can:
+   * a drive the user keeps their Imago agent out of. Absent everywhere else,
+   * where the block is unchanged. The block then names nothing in that drive
+   * — not the page, the path or the drive's own name, which are its contents
+   * as much as its pages are — and drops the "act on this workspace" defaults,
+   * which would send the agent at a drive its tools will refuse.
    */
   agentAccess?: LocationAgentAccess;
 }
 
-export type LocationAgentAccess =
-  | { kind: 'home' }
-  | { kind: 'granted'; role: string }
-  | { kind: 'not-granted' };
+export type LocationAgentAccess = { kind: 'excluded' };
 
-const agentAccessLine = (access: LocationAgentAccess): string => {
-  switch (access.kind) {
-    case 'home':
-      return "• Your access here: this is the user's Home drive, where you live";
-    case 'granted':
-      return `• Your access here: granted (${access.role})`;
-    case 'not-granted':
-      return '• Your access here: not granted — you cannot read or change this workspace. If the user wants you to work here, tell them they can grant you access to it';
-  }
-};
+const EXCLUDED_LOCATION = `LOCATION (current, this turn):
+• The user is looking at a workspace they keep you out of — you cannot read or change anything in it, so neither its name nor its pages are shown to you. If they want you to work here, they can let you back in from its settings
+• When the user says "here" or "this", they mean that workspace: tell them it is outside your reach`;
 
 export function buildLocationTurnPrompt(input: LocationPromptInput | undefined): string {
   if (!input || (!input.currentPage && !input.currentDrive)) {
@@ -82,6 +73,8 @@ export function buildLocationTurnPrompt(input: LocationPromptInput | undefined):
 • Do NOT default to the Home drive for general work — ask which workspace, or use list_drives${homeLine}`;
   }
 
+  if (input.agentAccess?.kind === 'excluded') return EXCLUDED_LOCATION;
+
   const lines: string[] = ['LOCATION (current, this turn):'];
 
   if (input.currentPage) {
@@ -99,14 +92,7 @@ export function buildLocationTurnPrompt(input: LocationPromptInput | undefined):
     lines.push(`• Path: ${input.breadcrumbs.join(' > ')}`);
   }
 
-  if (input.agentAccess) {
-    lines.push(agentAccessLine(input.agentAccess));
-  }
-
   lines.push('• When the user says "here" or "this", they mean the location above');
-  if (input.agentAccess?.kind === 'not-granted') {
-    return lines.join('\n');
-  }
   lines.push('• Default scope: operations should focus on this location unless the user indicates otherwise');
 
   if (input.currentDrive?.id) {
