@@ -113,6 +113,45 @@ describe('infrastructure/UPGRADE.md (operator upgrade note)', () => {
    * operator reading "nothing is dropped" next to that number would have taken
    * exactly the wrong snapshot decision.
    */
+  // Closing review F5 (IMG-10.7): the IMG-4.4 backfill runbook must carry
+  // everything an operator needs to run it safely in production.
+  describe('Imago agents backfill runbook (IMG-4.3/IMG-4.4)', () => {
+    const start = doc.indexOf('## Home drives and Imago agents for existing users');
+    const section = start === -1 ? '' : doc.slice(start, doc.indexOf('\n---', start));
+
+    it('given the section, should exist', () => {
+      expect(section).not.toBe('');
+    });
+
+    it('given the run, should require DATABASE_URL and ENCRYPTION_KEY', () => {
+      expect(section).toContain('DATABASE_URL');
+      expect(section).toContain('ENCRYPTION_KEY');
+      expect(section).toMatch(/unknown@system/);
+    });
+
+    it('given the run, should do the --dry-run first, then the real run', () => {
+      const dry = section.indexOf('bun scripts/backfill-imago-agents.ts --dry-run');
+      const real = section.indexOf('bun scripts/backfill-imago-agents.ts --batch-size');
+      expect(dry).toBeGreaterThan(-1);
+      expect(real).toBeGreaterThan(dry);
+    });
+
+    it('given the summary, should require zero on both "still missing" counts', () => {
+      expect(section).toMatch(/still missing a Home drive:\s+0/);
+      expect(section).toMatch(/still missing an agent:\s+0/);
+    });
+
+    it('given the run, should say it grants the agents MEMBER on every owned STANDARD drive', () => {
+      expect(section).toMatch(/MEMBER/);
+      expect(section).toMatch(/STANDARD drive/);
+    });
+
+    it('given the activity chain lock, should warn about contention (off-peak, smaller --batch-size)', () => {
+      expect(section).toMatch(/advisory lock/);
+      expect(section).toMatch(/off-peak/);
+    });
+  });
+
   describe('migration references', () => {
     const MIGRATIONS_DIR = resolve(__dirname, '../../packages/db/drizzle');
 
