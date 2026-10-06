@@ -42,6 +42,12 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   outside says that it may need approval or may be turned off, and if guests are off the refusal says so
   and switches you to giving them a seat. A failed "Move out of the organization" keeps its dialog open with
   the reason. The Workflows list fits a phone screen.
+- **Pricing page and plan cards show the organization plan's terms** — the pricing page and the in-app
+  plan cards now show three tiers, Free, Pro and Business. Each card lists the price, the credits
+  included, and the top-up rate as separate lines. Business is the organization plan: $50 a month with
+  5 seats, $10 a month for each extra seat, and the credits each extra seat adds. There is no trial, and
+  a card is required at checkout. Credit amounts are plain counts and never carry a "$". All figures come
+  from the same billing model the app charges with.
 - **New organizations ask before letting outsiders in** — a new organization's "guests from outside"
   setting now starts at "Admins approve" instead of "On": inviting or sharing with someone outside the
   organization waits for an Owner or Admin to approve it. Owners can change the setting at any time.

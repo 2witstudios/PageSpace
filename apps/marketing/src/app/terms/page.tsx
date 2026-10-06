@@ -2,7 +2,13 @@ import Link from "next/link";
 import { SiteNavbar } from "@/components/SiteNavbar";
 import { SiteFooter } from "@/components/SiteFooter";
 import { pageMetadata, LEGAL_LAST_UPDATED } from "@/lib/metadata";
-import { MONTHLY_CREDITS, FREE_STARTER_CREDITS_DISPLAY } from "@/lib/credits";
+import { MONTHLY_CREDITS, FREE_STARTER_CREDITS_DISPLAY, formatDollars, planFacts } from "@/lib/credits";
+
+// Plan and seat prices come from the tier table via planFacts (SEAT-2), never typed in here.
+const PRO = planFacts("pro");
+const BUSINESS = planFacts("business");
+const BUSINESS_SEATS = BUSINESS.org?.includedSeats;
+const EXTRA_SEAT_PRICE = BUSINESS.org ? formatDollars(BUSINESS.org.extraSeatPriceCents) : "";
 
 export const metadata = pageMetadata.terms;
 
@@ -142,8 +148,8 @@ export default function TermsOfService() {
             </p>
             <ul className="list-disc pl-6 mb-4">
               <li><strong>Free Plan:</strong> {FREE_STARTER_CREDITS_DISPLAY} credits as a one-time starter grant, standard models, 500MB storage</li>
-              <li><strong>Pro Plan ($15/month):</strong> {MONTHLY_CREDITS.pro} credits a month, standard and Pro models, 2GB storage</li>
-              <li><strong>Business Plan ($50/month per organization, 5 seats included, $10 per extra seat):</strong> {MONTHLY_CREDITS.business} credits a month, standard and Pro models, 50GB storage, priority support</li>
+              <li><strong>Pro Plan ({PRO.price}/month):</strong> {MONTHLY_CREDITS.pro} credits a month, standard and Pro models, 2GB storage</li>
+              <li><strong>Business Plan ({BUSINESS.price}/month per organization, {BUSINESS_SEATS} seats included, {EXTRA_SEAT_PRICE} per extra seat):</strong> {MONTHLY_CREDITS.business} credits a month, standard and Pro models, 50GB storage, priority support</li>
             </ul>
             <p className="mb-4">
               Credits meter AI usage. The Free plan&#39;s starter credits are granted once and are not renewed; paid plans receive a monthly credit allowance, and unused credits roll over and accumulate — they never expire. Additional credits may be purchased at any time as one-time top-ups, which also never expire. Model availability differs by plan: free accounts use standard models, while paid plans add access to Pro (advanced) models.

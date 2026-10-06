@@ -7,6 +7,7 @@ import { Badge } from '@/components/ui/badge';
 import { ExternalLink, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { PLAN_ORDER, type PlanDefinition, type SubscriptionTier } from '@/lib/subscription/plans';
+import { planFacts } from '@pagespace/lib/billing/credit-copy';
 
 interface PlanCardProps {
   plan: PlanDefinition;
@@ -40,6 +41,9 @@ export function PlanCard({
   className,
 }: PlanCardProps) {
   const showsGrandfatheredPrice = isCurrentPlan && grandfathered && plan.isOrgPlan;
+  // MON-6 / SEAT-2: price, seat terms, and per-seat credits from the same source as the
+  // marketing pricing page. Included credits stay on `plan`: withCreditOverrides may patch them.
+  const facts = planFacts(plan.id);
   const [isProcessing, setIsProcessing] = useState(false);
 
   const handleAction = async () => {
@@ -213,17 +217,20 @@ export function PlanCard({
             <span className="text-lg font-semibold" data-testid="plan-price">Your current price</span>
           ) : (
             <>
-              <span className="text-3xl font-bold" data-testid="plan-price">{plan.price.formatted}</span>
-              {plan.price.monthly > 0 && (
-                <span className="text-sm text-muted-foreground">/month</span>
+              <span className="text-3xl font-bold" data-testid="plan-price">{facts.priceCents > 0 ? facts.price : plan.price.formatted}</span>
+              {facts.period && (
+                <span className="text-sm text-muted-foreground">{facts.period}</span>
               )}
             </>
           )}
         </div>
-        {plan.isOrgPlan && !showsGrandfatheredPrice && (
-          <p className="text-xs text-muted-foreground" data-testid="plan-seats">
-            per organization · {plan.includedSeats} seats included · ${plan.extraSeatUsd} per extra seat
-          </p>
+        {/* SEAT-2: Business is the org plan; A-7 / D-OW-30: no org trial, card at checkout. */}
+        {facts.org && !showsGrandfatheredPrice && (
+          <div className="space-y-0.5 text-xs text-muted-foreground">
+            <p data-testid="plan-seats">{facts.org.seatTerms}</p>
+            <p data-testid="plan-seat-credits">{facts.org.extraSeatCredits}</p>
+            <p data-testid="plan-checkout">{facts.org.checkout}</p>
+          </div>
         )}
       </CardHeader>
 
