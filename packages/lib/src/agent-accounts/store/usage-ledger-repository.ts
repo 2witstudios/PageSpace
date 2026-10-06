@@ -40,8 +40,16 @@ export function createUsageLedgerRepository({ pool }: { readonly pool: Pick<Pool
 
     async reserve({ ref, grantId, bytes, now, admits }) {
       let client: PoolClient | null = null;
+      // pg-pool drops its idle 'error' listener on checkout: a backend that dies mid-transaction
+      // would emit an unhandled 'error' and crash the process. Absorb it here (the failing query
+      // already lands in the catch below) and destroy the connection on release.
+      let connectionError: Error | null = null;
+      const onConnectionError = (error: Error) => {
+        connectionError ??= error;
+      };
       try {
         client = await pool.connect();
+        client.on('error', onConnectionError);
         await client.query('BEGIN');
         await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`agent-accounts:usage:${ref.tenantId}:${ref.accountId}`]);
         await client.query('DELETE FROM agent_account_usage WHERE tenant_id = $1 AND account_id = $2 AND started_at < $3', [ref.tenantId, ref.accountId, new Date(now - RETENTION_MS)]);
@@ -53,10 +61,14 @@ export function createUsageLedgerRepository({ pool }: { readonly pool: Pick<Pool
         await client.query('COMMIT');
         return true;
       } catch {
-        await client?.query('ROLLBACK').catch(() => undefined);
+        // A ROLLBACK that fails leaves the transaction state in doubt — destroy rather than pool it.
+        await client?.query('ROLLBACK').catch((rollbackError: unknown) => {
+          connectionError ??= rollbackError instanceof Error ? rollbackError : new Error(String(rollbackError));
+        });
         return false;
       } finally {
-        client?.release();
+        client?.removeListener('error', onConnectionError);
+        client?.release(connectionError ?? undefined);
       }
     },
 

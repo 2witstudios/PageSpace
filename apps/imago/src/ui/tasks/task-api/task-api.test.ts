@@ -98,6 +98,22 @@ describe('fetchTaskList()', () => {
     });
   });
 
+  test('whole-list paging only', async () => {
+    const first = Array.from({ length: 200 }, (_, i) => taskItem(`a${i}`, { status: 'completed' }));
+    const web = fakeWeb({
+      [tasksOf('l1', 0)]: () => Response.json(taskListResponse(first, { hasMore: true })),
+      [tasksOf('l1', 200)]: () => Response.json(taskListResponse([taskItem('b0')], { hasMore: false })),
+    });
+    await fetchTaskList(web.client, 'l1');
+
+    assert({
+      given: 'a list that pages, done tasks first',
+      should: 'never opt into the route’s statusGroup or perStatus windows, which drop done tasks or count offsets per column',
+      actual: web.requests.map((request) => request.url).filter((url) => /statusGroup|perStatus/.test(url)),
+      expected: [],
+    });
+  });
+
   test('the cap', async () => {
     const full = Array.from({ length: 200 }, (_, i) => taskItem(`t${i}`));
     const routes = Object.fromEntries(

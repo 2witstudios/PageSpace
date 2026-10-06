@@ -2,7 +2,7 @@ import { getStorageConfigFromSubscription, STORAGE_TIERS, type SubscriptionTier 
 import { storageRepository, type DrizzleTx } from './storage-repository';
 import { reserveUploadSlot } from './pending-uploads';
 import { getAdvisoryLockPool } from '@pagespace/db/db';
-import { withAdvisoryLock, type AdvisoryLockPool } from '@pagespace/db/advisory-lock';
+import { throwIfLockLost, withAdvisoryLock, type AdvisoryLockPool } from '@pagespace/db/advisory-lock';
 
 // Re-exported for existing consumers; the canonical table lives in subscription-utils.
 export { STORAGE_TIERS };
@@ -312,7 +312,7 @@ export async function getUserFileCount(userId: string): Promise<number> {
  * read the same drift and each apply the correction delta once, double
  * counting it exactly like two overlapping cron ticks would (#2225 review).
  */
-async function reconcileStorageUsageUnlocked(userId: string): Promise<{
+async function reconcileStorageUsageUnlocked(userId: string, signal?: AbortSignal): Promise<{
   previousUsage: number;
   actualUsage: number;
   difference: number;
@@ -341,6 +341,10 @@ async function reconcileStorageUsageUnlocked(userId: string): Promise<{
 
   // Update if there's a discrepancy
   if (!withinCooldown && Math.abs(difference) > 1) { // Allow 1 byte tolerance for floating point
+    // The reconcile lock is what keeps a second run from applying this same delta again. If it
+    // was lost (the lock connection's backend died), skip: the drift is re-measured from scratch
+    // by the next reconcile, so nothing is lost by not applying it now.
+    throwIfLockLost(signal, `the storage correction for user ${JSON.stringify(userId)}`);
     actualUsage = await storageRepository.runTransaction(async (tx) => {
       const { newUsage } = await storageRepository.updateStorageInTx(tx, userId, difference);
 
@@ -428,7 +432,7 @@ export interface StorageReconcileCorrection {
  * failures are isolated so one bad account can't block the sweep; callers
  * alert on a non-empty `corrected`/`failed`.
  */
-export async function reconcileAllStorageUsage(): Promise<{
+export async function reconcileAllStorageUsage(signal?: AbortSignal): Promise<{
   corrected: StorageReconcileCorrection[];
   failed: string[];
 }> {
@@ -438,6 +442,9 @@ export async function reconcileAllStorageUsage(): Promise<{
   const failed: string[] = [];
 
   for (const candidate of candidates) {
+    // Losing the lock means another sweep can apply these same corrections (see
+    // RECONCILE_STORAGE_LOCK_KEY): stop, and let the next sweep re-measure every remaining drift.
+    if (signal?.aborted) break;
     const drift = computeStorageDrift(candidate, STORAGE_DRIFT_TOLERANCE_BYTES);
     if (!drift.flagged) continue;
 
@@ -495,8 +502,8 @@ export type ReconcileAllStorageUsageRunResult =
 export async function reconcileAllStorageUsageSerialized(
   pgPool: AdvisoryLockPool = getAdvisoryLockPool(),
 ): Promise<ReconcileAllStorageUsageRunResult> {
-  const locked = await withAdvisoryLock(pgPool, RECONCILE_STORAGE_LOCK_KEY, () =>
-    reconcileAllStorageUsage(),
+  const locked = await withAdvisoryLock(pgPool, RECONCILE_STORAGE_LOCK_KEY, (signal) =>
+    reconcileAllStorageUsage(signal),
   );
   if (locked.outcome === 'lock_busy') {
     return { outcome: 'lock_busy' };
@@ -524,8 +531,8 @@ export async function reconcileStorageUsage(
   userId: string,
   pgPool: AdvisoryLockPool = getAdvisoryLockPool(),
 ): Promise<ReconcileStorageUsageRunResult> {
-  const locked = await withAdvisoryLock(pgPool, RECONCILE_STORAGE_LOCK_KEY, () =>
-    reconcileStorageUsageUnlocked(userId),
+  const locked = await withAdvisoryLock(pgPool, RECONCILE_STORAGE_LOCK_KEY, (signal) =>
+    reconcileStorageUsageUnlocked(userId, signal),
   );
   if (locked.outcome === 'lock_busy') {
     return { outcome: 'lock_busy' };
