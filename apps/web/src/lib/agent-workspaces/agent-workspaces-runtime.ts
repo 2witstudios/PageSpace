@@ -480,6 +480,15 @@ export async function createConversationInSession(input: {
   /** The pane a human picked into — see `AdmitConversationInput.activeNodeId`. */
   activeNodeId?: string;
 }): Promise<void> {
+  // The creators run inside the membership transaction, so their
+  // `conversation:created` is held here and made once it has committed: a
+  // sidebar re-reads its listing on that event, and a re-read racing the commit
+  // gets the listing without this thread and is never prompted again. One slot,
+  // overwritten, so a transaction that runs `within` again announces once.
+  const held: { announceCreated?: () => void } = {};
+  const holdAnnouncement = (announce: () => void) => {
+    held.announceCreated = announce;
+  };
   await createConversationInSessionWith<DbExecutor>(
     {
       ...buildClaimDeps(input.userId),
@@ -487,10 +496,12 @@ export async function createConversationInSession(input: {
         conversationRepository.createConversation(conversationId, userId, agentPageId, {
           title: title ?? undefined,
           executor: tx,
+          announceAfterCommit: holdAnnouncement,
         }),
       createGlobalConversation: async ({ conversationId, userId, title }, tx) => {
         await resolveOrCreateConversation(userId, conversationId, tx, {
           title: title ?? undefined,
+          announceAfterCommit: holdAnnouncement,
         });
       },
       findConversationIn: async (conversationId, tx) => {
@@ -508,6 +519,8 @@ export async function createConversationInSession(input: {
     },
     input,
   );
+  // Resolving means the transaction committed; a refusal threw past this.
+  held.announceCreated?.();
 }
 
 /**

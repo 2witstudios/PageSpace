@@ -259,6 +259,13 @@ export const conversationRepository = {
        * changes.
        */
       executor?: ConversationWriteExecutor;
+      /**
+       * With `executor` a caller's transaction: receives the
+       * `conversation:created` announcement instead of it being made here, so
+       * the caller can make it once that transaction commits — see
+       * `resolveOrCreateConversation`'s option of the same name.
+       */
+      announceAfterCommit?: (announce: () => void) => void;
     }
   ): Promise<'created' | 'exists' | 'message_owner_conflict'> {
     const executor = opts?.executor ?? db;
@@ -294,7 +301,10 @@ export const conversationRepository = {
     // Directory event so sidebars (including the owner's other devices, and
     // server-spawned workers' owners) see the new conversation without a
     // poll. Emitted from the repository — routes never decide (SSoT §3).
-    emitConversationLifecycle('created', { ...inserted, rev: Number(inserted.rev) }, opts?.triggeredBy);
+    const announce = () =>
+      emitConversationLifecycle('created', { ...inserted, rev: Number(inserted.rev) }, opts?.triggeredBy);
+    if (opts?.announceAfterCommit) opts.announceAfterCommit(announce);
+    else announce();
     return 'created';
   },
 

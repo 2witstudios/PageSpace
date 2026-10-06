@@ -25,7 +25,7 @@
  * silent skip would be a green, zero-assertion pass. Local runs without Docker
  * opt out explicitly with ALLOW_SKIP_DB_TESTS=1.
  */
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, vi } from 'vitest';
 import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db';
 import { eq, and, isNull, count } from '@pagespace/db/operators';
@@ -49,6 +49,49 @@ import {
 } from '../agent-workspaces-runtime';
 import { AgentNotInSessionDriveError, SessionFullError } from '../create-conversation-in-workspace';
 import { requireDb } from '@pagespace/db/test/require-db';
+
+/**
+ * Every `conversation:created` announcement, with what ANOTHER connection could
+ * read at the instant it was made. A client answers that event by re-reading the
+ * listing on its own connection, so the announcement is only true if both the
+ * row and its membership node are already committed when it fires.
+ */
+const announcements = vi.hoisted(
+  () => [] as Array<{ conversationId: string; visible: Promise<{ row: boolean; node: boolean }> }>,
+);
+
+vi.mock('@/lib/repositories/conversation-rev', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/repositories/conversation-rev')>();
+  const { db: pooled } = await import('@pagespace/db/db');
+  const ops = await import('@pagespace/db/operators');
+  const schema = await import('@pagespace/db/schema/conversations');
+  const nodes = await import('@pagespace/db/schema/agent-workspace-nodes');
+  return {
+    ...actual,
+    emitConversationLifecycle: (...args: Parameters<typeof actual.emitConversationLifecycle>) => {
+      const [kind, row] = args;
+      if (kind === 'created') {
+        announcements.push({
+          conversationId: row.id,
+          visible: Promise.all([
+            pooled.select({ id: schema.conversations.id }).from(schema.conversations).where(ops.eq(schema.conversations.id, row.id)),
+            pooled
+              .select({ id: nodes.agentWorkspaceNodes.id })
+              .from(nodes.agentWorkspaceNodes)
+              .where(ops.eq(nodes.agentWorkspaceNodes.targetId, row.id)),
+          ]).then(([rows, held]) => ({ row: rows.length > 0, node: held.length > 0 })),
+        });
+      }
+      actual.emitConversationLifecycle(...args);
+    },
+  };
+});
+
+async function announcedFor(conversationId: string) {
+  return Promise.all(
+    announcements.filter((entry) => entry.conversationId === conversationId).map((entry) => entry.visible),
+  );
+}
 
 let dbAvailable = false;
 
@@ -472,6 +515,62 @@ describe('a conversation and its membership are one transaction', () => {
     // Membership lives HERE, and nowhere else — there is no second witness left
     // for it to disagree with.
     expect((await nodeFor(conversationId))?.rootId).toBe(workspace.id);
+  }, 20_000);
+});
+
+describe('conversation:created is announced only once the create has committed (IMG-10.8)', () => {
+  beforeAll(connect);
+
+  // A sidebar answers `conversation:created` by re-reading the session listing.
+  // Announced from inside the membership transaction, that re-read could run
+  // before the commit and get the old listing back, and nothing else would
+  // prompt another: the e2e spec 18 flake, where the row never appeared.
+  it('a page-agent create announces after its row and node are readable from another connection', async () => {
+    if (!dbAvailable) return;
+    const { owner, agentPage, workspace } = await seedWorkspace('Announce Agent');
+    const conversationId = createId();
+
+    await createConversationInSession({
+      conversationId,
+      userId: owner.id,
+      agentPageId: agentPage.id,
+      workspaceId: workspace.id,
+    });
+
+    expect(await announcedFor(conversationId)).toEqual([{ row: true, node: true }]);
+  }, 20_000);
+
+  it('a global-assistant create announces after its row and node are readable from another connection', async () => {
+    if (!dbAvailable) return;
+    const { owner, workspace } = await seedWorkspace('Announce Global');
+    const conversationId = createId();
+
+    await createConversationInSession({
+      conversationId,
+      userId: owner.id,
+      agentPageId: null,
+      workspaceId: workspace.id,
+    });
+
+    expect(await announcedFor(conversationId)).toEqual([{ row: true, node: true }]);
+  }, 20_000);
+
+  it('a create the transaction rolls back announces nothing', async () => {
+    if (!dbAvailable) return;
+    const { owner, agentPage, workspace } = await seedWorkspace('Announce Full');
+    await fillWorkspace(workspace.id, owner.id, agentPage.id, MAX_SESSION_CONVERSATIONS);
+    const conversationId = createId();
+
+    await expect(
+      createConversationInSession({
+        conversationId,
+        userId: owner.id,
+        agentPageId: agentPage.id,
+        workspaceId: workspace.id,
+      }),
+    ).rejects.toBeInstanceOf(SessionFullError);
+
+    expect(await announcedFor(conversationId)).toEqual([]);
   }, 20_000);
 });
 
