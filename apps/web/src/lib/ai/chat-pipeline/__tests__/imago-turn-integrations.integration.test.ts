@@ -292,6 +292,10 @@ async function integrationsSent(chatId: string, contextRef?: ContextRef, token?:
 const setConfig = (values: Partial<typeof globalAssistantConfig.$inferInsert>) =>
   db.update(globalAssistantConfig).set(values).where(eq(globalAssistantConfig.userId, world.userId));
 
+// DB-backed: a turn can legitimately take seconds (10s waitFor), and full-suite CI load
+// must not flap this suite on vitest's 5s default.
+vi.setConfig({ testTimeout: 30_000 });
+
 beforeAll(async () => {
   await ensureTestDb();
   world = await seedWorld();
