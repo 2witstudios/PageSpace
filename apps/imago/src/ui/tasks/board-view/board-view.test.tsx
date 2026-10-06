@@ -3,7 +3,8 @@ import { act } from 'react';
 import { afterEach, beforeEach, describe, test } from 'vitest';
 import { assert } from 'riteway/vitest';
 import { ImagoSWRProvider } from '@/api/swr-provider';
-import { click, mount, press, unmountAll } from '../../test-support/dom';
+import { click, mount, press, typeInto, unmountAll } from '../../test-support/dom';
+import { dueDateFor } from '../task-detail/due-date';
 import { createInitialState } from '../../store/state';
 import { setUiState } from '../../store/store';
 import { fakeWeb, type FakeRoute } from '@/ui/test-support/fake-web';
@@ -18,6 +19,8 @@ const DRIVE = 'GET /api/drives/d1/pages?ls=true&recursive=true';
 const L1 = 'GET /api/pages/l1/tasks?limit=200&offset=0';
 const PAGE_P = 'GET /api/pages/page-p/tasks?limit=200&offset=0';
 const PATCH_Z = 'PATCH /api/pages/l1/tasks/z';
+const PATCH_A = 'PATCH /api/pages/page-p/tasks/a';
+const POST_L1 = 'POST /api/pages/l1/tasks';
 
 /** l1 "Launch": parent p (one open subtask) in progress, leaf z to do. */
 const served = (z: Partial<TaskItemResponse> = {}) =>
@@ -84,11 +87,14 @@ const settle = async (check: () => void): Promise<void> => {
   check();
 };
 
+/** Noon UTC on 5 October: the 5th in every zone the tests run in. */
+const clock = () => new Date('2026-10-05T12:00:00.000Z');
+
 const open = async (table: Record<string, FakeRoute> = routes()) => {
   const web = fakeWeb(table);
   const container = mount(
     <ImagoSWRProvider client={web.client}>
-      <TaskListView driveId="d1" pageId="l1" viewerId="u-1" />
+      <TaskListView driveId="d1" pageId="l1" viewerId="u-1" clock={clock} />
     </ImagoSWRProvider>,
   );
   await settle(() => {
@@ -113,6 +119,16 @@ const columnOf = (container: HTMLElement, id: string) =>
 
 const moveTrigger = (container: HTMLElement, id: string) =>
   container.querySelector<HTMLButtonElement>(`button[data-move="${id}"]`) as HTMLButtonElement;
+
+/** Opens a column's New card, types a title and commits it with Enter. */
+const newCard = (container: HTMLElement, slug: string, title: string) => {
+  const column = container.querySelector(`section[data-column="${slug}"]`) as HTMLElement;
+  const rest = [...column.querySelectorAll('button')].find((button) => button.textContent === 'New card');
+  if (rest) click(rest);
+  const field = column.querySelector<HTMLInputElement>('input[aria-label="New card"]') as HTMLInputElement;
+  typeInto(field, title);
+  press(field, 'Enter');
+};
 
 const announced = (container: HTMLElement) => container.querySelector('p[aria-live="polite"]')?.textContent;
 
@@ -405,6 +421,216 @@ describe('Board view', () => {
     } finally {
       restore();
     }
+  });
+
+  test('a card’s flags, due date and people', async () => {
+    const { container } = await open(
+      routes({
+        [L1]: () =>
+          served({
+            priority: 'high',
+            status: 'blocked',
+            dueDate: dueDateFor('2026-10-07'),
+            assignees: [
+              {
+                id: 'as-1',
+                taskId: 'z',
+                userId: 'u-2',
+                agentPageId: null,
+                user: { id: 'u-2', name: 'Ada Lovelace', image: null },
+                agentPage: null,
+              },
+            ],
+          }),
+      }),
+    );
+    const card = container.querySelector('li[data-task="z"]') as HTMLElement;
+    assert({
+      given: 'Book venue served blocked, high priority, due 7 October and assigned to Ada',
+      should: 'show it in Blocked with both flags, its due day and Ada on the card',
+      actual: {
+        column: columnOf(container, 'z'),
+        blocked: card.querySelector('[data-blocked]')?.textContent,
+        priority: card.querySelector('[data-priority]')?.textContent,
+        due: [card.querySelector('time')?.textContent, card.querySelector('time')?.getAttribute('data-tone')],
+        assignees: card.querySelector('[role="img"]')?.getAttribute('aria-label'),
+      },
+      expected: {
+        column: 'Blocked',
+        blocked: 'Blocked',
+        priority: 'High priority',
+        due: ['Oct 7', 'soon'],
+        assignees: 'Assigned to Ada Lovelace',
+      },
+    });
+  });
+
+  test('a card’s subtasks, in place', async () => {
+    let done = false;
+    const { web, container } = await open(
+      routes({
+        [PAGE_P]: () =>
+          Response.json(taskListResponse([taskItem('a', { title: 'Draft copy', status: done ? 'completed' : 'pending' })])),
+        [PATCH_A]: ({ body }) => {
+          done = (body as { status: string }).status === 'completed';
+          return Response.json(taskItem('a', { title: 'Draft copy', status: 'completed' }));
+        },
+      }),
+    );
+    const card = () => container.querySelector('li[data-task="p"]') as HTMLElement;
+    const before = card().querySelector('li[data-task="a"]');
+    click(card().querySelector('button[aria-label="Toggle Plan launch"]') as HTMLButtonElement);
+    const subtask = card().querySelector('li[data-task="a"]');
+    const link = subtask?.querySelector('a[data-title]')?.getAttribute('href');
+    click(card().querySelector('[aria-label="Complete Draft copy"]') as HTMLElement);
+    await settle(() => {
+      if (web.writes().length === 0) throw new Error('not sent');
+    });
+    assert({
+      given: 'Plan launch’s caret pressed, then its subtask Draft copy ticked',
+      should: 'open Draft copy inside the card with a link to it, and PATCH it done on its own list with CSRF',
+      actual: {
+        before,
+        column: subtask?.closest('section')?.getAttribute('aria-label'),
+        inCard: subtask?.closest('li[data-task="p"]') !== null,
+        link,
+        writes: web.writes(),
+        stillOnBoard: board(container),
+      },
+      expected: {
+        before: null,
+        column: 'In Progress',
+        inCard: true,
+        link: '/d1/tasks/page-a',
+        writes: [{ method: 'PATCH', url: '/api/pages/page-p/tasks/a', csrf: 'tok-1', body: { status: 'completed' } }],
+        stillOnBoard: [
+          ['To Do', ['z']],
+          ['In Progress', ['p', 'a']],
+          ['Blocked', []],
+          ['Done', []],
+        ],
+      },
+    });
+  });
+
+  test('a New card in a column', async () => {
+    const answer = gate();
+    const created: TaskItemResponse[] = [];
+    const { web, container } = await open(
+      routes({
+        [L1]: () =>
+          Response.json(
+            taskListResponse([
+              taskItem('p', { title: 'Plan launch', status: 'in_progress', subTaskCount: 1, position: 0 }),
+              taskItem('z', { title: 'Book venue', position: 1 }),
+              ...created,
+            ]),
+          ),
+        [POST_L1]: async ({ body }) => {
+          await answer.shut;
+          const made = taskItem('n', { title: 'Chase supplier', status: (body as { status: string }).status, position: 2 });
+          created.push(made);
+          return Response.json(made, { status: 201 });
+        },
+      }),
+    );
+    newCard(container, 'blocked', 'Chase supplier');
+    await settle(() => {
+      if (web.writes().length === 0) throw new Error('not sent');
+    });
+    const whileSaving = { blocked: board(container)[2], counts: counts(container) };
+    answer.open();
+    await settle(() => {
+      if (container.querySelector('li[data-task="n"]') === null) throw new Error('not saved');
+    });
+    assert({
+      given: 'Chase supplier added with Blocked’s New card',
+      should: 'POST it to the list in the blocked status with CSRF, show and count it in Blocked at once, and keep it once saved',
+      actual: { writes: web.writes(), whileSaving: whileSaving.counts, after: counts(container), column: columnOf(container, 'n') },
+      expected: {
+        writes: [{ method: 'POST', url: '/api/pages/l1/tasks', csrf: 'tok-1', body: { title: 'Chase supplier', status: 'blocked' } }],
+        whileSaving: ['To Do, 1 task', 'In Progress, 1 task', 'Blocked, 1 task', 'Done, 0 tasks'],
+        after: ['To Do, 1 task', 'In Progress, 1 task', 'Blocked, 1 task', 'Done, 0 tasks'],
+        column: 'Blocked',
+      },
+    });
+    assert({
+      given: 'the same card while it was saving',
+      should: 'already sit in Blocked under its title',
+      actual: (whileSaving.blocked?.[1] as string[] | undefined)?.length,
+      expected: 1,
+    });
+  });
+
+  test('a New card the server refuses', async () => {
+    const list = heldAfterFirst(() => served());
+    const { web, container } = await open(
+      routes({
+        [L1]: list.route,
+        [POST_L1]: () => Response.json({ error: 'You do not have permission to edit this page' }, { status: 403 }),
+      }),
+    );
+    newCard(container, 'completed', 'Ship it');
+    const countsWhileSaving = counts(container);
+    // Refused, and the revalidating GET is held: only a rollback can have taken it off.
+    await settle(() => {
+      if (list.calls() < 2) throw new Error('not revalidating yet');
+    });
+    const countsBeforeServerAnswers = counts(container);
+    const doneBeforeServerAnswers = board(container)[3];
+    list.release();
+    await settle(() => {
+      if (container.querySelector('section[data-column="completed"] [role="status"]') === null) throw new Error('no notice');
+    });
+    assert({
+      given: 'a New card in Done the server refuses',
+      should: 'count it in Done at once, send it once, then take it off before the server answers again',
+      actual: { countsWhileSaving, writes: web.writes().length, countsBeforeServerAnswers, doneBeforeServerAnswers },
+      expected: {
+        countsWhileSaving: ['To Do, 1 task', 'In Progress, 1 task', 'Blocked, 0 tasks', 'Done, 1 task'],
+        writes: 1,
+        countsBeforeServerAnswers: ['To Do, 1 task', 'In Progress, 1 task', 'Blocked, 0 tasks', 'Done, 0 tasks'],
+        doneBeforeServerAnswers: ['Done', []],
+      },
+    });
+    assert({
+      given: 'the refusal',
+      should: 'say why in the Done column',
+      actual: container.querySelector('section[data-column="completed"] [role="status"]')?.textContent,
+      expected: 'You do not have permission to edit this page',
+    });
+  });
+
+  test('a task whose status the list no longer has', async () => {
+    let status = 'archived';
+    const { web, container } = await open(
+      routes({
+        [L1]: () => served({ status }),
+        [PATCH_Z]: ({ body }) => {
+          status = (body as { status: string }).status;
+          return Response.json(taskItem('z', { status }));
+        },
+      }),
+    );
+    act(() => moveTrigger(container, 'z').focus());
+    press(moveTrigger(container, 'z'), 'ArrowDown');
+    const offered = [...container.querySelectorAll('[role="menuitem"]')].map((item) => item.textContent);
+    // The menu focuses its first item: To Do.
+    click(document.activeElement as HTMLButtonElement);
+    await settle(() => {
+      if (announced(container) === '') throw new Error('not announced');
+    });
+    assert({
+      given: 'Book venue in a status the list no longer defines, shown in To Do, moved to To Do with Move to…',
+      should: 'offer To Do, PATCH it to pending and announce it',
+      actual: { offered, writes: web.writes(), column: columnOf(container, 'z'), announced: announced(container) },
+      expected: {
+        offered: ['To Do', 'In Progress', 'Blocked', 'Done'],
+        writes: [{ method: 'PATCH', url: '/api/pages/l1/tasks/z', csrf: 'tok-1', body: { status: 'pending' } }],
+        column: 'To Do',
+        announced: 'Moved Book venue to To Do.',
+      },
+    });
   });
 
   test('a press outside the menu', async () => {

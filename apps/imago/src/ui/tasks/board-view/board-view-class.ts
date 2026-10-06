@@ -1,5 +1,6 @@
 import { cn } from '../../cn';
-import type { StatusGroup } from '../task-model/task';
+import type { Priority, StatusGroup } from '../task-model/task';
+import type { DueTone } from '../task-tree/task-tree';
 
 /* The Board (myimago board-view): fixed-width columns side by side, the
    row scrolling across when they outgrow the object. */
@@ -55,3 +56,27 @@ export const boardMenuClass =
 
 export const boardMenuItemClass =
   'flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-row-y text-left text-sm text-ink hover:bg-surface-overlay focus-visible:bg-surface-overlay';
+
+/* A card's facts under its title (myimago task-meta): flags, progress, the
+   due date, then the faces at the end. */
+export const boardCardMetaClass = 'flex flex-wrap items-center gap-2';
+
+export const boardBlockedClass = 'flex-none text-2xs font-medium text-live';
+
+/** A raised priority reads in the live red; a lowered one stays faint. */
+export const boardPriorityClass = (priority: Exclude<Priority, 'medium'>): string =>
+  cn('flex flex-none items-center gap-1 text-2xs', priority === 'high' ? 'text-live' : 'text-ink-faint');
+
+const dueTones: Readonly<Record<DueTone, string>> = {
+  overdue: 'font-medium text-live',
+  soon: 'font-medium text-ink',
+  later: 'text-ink-faint',
+};
+
+/** A due date, graded: red while overdue, full ink when soon. */
+export const boardDueClass = (tone: DueTone): string => cn('flex-none text-2xs tabular-nums', dueTones[tone]);
+
+export const boardAssigneesClass = 'ml-auto';
+
+/** An open card's subtasks, ruled off under its facts. */
+export const boardSubtasksClass = 'border-t border-hairline pt-2';
