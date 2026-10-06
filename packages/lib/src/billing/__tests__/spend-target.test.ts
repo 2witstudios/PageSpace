@@ -25,6 +25,7 @@ import {
   cappedConsumerLeg,
   spendChoiceLabel,
   chooseSource,
+  effectiveDefaultSpendSource,
   sourceOfWallet,
   NO_STORED_CHOICE,
   PERSONAL_ROOT_NOT_YET_CREATED,
@@ -242,8 +243,8 @@ describe('spend-target: decideCallSpend', () => {
     });
   });
 
-  it('SPEND-4 (partial) with several sources and none chosen the call refuses with the options', () => {
-    const decision = decideCallSpend(input({ chosen: null }));
+  it('SPEND-4 (partial) with several sources and none chosen the call refuses with the options (a default was set but cannot be spent here)', () => {
+    const decision = decideCallSpend(input({ chosen: null, seatAllowance: null, stored: { ...NO_STORED_CHOICE, personalDefault: 'seat_allowance' } }));
     expect(decision.kind).toBe('refuse');
     expect(decision.kind === 'refuse' && decision.reason).toBe('no_source_chosen');
     expect(decision.kind === 'refuse' && decision.chargeCents).toBe(0);
@@ -343,6 +344,42 @@ describe('spend-target: the stored choice (conversations.chosenWalletId, wallets
       .toEqual({ kind: 'source', source: 'own_credits', via: 'personal_default' });
   });
 
+  it('SPEND-3 (partial) with no default set (out of the box) the drive\'s wallet is preselected when the drive has one, otherwise the person\'s own credits', () => {
+    expect(chooseSource(null, NO_STORED_CHOICE, input({ chosen: null })))
+      .toEqual({ kind: 'source', source: 'drive_wallet', via: 'out_of_box' });
+    expect(chooseSource(null, NO_STORED_CHOICE, input({ chosen: null, driveWallet: null })))
+      .toEqual({ kind: 'source', source: 'own_credits', via: 'out_of_box' });
+    // A guest may not spend the drive wallet: their own credits, never the seat they do not hold.
+    expect(chooseSource(null, NO_STORED_CHOICE, input({ actor: chris, chosen: null })))
+      .toEqual({ kind: 'source', source: 'own_credits', via: 'out_of_box' });
+    // A drive default this person cannot spend, with no personal default, still lands out of the box.
+    expect(chooseSource(null, stored({ driveDefault: 'seat_allowance' }), input({ chosen: null, seatAllowance: null })))
+      .toEqual({ kind: 'source', source: 'drive_wallet', via: 'out_of_box' });
+    // Nothing spendable at all: nothing is chosen.
+    expect(chooseSource(null, NO_STORED_CHOICE, input({ chosen: null, driveWallet: null, personal: null })))
+      .toEqual({ kind: 'none' });
+  });
+
+  it('SPEND-3 (partial) a default the person SET is honoured, never overridden by the out-of-box choice', () => {
+    expect(chooseSource(null, stored({ personalDefault: 'seat_allowance' }), input({ chosen: null })))
+      .toEqual({ kind: 'source', source: 'seat_allowance', via: 'personal_default' });
+  });
+
+  it('SPEND-3 (partial) out of the box a new conversation in a drive with a wallet spends that wallet without asking', () => {
+    expect(decideCallSpend(input({ chosen: null, stored: NO_STORED_CHOICE }))).toMatchObject({ kind: 'spend', source: 'drive_wallet', fallbackApplied: false });
+  });
+
+  it('SPEND-3 (partial) a saved "drive\'s wallet" default is the out-of-box default: in a drive with no wallet it lands on the person\'s own credits, not a refusal', () => {
+    expect(chooseSource(null, stored({ personalDefault: 'drive_wallet' }), input({ chosen: null, driveWallet: null })))
+      .toEqual({ kind: 'source', source: 'own_credits', via: 'out_of_box' });
+  });
+
+  it('SPEND-3 (partial) the default Settings shows as selected is the stored one, or the drive\'s wallet when none was set', () => {
+    expect(effectiveDefaultSpendSource(null)).toBe('drive_wallet');
+    expect(effectiveDefaultSpendSource('own_credits')).toBe('own_credits');
+    expect(effectiveDefaultSpendSource('drive_wallet')).toBe('drive_wallet');
+  });
+
   it('SPEND-4 (partial) the source a turn already resolved is kept for its follow-on calls, whatever is stored', () => {
     expect(chooseSource('seat_allowance', stored({ chosenWalletId: 'w-marcus' }), input()))
       .toEqual({ kind: 'source', source: 'seat_allowance', via: 'turn' });
@@ -387,8 +424,8 @@ describe('spend-target: the stored choice (conversations.chosenWalletId, wallets
     expect(decision).toMatchObject({ kind: 'refuse', reason: 'chosen_wallet_unavailable', chargeCents: 0 });
   });
 
-  it('SPEND-4 (partial) nothing chosen and no default refuses with the options; it never defaults to a wallet', () => {
-    const decision = decideCallSpend(input({ chosen: null, stored: NO_STORED_CHOICE }));
+  it('SPEND-4 (partial) nothing chosen and the default the person set cannot be spent here: refuses with the options; it never picks a wallet for them', () => {
+    const decision = decideCallSpend(input({ chosen: null, seatAllowance: null, stored: stored({ personalDefault: 'seat_allowance' }) }));
     expect(decision).toMatchObject({ kind: 'refuse', source: null, reason: 'no_source_chosen', chargeCents: 0 });
   });
 

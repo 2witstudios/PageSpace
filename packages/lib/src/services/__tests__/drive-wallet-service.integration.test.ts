@@ -382,7 +382,8 @@ describe('drive-wallet service (orgs on, real Postgres)', () => {
     const [conv] = await db.insert(conversations).values({ userId: world.ids.marcus, type: 'drive', contextId: world.productId, updatedAt: new Date() }).returning();
 
     const before = await getConversationSpend(world.ids.marcus, conv.id);
-    expect(before).toMatchObject({ ok: true, chosenWalletId: null, resolved: { kind: 'refuse', reason: 'no_source_chosen' } });
+    // Nothing chosen and no default set: the preview shows the out-of-box drive wallet, as the gate would spend.
+    expect(before).toMatchObject({ ok: true, chosenWalletId: null, resolved: { kind: 'spend', source: 'drive_wallet', walletId: world.productWalletId } });
     if (!before.ok) throw new Error('expected a read');
     expect(before.options.map((o) => o.source)).toEqual(['drive_wallet', 'seat_allowance', 'own_credits']);
     // UI-8: each choice is named and says what this person can still spend from it, as a credit count.

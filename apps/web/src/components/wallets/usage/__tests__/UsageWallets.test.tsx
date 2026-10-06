@@ -78,6 +78,21 @@ describe('Settings › Usage › Wallets', () => {
     expect(state.refresh).toHaveBeenCalled();
   });
 
+  it('SPEND-3 (partial) with no default set, "The drive\'s wallet, if it has one" shows as selected (the out-of-box default) and promises only what the gate does', () => {
+    render(<UsageWallets />);
+    expect(screen.getByRole('radio', { name: /The drive's wallet, if it has one/ }).getAttribute('aria-checked')).toBe('true');
+    expect(screen.getByRole('radio', { name: /Always my own credits/ }).getAttribute('aria-checked')).toBe('false');
+    expect(screen.getByText(/Where there isn't one you can spend, your own credits/)).toBeTruthy();
+    expect(screen.queryByText(/Then your allowance/)).toBeNull();
+  });
+
+  it('SPEND-3 (partial) a saved own-credits default shows as selected', () => {
+    state.wallets = { ...base, personal: { ...base.personal, defaultSpendSource: 'own_credits' } };
+    render(<UsageWallets />);
+    expect(screen.getByRole('radio', { name: /Always my own credits/ }).getAttribute('aria-checked')).toBe('true');
+    expect(screen.getByRole('radio', { name: /The drive's wallet, if it has one/ }).getAttribute('aria-checked')).toBe('false');
+  });
+
   it('UI-12 (partial) every amount is a credit count, never a dollar figure', () => {
     const { container } = render(<UsageWallets />);
     expect(container.textContent).not.toContain('$');

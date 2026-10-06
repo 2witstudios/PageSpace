@@ -416,7 +416,7 @@ export function sourceOfWallet(walletId: string, legs: CallSpendLegs): SpendSour
 }
 
 export type ChosenSource =
-  | { kind: 'source'; source: SpendSourceKind; via: 'turn' | 'conversation' | 'drive_default' | 'personal_default' }
+  | { kind: 'source'; source: SpendSourceKind; via: 'turn' | 'conversation' | 'drive_default' | 'personal_default' | 'out_of_box' }
   | { kind: 'none' }
   /** A stored choice that names no wallet this person may spend: refused, never replaced. */
   | { kind: 'invalid'; chosenWalletId: string };
@@ -428,6 +428,11 @@ export type ChosenSource =
  * (a guest and the drive wallet); a stored choice names a WALLET and is never skipped — if
  * it resolves to nothing the answer is `invalid`, so the gate refuses rather than moving the
  * conversation onto another source (SPEND-4).
+ *
+ * A person who never SET a default gets the out-of-box one (SPEND-3, canvas v9 UsageWallets
+ * "The drive's wallet, if it has one" selected): the drive's wallet when they may spend one
+ * here, otherwise their own credits. Saving that same option behaves the same. Any other
+ * default they set is honoured or skipped, never replaced by this.
  */
 export function chooseSource(turnSource: SpendSourceKind | null, stored: StoredSpendChoice, legs: CallSpendLegs): ChosenSource {
   if (turnSource !== null) return { kind: 'source', source: turnSource, via: 'turn' };
@@ -442,8 +447,20 @@ export function chooseSource(turnSource: SpendSourceKind | null, stored: StoredS
   if (stored.personalDefault !== null && available.includes(stored.personalDefault)) {
     return { kind: 'source', source: stored.personalDefault, via: 'personal_default' };
   }
+  if (effectiveDefaultSpendSource(stored.personalDefault) === 'drive_wallet') {
+    const outOfBox = OUT_OF_BOX_SOURCES.find((source) => available.includes(source));
+    if (outOfBox) return { kind: 'source', source: outOfBox, via: 'out_of_box' };
+  }
   return { kind: 'none' };
 }
+
+/** SPEND-3: the default a person has, as Settings shows it selected: the stored one, else the drive's wallet. */
+export function effectiveDefaultSpendSource(personalDefault: SpendSourceKind | null): SpendSourceKind {
+  return personalDefault ?? 'drive_wallet';
+}
+
+/** SPEND-3: what the "drive's wallet, if it has one" default spends from, in order. */
+export const OUT_OF_BOX_SOURCES: readonly SpendSourceKind[] = Object.freeze(['drive_wallet', 'own_credits']);
 
 // ---------------------------------------------------------------------------
 // The decision (SPEND-1, SPEND-4, WAL-8)
