@@ -15,6 +15,11 @@ import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, Sele
 import { post, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { getRoleColorClasses } from '@/lib/utils';
 import { VerificationRequiredAlert } from '@/components/VerificationRequiredAlert';
+import { inviteeStanding } from '@pagespace/lib/organizations/invite-choice';
+import { InviteJoinChoice, defaultJoinChoice, useInviteOrgContext, type JoinChoice } from '@/components/members/InviteJoinChoice';
+import { useDriveStore } from '@/hooks/useDrive';
+import { useMyOrganizations } from '@/hooks/useMyOrganizations';
+import { orgErrorCode, orgErrorMessage } from '@/lib/orgs/org-error-copy';
 
 interface SelectedUser {
   userId: string;
@@ -52,6 +57,19 @@ export default function InviteMemberPage() {
   const [saving, setSaving] = useState(false);
   const [showVerificationAlert, setShowVerificationAlert] = useState(false);
   const permissionsGridRef = useRef<PermissionsGridRef>(null);
+
+  // UI-5: on an org drive, an outsider joins as a guest of this drive or as a member of the org.
+  const drive = useDriveStore((state) => state.drives.find((d) => d.id === driveId));
+  const driveOrgId = drive?.orgId ?? null;
+  const { orgById } = useMyOrganizations();
+  const orgName = orgById(driveOrgId)?.name ?? 'the organization';
+  const orgContext = useInviteOrgContext(driveOrgId);
+  const [joinChoice, setJoinChoice] = useState<JoinChoice | null>(null);
+  const invitee = selectedUser ? { userId: selectedUser.userId, email: selectedUser.email ?? null } : pendingEmail ? { email: pendingEmail } : null;
+  const isOutsider = orgContext.enabled && invitee !== null && inviteeStanding(invitee, orgContext.members) === 'outsider';
+  const effectiveJoinChoice: JoinChoice | null = isOutsider
+    ? joinChoice ?? defaultJoinChoice({ driveName: drive?.name ?? 'this drive', orgName, guestPolicy: orgContext.guestPolicy, hasEmail: Boolean(invitee?.email) })
+    : null;
 
   // Fetch custom roles
   useEffect(() => {
@@ -103,16 +121,19 @@ export default function InviteMemberPage() {
   };
 
   const handleUserSelect = (user: SelectedUser) => {
+    setJoinChoice(null);
     setSelectedUser(user);
     setPendingEmail(null);
   };
 
   const handleInviteEmail = (email: string) => {
+    setJoinChoice(null);
     setPendingEmail(email);
     setSelectedUser(null);
   };
 
   const handleClearUser = () => {
+    setJoinChoice(null);
     setSelectedUser(null);
     setPendingEmail(null);
     setPermissions(new Map());
@@ -130,6 +151,21 @@ export default function InviteMemberPage() {
 
   const handleInvite = async () => {
     if (!selectedUser && !pendingEmail) return;
+
+    // UI-5: an outsider joining as a member of the org gets an org invitation, which holds a seat.
+    if (effectiveJoinChoice === 'member' && driveOrgId && invitee?.email) {
+      setSaving(true);
+      try {
+        await post(`/api/orgs/${driveOrgId}/invitations`, { email: invitee.email, role: 'MEMBER' });
+        toast.success(`Invitation to ${orgName} sent to ${invitee.email}. Once they accept they can open every Open drive.`);
+        router.push(`/dashboard/${driveId}/members`);
+      } catch (error) {
+        toast.error(orgErrorMessage(error, 'The invitation could not be sent.'));
+      } finally {
+        setSaving(false);
+      }
+      return;
+    }
 
     const backendRole = selectedUnifiedRole?.type === 'admin' ? 'ADMIN' : 'MEMBER';
     const backendCustomRoleId = selectedUnifiedRole?.type === 'custom'
@@ -184,12 +220,15 @@ export default function InviteMemberPage() {
 
     setSaving(true);
     try {
-      const response = await post<{ kind?: 'invited' | 'added'; email?: string }>(
+      const response = await post<{ kind?: 'invited' | 'added' | 'pending_approval'; email?: string }>(
         `/api/drives/${driveId}/members/invite`,
         payload
       );
 
-      if (response?.kind === 'invited' && submittedEmail) {
+      if (response?.kind === 'pending_approval') {
+        // POL-2 'approve': nothing is granted and no email goes out until an org admin approves.
+        toast.success(`Sent to the ${orgName} Owner and Admins for approval. Nothing is shared until they approve.`);
+      } else if (response?.kind === 'invited' && submittedEmail) {
         toast.success(`Invitation sent to ${submittedEmail}`);
       } else {
         toast.success(isAdmin ? 'Admin invited successfully' : 'Member invited successfully');
@@ -202,7 +241,7 @@ export default function InviteMemberPage() {
         return;
       }
       console.error('Error adding member:', error);
-      toast.error(error instanceof Error ? error.message : 'Failed to add member');
+      toast.error(orgErrorCode(error) ? orgErrorMessage(error, 'Failed to add member') : error instanceof Error ? error.message : 'Failed to add member');
     } finally {
       setSaving(false);
     }
@@ -304,8 +343,21 @@ export default function InviteMemberPage() {
           </CardContent>
         </Card>
 
+        {isOutsider && invitee && effectiveJoinChoice && (
+          <InviteJoinChoice
+            inviteeName={selectedUser?.displayName ?? pendingEmail ?? 'They'}
+            invitee={invitee}
+            driveName={drive?.name ?? 'This drive'}
+            orgName={orgName}
+            members={orgContext.members}
+            guestPolicy={orgContext.guestPolicy}
+            value={effectiveJoinChoice}
+            onChange={setJoinChoice}
+          />
+        )}
+
         {/* Role & Permissions - Show when user is selected OR an email invitation is pending */}
-        {(selectedUser || pendingEmail) && (
+        {(selectedUser || pendingEmail) && effectiveJoinChoice !== 'member' && (
           <>
             {/* Unified Role Selection Card */}
             <Card className="mb-6">
@@ -476,6 +528,18 @@ export default function InviteMemberPage() {
               </Button>
             </div>
           </>
+        )}
+
+        {effectiveJoinChoice === 'member' && (
+          <div className="flex justify-end gap-3">
+            <Button variant="outline" onClick={() => router.push(`/dashboard/${driveId}/members`)} disabled={saving}>
+              Cancel
+            </Button>
+            <Button onClick={handleInvite} disabled={saving}>
+              <UserPlus className="w-4 h-4 mr-2" />
+              {saving ? 'Inviting...' : `Invite to ${orgName}`}
+            </Button>
+          </div>
         )}
       </div>
     </div>

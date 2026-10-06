@@ -1,25 +1,15 @@
+import { spendFallbackCopy } from '@pagespace/lib/billing/spend-surface';
+
 /**
  * The line a chat shows when a drive's fallback rule moved a call to another source
  * (SPEND-4: the gate never switches silently). The payload is the turn's
- * `data-spend-fallback` part, which crosses the wire untyped, so it is validated here; a
- * malformed payload renders nothing.
+ * `data-spend-fallback` part, which crosses the wire untyped, so it is validated (by the one
+ * copy function, lib spend-surface); a malformed payload renders nothing. `fromLabel` names the
+ * wallet it moved off when the conversation's options know it ("Product wallet").
  */
-
-const SOURCE_LABELS: Readonly<Record<string, string>> = {
-  drive_wallet: 'the drive wallet',
-  seat_allowance: 'your seat allowance',
-  own_credits: 'your own credits',
-};
-
-function labelOf(value: unknown): string | null {
-  return typeof value === 'string' && Object.hasOwn(SOURCE_LABELS, value) ? SOURCE_LABELS[value] : null;
-}
-
-export function spendFallbackNoticeText(data: unknown): string | null {
+export function spendFallbackNoticeText(data: unknown, fromLabel: string | null = null): string | null {
   if (typeof data !== 'object' || data === null) return null;
   const record = data as Record<string, unknown>;
-  const from = labelOf(record.from);
-  const to = labelOf(record.to);
-  if (from === null || to === null || record.from === record.to) return null;
-  return `Spent from ${to} — ${from} couldn't cover this call.`;
+  // The payload says what moved, not why: the wallet's status now may not be its status then.
+  return spendFallbackCopy({ from: record.from, to: record.to, fromLabel, fromStatus: null });
 }

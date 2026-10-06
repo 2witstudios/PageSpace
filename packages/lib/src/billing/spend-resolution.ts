@@ -16,7 +16,7 @@
 import { loadConsumerCapFacts } from './consumer-caps';
 import { drives } from '@pagespace/db/schema/core';
 import { formatCreditCount } from './money-model';
-import { seatCapCheck } from './wallet-core';
+import { seatCapCheck, seatSpentCents } from './wallet-core';
 import { db } from '@pagespace/db/db';
 import { and, eq, gt, inArray, isNull, or, sql } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
@@ -488,14 +488,42 @@ export async function listSpendChoices(userId: string, driveId: string | null): 
     }
     if (source === 'seat_allowance' && pool && standing?.orgId) {
       // The seat's own remaining allowance (SPEND-9: their cap, never the pool's balance).
-      const policy = await readOrgSpendPolicy(db, standing.orgId);
-      const seat = await loadSeatCapFacts(db, { poolId: pool.id, poolPeriodStart: pool.monthlyPeriodStart, userId, policySeatAllowanceCents: policy.seatAllowanceCents, now });
-      const cap = seatCapCheck({ capCents: seat.capCents, dailyCapCents: seat.dailyCapCents, usage: seat.usage, reservationCents: 0 });
-      const windows = [cap.monthlyRemainingCents, cap.dailyRemainingCents].filter((c): c is number => c !== null);
-      out.push(choice('seat_allowance', pool.id, names, windows.length === 0 ? null : Math.min(...windows)));
+      const seat = await seatAllowanceFor(db, { orgId: standing.orgId, poolId: pool.id, poolPeriodStart: pool.monthlyPeriodStart, userId, now });
+      out.push(choice('seat_allowance', pool.id, names, seat.remainingCents));
     }
   }
   return out;
+}
+
+/** A member's seat on an org's pool as they may see it: their own allowance, never the pool (SPEND-9). */
+export interface SeatAllowanceView {
+  /** Their monthly seat allowance (WAL-2: a seat is never unlimited). */
+  allowanceCents: number;
+  /** What they have spent of it this period, as the cap counts it. */
+  spentCents: number;
+  /** What they can still spend now: the tighter of the monthly and (when set) daily windows. */
+  remainingCents: number;
+}
+
+/**
+ * The ONE read of a member's seat allowance (D-OW-38 read model: "seat allowance remaining"),
+ * for the spending-from popover (listSpendChoices) and Settings › Usage › Wallets
+ * (listMyWallets): the same facts and the same cap check the gate admits a seat call on.
+ */
+export async function seatAllowanceFor(
+  executor: typeof db,
+  input: { orgId: string; poolId: string; poolPeriodStart: Date | null; userId: string; now: Date },
+): Promise<SeatAllowanceView> {
+  const policy = await readOrgSpendPolicy(executor, input.orgId);
+  const seat = await loadSeatCapFacts(executor, { poolId: input.poolId, poolPeriodStart: input.poolPeriodStart, userId: input.userId, policySeatAllowanceCents: policy.seatAllowanceCents, now: input.now });
+  const cap = seatCapCheck({ capCents: seat.capCents, dailyCapCents: seat.dailyCapCents, usage: seat.usage, reservationCents: 0 });
+  const windows = [cap.monthlyRemainingCents, cap.dailyRemainingCents].filter((c): c is number => c !== null);
+  return {
+    allowanceCents: seat.capCents,
+    spentCents: seatSpentCents(seat.usage.periodChargedMillicents),
+    // The monthly window always exists on a seat, so there is always a number.
+    remainingCents: Math.min(...windows),
+  };
 }
 
 /** The drive's and the org's names, for labels (UI-8). */

@@ -46,6 +46,7 @@ export default function AssistantSessionChat({
       name="Global Assistant"
       visionModel={currentModel || ''}
       commandDriveId={contextRef.driveId ?? null}
+      spendScope={{ driveId: contextRef.driveId ?? null, isGlobal: true }}
       context={context}
       isReadOnly={isReadOnly}
     />

@@ -199,6 +199,16 @@
       "import": "./dist/organizations/orgs-enabled.js",
       "require": "./dist/organizations/orgs-enabled.js"
     },
+    "./organizations/drive-picker-groups": {
+      "types": "./dist/organizations/drive-picker-groups.d.ts",
+      "import": "./dist/organizations/drive-picker-groups.js",
+      "require": "./dist/organizations/drive-picker-groups.js"
+    },
+    "./organizations/invite-choice": {
+      "types": "./dist/organizations/invite-choice.d.ts",
+      "import": "./dist/organizations/invite-choice.js",
+      "require": "./dist/organizations/invite-choice.js"
+    },
     "./organizations/repository": {
       "types": "./dist/organizations/repository.d.ts",
       "import": "./dist/organizations/repository.js",
@@ -693,6 +703,26 @@
       "types": "./dist/billing/spend-fallback.d.ts",
       "import": "./dist/billing/spend-fallback.js",
       "require": "./dist/billing/spend-fallback.js"
+    },
+    "./billing/spend-refusal-copy": {
+      "types": "./dist/billing/spend-refusal-copy.d.ts",
+      "import": "./dist/billing/spend-refusal-copy.js",
+      "require": "./dist/billing/spend-refusal-copy.js"
+    },
+    "./billing/spend-surface": {
+      "types": "./dist/billing/spend-surface.d.ts",
+      "import": "./dist/billing/spend-surface.js",
+      "require": "./dist/billing/spend-surface.js"
+    },
+    "./billing/automation-run-record": {
+      "types": "./dist/billing/automation-run-record.d.ts",
+      "import": "./dist/billing/automation-run-record.js",
+      "require": "./dist/billing/automation-run-record.js"
+    },
+    "./billing/wallet-surface": {
+      "types": "./dist/billing/wallet-surface.d.ts",
+      "import": "./dist/billing/wallet-surface.js",
+      "require": "./dist/billing/wallet-surface.js"
     },
     "./billing/spend-target": {
       "types": "./dist/billing/spend-target.d.ts",

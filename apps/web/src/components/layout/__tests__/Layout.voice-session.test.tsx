@@ -214,6 +214,7 @@ beforeEach(() => {
       // No cap reported: this file is about placement, not chaining, and a
       // chain timer would only add a way for it to be flaky.
       maxDurationMs: undefined,
+      spendFallback: null,
       microphone: { getTracks: () => [], getAudioTracks: () => [] },
       setMicrophoneEnabled: setMicSpy,
       stop: stopSpy,

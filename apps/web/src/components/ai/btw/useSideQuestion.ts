@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { readSpendFallbackHeaders, type SpendFallbackNotice } from '@pagespace/lib/billing/spend-fallback';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useStreamingRegistration } from '@/lib/ai/shared';
 
@@ -29,6 +30,8 @@ export interface SideQuestionState {
   text: string;
   loading: boolean;
   error: string | null;
+  /** SPEND-4: the drive's rule moved this answer to another source (the X-Spend-Fallback-* headers). */
+  spendFallback: SpendFallbackNotice | null;
 }
 
 export function createSideQuestionRequest(conversationId: string, question: string): SideQuestionRequest {
@@ -90,7 +93,7 @@ export function useSideQuestion(conversationId: string) {
     // queued decoder chunk or completion from the first must not append into
     // (or clear the loading state of) the replacement card.
     const isCurrent = () => controller.current === request.controller;
-    setState({ requestId: request.requestId, question, text: '', loading: true, error: null });
+    setState({ requestId: request.requestId, question, text: '', loading: true, error: null, spendFallback: null });
     try {
       // fetchWithAuth (not raw fetch) so the session CSRF token is injected —
       // the route requires CSRF for POST and a bare request would always 403.
@@ -101,6 +104,10 @@ export function useSideQuestion(conversationId: string) {
         signal: request.controller.signal,
       });
       if (!response.ok || !response.body) throw new Error('Side question failed');
+      const spendFallback = response.headers ? readSpendFallbackHeaders(response.headers) : null;
+      if (spendFallback) {
+        setState((current) => (current && current.requestId === request.requestId ? { ...current, spendFallback } : current));
+      }
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       while (true) {

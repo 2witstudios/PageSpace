@@ -1,5 +1,7 @@
 'use client';
 
+import { ORGS_ENABLED } from '@pagespace/lib/organizations/orgs-enabled';
+import { AutomationSkipNote, AutomationSpendLine, isSpendSkip } from '@/components/wallets/AutomationSpendState';
 import { memo, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Check, Copy, Webhook } from 'lucide-react';
 import { toast } from 'sonner';
@@ -35,6 +37,8 @@ interface WebhookRow {
   isEnabled: boolean;
   lastFiredAt: string | null;
   lastFireError: string | null;
+  /** [D-OW-36] Set when its creator left the org: disabled until an Owner or Admin reassigns or deletes it. */
+  ownerLeftAt?: string | null;
 }
 
 interface PageWebhooksDialogProps {
@@ -412,7 +416,11 @@ function PageWebhooksDialogImpl({ open, onOpenChange, pageId, pageType }: PageWe
                       <span className="text-xs font-mono text-muted-foreground truncate block">
                         …{webhook.webhookToken.slice(-8)}
                       </span>
-                      {webhook.lastFireError && (
+                      {ORGS_ENABLED && webhook.ownerLeftAt ? (
+                        <AutomationSpendLine creatorName={null} walletLabel={null} ownerLeft />
+                      ) : isSpendSkip(webhook.lastFireError) ? (
+                        <AutomationSkipNote error={webhook.lastFireError} driveId={null} className="text-xs text-muted-foreground mt-1" />
+                      ) : webhook.lastFireError && (
                         <p className="text-xs text-destructive mt-1">Last delivery failed: {webhook.lastFireError}</p>
                       )}
                     </div>

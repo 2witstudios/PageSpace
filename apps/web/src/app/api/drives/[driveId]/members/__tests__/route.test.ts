@@ -502,7 +502,7 @@ describe('GET /api/drives/[driveId]/members', () => {
     });
 
     it('UI-5 (partial) the lead sees D-OW-24 page-link guests listed apart, by name; a plain member gets an empty list', async () => {
-      const pia = { userId: 'u-pia', displayName: 'Pia Page', username: null, avatarUrl: null, acceptedAt: null, source: 'invite' as const, pageGrantCount: 1 };
+      const pia = { userId: 'u-pia', displayName: 'Pia Page', username: null, avatarUrl: null, acceptedAt: null, source: 'invite' as const, pageGrantCount: 1, pages: [{ pageId: 'p-roadmap', title: 'Roadmap', role: 'view' as const, expiresAt: null }] };
       vi.mocked(listDrivePageLinkGuests).mockResolvedValue([pia]);
       vi.mocked(listDriveMembers).mockResolvedValue([]);
       vi.mocked(isPrincipalDriveOwnerOrAdmin).mockResolvedValue(true);

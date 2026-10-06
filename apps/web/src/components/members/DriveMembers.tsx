@@ -15,6 +15,10 @@ import { toast } from 'sonner';
 import { useSocket } from '@/hooks/useSocket';
 import { del, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { isHomeDrive } from '@pagespace/lib/services/drive-guards';
+import { ORGS_ENABLED } from '@pagespace/lib/organizations/orgs-enabled';
+import { useDriveStore } from '@/hooks/useDrive';
+import { useMyOrganizations } from '@/hooks/useMyOrganizations';
+import { MemberSourceLegend, PageLinkGuestsSection, type PageLinkGuest } from './PageLinkGuestsSection';
 
 interface DriveMember {
   id: string;
@@ -42,6 +46,8 @@ interface DriveMember {
     edit: number;
     share: number;
   };
+  source?: 'invite' | 'org' | 'lead';
+  isGuest?: boolean;
 }
 
 interface DriveMembersProps {
@@ -74,6 +80,12 @@ export function DriveMembers({ driveId, driveKind }: DriveMembersProps) {
   const [appMembers, setAppMembers] = useState<AppMember[]>([]);
   const [driveRoles, setDriveRoles] = useState<DriveRole[]>([]);
   const [pendingInvites, setPendingInvites] = useState<PendingInvite[]>([]);
+  const [pageLinkGuests, setPageLinkGuests] = useState<PageLinkGuest[]>([]);
+  // UI-5 / DRV-8: an org drive labels each member's source and its guests (orgs on only).
+  const driveOrgId = useDriveStore((state) => state.drives.find((d) => d.id === driveId)?.orgId ?? null);
+  const { orgById } = useMyOrganizations();
+  const orgLabels = ORGS_ENABLED && driveOrgId !== null;
+  const orgName = orgById(driveOrgId)?.name ?? null;
   const [currentUserRole, setCurrentUserRole] = useState<'OWNER' | 'ADMIN' | 'MEMBER'>('MEMBER');
   const [loading, setLoading] = useState(true);
   const [inviteAgentOpen, setInviteAgentOpen] = useState(false);
@@ -98,6 +110,7 @@ export function DriveMembers({ driveId, driveKind }: DriveMembersProps) {
       if (currentSeq !== requestSeqRef.current) return;
       setMembers(data.members);
       setPendingInvites(data.pendingInvites ?? []);
+      setPageLinkGuests(ORGS_ENABLED ? data.guests ?? [] : []);
       setCurrentUserRole(data.currentUserRole || 'MEMBER');
 
       if (agentMembersRes.ok) {
@@ -238,12 +251,17 @@ export function DriveMembers({ driveId, driveKind }: DriveMembersProps) {
               key={member.id}
               member={member}
               driveId={driveId}
+              orgLabels={orgLabels}
               currentUserRole={currentUserRole}
               onRemove={() => handleRemoveMember(member.userId)}
             />
           ))
         )}
       </div>
+
+      {orgLabels && members.length > 0 && <MemberSourceLegend orgName={orgName} />}
+
+      <PageLinkGuestsSection guests={pageLinkGuests} orgName={orgName} onChanged={() => void fetchMembers()} />
 
       <div>
         <div className="mb-3 flex items-start justify-between gap-2">

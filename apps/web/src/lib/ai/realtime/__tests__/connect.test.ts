@@ -103,6 +103,19 @@ describe('connectVoiceCall — the handshake', () => {
     expect(h.peer.addedTracks.map((t) => t.id)).toEqual(['mic-1']);
   });
 
+  it('SPEND-4 (partial) a call whose opening gate fell back carries the notice to the caller', async () => {
+    const h = harness({}, respondWith({ body: { ...CALL_OK, spendFallback: { from: 'drive_wallet', to: 'own_credits', walletId: 'w-me' } } }));
+    const result = await connectVoiceCall(h.deps);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.connection.spendFallback).toEqual({ from: 'drive_wallet', to: 'own_credits', walletId: 'w-me' });
+  });
+
+  it('SPEND-4 (partial) a call that spent what it named carries no notice', async () => {
+    const result = await connectVoiceCall(harness().deps);
+    expect(result.ok && result.connection.spendFallback).toBeNull();
+  });
+
   it('should post the offer and the bound conversation to OUR route only', async () => {
     // The page must never hold an OpenAI credential, which starts with never
     // talking to api.openai.com.

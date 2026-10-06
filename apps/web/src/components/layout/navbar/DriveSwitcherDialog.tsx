@@ -3,7 +3,8 @@
 import { useEffect, useState } from "react";
 import type { KeyboardEvent } from "react";
 import { formatDistanceToNow } from "date-fns";
-import { Check, Folder, Layers, Plus, Star } from "lucide-react";
+import Link from "next/link";
+import { Check, Folder, Layers, Plus, Settings, Star } from "lucide-react";
 
 import {
   CommandDialog,
@@ -20,6 +21,7 @@ import { useDriveStore, type Drive } from "@/hooks/useDrive";
 import { cn } from "@/lib/utils";
 
 import { useDrivePicker } from "./useDrivePicker";
+import { OrgMark } from "@/components/orgs/OrgMark";
 
 interface DriveSwitcherDialogProps {
   open: boolean;
@@ -98,6 +100,7 @@ function DrivePickerBody({ onClose, onCreate }: DrivePickerBodyProps) {
     favoriteDrives,
     recentDrives,
     allDrives,
+    ownerGroups,
     isSearching,
     selectDrive,
     selectAllDrives,
@@ -226,7 +229,39 @@ function DrivePickerBody({ onClose, onCreate }: DrivePickerBodyProps) {
           </CommandGroup>
         )}
 
-        {allDrives.length > 0 && (
+        {/*
+          DRV-9: with orgs on, the same drives under org headers and a Personal group. cmdk hides
+          group headings from assistive tech, so the header's settings icon is a pointer affordance
+          like the star; the org hub is also reached from Account › Organizations and the drive's
+          General page (UI-1).
+        */}
+        {allDrives.length > 0 && ownerGroups && !isSearching ? (
+          ownerGroups.map((group) => (
+            <CommandGroup
+              key={group.key}
+              heading={
+                <span className="flex items-center gap-2" data-testid={`picker-group-${group.kind}`}>
+                  {group.kind === "org" && <OrgMark name={group.label} avatarUrl={group.avatarUrl} size="sm" decorative />}
+                  <span>{group.label}</span>
+                  <span className="text-muted-foreground/70">· {group.drives.length}</span>
+                  {group.kind === "org" && (
+                    <Link
+                      href={`/orgs/${group.orgId}/settings`}
+                      onClick={close}
+                      className="ml-auto rounded p-0.5 text-muted-foreground hover:text-foreground"
+                      aria-label={`${group.label} settings`}
+                      title="Organization settings"
+                    >
+                      <Settings className="h-3.5 w-3.5" aria-hidden="true" />
+                    </Link>
+                  )}
+                </span>
+              }
+            >
+              {group.drives.map((drive) => renderItem(drive, group.key))}
+            </CommandGroup>
+          ))
+        ) : allDrives.length > 0 && (
           <CommandGroup heading={isSearching ? "Results" : `All drives · ${allDrives.length}`}>
             {allDrives.map((drive) => renderItem(drive, "all"))}
           </CommandGroup>

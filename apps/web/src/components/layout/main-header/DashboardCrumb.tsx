@@ -1,5 +1,8 @@
 "use client";
 
+import { ORGS_ENABLED } from '@pagespace/lib/organizations/orgs-enabled';
+import { OrgMark } from '@/components/orgs/OrgMark';
+import { useMyOrganizations } from '@/hooks/useMyOrganizations';
 import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -51,6 +54,13 @@ export default function DashboardCrumb() {
   const driveName = useDriveStore((state) =>
     driveId ? state.drives.find((drive) => drive.id === driveId)?.name : undefined
   );
+  // UI-3: an org-owned drive is still ONE chip — the org's mark replaces the folder icon, and
+  // the org's name is in the tooltip, never a second crumb. Dark while orgs are off.
+  const driveOrgId = useDriveStore((state) =>
+    driveId ? state.drives.find((drive) => drive.id === driveId)?.orgId ?? null : null
+  );
+  const { orgById } = useMyOrganizations();
+  const org = ORGS_ENABLED ? orgById(driveOrgId) : null;
 
   if (pathname === DASHBOARD_PATH) {
     // Hidden below lg, unlike the link. This variant is orientation only —
@@ -109,13 +119,17 @@ export default function DashboardCrumb() {
             aria-expanded={pickerOpen}
             className={DRIVE_CRUMB_CLASS}
           >
-            <Folder className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+            {org ? (
+              <OrgMark name={org.name} avatarUrl={org.avatarUrl} size="sm" />
+            ) : (
+              <Folder className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+            )}
             {/*
               title + a width cap, matching content-header/Breadcrumbs.tsx: a
               truncated name is unrecoverable without the tooltip, and an
               uncapped one competes with the search field for the same row.
             */}
-            <span className="max-w-[160px] truncate" title={driveName}>
+            <span className="max-w-[160px] truncate" title={org ? `${driveName} · ${org.name}` : driveName}>
               {driveName}
             </span>
             <ChevronsUpDown className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />

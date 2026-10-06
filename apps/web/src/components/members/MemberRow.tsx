@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import Link from 'next/link';
+import { GuestBadge, MemberSourceBadge } from './PageLinkGuestsSection';
 
 interface MemberRowProps {
   member: {
@@ -33,13 +34,19 @@ interface MemberRowProps {
       edit: number;
       share: number;
     };
+    /** UI-5: where this member's access comes from (org drives only). */
+    source?: 'invite' | 'org' | 'lead';
+    /** DRV-8: a member of an org drive who is not in its org. */
+    isGuest?: boolean;
   };
   driveId: string;
+  /** Show the org drive labels (source, Guest): orgs on and the drive belongs to an org. */
+  orgLabels?: boolean;
   currentUserRole: 'OWNER' | 'ADMIN' | 'MEMBER';
   onRemove: () => void;
 }
 
-export function MemberRow({ member, driveId, currentUserRole, onRemove }: MemberRowProps) {
+export function MemberRow({ member, driveId, orgLabels = false, currentUserRole, onRemove }: MemberRowProps) {
   const canManage = currentUserRole === 'OWNER' || currentUserRole === 'ADMIN';
   const displayName = member.profile?.displayName || member.user.name || member.user.email || 'Unknown User';
   const initials = displayName
@@ -116,6 +123,8 @@ export function MemberRow({ member, driveId, currentUserRole, onRemove }: Member
               <span className="text-sm text-gray-500 dark:text-gray-400">@{member.profile.username}</span>
             )}
             {getRoleBadge()}
+            {orgLabels && member.isGuest && <GuestBadge />}
+            {orgLabels && member.source && <MemberSourceBadge source={member.source} />}
           </div>
           <p className="text-sm text-gray-600 dark:text-gray-400">{member.user.email}</p>
 
