@@ -10,40 +10,43 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 ### Added
 
 - **Imago preview at `/imago` (off by default)** — a first look at PageSpace's new interface, served
-  beside classic PageSpace and signed in with the same account. It only appears when the server sets
+  beside classic PageSpace and signed in with the same account. It is off unless the server sets
   `IMAGO_ENABLED=true` (and `NEXT_PUBLIC_IMAGO_ENABLED=true` for the "Try Imago" link in the user
-  menu); otherwise every `/imago` address answers not found. One frame stays put as you move around:
-  a rail of sections, a drive switcher with your Home drive first, and an avatar menu with theme,
-  "Classic PageSpace" and sign out. Messages lists a drive's channels and your direct messages with
-  unread counts, and opens a channel or a direct message to read and post in, with new posts
-  arriving live; the unread count on the rail's Messages button keeps up too, wherever you are in
-  the frame. Tasks lists
-  a drive's task lists with progress and opens one in Tree or Focus view, where you can tick and add
-  tasks, or open a task to edit its title, status, priority, due date, assignees, description and
-  subtasks. Settings shows a drive's name (owners and admins can rename it), its members, and an
-  "Imago access" switch that lets your Imago agents work in that drive; your Home drive can't be
-  renamed and your agents always have access to it. Account links to your account, billing and
-  connections settings in classic PageSpace. The chat header picks who you talk to: your Imago
-  agents first, then the agents you can use in the open drive. Switching agent opens that agent's
-  latest conversation, opening a page only changes what the agent answers about, and an agent you
-  can no longer use hands the chat back to Imago with a note saying so. Files shows a drive's pages
-  as a live tree: open a folder in place with its caret, filter by name (the folders on the way to a
-  match stay in view), and press + to create a document in the open folder, which appears at once
-  and opens. Opening a folder shows it Finder-style: the path back up the drive, then each page in
-  it with its type icon, kind and when it last changed; an empty folder offers New page. Opening a
-  document reads it in a centred column, with its title and the path of pages above it in the
-  header; it is read-only for now, and a page you cannot view shows "not found". A sheet, canvas,
-  code page, file or task list opened from Files shows a card with its type and title and an "Open
-  in classic" button that takes you to it in classic PageSpace; an agent page also offers "Chat with
-  this agent", which picks it in the chat header and moves to the chat.
-  An empty drive, a section that fails to load and an address that names nothing you can
-  open each get their own designed screen inside the frame: a note about what will show up, a "Try
-  again" button that never shows the server's error text, or "not found" with a link back. Press ⌘K
-  (Ctrl-K on Windows and Linux) anywhere to search the open drive's pages by name, or tick "Include
-  all workspaces" to search every drive you can open; move with the arrow keys and press Enter to
-  jump straight to a page, channel, task list or agent, and Escape to go back where you were. Imago is
-  a preview: chat and page editing are still on their way, and classic
-  PageSpace is unchanged.
+  menu); until then every `/imago` address answers not found. One frame stays put as you move
+  around: a rail of sections, a drive switcher with your Home drive first, and an avatar menu with
+  theme, "Classic PageSpace" and sign out.
+  **Chat** talks to your agents. The header picks who you talk to: your Imago agents first, then the
+  agents you can use in the open drive; switching agent opens that agent's latest conversation, and
+  an agent you can no longer use hands the chat back to Imago with a note saying so. Replies stream
+  in as you watch, with one expandable line per tool the agent used and page citations as chips that
+  open the page in Files; Stop ends a reply and keeps what it had written so far. Whatever you open
+  elsewhere in the frame is what the agent answers about, and the draft in the composer waits for you
+  when you come back. The chat history lists the agent's conversations grouped by day, switches
+  between them in place, and starts a fresh one with New chat.
+  **Files** shows a drive's pages as a live tree: open a folder in place with its caret, filter by
+  name (the folders on the way to a match stay in view), and press + to create a document in the
+  open folder, which appears at once and opens. Opening a folder shows it Finder-style: the path back
+  up the drive, then each page in it with its type icon, kind and when it last changed; an empty
+  folder offers New page. Opening a document shows it in a centred column with the path of pages
+  above it; if you can edit it, you edit its title and text in place and it saves as you pause
+  ("Saving…", "Saved"). If someone else saved it while you were editing, your text stays put and you
+  choose "Keep my version" or "Use the saved version"; if you lose edit access, Imago says your
+  last changes were not saved. A sheet, canvas, code page, file or task list shows a card with an
+  "Open in classic" button; an agent page also offers "Chat with this agent".
+  **Messages** lists a drive's channels and your direct messages with unread counts, and opens a
+  channel or a direct message to read and post in, with new posts arriving live; the unread count on
+  the rail keeps up wherever you are. **Tasks** lists a drive's task lists with progress and opens one
+  in Tree or Focus view, where you can tick and add tasks, or open a task to edit its title, status,
+  priority, due date, assignees, description and subtasks. **Settings** shows a drive's name (owners
+  and admins can rename it), its members, and an "Imago access" switch that lets your Imago agents
+  work in that drive; your Home drive can't be renamed and your agents always have access to it.
+  Account links to your account, billing and connections settings in classic PageSpace.
+  Press ⌘K (Ctrl-K on Windows and Linux) anywhere to search the open drive's pages by name, or tick
+  "Include all workspaces" to search every drive you can open; move with the arrow keys, press Enter
+  to jump straight to a page, channel, task list or agent, and Escape to go back where you were. An
+  empty drive, a section that fails to load and an address that names nothing you can open each get
+  their own screen inside the frame: a note about what will show up, a "Try again" button, or "not
+  found" with a link back. Imago is a preview, and classic PageSpace is unchanged.
 
 - **Imago agents in your Home drive** — every account now gets three assistants, Imago, Imago
   Planner and Imago Researcher, as ordinary agents in an `Imago` folder in your Home drive. They are
