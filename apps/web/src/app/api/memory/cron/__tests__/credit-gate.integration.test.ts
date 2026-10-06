@@ -80,6 +80,7 @@ import { upsertCandidates } from '@/lib/memory/candidate-service';
 import { checkAndCompactIfNeeded } from '@/lib/memory/compaction-service';
 import { POST } from '../route';
 import { withHoldAudit, type HoldAudit } from '@/test/hold-audit';
+import { captureUsageSettles, type UsageSettles } from '@/test/usage-settles';
 
 let dbAvailable = false;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -94,6 +95,7 @@ const TEST_TIMEOUT_MS = 30_000;
 const CRON_USER_DELAY_MS = 1000;
 const createdUserIds: string[] = [];
 let setTimeoutSpy: MockInstance<typeof setTimeout> | undefined;
+let settles: UsageSettles | undefined;
 
 // 100k in / 10k out on claude-sonnet-5 ($2 / $10 per M) ≈ $0.30 per call before markup.
 const USAGE = { inputTokens: 100_000, outputTokens: 10_000 };
@@ -200,6 +202,7 @@ function expectOneHoldPerCall(audit: HoldAudit, userId: string, calls: number): 
 describe('memory cron credit gate (Postgres)', () => {
   afterEach(async () => {
     setTimeoutSpy?.mockRestore();
+    settles?.restore();
     if (!dbAvailable || createdUserIds.length === 0) return;
     const ids = createdUserIds.splice(0);
     // ai_usage_logs has no FK to users; everything else cascades from the user row.
@@ -221,6 +224,7 @@ describe('memory cron credit gate (Postgres)', () => {
     const realSetTimeout = globalThis.setTimeout;
     setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout').mockImplementation(((handler: () => void, ms?: number) =>
       realSetTimeout(handler, ms === CRON_USER_DELAY_MS ? 0 : ms)) as typeof setTimeout);
+    settles = captureUsageSettles();
     generateObjectMock.mockReset();
     generateTextMock.mockReset();
     generateObjectMock.mockResolvedValue({ object: { claims: [] }, usage: USAGE });
@@ -286,6 +290,28 @@ describe('memory cron credit gate (Postgres)', () => {
 
     expect(await usageRowsOf(exhausted)).toEqual([]);
     expect((await balanceOf(exhausted)).debtCents).toBe(500);
+  }, TEST_TIMEOUT_MS);
+
+  it('a settle that starts after the cron returns: its hold stays live until it runs, then is removed, and the audit waits for it', async () => {
+    if (!dbAvailable) return;
+    const exhausted = await activeProUser({ monthlyRemainingCents: 0, debtCents: 500 });
+    const funded = await activeProUser({ monthlyRemainingCents: 10_000, debtCents: 0 });
+    // The evaluator's settle is held until the gate opens: the ordering in which CI read
+    // four holds placed and three removed (the route returned, that settle had not started).
+    let openGate: () => void = () => {};
+    const gate = new Promise<void>((resolve) => { openGate = resolve; });
+    settles?.restore();
+    settles = captureUsageSettles((data, settle) =>
+      data.metadata?.feature === 'memory_integration' ? gate.then(settle) : settle());
+
+    const { audit } = await withHoldAudit([exhausted, funded], () => POST(new Request('http://web:3000/api/memory/cron', { method: 'POST' })), async () => {
+      await settled([exhausted, funded]);
+      openGate();
+    });
+
+    expectOneHoldPerCall(audit, funded, 4);
+    expectOneHoldPerCall(audit, exhausted, 0);
+    expect(await db.select().from(creditHolds).where(eq(creditHolds.userId, funded))).toEqual([]);
   }, TEST_TIMEOUT_MS);
 
   it('a funded user with an over-budget page: compaction reserves per call and each call settles once', async () => {
