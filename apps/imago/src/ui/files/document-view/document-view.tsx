@@ -109,6 +109,13 @@ const shownTitleOf = (title: string): string => (title.trim() === '' ? UNTITLED 
 
 const SAVED: SaverState = { status: { kind: 'saved' }, editing: false };
 
+/**
+ * How long a closed document's last save may hold SWR off its page. The API
+ * client sets no timeout, so a save that never answers would otherwise keep
+ * the page paused for the rest of the tab.
+ */
+export const CLOSING_SAVE_TIMEOUT_MS = 15_000;
+
 export function DocumentView({ driveId, page }: DocumentViewProps): ReactNode {
   const router = useRouter();
   // The editor is made once; a mention click reads the router it has now.
@@ -210,10 +217,14 @@ export function DocumentView({ driveId, page }: DocumentViewProps): ReactNode {
   // Leaving the document saves what is waiting. Text that still did not
   // reach the server (a conflict, a refusal, a failure) is never dropped with
   // the view: it is kept as the page's draft and restored when it opens again.
-  // Then SWR has the page again.
+  // Then SWR has the page again: once the save answers, or once it has had
+  // CLOSING_SAVE_TIMEOUT_MS, whichever comes first.
   useEffect(
     () => () => {
+      const release = () => dispatch(transactions.endDocumentEdit, { pageId: page.id, viewId });
+      const timeout = setTimeout(release, CLOSING_SAVE_TIMEOUT_MS);
       void saver.flush().finally(() => {
+        clearTimeout(timeout);
         const unsaved = saver.unsaved();
         if (unsaved !== null) {
           dispatch(transactions.keepDocumentDraft, {
@@ -221,7 +232,7 @@ export function DocumentView({ driveId, page }: DocumentViewProps): ReactNode {
             draft: { patch: unsaved, revision: saver.revision() },
           });
         }
-        dispatch(transactions.endDocumentEdit, { pageId: page.id, viewId });
+        release();
       });
     },
     [saver, page.id, viewId],
