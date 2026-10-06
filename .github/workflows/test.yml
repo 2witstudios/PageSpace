@@ -22,6 +22,14 @@ on:
   pull_request:
     branches: [main, master, develop, pu/flash-sandbox, pu/panes-agent, pu/imago]
   workflow_dispatch:
+    inputs:
+      # Makes imago's Linux visual baselines on the runner and uploads them as the
+      # `imago-visual-baselines` artifact, to be reviewed and committed by hand
+      # (apps/e2e/tests/34-imago-visual.spec.ts). Nothing is committed from CI.
+      update_visual_baselines:
+        description: Regenerate imago's visual baselines (artifact only; never committed by CI)
+        type: boolean
+        default: false
 
 # A newer push to the same PR makes the older run irrelevant, so cancel it:
 # superseded runs queued behind each other and held CI for ~40 minutes.
@@ -35,3 +43,6 @@ concurrency:
 jobs:
   ci:
     uses: ./.github/workflows/ci.yml
+    with:
+      # Empty on push and pull_request, which therefore always compare.
+      update_visual_baselines: ${{ inputs.update_visual_baselines == true }}

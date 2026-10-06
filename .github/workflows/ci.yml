@@ -5,6 +5,13 @@ name: CI
 # no duplicated job definitions.
 on:
   workflow_call:
+    inputs:
+      # test.yml's manual dispatch only. When true, the e2e job regenerates imago's Linux visual
+      # baselines and uploads them as an artifact INSTEAD of running the specs; when false (every
+      # push, PR and deploy gate) the baselines are only ever compared, never written.
+      update_visual_baselines:
+        type: boolean
+        default: false
 
 # Minimal permissions: read source only. No write access needed — artifact upload
 # uses the Actions API (not git), which is allowed under contents: read.
@@ -435,7 +442,7 @@ jobs:
       AWS_ACCESS_KEY_ID: e2e
       AWS_SECRET_ACCESS_KEY: e2e-not-a-real-secret
       BUCKET_NAME: pagespace-e2e
-      E2E_SPECS: tests/15-chat-fixture-smoke.spec.ts tests/16-dispatch-multiplayer.spec.ts tests/17-agent-workspace-grid.spec.ts tests/18-sidebar-directory-live.spec.ts tests/19-channels-badge-live.spec.ts tests/20-pane-lifecycle.spec.ts tests/26-imago-api-proxy.spec.ts tests/27-imago-shell.spec.ts tests/28-imago-settings.spec.ts tests/29-imago-messages.spec.ts tests/30-imago-palette.spec.ts tests/31-imago-chat.spec.ts tests/32-imago-files.spec.ts tests/33-imago-tasks.spec.ts
+      E2E_SPECS: tests/15-chat-fixture-smoke.spec.ts tests/16-dispatch-multiplayer.spec.ts tests/17-agent-workspace-grid.spec.ts tests/18-sidebar-directory-live.spec.ts tests/19-channels-badge-live.spec.ts tests/20-pane-lifecycle.spec.ts tests/26-imago-api-proxy.spec.ts tests/27-imago-shell.spec.ts tests/28-imago-settings.spec.ts tests/29-imago-messages.spec.ts tests/30-imago-palette.spec.ts tests/31-imago-chat.spec.ts tests/32-imago-files.spec.ts tests/33-imago-tasks.spec.ts tests/34-imago-visual.spec.ts tests/35-imago-visual-control.spec.ts
 
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -568,8 +575,33 @@ jobs:
 
       # Playwright starts the OpenRouter mock itself on :4998 via its `webServer` config.
       - name: Run agent-session e2e specs
+        if: ${{ !inputs.update_visual_baselines }}
         run: bunx playwright test $E2E_SPECS
         working-directory: apps/e2e
+
+      # IMG-10.4. Screenshot baselines depend on the platform's font rasterisation, so imago's are
+      # made here, on the runner the comparisons run on, never on a laptop. Dispatch test.yml with
+      # `update_visual_baselines` to get them: spec 34 rewrites every baseline, then 34 and its
+      # token negative control (35) run again in compare mode against the new files, so an
+      # unstable frame or a control that cannot fail shows up before anything is committed. The
+      # PNGs leave as an artifact for a person to review and commit; this job has read-only
+      # contents permission and commits nothing.
+      - name: Regenerate imago visual baselines (manual dispatch only)
+        if: ${{ inputs.update_visual_baselines }}
+        run: |
+          rm -f tests/__screenshots__/*-linux.png
+          bunx playwright test tests/34-imago-visual.spec.ts --update-snapshots=all
+          bunx playwright test tests/34-imago-visual.spec.ts tests/35-imago-visual-control.spec.ts
+        working-directory: apps/e2e
+
+      - name: Upload imago visual baselines
+        if: ${{ inputs.update_visual_baselines }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: imago-visual-baselines
+          path: apps/e2e/tests/__screenshots__/*-linux.png
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Upload Playwright report and traces
         if: failure()
