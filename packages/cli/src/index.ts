@@ -472,6 +472,25 @@ export {
 } from './commands/workspaces.js';
 export type { ExtractExecArgsResult } from './commands/workspaces.js';
 
+// Organization READ verbs (Spec X-1) — thin projections over the organizations.* SDK reads.
+export {
+  directoryStanding,
+  extractOrgArgs,
+  extractOrgsListArgs,
+  policyValueLabel,
+  renderOrg,
+  renderOrgDrives,
+  renderOrgMembers,
+  renderOrgPolicies,
+  renderOrgsList,
+  orgsDrivesHandler,
+  orgsGetHandler,
+  orgsListHandler,
+  orgsMembersHandler,
+  orgsPoliciesHandler,
+} from './commands/orgs.js';
+export type { ExtractOrgArgsResult } from './commands/orgs.js';
+
 // Wallet READ verbs (X-1, [D-OW-26]) — thin projections over the wallets.* SDK reads.
 export {
   extractConversationSourceArgs,

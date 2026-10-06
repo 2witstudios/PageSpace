@@ -54,6 +54,9 @@ import {
   listDriveRoles,
   listDrives,
   listModels,
+  listMyOrganizations,
+  listOrgDriveDirectory,
+  listOrgMembers,
   listPages,
   listTrash,
   listWorkflows,
@@ -92,6 +95,8 @@ import {
   updateWorkflow,
   execInWorkspace,
   listWorkspaces,
+  getOrganization,
+  getOrgPolicies,
   getConversationSpendSource,
   getDriveWallet,
   listMyWallets,
@@ -210,6 +215,13 @@ const ALL_OPERATIONS: readonly Operation[] = [
   updateWorkflow,
   execInWorkspace,
   listWorkspaces,
+  // Organization READS only (Spec X-1): every org write needs a signed-in session, so none
+  // is an SDK operation, and none can be a tool.
+  getOrganization,
+  getOrgPolicies,
+  listMyOrganizations,
+  listOrgDriveDirectory,
+  listOrgMembers,
   // Wallet READS only ([D-OW-26]): no wallet write is an SDK operation, so none can be a tool.
   getConversationSpendSource,
   getDriveWallet,
