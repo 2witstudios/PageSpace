@@ -16,6 +16,8 @@ import { GUESTS_HELD_MESSAGE } from '@pagespace/lib/organizations/sharing-decisi
 import { recordOrgAuditEvent } from '@pagespace/lib/audit/org-audit';
 import type { PendingPagePermission } from '@pagespace/db/schema/pending-page-invites';
 import { pageInviteRepository } from '@/lib/repositories/page-invite-repository';
+import { isOrgLapsedError } from '@pagespace/lib/permissions/org-lapse-guard';
+import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
 
 export interface SharedPage {
   id: string;
@@ -132,6 +134,8 @@ export async function sendPendingPageInvite(args: {
       now,
     });
   } catch (insertError) {
+    // [D-OW-33] no invitation is issued while the drive's org is lapsed.
+    if (isOrgLapsedError(insertError)) return orgLapsedResponse();
     const message = insertError instanceof Error ? insertError.message : String(insertError);
     const isUniqueViolation =
       message.includes('pending_page_invites_active_page_email_idx') ||

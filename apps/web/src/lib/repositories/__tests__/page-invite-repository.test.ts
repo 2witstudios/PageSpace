@@ -14,6 +14,14 @@ vi.mock('@pagespace/lib/permissions/guest-admission', () => ({ decideOrgDriveAdm
 const consumeApprovedInvitation = vi.hoisted(() => vi.fn());
 const requestGuestApproval = vi.hoisted(() => vi.fn());
 vi.mock('@pagespace/lib/permissions/guest-holds', () => ({ consumeApprovedInvitation, requestGuestApproval }));
+// [D-OW-33] the lapse guard: no org (null) unless a test lapses the drive.
+const checkDriveMayLoosen = vi.hoisted(() => vi.fn());
+const checkPageMayLoosen = vi.hoisted(() => vi.fn());
+vi.mock('@pagespace/lib/permissions/org-lapse-guard', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@pagespace/lib/permissions/org-lapse-guard')>()),
+  checkDriveMayLoosen,
+  checkPageMayLoosen,
+}));
 
 vi.mock('@pagespace/db/db', () => ({ db: { transaction: mockTransaction } }));
 vi.mock('@pagespace/db/operators', () => ({
@@ -62,6 +70,8 @@ const input = {
 beforeEach(() => {
   vi.clearAllMocks();
   decideOrgDriveAdmission.mockResolvedValue({ decision: 'allow', orgId: null });
+  checkDriveMayLoosen.mockResolvedValue(null);
+  checkPageMayLoosen.mockResolvedValue(null);
 });
 
 describe('pageInviteRepository.consumeInviteAndGrantPage and the guests policy', () => {
@@ -105,5 +115,49 @@ describe('pageInviteRepository.consumeInviteAndGrantPage and the guests policy',
     expect(await pageInviteRepository.consumeInviteAndGrantPage(input)).toEqual({ ok: true, memberId: 'mem_1' });
     expect(consumeSet).toHaveBeenCalledWith({ consumedAt: input.grantedAt });
     expect(insert).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('pageInviteRepository [D-OW-33] a lapsed org only restricts', () => {
+  const LAPSED = { ok: false, code: 'org_lapsed', status: 402, message: 'lapsed' };
+
+  it('SEAT-9 (partial) [D-OW-33] consumeInviteAndGrantPage: refused with ORG_LAPSED BEFORE the token is consumed; no row or grant written', async () => {
+    const { tx, consumeSet, insert } = setupTx();
+    decideOrgDriveAdmission.mockResolvedValue({ decision: 'allow', orgId: 'org_1' });
+    checkDriveMayLoosen.mockResolvedValue(LAPSED);
+
+    expect(await pageInviteRepository.consumeInviteAndGrantPage(input)).toEqual({ ok: false, reason: 'ORG_LAPSED' });
+    expect(checkDriveMayLoosen).toHaveBeenCalledWith(tx, 'drive_1', true);
+    expect(consumeSet).not.toHaveBeenCalled();
+    expect(insert).not.toHaveBeenCalled();
+  });
+
+  it('SEAT-9 (partial) [D-OW-33] createDirectPagePermission: a new grant while lapsed throws OrgLapsedError and inserts nothing; an existing grant is returned untouched', async () => {
+    const insert = vi.fn();
+    const limit = vi.fn().mockResolvedValue([]);
+    const select = vi.fn().mockReturnValue({ from: vi.fn().mockReturnValue({ where: vi.fn().mockReturnValue({ limit }) }) });
+    mockTransaction.mockImplementation(async (cb: (t: unknown) => Promise<unknown>) => cb({ select, insert }));
+    decideOrgDriveAdmission.mockResolvedValue({ decision: 'allow', orgId: 'org_1' });
+    checkDriveMayLoosen.mockResolvedValue(LAPSED);
+    const grant = { pageId: 'page_1', driveId: 'drive_1', userId: 'member_1', canView: true, canEdit: false, canShare: false, grantedBy: 'admin' };
+
+    await expect(pageInviteRepository.createDirectPagePermission(grant)).rejects.toMatchObject({ code: 'org_lapsed' });
+    expect(insert).not.toHaveBeenCalled();
+
+    limit.mockResolvedValue([{ id: 'perm_existing' }]);
+    expect(await pageInviteRepository.createDirectPagePermission(grant)).toEqual({ id: 'perm_existing' });
+  });
+
+  it('SEAT-9 (partial) [D-OW-33] createPendingInvite: no page invitation is issued while lapsed', async () => {
+    const insert = vi.fn();
+    const del = vi.fn();
+    mockTransaction.mockImplementation(async (cb: (t: unknown) => Promise<unknown>) => cb({ insert, delete: del }));
+    checkPageMayLoosen.mockResolvedValue(LAPSED);
+
+    await expect(pageInviteRepository.createPendingInvite({
+      tokenHash: 'h', email: 'a@b.com', pageId: 'page_1', permissions: ['VIEW'], invitedBy: 'i', expiresAt: null, now: new Date(),
+    })).rejects.toMatchObject({ code: 'org_lapsed' });
+    expect(checkPageMayLoosen).toHaveBeenCalledWith(expect.anything(), 'page_1', true);
+    expect(insert).not.toHaveBeenCalled();
   });
 });

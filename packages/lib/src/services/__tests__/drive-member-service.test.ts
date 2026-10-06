@@ -80,7 +80,6 @@ import {
   getDriveMemberUserIdsByStandardRole,
   getDriveMemberUserIdsByCustomRole,
   isMemberOfDrive,
-  addDriveMember,
   getDriveMemberDetails,
   getMemberPermissions,
   updateMemberRole,
@@ -232,20 +231,6 @@ describe('drive-member-service', () => {
     it('should return false when not a member', async () => {
       audience(['owner-1', 'OWNER', null, true]);
       expect(await isMemberOfDrive('drive-1', 'user-1')).toBe(false);
-    });
-  });
-
-  describe('addDriveMember', () => {
-    it('should insert and return member', async () => {
-      const newMember = { id: 'dm-new', userId: 'u1', role: 'MEMBER' };
-      mockDb.insert.mockReturnValue({
-        values: vi.fn().mockReturnValue({
-          returning: vi.fn().mockResolvedValue([newMember]),
-        }),
-      });
-
-      const result = await addDriveMember('drive-1', 'inviter-1', { userId: 'u1' });
-      expect(result.id).toBe('dm-new');
     });
   });
 

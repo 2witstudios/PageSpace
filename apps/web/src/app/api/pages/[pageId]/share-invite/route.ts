@@ -15,6 +15,8 @@ import { canUserSharePage } from '@pagespace/lib/permissions/permissions';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { getDriveById } from '@pagespace/lib/services/drive-service';
 import { isHomeDrive, homeDriveActionError } from '@pagespace/lib/services/drive-guards';
+import { isOrgLapsedError } from '@pagespace/lib/permissions/org-lapse-guard';
+import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -187,6 +189,8 @@ export async function POST(
     // R2: Non-existing user (or unverified existing user) — create pending invite
     return await sendPendingPageInvite({ request, page, email, permissions, expiryDays: expiryDays ?? null, inviterUserId });
   } catch (error) {
+    // [D-OW-33] the drive's org is lapsed: a new grant or invitation would loosen access.
+    if (isOrgLapsedError(error)) return orgLapsedResponse();
     loggers.api.error('Error in page share invite:', error as Error);
     return NextResponse.json({ error: 'Failed to send invite' }, { status: 500 });
   }
