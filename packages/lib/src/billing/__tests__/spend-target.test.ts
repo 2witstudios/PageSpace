@@ -412,6 +412,29 @@ describe('spend-target: the stored choice (conversations.chosenWalletId, wallets
       .toEqual({ kind: 'source', source: 'own_credits', via: 'out_of_box' });
   });
 
+  it('SPEND-3 (partial) a SAVED "drive\'s wallet" default takes the same path as no default: a healthy drive wallet; paused, capped or empty → own credits; neither → nothing preselected', () => {
+    const saved = stored({ personalDefault: 'drive_wallet' });
+    const capped = { ...walletLeg('w-product', 'active', 0), capReached: true };
+    expect(chooseSource(null, saved, input({ chosen: null }))).toEqual({ kind: 'source', source: 'drive_wallet', via: 'out_of_box' });
+    for (const driveWallet of [walletLeg('w-product', 'paused', c(1200)), capped, walletLeg('w-product', 'active', 0)]) {
+      expect(chooseSource(null, saved, input({ chosen: null, driveWallet }))).toEqual({ kind: 'source', source: 'own_credits', via: 'out_of_box' });
+      // Exactly what an unset default does with the same legs.
+      expect(chooseSource(null, saved, input({ chosen: null, driveWallet }))).toEqual(chooseSource(null, NO_STORED_CHOICE, input({ chosen: null, driveWallet })));
+    }
+    expect(chooseSource(null, saved, input({ chosen: null, driveWallet: walletLeg('w-product', 'paused', c(1200)), personal: walletLeg('w-marcus', 'active', 0) })))
+      .toEqual({ kind: 'none' });
+  });
+
+  it('SPEND-3 (partial) SPEND-4 (partial) with a saved "drive\'s wallet" default and a paused drive wallet the call spends own credits: no refusal, no fallback nobody chose', () => {
+    const decision = decideCallSpend(input({
+      chosen: null,
+      stored: stored({ personalDefault: 'drive_wallet' }),
+      driveWallet: walletLeg('w-product', 'paused', c(1200)),
+      driveRule: { fallback: 'refuse', guestsMaySpendDriveWallet: false },
+    }));
+    expect(decision).toMatchObject({ kind: 'spend', source: 'own_credits', walletId: 'w-marcus', fallbackApplied: false });
+  });
+
   it('SPEND-3 (partial) the default Settings shows as selected is the stored one, or the drive\'s wallet when none was set', () => {
     expect(effectiveDefaultSpendSource(null)).toBe('drive_wallet');
     expect(effectiveDefaultSpendSource('own_credits')).toBe('own_credits');

@@ -119,7 +119,10 @@ export async function checkOrgActive(orgId: string, opts: { now?: Date; executor
 
 /**
  * [D-OW-33] the lapse a loosening write reads: whether the org is lapsed right now, read with the write's
- * executor (pass the transaction) so the decision and the write see the same subscription row.
+ * executor (pass the transaction). Under READ COMMITTED this is the subscription as committed when the read
+ * runs; no lock is taken, so a lapse that commits after the read is not seen by this write. That is the same
+ * read every lapse gate makes (#2817): the write then serializes as one made just before the lapse, which is
+ * allowed (the webhook mirror writes only org_subscriptions, and a lapse by time has no writer at all).
  */
 export async function readOrgLapsed(orgId: string, executor: Executor = db): Promise<boolean> {
   return !(await isOrgActive(orgId, { executor }));

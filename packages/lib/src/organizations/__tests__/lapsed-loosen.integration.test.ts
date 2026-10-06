@@ -190,10 +190,25 @@ describe('a lapsed org cannot loosen access (orgs on, real Postgres)', () => {
 
     expect(await changeMemberRole({ orgId: w.orgId, actorId: w.ids.jono, targetId: w.ids.priya, newRole: 'MEMBER' })).toEqual({ ok: true });
     expect(await roleOf(w.orgId, w.ids.priya)).toBe('MEMBER');
+    // Setting the role a member already has changes nothing, so it loosens nothing.
+    expect(await changeMemberRole({ orgId: w.orgId, actorId: w.ids.jono, targetId: w.ids.dana, newRole: 'MEMBER' })).toEqual({ ok: true });
+    expect(await roleOf(w.orgId, w.ids.dana)).toBe('MEMBER');
 
     await setSubscription(w.orgId, 'active');
     expect(await changeMemberRole({ orgId: w.orgId, actorId: w.ids.jono, targetId: w.ids.marcus, newRole: 'ADMIN' })).toEqual({ ok: true });
     expect(await roleOf(w.orgId, w.ids.marcus)).toBe('ADMIN');
+  });
+
+  it('SEAT-9 (partial) POL-2 (partial) [D-OW-33] while lapsed the policy still decides first: guests=off still names guests_off, guests=approve still queues (nothing granted), and the lapse never turns either into an allow', async () => {
+    if (!world) return;
+    const w = world;
+    await setSubscription(w.orgId, 'canceled');
+    await db.update(organizations).set({ policies: { guests: 'off' } }).where(eq(organizations.id, w.orgId));
+    expect(await decideOrgDriveAdmission({ driveId: w.productId, userId: w.ids.gita })).toEqual({ decision: 'refuse', refusal: 'guests_off', orgId: w.orgId });
+    await db.update(organizations).set({ policies: { guests: 'approve' } }).where(eq(organizations.id, w.orgId));
+    expect(await decideOrgDriveAdmission({ driveId: w.productId, userId: w.ids.gita })).toEqual({ decision: 'hold', orgId: w.orgId });
+    expect(await db.transaction((tx) => decideOrgDriveAdmission({ driveId: w.productId, userId: w.ids.gita }, tx))).toEqual({ decision: 'hold', orgId: w.orgId });
+    expect(await rowsFor(w.productId, w.ids.gita)).toHaveLength(0);
   });
 
   it('SEAT-9 (partial) POL-2 (partial) [D-OW-33] with guests on, a lapsed org admits no outsider: the admission refuses org_lapsed, inside a transaction too, and a share-link redemption writes no row; an org member is still admitted; paid again, the outsider is', async () => {
