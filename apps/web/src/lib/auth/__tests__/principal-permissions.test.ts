@@ -25,6 +25,9 @@ vi.mock('@pagespace/lib/permissions/app-permissions', () => ({
   hasAppDriveMembership: vi.fn(),
   getScopedAccessLevel: vi.fn(),
   getScopedDriveMembership: vi.fn(),
+  // Review #2849 r3: authority reads the scope clamped to its owner; here it delegates to the raw-scope mock, and the
+  // clamp itself is tested in lib (app-permissions, org-lapse-loosening.integration).
+  getEffectiveScopedDriveMembership: vi.fn(),
   getScopedDriveAccessLevel: vi.fn(),
   getScopedAccessiblePagesInDrive: vi.fn(),
   hasScopedDriveMembership: vi.fn(),
@@ -80,6 +83,7 @@ import {
   hasAppDriveMembership,
   getScopedAccessLevel,
   getScopedDriveMembership,
+  getEffectiveScopedDriveMembership,
   getScopedAccessiblePagesInDrive,
   hasScopedDriveMembership,
 } from '@pagespace/lib/permissions/app-permissions';
@@ -109,6 +113,11 @@ const scopedOAuthAuth: AuthResult = {
 
 const FULL = { canView: true, canEdit: true, canShare: true, canDelete: true };
 const VIEW_ONLY = { canView: true, canEdit: false, canShare: false, canDelete: false };
+
+beforeEach(() => {
+  vi.mocked(getEffectiveScopedDriveMembership).mockImplementation(async (scopes, _ownerUserId, driveId) =>
+    vi.mocked(getScopedDriveMembership)(scopes, driveId));
+});
 
 describe('isScopedMCPAuth', () => {
   it('is true only for MCP auth with non-empty allowedDriveIds', () => {

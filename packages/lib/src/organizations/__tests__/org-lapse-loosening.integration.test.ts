@@ -37,7 +37,7 @@ import { ORG_LAPSED_MESSAGE, ORG_LAPSED_REFUSAL } from '../status';
 import { acceptInvitation } from '../invitations';
 import { transferOwnership } from '../membership';
 import { hashToken } from '../../auth/token-utils';
-import { OrgLapsedError, checkDriveMayLoosen, checkPageMayLoosen, guardDriveAccess } from '../../permissions/org-lapse-guard';
+import { OrgLapsedError, checkCalendarVisibilityMayLoosen, checkDriveMayLoosen, checkPageMayLoosen, guardDriveAccess } from '../../permissions/org-lapse-guard';
 import { updateMemberAccess } from '../../services/drive-member-service';
 import { createDriveShareLink, createPageShareLink, redeemDriveShareLink, revokeDriveShareLink } from '../../permissions/share-link-service';
 import { grantPagePermission } from '../../permissions/permission-mutations';
@@ -47,7 +47,9 @@ import { orgDriveServiceDeps } from '../../services/org-drive-service-deps';
 import { createDriveRole, deleteDriveRole, updateDriveRole } from '../../services/drive-role-service';
 import { changeDriveVisibility } from '../../services/org-drive-service';
 import { validateDriveScopeAccess } from '../../services/drive-service';
-import { getAppAccessLevel, getAppAccessiblePagesInDrive } from '../../permissions/app-permissions';
+import { getAppAccessLevel, getAppAccessiblePagesInDrive, getAppDriveMembership, getEffectiveScopedDriveMembership } from '../../permissions/app-permissions';
+import { calendarEvents, calendarEventDrives } from '@pagespace/db/schema/calendar';
+import { shareEventWithDrive, unshareEventFromDrive } from '../../services/calendar-event-drive-service';
 import { getUserAccessLevel } from '../../permissions/permissions';
 import { addAgentToDrive, setAgentDriveIncludeContext } from '../../services/drive-agent-service';
 import { EnforcedAuthContext } from '../../permissions/enforced-context';
@@ -529,5 +531,57 @@ describe('[D-OW-33] a lapsed org may only restrict, on every guarded write (orgs
       client.release();
     }
     expect((await memberRow(w.product, w.ids.marcus))?.customRoleId).toBe(narrow.id);
+  });
+
+  it('SEAT-9 (partial) [D-OW-33] review r3 P1-B: a key\'s stored ADMIN role is admin only while its owner is: demoting the owner demotes the key at once, paid AND lapsed (MCP and OAuth); re-promoting restores it', async () => {
+    if (!world) return;
+    const w = world;
+    // Marcus is a drive ADMIN through his row only (Priya would stay admin through her org Admin role, rightly).
+    await db.update(driveMembers).set({ role: 'ADMIN', customRoleId: null }).where(and(eq(driveMembers.driveId, w.product), eq(driveMembers.userId, w.ids.marcus)));
+    const [token] = await db.insert(mcpTokens).values({ userId: w.ids.marcus, tokenHash: `h_${createId()}`, tokenPrefix: 'mcp_', name: 'k' }).returning();
+    await db.insert(mcpTokenDrives).values({ tokenId: token.id, driveId: w.product, role: 'ADMIN', customRoleId: null });
+    const oauth = [{ driveId: w.product, role: 'ADMIN' as const, customRoleId: null }];
+    expect((await getAppDriveMembership(token.id, w.product))?.role).toBe('ADMIN');
+    expect((await getEffectiveScopedDriveMembership(oauth, w.ids.marcus, w.product))?.role).toBe('ADMIN');
+    await db.update(driveMembers).set({ role: 'MEMBER' }).where(and(eq(driveMembers.driveId, w.product), eq(driveMembers.userId, w.ids.marcus)));
+    for (const state of ['paid', 'lapsed'] as const) {
+      if (state === 'lapsed') await lapse(w);
+      expect((await getAppDriveMembership(token.id, w.product))?.role).toBe('MEMBER');
+      expect((await getEffectiveScopedDriveMembership(oauth, w.ids.marcus, w.product))?.role).toBe('MEMBER');
+    }
+    await db.update(driveMembers).set({ role: 'ADMIN' }).where(and(eq(driveMembers.driveId, w.product), eq(driveMembers.userId, w.ids.marcus)));
+    expect((await getAppDriveMembership(token.id, w.product))?.role).toBe('ADMIN');
+  });
+
+  it('SEAT-9 (partial) [D-OW-33] review r3 P1-A: the calendar visibility guard (PATCH and the AI/MCP update tool) refuses widening an org-drive event while lapsed, allows narrowing, and allows widening when paid; a personal event is never refused', async () => {
+    if (!world) return;
+    const w = world;
+    const [event] = await db.insert(calendarEvents).values({ driveId: w.product, createdById: w.ids.dana, title: 'Board', startAt: new Date(), endAt: new Date(Date.now() + 3_600_000), visibility: 'PRIVATE', updatedAt: new Date() }).returning();
+    const [personal] = await db.insert(calendarEvents).values({ driveId: null, createdById: w.ids.dana, title: 'Me', startAt: new Date(), endAt: new Date(Date.now() + 3_600_000), visibility: 'PRIVATE', updatedAt: new Date() }).returning();
+    await lapse(w);
+    expect(await db.transaction((tx) => checkCalendarVisibilityMayLoosen(tx, event.id, 'DRIVE'))).toEqual(ORG_LAPSED_REFUSAL);
+    expect(await db.transaction((tx) => checkCalendarVisibilityMayLoosen(tx, event.id, 'ATTENDEES_ONLY'))).toEqual(ORG_LAPSED_REFUSAL);
+    expect(await db.transaction((tx) => checkCalendarVisibilityMayLoosen(tx, event.id, 'PRIVATE'))).toBeNull();
+    expect(await db.transaction((tx) => checkCalendarVisibilityMayLoosen(tx, personal.id, 'DRIVE'))).toBeNull();
+    await db.update(calendarEvents).set({ visibility: 'DRIVE' }).where(eq(calendarEvents.id, event.id));
+    expect(await db.transaction((tx) => checkCalendarVisibilityMayLoosen(tx, event.id, 'PRIVATE'))).toBeNull();
+    await db.update(calendarEvents).set({ visibility: 'PRIVATE' }).where(eq(calendarEvents.id, event.id));
+    await pay(w);
+    expect(await db.transaction((tx) => checkCalendarVisibilityMayLoosen(tx, event.id, 'DRIVE'))).toBeNull();
+  });
+
+  it('SEAT-9 (partial) [D-OW-33] review r3 P2 ruling: sharing an org-drive event into another drive is refused while lapsed (402, no row); unsharing still works; paid, sharing goes through', async () => {
+    if (!world) return;
+    const w = world;
+    const [event] = await db.insert(calendarEvents).values({ driveId: w.product, createdById: w.ids.dana, title: 'Launch', startAt: new Date(), endAt: new Date(Date.now() + 3_600_000), visibility: 'DRIVE', updatedAt: new Date() }).returning();
+    const shares = async () => db.select({ driveId: calendarEventDrives.driveId }).from(calendarEventDrives).where(eq(calendarEventDrives.eventId, event.id));
+    await lapse(w);
+    expect(await shareEventWithDrive({ actingUserId: w.ids.dana, eventId: event.id, driveId: w.ops })).toEqual({ ok: false, status: 402, error: ORG_LAPSED_MESSAGE, code: 'org_lapsed' });
+    expect(await shares()).toHaveLength(0);
+    await pay(w);
+    expect(await shareEventWithDrive({ actingUserId: w.ids.dana, eventId: event.id, driveId: w.ops })).toMatchObject({ ok: true, status: 201 });
+    await lapse(w);
+    expect(await unshareEventFromDrive({ actingUserId: w.ids.dana, eventId: event.id, driveId: w.ops })).toMatchObject({ ok: true });
+    expect(await shares()).toHaveLength(0);
   });
 });

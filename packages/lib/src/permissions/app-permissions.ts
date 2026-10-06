@@ -5,6 +5,7 @@ import { mcpTokenDrives } from '@pagespace/db/schema/members';
 import { mcpTokens } from '@pagespace/db/schema/auth';
 import {
   getUserAccessLevel,
+  getUserDrivePermissions,
   isUserDriveMember,
   getUserAccessiblePagesInDriveWithDetails,
 } from './permissions';
@@ -197,6 +198,24 @@ export interface AppDriveMembership {
   ownerUserId: string;
 }
 
+/**
+ * Review #2849 r3 (P1-B): a key's stored OWNER/ADMIN role is AUTHORITY only while its owner holds that authority on
+ * the drive now. An explicit OWNER counts as OWNER only for the drive's lead (else ADMIN for a current admin), an
+ * explicit ADMIN only for a current owner or admin; otherwise the key is a plain MEMBER (its access is then bounded
+ * by the owner's own: intersectPermissionLevels). So a demoted admin's key loses admin immediately.
+ */
+async function clampExplicitRoleToOwner(role: AppMemberRole | null, ownerUserId: string, driveId: string): Promise<AppMemberRole | null> {
+  if (role !== 'OWNER' && role !== 'ADMIN') return role;
+  const owner = await getUserDrivePermissions(ownerUserId, driveId);
+  if (role === 'OWNER' && owner?.isOwner) return 'OWNER';
+  return owner?.isOwner || owner?.isAdmin ? 'ADMIN' : 'MEMBER';
+}
+
+/**
+ * The key's membership on the drive, its explicit role CLAMPED to its owner's current authority (clampExplicitRoleToOwner).
+ * Every authority check (owner/admin gates, the AI tools' manage ceiling, bulk move/copy, restore, agent create)
+ * reads this, never the stored role.
+ */
 export async function getAppDriveMembership(
   tokenId: string,
   driveId: string,
@@ -204,7 +223,7 @@ export async function getAppDriveMembership(
   const membership = await fetchAppMembershipContext(tokenId, driveId);
   if (!membership) return null;
   return {
-    role: membership.role,
+    role: await clampExplicitRoleToOwner(membership.role, membership.ownerUserId, driveId),
     customRoleId: membership.customRoleId ?? null,
     ownerUserId: membership.ownerUserId,
   };
@@ -464,6 +483,22 @@ export async function hasScopedDriveMembership(
   if (!row) return false;
   if (row.role === null) return isUserDriveMember(ownerUserId, driveId);
   return true;
+}
+
+/**
+ * The OAuth scope's membership with its explicit role CLAMPED to the owner's current authority (review #2849 r3,
+ * P1-B; see clampExplicitRoleToOwner). Authority checks read this, not the raw scope.
+ */
+export async function getEffectiveScopedDriveMembership(
+  driveScopes: DriveScopeRow[],
+  ownerUserId: string,
+  driveId: string,
+): Promise<{ role: 'ADMIN' | 'MEMBER' | null; customRoleId: string | null } | null> {
+  const row = findScopeRow(driveScopes, driveId);
+  if (!row) return null;
+  if (row.role !== 'ADMIN') return { role: row.role, customRoleId: row.customRoleId };
+  const clamped = await clampExplicitRoleToOwner(row.role, ownerUserId, driveId);
+  return { role: clamped === 'MEMBER' ? 'MEMBER' : 'ADMIN', customRoleId: row.customRoleId };
 }
 
 /** Pure array lookup — no DB, unlike getAppDriveMembership. */

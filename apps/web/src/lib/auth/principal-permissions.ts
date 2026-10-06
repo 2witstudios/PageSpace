@@ -47,7 +47,7 @@ import {
   hasAppDriveMembership,
   getScopedAccessLevel,
   getScopedDriveAccessLevel,
-  getScopedDriveMembership,
+  getEffectiveScopedDriveMembership,
   getScopedAccessiblePagesInDrive,
   hasScopedDriveMembership,
 } from '@pagespace/lib/permissions/app-permissions';
@@ -230,6 +230,8 @@ export async function isPrincipalDriveOwnerOrAdmin(auth: AuthResult, driveId: st
   auth = resolveDispatchedPrincipal(auth);
   if (isManageKeysOnly(auth)) return false;
   if (isScopedMCPAuth(auth)) {
+    // getAppDriveMembership clamps an explicit role to the owner's CURRENT authority (review #2849 r3 P1-B), so a
+    // demoted admin's ADMIN key is not admin here.
     const membership = await getAppDriveMembership(auth.tokenId, driveId);
     if (!membership) return false;
     // Inherit: the key is its owner — the owner's own authority decides.
@@ -237,7 +239,8 @@ export async function isPrincipalDriveOwnerOrAdmin(auth: AuthResult, driveId: st
     return membership.role === 'OWNER' || membership.role === 'ADMIN';
   }
   if (isScopedOAuthAuth(auth)) {
-    const membership = getScopedDriveMembership(auth.driveScopes, driveId);
+    // Review #2849 r3 P1-B: an explicit ADMIN scope is admin only while its owner is (clamped).
+    const membership = await getEffectiveScopedDriveMembership(auth.driveScopes, auth.userId, driveId);
     if (!membership) return false;
     if (membership.role === null) return isDriveOwnerOrAdmin(auth.userId, driveId);
     return membership.role === 'ADMIN';
@@ -321,7 +324,7 @@ export async function getPrincipalDriveMembership(
     return membership && { role: membership.role, customRoleId: membership.customRoleId };
   }
   if (isScopedOAuthAuth(auth)) {
-    const membership = getScopedDriveMembership(auth.driveScopes, driveId);
+    const membership = await getEffectiveScopedDriveMembership(auth.driveScopes, auth.userId, driveId);
     return membership && { role: membership.role, customRoleId: membership.customRoleId };
   }
 

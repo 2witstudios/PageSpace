@@ -18,6 +18,7 @@ import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
 import { users } from '@pagespace/db/schema/auth';
 import { drives, pages } from '@pagespace/db/schema/core';
+import { calendarEvents, eventAttendees } from '@pagespace/db/schema/calendar';
 import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
 import { organizations, orgMembers, orgSubscriptions } from '@pagespace/db/schema/organizations';
 import { orgGuestHolds } from '@pagespace/db/schema/org-guest-holds';
@@ -32,6 +33,16 @@ vi.mock('@pagespace/lib/services/page-version-service', async (importOriginal) =
 vi.mock('@pagespace/lib/services/page-content-store', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@pagespace/lib/services/page-content-store')>()),
   writePageContent: vi.fn(async (content: string, format: string) => ({ ref: `${format}:test-${content.length}`, size: content.length, compressed: false, storedSize: content.length, compressionRatio: 1 })),
+}));
+// Calendar writers broadcast and push to Google after the write; neither is what these tests assert. The routes'
+// authentication is stubbed to the drive lead (the event creator).
+vi.mock('@/lib/websocket/calendar-events', () => ({ broadcastCalendarEvent: vi.fn(async () => undefined) }));
+const authed = vi.hoisted(() => ({ userId: '' }));
+vi.mock('@/lib/auth', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/auth')>()),
+  authenticateRequestWithOptions: vi.fn(async () => ({ userId: authed.userId, tokenVersion: 0, tokenType: 'session', sessionId: 's', role: 'user', adminRoleVersion: 0 })),
+  isAuthError: vi.fn(() => false),
+  getAllowedDriveIds: vi.fn(() => []),
 }));
 vi.mock('@pagespace/lib/monitoring/activity-logger', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@pagespace/lib/monitoring/activity-logger')>()),
@@ -49,6 +60,8 @@ import { redoPageChange, redoPermissionChange } from '../rollback/redo-executors
 import { rollbackPageChange } from '../rollback/rollback-executors';
 import { pageService } from '../page-service';
 import { movePagesToDrive } from '../page-cross-drive-move-service';
+import { POST as addAttendees } from '@/app/api/calendar/events/[eventId]/attendees/route';
+import { calendarWriteTools } from '@/lib/ai/tools/calendar-write-tools';
 import type { ActivityLogForRollback } from '../rollback/types';
 
 const created = { userIds: [] as string[], driveIds: [] as string[], orgIds: [] as string[] };
@@ -354,5 +367,42 @@ describe('pages leaving a lapsed org drive (review P2-4 ruling)', () => {
     await pay();
     expect(await move(personal)).toMatchObject({ success: true });
     expect(await driveOf()).toBe(personal);
+  });
+});
+
+describe('calendar events in a lapsed org drive (review #2849 r3: P1-A, P2 ruling)', () => {
+  const makeEvent = async (visibility: 'PRIVATE' | 'ATTENDEES_ONLY' | 'DRIVE') =>
+    (await db.insert(calendarEvents).values({ driveId: w.orgDrive, createdById: w.owner, title: 'Board', startAt: new Date(), endAt: new Date(Date.now() + 3_600_000), visibility, updatedAt: new Date() }).returning())[0];
+  const ctx = () => ({ toolCallId: 't', messages: [], experimental_context: { userId: w.owner } });
+  const visibilityOf = async (id: string) => (await db.select({ v: calendarEvents.visibility }).from(calendarEvents).where(eq(calendarEvents.id, id)))[0].v;
+  const attendeesOf = async (id: string) => (await db.select({ userId: eventAttendees.userId }).from(eventAttendees).where(eq(eventAttendees.eventId, id))).map((a) => a.userId);
+
+  it('SEAT-9 (partial) [D-OW-33] review r3 P1-A: the AI/MCP update_calendar_event tool cannot make an org-drive event more visible while lapsed (nothing written); it can make it less visible; paid, it can widen', async () => {
+    const event = await makeEvent('PRIVATE');
+    await lapse();
+    await expect(calendarWriteTools.update_calendar_event.execute!({ eventId: event.id, visibility: 'DRIVE' }, ctx() as never)).rejects.toThrow(/subscription has lapsed/);
+    expect(await visibilityOf(event.id)).toBe('PRIVATE');
+    await db.update(calendarEvents).set({ visibility: 'DRIVE' }).where(eq(calendarEvents.id, event.id));
+    expect(await calendarWriteTools.update_calendar_event.execute!({ eventId: event.id, visibility: 'ATTENDEES_ONLY' }, ctx() as never)).toMatchObject({ success: true });
+    expect(await visibilityOf(event.id)).toBe('ATTENDEES_ONLY');
+    await pay();
+    expect(await calendarWriteTools.update_calendar_event.execute!({ eventId: event.id, visibility: 'DRIVE' }, ctx() as never)).toMatchObject({ success: true });
+    expect(await visibilityOf(event.id)).toBe('DRIVE');
+  });
+
+  it('SEAT-9 (partial) [D-OW-33] review r3 P2 ruling: adding an attendee to an org-drive event is refused while lapsed, by the route (402) and the AI tool, and nothing is written; paid, both add', async () => {
+    await factories.createDriveMember(w.orgDrive, w.member, { role: 'MEMBER', acceptedAt: new Date() });
+    const event = await makeEvent('ATTENDEES_ONLY');
+    authed.userId = w.owner;
+    const post = () => addAttendees(new Request(`http://localhost/api/calendar/events/${event.id}/attendees`, { method: 'POST', body: JSON.stringify({ userIds: [w.member] }) }), { params: Promise.resolve({ eventId: event.id }) });
+    await lapse();
+    const refused = await post();
+    expect(refused.status).toBe(402);
+    expect(await refused.json()).toMatchObject({ code: 'org_lapsed' });
+    expect(await calendarWriteTools.invite_calendar_attendees.execute!({ eventId: event.id, userIds: [w.member] }, ctx() as never)).toMatchObject({ success: false, error: expect.stringMatching(/subscription has lapsed/) });
+    expect(await attendeesOf(event.id)).not.toContain(w.member);
+    await pay();
+    expect((await post()).status).toBe(200);
+    expect(await attendeesOf(event.id)).toContain(w.member);
   });
 });

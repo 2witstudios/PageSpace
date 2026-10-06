@@ -17,7 +17,8 @@ import { db } from '@pagespace/db/db';
 import { and, eq, inArray, sql } from '@pagespace/db/operators';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { driveAgentMembers, driveMembers, driveRoles, mcpTokenDrives, pagePermissions } from '@pagespace/db/schema/members';
-import { driveAccessWidens, type DriveAccessSnapshot, type DriveMemberRoleName, type GrantFlags } from '../organizations/loosening-core';
+import { calendarEvents } from '@pagespace/db/schema/calendar';
+import { calendarVisibilityWidens, driveAccessWidens, type DriveAccessSnapshot, type DriveMemberRoleName, type GrantFlags } from '../organizations/loosening-core';
 import { checkOrgMayLoosen, ORG_LAPSED_CODE, ORG_LAPSED_MESSAGE, type OrgLapsedRefusal } from '../organizations/status';
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -54,6 +55,22 @@ export async function checkPageMayLoosen(executor: Executor, pageId: string, loo
     .where(eq(pages.id, pageId))
     .limit(1);
   return row?.orgId ? checkOrgMayLoosen(executor, row.orgId, true) : null;
+}
+
+/**
+ * [D-OW-33] orchestrator ruling (review #2849 r2/r3): a drive calendar event made MORE visible (Private < Attendees
+ * only < Drive) loosens who reads it. Locks the event row FOR UPDATE in `executor` (pass the write's transaction),
+ * then asks checkDriveMayLoosen for the event's drive only when `nextVisibility` widens. A personal event is never
+ * refused. Every writer of an event's visibility (the PATCH route, the AI/MCP update tool) calls this.
+ */
+export async function checkCalendarVisibilityMayLoosen(executor: Tx, eventId: string, nextVisibility: string): Promise<OrgLapsedRefusal | null> {
+  const [row] = await executor
+    .select({ driveId: calendarEvents.driveId, visibility: calendarEvents.visibility })
+    .from(calendarEvents)
+    .where(eq(calendarEvents.id, eventId))
+    .for('update');
+  if (!row?.driveId) return null;
+  return checkDriveMayLoosen(executor, row.driveId, calendarVisibilityWidens(row.visibility, nextVisibility));
 }
 
 /** Which part of a drive a guarded write can touch. Both snapshots of one write use the same scope. */

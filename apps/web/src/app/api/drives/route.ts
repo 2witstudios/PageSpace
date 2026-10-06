@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { listAccessibleDrives, createDrive, type DriveWithAccess } from '@pagespace/lib/services/drive-service';
 import { isReservedDriveName } from '@pagespace/lib/services/drive-guards';
-import { getAppDriveMembership, getScopedDriveMembership, hasAppDriveMembership, hasScopedDriveMembership } from '@pagespace/lib/permissions/app-permissions';
+import { getAppDriveMembership, getEffectiveScopedDriveMembership, hasAppDriveMembership, hasScopedDriveMembership } from '@pagespace/lib/permissions/app-permissions';
 import { resolveDriveWideCanEdit } from '@pagespace/lib/permissions/membership-queries';
 import { getUserAccessLevel } from '@pagespace/lib/permissions/permissions';
 import { db } from '@pagespace/db/db';
@@ -140,7 +140,7 @@ export async function GET(req: Request) {
           includeTrash,
           userId,
           getMembership: async (driveId) => {
-            const membership = getScopedDriveMembership(auth.driveScopes, driveId);
+            const membership = await getEffectiveScopedDriveMembership(auth.driveScopes, auth.userId, driveId);
             if (!membership || membership.role !== null) return membership;
             return (await hasScopedDriveMembership(auth.driveScopes, auth.userId, driveId)) ? membership : null;
           },

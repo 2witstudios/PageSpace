@@ -73,12 +73,19 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ audit: vi.fn(), auditRequest: vi.fn() }));
 
-// [D-OW-33] the lapse guard: a test says whether the event's drive is lapsed for a loosening change.
-const checkDriveMayLoosen = vi.hoisted(() => vi.fn(async (_tx?: unknown, _driveId?: unknown, _loosens?: unknown): Promise<unknown> => null));
-vi.mock('@pagespace/lib/permissions/org-lapse-guard', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@pagespace/lib/permissions/org-lapse-guard')>()),
-  checkDriveMayLoosen,
-}));
+// [D-OW-33] the calendar lapse guard (locks the event row, refuses a widening while lapsed; real-PG tested in lib
+// org-lapse-loosening.integration). Each test says whether the drive is lapsed.
+const lapsedDrive = vi.hoisted(() => ({ current: false }));
+const checkCalendarVisibilityMayLoosen = vi.hoisted(() => vi.fn());
+vi.mock('@pagespace/lib/permissions/org-lapse-guard', async (importOriginal) => {
+  const real = await importOriginal<typeof import('@pagespace/lib/permissions/org-lapse-guard')>();
+  const { calendarVisibilityWidens } = await import('@pagespace/lib/organizations/loosening-core');
+  checkCalendarVisibilityMayLoosen.mockImplementation(async (tx: { select: () => { from: () => { where: () => { for: () => Promise<Array<{ visibility: string }>> } } } }, _eventId: string, next: string) => {
+    const [row] = await tx.select().from().where().for();
+    return lapsedDrive.current && calendarVisibilityWidens(row.visibility, next) ? { ok: false, code: 'org_lapsed', status: 402, message: 'lapsed' } : null;
+  });
+  return { ...real, checkCalendarVisibilityMayLoosen };
+});
 
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
@@ -135,7 +142,6 @@ const baseEvent = {
 };
 
 let setMock: Mock;
-const LAPSED = { ok: false, code: 'org_lapsed', status: 402, message: 'lapsed' };
 
 function setupPatch(stored: 'PRIVATE' | 'ATTENDEES_ONLY' | 'DRIVE') {
   const storedEvent = { ...baseEvent, visibility: stored };
@@ -166,7 +172,7 @@ describe('PATCH /api/calendar/events/[eventId] — a lapsed org drive only restr
   beforeEach(() => {
     vi.clearAllMocks();
     profileWhere.mockResolvedValue([]);
-    checkDriveMayLoosen.mockImplementation(async (_tx, _driveId, loosens) => (loosens ? LAPSED : null));
+    lapsedDrive.current = true;
   });
 
   it('SEAT-9 (partial) [D-OW-33] ruling: Private → Drive while lapsed answers 402 org_lapsed and writes nothing', async () => {
@@ -174,7 +180,7 @@ describe('PATCH /api/calendar/events/[eventId] — a lapsed org drive only restr
     const res = await PATCH(makeRequest({ visibility: 'DRIVE' }), { params });
     expect(res.status).toBe(402);
     expect(await res.json()).toMatchObject({ code: 'org_lapsed' });
-    expect(checkDriveMayLoosen).toHaveBeenCalledWith(expect.anything(), DRIVE_ID, true);
+    expect(checkCalendarVisibilityMayLoosen).toHaveBeenCalledWith(expect.anything(), EVENT_ID, 'DRIVE');
     expect(setMock).not.toHaveBeenCalled();
   });
 
@@ -182,12 +188,12 @@ describe('PATCH /api/calendar/events/[eventId] — a lapsed org drive only restr
     setupPatch('DRIVE');
     const res = await PATCH(makeRequest({ visibility: 'PRIVATE' }), { params });
     expect(res.status).toBe(200);
-    expect(checkDriveMayLoosen).toHaveBeenCalledWith(expect.anything(), DRIVE_ID, false);
+    expect(checkCalendarVisibilityMayLoosen).toHaveBeenCalledWith(expect.anything(), EVENT_ID, 'PRIVATE');
     expect(setMock).toHaveBeenCalledWith(expect.objectContaining({ visibility: 'PRIVATE' }));
   });
 
   it('SEAT-9 (partial) [D-OW-33] ruling: paid, Private → Drive applies', async () => {
-    checkDriveMayLoosen.mockResolvedValue(null);
+    lapsedDrive.current = false;
     setupPatch('PRIVATE');
     const res = await PATCH(makeRequest({ visibility: 'DRIVE' }), { params });
     expect(res.status).toBe(200);

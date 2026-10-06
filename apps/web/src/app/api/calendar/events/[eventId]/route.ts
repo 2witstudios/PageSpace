@@ -17,8 +17,7 @@ import {
   upsertCalendarTriggerWorkflowInTx,
   validateCalendarAgentTrigger,
 } from '@/lib/workflows/calendar-trigger-helpers';
-import { OrgLapsedError, checkDriveMayLoosen, isOrgLapsedError } from '@pagespace/lib/permissions/org-lapse-guard';
-import { calendarVisibilityWidens } from '@pagespace/lib/organizations/loosening-core';
+import { OrgLapsedError, checkCalendarVisibilityMayLoosen, isOrgLapsedError } from '@pagespace/lib/permissions/org-lapse-guard';
 import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
@@ -299,11 +298,8 @@ export async function PATCH(
     const [updatedEvent] = await db.transaction(async (tx) => {
       // [D-OW-33] ruling: an org-drive event made more visible (e.g. Private → Drive) loosens who reads it; refused
       // while the drive's org is lapsed, judged on the event row locked in this transaction. Narrowing still applies.
-      if (event.driveId && data.visibility !== undefined) {
-        const [current] = await tx.select({ visibility: calendarEvents.visibility }).from(calendarEvents).where(eq(calendarEvents.id, eventId)).for('update');
-        if (current && (await checkDriveMayLoosen(tx, event.driveId, calendarVisibilityWidens(current.visibility, data.visibility)))) {
-          throw new OrgLapsedError();
-        }
+      if (data.visibility !== undefined && (await checkCalendarVisibilityMayLoosen(tx, eventId, data.visibility))) {
+        throw new OrgLapsedError();
       }
       const result = await tx
         .update(calendarEvents)

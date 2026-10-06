@@ -30,6 +30,7 @@ const GUARD_HELPERS: Readonly<Record<string, string>> = {
   checkDriveMayLoosen: 'packages/lib/src/permissions/org-lapse-guard.ts#checkDriveMayLoosen',
   checkPageMayLoosen: 'packages/lib/src/permissions/org-lapse-guard.ts#checkPageMayLoosen',
   guardDriveAccess: 'packages/lib/src/permissions/org-lapse-guard.ts#guardDriveAccess',
+  checkCalendarVisibilityMayLoosen: 'packages/lib/src/permissions/org-lapse-guard.ts#checkCalendarVisibilityMayLoosen',
 };
 const GUARD_NAMES = [...ROOT_GUARDS, ...Object.keys(GUARD_HELPERS)];
 export const GUARD_CALL = new RegExp(`\\b(?:${GUARD_NAMES.join('|')})\\s*\\(`);
@@ -37,6 +38,8 @@ export const GUARD_CALL = new RegExp(`\\b(?:${GUARD_NAMES.join('|')})\\s*\\(`);
 type Verdict = { guard: 'self' } | { guard: 'caller'; by: readonly string[] } | { exempt: string; writes: readonly string[] };
 
 const SELF = { guard: 'self' } as const;
+const NEW_EVENT_ATTENDEES =
+  "a NEW event's own attendees (the creator, and drive members the route checks): nothing existing becomes visible to anyone new";
 const ROLLBACK = ['apps/web/src/services/api/rollback/execute.ts#executeRollback'];
 const MEMBER_ACCESS = 'packages/lib/src/services/drive-member-service.ts#updateMemberAccess';
 const NEW_AGENT_IN_ITS_OWN_DRIVE =
@@ -181,6 +184,40 @@ export const LOOSENING_WRITE_LEDGER: Readonly<Record<string, Verdict>> = {
   // An org-drive event made more visible (Private < Attendees only < Drive) loosens who reads it.
   'apps/web/src/app/api/calendar/events/[eventId]/route.ts#PATCH': SELF,
   'apps/web/src/lib/integrations/google-calendar/sync-service.ts#upsertEvent': SELF,
+  // Review #2849 r3: the AI/MCP update tool (a computed .set(updates), now flagged fail-closed) takes the same locked-row guard.
+  'apps/web/src/lib/ai/tools/calendar-write-tools.ts#update_calendar_event.execute': SELF,
+  // Ruling (review #2849 r3): ADDING attendees to an org-drive event, or SHARING it into another drive, widens who
+  // reads org content: refused while lapsed. Removing attendees and unsharing are restricting and stay allowed.
+  'apps/web/src/app/api/calendar/events/[eventId]/attendees/route.ts#POST': SELF,
+  'apps/web/src/lib/ai/tools/calendar-write-tools.ts#invite_calendar_attendees.execute': SELF,
+  'apps/web/src/lib/integrations/google-calendar/sync-service.ts#mapAttendeesToUsers': SELF,
+  'packages/lib/src/services/calendar-event-drive-service.ts#insertCalendarEventDrive': {
+    guard: 'caller',
+    by: ['packages/lib/src/services/calendar-event-drive-service.ts#shareEventWithDrive'],
+  },
+  'apps/web/src/app/api/calendar/events/route.ts#POST': { exempt: NEW_EVENT_ATTENDEES, writes: ['insert(eventAttendees)'] },
+  'apps/web/src/lib/ai/tools/calendar-write-tools.ts#create_calendar_event.execute': { exempt: NEW_EVENT_ATTENDEES, writes: ['insert(eventAttendees)'] },
+  'apps/web/src/lib/ai/tools/trigger-tools.ts#set_calendar_trigger.execute': {
+    exempt: "the creator as organizer of the trigger event it just created: nobody new reads anything",
+    writes: ['insert(eventAttendees)'],
+  },
+  // ── generic page writers (computed .set objects, flagged fail-closed by review #2849 r3) ─────────────────
+  'apps/web/src/services/api/page-mutation-service.ts#applyMutationInTx': {
+    exempt: "the generic page mutation: `isPrivate` reaches it only from pageService.updatePage, which judges it in the same transaction against the locked page row (checkPageMayLoosen); `driveId` never does (moves go through page-cross-drive-move-service, guarded)",
+    writes: ['update(pages).set({ ..., ... })'],
+  },
+  'apps/web/src/services/api/rollback/page-mutation.ts#applyPageUpdateWithRevision': {
+    exempt: "rollback/redo's page write: the page and drive branches of executeRollback run it under guardDriveAccess with the page's privacy in the snapshot; the agent-config branch restores only whitelisted agent fields (AGENT_CONFIG_ROLLBACK_FIELDS: no isPrivate, no driveId)",
+    writes: ['update(pages).set({ ... })'],
+  },
+  'packages/lib/src/repositories/page-repository.ts#pageRepository.update': {
+    exempt: 'its input type (UpdatePageInput) carries title, trash, parent, position and agent fields: never isPrivate or driveId',
+    writes: ['update(pages).set({ <non-literal> })'],
+  },
+  'packages/lib/src/repositories/agent-repository.ts#agentRepository.updateConfig': {
+    exempt: 'its input type (AgentConfigUpdate) carries agent configuration only: never isPrivate or driveId',
+    writes: ['update(pages).set({ <non-literal> })'],
+  },
   // ── custom domains (#29) ────────────────────────────────────────────────────────────────────────────────
   'apps/web/src/app/api/drives/[driveId]/domains/route.ts#POST': SELF,
   // ── drives: other writers of ownerId / orgId / visibility ─────────────────────────────────────────────
@@ -324,13 +361,14 @@ describe('seam: [D-OW-33] every write that can loosen access passes the lapse gu
     expect(problems).toEqual([]);
   });
 
-  it('SEAT-9 (partial) [D-OW-33] every guard helper ends in checkOrgMayLoosen or checkOrgActive', () => {
-    const roots = new RegExp(`\\b(?:${ROOT_GUARDS.join('|')})\\s*\\(`);
+  it('SEAT-9 (partial) [D-OW-33] every guard helper ends in checkOrgMayLoosen or checkOrgActive (directly, or through another helper)', () => {
     const broken = Object.entries(GUARD_HELPERS)
-      .filter(([, key]) => {
+      .filter(([name, key]) => {
         const { file, fn } = splitKey(key);
         const text = functionText(file, fn);
-        return text === null || !roots.test(stripComments(text));
+        // A helper may call a root guard, or another (itself verified) helper, never only itself.
+        const allowed = [...ROOT_GUARDS, ...Object.keys(GUARD_HELPERS).filter((h) => h !== name)];
+        return text === null || !new RegExp(`\\b(?:${allowed.join('|')})\\s*\\(`).test(stripComments(text));
       })
       .map(([name]) => name);
     expect(broken).toEqual([]);
@@ -351,6 +389,11 @@ describe('seam: [D-OW-33] every write that can loosen access passes the lapse gu
     expect(shapes('function q() { return db.update(pages).set({ driveId: d, defaultEnvId: null }); }')).toEqual(['q:update(pages).set({ driveId })']);
     expect(shapes('function r() { return db.update(pages).set({ title: "x" }); }')).toEqual([]);
     expect(shapes('function c() { return db.update(calendarEvents).set({ visibility: "DRIVE" }); }')).toEqual(['c:update(calendarEvents).set({ visibility })']);
+    // Fail closed (review #2849 r3): a computed object may carry a guarded column.
+    expect(shapes('function u() { return db.update(calendarEvents).set(updates); }')).toEqual(['u:update(calendarEvents).set({ <non-literal> })']);
+    expect(shapes('function v() { return db.update(pages).set({ ...patch, updatedAt: now }); }')).toEqual(['v:update(pages).set({ ... })']);
+    expect(shapes('function w() { return db.update(calendarEvents).set({ title: "x" }); }')).toEqual([]);
+    expect(shapes('function x() { return db.insert(eventAttendees).values({}); }')).toEqual(['x:insert(eventAttendees)']);
     expect(shapes('function i() { return sql`insert into drive_members (id) values (1)`; }')).toEqual(['i:raw sql']);
     expect(shapes('const tools = { create_page: tool({ execute: async () => db.insert(driveAgentMembers).values({}) }) };')).toEqual(['create_page.execute:insert(driveAgentMembers)']);
     // Restricting or unrelated: deletes, reads, a drives rename, a pending invite consumed.

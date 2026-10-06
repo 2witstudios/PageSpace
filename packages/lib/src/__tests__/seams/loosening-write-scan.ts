@@ -32,17 +32,18 @@ export const ACCESS_TABLES = [
 
 /**
  * Tables where only an INSERT can widen access: a pending drive or page invitation (a token that admits whoever
- * accepts it) and a custom domain (published content on a new host). Their updates consume, verify or suspend.
+ * accepts it), a custom domain (published content on a new host), a calendar event attendee and a calendar event
+ * shared into another drive (both widen who reads the event). Their updates consume, verify, suspend or re-status.
  */
-export const INSERT_ONLY_TABLES = ['pendingInvites', 'pendingPageInvites', 'customDomains'] as const;
+export const INSERT_ONLY_TABLES = ['pendingInvites', 'pendingPageInvites', 'customDomains', 'eventAttendees', 'calendarEventDrives'] as const;
 
 /** The `drives` columns whose update can widen who reaches the drive. */
 export const DRIVE_ACCESS_COLUMNS = ['ownerId', 'orgId', 'orgVisibility'] as const;
 
 /**
  * The `pages` columns whose update can widen who reads a page: `isPrivate` (made readable by the whole drive) and
- * `driveId` (moved into another drive's audience). Only a LITERAL key is matched: the generic page mutation's
- * non-literal update is ledgered by its callers (the PATCH route and rollback guard it).
+ * `driveId` (moved into another drive's audience). FAILS CLOSED (review #2849 r3): a spread or a non-literal object
+ * is flagged too, since it may carry either column; its function is then ledgered (guarded, or exempt with reason).
  */
 export const PAGE_ACCESS_COLUMNS = ['isPrivate', 'driveId'] as const;
 
@@ -154,13 +155,13 @@ export function scanSource(file: string, source: string): LooseningWrite[] {
           out.push({ file, line: lineOf(node), fn: nameOf(enclosingFunction(node)), what: `${method}(${arg.text})` });
         } else if (arg.text === 'calendarEvents' && method === 'update') {
           const keys = setKeysAfter(node);
-          const hit = keys === null ? [] : keys.filter((k) => calendarCols.has(k));
+          const hit = keys === null ? [] : keys.filter((k) => calendarCols.has(k) || k === '...' || k === '<non-literal>');
           if (hit.length > 0) {
             out.push({ file, line: lineOf(node), fn: nameOf(enclosingFunction(node)), what: `update(calendarEvents).set({ ${hit.join(', ')} })` });
           }
         } else if (arg.text === 'pages' && method === 'update') {
           const keys = setKeysAfter(node);
-          const hit = keys === null ? [] : keys.filter((k) => pageCols.has(k));
+          const hit = keys === null ? [] : keys.filter((k) => pageCols.has(k) || k === '...' || k === '<non-literal>');
           if (hit.length > 0) {
             out.push({ file, line: lineOf(node), fn: nameOf(enclosingFunction(node)), what: `update(pages).set({ ${hit.join(', ')} })` });
           }

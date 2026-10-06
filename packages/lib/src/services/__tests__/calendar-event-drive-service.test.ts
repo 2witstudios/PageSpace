@@ -4,9 +4,15 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // Mocks — declared before any imports from the module under test
 // ---------------------------------------------------------------------------
 
-vi.mock('@pagespace/db/db', () => ({
-  db: { select: vi.fn(), insert: vi.fn(), delete: vi.fn() },
-}));
+vi.mock('@pagespace/db/db', () => {
+  const db: Record<string, unknown> = { select: vi.fn(), insert: vi.fn(), delete: vi.fn() };
+  // A share is inserted in a transaction (the [D-OW-33] lapse guard reads in it): the tx is the same mock.
+  db.transaction = vi.fn(async (fn: (tx: unknown) => Promise<unknown>) => fn(db));
+  return { db };
+});
+// [D-OW-33] the lapse guard: these drives have no org (null) unless a test lapses one.
+const checkDriveMayLoosen = vi.hoisted(() => vi.fn(async (_tx?: unknown, _driveId?: unknown, _loosens?: unknown): Promise<unknown> => null));
+vi.mock('../../permissions/org-lapse-guard', () => ({ checkDriveMayLoosen }));
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((_a: unknown, _b: unknown) => 'eq'),
   and: vi.fn((...args: unknown[]) => ({ and: args })),
@@ -276,6 +282,10 @@ describe('isUserInAnyDriveSet (pure)', () => {
 describe('shareEventWithDrive', () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    // resetAllMocks drops implementations: the share runs in a transaction over the same mock, and no drive is lapsed.
+    const mockDb = db as unknown as MockDb & { transaction: ReturnType<typeof vi.fn> };
+    mockDb.transaction.mockImplementation(async (fn: (tx: unknown) => Promise<unknown>) => fn(mockDb));
+    checkDriveMayLoosen.mockResolvedValue(null);
   });
 
   it('returns 201 with row when caller is creator + target drive member', async () => {

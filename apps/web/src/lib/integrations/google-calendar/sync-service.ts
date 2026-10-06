@@ -915,7 +915,14 @@ const mapAttendeesToUsers = async (
 
   // Upsert attendees in a single transaction to reduce connection overhead
   await db.transaction(async (tx) => {
+    // [D-OW-33] ruling: a NEW attendee on an org-drive event widens who reads org content. While the drive's org is
+    // lapsed the sync keeps updating existing attendees but adds no one.
+    const [owner] = await tx.select({ driveId: calendarEvents.driveId }).from(calendarEvents).where(eq(calendarEvents.id, eventId)).limit(1);
+    const existing = owner?.driveId && (await checkDriveMayLoosen(tx, owner.driveId, true))
+      ? new Set((await tx.select({ userId: eventAttendees.userId }).from(eventAttendees).where(eq(eventAttendees.eventId, eventId))).map((a) => a.userId))
+      : null;
     for (const attendee of attendeeValues) {
+      if (existing && !existing.has(attendee.userId)) continue;
       await tx
         .insert(eventAttendees)
         .values(attendee)
