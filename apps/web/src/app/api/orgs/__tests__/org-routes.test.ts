@@ -445,6 +445,15 @@ describe('org route behaviour', () => {
     expect(membership.transferOwnership).toHaveBeenCalledWith({ orgId: ORG_ID, actorId: CALLER, targetId: 'user_chris' });
   });
 
+  it('SEAT-9 (partial) [D-OW-33] #19 a lapsed transfer that would grant new access answers 402 org_lapsed with the lapse copy and audits nothing', async () => {
+    asRole('OWNER');
+    vi.mocked(membership.transferOwnership).mockResolvedValue({ ok: false, status: 402, reason: 'org_lapsed' });
+    const res = await transferRoute.POST(req('POST', { toUserId: 'user_marcus' }), params({ orgId: ORG_ID }));
+    expect(res.status).toBe(402);
+    expect(await res.json()).toEqual({ error: ORG_LAPSED_MESSAGE, code: 'org_lapsed' });
+    expect(auditRequest).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: 'authz.role.assigned' }));
+  });
+
   it('ORG-6 (partial) DELETE /api/orgs/[orgId] writes one audit event per drive naming its destination', async () => {
     asRole('OWNER');
     const steps = [

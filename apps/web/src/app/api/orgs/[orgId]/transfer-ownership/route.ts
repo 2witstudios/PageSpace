@@ -5,6 +5,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { transferOwnership } from '@pagespace/lib/organizations/membership';
 import { authorizeOrgRequest, ORG_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
 import { transferOwnershipSchema } from '@/lib/orgs/org-schemas';
+import { ORG_LAPSED_MESSAGE } from '@pagespace/lib/organizations/status-core';
 
 /**
  * POST /api/orgs/[orgId]/transfer-ownership — the Owner hands the org to another
@@ -31,7 +32,9 @@ export async function POST(request: Request, context: { params: Promise<{ orgId:
               ? 'Only a person can own an organization'
               : result.reason === 'not_found'
                 ? 'Organization not found'
-                : 'Only the Owner can transfer ownership';
+                : result.reason === 'org_lapsed'
+                  ? ORG_LAPSED_MESSAGE
+                  : 'Only the Owner can transfer ownership';
       return NextResponse.json({ error, code: result.reason }, { status: result.status });
     }
     auditRequest(request, {

@@ -91,11 +91,12 @@ export const LOOSENING_WRITE_LEDGER: Readonly<Record<string, Verdict>> = {
   'packages/lib/src/organizations/invitations.ts#resendInvitation': SELF,
   'packages/lib/src/organizations/domains.ts#autoJoinVerifiedDomainOrg': SELF,
   'packages/lib/src/organizations/membership.ts#changeMemberRole': SELF,
-  'packages/lib/src/organizations/membership.ts#transferOwnership': {
-    exempt:
-      'inventory #19, judgment call left to the orchestrator: the new Owner is already an accepted member, the old Owner is demoted in the same write, the new Owner may be the one who pays, and refusing it would trap an Owner who must hand over to leave',
-    writes: ['update(orgMembers)'],
-  },
+  // Inventory #19, orchestrator ruling: EXEMPT ON CONDITION. A transfer stays possible while lapsed (handing off and
+  // offboarding are never blocked) provided it grants no new access: the recipient must already be an accepted org
+  // member (refused otherwise, lapsed or not) who already reaches every drive the Owner reaches, i.e. an Admin. A
+  // lapsed transfer to a plain Member (who would gain every Restricted/Private drive) is refused, in the transfer's
+  // transaction: checkOrgMayLoosen(tx, orgId, ownershipTransferWidens(targetRole)).
+  'packages/lib/src/organizations/membership.ts#transferOwnership': SELF,
   'packages/lib/src/organizations/repository.ts#createOrganization': {
     exempt: "the creator's own Owner row in a brand-new org; an org is lapsed from creation (D-OW-30), so guarding it would forbid creating orgs",
     writes: ['insert(orgMembers)'],

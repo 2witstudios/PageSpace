@@ -35,6 +35,7 @@ vi.mock('../../audit/org-audit', () => ({
 
 import { ORG_LAPSED_MESSAGE, ORG_LAPSED_REFUSAL } from '../status';
 import { acceptInvitation } from '../invitations';
+import { transferOwnership } from '../membership';
 import { hashToken } from '../../auth/token-utils';
 import { OrgLapsedError, checkDriveMayLoosen, checkPageMayLoosen, guardDriveAccess } from '../../permissions/org-lapse-guard';
 import { updateMemberAccess } from '../../services/drive-member-service';
@@ -372,5 +373,27 @@ describe('[D-OW-33] a lapsed org may only restrict, on every guarded write (orgs
     expect(await setAgentDriveIncludeContext({ actingUserId: w.ids.dana, agentPageId: w.agent, driveId: w.product, includeContext: true })).toMatchObject({ ok: true });
     await lapse(w);
     expect(await setAgentDriveIncludeContext({ actingUserId: w.ids.dana, agentPageId: w.agent, driveId: w.product, includeContext: false })).toMatchObject({ ok: true });
+  });
+
+  it('SEAT-9 (partial) [D-OW-33] inventory #19 ruling: while lapsed, ownership moves to an existing Admin (who already reaches every org drive); a transfer that would grant new access (a plain Member) is refused 402 and nothing moves; an outsider is refused as always; paid, a Member can take it', async () => {
+    if (!world) return;
+    const w = world;
+    const ownerOf = async () => (await db.select({ ownerId: organizations.ownerId }).from(organizations).where(eq(organizations.id, w.orgId)))[0].ownerId;
+    const roleOf = async (userId: string) => (await db.select({ role: orgMembers.role }).from(orgMembers).where(and(eq(orgMembers.orgId, w.orgId), eq(orgMembers.userId, userId))))[0]?.role ?? null;
+    await lapse(w);
+
+    expect(await transferOwnership({ orgId: w.orgId, actorId: w.ids.jono, targetId: w.ids.marcus })).toEqual({ ok: false, status: 402, reason: 'org_lapsed' });
+    expect(await ownerOf()).toBe(w.ids.jono);
+    expect(await roleOf(w.ids.marcus)).toBe('MEMBER');
+    expect(await roleOf(w.ids.jono)).toBe('OWNER');
+    expect(await transferOwnership({ orgId: w.orgId, actorId: w.ids.jono, targetId: w.ids.gita })).toMatchObject({ ok: false, reason: 'target_not_member' });
+
+    expect(await transferOwnership({ orgId: w.orgId, actorId: w.ids.jono, targetId: w.ids.priya })).toEqual({ ok: true });
+    expect(await ownerOf()).toBe(w.ids.priya);
+    expect(await roleOf(w.ids.jono)).toBe('ADMIN');
+
+    await pay(w);
+    expect(await transferOwnership({ orgId: w.orgId, actorId: w.ids.priya, targetId: w.ids.lena })).toEqual({ ok: true });
+    expect(await ownerOf()).toBe(w.ids.lena);
   });
 });
