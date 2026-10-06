@@ -78,9 +78,9 @@ jobs:
               NEXT_PUBLIC_PUBLISH_EDGE_IPV6=2a09:8280:1::118:198f:0
               NEXT_PUBLIC_PUBLISH_EDGE_CNAME_TARGET=pagespace-proxy.fly.dev
               NEXT_PUBLIC_COOKIE_DOMAIN=.pagespace.ai
-              # Imago rollout flag, inlined at build time: set true here (and
-              # IMAGO_ENABLED=true on the imago app) for the IMG-11.2 flip.
-              NEXT_PUBLIC_IMAGO_ENABLED=false
+              # Imago rollout flag, inlined at build time: true since the IMG-11.2
+              # flip, with IMAGO_ENABLED=true set on the imago app's runtime env.
+              NEXT_PUBLIC_IMAGO_ENABLED=true
           - service: migrate
             dockerfile: apps/web/Dockerfile.migrate
             context: .

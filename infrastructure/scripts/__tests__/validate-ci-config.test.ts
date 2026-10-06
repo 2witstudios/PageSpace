@@ -110,11 +110,11 @@ describe('Docker Images CI workflow', () => {
         .map((line) => line.trim())
         .filter(Boolean);
 
-    it('given NEXT_PUBLIC_IMAGO_ENABLED is inlined at build time, should pass it to web explicitly, off (IMG-10.7)', () => {
+    it('given NEXT_PUBLIC_IMAGO_ENABLED is inlined at build time, should pass it to web explicitly, on since the IMG-11.2 flip', () => {
       // A Fly runtime env cannot reach a NEXT_PUBLIC_* value: the "Try Imago"
       // link only appears from a web image built with this arg set to true.
       const args = buildArgs('web').filter((arg) => arg.startsWith('NEXT_PUBLIC_IMAGO_ENABLED='));
-      expect(args).toEqual(['NEXT_PUBLIC_IMAGO_ENABLED=false']);
+      expect(args).toEqual(['NEXT_PUBLIC_IMAGO_ENABLED=true']);
     });
   });
 

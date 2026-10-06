@@ -13,10 +13,11 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
-- **Imago preview at `/imago` (off by default)** — a first look at PageSpace's new interface, served
-  beside classic PageSpace and signed in with the same account. It is off unless the server sets
-  `IMAGO_ENABLED=true` (and `NEXT_PUBLIC_IMAGO_ENABLED=true` for the "Try Imago" link in the user
-  menu); until then every `/imago` address answers not found. One frame stays put as you move
+- **Imago preview at `/imago`** — a first look at PageSpace's new interface, served
+  beside classic PageSpace and signed in with the same account. Live on pagespace.ai since the
+  IMG-11.2 flip; self-hosted installs stay dark until they set `IMAGO_ENABLED=true` (and
+  `NEXT_PUBLIC_IMAGO_ENABLED=true` for the "Try Imago" link in the user menu); until then every
+  `/imago` address answers not found. One frame stays put as you move
   around: a rail of sections, a drive switcher with your Home drive first, and an avatar menu with
   theme, "Classic PageSpace" and sign out.
   **Chat** talks to your agents. The header picks who you talk to: your Imago agents first, then the
