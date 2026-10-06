@@ -27,6 +27,15 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   added as a guest, by invitation, share link or page share, even with guests turned on. Making a drive less
   open, making an Admin a Member and removing people still work. The settings pages only offer what is
   allowed and say why the rest waits until the plan is paid.
+- **A lapsed organization can only restrict access, everywhere** (organizations; off until organizations
+  launch) — while its plan is unpaid, nothing in its drives can give anyone more access: no new members,
+  invitations (direct, by email, or to the organization), share links, page shares or wider page
+  permissions; no raising a member's role or widening a role people hold; no approving join requests,
+  changing a drive's lead, adding agents to a drive or letting an agent carry a drive's instructions; no
+  new custom domain; and no making a private page visible to the whole drive. Undo, redo and backup
+  restores that would give access back wait too. Invitations already sent stay open and work once the plan
+  is paid. Removing people, revoking links, lowering roles, narrowing permissions and making pages private
+  all still work, and each screen disables only what is paused and says so.
 - **New conversations start on the drive's wallet** — if you have not chosen a default, a new conversation
   in a drive with a wallet you can spend now uses that wallet, and elsewhere your own credits, instead of
   asking you to choose first. Settings › Usage › Wallets shows this default as selected. In the right
