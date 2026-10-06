@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { SiteNavbar } from "@/components/SiteNavbar";
 import { SiteFooter } from "@/components/SiteFooter";
 import { pageMetadata } from "@/lib/metadata";
-import { MONTHLY_CREDITS, FREE_STARTER_CREDITS_DISPLAY, creditPacksPhrase } from "@/lib/credits";
+import { MONTHLY_CREDITS, FREE_STARTER_CREDITS_DISPLAY, creditPacksPhrase, formatDollars, planFacts } from "@/lib/credits";
 import { JsonLd, createFaqSchema } from "@/lib/schema";
 import { FAQHashOpener } from "./hash-opener";
 
@@ -19,6 +19,12 @@ function faqText(node: ReactNode): string {
 }
 
 export const metadata = pageMetadata.faq;
+
+// Plan and seat prices come from the tier table via planFacts (SEAT-2), never typed in here.
+const PRO = planFacts("pro");
+const BUSINESS = planFacts("business");
+const BUSINESS_SEATS = BUSINESS.org?.includedSeats;
+const EXTRA_SEAT_PRICE = BUSINESS.org ? formatDollars(BUSINESS.org.extraSeatPriceCents) : "";
 
 interface FAQItem {
   id: string;
@@ -85,9 +91,9 @@ const faqs: FAQItem[] = [
       <>
         More credits, access to Pro models, and more storage. Each plan
         includes a monthly credit allowance — {MONTHLY_CREDITS.pro} credits a
-        month on Pro ($15/month) and {MONTHLY_CREDITS.business} credits a month
-        on Business ($50/month, the plan for an organization with 5 seats
-        included and $10 per extra seat) — and you can buy more credits
+        month on Pro ({PRO.price}/month) and {MONTHLY_CREDITS.business} credits a month
+        on Business ({BUSINESS.price}/month, the plan for an organization with {BUSINESS_SEATS} seats
+        included and {EXTRA_SEAT_PRICE} per extra seat) — and you can buy more credits
         anytime. All plans include real-time collaboration
         and AI agents. Full comparison on the{" "}
         {docsLink("/pricing", "Pricing page")}.

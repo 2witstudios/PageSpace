@@ -92,3 +92,31 @@ describe('UI-12 credit figures on public pages come from the money-model module'
     expect(source('pricing/page.tsx')).not.toMatch(HARDCODED_CREDIT_FIGURE);
   });
 });
+
+describe('plan and seat prices on the FAQ and Terms come from the tier table', () => {
+  /** A dollar figure typed into page source ("$15/month", "$10 per extra seat"); `${…}` does not match. */
+  const HARDCODED_PRICE = /\$\d/;
+
+  it('SEAT-2 (partial) the FAQ and Terms state the Pro price and the Business org terms from planFacts', async () => {
+    const { planFacts } = await import('@pagespace/lib/billing/credit-copy');
+    const { formatDollars } = await import('@pagespace/lib/billing/money-model');
+    const pro = planFacts('pro');
+    const business = planFacts('business');
+    const org = business.org;
+    if (!org) throw new Error('Business must be the org plan');
+    const seatPrice = formatDollars(org.extraSeatPriceCents);
+
+    const { default: FAQPage } = await import('../faq/page');
+    const faq = visibleText(renderToStaticMarkup(<FAQPage />));
+    expect(faq).toContain(`on Pro (${pro.price}/month)`);
+    expect(faq).toContain(`on Business (${business.price}/month, the plan for an organization with ${org.includedSeats} seats included and ${seatPrice} per extra seat)`);
+
+    const { default: TermsPage } = await import('../terms/page');
+    const terms = visibleText(renderToStaticMarkup(<TermsPage />));
+    expect(terms).toContain(`Pro Plan (${pro.price}/month):`);
+    expect(terms).toContain(`Business Plan (${business.price}/month per organization, ${org.includedSeats} seats included, ${seatPrice} per extra seat):`);
+
+    expect(source('faq/page.tsx')).not.toMatch(HARDCODED_PRICE);
+    expect(source('terms/page.tsx')).not.toMatch(HARDCODED_PRICE);
+  });
+});

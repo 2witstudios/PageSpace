@@ -13,14 +13,17 @@ import { TIER_ALLOWANCE_REFILLS } from './credit-pricing';
 import {
   CREDIT_PACKS,
   type CreditPack,
+  allowanceCentsForPaidCents,
   creditPackPriceCents,
   FREE_STARTER_CREDITS,
   centsFromCredits,
+  centsFromDollars,
   formatCreditCount,
   formatDollars,
   tierAllowanceCents,
+  tierListPriceCents,
 } from './money-model';
-import { TIERS, type SubscriptionTier } from './subscription-tiers';
+import { TIERS, TIER_PLAN_LIMITS, type SubscriptionTier } from './subscription-tiers';
 
 function perTier<T>(f: (tier: SubscriptionTier) => T): Record<SubscriptionTier, T> {
   return Object.fromEntries(TIERS.map((tier) => [tier, f(tier)])) as Record<SubscriptionTier, T>;
@@ -131,4 +134,67 @@ export function creditPacksPhrase(): string {
 export function topUpRatePhrase(): string {
   const smallest = CREDIT_PACK_LIST[0];
   return `${formatCreditCount(centsFromCredits(smallest.credits))} credits per ${formatDollars(creditPackPriceCents(smallest))}`;
+}
+
+/** The org plan's own facts on a plan card (SEAT-2, A-7, A-11); absent on a personal plan. */
+export interface OrgPlanFacts {
+  includedSeats: number;
+  /** Real money, whole cents. */
+  extraSeatPriceCents: number;
+  /** "per organization · 5 seats included · $10 per extra seat a month". */
+  seatTerms: string;
+  /** "+1,000 credits a month per extra seat": a count, never a dollar figure (UI-12). */
+  extraSeatCredits: string;
+  /** D-OW-30: no org trial; a card is required at checkout. */
+  checkout: string;
+}
+
+/** Everything a plan card states for one tier, so the marketing page and the in-app card cannot disagree. */
+export interface PlanFacts {
+  tier: SubscriptionTier;
+  name: string;
+  /** Real money, whole cents. */
+  priceCents: number;
+  /** "$15": the only dollar figure on the card besides the seat price and the top-up rate's purchase price. */
+  price: string;
+  /** "/month" for a paid tier, null for free. */
+  period: string | null;
+  /** MON-6 second fact: "1,500 credits included each month" / "500 credits to start". */
+  includedCredits: string;
+  /** MON-6 third fact: "1,000 credits per $10". */
+  topUpRate: string;
+  org: OrgPlanFacts | null;
+}
+
+/**
+ * MON-6 / SEAT-2 / UI-12: the plan-card facts for `tier`, every number derived from
+ * the tier table and money-model. `active` defaults to the committed ratio constant
+ * (D-OW-17); tests pass it to render both sides of the migration-day flip.
+ */
+export function planFacts(tier: SubscriptionTier, active?: boolean): PlanFacts {
+  const limits = TIER_PLAN_LIMITS[tier];
+  const priceCents = tierListPriceCents(tier);
+  return {
+    tier,
+    name: limits.name,
+    priceCents,
+    price: formatDollars(priceCents),
+    period: priceCents > 0 ? '/month' : null,
+    includedCredits: includedCreditsPhraseForCents(tier, tierAllowanceCents(tier, active)),
+    topUpRate: topUpRatePhrase(),
+    org: limits.isOrgPlan ? orgPlanFacts(tier, active) : null,
+  };
+}
+
+function orgPlanFacts(tier: SubscriptionTier, active?: boolean): OrgPlanFacts {
+  const limits = TIER_PLAN_LIMITS[tier];
+  const extraSeatPriceCents = centsFromDollars(limits.extraSeatUsd);
+  const seatCredits = formatCreditCount(allowanceCentsForPaidCents(extraSeatPriceCents, tier, active));
+  return {
+    includedSeats: limits.includedSeats,
+    extraSeatPriceCents,
+    seatTerms: `per organization · ${limits.includedSeats} seats included · ${formatDollars(extraSeatPriceCents)} per extra seat a month`,
+    extraSeatCredits: `+${seatCredits} credits a month per extra seat`,
+    checkout: 'No trial · card required at checkout',
+  };
 }
