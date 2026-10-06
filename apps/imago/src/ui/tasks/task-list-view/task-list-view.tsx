@@ -6,6 +6,7 @@ import { TASK_LIST_NOT_FOUND, renderNotFound } from '../../frame/not-found/not-f
 import { useUiState } from '../../store/store';
 import type { UiState } from '../../store/state';
 import { dispatch, transactions } from '../../store/transactions';
+import { BoardView } from '../board-view/board-view';
 import type { TaskList } from '../task-model/task';
 import { listProgress } from '../task-tree/task-tree';
 import { renderTreeView, type TaskNotice } from '../tree-view/tree-view.render';
@@ -29,9 +30,6 @@ export type TaskListViewProps = {
 
 const selectExpanded = (state: UiState) => state.resources.expandedTasks;
 
-/** Board is its own leaf (IMG-9.4); until it lands, it says so. */
-const comingBoard = 'Board view is not available yet. Switch to Tree to work on this list.';
-
 const systemClock = (): Date => new Date();
 
 type Body = {
@@ -47,7 +45,9 @@ type Body = {
 
 const bodyFor = ({ driveId, list, view, expandedIds, notice, actions, report, clock }: Body): ReactNode => {
   if (list === undefined) return renderTaskListMessage('Loading tasks…', 'status');
-  if (view === 'board') return renderTaskListMessage(comingBoard, 'status');
+  if (view === 'board') {
+    return <BoardView list={list} actions={actions} taskHref={(task) => taskHref(driveId, task.pageId)} />;
+  }
   if (view === 'focus') {
     return renderFocusView({
       title: list.title,
