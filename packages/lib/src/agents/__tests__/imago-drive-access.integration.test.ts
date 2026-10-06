@@ -501,6 +501,11 @@ describe('IMG-4.6a: a turn-off racing an agent recreation at sign-in (real concu
   // moment, the user switches the drive off. Whatever the interleaving, the
   // drive must end off: stored off, and no Imago page of the user a member.
   const ROUNDS = 12;
+  // Twelve sequential rounds of real setup, provisioning and toggling: ~2.6s on
+  // 10 saturated cores with coverage, past vitest's 5s default on a loaded
+  // runner (CI run 37405553419). The work is real, not a hang, so it gets an
+  // explicit budget instead of fewer rounds.
+  const RACE_ROUNDS_TIMEOUT_MS = 30_000;
 
   it(`given ${ROUNDS} rounds of sign-in and turn-off fired together, should end opted out every time`, async () => {
     if (!dbAvailable) return;
@@ -524,7 +529,7 @@ describe('IMG-4.6a: a turn-off racing an agent recreation at sign-in (real concu
       if (members.length > 0 || stored !== false) failures.push(`round ${round}: members=${members.length} stored=${stored}`);
     }
     expect(failures).toEqual([]);
-  });
+  }, RACE_ROUNDS_TIMEOUT_MS);
 });
 
 describe('IMG-4.6a: a turn-off and a grant in flight serialise on the user-row lock (real Postgres)', () => {
