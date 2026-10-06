@@ -28,6 +28,7 @@ import {
   decideMoveDriveOutOfOrg,
   orgDriveVisibilityForInsert,
   retryOnOrgSlugConflict,
+  visibilityChangeOnlyRestricts,
   type ImplicitMembersChoice,
   type OrgDriveCreationPolicy,
   type OrgDriveRefusal,
@@ -35,7 +36,7 @@ import {
 import { retryOnDeadlock } from '../organizations/repository';
 import { openDriveFloorRefusal } from '../organizations/open-role-floor';
 import { holdOrgGuestsUnderPolicy, kickSuspendedGuests } from '../permissions/guest-holds';
-import { checkOrgActive, type OrgLapsedRefusal } from '../organizations/status';
+import { checkOrgActive, checkOrgMayLoosen, type OrgLapsedRefusal } from '../organizations/status';
 import { removeFormerLeadOwnerRow } from '../permissions/org-drive-membership';
 import { getActorInfo, logActivityWithTx } from '../monitoring/activity-logger';
 import { reattributeDriveStorageInTx, type StorageReattributionResult } from './storage-limits';
@@ -328,6 +329,7 @@ async function lockDriveWithOrg(
 export type ChangeVisibilityResult =
   | { ok: true; changed: boolean; drive: DriveRow; from: OrgDriveVisibility; to: OrgDriveVisibility }
   | OrgDriveRefusal
+  | OrgLapsedRefusal
   | DriveNotFound;
 
 /**
@@ -350,6 +352,9 @@ export async function changeDriveVisibility(
     const verdict = decideChangeDriveVisibility({ drive, actorId, actorOrgRole, visibility: input.orgVisibility });
     if (!verdict.ok) return verdict;
     if (drive.orgId === null) throw new Error('Unreachable: a visibility change was admitted for a drive with no org');
+    // [D-OW-33] a lapsed org may only make a drive less open: the one guard, reading the lapse under the org's share lock.
+    const lapsed = await checkOrgMayLoosen(tx, drive.orgId, !visibilityChangeOnlyRestricts(verdict.from, verdict.to));
+    if (lapsed) return lapsed;
     if (!verdict.changed) {
       return { ok: true as const, changed: false, drive, from: verdict.from, to: verdict.to, publish: async () => {} };
     }

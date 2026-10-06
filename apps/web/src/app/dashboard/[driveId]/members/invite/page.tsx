@@ -19,7 +19,7 @@ import { inviteeStanding } from '@pagespace/lib/organizations/invite-choice';
 import { InviteJoinChoice, defaultJoinChoice, useInviteOrgContext, type JoinChoice } from '@/components/members/InviteJoinChoice';
 import { useDriveStore } from '@/hooks/useDrive';
 import { useMyOrganizations } from '@/hooks/useMyOrganizations';
-import { orgErrorCode, orgErrorMessage } from '@/lib/orgs/org-error-copy';
+import { orgErrorCode, orgErrorMessage, orgErrorPolicy } from '@/lib/orgs/org-error-copy';
 
 interface SelectedUser {
   userId: string;
@@ -65,10 +65,13 @@ export default function InviteMemberPage() {
   const orgName = orgById(driveOrgId)?.name ?? 'the organization';
   const orgContext = useInviteOrgContext(driveOrgId);
   const [joinChoice, setJoinChoice] = useState<JoinChoice | null>(null);
+  // POL-2: an inviter who cannot read the policy learns it from a refusal naming `guests`.
+  const [guestsRefused, setGuestsRefused] = useState(false);
+  const guestPolicy = guestsRefused ? 'off' : orgContext.guestPolicy;
   const invitee = selectedUser ? { userId: selectedUser.userId, email: selectedUser.email ?? null } : pendingEmail ? { email: pendingEmail } : null;
   const isOutsider = orgContext.enabled && invitee !== null && inviteeStanding(invitee, orgContext.members) === 'outsider';
   const effectiveJoinChoice: JoinChoice | null = isOutsider
-    ? joinChoice ?? defaultJoinChoice({ driveName: drive?.name ?? 'this drive', orgName, guestPolicy: orgContext.guestPolicy, hasEmail: Boolean(invitee?.email) })
+    ? joinChoice ?? defaultJoinChoice({ driveName: drive?.name ?? 'this drive', orgName, guestPolicy, hasEmail: Boolean(invitee?.email) })
     : null;
 
   // Fetch custom roles
@@ -241,6 +244,12 @@ export default function InviteMemberPage() {
         return;
       }
       console.error('Error adding member:', error);
+      if (orgErrorPolicy(error) === 'guests') {
+        setGuestsRefused(true);
+        setJoinChoice(null);
+        toast.error(`Guests are turned off for ${orgName}, so they cannot join as a guest.${invitee?.email ? ' Give them a seat instead.' : ''}`);
+        return;
+      }
       toast.error(orgErrorCode(error) ? orgErrorMessage(error, 'Failed to add member') : error instanceof Error ? error.message : 'Failed to add member');
     } finally {
       setSaving(false);
@@ -350,7 +359,7 @@ export default function InviteMemberPage() {
             driveName={drive?.name ?? 'This drive'}
             orgName={orgName}
             members={orgContext.members}
-            guestPolicy={orgContext.guestPolicy}
+            guestPolicy={guestPolicy}
             value={effectiveJoinChoice}
             onChange={setJoinChoice}
           />

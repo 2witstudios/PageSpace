@@ -21,6 +21,27 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Changed
 
+- **A lapsed organization can no longer open things up** (organizations; off until organizations launch) —
+  while its plan is unpaid or canceled, an organization's drives cannot be made more open (Private to
+  Restricted or Open, Restricted to Open), a member cannot be made an Admin, and nobody from outside can be
+  added as a guest, by invitation, share link or page share, even with guests turned on. Making a drive less
+  open, making an Admin a Member and removing people still work. The settings pages only offer what is
+  allowed and say why the rest waits until the plan is paid.
+- **New conversations start on the drive's wallet** — if you have not chosen a default, a new conversation
+  in a drive with a wallet you can spend now uses that wallet, and elsewhere your own credits, instead of
+  asking you to choose first. Settings › Usage › Wallets shows this default as selected. In the right
+  sidebar and the dashboard assistant, a new conversation now shows its spending source as soon as it is
+  saved.
+- **Automations spend their drive's wallet only** — the Wallet settings, workflow details and the
+  organization's attention page now say so: a scheduled run counts against its creator's caps and never
+  falls back to anyone's own credits. A workflow whose owner left can no longer be run by hand.
+- **Organization pages show where you are** — the header names the organization on its settings pages,
+  the drive picker lists each organization's settings as an option you can reach by keyboard and screen
+  reader, and the organization hub's rows keep readable text on hover.
+- **Clearer guest invitations** — if you cannot see an organization's Guests policy, inviting someone from
+  outside says that it may need approval or may be turned off, and if guests are off the refusal says so
+  and switches you to giving them a seat. A failed "Move out of the organization" keeps its dialog open with
+  the reason. The Workflows list fits a phone screen.
 - **Pricing page and plan cards show the organization plan's terms** — the pricing page and the in-app
   plan cards now show three tiers, Free, Pro and Business. Each card lists the price, the credits
   included, and the top-up rate as separate lines. Business is the organization plan: $50 a month with

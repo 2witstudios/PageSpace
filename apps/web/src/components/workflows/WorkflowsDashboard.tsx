@@ -91,11 +91,11 @@ export function WorkflowsDashboard({ driveId, driveName }: WorkflowsDashboardPro
     <div className="h-full overflow-y-auto">
       <div className="container mx-auto px-4 py-10 sm:px-6 lg:px-10 max-w-5xl">
         <div className="space-y-6">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Zap className="h-6 w-6 text-muted-foreground" />
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex min-w-0 items-center gap-2">
+              <Zap className="h-6 w-6 shrink-0 text-muted-foreground" />
               <h1 className="text-2xl font-bold">Workflows</h1>
-              <span className="text-muted-foreground">- {driveName}</span>
+              <span className="truncate text-muted-foreground">- {driveName}</span>
             </div>
             <Button onClick={handleOpenCreate}>
               <Plus className="h-4 w-4 mr-1.5" />

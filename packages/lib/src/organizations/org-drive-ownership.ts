@@ -180,9 +180,21 @@ function authorizeOrgDriveChange(
   return null;
 }
 
+/** How open each org drive visibility is: Private < Restricted < Open (DRV-4). */
+const VISIBILITY_OPENNESS: Readonly<Record<OrgDriveVisibility, number>> = { PRIVATE: 0, RESTRICTED: 1, OPEN: 2 };
+
+/**
+ * [D-OW-33] Whether a visibility change only restricts: toward Private, or no change. A lapsed org may make it;
+ * one toward Open loosens access and waits until the org pays. The UI offers exactly what this allows.
+ */
+export function visibilityChangeOnlyRestricts(from: OrgDriveVisibility, to: OrgDriveVisibility): boolean {
+  return VISIBILITY_OPENNESS[to] <= VISIBILITY_OPENNESS[from];
+}
+
 /**
  * Change an org drive's visibility (DRV-4). The service then runs the org membership sync so the
  * materialized rows follow: rows appear for an Open drive and go for Restricted or Private.
+ * The service then asks checkOrgMayLoosen for a change toward Open ([D-OW-33], SEAT-9).
  */
 export function decideChangeDriveVisibility({
   drive,

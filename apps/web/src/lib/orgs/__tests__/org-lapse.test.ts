@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { DEFAULT_ORG_POLICIES, type OrgPolicies } from '@pagespace/lib/organizations/policies-core';
-import { orgIsLapsed, policyChangeAllowed, seatCapChangeAllowed } from '../org-lapse';
+import { orgIsLapsed, policyChangeAllowed, roleChangeAllowed, seatCapChangeAllowed, visibilityChangeAllowed } from '../org-lapse';
 
 const policies: OrgPolicies = { ...DEFAULT_ORG_POLICIES, guests: 'approve', publicShareLinks: false, seatAllowanceCents: 150, providerAllowlist: ['anthropic', 'openai'] };
 
@@ -43,5 +43,18 @@ describe('seatCapChangeAllowed', () => {
 
   it('anything goes while paid', () => {
     expect(seatCapChangeAllowed(false, seat, { dailyCapCents: null, monthlyCapCents: 900 }, 150)).toBe(true);
+  });
+});
+
+describe('visibilityChangeAllowed and roleChangeAllowed', () => {
+  it('SEAT-9 (partial) D-OW-33: while lapsed a drive may only be made less open, and a role only lowered; paid, anything goes', () => {
+    expect(visibilityChangeAllowed(true, 'OPEN', 'RESTRICTED')).toBe(true);
+    expect(visibilityChangeAllowed(true, 'RESTRICTED', 'PRIVATE')).toBe(true);
+    expect(visibilityChangeAllowed(true, 'PRIVATE', 'RESTRICTED')).toBe(false);
+    expect(visibilityChangeAllowed(true, 'RESTRICTED', 'OPEN')).toBe(false);
+    expect(visibilityChangeAllowed(false, 'PRIVATE', 'OPEN')).toBe(true);
+    expect(roleChangeAllowed(true, 'ADMIN', 'MEMBER')).toBe(true);
+    expect(roleChangeAllowed(true, 'MEMBER', 'ADMIN')).toBe(false);
+    expect(roleChangeAllowed(false, 'MEMBER', 'ADMIN')).toBe(true);
   });
 });

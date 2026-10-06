@@ -15,7 +15,7 @@ describe('invite-choice: inviting someone to an org drive', () => {
     expect(guestChoice({ driveName: 'Product', orgName: 'Northwind Labs', guestPolicy: 'on' })).toEqual({ enabled: true, needsApproval: false, hint: 'No seat. Only sees Product.' });
     expect(guestChoice({ driveName: 'Product', orgName: 'Northwind Labs', guestPolicy: 'approve' })).toEqual({ enabled: true, needsApproval: true, hint: 'No seat. Only sees Product. Needs approval from a Northwind Labs admin under the Guests policy.' });
     expect(guestChoice({ driveName: 'Product', orgName: 'Northwind Labs', guestPolicy: 'off' })).toEqual({ enabled: false, needsApproval: false, hint: 'Guests are turned off for Northwind Labs.' });
-    expect(guestChoice({ driveName: 'Product', orgName: 'Northwind Labs', guestPolicy: null }).hint).toBe('No seat. Only sees Product. May need approval from a Northwind Labs admin.');
+    expect(guestChoice({ driveName: 'Product', orgName: 'Northwind Labs', guestPolicy: null }).hint).toBe('No seat. Only sees Product. Depends on the Northwind Labs Guests policy: an admin may need to approve it, or guests may be turned off.');
   });
 
   it('UI-5 (partial) SEAT-3 (partial) the member choice uses a seat and needs an email to invite to the org', () => {

@@ -12,7 +12,7 @@ import { db, pool } from '@pagespace/db/db';
 import { eq, inArray } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { drives } from '@pagespace/db/schema/core';
-import { organizations, orgMembers } from '@pagespace/db/schema/organizations';
+import { organizations, orgMembers, orgSubscriptions } from '@pagespace/db/schema/organizations';
 
 vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 
@@ -25,6 +25,7 @@ let w: { orgId: string; owner: string; member: string; outsider: string; legacyL
 async function cleanup() {
   if (created.driveIds.length) await db.delete(drives).where(inArray(drives.id, created.driveIds));
   if (created.orgIds.length) {
+    await db.delete(orgSubscriptions).where(inArray(orgSubscriptions.orgId, created.orgIds));
     await db.delete(orgMembers).where(inArray(orgMembers.orgId, created.orgIds));
     await db.delete(organizations).where(inArray(organizations.id, created.orgIds));
   }
@@ -45,6 +46,8 @@ beforeEach(async () => {
   created.orgIds.push(orgId);
   await db.insert(organizations).values({ id: orgId, name: 'Northwind', slug: `nw-${run}-${createId().slice(0, 4)}`, ownerId: owner });
   await db.insert(orgMembers).values([{ orgId, userId: owner, role: 'OWNER' }, { orgId, userId: member, role: 'MEMBER' }]);
+  // Northwind is paid: a lapsed org admits no outsider ([D-OW-33], lapsed-loosen.integration.test.ts).
+  await factories.createOrgSubscription(orgId, { status: 'active' });
   const mkDrive = async (ownerId: string, org: string | null) => {
     const d = await factories.createDrive(ownerId);
     created.driveIds.push(d.id);
@@ -66,7 +69,7 @@ describe('decideOrgDriveAdmission', () => {
   it('POL-2 (partial) an outsider is refused under off, held under approve, allowed under on; the answer follows the policy the next time it is asked', async () => {
     const ask = () => decideOrgDriveAdmission({ driveId: w.orgDrive, userId: w.outsider });
     await setGuests('off');
-    expect(await ask()).toEqual({ decision: 'refuse', orgId: w.orgId });
+    expect(await ask()).toEqual({ decision: 'refuse', refusal: 'guests_off', orgId: w.orgId });
     await setGuests('approve');
     expect(await ask()).toEqual({ decision: 'hold', orgId: w.orgId });
     await setGuests('on');

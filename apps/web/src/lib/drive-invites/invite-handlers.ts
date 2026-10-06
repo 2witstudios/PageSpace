@@ -19,7 +19,8 @@ import { and, eq } from '@pagespace/db/operators';
 import { driveRoles } from '@pagespace/db/schema/members';
 import { decideOrgDriveAdmission } from '@pagespace/lib/permissions/guest-admission';
 import { requestGuestApproval } from '@pagespace/lib/permissions/guest-holds';
-import { GUESTS_HELD_MESSAGE, guestsOffRefusal } from '@pagespace/lib/organizations/sharing-decisions';
+import { GUESTS_HELD_MESSAGE, guestsOffRefusal, type GuestAdmissionRefusal } from '@pagespace/lib/organizations/sharing-decisions';
+import { ORG_LAPSED_REFUSAL } from '@pagespace/lib/organizations/status-core';
 import { recordOrgAuditEvent } from '@pagespace/lib/audit/org-audit';
 import type { GuestHoldRequest } from '@pagespace/db/schema/org-guest-holds';
 
@@ -27,6 +28,18 @@ function resolveAppUrl(): string | null {
   const url = process.env.WEB_APP_URL || process.env.NEXT_PUBLIC_APP_URL;
   if (!url) return null;
   return url.replace(/\/+$/, '');
+}
+
+/**
+ * Why an outsider was not added, as the route answers it: the guests policy names itself (403 org_policy); a lapsed
+ * org answers with the lapse refusal (402 org_lapsed), since nothing about the policy stopped it ([D-OW-33]).
+ */
+export function admissionRefusalResponse(refusal: GuestAdmissionRefusal): Response {
+  if (refusal === 'org_lapsed') {
+    return NextResponse.json({ error: ORG_LAPSED_REFUSAL.message, code: ORG_LAPSED_REFUSAL.code }, { status: ORG_LAPSED_REFUSAL.status });
+  }
+  const policy = guestsOffRefusal();
+  return NextResponse.json({ error: policy.message, code: policy.code, policy: policy.policy }, { status: policy.status });
 }
 
 /**
@@ -42,10 +55,7 @@ async function guestPolicyResponse(input: {
 }): Promise<Response | null> {
   const admission = await decideOrgDriveAdmission({ driveId: input.driveId, userId: input.userId ?? null });
   if (admission.decision === 'allow') return null;
-  if (admission.decision === 'refuse') {
-    const refusal = guestsOffRefusal();
-    return NextResponse.json({ error: refusal.message, code: refusal.code, policy: refusal.policy }, { status: refusal.status });
-  }
+  if (admission.decision === 'refuse') return admissionRefusalResponse(admission.refusal);
   if (!admission.orgId) return null;
   const item = await requestGuestApproval({
     orgId: admission.orgId,
@@ -193,10 +203,7 @@ export async function handleUserIdPath(args: {
       grantedBy: inviterUserId,
       validPageIds,
     });
-    if ('refused' in result) {
-      const refusal = guestsOffRefusal();
-      return NextResponse.json({ error: refusal.message, code: refusal.code, policy: refusal.policy }, { status: refusal.status });
-    }
+    if ('refused' in result) return admissionRefusalResponse(result.refusal);
     memberId = result.memberId;
     permissionsGranted = result.permissionsGranted;
   } else {

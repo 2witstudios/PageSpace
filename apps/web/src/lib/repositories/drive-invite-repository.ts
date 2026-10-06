@@ -13,6 +13,7 @@ import { pendingInvites } from '@pagespace/db/schema/pending-invites';
 import { userEmailMatch, decryptUserRow } from '@pagespace/lib/auth/user-repository';
 import { decryptField } from '@pagespace/lib/encryption/field-crypto';
 import { decideOrgDriveAdmission } from '@pagespace/lib/permissions/guest-admission';
+import type { GuestAdmissionRefusal } from '@pagespace/lib/organizations/sharing-decisions';
 import { consumeApprovedInvitation, requestGuestApproval } from '@pagespace/lib/permissions/guest-holds';
 
 export const driveInviteRepository = {
@@ -190,12 +191,12 @@ export const driveInviteRepository = {
     permissions: Array<{ pageId: string; canView: boolean; canEdit: boolean; canShare: boolean }>;
     grantedBy: string;
     validPageIds: Set<string>;
-  }): Promise<{ memberId: string; permissionsGranted: number } | { refused: 'GUEST_POLICY' }> {
+  }): Promise<{ memberId: string; permissionsGranted: number } | { refused: 'GUEST_POLICY'; refusal: GuestAdmissionRefusal }> {
     return db.transaction(async (tx) => {
       // POL-2, again at the write and under the org row's share lock: the caller asked the policy before, but guests
       // may have been turned OFF since; then nothing is written (the change's suspension could not have seen it).
       const admission = await decideOrgDriveAdmission({ driveId: input.driveId, userId: input.userId }, tx);
-      if (admission.decision === 'refuse') return { refused: 'GUEST_POLICY' } as const;
+      if (admission.decision === 'refuse') return { refused: 'GUEST_POLICY', refusal: admission.refusal } as const;
 
       const [member] = await tx
         .insert(driveMembers)

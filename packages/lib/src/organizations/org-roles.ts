@@ -16,3 +16,11 @@ export function orgRoleAtLeast(role: OrgRole | null | undefined, min: OrgRole): 
   if (!role || !(role in ORG_ROLE_RANK)) return false;
   return ORG_ROLE_RANK[role] >= ORG_ROLE_RANK[min];
 }
+
+/**
+ * [D-OW-33] Whether a role change only restricts: down the ranks, or no change. A lapsed org may make a role
+ * change only when this holds; promoting anyone loosens access and waits until the org pays.
+ */
+export function roleChangeOnlyRestricts(from: OrgRole, to: OrgRole): boolean {
+  return ORG_ROLE_RANK[to] <= ORG_ROLE_RANK[from];
+}

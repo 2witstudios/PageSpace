@@ -184,6 +184,19 @@ describe('Members & seats', () => {
     expect((screen.getByRole('button', { name: 'Remove caps' }) as HTMLButtonElement).disabled).toBe(true);
   });
 
+  it('SEAT-9 (partial) D-OW-33: while lapsed a Member cannot be promoted to Admin; an Admin can still be made a Member', async () => {
+    mocks.notice = { kind: 'reactivate', reason: 'canceled', canManageBilling: true };
+    render(<OrgMembersPage />);
+    expect(screen.getByText(/Promoting members is paused while unpaid/)).toBeTruthy();
+    await userEvent.click(screen.getByRole('combobox', { name: 'Org role for Marcus Oyelaran' }));
+    expect((await screen.findByRole('option', { name: 'Admin' })).getAttribute('aria-disabled')).toBe('true');
+    await userEvent.keyboard('{Escape}');
+    await userEvent.click(screen.getByRole('combobox', { name: 'Org role for Priya Nair' }));
+    await userEvent.click(await screen.findByRole('option', { name: 'Member' }));
+    await waitFor(() => expect(mocks.changeOrgMemberRole).toHaveBeenCalledWith('org_nw', 'u_priya', 'MEMBER'));
+    expect(mocks.changeOrgMemberRole).not.toHaveBeenCalledWith('org_nw', 'u_marcus', 'ADMIN');
+  });
+
   it('removing a member asks first', async () => {
     render(<OrgMembersPage />);
     await userEvent.click(screen.getByRole('button', { name: 'Actions for Marcus Oyelaran' }));

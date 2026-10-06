@@ -3,6 +3,7 @@ import { announceOrgChange } from '@pagespace/lib/organizations/org-change-event
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { changeMemberRole, removeMember, type MembershipRefusal } from '@pagespace/lib/organizations/membership';
+import { ORG_LAPSED_MESSAGE } from '@pagespace/lib/organizations/status-core';
 import { authorizeOrgRequest, ORG_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
 import { memberRoleUpdateSchema } from '@/lib/orgs/org-schemas';
 
@@ -18,6 +19,7 @@ const REFUSAL_MESSAGES: Record<MembershipRefusal, string> = {
   not_found: 'Organization not found',
   not_member: 'You are no longer a member of this organization',
   insufficient_role: 'You are no longer an Admin of this organization',
+  org_lapsed: ORG_LAPSED_MESSAGE,
 };
 
 /** PATCH /api/orgs/[orgId]/members/[userId] — Owner and Admins change a role (ORG-2). */

@@ -3,7 +3,6 @@
 import Link from 'next/link';
 import { useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { ChevronRight } from 'lucide-react';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useBillingVisibility } from '@/hooks/useBillingVisibility';
 import { useMyOrgs, useOrg, useOrgHubCounts, useOrgRealtime, useOrgSeats } from '@/hooks/useOrgs';
@@ -14,35 +13,22 @@ import { LeaveOrgDialog } from '@/components/orgs/LeaveOrgDialog';
 import { OrgBillingBanner } from '@/components/orgs/OrgBillingBanner';
 import { PendingSetupCard } from '@/components/orgs/PendingSetupCard';
 import { ORG_HUB_ICONS } from '@/components/orgs/org-hub-icons';
+import { SettingsRow } from '@/app/settings/SettingsRow';
 import { orgHubSections, type OrgHubRow } from '@/lib/orgs/org-hub';
 import { orgErrorMessage } from '@/lib/orgs/org-error-copy';
 import { formatOrgShortDate } from '@/lib/orgs/org-format';
-import { cn } from '@/lib/utils/index';
 import { orgRoleAtLeast } from '@pagespace/lib/organizations/org-roles';
 
 function HubRow({ row, index, onAction }: { row: OrgHubRow; index: number; onAction: (action: 'leave') => void }) {
-  const Icon = ORG_HUB_ICONS[row.icon];
+  // UI-1: the shared SettingsRow, so the hub keeps the hover contrast settings-row.test pins.
   const body = (
-    <div
-      className={cn(
-        'group flex items-center gap-4 px-4 py-3 text-left transition-colors',
-        row.available ? 'hover:bg-accent hover:text-accent-foreground' : 'opacity-50',
-        index > 0 && 'border-t',
-        row.action === 'leave' && 'text-destructive',
-      )}
-    >
-      <Icon className="h-5 w-5 flex-shrink-0 text-muted-foreground" />
-      <div className="min-w-0 flex-1">
-        <div className="font-medium">{row.title}</div>
-        <div className="truncate text-sm text-muted-foreground">{row.description}</div>
-      </div>
-      {row.badge ? <OrgBadge tone={row.icon === 'guests' || row.icon === 'automation' ? 'restricted' : 'outline'}>{row.badge}</OrgBadge> : null}
-      {row.available ? (
-        row.href ? <ChevronRight className="h-4 w-4 flex-shrink-0 text-muted-foreground" /> : null
-      ) : (
-        <span className="text-xs text-muted-foreground">Coming Soon</span>
-      )}
-    </div>
+    <SettingsRow
+      item={{ title: row.title, description: row.description, icon: ORG_HUB_ICONS[row.icon], available: row.available }}
+      index={index}
+      badge={row.badge ? <OrgBadge tone={row.icon === 'guests' || row.icon === 'automation' ? 'restricted' : 'outline'}>{row.badge}</OrgBadge> : undefined}
+      chevron={Boolean(row.href)}
+      destructive={row.action === 'leave'}
+    />
   );
   if (!row.available) return <div aria-disabled="true">{body}</div>;
   if (row.action) {

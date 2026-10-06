@@ -17,7 +17,7 @@ import { requireDb } from '@pagespace/db/test/require-db';
 import { users } from '@pagespace/db/schema/auth';
 import { drives } from '@pagespace/db/schema/core';
 import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
-import { organizations, orgMembers } from '@pagespace/db/schema/organizations';
+import { organizations, orgMembers, orgSubscriptions } from '@pagespace/db/schema/organizations';
 import { orgGuestHolds } from '@pagespace/db/schema/org-guest-holds';
 // The move logs its activity fire-and-forget after it returns; that write would race this file's cleanup (a
 // deadlock on the drive row). The log is not what these tests assert.
@@ -56,6 +56,7 @@ async function cleanup() {
   if (created.orgIds.length) {
     await db.delete(orgGuestHolds).where(inArray(orgGuestHolds.orgId, created.orgIds));
     await db.delete(orgMembers).where(inArray(orgMembers.orgId, created.orgIds));
+    await db.delete(orgSubscriptions).where(inArray(orgSubscriptions.orgId, created.orgIds));
     await db.delete(organizations).where(inArray(organizations.id, created.orgIds));
   }
   if (created.userIds.length) await db.delete(users).where(inArray(users.id, created.userIds));
@@ -84,6 +85,8 @@ beforeEach(async () => {
   const orgId = createId();
   created.orgIds.push(orgId);
   await db.insert(organizations).values({ id: orgId, name: 'Northwind', slug: `nw-${createId()}`, ownerId: owner });
+  // Northwind is paid: a lapsed org admits no outsider even with guests on ([D-OW-33]).
+  await factories.createOrgSubscription(orgId, { status: 'active' });
   await db.insert(orgMembers).values([{ orgId, userId: owner, role: 'OWNER' }, { orgId, userId: member, role: 'MEMBER' }]);
   const orgDrive = (await factories.createDrive(owner)).id;
   const personalDrive = (await factories.createDrive(owner)).id;

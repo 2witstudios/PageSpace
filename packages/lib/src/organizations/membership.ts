@@ -11,6 +11,8 @@ import { db } from '@pagespace/db/db';
 import { and, asc, eq, inArray } from '@pagespace/db/operators';
 import { organizations, orgMembers, type OrgRole } from '@pagespace/db/schema/organizations';
 import { decideOrgRole } from './authorize';
+import { roleChangeOnlyRestricts } from './org-roles';
+import { checkOrgMayLoosen, type ORG_LAPSED_CODE } from './status';
 import { loadOrgPrincipalKind, type OrgPrincipalKind } from './owner-candidate';
 import { leaveOrganization, recordComputeReattributions, type ComputeReattribution, type LeadReassignment } from './leave';
 import { recordOwnerLeftAutomations, type OwnerLeftAutomation } from './automation-ownership';
@@ -21,7 +23,7 @@ import { recordLeaveEvents } from './org-events';
 
 export type MembershipDecision =
   | { ok: true }
-  | { ok: false; status: 400 | 403 | 404; reason: MembershipRefusal };
+  | { ok: false; status: 400 | 402 | 403 | 404; reason: MembershipRefusal };
 
 /**
  * The route authorized the actor before the write; the actor's role is read again
@@ -41,7 +43,8 @@ export type MembershipRefusal =
   | 'not_owner'
   | 'not_found'
   | 'not_member'
-  | 'insufficient_role';
+  | 'insufficient_role'
+  | typeof ORG_LAPSED_CODE;
 
 export const decideRoleChange = ({
   actorRole,
@@ -150,6 +153,11 @@ export async function changeMemberRole(input: {
     const roles = await lockActorAndTargetRoles(tx, input.orgId, input.actorId, input.targetId);
     const decision = decideRoleChange({ ...input, ...roles });
     if (!decision.ok) return decision;
+    // [D-OW-33] a lapsed org may demote but not promote: the one guard, reading the lapse after the row locks.
+    if (roles.targetRole !== null) {
+      const lapsed = await checkOrgMayLoosen(tx, input.orgId, !roleChangeOnlyRestricts(roles.targetRole, input.newRole));
+      if (lapsed) return { ok: false, status: lapsed.status, reason: lapsed.code };
+    }
     fromRole = roles.targetRole;
     await tx
       .update(orgMembers)

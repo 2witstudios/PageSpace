@@ -137,6 +137,13 @@ describe('Drive Settings › Wallet', () => {
     await waitFor(() => expect(within(caps).getAllByRole('button', { name: /Edit|Set cap/ }).length).toBe(2));
   });
 
+  it('SPEND-6 (partial) the Automations rule says they spend this wallet only, against their creator\'s caps, and never fall back to anyone\'s credits', () => {
+    viewAs('org_admin');
+    renderPage();
+    expect(screen.getByText(/Automations spend this drive's wallet only and never fall back to anyone's own credits/)).toBeTruthy();
+    expect(screen.queryByText(/caps and fallback apply/)).toBeNull();
+  });
+
   it('WAL-7 (partial) the pause switch pauses the wallet (the kill switch) and the status reads Paused', async () => {
     viewAs('lead');
     const { unmount } = renderPage();

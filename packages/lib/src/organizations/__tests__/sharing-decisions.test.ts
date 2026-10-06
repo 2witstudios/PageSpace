@@ -60,20 +60,22 @@ describe('publishingDecision and customDomainsDecision', () => {
 
 describe('decideGuestAdmission', () => {
   it.each([
-    ['off', 'refuse'],
-    ['approve', 'hold'],
-    ['on', 'allow'],
-  ] as const)('POL-2 (partial) an outsider under guests=%s is %s', (guests, expected) => {
-    expect(decideGuestAdmission(policies({ guests }), { isOrgMember: false })).toBe(expected);
+    ['off', 'refused', { decision: 'refuse', refusal: 'guests_off' }],
+    ['approve', 'held', { decision: 'hold' }],
+    ['on', 'allowed', { decision: 'allow' }],
+  ] as const)('POL-2 (partial) an outsider under guests=%s is %s', (guests, _label, expected) => {
+    expect(decideGuestAdmission(policies({ guests }), { isOrgMember: false })).toEqual(expected);
   });
 
   it.each(['off', 'approve', 'on'] as const)('POL-2 (partial) an org member is never a guest, whatever the policy (%s)', (guests) => {
-    expect(decideGuestAdmission(policies({ guests }), { isOrgMember: true })).toBe('allow');
+    expect(decideGuestAdmission(policies({ guests }), { isOrgMember: true })).toEqual({ decision: 'allow' });
   });
 
   it('POL-2 (partial) a personal drive has no guest policy: everyone is allowed', () => {
-    expect(decideGuestAdmission(null, { isOrgMember: false })).toBe('allow');
+    expect(decideGuestAdmission(null, { isOrgMember: false })).toEqual({ decision: 'allow' });
   });
+  // A lapsed org's outsider (D-OW-33) is refused by decideOrgDriveAdmission through checkOrgMayLoosen, not here:
+  // lapsed-loosen.integration.test.ts proves it on real Postgres.
 });
 
 describe('pageGrantWidensAccess', () => {

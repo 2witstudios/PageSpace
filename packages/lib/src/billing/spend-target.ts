@@ -17,6 +17,7 @@ import {
   childSpendableCents,
   coveredSpendOptions,
   entitlementTierFor,
+  legCovers,
   resolveSpendSource,
   seatLegSpendableCents,
   legSpendableCents,
@@ -416,7 +417,7 @@ export function sourceOfWallet(walletId: string, legs: CallSpendLegs): SpendSour
 }
 
 export type ChosenSource =
-  | { kind: 'source'; source: SpendSourceKind; via: 'turn' | 'conversation' | 'drive_default' | 'personal_default' }
+  | { kind: 'source'; source: SpendSourceKind; via: 'turn' | 'conversation' | 'drive_default' | 'personal_default' | 'out_of_box' }
   | { kind: 'none' }
   /** A stored choice that names no wallet this person may spend: refused, never replaced. */
   | { kind: 'invalid'; chosenWalletId: string };
@@ -428,8 +429,14 @@ export type ChosenSource =
  * (a guest and the drive wallet); a stored choice names a WALLET and is never skipped — if
  * it resolves to nothing the answer is `invalid`, so the gate refuses rather than moving the
  * conversation onto another source (SPEND-4).
+ *
+ * The person's "drive's wallet, if it has one" default — never set (canvas v9 UsageWallets shows it
+ * selected) or saved, one code path — is the drive's wallet when they may spend one here and it can
+ * pay this call now, otherwise their own credits if they can; with neither, nothing is preselected.
+ * Any other default they set is honoured or skipped. The drive's own default (set by its lead) is a
+ * drive policy and is taken as stored.
  */
-export function chooseSource(turnSource: SpendSourceKind | null, stored: StoredSpendChoice, legs: CallSpendLegs): ChosenSource {
+export function chooseSource(turnSource: SpendSourceKind | null, stored: StoredSpendChoice, legs: CallSpendLegs & { reservationCents: number }): ChosenSource {
   if (turnSource !== null) return { kind: 'source', source: turnSource, via: 'turn' };
   if (stored.chosenWalletId !== null) {
     const source = sourceOfWallet(stored.chosenWalletId, legs);
@@ -439,11 +446,36 @@ export function chooseSource(turnSource: SpendSourceKind | null, stored: StoredS
   if (stored.driveDefault !== null && available.includes(stored.driveDefault)) {
     return { kind: 'source', source: stored.driveDefault, via: 'drive_default' };
   }
+  // The person's default. "The drive's wallet, if it has one" — saved or never set (Settings shows it selected either
+  // way) — is ONE path: the first of drive wallet, own credits that can pay this call NOW (not paused, not at the
+  // person's cap, not short of the reservation), so it never lands on a refusal or on a fallback nobody chose. With
+  // neither, nothing is preselected and the person is asked (SPEND-4 no_source_chosen).
+  if (effectiveDefaultSpendSource(stored.personalDefault) === 'drive_wallet') {
+    const outOfBox = OUT_OF_BOX_SOURCES.find((source) => {
+      const leg = available.includes(source) ? legOf(legs, source) : null;
+      return leg !== null && legCovers(leg, legs.reservationCents);
+    });
+    return outOfBox ? { kind: 'source', source: outOfBox, via: 'out_of_box' } : { kind: 'none' };
+  }
+  // Any other default the person set (own credits, their seat) is honoured where they may spend it, else skipped.
   if (stored.personalDefault !== null && available.includes(stored.personalDefault)) {
     return { kind: 'source', source: stored.personalDefault, via: 'personal_default' };
   }
   return { kind: 'none' };
 }
+
+/** SPEND-3: the default a person has, as Settings shows it selected: the stored one, else the drive's wallet. */
+export function effectiveDefaultSpendSource(personalDefault: SpendSourceKind | null): SpendSourceKind {
+  return personalDefault ?? 'drive_wallet';
+}
+
+/** The leg of a source this person may spend (availableSources has already said they may). */
+function legOf(legs: CallSpendLegs, source: SpendSourceKind): SpendLeg | null {
+  return source === 'drive_wallet' ? legs.driveWallet : source === 'seat_allowance' ? legs.seatAllowance : legs.personal;
+}
+
+/** SPEND-3: what the "drive's wallet, if it has one" default spends from, in order. */
+export const OUT_OF_BOX_SOURCES: readonly SpendSourceKind[] = Object.freeze(['drive_wallet', 'own_credits']);
 
 // ---------------------------------------------------------------------------
 // The decision (SPEND-1, SPEND-4, WAL-8)

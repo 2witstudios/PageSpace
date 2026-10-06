@@ -131,6 +131,19 @@ describe('org Drives page', () => {
     render(<OrgDrivesPage />);
     expect((screen.getByRole('button', { name: /New drive/ }) as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByRole('button', { name: /Move a drive in/ }) as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getByText('Moving drives in and creating org drives are paused while unpaid.')).toBeTruthy();
+    expect(screen.getByText(/Moving drives in and creating org drives are paused while unpaid\./)).toBeTruthy();
+  });
+
+  it('SEAT-9 (partial) D-OW-33: while lapsed a drive row offers only less open visibilities; making a drive less open still works', async () => {
+    mocks.notice = { kind: 'reactivate', reason: 'unpaid', canManageBilling: true };
+    render(<OrgDrivesPage />);
+    expect(screen.getByText(/Making a drive more open is paused while unpaid/)).toBeTruthy();
+    await userEvent.click(within(row('Customer Research')).getByRole('combobox'));
+    expect((await screen.findByRole('option', { name: 'Open' })).getAttribute('aria-disabled')).toBe('true');
+    expect(screen.getByRole('option', { name: 'Private' }).getAttribute('aria-disabled')).not.toBe('true');
+    await userEvent.click(screen.getByRole('option', { name: 'Private' }));
+    await waitFor(() => expect(mocks.changeDriveVisibility).toHaveBeenCalledWith('d_cr', 'PRIVATE'));
+    expect(mocks.changeDriveVisibility).not.toHaveBeenCalledWith('d_cr', 'OPEN');
   });
 });
+

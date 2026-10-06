@@ -76,10 +76,11 @@ export function WorkflowList({ workflows, spendContext, onRun, onToggle, onEdit,
         <TableHeader>
           <TableRow>
             <TableHead>Name</TableHead>
-            <TableHead>Schedule</TableHead>
+            {/* On a phone the name, status, switch and Run stay in view; times wait for wider screens. */}
+            <TableHead className="hidden md:table-cell">Schedule</TableHead>
             <TableHead>Status</TableHead>
-            <TableHead>Last Run</TableHead>
-            <TableHead>Next Run</TableHead>
+            <TableHead className="hidden md:table-cell">Last Run</TableHead>
+            <TableHead className="hidden md:table-cell">Next Run</TableHead>
             <TableHead className="text-center">Enabled</TableHead>
             <TableHead className="text-right">Actions</TableHead>
           </TableRow>
@@ -90,9 +91,23 @@ export function WorkflowList({ workflows, spendContext, onRun, onToggle, onEdit,
               ? automationRunState({ ownerLeftAt: workflow.ownerLeftAt, lastRunStatus: workflow.lastRun?.status ?? null, lastRunError: workflow.lastRun?.error ?? null })
               : { kind: 'normal' as const };
             const creatorName = workflow.createdBy ? spendContext?.creatorNames[workflow.createdBy] ?? null : null;
+            const status = runState.kind === 'skipped' && spendContext ? (
+              <AutomationSkippedBadge state={runState} creatorName={creatorName} context={spendContext} />
+            ) : (
+              <Tooltip>
+                <TooltipTrigger>
+                  <WorkflowStatusBadge status={workflow.lastRun?.status ?? 'never_run'} />
+                </TooltipTrigger>
+                {workflow.lastRun?.error && (
+                  <TooltipContent className="max-w-xs">
+                    <p className="text-xs">{workflow.lastRun.error}</p>
+                  </TooltipContent>
+                )}
+              </Tooltip>
+            );
             return (
             <TableRow key={workflow.id}>
-              <TableCell className="font-medium">
+              <TableCell className="font-medium whitespace-normal">
                 <div className="flex flex-col">
                   <span>{workflow.name}</span>
                   {spendContext && (
@@ -100,32 +115,17 @@ export function WorkflowList({ workflows, spendContext, onRun, onToggle, onEdit,
                   )}
                 </div>
               </TableCell>
-              <TableCell className="text-muted-foreground text-sm">
+              <TableCell className="hidden text-muted-foreground text-sm md:table-cell">
                 <div className="flex items-center gap-1.5">
                   <Clock className="h-3.5 w-3.5 flex-shrink-0" />
                   <span className="font-mono">{workflow.cronExpression ?? '-'}</span>
                 </div>
               </TableCell>
-              <TableCell>
-                {runState.kind === 'skipped' && spendContext ? (
-                  <AutomationSkippedBadge state={runState} creatorName={creatorName} context={spendContext} />
-                ) : (
-                <Tooltip>
-                  <TooltipTrigger>
-                    <WorkflowStatusBadge status={workflow.lastRun?.status ?? 'never_run'} />
-                  </TooltipTrigger>
-                  {workflow.lastRun?.error && (
-                    <TooltipContent className="max-w-xs">
-                      <p className="text-xs">{workflow.lastRun.error}</p>
-                    </TooltipContent>
-                  )}
-                </Tooltip>
-                )}
-              </TableCell>
-              <TableCell className="text-sm text-muted-foreground">
+              <TableCell>{status}</TableCell>
+              <TableCell className="hidden text-sm text-muted-foreground md:table-cell">
                 {formatDate(workflow.lastRun?.startedAt ?? null)}
               </TableCell>
-              <TableCell className="text-sm text-muted-foreground">
+              <TableCell className="hidden text-sm text-muted-foreground md:table-cell">
                 {formatDate(workflow.nextRunAt)}
               </TableCell>
               <TableCell className="text-center">
@@ -141,7 +141,8 @@ export function WorkflowList({ workflows, spendContext, onRun, onToggle, onEdit,
                     variant="ghost"
                     size="sm"
                     onClick={() => handleRun(workflow.id)}
-                    disabled={runningIds.has(workflow.id)}
+                    // [D-OW-36] nothing runs under a missing person, by schedule or by hand.
+                    disabled={runningIds.has(workflow.id) || runState.kind === 'owner_left'}
                     className="h-8 w-8 p-0"
                     aria-label="Run workflow"
                   >

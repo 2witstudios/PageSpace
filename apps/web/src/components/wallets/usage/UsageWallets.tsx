@@ -6,6 +6,7 @@ import { toast } from 'sonner';
 import { Building2, Folder, HandCoins, Sparkles } from 'lucide-react';
 import { spendFromRowCopy, spendMeterPercent } from '@pagespace/lib/billing/wallet-surface';
 import type { WalletStatus } from '@pagespace/lib/billing/wallet-core';
+import { effectiveDefaultSpendSource } from '@pagespace/lib/billing/spend-target';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -41,7 +42,7 @@ export function UsageWallets() {
     <div className="flex flex-col gap-8">
       <SpendFromSection wallets={wallets} />
       <FundSection wallets={wallets} />
-      <DefaultSourceCard current={wallets.personal.defaultSpendSource} onChanged={refresh} />
+      <DefaultSourceCard stored={wallets.personal.defaultSpendSource} onChanged={refresh} />
     </div>
   );
 }
@@ -195,8 +196,10 @@ function FundSection({ wallets }: { wallets: MyWallets }) {
   );
 }
 
-function DefaultSourceCard({ current, onChanged }: { current: MyWallets['personal']['defaultSpendSource']; onChanged: () => Promise<unknown> }) {
+function DefaultSourceCard({ stored, onChanged }: { stored: MyWallets['personal']['defaultSpendSource']; onChanged: () => Promise<unknown> }) {
   const [pending, setPending] = useState(false);
+  // SPEND-3: no saved default is the out-of-box one, which the gate preselects (chooseSource).
+  const current = effectiveDefaultSpendSource(stored);
   const choose = async (source: 'drive_wallet' | 'own_credits') => {
     if (source === current || pending) return;
     setPending(true);
@@ -210,7 +213,7 @@ function DefaultSourceCard({ current, onChanged }: { current: MyWallets['persona
     }
   };
   const options = [
-    { value: 'drive_wallet' as const, label: "The drive's wallet, if it has one", hint: "Then your allowance, then your own credits, following each drive's fallback rule." },
+    { value: 'drive_wallet' as const, label: "The drive's wallet, if it has one", hint: "Where there isn't one you can spend, your own credits." },
     { value: 'own_credits' as const, label: 'Always my own credits', hint: 'Never spend a wallet or an allowance unless you switch for that conversation.' },
   ];
   return (

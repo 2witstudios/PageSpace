@@ -19,7 +19,8 @@ import { users } from '@pagespace/db/schema/auth';
 import { drives } from '@pagespace/db/schema/core';
 import { driveMembers, driveRoles } from '@pagespace/db/schema/members';
 import { driveJoinRequests } from '@pagespace/db/schema/drive-join-requests';
-import { organizations, orgMembers } from '@pagespace/db/schema/organizations';
+import { factories } from '@pagespace/db/test/factories';
+import { organizations, orgMembers, orgSubscriptions } from '@pagespace/db/schema/organizations';
 import { activityLogs } from '@pagespace/db/schema/monitoring';
 import {
   answerDriveJoinRequest,
@@ -60,6 +61,7 @@ async function cleanup() {
   await db.delete(activityLogs).where(or(inArray(activityLogs.userId, userIds), inArray(activityLogs.resourceId, [northwind, ...ours.map((d) => d.id)])));
   await db.delete(drives).where(or(eq(drives.orgId, northwind), inArray(drives.ownerId, userIds)));
   await db.delete(orgMembers).where(eq(orgMembers.orgId, northwind));
+  await db.delete(orgSubscriptions).where(eq(orgSubscriptions.orgId, northwind));
   await db.delete(organizations).where(eq(organizations.id, northwind));
   await db.delete(users).where(inArray(users.id, userIds));
 }
@@ -70,6 +72,8 @@ beforeEach(async () => {
     id, email: `${['jono', 'priya', 'marcus', 'lena', 'nina', 'chris'][i]}-${run}@northwind.test`, name: `User ${i}`, updatedAt: new Date(),
   })));
   await db.insert(organizations).values({ id: northwind, name: 'Northwind Labs', slug: `northwind-${run}`, ownerId: jono });
+  // Northwind is paid: a lapsed org may not open a drive ([D-OW-33]).
+  await factories.createOrgSubscription(northwind, { status: 'active' });
   await db.insert(orgMembers).values([
     { orgId: northwind, userId: jono, role: 'OWNER' },
     { orgId: northwind, userId: priya, role: 'ADMIN' },
@@ -391,6 +395,8 @@ describe('a pending request closes when what it asked for is gone', () => {
 
   it('DRV-6 (partial) deleting the org closes the requests on its drives', async () => {
     const { request } = await requestAs(lena);
+    // No live subscription to cancel: this test is about the requests, not the Stripe side of deletion.
+    await db.delete(orgSubscriptions).where(eq(orgSubscriptions.orgId, northwind));
 
     expect(await deleteOrganization({ actorId: jono, orgId: northwind, choices: [{ driveId: research, action: 'trash' }], now: new Date() }))
       .toMatchObject({ ok: true });

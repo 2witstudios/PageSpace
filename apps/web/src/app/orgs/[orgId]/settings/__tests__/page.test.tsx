@@ -72,6 +72,10 @@ describe('org settings hub', () => {
     expect(screen.getByText('12 members, 2 pending invites, 3 guests')).toBeTruthy();
     expect(screen.getByText('2 waiting')).toBeTruthy();
     expect(screen.getByRole('link', { name: /Policies/ }).getAttribute('href')).toBe('/orgs/org_nw/settings/policies');
+    // UI-1: the hub's rows are the shared SettingsRow, so hovered text keeps the WCAG AA flip it pins.
+    const policies = screen.getByRole('link', { name: /Policies/ });
+    expect((policies.firstElementChild as HTMLElement).className).toContain('hover:text-accent-foreground');
+    expect(policies.querySelector('.truncate')?.className).toContain('group-hover:text-accent-foreground');
     expect(screen.getByText(/Business plan · 12 of 15 seats/)).toBeTruthy();
     expect(screen.getByText(/Renews Oct 1/)).toBeTruthy();
   });

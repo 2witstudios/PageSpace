@@ -140,6 +140,11 @@ export type SpendResolution =
 
 const SOURCE_ORDER: readonly SpendSourceKind[] = ['drive_wallet', 'seat_allowance', 'own_credits'];
 
+/** Whether this leg can pay this call now: not paused, and spendable (cap included) to the reservation. */
+export function legCovers(leg: SpendLeg, reservationCents: number): boolean {
+  return covers(leg, reservationCents);
+}
+
 function covers(leg: SpendLeg, reservationCents: number): boolean {
   const reservation = Math.max(0, Math.round(reservationCents));
   return leg.status !== 'paused' && leg.spendableCents > 0 && leg.spendableCents >= reservation;

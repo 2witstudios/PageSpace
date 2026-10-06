@@ -15,16 +15,19 @@ import { eq } from '@pagespace/db/operators';
 import { organizations, orgSubscriptions } from '@pagespace/db/schema/organizations';
 import { isBillingEnabled } from '../deployment-mode';
 import {
+  decideOrgMayLoosen,
   deriveOrgStatus,
   orgBillingNotice,
   orgStatusAllows,
   type OrgBillingNotice,
   type OrgCapabilityCheck,
+  type OrgLapsedRefusal,
   type OrgStatusResult,
   type OrgSubscriptionState,
 } from './status-core';
 
 export {
+  decideOrgMayLoosen,
   ORG_LAPSED_CODE,
   ORG_LAPSED_MESSAGE,
   ORG_LAPSED_REFUSAL,
@@ -112,4 +115,23 @@ export async function getOrgBillingNotice(
 /** SEAT-9: the refusal an org-only capability returns (`{ ok: false, code: 'org_lapsed', message }`) or ok. */
 export async function checkOrgActive(orgId: string, opts: { now?: Date; executor?: Executor } = {}): Promise<OrgCapabilityCheck> {
   return orgStatusAllows(await getOrgStatus(orgId, opts));
+}
+
+/**
+ * [D-OW-33] the lapse a loosening write reads: whether the org is lapsed right now, read with the write's
+ * executor (pass the transaction). Under READ COMMITTED this is the subscription as committed when the read
+ * runs; no lock is taken, so a lapse that commits after the read is not seen by this write. That is the same
+ * read every lapse gate makes (#2817): the write then serializes as one made just before the lapse, which is
+ * allowed (the webhook mirror writes only org_subscriptions, and a lapse by time has no writer at all).
+ */
+export async function readOrgLapsed(orgId: string, executor: Executor = db): Promise<boolean> {
+  return !(await isOrgActive(orgId, { executor }));
+}
+
+/**
+ * [D-OW-33] the guard at a write site that loosens access in an org: reads the lapse in `executor` only when the
+ * change loosens, and answers the SEAT-9 lapse refusal or null (decideOrgMayLoosen).
+ */
+export async function checkOrgMayLoosen(executor: Executor, orgId: string, loosens: boolean): Promise<OrgLapsedRefusal | null> {
+  return decideOrgMayLoosen({ orgLapsed: loosens && (await readOrgLapsed(orgId, executor)), loosens });
 }

@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   decideChangeDriveVisibility,
   decideChangeOrgDriveLead,
+  visibilityChangeOnlyRestricts,
   type OrgDriveFactsForChange,
 } from '../org-drive-ownership';
 
@@ -57,6 +58,21 @@ describe('decideChangeDriveVisibility', () => {
     expect(decideChangeDriveVisibility({ drive: product({ orgVisibility: 'PRIVATE' }), actorId: PRIYA, actorOrgRole: 'ADMIN', visibility: 'PRIVATE' }))
       .toEqual({ ok: true, changed: false, from: 'PRIVATE', to: 'PRIVATE' });
   });
+});
+
+describe('[D-OW-33] a lapsed org may only make a drive less open', () => {
+  it('SEAT-9 (partial) Private < Restricted < Open: a change toward Private restricts, a change toward Open loosens, no change restricts', () => {
+    expect(visibilityChangeOnlyRestricts('OPEN', 'RESTRICTED')).toBe(true);
+    expect(visibilityChangeOnlyRestricts('OPEN', 'PRIVATE')).toBe(true);
+    expect(visibilityChangeOnlyRestricts('RESTRICTED', 'PRIVATE')).toBe(true);
+    expect(visibilityChangeOnlyRestricts('PRIVATE', 'PRIVATE')).toBe(true);
+    expect(visibilityChangeOnlyRestricts('PRIVATE', 'RESTRICTED')).toBe(false);
+    expect(visibilityChangeOnlyRestricts('PRIVATE', 'OPEN')).toBe(false);
+    expect(visibilityChangeOnlyRestricts('RESTRICTED', 'OPEN')).toBe(false);
+  });
+
+  // The lapse itself is decided by the one guard (status-core decideOrgMayLoosen, read by checkOrgMayLoosen in
+  // changeDriveVisibility): lapsed-loosen.integration.test.ts proves both directions on real Postgres.
 });
 
 describe('decideChangeOrgDriveLead', () => {

@@ -127,6 +127,17 @@ export const ORG_LAPSED_REFUSAL: OrgLapsedRefusal = Object.freeze({
 
 export type OrgCapabilityCheck = { ok: true } | OrgLapsedRefusal;
 
+/**
+ * [D-OW-33] the ONE guard for a write that could loosen access in an org (SEAT-9 as amended:
+ * a lapsed org may only restrict). The caller says whether its change loosens (by its own pure
+ * rule: visibilityChangeOnlyRestricts, roleChangeOnlyRestricts, loosenedPolicyKeys, …) and passes
+ * the lapse it read in the write's transaction (status.ts readOrgLapsed); the answer is the lapse
+ * refusal, or null to go ahead.
+ */
+export function decideOrgMayLoosen(input: { orgLapsed: boolean; loosens: boolean }): OrgLapsedRefusal | null {
+  return input.orgLapsed && input.loosens ? ORG_LAPSED_REFUSAL : null;
+}
+
 /** The one rule every org-only capability applies (SEAT-9): refused only while lapsed. */
 export function orgStatusAllows(result: OrgStatusResult): OrgCapabilityCheck {
   return result.status === 'lapsed' ? { ...ORG_LAPSED_REFUSAL } : { ok: true };

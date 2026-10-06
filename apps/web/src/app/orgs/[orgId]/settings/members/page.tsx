@@ -43,6 +43,7 @@ import {
   type OrgSeatCapsRead,
 } from '@/lib/orgs/org-api';
 import { orgErrorMessage } from '@/lib/orgs/org-error-copy';
+import { roleChangeAllowed } from '@/lib/orgs/org-lapse';
 import { filterMembers, guestAccessLine, inviteStatusLine, liveInvitations, memberTabCounts, seatCapsLabel, type MemberTab } from '@/lib/orgs/org-members';
 import { cn } from '@/lib/utils/index';
 
@@ -155,7 +156,7 @@ function MembersPageBody({ orgId, orgName, role, lapsed }: OrgSettingsContext) {
           </Button>
         </div>
       </div>
-      {lapsed ? <div className="mb-3"><PausedWhileUnpaid>Inviting is paused while unpaid. Removing members and revoking invitations still work.</PausedWhileUnpaid></div> : null}
+      {lapsed ? <div className="mb-3"><PausedWhileUnpaid>Inviting is paused while unpaid. Promoting members is paused while unpaid. Removing members, making an Admin a Member and revoking invitations still work.</PausedWhileUnpaid></div> : null}
 
       {tab !== 'guests' ? (
         <div className="overflow-hidden rounded-lg border bg-card">
@@ -202,8 +203,8 @@ function MembersPageBody({ orgId, orgName, role, lapsed }: OrgSettingsContext) {
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
-                            <SelectItem value="ADMIN">Admin</SelectItem>
-                            <SelectItem value="MEMBER">Member</SelectItem>
+                            <SelectItem value="ADMIN" disabled={!roleChangeAllowed(lapsed, m.role, 'ADMIN')}>Admin</SelectItem>
+                            <SelectItem value="MEMBER" disabled={!roleChangeAllowed(lapsed, m.role, 'MEMBER')}>Member</SelectItem>
                           </SelectContent>
                         </Select>
                       )}

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { ApiRequestError } from '@/lib/auth/auth-fetch';
 import { SWRConfig } from 'swr';
 import type { Drive } from '@pagespace/lib/types';
 
@@ -64,6 +65,26 @@ describe('OrgDriveCard on Drive Settings › General', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Move out of Northwind Labs' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Keep them as invited' }));
     await waitFor(() => expect(api.del).toHaveBeenCalledWith('/api/drives/d-product/org', { implicitMembers: 'keep' }));
+  });
+
+  it('DRV-2 (partial) "Remove them" moves the drive out removing the implicit members, and closes the dialog (D-OW-10)', async () => {
+    orgs.role = 'ADMIN';
+    renderCard(drive({}));
+    fireEvent.click(screen.getByRole('button', { name: 'Move out of Northwind Labs' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove them' }));
+    await waitFor(() => expect(api.del).toHaveBeenCalledWith('/api/drives/d-product/org', { implicitMembers: 'remove' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  });
+
+  it('DRV-2 (partial) a move that fails keeps the dialog open and says why in it, so the choice can be retried', async () => {
+    orgs.role = 'ADMIN';
+    api.del.mockRejectedValueOnce(new ApiRequestError('raw', 402, { error: 'raw', code: 'org_lapsed' }));
+    renderCard(drive({}));
+    fireEvent.click(screen.getByRole('button', { name: 'Move out of Northwind Labs' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove them' }));
+    const dialog = await screen.findByRole('dialog');
+    await waitFor(() => expect(within(dialog).getByRole('alert').textContent).toContain('This organization is unpaid'));
+    expect((within(dialog).getByRole('button', { name: 'Remove them' }) as HTMLButtonElement).disabled).toBe(false);
   });
 
   it('DRV-2 (partial) the owner of a personal drive can move it into one of their orgs; Home never offers it', async () => {

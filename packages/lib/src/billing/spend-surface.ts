@@ -156,19 +156,20 @@ export function spendFallbackCopy(input: { from: unknown; to: unknown; fromLabel
 
 /**
  * Who an automation spends as (Spec SPEND-6, D-OW-34): a scheduled run spends the drive's wallet
- * as its creator, under the creator's caps and fallback; a channel mention or a manual Run is the
- * spend of whoever triggered it. For the workflow and trigger surfaces.
+ * ONLY, counted against its creator's caps, and never falls back to anyone's own credits; a
+ * channel mention or a manual Run is the spend of whoever triggered it. For the workflow and
+ * trigger surfaces.
  */
 export function automationSpendCopy(input: { creatorName: string | null; walletLabel: string | null }): { badge: string; line: string | null; detail: string } {
   const firstName = input.creatorName?.trim().split(/\s+/)[0] ?? null;
   const who = input.creatorName ?? 'its creator';
   // A drive with no wallet gives an automation nothing to spend (SPEND-6): say so, not "its wallet".
   const spends = input.walletLabel
-    ? `Each scheduled run spends from ${input.walletLabel} as ${who}, under their caps and fallback.`
-    : `Each scheduled run spends as ${who}, from the drive's wallet once it has one.`;
+    ? `Each scheduled run spends only ${input.walletLabel}, as ${who} under their caps, and never falls back to anyone's own credits.`
+    : `Each scheduled run spends only the drive's wallet once it has one, as ${who} under their caps.`;
   return {
     badge: firstName ? `As ${firstName}` : 'As its creator',
     line: input.creatorName ? `Created by ${input.creatorName}` : null,
-    detail: `${spends} A channel mention or a manual Run counts against whoever triggered it. If no source can pay, the run is skipped and logged.`,
+    detail: `${spends} A channel mention or a manual Run counts against whoever triggered it. If the wallet can't pay, the run is skipped and logged.`,
   };
 }

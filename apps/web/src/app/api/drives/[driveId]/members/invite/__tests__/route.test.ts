@@ -1174,12 +1174,35 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
     });
 
     it('POL-2 (partial) guests turned OFF between the check and the write: the write refuses and the route answers 403 naming the policy', async () => {
-      vi.mocked(driveInviteRepository.createAcceptedMemberWithPermissions).mockResolvedValue({ refused: 'GUEST_POLICY' });
+      vi.mocked(driveInviteRepository.createAcceptedMemberWithPermissions).mockResolvedValue({ refused: 'GUEST_POLICY', refusal: 'guests_off' });
 
       const res = await POST(buildPost(mockDriveId, userIdBody), createContext(mockDriveId));
 
       expect(res.status).toBe(403);
       expect(await res.json()).toMatchObject({ code: 'org_policy', policy: 'guests' });
+    });
+
+    it('SEAT-9 (partial) POL-2 (partial) [D-OW-33] a LAPSED org with guests on refuses an outsider by user id with 402 org_lapsed, and creates nothing', async () => {
+      adminWhoCanInvite();
+      decideOrgDriveAdmission.mockResolvedValue({ decision: 'refuse', refusal: 'org_lapsed', orgId: 'org_1' });
+
+      const res = await POST(buildPost(mockDriveId, userIdBody), createContext(mockDriveId));
+
+      expect(res.status).toBe(402);
+      const body = await res.json();
+      expect(body).toMatchObject({ code: 'org_lapsed' });
+      expect(body.policy).toBeUndefined();
+      expect(driveInviteRepository.createAcceptedMemberWithPermissions).not.toHaveBeenCalled();
+      expect(requestGuestApproval).not.toHaveBeenCalled();
+    });
+
+    it('SEAT-9 (partial) [D-OW-33] the org lapsing between the check and the write: the write refuses and the route answers 402 org_lapsed', async () => {
+      vi.mocked(driveInviteRepository.createAcceptedMemberWithPermissions).mockResolvedValue({ refused: 'GUEST_POLICY', refusal: 'org_lapsed' });
+
+      const res = await POST(buildPost(mockDriveId, userIdBody), createContext(mockDriveId));
+
+      expect(res.status).toBe(402);
+      expect(await res.json()).toMatchObject({ code: 'org_lapsed' });
     });
 
     it('POL-2 (partial) guests ON on an ORG drive (decision allow, org named) adds them at once: nothing is queued', async () => {

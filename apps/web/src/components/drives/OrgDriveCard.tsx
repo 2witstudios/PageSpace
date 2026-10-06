@@ -63,19 +63,32 @@ function OrgOwnedCard({ drive, org, leadName, onChanged }: { drive: Drive; org: 
   const { data: orgMembers } = useSWR(mayEdit ? `/api/orgs/${org.id}/members` : null, membersFetcher, { revalidateOnFocus: false });
   const [pending, setPending] = useState(false);
   const [moveOutOpen, setMoveOutOpen] = useState(false);
+  const [moveOutError, setMoveOutError] = useState<string | null>(null);
   const visibility: Visibility = drive.orgVisibility ?? 'OPEN';
 
-  const run = async (action: () => Promise<unknown>, success: string, failure: string) => {
+  /** Runs a change; the refusal copy when it failed (also toasted), null when it went through. */
+  const run = async (action: () => Promise<unknown>, success: string, failure: string): Promise<string | null> => {
     setPending(true);
     try {
       await action();
       toast.success(success);
       onChanged();
+      return null;
     } catch (error) {
-      toast.error(orgErrorMessage(error, failure));
+      const message = orgErrorMessage(error, failure);
+      toast.error(message);
+      return message;
     } finally {
       setPending(false);
     }
+  };
+
+  // The dialog closes only once the move went through; a refusal stays in it so the choice can be retried.
+  const moveOut = async (implicitMembers: 'keep' | 'remove') => {
+    setMoveOutError(null);
+    const failed = await run(() => del(`/api/drives/${drive.id}/org`, { implicitMembers }), `${drive.name} moved out`, 'The drive could not be moved.');
+    if (failed) setMoveOutError(failed);
+    else setMoveOutOpen(false);
   };
 
   const summary = orgDriveSummaryCopy({
@@ -158,17 +171,18 @@ function OrgOwnedCard({ drive, org, leadName, onChanged }: { drive: Drive; org: 
               <span className="text-xs text-muted-foreground">Move this drive out of {org.name} to its lead. Storage and AI then bill the lead.</span>
               <Button variant="outline" size="sm" disabled={pending} onClick={() => setMoveOutOpen(true)}>Move out of {org.name}</Button>
             </div>
-            <Dialog open={moveOutOpen} onOpenChange={setMoveOutOpen}>
+            <Dialog open={moveOutOpen} onOpenChange={(open) => { setMoveOutOpen(open); setMoveOutError(null); }}>
               <DialogContent className="sm:max-w-md">
                 <DialogHeader>
                   <DialogTitle>Move {drive.name} out of {org.name}?</DialogTitle>
                   <DialogDescription>Org members who reach it only because it is Open lose access unless you keep them as invited members.</DialogDescription>
                 </DialogHeader>
+                {moveOutError ? <p role="alert" className="text-sm text-destructive">{moveOutError}</p> : null}
                 <DialogFooter className="gap-2">
-                  <Button variant="outline" disabled={pending} onClick={() => void run(() => del(`/api/drives/${drive.id}/org`, { implicitMembers: 'remove' }), `${drive.name} moved out`, 'The drive could not be moved.').then(() => setMoveOutOpen(false))}>
+                  <Button variant="outline" disabled={pending} onClick={() => void moveOut('remove')}>
                     Remove them
                   </Button>
-                  <Button disabled={pending} onClick={() => void run(() => del(`/api/drives/${drive.id}/org`, { implicitMembers: 'keep' }), `${drive.name} moved out`, 'The drive could not be moved.').then(() => setMoveOutOpen(false))}>
+                  <Button disabled={pending} onClick={() => void moveOut('keep')}>
                     Keep them as invited
                   </Button>
                 </DialogFooter>

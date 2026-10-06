@@ -4,6 +4,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import { ORG_ROLE_RANK, decideOrgRole } from '../authorize';
+import { roleChangeOnlyRestricts } from '../org-roles';
 import {
   decideInviteCreation,
   decideInviteAcceptance,
@@ -162,6 +163,14 @@ describe('membership decisions', () => {
       status: 400,
       reason: 'use_ownership_transfer',
     });
+  });
+
+  it('SEAT-9 (partial) [D-OW-33] the role ranks decide what a lapsed org may change: only a move down the ranks, or none, restricts', () => {
+    expect(roleChangeOnlyRestricts('ADMIN', 'MEMBER')).toBe(true);
+    expect(roleChangeOnlyRestricts('MEMBER', 'MEMBER')).toBe(true);
+    expect(roleChangeOnlyRestricts('MEMBER', 'ADMIN')).toBe(false);
+    expect(roleChangeOnlyRestricts('MEMBER', 'OWNER')).toBe(false);
+    expect(roleChangeOnlyRestricts('ADMIN', 'OWNER')).toBe(false);
   });
 
   it('ORG-2 (partial) removing the Owner is refused and removing yourself is leaving', () => {

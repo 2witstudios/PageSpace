@@ -1,10 +1,11 @@
 import React from 'react';
-import { render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Drive } from '@pagespace/lib/types';
 
 vi.mock('@pagespace/lib/organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
-vi.mock('next/navigation', () => ({ useRouter: () => ({ push: vi.fn() }), useParams: () => ({}), usePathname: () => '/dashboard' }));
+const push = vi.hoisted(() => vi.fn());
+vi.mock('next/navigation', () => ({ useRouter: () => ({ push }), useParams: () => ({}), usePathname: () => '/dashboard' }));
 vi.mock('@/lib/auth/auth-fetch', () => ({ fetchWithAuth: vi.fn(() => Promise.resolve(new Response(null, { status: 200 }))), post: vi.fn(), del: vi.fn() }));
 vi.mock('@/components/layout/left-sidebar/CreateDriveDialog', () => ({ default: () => null }));
 vi.mock('@/hooks/useMyOrganizations', () => ({
@@ -48,10 +49,21 @@ describe('DriveSwitcherDialog with organizations', () => {
     expect(screen.queryByText(/All drives ·/)).toBeNull();
   });
 
+  it('UI-1 (partial) the org hub is reachable from the picker by keyboard and assistive tech: a "settings" option in the org group, not only the icon in its hidden heading', () => {
+    const onOpenChange = vi.fn();
+    render(<DriveSwitcherDialog open onOpenChange={onOpenChange} />);
+    const option = screen.getByRole('option', { name: 'Northwind Labs settings' });
+    expect(option.closest('[cmdk-group]')).toBe(screen.getByTestId('picker-group-org').closest('[cmdk-group]'));
+    fireEvent.click(option);
+    expect(push).toHaveBeenCalledWith('/orgs/o-northwind/settings');
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
   it('DRV-9 (partial) shows nothing the person cannot open: an un-joined Restricted drive is never listed', () => {
     render(<DriveSwitcherDialog open onOpenChange={vi.fn()} />);
     expect(screen.queryByText('Finance')).toBeNull();
-    const listed = screen.getAllByRole('option').map((o) => o.textContent ?? '');
+    // Every option but the way out (All drives) and an org's settings is a drive.
+    const listed = screen.getAllByRole('option').map((o) => o.textContent ?? '').filter((t) => !/ settings$/.test(t));
     expect(listed.filter((t) => /Product|Customer Research|Home/.test(t)).length).toBe(listed.filter((t) => !/All drives/.test(t)).length);
   });
 });

@@ -51,6 +51,7 @@ vi.mock('@/lib/auth', () => ({
 
 import { PUT, DELETE, PATCH } from '../route';
 import { moveDriveToOrg, moveDriveOutOfOrg, changeDriveVisibility } from '@pagespace/lib/services/org-drive-service';
+import { ORG_LAPSED_REFUSAL } from '@pagespace/lib/organizations/status-core';
 import { recordOrgPowerDriveAction } from '@pagespace/lib/permissions/drive-relationship-loader';
 import { orgDriveServiceDeps } from '@pagespace/lib/services/org-drive-service-deps';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -273,6 +274,17 @@ describe('/api/drives/[driveId]/org', () => {
 
       expect(response.status).toBe(403);
       expect((await response.json()).code).toBe('NOT_DRIVE_LEAD_OR_ORG_ADMIN');
+      expect(auditRequest).not.toHaveBeenCalled();
+      expect(broadcastDriveEvent).not.toHaveBeenCalled();
+    });
+
+    it('SEAT-9 (partial) DRV-4 (partial) [D-OW-33] a loosening change refused because the org is lapsed answers 402 org_lapsed and audits nothing', async () => {
+      vi.mocked(changeDriveVisibility).mockResolvedValue(ORG_LAPSED_REFUSAL);
+
+      const response = await PATCH(request('PATCH', { orgVisibility: 'OPEN' }), context);
+
+      expect(response.status).toBe(402);
+      expect(await response.json()).toEqual({ code: 'org_lapsed', error: ORG_LAPSED_REFUSAL.message });
       expect(auditRequest).not.toHaveBeenCalled();
       expect(broadcastDriveEvent).not.toHaveBeenCalled();
     });
