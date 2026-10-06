@@ -45,6 +45,11 @@ ENV NEXT_PUBLIC_REALTIME_URL=$NEXT_PUBLIC_REALTIME_URL
 # same Domain in both apps, or imago leaves a host-only duplicate beside it.
 ARG NEXT_PUBLIC_COOKIE_DOMAIN=""
 ENV NEXT_PUBLIC_COOKIE_DOMAIN=$NEXT_PUBLIC_COOKIE_DOMAIN
+# Where /api/* is proxied when nothing in front of this server routes it to
+# apps/web (Docker Compose). next build bakes it into the routes manifest, so
+# it is a build arg. Empty (CI's published image): the edge routes /api.
+ARG IMAGO_API_PROXY_ORIGIN=""
+ENV IMAGO_API_PROXY_ORIGIN=$IMAGO_API_PROXY_ORIGIN
 ENV NEXT_TELEMETRY_DISABLED=1
 
 RUN bun run --filter '@pagespace/db' build && bun run --filter '@pagespace/lib' build && bun run --filter '@pagespace/editor' build

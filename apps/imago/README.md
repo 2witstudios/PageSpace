@@ -33,8 +33,9 @@ Imago needs the rest of the stack, because it uses classic's database, sessions 
    - `WEB_APP_INTERNAL_URL`: where this server reaches `apps/web` (default
      `http://localhost:3000`). `next dev` has no edge in front of it, so it rewrites `/api/*`
      (outside the `/imago` basePath) to this origin itself. The browser then sees one origin and the
-     session cookie and CSRF token work as they do in production. The rewrite exists only under
-     `next dev`; production builds carry none, because the edge routes `/api` to `apps/web`.
+     session cookie and CSRF token work as they do in production. Production builds carry no
+     rewrite, because the edge routes `/api` to `apps/web`, unless built with
+     `IMAGO_API_PROXY_ORIGIN` (Docker Compose, below).
    - `NEXT_PUBLIC_WEB_APP_URL`, `WEB_APP_URL` and `NEXT_PUBLIC_REALTIME_URL`, as the example file
      explains (sign-in redirects, absolute links, the Socket.IO server).
 3. **Allow Imago's origin.** In dev, Imago (`:3006`) is a different origin from `apps/web`
@@ -54,6 +55,23 @@ Imago needs the rest of the stack, because it uses classic's database, sessions 
 4. **Start.** Run `bun run dev` from the repo root (every app except the control plane), then sign
    in to classic at `http://localhost:3000` and open `http://localhost:3006/imago`. A signed-out
    visit goes to classic's sign-in and comes back to the `/imago` address it came from.
+
+## Docker Compose
+
+`docker compose up` runs imago's standalone server on `http://localhost:3006/imago` with no edge in
+front of it, so nothing else routes the browser's `/api/*` calls to `apps/web`. The `imago` service
+therefore builds with `IMAGO_API_PROXY_ORIGIN=http://web:3000`, which `next build` bakes into the
+routes manifest as an `/api/*` proxy (a build arg, because the server never re-reads it). Leave it
+unset everywhere an edge routes `/api` (Caddy, Fly, Traefik): the published image is built without
+it, and a second `/api` route there would double-route. The service also gets `apps/web`'s
+`DATABASE_URL`, and the `DATABASE_SSL`, `DEPLOYMENT_MODE`, `SESSION_IDLE_TIMEOUT_MS` and `LOG_LEVEL`
+values `apps/web` reads from `.env`, but not `.env` itself: imago reads no secrets.
+
+In the repo-root `.env`, set `IMAGO_ENABLED=true` (and `NEXT_PUBLIC_IMAGO_ENABLED=true` for the
+"Try Imago" link), and add imago's origin to `ADDITIONAL_ALLOWED_ORIGINS=http://localhost:3006` so
+`apps/web` accepts its proxied mutating requests and `apps/realtime` its socket. Sign-in happens on
+classic (`http://localhost:3000`, `WEB_APP_URL`), whose cookie reaches `:3006` because localhost
+cookies ignore the port.
 
 ## Tests
 
