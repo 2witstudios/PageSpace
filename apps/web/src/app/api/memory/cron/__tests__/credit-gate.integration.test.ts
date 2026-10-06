@@ -226,6 +226,8 @@ function expectOneHoldPerCall(audit: HoldAudit, userId: string, calls: number): 
 describe('memory cron credit gate (Postgres)', () => {
   afterEach(async () => {
     setTimeoutSpy?.mockRestore();
+    // A settle still in flight would race the deletes below (deadlock on the wallet row).
+    await settles?.drain();
     settles?.restore();
     if (!dbAvailable || createdUserIds.length === 0) return;
     const ids = createdUserIds.splice(0);
@@ -323,17 +325,26 @@ describe('memory cron credit gate (Postgres)', () => {
     // The evaluator's settle is held until the gate opens: the ordering in which CI read
     // four holds placed and three removed (the route returned, that settle had not started).
     const gate = manualGate();
+    const ungated: Promise<unknown>[] = [];
     settles?.restore();
-    settles = captureUsageSettles((data, settle) =>
-      data.metadata?.feature === 'memory_integration' ? gate.opened.then(settle) : settle());
+    settles = captureUsageSettles((data, settle) => {
+      if (data.metadata?.feature === 'memory_integration') return gate.opened.then(settle);
+      const outcome = settle();
+      ungated.push(outcome);
+      return outcome;
+    });
 
     const { audit } = await withHoldAudit([exhausted, funded], () => POST(new Request('http://web:3000/api/memory/cron', { method: 'POST' })), async () => {
-      // The state CI read: every usage row there is, applied, and the evaluator's hold
-      // still live, because its settle has not written anything yet.
-      expect(await usageRowsApplied([exhausted, funded])).toBe(true);
-      expect(await usageRowsOf(funded)).toHaveLength(3);
-      expect(await liveHolds(funded)).toHaveLength(1);
-      gate.open();
+      try {
+        // The state CI read: the other three settles done, every usage row there is applied,
+        // and the evaluator's hold still live, because its settle has not written anything yet.
+        await Promise.all(ungated);
+        expect(await usageRowsApplied([exhausted, funded])).toBe(true);
+        expect(await usageRowsOf(funded)).toHaveLength(3);
+        expect(await liveHolds(funded)).toHaveLength(1);
+      } finally {
+        gate.open();
+      }
       await settled([exhausted, funded]);
     });
 
