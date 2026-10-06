@@ -105,6 +105,13 @@ import { cancelUpload, completeUpload, presignUpload } from './operations/upload
 import { createWorkflow, deleteWorkflow, listWorkflows, updateWorkflow } from './operations/workflows.js';
 import { execInWorkspace, listWorkspaces } from './operations/workspaces.js';
 import { getConversationSpendSource, getDriveWallet, listMyWallets } from './operations/wallets.js';
+import {
+  getOrgPolicies,
+  getOrganization,
+  listMyOrganizations,
+  listOrgDriveDirectory,
+  listOrgMembers,
+} from './operations/organizations.js';
 import type { Operation } from './registry/define.js';
 import { createRegistry, type OperationRegistry } from './registry/registry.js';
 import { buildRequest } from './transport/build-request.js';
@@ -260,6 +267,19 @@ const DEFAULT_OPERATIONS_MAP = {
   workspaces: {
     list: listWorkspaces,
     exec: execInWorkspace,
+  },
+  /**
+   * Organization READS only (Spec X-1): every org write needs a signed-in session on the
+   * server, so no org write is an operation. The five reads ride the web's requireOrgRole
+   * gate; a drive-scoped key is refused everywhere but the drive directory, which it sees
+   * filtered to its own scope.
+   */
+  organizations: {
+    list: listMyOrganizations,
+    get: getOrganization,
+    listMembers: listOrgMembers,
+    listDrives: listOrgDriveDirectory,
+    getPolicies: getOrgPolicies,
   },
   /**
    * Wallet READS only ([D-OW-26]): an access key never moves money or changes a spend
