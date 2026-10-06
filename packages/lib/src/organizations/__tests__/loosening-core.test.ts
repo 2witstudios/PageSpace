@@ -2,7 +2,9 @@ import { describe, it, expect } from 'vitest';
 import {
   driveAccessWidens,
   memberAccessWidens,
+  pageFlagsWiden,
   roleGrantWidens,
+  tokenScopeWidens,
   type DriveAccessSnapshot,
   type RoleGrant,
 } from '../loosening-core';
@@ -23,6 +25,8 @@ function snapshot(over: Partial<DriveAccessSnapshot> = {}): DriveAccessSnapshot 
     grants: {},
     roles: {},
     agents: {},
+    tokens: {},
+    pagePrivacy: {},
     ...over,
   };
 }
@@ -130,5 +134,59 @@ describe('driveAccessWidens', () => {
     expect(driveAccessWidens(base, { ...base, roles: { ...base.roles, r1: { grant: role(ALL), isDefault: false } } })).toBe(false);
     // A pending invitation grants nothing yet, so its role may change freely (accepting it is what is guarded).
     expect(driveAccessWidens(base, { ...base, roles: { ...base.roles, r2: { grant: role(ALL), isDefault: false } } })).toBe(false);
+  });
+});
+
+describe('tokenScopeWidens and token scopes in a drive snapshot', () => {
+  const roles = { before: { r1: { grant: role(VIEW), isDefault: false } }, after: { r1: { grant: role(EDIT), isDefault: false } } };
+  it('SEAT-9 (partial) [D-OW-33] review P1-1: a new scope, MEMBER→ADMIN, inherit→ADMIN, MEMBER→inherit and a wider custom role widen a key', () => {
+    expect(tokenScopeWidens(undefined, { role: 'MEMBER', customRoleId: null }, roles)).toBe(true);
+    expect(tokenScopeWidens({ role: 'MEMBER', customRoleId: null }, { role: 'ADMIN', customRoleId: null }, roles)).toBe(true);
+    expect(tokenScopeWidens({ role: null, customRoleId: null }, { role: 'ADMIN', customRoleId: null }, roles)).toBe(true);
+    expect(tokenScopeWidens({ role: 'MEMBER', customRoleId: null }, { role: null, customRoleId: null }, roles)).toBe(true);
+    // The same role id, widened between the snapshots.
+    expect(tokenScopeWidens({ role: 'MEMBER', customRoleId: 'r1' }, { role: 'MEMBER', customRoleId: 'r1' }, roles)).toBe(true);
+  });
+  it('SEAT-9 (partial) [D-OW-33] review P1-1: ADMIN→MEMBER, ADMIN→inherit, inherit→inherit and no change do not widen a key', () => {
+    const same = { before: roles.before, after: roles.before };
+    expect(tokenScopeWidens({ role: 'ADMIN', customRoleId: null }, { role: 'MEMBER', customRoleId: null }, same)).toBe(false);
+    expect(tokenScopeWidens({ role: 'ADMIN', customRoleId: null }, { role: null, customRoleId: null }, same)).toBe(false);
+    expect(tokenScopeWidens({ role: null, customRoleId: null }, { role: null, customRoleId: null }, same)).toBe(false);
+    expect(tokenScopeWidens({ role: 'MEMBER', customRoleId: 'r1' }, { role: 'MEMBER', customRoleId: 'r1' }, same)).toBe(false);
+  });
+  it('SEAT-9 (partial) [D-OW-33] a token scope raised in a snapshot widens the drive; one lowered does not', () => {
+    const base = snapshot({ tokens: { k1: { role: 'MEMBER', customRoleId: null } } });
+    expect(driveAccessWidens(base, { ...base, tokens: { k1: { role: 'ADMIN', customRoleId: null } } })).toBe(true);
+    expect(driveAccessWidens(base, { ...base, tokens: { ...base.tokens, k2: { role: null, customRoleId: null } } })).toBe(true);
+    expect(driveAccessWidens({ ...base, tokens: { k1: { role: 'ADMIN', customRoleId: null } } }, base)).toBe(false);
+  });
+});
+
+describe('page privacy and the Open drive default in a drive snapshot', () => {
+  it('SEAT-9 (partial) [D-OW-33] review P1-2: a page made non-private widens the drive; made private, or unchanged, does not', () => {
+    expect(driveAccessWidens(snapshot({ pagePrivacy: { p1: true } }), snapshot({ pagePrivacy: { p1: false } }))).toBe(true);
+    expect(driveAccessWidens(snapshot({ pagePrivacy: { p1: false } }), snapshot({ pagePrivacy: { p1: true } }))).toBe(false);
+    expect(driveAccessWidens(snapshot({ pagePrivacy: { p1: false } }), snapshot({ pagePrivacy: { p1: false } }))).toBe(false);
+  });
+
+  it('SEAT-9 (partial) [D-OW-33] review P2-3: on an OPEN org drive a wider default role widens (org members hold it with no row); on a Restricted drive an unheld default does not', () => {
+    const open = { ...DRIVE, orgVisibility: 'OPEN' as const };
+    const before = snapshot({ drive: open, roles: { d: { grant: role(VIEW), isDefault: true } } });
+    expect(driveAccessWidens(before, { ...before, roles: { d: { grant: role(EDIT), isDefault: true } } })).toBe(true);
+    // A new default wider than the plain role.
+    expect(driveAccessWidens(snapshot({ drive: open }), snapshot({ drive: open, roles: { d: { grant: role(EDIT), isDefault: true } } }))).toBe(true);
+    expect(driveAccessWidens(before, { ...before, roles: { d: { grant: role(null), isDefault: true } } })).toBe(false);
+    const restricted = snapshot({ roles: { d: { grant: role(VIEW), isDefault: true } } });
+    expect(driveAccessWidens(restricted, { ...restricted, roles: { d: { grant: role(EDIT), isDefault: true } } })).toBe(false);
+  });
+
+  it('SEAT-9 (partial) [D-OW-33] a drive that appears, a pending row, and an agent with an unresolved role are judged fail-closed', () => {
+    expect(driveAccessWidens({ ...snapshot(), drive: null }, snapshot())).toBe(true);
+    expect(driveAccessWidens(snapshot(), { ...snapshot(), drive: null })).toBe(false);
+    // An agent whose custom role no longer exists resolves to nothing; moving it onto a real role widens.
+    const gone = snapshot({ agents: { a1: { role: 'MEMBER', customRoleId: 'missing', includeContext: false } } });
+    expect(driveAccessWidens(gone, { ...gone, agents: { a1: { role: 'MEMBER', customRoleId: null, includeContext: false } } })).toBe(true);
+    expect(pageFlagsWiden(null, { canView: false, canEdit: false, canShare: false, canDelete: false })).toBe(false);
+    expect(pageFlagsWiden({ canView: true, canEdit: false, canShare: false, canDelete: false }, { canView: true, canEdit: false, canShare: false, canDelete: true })).toBe(true);
   });
 });

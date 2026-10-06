@@ -18,6 +18,7 @@ import { drives } from '@pagespace/db/schema/core';
 import { driveRoles } from '@pagespace/db/schema/members';
 import { organizations } from '@pagespace/db/schema/organizations';
 import { followDriveDefaultRole } from '../permissions/org-drive-membership';
+import { driveAccessLockKey } from '../permissions/org-lapse-guard';
 import type { OrgDriveVisibility } from '@pagespace/db/schema/core';
 import { getOrgPolicies } from './policy-reader';
 import { OPEN_ROLE_FLOOR_MESSAGES, openDefaultRoleMeetsFloor, type OpenRoleFloor } from './policies-core';
@@ -107,7 +108,8 @@ async function lockForRoleWrite(tx: Executor, driveId: string): Promise<void> {
       throw error;
     });
     if (settled) {
-      await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`drive-roles:${driveId}`}, 0))`);
+      // The same key guardDriveAccess takes first ([D-OW-33]), so a lapse-guarded write and a role write serialize.
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${driveAccessLockKey(driveId)}, 0))`);
       return;
     }
   }

@@ -33,6 +33,7 @@ import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activit
 import { createChangeGroupId } from '@pagespace/lib/monitoring/change-group';
 import { syncTaskItemOnMove, scrubDriveScopedTaskAssociations } from '@/services/api/task-sync-service';
 import { holdOrgGuestsUnderPolicy, kickSuspendedGuests, type GuestHoldItem } from '@pagespace/lib/permissions/guest-holds';
+import { OrgLapsedError, checkDriveMayLoosen, isOrgLapsedError } from '@pagespace/lib/permissions/org-lapse-guard';
 
 /** Pages per POL-2 guest check: bounds each statement's bind list. */
 const GUEST_PAGE_CHUNK = 500;
@@ -97,7 +98,9 @@ export type CrossDriveMoveFailureCode =
   | 'SOURCE_PAGE_FORBIDDEN'
   | 'CIRCULAR_REFERENCE'
   | 'MEMORY_PAGE_PROTECTED'
-  | 'SUBTREE_TOO_DEEP';
+  | 'SUBTREE_TOO_DEEP'
+  // [D-OW-33] ruling P2-4: a page leaving a lapsed org's drive widens its audience (and writes read-only content).
+  | 'ORG_LAPSED';
 
 export interface MovedPageSummary {
   id: string;
@@ -121,7 +124,7 @@ export type CrossDriveMoveResult =
   | {
       success: false;
       code: CrossDriveMoveFailureCode;
-      status: 400 | 403 | 404;
+      status: 400 | 402 | 403 | 404;
       message: string;
     };
 
@@ -130,7 +133,7 @@ class PageSubtreeTooDeepError extends Error {}
 
 function fail(
   code: CrossDriveMoveFailureCode,
-  status: 400 | 403 | 404,
+  status: 400 | 402 | 403 | 404,
   message: string,
 ): CrossDriveMoveResult {
   return { success: false, code, status, message };
@@ -307,6 +310,12 @@ export async function movePagesToDrive(
 
   try {
     await db.transaction(async (tx) => {
+      // [D-OW-33] ruling P2-4: moving pages OUT of a lapsed org's drive puts its content where another drive's members
+      // read it: refused (checked against each SOURCE drive, in this transaction). A move within one drive, or into a
+      // lapsed org's drive from elsewhere, is not this. Exporting data (account / GDPR export) stays available.
+      for (const sourceDriveId of new Set(sourcePages.map((p) => p.driveId))) {
+        if (sourceDriveId !== targetDriveId && (await checkDriveMayLoosen(tx, sourceDriveId, true))) throw new OrgLapsedError();
+      }
       const cascadeRoots: string[] = [];
 
       for (const page of sourcePages) {
@@ -404,6 +413,7 @@ export async function movePagesToDrive(
     if (error instanceof PageSubtreeTooDeepError) {
       return fail('SUBTREE_TOO_DEEP', 400, error.message);
     }
+    if (isOrgLapsedError(error)) return fail('ORG_LAPSED', 402, error.message);
     throw error;
   }
 

@@ -17,6 +17,8 @@ import { createId } from '@paralleldrive/cuid2';
 import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { createChangeGroupId } from '@pagespace/lib/monitoring/change-group';
 import { ensureTaskItemForPage } from '@/services/api/task-sync-service';
+import { OrgLapsedError, checkDriveMayLoosen, isOrgLapsedError } from '@pagespace/lib/permissions/org-lapse-guard';
+import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -151,6 +153,12 @@ export async function POST(request: Request) {
 
     // Copy pages in transaction
     await db.transaction(async (tx) => {
+      // [D-OW-33] ruling P2-4: copying pages OUT of a lapsed org's drive puts its content where another drive's members
+      // read it: refused, checked against each SOURCE drive in this transaction. A copy within the same drive is not
+      // this. Exporting data (account / GDPR export) stays available.
+      for (const sourceDriveId of new Set(sourcePages.map((p) => p.driveId))) {
+        if (sourceDriveId !== targetDriveId && (await checkDriveMayLoosen(tx, sourceDriveId, true))) throw new OrgLapsedError();
+      }
       for (const page of sourcePages) {
         const newPageId = createId();
         copiedPages.push({ newId: newPageId, sourceTitle: page.title, sourceId: page.id });
@@ -260,6 +268,7 @@ export async function POST(request: Request) {
       copiedCount,
     });
   } catch (error) {
+    if (isOrgLapsedError(error)) return orgLapsedResponse();
     loggers.api.error('Error bulk copying pages:', error as Error);
     return NextResponse.json(
       { error: 'Failed to copy pages' },

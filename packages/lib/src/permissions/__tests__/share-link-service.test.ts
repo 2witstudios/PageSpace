@@ -199,7 +199,7 @@ describe('createDriveShareLink', () => {
     }
   });
 
-  it('SEAT-9 (partial) [D-OW-33] while the drive\'s org is lapsed no link is created: ORG_LAPSED with the SEAT-9 copy, nothing inserted', async () => {
+  it('SEAT-9 (partial) [D-OW-33] while the drive\'s org is lapsed no link is created: ORG_LAPSED with the lapse copy, nothing inserted', async () => {
     vi.mocked(isDriveOwnerOrAdmin).mockResolvedValue(true);
     makeInsertChain([{ id: LINK_ID }]);
     checkDriveMayLoosen.mockResolvedValueOnce({ ok: false, code: 'org_lapsed', status: 402, message: 'lapsed copy' });

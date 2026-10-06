@@ -446,7 +446,7 @@ describe('POST /api/pages/[pageId]/permissions', () => {
       expect(createPermissionNotification).not.toHaveBeenCalled();
     });
 
-    it('SEAT-9 (partial) [D-OW-33] a lapsed org: 402 org_lapsed with the SEAT-9 copy; nothing granted, nothing notified', async () => {
+    it('SEAT-9 (partial) [D-OW-33] a lapsed org: 402 org_lapsed with the lapse copy; nothing granted, nothing notified', async () => {
       vi.mocked(grantPagePermission).mockResolvedValue({ ok: false, error: { code: 'ORG_LAPSED', message: 'lapsed copy' } });
 
       const response = await POST(createRequest({ userId: mockTargetUserId, canView: true }), { params: mockParams });

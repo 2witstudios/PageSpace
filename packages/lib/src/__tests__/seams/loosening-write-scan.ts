@@ -3,7 +3,8 @@
  *
  * A "loosening write" is any insert or update of a table whose rows grant access in a drive or an org:
  * drive members, page grants, share links, drive roles, drive agents, org members and org invitations;
- * an insert of a pending invitation or a custom domain; and an update of `drives` that moves its lead (ownerId), its org (orgId) or its visibility
+ * an insert of a pending invitation or a custom domain; an update of `pages` that sets `isPrivate` or `driveId`; and
+ * an update of `drives` that moves its lead (ownerId), its org (orgId) or its visibility
  * (orgVisibility). A delete only ever removes access, so it is not a loosening write.
  *
  * The scanner parses each file with the TypeScript compiler (not a line regex), so it can name the
@@ -26,6 +27,7 @@ export const ACCESS_TABLES = [
   'driveAgentMembers',
   'orgMembers',
   'orgInvitations',
+  'mcpTokenDrives',
 ] as const;
 
 /**
@@ -37,9 +39,16 @@ export const INSERT_ONLY_TABLES = ['pendingInvites', 'pendingPageInvites', 'cust
 /** The `drives` columns whose update can widen who reaches the drive. */
 export const DRIVE_ACCESS_COLUMNS = ['ownerId', 'orgId', 'orgVisibility'] as const;
 
+/**
+ * The `pages` columns whose update can widen who reads a page: `isPrivate` (made readable by the whole drive) and
+ * `driveId` (moved into another drive's audience). Only a LITERAL key is matched: the generic page mutation's
+ * non-literal update is ledgered by its callers (the PATCH route and rollback guard it).
+ */
+export const PAGE_ACCESS_COLUMNS = ['isPrivate', 'driveId'] as const;
+
 /** A raw-SQL write of an access table (snake_case table names). */
 const RAW_SQL_WRITE =
-  /\b(?:insert\s+into|update)\s+"?(?:drive_members|page_permissions|drive_share_links|page_share_links|drive_roles|drive_agent_members|org_members|org_invitations)\b/i;
+  /\b(?:insert\s+into|update)\s+"?(?:drive_members|page_permissions|drive_share_links|page_share_links|drive_roles|drive_agent_members|org_members|org_invitations|mcp_token_drives)\b/i;
 
 export interface LooseningWrite {
   file: string;
@@ -130,6 +139,7 @@ export function scanSource(file: string, source: string): LooseningWrite[] {
   const tables = new Set<string>(ACCESS_TABLES);
   const insertOnly = new Set<string>(INSERT_ONLY_TABLES);
   const driveCols = new Set<string>(DRIVE_ACCESS_COLUMNS);
+  const pageCols = new Set<string>(PAGE_ACCESS_COLUMNS);
 
   const visit = (node: ts.Node): void => {
     if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
@@ -138,6 +148,12 @@ export function scanSource(file: string, source: string): LooseningWrite[] {
       if ((method === 'insert' || method === 'update') && arg && ts.isIdentifier(arg)) {
         if (tables.has(arg.text) || (method === 'insert' && insertOnly.has(arg.text))) {
           out.push({ file, line: lineOf(node), fn: nameOf(enclosingFunction(node)), what: `${method}(${arg.text})` });
+        } else if (arg.text === 'pages' && method === 'update') {
+          const keys = setKeysAfter(node);
+          const hit = keys === null ? [] : keys.filter((k) => pageCols.has(k));
+          if (hit.length > 0) {
+            out.push({ file, line: lineOf(node), fn: nameOf(enclosingFunction(node)), what: `update(pages).set({ ${hit.join(', ')} })` });
+          }
         } else if (arg.text === 'drives' && method === 'update') {
           const keys = setKeysAfter(node);
           const hit = keys === null ? [] : keys.filter((k) => driveCols.has(k) || k === '...' || k === '<non-literal>');

@@ -13,7 +13,7 @@ import { eq } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
 import { getUsersWhoCanViewPage } from '@pagespace/lib/permissions/permissions';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
-import { checkPageMayLoosen } from '@pagespace/lib/permissions/org-lapse-guard';
+import { isOrgLapsedError } from '@pagespace/lib/permissions/org-lapse-guard';
 import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
@@ -105,12 +105,6 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
         columns: { isPrivate: true },
       });
       previousIsPrivate = currentPage?.isPrivate;
-      // [D-OW-33] making a private page readable by every drive member loosens access: refused while the drive's org
-      // is lapsed. Making a page private only restricts and still works. (The write itself is the generic page
-      // mutation, which runs its own transaction; this reads the lapse just before it.)
-      if (isPrivateUpdate === false && previousIsPrivate === true && (await checkPageMayLoosen(db, pageId, true))) {
-        return orgLapsedResponse();
-      }
     }
 
     // Build the full updates object, applying isPrivate with skipPermissionCheck when present
@@ -200,6 +194,8 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
 
     return jsonResponse(result.page);
   } catch (error) {
+    // [D-OW-33] the page was private and its drive's org is lapsed: making it readable by the drive is refused.
+    if (isOrgLapsedError(error)) return orgLapsedResponse();
     loggers.api.error('Error updating page:', error as Error);
     if (error instanceof z.ZodError) {
       return NextResponse.json({ error: error.issues }, { status: 400 });

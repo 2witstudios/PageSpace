@@ -17,12 +17,22 @@ import { and, eq, inArray, isNull } from '@pagespace/db/operators';
 import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
 import { users } from '@pagespace/db/schema/auth';
-import { drives } from '@pagespace/db/schema/core';
+import { drives, pages } from '@pagespace/db/schema/core';
 import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
 import { organizations, orgMembers, orgSubscriptions } from '@pagespace/db/schema/organizations';
 import { orgGuestHolds } from '@pagespace/db/schema/org-guest-holds';
 import { pendingInvites } from '@pagespace/db/schema/pending-invites';
 import { pendingPageInvites } from '@pagespace/db/schema/pending-page-invites';
+// Page writes snapshot content to object storage (no credentials here): only those two storage calls are stubbed; the
+// page rows, their revisions and every access table stay real.
+vi.mock('@pagespace/lib/services/page-version-service', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@pagespace/lib/services/page-version-service')>()),
+  createPageVersion: vi.fn(async () => ({ id: 'test-version', contentRef: 'test-ref', contentSize: 0, compressed: false, storedSize: 0, compressionRatio: 1 })),
+}));
+vi.mock('@pagespace/lib/services/page-content-store', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@pagespace/lib/services/page-content-store')>()),
+  writePageContent: vi.fn(async (content: string, format: string) => ({ ref: `${format}:test-${content.length}`, size: content.length, compressed: false, storedSize: content.length, compressionRatio: 1 })),
+}));
 vi.mock('@pagespace/lib/monitoring/activity-logger', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@pagespace/lib/monitoring/activity-logger')>()),
   getActorInfo: vi.fn(async () => ({ actorEmail: 'a@x', actorDisplayName: 'A' })),
@@ -35,7 +45,10 @@ import { pageInviteRepository } from '@/lib/repositories/page-invite-repository'
 import { applyPermRestoreOps, type RestoreAdmission } from '../restore-permissions-service';
 import { defaultRollbackDeps, withTx, type RollbackDeps } from '../rollback/deps';
 import { rollbackMemberChange, rollbackPermissionChange } from '../rollback/rollback-executors';
-import { redoPermissionChange } from '../rollback/redo-executors';
+import { redoPageChange, redoPermissionChange } from '../rollback/redo-executors';
+import { rollbackPageChange } from '../rollback/rollback-executors';
+import { pageService } from '../page-service';
+import { movePagesToDrive } from '../page-cross-drive-move-service';
 import type { ActivityLogForRollback } from '../rollback/types';
 
 const created = { userIds: [] as string[], driveIds: [] as string[], orgIds: [] as string[] };
@@ -285,5 +298,61 @@ describe('a backup restore (inventory #26)', () => {
     // A restore whose backup no longer has them removes them: restricting, applied while lapsed.
     await restore([], [w.member]);
     expect(await memberRowOf(w.member)).toBeNull();
+  });
+});
+
+const isPrivateOf = async (pageId: string) => (await db.select({ isPrivate: pages.isPrivate }).from(pages).where(eq(pages.id, pageId)))[0].isPrivate;
+const PAGE_CTX = () => ({ userId: w.owner, changeGroupId: createId(), changeGroupType: 'user' as const, source: 'restore' as const, metadata: {} });
+
+/** As executeRollback runs a page undo/redo: deps.guardDriveAccess scoped to the page's privacy. */
+function guardedPageRollback<T>(pageId: string, run: (d: RollbackDeps) => Promise<T>): Promise<T> {
+  const deps = defaultRollbackDeps();
+  return deps.guardDriveAccess(deps.db, w.orgDrive, { members: false, grants: false, agents: false, tokens: false, pages: [pageId] }, (t) => run(withTx(deps, t)));
+}
+
+describe('page privacy (review P1-2, P2-2)', () => {
+  const madePrivate = () => activity({ operation: 'update', resourceType: 'page', resourceId: w.orgPage, pageId: w.orgPage, driveId: w.orgDrive, updatedFields: ['isPrivate'], previousValues: { isPrivate: false }, newValues: { isPrivate: true } });
+  const madePublic = () => activity({ operation: 'rollback', rollbackSourceOperation: 'update', resourceType: 'page', resourceId: w.orgPage, pageId: w.orgPage, driveId: w.orgDrive, updatedFields: ['isPrivate'], previousValues: { isPrivate: true }, newValues: { isPrivate: false } });
+
+  it('SEAT-9 (partial) [D-OW-33] review P1-2: undoing "made private" and redoing "made public" are refused while lapsed (the page stays private); paid, the undo makes it public again', async () => {
+    await db.update(pages).set({ isPrivate: true }).where(eq(pages.id, w.orgPage));
+    await lapse();
+    await expect(guardedPageRollback(w.orgPage, (d) => rollbackPageChange(d, madePrivate(), null, PAGE_CTX()))).rejects.toBeInstanceOf(OrgLapsedError);
+    expect(await isPrivateOf(w.orgPage)).toBe(true);
+    await expect(guardedPageRollback(w.orgPage, (d) => redoPageChange(d, madePublic(), { isPrivate: false }, 'update', PAGE_CTX()))).rejects.toBeInstanceOf(OrgLapsedError);
+    expect(await isPrivateOf(w.orgPage)).toBe(true);
+    await pay();
+    await guardedPageRollback(w.orgPage, (d) => rollbackPageChange(d, madePrivate(), null, PAGE_CTX()));
+    expect(await isPrivateOf(w.orgPage)).toBe(false);
+  });
+
+  it('SEAT-9 (partial) [D-OW-33] review P2-2: pageService.updatePage refuses isPrivate:false INSIDE its transaction while lapsed (the page stays private); making a page private still works; paid, it can be made public', async () => {
+    await db.update(pages).set({ isPrivate: true }).where(eq(pages.id, w.orgPage));
+    await lapse();
+    await expect(pageService.updatePage(w.orgPage, w.owner, { isPrivate: false }, { skipPermissionCheck: true })).rejects.toBeInstanceOf(OrgLapsedError);
+    expect(await isPrivateOf(w.orgPage)).toBe(true);
+    const other = (await factories.createPage(w.orgDrive)).id;
+    expect(await pageService.updatePage(other, w.owner, { isPrivate: true }, { skipPermissionCheck: true })).toMatchObject({ success: true });
+    expect(await isPrivateOf(other)).toBe(true);
+    await pay();
+    expect(await pageService.updatePage(w.orgPage, w.owner, { isPrivate: false }, { skipPermissionCheck: true })).toMatchObject({ success: true });
+    expect(await isPrivateOf(w.orgPage)).toBe(false);
+  });
+});
+
+describe('pages leaving a lapsed org drive (review P2-4 ruling)', () => {
+  it('SEAT-9 (partial) [D-OW-33] moving a page OUT of a lapsed org drive into another drive is refused (402 ORG_LAPSED, nothing moved); a move within the drive works; paid, the move goes through', async () => {
+    const personal = (await factories.createDrive(w.owner)).id;
+    created.driveIds.push(personal);
+    const allow = { isDriveInScope: () => true, canAdministerDrive: async () => true, canEditPage: async () => true };
+    const move = (targetDriveId: string) => movePagesToDrive({ pageIds: [w.orgPage], targetDriveId, targetParentId: null, userId: w.owner, authorize: allow });
+    const driveOf = async () => (await db.select({ driveId: pages.driveId }).from(pages).where(eq(pages.id, w.orgPage)))[0].driveId;
+    await lapse();
+    expect(await move(personal)).toMatchObject({ success: false, code: 'ORG_LAPSED', status: 402 });
+    expect(await driveOf()).toBe(w.orgDrive);
+    expect(await move(w.orgDrive)).toMatchObject({ success: true });
+    await pay();
+    expect(await move(personal)).toMatchObject({ success: true });
+    expect(await driveOf()).toBe(personal);
   });
 });

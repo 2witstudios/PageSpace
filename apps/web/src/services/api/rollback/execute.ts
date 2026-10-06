@@ -15,6 +15,7 @@ import type { ActivityAction, ActivityActionResult, ActivityActionPreview } from
 import type { DeferredWorkflowTrigger, ActivityOperation } from '@pagespace/lib/monitoring/activity-logger';
 import type { RollbackContext } from '@pagespace/lib/permissions/rollback-permissions';
 import { withTx, type RollbackDeps, type PageUpdateContext, type PageMutationMeta } from './deps';
+import type { DriveAccessScope } from '@pagespace/lib/permissions/org-lapse-guard';
 import { guardOpenRoleFloor } from '@pagespace/lib/organizations/open-role-floor';
 import { AGENT_CONFIG_ROLLBACK_FIELDS } from './operations';
 import { isRollingBackRollback } from './target-values';
@@ -58,6 +59,21 @@ export async function previewRollback(
   options?: { force?: boolean; undoGroupActivityIds?: string[] }
 ): Promise<ActivityActionPreview> {
   return previewActivityAction(deps, 'rollback', activityId, userId, context, options);
+}
+
+/** [D-OW-33] a page undo/redo can only change that page's privacy: snapshot just it. */
+const PAGE_SCOPE = (pageId: string): DriveAccessScope => ({ members: false, grants: false, agents: false, tokens: false, pages: [pageId] });
+
+/**
+ * [D-OW-33] a member or grant undo/redo touches one person: snapshot just them (P3). The person is the activity's
+ * target; with none recorded, the whole drive (fail closed: a full snapshot judges everything).
+ */
+function personScope(activity: { metadata: unknown; previousValues: unknown; newValues: unknown }): DriveAccessScope {
+  const pick = (v: unknown): string | null =>
+    v && typeof v === 'object' && typeof (v as Record<string, unknown>).userId === 'string' ? ((v as Record<string, unknown>).userId as string) : null;
+  const meta = activity.metadata && typeof activity.metadata === 'object' ? (activity.metadata as Record<string, unknown>) : null;
+  const target = (typeof meta?.targetUserId === 'string' ? meta.targetUserId : null) ?? pick(activity.previousValues) ?? pick(activity.newValues);
+  return target ? { users: [target] } : {};
 }
 
 /** POL-6's floor guard around a role write, when the role belongs to a drive. */
@@ -128,11 +144,12 @@ export async function executeRollback(
    * [D-OW-33] Run an access write (member, permission, role, drive) under the lapse guard: in a savepoint of the
    * caller's transaction (or a transaction of its own), undone with OrgLapsedError when it gave anyone more on the
    * drive while the drive's org is lapsed. Restoring LESS access (undoing a grant, re-removing a member) still applies.
+   * `scope` narrows what the snapshots read (one person for a member or grant change, one page for a page change).
    */
-  const guardedAccessWrite = <T>(driveId: string | null, run: (d: RollbackDeps) => Promise<T>): Promise<T> =>
+  const guardedAccessWrite = <T>(driveId: string | null, scope: DriveAccessScope, run: (d: RollbackDeps) => Promise<T>): Promise<T> =>
     driveId === null
       ? inTransaction(run)
-      : deps.guardDriveAccess(tx ?? deps.db, driveId, {}, (t) => run(withTx(deps, t)));
+      : deps.guardDriveAccess(tx ?? deps.db, driveId, scope, (t) => run(withTx(deps, t)));
   const changeGroupId = deps.genChangeGroupId();
   const changeGroupType = deps.inferChangeGroupType({ isAiGenerated: false });
 
@@ -180,23 +197,26 @@ export async function executeRollback(
 
     switch (activity.resourceType) {
       case 'page': {
-        const result = rollingBackRollback
-          ? await redoPageChange(txDeps, activity, preview.targetValues, effectiveSourceOperation, pageUpdateContext)
-          : await rollbackPageChange(txDeps, activity, resolvedContentSnapshot, pageUpdateContext);
+        // [D-OW-33] a page undo or redo can restore `isPrivate: false` (undoing "made private", redoing "made public"):
+        // the page's privacy is in the snapshot, so a page made readable by the whole drive is refused while lapsed.
+        const pageId = activity.pageId ?? activity.resourceId;
+        const result = await guardedAccessWrite(await accessDriveId(deps, { driveId: activity.driveId, pageId }), PAGE_SCOPE(pageId), (d) => rollingBackRollback
+          ? redoPageChange(d, activity, preview.targetValues, effectiveSourceOperation, pageUpdateContext)
+          : rollbackPageChange(d, activity, resolvedContentSnapshot, pageUpdateContext));
         restoredValues = result.restoredValues;
         pageMutationMeta = result.pageMutationMeta;
         break;
       }
 
       case 'drive':
-        restoredValues = await guardedAccessWrite(activity.driveId, (d) => rollingBackRollback
+        restoredValues = await guardedAccessWrite(activity.driveId, {}, (d) => rollingBackRollback
           ? redoDriveChange(d, activity, preview.targetValues, effectiveSourceOperation, pageUpdateContext)
           : rollbackDriveChange(d, activity, pageUpdateContext));
         break;
 
       case 'permission':
         // POL-2: a re-entering grant is decided by the org's guests policy inside a transaction (deps.admitReentry).
-        restoredValues = await guardedAccessWrite(await accessDriveId(deps, activity), (d) => rollingBackRollback
+        restoredValues = await guardedAccessWrite(await accessDriveId(deps, activity), personScope(activity), (d) => rollingBackRollback
           ? redoPermissionChange(d, activity, preview.targetValues, effectiveSourceOperation)
           : rollbackPermissionChange(d, activity));
         break;
@@ -212,7 +232,7 @@ export async function executeRollback(
 
       case 'member':
         // POL-2: a re-entering member row is decided by the org's guests policy inside a transaction.
-        restoredValues = await guardedAccessWrite(activity.driveId, (d) => rollingBackRollback
+        restoredValues = await guardedAccessWrite(activity.driveId, personScope(activity), (d) => rollingBackRollback
           ? redoMemberChange(d, activity, preview.targetValues, effectiveSourceOperation)
           : rollbackMemberChange(d, activity));
         break;
@@ -222,7 +242,7 @@ export async function executeRollback(
         // the org's floor like any role write, inside a transaction so a refusal writes nothing. [D-OW-33] and under
         // the lapse guard, like every access write.
         const roleDriveId = activity.driveId;
-        restoredValues = await guardedAccessWrite(roleDriveId, (d) =>
+        restoredValues = await guardedAccessWrite(roleDriveId, { grants: false }, (d) =>
           guardOpenRoleFloorIfDrive(d, roleDriveId, () => rollingBackRollback
             ? redoRoleChange(d, activity, preview.targetValues, effectiveSourceOperation)
             : rollbackRoleChange(d, activity)));

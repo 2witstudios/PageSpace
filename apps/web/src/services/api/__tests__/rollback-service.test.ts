@@ -841,7 +841,8 @@ describe('rollback-service', () => {
 
       const result = await executeRollback(mockActivityId, mockUserId, 'page');
 
-      expect(guardDriveAccess).toHaveBeenCalledWith(expect.anything(), mockDriveId, {}, expect.any(Function));
+      // Scoped to the person the revoke was about (review P3).
+      expect(guardDriveAccess).toHaveBeenCalledWith(expect.anything(), mockDriveId, { users: ['target_user'] }, expect.any(Function));
       expect(result.success).toBe(false);
       expect(result.message).toBe(ORG_LAPSED_MESSAGE);
     });

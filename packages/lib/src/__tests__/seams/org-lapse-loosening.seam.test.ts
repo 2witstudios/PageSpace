@@ -143,8 +143,8 @@ export const LOOSENING_WRITE_LEDGER: Readonly<Record<string, Verdict>> = {
     by: ['apps/web/src/app/api/drives/[driveId]/backups/[backupId]/restore/route.ts#POST'],
   },
   'packages/lib/src/permissions/guest-holds.ts#reinsertHeldAccess': {
-    exempt: "re-inserts a parked guest: reached from restoreOrgGuests (a guests-policy loosening, gated in policies.ts) and an approved page grant (SEAT-9 gated in claimGuestApprovalDecision)",
-    writes: ['insert(driveMembers)', 'insert(pagePermissions)'],
+    exempt: "re-inserts a parked guest (member row, grants, token scopes): reached from restoreOrgGuests (a guests-policy loosening, gated in policies.ts) and an approved page grant (SEAT-9 gated in claimGuestApprovalDecision)",
+    writes: ['insert(driveMembers)', 'insert(pagePermissions)', 'insert(mcpTokenDrives)'],
   },
   'packages/lib/src/permissions/page-grant-admission.ts#completeApprovedPageGrant': {
     exempt: 'replays an approved guest request; approving is SEAT-9 gated (claimGuestApprovalDecision refuses while lapsed)',
@@ -161,6 +161,22 @@ export const LOOSENING_WRITE_LEDGER: Readonly<Record<string, Verdict>> = {
   'apps/web/src/app/api/ai/page-agents/create/route.ts#POST': { exempt: NEW_AGENT_IN_ITS_OWN_DRIVE, writes: ['insert(driveAgentMembers)'] },
   'apps/web/src/lib/ai/tools/page-write-tools.ts#create_page.execute': { exempt: NEW_AGENT_IN_ITS_OWN_DRIVE, writes: ['insert(driveAgentMembers)'] },
   'apps/web/src/services/api/page-service.ts#pageService.createPage': { exempt: NEW_AGENT_IN_ITS_OWN_DRIVE, writes: ['insert(driveAgentMembers)'] },
+  // ── MCP token (app) drive scopes (#28, review P1-1) ─────────────────────────────────────────────────
+  // An explicit token role is NOT bounded by the owner's access (resolveExplicitAppRoleAccess): the drive admin's
+  // re-role of a key loosens and is guarded (guardDriveAccess, which now snapshots token scopes).
+  'apps/web/src/app/api/drives/[driveId]/apps/[tokenId]/route.ts#PATCH': SELF,
+  'apps/web/src/lib/repositories/session-repository.ts#run': {
+    exempt: "the token OWNER's own mint and re-scope (createMcpTokenWithDriveScopes / rescope): bounded by the owner's own access to each drive (validateDriveScopeAccess in api/auth/mcp-tokens)",
+    writes: ['insert(mcpTokenDrives)'],
+  },
+  // ── pages leaving a drive (review P2-4, orchestrator ruling) ───────────────────────────────────────────
+  // Moving (or copying, api/pages/bulk-copy) pages OUT of a lapsed org's drive writes read-only content and widens
+  // its audience: refused, checked against the SOURCE drive's org. Data export (account / GDPR) stays available.
+  'apps/web/src/services/api/page-cross-drive-move-service.ts#movePagesToDrive': SELF,
+  'apps/web/src/services/api/page-cross-drive-move-service.ts#cascadeDriveIdToDescendants': {
+    guard: 'caller',
+    by: ['apps/web/src/services/api/page-cross-drive-move-service.ts#movePagesToDrive'],
+  },
   // ── custom domains (#29) ────────────────────────────────────────────────────────────────────────────────
   'apps/web/src/app/api/drives/[driveId]/domains/route.ts#POST': SELF,
   // ── drives: other writers of ownerId / orgId / visibility ─────────────────────────────────────────────
@@ -326,6 +342,10 @@ describe('seam: [D-OW-33] every write that can loosen access passes the lapse gu
     expect(shapes('function f() { return db.update(drives).set({ ...patch }); }')).toEqual(['f:update(drives).set({ ... })']);
     expect(shapes('function g() { return db.update(drives).set(patch); }')).toEqual(['g:update(drives).set({ <non-literal> })']);
     expect(shapes('function h() { return db.insert(pendingInvites).values({}); }')).toEqual(['h:insert(pendingInvites)']);
+    expect(shapes('function t() { return db.update(mcpTokenDrives).set({ role: "ADMIN" }); }')).toEqual(['t:update(mcpTokenDrives)']);
+    expect(shapes('function p() { return db.update(pages).set({ isPrivate: false }); }')).toEqual(['p:update(pages).set({ isPrivate })']);
+    expect(shapes('function q() { return db.update(pages).set({ driveId: d, defaultEnvId: null }); }')).toEqual(['q:update(pages).set({ driveId })']);
+    expect(shapes('function r() { return db.update(pages).set({ title: "x" }); }')).toEqual([]);
     expect(shapes('function i() { return sql`insert into drive_members (id) values (1)`; }')).toEqual(['i:raw sql']);
     expect(shapes('const tools = { create_page: tool({ execute: async () => db.insert(driveAgentMembers).values({}) }) };')).toEqual(['create_page.execute:insert(driveAgentMembers)']);
     // Restricting or unrelated: deletes, reads, a drives rename, a pending invite consumed.

@@ -29,6 +29,7 @@ import {
   MEMORY_PAGE_DELETE_ERROR,
   MEMORY_PAGE_MOVE_ERROR,
 } from '@pagespace/lib/memory/memory-pages';
+import { OrgLapsedError, checkPageMayLoosen } from '@pagespace/lib/permissions/org-lapse-guard';
 
 /**
  * Helper to convert DB page result to PageData type
@@ -564,15 +565,28 @@ export const pageService = {
           resourceType: options?.context?.resourceType,
         };
 
-        await applyPageMutation({
+        const mutation = {
           pageId,
-          operation: 'update',
+          operation: 'update' as const,
           updates: processedUpdates,
           updatedFields,
           expectedRevision: options?.expectedRevision,
           context: mutationContext,
           source: options?.source,
-        });
+        };
+        if (processedUpdates.isPrivate === false) {
+          // [D-OW-33] making a page readable by the whole drive loosens access: judged INSIDE the write's transaction,
+          // against the page row locked FOR UPDATE, so a concurrent "make private" cannot slip between the check and
+          // the write. Refused (OrgLapsedError) only when the page is private now and its drive's org is lapsed.
+          const result = await db.transaction(async (tx) => {
+            const [current] = await tx.select({ isPrivate: pages.isPrivate }).from(pages).where(eq(pages.id, pageId)).for('update');
+            if (current?.isPrivate === true && (await checkPageMayLoosen(tx, pageId, true))) throw new OrgLapsedError();
+            return applyPageMutation({ ...mutation, tx: tx as unknown as typeof db });
+          });
+          result.deferredTrigger?.();
+        } else {
+          await applyPageMutation(mutation);
+        }
       } catch (error) {
         if (error instanceof PageRevisionMismatchError) {
           return {

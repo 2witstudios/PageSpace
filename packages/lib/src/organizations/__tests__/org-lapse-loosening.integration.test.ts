@@ -15,9 +15,9 @@ import { describe, it, expect, beforeAll, beforeEach, afterEach, afterAll, vi } 
 import { createId } from '@paralleldrive/cuid2';
 import { db, pool } from '@pagespace/db/db';
 import { and, eq, inArray, or } from '@pagespace/db/operators';
-import { users } from '@pagespace/db/schema/auth';
+import { mcpTokens, users } from '@pagespace/db/schema/auth';
 import { drives, pages } from '@pagespace/db/schema/core';
-import { driveAgentMembers, driveMembers, driveRoles, pagePermissions } from '@pagespace/db/schema/members';
+import { driveAgentMembers, driveMembers, driveRoles, mcpTokenDrives, pagePermissions } from '@pagespace/db/schema/members';
 import { activityLogs } from '@pagespace/db/schema/monitoring';
 import { orgGuestHolds } from '@pagespace/db/schema/org-guest-holds';
 import { organizations, orgInvitations, orgMembers, orgSubscriptions } from '@pagespace/db/schema/organizations';
@@ -45,6 +45,7 @@ import { answerDriveJoinRequest, requestToJoinDrive } from '../../services/drive
 import { changeOrgDriveLead } from '../../services/org-drive-service';
 import { orgDriveServiceDeps } from '../../services/org-drive-service-deps';
 import { createDriveRole, deleteDriveRole, updateDriveRole } from '../../services/drive-role-service';
+import { changeDriveVisibility } from '../../services/org-drive-service';
 import { addAgentToDrive, setAgentDriveIncludeContext } from '../../services/drive-agent-service';
 import { EnforcedAuthContext } from '../../permissions/enforced-context';
 import type { SessionClaims } from '../../auth/session-service';
@@ -136,12 +137,14 @@ async function teardown(w: World): Promise<void> {
       await db.delete(pagePermissions).where(inArray(pagePermissions.pageId, ourPages));
     }
     await db.delete(driveAgentMembers).where(inArray(driveAgentMembers.driveId, ours));
+    await db.delete(mcpTokenDrives).where(inArray(mcpTokenDrives.driveId, ours));
     await db.delete(driveMembers).where(inArray(driveMembers.driveId, ours));
     await db.delete(driveRoles).where(inArray(driveRoles.driveId, ours));
     await db.delete(pages).where(inArray(pages.driveId, ours));
     await db.delete(drives).where(inArray(drives.id, ours));
   }
   await db.delete(activityLogs).where(inArray(activityLogs.userId, w.userIds));
+  await db.delete(mcpTokens).where(inArray(mcpTokens.userId, w.userIds));
   await db.delete(orgInvitations).where(eq(orgInvitations.orgId, w.orgId));
   await db.delete(orgSubscriptions).where(eq(orgSubscriptions.orgId, w.orgId));
   await db.delete(orgMembers).where(eq(orgMembers.orgId, w.orgId));
@@ -244,7 +247,7 @@ describe('[D-OW-33] a lapsed org may only restrict, on every guarded write (orgs
     expect((await memberRow(w.product, w.ids.marcus))?.role).toBe('ADMIN');
   });
 
-  it('SEAT-9 (partial) [D-OW-33] inventory #11 a direct page grant: wider is refused (ORG_LAPSED, the SEAT-9 copy) for an org member; narrower applies; paid, wider applies', async () => {
+  it('SEAT-9 (partial) [D-OW-33] inventory #11 a direct page grant: wider is refused (ORG_LAPSED, the lapse copy) for an org member; narrower applies; paid, wider applies', async () => {
     if (!world) return;
     const w = world;
     await lapse(w);
@@ -395,5 +398,74 @@ describe('[D-OW-33] a lapsed org may only restrict, on every guarded write (orgs
     await pay(w);
     expect(await transferOwnership({ orgId: w.orgId, actorId: w.ids.priya, targetId: w.ids.lena })).toEqual({ ok: true });
     expect(await ownerOf()).toBe(w.ids.lena);
+  });
+
+  it('SEAT-9 (partial) [D-OW-33] review P1-1: a drive admin raising an MCP key\'s scope (MEMBER→ADMIN, inherit→ADMIN) is refused while lapsed, as the apps PATCH runs it; lowering applies; widening a custom role held only by a key is refused too; paid, the raise applies', async () => {
+    if (!world) return;
+    const w = world;
+    const [token] = await db.insert(mcpTokens).values({ userId: w.ids.marcus, tokenHash: `h_${createId()}`, tokenPrefix: 'mcp_', name: 'k' }).returning();
+    await db.insert(mcpTokenDrives).values({ tokenId: token.id, driveId: w.product, role: 'MEMBER', customRoleId: null });
+    const scopeOf = async () => (await db.select({ role: mcpTokenDrives.role, customRoleId: mcpTokenDrives.customRoleId }).from(mcpTokenDrives).where(eq(mcpTokenDrives.tokenId, token.id)))[0];
+    // As apps/[tokenId] PATCH runs it.
+    const patchScope = (set: { role?: 'ADMIN' | 'MEMBER' | null; customRoleId?: string | null }) =>
+      guardDriveAccess(db, w.product, { members: false, grants: false, agents: false }, (tx) =>
+        tx.update(mcpTokenDrives).set(set).where(and(eq(mcpTokenDrives.driveId, w.product), eq(mcpTokenDrives.tokenId, token.id))));
+    await lapse(w);
+    await expect(patchScope({ role: 'ADMIN' })).rejects.toBeInstanceOf(OrgLapsedError);
+    expect((await scopeOf()).role).toBe('MEMBER');
+    await expect(patchScope({ role: null })).rejects.toBeInstanceOf(OrgLapsedError);
+    expect((await scopeOf()).role).toBe('MEMBER');
+
+    // Held only by the key: the Spare role widened is caught through the key's scope.
+    const spare = await createDriveRole(w.product, { name: 'KeyRole', permissions: {}, driveWidePermissions: READ });
+    await patchScope({ customRoleId: spare.id });
+    await expect(updateDriveRole(w.product, spare.id, { driveWidePermissions: EDIT })).rejects.toBeInstanceOf(OrgLapsedError);
+
+    await pay(w);
+    await patchScope({ role: 'ADMIN', customRoleId: null });
+    expect((await scopeOf()).role).toBe('ADMIN');
+    await lapse(w);
+    await patchScope({ role: 'MEMBER' });
+    expect((await scopeOf()).role).toBe('MEMBER');
+  });
+
+  it('SEAT-9 (partial) [D-OW-33] review P2-1: a demotion committed while a guarded write waits is never silently reverted (the baseline is locked); the write sees the demotion and is refused', async () => {
+    if (!world) return;
+    const w = world;
+    await lapse(w);
+    // B: demote Priya (ADMIN → MEMBER) in an open transaction on its own connection, not yet committed.
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('UPDATE drive_members SET role = $1 WHERE "driveId" = $2 AND "userId" = $3', ['MEMBER', w.product, w.ids.priya]);
+      // A: a guarded write that sets Priya ADMIN. Its locked baseline must wait for B.
+      const a = guardDriveAccess(db, w.product, { users: [w.ids.priya] }, (tx) =>
+        tx.update(driveMembers).set({ role: 'ADMIN' }).where(and(eq(driveMembers.driveId, w.product), eq(driveMembers.userId, w.ids.priya))));
+      const settled = a.then(() => 'written', (e: unknown) => e);
+      await new Promise((r) => setTimeout(r, 300));
+      await client.query('COMMIT');
+      expect(await settled).toBeInstanceOf(OrgLapsedError);
+    } finally {
+      client.release();
+    }
+    expect((await memberRow(w.product, w.ids.priya))?.role).toBe('MEMBER');
+  });
+
+  it('SEAT-9 (partial) [D-OW-33] review P2-3: on an OPEN org drive, widening the default role is refused while lapsed even with no member row holding it; narrowing it applies; paid, it applies', async () => {
+    if (!world) return;
+    const w = world;
+    const [def] = await db.insert(driveRoles).values({ driveId: w.ops, name: 'Default', isDefault: true, permissions: {}, driveWidePermissions: READ }).returning();
+    expect(await changeDriveVisibility(w.ids.jono, w.ops, { orgVisibility: 'OPEN' }, orgDriveServiceDeps)).toMatchObject({ ok: true });
+    // No materialized org rows for this test: the default reaches org members implicitly.
+    await db.delete(driveMembers).where(eq(driveMembers.driveId, w.ops));
+    await lapse(w);
+    await expect(updateDriveRole(w.ops, def.id, { driveWidePermissions: EDIT })).rejects.toBeInstanceOf(OrgLapsedError);
+    expect((await roleGrant(def.id))?.driveWide).toEqual(READ);
+    await pay(w);
+    await updateDriveRole(w.ops, def.id, { driveWidePermissions: EDIT });
+    expect((await roleGrant(def.id))?.driveWide).toEqual(EDIT);
+    await lapse(w);
+    await updateDriveRole(w.ops, def.id, { driveWidePermissions: READ });
+    expect((await roleGrant(def.id))?.driveWide).toEqual(READ);
   });
 });

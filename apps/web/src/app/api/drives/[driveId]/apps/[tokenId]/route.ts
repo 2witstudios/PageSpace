@@ -9,6 +9,8 @@ import { eq, and } from '@pagespace/db/operators';
 import { mcpTokenDrives, driveRoles } from '@pagespace/db/schema/members';
 import { mcpTokens } from '@pagespace/db/schema/auth';
 import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
+import { guardDriveAccess, isOrgLapsedError } from '@pagespace/lib/permissions/org-lapse-guard';
+import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
 
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
@@ -91,11 +93,22 @@ export async function PATCH(
     if (role !== undefined) updateValues.role = role;
     if (customRoleId !== undefined) updateValues.customRoleId = customRoleId;
 
-    const [updated] = await db
-      .update(mcpTokenDrives)
-      .set(updateValues)
-      .where(and(eq(mcpTokenDrives.driveId, driveId), eq(mcpTokenDrives.tokenId, tokenId)))
-      .returning();
+    // [D-OW-33] an explicit role is NOT bounded by the token owner's access: raising a key to ADMIN (from MEMBER or
+    // inherit), or to a wider custom role, loosens the drive. guardDriveAccess undoes it while the drive's org is
+    // lapsed (402); narrowing a key still applies.
+    let updated: typeof mcpTokenDrives.$inferSelect | undefined;
+    try {
+      [updated] = await guardDriveAccess(db, driveId, { members: false, grants: false, agents: false }, (tx) =>
+        tx
+          .update(mcpTokenDrives)
+          .set(updateValues)
+          .where(and(eq(mcpTokenDrives.driveId, driveId), eq(mcpTokenDrives.tokenId, tokenId)))
+          .returning(),
+      );
+    } catch (error) {
+      if (isOrgLapsedError(error)) return orgLapsedResponse();
+      throw error;
+    }
 
     auditRequest(request, {
       eventType: 'authz.role.assigned',

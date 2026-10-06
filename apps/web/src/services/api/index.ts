@@ -3,7 +3,6 @@ export type { ReorderParams, ReorderResult, ReorderSuccess, ReorderError } from 
 
 export { permissionManagementService, rolePermissionService } from './permission-management-service';
 export type {
-  PermissionFlags,
   PermissionUser,
   PermissionEntry,
   GetPermissionsResult,

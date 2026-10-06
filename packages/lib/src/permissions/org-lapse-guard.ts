@@ -14,9 +14,9 @@
  * This module reads drive_members, so it lives in the permission layer (the drive-members enumeration seam).
  */
 import { db } from '@pagespace/db/db';
-import { and, eq, inArray } from '@pagespace/db/operators';
+import { and, eq, inArray, sql } from '@pagespace/db/operators';
 import { drives, pages } from '@pagespace/db/schema/core';
-import { driveAgentMembers, driveMembers, driveRoles, pagePermissions } from '@pagespace/db/schema/members';
+import { driveAgentMembers, driveMembers, driveRoles, mcpTokenDrives, pagePermissions } from '@pagespace/db/schema/members';
 import { driveAccessWidens, type DriveAccessSnapshot, type DriveMemberRoleName, type GrantFlags } from '../organizations/loosening-core';
 import { checkOrgMayLoosen, ORG_LAPSED_CODE, ORG_LAPSED_MESSAGE, type OrgLapsedRefusal } from '../organizations/status';
 
@@ -66,12 +66,26 @@ export interface DriveAccessScope {
   grants?: boolean;
   /** Read agent memberships (default true). */
   agents?: boolean;
+  /** Read MCP token (app) scopes (default true). */
+  tokens?: boolean;
+  /** The pages whose privacy the write can change (default none). */
+  pages?: readonly string[];
 }
 
 const asRole = (role: string): DriveMemberRoleName => (role === 'OWNER' || role === 'ADMIN' || role === 'GUEST' ? role : 'MEMBER');
 
-/** Who reaches the drive right now, within `scope`, read in `executor`. */
-export async function snapshotDriveAccess(executor: Executor, driveId: string, scope: DriveAccessScope = {}): Promise<DriveAccessSnapshot> {
+/**
+ * Who reaches the drive right now, within `scope`, read in `executor`. With `lock`, the scoped member, grant, agent,
+ * token and page rows are read FOR UPDATE: a concurrent write to any of them waits for this transaction, so the
+ * snapshot cannot go stale under the write it judges (a concurrent demotion is never silently reverted).
+ */
+export async function snapshotDriveAccess(
+  executor: Executor,
+  driveId: string,
+  scope: DriveAccessScope = {},
+  opts: { lock?: boolean } = {},
+): Promise<DriveAccessSnapshot> {
+  const lock = opts.lock === true;
   const users = scope.users ? [...scope.users] : null;
   const [drive] = await executor
     .select({ ownerId: drives.ownerId, orgId: drives.orgId, orgVisibility: drives.orgVisibility })
@@ -93,30 +107,53 @@ export async function snapshotDriveAccess(executor: Executor, driveId: string, s
 
   const members: DriveAccessSnapshot['members'] = {};
   if (scope.members !== false && (users === null || users.length > 0)) {
-    const rows = await executor
+    const query = executor
       .select({ userId: driveMembers.userId, role: driveMembers.role, customRoleId: driveMembers.customRoleId, acceptedAt: driveMembers.acceptedAt })
       .from(driveMembers)
       .where(users === null ? eq(driveMembers.driveId, driveId) : and(eq(driveMembers.driveId, driveId), inArray(driveMembers.userId, users)));
+    const rows = lock ? await query.for('update') : await query;
     for (const m of rows) members[m.userId] = { role: asRole(m.role), customRoleId: m.customRoleId, accepted: m.acceptedAt !== null };
   }
 
   const grants: DriveAccessSnapshot['grants'] = {};
   if (scope.grants !== false && (users === null || users.length > 0)) {
-    const rows = await executor
+    const query = executor
       .select({ pageId: pagePermissions.pageId, userId: pagePermissions.userId, canView: pagePermissions.canView, canEdit: pagePermissions.canEdit, canShare: pagePermissions.canShare, canDelete: pagePermissions.canDelete })
       .from(pagePermissions)
       .innerJoin(pages, eq(pages.id, pagePermissions.pageId))
       .where(users === null ? eq(pages.driveId, driveId) : and(eq(pages.driveId, driveId), inArray(pagePermissions.userId, users)));
+    const rows = lock ? await query.for('update', { of: pagePermissions }) : await query;
     for (const g of rows) grants[`${g.pageId}:${g.userId}`] = { canView: g.canView, canEdit: g.canEdit, canShare: g.canShare, canDelete: g.canDelete };
   }
 
   const agents: DriveAccessSnapshot['agents'] = {};
   if (scope.agents !== false) {
-    const rows = await executor
+    const query = executor
       .select({ agentPageId: driveAgentMembers.agentPageId, role: driveAgentMembers.role, customRoleId: driveAgentMembers.customRoleId, includeContext: driveAgentMembers.includeContext })
       .from(driveAgentMembers)
       .where(eq(driveAgentMembers.driveId, driveId));
+    const rows = lock ? await query.for('update') : await query;
     for (const a of rows) agents[a.agentPageId] = { role: asRole(a.role), customRoleId: a.customRoleId, includeContext: a.includeContext };
+  }
+
+  const tokens: DriveAccessSnapshot['tokens'] = {};
+  if (scope.tokens !== false) {
+    const query = executor
+      .select({ tokenId: mcpTokenDrives.tokenId, role: mcpTokenDrives.role, customRoleId: mcpTokenDrives.customRoleId })
+      .from(mcpTokenDrives)
+      .where(eq(mcpTokenDrives.driveId, driveId));
+    const rows = lock ? await query.for('update') : await query;
+    for (const t of rows) tokens[t.tokenId] = { role: t.role === null ? null : asRole(t.role), customRoleId: t.customRoleId };
+  }
+
+  const pagePrivacy: DriveAccessSnapshot['pagePrivacy'] = {};
+  if (scope.pages && scope.pages.length > 0) {
+    const query = executor
+      .select({ id: pages.id, isPrivate: pages.isPrivate })
+      .from(pages)
+      .where(and(eq(pages.driveId, driveId), inArray(pages.id, [...scope.pages])));
+    const rows = lock ? await query.for('update') : await query;
+    for (const p of rows) pagePrivacy[p.id] = p.isPrivate === true;
   }
 
   return {
@@ -125,8 +162,13 @@ export async function snapshotDriveAccess(executor: Executor, driveId: string, s
     grants,
     roles,
     agents,
+    tokens,
+    pagePrivacy,
   };
 }
+
+/** The per-drive advisory lock key guardDriveAccess shares with guardOpenRoleFloor (open-role-floor.ts). */
+export const driveAccessLockKey = (driveId: string): string => `drive-roles:${driveId}`;
 
 /**
  * [D-OW-33] Run `write` (handed the transaction to write with) and keep it only if it loosens nothing, or the drive's
@@ -141,7 +183,11 @@ export async function guardDriveAccess<T>(
   write: (tx: Tx) => Promise<T>,
 ): Promise<T> {
   return executor.transaction(async (tx) => {
-    const before = await snapshotDriveAccess(tx, driveId, scope);
+    // Serialize with every other guarded write on this drive and with POL-6's role writes (guardOpenRoleFloor takes
+    // the same per-drive advisory lock; it is re-entrant inside this transaction), then lock the rows the baseline
+    // reads, so nothing changes them between the baseline and the write.
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${driveAccessLockKey(driveId)}, 0))`);
+    const before = await snapshotDriveAccess(tx, driveId, scope, { lock: true });
     const result = await write(tx);
     const after = await snapshotDriveAccess(tx, driveId, scope);
     const loosens = driveAccessWidens(before, after);

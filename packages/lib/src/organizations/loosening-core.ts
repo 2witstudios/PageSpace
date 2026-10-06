@@ -111,6 +111,43 @@ export interface DriveAccessSnapshot {
   roles: Record<string, { grant: RoleGrant; isDefault: boolean }>;
   /** Agents that are members of this drive, by agent page id. Everyone who can use the agent reads through it. */
   agents: Record<string, { role: DriveMemberRoleName; customRoleId: string | null; includeContext: boolean }>;
+  /**
+   * MCP token (app) scopes on this drive, by token id (mcp_token_drives). `role: null` is INHERIT: the token acts
+   * with its owner's access here. An explicit role means what it means for a member, private pages included.
+   */
+  tokens: Record<string, TokenScope>;
+  /** `isPrivate` of the pages a write can touch (scoped; usually none). */
+  pagePrivacy: Record<string, boolean>;
+}
+
+export interface TokenScope {
+  role: DriveMemberRoleName | null;
+  customRoleId: string | null;
+}
+
+/**
+ * Does moving a token's scope from `from` (undefined: no scope) to `to` give it more on the drive? INHERIT is bounded
+ * by the owner's access, which this rule cannot see, so it fails closed: an explicit ADMIN is at least INHERIT (no
+ * one reaches more than an Admin), and anything else moving to or from INHERIT counts as widening.
+ */
+export function tokenScopeWidens(
+  from: TokenScope | undefined,
+  to: TokenScope,
+  roles: { before: DriveAccessSnapshot['roles']; after: DriveAccessSnapshot['roles'] },
+): boolean {
+  if (!from) return true;
+  if (to.role === null) return !(from.role === null || from.role === 'ADMIN' || from.role === 'OWNER');
+  if (from.role === null) return true;
+  return memberAccessWidens(
+    resolveAccess({ role: from.role, customRoleId: from.customRoleId }, roles.before),
+    resolveAccess({ role: to.role, customRoleId: to.customRoleId }, roles.after),
+  );
+}
+
+/** The drive's default custom role (the lowest id among defaults, for a deterministic pick), or null: the plain role. */
+function defaultRoleGrant(roles: DriveAccessSnapshot['roles']): RoleGrant | null {
+  const id = Object.keys(roles).filter((k) => roles[k].isDefault).sort()[0];
+  return id === undefined ? null : roles[id].grant;
 }
 
 function resolveAccess(
@@ -128,7 +165,10 @@ function resolveAccess(
  *   - each member: a new or newly accepted row, or more than before (memberAccessWidens) — a role's widening counts
  *     only through the people holding it, so editing an unused role loosens nothing;
  *   - each page grant: a flag gained;
- *   - each agent membership: a new one, more than before, or its drive context newly included.
+ *   - each agent membership: a new one, more than before, or its drive context newly included;
+ *   - an OPEN org drive's default role made wider (its org members hold it implicitly);
+ *   - each token (app) scope: a new one, or more than before (tokenScopeWidens);
+ *   - a page made non-private.
  */
 export function driveAccessWidens(before: DriveAccessSnapshot, after: DriveAccessSnapshot): boolean {
   const b = before.drive;
@@ -149,6 +189,21 @@ export function driveAccessWidens(before: DriveAccessSnapshot, after: DriveAcces
 
   for (const [key, flags] of Object.entries(after.grants)) {
     if (pageFlagsWiden(before.grants[key] ?? null, flags)) return true;
+  }
+
+  // An OPEN org drive's org members hold its default role implicitly (with or without a materialized row), so a wider
+  // default reaches people no member row shows: fail closed and count it.
+  if (a?.orgId && a.orgVisibility === 'OPEN' &&
+    memberAccessWidens({ role: 'MEMBER', customRole: defaultRoleGrant(before.roles) }, { role: 'MEMBER', customRole: defaultRoleGrant(after.roles) })) {
+    return true;
+  }
+
+  for (const [tokenId, scope] of Object.entries(after.tokens)) {
+    if (tokenScopeWidens(before.tokens[tokenId], scope, { before: before.roles, after: after.roles })) return true;
+  }
+
+  for (const [pageId, isPrivate] of Object.entries(after.pagePrivacy)) {
+    if (before.pagePrivacy[pageId] === true && !isPrivate) return true;
   }
 
   for (const [agentId, row] of Object.entries(after.agents)) {

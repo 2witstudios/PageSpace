@@ -8,16 +8,6 @@ import { getUserAccessLevel, isDriveOwnerOrAdmin } from '@pagespace/lib/permissi
 import { listDriveRoles, getRoleById, updateDriveRole } from '@pagespace/lib/services/drive-role-service';
 
 /**
- * Permission flags
- */
-export interface PermissionFlags {
-  canView: boolean;
-  canEdit: boolean;
-  canShare: boolean;
-  canDelete: boolean;
-}
-
-/**
  * User info for permission display
  */
 export interface PermissionUser {
