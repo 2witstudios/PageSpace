@@ -126,8 +126,9 @@ export async function GET(req: Request) {
         includeTrash,
         userId,
         getMembership: async (driveId) => {
+          // Review #2849 r5 (P2): EVERY key row, inherit or explicit, lists only while its owner is a current member.
           const membership = await getAppDriveMembership(auth.tokenId, driveId);
-          if (!membership || membership.role !== null) return membership;
+          if (!membership) return null;
           return (await hasAppDriveMembership(auth.tokenId, driveId)) ? membership : null;
         },
       });
@@ -141,7 +142,7 @@ export async function GET(req: Request) {
           userId,
           getMembership: async (driveId) => {
             const membership = await getEffectiveScopedDriveMembership(auth.driveScopes, auth.userId, driveId);
-            if (!membership || membership.role !== null) return membership;
+            if (!membership) return null;
             return (await hasScopedDriveMembership(auth.driveScopes, auth.userId, driveId)) ? membership : null;
           },
         });

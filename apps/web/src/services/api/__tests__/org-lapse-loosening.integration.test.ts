@@ -43,6 +43,7 @@ vi.mock('@/lib/auth', async (importOriginal) => {
   return {
     ...real,
     // A session for the drive lead, unless a test hands in a principal (an MCP key) to act as.
+    authenticateMCPRequest: vi.fn(async () => authed.principal),
     authenticateRequestWithOptions: vi.fn(async () => authed.principal ?? ({ userId: authed.userId, tokenVersion: 0, tokenType: 'session', sessionId: 's', role: 'user', adminRoleVersion: 0 })),
     isAuthError: vi.fn(() => false),
     getAllowedDriveIds: vi.fn((auth: Parameters<typeof real.getAllowedDriveIds>[0]) => (authed.principal ? real.getAllowedDriveIds(auth) : [])),
@@ -66,6 +67,8 @@ import { pageService } from '../page-service';
 import { movePagesToDrive } from '../page-cross-drive-move-service';
 import { POST as addAttendees } from '@/app/api/calendar/events/[eventId]/attendees/route';
 import { calendarWriteTools } from '@/lib/ai/tools/calendar-write-tools';
+import { GET as listDrives } from '@/app/api/drives/route';
+import { GET as listMcpDrives } from '@/app/api/mcp/drives/route';
 import { GET as driveActivities } from '@/app/api/activities/route';
 import { GET as publishedApps } from '@/app/api/drives/[driveId]/published-apps/route';
 import { getPrincipalDriveAccess, isPrincipalDriveMember } from '@/lib/auth';
@@ -459,5 +462,39 @@ describe('a key whose owner left the drive (review #2849 r4 P1)', () => {
     await db.insert(driveMembers).values(row);
     expect(await isPrincipalDriveMember(key as never, w.orgDrive)).toBe(true);
     expect((await feed()).status).toBe(200);
+  });
+});
+
+describe('drive listings for an explicit-role key whose owner left (review #2849 r5 P2)', () => {
+  afterEach(() => { authed.principal = null; });
+
+  it('SEAT-9 (partial) [D-OW-33] review r5 P2: GET /api/drives (MCP and OAuth) and GET /api/mcp/drives drop the drive for an explicit-role key once its owner\'s row is deleted, and list it again once the row is back', async () => {
+    await factories.createDriveMember(w.orgDrive, w.member, { role: 'MEMBER', acceptedAt: new Date() });
+    const [token] = await db.insert(mcpTokens).values({ userId: w.member, tokenHash: `h_${createId()}`, tokenPrefix: 'mcp_', name: 'k' }).returning();
+    await db.insert(mcpTokenDrives).values({ tokenId: token.id, driveId: w.orgDrive, role: 'MEMBER', customRoleId: null });
+    const mcpKey = { tokenType: 'mcp' as const, tokenId: token.id, allowedDriveIds: [w.orgDrive], userId: w.member, role: 'user' as const, tokenVersion: 0, adminRoleVersion: 0 };
+    const oauthKey = { tokenType: 'oauth' as const, userId: w.member, driveScopes: [{ driveId: w.orgDrive, role: 'MEMBER', customRoleId: null }], allowedDriveIds: [w.orgDrive], role: 'user' as const, tokenVersion: 0, adminRoleVersion: 0, scopes: ['drives:read'] };
+    const listed = async (res: Response) => {
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      return (Array.isArray(body) ? body : body.drives ?? []).map((d: { id: string }) => d.id);
+    };
+    const listings = async () => {
+      authed.principal = mcpKey;
+      const mcpViaDrives = await listed(await listDrives(new Request('http://localhost/api/drives')));
+      const mcpViaMcp = await listed(await listMcpDrives(new Request('http://localhost/api/mcp/drives') as never));
+      authed.principal = oauthKey;
+      const oauthViaDrives = await listed(await listDrives(new Request('http://localhost/api/drives')));
+      return [mcpViaDrives, mcpViaMcp, oauthViaDrives];
+    };
+
+    for (const ids of await listings()) expect(ids).toContain(w.orgDrive);
+
+    const [row] = await db.select().from(driveMembers).where(and(eq(driveMembers.driveId, w.orgDrive), eq(driveMembers.userId, w.member)));
+    await db.delete(driveMembers).where(eq(driveMembers.id, row.id));
+    for (const ids of await listings()) expect(ids).not.toContain(w.orgDrive);
+
+    await db.insert(driveMembers).values(row);
+    for (const ids of await listings()) expect(ids).toContain(w.orgDrive);
   });
 });

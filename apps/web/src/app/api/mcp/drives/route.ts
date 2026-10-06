@@ -9,7 +9,7 @@ import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { eq } from '@pagespace/db/operators';
-import { getAppDriveMembership } from '@pagespace/lib/permissions/app-permissions';
+import { getAppDriveMembership, hasAppDriveMembership } from '@pagespace/lib/permissions/app-permissions';
 import { authenticateMCPRequest, isAuthError, isMCPAuthResult } from '@/lib/auth';
 import { getActorInfo, logDriveActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { listAccessibleDrives } from '@pagespace/lib/services/drive-service';
@@ -122,6 +122,8 @@ export async function GET(req: NextRequest) {
       filteredDrives = (
         await Promise.all(
           allowedDriveIds.map(async (driveId) => {
+            // Review #2849 r5 (P2): a key lists a drive only while its owner is a current member, whichever row it holds.
+            if (tokenId && !(await hasAppDriveMembership(tokenId, driveId))) return null;
             const userView = accessibleById.get(driveId);
             if (userView) return userView;
             if (!tokenId) return null;
