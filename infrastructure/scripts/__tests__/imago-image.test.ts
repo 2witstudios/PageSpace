@@ -70,6 +70,12 @@ describe('apps/imago/Dockerfile', () => {
     expect(build).toBeGreaterThan(env);
   });
 
+  it("given turbo's strict env mode, should declare IMAGO_API_PROXY_ORIGIN for imago's build so it reaches next build and keys the cache (IMG-10.9)", () => {
+    const turbo = JSON.parse(read('apps/imago/turbo.json')) as { extends: string[]; tasks: { build?: { env?: string[] } } };
+    expect(turbo.extends).toEqual(['//']);
+    expect(turbo.tasks.build?.env).toContain('IMAGO_API_PROXY_ORIGIN');
+  });
+
   it('given the runner stage, should ship the standalone server and its static assets', () => {
     expect(dockerfile).toContain('COPY --from=builder /app/apps/imago/.next/standalone .');
     expect(dockerfile).toContain('COPY --from=builder /app/apps/imago/.next/static ./apps/imago/.next/static');
