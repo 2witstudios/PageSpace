@@ -6,7 +6,7 @@ import { getOrgPolicies, updateOrgPolicies } from '@pagespace/lib/organizations/
 import { OPEN_ROLE_FLOOR_RAISE_MESSAGE, validateOrgPoliciesPatch } from '@pagespace/lib/organizations/policies-core';
 import { reconcileOrgPublishedVisibility } from '@pagespace/lib/organizations/published-visibility';
 import { createPublishedObjectStore, isPublishConfigured } from '@/lib/canvas/published-storage';
-import { authorizeOrgRequest, ORG_READ_AUTH, ORG_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
+import { authorizeOrgRequest, refuseDriveScopedToken, ORG_TOKEN_READ_AUTH, ORG_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
 import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
 
 type Context = { params: Promise<{ orgId: string }> };
@@ -14,12 +14,15 @@ type Context = { params: Promise<{ orgId: string }> };
 /**
  * GET /api/orgs/[orgId]/policies (Spec POL-1) — Owner and Admins read the org's policies, defaults
  * filled in. A plain member sees no org settings (UI-11): the same 403 as any Admin-only read, and a
- * non-member gets the 404 of an org that does not exist.
+ * non-member gets the 404 of an org that does not exist. Session or MCP token (X-1); a drive-scoped
+ * token is refused, since policies govern the whole org.
  */
 export async function GET(request: Request, context: Context) {
   const { orgId } = await context.params;
-  const gate = await authorizeOrgRequest(request, orgId, 'ADMIN', ORG_READ_AUTH);
+  const gate = await authorizeOrgRequest(request, orgId, 'ADMIN', ORG_TOKEN_READ_AUTH);
   if (!gate.ok) return gate.response;
+  const scoped = refuseDriveScopedToken(gate);
+  if (scoped) return scoped;
   try {
     const policies = await getOrgPolicies(orgId);
     auditRequest(request, { eventType: 'data.read', userId: gate.userId, resourceType: 'organization_policies', resourceId: orgId, details: { orgId } });
