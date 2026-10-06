@@ -253,7 +253,7 @@ afterAll(async () => {
   await pool.end();
 });
 
-describe('backups and restore preserve org context and wallet rows (X-3 partial, real PG)', () => {
+describe('backups and restore preserve org context and wallet rows (X-3 (partial), real PG)', () => {
   it('X-3 (partial) a snapshot records the drive\'s orgId and orgVisibility; a personal drive\'s records nulls', async () => {
     const result = await createDriveBackup(w.orgDriveId, w.ownerId, { source: 'manual' });
     expect(result.success).toBe(true);

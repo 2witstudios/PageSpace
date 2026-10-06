@@ -183,7 +183,7 @@ afterAll(async () => {
   await pool.end();
 });
 
-describe('account deletion in an org (X-2 partial, real PG)', () => {
+describe('account deletion in an org (X-2 (partial), real PG)', () => {
   it('X-2 (partial) deletes the member, not the org: org, owner membership and drive survive; the membership and its departure record go; the org keeps only the keyed suppression', async () => {
     await accountRepository.deleteUser(w.memberId);
 
