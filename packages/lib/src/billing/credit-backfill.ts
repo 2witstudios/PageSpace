@@ -10,7 +10,7 @@
 import { db } from '@pagespace/db/db';
 import { creditLedger, creditHolds } from '@pagespace/db/schema/credits';
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
-import { and, eq, lt, gt, isNull, notInArray } from '@pagespace/db/operators';
+import { and, eq, lt, gt, inArray, isNull, notInArray } from '@pagespace/db/operators';
 import { isBillingEnabled } from '../deployment-mode';
 import { computeBackfillActions } from './credit-core';
 import { MACHINE_MARKUP_BPS } from './credit-pricing';
@@ -63,36 +63,51 @@ async function emitBalancesBestEffort(userIds: string[]): Promise<void> {
   }
 }
 
+/**
+ * Delete holds past their expiresAt and report how many went. Holds from a crashed or
+ * abandoned call that never reached consumeCredits would otherwise reserve spend (and
+ * count against the free in-flight cap) forever; deleting them frees that spendable
+ * back up. A live, still-running call's hold has a future expiresAt and is untouched.
+ * Idempotent: re-running deletes nothing new. Never throws.
+ *
+ * The cron sweeps every expired hold (via backfillCredits). `userIds` narrows the sweep
+ * to those users' holds, for a caller that must not touch anyone else's (a test on a
+ * shared database); an empty list sweeps nothing rather than widening to every hold.
+ */
+export async function sweepExpiredHolds(opts: { now?: Date; userIds?: string[] } = {}): Promise<number> {
+  if (!isBillingEnabled()) return 0;
+  if (opts.userIds && opts.userIds.length === 0) return 0;
+  const now = opts.now ?? new Date();
+  const expired = lt(creditHolds.expiresAt, now);
+  try {
+    const swept = await db
+      .delete(creditHolds)
+      .where(opts.userIds ? and(expired, inArray(creditHolds.userId, opts.userIds)) : expired)
+      .returning({ id: creditHolds.id, userId: creditHolds.userId });
+    // Reclaiming a stale hold raises that user's spendable back up — push the fresh
+    // balance so the navbar recovers without a refresh. This is the backstop for a
+    // call that was interrupted before settlement: its dangling reservation finally
+    // clears here. One emit per distinct user. Fire-and-forget (void) so a slow or
+    // unreachable realtime server (each emit self-times-out at 5s) never serializes
+    // its delay across users and stalls the pending/orphan reconciliation after it;
+    // the fan-out is bounded so a large sweep doesn't open one socket per user at once.
+    const affected = [...new Set(swept.map((h) => h.userId))];
+    void emitBalancesBestEffort(affected);
+    return swept.length;
+  } catch (error) {
+    loggers.ai.warn('credit hold expiry sweep failed', errorLogFields(error));
+    return 0;
+  }
+}
+
 export async function backfillCredits(): Promise<BackfillResult> {
   if (!isBillingEnabled()) return { retried: 0, orphans: 0, expiredHolds: 0 };
 
   const now = new Date();
   const cutoff = new Date(now.getTime() - GRACE_MS);
 
-  // Sweep abandoned holds FIRST: a hold from a crashed/abandoned stream that never
-  // reached consumeCredits would otherwise reserve spend (and count against the
-  // free in-flight cap) forever. Deleting them past expiresAt frees that spendable
-  // back up. A live, still-running stream's hold has a future expiresAt and is
-  // untouched. Idempotent — re-running deletes nothing new.
-  let expiredHolds = 0;
-  try {
-    const swept = await db
-      .delete(creditHolds)
-      .where(lt(creditHolds.expiresAt, now))
-      .returning({ id: creditHolds.id, userId: creditHolds.userId });
-    expiredHolds = swept.length;
-    // Reclaiming a stale hold raises that user's spendable back up — push the fresh
-    // balance so the navbar recovers without a refresh. This is the backstop for a
-    // call that was interrupted before settlement: its dangling reservation finally
-    // clears here. One emit per distinct user. Fire-and-forget (void) so a slow or
-    // unreachable realtime server (each emit self-times-out at 5s) never serializes
-    // its delay across users and stalls the pending/orphan reconciliation below;
-    // the fan-out is bounded so a large sweep doesn't open one socket per user at once.
-    const affected = [...new Set(swept.map((h) => h.userId))];
-    void emitBalancesBestEffort(affected);
-  } catch (error) {
-    loggers.ai.warn('credit hold expiry sweep failed', errorLogFields(error));
-  }
+  // Sweep abandoned holds FIRST, every user's (see sweepExpiredHolds).
+  const expiredHolds = await sweepExpiredHolds({ now });
 
   let retried = 0;
   let orphanCount = 0;

@@ -28,7 +28,7 @@ vi.mock('@/lib/ai/core/provider-factory', () => ({
   isProviderError: (p: unknown) => typeof p === 'object' && p !== null && 'error' in p,
 }));
 
-import { backfillCredits } from '@pagespace/lib/billing/credit-backfill';
+import { sweepExpiredHolds } from '@pagespace/lib/billing/credit-backfill';
 import { getCreditBalance } from '@pagespace/lib/billing/credit-balance';
 import { compactField } from '../compaction-service';
 import { reserveMemoryCall } from '../memory-credit';
@@ -152,8 +152,7 @@ describe('memory cron model calls reserve first (real Postgres)', () => {
     expect(held.spendable).toBe(FUNDED_CENTS);
 
     // The settle never runs and release is never called. Time passes: the hold was placed one
-    // TTL ago and its expiry is behind us. (The row is aged rather than the clock moved, so the
-    // sweep below runs at the real now and its grace window leaves other suites' rows alone.)
+    // TTL ago and its expiry is behind us. (The row is aged rather than the clock moved.)
     const ttlMs = hold.expiresAt.getTime() - hold.createdAt.getTime();
     const expiredAt = new Date(Date.now() - 1_000);
     await db.update(creditHolds)
@@ -165,9 +164,17 @@ describe('memory cron model calls reserve first (real Postgres)', () => {
     expect(expired.reserved).toBe(0);
     expect(expired.spendable).toBe(FUNDED_CENTS);
 
-    const swept = await backfillCredits();
-    expect(swept.expiredHolds).toBeGreaterThanOrEqual(1);
-    expect(await liveHolds(w)).toEqual([]);
+    // The cron's own sweep (backfillCredits → sweepExpiredHolds), scoped to this person so a
+    // shared CI database's other workers keep their holds. A bystander's expired hold proves it.
+    const bystander = await build(FUNDED_CENTS);
+    try {
+      await db.insert(creditHolds).values({ userId: bystander.userId, walletId: bystander.walletId, estCents: 1, expiresAt: expiredAt });
+      expect(await sweepExpiredHolds({ userIds: [w.userId] })).toBe(1);
+      expect(await liveHolds(w)).toEqual([]);
+      expect(await liveHolds(bystander)).toHaveLength(1);
+    } finally {
+      await teardown(bystander);
+    }
     // Money invariant: a hold never moved money, so the wallet and the ledger are as they were.
     expect(await walletCents(w)).toBe(FUNDED_CENTS);
     expect(await db.select().from(creditLedger).where(eq(creditLedger.userId, w.userId))).toEqual([]);
