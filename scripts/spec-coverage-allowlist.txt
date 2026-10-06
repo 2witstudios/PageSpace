@@ -37,10 +37,6 @@ DRV-3
 # accessible_page_ids_for_user (0334, pulse/activity/page payloads), in one real-PG matrix; the sidebar and picker
 # surfaces are not re-verified there, so it stays.
 DRV-5
-# DRV-6 (Restricted: directory only, join request, lead or org Admin approves): ow-pol6-resolver closed one leak
-# (a stale source='org' row opened a RESTRICTED or PRIVATE drive's pages in the SQL twin; 0334, matrix cell
-# red before / green after). The directory, picker and join-request clauses are not proven by that lane.
-DRV-6
 DRV-7
 # DRV-8 (a guest is a drive member not in the org; guests hold no seat, see only the drives they were
 # invited to, and are labeled as guests) re-added per reviews 5230157358 and 5230240628 on #2659:
