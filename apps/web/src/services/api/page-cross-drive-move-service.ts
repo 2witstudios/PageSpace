@@ -254,10 +254,12 @@ export async function movePagesToDrive(
 
   for (const page of sourcePages) {
     if (!(await authorize.canEditPage(page.id))) {
+      // The id the caller sent, never the title: a caller refused the edit may
+      // not be able to view the page either (an Imago kept out of its drive).
       return fail(
         'SOURCE_PAGE_FORBIDDEN',
         403,
-        `You do not have permission to move page: ${page.title}`,
+        `You do not have permission to move page: ${page.id}`,
       );
     }
   }

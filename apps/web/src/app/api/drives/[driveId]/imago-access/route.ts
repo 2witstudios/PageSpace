@@ -13,8 +13,8 @@ const putBodySchema = z.object({ enabled: z.boolean() }).strict();
 
 /**
  * GET /api/drives/{driveId}/imago-access
- * The session viewer's Imago access to the drive: whether their Imago agents
- * are members of it, per agent. Drive owners and admins only.
+ * Whether the session viewer's Imago may work in the drive: on unless they
+ * keep it out (IMG-10.10). Any user who can access the drive.
  */
 export async function GET(
   request: Request,
@@ -41,9 +41,9 @@ export async function GET(
 
 /**
  * PUT /api/drives/{driveId}/imago-access  { enabled: boolean }
- * Turn the session viewer's Imago access to the drive on (their Imago agents
- * join it as MEMBER) or off (they leave it). Drive owners and admins only;
- * Home is refused. Returns the new state.
+ * Let the session viewer's Imago into the drive, or keep it out — their own
+ * choice, touching nobody else's Imago. Any user who can access the drive;
+ * their own Home drive is refused. Returns the new state.
  */
 export async function PUT(
   request: Request,
@@ -76,7 +76,7 @@ export async function PUT(
       userId,
       resourceType: 'drive',
       resourceId: driveId,
-      details: { imagoAccess: enabled, agentPageIds: result.access.agents.map((agent) => agent.agentPageId) },
+      details: { imagoAccess: enabled },
     });
 
     return NextResponse.json(result.access);

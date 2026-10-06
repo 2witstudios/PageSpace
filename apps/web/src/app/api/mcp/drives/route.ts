@@ -5,7 +5,6 @@ import { z } from 'zod/v4';
 import { slugify } from '@pagespace/lib/utils/utils';
 import { isReservedDriveName } from '@pagespace/lib/services/drive-guards';
 import { allocatePublishSubdomain } from '@pagespace/lib/services/drive-service';
-import { grantImagoAgents } from '@pagespace/lib/agents/grant-imago-agents';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -59,9 +58,6 @@ export async function POST(req: NextRequest) {
       await allocatePublishSubdomain(created.id, slug, tx);
       return created;
     });
-
-    // After commit: the user's Imago agents join the drive they own (DEC-2).
-    await grantImagoAgents(userId, { driveIds: [newDrive.id] });
 
     // Broadcast drive creation event (only creator receives for new drives)
     await broadcastDriveEvent(

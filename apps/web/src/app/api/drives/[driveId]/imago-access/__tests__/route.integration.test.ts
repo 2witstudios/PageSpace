@@ -2,13 +2,15 @@
  * GET/PUT /api/drives/[driveId]/imago-access against a REAL Postgres — real
  * session tokens minted by the session service and sent as the browser's
  * session cookie, real CSRF tokens bound to that session, a real Origin check,
- * real Imago provisioning and real `drive_agent_members` rows. No mocks of
+ * real Imago provisioning and real `imago_drive_access` rows. No mocks of
  * auth, permissions or the database.
  *
- * What only a real database can show: that the toggle reads and writes the
- * viewer's own agents' memberships, that a member, guest or stranger is
- * refused with nothing changed, that a forged or foreign-origin PUT changes
- * nothing, and that a drive switched off stays off across re-provisioning.
+ * IMG-10.10: the setting is the viewer's own exclusion — on by default, off
+ * keeps their Imago out of the drive. What only a real database can show: that
+ * any user who can access the drive reads and sets only their own choice, that
+ * a stranger is refused with nothing changed, that a forged or foreign-origin
+ * PUT changes nothing, that no drive grant is ever made, and that a drive
+ * switched off stays off across re-provisioning.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { db } from '@pagespace/db/db';
@@ -16,6 +18,7 @@ import { and, eq, inArray } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { pages } from '@pagespace/db/schema/core';
 import { driveAgentMembers } from '@pagespace/db/schema/members';
+import { imagoDriveAccess } from '@pagespace/db/schema/imago-drive-access';
 import { factories } from '@pagespace/db/test/factories';
 import { sessionService } from '@pagespace/lib/auth/session-service';
 import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
@@ -78,12 +81,13 @@ async function membersIn(driveId: string, agentIds: string[]) {
   return rows.map((row) => row.agentPageId).sort();
 }
 
-async function rowIdsIn(driveId: string) {
-  const rows = await db.select({ id: driveAgentMembers.id }).from(driveAgentMembers).where(eq(driveAgentMembers.driveId, driveId));
-  return rows.map((row) => row.id).sort();
+async function storedChoice(userId: string, driveId: string) {
+  const [row] = await db
+    .select({ enabled: imagoDriveAccess.enabled })
+    .from(imagoDriveAccess)
+    .where(and(eq(imagoDriveAccess.userId, userId), eq(imagoDriveAccess.driveId, driveId)));
+  return row?.enabled ?? null;
 }
-
-const sorted = (ids: readonly string[]) => [...ids].sort();
 
 beforeAll(async () => {
   await ensureTestDb();
@@ -99,7 +103,7 @@ afterAll(async () => {
 });
 
 describe('GET/PUT /api/drives/[driveId]/imago-access (integration)', () => {
-  it("given the drive owner, should read and set their Imago agents' membership in that drive", async () => {
+  it('given the drive owner, should read on by default and store their own exclusion, never a drive grant', async () => {
     const { user } = await provisionedUser();
     const drive = await factories.createDrive(user.id, { name: 'Owned' });
     const ids = await agentIdsOf(user.id);
@@ -107,59 +111,58 @@ describe('GET/PUT /api/drives/[driveId]/imago-access (integration)', () => {
 
     const read = await getAs(session, drive.id);
     expect(read.status).toBe(200);
-    expect(await read.json()).toMatchObject({ driveId: drive.id, enabled: true });
+    expect(await read.json()).toEqual({ driveId: drive.id, enabled: true });
 
     const off = await putAs(session, drive.id, false);
     expect(off.status).toBe(200);
-    expect(await off.json()).toMatchObject({ driveId: drive.id, enabled: false });
-    expect(await membersIn(drive.id, ids)).toEqual([]);
+    expect(await off.json()).toEqual({ driveId: drive.id, enabled: false });
+    expect(await storedChoice(user.id, drive.id)).toBe(false);
     expect(await (await getAs(session, drive.id)).json()).toMatchObject({ enabled: false });
 
     const on = await putAs(session, drive.id, true);
     expect(on.status).toBe(200);
-    expect(await membersIn(drive.id, ids)).toEqual(sorted(ids));
+    expect(await on.json()).toEqual({ driveId: drive.id, enabled: true });
+    expect(await membersIn(drive.id, ids)).toEqual([]);
   });
 
-  it("given a drive admin, should toggle the admin's own agents only", async () => {
+  it('given a member, a guest with a shared page, an admin, should each set only their own choice', async () => {
     const { user: owner } = await provisionedUser();
     const drive = await factories.createDrive(owner.id, { name: 'Team' });
-    const ownerIds = await agentIdsOf(owner.id);
-    const { user: admin } = await provisionedUser();
-    const adminIds = await agentIdsOf(admin.id);
-    await factories.createDriveMember(drive.id, admin.id, { role: 'ADMIN' });
-    const session = await browserSession(admin.id);
-
-    expect((await putAs(session, drive.id, true)).status).toBe(200);
-    expect(await membersIn(drive.id, adminIds)).toEqual(sorted(adminIds));
-    expect((await putAs(session, drive.id, false)).status).toBe(200);
-    expect(await membersIn(drive.id, adminIds)).toEqual([]);
-    expect(await membersIn(drive.id, ownerIds)).toEqual(sorted(ownerIds));
-  });
-
-  it('given a plain member, a guest or a stranger, should return 403 on read and write and change nothing', async () => {
-    const { user: owner } = await provisionedUser();
-    const drive = await factories.createDrive(owner.id, { name: 'Guarded' });
+    const shared = await factories.createPage(drive.id, { title: 'Shared', type: 'DOCUMENT' });
     await agentIdsOf(owner.id);
-    const before = await rowIdsIn(drive.id);
 
-    for (const role of ['MEMBER', 'GUEST', null] as const) {
+    for (const role of ['ADMIN', 'MEMBER', 'GUEST'] as const) {
       const { user: viewer } = await provisionedUser();
       const viewerIds = await agentIdsOf(viewer.id);
-      if (role) await factories.createDriveMember(drive.id, viewer.id, { role });
+      await factories.createDriveMember(drive.id, viewer.id, { role, acceptedAt: new Date() });
+      if (role === 'GUEST') await factories.createPagePermission(shared.id, viewer.id);
       const session = await browserSession(viewer.id);
 
-      expect((await getAs(session, drive.id)).status).toBe(403);
-      expect((await putAs(session, drive.id, true)).status).toBe(403);
-      expect((await putAs(session, drive.id, false)).status).toBe(403);
+      expect(await (await getAs(session, drive.id)).json()).toEqual({ driveId: drive.id, enabled: true });
+      expect((await putAs(session, drive.id, false)).status).toBe(200);
+      expect(await storedChoice(viewer.id, drive.id)).toBe(false);
       expect(await membersIn(drive.id, viewerIds)).toEqual([]);
     }
-    expect(await rowIdsIn(drive.id)).toEqual(before);
+    expect(await storedChoice(owner.id, drive.id)).toBeNull();
+  });
+
+  it('given a stranger, should return 403 on read and write and store nothing', async () => {
+    const { user: owner } = await provisionedUser();
+    const drive = await factories.createDrive(owner.id, { name: 'Guarded' });
+    const { user: stranger } = await provisionedUser();
+    await agentIdsOf(stranger.id);
+    const session = await browserSession(stranger.id);
+
+    expect((await getAs(session, drive.id)).status).toBe(403);
+    expect((await putAs(session, drive.id, true)).status).toBe(403);
+    expect((await putAs(session, drive.id, false)).status).toBe(403);
+    expect(await storedChoice(stranger.id, drive.id)).toBeNull();
   });
 
   it('given a PUT without a CSRF token or with a forged one, should return 403 and change nothing', async () => {
     const { user } = await provisionedUser();
     const drive = await factories.createDrive(user.id, { name: 'Owned' });
-    const ids = await agentIdsOf(user.id);
+    await agentIdsOf(user.id);
     const session = await browserSession(user.id);
     const other = await browserSession(user.id);
 
@@ -168,19 +171,19 @@ describe('GET/PUT /api/drives/[driveId]/imago-access (integration)', () => {
     // A real token bound to another session of the same user is still refused.
     expect((await putAs(session, drive.id, false, { csrf: other.csrf })).status).toBe(403);
 
-    expect(await membersIn(drive.id, ids)).toEqual(sorted(ids));
+    expect(await storedChoice(user.id, drive.id)).toBeNull();
   });
 
   it('given a PUT from a foreign origin with a valid CSRF token, should return 403 and change nothing', async () => {
     const { user } = await provisionedUser();
     const drive = await factories.createDrive(user.id, { name: 'Owned' });
-    const ids = await agentIdsOf(user.id);
+    await agentIdsOf(user.id);
     const session = await browserSession(user.id);
 
     const response = await putAs(session, drive.id, false, { origin: 'https://evil.example' });
 
     expect(response.status).toBe(403);
-    expect(await membersIn(drive.id, ids)).toEqual(sorted(ids));
+    expect(await storedChoice(user.id, drive.id)).toBeNull();
   });
 
   it('given no session cookie, should return 401', async () => {
@@ -192,19 +195,19 @@ describe('GET/PUT /api/drives/[driveId]/imago-access (integration)', () => {
     expect(response.status).toBe(401);
   });
 
-  it("given the Home drive, should refuse the toggle and keep the agents' native membership", async () => {
+  it("given the viewer's own Home drive, should refuse: Imago lives there", async () => {
     const { user, home } = await provisionedUser();
     const ids = await agentIdsOf(user.id);
     const session = await browserSession(user.id);
 
     expect((await putAs(session, home.id, false)).status).toBe(403);
-    expect(await membersIn(home.id, ids)).toEqual(sorted(ids));
+    expect(await storedChoice(user.id, home.id)).toBeNull();
+    expect(await membersIn(home.id, ids)).toEqual(ids);
   });
 
-  it('given a drive switched off, should keep it off when a deleted agent is recreated at sign-in', async () => {
+  it('given a drive switched off, should keep it off when a deleted Imago is recreated at sign-in', async () => {
     const { user } = await provisionedUser();
     const off = await factories.createDrive(user.id, { name: 'Off' });
-    const on = await factories.createDrive(user.id, { name: 'On' });
     const first = await provisionImagoAgents(user.id);
     const session = await browserSession(user.id);
     expect((await putAs(session, off.id, false)).status).toBe(200);
@@ -215,7 +218,6 @@ describe('GET/PUT /api/drives/[driveId]/imago-access (integration)', () => {
 
     expect(recreated).not.toBe(first.agents.imago);
     expect(await membersIn(off.id, [recreated])).toEqual([]);
-    expect(await membersIn(on.id, [recreated])).toEqual([recreated]);
     expect(await (await getAs(session, off.id)).json()).toMatchObject({ enabled: false });
   });
 });

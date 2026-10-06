@@ -137,7 +137,7 @@ describe('POST /api/account/handle-drive', () => {
 
   // Helper to setup the ownership transfer mock
   const setupTransferMock = () => {
-    vi.mocked(transferDriveOwnership).mockResolvedValue([]);
+    vi.mocked(transferDriveOwnership).mockResolvedValue(undefined);
     return vi.mocked(transferDriveOwnership);
   };
 

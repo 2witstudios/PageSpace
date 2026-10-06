@@ -58,10 +58,12 @@ import {
   provisionSessionSandbox,
   measureWarmSessionStorage,
   ensureGlobalSandboxSession,
+  ensureDriveSessionForConversation,
   type AgentSessionRecord,
   type EnsureGlobalSandboxSessionFailureReason,
 } from '@/lib/agent-workspaces/agent-workspaces-runtime';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
+import { findOwnImagoHomeDriveId } from '@/lib/ai/core/imago-agent-context';
 import type { ToolExecutionContext } from '../core/types';
 import { notifyShellAgentActivity } from '@/lib/websocket/socket-utils';
 
@@ -164,11 +166,26 @@ async function resolveOrProvisionSession(
   // shareable with sibling panes exactly like any other), not a second
   // sandbox-only mechanism.
   const conversation = await conversationRepository.getConversation(conversationId);
-  if (conversation?.type !== 'global') return { ok: false, attempted: false };
+  if (conversation?.type === 'global') {
+    const ensured = await ensureGlobalSandboxSession(conversationId, userId);
+    if (ensured.ok) return { ok: true, session: ensured.session };
+    return { ok: false, attempted: true, reason: ensured.reason };
+  }
 
-  const ensured = await ensureGlobalSandboxSession(conversationId, userId);
-  if (ensured.ok) return { ok: true, session: ensured.session };
-  return { ok: false, attempted: true, reason: ensured.reason };
+  // The owner's own Imago conversation replaces the Global Assistant's
+  // (IMG-10.10), so it gets the same automatic workspace — in the Home drive
+  // the agent lives in, which the owner pays for. Anyone else's Imago
+  // conversation, and every other page conversation, keeps the explicit
+  // "New session" spawn.
+  if (conversation?.type === 'page' && conversation.contextId && conversation.userId === userId) {
+    const homeDriveId = await findOwnImagoHomeDriveId(userId, conversation.contextId);
+    if (homeDriveId) {
+      const ensured = await ensureDriveSessionForConversation(conversationId, userId, homeDriveId, 'Imago');
+      if (ensured.ok) return { ok: true, session: ensured.session };
+      return { ok: false, attempted: true, reason: ensured.reason };
+    }
+  }
+  return { ok: false, attempted: false };
 }
 
 /**
@@ -426,6 +443,8 @@ function stampTurnId(context: ToolExecutionContext | undefined): string | undefi
 export interface ResolveSandboxActorContextDeps {
   findDrive: (driveId: string) => Promise<{ ownerId: string } | undefined>;
   findPageDriveId: (pageId: string) => Promise<string | undefined>;
+  /** The Home drive of `userId`'s own Imago agent `pageId`, else null (IMG-10.10). */
+  findOwnImagoHomeDriveId: (userId: string, pageId: string) => Promise<string | null>;
   findUser: (userId: string) => Promise<{ subscriptionTier: string | null } | undefined>;
   getActorInfo: (userId: string) => Promise<{ actorEmail: string; actorDisplayName?: string }>;
   /** The conversation's bound session (null = unbound) — the payer source for GLOBAL conversations. */
@@ -444,6 +463,7 @@ const defaultResolveDeps: ResolveSandboxActorContextDeps = {
     });
     return row?.driveId ?? undefined;
   },
+  findOwnImagoHomeDriveId,
   findUser: (userId) =>
     db.query.users.findFirst({ where: eq(users.id, userId), columns: { subscriptionTier: true } }),
   getActorInfo,
@@ -501,13 +521,21 @@ export function createResolveSandboxActorContext(
     } else if (chatSourceType === 'global') {
       sessionOwnerId = userId;
     } else {
-      driveId =
-        context?.locationContext?.currentDrive?.id ??
-        (context?.chatSource?.agentPageId
-          ? await deps.findPageDriveId(context.chatSource.agentPageId)
-          : undefined);
-      if (!driveId) {
-        return { error: 'Code execution requires an active drive.' };
+      // The owner's own Imago conversation: provisioning mints its session in
+      // the agent's Home drive (`resolveOrProvisionSession`), whatever drive
+      // the user is looking at — so that is the payer, never the location.
+      const agentPageId = context?.chatSource?.agentPageId;
+      const imagoHomeDriveId = agentPageId ? await deps.findOwnImagoHomeDriveId(userId, agentPageId) : null;
+      if (imagoHomeDriveId) {
+        driveId = imagoHomeDriveId;
+        sessionOwnerId = userId;
+      } else {
+        driveId =
+          context?.locationContext?.currentDrive?.id ??
+          (agentPageId ? await deps.findPageDriveId(agentPageId) : undefined);
+        if (!driveId) {
+          return { error: 'Code execution requires an active drive.' };
+        }
       }
     }
 
