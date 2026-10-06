@@ -85,6 +85,7 @@ import { setImagoDriveAccess } from '@pagespace/lib/agents/imago-drive-access';
 import { getBuiltinAgent } from '@pagespace/lib/agents/builtin-agents';
 import type { IntegrationProviderConfig } from '@pagespace/lib/integrations/types';
 import { buildAgentMemorySection } from '@/lib/ai/core/agent-memory';
+import { buildLocationTurnPrompt } from '@/lib/ai/core/location-prompt';
 import { ensureTestDb } from '@/test/ensure-test-db';
 import type { ContextRef } from '@/lib/ai/shared/buildContextRef';
 import { POST as postPageChat } from '@/app/api/ai/chat/route';
@@ -341,7 +342,11 @@ describe('IMG-10.10 — Imago is given the global assistant\'s context, plus its
       expect(imago.system, hidden).not.toContain(hidden);
       expect(imago.lastUser, hidden).not.toContain(hidden);
     }
-    expect(locationBlock(imago.lastUser)).toContain('a workspace they keep you out of');
+    // The excluded drive's LOCATION block is exactly the honest note the
+    // `{ kind: 'excluded' }` access flag renders — nothing of the drive in it.
+    expect(locationBlock(imago.lastUser)).toBe(
+      buildLocationTurnPrompt({ currentDrive: { name: 'Drive' }, agentAccess: { kind: 'excluded' } }),
+    );
     // The all-drives summary it falls back to still names the drives it may use.
     expect(imago.system).toContain(`${MARK} Acme`);
   });

@@ -23,7 +23,6 @@ import {
   findOwnImagoHomeDriveId,
   loadImagoAgentContext,
   resolveImagoDriveInView,
-  resolveImagoLocationAccess,
 } from '../imago-agent-context';
 
 const seededUserIds: string[] = [];
@@ -85,24 +84,21 @@ describe('loadImagoAgentContext (integration)', () => {
   });
 });
 
-describe('resolveImagoLocationAccess / resolveImagoDriveInView', () => {
+describe('resolveImagoDriveInView', () => {
   const context = { homeDriveId: 'home_1', excludedDriveIds: new Set(['drive_out']) };
   const at = (id: string) => ({ currentDrive: { id, name: 'Drive', slug: 'drive' } });
 
-  it('given a drive the user keeps Imago out of, should flag it and offer no drive to use', () => {
-    expect(resolveImagoLocationAccess(at('drive_out'), context)).toEqual({ kind: 'excluded' });
+  it('given a drive the user keeps Imago out of, should offer no drive to use', () => {
     expect(resolveImagoDriveInView(at('drive_out'), context)).toBeNull();
   });
 
-  it('given any other drive, Home included, should leave the location as is and offer that drive', () => {
+  it('given any other drive, Home included, should offer that drive', () => {
     for (const id of ['home_1', 'drive_in']) {
-      expect(resolveImagoLocationAccess(at(id), context)).toBeUndefined();
       expect(resolveImagoDriveInView(at(id), context)).toBe(id);
     }
   });
 
   it('given no drive in view, should offer none', () => {
-    expect(resolveImagoLocationAccess(null, context)).toBeUndefined();
     expect(resolveImagoDriveInView(null, context)).toBeNull();
   });
 });

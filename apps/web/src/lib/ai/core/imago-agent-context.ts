@@ -21,7 +21,6 @@ import { pages } from '@pagespace/db/schema/core';
 import { userBuiltinAgents } from '@pagespace/db/schema/user-builtin-agents';
 import { imagoExcludedDriveIds } from '@pagespace/lib/agents/imago-reach';
 import type { LocationContext } from '@/lib/ai/shared/chat-types';
-import type { LocationAgentAccess } from './location-prompt';
 
 export interface ImagoAgentContext {
   /** The drive the agent page lives in — the user's Home drive. */
@@ -70,15 +69,6 @@ export async function findBuiltinAgentOwner(agentPageId: string): Promise<string
     .where(eq(userBuiltinAgents.pageId, agentPageId))
     .limit(1);
   return row?.userId ?? null;
-}
-
-/** The LOCATION note for a drive in view the user keeps Imago out of; undefined anywhere else. */
-export function resolveImagoLocationAccess(
-  location: LocationContext | null,
-  context: ImagoAgentContext,
-): LocationAgentAccess | undefined {
-  const driveId = location?.currentDrive?.id;
-  return driveId && context.excludedDriveIds.has(driveId) ? { kind: 'excluded' } : undefined;
 }
 
 /**
