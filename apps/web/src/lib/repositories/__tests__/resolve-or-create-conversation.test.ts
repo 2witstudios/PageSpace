@@ -16,6 +16,9 @@ vi.mock('@pagespace/db/schema/conversations', () => ({
   },
 }));
 
+const { emitConversationLifecycle } = vi.hoisted(() => ({ emitConversationLifecycle: vi.fn() }));
+vi.mock('../conversation-rev', () => ({ emitConversationLifecycle }));
+
 import {
   resolveOrCreateConversation,
   ConversationOwnershipError,
@@ -63,6 +66,34 @@ describe('resolveOrCreateConversation', () => {
     const result = await resolveOrCreateConversation('user1', 'conv1', db as never);
     expect(result).toEqual({ conversation: created, isNew: true });
     expect(db.insert).toHaveBeenCalled();
+  });
+
+  it('given a new row and no announceAfterCommit, announces conversation:created at once', async () => {
+    emitConversationLifecycle.mockClear();
+    const created = { id: 'conv1', userId: 'user1', type: 'global', isActive: true, rev: 0 };
+    await resolveOrCreateConversation('user1', 'conv1', makeDb([], [created]) as never);
+    expect(emitConversationLifecycle.mock.calls).toEqual([['created', created]]);
+  });
+
+  it('given announceAfterCommit, hands the announcement to the caller instead of making it inside its transaction', async () => {
+    emitConversationLifecycle.mockClear();
+    const created = { id: 'conv1', userId: 'user1', type: 'global', isActive: true, rev: 0 };
+    const held: Array<() => void> = [];
+    await resolveOrCreateConversation('user1', 'conv1', makeDb([], [created]) as never, {
+      announceAfterCommit: (announce) => held.push(announce),
+    });
+    expect({ before: emitConversationLifecycle.mock.calls.length, held: held.length }).toEqual({ before: 0, held: 1 });
+    held[0]();
+    expect(emitConversationLifecycle.mock.calls).toEqual([['created', created]]);
+  });
+
+  it('given an existing row, announces nothing and hands nothing over', async () => {
+    emitConversationLifecycle.mockClear();
+    const held: Array<() => void> = [];
+    await resolveOrCreateConversation('user1', 'conv1', makeDb([CONV]) as never, {
+      announceAfterCommit: (announce) => held.push(announce),
+    });
+    expect({ emitted: emitConversationLifecycle.mock.calls.length, held: held.length }).toEqual({ emitted: 0, held: 0 });
   });
 
   it('given existing conversation owned by a different user, throws ConversationOwnershipError', async () => {

@@ -201,7 +201,7 @@ describe('imago-image.yml (PR proof that the image builds and boots)', () => {
       .flatMap((line) => line.slice('COPY '.length).trim().split(/\s+/).slice(0, -1));
     const matchesTrigger = (path: string) =>
       (pr?.paths ?? []).some((glob) => {
-        const re = new RegExp(`^${glob.replace(/[.+]/g, '\\$&').replace(/\*\*/g, '\u0000').replace(/\*/g, '[^/]*').replace(/\u0000/g, '.*')}$`);
+        const re = new RegExp(`^${glob.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*\*/g, '\u0000').replace(/\*/g, '[^/]*').replace(/\u0000/g, '.*')}$`);
         return re.test(path) || re.test(`${path}/x`);
       });
     expect(copied.length).toBeGreaterThan(0);
