@@ -4,6 +4,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import { ORG_ROLE_RANK, decideOrgRole } from '../authorize';
+import { roleChangeOnlyRestricts } from '../org-roles';
 import {
   decideInviteCreation,
   decideInviteAcceptance,
@@ -139,12 +140,12 @@ describe('invitation decisions', () => {
 
 describe('membership decisions', () => {
   it('ORG-2 (partial) an Admin can make a Member an Admin and back', () => {
-    expect(decideRoleChange({ actorId: 'priya', actorRole: 'ADMIN', targetId: 'marcus', targetRole: 'MEMBER', newRole: 'ADMIN' })).toEqual({ ok: true });
-    expect(decideRoleChange({ actorId: 'priya', actorRole: 'ADMIN', targetId: 'dana', targetRole: 'ADMIN', newRole: 'MEMBER' })).toEqual({ ok: true });
+    expect(decideRoleChange({ actorId: 'priya', actorRole: 'ADMIN', targetId: 'marcus', targetRole: 'MEMBER', newRole: 'ADMIN', orgLapsed: false })).toEqual({ ok: true });
+    expect(decideRoleChange({ actorId: 'priya', actorRole: 'ADMIN', targetId: 'dana', targetRole: 'ADMIN', newRole: 'MEMBER', orgLapsed: false })).toEqual({ ok: true });
   });
 
   it('ORG-2 (partial) a role change on a non-member is not found', () => {
-    expect(decideRoleChange({ actorId: 'priya', actorRole: 'ADMIN', targetId: 'chris', targetRole: null, newRole: 'ADMIN' })).toEqual({
+    expect(decideRoleChange({ actorId: 'priya', actorRole: 'ADMIN', targetId: 'chris', targetRole: null, newRole: 'ADMIN', orgLapsed: false })).toEqual({
       ok: false,
       status: 404,
       reason: 'target_not_member',
@@ -152,16 +153,35 @@ describe('membership decisions', () => {
   });
 
   it('ORG-1 (partial) the Owner role is never granted or removed by a role change, only by transfer', () => {
-    expect(decideRoleChange({ actorId: 'priya', actorRole: 'ADMIN', targetId: 'marcus', targetRole: 'MEMBER', newRole: 'OWNER' })).toEqual({
+    expect(decideRoleChange({ actorId: 'priya', actorRole: 'ADMIN', targetId: 'marcus', targetRole: 'MEMBER', newRole: 'OWNER', orgLapsed: false })).toEqual({
       ok: false,
       status: 400,
       reason: 'use_ownership_transfer',
     });
-    expect(decideRoleChange({ actorId: 'priya', actorRole: 'ADMIN', targetId: 'jono', targetRole: 'OWNER', newRole: 'MEMBER' })).toEqual({
+    expect(decideRoleChange({ actorId: 'priya', actorRole: 'ADMIN', targetId: 'jono', targetRole: 'OWNER', newRole: 'MEMBER', orgLapsed: false })).toEqual({
       ok: false,
       status: 400,
       reason: 'use_ownership_transfer',
     });
+  });
+
+  it('ORG-2 (partial) SEAT-9 (partial) [D-OW-33] while the org is lapsed a Member cannot be made an Admin; an Admin can still be made a Member', () => {
+    expect(decideRoleChange({ actorId: 'priya', actorRole: 'ADMIN', targetId: 'marcus', targetRole: 'MEMBER', newRole: 'ADMIN', orgLapsed: true })).toEqual({
+      ok: false,
+      status: 402,
+      reason: 'org_lapsed',
+    });
+    expect(decideRoleChange({ actorId: 'priya', actorRole: 'ADMIN', targetId: 'dana', targetRole: 'ADMIN', newRole: 'MEMBER', orgLapsed: true })).toEqual({ ok: true });
+    // Setting the role a member already has changes nothing, so it loosens nothing.
+    expect(decideRoleChange({ actorId: 'priya', actorRole: 'ADMIN', targetId: 'dana', targetRole: 'ADMIN', newRole: 'ADMIN', orgLapsed: true })).toEqual({ ok: true });
+  });
+
+  it('SEAT-9 (partial) [D-OW-33] the role ranks decide what a lapsed org may change: only a move down the ranks, or none, restricts', () => {
+    expect(roleChangeOnlyRestricts('ADMIN', 'MEMBER')).toBe(true);
+    expect(roleChangeOnlyRestricts('MEMBER', 'MEMBER')).toBe(true);
+    expect(roleChangeOnlyRestricts('MEMBER', 'ADMIN')).toBe(false);
+    expect(roleChangeOnlyRestricts('MEMBER', 'OWNER')).toBe(false);
+    expect(roleChangeOnlyRestricts('ADMIN', 'OWNER')).toBe(false);
   });
 
   it('ORG-2 (partial) removing the Owner is refused and removing yourself is leaving', () => {
@@ -184,7 +204,7 @@ describe('membership decisions', () => {
   });
 
   it('ORG-5 (partial) a role change or removal re-checks the actor, who may have lost the Admin role since the route authorized', () => {
-    expect(decideRoleChange({ actorId: 'priya', actorRole: 'MEMBER', targetId: 'marcus', targetRole: 'MEMBER', newRole: 'ADMIN' })).toEqual({
+    expect(decideRoleChange({ actorId: 'priya', actorRole: 'MEMBER', targetId: 'marcus', targetRole: 'MEMBER', newRole: 'ADMIN', orgLapsed: false })).toEqual({
       ok: false,
       status: 403,
       reason: 'insufficient_role',

@@ -68,19 +68,30 @@ export function customDomainsDecision(policies: OrgPolicies | null): PolicyDecis
 /** What happens to a person being added to an org drive (POL-2). */
 export type GuestAdmission = 'allow' | 'hold' | 'refuse';
 
+/** Why an outsider was not added: the guests policy is off, or the org is lapsed ([D-OW-33]). */
+export type GuestAdmissionRefusal = 'guests_off' | 'org_lapsed';
+
+export type GuestAdmissionVerdict =
+  | { decision: 'allow' }
+  | { decision: 'hold' }
+  | { decision: 'refuse'; refusal: GuestAdmissionRefusal };
+
 /**
  * POL-2: an org MEMBER is never a guest. An outsider is refused when guests are off, held for an Owner or Admin
  * to approve when the policy is `approve`, and allowed when on. A drive with no org has no guest policy.
+ *
+ * [D-OW-33] a lapsed org may only restrict: an outsider it would ALLOW is refused instead (adding a guest loosens
+ * access). A held request still queues, since it grants nothing and approving it is refused while lapsed.
  */
-export function decideGuestAdmission(policies: OrgPolicies | null, who: { isOrgMember: boolean }): GuestAdmission {
-  if (policies === null || who.isOrgMember) return 'allow';
+export function decideGuestAdmission(policies: OrgPolicies | null, who: { isOrgMember: boolean; orgLapsed: boolean }): GuestAdmissionVerdict {
+  if (policies === null || who.isOrgMember) return { decision: 'allow' };
   switch (policies.guests) {
     case 'off':
-      return 'refuse';
+      return { decision: 'refuse', refusal: 'guests_off' };
     case 'approve':
-      return 'hold';
+      return { decision: 'hold' };
     case 'on':
-      return 'allow';
+      return who.orgLapsed ? { decision: 'refuse', refusal: 'org_lapsed' } : { decision: 'allow' };
   }
 }
 

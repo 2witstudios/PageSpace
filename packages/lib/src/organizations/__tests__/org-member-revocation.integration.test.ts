@@ -12,6 +12,7 @@ import { createId } from '@paralleldrive/cuid2';
 import { db, pool } from '@pagespace/db/db';
 import { and, eq, inArray } from '@pagespace/db/operators';
 import { orgGuestHolds } from '@pagespace/db/schema/org-guest-holds';
+import { orgSubscriptions } from '@pagespace/db/schema/organizations';
 import { factories } from '@pagespace/db/test/factories';
 import { mcpTokens } from '@pagespace/db/schema/auth';
 import { driveAgentMembers, driveRoles, mcpTokenDrives } from '@pagespace/db/schema/members';
@@ -202,8 +203,14 @@ describe('org member removal and demotion revoke what the membership handed out 
     const { jono, marcus } = f.people;
     const link = await pageLink(f.pages.productPage.id, marcus.id);
     const agent = await agentGrant(marcus.id, f.drives.product.id, 'MEMBER');
+    // Northwind is paid: a lapsed org may not promote anyone ([D-OW-33], lapsed-loosen.integration.test.ts).
+    await factories.createOrgSubscription(f.org.id, { status: 'active' });
 
-    expect(await changeMemberRole({ orgId: f.org.id, actorId: jono.id, targetId: marcus.id, newRole: 'ADMIN' })).toEqual({ ok: true });
+    try {
+      expect(await changeMemberRole({ orgId: f.org.id, actorId: jono.id, targetId: marcus.id, newRole: 'ADMIN' })).toEqual({ ok: true });
+    } finally {
+      await db.delete(orgSubscriptions).where(eq(orgSubscriptions.orgId, f.org.id));
+    }
 
     expect(await exists('pageLink', link)).not.toBeNull();
     expect(await exists('agent', agent)).toMatchObject({ role: 'MEMBER' });

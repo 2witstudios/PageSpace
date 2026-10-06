@@ -2,6 +2,7 @@ import type { OrgRole } from '@pagespace/db/schema/organizations';
 import type { OrgDriveVisibility } from '@pagespace/db/schema/core';
 import { homeDriveActionError, isHomeDrive } from '../services/drive-guards';
 import { isDriveLead } from '../permissions/drive-relationship';
+import { ORG_LAPSED_REFUSAL, type OrgLapsedRefusal } from './status-core';
 
 /**
  * Org-owned drives: who may move a drive into or out of an org, who may create one
@@ -180,27 +181,43 @@ function authorizeOrgDriveChange(
   return null;
 }
 
+/** How open each org drive visibility is: Private < Restricted < Open (DRV-4). */
+const VISIBILITY_OPENNESS: Readonly<Record<OrgDriveVisibility, number>> = { PRIVATE: 0, RESTRICTED: 1, OPEN: 2 };
+
+/**
+ * [D-OW-33] Whether a visibility change only restricts: toward Private, or no change. A lapsed org may make it;
+ * one toward Open loosens access and waits until the org pays. The UI offers exactly what this allows.
+ */
+export function visibilityChangeOnlyRestricts(from: OrgDriveVisibility, to: OrgDriveVisibility): boolean {
+  return VISIBILITY_OPENNESS[to] <= VISIBILITY_OPENNESS[from];
+}
+
 /**
  * Change an org drive's visibility (DRV-4). The service then runs the org membership sync so the
  * materialized rows follow: rows appear for an Open drive and go for Restricted or Private.
+ * While the org is lapsed only a change toward Private is made ([D-OW-33], SEAT-9).
  */
 export function decideChangeDriveVisibility({
   drive,
   actorId,
   actorOrgRole,
+  orgLapsed,
   visibility,
 }: {
   drive: OrgDriveFactsForChange;
   actorId: string;
   /** The actor's role in drive.orgId; null when not a member or the drive has no org. */
   actorOrgRole: OrgRole | null;
+  /** Whether drive.orgId is lapsed, read in the write's transaction. */
+  orgLapsed: boolean;
   visibility: OrgDriveVisibility;
-}): { ok: true; changed: boolean; from: OrgDriveVisibility; to: OrgDriveVisibility } | OrgDriveRefusal {
+}): { ok: true; changed: boolean; from: OrgDriveVisibility; to: OrgDriveVisibility } | OrgDriveRefusal | OrgLapsedRefusal {
   const refusal = authorizeOrgDriveChange(drive, actorId, actorOrgRole, "this drive's visibility");
   if (refusal) return refusal;
   if (drive.isTrashed) {
     return refuse('DRIVE_TRASHED', 409, "Restore this drive from trash before changing its visibility.");
   }
+  if (orgLapsed && !visibilityChangeOnlyRestricts(drive.orgVisibility, visibility)) return ORG_LAPSED_REFUSAL;
   return { ok: true, changed: drive.orgVisibility !== visibility, from: drive.orgVisibility, to: visibility };
 }
 

@@ -407,6 +407,15 @@ describe('org route behaviour', () => {
     expect(membership.changeMemberRole).not.toHaveBeenCalled();
   });
 
+  it('SEAT-9 (partial) ORG-2 (partial) [D-OW-33] a promotion refused while the org is lapsed answers 402 org_lapsed with the lapse copy, and audits nothing', async () => {
+    asRole('ADMIN');
+    vi.mocked(membership.changeMemberRole).mockResolvedValue({ ok: false, status: 402, reason: 'org_lapsed' });
+    const res = await memberRoute.PATCH(req('PATCH', { role: 'ADMIN' }), params({ orgId: ORG_ID, userId: 'user_marcus' }));
+    expect(res.status).toBe(402);
+    expect(await res.json()).toEqual({ code: 'org_lapsed', error: ORG_LAPSED_MESSAGE });
+    expect(auditRequest).not.toHaveBeenCalled();
+  });
+
   it('ORG-2 (partial) a refused role change or removal carries the service status and code', async () => {
     asRole('ADMIN');
     vi.mocked(membership.removeMember).mockResolvedValue({ ok: false, status: 400, reason: 'use_ownership_transfer' });

@@ -10,8 +10,9 @@ import { trackPageOperation } from '@pagespace/lib/monitoring/activity-tracker';
 import { createInviteToken } from '@pagespace/lib/auth/invite-token';
 import { sendPendingPageShareInvitationEmail } from '@pagespace/lib/services/notification-email-service';
 import { decideOrgDriveAdmission } from '@pagespace/lib/permissions/guest-admission';
+import { admissionRefusalResponse } from '@/lib/drive-invites/invite-handlers';
 import { requestGuestApproval } from '@pagespace/lib/permissions/guest-holds';
-import { GUESTS_HELD_MESSAGE, guestsOffRefusal } from '@pagespace/lib/organizations/sharing-decisions';
+import { GUESTS_HELD_MESSAGE } from '@pagespace/lib/organizations/sharing-decisions';
 import { recordOrgAuditEvent } from '@pagespace/lib/audit/org-audit';
 import type { PendingPagePermission } from '@pagespace/db/schema/pending-page-invites';
 import { pageInviteRepository } from '@/lib/repositories/page-invite-repository';
@@ -52,10 +53,7 @@ export async function pageShareGuestPolicyResponse(input: {
   const { page, email, verifiedUserId, permissions, expiryDays, inviterUserId } = input;
   const admission = await decideOrgDriveAdmission({ driveId: page.driveId, userId: verifiedUserId });
   if (admission.decision === 'allow') return null;
-  if (admission.decision === 'refuse') {
-    const refusal = guestsOffRefusal();
-    return NextResponse.json({ error: refusal.message, code: refusal.code, policy: refusal.policy }, { status: refusal.status });
-  }
+  if (admission.decision === 'refuse') return admissionRefusalResponse(admission.refusal);
   if (!admission.orgId) return null;
   const grant = { pageId: page.id, ...pageFlags(permissions) };
   const item = verifiedUserId
