@@ -141,7 +141,8 @@ export function WorkflowList({ workflows, spendContext, onRun, onToggle, onEdit,
                     variant="ghost"
                     size="sm"
                     onClick={() => handleRun(workflow.id)}
-                    disabled={runningIds.has(workflow.id)}
+                    // [D-OW-36] nothing runs under a missing person, by schedule or by hand.
+                    disabled={runningIds.has(workflow.id) || runState.kind === 'owner_left'}
                     className="h-8 w-8 p-0"
                     aria-label="Run workflow"
                   >

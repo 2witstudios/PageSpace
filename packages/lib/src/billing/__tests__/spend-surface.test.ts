@@ -158,13 +158,19 @@ describe('automationSpendCopy: who an automation spends as', () => {
     expect(automationSpendCopy({ creatorName: 'Priya Nair', walletLabel: 'Product wallet' })).toEqual({
       badge: 'As Priya',
       line: 'Created by Priya Nair',
-      detail: 'Each scheduled run spends from Product wallet as Priya Nair, under their caps and fallback. A channel mention or a manual Run counts against whoever triggered it. If no source can pay, the run is skipped and logged.',
+      detail: "Each scheduled run spends only Product wallet, as Priya Nair under their caps, and never falls back to anyone's own credits. A channel mention or a manual Run counts against whoever triggered it. If the wallet can't pay, the run is skipped and logged.",
     });
+  });
+
+  it('SPEND-6 (partial) the copy never promises an automation a fallback it does not get (orchestrator ruling on UI-8)', () => {
+    for (const input of [{ creatorName: 'Priya Nair', walletLabel: 'Product wallet' }, { creatorName: null, walletLabel: null }]) {
+      expect(automationSpendCopy(input).detail).not.toMatch(/fallback apply|caps and fallback|no source can pay/);
+    }
   });
 
   it('SPEND-6 (partial) an unknown creator or wallet still reads as a sentence', () => {
     expect(automationSpendCopy({ creatorName: null, walletLabel: null }).detail).toBe(
-      "Each scheduled run spends as its creator, from the drive's wallet once it has one. A channel mention or a manual Run counts against whoever triggered it. If no source can pay, the run is skipped and logged.",
+      "Each scheduled run spends only the drive's wallet once it has one, as its creator under their caps. A channel mention or a manual Run counts against whoever triggered it. If the wallet can't pay, the run is skipped and logged.",
     );
     expect(automationSpendCopy({ creatorName: null, walletLabel: null }).badge).toBe('As its creator');
   });

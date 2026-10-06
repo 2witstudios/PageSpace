@@ -77,7 +77,7 @@ export function WalletRulesCard({ driveId, orgName, wallet, editable, onChanged 
             </SelectContent>
           </Select>
         </Row>
-        <Row title="Automations" detail="Spend as a person. A scheduled run counts against the member who created it; a channel mention or a manual Run counts against whoever triggered it. Their caps and fallback apply.">
+        <Row title="Automations" detail="Automations spend this drive's wallet only and never fall back to anyone's own credits. A scheduled run counts against the caps of the member who created it; a channel mention or a manual Run counts against whoever triggered it.">
           <Badge variant="outline">As a person</Badge>
         </Row>
         {orgName && (

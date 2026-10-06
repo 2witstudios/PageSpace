@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { WorkflowList } from '../WorkflowList';
 import type { Workflow } from '../types';
 
@@ -49,6 +49,15 @@ describe('WorkflowList: automation spend state', () => {
     const toggle = screen.getByRole('switch');
     expect(toggle.getAttribute('aria-checked')).toBe('false');
     expect(toggle.hasAttribute('disabled')).toBe(true);
+  });
+
+  it('SPEND-6 (partial) an owner-left workflow cannot be Run by hand either: the Run button is disabled (D-OW-36)', () => {
+    const onRun = vi.fn();
+    render(<WorkflowList workflows={[{ ...base, ownerLeftAt: '2026-09-30T00:00:00Z' }]} spendContext={context} onRun={onRun} onToggle={noop} onEdit={noop} onDelete={noop} />);
+    const run = screen.getByRole('button', { name: 'Run workflow' }) as HTMLButtonElement;
+    expect(run.disabled).toBe(true);
+    fireEvent.click(run);
+    expect(onRun).not.toHaveBeenCalled();
   });
 
   it('SPEND-6 (partial) with organizations dark the list is exactly as before', () => {

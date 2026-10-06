@@ -151,7 +151,7 @@ function AttentionBody({ orgId, role, lapsed }: OrgSettingsContext) {
             ))
           )}
         </div>
-        <p className="mt-2 px-1 text-xs text-muted-foreground">Nothing runs under a missing person. Once reassigned, the automation spends as its new owner, under their caps and fallback.</p>
+        <p className="mt-2 px-1 text-xs text-muted-foreground">Nothing runs under a missing person. Once reassigned, the automation spends the drive's wallet only, under its new owner's caps.</p>
       </section>
     </div>
   );
