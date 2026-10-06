@@ -107,7 +107,7 @@ export function WorkflowList({ workflows, spendContext, onRun, onToggle, onEdit,
             );
             return (
             <TableRow key={workflow.id}>
-              <TableCell className="font-medium">
+              <TableCell className="font-medium whitespace-normal">
                 <div className="flex flex-col">
                   <span>{workflow.name}</span>
                   {spendContext && (

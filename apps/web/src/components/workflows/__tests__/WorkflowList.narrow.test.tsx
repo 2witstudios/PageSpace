@@ -22,5 +22,8 @@ describe('WorkflowList on a narrow screen (review: Workflows overflowed at 390px
       expect(screen.getByRole('columnheader', { name }).className).not.toContain('hidden');
     }
     expect(screen.getByRole('button', { name: 'Run workflow' }).closest('td')?.className ?? '').not.toContain('hidden');
+    // Table cells never wrap by default: a long name or spend line in the name cell pushed Run off a 390px screen
+    // (seen in the real-app check). The name cell wraps.
+    expect((screen.getByText('Weekly digest workflow').closest('td') as HTMLElement).className).toContain('whitespace-normal');
   });
 });
