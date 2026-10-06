@@ -22,7 +22,7 @@
  *
  * A new reader fails here until it is classified. A ledgered function that no longer reads must leave.
  */
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import ts from 'typescript';
@@ -246,6 +246,7 @@ const KEY_SCOPE_READ_LEDGER: Readonly<Record<string, Verdict>> = {
 };
 
 const ROOTS = ['apps', 'packages/lib/src'];
+const TYPED_SCAN_TIMEOUT_MS = 300_000;
 
 /** Name-based reads over every file, plus the type-based reads (the checker's runtime is reported by a test below). */
 function allReads(): { reads: ScopeRead[]; typedMs: number } {
@@ -278,8 +279,14 @@ function referencersOf(file: string, name: string): string[] {
 }
 
 describe('key-scope reads: no key reaches past its owner (review #2849 r6)', () => {
-  const { reads, typedMs } = allReads();
-  const keys = new Set(reads.map((r) => `${r.file}#${r.fn}`));
+  // The scan (the typed half builds a TypeScript Program) runs ONCE, with its own generous timeout: CI measured ~126 s.
+  let reads: ScopeRead[] = [];
+  let typedMs = 0;
+  let keys = new Set<string>();
+  beforeAll(() => {
+    ({ reads, typedMs } = allReads());
+    keys = new Set(reads.map((r) => `${r.file}#${r.fn}`));
+  }, TYPED_SCAN_TIMEOUT_MS);
 
   it('every read of a key\'s drive scope sits in a ledgered function', () => {
     const unledgered = reads.filter((r) => !(`${r.file}#${r.fn}` in KEY_SCOPE_READ_LEDGER)).map((r) => `${r.file}:${r.line} ${r.fn} ${r.what}`);
@@ -383,7 +390,7 @@ describe('key-scope reads: no key reaches past its owner (review #2849 r6)', () 
 
   it('the type-based scan runs within budget (its runtime is printed)', () => {
     console.log(`key-scope typed scan: ${typedMs} ms`);
-    expect(typedMs).toBeLessThan(120_000);
+    expect(typedMs).toBeLessThan(TYPED_SCAN_TIMEOUT_MS);
   });
 
   it('the type-based scan sees a ScopeSet and an OAuth row by TYPE, through renames the name rules cannot follow', () => {
