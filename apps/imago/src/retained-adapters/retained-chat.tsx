@@ -75,7 +75,7 @@ export function RetainedChat({ agentId, name, conversationId, resolving }: {
     {creationError && <p role="alert" className="px-2 text-sm text-destructive">Could not open this chat. Try sending again.</p>}
     <div className="border-t border-border p-2"><ChatInput value={input}
       onChange={value => dispatch(transactions.setChatDraft, value)} onSend={() => void prepareFirstSend()}
-      disabled={preparing || permissions?.canEdit !== true} isStreaming={false} hideModelSelector variant="main"
+      disabled={preparing || permissions?.canEdit !== true} isStreaming={false} onStop={() => undefined} hideModelSelector variant="main"
       placeholder={`Message ${name}...`} hasVision={hasVisionCapability(page.aiModel || '')}
       attachments={attachments} onAddFiles={addFiles} onRemoveFile={removeFile} commandDriveId={page.driveId} /></div>
   </div></RetainedSurface>;
