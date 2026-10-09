@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { imagoHref, imagoBrowserPath, retainedRouterHref, classicPathname } from './navigation';
+import { imagoHref, imagoBrowserPath, retainedRouterHref, navigateRetained, classicPathname } from './navigation';
 import { stageFor } from '@/ui/frame/stage/stage';
 
 afterEach(() => vi.unstubAllEnvs());
@@ -47,4 +47,14 @@ describe('retained destinations stay inside the persistent shell', () => {
     expect(stage.driveId).toBeNull();
     expect(stage.object).not.toBeNull();
   });
+});
+
+it.each([
+  ['/auth/signin?next=%2Fimago', 'https://pagespace.ai/auth/signin?next=%2Fimago', true],
+  ['/dashboard/drive123/page456', '/drive123/files/page456', false],
+] as const)('uses the correct navigation transport for %s', (href, destination, auth) => {
+  const exit = vi.fn(); const route = vi.fn();
+  navigateRetained(href, { origin: 'https://pagespace.ai', exit, route });
+  expect(auth ? exit : route).toHaveBeenCalledExactlyOnceWith(destination);
+  expect(auth ? route : exit).not.toHaveBeenCalled();
 });

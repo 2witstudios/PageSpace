@@ -199,3 +199,8 @@ chats reuse the original empty message area and input controls without creating
 a conversation on mount. The first send creates its thread then hands text/file
 parts once to the existing SessionChat pipeline; failed creation restores the
 draft and permits retry. Backend transport, streaming and model policy stay intact.
+
+Public auth exits explicitly use full-document assign/replace, matching Imago's
+existing sign-in contract, rather than relying on a cross-app Next RSC fallback.
+Focused boundary tests distinguish auth exits from persistent-shell navigation.
+Public auth routes are not prefetched by Imago. Native wrappers are unchanged.

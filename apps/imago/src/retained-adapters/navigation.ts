@@ -36,20 +36,37 @@ export function imagoBrowserPath(href: string): string {
   return translated === '/' ? IMAGO_BASE_PATH : `${IMAGO_BASE_PATH}${translated}`;
 }
 
+const isPublicAuth = (href: string): boolean => {
+  const path = href.split(/[?#]/, 1)[0];
+  return path === '/auth' || path.startsWith('/auth/');
+};
+
 /** Public auth belongs to classic, outside Next's Imago basePath. */
 export function retainedRouterHref(href: string, origin: string): string {
-  const path = href.split(/[?#]/, 1)[0];
-  if (path === '/auth' || path.startsWith('/auth/')) return new URL(href, process.env.NEXT_PUBLIC_WEB_APP_URL || signInOrigin(origin)).href;
+  if (isPublicAuth(href)) return new URL(href, process.env.NEXT_PUBLIC_WEB_APP_URL || signInOrigin(origin)).href;
   return imagoHref(href);
+}
+
+/** Public sign-in exits use Imago's full-document auth contract. */
+export function navigateRetained(href: string, io: {
+  origin: string; exit: (destination: string) => void; route: (destination: string) => void;
+}): void {
+  const destination = retainedRouterHref(href, io.origin);
+  if (isPublicAuth(href)) io.exit(destination);
+  else io.route(destination);
 }
 
 export function useRouter() {
   const router = useNextRouter();
   return useMemo(() => ({
     ...router,
-    push: (href: string, options?: Parameters<typeof router.push>[1]) => router.push(retainedRouterHref(href, window.location.origin), options),
-    replace: (href: string, options?: Parameters<typeof router.replace>[1]) => router.replace(retainedRouterHref(href, window.location.origin), options),
-    prefetch: (href: string, options?: Parameters<typeof router.prefetch>[1]) => router.prefetch(retainedRouterHref(href, window.location.origin), options),
+    push: (href: string, options?: Parameters<typeof router.push>[1]) => navigateRetained(href, {
+      origin: window.location.origin, exit: destination => window.location.assign(destination), route: destination => router.push(destination, options),
+    }),
+    replace: (href: string, options?: Parameters<typeof router.replace>[1]) => navigateRetained(href, {
+      origin: window.location.origin, exit: destination => window.location.replace(destination), route: destination => router.replace(destination, options),
+    }),
+    prefetch: (href: string, options?: Parameters<typeof router.prefetch>[1]) => isPublicAuth(href) ? undefined : router.prefetch(imagoHref(href), options),
   }), [router]);
 }
 
