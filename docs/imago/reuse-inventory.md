@@ -206,3 +206,5 @@ Focused boundary tests distinguish auth exits from persistent-shell navigation.
 Public auth routes are not prefetched by Imago. Native wrappers are unchanged.
 
 Native retained chat inputs provide the agent drive to mention search and enable the existing permission-filtered cross-drive search option. Commands remain scoped separately to the agent drive. The original mention search endpoint and authorization logic are unchanged.
+
+Account deletion still clears the ended session and performs a hard navigation, now resolving its original confirmation/Apple manual-disconnect marker against the configured public web origin. Both TipTap editor mention popup creation paths mount beneath retained-portals, separate from the chat mention picker. Agents/calendar/workflow/activity/trash/member context captions use their actual retained surface title rather than the generic drive-settings caption.

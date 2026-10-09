@@ -192,7 +192,7 @@ export const chatContextFor = (
   if (object?.kind === 'settings') {
     return {
       density: 'dense',
-      contextLabel: drive === undefined ? 'Drive settings in context' : `${drive} settings in context`,
+      contextLabel: `${drive ?? 'Drive'} ${(object.title ?? 'settings').toLowerCase()} in context`,
       placeholder: 'Ask anything…',
     };
   }
