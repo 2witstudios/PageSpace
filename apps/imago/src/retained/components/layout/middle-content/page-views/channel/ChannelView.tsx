@@ -740,7 +740,7 @@ function ChannelView({ page }: ChannelViewProps) {
   ) : null;
 
   return (
-    <div className="flex h-full w-full">
+    <div role="region" aria-label={`# ${page.title}`} className="flex h-full w-full">
     <MessageDropZone inputRef={channelInputRef} enabled={canEdit} className="flex flex-col h-full flex-1 min-w-0">
         <div className="flex-grow overflow-hidden relative">
           {/* Deliberately not permission-gated: the dialog itself explains the
@@ -811,6 +811,9 @@ function ChannelView({ page }: ChannelViewProps) {
                         <Fragment key={m.id}>
                         {showDateSeparator && <MessageDateSeparator label={formatMessageDate(m.createdAt)} />}
                         <div
+                          role="article"
+                          aria-label="Channel message"
+                          aria-busy={m.id.startsWith("temp-") || undefined}
                           data-message-id={m.id}
                           className={cn(
                             `group/msg flex items-start gap-4 ${rowSpacing} relative rounded`,

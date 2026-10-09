@@ -50,10 +50,10 @@ import {
 type Probed = Window & { __probe?: string };
 
 const listPane = (page: Page) => page.locator('[data-slot="list"]');
-const fileTree = (page: Page) => listPane(page).getByRole('list', { name: 'File tree', exact: true });
+const fileTree = (page: Page) => listPane(page).getByRole('navigation', { name: 'File tree', exact: true });
 /** A tree row's link; its accessible name is the page's name, then a folder's item count. */
 const treeLink = (scope: Locator, name: string) => scope.getByRole('link', { name: new RegExp(`^${name}\\b`) });
-const documentBody = (page: Page) => page.locator('[data-document-body]');
+const documentBody = (page: Page) => page.locator('.retained-ui .tiptap').first();
 
 const tagDocument = (page: Page) =>
   page.evaluate(() => {
@@ -98,6 +98,9 @@ test('a page created from the tree keeps the text typed into it across a reload'
     (response) => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/pages',
   );
   await listPane(page).getByRole('button', { name: 'New page', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Create new page' });
+  await dialog.getByRole('option').filter({ hasText: 'Document' }).first().click();
+  await dialog.getByRole('button', { name: 'Create', exact: true }).click();
   const answer = await created;
   expect(answer.ok(), await answer.text()).toBe(true);
   const { id: pageId } = (await answer.json()) as { id: string };
@@ -116,7 +119,7 @@ test('a page created from the tree keeps the text typed into it across a reload'
   await page.keyboard.type('Typed in imago, kept by PageSpace');
   const save = await saved;
   expect(save.ok(), await save.text()).toBe(true);
-  await expect(page.locator('[data-save-state]')).toHaveAttribute('data-save-state', 'saved');
+  await expect(page.locator('[data-slot="object"]').getByText('Saved', { exact: true })).toBeVisible();
 
   // apps/web stored it…
   const [row] = await db.select({ content: pages.content }).from(pages).where(eq(pages.id, pageId));
@@ -202,14 +205,12 @@ test('the tree filter keeps the folders above each match, and only those', async
   // Collapsed, as the tree opens: nothing under Alpha shows.
   await expect(treeLink(tree, 'Needle notes')).toHaveCount(0);
 
-  const filter = listPane(page).getByRole('searchbox', { name: 'Filter files' });
+  const filter = listPane(page).getByLabel('Filter files');
   await filter.fill('needle');
 
   // The match, with each folder above it opened on the way, and nothing beside them.
-  const alphaLevel = tree.getByRole('list', { name: 'Alpha', exact: true });
-  const betaLevel = alphaLevel.getByRole('list', { name: 'Beta', exact: true });
-  await expect(treeLink(betaLevel, 'Needle notes')).toBeVisible();
-  await expect(alphaLevel.getByRole('link')).toHaveCount(2);
+  await expect(treeLink(tree, 'Needle notes')).toBeVisible();
+  await expect(treeLink(tree, 'Beta')).toBeVisible();
   await expect(tree.getByRole('link')).toHaveCount(3);
   await expect(treeLink(tree, 'Alpha')).toBeVisible();
   await expect(treeLink(tree, 'Gamma')).toHaveCount(0);

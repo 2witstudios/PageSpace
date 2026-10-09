@@ -321,7 +321,7 @@ export default function PageTree({
           onDragOver={handleFileDragOver}
           onDrop={handleFileDropEvent}
         >
-          <nav className="px-1 py-2 min-h-[200px]">
+          <nav aria-label="File tree" className="px-1 py-2 min-h-[200px]">
             <SortableTree
               items={displayedTree as SortableTreePage[]}
               collapsedIds={collapsedIds}

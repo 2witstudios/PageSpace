@@ -991,7 +991,7 @@ function TaskListView({ page }: TaskListViewProps) {
   // Navigate to task page
   const handleNavigate = (task: TaskItem) => {
     if (task.pageId) {
-      router.push(`/dashboard/${page.driveId}/${task.pageId}`);
+      router.push(`/dashboard/${page.driveId}/tasks/${task.pageId}`);
     }
   };
 

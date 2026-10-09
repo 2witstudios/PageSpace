@@ -154,7 +154,7 @@ export function TaskRowCells({
           onValueChange={(value) => handlers.onStatusChange(loc, task, value)}
           disabled={!canEdit}
         >
-          <SelectTrigger className="h-8 w-28">
+          <SelectTrigger aria-label={`Status of ${task.title}`} className="h-8 w-28">
             <SelectValue>
               <Badge className={cn('text-xs', statusConfigMap[task.status]?.color || 'bg-slate-100 text-slate-700')}>
                 {statusConfigMap[task.status]?.label || task.status}
@@ -182,7 +182,7 @@ export function TaskRowCells({
           onValueChange={(value) => handlers.onPriorityChange(loc, value)}
           disabled={!canEdit}
         >
-          <SelectTrigger className="h-8 w-28">
+          <SelectTrigger aria-label={`Priority of ${task.title}`} className="h-8 w-28">
             <SelectValue>
               <Badge className={cn('text-xs', PRIORITY_CONFIG[task.priority].color)}>
                 {PRIORITY_CONFIG[task.priority].label}

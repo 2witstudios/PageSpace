@@ -113,3 +113,16 @@ worktree measurements; final checks and limitations belong in `verification.md`
 and the exact-candidate PageSpace handoff. Browser tests exercise original API
 writes, permission races, stream continuation and persisted parts; copied UI is
 not claimed fully covered merely because the native gate passes.
+
+## Retained accessibility and task navigation adaptations
+
+The retained page tree names its navigation and announces the current page.
+Channel/DM message rows are articles with pending state, inside named conversation
+regions. Kanban cards, drag handles, columns and task status/priority selectors
+have accessible names. These adapt the existing controls, not their API behavior.
+Task-list title navigation opens the existing native Tasks detail route; generic
+citations still resolve through the permission-filtered object route.
+
+Native cloud billing and plan pages mirror classic's exact COEP exception needed
+by Stripe; all other native pages retain credentialless COEP. CSP script nonce,
+strict-dynamic, deployment gating and frame-ancestor protections are unchanged.

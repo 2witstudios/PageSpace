@@ -19,11 +19,11 @@ import {
  * # Tasks in imago, end to end (IMG-9.6)
  *
  * A user signed in through the real magic-link route, in a browser of their own, against real
- * web, realtime and imago servers and a real database: adding a task and ticking it in the Tree
- * view, moving one across the Board, setting a due date in a task's detail, and being refused
+ * web, realtime and imago servers and a real database: adding a task and ticking it in the Table
+ * view, moving one across the Kanban board, setting a due date in a task's detail, and being refused
  * the completion of a parent whose subtask is still open. Every write goes through imago's API
  * client to apps/web's task routes; every task under test is created by the click that adds it.
- * Only the list itself is seeded (imago does not create task lists), so each test starts on it.
+ * Only the list itself is seeded, so each test starts on it.
  *
  * ## Requires
  *
@@ -71,6 +71,8 @@ const openAt = async (
 ): Promise<Page> => {
   const { context, page } = await freshBrowser(browser, baseURL ?? '');
   contexts.push(context);
+  // Exercise the retained wide table here; spec 36 covers the compact pane controls.
+  await page.setViewportSize({ width: 2400, height: 1000 });
   await signIn(page, user, path);
   await hydrated(page);
   return page;
@@ -96,9 +98,9 @@ const expectOk = async (answer: Response): Promise<void> => {
 const tasksPath = (pageId: string) => `/api/pages/${pageId}/tasks`;
 const taskPath = (pageId: string, taskId: string) => `/api/pages/${pageId}/tasks/${taskId}`;
 
-const treeOf = (page: Page) => page.getByRole('list', { name: `${LIST} tasks`, exact: true });
+const treeOf = (page: Page) => page.locator('[data-slot="object"]');
 const checkbox = (scope: Page | Locator, title: string) =>
-  scope.getByRole('checkbox', { name: `Complete ${title}`, exact: true });
+  scope.getByRole('checkbox', { name: new RegExp(`^(Complete|Reopen) ${title}$`) }).filter({ visible: true });
 
 /**
  * Adds a task with the "Add task" (or "Add subtask") control under `scope`, which writes it to
@@ -110,8 +112,11 @@ const addTask = async (
   { label, listPage, title }: { label: string; listPage: string; title: string },
 ): Promise<TaskCreated> => {
   const created = answerTo(page, 'POST', tasksPath(listPage));
-  await scope.getByRole('button', { name: label, exact: true }).click();
-  const field = scope.getByRole('textbox', { name: label, exact: true });
+  const rootTask = label === 'Add task';
+  await scope.getByRole('button', { name: rootTask ? 'New Task' : label, exact: true }).click();
+  const field = rootTask
+    ? scope.locator('input[placeholder="+ Add a new task..."]:visible')
+    : scope.getByRole('textbox', { name: label, exact: true });
   await field.fill(title);
   await field.press('Enter');
   const answer = await created;
@@ -119,7 +124,7 @@ const addTask = async (
   await field.press('Escape');
   const task = (await answer.json()) as TaskCreated;
   // The pending row is swapped for the server's once the list is read back.
-  await expect(scope.locator(`[data-task="${task.id}"]`)).toBeVisible();
+  await expect(scope.locator(rootTask ? `[data-task-id="${task.id}"]:visible` : `[data-task="${task.id}"]`)).toBeVisible();
   return task;
 };
 
@@ -154,16 +159,17 @@ const fetchInPage = (page: Page, method: string, path: string, json: Record<stri
     { method, path, json },
   );
 
-test('a task added in the Tree view, then ticked, stays added and done across reloads', async ({
+test('a task added in the Table view, then ticked, stays added and done across reloads', async ({
   browser,
   baseURL,
 }) => {
   const page = await openAt(browser, baseURL, imagoPath(driveId, 'tasks'));
 
-  // The list pane opens the list as the object, in the Tree view a new viewer starts in.
+  // The list pane opens the list as the object, in the Table view a new viewer starts in.
   await page.locator('[data-slot="list"]').getByRole('link', { name: new RegExp(`^${LIST}\\b`) }).click();
   await page.waitForURL(pathnameIs(imagoPath(driveId, `tasks/${listPageId}`)));
-  await expect(page.getByRole('radio', { name: 'Tree', exact: true })).toHaveAttribute('aria-checked', 'true');
+  await expect(page.getByRole('button', { name: 'Table view', exact: true })).toBeVisible();
+  await treeOf(page).getByRole('button', { name: 'All', exact: true }).click();
 
   const tree = treeOf(page);
   const task = await addTask(page, tree, { label: 'Add task', listPage: listPageId, title: 'Write the brief' });
@@ -185,11 +191,11 @@ test('a task added in the Tree view, then ticked, stays added and done across re
   await expect(checkbox(treeOf(page), 'Write the brief')).toHaveAttribute('aria-checked', 'true');
 });
 
-const boardOf = (page: Page) => page.getByRole('group', { name: `${LIST} board`, exact: true });
+const boardOf = (page: Page) => page.getByRole('group', { name: 'Task board', exact: true });
 const column = (page: Page, name: string) => boardOf(page).getByRole('region', { name, exact: true });
 const card = (scope: Locator, title: string) => scope.getByRole('article', { name: title, exact: true });
 
-test('a task moved on the Board with Move to… stays in its new column across a reload', async ({
+test('a task moved with the status selector stays in its Kanban column across a reload', async ({
   browser,
   baseURL,
 }) => {
@@ -197,17 +203,16 @@ test('a task moved on the Board with Move to… stays in its new column across a
   const task = await addTask(page, treeOf(page), { label: 'Add task', listPage: listPageId, title: 'Draft the post' });
   await addTask(page, treeOf(page), { label: 'Add task', listPage: listPageId, title: 'Pick a date' });
 
-  await page.getByRole('radio', { name: 'Board', exact: true }).click();
+  await page.getByRole('button', { name: 'Kanban view', exact: true }).click();
   await expect(card(column(page, 'To Do'), 'Draft the post')).toBeVisible();
   await expect(column(page, 'To Do').getByRole('heading')).toHaveAccessibleName('To Do, 2 tasks');
 
+  await page.getByRole('button', { name: 'Table view', exact: true }).click();
   const moved = answerTo(page, 'PATCH', taskPath(listPageId, task.id));
-  await page.getByRole('button', { name: 'Move Draft the post to…', exact: true }).click();
-  await page
-    .getByRole('menu', { name: 'Move Draft the post to', exact: true })
-    .getByRole('menuitem', { name: 'In Progress', exact: true })
-    .click();
+  await treeOf(page).getByRole('combobox', { name: 'Status of Draft the post', exact: true }).click();
+  await page.getByRole('option', { name: 'In Progress', exact: true }).click();
   await expectOk(await moved);
+  await page.getByRole('button', { name: 'Kanban view', exact: true }).click();
   await expect(card(column(page, 'In Progress'), 'Draft the post')).toBeVisible();
   await expect(column(page, 'In Progress').getByRole('heading')).toHaveAccessibleName('In Progress, 1 task');
   await expect(column(page, 'To Do').getByRole('heading')).toHaveAccessibleName('To Do, 1 task');
@@ -223,7 +228,7 @@ test('a task moved on the Board with Move to… stays in its new column across a
 test('a card dragged to another column on the Board stays there across a reload', async ({ browser, baseURL }) => {
   const page = await openAt(browser, baseURL, imagoPath(driveId, `tasks/${listPageId}`));
   const task = await addTask(page, treeOf(page), { label: 'Add task', listPage: listPageId, title: 'Order banners' });
-  await page.getByRole('radio', { name: 'Board', exact: true }).click();
+  await page.getByRole('button', { name: 'Kanban view', exact: true }).click();
 
   const handle = page.getByRole('button', { name: 'Drag Order banners', exact: true });
   const from = await handle.boundingBox();
@@ -233,7 +238,7 @@ test('a card dragged to another column on the Board stays there across a reload'
 
   // A real pointer drag: press on the handle, travel past the 4px activation distance, then on in
   // steps so each move is a pointermove the sensor sees, and let go. The board picks the column
-  // the dragged CARD overlaps most (rectIntersection), not the one under the pointer, and the
+  // the closest corners of the dragged card and column, and the
   // handle is at the card's left edge: so the pointer travels as far as takes the card's centre
   // to the column's.
   const start = { x: from.x + from.width / 2, y: from.y + from.height / 2 };
@@ -261,7 +266,7 @@ test('a due date set in the task’s detail stays set across a reload', async ({
   const task = await addTask(page, treeOf(page), { label: 'Add task', listPage: listPageId, title: 'Book the venue' });
 
   // The title opens the task's detail in the object pane.
-  await treeOf(page).getByRole('link', { name: 'Book the venue', exact: true }).click();
+  await treeOf(page).getByRole('button', { name: 'Book the venue', exact: true }).click();
   await page.waitForURL(pathnameIs(imagoPath(driveId, `tasks/${task.pageId}`)));
   const detail = page.getByRole('article', { name: 'Book the venue', exact: true });
   // A date field has no ARIA role of its own; its label names it.
@@ -299,14 +304,13 @@ test('a parent with an open subtask is refused completion, by the view and by th
   const refusal = await refused;
   expect(refusal.status()).toBe(422);
   expect(await refusal.json()).toMatchObject({ code: 'SUBTASKS_INCOMPLETE', pending: 1, total: 1 });
-  const printRow = treeOf(page).locator(`[data-task="${stale.id}"]`);
-  await expect(printRow.getByRole('status')).toHaveText('Complete all sub-tasks first (1 of 1 remaining)');
+  await expect(page.getByText('Finish 1 sub-task first', { exact: true })).toBeVisible();
   await expect(checkbox(treeOf(page), 'Print it')).toHaveAttribute('aria-checked', 'false');
   expect(await storedTask(stale.id)).toMatchObject({ status: 'pending', completedAt: null });
 
   // Refused by the view: a subtask added in the detail is one the view counts, so ticking the
   // parent says why at once and sends nothing.
-  await treeOf(page).getByRole('link', { name: 'Ship it', exact: true }).click();
+  await treeOf(page).getByRole('button', { name: 'Ship it', exact: true }).click();
   await page.waitForURL(pathnameIs(imagoPath(driveId, `tasks/${parent.pageId}`)));
   const detail = page.getByRole('article', { name: 'Ship it', exact: true });
   const subtasks = detail.getByRole('region', { name: 'Subtasks', exact: true });

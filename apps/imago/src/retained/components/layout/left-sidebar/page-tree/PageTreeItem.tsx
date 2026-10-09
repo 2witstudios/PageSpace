@@ -390,6 +390,7 @@ export const PageTreeItem = React.memo(function PageTreeItem({
               {/* Title - Click to Navigate */}
               <Link
                 href={linkHref}
+                aria-current={params.pageId === item.id ? "page" : undefined}
                 onClick={handleLinkClick}
                 onMouseDown={hideTabActions ? undefined : handleMouseDown}
                 onPointerDown={(e) => e.stopPropagation()}

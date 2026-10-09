@@ -332,13 +332,28 @@ describe('retained storage uploads', () => {
   });
 });
 
- test('retained billing frames obey the existing cloud-only gate while scripts stay strict', () => {
+test('retained billing frames obey the existing cloud-only gate while scripts stay strict', () => {
   for (const mode of ['onprem', 'tenant', 'cloud']) {
     vi.stubEnv('DEPLOYMENT_MODE', mode);
     const policy = buildCSPPolicy('abc123');
-    expect(directive(policy, 'frame-src')?.includes('https://js.stripe.com')).toBe(mode === 'cloud');
-    expect(directive(policy, 'connect-src')?.includes('https://*.stripe.com')).toBe(mode === 'cloud');
+    expect(directive(policy, 'frame-src')?.split(/\s+/).some(source => source === 'https://js.stripe.com')).toBe(mode === 'cloud');
+    expect(directive(policy, 'connect-src')?.split(/\s+/).some(source => source === 'https://*.stripe.com')).toBe(mode === 'cloud');
     expect(directive(policy, 'script-src')).toBe("script-src 'self' 'nonce-abc123' 'strict-dynamic' 'unsafe-inline'");
     expect(directive(policy, 'frame-src')).toContain("'self'");
+  }
+});
+
+
+test('only the exact cloud billing pages mirror classic’s embedder-policy exception', () => {
+  const request = new NextRequest('https://pagespace.test/imago/account');
+  for (const mode of ['cloud', 'tenant', 'onprem']) {
+    vi.stubEnv('DEPLOYMENT_MODE', mode);
+    for (const pathname of ['/account/billing', '/account/plan', '/account', '/account/billing-extra', '/drive/files/page']) {
+      const { response, nonce } = createSecureResponse(true, request, { pathname });
+      const exempt = mode === 'cloud' && (pathname === '/account/billing' || pathname === '/account/plan');
+      expect(response.headers.get('Cross-Origin-Embedder-Policy')).toBe(exempt ? null : 'credentialless');
+      expect(response.headers.get('Content-Security-Policy')).toBe(buildCSPPolicy(nonce));
+      expect(response.headers.get('X-Frame-Options')).toBe('DENY');
+    }
   }
 });

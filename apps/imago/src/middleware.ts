@@ -38,6 +38,7 @@ export function middleware(req: NextRequest): NextResponse {
   return createSecureResponse(isProduction, req, {
     isAPIRoute,
     isDevelopment,
+    pathname,
     // Dot access: Next inlines NEXT_PUBLIC_* into the edge bundle only when
     // referenced literally.
     realtimeUrl: process.env.NEXT_PUBLIC_REALTIME_URL,

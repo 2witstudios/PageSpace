@@ -75,7 +75,7 @@ describe('renderRail()', () => {
   test('the overflow, open', () => {
     const html = markup({ moreOpen: true });
     const links = [...(html.match(/<details[\s\S]*?<\/details>/)?.[0] ?? '').matchAll(/<a\b[^>]*href="(\/drive-1\/[^"]+)"[^>]*>(.*?)<\/a>/g)].map(match => [
-      match[2]?.replace(/<[^>]*>/g, ''), match[1],
+      match[2]?.match(/([^<>]+)$/)?.[1], match[1],
     ]);
     assert({
       given: 'the overflow open',

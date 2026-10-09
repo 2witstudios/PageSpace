@@ -162,6 +162,8 @@ function TaskCard({
 
   return (
     <Card
+      role="article"
+      aria-label={task.title}
       className={cn(
         'group transition-all',
         isCompleted && 'opacity-60',
@@ -175,12 +177,14 @@ function TaskCard({
             <button
               {...dragHandleProps.attributes}
               {...dragHandleProps.listeners}
+              aria-label={`Drag ${task.title}`}
               className="cursor-grab active:cursor-grabbing text-muted-foreground hover:text-foreground mt-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
             >
               <GripVertical className="h-4 w-4" />
             </button>
           )}
           <Checkbox
+            aria-label={`${isCompleted ? "Reopen" : "Complete"} ${task.title}`}
             checked={isCompleted}
             onCheckedChange={() => handlers.onToggleComplete(task)}
             disabled={!canEdit}
@@ -317,7 +321,7 @@ interface ColumnHeaderProps {
 
 function ColumnHeader({ status: _status, statusLabel, statusColor, count, canEdit, onAddTask }: ColumnHeaderProps) {
   return (
-    <div className="flex items-center justify-between mb-3 px-1">
+    <div role="heading" aria-level={3} aria-label={`${statusLabel}, ${count} ${count === 1 ? "task" : "tasks"}`} className="flex items-center justify-between mb-3 px-1">
       <div className="flex items-center gap-2">
         <Badge className={cn('text-xs', statusColor)}>{statusLabel}</Badge>
         <span className="text-sm text-muted-foreground">{count}</span>
@@ -328,6 +332,7 @@ function ColumnHeader({ status: _status, statusLabel, statusColor, count, canEdi
           size="icon"
           className="h-6 w-6"
           onClick={onAddTask}
+          aria-label={`Add task to ${statusLabel}`}
         >
           <Plus className="h-4 w-4" />
         </Button>
@@ -514,12 +519,14 @@ export function TaskKanbanView({
       onDragEnd={handleDragEnd}
       onDragCancel={handleDragCancel}
     >
-      <div className="flex gap-4 p-4 h-full overflow-x-auto @container">
+      <div role="group" aria-label="Task board" className="flex gap-4 p-4 h-full overflow-x-auto @container">
         {statusOrder.map((status) => {
           const cfg = statusConfigMap[status];
           return (
           <div
             key={status}
+            role="region"
+            aria-label={cfg?.label || status}
             className="flex-shrink-0 w-72 @max-[500px]:w-60 flex flex-col"
           >
             <ColumnHeader

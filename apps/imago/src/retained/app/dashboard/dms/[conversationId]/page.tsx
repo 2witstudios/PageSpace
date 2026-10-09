@@ -606,7 +606,7 @@ export default function InboxDMPage() {
   }
 
   return (
-    <div className="flex h-full w-full">
+    <div role="region" aria-label={displayName} className="flex h-full w-full">
     <MessageDropZone inputRef={chatInputRef} enabled className="flex flex-col h-full flex-1 min-w-0">
       {/* Header */}
       <div className="flex-shrink-0 border-b border-border p-4">
@@ -656,7 +656,7 @@ export default function InboxDMPage() {
               return (
                 <Fragment key={message.id}>
                 {showDateSeparator && <MessageDateSeparator label={formatMessageDate(message.createdAt)} />}
-                <div className={`group/msg flex items-start gap-4 ${rowSpacing} relative`}>
+                <div role="article" aria-label={`Message from ${senderName}`} aria-busy={message.id.startsWith("temp-") || undefined} data-message-id={message.id} className={`group/msg flex items-start gap-4 ${rowSpacing} relative`}>
                   {isFirst ? (
                     <Avatar className="h-10 w-10 flex-shrink-0">
                       {isOwnMessage ? (

@@ -89,3 +89,32 @@ cloud exactly as before; Compose passes its configured mode.
 Lightweight local source inspection and edits remain available. Local build,
 lint and test-service processes were stopped after the owner reported machine
 pressure. Private test environment files are excluded from delivery artifacts.
+
+## Remote candidate checks and follow-up
+
+Candidate `b26d718132718eb4889a524ce7bec17da148c616` is published as draft
+[PR #2860](https://github.com/2witstudios/PageSpace/pull/2860), against master.
+The owner requested GitHub Actions for resource-heavy verification; all owned
+local build, lint, app/proxy/realtime processes and the isolated database were
+stopped. Do not restart them for the final gates.
+
+- Test Suite run `37964494078`: workspace lint/typecheck passed. Unit and browser
+  jobs were still running when the next candidate was prepared; no pass inferred.
+- Imago Image run `37964493750`: image build and boot passed for `b26d718`.
+- Security run `37964493752`: all workflow jobs passed. The separate CodeQL alert
+  check identified two test-assertion patterns and the copied OAuth-grant row-id
+  storage. The assertions now check exact CSP tokens and extract text without
+  pretending to sanitize HTML. Alert #358 was dismissed with source evidence as
+  the exact same false positive as previously dismissed classic alert #250:
+  only a grant row id is stored, never an OAuth credential or step-up token.
+- Connected PageSpace tools returned `Transport closed` during handoff publication.
+  No new page id is claimed; the durable local record is available for orchestrator
+  reconciliation. The task remains In Progress.
+
+The follow-up candidate mirrors classic's exact cloud billing/plan COEP exception,
+adds accessible tree selection/message/task names, and updates existing browser
+specs 29/32/33/34 to the retained controls while preserving their real writes,
+reloads, live two-person delivery, pointer drag, rollback and subtask guard checks.
+Task-context navigation stays in the native Tasks section and its existing detail.
+The wide task-table regression uses a wider frame; spec 36 covers compact controls.
+Linux visual baselines still require deliberate remote regeneration and inspection.

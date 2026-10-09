@@ -127,11 +127,12 @@ type SecurityHeadersOptions = {
   isProduction: boolean;
   isSecure: boolean;
   isAPIRoute: boolean;
+  pathname?: string;
 };
 
 const applySecurityHeaders = (
   response: NextResponse,
-  { nonce, isDevelopment, realtimeUrl, isProduction, isSecure, isAPIRoute }: SecurityHeadersOptions,
+  { nonce, isDevelopment, realtimeUrl, isProduction, isSecure, isAPIRoute, pathname }: SecurityHeadersOptions,
 ): NextResponse => {
   response.headers.set(
     'Content-Security-Policy',
@@ -141,7 +142,10 @@ const applySecurityHeaders = (
   response.headers.set('X-Content-Type-Options', 'nosniff');
   response.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
   response.headers.set('Permissions-Policy', permissionsPolicy());
-  if (!isAPIRoute) {
+  // Classic exempts its Stripe-dependent billing/plan routes from COEP.
+  // Mirror only their native equivalents when cloud billing is enabled.
+  const stripePage = isStripeEnabled() && (pathname === '/account/billing' || pathname === '/account/plan');
+  if (!isAPIRoute && !stripePage) {
     response.headers.set('Cross-Origin-Embedder-Policy', 'credentialless');
   }
   if (shouldEmitHsts({ isProduction, isSecure })) {
@@ -151,6 +155,8 @@ const applySecurityHeaders = (
 };
 
 type CreateSecureResponseOptions = {
+  /** Base-path-relative route, for the exact cloud billing embed exception. */
+  pathname?: string;
   isAPIRoute?: boolean;
   /** The `next dev` server: adds 'unsafe-eval' to the document CSP. */
   isDevelopment?: boolean;
@@ -163,7 +169,7 @@ type CreateSecureResponseOptions = {
 export const createSecureResponse = (
   isProduction: boolean,
   request?: Request,
-  { isAPIRoute = false, isDevelopment = false, realtimeUrl, forwardHeaders = {} }: CreateSecureResponseOptions = {},
+  { isAPIRoute = false, isDevelopment = false, realtimeUrl, pathname, forwardHeaders = {} }: CreateSecureResponseOptions = {},
 ): { response: NextResponse; nonce: string } => {
   const nonce = generateNonce();
   const isSecure = isSecureRequest(request);
@@ -180,7 +186,7 @@ export const createSecureResponse = (
   }
 
   const response = NextResponse.next({ request: { headers: requestHeaders } });
-  applySecurityHeaders(response, { nonce, isDevelopment, realtimeUrl, isProduction, isSecure, isAPIRoute });
+  applySecurityHeaders(response, { nonce, isDevelopment, realtimeUrl, isProduction, isSecure, isAPIRoute, pathname });
 
   return { response, nonce };
 };

@@ -123,11 +123,11 @@ test('chat', async ({ browser, baseURL }) => {
   });
 
   // One turn through the real path: composer → web → page-chat → the mock model, which answers "pong".
-  const composer = chat.getByRole('textbox', { name: 'Message Imago' });
+  const composer = chat.getByLabel('Message Imago', { exact: true });
   await composer.fill('What ships in October?');
   await composer.press('Enter');
-  await expect(chat.locator('li[data-role="assistant"]')).toHaveText(/pong/, { timeout: LOAD_MS });
-  await expect(chat.getByRole('button', { name: 'Stop' })).toHaveCount(0, { timeout: LOAD_MS });
+  await expect(chat.locator('[data-testid="chat-message"][data-role="assistant"]')).toHaveText(/pong/, { timeout: LOAD_MS });
+  await expect(chat.getByRole('button', { name: 'Stop generating' })).toHaveCount(0, { timeout: LOAD_MS });
 
   const [conversation] = await db
     .select({ id: conversations.id })
@@ -139,8 +139,8 @@ test('chat', async ({ browser, baseURL }) => {
 
   await compare(page, baseURL, 'chat', async (shown) => {
     const thread = shown.getByRole('region', { name: 'Chat', exact: true });
-    await expect(thread.locator('li[data-role="user"]')).toHaveText(/What ships in October\?/, { timeout: LOAD_MS });
-    await expect(thread.locator('li[data-role="assistant"]')).toHaveText(/pong/);
+    await expect(thread.locator('[data-testid="chat-message"][data-role="user"]')).toHaveText(/What ships in October\?/, { timeout: LOAD_MS });
+    await expect(thread.locator('[data-testid="chat-message"][data-role="assistant"]')).toHaveText(/pong/);
     await expect(
       listPane(shown).getByRole('region', { name: 'Chat history' }).getByRole('button', {
         name: 'What ships in October?',
@@ -166,10 +166,10 @@ test('document', async ({ browser, baseURL }) => {
   const page = await open(browser, baseURL, user, imagoPath(driveId, `files/${brief.id}`));
 
   await compare(page, baseURL, 'document', async (shown) => {
-    await expect(shown.locator('[data-document-body]')).toContainText('Ship the preview to the team first', {
+    await expect(shown.locator('.retained-ui .tiptap').first()).toContainText('Ship the preview to the team first', {
       timeout: LOAD_MS,
     });
-    await expect(shown.locator('[data-document-body]')).toHaveAttribute('contenteditable', 'true');
+    await expect(shown.locator('.retained-ui .tiptap').first()).toHaveAttribute('contenteditable', 'true');
   });
 });
 
@@ -207,8 +207,8 @@ test('channel', async ({ browser, baseURL }) => {
   const page = await open(browser, baseURL, ada, imagoPath(driveId, `messages/${general.id}`));
   await compare(page, baseURL, 'channel', async (shown) => {
     const thread = shown.getByRole('region', { name: '# general', exact: true });
-    await expect(thread.getByRole('listitem').filter({ hasText: 'after lunch' })).toBeVisible({ timeout: LOAD_MS });
-    await expect(thread.getByRole('listitem').filter({ hasText: 'preview build is up' })).toBeVisible();
+    await expect(thread.getByRole('article').filter({ hasText: 'after lunch' })).toBeVisible({ timeout: LOAD_MS });
+    await expect(thread.getByRole('article').filter({ hasText: 'preview build is up' })).toBeVisible();
   });
 });
 
@@ -240,7 +240,7 @@ test('direct message', async ({ browser, baseURL }) => {
   const page = await open(browser, baseURL, ada, `/imago/dm/${conversation.id}`);
   await compare(page, baseURL, 'direct-message', async (shown) => {
     const thread = shown.getByRole('region', { name: 'Grace Hopper', exact: true });
-    await expect(thread.getByRole('listitem').filter({ hasText: 'see you then' })).toBeVisible({ timeout: LOAD_MS });
+    await expect(thread.getByRole('article').filter({ hasText: 'see you then' })).toBeVisible({ timeout: LOAD_MS });
   });
 });
 
@@ -309,12 +309,13 @@ test('task list', async ({ browser, baseURL }) => {
   await page.reload();
 
   await compare(page, baseURL, 'task-list', async (shown) => {
-    await expect(shown.getByRole('radio', { name: 'Tree', exact: true })).toHaveAttribute('aria-checked', 'true', {
-      timeout: LOAD_MS,
-    });
-    const tree = shown.getByRole('list', { name: `${LIST} tasks`, exact: true });
+    await expect(shown.getByRole('button', { name: 'Table view', exact: true })).toBeVisible({ timeout: LOAD_MS });
+    const tree = shown.locator('[data-slot="object"]');
+    await tree.getByRole('button', { name: /^Filters/ }).click();
+    await shown.getByRole('dialog').getByRole('button', { name: 'All', exact: true }).click();
+    await shown.keyboard.press('Escape');
     await expect(tree.getByRole('checkbox', { name: 'Complete Invite the press', exact: true })).toBeVisible();
-    await expect(tree.getByRole('checkbox', { name: 'Complete Write the brief', exact: true })).toHaveAttribute(
+    await expect(tree.getByRole('checkbox', { name: 'Reopen Write the brief', exact: true })).toHaveAttribute(
       'aria-checked',
       'true',
     );
@@ -325,10 +326,10 @@ test('task board', async ({ browser, baseURL }) => {
   const { page } = await openTasks(browser, baseURL);
   // The Board is the viewer's saved view, so it survives the reloads `compare` makes.
   await page.reload();
-  await page.getByRole('radio', { name: 'Board', exact: true }).click();
+  await page.getByRole('button', { name: 'Kanban view', exact: true }).click();
 
   await compare(page, baseURL, 'task-board', async (shown) => {
-    const board = shown.getByRole('group', { name: `${LIST} board`, exact: true });
+    const board = shown.getByRole('group', { name: 'Task board', exact: true });
     await expect(board.getByRole('region', { name: 'To Do', exact: true }).getByRole('heading')).toHaveAccessibleName(
       'To Do, 2 tasks',
       { timeout: LOAD_MS },
