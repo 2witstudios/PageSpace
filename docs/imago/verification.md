@@ -320,3 +320,11 @@ The picker fixture accounts for Home's installed personal /plan command: it
 selects that real command chip, then removes only its own user's configured
 commands and reloads before checking the genuine empty-state settings link.
 No search response is fabricated and installed production defaults are unchanged.
+
+### Cloud result at 329aa38 and next fixture corrections
+
+Test Suite [37986452624](https://github.com/2witstudios/PageSpace/actions/runs/37986452624) completed: production builds, lint/typecheck/Knip and all 19 Node 24 workspace tasks passed. Imago: 1,562 tests/222 files, coverage 94.37% lines/statements, 94.66% branches, 90.70% functions. Processor 1,220; backfill 472; DB integration 184; lib integration 643 (73 existing skips); Imago integration 11; real Infisical 70; infrastructure 399 all passed. Image build/boot 37986452251 and Security 37986452263 passed.
+
+Browser: 79 passed, 3 failed, no flaky cases; all 14 normal visual comparisons and negative control passed. Real revoked-session write refusal/sign-in exit passed. Failures were the command-empty-state assumption (real personal /plan is installed), the two-step session palette changing its accessible dialog title to “Name your session”, and a trigger removal assertion expecting deletion instead of the canonical disabled persisted record. Fixtures now select the installed command before exercising empty-state navigation, target the naming dialog by its actual accessible labels, and assert persisted disabled trigger/workflow scheduling metadata. No backend/API semantics or test thresholds changed. The held read-only trigger boundary must still run successfully on the next candidate.
+
+Queued source fixes also cover the independent review's workspace-agent/header mismatch and eager empty conversation creation, with adapter and real first-turn/persistence tests. Explicit document navigation handles public auth exits. These changes await their own exact-head cloud gates and independent delta review.

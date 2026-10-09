@@ -374,7 +374,7 @@ test('agent sessions and drive configuration remain native and preserve one chat
   await page.getByRole('button', { name: 'New Session', exact: true }).click();
   const palette = page.getByRole('dialog', { name: 'New session', exact: true });
   await palette.getByRole('option').filter({ hasText: 'Support proof' }).first().click();
-  const name = palette.getByPlaceholder('Support proof', { exact: true });
+  const name = page.getByRole('dialog', { name: 'Name your session', exact: true }).getByRole('textbox', { name: 'Session name', exact: true });
   await name.fill('Native agent session');
   const created = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/agent-workspaces');
   await name.press('Enter');
@@ -551,7 +551,10 @@ test('task agent triggers save, survive reload and remove through retained contr
   await dialog.getByRole('button', { name: 'Remove', exact: true }).click();
   expect((await removed).ok()).toBe(true);
   await expect(completion).not.toBeChecked();
-  expect(JSON.parse((await browserGet(page, triggersPath)).body)).toMatchObject({ triggers: [] });
+  // Canonical DELETE preserves the trigger record and disables its workflow.
+  expect(JSON.parse((await browserGet(page, triggersPath)).body)).toMatchObject({
+    triggers: [expect.objectContaining({ agentPageId: agent.id, triggerType: 'completion', isEnabled: false, nextRunAt: null, lastFireError: 'Disabled by user' })],
+  });
 
   const reader = await imagoUser('Trigger read-only member'); extraUsers.push(reader.id);
   await factories.createDriveMember(user.homeDriveId, reader.id, { role: 'MEMBER' });
