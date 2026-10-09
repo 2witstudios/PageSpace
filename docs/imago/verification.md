@@ -118,3 +118,12 @@ reloads, live two-person delivery, pointer drag, rollback and subtask guard chec
 Task-context navigation stays in the native Tasks section and its existing detail.
 The wide task-table regression uses a wider frame; spec 36 covers compact controls.
 Linux visual baselines still require deliberate remote regeneration and inspection.
+
+
+Follow-up `97f7ff78c8a78953f1881ab09c211e5eb7490754` failed remote Imago
+build/typecheck because the new channel label referenced a title omitted from
+its minimal UI prop type. Corrected by declaring an optional UI title supplied
+by the existing authorized page data, with an unnamed-data fallback. This does
+not change any backend DTO. The next candidate also adds a real status-category
+and disabled scheduled-workflow creation/reload check to spec 36. Neither these
+new actions nor the previous candidate’s remaining gates are claimed passed.

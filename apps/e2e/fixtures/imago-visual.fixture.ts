@@ -36,7 +36,7 @@ export const VIEWPORT = { width: 1400, height: 800 } as const;
 
 /** A verified user with a fixed name and no avatar image, plus the Home drive sign-in provisions. */
 export const visualUser = async (name: string): Promise<ImagoUser> => {
-  const user = await factories.createUser({ name, image: null, emailVerified: new Date(), currentAiProvider: 'openai', currentAiModel: 'gpt-4o-mini' });
+  const user = await factories.createUser({ name, image: null, emailVerified: new Date(), currentAiProvider: 'openai', currentAiModel: 'openai/gpt-4o-mini' });
   const { driveId } = await provisionHomeDriveIfNeeded(user.id);
   return { id: user.id, name, homeDriveId: driveId };
 };

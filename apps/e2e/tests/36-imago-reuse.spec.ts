@@ -463,3 +463,45 @@ test('persisted approval cards use the session API and retain a real service ref
   await expect(chat.getByRole('button', { name: 'Approve once', exact: true })).toBeEnabled();
   await shot(page, 'chat-approval-refusal');
 });
+
+
+test('task statuses and anchored workflows persist through retained configuration dialogs', async ({ browser, baseURL }) => {
+  const list = await factories.createPage(user.homeDriveId, { type: 'TASK_LIST', title: 'Configured tasks' });
+  await factories.createPage(user.homeDriveId, { type: 'AI_CHAT', title: 'Workflow proof agent' });
+  const page = await open(browser, baseURL!, imagoPath(user.homeDriveId, `tasks/${list.id}`));
+  const object = page.locator('[data-slot="object"]');
+  await object.getByRole('button', { name: /^Filters/ }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Statuses', exact: true }).click();
+  const statuses = page.getByRole('dialog', { name: 'Manage Status Categories', exact: true });
+  await statuses.getByRole('button', { name: 'Add Status', exact: true }).click();
+  await statuses.getByPlaceholder('Status name...').fill('Review ready');
+  const statusSaved = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === `/api/pages/${list.id}/tasks/statuses`);
+  await statuses.getByRole('button', { name: 'Add Status', exact: true }).click();
+  expect((await statusSaved).ok()).toBe(true);
+  await expect(statuses.getByText('Review ready', { exact: true })).toBeVisible();
+  await page.reload();
+  await object.getByRole('button', { name: /^Filters/ }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Statuses', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: 'Manage Status Categories', exact: true }).getByText('Review ready', { exact: true })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await page.getByRole('dialog').getByRole('button', { name: 'Workflows', exact: true }).click();
+  await page.getByRole('dialog', { name: 'Scheduled workflows', exact: true }).getByRole('button', { name: 'New workflow', exact: true }).click();
+  const form = page.getByRole('dialog', { name: 'Create Workflow', exact: true });
+  await form.getByLabel('Name', { exact: true }).fill('Retained workflow proof');
+  await form.getByRole('button', { name: 'Add step', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'AI step', exact: true }).click();
+  await form.getByRole('combobox').click();
+  await page.getByRole('option', { name: 'Workflow proof agent', exact: true }).click();
+  await form.getByPlaceholder('Write a daily summary report...').fill('Summarize the configured task list.');
+  await form.getByLabel('Enabled', { exact: true }).click();
+  await expect(form.getByLabel('Enabled', { exact: true })).toHaveAttribute('aria-checked', 'false');
+  const workflowSaved = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/workflows');
+  await form.getByRole('button', { name: 'Create', exact: true }).click();
+  expect((await workflowSaved).status()).toBe(201);
+  await expect(page.getByRole('dialog', { name: 'Scheduled workflows', exact: true }).getByText('Retained workflow proof', { exact: true })).toBeVisible();
+  await page.reload();
+  await object.getByRole('button', { name: /^Filters/ }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Workflows', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: 'Scheduled workflows', exact: true }).getByText('Retained workflow proof', { exact: true })).toBeVisible();
+  await shot(page, 'task-workflow-configuration');
+});

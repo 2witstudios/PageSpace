@@ -74,6 +74,8 @@ const looksLikeSameSend = (
 const MARK_READ_DEBOUNCE_MS = 1000;
 
 interface ChannelRef {
+  /** Native object data supplies the title for this conversation’s accessible name. */
+  title?: string;
   id: string;
   driveId: string;
 }
@@ -740,7 +742,7 @@ function ChannelView({ page }: ChannelViewProps) {
   ) : null;
 
   return (
-    <div role="region" aria-label={`# ${page.title}`} className="flex h-full w-full">
+    <div role="region" aria-label={page.title ? `# ${page.title}` : "Channel"} className="flex h-full w-full">
     <MessageDropZone inputRef={channelInputRef} enabled={canEdit} className="flex flex-col h-full flex-1 min-w-0">
         <div className="flex-grow overflow-hidden relative">
           {/* Deliberately not permission-gated: the dialog itself explains the
