@@ -107,14 +107,17 @@ export function CommandPickerPortal({
       : { top: position.top, left: clampedLeft }),
   };
 
+  const portalRoot = document.getElementById('retained-portals');
+  if (!portalRoot) return null;
   return createPortal(
     <div
+      data-retained-picker="command"
       ref={containerRef}
       style={style}
       className="bg-popover border border-border rounded-md shadow-md overflow-hidden"
     >
       <CommandPickerPanel {...panelProps} />
     </div>,
-    document.body
+    portalRoot
   );
 }

@@ -132,8 +132,11 @@ export function MentionPickerPortal({
       : { top: position.top, left: clampedLeft }),
   };
 
+  const portalRoot = document.getElementById('retained-portals');
+  if (!portalRoot) return null;
   return createPortal(
     <div
+      data-retained-picker="mention"
       style={style}
       className="bg-popover border border-border rounded-md shadow-md overflow-hidden"
     >
@@ -153,6 +156,6 @@ export function MentionPickerPortal({
         allowedTypes={allowedTypes}
       />
     </div>,
-    document.body,
+    portalRoot,
   );
 }

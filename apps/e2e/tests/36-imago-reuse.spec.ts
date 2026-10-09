@@ -255,6 +255,31 @@ test('one rich chat input sends and keeps its unsent draft through native object
   await shot(page, 'chat-persistent');
 });
 
+test('mention and command pickers keep scoped styles and native navigation', async ({ browser, baseURL }) => {
+  await factories.createPage(user.homeDriveId, { type: 'DOCUMENT', title: 'Mention proof', content: '<p>Mention target.</p>' });
+  const page = await open(browser, baseURL!, imagoPath(user.homeDriveId));
+  const chat = page.getByRole('region', { name: 'Chat', exact: true });
+  const composer = chat.locator('textarea');
+  await expect(composer).toBeEditable();
+  await composer.fill('@');
+  const mention = page.locator('#retained-portals [data-retained-picker="mention"]');
+  await expect(mention).toBeVisible();
+  await expect.poll(() => mention.evaluate(node => getComputedStyle(node).backgroundColor)).not.toBe('rgba(0, 0, 0, 0)');
+  await mention.getByPlaceholder('Search mentions...').fill('Mention proof');
+  await mention.getByRole('option').filter({ hasText: 'Mention proof' }).first().click();
+  await expect(composer).toHaveValue(/Mention proof/);
+  await expect(mention).toHaveCount(0);
+  await composer.fill('/');
+  const commands = page.locator('#retained-portals [data-retained-picker="command"]');
+  await expect(commands).toBeVisible();
+  await expect.poll(() => commands.evaluate(node => getComputedStyle(node).backgroundColor)).not.toBe('rgba(0, 0, 0, 0)');
+  await page.evaluate(() => { document.documentElement.dataset.pickerShellProof = 'kept'; });
+  await commands.getByRole('link', { name: 'Settings → AI Settings → Commands', exact: true }).click();
+  await expect(page).toHaveURL(/\/imago\/account\/commands$/);
+  expect(await page.evaluate(() => document.documentElement.dataset.pickerShellProof)).toBe('kept');
+  await expect(chat).toHaveCount(1);
+});
+
 test('code, sheet and canvas edits persist through their original editors', async ({ browser, baseURL }) => {
   const code = await factories.createPage(user.homeDriveId, { type: 'CODE', title: 'saved.ts', content: 'const before = true;' });
   const sheet = await factories.createPage(user.homeDriveId, { type: 'SHEET', title: 'Saved numbers' });

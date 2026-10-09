@@ -136,6 +136,15 @@ describe('docker-compose.yml imago service', () => {
     expect(compose.services.web.env_file).toBe('.env');
   });
 
+  it('passes public storage, preview and standalone auth policy configuration without credentials', () => {
+    for (const name of ['AWS_ENDPOINT_URL_S3', 'DEV_PREVIEW_ENABLED', 'DEV_PREVIEW_APEX']) {
+      expect(entry(imago, name)).toBe(`${name}=\${${name}:-}`);
+    }
+    expect(entry(imago, 'BUCKET_NAME')).toBe('BUCKET_NAME=${BUCKET_NAME:-${TIGRIS_BUCKET:-${S3_BUCKET:-pagespace-files}}}');
+    expect(imago.build?.args).toContain('NEXT_PUBLIC_WEB_APP_URL=${WEB_APP_URL:-http://localhost:3000}');
+    expect(read('apps/imago/Dockerfile')).toContain('ENV NEXT_PUBLIC_WEB_APP_URL=$NEXT_PUBLIC_WEB_APP_URL');
+  });
+
   it('should get no other credentials or the whole .env (imago reads no secrets) (IMG-10.9)', () => {
     expect(imago).not.toHaveProperty('env_file');
     expect((imago.environment ?? []).filter((e) => /ADMIN_|SECRET|KEY|PASSWORD|TOKEN/.test(e.split('=')[0]))).toEqual([]);

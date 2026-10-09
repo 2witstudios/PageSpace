@@ -185,3 +185,10 @@ modal portal, so Radix can resolve its accessible name at content mount. The
 agent-session browser flow now selects the named New session dialog. Interaction
 captures fast-forward finite animations to show completed modal appearance;
 visual baselines and thresholds are unchanged.
+
+Review follow-ups: custom mention/command portals mount inside the retained
+style root; Google Calendar OAuth also uses a native return path. Compose passes
+public storage endpoint/bucket and preview switch/apex into Imago without keys,
+and builds the explicit public web origin for retained auth exits on standalone
+origins. Published shared-origin images retain the empty origin default. Classic
+API/service contracts and native wrappers are unchanged.

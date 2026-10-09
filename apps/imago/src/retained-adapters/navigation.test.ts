@@ -1,6 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { imagoHref, imagoBrowserPath, retainedRouterHref, classicPathname } from './navigation';
 import { stageFor } from '@/ui/frame/stage/stage';
+
+afterEach(() => vi.unstubAllEnvs());
 
 describe('retained destinations stay inside the persistent shell', () => {
   it.each([
@@ -28,6 +30,12 @@ describe('retained destinations stay inside the persistent shell', () => {
     ['/dashboard/drive123/page456', '/drive123/files/page456'],
   ])('routes %s without putting public auth under the basePath', (source, destination) => {
     expect(retainedRouterHref(source, 'https://pagespace.ai')).toBe(destination);
+  });
+  it('uses the configured public auth origin on standalone production deployments', () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('NEXT_PUBLIC_WEB_APP_URL', 'http://localhost:3000');
+    expect(retainedRouterHref('/auth/signin?next=%2Fimago', 'http://localhost:3006'))
+      .toBe('http://localhost:3000/auth/signin?next=%2Fimago');
   });
   it('gives retained path readers their established drive/section shape', () => {
     expect(classicPathname('/drive123/files/page456')).toBe('/dashboard/drive123/page456');

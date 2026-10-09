@@ -292,3 +292,17 @@ The compact task-sheet audit also found its copied completion/title/status
 controls used an optimistic loading answer. Imago now waits for a definite edit
 grant. The same real reader scenario holds the permissions response and checks
 write controls before and after release, retaining the API's own authorization.
+
+The 7f full aggregate completed successfully: all 19 Node 24 workspace tasks
+(1,558 Imago tests; unchanged coverage floors met), processor coverage (1,220),
+backfill (472), DB integration (184), lib integration (643 with 73 existing skips),
+Imago integration (11), real Infisical (70, zero skips) and infrastructure (398)
+passed. The image-trigger correction is confirmed.
+
+External review is now enabled per owner steering: keep the PR ready for review.
+Review fixes include public Compose CSP inputs, scoped custom picker portals,
+Google Calendar's native callback and the explicit standalone public auth origin.
+The new browser picker case selects a real page mention and follows the real
+Commands empty-state link inside the persistent shell. Final candidate cloud
+results and independently reviewed acceptance will be recorded in the verified
+PR/handoff; no pass is inferred from earlier snapshots.

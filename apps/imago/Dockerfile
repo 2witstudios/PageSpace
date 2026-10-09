@@ -43,6 +43,9 @@ COPY --from=deps /app .
 # NEXT_PUBLIC_* are inlined at build time; the runtime env cannot override them.
 ARG NEXT_PUBLIC_DEPLOYMENT_MODE=""
 ENV NEXT_PUBLIC_DEPLOYMENT_MODE=$NEXT_PUBLIC_DEPLOYMENT_MODE
+# Optional public auth origin for standalone Compose; shared-origin images leave it empty.
+ARG NEXT_PUBLIC_WEB_APP_URL=""
+ENV NEXT_PUBLIC_WEB_APP_URL=$NEXT_PUBLIC_WEB_APP_URL
 ARG NEXT_PUBLIC_REALTIME_URL=""
 ENV NEXT_PUBLIC_REALTIME_URL=$NEXT_PUBLIC_REALTIME_URL
 # Classic's cookie domain (apps/web/Dockerfile): the theme cookie must carry the

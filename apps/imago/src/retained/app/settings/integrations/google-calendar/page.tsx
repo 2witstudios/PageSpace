@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { useRouter, useSearchParams } from "@/retained-adapters/navigation";
+import { useRouter, useSearchParams, imagoBrowserPath } from "@/retained-adapters/navigation";
 import { Button } from "@/retained/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/retained/components/ui/card";
 import { Alert, AlertDescription } from "@/retained/components/ui/alert";
@@ -214,7 +214,7 @@ export default function GoogleCalendarSettingsPage() {
       const response = await fetchWithAuth("/api/integrations/google-calendar/connect", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ returnUrl: "/settings/integrations/google-calendar" }),
+        body: JSON.stringify({ returnUrl: imagoBrowserPath("/settings/integrations/google-calendar") }),
       });
 
       if (!response.ok) {

@@ -39,7 +39,7 @@ export function imagoBrowserPath(href: string): string {
 /** Public auth belongs to classic, outside Next's Imago basePath. */
 export function retainedRouterHref(href: string, origin: string): string {
   const path = href.split(/[?#]/, 1)[0];
-  if (path === '/auth' || path.startsWith('/auth/')) return new URL(href, signInOrigin(origin)).href;
+  if (path === '/auth' || path.startsWith('/auth/')) return new URL(href, process.env.NEXT_PUBLIC_WEB_APP_URL || signInOrigin(origin)).href;
   return imagoHref(href);
 }
 
