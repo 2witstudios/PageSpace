@@ -9,7 +9,6 @@ import { pages } from '@pagespace/db/schema/core';
 import { users } from '@pagespace/db/schema/auth';
 import { sessions } from '@pagespace/db/schema/sessions';
 import { conversations } from '@pagespace/db/schema/conversations';
-import { commands as commandsTable } from '@pagespace/db/schema/commands';
 import { and } from '@pagespace/db/operators';
 import { imagoUser, freshBrowser, signIn, hydrated, deleteUsers, imagoPath, type ImagoUser } from '../fixtures/imago.fixture';
 
@@ -289,7 +288,7 @@ test('opening and abandoning new chat drafts creates no conversations before the
 });
 
 test('mention and command pickers keep scoped styles and native navigation', async ({ browser, baseURL }) => {
-  await factories.createPage(user.homeDriveId, { type: 'DOCUMENT', title: 'Mention proof', content: '<p>Mention target.</p>' });
+  const mentionTarget = await factories.createPage(user.homeDriveId, { type: 'DOCUMENT', title: 'Mention proof', content: '<p>Mention target.</p>' });
   const page = await open(browser, baseURL!, imagoPath(user.homeDriveId));
   const chat = page.getByRole('region', { name: 'Chat', exact: true });
   const composer = chat.locator('textarea');
@@ -309,15 +308,14 @@ test('mention and command pickers keep scoped styles and native navigation', asy
   await commands.getByRole('option', { name: /^\/plan,/ }).click();
   await expect(composer).toHaveValue(/\/plan/);
   await expect(commands).toHaveCount(0);
-  // The Home drive installs a real personal /plan command. Remove only this
-  // fixture user's configured commands to exercise the real empty-state link.
-  await db.delete(commandsTable).where(eq(commandsTable.userId, user.id));
-  await page.reload();
-  await expect(composer).toBeEditable();
-  await composer.fill('/');
-  await expect(commands).toBeVisible();
+  // Built-in commands remain available even without personal commands, so
+  // exercise Commands settings through its actual retained navigation card.
+  await composer.fill('');
+  await page.goto('/imago/account');
+  const settingsLink = page.getByRole('link').filter({ has: page.getByText('Commands', { exact: true }) });
+  await expect(settingsLink).toBeVisible();
   await page.evaluate(() => { document.documentElement.dataset.pickerShellProof = 'kept'; });
-  await commands.getByRole('link', { name: 'Settings → AI Settings → Commands', exact: true }).click();
+  await settingsLink.click();
   await expect(page).toHaveURL(/\/imago\/account\/commands$/);
   expect(await page.evaluate(() => document.documentElement.dataset.pickerShellProof)).toBe('kept');
   await expect(chat).toHaveCount(1);
@@ -325,15 +323,16 @@ test('mention and command pickers keep scoped styles and native navigation', asy
   await page.goto(imagoPath(user.homeDriveId, `files/${editorPage.id}`));
   const editor = page.locator('[data-slot="object"] .tiptap[contenteditable="true"]');
   await expect(editor).toBeEditable();
+  await expect(editor).toContainText('Insert a reference:');
   await editor.click();
   await page.keyboard.press('Control+End');
   await page.keyboard.type('@Mention proof');
   const editorMention = page.locator('#retained-portals [data-retained-picker="editor-mention"]');
   await expect(editorMention).toBeVisible();
   await expect.poll(() => editorMention.evaluate(node => getComputedStyle(node).backgroundColor)).not.toBe('rgba(0, 0, 0, 0)');
-  await editorMention.getByRole('option').filter({ hasText: 'Mention proof' }).first().click();
-  await expect(editor.locator('[data-page-id]')).toContainText('Mention proof');
-  await expect.poll(async () => (await db.select({ content: pages.content }).from(pages).where(eq(pages.id, editorPage.id)))[0]?.content).toContain('data-page-id');
+  await editorMention.getByRole('option').filter({ has: page.getByText('Mention proof', { exact: true }) }).click();
+  await expect(editor.locator(`[data-page-id="${mentionTarget.id}"]`)).toContainText('Mention proof');
+  await expect.poll(async () => (await db.select({ content: pages.content }).from(pages).where(eq(pages.id, editorPage.id)))[0]?.content).toContain(`data-page-id="${mentionTarget.id}"`);
   await shot(page, 'editor-mention');
 });
 
