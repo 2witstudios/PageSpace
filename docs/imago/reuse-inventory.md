@@ -192,3 +192,10 @@ public storage endpoint/bucket and preview switch/apex into Imago without keys,
 and builds the explicit public web origin for retained auth exits on standalone
 origins. Published shared-origin images retain the empty origin default. Classic
 API/service contracts and native wrappers are unchanged.
+
+Workspace chat headers follow the retained authorized agent selection, including
+Global Assistant, so choosing Imago can clear a different session. New draft
+chats reuse the original empty message area and input controls without creating
+a conversation on mount. The first send creates its thread then hands text/file
+parts once to the existing SessionChat pipeline; failed creation restores the
+draft and permits retry. Backend transport, streaming and model policy stay intact.

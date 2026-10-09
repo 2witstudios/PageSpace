@@ -56,6 +56,7 @@ const objectNameOf = (stage: Stage, trail: readonly { readonly id: string; reado
 };
 
 export function ChatPane({ stage, driveName, homeDriveId }: ChatPaneProps) {
+  const retainedSelection = useRetainedChatSelection(state => state.selection);
   const { agents, chosenAgent, agentId, agentName, error: agentsError } = useChatAgent();
   const { agents: driveAgents } = useDriveAgents(stage.driveId);
   const lost = useUiState(selectLost);
@@ -81,12 +82,16 @@ export function ChatPane({ stage, driveName, homeDriveId }: ChatPaneProps) {
   const { trail } = usePageTrail(stage.object?.kind === 'page' ? stage.object.pageId : null);
   const resolving = !chatNew && chosen === null && conversations === undefined && conversationsError === undefined;
   const context = chatContextFor(stage, { drive: driveName, object: objectNameOf(stage, trail) });
+  const headerAgent = retainedSelection ? {
+    id: retainedSelection.agentId ?? 'retained-global-assistant',
+    title: retainedSelection.agentTitle ?? (retainedSelection.agentId === null ? 'Global Assistant' : 'Opening agent…'),
+  } : chosenAgent;
   return renderChatPane({
     density: context.density,
-    agentName,
+    agentName: headerAgent?.title ?? agentName,
     // The hidden history's hamburger sits in the chat's own header, as the tree's does in the object's.
     leading: stage.section === 'chat' && historyHidden ? <ListOpener section="chat" title="Chat history" /> : null,
-    agents: agentMenu({ builtins: agents, driveAgents, driveName, selected: chosenAgent }),
+    agents: agentMenu({ builtins: agents, driveAgents, driveName, selected: headerAgent }),
     selectAgent: (value) => {
       useRetainedChatSelection.getState().select(null);
       const next = agentFor({ builtins: agents, driveAgents }, value);

@@ -7,6 +7,7 @@ import { fakeWeb } from '@/ui/test-support/fake-web';
 import { createInitialState } from '@/ui/store/state';
 import { setUiState, getUiState } from '@/ui/store/store';
 import { dispatch, transactions } from '@/ui/store/transactions';
+import { useRetainedChatSelection } from '@/retained-adapters/session-selection';
 import { stageFor } from '@/ui/frame/stage/stage';
 import { pointers, conversationsPage, agentConversation, driveAgentsBody } from '../chat-model/fixtures';
 import { chatPaths } from '../chat-api/chat-api';
@@ -16,7 +17,7 @@ import { chatPaths } from '../chat-api/chat-api';
 const host = vi.hoisted(() => ({ props: null as { agentId: string | null; conversationId: string | null; resolving: boolean; name: string } | null }));
 vi.mock('@/retained-adapters/retained-chat', () => ({ RetainedChat: (props: NonNullable<typeof host.props>) => { host.props = props; return <div data-retained-host="" />; } }));
 const { ChatPane } = await import('./chat-pane');
-beforeEach(() => { setUiState(createInitialState()); host.props = null; });
+beforeEach(() => { setUiState(createInitialState()); host.props = null; useRetainedChatSelection.getState().select(null); });
 afterEach(unmountAll);
 const settle = async () => { await act(async () => { await new Promise(resolve => setTimeout(resolve, 30)); }); };
 function show(path = '/d1', conversations = [agentConversation('c1')]) {
@@ -57,4 +58,18 @@ describe('persistent chat orchestration', () => {
     expect(container.querySelector('[aria-label="Chat"]')?.getAttribute('data-density')).toBe('dense');
     expect(host.props?.agentId).toBe('p-imago');
   });
+});
+
+it.each([
+  ['support', 'Support'],
+  [null, 'Global Assistant'],
+] as const)('names the retained %s session and lets Imago clear it', async (id, title) => {
+  useRetainedChatSelection.getState().select({ sessionId: 'w1', conversationId: 's1', agentId: id, agentTitle: title, driveId: 'd1', isReadOnly: false });
+  const { container } = show('/d1/agents'); await settle();
+  const picker = container.querySelector<HTMLSelectElement>('select[aria-label="Agent"]')!;
+  expect(picker.value).toBe(id ?? 'retained-global-assistant');
+  expect(picker.selectedOptions[0].textContent).toBe(title);
+  await act(async () => { picker.value = 'p-imago'; picker.dispatchEvent(new Event('change', { bubbles: true })); });
+  expect(useRetainedChatSelection.getState().selection).toBeNull();
+  expect(picker.value).toBe('p-imago');
 });

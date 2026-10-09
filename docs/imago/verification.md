@@ -306,3 +306,12 @@ The new browser picker case selects a real page mention and follows the real
 Commands empty-state link inside the persistent shell. Final candidate cloud
 results and independently reviewed acceptance will be recorded in the verified
 PR/handoff; no pass is inferred from earlier snapshots.
+
+External 7f review identified a session-header mismatch and eager empty-conversation
+creation. The follow-up derives the header/picker from retained selection and
+defers creation to first send, reusing the empty message area and rich input.
+Focused cases cover no-create drafts, first-send handoff/deduplication, refused
+creation recovery, read-only guards and once-only initial dispatch. Real browser
+cases verify zero rows/POSTs for abandoned drafts, one persisted first turn, and
+a custom workspace turn in the returned conversation before selecting Imago.
+These new follow-ups await their exact-candidate cloud checks.

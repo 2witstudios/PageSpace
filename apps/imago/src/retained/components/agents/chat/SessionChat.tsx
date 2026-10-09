@@ -21,7 +21,8 @@
  */
 import { useUiState, getUiState } from '@/ui/store/store';
 import { dispatch, transactions } from '@/ui/store/transactions';
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import type { FileUIPart } from 'ai';
 import { Loader2 } from 'lucide-react';
 import { Button } from '@/retained/components/ui/button';
 import { ChatInput } from '@/retained/components/ai/chat/input';
@@ -50,6 +51,9 @@ export interface SessionChatProps {
   context: 'page' | 'console';
   /** Read-only viewers get history but no send/edit/delete/retry affordances. */
   isReadOnly?: boolean;
+  /** A native draft's first accepted send, after its conversation was created. */
+  initialSend?: { id: string; text: string; files?: FileUIPart[] };
+  onInitialSend?: (dispatched: boolean) => void;
 }
 
 export default function SessionChat({
@@ -58,8 +62,19 @@ export default function SessionChat({
   conversationId,
   context,
   isReadOnly = false,
+  initialSend,
+  onInitialSend,
 }: SessionChatProps) {
   const chat = useAgentSessionChat({ agent, conversationId });
+  const firstSend = useRef<string | null>(null);
+  useEffect(() => {
+    if (!initialSend || firstSend.current === initialSend.id || isReadOnly) return;
+    firstSend.current = initialSend.id;
+    void chat.handleSend(initialSend.text, initialSend.files).then(
+      dispatched => onInitialSend?.(dispatched),
+      () => onInitialSend?.(false),
+    );
+  }, [initialSend, chat, isReadOnly, onInitialSend]);
   return (
     <SessionChatView
       sessionId={sessionId}

@@ -81,9 +81,7 @@ test('resolves an object by its actual drive, retaining one shell and one chat',
   const pointerBody = JSON.parse((await browserGet(page, '/api/user/builtin-agents')).body) as { agents: { key: string; title: string; pageId: string | null }[] };
   const agentId = pointerBody.agents.find(agent => agent.title === 'Imago')?.pageId;
   expect(agentId).toBeTruthy();
-  const conversationId = (await db.select({ id: conversations.id }).from(conversations).where(and(eq(conversations.userId, user.id), eq(conversations.contextId, agentId!))))[0]?.id;
-  expect(conversationId).toBeTruthy();
-  await factories.createChatMessage(agentId!, { conversationId, role: 'assistant', content: `Open @[Cross-drive object](${crossDrivePage.id}:page).` });
+  await factories.createChatMessage(agentId!, { role: 'assistant', content: `Open @[Cross-drive object](${crossDrivePage.id}:page).` });
   await page.reload();
   await hydrated(page);
   await page.evaluate(() => { document.documentElement.dataset.shellProof = 'kept'; });
@@ -255,6 +253,40 @@ test('one rich chat input sends and keeps its unsent draft through native object
   await shot(page, 'chat-persistent');
 });
 
+test('opening and abandoning new chat drafts creates no conversations before the first send', async ({ browser, baseURL }) => {
+  const page = await open(browser, baseURL!, imagoPath(user.homeDriveId));
+  const chat = page.getByRole('region', { name: 'Chat', exact: true });
+  const input = chat.locator('textarea');
+  await expect(input).toBeEditable();
+  const roster = JSON.parse((await browserGet(page, '/api/user/builtin-agents')).body) as { agents: { title: string; pageId: string | null }[] };
+  const agentId = roster.agents.find(agent => agent.title === 'Imago')?.pageId;
+  expect(agentId).toBeTruthy();
+  const rows = () => db.select({ id: conversations.id }).from(conversations).where(and(eq(conversations.userId, user.id), eq(conversations.contextId, agentId!)));
+  expect(await rows()).toHaveLength(0);
+  const creations: string[] = [];
+  page.on('request', request => {
+    if (request.method() === 'POST' && new URL(request.url()).pathname === `/api/ai/page-agents/${agentId}/conversations`) creations.push(request.url());
+  });
+  for (let i = 0; i < 3; i++) {
+    await page.getByRole('button', { name: 'New chat', exact: true }).click();
+    await input.fill('An abandoned draft');
+    await page.getByRole('button', { name: 'New chat', exact: true }).click();
+    await expect(input).toHaveValue('An abandoned draft');
+    await input.fill('');
+  }
+  expect(creations).toHaveLength(0);
+  expect(await rows()).toHaveLength(0);
+  const admitted = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/ai/chat');
+  await input.fill('The first real send');
+  await input.press('Enter');
+  expect((await admitted).ok()).toBe(true);
+  await expect(chat.locator('[data-role="assistant"]')).toContainText('pong');
+  expect(creations).toHaveLength(1);
+  expect(await rows()).toHaveLength(1);
+  await page.reload();
+  await expect(chat.locator('[data-role="user"]')).toContainText('The first real send');
+});
+
 test('mention and command pickers keep scoped styles and native navigation', async ({ browser, baseURL }) => {
   await factories.createPage(user.homeDriveId, { type: 'DOCUMENT', title: 'Mention proof', content: '<p>Mention target.</p>' });
   const page = await open(browser, baseURL!, imagoPath(user.homeDriveId));
@@ -323,21 +355,41 @@ test('uploads a file through the retained palette and opens its specialized view
 });
 
 test('agent sessions and drive configuration remain native and preserve one chat', async ({ browser, baseURL }) => {
+  const support = await factories.createPage(user.homeDriveId, { type: 'AI_CHAT', title: 'Support proof', aiProvider: DEFAULT_AI_PROVIDER, aiModel: DEFAULT_AI_MODEL });
   const page = await open(browser, baseURL!, imagoPath(user.homeDriveId, 'agents'));
   await expect(page.getByRole('button', { name: 'New Session', exact: true })).toBeVisible();
   await expect(page.getByRole('region', { name: 'Chat', exact: true })).toHaveCount(1);
   await expect(page.getByRole('complementary', { name: 'Agent sessions', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'New Session', exact: true }).click();
   const palette = page.getByRole('dialog', { name: 'New session', exact: true });
-  await palette.getByRole('option').filter({ hasText: 'Imago' }).first().click();
-  const name = palette.getByPlaceholder('Imago', { exact: true });
+  await palette.getByRole('option').filter({ hasText: 'Support proof' }).first().click();
+  const name = palette.getByPlaceholder('Support proof', { exact: true });
   await name.fill('Native agent session');
   const created = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/agent-workspaces');
   await name.press('Enter');
-  expect((await created).ok()).toBe(true);
+  const createdResponse = await created;
+  expect(createdResponse.ok()).toBe(true);
+  const workspace = await createdResponse.json() as { conversationId: string };
   await expect(page.getByRole('complementary', { name: 'Agent sessions', exact: true })).toContainText('Native agent session');
   await expect(page.getByRole('region', { name: 'Chat', exact: true }).locator('textarea')).toBeEditable();
   await expect(page.getByRole('region', { name: 'Chat', exact: true }).locator('textarea')).toHaveCount(1);
+  const chat = page.getByRole('region', { name: 'Chat', exact: true });
+  await expect(chat.getByRole('combobox', { name: 'Agent', exact: true })).toHaveValue(support.id);
+  const sessionInput = chat.getByPlaceholder('Message Support proof...');
+  await expect(sessionInput).toBeEditable();
+  const sent = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/ai/chat');
+  await sessionInput.fill('A real workspace conversation turn');
+  await sessionInput.press('Enter');
+  const admitted = await sent;
+  expect(admitted.ok()).toBe(true);
+  expect(admitted.request().postDataJSON()).toMatchObject({ conversationId: workspace.conversationId, chatId: support.id });
+  await expect(chat.locator('[data-role="assistant"]')).toContainText('pong');
+  const roster = JSON.parse((await browserGet(page, '/api/user/builtin-agents')).body) as { agents: { title: string; pageId: string | null }[] };
+  const imagoId = roster.agents.find(agent => agent.title === 'Imago')?.pageId;
+  expect(imagoId).toBeTruthy();
+  await chat.getByRole('combobox', { name: 'Agent', exact: true }).selectOption(imagoId!);
+  await expect(chat.getByPlaceholder('Message Imago...')).toBeEditable();
+  await expect(chat).toHaveCount(1);
   await shot(page, 'agents');
   await page.goto(imagoPath(user.homeDriveId, 'settings/integrations'));
   await expect(page.getByText('No integrations connected to this drive.', { exact: true })).toBeVisible();
@@ -605,15 +657,13 @@ test('persisted approval cards use the session API and retain a real service ref
   const roster = JSON.parse((await browserGet(page, '/api/user/builtin-agents')).body) as { agents: { title: string; pageId: string | null }[] };
   const agentId = roster.agents.find(agent => agent.title === 'Imago')?.pageId;
   expect(agentId).toBeTruthy();
-  const conversationId = (await db.select({ id: conversations.id }).from(conversations).where(and(eq(conversations.userId, user.id), eq(conversations.contextId, agentId!))))[0]?.id;
-  expect(conversationId).toBeTruthy();
   // A canonical persisted result exercises reconstruction and the rich consumer.
   // The isolated runtime has no credential plane, so its real API must refuse.
   const accountId = 'approval-fixture-account';
   const requestDigest = 'a'.repeat(64);
   const toolCallId = 'approval-fixture-call';
   await factories.createChatMessage(agentId!, {
-    conversationId, role: 'assistant',
+    role: 'assistant',
     content: JSON.stringify({ textParts: [], partsOrder: [{ index: 0, type: 'tool-http_request', toolCallId }], originalContent: '' }),
     toolCalls: JSON.stringify([{ toolCallId, toolName: 'http_request', input: { method: 'POST', url: 'https://example.com/fixture' }, state: 'output-available' }]),
     toolResults: JSON.stringify([{ toolCallId, toolName: 'http_request', state: 'output-available', output: { error: 'approval_required', approval: { accountId, requestDigest, stepUp: false, subject: { headline: 'Canonical fixture approval', origin: 'https://example.com', path: '/fixture' } } } }]),

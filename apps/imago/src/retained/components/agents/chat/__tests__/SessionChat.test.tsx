@@ -296,3 +296,22 @@ describe('AssistantSessionChat — command picker scope', () => {
   fireEvent.click(screen.getByTestId('chat-send'));
   await waitFor(() => expect(imageState.remove).toHaveBeenCalledExactlyOnceWith('image-1'));
 });
+
+ it('dispatches a newly created draft once and reports acceptance across rerenders', async () => {
+  const handleSend = vi.fn(async () => true);
+  const accepted = vi.fn();
+  chatState.current = baseChatState({ handleSend });
+  const props = { agent: agentFixture(), conversationId: 'new-thread', context: 'page' as const,
+    initialSend: { id: 'first-send', text: 'The first turn' }, onInitialSend: accepted };
+  const view = render(<SessionChat {...props} />);
+  await waitFor(() => expect(accepted).toHaveBeenCalledWith(true));
+  view.rerender(<SessionChat {...props} />);
+  expect(handleSend).toHaveBeenCalledExactlyOnceWith('The first turn', undefined);
+});
+
+ it('does not dispatch a prepared draft through a read-only surface', () => {
+  const handleSend = vi.fn(async () => true);
+  chatState.current = baseChatState({ handleSend });
+  render(<SessionChat agent={agentFixture()} conversationId="new-thread" context="page" isReadOnly initialSend={{ id: 'first-send', text: 'Blocked turn' }} />);
+  expect(handleSend).not.toHaveBeenCalled();
+});
