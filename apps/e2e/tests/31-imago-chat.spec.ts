@@ -1,3 +1,4 @@
+import { DEFAULT_AI_PROVIDER, DEFAULT_AI_MODEL } from '@pagespace/lib/ai/model-defaults';
 import { test, expect, type BrowserContext, type Page } from '@playwright/test';
 import {
   deleteUsers,
@@ -70,14 +71,18 @@ const ready = async (page: Page): Promise<void> => {
   await hydrated(page);
   // The lists are server reads: allowed a turn's ceiling, since a cold server compiles a route first.
   await expect(history(page).getByRole('status')).toHaveCount(0, { timeout: TURN_MS });
-  await expect(chat(page).locator('ol[aria-busy="true"]')).toHaveCount(0, { timeout: TURN_MS });
+  await expect(chat(page).getByTestId('session-chat-loading')).toHaveCount(0, { timeout: TURN_MS });
+  await expect(composer(page)).toBeEditable({ timeout: TURN_MS });
 };
 
 /** Types a prompt and sends it with Enter, as a person does. */
 const ask = async (page: Page, prompt: string): Promise<void> => {
   await composer(page).fill(prompt);
   await expect(sendButton(page)).toBeEnabled();
+  const admitted = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/ai/chat');
   await composer(page).press('Enter');
+  const response = await admitted;
+  expect(response.ok(), `Chat admission returned ${response.status()}`).toBe(true);
   await expect(composer(page)).toHaveValue('');
 };
 
@@ -93,7 +98,7 @@ const contexts: BrowserContext[] = [];
 
 test.beforeEach(async ({ request }) => {
   await resetMock(request);
-  user = await imagoUser(`Ada ${Math.random().toString(36).slice(2, 8)}`, { currentAiProvider: 'openai', currentAiModel: 'openai/gpt-4o-mini' });
+  user = await imagoUser(`Ada ${Math.random().toString(36).slice(2, 8)}`, { currentAiProvider: DEFAULT_AI_PROVIDER, currentAiModel: DEFAULT_AI_MODEL });
   created = [user.id];
 });
 

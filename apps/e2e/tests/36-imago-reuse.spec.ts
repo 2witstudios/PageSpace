@@ -1,3 +1,4 @@
+import { DEFAULT_AI_PROVIDER, DEFAULT_AI_MODEL } from '@pagespace/lib/ai/model-defaults';
 import { test, expect, type BrowserContext, type Page } from '@playwright/test';
 import { factories } from '@pagespace/db/test/factories';
 import { db } from '@pagespace/db/db';
@@ -12,7 +13,7 @@ let user: ImagoUser;
 const extraUsers: string[] = [];
 const contexts: BrowserContext[] = [];
 const mockOrigin = process.env.E2E_MOCK_OPENROUTER_URL ?? `http://127.0.0.1:${process.env.E2E_MOCK_OPENROUTER_PORT ?? 4998}`;
-test.beforeEach(async ({ request }) => { await request.post(`${mockOrigin}/__reset`); user = await imagoUser('Reuse test user', { currentAiProvider: 'openai', currentAiModel: 'openai/gpt-4o-mini' }); });
+test.beforeEach(async ({ request }) => { await request.post(`${mockOrigin}/__reset`); user = await imagoUser('Reuse test user', { currentAiProvider: DEFAULT_AI_PROVIDER, currentAiModel: DEFAULT_AI_MODEL }); });
 test.afterEach(async () => { await Promise.all(contexts.splice(0).map(context => context.close())); if (user) await deleteUsers([user.id, ...extraUsers.splice(0)]); });
 async function open(browser: Parameters<typeof freshBrowser>[0], baseURL: string, path: string) {
   const { context, page } = await freshBrowser(browser, baseURL);

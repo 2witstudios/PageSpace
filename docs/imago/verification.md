@@ -127,3 +127,18 @@ by the existing authorized page data, with an unnamed-data fallback. This does
 not change any backend DTO. The next candidate also adds a real status-category
 and disabled scheduled-workflow creation/reload check to spec 36. Neither these
 new actions nor the previous candidate’s remaining gates are claimed passed.
+
+
+Source investigation found that the explicitly selected GPT-4o Mini in the chat
+and visual fixtures is outside master’s free-model allowlist. This explains why
+interim tenant interaction runs worked while cloud CI reached no mock stream.
+Fixtures now use `DEFAULT_AI_PROVIDER`/`DEFAULT_AI_MODEL` from the existing shared
+catalog, preserving production model choices, billing policy and all backend gates.
+The original streaming spec also awaits the real chat admission response and the
+retained loading/composer readiness, rather than an obsolete native `<ol>` marker.
+No response body, runtime credential or environment material is logged.
+
+The cancelled first candidate’s completed Imago unit phase passed 1,551 tests in
+222 files. Its uploaded coverage summary measured 94.36% lines/statements,
+94.64% branches and 90.69% functions. This is exact `b26d718` intermediate evidence,
+not a passing aggregate job or a substitute for the final candidate’s CI.

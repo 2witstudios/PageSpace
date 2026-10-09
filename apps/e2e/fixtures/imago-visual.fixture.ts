@@ -1,3 +1,4 @@
+import { DEFAULT_AI_PROVIDER, DEFAULT_AI_MODEL } from '@pagespace/lib/ai/model-defaults';
 import { expect, type Browser, type BrowserContext, type Page, type Request } from '@playwright/test';
 import { factories } from '@pagespace/db/test/factories';
 import { db } from '@pagespace/db/db';
@@ -36,7 +37,7 @@ export const VIEWPORT = { width: 1400, height: 800 } as const;
 
 /** A verified user with a fixed name and no avatar image, plus the Home drive sign-in provisions. */
 export const visualUser = async (name: string): Promise<ImagoUser> => {
-  const user = await factories.createUser({ name, image: null, emailVerified: new Date(), currentAiProvider: 'openai', currentAiModel: 'openai/gpt-4o-mini' });
+  const user = await factories.createUser({ name, image: null, emailVerified: new Date(), currentAiProvider: DEFAULT_AI_PROVIDER, currentAiModel: DEFAULT_AI_MODEL });
   const { driveId } = await provisionHomeDriveIfNeeded(user.id);
   return { id: user.id, name, homeDriveId: driveId };
 };
