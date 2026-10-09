@@ -49,10 +49,10 @@ const TURN_MS = 30_000;
 const rail = (page: Page) => page.getByRole('navigation', { name: 'Primary' });
 const railLink = (page: Page, name: string) => rail(page).getByRole('link', { name, exact: true });
 const chat = (page: Page) => page.getByRole('region', { name: 'Chat', exact: true });
-const composer = (page: Page) => chat(page).getByRole('textbox', { name: 'Message Imago' });
-const sendButton = (page: Page) => chat(page).getByRole('button', { name: 'Send' });
-const stopButton = (page: Page) => chat(page).getByRole('button', { name: 'Stop' });
-const said = (page: Page, role: 'user' | 'assistant') => chat(page).locator(`li[data-role="${role}"]`);
+const composer = (page: Page) => chat(page).getByLabel('Message Imago', { exact: true });
+const sendButton = (page: Page) => chat(page).getByRole('button', { name: 'Send message', exact: true });
+const stopButton = (page: Page) => chat(page).getByRole('button', { name: 'Stop generating', exact: true });
+const said = (page: Page, role: 'user' | 'assistant') => chat(page).locator(`[data-testid="chat-message"][data-role="${role}"]`);
 const history = (page: Page) => page.locator('[data-slot="list"]').getByRole('region', { name: 'Chat history' });
 const historyRow = (page: Page, title: string) => history(page).getByRole('button', { name: title, exact: true });
 
@@ -84,7 +84,7 @@ const ask = async (page: Page, prompt: string): Promise<void> => {
 /** The turn has ended in the pane: no reply is busy and Send stands where Stop was. */
 const turnEnded = async (page: Page): Promise<void> => {
   await expect(stopButton(page)).toHaveCount(0, { timeout: TURN_MS });
-  await expect(chat(page).locator('li[aria-busy="true"]')).toHaveCount(0);
+  await expect(chat(page).locator('[data-testid="chat-message"][aria-busy="true"]')).toHaveCount(0);
 };
 
 let user: ImagoUser;
@@ -93,7 +93,7 @@ const contexts: BrowserContext[] = [];
 
 test.beforeEach(async ({ request }) => {
   await resetMock(request);
-  user = await imagoUser(`Ada ${Math.random().toString(36).slice(2, 8)}`);
+  user = await imagoUser(`Ada ${Math.random().toString(36).slice(2, 8)}`, { currentAiProvider: 'openai', currentAiModel: 'openai/gpt-4o-mini' });
   created = [user.id];
 });
 
@@ -122,7 +122,7 @@ test('a prompt streams its reply in, and both are there after a reload', async (
   const home = imagoPath(user.homeDriveId);
   const page = await signedIn(browser, baseURL, home);
   await ready(page);
-  await expect(chat(page)).toContainText('Ask Imago anything.');
+  await expect(chat(page)).toContainText('Start a conversation with the AI assistant');
 
   await ask(page, 'What ships in October?');
 
@@ -239,7 +239,7 @@ test('the history switches between two conversations', async ({ browser, baseURL
   await expect(historyRow(page, 'Alpha question')).toHaveAttribute('aria-current', 'true');
 
   await history(page).getByRole('button', { name: 'New chat' }).click();
-  await expect(chat(page)).toContainText('Ask Imago anything.');
+  await expect(chat(page)).toContainText('Start a conversation with the AI assistant');
   await ask(page, 'Beta question');
   await turnEnded(page);
   await expect(historyRow(page, 'Beta question')).toHaveAttribute('aria-current', 'true');

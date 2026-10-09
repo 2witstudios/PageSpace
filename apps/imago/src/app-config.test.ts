@@ -205,7 +205,7 @@ describe('apps/imago configuration', () => {
       given: 'the imago dev script',
       should: 'run next dev on port 3006',
       actual: packageJson.scripts.dev,
-      expected: 'next dev --port 3006 --hostname 0.0.0.0',
+      expected: 'bun run styles:retained && next dev --port 3006 --hostname 0.0.0.0',
     });
 
     assert({

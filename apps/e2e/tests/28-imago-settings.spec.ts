@@ -88,16 +88,16 @@ test.describe('drive settings', () => {
 });
 
 test.describe('account', () => {
-  test('links into classic settings', async ({ page }) => {
+  test('opens account settings within the persistent Imago shell', async ({ page }) => {
     await page.goto('/imago/account');
 
-    const links = page.getByRole('region', { name: 'Account settings' }).getByRole('link');
+    const links = page.locator('[data-slot="object"]').getByRole('link');
     await expect(links.first()).toBeVisible();
     const hrefs = await links.evaluateAll((nodes) => nodes.map((node) => node.getAttribute('href')));
-    expect(hrefs).toContain('/settings/account');
-    expect(hrefs).toContain('/settings/integrations');
+    expect(hrefs).toContain('/imago/account/account');
+    expect(hrefs).toContain('/imago/account/integrations');
 
     await links.filter({ hasText: 'Account' }).first().click();
-    await page.waitForURL((url) => url.pathname === '/settings/account');
+    await page.waitForURL((url) => url.pathname === '/imago/account/account');
   });
 });

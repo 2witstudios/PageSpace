@@ -65,6 +65,17 @@ export function createMockS3(): http.Server {
   const objects = new Map<string, Stored>();
 
   return http.createServer((req, res) => {
+    // Browser presigned uploads use the same configured test bucket as server writes.
+    // Limit this test service's CORS to local browser origins; production CORS is unchanged.
+    const origin = req.headers.origin;
+    if (origin && /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin)) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Vary', 'Origin');
+      res.setHeader('Access-Control-Allow-Methods', 'PUT, GET, HEAD, DELETE, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', req.headers['access-control-request-headers'] ?? 'content-type');
+      res.setHeader('Access-Control-Expose-Headers', 'ETag');
+      if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
+    }
     void (async () => {
       if (req.url === '/__health') {
         res.writeHead(200, { 'Content-Type': 'application/json' });

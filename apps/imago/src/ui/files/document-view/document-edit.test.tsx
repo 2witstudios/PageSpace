@@ -21,7 +21,7 @@ import { CLOSING_SAVE_TIMEOUT_MS, reloadsOn } from './document-view';
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push: () => {} }) }));
 
 const { PageObject } = await import('../page-object/page-object');
-const { PageView } = await import('../page-view/page-view');
+const { LegacyDocumentObject: PageView } = await import('../../test-support/legacy-document-object');
 
 beforeEach(() => {
   setUiState(createInitialState());

@@ -253,11 +253,12 @@ describe('Rail', () => {
       actual: [opened, focusedLink, afterEscape, focusBack, reopened, details?.open],
       expected: [
         [
-          '/dashboard/drive-1/calendar',
-          '/dashboard/drive-1/agents',
-          '/dashboard/drive-1/settings/integrations',
-          '/dashboard/drive-1/activity',
-          '/dashboard/drive-1/trash',
+          '/drive-1/calendar',
+          '/drive-1/agents',
+          '/drive-1/settings/integrations',
+          '/drive-1/activity',
+          '/drive-1/trash',
+        '/drive-1/workflows',
         ],
         true,
         false,

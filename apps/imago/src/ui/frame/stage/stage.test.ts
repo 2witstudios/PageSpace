@@ -151,7 +151,7 @@ describe('stageFor() unknown and malformed paths', () => {
         stageFor('/drive-1/tasks/list-1/extra'),
         stageFor('/drive-1/settings/extra'),
       ],
-      expected: [driveChat, driveChat, driveChat, driveChat, driveChat, driveChat],
+      expected: [driveChat, driveChat, driveChat, driveChat, driveChat, stageFor('/drive-1/settings')],
     });
   });
 
@@ -160,7 +160,7 @@ describe('stageFor() unknown and malformed paths', () => {
       given: 'a user-level route with extra segments',
       should: 'fall back to the root chat, never read a reserved word as a drive',
       actual: [stageFor('/dm/conversation-1/extra'), stageFor('/account/extra')],
-      expected: [root, root],
+      expected: [root, stageFor('/account')],
     });
   });
 

@@ -20,7 +20,7 @@ vi.mock('next/navigation', () => ({
 // The route itself is a server component (it awaits the viewer); these are
 // exactly what it renders into the object slot.
 const { PageObject } = await import('../page-object/page-object');
-const { PageView } = await import('../page-view/page-view');
+const { LegacyDocumentObject: PageView } = await import('../../test-support/legacy-document-object');
 
 beforeEach(() => {
   setUiState(createInitialState());

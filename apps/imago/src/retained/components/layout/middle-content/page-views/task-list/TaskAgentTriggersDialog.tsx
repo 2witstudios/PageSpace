@@ -1,0 +1,363 @@
+'use client';
+
+import { useEffect, useRef, useState } from 'react';
+import { AlertCircle, Bot, Zap } from 'lucide-react';
+import { toast } from 'sonner';
+import useSWR, { mutate as globalMutate } from 'swr';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/retained/components/ui/dialog';
+import { Button } from '@/retained/components/ui/button';
+import { Label } from '@/retained/components/ui/label';
+import { Switch } from '@/retained/components/ui/switch';
+import { fetchWithAuth, put, del } from '@/retained/lib/auth/auth-fetch';
+import { useEditingStore } from '@/retained/stores/useEditingStore';
+import { useEditingSession } from '@/retained/stores/useEditingSession';
+import { AgentTriggerSection } from '@/retained/components/agent-triggers/AgentTriggerSection';
+
+type TriggerType = 'due_date' | 'completion';
+
+interface DriveAgent {
+  id: string;
+  title: string | null;
+}
+
+interface TriggerRow {
+  id: string;
+  triggerType: TriggerType;
+  agentPageId: string;
+  prompt: string;
+  isEnabled: boolean;
+  lastFiredAt: string | null;
+  lastFireError: string | null;
+  instructionPageId: string | null;
+  contextPageIds: string[] | null;
+}
+
+type LastRunStatus = 'never_run' | 'success' | 'error';
+
+const lastRunStatusFor = (row: TriggerRow): LastRunStatus =>
+  row.lastFiredAt === null
+    ? 'never_run'
+    : row.lastFireError
+      ? 'error'
+      : 'success';
+
+interface TaskAgentTriggersDialogProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  taskId: string;
+  taskTitle: string;
+  pageId: string;
+  driveId: string;
+  hasDueDate: boolean;
+  onSaved?: () => void;
+}
+
+const TRIGGER_TYPES: { ui: TriggerType; label: string; help: string }[] = [
+  {
+    ui: 'due_date',
+    label: 'Run when due date arrives',
+    help: 'Requires a due date on this task. The agent runs once at the scheduled time.',
+  },
+  {
+    ui: 'completion',
+    label: 'Run when task is completed',
+    help: 'Fires the moment the task is moved to a status in the Done group.',
+  },
+];
+
+export const statusToneClass = (status: LastRunStatus) =>
+  status === 'error' ? 'text-xs text-destructive' : 'text-xs text-muted-foreground';
+
+const triggersFetcher = async (url: string): Promise<{ triggers: TriggerRow[] }> => {
+  const res = await fetchWithAuth(url);
+  if (!res.ok) throw new Error('Failed to load triggers');
+  return res.json();
+};
+
+const agentsFetcher = async (url: string): Promise<{ agents: DriveAgent[] }> => {
+  const res = await fetchWithAuth(url);
+  if (!res.ok) throw new Error('Failed to load agents');
+  return res.json();
+};
+
+interface SectionState {
+  enabled: boolean;
+  agentPageId: string;
+  prompt: string;
+  instructionPageId: string | null;
+  contextPageIds: string[];
+}
+
+const EMPTY_SECTION: SectionState = {
+  enabled: false,
+  agentPageId: '',
+  prompt: '',
+  instructionPageId: null,
+  contextPageIds: [],
+};
+
+export function TaskAgentTriggersDialog({
+  open,
+  onOpenChange,
+  taskId,
+  taskTitle,
+  pageId,
+  driveId,
+  hasDueDate,
+  onSaved,
+}: TaskAgentTriggersDialogProps) {
+  const triggersKey = open ? `/api/tasks/${taskId}/triggers` : null;
+  const agentsKey = open && driveId ? `/api/drives/${driveId}/agents` : null;
+
+  // Pause background revalidation during document/form editing so a remote
+  // task_updated broadcast cannot refetch this dialog and clobber in-progress prompt
+  // typing. Initial load and explicit mutate() (e.g. refetchTriggers after save) are
+  // unaffected because *LoadedRef gates the pause until first success.
+  const isAnyEditing = useEditingStore((s) => s.isAnyEditing());
+  const triggersLoadedRef = useRef(false);
+  const agentsLoadedRef = useRef(false);
+
+  const { data: triggersData, isLoading: triggersLoading, mutate: refetchTriggers } = useSWR(
+    triggersKey,
+    triggersFetcher,
+    {
+      revalidateOnFocus: false,
+      isPaused: () => triggersLoadedRef.current && isAnyEditing,
+      onSuccess: () => {
+        triggersLoadedRef.current = true;
+      },
+    },
+  );
+  const { data: agentsData, isLoading: agentsLoading } = useSWR(
+    agentsKey,
+    agentsFetcher,
+    {
+      revalidateOnFocus: false,
+      isPaused: () => agentsLoadedRef.current && isAnyEditing,
+      onSuccess: () => {
+        agentsLoadedRef.current = true;
+      },
+    },
+  );
+
+  const agents = agentsData?.agents ?? [];
+
+  const [sections, setSections] = useState<Record<TriggerType, SectionState>>({
+    due_date: { ...EMPTY_SECTION },
+    completion: { ...EMPTY_SECTION },
+  });
+  const [savingType, setSavingType] = useState<TriggerType | null>(null);
+  const [removingType, setRemovingType] = useState<TriggerType | null>(null);
+
+  useEditingSession(`task-triggers:${taskId}`, open, 'form', {
+    pageId,
+    componentName: 'TaskAgentTriggersDialog',
+  });
+
+  useEffect(() => {
+    if (!open) return;
+    const next: Record<TriggerType, SectionState> = {
+      due_date: { ...EMPTY_SECTION },
+      completion: { ...EMPTY_SECTION },
+    };
+    for (const row of triggersData?.triggers ?? []) {
+      const ui: TriggerType = row.triggerType;
+      next[ui] = {
+        enabled: row.isEnabled,
+        agentPageId: row.agentPageId,
+        prompt: row.prompt ?? '',
+        instructionPageId: row.instructionPageId ?? null,
+        contextPageIds: row.contextPageIds ?? [],
+      };
+    }
+    setSections(next);
+  }, [open, triggersData]);
+
+  const updateSection = (type: TriggerType, patch: Partial<SectionState>) => {
+    setSections((prev) => ({ ...prev, [type]: { ...prev[type], ...patch } }));
+  };
+
+  const handleSave = async (type: TriggerType) => {
+    const section = sections[type];
+    if (!section.agentPageId) {
+      toast.error('Pick an agent first');
+      return;
+    }
+    if (!section.prompt.trim() && !section.instructionPageId) {
+      toast.error('Enter a prompt or pick an instruction page');
+      return;
+    }
+    if (type === 'due_date' && !hasDueDate) {
+      toast.error('Set a due date on the task before adding a due-date trigger');
+      return;
+    }
+
+    setSavingType(type);
+    try {
+      await put(`/api/tasks/${taskId}/triggers`, {
+        triggerType: type,
+        agentPageId: section.agentPageId,
+        prompt: section.prompt.trim(),
+        instructionPageId: section.instructionPageId,
+        contextPageIds: section.contextPageIds,
+      });
+      await refetchTriggers();
+      await globalMutate(`/api/pages/${pageId}/tasks`);
+      toast.success(type === 'due_date' ? 'Due-date trigger saved' : 'Completion trigger saved');
+      onSaved?.();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Failed to save trigger';
+      toast.error(msg);
+    } finally {
+      setSavingType(null);
+    }
+  };
+
+  const handleRemove = async (type: TriggerType) => {
+    setRemovingType(type);
+    try {
+      await del(`/api/tasks/${taskId}/triggers/${type}`);
+      await refetchTriggers();
+      await globalMutate(`/api/pages/${pageId}/tasks`);
+      updateSection(type, { ...EMPTY_SECTION });
+      toast.success('Trigger removed');
+      onSaved?.();
+    } catch {
+      toast.error('Failed to remove trigger');
+    } finally {
+      setRemovingType(null);
+    }
+  };
+
+  const noAgents = !agentsLoading && agents.length === 0;
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-lg flex flex-col max-h-[85vh]">
+        <DialogHeader className="shrink-0">
+          <DialogTitle className="flex items-center gap-2">
+            <Zap className="h-4 w-4 text-amber-500" />
+            Agent triggers
+          </DialogTitle>
+          <DialogDescription className="truncate">
+            <span className="font-medium">{taskTitle}</span>
+          </DialogDescription>
+        </DialogHeader>
+
+        {triggersLoading ? (
+          <div className="py-8 text-center text-sm text-muted-foreground">Loading…</div>
+        ) : (
+          <div className="min-h-0 flex-1 overflow-y-auto space-y-4 pr-1">
+            {noAgents && (
+              <p className="text-xs text-muted-foreground">
+                No agents in this drive. Create an AI Chat page first.
+              </p>
+            )}
+
+            {TRIGGER_TYPES.map(({ ui, label, help }) => {
+              const switchId = `trigger-switch-${ui}`;
+              const section = sections[ui];
+              const existing = (triggersData?.triggers ?? []).find(
+                (t) => t.triggerType === ui,
+              );
+              const existingStatus: LastRunStatus | null = existing ? lastRunStatusFor(existing) : null;
+              const disabled = noAgents || (ui === 'due_date' && !hasDueDate);
+              return (
+                <div key={ui} className="space-y-3 rounded-md border p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <Bot className="h-4 w-4 text-muted-foreground shrink-0" />
+                      <Label htmlFor={switchId} className="font-medium cursor-pointer truncate">{label}</Label>
+                    </div>
+                    <Switch
+                      id={switchId}
+                      checked={section.enabled}
+                      disabled={disabled}
+                      onCheckedChange={(checked) => updateSection(ui, { enabled: checked })}
+                    />
+                  </div>
+
+                  <p className="text-xs text-muted-foreground">{help}</p>
+                  {ui === 'due_date' && !hasDueDate && (
+                    <p className="text-xs text-amber-600 dark:text-amber-400">
+                      Add a due date to this task to enable this trigger.
+                    </p>
+                  )}
+
+                  {section.enabled && !disabled && (
+                    <div className="space-y-3 pt-1">
+                      <AgentTriggerSection
+                        driveId={driveId}
+                        agents={agents}
+                        agentsLoading={agentsLoading}
+                        value={{
+                          agentPageId: section.agentPageId,
+                          prompt: section.prompt,
+                          instructionPageId: section.instructionPageId,
+                          contextPageIds: section.contextPageIds,
+                        }}
+                        onChange={(next) => updateSection(ui, next)}
+                        promptPlaceholder={
+                          ui === 'due_date'
+                            ? 'What should the agent do when the due date arrives?'
+                            : 'What should the agent do when the task is completed?'
+                        }
+                      />
+
+                      {existingStatus && existingStatus !== 'never_run' && (
+                        <p className={statusToneClass(existingStatus)}>
+                          {existingStatus === 'error' && (
+                            <AlertCircle className="h-3 w-3 inline mr-1" aria-hidden="true" />
+                          )}
+                          Last run: <span className="font-medium">{existingStatus}</span>
+                          {existing?.lastFiredAt
+                            ? ` • ${new Date(existing.lastFiredAt).toLocaleString()}`
+                            : ''}
+                        </p>
+                      )}
+
+                      <div className="flex items-center justify-end gap-2">
+                        {existing?.isEnabled && (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleRemove(ui)}
+                            disabled={removingType === ui}
+                          >
+                            {removingType === ui ? 'Removing…' : 'Remove'}
+                          </Button>
+                        )}
+                        <Button
+                          type="button"
+                          size="sm"
+                          onClick={() => handleSave(ui)}
+                          disabled={savingType === ui}
+                        >
+                          {savingType === ui ? 'Saving…' : existing ? 'Update' : 'Save'}
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        <DialogFooter className="shrink-0">
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            Done
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}

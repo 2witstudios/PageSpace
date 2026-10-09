@@ -85,3 +85,13 @@ describe('mock S3', () => {
     expect(await notFound(client.send(new GetObjectCommand({ Bucket: 'another-bucket', Key })))).toBe('NoSuchKey');
   });
 });
+
+ it('permits browser preflights only from local test origins', async () => {
+  const { port } = server.address() as AddressInfo;
+  const url = `http://127.0.0.1:${port}/pagespace-e2e/upload`;
+  const local = await fetch(url, { method: 'OPTIONS', headers: { Origin: 'http://localhost:3209', 'Access-Control-Request-Headers': 'content-type' } });
+  expect(local.status).toBe(204);
+  expect(local.headers.get('access-control-allow-origin')).toBe('http://localhost:3209');
+  const foreign = await fetch(url, { method: 'OPTIONS', headers: { Origin: 'https://foreign.example' } });
+  expect(foreign.headers.get('access-control-allow-origin')).toBeNull();
+});

@@ -1,0 +1,267 @@
+"use client";
+
+import { useEditor, EditorContent, Editor } from '@tiptap/react';
+import { clientExtensions } from '@/retained/lib/editor/client-schema';
+import { BubbleMenu, FloatingMenu } from '@tiptap/react/menus';
+import React, { useEffect } from 'react';
+import { useRouter } from '@/retained-adapters/navigation';
+import { Bold, Italic, Strikethrough, Code, Heading1, Heading2, Heading3, Pilcrow, List, ListOrdered, Quote } from 'lucide-react';
+import { subscribeToNavigationEvents } from '@/retained/lib/navigation/app-navigation';
+import LinkButton from './LinkButton';
+
+interface RichEditorProps {
+  value: string;
+  onChange?: (value: string) => void;
+  onEditorChange?: (editor: Editor | null) => void;
+  readOnly?: boolean;
+  isPaginated?: boolean;
+  contentMode?: 'html' | 'markdown';
+}
+
+const MAX_VIEW_MOUNT_ATTEMPTS = 120;
+type MarkdownStorage = { getMarkdown?: () => string };
+type EditorStorageWithMarkdown = { markdown?: MarkdownStorage };
+
+const getEditorRootElement = (editor: Editor | null): HTMLElement | null => {
+  if (!editor || editor.isDestroyed) {
+    return null;
+  }
+
+  try {
+    return editor.view.dom as HTMLElement;
+  } catch {
+    return null;
+  }
+};
+
+const serializeEditorContent = (editor: Editor, isMarkdownMode: boolean): string => {
+  const markdownStorage = (editor.storage as unknown as EditorStorageWithMarkdown).markdown;
+  return isMarkdownMode
+    ? (markdownStorage?.getMarkdown?.() ?? '')
+    : editor.getHTML();
+};
+
+const RichEditor = ({ value, onChange, onEditorChange, readOnly = false, isPaginated = false, contentMode = 'html' }: RichEditorProps) => {
+  const router = useRouter();
+  const [isEditorViewMounted, setIsEditorViewMounted] = React.useState(false);
+  const isMarkdownMode = contentMode === 'markdown';
+
+  // Subscribe to navigation events from TipTap mentions
+  // This enables mobile-aware navigation (stays in WebView on Capacitor)
+  useEffect(() => {
+    const unsubscribe = subscribeToNavigationEvents((href) => {
+      router.push(href);
+    });
+    return unsubscribe;
+  }, [router]);
+
+  const editor = useEditor({
+    immediatelyRender: false,
+    extensions: clientExtensions({ readOnly, isPaginated }),
+    content: value,
+    editable: !readOnly,
+    autofocus: readOnly ? false : undefined,
+    onUpdate: ({ editor }) => {
+      if (!readOnly) {
+        const serialized = serializeEditorContent(editor, isMarkdownMode);
+        onChange?.(serialized);
+      }
+    },
+    editorProps: {
+      attributes: {
+        class: readOnly
+          ? 'tiptap m-5 cursor-text'
+          : 'tiptap m-5 focus:outline-none',
+        tabindex: readOnly ? '-1' : '0',
+        style: readOnly ? 'user-select: text; -webkit-user-select: text;' : '',
+      },
+      scrollThreshold: 80,
+      scrollMargin: 80,
+    },
+  }, [isPaginated, contentMode, readOnly]); // Recreate editor when key mode/toggle settings change
+
+  useEffect(() => {
+    if (!editor || editor.isDestroyed) {
+      setIsEditorViewMounted(false);
+      return;
+    }
+
+    const mountedElement = getEditorRootElement(editor);
+    if (mountedElement) {
+      setIsEditorViewMounted(true);
+      return;
+    }
+
+    setIsEditorViewMounted(false);
+
+    let frameId: number | null = null;
+    let attempts = 0;
+
+    const waitForViewMount = () => {
+      const mounted = Boolean(getEditorRootElement(editor));
+      if (mounted) {
+        setIsEditorViewMounted(true);
+        return;
+      }
+
+      attempts += 1;
+      if (attempts >= MAX_VIEW_MOUNT_ATTEMPTS) {
+        return;
+      }
+
+      frameId = window.requestAnimationFrame(waitForViewMount);
+    };
+
+    frameId = window.requestAnimationFrame(waitForViewMount);
+
+    return () => {
+      if (frameId !== null) {
+        window.cancelAnimationFrame(frameId);
+      }
+    };
+  }, [editor]);
+
+  useEffect(() => {
+    if (editor && !editor.isDestroyed) {
+      const currentSerialized = serializeEditorContent(editor, isMarkdownMode);
+      // Check if value is empty and current content is just the default empty state
+      const isEmptyValue = !value || value.trim() === '';
+      const isDefaultEmpty = isMarkdownMode
+        ? (!currentSerialized || currentSerialized.trim() === '')
+        : (currentSerialized === '<p></p>' ||
+           currentSerialized === '<p><br></p>' ||
+           currentSerialized === '<p><br/></p>' ||
+           currentSerialized === '<p><br /></p>');
+
+      // Only update if there's a meaningful difference
+      if (isEmptyValue && isDefaultEmpty) {
+        // Both are effectively empty, no need to update
+        return;
+      }
+
+      if (value !== currentSerialized) {
+        // Save current view state before updating content
+        const { from, to } = editor.state.selection;
+        // Get current selection position
+
+        // Get the current view's scroll position if available
+        const editorElement = getEditorRootElement(editor);
+        const scrollTop = editorElement?.parentElement?.scrollTop || 0;
+
+        // Update content
+        editor.commands.setContent(value || '', { emitUpdate: false });
+
+        // Restore selection and scroll position after content update
+        requestAnimationFrame(() => {
+          if (editor && !editor.isDestroyed) {
+            try {
+              // Calculate the actual position accounting for any added line breaks
+              // Tiptap's positions include text nodes + block boundaries
+              const docSize = editor.state.doc.content.size;
+              
+              // For same-line cursor preservation, we need to account for block boundaries
+              // Each block (paragraph) adds 1 to the position count
+              let adjustedFrom = from;
+              let adjustedTo = to;
+              
+              // If we're at the end of a paragraph, stay there
+              const resolvedPos = editor.state.doc.resolve(Math.min(from, docSize - 1));
+              const isAtBlockEnd = resolvedPos.node().type.name === 'paragraph' && 
+                                   resolvedPos.parentOffset === resolvedPos.parent.content.size;
+              
+              if (!isAtBlockEnd) {
+                // Normal position within text
+                adjustedFrom = Math.min(from, docSize - 1);
+                adjustedTo = Math.min(to, docSize - 1);
+              } else {
+                // At block boundary - preserve exact position
+                adjustedFrom = Math.min(from, docSize);
+                adjustedTo = Math.min(to, docSize);
+              }
+              
+              editor.commands.setTextSelection({
+                from: adjustedFrom,
+                to: adjustedTo
+              });
+              
+              // Restore scroll position
+              if (editorElement?.parentElement) {
+                editorElement.parentElement.scrollTop = scrollTop;
+              }
+            } catch (error) {
+              console.debug('Could not restore cursor position:', error);
+            }
+          }
+        });
+      }
+    }
+  }, [value, editor, isMarkdownMode]);
+
+  useEffect(() => {
+    onEditorChange?.(editor);
+    // Blur the editor if it's read-only to prevent focus
+    if (editor && !editor.isDestroyed && readOnly && isEditorViewMounted) {
+      editor.commands.blur();
+    }
+    return () => {
+      onEditorChange?.(null);
+    };
+  }, [editor, onEditorChange, readOnly, isEditorViewMounted]);
+
+  return (
+    <div className="relative flex flex-col w-full h-full">
+      {editor && !editor.isDestroyed && isEditorViewMounted && !readOnly && (
+        <BubbleMenu
+          editor={editor}
+          pluginKey="bubbleMenu"
+          shouldShow={({ from, to }) => {
+            // show the bubble menu when the user selects some text
+            return from !== to;
+          }}
+          className="flex items-center gap-1 p-2 border rounded-md bg-card shadow-lg"
+        >
+          <button onClick={() => editor.chain().focus().toggleBold().run()} className={`p-2 rounded ${editor.isActive('bold') ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}><Bold size={16} /></button>
+          <button onClick={() => editor.chain().focus().toggleItalic().run()} className={`p-2 rounded ${editor.isActive('italic') ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}><Italic size={16} /></button>
+          <button onClick={() => editor.chain().focus().toggleStrike().run()} className={`p-2 rounded ${editor.isActive('strike') ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}><Strikethrough size={16} /></button>
+          <button onClick={() => editor.chain().focus().toggleCode().run()} className={`p-2 rounded ${editor.isActive('code') ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}><Code size={16} /></button>
+          <LinkButton editor={editor} variant="bubble" />
+          <div className="w-[1px] h-6 bg-muted-foreground/50 mx-2" />
+          <button onClick={() => editor.chain().focus().toggleHeading({ level: 1 }).run()} className={`p-2 rounded ${editor.isActive('heading', { level: 1 }) ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}><Heading1 size={16} /></button>
+          <button onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()} className={`p-2 rounded ${editor.isActive('heading', { level: 2 }) ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}><Heading2 size={16} /></button>
+          <button onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()} className={`p-2 rounded ${editor.isActive('heading', { level: 3 }) ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}><Heading3 size={16} /></button>
+        </BubbleMenu>
+      )}
+      {editor && !editor.isDestroyed && isEditorViewMounted && !readOnly && (
+        <FloatingMenu
+          editor={editor}
+          pluginKey="floatingMenu"
+          shouldShow={({ editor, from }) => {
+            // show the floating menu when the user types `/`
+            return editor.state.doc.textBetween(from - 1, from) === '/';
+          }}
+          className="flex flex-col gap-1 p-2 border rounded-md bg-card shadow-lg"
+        >
+          <button onClick={() => editor.chain().focus().toggleHeading({ level: 1 }).run()} className={`flex items-center gap-2 p-2 rounded ${editor.isActive('heading', { level: 1 }) ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}><Heading1 size={16} /><span>Heading 1</span></button>
+          <button onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()} className={`flex items-center gap-2 p-2 rounded ${editor.isActive('heading', { level: 2 }) ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}><Heading2 size={16} /><span>Heading 2</span></button>
+          <button onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()} className={`flex items-center gap-2 p-2 rounded ${editor.isActive('heading', { level: 3 }) ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}><Heading3 size={16} /><span>Heading 3</span></button>
+          <button onClick={() => editor.chain().focus().setParagraph().run()} className={`flex items-center gap-2 p-2 rounded ${editor.isActive('paragraph') ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}><Pilcrow size={16} /><span>Paragraph</span></button>
+          <div className="w-full h-[1px] bg-muted-foreground/50 my-1" />
+          <button onClick={() => editor.chain().focus().toggleBulletList().run()} className={`flex items-center gap-2 p-2 rounded ${editor.isActive('bulletList') ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}><List size={16} /><span>Bullet List</span></button>
+          <button onClick={() => editor.chain().focus().toggleOrderedList().run()} className={`flex items-center gap-2 p-2 rounded ${editor.isActive('orderedList') ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}><ListOrdered size={16} /><span>Ordered List</span></button>
+          <button onClick={() => editor.chain().focus().toggleBlockquote().run()} className={`flex items-center gap-2 p-2 rounded ${editor.isActive('blockquote') ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}><Quote size={16} /><span>Quote</span></button>
+        </FloatingMenu>
+      )}
+      <div className="flex-1 overflow-y-auto">
+        <EditorContent editor={editor} />
+        {isPaginated && <div className="print-page-number hidden print:block" />}
+      </div>
+      {!readOnly && (
+        <div className="flex justify-end p-2 text-sm text-muted-foreground">
+          {editor?.storage.characterCount.characters()} characters
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default RichEditor;

@@ -1,17 +1,23 @@
 import { NextResponse } from 'next/server';
+import { storageCspSources } from '@pagespace/lib/security/storage-csp-sources';
+import { isDevPreviewEnabled, resolveDevPreviewApex } from '@pagespace/lib/services/sandbox/preview/dev-preview-env';
+import { previewFrameSrcEntry } from '@pagespace/lib/services/sandbox/preview/preview-host';
 
 // Mirrors apps/web/src/middleware/security-headers.ts: a fresh nonce per
 // request, forwarded to the render on the request headers (Next reads the CSP
 // request header to stamp the nonce on its own scripts) and enforced in the
-// browser on the response. Imago loads no third-party scripts or frames, so
-// the policy omits apps/web's Google, Stripe, storage and preview entries.
+// browser on the response. The nonce/strict-dynamic script policy remains
+// unchanged; retained billing/preview frames use classic deployment gates. Storage
+// uses the existing deployment-configured endpoint/bucket rule for uploads.
 // Edge runtime: keep this module free of Node-only imports.
 
 export const NONCE_HEADER = 'x-nonce';
 
 const HSTS_VALUE = 'max-age=63072000; includeSubDomains; preload';
 
-const PERMISSIONS_POLICY = 'geolocation=(), microphone=(self), camera=(), payment=()';
+const permissionsPolicy = (): string =>
+  `geolocation=(), microphone=(self), camera=(), payment=${isStripeEnabled() ? '(self "https://js.stripe.com")' : '()'}`;
+const isStripeEnabled = (): boolean => process.env.DEPLOYMENT_MODE !== 'onprem' && process.env.DEPLOYMENT_MODE !== 'tenant';
 
 const shouldEmitHsts = ({
   isProduction,
@@ -77,6 +83,10 @@ export const buildCSPPolicy = (
   { isDevelopment = false, realtimeUrl }: CSPPolicyOptions = {},
 ): string => {
   const realtimeSource = realtimeConnectSource(realtimeUrl);
+  const storageSources = storageCspSources(process.env.AWS_ENDPOINT_URL_S3, process.env.BUCKET_NAME ?? process.env.TIGRIS_BUCKET ?? process.env.S3_BUCKET ?? 'pagespace-files');
+  const stripe = isStripeEnabled();
+  const previewApex = isDevPreviewEnabled() ? resolveDevPreviewApex() : null;
+  const frames = ["'self'", ...(previewApex ? [previewFrameSrcEntry(previewApex)] : []), ...(stripe ? ['https://js.stripe.com', 'https://hooks.stripe.com', 'https://m.stripe.network'] : [])];
   return buildCSPString({
     'default-src': ["'self'"],
     'script-src': [
@@ -89,11 +99,13 @@ export const buildCSPPolicy = (
       // it for development only; a production build never gets it.
       ...(isDevelopment ? ["'unsafe-eval'"] : []),
     ],
-    'style-src': ["'self'", "'unsafe-inline'"],
-    'img-src': ["'self'", 'data:', 'blob:', 'https:'],
+    'style-src': ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
+    'img-src': ["'self'", 'data:', 'blob:', 'https:', ...storageSources],
     // ws:/wss: for the realtime socket; its origin for socket.io's polling.
-    'connect-src': ["'self'", 'ws:', 'wss:', ...(realtimeSource ? [realtimeSource] : [])],
-    'font-src': ["'self'", 'data:'],
+    'connect-src': ["'self'", 'ws:', 'wss:', ...(realtimeSource ? [realtimeSource] : []), ...storageSources, ...(stripe ? ['https://*.stripe.com', 'https://m.stripe.network'] : [])],
+    'frame-src': frames,
+    ...(storageSources.length ? { 'media-src': ["'self'", ...storageSources] } : {}),
+    'font-src': ["'self'", 'data:', 'https://fonts.gstatic.com'],
     'worker-src': ["'self'", 'blob:'],
     'frame-ancestors': ["'none'"],
     'base-uri': ["'self'"],
@@ -128,7 +140,7 @@ const applySecurityHeaders = (
   response.headers.set('X-Frame-Options', 'DENY');
   response.headers.set('X-Content-Type-Options', 'nosniff');
   response.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
-  response.headers.set('Permissions-Policy', PERMISSIONS_POLICY);
+  response.headers.set('Permissions-Policy', permissionsPolicy());
   if (!isAPIRoute) {
     response.headers.set('Cross-Origin-Embedder-Policy', 'credentialless');
   }

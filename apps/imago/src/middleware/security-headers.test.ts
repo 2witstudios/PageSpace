@@ -1,4 +1,4 @@
-import { describe, test } from 'vitest';
+import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
 import { assert } from 'riteway/vitest';
 import { NextRequest } from 'next/server';
 import {
@@ -8,6 +8,9 @@ import {
   createSecureResponse,
   generateNonce,
 } from './security-headers';
+
+beforeEach(() => vi.stubEnv('DEPLOYMENT_MODE', 'onprem'));
+afterEach(() => vi.unstubAllEnvs());
 
 const directive = (policy: string, name: string): string | undefined =>
   policy
@@ -315,4 +318,27 @@ describe('createSecureResponse()', () => {
       expected: 'max-age=63072000; includeSubDomains; preload',
     });
   });
+});
+
+describe('retained storage uploads', () => {
+  test('allows only the configured storage origin and own bucket', () => {
+    vi.stubEnv('AWS_ENDPOINT_URL_S3', 'https://storage.example.test/path');
+    vi.stubEnv('BUCKET_NAME', 'owned-bucket');
+    const policy = buildCSPPolicy('abc123');
+    expect(directive(policy, 'connect-src')).toContain('https://storage.example.test https://owned-bucket.storage.example.test');
+    expect(policy).not.toContain('*.storage.example.test');
+    expect(directive(policy, 'script-src')).not.toContain('storage.example.test');
+    vi.unstubAllEnvs();
+  });
+});
+
+ test('retained billing frames obey the existing cloud-only gate while scripts stay strict', () => {
+  for (const mode of ['onprem', 'tenant', 'cloud']) {
+    vi.stubEnv('DEPLOYMENT_MODE', mode);
+    const policy = buildCSPPolicy('abc123');
+    expect(directive(policy, 'frame-src')?.includes('https://js.stripe.com')).toBe(mode === 'cloud');
+    expect(directive(policy, 'connect-src')?.includes('https://*.stripe.com')).toBe(mode === 'cloud');
+    expect(directive(policy, 'script-src')).toBe("script-src 'self' 'nonce-abc123' 'strict-dynamic' 'unsafe-inline'");
+    expect(directive(policy, 'frame-src')).toContain("'self'");
+  }
 });

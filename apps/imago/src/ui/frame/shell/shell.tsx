@@ -144,7 +144,7 @@ export function Shell({ children, homeDriveId, initialDrives }: ShellProps) {
   const layout = missing ? notFoundLayout : paneLayout(stage, { collapsedSections });
   const opener = missing ? null : openerFor(stage, layout);
   const drive = drives?.find((entry) => entry.id === stage.driveId);
-  const title = missing ? 'Not found' : titles[stage.section];
+  const title = missing ? 'Not found' : stage.object?.kind === 'settings' && stage.object.title ? stage.object.title : titles[stage.section];
   const hydrated = useHydrated();
   return renderShell({
     stage,

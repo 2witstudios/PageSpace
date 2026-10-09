@@ -18,7 +18,11 @@ export default defineConfig({
       reportsDirectory: './coverage',
       reportOnFailure: true,
       include: ['src/**/*.{ts,tsx}'],
-      exclude: ['src/**/*.test.{ts,tsx}', '**/*.d.ts'],
+      exclude: ['src/**/*.test.{ts,tsx}', '**/*.d.ts', 'src/retained/**'],
+      // The provenance-locked classic copies keep their tests in this run, but
+      // their coverage belongs to web. These unchanged floors govern Imago's
+      // native code AND every new boundary adapter. The all-source audit and
+      // real retained-feature interactions are recorded in docs/imago/verification.md.
       // Floors at what the suite measures; raise them as coverage rises,
       // never lower them to make a change fit. The layout and request-nonce
       // are server-only and proven against a running server instead.
@@ -33,6 +37,7 @@ export default defineConfig({
   resolve: {
     // Workspace packages from source, as the tsconfig paths resolve them.
     alias: [
+      { find: /^@pagespace\/browser-worker\/(.+)$/, replacement: path.resolve(repoRoot, 'packages/browser-worker/src/$1') },
       { find: '@', replacement: path.resolve(__dirname, './src') },
       { find: /^@pagespace\/db\/(.+)$/, replacement: path.resolve(repoRoot, 'packages/db/src/$1') },
       { find: /^@pagespace\/lib\/(.+)$/, replacement: path.resolve(repoRoot, 'packages/lib/src/$1') },

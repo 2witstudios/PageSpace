@@ -13,7 +13,7 @@ import { agentConversation, conversationsPage, driveAgentsBody, messagesPage, po
 import { ChatPane } from '../../chat/chat-pane/chat-pane';
 import { FileObject } from '../file-object/file-object';
 import { PageObject } from '../page-object/page-object';
-import { PageView } from '../page-view/page-view';
+import { LegacyDocumentObject as PageView } from '../../test-support/legacy-document-object';
 
 // The router is Next's seam: switching to the chat is a push to the drive's chat address.
 const router = vi.hoisted(() => ({ pushed: [] as string[] }));
@@ -21,6 +21,7 @@ vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: (href: string) => router.pushed.push(href) }),
 }));
 
+vi.mock('@/retained-adapters/retained-chat', () => ({ RetainedChat: ({ agentId }: { agentId: string | null }) => <div data-agent-id={agentId} /> }));
 const { ClassicHandoff } = await import('./classic-handoff');
 
 beforeEach(() => {
@@ -215,16 +216,16 @@ describe('Chat with this agent, through the chat header', () => {
   test('an agent the viewer can use', async () => {
     const { container } = show(chatRoutes(() => Response.json(conversationsPage([agentConversation('k1')]))), { withChat: true });
     await settle(() => {
-      if (!container.textContent?.includes('Hello Imago')) throw new Error('Imago thread not loaded');
+      if (!container.querySelector('[data-agent-id="p-imago"]')) throw new Error('Imago thread not loaded');
     });
     click(chatButton(container));
     await settle(() => {
-      if (!container.textContent?.includes('Any open tickets?')) throw new Error('agent thread not loaded');
+      if (!container.querySelector('[data-agent-id="p1"]')) throw new Error('agent thread not loaded');
     });
     assert({
       given: 'Chat with this agent beside the chat pane',
       should: 'show the agent chosen in the header and its latest conversation',
-      actual: [(picker(container) as HTMLSelectElement | null)?.value, container.textContent?.includes('Hello Imago')],
+      actual: [(picker(container) as HTMLSelectElement | null)?.value, Boolean(container.querySelector('[data-agent-id="p-imago"]'))],
       expected: ['p1', false],
     });
   });
@@ -235,7 +236,7 @@ describe('Chat with this agent, through the chat header', () => {
       { withChat: true },
     );
     await settle(() => {
-      if (!container.textContent?.includes('Hello Imago')) throw new Error('Imago thread not loaded');
+      if (!container.querySelector('[data-agent-id="p-imago"]')) throw new Error('Imago thread not loaded');
     });
     click(chatButton(container));
     await settle(() => {

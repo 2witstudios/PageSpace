@@ -1,0 +1,156 @@
+import useSWR from 'swr';
+import { useEffect, useMemo, useRef } from 'react';
+import { fetchWithAuth } from '@/retained/lib/auth/auth-fetch';
+import { useEditingStore } from '@/retained/stores/useEditingStore';
+import { type AgentInfo } from '@/retained/stores/page-agents';
+
+/**
+ * Agent summary from the multi-drive API
+ */
+export interface AgentSummary {
+  id: string;
+  title: string | null;
+  parentId: string;
+  position: number;
+  aiProvider: string;
+  aiModel: string;
+  hasWelcomeMessage: boolean;
+  createdAt: string;
+  updatedAt: string;
+  driveId: string;
+  driveName: string;
+  driveSlug: string;
+  systemPrompt?: string;
+  systemPromptPreview?: string;
+  enabledTools?: string[];
+  enabledToolsCount?: number;
+  hasSystemPrompt: boolean;
+  defaultEnvId?: string | null;
+}
+
+/**
+ * Drive with agents from the multi-drive API
+ */
+export interface DriveWithAgents {
+  driveId: string;
+  driveName: string;
+  driveSlug: string;
+  agentCount: number;
+  agents: AgentSummary[];
+  /** Whether THIS requester can use the sandbox in this drive (payer tier + actor edit access + kill switch). */
+  sandboxEligible: boolean;
+  /**
+   * Whether this deployment offers LOCAL environments (`LOCAL_ENVS_ENABLED`,
+   * server-side). Ridden per drive the way `sandboxEligible` is, so the spawn
+   * palette resolves it from the drive entry it already reads; absent = off.
+   */
+  localEnvsEnabled: boolean;
+}
+
+/**
+ * Response from /api/ai/page-agents/multi-drive
+ */
+interface AgentsResponse {
+  success: boolean;
+  totalCount: number;
+  driveCount: number;
+  summary: string;
+  agentsByDrive: DriveWithAgents[];
+}
+
+const fetcher = async (url: string) => {
+  const response = await fetchWithAuth(url);
+  if (!response.ok) {
+    throw new Error(`Failed to fetch agents: ${response.status}`);
+  }
+  return response.json();
+};
+
+/**
+ * Hook for fetching all accessible AI agents across drives
+ *
+ * @param driveId - Optional drive ID to filter agents to a single drive
+ * @param options.includeSystemPrompt - Include full system prompts (default: false)
+ * @param options.refreshInterval - Refresh interval in ms (default: 60000 = 1 minute)
+ * @param options.enabled - When false, passes a null SWR key so no request is
+ *   made at all (default: true). For a surface that will refuse to render the
+ *   list anyway — the Agents console behind its admin gate — fetching and then
+ *   discarding is just a request nobody reads.
+ */
+export function usePageAgents(
+  driveId?: string,
+  options: {
+    includeSystemPrompt?: boolean;
+    refreshInterval?: number;
+    enabled?: boolean;
+  } = {}
+) {
+  const { includeSystemPrompt = false, refreshInterval = 60000, enabled = true } = options;
+  const hasLoadedRef = useRef(false);
+  const isAnyEditing = useEditingStore(state => state.isAnyEditing());
+
+  // Build the API URL with query params
+  const swrKey = useMemo(() => {
+    if (!enabled) return null;
+    const params = new URLSearchParams();
+    params.set('groupByDrive', 'true');
+    if (includeSystemPrompt) {
+      params.set('includeSystemPrompt', 'true');
+    }
+    return `/api/ai/page-agents/multi-drive?${params.toString()}`;
+  }, [includeSystemPrompt, enabled]);
+
+  // Reset hasLoadedRef when SWR key changes so the new key's initial fetch isn't paused
+  useEffect(() => {
+    hasLoadedRef.current = false;
+  }, [swrKey]);
+
+  const { data, error, mutate, isLoading } = useSWR<AgentsResponse>(
+    swrKey,
+    fetcher,
+    {
+      isPaused: () => hasLoadedRef.current && isAnyEditing,
+      onSuccess: () => { hasLoadedRef.current = true; },
+      refreshInterval,
+      revalidateOnFocus: false,
+      dedupingInterval: 5000,
+    }
+  );
+
+  // Filter by drive if driveId is provided
+  const agentsByDrive = useMemo(() => {
+    if (!data?.agentsByDrive) return [];
+    if (!driveId) return data.agentsByDrive;
+    return data.agentsByDrive.filter(d => d.driveId === driveId);
+  }, [data, driveId]);
+
+  // Flatten all agents for convenience
+  const allAgents = useMemo(() => {
+    return agentsByDrive.flatMap(d => d.agents);
+  }, [agentsByDrive]);
+
+  // Convert AgentSummary to AgentInfo for use with agent selection
+  const toAgentInfo = (agent: AgentSummary): AgentInfo => ({
+    id: agent.id,
+    title: agent.title || 'Unnamed Agent',
+    driveId: agent.driveId,
+    driveName: agent.driveName,
+    systemPrompt: agent.systemPrompt,
+    aiProvider: agent.aiProvider,
+    aiModel: agent.aiModel,
+    enabledTools: agent.enabledTools,
+  });
+
+  return {
+    agentsByDrive,
+    allAgents,
+    totalCount: data?.totalCount ?? 0,
+    driveCount: data?.driveCount ?? 0,
+    isLoading: isLoading && !data,
+    isError: !!error,
+    error,
+    mutate,
+    toAgentInfo,
+  };
+}
+

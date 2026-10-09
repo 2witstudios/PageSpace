@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import type { ReactNode, Ref, SyntheticEvent } from 'react';
 import { renderIcon } from '../../components/icon/icon.render';
 import {
@@ -87,13 +88,13 @@ const overflow = (props: RailRenderProps): ReactNode => {
         <summary className={`${railHitClass(true)} summary-plain`} aria-label={MORE}>
           {moreChip(true)}
         </summary>
-        <ul className={overflowMenuClass} aria-label="Open in classic">
+        <ul className={overflowMenuClass} aria-label="More destinations">
           {links.map((link) => (
             <li key={link.id}>
-              <a href={link.href} className={overflowLinkClass}>
+              <Link href={link.href} className={overflowLinkClass}>
                 {renderIcon({ name: link.icon })}
                 {link.label}
-              </a>
+              </Link>
             </li>
           ))}
         </ul>

@@ -1,0 +1,313 @@
+'use client';
+
+import { useState, useEffect, useMemo, type FormEvent } from 'react';
+import useSWR from 'swr';
+import { Pin } from 'lucide-react';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/retained/components/ui/dialog';
+import { Badge } from '@/retained/components/ui/badge';
+import { Button } from '@/retained/components/ui/button';
+import { Input } from '@/retained/components/ui/input';
+import { Label } from '@/retained/components/ui/label';
+import { Switch } from '@/retained/components/ui/switch';
+import { fetchJSON } from '@/retained/lib/auth/auth-fetch';
+import { getHumanReadableCron } from '@/retained/lib/workflows/cron-utils';
+import { WorkflowStepsEditor, isStepsValid, type WorkflowStep } from './WorkflowStepsEditor';
+
+export type { WorkflowStep } from './WorkflowStepsEditor';
+
+export interface WorkflowFormData {
+  name: string;
+  steps: WorkflowStep[];
+  contextPageIds: string[];
+  cronExpression: string;
+  timezone: string;
+  isEnabled: boolean;
+}
+
+interface AgentPage {
+  id: string;
+  title: string;
+  type: string;
+}
+
+interface PageMeta {
+  id: string;
+  title: string;
+}
+
+interface WorkflowFormProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  driveId: string;
+  initialData?: Partial<WorkflowFormData> & { id?: string };
+  onSubmit: (data: WorkflowFormData) => Promise<void>;
+  /** When the form is opened from a page-scoped surface, the workflow is auto-anchored
+   *  to that page (its id is added to contextPageIds on save). Setting these props
+   *  surfaces that relationship so the user knows the field is not arbitrary. */
+  anchorPageId?: string;
+  anchorPageTitle?: string;
+}
+
+const CRON_PRESETS = [
+  { label: 'Every 5 minutes', value: '*/5 * * * *' },
+  { label: 'Every hour', value: '0 * * * *' },
+  { label: 'Daily at 9am', value: '0 9 * * *' },
+  { label: 'Weekdays at 9am', value: '0 9 * * 1-5' },
+  { label: 'Weekly on Monday', value: '0 9 * * 1' },
+  { label: 'Monthly on 1st', value: '0 9 1 * *' },
+];
+
+const fetcher = <T = unknown>(url: string) => fetchJSON<T>(url);
+
+function ContextPageChip({ pageId }: { pageId: string }) {
+  const { data, error } = useSWR<PageMeta>(`/api/pages/${pageId}`, fetcher);
+  const label = error ? 'Unknown page' : data?.title ?? 'Loading…';
+  return (
+    <Badge variant="secondary" className="font-normal" title={label}>
+      <span className="truncate max-w-[16rem]">{label}</span>
+    </Badge>
+  );
+}
+
+export function WorkflowForm({
+  open,
+  onOpenChange,
+  driveId,
+  initialData,
+  onSubmit,
+  anchorPageId,
+  anchorPageTitle,
+}: WorkflowFormProps) {
+  const [name, setName] = useState(initialData?.name ?? '');
+  const [steps, setSteps] = useState<WorkflowStep[]>(initialData?.steps ?? []);
+  const [cronExpression, setCronExpression] = useState(initialData?.cronExpression ?? '0 9 * * 1-5');
+  const [timezone, setTimezone] = useState(initialData?.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone);
+  const [isEnabled, setIsEnabled] = useState(initialData?.isEnabled ?? true);
+  const [contextPageIds, setContextPageIds] = useState<string[]>(initialData?.contextPageIds ?? []);
+  const [cronPreview, setCronPreview] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [error, setError] = useState('');
+
+  // Fetch agent pages in this drive
+  const { data: pagesData } = useSWR<AgentPage[]>(
+    open ? `/api/workflows/agents?driveId=${driveId}` : null,
+    fetcher
+  );
+
+  const agents = pagesData ?? [];
+
+  // Fetch human-readable cron preview using cronstrue
+  useEffect(() => {
+    if (!cronExpression) {
+      setCronPreview('');
+      return;
+    }
+    setCronPreview(getHumanReadableCron(cronExpression));
+  }, [cronExpression]);
+
+  // Reset form when dialog opens with new data
+  useEffect(() => {
+    if (open) {
+      setName(initialData?.name ?? '');
+      setSteps(initialData?.steps ?? []);
+      setCronExpression(initialData?.cronExpression ?? '0 9 * * 1-5');
+      setTimezone(initialData?.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone);
+      setIsEnabled(initialData?.isEnabled ?? true);
+      setContextPageIds(initialData?.contextPageIds ?? []);
+      setError('');
+    }
+  }, [open, initialData]);
+
+  const handleSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setIsSubmitting(true);
+
+    try {
+      await onSubmit({
+        name,
+        steps,
+        contextPageIds,
+        cronExpression,
+        timezone,
+        isEnabled,
+      });
+      onOpenChange(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to save workflow');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const isTimezoneValid = (() => {
+    try {
+      Intl.DateTimeFormat(undefined, { timeZone: timezone });
+      return true;
+    } catch {
+      return false;
+    }
+  })();
+
+  const isValid = name.trim().length > 0 && isStepsValid(steps) && isTimezoneValid && !!cronExpression;
+
+  const extraContextPageIds = useMemo(
+    () => (anchorPageId ? contextPageIds.filter((id) => id !== anchorPageId) : []),
+    [anchorPageId, contextPageIds],
+  );
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="flex flex-col gap-0 p-0 sm:max-w-2xl max-h-[90dvh] overflow-hidden">
+        <DialogHeader className="shrink-0 px-6 pt-6 pb-4 pr-12">
+          <DialogTitle>{initialData?.id ? 'Edit Workflow' : 'Create Workflow'}</DialogTitle>
+        </DialogHeader>
+        {anchorPageId && anchorPageTitle && (
+          <Badge variant="secondary" className="mx-6 mb-4 w-fit max-w-[calc(100%-3rem)] font-normal" title={`Anchored to: ${anchorPageTitle}`}>
+            <Pin className="h-3 w-3" />
+            <span className="text-muted-foreground">Anchored to:</span>
+            <span className="truncate max-w-[14rem]">{anchorPageTitle}</span>
+          </Badge>
+        )}
+        <form onSubmit={handleSubmit} className="flex min-h-0 min-w-0 flex-1 flex-col">
+          <div className="min-h-0 min-w-0 flex-1 space-y-4 overflow-y-auto px-6 pb-4">
+            <div className="space-y-2">
+              <Label htmlFor="wf-name">Name</Label>
+              <Input
+                id="wf-name"
+                value={name}
+                onChange={e => setName(e.target.value)}
+                placeholder="Daily report generation"
+                required
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label>Steps</Label>
+              {agents.length === 0 && pagesData && (
+                <p className="text-xs text-muted-foreground">
+                  No AI agents in this drive yet — create an AI Chat page first if you want AI
+                  steps. Tool steps don&apos;t need one.
+                </p>
+              )}
+              <WorkflowStepsEditor steps={steps} onChange={setSteps} agents={agents} />
+              {anchorPageId && extraContextPageIds.length > 0 && (
+                <div className="space-y-1.5 pt-1">
+                  <p className="text-xs text-muted-foreground">
+                    Additional context pages ({extraContextPageIds.length})
+                  </p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {extraContextPageIds.map((id) => (
+                      <ContextPageChip key={id} pageId={id} />
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="wf-cron">Schedule (Cron Expression)</Label>
+              <Input
+                id="wf-cron"
+                value={cronExpression}
+                onChange={e => setCronExpression(e.target.value)}
+                placeholder="0 9 * * 1-5"
+                required
+              />
+              {cronPreview && (
+                <p className="text-xs text-muted-foreground">{cronPreview}</p>
+              )}
+              <div className="flex flex-wrap gap-1.5">
+                {CRON_PRESETS.map(preset => (
+                  <Button
+                    key={preset.value}
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-6 text-xs px-2"
+                    onClick={() => setCronExpression(preset.value)}
+                  >
+                    {preset.label}
+                  </Button>
+                ))}
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="wf-tz">Timezone</Label>
+              <Input
+                id="wf-tz"
+                list="tz-options"
+                value={timezone}
+                onChange={e => setTimezone(e.target.value)}
+                placeholder="America/New_York"
+              />
+              <datalist id="tz-options">
+                <option value="UTC" />
+                <option value="America/New_York" />
+                <option value="America/Chicago" />
+                <option value="America/Denver" />
+                <option value="America/Los_Angeles" />
+                <option value="America/Anchorage" />
+                <option value="Pacific/Honolulu" />
+                <option value="America/Toronto" />
+                <option value="America/Vancouver" />
+                <option value="America/Sao_Paulo" />
+                <option value="America/Mexico_City" />
+                <option value="Europe/London" />
+                <option value="Europe/Paris" />
+                <option value="Europe/Berlin" />
+                <option value="Europe/Amsterdam" />
+                <option value="Europe/Madrid" />
+                <option value="Europe/Rome" />
+                <option value="Europe/Zurich" />
+                <option value="Europe/Stockholm" />
+                <option value="Europe/Moscow" />
+                <option value="Asia/Dubai" />
+                <option value="Asia/Kolkata" />
+                <option value="Asia/Shanghai" />
+                <option value="Asia/Tokyo" />
+                <option value="Asia/Seoul" />
+                <option value="Asia/Singapore" />
+                <option value="Asia/Hong_Kong" />
+                <option value="Australia/Sydney" />
+                <option value="Australia/Melbourne" />
+                <option value="Pacific/Auckland" />
+              </datalist>
+              {timezone && !isTimezoneValid && (
+                <p className="text-xs text-destructive">Invalid timezone. Select from the list or enter a valid IANA timezone.</p>
+              )}
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Switch
+                id="wf-enabled"
+                checked={isEnabled}
+                onCheckedChange={setIsEnabled}
+              />
+              <Label htmlFor="wf-enabled">Enabled</Label>
+            </div>
+
+            {error && (
+              <p className="text-sm text-destructive">{error}</p>
+            )}
+          </div>
+
+          <div className="flex shrink-0 justify-end gap-2 border-t px-6 py-4">
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={isSubmitting || !isValid}>
+              {isSubmitting ? 'Saving...' : (initialData?.id ? 'Update' : 'Create')}
+            </Button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}

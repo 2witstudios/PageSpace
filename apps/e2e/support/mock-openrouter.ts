@@ -96,6 +96,7 @@ export function createMockOpenRouter() {
   // Specs that never set a mode (09-14) leave this at 'instant' and see the original
   // behavior, unchanged.
   let streamMode: StreamMode = 'instant';
+  let nextTool: { name: string; arguments: Record<string, unknown> } | null = null;
 
   const completionUsage = {
     prompt_tokens: MOCK_PROMPT_TOKENS,
@@ -248,6 +249,14 @@ export function createMockOpenRouter() {
       streamChunks = DEFAULT_STREAM_CHUNKS;
       streamIntervalMs = DEFAULT_STREAM_INTERVAL_MS;
       streamMode = 'instant';
+      nextTool = null;
+      return writeJson(res, 200, { ok: true });
+    }
+    // A single provider tool response, followed by normal text on the resumed turn.
+    // The app still owns tool validation, execution, persistence and authorization.
+    if (method === 'POST' && url === '/__next-tool') {
+      const body = JSON.parse(await readBody(req)) as { name: string; arguments: Record<string, unknown> };
+      nextTool = body;
       return writeJson(res, 200, { ok: true });
     }
     // Live-stream introspection: lets a spec expect.poll() until the app's request has
@@ -331,6 +340,15 @@ export function createMockOpenRouter() {
       const model = body.model ?? 'e2e/stub';
 
       if (stream) {
+        if (nextTool) {
+          const selected = nextTool; nextTool = null;
+          res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });
+          const delta = { role: 'assistant', tool_calls: [{ index: 0, id: 'e2e-tool-call', type: 'function', function: { name: selected.name, arguments: JSON.stringify(selected.arguments) } }] };
+          res.write(`data: ${JSON.stringify({ ...chunkBase(id, model), choices: [{ index: 0, delta, finish_reason: null }] })}\n\n`);
+          res.write(`data: ${JSON.stringify({ ...finalChunkOf(id, model), choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] })}\n\n`);
+          res.write('data: [DONE]\n\n');
+          return res.end();
+        }
         if (streamMode !== 'instant') return startControlledStream(res, id, model, streamMode);
 
         res.writeHead(200, {

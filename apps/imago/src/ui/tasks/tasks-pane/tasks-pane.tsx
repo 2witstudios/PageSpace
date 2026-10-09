@@ -1,5 +1,6 @@
 'use client';
 
+import { CreateActions } from '@/retained-adapters/create-actions';
 import { listProgress } from '../task-tree/task-tree';
 import { useDriveTaskLists, useTaskList } from '../use-tasks/use-tasks';
 import { renderTaskListRow, renderTasksPane } from './tasks-pane.render';
@@ -37,7 +38,7 @@ export function TasksPane({ driveId, selectedPageId }: TasksPaneProps) {
   if (lists === undefined) {
     return renderTasksPane(error === undefined ? { state: 'loading' } : { state: 'error', retry });
   }
-  return renderTasksPane({
+  return <><CreateActions driveId={driveId} />{renderTasksPane({
     state: 'ready',
     empty: lists.length === 0,
     rows: lists.map((entry) => (
@@ -49,5 +50,5 @@ export function TasksPane({ driveId, selectedPageId }: TasksPaneProps) {
         selected={entry.pageId === selectedPageId}
       />
     )),
-  });
+  })}</>;
 }

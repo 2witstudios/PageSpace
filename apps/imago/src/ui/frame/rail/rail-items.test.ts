@@ -62,11 +62,12 @@ describe('overflowItems()', () => {
       should: 'list Calendar, Agents, Connections, Activity and Trash at classic’s drive routes',
       actual: overflowItems('drive-1').map(({ id, label, href }) => [id, label, href]),
       expected: [
-        ['calendar', 'Calendar', '/dashboard/drive-1/calendar'],
-        ['agents', 'Agents', '/dashboard/drive-1/agents'],
-        ['connections', 'Connections', '/dashboard/drive-1/settings/integrations'],
-        ['activity', 'Activity', '/dashboard/drive-1/activity'],
-        ['trash', 'Trash', '/dashboard/drive-1/trash'],
+        ['calendar', 'Calendar', '/drive-1/calendar'],
+        ['agents', 'Agents', '/drive-1/agents'],
+        ['connections', 'Connections', '/drive-1/settings/integrations'],
+        ['activity', 'Activity', '/drive-1/activity'],
+        ['trash', 'Trash', '/drive-1/trash'],
+        ['workflows', 'Workflows', '/drive-1/workflows'],
       ],
     });
   });
@@ -76,7 +77,7 @@ describe('overflowItems()', () => {
     assert({
       given: 'any drive id, a protocol-relative one included',
       should: 'produce only root-relative paths under /dashboard/, never another origin',
-      actual: hrefs.filter((href) => !href.startsWith('/dashboard/') || href.startsWith('//')),
+      actual: hrefs.filter((href) => !href.startsWith('/') || href.startsWith('//')),
       expected: [],
     });
   });

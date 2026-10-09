@@ -1,0 +1,474 @@
+'use client';
+
+import { useState, useEffect, useCallback } from 'react';
+import { useRouter, useSearchParams } from '@/retained-adapters/navigation';
+import Link from '@/retained-adapters/link';
+import { Button } from '@/retained/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/retained/components/ui/card';
+import { Alert, AlertDescription } from '@/retained/components/ui/alert';
+import { Badge } from '@/retained/components/ui/badge';
+import {
+  ArrowLeft,
+  CheckCircle,
+  XCircle,
+  Loader2,
+  CreditCard,
+  Receipt,
+  MapPin,
+  Sparkles,
+  Clock,
+  AlertTriangle,
+  ExternalLink,
+} from 'lucide-react';
+import { fetchWithAuth } from '@/retained/lib/auth/auth-fetch';
+import { InvoiceList, type Invoice } from '@/retained/components/billing/InvoiceList';
+import { UpcomingInvoice } from '@/retained/components/billing/UpcomingInvoice';
+import { BillingAddressForm, type BillingAddress } from '@/retained/components/billing/BillingAddressForm';
+import { BillingGuard } from '@/retained/components/billing/BillingGuard';
+import { useBillingVisibility } from '@/retained/hooks/useBillingVisibility';
+import { getPlan, getPlanFromPriceId, type SubscriptionTier } from '@/retained/lib/subscription/plans';
+import { post } from '@/retained/lib/auth/auth-fetch';
+
+interface SubscriptionData {
+  subscriptionTier: SubscriptionTier;
+  subscription?: {
+    status: string;
+    currentPeriodStart: string;
+    currentPeriodEnd: string;
+    cancelAtPeriodEnd: boolean;
+    scheduledPriceId?: string | null;
+    scheduledChangeDate?: string | null;
+  };
+}
+
+interface UpcomingInvoiceData {
+  invoice: {
+    amountDue: number;
+    total: number;
+    currency: string;
+    nextPaymentAttempt: string | null;
+    lines: Array<{ description: string | null; amount: number }>;
+  } | null;
+}
+
+function BillingPageContent() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const { isReady, hideBilling } = useBillingVisibility();
+  const showBillingSections = isReady && !hideBilling;
+
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const [subscriptionData, setSubscriptionData] = useState<SubscriptionData | null>(null);
+
+  const [portalLoading, setPortalLoading] = useState(false);
+  const [portalError, setPortalError] = useState<string | null>(null);
+
+  const [invoices, setInvoices] = useState<Invoice[]>([]);
+  const [invoicesHasMore, setInvoicesHasMore] = useState(false);
+  const [invoicesLoading, setInvoicesLoading] = useState(false);
+
+  const [upcomingInvoice, setUpcomingInvoice] = useState<UpcomingInvoiceData['invoice']>(null);
+
+  const [billingAddress, setBillingAddress] = useState<BillingAddress | null>(null);
+  const [billingName, setBillingName] = useState<string | null>(null);
+
+  const [cancellingSchedule, setCancellingSchedule] = useState(false);
+
+  const success = searchParams.get('success');
+
+  const fetchAllData = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+
+    try {
+      await Promise.all([
+        fetchSubscription(),
+        fetchInvoices(),
+        fetchUpcomingInvoice(),
+        fetchBillingAddress(),
+      ]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load billing data');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchAllData();
+  }, [fetchAllData]);
+
+  useEffect(() => {
+    if (success) {
+      const timer = setTimeout(() => {
+        router.replace('/settings/billing');
+      }, 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [success, router]);
+
+  const fetchSubscription = async () => {
+    const res = await fetchWithAuth('/api/subscriptions/status');
+    if (res.ok) {
+      const data = await res.json();
+      setSubscriptionData(data);
+    }
+  };
+
+  const fetchInvoices = async (startingAfter?: string) => {
+    setInvoicesLoading(true);
+    try {
+      const url = startingAfter
+        ? `/api/stripe/invoices?limit=10&starting_after=${startingAfter}`
+        : '/api/stripe/invoices?limit=10';
+      const res = await fetchWithAuth(url);
+      if (res.ok) {
+        const data = await res.json();
+        if (startingAfter) {
+          setInvoices((prev: Invoice[]) => [...prev, ...(data.invoices || [])]);
+        } else {
+          setInvoices(data.invoices || []);
+        }
+        setInvoicesHasMore(data.hasMore || false);
+      }
+    } finally {
+      setInvoicesLoading(false);
+    }
+  };
+
+  const fetchUpcomingInvoice = async () => {
+    const res = await fetchWithAuth('/api/stripe/upcoming-invoice');
+    if (res.ok) {
+      const data = await res.json();
+      setUpcomingInvoice(data.invoice);
+    }
+  };
+
+  const fetchBillingAddress = async () => {
+    const res = await fetchWithAuth('/api/stripe/billing-address');
+    if (res.ok) {
+      const data = await res.json();
+      setBillingAddress(data.address);
+      setBillingName(data.name);
+    }
+  };
+
+  const handleLoadMoreInvoices = () => {
+    if (invoices.length > 0) {
+      fetchInvoices(invoices[invoices.length - 1].id);
+    }
+  };
+
+  const handleCancelSchedule = async () => {
+    setCancellingSchedule(true);
+    try {
+      const result = await post<{ success?: boolean; error?: string }>('/api/stripe/cancel-schedule', {});
+      if (result.success) {
+        await fetchSubscription();
+        await fetchUpcomingInvoice();
+      } else {
+        setError(result.error || 'Failed to cancel pending plan change');
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to cancel pending plan change');
+    } finally {
+      setCancellingSchedule(false);
+    }
+  };
+
+  const handleManagePaymentMethods = async () => {
+    setPortalLoading(true);
+    setPortalError(null);
+    try {
+      const result = await post<{ url: string }>('/api/stripe/portal', {});
+      window.location.href = result.url;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : '';
+      if (message !== 'No Stripe customer found') {
+        console.error('Failed to open Stripe billing portal', err);
+      }
+      setPortalError(
+        message === 'No Stripe customer found'
+          ? 'No payment methods on file. Subscribe to a paid plan to add payment methods.'
+          : 'Failed to open billing portal. Please try again.'
+      );
+      setPortalLoading(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="container mx-auto p-6">
+        <div className="flex items-center justify-center min-h-64">
+          <div className="text-center">
+            <Loader2 className="h-8 w-8 animate-spin mx-auto mb-4" />
+            <p>Loading billing information...</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const plan = subscriptionData ? getPlan(subscriptionData.subscriptionTier) : getPlan('free');
+  const isPaid = subscriptionData?.subscriptionTier !== 'free';
+  const isCanceling = subscriptionData?.subscription?.cancelAtPeriodEnd;
+  const scheduledPriceId = subscriptionData?.subscription?.scheduledPriceId;
+  const scheduledPlan = scheduledPriceId ? getPlanFromPriceId(scheduledPriceId) : null;
+  const scheduledChangeDate = subscriptionData?.subscription?.scheduledChangeDate;
+
+  // Never display a past period-end date. If Stripe's currentPeriodEnd is stale (webhook
+  // delay or renewal in progress), project the next expected date instead.
+  const rawPeriodEnd = subscriptionData?.subscription?.currentPeriodEnd
+    ? new Date(subscriptionData.subscription.currentPeriodEnd)
+    : null;
+  const displayPeriodEnd = (() => {
+    if (!rawPeriodEnd) return null;
+    const now = new Date();
+    if (rawPeriodEnd >= now) return rawPeriodEnd;
+    const addMonth = (from: Date): Date => {
+      const d = new Date(from);
+      const day = d.getUTCDate();
+      d.setUTCDate(1);
+      d.setUTCMonth(d.getUTCMonth() + 1);
+      const lastDay = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
+      d.setUTCDate(Math.min(day, lastDay));
+      return d;
+    };
+    let projected = addMonth(rawPeriodEnd);
+    while (projected <= now) projected = addMonth(projected);
+    return projected;
+  })();
+
+  return (
+    <div className="container mx-auto p-6 space-y-8 max-w-4xl">
+      <div>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => router.push('/settings')}
+          className="mb-4"
+        >
+          <ArrowLeft className="h-4 w-4 mr-2" />
+          Back to Settings
+        </Button>
+        <div className="text-center space-y-2">
+          <h1 className="text-4xl font-bold">Billing</h1>
+          <p className="text-muted-foreground text-lg max-w-2xl mx-auto">
+            Your subscription, payment methods, and invoices
+          </p>
+        </div>
+      </div>
+
+      {success && (
+        <Alert className="border-green-200 bg-green-50 dark:border-green-800 dark:bg-green-950/20">
+          <CheckCircle className="h-4 w-4 text-green-600" />
+          <AlertDescription className="text-green-800 dark:text-green-200">
+            Billing updated successfully!
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {error && (
+        <Alert variant="destructive">
+          <XCircle className="h-4 w-4" />
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
+
+      {showBillingSections && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Sparkles className="h-5 w-5" />
+              Current Subscription
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3">
+              <div className="flex items-center gap-3">
+                <div className={`p-2 rounded-full ${plan.accentColor}`}>
+                  <plan.icon className={`h-5 w-5 ${plan.iconColor}`} />
+                </div>
+                <div>
+                  <div className="font-semibold flex items-center gap-2">
+                    {plan.displayName}
+                    {isPaid && (
+                      <Badge variant={isCanceling ? 'secondary' : 'default'}>
+                        {isCanceling ? 'Canceling' : subscriptionData?.subscription?.status}
+                      </Badge>
+                    )}
+                  </div>
+                  <div className="text-sm text-muted-foreground">
+                    {plan.price.formatted}{plan.price.monthly > 0 && '/month'}
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                {isPaid && displayPeriodEnd && (
+                  <div className="text-sm text-muted-foreground flex items-center gap-1 mr-4">
+                    <Clock className="h-4 w-4" />
+                    {isCanceling ? 'Ends' : 'Renews'}{' '}
+                    {displayPeriodEnd.toLocaleDateString()}
+                  </div>
+                )}
+                <Link href="/settings/plan">
+                  <Button variant="outline">
+                    {isPaid ? 'Change Plan' : 'Upgrade'}
+                  </Button>
+                </Link>
+              </div>
+            </div>
+
+            {isCanceling && (
+              <Alert className="mt-4">
+                <AlertTriangle className="h-4 w-4" />
+                <AlertDescription>
+                  Your subscription will end on{' '}
+                  {displayPeriodEnd?.toLocaleDateString()}.
+                  You can reactivate anytime before then.
+                </AlertDescription>
+              </Alert>
+            )}
+
+            {scheduledPlan && !isCanceling && (
+              <Alert className="mt-4 border-blue-200 bg-blue-50 dark:border-blue-800 dark:bg-blue-950/20">
+                <Clock className="h-4 w-4 text-blue-600" />
+                <AlertDescription className="text-blue-800 dark:text-blue-200 flex items-center justify-between">
+                  <span>
+                    Changing to {scheduledPlan.displayName} on{' '}
+                    {scheduledChangeDate ? new Date(scheduledChangeDate).toLocaleDateString() : 'next billing period'}
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleCancelSchedule}
+                    disabled={cancellingSchedule}
+                    className="ml-4"
+                  >
+                    {cancellingSchedule ? (
+                      <>
+                        <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                        Cancelling...
+                      </>
+                    ) : (
+                      'Keep Current Plan'
+                    )}
+                  </Button>
+                </AlertDescription>
+              </Alert>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {showBillingSections && (
+        <>
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <CreditCard className="h-5 w-5" />
+                Payment Methods
+              </CardTitle>
+              <CardDescription>
+                Add, remove, or update your payment methods securely through Stripe.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {portalError && (
+                <Alert variant="destructive" className="mb-4">
+                  <XCircle className="h-4 w-4" />
+                  <AlertDescription>{portalError}</AlertDescription>
+                </Alert>
+              )}
+              <Button onClick={handleManagePaymentMethods} disabled={portalLoading}>
+                {portalLoading ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Opening...
+                  </>
+                ) : (
+                  <>
+                    <ExternalLink className="h-4 w-4 mr-2" />
+                    Manage Payment Methods
+                  </>
+                )}
+              </Button>
+            </CardContent>
+          </Card>
+
+          {isPaid && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Receipt className="h-5 w-5" />
+                  Upcoming Invoice
+                </CardTitle>
+                <CardDescription>
+                  Your next scheduled payment
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <UpcomingInvoice invoice={upcomingInvoice} />
+              </CardContent>
+            </Card>
+          )}
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Receipt className="h-5 w-5" />
+                Invoice History
+              </CardTitle>
+              <CardDescription>
+                View and download your past invoices
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <InvoiceList
+                invoices={invoices}
+                hasMore={invoicesHasMore}
+                onLoadMore={handleLoadMoreInvoices}
+                loading={invoicesLoading}
+              />
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <MapPin className="h-5 w-5" />
+                Billing Address
+              </CardTitle>
+              <CardDescription>
+                Your billing address for invoices and receipts
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <BillingAddressForm
+                address={billingAddress}
+                name={billingName}
+                onUpdate={fetchBillingAddress}
+              />
+            </CardContent>
+          </Card>
+        </>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Every section on this page is billing, so on iOS the route rendered as a bare
+ * "Billing" header over nothing — and still fetched `/api/stripe/*` on mount.
+ * Guarding the whole route (the pattern `/settings/plan` already uses) redirects
+ * instead, and stops the child mounting at all so those fetches never fire.
+ */
+export default function BillingPage() {
+  return (
+    <BillingGuard>
+      <BillingPageContent />
+    </BillingGuard>
+  );
+}

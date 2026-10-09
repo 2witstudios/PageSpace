@@ -97,6 +97,15 @@
         "socket.io-client",
         "streamdown",
         "swr"
+      ],
+      "entry": [
+        "src/app/**/{page,layout,route}.tsx",
+        "scripts/*.{ts,mjs}",
+        "src/retained-adapters/retained.source.css",
+        "src/retained/styles/tiptap.css"
+      ],
+      "ignore": [
+        "public/pdf.worker.min.mjs"
       ]
     },
     "apps/realtime": {
@@ -392,6 +401,9 @@
         "src/content/version-resolver.ts",
         "src/deployment-mode.ts",
         "src/drive-envs/env-sprite-key.ts",
+        "src/drive-envs/env-contract.ts",
+        "src/env-bridge/index.ts",
+        "src/env-bridge/machine-signatures.ts",
         "src/email-templates/BroadcastEmail.tsx",
         "src/email-templates/FeedbackNotificationEmail.tsx",
         "src/email-templates/MagicLinkEmail.tsx",
@@ -725,5 +737,15 @@
     "**/drizzle.config.ts"
   ],
   "ignoreExportsUsedInFile": true,
-  "includeEntryExports": false
+  "includeEntryExports": false,
+  "ignoreIssues": {
+    "apps/imago/src/retained/**": [
+      "exports",
+      "types"
+    ],
+    "apps/imago/src/retained-adapters/{ui-contracts,tool-metadata}.ts": [
+      "exports",
+      "types"
+    ]
+  }
 }

@@ -3,6 +3,9 @@ import { buildPreviewResponseHeaders, PREVIEW_SANDBOX_TOKENS } from '../preview-
 import { buildSiteCsp, buildBaselineCsp } from '../csp';
 
 describe('buildPreviewResponseHeaders', () => {
+  it('keeps the opaque preview embeddable under the dashboard embedder policy', () => {
+    expect(buildPreviewResponseHeaders(buildBaselineCsp())?.['Cross-Origin-Embedder-Policy']).toBe('credentialless');
+  });
   it('given a blank policy, should return null so the route refuses rather than serving an unpoliced frame', () => {
     expect(buildPreviewResponseHeaders('')).toBeNull();
   });

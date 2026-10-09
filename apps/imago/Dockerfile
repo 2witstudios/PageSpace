@@ -28,6 +28,8 @@ RUN --mount=type=cache,id=bun,target=/root/.bun/install/cache bun install --froz
 
 COPY packages ./packages
 COPY apps/imago ./apps/imago
+# Build-time style and UI-contract generators read the retained source declarations.
+COPY apps/web/src ./apps/web/src
 COPY tsconfig.json ./
 COPY types ./types
 
@@ -39,6 +41,8 @@ COPY --from=oven/bun:1.3.12-alpine /usr/local/bin/bun /usr/local/bin/bun
 COPY --from=deps /app .
 
 # NEXT_PUBLIC_* are inlined at build time; the runtime env cannot override them.
+ARG NEXT_PUBLIC_DEPLOYMENT_MODE=""
+ENV NEXT_PUBLIC_DEPLOYMENT_MODE=$NEXT_PUBLIC_DEPLOYMENT_MODE
 ARG NEXT_PUBLIC_REALTIME_URL=""
 ENV NEXT_PUBLIC_REALTIME_URL=$NEXT_PUBLIC_REALTIME_URL
 # Classic's cookie domain (apps/web/Dockerfile): the theme cookie must carry the
@@ -53,7 +57,7 @@ ENV IMAGO_API_PROXY_ORIGIN=$IMAGO_API_PROXY_ORIGIN
 ENV NEXT_TELEMETRY_DISABLED=1
 
 RUN bun run --filter '@pagespace/db' build && bun run --filter '@pagespace/lib' build && bun run --filter '@pagespace/editor' build
-RUN cd apps/imago && NODE_OPTIONS="--max-old-space-size=2048" bun run build
+RUN cd apps/imago && NODE_OPTIONS="--max-old-space-size=4096" bun run build
 
 ENV NODE_ENV=production
 
@@ -67,6 +71,7 @@ RUN mkdir -p /app/apps/imago/.next/cache && chown -R node:node /app/apps/imago/.
 
 COPY --from=builder /app/apps/imago/.next/standalone .
 COPY --from=builder /app/apps/imago/.next/static ./apps/imago/.next/static
+COPY --from=builder /app/apps/imago/public ./apps/imago/public
 
 USER node
 
