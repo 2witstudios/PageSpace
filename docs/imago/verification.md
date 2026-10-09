@@ -315,3 +315,8 @@ creation recovery, read-only guards and once-only initial dispatch. Real browser
 cases verify zero rows/POSTs for abandoned drafts, one persisted first turn, and
 a custom workspace turn in the returned conversation before selecting Imago.
 These new follow-ups await their exact-candidate cloud checks.
+
+The picker fixture accounts for Home's installed personal /plan command: it
+selects that real command chip, then removes only its own user's configured
+commands and reloads before checking the genuine empty-state settings link.
+No search response is fabricated and installed production defaults are unchanged.

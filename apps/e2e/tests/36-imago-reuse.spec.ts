@@ -9,6 +9,7 @@ import { pages } from '@pagespace/db/schema/core';
 import { users } from '@pagespace/db/schema/auth';
 import { sessions } from '@pagespace/db/schema/sessions';
 import { conversations } from '@pagespace/db/schema/conversations';
+import { commands as commandsTable } from '@pagespace/db/schema/commands';
 import { and } from '@pagespace/db/operators';
 import { imagoUser, freshBrowser, signIn, hydrated, deleteUsers, imagoPath, type ImagoUser } from '../fixtures/imago.fixture';
 
@@ -305,6 +306,16 @@ test('mention and command pickers keep scoped styles and native navigation', asy
   const commands = page.locator('#retained-portals [data-retained-picker="command"]');
   await expect(commands).toBeVisible();
   await expect.poll(() => commands.evaluate(node => getComputedStyle(node).backgroundColor)).not.toBe('rgba(0, 0, 0, 0)');
+  await commands.getByRole('option', { name: /^\/plan,/ }).click();
+  await expect(composer).toHaveValue(/\/plan/);
+  await expect(commands).toHaveCount(0);
+  // The Home drive installs a real personal /plan command. Remove only this
+  // fixture user's configured commands to exercise the real empty-state link.
+  await db.delete(commandsTable).where(eq(commandsTable.userId, user.id));
+  await page.reload();
+  await expect(composer).toBeEditable();
+  await composer.fill('/');
+  await expect(commands).toBeVisible();
   await page.evaluate(() => { document.documentElement.dataset.pickerShellProof = 'kept'; });
   await commands.getByRole('link', { name: 'Settings → AI Settings → Commands', exact: true }).click();
   await expect(page).toHaveURL(/\/imago\/account\/commands$/);
