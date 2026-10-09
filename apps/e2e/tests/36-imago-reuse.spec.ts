@@ -327,7 +327,7 @@ test('mention and command pickers keep scoped styles and native navigation', asy
   await expect(editor).toContainText('Insert a reference:');
   await editor.click();
   await page.keyboard.press('Control+End');
-  await page.keyboard.type('@Mention proof');
+  await page.keyboard.type(' @Mention proof');
   const editorMention = page.locator('#retained-portals [data-retained-picker="editor-mention"]');
   await expect(editorMention).toBeVisible();
   await expect.poll(() => editorMention.evaluate(node => getComputedStyle(node).backgroundColor)).not.toBe('rgba(0, 0, 0, 0)');
