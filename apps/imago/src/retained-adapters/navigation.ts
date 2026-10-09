@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo } from 'react';
-import { IMAGO_BASE_PATH } from '@/lib/auth/sign-in-url';
+import { IMAGO_BASE_PATH, signInOrigin } from '@/lib/auth/sign-in-url';
 import { useRouter as useNextRouter, usePathname as useNextPathname } from 'next/navigation';
 export { useParams, useSearchParams, notFound, redirect, useSelectedLayoutSegment, useSelectedLayoutSegments } from 'next/navigation';
 
@@ -36,13 +36,20 @@ export function imagoBrowserPath(href: string): string {
   return translated === '/' ? IMAGO_BASE_PATH : `${IMAGO_BASE_PATH}${translated}`;
 }
 
+/** Public auth belongs to classic, outside Next's Imago basePath. */
+export function retainedRouterHref(href: string, origin: string): string {
+  const path = href.split(/[?#]/, 1)[0];
+  if (path === '/auth' || path.startsWith('/auth/')) return new URL(href, signInOrigin(origin)).href;
+  return imagoHref(href);
+}
+
 export function useRouter() {
   const router = useNextRouter();
   return useMemo(() => ({
     ...router,
-    push: (href: string, options?: Parameters<typeof router.push>[1]) => router.push(imagoHref(href), options),
-    replace: (href: string, options?: Parameters<typeof router.replace>[1]) => router.replace(imagoHref(href), options),
-    prefetch: (href: string, options?: Parameters<typeof router.prefetch>[1]) => router.prefetch(imagoHref(href), options),
+    push: (href: string, options?: Parameters<typeof router.push>[1]) => router.push(retainedRouterHref(href, window.location.origin), options),
+    replace: (href: string, options?: Parameters<typeof router.replace>[1]) => router.replace(retainedRouterHref(href, window.location.origin), options),
+    prefetch: (href: string, options?: Parameters<typeof router.prefetch>[1]) => router.prefetch(retainedRouterHref(href, window.location.origin), options),
   }), [router]);
 }
 

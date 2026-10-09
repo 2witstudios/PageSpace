@@ -165,3 +165,11 @@ Private Share-dialog page links also use native basePath-inclusive destinations;
 public publication URLs keep their existing contracts. The retained task workflow
 dialog uses an explicit responsive width and shrinkable content grid so its table
 and actions stay within the modal, including in narrow shell panes.
+
+Retained session-expiry and device-revoke logout destinations use the existing
+public sign-in origin outside Imago's Next basePath. Native content paths still
+use persistent-shell navigation; public auth uses an absolute destination, as
+Imago's existing sign-in contract requires. The original session refresh and
+desktop/device bridges remain unchanged. A real browser check holds an editor
+write, revokes the fixture user's sessions/version in the test database, then
+asserts the actual server's 401, unchanged content and public sign-in return path.

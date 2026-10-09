@@ -265,3 +265,14 @@ that `apps/web/src`, newly copied by the image’s contract generator, was absen
 from workflow triggers. The follow-up adds that source path to both PR and master
 push filters. No infrastructure assertion or existing skip policy is weakened.
 This is the aggregate job’s only failure; a complete exact-head rerun is required.
+
+### Candidate `7f61a1ef61932d58c1b262af758ed460ee6785a4`
+
+Test Suite `37983175249` has passed production builds and lint/typecheck/Knip;
+full aggregate and browser results are still pending. Image `37983174929` and
+security `37983174924` passed. No local build was restarted.
+
+The navigation audit found retained expiry/device-revoke flows could prefix the
+public sign-in route with Imago's basePath. The follow-up maps public auth through
+Imago's existing configured origin, with focused path cases and a real revoked-
+session editor-write browser check. It awaits its own exact-candidate cloud run.

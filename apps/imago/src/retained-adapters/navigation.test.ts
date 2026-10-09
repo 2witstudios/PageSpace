@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { imagoHref, imagoBrowserPath, classicPathname } from './navigation';
+import { imagoHref, imagoBrowserPath, retainedRouterHref, classicPathname } from './navigation';
 import { stageFor } from '@/ui/frame/stage/stage';
 
 describe('retained destinations stay inside the persistent shell', () => {
@@ -22,6 +22,13 @@ describe('retained destinations stay inside the persistent shell', () => {
     ['/imago/drive123/agents?c=c', '/imago/drive123/agents?c=c'],
     ['/imago?c=c#chat', '/imago?c=c#chat'],
   ])('returns the native callback path for %s', (source, destination) => expect(imagoBrowserPath(source)).toBe(destination));
+  it.each([
+    ['/auth', 'https://pagespace.ai/auth'],
+    ['/auth/signin?next=%2Fimago%2Fdrive123%2Ffiles', 'https://pagespace.ai/auth/signin?next=%2Fimago%2Fdrive123%2Ffiles'],
+    ['/dashboard/drive123/page456', '/drive123/files/page456'],
+  ])('routes %s without putting public auth under the basePath', (source, destination) => {
+    expect(retainedRouterHref(source, 'https://pagespace.ai')).toBe(destination);
+  });
   it('gives retained path readers their established drive/section shape', () => {
     expect(classicPathname('/drive123/files/page456')).toBe('/dashboard/drive123/page456');
     expect(classicPathname('/drive123/messages/page456')).toBe('/dashboard/drive123/channels/page456');

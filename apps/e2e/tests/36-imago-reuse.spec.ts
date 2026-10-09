@@ -4,9 +4,10 @@ import { DEFAULT_AI_PROVIDER, DEFAULT_AI_MODEL } from '@pagespace/lib/ai/model-d
 import { test, expect, type BrowserContext, type Page } from '@playwright/test';
 import { factories } from '@pagespace/db/test/factories';
 import { db } from '@pagespace/db/db';
-import { eq } from '@pagespace/db/operators';
+import { eq, sql } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
 import { users } from '@pagespace/db/schema/auth';
+import { sessions } from '@pagespace/db/schema/sessions';
 import { conversations } from '@pagespace/db/schema/conversations';
 import { and } from '@pagespace/db/operators';
 import { imagoUser, freshBrowser, signIn, hydrated, deleteUsers, imagoPath, type ImagoUser } from '../fixtures/imago.fixture';
@@ -147,6 +148,44 @@ test('read-only members cannot edit document or canvas, including while permissi
   await page.goto(imagoPath(user.homeDriveId, `files/${canvas.id}`));
   await expect(page.getByRole('button', { name: 'Settings', exact: true })).toBeDisabled();
   await expect(page.locator('iframe').first()).toBeVisible();
+});
+
+test('a revoked session refuses a retained editor write and returns to public sign-in', async ({ browser, baseURL }) => {
+  const doc = await factories.createPage(user.homeDriveId, { type: 'DOCUMENT', title: 'Session boundary', content: '<p>Protected before revocation.</p>' });
+  const path = imagoPath(user.homeDriveId, `files/${doc.id}`);
+  const page = await open(browser, baseURL!, path);
+  const editor = page.locator('.retained-ui .tiptap').first();
+  await expect(editor).toHaveAttribute('contenteditable', 'true');
+  await expect(page.getByRole('region', { name: 'Chat', exact: true }).locator('textarea')).toBeEditable();
+  let releaseWrite: () => void = () => {};
+  let noteWrite: () => void = () => {};
+  const writeGate = new Promise<void>(resolve => { releaseWrite = resolve; });
+  const writeSeen = new Promise<void>(resolve => { noteWrite = resolve; });
+  await page.route(url => url.pathname === `/api/pages/${doc.id}`, async route => {
+    if (route.request().method() === 'PATCH') {
+      noteWrite();
+      await writeGate;
+    }
+    await route.continue();
+  });
+  try {
+    const refused = page.waitForResponse(response => response.request().method() === 'PATCH' && new URL(response.url()).pathname === `/api/pages/${doc.id}` && response.status() === 401);
+    await editor.click();
+    await page.keyboard.type(' Refused after revocation.');
+    await writeSeen;
+    // Invalidate this fixture user's sessions/devices before the real write reaches
+    // the server. No fabricated response or auth-expired event is used.
+    await db.update(users).set({ tokenVersion: sql`${users.tokenVersion} + 1` }).where(eq(users.id, user.id));
+    await db.update(sessions).set({ revokedAt: new Date(), revokedReason: 'e2e-revocation' }).where(eq(sessions.userId, user.id));
+    releaseWrite();
+    expect((await refused).status()).toBe(401);
+    await page.waitForURL(url => url.pathname === '/auth/signin');
+    expect(new URL(page.url()).searchParams.get('next')).toBe(path);
+    expect((await db.select({ content: pages.content }).from(pages).where(eq(pages.id, doc.id)))[0]?.content).not.toContain('Refused after revocation.');
+  } finally {
+    releaseWrite();
+    await page.unrouteAll({ behavior: 'wait' });
+  }
 });
 
 test('retained channel controls send, edit, quote and reply through the existing APIs', async ({ browser, baseURL }) => {
