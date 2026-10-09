@@ -173,3 +173,9 @@ Imago's existing sign-in contract requires. The original session refresh and
 desktop/device bridges remain unchanged. A real browser check holds an editor
 write, revokes the fixture user's sessions/version in the test database, then
 asserts the actual server's 401, unchanged content and public sign-in return path.
+
+Compact task-detail write controls now wait for a definite parent-list edit
+grant, matching the retained trigger/description guards. The browser trigger
+check holds the real permission read and verifies completion/delete/trigger
+boundaries both while pending and after a view-only answer. API authorization
+and classic's implementation remain unchanged.

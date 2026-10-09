@@ -1,4 +1,4 @@
-import { expect, type Page } from '@playwright/test';
+import { expect, type Page, type Locator } from '@playwright/test';
 
 /** The retained task toolbar uses direct controls in wide panes and a sheet in narrow panes. */
 export async function selectTaskFilter(page: Page, name: 'All' | 'Active' | 'Completed'): Promise<void> {
@@ -32,4 +32,21 @@ export async function openTaskConfiguration(page: Page, name: 'Statuses' | 'Work
     await filters.click();
     await sheet.getByRole('button', { name, exact: true }).click();
   }
+}
+
+/** The same task actions are a row menu in wide panes and a detail sheet in narrow panes. */
+export async function openTaskActions(page: Page, taskId: string, title: string): Promise<Locator> {
+  const object = page.locator('[data-slot="object"]');
+  await object.getByRole('button', { name: 'Table view', exact: true }).click();
+  const row = object.locator(`[data-task-id="${taskId}"]:visible`);
+  await expect(row).toBeVisible();
+  const actions = row.getByRole('button', { name: `Actions for ${title}`, exact: true });
+  if (await actions.isVisible()) {
+    await actions.click();
+    return page.getByRole('menu');
+  }
+  await row.getByRole('button').filter({ hasText: title }).click();
+  const details = page.getByRole('dialog', { name: 'Task Details', exact: true });
+  await expect(details).toBeVisible();
+  return details;
 }

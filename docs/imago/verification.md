@@ -276,3 +276,19 @@ The navigation audit found retained expiry/device-revoke flows could prefix the
 public sign-in route with Imago's basePath. The follow-up maps public auth through
 Imago's existing configured origin, with focused path cases and a real revoked-
 session editor-write browser check. It awaits its own exact-candidate cloud run.
+
+The 7f browser run completed: 79 passes, one trigger-test failure, zero flaky
+cases (80 total, 7.8m). All fourteen light/dark baselines and the visual token
+negative control passed without retries. Real server-422 refusal/rollback,
+sharing/native links, workflow persistence/action containment and integrations
+configuration passed. The trigger test selected Table view but the pane remained
+under its 700px container breakpoint: classic renders a compact row there, whose
+actions live in Task Details rather than a right-click menu. The follow-up uses
+that real detail-sheet Triggers button (or the existing row menu in wide panes),
+and checks that read-only users lack that action plus receive a real API 403.
+No responsive breakpoint, timeout, retry or permission rule changes are needed.
+
+The compact task-sheet audit also found its copied completion/title/status
+controls used an optimistic loading answer. Imago now waits for a definite edit
+grant. The same real reader scenario holds the permissions response and checks
+write controls before and after release, retaining the API's own authorization.

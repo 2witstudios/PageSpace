@@ -1,4 +1,4 @@
-import { openTaskConfiguration, selectTaskFilter } from '../fixtures/retained-tasks.fixture';
+import { openTaskConfiguration, selectTaskFilter, openTaskActions } from '../fixtures/retained-tasks.fixture';
 import { browserGet } from '../fixtures/browser-api.fixture';
 import { DEFAULT_AI_PROVIDER, DEFAULT_AI_MODEL } from '@pagespace/lib/ai/model-defaults';
 import { test, expect, type BrowserContext, type Page } from '@playwright/test';
@@ -430,9 +430,9 @@ test('task agent triggers save, survive reload and remove through retained contr
   await expect(object.locator(`[data-task-id="${task.id}"]:visible`)).toBeVisible();
   const triggersPath = `/api/tasks/${task.id}/triggers`;
   const openTriggers = async () => {
-    await object.getByRole('button', { name: 'Table view', exact: true }).click();
-    await object.locator(`[data-task-id="${task.id}"]:visible`).click({ button: 'right' });
-    await page.getByRole('menuitem', { name: 'Agent triggers…', exact: true }).click();
+    const actions = await openTaskActions(page, task.id, 'Task with a trigger');
+    await actions.getByRole('button', { name: 'Agent triggers', exact: true })
+      .or(actions.getByRole('menuitem', { name: 'Agent triggers…', exact: true })).click();
   };
   await openTriggers();
   const dialog = page.getByRole('dialog', { name: 'Agent triggers', exact: true });
@@ -466,14 +466,41 @@ test('task agent triggers save, survive reload and remove through retained contr
   await factories.createDriveMember(user.homeDriveId, reader.id, { role: 'MEMBER' });
   await factories.createPagePermission(list.id, reader.id);
   const viewer = await freshBrowser(browser, baseURL!); contexts.push(viewer.context);
-  await signIn(viewer.page, reader, imagoPath(user.homeDriveId, `tasks/${list.id}`));
-  await hydrated(viewer.page);
-  const readOnlyObject = viewer.page.locator('[data-slot="object"]');
-  await readOnlyObject.getByRole('button', { name: 'Table view', exact: true }).click();
-  await readOnlyObject.locator(`[data-task-id="${task.id}"]:visible`).click({ button: 'right' });
-  await expect(viewer.page.getByRole('menuitem', { name: 'Agent triggers…', exact: true })).toBeDisabled();
-  const refusedRead = await viewer.page.evaluate(async path => (await fetch(path, { credentials: 'same-origin' })).status, triggersPath);
-  expect(refusedRead).toBe(403);
+  let releasePermission: () => void = () => {};
+  let notePermission: () => void = () => {};
+  const permissionGate = new Promise<void>(resolve => { releasePermission = resolve; });
+  const permissionSeen = new Promise<void>(resolve => { notePermission = resolve; });
+  const permissionPath = `/api/pages/${list.id}/permissions/check`;
+  await viewer.page.route(url => url.pathname === permissionPath, async route => {
+    notePermission();
+    await permissionGate;
+    await route.continue();
+  });
+  try {
+    await signIn(viewer.page, reader, imagoPath(user.homeDriveId, `tasks/${list.id}`));
+    await hydrated(viewer.page);
+    const readOnlyActions = await openTaskActions(viewer.page, task.id, 'Task with a trigger');
+    await permissionSeen;
+    const assertReadOnly = async () => {
+      if (await readOnlyActions.getAttribute('role') === 'menu') {
+        await expect(readOnlyActions.getByRole('menuitem', { name: 'Agent triggers…', exact: true })).toBeDisabled();
+      } else {
+        await expect(readOnlyActions.getByRole('button', { name: 'Agent triggers', exact: true })).toHaveCount(0);
+        await expect(readOnlyActions.getByRole('checkbox', { name: 'Complete Task with a trigger', exact: true })).toBeDisabled();
+        await expect(readOnlyActions.getByRole('button', { name: 'Delete task', exact: true })).toBeDisabled();
+      }
+    };
+    await assertReadOnly();
+    const checked = viewer.page.waitForResponse(response => new URL(response.url()).pathname === permissionPath);
+    releasePermission();
+    expect((await checked).ok()).toBe(true);
+    await assertReadOnly();
+    const refusedRead = await viewer.page.evaluate(async path => (await fetch(path, { credentials: 'same-origin' })).status, triggersPath);
+    expect(refusedRead).toBe(403);
+  } finally {
+    releasePermission();
+    await viewer.page.unrouteAll({ behavior: 'wait' });
+  }
 });
 
 test('direct messaging creates a destination and sends through native conversation controls', async ({ browser, baseURL }) => {

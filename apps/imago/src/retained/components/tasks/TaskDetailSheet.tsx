@@ -97,35 +97,13 @@ export function TaskDetailSheet({
       enabled: shouldFetchDescription(open, task?.pageId),
     });
 
-  // Permission gate mirrors the row-level Task List badge: edit on the parent
-  // task list page is what authorizes configuring triggers on its tasks.
-  // Two answers, because the controls here divide into two kinds.
-  //
-  // The sheet is the first thing to ask about a list's permissions on the
-  // dashboard, so the request starts when it opens and the answer is unknown
-  // for a round trip. Greying every control out for that window and lighting
-  // them up a beat later reads as broken, so controls whose worst case is a
-  // refused click use the optimistic answer.
-  //
-  // Two controls do NOT get that benefit of the doubt, because acting early
-  // writes rather than merely failing. The description editor autosaves through
-  // usePageContent, which debounces a second and then PATCHes with no
-  // permission check of its own — and it PATCHes the TASK's page while the
-  // permission here is the parent LIST's, so an early save is not even guarded
-  // by the same resource. TaskAgentTriggersDialog likewise PUTs and DELETEs
-  // unguarded, and gating its mount on an optimistic answer would have let the
-  // dialog be unmounted under the user when the answer arrived. Both wait for a
-  // definite yes.
-  //
-  // The resource mismatch cuts the other way too, and is left standing: someone
-  // with edit on the task page but view-only on the list cannot edit the
-  // description here at all. That is the safe direction, but the real fix is a
-  // second permission read against task.pageId for the editor.
-  const { permissions, isLoading: permissionsLoading } = usePermissions(
-    task?.taskListPageId ?? null,
-  );
+  // The parent task list authorizes these actions. Keep every write control
+  // disabled until that permission is known, including the compact-sheet
+  // status/title controls. Description and trigger mounting use the same
+  // definite answer; the existing server still authorizes each API mutation.
+  const { permissions } = usePermissions(task?.taskListPageId ?? null);
   const canEditKnown = permissions?.canEdit ?? false;
-  const canEdit = permissionsLoading || canEditKnown;
+  const canEdit = canEditKnown;
 
   // Reset editing state when task changes
   useEffect(() => {
@@ -144,7 +122,7 @@ export function TaskDetailSheet({
   const hasLinkedPage = Boolean(task.pageId && task.driveId);
   const { label: statusLabel, color: statusColor } = statusDisplay;
   const triggerCount = task.activeTriggerCount ?? 0;
-  // canEditKnown, not canEdit: this mounts a dialog that writes.
+  // A definite edit grant is required before mounting this writing dialog.
   const canConfigureTriggers = canEditKnown && Boolean(task.taskListPageId && task.driveId);
   const showTriggerBadge = canConfigureTriggers && triggerCount > 0;
 
@@ -369,7 +347,7 @@ export function TaskDetailSheet({
                   <RichEditor
                     value={descriptionContent ?? ''}
                     onChange={saveDescription}
-                    // canEditKnown, not canEdit: this autosaves.
+                    // This editor autosaves only after a definite edit grant.
                     readOnly={!canEditKnown}
                     contentMode="html"
                   />
