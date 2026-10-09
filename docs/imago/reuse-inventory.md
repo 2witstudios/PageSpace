@@ -204,3 +204,5 @@ Public auth exits explicitly use full-document assign/replace, matching Imago's
 existing sign-in contract, rather than relying on a cross-app Next RSC fallback.
 Focused boundary tests distinguish auth exits from persistent-shell navigation.
 Public auth routes are not prefetched by Imago. Native wrappers are unchanged.
+
+Native retained chat inputs provide the agent drive to mention search and enable the existing permission-filtered cross-drive search option. Commands remain scoped separately to the agent drive. The original mention search endpoint and authorization logic are unchanged.

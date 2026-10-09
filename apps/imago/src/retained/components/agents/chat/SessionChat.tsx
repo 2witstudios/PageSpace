@@ -278,6 +278,8 @@ export function SessionChatView({
           attachments={attachments}
           onAddFiles={addFiles}
           onRemoveFile={removeFile}
+          driveId={commandDriveId ?? undefined}
+          crossDrive
           commandDriveId={commandDriveId ?? undefined}
           remoteStreamingUser={remoteStreamingUser}
           queuedMessages={chat.queuedSends}

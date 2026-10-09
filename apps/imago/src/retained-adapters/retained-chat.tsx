@@ -77,7 +77,7 @@ export function RetainedChat({ agentId, name, conversationId, resolving }: {
       onChange={value => dispatch(transactions.setChatDraft, value)} onSend={() => void prepareFirstSend()}
       disabled={preparing || permissions?.canEdit !== true} isStreaming={false} onStop={() => undefined} hideModelSelector variant="main"
       placeholder={`Message ${name}...`} hasVision={hasVisionCapability(page.aiModel || '')}
-      attachments={attachments} onAddFiles={addFiles} onRemoveFile={removeFile} commandDriveId={page.driveId} /></div>
+      attachments={attachments} onAddFiles={addFiles} onRemoveFile={removeFile} driveId={page.driveId} crossDrive commandDriveId={page.driveId} /></div>
   </div></RetainedSurface>;
   return <RetainedSurface><SessionChat agent={{ ...page, id: selectedAgentId ?? page.id, title: selection ? page.title : name, driveName: '' }} conversationId={shownId} sessionId={selection?.sessionId}
     initialSend={!selection && firstSend?.conversationId === shownId ? firstSend : undefined}

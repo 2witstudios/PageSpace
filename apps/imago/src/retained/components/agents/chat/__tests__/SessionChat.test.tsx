@@ -47,6 +47,8 @@ vi.mock('@/retained/components/ai/chat/input', () => ({
     disabled,
     placeholder,
     commandDriveId,
+    driveId,
+    crossDrive,
   }: {
     value: string;
     onChange: (v: string) => void;
@@ -54,6 +56,8 @@ vi.mock('@/retained/components/ai/chat/input', () => ({
     disabled?: boolean;
     placeholder?: string;
     commandDriveId?: string;
+    driveId?: string;
+    crossDrive?: boolean;
   }) => (
     <div>
       <input
@@ -62,6 +66,8 @@ vi.mock('@/retained/components/ai/chat/input', () => ({
         placeholder={placeholder}
         disabled={disabled}
         data-command-drive-id={commandDriveId ?? 'none'}
+        data-mention-drive-id={driveId ?? 'none'}
+        data-cross-drive={crossDrive}
         onChange={(e) => onChange(e.target.value)}
       />
       <button data-testid="chat-send" onClick={onSend}>
@@ -160,6 +166,8 @@ describe('SessionChat', () => {
       'data-command-drive-id',
       'drive-1'
     );
+    expect(screen.getByTestId('chat-input')).toHaveAttribute('data-mention-drive-id', 'drive-1');
+    expect(screen.getByTestId('chat-input')).toHaveAttribute('data-cross-drive', 'true');
   });
 
   it("renders the full messages area (ChatMessagesArea) in 'page' context", () => {
