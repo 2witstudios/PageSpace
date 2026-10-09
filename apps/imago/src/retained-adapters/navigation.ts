@@ -1,6 +1,7 @@
 'use client';
 
 import { useMemo } from 'react';
+import { IMAGO_BASE_PATH } from '@/lib/auth/sign-in-url';
 import { useRouter as useNextRouter, usePathname as useNextPathname } from 'next/navigation';
 export { useParams, useSearchParams, notFound, redirect, useSelectedLayoutSegment, useSelectedLayoutSegments } from 'next/navigation';
 
@@ -10,7 +11,7 @@ export function imagoHref(href: string): string {
   const path = suffixAt === -1 ? href : href.slice(0, suffixAt);
   const query = suffixAt === -1 ? '' : href.slice(suffixAt);
   if (path === '/dashboard') return '/' + query;
-  if (href === '/settings' || href.startsWith('/settings/')) return href.replace('/settings', '/account');
+  if (path === '/settings' || path.startsWith('/settings/')) return href.replace('/settings', '/account');
   if (!href.startsWith('/dashboard/')) return href;
   const segments = path.slice('/dashboard/'.length).split('/');
   const [first, second, ...rest] = segments;
@@ -25,6 +26,14 @@ export function imagoHref(href: string): string {
   else if (['files', 'tasks', 'settings', 'calendar', 'agents', 'workflows', 'activity', 'trash', 'members'].includes(second)) destination = `/${segments.join('/')}`;
   else destination = `/${first}/files/${second}${rest.length ? `/${rest.join('/')}` : ''}`;
   return destination + (query ?? '');
+}
+
+/** Browser links and API return paths need the basePath, unlike Next router destinations. */
+export function imagoBrowserPath(href: string): string {
+  const path = href.split(/[?#]/, 1)[0];
+  if (path === IMAGO_BASE_PATH || path.startsWith(`${IMAGO_BASE_PATH}/`)) return href;
+  const translated = imagoHref(href);
+  return translated === '/' ? IMAGO_BASE_PATH : `${IMAGO_BASE_PATH}${translated}`;
 }
 
 export function useRouter() {

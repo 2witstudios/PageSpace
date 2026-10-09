@@ -318,7 +318,9 @@ test('a parent with an open subtask is refused completion, by the view and by th
     expect(await storedTask(stale.id)).toMatchObject({ status: 'pending', completedAt: null });
   } finally {
     releaseRefresh();
-    await page.unroute(rootTasks);
+    // Wait for held handlers to finish; removing them immediately can also
+    // continue the same request while its handler is resuming.
+    await page.unrouteAll({ behavior: 'wait' });
   }
 
   // Refused by the view: a subtask added in the detail is one the view counts, so ticking the

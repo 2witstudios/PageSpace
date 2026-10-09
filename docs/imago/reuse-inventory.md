@@ -154,3 +154,14 @@ the scoped cache without background revalidation. The open form intentionally
 pauses SWR, which also pauses bare mutate calls; that pause still protects other
 editing sessions. The new browser check exercises save/reload/removal via real APIs;
 its cloud result is still pending.
+
+Integration configuration submits the existing OAuth returnUrl parameter as a
+basePath-inclusive native path, preserving query/fragment and already-native
+paths. Backend OAuth, safe-return checks and desktop launch bridges are unchanged.
+The real provider picker/configuration dialog is included in browser verification;
+live external authorization remains outside the isolated fixture.
+
+Private Share-dialog page links also use native basePath-inclusive destinations;
+public publication URLs keep their existing contracts. The retained task workflow
+dialog uses an explicit responsive width and shrinkable content grid so its table
+and actions stay within the modal, including in narrow shell panes.

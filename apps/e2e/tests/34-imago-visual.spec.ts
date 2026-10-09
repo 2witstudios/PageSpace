@@ -274,12 +274,15 @@ const seedTasks = async (page: Page, listPageId: string, assigneeId: string): Pr
         return (await response.json()) as { id: string; pageId: string };
       };
       const made: { id: string; pageId: string }[] = [];
-      for (const [position, task] of tasks.entries()) made.push(await post(listPageId, { ...task, position }));
+      // Sequential default appends receive distinct stored positions. An explicit
+      // insertion index depends on the API's existing peer ordering and can tie
+      // positions, making a later reload sort by random fixture IDs.
+      for (const task of tasks) made.push(await post(listPageId, task));
       // Two subtasks under the announcement, one done, so its card shows a subtask count.
       const announcement = made[1];
       if (announcement === undefined) throw new Error('no announcement task');
-      await post(announcement.pageId, { title: 'Write the headline', status: 'completed', position: 0 });
-      await post(announcement.pageId, { title: 'Pick the screenshots', position: 1 });
+      await post(announcement.pageId, { title: 'Write the headline', status: 'completed' });
+      await post(announcement.pageId, { title: 'Pick the screenshots' });
       return made.length;
     },
     { listPageId, tasks },
@@ -314,6 +317,9 @@ test('task list', async ({ browser, baseURL }) => {
     await expect(shown.getByRole('button', { name: 'Table view', exact: true })).toBeVisible({ timeout: LOAD_MS });
     const tree = shown.locator('[data-slot="object"]');
     await selectTaskFilter(shown, 'All');
+    await expect(tree.locator('[data-task-id]:visible')).toHaveText([
+      /Write the brief/, /Draft the announcement/, /Order banners/, /Pick a launch date/, /Invite the press/,
+    ]);
     await expect(tree.getByRole('checkbox', { name: 'Complete Invite the press', exact: true })).toBeVisible();
     await expect(tree.getByRole('checkbox', { name: 'Reopen Write the brief', exact: true })).toHaveAttribute(
       'aria-checked',
@@ -336,6 +342,7 @@ test('task board', async ({ browser, baseURL }) => {
       { timeout: LOAD_MS },
     );
     await expect(board.getByRole('article', { name: 'Draft the announcement', exact: true })).toBeVisible();
+    await expect(board.getByRole('region', { name: 'To Do', exact: true }).getByRole('article')).toHaveText([/Pick a launch date/, /Invite the press/]);
     await expect(listPane(shown).getByRole('progressbar', { name: '2 of 7 tasks done', exact: true })).toBeVisible();
   });
 });

@@ -273,8 +273,17 @@ test('agent sessions and drive configuration remain native and preserve one chat
   await expect(page.getByRole('region', { name: 'Chat', exact: true }).locator('textarea')).toHaveCount(1);
   await shot(page, 'agents');
   await page.goto(imagoPath(user.homeDriveId, 'settings/integrations'));
-  await expect(page.getByText('Integrations', { exact: true }).first()).toBeVisible();
+  await expect(page.getByText('No integrations connected to this drive.', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Connect', exact: true })).toBeEnabled();
   await shot(page, 'drive-integrations');
+  await page.getByRole('button', { name: 'Connect', exact: true }).click();
+  await page.getByRole('dialog', { name: 'Connect Integration', exact: true }).getByRole('button', { name: /^GitHub/ }).click();
+  const connection = page.getByRole('dialog', { name: 'Connect GitHub', exact: true });
+  await expect(connection.getByLabel('Connection Name', { exact: true })).toBeEditable();
+  await expect(connection.getByRole('button', { name: 'Authorize', exact: true })).toBeEnabled();
+  await shot(page, 'drive-integration-configuration');
+  await connection.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(connection).toHaveCount(0);
 });
 
 test('sheet permissions also stay read-only while loading and after a view-only grant', async ({ browser, baseURL }) => {
@@ -382,7 +391,8 @@ test('task agent triggers save, survive reload and remove through retained contr
   await expect(object.locator(`[data-task-id="${task.id}"]:visible`)).toBeVisible();
   const triggersPath = `/api/tasks/${task.id}/triggers`;
   const openTriggers = async () => {
-    await object.getByText('Task with a trigger', { exact: true }).filter({ visible: true }).click({ button: 'right' });
+    await object.getByRole('button', { name: 'Table view', exact: true }).click();
+    await object.locator(`[data-task-id="${task.id}"]:visible`).click({ button: 'right' });
     await page.getByRole('menuitem', { name: 'Agent triggers…', exact: true }).click();
   };
   await openTriggers();
@@ -420,7 +430,8 @@ test('task agent triggers save, survive reload and remove through retained contr
   await signIn(viewer.page, reader, imagoPath(user.homeDriveId, `tasks/${list.id}`));
   await hydrated(viewer.page);
   const readOnlyObject = viewer.page.locator('[data-slot="object"]');
-  await readOnlyObject.getByText('Task with a trigger', { exact: true }).filter({ visible: true }).click({ button: 'right' });
+  await readOnlyObject.getByRole('button', { name: 'Table view', exact: true }).click();
+  await readOnlyObject.locator(`[data-task-id="${task.id}"]:visible`).click({ button: 'right' });
   await expect(viewer.page.getByRole('menuitem', { name: 'Agent triggers…', exact: true })).toBeDisabled();
   const refusedRead = await viewer.page.evaluate(async path => (await fetch(path, { credentials: 'same-origin' })).status, triggersPath);
   expect(refusedRead).toBe(403);
@@ -456,6 +467,8 @@ test('sharing controls grant a real view permission and preserve the reader boun
   const page = await open(browser, baseURL!, imagoPath(sharedDrive.id, `files/${doc.id}`));
   await page.locator('[data-slot="object"]').getByRole('button', { name: 'Share', exact: true }).click();
   const dialog = page.getByRole('dialog');
+  const sharedPath = imagoPath(sharedDrive.id, `files/${doc.id}`);
+  await expect(dialog.getByLabel('Page link', { exact: true })).toHaveValue(`${new URL(baseURL!).origin}${sharedPath}`);
   const row = await db.query.users.findFirst({ where: eq(users.id, reader.id), columns: { email: true } });
   await dialog.getByPlaceholder('Add people by email...').fill(row!.email);
   const grant = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === `/api/pages/${doc.id}/permissions`);
@@ -463,7 +476,7 @@ test('sharing controls grant a real view permission and preserve the reader boun
   expect((await grant).ok()).toBe(true);
   await shot(page, 'sharing');
   const fresh = await freshBrowser(browser, baseURL!); contexts.push(fresh.context);
-  await signIn(fresh.page, reader, imagoPath(sharedDrive.id, `files/${doc.id}`));
+  await signIn(fresh.page, reader, new URL(await dialog.getByLabel('Page link', { exact: true }).inputValue()).pathname);
   const editor = fresh.page.locator('.retained-ui .tiptap').first();
   await expect(editor).toContainText('Shared through native controls.');
   await expect(editor).toHaveAttribute('contenteditable', 'false');
@@ -560,5 +573,11 @@ test('task statuses and anchored workflows persist through retained configuratio
   await page.reload();
   await openTaskConfiguration(page, 'Workflows');
   await expect(page.getByRole('dialog', { name: 'Scheduled workflows', exact: true }).getByText('Retained workflow proof', { exact: true })).toBeVisible();
+  const workflows = page.getByRole('dialog', { name: 'Scheduled workflows', exact: true });
+  await expect.poll(async () => {
+    const bounds = await workflows.boundingBox();
+    const action = await workflows.getByRole('button', { name: 'New workflow', exact: true }).boundingBox();
+    return !!bounds && !!action && action.x >= bounds.x && action.x + action.width <= bounds.x + bounds.width;
+  }, { message: 'workflow actions should fit inside their dialog' }).toBe(true);
   await shot(page, 'task-workflow-configuration');
 });

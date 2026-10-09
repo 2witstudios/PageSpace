@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { imagoBrowserPath } from '@/retained-adapters/navigation';
 import { Button } from '@/retained/components/ui/button';
 import { Copy } from 'lucide-react';
 import { toast } from 'sonner';
@@ -52,7 +53,7 @@ export function PageLinkSection({ pageId, driveId }: PageLinkSectionProps) {
     setOrigin(window.location.origin);
   }, []);
 
-  const pageUrl = origin ? `${origin}/dashboard/${driveId}/${pageId}` : '';
+  const pageUrl = origin ? `${origin}${imagoBrowserPath(`/dashboard/${driveId}/${pageId}`)}` : '';
 
   return (
     <div className="space-y-2">

@@ -82,7 +82,7 @@ const RichEditor = ({ value, onChange, onEditorChange, readOnly = false, isPagin
 
   const characterCount = useEditorState({
     editor,
-    selector: ({ editor: current }) => current?.storage.characterCount.characters() ?? 0,
+    selector: ({ editor: current }) => current?.storage.characterCount?.characters() ?? 0,
   });
 
   useEffect(() => {

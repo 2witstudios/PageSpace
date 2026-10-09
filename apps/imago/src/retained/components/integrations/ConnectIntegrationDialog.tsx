@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { imagoBrowserPath } from '@/retained-adapters/navigation';
 import { startThirdPartyOAuth } from '@/retained/lib/navigation/oauth-redirect';
 import {
   Dialog,
@@ -73,9 +74,9 @@ export function ConnectIntegrationDialog({
       const body: Record<string, unknown> = {
         providerId: provider.id,
         name: connectionName,
-        returnUrl: returnUrl ?? (scope === 'drive' && driveId
+        returnUrl: imagoBrowserPath(returnUrl ?? (scope === 'drive' && driveId
           ? `/dashboard/${driveId}/settings/integrations`
-          : '/settings/integrations'),
+          : '/settings/integrations')),
       };
 
       if (scope === 'user') {

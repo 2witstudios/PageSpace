@@ -103,7 +103,7 @@ export function TaskListWorkflowsDialog({
   return (
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="min-w-0 sm:max-w-4xl max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <WorkflowIcon className="h-4 w-4 text-muted-foreground" />
@@ -114,7 +114,7 @@ export function TaskListWorkflowsDialog({
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-4">
+          <div className="min-w-0 space-y-4">
             <div className="flex items-center justify-between">
               <p className="text-sm text-muted-foreground">
                 {scoped.length} workflow{scoped.length === 1 ? '' : 's'} on this task list

@@ -6668,6 +6668,11 @@
         max-width: var(--container-2xl);
       }
     }
+    .sm\:max-w-4xl {
+      @media (width >= 40rem) {
+        max-width: var(--container-4xl);
+      }
+    }
     .sm\:max-w-\[16rem\] {
       @media (width >= 40rem) {
         max-width: 16rem;

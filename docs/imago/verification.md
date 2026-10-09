@@ -215,3 +215,53 @@ now fetch canonical trigger data and populate the cache with revalidation false,
 without removing the editing pause. This follow-up is not yet validated remotely.
 The prior ce5 manual aggregate also finished with the same sole copied-emitter
 audit failure (1,552 Imago tests and 21,397 other web tests passed).
+
+### Interaction report at `dc48a0655337a7d19a34a1cbd174eb23d29e738e`
+
+Test Suite `37978368784`: production web/Imago builds and lint/typecheck/Knip
+passed. Image `37978368362` and security `37978368376` passed. Browser job
+`113982823915` completed with 75 passes, two failures and three retries (8.3m).
+Task-list navigation and anchored workflow persistence passed. The held-request
+server-422 branch reached its real refusal/rollback assertions, then failed because
+unroute resumed the same request as its handler; cleanup now waits for handlers.
+The new trigger check right-clicked Editor view, which has no table context menu;
+it now selects the existing Table control before opening the menu, including for
+the view-only member. Trigger save/reload/removal still needs confirmation.
+
+Two retried document/sharing cases exposed an unguarded character-count storage
+read during editor construction. The selector now guards the not-yet-installed
+extension; content/181-character readiness assertions stay intact. The task-list
+dark diff is a swap of the two pending rows (3,512 pixels), not a style difference.
+The fixture supplied insertion indexes to the existing unsorted-peer API path,
+which can produce tied stored positions and an ID-based order after reload.
+Sequential default append requests give distinct positions; fixtures now assert
+the expected table/card ordering before capture. Backend ordering is unchanged.
+No screenshot threshold, retry policy or baseline is weakened. Aggregate coverage
+is still running on this candidate; no aggregate pass is inferred.
+
+Cloud screenshot review also found the drive-integrations capture occurred while
+its body was loading. The follow-up awaits the actual empty-state/Connect controls
+and exercises provider selection, the existing configuration dialog and Cancel.
+Its OAuth return path now maps at the UI boundary to a basePath-inclusive native
+callback, with focused path tests. Backend OAuth and desktop launch bridges are
+unchanged; live provider authorization is not claimed.
+
+Reviewed the successful workflow/sharing captures from dc48. The workflow table
+exceeded the dialog’s responsive width, so the copied dialog now has an explicit
+responsive width and a shrinkable content grid; its action bounds are asserted
+in the browser test. Private page links now use the same native browser-path
+adapter as OAuth return paths; the real sharing test checks the displayed link
+and opens it for the newly granted read-only member. Public publication URLs are
+unchanged. Scoped CSS generation completed in under a second; no local app build
+was restarted. These follow-ups require the next exact-candidate cloud run.
+
+The dc48 aggregate job completed. Node 24 coverage passed all 19 workspace tasks:
+1,552 Imago tests, 21,398 web tests and the repo-wide emitter registry passed.
+Processor Node 22 coverage passed (1,220 tests); backfill passed (472); database
+integration passed (184); library integration passed (643, 73 pre-existing skips);
+Imago integration passed (11); real Infisical suites passed (70, no skipped cases).
+The final infrastructure gate failed one of 398 tests: `imago-image.test.ts` found
+that `apps/web/src`, newly copied by the image’s contract generator, was absent
+from workflow triggers. The follow-up adds that source path to both PR and master
+push filters. No infrastructure assertion or existing skip policy is weakened.
+This is the aggregate job’s only failure; a complete exact-head rerun is required.
