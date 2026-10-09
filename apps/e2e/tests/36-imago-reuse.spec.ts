@@ -312,6 +312,7 @@ test('mention and command pickers keep scoped styles and native navigation', asy
   // exercise Commands settings through its actual retained navigation card.
   await composer.fill('');
   await page.goto('/imago/account');
+  await hydrated(page);
   const settingsLink = page.getByRole('link').filter({ has: page.getByText('Commands', { exact: true }) });
   await expect(settingsLink).toBeVisible();
   await page.evaluate(() => { document.documentElement.dataset.pickerShellProof = 'kept'; });
