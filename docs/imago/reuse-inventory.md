@@ -179,3 +179,9 @@ grant, matching the retained trigger/description guards. The browser trigger
 check holds the real permission read and verifies completion/delete/trigger
 boundaries both while pending and after a view-only answer. API authorization
 and classic's implementation remain unchanged.
+
+The copied command palette mounts its hidden title/description inside the
+modal portal, so Radix can resolve its accessible name at content mount. The
+agent-session browser flow now selects the named New session dialog. Interaction
+captures fast-forward finite animations to show completed modal appearance;
+visual baselines and thresholds are unchanged.

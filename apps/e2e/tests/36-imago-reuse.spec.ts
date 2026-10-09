@@ -29,7 +29,7 @@ async function open(browser: Parameters<typeof freshBrowser>[0], baseURL: string
   return page;
 }
 async function shot(page: Page, name: string) {
-  await page.screenshot({ path: `../../docs/imago/evidence/${name}.png`, fullPage: true });
+  await page.screenshot({ path: `../../docs/imago/evidence/${name}.png`, fullPage: true, animations: 'disabled' });
 }
 
 test('creates through the retained palette, edits with the retained toolbar and persists a document', async ({ browser, baseURL }) => {
@@ -156,13 +156,16 @@ test('a revoked session refuses a retained editor write and returns to public si
   const page = await open(browser, baseURL!, path);
   const editor = page.locator('.retained-ui .tiptap').first();
   await expect(editor).toHaveAttribute('contenteditable', 'true');
+  await expect(editor).toContainText('Protected before revocation.');
   await expect(page.getByRole('region', { name: 'Chat', exact: true }).locator('textarea')).toBeEditable();
   let releaseWrite: () => void = () => {};
   let noteWrite: () => void = () => {};
   const writeGate = new Promise<void>(resolve => { releaseWrite = resolve; });
   const writeSeen = new Promise<void>(resolve => { noteWrite = resolve; });
   await page.route(url => url.pathname === `/api/pages/${doc.id}`, async route => {
-    if (route.request().method() === 'PATCH') {
+    const request = route.request();
+    const body = request.method() === 'PATCH' ? request.postDataJSON() as { content?: unknown } : null;
+    if (typeof body?.content === 'string' && body.content.includes('Refused after revocation.')) {
       noteWrite();
       await writeGate;
     }
@@ -300,7 +303,7 @@ test('agent sessions and drive configuration remain native and preserve one chat
   await expect(page.getByRole('region', { name: 'Chat', exact: true })).toHaveCount(1);
   await expect(page.getByRole('complementary', { name: 'Agent sessions', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'New Session', exact: true }).click();
-  const palette = page.getByRole('dialog');
+  const palette = page.getByRole('dialog', { name: 'New session', exact: true });
   await palette.getByRole('option').filter({ hasText: 'Imago' }).first().click();
   const name = palette.getByPlaceholder('Imago', { exact: true });
   await name.fill('Native agent session');
