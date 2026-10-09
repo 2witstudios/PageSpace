@@ -1,0 +1,182 @@
+import '@/retained/test/setup';
+// @vitest-environment jsdom
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { renderHook, act } from '@testing-library/react';
+import { useAnswerAskUser, type UseAnswerAskUserOptions } from '../useAnswerAskUser';
+import { useAskUserAnsweringStore } from '@/retained/stores/useAskUserAnsweringStore';
+import { conversationMessagesActions } from '@/retained/hooks/conversationMessagesActions';
+import { useConversationMessagesStore } from '@/retained/stores/useConversationMessagesStore';
+import type { RenderedMessage } from '@/retained/lib/ai/streams/selectRenderedMessages';
+import type { UIMessage } from 'ai';
+
+const askUserMessage = (messageId: string, toolCallId: string): RenderedMessage => ({
+  mode: 'confirmed',
+  message: {
+    id: messageId,
+    role: 'assistant',
+    parts: [
+      { type: 'tool-ask_user', toolCallId, state: 'input-available', input: {}, output: undefined },
+    ],
+  } as UIMessage,
+});
+
+const baseOptions = (overrides: Partial<UseAnswerAskUserOptions> = {}): UseAnswerAskUserOptions => ({
+  conversationId: 'conv-1',
+  renderedMessages: [askUserMessage('m1', 'tc1')],
+  isConversationBusy: false,
+  addToolResult: vi.fn().mockResolvedValue({ dispatched: true }),
+  wrapSend: (sendFn) => sendFn(),
+  releasePendingSend: vi.fn(),
+  buildBody: () => ({}),
+  ...overrides,
+});
+
+describe('useAnswerAskUser', () => {
+  beforeEach(() => {
+    useAskUserAnsweringStore.setState({ answeringToolCallIds: new Set() });
+    useConversationMessagesStore.setState({ byConversationId: {} });
+  });
+
+  it('given wrapSend never invokes its callback (request dropped), should not leak the claimAnswering mutex', async () => {
+    const applyAskUserAnswerSpy = vi.spyOn(conversationMessagesActions, 'applyAskUserAnswer');
+    const wrapSend = vi.fn().mockReturnValue(undefined); // never calls sendFn — mirrors useSendHandoff's !conversationId early-return
+    const { result } = renderHook(() => useAnswerAskUser(baseOptions({ wrapSend })));
+
+    act(() => {
+      result.current.submitAnswers('tc1', { answers: [{ header: 'h', question: 'q', otherText: 'hi' }] });
+    });
+    await Promise.resolve();
+
+    expect(wrapSend).toHaveBeenCalledTimes(1);
+    // Neither the mutex nor the optimistic patch should have been applied — the callback
+    // wrapSend was supposed to invoke never ran (PR 6 review, CodeRabbit, Critical).
+    expect(useAskUserAnsweringStore.getState().answeringToolCallIds.has('tc1')).toBe(false);
+    expect(applyAskUserAnswerSpy).not.toHaveBeenCalled();
+  });
+
+  it('given a normal answerable submit, should claim, patch optimistically, hydrate+send, then clear the claim', async () => {
+    const addToolResult = vi.fn().mockResolvedValue({ dispatched: true });
+    const { result } = renderHook(() =>
+      useAnswerAskUser(baseOptions({ addToolResult })),
+    );
+
+    await act(async () => {
+      result.current.submitAnswers('tc1', { answers: [{ header: 'h', question: 'q', otherText: 'hi' }] });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(addToolResult).toHaveBeenCalledTimes(1);
+    // Claim is released once the send settles.
+    expect(useAskUserAnsweringStore.getState().answeringToolCallIds.has('tc1')).toBe(false);
+  });
+
+  it('given addToolResult rejects, should revert the optimistic patch and still clear the claim', async () => {
+    const revertSpy = vi.spyOn(conversationMessagesActions, 'revertAskUserAnswer');
+    const addToolResult = vi.fn().mockRejectedValue(new Error('network down'));
+    const { result } = renderHook(() =>
+      useAnswerAskUser(baseOptions({ addToolResult })),
+    );
+
+    await act(async () => {
+      result.current.submitAnswers('tc1', { answers: [{ header: 'h', question: 'q', otherText: 'hi' }] });
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(revertSpy).toHaveBeenCalledWith('conv-1', { messageId: 'm1', toolCallId: 'tc1' });
+    expect(useAskUserAnsweringStore.getState().answeringToolCallIds.has('tc1')).toBe(false);
+  });
+
+  it('given the toolCallId is not currently answerable, should not call wrapSend at all', () => {
+    const wrapSend = vi.fn();
+    const { result } = renderHook(() =>
+      useAnswerAskUser(baseOptions({ wrapSend, isConversationBusy: true })),
+    );
+
+    act(() => {
+      result.current.submitAnswers('tc1', { answers: [{ header: 'h', question: 'q', otherText: 'hi' }] });
+    });
+
+    expect(wrapSend).not.toHaveBeenCalled();
+  });
+
+  // Answering re-invokes the chat (addToolResult auto-resend) — with a shared chat instance it
+  // must go through the cross-conversation handoff like every other send path (dual-stream fix).
+  // TWO HANDOFF CASES WERE HERE ('given a refused handoff…', 'given a confirmed handoff…').
+  //
+  // They pinned `useConversationSendHandoff`, which existed because the AI SDK's `Chat` could
+  // not consume two response bodies at once: answering a question re-invokes the chat, and with
+  // one shared instance per surface the question's conversation could be ON SCREEN while the
+  // chat was still consuming ANOTHER conversation's stream. A refusal meant the user's click
+  // did nothing but raise a toast.
+  //
+  // `useChatSession` has no shared instance and no single-body limit — a resume is simply a
+  // `fetch` alongside whatever else is in flight — so the handoff is deleted rather than
+  // moved, and there is no refusal path left to have behaviour. The cases go with it.
+});
+
+describe('a pendingSend that will never become a stream must be released', () => {
+  // `useSendHandoff`'s clearing effect is keyed on [isStreamLive, status, conversationId], and a
+  // wrapped callback that returns WITHOUT dispatching moves none of them — so the name sticks
+  // for the life of the mount. The composer then renders only Stop, and `isConversationBusy`
+  // keeps the REMAINING question unanswerable. Both non-dispatching paths must say so.
+
+  it('given the answer did not resume the turn, releases the pendingSend', async () => {
+    // A turn with several ask_user questions resumes only once every one is answered, so
+    // answering the first records a patch and sends nothing.
+    const releasePendingSend = vi.fn();
+    const addToolResult = vi.fn().mockResolvedValue({ dispatched: false });
+    const { result } = renderHook(() =>
+      useAnswerAskUser(baseOptions({ addToolResult, releasePendingSend })),
+    );
+
+    await act(async () => {
+      result.current.submitAnswers('tc1', { answers: ['yes'] } as never);
+    });
+
+    expect(addToolResult).toHaveBeenCalled();
+    expect(releasePendingSend).toHaveBeenCalled();
+  });
+
+  it('given the answer DID resume the turn, does not release it', async () => {
+    // The stream is coming; the pendingSend hands off to the store entry as designed.
+    const releasePendingSend = vi.fn();
+    const addToolResult = vi.fn().mockResolvedValue({ dispatched: true });
+    const { result } = renderHook(() =>
+      useAnswerAskUser(baseOptions({ addToolResult, releasePendingSend })),
+    );
+
+    await act(async () => {
+      result.current.submitAnswers('tc1', { answers: ['yes'] } as never);
+    });
+
+    expect(releasePendingSend).not.toHaveBeenCalled();
+  });
+
+  it('given the claimAnswering race is LOST, releases without sending', async () => {
+    // A co-mounted surface (or a double-click) got there first. `wrapSend` has already
+    // registered a pendingSend for a send that will not happen.
+    const releasePendingSend = vi.fn();
+    const addToolResult = vi.fn().mockResolvedValue({ dispatched: true });
+    const { result } = renderHook(() =>
+      useAnswerAskUser(baseOptions({ addToolResult, releasePendingSend })),
+    );
+
+    // The handler a co-mounted surface bound from a render BEFORE any claim landed — which is
+    // what the race actually is. Claiming first instead would make the id unanswerable and the
+    // callback would bail at the render-time guard, never registering a pendingSend at all.
+    const submitFromEarlierRender = result.current.submitAnswers;
+    act(() => {
+      useAskUserAnsweringStore.getState().claimAnswering('tc1');
+    });
+
+    await act(async () => {
+      submitFromEarlierRender('tc1', { answers: ['yes'] } as never);
+    });
+
+    expect(addToolResult).not.toHaveBeenCalled();
+    expect(releasePendingSend).toHaveBeenCalled();
+  });
+});

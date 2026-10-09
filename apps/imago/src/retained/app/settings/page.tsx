@@ -1,0 +1,277 @@
+"use client";
+
+import Link from "@/retained-adapters/link";
+import { useRouter } from "@/retained-adapters/navigation";
+import { useMCP } from "@/retained/hooks/useMCP";
+import { useAuth } from "@/retained/hooks/useAuth";
+import { useBillingVisibility } from "@/retained/hooks/useBillingVisibility";
+import { useCapacitor } from "@/retained/hooks/useCapacitor";
+import { Button } from "@/retained/components/ui/button";
+import { User, Plug2, Key, ArrowLeft, CreditCard, Bell, Shield, Keyboard, Sparkles, Eye, Cable, Calendar, Scale, HardDrive, SlashSquare, Coins, Cookie, FileText, Lock, KeyRound } from "lucide-react";
+import { SettingsRow, type SettingsItem } from "./SettingsRow";
+import { MarketingLink } from "@/retained/components/ui/MarketingLink";
+import { filterSettingsItems } from "./settings-visibility";
+
+const ADMIN_APP_URL = process.env.NEXT_PUBLIC_ADMIN_APP_URL || 'http://localhost:3005';
+
+interface SettingsSection {
+  title: string;
+  items: SettingsItem[];
+}
+
+export default function SettingsPage() {
+  const router = useRouter();
+  const mcp = useMCP();
+  const { user } = useAuth();
+  const { showBilling } = useBillingVisibility();
+  const isDesktop = mcp.isDesktop;
+  const isAdmin = user?.role === 'admin';
+
+  const { isNative } = useCapacitor();
+
+  const filterItems = (items: SettingsItem[]) =>
+    filterSettingsItems(items, { isDesktop, showBilling, isNative });
+
+  const settingsSections: SettingsSection[] = [
+    {
+      title: "Personal",
+      items: filterItems([
+        {
+          title: "Account",
+          description: "Manage your account and profile",
+          icon: User,
+          href: "/settings/account",
+          available: true,
+        },
+        {
+          title: "Notifications",
+          description: "Manage email notification preferences",
+          icon: Bell,
+          href: "/settings/notifications",
+          available: true,
+        },
+        {
+          title: "Display & Pages",
+          description: "Manage interface visibility and global page defaults",
+          icon: Eye,
+          href: "/settings/display",
+          available: true,
+        },
+        {
+          title: "Keyboard Shortcuts",
+          description: "Customize keyboard shortcuts",
+          icon: Keyboard,
+          href: "/settings/hotkeys",
+          available: true,
+        },
+        {
+          title: "Backups",
+          description: "Create and manage snapshots of your drives",
+          icon: HardDrive,
+          href: "/settings/backups",
+          available: true,
+        },
+        {
+          title: "Usage",
+          description: "Credits, usage breakdown, automations & storage",
+          icon: Coins,
+          href: "/settings/usage",
+          available: true,
+        },
+        {
+          title: "Billing",
+          description: "Subscription, payment methods & invoices",
+          icon: CreditCard,
+          href: "/settings/billing",
+          available: true,
+          mobileHidden: true,
+        },
+      ]),
+    },
+    {
+      title: "AI Settings",
+      items: filterItems([
+        {
+          title: "Personalization",
+          description: "Customize how AI interacts with you",
+          icon: Sparkles,
+          href: "/settings/personalization",
+          available: true,
+        },
+        {
+          title: "Commands",
+          description: "Register pages as slash commands for AI",
+          icon: SlashSquare,
+          href: "/settings/commands",
+          available: true,
+        },
+        {
+          title: "AI Providers",
+          description: "Check which AI providers are available on this deployment",
+          icon: Key,
+          href: "/settings/ai",
+          available: true,
+        },
+      ]),
+    },
+    {
+      title: "Workspace",
+      items: [
+        { title: "Drives", description: "Create and manage drives", icon: HardDrive, href: "/account/drives", available: true },
+        { title: "Connections", description: "People, invitations and direct messages", icon: User, href: "/account/connections", available: true },
+        { title: "Storage", description: "Manage uploaded files and storage", icon: HardDrive, href: "/account/storage", available: true },
+        { title: "Messages", description: "Channels across your drives", icon: User, href: "/account/messages", available: true },
+        { title: "Tasks", description: "Tasks across your drives", icon: FileText, href: "/account/tasks", available: true },
+        { title: "Calendar", description: "Your calendar and invitations", icon: Calendar, href: "/account/calendar", available: true },
+        { title: "Activity", description: "Your activity history", icon: FileText, href: "/account/activity", available: true },
+        { title: "Trash", description: "Restore deleted drives", icon: HardDrive, href: "/account/trash", available: true },
+        { title: "Agents", description: "Agent sessions across your drives", icon: Sparkles, href: "/account/agents", available: true },
+      ],
+    },
+    {
+      title: "Integrations",
+      items: filterItems([
+        {
+          title: "Google Calendar",
+          description: "Sync events with Google Calendar",
+          icon: Calendar,
+          href: "/settings/integrations/google-calendar",
+          available: true,
+        },
+        {
+          title: "Service Connections",
+          description: "Connect external APIs and services to your AI assistants",
+          icon: Cable,
+          href: "/settings/integrations",
+          available: true,
+        },
+        {
+          title: "Agent Accounts",
+          description: "API keys your global assistant can use without ever seeing them",
+          icon: KeyRound,
+          href: "/settings/agent-accounts",
+          available: true,
+        },
+        {
+          title: "MCP Connection",
+          description: "Connect external tools to PageSpace (Cloud)",
+          icon: Plug2,
+          href: "/settings/mcp",
+          available: true,
+        },
+        {
+          title: "Local MCP Servers",
+          description: "Run your own MCP servers (Desktop only)",
+          icon: Plug2,
+          href: "/settings/local-mcp",
+          available: true,
+          desktopOnly: true,
+        },
+      ]),
+    },
+    {
+      title: "Legal",
+      items: filterItems([
+        {
+          title: "Privacy Policy",
+          description: "How PageSpace collects and uses your data",
+          icon: Lock,
+          href: "/privacy",
+          available: true,
+          marketing: true,
+        },
+        {
+          title: "Terms of Service",
+          description: "The terms that govern your use of PageSpace",
+          icon: FileText,
+          href: "/terms",
+          available: true,
+          marketing: true,
+        },
+        {
+          title: "Privacy & Cookies",
+          description: "Review or withdraw cookie consent",
+          icon: Cookie,
+          href: "/settings/privacy",
+          available: true,
+          // Same reason the cookie banner is hidden there: App Review reads a cookie prompt as tracking.
+          nativeHidden: true,
+        },
+        {
+          title: "Open-source licenses",
+          description: "Third-party OSS attribution notices",
+          icon: Scale,
+          href: "/settings/legal/oss-licenses",
+          available: true,
+        },
+      ]),
+    },
+    ...(isAdmin ? [{
+      title: "Administration",
+      items: [{
+        title: "Admin Console",
+        description: "System administration, monitoring, and debugging tools",
+        icon: Shield,
+        href: ADMIN_APP_URL,
+        available: true,
+      }],
+    }] : []),
+  ].filter(section => section.items.length > 0);
+
+  return (
+    <div className="container mx-auto px-4 py-10 sm:px-6 lg:px-10 max-w-2xl">
+      <div className="mb-8">
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => router.push('/dashboard')}
+          className="mb-4"
+        >
+          <ArrowLeft className="h-4 w-4 mr-2" />
+          Back to Dashboard
+        </Button>
+        <h1 className="text-3xl font-bold mb-2">Settings</h1>
+        <p className="text-muted-foreground">
+          Manage your application settings and preferences
+        </p>
+      </div>
+
+      <div className="space-y-8">
+        {settingsSections.map((section) => (
+          <div key={section.title}>
+            <h2 className="text-sm font-medium text-muted-foreground mb-2 px-1">
+              {section.title}
+            </h2>
+            <div className="rounded-lg border bg-card overflow-hidden">
+              {section.items.map((item, index) =>
+                item.available ? (
+                  item.marketing ? (
+                    <MarketingLink key={item.href} href={item.href}>
+                      <SettingsRow item={item} index={index} />
+                    </MarketingLink>
+                  ) : item.href.startsWith('http') ? (
+                    <a key={item.href} href={item.href} target="_blank" rel="noopener noreferrer">
+                      <SettingsRow item={item} index={index} />
+                    </a>
+                  ) : (
+                    <Link key={item.href} href={item.href}>
+                      <SettingsRow item={item} index={index} />
+                    </Link>
+                  )
+                ) : (
+                  <div
+                    key={item.href}
+                    className="cursor-not-allowed"
+                    aria-disabled="true"
+                  >
+                    <SettingsRow item={item} index={index} />
+                  </div>
+                )
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}

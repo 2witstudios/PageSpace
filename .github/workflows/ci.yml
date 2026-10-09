@@ -29,7 +29,7 @@ jobs:
 
     services:
       postgres:
-        image: postgres:17-alpine
+        image: mirror.gcr.io/library/postgres:17-alpine
         env:
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: pagespace_test
@@ -260,7 +260,13 @@ jobs:
       - name: Bring up local Infisical OSS (store adapter integration suite)
         working-directory: packages/lib/src/agent-accounts/store/infisical-dev
         run: |
-          docker compose up -d
+          # Fetch the unchanged fixture tags through Google's public Docker Hub cache.
+          # Tag them locally for the existing Compose file; production is untouched.
+          for image in infisical/infisical:v0.165.10 library/redis:7.4.11-alpine library/postgres:14-alpine; do
+            docker pull "mirror.gcr.io/$image"
+            docker tag "mirror.gcr.io/$image" "${image#library/}"
+          done
+          docker compose up -d --pull never
           for i in $(seq 1 30); do
             if curl -sf http://localhost:8080/api/status > /dev/null 2>&1; then
               echo "Infisical backend answered after $((i * 2))s"
@@ -391,7 +397,7 @@ jobs:
 
     services:
       postgres:
-        image: postgres:17-alpine
+        image: mirror.gcr.io/library/postgres:17-alpine
         env:
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: pagespace_test
@@ -442,7 +448,7 @@ jobs:
       AWS_ACCESS_KEY_ID: e2e
       AWS_SECRET_ACCESS_KEY: e2e-not-a-real-secret
       BUCKET_NAME: pagespace-e2e
-      E2E_SPECS: tests/15-chat-fixture-smoke.spec.ts tests/16-dispatch-multiplayer.spec.ts tests/17-agent-workspace-grid.spec.ts tests/18-sidebar-directory-live.spec.ts tests/19-channels-badge-live.spec.ts tests/20-pane-lifecycle.spec.ts tests/26-imago-api-proxy.spec.ts tests/27-imago-shell.spec.ts tests/28-imago-settings.spec.ts tests/29-imago-messages.spec.ts tests/30-imago-palette.spec.ts tests/31-imago-chat.spec.ts tests/32-imago-files.spec.ts tests/33-imago-tasks.spec.ts tests/34-imago-visual.spec.ts tests/35-imago-visual-control.spec.ts
+      E2E_SPECS: tests/15-chat-fixture-smoke.spec.ts tests/16-dispatch-multiplayer.spec.ts tests/17-agent-workspace-grid.spec.ts tests/18-sidebar-directory-live.spec.ts tests/19-channels-badge-live.spec.ts tests/20-pane-lifecycle.spec.ts tests/26-imago-api-proxy.spec.ts tests/27-imago-shell.spec.ts tests/28-imago-settings.spec.ts tests/29-imago-messages.spec.ts tests/30-imago-palette.spec.ts tests/31-imago-chat.spec.ts tests/32-imago-files.spec.ts tests/33-imago-tasks.spec.ts tests/34-imago-visual.spec.ts tests/35-imago-visual-control.spec.ts tests/36-imago-reuse.spec.ts
 
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -486,6 +492,7 @@ jobs:
           rm -rf /tmp/imago-standalone
           cp -R apps/imago/.next/standalone /tmp/imago-standalone
           cp -R apps/imago/.next/static /tmp/imago-standalone/apps/imago/.next/static
+          cp -R apps/imago/public /tmp/imago-standalone/apps/imago/public
 
       - name: Install Playwright browsers
         # Drops Google's Chrome apt source first — see the long comment on the
@@ -603,8 +610,17 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: Upload retained UI interaction evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: imago-reuse-evidence
+          path: docs/imago/evidence/*.png
+          if-no-files-found: warn
+          retention-days: 14
+
       - name: Upload Playwright report and traces
-        if: failure()
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: playwright-report

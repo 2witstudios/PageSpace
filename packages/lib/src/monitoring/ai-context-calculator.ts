@@ -5,7 +5,7 @@
  * Tracks which messages are included in each API call to determine real context window usage.
  */
 
-import { MODEL_CONTEXT_WINDOWS } from './ai-monitoring';
+import { MODEL_CONTEXT_WINDOWS } from '../ai/model-context-windows';
 
 /**
  * Minimal UIMessage type for token estimation

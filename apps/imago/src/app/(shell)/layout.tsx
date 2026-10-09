@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { getHomeDrive, listAccessibleDrives } from '@pagespace/lib/services/drive-service';
 import { getViewer } from '@/lib/auth/get-viewer';
 import type { DriveSummary } from '@/ui/frame/drives/drives';
+import { RetainedProvider } from '@/retained-adapters/retained-provider';
 import { Shell } from '@/ui/frame/shell/shell';
 
 /**
@@ -21,8 +22,8 @@ export default async function ShellLayout({ children }: Readonly<{ children: Rea
   ]);
   const initialDrives: DriveSummary[] = drives.map(({ id, name, kind }) => ({ id, name, kind }));
   return (
-    <Shell homeDriveId={home?.id ?? null} initialDrives={initialDrives}>
+    <RetainedProvider><Shell homeDriveId={home?.id ?? null} initialDrives={initialDrives}>
       {children}
-    </Shell>
+    </Shell></RetainedProvider>
   );
 }

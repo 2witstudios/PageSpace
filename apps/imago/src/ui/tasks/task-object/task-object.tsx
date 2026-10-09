@@ -4,7 +4,8 @@ import type { ReactNode } from 'react';
 import { edgeOf, renderErrorState } from '../../frame/edge-state/edge-state.render';
 import { TaskDetail, renderTaskNotFound } from '../task-detail/task-detail';
 import { renderTaskDetailMessage } from '../task-detail/task-detail.render';
-import { TaskListView } from '../task-list-view/task-list-view';
+import { PageView } from '@/ui/files/page-view/page-view';
+import { PageObject } from '@/ui/files/page-object/page-object';
 import { useDriveTaskLists, usePageTrail } from '../use-tasks/use-tasks';
 import { taskHref, taskRoute } from './task-route';
 
@@ -21,7 +22,7 @@ export type TaskObjectProps = {
  * as its view, or a task as its detail inside the list holding it. Where a
  * page sits is only asked when it is not one of the drive's lists.
  */
-export function TaskObject({ driveId, pageId, viewerId }: TaskObjectProps): ReactNode {
+export function TaskObject({ driveId, pageId }: TaskObjectProps): ReactNode {
   const { lists, error: listsError, retry: retryLists } = useDriveTaskLists(driveId);
   const isList = lists?.some((entry) => entry.pageId === pageId) === true;
   const { trail, error: trailError, retry: retryTrail } = usePageTrail(lists === undefined || isList ? null : pageId);
@@ -40,7 +41,7 @@ export function TaskObject({ driveId, pageId, viewerId }: TaskObjectProps): Reac
     case 'missing':
       return renderTaskNotFound(driveId);
     case 'list':
-      return <TaskListView driveId={driveId} pageId={pageId} viewerId={viewerId} />;
+      return <PageObject driveId={driveId} pageId={pageId}><PageView driveId={driveId} pageId={pageId} /></PageObject>;
     case 'task':
       return (
         <TaskDetail

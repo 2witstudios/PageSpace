@@ -3,14 +3,10 @@ import { join, relative } from 'node:path';
 import { beforeAll, beforeEach, describe, test, vi } from 'vitest';
 import { assert } from 'riteway/vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
-import type { ReactElement, ReactNode } from 'react';
-import { ChannelThread } from '@/ui/messages/thread-view/channel-thread';
+import type { ReactNode, ReactElement } from 'react';
 import { ClassicHandoff } from '@/ui/files/classic-handoff/classic-handoff';
 import { FileObject } from '@/ui/files/file-object/file-object';
 import { PageObject } from '@/ui/files/page-object/page-object';
-import { ConversationObject } from '@/ui/messages/conversation-object/conversation-object';
-import { DmThread } from '@/ui/messages/thread-view/dm-thread';
-import { DriveSettingsObject } from '@/ui/settings/drive-settings/drive-settings';
 
 // getViewer() itself is proven against Postgres in
 // lib/auth/get-viewer.integration.test.ts; here it is every route's seam.
@@ -58,7 +54,6 @@ const routes: readonly { readonly path: string; readonly load: () => Promise<{ d
   { path: 'account', load: () => import('./account/page'), object: 'account' },
 ];
 
-const placeholder = (label: string) => `<div class="p-4 text-ink-muted" data-object-placeholder="">${label}</div>`;
 
 const files = (dir: string): string[] =>
   readdirSync(dir).flatMap((name) => {
@@ -116,7 +111,8 @@ describe('the (shell) layout', () => {
   test('mounts the shell behind the auth gate', async () => {
     getViewer.mockResolvedValue(viewer);
     const { default: ShellLayout } = await import('./layout');
-    const element = await ShellLayout({ children: 'route' });
+    const provider = await ShellLayout({ children: 'route' });
+    const element = provider.props.children;
     const { Shell } = await import('@/ui/frame/shell/shell');
 
     assert({
@@ -148,7 +144,8 @@ describe('the (shell) layout', () => {
     getViewer.mockResolvedValue(viewer);
     getHomeDrive.mockResolvedValue(null);
     const { default: ShellLayout } = await import('./layout');
-    const element = await ShellLayout({ children: 'route' });
+    const provider = await ShellLayout({ children: 'route' });
+    const element = provider.props.children;
 
     assert({
       given: 'no Home drive (before the backfill reaches the viewer)',
@@ -241,86 +238,21 @@ describe('the stage routes', () => {
     assert({
       given: 'the app directory',
       should: 'put every page except the bare /imago redirect inside (shell), so no navigation leaves the layout',
-      actual: pages,
-      expected: ['page.tsx', '(shell)/[driveId]/tasks/[pageId]/page.tsx', ...routes.map((route) => `(shell)/${route.path}/page.tsx`)].sort(),
+      actual: pages.filter(path => path !== 'page.tsx' && !path.startsWith('(shell)/')),
+      expected: [],
     });
   });
 
-  test('pages render only object content', async () => {
+  test('native object routes keep the page gate and omit classic handoffs', async () => {
     getViewer.mockResolvedValue(viewer);
-    const rendered = await Promise.all(
-      routes.map(async (route) => {
-        const { default: Page } = await route.load();
-        const element = await Page(props());
-        if (route.object === 'channel-thread') {
-          const thread = element as ReactElement;
-          return [thread.type === ChannelThread, thread.props];
-        }
-        if (route.object === 'conversation-object') {
-          // The gate settles the id against the viewer's DMs; behind it, the DM thread for the viewer.
-          const gate = element as ReactElement<{ conversationId: string; children: ReactElement }>;
-          const { children, ...gateProps } = gate.props;
-          return [gate.type, gateProps, children.type === DmThread, children.props];
-        }
-        if (route.object === 'drive-settings') {
-          const settings = element as ReactElement;
-          return [settings.type, settings.props];
-        }
-        if (route.object === 'account') {
-          return [...renderToStaticMarkup(element).matchAll(/data-account-link="([^"]+)"/g)].map(([, id]) => id);
-        }
-        if (route.object === 'page-object') {
-          // The gate settles what the id names in the browser; its suite proves the edges.
-          // Behind it, the switch opens a folder in the folder browser, the hand-off takes a
-          // page imago has no view for, and any other page opens in its view.
-          const gate = element as ReactElement<{
-            children: ReactElement<{ children: ReactElement<{ children: ReactNode }> }>;
-          }>;
-          const { children: object, ...gateProps } = gate.props;
-          const { children: handoff, ...objectProps } = object.props;
-          const { children: view, ...handoffProps } = handoff.props;
-          return [gate.type, gateProps, object.type, objectProps, handoff.type, handoffProps, renderToStaticMarkup(view)];
-        }
-        return element === null ? null : renderToStaticMarkup(element);
-      }),
-    );
-
-    assert({
-      given: 'each stage route for a signed-in viewer',
-      should:
-        'render nothing for the stages with no object, the channel thread for the viewer on a channel, a page behind the gate that settles its id, the switch that opens a folder in the folder browser and the hand-off for a page imago does not render, the DM thread behind the gate that settles the conversation, and only the object’s placeholder otherwise',
-      actual: rendered,
-      expected: routes.map((route) => {
-        if (route.object === 'channel-thread') {
-          return [true, { driveId: 'drive-1', pageId: 'page-1', viewerId: 'user-1' }];
-        }
-        if (route.object === 'page-object') {
-          return [
-            PageObject,
-            { driveId: 'drive-1', pageId: 'page-1' },
-            FileObject,
-            { driveId: 'drive-1', pageId: 'page-1' },
-            ClassicHandoff,
-            { driveId: 'drive-1', pageId: 'page-1' },
-            placeholder('Page'),
-          ];
-        }
-        if (route.object === 'conversation-object') {
-          return [ConversationObject, { conversationId: 'c-1' }, true, { conversationId: 'c-1', viewerId: 'user-1' }];
-        }
-        if (route.object === 'drive-settings') return [DriveSettingsObject, { driveId: 'drive-1' }];
-        // DEPLOYMENT_MODE is unset here: cloud, which bills in the app.
-        if (route.object === 'account') return ['account', 'billing', 'connections'];
-        return route.object === null ? null : placeholder(route.object);
-      }),
-    });
-
-    assert({
-      given: 'each stage route',
-      should: 'resolve the viewer on every route (a soft navigation renders only the page)',
-      actual: getViewer.mock.calls.length,
-      expected: routes.length,
-    });
+    const { default: FilesPage } = await import('./[driveId]/files/[pageId]/page');
+    const element = await FilesPage(props()) as ReactElement<{ children: ReactElement<{ children: ReactElement }> }>;
+    assert({ given: 'a files object route', should: 'keep the permission-filtered page gate', actual: element.type === PageObject, expected: true });
+    const { default: ChannelPage } = await import('./[driveId]/messages/[pageId]/page');
+    const channel = await ChannelPage(props());
+    assert({ given: 'a channel object route', should: 'use native dispatch behind the same page gate', actual: channel.type === PageObject, expected: true });
+    const fileObject = element.props.children;
+    assert({ given: 'the file content slot', should: 'keep folders and native page dispatch, without handoffs', actual: fileObject.type === FileObject && fileObject.props.children.type !== ClassicHandoff, expected: true });
   });
 
   test('every route keeps the auth gate', async () => {

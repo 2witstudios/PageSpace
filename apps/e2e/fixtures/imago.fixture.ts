@@ -60,8 +60,8 @@ export const emailedMagicLink = async (userId: string, next: string): Promise<st
 export type ImagoUser = { readonly id: string; readonly name: string; readonly homeDriveId: string };
 
 /** A verified user with the Home drive every user gets at sign-in. */
-export const imagoUser = async (name: string): Promise<ImagoUser> => {
-  const user = await factories.createUser({ name, emailVerified: new Date() });
+export const imagoUser = async (name: string, ai: { currentAiProvider: string; currentAiModel: string } | undefined = undefined): Promise<ImagoUser> => {
+  const user = await factories.createUser({ name, emailVerified: new Date(), ...ai });
   const { driveId } = await provisionHomeDriveIfNeeded(user.id);
   return { id: user.id, name, homeDriveId: driveId };
 };
@@ -81,6 +81,12 @@ export const freshBrowser = async (
 /** Signs `page`'s browser in as `user` through the magic-link verify route, landing on `next`. */
 export const signIn = async (page: Page, user: ImagoUser, next: string): Promise<void> => {
   await page.goto(await emailedMagicLink(user.id, next));
+  // Fresh magic-link users may be offered optional passkey setup first.
+  if (new URL(page.url()).pathname === '/auth/passkey-setup') {
+    const consent = page.getByRole('button', { name: 'Reject optional', exact: true });
+    if (await consent.isVisible()) await consent.click();
+    await page.getByRole('button', { name: 'Skip for now', exact: true }).click();
+  }
   await page.waitForURL(pathnameIs(next));
 };
 

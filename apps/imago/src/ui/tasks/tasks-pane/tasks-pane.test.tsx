@@ -1,12 +1,14 @@
 // @vitest-environment jsdom
 import { act } from 'react';
-import { afterEach, describe, test } from 'vitest';
+import { afterEach, describe, test, vi } from 'vitest';
 import { assert } from 'riteway/vitest';
 import { ImagoSWRProvider } from '@/api/swr-provider';
 import { mount, unmountAll } from '../../test-support/dom';
 import { fakeWeb, type FakeRoute } from '@/ui/test-support/fake-web';
 import { taskItem, taskListResponse } from '../task-model/fixtures';
 import { TasksPane } from './tasks-pane';
+
+vi.mock('@/retained-adapters/create-actions', () => ({ CreateActions: () => null }));
 
 afterEach(unmountAll);
 

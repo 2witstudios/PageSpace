@@ -12,6 +12,8 @@ import { conversation, inboxChannel } from '../message-model/fixtures';
 import type { ConversationResponse, InboxItem } from '../message-model/message';
 import { MessagesPane, type MessagesPaneProps } from './messages-pane';
 
+vi.mock('@/retained-adapters/create-actions', () => ({ CreateActions: () => null }));
+
 afterEach(unmountAll);
 
 const CHANNELS = `GET ${messagePaths.driveChannels('d1')}`;

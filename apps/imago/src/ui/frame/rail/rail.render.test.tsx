@@ -74,40 +74,31 @@ describe('renderRail()', () => {
 
   test('the overflow, open', () => {
     const html = markup({ moreOpen: true });
-    const links = [...html.matchAll(/<a href="(\/dashboard\/[^"]+)"[^>]*>.*?<\/svg>([^<]+)<\/a>/g)].map((match) => [
-      match[2],
-      match[1],
+    const links = [...(html.match(/<details[\s\S]*?<\/details>/)?.[0] ?? '').matchAll(/<a\b[^>]*href="(\/drive-1\/[^"]+)"[^>]*>(.*?)<\/a>/g)].map(match => [
+      match[2]?.match(/([^<>]+)$/)?.[1], match[1],
     ]);
     assert({
       given: 'the overflow open',
-      should: 'list Calendar, Agents, Connections, Activity and Trash as links into classic for this drive',
+      should: 'list all secondary destinations as native links for this drive',
       actual: [/<details[^>]* open=""/.test(html), links],
       expected: [
         true,
         [
-          ['Calendar', '/dashboard/drive-1/calendar'],
-          ['Agents', '/dashboard/drive-1/agents'],
-          ['Connections', '/dashboard/drive-1/settings/integrations'],
-          ['Activity', '/dashboard/drive-1/activity'],
-          ['Trash', '/dashboard/drive-1/trash'],
+          ['Calendar', '/drive-1/calendar'],
+          ['Agents', '/drive-1/agents'],
+          ['Connections', '/drive-1/settings/integrations'],
+          ['Activity', '/drive-1/activity'],
+          ['Trash', '/drive-1/trash'],
+          ['Workflows', '/drive-1/workflows'],
         ],
       ],
     });
   });
 
-  test('classic links leave imago’s router', () => {
+  test('overflow links use the Imago router', () => {
     const tree = renderRail(props({ moreOpen: true }));
-    const nextLinkToClassic = findElement<{ href: string }>(
-      tree,
-      (element) => element.type === Link && String(element.props.href).startsWith('/dashboard/'),
-    );
-    const anchor = findElement<{ href: string }>(tree, (element) => element.type === 'a');
-    assert({
-      given: 'the overflow’s classic deep links',
-      should: 'be plain anchors, so Next does not prefix imago’s basePath',
-      actual: [nextLinkToClassic, anchor?.props.href],
-      expected: [undefined, '/dashboard/drive-1/calendar'],
-    });
+    const link = findElement<{ href: string }>(tree, element => element.type === Link && element.props.href === '/drive-1/calendar');
+    assert({ given: 'Calendar in the overflow', should: 'navigate inside the persistent shell', actual: link?.props.href, expected: '/drive-1/calendar' });
   });
 
   test('toggling the overflow', () => {

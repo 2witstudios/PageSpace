@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act } from 'react';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, test } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, test, vi } from 'vitest';
 import { assert } from 'riteway/vitest';
 import type { Editor } from '@tiptap/core';
 import { ImagoSWRProvider } from '@/api/swr-provider';
@@ -13,6 +13,8 @@ import type { TaskItemResponse } from '../task-model/task';
 import { TaskListView } from '../task-list-view/task-list-view';
 import { TaskObject } from './task-object';
 
+// TaskObject's list branch is a dispatch boundary; the reused list's writes are covered by the live port suite.
+vi.mock('@/ui/files/page-view/page-view', () => ({ PageView: () => <><h2>Launch</h2><ul aria-label="Launch tasks" /></> }));
 const DRIVE = 'GET /api/drives/d1/pages?ls=true&recursive=true';
 
 const people: Readonly<Record<string, { readonly type: 'user' | 'agent'; readonly name: string }>> = {
@@ -71,6 +73,7 @@ const server = (overrides: Record<string, FakeRoute> = {}) => {
     };
 
   const routes: Record<string, FakeRoute> = {
+    'GET /api/pages/l1': () => Response.json({ id: 'l1', driveId: 'd1', type: 'TASK_LIST', title: 'Launch' }),
     [DRIVE]: () =>
       Response.json({
         mode: 'ls',

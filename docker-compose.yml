@@ -200,6 +200,8 @@ services:
       context: .
       dockerfile: apps/imago/Dockerfile
       args:
+        - NEXT_PUBLIC_DEPLOYMENT_MODE=${DEPLOYMENT_MODE:-}
+        - NEXT_PUBLIC_WEB_APP_URL=${WEB_APP_URL:-http://localhost:3000}
         - NEXT_PUBLIC_REALTIME_URL=${NEXT_PUBLIC_REALTIME_URL}
         - NEXT_PUBLIC_COOKIE_DOMAIN=${NEXT_PUBLIC_COOKIE_DOMAIN:-localhost}
         # Nothing in front of :3006 routes /api to web, so the build proxies it.
@@ -220,6 +222,11 @@ services:
       - DEPLOYMENT_MODE=${DEPLOYMENT_MODE:-}
       - SESSION_IDLE_TIMEOUT_MS=${SESSION_IDLE_TIMEOUT_MS:-}
       - LOG_LEVEL=${LOG_LEVEL:-}
+      # Public storage/preview policy inputs, without service credentials.
+      - AWS_ENDPOINT_URL_S3=${AWS_ENDPOINT_URL_S3:-}
+      - BUCKET_NAME=${BUCKET_NAME:-${TIGRIS_BUCKET:-${S3_BUCKET:-pagespace-files}}}
+      - DEV_PREVIEW_ENABLED=${DEV_PREVIEW_ENABLED:-}
+      - DEV_PREVIEW_APEX=${DEV_PREVIEW_APEX:-}
       - WEB_APP_INTERNAL_URL=http://web:3000
       # Server redirects (sign-in, classic) are built on this, never on Host.
       - WEB_APP_URL=${WEB_APP_URL:-http://localhost:3000}

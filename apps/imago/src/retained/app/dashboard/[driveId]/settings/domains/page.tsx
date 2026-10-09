@@ -1,0 +1,1274 @@
+'use client';
+
+import { useState, useEffect, useMemo, type ReactNode } from 'react';
+import { useParams, useRouter } from '@/retained-adapters/navigation';
+import { Button } from '@/retained/components/ui/button';
+import { Input } from '@/retained/components/ui/input';
+import { Label } from '@/retained/components/ui/label';
+import { Badge } from '@/retained/components/ui/badge';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/retained/components/ui/card';
+import { Skeleton } from '@/retained/components/ui/skeleton';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/retained/components/ui/select';
+import { ChevronLeft, Shield, Globe, Trash2, Plus, RefreshCw, CheckCircle2, XCircle, Lock, Loader2, Star, Image as ImageIcon, FileWarning } from 'lucide-react';
+import { useDriveStore, type Drive } from '@/retained/hooks/useDrive';
+import { useAuth } from '@/retained/hooks/useAuth';
+import { toast } from 'sonner';
+import { fetchWithAuth, del, patch } from '@/retained/lib/auth/auth-fetch';
+import useSWR from 'swr';
+import { normalizeHostname, validateCustomDomain, buildDnsInstructions } from '@pagespace/lib/validators/custom-domain';
+import { selectPrimaryActiveDomain, isEligibleForPrimaryHost } from '@pagespace/lib/canvas/primary-host';
+import { PagePickerPopover } from '@/retained/components/common/PagePickerPopover';
+import { UpgradeLink } from '@/retained/components/billing/UpgradeLink';
+import { PageType } from '@pagespace/lib/utils/enums';
+
+interface CustomDomain {
+  id: string;
+  driveId: string;
+  hostname: string;
+  status: 'pending' | 'verified' | 'failed' | 'dns_failed' | 'provisioning' | 'active' | 'cert_failed';
+  isPrimary: boolean;
+  createdAt: string;
+  /**
+   * Platform-owned alias (e.g. pagespace.ai, or the docs/blog subdomains).
+   * Registered by a platform admin, not a customer, and excluded from
+   * primary-host selection unless explicitly flagged `isPrimary` — mirrors
+   * `getActiveDomainRecords` in apps/web/src/lib/canvas/custom-domain-mirror.ts.
+   */
+  platformOwned: boolean;
+  /** Canvas page overriding this domain's root ('/'); null = use the drive-wide home page. */
+  publishLandingPageId: string | null;
+  /** Canvas page overriding this domain's 404.html; null = use the drive-wide 404 page. */
+  publishNotFoundPageId: string | null;
+  /** What this domain routes to. null = the drive's static published site; a published_apps id = that app. */
+  publishedAppId: string | null;
+  /**
+   * What the customer must publish in DNS for a certificate stuck on Fly's
+   * `_fly-ownership` TXT check, or null when nothing is owed.
+   *
+   * Recomputed by the list route on every load rather than stored — it would be
+   * stale the moment the customer fixed their zone. Optional because it is only
+   * present for a domain still in a non-terminal cert state.
+   */
+  ownershipInstruction?: string | null;
+}
+
+interface DomainsResponse {
+  domains: CustomDomain[];
+  /** Maximum custom domains allowed by the drive owner's plan (0 = not available). */
+  limit: number;
+}
+
+interface DriveAppOption {
+  id: string;
+  envId: string;
+  envName: string;
+  subdomain: string;
+  url: string;
+  status: string;
+}
+
+interface DriveAppsResponse {
+  apps: DriveAppOption[];
+}
+
+interface SubdomainResponse {
+  subdomain: string | null;
+  canChange: boolean;
+  publishHost: string;
+}
+
+const fetcher = (url: string) => fetchWithAuth(url).then((r) => r.json());
+
+export default function DomainsSettingsPage() {
+  const params = useParams();
+  const router = useRouter();
+  const driveId = params.driveId as string;
+  const drives = useDriveStore((state) => state.drives);
+  const isLoading = useDriveStore((state) => state.isLoading);
+  const fetchDrives = useDriveStore((state) => state.fetchDrives);
+  const updateDriveInStore = useDriveStore((state) => state.updateDrive);
+
+  const [notFoundPageId, setNotFoundPageId] = useState<string | null>(null);
+  const [isSavingNotFoundPage, setIsSavingNotFoundPage] = useState(false);
+  const [newDomain, setNewDomain] = useState('');
+  const [isAddingDomain, setIsAddingDomain] = useState(false);
+  const [removingDomainId, setRemovingDomainId] = useState<string | null>(null);
+  const [verifyingDomainId, setVerifyingDomainId] = useState<string | null>(null);
+  const [verifyReasons, setVerifyReasons] = useState<Record<string, string | undefined>>({});
+  const [refreshingCertId, setRefreshingCertId] = useState<string | null>(null);
+  const [settingPrimaryId, setSettingPrimaryId] = useState<string | null>(null);
+  const [savingLandingPageId, setSavingLandingPageId] = useState<string | null>(null);
+  const [savingNotFoundPageId, setSavingNotFoundPageId] = useState<string | null>(null);
+  const [subdomainInput, setSubdomainInput] = useState('');
+  const [isSavingSubdomain, setIsSavingSubdomain] = useState(false);
+
+  useEffect(() => {
+    fetchDrives();
+  }, [fetchDrives]);
+
+  const drive = drives.find((d) => d.id === driveId);
+  const canManage = drive?.isOwned || drive?.role === 'ADMIN';
+  const { user } = useAuth();
+  // Platform admin (users.role === 'admin') — distinct from drive-level admin.
+  // Gates the platform-owned-domain bypass (e.g. registering pagespace.ai),
+  // mirroring the backend's wantsPlatformDomain path.
+  const isPlatformAdmin = user?.role === 'admin';
+
+  useEffect(() => {
+    if (drive) setNotFoundPageId(drive.notFoundPageId ?? null);
+  }, [drive]);
+
+  const ogImageSetting = useUploadableImageSetting({
+    driveId,
+    urlField: 'publishDefaultOgImageUrl',
+    fileIdField: 'ogImageFileId',
+    currentValue: drive?.publishDefaultOgImageUrl ?? '',
+    label: 'Default share image',
+    updateDriveInStore,
+  });
+
+  const faviconSetting = useUploadableImageSetting({
+    driveId,
+    urlField: 'publishFaviconUrl',
+    fileIdField: 'faviconFileId',
+    currentValue: drive?.publishFaviconUrl ?? '',
+    label: 'Favicon',
+    updateDriveInStore,
+  });
+
+  const handleSetNotFoundPage = async (pageId: string | null) => {
+    if (isSavingNotFoundPage) return;
+    const previous = notFoundPageId;
+    setNotFoundPageId(pageId);
+    setIsSavingNotFoundPage(true);
+    try {
+      await patch(`/api/drives/${driveId}`, { notFoundPageId: pageId });
+      updateDriveInStore(driveId, { notFoundPageId: pageId });
+      toast.success(pageId ? '404 page updated' : '404 page cleared');
+    } catch {
+      setNotFoundPageId(previous);
+      toast.error('Failed to update 404 page');
+    } finally {
+      setIsSavingNotFoundPage(false);
+    }
+  };
+
+  const { data: domainsData, mutate: mutateDomains } = useSWR<DomainsResponse>(
+    drive && canManage ? `/api/drives/${driveId}/domains` : null,
+    fetcher
+  );
+
+  const { data: subdomainData, mutate: mutateSubdomain } = useSWR<SubdomainResponse>(
+    drive && canManage ? `/api/drives/${driveId}/subdomain` : null,
+    fetcher
+  );
+
+  const { data: appsData } = useSWR<DriveAppsResponse>(
+    drive && canManage ? `/api/drives/${driveId}/published-apps` : null,
+    fetcher
+  );
+
+  const [settingTargetId, setSettingTargetId] = useState<string | null>(null);
+
+  const handleSetDomainTarget = async (domainId: string, publishedAppId: string | null) => {
+    if (settingTargetId) return;
+    setSettingTargetId(domainId);
+    try {
+      const res = await fetchWithAuth(`/api/drives/${driveId}/domains/${domainId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ publishedAppId }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({})) as { error?: string };
+        toast.error(data.error ?? 'Failed to update domain target');
+        return;
+      }
+      await mutateDomains();
+      toast.success(publishedAppId ? 'Domain now routes to the published app' : 'Domain now routes to the static site');
+    } catch {
+      toast.error('Failed to update domain target');
+    } finally {
+      setSettingTargetId(null);
+    }
+  };
+
+  useEffect(() => {
+    if (subdomainData?.subdomain) setSubdomainInput(subdomainData.subdomain);
+  }, [subdomainData?.subdomain]);
+
+  const handleChangeSubdomain = async () => {
+    const trimmed = subdomainInput.trim().toLowerCase();
+    if (!trimmed || isSavingSubdomain) return;
+    if (trimmed === subdomainData?.subdomain) return;
+    setIsSavingSubdomain(true);
+    try {
+      const res = await fetchWithAuth(`/api/drives/${driveId}/subdomain`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ subdomain: trimmed }),
+      });
+      const data = await res.json().catch(() => ({})) as { subdomain?: string; error?: string };
+      if (!res.ok) {
+        toast.error(data.error ?? 'Failed to update subdomain');
+        return;
+      }
+      await mutateSubdomain();
+      toast.success('Subdomain updated');
+    } catch {
+      toast.error('Failed to update subdomain');
+    } finally {
+      setIsSavingSubdomain(false);
+    }
+  };
+
+  const handleAddDomain = async () => {
+    const hostname = normalizeHostname(newDomain.trim());
+    const validation = validateCustomDomain(hostname, { allowPlatformDomain: isPlatformAdmin });
+    if (!validation.valid) {
+      toast.error(validation.reason);
+      return;
+    }
+    if (isAddingDomain) return;
+    setIsAddingDomain(true);
+    try {
+      const res = await fetchWithAuth(`/api/drives/${driveId}/domains`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ hostname }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({})) as { error?: string };
+        if (res.status === 409) {
+          toast.error('That domain is already registered');
+        } else if (res.status === 403) {
+          toast.error(data.error ?? 'Custom domains are not available on your current plan');
+        } else {
+          toast.error(data.error ?? 'Failed to add domain');
+        }
+        return;
+      }
+      setNewDomain('');
+      await mutateDomains();
+      toast.success('Domain added — set the DNS records below to activate it');
+    } catch {
+      toast.error('Failed to add domain');
+    } finally {
+      setIsAddingDomain(false);
+    }
+  };
+
+  const handleVerifyDomain = async (domainId: string) => {
+    if (verifyingDomainId) return;
+    setVerifyingDomainId(domainId);
+    try {
+      const res = await fetchWithAuth(`/api/drives/${driveId}/domains/${domainId}/verify`, {
+        method: 'POST',
+      });
+      const data = await res.json().catch(() => ({})) as { verified?: boolean; reason?: string; error?: string };
+      if (!res.ok) {
+        toast.error(data.error ?? 'Verification failed');
+        return;
+      }
+      setVerifyReasons((prev) => ({ ...prev, [domainId]: data.reason }));
+      await mutateDomains();
+      if (data.verified) {
+        toast.success('Domain verified — provisioning SSL cert…');
+        await handleRefreshCert(domainId);
+      } else {
+        toast.error(data.reason ?? 'DNS records not yet propagated');
+      }
+    } catch {
+      toast.error('Failed to verify domain');
+    } finally {
+      setVerifyingDomainId(null);
+    }
+  };
+
+  const handleRefreshCert = async (domainId: string) => {
+    if (refreshingCertId) return;
+    setRefreshingCertId(domainId);
+    try {
+      const res = await fetchWithAuth(`/api/drives/${driveId}/domains/${domainId}/cert/refresh`, {
+        method: 'POST',
+      });
+      const data = await res.json().catch(() => ({})) as {
+        status?: string;
+        error?: string;
+        ownershipInstruction?: string | null;
+      };
+      if (!res.ok) {
+        if (res.status === 503) {
+          toast.error('SSL provisioning is not yet configured');
+        } else {
+          toast.error(data.error ?? 'Failed to refresh cert status');
+        }
+        return;
+      }
+      await mutateDomains();
+      if (data.status === 'active') {
+        toast.success('SSL certificate is active');
+      } else if (data.ownershipInstruction) {
+        // The certificate is blocked on a DNS record the customer has not
+        // published. "Check back in a few minutes" would be false here: this is
+        // the one waiting state that never resolves on its own, so it gets the
+        // actual instruction and a duration long enough to copy a record out of.
+        toast.warning(data.ownershipInstruction, { duration: 30_000 });
+      } else if (data.status === 'provisioning') {
+        toast.success('SSL cert provisioned — check back in a few minutes');
+      } else if (data.status === 'cert_failed') {
+        toast.error('SSL provisioning failed — click Retry SSL to try again');
+      }
+    } catch {
+      toast.error('Failed to refresh cert status');
+    } finally {
+      setRefreshingCertId(null);
+    }
+  };
+
+  const handleRemoveDomain = async (domainId: string) => {
+    if (removingDomainId) return;
+    setRemovingDomainId(domainId);
+    try {
+      await del(`/api/drives/${driveId}/domains/${domainId}`);
+      await mutateDomains();
+      toast.success('Domain removed');
+    } catch {
+      toast.error('Failed to remove domain');
+    } finally {
+      setRemovingDomainId(null);
+    }
+  };
+
+  const handleSetPrimary = async (domainId: string) => {
+    if (settingPrimaryId) return;
+    setSettingPrimaryId(domainId);
+    try {
+      const res = await fetchWithAuth(`/api/drives/${driveId}/domains/${domainId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ isPrimary: true }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({})) as { error?: string };
+        toast.error(data.error ?? 'Failed to set primary domain');
+        return;
+      }
+      await mutateDomains();
+      toast.success('Primary domain updated');
+    } catch {
+      toast.error('Failed to set primary domain');
+    } finally {
+      setSettingPrimaryId(null);
+    }
+  };
+
+  const handleSetDomainLandingPage = async (domainId: string, pageId: string | null) => {
+    if (savingLandingPageId) return;
+    setSavingLandingPageId(domainId);
+    try {
+      const res = await fetchWithAuth(`/api/drives/${driveId}/domains/${domainId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ publishLandingPageId: pageId }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({})) as { error?: string };
+        toast.error(data.error ?? 'Failed to update landing page');
+        return;
+      }
+      await mutateDomains();
+      toast.success(pageId ? 'Landing page updated' : 'Landing page reset to the drive default');
+    } catch {
+      toast.error('Failed to update landing page');
+    } finally {
+      setSavingLandingPageId(null);
+    }
+  };
+
+  const handleSetDomainNotFoundPage = async (domainId: string, pageId: string | null) => {
+    if (savingNotFoundPageId) return;
+    setSavingNotFoundPageId(domainId);
+    try {
+      const res = await fetchWithAuth(`/api/drives/${driveId}/domains/${domainId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ publishNotFoundPageId: pageId }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({})) as { error?: string };
+        toast.error(data.error ?? 'Failed to update 404 page');
+        return;
+      }
+      await mutateDomains();
+      toast.success(pageId ? '404 page updated' : '404 page reset to the drive default');
+    } catch {
+      toast.error('Failed to update 404 page');
+    } finally {
+      setSavingNotFoundPageId(null);
+    }
+  };
+
+  if (isLoading) {
+    return (
+      <div className="container mx-auto px-4 py-10 sm:px-6 lg:px-10 max-w-2xl space-y-6">
+        <Skeleton className="h-8 w-48" />
+        <Skeleton className="h-40 w-full" />
+      </div>
+    );
+  }
+
+  if (!drive || !canManage) {
+    return (
+      <div className="flex items-center justify-center h-full">
+        <div className="text-center">
+          <Shield className="w-12 h-12 mx-auto mb-4 text-muted-foreground" />
+          <h2 className="text-lg font-semibold mb-2">Access Denied</h2>
+          <p className="text-muted-foreground">Only drive owners and admins can access settings.</p>
+          <Button
+            variant="outline"
+            className="mt-4"
+            onClick={() => router.push(`/dashboard/${driveId}`)}
+          >
+            Go Back
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="container mx-auto px-4 py-10 sm:px-6 lg:px-10 max-w-2xl space-y-6">
+      <div>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => router.push(`/dashboard/${driveId}/settings`)}
+          className="mb-4"
+        >
+          <ChevronLeft className="h-4 w-4 mr-1" />
+          Back to Settings
+        </Button>
+        <h1 className="text-3xl font-bold mb-1">Domains &amp; Publishing</h1>
+        <p className="text-muted-foreground">Custom domains and share defaults for this drive&apos;s published canvas site</p>
+      </div>
+
+      <SubdomainCard
+        subdomain={subdomainData?.subdomain ?? null}
+        publishHost={subdomainData?.publishHost ?? 'pagespace.site'}
+        canChange={subdomainData?.canChange ?? false}
+        inputValue={subdomainInput}
+        onInputChange={setSubdomainInput}
+        onSave={handleChangeSubdomain}
+        isSaving={isSavingSubdomain}
+      />
+
+      <CustomDomainsCard
+        driveId={driveId}
+        domains={domainsData?.domains ?? []}
+        limit={domainsData?.limit ?? null}
+        apps={appsData?.apps ?? []}
+        newDomain={newDomain}
+        onNewDomainChange={setNewDomain}
+        onAdd={handleAddDomain}
+        onRemove={handleRemoveDomain}
+        onVerify={handleVerifyDomain}
+        onRefreshCert={handleRefreshCert}
+        onSetPrimary={handleSetPrimary}
+        onSetLandingPage={handleSetDomainLandingPage}
+        onSetNotFoundPage={handleSetDomainNotFoundPage}
+        onSetTarget={handleSetDomainTarget}
+        isAdding={isAddingDomain}
+        removingId={removingDomainId}
+        verifyingId={verifyingDomainId}
+        refreshingCertId={refreshingCertId}
+        settingPrimaryId={settingPrimaryId}
+        savingLandingPageId={savingLandingPageId}
+        savingNotFoundPageId={savingNotFoundPageId}
+        settingTargetId={settingTargetId}
+        verifyReasons={verifyReasons}
+        isPlatformAdmin={isPlatformAdmin}
+      />
+
+      <UploadableImageSettingCard
+        driveId={driveId}
+        icon={<ImageIcon className="h-4 w-4" />}
+        title="Default Share Image"
+        description="The Open Graph image used when a published page has no image of its own. Recommended 1200×630."
+        inputId="default-og-image"
+        inputLabel="Image URL"
+        previewAlt="Default share image preview"
+        previewClassName="max-h-40 w-full rounded-md border object-contain bg-muted"
+        savedValue={drive.publishDefaultOgImageUrl ?? ''}
+        {...ogImageSetting}
+      />
+
+      <UploadableImageSettingCard
+        driveId={driveId}
+        icon={<ImageIcon className="h-4 w-4" />}
+        title="Favicon"
+        description={<>The icon shown in browser tabs for this site. Falls back to a page&apos;s own &lt;link rel=&quot;icon&quot;&gt; tag, then the PageSpace default.</>}
+        inputId="favicon-url"
+        inputLabel="Favicon URL"
+        previewAlt="Favicon preview"
+        previewClassName="h-10 w-10 rounded border object-contain bg-muted"
+        savedValue={drive.publishFaviconUrl ?? ''}
+        {...faviconSetting}
+      />
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <FileWarning className="h-4 w-4" />
+            Custom 404 Page
+          </CardTitle>
+          <CardDescription>
+            The Canvas page shown when a visitor requests a URL that doesn&apos;t exist on this
+            site. Falls back to a generic not-found page when unset.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <PagePickerPopover
+            driveId={driveId}
+            value={notFoundPageId}
+            onChange={handleSetNotFoundPage}
+            pageType={PageType.CANVAS}
+            placeholder="Select a Canvas page…"
+            disabled={isSavingNotFoundPage}
+          />
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+// ── Uploadable image setting (OG image / favicon) ───────────────────────────
+//
+// The Default Share Image and Favicon cards are the same shape: a pasted-URL
+// input with Save/Clear, plus a "browse uploaded files" alternative that
+// resolves through the same server-side pipeline. Shared here instead of
+// duplicated per field so a future fix (validation, preview handling) only
+// has to land once.
+
+interface UploadableImageSettingHook {
+  value: string;
+  setValue: (v: string) => void;
+  isSaving: boolean;
+  previewError: boolean;
+  setPreviewError: (v: boolean) => void;
+  onSave: (clear?: boolean) => void;
+  onPickFile: (fileId: string | null) => void;
+}
+
+function useUploadableImageSetting({
+  driveId,
+  urlField,
+  fileIdField,
+  currentValue,
+  label,
+  updateDriveInStore,
+}: {
+  driveId: string;
+  urlField: 'publishDefaultOgImageUrl' | 'publishFaviconUrl';
+  fileIdField: 'ogImageFileId' | 'faviconFileId';
+  currentValue: string;
+  label: string;
+  updateDriveInStore: (driveId: string, updates: Partial<Drive>) => void;
+}): UploadableImageSettingHook {
+  const [value, setValue] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
+  const [previewError, setPreviewError] = useState(false);
+
+  useEffect(() => {
+    setValue(currentValue);
+  }, [currentValue]);
+
+  // A corrected URL must be able to recover the preview, so clear the error
+  // flag whenever the value changes (the keyed <img> below also remounts on change).
+  useEffect(() => {
+    setPreviewError(false);
+  }, [value]);
+
+  const onSave = async (clear = false) => {
+    if (isSaving) return;
+    const next = clear ? '' : value.trim();
+    setIsSaving(true);
+    try {
+      await patch(`/api/drives/${driveId}`, { [urlField]: next });
+      updateDriveInStore(driveId, { [urlField]: next || null } as Partial<Drive>);
+      if (clear) setValue('');
+      toast.success(clear ? `${label} cleared` : `${label} saved`);
+    } catch {
+      toast.error(`Failed to save ${label.toLowerCase()}`);
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  // Picking an uploaded file resolves it server-side to a durable public CDN
+  // URL (see resolveUploadedImageAssetUrl) — a pasted link to one of the user's
+  // own files would otherwise be an authenticated URL that fails for anonymous
+  // site visitors. Saves immediately; the URL input above still supports a
+  // pasted external link via the Save button.
+  const onPickFile = async (fileId: string | null) => {
+    if (!fileId || isSaving) return;
+    setIsSaving(true);
+    try {
+      const updated = await patch<Record<string, string | null | undefined>>(`/api/drives/${driveId}`, { [fileIdField]: fileId });
+      const resolved = updated[urlField] ?? '';
+      setValue(resolved);
+      updateDriveInStore(driveId, { [urlField]: resolved || null } as Partial<Drive>);
+      toast.success(`${label} saved`);
+    } catch {
+      toast.error(`Failed to save ${label.toLowerCase()}`);
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  return { value, setValue, isSaving, previewError, setPreviewError, onSave, onPickFile };
+}
+
+interface UploadableImageSettingCardProps extends UploadableImageSettingHook {
+  driveId: string;
+  icon: ReactNode;
+  title: string;
+  description: ReactNode;
+  inputId: string;
+  inputLabel: string;
+  previewAlt: string;
+  previewClassName: string;
+  savedValue: string;
+}
+
+function UploadableImageSettingCard({
+  driveId,
+  icon,
+  title,
+  description,
+  inputId,
+  inputLabel,
+  previewAlt,
+  previewClassName,
+  savedValue,
+  value,
+  setValue,
+  isSaving,
+  previewError,
+  setPreviewError,
+  onSave,
+  onPickFile,
+}: UploadableImageSettingCardProps) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          {icon}
+          {title}
+        </CardTitle>
+        <CardDescription>{description}</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="space-y-1.5">
+          <Label htmlFor={inputId}>{inputLabel}</Label>
+          <Input
+            id={inputId}
+            type="url"
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && onSave()}
+            placeholder="https://…"
+          />
+        </div>
+        {value.trim() && !previewError && (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            key={value.trim()}
+            src={value.trim()}
+            alt={previewAlt}
+            className={previewClassName}
+            onError={() => setPreviewError(true)}
+          />
+        )}
+        <div className="flex gap-2">
+          <Button onClick={() => onSave()} disabled={isSaving || value.trim() === savedValue}>
+            {isSaving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+            Save
+          </Button>
+          <Button variant="outline" onClick={() => onSave(true)} disabled={isSaving || !savedValue}>
+            Clear
+          </Button>
+        </div>
+        <div className="space-y-1.5 pt-2 border-t">
+          <Label>Or pick an uploaded image</Label>
+          <PagePickerPopover
+            driveId={driveId}
+            value={null}
+            onChange={onPickFile}
+            pageType={PageType.FILE}
+            imageOnly
+            placeholder="Browse uploaded images…"
+            disabled={isSaving}
+          />
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+// ── Subdomain Card ──────────────────────────────────────────────────────────
+
+interface SubdomainCardProps {
+  subdomain: string | null;
+  publishHost: string;
+  canChange: boolean;
+  inputValue: string;
+  onInputChange: (v: string) => void;
+  onSave: () => void;
+  isSaving: boolean;
+}
+
+function SubdomainCard({ subdomain, publishHost, canChange, inputValue, onInputChange, onSave, isSaving }: SubdomainCardProps) {
+  const preview = inputValue.trim().toLowerCase() || subdomain || 'your-subdomain';
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Globe className="h-4 w-4" />
+          Subdomain
+        </CardTitle>
+        <CardDescription>
+          Your published site URL on {publishHost}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {subdomain && (
+          <a
+            href={`https://${subdomain}.${publishHost}`}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-block text-sm text-blue-500 hover:underline"
+          >
+            {subdomain}.{publishHost}
+          </a>
+        )}
+        {canChange ? (
+          <>
+            <div className="flex gap-2 items-end">
+              <div className="flex-1 space-y-1.5">
+                <Label htmlFor="subdomain-input">Custom subdomain</Label>
+                <div className="flex items-center">
+                  <Input
+                    id="subdomain-input"
+                    value={inputValue}
+                    onChange={(e) => onInputChange(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && !isSaving && inputValue.trim().toLowerCase() !== subdomain && onSave()}
+                    placeholder="my-brand"
+                    className="rounded-r-none"
+                    disabled={isSaving}
+                  />
+                  <span className="inline-flex items-center px-3 h-9 rounded-r-md border border-l-0 bg-muted text-sm text-muted-foreground">
+                    .{publishHost}
+                  </span>
+                </div>
+              </div>
+              <Button
+                onClick={onSave}
+                disabled={isSaving || !inputValue.trim() || inputValue.trim().toLowerCase() === subdomain}
+              >
+                {isSaving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                Save
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Preview: https://{preview}.{publishHost}
+            </p>
+          </>
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            Custom subdomain selection is a Pro feature.{' '}
+            <UpgradeLink href="/settings/billing" className="text-blue-500 hover:underline" fallback={null}>
+              Upgrade to choose your own subdomain.
+            </UpgradeLink>
+          </p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ── Custom Domains Card ───────────────────────────────────────────────────────
+
+interface CustomDomainsCardProps {
+  driveId: string;
+  domains: CustomDomain[];
+  /** null = still loading; 0 = not available on plan; N = max allowed */
+  limit: number | null;
+  apps: DriveAppOption[];
+  newDomain: string;
+  onNewDomainChange: (v: string) => void;
+  onAdd: () => void;
+  onRemove: (id: string) => void;
+  onVerify: (id: string) => void;
+  onRefreshCert: (id: string) => void;
+  onSetPrimary: (id: string) => void;
+  onSetLandingPage: (domainId: string, pageId: string | null) => void;
+  onSetNotFoundPage: (domainId: string, pageId: string | null) => void;
+  onSetTarget: (domainId: string, publishedAppId: string | null) => void;
+  isAdding: boolean;
+  removingId: string | null;
+  verifyingId: string | null;
+  refreshingCertId: string | null;
+  settingPrimaryId: string | null;
+  savingLandingPageId: string | null;
+  savingNotFoundPageId: string | null;
+  settingTargetId: string | null;
+  verifyReasons: Record<string, string | undefined>;
+  isPlatformAdmin: boolean;
+}
+
+const EDGE_IPV4 = process.env.NEXT_PUBLIC_PUBLISH_EDGE_IPV4 ?? '';
+const EDGE_IPV6 = process.env.NEXT_PUBLIC_PUBLISH_EDGE_IPV6 ?? '';
+const CNAME_TARGET = process.env.NEXT_PUBLIC_PUBLISH_EDGE_CNAME_TARGET ?? '';
+
+function CustomDomainsCard({ driveId, domains, limit, apps, newDomain, onNewDomainChange, onAdd, onRemove, onVerify, onRefreshCert, onSetPrimary, onSetLandingPage, onSetNotFoundPage, onSetTarget, isAdding, removingId, verifyingId, refreshingCertId, settingPrimaryId, savingLandingPageId, savingNotFoundPageId, settingTargetId, verifyReasons, isPlatformAdmin }: CustomDomainsCardProps) {
+  // A platform admin keeps the input usable regardless of the drive's plan tier
+  // — the backend's platform-domain path skips the subscription cap, and a
+  // non-platform hostname over cap still gets the server's 403 + toast.
+  const atCap = limit !== null && limit > 0 && domains.length >= limit && !isPlatformAdmin;
+  const notAvailable = limit === 0 && !isPlatformAdmin;
+  const addDisabled = isAdding || !newDomain.trim() || atCap || notAvailable;
+  // "Make primary" only matters once there's a choice to make between domains.
+  const showPrimaryControls = domains.length > 1;
+  // Any in-flight mutation (add/verify/cert/primary/remove/page-override) locks
+  // every per-row action so concurrent requests can't race or produce stale toasts.
+  const anyBusy =
+    removingId !== null ||
+    verifyingId !== null ||
+    refreshingCertId !== null ||
+    settingPrimaryId !== null ||
+    savingLandingPageId !== null ||
+    savingNotFoundPageId !== null ||
+    settingTargetId !== null;
+  // The EFFECTIVE primary is what the published site actually serves — an
+  // explicitly-flagged active domain, else the earliest-created active one. Badge
+  // and "Make primary" key off this (not the raw `isPrimary` flag) so a migrated
+  // drive with no explicit primary still highlights its canonical domain, and a
+  // flagged-but-inactive row is never shown as primary. Same resolver the server
+  // uses. Memoized: the controlled add-domain input re-renders this card per
+  // keystroke, and this filters/maps/sorts the domain list.
+  const effectivePrimaryId = useMemo(
+    () =>
+      selectPrimaryActiveDomain(
+        domains
+          // Literally the same predicate the server's getActiveDomainRecords
+          // applies, so the badge can never disagree with what the published
+          // site canonicalizes.
+          .filter((d) => d.status === 'active' && isEligibleForPrimaryHost(d))
+          .map((d) => ({ id: d.id, hostname: d.hostname, createdAt: new Date(d.createdAt), isPrimary: d.isPrimary })),
+      )?.id ?? null,
+    [domains],
+  );
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-start justify-between">
+          <div>
+            <CardTitle className="flex items-center gap-2">
+              <Globe className="h-4 w-4" />
+              Custom Domains
+            </CardTitle>
+            <CardDescription>
+              Point your own domain at this drive&apos;s published canvas site
+            </CardDescription>
+          </div>
+          {limit !== null && limit > 0 && (
+            <span className="text-xs text-muted-foreground tabular-nums mt-1">
+              {domains.length} / {limit}
+            </span>
+          )}
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {notAvailable ? (
+          <p className="text-sm text-muted-foreground">
+            Custom domains are available on Pro and higher plans.
+          </p>
+        ) : (
+          <div className="flex gap-2">
+            <Label htmlFor="new-custom-domain" className="sr-only">Custom domain</Label>
+            <Input
+              id="new-custom-domain"
+              placeholder="e.g. docs.acme.com or acme.com"
+              value={newDomain}
+              onChange={(e) => onNewDomainChange(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && !addDisabled && onAdd()}
+              className="flex-1"
+              disabled={atCap}
+            />
+            <Button onClick={onAdd} disabled={addDisabled}>
+              {isAdding ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+              Add
+            </Button>
+          </div>
+        )}
+
+        {atCap && !notAvailable && (
+          <p className="text-xs text-muted-foreground">
+            Domain limit reached ({domains.length} / {limit}). Remove a domain to add another.
+          </p>
+        )}
+
+        {showPrimaryControls && (
+          <p className="text-xs text-muted-foreground">
+            The primary domain is used as the canonical address for SEO and is the link shown on your published Canvas pages.
+          </p>
+        )}
+
+        {domains.length > 0 ? (
+          <div className="space-y-3">
+            {domains.map((domain) => (
+              <DomainRow
+                key={domain.id}
+                driveId={driveId}
+                domain={domain}
+                apps={apps}
+                onRemove={onRemove}
+                onVerify={onVerify}
+                onRefreshCert={onRefreshCert}
+                onSetPrimary={onSetPrimary}
+                onSetLandingPage={onSetLandingPage}
+                onSetNotFoundPage={onSetNotFoundPage}
+                onSetTarget={onSetTarget}
+                showPrimaryControls={showPrimaryControls}
+                isEffectivePrimary={domain.id === effectivePrimaryId}
+                isRemoving={removingId === domain.id}
+                isVerifying={verifyingId === domain.id}
+                isRefreshingCert={refreshingCertId === domain.id}
+                isSettingPrimary={settingPrimaryId === domain.id}
+                isSettingTarget={settingTargetId === domain.id}
+                anyBusy={anyBusy}
+                verifyReason={verifyReasons[domain.id]}
+              />
+            ))}
+          </div>
+        ) : (
+          !notAvailable && <p className="text-sm text-muted-foreground">No custom domains yet</p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function DomainRow({
+  driveId,
+  domain,
+  apps,
+  onRemove,
+  onVerify,
+  onRefreshCert,
+  onSetPrimary,
+  onSetLandingPage,
+  onSetNotFoundPage,
+  onSetTarget,
+  showPrimaryControls,
+  isEffectivePrimary,
+  isRemoving,
+  isVerifying,
+  isRefreshingCert,
+  isSettingPrimary,
+  isSettingTarget,
+  anyBusy,
+  verifyReason,
+}: {
+  driveId: string;
+  domain: CustomDomain;
+  apps: DriveAppOption[];
+  onRemove: (id: string) => void;
+  onVerify: (id: string) => void;
+  onRefreshCert: (id: string) => void;
+  onSetPrimary: (id: string) => void;
+  onSetLandingPage: (domainId: string, pageId: string | null) => void;
+  onSetNotFoundPage: (domainId: string, pageId: string | null) => void;
+  onSetTarget: (domainId: string, publishedAppId: string | null) => void;
+  showPrimaryControls: boolean;
+  isEffectivePrimary: boolean;
+  isRemoving: boolean;
+  isVerifying: boolean;
+  isRefreshingCert: boolean;
+  isSettingPrimary: boolean;
+  isSettingTarget: boolean;
+  anyBusy: boolean;
+  verifyReason: string | undefined;
+}) {
+  const [showDns, setShowDns] = useState(false);
+  const instructions = buildDnsInstructions({
+    hostname: domain.hostname,
+    edgeIpv4: EDGE_IPV4,
+    edgeIpv6: EDGE_IPV6,
+    cnameTarget: CNAME_TARGET,
+  });
+
+  const statusBadge = () => {
+    if (domain.status === 'active') {
+      return (
+        <Badge variant="secondary" className="text-xs text-green-600 gap-1">
+          <Lock className="h-3 w-3" />
+          Active
+        </Badge>
+      );
+    }
+    if (domain.status === 'provisioning') {
+      return (
+        <Badge variant="secondary" className="text-xs gap-1">
+          <Loader2 className="h-3 w-3 animate-spin" />
+          Provisioning SSL
+        </Badge>
+      );
+    }
+    if (domain.status === 'verified') {
+      return (
+        <Badge variant="secondary" className="text-xs text-green-600 gap-1">
+          <CheckCircle2 className="h-3 w-3" />
+          DNS Verified
+        </Badge>
+      );
+    }
+    if (domain.status === 'dns_failed') {
+      return (
+        <Badge variant="secondary" className="text-xs text-destructive gap-1">
+          <XCircle className="h-3 w-3" />
+          DNS Failed
+        </Badge>
+      );
+    }
+    if (domain.status === 'cert_failed') {
+      return (
+        <Badge variant="secondary" className="text-xs text-orange-600 gap-1">
+          <XCircle className="h-3 w-3" />
+          SSL Failed
+        </Badge>
+      );
+    }
+    if (domain.status === 'failed') {
+      return (
+        <Badge variant="secondary" className="text-xs text-destructive gap-1">
+          <XCircle className="h-3 w-3" />
+          DNS Failed
+        </Badge>
+      );
+    }
+    return (
+      <Badge variant="secondary" className="text-xs">
+        Pending DNS
+      </Badge>
+    );
+  };
+
+  const showVerifyButton = domain.status === 'pending' || domain.status === 'failed' || domain.status === 'dns_failed';
+  const showCertButton = domain.status === 'verified' || domain.status === 'provisioning' || domain.status === 'cert_failed';
+
+  return (
+    <div className="border rounded-md p-3 space-y-2">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 min-w-0">
+          <Globe className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+          <span className="text-sm font-medium truncate">{domain.hostname}</span>
+          {statusBadge()}
+          {showPrimaryControls && isEffectivePrimary && (
+            <Badge variant="secondary" className="text-xs gap-1">
+              <Star className="h-3 w-3 fill-current" />
+              Primary
+            </Badge>
+          )}
+        </div>
+        <div className="flex items-center gap-1 flex-shrink-0">
+          {showPrimaryControls && domain.status === 'active' && !isEffectivePrimary && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="text-xs h-7"
+              onClick={() => onSetPrimary(domain.id)}
+              disabled={anyBusy}
+              aria-label={`Make ${domain.hostname} the primary domain`}
+            >
+              {isSettingPrimary ? (
+                <Loader2 className="h-3 w-3 animate-spin mr-1" />
+              ) : (
+                <Star className="h-3 w-3 mr-1" />
+              )}
+              Make primary
+            </Button>
+          )}
+          {showVerifyButton && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="text-xs h-7"
+              onClick={() => onVerify(domain.id)}
+              disabled={anyBusy}
+              aria-label={`Verify domain ${domain.hostname}`}
+            >
+              {isVerifying ? (
+                <Loader2 className="h-3 w-3 animate-spin mr-1" />
+              ) : (
+                <RefreshCw className="h-3 w-3 mr-1" />
+              )}
+              {(domain.status === 'failed' || domain.status === 'dns_failed') ? 'Re-check DNS' : 'Verify DNS'}
+            </Button>
+          )}
+          {showCertButton && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="text-xs h-7"
+              onClick={() => onRefreshCert(domain.id)}
+              disabled={anyBusy}
+              aria-label={`Check SSL cert for ${domain.hostname}`}
+            >
+              {isRefreshingCert ? (
+                <Loader2 className="h-3 w-3 animate-spin mr-1" />
+              ) : (
+                <Lock className="h-3 w-3 mr-1" />
+              )}
+              {domain.status === 'provisioning' ? 'Check SSL' : domain.status === 'cert_failed' ? 'Retry SSL' : 'Provision SSL'}
+            </Button>
+          )}
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-xs h-7"
+            onClick={() => setShowDns((p) => !p)}
+          >
+            {showDns ? 'Hide DNS' : 'Show DNS'}
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 w-7 p-0 text-destructive hover:text-destructive"
+            onClick={() => onRemove(domain.id)}
+            disabled={anyBusy}
+            aria-label={`Remove domain ${domain.hostname}`}
+          >
+            {isRemoving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
+          </Button>
+        </div>
+      </div>
+
+      {(domain.status === 'failed' || domain.status === 'dns_failed') && verifyReason && (
+        <p className="text-xs text-destructive bg-destructive/5 rounded px-2 py-1">{verifyReason}</p>
+      )}
+
+      {/*
+        A certificate waiting on an ownership TXT is the ONE cert state that never
+        resolves on its own, so the instruction has to be visible without the
+        customer first guessing to press "Check SSL". Rendered in the row, beside
+        the DNS records panel it mirrors, rather than only as a toast that takes
+        the record name and value away with it.
+      */}
+      {domain.status === 'provisioning' && domain.ownershipInstruction && (
+        <div className="bg-muted rounded p-3 space-y-2">
+          <p className="text-xs text-muted-foreground">
+            SSL is waiting on a DNS record you still need to add:
+          </p>
+          {/*
+            `break-words`, not `break-all`, and no `font-mono`: this is a prose
+            sentence with a hostname and a record value embedded in it, unlike the
+            DNS panel below, which is a table of bare field values. `break-all`
+            would chop ordinary words mid-character, and monospacing the whole
+            sentence makes it harder to read to save the few tokens that benefit.
+            `break-words` still wraps the long `_fly-ownership.<host>` label rather
+            than letting it overflow the row.
+          */}
+          <p className="text-xs break-words">{domain.ownershipInstruction}</p>
+          <p className="text-xs text-muted-foreground">
+            Once it propagates, click Check SSL — the certificate cannot be issued until this
+            record resolves.
+          </p>
+        </div>
+      )}
+
+      {showDns && (
+        <div className="bg-muted rounded p-3 space-y-2">
+          <p className="text-xs text-muted-foreground">
+            {instructions.isApex
+              ? 'Add these records at your DNS provider:'
+              : 'Add this record at your DNS provider:'}
+          </p>
+          <div className="space-y-1">
+            {instructions.records.map((r, i) => (
+              <div key={i} className="flex gap-3 text-xs font-mono">
+                <span className="w-12 text-muted-foreground">{r.type}</span>
+                <span className="w-8 text-muted-foreground">{r.name}</span>
+                <span className="break-all">{r.value}</span>
+              </div>
+            ))}
+          </div>
+          <p className="text-xs text-muted-foreground mt-2">
+            Once records propagate, click Verify DNS to confirm setup and automatically provision SSL.
+          </p>
+        </div>
+      )}
+
+      {domain.status === 'active' && (
+        <div className="grid gap-3 sm:grid-cols-2 pt-2 border-t">
+          <div className="space-y-1.5 sm:col-span-2">
+            <Label className="text-xs text-muted-foreground">Routes to</Label>
+            <Select
+              value={domain.publishedAppId ?? '__static__'}
+              onValueChange={(value) => onSetTarget(domain.id, value === '__static__' ? null : value)}
+              disabled={anyBusy}
+            >
+              <SelectTrigger className="h-9">
+                {isSettingTarget ? (
+                  <span className="flex items-center gap-2 text-sm">
+                    <Loader2 className="h-3 w-3 animate-spin" /> Updating…
+                  </span>
+                ) : (
+                  <SelectValue />
+                )}
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__static__">This drive&apos;s static site</SelectItem>
+                {apps.map((app) => (
+                  <SelectItem key={app.id} value={app.id}>
+                    {app.envName} ({app.subdomain})
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {domain.publishedAppId && !apps.some((app) => app.id === domain.publishedAppId) && (
+              <p className="text-xs text-muted-foreground">
+                This domain points at a published app that no longer exists — pick a new target or switch back to the static site.
+              </p>
+            )}
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs text-muted-foreground">Landing page</Label>
+            <PagePickerPopover
+              driveId={driveId}
+              value={domain.publishLandingPageId}
+              onChange={(pageId) => onSetLandingPage(domain.id, pageId)}
+              pageType={PageType.CANVAS}
+              placeholder="Using drive default"
+              disabled={anyBusy}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs text-muted-foreground">404 page</Label>
+            <PagePickerPopover
+              driveId={driveId}
+              value={domain.publishNotFoundPageId}
+              onChange={(pageId) => onSetNotFoundPage(domain.id, pageId)}
+              pageType={PageType.CANVAS}
+              placeholder="Using drive default"
+              disabled={anyBusy}
+            />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

@@ -3,7 +3,8 @@ import { homeDriveActionError } from '@pagespace/lib/services/drive-guards';
 import { renderAvatar } from '../../components/avatar/avatar.render';
 import { renderBadge } from '../../components/badge/badge.render';
 import { renderErrorState, renderLoadingState } from '../../frame/edge-state/edge-state.render';
-import { classicHref } from '../../frame/rail/rail-items';
+import Link from 'next/link';
+import { imagoHref } from '@/retained-adapters/navigation';
 import type { DriveActions, DriveRole, DriveSettings, ImagoAccess, Member } from '../settings-model/settings-model';
 import {
   memberEmailClass,
@@ -173,9 +174,9 @@ const membersSection = ({ drive, members, membersFailed, retryMembers }: DriveSe
       </ul>
     )}
     {drive.kind === 'HOME' ? null : (
-      <a href={classicHref(drive.id, 'members')} className={settingsLinkClass}>
-        Manage members in Classic PageSpace
-      </a>
+      <Link href={imagoHref(`/dashboard/${drive.id}/members`)} className={settingsLinkClass}>
+        Manage members
+      </Link>
     )}
   </section>
 );

@@ -49,7 +49,7 @@ const railLink = (page: Page, name: string) => rail(page).getByRole('link', { na
 const listLink = (page: Page, name: string) =>
   page.locator('[data-slot="list"]').getByRole('link', { name, exact: true });
 const thread = (page: Page, name: string) => page.getByRole('region', { name, exact: true });
-const post = (scope: Locator, text: string) => scope.getByRole('listitem').filter({ hasText: text });
+const post = (scope: Locator, text: string) => scope.getByRole('article').filter({ hasText: text });
 
 /** A probe only the same document can still carry. */
 const tagDocument = (page: Page) =>
@@ -60,7 +60,7 @@ const probeOf = (page: Page) => page.evaluate(() => (window as Probed).__probe ?
 
 /** Types into the thread's composer and sends with Enter, then waits for apps/web to store it. */
 const send = async (scope: Locator, text: string): Promise<void> => {
-  const composer = scope.getByRole('textbox');
+  const composer = scope.getByRole('combobox');
   await composer.fill(text);
   await composer.press('Enter');
   await expect(composer).toHaveValue('');
@@ -136,7 +136,8 @@ test('a channel post from one member reaches the other live, with the unread bad
   // With the channel open on both sides, the next post arrives in the reader's thread live.
   await theirs.socket.asked('join_channel', channelId);
   await send(thread(mine.page, '# general'), 'second light');
-  await expect(post(reading, 'second light')).toContainText(poster.name);
+  await expect(post(reading, 'second light')).toBeVisible();
+  await expect(post(reading, 'first light')).toContainText(poster.name);
   expect(await probeOf(theirs.page), 'the reader’s page reloaded').toBe('same document');
 });
 
@@ -166,7 +167,8 @@ test('a DM round-trips a message both ways', async ({ browser, baseURL }) => {
   await signIn(theirs.page, reader, dm);
   await hydrated(theirs.page);
   const readerThread = thread(theirs.page, poster.name);
-  await expect(readerThread).toContainText(`No messages with ${poster.name} yet.`);
+  await expect(readerThread.getByRole('combobox')).toBeEditable();
+  await expect(readerThread.getByRole('article')).toHaveCount(0);
   await theirs.socket.asked('join_dm_conversation', conversation.id);
   await tagDocument(theirs.page);
 
@@ -174,7 +176,8 @@ test('a DM round-trips a message both ways', async ({ browser, baseURL }) => {
   await mine.page.goto(dm);
   await hydrated(mine.page);
   const posterThread = thread(mine.page, reader.name);
-  await expect(posterThread).toContainText(`No messages with ${reader.name} yet.`);
+  await expect(posterThread.getByRole('combobox')).toBeEditable();
+  await expect(posterThread.getByRole('article')).toHaveCount(0);
   await mine.socket.asked('join_dm_conversation', conversation.id);
   await tagDocument(mine.page);
   await send(posterThread, 'are you there?');

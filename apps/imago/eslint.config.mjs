@@ -51,6 +51,9 @@ const eslintConfig = [
   // and duplicate classes fail here.
   {
     files: ["src/**/*.tsx", "src/**/*-class.ts"],
+    // Retained feature JSX is checked against its separately scoped classic
+    // stylesheet. The Imago shell keeps the original strict token lock.
+    ignores: ["src/retained/**", "src/retained-adapters/**"],
     plugins: { "better-tailwindcss": betterTailwind },
     settings: { "better-tailwindcss": { entryPoint } },
     rules: {
@@ -80,6 +83,17 @@ const eslintConfig = [
           ],
         },
       ],
+    },
+  },
+  {
+    files: ["src/retained/**/*.tsx", "src/retained-adapters/**/*.tsx"],
+    plugins: { "better-tailwindcss": betterTailwind },
+    settings: { "better-tailwindcss": { entryPoint: join(__dirname, "src/retained-adapters/retained.source.css") } },
+    rules: {
+      // Literal custom CSS selectors / semantic markers in the retained styles,
+      // plus a type-index string the analyzer sees inside a cn() expression.
+      "better-tailwindcss/no-unknown-classes": ["error", { ignore: ["^(dark|prose-xs|prose-red|find-highlight|find-highlight-current|not-prose|print-page-number|breadcrumb|editor-readonly|middle-section-scroll|holographic-card|liquid-glass-thin|toaster|status)$"] }],
+      "better-tailwindcss/no-duplicate-classes": "error",
     },
   },
   // Variant class modules hold nothing but class strings, under whatever

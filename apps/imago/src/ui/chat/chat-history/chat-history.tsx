@@ -5,6 +5,7 @@
 // for its latest), grouped by the viewer's day. Picking one or New chat only
 // changes shell state, so the pane, its composer and the rail stay mounted.
 
+import { useRetainedChatSelection } from '@/retained-adapters/session-selection';
 import { useEffect, useRef, useState } from 'react';
 import { useUiState } from '@/ui/store/store';
 import type { UiState } from '@/ui/store/state';
@@ -63,8 +64,8 @@ export function ChatHistory() {
   return renderChatHistory({
     list,
     activeId,
-    selectConversation: (conversationId) => dispatch(transactions.openConversation, conversationId),
-    startNewChat: () => dispatch(transactions.startNewChat, undefined),
+    selectConversation: (conversationId) => { useRetainedChatSelection.getState().select(null); dispatch(transactions.openConversation, conversationId); },
+    startNewChat: () => { useRetainedChatSelection.getState().select(null); dispatch(transactions.startNewChat, undefined); },
     hide: () => dispatch(transactions.collapseSection, 'chat'),
     loadMore: () => void loadMore(),
     retry: () => void revalidate(),

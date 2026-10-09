@@ -169,7 +169,7 @@ jobs:
 
     services:
       postgres:
-        image: postgres:17-alpine
+        image: mirror.gcr.io/library/postgres:17-alpine
         env:
           POSTGRES_DB: pagespace_test
           POSTGRES_USER: test

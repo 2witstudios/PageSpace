@@ -1,0 +1,460 @@
+'use client';
+
+import { useId, useState, useMemo, useEffect } from 'react';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/retained/components/ui/card';
+import { Switch } from '@/retained/components/ui/switch';
+import { Label } from '@/retained/components/ui/label';
+import { Badge } from '@/retained/components/ui/badge';
+import { Button } from '@/retained/components/ui/button';
+import { Checkbox } from '@/retained/components/ui/checkbox';
+import { Skeleton } from '@/retained/components/ui/skeleton';
+import { Plug2, AlertCircle, Webhook } from 'lucide-react';
+import { toast } from 'sonner';
+import { useAgentGrants, useUserConnections, useDriveConnections } from '@/retained/hooks/useIntegrations';
+import { PageWebhooksDialog } from '@/retained/components/shared/PageWebhooksDialog';
+import { IntegrationStatusBadge } from '@/retained/components/integrations/IntegrationStatusBadge';
+import { post, put, del } from '@/retained/lib/auth/auth-fetch';
+import type { SafeConnection, SafeGrant } from '@/retained/components/integrations/types';
+import { useSocket } from '@/retained/hooks/useSocket';
+import type { AgentGrantChangedPayload } from '@/retained-adapters/ui-contracts';
+
+interface AgentIntegrationsPanelProps {
+  pageId: string;
+  driveId: string;
+}
+
+type ProviderTool = NonNullable<NonNullable<SafeGrant['connection']>['provider']>['tools'][number];
+type ProviderBundle = NonNullable<NonNullable<SafeGrant['connection']>['provider']>['toolBundles'][number];
+type ToolCategory = ProviderTool['category'];
+
+const getProviderTools = (grant: SafeGrant): ProviderTool[] =>
+  grant.connection?.provider?.tools ?? [];
+
+const getProviderBundles = (grant: SafeGrant): ProviderBundle[] =>
+  grant.connection?.provider?.toolBundles ?? [];
+
+const CATEGORY_ORDER: ToolCategory[] = ['read', 'write', 'admin', 'dangerous'];
+const CATEGORY_LABELS: Record<ToolCategory, string> = {
+  read: 'Read',
+  write: 'Write',
+  admin: 'Admin',
+  dangerous: 'Dangerous',
+};
+
+/** Bundle tool ids that actually exist on the provider's current tool list. */
+const bundleToolIds = (bundle: ProviderBundle, tools: ProviderTool[]): string[] => {
+  const valid = new Set(tools.map((t) => t.id));
+  return bundle.toolIds.filter((id) => valid.has(id));
+};
+
+const setsEqual = (a: Set<string>, b: Set<string>): boolean =>
+  a.size === b.size && [...a].every((x) => b.has(x));
+
+/** The id of the bundle exactly matching the allowed set, or null ("Custom"). */
+const activeBundleId = (
+  bundles: ProviderBundle[],
+  tools: ProviderTool[],
+  allowed: Set<string>
+): string | null =>
+  bundles.find((b) => setsEqual(allowed, new Set(bundleToolIds(b, tools))))?.id ?? null;
+
+/**
+ * Plain-English summary of what the agent can actually do. When read-only mode
+ * is on, the runtime gate drops non-read tools, so the summary mirrors that and
+ * counts only read tools — otherwise selecting a write bundle while read-only is
+ * on would misleadingly claim write access the agent can't exercise.
+ */
+const capabilitySummary = (
+  tools: ProviderTool[],
+  allowed: Set<string>,
+  readOnly: boolean
+): string => {
+  const enabled = tools.filter(
+    (t) => allowed.has(t.id) && (!readOnly || t.category === 'read')
+  );
+  if (enabled.length === 0) {
+    return readOnly
+      ? 'Read-only mode is on and no read tools are enabled — this agent can’t use the integration.'
+      : 'No tools enabled — this agent can’t use the integration.';
+  }
+  const names = enabled.map((t) => t.name);
+  const shown = names.slice(0, 6).join(', ');
+  const extra = names.length > 6 ? `, +${names.length - 6} more` : '';
+  return `This agent can use: ${shown}${extra}.`;
+};
+
+// When allowedTools is null, the runtime gate (is-tool-allowed.ts) permits every
+// non-dangerous tool but blocks dangerous ones until they are explicitly listed.
+// Mirror that here so the UI does not silently elevate dangerous tools when the
+// user makes a routine edit that promotes the implicit list to an explicit one.
+const getEffectiveAllowed = (grant: SafeGrant, tools: ProviderTool[]): Set<string> =>
+  grant.allowedTools === null
+    ? new Set(tools.filter((t) => t.category !== 'dangerous').map((t) => t.id))
+    : new Set(grant.allowedTools);
+
+export function AgentIntegrationsPanel({ pageId, driveId }: AgentIntegrationsPanelProps) {
+  const instanceId = useId();
+  const { grants, isLoading: loadingGrants, error: grantsError, mutate: mutateGrants } = useAgentGrants(pageId);
+  const { connections: userConnections, isLoading: loadingUser, error: userError } = useUserConnections();
+  const { connections: driveConnections, isLoading: loadingDrive, error: driveError } = useDriveConnections(driveId);
+  const socket = useSocket();
+
+  const [toggling, setToggling] = useState<string | null>(null);
+  const [updatingGrant, setUpdatingGrant] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!socket) return;
+    const handleGrantChanged = (payload: AgentGrantChangedPayload) => {
+      if (payload.agentId !== pageId) return;
+      mutateGrants();
+    };
+    socket.on('agent:grant_changed', handleGrantChanged);
+    return () => {
+      socket.off('agent:grant_changed', handleGrantChanged);
+    };
+  }, [socket, pageId, mutateGrants]);
+
+  const isLoading = loadingGrants || loadingUser || loadingDrive;
+  const error = grantsError || userError || driveError;
+
+  const allConnections = useMemo(() => {
+    const seen = new Map<string, SafeConnection>();
+    for (const c of userConnections) seen.set(c.id, c);
+    for (const c of driveConnections) {
+      if (!seen.has(c.id)) seen.set(c.id, c);
+    }
+    return Array.from(seen.values());
+  }, [userConnections, driveConnections]);
+
+  const grantByConnectionId = useMemo(
+    () => new Map(grants.map((g) => [g.connectionId, g])),
+    [grants]
+  );
+
+  const handleToggle = async (connection: SafeConnection, enabled: boolean) => {
+    setToggling(connection.id);
+    try {
+      if (enabled) {
+        await post(`/api/agents/${pageId}/integrations`, {
+          connectionId: connection.id,
+        });
+        toast.success(`Enabled ${connection.name}`);
+      } else {
+        const grant = grantByConnectionId.get(connection.id);
+        if (grant) {
+          await del(`/api/agents/${pageId}/integrations/${grant.id}`);
+          toast.success(`Disabled ${connection.name}`);
+        }
+      }
+      mutateGrants();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to update');
+    } finally {
+      setToggling(null);
+    }
+  };
+
+  const handleUpdateGrant = async (grant: SafeGrant, updates: {
+    readOnly?: boolean;
+    allowedTools?: string[] | null;
+  }) => {
+    setUpdatingGrant(grant.id);
+    try {
+      await put(`/api/agents/${pageId}/integrations/${grant.id}`, updates);
+      mutateGrants();
+    } catch {
+      toast.error('Failed to update grant settings');
+    } finally {
+      setUpdatingGrant(null);
+    }
+  };
+
+  const handleToggleTool = (grant: SafeGrant, toolId: string, checked: boolean) => {
+    const tools = getProviderTools(grant);
+    const current = getEffectiveAllowed(grant, tools);
+    if (checked) {
+      current.add(toolId);
+    } else {
+      current.delete(toolId);
+    }
+    handleUpdateGrant(grant, {
+      allowedTools: tools.filter((t) => current.has(t.id)).map((t) => t.id),
+    });
+  };
+
+  const handleSelectAllTools = (grant: SafeGrant) => {
+    const tools = getProviderTools(grant);
+    const allIds = tools.map((t) => t.id);
+    const current = grant.allowedTools;
+    if (current && current.length === allIds.length && allIds.every((id) => current.includes(id))) return;
+    handleUpdateGrant(grant, { allowedTools: allIds });
+  };
+
+  const handleDeselectAllTools = (grant: SafeGrant) => {
+    if (Array.isArray(grant.allowedTools) && grant.allowedTools.length === 0) return;
+    handleUpdateGrant(grant, { allowedTools: [] });
+  };
+
+  const handleApplyBundle = (grant: SafeGrant, bundle: ProviderBundle) => {
+    const tools = getProviderTools(grant);
+    handleUpdateGrant(grant, { allowedTools: bundleToolIds(bundle, tools) });
+  };
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-lg">
+            <Plug2 className="h-4 w-4" />
+            Integration Tools
+          </CardTitle>
+          <CardDescription>
+            Enable external integrations and choose which of their tools the agent can use.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {isLoading ? (
+            <div className="space-y-3">
+              <Skeleton className="h-12 w-full" />
+              <Skeleton className="h-12 w-full" />
+            </div>
+          ) : error ? (
+            <div className="flex items-center gap-2 p-4 text-sm text-destructive bg-destructive/10 rounded-lg">
+              <AlertCircle className="h-4 w-4" />
+              <span>Failed to load integrations</span>
+            </div>
+          ) : allConnections.length === 0 ? (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground py-4">
+              <AlertCircle className="h-4 w-4 flex-shrink-0" />
+              <span>
+                No integrations available. Connect integrations in Settings &rarr; Integrations.
+              </span>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {allConnections.map((connection) => {
+                const grant = grantByConnectionId.get(connection.id);
+                const isEnabled = !!grant;
+                const isActive = connection.status === 'active';
+                const tools = grant ? getProviderTools(grant) : [];
+                const allowed = grant ? getEffectiveAllowed(grant, tools) : new Set<string>();
+                const bundles = grant ? getProviderBundles(grant) : [];
+                const activeBundle = grant ? activeBundleId(bundles, tools, allowed) : null;
+
+                return (
+                  <div key={connection.id} className="border rounded-lg">
+                    <div className="flex items-center justify-between p-3">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="p-1.5 rounded-full bg-muted flex-shrink-0">
+                          <Plug2 className="h-3.5 w-3.5 text-muted-foreground" />
+                        </div>
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-medium truncate">{connection.name}</span>
+                            <IntegrationStatusBadge status={connection.status} />
+                            {connection.visibility && (
+                              <Badge variant="outline" className="text-[10px] px-1 py-0">
+                                {connection.visibility === 'private' ? 'User' : 'Drive'}
+                              </Badge>
+                            )}
+                          </div>
+                          {connection.provider && (
+                            <p className="text-xs text-muted-foreground">{connection.provider.name}</p>
+                          )}
+                        </div>
+                      </div>
+                      <Switch
+                        checked={isEnabled}
+                        disabled={!isActive || toggling === connection.id}
+                        onCheckedChange={(checked) => handleToggle(connection, checked)}
+                        aria-label={`Enable ${connection.name} integration`}
+                      />
+                    </div>
+
+                    {grant && (
+                      <div className="border-t px-3 py-3 space-y-3 bg-muted/30">
+                        <div className="flex items-center justify-between">
+                          <Label htmlFor={`readonly-${instanceId}-${grant.id}`} className="text-xs">
+                            Read-only mode
+                          </Label>
+                          <Switch
+                            id={`readonly-${instanceId}-${grant.id}`}
+                            checked={grant.readOnly}
+                            disabled={updatingGrant === grant.id}
+                            onCheckedChange={(readOnly) => handleUpdateGrant(grant, { readOnly })}
+                          />
+                        </div>
+
+                        <div className="space-y-3">
+                          <div className="flex items-center justify-between gap-2">
+                            <Label className="text-xs">Tools</Label>
+                            {bundles.length === 0 && (
+                              <div className="flex space-x-2">
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  disabled={updatingGrant === grant.id || tools.length === 0}
+                                  onClick={() => handleSelectAllTools(grant)}
+                                >
+                                  Select All
+                                </Button>
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  disabled={updatingGrant === grant.id || tools.length === 0}
+                                  onClick={() => handleDeselectAllTools(grant)}
+                                >
+                                  Deselect All
+                                </Button>
+                              </div>
+                            )}
+                          </div>
+
+                          {bundles.length > 0 && (
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              {bundles.map((bundle) => (
+                                <Button
+                                  key={bundle.id}
+                                  type="button"
+                                  size="sm"
+                                  variant={activeBundle === bundle.id ? 'default' : 'outline'}
+                                  disabled={updatingGrant === grant.id || tools.length === 0}
+                                  onClick={() => handleApplyBundle(grant, bundle)}
+                                  title={bundle.description}
+                                >
+                                  {bundle.name}
+                                </Button>
+                              ))}
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant={allowed.size === 0 ? 'default' : 'outline'}
+                                disabled={updatingGrant === grant.id || tools.length === 0}
+                                onClick={() => handleDeselectAllTools(grant)}
+                              >
+                                None
+                              </Button>
+                              {activeBundle === null && allowed.size > 0 && (
+                                <Badge variant="secondary" className="text-[10px]">
+                                  Custom
+                                </Badge>
+                              )}
+                            </div>
+                          )}
+
+                          {tools.length === 0 ? (
+                            <p className="text-xs text-muted-foreground py-2">
+                              This integration does not expose any tools.
+                            </p>
+                          ) : (
+                            <>
+                              <p className="text-xs text-muted-foreground">
+                                {capabilitySummary(tools, allowed, grant.readOnly)}
+                              </p>
+                              <div className="space-y-3">
+                                {CATEGORY_ORDER.map((category) => {
+                                  const toolsInCategory = tools.filter((t) => t.category === category);
+                                  if (toolsInCategory.length === 0) return null;
+                                  return (
+                                    <div key={category} className="space-y-1">
+                                      <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                                        {CATEGORY_LABELS[category]}
+                                      </p>
+                                      {toolsInCategory.map((tool) => {
+                                        const id = `tool-${instanceId}-${grant.id}-${tool.id}`;
+                                        return (
+                                          <div
+                                            key={tool.id}
+                                            className="flex items-start space-x-3 p-2 rounded-lg hover:bg-muted/50"
+                                          >
+                                            <Checkbox
+                                              id={id}
+                                              checked={allowed.has(tool.id)}
+                                              disabled={updatingGrant === grant.id}
+                                              onCheckedChange={(checked) =>
+                                                handleToggleTool(grant, tool.id, checked === true)
+                                              }
+                                              className="mt-1"
+                                            />
+                                            <div className="flex-1">
+                                              <label
+                                                htmlFor={id}
+                                                className="text-sm font-medium cursor-pointer"
+                                              >
+                                                {tool.name}
+                                              </label>
+                                              <p className="text-xs text-muted-foreground">
+                                                {tool.description}
+                                              </p>
+                                            </div>
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                              <p className="text-xs text-muted-foreground">
+                                Selected {allowed.size} of {tools.length} tools
+                              </p>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <IncomingWebhooksCard pageId={pageId} />
+    </div>
+  );
+}
+
+/**
+ * Incoming webhooks — an EXTERNAL service calling this agent, which is what
+ * makes it an integration rather than page chrome. It used to be an icon button
+ * in the AI_CHAT page's own header; that header is gone (it carried a duplicate
+ * copy of the pane bar's Chat/History/Settings tabs), and this is where it
+ * belongs. Living here also gives the agents CONSOLE a webhooks entry point,
+ * which it never had.
+ *
+ * Still the shared dialog rather than an inline panel: `PageWebhooksDialog`
+ * parks a revealed secret in module state keyed on its own open/close, and
+ * `ChannelView` renders the same component — one behaviour, one implementation.
+ */
+function IncomingWebhooksCard({ pageId }: { pageId: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-lg">
+          <Webhook className="h-4 w-4" />
+          Incoming Webhooks
+        </CardTitle>
+        <CardDescription>
+          Give an external service a URL that starts a conversation with this agent.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        {/* `type="button"` is load-bearing, not decoration: this card renders
+            INSIDE PageAgentSettingsTab's <form>, where a typeless button
+            defaults to submit and would save the whole agent config on the way
+            to opening a dialog. */}
+        <Button type="button" variant="outline" size="sm" onClick={() => setOpen(true)}>
+          Manage webhooks
+        </Button>
+        {/* Owner/admin is enforced inside the dialog, which explains the
+            requirement rather than hiding the feature — the same reason the
+            header button it replaces was deliberately ungated. */}
+        <PageWebhooksDialog open={open} onOpenChange={setOpen} pageId={pageId} pageType="AI_CHAT" />
+      </CardContent>
+    </Card>
+  );
+}

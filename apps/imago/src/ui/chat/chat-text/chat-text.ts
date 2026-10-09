@@ -58,11 +58,6 @@ export const citedPageId = (href: string | undefined): string | null => {
   return isPageId(id) ? id : null;
 };
 
-/**
- * A cited page in its drive's files section; Next's basePath puts it under
- * /imago. A mention names only the page, so the caller passes the drive the
- * chat is in: a page cited from another drive gets that drive's address until
- * the files route (IMG-7.x) resolves a page's own drive.
- */
-export const citationHref = (driveId: string, pageId: string): string =>
-  `/${encodeURIComponent(driveId)}/files/${encodeURIComponent(pageId)}`;
+/** Resolve a citation's authorized actual drive instead of assuming the chat drive. */
+export const citationHref = (_driveId: string | null, pageId: string): string =>
+  `/p/${encodeURIComponent(pageId)}`;

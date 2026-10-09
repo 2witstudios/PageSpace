@@ -1,0 +1,184 @@
+'use client';
+
+import React, { memo, useCallback, useMemo, useState } from 'react';
+import { EditableTitle } from './EditableTitle';
+import { Breadcrumbs } from './Breadcrumbs';
+import { EditorToggles } from './EditorToggles';
+import { PageSetupButton } from './PageSetupButton';
+import { SaveStatusIndicator } from './SaveStatusIndicator';
+import { ShareDialog } from './page-settings/ShareDialog';
+import { usePageTree } from '@/retained/hooks/usePageTree';
+import { findNodeAndParent } from '@/retained/lib/tree/tree-utils';
+import { useParams } from '@/retained-adapters/navigation';
+import { usePageStore } from '@/retained/hooks/usePage';
+import { Button } from '@/retained/components/ui/button';
+import { Download } from 'lucide-react';
+import { isDocumentPage, isFilePage, isSheetPage, isCodePage, isPublishablePageType } from '@pagespace/lib/content/page-types.config';
+import { ExportDropdown } from './ExportDropdown';
+import PublishControls from './PublishControls';
+import { fetchWithAuth } from '@/retained/lib/auth/auth-fetch';
+import { useMobile } from '@/retained/hooks/useMobile';
+import { useDocumentManagerStore } from '@/retained/stores/useDocumentManagerStore';
+import { usePagePresence } from '@/retained/hooks/usePagePresence';
+import { PageViewers } from '@/retained/components/common/PageViewers';
+
+interface ContentHeaderProps {
+  children?: React.ReactNode;
+  pageId?: string | null;
+}
+
+const DocumentSaveStatus = memo(function DocumentSaveStatus({
+  pageId,
+  enabled,
+}: {
+  pageId: string | null;
+  enabled: boolean;
+}) {
+  const selectIsDirty = useCallback(
+    (state: ReturnType<typeof useDocumentManagerStore.getState>) =>
+      pageId ? state.documents.get(pageId)?.isDirty ?? false : false,
+    [pageId]
+  );
+  const selectIsSaving = useCallback(
+    (state: ReturnType<typeof useDocumentManagerStore.getState>) =>
+      pageId ? state.savingDocuments.has(pageId) : false,
+    [pageId]
+  );
+
+  const isDirty = useDocumentManagerStore(selectIsDirty);
+  const isSaving = useDocumentManagerStore(selectIsSaving);
+
+  if (!enabled || !pageId) {
+    return null;
+  }
+
+  return <SaveStatusIndicator isDirty={isDirty} isSaving={isSaving} />;
+});
+
+const HeaderPublishControls = memo(function HeaderPublishControls({
+  pageId,
+}: {
+  pageId: string;
+}) {
+  const selectIsDirty = useCallback(
+    (state: ReturnType<typeof useDocumentManagerStore.getState>) =>
+      state.documents.get(pageId)?.isDirty ?? false,
+    [pageId]
+  );
+  const contentDirty = useDocumentManagerStore(selectIsDirty);
+
+  return <PublishControls pageId={pageId} contentDirty={contentDirty} />;
+});
+
+export function ViewHeader({ children, pageId: propPageId }: ContentHeaderProps = {}) {
+  const params = useParams();
+  const storePageId = usePageStore((state) => state.pageId);
+  const pageId = propPageId !== undefined ? propPageId : storePageId;
+  const driveId = params.driveId as string;
+  const { tree } = usePageTree(driveId);
+  const [isDownloading, setIsDownloading] = useState(false);
+  const isMobile = useMobile();
+
+  const page = useMemo(() => {
+    if (!pageId) {
+      return null;
+    }
+    return findNodeAndParent(tree, pageId)?.node ?? null;
+  }, [tree, pageId]);
+
+  const pageIsDocument = page ? isDocumentPage(page.type) : false;
+  const pageIsSheet = page ? isSheetPage(page.type) : false;
+  const pageIsFile = page ? isFilePage(page.type) : false;
+  const pageIsCode = page ? isCodePage(page.type) : false;
+  const showSaveStatus = (pageIsDocument || pageIsSheet || pageIsCode) && !isMobile;
+
+  // Track and display presence (who else is viewing this page)
+  usePagePresence(pageId);
+
+  // Handle file download
+  const handleDownload = useCallback(async () => {
+    if (!page || !pageIsFile) return;
+
+    setIsDownloading(true);
+    try {
+      // Two-step fetch: get the presigned URL as JSON, then fetch it without
+      // credentials. Letting fetchWithAuth follow the 307 into Tigris fails
+      // CORS — its credentialed mode needs Access-Control-Allow-Credentials,
+      // which the bucket never sends.
+      const response = await fetchWithAuth(`/api/files/${page.id}/download`, {
+        headers: { Accept: 'application/json' },
+      });
+      if (!response.ok) {
+        throw new Error('Failed to download file');
+      }
+      const { url: presignedUrl } = await response.json() as { url: string };
+
+      const fileRes = await fetch(presignedUrl);
+      if (!fileRes.ok) {
+        throw new Error(`Failed to download file bytes: ${fileRes.status}`);
+      }
+      const blob = await fileRes.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = window.document.createElement('a');
+      a.href = url;
+      a.download = page.originalFileName || page.title;
+      window.document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      window.document.body.removeChild(a);
+    } catch (error) {
+      console.error('Download error:', error);
+    } finally {
+      setIsDownloading(false);
+    }
+  }, [page, pageIsFile]);
+
+  return (
+    <div className="flex flex-col gap-1 @[400px]:gap-2 p-2 @[400px]:p-4 border-b border-[var(--separator)]">
+      <Breadcrumbs pageId={pageId} />
+      <div className="flex items-center justify-between gap-2 min-w-0">
+        <div className="flex items-center gap-2 min-w-0 flex-1">
+          <EditableTitle pageId={pageId} />
+          <DocumentSaveStatus pageId={page?.id ?? null} enabled={showSaveStatus} />
+        </div>
+        {/* One row that scrolls rather than wraps: wrapping cost the content
+            below a whole header row on a narrow pane. Not an overflow menu —
+            ShareDialog, ExportDropdown and PublishControls are dialog triggers,
+            and a DropdownMenu unmounts the dialog when it closes. And no
+            `justify-end`: end-aligning an overflow container pushes the excess
+            past the inline-start edge, where scrollLeft cannot reach it. The
+            `py-1 -my-1` is not spacing: `overflow-x-auto` makes overflow-y
+            compute to `auto` too, which would clip the buttons' 3px focus
+            rings — the padding gives them room, the margin takes the row's
+            height back. */}
+        <div className="flex items-center gap-1 @[400px]:gap-2 min-w-0 py-1 -my-1 overflow-x-auto scrollbar-none">
+          {pageIsDocument && <EditorToggles />}
+          {pageIsDocument && page && <PageSetupButton pageId={page.id} />}
+          {(pageIsDocument || pageIsSheet) && page && (
+            <ExportDropdown pageId={page.id} pageTitle={page.title} pageType={page.type} />
+          )}
+          {pageIsFile && (
+            <Button
+              onClick={handleDownload}
+              disabled={isDownloading}
+              variant="ghost"
+              size={isMobile ? "icon" : "sm"}
+            >
+              <Download className={isMobile ? "h-4 w-4" : "mr-2 h-4 w-4"} />
+              {!isMobile && (isDownloading ? 'Downloading...' : 'Download')}
+            </Button>
+          )}
+          {page && isPublishablePageType(page.type) && (
+            // Keyed on pageId so navigating to a different page remounts the
+            // control instead of reusing local UI state (e.g. an open Publish
+            // Settings dialog) across pages.
+            <HeaderPublishControls key={page.id} pageId={page.id} />
+          )}
+          <PageViewers pageId={pageId} />
+          <ShareDialog pageId={pageId} />
+          {children}
+        </div>
+      </div>
+    </div>
+  );
+}

@@ -1,0 +1,110 @@
+/**
+ * useProviderSettings - Shared hook for AI provider configuration
+ * Used by both Agent engine and Global Assistant engine
+ */
+
+import { useState, useEffect, useCallback } from 'react';
+import { fetchWithAuth } from '@/retained/lib/auth/auth-fetch';
+import { DEFAULT_PROVIDER } from '@/retained/lib/ai/core/ai-providers-config';
+import type { ProviderSettings } from '../chat-types';
+
+interface UseProviderSettingsOptions {
+  /**
+   * Optional page ID for page-specific settings
+   */
+  pageId?: string;
+}
+
+interface UseProviderSettingsResult {
+  /** Whether provider settings are still loading */
+  isLoading: boolean;
+  /** Provider settings from backend */
+  providerSettings: ProviderSettings | null;
+  /** Whether any provider is configured */
+  isAnyProviderConfigured: boolean;
+  /** Whether settings require setup (no providers configured) */
+  needsSetup: boolean;
+  /** Selected provider */
+  selectedProvider: string;
+  /** Set selected provider */
+  setSelectedProvider: (provider: string) => void;
+  /** Selected model */
+  selectedModel: string;
+  /** Set selected model */
+  setSelectedModel: (model: string) => void;
+  /** Check if a specific provider is configured */
+  isProviderConfigured: (provider: string) => boolean;
+  /** Reload provider settings */
+  refresh: () => Promise<void>;
+}
+
+/**
+ * Hook for managing AI provider settings
+ * Handles loading, caching, and checking provider configuration
+ */
+export function useProviderSettings({
+  pageId,
+}: UseProviderSettingsOptions = {}): UseProviderSettingsResult {
+  const [isLoading, setIsLoading] = useState(true);
+  const [providerSettings, setProviderSettings] = useState<ProviderSettings | null>(null);
+  const [selectedProvider, setSelectedProvider] = useState<string>(DEFAULT_PROVIDER);
+  const [selectedModel, setSelectedModel] = useState<string>('');
+
+  // Load provider settings
+  const loadProviderSettings = useCallback(async () => {
+    try {
+      setIsLoading(true);
+      const endpoint = pageId ? `/api/ai/chat?pageId=${pageId}` : '/api/ai/chat';
+      const response = await fetchWithAuth(endpoint);
+
+      if (response.ok) {
+        const data: ProviderSettings = await response.json();
+        setProviderSettings(data);
+
+        // Set current provider and model from server
+        setSelectedProvider(data.currentProvider);
+        setSelectedModel(data.currentModel);
+      }
+    } catch (error) {
+      console.error('Failed to load provider settings:', error);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [pageId]);
+
+  // Load on mount
+  useEffect(() => {
+    loadProviderSettings();
+  }, [loadProviderSettings]);
+
+  // Check whether the deployment can route AI calls through the given provider.
+  // Naming retained as `isProviderConfigured` for backwards compatibility with
+  // the existing prop contract in PageAgentSettingsTab and Sidebar.
+  const isProviderConfigured = useCallback(
+    (provider: string): boolean => {
+      if (!providerSettings) return false;
+      // The availability map is keyed by the user-facing provider name (every cloud
+      // vendor resolves to the shared OpenRouter key server-side).
+      const status = providerSettings.providers[provider as keyof typeof providerSettings.providers];
+      return status?.isAvailable ?? false;
+    },
+    [providerSettings]
+  );
+
+  // Derived state
+  const isAnyProviderConfigured = providerSettings?.isAnyProviderConfigured || false;
+  const needsSetup = !isAnyProviderConfigured;
+
+  return {
+    isLoading,
+    providerSettings,
+    isAnyProviderConfigured,
+    needsSetup,
+    selectedProvider,
+    setSelectedProvider,
+    selectedModel,
+    setSelectedModel,
+    isProviderConfigured,
+    refresh: loadProviderSettings,
+  };
+}

@@ -1,0 +1,938 @@
+'use client';
+
+import { useEffect, useState, useCallback, useRef, useMemo } from 'react';
+import { useRouter, useSearchParams } from '@/retained-adapters/navigation';
+import { formatDistanceToNow } from 'date-fns';
+import {
+  RefreshCw,
+  AlertTriangle,
+  Search,
+  LayoutList,
+  Kanban,
+} from 'lucide-react';
+import {
+  DndContext,
+  DragEndEvent,
+  DragOverlay,
+  DragStartEvent,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  closestCorners,
+} from '@dnd-kit/core';
+import { Button } from '@/retained/components/ui/button';
+import { Input } from '@/retained/components/ui/input';
+import { Alert, AlertDescription, AlertTitle } from '@/retained/components/ui/alert';
+import {
+  Table,
+  TableBody,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/retained/components/ui/table';
+import { toast } from 'sonner';
+import { fetchWithAuth, patch, del } from '@/retained/lib/auth/auth-fetch';
+import { cn } from '@/retained/lib/utils';
+import { PullToRefresh } from '@/retained/components/ui/pull-to-refresh';
+import { CustomScrollArea } from '@/retained/components/ui/custom-scroll-area';
+import { useLayoutStore } from '@/retained/stores/useLayoutStore';
+import {
+  scopeKeyFor,
+  pickInitialFilters,
+  toStoredDashboardFilters,
+  type DueDateFilter,
+  type AssigneeFilter,
+  type StatusGroupFilter,
+  forFocus,
+} from './dashboardFiltersPersistence';
+import { useEditingStore } from '@/retained/stores/useEditingStore';
+import { useMobile } from '@/retained/hooks/useMobile';
+import { useCapacitor } from '@/retained/hooks/useCapacitor';
+import {
+  buildStatusConfig,
+  type TaskPriority,
+  type TaskStatusConfig,
+} from '@/retained/components/layout/middle-content/page-views/task-list/task-list-types';
+import { DEFAULT_STATUS_CONFIG, type TaskStatusGroup } from '@/retained/lib/task-status-config';
+import type { Task, TaskFilters, Pagination, StatusConfigsByTaskList } from './types';
+import { getStatusDisplay } from './task-helpers';
+import { FocusTrigger } from '@/retained/components/shared/FocusTrigger';
+import { useDriveStore } from '@/retained/hooks/useDrive';
+import { ALL_DRIVES, driveFocus, focusSectionHref, useLegacyFocusRedirect } from '@/retained/lib/dashboard/focus';
+import { FilterControls } from './FilterControls';
+import { TaskCompactRow } from './TaskCompactRow';
+import { TaskDetailSheet } from './TaskDetailSheet';
+import { TaskFilterSheet, TaskFilterButton } from './TaskFilterSheet';
+import { TaskTableRow } from './TaskTableRow';
+import { TaskLoadingSkeleton, TaskEmptyState } from './TaskStates';
+import { KanbanColumn, KanbanCard } from './TaskKanbanComponents';
+
+const STATUS_GROUPS: TaskStatusGroup[] = ['todo', 'in_progress', 'done'];
+
+interface TasksDashboardProps {
+  driveId?: string;
+}
+
+interface ExtendedFilters extends TaskFilters {
+  search?: string;
+  dueDateFilter?: DueDateFilter;
+  assigneeFilter?: AssigneeFilter;
+  statusGroup?: StatusGroupFilter;
+}
+
+export function TasksDashboard({ driveId: propDriveId }: TasksDashboardProps) {
+  const isLocked = !!propDriveId;
+  const router = useRouter();
+  const searchParams = useSearchParams();
+
+  // State
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [statusConfigsByTaskList, setStatusConfigsByTaskList] = useState<StatusConfigsByTaskList>({});
+  const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [pagination, setPagination] = useState<Pagination | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  // View mode
+  const viewMode = useLayoutStore((state) => state.taskListViewMode);
+  const setViewMode = useLayoutStore((state) => state.setTaskListViewMode);
+  const isMobile = useMobile();
+  const { isNative } = useCapacitor();
+  const isMobileTaskLayout = isMobile || isNative;
+
+  // Editing state
+  const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
+  const [editingTitle, setEditingTitle] = useState('');
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  // Mobile sheet state
+  const [detailSheetTask, setDetailSheetTask] = useState<Task | null>(null);
+  const [detailSheetOpen, setDetailSheetOpen] = useState(false);
+  const [filterSheetOpen, setFilterSheetOpen] = useState(false);
+
+  // Filter state — URL params win on mount; otherwise fall back to per-scope persisted prefs.
+  // The focus: the route's drive, or All drives. There is no in-page drive
+  // filter any more — changing drive is changing focus, via the picker.
+  const persistDashboardFilter = useLayoutStore((state) => state.setTasksDashboardFilter);
+  const [filters, setFilters] = useState<ExtendedFilters>(() => {
+    const initialScopeKey = scopeKeyFor(isLocked ? 'drive' : 'user', propDriveId);
+    const stored = useLayoutStore.getState().tasksDashboardFilters[initialScopeKey];
+    return pickInitialFilters(searchParams, stored, isLocked);
+  });
+
+  // A bookmarked `/dashboard/tasks?driveId=…` from when the drive was a filter
+  // means the same thing the drive route now means. Known before any fetch
+  // effect below, so the page never asks for the all-drives list on its way out.
+  const legacyHref = useLegacyFocusRedirect(!isLocked);
+
+  // Drive names come from the store the switcher and subtitle already read,
+  // so a row's "Drive › List" can never disagree with the focus line.
+  // Only across all drives; in a drive the rows never name it, so the
+  // dashboard does not re-render on every drive-store write there.
+  const drives = useDriveStore((state) => (isLocked ? undefined : state.drives));
+  const driveNameById = useMemo(() => new Map((drives ?? []).map((d) => [d.id, d.name])), [drives]);
+
+
+  // Track last data refresh time
+  const [lastRefreshTime, setLastRefreshTime] = useState<Date>(new Date());
+
+  // Local search state (debounced)
+  const [searchValue, setSearchValue] = useState(filters.search || '');
+  const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+
+
+  // Cleanup debounce timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (searchTimeoutRef.current) {
+        clearTimeout(searchTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  // Update URL when filters change, and persist the filter state per scope.
+  const updateUrl = useCallback((newFilters: ExtendedFilters) => {
+    const params = new URLSearchParams();
+
+    if (newFilters.status) {
+      params.set('status', newFilters.status);
+    }
+    if (newFilters.priority) {
+      params.set('priority', newFilters.priority);
+    }
+    if (newFilters.search) {
+      params.set('search', newFilters.search);
+    }
+    if (newFilters.dueDateFilter && newFilters.dueDateFilter !== 'all') {
+      params.set('dueDateFilter', newFilters.dueDateFilter);
+    }
+    if (newFilters.assigneeFilter && newFilters.assigneeFilter !== 'mine') {
+      params.set('assigneeFilter', newFilters.assigneeFilter);
+    }
+    if (newFilters.statusGroup && newFilters.statusGroup !== 'active') {
+      params.set('statusGroup', newFilters.statusGroup);
+    }
+    const queryString = params.toString();
+    const basePath = focusSectionHref(propDriveId ? driveFocus(propDriveId) : ALL_DRIVES, 'tasks');
+    const newUrl = queryString ? `${basePath}?${queryString}` : basePath;
+
+    router.replace(newUrl, { scroll: false });
+
+    const scopeKey = scopeKeyFor(isLocked ? 'drive' : 'user', propDriveId);
+    persistDashboardFilter(scopeKey, toStoredDashboardFilters(newFilters));
+  }, [router, persistDashboardFilter, isLocked, propDriveId]);
+
+  // Across all drives a bookmarked slug status is not applied (forFocus), so
+  // the address bar is brought into line with the state once, or a share or
+  // reload would assert a filter the list is not using.
+  const urlSyncedRef = useRef(false);
+  useEffect(() => {
+    if (urlSyncedRef.current || legacyHref || isLocked || !searchParams.has('status')) return;
+    urlSyncedRef.current = true;
+    updateUrl(filters);
+  }, [legacyHref, isLocked, searchParams, filters, updateUrl]);
+
+
+  // Handle search with debounce
+  const handleSearchChange = useCallback((value: string) => {
+    setSearchValue(value);
+    if (searchTimeoutRef.current) {
+      clearTimeout(searchTimeoutRef.current);
+    }
+    searchTimeoutRef.current = setTimeout(() => {
+      setFilters((prev) => {
+        const next = { ...prev, search: value || undefined };
+        updateUrl(next);
+        return next;
+      });
+    }, 300);
+  }, [updateUrl]);
+
+  // Fetch tasks
+  const fetchTasks = useCallback(
+    async (offset = 0, append = false) => {
+      if (!append) {
+        setLoading(true);
+      } else {
+        setLoadingMore(true);
+      }
+      setError(null);
+
+      try {
+        const params = new URLSearchParams();
+        params.set('context', isLocked ? 'drive' : 'user');
+        params.set('limit', '50');
+        params.set('offset', offset.toString());
+
+        if (propDriveId) {
+          params.set('driveId', propDriveId);
+        }
+        if (filters.status) {
+          params.set('status', filters.status);
+        }
+        if (filters.priority) {
+          params.set('priority', filters.priority);
+        }
+        if (filters.search) {
+          params.set('search', filters.search);
+        }
+        if (filters.dueDateFilter && filters.dueDateFilter !== 'all') {
+          params.set('dueDateFilter', filters.dueDateFilter);
+        }
+        // Handle assignee filter - 'all' shows all tasks, 'mine' (default) shows only user's tasks
+        if (filters.assigneeFilter === 'all') {
+          params.set('showAllAssignees', 'true');
+        }
+        if (filters.statusGroup && filters.statusGroup !== 'all') {
+          params.set('statusGroup', filters.statusGroup);
+        }
+
+        const response = await fetchWithAuth(`/api/tasks?${params.toString()}`);
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.error || 'Failed to fetch tasks');
+        }
+
+        const data = await response.json();
+
+        if (append) {
+          setTasks((prev) => [...prev, ...data.tasks]);
+          // Merge new configs into existing ones
+          if (data.statusConfigsByTaskList) {
+            setStatusConfigsByTaskList(prev => ({ ...prev, ...data.statusConfigsByTaskList }));
+          }
+        } else {
+          setTasks(data.tasks);
+          if (data.statusConfigsByTaskList) {
+            setStatusConfigsByTaskList(data.statusConfigsByTaskList);
+          }
+        }
+        setPagination(data.pagination);
+        setLastRefreshTime(new Date());
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Failed to fetch tasks';
+        setError(message);
+        toast.error(message);
+      } finally {
+        setLoading(false);
+        setLoadingMore(false);
+      }
+    },
+    [isLocked, propDriveId, filters]
+  );
+
+  // Fetch tasks when filters or drive changes — unless this mount is only
+  // here to redirect a legacy bookmark.
+  useEffect(() => {
+    if (legacyHref) return;
+    fetchTasks();
+  }, [legacyHref, filters, fetchTasks]);
+
+  // Register/unregister editing state for UI refresh protection
+  useEffect(() => {
+    const dashboardId = `tasks-dashboard-${isLocked ? 'drive' : 'user'}-${propDriveId || 'all'}`;
+    if (editingTaskId) {
+      useEditingStore.getState().startEditing(dashboardId, 'form', { componentName: 'TasksDashboard' });
+    } else {
+      useEditingStore.getState().endEditing(dashboardId);
+    }
+    return () => useEditingStore.getState().endEditing(dashboardId);
+  }, [editingTaskId, isLocked, propDriveId]);
+
+  // Handlers
+  const handleLoadMore = () => {
+    if (pagination?.hasMore) {
+      fetchTasks(pagination.offset + pagination.limit, true);
+    }
+  };
+
+  const handleRefresh = async () => {
+    await fetchTasks();
+  };
+
+  const handleFiltersChange = (newFilters: Partial<ExtendedFilters>) => {
+    const updated = forFocus({ ...filters, ...newFilters }, isLocked);
+    setFilters(updated);
+    updateUrl(updated);
+  };
+
+  // Helper to get status configs for a specific task
+  const getConfigsForTask = useCallback((task: Task): TaskStatusConfig[] => {
+    return statusConfigsByTaskList[task.taskListPageId ?? ''] || [];
+  }, [statusConfigsByTaskList]);
+
+  // Task update handlers
+  const handleStatusChange = async (task: Task, newStatus: string) => {
+    if (!task.taskListPageId) return;
+
+    try {
+      await patch(`/api/pages/${task.taskListPageId}/tasks/${task.id}`, { status: newStatus });
+      // Resolve status metadata from task's own configs for optimistic update
+      const configs = getConfigsForTask(task);
+      const configMap = buildStatusConfig(configs);
+      const matched = configMap[newStatus];
+      const fallback = DEFAULT_STATUS_CONFIG[newStatus];
+      setTasks(prev => prev.map(t =>
+        t.id === task.id
+          ? {
+              ...t,
+              status: newStatus,
+              statusGroup: matched?.group ?? fallback?.group ?? t.statusGroup,
+              statusLabel: matched?.label ?? fallback?.label ?? t.statusLabel,
+              statusColor: matched?.color ?? fallback?.color ?? t.statusColor,
+            }
+          : t
+      ));
+    } catch {
+      toast.error('Failed to update status');
+      fetchTasks(); // Revert on error
+    }
+  };
+
+  const handlePriorityChange = async (task: Task, newPriority: string) => {
+    if (!task.taskListPageId) return;
+
+    try {
+      await patch(`/api/pages/${task.taskListPageId}/tasks/${task.id}`, { priority: newPriority });
+      setTasks(prev => prev.map(t =>
+        t.id === task.id ? { ...t, priority: newPriority as TaskPriority } : t
+      ));
+    } catch {
+      toast.error('Failed to update priority');
+      fetchTasks();
+    }
+  };
+
+  const handleToggleComplete = async (task: Task) => {
+    const statusDisplay = getStatusDisplay(task);
+    const configs = getConfigsForTask(task);
+    const sorted = [...configs].sort((a, b) => a.position - b.position);
+    if (statusDisplay.group === 'done') {
+      const firstTodo = sorted.find(c => c.group === 'todo');
+      await handleStatusChange(task, firstTodo?.slug || 'pending');
+    } else {
+      const firstDone = sorted.find(c => c.group === 'done');
+      await handleStatusChange(task, firstDone?.slug || 'completed');
+    }
+  };
+
+  const handleStartEdit = (task: Task) => {
+    setEditingTaskId(task.id);
+    setEditingTitle(task.title);
+  };
+
+  const handleSaveTitle = async (task: Task, title: string) => {
+    if (!task.taskListPageId || !title.trim()) return;
+
+    try {
+      await patch(`/api/pages/${task.taskListPageId}/tasks/${task.id}`, { title: title.trim() });
+      setTasks(prev => prev.map(t =>
+        t.id === task.id ? { ...t, title: title.trim() } : t
+      ));
+    } catch {
+      toast.error('Failed to update task title');
+      fetchTasks();
+    }
+    setEditingTaskId(null);
+  };
+
+  const handleMultiAssigneeChange = async (task: Task, assigneeIds: { type: 'user' | 'agent'; id: string }[]) => {
+    if (!task.taskListPageId) return;
+
+    try {
+      await patch(`/api/pages/${task.taskListPageId}/tasks/${task.id}`, {
+        assigneeIds,
+      });
+      fetchTasks(); // Refetch to get updated assignee data
+    } catch {
+      toast.error('Failed to update assignees');
+      fetchTasks();
+    }
+  };
+
+  const handleDueDateChange = async (task: Task, dueDate: Date | null) => {
+    if (!task.taskListPageId) return;
+
+    try {
+      await patch(`/api/pages/${task.taskListPageId}/tasks/${task.id}`, {
+        dueDate: dueDate?.toISOString() || null,
+      });
+      setTasks(prev => prev.map(t =>
+        t.id === task.id ? { ...t, dueDate: dueDate?.toISOString() || null } : t
+      ));
+    } catch {
+      toast.error('Failed to update due date');
+      fetchTasks();
+    }
+  };
+
+  const handleDeleteTask = async (task: Task) => {
+    if (!task.taskListPageId) return;
+
+    try {
+      await del(`/api/pages/${task.taskListPageId}/tasks/${task.id}`);
+      setTasks(prev => prev.filter(t => t.id !== task.id));
+      toast.success('Task deleted');
+    } catch {
+      toast.error('Failed to delete task');
+      fetchTasks();
+    }
+  };
+
+  const handleNavigate = (task: Task) => {
+    if (task.pageId && task.driveId) {
+      router.push(`/dashboard/${task.driveId}/${task.pageId}`);
+    }
+  };
+
+  // Kanban drag-and-drop
+  const [activeTask, setActiveTask] = useState<Task | null>(null);
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: { distance: 8 },
+    })
+  );
+
+  const handleDragStart = (event: DragStartEvent) => {
+    const task = tasks.find(t => t.id === event.active.id);
+    if (task) {
+      setActiveTask(task);
+    }
+  };
+
+  const handleDragEnd = async (event: DragEndEvent) => {
+    const { active, over } = event;
+    setActiveTask(null);
+
+    if (!over) return;
+
+    const draggedTask = tasks.find(t => t.id === active.id);
+    if (!draggedTask) return;
+
+    // Determine target status group
+    let targetGroup: TaskStatusGroup | null = null;
+
+    // Check if dropped on a group column
+    if (STATUS_GROUPS.includes(over.id as TaskStatusGroup)) {
+      targetGroup = over.id as TaskStatusGroup;
+    } else {
+      // Check if dropped on a task - use that task's status group
+      const targetTask = tasks.find(t => t.id === over.id);
+      if (targetTask) {
+        targetGroup = getStatusDisplay(targetTask).group;
+      }
+    }
+
+    if (targetGroup) {
+      const currentGroup = getStatusDisplay(draggedTask).group;
+      if (currentGroup !== targetGroup) {
+        // Use task's own configs to find first status in target group
+        const configs = getConfigsForTask(draggedTask);
+        const sorted = [...configs].sort((a, b) => a.position - b.position);
+        const firstInGroup = sorted.find(c => c.group === targetGroup);
+        const fallback: Record<TaskStatusGroup, string> = { todo: 'pending', in_progress: 'in_progress', done: 'completed' };
+        await handleStatusChange(draggedTask, firstInGroup?.slug || fallback[targetGroup]);
+      }
+    }
+  };
+
+  // Group tasks by status group for kanban
+  const tasksByGroup = useMemo(() => {
+    const grouped: Record<TaskStatusGroup, Task[]> = {
+      todo: [],
+      in_progress: [],
+      done: [],
+    };
+
+    for (const task of tasks) {
+      const { group } = getStatusDisplay(task);
+      grouped[group].push(task);
+    }
+
+    return grouped;
+  }, [tasks]);
+
+  // Resolve the sheet's task against the live tasks array so edits and refetches
+  // (status, priority, trigger badge after onTriggersSaved, etc.) are reflected
+  // without closing and reopening the sheet.
+  const liveDetailSheetTask = useMemo(
+    () => (detailSheetTask ? tasks.find(t => t.id === detailSheetTask.id) ?? detailSheetTask : null),
+    [detailSheetTask, tasks],
+  );
+
+  // Loading skeleton
+  if (loading && tasks.length === 0) {
+    return (
+      <div className="h-full overflow-y-auto">
+        <div className={cn(
+          'mx-auto w-full',
+          isMobileTaskLayout
+            ? 'px-4 pt-4'
+            : 'container max-w-6xl px-4 py-10 sm:px-6 lg:px-10'
+        )}>
+          <TaskLoadingSkeleton isMobile={isMobileTaskLayout} />
+        </div>
+      </div>
+    );
+  }
+
+  // The title names the section; the focus line under it names the drive
+  // (or All drives) and is how you change it. Scope no longer lives in words.
+  const assigneeSuffix = filters.assigneeFilter === 'all' ? 'all assignees' : 'assigned to you';
+
+  // A row's list title is ambiguous across drives, so in the All drives focus
+  // the Source also names the drive. Tasks carry driveId but not the name.
+  const driveNameFor = (task: Task): string | undefined =>
+    isLocked || !task.driveId ? undefined : driveNameById.get(task.driveId);
+
+  // Note: assigneeFilter === 'all' and statusGroup !== 'active' are included because their
+  // defaults are 'mine' and 'active' respectively — deviations users may want to clear.
+  const hasActiveFilters = Boolean(
+    filters.search ||
+    filters.status ||
+    filters.priority ||
+    (filters.dueDateFilter && filters.dueDateFilter !== 'all') ||
+    filters.assigneeFilter === 'all' ||
+    (filters.statusGroup && filters.statusGroup !== 'active')
+  );
+
+  const clearFilters = () => {
+    const nextFilters: ExtendedFilters = {
+      assigneeFilter: 'mine',
+      statusGroup: 'active',
+    };
+
+    if (searchTimeoutRef.current) {
+      clearTimeout(searchTimeoutRef.current);
+      searchTimeoutRef.current = null;
+    }
+
+    setSearchValue('');
+    setFilters(nextFilters);
+    updateUrl(nextFilters);
+  };
+
+  // Count active filters for the badge on mobile filter button
+  const activeFilterCount = [
+    filters.search,
+    filters.status,
+    filters.priority,
+    filters.dueDateFilter && filters.dueDateFilter !== 'all',
+    filters.assigneeFilter === 'all',
+    filters.statusGroup && filters.statusGroup !== 'active',
+  ].filter(Boolean).length;
+
+  const handleOpenDetailSheet = (task: Task) => {
+    setDetailSheetTask(task);
+    setDetailSheetOpen(true);
+  };
+
+  return (
+    <div className="h-full flex flex-col">
+      <PullToRefresh
+        direction="top"
+        onRefresh={handleRefresh}
+      >
+        <CustomScrollArea className="h-full">
+          <div
+            className={cn(
+              'mx-auto w-full',
+              isMobileTaskLayout
+                ? 'max-w-none'
+                : 'container max-w-6xl px-4 py-10 sm:px-6 lg:px-10'
+            )}
+          >
+            {isMobileTaskLayout ? (
+              <>
+                {/* Mobile Header - compact */}
+                <div className="sticky top-0 z-10 bg-background/95 backdrop-blur-sm border-b border-border/50">
+                  {/*
+                    No Back: Home is in the header and the nav. The row is the
+                    title, the focus, refresh, filters — every button 36px.
+                  */}
+                  <div className="flex items-center gap-2 px-3 py-2.5">
+                    <div className="flex min-w-0 flex-1 items-center gap-2">
+                      <h1 className="text-base font-semibold shrink-0">Tasks</h1>
+                      <FocusTrigger section="tasks" />
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-9 w-9 shrink-0"
+                      onClick={handleRefresh}
+                      disabled={loading}
+                    >
+                      <RefreshCw className={cn('h-4 w-4', loading && 'animate-spin')} />
+                    </Button>
+                    <TaskFilterButton
+                      activeFilterCount={activeFilterCount}
+                      onClick={() => setFilterSheetOpen(true)}
+                    />
+                  </div>
+
+                  {/* Search bar */}
+                  <div className="px-3 pb-2.5">
+                    <div className="relative">
+                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                      <Input
+                        ref={searchInputRef}
+                        placeholder="Search tasks..."
+                        value={searchValue}
+                        onChange={(e) => handleSearchChange(e.target.value)}
+                        className="pl-9 h-9 text-sm bg-muted/50 border-0"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Error Alert */}
+                {error && (
+                  <Alert variant="destructive" className="mx-3 mt-3">
+                    <AlertTriangle className="h-4 w-4" />
+                    <AlertTitle>Error</AlertTitle>
+                    <AlertDescription>{error}</AlertDescription>
+                  </Alert>
+                )}
+
+                {/* Mobile Compact Task List */}
+                {tasks.length === 0 ? (
+                  <TaskEmptyState
+                    hasActiveFilters={hasActiveFilters}
+                    onClearFilters={clearFilters}
+                    isMobile
+                  />
+                ) : (
+                  <div className="divide-y divide-border/50">
+                    {tasks.map((task) => (
+                      <TaskCompactRow
+                        key={task.id}
+                        task={task}
+                        driveName={driveNameFor(task)}
+                        onToggleComplete={handleToggleComplete}
+                        onTap={handleOpenDetailSheet}
+                        // This list spans every drive the user belongs to, so
+                        // there is no single permission to apply here; the
+                        // detail sheet resolves each task's own before it
+                        // allows a write.
+                        canEdit
+                      />
+                    ))}
+                  </div>
+                )}
+
+                {/* Load More */}
+                {pagination?.hasMore && (
+                  <div className="px-4 py-4 pb-[calc(1rem+env(safe-area-inset-bottom))]">
+                    <Button
+                      onClick={handleLoadMore}
+                      variant="outline"
+                      disabled={loadingMore}
+                      className="h-10 w-full"
+                    >
+                      {loadingMore ? 'Loading...' : 'Load more'}
+                    </Button>
+                  </div>
+                )}
+
+                {/* Mobile Sheets */}
+                <TaskDetailSheet
+                  task={liveDetailSheetTask}
+                  driveName={liveDetailSheetTask ? driveNameFor(liveDetailSheetTask) : undefined}
+                  statusConfigs={liveDetailSheetTask ? getConfigsForTask(liveDetailSheetTask) : []}
+                  open={detailSheetOpen}
+                  onOpenChange={setDetailSheetOpen}
+                  onStatusChange={handleStatusChange}
+                  onPriorityChange={handlePriorityChange}
+                  onToggleComplete={handleToggleComplete}
+                  onMultiAssigneeChange={handleMultiAssigneeChange}
+                  onDueDateChange={handleDueDateChange}
+                  onSaveTitle={handleSaveTitle}
+                  onDelete={handleDeleteTask}
+                  onNavigate={handleNavigate}
+                  onTriggersSaved={() => fetchTasks()}
+                />
+                <TaskFilterSheet
+                  open={filterSheetOpen}
+                  onOpenChange={setFilterSheetOpen}
+                  scopedToDrive={isLocked}
+                  filters={filters}
+                  activeFilterCount={activeFilterCount}
+                  statusConfigsByTaskList={statusConfigsByTaskList}
+                  onFiltersChange={handleFiltersChange}
+                  onClearFilters={clearFilters}
+                />
+              </>
+            ) : (
+              <>
+                {/* Desktop Header */}
+                <div className="mb-6">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="min-w-0">
+                      <h1 className="text-2xl font-bold">Tasks</h1>
+                      <div className="flex min-w-0 items-center gap-1.5 text-sm text-muted-foreground">
+                        <FocusTrigger section="tasks" />
+                        <span aria-hidden="true">·</span>
+                        <span className="shrink-0">{assigneeSuffix}</span>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {/* View toggle */}
+                      <div className="hidden md:flex items-center bg-muted rounded-md p-0.5">
+                        <button
+                          onClick={() => setViewMode('table')}
+                          className={cn(
+                            'p-1.5 rounded transition-colors',
+                            viewMode === 'table'
+                              ? 'bg-background text-foreground shadow-sm'
+                              : 'text-muted-foreground hover:text-foreground'
+                          )}
+                          title="Table view"
+                          aria-label="Table view"
+                        >
+                          <LayoutList className="h-4 w-4" />
+                        </button>
+                        <button
+                          onClick={() => setViewMode('kanban')}
+                          className={cn(
+                            'p-1.5 rounded transition-colors',
+                            viewMode === 'kanban'
+                              ? 'bg-background text-foreground shadow-sm'
+                              : 'text-muted-foreground hover:text-foreground'
+                          )}
+                          title="Kanban view"
+                          aria-label="Kanban view"
+                        >
+                          <Kanban className="h-4 w-4" />
+                        </button>
+                      </div>
+                      <Button
+                        onClick={handleRefresh}
+                        variant="outline"
+                        size="sm"
+                        disabled={loading}
+                      >
+                        <RefreshCw className={`h-4 w-4 mr-2 ${loading ? 'animate-spin' : ''}`} />
+                        <span>Refresh</span>
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Error Alert */}
+                {error && (
+                  <Alert variant="destructive" className="mb-6">
+                    <AlertTriangle className="h-4 w-4" />
+                    <AlertTitle>Error</AlertTitle>
+                    <AlertDescription>{error}</AlertDescription>
+                  </Alert>
+                )}
+
+                {/* Desktop Filter Bar */}
+                <div className="flex flex-wrap gap-3 mb-6">
+                  {/* Search */}
+                  <div className="relative flex-1 min-w-[200px] max-w-sm">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                    <Input
+                      ref={searchInputRef}
+                      placeholder="Search tasks..."
+                      value={searchValue}
+                      onChange={(e) => handleSearchChange(e.target.value)}
+                      className="pl-9"
+                    />
+                  </div>
+
+                  <FilterControls
+                    layout="desktop"
+                    scopedToDrive={isLocked}
+                    filters={filters}
+                    hasActiveFilters={hasActiveFilters}
+                    statusConfigsByTaskList={statusConfigsByTaskList}
+                    onFiltersChange={handleFiltersChange}
+                    onClearFilters={clearFilters}
+                  />
+                </div>
+
+                {/* Desktop Tasks View */}
+                {tasks.length === 0 ? (
+                  <TaskEmptyState
+                    hasActiveFilters={hasActiveFilters}
+                    onClearFilters={clearFilters}
+                  />
+                ) : viewMode === 'kanban' ? (
+                  /* Kanban View */
+                  <DndContext
+                    sensors={sensors}
+                    collisionDetection={closestCorners}
+                    onDragStart={handleDragStart}
+                    onDragEnd={handleDragEnd}
+                  >
+                    <div className="flex gap-4 overflow-x-auto pb-4">
+                      {STATUS_GROUPS.map((group) => (
+                        <KanbanColumn
+                          key={group}
+                          statusGroup={group}
+                          tasks={tasksByGroup[group]}
+                          onToggleComplete={handleToggleComplete}
+                          onNavigate={handleNavigate}
+                          onStartEdit={handleStartEdit}
+                          onDelete={handleDeleteTask}
+                          editingTaskId={editingTaskId}
+                          editingTitle={editingTitle}
+                          onEditingTitleChange={setEditingTitle}
+                          onSaveTitle={handleSaveTitle}
+                          onCancelEdit={() => setEditingTaskId(null)}
+                        />
+                      ))}
+                    </div>
+                    <DragOverlay>
+                      {activeTask && (
+                        <KanbanCard
+                          task={activeTask}
+                          isDragging
+                          onToggleComplete={() => {}}
+                          onNavigate={() => {}}
+                          onStartEdit={() => {}}
+                          onDelete={() => {}}
+                          isEditing={false}
+                          editingTitle=""
+                          onEditingTitleChange={() => {}}
+                          onSaveTitle={() => {}}
+                          onCancelEdit={() => {}}
+                        />
+                      )}
+                    </DragOverlay>
+                  </DndContext>
+                ) : (
+                  /* Table View */
+                  <div className="border rounded-lg overflow-hidden">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead className="w-10"></TableHead>
+                          <TableHead className="min-w-[250px]">Task</TableHead>
+                          <TableHead className="w-32">Status</TableHead>
+                          <TableHead className="w-28">Priority</TableHead>
+                          <TableHead className="w-32">Assignee</TableHead>
+                          <TableHead className="w-28">Due Date</TableHead>
+                          <TableHead className="w-40">Source</TableHead>
+                          <TableHead className="w-12"></TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {tasks.map((task) => (
+                          <TaskTableRow
+                            key={task.id}
+                            task={task}
+                            driveName={driveNameFor(task)}
+                            statusConfigs={getConfigsForTask(task)}
+                            onStatusChange={handleStatusChange}
+                            onPriorityChange={handlePriorityChange}
+                            onToggleComplete={handleToggleComplete}
+                            onMultiAssigneeChange={handleMultiAssigneeChange}
+                            onDueDateChange={handleDueDateChange}
+                            onStartEdit={handleStartEdit}
+                            onSaveTitle={handleSaveTitle}
+                            onDelete={handleDeleteTask}
+                            onNavigate={handleNavigate}
+                            isEditing={editingTaskId === task.id}
+                            editingTitle={editingTitle}
+                            onEditingTitleChange={setEditingTitle}
+                            onCancelEdit={() => setEditingTaskId(null)}
+                          />
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
+
+                {/* Load More */}
+                {pagination?.hasMore && (
+                  <div className="flex justify-center pt-6">
+                    <Button
+                      onClick={handleLoadMore}
+                      variant="outline"
+                      disabled={loadingMore}
+                    >
+                      {loadingMore ? 'Loading...' : 'Load more'}
+                    </Button>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        </CustomScrollArea>
+      </PullToRefresh>
+
+      {/* Stats Footer - desktop only */}
+      {!isMobileTaskLayout && (
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 px-4 py-2 border-t bg-muted/50 text-sm text-muted-foreground">
+          <span><strong>{pagination?.total ?? tasks.length}</strong> tasks</span>
+          <span className="text-xs sm:text-sm">
+            Updated {formatDistanceToNow(lastRefreshTime, { addSuffix: true })}
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}

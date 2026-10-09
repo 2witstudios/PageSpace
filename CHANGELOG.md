@@ -9,6 +9,8 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Changed
 
+- **Imago reuses the full PageSpace feature UI** — native editors and file viewers, page creation and sharing, rich chat controls and results, messaging, tasks, agent sessions and account/drive settings now stay inside the persistent Imago shell. Classic PageSpace and rollout defaults are preserved.
+
 - **Right-sidebar chat input is a single compact card** — attach, tools, model picker and one send/stop button now share one toolbar row under the text box instead of stacking a separate model selector above it. While a reply is streaming, a queue button appears next to Stop once you've typed something, so you can still queue a follow-up on phones.
 
 ### Added

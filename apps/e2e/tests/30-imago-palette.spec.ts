@@ -149,7 +149,7 @@ test('⌘K searches the open drive and jumps to a channel, a task list, a docume
   await expect(results(page)).toHaveCount(4);
   await pick(page, `${word} agent`);
   await page.waitForURL(pathnameIs(imagoPath(alphaId)));
-  await expect(page.getByRole('combobox', { name: 'Agent' })).toHaveValue(ids.agent);
+  await expect(page.getByRole('region', { name: 'Chat', exact: true }).getByRole('combobox', { name: 'Agent', exact: true })).toHaveValue(ids.agent);
 
   // Escape closes without going anywhere.
   await openPalette(page);

@@ -11,7 +11,7 @@ export type Section = 'chat' | 'files' | 'messages' | 'tasks' | 'settings' | 'ac
 export type StageObject =
   | { readonly kind: 'page'; readonly pageId: string }
   | { readonly kind: 'conversation'; readonly conversationId: string }
-  | { readonly kind: 'settings' }
+  | { readonly kind: 'settings'; readonly title?: string }
   | { readonly kind: 'account' };
 
 /** Which panes are open, derived from the URL and nothing else. */
@@ -88,12 +88,10 @@ const listStage = (
 
 const userStage = (first: string, rest: readonly string[]): Stage => {
   const [id, ...extra] = rest;
-  if (extra.length > 0) return root;
   if (first === 'account') {
-    return id === undefined
-      ? { driveId: null, section: 'account', list: 'closed', object: { kind: 'account' } }
-      : root;
+    return { driveId: null, section: 'account', list: 'closed', object: { kind: 'account' } };
   }
+  if (extra.length > 0) return root;
   if (id === undefined) return listStage(null, 'messages', null);
   return isId(id) ? listStage(null, 'messages', { kind: 'conversation', conversationId: id }) : root;
 };
@@ -101,12 +99,13 @@ const userStage = (first: string, rest: readonly string[]): Stage => {
 const driveStage = (driveId: string, rest: readonly string[]): Stage => {
   const [section, id, ...extra] = rest;
   if (section === undefined) return driveChat(driveId);
-  if (extra.length > 0) return driveChat(driveId);
   if (section === 'settings') {
-    return id === undefined
-      ? { driveId, section: 'settings', list: 'closed', object: { kind: 'settings' } }
-      : driveChat(driveId);
+    return { driveId, section: 'settings', list: 'closed', object: { kind: 'settings' } };
   }
+  if (['calendar', 'agents', 'workflows', 'activity', 'trash', 'members'].includes(section)) {
+    return { driveId, section: 'settings', list: 'closed', object: { kind: 'settings', title: section.charAt(0).toUpperCase() + section.slice(1) } };
+  }
+  if (extra.length > 0) return driveChat(driveId);
   if (!isListSection(section)) return driveChat(driveId);
   if (id === undefined) return listStage(driveId, section, null);
   return isId(id) ? listStage(driveId, section, { kind: 'page', pageId: id }) : driveChat(driveId);
@@ -124,6 +123,7 @@ export const stageFor = (pathname: string): Stage => {
   if (!pathname.startsWith('/')) return root;
   const [first, ...rest] = pathname.split('/').filter(Boolean);
   if (first === undefined) return root;
+  if (first === 'p' && isId(rest[0])) return { driveId: null, section: 'files', list: 'closed', object: { kind: 'page', pageId: rest[0] } };
   if (first === 'dm' || first === 'account') return userStage(first, rest);
   if (reserved.includes(first) || !isId(first)) return root;
   return driveStage(first, rest);
@@ -192,7 +192,7 @@ export const chatContextFor = (
   if (object?.kind === 'settings') {
     return {
       density: 'dense',
-      contextLabel: drive === undefined ? 'Drive settings in context' : `${drive} settings in context`,
+      contextLabel: `${drive ?? 'Drive'} ${(object.title ?? 'settings').toLowerCase()} in context`,
       placeholder: 'Ask anything…',
     };
   }

@@ -1,6 +1,5 @@
 import type { ReactNode } from 'react';
 import { getViewer } from '@/lib/auth/get-viewer';
-import { ClassicHandoff } from '@/ui/files/classic-handoff/classic-handoff';
 import { FileObject } from '@/ui/files/file-object/file-object';
 import { PageObject } from '@/ui/files/page-object/page-object';
 import { PageView } from '@/ui/files/page-view/page-view';
@@ -20,9 +19,7 @@ export default async function Page({ params }: Props): Promise<ReactNode> {
   return (
     <PageObject driveId={driveId} pageId={pageId}>
       <FileObject driveId={driveId} pageId={pageId}>
-        <ClassicHandoff driveId={driveId} pageId={pageId}>
           <PageView driveId={driveId} pageId={pageId} />
-        </ClassicHandoff>
       </FileObject>
     </PageObject>
   );

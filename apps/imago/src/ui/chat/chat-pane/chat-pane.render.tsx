@@ -38,6 +38,8 @@ export type ChatPaneRenderProps = {
   readonly notice: string | null;
   readonly citationDriveId: string | null;
   readonly composer: ReactNode;
+  /** Reused complete chat surface, hosted in this one persistent pane. */
+  readonly content?: ReactNode;
   /** The scroller, for the container to keep the newest message in view. */
   readonly scrollRef?: Ref<HTMLDivElement>;
   readonly onScroll?: UIEventHandler<HTMLDivElement>;
@@ -89,6 +91,7 @@ export function renderChatPane(props: ChatPaneRenderProps): ReactNode {
   return (
     <section className={chatPaneClass(density)} aria-label="Chat" data-density={density}>
       {renderPaneHeader({ title: renderTitle(props), leading })}
+      {props.content !== undefined ? <>{notice === null ? null : <p role="alert" className={chatNoticeClass}>{notice}</p>}{props.content}</> : <>
       <div ref={scrollRef} onScroll={onScroll} className={chatScrollClass}>
         <ol className={chatThreadClass(density)} aria-busy={messages === undefined ? true : undefined}>
           {messages === undefined ? null : messages.length === 0 ? (
@@ -112,6 +115,7 @@ export function renderChatPane(props: ChatPaneRenderProps): ReactNode {
         </ol>
       </div>
       {composer}
+      </>}
     </section>
   );
 }

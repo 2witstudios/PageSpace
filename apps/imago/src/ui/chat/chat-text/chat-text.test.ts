@@ -86,9 +86,9 @@ describe('citationHref()', () => {
   test('the page in the files section', () => {
     assert({
       given: 'a drive id and a page id',
-      should: 'address the page under the drive files route (basePath adds /imago)',
+      should: 'resolve the cited page by its actual authorized drive (basePath adds /imago)',
       actual: citationHref('d 1', 'p1'),
-      expected: '/d%201/files/p1',
+      expected: '/p/p1',
     });
   });
 });

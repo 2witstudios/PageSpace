@@ -167,7 +167,7 @@ describe('ChatProse', () => {
     const chip = view.querySelector('a[data-citation]');
     assert({
       given: 'a reply citing a page and mentioning a person, in drive d1',
-      should: 'render the page as a hairline chip linking to /imago/d1/files/p1 (basePath adds /imago) and the person as plain text',
+      should: 'render the page as a hairline chip linking to /imago/p/p1 (basePath adds /imago) and the person as plain text',
       actual: [
         chip?.getAttribute('href'),
         chip?.className,
@@ -176,7 +176,7 @@ describe('ChatProse', () => {
         view.querySelectorAll('a').length,
         view.textContent?.includes('@Ada'),
       ],
-      expected: ['/d1/files/p1', citationChipClass, 'Roadmap', null, 1, true],
+      expected: ['/p/p1', citationChipClass, 'Roadmap', null, 1, true],
     });
   });
 
@@ -184,9 +184,9 @@ describe('ChatProse', () => {
     const view = dom('See @[Roadmap](p1:page).', null);
     assert({
       given: 'a page citation where no drive is known',
-      should: 'show the chip without a link',
-      actual: [view.querySelector('a'), view.querySelector('[data-citation]')?.className, view.querySelector('[data-citation]')?.textContent],
-      expected: [null, citationChipClass, 'Roadmap'],
+      should: 'resolve the page through the native page resolver',
+      actual: [view.querySelector('a')?.getAttribute('href'), view.querySelector('[data-citation]')?.className, view.querySelector('[data-citation]')?.textContent],
+      expected: ['/p/p1', citationChipClass, 'Roadmap'],
     });
   });
 

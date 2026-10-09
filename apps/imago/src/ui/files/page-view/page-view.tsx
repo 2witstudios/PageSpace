@@ -2,8 +2,22 @@
 
 import type { ReactNode } from 'react';
 import { renderObjectPlaceholder } from '../../frame/shell/object-placeholder';
-import { DocumentView, type DocumentPage } from '../document-view/document-view';
+import { type DocumentPage } from '../document-view/document-view';
 import { usePage } from '../page-object/page-object';
+import dynamic from 'next/dynamic';
+import type { TreePage } from '@/retained/hooks/usePageTree';
+import { RetainedSurface } from '@/retained-adapters/retained-provider';
+import { ViewHeader } from '@/retained/components/layout/middle-content/content-header';
+import { PageHistory } from '@/retained-adapters/page-history';
+import { AgentSettings } from '@/retained-adapters/agent-settings';
+
+const Document = dynamic(() => import('@/retained/components/layout/middle-content/page-views/document/DocumentView'), { ssr: false });
+const Code = dynamic(() => import('@/retained/components/layout/middle-content/page-views/code/CodePageView'), { ssr: false });
+const Sheet = dynamic(() => import('@/retained/components/layout/middle-content/page-views/sheet/SheetView'), { ssr: false });
+const Canvas = dynamic(() => import('@/retained/components/layout/middle-content/page-views/canvas/CanvasPageView'), { ssr: false });
+const File = dynamic(() => import('@/retained-adapters/file-view'), { ssr: false });
+const Channel = dynamic(() => import('@/retained/components/layout/middle-content/page-views/channel/ChannelView'), { ssr: false });
+const Tasks = dynamic(() => import('@/retained/components/layout/middle-content/page-views/task-list/TaskListView'), { ssr: false });
 
 export type PageViewProps = {
   readonly driveId: string;
@@ -24,15 +38,22 @@ export const documentOf = (data: unknown): DocumentPage | null => {
   };
 };
 
-/**
- * The page's own view inside the Files object slot, once PageObject has
- * settled that it is this drive's: a document reads in place; other page
- * types keep the placeholder until their leaves land. It reads the same SWR
- * entry PageObject loaded, so it asks the server nothing more.
- */
+/** Dispatch the permission-filtered page into a reused native object view. */
 export function PageView({ driveId, pageId }: PageViewProps): ReactNode {
   const { data } = usePage(pageId);
-  const page = documentOf(data);
-  if (page === null) return renderObjectPlaceholder('Page');
-  return <DocumentView key={page.id} driveId={driveId} page={page} />;
+  if (!data || typeof data !== 'object' || !('type' in data)) return renderObjectPlaceholder('Page');
+  const page = data as TreePage;
+  let content: ReactNode;
+  switch (page.type) {
+    case 'DOCUMENT': content = <Document pageId={pageId} driveId={driveId} />; break;
+    case 'CODE': content = <Code pageId={pageId} driveId={driveId} />; break;
+    case 'SHEET': content = <Sheet page={page} />; break;
+    case 'CANVAS': content = <Canvas pageId={pageId} />; break;
+    case 'FILE': content = <File driveId={driveId} pageId={pageId} />; break;
+    case 'CHANNEL': content = <Channel page={page} />; break;
+    case 'TASK_LIST': content = <Tasks page={page} />; break;
+    case 'AI_CHAT': content = <AgentSettings pageId={pageId} driveId={driveId} title={page.title} />; break;
+    default: return renderObjectPlaceholder('Page');
+  }
+  return <RetainedSurface><div className="flex h-full min-h-0 flex-col"><ViewHeader pageId={pageId}><PageHistory /></ViewHeader><div className="min-h-0 flex-1">{content}</div></div></RetainedSurface>;
 }

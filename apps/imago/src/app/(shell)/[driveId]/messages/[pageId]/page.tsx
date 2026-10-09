@@ -1,13 +1,7 @@
-import type { ReactNode } from 'react';
 import { getViewer } from '@/lib/auth/get-viewer';
-import { ChannelThread } from '@/ui/messages/thread-view/channel-thread';
-
-/** Stage 3: the list, the open channel and the fixed chat. The route renders only the object slot's content. */
-export default async function Page({
-  params,
-}: {
-  readonly params: Promise<{ readonly driveId: string; readonly pageId: string }>;
-}): Promise<ReactNode> {
-  const [{ driveId, pageId }, viewer] = await Promise.all([params, getViewer()]);
-  return <ChannelThread driveId={driveId} pageId={pageId} viewerId={viewer.userId} />;
+import { PageObject } from '@/ui/files/page-object/page-object';
+import { PageView } from '@/ui/files/page-view/page-view';
+export default async function Page({ params }: { params: Promise<{ driveId: string; pageId: string }> }) {
+ const [{ driveId, pageId }] = await Promise.all([params, getViewer()]);
+ return <PageObject driveId={driveId} pageId={pageId}><PageView driveId={driveId} pageId={pageId} /></PageObject>;
 }

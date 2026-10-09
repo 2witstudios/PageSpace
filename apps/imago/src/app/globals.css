@@ -2,6 +2,7 @@
 @import './theme/reset.css';
 @import './theme/components.css';
 @import './theme/frame.css';
+@source not '../retained';
 
 /* Tests hold deliberately bad class strings (lint probes, negative
    fixtures); they are not markup and must never reach the stylesheet. */

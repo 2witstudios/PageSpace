@@ -13,6 +13,7 @@ import {
 } from '@/lib/theme/theme-preference';
 import { ThemeProvider } from '@/lib/theme/theme-provider';
 import './globals.css';
+import '../retained-adapters/retained.generated.css';
 
 // Self-hosted by next/font: served same-origin, so the CSP needs no font host.
 const sans = Geist({

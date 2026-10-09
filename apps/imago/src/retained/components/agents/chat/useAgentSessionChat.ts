@@ -1,0 +1,360 @@
+'use client';
+
+/**
+ * useAgentSessionChat — the ONE chat's state for an agent session.
+ *
+ * Derived from the machine pane's `useMachinePaneChat` with the dual-mode
+ * selector, `AISelector` and `pendingPrompt` machinery stripped: a session
+ * chat surface is never dual-mode — the agent is fixed by props, and the
+ * conversation being chatted in is fixed by props too (its SESSION, and
+ * therefore its sandbox, resolves server-side from the row's binding).
+ * History is a separate concern owned by whoever renders the conversation
+ * picker — this hook is purely
+ * send/stream/edit/delete/retry/error for the one conversation it was mounted
+ * for.
+ *
+ * 'ai-streaming' editing-store protection is NOT registered here: it comes
+ * for free from `useSendHandoff`'s pendingSend bookkeeping plus the app-wide
+ * `DerivedStreamingRegistrations` (mounted once by `GlobalChatProvider`),
+ * which derives a registration for ANY conversation with a pending send or a
+ * live stream entry — see that module for why a per-surface registration
+ * would only risk two owners disagreeing about when to end it.
+ */
+import { useCallback, useEffect, useMemo } from 'react';
+import { usePathname } from '@/retained-adapters/navigation';
+import type { UIMessage, FileUIPart } from 'ai';
+import { toast } from 'sonner';
+import { createId } from '@paralleldrive/cuid2';
+import type { AgentInfo } from '@/retained/types/agent';
+import {
+  useChatSession,
+  useCacheMessageActions,
+  useSendHandoff,
+  useQueuedSends,
+  useChatErrorCause,
+  useAnswerAskUser,
+  type AIErrorCause,
+} from '@/retained/lib/ai/shared';
+import type { UseAnswerAskUserResult } from '@/retained/lib/ai/shared/hooks/useAnswerAskUser';
+import { buildContextRef } from '@/retained/lib/ai/shared/buildContextRef';
+import { buildSessionChatRequestBody } from '@/retained/lib/agents/build-session-chat-request';
+import { buildUserMessage } from '@/retained/lib/ai/streams/buildUserMessage';
+import { rollbackOptimisticSendOnFailure } from '@/retained/lib/ai/streams/rollbackOptimisticSendOnFailure';
+import { conversationMessagesActions } from '@/retained/hooks/conversationMessagesActions';
+import { getOutboundMessages } from '@/retained/hooks/outboundMessages';
+import {
+  loadAgentConversationMessages,
+  loadOlderAgentConversationMessages,
+} from '@/retained/hooks/conversationMessagesLoaders';
+import {
+  useRenderedMessages,
+  useConversationLoadState,
+  useConversationOlderPageState,
+} from '@/retained/hooks/useRenderedMessages';
+import { useAgentChannelMultiplayer } from '@/retained/hooks/useAgentChannelMultiplayer';
+import { useActiveStream, useConversationActiveStream } from '@/retained/hooks/useActiveStream';
+import { useStopStream } from '@/retained/hooks/useStopStream';
+import { useAuth } from '@/retained/hooks/useAuth';
+import { useDriveStore } from '@/retained/hooks/useDrive';
+import { useAssistantSettingsStore } from '@/retained/stores/useAssistantSettingsStore';
+import type { PendingStream } from '@/retained/stores/usePendingStreamsStore';
+
+export interface UseAgentSessionChatOptions {
+  /** The fixed agent this session belongs to — never selectable here. */
+  agent: AgentInfo;
+  /** ≡ the sessionId. Fixed for the life of this hook's mount (the caller keys its mount by it). */
+  conversationId: string;
+}
+
+export interface UseAgentSessionChatReturn {
+  messages: UIMessage[];
+  remoteStreams: PendingStream[];
+  displayIsStreaming: boolean;
+  isMessagesLoading: boolean;
+  hasLoadError: boolean;
+  reloadConversation: () => Promise<void>;
+  /** Resolves false when nothing was dispatched (empty text, refused handoff) — the composer restores its draft. */
+  handleSend: (text: string, files?: FileUIPart[]) => Promise<boolean>;
+  handleStop: () => Promise<void>;
+  /** A Stop was requested and has not resolved — render "stopping", never "stopped". */
+  isStopping: boolean;
+  handleEdit: (messageId: string, newContent: string) => Promise<void>;
+  handleDelete: (messageId: string) => Promise<void>;
+  handleRetry: () => Promise<void>;
+  /** Messages queued while a response streams, in dispatch order (FIFO) — issue #2676. */
+  queuedSends: UIMessage[];
+  queueCount: number;
+  isQueueFull: boolean;
+  /** Queue a text-only message; false when the queue is full or the text is empty. */
+  enqueueQueuedSend: (text: string) => boolean;
+  removeQueuedSend: (messageId: string) => void;
+  clearQueuedSends: () => void;
+  /** Double-ESC: clear the queue and cancel the drain the pending abort would fire. */
+  cancelQueuedDrain: () => void;
+  lastAssistantMessageId: string | undefined;
+  lastUserMessageId: string | undefined;
+  handleScrollNearTop: () => void;
+  isLoadingOlder: boolean;
+  hasMoreOlder: boolean;
+  errorCause: AIErrorCause | null;
+  dismissError: () => void;
+  askUserAnswering: UseAnswerAskUserResult;
+}
+
+export function useAgentSessionChat({
+  agent,
+  conversationId,
+}: UseAgentSessionChatOptions): UseAgentSessionChatReturn {
+  const pathname = usePathname();
+  const { user } = useAuth();
+  const drives = useDriveStore((state) => state.drives);
+
+  useEffect(() => {
+    void loadAgentConversationMessages(agent.id, conversationId);
+  }, [agent.id, conversationId]);
+
+  // `userId` is what `isOwnStream` compares, so the optimistic store entry this send opens is
+  // recognised as the user's own in every tab and on every device — not just this one.
+  const sendIdentity = useMemo(
+    () => ({ userId: user?.id ?? '', displayName: user?.name || user?.email || 'You' }),
+    [user?.id, user?.name, user?.email],
+  );
+
+  // ONE OWNED SEND SHELL, no `Chat` instance and no transport object.
+  //
+  // `getBaseMessages` is the settled store view — which is why answering an `ask_user`
+  // question still works after a reload: the persisted assistant message carrying the
+  // question IS the base, so there is no empty internal array to hydrate first.
+
+  const {
+    sendMessage,
+    status,
+    error,
+    clearError,
+    regenerate,
+    addToolResult,
+  } = useChatSession({
+    api: '/api/ai/chat',
+    channelId: agent.id,
+    conversationId,
+    triggeredBy: sendIdentity,
+    getBaseMessages: getOutboundMessages,
+    onError: (err: Error) => {
+      console.error('Agent session chat error:', err);
+      toast.error('Chat error. Please try again.');
+    },
+  });
+
+  const loadConversation = useCallback(
+    (id: string) => loadAgentConversationMessages(agent.id, id),
+    [agent.id],
+  );
+  useAgentChannelMultiplayer({
+    selectedAgent: agent,
+    agentConversationId: conversationId,
+    loadConversation,
+  });
+
+  const renderedMessages = useRenderedMessages(agent.id, conversationId);
+  const messages = useMemo(() => renderedMessages.map((r) => r.message), [renderedMessages]);
+  const loadState = useConversationLoadState(conversationId);
+
+  const activeStream = useConversationActiveStream(agent.id, conversationId);
+  const { streams: remoteStreams } = useActiveStream(agent.id, conversationId);
+
+  const { wrapSend, pendingSendConversationId, releasePendingSend } = useSendHandoff(
+    conversationId,
+    status,
+    activeStream?.isOwn === true,
+  );
+
+  const displayIsStreaming =
+    activeStream?.isOwn === true ||
+    (pendingSendConversationId !== null && pendingSendConversationId === conversationId);
+
+  const webSearchEnabled = useAssistantSettingsStore((state) => state.webSearchEnabled);
+  const imageGenEnabled = useAssistantSettingsStore((state) => state.imageGenEnabled);
+  const writeMode = useAssistantSettingsStore((state) => state.writeMode);
+
+  // Shared by handleSend and the ask_user answer path (submitting an answer
+  // re-invokes the chat with the same per-request body a fresh send would use).
+  const buildBody = useCallback(
+    () =>
+      buildSessionChatRequestBody({
+        agentId: agent.id,
+        conversationId,
+        isReadOnly: !writeMode,
+        webSearchEnabled,
+        imageGenEnabled,
+        provider: agent.aiProvider,
+        model: agent.aiModel,
+        systemPrompt: agent.systemPrompt,
+        enabledTools: agent.enabledTools,
+        contextRef: buildContextRef(pathname, drives),
+      }),
+    [
+      agent.id,
+      agent.aiProvider,
+      agent.aiModel,
+      agent.systemPrompt,
+      agent.enabledTools,
+      conversationId,
+      writeMode,
+      webSearchEnabled,
+      imageGenEnabled,
+      pathname,
+      drives,
+    ],
+  );
+
+  // renderedMessages (selector output), not useChat's raw `messages`: "answerable" is
+  // decided by whether the ask_user part sits on the conversation's LAST message, and
+  // remote edits/deletes/messages update the store, not useChat's local array.
+  // isConversationBusy replaces status==='ready' — see selectAnswerableAskUserToolCallIds.
+  //
+  // Deliberately NOT displayIsStreaming (own-stream-only, what Stop is scoped to): a
+  // REMOTE collaborator's stream leaves displayIsStreaming false while renderedMessages
+  // filters out their in-flight message, so the conversation's last SETTLED message can
+  // still be a stale ask_user prompt from before their run started. Submitting it would
+  // invoke addToolResult, whose server-side per-conversation takeover aborts their
+  // generation and resumes the stale prompt (Codex review, PR #2303).
+  const isConversationBusyForAskUser = displayIsStreaming || remoteStreams.some((s) => !s.isOwn);
+  const askUserAnswering = useAnswerAskUser({
+    conversationId,
+    renderedMessages,
+    isConversationBusy: isConversationBusyForAskUser,
+    addToolResult,
+    wrapSend,
+    releasePendingSend,
+    buildBody,
+  });
+
+  /**
+   * The one send path, shared by the composer and the DRAIN (issue #2676):
+   * optimistic write first, then the wrapped dispatch with rollback. The
+   * drain hook re-invokes this with each queued message, so rollback,
+   * handoff and promotion work exactly as for a composer send.
+   */
+  const dispatchUserMessage = useCallback(
+    (message: UIMessage) => {
+      conversationMessagesActions.addOptimisticSend(conversationId, message);
+      return rollbackOptimisticSendOnFailure(
+        () => wrapSend(() => sendMessage(message, conversationId, { body: buildBody() })),
+        conversationId,
+        message.id,
+      );
+    },
+    [conversationId, wrapSend, sendMessage, buildBody],
+  );
+
+  // Send queue (issue #2676): drains one queued message per observed stream
+  // end, FIFO. `status` is what makes a manual send or retry take precedence —
+  // the queue waits out its TTFB window (the guard in the hook).
+  const {
+    queuedSends,
+    queueCount,
+    isQueueFull,
+    enqueue: enqueueQueuedSend,
+    remove: removeQueuedSend,
+    clear: clearQueuedSends,
+    cancelPendingDrain: cancelQueuedDrain,
+  } = useQueuedSends({
+    conversationId,
+    status,
+    dispatch: dispatchUserMessage,
+  });
+
+  const handleSend = useCallback(
+    async (text: string, files?: FileUIPart[]) => {
+      const trimmed = text.trim();
+      if ((!trimmed && !files?.length) || !conversationId) return false;
+
+      // NO PRE-SEND HANDOFF. There is nothing to hand off: this send is its own `fetch`, so a
+      // generation already running in another conversation is simply not this send's concern.
+      // The `stop()` + settle-wait + possible refusal that stood here is the thing this
+      // workstream exists to delete.
+      dispatchUserMessage(buildUserMessage({ id: createId(), text: trimmed || undefined, files }) as UIMessage);
+      return true;
+    },
+    [conversationId, dispatchUserMessage],
+  );
+
+  const { handleStop, isStopping } = useStopStream({
+    activeStream,
+    pendingSendConversationId,
+  });
+
+
+  const { handleEdit, handleDelete, handleRetry } = useCacheMessageActions({
+    agentId: agent.id,
+    conversationId,
+    renderedMessages,
+    // Adapts the shell's explicit-conversation `regenerate` to the action hook's
+    // conversation-less one. The id is bound HERE, where it is unambiguous, rather than being
+    // inferred inside a shared `Chat` from whatever the surface last touched — which is how a
+    // Retry used to be able to re-send another conversation's trail.
+    regenerate: (opts?: { body?: Record<string, unknown> }) => {
+      void regenerate(conversationId, opts);
+    },
+    // Retry inherits send's optimistic path — see useCacheMessageActions.
+    wrapSend,
+    // …and its release: a retry stopped mid-DELETE dispatches nothing, and nothing else
+    // would clear the pendingSend it registered.
+    releasePendingSend,
+  });
+
+  const lastAssistantMessageId = useMemo(
+    () => [...messages].reverse().find((m) => m.role === 'assistant')?.id,
+    [messages],
+  );
+  const lastUserMessageId = useMemo(
+    () => [...messages].reverse().find((m) => m.role === 'user')?.id,
+    [messages],
+  );
+
+  const reloadConversation = useCallback(async () => {
+    await loadAgentConversationMessages(agent.id, conversationId);
+  }, [agent.id, conversationId]);
+
+  const { isLoadingOlder, hasMoreOlder } = useConversationOlderPageState(conversationId);
+  const handleScrollNearTop = useCallback(() => {
+    void loadOlderAgentConversationMessages(agent.id, conversationId);
+  }, [agent.id, conversationId]);
+
+  const { cause: errorCause, dismiss: dismissError } = useChatErrorCause(
+    conversationId,
+    error,
+    clearError,
+    pendingSendConversationId ?? conversationId,
+  );
+
+  return {
+    messages,
+    remoteStreams,
+    displayIsStreaming,
+    isMessagesLoading: loadState.isLoading,
+    hasLoadError: loadState.hasError,
+    reloadConversation,
+    handleSend,
+    handleStop,
+    isStopping,
+    handleEdit,
+    handleDelete,
+    handleRetry,
+    queuedSends,
+    queueCount,
+    isQueueFull,
+    enqueueQueuedSend,
+    removeQueuedSend,
+    clearQueuedSends,
+    cancelQueuedDrain,
+    lastAssistantMessageId,
+    lastUserMessageId,
+    handleScrollNearTop,
+    isLoadingOlder,
+    hasMoreOlder,
+    errorCause,
+    dismissError,
+    askUserAnswering,
+  };
+}

@@ -12,6 +12,8 @@ on:
     branches: [master, 'pu/**']
     paths:
       - 'apps/imago/**'
+      # Classic source supplies generated UI contracts during the image build.
+      - 'apps/web/src/**'
       # Every Dockerfile shares the workspace manifest block imago depends on.
       - 'apps/*/Dockerfile*'
       - 'apps/*/package.json'
@@ -27,6 +29,8 @@ on:
     # Same inputs as pull_request above.
     paths:
       - 'apps/imago/**'
+      # Classic source supplies generated UI contracts during the image build.
+      - 'apps/web/src/**'
       - 'apps/*/Dockerfile*'
       - 'apps/*/package.json'
       - 'packages/**'
@@ -57,6 +61,11 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
+        with:
+          # Public cache of the same Docker Hub tags; fallback remains Docker Hub.
+          buildkitd-config-inline: |
+            [registry."docker.io"]
+              mirrors = ["mirror.gcr.io"]
 
       - name: Build image
         uses: docker/build-push-action@v7

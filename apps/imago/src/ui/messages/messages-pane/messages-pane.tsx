@@ -1,5 +1,6 @@
 'use client';
 
+import { CreateActions } from '@/retained-adapters/create-actions';
 import type { ChannelThread, DirectThread } from '../message-model/message';
 import { useDirectThreads, useDriveChannels } from '../use-messages/use-messages';
 import { renderMessagesPane, type MessageRowView, type MessagesSectionView } from './messages-pane.render';
@@ -54,11 +55,11 @@ const sectionOf = <T,>(
 export function MessagesPane({ driveId, selectedPageId, selectedConversationId }: MessagesPaneProps) {
   const channels = useDriveChannels(driveId);
   const direct = useDirectThreads();
-  return renderMessagesPane({
+  return <><CreateActions driveId={driveId} messages />{renderMessagesPane({
     channels:
       driveId === null
         ? { status: 'no-drive' }
         : sectionOf(channels.channels, channels.error, channels.retry, (thread) => channelRow(thread, selectedPageId)),
     direct: sectionOf(direct.threads, direct.error, direct.retry, (thread) => directRow(thread, selectedConversationId)),
-  });
+  })}</>;
 }

@@ -111,7 +111,7 @@ const components = (citationDriveId: string | null): StreamdownProps['components
     if (pageId !== null) {
       return renderCitationChip({
         label,
-        href: citationDriveId === null ? null : citationHref(citationDriveId, pageId),
+        href: citationHref(citationDriveId, pageId),
       });
     }
     // Sanitising drops an unsafe href: what is left is only text.

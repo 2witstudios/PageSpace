@@ -1,0 +1,340 @@
+import { useCallback, useRef, useState } from 'react';
+import { MentionSuggestion, MentionType } from '@/retained/types/mentions';
+import { useSuggestionCore } from './useSuggestionCore';
+import { useSuggestionContext } from '@/retained/components/providers/SuggestionProvider';
+import { positioningService, Position } from '@/retained/services/positioningService';
+import { MentionFormatter, MentionFormatType } from '@/retained/lib/mentions/mentionConfig';
+
+export interface UseSuggestionProps {
+  inputRef: React.RefObject<HTMLTextAreaElement | HTMLInputElement | null>;
+  onValueChange: (value: string) => void;
+  trigger?: string;
+  allowedTypes?: MentionType[];
+  driveId?: string;
+  crossDrive?: boolean;
+  mentionFormat?: MentionFormatType;
+  variant?: 'chat' | 'document';
+  popupPlacement?: 'top' | 'bottom';
+  appendSpace?: boolean;
+  triggerPattern?: RegExp;
+  /** Tracked mention ranges for position-based existing-mention detection */
+  mentionRanges?: Array<{ start: number; end: number }>;
+  /** Called when a mention is inserted via suggestion selection (before onValueChange) */
+  onMentionInserted?: (mention: {
+    label: string;
+    id: string;
+    type: MentionType;
+    start: number;
+    end: number;
+  }) => void;
+}
+
+export interface UseSuggestionResult {
+  handleKeyDown: (e: React.KeyboardEvent) => void;
+  handleValueChange: (newValue: string) => void;
+  isOpen: boolean;
+  position: Position | null;
+  items: unknown[];
+  selectedIndex: number;
+  loading: boolean;
+  error: string | null;
+  /** The current @ query string (text typed after the @ trigger) */
+  query: string;
+  actions: {
+    selectSuggestion: (suggestion: MentionSuggestion) => void;
+    selectItem: (index: number) => void;
+    close: () => void;
+  };
+}
+
+export function useSuggestion({
+  inputRef,
+  onValueChange,
+  trigger = '@',
+  allowedTypes = ['page', 'user', 'everyone', 'role'] as MentionType[],
+  driveId,
+  crossDrive = false,
+  mentionFormat = 'label',
+  variant = 'chat',
+  popupPlacement = 'bottom',
+  appendSpace = true,
+  triggerPattern,
+  mentionRanges,
+  onMentionInserted,
+}: UseSuggestionProps): UseSuggestionResult {
+  const context = useSuggestionContext();
+  const [currentQuery, setCurrentQuery] = useState('');
+
+  // Default pattern: @ must be at start or preceded by whitespace (existing behavior)
+  // Sheet pattern should allow formula operators like: ( = + - * / , < > ! and whitespace
+  const defaultTriggerPattern = /^$|^\s$/; // At start of string or preceded by whitespace
+  const effectiveTriggerPattern = triggerPattern || defaultTriggerPattern;
+
+  const getValue = useCallback((): string => {
+    const element = inputRef.current;
+    if (element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement) {
+      return element.value;
+    }
+    return '';
+  }, [inputRef]);
+
+
+  const getSelectionStart = useCallback((): number => {
+    const element = inputRef.current;
+    if (element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement) {
+      return element.selectionStart ?? 0;
+    }
+    return 0;
+  }, [inputRef]);
+
+  const setSelectionStart = useCallback((position: number) => {
+    const element = inputRef.current;
+    if (element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement) {
+      element.setSelectionRange(position, position);
+    }
+  }, [inputRef]);
+
+  // Track when we're temporarily disabling mention detection after insertion
+  const suppressMentionDetection = useRef(false);
+
+  // Index of the @ that opened the current popup (updated on open, read on dismiss)
+  const openTriggerIndexRef = useRef<number>(-1);
+  // Index of the @ trigger the user explicitly dismissed via ESC (-1 = none)
+  const dismissedTriggerRef = useRef<number>(-1);
+
+  const suggestion = useSuggestionCore({
+    driveId: driveId || null,
+    allowedTypes,
+    minQueryLength: 0,
+    debounceMs: 200,
+    crossDrive,
+  }, {
+    onSelect: (selectedSuggestion) => {
+      const element = inputRef.current;
+      if (!element) return;
+
+      const currentValue = getValue();
+      const cursorPos = getSelectionStart();
+      const textBeforeCursor = currentValue.substring(0, cursorPos);
+      const textAfterCursor = currentValue.substring(cursorPos);
+
+      const mentionTriggerIndex = textBeforeCursor.lastIndexOf(trigger);
+      if (mentionTriggerIndex === -1) return;
+
+      const textBeforeMention = textBeforeCursor.substring(0, mentionTriggerIndex);
+      
+      const mentionText = MentionFormatter.format(
+        selectedSuggestion.label,
+        selectedSuggestion.id,
+        selectedSuggestion.type,
+        mentionFormat
+      );
+
+      const insertion = appendSpace ? `${mentionText} ` : mentionText;
+      const newValue = `${textBeforeMention}${insertion}${textAfterCursor}`;
+      
+      // Temporarily suppress mention detection to avoid interference
+      suppressMentionDetection.current = true;
+
+      // Notify the tracker about the new mention before propagating the value change
+      onMentionInserted?.({
+        label: selectedSuggestion.label,
+        id: selectedSuggestion.id,
+        type: selectedSuggestion.type,
+        start: textBeforeMention.length,
+        end: textBeforeMention.length + mentionText.length,
+      });
+
+      onValueChange(newValue);
+
+      // Set cursor position after the mention synchronously
+      const newCursorPos =
+        textBeforeMention.length + mentionText.length + (appendSpace ? 1 : 0);
+      setSelectionStart(newCursorPos);
+
+      // Focus the element
+      if (element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement) {
+        element.focus();
+      }
+      
+      // Close both the suggestion core and the context to hide the popup
+      suggestion.actions.close();
+      context.close();
+      
+      // Re-enable mention detection after a brief delay
+      setTimeout(() => {
+        suppressMentionDetection.current = false;
+      }, 100);
+    },
+    onClose: () => {
+      context.close();
+    }
+  });
+
+  const dismiss = useCallback(() => {
+    dismissedTriggerRef.current = openTriggerIndexRef.current;
+    suggestion.actions.close();
+    context.close();
+  }, [suggestion.actions, context]);
+
+  const handleValueChange = useCallback((newValue: string) => {
+    onValueChange(newValue); // Propagate change immediately
+
+    // Skip mention detection if it's temporarily suppressed
+    if (suppressMentionDetection.current) {
+      return;
+    }
+
+    const element = inputRef.current;
+    if (!element) return;
+
+    const cursorPos = getSelectionStart();
+    const textBeforeCursor = newValue.substring(0, cursorPos);
+    
+    // Find the most recent @ that could be a trigger
+    const mentionTriggerIndex = textBeforeCursor.lastIndexOf(trigger);
+
+    if (mentionTriggerIndex !== -1 && (mentionTriggerIndex === 0 || effectiveTriggerPattern.test(textBeforeCursor[mentionTriggerIndex - 1]))) {
+      const textAfterTrigger = textBeforeCursor.substring(mentionTriggerIndex + 1);
+      
+      // Check if this @ is part of an existing mention
+      // First check tracked mention ranges (position-based, used by mention tracker)
+      const isInTrackedMention = mentionRanges?.some(
+        (m) => mentionTriggerIndex >= m.start && mentionTriggerIndex < m.end
+      ) ?? false;
+
+      // Fall back to regex patterns for non-tracked contexts
+      const existingMentionPatterns = [
+        /^[^\s\[\]]+\s/, // @username followed by space (completed simple mention)
+        /^\[[^\]]+\]\([^)]+\)/, // @[label](id) or @[label](id:type) (markdown-style mention)
+      ];
+
+      const isPartOfExistingMention = isInTrackedMention || existingMentionPatterns.some(pattern =>
+        pattern.test(textAfterTrigger)
+      );
+      
+      if (!isPartOfExistingMention) {
+        // This is a fresh @ trigger, proceed with suggestion logic
+        const query = textAfterTrigger;
+        setCurrentQuery(query);
+
+        if (!context.isOpen) {
+          if (dismissedTriggerRef.current !== mentionTriggerIndex) {
+            // Calculate position based on variant and input type
+            let position: Position | null = null;
+
+            if (variant === 'document') {
+              if (element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement) {
+                position = positioningService.calculateTextareaPosition({
+                  element,
+                  textBeforeCursor,
+                  placement: popupPlacement,
+                });
+              } else {
+                position = positioningService.calculateInlinePosition({
+                  element,
+                });
+              }
+            } else if (element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement) {
+              position = positioningService.calculateTextareaPosition({
+                element,
+                textBeforeCursor,
+                placement: popupPlacement,
+              });
+            }
+
+            if (position) {
+              openTriggerIndexRef.current = mentionTriggerIndex;
+              context.open(position);
+            }
+          }
+        }
+        // MentionPickerPortal handles its own fetching — no need to drive useSuggestionCore
+      } else {
+        // This @ is part of an existing mention, close suggestions if open
+        dismissedTriggerRef.current = -1;
+        if (context.isOpen) {
+          suggestion.actions.close();
+        }
+      }
+    } else {
+      dismissedTriggerRef.current = -1;
+      if (context.isOpen) {
+        suggestion.actions.close();
+      }
+    }
+  }, [
+    onValueChange,
+    inputRef,
+    trigger,
+    context,
+    suggestion.actions,
+    getSelectionStart,
+    variant,
+    popupPlacement,
+    effectiveTriggerPattern,
+    mentionRanges
+  ]);
+
+  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (!context.isOpen || context.items.length === 0) return;
+
+    const { items, selectedIndex } = context;
+    const { selectItem, selectSuggestion } = suggestion.actions;
+
+    switch (e.key) {
+      case 'ArrowUp':
+        e.preventDefault();
+        e.stopPropagation();
+        if (popupPlacement === 'top') {
+          selectItem(selectedIndex < items.length - 1 ? selectedIndex + 1 : 0);
+        } else {
+          selectItem(selectedIndex > 0 ? selectedIndex - 1 : items.length - 1);
+        }
+        break;
+
+      case 'ArrowDown':
+        e.preventDefault();
+        e.stopPropagation();
+        if (popupPlacement === 'top') {
+          selectItem(selectedIndex > 0 ? selectedIndex - 1 : items.length - 1);
+        } else {
+          selectItem(selectedIndex < items.length - 1 ? selectedIndex + 1 : 0);
+        }
+        break;
+
+      case 'Enter':
+        e.preventDefault();
+        e.stopPropagation();
+        if (items[selectedIndex]) {
+          selectSuggestion(items[selectedIndex]);
+        }
+        break;
+
+      case 'Escape':
+        e.preventDefault();
+        e.stopPropagation();
+        dismiss();
+        break;
+
+      default:
+        break;
+    }
+  }, [context, suggestion.actions, popupPlacement, dismiss]);
+
+  return {
+    handleKeyDown,
+    handleValueChange,
+    isOpen: context.isOpen,
+    position: context.position,
+    items: context.items,
+    selectedIndex: context.selectedIndex,
+    loading: context.loading,
+    error: context.error,
+    query: currentQuery,
+    actions: {
+      ...suggestion.actions,
+      close: dismiss,
+    },
+  };
+}

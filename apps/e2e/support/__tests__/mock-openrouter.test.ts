@@ -325,3 +325,13 @@ describe('mock OpenRouter — abort safety and reset', () => {
     expect(json.requests[0].model).toBe(APP_MODEL);
   });
 });
+
+it('emits one configured provider tool call, then restores the normal response', async () => {
+  await fetch(`${base}/__next-tool`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: 'ask_user', arguments: { questions: [] } }) });
+  const first = await (await completions(APP_MODEL)).text();
+  expect(first).toContain('ask_user');
+  expect(first).toContain('tool_calls');
+  const second = await (await completions(APP_MODEL)).text();
+  expect(second).toContain('pong');
+  expect(second).not.toContain('tool_calls');
+});

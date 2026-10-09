@@ -12,7 +12,7 @@ export type RailItem = {
   readonly href: string | null;
 };
 
-export type OverflowItemId = 'calendar' | 'agents' | 'connections' | 'activity' | 'trash';
+export type OverflowItemId = 'calendar' | 'agents' | 'connections' | 'activity' | 'trash' | 'workflows';
 
 export type OverflowItem = {
   readonly id: OverflowItemId;
@@ -59,16 +59,17 @@ export const classicHref = (driveId: string, path: string): string =>
  * deep links into classic for the same drive.
  */
 export const overflowItems = (driveId: string): readonly OverflowItem[] => [
-  { id: 'calendar', icon: 'calendar', label: 'Calendar', href: classicHref(driveId, 'calendar') },
-  { id: 'agents', icon: 'bot', label: 'Agents', href: classicHref(driveId, 'agents') },
+  { id: 'calendar', icon: 'calendar', label: 'Calendar', href: `/${encodeURIComponent(driveId)}/calendar` },
+  { id: 'agents', icon: 'bot', label: 'Agents', href: `/${encodeURIComponent(driveId)}/agents` },
   {
     id: 'connections',
     icon: 'connections',
     label: 'Connections',
-    href: classicHref(driveId, 'settings/integrations'),
+    href: `/${encodeURIComponent(driveId)}/settings/integrations`,
   },
-  { id: 'activity', icon: 'activity', label: 'Activity', href: classicHref(driveId, 'activity') },
-  { id: 'trash', icon: 'trash', label: 'Trash', href: classicHref(driveId, 'trash') },
+  { id: 'activity', icon: 'activity', label: 'Activity', href: `/${encodeURIComponent(driveId)}/activity` },
+  { id: 'trash', icon: 'trash', label: 'Trash', href: `/${encodeURIComponent(driveId)}/trash` },
+  { id: 'workflows', icon: 'activity', label: 'Workflows', href: `/${encodeURIComponent(driveId)}/workflows` },
 ];
 
 /**
