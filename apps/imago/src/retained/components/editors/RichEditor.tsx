@@ -1,6 +1,6 @@
 "use client";
 
-import { useEditor, EditorContent, Editor } from '@tiptap/react';
+import { useEditor, useEditorState, EditorContent, Editor } from '@tiptap/react';
 import { clientExtensions } from '@/retained/lib/editor/client-schema';
 import { BubbleMenu, FloatingMenu } from '@tiptap/react/menus';
 import React, { useEffect } from 'react';
@@ -79,6 +79,11 @@ const RichEditor = ({ value, onChange, onEditorChange, readOnly = false, isPagin
       scrollMargin: 80,
     },
   }, [isPaginated, contentMode, readOnly]); // Recreate editor when key mode/toggle settings change
+
+  const characterCount = useEditorState({
+    editor,
+    selector: ({ editor: current }) => current?.storage.characterCount.characters() ?? 0,
+  });
 
   useEffect(() => {
     if (!editor || editor.isDestroyed) {
@@ -257,7 +262,7 @@ const RichEditor = ({ value, onChange, onEditorChange, readOnly = false, isPagin
       </div>
       {!readOnly && (
         <div className="flex justify-end p-2 text-sm text-muted-foreground">
-          {editor?.storage.characterCount.characters()} characters
+          {characterCount} characters
         </div>
       )}
     </div>

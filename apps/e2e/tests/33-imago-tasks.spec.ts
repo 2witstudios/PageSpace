@@ -304,7 +304,7 @@ test('a parent with an open subtask is refused completion, by the view and by th
   const refusal = await refused;
   expect(refusal.status()).toBe(422);
   expect(await refusal.json()).toMatchObject({ code: 'SUBTASKS_INCOMPLETE', pending: 1, total: 1 });
-  await expect(page.getByText('Finish 1 sub-task first', { exact: true })).toBeVisible();
+  await expect(page.getByText('Complete all sub-tasks first (1 of 1 remaining)', { exact: true })).toBeVisible();
   await expect(checkbox(treeOf(page), 'Print it')).toHaveAttribute('aria-checked', 'false');
   expect(await storedTask(stale.id)).toMatchObject({ status: 'pending', completedAt: null });
 

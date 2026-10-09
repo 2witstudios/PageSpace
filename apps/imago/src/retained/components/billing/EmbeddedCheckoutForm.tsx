@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { imagoReturnPath } from '@/lib/auth/sign-in-url';
 import { useStripe, useElements, PaymentElement } from '@stripe/react-stripe-js';
 import { MarketingLink } from '@/retained/components/ui/MarketingLink';
 import { Button } from '@/retained/components/ui/button';
@@ -121,7 +122,7 @@ export function EmbeddedCheckoutForm({
       const result = await stripe.confirmPayment({
         elements,
         confirmParams: {
-          return_url: `${window.location.origin}/settings/plan?success=true`,
+          return_url: new URL(`${imagoReturnPath('/account/plan')}?success=true`, window.location.origin).href,
         },
         redirect: 'if_required',
       });

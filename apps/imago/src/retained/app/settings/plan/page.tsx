@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { useRouter, useSearchParams } from '@/retained-adapters/navigation';
-import { mutate } from 'swr';
+import { useSWRConfig } from 'swr';
 import { useTheme } from '@/retained-adapters/theme';
 import { Button } from '@/retained/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/retained/components/ui/card';
@@ -31,6 +31,7 @@ interface SubscriptionData {
 }
 
 export default function PlanPage() {
+  const { mutate: mutate } = useSWRConfig();
   const router = useRouter();
   const searchParams = useSearchParams();
   const { resolvedTheme } = useTheme();

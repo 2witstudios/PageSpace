@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { AlertCircle, Bot, Zap } from 'lucide-react';
 import { toast } from 'sonner';
-import useSWR, { mutate as globalMutate } from 'swr';
+import useSWR, { useSWRConfig } from 'swr';
 import {
   Dialog,
   DialogContent,
@@ -113,6 +113,7 @@ export function TaskAgentTriggersDialog({
   hasDueDate,
   onSaved,
 }: TaskAgentTriggersDialogProps) {
+  const { mutate: globalMutate } = useSWRConfig();
   const triggersKey = open ? `/api/tasks/${taskId}/triggers` : null;
   const agentsKey = open && driveId ? `/api/drives/${driveId}/agents` : null;
 

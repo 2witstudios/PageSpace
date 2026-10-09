@@ -100,7 +100,8 @@ test('a page created from the tree keeps the text typed into it across a reload'
   await listPane(page).getByRole('button', { name: 'New page', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: 'Create new page' });
   await dialog.getByRole('option').filter({ hasText: 'Document' }).first().click();
-  await dialog.getByRole('button', { name: 'Create', exact: true }).click();
+  await page.getByPlaceholder('Untitled Document').fill('Untitled Document');
+  await page.getByRole('dialog', { name: 'Name your page', exact: true }).getByRole('button', { name: 'Create', exact: true }).click();
   const answer = await created;
   expect(answer.ok(), await answer.text()).toBe(true);
   const { id: pageId } = (await answer.json()) as { id: string };

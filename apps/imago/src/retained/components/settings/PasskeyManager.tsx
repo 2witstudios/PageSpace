@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useEffect } from 'react';
 import { startRegistration, browserSupportsWebAuthn } from '@simplewebauthn/browser';
-import useSWR, { mutate } from 'swr';
+import useSWR, { useSWRConfig } from 'swr';
 import { Button } from '@/retained/components/ui/button';
 import { Input } from '@/retained/components/ui/input';
 import {
@@ -48,6 +48,7 @@ const fetcher = async (url: string) => {
 };
 
 export function PasskeyManager() {
+  const { mutate: mutate } = useSWRConfig();
   const { csrfToken } = useCSRFToken();
   const [isSupported, setIsSupported] = useState<boolean | null>(null);
   const [isRegistering, setIsRegistering] = useState(false);

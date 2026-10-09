@@ -14,7 +14,7 @@ import { useRouter } from '@/retained-adapters/navigation';
 import { toast } from 'sonner';
 import useSWRInfinite from 'swr/infinite';
 import { useDebounce } from '@/retained/hooks/useDebounce';
-import { mutate as globalMutate } from 'swr';
+import { useSWRConfig } from 'swr';
 import { formatDistanceToNow } from 'date-fns';
 import { useAuth } from '@/retained/hooks/useAuth';
 import { usePermissions, canManageDrive } from '@/retained/hooks/usePermissions';
@@ -552,7 +552,18 @@ function TaskListView({ page }: TaskListViewProps) {
   // touch dead cache entries and never actually revalidate. Only the hook's own bound
   // `mutate` (with no args, forcing every loaded page to refetch — see swr/infinite's
   // `_i` "revalidate all" flag) reaches the right key.
+  const { mutate: globalMutate } = useSWRConfig();
   const mutateTasks = useCallback(() => mutateTaskPages(), [mutateTaskPages]);
+  // The native list meter/detail reads a different projection of the same API.
+  // Refresh it when the retained list hydrates or confirms an edit, so navigating
+  // to a newly created task cannot reuse the meter's earlier empty tree.
+  useEffect(() => {
+    if (taskPages) void globalMutate(
+      key => Array.isArray(key) && key[0] === 'imago:task-tree',
+      undefined,
+      { revalidate: true },
+    );
+  }, [taskPages, globalMutate]);
 
   const data: TaskListData | undefined = useMemo(() => {
     if (!taskPages || taskPages.length === 0) return undefined;

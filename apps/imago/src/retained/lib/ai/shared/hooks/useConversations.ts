@@ -4,7 +4,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef } from 'react';
-import useSWR, { mutate } from 'swr';
+import useSWR, { useSWRConfig } from 'swr';
 import { fetchWithAuth } from '@/retained/lib/auth/auth-fetch';
 import { toast } from 'sonner';
 import { createId } from '@paralleldrive/cuid2';
@@ -112,6 +112,7 @@ export function useConversations({
   onConversationCreate,
   onConversationDelete,
 }: UseConversationsOptions): UseConversationsResult {
+  const { mutate: mutate } = useSWRConfig();
   // Determine API endpoints based on mode
   const isAgentMode = Boolean(agentId);
 

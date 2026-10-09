@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { mutate } from 'swr';
+import { useSWRConfig } from 'swr';
 import { useRouter } from '@/retained-adapters/navigation';
 import { post, fetchWithAuth, refreshAuthSession, clearSessionCache } from '@/retained/lib/auth/auth-fetch';
 
@@ -19,6 +19,7 @@ let globalRefreshTimeout: NodeJS.Timeout | null = null;
 let isRefreshScheduled = false;
 
 export function useTokenRefresh(options: TokenRefreshOptions = {}) {
+  const { mutate: mutate } = useSWRConfig();
   const {
     refreshBeforeExpiryMs = 3 * 60 * 1000, // 3 minutes (more buffer)
     retryAttempts = 5, // More retries for better network resilience

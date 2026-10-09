@@ -126,3 +126,22 @@ citations still resolve through the permission-filtered object route.
 Native cloud billing and plan pages mirror classic's exact COEP exception needed
 by Stripe; all other native pages retain credentialless COEP. CSP script nonce,
 strict-dynamic, deployment gating and frame-ancestor protections are unchanged.
+
+
+Embedded subscription payment confirmation returns to the native `/imago/account/plan`
+using Imago’s existing validated return-path helper. Stripe-hosted payment-method
+portal and credit top-up sessions keep the existing server-selected classic return
+URLs; those external billing service contracts are preserved, not redesigned by
+this UI port. Both settings surfaces themselves are available natively and keep
+cloud/on-prem deployment gates. Live Stripe payment issuance requires its existing
+configured service and is not claimed by the local/cloud-mock interaction fixture.
+
+The retained rich editor subscribes its character counter to TipTap editor state,
+including content hydration transactions. This avoids a stale zero beside loaded
+content without changing serialization, save transport or editing permissions.
+
+Retained explicit SWR mutations use the enclosing Imago cache rather than SWR’s
+unrelated global cache. Retained task hydration/edits also refresh the native task
+projection used by list progress and individual details. Filtering reveals matching
+descendants and their ancestors without changing saved tree expansion. Task-list
+navigation loads its authenticated route on demand instead of prefetching it.

@@ -1,7 +1,7 @@
 'use client';
 
 import { useRef, useCallback, useMemo } from 'react';
-import useSWR, { mutate } from 'swr';
+import useSWR, { useSWRConfig } from 'swr';
 import { fetchWithAuth, post, patch, del } from '@/retained/lib/auth/auth-fetch';
 import { useCalendarSocket } from '@/retained/hooks/useCalendarSocket';
 import { useEditingStore } from '@/retained/stores/useEditingStore';
@@ -44,6 +44,7 @@ export function useCalendarData({
   includePersonal = true,
   includeTasks = true,
 }: UseCalendarDataOptions) {
+  const { mutate: mutate } = useSWRConfig();
   const hasLoadedRef = useRef(false);
   const isAnyEditing = useEditingStore((state) => state.isAnyEditing());
 

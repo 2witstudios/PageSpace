@@ -16,7 +16,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/retained/components/ui/dropdown-menu';
-import useSWR, { mutate } from 'swr';
+import useSWR, { useSWRConfig } from 'swr';
 import { toast } from 'sonner';
 import { formatDistanceToNow } from 'date-fns';
 import { VerificationRequiredAlert } from '@/retained/components/VerificationRequiredAlert';
@@ -53,6 +53,7 @@ interface Connection {
 }
 
 export default function ConnectionsPage() {
+  const { mutate: mutate } = useSWRConfig();
   const { } = useAuth();
   const router = useRouter();
   const socket = useSocket();

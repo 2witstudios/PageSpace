@@ -38,7 +38,7 @@ export type TaskListRowRenderProps = {
 export function renderTaskListRow({ href, title, selected, progress }: TaskListRowRenderProps): ReactNode {
   return (
     <li>
-      <Link href={href} prefetch className={taskListRowClass(selected)} aria-current={selected ? 'page' : undefined}>
+      <Link href={href} prefetch={false} className={taskListRowClass(selected)} aria-current={selected ? 'page' : undefined}>
         <Icon name="tasks" />
         <span className={taskListRowTitleClass}>{title}</span>
         {progress === undefined ? null : progress.total === 0 ? (

@@ -5,7 +5,7 @@ import { useRouter } from '@/retained-adapters/navigation';
 import { formatDistanceToNow } from 'date-fns';
 import { ChevronLeft, ChevronRight, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
-import useSWR, { mutate } from 'swr';
+import useSWR, { useSWRConfig } from 'swr';
 
 import { fetchWithAuth, post, ApiRequestError } from '@/retained/lib/auth/auth-fetch';
 import { useAgentSurfaceStore } from '@/retained/stores/agents/useAgentSurfaceStore';
@@ -72,6 +72,7 @@ function rowSubtitle(row: PastConversationDTO, showDrive: boolean, driveName: st
  * clobber a different cursor's cached state.
  */
 export default function AgentsPastConversationsList({ driveId }: { driveId?: string }) {
+  const { mutate: mutate } = useSWRConfig();
   const router = useRouter();
   const selectConversation = useAgentSurfaceStore((state) => state.selectConversation);
   const selectChat = useRetainedChatSelection(state => state.select);

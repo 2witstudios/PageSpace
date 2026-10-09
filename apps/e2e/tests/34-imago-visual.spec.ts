@@ -1,3 +1,4 @@
+import { selectTaskFilter } from '../fixtures/retained-tasks.fixture';
 import { test, expect, type BrowserContext, type Page } from '@playwright/test';
 import { factories } from '@pagespace/db/test/factories';
 import { db } from '@pagespace/db/db';
@@ -170,6 +171,7 @@ test('document', async ({ browser, baseURL }) => {
       timeout: LOAD_MS,
     });
     await expect(shown.locator('.retained-ui .tiptap').first()).toHaveAttribute('contenteditable', 'true');
+    await expect(shown.locator('[data-slot="object"]').getByText('181 characters', { exact: true })).toBeVisible();
   });
 });
 
@@ -311,9 +313,7 @@ test('task list', async ({ browser, baseURL }) => {
   await compare(page, baseURL, 'task-list', async (shown) => {
     await expect(shown.getByRole('button', { name: 'Table view', exact: true })).toBeVisible({ timeout: LOAD_MS });
     const tree = shown.locator('[data-slot="object"]');
-    await tree.getByRole('button', { name: /^Filters/ }).click();
-    await shown.getByRole('dialog').getByRole('button', { name: 'All', exact: true }).click();
-    await shown.keyboard.press('Escape');
+    await selectTaskFilter(shown, 'All');
     await expect(tree.getByRole('checkbox', { name: 'Complete Invite the press', exact: true })).toBeVisible();
     await expect(tree.getByRole('checkbox', { name: 'Reopen Write the brief', exact: true })).toHaveAttribute(
       'aria-checked',

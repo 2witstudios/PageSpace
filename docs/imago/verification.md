@@ -142,3 +142,34 @@ The cancelled first candidate’s completed Imago unit phase passed 1,551 tests 
 222 files. Its uploaded coverage summary measured 94.36% lines/statements,
 94.64% branches and 90.69% functions. This is exact `b26d718` intermediate evidence,
 not a passing aggregate job or a substitute for the final candidate’s CI.
+
+### Cloud follow-up at `75bcc336596831465ebc39d99811da3ecc58784b`
+
+GitHub Actions passed production web/Imago builds, workspace lint/typecheck/Knip,
+the Imago image build/boot and security jobs. The aggregate coverage and full
+browser jobs remain pending. No heavy local build or test process remains running
+after the owner requested cloud verification.
+
+Manual Linux visual generation (run `37969460678`) passed chat, files, document,
+channel, DM and task-board captures in both themes. The task-list case failed
+because its wide pane exposes direct filter tabs rather than the compact Filters
+sheet. Reviewed the twelve produced images; do not treat this partial run as a
+validated baseline set. The next fixture supports both real responsive controls.
+Review also caught the document count displaying zero after content hydration:
+the retained counter now subscribes to editor state, and capture waits for the
+seeded document’s actual 181-character count. A complete generation, repeat
+comparison and token negative control are still required before baseline commit.
+
+PageSpace publication still returns `Transport closed`; this record and the PR
+carry progress for orchestrator reconciliation. Task status remains In Progress.
+
+The full browser job on this SHA completed with 62 passes and 17 failures.
+Eight failures involve old visual baselines; task-list capture also assumes the
+compact filter. Functional follow-up covers the palette’s second naming dialog,
+auto-expanding filtered tree ancestors, refreshing the native task projection
+after retained edits, scoped SWR mutation in retained settings/calendar/chat,
+browser-authenticated Secure-cookie probes and the workflow agent selector.
+Task-list click traces show an unfinished prefetched RSC response; task-list links
+now load on demand rather than reusing that prefetch. The completion-refusal test
+expects the actual server message while keeping 422, rollback and storage checks.
+These fixes require the next exact-candidate cloud run; they are not claimed passed.

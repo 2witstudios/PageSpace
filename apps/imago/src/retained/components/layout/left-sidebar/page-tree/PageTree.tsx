@@ -88,6 +88,8 @@ export default function PageTree({
   // Collapsed IDs for SortableTree (inverted from expanded)
   const collapsedIds = useMemo(() => {
     const allIds = new Set<string>();
+    // Reveal matching descendants without changing the user's saved expansion.
+    if (searchQuery.trim()) return allIds;
     const collectIds = (items: TreePage[]) => {
       for (const item of items) {
         if (!expandedNodes.has(item.id)) {
@@ -100,7 +102,7 @@ export default function PageTree({
     };
     collectIds(displayedTree);
     return allIds;
-  }, [displayedTree, expandedNodes]);
+  }, [displayedTree, expandedNodes, searchQuery]);
 
   // Handle move from SortableTree
   const handleMove = useCallback(
@@ -338,7 +340,7 @@ export default function PageTree({
                   projected={projected}
                   handleProps={handleProps}
                   wrapperProps={wrapperProps}
-                  isExpanded={expandedNodes.has(item.id)}
+                  isExpanded={Boolean(searchQuery.trim()) || expandedNodes.has(item.id)}
                   onToggleExpand={handleToggleExpand}
                   onOpenCreateDialog={handleOpenCreateDialog}
                   mutate={mutate}
