@@ -295,8 +295,12 @@ export function useAuth(): {
           if (isOAuthSuccess && typeof window !== 'undefined') {
             console.log('[AUTH_HOOK] Cleaning up OAuth success parameter from URL');
             const newUrl = new URL(window.location.href);
-            newUrl.searchParams.delete('auth');
-            window.history.replaceState({}, '', newUrl.toString());
+            // A retained hook may finish while a native route transition is pending.
+            // Preserve Next's router state and let only the first hook clean the marker.
+            if (newUrl.searchParams.get('auth') === 'success') {
+              newUrl.searchParams.delete('auth');
+              window.history.replaceState(window.history.state, '', newUrl.toString());
+            }
             setIsOAuthSuccess(false); // Clear the flag to exit loading state
           }
         }

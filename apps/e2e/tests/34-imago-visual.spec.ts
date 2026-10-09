@@ -319,6 +319,7 @@ test('task list', async ({ browser, baseURL }) => {
       'aria-checked',
       'true',
     );
+    await expect(listPane(shown).getByRole('progressbar', { name: '2 of 7 tasks done', exact: true })).toBeVisible();
   });
 });
 
@@ -335,5 +336,6 @@ test('task board', async ({ browser, baseURL }) => {
       { timeout: LOAD_MS },
     );
     await expect(board.getByRole('article', { name: 'Draft the announcement', exact: true })).toBeVisible();
+    await expect(listPane(shown).getByRole('progressbar', { name: '2 of 7 tasks done', exact: true })).toBeVisible();
   });
 });

@@ -9,7 +9,7 @@ import {
   revalidateWorkspaceListings,
   touchConversationInCache,
 } from '@/retained/components/agents/panes/workspace-conversations';
-import type { ConversationDirectoryPayload } from '@/retained/lib/websocket/conversation-events';
+import type { ConversationDirectoryPayload } from '@/retained-adapters/ui-contracts';
 
 /**
  * `useSessionDirectoryListener` — the DIRECTORY plane (Agent-Session Single

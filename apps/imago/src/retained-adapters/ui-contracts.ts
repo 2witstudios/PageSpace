@@ -1,3 +1,4 @@
+import type { UIMessage } from 'ai';
 import type { AttachmentMeta } from '@pagespace/lib/types';
 export type { PresenceViewer, PresencePageViewersPayload } from '@pagespace/lib/types';
 export type { AccessRevokedPayload } from '@pagespace/lib/realtime/kick-client';
@@ -7,6 +8,85 @@ import { PALETTE, MAX_DECIMALS, MIN_FONT_SIZE, MAX_FONT_SIZE, MAX_ADDRESSABLE_RO
 import type { PageType } from '@pagespace/lib/utils/enums';
 import type { ConversationAccessRow } from '@pagespace/lib/permissions/conversation-access';
 import type { ActivityActionPreview } from '@/retained/types/activity-actions';
+// lib/websocket/conversation-events.ts#ConversationEventScope
+export type ConversationEventScope =
+  | { kind: 'page'; pageId: string }
+  | { kind: 'global'; ownerId: string };
+// lib/websocket/conversation-events.ts#ConversationEventTriggeredBy
+export interface ConversationEventTriggeredBy {
+  userId: string;
+  browserSessionId: string;
+}
+// lib/websocket/conversation-events.ts#ConversationEventBase
+export interface ConversationEventBase {
+  conversationId: string;
+  /**
+   * The post-write `conversations.rev`. 0 when the conversation has no row
+   * (legacy page conversations) — subscribers treat that as "no watermark,
+   * refetch on doubt".
+   */
+  rev: number;
+  scope: ConversationEventScope;
+  triggeredBy: ConversationEventTriggeredBy;
+}
+// lib/websocket/conversation-events.ts#ConversationMessageRef
+export interface ConversationMessageRef {
+  id: string;
+  role: string;
+  status: string;
+  /**
+   * ABSENT when the message carries no timestamp — never "now" (review
+   * finding). `createdAt` is the key clients order on, so a fabricated one is
+   * the single value guaranteed to be wrong for the messages that reach this
+   * shape: a backfill or a replay lands at the bottom of the transcript rather
+   * than where it belongs. Missing is a fact a reader can act on; a plausible
+   * wrong answer is not.
+   */
+  createdAt?: string;
+}
+// lib/websocket/conversation-events.ts#ConversationMessagePayload
+export type ConversationMessagePayload = ConversationEventBase &
+  (
+    | { message: UIMessage; truncated?: undefined }
+    | { messageRef: ConversationMessageRef; truncated: true }
+  );
+// lib/websocket/conversation-events.ts#ConversationMessageDeletedPayload
+export interface ConversationMessageDeletedPayload extends ConversationEventBase {
+  messageId: string;
+}
+// lib/websocket/conversation-events.ts#ConversationUndoAppliedPayload
+export interface ConversationUndoAppliedPayload extends ConversationEventBase {
+  mode: 'messages_only' | 'messages_and_changes';
+  affectedMessageIds: string[];
+}
+// lib/websocket/conversation-events.ts#ConversationChangedFields
+export interface ConversationChangedFields {
+  title?: string | null;
+  lastMessageAt?: string | null;
+  isShared?: boolean;
+  /**
+   * The bound plan page, or null when unbound. On the wire because `PlanChip`
+   * renders it: without a field here (and the matching rev bump) a second pane
+   * on the same conversation sees an unchanged rev, which it cannot tell apart
+   * from "nothing happened", and shows no chip — or a stale one after
+   * `clear_plan` — until a reload.
+   */
+  planPageId?: string | null;
+}
+// lib/websocket/conversation-events.ts#ConversationDirectoryPayload
+export interface ConversationDirectoryPayload extends ConversationEventBase {
+  changes?: ConversationChangedFields;
+  /** Present on `conversation:created` so sidebars can insert without a fetch. */
+  conversation?: {
+    id: string;
+    title: string | null;
+    type: string;
+    contextId: string | null;
+    isShared: boolean;
+    createdAt: string;
+    lastMessageAt: string | null;
+  };
+}
 // lib/websocket/socket-utils.ts#PageOperation
 export type PageOperation = 'created' | 'updated' | 'moved' | 'deleted' | 'restored' | 'trashed' | 'content-updated';
 // lib/websocket/socket-utils.ts#DriveOperation

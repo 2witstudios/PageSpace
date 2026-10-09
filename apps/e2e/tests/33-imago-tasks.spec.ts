@@ -140,7 +140,7 @@ const storedTask = async (taskId: string) => {
 /**
  * A request from inside the signed-in page, as imago's client sends it: the session cookie and
  * web's CSRF token. (Playwright's request context would not carry the Secure session cookie over
- * http://127.0.0.1.) It goes around imago's SWR cache, so the open view does not see it.
+ * http://127.0.0.1.) It goes around Imago's SWR cache; socket events may still refresh the open view.
  */
 const fetchInPage = (page: Page, method: string, path: string, json: Record<string, unknown>) =>
   page.evaluate(
@@ -295,18 +295,31 @@ test('a parent with an open subtask is refused completion, by the view and by th
   const parent = await addTask(page, treeOf(page), { label: 'Add task', listPage: listPageId, title: 'Ship it' });
   const stale = await addTask(page, treeOf(page), { label: 'Add task', listPage: listPageId, title: 'Print it' });
 
-  // Refused by the server: a subtask lands under "Print it" from outside this view, so the view
-  // still counts none and sends the completion. apps/web answers 422 and the tick rolls back.
-  const outside = await fetchInPage(page, 'POST', tasksPath(stale.pageId), { title: 'Proof the cover' });
-  expect(outside.status).toBe(201);
-  const refused = answerTo(page, 'PATCH', taskPath(listPageId, stale.id));
-  await checkbox(treeOf(page), 'Print it').click();
-  const refusal = await refused;
-  expect(refusal.status()).toBe(422);
-  expect(await refusal.json()).toMatchObject({ code: 'SUBTASKS_INCOMPLETE', pending: 1, total: 1 });
-  await expect(page.getByText('Complete all sub-tasks first (1 of 1 remaining)', { exact: true })).toBeVisible();
-  await expect(checkbox(treeOf(page), 'Print it')).toHaveAttribute('aria-checked', 'false');
-  expect(await storedTask(stale.id)).toMatchObject({ status: 'pending', completedAt: null });
+  // Hold root-list revalidation to reproduce a genuinely stale client while the
+  // outside write and completion still reach the real server. Socket refresh normally
+  // updates the subtask count and correctly refuses completion before a PATCH.
+  let releaseRefresh: () => void = () => {};
+  const refreshGate = new Promise<void>((resolve) => { releaseRefresh = resolve; });
+  const rootTasks = (url: URL) => url.pathname === tasksPath(listPageId);
+  await page.route(rootTasks, async (route) => {
+    if (route.request().method() === 'GET') await refreshGate;
+    await route.continue();
+  });
+  try {
+    const outside = await fetchInPage(page, 'POST', tasksPath(stale.pageId), { title: 'Proof the cover' });
+    expect(outside.status).toBe(201);
+    const refused = answerTo(page, 'PATCH', taskPath(listPageId, stale.id));
+    await checkbox(treeOf(page), 'Print it').click();
+    const refusal = await refused;
+    expect(refusal.status()).toBe(422);
+    expect(await refusal.json()).toMatchObject({ code: 'SUBTASKS_INCOMPLETE', pending: 1, total: 1 });
+    await expect(page.getByText('Complete all sub-tasks first (1 of 1 remaining)', { exact: true })).toBeVisible();
+    await expect(checkbox(treeOf(page), 'Print it')).toHaveAttribute('aria-checked', 'false');
+    expect(await storedTask(stale.id)).toMatchObject({ status: 'pending', completedAt: null });
+  } finally {
+    releaseRefresh();
+    await page.unroute(rootTasks);
+  }
 
   // Refused by the view: a subtask added in the detail is one the view counts, so ticking the
   // parent says why at once and sends nothing.

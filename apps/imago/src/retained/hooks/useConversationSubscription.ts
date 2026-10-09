@@ -32,7 +32,7 @@ import type {
   ConversationMessagePayload,
   ConversationMessageDeletedPayload,
   ConversationUndoAppliedPayload,
-} from '@/retained/lib/websocket/conversation-events';
+} from '@/retained-adapters/ui-contracts';
 
 /**
  * `useConversationSubscription` — a surface's subscription to ONE conversation

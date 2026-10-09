@@ -4,6 +4,7 @@ import ts from 'typescript';
 // Copy only the declared API shapes consumed by the UI. Importing the service
 // barrels for these types otherwise inventories server executors as UI source.
 const declarations: Record<string, readonly string[]> = {
+  'lib/websocket/conversation-events.ts': ['ConversationEventScope', 'ConversationEventTriggeredBy', 'ConversationEventBase', 'ConversationMessageRef', 'ConversationMessagePayload', 'ConversationMessageDeletedPayload', 'ConversationUndoAppliedPayload', 'ConversationChangedFields', 'ConversationDirectoryPayload'],
   'lib/websocket/socket-utils.ts': ['PageOperation', 'DriveOperation', 'DriveMemberOperation', 'TaskOperation', 'CreditsOperation', 'InboxOperation', 'ActivityEventPayload', 'PageEventPayload', 'DriveEventPayload', 'DriveMemberEventPayload', 'TaskEventPayload', 'CreditsEventPayload', 'InboxEventPayload', 'ThreadReplyCountUpdatedPayload', 'AiStreamStartPayload', 'AiStreamCompletePayload', 'ChatUserMessagePayload', 'ChatMessageEditedPayload', 'ChatMessageDeletedPayload', 'ChatUndoAppliedPayload', 'ChatConversationAddedPayload', 'ChatGlobalConversationAddedPayload', 'ChatConversationRenamedPayload', 'ChatConversationDeletedPayload', 'AgentGrantChangedPayload', 'ShellActivityEventPayload'],
   'app/api/user/favorites/route.ts': ['FavoriteItem'],
   'app/api/user/recents/route.ts': ['RecentPage'],
@@ -17,6 +18,7 @@ const declarations: Record<string, readonly string[]> = {
   'lib/ai/core/command-processor.ts': ['CommandSkipReason', 'COMMAND_SKIP_REASON_TEXT', 'CommandExecutionData'],
 };
 const output = [
+  "import type { UIMessage } from 'ai';",
   "import type { AttachmentMeta } from '@pagespace/lib/types';",
   "export type { PresenceViewer, PresencePageViewersPayload } from '@pagespace/lib/types';",
   "export type { AccessRevokedPayload } from '@pagespace/lib/realtime/kick-client';",

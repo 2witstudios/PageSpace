@@ -169,7 +169,36 @@ compact filter. Functional follow-up covers the palette’s second naming dialog
 auto-expanding filtered tree ancestors, refreshing the native task projection
 after retained edits, scoped SWR mutation in retained settings/calendar/chat,
 browser-authenticated Secure-cookie probes and the workflow agent selector.
-Task-list click traces show an unfinished prefetched RSC response; task-list links
-now load on demand rather than reusing that prefetch. The completion-refusal test
-expects the actual server message while keeping 422, rollback and storage checks.
+Disabling task-link prefetch did not resolve navigation and is reverted. The next
+trace showed concurrent OAuth cleanup replacing browser history with empty state
+during navigation. Cleanup now preserves Next router state and is idempotent.
+The completion-refusal test holds real GET revalidation to reproduce a stale client
+without mocking the outside write or the server’s 422, rollback and storage checks.
 These fixes require the next exact-candidate cloud run; they are not claimed passed.
+
+The independent manual run on `75bcc336` completed its aggregate coverage step:
+Imago passed 1,552 tests in 222 files; the workspace command failed one web test
+(`conversation-events-audience.test.ts` emitter registry), with 21,397 other web
+tests passing. Its repo-wide source scan correctly discovered a copied server
+conversation emitter, reached solely by type imports. The next change extracts
+those exact event payload declarations into the existing generated UI contracts
+and removes that server implementation and its unused masking helper from the
+retained closure (850 source files). No emitter-registry exception is added.
+Processor/integration phases did not run after this failure; they remain required.
+
+### Linux baseline evidence at `ce5a5fbbeac3a948e407d22b8e53604da65dcfd2`
+
+Run `37973401635` passed production builds, lint/typecheck/Knip and its manual
+visual job. Generation passed seven cases (fourteen PNGs); repeat comparison and
+the token negative control passed, with one board comparison requiring a retry
+(2,806 changed pixels). Reviewed all fourteen images. Both document captures show
+the correct 181 characters. The task fixture seeds after opening, so capture now
+also awaits the persisted sidebar meter (2 of 7 tasks done). Pixel thresholds stay
+unchanged. CI now retains successful-run reports too, so any retry differences
+remain inspectable. The next normal comparison must validate the committed PNGs.
+Image build/boot and security passed at this SHA. The full interaction job completed
+with 68 passes and 11 failures: eight visual baseline mismatches, task-list navigation,
+the stale-client completion test and nested-dialog workflow navigation. Saved Canvas
+content, approval cards and read-only boundaries passed. The next candidate fixes the
+three remaining failures and includes the reviewed PNGs. Aggregate coverage still
+requires the emitter cleanup and subsequent processor/integration gates.
