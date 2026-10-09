@@ -321,6 +321,20 @@ test('mention and command pickers keep scoped styles and native navigation', asy
   await expect(page).toHaveURL(/\/imago\/account\/commands$/);
   expect(await page.evaluate(() => document.documentElement.dataset.pickerShellProof)).toBe('kept');
   await expect(chat).toHaveCount(1);
+  const editorPage = await factories.createPage(user.homeDriveId, { type: 'DOCUMENT', title: 'Editor mention proof', content: '<p>Insert a reference: </p>' });
+  await page.goto(imagoPath(user.homeDriveId, `files/${editorPage.id}`));
+  const editor = page.locator('[data-slot="object"] .tiptap[contenteditable="true"]');
+  await expect(editor).toBeEditable();
+  await editor.click();
+  await page.keyboard.press('Control+End');
+  await page.keyboard.type('@Mention proof');
+  const editorMention = page.locator('#retained-portals [data-retained-picker="editor-mention"]');
+  await expect(editorMention).toBeVisible();
+  await expect.poll(() => editorMention.evaluate(node => getComputedStyle(node).backgroundColor)).not.toBe('rgba(0, 0, 0, 0)');
+  await editorMention.getByRole('option').filter({ hasText: 'Mention proof' }).first().click();
+  await expect(editor.locator('[data-page-id]')).toContainText('Mention proof');
+  await expect.poll(async () => (await db.select({ content: pages.content }).from(pages).where(eq(pages.id, editorPage.id)))[0]?.content).toContain('data-page-id');
+  await shot(page, 'editor-mention');
 });
 
 test('code, sheet and canvas edits persist through their original editors', async ({ browser, baseURL }) => {

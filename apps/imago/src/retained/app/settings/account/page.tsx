@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useAuth } from "@/retained/hooks/useAuth";
-import { useRouter } from "@/retained-adapters/navigation";
+import { useRouter, retainedRouterHref } from "@/retained-adapters/navigation";
 import useSWR from "swr";
 import { Button } from "@/retained/components/ui/button";
 import { Input } from "@/retained/components/ui/input";
@@ -367,7 +367,7 @@ export default function AccountPage() {
       // path App Review walks (Guideline 3.1.1). An Apple user PageSpace could not
       // disconnect also sees the "Stop Using Sign in with Apple" steps there (TN3194).
       setTimeout(() => {
-        window.location.href = postDeletionDestination(result?.appleSignIn);
+        window.location.href = retainedRouterHref(postDeletionDestination(result?.appleSignIn), window.location.origin);
       }, 1000);
     } catch (error) {
       console.error("Account deletion error:", error);

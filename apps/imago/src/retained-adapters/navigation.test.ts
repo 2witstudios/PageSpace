@@ -36,6 +36,8 @@ describe('retained destinations stay inside the persistent shell', () => {
     vi.stubEnv('NEXT_PUBLIC_WEB_APP_URL', 'http://localhost:3000');
     expect(retainedRouterHref('/auth/signin?next=%2Fimago', 'http://localhost:3006'))
       .toBe('http://localhost:3000/auth/signin?next=%2Fimago');
+    expect(retainedRouterHref('/auth/account-deleted?appleSignIn=manual', 'http://localhost:3006'))
+      .toBe('http://localhost:3000/auth/account-deleted?appleSignIn=manual');
   });
   it('gives retained path readers their established drive/section shape', () => {
     expect(classicPathname('/drive123/files/page456')).toBe('/dashboard/drive123/page456');

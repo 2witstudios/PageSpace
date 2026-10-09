@@ -61,7 +61,7 @@ const TiptapSuggestionList = forwardRef<SuggestionListRef, TiptapSuggestionListP
   }));
 
   return (
-    <div className="bg-popover border border-border rounded-md shadow-md overflow-hidden min-w-64 max-w-sm">
+    <div data-retained-picker="editor-mention" className="bg-popover border border-border rounded-md shadow-md overflow-hidden min-w-64 max-w-sm">
       <Tabs
         value={activeTab}
         onValueChange={(v) => { setActiveTab(v as TabType); setSelectedIndex(0); }}
@@ -234,11 +234,13 @@ export const PageMention = PageMentionWithView.configure({
       return suggestions;
     },
     render: () => {
-      let component: ReactRenderer<SuggestionListRef>;
-      let popup: Instance | null;
+      let component: ReactRenderer<SuggestionListRef> | null = null;
+      let popup: Instance | null = null;
 
       return {
         onStart: (props) => {
+          const portalRoot = document.getElementById('retained-portals');
+          if (!portalRoot) return;
           component = new ReactRenderer(TiptapSuggestionList, {
             props: {
               items: props.items,
@@ -277,9 +279,9 @@ export const PageMention = PageMentionWithView.configure({
           const rect = props.clientRect();
           if (!rect) return;
 
-          popup = tippy(document.body, {
+          popup = tippy(portalRoot, {
             getReferenceClientRect: () => rect,
-            appendTo: () => document.body,
+            appendTo: () => portalRoot,
             content: component.element,
             showOnCreate: true,
             interactive: true,
@@ -288,6 +290,8 @@ export const PageMention = PageMentionWithView.configure({
           }) as Instance;
         },
         onUpdate(props) {
+          const portalRoot = document.getElementById('retained-portals');
+          if (!component || !portalRoot) return;
           component.updateProps({
             items: props.items,
             command: (item: MentionSuggestion) => {
@@ -321,9 +325,9 @@ export const PageMention = PageMentionWithView.configure({
 
           const rect = props.clientRect ? props.clientRect() : null;
           if (!popup && rect) {
-            popup = tippy(document.body, {
+            popup = tippy(portalRoot, {
               getReferenceClientRect: () => rect,
-              appendTo: () => document.body,
+              appendTo: () => portalRoot,
               content: component.element,
               showOnCreate: true,
               interactive: true,
@@ -339,11 +343,11 @@ export const PageMention = PageMentionWithView.configure({
             popup?.hide();
             return true;
           }
-          return component.ref?.onKeyDown(props) || false;
+          return component?.ref?.onKeyDown(props) || false;
         },
         onExit() {
           popup?.destroy();
-          component.destroy();
+          component?.destroy();
         },
       };
     },

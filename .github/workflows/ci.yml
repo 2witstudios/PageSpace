@@ -29,7 +29,7 @@ jobs:
 
     services:
       postgres:
-        image: postgres:17-alpine
+        image: mirror.gcr.io/library/postgres:17-alpine
         env:
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: pagespace_test
@@ -260,7 +260,13 @@ jobs:
       - name: Bring up local Infisical OSS (store adapter integration suite)
         working-directory: packages/lib/src/agent-accounts/store/infisical-dev
         run: |
-          docker compose up -d
+          # Fetch the unchanged fixture tags through Google's public Docker Hub cache.
+          # Tag them locally for the existing Compose file; production is untouched.
+          for image in infisical/infisical:v0.165.10 library/redis:7.4.11-alpine library/postgres:14-alpine; do
+            docker pull "mirror.gcr.io/$image"
+            docker tag "mirror.gcr.io/$image" "${image#library/}"
+          done
+          docker compose up -d --pull never
           for i in $(seq 1 30); do
             if curl -sf http://localhost:8080/api/status > /dev/null 2>&1; then
               echo "Infisical backend answered after $((i * 2))s"
@@ -391,7 +397,7 @@ jobs:
 
     services:
       postgres:
-        image: postgres:17-alpine
+        image: mirror.gcr.io/library/postgres:17-alpine
         env:
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: pagespace_test

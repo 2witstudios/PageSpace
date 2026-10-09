@@ -61,6 +61,11 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
+        with:
+          # Public cache of the same Docker Hub tags; fallback remains Docker Hub.
+          buildkitd-config-inline: |
+            [registry."docker.io"]
+              mirrors = ["mirror.gcr.io"]
 
       - name: Build image
         uses: docker/build-push-action@v7
