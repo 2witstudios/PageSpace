@@ -143,5 +143,14 @@ content without changing serialization, save transport or editing permissions.
 Retained explicit SWR mutations use the enclosing Imago cache rather than SWR’s
 unrelated global cache. Retained task hydration/edits also refresh the native task
 projection used by list progress and individual details. Filtering reveals matching
-descendants and their ancestors without changing saved tree expansion. Task-list
-navigation loads its authenticated route on demand instead of prefetching it.
+descendants and their ancestors without changing saved tree expansion. OAuth
+redirect cleanup preserves Next router history state during native navigation
+and only removes a success marker while it is present. Task links retain prefetch.
+Conversation event payload types come from generated UI declarations; the server
+emitter and unused masking helper are excluded from the 850-file retained closure.
+
+Explicit task-trigger saves/removals read the canonical trigger list and populate
+the scoped cache without background revalidation. The open form intentionally
+pauses SWR, which also pauses bare mutate calls; that pause still protects other
+editing sessions. The new browser check exercises save/reload/removal via real APIs;
+its cloud result is still pending.

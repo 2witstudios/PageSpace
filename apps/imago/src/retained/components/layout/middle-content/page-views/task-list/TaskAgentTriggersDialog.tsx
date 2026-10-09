@@ -119,8 +119,8 @@ export function TaskAgentTriggersDialog({
 
   // Pause background revalidation during document/form editing so a remote
   // task_updated broadcast cannot refetch this dialog and clobber in-progress prompt
-  // typing. Initial load and explicit mutate() (e.g. refetchTriggers after save) are
-  // unaffected because *LoadedRef gates the pause until first success.
+  // typing. Initial load remains available until first success; explicit saves
+  // fetch their canonical result and populate the cache without revalidation.
   const isAnyEditing = useEditingStore((s) => s.isAnyEditing());
   const triggersLoadedRef = useRef(false);
   const agentsLoadedRef = useRef(false);
@@ -209,7 +209,9 @@ export function TaskAgentTriggersDialog({
         instructionPageId: section.instructionPageId,
         contextPageIds: section.contextPageIds,
       });
-      await refetchTriggers();
+      // The open form pauses background SWR revalidation, including bare mutate().
+      // Read back this explicit write without unpausing other editing sessions.
+      await refetchTriggers(await triggersFetcher(`/api/tasks/${taskId}/triggers`), { revalidate: false });
       await globalMutate(`/api/pages/${pageId}/tasks`);
       toast.success(type === 'due_date' ? 'Due-date trigger saved' : 'Completion trigger saved');
       onSaved?.();
@@ -225,7 +227,9 @@ export function TaskAgentTriggersDialog({
     setRemovingType(type);
     try {
       await del(`/api/tasks/${taskId}/triggers/${type}`);
-      await refetchTriggers();
+      // The open form pauses background SWR revalidation, including bare mutate().
+      // Read back this explicit write without unpausing other editing sessions.
+      await refetchTriggers(await triggersFetcher(`/api/tasks/${taskId}/triggers`), { revalidate: false });
       await globalMutate(`/api/pages/${pageId}/tasks`);
       updateSection(type, { ...EMPTY_SECTION });
       toast.success('Trigger removed');

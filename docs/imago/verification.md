@@ -202,3 +202,16 @@ the stale-client completion test and nested-dialog workflow navigation. Saved Ca
 content, approval cards and read-only boundaries passed. The next candidate fixes the
 three remaining failures and includes the reviewed PNGs. Aggregate coverage still
 requires the emitter cleanup and subsequent processor/integration gates.
+
+### Candidate `63bc378e7e01ee53d2b5b6fa111a14c18aaf46dc`
+
+Test Suite `37976738495` is running; security `37976738033` and Imago image
+build/boot `37976738051` passed. The web production build passed. Do not infer
+final browser, lint/typecheck or aggregate results while those jobs are running.
+
+Prepared follow-up: a real task-trigger save/reload/removal test found that the
+open editing form pauses SWR’s bare mutate revalidation. Explicit saves/removals
+now fetch canonical trigger data and populate the cache with revalidation false,
+without removing the editing pause. This follow-up is not yet validated remotely.
+The prior ce5 manual aggregate also finished with the same sole copied-emitter
+audit failure (1,552 Imago tests and 21,397 other web tests passed).

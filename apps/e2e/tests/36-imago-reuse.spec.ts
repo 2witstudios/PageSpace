@@ -365,6 +365,67 @@ test('task creation and completion persist through retained task controls', asyn
   await shot(page, 'task-interactions');
 });
 
+test('task agent triggers save, survive reload and remove through retained controls', async ({ browser, baseURL }) => {
+  const list = await factories.createPage(user.homeDriveId, { type: 'TASK_LIST', title: 'Trigger tasks' });
+  const agent = await factories.createPage(user.homeDriveId, { type: 'AI_CHAT', title: 'Trigger proof agent' });
+  const page = await open(browser, baseURL!, imagoPath(user.homeDriveId, `tasks/${list.id}`));
+  const object = page.locator('[data-slot="object"]');
+  await object.getByRole('button', { name: 'New Task', exact: true }).click();
+  const input = object.locator('input[placeholder="+ Add a new task..."]:visible');
+  const created = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === `/api/pages/${list.id}/tasks`);
+  await input.fill('Task with a trigger');
+  await input.press('Enter');
+  const creation = await created;
+  expect(creation.status()).toBe(201);
+  await input.press('Escape');
+  const task = await creation.json() as { id: string };
+  await expect(object.locator(`[data-task-id="${task.id}"]:visible`)).toBeVisible();
+  const triggersPath = `/api/tasks/${task.id}/triggers`;
+  const openTriggers = async () => {
+    await object.getByText('Task with a trigger', { exact: true }).filter({ visible: true }).click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Agent triggers…', exact: true }).click();
+  };
+  await openTriggers();
+  const dialog = page.getByRole('dialog', { name: 'Agent triggers', exact: true });
+  const completion = dialog.getByRole('switch', { name: 'Run when task is completed', exact: true });
+  await expect(completion).toBeEnabled();
+  await expect(dialog.getByRole('switch', { name: 'Run when due date arrives', exact: true })).toBeDisabled();
+  await completion.click();
+  await dialog.getByRole('combobox').click();
+  await page.getByRole('option', { name: 'Trigger proof agent', exact: true }).click();
+  const prompt = dialog.getByPlaceholder('What should the agent do when the task is completed?');
+  await prompt.fill('Summarize the completed task.');
+  const saved = page.waitForResponse(response => response.request().method() === 'PUT' && new URL(response.url()).pathname === triggersPath);
+  await dialog.getByRole('button', { name: 'Save', exact: true }).click();
+  expect((await saved).ok()).toBe(true);
+  await expect(dialog.getByRole('button', { name: 'Update', exact: true })).toBeVisible();
+  const stored = JSON.parse((await browserGet(page, triggersPath)).body) as { triggers: { agentPageId: string; triggerType: string; prompt: string; isEnabled: boolean }[] };
+  expect(stored.triggers).toEqual([expect.objectContaining({ agentPageId: agent.id, triggerType: 'completion', prompt: 'Summarize the completed task.', isEnabled: true })]);
+  await page.reload();
+  await openTriggers();
+  await expect(completion).toBeChecked();
+  await expect(prompt).toHaveValue('Summarize the completed task.');
+  await expect(dialog.getByRole('combobox')).toHaveText('Trigger proof agent');
+  await shot(page, 'task-agent-trigger');
+  const removed = page.waitForResponse(response => response.request().method() === 'DELETE' && new URL(response.url()).pathname === `${triggersPath}/completion`);
+  await dialog.getByRole('button', { name: 'Remove', exact: true }).click();
+  expect((await removed).ok()).toBe(true);
+  await expect(completion).not.toBeChecked();
+  expect(JSON.parse((await browserGet(page, triggersPath)).body)).toMatchObject({ triggers: [] });
+
+  const reader = await imagoUser('Trigger read-only member'); extraUsers.push(reader.id);
+  await factories.createDriveMember(user.homeDriveId, reader.id, { role: 'MEMBER' });
+  await factories.createPagePermission(list.id, reader.id);
+  const viewer = await freshBrowser(browser, baseURL!); contexts.push(viewer.context);
+  await signIn(viewer.page, reader, imagoPath(user.homeDriveId, `tasks/${list.id}`));
+  await hydrated(viewer.page);
+  const readOnlyObject = viewer.page.locator('[data-slot="object"]');
+  await readOnlyObject.getByText('Task with a trigger', { exact: true }).filter({ visible: true }).click({ button: 'right' });
+  await expect(viewer.page.getByRole('menuitem', { name: 'Agent triggers…', exact: true })).toBeDisabled();
+  const refusedRead = await viewer.page.evaluate(async path => (await fetch(path, { credentials: 'same-origin' })).status, triggersPath);
+  expect(refusedRead).toBe(403);
+});
+
 test('direct messaging creates a destination and sends through native conversation controls', async ({ browser, baseURL }) => {
   const recipient = await imagoUser('Reuse recipient'); extraUsers.push(recipient.id);
   await factories.createDriveMember(user.homeDriveId, recipient.id, { role: 'MEMBER' });
