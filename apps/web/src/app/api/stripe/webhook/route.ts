@@ -4,7 +4,7 @@ import { eq, and, isNull, lte } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { subscriptions, stripeEvents } from '@pagespace/db/schema/subscriptions';
 import { stripe, Stripe, getPersonalTierFromPrice } from '@/lib/stripe';
-import { tierFromInvoiceLine } from '@/lib/stripe/price-config';
+import { tierFromInvoiceLines } from '@/lib/stripe/price-config';
 import type { SubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { deriveTierFromSubscriptions } from '@pagespace/lib/billing/subscription-tier-sync';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -432,9 +432,7 @@ async function withFundingRetry<T>(eventId: string, run: () => Promise<T>): Prom
  * An absent or unrecognized price explicitly has no paid entitlement.
  */
 function tierFromInvoice(invoice: Stripe.Invoice): SubscriptionTier {
-  const lines = invoice.lines?.data ?? [];
-  const line = lines.find((l) => l.pricing?.price_details?.price) ?? lines[0];
-  return tierFromInvoiceLine(line) ?? 'free';
+  return tierFromInvoiceLines(invoice.lines?.data ?? []);
 }
 
 async function handleSubscriptionChange(subscription: Stripe.Subscription) {

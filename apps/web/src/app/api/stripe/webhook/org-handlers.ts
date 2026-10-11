@@ -237,7 +237,7 @@ export async function handleOrgInvoicePaid(
   }
   const extraSeats = await invoiceExtraSeats(route.orgId, invoice, deps);
   // MON-3: the refill sums only the Business base and extra-seat lines, recognized by the
-  // configured org price ids (with the stored item ids as fallback, read in the shell).
+  // configured org price ids; stored subscription item ids cannot establish entitlement.
   const refill = await applyOrgPoolRefill(invoice, {
     extraSeats,
     basePriceId: deps.basePriceId(),

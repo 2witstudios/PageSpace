@@ -4,7 +4,7 @@ import { eq } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { stripe, Stripe } from '@/lib/stripe';
-import { tierFromInvoiceLine } from '@/lib/stripe/price-config';
+import { tierFromInvoiceLines } from '@/lib/stripe/price-config';
 import { PLANS } from '@/lib/subscription/plans';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -14,20 +14,11 @@ const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
 
 /**
  * Get a friendly plan name from invoice line items.
- * For proration invoices, finds the new plan (positive amount line).
+ * Resolves the configured plan across all subscription lines, including prorations.
  * Falls back to Stripe's description if plan can't be determined.
  */
 function getInvoiceDescription(invoice: Stripe.Invoice): string {
-  // Filter to subscription-related line items with pricing info
-  const subscriptionLines = invoice.lines.data.filter(
-    line => line.parent?.subscription_item_details && line.pricing?.price_details?.price
-  );
-
-  // Prefer the positive-amount line (new plan charge) over credits
-  const targetLine = subscriptionLines.find(line => line.amount > 0)
-    || subscriptionLines[0];
-
-  const tier = tierFromInvoiceLine(targetLine);
+  const tier = tierFromInvoiceLines(invoice.lines.data);
   if (tier && tier !== 'free') {
     return PLANS[tier].displayName;
   }

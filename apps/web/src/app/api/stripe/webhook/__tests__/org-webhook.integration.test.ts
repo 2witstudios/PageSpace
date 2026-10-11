@@ -627,12 +627,22 @@ describe('Stripe webhook — org routing, idempotency, lapse (real Postgres, in-
             amount: proCents,
             discount_amounts: [],
             quantity: 1,
+            parent: { subscription_item_details: { subscription_item: 'si_owd3_personal' } },
             pricing: { price_details: { price: stripeConfig.priceIds.pro }, unit_amount_decimal: String(proCents) },
             period: { start: 1_800_000_000, end: 1_800_000_000 + 30 * DAY },
           },
         ],
       },
     };
+    const adHoc = {
+      ...personal,
+      id: `${personal.id}_adhoc`,
+      lines: { ...personal.lines, data: personal.lines.data.map((line) => ({ ...line, parent: undefined })) },
+    };
+    expect(await deliver(eventPayload('invoice.paid', adHoc))).toBe(200);
+    const adHocRows = await db.select().from(creditLedger).where(eq(creditLedger.stripeRef, adHoc.id));
+    expect(adHocRows.reduce((sum, row) => sum + row.amountCents, 0)).toBe(0);
+
     expect(await deliver(eventPayload('invoice.paid', personal))).toBe(200);
     expect(await poolOf(org.orgId)).toBeNull();
     const personalRows = await db.select().from(creditLedger).where(eq(creditLedger.stripeRef, personal.id));

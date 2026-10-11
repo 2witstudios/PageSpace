@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type Stripe from 'stripe';
+import { stripeConfig } from '@/lib/stripe-config';
 
 // Mock Stripe - use vi.hoisted to ensure mocks are available before vi.mock
 const { mockStripeWebhooksConstructEvent, StripeError, mockGetPersonalTierFromPrice } = vi.hoisted(() => {
@@ -823,6 +824,23 @@ describe('POST /api/stripe/webhook', () => {
 
       expect((await POST(request)).status).toBe(200);
       expect(mockApplyStripeFunding).toHaveBeenCalledWith(event, { tier: 'free' });
+    });
+
+    it.each([false, true])('MON-2 (partial) configured subscription price resolves regardless of proration order (%s)', async (reverse) => {
+      const lines = ['price_retired', stripeConfig.priceIds.pro].map((price) => ({
+        amount: price === 'price_retired' ? -500 : 1500,
+        parent: { subscription_item_details: { subscription_item: 'si_personal' } },
+        pricing: { price_details: { price } },
+      }));
+      if (reverse) lines.reverse();
+      const invoice = { ...mockInvoice({ amountPaid: 1000 }), lines: { data: lines } } as Stripe.Invoice;
+      const event = mockStripeEvent('invoice.paid', invoice);
+      mockStripeWebhooksConstructEvent.mockReturnValue(event);
+      const request = new Request('https://example.com/api/stripe/webhook', {
+        method: 'POST', body: JSON.stringify(event), headers: { 'stripe-signature': 'valid_signature' },
+      }) as unknown as import('next/server').NextRequest;
+      expect((await POST(request)).status).toBe(200);
+      expect(mockApplyStripeFunding).toHaveBeenCalledWith(event, { tier: 'pro' });
     });
 
     it('MON-3 (partial) SEAT-7 (partial) an org customer invoice.paid goes to the org fork and never reaches the personal funding path', async () => {

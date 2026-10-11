@@ -85,16 +85,6 @@ export interface OrgPoolPriceIds {
   seatPriceId?: string | null;
 }
 
-/**
- * The org subscription's own Stripe item ids (org_subscriptions.stripeBaseItemId /
- * stripeSeatItemId, stamped by provisioning and refreshed by the mirror): the fallback
- * recognition key for a line whose price id is unreadable.
- */
-export interface OrgPoolItemIds {
-  baseItemId?: string | null;
-  seatItemId?: string | null;
-}
-
 /** An invoice line that is neither the Business base nor the extra-seat item (MON-3). */
 export interface UnrecognizedOrgInvoiceLine {
   /** The price id the line bills, when the line names one. */
@@ -127,9 +117,8 @@ function orgInvoiceLineItemId(line: OrgInvoiceLine | null | undefined): string |
 
 /**
  * MON-3: of an org subscription invoice's lines, the ones the pool refill may sum —
- * only the Business base and the extra-seat item. A line is recognized by its price id
- * matching a configured org plan price (D1), or — when the line carries no readable
- * price id — by its subscription item being one of the subscription's own items. Every
+ * only the Business base and the extra-seat item. A line must name one unambiguous
+ * configured org plan price (D-OW-42); a subscription item ID cannot establish price identity. Every
  * other line (a manually added ad-hoc invoice item, a stranger price) is EXCLUDED and
  * reported with its price id and amount, so a misconfiguration is visible in the log.
  * Nothing configured recognizes nothing: an invoice with no recognizable line refills
@@ -138,20 +127,16 @@ function orgInvoiceLineItemId(line: OrgInvoiceLine | null | undefined): string |
 export function selectOrgPoolRefillLines(
   lines: ReadonlyArray<OrgInvoiceLine | null | undefined>,
   prices: OrgPoolPriceIds = {},
-  items: OrgPoolItemIds = {},
 ): OrgPoolLineSelection {
   const basePriceId = prices.basePriceId || null;
   const seatPriceId = prices.seatPriceId || null;
-  const baseItemId = items.baseItemId || null;
-  const seatItemId = items.seatItemId || null;
   const refillLines: Array<OrgInvoiceLine> = [];
   const unrecognized: Array<UnrecognizedOrgInvoiceLine> = [];
   for (const line of lines) {
     const priceId = orgInvoiceLinePriceId(line);
     const subscriptionItemId = orgInvoiceLineItemId(line);
     const recognized =
-      (priceId !== null && (priceId === basePriceId || priceId === seatPriceId)) ||
-      (subscriptionItemId !== null && (subscriptionItemId === baseItemId || subscriptionItemId === seatItemId));
+      priceId !== null && basePriceId !== seatPriceId && (priceId === basePriceId || priceId === seatPriceId);
     if (recognized) refillLines.push(line as OrgInvoiceLine);
     else unrecognized.push({ priceId, subscriptionItemId, amountCents: wholeCents(line?.amount) });
   }
@@ -230,6 +215,7 @@ export function orgPoolRefillGrant(
     // A gift on any subscription but the org's own funds a pool the org could never spend: the
     // org's status reads its own subscription, so it stays lapsed. Grant nothing (review #2761 P2-4).
     if (input.onOrgSubscription !== true) return { paidCents, allowanceCents: 0, basis: 'none', reason: 'gift_not_org_subscription' };
+    if (input.lines.length === 0) return { paidCents, allowanceCents: 0, basis: 'none', reason: 'no_ratio' };
     const allowanceCents = orgPoolListPriceGrantCents(input.extraSeats ?? 0, active);
     return allowanceCents > 0
       ? { paidCents, allowanceCents, basis: 'list', reason: 'gifted' }

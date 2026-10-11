@@ -141,11 +141,23 @@ describe('wallet-funding: org pool refill', () => {
       expect(selection.unrecognized).toEqual([{ priceId: 'price_stranger', subscriptionItemId: null, amountCents: 900 }]);
     });
 
-    it('MON-3 a line whose subscription item is the subscription\'s own base item is recognized when its price id is unreadable', () => {
-      const legacyBase = { amount: BASE_CENTS, parent: { subscription_item_details: { subscription_item: 'si_base' } } };
-      const selection = selectOrgPoolRefillLines([legacyBase, priced('price_unknown', 700)], {}, { baseItemId: 'si_base', seatItemId: 'si_seat' });
-      expect(selection.refillLines).toEqual([legacyBase]);
-      expect(selection.unrecognized).toEqual([{ priceId: 'price_unknown', subscriptionItemId: null, amountCents: 700 }]);
+    it('MON-3 (partial) a stored subscription item cannot authorize an unreadable or unknown price', () => {
+      const parent = { subscription_item_details: { subscription_item: 'si_base' } };
+      const unreadable = { amount: BASE_CENTS, parent };
+      const unknown = { ...priced('price_unknown', BASE_CENTS), parent };
+      const selection = selectOrgPoolRefillLines([unreadable, unknown], PRICES);
+      expect(selection.refillLines).toEqual([]);
+      expect(selection.unrecognized).toHaveLength(2);
+    });
+
+    it('MON-3 (partial) ambiguous configured org prices authorize no invoice lines', () => {
+      const selection = selectOrgPoolRefillLines([priced(BASE_PRICE_ID, BASE_CENTS)], { basePriceId: BASE_PRICE_ID, seatPriceId: BASE_PRICE_ID });
+      expect(selection.refillLines).toEqual([]);
+    });
+
+    it('MON-3 (partial) a gift with no recognized invoice lines grants nothing', () => {
+      const gift = orgPoolRefillGrant({ lines: [], amountPaidCents: 0, hasSubscriptionParent: true, gifted: true, onOrgSubscription: true }, true, true);
+      expect(gift).toMatchObject({ allowanceCents: 0, basis: 'none', reason: 'no_ratio' });
     });
 
     it('MON-3 an expanded price object and a recognized proration credit are read like plain lines', () => {
@@ -157,7 +169,7 @@ describe('wallet-funding: org pool refill', () => {
       expect(grant.paidCents).toBe(4500);
     });
 
-    it('MON-3 with nothing configured (no price ids, no stored items) nothing is recognized — the pool is never sized from unverified lines', () => {
+    it('MON-3 with no configured price ids nothing is recognized — the pool is never sized from unverified lines', () => {
       const selection = selectOrgPoolRefillLines([priced(BASE_PRICE_ID, BASE_CENTS), { amount: SEAT_CENTS * 3 }]);
       expect(selection.refillLines).toEqual([]);
       expect(selection.unrecognized.map((l) => l.amountCents)).toEqual([BASE_CENTS, SEAT_CENTS * 3]);

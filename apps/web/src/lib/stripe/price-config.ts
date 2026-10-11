@@ -3,16 +3,23 @@ import { tierFromConfiguredPrice, type SubscriptionTier } from '@pagespace/lib/b
 
 /** The price identity carried by a Stripe invoice line. */
 export type InvoiceLinePricing = {
+  parent?: { subscription_item_details?: { subscription_item?: string | null } | null } | null;
   pricing?: {
     price_details?: { price?: string | { id: string } | null } | null;
   } | null;
 };
 
-/** Resolve a personal invoice line; organization billing has its own owner-aware path. */
-export function tierFromInvoiceLine(line: InvoiceLinePricing | undefined): SubscriptionTier | undefined {
-  const price = line?.pricing?.price_details?.price;
-  const priceId = typeof price === 'string' ? price : price?.id;
-  return priceId ? getPersonalTierFromPrice(priceId) : undefined;
+/** Resolve all subscription lines; unknown proration lines cannot hide a configured plan. */
+export function tierFromInvoiceLines(lines: readonly InvoiceLinePricing[]): Exclude<SubscriptionTier, 'business'> {
+  const tiers = new Set<SubscriptionTier>();
+  for (const line of lines) {
+    if (!line.parent?.subscription_item_details) continue;
+    const price = line.pricing?.price_details?.price;
+    const priceId = typeof price === 'string' ? price : price?.id;
+    const tier = priceId ? getTierFromPrice(priceId) : 'free';
+    if (tier !== 'free') tiers.add(tier);
+  }
+  return tiers.size === 1 && tiers.has('pro') ? 'pro' : 'free';
 }
 
 /** Unknown, retired and unconfigured prices have no paid entitlement. */

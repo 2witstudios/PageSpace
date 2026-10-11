@@ -140,8 +140,8 @@ export interface OrgPoolRefillOptions {
   extraSeats?: number;
   /**
    * MON-3: the configured org plan price ids (stripe-config orgPriceIds) — the Business
-   * base and the extra-seat item. Only lines on these prices (or on the subscription's
-   * own stored items) refill the pool; every other line is excluded and logged.
+   * base and the extra-seat item. Only lines on these prices refill the pool;
+   * every other line is excluded and logged.
    */
   basePriceId?: string;
   seatPriceId?: string;
@@ -153,8 +153,8 @@ export interface OrgPoolRefillOptions {
  * invoice.paid for an ORG customer: refill that org's pool with (base + extra-seat
  * items) paid × ratio (MON-3), once per invoice, and roll the pool's period to the
  * invoice's service period — the date the org's allocations then reset on (D-OW-12).
- * Only lines on the configured org plan prices (`basePriceId` / `seatPriceId`, or the
- * subscription's own stored items) are summed; any other line is excluded and logged.
+ * Only lines on the configured org plan prices (`basePriceId` / `seatPriceId`)
+ * are summed; any other line is excluded and logged.
  * The ledger row is written under the org Owner's user id (the ledger is keyed on a
  * person) and the pool's wallet id. Throws on a genuine failure so Stripe redelivers.
  */
@@ -174,14 +174,10 @@ export async function applyOrgPoolRefill(invoice: OrgInvoice, opts: OrgPoolRefil
 
   const lines = invoice.lines?.data ?? [];
   const gifted = invoice.parent?.subscription_details?.metadata?.type === GIFT_SUBSCRIPTION_METADATA_TYPE;
-  // The org's stored subscription linkage: the gift gate below reads whether the invoice is on
-  // the org's OWN subscription (review #2761 P2-4), and the MON-3 line selection falls back to
-  // the stored item ids for a line whose price id is unreadable.
+  // The gift gate requires the invoice to belong to the org's own subscription.
   const [stored] = await db
     .select({
       stripeSubscriptionId: orgSubscriptions.stripeSubscriptionId,
-      stripeBaseItemId: orgSubscriptions.stripeBaseItemId,
-      stripeSeatItemId: orgSubscriptions.stripeSeatItemId,
     })
     .from(orgSubscriptions)
     .where(eq(orgSubscriptions.orgId, org.id))
@@ -195,7 +191,6 @@ export async function applyOrgPoolRefill(invoice: OrgInvoice, opts: OrgPoolRefil
   const selection = selectOrgPoolRefillLines(
     lines,
     { basePriceId: opts.basePriceId, seatPriceId: opts.seatPriceId },
-    { baseItemId: stored?.stripeBaseItemId, seatItemId: stored?.stripeSeatItemId },
   );
   for (const line of selection.unrecognized) {
     loggers.api.warn('org pool refill: invoice line is not the Business base or an extra-seat item; excluded', {
