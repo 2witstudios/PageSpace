@@ -205,6 +205,7 @@ export async function applyOrgPoolRefill(invoice: OrgInvoice, opts: OrgPoolRefil
   const grant = orgPoolRefillGrant(
     {
       lines: selection.refillLines,
+      hasVerifiedGiftPrice: selection.hasVerifiedGiftPrice,
       amountPaidCents: invoice.amount_paid,
       hasSubscriptionParent: hasSubscriptionParent(invoice),
       billingReason: invoice.billing_reason,

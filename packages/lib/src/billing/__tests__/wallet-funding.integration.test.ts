@@ -98,6 +98,7 @@ describe('wallet funding against Postgres', () => {
   const PRICES = { basePriceId: 'price_test_org_base', seatPriceId: 'price_test_org_seat' };
   const priced = (priceId: string, line: { amount: number; period: { start: number; end: number } }) => ({
     ...line,
+    parent: { subscription_item_details: { subscription_item: 'si_org' } },
     pricing: { price_details: { price: priceId } },
   });
 
@@ -198,7 +199,9 @@ describe('wallet funding against Postgres', () => {
     expect(grants[0]).toMatchObject({ amountCents: 4800, paidCents: 8000 });
   });
 
-  it.each([false, true])('MON-3 (partial) unknown prices on stored org items cannot fund a pool, including gifts (%s)', async (gifted) => {
+  it.each([
+    { gifted: false, oldCredit: false }, { gifted: true, oldCredit: false }, { gifted: true, oldCredit: true },
+  ])('MON-3 (partial) unknown replacement prices on stored org items cannot fund a pool (%j)', async ({ gifted, oldCredit }) => {
     if (!dbAvailable) return;
     const owner = await user();
     const [org] = await db.insert(organizations).values({
@@ -219,7 +222,10 @@ describe('wallet funding against Postgres', () => {
       id: `in_${createId()}`, customer: org.stripeCustomerId,
       billing_reason: 'subscription_cycle', amount_paid: gifted ? 0 : 5000, subtotal: 5000,
       parent: { subscription_details: { subscription: subscriptionId, metadata: gifted ? { type: 'gift_subscription' } : undefined } },
-      lines: { data: [{
+      lines: { data: [...(oldCredit ? [{
+        ...priced(PRICES.basePriceId, { amount: -5000, period: { start: PERIOD_START_S, end: PERIOD_END_S } }),
+        parent: { subscription_item_details: { subscription_item: itemId } },
+      }] : []), {
         ...priced('price_retired', { amount: 5000, period: { start: PERIOD_START_S, end: PERIOD_END_S } }),
         parent: { subscription_item_details: { subscription_item: itemId } },
       }] },

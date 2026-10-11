@@ -75,7 +75,7 @@ describe('wallet-funding: org pool refill', () => {
 
   it('D-OW-23 a gifted org subscription (the admin path) is still funded at list price × ratio through the one named function', () => {
     const grant = orgPoolRefillGrant(
-      { lines: [giftedBase], amountPaidCents: 0, hasSubscriptionParent: true, billingReason: 'subscription_cycle', subtotalCents: 5000, gifted: true, onOrgSubscription: true },
+      { lines: [giftedBase], hasVerifiedGiftPrice: true, amountPaidCents: 0, hasSubscriptionParent: true, billingReason: 'subscription_cycle', subtotalCents: 5000, gifted: true, onOrgSubscription: true },
       true,
     );
     expect(ORG_POOL_FUNDS_GIFTS).toBe(true);
@@ -84,7 +84,7 @@ describe('wallet-funding: org pool refill', () => {
   });
 
   it('D-OW-23 review #2761 P2-4: a gift NOT on the org\'s own subscription (a separately created gift subscription the org never mirrors) grants nothing — fail closed, no money into a pool the org cannot spend', () => {
-    const gift = { lines: [giftedBase], amountPaidCents: 0, hasSubscriptionParent: true, billingReason: 'subscription_cycle', subtotalCents: 5000, gifted: true };
+    const gift = { lines: [giftedBase], hasVerifiedGiftPrice: true, amountPaidCents: 0, hasSubscriptionParent: true, billingReason: 'subscription_cycle', subtotalCents: 5000, gifted: true };
     for (const onOrgSubscription of [false, undefined]) {
       expect(orgPoolRefillGrant({ ...gift, onOrgSubscription }, true)).toEqual({ paidCents: 0, allowanceCents: 0, basis: 'none', reason: 'gift_not_org_subscription' });
     }
@@ -93,7 +93,7 @@ describe('wallet-funding: org pool refill', () => {
 
   it('a 100% coupon on a non-gifted org subscription grants nothing: the line keeps list price, its discount takes it to 0', () => {
     const grant = orgPoolRefillGrant(
-      { lines: [giftedBase], amountPaidCents: 0, hasSubscriptionParent: true, billingReason: 'subscription_cycle', subtotalCents: 5000 },
+      { lines: [giftedBase], hasVerifiedGiftPrice: true, amountPaidCents: 0, hasSubscriptionParent: true, billingReason: 'subscription_cycle', subtotalCents: 5000 },
       true,
     );
     expect(grant).toEqual({ paidCents: 0, allowanceCents: 0, basis: 'none', reason: 'zero_amount' });
@@ -121,7 +121,7 @@ describe('wallet-funding: org pool refill', () => {
   describe('MON-3 line selection: only the Business base and extra-seat lines refill the pool', () => {
     const BASE_PRICE_ID = 'price_org_base';
     const SEAT_PRICE_ID = 'price_org_seat';
-    const priced = (priceId: string, amount: number) => ({ amount, pricing: { price_details: { price: priceId } } });
+    const priced = (priceId: string, amount: number) => ({ amount, parent: { subscription_item_details: { subscription_item: 'si_org' } }, pricing: { price_details: { price: priceId } } });
     const PRICES = { basePriceId: BASE_PRICE_ID, seatPriceId: SEAT_PRICE_ID };
 
     it('MON-3 an ad-hoc invoice line (a manually added item, no org price, no subscription item) does NOT refill the pool', () => {
@@ -135,7 +135,7 @@ describe('wallet-funding: org pool refill', () => {
     });
 
     it('MON-3 a stranger price id is excluded and reported with its price id and amount', () => {
-      const stranger = priced('price_stranger', 900);
+      const stranger = { amount: 900, pricing: { price_details: { price: 'price_stranger' } } };
       const selection = selectOrgPoolRefillLines([priced(BASE_PRICE_ID, BASE_CENTS), stranger], PRICES);
       expect(selection.refillLines).toEqual([priced(BASE_PRICE_ID, BASE_CENTS)]);
       expect(selection.unrecognized).toEqual([{ priceId: 'price_stranger', subscriptionItemId: null, amountCents: 900 }]);
@@ -160,8 +160,30 @@ describe('wallet-funding: org pool refill', () => {
       expect(gift).toMatchObject({ allowanceCents: 0, basis: 'none', reason: 'no_ratio' });
     });
 
+    it.each([false, true])('MON-3 (partial) unknown replacement subscription prices cannot authorize gifts (known charge: %s)', (knownCharge) => {
+      const parent = { subscription_item_details: { subscription_item: 'si_org_base' } };
+      const selection = selectOrgPoolRefillLines([
+        { ...priced(BASE_PRICE_ID, knownCharge ? 5000 : -5000), parent },
+        { ...priced('price_unknown_replacement', 6000), parent },
+      ], PRICES);
+      expect(orgPoolRefillGrant({
+        lines: selection.refillLines, hasVerifiedGiftPrice: selection.hasVerifiedGiftPrice,
+        amountPaidCents: 0, hasSubscriptionParent: true, gifted: true, onOrgSubscription: true,
+      }, true, true).allowanceCents).toBe(0);
+    });
+
+    it('MON-3 (partial) an ad-hoc item using the org price cannot authorize a gift', () => {
+      const selection = selectOrgPoolRefillLines([{
+        amount: BASE_CENTS, pricing: { price_details: { price: BASE_PRICE_ID } },
+      }], PRICES);
+      expect(orgPoolRefillGrant({
+        lines: selection.refillLines, hasVerifiedGiftPrice: selection.hasVerifiedGiftPrice,
+        amountPaidCents: 0, hasSubscriptionParent: true, gifted: true, onOrgSubscription: true,
+      }, true, true).allowanceCents).toBe(0);
+    });
+
     it('MON-3 an expanded price object and a recognized proration credit are read like plain lines', () => {
-      const expanded = { amount: BASE_CENTS, pricing: { price_details: { price: { id: BASE_PRICE_ID } } } };
+      const expanded = { amount: BASE_CENTS, parent: { subscription_item_details: { subscription_item: 'si_org' } }, pricing: { price_details: { price: { id: BASE_PRICE_ID } } } };
       const seatProration = priced(SEAT_PRICE_ID, -500);
       const selection = selectOrgPoolRefillLines([expanded, seatProration], PRICES);
       expect(selection.refillLines).toEqual([expanded, seatProration]);
@@ -185,7 +207,7 @@ describe('wallet-funding: org pool refill', () => {
 
   it('D-OW-23 with gift funding OFF a gift grants nothing — the policy is one switch', () => {
     const gift = orgPoolRefillGrant(
-      { lines: [giftedBase], amountPaidCents: 0, hasSubscriptionParent: true, billingReason: 'subscription_cycle', subtotalCents: 5000, gifted: true, onOrgSubscription: true },
+      { lines: [giftedBase], hasVerifiedGiftPrice: true, amountPaidCents: 0, hasSubscriptionParent: true, billingReason: 'subscription_cycle', subtotalCents: 5000, gifted: true, onOrgSubscription: true },
       true,
       false,
     );

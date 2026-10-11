@@ -138,8 +138,8 @@ interface InvoiceSpec {
 function invoiceObject(spec: InvoiceSpec) {
   const periodEnd = spec.periodStart + 30 * DAY;
   const lines = [
-    { amount: spec.paid ? BASE_CENTS : 0, discount_amounts: [], quantity: 1, pricing: { price_details: { price: PRICES.basePriceId } }, period: { start: spec.periodStart, end: periodEnd } },
-    { amount: spec.paid ? SEAT_CENTS * spec.seats : 0, discount_amounts: [], quantity: spec.seats, pricing: { price_details: { price: PRICES.seatPriceId } }, period: { start: spec.periodStart, end: periodEnd } },
+    { amount: spec.paid ? BASE_CENTS : 0, parent: { subscription_item_details: { subscription_item: 'si_org' } }, discount_amounts: [], quantity: 1, pricing: { price_details: { price: PRICES.basePriceId } }, period: { start: spec.periodStart, end: periodEnd } },
+    { amount: spec.paid ? SEAT_CENTS * spec.seats : 0, parent: { subscription_item_details: { subscription_item: 'si_org' } }, discount_amounts: [], quantity: spec.seats, pricing: { price_details: { price: PRICES.seatPriceId } }, period: { start: spec.periodStart, end: periodEnd } },
   ];
   const total = lines.reduce((sum, l) => sum + l.amount, 0);
   return {
