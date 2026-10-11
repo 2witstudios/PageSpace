@@ -35,6 +35,8 @@ import { getOrgStatus } from '@pagespace/lib/organizations/status';
 import { ORG_ID_METADATA_KEY, ORG_SUBSCRIPTION_KIND, type OrgBusinessPrices } from '@pagespace/lib/billing/org-subscription-core';
 import { orgPoolListPriceGrantCents, orgPoolRefillGrant } from '@pagespace/lib/billing/wallet-funding';
 import { centsFromDollars, tierListPriceCents } from '@pagespace/lib/billing/money-model';
+import { reconcileSubscriptionTiers } from '@pagespace/lib/billing/subscription-tier-reconcile';
+import { getPersonalTierFromPrice } from '@/lib/stripe/price-config';
 import { TIER_PLAN_LIMITS } from '@pagespace/lib/billing/subscription-tiers';
 import { stripeConfig } from '@/lib/stripe-config';
 import { ensureOrgBusinessSubscription, type OrgBillingDeps, type OrgBillingStripe } from '@/lib/org-billing/org-subscription';
@@ -778,5 +780,26 @@ describe('Stripe webhook — org routing, idempotency, lapse (real Postgres, in-
     expect(await deliver(eventPayload('customer.subscription.deleted', { id: org.subscriptionId, object: 'subscription', customer: org.customerId, status: 'canceled', metadata: orgMetadata(org.orgId) }))).toBe(200);
     const [owner] = await db.select({ tier: users.subscriptionTier }).from(users).where(eq(users.id, org.ownerId));
     expect(owner.tier).toBe('pro');
+  });  it('SEAT-2 (partial) a price change updates the mirror so reconciliation cannot restore the previous entitlement', async () => {
+    const person = await factories.createUser({ stripeCustomerId: `cus_identity_${Date.now()}` });
+    userIds.push(person.id);
+    const subscription = {
+      id: `sub_identity_${Date.now()}`, customer: person.stripeCustomerId, status: 'active',
+      metadata: {}, schedule: null, cancel_at_period_end: false,
+      items: { data: [{
+        id: 'si_identity', price: { id: stripeConfig.priceIds.pro },
+        current_period_start: 1_800_000_000, current_period_end: 1_802_592_000,
+      }] },
+    };
+    expect(await deliver(eventPayload('customer.subscription.created', subscription))).toBe(200);
+    subscription.items.data[0].price.id = 'price_unknown_replacement';
+    expect(await deliver(eventPayload('customer.subscription.updated', subscription))).toBe(200);
+    const [mirror] = await db.select().from(subscriptions).where(eq(subscriptions.stripeSubscriptionId, subscription.id));
+    expect(mirror.stripePriceId).toBe('price_unknown_replacement');
+    await reconcileSubscriptionTiers({ priceTier: getPersonalTierFromPrice });
+    const [after] = await db.select().from(users).where(eq(users.id, person.id));
+    expect(after.subscriptionTier).toBe('free');
   });
+
+
 });

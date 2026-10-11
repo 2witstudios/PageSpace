@@ -523,6 +523,7 @@ async function handleSubscriptionChange(subscription: Stripe.Subscription) {
     }).onConflictDoUpdate({
       target: subscriptions.stripeSubscriptionId,
       set: {
+        stripePriceId: firstItem.price.id,
         status: subscription.status,
         currentPeriodStart,
         currentPeriodEnd,

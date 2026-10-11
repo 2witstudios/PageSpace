@@ -36,6 +36,7 @@ const mockInsertValues = vi.fn();
 const mockInsertOnConflictDoNothing = vi.fn();
 const mockInsertReturning = vi.fn();
 const mockTxInsertValues = vi.fn();
+const mockTxInsertOnConflictDoUpdate = vi.fn().mockResolvedValue(undefined);
 const mockUpdateSet = vi.fn();
 const mockUpdateWhere = vi.fn();
 const mockUpdateReturning = vi.fn();
@@ -46,7 +47,7 @@ vi.mock('@pagespace/db/db', () => {
   const mockTx = {
     insert: vi.fn(() => ({
       values: mockTxInsertValues.mockReturnValue({
-        onConflictDoUpdate: vi.fn().mockResolvedValue(undefined),
+        onConflictDoUpdate: mockTxInsertOnConflictDoUpdate,
       }),
     })),
     update: vi.fn(() => ({
@@ -314,7 +315,7 @@ describe('POST /api/stripe/webhook', () => {
     // Default: the idempotency insert wins the race (fresh row) → event is processed.
     mockInsertReturning.mockResolvedValue([{ id: 'evt_test' }]);
     mockTxInsertValues.mockReturnValue({
-      onConflictDoUpdate: vi.fn().mockResolvedValue(undefined),
+      onConflictDoUpdate: mockTxInsertOnConflictDoUpdate,
     });
     // update().set().where() is awaited directly (completion/error marks) and also
     // chains .returning() on the reclaim takeover path.
@@ -680,6 +681,9 @@ describe('POST /api/stripe/webhook', () => {
             subscriptionTier: expectedTier,
           })
         );
+        expect(mockTxInsertOnConflictDoUpdate).toHaveBeenCalledWith(expect.objectContaining({
+          set: expect.objectContaining({ stripePriceId: priceId }),
+        }));
       });
     }
 
