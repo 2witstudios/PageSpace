@@ -12,12 +12,7 @@ const { mockStripeWebhooksConstructEvent, StripeError, mockGetTierFromPrice } = 
   return {
     mockStripeWebhooksConstructEvent: vi.fn(),
     StripeError,
-    mockGetTierFromPrice: vi.fn((priceId: string, priceAmount?: number) => {
-      // Map price amounts to tiers for testing
-      if (priceAmount === 1500 || priceAmount === 2999) return 'pro';
-      if (priceAmount === 5000 || priceAmount === 10000 || priceAmount === 19999) return 'business';
-      return 'pro'; // Default fallback
-    }),
+    mockGetTierFromPrice: vi.fn((priceId: string) => priceId === 'price_pro' ? 'pro' : 'free'),
   };
 });
 
@@ -185,6 +180,7 @@ const mockSubscription = (overrides: Partial<{
   customer: string;
   status: string;
   priceAmount: number;
+  priceId: string;
   cancelAtPeriodEnd: boolean;
 }> = {}): Stripe.Subscription => ({
   id: overrides.id ?? 'sub_123',
@@ -195,7 +191,7 @@ const mockSubscription = (overrides: Partial<{
     data: [{
       id: 'si_123',
       price: {
-        id: 'price_123',
+        id: overrides.priceId ?? 'price_pro',
         unit_amount: overrides.priceAmount ?? 1500, // Default: $15 Pro
       },
       current_period_start: Math.floor(Date.now() / 1000),
@@ -539,8 +535,8 @@ describe('POST /api/stripe/webhook', () => {
       );
     });
 
-    it('SEAT-2 (partial) should handle subscription.updated and update tier to business ($50 org plan)', async () => {
-      const subscription = mockSubscription({ priceAmount: 5000 }); // $50 = Business
+    it('SEAT-2 (partial) a retired personal Business subscription cannot retain paid entitlement', async () => {
+      const subscription = mockSubscription({ priceAmount: 10000, priceId: 'price_retired_business' });
       const event = mockStripeEvent('customer.subscription.updated', subscription);
       mockStripeWebhooksConstructEvent.mockReturnValue(event);
 
@@ -559,7 +555,7 @@ describe('POST /api/stripe/webhook', () => {
       expect(body.received).toBe(true);
       expect(mockUpdateSet).toHaveBeenCalledWith(
         expect.objectContaining({
-          subscriptionTier: 'business',
+          subscriptionTier: 'free',
         })
       );
     });
@@ -652,19 +648,18 @@ describe('POST /api/stripe/webhook', () => {
     });
   });
 
-  describe('Tier Detection from Price Amount', () => {
+  describe('Tier Detection from Price Identity', () => {
     const tierPriceTests = [
-      { priceAmount: 1500, expectedTier: 'pro', description: '$15 = Pro (new)' },
-      { priceAmount: 2999, expectedTier: 'pro', description: '$29.99 = Pro (legacy)' },
-      { priceAmount: 5000, expectedTier: 'business', description: '$50 = Business, the org plan (SEAT-2 (partial))' },
-      { priceAmount: 10000, expectedTier: 'business', description: '$100 = legacy personal Business (grandfathered, A-9)' },
-      { priceAmount: 19999, expectedTier: 'business', description: '$199.99 = Business (legacy)' },
-      { priceAmount: 999, expectedTier: 'pro', description: 'Fallback to pro for unknown price' },
+      { priceId: 'price_pro', priceAmount: 1500, expectedTier: 'pro', description: 'configured Pro' },
+      { priceId: 'price_pro', priceAmount: 999, expectedTier: 'pro', description: 'configured Pro with a different amount' },
+      ...[1500, 2999, 5000, 10000, 19999].map(priceAmount => ({
+        priceId: 'price_unknown', priceAmount, expectedTier: 'free', description: 'unknown identity at ' + priceAmount,
+      })),
     ];
 
-    for (const { priceAmount, expectedTier, description } of tierPriceTests) {
+    for (const { priceId, priceAmount, expectedTier, description } of tierPriceTests) {
       it(`should detect ${description}`, async () => {
-        const subscription = mockSubscription({ priceAmount });
+        const subscription = mockSubscription({ priceId, priceAmount });
         const event = mockStripeEvent('customer.subscription.created', subscription);
         mockStripeWebhooksConstructEvent.mockReturnValue(event);
 
@@ -728,7 +723,7 @@ describe('POST /api/stripe/webhook', () => {
       expect(response.status).toBe(200);
       expect(mockUpdateSet).toHaveBeenCalledWith(
         expect.objectContaining({
-          subscriptionTier: 'business',
+          subscriptionTier: 'pro',
         })
       );
     });
@@ -798,7 +793,7 @@ describe('POST /api/stripe/webhook', () => {
       expect(body.received).toBe(true);
     });
 
-    it('funds the monthly credit bucket on invoice.paid (passing a tier option)', async () => {
+    it('MON-2 a price-less invoice explicitly has no paid entitlement rather than reusing the cached tier', async () => {
       const event = mockStripeEvent('invoice.paid', mockInvoice({ amountPaid: 1500 }));
       mockStripeWebhooksConstructEvent.mockReturnValue(event);
 
@@ -812,9 +807,22 @@ describe('POST /api/stripe/webhook', () => {
 
       expect(response.status).toBe(200);
       expect(mockApplyStripeFunding).toHaveBeenCalledTimes(1);
-      // Tier is derived from the invoice line; the bare mock invoice has no lines, so the
-      // option is undefined and the funding shell falls back to the stored user tier.
-      expect(mockApplyStripeFunding).toHaveBeenCalledWith(event, { tier: undefined });
+      expect(mockApplyStripeFunding).toHaveBeenCalledWith(event, { tier: 'free' });
+    });
+
+    it('MON-2 an unknown invoice price cannot reuse the stored paid tier', async () => {
+      const invoice = {
+        ...mockInvoice({ amountPaid: 1500 }),
+        lines: { data: [{ pricing: { price_details: { price: 'price_unknown' }, unit_amount_decimal: '1500' } }] },
+      } as Stripe.Invoice;
+      const event = mockStripeEvent('invoice.paid', invoice);
+      mockStripeWebhooksConstructEvent.mockReturnValue(event);
+      const request = new Request('https://example.com/api/stripe/webhook', {
+        method: 'POST', body: JSON.stringify(event), headers: { 'stripe-signature': 'valid_signature' },
+      }) as unknown as import('next/server').NextRequest;
+
+      expect((await POST(request)).status).toBe(200);
+      expect(mockApplyStripeFunding).toHaveBeenCalledWith(event, { tier: 'free' });
     });
 
     it('MON-3 (partial) SEAT-7 (partial) an org customer invoice.paid goes to the org fork and never reaches the personal funding path', async () => {

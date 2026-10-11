@@ -8,8 +8,27 @@ import {
   formatTierBytes,
   isOrgPlanTier,
   personalTiers,
+  tierFromConfiguredPrice,
   type SubscriptionTier,
 } from '../subscription-tiers';
+
+describe('tierFromConfiguredPrice', () => {
+  const prices = { pro: 'price_pro', business: 'price_org_business' };
+
+  it('SEAT-2 (partial) resolves only the configured paid price identities', () => {
+    expect(tierFromConfiguredPrice('price_pro', prices)).toBe('pro');
+    expect(tierFromConfiguredPrice('price_org_business', prices)).toBe('business');
+    for (const priceId of ['price_unknown', 'price_founder', 'price_personal_business', '', 'toString', '__proto__']) {
+      expect(tierFromConfiguredPrice(priceId, prices)).toBe('free');
+    }
+  });
+
+  it('SEAT-2 (partial) an unconfigured or ambiguous price cannot grant entitlements', () => {
+    expect(tierFromConfiguredPrice('', { pro: '', business: '' })).toBe('free');
+    expect(tierFromConfiguredPrice('price_shared', { pro: 'price_shared', business: 'price_shared' })).toBe('free');
+    expect(tierFromConfiguredPrice('price_pro', { pro: 'price_pro', business: '' })).toBe('pro');
+  });
+});
 
 describe('TIERS', () => {
   it('SEAT-2 (partial) lists Free, Pro, Business in ascending plan order (also the upgrade/downgrade ordering)', () => {

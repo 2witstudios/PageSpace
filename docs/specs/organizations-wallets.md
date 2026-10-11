@@ -162,7 +162,7 @@ Answered in conversation (2026-09-15):
 - A-6 All of this is one epic.
 - A-7 No free org tier. An organization exists only on a paid plan or its trial; the org itself is the upsell (SEAT-8, SEAT-9).
 - A-8 Seats beyond the 5 included cost $10 per seat per month, billed as a second subscription item with quantity = max(0, seats − 5).
-- A-9 Founder is removed from the tier vocabulary outright; its single subscriber (Jono) is migrated by this epic. Existing $100 Business personal subscribers are grandfathered at their price with Business entitlements and no new signups.
+- A-9 Full cutover (D-OW-42, 2026-10-11, supersedes indefinite grandfathering): Founder and personal Business billing paths are retired. Existing subscribers must complete an explicit, verified one-time migration before rollout; the final runtime supports only personal Free/Pro and organization Business. Stripe price identity, never an amount match, establishes plan entitlement. Unknown, retired, unconfigured, or ambiguous price identities grant no paid entitlement. Migration preserves existing credit value and must not silently charge or discard balances.
 - A-10 The subscription price and the metered credit allowance are decoupled: the allowance is a ratio of the price paid, and a credit has its own unit distinct from cents (MON-1..MON-8). The numbers are A-11.
 
 - A-11 Money model numbers: INCLUDED_CREDIT_RATIO 60% for Pro and Business; CREDITS_PER_DOLLAR 100; top-ups at the full rate with no ratio. So Pro includes 900 credits a month, Business 3,000 plus 600 per extra seat, and a 10-dollar pack is 1,000 credits. The canvas uses these numbers; every credit surface must fit them (UI-12).

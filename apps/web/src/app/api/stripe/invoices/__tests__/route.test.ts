@@ -236,9 +236,9 @@ describe('Invoices API', () => {
     });
 
     it.each([
-      ['5000', 'Business Plan'],
-      ['1500', 'Pro Plan'],
-    ])('MON-5 (partial) an unmapped legacy price with unit_amount_decimal %s (already cents) is named %s', async (decimal, name) => {
+      ['5000', 'Legacy plan'],
+      ['1500', 'Legacy plan'],
+    ])('MON-5 (partial) an unmapped price with amount %s retains its description %s', async (decimal, name) => {
       mockStripeInvoicesList.mockResolvedValue({
         data: [{
           ...mockInvoice(),

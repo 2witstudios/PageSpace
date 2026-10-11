@@ -431,19 +431,13 @@ async function withFundingRetry<T>(eventId: string, run: () => Promise<T>): Prom
 }
 
 /**
- * Derive the subscription tier from a paid invoice's line price. This is authoritative
- * for the monthly refill because it reflects what was actually billed, independent of
- * whether our DB's users.subscriptionTier has caught up with the subscription webhook
- * (the two events can arrive in either order). Returns undefined when the invoice has
- * no recognizable subscription price — including getTierFromPrice's 'free' fallback for
- * an unmapped price — so the funding shell falls back to the stored user tier rather
- * than wrongly downgrading a paid user. Mirrors the extraction in stripe/invoices/route.ts.
+ * Invoice price identity is authoritative even when the user cache still names a paid tier.
+ * An absent or unrecognized price explicitly has no paid entitlement.
  */
-function tierFromInvoice(invoice: Stripe.Invoice): SubscriptionTier | undefined {
+function tierFromInvoice(invoice: Stripe.Invoice): SubscriptionTier {
   const lines = invoice.lines?.data ?? [];
   const line = lines.find((l) => l.pricing?.price_details?.price) ?? lines[0];
-  const tier = tierFromInvoiceLine(line);
-  return tier === 'free' ? undefined : tier;
+  return tierFromInvoiceLine(line) ?? 'free';
 }
 
 async function handleSubscriptionChange(subscription: Stripe.Subscription) {
@@ -477,7 +471,7 @@ async function handleSubscriptionChange(subscription: Stripe.Subscription) {
   // is exactly one rule for what a subscription state implies about the tier.
   const subscriptionTier = deriveTierFromSubscriptions(
     [{ status: subscription.status, stripePriceId: firstItem.price.id }],
-    (priceId) => getTierFromPrice(priceId, firstItem.price.unit_amount),
+    getTierFromPrice,
   ).tier;
 
   // Get period from the first subscription item (API version 2025-08-27 change)

@@ -160,7 +160,7 @@ describe('getActiveSubscriptionsByTier', () => {
     resetQueue([
       { stripePriceId: stripeConfig.priceIds.pro },
       { stripePriceId: stripeConfig.priceIds.pro },
-      { stripePriceId: stripeConfig.priceIds.business },
+      { stripePriceId: stripeConfig.orgPriceIds.businessBase },
     ]);
 
     const result = await getActiveSubscriptionsByTier();
@@ -173,23 +173,23 @@ describe('getActiveSubscriptionsByTier', () => {
     ]));
   });
 
-  it('resolves legacy price IDs to a tier via the Stripe unit amount (H2)', async () => {
+  it('unknown prices remain unentitled even when their amount matches a paid plan', async () => {
     resetQueue([
       { stripePriceId: 'price_legacy_pro' },
       { stripePriceId: 'price_legacy_pro' },
-      { stripePriceId: stripeConfig.priceIds.business },
+      { stripePriceId: stripeConfig.orgPriceIds.businessBase },
+      { stripePriceId: stripeConfig.grandfatheredPriceIds.founder },
+      { stripePriceId: stripeConfig.grandfatheredPriceIds.legacyBusiness },
     ]);
     mockPricesRetrieve.mockResolvedValue({ unit_amount: 2999 }); // legacy $29.99 pro
 
     const result = await getActiveSubscriptionsByTier();
 
-    // One Stripe lookup per DISTINCT legacy price ID, not per subscription row.
-    expect(mockPricesRetrieve).toHaveBeenCalledTimes(1);
-    expect(mockPricesRetrieve).toHaveBeenCalledWith('price_legacy_pro');
+    expect(mockPricesRetrieve).not.toHaveBeenCalled();
     expect(result).toEqual(expect.arrayContaining([
-      { tier: 'pro', count: 2 },
+      { tier: 'pro', count: 0 },
       { tier: 'business', count: 1 },
-      { tier: 'free', count: 0 },
+      { tier: 'free', count: 4 },
     ]));
   });
 

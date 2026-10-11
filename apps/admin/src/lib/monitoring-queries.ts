@@ -15,8 +15,7 @@ import { computeBalanceDrift, isNegativeMargin } from '@pagespace/lib/billing/cr
 import { BALANCE_DRIFT_TOLERANCE_CENTS, NEGATIVE_MARGIN_FLOOR_BPS } from '@pagespace/lib/billing/credit-pricing';
 import { CENTS_PER_DOLLAR } from '@pagespace/lib/billing/money-model';
 import { readCreditLiability } from '@pagespace/lib/billing/credit-liability-query';
-import { getTierFromPrice, STRIPE_PRICE_TO_TIER } from './stripe/price-config';
-import { stripe } from './stripe/client';
+import { getTierFromPrice } from './stripe/price-config';
 import { TIERS, type SubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { decryptUserDisplayFields } from '@pagespace/lib/auth/user-repository';
 import { maskEmail } from '@pagespace/lib/audit/mask-email';
@@ -1135,19 +1134,7 @@ export async function getCreditRevenue(
   };
 }
 
-/**
- * Paying subscribers bucketed by tier. Consistent with the `payingUsers`
- * definition in getGrowthMetrics: status IN ('active', 'trialing') and
- * gifted = false. Legacy/grandfathered price IDs (absent from
- * STRIPE_PRICE_TO_TIER) are resolved by fetching their unit amount from
- * Stripe so getTierFromPrice's LEGACY_PRICE_AMOUNTS fallback applies instead
- * of miscounting real subscribers as 'free'.
- */
-// Stripe prices are immutable once created, so resolved unit amounts are
-// cached for the process lifetime. Failures are NOT cached so transient
-// errors retry on the next load.
-const legacyPriceAmountCache = new Map<string, number | null>();
-
+/** Paying, non-gifted active or trialing subscriptions grouped by configured price identity. */
 export async function getActiveSubscriptionsByTier(): Promise<SubscriptionsByTierRow[]> {
   const rows = await db
     .select({ stripePriceId: subscriptions.stripePriceId })
@@ -1157,31 +1144,9 @@ export async function getActiveSubscriptionsByTier(): Promise<SubscriptionsByTie
       eq(subscriptions.gifted, false),
     ));
 
-  // Look up unit amounts for price IDs the static map doesn't know (one Stripe
-  // call per distinct uncached legacy price ID, not per subscription row).
-  const legacyPriceIds = [...new Set(rows.map((r) => r.stripePriceId))]
-    .filter((priceId) => !(priceId in STRIPE_PRICE_TO_TIER));
-  const amountByPriceId = new Map<string, number | null>();
-  await Promise.all(legacyPriceIds.map(async (priceId) => {
-    const cached = legacyPriceAmountCache.get(priceId);
-    if (cached !== undefined) {
-      amountByPriceId.set(priceId, cached);
-      return;
-    }
-    try {
-      const price = await stripe.prices.retrieve(priceId);
-      legacyPriceAmountCache.set(priceId, price.unit_amount);
-      amountByPriceId.set(priceId, price.unit_amount);
-    } catch {
-      // Unresolvable price (deleted in Stripe, network error) — falls back to
-      // getTierFromPrice's 'free' bucket rather than failing the whole panel.
-      amountByPriceId.set(priceId, null);
-    }
-  }));
-
   const counts = Object.fromEntries(TIERS.map((t) => [t, 0])) as Record<SubscriptionTier, number>;
   for (const r of rows) {
-    counts[getTierFromPrice(r.stripePriceId, amountByPriceId.get(r.stripePriceId))] += 1;
+    counts[getTierFromPrice(r.stripePriceId)] += 1;
   }
 
   return (Object.keys(counts) as SubscriptionTier[]).map((tier) => ({ tier, count: counts[tier] }));

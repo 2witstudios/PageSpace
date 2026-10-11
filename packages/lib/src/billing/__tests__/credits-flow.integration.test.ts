@@ -718,13 +718,11 @@ describe('SECURITY (Codex P1): grants only fire for real subscription invoices, 
   });
 });
 
-// Mirrors the web app's getTierFromPrice: known price ids first, then the exact
-// legacy amount table (same values as LEGACY_PRICE_AMOUNTS), else 'free'.
-const LEGACY_AMOUNT_TIER: Record<number, 'pro' | 'business'> = { 1500: 'pro', 2999: 'pro', 5000: 'business', 10000: 'business', 19999: 'business' };
-const PRICE_TIER = (priceId: string, amountCents?: number | null) =>
+// Entitlement follows configured price identity; paidCents only sizes the grant.
+const PRICE_TIER = (priceId: string) =>
   priceId === 'price_pro' ? 'pro' as const
     : priceId === 'price_business' ? 'business' as const
-      : (amountCents != null && LEGACY_AMOUNT_TIER[amountCents]) || 'free' as const;
+      : 'free' as const;
 
 function seedPricedSubscription(userId: string, stripePriceId: string, status = 'active') {
   store.subscriptions.push({ id: `sub_${userId}_${stripePriceId}`, userId, status, gifted: false, stripePriceId });
@@ -872,7 +870,7 @@ describe('credits flow — missed-grant reconcile review fixes (#2645 threads)',
     seedUser('u1', 'cus_1', 'free');
     seedPricedSubscription('u1', 'price_pro', 'canceled'); // the plan the missed invoice was actually for
     seedPricedSubscription('u1', 'price_unmapped_other'); // a different, still-active subscription
-    seedMissedGrantRow('led_other', 'u1', 1500); // 1500 is also a LEGACY_PRICE_AMOUNTS key
+    seedMissedGrantRow('led_other', 'u1', 1500); // matching a plan amount must not establish identity
 
     const result = await reconcileMissedGrants({ priceTier: PRICE_TIER });
 
@@ -881,18 +879,19 @@ describe('credits flow — missed-grant reconcile review fixes (#2645 threads)',
     expect(balanceOf('u1')).toBeUndefined();
   });
 
-  it('MON-2 missed grant: a legacy subscription on an unmapped price id resolves through the invoice amount (the webhook\'s legacy fallback), so it is not stuck indeterminate forever', async () => {
+  it('MON-2 missed grant: an unmapped price remains indeterminate even when paidCents matches a retired plan', async () => {
     seedUser('u1', 'cus_1', 'free');
     seedPricedSubscription('u1', 'price_legacy_pro_2999');
     seedMissedGrantRow('led_legacy', 'u1', 2999);
 
     const result = await reconcileMissedGrants({ priceTier: PRICE_TIER });
 
-    expect(result).toEqual({ reconciled: 1, stillMissing: 0, indeterminate: 0, indeterminateLedgerIds: [], failed: 0 });
+    expect(result).toEqual({ reconciled: 0, stillMissing: 0, indeterminate: 1, indeterminateLedgerIds: ['led_legacy'], failed: 0 });
     expect(store.creditLedger.find((r) => r.id === 'led_legacy')).toMatchObject({
-      entryType: 'monthly_grant',
-      amountCents: allowanceCentsForPaidCents(2999, 'pro'),
+      entryType: 'missed_grant',
+      amountCents: 0,
     });
+    expect(balanceOf('u1')).toBeUndefined();
   });
 
   it('MON-2 bounded sweep: 250 unresolved rows ahead of a repairable one cannot starve it — it is granted within a bounded number of runs', async () => {

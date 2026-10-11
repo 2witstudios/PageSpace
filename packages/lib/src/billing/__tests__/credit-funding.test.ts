@@ -639,15 +639,15 @@ describe('applyStripeFunding', () => {
       expect(cap.ledgerValues).toBeUndefined();
     });
 
-    it('MON-2 a PAID invoice whose tier resolves to free (no ratio) fails closed, logs at ERROR, and writes a missed_grant row keyed on the invoice', async () => {
-      mockDb.select.mockReturnValue(userSelectReturning([{ id: 'u1', subscriptionTier: 'free' }]));
+    it.each(['free', 'pro', 'business'])('MON-2 an explicitly unentitled paid invoice grants nothing even when the cached user tier is %s', async (cachedTier) => {
+      mockDb.select.mockReturnValue(userSelectReturning([{ id: 'u1', subscriptionTier: cachedTier }]));
       const cap: Captured = {};
       mockDb.insert.mockReturnValueOnce(missedGrantInsert(cap));
       mockDb.transaction.mockImplementation(async (cb: (tx: unknown) => Promise<void>) => {
         await cb(refillTx(cap, [{ id: 'led_x' }], 0));
       });
 
-      await applyStripeFunding(paidInvoiceEvent(1500)); // no invoice-derived tier, stored tier still free
+      await applyStripeFunding(paidInvoiceEvent(1500), { tier: 'free' });
 
       expect(mockDb.transaction).not.toHaveBeenCalled(); // no balance change
       expect(mockApiLogger.error).toHaveBeenCalledWith(

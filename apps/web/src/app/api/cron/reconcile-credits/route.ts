@@ -31,7 +31,7 @@ export async function GET(request: Request) {
   try {
     const result = await backfillCredits();
     const missedGrants = await reconcileMissedGrants({
-      priceTier: (priceId, amountCents) => getTierFromPrice(priceId, amountCents),
+      priceTier: getTierFromPrice,
     });
     const counts = {
       ...result,
