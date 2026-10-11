@@ -22,7 +22,8 @@
  *     derivation is auditable per row. A PAID invoice whose tier has no ratio is a
  *     MISSED grant: a 'missed_grant' ledger row (amountCents 0, stripeRef = the
  *     invoice) is written for the reconcile cron to re-grant once the tier is
- *     repaired, and the miss is logged at error.
+ *     repaired, and the miss is logged at error. An explicit invoice rejection
+ *     never creates a repair candidate: subscription state cannot override it.
  *   - topup (checkout.session.completed, credit_pack): a one-time purchase ADDS to
  *     the never-expiring top-up bucket.
  *
@@ -335,7 +336,7 @@ async function applyMonthlyRefill(
   }, active);
   const allowanceCents = grant.allowanceCents;
   if (allowanceCents <= 0) {
-    if (grant.reason === 'no_ratio' && grant.paidCents > 0) {
+    if (tierOverride === undefined && grant.reason === 'no_ratio' && grant.paidCents > 0) {
       await recordMissedGrant(user.id, tier, grant.paidCents, stripeRef, event.id);
       return;
     }
