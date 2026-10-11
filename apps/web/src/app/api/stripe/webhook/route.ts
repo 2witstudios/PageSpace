@@ -5,6 +5,7 @@ import { users } from '@pagespace/db/schema/auth'
 import { subscriptions, stripeEvents } from '@pagespace/db/schema/subscriptions';
 import { stripe, Stripe, getPersonalTierFromPrice } from '@/lib/stripe';
 import { tierFromInvoiceLines } from '@/lib/stripe/price-config';
+import { completeInvoiceLines } from '@/lib/stripe/invoice-lines';
 import type { SubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { deriveTierFromSubscriptions } from '@pagespace/lib/billing/subscription-tier-sync';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -308,13 +309,7 @@ export async function POST(request: NextRequest) {
           const fundedOrg = await withFundingRetry(event.id, async () => {
             // Stripe embeds only the first page. Resolve identity and funding from
             // the complete invoice; a failed page fetch must release the event claim.
-            if (invoice.lines?.has_more) {
-              const lines: Stripe.InvoiceLineItem[] = [];
-              for await (const line of stripe.invoices.listLineItems(invoice.id, { limit: 100 })) {
-                lines.push(line);
-              }
-              invoice = { ...invoice, lines: { ...invoice.lines, data: lines, has_more: false } };
-            }
+            invoice = await completeInvoiceLines(invoice);
             if (await routeOrgInvoicePaid(invoice, event.id)) return true;
             await handleInvoicePaid(invoice);
             // Grant the monthly credit on each renewal. The grant is sized from what

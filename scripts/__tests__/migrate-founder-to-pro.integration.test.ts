@@ -28,11 +28,11 @@ afterAll(async () => {
 describe('D-OW-42 Founder migration PostgreSQL writes', () => {
   it('A-9 (partial) preserves every wallet field and applies an idempotent verified normalization', async () => {
     const { user, wallet } = await seed();
-    const store = createMigrationStore(db, [retiredPriceId]);
+    const store = createMigrationStore(db);
     const candidates = (await store.listCandidates()).filter((row) => row.id === user.id);
     const deps = { ...store, proPriceId,
       listCandidates: async () => (await store.listCandidates()).filter((row) => row.id === user.id),
-      readSubscription: async () => ({ customerId: user.stripeCustomerId!, status: 'active', priceIds: [proPriceId], scheduled: false }),
+      readCustomerSubscriptions: async () => [{ id: candidates[0].subscriptions[0].id, customerId: user.stripeCustomerId!, status: 'active', priceIds: [proPriceId], scheduled: false }],
     };
     expect(candidates).toHaveLength(1);
     expect((await runFounderMigration(deps, { apply: false })).normalized).toBe(1);
@@ -42,10 +42,25 @@ describe('D-OW-42 Founder migration PostgreSQL writes', () => {
     expect((await db.select().from(users).where(eq(users.id, user.id)))[0].subscriptionTier).toBe('pro');
     expect((await db.select().from(wallets).where(eq(wallets.id, wallet.id)))[0]).toEqual(wallet);
   });
+  it('A-9 (partial) a delivered webhook cannot remove a migrated subscriber from preflight', async () => {
+    const { user } = await seed();
+    await db.update(users).set({ subscriptionTier: 'free' }).where(eq(users.id, user.id));
+    await db.update(subscriptions).set({ stripePriceId: 'price_unknown_replacement' }).where(eq(subscriptions.userId, user.id));
+    const store = createMigrationStore(db);
+    const candidates = (await store.listCandidates()).filter((row) => row.id === user.id);
+    expect(candidates).toHaveLength(1);
+    const result = await runFounderMigration({ ...store, proPriceId,
+      listCandidates: async () => candidates,
+      readCustomerSubscriptions: async () => [{ id: candidates[0].subscriptions[0].id, customerId: user.stripeCustomerId!, status: 'active', priceIds: ['price_unknown_replacement'], scheduled: false }],
+    }, { apply: true });
+    expect(result.ready).toBe(false);
+    expect((await db.select().from(users).where(eq(users.id, user.id)))[0].subscriptionTier).toBe('free');
+  });
+
   it('A-9 (partial) a changed mirror aborts the entire apply transaction', async () => {
     const first = await seed();
     const second = await seed();
-    const store = createMigrationStore(db, [retiredPriceId]);
+    const store = createMigrationStore(db);
     const observed = (await store.listCandidates()).filter((row) => [first.user.id, second.user.id].includes(row.id));
     await db.update(subscriptions).set({ stripePriceId: retiredPriceId }).where(eq(subscriptions.userId, second.user.id));
     await expect(store.apply(observed.map((user) => ({ user, tier: 'pro' as const })))).rejects.toThrow('evidence changed');

@@ -14,8 +14,8 @@ function harness(people = [person()], live = liveSub()) {
   const reads: string[] = [];
   const deps: MigrationDeps = {
     proPriceId: PRO,
-    listCandidates: async () => people.filter((user) => user.tier === 'founder' || user.tier === 'business' || user.grandfathered),
-    readSubscription: async (id) => { reads.push(id); return live; },
+    listCandidates: async () => people,
+    readCustomerSubscriptions: async (id) => { reads.push(id); return [{ id: 'sub_user', ...live }]; },
     apply: async (updates) => {
       for (const { user, tier } of updates) { writes.push(user.id); user.tier = tier; }
     },
@@ -36,7 +36,7 @@ describe('D-OW-42 Founder cutover preflight', () => {
     expect(await runFounderMigration(h.deps, { apply: false })).toMatchObject({ ready: true, normalized: 1 });
     expect(h.writes).toEqual([]);
     expect(h.people[0].tier).toBe('founder');
-    expect(h.reads).toEqual(['sub_user']);
+    expect(h.reads).toEqual(['cus_user']);
   });
   it('normalizes a verified Pro subscription exactly once', async () => {
     const h = harness();
@@ -65,7 +65,7 @@ describe('D-OW-42 Founder cutover preflight', () => {
   });
   it('blocks all writes when any Stripe read fails', async () => {
     const h = harness();
-    h.deps.readSubscription = async () => { throw new Error('unavailable'); };
+    h.deps.readCustomerSubscriptions = async () => { throw new Error('unavailable'); };
     expect((await runFounderMigration(h.deps, { apply: true })).ready).toBe(false);
     expect(h.writes).toEqual([]);
   });
@@ -93,14 +93,28 @@ describe('D-OW-42 Founder cutover preflight', () => {
     h.deps.apply = async () => { throw new Error('evidence changed'); };
     await expect(runFounderMigration(h.deps, { apply: true })).rejects.toThrow('evidence changed');
   });
+  it('continues verifying Pro users and catches live subscriptions missing from the mirror', async () => {
+    const h = harness([person({ tier: 'pro', subscriptions: [] })]);
+    expect((await runFounderMigration(h.deps, { apply: true })).ready).toBe(false);
+    expect(h.reads).toEqual(['cus_user']);
+    expect(h.writes).toEqual([]);
+  });
+  it('a failed inventory read blocks rollout even for a customer with no mirrored rows', async () => {
+    const h = harness([person({ tier: 'free', subscriptions: [] })]);
+    h.deps.readCustomerSubscriptions = async () => { throw new Error('unavailable'); };
+    expect((await runFounderMigration(h.deps, { apply: true })).ready).toBe(false);
+  });
   it('the Stripe adapter is read-only and refuses truncated item evidence', async () => {
     const calls: string[] = [];
-    const subscription = { customer: 'cus_user', status: 'active', schedule: null, items: { has_more: false, data: [{ price: { id: PRO } }] } };
-    const stripe = { subscriptions: { retrieve: async (id: string) => { calls.push(id); return subscription; } } };
+    const subscription = { id: 'sub_user', metadata: {}, customer: 'cus_user', status: 'active', schedule: null, items: { has_more: false, data: [{ price: { id: PRO } }] } };
+    const stripe = { subscriptions: { list: (params: { customer: string }) => {
+      calls.push(params.customer);
+      return (async function* () { yield subscription; })();
+    } } };
     const read = createStripeReader(stripe as unknown as import('stripe').Stripe);
-    expect(await read('sub_user')).toEqual(liveSub());
-    expect(calls).toEqual(['sub_user']);
+    expect(await read('cus_user')).toEqual([{ id: 'sub_user', ...liveSub() }]);
+    expect(calls).toEqual(['cus_user']);
     subscription.items.has_more = true;
-    await expect(read('sub_user')).rejects.toThrow('Incomplete subscription items');
+    await expect(read('cus_user')).rejects.toThrow('Incomplete subscription items');
   });
 });

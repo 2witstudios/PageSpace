@@ -5,6 +5,7 @@ import { users } from '@pagespace/db/schema/auth';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { stripe, Stripe } from '@/lib/stripe';
 import { tierFromInvoiceLines } from '@/lib/stripe/price-config';
+import { completeInvoiceLines } from '@/lib/stripe/invoice-lines';
 import { PLANS } from '@/lib/subscription/plans';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -66,10 +67,11 @@ export async function GET(request: NextRequest) {
       starting_after: startingAfter,
     });
 
-    auditRequest(request, { eventType: 'data.read', userId, resourceType: 'invoices', resourceId: 'list', details: { count: invoices.data.length } });
+    const completeInvoices = await Promise.all(invoices.data.map(completeInvoiceLines));
+    auditRequest(request, { eventType: 'data.read', userId, resourceType: 'invoices', resourceId: 'list', details: { count: completeInvoices.length } });
 
     return NextResponse.json({
-      invoices: invoices.data.map(invoice => ({
+      invoices: completeInvoices.map(invoice => ({
         id: invoice.id,
         number: invoice.number,
         status: invoice.status,
