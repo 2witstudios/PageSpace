@@ -8,11 +8,11 @@ export type InvoiceLinePricing = {
   } | null;
 };
 
-/** Resolve an invoice line from its price ID; amounts never establish entitlement. */
+/** Resolve a personal invoice line; organization billing has its own owner-aware path. */
 export function tierFromInvoiceLine(line: InvoiceLinePricing | undefined): SubscriptionTier | undefined {
   const price = line?.pricing?.price_details?.price;
   const priceId = typeof price === 'string' ? price : price?.id;
-  return priceId ? getTierFromPrice(priceId) : undefined;
+  return priceId ? getPersonalTierFromPrice(priceId) : undefined;
 }
 
 /** Unknown, retired and unconfigured prices have no paid entitlement. */
@@ -21,4 +21,9 @@ export function getTierFromPrice(priceId: string): SubscriptionTier {
     pro: stripeConfig.priceIds.pro,
     business: stripeConfig.orgPriceIds.businessBase,
   });
+}
+
+/** Personal billing cannot grant organization Business entitlements. */
+export function getPersonalTierFromPrice(priceId: string): Exclude<SubscriptionTier, 'business'> {
+  return getTierFromPrice(priceId) === 'pro' ? 'pro' : 'free';
 }

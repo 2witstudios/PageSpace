@@ -4,7 +4,7 @@ import { audit } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { NextResponse } from 'next/server';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
-import { getTierFromPrice } from '@/lib/stripe/price-config';
+import { getPersonalTierFromPrice } from '@/lib/stripe/price-config';
 
 /**
  * Cron endpoint that reconciles prepaid AI-credit consumption and outstanding grants.
@@ -31,7 +31,7 @@ export async function GET(request: Request) {
   try {
     const result = await backfillCredits();
     const missedGrants = await reconcileMissedGrants({
-      priceTier: getTierFromPrice,
+      priceTier: getPersonalTierFromPrice,
     });
     const counts = {
       ...result,

@@ -3,7 +3,7 @@ import { audit } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { NextResponse } from 'next/server';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
-import { getTierFromPrice } from '@/lib/stripe';
+import { getPersonalTierFromPrice } from '@/lib/stripe';
 
 /**
  * Cron endpoint that reconciles the denormalized `users.subscriptionTier`
@@ -29,7 +29,7 @@ export async function GET(request: Request) {
 
   try {
     const result = await reconcileSubscriptionTiers({
-      priceTier: (priceId) => getTierFromPrice(priceId),
+      priceTier: (priceId) => getPersonalTierFromPrice(priceId),
     });
 
     console.log(

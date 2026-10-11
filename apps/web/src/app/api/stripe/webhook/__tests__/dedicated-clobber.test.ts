@@ -29,7 +29,7 @@ const { mockConstructEvent, StripeError } = vi.hoisted(() => ({
 vi.mock('@/lib/stripe', () => ({
   stripe: { webhooks: { constructEvent: mockConstructEvent } },
   Stripe: { errors: { StripeError } },
-  getTierFromPrice: vi.fn(() => 'free'),
+  getPersonalTierFromPrice: vi.fn(() => 'free'),
 }));
 
 /**

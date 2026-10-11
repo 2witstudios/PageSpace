@@ -3,7 +3,7 @@ import { db } from '@pagespace/db/db'
 import { eq, and, isNull, lte } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { subscriptions, stripeEvents } from '@pagespace/db/schema/subscriptions';
-import { stripe, Stripe, getTierFromPrice } from '@/lib/stripe';
+import { stripe, Stripe, getPersonalTierFromPrice } from '@/lib/stripe';
 import { tierFromInvoiceLine } from '@/lib/stripe/price-config';
 import type { SubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { deriveTierFromSubscriptions } from '@pagespace/lib/billing/subscription-tier-sync';
@@ -289,11 +289,8 @@ export async function POST(request: NextRequest) {
           const invoice = event.data.object as Stripe.Invoice;
           // FORKED BEFORE FUNDING, and this fork is as load-bearing as the
           // subscription one. `applyStripeFunding` refills the customer's monthly
-          // AI-credit bucket on every paid subscription invoice, falling back to
-          // their STORED tier when the invoice's price maps to no tier — which is
-          // exactly what a hosting price does. Left unforked, a customer with a
-          // dedicated app would have their monthly allowance reset a second time
-          // every month, on the hosting subscription's own billing anchor.
+          // AI-credit bucket on recognized personal subscription invoices. Hosting
+          // invoices also bypass personal payment-state updates and receipt handling.
           if (routeInvoice(invoice, event.id) === 'published_app_dedicated') {
             loggers.api.info('Dedicated hosting invoice paid', {
               eventId: event.id,
@@ -471,7 +468,7 @@ async function handleSubscriptionChange(subscription: Stripe.Subscription) {
   // is exactly one rule for what a subscription state implies about the tier.
   const subscriptionTier = deriveTierFromSubscriptions(
     [{ status: subscription.status, stripePriceId: firstItem.price.id }],
-    getTierFromPrice,
+    getPersonalTierFromPrice,
   ).tier;
 
   // Get period from the first subscription item (API version 2025-08-27 change)

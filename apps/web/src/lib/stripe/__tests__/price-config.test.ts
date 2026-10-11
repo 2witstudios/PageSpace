@@ -8,9 +8,16 @@ vi.mock('../../stripe-config', () => ({
   },
 }));
 
-import { getTierFromPrice, tierFromInvoiceLine } from '../price-config';
+import { getTierFromPrice, getPersonalTierFromPrice, tierFromInvoiceLine } from '../price-config';
 
 describe('configured Stripe price identity', () => {
+  it('SEAT-1 SEAT-2 (partial) organization prices cannot entitle a personal subscription or invoice', () => {
+    expect(getPersonalTierFromPrice('price_pro')).toBe('pro');
+    for (const price of ['price_org_business', 'price_extra_seat', 'price_business', 'price_founder', 'price_unknown']) {
+      expect(getPersonalTierFromPrice(price)).toBe('free');
+      expect(tierFromInvoiceLine({ pricing: { price_details: { price } } })).toBe('free');
+    }
+  });
   it('SEAT-2 (partial) unknown and retired prices never grant a paid tier by amount', () => {
     for (const amount of [1500, 2999, 5000, 10000, 19999]) {
       const invoiceLine = { pricing: { price_details: { price: 'price_unknown' }, unit_amount_decimal: String(amount) } };

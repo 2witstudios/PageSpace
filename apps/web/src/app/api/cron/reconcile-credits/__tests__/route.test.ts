@@ -25,7 +25,7 @@ vi.mock('@pagespace/lib/billing/missed-grant-reconcile', () => ({
 }));
 
 vi.mock('@/lib/stripe/price-config', () => ({
-  getTierFromPrice: vi.fn((priceId: string) => priceId === 'price_pro' ? 'pro' : 'free'),
+  getPersonalTierFromPrice: vi.fn((priceId: string) => priceId === 'price_pro' ? 'pro' : 'free'),
 }));
 
 vi.mock('@pagespace/lib/audit/audit-log', () => ({

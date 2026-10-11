@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type Stripe from 'stripe';
 
 // Mock Stripe - use vi.hoisted to ensure mocks are available before vi.mock
-const { mockStripeWebhooksConstructEvent, StripeError, mockGetTierFromPrice } = vi.hoisted(() => {
+const { mockStripeWebhooksConstructEvent, StripeError, mockGetPersonalTierFromPrice } = vi.hoisted(() => {
   const StripeError = class extends Error {
     constructor(message: string) {
       super(message);
@@ -12,7 +12,7 @@ const { mockStripeWebhooksConstructEvent, StripeError, mockGetTierFromPrice } = 
   return {
     mockStripeWebhooksConstructEvent: vi.fn(),
     StripeError,
-    mockGetTierFromPrice: vi.fn((priceId: string) => priceId === 'price_pro' ? 'pro' : 'free'),
+    mockGetPersonalTierFromPrice: vi.fn((priceId: string) => priceId === 'price_pro' ? 'pro' : 'free'),
   };
 });
 
@@ -25,7 +25,7 @@ vi.mock('@/lib/stripe', () => ({
   Stripe: {
     errors: { StripeError },
   },
-  getTierFromPrice: mockGetTierFromPrice,
+  getPersonalTierFromPrice: mockGetPersonalTierFromPrice,
 }));
 
 // Mock database
