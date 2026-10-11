@@ -468,13 +468,19 @@ async function handleSubscriptionChange(subscription: Stripe.Subscription) {
     throw new Error(`Subscription ${subscription.id} has no items`);
   }
 
+  // A personal subscription has exactly one plan item. The empty identity marks
+  // an ambiguous/truncated collection in the mirror so reconciliation cannot
+  // resurrect access from its first item.
+  const stripePriceId = subscription.items.data.length === 1 && !subscription.items.has_more
+    ? firstItem.price.id : '';
+
   // Derive the tier through the single canonical resolver (subscription-tier-sync.ts):
   // an entitled (active/trialing) row maps through the price→tier map; anything
   // else derives to 'free'. The periodic reconciler (reconcile-subscription-tiers
   // cron) uses this same function across the whole subscriptions table, so there
   // is exactly one rule for what a subscription state implies about the tier.
   const subscriptionTier = deriveTierFromSubscriptions(
-    [{ status: subscription.status, stripePriceId: firstItem.price.id }],
+    [{ status: subscription.status, stripePriceId }],
     getPersonalTierFromPrice,
   ).tier;
 
@@ -519,7 +525,7 @@ async function handleSubscriptionChange(subscription: Stripe.Subscription) {
     await tx.insert(subscriptions).values({
       userId,
       stripeSubscriptionId: subscription.id,
-      stripePriceId: firstItem.price.id,
+      stripePriceId,
       status: subscription.status,
       currentPeriodStart,
       currentPeriodEnd,
@@ -532,7 +538,7 @@ async function handleSubscriptionChange(subscription: Stripe.Subscription) {
     }).onConflictDoUpdate({
       target: subscriptions.stripeSubscriptionId,
       set: {
-        stripePriceId: firstItem.price.id,
+        stripePriceId,
         status: subscription.status,
         currentPeriodStart,
         currentPeriodEnd,

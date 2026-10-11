@@ -170,6 +170,20 @@ describe('org Business subscription shell (real Postgres, in-memory Stripe)', ()
     expect(await rowsFor(orgId)).toHaveLength(1);
   });
 
+  it('mirrors verified gift identity during provisioning and each existing-subscription refresh', async () => {
+    if (!dbAvailable) return;
+    const { orgId, deps, stripe } = await northwind(1);
+    const first = await ensureOrgBusinessSubscription(orgId, deps);
+    expect((await rowsFor(orgId))[0].gifted).toBe(false);
+    const live = stripe.subscriptions.get(first.linkage.stripeSubscriptionId)!;
+    live.metadata = { ...live.metadata, type: 'gift_subscription' };
+    await ensureOrgBusinessSubscription(orgId, deps);
+    expect((await rowsFor(orgId))[0].gifted).toBe(true);
+    delete live.metadata.type;
+    await ensureOrgBusinessSubscription(orgId, deps);
+    expect((await rowsFor(orgId))[0].gifted).toBe(false);
+  });
+
   it('SEAT-1 two concurrent first calls for one org create one customer and one subscription, and both see the same linkage', async () => {
     if (!dbAvailable) return;
     const { orgId, deps, stripe } = await northwind(1);

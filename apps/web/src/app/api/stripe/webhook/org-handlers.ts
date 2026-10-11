@@ -142,6 +142,7 @@ export async function mirrorOrgSubscription(
     });
     const next = {
       status: fetched.status,
+      gifted: fetched.metadata?.type === 'gift_subscription',
       trialEnd: fetched.trialEnd === null ? null : new Date(fetched.trialEnd * 1000),
       currentPeriodStart: fetched.currentPeriodStart === null ? null : new Date(fetched.currentPeriodStart * 1000),
       currentPeriodEnd: fetched.currentPeriodEnd === null ? null : new Date(fetched.currentPeriodEnd * 1000),

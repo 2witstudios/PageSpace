@@ -122,6 +122,8 @@ export const orgSubscriptions = pgTable('org_subscriptions', {
   seatRevision: integer('seatRevision').default(0).notNull(),
   // Stripe's subscription status: trialing, active, past_due, canceled, unpaid, incomplete, …
   status: text('status').notNull(),
+  // null = not yet verified from Stripe; reporting must not assume it is paid.
+  gifted: boolean('gifted'),
   trialEnd: timestamp('trialEnd', { mode: 'date' }),
   currentPeriodStart: timestamp('currentPeriodStart', { mode: 'date' }),
   currentPeriodEnd: timestamp('currentPeriodEnd', { mode: 'date' }),

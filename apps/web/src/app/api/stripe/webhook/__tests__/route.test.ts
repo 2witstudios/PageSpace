@@ -653,6 +653,24 @@ describe('POST /api/stripe/webhook', () => {
   });
 
   describe('Tier Detection from Price Identity', () => {
+    it.each(['unknown_extra', 'duplicate_pro', 'truncated'])('SEAT-2 (partial) personal subscription rejects ambiguous items (%s)', async (shape) => {
+      const subscription = mockSubscription({ priceId: 'price_pro' });
+      if (shape === 'truncated') subscription.items.has_more = true;
+      else subscription.items.data.push({ ...subscription.items.data[0], id: 'si_extra',
+        price: { ...subscription.items.data[0].price, id: shape === 'unknown_extra' ? 'price_unknown' : 'price_pro' },
+      });
+      const event = mockStripeEvent('customer.subscription.updated', subscription);
+      mockStripeWebhooksConstructEvent.mockReturnValue(event);
+      const response = await POST(new Request('https://example.com/api/stripe/webhook', {
+        method: 'POST', body: JSON.stringify(event), headers: { 'stripe-signature': 'valid_signature' },
+      }) as import('next/server').NextRequest);
+      expect(response.status).toBe(200);
+      expect(mockUpdateSet).toHaveBeenCalledWith(expect.objectContaining({ subscriptionTier: 'free' }));
+      expect(mockTxInsertOnConflictDoUpdate).toHaveBeenCalledWith(expect.objectContaining({
+        set: expect.objectContaining({ stripePriceId: '' }),
+      }));
+    });
+
     const tierPriceTests = [
       { priceId: 'price_pro', priceAmount: 1500, expectedTier: 'pro', description: 'configured Pro' },
       { priceId: 'price_pro', priceAmount: 999, expectedTier: 'pro', description: 'configured Pro with a different amount' },

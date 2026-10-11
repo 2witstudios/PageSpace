@@ -267,6 +267,7 @@ async function storeSubscription(
     stripeSeatItemId: seatItem.id,
     extraSeatQuantity: seatItem.quantity,
     status: sub.status,
+    gifted: sub.metadata?.type === 'gift_subscription',
     trialEnd: fromUnix(sub.trialEnd),
     currentPeriodStart: fromUnix(sub.currentPeriodStart),
     currentPeriodEnd: fromUnix(sub.currentPeriodEnd),
@@ -287,6 +288,7 @@ async function refreshStored(tx: Tx, orgId: string, sub: OrgStripeSubscription):
     .update(orgSubscriptions)
     .set({
       status: sub.status,
+      gifted: sub.metadata?.type === 'gift_subscription',
       trialEnd: fromUnix(sub.trialEnd),
       currentPeriodStart: fromUnix(sub.currentPeriodStart),
       currentPeriodEnd: fromUnix(sub.currentPeriodEnd),

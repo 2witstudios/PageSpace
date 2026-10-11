@@ -10,6 +10,7 @@ import { sessions } from '@pagespace/db/schema/sessions';
 import { creditLedger, creditHolds } from '@pagespace/db/schema/credits';
 import { wallets, isPersonalRootWallet } from '@pagespace/db/schema/wallets';
 import { subscriptions } from '@pagespace/db/schema/subscriptions';
+import { orgSubscriptions } from '@pagespace/db/schema/organizations';
 import type { SQL } from '@pagespace/db/operators';
 import { computeBalanceDrift, isNegativeMargin } from '@pagespace/lib/billing/credit-core';
 import { BALANCE_DRIFT_TOLERANCE_CENTS, NEGATIVE_MARGIN_FLOOR_BPS } from '@pagespace/lib/billing/credit-pricing';
@@ -1136,18 +1137,18 @@ export async function getCreditRevenue(
 
 /** Paying, non-gifted active or trialing subscriptions grouped by configured price identity. */
 export async function getActiveSubscriptionsByTier(): Promise<SubscriptionsByTierRow[]> {
-  const rows = await db
-    .select({ stripePriceId: subscriptions.stripePriceId })
-    .from(subscriptions)
-    .where(and(
-      inArray(subscriptions.status, ['active', 'trialing']),
-      eq(subscriptions.gifted, false),
-    ));
+  const [personalRows, orgRows] = await Promise.all([
+    db.select({ stripePriceId: subscriptions.stripePriceId }).from(subscriptions).where(and(
+      inArray(subscriptions.status, ['active', 'trialing']), eq(subscriptions.gifted, false),
+    )),
+    db.select({ stripePriceId: orgSubscriptions.stripeBasePriceId }).from(orgSubscriptions).where(and(
+      inArray(orgSubscriptions.status, ['active']), eq(orgSubscriptions.gifted, false),
+    )),
+  ]);
 
   const counts = Object.fromEntries(TIERS.map((t) => [t, 0])) as Record<SubscriptionTier, number>;
-  for (const r of rows) {
-    counts[getTierFromPrice(r.stripePriceId)] += 1;
-  }
+  for (const row of personalRows) counts[getTierFromPrice(row.stripePriceId) === 'pro' ? 'pro' : 'free'] += 1;
+  for (const row of orgRows) counts[getTierFromPrice(row.stripePriceId) === 'business' ? 'business' : 'free'] += 1;
 
   return (Object.keys(counts) as SubscriptionTier[]).map((tier) => ({ tier, count: counts[tier] }));
 }

@@ -302,6 +302,23 @@ describe('Stripe webhook — org routing, idempotency, lapse (real Postgres, in-
     if (userIds.length > 0) await db.delete(users).where(inArray(users.id, userIds));
   });
 
+  it('mirrors current Stripe gift identity through signed subscription events and replay', async () => {
+    if (!dbAvailable) return;
+    const org = await northwind();
+    expect((await storedSub(org.orgId)).gifted).toBe(false);
+    const live = org.stripe.subscriptions.get(org.subscriptionId)!;
+    live.metadata = { ...live.metadata, type: 'gift_subscription' };
+    const snapshot = { id: org.subscriptionId, object: 'subscription', customer: org.customerId, status: 'active', metadata: orgMetadata(org.orgId) };
+    const gift = eventPayload('customer.subscription.updated', snapshot);
+    expect(await deliver(gift)).toBe(200);
+    expect((await storedSub(org.orgId)).gifted).toBe(true);
+    expect(await deliver(gift)).toBe(200);
+    expect((await storedSub(org.orgId)).gifted).toBe(true);
+    delete live.metadata.type;
+    expect(await deliver(eventPayload('customer.subscription.updated', snapshot))).toBe(200);
+    expect((await storedSub(org.orgId)).gifted).toBe(false);
+  });
+
   it("SEAT-7 (partial) org subscription webhooks are routed to the org before the personal-tier handler and are idempotent: each event delivered twice applies once and never touches the Owner's personal plan", async () => {
     if (!dbAvailable) return;
     const org = await northwind(7);
@@ -780,7 +797,9 @@ describe('Stripe webhook — org routing, idempotency, lapse (real Postgres, in-
     expect(await deliver(eventPayload('customer.subscription.deleted', { id: org.subscriptionId, object: 'subscription', customer: org.customerId, status: 'canceled', metadata: orgMetadata(org.orgId) }))).toBe(200);
     const [owner] = await db.select({ tier: users.subscriptionTier }).from(users).where(eq(users.id, org.ownerId));
     expect(owner.tier).toBe('pro');
-  });  it('SEAT-2 (partial) a price change updates the mirror so reconciliation cannot restore the previous entitlement', async () => {
+  });
+
+  it.each([false, true])('SEAT-2 (partial) a replaced or extra price item cannot restore previous entitlement (%s)', async (extraItem) => {
     const person = await factories.createUser({ stripeCustomerId: `cus_identity_${Date.now()}` });
     userIds.push(person.id);
     const subscription = {
@@ -792,10 +811,11 @@ describe('Stripe webhook — org routing, idempotency, lapse (real Postgres, in-
       }] },
     };
     expect(await deliver(eventPayload('customer.subscription.created', subscription))).toBe(200);
-    subscription.items.data[0].price.id = 'price_unknown_replacement';
+    if (extraItem) subscription.items.data.push({ ...subscription.items.data[0], id: 'si_extra', price: { id: 'price_unknown_replacement' } });
+    else subscription.items.data[0].price.id = 'price_unknown_replacement';
     expect(await deliver(eventPayload('customer.subscription.updated', subscription))).toBe(200);
     const [mirror] = await db.select().from(subscriptions).where(eq(subscriptions.stripeSubscriptionId, subscription.id));
-    expect(mirror.stripePriceId).toBe('price_unknown_replacement');
+    expect(mirror.stripePriceId).toBe(extraItem ? '' : 'price_unknown_replacement');
     await reconcileSubscriptionTiers({ priceTier: getPersonalTierFromPrice });
     const [after] = await db.select().from(users).where(eq(users.id, person.id));
     expect(after.subscriptionTier).toBe('free');
