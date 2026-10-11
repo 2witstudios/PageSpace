@@ -120,7 +120,7 @@ export const orgSubscriptions = pgTable('org_subscriptions', {
   stripeSeatItemId: text('stripeSeatItemId').notNull(),
   extraSeatQuantity: integer('extraSeatQuantity').default(0).notNull(),
   seatRevision: integer('seatRevision').default(0).notNull(),
-  // Stripe's subscription status: trialing, active, past_due, canceled, unpaid, incomplete, …
+  // Stripe status, or unverified_price when a live subscription's price identity fails verification.
   status: text('status').notNull(),
   // null = not yet verified from Stripe; reporting must not assume it is paid.
   gifted: boolean('gifted'),

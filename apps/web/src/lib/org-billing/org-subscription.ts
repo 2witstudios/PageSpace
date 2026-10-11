@@ -43,6 +43,7 @@
  * applyOrgPoolRefill path (wallet-funding-shell), found by organizations.stripeCustomerId.
  */
 import type Stripe from 'stripe';
+import { planOrgSubscriptionPriceMirror } from '@pagespace/lib/billing/org-webhook-core';
 import { db } from '@pagespace/db/db';
 import { eq, and, isNull, sql } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
@@ -283,18 +284,18 @@ async function storeSubscription(
 }
 
 /** Mirror what Stripe says now about the stored subscription onto its row. */
-async function refreshStored(tx: Tx, orgId: string, sub: OrgStripeSubscription): Promise<OrgSubscription> {
+async function refreshStored(tx: Tx, stored: OrgSubscription, sub: OrgStripeSubscription, prices: OrgBusinessPrices): Promise<OrgSubscription> {
   const [row] = await tx
     .update(orgSubscriptions)
     .set({
-      status: sub.status,
+      ...planOrgSubscriptionPriceMirror({ stored, subscription: sub, prices }),
       gifted: sub.metadata?.type === 'gift_subscription',
       trialEnd: fromUnix(sub.trialEnd),
       currentPeriodStart: fromUnix(sub.currentPeriodStart),
       currentPeriodEnd: fromUnix(sub.currentPeriodEnd),
       cancelAtPeriodEnd: sub.cancelAtPeriodEnd,
     })
-    .where(eq(orgSubscriptions.orgId, orgId))
+    .where(eq(orgSubscriptions.orgId, stored.orgId))
     .returning();
   return row;
 }
@@ -323,7 +324,7 @@ export async function ensureOrgBusinessSubscription(
 
     let [stored] = await tx.select().from(orgSubscriptions).where(eq(orgSubscriptions.orgId, orgId)).limit(1);
     if (stored && isLiveOrgSubscriptionStatus(stored.status)) {
-      stored = await refreshStored(tx, orgId, await deps.stripe.retrieveSubscription(stored.stripeSubscriptionId));
+      stored = await refreshStored(tx, stored, await deps.stripe.retrieveSubscription(stored.stripeSubscriptionId), prices);
       if (isLiveOrgSubscriptionStatus(stored.status)) return { kind: 'existing' as const, linkage: toLinkage(stored, customerId) };
     }
 
@@ -335,6 +336,9 @@ export async function ensureOrgBusinessSubscription(
       sub = existing;
       kind = 'adopted';
     } else {
+      if (history.some(candidate => isLiveOrgSubscriptionStatus(candidate.status) && candidate.metadata?.[ORG_ID_METADATA_KEY] === orgId)) {
+        throw new OrgBillingError('not_an_org_business_subscription', 'Organization has an unverified live subscription; repair its prices before provisioning');
+      }
       const seats = await deps.countSeats(orgId);
       const seen = orgSubscriptionHistory(history, { orgId });
       const params = orgBusinessSubscriptionParams({ orgId, customerId, seats, prices });
@@ -398,7 +402,7 @@ export async function syncOrgSeatQuantity(
   return db.transaction(async (tx) => {
     await lockOrgBilling(tx, orgId);
     const [stored] = await tx.select().from(orgSubscriptions).where(eq(orgSubscriptions.orgId, orgId)).limit(1);
-    if (!stored || !isLiveOrgSubscriptionStatus(stored.status)) return { kind: 'no_subscription' as const };
+    if (!stored || !isLiveOrgSubscriptionStatus(stored.status) || stored.status === 'unverified_price') return { kind: 'no_subscription' as const };
 
     const seats = await deps.countSeats(orgId);
     const plan = planSeatQuantitySync({
@@ -518,6 +522,7 @@ function toOrgStripeSubscription(sub: Stripe.Subscription): OrgStripeSubscriptio
     status: sub.status,
     created: sub.created,
     metadata: sub.metadata ?? null,
+    itemsHasMore: sub.items.has_more,
     items: items.map((i) => ({ id: i.id, priceId: i.price.id, quantity: i.quantity ?? 0 })),
     trialEnd: sub.trial_end ?? null,
     currentPeriodStart: periodItem?.current_period_start ?? null,

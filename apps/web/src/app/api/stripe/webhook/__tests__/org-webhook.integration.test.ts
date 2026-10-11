@@ -302,6 +302,33 @@ describe('Stripe webhook — org routing, idempotency, lapse (real Postgres, in-
     if (userIds.length > 0) await db.delete(users).where(inArray(users.id, userIds));
   });
 
+  it.each(['unknown_base', 'extra_item', 'duplicate_base', 'missing_seat', 'truncated'])('fails closed and recovers when current org price identity changes: %s', async (change) => {
+    if (!dbAvailable) return;
+    const org = await northwind();
+    setStripeStatus(org, 'active');
+    const live = org.stripe.subscriptions.get(org.subscriptionId)!;
+    const originalItems = live.items.map(item => ({ ...item }));
+    const snapshot = { id: org.subscriptionId, object: 'subscription', customer: org.customerId, status: 'active', metadata: orgMetadata(org.orgId) };
+    expect(await deliver(eventPayload('customer.subscription.updated', snapshot))).toBe(200);
+    expect((await getOrgStatus(org.orgId)).status).toBe('active');
+    if (change === 'unknown_base') live.items = live.items.map(item => item.priceId === PRICES.basePriceId ? { ...item, priceId: 'price_unknown_business' } : item);
+    if (change === 'extra_item') live.items = [...live.items, { id: 'si_extra', priceId: 'price_unknown', quantity: 1 }];
+    if (change === 'duplicate_base') live.items = [...live.items, { ...originalItems[0], id: 'si_duplicate' }];
+    if (change === 'missing_seat') live.items = live.items.filter(item => item.priceId !== PRICES.seatPriceId);
+    if (change === 'truncated') Object.assign(live, { itemsHasMore: true });
+    const invalid = eventPayload('customer.subscription.updated', snapshot);
+    expect(await deliver(invalid)).toBe(200);
+    expect((await getOrgStatus(org.orgId)).status).toBe('lapsed');
+    expect((await storedSub(org.orgId)).stripeBasePriceId).toBe('');
+    expect(await deliver(invalid)).toBe(200);
+    expect((await getOrgStatus(org.orgId)).status).toBe('lapsed');
+    live.items = originalItems;
+    Object.assign(live, { itemsHasMore: false });
+    expect(await deliver(eventPayload('customer.subscription.updated', snapshot))).toBe(200);
+    expect((await getOrgStatus(org.orgId)).status).toBe('active');
+    expect((await storedSub(org.orgId)).stripeBasePriceId).toBe(PRICES.basePriceId);
+  });
+
   it('mirrors current Stripe gift identity through signed subscription events and replay', async () => {
     if (!dbAvailable) return;
     const org = await northwind();

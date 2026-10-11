@@ -170,6 +170,40 @@ describe('org Business subscription shell (real Postgres, in-memory Stripe)', ()
     expect(await rowsFor(orgId)).toHaveLength(1);
   });
 
+  it('refuses to buy a second subscription when a lost mirror has an unrecognized live org plan', async () => {
+    if (!dbAvailable) return;
+    const { orgId, deps, stripe } = await northwind(1);
+    const first = await ensureOrgBusinessSubscription(orgId, deps);
+    const live = stripe.subscriptions.get(first.linkage.stripeSubscriptionId)!;
+    live.status = 'active';
+    live.items = live.items.map(item => item.priceId === PRICES.basePriceId ? { ...item, priceId: 'price_unknown' } : item);
+    await db.delete(orgSubscriptions).where(eq(orgSubscriptions.orgId, orgId));
+    const writes = { ...stripe.writes };
+    await expect(ensureOrgBusinessSubscription(orgId, deps)).rejects.toThrow(/unverified live subscription/);
+    expect(stripe.writes).toEqual(writes);
+    expect(await rowsFor(orgId)).toHaveLength(0);
+  });
+
+  it('invalidates an existing subscription on refresh without buying another, and recovers only after its prices are repaired', async () => {
+    if (!dbAvailable) return;
+    const { orgId, deps, stripe, seats } = await northwind(1);
+    const first = await ensureOrgBusinessSubscription(orgId, deps);
+    const live = stripe.subscriptions.get(first.linkage.stripeSubscriptionId)!;
+    live.status = 'active';
+    const originalItems = live.items.map(item => ({ ...item }));
+    live.items = live.items.map(item => item.priceId === PRICES.basePriceId ? { ...item, priceId: 'price_unknown' } : item);
+    const writes = { ...stripe.writes };
+    await ensureOrgBusinessSubscription(orgId, deps);
+    expect((await rowsFor(orgId))[0]).toMatchObject({ status: 'unverified_price', stripeBasePriceId: '', stripeSeatPriceId: '' });
+    seats.count = 9;
+    expect(await syncOrgSeatQuantity(orgId, {}, deps)).toEqual({ kind: 'no_subscription' });
+    expect(stripe.writes).toEqual(writes);
+    live.items = originalItems;
+    await ensureOrgBusinessSubscription(orgId, deps);
+    expect((await rowsFor(orgId))[0]).toMatchObject({ status: 'active', stripeBasePriceId: PRICES.basePriceId, stripeSeatPriceId: PRICES.seatPriceId });
+    expect(stripe.writes).toEqual(writes);
+  });
+
   it('mirrors verified gift identity during provisioning and each existing-subscription refresh', async () => {
     if (!dbAvailable) return;
     const { orgId, deps, stripe } = await northwind(1);

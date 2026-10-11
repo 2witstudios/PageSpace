@@ -44,7 +44,7 @@ export type OrgStatusResult =
 
 /** The stored org subscription as the status reads it (org_subscriptions). */
 export interface OrgSubscriptionState {
-  /** Stripe's subscription status. */
+  /** Stripe status, or unverified_price when the mirror cannot verify the plan items. */
   status: string;
   trialEnd: Date | null;
   /**

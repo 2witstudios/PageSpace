@@ -184,6 +184,7 @@ export interface OrgSubscriptionCandidate {
   created: number;
   metadata: Record<string, string> | null;
   items: ReadonlyArray<{ id: string; priceId: string; quantity: number }>;
+  itemsHasMore?: boolean;
 }
 
 /**
@@ -262,11 +263,15 @@ export interface OrgSubscriptionItemLinkage {
   seatItem: { id: string; quantity: number } | null;
 }
 
-/** The item ids stored on the org; null when the subscription has no base item (not an org Business subscription). */
-export function orgSubscriptionItems(sub: Pick<OrgSubscriptionCandidate, 'items'>, prices: OrgBusinessPrices): OrgSubscriptionItemLinkage | null {
-  const base = sub.items.find((i) => i.priceId === prices.basePriceId);
-  if (!base) return null;
-  const seat = sub.items.find((i) => i.priceId === prices.seatPriceId);
+/** Verified org item identity. A missing seat item may be repaired during adoption; all other ambiguity fails closed. */
+export function orgSubscriptionItems(sub: Pick<OrgSubscriptionCandidate, 'items' | 'itemsHasMore'>, prices: OrgBusinessPrices): OrgSubscriptionItemLinkage | null {
+  if (sub.itemsHasMore || !prices.basePriceId || !prices.seatPriceId || prices.basePriceId === prices.seatPriceId) return null;
+  const bases = sub.items.filter(i => i.priceId === prices.basePriceId);
+  const seats = sub.items.filter(i => i.priceId === prices.seatPriceId);
+  if (bases.length !== 1 || seats.length > 1 || sub.items.length !== bases.length + seats.length) return null;
+  const base = bases[0];
+  const seat = seats[0];
+  if (base.quantity !== 1 || !base.id || (seat && (!seat.id || seat.id === base.id || !Number.isSafeInteger(seat.quantity) || seat.quantity < 0))) return null;
   return { baseItemId: base.id, seatItem: seat ? { id: seat.id, quantity: seat.quantity } : null };
 }
 

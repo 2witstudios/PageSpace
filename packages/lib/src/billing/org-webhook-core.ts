@@ -13,7 +13,7 @@
  * An event with neither signal is a person's and takes the existing personal path
  * unchanged — which also finds nobody for a customer that is no user's.
  */
-import { ORG_ID_METADATA_KEY, ORG_SUBSCRIPTION_KIND, orgSubscriptionItems, type OrgBusinessPrices } from './org-subscription-core';
+import { ORG_ID_METADATA_KEY, ORG_SUBSCRIPTION_KIND, orgSubscriptionItems, isLiveOrgSubscriptionStatus, type OrgSubscriptionCandidate, type OrgBusinessPrices } from './org-subscription-core';
 
 export type BillingOwnerRoute =
   | { kind: 'org'; orgId: string }
@@ -104,17 +104,18 @@ export type OrgSeatItemMirrorPatch = Partial<StoredOrgSeatLinkage>;
  * ids and the extra-seat quantity from what Stripe says NOW — a seat change made outside the app
  * (the dashboard, a support edit) is no longer left stale (the review saw stored 2 vs Stripe 3).
  * A changed quantity bumps the seat revision, so the next seat change's idempotency key can never
- * be one an earlier change already used. A subscription without the base price is not an org
- * Business subscription and changes nothing; a missing seat item never erases the stored one.
+ * be one an earlier change already used. Missing, ambiguous or incomplete plan items
+ * return null, so callers invalidate the mirror instead of keeping stale identity.
  * Only what differs is in the patch.
  */
 export function planOrgSeatItemMirror(input: {
   stored: StoredOrgSeatLinkage;
   items: ReadonlyArray<{ id: string; priceId: string; quantity: number }>;
   prices: OrgBusinessPrices;
-}): OrgSeatItemMirrorPatch {
-  const linkage = orgSubscriptionItems({ items: input.items }, input.prices);
-  if (!linkage) return {};
+  itemsHasMore?: boolean;
+}): OrgSeatItemMirrorPatch | null {
+  const linkage = orgSubscriptionItems({ items: input.items, itemsHasMore: input.itemsHasMore }, input.prices);
+  if (!linkage?.seatItem) return null;
   const patch: OrgSeatItemMirrorPatch = {};
   if (linkage.baseItemId !== input.stored.stripeBaseItemId) patch.stripeBaseItemId = linkage.baseItemId;
   if (linkage.seatItem) {
@@ -125,4 +126,20 @@ export function planOrgSeatItemMirror(input: {
     }
   }
   return patch;
+}
+
+/** Persist an invalid identity as a lapsed mirror, without losing the subscription ID
+ * needed to cancel or repair it. Ended subscriptions remain ended so replacement is safe. */
+export function planOrgSubscriptionPriceMirror(input: {
+  stored: StoredOrgSeatLinkage;
+  subscription: Pick<OrgSubscriptionCandidate, 'status' | 'items' | 'itemsHasMore'>;
+  prices: OrgBusinessPrices;
+}): OrgSeatItemMirrorPatch & { status: string; stripeBasePriceId: string; stripeSeatPriceId: string } {
+  const patch = planOrgSeatItemMirror({ stored: input.stored, ...input.subscription, prices: input.prices });
+  return {
+    ...patch,
+    status: patch !== null || !isLiveOrgSubscriptionStatus(input.subscription.status) ? input.subscription.status : 'unverified_price',
+    stripeBasePriceId: patch !== null ? input.prices.basePriceId : '',
+    stripeSeatPriceId: patch !== null ? input.prices.seatPriceId : '',
+  };
 }

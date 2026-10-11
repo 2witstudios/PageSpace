@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { ORG_ID_METADATA_KEY, ORG_SUBSCRIPTION_KIND } from '../org-subscription-core';
-import { routeBillingOwner, orgInvoiceExtraSeats, planOrgSubscriptionMirror, planOrgSeatItemMirror } from '../org-webhook-core';
+import { routeBillingOwner, orgInvoiceExtraSeats, planOrgSubscriptionMirror, planOrgSeatItemMirror, planOrgSubscriptionPriceMirror } from '../org-webhook-core';
 
 const ORG = 'org_northwind';
 
@@ -96,13 +96,41 @@ describe('planOrgSeatItemMirror — the mirror refreshes the seat item from what
     expect(planOrgSeatItemMirror({ stored, items, prices })).toEqual({ stripeBaseItemId: 'si_base_2', stripeSeatItemId: 'si_seat_2' });
   });
 
-  it('nothing changed is an empty patch; a subscription without the base item, or with no seat item, never overwrites the stored linkage', () => {
+  it('nothing changed is an empty patch; missing base or seat identity invalidates the mirror', () => {
     const same = [
       { id: 'si_base', priceId: 'price_base', quantity: 1 },
       { id: 'si_seat', priceId: 'price_seat', quantity: 2 },
     ];
     expect(planOrgSeatItemMirror({ stored, items: same, prices })).toEqual({});
-    expect(planOrgSeatItemMirror({ stored, items: [{ id: 'si_x', priceId: 'price_other', quantity: 9 }], prices })).toEqual({});
-    expect(planOrgSeatItemMirror({ stored, items: [{ id: 'si_base_3', priceId: 'price_base', quantity: 1 }], prices })).toEqual({ stripeBaseItemId: 'si_base_3' });
+    expect(planOrgSeatItemMirror({ stored, items: [{ id: 'si_x', priceId: 'price_other', quantity: 9 }], prices })).toBeNull();
+    expect(planOrgSeatItemMirror({ stored, items: [{ id: 'si_base_3', priceId: 'price_base', quantity: 1 }], prices })).toBeNull();
+  });
+});
+
+describe('org subscription price mirror', () => {
+  const prices = { basePriceId: 'price_base', seatPriceId: 'price_seat' };
+  const stored = { stripeBaseItemId: 'si_base', stripeSeatItemId: 'si_seat', extraSeatQuantity: 2, seatRevision: 4 };
+  const items = [{ id: 'si_base', priceId: 'price_base', quantity: 1 }, { id: 'si_seat', priceId: 'price_seat', quantity: 2 }];
+
+  it.each(['active', 'past_due', 'trialing', 'incomplete'])('invalidates a live %s mirror with unknown or incomplete identity', status => {
+    for (const invalid of [
+      [], items.slice(0, 1), items.slice(1),
+      [...items, { id: 'si_extra', priceId: 'price_unknown', quantity: 1 }],
+      [...items, { ...items[0], id: 'si_duplicate' }],
+      [{ ...items[0], quantity: 2 }, items[1]],
+      [items[0], { ...items[1], quantity: -1 }],
+    ]) {
+      expect(planOrgSubscriptionPriceMirror({ stored, subscription: { status, items: invalid }, prices })).toEqual({ status: 'unverified_price', stripeBasePriceId: '', stripeSeatPriceId: '' });
+    }
+    expect(planOrgSubscriptionPriceMirror({ stored, subscription: { status, items, itemsHasMore: true }, prices }).status).toBe('unverified_price');
+    expect(planOrgSubscriptionPriceMirror({ stored, subscription: { status, items }, prices: { ...prices, seatPriceId: prices.basePriceId } }).status).toBe('unverified_price');
+  });
+
+  it.each(['canceled', 'incomplete_expired'])('preserves an ended %s subscription so recovery can replace it safely', status => {
+    expect(planOrgSubscriptionPriceMirror({ stored, subscription: { status, items: [] }, prices })).toEqual({ status, stripeBasePriceId: '', stripeSeatPriceId: '' });
+  });
+
+  it('restores configured price identities when the complete collection verifies', () => {
+    expect(planOrgSubscriptionPriceMirror({ stored, subscription: { status: 'active', items: [...items].reverse() }, prices })).toEqual({ status: 'active', stripeBasePriceId: 'price_base', stripeSeatPriceId: 'price_seat' });
   });
 });
