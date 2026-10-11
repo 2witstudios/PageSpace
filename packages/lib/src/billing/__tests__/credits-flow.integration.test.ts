@@ -562,7 +562,7 @@ beforeEach(() => {
 describe('credits flow — grants sized from the invoice paid (MON-2)', () => {
   it('MON-2 the ledger row records paidCents and the grant is amount_paid × the default ratio', async () => {
     seedUser('u1', 'cus_1', 'pro');
-    await applyStripeFunding(invoicePaid('in_full', 'cus_1', PERIOD_START, PERIOD_END, 1500));
+    await applyStripeFunding(invoicePaid('in_full', 'cus_1', PERIOD_START, PERIOD_END, 1500), { tier: 'pro' });
 
     const grant = ledgerOf('u1').find((r) => r.entryType === 'monthly_grant' && r.stripeRef === 'in_full')!;
     expect(grant.paidCents).toBe(1500);
@@ -573,7 +573,7 @@ describe('credits flow — grants sized from the invoice paid (MON-2)', () => {
 
   it('D-OW-17 test seam: { active: true } through the full webhook → funding → balance path applies the 60% ratio, not a 100% pass-through', async () => {
     seedUser('u1', 'cus_1', 'pro');
-    await applyStripeFunding(invoicePaid('in_ratio', 'cus_1', PERIOD_START, PERIOD_END, 1500), { active: true });
+    await applyStripeFunding(invoicePaid('in_ratio', 'cus_1', PERIOD_START, PERIOD_END, 1500), { tier: 'pro', active: true });
 
     const grant = ledgerOf('u1').find((r) => r.entryType === 'monthly_grant' && r.stripeRef === 'in_ratio')!;
     expect(grant.paidCents).toBe(1500);
@@ -584,7 +584,7 @@ describe('credits flow — grants sized from the invoice paid (MON-2)', () => {
 
   it('MON-2 a 50%-off invoice grants half', async () => {
     seedUser('u1', 'cus_1', 'pro');
-    await applyStripeFunding(invoicePaid('in_half', 'cus_1', PERIOD_START, PERIOD_END, 750));
+    await applyStripeFunding(invoicePaid('in_half', 'cus_1', PERIOD_START, PERIOD_END, 750), { tier: 'pro' });
 
     expect(balanceOf('u1')!.monthlyRemainingCents).toBe(allowanceCentsForPaidCents(1500, 'pro') / 2);
     expect(ledgerOf('u1').find((r) => r.stripeRef === 'in_half')!.paidCents).toBe(750);
@@ -592,7 +592,7 @@ describe('credits flow — grants sized from the invoice paid (MON-2)', () => {
 
   it('MON-2 a zero-amount invoice grants nothing: no grant row, no balance row', async () => {
     seedUser('u1', 'cus_1', 'pro');
-    await applyStripeFunding(invoicePaid('in_zero', 'cus_1', PERIOD_START, PERIOD_END, 0));
+    await applyStripeFunding(invoicePaid('in_zero', 'cus_1', PERIOD_START, PERIOD_END, 0), { tier: 'pro' });
 
     expect(ledgerOf('u1')).toHaveLength(0);
     expect(balanceOf('u1')).toBeUndefined();
@@ -601,8 +601,8 @@ describe('credits flow — grants sized from the invoice paid (MON-2)', () => {
   it('MON-2 replaying the same invoice (stripeRef dedupe) grants once', async () => {
     seedUser('u1', 'cus_1', 'pro');
     const evt = invoicePaid('in_replay', 'cus_1', PERIOD_START, PERIOD_END, 1500);
-    await applyStripeFunding(evt);
-    await applyStripeFunding(evt);
+    await applyStripeFunding(evt, { tier: 'pro' });
+    await applyStripeFunding(evt, { tier: 'pro' });
 
     expect(balanceOf('u1')!.monthlyRemainingCents).toBe(1500);
     expect(ledgerOf('u1').filter((r) => r.entryType === 'monthly_grant')).toHaveLength(1);
@@ -617,7 +617,7 @@ describe('credits flow — grants sized from the invoice paid (MON-2)', () => {
   it('MON-2 (a) a gifted subscription (subscriptions.gifted) grants list × the default ratio from a $0 invoice, paidCents 0', async () => {
     seedUser('u1', 'cus_1', 'pro');
     seedLiveSubscription('u1', 'active', true);
-    await applyStripeFunding(withReason(invoicePaid('in_gift', 'cus_1', PERIOD_START, PERIOD_END, 0), 1500, 'subscription_cycle'));
+    await applyStripeFunding(withReason(invoicePaid('in_gift', 'cus_1', PERIOD_START, PERIOD_END, 0), 1500, 'subscription_cycle'), { tier: 'pro' });
 
     expect(balanceOf('u1')!.monthlyRemainingCents).toBe(1500);
     expect(ledgerOf('u1').find((r) => r.stripeRef === 'in_gift')).toMatchObject({ entryType: 'monthly_grant', amountCents: 1500, paidCents: 0 });
@@ -626,7 +626,7 @@ describe('credits flow — grants sized from the invoice paid (MON-2)', () => {
   it('MON-2 (a) a trial-created subscription ($0, subtotal 0, subscription_create) grants list × the default ratio', async () => {
     seedUser('u1', 'cus_1', 'pro');
     seedLiveSubscription('u1', 'trialing');
-    await applyStripeFunding(withReason(invoicePaid('in_trial', 'cus_1', PERIOD_START, PERIOD_END, 0), 0, 'subscription_create'));
+    await applyStripeFunding(withReason(invoicePaid('in_trial', 'cus_1', PERIOD_START, PERIOD_END, 0), 0, 'subscription_create'), { tier: 'pro' });
 
     expect(balanceOf('u1')!.monthlyRemainingCents).toBe(1500);
   });
@@ -634,23 +634,21 @@ describe('credits flow — grants sized from the invoice paid (MON-2)', () => {
   it('MON-2 (d) a 100% coupon on a non-gifted subscription grants nothing', async () => {
     seedUser('u1', 'cus_1', 'pro');
     seedLiveSubscription('u1', 'active');
-    await applyStripeFunding(withReason(invoicePaid('in_coupon', 'cus_1', PERIOD_START, PERIOD_END, 0), 1500, 'subscription_create'));
+    await applyStripeFunding(withReason(invoicePaid('in_coupon', 'cus_1', PERIOD_START, PERIOD_END, 0), 1500, 'subscription_create'), { tier: 'pro' });
 
     expect(ledgerOf('u1')).toHaveLength(0);
     expect(balanceOf('u1')).toBeUndefined();
   });
 
-  it('MON-2 a paid invoice on a free-resolved tier writes ONE missed_grant row (dedupes on the invoice) and no balance', async () => {
-    seedUser('u1', 'cus_1', 'free'); // stale stored tier, and no invoice-derived tier
-    const evt = invoicePaid('in_missed', 'cus_1', PERIOD_START, PERIOD_END, 1500);
+  it.each(['free', 'pro', 'business'])('MON-2 (partial) missing invoice identity cannot create credits or a repair candidate from a %s cache', async (cachedTier) => {
+    seedUser('u1', 'cus_1', cachedTier);
+    const evt = invoicePaid('in_unverified', 'cus_1', PERIOD_START, PERIOD_END, 1500);
     await applyStripeFunding(evt);
-    await applyStripeFunding(evt); // redelivery
-
-    const missed = ledgerOf('u1').filter((r) => r.entryType === 'missed_grant');
-    expect(missed).toHaveLength(1);
-    expect(missed[0]).toMatchObject({ amountCents: 0, paidCents: 1500, stripeRef: 'in_missed', consumeStatus: 'applied' });
-    // A missed grant ensures the payer's wallet (WAL-5: its ledger row names it) but funds nothing.
-    expectBareWallet('u1');
+    await applyStripeFunding(evt);
+    seedPricedSubscription('u1', 'price_pro');
+    await reconcileMissedGrants({ priceTier: PRICE_TIER });
+    expect(ledgerOf('u1')).toEqual([]);
+    expect(balanceOf('u1')).toBeUndefined();
   });
 });
 
@@ -664,7 +662,7 @@ describe('SECURITY (Codex P1): grants only fire for real subscription invoices, 
       data: { object: { id: 'in_manual', customer: 'cus_1', amount_paid: 100_000, billing_reason: 'manual' } },
     };
 
-    await applyStripeFunding(manualInvoice);
+    await applyStripeFunding(manualInvoice, { tier: 'pro' });
 
     expect(ledgerOf('u1')).toHaveLength(0);
     expect(balanceOf('u1')).toBeUndefined();
@@ -692,7 +690,7 @@ describe('SECURITY (Codex P1): grants only fire for real subscription invoices, 
       },
     };
 
-    await applyStripeFunding(giftInvoice);
+    await applyStripeFunding(giftInvoice, { tier: 'pro' });
 
     expect(balanceOf('u1')!.monthlyRemainingCents).toBe(allowanceCentsForPaidCents(1500, 'pro'));
     expect(ledgerOf('u1').find((r) => r.stripeRef === 'in_gift')).toMatchObject({ entryType: 'monthly_grant', paidCents: 0 });
@@ -709,7 +707,7 @@ describe('SECURITY (Codex P1): grants only fire for real subscription invoices, 
       },
     };
 
-    await applyStripeFunding(upgradeInvoice);
+    await applyStripeFunding(upgradeInvoice, { tier: 'pro' });
 
     const grant = ledgerOf('u1').find((r) => r.stripeRef === 'in_upgrade')!;
     expect(grant).toMatchObject({ entryType: 'monthly_grant', paidCents: 2000 });
@@ -737,10 +735,24 @@ function seedMissedGrantRow(id: string, userId: string, paidCents = 1500) {
   });
 }
 
+/** Existing ledger evidence from before strict funding; runtime no longer creates these rows. */
+function seedHistoricalMissedInvoice(userId: string, invoiceId: string) {
+  const walletId = `w_historical_${userId}`;
+  store.wallets.push({
+    id: walletId, ownerType: 'user', userId, orgId: null, subjectType: null, subjectId: null, parentWalletId: null,
+    monthlyRemainingCents: 0, monthlyAllowanceCents: 0, topupRemainingCents: 0, pendingMillicents: 0,
+    debtCents: 0, monthlyPeriodStart: null, monthlyPeriodEnd: null, updatedAt: new Date(),
+  });
+  seedMissedGrantRow(invoiceId, userId);
+  const row = store.creditLedger.find((entry) => entry.id === invoiceId)!;
+  row.stripeRef = invoiceId;
+  row.walletId = walletId;
+}
+
 describe('credits flow — missed-grant reconcile (MON-2)', () => {
   it('MON-2 missed grant: re-resolves the tier from the LIVE subscription and grants amount_paid × ratio once the tier repaired', async () => {
     seedUser('u1', 'cus_1', 'free'); // at funding time: stale stored tier, invoice grants nothing
-    await applyStripeFunding(invoicePaid('in_missed', 'cus_1', PERIOD_START, PERIOD_END, 1500));
+    seedHistoricalMissedInvoice('u1', 'in_missed');
     expect(ledgerOf('u1').filter((r) => r.entryType === 'missed_grant')).toHaveLength(1);
     // A missed grant ensures the payer's wallet (WAL-5: its ledger row names it) but funds nothing.
     expectBareWallet('u1');
@@ -761,7 +773,7 @@ describe('credits flow — missed-grant reconcile (MON-2)', () => {
 
   it('MON-2 missed grant: a row whose tier is STILL free is left untouched (not dropped, not double-counted)', async () => {
     seedUser('u1', 'cus_1', 'free');
-    await applyStripeFunding(invoicePaid('in_missed', 'cus_1', PERIOD_START, PERIOD_END, 1500));
+    seedHistoricalMissedInvoice('u1', 'in_missed');
 
     const result = await reconcileMissedGrants({ priceTier: PRICE_TIER });
 
@@ -774,12 +786,12 @@ describe('credits flow — missed-grant reconcile (MON-2)', () => {
   it('MON-2 missed grant: rolls over onto whatever balance already exists (netted with debt, same arithmetic as a normal renewal)', async () => {
     seedUser('u1', 'cus_1', 'pro');
     // A normal grant lands first, leaving a carried balance and some debt.
-    await applyStripeFunding(invoicePaid('in_normal', 'cus_1', PERIOD_START, PERIOD_END, 1500));
+    await applyStripeFunding(invoicePaid('in_normal', 'cus_1', PERIOD_START, PERIOD_END, 1500), { tier: 'pro' });
     store.wallets.find((r) => r.userId === 'u1')!.debtCents = 100;
 
     // Then a SEPARATE missed invoice (different tier resolution failure) lands.
     seedUser('u2', 'cus_2', 'free');
-    await applyStripeFunding(invoicePaid('in_missed2', 'cus_2', PERIOD_START, PERIOD_END, 1500));
+    seedHistoricalMissedInvoice('u2', 'in_missed2');
     seedPricedSubscription('u2', 'price_pro');
 
     const before = balanceOf('u1')!.monthlyRemainingCents;
@@ -793,7 +805,7 @@ describe('credits flow — missed-grant reconcile (MON-2)', () => {
 
   it('MON-2 missed grant: running the sweep twice reconciles once — the row conversion is itself the dedupe', async () => {
     seedUser('u1', 'cus_1', 'free');
-    await applyStripeFunding(invoicePaid('in_missed', 'cus_1', PERIOD_START, PERIOD_END, 1500));
+    seedHistoricalMissedInvoice('u1', 'in_missed');
     seedPricedSubscription('u1', 'price_pro');
 
     await reconcileMissedGrants({ priceTier: PRICE_TIER });
@@ -807,7 +819,7 @@ describe('credits flow — missed-grant reconcile (MON-2)', () => {
 
   it('billing disabled (tenant/onprem): the missed-grant sweep is a no-op and leaves missed_grant rows untouched', async () => {
     seedUser('u1', 'cus_1', 'free');
-    await applyStripeFunding(invoicePaid('in_missed', 'cus_1', PERIOD_START, PERIOD_END, 1500));
+    seedHistoricalMissedInvoice('u1', 'in_missed');
     H.isBillingEnabled.mockReturnValue(false);
 
     const result = await reconcileMissedGrants({ priceTier: PRICE_TIER });
@@ -821,7 +833,7 @@ describe('credits flow — missed-grant reconcile (MON-2)', () => {
 describe('credits flow — missed-grant reconcile review fixes (#2645 threads)', () => {
   it('MON-2 missed grant: the tier is derived from the subscriptions rows, NOT the stale users.subscriptionTier cache', async () => {
     seedUser('u1', 'cus_1', 'free'); // the cache is stale — exactly the case this reconciler exists for
-    await applyStripeFunding(invoicePaid('in_missed', 'cus_1', PERIOD_START, PERIOD_END, 1500));
+    seedHistoricalMissedInvoice('u1', 'in_missed');
     seedPricedSubscription('u1', 'price_pro'); // the source of truth says Pro; the cache never caught up
 
     const result = await reconcileMissedGrants({ priceTier: PRICE_TIER });
@@ -837,7 +849,7 @@ describe('credits flow — missed-grant reconcile review fixes (#2645 threads)',
 
   it('MON-2 missed grant: a cache that says pro does NOT grant when no subscription row entitles the user', async () => {
     seedUser('u1', 'cus_1', 'free');
-    await applyStripeFunding(invoicePaid('in_missed', 'cus_1', PERIOD_START, PERIOD_END, 1500));
+    seedHistoricalMissedInvoice('u1', 'in_missed');
     store.users.find((r) => r.id === 'u1')!.subscriptionTier = 'pro';
     seedPricedSubscription('u1', 'price_pro', 'canceled');
 
@@ -981,7 +993,7 @@ describe('credits flow — happy path (fund → gate → consume → top-up → 
     seedUser('u1', 'cus_1', 'pro'); // a $5 promo-priced Pro invoice → 500¢ (flag off: 100% of paid)
 
     // ── FUND: invoice.paid grants what the invoice paid and sets the period ──────
-    await applyStripeFunding(invoicePaid('in_1', 'cus_1', PERIOD_START, PERIOD_END, 500));
+    await applyStripeFunding(invoicePaid('in_1', 'cus_1', PERIOD_START, PERIOD_END, 500), { tier: 'pro' });
     expect(balanceOf('u1')!.monthlyRemainingCents).toBe(500);
     expect(balanceOf('u1')!.topupRemainingCents).toBe(0);
     const grants = ledgerOf('u1').filter((r) => r.entryType === 'monthly_grant');
@@ -1045,7 +1057,7 @@ describe('credits flow — happy path (fund → gate → consume → top-up → 
 describe('credits flow — negative balance (overage → debt → recover)', () => {
   it('overshoots into debt, blocks while net-negative, then a top-up pays the debt and unblocks', async () => {
     seedUser('u1', 'cus_1', 'pro'); // 1500¢ monthly
-    await applyStripeFunding(invoicePaid('in_1', 'cus_1', PERIOD_START, PERIOD_END));
+    await applyStripeFunding(invoicePaid('in_1', 'cus_1', PERIOD_START, PERIOD_END), { tier: 'pro' });
     expect(balanceOf('u1')!.monthlyRemainingCents).toBe(1500);
 
     // ── OVERSHOOT: gate allows (1500 spendable), but the call costs $12 -> 1800¢.
@@ -1075,7 +1087,7 @@ describe('credits flow — negative balance (overage → debt → recover)', () 
 
   it('nets outstanding debt against carry at renewal — debt absorbed, monthly reduced accordingly', async () => {
     seedUser('u1', 'cus_1', 'pro');
-    await applyStripeFunding(invoicePaid('in_1', 'cus_1', PERIOD_START, PERIOD_END));
+    await applyStripeFunding(invoicePaid('in_1', 'cus_1', PERIOD_START, PERIOD_END), { tier: 'pro' });
 
     const g = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND });
     await consumeCredits({ aiUsageLogId: 'log_over', userId: 'u1', costDollars: 12, holdId: g.holdId });
@@ -1084,7 +1096,7 @@ describe('credits flow — negative balance (overage → debt → recover)', () 
 
     // ── RENEWAL: debt netted against carry before allowance added. ──
     // monthly = 0, debt = 300; netCarried = 0 − 300 = −300; monthly = −300 + 1500 = 1200.
-    await applyStripeFunding(invoicePaid('in_2', 'cus_1', PERIOD_START, PERIOD_END));
+    await applyStripeFunding(invoicePaid('in_2', 'cus_1', PERIOD_START, PERIOD_END), { tier: 'pro' });
     expect(balanceOf('u1')!.monthlyRemainingCents).toBe(1200); // 1500 − 300 debt absorbed
     expect(balanceOf('u1')!.debtCents).toBe(0); // absorbed into monthly balance
     expect((await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND })).allowed).toBe(true);
@@ -1092,7 +1104,7 @@ describe('credits flow — negative balance (overage → debt → recover)', () 
 
   it('a partial top-up (smaller than the debt) reduces debt but stays blocked until net-positive', async () => {
     seedUser('u1', 'cus_1', 'pro');
-    await applyStripeFunding(invoicePaid('in_1', 'cus_1', PERIOD_START, PERIOD_END));
+    await applyStripeFunding(invoicePaid('in_1', 'cus_1', PERIOD_START, PERIOD_END), { tier: 'pro' });
 
     const g = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND });
     // $20 call -> 3000¢; covers 1500 monthly, leaves 1500¢ debt.
@@ -1108,7 +1120,7 @@ describe('credits flow — negative balance (overage → debt → recover)', () 
 
   it('ACCUMULATES debt across two in-flight overages (settle adds to existing debt, never overwrites)', async () => {
     seedUser('u1', 'cus_1', 'pro'); // 1500¢ monthly
-    await applyStripeFunding(invoicePaid('in_1', 'cus_1', PERIOD_START, PERIOD_END));
+    await applyStripeFunding(invoicePaid('in_1', 'cus_1', PERIOD_START, PERIOD_END), { tier: 'pro' });
 
     // Two calls go in-flight TOGETHER: both clear the gate (net 1500 − two 25¢
     // reservations still above the floor) before either settles. This is the only
@@ -1146,7 +1158,7 @@ describe('credits flow — negative balance (overage → debt → recover)', () 
 describe('credits flow — idempotency', () => {
   it('consuming the same aiUsageLogId twice debits exactly once', async () => {
     seedUser('u1', 'cus_1', 'pro');
-    await applyStripeFunding(invoicePaid('in_1', 'cus_1', PERIOD_START, PERIOD_END, 500)); // $5 paid → 500¢
+    await applyStripeFunding(invoicePaid('in_1', 'cus_1', PERIOD_START, PERIOD_END, 500), { tier: 'pro' }); // $5 paid → 500¢
 
     await consumeCredits({ aiUsageLogId: 'log_dup', userId: 'u1', costDollars: 1 }); // 150¢
     expect(balanceOf('u1')!.monthlyRemainingCents).toBe(350);
@@ -1161,8 +1173,8 @@ describe('credits flow — idempotency', () => {
     seedUser('u1', 'cus_1', 'pro'); // 1500¢
     const evt = invoicePaid('in_dup', 'cus_1', PERIOD_START, PERIOD_END);
 
-    await applyStripeFunding(evt);
-    await applyStripeFunding(evt); // redelivery
+    await applyStripeFunding(evt, { tier: 'pro' });
+    await applyStripeFunding(evt, { tier: 'pro' }); // redelivery
 
     expect(balanceOf('u1')!.monthlyRemainingCents).toBe(TIER_MONTHLY_ALLOWANCE_CENTS.pro);
     expect(ledgerOf('u1').filter((r) => r.entryType === 'monthly_grant' && r.stripeRef === 'in_dup')).toHaveLength(1);
@@ -1398,7 +1410,7 @@ describe('credits flow — monthly reset', () => {
     expect(balanceOf('u4')!.monthlyRemainingCents).toBe(250); // 400 - 150 = 250 carry remaining
 
     // Renewal fires: adds full allowance to whatever remains.
-    await applyStripeFunding(invoicePaid('in_4', 'cus_4', PERIOD_START, PERIOD_END));
+    await applyStripeFunding(invoicePaid('in_4', 'cus_4', PERIOD_START, PERIOD_END), { tier: 'pro' });
     expect(balanceOf('u4')!.monthlyRemainingCents).toBe(250 + TIER_MONTHLY_ALLOWANCE_CENTS.pro); // 250 + 1500 = 1750
   });
 
@@ -1415,7 +1427,7 @@ describe('credits flow — monthly reset', () => {
     await consumeCredits({ aiUsageLogId: 'log_x', userId: 'u2', costDollars: 1 }); // 150¢
     expect(balanceOf('u2')!.monthlyRemainingCents).toBe(1350);
 
-    await applyStripeFunding(invoicePaid('in_2', 'cus_2', PERIOD_START, PERIOD_END));
+    await applyStripeFunding(invoicePaid('in_2', 'cus_2', PERIOD_START, PERIOD_END), { tier: 'pro' });
     expect(balanceOf('u2')!.monthlyRemainingCents).toBe(1350 + TIER_MONTHLY_ALLOWANCE_CENTS.pro); // rollover: carry 1350 + new 1500 = 2850
     expect(balanceOf('u2')!.monthlyPeriodEnd!.getTime()).toBe(PERIOD_END * 1000);
   });
@@ -1496,7 +1508,7 @@ describe('credits flow — billing disabled (tenant/onprem)', () => {
     expect(await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND })).toEqual({ allowed: true, reason: 'unlimited' });
 
     await consumeCredits({ aiUsageLogId: 'log_1', userId: 'u1', costDollars: 5 });
-    await applyStripeFunding(invoicePaid('in_1', 'cus_1', PERIOD_START, PERIOD_END));
+    await applyStripeFunding(invoicePaid('in_1', 'cus_1', PERIOD_START, PERIOD_END), { tier: 'pro' });
     const result = await backfillCredits();
 
     expect(result).toEqual({ retried: 0, orphans: 0, expiredHolds: 0 });
@@ -1712,7 +1724,7 @@ describe('credits flow — per-user/day exposure cap (fund → consume past the 
   it('denies the next call once the day\'s charged spend would exceed the cap, while credits remain', async () => {
     process.env.DAILY_USER_EXPOSURE_CAP_CENTS = '200'; // 200¢/day ceiling
     seedUser('u1', 'cus_1', 'pro'); // pro = 1500¢ monthly — far above the daily cap
-    await applyStripeFunding(invoicePaid('in_1', 'cus_1', PERIOD_START, PERIOD_END));
+    await applyStripeFunding(invoicePaid('in_1', 'cus_1', PERIOD_START, PERIOD_END), { tier: 'pro' });
     expect(balanceOf('u1')!.monthlyRemainingCents).toBe(TIER_MONTHLY_ALLOWANCE_CENTS.pro);
 
     // CALL 1: $1 real → 150¢ charged. day total 0 + EST(25) < 200 → allowed.
@@ -1737,7 +1749,7 @@ describe('credits flow — per-user/day exposure cap (fund → consume past the 
 describe('credits flow — every row names the personal root wallet (WAL-5 (partial))', () => {
   it('WAL-5 (partial): funding, gate and settle all write against ONE personal root wallet, and every ledger and hold row names it', async () => {
     seedUser('u1', 'cus_1', 'pro');
-    await applyStripeFunding(invoicePaid('in_w5', 'cus_1', PERIOD_START, PERIOD_END));
+    await applyStripeFunding(invoicePaid('in_w5', 'cus_1', PERIOD_START, PERIOD_END), { tier: 'pro' });
     await applyStripeFunding(creditPackCheckout('cs_w5', 'cus_1', 1000));
 
     const gate = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND });
