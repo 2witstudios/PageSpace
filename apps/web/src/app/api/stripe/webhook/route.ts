@@ -286,7 +286,7 @@ export async function POST(request: NextRequest) {
         }
 
         case 'invoice.paid': {
-          const invoice = event.data.object as Stripe.Invoice;
+          let invoice = event.data.object as Stripe.Invoice;
           // FORKED BEFORE FUNDING, and this fork is as load-bearing as the
           // subscription one. `applyStripeFunding` refills the customer's monthly
           // AI-credit bucket on recognized personal subscription invoices. Hosting
@@ -305,8 +305,17 @@ export async function POST(request: NextRequest) {
           // customer funds nobody. A person's invoice (no org customer) never reaches the
           // org path, so it can never fund an org pool. Once per invoice (ledger
           // stripeRef); a failure rethrows so Stripe redelivers.
-          if (await withFundingRetry(event.id, () => routeOrgInvoicePaid(invoice, event.id))) break;
-          await withFundingRetry(event.id, async () => {
+          const fundedOrg = await withFundingRetry(event.id, async () => {
+            // Stripe embeds only the first page. Resolve identity and funding from
+            // the complete invoice; a failed page fetch must release the event claim.
+            if (invoice.lines?.has_more) {
+              const lines: Stripe.InvoiceLineItem[] = [];
+              for await (const line of stripe.invoices.listLineItems(invoice.id, { limit: 100 })) {
+                lines.push(line);
+              }
+              invoice = { ...invoice, lines: { ...invoice.lines, data: lines, has_more: false } };
+            }
+            if (await routeOrgInvoicePaid(invoice, event.id)) return true;
             await handleInvoicePaid(invoice);
             // Grant the monthly credit on each renewal. The grant is sized from what
             // this invoice actually PAID (invoice.amount_paid × the tier's included-
@@ -319,8 +328,13 @@ export async function POST(request: NextRequest) {
             // applies the correct (paid) tier's ratio. Replays are dedupe'd twice: the
             // stripe_events marker above short-circuits a redelivered event, and the
             // ledger's stripeRef unique index makes the grant itself exactly-once.
-            await applyStripeFunding(event, { tier: tierFromInvoice(invoice) });
+            await applyStripeFunding(
+              { ...event, data: { ...event.data, object: invoice } },
+              { tier: tierFromInvoice(invoice) },
+            );
+            return false;
           });
+          if (fundedOrg) break;
           // Push the refilled balance to the user's open tabs, and send a payment
           // receipt. Both best-effort, post-commit — a receipt-send failure must
           // never affect funding that already succeeded (see

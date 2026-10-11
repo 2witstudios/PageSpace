@@ -38,7 +38,7 @@ describe('configured Stripe price identity', () => {
 describe('personal invoice identity across subscription lines', () => {
   it('MON-2 (partial) recognized Pro is independent of unknown-line order and repeated plan lines', () => {
     const pro = subscriptionLine('price_pro');
-    const retired = subscriptionLine('price_retired');
+    const retired = { ...subscriptionLine('price_retired'), amount: -500 };
     expect(tierFromInvoiceLines([retired, pro])).toBe('pro');
     expect(tierFromInvoiceLines([pro, retired, pro])).toBe('pro');
     expect(tierFromInvoiceLines([subscriptionLine({ id: 'price_pro' })])).toBe('pro');
@@ -48,6 +48,16 @@ describe('personal invoice identity across subscription lines', () => {
     expect(tierFromInvoiceLines([subscriptionLine('price_pro'), subscriptionLine('price_org_business')])).toBe('free');
     expect(tierFromInvoiceLines([subscriptionLine('price_org_business')])).toBe('free');
     expect(tierFromInvoiceLines([{ pricing: { price_details: { price: 'price_pro' } } }])).toBe('free');
+  });
+
+  it('MON-2 (partial) an old Pro credit cannot authorize an unknown replacement charge', () => {
+    const oldPro = { ...subscriptionLine('price_pro'), amount: -500 };
+    const replacement = { ...subscriptionLine('price_unknown'), amount: 2000 };
+    for (const lines of [[oldPro, replacement], [replacement, oldPro]]) {
+      expect(tierFromInvoiceLines(lines)).toBe('free');
+    }
+    expect(tierFromInvoiceLines([subscriptionLine('price_pro'), replacement])).toBe('free');
+    expect(tierFromInvoiceLines([oldPro])).toBe('free');
   });
 
   it('MON-5 (partial) unrecognized or missing prices have no entitlement', () => {

@@ -45,6 +45,33 @@ describe('strict price reconciliation against PostgreSQL', () => {
     expect((await reconcileSubscriptionTiers({ priceTier })).details).not.toContainEqual(expect.objectContaining({ userId: user.id }));
   });
 
+  it('SEAT-2 (partial) a concurrent price replacement cannot restore stale Pro access', async () => {
+    const observedPrice = `price_${createId()}`;
+    const user = await subscriber(observedPrice);
+    await db.update(users).set({ subscriptionTier: 'free' }).where(eq(users.id, user.id));
+    let markLocked!: () => void;
+    let markObserved!: () => void;
+    const locked = new Promise<void>((resolve) => { markLocked = resolve; });
+    const observed = new Promise<void>((resolve) => { markObserved = resolve; });
+    const webhook = db.transaction(async (tx) => {
+      await tx.select().from(users).where(eq(users.id, user.id)).for('update');
+      markLocked();
+      await observed;
+      await tx.update(subscriptions).set({ stripePriceId: 'price_unknown_replacement' })
+        .where(eq(subscriptions.userId, user.id));
+      await tx.update(users).set({ subscriptionTier: 'free', updatedAt: new Date() })
+        .where(eq(users.id, user.id));
+    });
+    await locked;
+    const sweep = reconcileSubscriptionTiers({ priceTier: (id) => {
+      if (id === observedPrice) { markObserved(); return 'pro'; }
+      return priceTier(id);
+    } });
+    await Promise.all([webhook, sweep]);
+    const [stored] = await db.select().from(users).where(eq(users.id, user.id));
+    expect(stored.subscriptionTier).toBe('free');
+  });
+
   it('MON-2 (partial) a rejected invoice cannot become a grant through a stale Pro subscription', async () => {
     const user = await subscriber('price_verified_pro');
     const [wallet] = await db.insert(wallets).values({

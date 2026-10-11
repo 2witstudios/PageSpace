@@ -11,7 +11,7 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { and, eq, gt, inArray } from '@pagespace/db/operators';
+import { eq, gt, inArray } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { subscriptions } from '@pagespace/db/schema/subscriptions';
 import { loggers } from '../logging/logger-config';
@@ -54,8 +54,9 @@ const MAX_DETAILS = 100;
 /**
  * Sweep all users, compare the cached tier against the derived tier, and (when
  * `repair` is true) write the derived value back for repairable drift. The
- * repair UPDATE is guarded on the observed stored value so a concurrent
- * webhook write always wins over the sweep.
+ * repair locks the user and re-reads subscription evidence. Webhooks atomically
+ * update their subscription mirror and this same user, so a stale batch cannot
+ * overwrite a completed webhook or win over a webhook waiting on the user lock.
  */
 export async function reconcileSubscriptionTiers(options: {
   priceTier: PriceTierResolver;
@@ -116,17 +117,27 @@ export async function reconcileSubscriptionTiers(options: {
 
     result.drifted += driftedUsers.length;
 
-    // Each repair is an independent CAS UPDATE (different user id + guarded on
-    // the observed stored value) — safe to run concurrently.
+    // Batch reads are diagnostics only; authorize every repair from fresh evidence
+    // while holding the user lock shared with webhook transactions.
     const repairedFlags = await Promise.all(
       driftedUsers.map(async ({ user, drift }) => {
         if (!repair) return false;
-        const updated = await db
-          .update(users)
-          .set({ subscriptionTier: drift.expectedTier, updatedAt: new Date() })
-          .where(and(eq(users.id, user.id), eq(users.subscriptionTier, user.subscriptionTier)))
-          .returning({ id: users.id });
-        return updated.length > 0;
+        return db.transaction(async (tx) => {
+          const [current] = await tx.select({ tier: users.subscriptionTier }).from(users)
+            .where(eq(users.id, user.id)).for('update');
+          if (!current || current.tier !== user.subscriptionTier) return false;
+          const currentRows = await tx.select({ status: subscriptions.status, stripePriceId: subscriptions.stripePriceId })
+            .from(subscriptions).where(eq(subscriptions.userId, user.id));
+          const derived = deriveTierFromSubscriptions(
+            currentRows.filter((row) => ENTITLED_SUBSCRIPTION_STATUSES.includes(row.status)),
+            options.priceTier,
+          );
+          const freshDrift = computeTierDrift({ storedTier: current.tier, derived });
+          if (!freshDrift.drifted || freshDrift.expectedTier !== drift.expectedTier) return false;
+          await tx.update(users).set({ subscriptionTier: freshDrift.expectedTier, updatedAt: new Date() })
+            .where(eq(users.id, user.id));
+          return true;
+        });
       }),
     );
 

@@ -3,7 +3,7 @@ import type Stripe from 'stripe';
 import { stripeConfig } from '@/lib/stripe-config';
 
 // Mock Stripe - use vi.hoisted to ensure mocks are available before vi.mock
-const { mockStripeWebhooksConstructEvent, StripeError, mockGetPersonalTierFromPrice } = vi.hoisted(() => {
+const { mockStripeWebhooksConstructEvent, mockListLineItems, StripeError, mockGetPersonalTierFromPrice } = vi.hoisted(() => {
   const StripeError = class extends Error {
     constructor(message: string) {
       super(message);
@@ -12,6 +12,7 @@ const { mockStripeWebhooksConstructEvent, StripeError, mockGetPersonalTierFromPr
   };
   return {
     mockStripeWebhooksConstructEvent: vi.fn(),
+    mockListLineItems: vi.fn(),
     StripeError,
     mockGetPersonalTierFromPrice: vi.fn((priceId: string) => priceId === 'price_pro' ? 'pro' : 'free'),
   };
@@ -19,6 +20,7 @@ const { mockStripeWebhooksConstructEvent, StripeError, mockGetPersonalTierFromPr
 
 vi.mock('@/lib/stripe', () => ({
   stripe: {
+    invoices: { listLineItems: mockListLineItems },
     webhooks: {
       constructEvent: mockStripeWebhooksConstructEvent,
     },
@@ -845,6 +847,52 @@ describe('POST /api/stripe/webhook', () => {
       }) as unknown as import('next/server').NextRequest;
       expect((await POST(request)).status).toBe(200);
       expect(mockApplyStripeFunding).toHaveBeenCalledWith(event, { tier: 'pro' });
+    });
+
+    it.each([false, true])('loads all invoice lines before funding (org: %s)', async (org) => {
+      const firstLine = { id: 'il_pending', pricing: { price_details: { price: 'price_unknown' } } };
+      const proLine = {
+        id: 'il_pro', period: { start: 1700000000, end: 1702592000 },
+        parent: { subscription_item_details: { subscription_item: 'si_personal' } },
+        pricing: { price_details: { price: stripeConfig.priceIds.pro } },
+      };
+      const invoice = { ...mockInvoice({ amountPaid: 1500 }), lines: { data: [firstLine], has_more: true } };
+      const event = mockStripeEvent('invoice.paid', invoice);
+      mockStripeWebhooksConstructEvent.mockReturnValue(event);
+      mockRouteOrgInvoicePaid.mockResolvedValueOnce(org);
+      mockListLineItems.mockImplementationOnce(async function* () {
+        yield firstLine;
+        yield proLine;
+      });
+      const request = new Request('https://example.com/api/stripe/webhook', {
+        method: 'POST', body: JSON.stringify(event), headers: { 'stripe-signature': 'valid_signature' },
+      }) as unknown as import('next/server').NextRequest;
+      expect((await POST(request)).status).toBe(200);
+      const completeInvoice = { ...invoice, lines: { data: [firstLine, proLine], has_more: false } };
+      expect(mockListLineItems).toHaveBeenCalledWith(invoice.id, { limit: 100 });
+      expect(mockRouteOrgInvoicePaid).toHaveBeenCalledWith(completeInvoice, event.id);
+      if (org) expect(mockApplyStripeFunding).not.toHaveBeenCalled();
+      else expect(mockApplyStripeFunding).toHaveBeenCalledWith(
+        { ...event, data: { ...event.data, object: completeInvoice } }, { tier: 'pro' },
+      );
+      expect(invoice.lines.data).toEqual([firstLine]);
+    });
+
+    it('releases the event claim when a later invoice-line page fails', async () => {
+      const invoice = { ...mockInvoice(), lines: { data: [], has_more: true } };
+      const event = mockStripeEvent('invoice.paid', invoice);
+      mockStripeWebhooksConstructEvent.mockReturnValue(event);
+      mockListLineItems.mockImplementationOnce(async function* () {
+        yield { id: 'il_first' };
+        throw new Error('Stripe unavailable');
+      });
+      const request = new Request('https://example.com/api/stripe/webhook', {
+        method: 'POST', body: JSON.stringify(event), headers: { 'stripe-signature': 'valid_signature' },
+      }) as unknown as import('next/server').NextRequest;
+      expect((await POST(request)).status).toBe(500);
+      expect(mockRouteOrgInvoicePaid).not.toHaveBeenCalled();
+      expect(mockApplyStripeFunding).not.toHaveBeenCalled();
+      expect(mockDeleteWhere).toHaveBeenCalled();
     });
 
     it('MON-3 (partial) SEAT-7 (partial) an org customer invoice.paid goes to the org fork and never reaches the personal funding path', async () => {
