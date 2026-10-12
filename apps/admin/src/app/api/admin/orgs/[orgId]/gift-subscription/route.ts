@@ -95,8 +95,8 @@ export const POST = withAdminAuth<RouteContext>(async (adminUser, request, conte
  * DELETE /api/admin/orgs/[orgId]/gift-subscription
  * SEAT-8 / [D-OW-54]: revoke an organization's admin gift — the org twin of the personal
  * revoke. The coupon and gift metadata come off the org's own subscription with no proration,
- * so the org pays from its next renewal (a lapse follows if it never adds a card); the pinned
- * gifted seats are released. Audited in the admin trail and the org's own log.
+ * so the org pays from its next renewal (a lapse follows if it never adds a card); the seat
+ * item returns from the gifted quantity to the seats the org actually holds. Audited in the admin trail and the org's own log.
  */
 export const DELETE = withAdminAuth<RouteContext>(async (adminUser, request, context) => {
   try {
@@ -120,7 +120,7 @@ export const DELETE = withAdminAuth<RouteContext>(async (adminUser, request, con
       userId: adminUser.id,
       resourceType: 'organization',
       resourceId: orgId,
-      details: { source: 'admin', action: 'revoke_org_gift', reason, subscriptionId: result.subscriptionId },
+      details: { source: 'admin', action: 'revoke_org_gift', reason, subscriptionId: result.subscriptionId, extraSeatQuantity: result.extraSeatQuantity },
     });
 
     return NextResponse.json({

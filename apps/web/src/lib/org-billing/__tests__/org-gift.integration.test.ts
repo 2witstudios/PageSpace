@@ -98,6 +98,7 @@ class FakeGiftStripe implements OrgGiftStripe {
   updates: Array<{ subscriptionId: string; anchorNow: boolean; proration: string }> = [];
   issued: IssuedGiftInvoice[] = [];
   voided: string[] = [];
+  seatSyncs: Array<{ itemId: string; quantity: number; prorationBehavior: string }> = [];
   failNextUpdate: Error | null = null;
   constructor(private readonly org: FakeOrgStripe) {}
   async retrieveCoupon(id: string) {
@@ -117,6 +118,13 @@ class FakeGiftStripe implements OrgGiftStripe {
     if (!invoice || invoice.status !== 'open') throw new Error(`Invoice '${invoiceId}' is not open`);
     invoice.status = 'void';
     this.voided.push(invoiceId);
+  }
+  async setSeatQuantity(params: Parameters<OrgGiftStripe['setSeatQuantity']>[0]) {
+    const item = [...this.org.subscriptions.values()].flatMap((sub) => sub.items).find((i) => i.id === params.itemId);
+    if (!item) throw new Error(`No such subscription item: '${params.itemId}'`);
+    item.quantity = params.quantity;
+    this.seatSyncs.push(params);
+    return { quantity: item.quantity };
   }
   async updateSubscription(subscriptionId: string, params: Parameters<OrgGiftStripe['updateSubscription']>[1]) {
     if (this.failNextUpdate) {
@@ -379,8 +387,16 @@ describe('SEAT-8 an org exists only paid or gifted (real Postgres, in-memory Str
     expect(await deliver('invoice.paid', inflated)).toBe(200);
     expect((await poolCents(org.orgId)) - before).toBe(orgPoolListPriceGrantCents(pinnedSeats));
 
-    // Revoke: the coupon and the gift metadata come off; the pin is released.
-    expect(await ungiftOrgSubscription({ orgId: org.orgId, adminUserId: ADMIN_ID, reason: 'Partnership ended' }, gift)).toMatchObject({ kind: 'ungifted', subscriptionId: org.subscriptionId });
+    // Revoke with fewer real seats than gifted: the throwaway invites are gone, so only the
+    // Owner holds a seat. The coupon and the gift metadata come off, the pin is released, and
+    // the seat item returns to the seats actually held (0 extra), with no proration — the org
+    // is never billed for the 2 gifted seats nobody holds.
+    await db.delete(orgInvitations).where(eq(orgInvitations.orgId, org.orgId));
+    expect(await ungiftOrgSubscription({ orgId: org.orgId, adminUserId: ADMIN_ID, reason: 'Partnership ended' }, gift)).toMatchObject({ kind: 'ungifted', subscriptionId: org.subscriptionId, extraSeatQuantity: 0 });
+    expect(gift.seatSyncs).toEqual([{ itemId: sub.items.find((i) => i.priceId === PRICES.seatPriceId)!.id, quantity: 0, prorationBehavior: 'none' }]);
+    expect(sub.items.find((i) => i.priceId === PRICES.seatPriceId)?.quantity).toBe(0);
+    const [resynced] = await db.select({ extraSeatQuantity: orgSubscriptions.extraSeatQuantity }).from(orgSubscriptions).where(eq(orgSubscriptions.orgId, org.orgId));
+    expect(resynced.extraSeatQuantity).toBe(0);
     expect(gift.discounts.get(org.subscriptionId)).toEqual([]);
     expect(sub.metadata?.type).toBeUndefined();
     expect(sub.metadata?.giftedExtraSeats).toBeUndefined();
@@ -391,6 +407,5 @@ describe('SEAT-8 an org exists only paid or gifted (real Postgres, in-memory Str
     // A re-gift reuses the subscription's coupon instead of colliding with it.
     expect(await giftOrgSubscription({ orgId: org.orgId, adminUserId: ADMIN_ID, reason: 'Back on', extraSeats: 3 }, gift)).toMatchObject({ kind: 'gifted', giftedExtraSeats: 3 });
     expect(gift.couponCreates).toBe(1);
-    await db.delete(orgInvitations).where(eq(orgInvitations.orgId, org.orgId));
   });
 });

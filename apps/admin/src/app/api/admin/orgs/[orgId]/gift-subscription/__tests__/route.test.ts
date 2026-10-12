@@ -22,7 +22,7 @@ vi.mock('@pagespace/lib/billing/org-gift', () => ({
 const auditRequest = vi.fn();
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: (...args: unknown[]) => auditRequest(...args) }));
 
-const port = { retrieveCoupon: vi.fn(), createCoupon: vi.fn(), listOpenInvoiceIds: vi.fn(), voidInvoice: vi.fn(), updateSubscription: vi.fn() };
+const port = { retrieveCoupon: vi.fn(), createCoupon: vi.fn(), listOpenInvoiceIds: vi.fn(), voidInvoice: vi.fn(), updateSubscription: vi.fn(), setSeatQuantity: vi.fn() };
 vi.mock('@/lib/stripe/org-gift-port', () => ({ orgGiftStripe: () => port }));
 
 import { DELETE, POST } from '../route';
@@ -92,7 +92,7 @@ describe('POST /api/admin/orgs/[orgId]/gift-subscription', () => {
 
 describe('DELETE /api/admin/orgs/[orgId]/gift-subscription', () => {
   it('SEAT-8 (partial) revokes the gift on the org named in the path and audits the reason', async () => {
-    ungiftOrgSubscription.mockResolvedValue({ kind: 'ungifted', subscriptionId: 'sub_org', status: 'active' });
+    ungiftOrgSubscription.mockResolvedValue({ kind: 'ungifted', subscriptionId: 'sub_org', status: 'active', extraSeatQuantity: 0 });
     const res = await DELETE(request('DELETE', { reason: 'Partnership ended', subscriptionId: 'sub_attacker' }), ctx('org_1'));
     expect(res.status).toBe(200);
     expect(ungiftOrgSubscription).toHaveBeenCalledWith({ orgId: 'org_1', adminUserId: 'admin-1', reason: 'Partnership ended' }, port);

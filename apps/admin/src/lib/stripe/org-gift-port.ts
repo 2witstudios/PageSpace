@@ -27,6 +27,10 @@ export function orgGiftStripe(): OrgGiftStripe {
     async voidInvoice(invoiceId, idempotencyKey) {
       await stripe.invoices.voidInvoice(invoiceId, {}, { idempotencyKey });
     },
+    async setSeatQuantity({ itemId, quantity, prorationBehavior }, idempotencyKey) {
+      const item = await stripe.subscriptionItems.update(itemId, { quantity, proration_behavior: prorationBehavior }, { idempotencyKey });
+      return { quantity: item.quantity ?? quantity };
+    },
     async updateSubscription(subscriptionId, params, idempotencyKey) {
       const sub = await stripe.subscriptions.update(subscriptionId, params, { idempotencyKey });
       return { id: sub.id, status: sub.status };

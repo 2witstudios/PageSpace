@@ -20,8 +20,10 @@ import { orgSubscriptions } from '@pagespace/db/schema/organizations';
 import { isBillingEnabled } from '../deployment-mode';
 import { loggers } from '../logging/logger-config';
 import { recordOrgAuditEventAfterCommit } from '../audit/org-audit';
-import { findMembershipRole, findOrganizationById } from '../organizations/repository';
-import { orgBillingLockKey } from './org-subscription-core';
+import { countOrgSeatParts, findMembershipRole, findOrganizationById } from '../organizations/repository';
+import { seatQuantity } from '../organizations/seats';
+import { orgBillingLockKey, orgExtraSeatQuantity, planSeatQuantitySync } from './org-subscription-core';
+import { TIER_PLAN_LIMITS } from './subscription-tiers';
 import {
   orgGiftVoidKey,
   planOrgGift,
@@ -46,6 +48,8 @@ export interface OrgGiftStripe {
     params: OrgGiftSubscriptionUpdate | OrgUngiftSubscriptionUpdate,
     idempotencyKey: string,
   ): Promise<{ id: string; status: string }>;
+  /** The seat item's quantity, set with no proration (a revoke re-syncs it to the seats held). */
+  setSeatQuantity(params: { itemId: string; quantity: number; prorationBehavior: 'none' }, idempotencyKey: string): Promise<{ quantity: number }>;
 }
 
 export type OrgGiftResult =
@@ -62,11 +66,16 @@ export type OrgGiftResult =
 
 export type OrgUngiftResult =
   | { kind: 'refused'; reason: OrgGiftRefusal }
-  | { kind: 'ungifted'; subscriptionId: string; status: string };
+  | { kind: 'ungifted'; subscriptionId: string; status: string; extraSeatQuantity: number };
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
-async function lockAndReadStored(tx: Tx, orgId: string): Promise<OrgGiftStored | null> {
+interface StoredGiftRow extends OrgGiftStored {
+  extraSeatQuantity: number;
+  seatRevision: number;
+}
+
+async function lockAndReadStored(tx: Tx, orgId: string): Promise<StoredGiftRow | null> {
   await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${orgBillingLockKey(orgId)}, 0))`);
   const [row] = await tx
     .select({
@@ -75,6 +84,8 @@ async function lockAndReadStored(tx: Tx, orgId: string): Promise<OrgGiftStored |
       status: orgSubscriptions.status,
       gifted: orgSubscriptions.gifted,
       giftedExtraSeats: orgSubscriptions.giftedExtraSeats,
+      extraSeatQuantity: orgSubscriptions.extraSeatQuantity,
+      seatRevision: orgSubscriptions.seatRevision,
     })
     .from(orgSubscriptions)
     .where(eq(orgSubscriptions.orgId, orgId))
@@ -99,9 +110,16 @@ export async function giftOrgSubscription(
 
     // The pin is written first, in this transaction: it commits only with the gift, and the
     // pool refill reads it under this same lock, so a gift invoice never sees a half-applied gift.
+    // The gift sets the seat item to the pin, so the stored quantity moves with it (a new
+    // revision, so no later seat change reuses a key).
     await tx
       .update(orgSubscriptions)
-      .set({ giftedExtraSeats: plan.giftedExtraSeats })
+      .set({
+        giftedExtraSeats: plan.giftedExtraSeats,
+        ...(stored && stored.extraSeatQuantity !== plan.giftedExtraSeats
+          ? { extraSeatQuantity: plan.giftedExtraSeats, seatRevision: stored.seatRevision + 1 }
+          : {}),
+      })
       .where(eq(orgSubscriptions.orgId, input.orgId));
 
     // A lapsed org's failed renewal must not keep retrying a charge on the gifted period.
@@ -147,7 +165,9 @@ export async function giftOrgSubscription(
 
 /**
  * Revoke an admin gift: the coupon and gift metadata come off the org's own subscription with
- * no proration, so the org pays from its next renewal; the pinned seats are released.
+ * no proration, so the org pays from its next renewal; the pin is cleared and the seat item is
+ * re-synced to the seats the org actually holds, so it is never billed for gifted seats nobody
+ * holds.
  */
 export async function ungiftOrgSubscription(
   input: { orgId: string; adminUserId: string; reason: string },
@@ -163,7 +183,28 @@ export async function ungiftOrgSubscription(
       .set({ giftedExtraSeats: null, gifted: false })
       .where(eq(orgSubscriptions.orgId, input.orgId));
     const sub = await stripe.updateSubscription(plan.subscriptionId, plan.update, plan.updateKey);
-    return { kind: 'ungifted', subscriptionId: sub.id, status: sub.status };
+
+    // The gift held the seat item at its pin; with the pin gone it returns to the seats the
+    // org actually holds (members + live invites), with no proration — the period was gifted.
+    // Counted under this same lock, so no invite or removal races it.
+    const s = stored as StoredGiftRow;
+    const { held } = seatQuantity({ ...(await countOrgSeatParts(input.orgId, tx)), included: TIER_PLAN_LIMITS.business.includedSeats });
+    const sync = planSeatQuantitySync({
+      orgId: input.orgId,
+      stored: { seatItemId: s.stripeSeatItemId, extraSeatQuantity: s.extraSeatQuantity, seatRevision: s.seatRevision },
+      seats: held,
+      prorationBehavior: 'none',
+    });
+    let extraSeatQuantity = orgExtraSeatQuantity(held);
+    if (sync.kind === 'update') {
+      const item = await stripe.setSeatQuantity({ itemId: sync.itemId, quantity: sync.quantity, prorationBehavior: 'none' }, sync.idempotencyKey);
+      extraSeatQuantity = item.quantity;
+      await tx
+        .update(orgSubscriptions)
+        .set({ extraSeatQuantity: item.quantity, seatRevision: sync.nextRevision })
+        .where(eq(orgSubscriptions.orgId, input.orgId));
+    }
+    return { kind: 'ungifted', subscriptionId: sub.id, status: sub.status, extraSeatQuantity };
   });
 
   if (result.kind === 'refused') {
@@ -177,7 +218,7 @@ export async function ungiftOrgSubscription(
     actorId: input.adminUserId,
     resourceType: 'org_subscription',
     resourceId: input.orgId,
-    details: { source: 'admin_ungift', stripeSubscriptionId: result.subscriptionId },
+    details: { source: 'admin_ungift', stripeSubscriptionId: result.subscriptionId, extraSeatQuantity: result.extraSeatQuantity },
   });
   return result;
 }
