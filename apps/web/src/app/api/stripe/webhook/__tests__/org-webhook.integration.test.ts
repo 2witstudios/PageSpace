@@ -39,7 +39,7 @@ import { reconcileSubscriptionTiers } from '@pagespace/lib/billing/subscription-
 import { getPersonalTierFromPrice } from '@/lib/stripe/price-config';
 import { TIER_PLAN_LIMITS } from '@pagespace/lib/billing/subscription-tiers';
 import { stripeConfig } from '@/lib/stripe-config';
-import { ensureOrgBusinessSubscription, type OrgBillingDeps, type OrgBillingStripe } from '@/lib/org-billing/org-subscription';
+import { provisionOrgSubscription, type OrgBillingDeps, type OrgBillingStripe } from '@/lib/org-billing/org-subscription';
 import { FakeOrgStripe } from '@/lib/org-billing/__tests__/fake-org-stripe';
 import { WALLET_LEG_INVARIANT_GUC, expectWalletLegInvariant, installWalletLegInvariantTrigger } from '@pagespace/lib/test/wallet-leg-invariant';
 
@@ -108,7 +108,7 @@ async function northwind(seats = 7): Promise<Org> {
   orgIds.push(created.organization.id);
   const stripe = new FakeOrgStripe();
   const deps: OrgBillingDeps = { stripe, prices: () => PRICES, countSeats: async () => seats };
-  const { linkage } = await ensureOrgBusinessSubscription(created.organization.id, deps);
+  const { result: { linkage } } = await provisionOrgSubscription(created.organization.id, deps);
   fakeHolder.current = stripe;
   return { orgId: created.organization.id, ownerId: owner.id, customerId: linkage.stripeCustomerId, subscriptionId: linkage.stripeSubscriptionId, stripe, deps };
 }
@@ -816,7 +816,7 @@ describe('Stripe webhook — org routing, idempotency, lapse (real Postgres, in-
     expect((await getOrgStatus(org.orgId)).status).toBe('lapsed');
 
     // Reactivate: D1's path creates the replacement (awaiting its payment) and stores it.
-    const { linkage } = await ensureOrgBusinessSubscription(org.orgId, org.deps);
+    const { result: { linkage } } = await provisionOrgSubscription(org.orgId, org.deps);
     expect(linkage.stripeSubscriptionId).not.toBe(oldId);
     const replacement = org.stripe.subscriptions.get(linkage.stripeSubscriptionId)!;
     replacement.status = 'active';

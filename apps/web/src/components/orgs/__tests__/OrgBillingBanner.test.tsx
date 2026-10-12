@@ -8,12 +8,17 @@ vi.mock('next-themes', () => ({ useTheme: () => ({ resolvedTheme: 'light' }) }))
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 vi.mock('@/components/billing/StripeProvider', () => ({ StripeProvider: ({ children }: { children: React.ReactNode }) => <>{children}</> }));
 vi.mock('../OrgPaymentForm', () => ({ OrgPaymentForm: () => <div>payment element</div> }));
+vi.mock('@/components/shared/FeedbackDialog', () => ({
+  FeedbackDialog: ({ isOpen }: { isOpen: boolean }) => (isOpen ? <div>support dialog</div> : null),
+}));
 vi.mock('@/lib/orgs/payment-routes', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/orgs/payment-routes')>()),
   documentAllowsPaymentElement: () => mocks.paymentHere,
 }));
 vi.mock('@/lib/orgs/org-api', async (importOriginal) => ({ ...(await importOriginal<typeof import('@/lib/orgs/org-api')>()), startOrgSubscription: mocks.startOrgSubscription }));
 
+import { toast } from 'sonner';
+import { ApiRequestError } from '@/lib/auth/auth-fetch';
 import { OrgBillingBanner } from '../OrgBillingBanner';
 
 const reactivate = { kind: 'reactivate' as const, reason: 'canceled' as const, canManageBilling: true as const };
@@ -46,6 +51,22 @@ describe('OrgBillingBanner', () => {
     window.location.search = '?reactivate=1';
     render(<OrgBillingBanner orgId="org_1" orgName="Northwind Labs" notice={reactivate} />);
     await waitFor(() => expect(mocks.startOrgSubscription).toHaveBeenCalledTimes(1));
+  });
+
+  it('SEAT-9 (partial) D-OW-44: a subscription changed outside PageSpace says it needs support, offers a way to reach it, and never claims the org is active', async () => {
+    mocks.paymentHere = true;
+    const onReactivated = vi.fn();
+    mocks.startOrgSubscription.mockRejectedValue(
+      new ApiRequestError('raw', 409, { error: 'raw', code: 'billing_requires_support' }),
+    );
+    render(<OrgBillingBanner orgId="org_1" orgName="Northwind Labs" notice={reactivate} onReactivated={onReactivated} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Reactivate' }));
+    expect(await screen.findByText(/changed outside PageSpace/)).toBeTruthy();
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(onReactivated).not.toHaveBeenCalled();
+    expect(screen.queryByText('payment element')).toBeNull();
+    await userEvent.click(screen.getByRole('button', { name: 'Contact support' }));
+    expect(screen.getByText('support dialog')).toBeTruthy();
   });
 
   it('a member sees the read-only notice and nothing to pay', () => {

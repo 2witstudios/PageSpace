@@ -36,13 +36,15 @@ import { stripeConfig, stripeMode } from '@/lib/stripe-config';
 import {
   createOrgBillingPortalSession,
   endOrgSubscriptionPort,
-  ensureOrgBusinessSubscription,
   listOrgInvoices,
   provisionOrgSubscription,
   stripeOrgBilling,
   syncOrgSeatQuantity,
   type OrgBillingDeps,
 } from '../org-subscription';
+
+/** The provisioning result alone, for the tests that do not look at the payment step. */
+const ensureOrgBusinessSubscription = async (orgId: string, deps: OrgBillingDeps) => (await provisionOrgSubscription(orgId, deps)).result;
 
 const TEST_KEY = process.env.STRIPE_TEST_SECRET_KEY;
 const RUN = `ow-d1 test ${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;

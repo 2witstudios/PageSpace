@@ -136,6 +136,18 @@ describe('POST /api/orgs/[orgId]/billing/subscription', () => {
     expect(provisionOrgSubscription).not.toHaveBeenCalled();
   });
 
+  it('SEAT-9 (partial) D-OW-44: a subscription changed outside PageSpace is a 409 billing_requires_support, never a success', async () => {
+    as('OWNER');
+    vi.mocked(provisionOrgSubscription).mockRejectedValueOnce(new OrgBillingError('billing_requires_support', 'x: manual_collection'));
+    const res = await call();
+    expect(res.status).toBe(409);
+    const body = await res.json();
+    expect(body.code).toBe('billing_requires_support');
+    expect(body).not.toHaveProperty('subscription');
+    expect(body).not.toHaveProperty('payment');
+    expect(JSON.stringify(body)).not.toMatch(/manual_collection/);
+  });
+
   it('a Stripe failure is a retryable 502, unconfigured prices a 503, a vanished org a 404', async () => {
     as('OWNER');
     vi.mocked(provisionOrgSubscription).mockRejectedValueOnce(new Error('Stripe is unavailable'));

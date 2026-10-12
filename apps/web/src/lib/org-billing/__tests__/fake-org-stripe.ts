@@ -30,7 +30,7 @@ interface FakeInvoice {
   id: string;
   customerId: string;
   subscriptionId: string;
-  status: 'open' | 'paid';
+  status: 'draft' | 'open' | 'paid' | 'uncollectible' | 'void';
   amountDueCents: number;
   amountPaidCents: number;
   clientSecret: string;
@@ -47,8 +47,7 @@ type WriteOp =
   | 'createSubscription'
   | 'createSubscriptionItem'
   | 'updateSubscriptionItemQuantity'
-  | 'cancelSubscription'
-  | 'recoverSubscription';
+  | 'cancelSubscription';
 
 interface Customer {
   id: string;
@@ -67,7 +66,6 @@ export class FakeOrgStripe implements OrgBillingStripe {
     createSubscriptionItem: 0,
     updateSubscriptionItemQuantity: 0,
     cancelSubscription: 0,
-    recoverSubscription: 0,
   };
   reads = { findCustomerByOrgId: 0, listCustomerSubscriptions: 0, retrieveSubscription: 0, latestInvoice: 0 };
   /** Each subscription's invoices, newest last. */
@@ -208,6 +206,7 @@ export class FakeOrgStripe implements OrgBillingStripe {
         id: this.nextId('sub'),
         customerId: params.customer,
         status: 'incomplete',
+        collectionMethod: 'charge_automatically',
         created,
         metadata: { ...params.metadata },
         items: params.items.map((item) => ({ id: this.nextId('si'), priceId: item.price, quantity: item.quantity })),
@@ -327,21 +326,6 @@ export class FakeOrgStripe implements OrgBillingStripe {
         }
       }
       throw new Error(`No such subscription item: '${params.itemId}'`);
-    });
-  }
-
-  async recoverSubscription(subscriptionId: string, prices: import('@pagespace/lib/billing/org-subscription-core').OrgBusinessPrices & { extraSeatQuantity: number }, idempotencyKey: string): Promise<OrgStripeSubscription> {
-    const sub = this.subscriptions.get(subscriptionId);
-    if (!sub) throw new Error(`No such subscription: '${subscriptionId}'`);
-    if (sub.status !== 'trialing' && sub.status !== 'paused') return structuredClone(sub);
-    const seatItem = sub.items.find(item => item.priceId === prices.seatPriceId);
-    if (!seatItem) await this.createSubscriptionItem({ subscriptionId, priceId: prices.seatPriceId, quantity: prices.extraSeatQuantity }, `${idempotencyKey}:seats`);
-    else if (seatItem.quantity !== prices.extraSeatQuantity) await this.updateSubscriptionItemQuantity({ itemId: seatItem.id, quantity: prices.extraSeatQuantity, prorationBehavior: 'none' }, `${idempotencyKey}:seats`);
-    return this.write('recoverSubscription', idempotencyKey, { subscriptionId }, () => {
-      sub.status = 'past_due';
-      sub.trialEnd = this.clock;
-      this.addInvoice(sub, FAKE_BASE_CENTS + FAKE_SEAT_CENTS * (sub.items[1]?.quantity ?? 0));
-      return structuredClone(sub);
     });
   }
 
