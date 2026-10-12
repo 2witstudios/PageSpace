@@ -1,3 +1,4 @@
+import { isPrincipalDriveOwnerOrAdmin } from '@/lib/auth/principal-permissions';
 import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db';
 import { and, eq, or, inArray } from '@pagespace/db/operators';
@@ -10,7 +11,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket/socket-utils';
-import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
+
 import { getMemberDriveIds } from '@pagespace/lib/permissions/member-drives';
 import {
   validateCommandTrigger,
@@ -172,7 +173,7 @@ export async function POST(request: Request) {
     if (commandDriveId !== null) {
       const scopeError = checkMCPDriveScope(auth, commandDriveId);
       if (scopeError) return scopeError;
-      const allowed = await isDriveOwnerOrAdmin(userId, commandDriveId);
+      const allowed = await isPrincipalDriveOwnerOrAdmin(auth, commandDriveId);
       if (!allowed) {
         return NextResponse.json(
           { error: 'Only the drive owner or admins can manage drive commands' },

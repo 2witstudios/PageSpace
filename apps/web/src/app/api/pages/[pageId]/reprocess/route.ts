@@ -1,3 +1,4 @@
+import { canPrincipalEditPage } from '@/lib/auth/principal-permissions';
 import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db'
 import { eq } from '@pagespace/db/operators'
@@ -7,7 +8,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { createPageServiceToken } from '@pagespace/lib/services/validated-service-token';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { applyPageMutation } from '@/services/api/page-mutation-service';
-import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
+
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
@@ -34,7 +35,7 @@ export async function POST(
       return NextResponse.json({ error: 'Page not found' }, { status: 404 });
     }
 
-    const canEdit = await canUserEditPage(userId, pageId);
+    const canEdit = await canPrincipalEditPage(auth, pageId);
     if (!canEdit) {
       return NextResponse.json({ error: 'Insufficient permissions to reprocess this page' }, { status: 403 });
     }

@@ -1,3 +1,4 @@
+import { isPrincipalDriveOwnerOrAdmin } from '@/lib/auth/principal-permissions';
 import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db';
 import { and, eq, ne } from '@pagespace/db/operators';
@@ -8,7 +9,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket/socket-utils';
-import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
+
 import {
   validateCommandTrigger,
   validateCommandDescription,
@@ -51,7 +52,7 @@ async function loadCommandForManage(
   const scopeError = checkMCPDriveScope(auth, command.driveId as string);
   if (scopeError) return { error: scopeError };
 
-  const allowed = await isDriveOwnerOrAdmin(userId, command.driveId as string);
+  const allowed = await isPrincipalDriveOwnerOrAdmin(auth, command.driveId as string);
   if (!allowed) {
     return {
       error: NextResponse.json(

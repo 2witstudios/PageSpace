@@ -1,7 +1,8 @@
+import { canPrincipalViewPage, getPrincipalDriveAccess } from '@/lib/auth/principal-permissions';
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log'
-import { getUserDriveAccess, canUserViewPage } from '@pagespace/lib/permissions/permissions';
+
 import { db } from '@pagespace/db/db'
 import { eq, and, isNotNull, ne } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
@@ -50,7 +51,7 @@ export async function GET(
       );
     }
 
-    const hasDriveAccess = await getUserDriveAccess(userId, driveId);
+    const hasDriveAccess = await getPrincipalDriveAccess(auth, driveId);
     if (!hasDriveAccess) {
       return NextResponse.json(
         { error: 'You don\'t have access to this drive' },
@@ -101,7 +102,7 @@ export async function GET(
     const agentAccessResults = await Promise.all(
       allAgents.map(async (agent) => ({
         agent,
-        canView: await canUserViewPage(userId, agent.id),
+        canView: await canPrincipalViewPage(auth, agent.id),
       }))
     );
     const accessibleAgents = agentAccessResults

@@ -603,3 +603,13 @@ describe('GET /api/mentions/search', () => {
     });
   });
 });
+
+// Route contracts stub authorization; policy decisions are covered by principal-permissions integration tests.
+vi.mock('@/lib/auth/principal-permissions', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/auth/principal-permissions')>();
+  const permissions = await import('@pagespace/lib/permissions/permissions');
+  return { ...actual,
+    getPrincipalAccessLevel: (auth: { userId: string }, resourceId: string) => permissions.getUserAccessLevel(auth.userId, resourceId),
+    getPrincipalDriveAccess: (auth: { userId: string }, resourceId: string) => permissions.getUserDriveAccess(auth.userId, resourceId),
+  };
+});

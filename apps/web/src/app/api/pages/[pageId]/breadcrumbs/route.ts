@@ -1,5 +1,6 @@
+import { canPrincipalViewPage } from '@/lib/auth/principal-permissions';
 import { NextResponse } from 'next/server';
-import { canUserViewPage } from '@pagespace/lib/permissions/permissions'
+
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { getPageBreadcrumbTrail } from '@/lib/pages/get-page-breadcrumb-trail';
@@ -15,7 +16,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
     return auth.error;
   }
 
-  const canView = await canUserViewPage(auth.userId, pageId);
+  const canView = await canPrincipalViewPage(auth, pageId);
   if (!canView) {
     return new NextResponse("Forbidden", { status: 403 });
   }

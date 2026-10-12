@@ -1,10 +1,11 @@
+import { canPrincipalViewPage } from '@/lib/auth/principal-permissions';
 import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db'
 import { eq } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { createPageServiceToken } from '@pagespace/lib/services/validated-service-token'
-import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
+
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 const PROCESSOR_URL = process.env.PROCESSOR_URL || 'http://processor:3003';
@@ -23,7 +24,7 @@ export async function GET(
 
   try {
     // Verify user can view this page
-    const canView = await canUserViewPage(userId, pageId);
+    const canView = await canPrincipalViewPage(auth, pageId);
     if (!canView) {
       return NextResponse.json({ error: 'Access denied' }, { status: 403 });
     }

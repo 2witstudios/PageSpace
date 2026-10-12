@@ -1,3 +1,4 @@
+import { canPrincipalViewPage } from '@/lib/auth/principal-permissions';
 import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db'
 import { eq } from '@pagespace/db/operators'
@@ -7,7 +8,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { jsonResponse } from '@pagespace/lib/utils/api-utils';
-import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
+
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -35,7 +36,7 @@ export async function POST(
     }
 
     // Verify user has permission to view this page
-    const canView = await canUserViewPage(userId, pageId);
+    const canView = await canPrincipalViewPage(auth, pageId);
     if (!canView) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }

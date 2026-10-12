@@ -1,5 +1,6 @@
+import { getPrincipalAccessLevel, getPrincipalDriveAccess } from '@/lib/auth/principal-permissions';
 import { NextResponse } from 'next/server';
-import { getUserAccessLevel, getUserDriveAccess, getDriveIdsForUser } from '@pagespace/lib/permissions/permissions';
+import { getDriveIdsForUser } from '@pagespace/lib/permissions/permissions';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -226,7 +227,7 @@ export async function GET(request: Request) {
       loggers.api.debug('[API] Cross-drive search', { driveCount: targetDriveIds.length });
     } else {
       // Within-drive search: verify user has access to the specified drive
-      const hasAccess = await getUserDriveAccess(userId, driveId!);
+      const hasAccess = await getPrincipalDriveAccess(auth, driveId!);
 
       if (!hasAccess) {
         loggers.api.debug('[API] User does not have access to drive', { userId, driveId });
@@ -383,7 +384,7 @@ export async function GET(request: Request) {
         // entirely of eligible candidates, not just whatever's left of it
         // after an after-the-fact skip.
 
-        const accessLevel = await getUserAccessLevel(userId, page.id);
+        const accessLevel = await getPrincipalAccessLevel(auth, page.id);
         if (!accessLevel) continue;
 
         // All page types are now under 'page' mention type

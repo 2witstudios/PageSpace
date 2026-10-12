@@ -1,9 +1,10 @@
+import { canPrincipalEditPage } from '@/lib/auth/principal-permissions';
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { db } from '@pagespace/db/db'
 import { eq } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core';
-import { canUserEditPage } from '@pagespace/lib/permissions/permissions'
+
 import { createPageVersion } from '@pagespace/lib/services/page-version-service';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -33,7 +34,7 @@ export async function POST(
     const { targetMode } = convertSchema.parse(body);
 
     // Check permissions
-    const canEdit = await canUserEditPage(userId, pageId);
+    const canEdit = await canPrincipalEditPage(auth, pageId);
     if (!canEdit) {
       return NextResponse.json(
         { error: 'You need edit permission to convert this page' },

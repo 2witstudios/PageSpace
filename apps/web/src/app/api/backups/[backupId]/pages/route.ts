@@ -1,9 +1,10 @@
+import { isPrincipalDriveOwnerOrAdmin } from '@/lib/auth/principal-permissions';
 import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { driveBackups, driveBackupPages, pageVersions } from '@pagespace/db/schema/versioning';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
+
 import { readPageContent } from '@pagespace/lib/services/page-content-store';
 import { buildSnapshotPageTree } from '@/services/api/snapshot-pages-service';
 
@@ -28,7 +29,7 @@ export async function GET(
     return NextResponse.json({ error: 'Backup not found' }, { status: 404 });
   }
 
-  const isAdmin = await isDriveOwnerOrAdmin(auth.userId, backup.driveId);
+  const isAdmin = await isPrincipalDriveOwnerOrAdmin(auth, backup.driveId);
   if (!isAdmin) {
     return NextResponse.json({ error: 'Access denied' }, { status: 403 });
   }

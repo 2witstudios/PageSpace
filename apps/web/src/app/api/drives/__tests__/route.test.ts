@@ -793,3 +793,14 @@ describe('GET /api/drives — scoped MCP canCreatePages', () => {
     expect(getUserAccessLevel).toHaveBeenCalledWith('user_123', 'drive_scoped');
   });
 });
+
+// Route contracts stub authorization; policy decisions are covered by principal-permissions integration tests.
+vi.mock('@/lib/auth/principal-permissions', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/auth/principal-permissions')>();
+  const permissions = await import('@pagespace/lib/permissions/permissions');
+  return { ...actual,
+    getPrincipalAccessLevel: (auth: { userId: string }, resourceId: string) => permissions.getUserAccessLevel(auth.userId, resourceId),
+  };
+});
+
+vi.mock('@pagespace/lib/organizations/authentication-policy', () => ({ checkDriveAuthentication: vi.fn().mockResolvedValue({ allowed: true }) }));

@@ -168,3 +168,12 @@ describe('GET /api/drives/[driveId]/backups/[backupId]/pages', () => {
     expect(Array.isArray(body.pages)).toBe(true);
   });
 });
+
+// Route contracts stub authorization; policy decisions are covered by principal-permissions integration tests.
+vi.mock('@/lib/auth/principal-permissions', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/auth/principal-permissions')>();
+  const permissions = await import('@pagespace/lib/permissions/permissions');
+  return { ...actual,
+    isPrincipalDriveOwnerOrAdmin: (auth: { userId: string }, resourceId: string) => permissions.isDriveOwnerOrAdmin(auth.userId, resourceId),
+  };
+});

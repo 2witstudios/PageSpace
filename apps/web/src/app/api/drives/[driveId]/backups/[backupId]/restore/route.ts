@@ -1,3 +1,4 @@
+import { isPrincipalDriveOwnerOrAdmin } from '@/lib/auth/principal-permissions';
 import { NextResponse } from 'next/server';
 import { OpenRoleFloorError, guardOpenRoleFloor } from '@pagespace/lib/organizations/open-role-floor';
 import { admitReentry } from '@pagespace/lib/permissions/guest-holds';
@@ -6,7 +7,7 @@ import { eq, inArray } from '@pagespace/db/operators';
 import { driveBackups, driveBackupPermissions, driveBackupMembers, driveBackupRoles } from '@pagespace/db/schema/versioning';
 import { pagePermissions, driveMembers, driveRoles } from '@pagespace/db/schema/members';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
+
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { createChangeGroupId, inferChangeGroupType } from '@pagespace/lib/monitoring/change-group';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -37,7 +38,7 @@ export async function POST(
 
   try {
     // 1. Permission check
-    const isAdmin = await isDriveOwnerOrAdmin(auth.userId, driveId);
+    const isAdmin = await isPrincipalDriveOwnerOrAdmin(auth, driveId);
     if (!isAdmin) {
       return NextResponse.json({ error: 'Access denied' }, { status: 403 });
     }

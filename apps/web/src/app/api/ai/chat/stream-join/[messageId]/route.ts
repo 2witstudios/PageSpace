@@ -1,6 +1,7 @@
+import { canPrincipalViewPage } from '@/lib/auth/principal-permissions';
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
+
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { parseGlobalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import { canSubscribeToStream } from '@/lib/ai/core/stream-subscription-authz';
@@ -69,7 +70,7 @@ export async function GET(
   // You may join a stream you started, or one in an explicitly shared conversation.
   const hasPageAccess = channelOwner !== null
     ? channelOwner === userId
-    : await canUserViewPage(userId, meta.pageId);
+    : await canPrincipalViewPage(authResult, meta.pageId);
 
   if (!hasPageAccess) {
     // A genuine authorization violation: this user has no business on this page at all.
@@ -106,7 +107,7 @@ export async function GET(
   const hasViewAccess = async (): Promise<boolean> => {
     const pageOk = channelOwner !== null
       ? channelOwner === userId
-      : await canUserViewPage(userId, meta.pageId);
+      : await canPrincipalViewPage(authResult, meta.pageId);
     if (!pageOk) return false;
     return canSubscribe();
   };

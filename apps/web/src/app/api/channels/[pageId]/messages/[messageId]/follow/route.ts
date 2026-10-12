@@ -1,6 +1,7 @@
+import { canPrincipalViewPage } from '@/lib/auth/principal-permissions';
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
+
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { channelMessageRepository } from '@pagespace/lib/services/channel-message-repository';
 
@@ -26,7 +27,7 @@ export async function POST(req: Request, { params }: RouteParams) {
   if (isAuthError(auth)) return auth.error;
   const userId = auth.userId;
 
-  const canView = await canUserViewPage(userId, pageId);
+  const canView = await canPrincipalViewPage(auth, pageId);
   if (!canView) {
     return NextResponse.json(
       { error: 'You need view permission to follow threads in this channel' },
@@ -75,7 +76,7 @@ export async function DELETE(req: Request, { params }: RouteParams) {
   if (isAuthError(auth)) return auth.error;
   const userId = auth.userId;
 
-  const canView = await canUserViewPage(userId, pageId);
+  const canView = await canPrincipalViewPage(auth, pageId);
   if (!canView) {
     return NextResponse.json(
       { error: 'You need view permission to manage thread follows' },

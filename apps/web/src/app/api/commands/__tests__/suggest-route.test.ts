@@ -314,3 +314,12 @@ describe('/btw through GET /api/commands/suggest', () => {
     expect(btw?.description).toBe('Ask a side question without interrupting the run');
   });
 });
+
+// Route contracts stub authorization; policy decisions are covered by principal-permissions integration tests.
+vi.mock('@/lib/auth/principal-permissions', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/auth/principal-permissions')>();
+  const permissions = await import('@pagespace/lib/permissions/permissions');
+  return { ...actual,
+    isPrincipalDriveMember: (auth: { userId: string }, resourceId: string) => permissions.isUserDriveMember(auth.userId, resourceId),
+  };
+});

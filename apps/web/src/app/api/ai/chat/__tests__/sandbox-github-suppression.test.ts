@@ -358,3 +358,13 @@ describe('POST /api/ai/chat - GitHub suppression sees sandbox tools in search mo
     expect(call.currentTools).toHaveProperty('list_pages');
   });
 });
+
+// Route contracts stub authorization; policy decisions are covered by principal-permissions integration tests.
+vi.mock('@/lib/auth/principal-permissions', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/auth/principal-permissions')>();
+  const permissions = await import('@pagespace/lib/permissions/permissions');
+  return { ...actual,
+    canPrincipalViewPage: (auth: { userId: string }, resourceId: string) => permissions.canUserViewPage(auth.userId, resourceId),
+    canPrincipalEditPage: (auth: { userId: string }, resourceId: string) => permissions.canUserEditPage(auth.userId, resourceId),
+  };
+});

@@ -1,3 +1,4 @@
+import { isPrincipalDriveOwnerOrAdmin } from '@/lib/auth/principal-permissions';
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
@@ -6,7 +7,7 @@ import { eq } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { drives } from '@pagespace/db/schema/core';
 import { driveBackupSchedules } from '@pagespace/db/schema/versioning';
-import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
+
 import { MEMORY_PAYING_TIERS } from '@pagespace/lib/billing/automation-preferences';
 import { orgEntitlementTier } from '@pagespace/lib/billing/spend-target';
 import { isOrgLapsedForDrive } from '@pagespace/lib/organizations/status';
@@ -49,7 +50,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ driv
 
   try {
     const [canManage, ownerRow, schedule] = await Promise.all([
-      isDriveOwnerOrAdmin(auth.userId, driveId),
+      isPrincipalDriveOwnerOrAdmin(auth, driveId),
       db.select({ tier: users.subscriptionTier, orgId: drives.orgId }).from(drives).innerJoin(users, eq(drives.ownerId, users.id)).where(eq(drives.id, driveId)).limit(1),
       db.select().from(driveBackupSchedules).where(eq(driveBackupSchedules.driveId, driveId)).limit(1),
     ]);
@@ -86,7 +87,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ dr
   if (isAuthError(auth)) return auth.error;
 
   try {
-    const canManage = await isDriveOwnerOrAdmin(auth.userId, driveId);
+    const canManage = await isPrincipalDriveOwnerOrAdmin(auth, driveId);
     if (!canManage) {
       return NextResponse.json({ error: 'Only drive owners and admins can change backup settings' }, { status: 403 });
     }

@@ -1,3 +1,4 @@
+import { canPrincipalViewPage, canPrincipalEditPage } from '@/lib/auth/principal-permissions';
 import { NextRequest, NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db } from '@pagespace/db/db'
@@ -5,7 +6,7 @@ import { eq } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core';
 import { PageType } from '@pagespace/lib/utils/enums'
 import { canConvertToType } from '@pagespace/lib/content/page-type-validators'
-import { canUserEditPage, canUserViewPage } from '@pagespace/lib/permissions/permissions'
+
 import { createPageServiceToken } from '@pagespace/lib/services/validated-service-token';
 import mammoth from 'mammoth';
 import { createId } from '@paralleldrive/cuid2';
@@ -71,12 +72,12 @@ export async function POST(
       return NextResponse.json({ error: 'File is not a Word document' }, { status: 400 });
     }
 
-    const canView = await canUserViewPage(userId, filePage.id);
+    const canView = await canPrincipalViewPage(auth, filePage.id);
     if (!canView) {
       return NextResponse.json({ error: 'You do not have access to this file' }, { status: 403 });
     }
 
-    const canEdit = await canUserEditPage(userId, filePage.id);
+    const canEdit = await canPrincipalEditPage(auth, filePage.id);
     if (!canEdit) {
       return NextResponse.json({ error: 'You do not have permission to convert this file' }, { status: 403 });
     }

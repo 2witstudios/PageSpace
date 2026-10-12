@@ -1,3 +1,4 @@
+import { canPrincipalEditPage } from '@/lib/auth/principal-permissions';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
@@ -5,7 +6,7 @@ import { isOnPrem } from '@pagespace/lib/deployment-mode';
 import { db } from '@pagespace/db/db';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
+
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';
 import { listGrantsByAgent, createGrant, findGrant } from '@pagespace/lib/integrations/repositories/grant-repository';
 import { getConnectionWithProvider } from '@pagespace/lib/integrations/repositories/connection-repository';
@@ -116,7 +117,7 @@ export async function GET(
 
   try {
     // Verify user can view the agent
-    const canEdit = await canUserEditPage(auth.userId, agentId);
+    const canEdit = await canPrincipalEditPage(auth, agentId);
     if (!canEdit) {
       return NextResponse.json({ error: 'Access denied' }, { status: 403 });
     }
@@ -172,7 +173,7 @@ export async function POST(
   if (isAuthError(auth)) return auth.error;
 
   try {
-    const canEdit = await canUserEditPage(auth.userId, agentId);
+    const canEdit = await canPrincipalEditPage(auth, agentId);
     if (!canEdit) {
       return NextResponse.json({ error: 'Access denied' }, { status: 403 });
     }

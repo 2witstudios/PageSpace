@@ -1,6 +1,7 @@
+import { canPrincipalViewPage } from '@/lib/auth/principal-permissions';
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { canUserViewPage } from '@pagespace/lib/permissions/permissions'
+
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
@@ -22,7 +23,7 @@ export async function POST(req: Request, { params }: RouteParams) {
   const userId = auth.userId;
 
   // Check if user has view permission (reactions require at least view access)
-  const canView = await canUserViewPage(userId, pageId);
+  const canView = await canPrincipalViewPage(auth, pageId);
   if (!canView) {
     return NextResponse.json({
       error: 'You need view permission to react to messages',
@@ -107,7 +108,7 @@ export async function DELETE(req: Request, { params }: RouteParams) {
   const userId = auth.userId;
 
   // Check if user has view permission
-  const canView = await canUserViewPage(userId, pageId);
+  const canView = await canPrincipalViewPage(auth, pageId);
   if (!canView) {
     return NextResponse.json({
       error: 'You need view permission to manage reactions',

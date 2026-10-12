@@ -1,3 +1,4 @@
+import { canPrincipalDeletePage } from '@/lib/auth/principal-permissions';
 import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db'
 import { eq, sql } from '@pagespace/db/operators'
@@ -6,7 +7,7 @@ import { pagePermissions } from '@pagespace/db/schema/members'
 import { channelMessages } from '@pagespace/db/schema/chat';
 import { deleteConversationsForPages, type DbHandle } from '@pagespace/lib/repositories/conversation-cleanup';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { canUserDeletePage } from '@pagespace/lib/permissions/permissions';
+
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
@@ -79,7 +80,7 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ pageI
   if (isAuthError(auth)) return auth.error;
   const userId = auth.userId;
 
-  const canDelete = await canUserDeletePage(userId, pageId);
+  const canDelete = await canPrincipalDeletePage(auth, pageId);
   if (!canDelete) {
     return new NextResponse("Forbidden", { status: 403 });
   }

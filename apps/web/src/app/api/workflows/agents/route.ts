@@ -1,6 +1,7 @@
+import { isPrincipalDriveMember } from '@/lib/auth/principal-permissions';
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
+
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { db } from '@pagespace/db/db'
 import { eq, and } from '@pagespace/db/operators'
@@ -18,7 +19,7 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: 'driveId is required' }, { status: 400 });
   }
 
-  const isMember = await isUserDriveMember(auth.userId, driveId);
+  const isMember = await isPrincipalDriveMember(auth, driveId);
   if (!isMember) {
     return NextResponse.json({ error: 'Not a member of this drive' }, { status: 403 });
   }

@@ -233,3 +233,5 @@ describe('GET /api/drives — OAuth credentials', () => {
     expect(body[0]).toMatchObject({ id: 'drive-1', role: 'MEMBER', isOwned: false });
   });
 });
+
+vi.mock('@pagespace/lib/organizations/authentication-policy', () => ({ checkDriveAuthentication: vi.fn().mockResolvedValue({ allowed: true }) }));

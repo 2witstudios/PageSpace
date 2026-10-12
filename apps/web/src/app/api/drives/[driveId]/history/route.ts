@@ -1,7 +1,8 @@
+import { isPrincipalDriveOwnerOrAdmin } from '@/lib/auth/principal-permissions';
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
+
 import { getDriveVersionHistory, getUserRetentionDays } from '@/services/api';
 import { isActivityEligibleForRollback } from '@pagespace/lib/permissions/rollback-permissions';
 import { loggers } from '@pagespace/lib/logging/logger-config'
@@ -47,7 +48,7 @@ export async function GET(
   });
 
   // Check if user is drive owner or admin
-  const isAdmin = await isDriveOwnerOrAdmin(userId, driveId);
+  const isAdmin = await isPrincipalDriveOwnerOrAdmin(auth, driveId);
   if (!isAdmin) {
     loggers.api.debug('[History:Route] Permission denied - not drive admin');
     return NextResponse.json(

@@ -1,9 +1,10 @@
+import { isPrincipalDriveMember } from '@/lib/auth/principal-permissions';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
+
 import {
   COMMAND_TRIGGER_MAX_LENGTH,
   type CommandScope,
@@ -51,7 +52,7 @@ export async function GET(request: Request) {
 
   try {
     if (driveId) {
-      const isMember = await isUserDriveMember(userId, driveId);
+      const isMember = await isPrincipalDriveMember(auth, driveId);
       if (!isMember) {
         return NextResponse.json(
           { error: 'Access denied to the specified drive' },

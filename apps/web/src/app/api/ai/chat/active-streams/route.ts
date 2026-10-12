@@ -1,6 +1,7 @@
+import { canPrincipalViewPage } from '@/lib/auth/principal-permissions';
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
+
 import { db } from '@pagespace/db/db';
 import { and, asc, eq } from '@pagespace/db/operators';
 import { aiStreamSessions } from '@pagespace/db/schema/ai-streams';
@@ -92,7 +93,7 @@ export async function GET(request: Request) {
         return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
       }
     } else {
-      const allowed = await canUserViewPage(userId, channelId);
+      const allowed = await canPrincipalViewPage(auth, channelId);
       if (!allowed) {
         auditRequest(request, {
           eventType: 'authz.access.denied',

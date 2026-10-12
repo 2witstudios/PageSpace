@@ -1,10 +1,12 @@
+import { checkDriveAuthentication } from '@pagespace/lib/organizations/authentication-policy';
+import type { AuthResult } from '@/lib/auth';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { listAccessibleDrives, createDrive, type DriveWithAccess } from '@pagespace/lib/services/drive-service';
 import { isReservedDriveName } from '@pagespace/lib/services/drive-guards';
 import { getAppDriveMembership, getEffectiveScopedDriveMembership, hasAppDriveMembership, hasScopedDriveMembership } from '@pagespace/lib/permissions/app-permissions';
 import { resolveDriveWideCanEdit } from '@pagespace/lib/permissions/membership-queries';
-import { getUserAccessLevel } from '@pagespace/lib/permissions/permissions';
+
 import { db } from '@pagespace/db/db';
 import { and, eq, inArray } from '@pagespace/db/operators';
 import { drives as drivesTable, ORG_DRIVE_VISIBILITIES } from '@pagespace/db/schema/core';
@@ -16,6 +18,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackDriveOperation } from '@pagespace/lib/monitoring/activity-tracker';
 import { authenticateRequestWithOptions, isAuthError, checkMCPCreateScope, isScopedMCPAuth, isScopedOAuthAuth, isManageKeysOnly } from '@/lib/auth';
+import { getPrincipalAccessLevel } from '@/lib/auth/principal-permissions';
 import { jsonResponse } from '@pagespace/lib/utils/api-utils';
 import { getActorInfo, logDriveActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { safeParseBody } from '@/lib/validation/parse-body';
@@ -42,15 +45,16 @@ const createDriveSchema = z.object({
 async function listScopedDrivesWithMembership({
   scopedDriveIds,
   includeTrash,
-  userId,
+  auth,
   getMembership,
 }: {
   /** The key's scoped drives; each is kept only when `getMembership` (owner-bound) answers a membership. */
   scopedDriveIds: string[];
   includeTrash: boolean;
-  userId: string;
+  auth: AuthResult;
   getMembership: (driveId: string) => ScopedDriveMembership | Promise<ScopedDriveMembership>;
 }): Promise<DriveWithAccess[]> {
+  const userId = auth.userId;
   // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
   const rows = await db.query.drives.findMany({
     where: includeTrash
@@ -91,7 +95,7 @@ async function listScopedDrivesWithMembership({
       // row's synthesized MEMBER knows nothing of the owner's custom role.
       const inheritsNonOwner = membership.role === null && !isDriveLead(userId, drive);
       const canCreatePages = inheritsNonOwner
-        ? (await getUserAccessLevel(userId, drive.id))?.canEdit === true
+        ? (await getPrincipalAccessLevel(auth, drive.id))?.canEdit === true
         : (canCreatePagesMap.get(drive.id) ?? false);
       return {
         ...drive,
@@ -125,7 +129,7 @@ export async function GET(req: Request) {
       drives = await listScopedDrivesWithMembership({
         scopedDriveIds: auth.allowedDriveIds,
         includeTrash,
-        userId,
+        auth,
         getMembership: async (driveId) => {
           // Review #2849 r5 (P2): EVERY key row, inherit or explicit, lists only while its owner is a current member.
           const membership = await getAppDriveMembership(auth.tokenId, driveId);
@@ -140,7 +144,7 @@ export async function GET(req: Request) {
         drives = await listScopedDrivesWithMembership({
           scopedDriveIds: auth.allowedDriveIds,
           includeTrash,
-          userId,
+          auth,
           getMembership: async (driveId) => {
             const membership = await getEffectiveScopedDriveMembership(auth.driveScopes, auth.userId, driveId);
             if (!membership) return null;
@@ -153,6 +157,9 @@ export async function GET(req: Request) {
     } else {
       drives = await listAccessibleDrives(userId, { includeTrash, tokenScopable });
     }
+
+    const allowed = await Promise.all(drives.map(drive => checkDriveAuthentication(drive.id, auth.authentication)));
+    drives = drives.filter((_drive, index) => allowed[index].allowed);
 
     loggers.api.debug('[DEBUG] Drives API - Found drives:', {
       count: drives.length,
