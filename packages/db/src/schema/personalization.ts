@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, boolean, uniqueIndex, integer, check } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, boolean, uniqueIndex, index, integer, check } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 import { users } from './auth';
 import { pages } from './core';
@@ -50,6 +50,10 @@ export const userPersonalization = pgTable('user_personalization', {
   updatedAt: timestamp('updatedAt', { mode: 'date' }).defaultNow().notNull(),
 }, (table) => ({
   userIdx: uniqueIndex('user_personalization_user_idx').on(table.userId),
+  // The page read gate asks whether a page is a memory page restating org-derived content (D-OW-62).
+  bioPageIdx: index('user_personalization_bio_page_idx').on(table.bioPageId),
+  writingStylePageIdx: index('user_personalization_writing_style_page_idx').on(table.writingStylePageId),
+  rulesPageIdx: index('user_personalization_rules_page_idx').on(table.rulesPageId),
 }));
 
 export const userPersonalizationRelations = relations(userPersonalization, ({ one }) => ({

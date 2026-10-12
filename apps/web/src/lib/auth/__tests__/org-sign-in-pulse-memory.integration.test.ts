@@ -24,7 +24,18 @@ import { orgIdsOfSources } from '@pagespace/lib/permissions/org-derived-content'
 import type { OrgPolicies } from '@pagespace/lib/organizations/policies-core';
 import type { VerifiedAuthentication } from '@pagespace/lib/auth/authentication-evidence';
 
+import { provisionMemoryPages } from '@pagespace/lib/memory/memory-pages';
+import { getResourceAuthenticationPolicies } from '@pagespace/lib/organizations/policy-reader';
+import { accessiblePageIds } from '@pagespace/lib/permissions/accessible-page-ids';
+import {
+  canUserViewPage,
+  getBatchPagePermissions,
+  getUserAccessiblePagesInDrive,
+  getUserAccessiblePagesInDriveWithDetails,
+} from '@pagespace/lib/permissions/permissions';
+
 import { GET as getPulse } from '@/app/api/pulse/route';
+import { GET as getPage } from '@/app/api/pages/[pageId]/route';
 import { GET as getPersonalizationSettings } from '@/app/api/settings/personalization/route';
 import { getUserPersonalization } from '@/lib/ai/core/personalization-utils';
 import { recordMemoryOrgIds } from '@/lib/memory/candidate-service';
@@ -199,5 +210,71 @@ describe('distilled memory', () => {
     const [row] = await db.select({ memoryOrgIds: userPersonalization.memoryOrgIds })
       .from(userPersonalization).where(eq(userPersonalization.userId, user.id));
     expect(row.memoryOrgIds).toEqual([a.org.id, b.org.id].sort());
+  });
+});
+
+describe('memory pages (the pages the distilled memory lives in)', () => {
+  /** The person's memory pages in a drive of their own, the memory recorded against `orgIds`, and an ordinary page. */
+  async function memoryPagesFrom(userId: string, orgIds: string[]) {
+    const homeDrive = await factories.createDrive(userId);
+    const memory = await db.transaction((tx) => provisionMemoryPages(userId, homeDrive.id, tx));
+    await recordMemoryOrgIds(userId, orgIds);
+    const notes = await factories.createPage(homeDrive.id, { title: 'Grocery list' });
+    return { homeDrive, memory, notes };
+  }
+
+  const readPage = (token: string, pageId: string) =>
+    getPage(new Request(`https://app.test/api/pages/${pageId}`, { headers: bearer(token) }), { params: Promise.resolve({ pageId }) });
+
+  it('SEC-2 (partial) a memory page restating a requireStrongSignIn org is withheld from a single-factor credential on every read path, with the code; the person\'s other pages stand; a passkey credential reads it', async () => {
+    const user = await person();
+    const { org } = await orgWithDrive(user.id, { requireStrongSignIn: true });
+    const { homeDrive, memory, notes } = await memoryPagesFrom(user.id, [org.id]);
+    const weak = credentialActor(user.id, evidence('single_factor'));
+    const strong = credentialActor(user.id, evidence('user_verified_passkey'));
+
+    // The page route answers the code that unlocks it, not a bare 403.
+    const refused = await readPage(await session(user.id, 'single_factor'), memory.rulesPageId);
+    expect(refused.status).toBe(403);
+    expect((await refused.json() as { code: string }).code).toBe('org_strong_sign_in_required');
+    expect((await readPage(await session(user.id, 'single_factor'), notes.id)).status).toBe(200);
+    expect((await readPage(await session(user.id, 'user_verified_passkey'), memory.rulesPageId)).status).toBe(200);
+
+    // Every listing and check the page, search, tool, export and realtime paths are built on.
+    expect(await canUserViewPage(weak, memory.bioPageId)).toBe(false);
+    expect(await canUserViewPage(strong, memory.bioPageId)).toBe(true);
+    const memoryIds = [memory.bioPageId, memory.writingStylePageId, memory.rulesPageId];
+    const batch = await getBatchPagePermissions(weak, [...memoryIds, notes.id]);
+    expect(memoryIds.map((id) => batch.get(id)?.canView)).toEqual([false, false, false]);
+    expect(batch.get(notes.id)?.canView).toBe(true);
+    for (const listed of [
+      await accessiblePageIds(weak),
+      await getUserAccessiblePagesInDrive(weak, homeDrive.id),
+      (await getUserAccessiblePagesInDriveWithDetails(weak, homeDrive.id)).map((page) => page.id),
+    ]) {
+      expect(listed).toContain(notes.id);
+      expect(listed.filter((id) => memoryIds.includes(id))).toEqual([]);
+    }
+    expect(await getUserAccessiblePagesInDrive(strong, homeDrive.id)).toEqual(expect.arrayContaining(memoryIds));
+  });
+
+  it('SEC-3 (partial) a live socket holding a memory page re-decides it against every contributing org\'s policy, folded into the strictest', async () => {
+    const user = await person();
+    const strongOrg = await orgWithDrive(user.id, { requireStrongSignIn: true });
+    const agedOrg = await orgWithDrive(user.id, { maximumSessionAgeMinutes: 30 });
+    const { memory, notes } = await memoryPagesFrom(user.id, [strongOrg.org.id, agedOrg.org.id]);
+
+    const policies = await getResourceAuthenticationPolicies([memory.bioPageId, notes.id, agedOrg.orgDrive.id]);
+    expect(policies.get(memory.bioPageId)).toEqual({ requireStrongSignIn: true, maximumSessionAgeMinutes: 30 });
+    expect(policies.get(notes.id)).toBeNull();
+    expect(policies.get(agedOrg.orgDrive.id)).toEqual({ requireStrongSignIn: false, maximumSessionAgeMinutes: 30 });
+  });
+
+  it('SEC-2 (partial) memory pages no org contributed to are read by any credential', async () => {
+    const user = await person();
+    await orgWithDrive(user.id, { requireStrongSignIn: true });
+    const { memory } = await memoryPagesFrom(user.id, []);
+
+    expect(await canUserViewPage(credentialActor(user.id, evidence('single_factor')), memory.rulesPageId)).toBe(true);
   });
 });

@@ -135,6 +135,9 @@ export async function authorizeOrgRequest(
   }
   // Role first: a non-member learns nothing about the org's sign-in policy. Then the policy, for sessions and keys
   // alike, so a stolen or stale Admin credential cannot invite, change members, domains or ownership (review #2866 B1).
+  // D-OW-53(3): the policy asked here is policyInForce — a DAMAGED stored maximum age is held to the 15-minute floor, not
+  // read as 0, so a freshly signed-in Admin can still repair it. When lane D's policyInForce (8985a21ee) is integrated,
+  // these semantics are the ones kept.
   const refused = await orgCredentialRefusal(request, gate, orgId);
   if (refused) return { ok: false, response: refused };
   return { ...gate, role: decision.role };

@@ -1,5 +1,5 @@
 import { decideOrgAuthentication, type OrgAuthenticationDecision } from '../organizations/authentication-policy-core';
-import { getOrgPolicies, getResourceDriveIds, listOrgIdsOfDrives } from '../organizations/policy-reader';
+import { getDerivedPageOrgIds, getOrgPolicies, getResourceDriveIds, listOrgIdsOfDrives } from '../organizations/policy-reader';
 import type { AccessActor, OrgAuthenticationDenialCode } from './access-actor';
 
 /**
@@ -57,4 +57,26 @@ export async function orgIdsOfDrives(driveIds: readonly string[]): Promise<strin
 export async function orgIdsOfSources(sources: { readonly driveIds: readonly string[]; readonly pageIds: readonly string[] }): Promise<string[]> {
   const pageDrives = sources.pageIds.length > 0 ? [...(await getResourceDriveIds(sources.pageIds)).values()] : [];
   return listOrgIdsOfDrives([...sources.driveIds, ...pageDrives]);
+}
+
+export type DerivedContentRefusal = Extract<DerivedContentAccess, { readonly allowed: false }>;
+
+/**
+ * The pages of `pageIds` that restate org-derived content (memory pages, D-OW-62) and that this credential may not
+ * read, each with its refusal. Every page read path asks this through the actor sign-in gate (actor-authentication),
+ * so the page is withheld wherever it would be read. Pages sharing the same contributing orgs are decided once. An
+ * automation is judged by its scope alone: nothing is withheld from it here.
+ */
+export async function refusedDerivedPages(actor: AccessActor, pageIds: readonly string[]): Promise<Map<string, DerivedContentRefusal>> {
+  const refused = new Map<string, DerivedContentRefusal>();
+  if (pageIds.length === 0 || actor.via === 'automation') return refused;
+  const derived = await getDerivedPageOrgIds(pageIds);
+  const decided = new Map<string, DerivedContentAccess>();
+  for (const [pageId, orgIds] of derived) {
+    const key = orgIds.join(',');
+    const access = decided.get(key) ?? (await checkDerivedContentAccess(actor, orgIds));
+    decided.set(key, access);
+    if (!access.allowed) refused.set(pageId, access);
+  }
+  return refused;
 }

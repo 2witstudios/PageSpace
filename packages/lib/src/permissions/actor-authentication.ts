@@ -7,6 +7,7 @@ import {
   type ActorGateDecision,
   type OrgAuthenticationDenialCode,
 } from './access-actor';
+import { refusedDerivedPages } from './org-derived-content';
 
 /**
  * The IO around decideActorAuthentication (SEC-2/3, D-OW-45): the org sign-in policy governing a drive, read at
@@ -33,7 +34,19 @@ export async function filterResourcesForActor(actor: AccessActor, resourceIds: r
   if (actor.via === 'automation' && actor.scope.kind === 'held-drives') return new Set(resourceIds);
   const driveOf = await getResourceDriveIds(resourceIds);
   const allowedDrives = await filterDrivesForActor(actor, [...new Set(driveOf.values())]);
-  return new Set(resourceIds.filter((id) => allowedDrives.has(driveOf.get(id) ?? id)));
+  const inAllowedDrives = resourceIds.filter((id) => allowedDrives.has(driveOf.get(id) ?? id));
+  const withheld = await refusedDerivedPages(actor, inAllowedDrives);
+  return new Set(inAllowedDrives.filter((id) => !withheld.has(id)));
+}
+
+/**
+ * The pages of `pageIds` this actor may read once its drives are admitted: drops the pages that restate org-derived
+ * content (memory pages, D-OW-62) a contributing org's sign-in policy withholds from the credential. For listings that
+ * are gated per drive (a drive's pages, every accessible page).
+ */
+export async function dropWithheldDerivedPages(actor: AccessActor, pageIds: readonly string[]): Promise<string[]> {
+  const withheld = await refusedDerivedPages(actor, pageIds);
+  return pageIds.filter((id) => !withheld.has(id));
 }
 
 export async function checkActorDriveAuthentication(actor: AccessActor, driveId: string): Promise<ActorGateDecision> {
@@ -45,7 +58,11 @@ export async function checkActorDriveAuthentication(actor: AccessActor, driveId:
 export async function checkActorResourceAuthentication(actor: AccessActor, resourceId: string): Promise<ActorGateDecision> {
   if (actor.via === 'automation' && actor.scope.kind === 'held-drives') return { allowed: true };
   const driveOf = await getResourceDriveIds([resourceId]);
-  return checkActorDriveAuthentication(actor, driveOf.get(resourceId) ?? resourceId);
+  const driveDecision = await checkActorDriveAuthentication(actor, driveOf.get(resourceId) ?? resourceId);
+  if (!driveDecision.allowed) return driveDecision;
+  // A page restating org-derived content (a memory page, D-OW-62) also needs every contributing org's admission.
+  const refusal = (await refusedDerivedPages(actor, [resourceId])).get(resourceId);
+  return refusal ? { allowed: false, code: refusal.code } : driveDecision;
 }
 
 /**

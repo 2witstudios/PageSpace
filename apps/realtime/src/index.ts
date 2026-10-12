@@ -1,5 +1,5 @@
 import './instrument';
-import { getDrivePolicies, getDriveAuthenticationPolicies, getResourceDriveIds } from '@pagespace/lib/organizations/policy-reader';
+import { getDrivePolicies, getResourceAuthenticationPolicies } from '@pagespace/lib/organizations/policy-reader';
 import { credentialActor, type AccessActor } from '@pagespace/lib/permissions/access-actor';
 import { createOrgRoomWatch, createPolicyChangeFanout, ORG_REAUTHENTICATION_REQUIRED_EVENT, type OrgRoomWatch } from './org-room-watch';
 import { ORG_CHANGED_EVENT } from '@pagespace/lib/realtime/org-wallet-events';
@@ -1243,13 +1243,6 @@ async function populateUserMetadata(socket: AuthSocket): Promise<void> {
   }
 }
 
-/** The sign-in policy governing each page or drive id, read live (null where no org governs). */
-async function readResourceAuthenticationPolicies(resourceIds: readonly string[]) {
-  const driveOf = await getResourceDriveIds(resourceIds);
-  const policies = await getDriveAuthenticationPolicies([...new Set(driveOf.values())]);
-  return new Map(resourceIds.map((id) => [id, policies.get(driveOf.get(id) ?? id) ?? null]));
-}
-
 /** One org-room watch per connected socket (SEC-3 eviction), so an org policy change can nudge them. */
 const orgRoomWatches = new Map<string, OrgRoomWatch>();
 const fanOutOrgPolicyChange = createPolicyChangeFanout({
@@ -1360,7 +1353,8 @@ io.on('connection', (socket: AuthSocket) => {
   // App-log streams are tracked by the same watch (SEC-2/3); an eviction tears the stream down too.
   let onOrgRoomEvicted: (room: string) => void = () => {};
   const orgRoomWatch = createOrgRoomWatch(socket, {
-    readPolicies: readResourceAuthenticationPolicies,
+    // A page's own org and, for a memory page, every org its content was derived from (D-OW-62).
+    readPolicies: (resourceIds) => getResourceAuthenticationPolicies(resourceIds),
     onLeft: (room) => {
       socketRegistry.trackRoomLeave(socket.id, room);
       onOrgRoomEvicted(room);

@@ -9,6 +9,7 @@ import {
   policyInForce,
   signInPolicyLoosened,
   signInPolicyTightened,
+  strictestAuthenticationPolicy,
   type OrgAuthenticationPolicy,
 } from '../authentication-policy-core';
 
@@ -176,5 +177,38 @@ describe('counting who a sign-in policy blocks (POL-1, D-OW-45)', () => {
     expect(policyInForce({ requireStrongSignIn: false, maximumSessionAgeMinutes: 0 })).toEqual({ requireStrongSignIn: false, maximumSessionAgeMinutes: 15 });
     expect(policyInForce({ requireStrongSignIn: true, maximumSessionAgeMinutes: 60 })).toEqual({ requireStrongSignIn: true, maximumSessionAgeMinutes: 60 });
     expect(policyInForce({ requireStrongSignIn: false, maximumSessionAgeMinutes: null })).toEqual({ requireStrongSignIn: false, maximumSessionAgeMinutes: null });
+  });
+});
+
+describe('several orgs governing one resource (derived content, D-OW-62)', () => {
+  const credentials = [
+    strong,
+    { authenticatedAtMs: nowMs - 1000, assurance: 'single_factor' as const },
+    { authenticatedAtMs: nowMs - 45 * 60_000, assurance: 'user_verified_passkey' as const },
+    { authenticatedAtMs: nowMs - 90 * 60_000, assurance: 'single_factor' as const },
+    null,
+  ];
+  const policies: OrgAuthenticationPolicy[] = [
+    unrestricted,
+    { requireStrongSignIn: true, maximumSessionAgeMinutes: null },
+    { requireStrongSignIn: false, maximumSessionAgeMinutes: 60 },
+    { requireStrongSignIn: false, maximumSessionAgeMinutes: 30 },
+    { requireStrongSignIn: false, maximumSessionAgeMinutes: 0 },
+  ];
+
+  it('SEC-2 (partial) SEC-3 (partial) the strictest policy refuses exactly the credentials any one of the policies refuses', () => {
+    for (const a of policies) {
+      for (const b of policies) {
+        const combined = strictestAuthenticationPolicy([a, b]);
+        for (const authentication of credentials) {
+          const anyRefuses = [a, b].some((policy) => !decideOrgAuthentication({ policy, authentication, nowMs }).allowed);
+          expect(decideOrgAuthentication({ policy: combined, authentication, nowMs }).allowed).toBe(!anyRefuses);
+        }
+      }
+    }
+  });
+
+  it('SEC-2 (partial) no governing policy is no policy', () => {
+    expect(strictestAuthenticationPolicy([])).toBeNull();
   });
 });
