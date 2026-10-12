@@ -27,6 +27,7 @@ export { MCP_TOKEN_PREFIX, SESSION_TOKEN_PREFIX, OAUTH_ACCESS_TOKEN_PREFIX };
 export type TokenType = 'mcp' | 'session' | 'oauth' | 'service';
 
 interface BaseAuthDetails {
+  authentication?: SessionClaims['authentication'];
   userId: string;
   role: 'user' | 'admin';
   tokenVersion: number;
@@ -474,6 +475,7 @@ export async function authenticateSessionRequest(request: Request): Promise<Auth
           tokenVersion: sessionResult.claims.tokenVersion,
           adminRoleVersion: sessionResult.claims.adminRoleVersion,
           sessionId: sessionResult.claims.sessionId,
+          authentication: sessionResult.claims.authentication,
           tokenType: 'session',
         } satisfies SessionAuthResult;
       }
@@ -508,6 +510,7 @@ export async function authenticateSessionRequest(request: Request): Promise<Auth
     tokenVersion: sessionResult.claims.tokenVersion,
     adminRoleVersion: sessionResult.claims.adminRoleVersion,
     sessionId: sessionResult.claims.sessionId,
+    authentication: sessionResult.claims.authentication,
     tokenType: 'session',
   } satisfies SessionAuthResult;
 }

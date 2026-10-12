@@ -129,7 +129,7 @@ export type GenerateAuthOptionsResult =
   | { ok: false; error: PasskeyError };
 
 export type VerifyAuthResult =
-  | { ok: true; data: { userId: string; isNewSession: boolean } }
+  | { ok: true; data: { userId: string; isNewSession: boolean; userVerified: boolean } }
   | { ok: false; error: PasskeyError };
 
 export type ListPasskeysResult =
@@ -638,7 +638,7 @@ export async function verifyAuthentication(input: unknown): Promise<VerifyAuthRe
 
   return {
     ok: true,
-    data: { userId: passkey.userId, isNewSession: true },
+    data: { userId: passkey.userId, isNewSession: true, userVerified: verification.authenticationInfo.userVerified === true },
   };
 }
 

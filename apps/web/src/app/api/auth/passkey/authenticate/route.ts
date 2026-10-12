@@ -209,6 +209,7 @@ export async function POST(req: Request) {
     }
 
     const { userId } = result.data;
+    const authentication = { authenticatedAtMs: Date.now(), assurance: result.data.userVerified ? 'user_verified_passkey' as const : 'single_factor' as const };
 
     // Successful passkey auth proves legitimacy — clear any accumulated failed
     // attempts / lock for this account.
@@ -225,6 +226,7 @@ export async function POST(req: Request) {
     const sessionToken = await sessionService.createSession({
       userId,
       type: 'user',
+      authentication,
       scopes: ['*'],
       expiresInMs: SESSION_DURATION_MS,
       deviceId,

@@ -76,6 +76,13 @@ describe('/api/auth/socket-token', () => {
   });
 
   describe('successful token creation', () => {
+    it('SEC-3 (partial) carries the original sign-in time into the socket credential', async () => {
+      const authentication = { authenticatedAtMs: Date.now() - 3600000, assurance: 'user_verified_passkey' as const };
+      vi.mocked(requireAuth).mockResolvedValue({ ...mockAuthUser, tokenType: 'session', tokenVersion: 1, authentication });
+      await GET(new Request('http://localhost/api/auth/socket-token'));
+      expect(sessionService.createSession).toHaveBeenCalledWith(expect.objectContaining({ authentication }));
+    });
+
     it('GET_withValidSession_returns200WithTokenAndExpiry', async () => {
       const request = new Request('http://localhost/api/auth/socket-token', {
         method: 'GET',

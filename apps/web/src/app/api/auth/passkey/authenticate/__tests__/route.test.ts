@@ -170,6 +170,16 @@ describe('POST /api/auth/passkey/authenticate', () => {
   });
 
   describe('successful authentication', () => {
+    it.each([true, false])('SEC-2 (partial) binds only server-verified user verification to the new session (%s)', async (userVerified) => {
+      vi.mocked(verifyAuthentication).mockResolvedValue({ ok: true, data: { userId: 'user-1', isNewSession: true, userVerified } });
+      const before = Date.now();
+      await POST(createRequest({ ...validPayload, userVerified: true }));
+      const authentication = vi.mocked(sessionService.createSession).mock.calls[0][0].authentication;
+      expect(authentication?.assurance).toBe(userVerified ? 'user_verified_passkey' : 'single_factor');
+      expect(authentication?.authenticatedAtMs).toBeGreaterThanOrEqual(before);
+      expect(authentication?.authenticatedAtMs).toBeLessThanOrEqual(Date.now());
+    });
+
     it('returns 200 with success, userId, and redirectUrl', async () => {
       const response = await POST(createRequest());
       const body = await response.json();

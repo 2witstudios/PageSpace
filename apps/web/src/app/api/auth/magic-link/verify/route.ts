@@ -379,6 +379,7 @@ async function redeemMagicLink({
   const sessionToken = await sessionService.createSession({
     userId,
     type: 'user',
+    authentication: { authenticatedAtMs: Date.now(), assurance: 'single_factor' },
     scopes: ['*'],
     expiresInMs: SESSION_DURATION_MS,
     deviceId: handoffDevice?.deviceId,
