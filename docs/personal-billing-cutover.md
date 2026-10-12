@@ -48,7 +48,7 @@ the deployment evidence.
 
 ```sh
 bun scripts/migrate-founder-to-pro.ts --apply --business-manifest /secure/path/destinations.json
-bun run db:migrate
+BILLING_CUTOVER_OFFLINE=true bun run db:migrate
 bun scripts/migrate-founder-to-pro.ts --dry-run --business-manifest /secure/path/destinations.json
 ```
 
@@ -84,3 +84,24 @@ dry-run, idempotency before and after column removal, stale mirror/flag rejectio
 manifest refusal, schema guards, and unchanged wallet/ledger rows and spendable
 credit value. Fresh-database and upgrade migration runs must also pass for the
 exact deployment candidate.
+
+## Automated Fly deployment gate
+
+The migration entrypoint refuses an existing schema with the retired column unless
+`BILLING_CUTOVER_OFFLINE=true`. An ordinary push therefore cannot apply 0339 while
+the old images still serve traffic. This assertion is not a substitute for draining.
+
+After subscriber verification/apply and the maintenance-window preparation above,
+dispatch **Docker Images** on master with `billing_cutover=true`. The workflow saves
+the current Fly configuration for web, admin, realtime, processor and cron, scales
+all five application fleets to zero, and verifies that no machines remain (including
+stopped machines, which Fly could auto-start). Only a successful drain passes the
+offline assertion to the migration machine. Application volumes and databases are
+not deleted. External schedulers/autoscalers must remain paused during this window.
+The deployment recreates each application with its saved configuration and final
+image. If migration or deployment fails, keep maintenance in place and recover with
+the final image; never restart an old image after the column drop. Later ordinary
+deploys pass without an offline assertion because the retired column is absent.
+
+Fly behavior: [scaling to zero and redeployment](https://fly.io/docs/launch/scale-count/),
+[configuration snapshots](https://fly.io/docs/flyctl/config-save/).
