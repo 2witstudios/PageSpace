@@ -13,6 +13,22 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **Joining an organization from the invitation email** (shown once organizations are switched on) — the
+  invitation link now opens a page that lets you join: sign in or create an account with the invited
+  address (by any sign-in method) and you land in the organization; if you are already signed in, one click
+  joins. The page says plainly when the link has expired, is no longer valid, belongs to another account,
+  or you are already a member.
+
+- **Organization avatar upload** (shown once organizations are switched on) — Owners and Admins set the
+  organization's avatar in Organization settings › General by uploading an image (JPEG, PNG, GIF or WebP,
+  up to 5 MB). The avatar is stored by PageSpace and shown only to members; an avatar can no longer be a
+  link to an image on another site.
+
+- **Create drives in your organization from anywhere** (shown once organizations are switched on) — the
+  New drive dialog offers the organizations you may create drives in, preselecting the one you are working
+  in, and the AI assistant's create-drive tool and the MCP drive create accept an organization too. The
+  organization's "who can create drives" setting applies everywhere.
+
 - **Organizations in the CLI and on MCP keys** (shown once organizations are switched on) — `pagespace orgs
   list|get|members|drives|policies` and the matching `organizations.*` MCP tools read what the web already
   shows: your organizations and your role in each, the member roster, the drive directory (including
