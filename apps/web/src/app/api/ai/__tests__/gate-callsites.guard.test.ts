@@ -105,13 +105,11 @@ function routeAndDirectImports(file: string): Array<{ path: string; src: string 
  *
  * The memory cron was listed here until its services took a hold of their own — a
  * user in debt kept accruing debt every night (the fourth of this class after #2700
- * and #2728). Every other model call site now passes a gate, or is reachable only
- * through files that do.
+ * and #2728). ask_agent's sub-agent was the last entry, until it reserved against its
+ * turn's wallet before its own tool loop (WAL-6a). Every model call site now passes a
+ * gate, or is reachable only through files that do.
  */
-const UNGATED_BY_DESIGN: Record<string, string> = {
-  'src/lib/ai/tools/agent-communication-tools.ts':
-    "ask_agent's nested sub-agent call. It runs only as a tool's execute inside a parent model call that already passed its gate — the chat turns, v1 completions, page-agent consult, workflow runs (creditAdmission), channel-mention replies (acquireMentionCreditHold) and voice calls (gated at the realtime handshake). It settles on its parent's walletId via AIMonitoring.trackUsage. ai-tools imports it only to assemble the tool registry, which runs nothing. The module scan below pins the same file to its gated caller (GATED_BY_CALLER).",
-};
+const UNGATED_BY_DESIGN: Record<string, string> = {};
 
 function ungatedModelRoutes(): string[] {
   const offenders: string[] = [];
@@ -299,7 +297,7 @@ describe('AI gate call-site guards', () => {
 
   it('the ungated list is exactly these files, each with a reason', () => {
     // Pinned literally: growing the list must fail here and be argued in review.
-    expect(Object.keys(UNGATED_BY_DESIGN)).toEqual(['src/lib/ai/tools/agent-communication-tools.ts']);
+    expect(Object.keys(UNGATED_BY_DESIGN)).toEqual([]);
     for (const reason of Object.values(UNGATED_BY_DESIGN)) {
       expect(reason.length).toBeGreaterThan(20);
     }
@@ -616,10 +614,6 @@ const GATED_BY_CALLER: Record<string, { gatedIn: string; reason: string }> = {
     gatedIn: 'src/lib/ai/tools/image-generation-tools.ts',
     reason: 'runs only from the generate_image tool, which gates with canConsumeAI on its turn\'s spend before generating',
   },
-  'src/lib/ai/tools/agent-communication-tools.ts': {
-    gatedIn: 'src/lib/channels/agent-mention-responder.ts',
-    reason: 'executeAskAgent\'s only caller is the channel mention responder, which takes acquireMentionCreditHold (automationSpend on the drive) before it; it settles on that hold\'s walletId',
-  },
   'src/lib/integrations/zoom/extract-action-items.ts': {
     gatedIn: 'src/lib/integrations/zoom/process-webhook.ts',
     reason: 'called only from processZoomWebhook, which reserves the destination drive\'s payer (acquireUserCreditHold) before either enrichment call',
@@ -651,7 +645,6 @@ describe('AI gate call-site guards: every module that runs a model', () => {
     expect(Object.keys(GATED_BY_CALLER).sort()).toEqual([
       'src/lib/ai/btw/side-question.ts',
       'src/lib/ai/core/image-generation.ts',
-      'src/lib/ai/tools/agent-communication-tools.ts',
       'src/lib/integrations/zoom/extract-action-items.ts',
       'src/lib/integrations/zoom/generate-summary.ts',
       'src/lib/workflows/workflow-executor.ts',

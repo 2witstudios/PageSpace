@@ -34,6 +34,11 @@ import { taskManagementTools } from './task-management-tools';
 import { agentTools } from './agent-tools';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
+import { callAdmission } from '@pagespace/lib/billing/call-admission';
+import { releaseHold } from '@pagespace/lib/billing/credit-consume';
+import { isMeteringExempt } from '@pagespace/lib/ai/model-defaults';
+import { estimateChatHoldCentsForModel } from '@pagespace/lib/monitoring/chat-pricing';
+import { gateUserCall } from '@/lib/ai/core/user-credit-hold';
 import { capStepToolPayloads } from '@/lib/ai/core/cap-step-tool-payloads';
 
 // Nesting cap. Intent is 3+ for richer agent-to-agent composition, but held at 2
@@ -824,36 +829,75 @@ export async function executeAskAgent(
         });
         const { modelMessages: agentModelMessages } = await finishModelRequest({ prepared, tools: executionTools as ToolSet });
 
+        // 10c. Reserve BEFORE the sub-agent runs (WAL-6a, SPEND-1): its tool loop is a model call of
+        // its own, up to 20 steps, so it holds an estimate against the wallet the caller's turn
+        // resolved (a follow-on target: that source or a refusal by name, never a fallback of its own;
+        // a mention's drive wallet; personal with no gated caller) and settles that hold. A wallet
+        // that cannot cover it refuses the consultation and charges nothing.
+        const billedUserId = executionContext?.creditSpend?.userId ?? userId;
+        const askSpend = executionContext?.creditSpend?.spend ?? PERSONAL_SPEND;
+        const admission = callAdmission({
+          meteringExempt: isMeteringExempt(resolvedProvider),
+          spend: askSpend,
+          estCostCents: estimateChatHoldCentsForModel(resolvedModelName),
+        });
+        let holdId: string | undefined;
+        let settleWalletId: string | undefined;
+        if (admission.gate) {
+          const gate = await gateUserCall(billedUserId, { spend: admission.spend, estCostCents: admission.estCostCents });
+          if (!gate.allowed) {
+            loggers.ai.info('ask_agent refused by the credit gate', { agentId, userId: billedUserId, reason: gate.reason, refusal: gate.refusal?.reason });
+            return {
+              success: false,
+              agent: agentPath,
+              error: `Not enough credits to consult this agent (${gate.refusal?.reason ?? gate.reason})`,
+              refusal: gate.refusal ?? null,
+              question,
+              context,
+              metadata: { processingTime: Date.now() - startTime, callDepth: callDepth + 1 },
+            };
+          }
+          holdId = gate.holdId;
+          settleWalletId = gate.walletId;
+        }
+
         // 11. Process with target agent's configuration (ephemeral - no persistence)
-        const response = Object.keys(allAgentTools).length > 0
-          ? await generateText({
-              model,
-              system: systemPrompt,
-              messages: agentModelMessages,
-              tools: { ...allAgentTools, ...finishTool } as Parameters<typeof generateText>[0]['tools'],
-              experimental_context: nestedContext,
-              stopWhen: [hasToolCall(FINISH_TOOL_NAME), stepCountIs(20)],
-              // Per-step cap: history is prepared once, but this loop runs many model
-              // calls, so one run's oversized tool payloads would otherwise accumulate
-              // for its whole duration (#2461 — see cap-step-tool-payloads.ts).
-              prepareStep: ({ messages: stepMessages }) => ({ messages: capStepToolPayloads(stepMessages) }),
-              maxRetries: 3,
-              onStepFinish: ({ toolCalls }) => {
-                if (toolCalls?.length > 0) {
-                  loggers.ai.debug('Sub-agent tool execution:', {
-                    agentId,
-                    toolCalls: toolCalls.map(tc => tc.toolName),
-                  });
-                }
-              },
-            })
-          : await generateText({
-              model,
-              system: systemPrompt,
-              messages: agentModelMessages,
-              experimental_context: nestedContext,
-              maxRetries: 3,
-            });
+        let response: Awaited<ReturnType<typeof generateText>>;
+        try {
+          response = Object.keys(allAgentTools).length > 0
+            ? await generateText({
+                model,
+                system: systemPrompt,
+                messages: agentModelMessages,
+                tools: { ...allAgentTools, ...finishTool } as Parameters<typeof generateText>[0]['tools'],
+                experimental_context: nestedContext,
+                stopWhen: [hasToolCall(FINISH_TOOL_NAME), stepCountIs(20)],
+                // Per-step cap: history is prepared once, but this loop runs many model
+                // calls, so one run's oversized tool payloads would otherwise accumulate
+                // for its whole duration (#2461 — see cap-step-tool-payloads.ts).
+                prepareStep: ({ messages: stepMessages }) => ({ messages: capStepToolPayloads(stepMessages) }),
+                maxRetries: 3,
+                onStepFinish: ({ toolCalls }) => {
+                  if (toolCalls?.length > 0) {
+                    loggers.ai.debug('Sub-agent tool execution:', {
+                      agentId,
+                      toolCalls: toolCalls.map(tc => tc.toolName),
+                    });
+                  }
+                },
+              })
+            : await generateText({
+                model,
+                system: systemPrompt,
+                messages: agentModelMessages,
+                experimental_context: nestedContext,
+                maxRetries: 3,
+              });
+        } catch (error) {
+          // Nothing reached the settle: free the reservation now rather than at its TTL.
+          if (holdId) await releaseHold(holdId);
+          throw error;
+        }
 
         // Fire-and-forget compaction: after() is unavailable inside tool execution,
         // so we launch directly — the parent stream is still open but this is safe
@@ -864,22 +908,15 @@ export async function executeAskAgent(
           void runCompaction({ ...prepared.pendingCompaction, billedUserId: executionContext?.creditSpend?.userId });
         }
 
-        // Bill the requesting user for the sub-agent run. Use totalUsage so all
-        // tool-loop round-trips (up to stepCountIs(20)) are metered, not just the
-        // final step. Tracked against the resolved model name so the cost is real.
-        // Awaited (not fire-and-forget): trackAIUsage persists the usage log and
-        // debits the balance inside the returned promise, so awaiting here keeps the
-        // sub-agent charge durable if the tool returns into a serverless freeze.
-        // No holdId: every caller gates before invoking this engine (a nested call
-        // runs inside an already-gated parent request; the channel mention responder
-        // takes its own hold per reply via acquireMentionCreditHold and releases it when
-        // this returns); this decrement draws the balance directly, so there is no
-        // reservation to settle here. It draws the wallet the CALLER's gate named
-        // (walletId), because an agent's spend belongs to the session it runs in, not
-        // the drive the agent lives in (SPEND-7).
+        // Settle the sub-agent run on its own hold. totalUsage meters every tool-loop round-trip
+        // (up to stepCountIs(20)), against the resolved model name so the cost is real. Awaited
+        // so the charge is durable if the tool returns into a serverless freeze. The hold names
+        // the wallet the CALLER's turn resolved (SPEND-7: an agent's spend belongs to the session
+        // it runs in, not the drive the agent lives in); a flat-rate provider takes no hold and
+        // settles nothing.
         await AIMonitoring.trackUsage({
           // The consumer the turn's gate bound (a manual Run's presser), else the caller (review #2817 P2-3).
-          userId: executionContext?.creditSpend?.userId ?? userId,
+          userId: billedUserId,
           provider: resolvedProvider,
           model: resolvedModelName,
           source: 'page_agent',
@@ -889,9 +926,10 @@ export async function executeAskAgent(
           conversationId: activeConversationId,
           pageId: agentId,
           driveId: targetAgent.driveId,
-          walletId: executionContext?.creditSpend?.walletId,
-          // WAL-6b: no hold of its own, so it carries its turn's fallback origin to the settle.
-          fallbackFromWalletId: spendFallbackFromWalletId(executionContext?.creditSpend?.spend),
+          holdId,
+          walletId: settleWalletId,
+          // WAL-6b: the hold records the turn's fallback origin; carried too for a hold-less settle.
+          fallbackFromWalletId: spendFallbackFromWalletId(askSpend),
           success: true,
           metadata: { feature: 'ask_agent', agentCallDepth: callDepth + 1 },
         });

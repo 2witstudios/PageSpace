@@ -182,6 +182,11 @@ vi.mock('../../core/ai-providers-config', () => ({
   DEFAULT_MODEL: 'openai/gpt-5.4-nano',
 }));
 
+const mockGateUserCall = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/ai/core/user-credit-hold', () => ({ gateUserCall: mockGateUserCall }));
+const mockReleaseHold = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock('@pagespace/lib/billing/credit-consume', () => ({ releaseHold: mockReleaseHold }));
+
 import { agentCommunicationTools, executeAskAgent } from '../agent-communication-tools';
 import { db } from '@pagespace/db/db';
 import { canActorViewPage, canActorConsultAgent, isMcpScoped, resolveActingAgentId, filterDriveIdsByAppTokenScope, filterDriveIdsByMcpScope } from '../actor-permissions';
@@ -376,6 +381,7 @@ describe('agent-communication-tools', () => {
       } as unknown as ReturnType<typeof generateText> extends Promise<infer T> ? T : never);
       vi.mocked(messageRepository.savePageMessage).mockResolvedValue({ saved: true, rev: 1 });
       vi.mocked(AIMonitoring.trackUsage).mockClear();
+      mockGateUserCall.mockResolvedValue({ allowed: true, reason: 'ok', holdId: 'hold-ask', walletId: 'w-drive-1' });
     });
 
     it('requires user authentication', async () => {
@@ -1209,6 +1215,51 @@ describe('agent-communication-tools', () => {
           { toolCallId: '1', messages: [], experimental_context: { userId: 'user-123' } as ToolExecutionContext },
         );
         expect(vi.mocked(prepareHistoryForModel).mock.calls[0][0].spend).toEqual({ kind: 'personal' });
+      });
+    });
+
+    describe('its own reservation (WAL-6a)', () => {
+      const turnTarget = { kind: 'drive' as const, driveId: 'drive-1', chosen: 'drive_wallet' as const, followOn: true as const };
+      const run = () => executeAskAgent(
+        { agentPath: '/test/agent', agentId: 'agent-1', question: 'Test question' },
+        {
+          toolCallId: '1', messages: [],
+          experimental_context: { userId: 'user-123', creditSpend: { spend: turnTarget, walletId: 'w-drive-1' } } as ToolExecutionContext,
+        },
+      );
+
+      it('WAL-6 (partial) SPEND-1 (partial) the sub-agent reserves against its turn\'s target BEFORE its tool loop runs, and settles exactly that hold on that wallet', async () => {
+        const order: string[] = [];
+        mockGateUserCall.mockImplementationOnce(async () => { order.push('gate'); return { allowed: true, reason: 'ok', holdId: 'hold-ask', walletId: 'w-drive-1' }; });
+        vi.mocked(generateText).mockImplementationOnce((async () => { order.push('model'); return { text: 'ok', steps: [], totalUsage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } }; }) as never);
+
+        await run();
+
+        expect(order).toEqual(['gate', 'model']);
+        expect(mockGateUserCall).toHaveBeenCalledWith('user-123', { spend: turnTarget, estCostCents: expect.any(Number) });
+        expect(mockGateUserCall.mock.calls[0][1].estCostCents).toBeGreaterThan(0);
+        expect(AIMonitoring.trackUsage).toHaveBeenCalledWith(expect.objectContaining({ holdId: 'hold-ask', walletId: 'w-drive-1' }));
+        expect(mockReleaseHold).not.toHaveBeenCalled();
+      });
+
+      it('WAL-6 (partial) a wallet that cannot cover the sub-agent refuses the consultation: no model call, nothing charged', async () => {
+        mockGateUserCall.mockResolvedValueOnce({ allowed: false, reason: 'source_refused', refusal: { source: 'drive_wallet', reason: 'source_empty', options: [] } });
+
+        const result = await run();
+
+        expect(result).toMatchObject({ success: false, refusal: { source: 'drive_wallet', reason: 'source_empty' } });
+        expect(generateText).not.toHaveBeenCalled();
+        expect(AIMonitoring.trackUsage).not.toHaveBeenCalled();
+      });
+
+      it('a sub-agent run that fails before the settle releases its hold at once', async () => {
+        vi.mocked(generateText).mockRejectedValueOnce(new Error('provider down'));
+
+        const result = await run();
+
+        expect(result).toMatchObject({ success: false });
+        expect(mockReleaseHold).toHaveBeenCalledWith('hold-ask');
+        expect(AIMonitoring.trackUsage).not.toHaveBeenCalled();
       });
     });
 
