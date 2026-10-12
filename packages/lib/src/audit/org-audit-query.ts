@@ -13,7 +13,7 @@
  * The rows are read through the resolved audit binding, the same store the chain writes to and the
  * verifier reads (the Admin PG when dedicated).
  */
-import { and, desc, eq, inArray, lt, or, sql } from '@pagespace/db/operators';
+import { and, desc, eq, inArray, lt, or, sql, type SQL } from '@pagespace/db/operators';
 import { db } from '@pagespace/db/db';
 import { users } from '@pagespace/db/schema/auth';
 import { orgMembers } from '@pagespace/db/schema/organizations';
@@ -38,6 +38,8 @@ export interface OrgAuditPage {
 
 export interface OrgAuditQueryDeps {
   auditDb?: SecurityAuditDatabase;
+  /** Rows per CSV export chunk (default ORG_AUDIT_MAX_LIMIT); a test pages a small log in small chunks. */
+  exportChunk?: number;
 }
 
 interface RawOrgAuditRow {
@@ -51,7 +53,28 @@ interface RawOrgAuditRow {
 }
 
 /** When the event's change happened: the staged time an outbox delivery carries, else the chain row's own time. */
-const occurredAt = sql`coalesce((${securityAuditLog.details}->>'occurredAt')::timestamptz at time zone 'utc', ${securityAuditLog.timestamp})`;
+const stagedAt = sql`(${securityAuditLog.details}->>'occurredAt')`;
+
+/**
+ * When the event's change happened is inside [from, to]: an outbox delivery's details.occurredAt (an ISO string, so
+ * compared as text it is a range on idx_security_audit_org_occurred_at), else — a row with none — the row's own time.
+ */
+function occurredWithin(from: Date | null, to: Date | null): SQL[] {
+  const out: SQL[] = [];
+  if (from) out.push(sql`(${stagedAt} >= ${from.toISOString()} or (${stagedAt} is null and ${securityAuditLog.timestamp} >= ${from.toISOString()}::timestamp))`);
+  if (to) out.push(sql`(${stagedAt} <= ${to.toISOString()} or (${stagedAt} is null and ${securityAuditLog.timestamp} <= ${to.toISOString()}::timestamp))`);
+  return out;
+}
+
+/**
+ * AUD-1: outbox delivery is at least once. A row is shown only if no EARLIER row of the log carries its outboxId, so a
+ * re-delivered event appears once across every page and export chunk (idx_security_audit_outbox_id).
+ */
+const firstDelivery = sql`(${securityAuditLog.details}->>'outboxId' is null or not exists (
+  select 1 from ${securityAuditLog} as earlier_copy
+  where earlier_copy.details->>'outboxId' = ${securityAuditLog.details}->>'outboxId'
+    and earlier_copy.chain_seq < ${securityAuditLog.chainSeq}
+))`;
 
 async function readRows(orgId: string, filter: OrgAuditFilter, auditDb: SecurityAuditDatabase): Promise<RawOrgAuditRow[]> {
   const conditions = [
@@ -66,8 +89,7 @@ async function readRows(orgId: string, filter: OrgAuditFilter, auditDb: Security
     )!);
   }
   // AUD-1: an outbox-delivered event is dated by its change (details.occurredAt), not by its delivery.
-  if (filter.from) conditions.push(sql`${occurredAt} >= ${filter.from.toISOString()}::timestamptz at time zone 'utc'`);
-  if (filter.to) conditions.push(sql`${occurredAt} <= ${filter.to.toISOString()}::timestamptz at time zone 'utc'`);
+  conditions.push(...occurredWithin(filter.from, filter.to), firstDelivery);
   if (filter.before !== null) conditions.push(lt(securityAuditLog.chainSeq, filter.before));
   return auditDb
     .select({
@@ -125,17 +147,8 @@ export async function queryOrgAuditEvents(orgId: string, filter: OrgAuditFilter,
   const rows = await readRows(orgId, filter, auditDb);
   const page = rows.slice(0, filter.limit);
   const names = await memberNames(orgId, [...new Set(page.map((r) => r.userId).filter((id): id is string => id !== null))]);
-  // AUD-1: outbox delivery is at least once; a re-delivered event (same outboxId) is shown once.
-  const seen = new Set<string>();
-  const unique = page.filter((row) => {
-    const outboxId = row.details?.outboxId;
-    if (typeof outboxId !== 'string') return true;
-    if (seen.has(outboxId)) return false;
-    seen.add(outboxId);
-    return true;
-  });
   return {
-    entries: unique.map((row) => toEntry(row, names)).filter((e): e is OrgAuditEntry => e !== null),
+    entries: page.map((row) => toEntry(row, names)).filter((e): e is OrgAuditEntry => e !== null),
     nextCursor: rows.length > filter.limit ? page[page.length - 1].chainSeq : null,
   };
 }
@@ -158,7 +171,7 @@ export async function* exportOrgAuditCsv(
   let before: number | null = null;
   let written = 0;
   for (;;) {
-    const page = await queryOrgAuditEvents(orgId, { ...filter, limit: EXPORT_CHUNK, before }, deps);
+    const page = await queryOrgAuditEvents(orgId, { ...filter, limit: deps.exportChunk ?? EXPORT_CHUNK, before }, deps);
     const room = ORG_AUDIT_EXPORT_MAX_ROWS - written;
     const take = page.entries.slice(0, room);
     if (take.length > 0) yield take.map((entry) => `${orgAuditCsvRow(entry)}\r\n`).join('');

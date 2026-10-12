@@ -255,6 +255,15 @@ const securityAuditLogIndexes = (table: SecurityAuditLogIndexColumns) => ({
   orgChainSeqIdx: index('idx_security_audit_org_chain_seq')
     .on(sql`(${table.details} ->> 'orgId')`, table.chainSeq)
     .where(sql`(${table.details} ->> 'orgId') IS NOT NULL`),
+  // The org audit log's time filter (AUD-1/AUD-3): an outbox-delivered event is dated by details.occurredAt, an ISO
+  // string (lexically ordered), so one org's rows in a time window are an index range.
+  orgOccurredAtIdx: index('idx_security_audit_org_occurred_at')
+    .on(sql`(${table.details} ->> 'orgId')`, sql`(${table.details} ->> 'occurredAt')`)
+    .where(sql`(${table.details} ->> 'orgId') IS NOT NULL`),
+  // At-least-once outbox delivery: the org log shows each outboxId once, looking up earlier copies by it.
+  outboxIdIdx: index('idx_security_audit_outbox_id')
+    .on(sql`(${table.details} ->> 'outboxId')`, table.chainSeq)
+    .where(sql`(${table.details} ->> 'outboxId') IS NOT NULL`),
 });
 
 export const defineSecurityAuditLogTable = (opts: { crossPlaneUserFk: boolean }) =>
