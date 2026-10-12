@@ -526,7 +526,7 @@ describe('verified email domains (real Postgres)', () => {
       if (join === 'invitation') {
         const tokens: string[] = [];
         const invited = await createOrRotateInvitation({
-          orgId: org.id, email, role: 'MEMBER', invitedBy: jono.id, actorRole: 'OWNER', now: new Date(),
+          orgId: org.id, email, role: 'MEMBER', invitedBy: jono.id, now: new Date(),
           deliver: async (_i, token) => { tokens.push(token); },
         });
         if (!invited.ok) throw new Error(`invite: ${invited.reason}`);

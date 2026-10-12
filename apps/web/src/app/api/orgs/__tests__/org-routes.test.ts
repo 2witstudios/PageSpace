@@ -530,7 +530,7 @@ describe('org route behaviour', () => {
     expect(invitations.revokeInvitation).not.toHaveBeenCalled();
   });
 
-  it('POL-5 (partial) the route reaches the service for a plain Member with their ROLE, and the service\'s policy refusal is answered 403 naming the policy (create and resend)', async () => {
+  it('POL-5 (partial) the route reaches the service for a plain Member as the ACTOR (the service reads their role itself), and the service\'s policy refusal is answered 403 naming the policy (create and resend)', async () => {
     const refusal = { ok: false as const, status: 403 as const, code: 'org_policy' as const, reason: 'org_policy' as const, policy: 'whoCanInvite' as const, message: 'This organization lets only Owners and Admins invite people.' };
     vi.mocked(invitations.createOrRotateInvitation).mockResolvedValue(refusal);
     vi.mocked(invitations.resendInvitation).mockResolvedValue(refusal);
@@ -542,8 +542,26 @@ describe('org route behaviour', () => {
     expect(created.status).toBe(403);
     expect(await created.json()).toEqual({ error: refusal.message, code: 'org_policy', policy: 'whoCanInvite' });
     expect(resent.status).toBe(403);
-    expect(invitations.createOrRotateInvitation).toHaveBeenCalledWith(expect.objectContaining({ actorRole: 'MEMBER' }));
-    expect(invitations.resendInvitation).toHaveBeenCalledWith(expect.objectContaining({ actorRole: 'MEMBER' }));
+    expect(invitations.createOrRotateInvitation).toHaveBeenCalledWith(expect.objectContaining({ invitedBy: CALLER }));
+    expect(invitations.resendInvitation).toHaveBeenCalledWith(expect.objectContaining({ actorId: CALLER }));
+    // The gate's role is never handed over: the service re-reads it inside its transaction.
+    expect(invitations.createOrRotateInvitation).toHaveBeenCalledWith(expect.not.objectContaining({ actorRole: expect.anything() }));
+    expect(invitations.resendInvitation).toHaveBeenCalledWith(expect.not.objectContaining({ actorRole: expect.anything() }));
+  });
+
+  it('ORG-3 (partial) an inviter removed from the org between the gate and the write is answered 404 like any non-member (create and resend)', async () => {
+    asRole('ADMIN');
+    const gone = { ok: false as const, status: 404 as const, reason: 'not_member' as const };
+    vi.mocked(invitations.createOrRotateInvitation).mockResolvedValue(gone);
+    vi.mocked(invitations.resendInvitation).mockResolvedValue(gone);
+    for (const res of [
+      await invitationsRoute.POST(req('POST', { email: 'lena@northwind.test' }), params({ orgId: ORG_ID })),
+      await resendRoute.POST(req('POST'), params({ orgId: ORG_ID, invitationId: 'inv_1' })),
+    ]) {
+      expect(res.status).toBe(404);
+      expect(await res.json()).toMatchObject({ code: 'org_not_found' });
+    }
+    expect(deliverOrgInvite).not.toHaveBeenCalled();
   });
 
   it('ORG-3 (partial) inviting refuses an existing member, an unverified inviter, and an OWNER role', async () => {
@@ -570,7 +588,7 @@ describe('org route behaviour', () => {
     expect(deliverOrgInvite).not.toHaveBeenCalled();
   });
 
-  it('SEAT-4 (partial) a refused seat answers 402 with the seats_full code and the message, audits it, sends no email, and passes the inviter\'s role to the service', async () => {
+  it('SEAT-4 (partial) a refused seat answers 402 with the seats_full code and the message, audits it, sends no email, and passes the inviter and the Stripe port to the service', async () => {
     asRole('ADMIN');
     const refusal = { ok: false as const, status: 402 as const, reason: 'seats_full' as const, message: 'All 5 seats in this organization are taken.', purchased: 5, held: 5 };
     vi.mocked(invitations.createOrRotateInvitation).mockResolvedValue(refusal);
@@ -578,11 +596,11 @@ describe('org route behaviour', () => {
     expect(res.status).toBe(402);
     expect(await res.json()).toEqual({ error: refusal.message, code: 'seats_full' });
     expect(deliverOrgInvite).not.toHaveBeenCalled();
-    expect(invitations.createOrRotateInvitation).toHaveBeenCalledWith(expect.objectContaining({ actorRole: 'ADMIN', seatBilling: expect.any(Object) }));
+    expect(invitations.createOrRotateInvitation).toHaveBeenCalledWith(expect.objectContaining({ invitedBy: CALLER, seatBilling: expect.any(Object) }));
     expect(auditRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: 'authz.access.denied', details: expect.objectContaining({ reason: 'seats_full', purchased: 5, held: 5 }) }));
   });
 
-  it('SEAT-4 (partial) resending an expired invite into a full org answers 402 seats_full, audits it, sends no email, and passes the resender\'s role and the Stripe port', async () => {
+  it('SEAT-4 (partial) resending an expired invite into a full org answers 402 seats_full, audits it, sends no email, and passes the resender and the Stripe port', async () => {
     asRole('ADMIN');
     const refusal = { ok: false as const, status: 402 as const, reason: 'seats_full' as const, message: 'All 5 seats in this organization are taken.', purchased: 5, held: 5 };
     vi.mocked(invitations.resendInvitation).mockResolvedValue(refusal);
@@ -590,7 +608,7 @@ describe('org route behaviour', () => {
     expect(res.status).toBe(402);
     expect(await res.json()).toEqual({ error: refusal.message, code: 'seats_full' });
     expect(deliverOrgInvite).not.toHaveBeenCalled();
-    expect(invitations.resendInvitation).toHaveBeenCalledWith(expect.objectContaining({ actorRole: 'ADMIN', seatBilling: expect.any(Object) }));
+    expect(invitations.resendInvitation).toHaveBeenCalledWith(expect.objectContaining({ actorId: CALLER, seatBilling: expect.any(Object) }));
     expect(auditRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: 'authz.access.denied', details: expect.objectContaining({ reason: 'seats_full', operation: 'resend_org_invitation' }) }));
   });
 

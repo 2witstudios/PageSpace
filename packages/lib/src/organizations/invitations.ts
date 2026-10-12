@@ -23,6 +23,7 @@ import { policyRefusal, type PolicyRefusal } from './sharing-decisions';
 import { checkOrgActive, checkOrgMayLoosen, ORG_LAPSED_CODE, type OrgLapsedRefusal } from './status';
 import { admitSeat, recordSeatAdmissionEvents, type SeatAdmission, type SeatBillingPort } from './seat-service';
 import { recordOrgAuditEventAfterCommit } from '../audit/org-audit';
+import { decideOrgRole, type OrgAuthorization } from './authorize';
 import {
   publishOrgMembershipSyncEvents,
   syncOrgMemberAccess,
@@ -117,6 +118,32 @@ function lapsedRefusal(check: OrgLapsedRefusal): OrgInviteLapsed {
   return { ok: false, status: 402, reason: check.code, message: check.message };
 }
 
+/** The inviter is no longer a member: the route's gate ran before this transaction. */
+export type InviterNotMember = Extract<OrgAuthorization, { ok: false; status: 404 }>;
+
+/**
+ * The inviter's org role, read again under a share lock inside the invite transaction. The route
+ * authorized the caller before the transaction began, so an Admin demoted (or removed) in between
+ * is judged on what they are NOW, as role changes and removals re-check their actor. The share
+ * lock conflicts with changeMemberRole's row lock, so a concurrent demotion waits for this invite
+ * or this invite waits for it; never both judged on the old role.
+ */
+async function lockInviterRole(
+  tx: Tx,
+  orgId: string,
+  userId: string,
+): Promise<{ ok: true; role: OrgRole } | InviterNotMember> {
+  const [row] = await tx
+    .select({ role: orgMembers.role })
+    .from(orgMembers)
+    .where(and(eq(orgMembers.orgId, orgId), eq(orgMembers.userId, userId)))
+    .for('share');
+  const decision = decideOrgRole({ membershipRole: row?.role ?? null, minRole: 'MEMBER' });
+  if (decision.ok) return decision;
+  // minRole MEMBER refuses only a non-member.
+  return { ok: false, status: 404, reason: 'not_member' };
+}
+
 /**
  * POL-5: may this person invite, under the org's who-can-invite policy (read now, inside the transaction)? Only an Owner
  * or Admin may hand out the Admin role, whatever the policy says.
@@ -137,6 +164,7 @@ export type OrgInviteSeatRefusal = Extract<SeatAdmission, { ok: false }>;
 export type IssueInvitationResult =
   | { ok: true; invitation: PublicOrgInvitation; token: string; rotated: boolean }
   | { ok: false; status: 409; reason: 'already_member' | 'already_invited' }
+  | InviterNotMember
   | OrgInviteLapsed
   | PolicyRefusal
   | OrgInviteSeatRefusal
@@ -145,6 +173,7 @@ export type IssueInvitationResult =
 type Issued =
   | { ok: true; invitation: OrgInvitation; token: string; previous: OrgInvitation | null }
   | { ok: false; status: 409; reason: 'already_member' | 'already_invited' }
+  | InviterNotMember
   | OrgInviteLapsed
   | PolicyRefusal
   | OrgInviteSeatRefusal;
@@ -158,9 +187,8 @@ export async function createOrRotateInvitation(input: {
   orgId: string;
   email: string;
   role: InvitableRole;
+  /** The inviter. Their org role is read inside the transaction (lockInviterRole), never taken from the caller. */
   invitedBy: string;
-  /** The inviter's org role: what the who-can-invite policy (POL-5) is judged on, and the wording of a seat refusal. */
-  actorRole: OrgRole;
   now: Date;
   deliver: InviteDelivery;
   /** Stripe's seat item, for an auto-add raise (SEAT-4). Only a raise needs it. */
@@ -171,11 +199,13 @@ export async function createOrRotateInvitation(input: {
   try {
     issued = await db.transaction(async (tx): Promise<Issued> => {
       await lockOrgInviteAddress(tx, input.orgId, input.email);
+      const actor = await lockInviterRole(tx, input.orgId, input.invitedBy);
+      if (!actor.ok) return actor;
       // SEAT-9: inviting is an org-only capability; a lapsed org is refused before any write.
       const active = await checkOrgActive(input.orgId, { executor: tx, now: input.now });
       if (!active.ok) return lapsedRefusal(active);
       // POL-5: who may invite, read here in the same transaction and before anything is written.
-      const refusal = await inviterRefusal(tx, input.orgId, input.actorRole, input.role);
+      const refusal = await inviterRefusal(tx, input.orgId, actor.role, input.role);
       if (refusal) return refusal;
       const isExistingMember = await isEmailAMember(input.orgId, input.email, tx);
       const [openInvite] = await tx
@@ -197,7 +227,7 @@ export async function createOrRotateInvitation(input: {
       // SEAT-3/4/5: a new or rotated invite holds a seat. Decided under the org's billing lock,
       // after the address is known to need one and before anything is written; an auto-add
       // raise and this invite commit or roll back together.
-      seat = await admitSeat(tx, { orgId: input.orgId, actorRole: input.actorRole }, input.seatBilling);
+      seat = await admitSeat(tx, { orgId: input.orgId, actorRole: actor.role }, input.seatBilling);
       if (!seat.ok) return seat;
 
       const { token, hash } = generateToken(ORG_INVITE_TOKEN_PREFIX);
@@ -269,6 +299,7 @@ export async function listOpenInvitations(orgId: string): Promise<PublicOrgInvit
 export type ResendInvitationResult =
   | { ok: true; invitation: PublicOrgInvitation; token: string }
   | { ok: false; status: 404; reason: 'not_found' }
+  | InviterNotMember
   | OrgInviteLapsed
   | PolicyRefusal
   | OrgInviteSeatRefusal
@@ -287,10 +318,8 @@ export type ResendInvitationResult =
 export async function resendInvitation(input: {
   orgId: string;
   invitationId: string;
-  /** The resender's org role: what the who-can-invite policy (POL-5) is judged on, and the wording of a seat refusal. */
-  actorRole: OrgRole;
-  /** Who resent it: the audit actor (AUD-1). */
-  actorId?: string;
+  /** Who resent it: the audit actor (AUD-1). Their org role is read inside the transaction, never taken from the caller. */
+  actorId: string;
   now: Date;
   deliver: InviteDelivery;
   /** Stripe's seat item, for an auto-add raise when the resent invite was expired (SEAT-4). */
@@ -307,6 +336,8 @@ export async function resendInvitation(input: {
       .where(and(eq(orgInvitations.id, input.invitationId), eq(orgInvitations.orgId, input.orgId), isNull(orgInvitations.acceptedAt)))
       .limit(1);
     if (peek) await lockOrgInviteAddress(tx, input.orgId, peek.email);
+    const actor = await lockInviterRole(tx, input.orgId, input.actorId);
+    if (!actor.ok) return actor;
     // SEAT-9: a re-sent invite is an invite; the pending one keeps its link and its seat.
     const active = await checkOrgActive(input.orgId, { executor: tx, now: input.now });
     if (!active.ok) return lapsedRefusal(active);
@@ -323,10 +354,10 @@ export async function resendInvitation(input: {
       .for('update');
     if (!previous) return null;
     // POL-5: a re-sent invite is an invite. Judged on the role the invitation carries.
-    const refusal = await inviterRefusal(tx, input.orgId, input.actorRole, previous.role);
+    const refusal = await inviterRefusal(tx, input.orgId, actor.role, previous.role);
     if (refusal) return refusal;
     if (!isLiveInvite(previous, input.now)) {
-      seat = await admitSeat(tx, { orgId: input.orgId, actorRole: input.actorRole }, input.seatBilling);
+      seat = await admitSeat(tx, { orgId: input.orgId, actorRole: actor.role }, input.seatBilling);
       if (!seat.ok) return seat;
     }
     const [invitation] = await tx

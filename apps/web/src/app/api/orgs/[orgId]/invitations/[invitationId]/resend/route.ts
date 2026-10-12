@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { apiError } from '@/lib/api/api-error';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
@@ -39,7 +40,6 @@ export async function POST(
     const result = await resendInvitation({
       orgId,
       invitationId,
-      actorRole: gate.role ?? 'MEMBER',
       actorId: gate.userId,
       seatBilling: defaultSeatBilling(),
       now: new Date(),
@@ -58,6 +58,8 @@ export async function POST(
         loggers.api.error('Failed to resend organization invitation email', result.cause as Error, { orgId });
         return NextResponse.json({ error: 'Failed to send the invitation email', code: 'delivery_failed' }, { status: 502 });
       }
+      // Removed from the org between the gate and the write: the same 404 the gate gives a non-member.
+      if (result.reason === 'not_member') return apiError(404, 'org_not_found', 'Organization not found');
       if (result.reason === 'org_lapsed') return orgLapsedResponse(result.message);
       if (result.reason === 'org_policy') return orgPolicyRefusalResponse(result);
       if (result.reason === 'seats_full') {

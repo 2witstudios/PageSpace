@@ -10,7 +10,7 @@
 import { describe, it, expect, beforeAll, afterEach, vi } from 'vitest';
 import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db';
-import { eq, inArray, sql } from '@pagespace/db/operators';
+import { and, eq, inArray, sql } from '@pagespace/db/operators';
 import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
 import { users } from '@pagespace/db/schema/auth';
@@ -164,13 +164,23 @@ async function teardownAll(): Promise<void> {
 let emailSeq = 0;
 const freshEmail = () => `invitee-${emailSeq++}-${createId()}@northwind.test`;
 
-function invite(f: Fixture, stripe: RecordingSeatStripe | undefined, email = freshEmail(), actorRole: 'OWNER' | 'ADMIN' = 'OWNER') {
+/**
+ * The inviter's role is read from org_members inside the service, so an ADMIN actor is a real Admin:
+ * the fixture's second member, promoted.
+ */
+async function actorAs(f: Fixture, role: 'OWNER' | 'ADMIN'): Promise<string> {
+  if (role === 'OWNER') return f.ownerId;
+  const adminId = f.memberIds[1];
+  await db.update(orgMembers).set({ role: 'ADMIN' }).where(and(eq(orgMembers.orgId, f.orgId), eq(orgMembers.userId, adminId)));
+  return adminId;
+}
+
+async function invite(f: Fixture, stripe: RecordingSeatStripe | undefined, email = freshEmail(), actorRole: 'OWNER' | 'ADMIN' = 'OWNER') {
   return createOrRotateInvitation({
     orgId: f.orgId,
     email,
     role: 'MEMBER',
-    invitedBy: f.ownerId,
-    actorRole,
+    invitedBy: await actorAs(f, actorRole),
     now: new Date(),
     deliver,
     seatBilling: stripe,
@@ -187,8 +197,8 @@ async function expiredInvite(f: Fixture): Promise<{ id: string; email: string }>
   return { id: row.id, email };
 }
 
-function resend(f: Fixture, invitationId: string, stripe: RecordingSeatStripe | undefined, actorRole: 'OWNER' | 'ADMIN' = 'OWNER') {
-  return resendInvitation({ orgId: f.orgId, invitationId, actorRole, now: new Date(), deliver, seatBilling: stripe });
+async function resend(f: Fixture, invitationId: string, stripe: RecordingSeatStripe | undefined, actorRole: 'OWNER' | 'ADMIN' = 'OWNER') {
+  return resendInvitation({ orgId: f.orgId, invitationId, actorId: await actorAs(f, actorRole), now: new Date(), deliver, seatBilling: stripe });
 }
 
 const storedExtra = async (orgId: string) => (await db.select().from(orgSubscriptions).where(eq(orgSubscriptions.orgId, orgId)))[0]?.extraSeatQuantity;
@@ -463,7 +473,7 @@ describe('seat accounting (real Postgres)', () => {
       const f = await buildOrg({ members: 5, autoAdd: true });
       const stripe = new RecordingSeatStripe(0);
       const result = await createOrRotateInvitation({
-        orgId: f.orgId, email: freshEmail(), role: 'MEMBER', invitedBy: f.ownerId, actorRole: 'OWNER', now: new Date(),
+        orgId: f.orgId, email: freshEmail(), role: 'MEMBER', invitedBy: f.ownerId, now: new Date(),
         deliver: async () => { throw new Error('smtp down'); }, seatBilling: stripe,
       });
       expect(result).toMatchObject({ ok: false, reason: 'delivery_failed' });
