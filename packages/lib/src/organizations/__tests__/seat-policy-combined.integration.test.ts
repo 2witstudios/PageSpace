@@ -101,6 +101,7 @@ describe('seat admission and the policy layer together (real Postgres)', () => {
       orgId: org.id, stripeSubscriptionId: `sub_${createId()}`, stripeBasePriceId: 'pb', stripeBaseItemId: 'ib', stripeSeatPriceId: 'ps', stripeSeatItemId: 'is',
       extraSeatQuantity: 0, status: 'active', currentPeriodStart: new Date(Date.now() - 20 * 86_400_000), currentPeriodEnd: new Date(Date.now() + 10 * 86_400_000),
     });
+  await factories.fundOrgSubscription(org.id);
     const drive = await factories.createDrive(owner.id, { name: 'Product', slug: `product-${createId()}`, orgId: org.id, orgVisibility: 'OPEN' });
     created.driveId = drive.id;
     await factories.createDriveMember(drive.id, marcus.id, { source: 'org' });

@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, jsonb, pgEnum, index, uniqueIndex, unique, integer, boolean } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, jsonb, pgEnum, index, uniqueIndex, unique, integer, boolean, check } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import { users } from './auth';
@@ -135,6 +135,20 @@ export const orgSubscriptions = pgTable('org_subscriptions', {
   createdAt: timestamp('createdAt', { mode: 'date' }).default(utcNow).notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).default(utcNow).notNull().$onUpdate(() => new Date()),
 });
+
+/** First verified funding for an org subscription; independent of mirror/event order and wallet depletion. */
+export const orgSubscriptionFunding = pgTable('org_subscription_funding', {
+  id: text('id').primaryKey().$defaultFn(() => createId()),
+  orgId: text('orgId').notNull().references(() => organizations.id, { onDelete: 'cascade' }),
+  stripeSubscriptionId: text('stripeSubscriptionId').notNull(),
+  stripeInvoiceId: text('stripeInvoiceId').notNull().unique(),
+  basis: text('basis').$type<'paid' | 'gift'>().notNull(),
+  paidCents: integer('paidCents').notNull(),
+  verifiedAt: timestamp('verifiedAt', { mode: 'date' }).default(utcNow).notNull(),
+}, (table) => ({
+  orgSubscriptionKey: unique('org_subscription_funding_org_subscription_key').on(table.orgId, table.stripeSubscriptionId),
+  evidenceCheck: check('org_subscription_funding_evidence_check', sql`(${table.basis} = 'paid' AND ${table.paidCents} > 0) OR (${table.basis} = 'gift' AND ${table.paidCents} >= 0)`),
+}));
 
 /**
  * Verified email domains (Spec SEC-1, D-OW-1). An org CLAIMS a domain by adding it; the claim

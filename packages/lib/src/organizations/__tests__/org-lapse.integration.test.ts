@@ -24,7 +24,7 @@ import { wallets, walletFundingLegs } from '@pagespace/db/schema/wallets';
 import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
 import { createOrRotateInvitation, resendInvitation } from '../invitations';
-import { ORG_LAPSED_MESSAGE, getOrgBillingNotice, getOrgStatus, isOrgActive } from '../status';
+import { ORG_LAPSED_MESSAGE, getOrgBillingNotice, getOrgStatus, isOrgActive, checkOrgActive } from '../status';
 import { createOrgDrive, moveDriveOutOfOrg, moveDriveToOrg, type OrgDriveServiceDeps } from '../../services/org-drive-service';
 import { createDriveWallet, getDriveWallet, updateDriveWallet, topUpDriveWallet } from '../../services/drive-wallet-service';
 import { resolveCallSpend } from '../../billing/spend-resolution';
@@ -125,6 +125,7 @@ async function setSubscription(orgId: string, status: string): Promise<void> {
       status,
     })
     .onConflictDoUpdate({ target: orgSubscriptions.orgId, set: { status } });
+  await factories.fundOrgSubscription(orgId);
 }
 
 const deliver = vi.fn(async () => {});
@@ -166,6 +167,15 @@ describe('org lapse gates (orgs on, real Postgres)', () => {
     else process.env.DEPLOYMENT_MODE = originalMode;
     if (world) await teardown(world);
     world = null;
+  });
+
+  it('SEAT-9 (partial) active status and an existing balance cannot activate an unpaid replacement subscription', async () => {
+    if (!world) return;
+    await db.update(orgSubscriptions).set({ stripeSubscriptionId: `sub_unpaid_${createId()}`, status: 'active' }).where(eq(orgSubscriptions.orgId, world.orgId));
+    const before = await footprint(world);
+    expect(await isOrgActive(world.orgId)).toBe(false);
+    expect(await checkOrgActive(world.orgId)).toMatchObject({ ok: false, code: 'org_lapsed' });
+    expect(await footprint(world)).toEqual(before);
   });
 
   it('SEAT-9 (partial) a lapsed org refuses an invite with the lapse refusal message and writes nothing; reactivated, the same invite goes through', async () => {

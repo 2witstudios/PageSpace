@@ -56,7 +56,7 @@ export function OrgBillingBanner({ orgId, orgName, notice, onReactivated }: {
       const res = await startOrgSubscription(orgId);
       if (res.payment.kind === 'confirm_payment') setClientSecret(res.payment.clientSecret);
       else {
-        toast.success(`${orgName} is active again`);
+        toast.message('Billing refreshed. Payment confirmation may still be pending.');
         onReactivated?.();
       }
     } catch (error) {

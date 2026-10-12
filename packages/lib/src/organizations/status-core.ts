@@ -10,6 +10,7 @@ export type OrgStatus = (typeof ORG_STATUSES)[number];
 
 export type OrgLapseReason =
   | 'no_subscription'
+  | 'never_funded'
   | 'trial_unsupported'
   | 'payment_failed'
   | 'unpaid'
@@ -25,6 +26,8 @@ export type OrgStatusResult =
 export interface OrgSubscriptionState {
   /** Stripe status, or unverified_price when the mirror cannot verify the plan items. */
   status: string;
+  /** Verified invoice evidence for this exact org and subscription. */
+  hasVerifiedFunding: boolean;
   trialEnd: Date | null;
   currentPeriodStart: Date | null;
   currentPeriodEnd: Date | null;
@@ -51,7 +54,9 @@ export function deriveOrgStatus(input: {
 
   switch (sub.status) {
     case 'active':
-      return { status: 'active', reason: null };
+      return sub.hasVerifiedFunding === true
+        ? { status: 'active', reason: null }
+        : { status: 'lapsed', reason: 'never_funded' };
     case 'past_due':
       return { status: 'lapsed', reason: 'payment_failed' };
     case 'trialing':

@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({ paymentHere: false, assign: vi.fn(), startOrgSubscription: vi.fn() }));
 
 vi.mock('next-themes', () => ({ useTheme: () => ({ resolvedTheme: 'light' }) }));
-vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn(), message: vi.fn() } }));
 vi.mock('@/components/billing/StripeProvider', () => ({ StripeProvider: ({ children }: { children: React.ReactNode }) => <>{children}</> }));
 vi.mock('../OrgPaymentForm', () => ({ OrgPaymentForm: () => <div>payment element</div> }));
 vi.mock('@/lib/orgs/payment-routes', async (importOriginal) => ({
@@ -14,6 +14,7 @@ vi.mock('@/lib/orgs/payment-routes', async (importOriginal) => ({
 }));
 vi.mock('@/lib/orgs/org-api', async (importOriginal) => ({ ...(await importOriginal<typeof import('@/lib/orgs/org-api')>()), startOrgSubscription: mocks.startOrgSubscription }));
 
+import { toast } from 'sonner';
 import { OrgBillingBanner } from '../OrgBillingBanner';
 
 const reactivate = { kind: 'reactivate' as const, reason: 'canceled' as const, canManageBilling: true as const };
@@ -46,6 +47,17 @@ describe('OrgBillingBanner', () => {
     window.location.search = '?reactivate=1';
     render(<OrgBillingBanner orgId="org_1" orgName="Northwind Labs" notice={reactivate} />);
     await waitFor(() => expect(mocks.startOrgSubscription).toHaveBeenCalledTimes(1));
+  });
+
+  it('does not announce active entitlement merely because Stripe has no payment step', async () => {
+    mocks.paymentHere = true;
+    mocks.startOrgSubscription.mockResolvedValue({ subscription: { status: 'active' }, payment: { kind: 'none' } });
+    const refreshed = vi.fn();
+    render(<OrgBillingBanner orgId="org_1" orgName="Northwind Labs" notice={{ ...reactivate, reason: 'never_funded' }} onReactivated={refreshed} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Reactivate' }));
+    await waitFor(() => expect(refreshed).toHaveBeenCalledOnce());
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(toast.message).toHaveBeenCalledWith('Billing refreshed. Payment confirmation may still be pending.');
   });
 
   it('a member sees the read-only notice and nothing to pay', () => {

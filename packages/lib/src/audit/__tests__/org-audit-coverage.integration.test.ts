@@ -199,6 +199,7 @@ describe('every org mutation writes its event', () => {
       currentPeriodStart: new Date(Date.now() - 86_400_000),
       currentPeriodEnd: new Date(Date.now() + 20 * 86_400_000),
     });
+  await factories.fundOrgSubscription(orgId);
 
     // ── seats and invites: five held, auto-add on raises, off refuses; resend, accept, revoke ─────────
     expect(await setSeatAutoAdd(orgId, true, jono.id)).toBe(true);

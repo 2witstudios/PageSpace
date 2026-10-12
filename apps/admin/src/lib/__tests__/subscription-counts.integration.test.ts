@@ -22,8 +22,9 @@ describe('paid organization subscription counts (real Postgres)', () => {
         { status: 'trialing', gifted: false },
         { status: 'past_due', gifted: false },
         { status: 'canceled', gifted: false },
+        { status: 'active', gifted: false, funded: false },
       ];
-      for (const candidate of cases) {
+      for (const { funded = true, ...candidate } of cases) {
         const suffix = crypto.randomUUID();
         const [org] = await db.insert(organizations).values({ name: 'Counts fixture', slug: `counts-${suffix}`, ownerId: owner.id }).returning();
         orgIds.push(org.id);
@@ -36,6 +37,7 @@ describe('paid organization subscription counts (real Postgres)', () => {
           stripeSeatItemId: `si_seat_${suffix}`,
           ...candidate,
         });
+        if (funded) await factories.fundOrgSubscription(org.id);
       }
       expect(await getActiveSubscriptionsByTier()).toEqual(baseline.map(row => ({
         ...row, count: row.count + (row.tier === 'business' ? 1 : 0),

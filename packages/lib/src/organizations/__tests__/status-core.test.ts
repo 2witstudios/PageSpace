@@ -17,6 +17,7 @@ const DAY = 24 * 60 * 60 * 1000;
 function sub(status: string, over: Partial<OrgSubscriptionState> = {}): OrgSubscriptionState {
   return {
     status,
+    hasVerifiedFunding: true,
     trialEnd: null,
     currentPeriodStart: new Date(NOW.getTime() - 10 * DAY),
     currentPeriodEnd: new Date(NOW.getTime() + 20 * DAY),
@@ -67,6 +68,11 @@ describe('deriveOrgStatus', () => {
     for (const [status, reason] of cases) {
       expect(deriveOrgStatus({ billingEnabled: true, subscription: sub(status), now: NOW })).toEqual({ status: 'lapsed', reason });
     }
+  });
+
+  it('SEAT-9 (partial) an active Stripe subscription without verified funding remains lapsed', () => {
+    const unpaid = { ...sub('active'), hasVerifiedFunding: false };
+    expect(deriveOrgStatus({ billingEnabled: true, subscription: unpaid, now: NOW })).toEqual({ status: 'lapsed', reason: 'never_funded' });
   });
 
   it('SEAT-9 (partial) an unrecognised Stripe status fails closed to lapsed', () => {

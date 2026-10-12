@@ -30,7 +30,7 @@
 import { db } from '@pagespace/db/db';
 import { creditLedger, creditHolds } from '@pagespace/db/schema/credits';
 import { wallets, walletFundingLegs, personalRootWalletOf } from '@pagespace/db/schema/wallets';
-import { organizations, orgSubscriptions } from '@pagespace/db/schema/organizations';
+import { organizations, orgSubscriptions, orgSubscriptionFunding } from '@pagespace/db/schema/organizations';
 import { users } from '@pagespace/db/schema/auth';
 import { subscriptions } from '@pagespace/db/schema/subscriptions';
 import { and, asc, eq, gt, inArray, isNotNull, isNull, lte, or, lt, sql } from '@pagespace/db/operators';
@@ -43,6 +43,7 @@ import { computeMonthlyRefill } from './credit-core';
 import { RENEWAL_CAPABLE_STATUSES, TIER_ALLOWANCE_REFILLS } from './credit-pricing';
 import {
   orgPoolRefillGrant,
+  orgSubscriptionFundingBasis,
   refillPool,
   invoiceServicePeriodMs,
   planAllocationReset,
@@ -54,8 +55,11 @@ import {
   type LegRefundPlan,
 } from './wallet-funding';
 import { recordOrgAuditEventAfterCommit } from '../audit/org-audit';
+import { announceOrgChange } from '../organizations/org-change-events';
 import { drives } from '@pagespace/db/schema/core';
 
+
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 const STRIPE_REF_ARBITER = {
   target: creditLedger.stripeRef,
@@ -202,21 +206,37 @@ export async function applyOrgPoolRefill(invoice: OrgInvoice, opts: OrgPoolRefil
     });
   }
 
-  const grant = orgPoolRefillGrant(
-    {
-      lines: selection.refillLines,
-      hasVerifiedGiftPrice: selection.hasVerifiedGiftPrice,
-      amountPaidCents: invoice.amount_paid,
-      hasSubscriptionParent: hasSubscriptionParent(invoice),
-      billingReason: invoice.billing_reason,
-      subtotalCents: invoice.subtotal,
-      gifted,
-      onOrgSubscription,
-      extraSeats: opts.extraSeats,
-    },
-    opts.active ?? MONEY_MODEL_V2_ACTIVE,
-  );
+  const grantInput = {
+    lines: selection.refillLines,
+    hasVerifiedGiftPrice: selection.hasVerifiedGiftPrice,
+    amountPaidCents: invoice.amount_paid,
+    hasSubscriptionParent: hasSubscriptionParent(invoice),
+    billingReason: invoice.billing_reason,
+    subtotalCents: invoice.subtotal,
+    gifted,
+    onOrgSubscription,
+    extraSeats: opts.extraSeats,
+  };
+  const grant = orgPoolRefillGrant(grantInput, opts.active ?? MONEY_MODEL_V2_ACTIVE);
+  const basis = orgSubscriptionFundingBasis(grantInput);
+  const stripeSubscriptionId = invoiceSubscriptionIdOf(invoice);
+  const recordFunding = async (tx: Tx): Promise<boolean> => {
+    if (!basis || !stripeSubscriptionId) return false;
+    const inserted = await tx.insert(orgSubscriptionFunding).values({
+      orgId: org.id, stripeSubscriptionId, stripeInvoiceId: stripeRef, basis, paidCents: grant.paidCents,
+    }).onConflictDoNothing().returning({ id: orgSubscriptionFunding.id });
+    return inserted.length > 0;
+  };
+  const announceFunding = async (recorded: boolean): Promise<void> => {
+    if (!recorded) return;
+    await recordOrgAuditEventAfterCommit({
+      orgId: org.id, eventType: 'org.billing.subscription_changed', resourceType: 'org_subscription', resourceId: org.id,
+      details: { source: 'verified_funding', stripeSubscriptionId, invoiceId: stripeRef, basis, paidCents: grant.paidCents },
+    });
+    void announceOrgChange(org.id, 'status');
+  };
   if (grant.allowanceCents <= 0) {
+    await announceFunding(await db.transaction(recordFunding));
     if (grant.reason === 'gift_not_org_subscription') {
       // An operator gifted a subscription the org never mirrors: no credit lands in a pool the org
       // cannot spend. Fix it by applying the gift coupon to the org's own subscription (runbook).
@@ -248,6 +268,7 @@ export async function applyOrgPoolRefill(invoice: OrgInvoice, opts: OrgPoolRefil
       .limit(1);
     if (!pool) throw new Error(`org pool for ${org.id} could not be found or created`);
 
+    const fundingRecorded = await recordFunding(tx);
     const inserted = await tx
       .insert(creditLedger)
       .values({
@@ -262,7 +283,7 @@ export async function applyOrgPoolRefill(invoice: OrgInvoice, opts: OrgPoolRefil
       })
       .onConflictDoNothing(STRIPE_REF_ARBITER)
       .returning({ id: creditLedger.id });
-    if (inserted.length === 0) return { kind: 'duplicate' as const, walletId: pool.id };
+    if (inserted.length === 0) return { kind: 'duplicate' as const, walletId: pool.id, fundingRecorded };
 
     const refill = refillPool(pool, grant.allowanceCents);
     // Stripe does not order invoice.paid deliveries: an older invoice settled late
@@ -288,9 +309,10 @@ export async function applyOrgPoolRefill(invoice: OrgInvoice, opts: OrgPoolRefil
           : {}),
       })
       .where(eq(wallets.id, pool.id));
-    return { kind: 'granted' as const, walletId: pool.id };
+    return { kind: 'granted' as const, walletId: pool.id, fundingRecorded };
   });
 
+  await announceFunding(result.fundingRecorded);
   if (result.kind === 'duplicate') return { kind: 'duplicate', orgId: org.id };
   loggers.api.info('org pool refill applied', { orgId: org.id, stripeRef, allowanceCents: grant.allowanceCents, basis: grant.basis });
   // AUD-1: a billing event. Once per invoice: a redelivery is a duplicate above and writes nothing.

@@ -112,6 +112,7 @@ async function northwind(input: { members?: number; autoAdd?: boolean } = {}) {
     currentPeriodStart: new Date(Date.now() - 20 * 24 * HOUR),
     currentPeriodEnd: new Date(Date.now() + 10 * 24 * HOUR),
   });
+  await factories.fundOrgSubscription(org.id);
   const product = await factories.createDrive(jono.id, { name: 'Product', slug: `product-${createId()}`, orgId: org.id, orgVisibility: 'OPEN' });
   const research = await factories.createDrive(jono.id, { name: 'Customer Research', slug: `research-${createId()}`, orgId: org.id, orgVisibility: 'RESTRICTED' });
   const finance = await factories.createDrive(jono.id, { name: 'Finance', slug: `finance-${createId()}`, orgId: org.id, orgVisibility: 'PRIVATE' });

@@ -11,8 +11,8 @@
  * everything exactly where it was.
  */
 import { db } from '@pagespace/db/db';
-import { eq } from '@pagespace/db/operators';
-import { organizations, orgSubscriptions } from '@pagespace/db/schema/organizations';
+import { and, eq, sql } from '@pagespace/db/operators';
+import { organizations, orgSubscriptions, orgSubscriptionFunding } from '@pagespace/db/schema/organizations';
 import { isBillingEnabled } from '../deployment-mode';
 import {
   decideOrgMayLoosen,
@@ -60,6 +60,7 @@ export async function readOrgStatus(orgId: string, opts: { now?: Date; executor?
     .select({
       orgId: organizations.id,
       status: orgSubscriptions.status,
+      hasVerifiedFunding: sql<boolean>`${orgSubscriptionFunding.id} IS NOT NULL`,
       trialEnd: orgSubscriptions.trialEnd,
       currentPeriodStart: orgSubscriptions.currentPeriodStart,
       currentPeriodEnd: orgSubscriptions.currentPeriodEnd,
@@ -67,13 +68,14 @@ export async function readOrgStatus(orgId: string, opts: { now?: Date; executor?
     })
     .from(organizations)
     .leftJoin(orgSubscriptions, eq(orgSubscriptions.orgId, organizations.id))
+    .leftJoin(orgSubscriptionFunding, and(eq(orgSubscriptionFunding.orgId, organizations.id), eq(orgSubscriptionFunding.stripeSubscriptionId, orgSubscriptions.stripeSubscriptionId)))
     .where(eq(organizations.id, orgId))
     .limit(1);
   if (!row) return { result: { status: 'lapsed', reason: 'no_subscription' }, subscription: null, trialEnd: null };
   const subscription: OrgSubscriptionState | null =
     row.status === null
       ? null
-      : { status: row.status, trialEnd: row.trialEnd, currentPeriodStart: row.currentPeriodStart, currentPeriodEnd: row.currentPeriodEnd, cancelAtPeriodEnd: row.cancelAtPeriodEnd ?? false };
+      : { status: row.status, hasVerifiedFunding: row.hasVerifiedFunding, trialEnd: row.trialEnd, currentPeriodStart: row.currentPeriodStart, currentPeriodEnd: row.currentPeriodEnd, cancelAtPeriodEnd: row.cancelAtPeriodEnd ?? false };
   const result = deriveOrgStatus({ billingEnabled, subscription, now: opts.now ?? new Date() });
   return { result, subscription, trialEnd: subscription ? subscription.trialEnd : null };
 }

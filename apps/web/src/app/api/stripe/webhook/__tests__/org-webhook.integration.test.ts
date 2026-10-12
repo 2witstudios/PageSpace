@@ -305,6 +305,7 @@ describe('Stripe webhook — org routing, idempotency, lapse (real Postgres, in-
   it.each(['unknown_base', 'extra_item', 'duplicate_base', 'missing_seat', 'truncated'])('fails closed and recovers when current org price identity changes: %s', async (change) => {
     if (!dbAvailable) return;
     const org = await northwind();
+    await factories.fundOrgSubscription(org.orgId);
     setStripeStatus(org, 'active');
     const live = org.stripe.subscriptions.get(org.subscriptionId)!;
     const originalItems = live.items.map(item => ({ ...item }));
@@ -428,6 +429,7 @@ describe('Stripe webhook — org routing, idempotency, lapse (real Postgres, in-
     expect(await billingTypes()).toEqual([
       ['org.billing.subscription_changed', 'canceled'],
       ['org.billing.pool_refilled', null],
+      ['org.billing.subscription_changed', null], // first verified funding
       ['org.billing.subscription_changed', 'active'],
       ['org.billing.subscription_changed', 'incomplete'],
     ]);
@@ -439,6 +441,7 @@ describe('Stripe webhook — org routing, idempotency, lapse (real Postgres, in-
     // A farmer's $0 first invoices (what a trial used to send) are delivered for every org.
     for (const org of orgs) {
       fakeHolder.current = org.stripe; // each org has its own in-memory Stripe
+      setStripeStatus(org, 'active'); // A zero-dollar invoice can be active in Stripe without paid entitlement.
       const free = invoiceObject({ customer: org.customerId, subscriptionId: org.subscriptionId, metadata: orgMetadata(org.orgId), seats: 0, paid: false, billingReason: 'subscription_create', periodStart: 1_800_000_000 });
       expect(await deliver(eventPayload('invoice.paid', free))).toBe(200);
     }
@@ -446,6 +449,7 @@ describe('Stripe webhook — org routing, idempotency, lapse (real Postgres, in-
       const pool = await poolOf(org.orgId);
       expect(pool === null ? 0 : pool.monthlyRemainingCents + pool.topupRemainingCents).toBe(0);
       if (pool) expect(await ledgerRows(pool.id)).toHaveLength(0);
+      expect(await getOrgStatus(org.orgId)).toEqual({ status: 'lapsed', reason: 'never_funded' });
     }
     // Each org's first REAL payment: base + its extra seats, paid in full.
     for (const [i, org] of orgs.entries()) {
@@ -495,8 +499,10 @@ describe('Stripe webhook — org routing, idempotency, lapse (real Postgres, in-
     // The gift coupon on the org's OWN subscription (the runbook procedure): funded at list × ratio.
     const own = await northwind(7);
     fakeHolder.current = own.stripe;
+    setStripeStatus(own, 'active');
     const ownGift = invoiceObject({ customer: own.customerId, subscriptionId: own.subscriptionId, metadata: giftMeta(own.orgId), seats: 2, paid: false, billingReason: 'subscription_cycle', periodStart: 1_800_000_000 });
     expect(await deliver(eventPayload('invoice.paid', ownGift))).toBe(200);
+    expect((await getOrgStatus(own.orgId)).status).toBe('active');
     const ownPool = await poolOf(own.orgId);
     expect(ownPool?.monthlyRemainingCents).toBe(orgPoolListPriceGrantCents(2));
     expect(ownPool?.monthlyRemainingCents).toBeGreaterThan(0);
@@ -746,6 +752,7 @@ describe('Stripe webhook — org routing, idempotency, lapse (real Postgres, in-
   it('SEAT-9 (partial) SEAT-7 (partial) a subscription event mirrors what Stripe says NOW, so an out-of-order snapshot cannot roll the org back', async () => {
     if (!dbAvailable) return;
     const org = await northwind(7);
+    await factories.fundOrgSubscription(org.orgId);
     setStripeStatus(org, 'active');
     // An older event whose snapshot still says past_due arrives after Stripe moved on.
     const staleSnapshot = { id: org.subscriptionId, object: 'subscription', customer: org.customerId, status: 'past_due', metadata: orgMetadata(org.orgId) };
@@ -820,6 +827,7 @@ describe('Stripe webhook — org routing, idempotency, lapse (real Postgres, in-
     expect(linkage.stripeSubscriptionId).not.toBe(oldId);
     const replacement = org.stripe.subscriptions.get(linkage.stripeSubscriptionId)!;
     replacement.status = 'active';
+    await factories.fundOrgSubscription(org.orgId);
     expect(await deliver(eventPayload('customer.subscription.updated', { id: replacement.id, object: 'subscription', customer: org.customerId, status: 'active', metadata: orgMetadata(org.orgId) }))).toBe(200);
     expect((await getOrgStatus(org.orgId)).status).toBe('active');
 
