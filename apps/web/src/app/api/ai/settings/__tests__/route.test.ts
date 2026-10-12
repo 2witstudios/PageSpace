@@ -20,6 +20,11 @@ vi.mock('@/lib/repositories/ai-settings-repository', () => ({
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(),
+  getPrincipalDriveAccess: vi.fn(async () => true),
+}));
+
+vi.mock('@/lib/ai/core/org-model-policy', () => ({
+  offeredModels: vi.fn(async () => null),
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => {
@@ -55,7 +60,8 @@ vi.mock('@/lib/subscription/rate-limit-middleware', () => ({
 
 import { GET, POST, PATCH, DELETE } from '../route';
 import { aiSettingsRepository } from '@/lib/repositories/ai-settings-repository';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, getPrincipalDriveAccess, isAuthError } from '@/lib/auth';
+import { offeredModels } from '@/lib/ai/core/org-model-policy';
 import { isOnPrem } from '@pagespace/lib/deployment-mode';
 import { requiresProSubscription, createAdminRestrictedResponse } from '@/lib/subscription/rate-limit-middleware';
 
@@ -110,6 +116,31 @@ describe('AI settings route', () => {
   });
 
   describe('GET', () => {
+    it('POL-8 (partial) with a driveId the caller can reach, returns the models that drive\'s org allows, as the server computed them', async () => {
+      vi.mocked(offeredModels).mockResolvedValueOnce({ openai: ['openai/gpt-5.4-nano'] });
+      const response = await GET(new Request('http://localhost:3000/api/ai/settings?driveId=drive-org'));
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(getPrincipalDriveAccess).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }), 'drive-org');
+      expect(offeredModels).toHaveBeenCalledWith('drive-org');
+      expect(body.allowedModels).toEqual({ openai: ['openai/gpt-5.4-nano'] });
+    });
+
+    it('POL-8 (partial) a drive the caller cannot reach is not found, and its policy is never read', async () => {
+      vi.mocked(getPrincipalDriveAccess).mockResolvedValueOnce(false);
+      const response = await GET(new Request('http://localhost:3000/api/ai/settings?driveId=drive-other'));
+
+      expect(response.status).toBe(404);
+      expect(offeredModels).not.toHaveBeenCalled();
+    });
+
+    it('POL-8 (partial) without a driveId nothing is restricted (allowedModels null)', async () => {
+      const body = await (await GET(makeRequest('GET'))).json();
+      expect(offeredModels).toHaveBeenCalledWith(null);
+      expect(body.allowedModels).toBeNull();
+    });
+
     it('reports providers as unavailable when no env keys are set', async () => {
       const response = await GET(makeRequest('GET'));
       const body = await response.json();
