@@ -19,11 +19,9 @@
  *     own subscription-metadata snapshot first, so it cannot race the
  *     subscription webhook, with the live subscriptions row as a fallback. Any
  *     other $0 invoice grants nothing. The ledger row records paidCents so the
- *     derivation is auditable per row. A PAID invoice whose tier has no ratio is a
- *     MISSED grant: a 'missed_grant' ledger row (amountCents 0, stripeRef = the
- *     invoice) is written for the reconcile cron to re-grant once the tier is
- *     repaired, and the miss is logged at error. An explicit invoice rejection
- *     never creates a repair candidate: subscription state cannot override it.
+ *     derivation is auditable per row. Missing or rejected invoice identities
+ *     grant nothing and never create a repair candidate. Subscription state
+ *     cannot override the invoice-derived identity.
  *   - topup (checkout.session.completed, credit_pack): a one-time purchase ADDS to
  *     the never-expiring top-up bucket.
  *
@@ -153,14 +151,14 @@ function invoicePeriod(obj: FundingEventObject): { start: Date | null; end: Date
 
 async function resolveUser(
   customerId: string,
-): Promise<{ id: string; tier: SubscriptionTier } | null> {
+): Promise<{ id: string } | null> {
   const rows = await db
-    .select({ id: users.id, subscriptionTier: users.subscriptionTier })
+    .select({ id: users.id })
     .from(users)
     .where(eq(users.stripeCustomerId, customerId))
     .limit(1);
   if (!rows.length) return null;
-  return { id: rows[0].id, tier: rows[0].subscriptionTier as SubscriptionTier };
+  return { id: rows[0].id };
 }
 
 /**
@@ -246,47 +244,6 @@ function invoiceHasSubscriptionParent(obj: FundingEventObject): boolean {
 }
 
 /**
- * A PAID invoice whose tier resolved to one with no ratio (stored tier still 'free'
- * and no usable price on the line): fail closed — grant nothing — but leave a
- * 'missed_grant' ledger row (amountCents 0, stripeRef = the invoice, paidCents = what
- * was paid) so the reconcile cron (Phase 2 leaf) can re-grant once the tier is
- * repaired, and log at error with everything needed to find it. The row shares the
- * stripeRef unique index with the eventual monthly_grant, so the reconcile must
- * REPLACE this row (same stripeRef) rather than insert beside it; a plain Stripe
- * redelivery of the same event still dedupes on it.
- */
-async function recordMissedGrant(
-  userId: string,
-  tier: SubscriptionTier,
-  paidCents: number,
-  stripeRef: string,
-  eventId: string,
-): Promise<void> {
-  loggers.api.error('credit funding: MISSED grant — paid invoice resolved to a tier with no ratio', undefined, {
-    eventId,
-    invoiceId: stripeRef,
-    userId,
-    storedTier: tier,
-    paidCents,
-  });
-  const walletId = await ensurePersonalRootWalletId(db, userId);
-  await db
-    .insert(creditLedger)
-    .values({
-      userId,
-      walletId,
-      entryType: 'missed_grant',
-      bucket: 'monthly',
-      amountCents: 0,
-      paidCents,
-      stripeRef,
-      // Settled on insert (see applyMonthlyRefill): keeps the backfill sweep off it.
-      consumeStatus: 'applied',
-    })
-    .onConflictDoNothing(STRIPE_REF_ARBITER);
-}
-
-/**
  * invoice.paid — add the invoice-sized grant to the current monthly balance (rollover)
  * and roll the billing window forward, recording a monthly_grant ledger row keyed
  * on the invoice id. The balance write only runs if the grant row was newly inserted.
@@ -313,11 +270,9 @@ async function applyMonthlyRefill(
     return;
   }
 
-  // Prefer the tier the caller derived from the PAID invoice's line price. invoice.paid
-  // can land before customer.subscription.* has updated users.subscriptionTier, so the
-  // stored tier (user.tier) may be stale ('free'); the invoice reflects what was actually
-  // billed. Fall back to the stored tier only when the caller couldn't resolve one.
-  const tier = tierOverride ?? user.tier;
+  // Only a verified personal invoice identity authorizes this funding path. A
+  // cached user tier cannot establish what this invoice actually purchased.
+  const tier = tierOverride === 'pro' ? 'pro' : 'free';
   // MON-2 / D-OW-16: the grant is sized from what THIS invoice paid, never from a
   // tier table — a promo, a proration, or a price change flows through with no table
   // edit. A gift or a trial is us fronting the plan and derives from the list price.
@@ -336,10 +291,6 @@ async function applyMonthlyRefill(
   }, active);
   const allowanceCents = grant.allowanceCents;
   if (allowanceCents <= 0) {
-    if (tierOverride === undefined && grant.reason === 'no_ratio' && grant.paidCents > 0) {
-      await recordMissedGrant(user.id, tier, grant.paidCents, stripeRef, event.id);
-      return;
-    }
     // Nothing paid and not a gift or trial (proration-only, subscription_update at
     // $0, a 100% coupon on a non-gifted subscription): nothing to grant, nothing to
     // record, nothing to dedupe — the next PAID invoice sizes its own grant.
@@ -533,9 +484,9 @@ async function applyTopupFunding(event: FundingEvent, packCents: number): Promis
  */
 export interface FundingOptions {
   /**
-   * Tier derived from the PAID invoice (invoice.paid line price). Authoritative over the
-   * stored user tier, which can lag behind a near-simultaneous subscription webhook.
-   * Only used by the monthly_refill path.
+   * Tier derived from the complete PAID invoice. Only personal Pro can fund a
+   * monthly refill; missing, Free, Business and invalid identities grant nothing.
+   * Top-ups do not use this field.
    */
   tier?: SubscriptionTier;
   /**

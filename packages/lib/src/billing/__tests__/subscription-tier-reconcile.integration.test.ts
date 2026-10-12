@@ -72,7 +72,7 @@ describe('strict price reconciliation against PostgreSQL', () => {
     expect(stored.subscriptionTier).toBe('free');
   });
 
-  it('MON-2 (partial) a rejected invoice cannot become a grant through a stale Pro subscription', async () => {
+  it.each(['free', 'business', undefined] as const)('MON-2 (partial) unverified invoice identity (%s) cannot become a grant through a stale Pro subscription', async (tier) => {
     const user = await subscriber('price_verified_pro');
     const [wallet] = await db.insert(wallets).values({
       ownerType: 'user', userId: user.id, monthlyRemainingCents: 123, topupRemainingCents: 456,
@@ -81,7 +81,7 @@ describe('strict price reconciliation against PostgreSQL', () => {
     await applyStripeFunding({ id: `evt_${createId()}`, type: 'invoice.paid', data: { object: {
       id: invoiceId, customer: user.stripeCustomerId, amount_paid: 1500, billing_reason: 'subscription_cycle',
       parent: { subscription_details: { subscription: 'sub_unknown_price' } },
-    } } }, { tier: 'free' });
+    } } }, tier === undefined ? undefined : { tier });
     await reconcileMissedGrants({ priceTier });
     expect(await db.select().from(creditLedger).where(eq(creditLedger.stripeRef, invoiceId))).toEqual([]);
     const [after] = await db.select().from(wallets).where(eq(wallets.id, wallet.id));

@@ -206,7 +206,7 @@ describe('applyStripeFunding', () => {
 
   it('does nothing when billing is disabled (tenant/onprem)', async () => {
     mockIsBillingEnabled.mockReturnValue(false);
-    await applyStripeFunding(invoiceEvent);
+    await applyStripeFunding(invoiceEvent, { tier: 'pro' });
     expect(mockDb.select).not.toHaveBeenCalled();
     expect(mockDb.transaction).not.toHaveBeenCalled();
   });
@@ -219,7 +219,7 @@ describe('applyStripeFunding', () => {
       await cb(refillTx(cap, [{ id: 'led_1' }], 0));
     });
 
-    await applyStripeFunding(invoiceEvent);
+    await applyStripeFunding(invoiceEvent, { tier: 'pro' });
 
     // Flag off: 100% of the $15 paid = today's Pro allowance.
     const allowance = tierAllowanceCents('pro');
@@ -281,7 +281,7 @@ describe('applyStripeFunding', () => {
       await cb(refillTx(cap, [{ id: 'led_renewal' }], 0));
     });
 
-    await applyStripeFunding(renewalEvent);
+    await applyStripeFunding(renewalEvent, { tier: 'pro' });
 
     expect(cap.balanceSet).toMatchObject({
       monthlyPeriodStart: new Date(NEW_START * 1000),
@@ -314,7 +314,7 @@ describe('applyStripeFunding', () => {
       await cb(refillTx(cap, [{ id: 'led_change' }], 0));
     });
 
-    await applyStripeFunding(planChangeEvent);
+    await applyStripeFunding(planChangeEvent, { tier: 'pro' });
 
     expect(cap.balanceSet).toMatchObject({
       monthlyPeriodStart: new Date(1_700_000_000 * 1000),
@@ -330,7 +330,7 @@ describe('applyStripeFunding', () => {
       await cb(refillTx(cap, [{ id: 'led_rollover' }], 600));
     });
 
-    await applyStripeFunding(invoiceEvent);
+    await applyStripeFunding(invoiceEvent, { tier: 'pro' });
 
     const allowance = tierAllowanceCents('pro');
     expect(cap.balanceSet).toMatchObject({
@@ -348,7 +348,7 @@ describe('applyStripeFunding', () => {
       await cb(refillTx(cap, [{ id: 'led_debt_refill' }], 200, 200));
     });
 
-    await applyStripeFunding(invoiceEvent);
+    await applyStripeFunding(invoiceEvent, { tier: 'pro' });
 
     const allowance = tierAllowanceCents('pro');
     expect(cap.balanceSet).toMatchObject({
@@ -456,10 +456,10 @@ describe('applyStripeFunding', () => {
       await cb(refillTx(cap, [{ id: 'led_tier' }], 0));
     });
 
-    // A Business invoice: what it paid is the Business list price.
-    await applyStripeFunding(paidInvoiceEvent(tierAllowanceCents('business')), { tier: 'business' });
+    // A verified Pro invoice supplies its identity independently of the cache.
+    await applyStripeFunding(paidInvoiceEvent(tierAllowanceCents('pro')), { tier: 'pro' });
 
-    const allowance = tierAllowanceCents('business');
+    const allowance = tierAllowanceCents('pro');
     expect(allowance).not.toBe(tierAllowanceCents('free'));
     expect(cap.ledgerValues).toMatchObject({ amountCents: allowance });
     expect(cap.balanceSet).toMatchObject({
@@ -475,7 +475,7 @@ describe('applyStripeFunding', () => {
       await cb(refillTx(cap, [{ id: 'led_1' }], 0));
     });
 
-    await applyStripeFunding(invoiceEvent);
+    await applyStripeFunding(invoiceEvent, { tier: 'pro' });
 
     expect(cap.arbiter).toBeDefined();
     expect(cap.arbiter).toHaveProperty('target');
@@ -496,7 +496,7 @@ describe('applyStripeFunding', () => {
       await cb(tx);
     });
 
-    await applyStripeFunding(invoiceEvent);
+    await applyStripeFunding(invoiceEvent, { tier: 'pro' });
 
     expect(balanceInsert).not.toHaveBeenCalled();
     expect(cap.balanceSet).toBeUndefined();
@@ -512,7 +512,7 @@ describe('applyStripeFunding', () => {
   it('rethrows a genuine funding failure (logged) so the webhook can let Stripe redeliver', async () => {
     mockDb.select.mockReturnValue(userSelectReturning(PRO_USER));
     mockDb.transaction.mockRejectedValueOnce(new Error('db boom'));
-    await expect(applyStripeFunding(invoiceEvent)).rejects.toThrow('db boom');
+    await expect(applyStripeFunding(invoiceEvent, { tier: 'pro' })).rejects.toThrow('db boom');
     expect(mockApiLogger.error).toHaveBeenCalled();
   });
 
@@ -520,20 +520,20 @@ describe('applyStripeFunding', () => {
     // "Nothing to do" must not look like a failure — otherwise the webhook would
     // needlessly clear the idempotency marker and 500 on a no-op.
     mockDb.select.mockReturnValue(userSelectReturning([])); // no user
-    await expect(applyStripeFunding(invoiceEvent)).resolves.toBeUndefined();
+    await expect(applyStripeFunding(invoiceEvent, { tier: 'pro' })).resolves.toBeUndefined();
     await expect(applyStripeFunding(subscriptionCheckoutEvent)).resolves.toBeUndefined(); // ignored
     mockIsBillingEnabled.mockReturnValue(false);
-    await expect(applyStripeFunding(invoiceEvent)).resolves.toBeUndefined(); // billing disabled
+    await expect(applyStripeFunding(invoiceEvent, { tier: 'pro' })).resolves.toBeUndefined(); // billing disabled
   });
 
   it('skips funding (and never opens a transaction) when no user matches the Stripe customer', async () => {
     mockDb.select.mockReturnValue(userSelectReturning([]));
-    await applyStripeFunding(invoiceEvent);
+    await applyStripeFunding(invoiceEvent, { tier: 'pro' });
     expect(mockDb.transaction).not.toHaveBeenCalled();
     expect(mockApiLogger.warn).toHaveBeenCalled();
   });
 
-  describe('grants sized from the invoice paid (MON-2)', () => {
+  describe('grants sized from the invoice paid', () => {
     function refill(cap: Captured, carried = 0, debt = 0) {
       mockDb.select.mockReturnValue(userSelectReturning(PRO_USER));
       mockDb.transaction.mockImplementation(async (cb: (tx: unknown) => Promise<void>) => {
@@ -643,6 +643,18 @@ describe('applyStripeFunding', () => {
       expect(cap.ledgerValues).toBeUndefined();
     });
 
+    it.each([undefined, 'business'] as const)('MON-2 (partial) a stale paid cache cannot fund without explicit personal Pro identity (%s)', async (tier) => {
+      mockDb.select.mockReturnValue(userSelectReturning([{ id: 'u1', subscriptionTier: 'pro' }]));
+      const cap: Captured = {};
+      mockDb.transaction.mockImplementation(async (cb: (tx: unknown) => Promise<void>) => {
+        await cb(refillTx(cap, [{ id: 'led_invalid' }], 0));
+      });
+      await applyStripeFunding(paidInvoiceEvent(1500), tier === undefined ? undefined : { tier });
+      expect(mockDb.transaction).not.toHaveBeenCalled();
+      expect(mockDb.insert).not.toHaveBeenCalled();
+      expect(cap.ledgerValues).toBeUndefined();
+    });
+
     describe('D-OW-16: grants we deliberately fund', () => {
       it('MON-2 (a) a gifted subscription grants list price × the default ratio although it paid nothing', async () => {
         selectUserThenSubscriptions(PRO_USER, [{ gifted: true, status: 'active' }]);
@@ -697,12 +709,12 @@ describe('applyStripeFunding', () => {
         const cap: Captured = {};
         refill(cap);
 
-        await applyStripeFunding(paidInvoiceEvent(1000, { subtotal: 1000, billing_reason: 'subscription_update' }), { tier: 'business' });
+        await applyStripeFunding(paidInvoiceEvent(1000, { subtotal: 1000, billing_reason: 'subscription_update' }), { tier: 'pro' });
 
         expect(cap.ledgerValues).toMatchObject({
           entryType: 'monthly_grant',
           paidCents: 1000,
-          amountCents: allowanceCentsForPaidCents(1000, 'business'),
+          amountCents: allowanceCentsForPaidCents(1000, 'pro'),
         });
         expect(cap.ledgerValues!.amountCents).toBeGreaterThan(0);
       });
