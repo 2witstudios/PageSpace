@@ -734,6 +734,11 @@
       "import": "./dist/billing/spend-target.js",
       "require": "./dist/billing/spend-target.js"
     },
+    "./billing/wallet-reconcile": {
+      "types": "./dist/billing/wallet-reconcile.d.ts",
+      "import": "./dist/billing/wallet-reconcile.js",
+      "require": "./dist/billing/wallet-reconcile.js"
+    },
     "./billing/spend-resolution": {
       "types": "./dist/billing/spend-resolution.d.ts",
       "import": "./dist/billing/spend-resolution.js",

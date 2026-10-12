@@ -198,26 +198,10 @@ UI-11
 # suite proves owner/subject/parent/status shapes; top-up "never expires" on child wallets is unproven
 # until C3/C5 spend and refill against them.
 WAL-1
-# WAL-3 (partial, ow-c2): allocation draws against the parent as spend happens and legs last until spent,
-# as pure math; persisted wallets and ledger rows are unproven until C1/C3.
-# (partial, ow-c5): persisted funding legs draw FIFO and last until spent, and allocations reset on the
-# governing period (D-OW-12) against Postgres; the gate drawing an allocation against its parent as
-# spend happens is C3.
-WAL-3
 # WAL-4 (partial, ow-c5): a donation from the donor's own balance to a drive wallet they can see, as a
 # one-off amount recorded with the donor as its own non-refundable leg, refused when the drive has
 # donations off — proven against Postgres. The drive lead's toggle route and the donate route are C6.
 WAL-4
-# WAL-5 (every AI usage row records the wallet charged; holds per wallet; ledger, reconciliation
-# and monthly reset keyed on wallet) re-added by lane ow-r0-fixups per Review 0b (page
-# wiv716vr39v9wbx2z40aoio1, Follow-up 2): no wallet exists yet, and the tests that named it
-# prove user-keyed missed-grant reconciliation (MON-2), not wallet keying. Their titles no
-# longer claim it. Remove this line once a test exercises wallet-keyed rows.
-# ow-c1: usage rows now record the wallet charged, every ledger and hold row names its wallet (NOT
-# NULL, backfilled), and cost reconciliation corrects the wallet the charge was billed to — each
-# titled "WAL-5 (partial)". Still user-keyed: the gate's monthly reset and settle lock the personal
-# root by user (identical while every wallet charged is a personal root); C3 keys them on wallet.
-WAL-5
 # WAL-7 (partial, ow-c2): UTC caps, defaults and 80/100% thresholds are pure logic; caps on stored legs,
 # alert delivery and the kill switch control are unproven until C3/C6.
 WAL-7

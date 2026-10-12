@@ -31,6 +31,7 @@ import { readOrgSpendPolicy } from '../organizations/policy-reader';
 import { isOrgActive } from '../organizations/status';
 import { isSeatCountedSpendKind, loadSeatCapFacts, SEAT_OVERSHOOT_ENTRY } from './seat-allowance';
 import { drawWalletFundingLegs, creditWalletFundingLegs } from './wallet-legs';
+import { allocationTransferRows } from './wallet-ledger-core';
 import { parseWalletDraws, addWalletDraws, planWalletRefund, type WalletDraws } from './wallet-draws';
 import { MARKUP_BPS } from './credit-pricing';
 import { centsFromDollars } from './money-model';
@@ -139,7 +140,7 @@ async function decrementAndSettle(
   // else what the caller carried), so the in-line settle and a cron retry land overshoot alike.
   fallbackFromWalletId: string | null,
 ): Promise<SettleOutcome | null> {
-  const settled = await chargeWallet(tx, walletId, chargeMc, aiUsageLogId, fallbackFromWalletId);
+  const settled = await chargeWallet(tx, walletId, chargeMc, aiUsageLogId, { userId, spendKind }, fallbackFromWalletId);
 
   // No balance row yet (e.g. an existing user before the gate lazy-inits one).
   // Leave the ledger row 'pending' so the reconcile cron retries once a balance
@@ -190,6 +191,12 @@ async function decrementAndSettle(
     await tx.delete(creditHolds).where(eq(creditHolds.id, holdId));
   }
   return { debtWalletId: settled.debt?.walletId ?? null };
+}
+
+/** Whose call a charge is and what it was for: recorded on the ledger rows it writes (WAL-5). */
+export interface LedgerParty {
+  userId: string;
+  spendKind: SpendKind;
 }
 
 /** A decrement that landed; `debtWalletId` names the wallet left carrying overshoot, if any (WAL-6e). */
@@ -355,6 +362,8 @@ export async function chargeWallet(
   walletId: string,
   chargeMc: number,
   aiUsageLogId: string | null,
+  // WAL-5: whose call this is and what for — the allocation transfer rows a drive wallet's draw writes.
+  ledger: LedgerParty,
   // WAL-6b: the chosen wallet a drive rule moved this call off (the hold's fallbackFromWalletId).
   fallbackFromWalletId: string | null = null,
 ): Promise<WalletSettlement | null> {
@@ -366,7 +375,7 @@ export async function chargeWallet(
   const accrual = accruePending(bal.pendingMillicents ?? 0, chargeMc);
   if (!bal.parentWalletId) return settleOnRootWallet(tx, bal, accrual.wholeCents, accrual.newPending, fallbackFrom);
 
-  const { settlement, draws } = await settleOnChildWallet(tx, bal, accrual.wholeCents, accrual.newPending);
+  const { settlement, draws } = await settleOnChildWallet(tx, bal, accrual.wholeCents, accrual.newPending, { ...ledger, aiUsageLogId });
   if (aiUsageLogId) {
     const usage = await usageMetadata(tx, aiUsageLogId);
     if (usage) {
@@ -409,7 +418,7 @@ const REFUND_ROUNDING_SLACK_CENTS = 1;
  *     never thrown, never a guessed leg. Either way topupRemainingCents == SUM(legs).
  * Returns the cents actually credited.
  */
-export async function refundWalletCharge(tx: Tx, walletId: string, refundCents: number, aiUsageLogId: string | null): Promise<number> {
+export async function refundWalletCharge(tx: Tx, walletId: string, refundCents: number, aiUsageLogId: string | null, ledger: LedgerParty): Promise<number> {
   const bal = await lockWallet(tx, walletId);
   if (!bal || refundCents <= 0) return 0;
   if (!bal.parentWalletId) {
@@ -427,6 +436,8 @@ export async function refundWalletCharge(tx: Tx, walletId: string, refundCents: 
     }
     const r = applyPaymentToDebt(parent.debtCents ?? 0, parent.topupRemainingCents, cents);
     await tx.update(wallets).set({ debtCents: r.debtCents, topupRemainingCents: r.topupCents }).where(eq(wallets.id, parent.id));
+    // WAL-5: what the refund returns to the parent leaves this wallet's books for the parent's.
+    await tx.insert(creditLedger).values(allocationTransferRows({ fromWalletId: walletId, toWalletId: parent.id, cents, ...ledger, aiUsageLogId }));
     return cents;
   };
   const legacy = (reason: string): Promise<number> => {
@@ -535,6 +546,7 @@ async function settleOnChildWallet(
   bal: LockedWallet,
   wholeCents: number,
   newPending: number,
+  ledger: LedgerParty & { aiUsageLogId: string | null },
 ): Promise<{ settlement: WalletSettlement; draws: Omit<WalletDraws, 'walletId' | 'totalCents'> }> {
   const parentId = bal.parentWalletId as string;
   const parentRows = await tx
@@ -577,6 +589,9 @@ async function settleOnChildWallet(
         ...(landing.kind === 'parent_debt' ? { debtCents: sql`${wallets.debtCents} + ${landing.cents}` } : {}),
       })
       .where(eq(wallets.id, parent.id));
+    // WAL-5: the allocation drawn is money leaving the parent for this wallet — ledgered on both.
+    const transfer = allocationTransferRows({ fromWalletId: parent.id, toWalletId: bal.id, cents: draw.allocationDrawCents, ...ledger });
+    if (transfer.length > 0) await tx.insert(creditLedger).values(transfer);
   }
   // topupRemainingCents is NOT written here: drawWalletFundingLegs moved it with the legs.
   await tx

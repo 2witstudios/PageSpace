@@ -635,7 +635,7 @@ export interface StorageDriftResult {
 
 /**
  * #2155 — compare the materialized storage counter against what the `files`
- * rows imply (pure; modeled on computeBalanceDrift in the credit service).
+ * rows imply (pure; modeled on computeWalletDrift in wallet-ledger-core).
  * Between a delete and the orphan-reaper cron the two legitimately disagree,
  * so a small tolerance keeps the reconcile from thrashing on in-flight state;
  * a flag means "rewrite the cache from the rows", not "data corruption".

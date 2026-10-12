@@ -490,7 +490,7 @@ export function openRouterBaseUrl(): string {
  * Tolerance (whole cents) for the account-level balance-drift detector: a user's
  * materialized buckets may diverge from the ledger-implied amount beyond this before the
  * admin panel flags them. Generous because monthly resets / debt-forgiveness legitimately
- * break exact reconciliation (see computeBalanceDrift). Default 10¢.
+ * break exact reconciliation (see wallet-ledger-core computeWalletDrift). Default 10¢.
  */
 export const BALANCE_DRIFT_TOLERANCE_CENTS = envInt('BALANCE_DRIFT_TOLERANCE_CENTS', 10);
 

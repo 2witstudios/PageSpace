@@ -188,7 +188,7 @@ async function applyCorrection(
       // wallet, allocation from the parent, then the locked funding legs, then overshoot
       // per D20.2 — never a direct write of topupRemainingCents past the legs.
       // Rollover: carry balance is always spendable; no period-expiry exclusion here.
-      const charged = await chargeWallet(tx, walletId, drift.deltaChargeMillicents, aiUsageLogId);
+      const charged = await chargeWallet(tx, walletId, drift.deltaChargeMillicents, aiUsageLogId, { userId, spendKind: 'ai' });
       // No balance row to move (rare — reconcile runs on billed rows). Record the
       // correction row with no applied delta so a later run doesn't re-correct.
       if (!charged) {
@@ -196,6 +196,14 @@ async function applyCorrection(
         return false;
       }
       appliedCents = -charged.appliedCents || 0; // negative: decremented
+      // WAL-5: uncovered cost lands as debt (on this wallet or the one its funder chose); ledger it
+      // there, as the settle does, so every wallet still reconciles against its own rows.
+      if (charged.debt) {
+        await tx.insert(creditLedger).values({
+          userId, walletId: charged.debt.walletId, entryType: 'adjustment', bucket: 'monthly',
+          amountCents: -charged.debt.cents, aiUsageLogId, consumeStatus: 'applied', spendKind: 'ai',
+        });
+      }
       // WAL-2: an undercharge on a seat is charged like a settle, so it is capped like one.
       // The cost reconcile corrects OpenRouter AI calls only: always an AI charge.
       await recordSeatOvershoot(tx, { walletId, userId, aiUsageLogId, claimLedgerId: ledgerId, spendKind: 'ai' });
@@ -204,7 +212,7 @@ async function applyCorrection(
       // refundWalletCharge): debt first, then the top-up on a root wallet; on a drive
       // wallet, the call's recorded draws in the inverse order, legs included.
       const refundCents = Math.round(Math.abs(drift.deltaChargeMillicents) / 1000);
-      appliedCents = await refundWalletCharge(tx, walletId, refundCents, aiUsageLogId); // positive: credited back
+      appliedCents = await refundWalletCharge(tx, walletId, refundCents, aiUsageLogId, { userId, spendKind: 'ai' }); // positive: credited back
       // WAL-2: a refund on a seat gives back forgiveness that no longer applies, window by window.
       // The cost reconcile corrects OpenRouter AI calls only: always an AI charge.
       await recordSeatOvershoot(tx, { walletId, userId, aiUsageLogId, claimLedgerId: ledgerId, spendKind: 'ai' });

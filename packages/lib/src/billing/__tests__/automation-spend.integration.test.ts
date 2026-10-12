@@ -281,7 +281,10 @@ describe('automations spend the drive wallet only (orgs on, real Postgres)', () 
     expect((await walletRow(world.productWalletId)).spentCents).toBe(15);
     expect((await walletRow(world.marcusWalletId)).monthlyRemainingCents).toBe(5_000);
     const ledger = await ledgerOf(world.marcusId);
-    expect(ledger.map((r) => [r.entryType, r.walletId])).toEqual([['usage', world.productWalletId]]);
+    // WAL-5: the usage on the drive wallet, and its allocation draw as a transfer out of the pool into it.
+    expect(ledger.map((r) => [r.entryType, r.walletId, r.appliedCents]).sort()).toEqual([
+      ['allocation_draw', world.poolId, -15], ['allocation_draw', world.productWalletId, 15], ['usage', world.productWalletId, -15],
+    ].sort());
   });
 
   describe('the destination drive\'s payer pays for a person-less run (point-guard ruling on #2731: Zoom enrichment)', () => {
@@ -305,7 +308,7 @@ describe('automations spend the drive wallet only (orgs on, real Postgres)', () 
 
       const [log] = await db.insert(aiUsageLogs).values({ userId: billing.userId, provider: 'anthropic', model: 'm', cost: 0.1 }).returning({ id: aiUsageLogs.id });
       expect(await consumeCredits({ aiUsageLogId: log.id, userId: billing.userId, costDollars: 0.1, holdId: gate.holdId, walletId: gate.walletId })).toBe('settled');
-      expect((await ledgerOf(world.marcusId)).map((r) => [r.entryType, r.walletId])).toEqual([['usage', world.productWalletId]]);
+      expect((await ledgerOf(world.marcusId)).filter((r) => r.entryType === 'usage').map((r) => [r.entryType, r.walletId])).toEqual([['usage', world.productWalletId]]);
       expect((await walletRow(world.productWalletId)).spentCents).toBe(15);
       expect((await walletRow(world.marcusWalletId)).monthlyRemainingCents).toBe(5_000);
     });

@@ -23,7 +23,7 @@ import { driveMembers } from '@pagespace/db/schema/members';
 import { creditHolds, creditLedger, type SpendKind } from '@pagespace/db/schema/credits';
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { organizations, orgMembers, orgSubscriptions } from '@pagespace/db/schema/organizations';
-import { driveSpendOverrides, personalRootWalletOf, walletConsumerCaps, walletDebtNotices, wallets } from '@pagespace/db/schema/wallets';
+import { driveSpendOverrides, personalRootWalletOf, walletConsumerCaps, walletDebtNotices, walletFundingLegs, wallets } from '@pagespace/db/schema/wallets';
 import { notifications } from '@pagespace/db/schema/notifications';
 import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
@@ -36,7 +36,8 @@ import { DEFAULT_SEAT_ALLOWANCE_CENTS } from '../wallet-core';
 import { loadSeatCapFacts } from '../seat-allowance';
 import { applyOrgPoolRefill, donateToDriveWallet, resetDueAllocations } from '../wallet-funding-shell';
 import { reconcileOpenRouterCosts } from '../cost-reconcile';
-import { createDriveWallet, getConversationSpend, getDriveWallet, setConversationSpend } from '../../services/drive-wallet-service';
+import { createDriveWallet, getConversationSpend, getDriveWallet, setConversationSpend, topUpDriveWallet } from '../../services/drive-wallet-service';
+import { walletDriftAlerts } from '../wallet-reconcile';
 import { pinConversationSource } from '../spend-resolution';
 import { gateComputeCharge } from '../compute-gate';
 import { computeChargeFor, driveAccrualChargeFor } from '../compute-charge';
@@ -278,7 +279,9 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
     expect((await walletRow(world.poolId)).monthlyRemainingCents).toBe(5_000 - 15);
     expect((await walletRow(world.marcusWalletId)).monthlyRemainingCents).toBe(5_000);
     const ledger = await ledgerOf(world.marcusId);
-    expect(ledger.map((r) => [r.entryType, r.walletId, r.appliedCents])).toEqual([['usage', world.productWalletId, -15]]);
+    expect(ledger.map((r) => [r.entryType, r.walletId, r.appliedCents]).sort()).toEqual([
+      ['allocation_draw', world.poolId, -15], ['allocation_draw', world.productWalletId, 15], ['usage', world.productWalletId, -15],
+    ].sort());
     const [usage] = await db.select({ walletId: aiUsageLogs.walletId }).from(aiUsageLogs).where(eq(aiUsageLogs.id, log.id));
     expect(usage.walletId).toBe(world.productWalletId);
     expect(await holdsOf(world.marcusId)).toEqual([]);
@@ -1767,6 +1770,137 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
     expect(await walletRow(w.productWalletId)).toMatchObject({ spentCents: 60, debtCents: 0 });
     expect(await getDriveWallet(w.marcusId, w.productId, 'session')).toMatchObject({ ok: true, wallet: { status: 'active' } });
     expect((await walletRow(w.marcusWalletId)).debtCents).toBe(0);
+  });
+
+  it('WAL-5 every AI usage row records the wallet charged, holds are per wallet, and ledger, reconciliation and reset are keyed on wallet: a drive-wallet call holds and settles on the drive wallet with its allocation draw ledgered out of the pool and into it, and after donations, top-ups, seat spend, pool debt, a refill and a reset every wallet — the donor\'s, the lead\'s, the pool and both drive wallets — reconciles with its own rows', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 60, poolCents: 5_000 });
+    const w = world;
+    const side = await personalDrive(w, { allocationCents: 100, fallbackRule: null });
+    try {
+      // The opening balances, as the grants that funded them.
+      await db.insert(creditLedger).values([
+        { userId: w.jonoId, walletId: w.poolId, entryType: 'monthly_grant', bucket: 'monthly', amountCents: 5_000, consumeStatus: 'applied' },
+        { userId: w.marcusId, walletId: w.marcusWalletId, entryType: 'monthly_grant', bucket: 'monthly', amountCents: 5_000, consumeStatus: 'applied' },
+        { userId: w.jonoId, walletId: side.jonoRootId, entryType: 'monthly_grant', bucket: 'monthly', amountCents: 9_000, consumeStatus: 'applied' },
+      ]);
+      const ids = [w.poolId, w.productWalletId, w.marcusWalletId, side.jonoRootId, side.walletId];
+      expect(await walletDriftAlerts({ toleranceCents: 0, limit: 10, walletIds: ids })).toEqual([]);
+
+      // A donor (Marcus, from his own credits) and the leads' top-ups (the org's pool; Jono's own credits).
+      expect(await donateToDriveWallet({ donorUserId: w.marcusId, targetWalletId: w.productWalletId, amountCents: 40, donationId: createId() })).toMatchObject({ kind: 'donated' });
+      expect(await topUpDriveWallet(w.jonoId, w.productId, { amountCents: 30, idempotencyKey: createId() }, 'session')).toMatchObject({ ok: true });
+      expect(await topUpDriveWallet(w.jonoId, side.driveId, { amountCents: 50, idempotencyKey: createId() }, 'session')).toMatchObject({ ok: true });
+
+      // A drive-wallet call: held on Product, settled there, the usage row naming it; 150¢ = the
+      // 60¢ allocation (drawn from the pool), the 70¢ of legs, then 20¢ overshoot onto the pool's debt.
+      const gate = await canConsumeAI(w.marcusId, 'pro', { spend: driveSpend(w.productId, 'drive_wallet') });
+      expect(gate).toMatchObject({ allowed: true, walletId: w.productWalletId });
+      expect((await holdsOf(w.marcusId)).map((h) => h.walletId)).toEqual([w.productWalletId]);
+      const [log] = await db.insert(aiUsageLogs).values({ userId: w.marcusId, provider: 'openrouter', model: 'm', cost: 1 }).returning({ id: aiUsageLogs.id });
+      expect(await consumeCredits({ aiUsageLogId: log.id, userId: w.marcusId, costDollars: 1, holdId: gate.holdId, walletId: gate.walletId })).toBe('settled');
+      const [usage] = await db.select({ walletId: aiUsageLogs.walletId }).from(aiUsageLogs).where(eq(aiUsageLogs.id, log.id));
+      expect(usage.walletId).toBe(w.productWalletId);
+      const callRows = await db.select().from(creditLedger).where(eq(creditLedger.aiUsageLogId, log.id));
+      expect(callRows.map((r) => [r.entryType, r.walletId, r.appliedCents ?? r.amountCents]).sort()).toEqual([
+        ['adjustment', w.poolId, -20],
+        ['allocation_draw', w.poolId, -60],
+        ['allocation_draw', w.productWalletId, 60],
+        ['usage', w.productWalletId, -130],
+      ].sort());
+      expect((await walletRow(w.poolId)).debtCents).toBe(20);
+
+      // A personal drive's call draws its allocation from the lead's own root, ledgered there too.
+      const sideGate = await canConsumeAI(w.marcusId, 'pro', { spend: driveSpend(side.driveId, 'drive_wallet') });
+      const [sideLog] = await db.insert(aiUsageLogs).values({ userId: w.marcusId, provider: 'openrouter', model: 'm', cost: 0.1 }).returning({ id: aiUsageLogs.id });
+      expect(await consumeCredits({ aiUsageLogId: sideLog.id, userId: w.marcusId, costDollars: 0.1, holdId: sideGate.holdId, walletId: sideGate.walletId })).toBe('settled');
+      // And a seat call on the pool.
+      await seatCall(w, w.marcusId);
+
+      expect(await walletDriftAlerts({ toleranceCents: 0, limit: 10, walletIds: ids })).toEqual([]);
+
+      // Reset is per wallet: the pool's refill (its own grant row) and Product's allocation reset on the
+      // pool's new period touch only those wallets, and the books still balance.
+      const [org] = await db.select().from(organizations).where(eq(organizations.id, w.orgId));
+      const startS = Math.floor(Date.now() / 1000) + 1;
+      expect(await applyOrgPoolRefill({
+        id: `in_${createId()}`,
+        customer: org.stripeCustomerId,
+        billing_reason: 'subscription_cycle',
+        amount_paid: 5000,
+        subtotal: 5000,
+        parent: { subscription_details: { subscription: `sub_${createId()}` } },
+        lines: { data: [{ amount: 5000, parent: { subscription_item_details: { subscription_item: 'si_org' } }, period: { start: startS, end: startS + 30 * 86_400 }, pricing: { price_details: { price: REFILL_PRICE_ID } } }] },
+      }, { active: true, basePriceId: REFILL_PRICE_ID, seatPriceId: REFILL_SEAT_PRICE_ID })).toMatchObject({ kind: 'granted', walletId: w.poolId });
+      const marcusBefore = await walletRow(w.marcusWalletId);
+      await resetDueAllocations({ now: new Date(startS * 1000 + 1_000) });
+      expect((await walletRow(w.productWalletId)).spentCents).toBe(0);
+      expect(await walletRow(w.marcusWalletId)).toEqual(marcusBefore);
+      expect(await walletDriftAlerts({ toleranceCents: 0, limit: 10, walletIds: ids })).toEqual([]);
+
+      // And a wallet whose balance moves with no row is caught.
+      await db.update(wallets).set({ topupRemainingCents: sql`${wallets.topupRemainingCents} + 7` }).where(eq(wallets.id, w.poolId));
+      expect(await walletDriftAlerts({ toleranceCents: 0, limit: 10, walletIds: ids })).toEqual([
+        expect.objectContaining({ walletId: w.poolId, kind: 'org_pool', orgId: w.orgId, driftCents: 7 }),
+      ]);
+    } finally {
+      await teardownPersonalDrive(side);
+    }
+  });
+
+  it('WAL-3 an allocation is a budget drawn against the parent as spend happens: setting it moves nothing, each settled call draws its share from the pool, and the unspent part never leaves the pool across a reset; a top-up leaves the pool at once and outlives the reset, and spend past the allocation drains the legs first-in first-out', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 5_000 });
+    const w = world;
+    const legsOf = async () => (await db.select({ kind: walletFundingLegs.funderKind, remaining: walletFundingLegs.remainingCents, at: walletFundingLegs.createdAt })
+      .from(walletFundingLegs).where(eq(walletFundingLegs.walletId, w.productWalletId)))
+      .sort((a, b) => a.at.getTime() - b.at.getTime()).map((l) => [l.kind, l.remaining]);
+
+    // A 1,000¢ allocation is set: nothing has left the pool.
+    expect((await walletRow(w.poolId)).monthlyRemainingCents).toBe(5_000);
+
+    // One call settles 15¢: drawn from the pool as it happens.
+    const gate = await canConsumeAI(w.marcusId, 'pro', { spend: driveSpend(w.productId, 'drive_wallet') });
+    const [log] = await db.insert(aiUsageLogs).values({ userId: w.marcusId, provider: 'openrouter', model: 'm', cost: 0.1 }).returning({ id: aiUsageLogs.id });
+    expect(await consumeCredits({ aiUsageLogId: log.id, userId: w.marcusId, costDollars: 0.1, holdId: gate.holdId, walletId: gate.walletId })).toBe('settled');
+    expect((await walletRow(w.poolId)).monthlyRemainingCents).toBe(4_985);
+    expect((await walletRow(w.productWalletId)).spentCents).toBe(15);
+
+    // A 300¢ top-up leaves the pool at once, into a leg on Product; then a 50¢ donation leg.
+    expect(await topUpDriveWallet(w.jonoId, w.productId, { amountCents: 300, idempotencyKey: createId() }, 'session')).toMatchObject({ ok: true });
+    expect((await walletRow(w.poolId)).monthlyRemainingCents).toBe(4_685);
+    expect(await donateToDriveWallet({ donorUserId: w.marcusId, targetWalletId: w.productWalletId, amountCents: 50, donationId: createId() })).toMatchObject({ kind: 'donated' });
+    expect(await legsOf()).toEqual([['owner', 300], ['donation', 50]]);
+
+    // The pool refills and Product's allocation resets: the 985¢ never drawn stayed in the pool all
+    // along (the refill only adds), spend restarts at zero, and the legs are untouched.
+    const [org] = await db.select().from(organizations).where(eq(organizations.id, w.orgId));
+    const startS = Math.floor(Date.now() / 1000) + 1;
+    const refill = await applyOrgPoolRefill({
+      id: `in_${createId()}`,
+      customer: org.stripeCustomerId,
+      billing_reason: 'subscription_cycle',
+      amount_paid: 5000,
+      subtotal: 5000,
+      parent: { subscription_details: { subscription: `sub_${createId()}` } },
+      lines: { data: [{ amount: 5000, parent: { subscription_item_details: { subscription_item: 'si_org' } }, period: { start: startS, end: startS + 30 * 86_400 }, pricing: { price_details: { price: REFILL_PRICE_ID } } }] },
+    }, { active: true, basePriceId: REFILL_PRICE_ID, seatPriceId: REFILL_SEAT_PRICE_ID });
+    expect(refill).toMatchObject({ kind: 'granted', walletId: w.poolId });
+    const pool = await walletRow(w.poolId);
+    expect(pool.monthlyRemainingCents).toBe(4_685 + pool.monthlyAllowanceCents);
+    await resetDueAllocations({ now: new Date(startS * 1000 + 1_000) });
+    expect(await walletRow(w.productWalletId)).toMatchObject({ spentCents: 0, topupRemainingCents: 350 });
+    expect(await legsOf()).toEqual([['owner', 300], ['donation', 50]]);
+
+    // 1,200¢ of spend: the whole 1,000¢ allocation from the pool, then 200¢ from the OLDEST leg first.
+    await new Promise((resolve) => setTimeout(resolve, Math.max(0, startS * 1000 - Date.now() + 5)));
+    const big = await canConsumeAI(w.marcusId, 'pro', { spend: driveSpend(w.productId, 'drive_wallet') });
+    const [bigLog] = await db.insert(aiUsageLogs).values({ userId: w.marcusId, provider: 'openrouter', model: 'm', cost: 8 }).returning({ id: aiUsageLogs.id });
+    expect(await consumeCredits({ aiUsageLogId: bigLog.id, userId: w.marcusId, costDollars: 8, holdId: big.holdId, walletId: big.walletId })).toBe('settled');
+    expect((await walletRow(w.poolId)).monthlyRemainingCents).toBe(pool.monthlyRemainingCents - 1_000);
+    expect(await walletRow(w.productWalletId)).toMatchObject({ spentCents: 1_000, topupRemainingCents: 150 });
+    expect(await legsOf()).toEqual([['owner', 100], ['donation', 50]]);
+    await expectWalletLegInvariant([w.productWalletId]);
   });
 
   // ---------------------------------------------------------------------------

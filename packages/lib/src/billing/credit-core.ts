@@ -598,44 +598,6 @@ export function computeCostDrift(input: CostDriftInput, markupBps: number): Cost
   return { shouldCorrect, deltaRealCostCents: delta, deltaChargeMillicents };
 }
 
-export interface LedgerDerivedInput {
-  /** SUM(amountCents) of grant/purchase rows — credits added to buckets. */
-  grantCents: number;
-  /** SUM(|appliedCents|) of usage rows — what spend drew out of the buckets. */
-  appliedUsageCents: number;
-  /** SUM(appliedCents) of adjustment rows (signed): reconcile corrections that moved buckets. */
-  adjustmentCents: number;
-  /** The materialized personal-wallet buckets: monthlyRemaining + topupRemaining. */
-  materializedSpendableCents: number;
-  /** The materialized debt (reported alongside; not part of the bucket equation). */
-  debtCents: number;
-}
-
-export interface BalanceDriftResult {
-  /** Buckets implied by the ledger: grants − spend + applied corrections. */
-  expectedSpendableCents: number;
-  /** materialized − expected. Non-zero beyond tolerance flags a divergence. */
-  driftCents: number;
-  flagged: boolean;
-}
-
-/**
- * Compare a user's MATERIALIZED spendable buckets against what the ledger implies
- * (grants − usage drawn from buckets + applied reconcile corrections). This is a
- * DIVERGENCE SMELL DETECTOR, NOT an exact reconciliation: with rollover, monthly
- * credits carry forward with no ledger row at the boundary, and renewal debt-netting
- * absorbs debt into monthly — both legitimately break expected = materialized at period boundaries.
- * So the tolerance is generous and a flag means "look at this account", not "the books
- * are wrong". Pure; the shell supplies the SQL aggregates.
- */
-export function computeBalanceDrift(input: LedgerDerivedInput, toleranceCents: number): BalanceDriftResult {
-  const expectedSpendableCents =
-    Math.round(input.grantCents) - Math.round(input.appliedUsageCents) + Math.round(input.adjustmentCents);
-  const driftCents = Math.round(input.materializedSpendableCents) - expectedSpendableCents;
-  const flagged = Math.abs(driftCents) > Math.max(0, Math.round(toleranceCents));
-  return { expectedSpendableCents, driftCents, flagged };
-}
-
 /**
  * True when the credits charged for some usage fail to cover its real provider cost by
  * the required margin floor — i.e. we're (near-)losing money on that account. With no

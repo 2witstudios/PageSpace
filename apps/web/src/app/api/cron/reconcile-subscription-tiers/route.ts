@@ -10,7 +10,7 @@ import { getPersonalTierFromPrice } from '@/lib/stripe';
  * cache against the `subscriptions` table (#2149). The cache is written only
  * by the Stripe webhook, so a missed/failed webhook leaves it stale
  * indefinitely — this sweep is the periodic backstop, modeled on
- * reconcile-credits' relationship to computeBalanceDrift. Unknown prices and
+ * reconcile-credits' relationship to the wallet balance-drift sweep. Unknown prices and
  * missing subscriptions establish no paid entitlement; stale paid caches are revoked.
  *
  * Replaces the one-shot repair scripts this drift class used to require

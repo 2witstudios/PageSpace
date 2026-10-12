@@ -19,7 +19,6 @@ import {
   decideSettleTarget,
   orphanSpendKind,
   computeCostDrift,
-  computeBalanceDrift,
   isNegativeMargin,
 } from '../credit-core';
 
@@ -790,47 +789,6 @@ describe('computeCostDrift', () => {
     expect(r.deltaRealCostCents).toBe(-20);
     // refund charge: −(0.20 × 1.5 × 100_000) = −30_000 millicents.
     expect(r.deltaChargeMillicents).toBe(-30_000);
-  });
-});
-
-describe('computeBalanceDrift', () => {
-  it('does not flag when materialized buckets match the ledger-implied amount', () => {
-    // grants 1000 − usage 300 + adjustments 0 = 700 expected; materialized 700.
-    const r = computeBalanceDrift(
-      { grantCents: 1000, appliedUsageCents: 300, adjustmentCents: 0, materializedSpendableCents: 700, debtCents: 0 },
-      10,
-    );
-    expect(r).toEqual({ expectedSpendableCents: 700, driftCents: 0, flagged: false });
-  });
-
-  it('does not flag a divergence within tolerance', () => {
-    const r = computeBalanceDrift(
-      { grantCents: 1000, appliedUsageCents: 300, adjustmentCents: 0, materializedSpendableCents: 705, debtCents: 0 },
-      10,
-    );
-    expect(r.driftCents).toBe(5);
-    expect(r.flagged).toBe(false);
-  });
-
-  it('flags a divergence beyond tolerance (either sign)', () => {
-    expect(computeBalanceDrift(
-      { grantCents: 1000, appliedUsageCents: 300, adjustmentCents: 0, materializedSpendableCents: 800, debtCents: 0 },
-      10,
-    ).flagged).toBe(true);
-    expect(computeBalanceDrift(
-      { grantCents: 1000, appliedUsageCents: 300, adjustmentCents: 0, materializedSpendableCents: 600, debtCents: 0 },
-      10,
-    ).flagged).toBe(true);
-  });
-
-  it('folds applied adjustments into the expected amount', () => {
-    // grants 1000 − usage 300 + adjustments −15 (a reconcile debit) = 685 expected.
-    const r = computeBalanceDrift(
-      { grantCents: 1000, appliedUsageCents: 300, adjustmentCents: -15, materializedSpendableCents: 685, debtCents: 0 },
-      10,
-    );
-    expect(r.expectedSpendableCents).toBe(685);
-    expect(r.flagged).toBe(false);
   });
 });
 

@@ -175,7 +175,7 @@ export const GET = withAdminAuth(async (_adminUser, request) => {
         rows.push(['debt_user', r.userEmail ?? r.userName ?? r.userId, '', '', '', '', '', '', '', '', '', '', centsToDollars(r.debtCents)]);
       }
       for (const r of balanceDrift) {
-        rows.push(['alert_balance_drift', r.userEmail ?? r.userName ?? r.userId, `expected ${centsToDollars(r.expectedSpendableCents)} materialized ${centsToDollars(r.materializedSpendableCents)}`, '', '', '', '', '', '', '', '', '', centsToDollars(r.driftCents)]);
+        rows.push(['alert_balance_drift', r.userEmail ?? r.userName ?? r.userId ?? `${r.walletKind}:${r.walletId}`, `expected ${centsToDollars(r.expectedNetCents)} materialized ${centsToDollars(r.materializedNetCents)}`, '', '', '', '', '', '', '', '', '', centsToDollars(r.driftCents)]);
       }
       for (const r of negativeMargin) {
         rows.push(['alert_negative_margin', r.userEmail ?? r.userName ?? r.userId, '', '', '', '', r.requestCount, centsToDollars(r.realCostCents), centsToDollars(r.chargedCents), '', centsToDollars(r.marginCents), fmtPct(r.marginPct), '']);

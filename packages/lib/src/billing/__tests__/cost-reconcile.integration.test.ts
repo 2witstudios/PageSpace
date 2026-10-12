@@ -439,7 +439,7 @@ describe('applyCorrection transaction atomicity (Postgres)', () => {
         expect(await consumeCredits({ aiUsageLogId: log.id, userId: w.userId, costDollars: 1.0, walletId: w.driveId })).toBe('settled');
         await db.delete(aiUsageLogs).where(eq(aiUsageLogs.id, log.id));
 
-        const credited = await db.transaction((tx) => refundWalletCharge(tx, w.driveId, 90, log.id));
+        const credited = await db.transaction((tx) => refundWalletCharge(tx, w.driveId, 90, log.id, { userId: w.userId, spendKind: 'ai' }));
 
         expect(credited).toBe(90);
         expect(await legs(w.driveId)).toEqual([0, 250]);
