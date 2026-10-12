@@ -52,6 +52,14 @@ test.describe('imago-c shell on C-Files-Doc', () => {
     await expect(pane(page).getByRole('button', { name: 'Close sidebar' })).toBeVisible();
     await expect(imago.getByRole('button', { name: 'Collapse Imago' })).toBeVisible();
     await expect(object(page).getByRole('link', { name: 'Close page' })).toBeVisible();
+    // IMC-1.9: the page head is the page's only header — its path, Share and Page actions.
+    const head = object(page).locator('header').first();
+    await expect(head.getByRole('list', { name: 'Path' })).toHaveText(/Launch\s*›\s*Q4 Launch Plan/);
+    await expect(head.getByRole('button', { name: 'Share' })).toBeVisible();
+    await expect(head.getByLabel('Page actions').first()).toBeVisible();
+    await expect(object(page).getByRole('button', { name: 'History' })).toBeHidden();
+    // IMC-1.10: a document's tools sit in the 44px Formatting strip under the head.
+    await expectHeight(object(page).getByRole('toolbar', { name: 'Formatting' }), 44);
     await attachBoard(testInfo, page, 'C-Files-Doc');
   });
 

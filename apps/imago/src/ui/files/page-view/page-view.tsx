@@ -7,8 +7,7 @@ import { usePage } from '../page-object/page-object';
 import dynamic from 'next/dynamic';
 import type { TreePage } from '@/retained/hooks/usePageTree';
 import { RetainedSurface } from '@/retained-adapters/retained-provider';
-import { ViewHeader } from '@/retained/components/layout/middle-content/content-header';
-import { PageHistory } from '@/retained-adapters/page-history';
+import { PageToolbar } from '@/retained-adapters/page-toolbar';
 import { AgentSettings } from '@/retained-adapters/agent-settings';
 
 const Document = dynamic(() => import('@/retained/components/layout/middle-content/page-views/document/DocumentView'), { ssr: false });
@@ -55,5 +54,6 @@ export function PageView({ driveId, pageId }: PageViewProps): ReactNode {
     case 'AI_CHAT': content = <AgentSettings pageId={pageId} driveId={driveId} title={page.title} />; break;
     default: return renderObjectPlaceholder('Page');
   }
-  return <RetainedSurface><div className="flex h-full min-h-0 flex-col"><ViewHeader pageId={pageId}><PageHistory /></ViewHeader><div className="min-h-0 flex-1">{content}</div></div></RetainedSurface>;
+  // The page head (IMC-1.9) is the page's only header; its tools sit in the 44px strip (IMC-1.10).
+  return <RetainedSurface><div className="flex h-full min-h-0 flex-col"><PageToolbar page={page} /><div className="min-h-0 flex-1">{content}</div></div></RetainedSurface>;
 }

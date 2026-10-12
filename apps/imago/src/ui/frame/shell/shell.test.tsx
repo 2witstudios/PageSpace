@@ -119,6 +119,16 @@ vi.mock('@/ui/chat/chat-pane/chat-pane', async () => {
   };
 });
 
+// The page head loads the page, its trail and classic's share and presence; its own suite
+// proves them. Here it only has to carry the shell's Show sidebar, Ask and Close page.
+vi.mock('@/ui/files/page-head/page-head', async () => {
+  const { renderPaneHeader } = await import('../pane/pane-header');
+  return {
+    PageHead: ({ pageId, leading, trailing }: { pageId: string; leading?: ReactNode; trailing?: ReactNode }) =>
+      renderPaneHeader({ title: `page ${pageId}`, leading, actions: trailing }),
+  };
+});
+
 // The chat history loads through SWR; its own suite proves it beside the real
 // chat pane. Here it only has to be in the list slot, with its Close sidebar
 // wired to the store as the real one is.
