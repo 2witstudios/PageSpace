@@ -1,3 +1,4 @@
+import { parseVerifiedAuthentication, type VerifiedAuthentication } from './authentication-evidence';
 import { generateOpaqueToken, isValidTokenFormat, type TokenType } from './opaque-tokens';
 import { hashToken } from './token-utils';
 import { IDLE_TIMEOUT_MS } from './constants';
@@ -17,6 +18,7 @@ export function clampExpiry(currentExpiresAt: Date, notLaterThan: Date): Date {
 
 export interface SessionClaims {
   sessionId: string;
+  authentication?: VerifiedAuthentication | null;
   userId: string;
   userRole: 'user' | 'admin';
   tokenVersion: number;
@@ -63,6 +65,7 @@ export interface SessionValidationFailure {
 export type SessionValidationResult = SessionValidationSuccess | SessionValidationFailure;
 
 export interface CreateSessionOptions {
+  authentication?: VerifiedAuthentication | null;
   userId: string;
   type: 'user' | 'service' | 'mcp' | 'device' | 'socket';
   scopes: string[];
@@ -80,6 +83,8 @@ export class SessionService {
    * Create new session - returns raw token ONCE (never stored)
    */
   async createSession(options: CreateSessionOptions): Promise<string> {
+    const authentication = parseVerifiedAuthentication(options.authentication, Date.now());
+    if (options.authentication != null && authentication === null) throw new Error('Invalid authentication evidence');
     const user = await sessionRepository.findUserById(options.userId);
 
     if (!user) {
@@ -97,6 +102,8 @@ export class SessionService {
     await sessionRepository.insertSession({
       tokenHash,
       tokenPrefix,
+      authenticatedAt: authentication ? new Date(authentication.authenticatedAtMs) : null,
+      authenticationAssurance: authentication?.assurance ?? null,
       userId: options.userId,
       deviceId: options.deviceId,
       type: options.type,
@@ -249,6 +256,7 @@ export class SessionService {
     return {
       claims: {
         sessionId: session.id,
+        authentication: parseVerifiedAuthentication({ authenticatedAtMs: session.authenticatedAt?.getTime(), assurance: session.authenticationAssurance }, Date.now()),
         userId: session.userId,
         userRole: session.user.role,
         tokenVersion: session.tokenVersion,

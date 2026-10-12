@@ -83,6 +83,8 @@ describe('policyChangeOnlyRestricts', () => {
 
   it('SEAT-9 (partial) every policy key is classified: setting each key to its strictest value from the default never reads as loosening', () => {
     const strictest: OrgPolicies = {
+      requireStrongSignIn: true,
+      maximumSessionAgeMinutes: 0,
       guests: 'off', publicShareLinks: false, publishWeb: false, customDomains: false, whoCanInvite: 'admins', whoCanCreateDrives: 'admins',
       openDriveRoleFloor: 'view', seatAllowanceCents: 0, walletFallback: 'refuse', modelAllowlist: [], providerAllowlist: [],
       agentsAutonomous: false, crossDriveAgents: false, cloudSandbox: false, persistentEnvironments: false, publishedApps: false, integrationsAllowlist: [],

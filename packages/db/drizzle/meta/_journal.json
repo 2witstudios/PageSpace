@@ -2304,6 +2304,13 @@
       "when": 1791767513387,
       "tag": "0340_org_subscription_funding",
       "breakpoints": true
+    },
+    {
+      "idx": 331,
+      "version": "7",
+      "when": 1791771356674,
+      "tag": "0341_credential_authentication_evidence",
+      "breakpoints": true
     }
   ]
 }

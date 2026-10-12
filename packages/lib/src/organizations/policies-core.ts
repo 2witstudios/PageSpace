@@ -16,6 +16,7 @@
  * Seat count, seat auto-add and billing are NOT policies (point-guard ruling): they are billing state
  * with their own columns. The two spend policies here (seat allowance amount, wallet fallback) are POL-7.
  */
+import { normalizeMaximumSessionAgeMinutes, type OrgAuthenticationPolicy } from './authentication-policy-core';
 import { DEFAULT_SEAT_ALLOWANCE_CENTS, effectiveSpendPolicy, type FallbackRule, type SpendPolicy } from '../billing/wallet-core';
 
 export const GUEST_POLICIES = ['off', 'approve', 'on'] as const;
@@ -31,7 +32,7 @@ export type OpenRoleFloor = (typeof OPEN_ROLE_FLOORS)[number];
 
 export const WALLET_FALLBACKS = ['refuse', 'seat_allowance', 'own_credits'] as const satisfies readonly FallbackRule[];
 
-export interface OrgPolicies {
+export interface OrgPolicies extends OrgAuthenticationPolicy {
   /** POL-2 guests from outside the org: off, admins approve, on. */
   guests: GuestPolicy;
   /** POL-3 public share links. */
@@ -115,6 +116,8 @@ const wholeCents = (raw: unknown): number | undefined =>
   typeof raw === 'number' && Number.isSafeInteger(raw) && raw >= 0 && raw <= MAX_SEAT_ALLOWANCE_CENTS ? raw : undefined;
 
 const SPECS: { [K in OrgPolicyKey]: FieldSpec<OrgPolicies[K]> } = {
+  requireStrongSignIn: { default: false, strictest: true, normalize: bool },
+  maximumSessionAgeMinutes: { default: null, strictest: 0, normalize: normalizeMaximumSessionAgeMinutes },
   // [D-OW-41] Outsiders wait for an Owner or Admin unless the org chooses otherwise. New orgs also store it
   // explicitly (NEW_ORG_POLICIES), so a later change of this default never silently moves an existing org.
   guests: { default: 'approve', strictest: 'off', normalize: oneOf(GUEST_POLICIES) },
@@ -349,6 +352,8 @@ const notLooser = (before: boolean, after: boolean): boolean => before || !after
  * being classified. Equal values are not looser.
  */
 const NO_LOOSER: { [K in OrgPolicyKey]: (before: OrgPolicies[K], after: OrgPolicies[K]) => boolean } = {
+  requireStrongSignIn: (before, after) => !before || after,
+  maximumSessionAgeMinutes: (before, after) => before === null || (after !== null && after <= before),
   guests: (b, a) => GUEST_RANK[a] <= GUEST_RANK[b],
   publicShareLinks: notLooser,
   publishWeb: notLooser,

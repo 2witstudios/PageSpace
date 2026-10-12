@@ -28,6 +28,21 @@ describe('Session Service', () => {
   });
 
   describe('createSession', () => {
+    it('SEC-2 (partial) SEC-3 (partial) preserves the verified ceremony on its credential without upgrading sibling sessions', async () => {
+      const authenticatedAtMs = Date.now() - 60_000;
+      const authentication = { authenticatedAtMs, assurance: 'user_verified_passkey' as const };
+      const oldToken = await sessionService.createSession({ userId: testUserId, type: 'user', scopes: ['*'], expiresInMs: 3600000 });
+      const freshToken = await sessionService.createSession({ userId: testUserId, type: 'user', scopes: ['*'], expiresInMs: 3600000, authentication });
+      expect((await sessionService.validateSession(freshToken))?.authentication).toEqual(authentication);
+      expect((await sessionService.validateSession(oldToken))?.authentication).toBeNull();
+      const derivedToken = await sessionService.createSession({ userId: testUserId, type: 'socket', scopes: [], expiresInMs: 300000, authentication: (await sessionService.validateSession(freshToken))?.authentication });
+      expect((await sessionService.validateSession(derivedToken))?.authentication).toEqual(authentication);
+    });
+
+    it('SEC-3 (partial) refuses future ceremony evidence when minting a session', async () => {
+      await expect(sessionService.createSession({ userId: testUserId, type: 'user', scopes: ['*'], expiresInMs: 3600000, authentication: { authenticatedAtMs: Date.now() + 60_000, assurance: 'single_factor' } })).rejects.toThrow('Invalid authentication evidence');
+    });
+
     it('creates session with valid user', async () => {
       const token = await sessionService.createSession({
         userId: testUserId,
