@@ -221,9 +221,9 @@ describe('applyStripeFunding', () => {
 
     await applyStripeFunding(invoiceEvent, { tier: 'pro' });
 
-    // Flag off: 100% of the $15 paid = today's Pro allowance.
+    // A-11: 60% of the $15 paid.
     const allowance = tierAllowanceCents('pro');
-    expect(allowance).toBe(1500);
+    expect(allowance).toBe(900);
     expect(cap.ledgerValues).toMatchObject({
       userId: 'u1',
       // WAL-5: the grant names the payer's personal root wallet, resolved inside the tx.
@@ -457,7 +457,7 @@ describe('applyStripeFunding', () => {
     });
 
     // A verified Pro invoice supplies its identity independently of the cache.
-    await applyStripeFunding(paidInvoiceEvent(tierAllowanceCents('pro')), { tier: 'pro' });
+    await applyStripeFunding(paidInvoiceEvent(tierListPriceCents('pro')), { tier: 'pro' });
 
     const allowance = tierAllowanceCents('pro');
     expect(allowance).not.toBe(tierAllowanceCents('free'));
@@ -543,7 +543,7 @@ describe('applyStripeFunding', () => {
 
     // D-OW-17: applyStripeFunding calls grantForInvoice/allowanceCentsForPaidCents
     // with no `active` argument, so it always uses the money-model default
-    // (MONEY_MODEL_V2_ACTIVE = false in this PR — the legacy 100% pass-through).
+    // (A-11's 60% ratio).
     // The ratio math itself, at BOTH active=true and active=false, is covered
     // directly (no shell, no mocks) in money-model.test.ts and invoice-grant.test.ts;
     // these tests only prove the funding shell wires amount_paid through correctly.
@@ -554,7 +554,7 @@ describe('applyStripeFunding', () => {
       await applyStripeFunding(paidInvoiceEvent(1500), { tier: 'pro' });
 
       const expected = allowanceCentsForPaidCents(1500, 'pro');
-      expect(expected).toBe(1500);
+      expect(expected).toBe(900);
       expect(cap.ledgerValues).toMatchObject({
         entryType: 'monthly_grant',
         amountCents: expected,
@@ -666,7 +666,7 @@ describe('applyStripeFunding', () => {
         await applyStripeFunding(paidInvoiceEvent(0, { subtotal: 1500, billing_reason: 'subscription_cycle' }), { tier: 'pro' });
 
         const list = allowanceCentsForPaidCents(tierListPriceCents('pro'), 'pro');
-        expect(list).toBe(1500);
+        expect(list).toBe(900);
         expect(cap.ledgerValues).toMatchObject({ amountCents: list, paidCents: 0, stripeRef: 'in_123' });
         expect(cap.balanceSet).toMatchObject({ monthlyRemainingCents: list, monthlyAllowanceCents: list });
         expect(mockApiLogger.info).toHaveBeenCalledWith(
@@ -684,7 +684,7 @@ describe('applyStripeFunding', () => {
 
         await applyStripeFunding(paidInvoiceEvent(0, { subtotal: 0, billing_reason: 'subscription_create' }), { tier: 'pro' });
 
-        expect(cap.ledgerValues).toMatchObject({ amountCents: 1500, paidCents: 0 });
+        expect(cap.ledgerValues).toMatchObject({ amountCents: 900, paidCents: 0 });
         expect(mockApiLogger.info).toHaveBeenCalledWith(
           'credit funding: monthly refill applied',
           expect.objectContaining({ basis: 'list', reason: 'trial' }),
@@ -726,7 +726,7 @@ describe('applyStripeFunding', () => {
         await applyStripeFunding(paidInvoiceEvent(1200, { subtotal: 1500, billing_reason: 'subscription_cycle' }), { tier: 'pro' });
 
         expect(cap.ledgerValues).toMatchObject({ amountCents: allowanceCentsForPaidCents(1200, 'pro'), paidCents: 1200 });
-        expect(allowanceCentsForPaidCents(1200, 'pro')).toBe(1200);
+        expect(allowanceCentsForPaidCents(1200, 'pro')).toBe(720);
       });
 
       it('MON-2 (d) a 100% coupon on a NON-gifted subscription grants nothing — admin gifting is the door', async () => {
@@ -744,13 +744,13 @@ describe('applyStripeFunding', () => {
       });
     });
 
-    it('MON-2 / D-OW-17 a full-price invoice grants 100% of what it paid under the current default (MONEY_MODEL_V2_ACTIVE = false)', async () => {
+    it('MON-2 / D-OW-17 a full-price invoice grants A-11\'s 60% of what it paid', async () => {
       const cap: Captured = {};
       refill(cap);
 
       await applyStripeFunding(paidInvoiceEvent(1500), { tier: 'pro' });
 
-      expect(cap.ledgerValues).toMatchObject({ amountCents: 1500, paidCents: 1500 });
+      expect(cap.ledgerValues).toMatchObject({ amountCents: 900, paidCents: 1500 });
     });
   });
 });

@@ -30,8 +30,8 @@ describe('MON-5 (partial) the web formatter, the marketing mirror, and admin con
       expect(MONTHLY_CREDIT_CENTS[tier], tier).toBe(tierAllowanceCents(tier));
       expect(MONTHLY_CREDITS[tier], tier).toBe(formatCreditCount(MONTHLY_CREDIT_CENTS[tier]));
     }
-    // Today's production figure (MONEY_MODEL_V2_ACTIVE = false): Pro is $15 → 1,500.
-    expect(MONTHLY_CREDITS.pro).toBe('1,500');
+    // A-11: Pro is $15 × 60% → 900.
+    expect(MONTHLY_CREDITS.pro).toBe('900');
   });
 
   it('MON-8 FREE_STARTER_CREDITS_DISPLAY is the starter count, not a monthly figure', () => {
@@ -55,9 +55,9 @@ describe('MON-5 (partial) the web formatter, the marketing mirror, and admin con
   it('UI-12 the free phrase says "to start" and never "/month"; paid phrases say "/month"', () => {
     expect(monthlyCreditsPhrase('free')).toBe('500 credits to start');
     expect(creditsPhrase('free')).toBe('500 to start');
-    // Today's production figure: Pro $15 → 1,500 (MONEY_MODEL_V2_ACTIVE = false).
-    expect(monthlyCreditsPhrase('pro')).toBe('1,500 credits/month');
-    expect(creditsPhrase('pro')).toBe('1,500/mo');
+    // A-11: Pro $15 × 60% → 900.
+    expect(monthlyCreditsPhrase('pro')).toBe('900 credits/month');
+    expect(creditsPhrase('pro')).toBe('900/mo');
   });
 
   it('MON-4 top-up packs are credit counts; their prices are real purchases and keep dollar strings', () => {
@@ -70,12 +70,12 @@ describe('MON-5 (partial) the web formatter, the marketing mirror, and admin con
 
 describe('MON-6 plan-card facts (lane A2)', () => {
   it('MON-6 includedCreditsPhrase is an integer credit count with no dollar sign, per tier', () => {
-    // Literal committed-default copy (MONEY_MODEL_V2_ACTIVE = false), not rebuilt from
+    // Literal committed-default copy (MONEY_MODEL_V2_ACTIVE = true), not rebuilt from
     // MONTHLY_CREDITS: an expectation derived from the module under test cannot fail.
-    expect(MONEY_MODEL_V2_ACTIVE).toBe(false);
+    expect(MONEY_MODEL_V2_ACTIVE).toBe(true);
     expect(includedCreditsPhrase('free')).toBe('500 credits to start');
-    expect(includedCreditsPhrase('pro')).toBe('1,500 credits included each month');
-    expect(includedCreditsPhrase('business')).toBe('5,000 credits included each month');
+    expect(includedCreditsPhrase('pro')).toBe('900 credits included each month');
+    expect(includedCreditsPhrase('business')).toBe('3,000 credits included each month');
     for (const tier of TIERS) {
       expect(includedCreditsPhrase(tier), tier).not.toContain('$');
       expect(includedCreditsPhrase(tier), tier).toMatch(/^\d/);

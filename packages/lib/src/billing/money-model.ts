@@ -94,7 +94,7 @@ export const FREE_STARTER_CREDITS = 500;
  * CONSTANT, never a runtime env var (see the module doc comment for why). FALSE in
  * this PR; migration day changes this literal in a follow-up commit.
  */
-export const MONEY_MODEL_V2_ACTIVE = false;
+export const MONEY_MODEL_V2_ACTIVE = true;
 
 /**
  * Whether the decoupled money model is active. Takes no argument and returns

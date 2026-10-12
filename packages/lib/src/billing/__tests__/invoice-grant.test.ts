@@ -171,20 +171,20 @@ describe('grantForInvoiceLines (org subscriptions seam, Phase 3)', () => {
   });
 });
 
-describe('D-OW-17 active=false (today\'s real production default) reproduces the legacy 1:1 amounts, with no env var involved', () => {
+describe('D-OW-17 active=false reproduces the legacy 1:1 amounts; production defaults to the ratio, with no env var involved', () => {
   it('a full-price Pro invoice grants exactly what it paid, not the 60% ratio', () => {
     const result = grantForInvoice({ amountPaidCents: 1500, billingReason: 'subscription_cycle', hasSubscriptionParent: true, tier: 'pro' }, false);
     expect(result).toMatchObject({ paidCents: 1500, allowanceCents: 1500, basis: 'paid', reason: 'paid' });
   });
 
-  it('grantForInvoice with no active argument at all defaults to false in this PR — production\'s actual call shape', () => {
-    const explicit = grantForInvoice({ amountPaidCents: 1500, billingReason: 'subscription_cycle', hasSubscriptionParent: true, tier: 'pro' }, false);
+  it('grantForInvoice with no active argument at all defaults to true since the migration commit — production\'s actual call shape', () => {
+    const explicit = grantForInvoice({ amountPaidCents: 1500, billingReason: 'subscription_cycle', hasSubscriptionParent: true, tier: 'pro' }, true);
     const defaulted = grantForInvoice({ amountPaidCents: 1500, billingReason: 'subscription_cycle', hasSubscriptionParent: true, tier: 'pro' });
     expect(defaulted).toEqual(explicit);
   });
 
-  it('grantForInvoiceLines with no active argument also defaults to false', () => {
-    const explicit = grantForInvoiceLines([{ amount: 5000 }], 'business', false);
+  it('grantForInvoiceLines with no active argument also defaults to true', () => {
+    const explicit = grantForInvoiceLines([{ amount: 5000 }], 'business', true);
     const defaulted = grantForInvoiceLines([{ amount: 5000 }], 'business');
     expect(defaulted).toEqual(explicit);
   });

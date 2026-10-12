@@ -76,9 +76,9 @@ describe('MON-1 (partial) one module defines the money model', () => {
     expect(INCLUDED_CREDIT_RATIO_BPS.free).toBe(0);
   });
 
-  it('D-OW-17 MONEY_MODEL_V2_ACTIVE is a plain code constant, FALSE in this PR — migration day is a follow-up commit, never an env var', () => {
+  it('D-OW-17 MONEY_MODEL_V2_ACTIVE is a plain code constant, TRUE since the migration commit, never an env var', () => {
     expect(typeof MONEY_MODEL_V2_ACTIVE).toBe('boolean');
-    expect(MONEY_MODEL_V2_ACTIVE).toBe(false);
+    expect(MONEY_MODEL_V2_ACTIVE).toBe(true);
   });
 
   it('D-OW-17 isMoneyModelV2Enabled() takes no argument and returns the constant directly', () => {
@@ -142,12 +142,12 @@ describe('MON-2 the monthly allowance is derived from the amount paid, never tab
     expect(allowanceCentsForPaidCents(Number.NaN, 'pro', true)).toBe(0);
   });
 
-  it('MON-2 with active=false the ratio is the legacy 1:1 so balances compute as today (this PR\'s actual production behavior)', () => {
+  it('MON-2 with active=false the ratio is the legacy 1:1; production (no third argument) uses the ratio', () => {
     expect(includedCreditRatioBps('pro', false)).toBe(10000);
     expect(allowanceCentsForPaidCents(1500, 'pro', false)).toBe(1500);
     expect(allowanceCentsForPaidCents(10000, 'business', false)).toBe(10000);
-    // No third argument: production's actual call shape, defaulting to the FALSE constant.
-    expect(allowanceCentsForPaidCents(1500, 'pro')).toBe(1500);
+    // No third argument: production's actual call shape, defaulting to the TRUE constant.
+    expect(allowanceCentsForPaidCents(1500, 'pro')).toBe(900);
   });
 
   it('MON-2 tierAllowanceCents sizes a grant from the list price when there is no invoice, per tier, both active values', () => {
@@ -157,8 +157,8 @@ describe('MON-2 the monthly allowance is derived from the amount paid, never tab
       expect(tierAllowanceCents(tier, true), tier).toBe(allowanceCentsForPaidCents(list, tier, true));
       expect(tierAllowanceCents(tier, true), tier).toBeGreaterThan(0);
     }
-    // No third argument (today's production shape): pro $15 → 1500¢.
-    expect(tierAllowanceCents('pro')).toBe(1500);
+    // No third argument (production's shape): pro $15 × 60% → 900¢.
+    expect(tierAllowanceCents('pro')).toBe(900);
   });
 });
 
@@ -383,12 +383,12 @@ describe('D-OW-17 no client-visible mirror, and no env var, of the flag (single 
   it('this module never reads process.env.MONEY_MODEL_V2 — the seam guard in __tests__/seams/credit-conversion.seam.test.ts enforces this repo-wide', () => {
     // A weaker, local echo of the seam: with the env var explicitly set to something
     // that would flip legacy env-based behavior, production's own call shape (no
-    // active argument) must still return the FALSE-constant figures.
+    // active argument) must still return the constant's figures.
     const original = process.env.MONEY_MODEL_V2;
     process.env.MONEY_MODEL_V2 = 'true';
     try {
-      expect(tierAllowanceCents('pro')).toBe(1500);
-      expect(isMoneyModelV2Enabled()).toBe(false);
+      expect(tierAllowanceCents('pro')).toBe(900);
+      expect(isMoneyModelV2Enabled()).toBe(true);
     } finally {
       if (original === undefined) delete process.env.MONEY_MODEL_V2;
       else process.env.MONEY_MODEL_V2 = original;
