@@ -1,5 +1,3 @@
-import { resolvePersonalCapabilityTier } from '@pagespace/lib/billing/deployment-capability';
-import { toPersonalSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 /**
  * The PAGE-AGENT chat turn — one of the two strategies behind the single
  * chat pipeline (`handle-chat-turn.ts`).
@@ -43,7 +41,7 @@ import {
 import { MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
 import { conversationSpend } from '@pagespace/lib/billing/spend-target';
-import { UNGATED_TURN_CREDIT, turnCreditAfterGate, type TurnCredit } from './turn-credit';
+import { UNGATED_TURN_CREDIT, personalTurnTiers, turnCreditAfterGate, type TurnCredit } from './turn-credit';
 import { writeTurnPreamble } from './turn-preamble';
 import { isMeteringExempt } from '@pagespace/lib/ai/model-defaults';
 import { estimateChatHoldCentsForModel } from '@pagespace/lib/monitoring/chat-pricing';
@@ -770,7 +768,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     const pageSpend = conversationSpend(page.driveId, conversationId);
     credit = { spend: pageSpend };
     if (!isMeteringExempt(gateProvider) && !isSoloHelpRequest) {
-      const creditGate = await canConsumeAI(userId, toPersonalSubscriptionTier(user?.subscriptionTier), {
+      const creditGate = await canConsumeAI(userId, personalTurnTiers(user?.subscriptionTier).gate, {
         spend: pageSpend,
         estCostCents: estimateChatHoldCentsForModel(selectedModel),
         maxInFlight: MAX_CHAT_INFLIGHT,
@@ -1152,7 +1150,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
       provider: currentProvider,
       model: currentModel,
       // WAL-8: the tier of whoever funds this call, as the gate resolved it.
-      subscriptionTier: credit.entitlementTier ?? resolvePersonalCapabilityTier(user?.subscriptionTier),
+      subscriptionTier: credit.entitlementTier ?? personalTurnTiers(user?.subscriptionTier).capability,
       isAdmin: isAdminUser,
       requiresProSubscription,
     });
@@ -1162,7 +1160,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
         userId,
         provider: currentProvider,
         model: currentModel,
-        subscriptionTier: resolvePersonalCapabilityTier(user?.subscriptionTier)
+        subscriptionTier: personalTurnTiers(user?.subscriptionTier).capability
       });
       return createSubscriptionRequiredResponse();
     }
@@ -1930,7 +1928,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
                 } : undefined,
                 modelCapabilities: modelCapabilitiesForTools,
                 isAdmin: isAdminUser,
-                subscriptionTier: resolvePersonalCapabilityTier(user?.subscriptionTier),
+                subscriptionTier: personalTurnTiers(user?.subscriptionTier).capability,
                 imageGenerationModel: user?.imageGenerationModel ?? DEFAULT_IMAGE_MODEL,
                 creditSpend: credit,
                 chatSource: {
