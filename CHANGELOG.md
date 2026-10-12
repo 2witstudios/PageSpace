@@ -9,7 +9,8 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 - Guests can no longer spend an organization drive's wallet by @mentioning an agent or pressing Run. An Admin can let a drive's guests spend its wallet (Drive Settings › Wallet › Guests); guests are then always held to spending caps (50 credits a day and 1,000 a month unless set lower).
 - The amount shown for a drive wallet in the "spending from" chip, strip and popover is now the wallet's own remaining amount, the same figure as the drive's Wallet page.
 - When an automation or mention is skipped because the person it runs as reached their cap, or is a guest the drive keeps off its wallet, the drive lead's notice now says so.
-- A donation to a drive wallet is now always kept whole as your gift; it no longer pays off the wallet's debt.
+- A donation to a drive wallet is now always kept whole as your gift; it no longer pays off the wallet's debt, and it can be spent right away even while the wallet is over.
+- Moving a drive into or out of an organization now moves its wallet with it: top-ups and donations stay, and the new owner sets its monthly allocation.
 - Zoom transcript summaries and action items spend the destination drive's wallet on personal drives too, never anyone's own credits; a drive without a wallet skips them.
 - The drive lead sees each automation's spend as its own row on the Wallet page, apart from the person who created it.
 - Inside a drive with no chat open, the header chip now shows what a new conversation there would spend from.
