@@ -2,7 +2,8 @@
  * Verified-domain auto-join through the REAL sign-up routes against a REAL Postgres (Spec SEC-1).
  *
  * A new person signs up the way the product signs them up: POST /api/auth/magic-link/send (which creates the
- * account) and then GET /api/auth/magic-link/verify with the link from the captured email. Nothing in between is
+ * account) and then GET /api/auth/magic-link/verify with the link from the captured email, or with Google through
+ * GET /api/auth/google/callback (only Google's token exchange and ID-token check are faked). Nothing in between is
  * mocked: the account, the email verification, the domain lookup, the seat count under the billing lock, the
  * membership row and the org audit trail are all real. Only external IO is replaced: the outgoing email (captured,
  * to read the link) and Stripe (a recording seat port, for the extra seat when auto-add is on).
@@ -56,6 +57,20 @@ vi.mock('@/lib/org-billing/seat-billing', () => ({
   }),
 }));
 
+const google = vi.hoisted(() => ({ payload: null as null | { sub: string; email: string; email_verified: boolean; name: string } }));
+vi.mock('google-auth-library', () => ({
+  // Google's side of the code exchange: the token endpoint and the ID-token check, answered with the test's payload.
+  OAuth2Client: class {
+    async getToken() {
+      return { tokens: { id_token: 'google-id-token' } };
+    }
+    async verifyIdToken() {
+      return { getPayload: () => google.payload };
+    }
+  },
+}));
+
+import { createHmac } from 'node:crypto';
 import { generateLoginCSRFToken } from '@/lib/auth/login-csrf-utils';
 import { resetAuditDbBindingForTests } from '@pagespace/lib/audit/audit-db-binding';
 import { resetDefaultSecurityAuditForTests } from '@pagespace/lib/audit/security-audit';
@@ -66,6 +81,7 @@ import { addOrgDomain, confirmDomainProofEmail, sendDomainProofEmail, verifyOrgD
 import { dnsRecordName, dnsRecordValue } from '@pagespace/lib/organizations/domains-core';
 import { POST as sendMagicLink } from '../send/route';
 import { GET as verifyMagicLink } from '../verify/route';
+import { GET as googleCallback } from '../../google/callback/route';
 
 const HOUR = 3_600_000;
 const created = { orgs: [] as string[], users: [] as string[] };
@@ -86,6 +102,7 @@ beforeAll(async () => {
   resetAuditDbBindingForTests();
   resetDefaultSecurityAuditForTests();
   vi.stubEnv('WEB_APP_URL', 'http://localhost');
+  vi.stubEnv('OAUTH_STATE_SECRET', 'sec-1-oauth-state-secret-for-integration-tests');
   libOrgsFlag.ORGS_ENABLED = true;
 });
 
@@ -209,6 +226,23 @@ async function signUp(email: string) {
   return user.id;
 }
 
+/** Sign up with Google through the real callback route: a signed state, Google answering with a verified address. */
+async function signUpWithGoogle(email: string) {
+  google.payload = { sub: `google-${createId()}`, email, email_verified: true, name: 'New Person' };
+  const data = { returnUrl: '/dashboard', platform: 'web' as const, timestamp: Date.now() };
+  const sig = createHmac('sha256', process.env.OAUTH_STATE_SECRET ?? '').update(JSON.stringify(data)).digest('hex');
+  const state = Buffer.from(JSON.stringify({ data, sig })).toString('base64');
+  const ip = `10.9.${Math.floor(Math.random() * 250)}.${Math.floor(Math.random() * 250)}`;
+  const res = await googleCallback(new Request(`http://localhost/api/auth/google/callback?code=auth-code-${createId()}&state=${encodeURIComponent(state)}`, {
+    headers: { 'x-forwarded-for': ip },
+  }));
+  expect(res.headers.get('location') ?? '').not.toContain('error=');
+  const [user] = await db.select({ id: users.id }).from(users).where(userEmailMatch(email));
+  if (!user) throw new Error('Google sign-up created no account');
+  if (!created.users.includes(user.id)) created.users.push(user.id);
+  return user.id;
+}
+
 const roleIn = async (orgId: string, userId: string) =>
   (await db.select({ role: orgMembers.role }).from(orgMembers).where(and(eq(orgMembers.orgId, orgId), eq(orgMembers.userId, userId))))[0]?.role ?? null;
 
@@ -288,5 +322,40 @@ describe('SEC-1 verified email domains auto-join new sign-ups through the real s
     expect(stripe.calls).toEqual([{ quantity: 1 }]);
     const [sub] = await db.select({ extra: orgSubscriptions.extraSeatQuantity }).from(orgSubscriptions).where(eq(orgSubscriptions.orgId, org.id));
     expect(sub.extra).toBe(1);
+  });
+
+  it('a new Google sign-up through the OAuth callback on a verified domain joins as MEMBER while a seat is free', async () => {
+    if (!dbAvailable) return;
+    const { org, jono } = await northwind({ members: 2, autoAdd: false });
+    const domain = await verifyByDns(org.id, jono.id);
+
+    const gia = await signUpWithGoogle(`gia-${createId()}@${domain}`);
+
+    expect(await roleIn(org.id, gia)).toBe('MEMBER');
+    expect((await auditOf(org.id, gia)).map((e) => e.eventType)).toContain('org.member.auto_joined');
+  });
+
+  it('a new Google sign-up on a domain that is only claimed, not verified, joins nobody', async () => {
+    if (!dbAvailable) return;
+    const { org, jono } = await northwind({ members: 1, autoAdd: false });
+    const domain = freshDomain();
+    await claim(org.id, jono.id, domain);
+
+    const hal = await signUpWithGoogle(`hal-${createId()}@${domain}`);
+
+    expect(await roleIn(org.id, hal)).toBeNull();
+  });
+
+  it('a new Google sign-up into a full org with auto-add off is refused and audited', async () => {
+    if (!dbAvailable) return;
+    const { org, jono } = await northwind({ members: 5, autoAdd: false });
+    const domain = await verifyByDns(org.id, jono.id);
+
+    const ivy = await signUpWithGoogle(`ivy-${createId()}@${domain}`);
+
+    expect(await roleIn(org.id, ivy)).toBeNull();
+    expect(stripe.calls).toEqual([]);
+    const refused = (await auditOf(org.id, ivy)).find((e) => e.eventType === 'org.member.auto_join_refused');
+    expect(refused?.details).toMatchObject({ domain, reason: 'seats_full' });
   });
 });
