@@ -30,6 +30,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import {
   findDedicatedSubscriptionByStripeId,
   recordDedicatedSubscription,
+  resolveDedicatedPayer,
   syncAppTierToSubscription,
 } from '@pagespace/lib/services/app-hosting/dedicated-tier-service';
 import { subscriptionPeriod } from '@/lib/app-hosting/stripe-subscription-period';
@@ -41,21 +42,22 @@ export async function handleDedicatedSubscriptionEvent(
   eventCreated: number,
 ): Promise<void> {
   const publishedAppId = subscription.metadata?.publishedAppId;
-  const userId = subscription.metadata?.userId;
-  // WAL-9: the org billed, for an org drive's app (the purchase path stamps it).
-  const orgId = subscription.metadata?.orgId;
   const guestPreset = subscription.metadata?.guestPreset;
 
-  // Prefer the metadata the purchase path stamped; fall back to the existing
-  // mirror row when an event carries a partial bag (metadata can be edited in the
+  // Prefer the metadata the purchase path stamped for WHICH app and size; fall back to the
+  // existing mirror row when an event carries a partial bag (metadata can be edited in the
   // Stripe dashboard, and a human editing one key should not be able to orphan the
   // subscription). Only if BOTH are empty is there nothing to act on.
   const existing = await findDedicatedSubscriptionByStripeId(subscription.id);
   const resolvedAppId = publishedAppId ?? existing?.publishedAppId;
-  const resolvedUserId = userId ?? existing?.userId ?? null;
-  const resolvedOrgId = orgId ?? existing?.orgId ?? null;
   const resolvedPreset = guestPreset ?? existing?.guestPreset;
   const priceId = subscription.items?.data?.[0]?.price?.id ?? existing?.stripePriceId;
+  // WHO pays comes from stored rows only, never metadata.userId (D-OW-64): a buyer who has
+  // since deleted their account is null on the mirror, and writing their id back would fail
+  // the FK and wedge every later event, leaving the app's tier unsynced.
+  const payer = resolvedAppId ? await resolveDedicatedPayer({ mirror: existing, publishedAppId: resolvedAppId }) : null;
+  const resolvedUserId = payer?.userId ?? null;
+  const resolvedOrgId = payer?.orgId ?? null;
 
   // A subscription names who pays: the org, or (a personal drive's app) the person.
   if (!resolvedAppId || (!resolvedUserId && !resolvedOrgId) || !resolvedPreset || !priceId) {

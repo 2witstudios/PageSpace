@@ -27,6 +27,7 @@ import {
   type PublishedAppSubscription,
 } from '@pagespace/db/schema/published-app-subscriptions';
 import { loggers } from '../../logging/logger-config';
+import { lookupDriveBillingFacts, payerForDrive } from '../../billing/sandbox-payer';
 import { isBillingEnabled } from '../../deployment-mode';
 import { stopPublishedApp } from './app-lifecycle-metering';
 import { releaseHold as releaseCreditHold } from '../../billing/credit-consume';
@@ -521,6 +522,27 @@ export async function findDedicatedSubscriptionByStripeId(
     .where(eq(publishedAppSubscriptions.stripeSubscriptionId, stripeSubscriptionId))
     .limit(1);
   return row ?? null;
+}
+
+/**
+ * Who a dedicated subscription bills, read from STORED rows, never from Stripe metadata (D-OW-64):
+ * the mirror row's buyer and org when the mirror exists; otherwise (a webhook that beat the
+ * purchase path's own mirror write) the payer seam on the app's drive — the org for an org drive
+ * (no buyer known yet), the drive owner for a personal one. Null when the app is gone. Metadata
+ * can name a person who has since been deleted (the mirror's buyer FK is SET NULL), and writing
+ * that id back would fail the FK and wedge every later event for the subscription.
+ */
+export async function resolveDedicatedPayer(input: {
+  mirror: Pick<PublishedAppSubscription, 'userId' | 'orgId'> | null;
+  publishedAppId: string;
+}): Promise<{ userId: string | null; orgId: string | null } | null> {
+  if (input.mirror) return { userId: input.mirror.userId, orgId: input.mirror.orgId };
+  const [app] = await db.select({ driveId: publishedApps.driveId }).from(publishedApps).where(eq(publishedApps.id, input.publishedAppId)).limit(1);
+  if (!app) return null;
+  const facts = await lookupDriveBillingFacts(app.driveId);
+  if (!facts) return null;
+  const payer = payerForDrive(facts);
+  return payer.kind === 'org' ? { userId: null, orgId: payer.orgId } : { userId: payer.userId, orgId: null };
 }
 
 /** The subscription mirror row for one app — the publish surface's lookup. */
