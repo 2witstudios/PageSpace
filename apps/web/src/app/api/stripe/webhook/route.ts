@@ -14,6 +14,7 @@ import { maskEmail } from '@pagespace/lib/audit/mask-email';
 import { userEmailMatch } from '@pagespace/lib/auth/user-repository';
 import { applyStripeFunding } from '@pagespace/lib/billing/credit-funding';
 import { getCreditPack } from '@pagespace/lib/billing/credit-pricing';
+import { GIFT_SUBSCRIPTION_METADATA_TYPE } from '@pagespace/lib/billing/wallet-funding';
 import { emitCreditsUpdated } from '@/lib/subscription/credit-balance';
 import { sendSubscriptionReceiptEmail, sendTopupReceiptEmail } from '@/lib/billing/send-payment-receipt-email';
 import { classifyDedupeOutcome, DEFAULT_LEASE_MS, type DedupeOutcome } from './dedupe';
@@ -523,7 +524,7 @@ async function handleSubscriptionChange(subscription: Stripe.Subscription) {
     // Shared order with reconciliation, deletion and cutover: user, then mirror.
     await tx.select({ id: users.id }).from(users).where(eq(users.id, userId)).for('update');
     // Upsert subscription record
-    const isGifted = subscription.metadata?.type === 'gift_subscription';
+    const isGifted = subscription.metadata?.type === GIFT_SUBSCRIPTION_METADATA_TYPE;
     await tx.insert(subscriptions).values({
       userId,
       stripeSubscriptionId: subscription.id,

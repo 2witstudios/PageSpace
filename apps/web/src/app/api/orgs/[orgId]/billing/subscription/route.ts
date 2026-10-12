@@ -13,9 +13,13 @@ import { OrgBillingError, orgSubscriptionSummary, provisionOrgSubscription } fro
  * client's card confirmation (Stripe Payment Element). The same call re-subscribes a
  * lapsed org (a new subscription after the old one ended) and hands a past_due or unpaid
  * org the secret for what it owes; paying lifts the lapse through the webhook with no
- * other step (review 3+4 P1-1). A subscription changed outside PageSpace (a trial, a pause,
- * send_invoice collection, an unpayable invoice, other prices, a second subscription) is a
- * 409 `billing_requires_support` ([D-OW-44]), never a success. Idempotent: an org already
+ * other step (review 3+4 P1-1). `activation` says where the org stands: `active` (funding
+ * verified), `payment_required` (confirm `payment`), or `funding_pending` (Stripe has the
+ * payment and the invoice.paid webhook is recording the funding proof; nothing to pay, the
+ * org turns active with an org:changed event). A subscription PageSpace cannot activate (a
+ * trial, a pause, send_invoice collection, an unpayable invoice, other prices, a second
+ * subscription, or an active one nothing ever funded, [D-OW-30]) is a 409
+ * `billing_requires_support` ([D-OW-44]), never a success. Idempotent: an org already
  * subscribed gets its subscription back. Absent where billing is off (onprem, tenant).
  */
 export async function POST(request: Request, context: { params: Promise<{ orgId: string }> }) {
@@ -24,16 +28,16 @@ export async function POST(request: Request, context: { params: Promise<{ orgId:
   if (!gate.ok) return gate.response;
   if (!isBillingEnabled()) return billingUnavailableResponse();
   try {
-    const { result, payment } = await provisionOrgSubscription(orgId);
+    const { result, payment, activation } = await provisionOrgSubscription(orgId);
     auditRequest(request, {
       eventType: 'data.write',
       userId: gate.userId,
       resourceType: 'organization',
       resourceId: orgId,
-      details: { operation: 'provision_org_subscription', outcome: result.kind, status: result.linkage.status, paymentStep: payment.kind },
+      details: { operation: 'provision_org_subscription', outcome: result.kind, status: result.linkage.status, paymentStep: payment.kind, activation },
     });
     return NextResponse.json(
-      { subscription: orgSubscriptionSummary(result.linkage), payment },
+      { subscription: orgSubscriptionSummary(result.linkage), payment, activation },
       { status: result.kind === 'existing' ? 200 : 201 },
     );
   } catch (error) {

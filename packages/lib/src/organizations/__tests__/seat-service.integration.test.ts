@@ -119,6 +119,7 @@ async function buildOrg(input: {
       currentPeriodEnd: input.periodEnd ?? new Date(Date.now() + 10 * 24 * HOUR),
       cancelAtPeriodEnd: input.cancelAtPeriodEnd ?? false,
     });
+  await factories.fundOrgSubscription(org.id);
   }
   const drive = await factories.createDrive(owner.id, { name: 'Product', slug: `product-${createId()}`, orgId: org.id, orgVisibility: 'OPEN' });
   const page = await factories.createPage(drive.id, { title: 'Roadmap' });

@@ -2311,6 +2311,13 @@
       "when": 1791811791589,
       "tag": "0341_drop_org_subscription_trial_end",
       "breakpoints": true
+    },
+    {
+      "idx": 332,
+      "version": "7",
+      "when": 1791812566533,
+      "tag": "0342_org_subscription_funding",
+      "breakpoints": true
     }
   ]
 }

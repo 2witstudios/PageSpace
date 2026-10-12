@@ -68,7 +68,8 @@ vi.mock('@pagespace/db/schema/wallets', () => ({
 }));
 
 vi.mock('@pagespace/db/schema/organizations', () => ({
-  orgSubscriptions: { status: 'ORG_SUB_STATUS', gifted: 'ORG_SUB_GIFTED', stripeBasePriceId: 'ORG_SUB_PRICE_ID' },
+  orgSubscriptions: { orgId: 'ORG_SUB_ORG_ID', stripeSubscriptionId: 'ORG_SUB_ID', status: 'ORG_SUB_STATUS', gifted: 'ORG_SUB_GIFTED', stripeBasePriceId: 'ORG_SUB_PRICE_ID' },
+  orgSubscriptionFunding: { orgId: 'FUNDING_ORG_ID', stripeSubscriptionId: 'FUNDING_SUB_ID' },
 }));
 
 vi.mock('@pagespace/db/schema/subscriptions', () => ({

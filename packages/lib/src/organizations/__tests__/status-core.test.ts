@@ -12,7 +12,7 @@ import {
 } from '../status-core';
 
 function sub(status: string, over: Partial<OrgSubscriptionState> = {}): OrgSubscriptionState {
-  return { status, collectionMethod: 'charge_automatically', ...over };
+  return { status, collectionMethod: 'charge_automatically', hasVerifiedFunding: true, ...over };
 }
 
 describe('deriveOrgStatus', () => {
@@ -61,6 +61,11 @@ describe('deriveOrgStatus', () => {
     for (const [status, reason] of cases) {
       expect(deriveOrgStatus({ billingEnabled: true, subscription: sub(status) })).toEqual({ status: 'lapsed', reason });
     }
+  });
+
+  it('SEAT-9 (partial) an active Stripe subscription without verified funding remains lapsed', () => {
+    const unpaid = { ...sub('active'), hasVerifiedFunding: false };
+    expect(deriveOrgStatus({ billingEnabled: true, subscription: unpaid })).toEqual({ status: 'lapsed', reason: 'never_funded' });
   });
 
   it('SEAT-9 (partial) an unrecognised Stripe status fails closed to lapsed', () => {

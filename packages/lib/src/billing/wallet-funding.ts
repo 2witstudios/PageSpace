@@ -55,6 +55,14 @@ export const ORG_POOL_TIER = 'business' as const;
 export const ORG_POOL_FUNDS_GIFTS = true;
 
 /**
+ * `metadata.type` the admin gift-subscription route stamps on a Stripe subscription it
+ * creates (apps/admin .../gift-subscription/route.ts). The one place a gift is recognized:
+ * the invoice snapshot (personal and org funding), the subscription mirrors, and the
+ * reactivation decision all read this constant.
+ */
+export const GIFT_SUBSCRIPTION_METADATA_TYPE = 'gift_subscription';
+
+/**
  * The pool grant for an org subscription we fund ourselves (an admin gift): the
  * Business list price for the base plus `extraSeats` extra seats at the list seat
  * price, times the Business ratio. Integer cents; multiply before any divide.
@@ -183,6 +191,64 @@ function wholeCents(value: number | null | undefined): number {
   return typeof value === 'number' && Number.isFinite(value) ? Math.round(value) : 0;
 }
 
+/** Structural subset of a Stripe invoice the org funding path reads (a Stripe.Invoice satisfies it). */
+export interface OrgInvoice {
+  id?: string | null;
+  customer?: string | { id?: string | null } | null;
+  amount_paid?: number | null;
+  subtotal?: number | null;
+  billing_reason?: string | null;
+  period_start?: number | null;
+  period_end?: number | null;
+  parent?: {
+    subscription_details?: {
+      metadata?: Record<string, string> | null;
+      subscription?: string | { id?: string | null } | null;
+    } | null;
+  } | null;
+  lines?: {
+    data?: Array<OrgInvoiceLine | null | undefined> | null;
+    /** Stripe's pagination flag: only `false` proves `data` is every line of the invoice. */
+    has_more?: boolean | null;
+  } | null;
+}
+
+/** The subscription an invoice was generated for (invoice.parent.subscription_details), or null. */
+export function orgInvoiceSubscriptionId(invoice: Pick<OrgInvoice, 'parent'>): string | null {
+  const s = invoice.parent?.subscription_details?.subscription;
+  if (typeof s === 'string') return s.length > 0 ? s : null;
+  return typeof s?.id === 'string' && s.id.length > 0 ? s.id : null;
+}
+
+/**
+ * The ONE reading of an org invoice as funding evidence: the recognized Business lines, what was
+ * paid for them, whether it is a subscription invoice, and whether it is a gift on the org's own
+ * (stored) subscription. invoice.paid (the pool refill and its proof), the proof recovery script
+ * and the reactivation decision all derive `orgSubscriptionFundingBasis` from this, so they can
+ * never disagree about what funds an org. The caller guarantees `lines` is COMPLETE.
+ */
+export function orgInvoiceFundingInput(
+  invoice: OrgInvoice,
+  ctx: { prices: OrgPoolPriceIds; storedSubscriptionId: string | null; extraSeats?: number },
+): { input: OrgPoolRefillInput; unrecognized: UnrecognizedOrgInvoiceLine[] } {
+  const subscriptionId = orgInvoiceSubscriptionId(invoice);
+  const selection = selectOrgPoolRefillLines(invoice.lines?.data ?? [], ctx.prices);
+  return {
+    input: {
+      lines: selection.refillLines,
+      hasVerifiedGiftPrice: selection.hasVerifiedGiftPrice,
+      amountPaidCents: invoice.amount_paid,
+      hasSubscriptionParent: subscriptionId !== null,
+      billingReason: invoice.billing_reason,
+      subtotalCents: invoice.subtotal,
+      gifted: invoice.parent?.subscription_details?.metadata?.type === GIFT_SUBSCRIPTION_METADATA_TYPE,
+      onOrgSubscription: subscriptionId !== null && subscriptionId === ctx.storedSubscriptionId,
+      extraSeats: ctx.extraSeats,
+    },
+    unrecognized: selection.unrecognized,
+  };
+}
+
 /**
  * What the org PAID for the subscription's lines: each line net of its discounts,
  * summed (proration credits net in), and never more than the invoice actually
@@ -196,6 +262,13 @@ export function orgInvoicePaidCents(input: Pick<OrgPoolRefillInput, 'lines' | 'a
     for (const discount of line?.discount_amounts ?? []) net -= wholeCents(discount?.amount);
   }
   return Math.max(0, Math.min(net, wholeCents(input.amountPaidCents)));
+}
+
+/** First-payment entitlement is independent of credit ratios and sub-cent rounding. */
+export function orgSubscriptionFundingBasis(input: OrgPoolRefillInput): 'paid' | 'gift' | null {
+  if (!input.hasSubscriptionParent || input.hasVerifiedGiftPrice !== true) return null;
+  if (input.gifted === true) return input.onOrgSubscription === true && ORG_POOL_FUNDS_GIFTS ? 'gift' : null;
+  return orgInvoicePaidCents(input) > 0 ? 'paid' : null;
 }
 
 /**

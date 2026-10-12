@@ -39,6 +39,8 @@
     "__tests__/collab-seed-audit*.test.ts",
     "check-spec-coverage.ts",
     "__tests__/check-spec-coverage.test.ts",
+    "restore-org-funding-proof.ts",
+    "__tests__/restore-org-funding-proof*.test.ts",
     "migrate-founder-to-pro.ts",
     "__tests__/migrate-founder-to-pro*.test.ts"
   ]

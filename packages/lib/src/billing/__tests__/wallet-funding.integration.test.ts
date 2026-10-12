@@ -14,7 +14,7 @@ import { eq, inArray, and } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { drives } from '@pagespace/db/schema/core';
 import { driveMembers } from '@pagespace/db/schema/members';
-import { organizations, orgSubscriptions } from '@pagespace/db/schema/organizations';
+import { organizations, orgSubscriptions, orgSubscriptionFunding } from '@pagespace/db/schema/organizations';
 import { creditLedger } from '@pagespace/db/schema/credits';
 import { wallets, walletFundingLegs, personalRootWalletOf } from '@pagespace/db/schema/wallets';
 import { factories } from '@pagespace/db/test/factories';
@@ -25,6 +25,7 @@ import {
   donateToDriveWallet,
   refundFundingLeg,
 } from '../wallet-funding-shell';
+import { isOrgActive } from '../../organizations/status';
 import { drawWalletFundingLegs } from '../wallet-legs';
 
 let dbAvailable = false;
@@ -102,6 +103,36 @@ describe('wallet funding against Postgres', () => {
     pricing: { price_details: { price: priceId } },
   });
 
+  it.each([0, 1, 5000])('SEAT-8 (partial) first payment %s establishes proof independently of credit rounding and balance', async (paid) => {
+    if (!dbAvailable) return;
+    const owner = await user();
+    const [org] = await db.insert(organizations).values({ name: 'Proof', slug: `proof-${createId()}`, ownerId: owner, stripeCustomerId: `cus_${createId()}` }).returning();
+    created.orgs.push(org.id);
+    const subscriptionId = `sub_${createId()}`;
+    await db.insert(orgSubscriptions).values({ orgId: org.id, stripeSubscriptionId: subscriptionId, stripeBasePriceId: PRICES.basePriceId, stripeBaseItemId: 'si_base', stripeSeatPriceId: PRICES.seatPriceId, stripeSeatItemId: 'si_seat', status: 'active' });
+    expect(await isOrgActive(org.id)).toBe(false);
+    const invoice = { id: `in_${createId()}`, customer: org.stripeCustomerId, amount_paid: paid, subtotal: 5000, billing_reason: 'subscription_create', parent: { subscription_details: { subscription: subscriptionId } }, lines: { has_more: false, data: [priced(PRICES.basePriceId, { amount: 5000, period: { start: PERIOD_START_S, end: PERIOD_END_S } })] } };
+    await applyOrgPoolRefill(invoice, { ...PRICES, active: true });
+    expect(await isOrgActive(org.id)).toBe(paid > 0);
+    const receipts = await db.select().from(orgSubscriptionFunding).where(eq(orgSubscriptionFunding.orgId, org.id));
+    expect(receipts).toHaveLength(paid > 0 ? 1 : 0);
+    if (paid > 0) expect(receipts[0]).toMatchObject({ stripeSubscriptionId: subscriptionId, stripeInvoiceId: invoice.id, basis: 'paid', paidCents: paid });
+    await db.update(wallets).set({ monthlyRemainingCents: 0, topupRemainingCents: 0 }).where(eq(wallets.orgId, org.id));
+    expect(await isOrgActive(org.id)).toBe(paid > 0);
+    await applyOrgPoolRefill(invoice, { ...PRICES, active: true });
+    expect(await db.select().from(orgSubscriptionFunding).where(eq(orgSubscriptionFunding.orgId, org.id))).toHaveLength(paid > 0 ? 1 : 0);
+    if (paid === 5000) {
+      // An existing historical grant can recover missing proof without refilling its spent balance.
+      await db.delete(orgSubscriptionFunding).where(eq(orgSubscriptionFunding.orgId, org.id));
+      const beforeReplay = await db.select().from(wallets).where(eq(wallets.orgId, org.id));
+      expect((await applyOrgPoolRefill(invoice, { ...PRICES, active: true })).kind).toBe('duplicate');
+      expect(await isOrgActive(org.id)).toBe(true);
+      expect(await db.select().from(wallets).where(eq(wallets.orgId, org.id))).toEqual(beforeReplay);
+    }
+    await db.update(orgSubscriptions).set({ stripeSubscriptionId: `sub_replacement_${createId()}` }).where(eq(orgSubscriptions.orgId, org.id));
+    expect(await isOrgActive(org.id)).toBe(false);
+  });
+
   it('MON-3 an org invoice paid for base + 3 extra seats refills the org pool with paid × ratio, once, and stamps the refill date', async () => {
     if (!dbAvailable) return;
     const owner = await user();
@@ -118,6 +149,7 @@ describe('wallet funding against Postgres', () => {
       subtotal: 8000,
       parent: { subscription_details: { subscription: `sub_${createId()}` } },
       lines: {
+        has_more: false,
         data: [
           priced(PRICES.basePriceId, { amount: 5000, period: { start: PERIOD_START_S, end: PERIOD_END_S } }),
           priced(PRICES.seatPriceId, { amount: 3000, period: { start: PERIOD_START_S, end: PERIOD_END_S } }),
@@ -149,7 +181,7 @@ describe('wallet funding against Postgres', () => {
     const lateOld = {
       ...invoice,
       id: `in_${createId()}`,
-      lines: { data: invoice.lines.data.map((l) => ({ ...l, period: { start: PERIOD_START_S - 30 * 86_400, end: PERIOD_START_S } })) },
+      lines: { has_more: false, data: invoice.lines.data.map((l) => ({ ...l, period: { start: PERIOD_START_S - 30 * 86_400, end: PERIOD_START_S } })) },
     };
     expect(await applyOrgPoolRefill(lateOld, { active: true, ...PRICES })).toMatchObject({ kind: 'granted', allowanceCents: 4800 });
     const [afterLate] = await db.select().from(wallets).where(eq(wallets.id, pools[0].id));
@@ -159,6 +191,38 @@ describe('wallet funding against Postgres', () => {
 
     // A customer that is no org's is left to the personal path.
     expect(await applyOrgPoolRefill({ ...invoice, customer: `cus_${createId()}` })).toEqual({ kind: 'not_org' });
+  });
+
+  it.each([
+    { label: 'more lines on a later page', lines: { has_more: true } },
+    { label: 'no pagination flag', lines: {} },
+    { label: 'no line collection', lines: null },
+  ])('MON-3 (partial) a truncated invoice ($label) throws for redelivery and writes no refill or funding proof', async ({ lines }) => {
+    if (!dbAvailable) return;
+    const owner = await user();
+    const [org] = await db
+      .insert(organizations)
+      .values({ name: 'Paged Ltd', slug: `paged-${createId()}`, ownerId: owner, stripeCustomerId: `cus_${createId()}` })
+      .returning();
+    created.orgs.push(org.id);
+    const subscriptionId = `sub_${createId()}`;
+    const invoice = {
+      id: `in_${createId()}`,
+      customer: org.stripeCustomerId,
+      billing_reason: 'subscription_create',
+      amount_paid: 5000,
+      subtotal: 5000,
+      parent: { subscription_details: { subscription: subscriptionId } },
+      lines: lines === null ? null : {
+        ...lines,
+        data: [priced(PRICES.basePriceId, { amount: 5000, period: { start: PERIOD_START_S, end: PERIOD_END_S } })],
+      },
+    };
+
+    await expect(applyOrgPoolRefill(invoice, { active: true, ...PRICES })).rejects.toThrow(/every line of invoice/);
+    expect(await db.select().from(wallets).where(eq(wallets.orgId, org.id))).toEqual([]);
+    expect(await db.select().from(creditLedger).where(eq(creditLedger.stripeRef, invoice.id))).toEqual([]);
+    expect(await db.select().from(orgSubscriptionFunding).where(eq(orgSubscriptionFunding.orgId, org.id))).toEqual([]);
   });
 
   it('MON-3 an ad-hoc invoice line does not refill the pool: the grant sizes only the recognized base + seat lines, whatever collected', async () => {
@@ -179,6 +243,7 @@ describe('wallet funding against Postgres', () => {
       subtotal: 10500,
       parent: { subscription_details: { subscription: `sub_${createId()}` } },
       lines: {
+        has_more: false,
         data: [
           priced(PRICES.basePriceId, { amount: 5000, period: { start: PERIOD_START_S, end: PERIOD_END_S } }),
           priced(PRICES.seatPriceId, { amount: 3000, period: { start: PERIOD_START_S, end: PERIOD_END_S } }),
@@ -222,7 +287,7 @@ describe('wallet funding against Postgres', () => {
       id: `in_${createId()}`, customer: org.stripeCustomerId,
       billing_reason: 'subscription_cycle', amount_paid: gifted ? 0 : 5000, subtotal: 5000,
       parent: { subscription_details: { subscription: subscriptionId, metadata: gifted ? { type: 'gift_subscription' } : undefined } },
-      lines: { data: [...(oldCredit ? [{
+      lines: { has_more: false, data: [...(oldCredit ? [{
         ...priced(PRICES.basePriceId, { amount: -5000, period: { start: PERIOD_START_S, end: PERIOD_END_S } }),
         parent: { subscription_item_details: { subscription_item: itemId } },
       }] : []), {

@@ -5,7 +5,7 @@ import { users } from '../schema/auth';
 import { drives, pages } from '../schema/core';
 import { conversations, messages } from '../schema/conversations';
 import { driveMembers, pagePermissions } from '../schema/members';
-import { orgSubscriptions } from '../schema/organizations';
+import { orgSubscriptions, orgSubscriptionFunding } from '../schema/organizations';
 import { eq } from 'drizzle-orm';
 
 /**
@@ -83,7 +83,15 @@ function buildDriveMember(
   }
 }
 
+/** Explicit paid evidence for fixtures that exercise capabilities, never a production bypass. */
+async function fundOrgSubscription(orgId: string): Promise<void> {
+  const subscription = await db.query.orgSubscriptions.findFirst({ where: eq(orgSubscriptions.orgId, orgId) });
+  if (!subscription) throw new Error('Cannot fund a missing fixture subscription');
+  await db.insert(orgSubscriptionFunding).values({ orgId, stripeSubscriptionId: subscription.stripeSubscriptionId, stripeInvoiceId: `in_fixture_${createId()}`, basis: 'paid', paidCents: 5000 }).onConflictDoNothing();
+}
+
 export const factories = {
+  fundOrgSubscription,
   async createUser(overrides?: Partial<typeof users.$inferInsert>) {
     const [created] = await db.insert(users).values(buildUser(overrides)).returning()
     return created
@@ -274,6 +282,7 @@ export const factories = {
         ...overrides,
       })
       .returning()
+    await fundOrgSubscription(orgId)
     return created
   },
 }

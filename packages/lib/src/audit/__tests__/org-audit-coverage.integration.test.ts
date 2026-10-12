@@ -199,6 +199,7 @@ describe('every org mutation writes its event', () => {
       currentPeriodStart: new Date(Date.now() - 86_400_000),
       currentPeriodEnd: new Date(Date.now() + 20 * 86_400_000),
     });
+  await factories.fundOrgSubscription(orgId);
 
     // ── seats and invites: five held, auto-add on raises, off refuses; resend, accept, revoke ─────────
     expect(await setSeatAutoAdd(orgId, true, jono.id)).toBe(true);
@@ -288,7 +289,7 @@ describe('every org mutation writes its event', () => {
       amount_paid: 5000,
       subtotal: 5000,
       parent: { subscription_details: { subscription: `sub_${createId()}` } },
-      lines: { data: [{ amount: 5000, parent: { subscription_item_details: { subscription_item: 'si_org' } }, period: { start: startS, end: startS + 30 * 86_400 }, pricing: { price_details: { price: REFILL_PRICE_ID } } }] },
+      lines: { has_more: false, data: [{ amount: 5000, parent: { subscription_item_details: { subscription_item: 'si_org' } }, period: { start: startS, end: startS + 30 * 86_400 }, pricing: { price_details: { price: REFILL_PRICE_ID } } }] },
     }, { active: true, basePriceId: REFILL_PRICE_ID, seatPriceId: REFILL_SEAT_PRICE_ID })).toMatchObject({ kind: 'granted' });
 
     // ── verified domains and auto-join (one refused while seats are full, one joined with auto-add) ──

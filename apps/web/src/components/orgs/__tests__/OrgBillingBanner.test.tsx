@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({ paymentHere: false, assign: vi.fn(), startOrgSubscription: vi.fn() }));
 
 vi.mock('next-themes', () => ({ useTheme: () => ({ resolvedTheme: 'light' }) }));
-vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn(), message: vi.fn() } }));
 vi.mock('@/components/billing/StripeProvider', () => ({ StripeProvider: ({ children }: { children: React.ReactNode }) => <>{children}</> }));
 vi.mock('../OrgPaymentForm', () => ({ OrgPaymentForm: () => <div>payment element</div> }));
 vi.mock('@/components/shared/FeedbackDialog', () => ({
@@ -26,7 +26,7 @@ const reactivate = { kind: 'reactivate' as const, reason: 'canceled' as const, c
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.paymentHere = false;
-  mocks.startOrgSubscription.mockResolvedValue({ subscription: {}, payment: { kind: 'confirm_payment', clientSecret: 'cs_1' } });
+  mocks.startOrgSubscription.mockResolvedValue({ subscription: {}, payment: { kind: 'confirm_payment', clientSecret: 'cs_1' }, activation: 'payment_required' });
   Object.defineProperty(window, 'location', { value: { ...window.location, search: '', assign: mocks.assign }, writable: true });
 });
 
@@ -67,6 +67,46 @@ describe('OrgBillingBanner', () => {
     expect(screen.queryByText('payment element')).toBeNull();
     await userEvent.click(screen.getByRole('button', { name: 'Contact support' }));
     expect(screen.getByText('support dialog')).toBeTruthy();
+  });
+
+  it('SEAT-9 (partial) D-OW-30: a never-funded org whose payment is in shows activation finishing (not success), refreshes once, and leaves the rest to the realtime org:changed event', async () => {
+    mocks.paymentHere = true;
+    mocks.startOrgSubscription.mockResolvedValue({ subscription: { status: 'active' }, payment: { kind: 'none' }, activation: 'funding_pending' });
+    const refreshed = vi.fn();
+    render(<OrgBillingBanner orgId="org_1" orgName="Northwind Labs" notice={{ ...reactivate, reason: 'never_funded' }} onReactivated={refreshed} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Reactivate' }));
+    expect(await screen.findByText(/Payment received — activation is finishing/)).toBeTruthy();
+    expect(screen.getByText(/this page updates automatically/)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Reactivate' })).toBeNull();
+    expect(refreshed).toHaveBeenCalledOnce();
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(toast.message).not.toHaveBeenCalled();
+    expect(screen.queryByText('payment element')).toBeNull();
+  });
+
+  it('SEAT-9 (partial) D-OW-30: an active org nothing ever funded (unfunded_active) is sent to support, never told payment may be pending', async () => {
+    mocks.paymentHere = true;
+    const refreshed = vi.fn();
+    mocks.startOrgSubscription.mockRejectedValue(new ApiRequestError('raw', 409, { error: 'raw', code: 'billing_requires_support' }));
+    render(<OrgBillingBanner orgId="org_1" orgName="Northwind Labs" notice={{ ...reactivate, reason: 'never_funded' }} onReactivated={refreshed} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Reactivate' }));
+    expect(await screen.findByRole('button', { name: 'Contact support' })).toBeTruthy();
+    expect(screen.queryByText(/activation is finishing/)).toBeNull();
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(toast.message).not.toHaveBeenCalled();
+    expect(refreshed).not.toHaveBeenCalled();
+  });
+
+  it('an org already active and funded just refreshes, with no toast claiming anything', async () => {
+    mocks.paymentHere = true;
+    mocks.startOrgSubscription.mockResolvedValue({ subscription: { status: 'active' }, payment: { kind: 'none' }, activation: 'active' });
+    const refreshed = vi.fn();
+    render(<OrgBillingBanner orgId="org_1" orgName="Northwind Labs" notice={reactivate} onReactivated={refreshed} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Reactivate' }));
+    await waitFor(() => expect(refreshed).toHaveBeenCalledOnce());
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(toast.message).not.toHaveBeenCalled();
+    expect(screen.queryByText(/activation is finishing/)).toBeNull();
   });
 
   it('a member sees the read-only notice and nothing to pay', () => {

@@ -30,7 +30,7 @@
 import { db } from '@pagespace/db/db';
 import { creditLedger, creditHolds } from '@pagespace/db/schema/credits';
 import { wallets, walletFundingLegs, personalRootWalletOf } from '@pagespace/db/schema/wallets';
-import { organizations, orgSubscriptions } from '@pagespace/db/schema/organizations';
+import { organizations, orgSubscriptions, orgSubscriptionFunding } from '@pagespace/db/schema/organizations';
 import { users } from '@pagespace/db/schema/auth';
 import { subscriptions } from '@pagespace/db/schema/subscriptions';
 import { and, asc, eq, gt, inArray, isNotNull, isNull, lte, or, lt, sql } from '@pagespace/db/operators';
@@ -42,20 +42,26 @@ import { MONEY_MODEL_V2_ACTIVE, tierAllowanceCents } from './money-model';
 import { computeMonthlyRefill } from './credit-core';
 import { RENEWAL_CAPABLE_STATUSES, TIER_ALLOWANCE_REFILLS } from './credit-pricing';
 import {
+  orgInvoiceFundingInput,
+  orgInvoiceSubscriptionId,
   orgPoolRefillGrant,
+  orgSubscriptionFundingBasis,
   refillPool,
   invoiceServicePeriodMs,
   planAllocationReset,
   planPersonalRootRoll,
   planLegRefund,
   planDonation,
-  selectOrgPoolRefillLines,
   type DonationRefusal,
+  type OrgInvoice,
   type LegRefundPlan,
 } from './wallet-funding';
 import { recordOrgAuditEventAfterCommit } from '../audit/org-audit';
+import { announceOrgChange } from '../organizations/org-change-events';
 import { drives } from '@pagespace/db/schema/core';
 
+
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 const STRIPE_REF_ARBITER = {
   target: creditLedger.stripeRef,
@@ -81,32 +87,6 @@ function orgPoolOf(orgId: string) {
 // Org pool refill (MON-3)
 // ---------------------------------------------------------------------------
 
-/** Structural subset of a Stripe invoice the pool refill reads (a Stripe.Invoice satisfies it). */
-export interface OrgInvoice {
-  id?: string | null;
-  customer?: string | { id?: string | null } | null;
-  amount_paid?: number | null;
-  subtotal?: number | null;
-  billing_reason?: string | null;
-  period_start?: number | null;
-  period_end?: number | null;
-  parent?: {
-    subscription_details?: {
-      metadata?: Record<string, string> | null;
-      subscription?: string | { id?: string | null } | null;
-    } | null;
-  } | null;
-  lines?: {
-    data?: Array<{
-      amount?: number | null;
-      discount_amounts?: ReadonlyArray<{ amount?: number | null } | null> | null;
-      period?: { start?: number | null; end?: number | null } | null;
-      pricing?: { price_details?: { price?: string | { id?: string | null } | null } | null } | null;
-      parent?: { subscription_item_details?: { subscription_item?: string | null } | null } | null;
-    } | null | undefined> | null;
-  } | null;
-}
-
 export type OrgPoolRefillOutcome =
   /** The customer is not an org's: the personal funding path owns this invoice. */
   | { kind: 'not_org' }
@@ -115,24 +95,10 @@ export type OrgPoolRefillOutcome =
   | { kind: 'duplicate'; orgId: string }
   | { kind: 'nothing'; orgId: string; reason: string };
 
-const GIFT_SUBSCRIPTION_METADATA_TYPE = 'gift_subscription';
-
 function customerIdOf(invoice: OrgInvoice): string | null {
   const c = invoice.customer;
   if (!c) return null;
   return typeof c === 'string' ? c : c.id ?? null;
-}
-
-function invoiceSubscriptionIdOf(invoice: OrgInvoice): string | null {
-  const s = invoice.parent?.subscription_details?.subscription;
-  if (typeof s === 'string') return s.length > 0 ? s : null;
-  return typeof s?.id === 'string' && s.id.length > 0 ? s.id : null;
-}
-
-function hasSubscriptionParent(invoice: OrgInvoice): boolean {
-  const s = invoice.parent?.subscription_details?.subscription;
-  if (typeof s === 'string') return s.length > 0;
-  return typeof s?.id === 'string' && s.id.length > 0;
 }
 
 export interface OrgPoolRefillOptions {
@@ -171,28 +137,29 @@ export async function applyOrgPoolRefill(invoice: OrgInvoice, opts: OrgPoolRefil
 
   const stripeRef = invoice.id ?? null;
   if (!stripeRef) return { kind: 'nothing', orgId: org.id, reason: 'no_invoice_id' };
+  // Plan identity, the refill and funding proof are all derived from the lines, so a page of
+  // them proves nothing: a later page can hold the Business line or an unrecognized charge.
+  // Callers expand the invoice first (completeInvoiceLines); anything else throws so the
+  // event is redelivered rather than acknowledged without funding.
+  if (invoice.lines?.has_more !== false) {
+    throw new Error(`org pool refill requires every line of invoice ${stripeRef}; expand the invoice before funding`);
+  }
 
-  const lines = invoice.lines?.data ?? [];
-  const gifted = invoice.parent?.subscription_details?.metadata?.type === GIFT_SUBSCRIPTION_METADATA_TYPE;
   // The gift gate requires the invoice to belong to the org's own subscription.
   const [stored] = await db
-    .select({
-      stripeSubscriptionId: orgSubscriptions.stripeSubscriptionId,
-    })
+    .select({ stripeSubscriptionId: orgSubscriptions.stripeSubscriptionId })
     .from(orgSubscriptions)
     .where(eq(orgSubscriptions.orgId, org.id))
     .limit(1);
-  const onOrgSubscription =
-    gifted && invoiceSubscriptionIdOf(invoice) !== null && stored?.stripeSubscriptionId === invoiceSubscriptionIdOf(invoice);
-
   // MON-3: the pool refills only from the Business base and extra-seat lines. An ad-hoc
   // invoice item (or any line on an unrecognized price) is excluded and logged with its
   // price id and amount, so a misconfiguration is visible instead of silently funding the pool.
-  const selection = selectOrgPoolRefillLines(
-    lines,
-    { basePriceId: opts.basePriceId, seatPriceId: opts.seatPriceId },
-  );
-  for (const line of selection.unrecognized) {
+  const { input: grantInput, unrecognized } = orgInvoiceFundingInput(invoice, {
+    prices: { basePriceId: opts.basePriceId, seatPriceId: opts.seatPriceId },
+    storedSubscriptionId: stored?.stripeSubscriptionId ?? null,
+    extraSeats: opts.extraSeats,
+  });
+  for (const line of unrecognized) {
     loggers.api.warn('org pool refill: invoice line is not the Business base or an extra-seat item; excluded', {
       orgId: org.id,
       stripeRef,
@@ -202,28 +169,33 @@ export async function applyOrgPoolRefill(invoice: OrgInvoice, opts: OrgPoolRefil
     });
   }
 
-  const grant = orgPoolRefillGrant(
-    {
-      lines: selection.refillLines,
-      hasVerifiedGiftPrice: selection.hasVerifiedGiftPrice,
-      amountPaidCents: invoice.amount_paid,
-      hasSubscriptionParent: hasSubscriptionParent(invoice),
-      billingReason: invoice.billing_reason,
-      subtotalCents: invoice.subtotal,
-      gifted,
-      onOrgSubscription,
-      extraSeats: opts.extraSeats,
-    },
-    opts.active ?? MONEY_MODEL_V2_ACTIVE,
-  );
+  const grant = orgPoolRefillGrant(grantInput, opts.active ?? MONEY_MODEL_V2_ACTIVE);
+  const basis = orgSubscriptionFundingBasis(grantInput);
+  const stripeSubscriptionId = orgInvoiceSubscriptionId(invoice);
+  const recordFunding = async (tx: Tx): Promise<boolean> => {
+    if (!basis || !stripeSubscriptionId) return false;
+    const inserted = await tx.insert(orgSubscriptionFunding).values({
+      orgId: org.id, stripeSubscriptionId, stripeInvoiceId: stripeRef, basis, paidCents: grant.paidCents,
+    }).onConflictDoNothing().returning({ id: orgSubscriptionFunding.id });
+    return inserted.length > 0;
+  };
+  const announceFunding = async (recorded: boolean): Promise<void> => {
+    if (!recorded) return;
+    await recordOrgAuditEventAfterCommit({
+      orgId: org.id, eventType: 'org.billing.subscription_changed', resourceType: 'org_subscription', resourceId: org.id,
+      details: { source: 'verified_funding', stripeSubscriptionId, invoiceId: stripeRef, basis, paidCents: grant.paidCents },
+    });
+    void announceOrgChange(org.id, 'status');
+  };
   if (grant.allowanceCents <= 0) {
+    await announceFunding(await db.transaction(recordFunding));
     if (grant.reason === 'gift_not_org_subscription') {
       // An operator gifted a subscription the org never mirrors: no credit lands in a pool the org
       // cannot spend. Fix it by applying the gift coupon to the org's own subscription (runbook).
       loggers.api.error('org pool refill REFUSED: gift invoice is not on the org\'s own subscription', undefined, {
         orgId: org.id,
         stripeRef,
-        invoiceSubscriptionId: invoiceSubscriptionIdOf(invoice),
+        invoiceSubscriptionId: orgInvoiceSubscriptionId(invoice),
       });
     }
     loggers.api.info('org pool refill: invoice grants nothing', { orgId: org.id, stripeRef, reason: grant.reason, paidCents: grant.paidCents });
@@ -231,7 +203,7 @@ export async function applyOrgPoolRefill(invoice: OrgInvoice, opts: OrgPoolRefil
   }
   // The service period comes from the recognized lines too: an ad-hoc line's period must
   // no more move the pool's reset date than its amount may fund the pool.
-  const period = invoiceServicePeriodMs({ lines: selection.refillLines, periodStart: invoice.period_start, periodEnd: invoice.period_end });
+  const period = invoiceServicePeriodMs({ lines: grantInput.lines, periodStart: invoice.period_start, periodEnd: invoice.period_end });
 
   const result = await db.transaction(async (tx) => {
     await tx.insert(wallets).values({ ownerType: 'org', orgId: org.id }).onConflictDoNothing(ORG_POOL_ARBITER);
@@ -248,6 +220,7 @@ export async function applyOrgPoolRefill(invoice: OrgInvoice, opts: OrgPoolRefil
       .limit(1);
     if (!pool) throw new Error(`org pool for ${org.id} could not be found or created`);
 
+    const fundingRecorded = await recordFunding(tx);
     const inserted = await tx
       .insert(creditLedger)
       .values({
@@ -262,7 +235,7 @@ export async function applyOrgPoolRefill(invoice: OrgInvoice, opts: OrgPoolRefil
       })
       .onConflictDoNothing(STRIPE_REF_ARBITER)
       .returning({ id: creditLedger.id });
-    if (inserted.length === 0) return { kind: 'duplicate' as const, walletId: pool.id };
+    if (inserted.length === 0) return { kind: 'duplicate' as const, walletId: pool.id, fundingRecorded };
 
     const refill = refillPool(pool, grant.allowanceCents);
     // Stripe does not order invoice.paid deliveries: an older invoice settled late
@@ -288,9 +261,10 @@ export async function applyOrgPoolRefill(invoice: OrgInvoice, opts: OrgPoolRefil
           : {}),
       })
       .where(eq(wallets.id, pool.id));
-    return { kind: 'granted' as const, walletId: pool.id };
+    return { kind: 'granted' as const, walletId: pool.id, fundingRecorded };
   });
 
+  await announceFunding(result.fundingRecorded);
   if (result.kind === 'duplicate') return { kind: 'duplicate', orgId: org.id };
   loggers.api.info('org pool refill applied', { orgId: org.id, stripeRef, allowanceCents: grant.allowanceCents, basis: grant.basis });
   // AUD-1: a billing event. Once per invoice: a redelivery is a duplicate above and writes nothing.
