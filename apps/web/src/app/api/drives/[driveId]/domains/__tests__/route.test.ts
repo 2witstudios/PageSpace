@@ -50,7 +50,7 @@ vi.mock('@pagespace/db/schema/custom-domains', () => ({
   },
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
-  drives: { id: 'col_drives_id', ownerId: 'col_drives_ownerId' },
+  drives: { id: 'col_drives_id', ownerId: 'col_drives_ownerId', orgId: 'col_orgId' },
 }));
 vi.mock('@pagespace/db/schema/auth', () => ({
   users: { id: 'col_users_id', subscriptionTier: 'col_subscriptionTier', role: 'col_role' },
@@ -73,6 +73,12 @@ vi.mock('@/lib/subscription/plans', () => ({
 const getDrivePolicies = vi.fn();
 vi.mock('@pagespace/lib/organizations/policy-reader', () => ({
   getDrivePolicies: (...args: unknown[]) => getDrivePolicies(...args),
+}));
+
+const isOrgLapsedForDrive = vi.fn();
+vi.mock('@pagespace/lib/organizations/status', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@pagespace/lib/organizations/status')>()),
+  isOrgLapsedForDrive: (...args: unknown[]) => isOrgLapsedForDrive(...args),
 }));
 
 const reconcileCustomDomainCert = vi.fn();
@@ -137,6 +143,7 @@ function mockPlatformAdmin() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  isOrgLapsedForDrive.mockResolvedValue(false);
   authenticateRequestWithOptions.mockResolvedValue(mockAuth);
   checkMCPDriveScope.mockReturnValue(null);
   isPrincipalDriveOwnerOrAdmin.mockResolvedValue(true);
@@ -203,6 +210,25 @@ describe('GET /api/drives/[driveId]/domains', () => {
     expect(body.domains).toHaveLength(1);
     expect(body.domains[0].hostname).toBe('acme.com');
     expect(body.limit).toBe(1); // pro tier = 1
+  });
+
+  it.each(['free', 'pro'])('SEAT-8 (partial) gives an active org its Business domain limit with a personal %s lead', async (tier) => {
+    let calls = 0;
+    dbSelect.mockImplementation(() => ++calls === 1
+      ? { from: vi.fn().mockReturnThis(), where: vi.fn().mockResolvedValue([]) }
+      : { from: vi.fn().mockReturnThis(), innerJoin: vi.fn().mockReturnThis(), where: vi.fn().mockReturnThis(), limit: vi.fn().mockResolvedValue([{ tier, orgId: 'org_1' }]) });
+    const response = await GET(makeReq(), ctx());
+    expect(response.status).toBe(200);
+    expect((await response.json()).limit).toBe(10);
+  });
+
+  it('SEAT-9 (partial) a lapsed org does not inherit its personal Pro lead domain capability', async () => {
+    isOrgLapsedForDrive.mockResolvedValue(true);
+    let calls = 0;
+    dbSelect.mockImplementation(() => ++calls === 1
+      ? { from: vi.fn().mockReturnThis(), where: vi.fn().mockResolvedValue([]) }
+      : { from: vi.fn().mockReturnThis(), innerJoin: vi.fn().mockReturnThis(), where: vi.fn().mockReturnThis(), limit: vi.fn().mockResolvedValue([{ tier: 'pro', orgId: 'org_1' }]) });
+    expect((await (await GET(makeReq(), ctx())).json()).limit).toBe(0);
   });
 
   it('returns 500 on unexpected db error', async () => {
