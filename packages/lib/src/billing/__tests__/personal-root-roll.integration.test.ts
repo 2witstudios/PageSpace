@@ -31,7 +31,7 @@ const userIds: string[] = [];
 
 const DAY = 86_400_000;
 
-async function person(tier: 'free' | 'pro' | 'business'): Promise<string> {
+async function person(tier: 'free' | 'pro'): Promise<string> {
   const user = await factories.createUser({ name: `Comped ${tier}`, subscriptionTier: tier });
   userIds.push(user.id);
   return user.id;
@@ -142,14 +142,14 @@ describe('the comped personal root roll lives in the period sweep, never in the 
 
   it('three SIMULTANEOUS sweeps roll a period once: one grant, one allowance', async () => {
     if (!dbAvailable) return;
-    const userId = await person('business');
+    const userId = await person('pro');
     const end = new Date(Date.now() - DAY);
     await root(userId, { remainingCents: 0, start: new Date(end.getTime() - 30 * DAY), end });
 
     await Promise.all([0, 1, 2].map(() => resetDuePeriods({ now: new Date() })));
 
     expect(await grantsOf(userId)).toHaveLength(1);
-    expect((await rootOf(userId)).monthlyRemainingCents).toBe(tierAllowanceCents('business'));
+    expect((await rootOf(userId)).monthlyRemainingCents).toBe(tierAllowanceCents('pro'));
   });
 
   it('review P3-3: on onprem and tenant (billing off) the sweep rolls nothing and writes no grant', async () => {
