@@ -4,6 +4,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { useSocket } from "@/hooks/useSocket";
 import { useAccessRevocation } from "@/hooks/useAccessRevocation";
 import { useOrgRealtime } from "@/hooks/useOrgs";
+import { useSurfaceOrgId } from "@/hooks/useSurfaceOrgId";
 import { OrgSurfaceBanner } from "@/components/orgs/OrgSurfaceBanner";
 import { useNotificationToasts } from "@/hooks/useNotificationToasts";
 import { useDesktopNotifications } from "@/hooks/useDesktopNotifications";
@@ -172,8 +173,9 @@ function Layout({ children }: LayoutProps) {
   // Handle real-time permission revocation (zero-trust security)
   useAccessRevocation();
 
-  // X-4: the picker's org groups, the crumb and Account Settings follow org:changed (join, leave, rename, delete)
-  useOrgRealtime();
+  // X-4: the picker's org groups, the crumb and Account Settings follow org:changed (join, leave, rename, delete),
+  // and so does the org this screen belongs to: its banner turns on or off live when it lapses or is paid.
+  useOrgRealtime(useSurfaceOrgId());
 
   // Show live toast popups for new notifications, anywhere in the app
   useNotificationToasts();

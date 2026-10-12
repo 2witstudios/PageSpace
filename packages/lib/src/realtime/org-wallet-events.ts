@@ -41,6 +41,18 @@ export function walletChangedMessage(input: WalletChangedPayload): RealtimeMessa
   return { channelId: driveWalletRoom(input.driveId), event: WALLET_CHANGED_EVENT, payload: { driveId: input.driveId, walletId: input.walletId, change: input.change } };
 }
 
+/** Changes only the org's Owner and Admins can see: GET invitations is ADMIN-gated, so only they are told. */
+const ADMIN_ONLY_CHANGES: ReadonlySet<OrgChange> = new Set(['invitations']);
+
+/**
+ * Who an org change is sent to, from the org's member rows: every accepted member, except for a change
+ * only managers can see (invitations), which reaches the Owner and Admins alone.
+ */
+export function orgChangeRecipients(members: readonly { userId: string; role: 'OWNER' | 'ADMIN' | 'MEMBER' }[], change: OrgChange): string[] {
+  const managersOnly = ADMIN_ONLY_CHANGES.has(change);
+  return members.filter((m) => !managersOnly || m.role === 'OWNER' || m.role === 'ADMIN').map((m) => m.userId);
+}
+
 /** One message per recipient, deduplicated and in a stable order. */
 export function orgChangedMessages(input: OrgChangedPayload, recipientIds: readonly string[]): RealtimeMessage<OrgChangedPayload>[] {
   return [...new Set(recipientIds)].sort().map((userId) => ({

@@ -103,7 +103,7 @@ export async function DELETE(request: Request, context: Context) {
     // still holds the org; it is used only once the delete has committed.
     const avatarToken = (await findOrganizationById(orgId))?.avatarUrl ? await mintOrgAvatarToken(orgId, gate.userId) : null;
     // X-4: after the delete the org has no members to read, so who to tell is read now.
-    const audience = await orgChangeAudience(orgId);
+    const audience = await orgChangeAudience(orgId, 'deleted');
     const result = await deleteOrganization(
       { actorId: gate.userId, orgId, choices: parsed.data.drives, now: new Date() },
       { endSubscription: endOrgSubscriptionPort() },

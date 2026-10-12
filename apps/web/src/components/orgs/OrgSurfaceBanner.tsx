@@ -1,23 +1,19 @@
 'use client';
 
-import { usePathname } from 'next/navigation';
-import { useDriveStore } from '@/hooks/useDrive';
 import { useMyOrganizations } from '@/hooks/useMyOrganizations';
 import { useOrg } from '@/hooks/useOrgs';
-import { orgIdForSurface } from '@/lib/orgs/org-surface';
+import { useSurfaceOrgId } from '@/hooks/useSurfaceOrgId';
 import { OrgBillingBanner } from './OrgBillingBanner';
 
 /**
  * SEAT-9: the ONE placement of the lapse banner, in the app shell above every page. On an org
  * surface (any /orgs/[orgId] page, any page of an open org drive) it shows what GET
  * /api/orgs/[orgId] says this viewer sees: reactivate for the Owner and Admins, the read-only
- * notice for a Member, nothing for a paid org, a guest (not an org member: the org read is 404)
- * or where billing is off.
+ * notice for a Member, nothing for a paid org or where billing is off. A guest on an org drive is
+ * not an org member, so the org is never asked for (useSurfaceOrgId).
  */
 export function OrgSurfaceBanner() {
-  const pathname = usePathname();
-  const drives = useDriveStore((state) => state.drives);
-  const orgId = orgIdForSurface(pathname, drives) ?? undefined;
+  const orgId = useSurfaceOrgId();
   const { org, mutate } = useOrg(orgId);
   const { refresh: refreshMyOrgs } = useMyOrganizations();
 

@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   drives: [] as { id: string; orgId: string | null }[],
   orgs: {} as Record<string, { role: 'OWNER' | 'ADMIN' | 'MEMBER'; billingNotice?: OrgBillingNotice }>,
   useOrg: vi.fn(),
+  memberOf: ['org_1'] as string[],
 }));
 
 vi.mock('next/navigation', () => ({ usePathname: () => mocks.pathname }));
@@ -15,7 +16,9 @@ vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn(), message: v
 vi.mock('@/components/billing/StripeProvider', () => ({ StripeProvider: ({ children }: { children: React.ReactNode }) => <>{children}</> }));
 vi.mock('../OrgPaymentForm', () => ({ OrgPaymentForm: () => null }));
 vi.mock('@/hooks/useDrive', () => ({ useDriveStore: (select: (s: { drives: typeof mocks.drives }) => unknown) => select({ drives: mocks.drives }) }));
-vi.mock('@/hooks/useMyOrganizations', () => ({ useMyOrganizations: () => ({ refresh: vi.fn() }) }));
+vi.mock('@/hooks/useMyOrganizations', () => ({
+  useMyOrganizations: () => ({ refresh: vi.fn(), orgById: (id: string | null | undefined) => (id && mocks.memberOf.includes(id) ? { id } : null) }),
+}));
 vi.mock('@/hooks/useOrgs', () => ({ useOrg: mocks.useOrg }));
 
 import { OrgSurfaceBanner } from '../OrgSurfaceBanner';
@@ -57,6 +60,7 @@ const ORG_SURFACES = [
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.memberOf = ['org_1'];
   mocks.drives = [{ id: 'd_org', orgId: 'org_1' }, { id: 'd_personal', orgId: null }];
 });
 
@@ -86,5 +90,14 @@ describe('the lapse banner on every org surface', () => {
     serve('org_1', reactivate);
     shows('/dashboard/d_personal');
     expect(mocks.useOrg).toHaveBeenCalledWith(undefined);
+  });
+
+  it('SEAT-9 (partial) a guest on an org drive (not an org member) sees no banner, and the org is never asked for (no 404, no audited denial)', () => {
+    mocks.memberOf = [];
+    serve('org_1', reactivate);
+    for (const path of ['/dashboard/d_org', '/dashboard/d_org/page_1', '/orgs/org_1/settings']) {
+      expect(shows(path).any, path).toBe(false);
+    }
+    expect(mocks.useOrg.mock.calls.every(([id]) => id === undefined)).toBe(true);
   });
 });
