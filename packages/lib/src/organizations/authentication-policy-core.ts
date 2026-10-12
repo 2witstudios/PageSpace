@@ -99,6 +99,37 @@ export function decideReauthentication(input: {
   return { ok: true, authentication: fresh };
 }
 
+export interface LockedOrgDrive {
+  readonly driveId: string;
+  readonly driveName: string;
+  readonly orgId: string;
+  readonly code: OrgAuthenticationDenialCode;
+}
+
+/**
+ * D-OW-45: of the drives a person can reach, the org drives their CURRENT credential is locked out of, each with the
+ * code that says what would unlock it, so a drive list can show "locked — sign in again" instead of the drive
+ * vanishing. An org whose policies were not supplied fails closed (needs a fresh sign-in).
+ */
+export function lockedOrgDrives(input: {
+  readonly drives: ReadonlyArray<{ readonly id: string; readonly name: string; readonly orgId: string | null }>;
+  readonly policies: ReadonlyMap<string, OrgAuthenticationPolicy>;
+  readonly authentication: VerifiedAuthentication | null;
+  readonly nowMs: number;
+}): LockedOrgDrive[] {
+  const { drives, policies, authentication, nowMs } = input;
+  const locked: LockedOrgDrive[] = [];
+  for (const drive of drives) {
+    if (drive.orgId === null) continue;
+    const policy = policies.get(drive.orgId);
+    const decision: OrgAuthenticationDecision = policy
+      ? decideOrgAuthentication({ policy, authentication, nowMs })
+      : { allowed: false, code: 'org_reauthentication_required' };
+    if (!decision.allowed) locked.push({ driveId: drive.id, driveName: drive.name, orgId: drive.orgId, code: decision.code });
+  }
+  return locked;
+}
+
 /**
  * POL-1 for the sign-in keys: how many live credentials a policy refuses, and how many people hold no live credential
  * it admits (they must sign in again before opening the org's drives). Counts only, no identities.

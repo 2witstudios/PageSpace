@@ -4,6 +4,7 @@ import {
   decideOrgAuthentication,
   decideReauthentication,
   decideSignInPolicyChange,
+  lockedOrgDrives,
   normalizeMaximumSessionAgeMinutes,
   signInPolicyLoosened,
   signInPolicyTightened,
@@ -108,6 +109,31 @@ describe('re-authenticating the current credential (D-OW-45)', () => {
   });
   it('SEC-2 (partial) a weaker ceremony never downgrades a passkey-verified credential', () => {
     expect(decideReauthentication({ current: strong, fresh })).toEqual({ ok: false, reason: 'weaker_than_current' });
+  });
+});
+
+describe('org drives a credential is locked out of (D-OW-45)', () => {
+  const drives = [
+    { id: 'd1', name: 'Roadmap', orgId: 'org_a' },
+    { id: 'd2', name: 'Personal', orgId: null },
+    { id: 'd3', name: 'Finance', orgId: 'org_b' },
+    { id: 'd4', name: 'Ops', orgId: 'org_a' },
+  ];
+  const policies = new Map<string, OrgAuthenticationPolicy>([
+    ['org_a', { requireStrongSignIn: true, maximumSessionAgeMinutes: null }],
+    ['org_b', unrestricted],
+  ]);
+  it('SEC-2 (partial) lists each policy-locked org drive with the code that would unlock it, never a personal or open one', () => {
+    const single = { authenticatedAtMs: nowMs - 1000, assurance: 'single_factor' as const };
+    expect(lockedOrgDrives({ drives, policies, authentication: single, nowMs })).toEqual([
+      { driveId: 'd1', driveName: 'Roadmap', orgId: 'org_a', code: 'org_strong_sign_in_required' },
+      { driveId: 'd4', driveName: 'Ops', orgId: 'org_a', code: 'org_strong_sign_in_required' },
+    ]);
+    expect(lockedOrgDrives({ drives, policies, authentication: strong, nowMs })).toEqual([]);
+  });
+  it('an org whose policies could not be read locks its drives as needing a fresh sign-in (fails closed)', () => {
+    expect(lockedOrgDrives({ drives: [{ id: 'd9', name: 'X', orgId: 'org_gone' }], policies, authentication: strong, nowMs }))
+      .toEqual([{ driveId: 'd9', driveName: 'X', orgId: 'org_gone', code: 'org_reauthentication_required' }]);
   });
 });
 
