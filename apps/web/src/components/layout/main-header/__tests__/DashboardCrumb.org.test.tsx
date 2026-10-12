@@ -68,3 +68,24 @@ describe('DashboardCrumb on the org pages', () => {
     expect(screen.queryByText(/o-other/)).toBeNull();
   });
 });
+
+describe('the header crumb is one chip', () => {
+  it('UI-3 an org drive shows exactly one chip, the drive (org only in its tooltip); an org page shows exactly one chip, the org; never both', () => {
+    useDriveStore.setState({ drives: [drive({ orgId: 'o-northwind' })], currentDriveId: null, isLoading: false, lastFetched: 0 });
+    vi.mocked(usePathname).mockReturnValue('/dashboard/d-product/p1');
+    vi.mocked(useParams).mockReturnValue({ driveId: 'd-product' });
+    const inDrive = render(<DashboardCrumb />);
+    expect(screen.getAllByRole('button').map((b) => b.textContent)).toEqual(['NProduct']);
+    expect(screen.queryByRole('link', { name: /Northwind Labs/ })).toBeNull();
+    inDrive.unmount();
+
+    for (const path of ['/orgs/o-northwind/settings', '/orgs/o-northwind/settings/policies', '/orgs/o-northwind/drives']) {
+      vi.mocked(usePathname).mockReturnValue(path);
+      vi.mocked(useParams).mockReturnValue({ orgId: 'o-northwind' });
+      const onOrg = render(<DashboardCrumb />);
+      expect(screen.getAllByRole('link', { name: /Northwind Labs/ })).toHaveLength(1);
+      expect(screen.queryByRole('button', { name: /Product/ })).toBeNull();
+      onOrg.unmount();
+    }
+  });
+});

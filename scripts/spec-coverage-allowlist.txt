@@ -112,10 +112,11 @@ SEAT-6
 # test: the ordering clause against a user whose stripeCustomerId IS the org's customer.
 SEAT-7
 SEAT-8
-# SEAT-9 (partial, ow-lapse-automation): [D-OW-33] amends the policies clause — a lapsed org may make
-# RESTRICTING changes only (lapsed-restrict.integration, policy-restricts, wallet-restricts). Stays listed: the
-# Spec text still says "policies changes" are blocked (amendment proposed in the PR body), and the banner/notice
-# and "nothing is deleted" clauses are proven elsewhere only in part.
+# SEAT-9 (partial, ow-lapse-automation): [D-OW-33] amends the policies clause (the Spec now reads "loosening
+# policies or caps") — a lapsed org may make RESTRICTING changes only (lapsed-restrict.integration,
+# policy-restricts, wallet-restricts). The banner/notice clause is proven by OrgSurfaceBanner.test (one placement
+# in the app shell, every org page and open org drive). Stays listed: no single real-PG capability matrix
+# (refusals, restricting allowed, no storage charge, nothing deleted, restore on payment) exists yet.
 SEAT-9
 SEC-1
 SEC-2
@@ -159,18 +160,16 @@ SPEND-9
 # SPEND-10 (partial, ow-c6): the lead's view carries spend by member, the org admin's the pool and the
 # unallocated balance; automation spend is labeled per person until C4 names the drive consumer.
 SPEND-10
-UI-1
-# UI-3 (partial, phase5-fixes): the drive chip (org mark, org in the tooltip) and the org chip on /orgs/* pages
-# (Main.dc.html:146) are tested in DashboardCrumb.org.test; back on the list until a reviewer agrees every clause is proven.
-UI-3
-UI-4
-UI-5
 UI-7
 # UI-8 (partial): the chip, popover and composer strip (spend-surfaces*), the refusal card in the chat error
 # banner, the automation spend line / skipped badge / owner-left state, and the /btw fallback notice are
 # tested, each titled "UI-8 (partial)". Unproven: v1/chat/completions, consult and mentions still drop the
 # gate's fallback (SPEND-4, the spend-gate lane), and canvas page 2 fidelity needs a reviewer with the canvas.
 UI-8
+# UI-11 (partial, ow-final-ui): the hub gives a Member only the Drives directory (DRV-6, not a setting) and Leave,
+# the settings shell and routes refuse them, the Organization card is read-only, join-request approval is not
+# theirs, and the wallet page gives the consumer projection — each titled "UI-11 (partial)". "Every surface" has
+# no single matrix test yet (best proof: an e2e signed in as a seeded Member once ORGS_ENABLED flips).
 UI-11
 # WAL-1 (partial, ow-c1): the wallets table carries every WAL-1 field, the migration proves each
 # former credit_balances row became its user's personal root wallet to the cent, and the constraint
@@ -224,9 +223,11 @@ X-1
 # export; the export and account-deletion handling itself is the Phase 6 leaf yfmlkdchehmberwthwu6g7vt.
 X-2
 X-3
-# X-4 (realtime events for membership, visibility and wallet state): B4 proves one drive-member event
-# per affected user from the org membership sync, titled "X-4 (partial)"; wallet-state events and the
-# client updating without refresh are unproven until Wave C/F.
+# X-4 (partial): one drive-member event per affected user from the org membership sync (B4); wallet:changed
+# and org:changed contracts; org rename/avatar, delete (audience read before), invitation create/revoke and
+# accept announce org:changed; the app shell's listener refetches GET /api/orgs so the picker regroups and
+# renames without reload (useMyOrgs.shared-cache). Unproven in one test: a two-context run where a visibility
+# change updates another member's sidebar live (an e2e in E2E_SPECS once ORGS_ENABLED flips).
 X-4
 # X-6 (Negative tests: non-member sees no other org's Open drive; a guest sees exactly one
 # drive; a disabled policy refuses; an empty chosen wallet charges nothing; an automation never
