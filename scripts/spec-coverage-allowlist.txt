@@ -204,7 +204,6 @@ WAL-4
 # WAL-7 (partial, ow-c2): UTC caps, defaults and 80/100% thresholds are pure logic; caps on stored legs,
 # alert delivery and the kill switch control are unproven until C3/C6.
 WAL-7
-WAL-8
 # X-1 (partial, ow-c6 + ow-p6-x1): wallet READS and the five org READS (orgs list/get, members,
 # drive directory, policies) are mirrored for CLI/MCP, gated by the same requireOrgRole the web
 # routes run; per [D-OW-26] a token may not move money or change a spend source, and every org
