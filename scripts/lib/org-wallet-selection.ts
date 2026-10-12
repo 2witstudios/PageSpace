@@ -4,24 +4,38 @@
  * the export answered (the same reason `conversationSelectionWhere` and
  * `contentTagSelectionWhere` exist).
  *
- * Two kinds of carried org, and the difference is MONEY:
+ * WHAT THE ROWS MEAN ON A TENANT. A tenant deployment runs with billing OFF
+ * (`isBillingEnabled()` is false for DEPLOYMENT_MODE=tenant): every org reads
+ * active whatever its subscription says, and the credit gate neither checks
+ * nor debits wallets. So subscriptions, funding proof, balances, debt and caps
+ * are carried as DATA — the record of the team's money, and what a later move
+ * back to a billed deployment would need — and enforced by nothing on the
+ * tenant. Nothing below may rely on billing to fail closed there.
+ *
+ * Two kinds of carried org, and the difference is what can ADD access or hold
+ * money:
  *
  *  - A MIGRATING org: its Owner is one of the requested users. The team is
  *    moving, so the org moves whole — identity and policies, members, open
- *    invitations, verified domains and their departure suppressions, the
- *    Business subscription and its funding proof, and every wallet it owns
- *    (pool, drive and agent wallets, with their funding legs, caps and notice
- *    state).
+ *    invitations, verified domains, departure suppressions, the Business
+ *    subscription and its funding proof, and every wallet it owns (pool, drive
+ *    and agent wallets, with their funding legs, caps and notice state).
  *  - A REFERENCED org: carried only because a carried drive names it
  *    (`drives.orgId` is a RESTRICT FK, so the drive cannot land without it) or
  *    a requested user is a member, while its Owner stays behind. It travels as
  *    identity, policies, the exported users' memberships and departures — what
  *    the tenant needs to resolve access to the drive exactly as the source did —
- *    and NOTHING that adds access or holds money: no invitations, no domains
- *    (a verified domain would auto-join tenant users into another team's org),
- *    no subscription, no wallets. Carrying a referenced org's pool would mint a
- *    second copy of money the source still spends; without a subscription the
- *    tenant reads it as lapsed, which fails closed (SEAT-9).
+ *    plus its departure suppressions, and nothing that adds access or holds
+ *    money: no invitations, no domains (a verified domain would auto-join tenant
+ *    users into another team's org), no subscription, no wallets (a second copy
+ *    of a pool the source still spends).
+ *
+ * SUPPRESSIONS TRAVEL FOR EVERY CARRIED ORG [D-OW-27]. A referenced org reads
+ * ACTIVE on the tenant, and its Owner or an Admin there can re-add and verify a
+ * domain; from then on the suppression is the only thing that keeps a person
+ * who left the org from being auto-joined back. Suppressions are keyed hashes
+ * (no address, no user id) and can only ever refuse a join, so carrying them
+ * adds no access and no personal data.
  *
  * Personal wallets travel with their REQUESTED owner only. A discovered user
  * (a conversation owner, a channel author, a drive or org Owner) is carried as
@@ -133,12 +147,14 @@ export function orgWalletSelectionWhere(table: ScopedOrgWalletTable, s: OrgWalle
     case 'org_members':
     case 'org_member_departures':
       return `"orgId" IN (${s.orgIn}) AND "userId" IN (${s.allUserIn})`;
+    // Refuses only, never grants: every carried org (see the module header, D-OW-27).
+    case 'org_departure_suppressions':
+      return `"orgId" IN (${s.orgIn})`;
     // What adds access or holds money: migrating orgs only (see the module header).
     case 'org_invitations':
     case 'org_subscriptions':
     case 'org_subscription_funding':
     case 'org_domains':
-    case 'org_departure_suppressions':
       return `"orgId" IN (${s.migratingOrgIn})`;
     // A hold names a person (userId) or an address (email), never both; a held person must travel.
     case 'org_guest_holds':

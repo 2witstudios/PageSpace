@@ -57,9 +57,13 @@ describe('orgWalletSelectionWhere', () => {
   };
 
   it('scopes what adds access or holds money to migrating orgs only', () => {
-    for (const table of ['org_invitations', 'org_subscriptions', 'org_subscription_funding', 'org_domains', 'org_departure_suppressions'] as const) {
+    for (const table of ['org_invitations', 'org_subscriptions', 'org_subscription_funding', 'org_domains'] as const) {
       expect(orgWalletSelectionWhere(table, scope)).toBe(`"orgId" IN ('o1')`);
     }
+  });
+
+  it('carries departure suppressions for every carried org: they only ever refuse a join (D-OW-27)', () => {
+    expect(orgWalletSelectionWhere('org_departure_suppressions', scope)).toBe(`"orgId" IN ('o1', 'o2')`);
   });
 
   it('scopes memberships to every carried org and every carried user', () => {

@@ -21,6 +21,7 @@ import * as dbSchema from '@pagespace/db/schema';
 import { EXCLUDED_TABLES } from '../../packages/lib/src/compliance/export/gdpr-export-coverage';
 import { TABLE_IMPORT_ORDER } from '../lib/migration-types';
 import { TENANT_EXPORT_EXCLUDED_TABLES, carriedColumns } from '../lib/tenant-export-columns';
+import { CONFLICT_TARGETS } from '../tenant-export';
 
 /** The GDPR export's temporary org exclusions still present; empty once X-2 landed. */
 function temporaryGdprOrgExclusions(gdprExcludedTables: Readonly<Record<string, string>>): string[] {
@@ -93,6 +94,22 @@ describe('ORGS_ENABLED export precondition', () => {
       drivesCarried: carriedColumns('drives'),
       onAnOrgOrWallet: tablesOnAnOrgOrWallet(),
     })).toEqual([]);
+  });
+
+  it('X-3 (partial) every org and wallet table forgives only its primary key on import, so a secondary-unique collision aborts', () => {
+    const tables = new Map<string, PgTable>();
+    for (const value of Object.values(dbSchema as Record<string, unknown>)) {
+      if (value && is(value, PgTable)) tables.set(getTableName(value), value);
+    }
+    const primaryKeyOf = (name: string): string[] => {
+      const table = tables.get(name);
+      if (!table) return [];
+      const config = getTableConfig(table);
+      const composite = config.primaryKeys[0]?.columns.map((c) => c.name);
+      return composite ?? config.columns.filter((c) => c.primary).map((c) => c.name);
+    };
+    expect(Object.fromEntries(ORG_WALLET_TABLES.map((t) => [t, [...(CONFLICT_TARGETS[t] ?? [])]])))
+      .toEqual(Object.fromEntries(ORG_WALLET_TABLES.map((t) => [t, primaryKeyOf(t)])));
   });
 
   it('the detectors flag each gap shape and pass a complete export, so the guards are not vacuous', () => {

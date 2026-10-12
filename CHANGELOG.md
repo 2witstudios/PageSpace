@@ -10,10 +10,12 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 - Billing now recognizes paid plans only by their configured Stripe price IDs. Unknown and retired prices no longer gain paid access or credit grants by matching a plan amount.
 
 - Moving a team to a dedicated PageSpace instance now brings its organizations with it: org drives arrive
-  as org drives with their visibility, members, policies, verified domains and subscription, and wallet
-  balances (including debt), donations and spending caps carry over. An organization that is only reached
-  through a drive you were a guest in comes along without its money, invitations or domains. Usage history
-  stays on the original instance.
+  as org drives with their visibility, members, policies, verified domains and subscription record. Wallet
+  balances (including debt), donations and spending caps are copied across as records only: a dedicated
+  instance does not run PageSpace billing, so there they are not charged against or enforced, and every
+  organization counts as active. An organization that is only reached through a drive you were a guest in
+  comes along without its money, invitations or domains, but people who left it still cannot be
+  automatically re-added by email domain. Usage history stays on the original instance.
 
 - /btw side questions now work on every chat surface (dashboard assistant, right-sidebar chat, agent console) and /btw appears in the / command picker on all of them.
 

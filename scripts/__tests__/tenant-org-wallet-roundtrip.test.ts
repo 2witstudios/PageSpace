@@ -35,7 +35,14 @@ import { exportData } from '../tenant-export';
 import { runImport } from '../tenant-import';
 import { validateData } from '../tenant-validate';
 import type { DbClient, ExportManifest } from '../lib/migration-types';
+import { db as libDb, pool as libPool } from '@pagespace/db/db';
 import { deriveOrgStatus } from '../../packages/lib/src/organizations/status-core';
+import { isBillingEnabled } from '../../packages/lib/src/deployment-mode';
+import { decideAutoJoin } from '../../packages/lib/src/organizations/domains-core';
+import {
+  departureSuppressionHash,
+  isDepartureSuppressed,
+} from '../../packages/lib/src/organizations/departure-suppression';
 
 const { owner, member, outsider } = FIXTURES.users;
 const DRIVE = FIXTURES.drives.shared.id;
@@ -48,6 +55,8 @@ const OWNER_ROOT = 'test_wallet_owner_root_003';
 const MEMBER_ROOT = 'test_wallet_member_root_004';
 const CONTOSO_POOL = 'test_wallet_contoso_pool_005';
 const OUTSIDER_ROOT = 'test_wallet_outsider_root_006';
+/** Someone who left Contoso; only a keyed hash of the address is stored (D-OW-27). */
+const CONTOSO_LEAVER = 'leaver@contoso.test';
 
 let db: TestDb;
 let tmpDir: string;
@@ -100,9 +109,12 @@ async function seedOrgWorld(): Promise<void> {
     INSERT INTO org_member_departures (id, "orgId", "userId", reason, "departedAt")
     VALUES ('test_odep_nw', ${NW}, ${member.id}, 'left', ${t})
   `);
+  const leaverHash = departureSuppressionHash(CONTOSO_LEAVER);
+  if (leaverHash === null) throw new Error('no blind-index key: set ENCRYPTION_KEY');
   await db.execute(sql`
-    INSERT INTO org_departure_suppressions (id, "orgId", "emailHash", "createdAt")
-    VALUES ('test_osup_nw', ${NW}, 'hmac_departed_address', ${t})
+    INSERT INTO org_departure_suppressions (id, "orgId", "emailHash", "createdAt") VALUES
+      ('test_osup_nw', ${NW}, 'hmac_departed_address', ${t}),
+      ('test_osup_contoso', ${CONTOSO}, ${leaverHash}, ${t})
   `);
   await db.execute(sql`
     INSERT INTO org_guest_holds (id, "orgId", "driveId", "userId", email, state, origin, request, "requestedBy", "createdAt")
@@ -179,12 +191,15 @@ async function count(query: string): Promise<number> {
 }
 
 beforeAll(async () => {
+  // The suppression hash is keyed under the deployment's blind-index key, which the tenant shares.
+  if ((process.env.ENCRYPTION_KEY ?? '').length < 32) process.env.ENCRYPTION_KEY = 'tenant-roundtrip-test-key-'.padEnd(64, 'k');
   db = createTestDb();
   await runMigrations(db);
 });
 
 afterAll(async () => {
   await closePool();
+  await libPool.end();
 });
 
 let before: Record<string, unknown[]>;
@@ -206,9 +221,11 @@ beforeEach(async () => {
     databaseUrl: getTestDatabaseUrl(),
     dryRun: false,
   }));
-
   await truncateAll(db);
   expect(await count('organizations')).toBe(0);
+});
+
+async function importBundle(): Promise<void> {
   const targetFiles = path.join(tmpDir, 'target-files');
   await mkdir(targetFiles, { recursive: true });
   await runImport({
@@ -217,13 +234,15 @@ beforeEach(async () => {
     fileStoragePath: targetFiles,
     dryRun: false,
   });
-});
+}
 
 afterEach(async () => {
   await rm(tmpDir, { recursive: true, force: true });
 });
 
 describe('X-3 tenant export/import round-trip of organizations and wallets (real PG)', () => {
+  beforeEach(importBundle);
+
   it('X-3 a tenant export/import round-trip keeps an org drive\'s orgId and visibility, org membership, policies and wallet balances, row for row', async () => {
     const after = await snapshot();
     for (const table of Object.keys(CARRIED)) {
@@ -236,24 +255,61 @@ describe('X-3 tenant export/import round-trip of organizations and wallets (real
     expect(after.conversations).toEqual([{ id: FIXTURES.conversations.pageChat.id, chosenWalletId: DRIVE_WALLET }]);
   });
 
-  it('X-3 a lapsed org arrives lapsed: its subscription and funding proof travel unchanged', async () => {
+  it('X-3 subscription and funding proof travel unchanged, and on a tenant (billing off) they gate nothing: the lapsed org reads active', async () => {
+    // The rows are identical (the row-for-row test above). What they MEAN on a tenant is different:
+    // tenant mode runs with billing off, so org status, wallet balances, debt and caps are carried as
+    // data and enforced by nothing — the same org that is lapsed on the source reads active here.
     const { rows } = await db.execute(sql.raw(`SELECT * FROM org_subscriptions WHERE "orgId" = '${NW}'`));
-    expect(rows).toHaveLength(1);
+    expect(rows).toEqual(before.org_subscriptions);
     const sub = rows[0] as { status: string; trialEnd: Date | null; currentPeriodStart: Date | null; currentPeriodEnd: Date | null; cancelAtPeriodEnd: boolean };
-    expect(deriveOrgStatus({
-      billingEnabled: true,
-      subscription: { ...sub, hasVerifiedFunding: (await count(`org_subscription_funding WHERE "orgId" = '${NW}'`)) > 0 },
-      now: new Date('2026-09-15T00:00:00.000Z'),
-    })).toEqual({ status: 'lapsed', reason: 'payment_failed' });
+    const subscription = { ...sub, hasVerifiedFunding: (await count(`org_subscription_funding WHERE "orgId" = '${NW}'`)) > 0 };
+    const now = new Date('2026-09-15T00:00:00.000Z');
+
+    const mode = process.env.DEPLOYMENT_MODE;
+    process.env.DEPLOYMENT_MODE = 'tenant';
+    try {
+      expect(isBillingEnabled()).toBe(false);
+      expect(deriveOrgStatus({ billingEnabled: isBillingEnabled(), subscription, now })).toEqual({ status: 'active', reason: null });
+    } finally {
+      if (mode === undefined) delete process.env.DEPLOYMENT_MODE;
+      else process.env.DEPLOYMENT_MODE = mode;
+    }
+    // On the billed source the identical rows read lapsed — so the data, not its meaning, is what travels.
+    expect(deriveOrgStatus({ billingEnabled: true, subscription, now })).toEqual({ status: 'lapsed', reason: 'payment_failed' });
   });
 
-  it('X-3 an org reached only through a guest drive travels as identity and membership, never with its money, invitations or domains', async () => {
+  it('X-3 a referenced org\'s departure suppressions travel, so an address that left it is never auto-joined on the tenant', async () => {
+    // On the tenant the referenced org reads ACTIVE (billing off), and an Admin there can re-add and
+    // verify a domain. The suppression is then the only thing standing between a departed person and an
+    // automatic re-join, so it travels for every carried org (scripts/lib/org-wallet-selection.ts).
+    expect(await isDepartureSuppressed(libDb, CONTOSO, CONTOSO_LEAVER)).toBe(true);
+    expect(await isDepartureSuppressed(libDb, CONTOSO, 'newcomer@contoso.test')).toBe(false);
+
+    const joinOnTenant = async (email: string) => decideAutoJoin({
+      emailVerified: true,
+      userCreatedAt: new Date('2026-11-02T00:00:00.000Z'),
+      // A domain the tenant's Admin re-added and verified after the move.
+      domainVerifiedAt: new Date('2026-11-01T00:00:00.000Z'),
+      isMember: false,
+      previouslyDeparted: false,
+      departureSuppressed: await isDepartureSuppressed(libDb, CONTOSO, email),
+      hasOpenInvite: false,
+      isOrgGuest: false,
+      orgActive: true,
+    });
+    expect(await joinOnTenant(CONTOSO_LEAVER)).toEqual({ action: 'skip', reason: 'departure_suppressed' });
+    expect(await joinOnTenant('newcomer@contoso.test')).toEqual({ action: 'join' });
+  });
+
+  it('X-3 an org reached only through a guest drive travels as identity and membership, never with its money, invitations or domains (its suppressions do travel)', async () => {
     expect(await count(`organizations WHERE id = '${CONTOSO}'`)).toBe(1);
     expect(await count(`drives WHERE id = '${CONTOSO_DRIVE}' AND "orgId" = '${CONTOSO}'`)).toBe(1);
     expect(await count(`wallets WHERE "orgId" = '${CONTOSO}'`)).toBe(0);
     expect(await count(`org_subscriptions WHERE "orgId" = '${CONTOSO}'`)).toBe(0);
     expect(await count(`org_invitations WHERE "orgId" = '${CONTOSO}'`)).toBe(0);
     expect(await count(`org_domains WHERE "orgId" = '${CONTOSO}'`)).toBe(0);
+    // Its departure suppressions DO travel: keyed hashes, no address, and they only ever refuse.
+    expect(await count(`org_departure_suppressions WHERE "orgId" = '${CONTOSO}'`)).toBe(1);
     // Its Owner is carried as a row (organizations.ownerId and drives.ownerId resolve)…
     expect(await count(`users WHERE id = '${outsider.id}'`)).toBe(1);
     // …but stays live on the source, so their personal balance is not duplicated.
@@ -278,5 +334,71 @@ describe('X-3 tenant export/import round-trip of organizations and wallets (real
       expect({ table, count: compared?.sourceCount, passed: compared?.passed }).toEqual({ table, count: counts[key], passed: true });
     }
     expect(counts.wallets).toBe(4);
+  });
+});
+
+/**
+ * A destination that already holds a row colliding with the bundle on a SECONDARY unique key (not the
+ * primary key, which is how a re-imported bundle stays a no-op). Every org and wallet table names its
+ * primary key as the only forgiven conflict, so each of these aborts the one BEGIN/COMMIT and nothing of
+ * the bundle lands — never a silently skipped row (a skipped funding leg would break D-OW-13's
+ * top-up == SUM(legs), a skipped org would orphan its drives).
+ */
+describe('X-3 a tenant import that collides on an org or wallet unique key aborts whole (real PG)', () => {
+  const COLLIDER = 'test_user_collider_009';
+  const COLLIDER_ORG = 'test_org_collider_009';
+  const COLLIDER_WALLET = 'test_wallet_collider_009';
+  const t = new Date('2026-08-01T00:00:00.000Z');
+
+  async function seedCollider(): Promise<void> {
+    await db.execute(sql`
+      INSERT INTO users (id, name, email, provider, "createdAt", "updatedAt")
+      VALUES (${COLLIDER}, 'Collider', 'collider@test.local', 'email', ${t}, ${t})
+    `);
+    await db.execute(sql`
+      INSERT INTO organizations (id, name, slug, "ownerId", "createdAt", "updatedAt")
+      VALUES (${COLLIDER_ORG}, 'Collider Org', 'collider-org', ${COLLIDER}, ${t}, ${t})
+    `);
+    await db.execute(sql`
+      INSERT INTO wallets (id, "ownerType", "userId") VALUES (${COLLIDER_WALLET}, 'user', ${COLLIDER})
+    `);
+  }
+
+  const collisions: Array<[string, string, () => Promise<unknown>]> = [
+    ['an org slug', 'organizations_slug_unique', () => db.execute(sql`UPDATE organizations SET slug = 'northwind' WHERE id = ${COLLIDER_ORG}`)],
+    ['a personal root wallet', 'wallets_personal_root_unique', async () => {
+      await db.execute(sql`INSERT INTO users (id, name, email, provider, "createdAt", "updatedAt") VALUES (${owner.id}, 'Already here', 'already@test.local', 'email', ${t}, ${t})`);
+      await db.execute(sql`INSERT INTO wallets (id, "ownerType", "userId") VALUES ('test_wallet_preexisting_root', 'user', ${owner.id})`);
+    }],
+    ['a funding leg sourceRef', 'wallet_funding_legs_source_ref_unique', () => db.execute(sql`
+      INSERT INTO wallet_funding_legs (id, "walletId", "funderKind", "funderUserId", "originalCents", "remainingCents", "nonRefundable", "sourceRef")
+      VALUES ('test_leg_collider', ${COLLIDER_WALLET}, 'owner', ${COLLIDER}, 100, 100, FALSE, 'donation-ref-1')
+    `)],
+    ['a Stripe subscription id', 'org_subscriptions_stripeSubscriptionId_unique', () => db.execute(sql`
+      INSERT INTO org_subscriptions (id, "orgId", "stripeSubscriptionId", "stripeBasePriceId", "stripeBaseItemId", "stripeSeatPriceId", "stripeSeatItemId", status)
+      VALUES ('test_osub_collider', ${COLLIDER_ORG}, 'sub_nw', 'p', 'i', 'p', 'i', 'active')
+    `)],
+    ['a verified domain', 'org_domains_verified_domain_key', () => db.execute(sql`
+      INSERT INTO org_domains (id, "orgId", domain, "dnsToken", "verifiedAt", "verifiedMethod")
+      VALUES ('test_odom_collider', ${COLLIDER_ORG}, 'northwind.test', 'dns_x', ${t}, 'dns')
+    `)],
+    ['an invitation token hash', 'org_invitations_tokenHash_unique', () => db.execute(sql`
+      INSERT INTO org_invitations (id, "orgId", email, "tokenHash", "expiresAt")
+      VALUES ('test_inv_collider', ${COLLIDER_ORG}, 'x@test.local', 'hash_inv_nw', ${new Date('2026-12-01T00:00:00.000Z')})
+    `)],
+  ];
+
+  it.each(collisions)('X-3 a destination already holding %s fails the import on %s and lands nothing', async (_label, constraint, collide) => {
+    await seedCollider();
+    await collide();
+    const users = await count('users');
+
+    await expect(importBundle()).rejects.toThrow(constraint);
+
+    expect(await count(`organizations WHERE id IN ('${NW}', '${CONTOSO}')`)).toBe(0);
+    expect(await count(`drives`)).toBe(0);
+    expect(await count(`wallets WHERE id IN ('${POOL}', '${DRIVE_WALLET}', '${OWNER_ROOT}', '${MEMBER_ROOT}')`)).toBe(0);
+    expect(await count(`wallet_funding_legs WHERE id IN ('test_leg_donation', 'test_leg_owner')`)).toBe(0);
+    expect(await count('users')).toBe(users);
   });
 });

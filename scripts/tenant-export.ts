@@ -180,13 +180,32 @@ function unbindOutOfBundleTargets(
  *  - `organizations`: a slug already taken in the destination would otherwise
  *    skip the org, and every org drive would then fail on its FK with a message
  *    that names the drive rather than the slug.
- *  - `wallets`: a user or org who already has a root wallet in the destination
- *    would otherwise keep that one and drop the carried balance and debt.
+ *  - every org and wallet table: a secondary unique key already taken in the
+ *    destination (an org slug, a root wallet, a funding leg's `sourceRef`, a
+ *    Stripe subscription id, a verified domain, an invitation token hash, a
+ *    membership) would otherwise skip the row in silence — an org whose drives
+ *    then fail on their FK, a balance replaced by the destination's, a funding
+ *    leg gone so the wallet's top-up no longer equals its legs (D-OW-13).
  */
-const CONFLICT_TARGETS: Partial<Record<ExportTableName, readonly string[]>> = {
+export const CONFLICT_TARGETS: Partial<Record<ExportTableName, readonly string[]>> = {
   agent_workspace_nodes: ['rootId', 'id'],
   organizations: ['id'],
+  org_members: ['id'],
+  org_invitations: ['id'],
+  org_subscriptions: ['id'],
+  org_subscription_funding: ['id'],
+  org_domains: ['id'],
+  org_member_departures: ['id'],
+  org_departure_suppressions: ['id'],
+  org_guest_holds: ['id'],
+  drive_join_requests: ['id'],
   wallets: ['id'],
+  wallet_funding_legs: ['id'],
+  wallet_consumer_caps: ['walletId', 'consumerKey'],
+  wallet_debt_notices: ['walletId'],
+  wallet_cap_alerts: ['walletId', 'consumerKey', 'capWindow', 'periodStart', 'threshold'],
+  drive_spend_overrides: ['userId', 'driveId'],
+  automation_skip_notices: ['driveId'],
 };
 
 /** `org_member_departures` → `orgMemberDepartures`, the manifest's key for a table. */
