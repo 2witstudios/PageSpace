@@ -59,13 +59,9 @@ describe('PlanPage (D-OW-17: the real settings/plan regression guard)', () => {
   });
 
   it('MON-2 (independent review on #2649, D-OW-17) shows the server-supplied planCredits figure on the Pro card, not the plan module\'s own built-in number', async () => {
-    // 777 is deliberately NOT a figure PLANS.pro can resolve to in EITHER state of
-    // MONEY_MODEL_V2_ACTIVE: 1,500 while it is false, 900 once the migration commit
-    // flips it. It must never be 900 or 1,500 — either one equals the built-in
-    // number in one of the two states, and in that state a dropped override would
-    // render the same text and this guard would pass vacuously. If the
-    // server-supplied override is dropped, the card shows the module's own number
-    // instead and this assertion fails, before and after the flip.
+    // 777 is deliberately NOT a figure PLANS.pro resolves to (900): a dropped
+    // override would render the module's own number and this assertion fails,
+    // never passing vacuously.
     mockStatusResponse({
       subscriptionTier: 'free',
       planCredits: { free: 500, pro: 777, business: 7777 },
@@ -87,8 +83,7 @@ describe('PlanPage (D-OW-17: the real settings/plan regression guard)', () => {
     const [freeCard, proCard] = screen.getAllByTestId('plan-included-credits');
     expect(freeCard).toHaveTextContent('500 credits to start');
     // The card that actually matters for this regression: the server-supplied
-    // override (777), not the plan module's own built-in number (1,500 today, 900
-    // after the migration-day flip).
+    // override (777), not the plan module's own built-in number (900).
     expect(proCard).toHaveTextContent('777 credits included each month');
   });
 });

@@ -4,8 +4,6 @@ import {
   MARKUP_BPS,
   CREDITS_PER_DOLLAR,
   INCLUDED_CREDIT_RATIO_BPS,
-  MONEY_MODEL_V2_ACTIVE,
-  isMoneyModelV2Enabled,
   includedCreditRatioBps,
   allowanceCentsForPaidCents,
   tierAllowanceCents,
@@ -76,88 +74,67 @@ describe('MON-1 (partial) one module defines the money model', () => {
     expect(INCLUDED_CREDIT_RATIO_BPS.free).toBe(0);
   });
 
-  it('D-OW-17 MONEY_MODEL_V2_ACTIVE is a plain code constant, TRUE since the migration commit, never an env var', () => {
-    expect(typeof MONEY_MODEL_V2_ACTIVE).toBe('boolean');
-    expect(MONEY_MODEL_V2_ACTIVE).toBe(true);
-  });
-
-  it('D-OW-17 isMoneyModelV2Enabled() takes no argument and returns the constant directly', () => {
-    expect(isMoneyModelV2Enabled.length).toBe(0);
-    expect(isMoneyModelV2Enabled()).toBe(MONEY_MODEL_V2_ACTIVE);
+  it('D-OW-17 / D-OW-42 the ratio is in force unconditionally: no switch, flag or legacy 100% ratio is exported', async () => {
+    const mod: Record<string, unknown> = await import('../money-model');
+    expect(mod.MONEY_MODEL_V2_ACTIVE).toBeUndefined();
+    expect(mod.isMoneyModelV2Enabled).toBeUndefined();
+    expect(mod.LEGACY_INCLUDED_CREDIT_RATIO_BPS).toBeUndefined();
+    expect(includedCreditRatioBps.length).toBe(1);
+    expect(allowanceCentsForPaidCents.length).toBe(2);
+    expect(tierAllowanceCents.length).toBe(1);
   });
 });
 
-describe('D-OW-17 includedCreditRatioBps is a pure function of an explicit `active` flag', () => {
-  it('active=true selects the real per-tier ratio; active=false selects the legacy 1:1 ratio — no env, no module reload needed to see both', () => {
-    expect(includedCreditRatioBps('pro', true)).toBe(6000);
-    expect(includedCreditRatioBps('business', true)).toBe(6000);
-    expect(includedCreditRatioBps('pro', false)).toBe(10000);
-    expect(includedCreditRatioBps('business', false)).toBe(10000);
-  });
-
-  it('the free tier and an unknown tier derive nothing regardless of active', () => {
-    expect(includedCreditRatioBps('free', true)).toBe(0);
-    expect(includedCreditRatioBps('free', false)).toBe(0);
-    expect(includedCreditRatioBps('enterprise', true)).toBe(0);
-    expect(includedCreditRatioBps('enterprise', false)).toBe(0);
-  });
-
-  it('defaults to MONEY_MODEL_V2_ACTIVE when active is omitted — this is "production passing the constant"', () => {
-    expect(includedCreditRatioBps('pro')).toBe(includedCreditRatioBps('pro', MONEY_MODEL_V2_ACTIVE));
-    expect(includedCreditRatioBps.length).toBe(1); // the default isn't a REQUIRED param
+describe('includedCreditRatioBps reads the ratio table', () => {
+  it('pro and business are 60%; the free tier and an unknown tier derive nothing', () => {
+    expect(includedCreditRatioBps('pro')).toBe(6000);
+    expect(includedCreditRatioBps('business')).toBe(6000);
+    expect(includedCreditRatioBps('free')).toBe(0);
+    expect(includedCreditRatioBps('enterprise')).toBe(0);
   });
 });
 
 describe('MON-2 the monthly allowance is derived from the amount paid, never tabulated', () => {
-  it('MON-2 allowanceCentsForPaidCents = paidCents × ratio for every paid tier, with active=true', () => {
+  it('MON-2 allowanceCentsForPaidCents = paidCents × ratio for every paid tier', () => {
     for (const tier of TIERS) {
       if (tier === 'free') continue;
       const paid = TIER_PLAN_LIMITS[tier].priceMonthlyUsd * 100;
       const expected = Math.floor((paid * INCLUDED_CREDIT_RATIO_BPS[tier]) / 10000);
-      expect(allowanceCentsForPaidCents(paid, tier, true), tier).toBe(expected);
+      expect(allowanceCentsForPaidCents(paid, tier), tier).toBe(expected);
     }
   });
 
-  it('A-11 Pro $15 → 900 credits; Business $50 + 10 seats × $10 → 9,000 credits (Northwind Labs), with active=true', () => {
-    expect(creditsFromCents(allowanceCentsForPaidCents(1500, 'pro', true))).toBe(900);
-    expect(creditsFromCents(allowanceCentsForPaidCents(5000, 'business', true))).toBe(3000);
-    expect(creditsFromCents(allowanceCentsForPaidCents(5000 + 10 * 1000, 'business', true))).toBe(9000);
+  it('A-11 Pro $15 → 900 credits; Business $50 + 10 seats × $10 → 9,000 credits (Northwind Labs)', () => {
+    expect(creditsFromCents(allowanceCentsForPaidCents(1500, 'pro'))).toBe(900);
+    expect(creditsFromCents(allowanceCentsForPaidCents(5000, 'business'))).toBe(3000);
+    expect(creditsFromCents(allowanceCentsForPaidCents(5000 + 10 * 1000, 'business'))).toBe(9000);
     // One extra seat is $10 → 600 credits, so 6 extra seats add 3,600.
-    expect(creditsFromCents(allowanceCentsForPaidCents(1000, 'business', true))).toBe(600);
+    expect(creditsFromCents(allowanceCentsForPaidCents(1000, 'business'))).toBe(600);
   });
 
-  it('MON-2 a promo or partial period flows through: a $12.34 invoice grants floor(1234 × 0.6) = 740¢, with active=true', () => {
-    expect(allowanceCentsForPaidCents(1234, 'pro', true)).toBe(740);
-    expect(allowanceCentsForPaidCents(0, 'pro', true)).toBe(0);
+  it('MON-2 a promo or partial period flows through: a $12.34 invoice grants floor(1234 × 0.6) = 740¢', () => {
+    expect(allowanceCentsForPaidCents(1234, 'pro')).toBe(740);
+    expect(allowanceCentsForPaidCents(0, 'pro')).toBe(0);
   });
 
-  it('MON-2 the free tier and an unknown tier derive nothing from a payment, either active value', () => {
-    expect(allowanceCentsForPaidCents(1500, 'free', true)).toBe(0);
-    expect(allowanceCentsForPaidCents(1500, 'free', false)).toBe(0);
-    expect(includedCreditRatioBps('enterprise', true)).toBe(0);
+  it('MON-2 the free tier and an unknown tier derive nothing from a payment', () => {
+    expect(allowanceCentsForPaidCents(1500, 'free')).toBe(0);
+    expect(includedCreditRatioBps('enterprise')).toBe(0);
   });
 
   it('MON-2 a negative or non-finite paid amount grants nothing (never a negative allowance)', () => {
-    expect(allowanceCentsForPaidCents(-1500, 'pro', true)).toBe(0);
-    expect(allowanceCentsForPaidCents(Number.NaN, 'pro', true)).toBe(0);
+    expect(allowanceCentsForPaidCents(-1500, 'pro')).toBe(0);
+    expect(allowanceCentsForPaidCents(Number.NaN, 'pro')).toBe(0);
   });
 
-  it('MON-2 with active=false the ratio is the legacy 1:1; production (no third argument) uses the ratio', () => {
-    expect(includedCreditRatioBps('pro', false)).toBe(10000);
-    expect(allowanceCentsForPaidCents(1500, 'pro', false)).toBe(1500);
-    expect(allowanceCentsForPaidCents(10000, 'business', false)).toBe(10000);
-    // No third argument: production's actual call shape, defaulting to the TRUE constant.
-    expect(allowanceCentsForPaidCents(1500, 'pro')).toBe(900);
-  });
-
-  it('MON-2 tierAllowanceCents sizes a grant from the list price when there is no invoice, per tier, both active values', () => {
+  it('MON-2 tierAllowanceCents sizes a grant from the list price when there is no invoice, per tier', () => {
     for (const tier of TIERS) {
       if (tier === 'free') continue;
       const list = TIER_PLAN_LIMITS[tier].priceMonthlyUsd * 100;
-      expect(tierAllowanceCents(tier, true), tier).toBe(allowanceCentsForPaidCents(list, tier, true));
-      expect(tierAllowanceCents(tier, true), tier).toBeGreaterThan(0);
+      expect(tierAllowanceCents(tier), tier).toBe(allowanceCentsForPaidCents(list, tier));
+      expect(tierAllowanceCents(tier), tier).toBeGreaterThan(0);
     }
-    // No third argument (production's shape): pro $15 × 60% → 900¢.
+    // Pro $15 × 60% → 900¢.
     expect(tierAllowanceCents('pro')).toBe(900);
   });
 });
@@ -168,15 +145,14 @@ describe('MON-8 the free starter grant is a plain credit count, not derived from
     expect(FREE_STARTER_CREDITS).toBeGreaterThan(0);
   });
 
-  it('MON-8 tierAllowanceCents("free") is the starter grant in cents regardless of active or any price', () => {
-    expect(tierAllowanceCents('free', true)).toBe(centsFromCredits(FREE_STARTER_CREDITS));
-    expect(tierAllowanceCents('free', false)).toBe(tierAllowanceCents('free', true));
+  it('MON-8 tierAllowanceCents("free") is the starter grant in cents regardless of any price', () => {
+    expect(tierAllowanceCents('free')).toBe(centsFromCredits(FREE_STARTER_CREDITS));
     // Today's $5 of starter value, unchanged.
     expect(tierAllowanceCents('free')).toBe(500);
   });
 
   it('MON-8 an unknown/legacy tier is treated as free for grant sizing (never a paid allowance)', () => {
-    expect(tierAllowanceCents('enterprise', true)).toBe(tierAllowanceCents('free', true));
+    expect(tierAllowanceCents('enterprise')).toBe(tierAllowanceCents('free'));
   });
 });
 
@@ -381,14 +357,10 @@ describe('D-OW-17 no client-visible mirror, and no env var, of the flag (single 
   });
 
   it('this module never reads process.env.MONEY_MODEL_V2 — the seam guard in __tests__/seams/credit-conversion.seam.test.ts enforces this repo-wide', () => {
-    // A weaker, local echo of the seam: with the env var explicitly set to something
-    // that would flip legacy env-based behavior, production's own call shape (no
-    // active argument) must still return the constant's figures.
     const original = process.env.MONEY_MODEL_V2;
-    process.env.MONEY_MODEL_V2 = 'true';
+    process.env.MONEY_MODEL_V2 = 'false';
     try {
       expect(tierAllowanceCents('pro')).toBe(900);
-      expect(isMoneyModelV2Enabled()).toBe(true);
     } finally {
       if (original === undefined) delete process.env.MONEY_MODEL_V2;
       else process.env.MONEY_MODEL_V2 = original;

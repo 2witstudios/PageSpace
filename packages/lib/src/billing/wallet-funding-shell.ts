@@ -38,7 +38,7 @@ import { alias } from 'drizzle-orm/pg-core';
 import { isBillingEnabled } from '../deployment-mode';
 import { getUserDriveAccess } from '../permissions/permissions';
 import { loggers } from '../logging/logger-config';
-import { MONEY_MODEL_V2_ACTIVE, tierAllowanceCents } from './money-model';
+import { tierAllowanceCents } from './money-model';
 import { computeMonthlyRefill } from './credit-core';
 import { RENEWAL_CAPABLE_STATUSES, TIER_ALLOWANCE_REFILLS } from './credit-pricing';
 import {
@@ -149,8 +149,6 @@ export interface OrgPoolRefillOptions {
    */
   basePriceId?: string;
   seatPriceId?: string;
-  /** D-OW-17 test seam only; production callers never pass it. */
-  active?: boolean;
 }
 
 /**
@@ -217,7 +215,7 @@ export async function applyOrgPoolRefill(invoice: OrgInvoice, opts: OrgPoolRefil
     onOrgSubscription,
     extraSeats: opts.extraSeats,
   };
-  const grant = orgPoolRefillGrant(grantInput, opts.active ?? MONEY_MODEL_V2_ACTIVE);
+  const grant = orgPoolRefillGrant(grantInput);
   const basis = orgSubscriptionFundingBasis(grantInput);
   const stripeSubscriptionId = invoiceSubscriptionIdOf(invoice);
   const recordFunding = async (tx: Tx): Promise<boolean> => {

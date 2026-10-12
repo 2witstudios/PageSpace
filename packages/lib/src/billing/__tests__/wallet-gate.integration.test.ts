@@ -1237,7 +1237,7 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
       subtotal: 5000,
       parent: { subscription_details: { subscription: `sub_${createId()}` } },
       lines: { data: [{ amount: 5000, parent: { subscription_item_details: { subscription_item: 'si_org' } }, period: { start: startS, end: startS + 30 * 86_400 }, pricing: { price_details: { price: REFILL_PRICE_ID } } }] },
-    }, { active: true, basePriceId: REFILL_PRICE_ID, seatPriceId: REFILL_SEAT_PRICE_ID });
+    }, { basePriceId: REFILL_PRICE_ID, seatPriceId: REFILL_SEAT_PRICE_ID });
     expect(refill).toMatchObject({ kind: 'granted', walletId: w.poolId });
     expect((await walletRow(w.poolId)).monthlyPeriodStart?.getTime()).toBe(startS * 1000);
     // Wait out the one second to the new period's start, so the refill is in force.
@@ -1682,7 +1682,7 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
         id: `in_${createId()}`, customer: acme.stripeCustomerId, billing_reason: 'subscription_cycle', amount_paid: 5000, subtotal: 5000,
         parent: { subscription_details: { subscription: `sub_${createId()}` } },
         lines: { data: [{ amount: 5000, parent: { subscription_item_details: { subscription_item: 'si_org' } }, period: { start: startS, end: startS + 30 * 86_400 }, pricing: { price_details: { price: REFILL_PRICE_ID } } }] },
-      }, { active: true, basePriceId: REFILL_PRICE_ID, seatPriceId: REFILL_SEAT_PRICE_ID })).toMatchObject({ kind: 'granted' });
+      }, { basePriceId: REFILL_PRICE_ID, seatPriceId: REFILL_SEAT_PRICE_ID })).toMatchObject({ kind: 'granted' });
 
       // The org pool: owned by the org, no subject, no parent — one row.
       const acmeWallets = () => db.select().from(wallets).where(eq(wallets.orgId, acme.id));

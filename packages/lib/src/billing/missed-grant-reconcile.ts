@@ -23,7 +23,7 @@ import { subscriptions } from '@pagespace/db/schema/subscriptions';
 import { and, eq, gt, inArray } from '@pagespace/db/operators';
 import { isBillingEnabled } from '../deployment-mode';
 import { computeMonthlyRefill } from './credit-core';
-import { MONEY_MODEL_V2_ACTIVE, allowanceCentsForPaidCents } from './money-model';
+import { allowanceCentsForPaidCents } from './money-model';
 import { ensurePersonalRootWalletId } from './personal-wallet';
 import { toSubscriptionTier, type SubscriptionTier } from './subscription-tiers';
 import { deriveTierFromSubscriptions, type SubscriptionRowLike } from './subscription-tier-sync';
@@ -58,11 +58,6 @@ export interface MissedGrantReconcileResult {
 interface MissedGrantReconcileOptions {
   /** Resolve entitlement from configured price identity, independently of the invoice amount. */
   priceTier: (stripePriceId: string) => SubscriptionTier;
-  /**
-   * Whether the money model's ratio is in force (D-OW-17 test seam, as applyStripeFunding's
-   * `{ active }`). Production callers leave it unset: the MONEY_MODEL_V2_ACTIVE default.
-   */
-  active?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -90,9 +85,9 @@ export interface MissedGrantPlan {
  * (never the stale tier that caused the miss). `allowanceCentsForPaidCents` is the
  * same pure function every other grant path uses — one definition, no drift.
  */
-export function planMissedGrantReconcile(row: MissedGrantRow, resolvedTier: string, active: boolean = MONEY_MODEL_V2_ACTIVE): MissedGrantPlan {
+export function planMissedGrantReconcile(row: MissedGrantRow, resolvedTier: string): MissedGrantPlan {
   const tier = toSubscriptionTier(resolvedTier);
-  const allowanceCents = allowanceCentsForPaidCents(row.paidCents, tier, active);
+  const allowanceCents = allowanceCentsForPaidCents(row.paidCents, tier);
   return {
     id: row.id,
     userId: row.userId,
@@ -220,7 +215,6 @@ export async function reconcileMissedGrants(options: MissedGrantReconcileOptions
         const plan = planMissedGrantReconcile(
           { id: row.id, userId: row.userId, paidCents: row.paidCents ?? 0 },
           derived.tier,
-          options.active,
         );
         if (derived.indeterminate) {
           result.indeterminate++;
