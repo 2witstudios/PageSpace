@@ -40,7 +40,7 @@ import { checkOrgActive, checkOrgMayLoosen, type OrgLapsedRefusal } from '../org
 import { removeFormerLeadOwnerRow } from '../permissions/org-drive-membership';
 import { getActorInfo, logActivityWithTx } from '../monitoring/activity-logger';
 import { reattributeDriveStorageInTx, type StorageReattributionResult } from './storage-limits';
-import { releaseOrgDedicatedHostingInTx } from './app-hosting/dedicated-release';
+import { releaseDedicatedHostingInTx } from './app-hosting/dedicated-release';
 import { recordOrgAuditEventAfterCommit } from '../audit/org-audit';
 
 export type OrgDriveTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -174,6 +174,9 @@ export async function moveDriveToOrg(
     // O-9: the drive's bytes leave its owner's personal quota in the same transaction that makes
     // them the org's; the org's usage is derived from its drives, so it follows orgId.
     const storageReattribution = await reattributeDriveStorageInTx(tx, { driveId, ownerId: drive.ownerId, orgId: input.orgId, direction: 'into-org' });
+    // WAL-9 (D-OW-64, symmetric): the owner stops paying for this drive's apps' dedicated hosting at
+    // period end — the drive is the org's now, and the org buys its own.
+    await releaseDedicatedHostingInTx(tx, { driveId, formerPayer: { kind: 'user' } });
     const publish = await deps.syncOrgMembership(tx, { kind: 'move-in', driveId, orgId: input.orgId });
     // POL-2 (Review #2762 P1-1): the drive brings its outsiders with it. Under the org row lock taken above, the
     // org's guests policy decides them as it decides any admission: off parks them (restored when guests come back
@@ -232,7 +235,7 @@ export async function moveDriveOutOfOrg(
     // O-9: the drive's bytes land on its owner's (the lead's) personal quota, atomically with orgId.
     const storageReattribution = await reattributeDriveStorageInTx(tx, { driveId, ownerId: moved.ownerId, orgId, direction: 'out-of-org' });
     // WAL-9 (D-OW-64): the org stops paying for this drive's apps' dedicated hosting at period end.
-    await releaseOrgDedicatedHostingInTx(tx, { driveId, orgId });
+    await releaseDedicatedHostingInTx(tx, { driveId, formerPayer: { kind: 'org', orgId } });
     const publish = await deps.syncOrgMembership(tx, {
       kind: 'move-out',
       driveId,

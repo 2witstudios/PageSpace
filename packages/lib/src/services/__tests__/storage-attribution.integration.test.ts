@@ -283,6 +283,33 @@ describe('moving a drive re-attributes its bytes', () => {
     }
   });
 
+  it('WAL-9 (partial) moving a personal drive INTO the org queues its owner\'s personal dedicated hosting to end at period end, in the move\'s transaction — the org buys its own (D-OW-64)', async () => {
+    const product = await seedDrive(marcus);
+    const envId = createId();
+    await db.insert(driveEnvs).values({ id: envId, driveId: product, name: `env-${envId}`, createdBy: marcus, updatedAt: new Date() } as never);
+    const appId = createId();
+    await db.insert(publishedApps).values({
+      id: appId, envId, driveId: product, ownerId: marcus, flyAppName: `pgs-${appId}`, networkName: 'published-apps',
+      subdomain: `in-${appId}`, machineId: `m-${appId}`, status: 'running', tier: 'dedicated', imageDigest: 'sha256:abc', updatedAt: new Date(),
+    } as never);
+    const subId = `sub_${appId}`;
+    await db.insert(publishedAppSubscriptions).values({
+      publishedAppId: appId, userId: marcus, orgId: null, stripeSubscriptionId: subId, stripePriceId: 'price_small',
+      guestPreset: 'shared-cpu-1x-512', status: 'active', currentPeriodStart: new Date(), currentPeriodEnd: new Date(Date.now() + 30 * 86_400_000),
+    });
+    try {
+      const moved = await moveDriveToOrg(marcus, product, { orgId: northwind }, deps);
+
+      expect(moved.ok).toBe(true);
+      const [reclaim] = await db.select().from(appHostingStripeReclaims).where(eq(appHostingStripeReclaims.stripeSubscriptionId, subId));
+      expect(reclaim).toMatchObject({ publishedAppId: appId, cancelAt: 'period_end' });
+    } finally {
+      await db.delete(appHostingStripeReclaims).where(eq(appHostingStripeReclaims.stripeSubscriptionId, subId));
+      await db.delete(publishedApps).where(eq(publishedApps.id, appId));
+      await db.delete(driveEnvs).where(eq(driveEnvs.id, envId));
+    }
+  });
+
   it('WAL-9 (partial) a refused move re-attributes nothing', async () => {
     const product = await seedDrive(marcus);
     await seedFile(product, marcus, 1000);

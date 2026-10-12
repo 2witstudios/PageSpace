@@ -9,7 +9,7 @@ import {
   applyMinMachinesRunning,
   classifySubscriptionKind,
   decideDedicatedPurchaser,
-  orgDedicatedSubscriptionsToRelease,
+  dedicatedSubscriptionsToRelease,
   dedicatedMonthlyFloorCents,
   findGuestPreset,
   guestPresetShape,
@@ -701,7 +701,7 @@ describe('decideDedicatedPurchaser — who buys an app\'s dedicated hosting, and
   });
 });
 
-describe('orgDedicatedSubscriptionsToRelease — what an org stops paying for when a drive leaves it (D-OW-64)', () => {
+describe('dedicatedSubscriptionsToRelease — what a drive\'s former payer stops paying for (D-OW-64)', () => {
   it('WAL-9 (partial) only the live subscriptions billing the leaving org; a terminal one, or one billing a person, is not the org\'s to stop', () => {
     const rows = [
       { stripeSubscriptionId: 'sub_live', orgId: 'org-1', status: 'active' },
@@ -713,8 +713,22 @@ describe('orgDedicatedSubscriptionsToRelease — what an org stops paying for wh
     assert({
       given: 'a drive leaving org-1',
       should: 'release its live org-1 subscriptions only',
-      actual: orgDedicatedSubscriptionsToRelease(rows, 'org-1').map((r) => r.stripeSubscriptionId),
+      actual: dedicatedSubscriptionsToRelease(rows, { kind: 'org', orgId: 'org-1' }).map((r) => r.stripeSubscriptionId),
       expected: ['sub_live', 'sub_past_due'],
+    });
+  });
+
+  it('WAL-9 (partial) a personal drive moving into an org releases only its owner\'s live personal subscriptions — never one an org already pays for', () => {
+    const rows = [
+      { stripeSubscriptionId: 'sub_mine', orgId: null, status: 'active' },
+      { stripeSubscriptionId: 'sub_mine_over', orgId: null, status: 'incomplete_expired' },
+      { stripeSubscriptionId: 'sub_org', orgId: 'org-1', status: 'active' },
+    ];
+    assert({
+      given: 'a personal drive moving into an org',
+      should: 'release the owner\'s live personal subscription only',
+      actual: dedicatedSubscriptionsToRelease(rows, { kind: 'user' }).map((r) => r.stripeSubscriptionId),
+      expected: ['sub_mine'],
     });
   });
 });

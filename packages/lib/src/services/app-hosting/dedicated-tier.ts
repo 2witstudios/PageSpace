@@ -555,14 +555,17 @@ export function decideDedicatedPurchaser(input: {
 }
 
 /**
- * WAL-9 (D-OW-64): the dedicated subscriptions an org stops paying for when one of its drives
- * LEAVES it (moved out, or the org deleted) — the ones that bill that org and are still live.
- * Each is released at the end of the period the org has already paid for, never beyond it; a
- * terminal one is already over, and one billing someone else is not the org's to stop (pure).
+ * WAL-9 (D-OW-64): the dedicated subscriptions a drive's FORMER payer stops paying for when the
+ * drive changes payer — an org drive leaving its org (moved out, or the org deleted), or a
+ * personal drive moving into an org (whose own Stripe customer can buy its own). The ones that
+ * bill that former payer and are still live: an org's carry its orgId, a person's carry none.
+ * Each is released at the end of the period already paid for, never beyond it; a terminal one is
+ * already over, and one billing someone else is not the former payer's to stop (pure).
  */
-export function orgDedicatedSubscriptionsToRelease<Row extends { stripeSubscriptionId: string; orgId: string | null; status: string }>(
+export function dedicatedSubscriptionsToRelease<Row extends { stripeSubscriptionId: string; orgId: string | null; status: string }>(
   rows: readonly Row[],
-  leavingOrgId: string,
+  formerPayer: { kind: 'org'; orgId: string } | { kind: 'user' },
 ): Row[] {
-  return rows.filter((row) => row.orgId === leavingOrgId && !isTerminalSubscriptionStatus(row.status));
+  const billsFormerPayer = (row: Row) => (formerPayer.kind === 'org' ? row.orgId === formerPayer.orgId : row.orgId === null);
+  return rows.filter((row) => billsFormerPayer(row) && !isTerminalSubscriptionStatus(row.status));
 }
