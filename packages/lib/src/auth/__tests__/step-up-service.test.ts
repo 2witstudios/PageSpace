@@ -198,7 +198,7 @@ describe('step-up-service', () => {
       });
 
       expect(result.ok).toBe(true);
-      const minted = mockDb.insert.mock.results.at(-1)!.value.values.mock.calls[0][0];
+      const minted = mockDb.insert.mock.results[mockDb.insert.mock.results.length - 1]!.value.values.mock.calls[0][0];
       expect(JSON.parse(minted.metadata).authentication).toEqual({
         authenticatedAtMs: expect.any(Number), assurance: userVerified ? 'user_verified_passkey' : 'single_factor',
       });
@@ -472,7 +472,7 @@ describe('step-up-service', () => {
       });
 
       expect(result.ok).toBe(true);
-      const minted = mockDb.insert.mock.results.at(-1)!.value.values.mock.calls[0][0];
+      const minted = mockDb.insert.mock.results[mockDb.insert.mock.results.length - 1]!.value.values.mock.calls[0][0];
       expect(JSON.parse(minted.metadata).authentication).toEqual({ authenticatedAtMs: expect.any(Number), assurance: 'single_factor' });
       if (result.ok) expect(result.data.stepUpToken).toBe('ps_stepup_rawtoken');
     });

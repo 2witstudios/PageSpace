@@ -60,6 +60,8 @@ const DRIVES = {
 
 const POLICIES = {
   policies: {
+    requireStrongSignIn: true,
+    maximumSessionAgeMinutes: null,
     guests: 'approve' as const,
     publicShareLinks: false,
     publishWeb: true,
@@ -130,6 +132,8 @@ describe('orgs rendering', () => {
 
   it('X-1 (partial) renders every policy key; null, empty allowlist, booleans as words', () => {
     const text = renderOrgPolicies(POLICIES);
+    expect(text).toContain('requireStrongSignIn: on');
+    expect(text).toContain('maximumSessionAgeMinutes: (none)');
     expect(text).toContain('guests: approve');
     expect(text).toContain('publicShareLinks: off');
     expect(text).toContain('seatAllowanceCents: 3000');

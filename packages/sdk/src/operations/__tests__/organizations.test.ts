@@ -51,6 +51,8 @@ const DIRECTORY = {
 
 const POLICIES = {
   policies: {
+    requireStrongSignIn: false,
+    maximumSessionAgeMinutes: null,
     guests: 'approve',
     publicShareLinks: true,
     publishWeb: true,

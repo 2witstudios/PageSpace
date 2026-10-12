@@ -140,6 +140,8 @@ export const listOrgDriveDirectory = defineOperation({
 
 /** `OrgPolicies` (`packages/lib/src/organizations/policies-core.ts`) — every key always present, defaults filled in (POL-1). */
 const orgPoliciesSchema = z.object({
+  requireStrongSignIn: z.boolean(),
+  maximumSessionAgeMinutes: z.number().int().nonnegative().max(43_200).nullable(),
   guests: z.enum(['off', 'approve', 'on']),
   publicShareLinks: z.boolean(),
   publishWeb: z.boolean(),
