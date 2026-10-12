@@ -350,21 +350,26 @@ describe('Stripe webhook — org routing, idempotency, lapse (real Postgres, in-
     ]);
   });
 
-  it('mirrors current Stripe gift identity through signed subscription events and replay', async () => {
+  it('D-OW-54 mirrors the current Stripe gift AND its pinned seats through signed subscription events and replay; a gift with no valid pin is not a gift', async () => {
     if (!dbAvailable) return;
     const org = await northwind();
     expect((await storedSub(org.orgId)).gifted).toBe(false);
     const live = org.stripe.subscriptions.get(org.subscriptionId)!;
-    live.metadata = { ...live.metadata, type: 'gift_subscription' };
+    live.metadata = { ...live.metadata, type: 'gift_subscription', giftedExtraSeats: '2' };
     const snapshot = { id: org.subscriptionId, object: 'subscription', customer: org.customerId, status: 'active', metadata: orgMetadata(org.orgId) };
     const gift = eventPayload('customer.subscription.updated', snapshot);
     expect(await deliver(gift)).toBe(200);
-    expect((await storedSub(org.orgId)).gifted).toBe(true);
+    expect(await storedSub(org.orgId)).toMatchObject({ gifted: true, giftedExtraSeats: 2 });
     expect(await deliver(gift)).toBe(200);
-    expect((await storedSub(org.orgId)).gifted).toBe(true);
-    delete live.metadata.type;
+    expect(await storedSub(org.orgId)).toMatchObject({ gifted: true, giftedExtraSeats: 2 });
+    // A gift-typed subscription without a valid pin (a hand edit): not a gift for capability.
+    live.metadata.giftedExtraSeats = '-3';
     expect(await deliver(eventPayload('customer.subscription.updated', snapshot))).toBe(200);
-    expect((await storedSub(org.orgId)).gifted).toBe(false);
+    expect(await storedSub(org.orgId)).toMatchObject({ gifted: false, giftedExtraSeats: null });
+    delete live.metadata.type;
+    delete live.metadata.giftedExtraSeats;
+    expect(await deliver(eventPayload('customer.subscription.updated', snapshot))).toBe(200);
+    expect(await storedSub(org.orgId)).toMatchObject({ gifted: false, giftedExtraSeats: null });
   });
 
   it("SEAT-7 (partial) org subscription webhooks are routed to the org before the personal-tier handler and are idempotent: each event delivered twice applies once and never touches the Owner's personal plan", async () => {

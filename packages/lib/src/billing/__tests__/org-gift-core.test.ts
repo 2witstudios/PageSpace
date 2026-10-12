@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   planOrgGift,
   planOrgUngift,
+  parseOrgGiftMetadata,
   orgGiftCouponId,
   orgGiftVoidKey,
   orgGiftRefusalStatus,
@@ -29,10 +30,38 @@ const facts = (over: Partial<OrgGiftFacts> = {}): OrgGiftFacts => ({
   billingEnabled: true,
   org: { adminRole: null },
   stored: stored(),
+  stripeGift: { typed: false, giftedExtraSeats: null },
   ...over,
 });
 
+describe('parseOrgGiftMetadata: Stripe is the single source of an applied gift (D-OW-54)', () => {
+  it('reads a gift and its pinned seats; anything else is not a gift', () => {
+    expect(parseOrgGiftMetadata({ type: ORG_GIFT_METADATA_TYPE, giftedExtraSeats: '3' })).toEqual({ typed: true, giftedExtraSeats: 3 });
+    expect(parseOrgGiftMetadata({ type: ORG_GIFT_METADATA_TYPE, giftedExtraSeats: '0' })).toEqual({ typed: true, giftedExtraSeats: 0 });
+    expect(parseOrgGiftMetadata({ kind: 'org_business' })).toEqual({ typed: false, giftedExtraSeats: null });
+    expect(parseOrgGiftMetadata(null)).toEqual({ typed: false, giftedExtraSeats: null });
+  });
+
+  it.each([undefined, '', '-1', '1.5', 'two', '1e3', '9999999999'])('a gift with an invalid seat pin (%s) carries no seats', (raw) => {
+    const metadata: Record<string, string> = { type: ORG_GIFT_METADATA_TYPE };
+    if (raw !== undefined) metadata.giftedExtraSeats = raw;
+    expect(parseOrgGiftMetadata(metadata)).toEqual({ typed: true, giftedExtraSeats: null });
+  });
+});
+
 describe('planOrgGift (SEAT-8 admin gift, D-OW-23, D-OW-54)', () => {
+  it('D-OW-54 a gift Stripe already holds with the requested seats is COMPLETED (pin and revision committed, nothing written to Stripe), whatever the mirror says', () => {
+    for (const mirrored of [stored(), stored({ gifted: true, giftedExtraSeats: 2 })]) {
+      expect(planOrgGift(facts({ stored: mirrored, stripeGift: { typed: true, giftedExtraSeats: 2 } }))).toEqual({
+        kind: 'complete', subscriptionId: 'sub_org', giftedExtraSeats: 2, nextGiftRevision: 1, couponId: orgGiftCouponId('sub_org'),
+      });
+    }
+  });
+
+  it('D-OW-54 a mirror that says gifted while Stripe no longer holds the gift does not block a new gift', () => {
+    expect(planOrgGift(facts({ stored: stored({ gifted: true, giftedExtraSeats: 2 }) })).kind).toBe('gift');
+  });
+
   it('SEAT-8 (partial) gifts ON the org\'s own stored subscription: a 100% forever coupon, the gift metadata the funding path reads, and the seat item held at the pinned quantity', () => {
     const plan = planOrgGift(facts());
     expect(plan.kind).toBe('gift');
@@ -121,8 +150,8 @@ describe('planOrgGift (SEAT-8 admin gift, D-OW-23, D-OW-54)', () => {
     ['canceled', { stored: stored({ status: 'canceled' }) }, 'subscription_not_live'],
     ['expired', { stored: stored({ status: 'incomplete_expired' }) }, 'subscription_not_live'],
     ['an unverified price', { stored: stored({ status: 'unverified_price' }) }, 'subscription_not_live'],
-    ['already gifted (mirrored)', { stored: stored({ gifted: true }) }, 'already_gifted'],
-    ['already gifted (pinned)', { stored: stored({ giftedExtraSeats: 3 }) }, 'already_gifted'],
+    ['already gifted in Stripe with other seats (revoke first)', { stripeGift: { typed: true, giftedExtraSeats: 3 } }, 'already_gifted'],
+    ['gift-typed in Stripe with no valid seat pin (revoke first)', { stripeGift: { typed: true, giftedExtraSeats: null } }, 'already_gifted'],
   ])('refuses (fail closed) when %s', (_label, over, reason) => {
     expect(planOrgGift(facts(over))).toEqual({ kind: 'refuse', reason });
   });
@@ -145,6 +174,7 @@ const ungift = (over: Partial<OrgUngiftFacts> = {}): OrgUngiftFacts => ({
   billingEnabled: true,
   org: { adminRole: null },
   stored: stored({ gifted: true, giftedExtraSeats: 2, giftRevision: 1 }),
+  stripeGift: { typed: true, giftedExtraSeats: 2 },
   ...over,
 });
 
@@ -175,12 +205,13 @@ describe('planOrgUngift (SEAT-8 revoke, D-OW-54)', () => {
     ['no such org', { org: null }, 'org_not_found'],
     ['the admin is a member', { org: { adminRole: 'MEMBER' } }, 'admin_is_member'],
     ['no subscription', { stored: null }, 'no_subscription'],
-    ['not gifted', { stored: stored() }, 'not_gifted'],
+    ['not gifted', { stored: stored(), stripeGift: { typed: false, giftedExtraSeats: null } }, 'not_gifted'],
   ])('refuses when %s', (_label, over, reason) => {
     expect(planOrgUngift(ungift(over))).toEqual({ kind: 'refuse', reason });
   });
 
-  it('a gift that is only mirrored (pinned seats already cleared) can still be revoked', () => {
+  it('a gift Stripe holds can be revoked whatever the mirror says, including one with an invalid seat pin', () => {
+    expect(planOrgUngift(ungift({ stored: stored(), stripeGift: { typed: true, giftedExtraSeats: null } })).kind).toBe('ungift');
     expect(planOrgUngift(ungift({ stored: stored({ gifted: true, giftedExtraSeats: null }) })).kind).toBe('ungift');
   });
 });

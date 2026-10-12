@@ -29,6 +29,14 @@
  * shell retrieves before it creates, so a gift interrupted between its writes completes on
  * any retry, and a gift revoked and given again reuses its coupon.
  *
+ * Stripe is the single source of whether a gift is applied: the shell reads the subscription's
+ * gift metadata from Stripe (not the lagging mirror) before it plans. A gift Stripe already
+ * holds with the requested seats is COMPLETED (the pin is committed, nothing is written to
+ * Stripe again), whichever came first after an ambiguous failure — the retry or the
+ * subscription webhook; with any other seat count it is refused (revoke first), so a lapsed org
+ * is never re-anchored and billed twice. The webhook mirror reads the same metadata through
+ * {@link parseOrgGiftMetadata}.
+ *
  * One Stripe key per gift state transition: the subscription update of a gift (subscription,
  * revision, pinned seats) and of a revoke (subscription, revision) is keyed on the stored gift
  * revision, which every gift and revoke bumps under the billing
@@ -40,6 +48,27 @@ import { isLiveOrgSubscriptionStatus, orgStripeIdempotencyKey } from './org-subs
 
 /** The subscription metadata `type` the funding path recognises as an admin gift. */
 export const ORG_GIFT_METADATA_TYPE = 'gift_subscription';
+
+/** What a subscription's metadata says about an admin gift. */
+export interface OrgGiftMetadataState {
+  /** The metadata says this is a gift (`type: gift_subscription`). */
+  typed: boolean;
+  /** The pinned gifted extra seats, when the metadata carries a valid one (a non-negative integer). */
+  giftedExtraSeats: number | null;
+}
+
+/**
+ * Parse a Stripe subscription's gift metadata. A gift-typed subscription with a missing or
+ * invalid seat pin (not a non-negative integer) reads `{ typed: true, giftedExtraSeats: null }`:
+ * the mirror treats it as NOT gifted for capability and reports it, and a new gift is refused
+ * until it is revoked.
+ */
+export function parseOrgGiftMetadata(metadata: Record<string, string> | null | undefined): OrgGiftMetadataState {
+  if (metadata?.type !== ORG_GIFT_METADATA_TYPE) return { typed: false, giftedExtraSeats: null };
+  const raw = metadata.giftedExtraSeats;
+  const seats = typeof raw === 'string' && /^\d{1,9}$/.test(raw) ? Number(raw) : null;
+  return { typed: true, giftedExtraSeats: seats };
+}
 
 export type OrgGiftRefusal =
   | 'billing_disabled'
@@ -76,6 +105,8 @@ export interface OrgGiftFacts {
   /** The org, with the gifting admin's own role in it (null when not a member). */
   org: { adminRole: OrgRole | null } | null;
   stored: OrgGiftStored | null;
+  /** The stored subscription's gift metadata as Stripe holds it NOW (null with no subscription). */
+  stripeGift: OrgGiftMetadataState | null;
 }
 
 export type OrgUngiftFacts = Omit<OrgGiftFacts, 'extraSeats'>;
@@ -108,6 +139,11 @@ export interface OrgUngiftSubscriptionUpdate {
 
 export type OrgGiftPlan =
   | { kind: 'refuse'; reason: OrgGiftRefusal }
+  /**
+   * Stripe already holds this gift with these seats (an ambiguous failure the webhook or the
+   * retry got to first): commit the pin and the revision; write nothing to Stripe.
+   */
+  | { kind: 'complete'; subscriptionId: string; giftedExtraSeats: number; nextGiftRevision: number; couponId: string }
   | {
       kind: 'gift';
       subscriptionId: string;
@@ -164,9 +200,14 @@ export function planOrgGift(facts: OrgGiftFacts): OrgGiftPlan {
   if (!isLiveOrgSubscriptionStatus(stored.status) || (stored.status !== 'active' && !restoresNow)) {
     return { kind: 'refuse', reason: 'subscription_not_live' };
   }
-  if (stored.gifted || stored.giftedExtraSeats !== null) return { kind: 'refuse', reason: 'already_gifted' };
-
   const subscriptionId = stored.stripeSubscriptionId;
+  const inStripe = facts.stripeGift ?? { typed: false, giftedExtraSeats: null };
+  if (inStripe.typed) {
+    return inStripe.giftedExtraSeats === facts.extraSeats
+      ? { kind: 'complete', subscriptionId, giftedExtraSeats: facts.extraSeats, nextGiftRevision: stored.giftRevision + 1, couponId: orgGiftCouponId(subscriptionId) }
+      : { kind: 'refuse', reason: 'already_gifted' };
+  }
+
   const coupon: OrgGiftCouponParams = {
     id: orgGiftCouponId(subscriptionId),
     percent_off: 100,
@@ -202,7 +243,7 @@ export function planOrgUngift(facts: OrgUngiftFacts): OrgUngiftPlan {
   const common = refuseCommon(facts);
   if (common) return { kind: 'refuse', reason: common };
   const stored = facts.stored as OrgGiftStored;
-  if (!stored.gifted && stored.giftedExtraSeats === null) return { kind: 'refuse', reason: 'not_gifted' };
+  if (!facts.stripeGift?.typed && !stored.gifted && stored.giftedExtraSeats === null) return { kind: 'refuse', reason: 'not_gifted' };
   const subscriptionId = stored.stripeSubscriptionId;
   const update: OrgUngiftSubscriptionUpdate = {
     discounts: '',

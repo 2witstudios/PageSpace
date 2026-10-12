@@ -31,6 +31,10 @@ export function orgGiftStripe(): OrgGiftStripe {
       const item = await stripe.subscriptionItems.update(itemId, { quantity, proration_behavior: prorationBehavior }, { idempotencyKey });
       return { quantity: item.quantity ?? quantity };
     },
+    async retrieveSubscriptionMetadata(subscriptionId) {
+      const sub = await stripe.subscriptions.retrieve(subscriptionId);
+      return { ...sub.metadata };
+    },
     async updateSubscription(subscriptionId, params, idempotencyKey) {
       const sub = await stripe.subscriptions.update(subscriptionId, params, { idempotencyKey });
       return { id: sub.id, status: sub.status };

@@ -26,6 +26,7 @@ import { orgBillingLockKey, orgExtraSeatQuantity, planSeatQuantitySync } from '.
 import { TIER_PLAN_LIMITS } from './subscription-tiers';
 import {
   orgGiftVoidKey,
+  parseOrgGiftMetadata,
   planOrgGift,
   planOrgUngift,
   type OrgGiftCouponParams,
@@ -50,6 +51,8 @@ export interface OrgGiftStripe {
   ): Promise<{ id: string; status: string }>;
   /** The seat item's quantity, set with no proration (a revoke re-syncs it to the seats held). */
   setSeatQuantity(params: { itemId: string; quantity: number; prorationBehavior: 'none' }, idempotencyKey: string): Promise<{ quantity: number }>;
+  /** The subscription's metadata as Stripe holds it now (the single source of an applied gift). */
+  retrieveSubscriptionMetadata(subscriptionId: string): Promise<Record<string, string>>;
 }
 
 export type OrgGiftResult =
@@ -94,6 +97,12 @@ async function lockAndReadStored(tx: Tx, orgId: string): Promise<StoredGiftRow |
   return row ? { ...row, gifted: row.gifted === true } : null;
 }
 
+/** Stripe's gift metadata for the stored subscription — read only when a plan could use it. */
+async function readStripeGift(stripe: OrgGiftStripe, org: { adminRole: unknown } | null, stored: StoredGiftRow | null) {
+  if (!org || org.adminRole !== null || !stored) return null;
+  return parseOrgGiftMetadata(await stripe.retrieveSubscriptionMetadata(stored.stripeSubscriptionId));
+}
+
 async function readOrg(orgId: string, adminUserId: string) {
   const found = await findOrganizationById(orgId);
   return found ? { adminRole: await findMembershipRole(orgId, adminUserId) } : null;
@@ -106,8 +115,26 @@ export async function giftOrgSubscription(
   const org = await readOrg(input.orgId, input.adminUserId);
   const result = await db.transaction(async (tx): Promise<OrgGiftResult> => {
     const stored = await lockAndReadStored(tx, input.orgId);
-    const plan = planOrgGift({ ...input, billingEnabled: isBillingEnabled(), org, stored });
+    const stripeGift = await readStripeGift(stripe, org, stored);
+    const plan = planOrgGift({ ...input, billingEnabled: isBillingEnabled(), org, stored, stripeGift });
     if (plan.kind === 'refuse') return { kind: 'refused', reason: plan.reason };
+    if (plan.kind === 'complete') {
+      // Stripe already applied this gift (its response was lost); the mirror may or may not have
+      // seen it. Commit the pin and the revision; nothing is written to Stripe again.
+      await tx
+        .update(orgSubscriptions)
+        .set({ giftedExtraSeats: plan.giftedExtraSeats, giftRevision: plan.nextGiftRevision })
+        .where(eq(orgSubscriptions.orgId, input.orgId));
+      return {
+        kind: 'gifted',
+        subscriptionId: plan.subscriptionId,
+        couponId: plan.couponId,
+        status: (stored as StoredGiftRow).status,
+        restoresNow: false,
+        giftedExtraSeats: plan.giftedExtraSeats,
+        voidedInvoiceIds: [],
+      };
+    }
 
     // The pin is written first, in this transaction: it commits only with the gift, and the
     // pool refill reads it under this same lock, so a gift invoice never sees a half-applied gift.
@@ -179,7 +206,8 @@ export async function ungiftOrgSubscription(
   const org = await readOrg(input.orgId, input.adminUserId);
   const result = await db.transaction(async (tx): Promise<OrgUngiftResult> => {
     const stored = await lockAndReadStored(tx, input.orgId);
-    const plan = planOrgUngift({ ...input, billingEnabled: isBillingEnabled(), org, stored });
+    const stripeGift = await readStripeGift(stripe, org, stored);
+    const plan = planOrgUngift({ ...input, billingEnabled: isBillingEnabled(), org, stored, stripeGift });
     if (plan.kind === 'refuse') return { kind: 'refused', reason: plan.reason };
     await tx
       .update(orgSubscriptions)

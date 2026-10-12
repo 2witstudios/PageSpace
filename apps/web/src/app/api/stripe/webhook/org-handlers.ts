@@ -36,6 +36,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getOrgStatus } from '@pagespace/lib/organizations/status';
 import { applyOrgPoolRefill, type OrgPoolRefillOutcome } from '@pagespace/lib/billing/wallet-funding-shell';
 import { orgBillingLockKey } from '@pagespace/lib/billing/org-subscription-core';
+import { parseOrgGiftMetadata } from '@pagespace/lib/billing/org-gift-core';
 import {
   planOrgSubscriptionPriceMirror,
   planOrgSubscriptionMirror,
@@ -138,8 +139,20 @@ export async function mirrorOrgSubscription(
       subscription: fetched,
       prices: { basePriceId: deps.basePriceId(), seatPriceId: deps.seatPriceId() },
     });
+    // D-OW-54: Stripe's gift metadata is the single source of a gift and its pinned seats. A
+    // gift-typed subscription without a valid pin is NOT a gift for capability (no pinned seats,
+    // no gift funding) and is reported, so an admin revokes and re-gifts it.
+    const gift = parseOrgGiftMetadata(fetched.metadata);
+    if (gift.typed && gift.giftedExtraSeats === null) {
+      loggers.api.error('org subscription is gift-typed in Stripe without a valid giftedExtraSeats; treated as not gifted — revoke and re-gift it from the admin console', undefined, {
+        orgId,
+        stripeSubscriptionId: subscriptionId,
+        eventId,
+      });
+    }
     const next = {
-      gifted: fetched.metadata?.type === 'gift_subscription',
+      gifted: gift.typed && gift.giftedExtraSeats !== null,
+      giftedExtraSeats: gift.typed ? gift.giftedExtraSeats : null,
       trialEnd: fetched.trialEnd === null ? null : new Date(fetched.trialEnd * 1000),
       currentPeriodStart: fetched.currentPeriodStart === null ? null : new Date(fetched.currentPeriodStart * 1000),
       currentPeriodEnd: fetched.currentPeriodEnd === null ? null : new Date(fetched.currentPeriodEnd * 1000),

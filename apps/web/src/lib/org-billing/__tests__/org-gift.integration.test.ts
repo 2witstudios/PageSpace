@@ -123,6 +123,11 @@ class FakeGiftStripe implements OrgGiftStripe {
     this.idempotent.set(key, { params: serialized, result: structuredClone(result) });
     return result;
   }
+  async retrieveSubscriptionMetadata(subscriptionId: string) {
+    const sub = this.org.subscriptions.get(subscriptionId);
+    if (!sub) throw new Error(`No such subscription: '${subscriptionId}'`);
+    return { ...(sub.metadata ?? {}) };
+  }
   async retrieveCoupon(id: string) {
     return this.coupons.find((c) => c.id === id) ?? null;
   }
@@ -365,9 +370,13 @@ describe('SEAT-8 an org exists only paid or gifted (real Postgres, in-memory Str
     expect((await getOrgStatus(org.orgId)).status).toBe('active');
     const [stored] = await db.select({ gifted: orgSubscriptions.gifted }).from(orgSubscriptions).where(eq(orgSubscriptions.orgId, org.orgId));
     expect(stored.gifted).toBe(true);
-    // Once gifted, a second gift is refused (fail closed, no second coupon).
-    expect(await giftOrgSubscription({ orgId: org.orgId, adminUserId: ADMIN_ID, reason: 'again', extraSeats }, gift)).toEqual({ kind: 'refused', reason: 'already_gifted' });
+    // Once gifted, a gift with other seats is refused (revoke first); the same gift again is
+    // already complete in Stripe and writes nothing (no second coupon, update or $0 invoice).
+    expect(await giftOrgSubscription({ orgId: org.orgId, adminUserId: ADMIN_ID, reason: 'again', extraSeats: extraSeats + 1 }, gift)).toEqual({ kind: 'refused', reason: 'already_gifted' });
+    expect(await giftOrgSubscription({ orgId: org.orgId, adminUserId: ADMIN_ID, reason: 'again', extraSeats }, gift)).toMatchObject({ kind: 'gifted', giftedExtraSeats: extraSeats });
     expect(gift.couponCreates).toBe(1);
+    expect(gift.updates).toHaveLength(1);
+    expect(gift.issued).toHaveLength(1);
 
     // 4. A gift invoice on ANY other subscription (an operator's separate one) funds nothing.
     const before = await poolCents(org.orgId);
@@ -509,5 +518,75 @@ describe('SEAT-8 an org exists only paid or gifted (real Postgres, in-memory Str
     const pool = await poolOf(org.orgId);
     expect(await db.select().from(creditLedger).where(eq(creditLedger.walletId, pool!.id))).toHaveLength(2);
     expect((await getOrgStatus(org.orgId)).status).toBe('active');
+  });
+
+  describe('D-OW-54 a gift applied in Stripe whose response was lost is completed from Stripe, in either order', () => {
+    async function lapsedOrgWithLostGift(seats: number) {
+      const org = await northwind(TIER_PLAN_LIMITS.business.includedSeats + seats);
+      const meta = { kind: ORG_SUBSCRIPTION_KIND, [ORG_ID_METADATA_KEY]: org.orgId };
+      org.stripe.payLatestInvoice(org.subscriptionId);
+      const firstPaid = invoiceObject({ customer: org.customerId, subscriptionId: org.subscriptionId, metadata: meta, extraSeats: seats, paid: true, billingReason: 'subscription_create', periodStart: 1_830_000_000 });
+      expect(await deliver('invoice.paid', firstPaid)).toBe(200);
+      org.stripe.openRenewalInvoice(org.subscriptionId, 'past_due');
+      expect(await deliver('customer.subscription.updated', { id: org.subscriptionId, object: 'subscription', customer: org.customerId, status: 'past_due', metadata: meta })).toBe(200);
+      const gift = new FakeGiftStripe(org.stripe);
+      gift.loseNextUpdateResponse = true;
+      await expect(giftOrgSubscription({ orgId: org.orgId, adminUserId: ADMIN_ID, reason: 'Design partner', extraSeats: seats }, gift)).rejects.toThrow(/connection/);
+      expect(gift.issued).toHaveLength(1);
+      return { org, gift, sub: org.stripe.subscriptions.get(org.subscriptionId)! };
+    }
+    const row = async (orgId: string) => (await db.select({ gifted: orgSubscriptions.gifted, giftedExtraSeats: orgSubscriptions.giftedExtraSeats, giftRevision: orgSubscriptions.giftRevision }).from(orgSubscriptions).where(eq(orgSubscriptions.orgId, orgId)))[0];
+
+    it('SEAT-8 (partial) webhook first: the mirror copies the gift AND its pinned seats from Stripe; a retry with the same seats completes without writing to Stripe; a retry with other seats is refused', async () => {
+      if (!dbAvailable) return;
+      const seats = 2;
+      const { org, gift, sub } = await lapsedOrgWithLostGift(seats);
+      expect(await row(org.orgId)).toEqual({ gifted: false, giftedExtraSeats: null, giftRevision: 0 });
+
+      // Stripe's subscription.updated lands before the admin retries: gifted AND pinned, from Stripe.
+      expect(await deliver('customer.subscription.updated', { id: org.subscriptionId, object: 'subscription', customer: org.customerId, status: sub.status, metadata: sub.metadata })).toBe(200);
+      expect(await row(org.orgId)).toEqual({ gifted: true, giftedExtraSeats: seats, giftRevision: 0 });
+      expect((await getOrgStatus(org.orgId)).status).toBe('active');
+
+      // A retry with OTHER seats would re-anchor a lapsed org and bill it twice: refused.
+      const applied = gift.applied;
+      expect(await giftOrgSubscription({ orgId: org.orgId, adminUserId: ADMIN_ID, reason: 'retry', extraSeats: seats + 1 }, gift)).toEqual({ kind: 'refused', reason: 'already_gifted' });
+      // The same seats: completed from Stripe — the revision commits, Stripe sees no write.
+      expect(await giftOrgSubscription({ orgId: org.orgId, adminUserId: ADMIN_ID, reason: 'retry, reworded', extraSeats: seats }, gift)).toMatchObject({ kind: 'gifted', giftedExtraSeats: seats, voidedInvoiceIds: [] });
+      expect(gift.applied).toBe(applied);
+      expect(gift.updates).toHaveLength(1);
+      expect(gift.issued).toHaveLength(1);
+      expect(await row(org.orgId)).toEqual({ gifted: true, giftedExtraSeats: seats, giftRevision: 1 });
+
+      // The one $0 gift invoice funds the pool once, for the pinned seats.
+      const before = await poolCents(org.orgId);
+      const issued = gift.issued[0];
+      expect(await deliver('invoice.paid', invoiceObject({ id: issued.id, customer: org.customerId, subscriptionId: org.subscriptionId, metadata: issued.metadata, extraSeats: issued.extraSeats, paid: false, billingReason: 'subscription_update', periodStart: 1_830_000_000 + 40 * DAY }))).toBe(200);
+      expect((await poolCents(org.orgId)) - before).toBe(orgPoolListPriceGrantCents(seats));
+    });
+
+    it('SEAT-8 (partial) retry first: a retry with other seats is refused from Stripe\'s state before any webhook; the same seats complete; the later webhook agrees', async () => {
+      if (!dbAvailable) return;
+      const seats = 1;
+      const { org, gift, sub } = await lapsedOrgWithLostGift(seats);
+
+      const applied = gift.applied;
+      expect(await giftOrgSubscription({ orgId: org.orgId, adminUserId: ADMIN_ID, reason: 'retry', extraSeats: seats + 2 }, gift)).toEqual({ kind: 'refused', reason: 'already_gifted' });
+      expect(await giftOrgSubscription({ orgId: org.orgId, adminUserId: ADMIN_ID, reason: 'retry', extraSeats: seats }, gift)).toMatchObject({ kind: 'gifted', giftedExtraSeats: seats });
+      expect(gift.applied).toBe(applied);
+      expect(gift.issued).toHaveLength(1);
+      expect(await row(org.orgId)).toMatchObject({ giftedExtraSeats: seats, giftRevision: 1 });
+
+      expect(await deliver('customer.subscription.updated', { id: org.subscriptionId, object: 'subscription', customer: org.customerId, status: sub.status, metadata: sub.metadata })).toBe(200);
+      expect(await row(org.orgId)).toEqual({ gifted: true, giftedExtraSeats: seats, giftRevision: 1 });
+    });
+
+    it('SEAT-8 (partial) a gift-typed subscription with no valid seat pin in Stripe is not a gift for capability: the mirror clears it and reports it', async () => {
+      if (!dbAvailable) return;
+      const { org, sub } = await lapsedOrgWithLostGift(1);
+      sub.metadata = { ...(sub.metadata ?? {}), giftedExtraSeats: 'lots' };
+      expect(await deliver('customer.subscription.updated', { id: org.subscriptionId, object: 'subscription', customer: org.customerId, status: sub.status, metadata: sub.metadata })).toBe(200);
+      expect(await row(org.orgId)).toMatchObject({ gifted: false, giftedExtraSeats: null });
+    });
   });
 });

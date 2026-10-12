@@ -22,7 +22,7 @@ vi.mock('@pagespace/lib/billing/org-gift', () => ({
 const auditRequest = vi.fn();
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: (...args: unknown[]) => auditRequest(...args) }));
 
-const port = { retrieveCoupon: vi.fn(), createCoupon: vi.fn(), listOpenInvoiceIds: vi.fn(), voidInvoice: vi.fn(), updateSubscription: vi.fn(), setSeatQuantity: vi.fn() };
+const port = { retrieveCoupon: vi.fn(), createCoupon: vi.fn(), listOpenInvoiceIds: vi.fn(), voidInvoice: vi.fn(), updateSubscription: vi.fn(), setSeatQuantity: vi.fn(), retrieveSubscriptionMetadata: vi.fn() };
 vi.mock('@/lib/stripe/org-gift-port', () => ({ orgGiftStripe: () => port }));
 
 import { DELETE, POST } from '../route';
