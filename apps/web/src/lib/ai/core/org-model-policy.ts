@@ -4,7 +4,8 @@
  * drives a person's background model call may read. Each reads the drive's org policies NOW (no cache) and asks
  * the pure decisions in @pagespace/lib/organizations/org-action-decisions.
  *
- * SERVER-ONLY: model-catalog pulls in the DB client.
+ * SERVER-ONLY. The model catalog (which pulls in the monitoring module) is loaded only by offeredModels, so the page
+ * mutation path that imports this module for every save does not carry it.
  */
 import { db } from '@pagespace/db/db';
 import { inArray } from '@pagespace/db/operators';
@@ -16,7 +17,6 @@ import {
   drivesAllowingModel,
 } from '@pagespace/lib/organizations/org-action-decisions';
 import type { PolicyDecision } from '@pagespace/lib/organizations/sharing-decisions';
-import { buildModelCatalog } from './model-catalog';
 
 const policiesOf = async (driveId: string) => (await getDrivePolicies(driveId))?.policies ?? null;
 
@@ -31,6 +31,7 @@ export async function agentModelSaveRefusal(
 /** The models a drive offers its pickers: null = the whole catalog; otherwise provider → allowed models. */
 export async function offeredModels(driveId: string | null): Promise<Record<string, readonly string[] | null> | null> {
   if (!driveId) return null;
+  const { buildModelCatalog } = await import('./model-catalog');
   const catalog = buildModelCatalog().map((p) => ({ provider: p.provider, dynamic: p.dynamic, models: p.models.map((m) => m.id) }));
   return allowedModelCatalog(await policiesOf(driveId), catalog);
 }

@@ -1,4 +1,4 @@
-import { describe, it, vi, beforeEach, expect } from 'vitest';
+import { describe, it, vi, beforeAll, beforeEach, expect } from 'vitest';
 import { assert } from './riteway';
 
 /**
@@ -67,6 +67,12 @@ const { mockReserve, mockReleaseMemoryHold } = vi.hoisted(() => {
   };
 });
 vi.mock('../memory-credit', () => ({ reserveMemoryCall: mockReserve }));
+
+// The service's module graph (integration-service, the page mutation path) is loaded once here, outside any one
+// test's timeout, so the first test's verdict never depends on cold-load time.
+beforeAll(async () => {
+  await import('../compaction-service');
+}, 60_000);
 
 describe('needsCompaction', () => {
   it('leaves a page under its budget alone', async () => {

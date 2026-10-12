@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest';
 
 /**
  * pageService.createPage() — TASK_LIST seeding coverage.
@@ -100,6 +100,12 @@ vi.mock('@pagespace/lib/monitoring/change-group', () => ({
 vi.mock('../page-mutation-service', () => ({
   applyPageMutation: vi.fn(),
   PageRevisionMismatchError: class PageRevisionMismatchError extends Error {},
+  OrgModelPolicyError: class OrgModelPolicyError extends Error {},
+}));
+// POL-8: the drive's org allowlists for a chosen model. Default: allowed (no org).
+const mockAgentModelSaveRefusal = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/ai/core/org-model-policy', () => ({
+  agentModelSaveRefusal: (...args: unknown[]) => mockAgentModelSaveRefusal(...args),
 }));
 vi.mock('../task-sync-service', () => ({
   ensureTaskItemForPage: (...args: unknown[]) => mockEnsureTaskItemForPage(...args),
@@ -199,6 +205,12 @@ describe('pageService.createPage — TASK_LIST seeding', () => {
  * nothing — the contradiction, at birth, through the generic page API.
  */
 describe('pageService.createPage — the per-agent sandbox switch', () => {
+  // createPage validates enabledTools against the real tool registry through a dynamic import of ai-tools, a large
+  // module graph. Load it once here, outside any one test's timeout, so no test's verdict depends on cold-load time.
+  beforeAll(async () => {
+    await import('@/lib/ai/core/ai-tools');
+  }, 120_000);
+
   beforeEach(() => {
     vi.clearAllMocks();
     mockFindFirstDrive.mockResolvedValue({ id: 'drive-1', ownerId: 'owner-1' });
@@ -206,6 +218,7 @@ describe('pageService.createPage — the per-agent sandbox switch', () => {
     mockCreatePageVersion.mockResolvedValue(undefined);
     mockLogActivityWithTx.mockResolvedValue(undefined);
     mockEnsureTaskItemForPage.mockResolvedValue(undefined);
+    mockAgentModelSaveRefusal.mockResolvedValue({ ok: true });
     mockTxInsertReturning.mockResolvedValue([{
       id: 'new-agent-page',
       title: 'Scraper Runner',
@@ -227,6 +240,19 @@ describe('pageService.createPage — the per-agent sandbox switch', () => {
       enabledTools: ['bash'],
       isPaginated: null,
     }]);
+  });
+
+  it('POL-8 (partial) a chosen model the drive\'s org does not allow is refused 403 and nothing is inserted; an unchosen model is not judged here', async () => {
+    mockAgentModelSaveRefusal.mockResolvedValueOnce({ ok: false, code: 'org_policy', reason: 'org_policy', policy: 'modelAllowlist', status: 403, message: "This organization doesn't allow that AI model." });
+    const refused = await pageService.createPage('user-123', { title: 'Analyst', type: 'AI_CHAT', driveId: 'drive-1', aiProvider: 'openai', aiModel: 'openai/gpt-6-sol' });
+
+    expect(refused).toMatchObject({ success: false, status: 403 });
+    expect(mockAgentModelSaveRefusal).toHaveBeenCalledWith('drive-1', { provider: 'openai', modelId: 'openai/gpt-6-sol' });
+    expect(mockTxInsertValues).not.toHaveBeenCalled();
+
+    mockAgentModelSaveRefusal.mockClear();
+    await pageService.createPage('user-123', { title: 'Analyst', type: 'AI_CHAT', driveId: 'drive-1' });
+    expect(mockAgentModelSaveRefusal).not.toHaveBeenCalled();
   });
 
   it('stores the switch on an AI_CHAT page', async () => {
