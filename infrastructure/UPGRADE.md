@@ -13,6 +13,17 @@ emits everything below.
 > It is a provisioning tool for new tenants only. Upgrades are always
 > append-only edits to the existing `.env`.
 
+## Personal billing final cutover (0338–0339)
+
+Existing installations with `users.subscriptionGrandfathered` require an offline
+maintenance window before these migrations. An ordinary compose upgrade refuses
+at the migration entrypoint. Follow the [personal billing cutover runbook](../docs/personal-billing-cutover.md#docker-compose-and-tenant-upgrades):
+back up, prepare final images, drain all old containers, verify/apply personal
+billing normalization, run the migrate service with the one-off
+`BILLING_CUTOVER_OFFLINE=true` assertion, and recreate only final images.
+Keep the assertion false in the deployment environment and preserve data volumes.
+Fresh databases and later upgrades do not need the assertion.
+
 ## 2026-08 — ⚠️ Minimum upgrade path: workspace membership becomes a node tree (`0255` → `0256`)
 
 **Two separate concerns, with different audiences — read the one that is yours:**

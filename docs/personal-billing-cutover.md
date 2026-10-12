@@ -105,3 +105,54 @@ deploys pass without an offline assertion because the retired column is absent.
 
 Fly behavior: [scaling to zero and redeployment](https://fly.io/docs/launch/scale-count/),
 [configuration snapshots](https://fly.io/docs/flyctl/config-save/).
+
+## Docker Compose and tenant upgrades
+
+Both compose migration services forward `BILLING_CUTOVER_OFFLINE`, defaulting to
+`false`. Do not persist `true` in `.env`. Before starting, back up the databases,
+pause external workers/autoscalers and webhook delivery, and build or pull **all**
+final candidate images, including migrate. Keep the same compose project name,
+files, environment file and image tag throughout; changing the project can select
+empty volumes instead of the existing deployment.
+
+For a tenant, define a shell helper using that deployment's actual project and
+existing environment file (substitute both paths/names):
+
+```sh
+dc() { docker compose --env-file /secure/tenant.env -p ps-TENANT -f infrastructure/docker-compose.tenant.yml "$@"; }
+```
+
+For the root on-prem stack, use its existing project name and environment file:
+
+```sh
+dc() { docker compose --env-file /secure/onprem.env -p EXISTING_PROJECT -f docker-compose.yml "$@"; }
+```
+
+Run the following in order, stopping on any nonzero exit. `down` removes old
+containers so their restart policies cannot revive an old writer; **never add
+`--volumes`**. Check that no containers from this project remain before starting
+only the databases. Other deployments sharing this database must also be drained.
+
+```sh
+dc down --remove-orphans
+test -z "$(dc ps -a -q)"
+dc up -d postgres postgres-admin
+# Use onprem instead of tenant for the root on-prem stack.
+dc run --rm --no-deps -e DEPLOYMENT_MODE=tenant migrate bun scripts/migrate-founder-to-pro.ts --dry-run
+dc run --rm --no-deps -e DEPLOYMENT_MODE=tenant migrate bun scripts/migrate-founder-to-pro.ts --apply
+BILLING_CUTOVER_OFFLINE=true dc run --rm --no-deps migrate
+dc run --rm --no-deps -e DEPLOYMENT_MODE=tenant migrate bun scripts/migrate-founder-to-pro.ts --dry-run
+dc up -d --force-recreate
+```
+
+Each verifier must exit successfully with `ready: true`. For a billing-enabled
+Compose deployment, use `DEPLOYMENT_MODE=cloud`, pass its existing Stripe
+configuration into the one-off verifier, and mount/pass the verified Business
+manifest described above. Never select tenant/onprem to bypass Stripe evidence;
+the verifier rejects those modes when customer/subscription evidence exists.
+The migration command runs the compose service's normal main/admin migrations and
+admin-user provisioning. The final `up` may rerun migrations safely with the
+assertion back at false because 0339 removed the retired column. Resume external
+traffic/jobs only after the final images are healthy. If any step fails, leave
+application containers down and repair using the candidate; never restart old
+images against the contracted schema.
