@@ -666,7 +666,11 @@ export function evaluateCaps(input: { caps: ConsumerCaps; usage: CapUsage; reser
 /** Funder alert thresholds, percent of a cap (D20.6). */
 export const CAP_ALERT_THRESHOLDS = [80, 100] as const;
 export type CapAlertThreshold = (typeof CAP_ALERT_THRESHOLDS)[number];
-const PERCENT = 100;
+
+/** Has `part` reached `percent`% of `whole`? Cross-multiplied, so integers stay exact (a ratio, not money). */
+function reachesPercent(part: number, whole: number, percent: number): boolean {
+  return part * 100 >= whole * percent;
+}
 
 /**
  * The thresholds a consumer's spend in one cap window has reached (spent >= threshold% of the
@@ -678,7 +682,7 @@ export function capThresholdsReached(input: { capCents: number | null; spentCent
   if (input.capCents === null || !Number.isFinite(input.capCents)) return [];
   const cap = wholeNonNegative(input.capCents);
   const spent = wholeNonNegative(input.spentCents);
-  return CAP_ALERT_THRESHOLDS.filter((t) => spent * PERCENT >= cap * t);
+  return CAP_ALERT_THRESHOLDS.filter((t) => reachesPercent(spent, cap, t));
 }
 
 /** A cap window of WAL-7: the UTC day, and the month (the pool period for a seat, D-OW-12). */

@@ -94,6 +94,11 @@ describe('MON-5 (partial) no second credit or cents conversion outside money-mod
     ['a ternary with a literal branch', 'const c = (isTrial ? 0 : costDollars) * 100;'],
     ['a name with "share" mid-word', 'const d = revenueShareCents / 100;'],
     ['a per-seat share in cents', 'const d = perSeatShareCents / 100;'],
+    // Former KNOWN LIMITS, closed by resolveBindings.
+    ['a destructured or aliased operand', 'const { remainingCents: r } = view;\nconst d = r / 100;'],
+    ['a value split across a variable', 'const n = walletRemainingCents(x);\nconst d = n / 100;'],
+    ['a divisor spelled as a named constant', 'const HUNDRED = 100;\nconst d = cents / HUNDRED;'],
+    ['a hundred split into steps', 'const d = cents / 10 / 10;'],
   ])('MON-5 (partial) the rule flags %s', (_label, code) => {
     expect(flagged(code)).toBe(true);
   });
@@ -124,6 +129,9 @@ describe('MON-5 (partial) no second credit or cents conversion outside money-mod
     ['a millicent scale (0.001 is not a hundredth)', 'const m = amountCents * 0.001;'],
     ['an invoice count', 'const pct = (overdue / invoice.count) * 100;'],
     ['an unrelated total', 'const pct = Math.round((completed / total) * 100);'],
+    ['a binding renamed only inside its own block', 'function a() { const r = readCreditLiability(); return r; }\nfunction b(r: Row) { return (r.count / total) * 100; }'],
+    ['a ratio bound to a name', 'const used = spentCents / allowanceCents;\nconst pct = used * 100;'],
+    ['a value hidden by a wrapper call', 'const used = wholeNonNegative(input.spentCents);\nconst pct = used * 100;'],
   ])('MON-5 (partial) the rule ignores %s', (_label, code) => {
     expect(flagged(code)).toBe(false);
   });
@@ -141,16 +149,16 @@ describe('MON-5 (partial) no second credit or cents conversion outside money-mod
   });
 
   it('MON-5 (partial) the scanner documents its known limits, each with a shape, an example and why', () => {
-    expect(KNOWN_LIMITS.length).toBeGreaterThanOrEqual(7);
+    expect(KNOWN_LIMITS.length).toBeGreaterThanOrEqual(3);
     for (const limit of KNOWN_LIMITS) {
       expect(limit.shape.length, limit.shape).toBeGreaterThan(0);
       expect(limit.why.length, limit.shape).toBeGreaterThan(0);
     }
     expect(KNOWN_LIMITS.map((l) => l.shape)).toEqual(
       expect.arrayContaining([
-        'a destructured or aliased operand',
-        'a value split across a variable',
-        'a divisor spelled as a named constant',
+        'a conversion inside a helper, called with cents from elsewhere',
+        'SQL inside a quoted string',
+        'an operand with no name at all',
       ]),
     );
   });

@@ -45,13 +45,6 @@ DRV-7
 # until B4/B7, Wave C and Wave F.
 DRV-8
 DRV-9
-# MON-5 re-added per Review 2 ("removed on a false cover": the guard missed call results and
-# non-"cents" operands, live second conversions existed, and cli wallets.test.ts carried a stray
-# "MON-5" token). ow-fix-money-defs closes the guard hole (mutants M9b/M9c now red) and routes every
-# live conversion through money-model; each test proves one clause and is titled "MON-5 (partial)".
-# A single test proving every clause (one definition, consumed by the lib/web/marketing/admin/CLI
-# formatters, the removed helpers gone, the grep) is still owed before the reviewer can agree.
-MON-5
 # ORG-1 (name, slug, avatar, one human Owner; ownership is transferable), ORG-2 (Owner/Admin/Member;
 # many orgs per user; a user in no org sees no org UI) and ORG-3 (email invites with expiry, resend,
 # revoke, acceptance for new and existing accounts; a pending invite counts as a seat) re-added per
