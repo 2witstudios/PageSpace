@@ -2339,6 +2339,13 @@
       "when": 1791828083477,
       "tag": "0345_wallet_opening_balance",
       "breakpoints": true
+    },
+    {
+      "idx": 336,
+      "version": "7",
+      "when": 1791829431189,
+      "tag": "0346_ledger_former_member_unattributed",
+      "breakpoints": true
     }
   ]
 }

@@ -10,11 +10,11 @@
 import { db } from '@pagespace/db/db';
 import { creditLedger, creditHolds } from '@pagespace/db/schema/credits';
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
-import { and, eq, lt, gt, inArray, isNull, notInArray, sql } from '@pagespace/db/operators';
+import { and, eq, lt, gt, inArray, isNull, notInArray } from '@pagespace/db/operators';
 import { isBillingEnabled } from '../deployment-mode';
 import { computeBackfillActions } from './credit-core';
 import { MACHINE_MARKUP_BPS } from './credit-pricing';
-import { consumeCredits, markUsageUnattributed, settlePendingLedgerRow, UNATTRIBUTED_USAGE_MARKER } from './credit-consume';
+import { consumeCredits, markUsageUnattributed, settlePendingLedgerRow } from './credit-consume';
 import { emitCreditsUpdated } from './credit-emit';
 import { loggers } from '../logging/logger-config';
 import type { AIUsageSource } from '../monitoring/usage-source';
@@ -165,7 +165,7 @@ export async function backfillCredits(): Promise<BackfillResult> {
           lt(aiUsageLogs.timestamp, cutoff),
           notInArray(aiUsageLogs.provider, METERING_EXEMPT_PROVIDERS),
           // WAL-6b: a row already found to name no wallet is terminal — never rescanned.
-          sql`(${aiUsageLogs.metadata} ->> ${UNATTRIBUTED_USAGE_MARKER}) IS NULL`,
+          isNull(aiUsageLogs.unattributedAt),
         ),
       )
       .limit(BATCH);

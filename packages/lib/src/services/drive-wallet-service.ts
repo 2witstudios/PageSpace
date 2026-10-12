@@ -57,7 +57,7 @@ import { donateToDriveWallet } from '../billing/wallet-funding-shell';
 import { checkOrgActive } from '../organizations/status';
 import { findMembershipRole, findOrganizationNames, listOrgMembers } from '../organizations/repository';
 import { loadSeatCapFactsForUsers } from '../billing/seat-allowance';
-import { planConsumerCapWrite, seatCapCheck, seatSpentCents, userConsumerKey, utcDayStartMs, utcMonthStartMs, type ConsumerCapWriteInput, type ConsumerCaps, type SpendSourceKind } from '../billing/wallet-core';
+import { planConsumerCapWrite, seatCapCheck, seatSpentCents, userConsumerKey, FORMER_MEMBER_CONSUMER_KEY, utcDayStartMs, utcMonthStartMs, type ConsumerCapWriteInput, type ConsumerCaps, type SpendSourceKind } from '../billing/wallet-core';
 import { getOrgPolicies, readOrgSpendPolicy } from '../organizations/policy-reader';
 import {
   capRemainingCents,
@@ -257,9 +257,13 @@ async function spendByConsumer(walletId: string, since: Date | null): Promise<Co
     ))
     .groupBy(creditLedger.userId)
     .limit(500);
-  const names = await userNamesById(rows.map((r) => r.userId));
+  const names = await userNamesById(rows.map((r) => r.userId).filter((id): id is string => id !== null));
+  // [D-OW-58] a person who deleted their account keeps their spend on this wallet's books with no
+  // name: one "former member" row, never folded into anyone else's.
   return rows
-    .map((r) => ({ consumerKey: userConsumerKey(r.userId), userId: r.userId, displayName: names.get(r.userId) ?? null, spentCents: Math.max(0, Number(r.cents)) }))
+    .map((r) => r.userId === null
+      ? { consumerKey: FORMER_MEMBER_CONSUMER_KEY, userId: null, displayName: null, spentCents: Math.max(0, Number(r.cents)) }
+      : { consumerKey: userConsumerKey(r.userId), userId: r.userId, displayName: names.get(r.userId) ?? null, spentCents: Math.max(0, Number(r.cents)) })
     .sort((a, b) => b.spentCents - a.spentCents || a.consumerKey.localeCompare(b.consumerKey));
 }
 

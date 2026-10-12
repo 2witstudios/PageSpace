@@ -33,6 +33,7 @@ import { loggers } from '../../logging/logger-config';
 import { canConsumeAI } from '../credit-gate';
 import { consumeCredits, recordSeatOvershoot, releaseHold, settlePendingLedgerRow } from '../credit-consume';
 import { computeBackfillActions } from '../credit-core';
+import { spendRowLabel } from '../wallet-surface';
 import { PERSONAL_SPEND, conversationSpend, driveSpend, resolvedSpend, spendFallbackFromWalletId } from '../spend-target';
 import { DEFAULT_SEAT_ALLOWANCE_CENTS } from '../wallet-core';
 import { loadSeatCapFacts } from '../seat-allowance';
@@ -1745,8 +1746,8 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
     await expectNothingCharged(w);
     expect((await walletRow(w.productWalletId)).spentCents).toBe(0);
     // Marked terminal on first detection — the orphan sweep never rescans it — and counted for the admin panel.
-    const [marked] = await db.select({ metadata: aiUsageLogs.metadata }).from(aiUsageLogs).where(eq(aiUsageLogs.id, log.id));
-    expect(marked.metadata).toMatchObject({ unattributedAt: expect.any(String) });
+    const [marked] = await db.select({ unattributedAt: aiUsageLogs.unattributedAt }).from(aiUsageLogs).where(eq(aiUsageLogs.id, log.id));
+    expect(marked.unattributedAt).toBeInstanceOf(Date);
     expect((await unattributedUsage()).count).toBeGreaterThanOrEqual(1);
     expect(computeBackfillActions([], [{ aiUsageLogId: log.id, userId: w.marcusId, costDollars: 1, walletId: null, metadata: {} }], {}))
       .toEqual([{ kind: 'unattributed_orphan', aiUsageLogId: log.id, userId: w.marcusId, costDollars: 1 }]);
@@ -1935,6 +1936,38 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
     expect(await walletRow(w.productWalletId)).toMatchObject({ spentCents: 1_000, topupRemainingCents: 150 });
     expect(await legsOf()).toEqual([['owner', 100], ['donation', 50]]);
     await expectWalletLegInvariant([w.productWalletId]);
+  });
+
+  it('WAL-5 [D-OW-58] a member who drew from an org wallet deletes their account: their rows stay on the wallet\'s books unnamed, the wallet and the pool still reconcile at zero, spend by member shows a former member, and their own root goes with them', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 5_000 });
+    const w = world;
+    await db.insert(creditLedger).values({ userId: w.jonoId, walletId: w.poolId, entryType: 'monthly_grant', bucket: 'monthly', amountCents: 5_000, consumeStatus: 'applied' });
+    // Marcus draws from Product (allocation from the pool) and from his seat on the pool.
+    const gate = await canConsumeAI(w.marcusId, 'pro', { spend: driveSpend(w.productId, 'drive_wallet') });
+    const [log] = await db.insert(aiUsageLogs).values({ userId: w.marcusId, provider: 'openrouter', model: 'm', cost: 0.1 }).returning({ id: aiUsageLogs.id });
+    expect(await consumeCredits({ aiUsageLogId: log.id, userId: w.marcusId, costDollars: 0.1, holdId: gate.holdId, walletId: gate.walletId })).toBe('settled');
+    await seatCall(w, w.marcusId);
+    const shared = [w.poolId, w.productWalletId];
+    expect(await walletDriftAlerts({ toleranceCents: 0, limit: 10, walletIds: shared })).toEqual([]);
+
+    // Account deletion (the eraser's delete-user step).
+    await db.delete(creditHolds).where(eq(creditHolds.userId, w.marcusId));
+    await db.delete(users).where(eq(users.id, w.marcusId));
+
+    // His rows on wallets he did not own are kept, unnamed; his own root and its rows are gone.
+    const kept = await db.select().from(creditLedger).where(inArray(creditLedger.walletId, shared));
+    expect(kept.filter((r) => r.entryType !== 'monthly_grant').every((r) => r.userId === null)).toBe(true);
+    expect(kept.filter((r) => r.entryType === 'usage').map((r) => r.walletId).sort()).toEqual([...shared].sort());
+    expect(await db.select().from(wallets).where(eq(wallets.id, w.marcusWalletId))).toEqual([]);
+    expect(await db.select().from(creditLedger).where(eq(creditLedger.walletId, w.marcusWalletId))).toEqual([]);
+
+    expect(await walletDriftAlerts({ toleranceCents: 0, limit: 10, walletIds: shared })).toEqual([]);
+    const view = await getDriveWallet(w.jonoId, w.productId, 'session');
+    if (!view.ok || !view.wallet || !('spendByConsumer' in view.wallet)) throw new Error('expected the lead\'s view with spend by member');
+    expect(view.wallet.spendByConsumer).toEqual([expect.objectContaining({ consumerKey: 'former-member', userId: null, displayName: null, spentCents: 15 })]);
+    expect(spendRowLabel(view.wallet.spendByConsumer[0])).toBe('Former member');
+    w.userIds = w.userIds.filter((id) => id !== w.marcusId);
   });
 
   it('WAL-5 the cutover opens every wallet\'s books: a wallet whose balance moved before the ledger recorded it (pre-cutover) gets one opening_balance row and reconciles at zero drift; re-running opens nothing twice; a drift planted after the cutover is caught', async () => {

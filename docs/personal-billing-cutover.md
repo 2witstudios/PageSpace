@@ -63,13 +63,16 @@ then removes the flag. The retained database constraint prevents a runtime write
 from putting Founder or Business back in a personal row. Both migrations are
 generated from the schema; never bypass their checks to complete deployment.
 
-The same offline window applies two wallet-ledger migrations (WAL-5, WAL-6b):
+The same offline window applies three wallet-ledger migrations (WAL-5, WAL-6b):
 0344 adds `credit_ledger.fallbackFromWalletId` with a foreign key to `wallets`,
 whose validation takes a lock on the ledger while it scans; 0345 writes one
 `opening_balance` ledger row per wallet (its balance less what its earlier rows
 already account for), so balance-drift reconciliation is exact from the cutover
-forward. Both run with traffic and billing jobs stopped; 0345 is idempotent
-(keyed on `opening-balance:<walletId>`), so a repeated run writes nothing.
+forward. 0346 re-creates the `credit_ledger.userId` foreign key as ON DELETE SET
+NULL ([D-OW-58]: a deleted account's rows on wallets it did not own stay on those
+wallets' books, unnamed) and adds the partial index for unattributed usage. All
+three run with traffic and billing jobs stopped; 0345 is idempotent (keyed on
+`opening-balance:<walletId>`), so a repeated run writes nothing.
 
 Start only the final application images, resume webhook delivery and jobs, and
 verify personal Free/Pro plus organization billing through their respective

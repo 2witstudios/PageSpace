@@ -57,7 +57,10 @@ export interface ConsumerCapFacts {
 }
 
 export interface ConsumerSpend {
-  /** `user:<id>`: every row is a person; automation runs count under their creator (D-OW-34). */
+  /**
+   * `user:<id>` for a person (automation runs count under their creator, D-OW-34), or
+   * `former-member` for spend by people who deleted their account (D-OW-58: userId null).
+   */
   consumerKey: string;
   userId: string | null;
   /** The person's name, so the UI never resolves an id (null when unknown). */

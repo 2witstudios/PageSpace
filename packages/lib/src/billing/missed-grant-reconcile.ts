@@ -191,14 +191,17 @@ export async function reconcileMissedGrants(options: MissedGrantReconcileOptions
   let cursor = '';
 
   for (;;) {
-    const page = await db
+    const rawPage = await db
       .select({ id: creditLedger.id, userId: creditLedger.userId, paidCents: creditLedger.paidCents })
       .from(creditLedger)
       .where(and(eq(creditLedger.entryType, 'missed_grant'), gt(creditLedger.id, cursor)))
       .orderBy(creditLedger.id)
       .limit(BATCH);
-    if (page.length === 0) break;
-    cursor = page[page.length - 1].id;
+    if (rawPage.length === 0) break;
+    cursor = rawPage[rawPage.length - 1].id;
+    // A missed grant is a person's own record on their own root; it never outlives them (D-OW-58:
+    // only rows on wallets they did not own are kept, unnamed), so a null person is skipped.
+    const page = rawPage.filter((r): r is { id: string; userId: string; paidCents: number | null } => r.userId !== null);
 
     let rowsByUser: Map<string, SubscriptionRowLike[]>;
     try {
@@ -218,7 +221,7 @@ export async function reconcileMissedGrants(options: MissedGrantReconcileOptions
         firstLedgerId: page[0].id,
         rows: page.length,
       });
-      if (page.length < BATCH) break;
+      if (rawPage.length < BATCH) break;
       continue;
     }
 
@@ -261,7 +264,7 @@ export async function reconcileMissedGrants(options: MissedGrantReconcileOptions
       }
     }
 
-    if (page.length < BATCH) break;
+    if (rawPage.length < BATCH) break;
   }
 
   for (const userId of toEmit) void emitCreditsUpdated(userId);

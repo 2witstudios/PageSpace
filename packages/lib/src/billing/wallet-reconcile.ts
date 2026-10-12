@@ -9,9 +9,8 @@
 import { db } from '@pagespace/db/db';
 import { creditLedger } from '@pagespace/db/schema/credits';
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
-import { UNATTRIBUTED_USAGE_MARKER } from './credit-consume';
 import { wallets } from '@pagespace/db/schema/wallets';
-import { eq, inArray, sql } from '@pagespace/db/operators';
+import { eq, inArray, isNotNull, sql } from '@pagespace/db/operators';
 import { computeWalletDrift, ledgerMovementCents } from './wallet-ledger-core';
 import { centsFromDollars } from './money-model';
 
@@ -122,6 +121,7 @@ export async function unattributedUsage(): Promise<UnattributedUsage> {
   const [row] = await db
     .select({ count: sql<number>`count(*)::int`, cost: sql<number>`coalesce(sum(${aiUsageLogs.cost}), 0)` })
     .from(aiUsageLogs)
-    .where(sql`(${aiUsageLogs.metadata} ->> ${UNATTRIBUTED_USAGE_MARKER}) IS NOT NULL`);
+    // The partial index idx_ai_usage_unattributed: only the marked rows are read, never the log.
+    .where(isNotNull(aiUsageLogs.unattributedAt));
   return { count: Number(row?.count ?? 0), realCostCents: centsFromDollars(Number(row?.cost ?? 0)) };
 }

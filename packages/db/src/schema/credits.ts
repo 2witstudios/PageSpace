@@ -36,7 +36,14 @@ export type SpendKind = (typeof SPEND_KINDS)[number];
  */
 export const creditLedger = pgTable('credit_ledger', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
-  userId: text('userId').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  /**
+   * The person the row is recorded under (the consumer of a call, the funder of a transfer).
+   * [D-OW-58] ledger rows are the WALLET's financial records: when the person deletes their
+   * account, rows on wallets they do not own (an org pool, a drive wallet) are kept with this
+   * reference anonymised (SET NULL — readers show a "former member"); rows on their own
+   * personal root go with that wallet (walletId cascades).
+   */
+  userId: text('userId').references(() => users.id, { onDelete: 'set null' }),
   // WAL-5: the wallet this row moved money in or out of. For every row written before
   // wallets existed it is the user's personal root wallet (backfilled by 0303/0304).
   walletId: text('walletId').notNull().references(() => wallets.id, { onDelete: 'cascade' }),

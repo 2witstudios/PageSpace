@@ -71,7 +71,7 @@ async function personalWalletId(userId: string): Promise<string> {
 }
 
 /** A ledger row; written against the user's personal root wallet unless the test names one (WAL-5). */
-type LedgerRow = Omit<typeof creditLedger.$inferInsert, 'walletId'> & { walletId?: string };
+type LedgerRow = Omit<typeof creditLedger.$inferInsert, 'walletId' | 'userId'> & { userId: string; walletId?: string };
 async function insertLedger(row: LedgerRow): Promise<void> {
   const walletId = row.walletId ?? (await personalWalletId(row.userId));
   await db.insert(creditLedger).values({ ...row, walletId });

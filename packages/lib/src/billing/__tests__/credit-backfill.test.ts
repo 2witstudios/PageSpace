@@ -36,7 +36,6 @@ vi.mock('../credit-consume', () => ({
   consumeCredits: mockConsumeCredits,
   settlePendingLedgerRow: mockSettlePending,
   markUsageUnattributed: mockMarkUnattributed,
-  UNATTRIBUTED_USAGE_MARKER: 'unattributedAt',
 }));
 const mockEmitCreditsUpdated = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('../credit-emit', () => ({ emitCreditsUpdated: mockEmitCreditsUpdated }));

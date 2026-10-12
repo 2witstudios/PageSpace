@@ -643,18 +643,15 @@ async function settleOnChildWallet(
 export type CreditSettleStatus = 'settled' | 'deferred' | 'unbillable' | 'refused' | 'unattributed';
 
 /**
- * The metadata key that marks a usage row whose charge names no wallet (WAL-6b fail closed): set
- * once, when it is first found, so the orphan sweep never rescans it and the admin panel can count
- * what is waiting for reconciliation. Its value is when it was found.
+ * Mark a usage row whose charge names no wallet (WAL-6b fail closed): `ai_usage_logs.unattributedAt`
+ * is set once, when it is first found, so the orphan sweep never rescans it and the admin panel can
+ * count (by a partial index) what is waiting for reconciliation. A no-op when already marked.
  */
-export const UNATTRIBUTED_USAGE_MARKER = 'unattributedAt';
-
-/** Mark `aiUsageLogId` unattributed (terminal for the sweeps), once; a no-op when already marked. */
 export async function markUsageUnattributed(aiUsageLogId: string, now: Date = new Date()): Promise<void> {
   await db
     .update(aiUsageLogs)
-    .set({ metadata: sql`coalesce(${aiUsageLogs.metadata}, '{}'::jsonb) || jsonb_build_object(${UNATTRIBUTED_USAGE_MARKER}::text, ${now.toISOString()}::text)` })
-    .where(and(eq(aiUsageLogs.id, aiUsageLogId), sql`(${aiUsageLogs.metadata} ->> ${UNATTRIBUTED_USAGE_MARKER}) IS NULL`));
+    .set({ unattributedAt: now })
+    .where(and(eq(aiUsageLogs.id, aiUsageLogId), isNull(aiUsageLogs.unattributedAt)));
 }
 
 /** The wallet a hold reserves on, or null when the hold no longer exists (settled, released, expired). */

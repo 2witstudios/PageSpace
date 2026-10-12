@@ -578,6 +578,9 @@ export function userConsumerKey(userId: string): string {
   return `user:${userId}`;
 }
 
+/** [D-OW-58] the spend row of people who deleted their account: their ledger rows stay, unnamed. */
+export const FORMER_MEMBER_CONSUMER_KEY = 'former-member';
+
 /** Whole cents; null means unlimited within the wallet. */
 export interface ConsumerCaps {
   dailyCents: number | null;

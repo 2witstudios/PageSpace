@@ -395,6 +395,12 @@ export const EXCLUDED_TABLES: Readonly<Record<string, string>> = {
     // Which WAL-7 cap alert (80% / 100%) was sent for a consumer's window this period (0332): a
     // once-per-threshold throttle stamp. The alert itself is exported under `notifications`.
     'credit_holds',
+    // [D-OW-58] ledger rows are the WALLET's financial records. The subject's own money — their
+    // personal root wallet — is exported under `wallet`; rows on wallets they do not own (an org
+    // pool, a drive wallet: allocation draws, usage, debt landed on a funder) are that wallet's
+    // books. On erasure those rows are KEPT with the person anonymised (credit_ledger.userId ON
+    // DELETE SET NULL, read as a "former member"); the subject's own root and its rows go with
+    // the user row (wallets.userId and credit_ledger.walletId cascade).
     'credit_ledger',
   ),
 

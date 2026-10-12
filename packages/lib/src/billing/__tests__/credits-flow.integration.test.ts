@@ -64,7 +64,7 @@ const H = vi.hoisted(() => {
   const subscriptions = cols('subscriptions', ['id', 'userId', 'status', 'gifted', 'stripePriceId']);
   const aiUsageLogs = cols('aiUsageLogs', [
     'id', 'userId', 'cost', 'timestamp', 'success', 'provider', 'source', 'walletId',
-    'metadata', 'reconcileStatus', 'reconcileAttempts', 'reconciledAt',
+    'metadata', 'reconcileStatus', 'reconcileAttempts', 'reconciledAt', 'unattributedAt',
   ]);
 
   // ── operators ───────────────────────────────────────────────────────────────
