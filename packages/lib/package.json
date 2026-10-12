@@ -3019,6 +3019,11 @@
       "import": "./dist/organizations/authentication-policy.js",
       "require": "./dist/organizations/authentication-policy.js"
     },
+    "./organizations/authentication-policy-core": {
+      "types": "./dist/organizations/authentication-policy-core.d.ts",
+      "import": "./dist/organizations/authentication-policy-core.js",
+      "require": "./dist/organizations/authentication-policy-core.js"
+    },
     "./organizations/policy-reader": {
       "types": "./dist/organizations/policy-reader.d.ts",
       "import": "./dist/organizations/policy-reader.js",
@@ -3937,6 +3942,9 @@
       ],
       "organizations/authentication-policy": [
         "./dist/organizations/authentication-policy.d.ts"
+      ],
+      "organizations/authentication-policy-core": [
+        "./dist/organizations/authentication-policy-core.d.ts"
       ],
       "organizations/policy-reader": [
         "./dist/organizations/policy-reader.d.ts"
