@@ -108,6 +108,8 @@ export interface OrgInvoice {
       pricing?: { price_details?: { price?: string | { id?: string | null } | null } | null } | null;
       parent?: { subscription_item_details?: { subscription_item?: string | null } | null } | null;
     } | null | undefined> | null;
+    /** Stripe's pagination flag: only `false` proves `data` is every line of the invoice. */
+    has_more?: boolean | null;
   } | null;
 }
 
@@ -175,8 +177,15 @@ export async function applyOrgPoolRefill(invoice: OrgInvoice, opts: OrgPoolRefil
 
   const stripeRef = invoice.id ?? null;
   if (!stripeRef) return { kind: 'nothing', orgId: org.id, reason: 'no_invoice_id' };
+  // Plan identity, the refill and funding proof are all derived from the lines, so a page of
+  // them proves nothing: a later page can hold the Business line or an unrecognized charge.
+  // Callers expand the invoice first (completeInvoiceLines); anything else throws so the
+  // event is redelivered rather than acknowledged without funding.
+  if (invoice.lines?.has_more !== false) {
+    throw new Error(`org pool refill requires every line of invoice ${stripeRef}; expand the invoice before funding`);
+  }
 
-  const lines = invoice.lines?.data ?? [];
+  const lines = invoice.lines.data ?? [];
   const gifted = invoice.parent?.subscription_details?.metadata?.type === GIFT_SUBSCRIPTION_METADATA_TYPE;
   // The gift gate requires the invoice to belong to the org's own subscription.
   const [stored] = await db

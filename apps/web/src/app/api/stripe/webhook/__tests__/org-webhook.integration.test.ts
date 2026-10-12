@@ -154,7 +154,7 @@ function invoiceObject(spec: InvoiceSpec) {
     period_end: spec.periodStart,
     livemode: false,
     parent: { type: 'subscription_details', subscription_details: { metadata: spec.metadata, subscription: spec.subscriptionId } },
-    lines: { object: 'list', data: lines },
+    lines: { object: 'list', has_more: false, data: lines },
   };
 }
 
