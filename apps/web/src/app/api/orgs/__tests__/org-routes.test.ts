@@ -61,6 +61,13 @@ vi.mock('@pagespace/lib/organizations/invitations', () => ({
   acceptInvitation: vi.fn(),
 }));
 vi.mock('@pagespace/lib/organizations/deletion', () => ({ deleteOrganization: vi.fn() }));
+vi.mock('@pagespace/lib/organizations/policy-reader', async (importOriginal) => {
+  const { parseOrgPolicies: parse } = await import('@pagespace/lib/organizations/policies-core');
+  return {
+    ...(await importOriginal<typeof import('@pagespace/lib/organizations/policy-reader')>()),
+    getOrgPolicies: vi.fn(async () => parse({})),
+  };
+});
 vi.mock('@/lib/orgs/org-avatar-storage', () => ({
   mintOrgAvatarToken: vi.fn().mockResolvedValue('ps_svc_org'),
   callOrgAvatarStorage: vi.fn().mockResolvedValue(new Response('{}', { status: 200 })),
@@ -83,6 +90,8 @@ import * as repository from '@pagespace/lib/organizations/repository';
 import * as membership from '@pagespace/lib/organizations/membership';
 import * as invitations from '@pagespace/lib/organizations/invitations';
 import { deleteOrganization } from '@pagespace/lib/organizations/deletion';
+import { getOrgPolicies } from '@pagespace/lib/organizations/policy-reader';
+import { parseOrgPolicies } from '@pagespace/lib/organizations/policies-core';
 import { callOrgAvatarStorage, mintOrgAvatarToken } from '@/lib/orgs/org-avatar-storage';
 import { getOrgBillingNotice, isOrgActive } from '@pagespace/lib/organizations/status';
 import { deliverOrgInvite } from '@/lib/orgs/org-invite-delivery';
@@ -319,6 +328,22 @@ describe('org route behaviour', () => {
     const res = await orgsRoute.GET(req('GET'));
     expect(res.status).toBe(200);
     expect((await res.json()).organizations.map((o: { id: string; lapsed: boolean }) => [o.id, o.lapsed])).toEqual([['org_paid', false], ['org_lapsed', true]]);
+  });
+
+  it('DRV-3 (partial) GET /api/orgs says per org whether the caller may create a drive in it: role against the who-can-create policy, never while lapsed', async () => {
+    vi.mocked(repository.listOrganizationsForUser).mockResolvedValue([
+      { id: 'org_members', name: 'M', slug: 'm', avatarUrl: null, role: 'MEMBER' },
+      { id: 'org_admins', name: 'A', slug: 'a', avatarUrl: null, role: 'MEMBER' },
+      { id: 'org_admin_role', name: 'B', slug: 'b', avatarUrl: null, role: 'ADMIN' },
+      { id: 'org_lapsed', name: 'L', slug: 'l', avatarUrl: null, role: 'OWNER' },
+    ]);
+    vi.mocked(isOrgActive).mockImplementation(async (orgId: string) => orgId !== 'org_lapsed');
+    const stored: Record<string, Record<string, unknown>> = { org_admins: { whoCanCreateDrives: 'admins' }, org_admin_role: { whoCanCreateDrives: 'admins' } };
+    vi.mocked(getOrgPolicies).mockImplementation(async (orgId: string) => parseOrgPolicies(stored[orgId] ?? {}));
+    const res = await orgsRoute.GET(req('GET'));
+    expect((await res.json()).organizations.map((o: { id: string; canCreateDrives: boolean }) => [o.id, o.canCreateDrives])).toEqual([
+      ['org_members', true], ['org_admins', false], ['org_admin_role', true], ['org_lapsed', false],
+    ]);
   });
 
   it('SEAT-9 (partial) SEAT-6 (partial) GET /api/orgs/[orgId] carries the billing notice for the caller\'s own role, and nothing when there is none', async () => {

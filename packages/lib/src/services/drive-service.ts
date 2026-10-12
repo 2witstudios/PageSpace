@@ -62,6 +62,8 @@ export interface ListDrivesOptions {
 
 export interface CreateDriveInput {
   name: string;
+  /** Initial drive context (workspace memory), e.g. set by the AI create_drive tool. */
+  drivePrompt?: string | null;
 }
 
 export interface UpdateDriveInput {
@@ -356,6 +358,7 @@ export async function createDrive(
         name,
         slug,
         ownerId: userId,
+        drivePrompt: input.drivePrompt ?? null,
         isTrashed: false,
         trashedAt: null,
         updatedAt: new Date(),

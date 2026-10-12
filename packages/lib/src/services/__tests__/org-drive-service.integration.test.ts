@@ -31,6 +31,8 @@ import { orgDriveServiceDeps } from '../org-drive-service-deps';
 import { accountRepository } from '../../repositories/account-repository';
 import { removeMember } from '../../organizations/membership';
 import { getDriveAccess } from '../drive-service';
+import { queryOrgAuditEvents } from '../../audit/org-audit-query';
+import { parseOrgAuditFilter } from '../../audit/org-audit-query-core';
 
 // Northwind Labs fixture names (Sequence Spec Part 2), with per-run ids.
 const run = createId().slice(0, 8);
@@ -409,6 +411,39 @@ describe('moveDriveOutOfOrg', () => {
 });
 
 describe('createOrgDrive', () => {
+  it('DRV-3 a drive created in an org is org-owned from creation (orgId, Open by default, creator leads it, org members materialized, org.drive.created audited) and obeys who-can-create: members-policy admits a Member, admins-policy refuses a Member and admits an Admin, an outsider is refused, and nothing is inserted on refusal', async () => {
+    // Production deps throughout (the role lookup through requireOrgRole, the stored policy, the
+    // real materialization); only the after-commit realtime publish is dropped.
+    const production: OrgDriveServiceDeps = {
+      ...orgDriveServiceDeps,
+      syncOrgMembership: async (tx, call) => {
+        await orgDriveServiceDeps.syncOrgMembership(tx, call);
+        return async () => {};
+      },
+    };
+    const setPolicy = (whoCanCreateDrives: 'members' | 'admins') =>
+      db.update(organizations).set({ policies: { guests: 'on', whoCanCreateDrives } }).where(eq(organizations.id, northwind));
+    const orgDriveCount = async () => (await db.select({ id: drives.id }).from(drives).where(eq(drives.orgId, northwind))).length;
+
+    await setPolicy('members');
+    const created = await createOrgDrive(marcus, { name: `Engineering ${run}`, orgId: northwind }, production);
+    if (!created.ok) throw new Error(`refused: ${created.code}`);
+    expect(await readDrive(created.drive.id)).toMatchObject({ orgId: northwind, orgVisibility: 'OPEN', ownerId: marcus });
+    const rows = await db.select({ userId: driveMembers.userId, source: driveMembers.source }).from(driveMembers).where(eq(driveMembers.driveId, created.drive.id));
+    expect(rows.map((r) => [r.userId, r.source]).sort()).toEqual([[jono, 'org'], [priya, 'org'], [lena, 'org']].sort());
+    const filter = parseOrgAuditFilter({ limit: '50' });
+    if (!filter.ok) throw new Error(filter.error);
+    const audit = (await queryOrgAuditEvents(northwind, filter.filter)).entries.filter((e) => e.eventType === 'org.drive.created');
+    expect(audit.map((e) => e.resourceId)).toEqual([created.drive.id]);
+
+    await setPolicy('admins');
+    expect(await createOrgDrive(marcus, { name: `Refused ${run}`, orgId: northwind }, production)).toMatchObject({ ok: false, code: 'POLICY_FORBIDS_CREATE', status: 403 });
+    expect(await createOrgDrive(chris, { name: `Sneaky ${run}`, orgId: northwind }, production)).toMatchObject({ ok: false, code: 'NOT_ORG_MEMBER', status: 403 });
+    expect(await orgDriveCount()).toBe(1);
+    expect(await createOrgDrive(priya, { name: `Finance ${run}`, orgId: northwind }, production)).toMatchObject({ ok: true, drive: { orgId: northwind, ownerId: priya } });
+    expect(await orgDriveCount()).toBe(2);
+  });
+
   it('DRV-4 a drive created in an org without a chosen visibility is Open', async () => {
     const result = await createOrgDrive(marcus, { name: 'Engineering', orgId: northwind }, deps);
 

@@ -149,6 +149,21 @@ export function decideCreateDriveInOrg({
   return { ok: true };
 }
 
+/**
+ * DRV-3: whether this person may create a drive in this org right now — the same verdict
+ * createOrgDrive reaches (decideCreateDriveInOrg, then SEAT-9: a lapsed org creates nothing). The
+ * create-drive dialog offers exactly these orgs; the server decides again when the drive is created.
+ */
+export const canCreateOrgDrive = ({
+  role,
+  creationPolicy,
+  lapsed,
+}: {
+  role: OrgRole | null;
+  creationPolicy: OrgDriveCreationPolicy;
+  lapsed: boolean;
+}): boolean => !lapsed && decideCreateDriveInOrg({ actorOrgRole: role, creationPolicy }).ok;
+
 /** The drive facts a visibility or lead change depends on. */
 export interface OrgDriveFactsForChange {
   ownerId: string;

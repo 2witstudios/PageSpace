@@ -2,17 +2,14 @@ import { checkDriveAuthentication } from '@pagespace/lib/organizations/authentic
 import type { AuthResult } from '@/lib/auth';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { listAccessibleDrives, createDrive, type DriveWithAccess } from '@pagespace/lib/services/drive-service';
-import { isReservedDriveName } from '@pagespace/lib/services/drive-guards';
+import { listAccessibleDrives, type DriveWithAccess } from '@pagespace/lib/services/drive-service';
+import { createDriveForCaller } from '@/lib/drives/create-drive-for-caller';
 import { getAppDriveMembership, getEffectiveScopedDriveMembership, hasAppDriveMembership, hasScopedDriveMembership } from '@pagespace/lib/permissions/app-permissions';
 import { resolveDriveWideCanEdit } from '@pagespace/lib/permissions/membership-queries';
 
 import { db } from '@pagespace/db/db';
 import { and, eq, inArray } from '@pagespace/db/operators';
 import { drives as drivesTable, ORG_DRIVE_VISIBILITIES } from '@pagespace/db/schema/core';
-import { ORGS_ENABLED } from '@pagespace/lib/organizations/orgs-enabled';
-import { createOrgDrive } from '@pagespace/lib/services/org-drive-service';
-import { orgDriveServiceDeps } from '@pagespace/lib/services/org-drive-service-deps';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -194,33 +191,14 @@ export async function POST(request: Request) {
 
   const { name, orgId, orgVisibility } = parsed.data;
 
-  if (orgId !== undefined && !ORGS_ENABLED) {
-    return NextResponse.json({ error: 'Not found' }, { status: 404 });
-  }
-  // Creating in an org is session-only, like the org move routes; CLI and MCP parity is Wave G.
-  if (orgId !== undefined && auth.tokenType !== 'session') {
-    return NextResponse.json(
-      { error: 'Creating a drive in an organization requires a signed-in session; tokens cannot do this yet.' },
-      { status: 403 }
-    );
-  }
-
   try {
-    if (isReservedDriveName(name)) {
-      return NextResponse.json({ error: 'Cannot create a drive with that name.' }, { status: 400 });
+    // DRV-3: personal, or org-owned from creation under the org's who-can-create policy. A token may
+    // create in an org too ([D-OW-26] forbids only money moves); a drive-scoped one was refused above.
+    const created = await createDriveForCaller({ userId, name, orgId, orgVisibility, authentication: auth.authentication });
+    if (!created.ok) {
+      return NextResponse.json({ error: created.error, ...(created.code && { code: created.code }) }, { status: created.status });
     }
-
-    let newDrive: DriveWithAccess;
-    if (orgId !== undefined) {
-      const created = await createOrgDrive(userId, { name, orgId, orgVisibility }, orgDriveServiceDeps);
-      if (!created.ok) {
-        return NextResponse.json({ error: created.message, code: created.code }, { status: created.status });
-      }
-      // The creator leads the new drive, so the drive-wide canEdit rule (#2627) grants create, as createDrive does.
-      newDrive = { ...created.drive, isOwned: true, role: 'OWNER', canCreatePages: true, lastAccessedAt: null };
-    } else {
-      newDrive = await createDrive(userId, { name });
-    }
+    const newDrive = created.drive;
 
     await broadcastDriveEvent(
       createDriveEventPayload(newDrive.id, 'created', {

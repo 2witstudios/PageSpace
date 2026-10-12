@@ -13,6 +13,8 @@ export interface MyOrganization {
   role: 'OWNER' | 'ADMIN' | 'MEMBER';
   /** [D-OW-33] the org's subscription has lapsed: its drives may only restrict access until it pays. */
   lapsed?: boolean;
+  /** DRV-3: whether this person may create a drive in the org now (policy, role, not lapsed). */
+  canCreateDrives?: boolean;
 }
 
 const fetcher = async (url: string): Promise<MyOrganization[]> => {

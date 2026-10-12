@@ -256,7 +256,7 @@ export async function moveDriveOutOfOrg(
 
 export async function createOrgDrive(
   actorId: string,
-  input: { name: string; orgId: string; orgVisibility?: OrgDriveVisibility },
+  input: { name: string; orgId: string; orgVisibility?: OrgDriveVisibility; drivePrompt?: string | null },
   deps: OrgDriveServiceDeps
 ): Promise<CreateOrgDriveResult> {
   const outcome = await retryOnOrgSlugConflict(() => db.transaction(async (tx) => {
@@ -280,6 +280,7 @@ export async function createOrgDrive(
         slug,
         ownerId: actorId,
         orgId: input.orgId,
+        drivePrompt: input.drivePrompt ?? null,
         ...orgDriveVisibilityForInsert(input.orgVisibility),
         updatedAt: new Date(),
       })

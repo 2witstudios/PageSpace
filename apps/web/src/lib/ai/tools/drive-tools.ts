@@ -6,7 +6,8 @@ import { drives } from '@pagespace/db/schema/core'
 import { slugify } from '@pagespace/lib/utils/utils';
 import { isReservedDriveName, isHomeDrive, homeDriveActionError } from '@pagespace/lib/services/drive-guards';
 import { logDriveActivity, getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
-import { getDriveAccessWithDrive, getDriveById, isValidDriveHomePage, updateDrive, allocatePublishSubdomain, listAccessibleDrives } from '@pagespace/lib/services/drive-service';
+import { getDriveAccessWithDrive, getDriveById, isValidDriveHomePage, updateDrive, listAccessibleDrives } from '@pagespace/lib/services/drive-service';
+import { createDriveForCaller } from '@/lib/drives/create-drive-for-caller';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { listAgentDrives } from '@pagespace/lib/services/drive-agent-service';
@@ -134,12 +135,13 @@ export const driveTools = {
    * Create a new workspace/drive
    */
   create_drive: tool({
-    description: 'Create a new workspace/drive. Use when user explicitly requests a new workspace or when their project clearly doesn\'t fit existing drives — check existing drives (list_drives) first. Ask for confirmation before calling this unless the user was explicit about wanting a new workspace. Optionally set initial drive context to establish workspace memory.',
+    description: 'Create a new workspace/drive. Use when user explicitly requests a new workspace or when their project clearly doesn\'t fit existing drives — check existing drives (list_drives) first. Ask for confirmation before calling this unless the user was explicit about wanting a new workspace. Optionally set initial drive context to establish workspace memory. Pass orgId to create it in one of the user\'s organizations (it is then owned by that organization); omit it for a personal workspace.',
     inputSchema: z.object({
       name: z.string().describe('The name of the new drive/workspace'),
       context: z.string().max(10000).optional().describe('Optional initial drive context (workspace memory) - information about the project, conventions, or preferences'),
+      orgId: z.string().min(1).optional().describe('Optional organization id: create the workspace owned by this organization. The server checks the user may create drives there.'),
     }),
-    execute: async ({ name, context: driveContext }, { experimental_context: context }) => {
+    execute: async ({ name, context: driveContext, orgId }, { experimental_context: context }) => {
       const userId = (context as ToolExecutionContext)?.userId;
       if (!userId) {
         throw new Error('User authentication required');
@@ -160,40 +162,13 @@ export const driveTools = {
       }
 
       try {
-        // Validate name
-        if (!name || name.trim().length === 0) {
-          throw new Error('Drive name is required');
-        }
-
-        if (isReservedDriveName(name)) {
-          throw new Error(`Cannot create a drive named "${name.trim()}"`);
-        }
-
-        // Generate slug from name
-        const slug = name.toLowerCase()
-          .replace(/[^a-z0-9\s-]/g, '')
-          .trim()
-          .replace(/\s+/g, '-')
-          .replace(/-+/g, '-');
-
-        // Create drive + allocate subdomain atomically — allocation failure after insert
-        // would leave a drive without a subdomain identity.
-        const newDrive = await db.transaction(async (tx) => {
-          const [created] = await tx.insert(drives).values({
-            name: name.trim(),
-            slug,
-            ownerId: userId,
-            drivePrompt: driveContext || null,
-            updatedAt: new Date(),
-          }).returning({
-            id: drives.id,
-            name: drives.name,
-            slug: drives.slug,
-            drivePrompt: drives.drivePrompt,
-          });
-          await allocatePublishSubdomain(created.id, slug, tx);
-          return created;
-        });
+        // DRV-3: the one create every door uses — personal, or org-owned from creation when orgId
+        // names an org the user may create drives in (decided server-side by createOrgDrive). The
+        // tool carries no credential evidence, so an org that demands a strong or recent sign-in
+        // refuses it (fail closed).
+        const created = await createDriveForCaller({ userId, name, orgId, drivePrompt: driveContext || null, authentication: null });
+        if (!created.ok) throw new Error(created.error);
+        const newDrive = created.drive;
 
         // Broadcast drive creation event (only creator receives for new drives)
         await broadcastDriveEvent(

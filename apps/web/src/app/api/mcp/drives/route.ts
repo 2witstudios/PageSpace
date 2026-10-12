@@ -2,9 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db'
 import { drives } from '@pagespace/db/schema/core';
 import { z } from 'zod/v4';
-import { slugify } from '@pagespace/lib/utils/utils';
-import { isReservedDriveName } from '@pagespace/lib/services/drive-guards';
-import { allocatePublishSubdomain } from '@pagespace/lib/services/drive-service';
+import { createDriveForCaller } from '@/lib/drives/create-drive-for-caller';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -14,9 +12,10 @@ import { authenticateMCPRequest, isAuthError, isMCPAuthResult } from '@/lib/auth
 import { getActorInfo, logDriveActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { listAccessibleDrives } from '@pagespace/lib/services/drive-service';
 
-// Schema for drive creation
+// Schema for drive creation. orgId: create the drive in that org (DRV-3).
 const createDriveSchema = z.object({
   name: z.string().min(1).max(100),
+  orgId: z.string().min(1).optional(),
 });
 
 export async function POST(req: NextRequest) {
@@ -37,27 +36,15 @@ export async function POST(req: NextRequest) {
   try {
     const userId = auth.userId;
     const body = await req.json();
-    const { name } = createDriveSchema.parse(body);
-    
-    // Validate name
-    if (isReservedDriveName(name)) {
-      return NextResponse.json({ error: 'Cannot create a drive with that name.' }, { status: 400 });
+    const { name, orgId } = createDriveSchema.parse(body);
+
+    // DRV-3: the same create as every other door — personal, or org-owned from creation when orgId
+    // names an org the caller may create drives in (decided server-side by createOrgDrive).
+    const created = await createDriveForCaller({ userId, name, orgId, authentication: auth.authentication });
+    if (!created.ok) {
+      return NextResponse.json({ error: created.error, ...(created.code && { code: created.code }) }, { status: created.status });
     }
-
-    const slug = slugify(name);
-
-    // Create drive + allocate subdomain atomically — allocation failure after insert
-    // would leave a drive without a subdomain identity.
-    const newDrive = await db.transaction(async (tx) => {
-      const [created] = await tx.insert(drives).values({
-        name,
-        slug,
-        ownerId: userId,
-        updatedAt: new Date(),
-      }).returning();
-      await allocatePublishSubdomain(created.id, slug, tx);
-      return created;
-    });
+    const newDrive = created.drive;
 
     // Broadcast drive creation event (only creator receives for new drives)
     await broadcastDriveEvent(
@@ -78,7 +65,7 @@ export async function POST(req: NextRequest) {
       metadata: { source: 'mcp' },
     });
 
-    auditRequest(req, { eventType: 'data.write', userId, resourceType: 'drive', resourceId: newDrive.id, details: { source: 'mcp' } });
+    auditRequest(req, { eventType: 'data.write', userId, resourceType: 'drive', resourceId: newDrive.id, details: { source: 'mcp', ...(orgId && { orgId }) } });
 
     return NextResponse.json(newDrive, { status: 201 });
   } catch (error) {

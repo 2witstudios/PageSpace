@@ -45,6 +45,10 @@ vi.mock('@pagespace/lib/organizations/status', () => ({
 }));
 vi.mock('@pagespace/lib/permissions/org-drive-directory', () => ({ listOrgDriveDirectory: vi.fn() }));
 vi.mock('@pagespace/lib/organizations/policies', () => ({ getOrgPolicies: vi.fn() }));
+vi.mock('@pagespace/lib/organizations/policy-reader', async () => {
+  const { parseOrgPolicies } = await import('@pagespace/lib/organizations/policies-core');
+  return { getOrgPolicies: vi.fn(async () => parseOrgPolicies({})) };
+});
 
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { findMembershipRole, findOrganizationById, listOrganizationsForUser, listOrgMembers } from '@pagespace/lib/organizations/repository';
@@ -135,7 +139,9 @@ describe('X-1 (partial) the five org reads over an MCP token', () => {
   it('orgs list: an unscoped token reads the caller\'s orgs; a drive-scoped token is refused before any read', async () => {
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(token());
     expect((await listOrgs(new Request('https://x.test/api/orgs'))).status).toBe(200);
-    expect(await (await listOrgs(new Request('https://x.test/api/orgs'))).json()).toEqual(orgsList);
+    expect(await (await listOrgs(new Request('https://x.test/api/orgs'))).json()).toEqual({
+      organizations: orgsList.organizations.map((org) => ({ ...org, canCreateDrives: true })),
+    });
 
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(token(['drive-open']));
     const refused = await listOrgs(new Request('https://x.test/api/orgs'));

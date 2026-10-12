@@ -8,17 +8,6 @@ vi.mock('@pagespace/db/db', () => ({
     },
     select: vi.fn(),
     selectDistinct: vi.fn(),
-    transaction: vi.fn(async (fn: (tx: unknown) => Promise<unknown>) =>
-      fn({
-        insert: () => ({
-          values: () => ({
-            returning: async () => [
-              { id: 'drive-new', name: 'Test Drive', slug: 'test-drive', drivePrompt: null },
-            ],
-          }),
-        }),
-      }),
-    ),
   },
 }));
 vi.mock('@pagespace/db/operators', () => ({
@@ -65,9 +54,17 @@ vi.mock('@pagespace/lib/services/drive-service', () => ({
   getDriveById: vi.fn(),
   isValidDriveHomePage: vi.fn(),
   updateDrive: vi.fn(),
-  allocatePublishSubdomain: vi.fn().mockResolvedValue('test-drive'),
   listAccessibleDrives: vi.fn().mockResolvedValue([]),
+  createDrive: vi.fn(async (_userId: string, input: { name: string; drivePrompt?: string | null }) => ({
+    id: 'drive-new', name: input.name, slug: 'test-drive', drivePrompt: input.drivePrompt ?? null, orgId: null,
+  })),
 }));
+vi.mock('@pagespace/lib/organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
+vi.mock('@pagespace/lib/organizations/authentication-policy', () => ({
+  checkOrgAuthentication: vi.fn().mockResolvedValue({ allowed: true }),
+}));
+vi.mock('@pagespace/lib/services/org-drive-service', () => ({ createOrgDrive: vi.fn() }));
+vi.mock('@pagespace/lib/services/org-drive-service-deps', () => ({ orgDriveServiceDeps: { production: true } }));
 
 vi.mock('@pagespace/lib/services/drive-member-service', () => ({
   getDriveRecipientUserIds: vi.fn().mockResolvedValue([]),
@@ -100,6 +97,9 @@ import { syncPublishedHomeRoot } from '@/lib/canvas/publish-page';
 import { resolveActingAgentId } from '../actor-permissions';
 import type { ToolExecutionContext } from '../../core/types';
 import { LEAD_ACTION_CASES, LEAD_ACTION_DRIVES, leadAuthority } from '@/lib/auth/__tests__/lead-authority-fake';
+import { createDrive } from '@pagespace/lib/services/drive-service';
+import { createOrgDrive } from '@pagespace/lib/services/org-drive-service';
+import { orgDriveServiceDeps } from '@pagespace/lib/services/org-drive-service-deps';
 
 const mockDb = vi.mocked(db);
 
@@ -214,7 +214,7 @@ describe('drive-tools', () => {
 
       await expect(
         driveTools.create_drive.execute!({ name: 'Personal' }, context)
-      ).rejects.toThrow('Cannot create a drive named "Personal"');
+      ).rejects.toThrow('Cannot create a drive with that name');
     });
 
     it('blocks a page-agent without user-scoped access from creating a drive', async () => {
@@ -273,6 +273,22 @@ describe('drive-tools', () => {
         id: 'drive-new',
         name: 'Test Drive',
       });
+    });
+
+    it('DRV-3 (partial) with an orgId the workspace is created org-owned through createOrgDrive (the server decides who may), with its context; without one it is personal', async () => {
+      vi.mocked(createOrgDrive).mockResolvedValueOnce({ ok: true, drive: { id: 'drive-org', name: 'Engineering', slug: 'engineering', orgId: 'org_nw' } as never });
+      const context = { toolCallId: '1', messages: [], experimental_context: { userId: 'user-123' } as ToolExecutionContext };
+
+      const result = await driveTools.create_drive.execute!({ name: 'Engineering', orgId: 'org_nw', context: 'We ship weekly' }, context) as { success: boolean };
+      expect(result.success).toBe(true);
+      expect(createOrgDrive).toHaveBeenCalledWith('user-123', expect.objectContaining({ name: 'Engineering', orgId: 'org_nw', drivePrompt: 'We ship weekly' }), orgDriveServiceDeps);
+      expect(createDrive).not.toHaveBeenCalled();
+
+      vi.mocked(createOrgDrive).mockResolvedValueOnce({ ok: false, code: 'NOT_ORG_MEMBER', status: 403, message: 'You must be a member of the organization to create a drive in it.' });
+      await expect(driveTools.create_drive.execute!({ name: 'Engineering', orgId: 'org_other' }, context)).rejects.toThrow('You must be a member of the organization');
+
+      await driveTools.create_drive.execute!({ name: 'Notes' }, context);
+      expect(createDrive).toHaveBeenCalledWith('user-123', expect.objectContaining({ name: 'Notes' }));
     });
 
     it('does not block a plain user (non-agent) call at the agent gate', async () => {
