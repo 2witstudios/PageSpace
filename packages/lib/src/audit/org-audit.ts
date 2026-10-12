@@ -58,9 +58,7 @@ export async function stageOrgAuditEvents(
   options: StageOptions = {},
 ): Promise<StagedOrgAuditEvent[]> {
   if (events.length === 0) return [];
-  const hold = options.hold
-    ? { nextAttemptAt: new Date(Date.now() + ORG_AUDIT_PENDING_HOLD_MS), discardIfUnreleased: options.hold === 'discard_if_unreleased' }
-    : {};
+  const hold = options.held ? { nextAttemptAt: new Date(Date.now() + ORG_AUDIT_PENDING_HOLD_MS) } : {};
   return executor
     .insert(orgAuditOutbox)
     .values(
@@ -85,32 +83,15 @@ export async function stageOrgAuditEvent(executor: OrgAuditExecutor, event: OrgA
 
 export interface StageOptions {
   /**
-   * The change commits now but is final only after a later step. The drainer leaves the event alone for
-   * ORG_AUDIT_PENDING_HOLD_MS; the caller publishes it once final, or discards it with an undo. If the caller never
-   * does (the process stopped), the hold ends:
-   *   - `deliver_if_unreleased`: the committed change stands unless undone (an invitation whose email may or may not
-   *     have gone out still exists), so the event is delivered;
-   *   - `discard_if_unreleased`: the change is real only once a later step commits (a guest approval whose admission
-   *     may never have run), so the event is discarded, never delivered.
+   * The change commits now but is final only after a later step outside the transaction (an invitation's email). The
+   * drainer leaves the event alone for ORG_AUDIT_PENDING_HOLD_MS; the caller publishes it once final, or discards it
+   * with an undo. If the caller does neither (the process stopped), the committed change stands, so the drainer
+   * delivers it when the hold ends.
    */
-  hold?: 'deliver_if_unreleased' | 'discard_if_unreleased';
+  held?: boolean;
 }
 
 /** Withdraw staged events whose change was undone (in the undo's own transaction). */
-/**
- * The change a `discard_if_unreleased` hold waited for has COMMITTED (a guest approval's admission): from now on the
- * event is an ordinary one, delivered (and retried, and dead-lettered) like any other, never discarded. Release it as
- * soon as the change commits, before publishing, so a failed publish leaves it for the drainer to deliver.
- *
- * The one window left: a process that dies between the change's commit and this release loses that approval's event
- * (its hold ends unreleased and is discarded). The alternative, delivering unreleased holds, would record approvals
- * whose admission never ran; the discard is logged with the event's ids so the record survives in the security log.
- */
-export async function releaseStagedOrgAuditEvents(executor: OrgAuditExecutor, staged: readonly StagedOrgAuditEvent[]): Promise<void> {
-  if (staged.length === 0) return;
-  await executor.update(orgAuditOutbox).set({ discardIfUnreleased: false }).where(inArray(orgAuditOutbox.id, staged.map((s) => s.id)));
-}
-
 export async function discardStagedOrgAuditEvents(executor: OrgAuditExecutor, staged: readonly StagedOrgAuditEvent[]): Promise<void> {
   if (staged.length === 0) return;
   await executor.delete(orgAuditOutbox).where(inArray(orgAuditOutbox.id, staged.map((s) => s.id)));
@@ -131,31 +112,17 @@ async function appendToChain(row: OutboxRow): Promise<void> {
   await securityAudit.logEvent(entry);
 }
 
-type Delivery = 'delivered' | 'retrying' | 'skipped' | 'discarded' | 'dead_lettered';
+type Delivery = 'delivered' | 'retrying' | 'skipped' | 'dead_lettered';
 
 /**
  * Deliver one staged event: lock its row (SKIP LOCKED, so a publish and the drainer never deliver it twice at once),
  * append it to the chain, delete the row. A refused append keeps the row, counts the attempt and schedules the next.
  * At least once: a crash between the append and the delete re-appends the same event on the next drain.
  */
-async function deliverOne(id: string, now: Date, releasedHold: 'drainer' | null): Promise<Delivery> {
+async function deliverOne(id: string, now: Date): Promise<Delivery> {
   return db.transaction(async (tx) => {
     const [row] = await tx.select().from(orgAuditOutbox).where(eq(orgAuditOutbox.id, id)).for('update', { skipLocked: true }).limit(1);
     if (!row) return 'skipped';
-    if (releasedHold === null && row.discardIfUnreleased) {
-      // The caller released it (its change is final): from now on it is an ordinary event, retried until delivered.
-      await tx.update(orgAuditOutbox).set({ discardIfUnreleased: false }).where(eq(orgAuditOutbox.id, id));
-    } else if (releasedHold !== null && row.discardIfUnreleased) {
-      // The hold ended without the caller releasing it: the change it described never became final.
-      await tx.delete(orgAuditOutbox).where(eq(orgAuditOutbox.id, id));
-      // Either the change never committed (the intended case), or the process died between its commit and the release
-      // (the accepted trade-off, see releaseStagedOrgAuditEvents): the ids are logged so the record is not silent.
-      loggers.security.warn('[Audit] a held org event was not released (its change did not commit, or the process stopped before releasing it) and is discarded', {
-        outboxId: id, eventType: row.eventType, orgId: row.orgId, resourceType: row.resourceType, resourceId: row.resourceId,
-        actorId: row.actorId, driveId: row.driveId, details: row.details, occurredAt: row.createdAt.toISOString(),
-      });
-      return 'discarded';
-    }
     // An actor whose account was deleted while the event waited is written as no one: the chain's user reference is
     // SET NULL on erasure, so this is exactly what a delivered row would hold by now (and the append cannot fail on it).
     const actorGone = row.actorId !== null && (await tx.select({ id: users.id }).from(users).where(eq(users.id, row.actorId)).limit(1)).length === 0;
@@ -199,9 +166,9 @@ export async function publishOrgAuditEvents(staged: readonly StagedOrgAuditEvent
   const now = new Date();
   for (const { id } of list) {
     try {
-      await deliverOne(id, now, null);
+      await deliverOne(id, now);
     } catch (error) {
-      loggers.security.warn('[Audit] org event publish failed; it stays in the outbox for the drainer (a still-held event is delivered only once released)', {
+      loggers.security.warn('[Audit] org event publish failed; it stays in the outbox and the drainer delivers it', {
         outboxId: id,
         error: error instanceof Error ? error.message : String(error),
       });
@@ -239,8 +206,6 @@ export async function transactionWithOrgAudit<T>(run: (tx: Tx, audit: StageOrgAu
 export interface OrgAuditDrainResult {
   delivered: number;
   retrying: number;
-  /** Held events whose change never became final, dropped this pass. */
-  discarded: number;
   /** Events this pass gave up retrying (kept, alerted). */
   deadLettered: number;
 }
@@ -257,10 +222,10 @@ export async function drainOrgAuditOutbox(options: { now?: Date; limit?: number 
     .where(and(lte(orgAuditOutbox.nextAttemptAt, now), isNull(orgAuditOutbox.deadLetteredAt)))
     .orderBy(asc(orgAuditOutbox.seq))
     .limit(options.limit ?? ORG_AUDIT_DRAIN_BATCH);
-  const result: OrgAuditDrainResult = { delivered: 0, retrying: 0, discarded: 0, deadLettered: 0 };
-  const counter = { delivered: 'delivered', retrying: 'retrying', discarded: 'discarded', dead_lettered: 'deadLettered' } as const;
+  const result: OrgAuditDrainResult = { delivered: 0, retrying: 0, deadLettered: 0 };
+  const counter = { delivered: 'delivered', retrying: 'retrying', dead_lettered: 'deadLettered' } as const;
   for (const { id } of due) {
-    const outcome = await deliverOne(id, now, 'drainer');
+    const outcome = await deliverOne(id, now);
     if (outcome !== 'skipped') result[counter[outcome]] += 1;
   }
   return result;

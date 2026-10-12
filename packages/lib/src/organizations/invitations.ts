@@ -226,7 +226,7 @@ export async function createOrRotateInvitation(input: {
         resourceType: 'organization_invitation',
         resourceId: invitation.id,
         details: { role: invitation.role, rotated: previous !== null },
-      }, { hold: 'deliver_if_unreleased' });
+      }, { held: true });
       return { ok: true, invitation, token, previous };
     });
   } catch (error) {
@@ -356,7 +356,7 @@ export async function resendInvitation(input: {
       resourceType: 'organization_invitation',
       resourceId: invitation.id,
       details: { wasExpired: !isLiveInvite(previous, input.now) },
-    }, { hold: 'deliver_if_unreleased' });
+    }, { held: true });
     return { previous, invitation };
   });
   await publishOrgAuditEvents(seatEvents);

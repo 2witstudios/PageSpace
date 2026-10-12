@@ -233,9 +233,10 @@ export const driveInviteRepository = {
     expiresAt: Date | null;
     now: Date;
     /**
-     * AUD-1: an approver's `org.guest.approved`, staged with the invitation. The invitation is final only once its
-     * email went out (after this transaction), so it is HELD: the caller releases it on delivery or discards it with
-     * the row.
+     * AUD-1: an approver's `org.guest.approved`, staged with the invitation. The invitation is a committed change that
+     * stands unless undone (a failed email deletes it), so the event is held deliver-unless-undone, like an org
+     * invitation's: published once the email went out, discarded with the row on an undo, and delivered by the drainer
+     * when the hold ends if the process stopped in between.
      */
     approval?: OrgAuditEvent;
   }) {
@@ -260,7 +261,7 @@ export const driveInviteRepository = {
         .insert(pendingInvites)
         .values({ tokenHash, email, driveId, role, customRoleId, invitedBy, expiresAt })
         .returning();
-      const approvalStaged = input.approval ? await stageOrgAuditEvents(tx, [input.approval], { hold: 'discard_if_unreleased' }) : [];
+      const approvalStaged = input.approval ? await stageOrgAuditEvents(tx, [input.approval], { held: true }) : [];
       return { ...row, approvalStaged };
     });
   },

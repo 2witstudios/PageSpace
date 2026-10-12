@@ -36,14 +36,14 @@ describe('/api/cron/drain-org-audit-outbox', () => {
   });
 
   it('AUD-1 (partial) drains the outbox and reports what it delivered', async () => {
-    mockDrain.mockResolvedValue({ delivered: 4, retrying: 0, discarded: 1, deadLettered: 0 });
+    mockDrain.mockResolvedValue({ delivered: 4, retrying: 0, deadLettered: 0 });
     const res = await GET(request());
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ success: true, delivered: 4, retrying: 0, discarded: 1, deadLettered: 0, queued: 0, deadLetteredTotal: 0 });
+    expect(await res.json()).toEqual({ success: true, delivered: 4, retrying: 0, deadLettered: 0, queued: 0, deadLetteredTotal: 0 });
   });
 
   it('AUD-1 (partial) a dead-lettered event outstanding makes every run a 500 until an operator deals with it', async () => {
-    mockDrain.mockResolvedValue({ delivered: 0, retrying: 0, discarded: 0, deadLettered: 0 });
+    mockDrain.mockResolvedValue({ delivered: 0, retrying: 0, deadLettered: 0 });
     mockBacklog.mockResolvedValue({ queued: 1, deadLettered: 1 });
     const res = await GET(request());
     expect(res.status).toBe(500);
@@ -51,7 +51,7 @@ describe('/api/cron/drain-org-audit-outbox', () => {
   });
 
   it('AUD-1 (partial) events the chain still refuses make the run a 500 so it pages', async () => {
-    mockDrain.mockResolvedValue({ delivered: 1, retrying: 2, discarded: 0, deadLettered: 0 });
+    mockDrain.mockResolvedValue({ delivered: 1, retrying: 2, deadLettered: 0 });
     expect((await GET(request())).status).toBe(500);
     expect(mockLogError).toHaveBeenCalled();
   });

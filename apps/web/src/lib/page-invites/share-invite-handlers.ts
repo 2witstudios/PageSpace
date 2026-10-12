@@ -12,7 +12,7 @@ import { sendPendingPageShareInvitationEmail } from '@pagespace/lib/services/not
 import { decideOrgDriveAdmission } from '@pagespace/lib/permissions/guest-admission';
 import { admissionRefusalResponse } from '@/lib/drive-invites/invite-handlers';
 import { queueGuestForApproval } from '@pagespace/lib/permissions/guest-holds';
-import { discardStagedOrgAuditEvents, publishOrgAuditEvents, releaseStagedOrgAuditEvents, type OrgAuditEvent, type StagedOrgAuditEvent } from '@pagespace/lib/audit/org-audit';
+import { discardStagedOrgAuditEvents, publishOrgAuditEvents, type OrgAuditEvent, type StagedOrgAuditEvent } from '@pagespace/lib/audit/org-audit';
 import { GUESTS_HELD_MESSAGE } from '@pagespace/lib/organizations/sharing-decisions';
 import type { PendingPagePermission } from '@pagespace/db/schema/pending-page-invites';
 import { db } from '@pagespace/db/db';
@@ -168,9 +168,9 @@ export async function sendPendingPageInvite(args: {
       { pageId, recipientEmail: email },
     );
     try {
-      await pageInviteRepository.deletePendingInvite(pendingInvite.id);
-      // The invitation was never sent: its approval event goes with it.
+      // The invitation was never sent: its approval event goes with it (first, so the drainer never delivers it).
       await discardStagedOrgAuditEvents(db, pendingInvite.approvalStaged ?? []);
+      await pageInviteRepository.deletePendingInvite(pendingInvite.id);
     } catch (rollbackError) {
       loggers.api.error(
         'Rollback of pending_page_invites row failed after email send failure',
@@ -181,11 +181,9 @@ export async function sendPendingPageInvite(args: {
     return NextResponse.json({ error: 'Failed to send invitation email. Please try again.' }, { status: 502 });
   }
 
-  // The invitation went out: its approval event (if any) is final now — released, then published.
-  if (pendingInvite.approvalStaged?.length) {
-    await releaseStagedOrgAuditEvents(db, pendingInvite.approvalStaged);
-    await publishOrgAuditEvents(pendingInvite.approvalStaged);
-  }
+  // The invitation went out: publish its approval event (if any) now. Publishing never throws; if it cannot deliver
+  // (or the process stops before this line), the held event is delivered by the drainer when its hold ends.
+  await publishOrgAuditEvents(pendingInvite.approvalStaged);
 
   trackPageOperation(inviterUserId, 'share', pageId, {
     invitedEmail: email,

@@ -10,8 +10,7 @@ import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
  * after commit. An event that publish could not deliver (the audit chain refused it, or the process stopped between
  * commit and publish) stays queued; this sweep, every minute, appends every due event to the security audit chain
  * and deletes it, oldest first. A refused append is retried with a capped backoff; after ORG_AUDIT_DEAD_LETTER_ATTEMPTS
- * it is dead-lettered (kept, alerted, counted on the admin monitoring page) instead of retried forever. A held event
- * whose change never became final (a guest approval whose admission did not commit) is discarded, never delivered.
+ * it is dead-lettered (kept, alerted, counted on the admin monitoring page) instead of retried forever.
  * A run that left events retrying, or with any dead-lettered event outstanding, answers 500 so it pages.
  *
  * Authentication: HMAC-signed request with X-Cron-Timestamp, X-Cron-Nonce, X-Cron-Signature.

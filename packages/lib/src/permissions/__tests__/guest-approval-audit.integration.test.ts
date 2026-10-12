@@ -113,8 +113,8 @@ describe('the approval event is committed with the admission', () => {
     expect(await getUserDriveAccess(outsider, w.drive)).toBe(true);
     expect(approvals()).toEqual([]);
     const [row] = await db.select().from(orgAuditOutbox).where(eq(orgAuditOutbox.eventType, 'org.guest.approved')).then((rows) => rows.filter((r) => r.orgId === w.orgId));
-    // Not a hold: nothing can discard it.
-    expect(row).toMatchObject({ discardIfUnreleased: false });
+    // Committed with the admission and queued (the refused publish counted one attempt), never a hold.
+    expect(row).toMatchObject({ attempts: 1 });
 
     chain.refuse = false;
     await drainOrgAuditOutbox({ now: new Date(Date.now() + ORG_AUDIT_PENDING_HOLD_MS + 2 * 60 * 60_000) });

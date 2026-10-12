@@ -10,7 +10,6 @@ CREATE TABLE "org_audit_outbox" (
 	"details" jsonb DEFAULT '{}'::jsonb NOT NULL,
 	"attempts" integer DEFAULT 0 NOT NULL,
 	"lastError" text,
-	"discardIfUnreleased" boolean DEFAULT false NOT NULL,
 	"deadLetteredAt" timestamp,
 	"nextAttemptAt" timestamp DEFAULT (now() at time zone 'utc') NOT NULL,
 	"createdAt" timestamp DEFAULT (now() at time zone 'utc') NOT NULL

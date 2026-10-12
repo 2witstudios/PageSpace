@@ -19,7 +19,7 @@ import { and, eq } from '@pagespace/db/operators';
 import { driveRoles } from '@pagespace/db/schema/members';
 import { decideOrgDriveAdmission } from '@pagespace/lib/permissions/guest-admission';
 import { queueGuestForApproval } from '@pagespace/lib/permissions/guest-holds';
-import { discardStagedOrgAuditEvents, publishOrgAuditEvents, releaseStagedOrgAuditEvents, type OrgAuditEvent, type StagedOrgAuditEvent } from '@pagespace/lib/audit/org-audit';
+import { discardStagedOrgAuditEvents, publishOrgAuditEvents, type OrgAuditEvent, type StagedOrgAuditEvent } from '@pagespace/lib/audit/org-audit';
 import { GUESTS_HELD_MESSAGE, guestsOffRefusal, type GuestAdmissionRefusal } from '@pagespace/lib/organizations/sharing-decisions';
 import { ORG_LAPSED_REFUSAL } from '@pagespace/lib/organizations/status-core';
 import { isOrgLapsedError } from '@pagespace/lib/permissions/org-lapse-guard';
@@ -477,9 +477,9 @@ export async function handleEmailPath(args: {
       { driveId, recipientEmail: email }
     );
     try {
-      await driveInviteRepository.deletePendingInvite(pendingInvite.id);
-      // The invitation was never sent: its approval event goes with it.
+      // The invitation was never sent: its approval event goes with it (first, so the drainer never delivers it).
       await discardStagedOrgAuditEvents(db, pendingInvite.approvalStaged ?? []);
+      await driveInviteRepository.deletePendingInvite(pendingInvite.id);
     } catch (rollbackError) {
       loggers.api.error(
         'Rollback of pending_invites row failed after email send failure',
@@ -493,11 +493,9 @@ export async function handleEmailPath(args: {
     );
   }
 
-  // The invitation went out: its approval event (if any) is final now — released, then published.
-  if (pendingInvite.approvalStaged?.length) {
-    await releaseStagedOrgAuditEvents(db, pendingInvite.approvalStaged);
-    await publishOrgAuditEvents(pendingInvite.approvalStaged);
-  }
+  // The invitation went out: publish its approval event (if any) now. Publishing never throws; if it cannot deliver
+  // (or the process stops before this line), the held event is delivered by the drainer when its hold ends.
+  await publishOrgAuditEvents(pendingInvite.approvalStaged);
 
   trackDriveOperation(inviterUserId, 'invite_member', driveId, {
     invitedEmail: email,

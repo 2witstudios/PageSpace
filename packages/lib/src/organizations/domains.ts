@@ -272,7 +272,7 @@ export async function sendDomainProofEmail(input: {
       resourceType: 'org_domain',
       resourceId: claim.id,
       details: { domain: claim.domain, mailbox: input.mailbox },
-    }, { hold: 'deliver_if_unreleased' });
+    }, { held: true });
     return { ok: true, claim, to, event } as const;
   });
   if (!stored.ok) return stored;

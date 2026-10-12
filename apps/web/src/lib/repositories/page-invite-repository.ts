@@ -84,7 +84,7 @@ export const pageInviteRepository = {
     invitedBy: string;
     expiresAt: Date | null;
     now: Date;
-    /** AUD-1: an approver's `org.guest.approved`, HELD with the invitation until its email went out. */
+    /** AUD-1: an approver's `org.guest.approved`, held deliver-unless-undone with the invitation (see drive invites). */
     approval?: OrgAuditEvent;
   }) {
     const { tokenHash, email, pageId, permissions, invitedBy, expiresAt, now } = input;
@@ -107,7 +107,7 @@ export const pageInviteRepository = {
         .insert(pendingPageInvites)
         .values({ tokenHash, email, pageId, permissions, invitedBy, expiresAt })
         .returning();
-      const approvalStaged = input.approval ? await stageOrgAuditEvents(tx, [input.approval], { hold: 'discard_if_unreleased' }) : [];
+      const approvalStaged = input.approval ? await stageOrgAuditEvents(tx, [input.approval], { held: true }) : [];
       return { ...row, approvalStaged };
     });
   },

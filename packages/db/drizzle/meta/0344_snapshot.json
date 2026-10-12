@@ -1,5 +1,5 @@
 {
-  "id": "a990bf4b-bc6c-4ca3-900e-6003f9c352d3",
+  "id": "c4c2b059-5fa8-437c-b9cd-c0e326a0efe5",
   "prevId": "276b096e-ea0e-4c62-a2c4-01c20f2170fe",
   "version": "7",
   "dialect": "postgresql",
@@ -25569,13 +25569,6 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
-        },
-        "discardIfUnreleased": {
-          "name": "discardIfUnreleased",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
         },
         "deadLetteredAt": {
           "name": "deadLetteredAt",
