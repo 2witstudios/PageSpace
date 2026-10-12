@@ -346,6 +346,8 @@ export function VoiceSessionProvider({
       // SPEND-4: the call moved to another source under the drive's rule; never silently.
       const fallbackText = spendFallbackNoticeText(result.connection.spendFallback);
       if (fallbackText) toast.info(fallbackText);
+      // POL-8: the call started without the conversation's earlier messages; never silently.
+      if (result.connection.historyWithheld) toast.info(result.connection.historyWithheld);
 
       // Each call schedules its own successor from its own reported ceiling.
       clearChainTimer();

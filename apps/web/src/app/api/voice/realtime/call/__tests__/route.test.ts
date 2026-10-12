@@ -54,6 +54,8 @@ vi.mock('@/lib/ai/core/ai-tools', () => ({ buildPageSpaceTools: () => ({}) }));
 // POL-8: the org model policy the route asks before the handshake (its own real-Postgres proof is the factory's).
 const { mockOrgModelRefusal } = vi.hoisted(() => ({ mockOrgModelRefusal: vi.fn() }));
 vi.mock('@/lib/ai/core/provider-factory', () => ({ orgModelRefusal: mockOrgModelRefusal }));
+const { mockMemberDrivesReadable } = vi.hoisted(() => ({ mockMemberDrivesReadable: vi.fn() }));
+vi.mock('@/lib/ai/core/org-model-policy', () => ({ memberDrivesReadableByModel: mockMemberDrivesReadable }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: { ai: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() } },
@@ -78,6 +80,7 @@ describe('POST /api/voice/realtime/call', () => {
     vi.clearAllMocks();
     mockResolveVoiceSpend.mockResolvedValue({ kind: 'personal' });
     mockOrgModelRefusal.mockResolvedValue(null);
+    mockMemberDrivesReadable.mockResolvedValue({ driveIds: [], allReadable: true });
     vi.unstubAllEnvs();
     mockAuth.mockResolvedValue({ userId: 'u1' });
     mockIsAuthError.mockReturnValue(false);
@@ -199,6 +202,7 @@ describe('POST /api/voice/realtime/call', () => {
       attached: true,
       maxDurationMs: REALTIME_MAX_SESSION_SECONDS * 1000,
       spendFallback: null,
+      historyWithheld: null,
     });
   });
 
@@ -473,6 +477,35 @@ describe('POST /api/voice/realtime/call', () => {
       expect(await response.json()).toEqual({ error: "This organization doesn't allow this model.", code: 'org_policy', policy: 'providerAllowlist' });
       expect(mockRunCallHandshake).not.toHaveBeenCalled();
       expect(mockLoadVoiceBinding).not.toHaveBeenCalled();
+    });
+
+    describe('a Global Assistant call\'s replayed history', () => {
+      const SEED = [{ role: 'user', text: 'what did the Q3 board deck say?' }, { role: 'assistant', text: 'Revenue grew 40%.' }];
+
+      it('POL-8 (partial) is replayed when every org the person is in allows the voice model', async () => {
+        mockLoadVoiceBinding.mockResolvedValue({ seed: SEED, instructions: 'Speak.', tools: TOOLS });
+        const res = await POST(callRequest({ sdp: 'v=0 offer', conversationId: 'global1' }));
+        expect(mockMemberDrivesReadable).toHaveBeenCalledWith('u1', { provider: 'openai', modelId: expect.any(String) });
+        expect(mockRunCallHandshake).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ seed: SEED }));
+        expect((await res.json()).historyWithheld).toBeNull();
+      });
+
+      it('POL-8 (partial) is left out, and the caller told why, when some org the person is in does not allow the voice model', async () => {
+        mockLoadVoiceBinding.mockResolvedValue({ seed: SEED, instructions: 'Speak.', tools: TOOLS });
+        mockMemberDrivesReadable.mockResolvedValue({ driveIds: ['personal'], allReadable: false });
+        const res = await POST(callRequest({ sdp: 'v=0 offer', conversationId: 'global1' }));
+        expect(res.status).toBe(200);
+        expect(mockRunCallHandshake).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ seed: [] }));
+        expect((await res.json()).historyWithheld).toMatch(/earlier messages/);
+      });
+
+      it('a drive conversation\'s history is governed by its drive (judged before the handshake), not by every org', async () => {
+        mockResolveVoiceSpend.mockResolvedValue({ kind: 'drive', driveId: 'drive-1' });
+        mockLoadVoiceBinding.mockResolvedValue({ seed: SEED, instructions: 'Speak.', tools: TOOLS });
+        await POST(callRequest({ sdp: 'v=0 offer', conversationId: 'conv1' }));
+        expect(mockMemberDrivesReadable).not.toHaveBeenCalled();
+        expect(mockRunCallHandshake).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ seed: SEED }));
+      });
     });
 
     it('a personal (Global Assistant) call is judged with no drive, which no org restricts', async () => {

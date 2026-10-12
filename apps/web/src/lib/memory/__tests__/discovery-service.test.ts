@@ -17,8 +17,14 @@ vi.mock('@pagespace/lib/permissions/member-drives', () => ({
 
 // POL-8: the drives whose org lets the discovery model read them. Default: every drive.
 const mockScopeReadableByModel = vi.fn(async (_use: { provider: string; modelId: string }, scope: { driveIds: readonly string[] }) => ({ driveIds: [...scope.driveIds], pageIds: [] as string[] }));
+// memberDrivesReadableByModel is the shared rule (the person's member drives, judged by scopeReadableByModel, and
+// whether ALL passed), composed here from the two mocked reads so each stays observable.
 vi.mock('@/lib/ai/core/org-model-policy', () => ({
-  scopeReadableByModel: (use: { provider: string; modelId: string }, scope: { driveIds: readonly string[] }) => mockScopeReadableByModel(use, scope),
+  memberDrivesReadableByModel: async (userId: string, use: { provider: string; modelId: string }) => {
+    const memberDriveIds: string[] = await mockGetMemberDriveIds(userId, { includeTrashed: true });
+    const { driveIds } = await mockScopeReadableByModel(use, { driveIds: memberDriveIds });
+    return { driveIds, allReadable: driveIds.length === memberDriveIds.length };
+  },
 }));
 
 const mockDbSelect = vi.fn();

@@ -11,6 +11,7 @@ import { db } from '@pagespace/db/db';
 import { inArray } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
 import { getDrivePolicies } from '@pagespace/lib/organizations/policy-reader';
+import { getMemberDriveIds } from '@pagespace/lib/permissions/member-drives';
 import {
   agentModelSaveDecision,
   allowedModelCatalog,
@@ -57,4 +58,19 @@ export async function scopeReadableByModel(
     driveIds: scope.driveIds.filter((id) => readable.has(id)),
     pageIds: pageDrives.filter((p) => readable.has(p.driveId)).map((p) => p.id),
   };
+}
+
+/**
+ * A person's member drives a model may read, and whether that is ALL of them. Content that carries no drive — the
+ * person's global-assistant conversations — may hold any of those orgs' content, so it may reach the model only when
+ * `allReadable` (every org the person is in allows it). The one rule memory discovery and a global-assistant voice
+ * call's replayed history both follow.
+ */
+export async function memberDrivesReadableByModel(
+  userId: string,
+  use: { provider: string; modelId: string },
+): Promise<{ driveIds: string[]; allReadable: boolean }> {
+  const memberDriveIds = await getMemberDriveIds(userId, { includeTrashed: true });
+  const { driveIds } = await scopeReadableByModel(use, { driveIds: memberDriveIds });
+  return { driveIds, allReadable: driveIds.length === memberDriveIds.length };
 }

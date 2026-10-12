@@ -13,13 +13,12 @@ import { db } from '@pagespace/db/db';
 import { and, desc, eq, gte, inArray, ne } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
 import { activityLogs } from '@pagespace/db/schema/monitoring';
-import { getMemberDriveIds } from '@pagespace/lib/permissions/member-drives';
 import { conversations, messages } from '@pagespace/db/schema/conversations';
 import { createAIProvider, isProviderError } from '@/lib/ai/core/provider-factory';
 import { BACKGROUND_HEAVY_PROVIDER, BACKGROUND_HEAVY_MODEL } from '@/lib/ai/core/ai-providers-config';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { AIMonitoring, discardUsageOutcome } from '@pagespace/lib/monitoring/ai-monitoring';
-import { scopeReadableByModel } from '@/lib/ai/core/org-model-policy';
+import { memberDrivesReadableByModel } from '@/lib/ai/core/org-model-policy';
 import { reserveMemoryCall, type MemoryGateRefusal } from './memory-credit';
 import { z } from 'zod';
 
@@ -30,9 +29,7 @@ import { z } from 'zod';
  * global-assistant conversations: they carry no drive, so any of those orgs' content may be in them.
  */
 async function readableMemberDrives(userId: string): Promise<{ driveIds: string[]; allReadable: boolean }> {
-  const memberDriveIds = await getMemberDriveIds(userId, { includeTrashed: true });
-  const { driveIds } = await scopeReadableByModel({ provider: BACKGROUND_HEAVY_PROVIDER, modelId: BACKGROUND_HEAVY_MODEL }, { driveIds: memberDriveIds });
-  return { driveIds, allReadable: driveIds.length === memberDriveIds.length };
+  return memberDrivesReadableByModel(userId, { provider: BACKGROUND_HEAVY_PROVIDER, modelId: BACKGROUND_HEAVY_MODEL });
 }
 
 export type MemoryField = 'bio' | 'writingStyle' | 'rules';

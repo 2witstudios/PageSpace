@@ -34,8 +34,9 @@ import { REALTIME_MAX_SESSION_SECONDS } from '@pagespace/lib/billing/credit-pric
 import { PAID_TIERS } from '@/lib/subscription/rate-limit-middleware';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
-import { REALTIME_MODEL_VENDOR, resolveRealtimeModel } from '@/lib/ai/realtime/session';
+import { REALTIME_MODEL_VENDOR, VOICE_HISTORY_WITHHELD_MESSAGE, resolveRealtimeModel } from '@/lib/ai/realtime/session';
 import { orgModelRefusal } from '@/lib/ai/core/provider-factory';
+import { memberDrivesReadableByModel } from '@/lib/ai/core/org-model-policy';
 import { runCallHandshake } from '@/lib/ai/realtime/call-handshake';
 import { loadVoiceBinding } from '@/lib/ai/realtime/binding-loader';
 import { voiceBindingDeps, voiceSpendDeps } from '@/lib/ai/realtime/voice-runtime-deps';
@@ -180,6 +181,13 @@ export async function POST(request: Request) {
       ...(conversationId === undefined ? {} : { conversationId }),
     });
 
+    // POL-8 for a Global Assistant call (no drive): its replayed history carries no drive, so any org the person is in
+    // may have content in it. As memory discovery reads such conversations, the history reaches the realtime model
+    // only when every one of those orgs allows it; otherwise the call starts without it and says why.
+    const historyWithheld = spend.kind === 'personal' && binding.seed.length > 0
+      && !(await memberDrivesReadableByModel(userId, { provider: REALTIME_MODEL_VENDOR, modelId: model })).allReadable;
+    const seed = historyWithheld ? [] : binding.seed;
+
     const result = await runCallHandshake(
       {
         fetch,
@@ -208,7 +216,7 @@ export async function POST(request: Request) {
         offerSdp: sdp,
         userId,
         ...(conversationId === undefined ? {} : { conversationId }),
-        seed: binding.seed,
+        seed,
         instructions: binding.instructions,
         ...(binding.assistant === undefined ? {} : { assistant: binding.assistant }),
         // Where the call spends (resolved above), carried to the meter on the signed attach.
@@ -301,6 +309,7 @@ export async function POST(request: Request) {
       attached: result.attached,
       maxDurationMs: REALTIME_MAX_SESSION_SECONDS * 1000,
       spendFallback: result.spendFallback,
+      historyWithheld: historyWithheld ? VOICE_HISTORY_WITHHELD_MESSAGE : null,
     }, { headers: spendFallbackHeaders(result.spendFallback) });
   } catch (error) {
     loggers.ai.error('Realtime voice call error', error as Error);

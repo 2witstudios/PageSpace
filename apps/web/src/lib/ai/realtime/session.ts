@@ -33,6 +33,10 @@ export const REALTIME_VOICE = 'marin';
  */
 export const REALTIME_MODEL_VENDOR = 'openai';
 
+/** What the caller is told when its conversation's earlier turns were left out of a voice call (POL-8). */
+export const VOICE_HISTORY_WITHHELD_MESSAGE =
+  "Voice started without this conversation's earlier messages: an organization you belong to doesn't allow the voice model to read them.";
+
 /** The env var that overrides the model, named once so callers can't drift. */
 export const REALTIME_MODEL_ENV_VAR = 'OPENAI_REALTIME_MODEL';
 

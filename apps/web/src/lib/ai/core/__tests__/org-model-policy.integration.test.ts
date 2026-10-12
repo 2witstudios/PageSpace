@@ -66,7 +66,7 @@ vi.mock('@/lib/websocket', async (importOriginal) => ({ ...(await importOriginal
 import { createAIProvider, isProviderError, orgModelRefusal } from '../provider-factory';
 import { REALTIME_MODEL_VENDOR, resolveRealtimeModel } from '@/lib/ai/realtime/session';
 import { resolveProviderModel } from '../ai-providers-config';
-import { offeredModels, scopeReadableByModel } from '../org-model-policy';
+import { memberDrivesReadableByModel, offeredModels, scopeReadableByModel } from '../org-model-policy';
 import { applyPageMutation, OrgModelPolicyError } from '@/services/api/page-mutation-service';
 import { pageService } from '@/services/api/page-service';
 import { generateTranscriptSummary } from '@/lib/integrations/zoom/generate-summary';
@@ -212,6 +212,11 @@ describe('POL-8 the org model and provider allowlists govern every model use in 
     // No drive (a personal call) is never restricted.
     await setPolicies({ providerAllowlist: ['anthropic'] });
     expect(await orgModelRefusal([null], [realtime])).toBeNull();
+    // A Global Assistant call's replayed history (it carries no drive) reaches the model only when EVERY org the person
+    // is in allows it — the memory-discovery rule: the owner's org drive refuses, so not all are readable.
+    expect((await memberDrivesReadableByModel(w.owner, realtime)).allReadable).toBe(false);
+    await setPolicies({ providerAllowlist: ['openai'], modelAllowlist: [realtime.modelId] });
+    expect((await memberDrivesReadableByModel(w.owner, realtime)).allReadable).toBe(true);
   });
 
   it('saving: an agent page\'s provider/model write to a model the org does not allow is refused and nothing is written; an allowed one is saved', async () => {
