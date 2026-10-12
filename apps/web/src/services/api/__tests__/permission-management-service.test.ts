@@ -19,6 +19,7 @@ vi.mock('@pagespace/db/schema/members', () => ({
   driveMembers: { driveId: 'driveMembers.driveId', userId: 'driveMembers.userId', role: 'driveMembers.role', acceptedAt: 'driveMembers.acceptedAt' },
 }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   getUserAccessLevel: vi.fn(async () => ({ canShare: true })),
   isDriveOwnerOrAdmin: vi.fn(async () => false),
 }));

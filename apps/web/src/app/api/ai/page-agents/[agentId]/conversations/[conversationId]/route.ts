@@ -11,7 +11,7 @@ import {
 import { broadcastAiConversationAdded, broadcastAiConversationRenamed, broadcastAiConversationDeleted } from '@/lib/websocket/socket-utils';
 import { resolveTriggeredBy } from '@/lib/websocket/broadcast-triggered-by';
 import { maskIdentifier } from '@/lib/logging/mask';
-import { actorFromAuth } from '@/lib/auth/request-actor';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 // Auth options: PATCH and DELETE are write operations requiring CSRF protection
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -56,10 +56,10 @@ export async function PATCH(
     const canEdit = await canPrincipalEditPage(auth, agentId);
     if (!canEdit) {
       auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'page_agent_conversation', resourceId: conversationId, details: { reason: 'no_edit_permission', agentId, method: 'PATCH' }, riskScore: 0.5 });
-      return NextResponse.json(
+      return deniedResponse(actorFromAuth(auth), agentId, NextResponse.json(
         { error: 'Insufficient permissions to modify this conversation' },
         { status: 403 }
-      );
+      ));
     }
 
     // Parse request body

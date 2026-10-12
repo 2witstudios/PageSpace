@@ -10,7 +10,7 @@ import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { deleteConversationsForDrive } from '@pagespace/lib/repositories/conversation-cleanup';
 import { loadDriveLeadAuthority } from '@pagespace/lib/permissions/drive-relationship-loader';
-import { actorFromAuth } from '@/lib/auth/request-actor';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -36,7 +36,7 @@ export async function DELETE(
     const drive = found && (await loadDriveLeadAuthority(actorFromAuth(auth), found, 'permanent_delete')).allowed ? found : undefined;
 
     if (!drive) {
-      return NextResponse.json({ error: 'Drive not found or access denied' }, { status: 404 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Drive not found or access denied' }, { status: 404 }));
     }
 
     if (isHomeDrive(drive)) {

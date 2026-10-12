@@ -26,7 +26,7 @@ import { priceInterruptedStep } from '@/lib/ai/core/interrupted-step-cost';
 import { createAdminRestrictedResponse, createSubscriptionRequiredResponse, requiresProSubscription } from '@/lib/subscription/rate-limit-middleware';
 import { creditGateErrorResponse } from '@/lib/subscription/credit-gate-response';
 import { buildSideQuestionSnapshot, createSideQuestionStream } from '@/lib/ai/btw/side-question';
-import { actorFromAuth } from '@/lib/auth/request-actor';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 export const maxDuration = 60;
 const MAX_QUESTION_CHARS = 2_000;
@@ -58,7 +58,7 @@ export async function POST(request: Request) {
     const [conversation] = await db.select({ userId: conversations.userId, isShared: conversations.isShared, type: conversations.type, contextId: conversations.contextId }).from(conversations).where(eq(conversations.id, conversationId)).limit(1);
     if (!conversation || !(await canAccessConversation(actorFromAuth(auth), conversation))) {
       auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'ai_btw', resourceId: conversationId, details: { reason: 'conversation_not_accessible', method: 'POST' }, riskScore: 0.5 });
-      return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
+      return deniedResponse(actorFromAuth(auth), conversation?.userId === userId ? conversation.contextId : null, NextResponse.json({ error: 'Conversation not found' }, { status: 404 }));
     }
 
     const trimmedQuestion = question.trim();

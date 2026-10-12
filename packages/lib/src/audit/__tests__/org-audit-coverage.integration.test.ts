@@ -277,10 +277,10 @@ describe('every org mutation writes its event', () => {
     await db.update(organizations).set({ stripeCustomerId: `cus_${createId()}` }).where(eq(organizations.id, orgId));
     await db.insert(wallets).values({ ownerType: 'org', orgId, monthlyRemainingCents: 500_000 });
     await db.insert(wallets).values({ userId: dana.id, monthlyRemainingCents: 5_000, monthlyPeriodStart: new Date(), monthlyPeriodEnd: new Date(Date.now() + 20 * 86_400_000) });
-    expect(await createDriveWallet(jono.id, productId, { allocationCents: 10_000 }, 'session')).toMatchObject({ ok: true });
-    expect(await updateDriveWallet(jono.id, productId, { donationsEnabled: true }, 'session')).toMatchObject({ ok: true });
-    expect(await topUpDriveWallet(jono.id, productId, { amountCents: 500, idempotencyKey: createId() }, 'session')).toMatchObject({ ok: true, duplicate: false });
-    expect(await donateToDrive(dana.id, productId, { amountCents: 100, idempotencyKey: createId() }, 'session')).toMatchObject({ ok: true, duplicate: false });
+    expect(await createDriveWallet(credentialActor(jono.id, null), productId, { allocationCents: 10_000 }, 'session')).toMatchObject({ ok: true });
+    expect(await updateDriveWallet(credentialActor(jono.id, null), productId, { donationsEnabled: true }, 'session')).toMatchObject({ ok: true });
+    expect(await topUpDriveWallet(credentialActor(jono.id, null), productId, { amountCents: 500, idempotencyKey: createId() }, 'session')).toMatchObject({ ok: true, duplicate: false });
+    expect(await donateToDrive(credentialActor(dana.id, null), productId, { amountCents: 100, idempotencyKey: createId() }, 'session')).toMatchObject({ ok: true, duplicate: false });
     const [orgRow] = await db.select().from(organizations).where(eq(organizations.id, orgId));
     const startS = Math.floor(Date.now() / 1000);
     expect(await applyOrgPoolRefill({

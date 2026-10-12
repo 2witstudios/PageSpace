@@ -11,7 +11,7 @@ import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPD
 import { getAppDriveMembership } from '@pagespace/lib/permissions/app-permissions';
 import { getActorInfo, logDriveActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { loadDriveLeadAuthority } from '@pagespace/lib/permissions/drive-relationship-loader';
-import { actorFromAuth } from '@/lib/auth/request-actor';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -56,7 +56,7 @@ export async function POST(
       : undefined;
 
     if (!drive) {
-      return NextResponse.json({ error: 'Drive not found or access denied' }, { status: 404 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Drive not found or access denied' }, { status: 404 }));
     }
 
     if (isHomeDrive(drive)) {

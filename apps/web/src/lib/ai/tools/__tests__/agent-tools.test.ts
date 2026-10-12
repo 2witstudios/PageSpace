@@ -11,6 +11,7 @@ vi.mock('@pagespace/lib/permissions/actor-authentication', () => ({
   explainOrgAuthenticationDenial: vi.fn(async () => null),
 }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
     canUserEditPage: vi.fn(),
 }));
 vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({

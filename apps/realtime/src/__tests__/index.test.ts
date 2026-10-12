@@ -74,14 +74,11 @@ vi.mock('@pagespace/lib/encryption/field-crypto', () => ({
 }));
 
 // permissions mock
+// SEC-2/3 seam: explainSignInRefusal names an org sign-in denial (the per-socket org-room watch is unit-tested on its own).
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
   getUserAccessLevel: vi.fn(),
   getUserDriveAccess: vi.fn(),
-}));
-
-// SEC-2/3 seam: the org sign-in denial explainer and the per-socket org-room watch (unit-tested on their own).
-vi.mock('@pagespace/lib/permissions/actor-authentication', () => ({
-  explainOrgAuthenticationDenial: vi.fn().mockResolvedValue(null),
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
 }));
 const mockOrgRoomWatch = { track: vi.fn().mockResolvedValue(undefined), untrack: vi.fn(), recheck: vi.fn().mockResolvedValue(undefined), dispose: vi.fn() };
 vi.mock('../org-room-watch', () => ({
@@ -376,11 +373,10 @@ vi.mock('socket.io', () => ({
 // ---------------------------------------------------------------------------
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { verifyBroadcastSignature } from '@pagespace/lib/auth/broadcast-auth';
-import { getUserAccessLevel, getUserDriveAccess } from '@pagespace/lib/permissions/permissions';
+import { explainSignInRefusal, getUserAccessLevel, getUserDriveAccess } from '@pagespace/lib/permissions/permissions';
 import { canViewDriveWallet } from '@pagespace/lib/permissions/spend-standing';
 import { canAccessConversation } from '@pagespace/lib/permissions/conversation-access';
 import { sessionService } from '@pagespace/lib/auth/session-service';
-import { explainOrgAuthenticationDenial } from '@pagespace/lib/permissions/actor-authentication';
 import { decryptField } from '@pagespace/lib/encryption/field-crypto';
 import { emitValidationError } from '../validation';
 
@@ -1353,7 +1349,7 @@ describe('Socket.IO connection handler', () => {
 
     it('SEC-2 (partial) a realtime join with a credential the org refuses is denied, and the socket is told to sign in again rather than disconnected', async () => {
       vi.mocked(getUserAccessLevel).mockResolvedValue(null);
-      vi.mocked(explainOrgAuthenticationDenial).mockResolvedValueOnce('org_strong_sign_in_required');
+      vi.mocked(explainSignInRefusal).mockResolvedValueOnce('org_strong_sign_in_required');
       const socket = createMockSocket({ id: 'socket-1', data: { user: { id: 'user-1', name: 'T', avatarUrl: null } } });
       capturedIoConnectionCallback!(socket);
 
@@ -1430,7 +1426,7 @@ describe('Socket.IO connection handler', () => {
       capturedIoConnectionCallback!(viewer);
       await viewer._trigger('join_drive', 'athmieqpwr4ax1t2e0i4lmor');
       expect(viewer.join).toHaveBeenCalledWith('drive:athmieqpwr4ax1t2e0i4lmor:wallet');
-      expect(canViewDriveWallet).toHaveBeenLastCalledWith('user-1', 'athmieqpwr4ax1t2e0i4lmor');
+      expect(canViewDriveWallet).toHaveBeenLastCalledWith(expect.objectContaining({ via: 'credential', userId: 'user-1' }), 'athmieqpwr4ax1t2e0i4lmor');
 
       vi.mocked(canViewDriveWallet).mockResolvedValueOnce(false);
       const collaborator = createMockSocket({ id: 'socket-c', data: { user: { id: 'user-2', name: 'C', avatarUrl: null } } });

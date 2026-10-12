@@ -1,14 +1,13 @@
 import './instrument';
 import { getDrivePolicies, getDriveAuthenticationPolicies, getResourceDriveIds } from '@pagespace/lib/organizations/policy-reader';
 import { credentialActor, type AccessActor } from '@pagespace/lib/permissions/access-actor';
-import { explainOrgAuthenticationDenial } from '@pagespace/lib/permissions/actor-authentication';
 import { createOrgRoomWatch, ORG_REAUTHENTICATION_REQUIRED_EVENT, type OrgRoomWatch } from './org-room-watch';
 import { ORG_CHANGED_EVENT } from '@pagespace/lib/realtime/org-wallet-events';
 import * as Sentry from '@sentry/node';
 import { createServer, IncomingMessage, ServerResponse } from 'http';
 import type { Duplex } from 'stream';
 import { Server, Socket } from 'socket.io';
-import { getUserAccessLevel, getUserDriveAccess } from '@pagespace/lib/permissions/permissions';
+import { explainSignInRefusal, getUserAccessLevel, getUserDriveAccess } from '@pagespace/lib/permissions/permissions';
 import { SHELL_BRIDGE_ROUTES } from '@pagespace/lib/agent-workspaces/shells-contract';
 import { sessionService } from '@pagespace/lib/auth/session-service';
 import { verifyBroadcastSignature } from '@pagespace/lib/auth/broadcast-auth';
@@ -1260,7 +1259,7 @@ const orgRoomWatches = new Map<string, OrgRoomWatch>();
  * person to sign in again, and answer true so the caller does not treat it as a protocol violation.
  */
 async function emitSignInDenial(socket: AuthSocket, actor: AccessActor, resourceId: string): Promise<boolean> {
-  const code = await explainOrgAuthenticationDenial(actor, resourceId);
+  const code = await explainSignInRefusal(actor, resourceId);
   if (code) socket.emit(ORG_REAUTHENTICATION_REQUIRED_EVENT, { code, resourceId });
   return code !== null;
 }
@@ -1457,7 +1456,7 @@ io.on('connection', (socket: AuthSocket) => {
         const rooms = [driveRoom(driveId), driveCalendarRoom(driveId)];
         // X-4: wallet:changed reaches only people with a wallet view of the drive, never a
         // page-share collaborator whose drive-room access comes from a page grant alone.
-        if (await canViewDriveWallet(user.id, driveId)) rooms.push(driveWalletRoom(driveId));
+        if (await canViewDriveWallet(actor, driveId)) rooms.push(driveWalletRoom(driveId));
         for (const room of rooms) {
           socket.join(room);
           socketRegistry.trackRoomJoin(socket.id, room);

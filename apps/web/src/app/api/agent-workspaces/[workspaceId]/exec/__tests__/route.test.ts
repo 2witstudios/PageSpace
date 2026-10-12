@@ -35,6 +35,7 @@ vi.mock('@/lib/auth', () => ({
 }));
 // The REAL principal code-exec helper runs too; only its permission reads are faked.
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   getUserDrivePermissions: (...args: unknown[]) => mockGetUserDrivePermissions(...args),
 }));
 vi.mock('@pagespace/lib/permissions/membership-queries', () => ({

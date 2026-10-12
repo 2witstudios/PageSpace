@@ -14,7 +14,7 @@ import { releasePendingUpload } from '@pagespace/lib/services/pending-uploads';
 import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
 import { checkObjectExists, issuePresignedPutUrl } from '@/lib/upload/s3-effects';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { actorFromAuth } from '@/lib/auth/request-actor';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 const PRESIGN_TTL = 900;
@@ -60,10 +60,10 @@ export async function POST(request: Request) {
   } else {
     const drivePerms = await getUserDrivePermissions(actorFromAuth(auth), driveId);
     if (!drivePerms) {
-      return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Drive not found' }, { status: 404 }));
     }
     if (!drivePerms.canEdit) {
-      return NextResponse.json({ error: 'You do not have permission to upload to this drive' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'You do not have permission to upload to this drive' }, { status: 403 }));
     }
   }
 

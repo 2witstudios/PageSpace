@@ -83,6 +83,7 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: (...a: unknown[]) => isAuthErrorMock(...a),
 }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   canUserViewPage: (...a: unknown[]) => canUserViewPageMock(...a),
 }));
 vi.mock('@pagespace/lib/permissions/conversation-access', () => ({

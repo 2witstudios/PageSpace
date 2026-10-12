@@ -21,6 +21,7 @@ vi.mock('@pagespace/db/schema/members', () => ({
   },
 }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   isDriveOwnerOrAdmin: vi.fn(async () => false),
 }));
 vi.mock('@pagespace/lib/pages/circular-reference-guard', () => ({

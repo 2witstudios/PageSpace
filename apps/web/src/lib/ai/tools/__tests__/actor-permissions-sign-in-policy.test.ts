@@ -14,6 +14,7 @@ vi.mock('@pagespace/lib/permissions/actor-authentication', () => ({
   checkActorDriveAuthentication: mockCheckDrive,
 }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   getUserAccessLevel: mockGetUserAccessLevel,
   getUserDriveAccess: vi.fn(),
   canUserEditPage: mockCanUserEditPage,

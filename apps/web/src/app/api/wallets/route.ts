@@ -4,6 +4,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { listMyWallets } from '@pagespace/lib/services/drive-wallet-service';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { WALLET_READ_AUTH, refuseScopedTokenForAccountRead, walletCredentialOf } from '@/lib/wallets/wallet-route';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 /**
  * GET /api/wallets — Settings › Usage › Wallets (Spec UI-10): everything the caller spends from
@@ -22,7 +23,7 @@ export async function GET(request: Request) {
   const scopeError = refuseScopedTokenForAccountRead(auth);
   if (scopeError) return scopeError;
   try {
-    const wallets = await listMyWallets(auth.userId, walletCredentialOf(auth));
+    const wallets = await listMyWallets(actorFromAuth(auth), walletCredentialOf(auth));
     auditRequest(request, {
       eventType: 'data.read',
       userId: auth.userId,

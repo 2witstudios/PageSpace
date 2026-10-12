@@ -20,6 +20,7 @@ vi.mock('@pagespace/db/schema/commands', () => ({
   commands: { id: 'id' },
 }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   canUserViewPage: vi.fn(),
   isUserDriveMember: vi.fn(),
   getBatchPagePermissions: vi.fn(),

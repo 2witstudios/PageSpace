@@ -16,7 +16,7 @@ import {
 } from '@/lib/canvas/file-view-links';
 import { createCanvasFileViewToken } from '@/lib/canvas/file-view-token';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { actorFromVerifiedUser } from '@/lib/auth/request-actor';
+import { actorFromVerifiedUser, deniedResponse } from '@/lib/auth/request-actor';
 import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 /**
@@ -101,7 +101,7 @@ export async function GET(
       details: { reason: 'no_view_access', surface: 'canvas_preview' },
       riskScore: 0.4,
     });
-    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    return deniedResponse(actorFromVerifiedUser(user), pageId, NextResponse.json({ error: 'Forbidden' }, { status: 403 }));
   }
 
   const page = await db.query.pages.findFirst({

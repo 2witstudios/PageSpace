@@ -80,6 +80,7 @@ vi.mock('@pagespace/lib/permissions/membership-queries', () => ({
   resolveDriveWideCanEdit: vi.fn(),
 }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   getUserAccessLevel: vi.fn(),
 }));
 vi.mock('@pagespace/db/db', () => ({

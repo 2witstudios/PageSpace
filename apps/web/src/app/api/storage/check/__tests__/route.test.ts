@@ -23,6 +23,7 @@ vi.mock('@pagespace/lib/services/storage-limits', () => ({
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   getUserDrivePermissions: vi.fn(),
 }));
 

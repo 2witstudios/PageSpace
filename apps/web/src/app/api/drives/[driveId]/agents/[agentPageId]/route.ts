@@ -9,7 +9,7 @@ import { eq, and } from '@pagespace/db/operators';
 import { driveAgentMembers, driveRoles } from '@pagespace/db/schema/members';
 import { guardDriveAccess, isOrgLapsedError } from '@pagespace/lib/permissions/org-lapse-guard';
 import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
-import { actorFromAuth } from '@/lib/auth/request-actor';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
@@ -36,10 +36,10 @@ export async function PATCH(
 
     const access = await checkDriveAccess(driveId, actorFromAuth(auth));
     if (!access.drive) {
-      return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Drive not found' }, { status: 404 }));
     }
     if (!access.isOwner && !access.isAdmin) {
-      return NextResponse.json({ error: 'Only drive owners and admins can update agent members' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Only drive owners and admins can update agent members' }, { status: 403 }));
     }
 
     const rawBody = await request.json();
@@ -130,10 +130,10 @@ export async function DELETE(
 
     const access = await checkDriveAccess(driveId, actorFromAuth(auth));
     if (!access.drive) {
-      return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Drive not found' }, { status: 404 }));
     }
     if (!access.isOwner && !access.isAdmin) {
-      return NextResponse.json({ error: 'Only drive owners and admins can remove agent members' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Only drive owners and admins can remove agent members' }, { status: 403 }));
     }
 
     // Verify membership exists

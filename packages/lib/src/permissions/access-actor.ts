@@ -16,7 +16,7 @@ import {
  * - `automation`: work running as its creator with no one signing in (D-OW-34: workflows, triggers,
  *   cron). Sign-in policy does not apply to it; membership and every other policy still do.
  */
-export type AccessActor =
+export type AccessActor = (
   | {
       readonly via: 'credential';
       readonly userId: string;
@@ -26,20 +26,28 @@ export type AccessActor =
       readonly via: 'automation';
       readonly userId: string;
       readonly reason: string;
-    };
+    }
+) & AccessActorBrand;
+
+/**
+ * Opaque: only credentialActor / automationActor can produce one, so neither a plain string nor a hand-written object
+ * literal type-checks as an actor (an `any` still can; the guard test pins the request-body shapes that feed it).
+ */
+declare const accessActorBrand: unique symbol;
+type AccessActorBrand = { readonly [accessActorBrand]: true };
 
 export function credentialActor(
   userId: string,
   authentication: VerifiedAuthentication | null | undefined,
 ): AccessActor {
   if (!userId) throw new Error('An access actor needs a user');
-  return Object.freeze({ via: 'credential', userId, authentication: authentication ?? null });
+  return Object.freeze({ via: 'credential', userId, authentication: authentication ?? null }) as AccessActor;
 }
 
 export function automationActor(userId: string, reason: string): AccessActor {
   if (!userId) throw new Error('An access actor needs a user');
   if (!reason) throw new Error('An automation actor must name why it runs');
-  return Object.freeze({ via: 'automation', userId, reason });
+  return Object.freeze({ via: 'automation', userId, reason }) as AccessActor;
 }
 
 /**

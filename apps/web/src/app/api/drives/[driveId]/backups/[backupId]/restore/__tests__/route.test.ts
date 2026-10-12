@@ -16,6 +16,7 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
 }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   isDriveOwnerOrAdmin: vi.fn(),
 }));
 vi.mock('@pagespace/db/db', () => ({

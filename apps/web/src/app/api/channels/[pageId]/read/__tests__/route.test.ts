@@ -20,6 +20,7 @@ vi.mock('@/lib/auth', () => ({
 
 // --- Permissions -----------------------------------------------------------------
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   canUserViewPage: vi.fn(),
 }));
 

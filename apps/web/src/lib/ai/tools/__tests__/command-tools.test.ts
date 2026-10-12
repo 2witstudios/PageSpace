@@ -80,6 +80,7 @@ vi.mock('@pagespace/lib/permissions/member-drives', () => ({
   getMemberDriveIds: vi.fn(async () => []),
 }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   canUserViewPage: vi.fn(),
   isDriveOwnerOrAdmin: vi.fn(),
 }));

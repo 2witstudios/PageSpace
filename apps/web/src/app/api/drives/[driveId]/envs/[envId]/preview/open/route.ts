@@ -31,7 +31,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { isDevPreviewConfigured } from '@pagespace/lib/services/sandbox/preview/dev-preview-env';
 import { resolveEnvInDrive } from '@/lib/drive-envs/drive-envs-runtime';
 import { isAllowedPreviewOpen, openPreviewForUser, signInOrDeny } from '@/lib/dev-preview/preview-runtime';
-import { actorFromAuth } from '@/lib/auth/request-actor';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
 const ROUTE = 'drive-envs/preview/open';
@@ -52,7 +52,7 @@ export async function GET(request: Request, context: { params: Promise<{ driveId
     }
     if (!(await isPrincipalDriveMember(auth, driveId))) {
       auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'drive', resourceId: driveId, details: { route: ROUTE, envId } });
-      return NextResponse.json({ error: 'Not a member of this drive' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Not a member of this drive' }, { status: 403 }));
     }
     if (!(await resolveEnvInDrive(envId, driveId))) return NextResponse.json({ error: 'Environment not found' }, { status: 404 });
 

@@ -17,7 +17,7 @@ import { getActorInfo, logFileActivity } from '@pagespace/lib/monitoring/activit
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { enqueueProcessorJob } from '@/lib/upload/processor-effects';
 import { checkObjectExists } from '@/lib/upload/s3-effects';
-import { actorFromAuth } from '@/lib/auth/request-actor';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -211,10 +211,10 @@ export async function POST(request: Request) {
   } else {
     const drivePerms = await getUserDrivePermissions(actorFromAuth(auth), driveId);
     if (!drivePerms) {
-      return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Drive not found' }, { status: 404 }));
     }
     if (!drivePerms.canEdit) {
-      return NextResponse.json({ error: 'You do not have permission to upload to this drive' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'You do not have permission to upload to this drive' }, { status: 403 }));
     }
   }
 

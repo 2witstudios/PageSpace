@@ -40,6 +40,7 @@ vi.mock('@/lib/ai/tools/actor-permissions', () => ({
   canActorConsultAgent: vi.fn().mockResolvedValue(true),
 }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
     canUserViewPage: vi.fn(),
 }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({

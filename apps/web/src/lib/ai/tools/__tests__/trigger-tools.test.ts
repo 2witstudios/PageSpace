@@ -80,6 +80,7 @@ vi.mock('@/lib/workflows/task-trigger-helpers', () => ({
   recomputeTaskTriggerMetadata: mockRecomputeTaskTriggerMetadata,
 }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   isUserDriveMember: mockIsUserDriveMember,
 }));
 vi.mock('../actor-permissions', () => ({

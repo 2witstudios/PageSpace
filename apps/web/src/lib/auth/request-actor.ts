@@ -4,7 +4,7 @@
  */
 import { NextResponse } from 'next/server';
 import { credentialActor, type AccessActor, type OrgAuthenticationDenialCode } from '@pagespace/lib/permissions/access-actor';
-import { explainOrgAuthenticationDenial } from '@pagespace/lib/permissions/actor-authentication';
+import { explainSignInRefusal } from '@pagespace/lib/permissions/permissions';
 import type { AuthResult } from './index';
 import type { VerifiedUser } from './auth';
 
@@ -34,9 +34,15 @@ export function orgSignInRequiredResponse(code: OrgAuthenticationDenialCode): Ne
 
 /**
  * After an access check refused `actor` on a page or drive: the sign-in-required response when the org's sign-in
- * policy is why, else `fallback` (the route's own 403/404). Never widens anything: it only names a refusal.
+ * policy is why, else `fallback` (the route's own 403/404). Never widens anything: it only names a refusal. A
+ * resource with no page or drive (null) has no org to name, so the fallback stands.
  */
-export async function deniedResponse(actor: AccessActor, resourceId: string, fallback: NextResponse): Promise<NextResponse> {
-  const code = await explainOrgAuthenticationDenial(actor, resourceId);
+export async function deniedResponse(
+  actor: AccessActor,
+  resourceId: string | null | undefined,
+  fallback: NextResponse,
+): Promise<NextResponse> {
+  if (!resourceId) return fallback;
+  const code = await explainSignInRefusal(actor, resourceId);
   return code ? orgSignInRequiredResponse(code) : fallback;
 }

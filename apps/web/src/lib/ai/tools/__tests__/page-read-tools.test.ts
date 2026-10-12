@@ -96,6 +96,7 @@ vi.mock('@pagespace/db/schema/chat', () => ({
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
     getUserAccessLevel: vi.fn(),
     getUserAccessiblePagesInDriveWithDetails: vi.fn(),
     getUserDriveAccess: vi.fn(),

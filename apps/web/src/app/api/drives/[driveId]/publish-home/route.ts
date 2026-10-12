@@ -9,7 +9,7 @@ import { publishHomePageAtRoot, PublishError } from '@/lib/canvas/publish-page';
 import { isPublishConfigured } from '@/lib/canvas/published-storage';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { actorFromAuth } from '@/lib/auth/request-actor';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -35,10 +35,10 @@ export async function POST(
   const userId = auth.userId;
 
   if (!(await isPrincipalDriveOwnerOrAdmin(auth, driveId))) {
-    return NextResponse.json(
+    return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json(
       { error: 'Only drive owners and admins can publish the home page' },
       { status: 403 },
-    );
+    ));
   }
 
   // Operational kill-switch: mirror the per-page publish endpoint so this route

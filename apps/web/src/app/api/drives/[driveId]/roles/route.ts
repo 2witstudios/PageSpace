@@ -7,7 +7,7 @@ import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-s
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { isOrgLapsedError } from '@pagespace/lib/permissions/org-lapse-guard';
 import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
-import { actorFromAuth } from '@/lib/auth/request-actor';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -30,11 +30,11 @@ export async function GET(
     const access = await checkDriveAccessForRoles(driveId, actorFromAuth(auth));
 
     if (!access.drive) {
-      return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Drive not found' }, { status: 404 }));
     }
 
     if (!access.isOwner && !access.isMember) {
-      return NextResponse.json({ error: 'Not a member of this drive' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Not a member of this drive' }, { status: 403 }));
     }
 
     // Fetch all roles for the drive
@@ -66,11 +66,11 @@ export async function POST(
     const access = await checkDriveAccessForRoles(driveId, actorFromAuth(auth));
 
     if (!access.drive) {
-      return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Drive not found' }, { status: 404 }));
     }
 
     if (!access.isOwner && !access.isAdmin) {
-      return NextResponse.json({ error: 'Only owners and admins can create roles' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Only owners and admins can create roles' }, { status: 403 }));
     }
 
     const body = await request.json();

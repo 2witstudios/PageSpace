@@ -9,7 +9,7 @@ import { driveInviteRepository } from '@/lib/repositories/drive-invite-repositor
 import { canAdministerDrive } from '@pagespace/lib/permissions/drive-relationship';
 import { loadDriveRelationship } from '@pagespace/lib/permissions/drive-relationship-loader';
 import { handleEmailPath, handleUserIdPath } from '@/lib/drive-invites/invite-handlers';
-import { actorFromAuth } from '@/lib/auth/request-actor';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -97,10 +97,10 @@ export async function POST(
         resourceId: driveId,
         details: { operation: 'invite', reason: 'not_drive_admin' },
       });
-      return NextResponse.json(
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json(
         { error: 'Only drive owners and admins can add members' },
         { status: 403 }
-      );
+      ));
     }
 
     if ('userId' in body) {

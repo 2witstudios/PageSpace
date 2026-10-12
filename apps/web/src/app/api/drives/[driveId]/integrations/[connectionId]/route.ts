@@ -6,7 +6,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';
 import { getConnectionById, getConnectionWithProvider, deleteConnection } from '@pagespace/lib/integrations/repositories/connection-repository';
-import { actorFromAuth } from '@/lib/auth/request-actor';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -27,7 +27,7 @@ export async function GET(
   try {
     const access = await getDriveAccess(driveId, actorFromAuth(auth));
     if (!access.isMember) {
-      return NextResponse.json({ error: 'Access denied' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Access denied' }, { status: 403 }));
     }
 
     const connection = await getConnectionWithProvider(db, connectionId);
@@ -76,7 +76,7 @@ export async function DELETE(
   try {
     const access = await getDriveAccess(driveId, actorFromAuth(auth));
     if (!access.isOwner && !access.isAdmin) {
-      return NextResponse.json({ error: 'Admin access required' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Admin access required' }, { status: 403 }));
     }
 
     const connection = await getConnectionById(db, connectionId);

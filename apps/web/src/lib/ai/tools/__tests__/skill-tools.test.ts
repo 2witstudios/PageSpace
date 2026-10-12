@@ -14,6 +14,7 @@ vi.mock('@/lib/commands/available-commands', () => ({
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   isUserDriveMember: mockIsUserDriveMember,
 }));
 

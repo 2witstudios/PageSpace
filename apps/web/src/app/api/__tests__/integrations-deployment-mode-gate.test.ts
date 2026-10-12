@@ -81,6 +81,7 @@ vi.mock('@pagespace/lib/integrations/providers/builtin-providers', () => ({
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   canUserEditPage: vi.fn().mockResolvedValue(true),
 }));
 

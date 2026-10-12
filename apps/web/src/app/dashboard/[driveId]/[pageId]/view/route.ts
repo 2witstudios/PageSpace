@@ -9,7 +9,7 @@ import { PageType } from '@pagespace/lib/utils/enums';
 import { isDangerousMimeType, sanitizeFilenameForHeader } from '@pagespace/lib/utils/file-security';
 import { generatePresignedUrl, getPresignedUrlTtl } from '@/lib/presigned-url';
 import { verifyCanvasFileViewToken } from '@/lib/canvas/file-view-token';
-import { actorFromVerifiedUser } from '@/lib/auth/request-actor';
+import { actorFromVerifiedUser, deniedResponse } from '@/lib/auth/request-actor';
 
 interface RouteParams {
   params: Promise<{
@@ -57,7 +57,7 @@ export async function GET(request: Request, context: RouteParams) {
 
     const canView = await canUserViewPage(actorFromVerifiedUser(user), pageId);
     if (!canView) {
-      return NextResponse.json({ error: 'You do not have access to this file' }, { status: 403 });
+      return deniedResponse(actorFromVerifiedUser(user), pageId, NextResponse.json({ error: 'You do not have access to this file' }, { status: 403 }));
     }
   }
 

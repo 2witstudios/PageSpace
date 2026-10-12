@@ -13,7 +13,7 @@ import { validateCronExpression, validateTimezone, getNextRunDate } from '@/lib/
 import { resolveTimezone } from '@/lib/ai/core/personalization-utils';
 import { workflowStepsSchema, validateStepsForApi } from '@/lib/workflows/steps-api-validation';
 import { AUTOMATION_OWNER_LEFT_CODE, AUTOMATION_OWNER_LEFT_ERROR } from '@pagespace/lib/permissions/automation-ownership';
-import { actorFromAuth } from '@/lib/auth/request-actor';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -52,7 +52,7 @@ async function getWorkflowWithAuth(workflowId: string, auth: AuthResult) {
   if (!(await isPrincipalDriveOwnerOrAdmin(auth, workflow.driveId))) {
     const access = await checkDriveAccess(workflow.driveId, actorFromAuth(auth));
     if (!access.drive) return { error: NextResponse.json({ error: 'Drive not found' }, { status: 404 }) };
-    return { error: NextResponse.json({ error: 'Only drive owners and admins can manage workflows' }, { status: 403 }) };
+    return { error: await deniedResponse(actorFromAuth(auth), workflow.driveId, NextResponse.json({ error: 'Only drive owners and admins can manage workflows' }, { status: 403 })) };
   }
 
   return { workflow };

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   getUserAccessLevel: vi.fn(),
   canUserViewPage: vi.fn(),
   canUserEditPage: vi.fn(),

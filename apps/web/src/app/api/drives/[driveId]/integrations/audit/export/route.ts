@@ -8,7 +8,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';
 import { format } from 'date-fns';
 import { buildAuditLogWhereClause, parseAuditFilterParams } from '../audit-filters';
-import { actorFromAuth } from '@/lib/auth/request-actor';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session'] as const };
 const CSV_HEADER = [
@@ -58,7 +58,7 @@ export async function GET(
   try {
     const access = await getDriveAccess(driveId, actorFromAuth(auth));
     if (!access.isOwner && !access.isAdmin) {
-      return NextResponse.json({ error: 'Admin access required' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Admin access required' }, { status: 403 }));
     }
 
     const { searchParams } = new URL(request.url);

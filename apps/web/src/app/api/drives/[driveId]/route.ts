@@ -14,7 +14,7 @@ import { trackDriveOperation } from '@pagespace/lib/monitoring/activity-tracker'
 import { syncPublishedHomeRoot, regeneratePublishedSiteFiles } from '@/lib/canvas/publish-page';
 import { resolveUploadedImageAssetUrl } from '@/lib/canvas/asset-pipeline';
 import { db } from '@pagespace/db/db';
-import { actorFromAuth } from '@/lib/auth/request-actor';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -70,7 +70,7 @@ export async function GET(
       }
       const level = await getAppDriveAccessLevel(actorFromAuth(auth), auth.tokenId, driveId);
       if (!level?.canView) {
-        return NextResponse.json({ error: 'Access denied' }, { status: 403 });
+        return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Access denied' }, { status: 403 }));
       }
       const membership = await getAppDriveMembership(actorFromAuth(auth), auth.tokenId, driveId);
       if (membership?.role === null) {
@@ -95,7 +95,7 @@ export async function GET(
       if (!drive) {
         return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
       }
-      return NextResponse.json({ error: 'Access denied' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Access denied' }, { status: 403 }));
     }
 
     return NextResponse.json(driveWithAccess);
@@ -160,10 +160,10 @@ export async function PATCH(
     // Check authorization: owner/admin authority. Scoped tokens with an
     // explicit role need OWNER/ADMIN; inherited keys use the owner's authority.
     if (!(await isPrincipalDriveOwnerOrAdmin(auth, driveId))) {
-      return NextResponse.json(
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json(
         { error: 'Only drive owners and admins can update drive settings' },
         { status: 403 }
-      );
+      ));
     }
 
     // A rename taken through org Owner/Admin power (an org drive the actor does not lead) is audited.
@@ -351,10 +351,10 @@ export async function DELETE(
     // Check authorization: owner/admin authority. Scoped tokens with an
     // explicit role need OWNER/ADMIN; inherited keys use the owner's authority.
     if (!(await isPrincipalDriveOwnerOrAdmin(auth, driveId))) {
-      return NextResponse.json(
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json(
         { error: 'Only drive owners and admins can delete drives' },
         { status: 403 }
-      );
+      ));
     }
 
     // Trashing through org Owner/Admin power (an org drive the actor does not lead) is audited.

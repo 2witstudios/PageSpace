@@ -32,6 +32,7 @@ vi.mock('@pagespace/db/schema/core', () => ({
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   canUserViewPage: mockCanUserViewPage,
 }));
 

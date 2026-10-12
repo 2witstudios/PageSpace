@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { db } from '@pagespace/db/db'
 import { eq } from '@pagespace/db/operators'
 import { drives } from '@pagespace/db/schema/core'
@@ -10,6 +11,12 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { getActorInfo, logDriveActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { deleteConversationsForDrive } from '@pagespace/lib/repositories/conversation-cleanup';
 
+const handleDriveBodySchema = z.object({
+  driveId: z.string().optional(),
+  action: z.string().optional(),
+  newOwnerId: z.string().optional(),
+});
+
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
 export async function POST(req: Request) {
@@ -20,8 +27,12 @@ export async function POST(req: Request) {
   const userId = auth.userId;
 
   try {
-    const body = await req.json();
-    const { driveId, action, newOwnerId } = body;
+    // Typed at the boundary: `newOwnerId` reaches a membership lookup, so an untyped body never does (D-OW-45).
+    const parsed = handleDriveBodySchema.safeParse(await req.json().catch(() => null));
+    if (!parsed.success) {
+      return Response.json({ error: 'Drive ID and action are required' }, { status: 400 });
+    }
+    const { driveId, action, newOwnerId } = parsed.data;
 
     // Validate inputs
     if (!driveId || !action) {
@@ -72,13 +83,13 @@ export async function POST(req: Request) {
       return Response.json({ error: homeDriveActionError(drive, 'transfer') }, { status: 403 });
     }
 
-    if (action === 'transfer') {
+    if (action === 'transfer' && newOwnerId) {
       // Verify the new owner is an *accepted* admin in the drive. A pending
       // admin (acceptedAt IS NULL) must not receive ownership — they have
       // never authenticated to the drive and cannot consent. Closes Review C2.
       // The org-aware membership reads ACCEPTED rows only; only an effective ADMIN qualifies.
       // A THIRD-PARTY membership fact (the new owner is not the caller): no credential of theirs is involved.
-      const newOwner = (await loadUserDriveRelationships(String(newOwnerId), [drive])).get(drive.id) ?? { isOwner: false, membership: null };
+      const newOwner = (await loadUserDriveRelationships(newOwnerId, [drive])).get(drive.id) ?? { isOwner: false, membership: null };
 
       if (newOwner.membership?.role !== 'ADMIN') {
         return Response.json(

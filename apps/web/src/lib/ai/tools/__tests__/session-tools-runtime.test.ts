@@ -67,6 +67,7 @@ vi.mock('@/lib/agent-workspaces/agent-workspaces-runtime', () => ({
   renameSession: mockRenameSession,
 }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   canUserViewPage: mockCanUserViewPage,
   getDriveIdsForUser: mockGetDriveIdsForUser,
 }));

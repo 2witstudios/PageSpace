@@ -9,6 +9,7 @@ import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getContextWindow } from '@pagespace/lib/monitoring/ai-monitoring';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session'] as const };
 
@@ -42,9 +43,9 @@ export async function GET(
     // Check permissions
     const accessLevel = await getPrincipalAccessLevel(auth, pageId);
     if (!accessLevel || !accessLevel.canView) {
-      return NextResponse.json({
+      return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json({
         error: 'Access denied'
-      }, { status: 403 });
+      }, { status: 403 }));
     }
 
     // Fetch all usage logs for this page

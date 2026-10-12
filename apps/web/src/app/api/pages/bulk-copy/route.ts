@@ -19,7 +19,7 @@ import { createChangeGroupId } from '@pagespace/lib/monitoring/change-group';
 import { ensureTaskItemForPage } from '@/services/api/task-sync-service';
 import { OrgLapsedError, checkDriveMayLoosen, isOrgLapsedError } from '@pagespace/lib/permissions/org-lapse-guard';
 import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
-import { actorFromAuth } from '@/lib/auth/request-actor';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -131,10 +131,10 @@ export async function POST(request: Request) {
     for (const page of sourcePages) {
       const canView = await canPrincipalViewPage(auth, page.id);
       if (!canView) {
-        return NextResponse.json(
+        return deniedResponse(actorFromAuth(auth), page.id, NextResponse.json(
           { error: `You do not have permission to copy page: ${page.title}` },
           { status: 403 }
-        );
+        ));
       }
     }
 

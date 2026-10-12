@@ -26,6 +26,7 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
   auditRequest: vi.fn(),
 }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   isUserDriveMember: vi.fn(),
   getBatchPagePermissions: vi.fn(),
 }));
@@ -47,6 +48,7 @@ const withBuiltins = (...triggers: string[]) =>
   [...BUILTIN_COMMANDS.map((c) => c.trigger), ...triggers].sort();
 import { getBatchPagePermissions, isUserDriveMember } from '@pagespace/lib/permissions/permissions';
 import { authenticateRequestWithOptions } from '@/lib/auth';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const mockedAuth = vi.mocked(authenticateRequestWithOptions);
 const mockedDb = vi.mocked(db, true);
@@ -320,6 +322,6 @@ vi.mock('@/lib/auth/principal-permissions', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/auth/principal-permissions')>();
   const permissions = await import('@pagespace/lib/permissions/permissions');
   return { ...actual,
-    isPrincipalDriveMember: (auth: { userId: string }, resourceId: string) => permissions.isUserDriveMember(auth.userId as never, resourceId),
+    isPrincipalDriveMember: (auth: { userId: string }, resourceId: string) => permissions.isUserDriveMember(credentialActor(auth.userId, null), resourceId),
   };
 });

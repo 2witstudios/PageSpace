@@ -24,6 +24,7 @@ vi.mock('@pagespace/db/operators', () => ({
 
 const canUserViewPage = vi.fn();
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   canUserViewPage: (...args: unknown[]) => canUserViewPage(...args),
 }));
 

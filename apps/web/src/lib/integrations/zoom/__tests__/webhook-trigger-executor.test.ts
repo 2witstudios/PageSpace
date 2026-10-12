@@ -39,7 +39,8 @@ vi.mock('@pagespace/db/schema/workflows', () => ({ workflows: { id: 'id' } }));
 vi.mock('@/lib/workflows/workflow-executor', () => ({ executeWorkflow: mockExecuteWorkflow }));
 vi.mock('@pagespace/lib/billing/credit-gate', () => ({ canConsumeAI: mockCanConsumeAI }));
 vi.mock('@pagespace/lib/billing/credit-consume', () => ({ releaseHold: mockReleaseHold }));
-vi.mock('@pagespace/lib/permissions/permissions', () => ({ isUserDriveMember: mockIsUserDriveMember }));
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null), isUserDriveMember: mockIsUserDriveMember }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     api: { child: vi.fn(() => makeChildLogger()), info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },

@@ -35,6 +35,7 @@ vi.mock('@/lib/auth', () => ({
 const canUserEditPage = vi.fn();
 const canUserViewPage = vi.fn();
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   canUserEditPage: (...args: unknown[]) => canUserEditPage(...args),
 }));
 

@@ -39,7 +39,7 @@ import { resolveEnvInDrive } from '@/lib/drive-envs/drive-envs-runtime';
 import { stopPublishedApp, wakePublishedApp } from '@pagespace/lib/services/app-hosting/app-lifecycle-metering';
 import { unparkPublishedApp, type UnparkHeld } from '@pagespace/lib/services/app-hosting/app-unpark';
 import { findPublishedAppByEnvId, findPublishedAppById, toPublishedAppDTO } from '@/lib/app-hosting/published-app-dto';
-import { actorFromAuth } from '@/lib/auth/request-actor';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 /** Why a parked app cannot be un-parked yet, in words for the person who asked. */
 const UNPARK_HELD_MESSAGES: Readonly<Record<UnparkHeld, string>> = {
@@ -69,7 +69,7 @@ export async function POST(request: Request, context: { params: Promise<{ driveI
         resourceId: driveId,
         details: { route: 'drive-envs-app-actions', envId },
       });
-      return NextResponse.json({ error: 'Only drive owners and admins can manage a published app' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Only drive owners and admins can manage a published app' }, { status: 403 }));
     };
     // A drive owner/admin may run every action. Any other drive member gets as far as a PARKED
     // app's resume, whose un-park authority (creator, lead, org Owner/Admin) is decided below.

@@ -34,15 +34,16 @@ vi.mock('@/lib/auth', () => ({
   ),
   canPrincipalViewPage: vi.fn(async (auth: { userId: string }, pageId: string) => {
     const { canUserViewPage } = await import('@pagespace/lib/permissions/permissions');
-    return canUserViewPage(auth.userId as never, pageId);
+    return canUserViewPage(credentialActor(auth.userId, null), pageId);
   }),
   canPrincipalEditPage: vi.fn(async (auth: { userId: string }, pageId: string) => {
     const { canUserEditPage } = await import('@pagespace/lib/permissions/permissions');
-    return canUserEditPage(auth.userId as never, pageId);
+    return canUserEditPage(credentialActor(auth.userId, null), pageId);
   }),
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   canUserViewPage: vi.fn().mockResolvedValue(true),
   canUserEditPage: vi.fn().mockResolvedValue(true),
 }));
@@ -217,6 +218,7 @@ import { POST } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
 import { streamText } from 'ai';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const mockUserId = 'user_123';
 
@@ -301,7 +303,7 @@ vi.mock('@/lib/auth/principal-permissions', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/auth/principal-permissions')>();
   const permissions = await import('@pagespace/lib/permissions/permissions');
   return { ...actual,
-    canPrincipalViewPage: (auth: { userId: string }, resourceId: string) => permissions.canUserViewPage(auth.userId as never, resourceId),
-    canPrincipalEditPage: (auth: { userId: string }, resourceId: string) => permissions.canUserEditPage(auth.userId as never, resourceId),
+    canPrincipalViewPage: (auth: { userId: string }, resourceId: string) => permissions.canUserViewPage(credentialActor(auth.userId, null), resourceId),
+    canPrincipalEditPage: (auth: { userId: string }, resourceId: string) => permissions.canUserEditPage(credentialActor(auth.userId, null), resourceId),
   };
 });

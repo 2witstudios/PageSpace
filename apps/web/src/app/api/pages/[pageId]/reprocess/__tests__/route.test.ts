@@ -36,6 +36,7 @@ vi.mock('@/services/api/page-mutation-service', () => ({
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
     canUserEditPage: vi.fn(),
 }));
 

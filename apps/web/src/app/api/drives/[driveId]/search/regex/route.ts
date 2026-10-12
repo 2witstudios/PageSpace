@@ -8,7 +8,7 @@ import { eq } from '@pagespace/db/operators';
 import { drives } from '@pagespace/db/schema/core';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { actorFromAuth } from '@/lib/auth/request-actor';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const };
 
@@ -68,10 +68,10 @@ export async function GET(
       const accessInfo = await checkDriveAccessForSearch(driveId, actorFromAuth(auth));
 
       if (!accessInfo.hasAccess) {
-        return NextResponse.json(
+        return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json(
           { error: "You don't have access to this drive" },
           { status: 403 }
-        );
+        ));
       }
 
       drive = accessInfo.drive;

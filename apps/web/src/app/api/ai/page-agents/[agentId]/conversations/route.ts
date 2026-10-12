@@ -17,7 +17,7 @@ import {
   generateTitle,
 } from '@/lib/repositories/conversation-repository';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
-import { actorFromAuth } from '@/lib/auth/request-actor';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 // Auth options: GET is read-only, POST creates new conversations
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
@@ -63,10 +63,10 @@ export async function GET(
     const canView = await canPrincipalViewPage(auth, agentId);
     if (!canView) {
       auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'page_agent_conversation', resourceId: agentId, details: { reason: 'no_view_permission', method: 'GET' }, riskScore: 0.5 });
-      return NextResponse.json(
+      return deniedResponse(actorFromAuth(auth), agentId, NextResponse.json(
         { error: 'Insufficient permissions to view this agent' },
         { status: 403 }
-      );
+      ));
     }
 
     // Get URL params for pagination
@@ -184,10 +184,10 @@ export async function POST(
     const canView = await canPrincipalViewPage(auth, agentId);
     if (!canView) {
       auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'page_agent_conversation', resourceId: agentId, details: { reason: 'no_view_permission', method: 'POST' }, riskScore: 0.5 });
-      return NextResponse.json(
+      return deniedResponse(actorFromAuth(auth), agentId, NextResponse.json(
         { error: 'Insufficient permissions to create conversations for this agent' },
         { status: 403 }
-      );
+      ));
     }
 
     // Parse request body (optional custom title, optional client-generated id)

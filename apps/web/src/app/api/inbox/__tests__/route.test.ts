@@ -39,6 +39,7 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   getBatchPagePermissions: vi.fn(),
 }));
 

@@ -31,7 +31,7 @@ import { mcpTokens } from '@pagespace/db/schema/auth'
 import { pages } from '@pagespace/db/schema/core'
 import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
 import { isDriveLead } from '@pagespace/lib/permissions/drive-relationship';
-import { actorFromAuth } from '@/lib/auth/request-actor';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -50,11 +50,11 @@ export async function GET(
     const access = await checkDriveAccess(driveId, actorFromAuth(auth));
 
     if (!access.drive) {
-      return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Drive not found' }, { status: 404 }));
     }
 
     if (!access.isOwner && !access.isAdmin) {
-      return NextResponse.json({ error: 'Only drive owners and admins can manage member settings' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Only drive owners and admins can manage member settings' }, { status: 403 }));
     }
 
     // Get member details
@@ -116,11 +116,11 @@ export async function PATCH(
     const access = await checkDriveAccess(driveId, actorFromAuth(auth));
 
     if (!access.drive) {
-      return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Drive not found' }, { status: 404 }));
     }
 
     if (!access.isOwner && !access.isAdmin) {
-      return NextResponse.json({ error: 'Only drive owners and admins can manage member settings' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Only drive owners and admins can manage member settings' }, { status: 403 }));
     }
 
     // Verify member exists in drive
@@ -232,11 +232,11 @@ export async function DELETE(
     const access = await checkDriveAccess(driveId, actorFromAuth(auth));
 
     if (!access.drive) {
-      return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Drive not found' }, { status: 404 }));
     }
 
     if (!access.isOwner && !access.isAdmin) {
-      return NextResponse.json({ error: 'Only drive owners and admins can remove members' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Only drive owners and admins can remove members' }, { status: 403 }));
     }
 
     // Cannot remove the drive owner

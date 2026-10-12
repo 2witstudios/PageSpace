@@ -253,16 +253,16 @@ describe('a lapsed org may still restrict (orgs on, real Postgres)', () => {
     const w = world;
     await setSubscription(w.orgId, 'unpaid');
 
-    expect(await updateDriveWallet(w.ids.priya, w.productId, { paused: true, allocationCents: 1 }, 'session')).toEqual(lapsedWalletRefusal);
+    expect(await updateDriveWallet(credentialActor(w.ids.priya, null), w.productId, { paused: true, allocationCents: 1 }, 'session')).toEqual(lapsedWalletRefusal);
     expect((await db.select({ status: wallets.status }).from(wallets).where(eq(wallets.id, w.productWalletId)))[0].status).toBe('active');
 
-    expect(await updateDriveWallet(w.ids.priya, w.productId, { paused: true }, 'session')).toMatchObject({ ok: true });
+    expect(await updateDriveWallet(credentialActor(w.ids.priya, null), w.productId, { paused: true }, 'session')).toMatchObject({ ok: true });
     expect((await db.select({ status: wallets.status }).from(wallets).where(eq(wallets.id, w.productWalletId)))[0].status).toBe('paused');
-    expect(await updateDriveWallet(w.ids.priya, w.productId, { fallbackRule: 'refuse', donationsEnabled: false }, 'session')).toMatchObject({ ok: true });
+    expect(await updateDriveWallet(credentialActor(w.ids.priya, null), w.productId, { fallbackRule: 'refuse', donationsEnabled: false }, 'session')).toMatchObject({ ok: true });
 
-    expect(await updateDriveWallet(w.ids.priya, w.productId, { paused: false }, 'session')).toEqual(lapsedWalletRefusal);
-    expect(await updateDriveWallet(w.ids.priya, w.productId, { allocationCents: 1 }, 'session')).toEqual(lapsedWalletRefusal);
-    expect(await updateDriveWallet(w.ids.priya, w.productId, { fallbackRule: 'own_credits' }, 'session')).toEqual(lapsedWalletRefusal);
+    expect(await updateDriveWallet(credentialActor(w.ids.priya, null), w.productId, { paused: false }, 'session')).toEqual(lapsedWalletRefusal);
+    expect(await updateDriveWallet(credentialActor(w.ids.priya, null), w.productId, { allocationCents: 1 }, 'session')).toEqual(lapsedWalletRefusal);
+    expect(await updateDriveWallet(credentialActor(w.ids.priya, null), w.productId, { fallbackRule: 'own_credits' }, 'session')).toEqual(lapsedWalletRefusal);
     const [row] = await db.select().from(wallets).where(eq(wallets.id, w.productWalletId));
     expect([row.status, row.monthlyAllowanceCents, row.fallbackRule, row.donationsEnabled]).toEqual(['paused', 120_000, 'refuse', false]);
   });
@@ -304,17 +304,17 @@ describe('a lapsed org may still restrict (orgs on, real Postgres)', () => {
   it('SEAT-9 (partial) WAL-7 (partial) while lapsed a cap can be LOWERED or set where there was none; raising or clearing one is refused and writes nothing', async () => {
     if (!world) return;
     const w = world;
-    await setDriveWalletCap(w.ids.priya, w.productId, w.ids.marcus, { dailyCents: 300, monthlyCents: 3_000 }, 'session');
+    await setDriveWalletCap(credentialActor(w.ids.priya, null), w.productId, w.ids.marcus, { dailyCents: 300, monthlyCents: 3_000 }, 'session');
     await setSubscription(w.orgId, 'canceled');
 
-    expect(await setDriveWalletCap(w.ids.priya, w.productId, w.ids.marcus, { dailyCents: 100 }, 'session')).toMatchObject({ ok: true });
+    expect(await setDriveWalletCap(credentialActor(w.ids.priya, null), w.productId, w.ids.marcus, { dailyCents: 100 }, 'session')).toMatchObject({ ok: true });
     expect(await capOf(w.productWalletId, w.ids.marcus)).toEqual({ daily: 100, monthly: 3_000 });
-    expect(await setDriveWalletCap(w.ids.priya, w.productId, w.ids.marcus, { dailyCents: 50, monthlyCents: 4_000 }, 'session')).toEqual(lapsedWalletRefusal);
-    expect(await setDriveWalletCap(w.ids.priya, w.productId, w.ids.marcus, { monthlyCents: null }, 'session')).toEqual(lapsedWalletRefusal);
-    expect(await setDriveWalletCap(w.ids.priya, w.productId, w.ids.marcus, null, 'session')).toEqual(lapsedWalletRefusal);
+    expect(await setDriveWalletCap(credentialActor(w.ids.priya, null), w.productId, w.ids.marcus, { dailyCents: 50, monthlyCents: 4_000 }, 'session')).toEqual(lapsedWalletRefusal);
+    expect(await setDriveWalletCap(credentialActor(w.ids.priya, null), w.productId, w.ids.marcus, { monthlyCents: null }, 'session')).toEqual(lapsedWalletRefusal);
+    expect(await setDriveWalletCap(credentialActor(w.ids.priya, null), w.productId, w.ids.marcus, null, 'session')).toEqual(lapsedWalletRefusal);
     expect(await capOf(w.productWalletId, w.ids.marcus)).toEqual({ daily: 100, monthly: 3_000 });
     // Dana had no cap (unlimited within the wallet): any cap restricts her.
-    expect(await setDriveWalletCap(w.ids.priya, w.productId, w.ids.dana, { dailyCents: 10, monthlyCents: 100 }, 'session')).toMatchObject({ ok: true });
+    expect(await setDriveWalletCap(credentialActor(w.ids.priya, null), w.productId, w.ids.dana, { dailyCents: 10, monthlyCents: 100 }, 'session')).toMatchObject({ ok: true });
 
     // A seat with no row of its own draws the org's allowance: below it restricts, above it loosens.
     const allowance = DEFAULT_ORG_POLICIES.seatAllowanceCents;

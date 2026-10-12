@@ -34,6 +34,7 @@ vi.mock('@pagespace/lib/services/drive-member-service', () => ({
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   canUserViewPage: vi.fn().mockResolvedValue(true),
   canUserEditPage: vi.fn().mockResolvedValue(true),
   // Inbox fan-out asks the centralized helper which candidates can view the

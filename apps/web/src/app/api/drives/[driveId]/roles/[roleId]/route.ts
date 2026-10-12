@@ -7,7 +7,7 @@ import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-s
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { isOrgLapsedError } from '@pagespace/lib/permissions/org-lapse-guard';
 import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
-import { actorFromAuth } from '@/lib/auth/request-actor';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -46,11 +46,11 @@ export async function GET(
     const access = await checkDriveAccessForRoles(driveId, actorFromAuth(auth));
 
     if (!access.drive) {
-      return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Drive not found' }, { status: 404 }));
     }
 
     if (!access.isOwner && !access.isMember) {
-      return NextResponse.json({ error: 'Not a member of this drive' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Not a member of this drive' }, { status: 403 }));
     }
 
     const role = await getRoleById(driveId, roleId);
@@ -89,11 +89,11 @@ export async function PATCH(
     const access = await checkDriveAccessForRoles(driveId, actorFromAuth(auth));
 
     if (!access.drive) {
-      return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Drive not found' }, { status: 404 }));
     }
 
     if (!access.isOwner && !access.isAdmin) {
-      return NextResponse.json({ error: 'Only owners and admins can update roles' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Only owners and admins can update roles' }, { status: 403 }));
     }
 
     // Check role exists
@@ -203,11 +203,11 @@ export async function DELETE(
     const access = await checkDriveAccessForRoles(driveId, actorFromAuth(auth));
 
     if (!access.drive) {
-      return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Drive not found' }, { status: 404 }));
     }
 
     if (!access.isOwner && !access.isAdmin) {
-      return NextResponse.json({ error: 'Only owners and admins can delete roles' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Only owners and admins can delete roles' }, { status: 403 }));
     }
 
     // Check role exists

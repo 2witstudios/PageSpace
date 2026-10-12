@@ -9,7 +9,7 @@ import { verifyAuth } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getGrantedAccessLevel } from '@pagespace/lib/permissions/permissions';
-import { actorFromVerifiedUser } from '@/lib/auth/request-actor';
+import { actorFromVerifiedUser, deniedResponse } from '@/lib/auth/request-actor';
 
 interface PageNode {
   id: string;
@@ -51,7 +51,7 @@ export async function GET(
 
     // The drive's lead or an effective ADMIN (the org-aware membership).
     if (!canAdministerDrive(await loadDriveRelationship(actorFromVerifiedUser(user), drive[0]))) {
-      return NextResponse.json({ error: 'Only drive owners and admins can view permission tree' }, { status: 403 });
+      return deniedResponse(actorFromVerifiedUser(user), driveId, NextResponse.json({ error: 'Only drive owners and admins can view permission tree' }, { status: 403 }));
     }
 
     // Get all pages in the drive

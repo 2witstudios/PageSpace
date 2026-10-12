@@ -92,6 +92,7 @@ vi.mock('@/lib/workflows/task-trigger-helpers', () => ({
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   canUserEditPage: vi.fn(),
   canUserViewPage: vi.fn(),
   getUserDriveAccess: vi.fn(),

@@ -51,6 +51,7 @@ vi.mock('@pagespace/lib/permissions/revocation-kick', () => ({
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   canUserSharePage: vi.fn().mockResolvedValue(true),
   getUsersWhoCanViewPage: vi.fn(async () => new Set<string>()),
 }));

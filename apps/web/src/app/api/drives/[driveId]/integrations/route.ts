@@ -16,7 +16,7 @@ import { encryptCredentials } from '@pagespace/lib/integrations/credentials/encr
 import { buildOAuthAuthorizationUrl } from '@pagespace/lib/integrations/oauth/oauth-handler'
 import { createSignedState } from '@pagespace/lib/integrations/oauth/oauth-state';
 import { validateIntegrationTargetUrl } from '@pagespace/lib/integrations/validation/validate-base-url';
-import { actorFromAuth } from '@/lib/auth/request-actor';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -46,7 +46,7 @@ export async function GET(
     // Verify drive membership
     const access = await getDriveAccess(driveId, actorFromAuth(auth));
     if (!access.isMember) {
-      return NextResponse.json({ error: 'Access denied' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Access denied' }, { status: 403 }));
     }
 
     const connections = await listDriveConnections(db, driveId);
@@ -95,7 +95,7 @@ export async function POST(
     // Require OWNER or ADMIN role
     const access = await getDriveAccess(driveId, actorFromAuth(auth));
     if (!access.isOwner && !access.isAdmin) {
-      return NextResponse.json({ error: 'Admin access required' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Admin access required' }, { status: 403 }));
     }
 
     const body = await request.json();

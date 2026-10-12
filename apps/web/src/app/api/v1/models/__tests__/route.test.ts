@@ -38,6 +38,7 @@ vi.mock('@pagespace/lib/utils/enums', () => ({
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   getBatchPagePermissions: vi.fn(),
 }));
 

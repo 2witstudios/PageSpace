@@ -11,6 +11,7 @@
  * credential for that person opens the org content.
  */
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { NextRequest } from 'next/server';
 import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db';
 import { eq, inArray } from '@pagespace/db/operators';
@@ -86,7 +87,7 @@ const bearer = (token: string) => ({ headers: { authorization: `Bearer ${token}`
 const pageRequest = (pageId: string, token: string) =>
   getPage(new Request(`https://app.test/api/pages/${pageId}`, bearer(token)), { params: Promise.resolve({ pageId }) });
 const fileRequest = (handler: typeof viewFile, id: string, token: string) =>
-  handler(new Request(`https://app.test/api/files/${id}/view`, { ...bearer(token), headers: { ...bearer(token).headers, accept: 'application/json' } }) as never, { params: Promise.resolve({ id }) });
+  handler(new NextRequest(`https://app.test/api/files/${id}/view`, { headers: { ...bearer(token).headers, accept: 'application/json' } }), { params: Promise.resolve({ id }) });
 
 const toolContext = (actor: AccessActor): ToolExecutionContext => ({ userId: actor.userId, accessActor: actor });
 const toolOptions = (context: ToolExecutionContext) => ({ toolCallId: createId(), messages: [], experimental_context: context });

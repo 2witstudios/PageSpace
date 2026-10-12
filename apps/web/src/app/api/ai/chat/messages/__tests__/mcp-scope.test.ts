@@ -25,12 +25,13 @@ vi.mock('@/lib/auth', () => ({
   checkMCPPageScope: vi.fn().mockResolvedValue(null),
   canPrincipalViewPage: vi.fn(async (auth: { userId: string }, pageId: string) => {
     const { canUserViewPage } = await import('@pagespace/lib/permissions/permissions');
-    return canUserViewPage(auth.userId as never, pageId);
+    return canUserViewPage(credentialActor(auth.userId, null), pageId);
   }),
 }));
 
 // Mock permissions (boundary)
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
     canUserViewPage: vi.fn().mockResolvedValue(true),
 }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -56,6 +57,7 @@ vi.mock('@/lib/ai/core/message-utils', () => ({
 import { authenticateRequestWithOptions, checkMCPPageScope } from '@/lib/auth';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { messageRepository } from '@/lib/repositories/message-repository';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 // ============================================================================
 // Test Fixtures

@@ -14,6 +14,7 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
     canUserEditPage: vi.fn(),
 }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({

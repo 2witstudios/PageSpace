@@ -7,7 +7,7 @@ import { pages } from '@pagespace/db/schema/core';
 import { addAgentToDrive, listAgentDrives } from '@pagespace/lib/services/drive-agent-service';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { actorFromAuth } from '@/lib/auth/request-actor';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -44,7 +44,7 @@ export async function GET(
     if (scopeError) return scopeError;
 
     if (!(await canPrincipalViewPage(auth, agentId))) {
-      return NextResponse.json({ error: 'Insufficient permissions to view this agent' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), agentId, NextResponse.json({ error: 'Insufficient permissions to view this agent' }, { status: 403 }));
     }
 
     const drives = await listAgentDrives(agentId);
@@ -83,7 +83,7 @@ export async function POST(
     }
 
     if (!(await canPrincipalEditPage(auth, agentId))) {
-      return NextResponse.json({ error: 'You do not have permission to manage this agent' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), agentId, NextResponse.json({ error: 'You do not have permission to manage this agent' }, { status: 403 }));
     }
 
     const parsed = postBodySchema.safeParse(await request.json());

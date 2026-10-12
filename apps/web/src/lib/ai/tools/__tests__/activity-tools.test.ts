@@ -4,6 +4,7 @@ import { ensureTestDb } from '@/test/ensure-test-db';
 
 // Mock boundaries
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
     isUserDriveMember: vi.fn(),
 }));
 

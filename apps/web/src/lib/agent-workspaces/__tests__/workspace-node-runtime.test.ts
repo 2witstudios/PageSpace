@@ -204,7 +204,8 @@ vi.mock('@pagespace/db/operators', () => ({
   and: () => ({}),
   sql: Object.assign(() => ({}), { raw: () => ({}) }),
 }));
-vi.mock('@pagespace/lib/permissions/permissions', () => ({ getUserAccessLevel: async () => 'VIEW' }));
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null), getUserAccessLevel: async () => 'VIEW' }));
 vi.mock('@pagespace/lib/permissions/conversation-access', () => ({ canAccessConversation: async () => true }));
 
 const {

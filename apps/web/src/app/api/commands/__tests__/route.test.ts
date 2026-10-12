@@ -45,6 +45,7 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
   auditRequest: vi.fn(),
 }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   canUserViewPage: vi.fn(),
   isDriveOwnerOrAdmin: vi.fn(),
   isUserDriveMember: vi.fn(),
@@ -83,6 +84,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
 import { authenticateRequestWithOptions, canPrincipalViewPage, filterDrivesByMCPScope, checkMCPDriveScope } from '@/lib/auth';
 import { decryptUsersByIdOnce } from '@pagespace/lib/auth/user-repository';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const mockedAuth = vi.mocked(authenticateRequestWithOptions);
 const mockedDb = vi.mocked(db, true);
@@ -454,7 +456,7 @@ describe('POST /api/commands', () => {
     expect(response.status).toBe(201);
     const json = await response.json();
     expect(json.command.scope).toBe('drive');
-    expect(mockedIsOwnerOrAdmin).toHaveBeenCalledWith(USER_ID, 'drive_1');
+    expect(mockedIsOwnerOrAdmin).toHaveBeenCalledWith(expect.objectContaining({ userId: USER_ID }), 'drive_1');
   });
 
   it('stamps createdById with the caller on create', async () => {
@@ -485,8 +487,8 @@ vi.mock('@/lib/auth/principal-permissions', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/auth/principal-permissions')>();
   const permissions = await import('@pagespace/lib/permissions/permissions');
   return { ...actual,
-    canPrincipalViewPage: (auth: { userId: string }, resourceId: string) => permissions.canUserViewPage(auth.userId as never, resourceId),
-    isPrincipalDriveMember: (auth: { userId: string }, resourceId: string) => permissions.isUserDriveMember(auth.userId as never, resourceId),
-    isPrincipalDriveOwnerOrAdmin: (auth: { userId: string }, resourceId: string) => permissions.isDriveOwnerOrAdmin(auth.userId as never, resourceId),
+    canPrincipalViewPage: (auth: { userId: string }, resourceId: string) => permissions.canUserViewPage(credentialActor(auth.userId, null), resourceId),
+    isPrincipalDriveMember: (auth: { userId: string }, resourceId: string) => permissions.isUserDriveMember(credentialActor(auth.userId, null), resourceId),
+    isPrincipalDriveOwnerOrAdmin: (auth: { userId: string }, resourceId: string) => permissions.isDriveOwnerOrAdmin(credentialActor(auth.userId, null), resourceId),
   };
 });

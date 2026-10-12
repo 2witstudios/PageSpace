@@ -7,6 +7,7 @@ import type { SessionAuthResult, AuthError } from '@/lib/auth';
 // ============================================================================
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
     getUserDriveAccess: vi.fn(),
     canUserViewPage: vi.fn(),
 }));

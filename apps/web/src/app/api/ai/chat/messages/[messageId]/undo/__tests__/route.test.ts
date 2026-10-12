@@ -26,7 +26,7 @@ vi.mock('@/lib/auth', () => ({
   checkMCPPageScope: vi.fn(),
   canPrincipalEditPage: vi.fn(async (auth: { userId: string }, pageId: string) => {
     const { canUserEditPage } = await import('@pagespace/lib/permissions/permissions');
-    return canUserEditPage(auth.userId as never, pageId);
+    return canUserEditPage(credentialActor(auth.userId, null), pageId);
   }),
 }));
 
@@ -47,6 +47,7 @@ vi.mock('@pagespace/lib/permissions/conversation-access', () => ({
   canAccessConversation: vi.fn(),
 }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
     canUserEditPage: vi.fn(),
 }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -86,6 +87,7 @@ import { authenticateRequestWithOptions, checkMCPPageScope } from '@/lib/auth';
 import { globalConversationRepository } from '@/lib/repositories/global-conversation-repository';
 import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import { canAccessConversation } from '@pagespace/lib/permissions/conversation-access';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const mockAuth = vi.mocked(authenticateRequestWithOptions);
 const mockCheckMCPPageScope = vi.mocked(checkMCPPageScope);

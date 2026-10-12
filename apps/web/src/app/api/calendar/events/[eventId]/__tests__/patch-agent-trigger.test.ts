@@ -57,6 +57,7 @@ vi.mock('@/lib/workflows/calendar-trigger-helpers', () => ({
 // naive-datetime rule.
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   isUserDriveMember: vi.fn(),
   isDriveOwnerOrAdmin: vi.fn(),
 }));

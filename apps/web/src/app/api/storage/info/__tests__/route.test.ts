@@ -17,6 +17,7 @@ vi.mock('@/lib/auth/admin-role', () => ({
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   getUserDriveAccess: vi.fn(),
   getBatchPagePermissions: vi.fn().mockResolvedValue(new Map()),
 }));

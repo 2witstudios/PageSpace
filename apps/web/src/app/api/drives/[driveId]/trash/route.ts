@@ -8,7 +8,7 @@ import { buildTree } from '@pagespace/lib/content/tree-utils'
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isScopedMCPAuth, isPrincipalDriveOwnerOrAdmin } from '@/lib/auth';
-import { actorFromAuth } from '@/lib/auth/request-actor';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const };
 
@@ -45,19 +45,19 @@ export async function GET(request: Request, context: { params: Promise<DrivePara
     // role need OWNER/ADMIN; inherited keys use the owner's own authority.
     if (isScopedMCPAuth(auth)) {
       if (!(await isPrincipalDriveOwnerOrAdmin(auth, driveId))) {
-        return NextResponse.json(
+        return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json(
           { error: 'Only drive owners and admins can view trash' },
           { status: 403 },
-        );
+        ));
       }
     } else {
       // The drive's lead or an effective ADMIN (the org-aware membership: accepted rows only,
       // org Owner/Admin power, stale org rows counting for nothing).
       if (!canAdministerDrive(await loadDriveRelationship(actorFromAuth(auth), drive))) {
-        return NextResponse.json(
+        return deniedResponse(actorFromAuth(auth), drive.id, NextResponse.json(
           { error: 'Only drive owners and admins can view trash' },
           { status: 403 },
-        );
+        ));
       }
     }
 

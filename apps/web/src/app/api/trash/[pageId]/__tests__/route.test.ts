@@ -42,6 +42,7 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: (value: unknown) => typeof value === 'object' && value !== null && 'error' in value,
 }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   canUserDeletePage: (...args: unknown[]) => mockCanDelete(...args),
 }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({

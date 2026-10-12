@@ -81,6 +81,7 @@ vi.mock('@pagespace/db/schema/calendar-triggers', () => ({
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
     isUserDriveMember: vi.fn(),
 }));
 

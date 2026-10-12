@@ -19,7 +19,7 @@ import { db } from '@pagespace/db/db';
 import { pages } from '@pagespace/db/schema/core';
 import { driveAgentMembers } from '@pagespace/db/schema/members';
 import { isDriveLead } from '@pagespace/lib/permissions/drive-relationship';
-import { actorFromAuth } from '@/lib/auth/request-actor';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 /**
  * POST /api/ai/page-agents/create
@@ -79,10 +79,10 @@ export async function POST(request: Request) {
       const canEdit = await canPrincipalEditPage(auth, parentId);
       if (!canEdit) {
         auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'page_agent', resourceId: 'create', details: { reason: 'no_edit_permission_on_parent', parentId, driveId, method: 'POST' }, riskScore: 0.5 });
-        return NextResponse.json(
+        return deniedResponse(actorFromAuth(auth), parentId, NextResponse.json(
           { error: 'Insufficient permissions to create agents in this folder' },
           { status: 403 }
-        );
+        ));
       }
     } else {
       // Creating at root level — owner-only. An explicit-role key needs the

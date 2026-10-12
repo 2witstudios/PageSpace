@@ -46,12 +46,13 @@ vi.mock('@/lib/auth', () => ({
   checkMCPPageScope: vi.fn(),
   canPrincipalEditPage: vi.fn(async (auth: { userId: string }, pageId: string) => {
     const { canUserEditPage } = await import('@pagespace/lib/permissions/permissions');
-    return canUserEditPage(auth.userId as never, pageId);
+    return canUserEditPage(credentialActor(auth.userId, null), pageId);
   }),
 }));
 
 // Mock permissions (boundary)
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
     canUserEditPage: vi.fn(),
 }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -88,6 +89,7 @@ import {
   expelConversationFromSession,
   findWorkspaceOfConversation,
 } from '@/lib/agent-workspaces/agent-workspaces-runtime';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 // Test fixtures
 const mockUserId = 'user_123';

@@ -86,6 +86,7 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
   logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   getGrantedAccessLevel: vi.fn(),
 }));
 // The org-aware relationship is the gate (its pure role decisions stay real).

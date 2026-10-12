@@ -10,7 +10,7 @@ import {
   type CommandScope,
 } from '@pagespace/lib/commands/command-core';
 import { loadAvailableCommands } from '@/lib/commands/available-commands';
-import { actorFromAuth } from '@/lib/auth/request-actor';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
 
@@ -55,10 +55,10 @@ export async function GET(request: Request) {
     if (driveId) {
       const isMember = await isPrincipalDriveMember(auth, driveId);
       if (!isMember) {
-        return NextResponse.json(
+        return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json(
           { error: 'Access denied to the specified drive' },
           { status: 403 }
-        );
+        ));
       }
     }
 

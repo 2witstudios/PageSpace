@@ -20,8 +20,8 @@ import { isGuestRole } from './guest-role';
 import { applyOpenDriveFloor } from './open-drive-floor';
 import { ORGS_ENABLED } from '../organizations/orgs-enabled';
 import type { OpenRoleFloor } from '../organizations/policies-core';
-import type { AccessActor } from './access-actor';
-import { checkActorDriveAuthentication, checkActorResourceAuthentication, filterDrivesForActor, filterResourcesForActor } from './actor-authentication';
+import type { AccessActor, OrgAuthenticationDenialCode } from './access-actor';
+import { checkActorDriveAuthentication, checkActorResourceAuthentication, explainOrgAuthenticationDenial, filterDrivesForActor, filterResourcesForActor } from './actor-authentication';
 
 /**
  * Permission level for a single page.
@@ -51,10 +51,23 @@ export interface DrivePermissionLevel {
 // ---------------------------------------------------------------------------
 // The access API (D-OW-45). Every question about what THE CALLER may open takes an AccessActor, and the
 // org's sign-in policy (SEC-2/3) is asked first: a credential that fails it has no access to that org's
-// drives, exactly as a non-member has none (explainOrgAuthenticationDenial names the reason for a route).
+// drives, exactly as a non-member has none (explainSignInRefusal names the reason for a route).
 // The userId-only resolvers below are module-private, so no caller can skip the policy; questions about
 // third parties (getUsersWhoCanViewPage, usersShareDrive) take user ids because no one is opening anything.
 // ---------------------------------------------------------------------------
+
+/**
+ * Why the actor was refused a page or drive, when the org's sign-in policy is the reason AND the person would
+ * otherwise reach it: the code a route or socket returns so they can sign in again (or with a passkey). Null when
+ * sign-in policy is not why — including for someone the resource would refuse anyway, so the code is never an
+ * oracle for what exists in an org they do not belong to.
+ */
+export async function explainSignInRefusal(actor: AccessActor, resourceId: string): Promise<OrgAuthenticationDenialCode | null> {
+  const code = await explainOrgAuthenticationDenial(actor, resourceId);
+  if (code === null) return null;
+  const held = (await resolveAccessLevel(actor.userId, resourceId)) !== null || (await resolveDriveAccess(actor.userId, resourceId));
+  return held ? code : null;
+}
 
 /**
  * Get all drive IDs the actor can open
@@ -165,16 +178,12 @@ export async function getBatchPagePermissions(actor: AccessActor, pageIds: strin
 
 /**
  * THIRD-PARTY facts: what a person HOLDS, asked about someone who is not presenting a credential right now —
- * billing (what they may fund or be billed for), recapping what they granted, an admin viewing the grants of a
- * member. No sign-in policy is asked, because no one is opening content. The guard test pins each importer;
+ * re-checking a donor inside the donation's own transaction, recapping what someone granted, an admin viewing the
+ * grants of a member. No sign-in policy is asked, because no one is opening content. The guard test pins each importer;
  * content access for the caller goes through the actor API above.
  */
 export async function getGrantedAccessLevel(userId: string, resourceId: string): Promise<PermissionLevel | null> {
   return resolveAccessLevel(userId, resourceId);
-}
-
-export async function listDriveIdsHeldBy(userId: string): Promise<string[]> {
-  return resolveDriveIdsForUser(userId);
 }
 
 export async function holdsDriveAccess(userId: string, driveId: string): Promise<boolean> {

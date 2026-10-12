@@ -27,7 +27,7 @@ import {
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { rebuildEnv, resolveEnvInDrive } from '@/lib/drive-envs/drive-envs-runtime';
-import { actorFromAuth } from '@/lib/auth/request-actor';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -48,7 +48,7 @@ export async function POST(request: Request, context: { params: Promise<{ driveI
         resourceId: driveId,
         details: { route: 'drive-envs', operation: 'rebuild', envId },
       });
-      return NextResponse.json({ error: 'Only drive owners and admins can rebuild environments' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Only drive owners and admins can rebuild environments' }, { status: 403 }));
     }
 
     if (!(await resolveEnvInDrive(envId, driveId))) {

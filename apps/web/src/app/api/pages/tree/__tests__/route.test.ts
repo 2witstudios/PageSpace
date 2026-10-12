@@ -67,6 +67,7 @@ vi.mock('@pagespace/db/schema/members', () => ({
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   getUserAccessiblePagesInDrive: vi.fn(),
 }));
 // The org-aware relationship is the gate (its pure role decisions stay real).

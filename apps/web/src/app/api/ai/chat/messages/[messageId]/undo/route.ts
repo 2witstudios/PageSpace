@@ -12,7 +12,7 @@ import { messageRepository } from '@/lib/repositories/message-repository';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
 import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import { canAccessConversation, type ConversationAccessRow } from '@pagespace/lib/permissions/conversation-access';
-import { actorFromAuth } from '@/lib/auth/request-actor';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 /**
  * The fail-closed stand-in when a message has no conversation row. The
@@ -68,10 +68,10 @@ async function checkUndoPermissions(
     // before — nothing that was allowed and legitimate becomes denied.
     if (!(await canAccessConversation(actorFromAuth(auth), preview.conversationAccess ?? NO_CONVERSATION))) {
       auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'ai_chat_undo', resourceId: messageId, details: { reason: 'conversation_not_accessible', operationType, conversationId: preview.conversationId }, riskScore: 0.6 });
-      return NextResponse.json(
+      return deniedResponse(actorFromAuth(auth), preview.conversationAccess?.contextId, NextResponse.json(
         { error: 'You do not have permission to undo messages in this chat' },
         { status: 403 }
-      );
+      ));
     }
 
     if (!preview.pageId) {
@@ -109,10 +109,10 @@ async function checkUndoPermissions(
         pageId: maskIdentifier(preview.pageId)
       });
       auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'ai_chat_undo', resourceId: messageId, details: { reason: 'no_edit_permission', operationType, pageId: preview.pageId }, riskScore: 0.5 });
-      return NextResponse.json(
+      return deniedResponse(actorFromAuth(auth), preview.pageId, NextResponse.json(
         { error: 'You do not have permission to undo messages in this chat' },
         { status: 403 }
-      );
+      ));
     }
   } else {
     // Global Assistant chat - verify conversation ownership
@@ -124,10 +124,10 @@ async function checkUndoPermissions(
         conversationId: maskIdentifier(preview.conversationId)
       });
       auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'ai_chat_undo', resourceId: messageId, details: { reason: 'conversation_not_owned', operationType, conversationId: preview.conversationId }, riskScore: 0.5 });
-      return NextResponse.json(
+      return deniedResponse(actorFromAuth(auth), preview.conversationAccess?.contextId, NextResponse.json(
         { error: 'You do not have permission to undo messages in this chat' },
         { status: 403 }
-      );
+      ));
     }
   }
   return null;

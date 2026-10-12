@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { automationActor, credentialActor, decideActorAuthentication } from '../access-actor';
+import { automationActor, credentialActor, decideActorAuthentication, type AccessActor } from '../access-actor';
 import type { OrgAuthenticationPolicy } from '../../organizations/authentication-policy-core';
 
 const nowMs = Date.parse('2026-10-12T12:00:00Z');
@@ -23,6 +23,14 @@ describe('access actor', () => {
     const actor = automationActor('user-1', 'workflow');
     expect(actor).toEqual({ via: 'automation', userId: 'user-1', reason: 'workflow' });
     expect(Object.isFrozen(actor)).toBe(true);
+  });
+
+  it('an actor cannot be forged: neither a user id nor a hand-written literal type-checks as one', () => {
+    // @ts-expect-error a bare user id is not an actor
+    const fromString: AccessActor = 'user-1';
+    // @ts-expect-error an object literal lacks the brand only the constructors give
+    const fromLiteral: AccessActor = { via: 'credential', userId: 'user-1', authentication: null };
+    expect([fromString, fromLiteral]).toHaveLength(2);
   });
 
   it('an actor without a user or an automation without a reason is refused at construction', () => {

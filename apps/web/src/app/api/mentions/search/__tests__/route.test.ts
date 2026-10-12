@@ -27,6 +27,7 @@ vi.mock('next/server', () => {
 // ============================================================================
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   getUserAccessLevel: vi.fn(),
   getUserDriveAccess: vi.fn(),
   getDriveIdsForUser: vi.fn(),

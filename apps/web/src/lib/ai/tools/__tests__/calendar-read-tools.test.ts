@@ -60,6 +60,7 @@ vi.mock('@pagespace/db/schema/calendar', () => ({
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   isUserDriveMember: vi.fn(),
   getDriveIdsForUser: vi.fn(),
 }));

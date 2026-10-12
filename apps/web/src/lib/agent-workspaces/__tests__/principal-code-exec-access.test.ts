@@ -12,7 +12,8 @@ vi.mock('@/lib/auth', () => ({
   getPrincipalDriveMembership: mocks.getPrincipalDriveMembership,
   isDriveScopedPrincipal: mocks.isDriveScopedPrincipal,
 }));
-vi.mock('@pagespace/lib/permissions/permissions', () => ({ getUserDrivePermissions: mocks.getUserDrivePermissions }));
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null), getUserDrivePermissions: mocks.getUserDrivePermissions }));
 vi.mock('@pagespace/lib/permissions/membership-queries', () => ({ fetchCustomRolePermissions: mocks.fetchCustomRolePermissions }));
 
 import { canPrincipalRunCodeInDrive } from '../principal-code-exec-access';

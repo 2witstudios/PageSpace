@@ -12,7 +12,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isScopedMCPAuth, getPrincipalAccessiblePagesInDrive } from '@/lib/auth';
 import { getUserAccessiblePagesInDrive } from '@pagespace/lib/permissions/permissions';
 import { hasAppDriveMembership } from '@pagespace/lib/permissions/app-permissions';
-import { actorFromAuth } from '@/lib/auth/request-actor';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -60,7 +60,7 @@ export async function POST(request: Request) {
       // Membership gate only — the tree below is filtered to the TOKEN's
       // per-page view set, so per-page custom-role grants still work.
       if (!(await hasAppDriveMembership(actorFromAuth(auth), auth.tokenId, driveId))) {
-        return NextResponse.json({ error: 'Access denied' }, { status: 403 });
+        return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Access denied' }, { status: 403 }));
       }
     } else {
       // The drive's lead or an effective member (the org-aware membership reads ACCEPTED rows
@@ -71,7 +71,7 @@ export async function POST(request: Request) {
       const admitted = relationship !== null
         && (isDriveMemberRelationship(relationship) || await holdsAcceptedGuestRow(driveId, userId));
       if (!admitted) {
-        return NextResponse.json({ error: 'Access denied' }, { status: 403 });
+        return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Access denied' }, { status: 403 }));
       }
     }
 

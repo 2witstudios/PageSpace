@@ -237,7 +237,7 @@ describe('org lapse gates (orgs on, real Postgres)', () => {
     expect(await getUserDriveAccess(credentialActor(w.ids.marcus, null), w.productId)).toBe(true);
     expect(await canUserViewPage(credentialActor(w.ids.marcus, null), w.pageId)).toBe(true);
     expect(await getUserDriveAccess(credentialActor(w.ids.dana, null), w.productId)).toBe(true);
-    const read = await getDriveWallet(w.ids.priya, w.productId, 'session');
+    const read = await getDriveWallet(credentialActor(w.ids.priya, null), w.productId, 'session');
     expect(read.ok).toBe(true);
 
     expect(await footprint(w)).toEqual(before);
@@ -270,17 +270,17 @@ describe('org lapse gates (orgs on, real Postgres)', () => {
     const before = await footprint(w);
     await setSubscription(w.orgId, 'past_due');
     // A failed payment lapses immediately, before retries are exhausted.
-    expect(await updateDriveWallet(w.ids.priya, w.productId, { allocationCents: 130_000 }, 'session')).toMatchObject({ ok: false, code: 'org_lapsed' });
+    expect(await updateDriveWallet(credentialActor(w.ids.priya, null), w.productId, { allocationCents: 130_000 }, 'session')).toMatchObject({ ok: false, code: 'org_lapsed' });
     expect(await footprint(w)).toEqual(before);
 
     await setSubscription(w.orgId, 'unpaid');
     const lapsedRefusal = { ok: false, status: 402, code: 'org_lapsed', message: ORG_LAPSED_MESSAGE };
-    expect(await updateDriveWallet(w.ids.priya, w.productId, { allocationCents: 1 }, 'session')).toEqual(lapsedRefusal);
+    expect(await updateDriveWallet(credentialActor(w.ids.priya, null), w.productId, { allocationCents: 1 }, 'session')).toEqual(lapsedRefusal);
     // Resuming loosens; pausing (the kill switch) restricts and still applies while lapsed ([D-OW-33], lapsed-restrict suite).
-    expect(await updateDriveWallet(w.ids.priya, w.productId, { paused: false }, 'session')).toEqual(lapsedRefusal);
-    expect(await topUpDriveWallet(w.ids.priya, w.productId, { amountCents: 500, idempotencyKey: createId() }, 'session')).toEqual(lapsedRefusal);
+    expect(await updateDriveWallet(credentialActor(w.ids.priya, null), w.productId, { paused: false }, 'session')).toEqual(lapsedRefusal);
+    expect(await topUpDriveWallet(credentialActor(w.ids.priya, null), w.productId, { amountCents: 500, idempotencyKey: createId() }, 'session')).toEqual(lapsedRefusal);
     await db.delete(wallets).where(eq(wallets.id, w.productWalletId));
-    expect(await createDriveWallet(w.ids.priya, w.productId, { allocationCents: 50_000 }, 'session')).toEqual(lapsedRefusal);
+    expect(await createDriveWallet(credentialActor(w.ids.priya, null), w.productId, { allocationCents: 50_000 }, 'session')).toEqual(lapsedRefusal);
     expect(await db.select().from(wallets).where(and(eq(wallets.subjectType, 'drive'), eq(wallets.subjectId, w.productId)))).toHaveLength(0);
     // Put the fixture back as it was (the delete above was the test's own, not the lapse's).
     await db.insert(wallets).values({ id: w.productWalletId, ownerType: 'org', orgId: w.orgId, subjectType: 'drive', subjectId: w.productId, parentWalletId: w.poolId, monthlyAllowanceCents: 120_000, monthlyPeriodStart: new Date(Date.now() - 86_400_000) });

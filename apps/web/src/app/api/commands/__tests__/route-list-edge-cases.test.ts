@@ -50,6 +50,7 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
   auditRequest: vi.fn(),
 }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   canUserViewPage: vi.fn(),
   isDriveOwnerOrAdmin: vi.fn(),
   isUserDriveMember: vi.fn(),
@@ -72,6 +73,7 @@ import { GET } from '../route';
 import { getMemberDriveIds } from '@pagespace/lib/permissions/member-drives';
 import { db } from '@pagespace/db/db';
 import { authenticateRequestWithOptions, canPrincipalViewPage, filterDrivesByMCPScope } from '@/lib/auth';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const mockedAuth = vi.mocked(authenticateRequestWithOptions);
 const mockedDb = vi.mocked(db, true);
@@ -203,8 +205,8 @@ vi.mock('@/lib/auth/principal-permissions', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/auth/principal-permissions')>();
   const permissions = await import('@pagespace/lib/permissions/permissions');
   return { ...actual,
-    canPrincipalViewPage: (auth: { userId: string }, resourceId: string) => permissions.canUserViewPage(auth.userId as never, resourceId),
-    isPrincipalDriveMember: (auth: { userId: string }, resourceId: string) => permissions.isUserDriveMember(auth.userId as never, resourceId),
-    isPrincipalDriveOwnerOrAdmin: (auth: { userId: string }, resourceId: string) => permissions.isDriveOwnerOrAdmin(auth.userId as never, resourceId),
+    canPrincipalViewPage: (auth: { userId: string }, resourceId: string) => permissions.canUserViewPage(credentialActor(auth.userId, null), resourceId),
+    isPrincipalDriveMember: (auth: { userId: string }, resourceId: string) => permissions.isUserDriveMember(credentialActor(auth.userId, null), resourceId),
+    isPrincipalDriveOwnerOrAdmin: (auth: { userId: string }, resourceId: string) => permissions.isDriveOwnerOrAdmin(credentialActor(auth.userId, null), resourceId),
   };
 });

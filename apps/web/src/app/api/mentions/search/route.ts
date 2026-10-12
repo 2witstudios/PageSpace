@@ -16,7 +16,7 @@ import { driveRoles } from '@pagespace/db/schema/members';
 import { MentionSuggestion, MentionType } from '@/types/mentions';
 import { findGuestAgentMembers, guestAgentSuggestion, shouldOfferGuestAgents } from '@/lib/mentions/guest-agent-members';
 import { z } from 'zod';
-import { actorFromAuth } from '@/lib/auth/request-actor';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 /**
  * Build a multi-word search condition
@@ -232,10 +232,10 @@ export async function GET(request: Request) {
 
       if (!hasAccess) {
         loggers.api.debug('[API] User does not have access to drive', { userId, driveId });
-        return NextResponse.json(
+        return deniedResponse(actorFromAuth(auth), driveId!, NextResponse.json(
           { error: 'Access denied to the specified drive' },
           { status: 403 }
-        );
+        ));
       }
 
       targetDriveIds = [driveId!];

@@ -25,7 +25,7 @@ import {
   isUniqueViolation,
   validateEntryPage,
 } from './command-route-helpers';
-import { actorFromAuth } from '@/lib/auth/request-actor';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 // GET /api/commands - list commands visible to the caller:
 // their personal commands + drive commands of drives they belong to
@@ -176,10 +176,10 @@ export async function POST(request: Request) {
       if (scopeError) return scopeError;
       const allowed = await isPrincipalDriveOwnerOrAdmin(auth, commandDriveId);
       if (!allowed) {
-        return NextResponse.json(
+        return deniedResponse(actorFromAuth(auth), commandDriveId, NextResponse.json(
           { error: 'Only the drive owner or admins can manage drive commands' },
           { status: 403 }
-        );
+        ));
       }
     }
 

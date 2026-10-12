@@ -30,6 +30,7 @@ vi.mock('@pagespace/lib/permissions/member-drives', () => ({
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   getBatchPagePermissions: vi.fn(async (_userId: string, pageIds: string[]) =>
     new Map(pageIds.map((id) => [id, { canView: true, canEdit: false, canShare: false, canDelete: false }]))),
 }));

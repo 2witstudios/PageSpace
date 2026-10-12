@@ -147,13 +147,6 @@ SEAT-8
 # and "nothing is deleted" clauses are proven elsewhere only in part.
 SEAT-9
 SEC-1
-# SEC-2 / SEC-3 (partial, ow-final-signin-ux, D-OW-45/D-OW-47): every sign-in ceremony records evidence (required
-# on credential creation; seam test), the current session re-authenticates through the step-up ceremony (real PG),
-# denials are actionable on web (prompt, locked drives), CLI and MCP, loosening needs the policy in force and
-# tightening needs the resulting one (real PG), and the Security page sets both. Still unproven: one enforcement seam
-# over every content path (routes, AI tools, realtime, processor; lane S1's AccessActor refactor).
-SEC-2
-SEC-3
 # SPEND-1 (partial, ow-c2, C3, ow-fix-ungated-ai): every chat turn, /btw, consult, v1, image, pulse,
 # workflow, trigger and mention call gates first; context compaction and the memory cron now reserve
 # before their model call; a realtime voice call resolves its drive before connecting (a page

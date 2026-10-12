@@ -15,7 +15,8 @@ import { automationActor, credentialActor } from '@pagespace/lib/permissions/acc
 // The property it guarded (a dispatched turn is admitted as the calling user,
 // and only as them) is now guarded by the signature and by `actingUserId`.
 vi.mock('@pagespace/db/db', () => ({ db: {} }));
-vi.mock('@pagespace/lib/permissions/permissions', () => ({ canUserViewPage: vi.fn(), getDriveIdsForUser: vi.fn() }));
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null), canUserViewPage: vi.fn(), getDriveIdsForUser: vi.fn() }));
 vi.mock('@pagespace/lib/services/agent-workspaces/workspace-status', () => ({ deriveSandboxStatus: vi.fn() }));
 vi.mock('@pagespace/lib/logging/logger-config', () => {
   const silent = { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() };

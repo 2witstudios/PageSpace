@@ -58,7 +58,8 @@ vi.mock('@pagespace/db/db', () => ({
 }));
 vi.mock('@pagespace/db/operators', () => ({ eq: () => ({}) }));
 vi.mock('@pagespace/db/schema/conversations', () => ({ conversations: {} }));
-vi.mock('@pagespace/lib/permissions/permissions', () => ({ getUserAccessLevel: async () => access.level }));
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null), getUserAccessLevel: async () => access.level }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     api: {

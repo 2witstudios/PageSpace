@@ -180,6 +180,7 @@ vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   isUserDriveMember: vi.fn(),
 }));
 

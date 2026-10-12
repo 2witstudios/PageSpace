@@ -17,7 +17,7 @@ import { getDriveById } from '@pagespace/lib/services/drive-service';
 import { isHomeDrive, homeDriveActionError } from '@pagespace/lib/services/drive-guards';
 import { isOrgLapsedError } from '@pagespace/lib/permissions/org-lapse-guard';
 import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
-import { actorFromAuth } from '@/lib/auth/request-actor';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -56,10 +56,10 @@ export async function POST(
     // R3: canShare check BEFORE any row is written
     const hasSharePermission = await canUserSharePage(actorFromAuth(auth), pageId);
     if (!hasSharePermission) {
-      return NextResponse.json(
+      return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json(
         { error: 'You do not have permission to share this page.' },
         { status: 403 },
-      );
+      ));
     }
 
     const emailVerified = await isEmailVerified(inviterUserId);

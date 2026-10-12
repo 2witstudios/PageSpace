@@ -82,14 +82,11 @@ describe('SEC-2 (partial) SEC-3 (partial) the org sign-in seam is structural (D-
   });
 
   it('SEC-2 (partial) third-party membership facts are asked only where no credential is opening content', () => {
-    // Billing standing and donations (what someone may fund or be billed for): out of the content seam by design.
+    // The donor re-check inside a donation's transaction (the wallet route already passed the actor gate), and
+    // recapping what someone granted an agent. Wallet reads and spends themselves go through the actor (D-OW-45).
     expect(importersOf('holdsDriveAccess', /permissions\/permissions$|\.\/permissions$/)).toEqual([
       'packages/lib/src/billing/wallet-funding-shell.ts',
       'packages/lib/src/services/drive-agent-service.ts',
-      'packages/lib/src/services/drive-wallet-service.ts',
-    ]);
-    expect(importersOf('listDriveIdsHeldBy', /permissions\/permissions$/)).toEqual([
-      'packages/lib/src/services/drive-wallet-service.ts',
     ]);
     // Wallet standing, and whether the TARGET of a drive transfer (not the caller) is a member of it.
     expect(importersOf('loadUserDriveRelationships', /drive-relationship-loader$/)).toEqual([

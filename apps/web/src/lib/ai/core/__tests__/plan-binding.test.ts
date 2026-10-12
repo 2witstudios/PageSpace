@@ -16,6 +16,7 @@ vi.mock('@pagespace/db/schema/core', () => ({
   pages: { id: 'id', title: 'title', isTrashed: 'isTrashed' },
 }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   canUserViewPage: (...args: unknown[]) => canUserViewPageMock(...args),
 }));
 
