@@ -46,7 +46,8 @@ import { users } from '@pagespace/db/schema/auth';
 import { subscriptions } from '@pagespace/db/schema/subscriptions';
 import { eq, sql } from '@pagespace/db/operators';
 import { isBillingEnabled } from '../deployment-mode';
-import { classifyStripeEvent, computeMonthlyRefill, applyPaymentToDebt } from './credit-core';
+import { classifyStripeEvent, computeMonthlyRefill, applyPaymentToDebt, forgivenAtRefillCents } from './credit-core';
+import { debtClearedRow, DEBT_FORGIVEN_ENTRY } from './wallet-ledger-core';
 import { grantForInvoice } from './invoice-grant';
 import { MONEY_MODEL_V2_ACTIVE } from './money-model';
 import { ensurePersonalRootWalletId } from './personal-wallet';
@@ -356,6 +357,9 @@ async function applyMonthlyRefill(
       .limit(1);
     carriedCents = currentRow?.monthlyRemainingCents ?? 0;
     const refill = computeMonthlyRefill(allowanceCents, carriedCents, currentRow?.debtCents ?? 0);
+    // WAL-5: debt the clamp forgives is a balance change, so it is a row in this transaction.
+    const forgiven = debtClearedRow({ entryType: DEBT_FORGIVEN_ENTRY, userId: user.id, walletId, clearedCents: forgivenAtRefillCents(allowanceCents, carriedCents, currentRow?.debtCents ?? 0) });
+    if (forgiven) await tx.insert(creditLedger).values(forgiven);
 
     await tx
       .insert(wallets)

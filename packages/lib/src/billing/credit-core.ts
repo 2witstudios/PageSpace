@@ -319,6 +319,20 @@ export function computeMonthlyRefill(
   return { monthlyRemainingCents: Math.max(0, netCarried + allowance), monthlyAllowanceCents: allowance, debtCents: 0 };
 }
 
+/**
+ * The debt a refill FORGIVES (computeMonthlyRefill clamps `monthlyRemainingCents` at 0): what is
+ * left of the debt once the carried balance and the new allowance have absorbed what they can.
+ * Ledgered as its own row (debt_forgiven), so the wallet's books still balance (WAL-5).
+ */
+export function forgivenAtRefillCents(
+  allowanceCents: number,
+  currentRemainingCents: number = 0,
+  currentDebtCents: number = 0,
+): number {
+  const allowance = Number.isFinite(allowanceCents) ? Math.max(0, Math.floor(allowanceCents)) : 0;
+  return Math.max(0, Math.max(0, currentDebtCents) - currentRemainingCents - allowance);
+}
+
 export interface PaymentToDebtResult {
   /** Remaining debt after the payment (>= 0). */
   debtCents: number;

@@ -39,7 +39,8 @@ import { isBillingEnabled } from '../deployment-mode';
 import { getUserDriveAccess } from '../permissions/permissions';
 import { loggers } from '../logging/logger-config';
 import { MONEY_MODEL_V2_ACTIVE, tierAllowanceCents } from './money-model';
-import { computeMonthlyRefill } from './credit-core';
+import { computeMonthlyRefill, forgivenAtRefillCents } from './credit-core';
+import { debtClearedRow, ALLOCATION_RESET_ENTRY, DEBT_FORGIVEN_ENTRY, LEG_REFUND_ENTRY } from './wallet-ledger-core';
 import { RENEWAL_CAPABLE_STATUSES, TIER_ALLOWANCE_REFILLS } from './credit-pricing';
 import {
   orgPoolRefillGrant,
@@ -286,6 +287,9 @@ export async function applyOrgPoolRefill(invoice: OrgInvoice, opts: OrgPoolRefil
     if (inserted.length === 0) return { kind: 'duplicate' as const, walletId: pool.id, fundingRecorded };
 
     const refill = refillPool(pool, grant.allowanceCents);
+    // WAL-5: debt the clamp forgives is a balance change, so it is a row in this transaction.
+    const forgiven = debtClearedRow({ entryType: DEBT_FORGIVEN_ENTRY, userId: org.ownerId, walletId: pool.id, clearedCents: forgivenAtRefillCents(grant.allowanceCents, pool.monthlyRemainingCents, pool.debtCents) });
+    if (forgiven) await tx.insert(creditLedger).values(forgiven);
     // Stripe does not order invoice.paid deliveries: an older invoice settled late
     // (dunning) still refills once, but it must never move the pool's period — the
     // date its org allocations reset on — backwards.
@@ -530,6 +534,14 @@ async function rollOneRoot(userId: string, now: Date): Promise<boolean> {
       .onConflictDoNothing(STRIPE_REF_ARBITER)
       .returning({ id: creditLedger.id });
     if (claimed.length === 0) return false;
+    // WAL-5: debt the clamp forgives is a balance change, so it is a row in this transaction.
+    const forgiven = debtClearedRow({
+      entryType: DEBT_FORGIVEN_ENTRY,
+      userId,
+      walletId: locked.id,
+      clearedCents: forgivenAtRefillCents(tierAllowanceCents(tier), locked.monthlyRemainingCents ?? 0, locked.debtCents ?? 0),
+    });
+    if (forgiven) await tx.insert(creditLedger).values(forgiven);
     await tx
       .update(wallets)
       .set({
@@ -558,6 +570,8 @@ async function resetOne(
         spentCents: wallets.spentCents,
         debtCents: wallets.debtCents,
         status: wallets.status,
+        userId: wallets.userId,
+        orgId: wallets.orgId,
       })
       .from(wallets)
       .where(eq(wallets.id, walletId))
@@ -588,7 +602,18 @@ async function resetOne(
       })
       .where(and(eq(wallets.id, walletId), or(isNull(wallets.monthlyPeriodStart), lt(wallets.monthlyPeriodStart, newStart))))
       .returning({ id: wallets.id });
-    return updated.length > 0;
+    if (updated.length === 0) return false;
+    // WAL-5 / WAL-6d: the wallet's debt netted from its new allocation clears with no payment, a
+    // balance change recorded in this transaction (under the wallet's person, else its org's owner).
+    const cleared = Math.max(0, locked.debtCents) - Math.max(0, plan.debtCents);
+    if (cleared > 0) {
+      const ownerId = locked.userId
+        ?? (locked.orgId ? (await tx.select({ ownerId: organizations.ownerId }).from(organizations).where(eq(organizations.id, locked.orgId)))[0]?.ownerId : undefined);
+      const row = ownerId ? debtClearedRow({ entryType: ALLOCATION_RESET_ENTRY, userId: ownerId, walletId, clearedCents: cleared }) : null;
+      if (row) await tx.insert(creditLedger).values(row);
+      else loggers.api.error('allocation reset cleared debt on a wallet with no owner to record it under', new Error('no owner'), { walletId, cleared });
+    }
+    return true;
   });
 }
 
@@ -635,6 +660,17 @@ export async function refundFundingLeg(legId: string, cents: number): Promise<Le
       .update(wallets)
       .set({ topupRemainingCents: sql`${wallets.topupRemainingCents} - ${plan.cents}` })
       .where(eq(wallets.id, row.walletId));
+    // WAL-5: money leaving the wallet for a refund is a row in this transaction, under its funder
+    // (else the wallet's person, else its org's owner).
+    const [walletOwner] = await tx.select({ userId: wallets.userId, orgId: wallets.orgId }).from(wallets).where(eq(wallets.id, row.walletId));
+    const recordedUnder = row.funderUserId
+      ?? walletOwner?.userId
+      ?? (walletOwner?.orgId ? (await tx.select({ ownerId: organizations.ownerId }).from(organizations).where(eq(organizations.id, walletOwner.orgId)))[0]?.ownerId : undefined);
+    if (recordedUnder) {
+      await tx.insert(creditLedger).values({ userId: recordedUnder, walletId: row.walletId, entryType: LEG_REFUND_ENTRY, bucket: 'topup', amountCents: -plan.cents, appliedCents: -plan.cents, consumeStatus: 'applied' });
+    } else {
+      loggers.api.error('funding-leg refund on a wallet with no owner to record it under', new Error('no owner'), { walletId: row.walletId, legId });
+    }
     return plan;
   });
 }

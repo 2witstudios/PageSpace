@@ -60,6 +60,39 @@ export function allocationTransferRows(input: {
 }
 
 /**
+ * Debt cleared with no payment (WAL-6d): `debt_forgiven` when a renewal's clamp drops what the
+ * carried balance and the new allowance could not absorb (a personal root, an org pool);
+ * `allocation_reset` when a drive wallet's debt is netted from its next allocation. Either raises
+ * the wallet's net by the debt cleared, so it is a row like every other balance change.
+ */
+export const DEBT_FORGIVEN_ENTRY = 'debt_forgiven' as const;
+/** An owner funding leg refunded out of a drive wallet (money leaves it): the leg's cents, negative. */
+export const LEG_REFUND_ENTRY = 'leg_refund' as const;
+export const ALLOCATION_RESET_ENTRY = 'allocation_reset' as const;
+
+export interface DebtClearedRow {
+  userId: string;
+  walletId: string;
+  entryType: typeof DEBT_FORGIVEN_ENTRY | typeof ALLOCATION_RESET_ENTRY;
+  bucket: 'monthly';
+  amountCents: number;
+  appliedCents: number;
+  consumeStatus: 'applied';
+}
+
+/** The row recording `clearedCents` of debt cleared on `walletId`; null when none was. */
+export function debtClearedRow(input: {
+  entryType: DebtClearedRow['entryType'];
+  userId: string;
+  walletId: string;
+  clearedCents: number;
+}): DebtClearedRow | null {
+  const cents = Number.isFinite(input.clearedCents) ? Math.round(input.clearedCents) : 0;
+  if (cents <= 0) return null;
+  return { userId: input.userId, walletId: input.walletId, entryType: input.entryType, bucket: 'monthly', amountCents: cents, appliedCents: cents, consumeStatus: 'applied' };
+}
+
+/**
  * The rows of one entry type on one wallet, summed as reconciliation reads them (one row is a sum of
  * one): `appliedCents` sums appliedCents with a null as 0; `appliedOrAmountCents` sums, per row,
  * appliedCents when set and amountCents when not.
@@ -77,16 +110,16 @@ export function rowTotals(row: { entryType: string; amountCents: number; applied
 }
 
 /** Entry types whose `amountCents` is the money that moved (a grant or purchase lands in full). */
-const CREDITED_IN_FULL = new Set(['monthly_grant', 'topup_purchase', 'missed_grant']);
+const CREDITED_IN_FULL = new Set<string>(['monthly_grant', 'topup_purchase', 'missed_grant', DEBT_FORGIVEN_ENTRY, ALLOCATION_RESET_ENTRY]);
 /** Entry types that move what `appliedCents` says (null: nothing has moved yet, e.g. a pending claim). */
-const APPLIED_ONLY = new Set(['usage', 'donation', 'wallet_topup', ALLOCATION_DRAW_ENTRY]);
+const APPLIED_ONLY = new Set<string>(['usage', 'donation', 'wallet_topup', ALLOCATION_DRAW_ENTRY, LEG_REFUND_ENTRY]);
 /** Attribution rows: they move no money. */
 const NO_MONEY = new Set(['seat_overshoot_month', 'seat_overshoot_day']);
 
 /**
  * The signed cents rows moved on their wallet's NET balance (monthly + top-up − debt):
- *   - a grant or purchase: its amount;
- *   - a usage claim, a transfer (donation, top-up, allocation draw): what it applied;
+ *   - a grant or purchase, or debt cleared without payment (forgiven, netted at a reset): its amount;
+ *   - a usage claim, a transfer (donation, top-up, allocation draw), a leg refund: what it applied;
  *   - an `adjustment`: what it applied, else its amount — a debt row (overshoot landing on this
  *     wallet) applies nothing to the buckets and raises debt by its amount;
  *   - seat-overshoot attribution: nothing.
@@ -116,9 +149,9 @@ export interface WalletDriftResult {
 }
 
 /**
- * A wallet's materialized net against what its own rows moved (WAL-5). Forgiveness moves no money
- * and writes no row — debt clamped away at a renewal, a drive wallet's debt netted at its
- * allocation reset — so a flag means "look at this wallet", within `toleranceCents`.
+ * A wallet's materialized net against what its own rows moved (WAL-5). Every balance change is a
+ * row — forgiveness at a renewal and netting at an allocation reset included — so any drift past
+ * `toleranceCents` is a change that bypassed the ledger.
  */
 export function computeWalletDrift(input: WalletDriftInput, toleranceCents: number): WalletDriftResult {
   const materializedNetCents =

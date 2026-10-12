@@ -22,7 +22,8 @@ import { wallets, personalRootWalletOf } from '@pagespace/db/schema/wallets';
 import { subscriptions } from '@pagespace/db/schema/subscriptions';
 import { and, eq, gt, inArray } from '@pagespace/db/operators';
 import { isBillingEnabled } from '../deployment-mode';
-import { computeMonthlyRefill } from './credit-core';
+import { computeMonthlyRefill, forgivenAtRefillCents } from './credit-core';
+import { debtClearedRow, DEBT_FORGIVEN_ENTRY } from './wallet-ledger-core';
 import { MONEY_MODEL_V2_ACTIVE, allowanceCentsForPaidCents } from './money-model';
 import { ensurePersonalRootWalletId } from './personal-wallet';
 import { toSubscriptionTier, type SubscriptionTier } from './subscription-tiers';
@@ -125,7 +126,7 @@ async function grantMissedRow(row: { id: string; userId: string }, allowanceCent
     if (claimed.length === 0) return 'already_claimed';
 
     // The row this grant lands on must exist before the FOR UPDATE below can lock it.
-    await ensurePersonalRootWalletId(tx, row.userId);
+    const walletId = await ensurePersonalRootWalletId(tx, row.userId);
 
     const [balanceRow] = await tx
       .select({ monthlyRemainingCents: wallets.monthlyRemainingCents, debtCents: wallets.debtCents })
@@ -139,6 +140,14 @@ async function grantMissedRow(row: { id: string; userId: string }, allowanceCent
       balanceRow?.monthlyRemainingCents ?? 0,
       balanceRow?.debtCents ?? 0,
     );
+    // WAL-5: debt the clamp forgives is a balance change, so it is a row in this transaction.
+    const forgiven = debtClearedRow({
+      entryType: DEBT_FORGIVEN_ENTRY,
+      userId: row.userId,
+      walletId,
+      clearedCents: forgivenAtRefillCents(allowanceCents, balanceRow?.monthlyRemainingCents ?? 0, balanceRow?.debtCents ?? 0),
+    });
+    if (forgiven) await tx.insert(creditLedger).values(forgiven);
 
     await tx
       .update(wallets)

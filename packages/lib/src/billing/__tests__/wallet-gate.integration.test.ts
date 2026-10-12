@@ -34,7 +34,7 @@ import { computeBackfillActions } from '../credit-core';
 import { PERSONAL_SPEND, conversationSpend, driveSpend, resolvedSpend, spendFallbackFromWalletId } from '../spend-target';
 import { DEFAULT_SEAT_ALLOWANCE_CENTS } from '../wallet-core';
 import { loadSeatCapFacts } from '../seat-allowance';
-import { applyOrgPoolRefill, donateToDriveWallet, resetDueAllocations } from '../wallet-funding-shell';
+import { applyOrgPoolRefill, donateToDriveWallet, resetDueAllocations, resetDuePeriods } from '../wallet-funding-shell';
 import { reconcileOpenRouterCosts } from '../cost-reconcile';
 import { createDriveWallet, getConversationSpend, getDriveWallet, setConversationSpend, topUpDriveWallet } from '../../services/drive-wallet-service';
 import { walletDriftAlerts } from '../wallet-reconcile';
@@ -1901,6 +1901,58 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
     expect(await walletRow(w.productWalletId)).toMatchObject({ spentCents: 1_000, topupRemainingCents: 150 });
     expect(await legsOf()).toEqual([['owner', 100], ['donation', 50]]);
     await expectWalletLegInvariant([w.productWalletId]);
+  });
+
+  it('WAL-5 every balance change is a ledger row, forgiveness included: a pool whose refill forgives most of its debt, a drive wallet whose debt is netted at its allocation reset and a person whose renewal clamps their debt away each reconcile with their own rows at zero drift — and a change made without a row is still caught', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 100 });
+    const w = world;
+    // Heavily indebted wallets, with the rows that put them there.
+    await db.update(wallets).set({ debtCents: 9_000 }).where(eq(wallets.id, w.poolId));
+    await db.update(wallets).set({ spentCents: 1_000, debtCents: 300 }).where(eq(wallets.id, w.productWalletId));
+    await db.update(users).set({ subscriptionTier: 'pro' }).where(eq(users.id, w.marcusId));
+    await db.update(wallets).set({ monthlyRemainingCents: 0, debtCents: 20_000, monthlyPeriodStart: new Date(Date.now() - 40 * 86_400_000), monthlyPeriodEnd: new Date(Date.now() - 86_400_000) }).where(eq(wallets.id, w.marcusWalletId));
+    await db.insert(creditLedger).values([
+      { userId: w.jonoId, walletId: w.poolId, entryType: 'monthly_grant', bucket: 'monthly', amountCents: 100, consumeStatus: 'applied' },
+      { userId: w.jonoId, walletId: w.poolId, entryType: 'adjustment', bucket: 'monthly', amountCents: -9_000, consumeStatus: 'applied' },
+      { userId: w.marcusId, walletId: w.productWalletId, entryType: 'adjustment', bucket: 'monthly', amountCents: -300, consumeStatus: 'applied' },
+      { userId: w.marcusId, walletId: w.marcusWalletId, entryType: 'adjustment', bucket: 'monthly', amountCents: -20_000, consumeStatus: 'applied' },
+    ]);
+    const ids = [w.poolId, w.productWalletId, w.marcusWalletId];
+    expect(await walletDriftAlerts({ toleranceCents: 0, limit: 10, walletIds: ids })).toEqual([]);
+
+    // The pool's invoice: 100¢ carried + the allowance cannot cover 9,000¢ of debt — the rest is forgiven.
+    const [org] = await db.select().from(organizations).where(eq(organizations.id, w.orgId));
+    const startS = Math.floor(Date.now() / 1000) + 1;
+    expect(await applyOrgPoolRefill({
+      id: `in_${createId()}`,
+      customer: org.stripeCustomerId,
+      billing_reason: 'subscription_cycle',
+      amount_paid: 5000,
+      subtotal: 5000,
+      parent: { subscription_details: { subscription: `sub_${createId()}` } },
+      lines: { data: [{ amount: 5000, parent: { subscription_item_details: { subscription_item: 'si_org' } }, period: { start: startS, end: startS + 30 * 86_400 }, pricing: { price_details: { price: REFILL_PRICE_ID } } }] },
+    }, { active: true, basePriceId: REFILL_PRICE_ID, seatPriceId: REFILL_SEAT_PRICE_ID })).toMatchObject({ kind: 'granted' });
+    // Product's allocation resets on the pool's new period (its 300¢ netted); Marcus's comped period rolls.
+    await resetDuePeriods({ now: new Date(startS * 1000 + 1_000) });
+
+    const pool = await walletRow(w.poolId);
+    expect(pool).toMatchObject({ monthlyRemainingCents: 0, debtCents: 0 });
+    expect(await walletRow(w.productWalletId)).toMatchObject({ spentCents: 300, debtCents: 0 });
+    expect(await walletRow(w.marcusWalletId)).toMatchObject({ monthlyRemainingCents: 0, debtCents: 0 });
+    const cleared = await db.select().from(creditLedger).where(and(inArray(creditLedger.walletId, ids), inArray(creditLedger.entryType, ['debt_forgiven', 'allocation_reset'])));
+    expect(cleared.map((r) => [r.walletId, r.entryType]).sort()).toEqual([
+      [w.marcusWalletId, 'debt_forgiven'], [w.poolId, 'debt_forgiven'], [w.productWalletId, 'allocation_reset'],
+    ].sort());
+    expect(cleared.find((r) => r.walletId === w.productWalletId)?.amountCents).toBe(300);
+    expect(cleared.find((r) => r.walletId === w.poolId)?.amountCents).toBe(9_000 - 100 - pool.monthlyAllowanceCents);
+    expect(await walletDriftAlerts({ toleranceCents: 0, limit: 10, walletIds: ids })).toEqual([]);
+
+    // A change that bypasses the ledger is caught.
+    await db.update(wallets).set({ debtCents: 5 }).where(eq(wallets.id, w.productWalletId));
+    expect(await walletDriftAlerts({ toleranceCents: 0, limit: 10, walletIds: ids })).toEqual([
+      expect.objectContaining({ walletId: w.productWalletId, kind: 'drive_wallet', driftCents: -5 }),
+    ]);
   });
 
   // ---------------------------------------------------------------------------

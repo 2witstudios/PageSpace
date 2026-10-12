@@ -13,6 +13,7 @@ import {
   estimateChatHoldCents,
   holdExpiresAt,
   computeMonthlyRefill,
+  forgivenAtRefillCents,
   applyPaymentToDebt,
   classifyStripeEvent,
   computeBackfillActions,
@@ -473,6 +474,20 @@ describe('computeMonthlyRefill', () => {
       monthlyAllowanceCents: 1500,
       debtCents: 0,
     });
+  });
+});
+
+describe('forgivenAtRefillCents — the debt a refill clamps away (WAL-5: it is ledgered)', () => {
+  it('WAL-5 (partial) is exactly what the clamp drops: debt past the carried balance plus the allowance, else nothing', () => {
+    expect(forgivenAtRefillCents(1500, 100, 200)).toBe(0);
+    expect(forgivenAtRefillCents(1500, 100, 1600)).toBe(0);
+    expect(forgivenAtRefillCents(1500, 100, 2000)).toBe(400);
+    expect(forgivenAtRefillCents(-5, 0, 300)).toBe(300);
+    for (const [allowance, rem, debt] of [[1500, 100, 2000], [0, 0, 70], [500, 900, 50]] as const) {
+      const r = computeMonthlyRefill(allowance, rem, debt);
+      // net after − net before = allowance + forgiven: the grant row and the forgiveness row.
+      expect(r.monthlyRemainingCents - r.debtCents - (rem - debt)).toBe(Math.max(0, allowance) + forgivenAtRefillCents(allowance, rem, debt));
+    }
   });
 });
 

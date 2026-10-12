@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { allocationTransferRows, computeWalletDrift, ledgerMovementCents, rowTotals, ALLOCATION_DRAW_ENTRY } from '../wallet-ledger-core';
+import { allocationTransferRows, computeWalletDrift, debtClearedRow, ledgerMovementCents, rowTotals, ALLOCATION_DRAW_ENTRY, ALLOCATION_RESET_ENTRY, DEBT_FORGIVEN_ENTRY } from '../wallet-ledger-core';
 
 describe('allocationTransferRows: an allocation draw is a transfer pair', () => {
   it('WAL-5 (partial) a settle drawing 60¢ of allocation writes 60¢ out of the parent and 60¢ into the drive wallet, under the consumer and the call', () => {
@@ -38,6 +38,17 @@ describe('ledgerMovementCents: what one row moved on its wallet\'s net', () => {
   it('WAL-5 (partial) summed per entry type, a debt row and a reconcile correction of the same type still count each their own way', () => {
     // -90 debt (applied null) and a -7 correction (amount -10): applied-or-amount sums -97.
     expect(ledgerMovementCents({ entryType: 'adjustment', amountCents: -100, appliedCents: -7, appliedOrAmountCents: -97 })).toBe(-97);
+  });
+});
+
+describe('debtClearedRow: debt cleared without payment is a row', () => {
+  it('WAL-5 (partial) forgiveness at a renewal and netting at an allocation reset each raise the wallet\'s net by what was cleared, and reconciliation counts it', () => {
+    for (const entryType of [DEBT_FORGIVEN_ENTRY, ALLOCATION_RESET_ENTRY] as const) {
+      const row = debtClearedRow({ entryType, userId: 'u', walletId: 'w', clearedCents: 400 });
+      expect(row).toEqual({ userId: 'u', walletId: 'w', entryType, bucket: 'monthly', amountCents: 400, appliedCents: 400, consumeStatus: 'applied' });
+      expect(ledgerMovementCents(rowTotals(row!))).toBe(400);
+    }
+    expect(debtClearedRow({ entryType: DEBT_FORGIVEN_ENTRY, userId: 'u', walletId: 'w', clearedCents: 0 })).toBeNull();
   });
 });
 
