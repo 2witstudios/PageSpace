@@ -39,6 +39,10 @@ export const userPersonalization = pgTable('user_personalization', {
   writingStylePageId: text('writingStylePageId').references(() => pages.id, { onDelete: 'set null' }),
   rulesPageId: text('rulesPageId').references(() => pages.id, { onDelete: 'set null' }),
 
+  // SEC-2/3 (D-OW-62): the orgs whose content memory discovery distilled into these pages (union over every promoted
+  // claim). The memory is injected into, and shown to, a credential only when every one of these orgs admits it.
+  memoryOrgIds: text('memoryOrgIds').array().notNull().default(sql`ARRAY[]::text[]`),
+
   // Global toggle for AI personalization
   enabled: boolean('enabled').default(true).notNull(),
 
@@ -94,6 +98,8 @@ export const personalizationCandidates = pgTable('personalization_candidates', {
   claim: text('claim').notNull(),
   claimKey: text('claimKey').notNull(), // normalized for dedupe
   evidence: text('evidence').notNull(), // verbatim quote from user message
+  // SEC-2/3 (D-OW-62): the orgs whose drives fed the discovery pass that produced this claim (union across passes).
+  orgIds: text('orgIds').array().notNull().default(sql`ARRAY[]::text[]`),
 
   occurrences: integer('occurrences').default(1).notNull(),
 

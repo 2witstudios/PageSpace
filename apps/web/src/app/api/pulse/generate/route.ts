@@ -33,6 +33,7 @@ import {
 import { readPageContent } from '@pagespace/lib/services/page-content-store';
 import { accessiblePageIds } from '@pagespace/lib/permissions/accessible-page-ids';
 import { getMemberDriveIds } from '@pagespace/lib/permissions/member-drives';
+import { orgIdsOfSources } from '@pagespace/lib/permissions/org-derived-content';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { AIMonitoring, discardUsageOutcome, extractOpenRouterCostDollars, extractOpenRouterGenerationIds } from '@pagespace/lib/monitoring/ai-monitoring';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
@@ -143,6 +144,8 @@ export async function POST(req: Request) {
     ]);
     const driveIds = userDrives;
     const accessiblePages = new Set(accessiblePagesList);
+    // SEC-2/3 (D-OW-62): every org whose drive or page can feed this summary; readers must satisfy all of them.
+    const contributingOrgIds = await orgIdsOfSources({ driveIds, pageIds: accessiblePagesList });
 
     // ========================================
     // 1. WORKSPACE CONTEXT
@@ -787,6 +790,7 @@ What would be genuinely useful or interesting to say right now? Maybe it's an ob
       summary,
       greeting,
       type: 'on_demand',
+      orgIds: contributingOrgIds,
       contextData: {
         workspace: contextData.workspace,
         workingOn: contextData.activitySummary.slice(0, 5).map(a => ({

@@ -151,3 +151,14 @@ export async function getResourceDriveIds(resourceIds: readonly string[], execut
   }
   return out;
 }
+
+/** The distinct orgs governing `driveIds`, sorted (a personal drive governs none). One read per chunk. */
+export async function listOrgIdsOfDrives(driveIds: readonly string[], executor: Executor = db): Promise<string[]> {
+  const unique = [...new Set(driveIds)];
+  const orgIds = new Set<string>();
+  for (let i = 0; i < unique.length; i += ORG_ID_CHUNK) {
+    const rows = await executor.select({ orgId: drives.orgId }).from(drives).where(inArray(drives.id, unique.slice(i, i + ORG_ID_CHUNK)));
+    for (const row of rows) if (row.orgId) orgIds.add(row.orgId);
+  }
+  return [...orgIds].sort();
+}

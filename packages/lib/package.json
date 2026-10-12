@@ -3029,6 +3029,11 @@
       "import": "./dist/permissions/actor-authentication.js",
       "require": "./dist/permissions/actor-authentication.js"
     },
+    "./permissions/org-derived-content": {
+      "types": "./dist/permissions/org-derived-content.d.ts",
+      "import": "./dist/permissions/org-derived-content.js",
+      "require": "./dist/permissions/org-derived-content.js"
+    },
     "./organizations/authentication-policy-core": {
       "types": "./dist/organizations/authentication-policy-core.d.ts",
       "import": "./dist/organizations/authentication-policy-core.js",
@@ -3963,6 +3968,9 @@
       ],
       "permissions/actor-authentication": [
         "./dist/permissions/actor-authentication.d.ts"
+      ],
+      "permissions/org-derived-content": [
+        "./dist/permissions/org-derived-content.d.ts"
       ],
       "organizations/authentication-policy-core": [
         "./dist/organizations/authentication-policy-core.d.ts"
