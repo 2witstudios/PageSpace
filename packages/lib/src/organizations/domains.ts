@@ -443,7 +443,7 @@ export async function autoJoinVerifiedDomainOrg(
       departureSuppressed: await isDepartureSuppressed(tx, orgId, email),
       hasOpenInvite: openInvite !== undefined,
       isOrgGuest: isMember ? false : await isOrgGuest(orgId, input.userId, tx),
-      orgActive: (await checkOrgActive(orgId, { executor: tx, now: input.now })).ok,
+      orgActive: (await checkOrgActive(orgId, { executor: tx })).ok,
     });
     if (decision.action === 'skip') {
       // [D-OW-27] A departed person tried to come back and was turned away: the Owner sees that someone tried, by

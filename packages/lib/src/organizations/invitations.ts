@@ -177,7 +177,7 @@ export async function createOrRotateInvitation(input: {
       inviteEvent = null;
       await lockOrgInviteAddress(tx, input.orgId, input.email);
       // SEAT-9: inviting is an org-only capability; a lapsed org is refused before any write.
-      const active = await checkOrgActive(input.orgId, { executor: tx, now: input.now });
+      const active = await checkOrgActive(input.orgId, { executor: tx });
       if (!active.ok) return lapsedRefusal(active);
       // POL-5: who may invite, read here in the same transaction and before anything is written.
       const refusal = await inviterRefusal(tx, input.orgId, input.actorRole, input.role);
@@ -322,7 +322,7 @@ export async function resendInvitation(input: {
       .limit(1);
     if (peek) await lockOrgInviteAddress(tx, input.orgId, peek.email);
     // SEAT-9: a re-sent invite is an invite; the pending one keeps its link and its seat.
-    const active = await checkOrgActive(input.orgId, { executor: tx, now: input.now });
+    const active = await checkOrgActive(input.orgId, { executor: tx });
     if (!active.ok) return lapsedRefusal(active);
     const [previous] = await tx
       .select()

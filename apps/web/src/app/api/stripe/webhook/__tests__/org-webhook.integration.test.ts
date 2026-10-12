@@ -31,7 +31,7 @@ import { stripeEvents, subscriptions } from '@pagespace/db/schema/subscriptions'
 import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
 import { createOrganization } from '@pagespace/lib/organizations/repository';
-import { getOrgStatus } from '@pagespace/lib/organizations/status';
+import { checkOrgActive, getOrgStatus } from '@pagespace/lib/organizations/status';
 import { ORG_ID_METADATA_KEY, ORG_SUBSCRIPTION_KIND, type OrgBusinessPrices } from '@pagespace/lib/billing/org-subscription-core';
 import { orgPoolListPriceGrantCents, orgPoolRefillGrant } from '@pagespace/lib/billing/wallet-funding';
 import { centsFromDollars, tierListPriceCents } from '@pagespace/lib/billing/money-model';
@@ -39,7 +39,7 @@ import { reconcileSubscriptionTiers } from '@pagespace/lib/billing/subscription-
 import { getPersonalTierFromPrice } from '@/lib/stripe/price-config';
 import { TIER_PLAN_LIMITS } from '@pagespace/lib/billing/subscription-tiers';
 import { stripeConfig } from '@/lib/stripe-config';
-import { ensureOrgBusinessSubscription, type OrgBillingDeps, type OrgBillingStripe } from '@/lib/org-billing/org-subscription';
+import { provisionOrgSubscription, type OrgBillingDeps, type OrgBillingStripe } from '@/lib/org-billing/org-subscription';
 import { FakeOrgStripe } from '@/lib/org-billing/__tests__/fake-org-stripe';
 import { WALLET_LEG_INVARIANT_GUC, expectWalletLegInvariant, installWalletLegInvariantTrigger } from '@pagespace/lib/test/wallet-leg-invariant';
 
@@ -108,7 +108,7 @@ async function northwind(seats = 7): Promise<Org> {
   orgIds.push(created.organization.id);
   const stripe = new FakeOrgStripe();
   const deps: OrgBillingDeps = { stripe, prices: () => PRICES, countSeats: async () => seats };
-  const { linkage } = await ensureOrgBusinessSubscription(created.organization.id, deps);
+  const { result: { linkage } } = await provisionOrgSubscription(created.organization.id, deps);
   fakeHolder.current = stripe;
   return { orgId: created.organization.id, ownerId: owner.id, customerId: linkage.stripeCustomerId, subscriptionId: linkage.stripeSubscriptionId, stripe, deps };
 }
@@ -154,7 +154,7 @@ function invoiceObject(spec: InvoiceSpec) {
     period_end: spec.periodStart,
     livemode: false,
     parent: { type: 'subscription_details', subscription_details: { metadata: spec.metadata, subscription: spec.subscriptionId } },
-    lines: { object: 'list', data: lines },
+    lines: { object: 'list', has_more: false, data: lines },
   };
 }
 
@@ -202,11 +202,10 @@ async function seedDriveWallet(orgId: string, poolId: string, topupCents: number
   });
 }
 
-function setStripeStatus(org: Org, status: string, extra: Partial<{ trialEnd: number | null }> = {}): void {
+function setStripeStatus(org: Org, status: string): void {
   const sub = org.stripe.subscriptions.get(org.subscriptionId);
   if (!sub) throw new Error('no fake subscription');
   sub.status = status;
-  if ('trialEnd' in extra) sub.trialEnd = extra.trialEnd ?? null;
 }
 
 /**
@@ -779,6 +778,26 @@ describe('Stripe webhook — org routing, idempotency, lapse (real Postgres, in-
     expect((await getOrgStatus(org.orgId)).status).toBe('active');
   });
 
+  it('SEAT-9 (partial) D-OW-44: an active subscription switched to send_invoice lapses the org through the webhook, and switching back restores it', async () => {
+    if (!dbAvailable) return;
+    const org = await northwind(7);
+    const snapshot = { id: org.subscriptionId, object: 'subscription', customer: org.customerId, metadata: orgMetadata(org.orgId), status: 'active' };
+    setStripeStatus(org, 'active');
+    await factories.fundOrgSubscription(org.orgId);
+    expect(await deliver(eventPayload('customer.subscription.updated', snapshot))).toBe(200);
+    expect((await getOrgStatus(org.orgId)).status).toBe('active');
+
+    org.stripe.subscriptions.get(org.subscriptionId)!.collectionMethod = 'send_invoice';
+    expect(await deliver(eventPayload('customer.subscription.updated', snapshot))).toBe(200);
+    expect((await storedSub(org.orgId)).collectionMethod).toBe('send_invoice');
+    expect(await getOrgStatus(org.orgId)).toEqual({ status: 'lapsed', reason: 'manual_collection' });
+    expect(await checkOrgActive(org.orgId)).toMatchObject({ ok: false, code: 'org_lapsed' });
+
+    org.stripe.subscriptions.get(org.subscriptionId)!.collectionMethod = 'charge_automatically';
+    expect(await deliver(eventPayload('customer.subscription.updated', snapshot))).toBe(200);
+    expect((await getOrgStatus(org.orgId)).status).toBe('active');
+  });
+
   it('SEAT-9 (partial) entering and leaving lapse is explicit and reversible, and never touches a credit already granted', async () => {
     if (!dbAvailable) return;
     const org = await northwind(7);
@@ -841,7 +860,7 @@ describe('Stripe webhook — org routing, idempotency, lapse (real Postgres, in-
     expect((await getOrgStatus(org.orgId)).status).toBe('lapsed');
 
     // Reactivate: D1's path creates the replacement (awaiting its payment) and stores it.
-    const { linkage } = await ensureOrgBusinessSubscription(org.orgId, org.deps);
+    const { result: { linkage } } = await provisionOrgSubscription(org.orgId, org.deps);
     expect(linkage.stripeSubscriptionId).not.toBe(oldId);
     const replacement = org.stripe.subscriptions.get(linkage.stripeSubscriptionId)!;
     replacement.status = 'active';

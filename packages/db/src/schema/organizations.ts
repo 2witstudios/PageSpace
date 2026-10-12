@@ -125,7 +125,10 @@ export const orgSubscriptions = pgTable('org_subscriptions', {
   status: text('status').notNull(),
   // null = not yet verified from Stripe; reporting must not assume it is paid.
   gifted: boolean('gifted'),
-  trialEnd: timestamp('trialEnd', { mode: 'date' }),
+  // [D-OW-44] Stripe collection_method, mirrored with the status: only charge_automatically can
+  // grant capability (status-core). Every writer sets it from Stripe; the default only backfills
+  // rows that existed before the column, all of which PageSpace created automatically collected.
+  collectionMethod: text('collectionMethod').default('charge_automatically').notNull(),
   currentPeriodStart: timestamp('currentPeriodStart', { mode: 'date' }),
   currentPeriodEnd: timestamp('currentPeriodEnd', { mode: 'date' }),
   cancelAtPeriodEnd: boolean('cancelAtPeriodEnd').default(false).notNull(),
