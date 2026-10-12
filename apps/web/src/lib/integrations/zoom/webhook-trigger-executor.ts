@@ -1,3 +1,4 @@
+import { toPersonalSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
@@ -12,7 +13,6 @@ import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
 import { automationSpend } from '@pagespace/lib/billing/spend-target';
 import { creditDeniedError } from '@/lib/workflows/workflow-credit-gate';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
-import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 
 const logger = loggers.api.child({ module: 'webhook-trigger-executor' });
@@ -96,7 +96,7 @@ export async function executeWebhookTrigger(
     const spend = automationSpend(workflow.driveId);
     const gate = await canConsumeAI(
       ownerId,
-      (workflowOwner?.subscriptionTier ?? 'free') as SubscriptionTier,
+      toPersonalSubscriptionTier(workflowOwner?.subscriptionTier),
       { spend, skipDailyCap: true },
     );
     if (!gate.allowed) {

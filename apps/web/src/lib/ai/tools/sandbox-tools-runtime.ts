@@ -51,7 +51,7 @@ import { writeCodeExecutionAudit } from '@pagespace/lib/services/sandbox/audit';
 import { gateSandboxToolCall } from '@pagespace/lib/services/sandbox/tool-gate';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { toSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
+import { toPersonalSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { computeTierForDrive } from '@pagespace/lib/billing/sandbox-eligibility';
 import { createSandboxTools, type ResolveSandboxContext, type SandboxGate } from './sandbox-tools';
 import {
@@ -543,7 +543,7 @@ export function createResolveSandboxActorContext(
       aiProvider: context?.aiProvider,
       aiModel: context?.aiModel,
       // WAL-9: an org drive's compute runs on the org's tier, not the lead's own plan.
-      tier: computeTierForDrive(drive, toSubscriptionTier(payerRow?.subscriptionTier), await isOrgLapsedForDrive(drive)),
+      tier: computeTierForDrive(drive, toPersonalSubscriptionTier(payerRow?.subscriptionTier), await isOrgLapsedForDrive(drive)),
       turnId,
     };
 

@@ -1,10 +1,10 @@
+import { toPersonalSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { canConsumeAI, type CreditGateResult, type GateOptions, type SpendRefusal } from '@pagespace/lib/billing/credit-gate';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import type { GateReason } from '@pagespace/lib/billing/credit-core';
-import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 
 type UserCreditHold =
   | { allowed: true; walletId: string | undefined; release: () => void }
@@ -52,5 +52,5 @@ export async function gateUserCall(userId: string, opts: GateOptions): Promise<C
     .from(users)
     .where(eq(users.id, userId));
 
-  return canConsumeAI(userId, (user?.subscriptionTier ?? 'free') as SubscriptionTier, opts);
+  return canConsumeAI(userId, toPersonalSubscriptionTier(user?.subscriptionTier), opts);
 }

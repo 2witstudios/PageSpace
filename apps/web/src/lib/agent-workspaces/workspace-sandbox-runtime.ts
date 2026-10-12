@@ -24,7 +24,7 @@ import {
 } from '@pagespace/lib/services/sandbox/quota';
 import { writeCodeExecutionAudit } from '@pagespace/lib/services/sandbox/audit';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
-import { toSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
+import { toPersonalSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
@@ -117,7 +117,7 @@ export interface SessionActorContext {
   tenantId: string;
   actorEmail: string;
   actorDisplayName?: string;
-  tier: ReturnType<typeof toSubscriptionTier>;
+  tier: ReturnType<typeof toPersonalSubscriptionTier>;
 }
 
 /** The acting user's identity/tier facts for a git read run's actor context. */
@@ -131,7 +131,7 @@ export async function resolveSessionActorContext(userId: string): Promise<Sessio
     tenantId: userId,
     actorEmail: actorInfo.actorEmail,
     actorDisplayName: actorInfo.actorDisplayName,
-    tier: toSubscriptionTier(user?.subscriptionTier),
+    tier: toPersonalSubscriptionTier(user?.subscriptionTier),
   };
 }
 

@@ -1,3 +1,4 @@
+import { resolvePersonalCapabilityTier } from '@pagespace/lib/billing/deployment-capability';
 /**
  * AI PROVIDER SETTINGS — the read and write behind `GET`/`PATCH /api/ai/chat`.
  *
@@ -119,7 +120,7 @@ async function validateProviderModel(
     const admission = resolveGenerationAdmission({
       provider,
       model,
-      subscriptionTier: user?.subscriptionTier ?? undefined,
+      subscriptionTier: resolvePersonalCapabilityTier(user?.subscriptionTier),
       isAdmin: isAdminUser,
       requiresProSubscription,
     });

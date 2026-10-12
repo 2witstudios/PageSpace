@@ -1,3 +1,4 @@
+import { toPersonalSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
@@ -5,7 +6,6 @@ import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import { MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
 import { personTriggeredSpend } from '@pagespace/lib/billing/spend-target';
-import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import type { ToolExecutionContext } from '@/lib/ai/core/types';
 import { creditDeniedError } from '@/lib/workflows/workflow-credit-gate';
 
@@ -45,7 +45,7 @@ export async function acquireMentionCreditHold(input: {
   const spend = personTriggeredSpend(input.driveId);
   const gate = await canConsumeAI(
     input.userId,
-    (sender?.subscriptionTier ?? 'free') as SubscriptionTier,
+    toPersonalSubscriptionTier(sender?.subscriptionTier),
     { spend, maxInFlight: MAX_CHAT_INFLIGHT },
   );
   if (!gate.allowed) return { allowed: false, error: creditDeniedError(gate.reason, gate.refusal) };

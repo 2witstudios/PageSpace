@@ -11,14 +11,10 @@
  * is checked first (cheap, no DB) so a disabled feature denies before any
  * database round-trip.
  *
- * No deployment-mode branch HERE, but the mode is not ignored: it is folded into
- * the tier answer one layer down. `isSandboxAvailable` resolves the payer's
- * EFFECTIVE tier for this deployment (`resolveEffectiveSandboxTier`), so a tenant
- * — whose stored tier is not a purchase record, since it has no Stripe path — is
- * eligible without this chokepoint knowing the word "tenant". On-prem is
- * deliberately NOT exempt there: its answer to code execution is a local bridge to
- * the operator's own shell, not a Sprite. Adding an `isTenantMode()` check here
- * would be a second place for the same question to be answered differently.
+ * Deployment capability is resolved once by `isSandboxAvailable`: billing-disabled
+ * tenant/on-prem installations use finite deployment limits instead of a synthetic
+ * personal paid tier. This gate also authorizes local bridge binding, so personal
+ * Free normalization must not remove self-hosted execution capability.
  *
  * Tier gate, not admin gate: the sandbox is a paid feature (Pro tier and
  * above) — session/chat/panes/GitHub-tool access is open to every
@@ -124,7 +120,7 @@ const defaultDeps: CanRunCodeDeps = {
   lookupDriveBillingFacts: (driveId) =>
     import('../../billing/sandbox-payer').then((m) => m.lookupDriveBillingFacts(driveId)),
   getUserSubscriptionTier: async (userId) => {
-    const [{ db }, { eq }, { users }, { toSubscriptionTier }] = await Promise.all([
+    const [{ db }, { eq }, { users }, { toPersonalSubscriptionTier }] = await Promise.all([
       import('@pagespace/db/db'),
       import('@pagespace/db/operators'),
       import('@pagespace/db/schema/auth'),
@@ -134,7 +130,7 @@ const defaultDeps: CanRunCodeDeps = {
       where: eq(users.id, userId),
       columns: { subscriptionTier: true },
     });
-    return toSubscriptionTier(user?.subscriptionTier);
+    return toPersonalSubscriptionTier(user?.subscriptionTier);
   },
   getAgentAccessLevel: (agentPageId, targetPageId) =>
     import('../../permissions/agent-permissions').then((m) =>

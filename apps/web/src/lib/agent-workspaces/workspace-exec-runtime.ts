@@ -14,7 +14,7 @@ import { eq } from '@pagespace/db/operators';
 import { drives } from '@pagespace/db/schema/core';
 import { users } from '@pagespace/db/schema/auth';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
-import { toSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
+import { toPersonalSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { computeTierForDrive } from '@pagespace/lib/billing/sandbox-eligibility';
 import {
   runBashInSandbox,
@@ -62,7 +62,7 @@ export async function resolveWorkspaceExecActorContext(
     actorEmail: actorInfo.actorEmail,
     actorDisplayName: actorInfo.actorDisplayName,
     // WAL-9: an org drive's compute runs on the org's tier, not the lead's own plan.
-    tier: computeTierForDrive(drive, toSubscriptionTier(payer?.subscriptionTier), await isOrgLapsedForDrive(drive)),
+    tier: computeTierForDrive(drive, toPersonalSubscriptionTier(payer?.subscriptionTier), await isOrgLapsedForDrive(drive)),
   };
 }
 

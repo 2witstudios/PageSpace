@@ -9,7 +9,7 @@
 /** Fields to spread into a `users` insert/update for on-prem deployments. */
 export function getOnPremUserDefaults() {
   return {
-    subscriptionTier: 'business' as const,
+    subscriptionTier: 'free' as const,
     currentAiProvider: 'ollama',
     currentAiModel: '',
   };

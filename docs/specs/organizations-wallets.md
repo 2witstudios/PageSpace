@@ -56,9 +56,9 @@ Each line must be true for the epic to be complete. IDs are stable for task list
 - SEAT-5 Removing a member frees the seat at period end; re-adding within the period reuses it without a charge.
 - SEAT-6 Plan, seat count, invoices, billing email, and portal are visible to Owner and Admins only; hidden entirely in onprem and tenant modes by the existing billing gate.
 - SEAT-7 Org subscription webhooks are idempotent and routed before the personal-tier handler, as dedicated-hosting subscriptions already are.
-- SEAT-8 There is no free org tier. Creating an org starts Business ($50 a month, 5 seats included) with a trial; a card is required before the trial ends.
+- SEAT-8 There is no free org tier and no org trial (D-OW-30). Creating an org starts Business ($50 a month, 5 seats included) and requires a card at checkout; the org pool is funded from the first real payment. A gifted org (admin path) is funded at list price × the included-credit ratio, only when the gift is on the org's own subscription.
 
-- SEAT-9 A lapsed org (trial expired, unpaid, or canceled) keeps every org drive readable to its members and blocks org-only capabilities: inviting, creating org drives, the org pool and allocations, policies changes, publishing from org drives, and sandbox or environments in org drives. Owner and Admins see a reactivate banner on every org surface; members see a read-only notice. Nothing is deleted.
+- SEAT-9 A lapsed org (unpaid, payment failed, or canceled; an org that has never paid is lapsed) keeps every org drive readable to its members and blocks org-only capabilities that add access or spend: inviting, creating org drives, the org pool and allocations, loosening policies or caps, approving guests, publishing from org drives, and sandbox or environments in org drives. It is charged nothing for storage while lapsed (D-OW-32). Admins can still restrict: tighten policies and caps, turn guests off, revoke links and invitations, decline guests, and remove members; billing never blocks security (D-OW-33). Owner and Admins see a reactivate banner on every org surface; members see a read-only notice. Nothing is deleted.
 
 
 ### WAL — Wallets and allocations (generalizes Phase 1 credit provisioning)
@@ -92,7 +92,7 @@ Each line must be true for the epic to be complete. IDs are stable for task list
 - SPEND-3 Switching source is per conversation and persists for it. Preselection comes from the drive's default, then the person's own default in Settings.
 - SPEND-4 The gate never picks a different wallet silently. An empty chosen source refuses the call, names the source, offers the remaining options, and charges nothing. Fallback happens only when the drive's rule allows it and the chip and strip show the new source.
 - SPEND-5 "Always my own credits" is an absolute per-user override, per drive and as one global switch (D17.2, D20.7).
-- SPEND-6 Automations, triggers, scheduled workflows, and channel mentions spend the drive wallet only, never a person's credits or allowance. Consumer key is the drive. An empty wallet skips the run and logs it.
+- SPEND-6 Automations, triggers, and scheduled workflows spend the drive wallet only, never a person's own credits or allowance, and run on behalf of their creator: their spend counts against the creator's per-consumer cap (D-OW-34). A channel mention or a manual workflow Run is a person's action: it spends the drive wallet and counts against that person's cap. An automation whose creator is no longer a member does not run; when a creator leaves the org or deletes their account, their org-drive automations are disabled and flagged for an admin to reassign or delete (D-OW-36). An empty wallet or a reached cap skips the run and logs why.
 - SPEND-7 An agent's spend is attributed to the drive of the session it runs in, not the drive the agent page lives in.
 - SPEND-8 The global assistant with no drive spends personal credits.
 - SPEND-9 Consumers see the drive wallet's remaining amount and their own remaining cap; never the org pool, never the funder's balance, never other consumers' spend (D18 as refined).
@@ -128,7 +128,7 @@ Each line must be true for the epic to be complete. IDs are stable for task list
 - UI-3 Header crumb stays one chip: the org or the drive.
 - UI-4 Drive General gains the Organization card: owner, billing summary, visibility, drive lead, move in or out.
 - UI-5 Drive Members labels guests; the invite flow offers guest versus seat for an outsider.
-- UI-6 Create-organization dialog: name, slug, move owned drives (Home excluded), invite people, plan summary, trial.
+- UI-6 Create-organization dialog: name, slug, move owned drives (Home excluded), invite people, plan summary, and card-first checkout with no trial (D-OW-30, SEAT-8).
 - UI-7 Members & seats, Drives, Policies, Security, Plan & seats, Audit log pages per canvas page 1.
 - UI-8 Spending-from chip and popover, composer strip, refusal card, automation state per canvas page 2.
 - UI-9 Drive Settings › Wallet page: allocation, top-up, donate, who spends, fallback, spend this month.
@@ -160,7 +160,7 @@ Answered in conversation (2026-09-15):
 
 
 - A-6 All of this is one epic.
-- A-7 No free org tier. An organization exists only on a paid plan or its trial; the org itself is the upsell (SEAT-8, SEAT-9).
+- A-7 No free org tier and no org trial. An organization exists only on a paid or gifted plan; the org itself is the upsell (SEAT-8, SEAT-9).
 - A-8 Seats beyond the 5 included cost $10 per seat per month, billed as a second subscription item with quantity = max(0, seats − 5).
 - A-9 Full cutover (D-OW-42, 2026-10-11, supersedes indefinite grandfathering): Founder and personal Business billing paths are retired. Existing subscribers must complete an explicit, verified one-time migration before rollout; the final runtime supports only personal Free/Pro and organization Business. Stripe price identity, never an amount match, establishes plan entitlement. Unknown, retired, unconfigured, or ambiguous price identities grant no paid entitlement. Migration preserves existing credit value and must not silently charge or discard balances.
 - A-10 The subscription price and the metered credit allowance are decoupled: the allowance is a ratio of the price paid, and a credit has its own unit distinct from cents (MON-1..MON-8). The numbers are A-11.
@@ -172,7 +172,7 @@ Answered in conversation (2026-09-15):
 
 
 Open, with recommendation:
-- O-1 Security (SEC-1..3) in this epic or deferred. Recommend: SEC-1 verified domains in; SEC-2 and SEC-3 deferred to a follow-on, since neither changes the data model.
+- O-1 Resolved by D-OW-43 (2026-10-11): SEC-1, SEC-2 and SEC-3 are all required in this epic under the full-spec completion instruction. Two-step/strong sign-in and maximum session age must restrict org access through shared enforcement, without locking the person out of their account. Web, CLI and MCP must obey the same policy. SSO and SCIM remain out of scope (SEC-4).
 - O-2 Restricted visibility at launch. Recommend: in, since the directory and join request are small once Open exists.
 - O-3 Whether a seat holder needs a personal plan. Recommend: no; a seat grants Business entitlements inside org drives, and the person's personal drives stay on their own tier (Free or Pro).
 
@@ -196,4 +196,3 @@ Open, with recommendation:
 
 ## Out of scope
 SSO and SCIM. Public drives and the visitor principal (Phase 2 of the Public Platform Program) remain their own work and consume the wallet primitive unchanged. App hosting economics.
-

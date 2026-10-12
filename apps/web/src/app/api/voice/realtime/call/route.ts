@@ -1,3 +1,4 @@
+import { toPersonalSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 /**
  * Realtime Voice Call API Route
  *
@@ -64,7 +65,7 @@ export async function POST(request: Request) {
     // Free users can't use voice at all — same gate, same message as STT/TTS.
     if (isBillingEnabled()) {
       const user = await aiSettingsRepository.getUserSettings(userId);
-      tier = (user?.subscriptionTier ?? 'free') as SubscriptionTier;
+      tier = toPersonalSubscriptionTier(user?.subscriptionTier);
       if (!PAID_TIERS.has(tier)) {
         return NextResponse.json(
           {

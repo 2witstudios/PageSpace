@@ -51,7 +51,7 @@ import { ensurePersonalRootWalletId } from '../billing/personal-wallet';
 import { listSpendChoices, resolveCallSpend, seatAllowanceFor, seatAllowancesFor, type SpendChoice } from '../billing/spend-resolution';
 import { conversationSpend, type CallSpendDecision } from '../billing/spend-target';
 import { formatCreditCount } from '../billing/money-model';
-import { toSubscriptionTier } from '../billing/subscription-tiers';
+import { toPersonalSubscriptionTier } from '../billing/subscription-tiers';
 import { capChangeOnlyRestricts, planDeleteWallet, planTopUp, planWalletPatch, walletPatchOnlyRestricts, type DeleteBlocker, type WalletPatchInput } from '../billing/wallet-admin';
 import { donateToDriveWallet } from '../billing/wallet-funding-shell';
 import { checkOrgActive } from '../organizations/status';
@@ -1338,7 +1338,7 @@ export async function getConversationSpend(userId: string, conversationId: strin
   const options = await listSpendChoices(userId, sessionDriveId);
   const resolved = await resolveCallSpend({
     userId,
-    consumerTier: toSubscriptionTier(user?.tier),
+    consumerTier: toPersonalSubscriptionTier(user?.tier),
     target: conversationSpend(sessionDriveId, conversationId),
     reservationCents: 0,
     recordRefusal: false,

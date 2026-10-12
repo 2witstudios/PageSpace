@@ -21,15 +21,13 @@ import { db } from '@pagespace/db/db';
 import { and, eq, inArray, sql } from '@pagespace/db/operators';
 import { conversations } from '@pagespace/db/schema/conversations';
 import { agentWorkspaceNodes } from '@pagespace/db/schema/agent-workspace-nodes';
-import { users } from '@pagespace/db/schema/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { checkAgentSessionConcurrency } from '@pagespace/lib/services/sandbox/quota';
+import { checkSessionConcurrency } from './session-concurrency';
 import {
   refreshSessionStorageMeasurement,
   shouldRefreshMeasurement,
   SESSION_STORAGE_MEASUREMENT_THROTTLE_MS,
 } from '@pagespace/lib/services/sandbox/sandbox-storage-measure';
-import { toSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import type { SandboxHandle } from '@pagespace/lib/services/sandbox/sandbox-host';
 import { getSandboxHost } from './sandbox-host-runtime';
 import { ensureEnvSandboxForSession, gateLocalEnvBind, getDriveEnvStore } from '@/lib/drive-envs/drive-envs-runtime';
@@ -1225,25 +1223,12 @@ export async function provisionSessionSandbox(
           adminGateEnabled: isCodeExecutionEnabled(),
           containment: isContainmentVerified() ? { contained: true } : null,
         }),
-      checkConcurrency: async ({ ownerId, alreadyProvisioned }) => {
-        // Tier of the PAYER — the drive's owner, already resolved as the
-        // session's tenant above (drive owner, else session owner) — not the
-        // session creator's own tier (review #2326): a free-tier member's
-        // session in a Pro-owned drive is paid for, and therefore
-        // tier-entitled, by the drive owner. The ceiling still COUNTS the
-        // session owner's live sessions (`ownerId`), keeping per-owner
-        // accounting separate from payer-based entitlement.
-        const payer = await db.query.users.findFirst({
-          where: eq(users.id, tenant.tenantId),
-          columns: { subscriptionTier: true },
-        });
-        return checkAgentSessionConcurrency({
-          ownerId,
-          tier: toSubscriptionTier(payer?.subscriptionTier),
-          countLiveAgentSessions: (id) => store.countLive(id),
-          alreadyProvisioned,
-        });
-      },
+      checkConcurrency: ({ ownerId, alreadyProvisioned }) => checkSessionConcurrency({
+        session: row,
+        ownerId,
+        alreadyProvisioned,
+        countLiveAgentSessions: (id) => store.countLive(id),
+      }),
       // Opportunistic storage measurement, captured while the Sprite is still
       // awake right after provisioning — the one moment its bytes are free to
       // read. Without this the reconcile has no writer for

@@ -2,6 +2,11 @@ name: Docker Images
 
 on:
   workflow_dispatch:
+    inputs:
+      billing_cutover:
+        description: 'Offline final billing cutover: remove old app machines before migration'
+        type: boolean
+        default: false
   push:
     branches: [master]
     tags: ['v*.*.*']
@@ -166,6 +171,8 @@ jobs:
     if: github.ref == 'refs/heads/master'
 
     steps:
+      - uses: actions/checkout@v7
+
       - name: Setup flyctl
         uses: superfly/flyctl-actions/setup-flyctl@master
 
@@ -181,6 +188,12 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Drain old application images for billing cutover
+        if: inputs.billing_cutover == true
+        run: bash scripts/fly-billing-cutover.sh /tmp/pagespace-cutover
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
       - name: Run migrations
         run: |
           docker pull ghcr.io/2witstudios/pagespace-migrate:latest
@@ -191,6 +204,7 @@ jobs:
           # "failed to reach desired start state" after 60s. This is expected.
           # Use || true so bash -e doesn't exit; we verify success via machine state below.
           flyctl machine run registry.fly.io/pagespace-web:migrate \
+            --env "BILLING_CUTOVER_OFFLINE=$BILLING_CUTOVER_OFFLINE" \
             --app pagespace-web \
             --region iad \
             --restart no \
@@ -212,7 +226,7 @@ jobs:
             exit 1
           fi
 
-          # Poll for terminal state. A machine that exits 0 → "stopped"; non-zero → "failed".
+          # Poll for terminal state, then verify exit evidence: stopped alone does not prove success.
           # flyctl machine wait --state stopped hangs the full timeout when migrations fail
           # because the machine is already in "failed" state, not "stopped". Poll both.
           TIMEOUT=900
@@ -233,6 +247,12 @@ jobs:
             fi
             echo "  [${ELAPSED}s] state: $STATE"
             if [ "$STATE" = "stopped" ]; then
+              if ! jq -e -f scripts/fly-migration-succeeded.jq /tmp/fly_machine.json >/dev/null; then
+                echo "ERROR: migration has no verified successful exit"
+                flyctl machine logs "$MACHINE_ID" --app pagespace-web 2>/dev/null || true
+                flyctl machine destroy "$MACHINE_ID" --app pagespace-web --force
+                exit 1
+              fi
               break
             elif [ "$STATE" = "failed" ] || [ "$STATE" = "destroyed" ]; then
               echo "ERROR: migration machine reached $STATE state (migrations failed)"
@@ -255,6 +275,7 @@ jobs:
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
           FLY_NO_UPDATE_CHECK: "true"
+          BILLING_CUTOVER_OFFLINE: ${{ inputs.billing_cutover == true && 'true' || 'false' }}
 
       # Admin PG (trust plane, #890): mirrors the main migration machine but runs
       # db:migrate:admin. The machine runs in the pagespace-web app, BUT it must
@@ -328,6 +349,12 @@ jobs:
             fi
             echo "  [${ELAPSED}s] state: $STATE"
             if [ "$STATE" = "stopped" ]; then
+              if ! jq -e -f scripts/fly-migration-succeeded.jq /tmp/fly_admin_machine.json >/dev/null; then
+                echo "ERROR: migration has no verified successful exit"
+                flyctl machine logs "$MACHINE_ID" --app pagespace-web 2>/dev/null || true
+                flyctl machine destroy "$MACHINE_ID" --app pagespace-web --force
+                exit 1
+              fi
               break
             elif [ "$STATE" = "failed" ] || [ "$STATE" = "destroyed" ]; then
               echo "ERROR: admin migration machine reached $STATE state (migrations failed)"
@@ -373,7 +400,14 @@ jobs:
           docker pull ghcr.io/2witstudios/pagespace-realtime:latest
           docker tag ghcr.io/2witstudios/pagespace-realtime:latest registry.fly.io/pagespace-realtime:latest
           docker push registry.fly.io/pagespace-realtime:latest
-          flyctl deploy --app pagespace-realtime --image registry.fly.io/pagespace-realtime:latest --wait-timeout 300
+          config_args=()
+          if [ -f /tmp/pagespace-cutover/pagespace-realtime.toml ]; then
+            config_args=(--config /tmp/pagespace-cutover/pagespace-realtime.toml)
+          fi
+          flyctl deploy "${config_args[@]}" --app pagespace-realtime --image registry.fly.io/pagespace-realtime:latest --wait-timeout 300
+          if [ -f /tmp/pagespace-cutover/pagespace-realtime.machines.json ]; then
+            bash scripts/fly-billing-restore.sh /tmp/pagespace-cutover pagespace-realtime
+          fi
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
@@ -382,7 +416,14 @@ jobs:
           docker pull ghcr.io/2witstudios/pagespace-web:latest
           docker tag ghcr.io/2witstudios/pagespace-web:latest registry.fly.io/pagespace-web:latest
           docker push registry.fly.io/pagespace-web:latest
-          flyctl deploy --app pagespace-web --image registry.fly.io/pagespace-web:latest --wait-timeout 300
+          config_args=()
+          if [ -f /tmp/pagespace-cutover/pagespace-web.toml ]; then
+            config_args=(--config /tmp/pagespace-cutover/pagespace-web.toml)
+          fi
+          flyctl deploy "${config_args[@]}" --app pagespace-web --image registry.fly.io/pagespace-web:latest --wait-timeout 300
+          if [ -f /tmp/pagespace-cutover/pagespace-web.machines.json ]; then
+            bash scripts/fly-billing-restore.sh /tmp/pagespace-cutover pagespace-web
+          fi
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
@@ -396,7 +437,14 @@ jobs:
           # returns "good state" only after the machine is up. No post-deploy machine wait needed —
           # flyctl machine wait against an immediate-strategy machine hits a transient "replacing"
           # state and produces false-negative CI failures.
-          flyctl deploy --app pagespace-processor --image registry.fly.io/pagespace-processor:latest --wait-timeout 120
+          config_args=()
+          if [ -f /tmp/pagespace-cutover/pagespace-processor.toml ]; then
+            config_args=(--config /tmp/pagespace-cutover/pagespace-processor.toml)
+          fi
+          flyctl deploy "${config_args[@]}" --app pagespace-processor --image registry.fly.io/pagespace-processor:latest --wait-timeout 120
+          if [ -f /tmp/pagespace-cutover/pagespace-processor.machines.json ]; then
+            bash scripts/fly-billing-restore.sh /tmp/pagespace-cutover pagespace-processor
+          fi
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
@@ -405,7 +453,14 @@ jobs:
           docker pull ghcr.io/2witstudios/pagespace-admin:latest
           docker tag ghcr.io/2witstudios/pagespace-admin:latest registry.fly.io/pagespace-admin:latest
           docker push registry.fly.io/pagespace-admin:latest
-          flyctl deploy --app pagespace-admin --image registry.fly.io/pagespace-admin:latest --wait-timeout 300
+          config_args=()
+          if [ -f /tmp/pagespace-cutover/pagespace-admin.toml ]; then
+            config_args=(--config /tmp/pagespace-cutover/pagespace-admin.toml)
+          fi
+          flyctl deploy "${config_args[@]}" --app pagespace-admin --image registry.fly.io/pagespace-admin:latest --wait-timeout 300
+          if [ -f /tmp/pagespace-cutover/pagespace-admin.machines.json ]; then
+            bash scripts/fly-billing-restore.sh /tmp/pagespace-cutover pagespace-admin
+          fi
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
@@ -414,13 +469,22 @@ jobs:
           docker pull ghcr.io/2witstudios/pagespace-cron:latest
           docker tag ghcr.io/2witstudios/pagespace-cron:latest registry.fly.io/pagespace-cron:latest
           docker push registry.fly.io/pagespace-cron:latest
-          flyctl deploy --app pagespace-cron --image registry.fly.io/pagespace-cron:latest --wait-timeout 300
+          config_args=()
+          if [ -f /tmp/pagespace-cutover/pagespace-cron.toml ]; then
+            config_args=(--config /tmp/pagespace-cutover/pagespace-cron.toml)
+          fi
+          flyctl deploy "${config_args[@]}" --app pagespace-cron --image registry.fly.io/pagespace-cron:latest --wait-timeout 300
+          if [ -f /tmp/pagespace-cutover/pagespace-cron.machines.json ]; then
+            bash scripts/fly-billing-restore.sh /tmp/pagespace-cutover pagespace-cron
+          fi
 
           # Cron is a SINGLETON scheduler: exactly one machine must run, or scheduled jobs
           # (memory/pulse crons) double-fire. Reconcile to one machine, ensure it's started,
           # then VERIFY the invariant — if it can't be enforced, fail the deploy rather than
           # silently leave duplicate (double-firing) or stopped (non-firing) cron machines.
-          flyctl scale count 1 --app pagespace-cron --yes
+          if [ ! -f /tmp/pagespace-cutover/pagespace-cron.machines.json ]; then
+            flyctl scale count 1 --app pagespace-cron --yes
+          fi
           for id in $(flyctl machines list --app pagespace-cron --json | jq -r '.[].id'); do
             flyctl machine start "$id" --app pagespace-cron 2>/dev/null || true
           done

@@ -1,3 +1,4 @@
+import { toPersonalSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { db } from '@pagespace/db/db'
 import { and, eq, ne, inArray, desc, count, sql } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
@@ -82,6 +83,7 @@ export const GET = withAdminAuth(async (_adminUser, _request) => {
 
     const allUsers = decryptedUsers.map(user => ({
       ...user,
+      subscriptionTier: toPersonalSubscriptionTier(user.subscriptionTier),
       lastActiveAt: lastActiveMap.get(user.id) ?? null,
     }));
 

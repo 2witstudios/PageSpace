@@ -1,3 +1,4 @@
+import { toPersonalSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { db } from '@pagespace/db/db'
 import { eq } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
@@ -15,7 +16,6 @@ import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
 import { automationSpend } from '@pagespace/lib/billing/spend-target';
 import { creditDeniedError } from '@/lib/workflows/workflow-credit-gate';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
-import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 
 const logger = loggers.api.child({ module: 'calendar-trigger-executor' });
@@ -105,7 +105,7 @@ export async function executeCalendarTrigger(
     const spend = automationSpend(workflow.driveId);
     const gate = await canConsumeAI(
       scheduledById,
-      (schedulingUser?.subscriptionTier ?? 'free') as SubscriptionTier,
+      toPersonalSubscriptionTier(schedulingUser?.subscriptionTier),
       { spend, skipDailyCap: true },
     );
     if (!gate.allowed) {

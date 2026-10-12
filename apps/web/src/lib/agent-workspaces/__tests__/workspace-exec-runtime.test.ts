@@ -17,9 +17,6 @@ vi.mock('@pagespace/db/operators', () => ({ eq: (column: unknown, value: unknown
 vi.mock('@pagespace/db/schema/core', () => ({ drives: { id: 'id' } }));
 vi.mock('@pagespace/db/schema/auth', () => ({ users: { id: 'id' } }));
 vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({ getActorInfo: mockGetActorInfo }));
-vi.mock('@pagespace/lib/billing/subscription-tiers', () => ({
-  toSubscriptionTier: (tier: string | null | undefined) => tier ?? 'free',
-}));
 vi.mock('@pagespace/lib/services/sandbox/tool-runners', () => ({ runBashInSandbox: mockRunBash }));
 vi.mock('@/lib/ai/tools/sandbox-tools-runtime', () => ({
   buildRealSandboxRunDeps: mockBuildRunDeps,

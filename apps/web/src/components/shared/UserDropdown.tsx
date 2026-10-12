@@ -27,7 +27,7 @@ import { isOnPrem } from '@/lib/deployment-mode';
 import useSWR from 'swr';
 import { FeedbackDialog } from './FeedbackDialog';
 import { formatCreditCount } from '@/lib/subscription/credits';
-import { TIER_PLAN_LIMITS, toSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
+import { TIER_PLAN_LIMITS, toPersonalSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 
 const LOW_BALANCE_THRESHOLD_PCT = 15;
 
@@ -62,7 +62,7 @@ export default function UserDropdown() {
   // the tier /api/auth/me already gave us so the label is right on first paint,
   // and coerce through the canonical vocabulary (unknown/missing => 'free').
   const tierName = TIER_PLAN_LIMITS[
-    toSubscriptionTier(subscriptionInfo?.subscriptionTier ?? user?.subscriptionTier)
+    toPersonalSubscriptionTier(subscriptionInfo?.subscriptionTier ?? user?.subscriptionTier)
   ].name;
 
   // Derive credit balance display values

@@ -13,7 +13,9 @@ import { eq } from '@pagespace/db/operators';
 import { drives } from '@pagespace/db/schema/core';
 import { users } from '@pagespace/db/schema/auth';
 import { getPlan } from '@/lib/subscription/plans';
-import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
+import { orgEntitlementTier } from '@pagespace/lib/billing/spend-target';
+import { isOrgLapsedForDrive } from '@pagespace/lib/organizations/status';
+import { resolvePersonalCapabilityTier } from '@pagespace/lib/billing/deployment-capability';
 import { changePublishSubdomain, PublishError, PUBLISH_HOST } from '@/lib/canvas/publish-page';
 import { CUSTOM_SUBDOMAIN_UNAVAILABLE_MESSAGE } from '@/lib/subscription/plan-refusal-copy';
 
@@ -25,12 +27,12 @@ const schema = z.object({
 
 async function canChooseSubdomain(driveId: string): Promise<boolean> {
   const [row] = await db
-    .select({ tier: users.subscriptionTier })
+    .select({ tier: users.subscriptionTier, orgId: drives.orgId })
     .from(drives)
     .innerJoin(users, eq(drives.ownerId, users.id))
     .where(eq(drives.id, driveId))
     .limit(1);
-  const tier = ((row?.tier ?? 'free') as SubscriptionTier);
+  const tier = row?.orgId ? orgEntitlementTier(await isOrgLapsedForDrive(row)) : resolvePersonalCapabilityTier(row?.tier);
   return getPlan(tier).limits.canChooseSubdomain;
 }
 

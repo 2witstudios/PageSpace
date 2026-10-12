@@ -26,6 +26,13 @@ beforeEach(() => {
 });
 
 describe('acquireUserCreditHold', () => {
+  it.each(['business', 'founder'])('A-9 never passes retired personal %s as a paid consumer tier', async (subscriptionTier) => {
+    mockSelectWhere.mockResolvedValue([{ subscriptionTier }]);
+    mockCanConsumeAI.mockResolvedValue({ allowed: false, reason: 'insufficient_credits' });
+    await acquireUserCreditHold('user-1', { spend: SPEND });
+    expect(mockCanConsumeAI).toHaveBeenCalledWith('user-1', 'free', { spend: SPEND });
+  });
+
   it('given a user, should gate them at their own tier with the caller options', async () => {
     mockCanConsumeAI.mockResolvedValue({ allowed: true, reason: 'ok', holdId: 'h' });
 

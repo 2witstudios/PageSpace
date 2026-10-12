@@ -1,3 +1,4 @@
+import { toPersonalSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
@@ -7,7 +8,6 @@ import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import { CREDIT_HOLD_ESTIMATE_CENTS, MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
 import type { GateReason } from '@pagespace/lib/billing/credit-core';
 import { creditDeniedError } from '@pagespace/lib/billing/automation-run-record';
-import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { resolveSteps, hasAiStep, countAiSteps } from './core/step-plan';
 import type { RunAdmission, RunCreditSpend, WorkflowExecutionInput } from './workflow-executor';
 
@@ -81,7 +81,7 @@ export async function acquireWorkflowCreditHold(
     ? { spend: target, estCostCents, maxInFlight: MAX_CHAT_INFLIGHT }
     : { spend: target, estCostCents, skipDailyCap: true };
 
-  const gate = await canConsumeAI(userId, (user?.subscriptionTier ?? 'free') as SubscriptionTier, opts);
+  const gate = await canConsumeAI(userId, toPersonalSubscriptionTier(user?.subscriptionTier), opts);
   if (!gate.allowed) return gate.refusal ? { allowed: false, reason: gate.reason, refusal: gate.refusal } : { allowed: false, reason: gate.reason };
 
   // The run settles on the wallet the gate reserved on (WAL-5): the drive wallet once

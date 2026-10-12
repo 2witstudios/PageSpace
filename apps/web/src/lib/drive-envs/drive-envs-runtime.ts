@@ -19,7 +19,7 @@ import { eq } from '@pagespace/db/operators';
 import { drives } from '@pagespace/db/schema/core';
 import { users } from '@pagespace/db/schema/auth';
 import { computeTierForDrive } from '@pagespace/lib/billing/sandbox-eligibility';
-import { toSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
+import { toPersonalSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import {
   ensureDriveEnvSandbox,
   gateLocalEnvForRequester,
@@ -123,7 +123,7 @@ export async function resolveDriveEnvPayer(driveId: string): Promise<DriveEnvPay
   });
   // `payerId` is the Sprite TENANT (key folding), which stays the lead; the TIER an env's
   // eligibility and allowance follow is the org's for an org drive (WAL-9), whose pool pays.
-  return { payerId: drive.ownerId, tier: computeTierForDrive(drive, toSubscriptionTier(owner?.subscriptionTier), await isOrgLapsedForDrive(drive)) };
+  return { payerId: drive.ownerId, tier: computeTierForDrive(drive, toPersonalSubscriptionTier(owner?.subscriptionTier), await isOrgLapsedForDrive(drive)) };
 }
 
 // ---------------------------------------------------------------------------

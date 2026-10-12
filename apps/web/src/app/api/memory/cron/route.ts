@@ -33,7 +33,7 @@
  * without it (candidates stay pending, pages stay as they are) and the refusal
  * is reported in `creditSkipped`. One user's refusal never touches another's.
  *
- * Paying users only — gated on MEMORY_PAYING_TIERS, the same constant the
+ * Paying personal users only — gated on the canonical personal tiers the
  * settings UI uses, so the two cannot disagree about who gets Memory.
  *
  * Security: HMAC-signed cron requests via cron-curl (X-Cron-Timestamp/Nonce/Signature)
@@ -48,7 +48,9 @@ import { sessions } from '@pagespace/db/schema/sessions';
 import { userPersonalization } from '@pagespace/db/schema/personalization';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
-import { MEMORY_PAYING_TIERS } from '@pagespace/lib/billing/automation-preferences';
+import { personalTiers } from '@pagespace/lib/billing/subscription-tiers';
+import { resolvePersonalCapabilityTier } from '@pagespace/lib/billing/deployment-capability';
+import { isMemoryAvailable } from '@pagespace/lib/billing/automation-preferences';
 import { runDiscoveryPasses } from '@/lib/memory/discovery-service';
 import {
   getCurrentPersonalizationPages,
@@ -76,7 +78,7 @@ import { errorLogFields } from '@pagespace/lib/logging/error-cause';
  * have anything learned, or the reverse — learning for users the product says
  * cannot have it. Neither failure is visible from either side alone.
  */
-const PAYING_TIERS = [...MEMORY_PAYING_TIERS];
+const memoryEligiblePersonalTiers = () => personalTiers().filter((tier) => isMemoryAvailable(resolvePersonalCapabilityTier(tier)));
 
 const DELAY_BETWEEN_USERS_MS = 1000;
 
@@ -102,7 +104,7 @@ export async function POST(request: Request) {
           eq(sessions.type, 'user'),
           isNull(sessions.revokedAt),
           gte(sessions.lastUsedAt, sevenDaysAgo),
-          inArray(users.subscriptionTier, PAYING_TIERS)
+          inArray(users.subscriptionTier, memoryEligiblePersonalTiers())
         )
       )
       .groupBy(sessions.userId, users.subscriptionTier);

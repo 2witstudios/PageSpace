@@ -29,11 +29,13 @@
         "knip": "^5.70.2",
         "msw": "^2.6.8",
         "pg": "^8.16.3",
+        "stripe": "^20.1.0",
         "turbo": "^2.5.5",
         "typescript": "^5.8.3",
         "typescript-eslint": "^8.59.0",
         "vitest": "^2.1.0",
         "yaml": "^2.8.2",
+        "zod": "^4.1.8",
       },
     },
     "apps/admin": {

@@ -134,6 +134,14 @@ describe('storage-limits', () => {
       expect(result!.warningLevel).toBe('none');
     });
 
+    it.each(['business', 'founder'])('A-9 applies Free storage limits to retired personal %s', async (subscriptionTier) => {
+      vi.mocked(storageRepository.findUserForStorage).mockResolvedValue({
+        id: 'user-1', storageUsedBytes: 100, subscriptionTier,
+      });
+      const result = await getUserStorageQuota('user-1');
+      expect(result).toMatchObject({ tier: 'free', usedBytes: 100, quotaBytes: 500 * 1024 * 1024 });
+    });
+
     it('getUserStorageQuota_withNullSubscriptionTier_defaultsToFree', async () => {
       vi.mocked(storageRepository.findUserForStorage).mockResolvedValue({
         id: 'user-1',

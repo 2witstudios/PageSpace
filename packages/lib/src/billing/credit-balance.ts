@@ -28,6 +28,7 @@
  * without reaching back into apps/web. See ./credit-emit.
  */
 
+import { toPersonalSubscriptionTier } from './subscription-tiers';
 import { db } from '@pagespace/db/db';
 import { creditHolds } from '@pagespace/db/schema/credits';
 import { wallets, personalRootWalletOf } from '@pagespace/db/schema/wallets';
@@ -290,5 +291,5 @@ export async function resolveTier(userId: string): Promise<SubscriptionTier> {
     .from(users)
     .where(eq(users.id, userId))
     .limit(1);
-  return (rows[0]?.subscriptionTier as SubscriptionTier) ?? 'free';
+  return toPersonalSubscriptionTier(rows[0]?.subscriptionTier);
 }

@@ -63,7 +63,6 @@ export function SubscriptionControls({ user, onActionComplete }: SubscriptionCon
         <div className="flex items-center justify-between">
           <span className="text-sm text-muted-foreground">Current Plan:</span>
           <Badge variant={
-            user.subscriptionTier === 'business' ? 'destructive' :
               user.subscriptionTier === 'pro' ? 'default' : 'secondary'
           }>
             {user.subscription?.isGifted && <Gift className="h-3 w-3 mr-1" />}

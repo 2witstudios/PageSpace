@@ -231,7 +231,7 @@ describe('AI settings route', () => {
       expect(body.providers.ollama.isAvailable).toBe(true);
     });
 
-    it('returns the user current selection and tier', async () => {
+    it('returns the selection and refuses a retired personal Business tier', async () => {
       vi.mocked(aiSettingsRepository.getUserSettings).mockResolvedValue({
         id: mockUserId,
         currentAiProvider: 'anthropic',
@@ -245,7 +245,7 @@ describe('AI settings route', () => {
 
       expect(body.currentProvider).toBe('anthropic');
       expect(body.currentModel).toBe('anthropic/claude-sonnet-4.6');
-      expect(body.userSubscriptionTier).toBe('business');
+      expect(body.userSubscriptionTier).toBe('free');
     });
 
     it('falls back to the default provider/model when the user has no selection', async () => {

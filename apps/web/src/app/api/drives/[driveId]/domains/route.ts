@@ -15,7 +15,9 @@ import { customDomains } from '@pagespace/db/schema/custom-domains';
 import { drives } from '@pagespace/db/schema/core';
 import { users } from '@pagespace/db/schema/auth';
 import { getPlan } from '@/lib/subscription/plans';
-import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
+import { orgEntitlementTier } from '@pagespace/lib/billing/spend-target';
+import { isOrgLapsedForDrive } from '@pagespace/lib/organizations/status';
+import { resolvePersonalCapabilityTier } from '@pagespace/lib/billing/deployment-capability';
 import { reconcileCustomDomainCert } from '@/lib/canvas/reconcile-cert';
 import { mirrorDriveToCustomHost } from '@/lib/canvas/custom-domain-mirror';
 import { renderDomainNotFoundOverride } from '@/lib/canvas/publish-page';
@@ -35,16 +37,18 @@ const addDomainSchema = z.object({
   hostname: z.string().min(1),
 });
 
-/** Resolve the maximum custom domains allowed for the drive owner's tier. */
+/** Organization drives use their own entitlement, independent of the human lead. */
 async function getMaxCustomDomainsForDrive(driveId: string): Promise<number> {
   const [row] = await db
-    .select({ tier: users.subscriptionTier })
+    .select({ tier: users.subscriptionTier, orgId: drives.orgId })
     .from(drives)
     .innerJoin(users, eq(drives.ownerId, users.id))
     .where(eq(drives.id, driveId))
     .limit(1);
 
-  const tier = ((row?.tier ?? 'free') as SubscriptionTier);
+  const tier = row?.orgId
+    ? orgEntitlementTier(await isOrgLapsedForDrive(row))
+    : resolvePersonalCapabilityTier(row?.tier);
   return getPlan(tier).limits.maxCustomDomains;
 }
 

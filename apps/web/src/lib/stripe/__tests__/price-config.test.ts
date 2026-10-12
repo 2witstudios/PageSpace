@@ -2,8 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 
 vi.mock('../../stripe-config', () => ({
   stripeConfig: {
-    priceIds: { pro: 'price_pro', business: 'price_business' },
-    grandfatheredPriceIds: { founder: 'price_founder' },
+    priceIds: { pro: 'price_pro' },
     orgPriceIds: { businessBase: 'price_org_business', extraSeat: 'price_extra_seat' },
   },
 }));

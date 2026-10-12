@@ -13,15 +13,13 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { maskEmail } from '@pagespace/lib/audit/mask-email';
 import { decryptUserRow } from '@pagespace/lib/auth/user-repository';
-import { TIERS, isOrgPlanTier } from '@pagespace/lib/billing/subscription-tiers';
+import { personalTiers } from '@pagespace/lib/billing/subscription-tiers';
 
 // SEAT-2 P2: an ordinary user gift can only ever be a PERSONAL tier — Business
 // is the organization plan and buying it creates an org, which does not exist
 // for a gifted subscription. Excluded until org gifting is built, not just
 // hidden from a UI; this is the schema that actually validates the request.
-const GIFTABLE_TIERS = TIERS.filter(
-  (tier): tier is Exclude<(typeof TIERS)[number], 'free'> => tier !== 'free' && !isOrgPlanTier(tier),
-);
+const GIFTABLE_TIERS = personalTiers().filter((tier) => tier !== 'free');
 
 type RouteContext = { params: Promise<{ userId: string }> };
 

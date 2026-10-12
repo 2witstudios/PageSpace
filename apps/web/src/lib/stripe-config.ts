@@ -12,26 +12,8 @@
 
 interface StripeConfig {
   publishableKey: string;
-  /** Prices a plan UI may sell today, keyed by canonical tier (SEAT-2). */
-  priceIds: {
-    pro: string;
-    /**
-     * Business is the $50 organization plan (SEAT-2). The $50 Business and
-     * extra-seat prices are created in Wave C (D1); until then this is the
-     * legacy $100 personal Business price, which is what existing
-     * (grandfathered, A-9) Business subscribers are still billed on. When the
-     * $50 price replaces it here, move this id into `grandfatheredPriceIds`.
-     */
-    business: string;
-  };
-  /**
-   * Retired identifiers retained for the one-time subscriber migration.
-   * Runtime tier resolution never recognizes these prices (D-OW-42).
-   */
-  grandfatheredPriceIds: {
-    founder: string;
-    legacyBusiness: string;
-  };
+  /** The only purchasable personal plan (SEAT-2, A-9). */
+  priceIds: { pro: string };
   /**
    * The ORGANIZATION plan's two prices (SEAT-2, A-8): the Business base
    * ($50/month, 5 seats included) and the extra seat ($10/month per seat beyond
@@ -52,11 +34,6 @@ const config: Record<'test' | 'live', StripeConfig> = {
     publishableKey: 'pk_test_51S2LlZPCGvbSozobCg5nWBQeS8xHHYQqsbLZxAjzWnTL2o2BSSRtafSH36n4iaKe52Mmj2dGk2ybJtN5yLN6QCjX00JFh3a7MY',
     priceIds: {
       pro: 'price_1Sdbh6PCGvbSozob1IBfmSuv',        // $15/month
-      business: 'price_1SdbhfPCGvbSozobpTMXfqkX',   // legacy $100/month personal Business (see StripeConfig)
-    },
-    grandfatheredPriceIds: {
-      founder: 'price_1SdbhePCGvbSozobuNjSn5j0',    // $50/month, removed tier (A-9)
-      legacyBusiness: 'price_1SdbhfPCGvbSozobpTMXfqkX', // $100/month personal Business, grandfathered (A-9)
     },
     orgPriceIds: {
       businessBase: 'price_1UK59APCGvbSozobgDCKr4zB', // $50/month org base, 5 seats included (D-OW-20)
@@ -67,11 +44,6 @@ const config: Record<'test' | 'live', StripeConfig> = {
     publishableKey: 'pk_live_51S2LlQPRnBcvXFso7Y3yM21QcIuHM3b6Iz1VdOZ7d51aVaZvITRSs7M5KVpKF3jih2p2t59xwlR4Jr8DwIydW9Ht00KeOaUd35',
     priceIds: {
       pro: 'price_1SdfbXPRnBcvXFsoRbjnaQFS',        // $15/month
-      business: 'price_1SdfbePRnBcvXFsoCvpJsSxw',   // legacy $100/month personal Business (see StripeConfig)
-    },
-    grandfatheredPriceIds: {
-      founder: 'price_1SdfbbPRnBcvXFsofn7L1leP',    // $50/month, removed tier (A-9)
-      legacyBusiness: 'price_1SdfbePRnBcvXFsoCvpJsSxw', // $100/month personal Business, grandfathered (A-9)
     },
     // Not created in live mode yet: org provisioning refuses while these are empty.
     orgPriceIds: {

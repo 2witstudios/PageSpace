@@ -971,7 +971,7 @@ describe('rollback-service', () => {
       expect(result).toBe(30);
     });
 
-    it('returns -1 (unlimited) for business tier', async () => {
+    it('rejects a retired personal Business cache as Free', async () => {
       mockDb.select.mockReturnValue({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({
@@ -982,7 +982,7 @@ describe('rollback-service', () => {
 
       const result = await getUserRetentionDays(mockUserId);
 
-      expect(result).toBe(-1);
+      expect(result).toBe(7);
     });
 
     it('returns free tier default when user not found', async () => {

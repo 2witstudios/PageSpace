@@ -117,14 +117,14 @@ describe('defaultSandboxBillingDeps.gate — org charge', () => {
 
 describe('defaultSandboxBillingDeps.gate', () => {
   it("resolves the PAYER's own subscription tier (not the caller's) and gates via canConsumeAI", async () => {
-    mockUserRow('business');
+    mockUserRow('pro');
     mockCanConsumeAI.mockResolvedValue({ allowed: true, reason: 'ok', holdId: 'hold-1' });
 
     const result = await defaultSandboxBillingDeps.gate({ charge: { kind: 'user', userId: 'owner-1' } });
 
     expect(mockCanConsumeAI).toHaveBeenCalledWith(
       'owner-1',
-      'business',
+      'pro',
       // Compute bills the payer's personal wallet (WAL-9): no drive wallet is ever named.
       expect.objectContaining({ spend: { kind: 'personal' }, spendKind: 'compute', estCostCents: expect.any(Number), maxInFlight: expect.any(Number) }),
     );
@@ -152,7 +152,7 @@ describe('defaultSandboxBillingDeps.gate', () => {
   });
 
   it("passes the payer's own maxInFlight when MACHINE_MAX_INFLIGHT is left at its default", async () => {
-    mockUserRow('business');
+    mockUserRow('pro');
     mockCanConsumeAI.mockResolvedValue({ allowed: true, reason: 'ok', holdId: 'hold-1' });
 
     await defaultSandboxBillingDeps.gate({ charge: { kind: 'user', userId: 'owner-1' } });
@@ -160,20 +160,20 @@ describe('defaultSandboxBillingDeps.gate', () => {
     const opts = mockCanConsumeAI.mock.calls[0][2];
     // Never below the flat MACHINE_MAX_INFLIGHT floor, and never below the
     // resolved tier's own quota.ts ceiling — see the comment below.
-    expect(opts.maxInFlight).toBe(Math.max(MACHINE_MAX_INFLIGHT, getCodeExecutionConcurrencyLimit('business')));
+    expect(opts.maxInFlight).toBe(Math.max(MACHINE_MAX_INFLIGHT, getCodeExecutionConcurrencyLimit('pro')));
   });
 
   it("widens maxInFlight past MACHINE_MAX_INFLIGHT when an operator raises a tier's quota.ts ceiling above it, so the billing gate never silently undercuts a raised concurrency tier", async () => {
-    const originalEnv = process.env.CODE_EXEC_CONCURRENCY_BUSINESS;
+    const originalEnv = process.env.CODE_EXEC_CONCURRENCY_PRO;
     try {
-      // Simulate an operator raising the business tier's semaphore ceiling
+      // Simulate an operator raising the Pro tier's semaphore ceiling
       // well past the flat MACHINE_MAX_INFLIGHT default (50) without also
       // updating MACHINE_MAX_INFLIGHT — the exact drift Codex flagged.
-      process.env.CODE_EXEC_CONCURRENCY_BUSINESS = String(MACHINE_MAX_INFLIGHT + 25);
+      process.env.CODE_EXEC_CONCURRENCY_PRO = String(MACHINE_MAX_INFLIGHT + 25);
       vi.resetModules();
       const { defaultSandboxBillingDeps: freshDeps } = await import('../sandbox-billing');
 
-      mockUserRow('business');
+      mockUserRow('pro');
       mockCanConsumeAI.mockResolvedValue({ allowed: true, reason: 'ok', holdId: 'hold-1' });
 
       await freshDeps.gate({ charge: { kind: 'user', userId: 'owner-1' } });
@@ -181,8 +181,8 @@ describe('defaultSandboxBillingDeps.gate', () => {
       const opts = mockCanConsumeAI.mock.calls[0][2];
       expect(opts.maxInFlight).toBe(MACHINE_MAX_INFLIGHT + 25);
     } finally {
-      if (originalEnv === undefined) delete process.env.CODE_EXEC_CONCURRENCY_BUSINESS;
-      else process.env.CODE_EXEC_CONCURRENCY_BUSINESS = originalEnv;
+      if (originalEnv === undefined) delete process.env.CODE_EXEC_CONCURRENCY_PRO;
+      else process.env.CODE_EXEC_CONCURRENCY_PRO = originalEnv;
       vi.resetModules();
     }
   });

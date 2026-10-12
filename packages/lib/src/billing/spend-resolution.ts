@@ -52,7 +52,7 @@ import {
   cappedConsumerLeg,
   spendChoiceLabel,
 } from './spend-target';
-import { toSubscriptionTier, type SubscriptionTier } from './subscription-tiers';
+import { toPersonalSubscriptionTier, type SubscriptionTier } from './subscription-tiers';
 import { ensurePersonalRootWalletId } from './personal-wallet';
 import { loadSeatCapFacts, loadSeatCapFactsForUsers } from './seat-allowance';
 import { readOrgSpendPolicy } from '../organizations/policy-reader';
@@ -163,7 +163,7 @@ async function alwaysOwnCreditsInDrive(userId: string, driveId: string): Promise
 
 async function tierOf(userId: string): Promise<SubscriptionTier> {
   const [row] = await db.select({ tier: users.subscriptionTier }).from(users).where(eq(users.id, userId)).limit(1);
-  return toSubscriptionTier(row?.tier);
+  return toPersonalSubscriptionTier(row?.tier);
 }
 
 function statusOf(row: WalletRow, orgLapsed = false): WalletStatus {

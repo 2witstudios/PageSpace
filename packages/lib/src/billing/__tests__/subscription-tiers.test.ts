@@ -4,6 +4,7 @@ import {
   TIER_PLAN_LIMITS,
   isSubscriptionTier,
   toSubscriptionTier,
+  toPersonalSubscriptionTier,
   tierRank,
   formatTierBytes,
   isOrgPlanTier,
@@ -115,10 +116,8 @@ describe('TIER_PLAN_LIMITS', () => {
     expect(isOrgPlanTier('free')).toBe(false);
   });
 
-  it('SEAT-2 (partial) an org plan is not offered to a lone user; a grandfathered Business user still sees their own plan', () => {
+  it('SEAT-2 (partial) personal plans never include Business after cutover', () => {
     expect(personalTiers()).toEqual(['free', 'pro']);
-    expect(personalTiers('free')).toEqual(['free', 'pro']);
-    expect(personalTiers('business')).toEqual(['free', 'pro', 'business']);
   });
 
   it('limits grow monotonically with tier rank', () => {
@@ -153,5 +152,14 @@ describe('type-level', () => {
   it('SubscriptionTier is the element type of TIERS', () => {
     const t: SubscriptionTier = TIERS[0];
     expect(t).toBe('free');
+  });
+});
+
+describe('personal subscription vocabulary after cutover', () => {
+  it.each(['business', 'founder', 'enterprise', '', null, undefined])('SEAT-2 (partial) refuses retired or organization-only personal tier %s', tier => {
+    expect(toPersonalSubscriptionTier(tier)).toBe('free');
+  });
+  it.each(['free', 'pro'] as const)('keeps supported personal tier %s', tier => {
+    expect(toPersonalSubscriptionTier(tier)).toBe(tier);
   });
 });

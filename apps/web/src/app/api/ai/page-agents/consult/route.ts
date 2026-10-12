@@ -1,3 +1,4 @@
+import { toPersonalSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { NextResponse } from 'next/server';
 import { convertToModelMessages, generateText, stepCountIs, hasToolCall } from 'ai';
 import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
@@ -36,7 +37,6 @@ import { MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
 import { estimateChatHoldCentsForModel } from '@pagespace/lib/monitoring/chat-pricing';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import { creditGateErrorResponse } from '@/lib/subscription/credit-gate-response';
-import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { capStepToolPayloads } from '@/lib/ai/core/cap-step-tool-payloads';
 
 /**
@@ -324,7 +324,7 @@ export async function POST(request: Request) {
     // (`spendFallback` and the X-Spend-Fallback-* headers), never applied silently.
     let spendFallback: SpendFallbackNotice | null = null;
     if (!isMeteringExempt(effectiveProvider)) {
-      const creditGate = await canConsumeAI(userId, (gateUser?.subscriptionTier ?? 'free') as SubscriptionTier, {
+      const creditGate = await canConsumeAI(userId, toPersonalSubscriptionTier(gateUser?.subscriptionTier), {
         spend,
         estCostCents: estimateChatHoldCentsForModel(agent.aiModel ?? undefined),
         maxInFlight: MAX_CHAT_INFLIGHT,
