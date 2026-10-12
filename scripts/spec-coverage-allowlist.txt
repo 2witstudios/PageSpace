@@ -168,7 +168,6 @@ SPEND-2
 # ow-lapse-automation: [D-OW-34] amends it — an automation runs on behalf of its creator, whose per-consumer cap
 # binds it (consumer-caps.integration self-firing trigger). Stays listed until the Spec text is amended.
 SPEND-6
-SPEND-7
 # SPEND-9 (partial, ow-c6): members and guests get the consumer allowlist (remaining, own cap) with no pool
 # balance or other consumer's spend, per role against Postgres and for MCP tokens ([D-OW-26]); the chip and
 # wallet page that display it are UI-8/UI-9.
