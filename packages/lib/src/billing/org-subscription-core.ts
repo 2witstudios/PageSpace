@@ -57,6 +57,7 @@ export type OrgStripeOperation =
   | 'customer.update'
   | 'subscription.create'
   | 'subscription.cancel'
+  | 'subscription.recover'
   | 'seat-item.create'
   | 'seat-quantity.update';
 
@@ -235,7 +236,7 @@ export interface OrgLatestInvoice {
 export type OrgPaymentStep = { kind: 'none' } | { kind: 'confirm_payment'; clientSecret: string };
 
 /** Subscription statuses whose open invoice the org can still pay to become (or stay) active. */
-const PAYABLE_STATUSES: ReadonlySet<string> = new Set(['incomplete', 'past_due', 'unpaid']);
+const PAYABLE_STATUSES: ReadonlySet<string> = new Set(['incomplete', 'past_due', 'unpaid', 'paused']);
 
 /** Whether a subscription in `status` can owe a payment the client may still make (only then is its invoice read). */
 export function orgSubscriptionMayOwePayment(status: string): boolean {

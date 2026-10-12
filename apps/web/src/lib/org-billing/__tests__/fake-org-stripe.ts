@@ -47,7 +47,8 @@ type WriteOp =
   | 'createSubscription'
   | 'createSubscriptionItem'
   | 'updateSubscriptionItemQuantity'
-  | 'cancelSubscription';
+  | 'cancelSubscription'
+  | 'recoverSubscription';
 
 interface Customer {
   id: string;
@@ -66,6 +67,7 @@ export class FakeOrgStripe implements OrgBillingStripe {
     createSubscriptionItem: 0,
     updateSubscriptionItemQuantity: 0,
     cancelSubscription: 0,
+    recoverSubscription: 0,
   };
   reads = { findCustomerByOrgId: 0, listCustomerSubscriptions: 0, retrieveSubscription: 0, latestInvoice: 0 };
   /** Each subscription's invoices, newest last. */
@@ -328,11 +330,23 @@ export class FakeOrgStripe implements OrgBillingStripe {
     });
   }
 
-  async cancelSubscription(subscriptionId: string, idempotencyKey: string, expectedStatus?: 'trialing' | 'paused'): Promise<{ status: string }> {
+  async recoverSubscription(subscriptionId: string, _prices: import('@pagespace/lib/billing/org-subscription-core').OrgBusinessPrices, idempotencyKey: string): Promise<OrgStripeSubscription> {
+    const sub = this.subscriptions.get(subscriptionId);
+    if (!sub) throw new Error(`No such subscription: '${subscriptionId}'`);
+    if (sub.status !== 'trialing' && sub.status !== 'paused') return structuredClone(sub);
+    return this.write('recoverSubscription', idempotencyKey, { subscriptionId }, () => {
+      sub.status = 'past_due';
+      sub.trialEnd = this.clock;
+      this.addInvoice(sub, FAKE_BASE_CENTS + FAKE_SEAT_CENTS * (sub.items[1]?.quantity ?? 0));
+      return structuredClone(sub);
+    });
+  }
+
+  async cancelSubscription(subscriptionId: string, idempotencyKey: string): Promise<{ status: string }> {
     const sub = this.subscriptions.get(subscriptionId);
     if (!sub) throw new Error(`No such subscription: '${subscriptionId}'`);
     // Stripe refuses to cancel what is already over; the shell must not ask.
-    if (sub.status === 'canceled' || sub.status === 'incomplete_expired' || (expectedStatus && sub.status !== expectedStatus)) return { status: sub.status };
+    if (sub.status === 'canceled' || sub.status === 'incomplete_expired') return { status: sub.status };
     return this.write('cancelSubscription', idempotencyKey, { subscriptionId }, () => {
       sub.status = 'canceled';
       return { status: sub.status };

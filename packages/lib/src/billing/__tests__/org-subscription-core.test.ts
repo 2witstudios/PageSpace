@@ -138,9 +138,9 @@ describe('orgPaymentStep — what the client must do to pay for the org subscrip
     expect(orgPaymentStep({ subscriptionStatus: 'incomplete', latestInvoice: null })).toEqual({ kind: 'none' });
   });
 
-  it('only incomplete, past_due and unpaid subscriptions may owe a payment (so only they read the invoice)', () => {
-    for (const s of ['incomplete', 'past_due', 'unpaid']) expect(orgSubscriptionMayOwePayment(s)).toBe(true);
-    for (const s of ['active', 'trialing', 'canceled', 'incomplete_expired', 'paused']) expect(orgSubscriptionMayOwePayment(s)).toBe(false);
+  it('incomplete, past_due, unpaid and resumed paused subscriptions may owe a payment (so only they read the invoice)', () => {
+    for (const s of ['incomplete', 'past_due', 'unpaid', 'paused']) expect(orgSubscriptionMayOwePayment(s)).toBe(true);
+    for (const s of ['active', 'trialing', 'canceled', 'incomplete_expired']) expect(orgSubscriptionMayOwePayment(s)).toBe(false);
   });
 
   it('an ended subscription never hands out a secret: the org subscribes again instead', () => {

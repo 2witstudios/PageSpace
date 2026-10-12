@@ -170,7 +170,7 @@ describe('org Business subscription shell (real Postgres, in-memory Stripe)', ()
     expect(await rowsFor(orgId)).toHaveLength(1);
   });
 
-  it.each([false, true])('replaces an unsupported trial with paid checkout (lost mirror: %s)', async (lostMirror) => {
+  it.each([false, true])('recovers an unsupported trial in place with paid checkout (lost mirror: %s)', async (lostMirror) => {
     if (!dbAvailable) return;
     const { orgId, deps, stripe } = await northwind(1);
     const first = await ensureOrgBusinessSubscription(orgId, deps);
@@ -181,15 +181,15 @@ describe('org Business subscription shell (real Postgres, in-memory Stripe)', ()
 
     const recovered = await provisionOrgSubscription(orgId, deps);
     expect(recovered.payment.kind).toBe('confirm_payment');
-    expect(recovered.result.linkage.status).toBe('incomplete');
-    expect(recovered.result.linkage.stripeSubscriptionId).not.toBe(trial.id);
-    expect(stripe.subscriptions.get(trial.id)?.status).toBe('canceled');
-    expect(stripe.writes.cancelSubscription).toBe(1);
-    expect(stripe.writes.createSubscription).toBe(2);
+    expect(recovered.result.linkage.status).toBe('past_due');
+    expect(recovered.result.linkage.stripeSubscriptionId).toBe(trial.id);
+    expect(stripe.subscriptions.get(trial.id)?.status).toBe('past_due');
+    expect(stripe.writes.cancelSubscription).toBe(0);
+    expect(stripe.writes.createSubscription).toBe(1);
     const replay = await provisionOrgSubscription(orgId, deps);
     expect(replay.result.linkage.stripeSubscriptionId).toBe(recovered.result.linkage.stripeSubscriptionId);
     expect(replay.payment).toEqual(recovered.payment);
-    expect(stripe.writes.createSubscription).toBe(2);
+    expect(stripe.writes.createSubscription).toBe(1);
   });
 
   it.each([false, true])('adopts a trial that becomes active after inventory without canceling or buying again (lost mirror: %s)', async (lostMirror) => {
@@ -212,7 +212,7 @@ describe('org Business subscription shell (real Postgres, in-memory Stripe)', ()
     expect(stripe.writes.createSubscription).toBe(1);
   });
 
-  it.each([false, true])('replaces a paused unsupported trial with paid checkout (paused after inventory: %s)', async (duringInventory) => {
+  it.each([false, true])('recovers a paused unsupported trial in place with paid checkout (paused after inventory: %s)', async (duringInventory) => {
     if (!dbAvailable) return;
     const { orgId, deps, stripe } = await northwind(1);
     const first = await ensureOrgBusinessSubscription(orgId, deps);
@@ -228,25 +228,38 @@ describe('org Business subscription shell (real Postgres, in-memory Stripe)', ()
     }
     const recovered = await provisionOrgSubscription(orgId, deps);
     expect(recovered.payment.kind).toBe('confirm_payment');
-    expect(recovered.result.linkage.status).toBe('incomplete');
-    expect(recovered.result.linkage.stripeSubscriptionId).not.toBe(trial.id);
-    expect(stripe.writes.cancelSubscription).toBe(1);
-    expect(stripe.writes.createSubscription).toBe(2);
+    expect(recovered.result.linkage.status).toBe('past_due');
+    expect(recovered.result.linkage.stripeSubscriptionId).toBe(trial.id);
+    expect(stripe.writes.cancelSubscription).toBe(0);
+    expect(stripe.writes.createSubscription).toBe(1);
   });
 
-  it('recovers a lost trial cancellation response without duplicate live subscriptions', async () => {
+  it('never announces successful recovery when a paused subscription has no payable invoice', async () => {
+    if (!dbAvailable) return;
+    const { orgId, deps, stripe } = await northwind(1);
+    const first = await ensureOrgBusinessSubscription(orgId, deps);
+    const paused = stripe.subscriptions.get(first.linkage.stripeSubscriptionId)!;
+    paused.status = 'paused';
+    stripe.invoices.delete(paused.id);
+    stripe.recoverSubscription = async () => structuredClone(paused);
+    await expect(provisionOrgSubscription(orgId, deps)).rejects.toThrow('awaiting a payable invoice');
+    expect(stripe.writes.cancelSubscription).toBe(0);
+    expect(stripe.writes.createSubscription).toBe(1);
+  });
+
+  it('recovers a lost trial recovery response without duplicate live subscriptions', async () => {
     if (!dbAvailable) return;
     const { orgId, deps, stripe } = await northwind(1);
     const first = await ensureOrgBusinessSubscription(orgId, deps);
     stripe.subscriptions.get(first.linkage.stripeSubscriptionId)!.status = 'trialing';
-    stripe.loseNextResponse('cancelSubscription');
+    stripe.loseNextResponse('recoverSubscription');
     await expect(provisionOrgSubscription(orgId, deps)).rejects.toThrow(/connection to Stripe/);
     const recovered = await provisionOrgSubscription(orgId, deps);
     expect(recovered.payment.kind).toBe('confirm_payment');
-    expect(recovered.result.linkage.status).toBe('incomplete');
+    expect(recovered.result.linkage.status).toBe('past_due');
     expect([...stripe.subscriptions.values()].filter(sub => sub.status !== 'canceled')).toHaveLength(1);
-    expect(stripe.writes.cancelSubscription).toBe(1);
-    expect(stripe.writes.createSubscription).toBe(2);
+    expect(stripe.writes.cancelSubscription).toBe(0);
+    expect(stripe.writes.createSubscription).toBe(1);
   });
 
   it('refuses to buy a second subscription when a lost mirror has an unrecognized live org plan', async () => {

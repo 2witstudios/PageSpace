@@ -123,7 +123,8 @@ export interface OrgBillingStripe {
     idempotencyKey: string,
   ): Promise<{ id: string; quantity: number }>;
   /** Cancel now; a subscription that is already over is left as it is. */
-  cancelSubscription(subscriptionId: string, idempotencyKey: string, expectedStatus?: 'trialing' | 'paused'): Promise<{ status: string }>;
+  cancelSubscription(subscriptionId: string, idempotencyKey: string): Promise<{ status: string }>;
+  recoverSubscription(subscriptionId: string, prices: OrgBusinessPrices, idempotencyKey: string): Promise<OrgStripeSubscription>;
   /** The subscription's latest invoice with its confirmation secret, or null when it has none. */
   latestInvoice(subscriptionId: string): Promise<OrgLatestInvoice | null>;
   /** A Stripe billing-portal session on `customerId` (the org's). */
@@ -329,33 +330,18 @@ export async function ensureOrgBusinessSubscription(
     }
 
     const history = await deps.stripe.listCustomerSubscriptions(customerId);
-    // Trials are never entitled. An explicit purchase replaces a verified trial
-    // with the normal first-payment checkout. The ended generation remains in
-    // history, so a lost cancellation/create response cannot cause a duplicate.
+    // Recover on the SAME subscription. A retrieve followed by cancel cannot
+    // condition cancellation on status and can destroy a concurrently paid plan.
     for (const candidate of history) {
-      if (candidate.metadata?.[ORG_ID_METADATA_KEY] !== orgId) continue;
-      // A trial can become paused while inventory is read. Handle that transition
-      // once in this request; repeated state changes fail for a safe retry.
-      for (let attempt = 0; attempt < 2 && (candidate.status === 'trialing' || candidate.status === 'paused'); attempt++) {
-        if (!orgSubscriptionItems(candidate, prices)) {
-          throw new OrgBillingError('not_an_org_business_subscription', 'Organization has an unverified live subscription; repair its prices before provisioning');
-        }
-        const expectedStatus = candidate.status;
-        const canceled = await deps.stripe.cancelSubscription(
-          candidate.id,
-          orgStripeIdempotencyKey(orgId, 'subscription.cancel', { subscriptionId: candidate.id }),
-          expectedStatus,
-        );
-        if (isLiveOrgSubscriptionStatus(canceled.status)) {
-          Object.assign(candidate, await deps.stripe.retrieveSubscription(candidate.id));
-          if (candidate.status === expectedStatus) {
-            throw new OrgBillingError('subscription_not_live', 'Unsupported trial could not be ended for paid checkout');
-          }
-        } else candidate.status = canceled.status;
+      if (candidate.metadata?.[ORG_ID_METADATA_KEY] !== orgId || (candidate.status !== 'trialing' && candidate.status !== 'paused')) continue;
+      if (!orgSubscriptionItems(candidate, prices)) {
+        throw new OrgBillingError('not_an_org_business_subscription', 'Organization has an unverified live subscription; repair its prices before provisioning');
       }
-      if (candidate.status === 'trialing' || candidate.status === 'paused') {
-        throw new OrgBillingError('subscription_not_live', 'Subscription changed during recovery; retry paid checkout');
-      }
+      Object.assign(candidate, await deps.stripe.recoverSubscription(
+        candidate.id, prices,
+        orgStripeIdempotencyKey(orgId, 'subscription.recover', { subscriptionId: candidate.id }),
+      ));
+      if (candidate.status === 'trialing') throw new OrgBillingError('subscription_not_live', 'Trial recovery is pending; retry paid checkout');
     }
     const existing = pickAdoptableOrgSubscription(history, { orgId, prices });
     let sub: OrgStripeSubscription;
@@ -482,7 +468,9 @@ export async function orgPaymentStepFor(
 ): Promise<OrgPaymentStep> {
   if (!orgSubscriptionMayOwePayment(linkage.status)) return { kind: 'none' };
   const latestInvoice = await deps.stripe.latestInvoice(linkage.stripeSubscriptionId);
-  return orgPaymentStep({ subscriptionStatus: linkage.status, latestInvoice });
+  const payment = orgPaymentStep({ subscriptionStatus: linkage.status, latestInvoice });
+  if (linkage.status === 'paused' && payment.kind === 'none') throw new OrgBillingError('subscription_not_live', 'Subscription recovery is awaiting a payable invoice; retry');
+  return payment;
 }
 
 /**
@@ -611,11 +599,39 @@ export function stripeOrgBilling(client: Stripe): OrgBillingStripe {
       );
       return { id: item.id, quantity: item.quantity ?? 0 };
     },
-    async cancelSubscription(subscriptionId, idempotencyKey, expectedStatus) {
+    async cancelSubscription(subscriptionId, idempotencyKey) {
       const current = await client.subscriptions.retrieve(subscriptionId);
-      if (!isLiveOrgSubscriptionStatus(current.status) || (expectedStatus && current.status !== expectedStatus)) return { status: current.status };
+      if (!isLiveOrgSubscriptionStatus(current.status)) return { status: current.status };
       const canceled = await client.subscriptions.cancel(subscriptionId, {}, { idempotencyKey });
       return { status: canceled.status };
+    },
+    async recoverSubscription(subscriptionId, prices, idempotencyKey) {
+      const current = await client.subscriptions.retrieve(subscriptionId, { expand: ['latest_invoice'] });
+      const subscription = toOrgStripeSubscription(current);
+      if (current.status !== 'trialing' && current.status !== 'paused') return subscription;
+      if (!orgSubscriptionItems(subscription, prices)) {
+        throw new OrgBillingError('not_an_org_business_subscription', 'Organization subscription prices changed during recovery');
+      }
+      try {
+        if (current.status === 'trialing') {
+          return toOrgStripeSubscription(await client.subscriptions.update(subscriptionId, {
+            trial_end: 'now', payment_behavior: 'default_incomplete', proration_behavior: 'none',
+            trial_settings: { end_behavior: { missing_payment_method: 'create_invoice' } },
+          }, { idempotencyKey: `${idempotencyKey}:end-trial` }));
+        }
+        const invoice = typeof current.latest_invoice === 'object' ? current.latest_invoice : null;
+        // A lost resume response or retry must reuse its open resumption invoice.
+        if (invoice?.status === 'open' && invoice.amount_due > 0) return subscription;
+        const invoiceId = typeof current.latest_invoice === 'string' ? current.latest_invoice : invoice?.id ?? 'none';
+        return toOrgStripeSubscription(await client.subscriptions.resume(subscriptionId, {
+          billing_cycle_anchor: 'now', proration_behavior: 'none',
+        }, { idempotencyKey: `${idempotencyKey}:resume:${invoiceId}` }));
+      } catch (error) {
+        // A concurrent successful payment can make resume invalid. Preserve it.
+        const fresh = await client.subscriptions.retrieve(subscriptionId);
+        if (fresh.status === 'active') return toOrgStripeSubscription(fresh);
+        throw error;
+      }
     },
     async updateCustomer(customerId, details, idempotencyKey) {
       await client.customers.update(customerId, details, { idempotencyKey });
