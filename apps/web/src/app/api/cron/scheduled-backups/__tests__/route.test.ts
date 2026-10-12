@@ -1,4 +1,10 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+
+const orgLapsed = vi.hoisted(() => vi.fn().mockResolvedValue(false));
+vi.mock('@pagespace/lib/organizations/status', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@pagespace/lib/organizations/status')>()),
+  isOrgLapsedForDrive: orgLapsed,
+}));
 import { NextResponse } from 'next/server';
 
 // ============================================================================
@@ -78,6 +84,7 @@ type ScheduleRow = {
   nextRunAt: Date | null;
   ownerId: string;
   ownerTier: string;
+  orgId?: string | null;
 };
 
 const makeSchedule = (overrides: Partial<ScheduleRow> = {}): ScheduleRow => ({
@@ -97,6 +104,7 @@ const makeSchedule = (overrides: Partial<ScheduleRow> = {}): ScheduleRow => ({
 describe('GET /api/cron/scheduled-backups', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    orgLapsed.mockResolvedValue(false);
     mockLimit.mockReset();
     mockLimit.mockResolvedValue([]);
     mockUpdateWhere.mockResolvedValue(undefined);
@@ -113,6 +121,15 @@ describe('GET /api/cron/scheduled-backups', () => {
       const res = await GET(req());
       expect(res.status).toBe(403);
     });
+  });
+
+  it.each([false, true])('SEAT-8 (partial) runs active org backups with a Free lead and skips lapsed orgs (lapsed: %s)', async (lapsed) => {
+    orgLapsed.mockResolvedValue(lapsed);
+    mockLimit.mockResolvedValueOnce([makeSchedule({ ownerTier: 'free', orgId: 'org_1' })]).mockResolvedValueOnce([]);
+    const response = await GET(req());
+    expect(response.status).toBe(200);
+    expect((await response.json()).fired).toBe(lapsed ? 0 : 1);
+    expect(createDriveBackup).toHaveBeenCalledTimes(lapsed ? 0 : 1);
   });
 
   describe('no due schedules', () => {

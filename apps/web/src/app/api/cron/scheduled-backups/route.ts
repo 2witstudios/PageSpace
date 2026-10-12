@@ -7,6 +7,8 @@ import { users } from '@pagespace/db/schema/auth';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 import { createDriveBackup } from '@/services/api/drive-backup-service';
 import { MEMORY_PAYING_TIERS } from '@pagespace/lib/billing/automation-preferences';
+import { orgEntitlementTier } from '@pagespace/lib/billing/spend-target';
+import { isOrgLapsedForDrive } from '@pagespace/lib/organizations/status';
 import { resolvePersonalCapabilityTier } from '@pagespace/lib/billing/deployment-capability';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 
@@ -51,6 +53,7 @@ export async function GET(request: Request) {
           nextRunAt: driveBackupSchedules.nextRunAt,
           ownerId: drives.ownerId,
           ownerTier: users.subscriptionTier,
+          orgId: drives.orgId,
         })
         .from(driveBackupSchedules)
         .innerJoin(drives, eq(driveBackupSchedules.driveId, drives.id))
@@ -70,7 +73,8 @@ export async function GET(request: Request) {
         const nextRunAt = computeNextRunAt(schedule.frequency as BackupFrequency, prevNextRunAt);
         const runAt = new Date();
 
-        const isProPlus = MEMORY_PAYING_TIERS.includes(resolvePersonalCapabilityTier(schedule.ownerTier));
+        const tier = schedule.orgId ? orgEntitlementTier(await isOrgLapsedForDrive(schedule)) : resolvePersonalCapabilityTier(schedule.ownerTier);
+        const isProPlus = MEMORY_PAYING_TIERS.includes(tier);
 
         if (!isProPlus) {
           await db.update(driveBackupSchedules)

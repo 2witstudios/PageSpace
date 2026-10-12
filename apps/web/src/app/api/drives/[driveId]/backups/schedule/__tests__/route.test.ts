@@ -1,4 +1,10 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+
+const orgLapsed = vi.hoisted(() => vi.fn().mockResolvedValue(false));
+vi.mock('@pagespace/lib/organizations/status', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@pagespace/lib/organizations/status')>()),
+  isOrgLapsedForDrive: orgLapsed,
+}));
 import { NextResponse } from 'next/server';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
 
@@ -91,6 +97,7 @@ const DRIVE_ID = 'drive_1';
 describe('GET /api/drives/[driveId]/backups/schedule', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    orgLapsed.mockResolvedValue(false);
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuth(USER_ID));
     vi.mocked(isAuthError).mockReturnValue(false);
     vi.mocked(isDriveOwnerOrAdmin).mockResolvedValue(true);
@@ -138,6 +145,15 @@ describe('GET /api/drives/[driveId]/backups/schedule', () => {
         nextRunAt: null,
         lastRunAt: null,
       });
+    });
+
+    it.each([false, true])('SEAT-8 (partial) resolves organization backup availability independently of the personal Free lead (lapsed: %s)', async (lapsed) => {
+      orgLapsed.mockResolvedValue(lapsed);
+      mockLimit.mockReset();
+      mockLimit.mockResolvedValueOnce([{ tier: 'free', orgId: 'org_1' }]).mockResolvedValueOnce([]);
+      const response = await GET(req(), ctx(DRIVE_ID));
+      expect(response.status).toBe(200);
+      expect((await response.json()).available).toBe(!lapsed);
     });
 
     it('returns available:false for free tier', async () => {
@@ -243,6 +259,7 @@ describe('GET /api/drives/[driveId]/backups/schedule', () => {
 describe('PATCH /api/drives/[driveId]/backups/schedule', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    orgLapsed.mockResolvedValue(false);
     // mockResolvedValueOnce values survive vi.clearAllMocks() — reset the queue explicitly
     mockLimit.mockReset();
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuth(USER_ID));
@@ -271,6 +288,14 @@ describe('PATCH /api/drives/[driveId]/backups/schedule', () => {
       const res = await PATCH(patchReq({ enabled: true }), ctx(DRIVE_ID));
       expect(res.status).toBe(401);
     });
+  });
+
+  it('SEAT-8 (partial) enables backups for an active Business org with a Free lead', async () => {
+    mockLimit.mockReset();
+    mockLimit.mockResolvedValueOnce([{ tier: 'free', orgId: 'org_1' }]).mockResolvedValueOnce([]);
+    const response = await PATCH(patchReq({ enabled: true }), ctx(DRIVE_ID));
+    expect(response.status).toBe(200);
+    expect(mockOnConflictDoUpdate).toHaveBeenCalled();
   });
 
   describe('authorization', () => {

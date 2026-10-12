@@ -8,6 +8,8 @@ import { drives } from '@pagespace/db/schema/core';
 import { driveBackupSchedules } from '@pagespace/db/schema/versioning';
 import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
 import { MEMORY_PAYING_TIERS } from '@pagespace/lib/billing/automation-preferences';
+import { orgEntitlementTier } from '@pagespace/lib/billing/spend-target';
+import { isOrgLapsedForDrive } from '@pagespace/lib/organizations/status';
 import { resolvePersonalCapabilityTier } from '@pagespace/lib/billing/deployment-capability';
 import { validateTimezone } from '@/lib/workflows/cron-utils';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -48,7 +50,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ driv
   try {
     const [canManage, ownerRow, schedule] = await Promise.all([
       isDriveOwnerOrAdmin(auth.userId, driveId),
-      db.select({ tier: users.subscriptionTier }).from(drives).innerJoin(users, eq(drives.ownerId, users.id)).where(eq(drives.id, driveId)).limit(1),
+      db.select({ tier: users.subscriptionTier, orgId: drives.orgId }).from(drives).innerJoin(users, eq(drives.ownerId, users.id)).where(eq(drives.id, driveId)).limit(1),
       db.select().from(driveBackupSchedules).where(eq(driveBackupSchedules.driveId, driveId)).limit(1),
     ]);
 
@@ -56,7 +58,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ driv
       return NextResponse.json({ error: 'Only drive owners and admins can access backup settings' }, { status: 403 });
     }
 
-    const tier = resolvePersonalCapabilityTier(ownerRow[0]?.tier);
+    const tier = ownerRow[0]?.orgId ? orgEntitlementTier(await isOrgLapsedForDrive(ownerRow[0])) : resolvePersonalCapabilityTier(ownerRow[0]?.tier);
     const available = MEMORY_PAYING_TIERS.includes(tier);
     const row = schedule[0];
 
@@ -89,16 +91,16 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ dr
       return NextResponse.json({ error: 'Only drive owners and admins can change backup settings' }, { status: 403 });
     }
 
-    // Tier enforcement uses the drive owner's subscription — the cron job does the same,
-    // so admin-configured schedules for a free owner's drive will not silently execute.
+    // Organization drives follow their org; personal drives follow their owner.
+    // The cron uses the same entitlement rule before executing a schedule.
     const [ownerRow] = await db
-      .select({ tier: users.subscriptionTier })
+      .select({ tier: users.subscriptionTier, orgId: drives.orgId })
       .from(drives)
       .innerJoin(users, eq(drives.ownerId, users.id))
       .where(eq(drives.id, driveId))
       .limit(1);
 
-    const tier = resolvePersonalCapabilityTier(ownerRow?.tier);
+    const tier = ownerRow?.orgId ? orgEntitlementTier(await isOrgLapsedForDrive(ownerRow)) : resolvePersonalCapabilityTier(ownerRow?.tier);
     if (!MEMORY_PAYING_TIERS.includes(tier)) {
       return NextResponse.json({ error: 'pro_required', message: 'Automatic backups require a Pro plan or higher' }, { status: 402 });
     }

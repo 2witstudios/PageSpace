@@ -1,4 +1,10 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+
+const orgLapsed = vi.hoisted(() => vi.fn().mockResolvedValue(false));
+vi.mock('@pagespace/lib/organizations/status', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@pagespace/lib/organizations/status')>()),
+  isOrgLapsedForDrive: orgLapsed,
+}));
 import { GET, PATCH } from '../route';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
 import { NextResponse } from 'next/server';
@@ -105,6 +111,7 @@ describe('PATCH /api/drives/[driveId]/subdomain', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    orgLapsed.mockResolvedValue(false);
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
     vi.mocked(isAuthError).mockReturnValue(false);
     vi.mocked(isPrincipalDriveOwnerOrAdmin).mockResolvedValue(true);
@@ -136,6 +143,18 @@ describe('PATCH /api/drives/[driveId]/subdomain', () => {
     expect(response.status).toBe(403);
     expect(changePublishSubdomain).not.toHaveBeenCalled();
     expect(body.error).toBe('Only drive owners and admins can change the subdomain');
+  });
+
+  it('SEAT-8 (partial) uses Business custom-subdomain capability for an active org with a Free lead', async () => {
+    vi.mocked(db.select).mockReturnValueOnce(mockSelectChain([{ tier: 'free', orgId: 'org_1' }]) as never);
+    vi.mocked(getPlan).mockImplementation((tier) => ({ limits: { canChooseSubdomain: tier === 'business' } }) as ReturnType<typeof getPlan>);
+    vi.mocked(changePublishSubdomain).mockResolvedValue({ oldSubdomain: 'old-name', newSubdomain: 'new-name' });
+    const request = new Request(`https://example.com/api/drives/${mockDriveId}/subdomain`, {
+      method: 'PATCH', body: JSON.stringify({ subdomain: 'new-name' }),
+    });
+    const response = await PATCH(request, createContext(mockDriveId));
+    expect(response.status).toBe(200);
+    expect(changePublishSubdomain).toHaveBeenCalled();
   });
 
   it('returns 403 when the tier does not allow choosing a subdomain', async () => {
@@ -207,6 +226,7 @@ describe('GET /api/drives/[driveId]/subdomain', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    orgLapsed.mockResolvedValue(false);
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
     vi.mocked(isAuthError).mockReturnValue(false);
     vi.mocked(isPrincipalDriveOwnerOrAdmin).mockResolvedValue(true);
