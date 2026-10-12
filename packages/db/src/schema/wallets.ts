@@ -103,6 +103,10 @@ export const wallets = pgTable('wallets', {
   status: text('status').$type<WalletStatusValue>().default('active').notNull(),
   // WAL-4: the drive lead can turn donations off. On by default.
   donationsEnabled: boolean('donationsEnabled').default(true).notNull(),
+  // D-OW-4: whether the drive's GUESTS (drive members outside its org, DRV-8) may spend this drive
+  // wallet. Off by default; when on, a guest is still always bound by per-consumer caps (WAL-7).
+  // Meaningful only on a drive wallet: the CHECK refuses it on a root wallet.
+  guestSpendEnabled: boolean('guestSpendEnabled').default(false).notNull(),
   fallbackRule: text('fallbackRule').$type<WalletFallbackRuleValue>(),
   // SPEND-3 preselection. On a DRIVE wallet it is the drive's default (set by whoever
   // administers the wallet); on a PERSONAL ROOT wallet it is the person's own default from
@@ -165,6 +169,11 @@ export const wallets = pgTable('wallets', {
     // A known kind, and never on an org pool: no one spends a pool "by default" (the seat is
     // a source, the pool is not a place a default can live).
     sql`${table.defaultSpendSource} IS NULL OR (${table.defaultSpendSource} IN ('drive_wallet', 'seat_allowance', 'own_credits') AND NOT (${table.ownerType} = 'org' AND ${table.subjectType} IS NULL))`,
+  ),
+
+  guestSpendOnSubjectWallet: check(
+    'wallets_guest_spend_subject_wallet',
+    sql`NOT ${table.guestSpendEnabled} OR ${table.subjectType} IS NOT NULL`,
   ),
 
   alwaysOwnCreditsOnPersonalRoot: check(
