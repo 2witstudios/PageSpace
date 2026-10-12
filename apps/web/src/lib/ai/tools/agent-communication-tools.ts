@@ -9,7 +9,8 @@ import { pages, drives } from '@pagespace/db/schema/core';
 import { conversations as conversationsTable, messages as unifiedMessages } from '@pagespace/db/schema/conversations';
 import { users } from '@pagespace/db/schema/auth';
 import { prepareHistoryForModel, finishModelRequest } from '@/lib/ai/core/context-assembly';
-import { PERSONAL_SPEND, spendDriveId, spendFallbackFromWalletId } from '@pagespace/lib/billing/spend-target';
+import { PERSONAL_SPEND, spendDriveId, spendFallbackFromWalletId, type SpendTarget } from '@pagespace/lib/billing/spend-target';
+import { MODEL_ENTITLEMENT_MESSAGES, modelEntitlement } from '@/lib/ai/core/model-entitlement';
 import { runCompaction } from '@/lib/ai/core/compaction/compaction-service';
 import { canActorViewPage, canActorAccessDrive, canActorConsultAgent, filterDriveIdsByAppTokenScope, filterDriveIdsByMcpScope, isMcpScoped, resolveActingAgentId } from './actor-permissions';
 import { listAgentDrives, getAgentContextDrives } from '@pagespace/lib/services/drive-agent-service';
@@ -50,7 +51,7 @@ const MAX_AGENT_DEPTH = 2;
  * Get configured AI model for agent using the centralized provider factory
  * Handles provider-specific setup and fallbacks
  */
-async function getConfiguredModel(userId: string, agentConfig: { aiProvider?: string | null; aiModel?: string | null }, driveId: string | null) {
+async function getConfiguredModel(userId: string, agentConfig: { aiProvider?: string | null; aiModel?: string | null }, spend: SpendTarget) {
   const { aiProvider, aiModel } = agentConfig;
 
   // Use default provider/model if agent doesn't have specific configuration
@@ -63,10 +64,17 @@ async function getConfiguredModel(userId: string, agentConfig: { aiProvider?: st
   };
 
   // POL-8: the org of the drive this call runs in (its spend drive); none for personal spend.
-  const providerResult = await createAIProvider(userId, providerRequest, { driveId });
+  const providerResult = await createAIProvider(userId, providerRequest, { driveId: spendDriveId(spend) });
 
   if (isProviderError(providerResult)) {
     throw new Error(providerResult.error);
+  }
+
+  // The pro-model gate, for the tier of whoever funds this consult (WAL-8, POL-8): the drive wallet's root owner for a
+  // mention reply or an in-drive consult, the caller's own on their own credits. Keyed on the model that will run.
+  const entitlement = await modelEntitlement({ userId, provider: providerResult.provider, model: providerResult.modelName, spend });
+  if (!entitlement.allowed) {
+    throw new Error(MODEL_ENTITLEMENT_MESSAGES[entitlement.reason]);
   }
 
   return providerResult;
@@ -711,7 +719,7 @@ export async function executeAskAgent(
           await getConfiguredModel(userId, {
             aiProvider: targetAgent.aiProvider,
             aiModel: targetAgent.aiModel
-          }, spendDriveId(executionContext?.creditSpend?.spend ?? PERSONAL_SPEND));
+          }, executionContext?.creditSpend?.spend ?? PERSONAL_SPEND);
         
         // 9. Filter tools for agent. Nested calls inherit the top-level caller's MCP
         // drive scope via nestedContext below, so a scoped token must not be able to

@@ -97,6 +97,8 @@ vi.mock('@pagespace/db/schema/auth', () => ({ users: { id: 'id', subscriptionTie
 // The credit gate under test. Default: allowed. Individual tests override.
 vi.mock('@pagespace/lib/billing/credit-gate', () => ({
   canConsumeAI: vi.fn().mockResolvedValue({ allowed: true, reason: 'unlimited' }),
+  // WAL-8: the funder's tier; here the caller's own.
+  resolveEntitlementTier: vi.fn(async (_userId: string, tier: string) => tier),
 }));
 
 vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
@@ -128,6 +130,7 @@ vi.mock('@/lib/ai/core/ai-providers-config', () => ({
   DEFAULT_PROVIDER: 'openai',
   DEFAULT_MODEL: 'openai/gpt-5.4-nano',
   ADMIN_ONLY_PROVIDERS: new Set<string>(['glm']),
+  isModelAllowedForTier: vi.fn(() => true),
   resolveProviderModel: vi.fn((sp: string, sm: string) => ({
     provider: sp && sm ? sp : 'openai',
     model: sm || 'openai/gpt-5.4-nano',
@@ -219,6 +222,28 @@ describe('POST /api/ai/page-agents/consult — prepaid credit gate', () => {
     expect(refused.status).toBe(403);
     expect(await refused.json()).toMatchObject({ code: 'org_policy', policy: 'modelAllowlist' });
     expect(generateText).not.toHaveBeenCalled();
+  });
+
+  it('POL-8 (partial) WAL-8 (partial) the pro-model gate takes the tier of whoever FUNDS the call, resolved on the consult\'s spend', async () => {
+    const { resolveEntitlementTier } = await import('@pagespace/lib/billing/credit-gate');
+    const { isModelAllowedForTier } = await import('@/lib/ai/core/ai-providers-config');
+    vi.mocked(isModelAllowedForTier).mockImplementation((_model, tier) => tier === 'business');
+
+    // The caller is on Pro, but the org drive's wallet (Business) funds the call: the model runs.
+    vi.mocked(resolveEntitlementTier).mockResolvedValueOnce('business');
+    expect((await POST(makeRequest())).status).toBe(200);
+    expect(vi.mocked(resolveEntitlementTier).mock.calls.at(-1)).toEqual(['user-1', 'pro', expect.objectContaining({ kind: 'drive', driveId: 'drive-1', chosen: null })]);
+
+    // The funder's tier does not reach the model: refused as a tier block before any hold or model call.
+    vi.mocked(canConsumeAI).mockClear();
+    vi.mocked(generateText).mockClear();
+    vi.mocked(resolveEntitlementTier).mockResolvedValueOnce('free');
+    const refused = await POST(makeRequest());
+    expect(refused.status).toBe(403);
+    expect(await refused.json()).toMatchObject({ error: 'Subscription required' });
+    expect(canConsumeAI).not.toHaveBeenCalled();
+    expect(generateText).not.toHaveBeenCalled();
+    vi.mocked(isModelAllowedForTier).mockImplementation(() => true);
   });
 
   it('does not block with a 402 when the gate allows', async () => {

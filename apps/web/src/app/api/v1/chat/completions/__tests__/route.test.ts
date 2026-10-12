@@ -167,6 +167,8 @@ vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
 
 vi.mock('@pagespace/lib/billing/credit-gate', () => ({
   canConsumeAI: vi.fn().mockResolvedValue({ allowed: true, reason: 'unlimited' }),
+  // WAL-8: the funder's tier; here the caller's own.
+  resolveEntitlementTier: vi.fn(async (_userId: string, tier: string) => tier),
 }));
 
 vi.mock('@pagespace/lib/billing/credit-consume', () => ({
@@ -282,6 +284,32 @@ describe('POST /api/v1/chat/completions', () => {
 
     expect(vi.mocked(createAIProvider).mock.calls.at(-1)?.[2]).toEqual({ driveId: 'drive-abc' });
     expect({ status: response.status, code: body.code, policy: body.policy }).toEqual({ status: 403, code: 'org_policy', policy: 'modelAllowlist' });
+  });
+
+  test('POL-8 (partial) WAL-8 (partial) the pro-model gate takes the tier of whoever FUNDS the call, resolved on its spend', async () => {
+    const { createAIProvider } = await import('@/lib/ai/core/provider-factory');
+    const { resolveEntitlementTier } = await import('@pagespace/lib/billing/credit-gate');
+    const mode = process.env.DEPLOYMENT_MODE;
+    process.env.DEPLOYMENT_MODE = 'cloud';
+    try {
+      // A paid-tier model: the org drive's wallet (Business) funds it, so it runs.
+      vi.mocked(createAIProvider).mockResolvedValueOnce({ model: {}, provider: 'openai', modelName: 'openai/gpt-6-sol' } as never);
+      vi.mocked(resolveEntitlementTier).mockResolvedValueOnce('business');
+      expect((await POST(makeRequest(validBody))).status).not.toBe(403);
+      expect(vi.mocked(resolveEntitlementTier).mock.calls.at(-1)?.[2]).toEqual({ kind: 'drive', driveId: 'drive-abc', chosen: null });
+
+      // The funder is on Free: a tier block, before any hold.
+      vi.mocked(canConsumeAI).mockClear();
+      vi.mocked(createAIProvider).mockResolvedValueOnce({ model: {}, provider: 'openai', modelName: 'openai/gpt-6-sol' } as never);
+      vi.mocked(resolveEntitlementTier).mockResolvedValueOnce('free');
+      const refused = await POST(makeRequest(validBody));
+      expect(refused.status).toBe(403);
+      expect((await refused.json()).error).toBe('Subscription required');
+      expect(canConsumeAI).not.toHaveBeenCalled();
+    } finally {
+      if (mode === undefined) delete process.env.DEPLOYMENT_MODE;
+      else process.env.DEPLOYMENT_MODE = mode;
+    }
   });
 
   test('SPEND-3 (partial) a thread names its conversation so the gate reads its stored source; a stateless call names none', async () => {

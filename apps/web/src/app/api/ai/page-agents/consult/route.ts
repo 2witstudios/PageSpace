@@ -15,8 +15,9 @@ import { createAIProvider, isProviderError, type ProviderRequest } from '@/lib/a
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
 import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
 import { getUserTimezone } from '@/lib/ai/core/personalization-utils';
-import { DEFAULT_PROVIDER, DEFAULT_MODEL, ADMIN_ONLY_PROVIDERS, resolveProviderModel } from '@/lib/ai/core/ai-providers-config';
-import { createAdminRestrictedResponse } from '@/lib/subscription/rate-limit-middleware';
+import { DEFAULT_PROVIDER, DEFAULT_MODEL, resolveProviderModel } from '@/lib/ai/core/ai-providers-config';
+import { resolveGenerationAdmission } from '@/lib/ai/core/generation-admission';
+import { createAdminRestrictedResponse, createSubscriptionRequiredResponse, requiresProSubscription } from '@/lib/subscription/rate-limit-middleware';
 import type { ToolExecutionContext } from '@/lib/ai/core/types';
 import { supportsTemperature } from '@/lib/ai/core/model-capabilities';
 import { db } from '@pagespace/db/db'
@@ -29,7 +30,7 @@ import { messageRepository } from '@/lib/repositories/message-repository';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
 import { authorizePageConversation, type PageConversationAccess } from '@/lib/ai/core/authorize-page-conversation';
 import { createId } from '@paralleldrive/cuid2';
-import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
+import { canConsumeAI, resolveEntitlementTier } from '@pagespace/lib/billing/credit-gate';
 import { conversationSpend, resolvedSpend } from '@pagespace/lib/billing/spend-target';
 import { pinConversationSource } from '@pagespace/lib/billing/spend-resolution';
 import { spendFallbackHeaders, spendFallbackNotice, type SpendFallbackNotice } from '@pagespace/lib/billing/spend-fallback';
@@ -302,20 +303,9 @@ export async function POST(request: Request) {
     // an agent configured with `glm` + an invalid model resolves to the metered
     // default, so both the admin gate and the credit gate must key off this, not the
     // raw agent config.
-    const { provider: effectiveProvider } = resolveProviderModel(agent.aiProvider, agent.aiModel);
+    const { provider: effectiveProvider, model: effectiveModel } = resolveProviderModel(agent.aiProvider, agent.aiModel);
+    const consumerTier = toPersonalSubscriptionTier(gateUser?.subscriptionTier);
 
-    // Admin-only providers (the direct Z.ai Coder Plan) are unmetered and must never
-    // be reachable by a non-admin — otherwise any viewer of a glm-configured shared
-    // agent could consume the admin subscription for free. The interactive chat routes
-    // enforce this; the consult + v1 routes must too.
-    if (ADMIN_ONLY_PROVIDERS.has(effectiveProvider) && gateUser?.role !== 'admin') {
-      auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'page_agent', resourceId: agentId, details: { reason: 'admin_only_provider', provider: effectiveProvider, action: 'consult', method: 'POST' }, riskScore: 0.5 });
-      return createAdminRestrictedResponse();
-    }
-
-    // Metering-exempt providers (admin Z.ai Coder Plan) bill on a flat-rate external
-    // subscription, so skip the gate entirely — no hold, no balance check — and never
-    // debit at settle (see isMeteringExempt in trackAIUsage).
     // A consultation runs as a conversation on the agent's page, so its session is the
     // agent's drive (SPEND-7). A continued conversation carries its stored source (SPEND-3);
     // the gate reads it only when the caller owns that conversation, so an id not yet vetted
@@ -325,11 +315,31 @@ export async function POST(request: Request) {
     const activeConversationId: string = conversationId || newConversationId || createId();
     let spend = conversationSpend(agent.driveId, activeConversationId);
     let conversationSourceWalletId: string | undefined;
+
+    // The SHARED entitlement decision a chat turn applies (generation-admission.ts): an
+    // admin-only provider is a role block (a viewer of a glm-configured shared agent must
+    // never consume the admin subscription), a paid-tier model a tier block — for the tier
+    // of whoever funds this call (WAL-8, POL-8), as the spend resolution names it.
+    const admission = resolveGenerationAdmission({
+      provider: effectiveProvider,
+      model: effectiveModel,
+      subscriptionTier: await resolveEntitlementTier(userId, consumerTier, spend),
+      isAdmin: gateUser?.role === 'admin',
+      requiresProSubscription,
+    });
+    if (!admission.allowed) {
+      auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'page_agent', resourceId: agentId, details: { reason: admission.reason, provider: effectiveProvider, action: 'consult', method: 'POST' }, riskScore: 0.5 });
+      return admission.reason === 'provider_admin_only' ? createAdminRestrictedResponse() : createSubscriptionRequiredResponse();
+    }
+
+    // Metering-exempt providers (admin Z.ai Coder Plan) bill on a flat-rate external
+    // subscription, so skip the gate entirely — no hold, no balance check — and never
+    // debit at settle (see isMeteringExempt in trackAIUsage).
     // SPEND-4: a drive rule that moved the call to another source is reported in the answer
     // (`spendFallback` and the X-Spend-Fallback-* headers), never applied silently.
     let spendFallback: SpendFallbackNotice | null = null;
     if (!isMeteringExempt(effectiveProvider)) {
-      const creditGate = await canConsumeAI(userId, toPersonalSubscriptionTier(gateUser?.subscriptionTier), {
+      const creditGate = await canConsumeAI(userId, consumerTier, {
         spend,
         estCostCents: estimateChatHoldCentsForModel(agent.aiModel ?? undefined),
         maxInFlight: MAX_CHAT_INFLIGHT,
