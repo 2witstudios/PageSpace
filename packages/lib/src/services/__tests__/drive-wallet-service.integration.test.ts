@@ -44,6 +44,7 @@ import {
   getOrgPoolSplit,
   getDriveSpend,
 } from '../drive-wallet-service';
+import { encodeAutomationRef } from '../../billing/automation-attribution';
 
 vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 
@@ -208,9 +209,9 @@ describe('drive-wallet service (orgs on, real Postgres)', () => {
     // Marcus's scheduled "Weekly digest" spends the drive wallet on his behalf (D-OW-34), and he makes a
     // call of his own; both settle for real on the Product wallet.
     const [digest] = await db.insert(workflows).values({ driveId: w.productId, createdBy: w.ids.marcus, name: 'Weekly digest', prompt: 'digest' }).returning();
-    expect(await consumeCredits({ aiUsageLogId: createId(), userId: w.ids.marcus, costDollars: 0.04, walletId: w.productWalletId, automationWorkflowId: digest.id })).toBe('settled');
+    expect(await consumeCredits({ aiUsageLogId: createId(), userId: w.ids.marcus, costDollars: 0.04, walletId: w.productWalletId, automationRef: encodeAutomationRef({ kind: 'workflow', workflowId: digest.id }) })).toBe('settled');
     expect(await consumeCredits({ aiUsageLogId: createId(), userId: w.ids.marcus, costDollars: 0.02, walletId: w.productWalletId })).toBe('settled');
-    const charged = async (automation: boolean) => -(await db.select({ applied: creditLedger.appliedCents, wf: creditLedger.automationWorkflowId }).from(creditLedger)
+    const charged = async (automation: boolean) => -(await db.select({ applied: creditLedger.appliedCents, wf: creditLedger.automationRef }).from(creditLedger)
       .where(and(eq(creditLedger.walletId, w.productWalletId), eq(creditLedger.userId, w.ids.marcus), eq(creditLedger.entryType, 'usage'))))
       .filter((r) => (r.wf !== null) === automation)
       .reduce((sum, r) => sum + (r.applied ?? 0), 0);
@@ -225,7 +226,7 @@ describe('drive-wallet service (orgs on, real Postgres)', () => {
       { kind: 'member', label: 'Marcus Oyelaran', cents: marcusCents },
       { kind: 'automation', label: 'Weekly digest', cents: digestCents },
     ]);
-    expect(lead.wallet.spendByConsumer.find((r) => r.kind === 'automation')).toMatchObject({ automationWorkflowId: digest.id, creatorUserId: w.ids.marcus, creatorName: 'Marcus Oyelaran' });
+    expect(lead.wallet.spendByConsumer.find((r) => r.kind === 'automation')).toMatchObject({ automation: { kind: 'workflow', workflowId: digest.id }, creatorUserId: w.ids.marcus, creatorName: 'Marcus Oyelaran' });
 
     // A consumer sees none of it (SPEND-9).
     const member = await getDriveWallet(w.ids.lena, w.productId, 'session');

@@ -8,10 +8,13 @@ import {
   capRemainingCents,
   poolUnallocatedCents,
   consumerSpendRows,
+  workflowIdsToName,
   CONSUMER_WALLET_FIELDS,
   type DriveWalletFacts,
 } from '../wallet-views';
-import { zoomTranscriptsAutomationRef } from '../automation-attribution';
+import { encodeAutomationRef } from '../automation-attribution';
+
+const wf = (workflowId: string) => encodeAutomationRef({ kind: 'workflow', workflowId });
 
 // Northwind Labs fixture: Product's wallet holds a 1,200-credit allocation under the
 // 9,000-credit pool; Marcus has spent 50 credits of it, Lena 30, Priya 20 and her weekly digest 15.
@@ -40,7 +43,7 @@ const facts = (over: Partial<DriveWalletFacts> = {}): DriveWalletFacts => ({
     { kind: 'member', consumerKey: 'user:u-marcus', userId: 'u-marcus', displayName: 'Marcus Oyelaran', spentCents: c(50) },
     { kind: 'member', consumerKey: 'user:u-lena', userId: 'u-lena', displayName: 'Lena Lead', spentCents: c(30) },
     { kind: 'member', consumerKey: 'user:u-priya', userId: 'u-priya', displayName: 'Priya Nair', spentCents: c(20) },
-    { kind: 'automation', consumerKey: 'automation:wf-digest', automationWorkflowId: 'wf-digest', displayName: 'Weekly digest', creatorUserId: 'u-priya', creatorName: 'Priya Nair', spentCents: c(15) },
+    { kind: 'automation', consumerKey: 'automation:workflow:wf-digest', automation: { kind: 'workflow', workflowId: 'wf-digest' }, displayName: 'Weekly digest', creatorUserId: 'u-priya', creatorName: 'Priya Nair', spentCents: c(15) },
   ],
   pool: { walletId: 'w-pool', availableCents: c(9000), outstandingChildAllocationsCents: c(3000) },
   ...over,
@@ -103,38 +106,51 @@ describe('wallet-views: spend by member and automation (SPEND-10)', () => {
 
   it("SPEND-10 (partial) a creator's workflow spend is its own automation row, never merged into the creator's member row", () => {
     const rows = consumerSpendRows([
-      { userId: 'u-priya', automationWorkflowId: null, spentCents: c(20) },
-      { userId: 'u-priya', automationWorkflowId: 'wf-digest', spentCents: c(15) },
-      { userId: 'u-marcus', automationWorkflowId: null, spentCents: c(50) },
+      { userId: 'u-priya', automationRef: null, spentCents: c(20) },
+      { userId: 'u-priya', automationRef: wf('wf-digest'), spentCents: c(15) },
+      { userId: 'u-marcus', automationRef: null, spentCents: c(50) },
     ], { people, automations });
     expect(rows).toEqual([
       { kind: 'member', consumerKey: 'user:u-marcus', userId: 'u-marcus', displayName: 'Marcus Oyelaran', spentCents: c(50) },
       { kind: 'member', consumerKey: 'user:u-priya', userId: 'u-priya', displayName: 'Priya Nair', spentCents: c(20) },
-      { kind: 'automation', consumerKey: 'automation:wf-digest', automationWorkflowId: 'wf-digest', displayName: 'Weekly digest', creatorUserId: 'u-priya', creatorName: 'Priya Nair', spentCents: c(15) },
+      { kind: 'automation', consumerKey: 'automation:workflow:wf-digest', automation: { kind: 'workflow', workflowId: 'wf-digest' }, displayName: 'Weekly digest', creatorUserId: 'u-priya', creatorName: 'Priya Nair', spentCents: c(15) },
     ]);
   });
 
   it('SPEND-10 (partial) one automation is one row whoever it ran as this period (reassigned mid-period); a deleted workflow keeps its spend, unnamed', () => {
     const rows = consumerSpendRows([
-      { userId: 'u-priya', automationWorkflowId: 'wf-digest', spentCents: c(10) },
-      { userId: 'u-marcus', automationWorkflowId: 'wf-digest', spentCents: c(5) },
-      { userId: 'u-marcus', automationWorkflowId: 'wf-gone', spentCents: c(3) },
+      { userId: 'u-priya', automationRef: wf('wf-digest'), spentCents: c(10) },
+      { userId: 'u-marcus', automationRef: wf('wf-digest'), spentCents: c(5) },
+      { userId: 'u-marcus', automationRef: wf('wf-gone'), spentCents: c(3) },
     ], { people, automations });
     expect(rows).toEqual([
-      { kind: 'automation', consumerKey: 'automation:wf-digest', automationWorkflowId: 'wf-digest', displayName: 'Weekly digest', creatorUserId: 'u-priya', creatorName: 'Priya Nair', spentCents: c(15) },
-      { kind: 'automation', consumerKey: 'automation:wf-gone', automationWorkflowId: 'wf-gone', displayName: null, creatorUserId: null, creatorName: null, spentCents: c(3) },
+      { kind: 'automation', consumerKey: 'automation:workflow:wf-digest', automation: { kind: 'workflow', workflowId: 'wf-digest' }, displayName: 'Weekly digest', creatorUserId: 'u-priya', creatorName: 'Priya Nair', spentCents: c(15) },
+      { kind: 'automation', consumerKey: 'automation:workflow:wf-gone', automation: { kind: 'workflow', workflowId: 'wf-gone' }, displayName: null, creatorUserId: null, creatorName: null, spentCents: c(3) },
     ]);
   });
 
   it('SPEND-10 (partial) a Zoom connection\'s transcript enrichment is its own automation row, named, running as the connection\'s owner', () => {
-    const ref = zoomTranscriptsAutomationRef('zc-1');
-    expect(consumerSpendRows([{ userId: 'u-marcus', automationWorkflowId: ref, spentCents: c(4) }], { people, automations })).toEqual([
-      { kind: 'automation', consumerKey: `automation:${ref}`, automationWorkflowId: ref, displayName: 'Zoom transcripts', creatorUserId: 'u-marcus', creatorName: 'Marcus Oyelaran', spentCents: c(4) },
+    const ref = encodeAutomationRef({ kind: 'zoom', connectionId: 'zc-1' });
+    expect(consumerSpendRows([{ userId: 'u-marcus', automationRef: ref, spentCents: c(4) }], { people, automations })).toEqual([
+      { kind: 'automation', consumerKey: 'automation:zoom:zc-1', automation: { kind: 'zoom', connectionId: 'zc-1' }, displayName: 'Zoom transcripts', creatorUserId: 'u-marcus', creatorName: 'Marcus Oyelaran', spentCents: c(4) },
+    ]);
+  });
+
+  it('SPEND-10 (partial) only the workflows the groups name are looked up; a reference the codec did not write stays the person\'s spend', () => {
+    const groups = [
+      { userId: 'u-marcus', automationRef: wf('wf-digest'), spentCents: c(2) },
+      { userId: 'u-marcus', automationRef: wf('wf-digest'), spentCents: c(1) },
+      { userId: 'u-marcus', automationRef: encodeAutomationRef({ kind: 'zoom', connectionId: 'zc-1' }), spentCents: c(1) },
+      { userId: 'u-priya', automationRef: 'wf-raw-id', spentCents: c(5) },
+    ];
+    expect(workflowIdsToName(groups)).toEqual(['wf-digest']);
+    expect(consumerSpendRows([groups[3]], { people, automations })).toEqual([
+      { kind: 'member', consumerKey: 'user:u-priya', userId: 'u-priya', displayName: 'Priya Nair', spentCents: c(5) },
     ]);
   });
 
   it('a refund that leaves a group below zero shows nothing spent, and an unknown person is unnamed', () => {
-    expect(consumerSpendRows([{ userId: 'u-x', automationWorkflowId: null, spentCents: -5 }], { people, automations }))
+    expect(consumerSpendRows([{ userId: 'u-x', automationRef: null, spentCents: -5 }], { people, automations }))
       .toEqual([{ kind: 'member', consumerKey: 'user:u-x', userId: 'u-x', displayName: null, spentCents: 0 }]);
   });
 });

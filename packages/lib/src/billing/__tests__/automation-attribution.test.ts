@@ -1,28 +1,35 @@
 import { describe, it, expect } from 'vitest';
-import { automationWorkflowIdFor, isZoomTranscriptsAutomationRef, zoomTranscriptsAutomationRef } from '../automation-attribution';
+import { automationRefFor, encodeAutomationRef, parseAutomationRef } from '../automation-attribution';
 import { automationSpend, driveSpend, personTriggeredSpend, PERSONAL_SPEND } from '../spend-target';
 
-describe('automationWorkflowIdFor', () => {
+describe('automationRefFor', () => {
   it('SPEND-10 (partial) a run no person is present for is attributed to its workflow', () => {
-    expect(automationWorkflowIdFor(automationSpend('d1'), 'wf-1')).toBe('wf-1');
+    expect(automationRefFor(automationSpend('d1'), 'wf-1')).toBe('workflow:wf-1');
   });
 
   it("SPEND-10 (partial) a person's action (a manual Run, a channel mention) and a person's own call stay theirs", () => {
-    expect(automationWorkflowIdFor(personTriggeredSpend('d1'), 'wf-1')).toBeUndefined();
-    expect(automationWorkflowIdFor(driveSpend('d1'), 'wf-1')).toBeUndefined();
-    expect(automationWorkflowIdFor(PERSONAL_SPEND, 'wf-1')).toBeUndefined();
+    expect(automationRefFor(personTriggeredSpend('d1'), 'wf-1')).toBeUndefined();
+    expect(automationRefFor(driveSpend('d1'), 'wf-1')).toBeUndefined();
+    expect(automationRefFor(PERSONAL_SPEND, 'wf-1')).toBeUndefined();
   });
 
   it('names nothing without a workflow id', () => {
-    expect(automationWorkflowIdFor(automationSpend('d1'), undefined)).toBeUndefined();
-    expect(automationWorkflowIdFor(automationSpend('d1'), '')).toBeUndefined();
+    expect(automationRefFor(automationSpend('d1'), undefined)).toBeUndefined();
+    expect(automationRefFor(automationSpend('d1'), '')).toBeUndefined();
   });
 });
 
-describe('zoomTranscriptsAutomationRef', () => {
-  it('SPEND-10 (partial) a Zoom connection\'s enrichment has its own automation reference, never mistaken for a workflow id', () => {
-    const ref = zoomTranscriptsAutomationRef('zc-1');
-    expect(isZoomTranscriptsAutomationRef(ref)).toBe(true);
-    expect(isZoomTranscriptsAutomationRef('wf-1')).toBe(false);
+describe('the automation reference codec', () => {
+  it('SPEND-10 (partial) a workflow and a Zoom connection round-trip through one codec, each by its kind', () => {
+    for (const ref of [{ kind: 'workflow', workflowId: 'wf-1' }, { kind: 'zoom', connectionId: 'zc-1' }] as const) {
+      expect(parseAutomationRef(encodeAutomationRef(ref))).toEqual(ref);
+    }
+    expect(encodeAutomationRef({ kind: 'zoom', connectionId: 'zc-1' })).toBe('zoom:zc-1');
+  });
+
+  it('reads nothing it did not write: a bare id, an empty id, an unknown kind, null', () => {
+    for (const stored of ['wf-1', 'workflow:', 'zoom:', 'github:x', '', null, undefined]) {
+      expect(parseAutomationRef(stored), String(stored)).toBeNull();
+    }
   });
 });

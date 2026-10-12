@@ -5,7 +5,7 @@ import { createId } from '@paralleldrive/cuid2';
 import { createAIProvider, isProviderError, type ProviderRequest } from '@/lib/ai/core/provider-factory';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
 import { automationRunUnreserved, automationSpend } from '@pagespace/lib/billing/spend-target';
-import { automationWorkflowIdFor } from '@pagespace/lib/billing/automation-attribution';
+import { automationRefFor } from '@pagespace/lib/billing/automation-attribution';
 import { ORGS_ENABLED } from '@pagespace/lib/organizations/orgs-enabled';
 import { isBillingEnabled } from '@pagespace/lib/deployment-mode';
 import { filterToolsForEphemeralWorkspace, filterToolsForImageGen, filterToolsForSandboxEnablement, filterToolsForSandboxTier, SANDBOX_COMPUTE_TOOL_NAMES } from '@/lib/ai/core/tool-filtering';
@@ -224,8 +224,8 @@ export async function executeWorkflow(
         result = { success: false, skipped: true, durationMs: Date.now() - startTime, error: 'AI credit gate denied: no drive wallet reserved for this automation' };
       } else {
         // SPEND-10: a run no person is present for is listed as this workflow on the drive's spend.
-        const automationWorkflowId = automationWorkflowIdFor(creditSpend.spend, input.workflowId);
-        result = await runClaimed({ ...input, creditSpend: automationWorkflowId ? { ...creditSpend, automationWorkflowId } : creditSpend }, runId, startTime);
+        const automationRef = automationRefFor(creditSpend.spend, input.workflowId);
+        result = await runClaimed({ ...input, creditSpend: automationRef ? { ...creditSpend, automationRef } : creditSpend }, runId, startTime);
       }
     }
   } catch (error) {
@@ -936,7 +936,7 @@ async function runExecution(
       // WAL-5 / SPEND-6: settle on the wallet the run's gate reserved on — the drive wallet,
       // never a person's — not the payer's personal root.
       walletId: input.creditSpend.walletId,
-      automationWorkflowId: input.creditSpend.automationWorkflowId,
+      automationRef: input.creditSpend.automationRef,
       success: true,
     });
 

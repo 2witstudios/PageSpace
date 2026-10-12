@@ -905,7 +905,7 @@ export async function executeAskAgent(
         // runCompaction gates and reserves on the caller's spend target before its own model
         // call, and skips (persisting nothing) when that source cannot cover it.
         if (prepared.pendingCompaction) {
-          void runCompaction({ ...prepared.pendingCompaction, billedUserId: executionContext?.creditSpend?.userId, automationWorkflowId: executionContext?.creditSpend?.automationWorkflowId });
+          void runCompaction({ ...prepared.pendingCompaction, billedUserId: executionContext?.creditSpend?.userId, automationRef: executionContext?.creditSpend?.automationRef });
         }
 
         // Settle the sub-agent run on its own hold. totalUsage meters every tool-loop round-trip
@@ -931,7 +931,7 @@ export async function executeAskAgent(
           // WAL-6b: the hold records the turn's fallback origin; carried too for a hold-less settle.
           fallbackFromWalletId: spendFallbackFromWalletId(askSpend),
           // SPEND-10: a consultation inside an automation run is that automation's spend.
-          automationWorkflowId: executionContext?.creditSpend?.automationWorkflowId,
+          automationRef: executionContext?.creditSpend?.automationRef,
           success: true,
           metadata: { feature: 'ask_agent', agentCallDepth: callDepth + 1 },
         });

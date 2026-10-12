@@ -5,8 +5,8 @@ import { WalletSpendCard } from '../drive-wallet/WalletSpendCard';
 
 const rows: ConsumerSpendView[] = [
   { kind: 'member', consumerKey: 'user:u-priya', userId: 'u-priya', displayName: 'Priya Nair', spentCents: 2_000, spentCredits: '20' },
-  { kind: 'automation', consumerKey: 'automation:wf-digest', automationWorkflowId: 'wf-digest', displayName: 'Weekly digest', creatorUserId: 'u-priya', creatorName: 'Priya Nair', spentCents: 1_500, spentCredits: '15' },
-  { kind: 'automation', consumerKey: 'automation:wf-gone', automationWorkflowId: 'wf-gone', displayName: null, creatorUserId: null, creatorName: null, spentCents: 300, spentCredits: '3' },
+  { kind: 'automation', consumerKey: 'automation:workflow:wf-digest', automation: { kind: 'workflow', workflowId: 'wf-digest' }, displayName: 'Weekly digest', creatorUserId: 'u-priya', creatorName: 'Priya Nair', spentCents: 1_500, spentCredits: '15' },
+  { kind: 'automation', consumerKey: 'automation:workflow:wf-gone', automation: { kind: 'workflow', workflowId: 'wf-gone' }, displayName: null, creatorUserId: null, creatorName: null, spentCents: 300, spentCredits: '3' },
 ];
 
 describe('WalletSpendCard', () => {

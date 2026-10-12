@@ -93,10 +93,10 @@ export interface SandboxActorContext {
    */
   turnId?: string;
   /**
-   * SPEND-10: the automation (workflow) this turn runs for when no person is present, so compute
+   * SPEND-10: the automation (its stored reference, automation-attribution) this turn runs for when no person is present, so compute
    * its tools meter (a browser session) is listed under that automation, not its creator.
    */
-  automationWorkflowId?: string;
+  automationRef?: string;
 }
 
 export interface SandboxQuotaDeps {

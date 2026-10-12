@@ -67,6 +67,7 @@ import { POST as manualRun } from '@/app/api/workflows/[workflowId]/run/route';
 import { executePageWebhookTrigger } from '@/lib/webhooks/page-webhook-trigger-executor';
 import { executeCalendarTrigger } from '@/lib/workflows/calendar-trigger-executor';
 import { triggerMentionedAgentResponses } from '@/lib/channels/agent-mention-responder';
+import { encodeAutomationRef } from '@pagespace/lib/billing/automation-attribution';
 
 const orgsFlag = createRequire(import.meta.url)('@pagespace/lib/organizations/orgs-enabled') as { ORGS_ENABLED: boolean };
 const shippedOrgsEnabled = orgsFlag.ORGS_ENABLED;
@@ -264,7 +265,7 @@ describe('SPEND-6 automations, triggers and scheduled workflows spend the drive 
     const usage = await usageRows(w);
     expect(usage).toHaveLength(4);
     for (const row of usage) expect(row).toMatchObject({ walletId: w.productWalletId, userId: w.marcusId });
-    expect(new Set(usage.map((r) => r.automationWorkflowId))).toEqual(new Set([w.hourlyId, w.taskWorkflowId, w.webhookWorkflowId, w.calendarWorkflowId]));
+    expect(new Set(usage.map((r) => r.automationRef))).toEqual(new Set([w.hourlyId, w.taskWorkflowId, w.webhookWorkflowId, w.calendarWorkflowId].map((workflowId) => encodeAutomationRef({ kind: 'workflow', workflowId }))));
     expect((await walletRow(w.productWalletId)).spentCents).toBeGreaterThan(0);
     await expectNoPersonCharged(w);
     expect(await liveHolds(w)).toEqual([]);
@@ -281,7 +282,7 @@ describe('SPEND-6 automations, triggers and scheduled workflows spend the drive 
 
     const usage = await usageRows(w);
     expect(usage.length).toBeGreaterThanOrEqual(2);
-    for (const row of usage) expect(row).toMatchObject({ walletId: w.productWalletId, userId: w.priyaId, automationWorkflowId: null });
+    for (const row of usage) expect(row).toMatchObject({ walletId: w.productWalletId, userId: w.priyaId, automationRef: null });
     await expectNoPersonCharged(w);
   });
 

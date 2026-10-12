@@ -57,13 +57,13 @@ const H = vi.hoisted(() => {
   const creditLedger = cols('creditLedger', [
     'id', 'userId', 'walletId', 'entryType', 'bucket', 'amountCents', 'appliedCents', 'chargeMillicents',
     'aiUsageLogId', 'realCostCents', 'markupBps', 'stripeRef', 'paidCents', 'consumeStatus',
-    'reconcileGenerationKey', 'spendKind', 'fallbackFromWalletId', 'automationWorkflowId', 'createdAt',
+    'reconcileGenerationKey', 'spendKind', 'fallbackFromWalletId', 'automationRef', 'createdAt',
   ]);
   const creditHolds = cols('creditHolds', ['id', 'userId', 'walletId', 'fallbackFromWalletId', 'estCents', 'aiUsageLogId', 'spendKind', 'createdAt', 'expiresAt']);
   const users = cols('users', ['id', 'stripeCustomerId', 'subscriptionTier']);
   const subscriptions = cols('subscriptions', ['id', 'userId', 'status', 'gifted', 'stripePriceId']);
   const aiUsageLogs = cols('aiUsageLogs', [
-    'id', 'userId', 'cost', 'timestamp', 'success', 'provider', 'source', 'walletId', 'automationWorkflowId',
+    'id', 'userId', 'cost', 'timestamp', 'success', 'provider', 'source', 'walletId', 'automationRef',
     'metadata', 'reconcileStatus', 'reconcileAttempts', 'reconciledAt',
   ]);
 

@@ -81,7 +81,7 @@ async function poolRowsOf(w: World, userId: string) {
   return { ledger, holds };
 }
 
-const billingFor = (w: World, actorId: string): BrowserBilling => ({ driveId: w.driveId, ownerId: w.annaId, actorId, agentPageId: null, conversationId: `conv-${createId()}`, automationWorkflowId: null });
+const billingFor = (w: World, actorId: string): BrowserBilling => ({ driveId: w.driveId, ownerId: w.annaId, actorId, agentPageId: null, conversationId: `conv-${createId()}`, automationRef: null });
 
 describe('the browser is charged to the person driving it, never the owner (review #2760 P1)', () => {
   beforeAll(async () => {

@@ -447,8 +447,8 @@ export interface OrphanUsageRow {
   walletId?: string | null;
   /** The usage row's metadata, whose explicit compute `spendKind` is carried to the re-settle. */
   metadata?: unknown;
-  /** SPEND-10: the automation the call ran for (aiUsageLogs.automation_workflow_id), carried to the re-settle. */
-  automationWorkflowId?: string | null;
+  /** SPEND-10: the automation the call ran for (aiUsageLogs.automation_ref), carried to the re-settle. */
+  automationRef?: string | null;
 }
 
 export type BackfillAction =
@@ -464,7 +464,7 @@ export type BackfillAction =
       /** WAL-6b: the chosen wallet a drive rule moved the call off (usage metadata.fallbackFromWalletId). */
       fallbackFromWalletId?: string;
       /** SPEND-10: the automation the call ran for, so the re-settled spend is still listed as it. */
-      automationWorkflowId?: string;
+      automationRef?: string;
     }
   /**
    * WAL-6b fail closed: a usage row that names no wallet. Nothing chose a wallet for it, so no
@@ -565,7 +565,7 @@ export function computeBackfillActions(
         walletId: row.walletId,
         spendKind: orphanSpendKind(row.metadata),
         ...(fallbackFromWalletId ? { fallbackFromWalletId } : {}),
-        ...(row.automationWorkflowId ? { automationWorkflowId: row.automationWorkflowId } : {}),
+        ...(row.automationRef ? { automationRef: row.automationRef } : {}),
       };
     }),
   ];

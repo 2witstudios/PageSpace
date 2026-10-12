@@ -67,11 +67,11 @@ export interface ConsumeCreditsInput {
    */
   fallbackFromWalletId?: string;
   /**
-   * SPEND-10: the automation (workflow) this call ran for with no person present
-   * (automation-attribution `automationWorkflowIdFor`). Recorded on the claim row, so the lead
+   * SPEND-10: the automation (its stored reference, automation-attribution) this call ran for with no person present
+   * (automation-attribution `automationRefFor`). Recorded on the claim row, so the lead
    * sees the spend as the automation, and a retried settle keeps it (it reuses the row).
    */
-  automationWorkflowId?: string;
+  automationRef?: string;
   /**
    * Optional scope so the live `credits:updated` push can carry conversation/page
    * hints (the per-conversation usage monitor filters on them). Live chat routes
@@ -785,7 +785,7 @@ export async function consumeCredits(input: ConsumeCreditsInput): Promise<Credit
         consumeStatus: 'pending',
         spendKind: input.spendKind ?? 'ai',
         fallbackFromWalletId,
-        automationWorkflowId: input.automationWorkflowId ?? null,
+        automationRef: input.automationRef ?? null,
       })
       // The unique index on aiUsageLogId is partial (WHERE aiUsageLogId IS NOT NULL
       // AND entryType = 'usage'); Postgres can only infer it as the conflict arbiter

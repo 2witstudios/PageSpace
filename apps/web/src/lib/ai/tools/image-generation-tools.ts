@@ -231,7 +231,7 @@ restricted to app administrators.`,
           holdId,
           walletId,
           // SPEND-10: an image an automation run generates is that automation's spend.
-          automationWorkflowId: context?.creditSpend?.automationWorkflowId,
+          automationRef: context?.creditSpend?.automationRef,
           success: true,
           source: 'image_generation',
           conversationId: context?.conversationId,

@@ -1,5 +1,5 @@
 {
-  "id": "bfcefb64-3cd7-4500-ab49-d007b25535fd",
+  "id": "d43bf40d-b910-44b0-b416-a75a188dfe19",
   "prevId": "814cd47f-1f4b-43f6-8e39-dcf8c3c30b44",
   "version": "7",
   "dialect": "postgresql",
@@ -6380,8 +6380,8 @@
           "primaryKey": false,
           "notNull": false
         },
-        "automation_workflow_id": {
-          "name": "automation_workflow_id",
+        "automation_ref": {
+          "name": "automation_ref",
           "type": "text",
           "primaryKey": false,
           "notNull": false
@@ -18816,8 +18816,8 @@
           "primaryKey": false,
           "notNull": false
         },
-        "automationWorkflowId": {
-          "name": "automationWorkflowId",
+        "automationRef": {
+          "name": "automationRef",
           "type": "text",
           "primaryKey": false,
           "notNull": false

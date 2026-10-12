@@ -189,10 +189,11 @@ export const aiUsageLogs = pgTable('ai_usage_logs', {
   // Null on rows written before wallets existed.
   walletId: text('wallet_id'),
 
-  // SPEND-10: the automation (workflow) this call ran for when no person was present (a cron, a
-  // trigger, a scheduled run), so the drive lead sees spend by automation apart from its creator.
-  // A soft link like walletId. Null for a person's own call, a channel mention or a manual Run.
-  automationWorkflowId: text('automation_workflow_id'),
+  // SPEND-10: the automation this call ran for when no person was present (a cron, a trigger, a
+  // scheduled run, Zoom enrichment), a typed reference encoded only by lib billing/automation-attribution
+  // (`workflow:<id>` | `zoom:<connectionId>`), so the drive lead sees spend by automation apart from its
+  // creator. A soft link like walletId. Null for a person's own call, a channel mention or a manual Run.
+  automationRef: text('automation_ref'),
 
   // Metadata
   metadata: jsonb('metadata'),

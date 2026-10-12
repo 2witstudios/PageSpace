@@ -64,6 +64,7 @@ import { getOrgPolicies, readOrgSpendPolicy } from '../organizations/policy-read
 import {
   capRemainingCents,
   consumerSpendRows,
+  workflowIdsToName,
   displayedWalletStatus,
   projectDriveWallet,
   poolUnallocatedCents,
@@ -265,17 +266,18 @@ const SPEND_GROUPS_LISTED = 500;
 async function spendByConsumer(walletId: string, since: Date | null): Promise<ConsumerSpend[]> {
   const cents = sql<number>`coalesce(-sum(${creditLedger.appliedCents}), 0)::int`;
   const groups = await db
-    .select({ userId: creditLedger.userId, automationWorkflowId: creditLedger.automationWorkflowId, cents })
+    .select({ userId: creditLedger.userId, automationRef: creditLedger.automationRef, cents })
     .from(creditLedger)
     .where(and(
       eq(creditLedger.walletId, walletId),
       eq(creditLedger.entryType, 'usage'),
       since ? gte(creditLedger.createdAt, since) : undefined,
     ))
-    .groupBy(creditLedger.userId, creditLedger.automationWorkflowId)
+    .groupBy(creditLedger.userId, creditLedger.automationRef)
     .orderBy(sql`${cents} DESC`)
     .limit(SPEND_GROUPS_LISTED);
-  const workflowIds = [...new Set(groups.map((g) => g.automationWorkflowId).filter((id): id is string => id !== null))];
+  const spent = groups.map((g) => ({ userId: g.userId, automationRef: g.automationRef, spentCents: Number(g.cents) }));
+  const workflowIds = workflowIdsToName(spent);
   const flows = workflowIds.length === 0
     ? []
     : await db.select({ id: workflows.id, name: workflows.name, createdBy: workflows.createdBy }).from(workflows).where(inArray(workflows.id, workflowIds));
@@ -284,7 +286,7 @@ async function spendByConsumer(walletId: string, since: Date | null): Promise<Co
     ...flows.map((f) => f.createdBy).filter((id): id is string => id !== null),
   ]);
   return consumerSpendRows(
-    groups.map((g) => ({ userId: g.userId, automationWorkflowId: g.automationWorkflowId, spentCents: Number(g.cents) })),
+    spent,
     { people, automations: new Map(flows.map((f) => [f.id, { name: f.name, createdBy: f.createdBy }])) },
   );
 }

@@ -6,7 +6,7 @@ describe('browserSessionFor — the browser session a tool call operates, and wh
     const asPriya = browserSessionFor({ userId: 'priya', tenantId: 't1', driveId: 'drive-1', ownerId: 'priya', conversationId: 'conv-1', agentPageId: 'agent-1' });
     const asBen = browserSessionFor({ userId: 'ben', tenantId: 't1', driveId: 'drive-1', ownerId: 'priya', conversationId: 'conv-1', agentPageId: 'agent-1' });
 
-    expect(asBen.billing).toEqual({ driveId: 'drive-1', ownerId: 'priya', actorId: 'ben', agentPageId: 'agent-1', conversationId: 'conv-1', automationWorkflowId: null });
+    expect(asBen.billing).toEqual({ driveId: 'drive-1', ownerId: 'priya', actorId: 'ben', agentPageId: 'agent-1', conversationId: 'conv-1', automationRef: null });
     // One shared session — the conversation's — whoever is acting in it.
     expect(asBen.sessionId).toBe(asPriya.sessionId);
     expect(asBen.agentId).toBe('agent-1');
@@ -14,12 +14,12 @@ describe('browserSessionFor — the browser session a tool call operates, and wh
 
   it('a global (driveless) context is the acting user\'s own session and bill', () => {
     const own = browserSessionFor({ userId: 'ben', tenantId: 't1', conversationId: 'conv-2' });
-    expect(own.billing).toEqual({ driveId: null, ownerId: 'ben', actorId: 'ben', agentPageId: null, conversationId: 'conv-2', automationWorkflowId: null });
+    expect(own.billing).toEqual({ driveId: null, ownerId: 'ben', actorId: 'ben', agentPageId: null, conversationId: 'conv-2', automationRef: null });
     expect(own.agentId).toBe('global:ben');
   });
 
   it('SPEND-10 (partial) a browser opened by a run with no person present is billed as that automation', () => {
-    const run = browserSessionFor({ userId: 'marcus', tenantId: 't1', driveId: 'drive-1', ownerId: 'lena', conversationId: 'conv-3', agentPageId: 'agent-1', automationWorkflowId: 'wf-digest' });
-    expect(run.billing.automationWorkflowId).toBe('wf-digest');
+    const run = browserSessionFor({ userId: 'marcus', tenantId: 't1', driveId: 'drive-1', ownerId: 'lena', conversationId: 'conv-3', agentPageId: 'agent-1', automationRef: 'workflow:wf-digest' });
+    expect(run.billing.automationRef).toBe('workflow:wf-digest');
   });
 });

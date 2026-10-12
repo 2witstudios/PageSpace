@@ -17,7 +17,7 @@ export async function extractActionItems(
    * Who the usage is recorded against and the wallet the enrichment's credit hold reserved
    * (process-webhook's payer seam on the destination drive). Omitted: the user, their own root.
    */
-  billing?: { userId: string; walletId?: string; automationWorkflowId?: string },
+  billing?: { userId: string; walletId?: string; automationRef?: string },
 ): Promise<ActionItem[]> {
   try {
     const provider = await createAIProvider(userId, {});
@@ -45,7 +45,7 @@ export async function extractActionItems(
         : undefined,
       success: true,
       walletId: billing?.walletId,
-      automationWorkflowId: billing?.automationWorkflowId,
+      automationRef: billing?.automationRef,
       metadata: { feature: 'zoom_action_items' },
     }));
 

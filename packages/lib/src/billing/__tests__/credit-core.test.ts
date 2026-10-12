@@ -613,12 +613,12 @@ describe('computeBackfillActions — orphan wallet and spend kind', () => {
   it('SPEND-10 (partial) an orphan an automation ran keeps its workflow on the re-settle, so the lead still sees it as the automation', () => {
     const [action] = computeBackfillActions(
       [],
-      [{ aiUsageLogId: 'a', userId: 'u', costDollars: 1, walletId: 'w-drive', automationWorkflowId: 'wf-1' }],
+      [{ aiUsageLogId: 'a', userId: 'u', costDollars: 1, walletId: 'w-drive', automationRef: 'workflow:wf-1' }],
       {},
     );
-    expect(action).toEqual({ kind: 'apply_orphan', aiUsageLogId: 'a', userId: 'u', costDollars: 1, walletId: 'w-drive', spendKind: 'ai', automationWorkflowId: 'wf-1' });
-    expect(computeBackfillActions([], [{ aiUsageLogId: 'a', userId: 'u', costDollars: 1, walletId: 'w-drive', automationWorkflowId: null }], {})[0])
-      .not.toHaveProperty('automationWorkflowId');
+    expect(action).toEqual({ kind: 'apply_orphan', aiUsageLogId: 'a', userId: 'u', costDollars: 1, walletId: 'w-drive', spendKind: 'ai', automationRef: 'workflow:wf-1' });
+    expect(computeBackfillActions([], [{ aiUsageLogId: 'a', userId: 'u', costDollars: 1, walletId: 'w-drive', automationRef: null }], {})[0])
+      .not.toHaveProperty('automationRef');
   });
 });
 

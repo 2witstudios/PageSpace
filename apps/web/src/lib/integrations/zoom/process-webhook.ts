@@ -9,7 +9,7 @@ import { pageService } from '@/services/api';
 import { acquireUserCreditHold } from '@/lib/ai/core/user-credit-hold';
 import { automationRunUnreserved, automationSpend } from '@pagespace/lib/billing/spend-target';
 import { lookupDriveBillingFacts } from '@pagespace/lib/billing/sandbox-payer';
-import { zoomTranscriptsAutomationRef } from '@pagespace/lib/billing/automation-attribution';
+import { encodeAutomationRef } from '@pagespace/lib/billing/automation-attribution';
 import { ORGS_ENABLED } from '@pagespace/lib/organizations/orgs-enabled';
 import { isBillingEnabled } from '@pagespace/lib/deployment-mode';
 import { getRecordings, downloadTranscript } from './zoom-api-client';
@@ -259,7 +259,7 @@ async function enrichTranscript(
       return { summary: '', actionItems: [], skippedReason: 'no_drive_wallet' };
     }
     // SPEND-10: listed on the drive's spend as this connection's "Zoom transcripts", not its owner's own.
-    const settleOn = { userId: billing.userId, walletId: hold.walletId, automationWorkflowId: zoomTranscriptsAutomationRef(connection.id) };
+    const settleOn = { userId: billing.userId, walletId: hold.walletId, automationRef: encodeAutomationRef({ kind: 'zoom', connectionId: connection.id }) };
     const [summary, actionItems] = await Promise.all([
       connection.includeAiSummary ? generateTranscriptSummary(connection.userId, plainText, settleOn) : Promise.resolve(''),
       connection.includeActionItems ? extractActionItems(connection.userId, plainText, settleOn) : Promise.resolve([]),

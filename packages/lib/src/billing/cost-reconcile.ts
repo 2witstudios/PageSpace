@@ -125,9 +125,9 @@ async function bumpAttempts(aiUsageLogId: string): Promise<void> {
  * the wallet) and the automation it ran for (SPEND-10, so the correction stays attributed),
  * or null when there is no base charge yet.
  */
-async function usageLedgerCharge(aiUsageLogId: string): Promise<{ walletId: string; automationWorkflowId: string | null } | null> {
+async function usageLedgerCharge(aiUsageLogId: string): Promise<{ walletId: string; automationRef: string | null } | null> {
   const rows = await db
-    .select({ walletId: creditLedger.walletId, automationWorkflowId: creditLedger.automationWorkflowId })
+    .select({ walletId: creditLedger.walletId, automationRef: creditLedger.automationRef })
     .from(creditLedger)
     .where(and(eq(creditLedger.aiUsageLogId, aiUsageLogId), eq(creditLedger.entryType, 'usage')))
     .limit(1);
@@ -145,7 +145,7 @@ async function usageLedgerCharge(aiUsageLogId: string): Promise<{ walletId: stri
  */
 async function applyCorrection(
   userId: string,
-  charge: { walletId: string; automationWorkflowId: string | null },
+  charge: { walletId: string; automationRef: string | null },
   drift: ReturnType<typeof computeCostDrift>,
   aiUsageLogId: string,
   generationIds: string[],
@@ -173,7 +173,7 @@ async function applyCorrection(
         reconcileGenerationKey: reconcileKey,
         markupBps: MARKUP_BPS,
         consumeStatus: 'applied',
-        automationWorkflowId: charge.automationWorkflowId,
+        automationRef: charge.automationRef,
       })
       .onConflictDoNothing({
         target: creditLedger.reconcileGenerationKey,

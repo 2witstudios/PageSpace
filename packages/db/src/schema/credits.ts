@@ -67,13 +67,14 @@ export const creditLedger = pgTable('credit_ledger', {
    */
   fallbackFromWalletId: text('fallbackFromWalletId').references(() => wallets.id, { onDelete: 'set null' }),
   /**
-   * SPEND-10, on usage and reconcile rows: the automation (workflow) the call ran for when no person
-   * was present (a cron, a trigger, a scheduled run, [D-OW-34]: recorded as its creator in userId).
-   * The lead's spend view groups by it, so automation spend is listed as the automation rather than
-   * merged into its creator. A soft link (no FK): deleting a workflow keeps its spend history. Null for
-   * a person's own call, a channel mention or a manual Run (a person's action, SPEND-6).
+   * SPEND-10, on usage and reconcile rows: the automation the call ran for when no person was present
+   * (a cron, a trigger, a scheduled run, Zoom enrichment; [D-OW-34]: recorded as its creator in userId),
+   * a typed reference encoded and parsed ONLY by lib billing/automation-attribution (`workflow:<id>` |
+   * `zoom:<connectionId>`). The lead's spend view groups by it, so automation spend is listed as the
+   * automation rather than merged into its creator. A soft link (no FK): deleting a workflow keeps its
+   * spend history. Null for a person's own call, a channel mention or a manual Run (SPEND-6).
    */
-  automationWorkflowId: text('automationWorkflowId'),
+  automationRef: text('automationRef'),
   createdAt: timestamp('createdAt', { mode: 'date', withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
   userIdx: index('credit_ledger_user_idx').on(table.userId, table.createdAt),

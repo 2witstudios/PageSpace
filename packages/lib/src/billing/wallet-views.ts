@@ -20,7 +20,7 @@
 
 import type { WalletViewer } from '../permissions/wallet-access';
 import { formatCreditCount } from './money-model';
-import { isZoomTranscriptsAutomationRef, ZOOM_TRANSCRIPTS_AUTOMATION_NAME } from './automation-attribution';
+import { encodeAutomationRef, parseAutomationRef, ZOOM_TRANSCRIPTS_AUTOMATION_NAME, type AutomationRef } from './automation-attribution';
 import { userConsumerKey, walletChainStatus, walletOwnRemainingCents, walletStatusFor, type FallbackRule, type OvershootFunderChoice, type SpendSourceKind, type WalletStatus } from './wallet-core';
 
 export interface DriveWalletRowFacts {
@@ -67,9 +67,10 @@ export interface ConsumerCapFacts {
  * One row of this period's spend on a wallet (SPEND-10):
  *   - member: a person's own spend, including what they triggered themselves (a manual Run, a
  *     channel mention — a person's action, SPEND-6); keyed `user:<id>`.
- *   - automation: what a workflow spent with no person present (a cron, a trigger), keyed
- *     `automation:<workflowId>`. It runs on behalf of its creator ([D-OW-34]) and counts toward their
- *     cap, but is listed as the automation so the lead sees it apart from the person.
+ *   - automation: what an automation spent with no person present (a workflow's cron or trigger, a
+ *     Zoom connection's transcript enrichment), keyed `automation:<stored ref>`. It runs on behalf of
+ *     its creator ([D-OW-34]) and counts toward their cap, but is listed as the automation so the lead
+ *     sees it apart from the person.
  */
 export type ConsumerSpend =
   | {
@@ -83,8 +84,9 @@ export type ConsumerSpend =
   | {
       kind: 'automation';
       consumerKey: string;
-      automationWorkflowId: string;
-      /** The workflow's name; null once the workflow is deleted (its spend stays listed). */
+      /** Which automation (automation-attribution's typed reference). */
+      automation: AutomationRef;
+      /** Its name: the workflow's (null once the workflow is deleted; its spend stays listed), or "Zoom transcripts". */
       displayName: string | null;
       /** Who it runs as now (the workflow's creator); null when unknown or deleted. */
       creatorUserId: string | null;
@@ -95,11 +97,23 @@ export type ConsumerSpend =
 /** A spend row as the lead and admins see it: the amount also as a credit count. */
 export type ConsumerSpendView = ConsumerSpend & { spentCredits: string };
 
-/** One ledger group of this period's usage on a wallet: who it is recorded as, and the automation it ran for (null: none). */
+/** One ledger group of this period's usage on a wallet: who it is recorded as, and the stored automation reference (null: none). */
 export interface ConsumerSpendGroup {
   userId: string;
-  automationWorkflowId: string | null;
+  automationRef: string | null;
   spentCents: number;
+}
+
+/**
+ * The workflows whose names the spend list needs, from the ledger's groups: the ONE place the list
+ * reads stored automation references (automation-attribution's codec), with consumerSpendRows.
+ */
+export function workflowIdsToName(groups: readonly ConsumerSpendGroup[]): string[] {
+  const ids = groups.flatMap((g) => {
+    const ref = parseAutomationRef(g.automationRef);
+    return ref?.kind === 'workflow' ? [ref.workflowId] : [];
+  });
+  return [...new Set(ids)];
 }
 
 /** The names the spend rows carry, loaded by the shell: people by id, workflows by id. */
@@ -109,8 +123,8 @@ export interface ConsumerSpendNames {
 }
 
 /** The key an automation's spend row is listed under (a person's is wallet-core `userConsumerKey`). */
-export function automationConsumerKey(workflowId: string): string {
-  return `automation:${workflowId}`;
+export function automationConsumerKey(ref: AutomationRef): string {
+  return `automation:${encodeAutomationRef(ref)}`;
 }
 
 /**
@@ -123,30 +137,32 @@ export function consumerSpendRows(groups: readonly ConsumerSpendGroup[], names: 
   const rows = new Map<string, ConsumerSpend>();
   for (const g of groups) {
     const cents = whole(g.spentCents);
-    const key = g.automationWorkflowId === null ? userConsumerKey(g.userId) : automationConsumerKey(g.automationWorkflowId);
+    // A reference this codec did not write is no automation: it stays the recorded person's spend.
+    const automation = parseAutomationRef(g.automationRef);
+    const key = automation === null ? userConsumerKey(g.userId) : automationConsumerKey(automation);
     const existing = rows.get(key);
     if (existing) {
       rows.set(key, { ...existing, spentCents: existing.spentCents + cents });
-    } else if (g.automationWorkflowId === null) {
+    } else if (automation === null) {
       rows.set(key, { kind: 'member', consumerKey: key, userId: g.userId, displayName: names.people.get(g.userId) ?? null, spentCents: cents });
-    } else if (isZoomTranscriptsAutomationRef(g.automationWorkflowId)) {
+    } else if (automation.kind === 'zoom') {
       // A Zoom connection's enrichment runs as the connection's owner: the person it is recorded under.
       rows.set(key, {
         kind: 'automation',
         consumerKey: key,
-        automationWorkflowId: g.automationWorkflowId,
+        automation,
         displayName: ZOOM_TRANSCRIPTS_AUTOMATION_NAME,
         creatorUserId: g.userId,
         creatorName: names.people.get(g.userId) ?? null,
         spentCents: cents,
       });
     } else {
-      const workflow = names.automations.get(g.automationWorkflowId);
+      const workflow = names.automations.get(automation.workflowId);
       const creatorUserId = workflow?.createdBy ?? null;
       rows.set(key, {
         kind: 'automation',
         consumerKey: key,
-        automationWorkflowId: g.automationWorkflowId,
+        automation,
         displayName: workflow?.name ?? null,
         creatorUserId,
         creatorName: creatorUserId ? names.people.get(creatorUserId) ?? null : null,
