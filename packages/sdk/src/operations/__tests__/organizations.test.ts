@@ -7,6 +7,7 @@
  * `organizations-drift-guard.test.ts`.
  */
 import { describe, expect, it } from 'vitest';
+import type { Operation } from '../../registry/define.js';
 import {
   getOrgPolicies,
   getOrganization,
@@ -88,11 +89,19 @@ describe('operations/organizations.ts — the five org reads', () => {
     }
   });
 
-  it('X-1 (partial) reads only: the file declares no non-GET operation', async () => {
-    const source = await import('node:fs').then((fs) => fs.promises.readFile(new URL('../organizations.ts', import.meta.url), 'utf-8'));
-    const methods = [...source.matchAll(/method: '(\w+)'/g)].map((m) => m[1]);
-    expect(methods.length).toBe(5);
-    expect(methods.every((m) => m === 'GET')).toBe(true);
+  it('X-1 (partial) every operation in the file carries account scope and a description that states the key rules', async () => {
+    const isOperation = (value: unknown): value is Operation =>
+      typeof value === 'object' && value !== null && 'method' in value && 'path' in value;
+    const ops = (Object.values(await import('../organizations.js')) as unknown[]).filter(isOperation);
+    expect(ops.length).toBe(33);
+    for (const op of ops) {
+      expect(op.requiredScope, op.name).toBe('account');
+      expect(op.description, op.name).toMatch(/no drive restriction|scoped to specific drives/);
+      // Accepting an invite and confirming a domain mail are not acts IN an org yet: no org policy governs them.
+      if (op.name !== 'organizations.acceptInvitation' && op.name !== 'organizations.confirmDomainEmail') {
+        expect(op.description, op.name).toMatch(/sign-in/);
+      }
+    }
   });
 
   it('X-1 (partial) orgs.list parses the route response and strips unknown fields', () => {

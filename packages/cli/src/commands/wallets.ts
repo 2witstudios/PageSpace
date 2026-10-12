@@ -1,5 +1,5 @@
 /**
- * `pagespace wallets drive|list|source` — READ-ONLY wallet verbs (Spec X-1, narrowed by
+ * `pagespace wallets drive|list|source|always-own-credits` — READ-ONLY wallet verbs (Spec X-1, narrowed by
  * [D-OW-26]). Thin projections over the `wallets.*` SDK operations; argv parsing and
  * rendering are pure, `ctx.sdk` is the only I/O edge.
  *
@@ -18,6 +18,7 @@ import type { PageSpaceClient } from '@pagespace/sdk';
 import { EXIT_RUNTIME_ERROR, EXIT_SUCCESS, EXIT_USAGE_ERROR } from '../exit-codes.js';
 import type { CommandHandler } from '../router/router.js';
 import { callSdk } from './sdk-error.js';
+import { verbHandler } from './verb.js';
 
 type DriveWalletResult = Awaited<ReturnType<PageSpaceClient['wallets']['getDriveWallet']>>;
 type MyWalletsResult = Awaited<ReturnType<PageSpaceClient['wallets']['list']>>;
@@ -189,3 +190,25 @@ export const walletsSourceHandler: CommandHandler = async (ctx, intent) => {
   ctx.stdout.write(intent.flags.json ? `${JSON.stringify(result.value)}\n` : renderConversationSource(result.value));
   return EXIT_SUCCESS;
 };
+
+/** Pure: the "Always my own credits" switches as on/off lines (SPEND-5). */
+export function renderAlwaysOwnCredits(
+  value: Awaited<ReturnType<PageSpaceClient['wallets']['getAlwaysOwnCredits']>>,
+  driveId: string | undefined,
+): string {
+  return [
+    `Always my own credits: ${value.alwaysOwnCredits ? 'on' : 'off'}`,
+    ...(driveId === undefined ? [] : [`  in drive ${driveId}: ${value.alwaysOwnCreditsInDrive ? 'on' : 'off'}`]),
+    '',
+  ].join('\n');
+}
+
+/** `pagespace wallets always-own-credits [--drive <driveId>]` — read the switches; setting them needs a session ([D-OW-26]). */
+export const walletsAlwaysOwnCreditsHandler = verbHandler({
+  usage: 'Usage: pagespace wallets always-own-credits [--drive <driveId>]',
+  positionals: 0,
+  flags: ['drive'],
+  build: ({ options }) => ({ ok: true, value: options.drive !== undefined ? { driveId: options.drive } : {} }),
+  call: (sdk, input: { driveId?: string }) => sdk.wallets.getAlwaysOwnCredits(input),
+  render: (value, input) => renderAlwaysOwnCredits(value, input.driveId),
+});

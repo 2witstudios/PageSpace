@@ -16,9 +16,18 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 - **Organizations in the CLI and on MCP keys** (shown once organizations are switched on) — `pagespace orgs
   list|get|members|drives|policies` and the matching `organizations.*` MCP tools read what the web already
   shows: your organizations and your role in each, the member roster, the drive directory (including
-  Restricted drives, with join standing), and the org's policies for Owners and Admins. Reads only: creating,
-  inviting, roles, policies and billing still need a signed-in session. An access key scoped to specific
-  drives is refused on the org-wide reads and sees only its own drives in the directory.
+  Restricted drives, with join standing), and the org's policies for Owners and Admins. The CLI and MCP now
+  also do what the web does with an organization, under the same roles: rename it, invite, resend and revoke
+  invitations, accept one, change roles, remove members, leave, change policies (including requiring a
+  passkey sign-in and a maximum sign-in age), manage verified domains, answer guest requests and owner-left
+  automations, read the audit log (and export it as CSV), trashed drives, drive usage and suspended items;
+  create a drive in an organization, move drives in and out, change a drive's visibility or lead, and ask
+  to join, approve, deny or withdraw drive join requests (`pagespace orgs …`, `pagespace drives …`). Money
+  stays with a signed-in session: creating or deleting an organization, transferring ownership, seat caps,
+  billing, the credits pool and every wallet change refuse an access key by name. An access key scoped to
+  specific drives is refused on organization actions and sees only its own drives in the directory, and
+  an organization's sign-in requirements now apply to its own settings and admin actions too, for access
+  keys and signed-in sessions alike.
 
 - **Organization settings** (shown once organizations are switched on) — Settings › Organizations lists the
   organizations you belong to and lets you create one: name it, choose the drives you own to move in (Home

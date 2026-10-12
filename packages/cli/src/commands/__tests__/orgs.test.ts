@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { listOperations } from '@pagespace/sdk';
+import { listOperations, PageSpaceClient, StaticTokenProvider } from '@pagespace/sdk';
 import {
   EXIT_RUNTIME_ERROR,
   EXIT_SUCCESS,
@@ -225,15 +225,13 @@ describe('pagespace orgs get|members|drives|policies', () => {
 });
 
 describe('pagespace mcp — org tools', () => {
-  it('X-1 (partial) serves the five org reads and no org write', () => {
+  it('X-1 (partial) serves every organizations.* operation the SDK defines, and none of the session-only acts', () => {
     const orgOps = listOperations(buildOperationRegistry()).filter((op) => op.name.startsWith('organizations.'));
-    expect(orgOps.map((op) => op.name).sort()).toEqual([
-      'organizations.get',
-      'organizations.getPolicies',
-      'organizations.list',
-      'organizations.listDrives',
-      'organizations.listMembers',
-    ]);
-    expect(orgOps.every((op) => op.method === 'GET')).toBe(true);
+    expect(orgOps.map((op) => op.name).sort()).toEqual(Object.keys(new PageSpaceClient({ baseUrl: 'https://x.test', auth: new StaticTokenProvider('t') }).organizations).map((m) => `organizations.${m}`).sort());
+    const routes = orgOps.map((op) => `${op.method} ${op.path}`);
+    // Card-checkout create, org delete (Stripe), ownership transfer, seat caps, pool, billing: never tools ([D-OW-26]).
+    expect(routes).not.toContain('POST /api/orgs');
+    expect(routes).not.toContain('DELETE /api/orgs/:orgId');
+    expect(routes.some((r) => /transfer-ownership|seat-cap|\/pool|\/billing/.test(r))).toBe(false);
   });
 });

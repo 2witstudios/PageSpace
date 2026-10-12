@@ -1,13 +1,12 @@
 /**
- * `pagespace orgs list|get|members|drives|policies` — READ-ONLY organization verbs
- * (Spec X-1). Thin projections over the `organizations.*` SDK operations; argv
- * parsing and rendering are pure, `ctx.sdk` is the only I/O edge.
+ * `pagespace orgs list|get|members|drives|policies` — the organization READ verbs (Spec X-1).
+ * Thin projections over the `organizations.*` SDK operations; argv parsing and rendering are
+ * pure, `ctx.sdk` is the only I/O edge. The org WRITES and admin reads (update, invite, roles,
+ * policies, audit, domains, guests, automations, …) are in `org-writes.ts`.
  *
- * There is deliberately no org write here: every org write (create, rename, invite,
- * remove, role change, policy change, billing) needs a signed-in session in the web
- * app, so there is no write operation in the SDK for these to project. A key reads
- * what the web's `requireOrgRole` gate admits for its owner: org-wide reads refuse a
- * drive-scoped key, and the drive directory shows a scoped key only its own drives.
+ * A key reads what the web's `requireOrgRole` gate admits for its owner: org-wide reads refuse
+ * a drive-scoped key, the drive directory shows a scoped key only its own drives, and the org's
+ * sign-in policy applies to the key.
  *
  * Policies are Owner/Admin facts (SEAT-6): the server refuses a plain member with the
  * same 403 the web answers, and this file renders rather than re-decides.

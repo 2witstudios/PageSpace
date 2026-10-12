@@ -212,9 +212,14 @@ describe('pagespace wallets source', () => {
 });
 
 describe('pagespace mcp — wallet tools', () => {
-  it('X-1 (partial) serves the three wallet reads and no wallet write', () => {
+  it('X-1 (partial) serves the four wallet reads and no wallet write', () => {
     const walletOps = listOperations(buildOperationRegistry()).filter((op) => op.name.startsWith('wallets.'));
-    expect(walletOps.map((op) => op.name).sort()).toEqual(['wallets.getConversationSource', 'wallets.getDriveWallet', 'wallets.list']);
+    expect(walletOps.map((op) => op.name).sort()).toEqual([
+      'wallets.getAlwaysOwnCredits',
+      'wallets.getConversationSource',
+      'wallets.getDriveWallet',
+      'wallets.list',
+    ]);
     expect(walletOps.every((op) => op.method === 'GET')).toBe(true);
   });
 });
