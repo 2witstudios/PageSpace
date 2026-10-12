@@ -53,7 +53,7 @@ async function org(name: string, ownerId: string, members: Array<{ userId: strin
 }
 
 describe('org roles across many orgs (real Postgres)', () => {
-  it('ORG-2 one person is Owner of one org, Admin of a second and Member of a third; each org answers with its own role, a role changes only between Admin and Member, never to or from Owner; and a person in no org gets no org and the org 404 everywhere', async () => {
+  it('ORG-2 (partial) one person is Owner of one org, Admin of a second and Member of a third; each org answers with its own role, a role changes only between Admin and Member, never to or from Owner; and a person in no org gets no org and the org 404 everywhere', async () => {
     const sam = await person('Sam Rivera');
     const dee = await person('Dee Walker');
     const ana = await person('Ana Lopez');

@@ -46,6 +46,13 @@ MON-5
 # never counted twice, "MON-7 (partial)"); the margin-as-charged-versus-cost clause has no test
 # naming MON-7 yet.
 MON-7
+# ORG-2 (Owner/Admin/Member; many orgs per user; a user in no org sees no org UI) re-added per the lane-B review
+# of #2869 (comment 6126276565): no single test proves all three clauses. Proven in parts, each titled
+# "ORG-2 (partial)": the roles and many-orgs clauses and a no-org person's empty org list and 404s on real Postgres
+# (packages/lib org-roles-many-orgs.integration), and the no-org UI on the real web components with an empty org
+# list (apps/web components/orgs/__tests__/no-org-ui.test.tsx; ruling: the Create organization entry is the one
+# affordance a no-org user sees). A test crossing both packages is not possible in one run, so it stays here.
+ORG-2
 # ORG-5 (one shared org permission function used by web routes, CLI, and MCP): B3 routes all go
 # through requireOrgRole, titled "ORG-5 (partial)"; CLI and MCP use it in Wave G (X-1).
 ORG-5
