@@ -469,7 +469,10 @@ async function redeemMagicLink({
   // Determine the landing path — kind-specific overrides win, then fall back
   // to the shared helper so new-user provisioning and `next` still work.
   let redirectPath: string;
-  if (inviteResult?.kind === 'connection') {
+  if (inviteResult?.orgLandingPath) {
+    // ORG-3: the org hub once joined; the invite page (which says why) when refused.
+    redirectPath = inviteResult.orgLandingPath;
+  } else if (inviteResult?.kind === 'connection') {
     redirectPath = '/dashboard/connections';
   } else if (inviteResult?.kind === 'page' && invitedDriveId && inviteResult.invitedPageId) {
     redirectPath = `/dashboard/${invitedDriveId}/pages/${inviteResult.invitedPageId}`;
@@ -478,7 +481,9 @@ async function redeemMagicLink({
   }
 
   const redirectParams: Record<string, string> = {};
-  if (inviteResult?.kind === 'connection') {
+  if (inviteResult?.orgLandingPath) {
+    // The landing page itself tells the person what happened.
+  } else if (inviteResult?.kind === 'connection') {
     redirectParams.connection_requested = '1';
   } else if (invitedDriveId) {
     redirectParams.invited = '1';

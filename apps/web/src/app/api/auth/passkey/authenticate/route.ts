@@ -291,7 +291,10 @@ export async function POST(req: Request) {
 
     const invitedDriveId = inviteResult?.invitedDriveId ?? null;
     const successRedirect =
-      inviteResult?.kind === 'connection'
+      // ORG-3: the org hub once joined; the invite page (which says why) when refused.
+      inviteResult?.orgLandingPath
+        ? inviteResult.orgLandingPath
+        : inviteResult?.kind === 'connection'
         ? '/dashboard/connections?connection_requested=1'
         : inviteResult?.kind === 'page' && invitedDriveId && inviteResult.invitedPageId
           ? `/dashboard/${invitedDriveId}/pages/${inviteResult.invitedPageId}?invited=1`

@@ -322,7 +322,10 @@ export async function POST(req: Request) {
     });
 
     const { invitedDriveId, invitedPageId, inviteError, kind: inviteKind } = inviteResult;
-    if (inviteKind === 'page' && invitedDriveId && invitedPageId) {
+    if (inviteResult.orgLandingPath) {
+      // ORG-3: the org hub once joined; the invite page (which says why) when refused.
+      redirectTo = inviteResult.orgLandingPath;
+    } else if (inviteKind === 'page' && invitedDriveId && invitedPageId) {
       redirectTo = `/dashboard/${invitedDriveId}/pages/${invitedPageId}?invited=1`;
     } else if (inviteKind === 'connection') {
       redirectTo = `/dashboard/connections?connection_requested=1`;

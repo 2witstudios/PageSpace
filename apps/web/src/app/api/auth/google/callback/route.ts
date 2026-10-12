@@ -492,7 +492,10 @@ export async function GET(req: Request) {
       }
     }
 
-    if (oauthInviteResult.kind === 'page' && oauthInviteResult.invitedDriveId && oauthInviteResult.invitedPageId) {
+    if (oauthInviteResult.orgLandingPath) {
+      // ORG-3: the org hub once joined; the invite page (which says why) when refused.
+      returnUrl = oauthInviteResult.orgLandingPath;
+    } else if (oauthInviteResult.kind === 'page' && oauthInviteResult.invitedDriveId && oauthInviteResult.invitedPageId) {
       returnUrl = `/dashboard/${oauthInviteResult.invitedDriveId}/pages/${oauthInviteResult.invitedPageId}?invited=1`;
     } else if (oauthInviteResult.kind === 'connection') {
       returnUrl = `/dashboard/connections?connection_requested=1`;

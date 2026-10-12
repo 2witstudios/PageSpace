@@ -128,7 +128,7 @@ vi.mock('@/lib/auth/native-invite-acceptance', () => ({
     kind: null,
     invitedDriveId: null,
     invitedPageId: null,
-    connectionId: null,
+    connectionId: null, invitedOrgId: null, orgLandingPath: null,
   }),
   consumeAllInvitesForEmail: vi.fn().mockResolvedValue({
     drivesAccepted: 0,
@@ -757,7 +757,7 @@ describe('POST /api/auth/apple/native', () => {
         kind: 'drive',
         invitedDriveId: 'drive-from-invite',
         invitedPageId: null,
-        connectionId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
       });
 
       const response = await POST(createNativeRequest({ ...validPayload, inviteToken: 'ps_invite_xyz' }));
@@ -774,7 +774,7 @@ describe('POST /api/auth/apple/native', () => {
         kind: null,
         invitedDriveId: null,
         invitedPageId: null,
-        connectionId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
         inviteError: 'TOKEN_CONSUMED',
       });
 
@@ -798,7 +798,7 @@ describe('POST /api/auth/apple/native', () => {
         kind: 'page',
         invitedDriveId: 'drv_1',
         invitedPageId: 'page_1',
-        connectionId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
       });
 
       const response = await POST(createNativeRequest({ ...validPayload, inviteToken: 'ps_invite_p' }));
@@ -814,7 +814,7 @@ describe('POST /api/auth/apple/native', () => {
         kind: 'connection',
         invitedDriveId: null,
         invitedPageId: null,
-        connectionId: 'conn_1',
+        connectionId: 'conn_1', invitedOrgId: null, orgLandingPath: null,
       });
 
       const response = await POST(createNativeRequest({ ...validPayload, inviteToken: 'ps_invite_c' }));

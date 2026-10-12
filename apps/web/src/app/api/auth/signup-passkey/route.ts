@@ -21,6 +21,7 @@ import { provisionHomeDriveIfNeeded, type ProvisionHomeDriveResult } from '@page
 import {
   consumeAllInvitesForEmail,
   consumeAnyInviteIfPresent,
+  type InviteKind,
 } from '@/lib/auth/native-invite-acceptance';
 import { autoJoinVerifiedDomainAfterSignIn } from '@/lib/orgs/domain-auto-join';
 
@@ -222,7 +223,8 @@ export async function POST(req: Request) {
     // ?inviteError=<code> so the user can act on it.
     let inviteAcceptedDriveId: string | null = null;
     let inviteAcceptedPageId: string | null = null;
-    let inviteAcceptedKind: 'drive' | 'page' | 'connection' | null = null;
+    let inviteAcceptedKind: InviteKind | null = null;
+    let orgLandingPath: string | null = null;
     let inviteAcceptError: string | null = null;
     if (validation.data.inviteToken) {
       const inviteResult = await consumeAnyInviteIfPresent({
@@ -235,6 +237,7 @@ export async function POST(req: Request) {
       inviteAcceptedDriveId = inviteResult.invitedDriveId;
       inviteAcceptedPageId = inviteResult.invitedPageId;
       inviteAcceptedKind = inviteResult.kind;
+      orgLandingPath = inviteResult.orgLandingPath;
       if (inviteResult.inviteError) {
         inviteAcceptError = inviteResult.inviteError;
       }
@@ -335,7 +338,10 @@ export async function POST(req: Request) {
     // user land on the dashboard but with an inviteError query param so the
     // UI can surface what went wrong.
     let redirectUrl: string;
-    if (inviteAcceptedKind === 'page' && inviteAcceptedDriveId && inviteAcceptedPageId) {
+    if (orgLandingPath) {
+      // ORG-3: the org hub once joined; the invite page (which says why) when refused.
+      redirectUrl = orgLandingPath;
+    } else if (inviteAcceptedKind === 'page' && inviteAcceptedDriveId && inviteAcceptedPageId) {
       redirectUrl = `/dashboard/${inviteAcceptedDriveId}/pages/${inviteAcceptedPageId}?welcome=true&invited=1`;
     } else if (inviteAcceptedKind === 'connection') {
       redirectUrl = `/dashboard/connections?welcome=true&connection_requested=1`;

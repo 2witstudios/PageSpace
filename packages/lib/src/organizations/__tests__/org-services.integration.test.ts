@@ -34,6 +34,7 @@ import {
   resendInvitation,
   revokeInvitation,
   lockOrgInviteAddress,
+  findInvitationByToken,
 } from '../invitations';
 import { deleteOrganization } from '../deletion';
 import { requireOrgRole } from '../authorize';
@@ -359,6 +360,73 @@ describe('org services (real Postgres)', () => {
       expect(await revokeInvitation({ orgId: org.id, invitationId: invite.invitation.id })).toBe(true);
       expect(await acceptInvitation({ token: resent.token, userId: aisha.id, now: new Date() })).toMatchObject({ ok: false, reason: 'not_found' });
       expect(await countOrgSeats(org.id)).toBe(1);
+    });
+
+    it('ORG-3 an emailed invite holds a seat while pending, expires, is resent with a new link that kills the old one, is revoked freeing its seat, and is accepted once by a brand-new account and by an existing account (other accounts refused)', async () => {
+      const { jono, org } = await seedNorthwind();
+      const emailed: Array<{ email: string; token: string }> = [];
+      const capture = async (invitation: { email: string }, token: string) => { emailed.push({ email: invitation.email, token }); };
+      const linkFor = (email: string) => emailed.filter((e) => e.email === email).at(-1)?.token ?? '';
+      expect(await countOrgSeats(org.id)).toBe(1);
+
+      // Invited by email: one address with no account yet, one existing account. Each pending invite is a seat.
+      const tomasEmail = `tomas-${createId()}@northwind.test`;
+      const dana = await person('Dana Kim');
+      const tomasInvite = await createOrRotateInvitation({ orgId: org.id, email: tomasEmail, role: 'MEMBER', invitedBy: jono.id, now: new Date(), deliver: capture });
+      const danaInvite = await createOrRotateInvitation({ orgId: org.id, email: dana.email, role: 'ADMIN', invitedBy: jono.id, now: new Date(), deliver: capture });
+      if (!tomasInvite.ok || !danaInvite.ok) throw new Error('invite failed');
+      expect(emailed.map((e) => e.email)).toEqual([tomasEmail, dana.email]);
+      expect(await countOrgSeats(org.id)).toBe(3);
+
+      // Expiry: an expired invite holds no seat and cannot be accepted.
+      const firstLink = linkFor(tomasEmail);
+      await db.update(orgInvitations).set({ expiresAt: new Date(Date.now() - HOUR) }).where(eq(orgInvitations.id, tomasInvite.invitation.id));
+      expect(await countOrgSeats(org.id)).toBe(2);
+      const tomas = await factories.createUser({ name: 'Tomás Alvarez', email: tomasEmail });
+      createdUsers.push(tomas.id);
+      expect(await acceptInvitation({ token: firstLink, userId: tomas.id, now: new Date() })).toMatchObject({ ok: false, status: 410, reason: 'expired' });
+
+      // Resend: a new link is emailed, the seat is held again, and the old link no longer works.
+      const resent = await resendInvitation({ orgId: org.id, invitationId: tomasInvite.invitation.id, actorId: jono.id, now: new Date(), deliver: capture });
+      if (!resent.ok) throw new Error(`resend refused: ${resent.reason}`);
+      expect(linkFor(tomasEmail)).not.toBe(firstLink);
+      expect(await countOrgSeats(org.id)).toBe(3);
+      expect(await acceptInvitation({ token: firstLink, userId: tomas.id, now: new Date() })).toMatchObject({ ok: false, status: 404, reason: 'not_found' });
+
+      // Revoke: the seat is freed and the link is dead.
+      const chrisEmail = `chris-${createId()}@northwind.test`;
+      const chrisInvite = await createOrRotateInvitation({ orgId: org.id, email: chrisEmail, role: 'MEMBER', invitedBy: jono.id, now: new Date(), deliver: capture });
+      if (!chrisInvite.ok) throw new Error('invite failed');
+      expect(await countOrgSeats(org.id)).toBe(4);
+      expect(await revokeInvitation({ orgId: org.id, invitationId: chrisInvite.invitation.id, actorId: jono.id })).toBe(true);
+      expect(await countOrgSeats(org.id)).toBe(3);
+      const chris = await factories.createUser({ name: 'Chris Rowe', email: chrisEmail });
+      createdUsers.push(chris.id);
+      expect(await acceptInvitation({ token: linkFor(chrisEmail), userId: chris.id, now: new Date() })).toMatchObject({ ok: false, reason: 'not_found' });
+
+      // Acceptance: the brand-new account and the existing one each join with the invited role; the
+      // seat moves from the invite to the membership, so the count does not change. Another account
+      // cannot use a link, and a link works once.
+      const marcus = await person('Marcus Oyelaran');
+      expect(await acceptInvitation({ token: linkFor(dana.email), userId: marcus.id, now: new Date() })).toMatchObject({ ok: false, status: 403, reason: 'email_mismatch' });
+      expect(await acceptInvitation({ token: linkFor(tomasEmail), userId: tomas.id, now: new Date() })).toEqual({ ok: true, orgId: org.id, role: 'MEMBER', joined: true });
+      expect(await countOrgSeats(org.id)).toBe(3);
+      expect(await acceptInvitation({ token: linkFor(dana.email), userId: dana.id, now: new Date() })).toEqual({ ok: true, orgId: org.id, role: 'ADMIN', joined: true });
+      expect(await countOrgSeats(org.id)).toBe(3);
+      expect(await acceptInvitation({ token: linkFor(dana.email), userId: dana.id, now: new Date() })).toMatchObject({ ok: false, status: 410, reason: 'already_accepted' });
+      expect(await requireOrgRole(marcus.id, org.id, 'MEMBER')).toMatchObject({ ok: false, status: 404 });
+      expect(await listOpenInvitations(org.id)).toEqual([]);
+    });
+
+    it('ORG-3 (partial) findInvitationByToken finds the invitation and its org name by the raw link token, and nothing for any other token', async () => {
+      const { jono, org } = await seedNorthwind();
+      const tokens: string[] = [];
+      const invite = await createOrRotateInvitation({ orgId: org.id, email: `lena-${createId()}@northwind.test`, role: 'MEMBER', invitedBy: jono.id, now: new Date(), deliver: async (_i, token) => { tokens.push(token); } });
+      if (!invite.ok) throw new Error('invite failed');
+      const found = await findInvitationByToken(tokens[0]);
+      expect(found).toMatchObject({ id: invite.invitation.id, orgId: org.id, orgName: 'Northwind Labs', role: 'MEMBER' });
+      expect(found).not.toHaveProperty('tokenHash');
+      expect(await findInvitationByToken(`ps_orginv_${createId()}`)).toBeNull();
     });
 
     it('ORG-3 (partial) the inviter role is read again inside the transaction: an Admin demoted or removed after the route gate cannot invite or resend as an Admin', async () => {

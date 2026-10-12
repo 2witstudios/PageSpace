@@ -24,6 +24,7 @@ import { checkOrgActive, checkOrgMayLoosen, ORG_LAPSED_CODE, type OrgLapsedRefus
 import { admitSeat, recordSeatAdmissionEvents, type SeatAdmission, type SeatBillingPort } from './seat-service';
 import { recordOrgAuditEventAfterCommit } from '../audit/org-audit';
 import { decideOrgRole, type OrgAuthorization } from './authorize';
+import { isLiveInvite } from './invite-view-core';
 import {
   publishOrgMembershipSyncEvents,
   syncOrgMemberAccess,
@@ -38,9 +39,7 @@ export type InvitableRole = Exclude<OrgRole, 'OWNER'>;
 
 export const inviteExpiryFrom = (now: Date): Date => new Date(now.getTime() + INVITE_EXPIRY_DAYS * DAY_MS);
 
-/** A live invite holds a seat and can be accepted: not accepted, not yet expired. */
-export const isLiveInvite = (invite: { acceptedAt: Date | null; expiresAt: Date }, now: Date): boolean =>
-  invite.acceptedAt === null && invite.expiresAt.getTime() > now.getTime();
+export { isLiveInvite };
 
 export type InviteCreationDecision =
   | { action: 'insert' }
@@ -284,6 +283,20 @@ export async function createOrRotateInvitation(input: {
     details: { role: invitation.role, rotated: previous !== null },
   });
   return { ok: true, invitation: toPublic(invitation), token, rotated: previous !== null };
+}
+
+/** An invitation found by its raw link token, with the org's name: what the accept page shows. */
+export type OrgInvitationByToken = PublicOrgInvitation & { orgName: string };
+
+/** Looks an invitation up by the raw token in its link (only the hash is stored). Null when no row holds it. */
+export async function findInvitationByToken(token: string): Promise<OrgInvitationByToken | null> {
+  const [row] = await db
+    .select({ invitation: orgInvitations, orgName: organizations.name })
+    .from(orgInvitations)
+    .innerJoin(organizations, eq(organizations.id, orgInvitations.orgId))
+    .where(eq(orgInvitations.tokenHash, hashToken(token)))
+    .limit(1);
+  return row ? { ...toPublic(row.invitation), orgName: row.orgName } : null;
 }
 
 export async function listOpenInvitations(orgId: string): Promise<PublicOrgInvitation[]> {

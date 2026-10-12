@@ -287,7 +287,8 @@ export async function POST(req: Request) {
       invitedPageId: inviteResult.invitedPageId,
       invitedConnectionId: inviteResult.connectionId,
       ...(inviteResult.inviteError && { inviteError: inviteResult.inviteError }),
-      ...(returnUrl && { returnUrl }),
+      // ORG-3: an org invitation lands on the org hub once joined, or back on its invite page when refused.
+      ...((inviteResult.orgLandingPath ?? returnUrl) && { returnUrl: inviteResult.orgLandingPath ?? returnUrl }),
       user: {
         id: user.id,
         name: user.name,

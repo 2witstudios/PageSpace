@@ -1,8 +1,6 @@
 import { NextResponse } from 'next/server';
-import { announceOrgChange } from '@pagespace/lib/organizations/org-change-events';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { acceptInvitation } from '@pagespace/lib/organizations/invitations';
+import { acceptOrgInviteForUser } from '@/lib/orgs/accept-org-invite';
 import { authenticateOrgRequest, ORG_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
 import { inviteAcceptSchema } from '@/lib/orgs/org-schemas';
 import { ORG_LAPSED_MESSAGE } from '@pagespace/lib/organizations/status-core';
@@ -30,26 +28,10 @@ export async function POST(request: Request) {
     if (!parsed.success) {
       return NextResponse.json({ error: 'Invalid request body', issues: parsed.error.issues, code: 'invalid_request' }, { status: 400 });
     }
-    const result = await acceptInvitation({ token: parsed.data.token, userId: gate.userId, now: new Date() });
+    const result = await acceptOrgInviteForUser({ request, token: parsed.data.token, userId: gate.userId });
     if (!result.ok) {
-      auditRequest(request, {
-        eventType: 'authz.access.denied',
-        userId: gate.userId,
-        resourceType: 'organization_invitation',
-        resourceId: 'token',
-        details: { operation: 'accept_org_invitation', reason: result.reason },
-      });
       return NextResponse.json({ error: REFUSALS[result.reason], code: result.reason }, { status: result.status });
     }
-    auditRequest(request, {
-      eventType: 'authz.role.assigned',
-      userId: gate.userId,
-      resourceType: 'organization',
-      resourceId: result.orgId,
-      details: { operation: 'accept_org_invitation', role: result.role, joined: result.joined },
-    });
-    // X-4: members see the change without a refresh (org:changed, no content).
-    void announceOrgChange(result.orgId, 'membership');
     return NextResponse.json({ orgId: result.orgId, role: result.role, joined: result.joined });
   } catch (error) {
     loggers.api.error('Error accepting organization invitation:', error as Error);

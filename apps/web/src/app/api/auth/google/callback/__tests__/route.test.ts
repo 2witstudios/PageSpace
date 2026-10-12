@@ -159,7 +159,7 @@ vi.mock('@/lib/auth/native-invite-acceptance', () => ({
     kind: null,
     invitedDriveId: null,
     invitedPageId: null,
-    connectionId: null,
+    connectionId: null, invitedOrgId: null, orgLandingPath: null,
   }),
   consumeAllInvitesForEmail: vi.fn().mockResolvedValue({
     drivesAccepted: 0,
@@ -323,7 +323,7 @@ describe('GET /api/auth/google/callback', () => {
       kind: null,
       invitedDriveId: null,
       invitedPageId: null,
-      connectionId: null,
+      connectionId: null, invitedOrgId: null, orgLandingPath: null,
     });
     vi.mocked(consumeAllInvitesForEmail).mockResolvedValue({
       drivesAccepted: 0,
@@ -1339,7 +1339,7 @@ describe('GET /api/auth/google/callback', () => {
         kind: null,
         invitedDriveId: null,
         invitedPageId: null,
-        connectionId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
       });
       vi.mocked(consumeAllInvitesForEmail).mockResolvedValue({
         drivesAccepted: 0,
@@ -1353,7 +1353,7 @@ describe('GET /api/auth/google/callback', () => {
         kind: 'drive',
         invitedDriveId: 'drive-789',
         invitedPageId: null,
-        connectionId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
       });
 
       const request = createCallbackRequest({ code: 'valid-code', state: stateWithInvite() });
@@ -1372,6 +1372,22 @@ describe('GET /api/auth/google/callback', () => {
       expect(location).toContain('invited=1');
     });
 
+    it('ORG-3 (partial) an org invitation accepted at sign-in lands on the org hub; a refused one returns to its invite page', async () => {
+      vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
+        kind: 'org', invitedDriveId: null, invitedPageId: null, connectionId: null,
+        invitedOrgId: 'org_nw', orgLandingPath: '/orgs/org_nw/settings',
+      });
+      const joined = await GET(createCallbackRequest({ code: 'valid-code', state: stateWithInvite() }));
+      expect(new URL(joined.headers.get('Location')!).pathname).toBe('/orgs/org_nw/settings');
+
+      vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
+        kind: 'org', invitedDriveId: null, invitedPageId: null, connectionId: null,
+        invitedOrgId: null, orgLandingPath: '/invite/ps_orginv_abc', inviteError: 'EMAIL_MISMATCH',
+      });
+      const refused = await GET(createCallbackRequest({ code: 'valid-code', state: stateWithInvite() }));
+      expect(new URL(refused.headers.get('Location')!).pathname).toBe('/invite/ps_orginv_abc');
+    });
+
     it('calls consumeAnyInviteIfPresent with isNewUser=false for existing users when inviteToken is in state', async () => {
       vi.mocked(authRepository.findUserByGoogleId).mockResolvedValue(mockExistingUser as never);
       vi.mocked(authRepository.findUserByEmail).mockResolvedValue(mockExistingUser as never);
@@ -1381,7 +1397,7 @@ describe('GET /api/auth/google/callback', () => {
         kind: 'drive',
         invitedDriveId: 'drive-existing',
         invitedPageId: null,
-        connectionId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
       });
 
       const request = createCallbackRequest({ code: 'valid-code', state: stateWithInvite() });
@@ -1410,7 +1426,7 @@ describe('GET /api/auth/google/callback', () => {
         kind: null,
         invitedDriveId: null,
         invitedPageId: null,
-        connectionId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
         inviteError: 'EMAIL_MISMATCH',
       });
 
@@ -1428,7 +1444,7 @@ describe('GET /api/auth/google/callback', () => {
         kind: null,
         invitedDriveId: null,
         invitedPageId: null,
-        connectionId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
         inviteError: 'TOKEN_CONSUMED',
       });
 
@@ -1444,7 +1460,7 @@ describe('GET /api/auth/google/callback', () => {
         kind: 'drive',
         invitedDriveId: 'drive-desktop-1',
         invitedPageId: null,
-        connectionId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
       });
 
       const state = createSignedState({
@@ -1468,7 +1484,7 @@ describe('GET /api/auth/google/callback', () => {
         kind: 'drive',
         invitedDriveId: 'drive-ios-1',
         invitedPageId: null,
-        connectionId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
       });
 
       const state = createSignedState({
