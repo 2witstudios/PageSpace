@@ -126,16 +126,6 @@ function selectUserThenSubscriptions(user: Array<Record<string, unknown>>, subs:
   mockDb.select.mockReturnValueOnce(userSelectReturning(user)).mockReturnValueOnce(userSelectReturning(subs));
 }
 
-// Capture a top-level (non-tx) ledger insert — the missed_grant row.
-function missedGrantInsert(cap: Captured) {
-  return {
-    values: (v: Record<string, unknown>) => {
-      cap.ledgerValues = v;
-      return { onConflictDoNothing: (arb: { target?: unknown; where?: unknown }) => { cap.arbiter = arb; return Promise.resolve(undefined); } };
-    },
-  };
-}
-
 const PRO_USER = [{ id: 'u1', subscriptionTier: 'pro' }];
 
 // billing_reason defaults to 'subscription_cycle' — an ordinary renewal — since
@@ -639,34 +629,18 @@ describe('applyStripeFunding', () => {
       expect(cap.ledgerValues).toBeUndefined();
     });
 
-    it('MON-2 a PAID invoice whose tier resolves to free (no ratio) fails closed, logs at ERROR, and writes a missed_grant row keyed on the invoice', async () => {
-      mockDb.select.mockReturnValue(userSelectReturning([{ id: 'u1', subscriptionTier: 'free' }]));
+    it.each(['free', 'pro', 'business'])('MON-2 an explicitly unentitled paid invoice grants nothing even when the cached user tier is %s', async (cachedTier) => {
+      mockDb.select.mockReturnValue(userSelectReturning([{ id: 'u1', subscriptionTier: cachedTier }]));
       const cap: Captured = {};
-      mockDb.insert.mockReturnValueOnce(missedGrantInsert(cap));
       mockDb.transaction.mockImplementation(async (cb: (tx: unknown) => Promise<void>) => {
         await cb(refillTx(cap, [{ id: 'led_x' }], 0));
       });
 
-      await applyStripeFunding(paidInvoiceEvent(1500)); // no invoice-derived tier, stored tier still free
+      await applyStripeFunding(paidInvoiceEvent(1500), { tier: 'free' });
 
       expect(mockDb.transaction).not.toHaveBeenCalled(); // no balance change
-      expect(mockApiLogger.error).toHaveBeenCalledWith(
-        'credit funding: MISSED grant — paid invoice resolved to a tier with no ratio',
-        undefined,
-        expect.objectContaining({ eventId: 'evt_inv', invoiceId: 'in_123', userId: 'u1', storedTier: 'free', paidCents: 1500 }),
-      );
-      expect(cap.ledgerValues).toMatchObject({
-        userId: 'u1',
-        walletId: 'w_root', // WAL-5
-        entryType: 'missed_grant',
-        bucket: 'monthly',
-        amountCents: 0,
-        paidCents: 1500,
-        stripeRef: 'in_123',
-        consumeStatus: 'applied',
-      });
-      // Dedupes on the invoice like a grant does, so a redelivery cannot double-record it.
-      expect(cap.arbiter).toHaveProperty('target');
+      expect(mockDb.insert).not.toHaveBeenCalled();
+      expect(cap.ledgerValues).toBeUndefined();
     });
 
     describe('D-OW-16: grants we deliberately fund', () => {

@@ -3,16 +3,13 @@ import {
   ENTITLED_SUBSCRIPTION_STATUSES,
   deriveTierFromSubscriptions,
   computeTierDrift,
-  isTierDriftRepairable,
 } from '../subscription-tier-sync';
 import type { SubscriptionTier } from '../subscription-tiers';
 
 const priceTier = (map: Record<string, SubscriptionTier>) =>
   (priceId: string): SubscriptionTier => map[priceId] ?? 'free';
 
-// A-9: the legacy founder price resolves to its migration target (pro) — a
-// GRANDFATHERED price-id entry in stripe-config, never a tier of its own.
-const KNOWN = priceTier({ price_pro: 'pro', price_founder: 'pro', price_business: 'business' });
+const KNOWN = priceTier({ price_pro: 'pro', price_business: 'business' });
 
 describe('ENTITLED_SUBSCRIPTION_STATUSES', () => {
   it('matches the webhook entitlement set', () => {
@@ -50,7 +47,7 @@ describe('deriveTierFromSubscriptions', () => {
     const rows = [
       { status: 'active', stripePriceId: 'price_pro' },
       { status: 'trialing', stripePriceId: 'price_business' },
-      { status: 'active', stripePriceId: 'price_founder' },
+      { status: 'active', stripePriceId: 'price_pro' },
     ];
     expect(deriveTierFromSubscriptions(rows, KNOWN)).toEqual({ tier: 'business', indeterminate: false });
   });
@@ -94,13 +91,13 @@ describe('computeTierDrift', () => {
     });
   });
 
-  it('A-9 a stored legacy "founder" value is drift against the tier its (grandfathered) price now derives to', () => {
+  it('A-9 a stale removed tier resolves from its configured replacement subscription', () => {
     // 'founder' is outside the vocabulary: it coerces to free, so the
-    // reconciler repairs the row to what the founder price id maps to (pro).
+    // reconciler repairs the row to what the configured replacement price maps to (pro).
     expect(
       computeTierDrift({
         storedTier: 'founder',
-        derived: deriveTierFromSubscriptions([{ status: 'active', stripePriceId: 'price_founder' }], KNOWN),
+        derived: deriveTierFromSubscriptions([{ status: 'active', stripePriceId: 'price_pro' }], KNOWN),
       }),
     ).toEqual({ drifted: true, storedTier: 'free', expectedTier: 'pro' });
   });
@@ -118,71 +115,6 @@ describe('computeTierDrift', () => {
       drifted: false,
       storedTier: 'free',
       expectedTier: 'free',
-    });
-  });
-});
-
-describe('isTierDriftRepairable', () => {
-  it('is repairable when determinate and the user has a subscription record (e.g. a canceled row)', () => {
-    // A canceled/expired subscription still LEAVES A ROW — this is the normal
-    // downgrade path, not the unmigrated-legacy-user case below.
-    expect(
-      isTierDriftRepairable({
-        storedTier: 'business',
-        derived: { tier: 'free', indeterminate: false },
-        hasAnySubscriptionRecord: true,
-      }),
-    ).toBe(true);
-  });
-
-  it('is NOT repairable when the derivation is indeterminate (unmapped price)', () => {
-    expect(
-      isTierDriftRepairable({
-        storedTier: 'pro',
-        derived: { tier: 'free', indeterminate: true },
-        hasAnySubscriptionRecord: true,
-      }),
-    ).toBe(false);
-  });
-
-  describe('unmigrated legacy paid user (no subscription record at all)', () => {
-    // Regression for a P1 review finding: a non-free stored tier with ZERO
-    // subscription rows is exactly the population the retired
-    // scripts/sync-legacy-subscriptions.ts existed to migrate (a tier set
-    // before a real Stripe subscription backed it, e.g. an old manual/gift
-    // grant). The reconciler must NOT auto-repair this downward to free —
-    // that would silently revoke a paying customer's entitlements.
-
-    it('is NOT repairable for a non-free stored tier with no subscription record', () => {
-      expect(
-        isTierDriftRepairable({
-          storedTier: 'business',
-          derived: { tier: 'free', indeterminate: false },
-          hasAnySubscriptionRecord: false,
-        }),
-      ).toBe(false);
-    });
-
-    it('does not apply the no-record guard to an ALREADY-free stored tier', () => {
-      // A free user with no subscriptions row is the ordinary case, not
-      // an unmigrated legacy user — nothing to protect here.
-      expect(
-        isTierDriftRepairable({
-          storedTier: 'free',
-          derived: { tier: 'free', indeterminate: false },
-          hasAnySubscriptionRecord: false,
-        }),
-      ).toBe(true);
-    });
-
-    it('does not apply the no-record guard once a subscription record exists (normal cancel path)', () => {
-      expect(
-        isTierDriftRepairable({
-          storedTier: 'business',
-          derived: { tier: 'free', indeterminate: false },
-          hasAnySubscriptionRecord: true,
-        }),
-      ).toBe(true);
     });
   });
 });

@@ -29,7 +29,7 @@ const { mockConstructEvent, StripeError } = vi.hoisted(() => ({
 vi.mock('@/lib/stripe', () => ({
   stripe: { webhooks: { constructEvent: mockConstructEvent } },
   Stripe: { errors: { StripeError } },
-  getTierFromPrice: vi.fn(() => 'free'),
+  getPersonalTierFromPrice: vi.fn(() => 'free'),
 }));
 
 /**
@@ -67,6 +67,7 @@ const mockDb = vi.hoisted(() => {
     }),
     transaction: async (cb: (tx: unknown) => Promise<void>) => {
       await cb({
+        select: () => ({ from: () => ({ where: () => ({ for: async () => state.userRows }) }) }),
         insert: () => ({ values: () => ({ onConflictDoUpdate: async () => undefined }) }),
         update: recordUpdate,
       });

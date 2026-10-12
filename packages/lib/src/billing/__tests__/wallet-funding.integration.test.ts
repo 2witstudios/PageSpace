@@ -14,7 +14,7 @@ import { eq, inArray, and } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { drives } from '@pagespace/db/schema/core';
 import { driveMembers } from '@pagespace/db/schema/members';
-import { organizations } from '@pagespace/db/schema/organizations';
+import { organizations, orgSubscriptions } from '@pagespace/db/schema/organizations';
 import { creditLedger } from '@pagespace/db/schema/credits';
 import { wallets, walletFundingLegs, personalRootWalletOf } from '@pagespace/db/schema/wallets';
 import { factories } from '@pagespace/db/test/factories';
@@ -86,6 +86,7 @@ describe('wallet funding against Postgres', () => {
       await db.delete(driveMembers).where(inArray(driveMembers.driveId, created.drives));
       await db.delete(drives).where(inArray(drives.id, created.drives));
     }
+    if (created.orgs.length) await db.delete(orgSubscriptions).where(inArray(orgSubscriptions.orgId, created.orgs));
     if (created.orgs.length) await db.delete(organizations).where(inArray(organizations.id, created.orgs));
     if (created.users.length) await db.delete(users).where(inArray(users.id, created.users));
   });
@@ -97,6 +98,7 @@ describe('wallet funding against Postgres', () => {
   const PRICES = { basePriceId: 'price_test_org_base', seatPriceId: 'price_test_org_seat' };
   const priced = (priceId: string, line: { amount: number; period: { start: number; end: number } }) => ({
     ...line,
+    parent: { subscription_item_details: { subscription_item: 'si_org' } },
     pricing: { price_details: { price: priceId } },
   });
 
@@ -195,6 +197,42 @@ describe('wallet funding against Postgres', () => {
     const grants = await db.select().from(creditLedger).where(eq(creditLedger.stripeRef, invoice.id));
     expect(grants).toHaveLength(1);
     expect(grants[0]).toMatchObject({ amountCents: 4800, paidCents: 8000 });
+  });
+
+  it.each([
+    { gifted: false, oldCredit: false }, { gifted: true, oldCredit: false }, { gifted: true, oldCredit: true },
+  ])('MON-3 (partial) unknown replacement prices on stored org items cannot fund a pool (%j)', async ({ gifted, oldCredit }) => {
+    if (!dbAvailable) return;
+    const owner = await user();
+    const [org] = await db.insert(organizations).values({
+      name: 'Identity test', slug: `identity-${createId()}`, ownerId: owner, stripeCustomerId: `cus_${createId()}`,
+    }).returning();
+    created.orgs.push(org.id);
+    const subscriptionId = `sub_${createId()}`;
+    const itemId = `si_${createId()}`;
+    await db.insert(orgSubscriptions).values({
+      orgId: org.id, stripeSubscriptionId: subscriptionId,
+      stripeBasePriceId: PRICES.basePriceId, stripeBaseItemId: itemId,
+      stripeSeatPriceId: PRICES.seatPriceId, stripeSeatItemId: `si_${createId()}`, status: 'active',
+    });
+    const [pool] = await db.insert(wallets).values({
+      ownerType: 'org', orgId: org.id, monthlyRemainingCents: 1234, topupRemainingCents: 567,
+    }).returning();
+    const invoice = {
+      id: `in_${createId()}`, customer: org.stripeCustomerId,
+      billing_reason: 'subscription_cycle', amount_paid: gifted ? 0 : 5000, subtotal: 5000,
+      parent: { subscription_details: { subscription: subscriptionId, metadata: gifted ? { type: 'gift_subscription' } : undefined } },
+      lines: { data: [...(oldCredit ? [{
+        ...priced(PRICES.basePriceId, { amount: -5000, period: { start: PERIOD_START_S, end: PERIOD_END_S } }),
+        parent: { subscription_item_details: { subscription_item: itemId } },
+      }] : []), {
+        ...priced('price_retired', { amount: 5000, period: { start: PERIOD_START_S, end: PERIOD_END_S } }),
+        parent: { subscription_item_details: { subscription_item: itemId } },
+      }] },
+    };
+    expect(await applyOrgPoolRefill(invoice, { active: true, ...PRICES })).toMatchObject({ kind: 'nothing' });
+    expect(await walletRow(pool.id)).toEqual(pool);
+    expect(await db.select().from(creditLedger).where(eq(creditLedger.stripeRef, invoice.id))).toEqual([]);
   });
 
   it('WAL-3 (partial) D-OW-12 org allocations reset on the pool refill date, personal ones on the personal renewal; running it twice resets once', async () => {

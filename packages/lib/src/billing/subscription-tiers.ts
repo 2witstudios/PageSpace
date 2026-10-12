@@ -24,6 +24,16 @@ export const TIERS = ['free', 'pro', 'business'] as const;
 
 export type SubscriptionTier = (typeof TIERS)[number];
 
+/** Resolve a paid plan only from an unambiguous configured price identity. */
+export function tierFromConfiguredPrice(
+  priceId: string,
+  prices: Readonly<Record<Exclude<SubscriptionTier, 'free'>, string>>,
+): SubscriptionTier {
+  if (!priceId) return 'free';
+  const matches = TIERS.filter((tier) => tier !== 'free').filter((tier) => prices[tier] === priceId);
+  return matches.length === 1 ? matches[0] : 'free';
+}
+
 export function isSubscriptionTier(value: unknown): value is SubscriptionTier {
   return typeof value === 'string' && (TIERS as readonly string[]).includes(value);
 }

@@ -38,7 +38,7 @@ import { applyOrgPoolRefill, type OrgPoolRefillOutcome } from '@pagespace/lib/bi
 import { orgBillingLockKey } from '@pagespace/lib/billing/org-subscription-core';
 import {
   orgInvoiceExtraSeats,
-  planOrgSeatItemMirror,
+  planOrgSubscriptionPriceMirror,
   planOrgSubscriptionMirror,
   routeBillingOwner,
   type BillingOwnerRoute,
@@ -135,18 +135,18 @@ export async function mirrorOrgSubscription(
     const billingEnabled = isBillingEnabled();
     // Review 3+4 P2-8: the seat item and its quantity as Stripe has them NOW (a change made
     // outside the app is mirrored, never left stale), alongside the status.
-    const seatPatch = planOrgSeatItemMirror({
+    const mirrorPatch = planOrgSubscriptionPriceMirror({
       stored,
-      items: fetched.items,
+      subscription: fetched,
       prices: { basePriceId: deps.basePriceId(), seatPriceId: deps.seatPriceId() },
     });
     const next = {
-      status: fetched.status,
+      gifted: fetched.metadata?.type === 'gift_subscription',
       trialEnd: fetched.trialEnd === null ? null : new Date(fetched.trialEnd * 1000),
       currentPeriodStart: fetched.currentPeriodStart === null ? null : new Date(fetched.currentPeriodStart * 1000),
       currentPeriodEnd: fetched.currentPeriodEnd === null ? null : new Date(fetched.currentPeriodEnd * 1000),
       cancelAtPeriodEnd: fetched.cancelAtPeriodEnd,
-      ...seatPatch,
+      ...mirrorPatch,
     };
     const before = deriveOrgStatus({ billingEnabled, subscription: stored, now }).status;
     await tx.update(orgSubscriptions).set(next).where(eq(orgSubscriptions.id, stored.id));
@@ -154,7 +154,7 @@ export async function mirrorOrgSubscription(
     return {
       kind: 'applied',
       orgId,
-      stripeStatus: fetched.status,
+      stripeStatus: next.status,
       cancelAtPeriodEnd: fetched.cancelAtPeriodEnd,
       previous: { stripeStatus: stored.status, cancelAtPeriodEnd: stored.cancelAtPeriodEnd },
       before,
@@ -237,7 +237,7 @@ export async function handleOrgInvoicePaid(
   }
   const extraSeats = await invoiceExtraSeats(route.orgId, invoice, deps);
   // MON-3: the refill sums only the Business base and extra-seat lines, recognized by the
-  // configured org price ids (with the stored item ids as fallback, read in the shell).
+  // configured org price ids; stored subscription item ids cannot establish entitlement.
   const refill = await applyOrgPoolRefill(invoice, {
     extraSeats,
     basePriceId: deps.basePriceId(),

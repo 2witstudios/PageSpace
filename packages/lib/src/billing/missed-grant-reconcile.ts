@@ -41,7 +41,7 @@ export interface MissedGrantReconcileResult {
   stillMissing: number;
   /**
    * Rows whose user holds an entitled subscription the price map cannot classify
-   * (unmapped price id, and the invoice amount matches no legacy price). Left
+   * (unmapped price id). Left
    * missing and warned per row: a later sweep cannot resolve these on its own, so
    * they need a human (map the price, or grant by hand).
    */
@@ -56,16 +56,8 @@ export interface MissedGrantReconcileResult {
 }
 
 interface MissedGrantReconcileOptions {
-  /**
-   * Maps a Stripe price id to its tier; the web app injects getTierFromPrice. When
-   * the user has exactly ONE subscription row (any status) the missed invoice must
-   * have been billed on it, so its paidCents is passed as the amount and an unmapped
-   * legacy price id still resolves through the exact-match legacy amount table (the
-   * subscriptions table stores no amount). With more than one row the invoice amount
-   * may describe a different subscription, so no amount is passed; an unmapped
-   * entitled row then stays indeterminate.
-   */
-  priceTier: (stripePriceId: string, amountCents: number | null) => SubscriptionTier;
+  /** Resolve entitlement from configured price identity, independently of the invoice amount. */
+  priceTier: (stripePriceId: string) => SubscriptionTier;
   /**
    * Whether the money model's ratio is in force (D-OW-17 test seam, as applyStripeFunding's
    * `{ active }`). Production callers leave it unset: the MONEY_MODEL_V2_ACTIVE default.
@@ -224,8 +216,7 @@ export async function reconcileMissedGrants(options: MissedGrantReconcileOptions
     for (const row of page) {
       try {
         const userSubs = rowsByUser.get(row.userId) ?? [];
-        const invoiceAmount = userSubs.length === 1 ? row.paidCents : null;
-        const derived = deriveTierFromSubscriptions(userSubs, (priceId) => options.priceTier(priceId, invoiceAmount));
+        const derived = deriveTierFromSubscriptions(userSubs, options.priceTier);
         const plan = planMissedGrantReconcile(
           { id: row.id, userId: row.userId, paidCents: row.paidCents ?? 0 },
           derived.tier,

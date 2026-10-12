@@ -22,10 +22,9 @@ import { publishedApps } from './published-apps';
  *      therefore derive `free` and write it straight over a Pro /
  *      Business customer's tier — a paying user demoted by buying more.
  *   2. The reconcile cron would then see `indeterminate: true` (an entitled row
- *      on an unmapped price) for that user forever, and `isTierDriftRepairable`
- *      deliberately refuses to auto-repair such a user. The demotion in (1)
- *      would be permanent AND invisible to the repair path built for exactly
- *      that failure.
+ *      on an unmapped price) for that user forever. Dedicated hosting belongs
+ *      outside account-plan entitlement derivation, even though strict price
+ *      reconciliation can restore a separately verified personal plan.
  *
  * Hosting spend is not a plan. It hangs off a published app, it is bought and
  * cancelled per app, and it says nothing about what the account is entitled to —

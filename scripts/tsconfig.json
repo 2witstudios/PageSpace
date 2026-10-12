@@ -40,6 +40,6 @@
     "check-spec-coverage.ts",
     "__tests__/check-spec-coverage.test.ts",
     "migrate-founder-to-pro.ts",
-    "__tests__/migrate-founder-to-pro.test.ts"
+    "__tests__/migrate-founder-to-pro*.test.ts"
   ]
 }

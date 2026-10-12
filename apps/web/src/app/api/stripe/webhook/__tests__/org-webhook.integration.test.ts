@@ -35,6 +35,8 @@ import { getOrgStatus } from '@pagespace/lib/organizations/status';
 import { ORG_ID_METADATA_KEY, ORG_SUBSCRIPTION_KIND, type OrgBusinessPrices } from '@pagespace/lib/billing/org-subscription-core';
 import { orgPoolListPriceGrantCents, orgPoolRefillGrant } from '@pagespace/lib/billing/wallet-funding';
 import { centsFromDollars, tierListPriceCents } from '@pagespace/lib/billing/money-model';
+import { reconcileSubscriptionTiers } from '@pagespace/lib/billing/subscription-tier-reconcile';
+import { getPersonalTierFromPrice } from '@/lib/stripe/price-config';
 import { TIER_PLAN_LIMITS } from '@pagespace/lib/billing/subscription-tiers';
 import { stripeConfig } from '@/lib/stripe-config';
 import { ensureOrgBusinessSubscription, type OrgBillingDeps, type OrgBillingStripe } from '@/lib/org-billing/org-subscription';
@@ -136,8 +138,8 @@ interface InvoiceSpec {
 function invoiceObject(spec: InvoiceSpec) {
   const periodEnd = spec.periodStart + 30 * DAY;
   const lines = [
-    { amount: spec.paid ? BASE_CENTS : 0, discount_amounts: [], quantity: 1, pricing: { price_details: { price: PRICES.basePriceId } }, period: { start: spec.periodStart, end: periodEnd } },
-    { amount: spec.paid ? SEAT_CENTS * spec.seats : 0, discount_amounts: [], quantity: spec.seats, pricing: { price_details: { price: PRICES.seatPriceId } }, period: { start: spec.periodStart, end: periodEnd } },
+    { amount: spec.paid ? BASE_CENTS : 0, parent: { subscription_item_details: { subscription_item: 'si_org' } }, discount_amounts: [], quantity: 1, pricing: { price_details: { price: PRICES.basePriceId } }, period: { start: spec.periodStart, end: periodEnd } },
+    { amount: spec.paid ? SEAT_CENTS * spec.seats : 0, parent: { subscription_item_details: { subscription_item: 'si_org' } }, discount_amounts: [], quantity: spec.seats, pricing: { price_details: { price: PRICES.seatPriceId } }, period: { start: spec.periodStart, end: periodEnd } },
   ];
   const total = lines.reduce((sum, l) => sum + l.amount, 0);
   return {
@@ -298,6 +300,61 @@ describe('Stripe webhook — org routing, idempotency, lapse (real Postgres, in-
       await db.delete(organizations).where(inArray(organizations.id, orgIds));
     }
     if (userIds.length > 0) await db.delete(users).where(inArray(users.id, userIds));
+  });
+
+  it.each(['unknown_base', 'extra_item', 'duplicate_base', 'missing_seat', 'truncated'])('fails closed and recovers when current org price identity changes: %s', async (change) => {
+    if (!dbAvailable) return;
+    const org = await northwind();
+    setStripeStatus(org, 'active');
+    const live = org.stripe.subscriptions.get(org.subscriptionId)!;
+    const originalItems = live.items.map(item => ({ ...item }));
+    const snapshot = { id: org.subscriptionId, object: 'subscription', customer: org.customerId, status: 'active', metadata: orgMetadata(org.orgId) };
+    expect(await deliver(eventPayload('customer.subscription.updated', snapshot))).toBe(200);
+    expect((await getOrgStatus(org.orgId)).status).toBe('active');
+    if (change === 'unknown_base') live.items = live.items.map(item => item.priceId === PRICES.basePriceId ? { ...item, priceId: 'price_unknown_business' } : item);
+    if (change === 'extra_item') live.items = [...live.items, { id: 'si_extra', priceId: 'price_unknown', quantity: 1 }];
+    if (change === 'duplicate_base') live.items = [...live.items, { ...originalItems[0], id: 'si_duplicate' }];
+    if (change === 'missing_seat') live.items = live.items.filter(item => item.priceId !== PRICES.seatPriceId);
+    if (change === 'truncated') Object.assign(live, { itemsHasMore: true });
+    const invalid = eventPayload('customer.subscription.updated', snapshot);
+    expect(await deliver(invalid)).toBe(200);
+    expect((await getOrgStatus(org.orgId)).status).toBe('lapsed');
+    expect((await storedSub(org.orgId)).stripeBasePriceId).toBe('');
+    expect(await deliver(invalid)).toBe(200);
+    expect((await getOrgStatus(org.orgId)).status).toBe('lapsed');
+    live.items = originalItems;
+    Object.assign(live, { itemsHasMore: false });
+    expect(await deliver(eventPayload('customer.subscription.updated', snapshot))).toBe(200);
+    expect((await getOrgStatus(org.orgId)).status).toBe('active');
+    expect((await storedSub(org.orgId)).stripeBasePriceId).toBe(PRICES.basePriceId);
+    const auditFilter = parseOrgAuditFilter({ category: 'billing', limit: '100' });
+    if (!auditFilter.ok) throw new Error(auditFilter.error);
+    const audit = await queryOrgAuditEvents(org.orgId, auditFilter.filter);
+    expect(audit.entries.filter(entry => entry.eventType === 'org.billing.subscription_changed').map(entry => ({
+      to: entry.details.to, after: entry.details.orgStatusAfter,
+    }))).toEqual([
+      { to: 'active', after: 'active' },
+      { to: 'unverified_price', after: 'lapsed' },
+      { to: 'active', after: 'active' },
+      { to: 'incomplete', after: undefined },
+    ]);
+  });
+
+  it('mirrors current Stripe gift identity through signed subscription events and replay', async () => {
+    if (!dbAvailable) return;
+    const org = await northwind();
+    expect((await storedSub(org.orgId)).gifted).toBe(false);
+    const live = org.stripe.subscriptions.get(org.subscriptionId)!;
+    live.metadata = { ...live.metadata, type: 'gift_subscription' };
+    const snapshot = { id: org.subscriptionId, object: 'subscription', customer: org.customerId, status: 'active', metadata: orgMetadata(org.orgId) };
+    const gift = eventPayload('customer.subscription.updated', snapshot);
+    expect(await deliver(gift)).toBe(200);
+    expect((await storedSub(org.orgId)).gifted).toBe(true);
+    expect(await deliver(gift)).toBe(200);
+    expect((await storedSub(org.orgId)).gifted).toBe(true);
+    delete live.metadata.type;
+    expect(await deliver(eventPayload('customer.subscription.updated', snapshot))).toBe(200);
+    expect((await storedSub(org.orgId)).gifted).toBe(false);
   });
 
   it("SEAT-7 (partial) org subscription webhooks are routed to the org before the personal-tier handler and are idempotent: each event delivered twice applies once and never touches the Owner's personal plan", async () => {
@@ -627,12 +684,22 @@ describe('Stripe webhook — org routing, idempotency, lapse (real Postgres, in-
             amount: proCents,
             discount_amounts: [],
             quantity: 1,
+            parent: { subscription_item_details: { subscription_item: 'si_owd3_personal' } },
             pricing: { price_details: { price: stripeConfig.priceIds.pro }, unit_amount_decimal: String(proCents) },
             period: { start: 1_800_000_000, end: 1_800_000_000 + 30 * DAY },
           },
         ],
       },
     };
+    const adHoc = {
+      ...personal,
+      id: `${personal.id}_adhoc`,
+      lines: { ...personal.lines, data: personal.lines.data.map((line) => ({ ...line, parent: undefined })) },
+    };
+    expect(await deliver(eventPayload('invoice.paid', adHoc))).toBe(200);
+    const adHocRows = await db.select().from(creditLedger).where(eq(creditLedger.stripeRef, adHoc.id));
+    expect(adHocRows.reduce((sum, row) => sum + row.amountCents, 0)).toBe(0);
+
     expect(await deliver(eventPayload('invoice.paid', personal))).toBe(200);
     expect(await poolOf(org.orgId)).toBeNull();
     const personalRows = await db.select().from(creditLedger).where(eq(creditLedger.stripeRef, personal.id));
@@ -769,4 +836,60 @@ describe('Stripe webhook — org routing, idempotency, lapse (real Postgres, in-
     const [owner] = await db.select({ tier: users.subscriptionTier }).from(users).where(eq(users.id, org.ownerId));
     expect(owner.tier).toBe('pro');
   });
+
+  it('SEAT-2 (partial) a subscription webhook waits for the user lock before locking its mirror', async () => {
+    const person = await factories.createUser({ stripeCustomerId: `cus_lock_${Date.now()}` });
+    userIds.push(person.id);
+    const subscription = {
+      id: `sub_lock_${Date.now()}`, customer: person.stripeCustomerId, status: 'active',
+      metadata: {}, schedule: null, cancel_at_period_end: false,
+      items: { data: [{ id: 'si_lock', price: { id: stripeConfig.priceIds.pro }, current_period_start: 1_800_000_000, current_period_end: 1_802_592_000 }] },
+    };
+    expect(await deliver(eventPayload('customer.subscription.created', subscription))).toBe(200);
+    let delivery: Promise<number> | undefined;
+    try {
+      await db.transaction(async (tx) => {
+        await tx.select({ id: users.id }).from(users).where(eq(users.id, person.id)).for('update');
+        const backend = await tx.execute(sql`select pg_backend_pid() as pid`);
+        const pid = Number(backend.rows[0].pid);
+        subscription.items.data[0].price.id = 'price_unknown_replacement';
+        delivery = deliver(eventPayload('customer.subscription.updated', subscription));
+        await vi.waitFor(async () => {
+          const blocked = await db.execute(sql`select count(*)::int as n from pg_stat_activity where ${pid} = any(pg_blocking_pids(pid))`);
+          expect(Number(blocked.rows[0].n)).toBeGreaterThan(0);
+        });
+        // This would fail with 55P03 if the webhook took the mirror first. No
+        // sleep or deadlock timeout is needed to prove the ordering.
+        await tx.execute(sql`select id from subscriptions where "stripeSubscriptionId" = ${subscription.id} for update nowait`);
+      });
+    } finally {
+      if (delivery) expect(await delivery).toBe(200);
+    }
+    const [after] = await db.select().from(users).where(eq(users.id, person.id));
+    expect(after.subscriptionTier).toBe('free');
+  });
+
+  it.each([false, true])('SEAT-2 (partial) a replaced or extra price item cannot restore previous entitlement (%s)', async (extraItem) => {
+    const person = await factories.createUser({ stripeCustomerId: `cus_identity_${Date.now()}` });
+    userIds.push(person.id);
+    const subscription = {
+      id: `sub_identity_${Date.now()}`, customer: person.stripeCustomerId, status: 'active',
+      metadata: {}, schedule: null, cancel_at_period_end: false,
+      items: { data: [{
+        id: 'si_identity', price: { id: stripeConfig.priceIds.pro },
+        current_period_start: 1_800_000_000, current_period_end: 1_802_592_000,
+      }] },
+    };
+    expect(await deliver(eventPayload('customer.subscription.created', subscription))).toBe(200);
+    if (extraItem) subscription.items.data.push({ ...subscription.items.data[0], id: 'si_extra', price: { id: 'price_unknown_replacement' } });
+    else subscription.items.data[0].price.id = 'price_unknown_replacement';
+    expect(await deliver(eventPayload('customer.subscription.updated', subscription))).toBe(200);
+    const [mirror] = await db.select().from(subscriptions).where(eq(subscriptions.stripeSubscriptionId, subscription.id));
+    expect(mirror.stripePriceId).toBe(extraItem ? '' : 'price_unknown_replacement');
+    await reconcileSubscriptionTiers({ priceTier: getPersonalTierFromPrice });
+    const [after] = await db.select().from(users).where(eq(users.id, person.id));
+    expect(after.subscriptionTier).toBe('free');
+  });
+
+
 });

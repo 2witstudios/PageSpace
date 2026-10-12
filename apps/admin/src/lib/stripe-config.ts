@@ -25,18 +25,15 @@ interface StripeConfig {
     business: string;
   };
   /**
-   * Prices that are no longer sold but still resolve for the subscribers on
-   * them (A-9). Never a member of TIERS — a removed tier's price lives here.
-   * `founder` ($50/month) resolves to its migration target, Pro, until the
-   * subscription is moved to Pro at period end by a manual Stripe dashboard
-   * step ([D-OW-19]). `legacyBusiness` is the $100/month personal Business
-   * price whose subscribers are grandfathered (A-9) — today the same id as
-   * `priceIds.business`, which becomes the $50 org price in Wave C.
+   * Retired identifiers retained for the one-time subscriber migration.
+   * Runtime tier resolution never recognizes these prices (D-OW-42).
    */
   grandfatheredPriceIds: {
     founder: string;
     legacyBusiness: string;
   };
+  /** Organization plan identities; empty live IDs refuse provisioning. */
+  orgPriceIds: { businessBase: string; extraSeat: string };
 }
 
 const config: Record<'test' | 'live', StripeConfig> = {
@@ -45,6 +42,10 @@ const config: Record<'test' | 'live', StripeConfig> = {
     priceIds: {
       pro: 'price_1Sdbh6PCGvbSozob1IBfmSuv',        // $15/month
       business: 'price_1SdbhfPCGvbSozobpTMXfqkX',   // legacy $100/month personal Business (see StripeConfig)
+    },
+    orgPriceIds: {
+      businessBase: 'price_1UK59APCGvbSozobgDCKr4zB',
+      extraSeat: 'price_1UK59APCGvbSozobTxuoHMeP',
     },
     grandfatheredPriceIds: {
       founder: 'price_1SdbhePCGvbSozobuNjSn5j0',    // $50/month, removed tier (A-9)
@@ -57,6 +58,7 @@ const config: Record<'test' | 'live', StripeConfig> = {
       pro: 'price_1SdfbXPRnBcvXFsoRbjnaQFS',        // $15/month
       business: 'price_1SdfbePRnBcvXFsoCvpJsSxw',   // legacy $100/month personal Business (see StripeConfig)
     },
+    orgPriceIds: { businessBase: '', extraSeat: '' },
     grandfatheredPriceIds: {
       founder: 'price_1SdfbbPRnBcvXFsofn7L1leP',    // $50/month, removed tier (A-9)
       legacyBusiness: 'price_1SdfbePRnBcvXFsoCvpJsSxw', // $100/month personal Business, grandfathered (A-9)

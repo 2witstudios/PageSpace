@@ -3,8 +3,9 @@ import { db } from '@pagespace/db/db'
 import { eq, and, isNull, lte } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { subscriptions, stripeEvents } from '@pagespace/db/schema/subscriptions';
-import { stripe, Stripe, getTierFromPrice } from '@/lib/stripe';
-import { tierFromInvoiceLine } from '@/lib/stripe/price-config';
+import { stripe, Stripe, getPersonalTierFromPrice } from '@/lib/stripe';
+import { tierFromInvoiceLines } from '@/lib/stripe/price-config';
+import { completeInvoiceLines } from '@/lib/stripe/invoice-lines';
 import type { SubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { deriveTierFromSubscriptions } from '@pagespace/lib/billing/subscription-tier-sync';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -184,7 +185,7 @@ export async function POST(request: NextRequest) {
           // Retryable, the owner lookup included: a throw outside the wrapper would mark
           // the event processed and lose it.
           if (await withFundingRetry(event.id, () => routeOrgSubscriptionEvent(subscription, event.id))) break;
-          await handleSubscriptionChange(subscription);
+          await withFundingRetry(event.id, () => handleSubscriptionChange(subscription));
           break;
         }
 
@@ -207,7 +208,7 @@ export async function POST(request: NextRequest) {
           // Same org fork: an org subscription ending lapses the ORG (SEAT-9) and never
           // sets a person's tier to free.
           if (await withFundingRetry(event.id, () => routeOrgSubscriptionEvent(subscription, event.id))) break;
-          await handleSubscriptionDeleted(subscription);
+          await withFundingRetry(event.id, () => handleSubscriptionDeleted(subscription));
           break;
         }
 
@@ -286,14 +287,11 @@ export async function POST(request: NextRequest) {
         }
 
         case 'invoice.paid': {
-          const invoice = event.data.object as Stripe.Invoice;
+          let invoice = event.data.object as Stripe.Invoice;
           // FORKED BEFORE FUNDING, and this fork is as load-bearing as the
           // subscription one. `applyStripeFunding` refills the customer's monthly
-          // AI-credit bucket on every paid subscription invoice, falling back to
-          // their STORED tier when the invoice's price maps to no tier — which is
-          // exactly what a hosting price does. Left unforked, a customer with a
-          // dedicated app would have their monthly allowance reset a second time
-          // every month, on the hosting subscription's own billing anchor.
+          // AI-credit bucket on recognized personal subscription invoices. Hosting
+          // invoices also bypass personal payment-state updates and receipt handling.
           if (routeInvoice(invoice, event.id) === 'published_app_dedicated') {
             loggers.api.info('Dedicated hosting invoice paid', {
               eventId: event.id,
@@ -308,8 +306,11 @@ export async function POST(request: NextRequest) {
           // customer funds nobody. A person's invoice (no org customer) never reaches the
           // org path, so it can never fund an org pool. Once per invoice (ledger
           // stripeRef); a failure rethrows so Stripe redelivers.
-          if (await withFundingRetry(event.id, () => routeOrgInvoicePaid(invoice, event.id))) break;
-          await withFundingRetry(event.id, async () => {
+          const fundedOrg = await withFundingRetry(event.id, async () => {
+            // Stripe embeds only the first page. Resolve identity and funding from
+            // the complete invoice; a failed page fetch must release the event claim.
+            invoice = await completeInvoiceLines(invoice);
+            if (await routeOrgInvoicePaid(invoice, event.id)) return true;
             await handleInvoicePaid(invoice);
             // Grant the monthly credit on each renewal. The grant is sized from what
             // this invoice actually PAID (invoice.amount_paid × the tier's included-
@@ -322,8 +323,13 @@ export async function POST(request: NextRequest) {
             // applies the correct (paid) tier's ratio. Replays are dedupe'd twice: the
             // stripe_events marker above short-circuits a redelivered event, and the
             // ledger's stripeRef unique index makes the grant itself exactly-once.
-            await applyStripeFunding(event, { tier: tierFromInvoice(invoice) });
+            await applyStripeFunding(
+              { ...event, data: { ...event.data, object: invoice } },
+              { tier: tierFromInvoice(invoice) },
+            );
+            return false;
           });
+          if (fundedOrg) break;
           // Push the refilled balance to the user's open tabs, and send a payment
           // receipt. Both best-effort, post-commit — a receipt-send failure must
           // never affect funding that already succeeded (see
@@ -431,19 +437,11 @@ async function withFundingRetry<T>(eventId: string, run: () => Promise<T>): Prom
 }
 
 /**
- * Derive the subscription tier from a paid invoice's line price. This is authoritative
- * for the monthly refill because it reflects what was actually billed, independent of
- * whether our DB's users.subscriptionTier has caught up with the subscription webhook
- * (the two events can arrive in either order). Returns undefined when the invoice has
- * no recognizable subscription price — including getTierFromPrice's 'free' fallback for
- * an unmapped price — so the funding shell falls back to the stored user tier rather
- * than wrongly downgrading a paid user. Mirrors the extraction in stripe/invoices/route.ts.
+ * Invoice price identity is authoritative even when the user cache still names a paid tier.
+ * An absent or unrecognized price explicitly has no paid entitlement.
  */
-function tierFromInvoice(invoice: Stripe.Invoice): SubscriptionTier | undefined {
-  const lines = invoice.lines?.data ?? [];
-  const line = lines.find((l) => l.pricing?.price_details?.price) ?? lines[0];
-  const tier = tierFromInvoiceLine(line);
-  return tier === 'free' ? undefined : tier;
+function tierFromInvoice(invoice: Stripe.Invoice): SubscriptionTier {
+  return tierFromInvoiceLines(invoice.lines?.data ?? []);
 }
 
 async function handleSubscriptionChange(subscription: Stripe.Subscription) {
@@ -470,14 +468,20 @@ async function handleSubscriptionChange(subscription: Stripe.Subscription) {
     throw new Error(`Subscription ${subscription.id} has no items`);
   }
 
+  // A personal subscription has exactly one plan item. The empty identity marks
+  // an ambiguous/truncated collection in the mirror so reconciliation cannot
+  // resurrect access from its first item.
+  const stripePriceId = subscription.items.data.length === 1 && !subscription.items.has_more
+    ? firstItem.price.id : '';
+
   // Derive the tier through the single canonical resolver (subscription-tier-sync.ts):
   // an entitled (active/trialing) row maps through the price→tier map; anything
   // else derives to 'free'. The periodic reconciler (reconcile-subscription-tiers
   // cron) uses this same function across the whole subscriptions table, so there
   // is exactly one rule for what a subscription state implies about the tier.
   const subscriptionTier = deriveTierFromSubscriptions(
-    [{ status: subscription.status, stripePriceId: firstItem.price.id }],
-    (priceId) => getTierFromPrice(priceId, firstItem.price.unit_amount),
+    [{ status: subscription.status, stripePriceId }],
+    getPersonalTierFromPrice,
   ).tier;
 
   // Get period from the first subscription item (API version 2025-08-27 change)
@@ -516,12 +520,14 @@ async function handleSubscriptionChange(subscription: Stripe.Subscription) {
 
   // Use transaction to ensure subscription and user updates are atomic
   await db.transaction(async (tx) => {
+    // Shared order with reconciliation, deletion and cutover: user, then mirror.
+    await tx.select({ id: users.id }).from(users).where(eq(users.id, userId)).for('update');
     // Upsert subscription record
     const isGifted = subscription.metadata?.type === 'gift_subscription';
     await tx.insert(subscriptions).values({
       userId,
       stripeSubscriptionId: subscription.id,
-      stripePriceId: firstItem.price.id,
+      stripePriceId,
       status: subscription.status,
       currentPeriodStart,
       currentPeriodEnd,
@@ -534,6 +540,7 @@ async function handleSubscriptionChange(subscription: Stripe.Subscription) {
     }).onConflictDoUpdate({
       target: subscriptions.stripeSubscriptionId,
       set: {
+        stripePriceId,
         status: subscription.status,
         currentPeriodStart,
         currentPeriodEnd,
