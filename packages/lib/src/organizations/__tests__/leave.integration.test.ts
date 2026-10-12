@@ -433,15 +433,20 @@ describe('leave and delete cascades (Postgres)', () => {
     });
     await orgShared;
 
+    // The leave must finish while the share is still held. A leave that wanted the row
+    // exclusively would wait for `release()`, which only runs after this race, so it can
+    // only lose: the deadline is a hang guard, not a timing assumption.
     const leaving = leaveOrganization(lead.id, org.id);
-    let leaveSettled = false;
-    void leaving.finally(() => { leaveSettled = true; }).catch(() => {});
-    await new Promise((resolve) => setTimeout(resolve, 300));
-    const finishedWhileShared = leaveSettled;
+    let deadline: ReturnType<typeof setTimeout> | undefined;
+    const whileShared = await Promise.race([
+      leaving.then((result) => ({ finished: true as const, result })),
+      new Promise<{ finished: false }>((resolve) => { deadline = setTimeout(() => resolve({ finished: false }), 10_000); }),
+    ]);
+    clearTimeout(deadline);
 
     release();
     await holder;
-    expect(finishedWhileShared).toBe(true);
+    expect(whileShared.finished).toBe(true);
     expect(await leaving).toMatchObject({ ok: true, reassigned: [{ driveId: led.id, toUserId: owner.id }] });
   });
 

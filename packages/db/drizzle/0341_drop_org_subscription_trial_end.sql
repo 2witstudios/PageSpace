@@ -1,0 +1,1 @@
+ALTER TABLE "org_subscriptions" DROP COLUMN "trialEnd";

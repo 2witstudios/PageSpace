@@ -64,6 +64,9 @@ import { sessionRepository } from '@/lib/repositories/session-repository';
 import { authenticateRequestWithOptions, isAuthError, isScopedOAuthAuth } from '@/lib/auth';
 import { logTokenActivity } from '@pagespace/lib/monitoring/activity-logger';
 
+/** The minting session's sign-in ceremony: a new MCP token inherits it, never a fresh time. */
+const SIGNED_IN_AT = new Date('2026-10-12T09:00:00.000Z');
+
 describe('/api/auth/mcp-tokens', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -75,6 +78,7 @@ describe('/api/auth/mcp-tokens', () => {
       tokenVersion: 0,
       tokenType: 'session',
       sessionId: 'test-session-id',
+      authentication: { authenticatedAtMs: SIGNED_IN_AT.getTime(), assurance: 'user_verified_passkey' },
     } as never);
     vi.mocked(isAuthError).mockReturnValue(false);
     vi.mocked(isScopedOAuthAuth).mockReturnValue(false);
@@ -127,8 +131,8 @@ describe('/api/auth/mcp-tokens', () => {
 
         // Assert - verify repository was called with correct params
         expect(sessionRepository.createMcpTokenWithDriveScopes).toHaveBeenCalledWith({
-          authenticatedAt: null,
-          authenticationAssurance: null,
+          authenticatedAt: SIGNED_IN_AT,
+          authenticationAssurance: 'user_verified_passkey',
           name: 'My API Token',
           userId: 'test-user-id',
           tokenHash: 'mockTokenHash123',
@@ -167,8 +171,8 @@ describe('/api/auth/mcp-tokens', () => {
 
         // Assert - verify RESPONSE token has mcp_ prefix (DB stores hash, response returns raw token)
         expect(sessionRepository.createMcpTokenWithDriveScopes).toHaveBeenCalledWith({
-          authenticatedAt: null,
-          authenticationAssurance: null,
+          authenticatedAt: SIGNED_IN_AT,
+          authenticationAssurance: 'user_verified_passkey',
           name: 'My Token',
           userId: 'test-user-id',
           tokenHash: 'mockTokenHash123',
@@ -195,8 +199,8 @@ describe('/api/auth/mcp-tokens', () => {
 
         // Assert - verify token is associated with authenticated user
         expect(sessionRepository.createMcpTokenWithDriveScopes).toHaveBeenCalledWith({
-          authenticatedAt: null,
-          authenticationAssurance: null,
+          authenticatedAt: SIGNED_IN_AT,
+          authenticationAssurance: 'user_verified_passkey',
           name: 'My Token',
           userId: 'test-user-id',
           tokenHash: 'mockTokenHash123',

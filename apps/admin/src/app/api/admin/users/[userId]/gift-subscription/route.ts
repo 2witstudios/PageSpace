@@ -14,6 +14,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { maskEmail } from '@pagespace/lib/audit/mask-email';
 import { decryptUserRow } from '@pagespace/lib/auth/user-repository';
 import { personalTiers } from '@pagespace/lib/billing/subscription-tiers';
+import { GIFT_SUBSCRIPTION_METADATA_TYPE } from '@pagespace/lib/billing/wallet-funding';
 
 // SEAT-2 P2: an ordinary user gift can only ever be a PERSONAL tier — Business
 // is the organization plan and buying it creates an org, which does not exist
@@ -140,7 +141,7 @@ export const POST = withAdminAuth<RouteContext>(async (adminUser, request, conte
         userId: targetUser.id,
         giftedBy: adminUserId,
         reason,
-        type: 'gift_subscription',
+        type: GIFT_SUBSCRIPTION_METADATA_TYPE,
       },
     });
 

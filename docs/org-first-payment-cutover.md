@@ -1,6 +1,17 @@
 # Organization first-payment cutover
 
-Migration 0340 creates `org_subscription_funding` without inferring payment from
+**Release:** migration 0342 (`org_subscription_funding`) ships in the SAME offline release as the
+[personal billing cutover](personal-billing-cutover.md) (0338/0339): both land with the
+Organizations & Wallets epic merge, and the one drained-fleet maintenance window covers both.
+The migrate entrypoint enforces it: while `org_subscription_funding` does not exist yet and
+`org_subscriptions` has rows, `db:migrate` refuses to run unless `BILLING_CUTOVER_OFFLINE=true`
+(`assertOrgFundingCutoverOffline` in `packages/db/src/personal-cutover-gate.ts`), exactly like the
+personal gate. Without it, a rolling deploy would add the table and every existing paying org would
+read `never_funded` (lapsed, nothing lost or wrongly granted) until the recovery below ran. A
+database with no org subscriptions yet (a new install) and every deploy after the table exists
+migrate as usual.
+
+Migration 0342 creates `org_subscription_funding` without inferring payment from
 wallet balances, cached tiers or Stripe's active status. In billing-enabled
 deployments, an organization remains lapsed until its **current** subscription
 has a verified positive payment or supported gift. A predecessor's proof cannot
@@ -40,7 +51,7 @@ makes **no Stripe, wallet or ledger writes** and does not recalculate historical
 credit using the new ratio. Successful insertion emits the billing audit event
 and org status notification; repeated apply is a no-op.
 
-Apply migration 0340 before running the tool. For Docker/tenant/Fly installations,
+Apply migration 0342 before running the tool. For Docker/tenant/Fly installations,
 retain the maintenance sequence in [personal billing cutover](personal-billing-cutover.md)
 while completing recovery. Do not run an old application image against the final
 schema. Organizations that never paid or received a supported gift must remain
