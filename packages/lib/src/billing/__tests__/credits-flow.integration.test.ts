@@ -449,7 +449,6 @@ import { backfillCredits } from '../credit-backfill';
 import { reconcileOpenRouterCosts, type GenerationFetcher } from '../cost-reconcile';
 import { reconcileMissedGrants } from '../missed-grant-reconcile';
 import {
-  RESERVE_FLOOR_CENTS,
   MARKUP_BPS,
   MACHINE_MARKUP_BPS,
 } from '../credit-pricing';
