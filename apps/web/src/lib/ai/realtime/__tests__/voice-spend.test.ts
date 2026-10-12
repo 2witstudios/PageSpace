@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { resolveVoiceSpend, type VoiceSpendDeps } from '../voice-spend';
+import { resolveVoiceSpend, voiceContextRef, type VoiceSpendDeps } from '../voice-spend';
 import type { SeedConversation } from '../binding-loader';
 
 const row = (over: Partial<SeedConversation> = {}): SeedConversation => ({
@@ -86,8 +86,36 @@ describe('resolveVoiceSpend — where a voice call spends, decided before it con
     expect(await resolveVoiceSpend(deps(), { userId: 'u1' })).toEqual({ kind: 'personal' });
   });
 
+  it('SPEND-1 (partial) a Global Assistant conversation held inside a drive spends in that drive, as its typed turn there does (the drive the server resolved from the caller\'s context)', async () => {
+    expect(await resolveVoiceSpend(deps({ loadConversation: vi.fn(async () => row({ type: 'global', contextId: null })) }), { userId: 'u1', conversationId: 'conv1', contextDriveId: 'drive-7' }))
+      .toEqual({ kind: 'drive', driveId: 'drive-7' });
+  });
+
+  it('SPEND-1 (partial) a fresh Global Assistant thread and an unbound call inside a drive spend in that drive, never personal credits', async () => {
+    expect(await resolveVoiceSpend(deps({ loadConversation: vi.fn(async () => undefined) }), { userId: 'u1', conversationId: 'fresh', contextDriveId: 'drive-7' }))
+      .toEqual({ kind: 'drive', driveId: 'drive-7' });
+    expect(await resolveVoiceSpend(deps(), { userId: 'u1', contextDriveId: 'drive-7' })).toEqual({ kind: 'drive', driveId: 'drive-7' });
+  });
+
+  it('a page or drive conversation keeps its own drive whatever context the caller stands in: the context only places a call that has no drive of its own', async () => {
+    expect(await resolveVoiceSpend(deps(), { userId: 'u1', conversationId: 'conv1', contextDriveId: 'drive-7' })).toEqual({ kind: 'drive', driveId: 'drive-1' });
+    expect(await resolveVoiceSpend(deps({ loadConversation: vi.fn(async () => row({ type: 'drive', contextId: 'drive-9' })) }), { userId: 'u1', conversationId: 'conv1', contextDriveId: 'drive-7' }))
+      .toEqual({ kind: 'drive', driveId: 'drive-9' });
+  });
+
   it('a drive conversation spends in its drive', async () => {
     expect(await resolveVoiceSpend(deps({ loadConversation: vi.fn(async () => row({ type: 'drive', contextId: 'drive-9' })) }), { userId: 'u1', conversationId: 'conv1' }))
       .toEqual({ kind: 'drive', driveId: 'drive-9' });
+  });
+});
+
+describe('voiceContextRef — the reference the server resolves a voice call\'s context from', () => {
+  it('names the page the caller stands on, else their drive, else nothing — a claim the server permission-checks, never a drive it trusts', () => {
+    const page = { id: 'p1', title: 'Plan', type: 'DOCUMENT', path: '/d/p1' };
+    const drive = { id: 'd1', name: 'Product', slug: 'product' };
+    expect(voiceContextRef({ currentPage: page, currentDrive: drive })).toEqual({ routeType: 'page', pageId: 'p1' });
+    expect(voiceContextRef({ currentDrive: drive })).toEqual({ routeType: 'drive', driveId: 'd1' });
+    expect(voiceContextRef({})).toBeUndefined();
+    expect(voiceContextRef(undefined)).toBeUndefined();
   });
 });

@@ -1,4 +1,4 @@
-import { toPersonalSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
+import { toPersonalSubscriptionTier, type SubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -73,26 +73,13 @@ export async function POST(request: Request) {
     // It spends the source stored on that conversation (SPEND-3), or refuses (SPEND-4).
     const sessionDriveId = await conversationSessionDriveId(conversation);
     const spend = conversationSpend(sessionDriveId, conversationId);
-    // Entitlement exactly as a chat turn decides it: an admin-only provider is a
-    // role block, a paid-tier model is a tier block (a downgraded user's stored
-    // model must not keep running here) — for the tier of whoever funds the call (WAL-8).
-    const admission = resolveGenerationAdmission({
-      provider: effectiveProvider,
-      model: effectiveModel,
-      subscriptionTier: await resolveEntitlementTier(userId, consumerTier, spend),
-      isAdmin: user?.role === 'admin',
-      requiresProSubscription,
-    });
-    if (!admission.allowed) {
-      auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'ai_btw', resourceId: conversationId, details: { reason: admission.reason, provider: effectiveProvider, method: 'POST' }, riskScore: 0.5 });
-      return admission.reason === 'provider_admin_only' ? createAdminRestrictedResponse() : createSubscriptionRequiredResponse();
-    }
     // The reservation for this call. Also the ceiling on what an aborted run's
     // estimate may charge (see priceInterruptedStep).
     const holdCents = estimateChatHoldCentsForModel(effectiveModel, { inputTokens: estimateTokens(snapshot) + estimateTokens(trimmedQuestion) });
     // Prepaid credit gate BEFORE the provider is built: out_of_credits -> 402, the
     // in-flight cap -> 429. Metering-exempt providers bill on a flat external plan,
     // so they skip the gate (no hold) exactly as the chat pipeline does.
+    let entitlementTier: SubscriptionTier | undefined;
     if (!isMeteringExempt(effectiveProvider)) {
       const gate = await canConsumeAI(userId, consumerTier, {
         spend,
@@ -106,6 +93,24 @@ export async function POST(request: Request) {
       holdId = gate.holdId;
       walletId = gate.walletId;
       spendFallback = spendFallbackNotice(gate);
+      entitlementTier = gate.entitlementTier;
+    }
+
+    // Entitlement exactly as a chat turn decides it, AFTER the gate: an admin-only provider is a
+    // role block, a paid-tier model a tier block (a downgraded user's stored model must not keep
+    // running here) — for the tier of whoever funds the source the gate just HELD (WAL-8), never a
+    // separate pre-read that could judge a different source. A metering-exempt provider takes no
+    // hold, so its funder is read without one. A refusal frees the hold in the finally below.
+    const admission = resolveGenerationAdmission({
+      provider: effectiveProvider,
+      model: effectiveModel,
+      subscriptionTier: entitlementTier ?? await resolveEntitlementTier(userId, consumerTier, spend),
+      isAdmin: user?.role === 'admin',
+      requiresProSubscription,
+    });
+    if (!admission.allowed) {
+      auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'ai_btw', resourceId: conversationId, details: { reason: admission.reason, provider: effectiveProvider, method: 'POST' }, riskScore: 0.5 });
+      return admission.reason === 'provider_admin_only' ? createAdminRestrictedResponse() : createSubscriptionRequiredResponse();
     }
 
     const provider = await createAIProvider(userId, {}, { user: user ?? null, driveId: sessionDriveId });
