@@ -4,6 +4,9 @@ import {
   agentsAutonomousDecision,
   crossDriveAgentsDecision,
   environmentsDecision,
+  agentModelSaveDecision,
+  allowedModelCatalog,
+  drivesAllowingModel,
   integrationDecision,
   modelDecision,
   orgActorDecision,
@@ -61,6 +64,66 @@ describe('modelDecision', () => {
 
   it('POL-8 (partial) a call with no org policies (a personal drive, the global assistant) is never restricted', () => {
     expect(modelDecision(null, { modelId: 'm', provider: 'x' }).ok).toBe(true);
+  });
+});
+
+describe('agentModelSaveDecision (saving an agent page\'s provider/model)', () => {
+  it('POL-8 (partial) only what the save sets is judged: a set model off the list is refused, an unset one is not', () => {
+    const pol = p({ modelAllowlist: ['a/fast'] });
+    expect(agentModelSaveDecision(pol, { provider: 'openrouter', modelId: 'b/slow' })).toMatchObject({ ok: false, status: 403, code: 'org_policy', policy: 'modelAllowlist' });
+    expect(agentModelSaveDecision(pol, { provider: 'openrouter', modelId: 'a/fast' })).toEqual({ ok: true });
+    expect(agentModelSaveDecision(pol, { provider: 'openrouter', modelId: null })).toEqual({ ok: true });
+  });
+
+  it('POL-8 (partial) a set provider off the provider list is refused even with no model set', () => {
+    const pol = p({ providerAllowlist: ['openrouter'] });
+    expect(agentModelSaveDecision(pol, { provider: 'google', modelId: null })).toMatchObject({ ok: false, policy: 'providerAllowlist' });
+    expect(agentModelSaveDecision(pol, { provider: null, modelId: 'x' })).toEqual({ ok: true });
+  });
+
+  it('POL-8 (partial) no org policies never restrict a save', () => {
+    expect(agentModelSaveDecision(null, { provider: 'google', modelId: 'b/slow' })).toEqual({ ok: true });
+  });
+});
+
+describe('allowedModelCatalog (the model list offered in a drive)', () => {
+  const catalog = [
+    { provider: 'openrouter', dynamic: false, models: ['a/fast', 'b/slow'] },
+    { provider: 'google', dynamic: false, models: ['g/one'] },
+    { provider: 'ollama', dynamic: true, models: [] },
+  ];
+
+  it('POL-8 (partial) no org, or an org with neither allowlist set, is unrestricted (null)', () => {
+    expect(allowedModelCatalog(null, catalog)).toBeNull();
+    expect(allowedModelCatalog(p({}), catalog)).toBeNull();
+  });
+
+  it('POL-8 (partial) only allowed providers appear, each with only its allowed models; a dynamic provider carries the model allowlist', () => {
+    expect(allowedModelCatalog(p({ providerAllowlist: ['openrouter', 'ollama'], modelAllowlist: ['b/slow', 'llama3'] }), catalog)).toEqual({
+      openrouter: ['b/slow'],
+      ollama: ['b/slow', 'llama3'],
+    });
+  });
+
+  it('POL-8 (partial) a provider allowlist alone keeps every model of the allowed providers; dynamic providers stay open (null)', () => {
+    expect(allowedModelCatalog(p({ providerAllowlist: ['google', 'ollama'] }), catalog)).toEqual({ google: ['g/one'], ollama: null });
+  });
+
+  it('POL-8 (partial) an empty allowlist offers nothing', () => {
+    expect(allowedModelCatalog(p({ modelAllowlist: [] }), catalog)).toEqual({ openrouter: [], google: [], ollama: [] });
+    expect(allowedModelCatalog(p({ providerAllowlist: [] }), catalog)).toEqual({});
+  });
+});
+
+describe('drivesAllowingModel (whose content a background model may read)', () => {
+  it('POL-8 (partial) keeps personal drives and org drives whose org allows the model; drops drives whose org does not', () => {
+    const use = { modelId: 'a/fast', provider: 'openrouter' };
+    expect(drivesAllowingModel([
+      { driveId: 'personal', policies: null },
+      { driveId: 'open-org', policies: p({}) },
+      { driveId: 'strict-org', policies: p({ modelAllowlist: ['other'] }) },
+      { driveId: 'provider-org', policies: p({ providerAllowlist: ['google'] }) },
+    ], use)).toEqual(['personal', 'open-org']);
   });
 });
 

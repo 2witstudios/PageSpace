@@ -33,17 +33,71 @@ export function orgActorDecision(setting: ActorPolicy, role: OrgRole, action: Or
  * restriction; an empty list allows nothing (never everything). No org policies = unrestricted.
  */
 export function modelDecision(policies: OrgPolicies | null, use: { modelId: string; provider: string }): PolicyDecision {
+  return agentModelSaveDecision(policies, { provider: use.provider, modelId: use.modelId });
+}
+
+const PROVIDER_REFUSED = "This organization doesn't allow that AI provider. Choose a model from an allowed provider.";
+const MODEL_REFUSED = "This organization doesn't allow that AI model. Choose one of the models it allows.";
+
+/**
+ * POL-8 at save time: may an agent page in this org's drives store this provider/model? Only what the save SETS is
+ * judged: an unset model runs a default at call time, where the provider factory judges it (modelDecision).
+ */
+export function agentModelSaveDecision(
+  policies: OrgPolicies | null,
+  saved: { provider: string | null; modelId: string | null },
+): PolicyDecision {
   if (policies === null) return { ok: true };
-  if (policies.providerAllowlist !== null && !policies.providerAllowlist.includes(use.provider)) {
-    return refuse('providerAllowlist', "This organization doesn't allow that AI provider. Choose a model from an allowed provider.");
+  if (saved.provider !== null && policies.providerAllowlist !== null && !policies.providerAllowlist.includes(saved.provider)) {
+    return refuse('providerAllowlist', PROVIDER_REFUSED);
   }
-  if (policies.modelAllowlist !== null && !policies.modelAllowlist.includes(use.modelId)) {
-    return refuse('modelAllowlist', "This organization doesn't allow that AI model. Choose one of the models it allows.");
+  if (saved.modelId !== null && policies.modelAllowlist !== null && !policies.modelAllowlist.includes(saved.modelId)) {
+    return refuse('modelAllowlist', MODEL_REFUSED);
   }
   return { ok: true };
 }
 
-const switchDecision = (policies: OrgPolicies | null, key: Extract<OrgPolicyKey, 'agentsAutonomous' | 'crossDriveAgents' | 'cloudSandbox' | 'persistentEnvironments' | 'publishedApps'>, message: string): PolicyDecision =>
+/** One provider of the model catalog, as the picker's catalog builder lists it. */
+export interface ModelCatalogEntry {
+  provider: string;
+  /** Models are discovered at runtime (local providers), so the catalog lists none. */
+  dynamic: boolean;
+  models: readonly string[];
+}
+
+/**
+ * POL-8, the picker: the models a drive offers. `null` = unrestricted (no org, or neither allowlist set). Otherwise
+ * only allowed providers appear, each with its allowed models; a dynamic provider's value is the model allowlist
+ * (null when only providers are restricted), which its runtime-discovered list is filtered by.
+ */
+export function allowedModelCatalog(
+  policies: OrgPolicies | null,
+  catalog: readonly ModelCatalogEntry[],
+): Record<string, readonly string[] | null> | null {
+  if (policies === null || (policies.modelAllowlist === null && policies.providerAllowlist === null)) return null;
+  const { modelAllowlist, providerAllowlist } = policies;
+  const allowed: Record<string, readonly string[] | null> = {};
+  for (const entry of catalog) {
+    if (providerAllowlist !== null && !providerAllowlist.includes(entry.provider)) continue;
+    allowed[entry.provider] = entry.dynamic
+      ? modelAllowlist
+      : entry.models.filter((m) => modelDecision(policies, { provider: entry.provider, modelId: m }).ok);
+  }
+  return allowed;
+}
+
+/**
+ * POL-8 for a person's background model call that reads content across their drives (memory discovery, pulse): the
+ * drives whose content it may read. A drive whose org does not allow the model is left out; a drive with no org stays.
+ */
+export function drivesAllowingModel(
+  drives: ReadonlyArray<{ driveId: string; policies: OrgPolicies | null }>,
+  use: { modelId: string; provider: string },
+): string[] {
+  return drives.filter((d) => modelDecision(d.policies, use).ok).map((d) => d.driveId);
+}
+
+const switchDecision =(policies: OrgPolicies | null, key: Extract<OrgPolicyKey, 'agentsAutonomous' | 'crossDriveAgents' | 'cloudSandbox' | 'persistentEnvironments' | 'publishedApps'>, message: string): PolicyDecision =>
   policies === null || policies[key] ? { ok: true } : refuse(key, message);
 
 /** POL-9: may agents run without a person present (mentions, triggers, workflows) in this org's drives? */
