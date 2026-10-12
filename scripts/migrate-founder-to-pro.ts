@@ -35,7 +35,7 @@ export interface MigrationDeps {
   listCandidates(): Promise<MigrationUser[]>;
   readCustomerSubscriptions(customerId: string): Promise<ReadonlyArray<LiveSubscription & { id: string }>>;
   /** Atomically compare every observed user/mirror row and apply all updates. */
-  apply(updates: readonly MigrationUpdate[]): Promise<void>;
+  apply(updates: readonly MigrationUpdate[], observed: readonly MigrationUser[]): Promise<void>;
   proPriceId: string;
 }
 export function parseMode(argv: readonly string[]): { apply: boolean } {
@@ -95,7 +95,7 @@ export async function runFounderMigration(deps: MigrationDeps, options: { apply:
   const plans = candidates.map((user) => planFounderCutover(user, live, deps.proPriceId));
   const issues = [...readFailures, ...plans.flatMap((plan) => plan.issues)];
   const updates = plans.flatMap((plan) => plan.update ? [plan.update] : []);
-  if (options.apply && issues.length === 0 && updates.length > 0) await deps.apply(updates);
+  if (options.apply && issues.length === 0) await deps.apply(updates, candidates);
   return { ready: issues.length === 0, apply: options.apply, scanned: candidates.length, normalized: issues.length === 0 ? updates.length : 0, issues };
 }
 
@@ -123,12 +123,12 @@ export function createMigrationStore(db: MigrationDb) {
       const ids = [...new Set(rows.map((row) => row.id))];
       return ids.length ? readUsers(ids, db) : [];
     },
-    async apply(updates: readonly MigrationUpdate[]): Promise<void> {
+    async apply(updates: readonly MigrationUpdate[], observed: readonly MigrationUser[]): Promise<void> {
       await db.transaction(async (tx) => {
-        const current = await readUsers(updates.map(({ user }) => user.id), tx, true);
-        for (const update of updates) {
-          const actual = current.find((user) => user.id === update.user.id);
-          if (!actual || fingerprint(actual) !== fingerprint(update.user)) throw new Error(`Migration evidence changed for ${update.user.id}; rerun preflight`);
+        const current = observed.length ? await readUsers(observed.map((user) => user.id), tx, true) : [];
+        for (const expected of observed) {
+          const actual = current.find((user) => user.id === expected.id);
+          if (!actual || fingerprint(actual) !== fingerprint(expected)) throw new Error(`Migration evidence changed for ${expected.id}; rerun preflight`);
         }
         for (const { user, tier } of updates) await tx.update(users).set({ subscriptionTier: tier, updatedAt: new Date() })
           .where(and(eq(users.id, user.id), eq(users.subscriptionTier, 'founder')));

@@ -93,6 +93,19 @@ describe('D-OW-42 Founder cutover preflight', () => {
     h.deps.apply = async () => { throw new Error('evidence changed'); };
     await expect(runFounderMigration(h.deps, { apply: true })).rejects.toThrow('evidence changed');
   });
+  it.each([true, false])('validates unchanged Pro candidates during apply, with pending writes=%s', async (hasWrites) => {
+    const unchanged = person({ id: 'already-pro', tier: 'pro' });
+    const people = hasWrites ? [person(), unchanged] : [unchanged];
+    const h = harness(people);
+    let validated: readonly MigrationUser[] = [];
+    h.deps.apply = async (_updates, observed) => {
+      validated = observed;
+      if (observed.some((user) => user.id === unchanged.id)) throw new Error('evidence changed');
+    };
+    await expect(runFounderMigration(h.deps, { apply: true })).rejects.toThrow('evidence changed');
+    expect(validated).toEqual(people);
+    expect(h.writes).toEqual([]);
+  });
   it('continues verifying Pro users and catches live subscriptions missing from the mirror', async () => {
     const h = harness([person({ tier: 'pro', subscriptions: [] })]);
     expect((await runFounderMigration(h.deps, { apply: true })).ready).toBe(false);
