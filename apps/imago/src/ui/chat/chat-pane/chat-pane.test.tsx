@@ -55,7 +55,7 @@ describe('persistent chat orchestration', () => {
   it('uses dense context for settings without changing the selected agent', async () => {
     dispatch(transactions.selectAgent, { id: 'p-imago', title: 'Imago' });
     const { container } = show('/d1/settings'); await settle();
-    expect(container.querySelector('[aria-label="Chat"]')?.getAttribute('data-density')).toBe('dense');
+    expect(container.querySelector('aside[aria-label="Imago"]')?.getAttribute('data-density')).toBe('dense');
     expect(host.props?.agentId).toBe('p-imago');
   });
 });

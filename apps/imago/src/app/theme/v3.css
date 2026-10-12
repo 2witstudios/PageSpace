@@ -72,6 +72,11 @@
   --color-type-file: var(--type-file);
 }
 
+/* The stage sheet's lift off the spine. */
+@theme {
+  --shadow-sheet: -8px 0 32px rgb(0 0 0 / 0.18);
+}
+
 /* Spine geometry (C-Files-Doc): 48px primary tiles radius 12, 40px tool tiles
    radius 10, the 36px drive tile radius 11, the 34px avatar; the active marker
    is a 4px bar at the spine's edge, 24px tall beside a primary tile and 20px
@@ -108,4 +113,20 @@
   --spacing-empty-row: 36px;
   --spacing-ask-imago: 34px;
   --spacing-ask-pill: 30px;
+}
+
+/* Share in the page head (SPEC v3: outlined, 30px, radius 8, identical everywhere). The trigger
+   is classic's ShareDialog button, re-skinned here rather than forked. */
+@utility share-trigger {
+  & button {
+    height: 30px;
+    padding: 0 12px;
+    gap: 6px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 500;
+  }
 }

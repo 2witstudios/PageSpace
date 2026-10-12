@@ -16,10 +16,17 @@ import { BrandChip } from '../brand-chip/brand-chip';
 import { DRIVES, driveStatus, drivesFrom, type DriveSummary } from '../drives/drives';
 import { DRIVE_NOT_FOUND, renderNotFound } from '../not-found/not-found.render';
 import { renderPaneHeader } from '../pane/pane-header';
-import { ListOpener, ListPane } from '../list-pane/list-pane';
+import { ListPane } from '../list-pane/list-pane';
+import { AskPill, ClosePage, CloseImago, CollapseImago, ShowSidebar } from '../controls/controls';
+import { EmptyMiddle } from '../empty-middle/empty-middle';
+import { TabBar } from '../tabs/tab-bar';
+import { sectionPath } from '../tabs/tabs-model';
+import { columnsFor, type Columns } from '../stage/columns';
+import { AccountNavPane, DriveSettingsNavPane } from '../../settings/settings-nav/settings-nav-pane';
 import { Rail } from '../rail/rail';
 import { railDrive } from '../rail/rail-items';
 import {
+  isHideableSection,
   isListSection,
   paneLayout,
   stageFor,
@@ -50,6 +57,8 @@ const titles: Readonly<Record<Section, string>> = {
 };
 
 const selectCollapsed = (state: UiState) => state.resources.collapsedSections;
+const selectImagoCollapsed = (state: UiState) => state.resources.imagoCollapsed;
+const selectImagoClosed = (state: UiState) => state.resources.imagoClosed;
 
 /**
  * A drive the API does not list for the viewer (it lists every drive they
@@ -58,12 +67,19 @@ const selectCollapsed = (state: UiState) => state.resources.collapsedSections;
  */
 const notFoundLayout: PaneLayout = { list: 'closed', listHidden: false, object: true };
 
+const notFoundColumns: Columns = {
+  pane: false,
+  page: true,
+  imago: 'docked',
+  showSidebarIn: null,
+  askPill: false,
+  collapseImago: true,
+  closeImago: false,
+  closePage: false,
+};
+
 const homeHref = (homeDriveId: string | null): string | null =>
   homeDriveId === null ? null : `/${encodeURIComponent(homeDriveId)}`;
-
-/** × on the stage-2 list steps back to the drive chat, or the Home root. */
-const chatHref = (stage: Stage): string =>
-  stage.driveId === null ? '/' : `/${encodeURIComponent(stage.driveId)}`;
 
 /** A section's rows: channels and DMs in Messages, the drive's task lists in Tasks. */
 const rowsFor = (stage: Stage): ReactNode => {
@@ -88,13 +104,14 @@ const rowsFor = (stage: Stage): ReactNode => {
 };
 
 /**
- * The list slot holds the section's list; the chat's is its history of past
- * chats. Files draws its own pane, since its header carries New page beside
- * the close.
+ * The left pane: the chat's history, a section's list or tree, or the settings and account
+ * navs. Files draws its own pane, since its head carries New page beside Close sidebar.
  */
 const listFor = (stage: Stage, layout: PaneLayout): ReactNode => {
   if (layout.list === 'closed') return null;
   if (stage.section === 'chat') return <ChatHistory />;
+  if (stage.section === 'settings') return stage.driveId === null ? null : <DriveSettingsNavPane driveId={stage.driveId} />;
+  if (stage.section === 'account') return <AccountNavPane />;
   if (!isListSection(stage.section)) return null;
   if (stage.section === 'files' && stage.driveId !== null) {
     return (
@@ -103,30 +120,19 @@ const listFor = (stage: Stage, layout: PaneLayout): ReactNode => {
         selectedPageId={stage.object?.kind === 'page' ? stage.object.pageId : null}
         variant={layout.list}
         title={titles.files}
-        closeHref={chatHref(stage)}
       />
     );
   }
   return (
-    <ListPane
-      section={stage.section}
-      variant={layout.list}
-      title={titles[stage.section]}
-      closeHref={chatHref(stage)}
-    >
+    <ListPane section={stage.section} variant={layout.list} title={titles[stage.section]}>
       {rowsFor(stage)}
     </ListPane>
   );
 };
 
-/**
- * The hamburger, while this section's list is hidden. Only the tree beside an
- * open object hides (stage.ts), so it always belongs in the object's header.
- */
-const openerFor = (stage: Stage, layout: PaneLayout): ReactNode =>
-  layout.listHidden && isListSection(stage.section) ? (
-    <ListOpener section={stage.section} title={titles[stage.section]} />
-  ) : null;
+/** Show sidebar, in whichever head comes first while the pane is closed. */
+const opener = (stage: Stage, columns: Columns, at: Columns['showSidebarIn']): ReactNode =>
+  columns.showSidebarIn === at && isHideableSection(stage.section) ? <ShowSidebar section={stage.section} /> : null;
 
 /**
  * The one persistent frame, mounted once by the (shell) layout. Routes are
@@ -137,18 +143,27 @@ const openerFor = (stage: Stage, layout: PaneLayout): ReactNode =>
 export function Shell({ children, homeDriveId, initialDrives }: ShellProps) {
   const pathname = usePathname() ?? '/';
   const collapsedSections = useUiState(selectCollapsed);
+  const imagoCollapsed = useUiState(selectImagoCollapsed);
+  const imagoClosed = useUiState(selectImagoClosed);
   const { data, error } = useSWR<unknown>(DRIVES, { fallbackData: initialDrives });
   const drives = drivesFrom(data, homeDriveId);
   const stage = stageFor(pathname);
   const missing = driveStatus(drives, stage.driveId) === 'missing';
   const layout = missing ? notFoundLayout : paneLayout(stage, { collapsedSections });
-  const opener = missing ? null : openerFor(stage, layout);
+  const columns = missing
+    ? notFoundColumns
+    : columnsFor(stage, {
+        paneCollapsed: isHideableSection(stage.section) && collapsedSections.includes(stage.section),
+        imagoCollapsed,
+        imagoClosed,
+      });
   const drive = drives?.find((entry) => entry.id === stage.driveId);
   const title = missing ? 'Not found' : stage.object?.kind === 'settings' && stage.object.title ? stage.object.title : titles[stage.section];
   const hydrated = useHydrated();
   return renderShell({
     stage,
     layout,
+    columns,
     hydrated,
     rail: (
       <Rail
@@ -166,16 +181,35 @@ export function Shell({ children, homeDriveId, initialDrives }: ShellProps) {
         footer={<AvatarMenu active={stage.section === 'account'} />}
       />
     ),
+    tabBar: <TabBar stage={stage} driveKey={railDrive(stage, homeDriveId) ?? 'home'} />,
     list: missing ? null : listFor(stage, layout),
     object: (
       <section className={columnClass} aria-label={title}>
-        {renderPaneHeader({ title, leading: opener })}
+        {renderPaneHeader({
+          title,
+          leading: opener(stage, columns, 'page'),
+          actions: missing ? null : (
+            <span className="flex flex-none items-center gap-1">
+              {columns.askPill ? <AskPill /> : null}
+              <ClosePage href={sectionPath(stage)} />
+            </span>
+          ),
+        })}
         <div className="min-h-0 flex-1 overflow-y-auto">
           {missing ? renderNotFound({ ...DRIVE_NOT_FOUND, homeHref: homeHref(homeDriveId) }) : children}
         </div>
       </section>
     ),
-    chat: <ChatPane stage={stage} driveName={drive?.name} homeDriveId={homeDriveId} />,
+    chat: (
+      <ChatPane
+        stage={stage}
+        driveName={drive?.name}
+        homeDriveId={homeDriveId}
+        leading={opener(stage, columns, 'imago')}
+        trailing={columns.collapseImago ? <CollapseImago /> : columns.closeImago ? <CloseImago /> : null}
+      />
+    ),
+    empty: <EmptyMiddle driveId={railDrive(stage, homeDriveId)} leading={opener(stage, columns, 'empty')} />,
     palette: <CommandPalette stage={stage} homeDriveId={homeDriveId} drives={drives} />,
   });
 }

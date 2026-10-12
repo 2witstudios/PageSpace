@@ -20,9 +20,9 @@ test.describe('imago-c harness', () => {
     const canon = await seedCanon(user.id);
     await signIn(page, user, imagoPath(canon.driveId, 'files'));
     await hydrated(page);
-    const tree = page.getByRole('tree').first();
+    const pane = page.locator('[data-slot="list"]');
     for (const node of CANON_TREE) {
-      await expect(tree.getByText(node.title, { exact: true }).first()).toBeVisible();
+      await expect(pane.getByRole('link', { name: node.title, exact: true }).first()).toBeVisible();
     }
     await attachBoard(testInfo, page, 'C-Files-Index');
     expect(testInfo.attachments.map((a) => a.name)).toEqual(['C-Files-Index · board', 'C-Files-Index · app']);

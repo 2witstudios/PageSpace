@@ -28,6 +28,9 @@ import {
   MessagesSquare,
   Monitor,
   Moon,
+  PanelLeftClose,
+  PanelLeftOpen,
+  PanelRightClose,
   Plus,
   Puzzle,
   Search,
@@ -98,6 +101,10 @@ export const icons = {
   sheet: FileSpreadsheet,
   code: FileCode,
   file: File,
+  // The v3.2 column controls (IMC-1.6): Close/Show sidebar, Collapse Imago.
+  panelLeftClose: PanelLeftClose,
+  panelLeftOpen: PanelLeftOpen,
+  panelRightClose: PanelRightClose,
   // The Board's drag handle (IMG-9.4).
   grip: GripVertical,
 } as const satisfies Readonly<Record<string, LucideIcon>>;

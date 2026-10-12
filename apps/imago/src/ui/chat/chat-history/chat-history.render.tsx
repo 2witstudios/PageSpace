@@ -1,4 +1,4 @@
-import { Plus, X } from 'lucide-react';
+import { PanelLeftClose, Plus } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { renderButton } from '../../components/button/button.render';
 import { renderListGroup } from '../../components/list-group/list-group.render';
@@ -92,8 +92,7 @@ const renderRows = (props: ChatHistoryRenderProps): ReactNode => {
  * The chat's own list: the current agent's past chats, filed under the day
  * they were last active. A row switches the one chat beside every stage
  * rather than navigating, so it is a button and the open chat marks itself
- * current. Nowhere to step back to from the chat, so × hides the history
- * rather than closing a stage (myimago ADR 0029 decision 2).
+ * current. Like every left pane it collapses with Close sidebar (SPEC v3.2).
  */
 export function renderChatHistory(props: ChatHistoryRenderProps): ReactNode {
   return (
@@ -105,8 +104,8 @@ export function renderChatHistory(props: ChatHistoryRenderProps): ReactNode {
             <button type="button" aria-label="New chat" className={paneControlClass} onClick={props.startNewChat}>
               <Plus {...icon} />
             </button>
-            <button type="button" aria-label="Hide Chat history" className={paneControlClass} onClick={props.hide}>
-              <X {...icon} />
+            <button type="button" aria-label="Close sidebar" title="Close sidebar" className={paneControlClass} onClick={props.hide}>
+              <PanelLeftClose {...icon} />
             </button>
           </>
         ),

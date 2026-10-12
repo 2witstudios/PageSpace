@@ -94,12 +94,12 @@ describe('stageFor() settings and account', () => {
   test('drive settings', () => {
     assert({
       given: 'a drive’s settings path',
-      should: 'open the settings as the object, with no list',
+      should: 'open the settings as the object beside the 260px settings nav',
       actual: stageFor('/drive-1/settings'),
       expected: {
         driveId: 'drive-1',
         section: 'settings',
-        list: 'closed',
+        list: 'tree',
         object: { kind: 'settings' },
       },
     });
@@ -108,9 +108,9 @@ describe('stageFor() settings and account', () => {
   test('account', () => {
     assert({
       given: 'the user-level account path',
-      should: 'open the account as the object, with no drive and no list',
+      should: 'open the account as the object beside its nav, with no drive',
       actual: stageFor('/account'),
-      expected: { driveId: null, section: 'account', list: 'closed', object: { kind: 'account' } },
+      expected: { driveId: null, section: 'account', list: 'tree', object: { kind: 'account' } },
     });
   });
 });
@@ -236,7 +236,7 @@ describe('paneLayout()', () => {
         { list: 'list', listHidden: false, object: false },
         { list: 'list', listHidden: false, object: false },
         { list: 'tree', listHidden: false, object: true },
-        { list: 'closed', listHidden: false, object: true },
+        { list: 'tree', listHidden: false, object: true },
       ],
     });
   });
@@ -306,31 +306,47 @@ describe('paneLayout()', () => {
     });
   });
 
-  test('the stage 2 list never hides', () => {
+  test('the stage 2 list hides too', () => {
     assert({
       given: 'stage 2 with its section collapsed',
-      should: 'keep the wide list open, because it is the whole stage',
+      should: 'close the wide list like any other left pane (SPEC v3.2)',
       actual: [
         paneLayout(stageFor('/drive-1/files'), { collapsedSections: ['files'] }),
         paneLayout(stageFor('/dm'), { collapsedSections: ['messages'] }),
       ],
       expected: [
-        { list: 'list', listHidden: false, object: false },
-        { list: 'list', listHidden: false, object: false },
+        { list: 'closed', listHidden: true, object: false },
+        { list: 'closed', listHidden: true, object: false },
       ],
     });
   });
 
-  test('stages with no list', () => {
-    const every: readonly HideableSection[] = ['chat', 'files', 'messages', 'tasks'];
+  test('the settings and account navs hide', () => {
     assert({
-      given: 'settings and account with every section collapsed',
-      should: 'have no list to hide, so report none hidden',
+      given: 'settings and account each with its own section collapsed, then with only the other sections collapsed',
+      should: 'close only the nav whose own section is collapsed and keep the object',
       actual: [
-        paneLayout(stageFor('/drive-1/settings'), { collapsedSections: every }).listHidden,
-        paneLayout(stageFor('/account'), { collapsedSections: every }).listHidden,
+        paneLayout(stageFor('/drive-1/settings'), { collapsedSections: ['settings'] }),
+        paneLayout(stageFor('/account'), { collapsedSections: ['account'] }),
+        paneLayout(stageFor('/drive-1/settings'), { collapsedSections: ['chat', 'files', 'messages', 'tasks', 'account'] }).list,
+        paneLayout(stageFor('/account'), { collapsedSections: ['chat', 'files', 'messages', 'tasks', 'settings'] }).list,
       ],
-      expected: [false, false],
+      expected: [
+        { list: 'closed', listHidden: true, object: true },
+        { list: 'closed', listHidden: true, object: true },
+        'tree',
+        'tree',
+      ],
+    });
+  });
+
+  test('a drive tool has no pane', () => {
+    const every: readonly HideableSection[] = ['chat', 'files', 'messages', 'tasks', 'settings', 'account'];
+    assert({
+      given: 'a drive tool with every section collapsed',
+      should: 'have no pane to hide, so report none hidden',
+      actual: paneLayout(stageFor('/drive-1/members'), { collapsedSections: every }),
+      expected: { list: 'closed', listHidden: false, object: true },
     });
   });
 

@@ -28,6 +28,8 @@ export type ChatPaneRenderProps = {
   readonly selectAgent: (value: string) => void;
   /** Ahead of the title: the hidden chat history's opener. */
   readonly leading?: ReactNode;
+  /** The head's closing control: Collapse Imago or Close Imago. */
+  readonly trailing?: ReactNode;
   /** What the agent answers against: the drive, the section, or the open object. */
   readonly contextLabel: string;
   /** Oldest first; undefined while the conversation loads. */
@@ -89,8 +91,8 @@ export function renderChatPane(props: ChatPaneRenderProps): ReactNode {
   const { density, agentName, leading, messages, streamingMessageId, notice, citationDriveId, composer, scrollRef, onScroll } =
     props;
   return (
-    <section className={chatPaneClass(density)} aria-label="Chat" data-density={density}>
-      {renderPaneHeader({ title: renderTitle(props), leading })}
+    <aside className={chatPaneClass(density)} aria-label="Imago" data-density={density}>
+      {renderPaneHeader({ title: renderTitle(props), leading, actions: props.trailing ?? null })}
       {props.content !== undefined ? <>{notice === null ? null : <p role="alert" className={chatNoticeClass}>{notice}</p>}{props.content}</> : <>
       <div ref={scrollRef} onScroll={onScroll} className={chatScrollClass}>
         <ol className={chatThreadClass(density)} aria-busy={messages === undefined ? true : undefined}>
@@ -116,6 +118,6 @@ export function renderChatPane(props: ChatPaneRenderProps): ReactNode {
       </div>
       {composer}
       </>}
-    </section>
+    </aside>
   );
 }

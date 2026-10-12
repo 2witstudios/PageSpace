@@ -97,7 +97,7 @@ const listStage = (
 const userStage = (first: string, rest: readonly string[]): Stage => {
   const [id, ...extra] = rest;
   if (first === 'account') {
-    return { driveId: null, section: 'account', list: 'closed', object: { kind: 'account' } };
+    return { driveId: null, section: 'account', list: 'tree', object: { kind: 'account' } };
   }
   if (extra.length > 0) return root;
   if (id === undefined) return listStage(null, 'messages', null);
@@ -108,7 +108,7 @@ const driveStage = (driveId: string, rest: readonly string[]): Stage => {
   const [section, id, ...extra] = rest;
   if (section === undefined) return driveChat(driveId);
   if (section === 'settings') {
-    return { driveId, section: 'settings', list: 'closed', object: { kind: 'settings' } };
+    return { driveId, section: 'settings', list: 'tree', object: { kind: 'settings' } };
   }
   if (isDriveTool(section)) {
     return {
@@ -143,12 +143,11 @@ export const stageFor = (pathname: string): Stage => {
 };
 
 /**
- * A list hides rather than steps back where there is nowhere to step back to
- * (the chat history: the chat is home) or the object stays open (the narrow
- * tree beside an object). The stage-2 list is the whole stage, so closing it
- * leaves the section instead; settings and account have no list.
+ * Every left pane collapses in place with Close sidebar (SPEC v3.2): the chat's
+ * history, a stage-2 list, the tree beside an object and the settings and
+ * account navs alike. Only a stage with no pane has nothing to hide.
  */
-const collapsible = (stage: Stage): boolean => stage.section === 'chat' || stage.list === 'tree';
+const collapsible = (stage: Stage): boolean => stage.list !== 'closed';
 
 /**
  * The panes to show, from the stage and the one piece of view state the URL

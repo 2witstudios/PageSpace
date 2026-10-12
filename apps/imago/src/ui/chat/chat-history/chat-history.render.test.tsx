@@ -78,8 +78,8 @@ describe('renderChatHistory', () => {
     const html = markup();
     assert({
       given: 'the pane header',
-      should: 'carry a New chat button and a control that hides the history',
-      actual: [html.includes('aria-label="New chat"'), html.includes('aria-label="Hide Chat history"'), html.includes('>Chats<')],
+      should: 'carry a New chat button and Close sidebar, which hides the history like every left pane',
+      actual: [html.includes('aria-label="New chat"'), html.includes('aria-label="Close sidebar"'), html.includes('>Chats<')],
       expected: [true, true, true],
     });
   });

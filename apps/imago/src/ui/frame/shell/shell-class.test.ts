@@ -7,30 +7,38 @@ import { describe, test } from 'vitest';
 import { assert } from 'riteway/vitest';
 import { listPaneClass } from '../list-pane/list-pane-class';
 import { paneClass } from '../pane/pane-class';
-import { paneLayout, stageFor, type HideableSection } from '../stage/stage';
+import { columnsFor, type ColumnState } from '../stage/columns';
+import { stageFor } from '../stage/stage';
 import {
   chatSlotClass,
   columnClass,
+  columnsRowClass,
+  emptySlotClass,
   listSlotClass,
   objectSlotClass,
   railClass,
   shellClass,
+  stageSheetClass,
 } from './shell-class';
 
-const widths = (pathname: string, collapsedSections: readonly HideableSection[] = []): readonly string[] => {
-  const layout = paneLayout(stageFor(pathname), { collapsedSections });
-  return [listSlotClass(layout), objectSlotClass(layout), chatSlotClass(layout)];
+const open: ColumnState = { paneCollapsed: false, imagoCollapsed: false, imagoClosed: false };
+
+/** The list, page, Imago and empty-middle widths for a path and the viewer's column state. */
+const widths = (pathname: string, state: Partial<ColumnState> = {}): readonly string[] => {
+  const stage = stageFor(pathname);
+  const columns = columnsFor(stage, { ...open, ...state });
+  return [listSlotClass(columns, stage.list), objectSlotClass(columns), chatSlotClass(columns), emptySlotClass(columns)];
 };
 
 describe('shell slot widths', () => {
   test('a drive’s chat', () => {
     assert({
-      given: 'the drive chat stage, then with its history hidden',
-      should: 'open the history beside the chat and close the object; hidden, give the chat the frame',
-      actual: [widths('/drive-1'), widths('/drive-1', ['chat'])],
+      given: 'the drive chat stage, then with its history closed',
+      should: 'open the history beside Imago on the ground; closed, give Imago the frame',
+      actual: [widths('/drive-1'), widths('/drive-1', { paneCollapsed: true })],
       expected: [
-        ['w-list-pane', 'w-0', 'w-stage-chat-list'],
-        ['w-0', 'w-0', 'w-stage-chat'],
+        ['w-list-pane', 'w-0', 'grow', 'w-0'],
+        ['w-0', 'w-0', 'grow', 'w-0'],
       ],
     });
   });
@@ -38,12 +46,12 @@ describe('shell slot widths', () => {
   test('stage 2', () => {
     assert({
       given: 'a section’s list',
-      should: 'open the wide list and give the chat the rest',
+      should: 'open the wide list and give Imago the rest',
       actual: [widths('/drive-1/files'), widths('/drive-1/tasks'), widths('/dm')],
       expected: [
-        ['w-list-pane', 'w-0', 'w-stage-chat-list'],
-        ['w-list-pane', 'w-0', 'w-stage-chat-list'],
-        ['w-list-pane', 'w-0', 'w-stage-chat-list'],
+        ['w-list-pane', 'w-0', 'grow', 'w-0'],
+        ['w-list-pane', 'w-0', 'grow', 'w-0'],
+        ['w-list-pane', 'w-0', 'grow', 'w-0'],
       ],
     });
   });
@@ -51,32 +59,56 @@ describe('shell slot widths', () => {
   test('stage 3', () => {
     assert({
       given: 'an open page or conversation',
-      should: 'narrow the list to the tree, fill with the object and fix the chat',
+      should: 'narrow the list to the tree, fill with the page and dock Imago',
       actual: [widths('/drive-1/files/page-1'), widths('/dm/conversation-1')],
       expected: [
-        ['w-tree-pane', 'w-stage-object-tree', 'w-chat-pane'],
-        ['w-tree-pane', 'w-stage-object-tree', 'w-chat-pane'],
+        ['w-tree-pane', 'grow', 'w-chat-pane', 'w-0'],
+        ['w-tree-pane', 'grow', 'w-chat-pane', 'w-0'],
       ],
     });
   });
 
-  test('stage 3 with its list hidden', () => {
+  test('stage 3 with its pane closed', () => {
     assert({
-      given: 'an open page with its section collapsed',
-      should: 'close the tree and give the object its room',
-      actual: widths('/drive-1/files/page-1', ['files']),
-      expected: ['w-0', 'w-stage-object', 'w-chat-pane'],
+      given: 'an open page with its pane closed',
+      should: 'close the tree and let the page take its room',
+      actual: widths('/drive-1/files/page-1', { paneCollapsed: true }),
+      expected: ['w-0', 'grow', 'w-chat-pane', 'w-0'],
     });
   });
 
-  test('an object with no list', () => {
+  test('settings and the account', () => {
     assert({
       given: 'drive settings and the account',
-      should: 'open the object beside the fixed chat with no list',
+      should: 'open their 260px nav beside the page and docked Imago',
       actual: [widths('/drive-1/settings'), widths('/account')],
       expected: [
-        ['w-0', 'w-stage-object', 'w-chat-pane'],
-        ['w-0', 'w-stage-object', 'w-chat-pane'],
+        ['w-tree-pane', 'grow', 'w-chat-pane', 'w-0'],
+        ['w-tree-pane', 'grow', 'w-chat-pane', 'w-0'],
+      ],
+    });
+  });
+
+  test('Imago collapsed', () => {
+    assert({
+      given: 'Imago collapsed beside a page, then with no page open',
+      should: 'close Imago’s column beside the page, and ignore the collapse where Imago is the ground',
+      actual: [widths('/drive-1/files/page-1', { imagoCollapsed: true }), widths('/drive-1', { imagoCollapsed: true })],
+      expected: [
+        ['w-tree-pane', 'grow', 'w-0', 'w-0'],
+        ['w-list-pane', 'w-0', 'grow', 'w-0'],
+      ],
+    });
+  });
+
+  test('Imago closed on the ground', () => {
+    assert({
+      given: 'Imago closed with no page open, then a page opened',
+      should: 'give the middle to the empty area, then dock Imago beside the page again',
+      actual: [widths('/drive-1', { imagoClosed: true }), widths('/drive-1/files/page-1', { imagoClosed: true })],
+      expected: [
+        ['w-list-pane', 'w-0', 'w-0', 'grow'],
+        ['w-tree-pane', 'grow', 'w-chat-pane', 'w-0'],
       ],
     });
   });
@@ -86,9 +118,21 @@ describe('shell frame classes', () => {
   test('the frame', () => {
     assert({
       given: 'the shell',
-      should: 'fill the viewport as one row that never scrolls',
+      should: 'fill the viewport as one row on the spine’s blue that never scrolls',
       actual: shellClass,
-      expected: 'flex h-screen w-full overflow-hidden',
+      expected: 'flex h-screen w-full overflow-hidden bg-spine',
+    });
+  });
+
+  test('the stage sheet', () => {
+    assert({
+      given: 'the stage sheet and the columns row inside it',
+      should: 'round the sheet’s top-left, lift it off the spine, and stack the tab bar over a row that fills the rest',
+      actual: [stageSheetClass, columnsRowClass],
+      expected: [
+        'mt-2 flex min-w-0 flex-1 flex-col overflow-hidden rounded-tl-stage bg-background shadow-sheet',
+        'flex min-h-0 flex-1',
+      ],
     });
   });
 
@@ -170,6 +214,26 @@ describe('the rail above the panes', () => {
         panes.map((decls) => decls.has('z-index')),
       ],
       expected: [false, 'relative', '--z-index-rail', true, [false, false]],
+    });
+  });
+});
+
+describe('shell classes against the theme', () => {
+  test('every class resolves', async () => {
+    const classes = [shellClass, stageSheetClass, columnsRowClass, 'w-list-pane w-tree-pane w-chat-pane w-0']
+      .flatMap((list) => list.split(' '))
+      .filter((cls, index, all) => all.indexOf(cls) === index);
+    const css = await compile(classes);
+    const selectors = new Set<string>();
+    css.walkRules((rule) => {
+      selectors.add(rule.selector);
+    });
+
+    assert({
+      given: `the ${classes.length} classes the frame, the stage sheet and the slot widths emit`,
+      should: 'each generate a rule from the token-locked theme',
+      actual: classes.filter((cls) => !selectors.has(`.${cls.replace(/[:/.]/g, (char) => `\\${char}`)}`)),
+      expected: [],
     });
   });
 });
