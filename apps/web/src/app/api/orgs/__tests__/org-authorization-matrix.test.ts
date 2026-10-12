@@ -3,13 +3,16 @@
  * routes, CLI, and MCP."
  *
  * The full route × caller matrix. Every handler of every org route file on disk is called as a
- * non-member, a Member, an Admin and the Owner, over a session and over an unscoped MCP key (the
- * credential the CLI and MCP send, Spec X-1). Authorization is NOT faked: the real gate runs the real
- * requireOrgRole over a faked membership lookup. The org sign-in policy is faked to refuse everyone,
- * so a caller the role check admits stops at the very next step of the gate with
- * `org_reauthentication_required` — proof the handler reached the shared function, passed it, and
- * never touched a service before it. A route that skipped the gate, asked for the wrong minimum role,
- * or ran a service first fails here.
+ * non-member, a Member, an Admin and the Owner, over a session, an unscoped MCP key (the credential the
+ * CLI and MCP send, Spec X-1) and a key restricted to drives (refused everywhere but the directory).
+ * The drive-org and join-request handlers have their own real-Postgres matrix
+ * (api/drives/__tests__/drive-org-authorization-matrix.integration.test.ts).
+ *
+ * Authorization is NOT faked: the real gate runs the real requireOrgRole over a faked membership
+ * lookup. The org sign-in policy is faked to refuse everyone, so a caller the role check
+ * admits stops at the very next step of the gate with `org_reauthentication_required` — proof the
+ * handler reached the shared function, passed it, and never touched a service before it.
+ * A route that skipped the gate, asked for the wrong minimum role, or ran a service first fails here.
  *
  * Expected minimum roles are written out below, one row per handler; a handler on disk without a row
  * (a new route) fails the completeness check, so the matrix cannot silently fall behind.
@@ -20,20 +23,21 @@ import { join, relative, sep } from 'node:path';
 import { NextResponse } from 'next/server';
 import type { OrgRole } from '@pagespace/db/schema/organizations';
 
-type Credential = 'session' | 'mcp';
-const caller = vi.hoisted(() => ({ credential: 'session' as 'session' | 'mcp' }));
+type Credential = 'session' | 'mcp' | 'drive-key';
+const caller = vi.hoisted(() => ({ credential: 'session' as 'session' | 'mcp' | 'drive-key' }));
 
 vi.mock('@pagespace/lib/organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 vi.mock('@/lib/auth', () => ({
   // The real admission rule of authenticateRequestWithOptions: a credential type the route does not
   // list is a 401 before anything else runs.
   authenticateRequestWithOptions: vi.fn(async (_request: Request, options: { allow: readonly string[] }) => {
-    if (!options.allow.includes(caller.credential)) {
+    const tokenType = caller.credential === 'session' ? 'session' : 'mcp';
+    if (!options.allow.includes(tokenType)) {
       return { error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }) };
     }
     return caller.credential === 'session'
       ? { userId: 'user_caller', tokenVersion: 0, tokenType: 'session', sessionId: 's', role: 'user', adminRoleVersion: 0 }
-      : { userId: 'user_caller', tokenVersion: 0, tokenType: 'mcp', tokenId: 'tok', role: 'user', adminRoleVersion: 0, allowedDriveIds: [] };
+      : { userId: 'user_caller', tokenVersion: 0, tokenType: 'mcp', tokenId: 'tok', role: 'user', adminRoleVersion: 0, allowedDriveIds: caller.credential === 'drive-key' ? ['drive_scoped'] : [] };
   }),
   isAuthError: (result: object) => 'error' in result,
   getAllowedDriveIds: (auth: { allowedDriveIds?: string[] }) => auth.allowedDriveIds ?? [],
@@ -53,7 +57,7 @@ import { findMembershipRole } from '@pagespace/lib/organizations/repository';
 import { checkOrgAuthentication } from '@pagespace/lib/organizations/authentication-policy';
 
 /** How a handler admits credentials (org-route-auth's postures). */
-type Posture = 'token' | 'session-read' | 'money-write' | 'no-org';
+type Posture = 'token' | 'directory' | 'session-read' | 'money-write' | 'no-org';
 interface Row {
   minRole: OrgRole | null;
   posture: Posture;
@@ -84,7 +88,7 @@ const MATRIX: Record<string, Row> = {
   '/[orgId]/domains POST': { minRole: 'ADMIN', posture: 'token' },
   '/[orgId]/domains/[domainId] DELETE': { minRole: 'ADMIN', posture: 'token' },
   '/[orgId]/domains/[domainId]/verify POST': { minRole: 'ADMIN', posture: 'token' },
-  '/[orgId]/drives GET': { minRole: 'MEMBER', posture: 'token' },
+  '/[orgId]/drives GET': { minRole: 'MEMBER', posture: 'directory' },
   '/[orgId]/drives/trashed GET': { minRole: 'ADMIN', posture: 'token' },
   '/[orgId]/drives/usage GET': { minRole: 'ADMIN', posture: 'token' },
   '/[orgId]/guest-approvals GET': { minRole: 'ADMIN', posture: 'token' },
@@ -154,8 +158,10 @@ const RANK: Record<OrgRole, number> = { MEMBER: 1, ADMIN: 2, OWNER: 3 };
 
 /** What the gate answers, by posture, role and credential — `null` code means the role check admitted the caller. */
 function expected(row: Row, role: OrgRole | null, credential: Credential): { status: number; code: string | null } {
-  if (credential === 'mcp' && row.posture === 'session-read') return { status: 401, code: null };
-  if (credential === 'mcp' && row.posture === 'money-write') return { status: 403, code: 'mcp_token_cannot_move_money' };
+  if (credential !== 'session' && row.posture === 'session-read') return { status: 401, code: null };
+  if (credential !== 'session' && row.posture === 'money-write') return { status: 403, code: 'mcp_token_cannot_move_money' };
+  // A key restricted to drives acts on nothing org-wide; only the directory admits it (filtered to its drives).
+  if (credential === 'drive-key' && row.posture !== 'directory') return { status: 403, code: 'token_scope_refused' };
   if (row.minRole === null) return { status: -1, code: null };
   if (role === null) return { status: 404, code: 'org_not_found' };
   if (RANK[role] < RANK[row.minRole]) return { status: 403, code: 'insufficient_role' };
@@ -187,10 +193,10 @@ describe('ORG-5 every org route authorizes through the one shared org permission
   for (const entry of HANDLERS) {
     const row = MATRIX[entry.key];
     if (!row || row.minRole === null) continue;
-    for (const credential of ['session', 'mcp'] as const) {
+    for (const credential of ['session', 'mcp', 'drive-key'] as const) {
       for (const who of CALLERS) {
         const want = expected(row, who.role, credential);
-        it(`ORG-5 ${entry.key} as ${who.label} over ${credential === 'mcp' ? 'an MCP key' : 'a session'} answers ${want.status}${want.code ? ` ${want.code}` : ''}`, async () => {
+        it(`ORG-5 ${entry.key} as ${who.label} over ${credential === 'mcp' ? 'an MCP key' : credential === 'drive-key' ? 'a drive-restricted MCP key' : 'a session'} answers ${want.status}${want.code ? ` ${want.code}` : ''}`, async () => {
           caller.credential = credential;
           vi.mocked(findMembershipRole).mockResolvedValue(who.role);
           const response = await call(entry);
@@ -201,7 +207,7 @@ describe('ORG-5 every org route authorizes through the one shared org permission
             expect(findMembershipRole).toHaveBeenCalledWith(ORG_ID, 'user_caller');
             expect(checkOrgAuthentication).toHaveBeenCalledWith(ORG_ID, null);
           }
-          if (want.status === 401 || want.code === 'mcp_token_cannot_move_money') {
+          if (want.status === 401 || want.code === 'mcp_token_cannot_move_money' || want.code === 'token_scope_refused') {
             // Refused on the credential alone: no membership, and so no org fact, was read.
             expect(findMembershipRole).not.toHaveBeenCalled();
           }
