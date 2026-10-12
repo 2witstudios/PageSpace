@@ -26,7 +26,7 @@ afterAll(async () => {
 });
 
 describe('D-OW-42 Founder migration PostgreSQL writes', () => {
-  it('A-9 (partial) preserves every wallet field and applies an idempotent verified normalization', async () => {
+  it('A-9 preserves every wallet field and applies an idempotent verified normalization', async () => {
     const { user, wallet } = await seed();
     const store = createMigrationStore(db);
     const candidates = (await store.listCandidates()).filter((row) => row.id === user.id);
@@ -42,7 +42,7 @@ describe('D-OW-42 Founder migration PostgreSQL writes', () => {
     expect((await db.select().from(users).where(eq(users.id, user.id)))[0].subscriptionTier).toBe('pro');
     expect((await db.select().from(wallets).where(eq(wallets.id, wallet.id)))[0]).toEqual(wallet);
   });
-  it('A-9 (partial) a delivered webhook cannot remove a migrated subscriber from preflight', async () => {
+  it('A-9 a delivered webhook cannot remove a migrated subscriber from preflight', async () => {
     const { user } = await seed();
     await db.update(users).set({ subscriptionTier: 'free' }).where(eq(users.id, user.id));
     await db.update(subscriptions).set({ stripePriceId: 'price_unknown_replacement' }).where(eq(subscriptions.userId, user.id));
@@ -57,7 +57,7 @@ describe('D-OW-42 Founder migration PostgreSQL writes', () => {
     expect((await db.select().from(users).where(eq(users.id, user.id)))[0].subscriptionTier).toBe('free');
   });
 
-  it('A-9 (partial) a changed mirror aborts the entire apply transaction', async () => {
+  it('A-9 a changed mirror aborts the entire apply transaction', async () => {
     const first = await seed();
     const second = await seed();
     const store = createMigrationStore(db);

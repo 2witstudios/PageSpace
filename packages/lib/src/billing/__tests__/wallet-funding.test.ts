@@ -118,7 +118,7 @@ describe('wallet-funding: org pool refill', () => {
     expect(orgInvoicePaidCents({ lines: [half(BASE_CENTS), half(SEAT_CENTS * 3)], amountPaidCents: 4400 })).toBe(4000);
   });
 
-  describe('MON-3 line selection: only the Business base and extra-seat lines refill the pool', () => {
+  describe('Organization invoice line selection: only the Business base and extra-seat lines refill the pool', () => {
     const BASE_PRICE_ID = 'price_org_base';
     const SEAT_PRICE_ID = 'price_org_seat';
     const priced = (priceId: string, amount: number) => ({ amount, parent: { subscription_item_details: { subscription_item: 'si_org' } }, pricing: { price_details: { price: priceId } } });
