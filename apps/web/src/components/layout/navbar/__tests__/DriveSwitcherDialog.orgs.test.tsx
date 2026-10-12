@@ -15,6 +15,7 @@ vi.mock('@/hooks/useMyOrganizations', () => ({
 import DriveSwitcherDialog from '../DriveSwitcherDialog';
 import { useDriveStore } from '@/hooks/useDrive';
 import { useFavorites } from '@/hooks/useFavorites';
+import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 
 const drive = (o: Partial<Drive> & Pick<Drive, 'id' | 'name'>): Drive => ({
   slug: o.name.toLowerCase(), ownerId: 'u1', isTrashed: false, trashedAt: null,
@@ -65,5 +66,19 @@ describe('DriveSwitcherDialog with organizations', () => {
     // Every option but the way out (All drives) and an org's settings is a drive.
     const listed = screen.getAllByRole('option').map((o) => o.textContent ?? '').filter((t) => !/ settings$/.test(t));
     expect(listed.filter((t) => /Product|Customer Research|Home/.test(t)).length).toBe(listed.filter((t) => !/All drives/.test(t)).length);
+  });
+
+  it('DRV-5 (partial) DRV-9 (partial) the picker (the sidebar\'s drive switcher opens this same dialog) lists exactly what GET /api/drives answered: an Open drive of my org with no membership row appears under its org header', async () => {
+    useDriveStore.setState({ drives: [], currentDriveId: null, isLoading: false, lastFetched: 0 });
+    const answered = [drive({ id: 'd-open', name: 'Engineering', orgId: 'o-northwind', orgVisibility: 'OPEN' }), drive({ id: 'd-home', name: 'Home', orgId: null, isOwned: true })];
+    vi.mocked(fetchWithAuth).mockResolvedValueOnce(new Response(JSON.stringify(answered), { status: 200 }));
+
+    await useDriveStore.getState().fetchDrives(false, true);
+    expect(fetchWithAuth).toHaveBeenCalledWith('/api/drives');
+    render(<DriveSwitcherDialog open onOpenChange={vi.fn()} />);
+
+    const org = within(screen.getByTestId('picker-group-org').closest('[cmdk-group]') as HTMLElement);
+    expect(org.getByText('Engineering')).toBeTruthy();
+    expect(screen.queryByText('Product')).toBeNull();
   });
 });

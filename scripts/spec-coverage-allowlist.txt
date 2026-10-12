@@ -28,23 +28,6 @@
 # seat quantity changed on Stripe's side writes no event, and org events are appended after commit and a failed
 # append is logged, not retried (org-audit.ts).
 AUD-1
-DRV-3
-# DRV-5 (Open: every org member resolves as an implicit member with the drive's default role; sidebar,
-# picker and accessible-drives include it): B4's org-membership-sync tests prove the materialized rows
-# (default role, accepted, drive lead excluded, idempotent), titled "DRV-5 (partial)"; resolution through
-# the permission resolver and inclusion in sidebar, picker and accessible-drives are unproven until B7/Wave F.
-# ow-pol6-resolver: implicit Open membership now resolves the same in every TS resolver AND the SQL twin
-# accessible_page_ids_for_user (0334, pulse/activity/page payloads), in one real-PG matrix; the sidebar and picker
-# surfaces are not re-verified there, so it stays.
-DRV-5
-DRV-7
-# DRV-8 (a guest is a drive member not in the org; guests hold no seat, see only the drives they were
-# invited to, and are labeled as guests) re-added per reviews 5230157358 and 5230240628 on #2659:
-# the B1 tests prove only that drive_members.source distinguishes invited rows from org-materialized
-# rows, so they are titled "DRV-8 (partial)"; seat exclusion, visibility and labeling are unproven
-# until B4/B7, Wave C and Wave F.
-DRV-8
-DRV-9
 # MON-1 re-added per Review 2 (page x78t4kownl6t4ko29lv2xvhu, "removed, but not proven"): the
 # money-model tests prove the one module; ow-fix-money-defs adds the copy guard (no literal credit
 # figure in any app or email template, no Founder plan in marketing or email copy) and the
@@ -63,25 +46,6 @@ MON-5
 # never counted twice, "MON-7 (partial)"); the margin-as-charged-versus-cost clause has no test
 # naming MON-7 yet.
 MON-7
-# ORG-1 (name, slug, avatar, one human Owner; ownership is transferable), ORG-2 (Owner/Admin/Member;
-# many orgs per user; a user in no org sees no org UI) and ORG-3 (email invites with expiry, resend,
-# revoke, acceptance for new and existing accounts; a pending invite counts as a seat) re-added per
-# reviews 5230157358 and 5230240628 on #2659: the B1 schema tests prove only the storage shape
-# (fields, the one-OWNER-row cap, unique membership, one open case-insensitive invite), so they are
-# titled "(partial)". B3 (org services and routes) then proved Owner membership matching ownerId
-# through creation and transfer, roles and membership across many orgs, and the invite lifecycle
-# (expiry, rotation after expiry, resend, revoke, acceptance by a new or an existing account, live-
-# invite seat counting), still titled "(partial)" because each test proves one clause. Still
-# unproven: ORG-1 "human" Owner (agent accounts), ORG-2 the no-org-UI rule (Wave F), ORG-3 invite
-# acceptance wired into every sign-up flow (Wave F accept page) and a pending invite counting in
-# the Stripe seat quantity (Wave C, SEAT-3).
-ORG-1
-ORG-2
-ORG-3
-# ORG-4: ow-pol6-resolver made the SQL twin (0334) give org Owner/Admin power the same full access as the TS
-# resolvers, and audit it on a PRIVATE drive through the same deduped event (accessiblePageIds, loadPagePayload;
-# "ORG-4 (partial)" in org-admin-access-audit.integration). Other ORG-4 clauses were not re-verified there.
-ORG-4
 # ORG-5 (one shared org permission function used by web routes, CLI, and MCP): B3 routes all go
 # through requireOrgRole, titled "ORG-5 (partial)"; CLI and MCP use it in Wave G (X-1).
 ORG-5
