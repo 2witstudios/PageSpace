@@ -268,6 +268,7 @@ describe('GET /api/pages/[pageId]/history', () => {
       vi.mocked(getUserRetentionDays).mockResolvedValue(7);
 
       await GET(createRequest(), { params: mockParams });
+      expect(getUserRetentionDays).toHaveBeenCalledWith(mockUserId, { pageId: mockPageId });
 
       // Should have called with a startDate exactly 7 days ago
       const call = vi.mocked(getPageVersionHistory).mock.calls[0];

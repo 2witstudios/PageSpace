@@ -215,6 +215,7 @@ describe('GET /api/drives/[driveId]/history', () => {
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/history`);
       await GET(request, createContext(mockDriveId));
+      expect(getUserRetentionDays).toHaveBeenCalledWith(mockUserId, { driveId: mockDriveId });
 
       expect(getDriveVersionHistory).toHaveBeenCalledWith(
         mockDriveId,

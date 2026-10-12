@@ -13,6 +13,9 @@ import { resolvePersonalCapabilityTier } from '@pagespace/lib/billing/deployment
 import { eq, and, desc, count } from '@pagespace/db/operators';
 import { activityLogs } from '@pagespace/db/schema/monitoring';
 import { users } from '@pagespace/db/schema/auth';
+import { drives, pages } from '@pagespace/db/schema/core';
+import { orgEntitlementTier } from '@pagespace/lib/billing/spend-target';
+import { isOrgLapsedForDrive } from '@pagespace/lib/organizations/status';
 import { mapActivityRow, buildHistoryConditions } from './activity-mapping';
 import type { RollbackDeps } from './deps';
 import type { ActivityLogForRollback } from './types';
@@ -144,8 +147,19 @@ export function loadDriveVersionHistory(
   return loadVersionHistory(deps, 'drive', driveId, userId, options);
 }
 
-export async function loadUserRetentionDays(deps: RollbackDeps, userId: string): Promise<RepoResult<number>> {
+export type RetentionResource = { driveId: string } | { pageId: string };
+
+export async function loadUserRetentionDays(deps: RollbackDeps, userId: string, resource?: RetentionResource): Promise<RepoResult<number>> {
   try {
+    if (resource) {
+      const driveId = 'driveId' in resource ? resource.driveId : (await deps.db.query.pages.findFirst({
+        where: eq(pages.id, resource.pageId), columns: { driveId: true },
+      }))?.driveId;
+      if (!driveId) return { ok: true, value: FREE_RETENTION };
+      const drive = await deps.db.query.drives.findFirst({ where: eq(drives.id, driveId), columns: { orgId: true } });
+      if (!drive) return { ok: true, value: FREE_RETENTION };
+      if (drive.orgId) return { ok: true, value: DEFAULT_RETENTION[orgEntitlementTier(await isOrgLapsedForDrive(drive))] };
+    }
     const user = await deps.db
       .select({ subscriptionTier: users.subscriptionTier })
       .from(users)
@@ -191,7 +205,7 @@ export async function getDriveVersionHistory(
   return result.ok ? result.value : { activities: [], total: 0 };
 }
 
-export async function getUserRetentionDays(deps: RollbackDeps, userId: string): Promise<number> {
-  const result = await loadUserRetentionDays(deps, userId);
+export async function getUserRetentionDays(deps: RollbackDeps, userId: string, resource?: RetentionResource): Promise<number> {
+  const result = await loadUserRetentionDays(deps, userId, resource);
   return result.ok ? result.value : FREE_RETENTION;
 }

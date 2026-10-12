@@ -76,8 +76,8 @@ export async function GET(
 
   const params = parseResult.data;
 
-  // Get user's retention limit
-  const retentionDays = await getUserRetentionDays(userId);
+  // Resolve history retention for the requested resource.
+  const retentionDays = await getUserRetentionDays(userId, { driveId });
 
   // Apply retention limit to startDate if not unlimited (-1)
   let effectiveStartDate = params.startDate;

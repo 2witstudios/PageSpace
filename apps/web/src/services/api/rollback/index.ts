@@ -16,6 +16,7 @@ import {
   getPageVersionHistory as repoGetPageVersionHistory,
   getDriveVersionHistory as repoGetDriveVersionHistory,
   getUserRetentionDays as repoGetUserRetentionDays,
+  type RetentionResource,
   type VersionHistoryOptions,
   type VersionHistoryPage,
 } from './activity-repo'
@@ -84,6 +85,6 @@ export async function getDriveVersionHistory(
 }
 
 /** Get user's retention limit based on subscription tier */
-export async function getUserRetentionDays(userId: string): Promise<number> {
-  return repoGetUserRetentionDays(deps, userId)
+export async function getUserRetentionDays(userId: string, resource?: RetentionResource): Promise<number> {
+  return repoGetUserRetentionDays(deps, userId, resource)
 }
