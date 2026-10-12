@@ -141,7 +141,7 @@ function formatToolExecutionResults(steps: unknown[]): string {
  * Get configured AI model for agent using the centralized provider factory
  * Handles provider-specific setup and fallbacks
  */
-async function getConfiguredModel(userId: string, agentConfig: { aiProvider?: string | null; aiModel?: string | null }, driveId: string | null) {
+async function getConfiguredModel(userId: string, agentConfig: { aiProvider?: string | null; aiModel?: string | null }, drives: { driveId: string; agentDriveId: string }) {
   const { aiProvider, aiModel } = agentConfig;
 
   // Use default provider/model if agent doesn't have specific configuration
@@ -153,8 +153,9 @@ async function getConfiguredModel(userId: string, agentConfig: { aiProvider?: st
     selectedModel,
   };
 
-  // POL-8: the org of the drive the consultation runs in (its session's, where its spend is attributed, SPEND-7).
-  const providerResult = await createAIProvider(userId, providerRequest, { driveId });
+  // POL-8: the org of the drive the consultation runs in (its session's, where its spend is attributed, SPEND-7)
+  // AND the org of the drive the agent lives in — the intersection of both allowlists (D-OW-64).
+  const providerResult = await createAIProvider(userId, providerRequest, { driveId: drives.driveId, agentDriveId: drives.agentDriveId });
 
   if (isProviderError(providerResult)) {
     // An org-policy refusal keeps its status and policy so the route can answer 403 (POL-8), not a 500.
@@ -556,7 +557,7 @@ export async function POST(request: Request) {
       const providerResult = await getConfiguredModel(userId, {
         aiProvider: agent.aiProvider,
         aiModel: agent.aiModel
-      }, sessionDrive);
+      }, { driveId: sessionDrive, agentDriveId: agent.driveId });
       model = providerResult.model;
       resolvedProvider = providerResult.provider;
       resolvedModelName = providerResult.modelName;

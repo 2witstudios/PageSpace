@@ -285,7 +285,7 @@ describe('POST /api/v1/chat/completions', () => {
     const response = await POST(makeRequest(validBody));
     const body = await response.json();
 
-    expect(vi.mocked(createAIProvider).mock.calls.at(-1)?.[2]).toEqual({ driveId: 'drive-abc' });
+    expect(vi.mocked(createAIProvider).mock.calls.at(-1)?.[2]).toEqual({ driveId: 'drive-abc', agentDriveId: 'drive-abc' });
     expect({ status: response.status, code: body.code, policy: body.policy }).toEqual({ status: 403, code: 'org_policy', policy: 'modelAllowlist' });
   });
 
@@ -335,10 +335,30 @@ describe('POST /api/v1/chat/completions', () => {
   test('SPEND-7 (partial) an API client thread is a session in its own drive: it spends there with its stored source, and drive_context cannot move it', async () => {
     const { conversationRepository } = await import('@/lib/repositories/conversation-repository');
     vi.mocked(conversationRepository.getConversation).mockResolvedValueOnce({
-      id: 'conv-abc', userId: 'user-1', isActive: true, type: 'client', contextId: 'drive-c', title: null, createdAt: new Date(), updatedAt: new Date(),
+      id: 'conv-abc', userId: 'user-1', isActive: true, type: 'client', contextId: 'drive-a', title: null, createdAt: new Date(), updatedAt: new Date(),
     } as never);
-    await POST(makeRequest({ ...validBody, conversation_id: 'conv-abc', drive_context: 'drive-a' }));
-    expect(vi.mocked(canConsumeAI).mock.calls[0]?.[2]?.spend).toEqual({ kind: 'drive', driveId: 'drive-c', chosen: null, conversationId: 'conv-abc' });
+    const { isPrincipalDriveMember } = await import('@/lib/auth');
+    vi.mocked(isPrincipalDriveMember).mockImplementation(async (_auth, driveId: string) => driveId === 'drive-a' || driveId === 'drive-b');
+    await POST(makeRequest({ ...validBody, conversation_id: 'conv-abc', drive_context: 'drive-b' }));
+    expect(vi.mocked(canConsumeAI).mock.calls[0]?.[2]?.spend).toEqual({ kind: 'drive', driveId: 'drive-a', chosen: null, conversationId: 'conv-abc' });
+    vi.mocked(isPrincipalDriveMember).mockImplementation(async (_auth, driveId: string) => driveId === 'drive-a');
+  });
+
+  test('SPEND-7 (partial) a client thread opened in a drive the caller cannot use is refused 403 at use — its drive is never taken on trust (D-OW-64)', async () => {
+    const { conversationRepository } = await import('@/lib/repositories/conversation-repository');
+    vi.mocked(conversationRepository.getConversation).mockResolvedValueOnce({
+      id: 'conv-abc', userId: 'user-1', isActive: true, type: 'client', contextId: 'drive-not-mine', title: null, createdAt: new Date(), updatedAt: new Date(),
+    } as never);
+    vi.mocked(canConsumeAI).mockClear();
+    const response = await POST(makeRequest({ ...validBody, conversation_id: 'conv-abc' }));
+    expect(response.status).toBe(403);
+    expect(canConsumeAI).not.toHaveBeenCalled();
+  });
+
+  test('POL-8 (partial) a completion run from a session in another drive is judged by the agent drive\'s org policy too (D-OW-64)', async () => {
+    const { createAIProvider } = await import('@/lib/ai/core/provider-factory');
+    await POST(makeRequest({ ...validBody, drive_context: 'drive-a' }));
+    expect(vi.mocked(createAIProvider).mock.calls.at(-1)?.[2]).toEqual({ driveId: 'drive-a', agentDriveId: 'drive-abc' });
   });
 
   test('SPEND-7 (partial) a drive_context the caller cannot use is refused 403 before anything is reserved', async () => {

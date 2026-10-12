@@ -48,6 +48,12 @@ export interface ProviderFactoryOptions {
    * drive, background services for one person), which no org policy restricts.
    */
   driveId?: string | null;
+  /**
+   * The drive the AGENT page lives in, when an agent runs in a session of another drive (consult,
+   * /v1, SPEND-7). Its org's allowlists bind too: the policy is the INTERSECTION of both drives'
+   * orgs (D-OW-64), so naming a session in another drive never escapes the agent's own org policy.
+   */
+  agentDriveId?: string | null;
 }
 
 export interface ProviderResult {
@@ -99,8 +105,10 @@ export async function createAIProvider(
   // POL-8: the org's model and provider allowlists, read now (no cache). BOTH the pair that will run and the pair
   // that was asked for must be allowed: an allowlist that let the resolver swap a refused selection for the
   // default would run a model the org never allowed, and call it a success.
-  if (options?.driveId) {
-    const policies = (await getDrivePolicies(options.driveId))?.policies ?? null;
+  // An agent run in another drive's session is judged by BOTH drives' orgs (D-OW-64): every allowlist binds.
+  const policyDriveIds = [...new Set([options?.driveId, options?.agentDriveId].filter((id): id is string => typeof id === 'string' && id.length > 0))];
+  for (const policyDriveId of policyDriveIds) {
+    const policies = (await getDrivePolicies(policyDriveId))?.policies ?? null;
     const asked = selectedModel || selectedProvider ? { modelId: selectedModel ?? currentModel, provider: selectedProvider ?? currentProvider } : null;
     for (const use of [{ modelId: currentModel, provider: currentProvider }, ...(asked ? [asked] : [])]) {
       const decision = modelDecision(policies, use);

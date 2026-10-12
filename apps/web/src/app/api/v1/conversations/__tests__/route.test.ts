@@ -7,6 +7,8 @@ vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn((r: unknown) => r != null && typeof r === 'object' && 'error' in r),
   getAllowedDriveIds: vi.fn(() => []),
+  // The caller is a member of drive-xyz only.
+  isPrincipalDriveMember: vi.fn(async (_auth: unknown, driveId: string) => driveId === 'drive-xyz'),
 }));
 
 vi.mock('@pagespace/db/db', () => ({
@@ -214,6 +216,13 @@ describe('POST /api/v1/conversations', () => {
       actual: { status: response.status, drive_id: body.drive_id },
       expected: { status: 201, drive_id: 'drive-xyz' },
     });
+  });
+
+  test('SPEND-7 (partial) refuses 403 a thread in a drive the caller is not a member of, creating nothing (D-OW-64)', async () => {
+    vi.mocked(conversationRepository.createApiConversation).mockClear();
+    const response = await POST(makePostRequest({ drive_id: 'drive-not-mine' }));
+    expect(response.status).toBe(403);
+    expect(conversationRepository.createApiConversation).not.toHaveBeenCalled();
   });
 
   test('creates the conversation through the repository, not with a bare insert', async () => {

@@ -214,6 +214,12 @@ export async function POST(request: Request): Promise<Response> {
     auditRequest(request, { eventType: 'authz.access.denied', userId: authResult.userId, resourceType: 'drive', resourceId: driveContext, details: { reason: 'session_drive_denied', method: 'POST' }, riskScore: 0.5 });
     return NextResponse.json({ error: 'drive_context names a drive you cannot use' }, { status: 403 });
   }
+  // A client thread's drive is a claim made when the thread was minted; it is re-checked on every
+  // use exactly as drive_context is (D-OW-64), so membership lost since then names nothing.
+  if (clientThreadDriveId !== null && !(await isPrincipalDriveMember(authResult, clientThreadDriveId))) {
+    auditRequest(request, { eventType: 'authz.access.denied', userId: authResult.userId, resourceType: 'drive', resourceId: clientThreadDriveId, details: { reason: 'thread_drive_denied', method: 'POST' }, riskScore: 0.5 });
+    return NextResponse.json({ error: 'conversation_id belongs to a drive you cannot use' }, { status: 403 });
+  }
   let spend = agentCallSpend({
     agentDriveId: page.driveId,
     conversationId: incomingConversationId ?? null,
@@ -227,7 +233,7 @@ export async function POST(request: Request): Promise<Response> {
   const providerResult = await createAIProvider(authResult.userId, {
     selectedProvider: page.aiProvider ?? undefined,
     selectedModel: page.aiModel ?? undefined,
-  }, { driveId: sessionDriveId });
+  }, { driveId: sessionDriveId, agentDriveId: page.driveId });
   if (isProviderError(providerResult)) {
     return NextResponse.json({ error: providerResult.error, ...(providerResult.code ? { code: providerResult.code, policy: providerResult.policy } : {}) }, { status: providerResult.status });
   }

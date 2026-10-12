@@ -219,7 +219,8 @@ describe('POST /api/ai/page-agents/consult — prepaid credit gate', () => {
     }));
     expect(res.status).toBe(200);
     expect(vi.mocked(canConsumeAI).mock.calls[0]?.[2]?.spend).toEqual({ kind: 'drive', driveId: 'drive-a', chosen: null });
-    expect(vi.mocked(createAIProvider).mock.calls.at(-1)?.[2]).toEqual({ driveId: 'drive-a' });
+    // The session drive's org AND the agent drive's org both judge the model (D-OW-64).
+    expect(vi.mocked(createAIProvider).mock.calls.at(-1)?.[2]).toEqual({ driveId: 'drive-a', agentDriveId: 'drive-1' });
     const { AIMonitoring } = await import('@pagespace/lib/monitoring/ai-monitoring');
     expect(AIMonitoring.trackUsage).toHaveBeenCalledWith(expect.objectContaining({ driveId: 'drive-a', walletId: 'w-a', holdId: 'h-1' }));
   });
@@ -240,7 +241,7 @@ describe('POST /api/ai/page-agents/consult — prepaid credit gate', () => {
   it('POL-8 (partial) the agent\'s drive is named to the provider factory, and an org-policy refusal is a 403 naming the policy, not a 500', async () => {
     vi.mocked(canConsumeAI).mockResolvedValue({ allowed: true, reason: 'ok' });
     await POST(makeRequest());
-    expect(vi.mocked(createAIProvider).mock.calls.at(-1)?.[2]).toEqual({ driveId: 'drive-1' });
+    expect(vi.mocked(createAIProvider).mock.calls.at(-1)?.[2]).toEqual({ driveId: 'drive-1', agentDriveId: 'drive-1' });
 
     vi.mocked(createAIProvider).mockResolvedValueOnce({ error: "This organization doesn't allow that AI model.", status: 403, code: 'org_policy', policy: 'modelAllowlist' } as never);
     const { isProviderError } = await import('@/lib/ai/core/provider-factory');

@@ -7,6 +7,7 @@ import {
   authenticateRequestWithOptions,
   isAuthError,
   getAllowedDriveIds,
+  isPrincipalDriveMember,
 } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
@@ -33,6 +34,12 @@ export async function POST(request: Request): Promise<Response> {
   const result = buildCreateConversationPayload(rawBody, authResult.userId, allowedDriveIds, id);
   if (!result.ok) {
     return NextResponse.json({ error: result.error }, { status: result.status });
+  }
+  // A thread's drive is the session its calls spend in and are attributed to (SPEND-7), so the
+  // caller must be a member of it — never just any id an unscoped token names (D-OW-64).
+  if (result.data.contextId !== null && !(await isPrincipalDriveMember(authResult, result.data.contextId))) {
+    auditRequest(request, { eventType: 'authz.access.denied', userId: authResult.userId, resourceType: 'drive', resourceId: result.data.contextId, details: { reason: 'thread_drive_denied', action: 'create_conversation' }, riskScore: 0.5 });
+    return NextResponse.json({ error: 'drive_id names a drive you cannot use' }, { status: 403 });
   }
 
   // Through the repository, so this creator emits its lifecycle event like the

@@ -132,6 +132,19 @@ describe('provider-factory', () => {
         expect(getDrivePolicies).toHaveBeenCalledWith('drive-1');
       });
 
+      it('POL-8 (partial) an agent run in a session of another drive is judged by BOTH drives\' orgs: the agent\'s org refusing is enough, whatever the session drive allows (D-OW-64)', async () => {
+        process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
+        getDrivePolicies.mockImplementation(async (driveId: string) => (driveId === 'agent-drive' ? orgPolicies({ modelAllowlist: ['some/other-model'] }) : null));
+
+        const result = await createAIProvider('user-123', {}, { driveId: 'session-drive', agentDriveId: 'agent-drive' });
+
+        expect(isProviderError(result)).toBe(true);
+        if (isProviderError(result)) expect(result).toMatchObject({ status: 403, code: 'org_policy', policy: 'modelAllowlist' });
+        expect(getDrivePolicies).toHaveBeenCalledWith('session-drive');
+        expect(getDrivePolicies).toHaveBeenCalledWith('agent-drive');
+        expect(createOpenRouter).not.toHaveBeenCalled();
+      });
+
       it('POL-8 (partial) a provider the org does not allow is refused, independently of the model list', async () => {
         process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
         getDrivePolicies.mockResolvedValue(orgPolicies({ providerAllowlist: ['google'] }));
