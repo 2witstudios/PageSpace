@@ -18,7 +18,7 @@ export default async function InvitePage({ params }: InvitePageProps) {
   if (orgInvite) {
     return (
       <AuthShell>
-        <OrgInviteCard token={token} {...orgInvite} />
+        <OrgInviteCard token={token} model={orgInvite} />
       </AuthShell>
     );
   }

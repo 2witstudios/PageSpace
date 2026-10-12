@@ -13,12 +13,16 @@ vi.mock('@/lib/auth/auth-fetch', async (importOriginal) => ({
 }));
 
 import { OrgInviteCard, type OrgInviteCardProps } from '../OrgInviteCard';
-import { screenAfterAccept } from '@/lib/orgs/org-invite-view';
+import { orgInviteCardModel, screenAfterAccept } from '@/lib/orgs/org-invite-view';
+import type { OrgInviteView } from '@pagespace/lib/organizations/invite-view-core';
 
 const TOKEN = 'ps_orginv_abc';
-const props = (view: OrgInviteCardProps['view'], extra: Partial<OrgInviteCardProps> = {}): OrgInviteCardProps => ({
-  token: TOKEN, view, orgId: 'org_nw', orgName: 'Northwind Labs', inviterName: 'Jono', role: 'MEMBER',
-  invitedEmail: 'tomas@northwind.test', viewerEmail: null, ...extra,
+const props = (view: OrgInviteView, extra: { viewerEmail?: string | null } = {}): OrgInviteCardProps => ({
+  token: TOKEN,
+  model: orgInviteCardModel(view, {
+    orgId: 'org_nw', orgName: 'Northwind Labs', inviterName: 'Jono', role: 'MEMBER',
+    invitedEmail: 'tomas@northwind.test', viewerEmail: extra.viewerEmail ?? null,
+  }),
 });
 const refusal = (code: string, status: number) => new ApiRequestError('refused', status, { code });
 
@@ -39,7 +43,7 @@ describe('ORG-3 (partial) the org invitation page', () => {
 
   it('the invited account accepts with one click and lands on the org hub', async () => {
     mocks.post.mockResolvedValue({ orgId: 'org_nw', role: 'MEMBER', joined: true });
-    render(<OrgInviteCard {...props('accept', { viewerEmail: 'tomas@northwind.test' })} />);
+    render(<OrgInviteCard {...props('accept')} />);
     await userEvent.click(screen.getByRole('button', { name: 'Join Northwind Labs' }));
     expect(mocks.post).toHaveBeenCalledWith('/api/orgs/invitations/accept', { token: TOKEN });
     await waitFor(() => expect(mocks.push).toHaveBeenCalledWith('/orgs/org_nw/settings'));

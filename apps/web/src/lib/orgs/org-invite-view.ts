@@ -14,6 +14,40 @@ export const orgInvitePagePath = (token: string): string => `/invite/${encodeURI
 
 export type OrgInviteScreen = OrgInviteView | 'org_lapsed' | 'failed';
 
+type InvitedRole = 'OWNER' | 'ADMIN' | 'MEMBER';
+
+/**
+ * What the page hands the card for each screen: only what that screen shows (review of #2869).
+ * A link that cannot be used carries nothing but its state — no address, org, inviter or role —
+ * since its props are in the page's HTML for anyone holding the link.
+ */
+export type OrgInviteCardModel =
+  | { view: 'invalid' }
+  | { view: 'expired' }
+  | { view: 'already_member'; orgId: string; orgName: string }
+  | { view: 'wrong_account'; invitedEmail: string; viewerEmail: string | null }
+  | { view: 'sign_in' | 'sign_up' | 'accept'; orgName: string; inviterName: string; role: InvitedRole; invitedEmail: string };
+
+export const orgInviteCardModel = (
+  view: OrgInviteView,
+  facts: { orgId: string; orgName: string; inviterName: string; role: InvitedRole; invitedEmail: string; viewerEmail: string | null },
+): OrgInviteCardModel => {
+  switch (view) {
+    case 'invalid':
+    case 'expired':
+      return { view };
+    case 'already_member':
+      // The viewer is a member: the org is theirs to see, and its hub is where they go.
+      return { view, orgId: facts.orgId, orgName: facts.orgName };
+    case 'wrong_account':
+      return { view, invitedEmail: facts.invitedEmail, viewerEmail: facts.viewerEmail };
+    case 'sign_in':
+    case 'sign_up':
+    case 'accept':
+      return { view, orgName: facts.orgName, inviterName: facts.inviterName, role: facts.role, invitedEmail: facts.invitedEmail };
+  }
+};
+
 export type AcceptOutcome = { ok: true; orgId: string; joined: boolean } | { ok: false; code: string | null };
 
 export const screenAfterAccept = (outcome: AcceptOutcome): OrgInviteScreen | 'joined' => {
