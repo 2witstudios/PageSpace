@@ -59,7 +59,9 @@ export type OrgStripeOperation =
   | 'subscription.cancel'
   | 'subscription.recover'
   | 'seat-item.create'
-  | 'seat-quantity.update';
+  | 'seat-quantity.update'
+  | 'gift.coupon.create'
+  | 'gift.subscription.update';
 
 function stableJson(value: unknown): string {
   if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null';

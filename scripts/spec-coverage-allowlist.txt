@@ -108,7 +108,6 @@ POL-2
 # list offered to the pickers is the public catalog and is not org-filtered (UI lane), and the hidden agent-model
 # writes (page-agents config) are not checked at save time, only at run time.
 POL-8
-SEAT-8
 # SEAT-9 (partial, ow-lapse-automation): [D-OW-33] amends the policies clause — a lapsed org may make
 # RESTRICTING changes only (lapsed-restrict.integration, policy-restricts, wallet-restricts). Stays listed: the
 # Spec text still says "policies changes" are blocked (amendment proposed in the PR body), and the banner/notice

@@ -35,6 +35,11 @@ export function giftSubscription(userId: string, tier: Exclude<SubscriptionTier,
   return mutate<ActionResult>(`/api/admin/users/${userId}/gift-subscription`, 'POST', { tier, reason });
 }
 
+/** SEAT-8: gift an organization on its own subscription (the server reads it from the org id). */
+export function giftOrganization(orgId: string, reason: string) {
+  return mutate<ActionResult>(`/api/admin/orgs/${encodeURIComponent(orgId)}/gift-subscription`, 'POST', { reason });
+}
+
 export function revokeSubscription(userId: string, reason: string, cancelAtPeriodEnd: boolean) {
   return mutate<ActionResult>(`/api/admin/users/${userId}/gift-subscription`, 'DELETE', { reason, cancelAtPeriodEnd });
 }

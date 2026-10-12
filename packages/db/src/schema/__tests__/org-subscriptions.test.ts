@@ -42,7 +42,7 @@ describe('org_subscriptions', () => {
     expect(columns.seatRevision.default).toBe(0);
   });
 
-  it('SEAT-8 (partial) records the trial end and the current period, both nullable until Stripe reports them', () => {
+  it('the trial end and the current period columns are nullable until Stripe reports them', () => {
     for (const c of ['trialEnd', 'currentPeriodStart', 'currentPeriodEnd'] as const) {
       expect(columns[c].notNull, c).toBe(false);
     }

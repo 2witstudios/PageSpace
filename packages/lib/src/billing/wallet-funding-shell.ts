@@ -236,8 +236,9 @@ export async function applyOrgPoolRefill(invoice: OrgInvoice, opts: OrgPoolRefil
   if (grant.allowanceCents <= 0) {
     await announceFunding(await db.transaction(recordFunding));
     if (grant.reason === 'gift_not_org_subscription') {
-      // An operator gifted a subscription the org never mirrors: no credit lands in a pool the org
-      // cannot spend. Fix it by applying the gift coupon to the org's own subscription (runbook).
+      // A gift on a subscription the org never mirrors: no credit lands in a pool the org cannot
+      // spend. Gift an org only through the admin route (POST /api/admin/orgs/[orgId]/gift-subscription,
+      // lib billing/org-gift), which writes the gift ON the org's own stored subscription.
       loggers.api.error('org pool refill REFUSED: gift invoice is not on the org\'s own subscription', undefined, {
         orgId: org.id,
         stripeRef,

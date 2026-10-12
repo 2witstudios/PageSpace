@@ -839,6 +839,16 @@
       "import": "./dist/billing/org-subscription-core.js",
       "require": "./dist/billing/org-subscription-core.js"
     },
+    "./billing/org-gift-core": {
+      "types": "./dist/billing/org-gift-core.d.ts",
+      "import": "./dist/billing/org-gift-core.js",
+      "require": "./dist/billing/org-gift-core.js"
+    },
+    "./billing/org-gift": {
+      "types": "./dist/billing/org-gift.d.ts",
+      "import": "./dist/billing/org-gift.js",
+      "require": "./dist/billing/org-gift.js"
+    },
     "./billing/org-plan-quote": {
       "types": "./dist/billing/org-plan-quote.d.ts",
       "import": "./dist/billing/org-plan-quote.js",
@@ -3165,6 +3175,12 @@
       ],
       "billing/org-subscription-core": [
         "./dist/billing/org-subscription-core.d.ts"
+      ],
+      "billing/org-gift-core": [
+        "./dist/billing/org-gift-core.d.ts"
+      ],
+      "billing/org-gift": [
+        "./dist/billing/org-gift.d.ts"
       ],
       "billing/org-plan-quote": [
         "./dist/billing/org-plan-quote.d.ts"
