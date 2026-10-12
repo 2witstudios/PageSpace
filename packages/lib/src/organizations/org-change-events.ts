@@ -6,6 +6,19 @@
 import { emitOrgChanged, type OrgChange } from '../realtime/org-wallet-events';
 import { listOrgMembers } from './repository';
 
+/** Who an org change reaches: the org's accepted members, as of now. */
+export async function orgChangeAudience(orgId: string): Promise<string[]> {
+  return (await listOrgMembers(orgId)).map((m) => m.userId);
+}
+
 export async function announceOrgChange(orgId: string, change: OrgChange): Promise<void> {
-  await emitOrgChanged({ orgId, change }, async (id) => (await listOrgMembers(id)).map((m) => m.userId));
+  await emitOrgChanged({ orgId, change }, orgChangeAudience);
+}
+
+/**
+ * Announce to an audience read BEFORE the change: a deleted org has no members left to read, so
+ * its delete route captures orgChangeAudience first and tells those people afterwards.
+ */
+export async function announceOrgChangeTo(orgId: string, change: OrgChange, audience: readonly string[]): Promise<void> {
+  await emitOrgChanged({ orgId, change }, async () => audience);
 }

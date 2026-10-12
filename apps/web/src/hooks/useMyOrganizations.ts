@@ -26,13 +26,19 @@ const fetcher = async (url: string): Promise<MyOrganization[]> => {
   return body.organizations ?? [];
 };
 
-/** The person's organizations (names for org-owned drives). No request while organizations are dark. */
+/**
+ * The person's organizations (names for org-owned drives). No request while organizations are dark.
+ * The ONE reader of GET /api/orgs: every surface (the picker, the crumb, Account Settings, the org hub)
+ * shares this cache entry and its shape, so an org:changed refresh (X-4) reaches all of them.
+ */
 export function useMyOrganizations() {
   const { data, error, isLoading, mutate } = useSWR<MyOrganization[]>(ORGS_ENABLED ? '/api/orgs' : null, fetcher, {
     revalidateOnFocus: false,
   });
   const organizations = data ?? [];
   return {
+    /** Undefined until the first answer arrives (a list that is still loading is not an empty one). */
+    loaded: data,
     organizations,
     orgById: (orgId: string | null | undefined) => (orgId ? organizations.find((o) => o.id === orgId) ?? null : null),
     error,

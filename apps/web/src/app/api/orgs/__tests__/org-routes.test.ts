@@ -47,6 +47,11 @@ vi.mock('@pagespace/lib/organizations/repository', () => ({
   createOrganization: vi.fn(),
   updateOrganization: vi.fn(),
 }));
+vi.mock('@pagespace/lib/organizations/org-change-events', () => ({
+  announceOrgChange: vi.fn(async () => undefined),
+  announceOrgChangeTo: vi.fn(async () => undefined),
+  orgChangeAudience: vi.fn(async () => []),
+}));
 vi.mock('@pagespace/lib/organizations/membership', () => ({
   changeMemberRole: vi.fn(),
   removeMember: vi.fn(),

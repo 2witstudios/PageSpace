@@ -23,17 +23,15 @@ import {
   type OrgSummary,
 } from '@/lib/orgs/org-api';
 import { orgChangeRefreshes, walletChangeRefreshes } from '@/lib/orgs/org-realtime';
+import { useMyOrganizations } from './useMyOrganizations';
 import type { OrgHubCounts } from '@/lib/orgs/org-hub';
 
 const SWR_OPTIONS = { revalidateOnFocus: false, isPaused: () => useEditingStore.getState().isAnyEditing() };
 
-export function useMyOrgs() {
-  const { data, error, isLoading, mutate } = useSWR<{ organizations: OrgSummary[] }>(
-    ORGS_ENABLED ? orgKeys.mine() : null,
-    orgFetcher,
-    SWR_OPTIONS,
-  );
-  return { orgs: data?.organizations, error, isLoading: ORGS_ENABLED && isLoading, mutate };
+/** My organizations for the org surfaces: the same GET /api/orgs cache entry the picker reads (useMyOrganizations). */
+export function useMyOrgs(): { orgs: OrgSummary[] | undefined; error: unknown; isLoading: boolean; mutate: () => Promise<unknown> } {
+  const { loaded, error, isLoading, refresh } = useMyOrganizations();
+  return { orgs: loaded, error, isLoading: ORGS_ENABLED && isLoading, mutate: refresh };
 }
 
 export function useOrg(orgId: string | undefined) {

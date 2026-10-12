@@ -5,6 +5,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { isEmailVerified } from '@pagespace/lib/auth/verification-utils';
 import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
 import { createOrRotateInvitation, listOpenInvitations } from '@pagespace/lib/organizations/invitations';
+import { announceOrgChange } from '@pagespace/lib/organizations/org-change-events';
 import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
 import { authorizeOrgRequest, ORG_READ_AUTH, ORG_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
 import { inviteCreateSchema } from '@/lib/orgs/org-schemas';
@@ -114,6 +115,8 @@ export async function POST(request: Request, context: Context) {
       resourceId: result.invitation.id,
       details: { operation: result.rotated ? 'rotate_org_invitation' : 'create_org_invitation', orgId, role },
     });
+    // X-4: the Members & seats page and the hub's pending count update for the org's admins.
+    void announceOrgChange(orgId, 'invitations');
     return NextResponse.json({ invitation: result.invitation }, { status: result.rotated ? 200 : 201 });
   } catch (error) {
     loggers.api.error('Error creating organization invitation:', error as Error);

@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { setOrganizationAvatar } from '@pagespace/lib/organizations/repository';
+import { announceOrgChange } from '@pagespace/lib/organizations/org-change-events';
 import {
   ORG_AVATAR_MAX_BYTES,
   ORG_AVATAR_MIME_TYPES,
@@ -76,6 +77,8 @@ export async function POST(request: Request, context: Context) {
       resourceId: orgId,
       details: { operation: 'upload_org_avatar' },
     });
+    // X-4: the org mark in the picker and the crumb follows without a refresh.
+    void announceOrgChange(orgId, 'profile');
     return avatarResponse(saved.organization);
   } catch (error) {
     loggers.api.error('Error uploading organization avatar:', error as Error);
@@ -100,6 +103,8 @@ export async function DELETE(request: Request, context: Context) {
       resourceId: orgId,
       details: { operation: 'delete_org_avatar' },
     });
+    // X-4: the org mark in the picker and the crumb follows without a refresh.
+    void announceOrgChange(orgId, 'profile');
     return avatarResponse(saved.organization);
   } catch (error) {
     loggers.api.error('Error removing organization avatar:', error as Error);

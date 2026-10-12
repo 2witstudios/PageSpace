@@ -22,6 +22,7 @@ vi.mock('@pagespace/lib/organizations/repository', () => ({
 vi.mock('@pagespace/lib/services/validated-service-token', () => ({
   createOrgServiceToken: vi.fn().mockResolvedValue({ token: 'ps_svc_org', grantedScopes: ['org-avatars:write'] }),
 }));
+vi.mock('@pagespace/lib/organizations/org-change-events', () => ({ announceOrgChange: vi.fn(async () => undefined) }));
 vi.mock('@/lib/presigned-url', () => ({ getS3Client: () => s3, getS3Bucket: () => 'bucket' }));
 
 import { POST, DELETE } from '../route';
@@ -29,6 +30,7 @@ import { GET } from '../[filename]/route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { findMembershipRole, setOrganizationAvatar } from '@pagespace/lib/organizations/repository';
 import { createOrgServiceToken } from '@pagespace/lib/services/validated-service-token';
+import { announceOrgChange } from '@pagespace/lib/organizations/org-change-events';
 
 const ORG = 'org_nw';
 const session: SessionAuthResult = { userId: 'u_priya', tokenVersion: 0, tokenType: 'session', sessionId: 's', role: 'user', adminRoleVersion: 0 };
@@ -82,6 +84,8 @@ describe('ORG-1 (partial) uploading and removing the org avatar', () => {
     expect(createOrgServiceToken).toHaveBeenCalledWith('u_priya', ORG, ['org-avatars:write'], expect.any(String));
     expect(fetchMock).toHaveBeenCalledWith(expect.stringMatching(new RegExp(`/api/org-avatar/${ORG}$`)), expect.objectContaining({ method: 'POST', headers: { Authorization: 'Bearer ps_svc_org' } }));
     expect(calls).toEqual([`storage POST ${ORG}`, `column ${NEW}`, `storage DELETE ${ORG}/avatar-old111.png`]);
+    // X-4: the picker and crumb show the new mark without a refresh.
+    expect(announceOrgChange).toHaveBeenCalledWith(ORG, 'profile');
   });
 
   it('a first upload deletes nothing; an upload the org could not be switched to removes its own new file', async () => {

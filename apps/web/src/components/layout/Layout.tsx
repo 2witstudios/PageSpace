@@ -3,6 +3,7 @@
 import { useAuth } from "@/hooks/useAuth";
 import { useSocket } from "@/hooks/useSocket";
 import { useAccessRevocation } from "@/hooks/useAccessRevocation";
+import { useOrgRealtime } from "@/hooks/useOrgs";
 import { useNotificationToasts } from "@/hooks/useNotificationToasts";
 import { useDesktopNotifications } from "@/hooks/useDesktopNotifications";
 import { useNativeBadgeSync } from "@/hooks/useNativeBadgeSync";
@@ -169,6 +170,9 @@ function Layout({ children }: LayoutProps) {
 
   // Handle real-time permission revocation (zero-trust security)
   useAccessRevocation();
+
+  // X-4: the picker's org groups, the crumb and Account Settings follow org:changed (join, leave, rename, delete)
+  useOrgRealtime();
 
   // Show live toast popups for new notifications, anywhere in the app
   useNotificationToasts();

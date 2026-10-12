@@ -5,6 +5,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { findOrganizationById, updateOrganization } from '@pagespace/lib/organizations/repository';
 import { deleteOrganization } from '@pagespace/lib/organizations/deletion';
 import { getOrgBillingNotice } from '@pagespace/lib/organizations/status';
+import { announceOrgChange, announceOrgChangeTo, orgChangeAudience } from '@pagespace/lib/organizations/org-change-events';
 import { authorizeOrgRequest, refuseDriveScopedToken, ORG_TOKEN_READ_AUTH, ORG_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
 import { orgDeleteSchema, orgUpdateSchema } from '@/lib/orgs/org-schemas';
 import { endOrgSubscriptionPort } from '@/lib/org-billing/org-subscription';
@@ -71,6 +72,8 @@ export async function PATCH(request: Request, context: Context) {
       resourceId: orgId,
       details: { operation: 'update_organization', fields: Object.keys(parsed.data) },
     });
+    // X-4: the picker header, the crumb and the org pages show the new name without a refresh.
+    void announceOrgChange(orgId, 'profile');
     const { id, name, slug, avatarUrl, ownerId, createdAt } = result.organization;
     return NextResponse.json({ organization: { id, name, slug, avatarUrl, ownerId, createdAt } });
   } catch (error) {
@@ -99,6 +102,8 @@ export async function DELETE(request: Request, context: Context) {
     // ORG-1: the stored avatar file goes with the org. Its token is minted now, while the caller
     // still holds the org; it is used only once the delete has committed.
     const avatarToken = (await findOrganizationById(orgId))?.avatarUrl ? await mintOrgAvatarToken(orgId, gate.userId) : null;
+    // X-4: after the delete the org has no members to read, so who to tell is read now.
+    const audience = await orgChangeAudience(orgId);
     const result = await deleteOrganization(
       { actorId: gate.userId, orgId, choices: parsed.data.drives, now: new Date() },
       { endSubscription: endOrgSubscriptionPort() },
@@ -133,6 +138,7 @@ export async function DELETE(request: Request, context: Context) {
       resourceId: orgId,
       details: { operation: 'delete_organization', driveCount: result.steps.length },
     });
+    void announceOrgChangeTo(orgId, 'deleted', audience);
     if (avatarToken) {
       // Best effort: the org is already gone; a leftover file is logged, never a failed delete.
       const removed = await callOrgAvatarStorage(orgId, avatarToken, { method: 'DELETE' }).catch((error: unknown) => error);

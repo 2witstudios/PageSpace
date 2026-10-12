@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { revokeInvitation } from '@pagespace/lib/organizations/invitations';
+import { announceOrgChange } from '@pagespace/lib/organizations/org-change-events';
 import { authorizeOrgRequest, ORG_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
 
 /** DELETE /api/orgs/[orgId]/invitations/[invitationId] — revoke an open invite; Owner and Admins (ORG-3). */
@@ -22,6 +23,7 @@ export async function DELETE(
       resourceId: invitationId,
       details: { operation: 'revoke_org_invitation', orgId },
     });
+    void announceOrgChange(orgId, 'invitations');
     return NextResponse.json({ revoked: true });
   } catch (error) {
     loggers.api.error('Error revoking organization invitation:', error as Error);
