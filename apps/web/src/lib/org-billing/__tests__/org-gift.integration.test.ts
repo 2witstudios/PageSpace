@@ -86,7 +86,9 @@ interface IssuedGiftInvoice {
 
 /**
  * The admin gift's Stripe calls, applied to the same in-memory Stripe the org lives in. Faithful
- * to what the gift relies on: metadata keys merge (an empty string removes one), a discount of
+ * to what the gift relies on: IDEMPOTENCY as Stripe applies it (a write with a key already seen
+ * returns the first response and changes nothing; the same key with other parameters is
+ * refused; `expireIdempotencyKeys()` models the 24-hour window passing), metadata keys merge (an empty string removes one), a discount of
  * '' removes the coupon, a billing-cycle reset issues a $0 invoice at once (paid, since the
  * coupon zeroes it), and a subscription is `active` only once none of its invoices is open —
  * a failed renewal left open keeps it lapsed whatever else is paid.
@@ -100,38 +102,66 @@ class FakeGiftStripe implements OrgGiftStripe {
   voided: string[] = [];
   seatSyncs: Array<{ itemId: string; quantity: number; prorationBehavior: string }> = [];
   failNextUpdate: Error | null = null;
+  /** Writes Stripe actually applied (a replayed key applies nothing). */
+  applied = 0;
+  private idempotent = new Map<string, { params: string; result: unknown }>();
   constructor(private readonly org: FakeOrgStripe) {}
+  expireIdempotencyKeys(): void {
+    this.idempotent.clear();
+  }
+  private keyed<T>(key: string, params: unknown, run: () => T): T {
+    const serialized = JSON.stringify(params);
+    const prior = this.idempotent.get(key);
+    if (prior) {
+      if (prior.params !== serialized) throw new Error('Keys for idempotent requests can only be used with the same parameters they were first used with.');
+      return structuredClone(prior.result) as T;
+    }
+    const result = run();
+    this.applied += 1;
+    this.idempotent.set(key, { params: serialized, result: structuredClone(result) });
+    return result;
+  }
   async retrieveCoupon(id: string) {
     return this.coupons.find((c) => c.id === id) ?? null;
   }
-  async createCoupon(params: Parameters<OrgGiftStripe['createCoupon']>[0]) {
-    if (this.coupons.some((c) => c.id === params.id)) throw new Error('resource_already_exists: Coupon already exists.');
-    this.couponCreates += 1;
-    this.coupons.push({ id: params.id, percentOff: params.percent_off });
-    return { id: params.id };
+  async createCoupon(params: Parameters<OrgGiftStripe['createCoupon']>[0], key: string) {
+    return this.keyed(key, params, () => {
+      if (this.coupons.some((c) => c.id === params.id)) throw new Error('resource_already_exists: Coupon already exists.');
+      this.couponCreates += 1;
+      this.coupons.push({ id: params.id, percentOff: params.percent_off });
+      return { id: params.id };
+    });
   }
   async listOpenInvoiceIds(subscriptionId: string) {
     return (this.org.invoices.get(subscriptionId) ?? []).filter((i) => i.status === 'open').map((i) => i.id);
   }
-  async voidInvoice(invoiceId: string) {
-    const invoice = [...this.org.invoices.values()].flat().find((i) => i.id === invoiceId);
-    if (!invoice || invoice.status !== 'open') throw new Error(`Invoice '${invoiceId}' is not open`);
-    invoice.status = 'void';
-    this.voided.push(invoiceId);
+  async voidInvoice(invoiceId: string, key: string) {
+    this.keyed(key, { invoiceId }, () => {
+      const invoice = [...this.org.invoices.values()].flat().find((i) => i.id === invoiceId);
+      if (!invoice || invoice.status !== 'open') throw new Error(`Invoice '${invoiceId}' is not open`);
+      invoice.status = 'void';
+      this.voided.push(invoiceId);
+      return null;
+    });
   }
-  async setSeatQuantity(params: Parameters<OrgGiftStripe['setSeatQuantity']>[0]) {
-    const item = [...this.org.subscriptions.values()].flatMap((sub) => sub.items).find((i) => i.id === params.itemId);
-    if (!item) throw new Error(`No such subscription item: '${params.itemId}'`);
-    item.quantity = params.quantity;
-    this.seatSyncs.push(params);
-    return { quantity: item.quantity };
+  async setSeatQuantity(params: Parameters<OrgGiftStripe['setSeatQuantity']>[0], key: string) {
+    return this.keyed(key, params, () => {
+      const item = [...this.org.subscriptions.values()].flatMap((sub) => sub.items).find((i) => i.id === params.itemId);
+      if (!item) throw new Error(`No such subscription item: '${params.itemId}'`);
+      item.quantity = params.quantity;
+      this.seatSyncs.push(params);
+      return { quantity: item.quantity };
+    });
   }
-  async updateSubscription(subscriptionId: string, params: Parameters<OrgGiftStripe['updateSubscription']>[1]) {
+  async updateSubscription(subscriptionId: string, params: Parameters<OrgGiftStripe['updateSubscription']>[1], key: string) {
     if (this.failNextUpdate) {
       const error = this.failNextUpdate;
       this.failNextUpdate = null;
       throw error;
     }
+    return this.keyed(key, { subscriptionId, params }, () => this.applyUpdate(subscriptionId, params));
+  }
+  private applyUpdate(subscriptionId: string, params: Parameters<OrgGiftStripe['updateSubscription']>[1]) {
     const sub = this.org.subscriptions.get(subscriptionId);
     if (!sub) throw new Error(`No such subscription: '${subscriptionId}'`);
     const metadata: Record<string, string> = { ...sub.metadata };
@@ -351,6 +381,11 @@ describe('SEAT-8 an org exists only paid or gifted (real Postgres, in-memory Str
     expect(await deliver('invoice.paid', firstPaid)).toBe(200);
     expect((await getOrgStatus(org.orgId)).status).toBe('active');
 
+    // An ACTIVE org's renewal is issued but not yet charged: the gift must not void it — that
+    // period is still the org's to pay; the gift starts at the next renewal.
+    const pendingRenewal = org.stripe.addInvoice(org.stripe.subscriptions.get(org.subscriptionId)!, BASE_CENTS + SEAT_CENTS * pinnedSeats);
+    expect(pendingRenewal.status).toBe('open');
+
     // Resumable: the coupon is created, then the subscription update fails. Nothing is pinned
     // (the transaction rolled back); a retry with another reason reuses the one coupon.
     const gift = new FakeGiftStripe(org.stripe);
@@ -359,8 +394,10 @@ describe('SEAT-8 an org exists only paid or gifted (real Postgres, in-memory Str
     expect(gift.couponCreates).toBe(1);
     const [afterFailure] = await db.select({ giftedExtraSeats: orgSubscriptions.giftedExtraSeats }).from(orgSubscriptions).where(eq(orgSubscriptions.orgId, org.orgId));
     expect(afterFailure.giftedExtraSeats).toBeNull();
-    expect(await giftOrgSubscription({ orgId: org.orgId, adminUserId: ADMIN_ID, reason: 'Second try, new reason', extraSeats: pinnedSeats }, gift)).toMatchObject({ kind: 'gifted', giftedExtraSeats: pinnedSeats });
+    expect(await giftOrgSubscription({ orgId: org.orgId, adminUserId: ADMIN_ID, reason: 'Second try, new reason', extraSeats: pinnedSeats }, gift)).toMatchObject({ kind: 'gifted', giftedExtraSeats: pinnedSeats, voidedInvoiceIds: [], restoresNow: false });
     expect(gift.couponCreates).toBe(1);
+    expect(pendingRenewal.status).toBe('open');
+    expect(gift.voided).toEqual([]);
     const sub = org.stripe.subscriptions.get(org.subscriptionId)!;
     expect(sub.items.find((i) => i.priceId === PRICES.seatPriceId)?.quantity).toBe(pinnedSeats);
     expect(await deliver('customer.subscription.updated', { id: org.subscriptionId, object: 'subscription', customer: org.customerId, status: sub.status, metadata: sub.metadata })).toBe(200);
@@ -407,5 +444,21 @@ describe('SEAT-8 an org exists only paid or gifted (real Postgres, in-memory Str
     // A re-gift reuses the subscription's coupon instead of colliding with it.
     expect(await giftOrgSubscription({ orgId: org.orgId, adminUserId: ADMIN_ID, reason: 'Back on', extraSeats: 3 }, gift)).toMatchObject({ kind: 'gifted', giftedExtraSeats: 3 });
     expect(gift.couponCreates).toBe(1);
+    expect(gift.discounts.get(org.subscriptionId)).toEqual([gift.coupons[0].id]);
+
+    // D-OW-54 one key per transition, all inside Stripe's 24-hour window (no key expires here):
+    // a SECOND revoke is applied, not answered with the first revoke's cached response...
+    const appliedBefore = gift.applied;
+    expect(await ungiftOrgSubscription({ orgId: org.orgId, adminUserId: ADMIN_ID, reason: 'Partnership ended' }, gift)).toMatchObject({ kind: 'ungifted' });
+    expect(gift.applied).toBeGreaterThan(appliedBefore);
+    expect(gift.discounts.get(org.subscriptionId)).toEqual([]);
+    expect(sub.metadata?.type).toBeUndefined();
+    // ...and a re-gift IDENTICAL to an earlier gift (same admin, reason and seats) is applied too.
+    expect(await giftOrgSubscription({ orgId: org.orgId, adminUserId: ADMIN_ID, reason: 'Second try, new reason', extraSeats: pinnedSeats }, gift)).toMatchObject({ kind: 'gifted', giftedExtraSeats: pinnedSeats });
+    expect(gift.discounts.get(org.subscriptionId)).toEqual([gift.coupons[0].id]);
+    expect(sub.metadata?.type).toBe('gift_subscription');
+    expect(sub.items.find((i) => i.priceId === PRICES.seatPriceId)?.quantity).toBe(pinnedSeats);
+    const [regifted] = await db.select({ giftedExtraSeats: orgSubscriptions.giftedExtraSeats, giftRevision: orgSubscriptions.giftRevision }).from(orgSubscriptions).where(eq(orgSubscriptions.orgId, org.orgId));
+    expect(regifted).toEqual({ giftedExtraSeats: pinnedSeats, giftRevision: 5 });
   });
 });

@@ -17,6 +17,7 @@ const stored = (over: Partial<NonNullable<OrgGiftFacts['stored']>> = {}): NonNul
   status: 'active',
   gifted: false,
   giftedExtraSeats: null,
+  giftRevision: 0,
   ...over,
 });
 
@@ -46,9 +47,29 @@ describe('planOrgGift (SEAT-8 admin gift, D-OW-23, D-OW-54)', () => {
     expect(plan.update.proration_behavior).toBe('none');
   });
 
-  it('D-OW-54 the gift voids the subscription\'s open invoices before it is applied', () => {
-    const plan = planOrgGift(facts({ stored: stored({ status: 'past_due' }) }));
-    expect(plan.kind === 'gift' && plan.voidOpenInvoices).toBe(true);
+  it('D-OW-54 a gift on a LAPSED org voids the subscription\'s open invoices before it is applied', () => {
+    for (const status of ['past_due', 'unpaid']) {
+      const plan = planOrgGift(facts({ stored: stored({ status }) }));
+      expect(plan.kind === 'gift' && plan.voidOpenInvoices, status).toBe(true);
+    }
+  });
+
+  it('D-OW-54 a gift on an ACTIVE org voids nothing: an issued-but-uncharged renewal is the period the org still pays for', () => {
+    const plan = planOrgGift(facts());
+    expect(plan.kind === 'gift' && plan.voidOpenInvoices).toBe(false);
+  });
+
+  it('D-OW-54 one idempotency key per gift state transition: the same transition retried reuses its key; the same request at a later gift revision gets a new one', () => {
+    const first = planOrgGift(facts());
+    const retry = planOrgGift(facts());
+    const later = planOrgGift(facts({ stored: stored({ giftRevision: 2 }) }));
+    if (first.kind !== 'gift' || retry.kind !== 'gift' || later.kind !== 'gift') throw new Error('expected gifts');
+    expect(retry.updateKey).toBe(first.updateKey);
+    expect(later.updateKey).not.toBe(first.updateKey);
+    expect(first.nextGiftRevision).toBe(1);
+    expect(later.nextGiftRevision).toBe(3);
+    // The coupon is one per subscription, whatever the revision.
+    expect(later.couponKey).toBe(first.couponKey);
   });
 
   it('an active org keeps the period it paid for: the gift starts at renewal (no anchor reset)', () => {
@@ -120,7 +141,7 @@ const ungift = (over: Partial<OrgUngiftFacts> = {}): OrgUngiftFacts => ({
   reason: 'Partnership ended',
   billingEnabled: true,
   org: { adminRole: null },
-  stored: stored({ gifted: true, giftedExtraSeats: 2 }),
+  stored: stored({ gifted: true, giftedExtraSeats: 2, giftRevision: 1 }),
   ...over,
 });
 
@@ -136,6 +157,14 @@ describe('planOrgUngift (SEAT-8 revoke, D-OW-54)', () => {
       proration_behavior: 'none',
     });
     expect(plan.updateKey).toBe((planOrgUngift(ungift()) as typeof plan).updateKey);
+    expect(plan.nextGiftRevision).toBe(2);
+  });
+
+  it('D-OW-54 every revoke has its own key: a second revoke (after a re-gift) is never answered with the first one\'s cached response', () => {
+    const firstRevoke = planOrgUngift(ungift());
+    const secondRevoke = planOrgUngift(ungift({ stored: stored({ gifted: true, giftedExtraSeats: 2, giftRevision: 3 }) }));
+    if (firstRevoke.kind !== 'ungift' || secondRevoke.kind !== 'ungift') throw new Error('expected revokes');
+    expect(secondRevoke.updateKey).not.toBe(firstRevoke.updateKey);
   });
 
   it.each<[string, Partial<OrgUngiftFacts>, OrgGiftRefusal]>([

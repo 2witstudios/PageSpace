@@ -84,6 +84,7 @@ async function lockAndReadStored(tx: Tx, orgId: string): Promise<StoredGiftRow |
       status: orgSubscriptions.status,
       gifted: orgSubscriptions.gifted,
       giftedExtraSeats: orgSubscriptions.giftedExtraSeats,
+      giftRevision: orgSubscriptions.giftRevision,
       extraSeatQuantity: orgSubscriptions.extraSeatQuantity,
       seatRevision: orgSubscriptions.seatRevision,
     })
@@ -116,14 +117,16 @@ export async function giftOrgSubscription(
       .update(orgSubscriptions)
       .set({
         giftedExtraSeats: plan.giftedExtraSeats,
+        giftRevision: plan.nextGiftRevision,
         ...(stored && stored.extraSeatQuantity !== plan.giftedExtraSeats
           ? { extraSeatQuantity: plan.giftedExtraSeats, seatRevision: stored.seatRevision + 1 }
           : {}),
       })
       .where(eq(orgSubscriptions.orgId, input.orgId));
 
-    // A lapsed org's failed renewal must not keep retrying a charge on the gifted period.
-    const voidedInvoiceIds = await stripe.listOpenInvoiceIds(plan.subscriptionId);
+    // A lapsed org's failed renewal must not keep retrying a charge on the gifted period; an
+    // active org's open renewal is a period it still pays for, so nothing is voided there.
+    const voidedInvoiceIds = plan.voidOpenInvoices ? await stripe.listOpenInvoiceIds(plan.subscriptionId) : [];
     for (const invoiceId of voidedInvoiceIds) await stripe.voidInvoice(invoiceId, orgGiftVoidKey(input.orgId, invoiceId));
 
     const coupon = (await stripe.retrieveCoupon(plan.coupon.id)) ?? (await stripe.createCoupon(plan.coupon, plan.couponKey));
@@ -180,7 +183,7 @@ export async function ungiftOrgSubscription(
     if (plan.kind === 'refuse') return { kind: 'refused', reason: plan.reason };
     await tx
       .update(orgSubscriptions)
-      .set({ giftedExtraSeats: null, gifted: false })
+      .set({ giftedExtraSeats: null, gifted: false, giftRevision: plan.nextGiftRevision })
       .where(eq(orgSubscriptions.orgId, input.orgId));
     const sub = await stripe.updateSubscription(plan.subscriptionId, plan.update, plan.updateKey);
 

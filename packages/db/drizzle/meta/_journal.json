@@ -2332,6 +2332,13 @@
       "when": 1791815684589,
       "tag": "0344_org_gifted_extra_seats",
       "breakpoints": true
+    },
+    {
+      "idx": 335,
+      "version": "7",
+      "when": 1791828464674,
+      "tag": "0345_org_gift_revision",
+      "breakpoints": true
     }
   ]
 }

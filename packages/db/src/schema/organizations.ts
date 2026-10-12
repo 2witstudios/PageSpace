@@ -129,6 +129,10 @@ export const orgSubscriptions = pgTable('org_subscriptions', {
   // held at this quantity, auto-add is refused past it, and a gift invoice funds the pool for
   // exactly this many seats — never the invoice's live seat count.
   giftedExtraSeats: integer('giftedExtraSeats'),
+  // D-OW-54: bumped by every admin gift and revoke, under the org billing lock, and part of
+  // each one's Stripe idempotency key: one key per gift state transition, so a later gift or
+  // revoke is never answered with an earlier one's cached response.
+  giftRevision: integer('giftRevision').default(0).notNull(),
   trialEnd: timestamp('trialEnd', { mode: 'date' }),
   currentPeriodStart: timestamp('currentPeriodStart', { mode: 'date' }),
   currentPeriodEnd: timestamp('currentPeriodEnd', { mode: 'date' }),

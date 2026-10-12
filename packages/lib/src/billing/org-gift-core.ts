@@ -15,9 +15,10 @@
  * invoice funds exactly that many seats — never the invoice's seat line, which a gifted
  * Owner could inflate for free with throwaway invites.
  *
- * What a gift writes: the subscription's open invoices are voided first (a lapsed org's
- * failed renewal must not keep retrying a charge, or reach dunning, on a gifted period),
- * then one 100% `forever` coupon and the gift metadata in a single subscription update with
+ * What a gift writes: on a LAPSED org the subscription's open invoices are voided first (its
+ * failed renewal must not keep retrying a charge, or reach dunning, on a gifted period; an
+ * ACTIVE org's open renewal is a period it still pays for, so nothing is voided there), then
+ * one 100% `forever` coupon and the gift metadata in a single subscription update with
  * no proration. An ACTIVE org keeps the period it already paid for and its next invoice is
  * the first $0 gift invoice. A LAPSED org (past_due, unpaid) has its billing cycle reset to
  * now, so Stripe issues the $0 gift invoice immediately and the lapse lifts at once. An org
@@ -27,6 +28,11 @@
  * Resumable: the coupon id and its creation key depend on the subscription alone, and the
  * shell retrieves before it creates, so a gift interrupted between its writes completes on
  * any retry, and a gift revoked and given again reuses its coupon.
+ *
+ * One Stripe key per gift state transition: the subscription update of a gift and of a revoke
+ * is keyed on the stored gift revision, which every gift and revoke bumps under the billing
+ * lock. A retry of the SAME transition (the revision did not commit) replays its own request;
+ * a later gift or revoke can never be answered with an earlier one's cached response.
  */
 import type { OrgRole } from '@pagespace/db/schema/organizations';
 import { isLiveOrgSubscriptionStatus, orgStripeIdempotencyKey } from './org-subscription-core';
@@ -54,6 +60,8 @@ export interface OrgGiftStored {
   gifted: boolean;
   /** The admin-pinned gifted extra seats, or null. */
   giftedExtraSeats: number | null;
+  /** Bumped by every gift and revoke (org_subscriptions.giftRevision). */
+  giftRevision: number;
 }
 
 /** What the shell read from the database; nothing here comes from the request but the reason and seats. */
@@ -102,8 +110,10 @@ export type OrgGiftPlan =
       kind: 'gift';
       subscriptionId: string;
       giftedExtraSeats: number;
-      /** Void the subscription's open invoices before the update (always: only a lapsed one has any). */
-      voidOpenInvoices: true;
+      /** The gift revision this gift commits. */
+      nextGiftRevision: number;
+      /** Void the subscription's open invoices before the update: a lapsed org only. */
+      voidOpenInvoices: boolean;
       coupon: OrgGiftCouponParams;
       couponKey: string;
       update: OrgGiftSubscriptionUpdate;
@@ -114,7 +124,7 @@ export type OrgGiftPlan =
 
 export type OrgUngiftPlan =
   | { kind: 'refuse'; reason: OrgGiftRefusal }
-  | { kind: 'ungift'; subscriptionId: string; update: OrgUngiftSubscriptionUpdate; updateKey: string };
+  | { kind: 'ungift'; subscriptionId: string; update: OrgUngiftSubscriptionUpdate; updateKey: string; nextGiftRevision: number };
 
 /** Statuses a lapsed org's subscription has while Stripe still invoices it. */
 const LAPSED_INVOICING_STATUSES: ReadonlySet<string> = new Set(['past_due', 'unpaid']);
@@ -173,11 +183,12 @@ export function planOrgGift(facts: OrgGiftFacts): OrgGiftPlan {
     kind: 'gift',
     subscriptionId,
     giftedExtraSeats: facts.extraSeats,
-    voidOpenInvoices: true,
+    nextGiftRevision: stored.giftRevision + 1,
+    voidOpenInvoices: restoresNow,
     coupon,
     couponKey: orgStripeIdempotencyKey(facts.orgId, 'gift.coupon.create', coupon),
     update,
-    updateKey: orgStripeIdempotencyKey(facts.orgId, 'gift.subscription.update', { subscriptionId, update }),
+    updateKey: orgStripeIdempotencyKey(facts.orgId, 'gift.subscription.update', { subscriptionId, giftRevision: stored.giftRevision, update }),
     restoresNow,
   };
 }
@@ -197,7 +208,8 @@ export function planOrgUngift(facts: OrgUngiftFacts): OrgUngiftPlan {
     kind: 'ungift',
     subscriptionId,
     update,
-    updateKey: orgStripeIdempotencyKey(facts.orgId, 'gift.subscription.revoke', { subscriptionId, update }),
+    updateKey: orgStripeIdempotencyKey(facts.orgId, 'gift.subscription.revoke', { subscriptionId, giftRevision: stored.giftRevision, update }),
+    nextGiftRevision: stored.giftRevision + 1,
   };
 }
 
