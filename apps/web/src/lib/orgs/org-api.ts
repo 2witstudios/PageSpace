@@ -6,7 +6,7 @@
  */
 import type { OrgBillingNotice } from '@pagespace/lib/organizations/status-core';
 import type { OrgPolicies as StoredOrgPolicies } from '@pagespace/lib/organizations/policies-core';
-import { fetchJSON, post, patch, put, del } from '@/lib/auth/auth-fetch';
+import { fetchJSON, fetchWithAuth, post, patch, put, del, ApiRequestError } from '@/lib/auth/auth-fetch';
 
 export type OrgRole = 'OWNER' | 'ADMIN' | 'MEMBER';
 
@@ -148,6 +148,25 @@ export const leaveOrganization = (orgId: string) => post<{ left: true }>(`/api/o
 
 export const patchOrganization = (orgId: string, body: { name?: string; slug?: string }) =>
   patch<{ organization: Organization }>(orgKeys.detail(orgId), body);
+
+/**
+ * ORG-1: upload the org's avatar image (Owner and Admins). fetchWithAuth, not post(): the browser
+ * must set the multipart boundary. A refusal throws ApiRequestError, as every org call does.
+ */
+export async function uploadOrgAvatar(orgId: string, file: File): Promise<{ organization: { id: string; avatarUrl: string | null } }> {
+  const body = new FormData();
+  body.append('file', file);
+  const response = await fetchWithAuth(`/api/orgs/${orgId}/avatar`, { method: 'POST', body });
+  const data: unknown = await response.json().catch(() => null);
+  if (!response.ok) {
+    const message = data && typeof data === 'object' && 'error' in data && typeof data.error === 'string' ? data.error : 'The image could not be uploaded.';
+    throw new ApiRequestError(message, response.status, data ?? undefined);
+  }
+  return data as { organization: { id: string; avatarUrl: string | null } };
+}
+
+export const removeOrgAvatar = (orgId: string) =>
+  del<{ organization: { id: string; avatarUrl: string | null } }>(`/api/orgs/${orgId}/avatar`);
 
 export const revokeOrgInvitation = (orgId: string, invitationId: string) =>
   del<{ revoked: true }>(`${orgKeys.invitations(orgId)}/${invitationId}`);

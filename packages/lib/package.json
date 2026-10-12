@@ -154,6 +154,11 @@
       "import": "./dist/organizations/invitations.js",
       "require": "./dist/organizations/invitations.js"
     },
+    "./organizations/org-avatar-core": {
+      "types": "./dist/organizations/org-avatar-core.d.ts",
+      "import": "./dist/organizations/org-avatar-core.js",
+      "require": "./dist/organizations/org-avatar-core.js"
+    },
     "./organizations/invite-view-core": {
       "types": "./dist/organizations/invite-view-core.d.ts",
       "import": "./dist/organizations/invite-view-core.js",

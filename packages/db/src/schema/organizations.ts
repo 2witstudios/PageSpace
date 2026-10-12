@@ -41,6 +41,8 @@ export const organizations = pgTable('organizations', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
   name: text('name').notNull(),
   slug: text('slug').unique().notNull(),
+  // ORG-1: an image PageSpace stores and serves, never an outside URL (organizations_avatar_url_chk
+  // below; the pure rule is lib organizations/org-avatar-core.ts).
   avatarUrl: text('avatarUrl'),
   ownerId: text('ownerId').notNull().references(() => users.id, { onDelete: 'restrict' }),
   // Org-wide policies (Spec POL). Shape is owned by the policy reader in lib;
@@ -56,6 +58,11 @@ export const organizations = pgTable('organizations', {
   updatedAt: timestamp('updatedAt', { mode: 'date' }).default(utcNow).notNull().$onUpdate(() => new Date()),
 }, (table) => ({
   ownerIdx: index('organizations_owner_id_idx').on(table.ownerId),
+  // Only this org's own avatar route, exactly as orgAvatarPath builds it: no other host, no other org.
+  avatarUrlCheck: check(
+    'organizations_avatar_url_chk',
+    sql`${table.avatarUrl} IS NULL OR ${table.avatarUrl} ~ ('^/api/orgs/' || ${table.id} || '/avatar/avatar\\.(png|jpg|gif|webp)\\?v=[0-9]+$')`,
+  ),
 }));
 
 export const orgMembers = pgTable('org_members', {

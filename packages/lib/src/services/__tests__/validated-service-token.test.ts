@@ -5,6 +5,7 @@ import {
   createDriveServiceToken,
   createFileServiceToken,
   createUserServiceToken,
+  createOrgServiceToken,
   createUploadServiceToken,
   createSystemFileDeleteToken,
   SYSTEM_SERVICE_USER_ID,
@@ -51,6 +52,12 @@ vi.mock('../../permissions/permissions', () => ({
 }));
 vi.mock('../../permissions/file-access', () => ({
   canUserAccessFile: vi.fn(),
+}));
+
+// The ONE org authorization function (ORG-5): the org-bound token asks it, never orgMembers directly.
+const mockRequireOrgRole = vi.fn();
+vi.mock('../../organizations/authorize', () => ({
+  requireOrgRole: (...args: unknown[]) => mockRequireOrgRole(...args),
 }));
 
 // Mock the session service
@@ -421,6 +428,36 @@ describe('createValidatedServiceToken', () => {
     it('grants app-hosting:publish for the caller\'s own user resource', async () => {
       const result = await createUserServiceToken('user-1', ['app-hosting:publish']);
       expect(result.grantedScopes).toEqual(['app-hosting:publish']);
+    });
+  });
+
+  describe('organization resource type (ORG-1 org avatar upload)', () => {
+    it('ORG-1 (partial) an org Owner or Admin gets an org-bound org-avatars:write token, bound to that org', async () => {
+      mockRequireOrgRole.mockResolvedValue({ ok: true, role: 'ADMIN' });
+      const result = await createOrgServiceToken('user-1', 'org_nw', ['org-avatars:write'], '2m');
+      expect(result.grantedScopes).toEqual(['org-avatars:write']);
+      expect(mockRequireOrgRole).toHaveBeenCalledWith('user-1', 'org_nw', 'ADMIN');
+      expect(mockCreateSession).toHaveBeenCalledWith(expect.objectContaining({
+        userId: 'user-1', scopes: ['org-avatars:write'], resourceType: 'organization', resourceId: 'org_nw',
+      }));
+    });
+
+    it('ORG-1 (partial) a plain Member or a non-member gets no org-bound token at all', async () => {
+      for (const refusal of [{ ok: false, status: 403, reason: 'insufficient_role' }, { ok: false, status: 404, reason: 'not_member' }]) {
+        mockRequireOrgRole.mockResolvedValueOnce(refusal);
+        await expect(createOrgServiceToken('user-1', 'org_nw', ['org-avatars:write'])).rejects.toThrow('User has no access to organization:org_nw');
+      }
+      expect(mockCreateSession).not.toHaveBeenCalled();
+    });
+
+    it('ORG-1 (partial) an org-bound token never carries user-avatar, file, queue or wildcard scopes', async () => {
+      mockRequireOrgRole.mockResolvedValue({ ok: true, role: 'OWNER' });
+      const result = await createOrgServiceToken('user-1', 'org_nw', ['org-avatars:write', 'avatars:write', 'files:read', 'queue:read', '*']);
+      expect(result.grantedScopes).toEqual(['org-avatars:write']);
+    });
+
+    it('ORG-1 (partial) org-avatars:write is refused on every other resource type', async () => {
+      await expect(createUserServiceToken('user-1', ['org-avatars:write'])).rejects.toThrow('User lacks permissions');
     });
   });
 

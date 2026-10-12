@@ -20,6 +20,7 @@ import { canUserAccessFile } from '../permissions/file-access';
 import { prepareUserWrite } from '../auth/user-repository';
 import { sessionService } from '../auth/session-service';
 import { loggers } from '../logging/logger-config';
+import { requireOrgRole } from '../organizations/authorize';
 
 /**
  * Service scope types - defines allowed permission scopes
@@ -35,6 +36,8 @@ export type ServiceScope =
   | 'files:write:any'
   | 'avatars:write'
   | 'avatars:write:any'
+  // ORG-1: replace or remove an org's avatar; only on an org-bound token, minted for an org Owner or Admin.
+  | 'org-avatars:write'
   | 'queue:read'
   | 'erasure:enqueue'
   | 'broadcast:enqueue'
@@ -124,7 +127,7 @@ export function isPermissionDeniedError(
   );
 }
 
-export type ResourceType = 'page' | 'drive' | 'user';
+export type ResourceType = 'page' | 'drive' | 'user' | 'organization';
 
 /**
  * Permission set representing what a user can do with a resource
@@ -134,6 +137,8 @@ export interface PermissionSet {
   canEdit: boolean;
   canDelete: boolean;
   isOwner: boolean;
+  /** An org Owner or Admin, on an 'organization' resource only. */
+  isOrgAdmin?: boolean;
 }
 
 /**
@@ -292,6 +297,14 @@ async function getPermissionsForResource(
       };
     }
 
+    case 'organization': {
+      // ORG-5: the one org authorization function. An org-bound token grants org-scoped writes only
+      // (org-avatars:write): no page, drive, user or wildcard power rides on it.
+      const authorization = await requireOrgRole(userId, resourceId, 'ADMIN');
+      if (!authorization.ok) return null;
+      return { canView: false, canEdit: false, canDelete: false, isOwner: false, isOrgAdmin: true };
+    }
+
     default:
       return null;
   }
@@ -318,6 +331,9 @@ function filterScopesByPermissions(
       case 'files:ingest':
       case 'avatars:write':
         return permissions.canEdit;
+
+      case 'org-avatars:write':
+        return permissions.isOrgAdmin === true;
 
       // Delete scopes require delete permission
       case 'files:delete':
@@ -408,6 +424,25 @@ export async function createUserServiceToken(
     userId,
     resourceType: 'user',
     resourceId: userId,
+    requestedScopes: scopes,
+    expiresIn,
+  });
+}
+
+/**
+ * Convenience function for creating an org-bound service token (the org avatar upload): granted
+ * only to the org's Owner and Admins, and bound to that org.
+ */
+export async function createOrgServiceToken(
+  userId: string,
+  orgId: string,
+  scopes: ServiceScope[],
+  expiresIn?: string
+): Promise<ValidatedTokenResult> {
+  return createValidatedServiceToken({
+    userId,
+    resourceType: 'organization',
+    resourceId: orgId,
     requestedScopes: scopes,
     expiresIn,
   });

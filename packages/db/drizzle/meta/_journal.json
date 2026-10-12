@@ -2325,6 +2325,13 @@
       "when": 1791773814980,
       "tag": "0343_oauth_authentication_evidence",
       "breakpoints": true
+    },
+    {
+      "idx": 334,
+      "version": "7",
+      "when": 1791810876033,
+      "tag": "0344_org_avatar_upload_only",
+      "breakpoints": true
     }
   ]
 }

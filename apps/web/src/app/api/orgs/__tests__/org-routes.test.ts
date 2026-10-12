@@ -61,6 +61,10 @@ vi.mock('@pagespace/lib/organizations/invitations', () => ({
   acceptInvitation: vi.fn(),
 }));
 vi.mock('@pagespace/lib/organizations/deletion', () => ({ deleteOrganization: vi.fn() }));
+vi.mock('@/lib/orgs/org-avatar-storage', () => ({
+  mintOrgAvatarToken: vi.fn().mockResolvedValue('ps_svc_org'),
+  callOrgAvatarStorage: vi.fn().mockResolvedValue(new Response('{}', { status: 200 })),
+}));
 // The notice's per-role decision is status-core's (unit-tested); here only that GET passes the caller's role through.
 vi.mock('@pagespace/lib/organizations/status', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@pagespace/lib/organizations/status')>()),
@@ -79,6 +83,7 @@ import * as repository from '@pagespace/lib/organizations/repository';
 import * as membership from '@pagespace/lib/organizations/membership';
 import * as invitations from '@pagespace/lib/organizations/invitations';
 import { deleteOrganization } from '@pagespace/lib/organizations/deletion';
+import { callOrgAvatarStorage, mintOrgAvatarToken } from '@/lib/orgs/org-avatar-storage';
 import { getOrgBillingNotice, isOrgActive } from '@pagespace/lib/organizations/status';
 import { deliverOrgInvite } from '@/lib/orgs/org-invite-delivery';
 import { startOrgBusinessSubscription } from '@/lib/org-billing/org-subscription';
@@ -342,12 +347,11 @@ describe('org route behaviour', () => {
   });
 
   it('ORG-1 (partial) POST /api/orgs makes the caller the Owner and never returns billing ids', async () => {
-    const res = await orgsRoute.POST(req('POST', { name: 'Northwind Labs', slug: 'Northwind', avatarUrl: 'https://example.test/n.png' }));
+    const res = await orgsRoute.POST(req('POST', { name: 'Northwind Labs', slug: 'Northwind' }));
     expect(res.status).toBe(201);
     expect(repository.createOrganization).toHaveBeenCalledWith({
       name: 'Northwind Labs',
       slug: 'northwind',
-      avatarUrl: 'https://example.test/n.png',
       ownerId: CALLER,
     });
     const body = await res.json();
@@ -404,12 +408,13 @@ describe('org route behaviour', () => {
     expect(await transferred.json()).toEqual({ error: 'Only a person can own an organization', code: 'owner_not_human' });
   });
 
-  it('ORG-1 (partial) an org avatar must be an https URL, never a script or data URI', async () => {
-    for (const avatarUrl of ['javascript:alert(1)', 'data:image/png;base64,AAAA', 'http://example.test/n.png']) {
+  it('ORG-1 (partial) an org avatar is never a URL: create and update refuse any avatarUrl, even https (it is uploaded to /avatar)', async () => {
+    for (const avatarUrl of ['https://tracker.example.com/pixel.png', 'javascript:alert(1)', 'data:image/png;base64,AAAA', 'http://example.test/n.png']) {
       expect((await orgsRoute.POST(req('POST', { name: 'N', slug: 'northwind', avatarUrl }))).status).toBe(400);
     }
     asRole('ADMIN');
-    expect((await orgRoute.PATCH(req('PATCH', { avatarUrl: 'javascript:alert(1)' }), params({ orgId: ORG_ID }))).status).toBe(400);
+    expect((await orgRoute.PATCH(req('PATCH', { avatarUrl: 'https://tracker.example.com/pixel.png' }), params({ orgId: ORG_ID }))).status).toBe(400);
+    expect((await orgRoute.PATCH(req('PATCH', { name: 'Northwind', avatarUrl: 'https://tracker.example.com/pixel.png' }), params({ orgId: ORG_ID }))).status).toBe(400);
     expect(repository.createOrganization).not.toHaveBeenCalled();
     expect(repository.updateOrganization).not.toHaveBeenCalled();
   });
@@ -487,6 +492,18 @@ describe('org route behaviour', () => {
     const res = await orgRoute.DELETE(req('DELETE', { drives: [] }), params({ orgId: ORG_ID }));
     expect(res.status).toBe(200);
     expect(deleteOrganization).toHaveBeenCalledWith(expect.objectContaining({ orgId: ORG_ID }), { endSubscription: endSubscriptionPort });
+  });
+
+  it('ORG-1 (partial) deleting an org removes its stored avatar file, only once the delete has gone through', async () => {
+    asRole('OWNER');
+    vi.mocked(repository.findOrganizationById).mockResolvedValue({ ...organization, avatarUrl: `/api/orgs/${ORG_ID}/avatar/avatar.png?v=1` });
+    vi.mocked(deleteOrganization).mockResolvedValueOnce({ ok: false, status: 403, reason: 'not_owner' });
+    expect((await orgRoute.DELETE(req('DELETE', { drives: [] }), params({ orgId: ORG_ID }))).status).toBe(403);
+    expect(callOrgAvatarStorage).not.toHaveBeenCalled();
+
+    expect((await orgRoute.DELETE(req('DELETE', { drives: [] }), params({ orgId: ORG_ID }))).status).toBe(200);
+    expect(mintOrgAvatarToken).toHaveBeenCalledWith(ORG_ID, CALLER);
+    expect(callOrgAvatarStorage).toHaveBeenCalledWith(ORG_ID, 'ps_svc_org', { method: 'DELETE' });
   });
 
   it('ORG-6 (partial) DELETE /api/orgs/[orgId] passes the caller so the service can re-check ownership, and maps its refusal', async () => {

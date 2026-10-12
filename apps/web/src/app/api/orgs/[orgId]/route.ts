@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { callOrgAvatarStorage, mintOrgAvatarToken } from '@/lib/orgs/org-avatar-storage';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { findOrganizationById, updateOrganization } from '@pagespace/lib/organizations/repository';
@@ -47,7 +48,7 @@ export async function GET(request: Request, context: Context) {
   }
 }
 
-/** PATCH /api/orgs/[orgId] — name, slug, avatar; Owner and Admins. */
+/** PATCH /api/orgs/[orgId] — name and slug; Owner and Admins (the avatar is uploaded: ./avatar). */
 export async function PATCH(request: Request, context: Context) {
   const { orgId } = await context.params;
   const gate = await authorizeOrgRequest(request, orgId, 'ADMIN', ORG_WRITE_AUTH);
@@ -95,6 +96,9 @@ export async function DELETE(request: Request, context: Context) {
     // The service re-checks the caller is still the Owner under the org row lock, and ends
     // the org's live Stripe subscription inside its transaction (a Stripe failure refuses
     // the delete rather than leave a deleted org billed).
+    // ORG-1: the stored avatar file goes with the org. Its token is minted now, while the caller
+    // still holds the org; it is used only once the delete has committed.
+    const avatarToken = (await findOrganizationById(orgId))?.avatarUrl ? await mintOrgAvatarToken(orgId, gate.userId) : null;
     const result = await deleteOrganization(
       { actorId: gate.userId, orgId, choices: parsed.data.drives, now: new Date() },
       { endSubscription: endOrgSubscriptionPort() },
@@ -129,6 +133,11 @@ export async function DELETE(request: Request, context: Context) {
       resourceId: orgId,
       details: { operation: 'delete_organization', driveCount: result.steps.length },
     });
+    if (avatarToken) {
+      // Best effort: the org is already gone; a leftover file is logged, never a failed delete.
+      const removed = await callOrgAvatarStorage(orgId, avatarToken, { method: 'DELETE' }).catch((error: unknown) => error);
+      if (!(removed instanceof Response) || !removed.ok) loggers.api.warn('Deleted organization avatar file was not removed', { orgId });
+    }
     return NextResponse.json({ deleted: true, drives: result.steps });
   } catch (error) {
     loggers.api.error('Error deleting organization:', error as Error);

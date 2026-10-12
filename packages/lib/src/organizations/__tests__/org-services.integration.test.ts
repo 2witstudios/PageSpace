@@ -24,8 +24,11 @@ import { organizations, orgInvitations, orgMembers, orgSubscriptions } from '@pa
 import {
   countOrgSeats,
   createOrganization,
+  findOrganizationById,
   listOrganizationsForUser,
+  setOrganizationAvatar,
 } from '../repository';
+import { orgAvatarPath } from '../org-avatar-core';
 import { changeMemberRole, removeMember, transferOwnership } from '../membership';
 import {
   acceptInvitation,
@@ -123,7 +126,6 @@ describe('org services (real Postgres)', () => {
     const result = await createOrganization({
       name: 'Northwind Labs',
       slug: `northwind-${createId()}`,
-      avatarUrl: 'https://example.test/northwind.png',
       ownerId: jono.id,
     });
     if (!result.ok) throw new Error('seed failed');
@@ -160,7 +162,7 @@ describe('org services (real Postgres)', () => {
     it('ORG-1 (partial) creating an org writes ownerId and the one OWNER row together', async () => {
       const { jono, org } = await seedNorthwind();
       expect(org.name).toBe('Northwind Labs');
-      expect(org.avatarUrl).toBe('https://example.test/northwind.png');
+      expect(org.avatarUrl).toBeNull();
       expect(org.ownerId).toBe(jono.id);
       expect(await ownerRows(org.id)).toEqual([{ userId: jono.id }]);
       expect(await requireOrgRole(jono.id, org.id, 'OWNER')).toEqual({ ok: true, role: 'OWNER' });
@@ -174,6 +176,39 @@ describe('org services (real Postgres)', () => {
       const outsider = await person('Otto Outsider');
       const drive = await seedDrive(org.ownerId, org.id, { orgVisibility: 'OPEN' });
       expect(await decideOrgDriveAdmission({ driveId: drive.id, userId: outsider.id })).toEqual({ decision: 'hold', orgId: org.id });
+    });
+
+    it('ORG-1 an org has a name, a unique slug, an avatar PageSpace stores and serves (never an outside URL, refused by the service and by the database) and exactly one human Owner matching ownerId; an agent can be neither; ownership transfers to a member, leaving the old Owner an Admin', async () => {
+      const { jono, org } = await seedNorthwind();
+      expect(org).toMatchObject({ name: 'Northwind Labs', slug: expect.stringMatching(/^northwind-/), avatarUrl: null, ownerId: jono.id });
+      expect(await ownerRows(org.id)).toEqual([{ userId: jono.id }]);
+      expect(await createOrganization({ name: 'Copycat', slug: org.slug, ownerId: (await person('Copy Cat')).id })).toEqual({ ok: false, reason: 'slug_taken' });
+
+      // Avatar: the uploaded file's PageSpace path is stored and read back; an outside URL never is.
+      const uploaded = orgAvatarPath(org.id, 'avatar.png', 1);
+      expect(await setOrganizationAvatar(org.id, uploaded, jono.id)).toMatchObject({ ok: true, organization: { avatarUrl: uploaded } });
+      expect((await findOrganizationById(org.id))?.avatarUrl).toBe(uploaded);
+      for (const outside of ['https://tracker.example.com/pixel.png', orgAvatarPath('org_someone_else', 'avatar.png', 1)]) {
+        expect(await setOrganizationAvatar(org.id, outside, jono.id)).toEqual({ ok: false, reason: 'invalid_avatar' });
+        await expect(db.update(organizations).set({ avatarUrl: outside }).where(eq(organizations.id, org.id))).rejects.toThrow();
+      }
+      expect((await findOrganizationById(org.id))?.avatarUrl).toBe(uploaded);
+      expect(await setOrganizationAvatar(org.id, null, jono.id)).toMatchObject({ ok: true, organization: { avatarUrl: null } });
+
+      // One human Owner: an agent can neither own nor receive the org.
+      const product = await seedDrive(jono.id, org.id, { name: 'Product' });
+      const agent = await factories.createPage(product.id, { type: 'AI_CHAT', title: 'Planner' });
+      expect(await createOrganization({ name: 'Agent Org', slug: `agent-org-${createId()}`, ownerId: agent.id })).toEqual({ ok: false, reason: 'owner_not_human' });
+      expect(await transferOwnership({ orgId: org.id, actorId: jono.id, targetId: agent.id })).toEqual({ ok: false, status: 400, reason: 'owner_not_human' });
+
+      // Transferable: to a member only; ownerId and the one OWNER row move together.
+      const priya = await person('Priya Nair');
+      expect(await transferOwnership({ orgId: org.id, actorId: jono.id, targetId: priya.id })).toEqual({ ok: false, status: 400, reason: 'target_not_member' });
+      await addMember(org.id, priya.id, 'ADMIN');
+      expect(await transferOwnership({ orgId: org.id, actorId: jono.id, targetId: priya.id })).toEqual({ ok: true });
+      expect(await orgOwnerId(org.id)).toBe(priya.id);
+      expect(await ownerRows(org.id)).toEqual([{ userId: priya.id }]);
+      expect(await requireOrgRole(jono.id, org.id, 'MEMBER')).toEqual({ ok: true, role: 'ADMIN' });
     });
 
     it('ORG-1 (partial) a taken slug creates neither the org nor a membership row', async () => {
@@ -366,7 +401,7 @@ describe('org services (real Postgres)', () => {
       const { jono, org } = await seedNorthwind();
       const emailed: Array<{ email: string; token: string }> = [];
       const capture = async (invitation: { email: string }, token: string) => { emailed.push({ email: invitation.email, token }); };
-      const linkFor = (email: string) => emailed.filter((e) => e.email === email).at(-1)?.token ?? '';
+      const linkFor = (email: string) => emailed.filter((e) => e.email === email).pop()?.token ?? '';
       expect(await countOrgSeats(org.id)).toBe(1);
 
       // Invited by email: one address with no account yet, one existing account. Each pending invite is a seat.
