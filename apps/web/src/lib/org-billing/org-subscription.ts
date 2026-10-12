@@ -123,7 +123,7 @@ export interface OrgBillingStripe {
     idempotencyKey: string,
   ): Promise<{ id: string; quantity: number }>;
   /** Cancel now; a subscription that is already over is left as it is. */
-  cancelSubscription(subscriptionId: string, idempotencyKey: string): Promise<{ status: string }>;
+  cancelSubscription(subscriptionId: string, idempotencyKey: string, expectedStatus?: 'trialing'): Promise<{ status: string }>;
   /** The subscription's latest invoice with its confirmation secret, or null when it has none. */
   latestInvoice(subscriptionId: string): Promise<OrgLatestInvoice | null>;
   /** A Stripe billing-portal session on `customerId` (the org's). */
@@ -340,11 +340,16 @@ export async function ensureOrgBusinessSubscription(
       const canceled = await deps.stripe.cancelSubscription(
         candidate.id,
         orgStripeIdempotencyKey(orgId, 'subscription.cancel', { subscriptionId: candidate.id }),
+        'trialing',
       );
       if (isLiveOrgSubscriptionStatus(canceled.status)) {
-        throw new OrgBillingError('subscription_not_live', 'Unsupported trial could not be ended for paid checkout');
-      }
-      candidate.status = canceled.status;
+        // Payment may have completed after the inventory read. Preserve that
+        // subscription and re-read all its price/item evidence before adoption.
+        Object.assign(candidate, await deps.stripe.retrieveSubscription(candidate.id));
+        if (candidate.status === 'trialing') {
+          throw new OrgBillingError('subscription_not_live', 'Unsupported trial could not be ended for paid checkout');
+        }
+      } else candidate.status = canceled.status;
     }
     const existing = pickAdoptableOrgSubscription(history, { orgId, prices });
     let sub: OrgStripeSubscription;
@@ -600,9 +605,9 @@ export function stripeOrgBilling(client: Stripe): OrgBillingStripe {
       );
       return { id: item.id, quantity: item.quantity ?? 0 };
     },
-    async cancelSubscription(subscriptionId, idempotencyKey) {
+    async cancelSubscription(subscriptionId, idempotencyKey, expectedStatus) {
       const current = await client.subscriptions.retrieve(subscriptionId);
-      if (!isLiveOrgSubscriptionStatus(current.status)) return { status: current.status };
+      if (!isLiveOrgSubscriptionStatus(current.status) || (expectedStatus && current.status !== expectedStatus)) return { status: current.status };
       const canceled = await client.subscriptions.cancel(subscriptionId, {}, { idempotencyKey });
       return { status: canceled.status };
     },

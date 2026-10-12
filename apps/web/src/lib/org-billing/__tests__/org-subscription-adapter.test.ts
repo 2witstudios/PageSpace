@@ -5,6 +5,12 @@ import { stripeOrgBilling } from '../org-subscription';
 import { planOrgSubscriptionPriceMirror } from '@pagespace/lib/billing/org-webhook-core';
 
 describe('Stripe org subscription adapter', () => {
+  it('does not cancel a trial that Stripe now reports as active', async () => {
+    const cancel = vi.fn().mockResolvedValue({ status: 'canceled' });
+    const client = { subscriptions: { retrieve: vi.fn().mockResolvedValue({ status: 'active' }), cancel } } as unknown as Stripe;
+    expect(await stripeOrgBilling(client).cancelSubscription('sub_org', 'trial-recovery', 'trialing')).toEqual({ status: 'active' });
+    expect(cancel).not.toHaveBeenCalled();
+  });
   it('preserves pagination evidence so a valid-looking first page cannot authorize Business', async () => {
     const retrieve = vi.fn().mockResolvedValue({
       id: 'sub_org', customer: 'cus_org', status: 'active', created: 1,

@@ -192,6 +192,26 @@ describe('org Business subscription shell (real Postgres, in-memory Stripe)', ()
     expect(stripe.writes.createSubscription).toBe(2);
   });
 
+  it.each([false, true])('adopts a trial that becomes active after inventory without canceling or buying again (lost mirror: %s)', async (lostMirror) => {
+    if (!dbAvailable) return;
+    const { orgId, deps, stripe } = await northwind(1);
+    const first = await ensureOrgBusinessSubscription(orgId, deps);
+    const trial = stripe.subscriptions.get(first.linkage.stripeSubscriptionId)!;
+    trial.status = 'trialing';
+    if (lostMirror) await db.delete(orgSubscriptions).where(eq(orgSubscriptions.orgId, orgId));
+    const list = stripe.listCustomerSubscriptions.bind(stripe);
+    stripe.listCustomerSubscriptions = async (customerId) => {
+      const snapshot = await list(customerId);
+      trial.status = 'active';
+      return snapshot;
+    };
+    const recovered = await ensureOrgBusinessSubscription(orgId, deps);
+    expect(recovered.linkage.stripeSubscriptionId).toBe(trial.id);
+    expect(recovered.linkage.status).toBe('active');
+    expect(stripe.writes.cancelSubscription).toBe(0);
+    expect(stripe.writes.createSubscription).toBe(1);
+  });
+
   it('recovers a lost trial cancellation response without duplicate live subscriptions', async () => {
     if (!dbAvailable) return;
     const { orgId, deps, stripe } = await northwind(1);
