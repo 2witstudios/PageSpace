@@ -559,7 +559,7 @@ beforeEach(() => {
 // from "grant = paid" (both produce the same number). The dedicated active:true
 // test below closes that gap by proving the full webhook → funding → balance path
 // actually applies the ratio, not just amount_paid, end to end.
-describe('credits flow — grants sized from the invoice paid (MON-2)', () => {
+describe('credits flow — grants sized from the invoice paid', () => {
   it('MON-2 the ledger row records paidCents and the grant is amount_paid × the default ratio', async () => {
     seedUser('u1', 'cus_1', 'pro');
     await applyStripeFunding(invoicePaid('in_full', 'cus_1', PERIOD_START, PERIOD_END, 1500), { tier: 'pro' });

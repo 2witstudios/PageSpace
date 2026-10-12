@@ -533,7 +533,7 @@ describe('applyStripeFunding', () => {
     expect(mockApiLogger.warn).toHaveBeenCalled();
   });
 
-  describe('grants sized from the invoice paid (MON-2)', () => {
+  describe('grants sized from the invoice paid', () => {
     function refill(cap: Captured, carried = 0, debt = 0) {
       mockDb.select.mockReturnValue(userSelectReturning(PRO_USER));
       mockDb.transaction.mockImplementation(async (cb: (tx: unknown) => Promise<void>) => {
