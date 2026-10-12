@@ -57,31 +57,31 @@ describe('grantForInvoice — D-OW-16: entitlement follows amount paid except gr
   const list = () => allowanceCentsForPaidCents(tierListPriceCents('pro'), 'pro');
 
   it('MON-2 (a) a gifted subscription grants list price × ratio, records paidCents 0, basis list', () => {
-    expect(grantForInvoice({ amountPaidCents: 0, subtotalCents: 1500, billingReason: 'subscription_cycle', hasSubscriptionParent: true, gifted: true, tier: 'pro' }))
+    expect(grantForInvoice({ amountPaidCents: 0, billingReason: 'subscription_cycle', hasSubscriptionParent: true, gifted: true, tier: 'pro' }))
       .toEqual({ paidCents: 0, allowanceCents: list(), basis: 'list', reason: 'gifted' });
     expect(list()).toBe(900);
   });
 
-  it('MON-2 (a) a subscription created with a trial (subscription_create, paid 0, subtotal 0) grants list price × ratio', () => {
-    expect(grantForInvoice({ amountPaidCents: 0, subtotalCents: 0, billingReason: 'subscription_create', hasSubscriptionParent: true, gifted: false, tier: 'pro' }))
-      .toEqual({ paidCents: 0, allowanceCents: list(), basis: 'list', reason: 'trial' });
+  it('D-OW-30 nothing creates trials: a $0 subscription_create invoice with subtotal 0 that is not a gift grants nothing', () => {
+    expect(grantForInvoice({ amountPaidCents: 0, billingReason: 'subscription_create', hasSubscriptionParent: true, gifted: false, tier: 'pro' }))
+      .toEqual({ paidCents: 0, allowanceCents: 0, basis: 'none', reason: 'zero_amount' });
   });
 
   it('MON-2 (b) a proration-only or subscription_update invoice that paid 0 grants nothing (subscription_update is grant-eligible as a KIND, but $0 paid is $0 granted, via the ordinary zero_amount path)', () => {
-    expect(grantForInvoice({ amountPaidCents: 0, subtotalCents: 0, billingReason: 'subscription_update', hasSubscriptionParent: true, tier: 'pro' }))
+    expect(grantForInvoice({ amountPaidCents: 0, billingReason: 'subscription_update', hasSubscriptionParent: true, tier: 'pro' }))
       .toEqual({ paidCents: 0, allowanceCents: 0, basis: 'none', reason: 'zero_amount' });
-    expect(grantForInvoice({ amountPaidCents: 0, subtotalCents: 300, billingReason: 'subscription_update', hasSubscriptionParent: true, tier: 'pro' }).allowanceCents).toBe(0);
+    expect(grantForInvoice({ amountPaidCents: 0, billingReason: 'subscription_update', hasSubscriptionParent: true, tier: 'pro' }).allowanceCents).toBe(0);
   });
 
   it('MON-2 (c) a partial discount grants from amount_paid: 50% off → half, 20% off → 720', () => {
-    expect(grantForInvoice({ amountPaidCents: 750, subtotalCents: 1500, billingReason: 'subscription_cycle', hasSubscriptionParent: true, tier: 'pro' }))
+    expect(grantForInvoice({ amountPaidCents: 750, billingReason: 'subscription_cycle', hasSubscriptionParent: true, tier: 'pro' }))
       .toEqual({ paidCents: 750, allowanceCents: list() / 2, basis: 'paid', reason: 'paid' });
-    expect(grantForInvoice({ amountPaidCents: 1200, subtotalCents: 1500, billingReason: 'subscription_cycle', hasSubscriptionParent: true, tier: 'pro' }).allowanceCents).toBe(720);
+    expect(grantForInvoice({ amountPaidCents: 1200, billingReason: 'subscription_cycle', hasSubscriptionParent: true, tier: 'pro' }).allowanceCents).toBe(720);
   });
 
   it('MON-2 (d) a 100% coupon on a non-gifted subscription grants nothing, even on subscription_create', () => {
     // subtotal is the list price, paid 0: a coupon, not a trial.
-    expect(grantForInvoice({ amountPaidCents: 0, subtotalCents: 1500, billingReason: 'subscription_create', hasSubscriptionParent: true, gifted: false, tier: 'pro' }))
+    expect(grantForInvoice({ amountPaidCents: 0, billingReason: 'subscription_create', hasSubscriptionParent: true, gifted: false, tier: 'pro' }))
       .toEqual({ paidCents: 0, allowanceCents: 0, basis: 'none', reason: 'zero_amount' });
   });
 
@@ -115,7 +115,7 @@ describe('SECURITY (Codex P1, thread "Restrict derived grants to account-plan in
   });
 
   it('a gifted subscription is still restricted to a real subscription invoice: a manual invoice on a gifted account grants nothing even with gifted: true', () => {
-    const result = grantForInvoice({ amountPaidCents: 0, subtotalCents: 5000, billingReason: 'manual', gifted: true, tier: 'business' });
+    const result = grantForInvoice({ amountPaidCents: 0, billingReason: 'manual', gifted: true, tier: 'business' });
     expect(result.allowanceCents).toBe(0);
   });
 

@@ -11,7 +11,7 @@
  *     account-plan-classified invoice grants nothing regardless of amount_paid
  *     (invoice-grant.ts). The grant is sized from what the invoice PAID:
  *     invoice.amount_paid × the tier's included-credit ratio (Spec MON-2, via the
- *     pure invoice-grant module). Gifts and trials are funded at
+ *     pure invoice-grant module). Gifts are funded at
  *     list price × ratio (D-OW-16a) — gifted status is read from the invoice's
  *     own subscription-metadata snapshot first, so it cannot race the
  *     subscription webhook, with the live subscriptions row as a fallback. Any
@@ -60,7 +60,6 @@ interface FundingEventObject {
   customer?: string | { id?: string | null } | null;
   /** Stripe invoice.amount_paid — what the invoice actually collected, in minor units. */
   amount_paid?: number | null;
-  /** Stripe invoice.subtotal — line items before discounts; 0 on a trial-create invoice. */
   subtotal?: number | null;
   /** Stripe invoice.billing_reason. */
   billing_reason?: string | null;
@@ -267,7 +266,7 @@ async function applyMonthlyRefill(event: FundingEvent, tierOverride?: Subscripti
   const tier = tierOverride === 'pro' ? 'pro' : 'free';
   // MON-2 / D-OW-16: the grant is sized from what THIS invoice paid, never from a
   // tier table — a promo, a proration, or a price change flows through with no table
-  // edit. A gift or a trial is us fronting the plan and derives from the list price.
+  // edit. A gift is us fronting the plan and derives from the list price.
   // Gifted status is read from the invoice's OWN metadata snapshot first — no DB
   // round trip, no race against the subscription webhook (Codex P1) — with the live
   // subscriptions row as a secondary OR (still correct when it resolves, and covers
@@ -275,7 +274,6 @@ async function applyMonthlyRefill(event: FundingEvent, tierOverride?: Subscripti
   const gifted = isGiftInvoice(obj) || (await isGiftedSubscriber(user.id));
   const grant = grantForInvoice({
     amountPaidCents: obj.amount_paid,
-    subtotalCents: obj.subtotal,
     billingReason: obj.billing_reason,
     hasSubscriptionParent: invoiceHasSubscriptionParent(obj),
     gifted,
@@ -283,7 +281,7 @@ async function applyMonthlyRefill(event: FundingEvent, tierOverride?: Subscripti
   });
   const allowanceCents = grant.allowanceCents;
   if (allowanceCents <= 0) {
-    // Nothing paid and not a gift or trial (proration-only, subscription_update at
+    // Nothing paid and not a gift (proration-only, subscription_update at
     // $0, a 100% coupon on a non-gifted subscription): nothing to grant, nothing to
     // record, nothing to dedupe — the next PAID invoice sizes its own grant.
     loggers.api.info('credit funding: invoice grants nothing', {

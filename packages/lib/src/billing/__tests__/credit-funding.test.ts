@@ -152,7 +152,7 @@ const invoiceEvent = {
   },
 };
 
-// Same invoice shape with a different amount actually paid (promo, proration, $0 trial start).
+// Same invoice shape with a different amount actually paid (promo, proration, a $0 gift).
 function paidInvoiceEvent(amountPaid: number | undefined, extra: Record<string, unknown> = {}) {
   return {
     id: 'evt_inv',
@@ -653,20 +653,17 @@ describe('applyStripeFunding', () => {
         );
       });
 
-      it('MON-2 (a) a subscription created with a trial (subscription_create, $0, subtotal 0) grants list price × the default ratio', async () => {
-        selectUserThenSubscriptions(PRO_USER, [{ gifted: false, status: 'trialing' }]);
+      it('D-OW-30 nothing creates trials: a $0 subscription_create invoice (subtotal 0) on a non-gifted subscription grants nothing', async () => {
+        selectUserThenSubscriptions(PRO_USER, [{ gifted: false, status: 'active' }]);
         const cap: Captured = {};
         mockDb.transaction.mockImplementation(async (cb: (tx: unknown) => Promise<void>) => {
-          await cb(refillTx(cap, [{ id: 'led_trial' }], 0));
+          await cb(refillTx(cap, [{ id: 'led_zero_create' }], 0));
         });
 
         await applyStripeFunding(paidInvoiceEvent(0, { subtotal: 0, billing_reason: 'subscription_create' }), { tier: 'pro' });
 
-        expect(cap.ledgerValues).toMatchObject({ amountCents: 900, paidCents: 0 });
-        expect(mockApiLogger.info).toHaveBeenCalledWith(
-          'credit funding: monthly refill applied',
-          expect.objectContaining({ basis: 'list', reason: 'trial' }),
-        );
+        expect(mockDb.transaction).not.toHaveBeenCalled();
+        expect(cap.ledgerValues).toBeUndefined();
       });
 
       it('MON-2 (b) a proration-only / subscription_update invoice that paid $0 grants nothing (subscription_update is grant-eligible as a KIND; $0 paid is $0 granted)', async () => {

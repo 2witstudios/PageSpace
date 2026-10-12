@@ -610,12 +610,13 @@ describe('credits flow — grants sized from the invoice paid', () => {
     expect(ledgerOf('u1').find((r) => r.stripeRef === 'in_gift')).toMatchObject({ entryType: 'monthly_grant', amountCents: 900, paidCents: 0 });
   });
 
-  it('MON-2 (a) a trial-created subscription ($0, subtotal 0, subscription_create) grants list × the default ratio', async () => {
+  it('D-OW-30 a $0 subscription_create invoice (subtotal 0) on a non-gifted subscription grants nothing: no trial is funded', async () => {
     seedUser('u1', 'cus_1', 'pro');
-    seedLiveSubscription('u1', 'trialing');
-    await applyStripeFunding(withReason(invoicePaid('in_trial', 'cus_1', PERIOD_START, PERIOD_END, 0), 0, 'subscription_create'), { tier: 'pro' });
+    seedLiveSubscription('u1', 'active');
+    await applyStripeFunding(withReason(invoicePaid('in_zero_create', 'cus_1', PERIOD_START, PERIOD_END, 0), 0, 'subscription_create'), { tier: 'pro' });
 
-    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(900);
+    expect(ledgerOf('u1')).toHaveLength(0);
+    expect(balanceOf('u1')).toBeUndefined();
   });
 
   it('MON-2 (d) a 100% coupon on a non-gifted subscription grants nothing', async () => {
