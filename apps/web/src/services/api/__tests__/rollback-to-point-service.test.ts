@@ -20,6 +20,7 @@ import { db } from '@pagespace/db/db';
 import { executeRollback } from '../rollback-service';
 import { lockOrgsOfDrivesForShare } from '@pagespace/lib/organizations/policy-reader';
 import { executeRollbackToPoint, type RollbackToPointPreview } from '../rollback-to-point-service';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const canRun: ActivityActionPreview = {
   action: 'rollback', canExecute: true, reason: undefined, warnings: [], hasConflict: false, conflictFields: [],
@@ -51,7 +52,7 @@ describe('executeRollbackToPoint', () => {
     const tx = { marker: 'rollback-tx' };
     vi.mocked(db.transaction).mockImplementation((async (callback: (t: typeof tx) => Promise<void>) => callback(tx)) as unknown as typeof db.transaction);
 
-    const result = await executeRollbackToPoint('act_1', 'user_dana', 'drive', preview);
+    const result = await executeRollbackToPoint('act_1', credentialActor('user_dana', null), 'drive', preview);
 
     expect(result).toEqual({ success: true, activitiesRolledBack: 2, errors: [] });
     const lock = vi.mocked(lockOrgsOfDrivesForShare);
@@ -65,7 +66,7 @@ describe('executeRollbackToPoint', () => {
     vi.mocked(db.transaction).mockImplementation((async (callback: (t: object) => Promise<void>) => callback({})) as unknown as typeof db.transaction);
     vi.mocked(lockOrgsOfDrivesForShare).mockRejectedValueOnce(new Error('deadlock detected'));
 
-    const result = await executeRollbackToPoint('act_1', 'user_dana', 'drive', preview);
+    const result = await executeRollbackToPoint('act_1', credentialActor('user_dana', null), 'drive', preview);
 
     expect(result).toEqual({ success: false, activitiesRolledBack: 0, errors: ['deadlock detected'] });
     expect(executeRollback).not.toHaveBeenCalled();

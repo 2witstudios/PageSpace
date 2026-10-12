@@ -34,6 +34,7 @@ import { applyDevPreviewUserActionForHolder, authorizePreviewHolderForUser } fro
 import { readDevPreviewUserAction } from '@/lib/dev-preview/user-action-body';
 import { respondToDevPreviewUserAction } from '@/lib/dev-preview/action-response';
 import { canManageDevPreview } from '@/lib/dev-preview/manage-decision';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 const ROUTE = 'agent-workspaces/[workspaceId]/preview/actions';
@@ -50,7 +51,7 @@ export async function POST(request: Request, context: { params: Promise<{ worksp
 
     const session = await findSessionRecord(workspaceId);
     if (!session) return workspaceNotFoundOrDenied(request, auth.userId, workspaceId, 'session_not_found', ROUTE);
-    const authorization = await authorizePreviewHolderForUser({ holder: { kind: 'workspace', id: session.id }, userId: auth.userId });
+    const authorization = await authorizePreviewHolderForUser({ holder: { kind: 'workspace', id: session.id }, actor: actorFromAuth(auth)});
     if (!authorization.allowed) return workspaceNotFoundOrDenied(request, auth.userId, workspaceId, authorization.reason, ROUTE);
 
     const holder = resolveDevPreviewHolder({ id: session.id, envId: session.envId });
@@ -62,7 +63,7 @@ export async function POST(request: Request, context: { params: Promise<{ worksp
       return NextResponse.json({ error: manage.message }, { status: 403 });
     }
 
-    const result = await applyDevPreviewUserActionForHolder({ holder, action, userId: auth.userId, wakeSubject: authorization.wakeSubject, sandboxId: authorization.sandboxId });
+    const result = await applyDevPreviewUserActionForHolder({ holder, action, actor: actorFromAuth(auth), wakeSubject: authorization.wakeSubject, sandboxId: authorization.sandboxId });
     return respondToDevPreviewUserAction({ request, userId: auth.userId, route: ROUTE, holder, action, result });
   } catch (error) {
     loggers.api.error('Failed to apply session preview action', error instanceof Error ? error : new Error(String(error)));

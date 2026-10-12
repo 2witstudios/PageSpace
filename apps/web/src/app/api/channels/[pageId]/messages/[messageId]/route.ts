@@ -4,6 +4,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
 import { channelMessageRepository } from '@pagespace/lib/services/channel-message-repository';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -22,7 +23,7 @@ export async function PATCH(req: Request, { params }: RouteParams) {
 
   const canEdit = await canPrincipalEditPage(auth, pageId);
   if (!canEdit) {
-    return NextResponse.json({ error: 'You need edit permission to modify channel messages' }, { status: 403 });
+    return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json({ error: 'You need edit permission to modify channel messages' }, { status: 403 }));
   }
 
   const message = await channelMessageRepository.findChannelMessageInPage({ messageId, pageId });
@@ -92,7 +93,7 @@ export async function DELETE(req: Request, { params }: RouteParams) {
 
   const canEdit = await canPrincipalEditPage(auth, pageId);
   if (!canEdit) {
-    return NextResponse.json({ error: 'You need edit permission to modify channel messages' }, { status: 403 });
+    return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json({ error: 'You need edit permission to modify channel messages' }, { status: 403 }));
   }
 
   const message = await channelMessageRepository.findChannelMessageInPage({ messageId, pageId });

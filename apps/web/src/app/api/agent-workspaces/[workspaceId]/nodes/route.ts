@@ -49,6 +49,7 @@ import type {
 import { checkSessionAccess } from '@/lib/agent-workspaces/agent-workspaces-runtime';
 import { applyWorkspaceNodeWrite, readWorkspaceNodes } from '@/lib/agent-workspaces/workspace-node-runtime';
 import { workspaceNotFoundOrDenied } from '@/lib/agent-workspaces/workspace-unavailable-response';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -62,13 +63,13 @@ export async function GET(request: Request, context: RouteContext) {
   if (isAuthError(auth)) return auth.error;
   const { workspaceId } = await context.params;
 
-  const access = await checkSessionAccess(auth.userId, workspaceId);
+  const access = await checkSessionAccess(actorFromAuth(auth), workspaceId);
   if (!access.allowed) {
     return workspaceNotFoundOrDenied(request, auth.userId, workspaceId, access.reason, ROUTE);
   }
 
   try {
-    const snapshot: WorkspaceNodeSnapshotResponse = await readWorkspaceNodes(workspaceId, auth.userId);
+    const snapshot: WorkspaceNodeSnapshotResponse = await readWorkspaceNodes(workspaceId, actorFromAuth(auth));
     return NextResponse.json(snapshot);
   } catch (error) {
     loggers.api.error('Workspace node read failed', error instanceof Error ? error : undefined, { workspaceId });
@@ -81,7 +82,7 @@ export async function POST(request: Request, context: RouteContext) {
   if (isAuthError(auth)) return auth.error;
   const { workspaceId } = await context.params;
 
-  const access = await checkSessionAccess(auth.userId, workspaceId);
+  const access = await checkSessionAccess(actorFromAuth(auth), workspaceId);
   if (!access.allowed) {
     return workspaceNotFoundOrDenied(request, auth.userId, workspaceId, access.reason, ROUTE);
   }
@@ -105,7 +106,7 @@ export async function POST(request: Request, context: RouteContext) {
       baseRev: parsed.data.baseRev,
       put: parsed.data.put,
       drop: parsed.data.drop,
-      viewerId: auth.userId,
+      viewer: actorFromAuth(auth),
     });
   } catch (error) {
     loggers.api.error('Workspace node write failed', error instanceof Error ? error : undefined, { workspaceId });

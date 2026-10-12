@@ -261,21 +261,20 @@ describe('X-3 tenant export/import round-trip of organizations and wallets (real
     // data and enforced by nothing — the same org that is lapsed on the source reads active here.
     const { rows } = await db.execute(sql.raw(`SELECT * FROM org_subscriptions WHERE "orgId" = '${NW}'`));
     expect(rows).toEqual(before.org_subscriptions);
-    const sub = rows[0] as { status: string; trialEnd: Date | null; currentPeriodStart: Date | null; currentPeriodEnd: Date | null; cancelAtPeriodEnd: boolean };
+    const sub = rows[0] as { status: string; collectionMethod: string; currentPeriodStart: Date | null; currentPeriodEnd: Date | null; cancelAtPeriodEnd: boolean };
     const subscription = { ...sub, hasVerifiedFunding: (await count(`org_subscription_funding WHERE "orgId" = '${NW}'`)) > 0 };
-    const now = new Date('2026-09-15T00:00:00.000Z');
 
     const mode = process.env.DEPLOYMENT_MODE;
     process.env.DEPLOYMENT_MODE = 'tenant';
     try {
       expect(isBillingEnabled()).toBe(false);
-      expect(deriveOrgStatus({ billingEnabled: isBillingEnabled(), subscription, now })).toEqual({ status: 'active', reason: null });
+      expect(deriveOrgStatus({ billingEnabled: isBillingEnabled(), subscription })).toEqual({ status: 'active', reason: null });
     } finally {
       if (mode === undefined) delete process.env.DEPLOYMENT_MODE;
       else process.env.DEPLOYMENT_MODE = mode;
     }
     // On the billed source the identical rows read lapsed — so the data, not its meaning, is what travels.
-    expect(deriveOrgStatus({ billingEnabled: true, subscription, now })).toEqual({ status: 'lapsed', reason: 'payment_failed' });
+    expect(deriveOrgStatus({ billingEnabled: true, subscription })).toEqual({ status: 'lapsed', reason: 'payment_failed' });
   });
 
   it('X-3 a referenced org\'s departure suppressions travel, so an address that left it is never auto-joined on the tenant', async () => {

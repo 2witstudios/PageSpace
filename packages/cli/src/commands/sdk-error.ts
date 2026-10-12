@@ -5,6 +5,7 @@
  * try/catch/format triple.
  */
 import type { OutputSink } from '../handler-context.js';
+import { formatCliError } from '../format-error.js';
 
 export type SdkCallResult<T> = { readonly ok: true; readonly value: T } | { readonly ok: false };
 
@@ -12,7 +13,7 @@ export async function callSdk<T>(stderr: OutputSink, fn: () => Promise<T>): Prom
   try {
     return { ok: true, value: await fn() };
   } catch (error) {
-    stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    stderr.write(`${formatCliError(error)}\n`);
     return { ok: false };
   }
 }

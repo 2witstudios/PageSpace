@@ -33,6 +33,7 @@ import { releaseHold } from '../../billing/credit-consume';
 import { resolveSandboxPayerTier } from '../../billing/sandbox-eligibility';
 import { lookupDriveBillingFacts } from '../../billing/sandbox-payer';
 import { getUserDriveAccess, canUserViewPage } from '../../permissions/permissions';
+import { credentialActor } from '../../permissions/access-actor';
 
 vi.mock('../orgs-enabled', () => ({ ORGS_ENABLED: true }));
 
@@ -202,8 +203,8 @@ describe('org lapse gates (orgs on, real Postgres)', () => {
     const before = await footprint(w);
     await setSubscription(w.orgId, status);
     expect(await isOrgActive(w.orgId)).toBe(false);
-    expect(await canUserViewPage(w.ids.marcus, w.pageId)).toBe(true);
-    expect(await getUserDriveAccess(w.ids.dana, w.productId)).toBe(true);
+    expect(await canUserViewPage(credentialActor(w.ids.marcus, null), w.pageId)).toBe(true);
+    expect(await getUserDriveAccess(credentialActor(w.ids.dana, null), w.productId)).toBe(true);
     expect(await createOrgDrive(w.ids.marcus, { name: 'Engineering', orgId: w.orgId }, deps)).toMatchObject({ ok: false, code: 'org_lapsed' });
     expect(await createOrRotateInvitation({ actorRole: 'OWNER', orgId: w.orgId, email: `lapsed-${createId()}@northwind.test`, role: 'MEMBER', invitedBy: w.ids.jono, now: new Date(), deliver })).toMatchObject({ ok: false, reason: 'org_lapsed' });
     expect(await admitDriveComputeCreator({ driveId: w.productId, userId: w.ids.dana })).toMatchObject({ allowed: false, code: 'org_lapsed' });
@@ -233,10 +234,10 @@ describe('org lapse gates (orgs on, real Postgres)', () => {
     const before = await footprint(w);
     await setSubscription(w.orgId, 'canceled');
 
-    expect(await getUserDriveAccess(w.ids.marcus, w.productId)).toBe(true);
-    expect(await canUserViewPage(w.ids.marcus, w.pageId)).toBe(true);
-    expect(await getUserDriveAccess(w.ids.dana, w.productId)).toBe(true);
-    const read = await getDriveWallet(w.ids.priya, w.productId, 'session');
+    expect(await getUserDriveAccess(credentialActor(w.ids.marcus, null), w.productId)).toBe(true);
+    expect(await canUserViewPage(credentialActor(w.ids.marcus, null), w.pageId)).toBe(true);
+    expect(await getUserDriveAccess(credentialActor(w.ids.dana, null), w.productId)).toBe(true);
+    const read = await getDriveWallet(credentialActor(w.ids.priya, null), w.productId, 'session');
     expect(read.ok).toBe(true);
 
     expect(await footprint(w)).toEqual(before);
@@ -269,17 +270,17 @@ describe('org lapse gates (orgs on, real Postgres)', () => {
     const before = await footprint(w);
     await setSubscription(w.orgId, 'past_due');
     // A failed payment lapses immediately, before retries are exhausted.
-    expect(await updateDriveWallet(w.ids.priya, w.productId, { allocationCents: 130_000 }, 'session')).toMatchObject({ ok: false, code: 'org_lapsed' });
+    expect(await updateDriveWallet(credentialActor(w.ids.priya, null), w.productId, { allocationCents: 130_000 }, 'session')).toMatchObject({ ok: false, code: 'org_lapsed' });
     expect(await footprint(w)).toEqual(before);
 
     await setSubscription(w.orgId, 'unpaid');
     const lapsedRefusal = { ok: false, status: 402, code: 'org_lapsed', message: ORG_LAPSED_MESSAGE };
-    expect(await updateDriveWallet(w.ids.priya, w.productId, { allocationCents: 1 }, 'session')).toEqual(lapsedRefusal);
+    expect(await updateDriveWallet(credentialActor(w.ids.priya, null), w.productId, { allocationCents: 1 }, 'session')).toEqual(lapsedRefusal);
     // Resuming loosens; pausing (the kill switch) restricts and still applies while lapsed ([D-OW-33], lapsed-restrict suite).
-    expect(await updateDriveWallet(w.ids.priya, w.productId, { paused: false }, 'session')).toEqual(lapsedRefusal);
-    expect(await topUpDriveWallet(w.ids.priya, w.productId, { amountCents: 500, idempotencyKey: createId() }, 'session')).toEqual(lapsedRefusal);
+    expect(await updateDriveWallet(credentialActor(w.ids.priya, null), w.productId, { paused: false }, 'session')).toEqual(lapsedRefusal);
+    expect(await topUpDriveWallet(credentialActor(w.ids.priya, null), w.productId, { amountCents: 500, idempotencyKey: createId() }, 'session')).toEqual(lapsedRefusal);
     await db.delete(wallets).where(eq(wallets.id, w.productWalletId));
-    expect(await createDriveWallet(w.ids.priya, w.productId, { allocationCents: 50_000 }, 'session')).toEqual(lapsedRefusal);
+    expect(await createDriveWallet(credentialActor(w.ids.priya, null), w.productId, { allocationCents: 50_000 }, 'session')).toEqual(lapsedRefusal);
     expect(await db.select().from(wallets).where(and(eq(wallets.subjectType, 'drive'), eq(wallets.subjectId, w.productId)))).toHaveLength(0);
     // Put the fixture back as it was (the delete above was the test's own, not the lapse's).
     await db.insert(wallets).values({ id: w.productWalletId, ownerType: 'org', orgId: w.orgId, subjectType: 'drive', subjectId: w.productId, parentWalletId: w.poolId, monthlyAllowanceCents: 120_000, monthlyPeriodStart: new Date(Date.now() - 86_400_000) });
@@ -359,7 +360,7 @@ describe('org lapse gates (orgs on, real Postgres)', () => {
     expect(await footprint(w)).toEqual(before);
     expect(await db.select().from(creditLedger).where(eq(creditLedger.walletId, w.poolId))).toHaveLength(0);
     // Drives stay readable while lapsed (scenario step 10).
-    expect(await canUserViewPage(w.ids.dana, w.pageId)).toBe(true);
+    expect(await canUserViewPage(credentialActor(w.ids.dana, null), w.pageId)).toBe(true);
 
     // Reactivated (the webhook mirror reports active): no other step, everything is back.
     await setSubscription(w.orgId, 'active');

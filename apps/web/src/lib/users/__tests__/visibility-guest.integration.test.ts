@@ -13,6 +13,7 @@ import { createId } from '@paralleldrive/cuid2';
 import { factories } from '@pagespace/db/test/factories';
 import { ensureTestDb } from '@/test/ensure-test-db';
 import { callerCanViewUser, searchRelatedProfilesByName } from '../visibility';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const seededUserIds: string[] = [];
 
@@ -79,11 +80,11 @@ describe('searchRelatedProfilesByName across a GUEST row (integration)', () => {
       { userId: owner.id, username: `o-${tag}`, displayName: `Owner ${tag}`, updatedAt: new Date() },
     ]);
 
-    const byOwner = (await searchRelatedProfilesByName(owner.id, `%${tag}%`, 10)).map((p) => p.userId);
+    const byOwner = (await searchRelatedProfilesByName(credentialActor(owner.id, null), `%${tag}%`, 10)).map((p) => p.userId);
     // Control: the accepted co-member is found by the very same query.
     expect(byOwner).toContain(member.id);
     expect(byOwner).not.toContain(guest.id);
-    expect((await searchRelatedProfilesByName(member.id, `%${tag}%`, 10)).map((p) => p.userId)).not.toContain(guest.id);
-    expect(await searchRelatedProfilesByName(guest.id, `%${tag}%`, 10)).toEqual([]);
+    expect((await searchRelatedProfilesByName(credentialActor(member.id, null), `%${tag}%`, 10)).map((p) => p.userId)).not.toContain(guest.id);
+    expect(await searchRelatedProfilesByName(credentialActor(guest.id, null), `%${tag}%`, 10)).toEqual([]);
   });
 });

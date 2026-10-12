@@ -15,6 +15,7 @@ vi.mock('@/lib/orgs/org-route-auth', () => ({ authorizeOrgRequest: vi.fn(), ORG_
 import { PUT, DELETE } from '../route';
 import { setSeatCap } from '@pagespace/lib/services/drive-wallet-service';
 import { authorizeOrgRequest } from '@/lib/orgs/org-route-auth';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const ctx = { params: Promise.resolve({ orgId: 'org-1', userId: 'u-marcus' }) };
 const req = (method: string, body?: unknown) => new Request('https://example.com/api/orgs/org-1/members/u-marcus/seat-cap', {
@@ -24,7 +25,7 @@ const req = (method: string, body?: unknown) => new Request('https://example.com
 describe('/api/orgs/[orgId]/members/[userId]/seat-cap', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(authorizeOrgRequest).mockResolvedValue({ ok: true, userId: 'u-ana', role: 'ADMIN', allowedDriveIds: [] });
+    vi.mocked(authorizeOrgRequest).mockResolvedValue({ ok: true, userId: 'u-ana', role: 'ADMIN', allowedDriveIds: [], authentication: null, actor: credentialActor('u-ana', null) });
   });
 
   it('WAL-7 (partial) an Admin\'s PUT reaches the service with the windows; DELETE clears', async () => {

@@ -250,7 +250,7 @@ describe('GET /api/drives/[driveId]/members', () => {
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/members`);
       await GET(request, createContext(mockDriveId));
 
-      expect(checkDriveAccess).toHaveBeenCalledWith(mockDriveId, mockUserId);
+      expect(checkDriveAccess).toHaveBeenCalledWith(mockDriveId, expect.objectContaining({ userId: mockUserId }));
     });
 
     it('should call listDriveMembers with driveId', async () => {

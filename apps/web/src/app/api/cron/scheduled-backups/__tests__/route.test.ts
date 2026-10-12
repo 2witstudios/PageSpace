@@ -154,7 +154,7 @@ describe('GET /api/cron/scheduled-backups', () => {
 
       expect(createDriveBackup).toHaveBeenCalledWith(
         schedule.driveId,
-        schedule.ownerId,
+        expect.objectContaining({ userId: schedule.ownerId }),
         { source: 'scheduled' }
       );
       expect(res.status).toBe(200);
@@ -240,7 +240,7 @@ describe('GET /api/cron/scheduled-backups', () => {
       mockLimit.mockResolvedValueOnce([schedule]).mockResolvedValue([]);
       const response = await GET(req());
       expect(await response.json()).toMatchObject({ fired: 1, skipped: 0 });
-      expect(createDriveBackup).toHaveBeenCalledWith(schedule.driveId, schedule.ownerId, { source: 'scheduled' });
+      expect(createDriveBackup).toHaveBeenCalledWith(schedule.driveId, expect.objectContaining({ userId: schedule.ownerId }), { source: 'scheduled' });
     } finally {
       vi.unstubAllEnvs();
     }

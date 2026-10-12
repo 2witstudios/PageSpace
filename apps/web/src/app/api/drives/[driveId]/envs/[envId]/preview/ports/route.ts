@@ -15,6 +15,7 @@ import { resolveEnvInDrive } from '@/lib/drive-envs/drive-envs-runtime';
 import { authorizePreviewHolderForUser, probeDevPreviewPortsForHolder } from '@/lib/dev-preview/preview-runtime';
 import { respondToDevPreviewPorts } from '@/lib/dev-preview/ports-response';
 import { canManageDevPreview } from '@/lib/dev-preview/manage-decision';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 const ROUTE = 'drive-envs/preview/ports';
@@ -36,12 +37,12 @@ export async function POST(request: Request, context: { params: Promise<{ driveI
     if (!env) return NextResponse.json({ error: 'Environment not found' }, { status: 404 });
     if (env.substrate !== 'sprite') return NextResponse.json({ error: 'This environment has no sandbox to list ports for', reason: 'env_not_sprite' }, { status: 404 });
 
-    const authorization = await authorizePreviewHolderForUser({ holder, userId: auth.userId });
+    const authorization = await authorizePreviewHolderForUser({ holder, actor: actorFromAuth(auth)});
     if (!authorization.allowed) {
       auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'dev_preview', resourceId: `env:${envId}`, details: { route: ROUTE, action: 'ports', reason: authorization.reason } });
       return NextResponse.json({ error: 'Not found' }, { status: 404 });
     }
-    const result = await probeDevPreviewPortsForHolder({ holder, userId: auth.userId, wakeSubject: authorization.wakeSubject, sandboxId: authorization.sandboxId });
+    const result = await probeDevPreviewPortsForHolder({ holder, actor: actorFromAuth(auth), wakeSubject: authorization.wakeSubject, sandboxId: authorization.sandboxId });
     return respondToDevPreviewPorts({ request, userId: auth.userId, route: ROUTE, holder, result });
   } catch (error) {
     loggers.api.error('Failed to list env preview ports', error instanceof Error ? error : new Error(String(error)));

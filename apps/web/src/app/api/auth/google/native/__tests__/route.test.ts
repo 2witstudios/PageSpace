@@ -334,11 +334,12 @@ describe('POST /api/auth/google/native', () => {
       expect(provisionHomeDriveIfNeeded).toHaveBeenCalledWith(mockExistingUser.id);
     });
 
-    it('should create session with correct parameters', async () => {
+    it('SEC-2 (partial) should create session with correct parameters, including Google single-factor evidence (D-OW-45)', async () => {
       const request = createNativeRequest(validNativePayload);
       await POST(request);
 
       expect(sessionService.createSession).toHaveBeenCalledWith({
+        authentication: { authenticatedAtMs: expect.any(Number), assurance: 'single_factor' },
         userId: mockNewUser.id,
         type: 'user',
         scopes: ['*'],
@@ -348,11 +349,12 @@ describe('POST /api/auth/google/native', () => {
       });
     });
 
-    it('should create device token with platform info', async () => {
+    it('SEC-2 (partial) should create device token with platform info, carrying the same Google evidence (D-OW-45)', async () => {
       const request = createNativeRequest(validNativePayload);
       await POST(request);
 
       expect(validateOrCreateDeviceToken).toHaveBeenCalledWith({
+        authentication: { authenticatedAtMs: expect.any(Number), assurance: 'single_factor' },
         providedDeviceToken: undefined,
         userId: mockNewUser.id,
         deviceId: 'device-123',
@@ -375,6 +377,7 @@ describe('POST /api/auth/google/native', () => {
       await POST(request);
 
       expect(validateOrCreateDeviceToken).toHaveBeenCalledWith({
+        authentication: { authenticatedAtMs: expect.any(Number), assurance: 'single_factor' },
         providedDeviceToken: undefined,
         userId: mockNewUser.id,
         deviceId: 'device-123',
@@ -397,6 +400,7 @@ describe('POST /api/auth/google/native', () => {
       await POST(request);
 
       expect(validateOrCreateDeviceToken).toHaveBeenCalledWith({
+        authentication: { authenticatedAtMs: expect.any(Number), assurance: 'single_factor' },
         providedDeviceToken: undefined,
         userId: mockNewUser.id,
         deviceId: 'device-123',

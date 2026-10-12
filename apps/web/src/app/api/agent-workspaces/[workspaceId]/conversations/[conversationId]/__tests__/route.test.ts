@@ -65,7 +65,7 @@ describe('DELETE /api/agent-workspaces/[workspaceId]/conversations/[conversation
     // passes the caller through.
     expect(mockCloseConversationInSession).toHaveBeenCalledWith({
       conversationId: CONVERSATION_ID,
-      userId: AUTH_USER.userId,
+      actor: expect.objectContaining({ userId: AUTH_USER.userId }),
       workspaceId: SESSION_ID,
     });
     expect(mockAuditRequest).toHaveBeenCalledWith(

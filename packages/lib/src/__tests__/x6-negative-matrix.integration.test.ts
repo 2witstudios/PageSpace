@@ -38,6 +38,7 @@ import { requireDb } from '@pagespace/db/test/require-db';
 import type { SessionClaims } from '../auth/session-service';
 import { EnforcedAuthContext } from '../permissions/enforced-context';
 import { getUserAccessLevel } from '../permissions/permissions';
+import { credentialActor } from '../permissions/access-actor';
 import { createDriveShareLink, createPageShareLink, redeemDriveShareLink, redeemPageShareLink } from '../permissions/share-link-service';
 import { listPendingGuestApprovals } from '../permissions/guest-holds';
 import { getDriveAccess, listAccessibleDrives, type ListDrivesOptions } from '../services/drive-service';
@@ -55,7 +56,7 @@ const originalMode = process.env.DEPLOYMENT_MODE;
 
 const LIST_OPTIONS: ListDrivesOptions[] = [{}, { includeTrash: true }, { tokenScopable: true }];
 const listedIds = async (userId: string, options?: ListDrivesOptions) =>
-  (await listAccessibleDrives(userId, options)).map((d) => d.id).sort();
+  (await listAccessibleDrives(credentialActor(userId, null), options)).map((d) => d.id).sort();
 const NO_MEMBERSHIP = { isOwner: false, isAdmin: false, isMember: false, role: null, customRoleId: null };
 
 // ── Rows this file creates outside the Northwind fixture (which tracks its own) ──
@@ -216,9 +217,9 @@ describe('X-6 negative tests (real PG)', () => {
 
     for (const outsider of [f.people.dana.id, stranger]) {
       for (const target of [f.drives.product.id, f.pages.productPage.id, f.pages.productPrivatePage.id]) {
-        expect(await getUserAccessLevel(outsider, target), `${outsider} ${target}`).toBeNull();
+        expect(await getUserAccessLevel(credentialActor(outsider, null), target), `${outsider} ${target}`).toBeNull();
       }
-      expect(await getDriveAccess(f.drives.product.id, outsider)).toEqual(NO_MEMBERSHIP);
+      expect(await getDriveAccess(f.drives.product.id, credentialActor(outsider, null))).toEqual(NO_MEMBERSHIP);
       for (const options of LIST_OPTIONS) {
         expect(await listedIds(outsider, options)).not.toContain(f.drives.product.id);
       }
@@ -228,7 +229,7 @@ describe('X-6 negative tests (real PG)', () => {
     expect(await listedIds(stranger)).toEqual([]);
 
     // Not vacuous: a Northwind member with NO row resolves the same Open drive through its default role.
-    expect(await getUserAccessLevel(f.people.nina.id, f.drives.product.id)).toMatchObject({ canView: true });
+    expect(await getUserAccessLevel(credentialActor(f.people.nina.id, null), f.drives.product.id)).toMatchObject({ canView: true });
     expect(await listedIds(f.people.nina.id)).toContain(f.drives.product.id);
   });
 
@@ -246,15 +247,15 @@ describe('X-6 negative tests (real PG)', () => {
       expect(await listedIds(chris, options)).toEqual([f.drives.product.id]);
     }
     for (const second of [design.id, f.drives.research.id, f.drives.finance.id]) {
-      expect(await getUserAccessLevel(chris, second), second).toBeNull();
-      expect(await getDriveAccess(second, chris), second).toEqual(NO_MEMBERSHIP);
+      expect(await getUserAccessLevel(credentialActor(chris, null), second), second).toBeNull();
+      expect(await getDriveAccess(second, credentialActor(chris, null)), second).toEqual(NO_MEMBERSHIP);
     }
-    expect(await getUserAccessLevel(chris, designPage.id)).toBeNull();
-    expect(await getUserAccessLevel(chris, f.pages.researchPage.id)).toBeNull();
+    expect(await getUserAccessLevel(credentialActor(chris, null), designPage.id)).toBeNull();
+    expect(await getUserAccessLevel(credentialActor(chris, null), f.pages.researchPage.id)).toBeNull();
 
     // Not vacuous: the invited drive does resolve for him, and the second Open drive does for a member.
-    expect(await getDriveAccess(f.drives.product.id, chris)).toEqual({ isOwner: false, isAdmin: false, isMember: true, role: 'MEMBER', customRoleId: null });
-    expect(await getUserAccessLevel(f.people.nina.id, design.id)).toMatchObject({ canView: true });
+    expect(await getDriveAccess(f.drives.product.id, credentialActor(chris, null))).toEqual({ isOwner: false, isAdmin: false, isMember: true, role: 'MEMBER', customRoleId: null });
+    expect(await getUserAccessLevel(credentialActor(f.people.nina.id, null), design.id)).toMatchObject({ canView: true });
   });
 
   it('X-6 a policy set to off refuses (guests off: share-link redemption)', async () => {
@@ -270,7 +271,7 @@ describe('X-6 negative tests (real PG)', () => {
     const pageLink = await createPageShareLink(ctxFor(owner), orgPage.id, { permissions: ['VIEW'] });
     if (!driveLink.ok || !pageLink.ok) throw new Error('setup: links should be creatable while guests are on');
     // …then the Owner sets the guests policy to off.
-    await updateOrgPolicies({ orgId, actorId: owner, patch: { guests: 'off' } });
+    await updateOrgPolicies({ orgId, actorId: owner, actorAuthentication: null, patch: { guests: 'off' } });
     const outsider = await newUser('Gus Guest');
 
     expect(await redeemDriveShareLink(ctxFor(outsider), driveLink.data.rawToken)).toEqual({ ok: false, error: 'NOT_FOUND' });
@@ -280,7 +281,7 @@ describe('X-6 negative tests (real PG)', () => {
     expect(await db.select().from(driveMembers).where(and(eq(driveMembers.driveId, orgDrive.id), eq(driveMembers.userId, outsider)))).toEqual([]);
     expect(await db.$count(pagePermissions, eq(pagePermissions.userId, outsider))).toBe(0);
     expect((await listPendingGuestApprovals(orgId, 10)).total).toBe(0);
-    expect(await getUserAccessLevel(outsider, orgPage.id)).toBeNull();
+    expect(await getUserAccessLevel(credentialActor(outsider, null), orgPage.id)).toBeNull();
     expect(await listedIds(outsider)).toEqual([]);
   });
 

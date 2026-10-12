@@ -50,10 +50,12 @@ vi.mock('@pagespace/lib/permissions/agent-permissions', () => ({
   hasAgentDriveMembership: vi.fn().mockResolvedValue(false),
 }));
 vi.mock('@/lib/ai/tools/actor-permissions', () => ({
+  toolActor: (ctx: { userId: string; accessActor?: unknown }) => ctx.accessActor ?? { via: 'credential', userId: ctx.userId, authentication: null },
   canActorEditPage: vi.fn().mockResolvedValue(true),
   canActorConsultAgent: vi.fn().mockResolvedValue(true),
 }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   canUserViewPage: vi.fn().mockResolvedValue(true),
 }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -175,7 +177,7 @@ describe('triggerMentionedAgentResponses — image attachment plumbing', () => {
     });
 
     // Access-checked against the file row's own drive, not the channel's.
-    expect(mockCanUserAccessFile).toHaveBeenCalledWith('user-1', 'file-1', 'file-drive-1');
+    expect(mockCanUserAccessFile).toHaveBeenCalledWith(expect.objectContaining({ via: 'automation', userId: 'user-1' }), 'file-1', 'file-drive-1');
     expect(mockAskAgentExecute).toHaveBeenCalledTimes(1);
     const askArgs = mockAskAgentExecute.mock.calls[0][0];
     expect(askArgs.imageAttachments).toEqual([

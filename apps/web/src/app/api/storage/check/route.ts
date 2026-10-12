@@ -12,6 +12,8 @@ import { getUserDrivePermissions } from '@pagespace/lib/permissions/permissions'
 import { countLiveUploadsForUser } from '@pagespace/lib/services/pending-uploads';
 import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
 import { safeParseBody } from '@/lib/validation/parse-body';
+import { actorFromAuth } from '@/lib/auth/request-actor';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -27,9 +29,9 @@ const storageCheckSchema = z.object({
  * presign requires). A missing or inaccessible drive fails CLOSED to the caller's personal
  * quota, and answers the same whether the drive does not exist or the caller cannot see it.
  */
-async function quotaDriveId(userId: string, driveId: string | undefined): Promise<string | null> {
+async function quotaDriveId(actor: AccessActor, driveId: string | undefined): Promise<string | null> {
   if (!driveId) return null;
-  const drivePerms = await getUserDrivePermissions(userId, driveId);
+  const drivePerms = await getUserDrivePermissions(actor, driveId);
   return drivePerms?.canEdit ? driveId : null;
 }
 
@@ -49,7 +51,7 @@ export async function POST(request: NextRequest) {
     const { fileSize, driveId } = parsed.data;
 
     // The quota presign will check this upload against: an org drive's org, else the caller's.
-    const quotaTarget = await resolveUploadQuotaTarget(userId, await quotaDriveId(userId, driveId));
+    const quotaTarget = await resolveUploadQuotaTarget(userId, await quotaDriveId(actorFromAuth(auth), driveId));
     const quotaCheck = await checkUploadQuotaTarget(quotaTarget, fileSize);
     if (!quotaCheck.allowed) {
       return NextResponse.json({

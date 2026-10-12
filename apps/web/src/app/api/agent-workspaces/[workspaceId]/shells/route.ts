@@ -28,6 +28,7 @@ import { listShells, spawnShell } from '@/lib/agent-workspaces/workspace-shells-
 import { sessionQuotaExceeded } from '@/lib/agent-workspaces/quota-response';
 import { auditSessionAccessDenial, workspaceNotFoundOrDenied } from '@/lib/agent-workspaces/workspace-unavailable-response';
 import { ORG_LAPSED_MESSAGE } from '@pagespace/lib/organizations/status-core';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -41,7 +42,7 @@ export async function GET(request: Request, context: RouteContext) {
   if (isAuthError(auth)) return auth.error;
   const { workspaceId } = await context.params;
 
-  const access = await checkSessionAccess(auth.userId, workspaceId);
+  const access = await checkSessionAccess(actorFromAuth(auth), workspaceId);
   if (!access.allowed) {
     // Not found and denied answer THE SAME empty list (family policy, review
     // #2261/5) — never a 403 that would tell a caller the session is real.
@@ -114,7 +115,7 @@ export async function POST(request: Request, context: RouteContext) {
   // The session must already EXIST — a shell opens inside a workspace, it
   // never mints one (spawning a session is an explicit act on the collection
   // route, and a session is born with its first conversation, not a shell).
-  const access = await checkSessionAccess(auth.userId, workspaceId);
+  const access = await checkSessionAccess(actorFromAuth(auth), workspaceId);
   if (!access.allowed) {
     return workspaceNotFoundOrDenied(request, auth.userId, workspaceId, access.reason, ROUTE);
   }
@@ -124,7 +125,7 @@ export async function POST(request: Request, context: RouteContext) {
 
   // A shell needs a sandbox to run in: cold sessions lazily acquire theirs
   // HERE, through the same one provisioning path every surface shares.
-  const provisioned = await provisionSessionSandbox(row, auth.userId);
+  const provisioned = await provisionSessionSandbox(row, actorFromAuth(auth));
   if (!provisioned.ok) {
     if (provisioned.reason === 'denied') {
       // A plan-limit refusal is not an access denial — separate response and
@@ -158,7 +159,7 @@ export async function POST(request: Request, context: RouteContext) {
 
   const spawned = await spawnShell({
     workspaceId,
-    ownerId: auth.userId,
+    owner: actorFromAuth(auth),
     name: rawName,
     ...(activeNodeId === null ? {} : { activeNodeId }),
   });

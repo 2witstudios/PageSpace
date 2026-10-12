@@ -1,6 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Mock database - only mock what's actually used in tests
+// Org sign-in policy (SEC-2/3) admits every actor here; tests that exercise a refusal override it.
+vi.mock('@pagespace/lib/permissions/actor-authentication', () => ({
+  checkActorResourceAuthentication: vi.fn(async () => ({ allowed: true })),
+  checkActorDriveAuthentication: vi.fn(async () => ({ allowed: true })),
+  filterDrivesForActor: vi.fn(async (_actor: unknown, ids: readonly string[]) => new Set(ids)),
+  filterResourcesForActor: vi.fn(async (_actor: unknown, ids: readonly string[]) => new Set(ids)),
+  explainOrgAuthenticationDenial: vi.fn(async () => null),
+}));
 vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
@@ -100,6 +108,7 @@ import { syncPublishedHomeRoot } from '@/lib/canvas/publish-page';
 import { resolveActingAgentId } from '../actor-permissions';
 import type { ToolExecutionContext } from '../../core/types';
 import { LEAD_ACTION_CASES, LEAD_ACTION_DRIVES, leadAuthority } from '@/lib/auth/__tests__/lead-authority-fake';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const mockDb = vi.mocked(db);
 
@@ -134,7 +143,7 @@ describe('drive-tools', () => {
         toolCallId: '1',
         messages: [],
         experimental_context: {
-          userId: 'user_1',
+          userId: 'user_1', accessActor: credentialActor('user_1', null),
           chatSource: { type: 'page' as const, agentPageId: 'agent_1' },
         } as ToolExecutionContext,
       };
@@ -161,7 +170,7 @@ describe('drive-tools', () => {
         toolCallId: '1',
         messages: [],
         experimental_context: {
-          userId: 'user_1',
+          userId: 'user_1', accessActor: credentialActor('user_1', null),
           chatSource: { type: 'page' as const, agentPageId: 'agent_1' },
         } as ToolExecutionContext,
       };
@@ -170,7 +179,7 @@ describe('drive-tools', () => {
         drives: Array<{ id: string; slug: string; title: string }>;
       };
 
-      expect(listAccessibleDrives).toHaveBeenCalledWith('user_1');
+      expect(listAccessibleDrives).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user_1' }));
       // The membership-scoped agent path must not be used.
       expect(listAgentDrives).not.toHaveBeenCalled();
       expect(result.drives.map((d) => d.id)).toEqual(['du1']);
@@ -198,7 +207,7 @@ describe('drive-tools', () => {
     it('throws on empty name', async () => {
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       await expect(
@@ -209,7 +218,7 @@ describe('drive-tools', () => {
     it('throws when trying to create Personal drive', async () => {
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       await expect(
@@ -224,7 +233,7 @@ describe('drive-tools', () => {
         toolCallId: '1',
         messages: [],
         experimental_context: {
-          userId: 'user_1',
+          userId: 'user_1', accessActor: credentialActor('user_1', null),
           chatSource: { type: 'page' as const, agentPageId: 'agent_1' },
         } as ToolExecutionContext,
       };
@@ -243,7 +252,7 @@ describe('drive-tools', () => {
         toolCallId: '1',
         messages: [],
         experimental_context: {
-          userId: 'user_1',
+          userId: 'user_1', accessActor: credentialActor('user_1', null),
           chatSource: { type: 'page' as const, agentPageId: 'agent_1' },
         } as ToolExecutionContext,
       };
@@ -262,7 +271,7 @@ describe('drive-tools', () => {
     it('parks the agent in the workspace it just created', async () => {
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       const result = await driveTools.create_drive.execute!({ name: 'Test Drive' }, context) as
@@ -278,7 +287,7 @@ describe('drive-tools', () => {
     it('does not block a plain user (non-agent) call at the agent gate', async () => {
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       // Empty name still fails downstream validation, proving the plain-user
@@ -313,7 +322,7 @@ describe('drive-tools', () => {
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       await expect(
@@ -329,7 +338,7 @@ describe('drive-tools', () => {
     const authedContext = {
       toolCallId: '1',
       messages: [],
-      experimental_context: { userId: 'user-1' } as ToolExecutionContext,
+      experimental_context: { userId: 'user-1' , accessActor: credentialActor('user-1', null)} as ToolExecutionContext,
     };
 
     it('has correct tool definition', () => {
@@ -388,7 +397,7 @@ describe('drive-tools', () => {
 describe('create_drive — Home name reservation', () => {
   const context = {
     toolCallId: '1', messages: [],
-    experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+    experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
   };
 
   beforeEach(() => {
@@ -422,7 +431,7 @@ describe('rename_drive — Home drive guard', () => {
 
     const context = {
       toolCallId: '1', messages: [],
-      experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+      experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
     };
 
     await expect(
@@ -436,7 +445,7 @@ describe('rename_drive — Home drive guard', () => {
   it('throws when renaming any drive to a reserved name', async () => {
     const context = {
       toolCallId: '1', messages: [],
-      experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+      experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
     };
 
     for (const reservedName of ['Home', 'home', 'Personal', 'personal']) {
@@ -465,7 +474,7 @@ describe('rename_drive: lead authority (point-guard ruling on #2689)', () => {
   it.each(LEAD_ACTION_CASES)('ORG-4 (partial) $who: allowed=$allowed, audited=$audited', async ({ userId, orgRole, drive, allowed, audited }) => {
     if (orgRole) leadAuthority.orgRoles.set(userId, orgRole);
     mockDb.query.drives.findFirst = vi.fn().mockResolvedValue({ id: 'drive-1', name: 'Finance', slug: 'finance', kind: 'STANDARD', isTrashed: false, ...LEAD_ACTION_DRIVES[drive] });
-    const context = { toolCallId: '1', messages: [], experimental_context: { userId } as ToolExecutionContext };
+    const context = { toolCallId: '1', messages: [], experimental_context: { userId, accessActor: credentialActor(userId, null) } as ToolExecutionContext };
 
     const run = driveTools.rename_drive.execute!({ currentName: 'Finance', driveId: 'drive-1', name: 'Renamed' }, context);
 

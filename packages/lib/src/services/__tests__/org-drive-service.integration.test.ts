@@ -31,6 +31,7 @@ import { orgDriveServiceDeps } from '../org-drive-service-deps';
 import { accountRepository } from '../../repositories/account-repository';
 import { removeMember } from '../../organizations/membership';
 import { getDriveAccess } from '../drive-service';
+import { credentialActor } from '../../permissions/access-actor';
 
 // Northwind Labs fixture names (Sequence Spec Part 2), with per-run ids.
 const run = createId().slice(0, 8);
@@ -173,7 +174,7 @@ describe('moveDriveToOrg', () => {
 
     expect(await moveDriveToOrg(marcus, driveId, { orgId: northwind }, deps)).toMatchObject({ ok: true, orgId: northwind });
     expect(await readDrive(driveId)).toMatchObject({ orgId: northwind, ownerId: marcus });
-    expect(await getDriveAccess(driveId, marcus)).toEqual({ isOwner: true, isAdmin: true, isMember: true, role: 'OWNER', customRoleId: null });
+    expect(await getDriveAccess(driveId, credentialActor(marcus, null))).toEqual({ isOwner: true, isAdmin: true, isMember: true, role: 'OWNER', customRoleId: null });
 
     // A Home drive is refused by the service and, beneath it, by the drives_home_never_org_check CHECK.
     expect(await moveDriveToOrg(marcus, homeId, { orgId: northwind }, deps)).toMatchObject({ ok: false, code: 'HOME_DRIVE' });
@@ -183,7 +184,7 @@ describe('moveDriveToOrg', () => {
     // The Owner role stays with a person: when the lead's account goes, the org Owner leads the drive.
     await accountRepository.deleteUser(marcus);
     expect(await readDrive(driveId)).toMatchObject({ orgId: northwind, ownerId: jono });
-    expect(await getDriveAccess(driveId, jono)).toEqual({ isOwner: true, isAdmin: true, isMember: true, role: 'OWNER', customRoleId: null });
+    expect(await getDriveAccess(driveId, credentialActor(jono, null))).toEqual({ isOwner: true, isAdmin: true, isMember: true, role: 'OWNER', customRoleId: null });
   });
 
   it('DRV-1 (partial) a Home drive is refused and nothing is written', async () => {

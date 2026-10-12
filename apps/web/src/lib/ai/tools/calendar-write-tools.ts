@@ -19,7 +19,7 @@ import { getAllMemberUserIdsForEvent, shareEventWithDrive, unshareEventFromDrive
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
 import type { ToolExecutionContext } from '../core/types';
-import { driveDeniedByAppToken, isMcpScoped } from './actor-permissions';
+import { driveDeniedByAppToken, isMcpScoped, toolActor } from './actor-permissions';
 import { normalizeTimezone, formatDateInTimezone, parseDateTime } from '../core/timestamp-utils';
 import { maskIdentifier } from '@/lib/logging/mask';
 import { OrgLapsedError, checkCalendarVisibilityMayLoosen, checkDriveMayLoosen } from '@pagespace/lib/permissions/org-lapse-guard';
@@ -159,7 +159,7 @@ export const calendarWriteTools = {
           if (await driveDeniedByAppToken(ctx as ToolExecutionContext, driveId, 'edit')) {
             return { success: false, error: 'This token does not have access to this drive.' };
           }
-          const canAccess = await isUserDriveMember(userId, driveId);
+          const canAccess = await isUserDriveMember(toolActor(ctx as ToolExecutionContext), driveId);
           if (!canAccess) {
             return {
               success: false,
@@ -192,7 +192,7 @@ export const calendarWriteTools = {
             if (await driveDeniedByAppToken(ctx as ToolExecutionContext, agent.driveId, 'view')) {
               return { success: false, error: 'This token does not have access to the drive containing this agent.' };
             }
-            const canAccessAgentDrive = await isUserDriveMember(userId, agent.driveId);
+            const canAccessAgentDrive = await isUserDriveMember(toolActor(ctx as ToolExecutionContext), agent.driveId);
             if (!canAccessAgentDrive) return { success: false, error: 'You do not have access to the drive containing this agent.' };
           }
           validatedAgent = { id: agent.id, title: agent.title };
@@ -210,7 +210,7 @@ export const calendarWriteTools = {
               if (await driveDeniedByAppToken(ctx as ToolExecutionContext, instrPage.driveId, 'view')) {
                 return { success: false, error: 'This token does not have access to the instruction page drive.' };
               }
-              const canAccessInstrDrive = await isUserDriveMember(userId, instrPage.driveId);
+              const canAccessInstrDrive = await isUserDriveMember(toolActor(ctx as ToolExecutionContext), instrPage.driveId);
               if (!canAccessInstrDrive) return { success: false, error: 'You do not have access to the instruction page drive.' };
             }
           }
@@ -1222,7 +1222,7 @@ export const calendarWriteTools = {
         return { success: false, error: 'Target drive is outside the scope of your access token.' };
       }
 
-      const result = await shareEventWithDrive({ actingUserId: userId, eventId, driveId });
+      const result = await shareEventWithDrive({ actor: toolActor(ctx as ToolExecutionContext), eventId, driveId });
       if (!result.ok) {
         return { success: false, error: result.error };
       }
@@ -1273,7 +1273,7 @@ export const calendarWriteTools = {
         return { success: false, error: 'Drive-scoped tokens cannot access personal events.' };
       }
 
-      const result = await unshareEventFromDrive({ actingUserId: userId, eventId, driveId });
+      const result = await unshareEventFromDrive({ actor: toolActor(ctx as ToolExecutionContext), eventId, driveId });
       if (!result.ok) {
         return { success: false, error: result.error };
       }

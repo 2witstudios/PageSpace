@@ -4,6 +4,7 @@ import { convertDbMessageToUIMessage } from '@/lib/ai/core/message-utils';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { messageRepository } from '@/lib/repositories/message-repository';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 // Auth options: GET is read-only operation
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
@@ -42,10 +43,10 @@ export async function GET(request: Request) {
     const canView = await canPrincipalViewPage(auth, pageId);
     if (!canView) {
       auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'message', resourceId: pageId, details: { reason: 'no_view_permission', method: 'GET' }, riskScore: 0.5 });
-      return NextResponse.json({
+      return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json({
         error: 'You need view permission to access this page\'s chat messages',
         details: 'Contact the page owner to request access'
-      }, { status: 403 });
+      }, { status: 403 }));
     }
 
     // Get messages from the repository — the UNIFIED `messages` table since

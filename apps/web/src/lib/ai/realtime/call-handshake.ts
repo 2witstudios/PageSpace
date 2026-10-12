@@ -130,6 +130,8 @@ export type HandshakeDeps = {
 export type HandshakeInput = {
   readonly offerSdp: string;
   readonly userId: string;
+  /** The starting session's ceremony evidence, carried on the attach and echoed on every bridge hop (SEC-2/3). */
+  readonly authentication: RealtimeAttachPayload['authentication'];
   readonly conversationId?: string;
   /**
    * The bound conversation's history, already loaded and capped
@@ -256,6 +258,7 @@ const handOff = async (
     callId,
     secret,
     userId: input.userId,
+    authentication: input.authentication,
     ...(input.conversationId === undefined ? {} : { conversationId: input.conversationId }),
     tools: [...deps.tools],
     model: deps.model,

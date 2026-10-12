@@ -10,6 +10,7 @@ import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-s
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { isOrgLapsedError } from '@pagespace/lib/permissions/org-lapse-guard';
 import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -26,14 +27,14 @@ export async function PATCH(
     const { driveId } = await context.params;
 
     // Check if user is owner or admin
-    const access = await checkDriveAccessForRoles(driveId, userId);
+    const access = await checkDriveAccessForRoles(driveId, actorFromAuth(auth));
 
     if (!access.drive) {
-      return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Drive not found' }, { status: 404 }));
     }
 
     if (!access.isOwner && !access.isAdmin) {
-      return NextResponse.json({ error: 'Only owners and admins can reorder roles' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Only owners and admins can reorder roles' }, { status: 403 }));
     }
 
     const body = await request.json();

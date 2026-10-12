@@ -8,6 +8,7 @@
  * and that is the creator's, the lead's or the org's money authority, not a drive role's.
  */
 
+import { checkActorDriveAuthentication } from './actor-authentication';
 import { db } from '@pagespace/db/db';
 import { and, eq } from '@pagespace/db/operators';
 import { orgMembers } from '@pagespace/db/schema/organizations';
@@ -15,6 +16,7 @@ import { drives } from '@pagespace/db/schema/core';
 import { ORGS_ENABLED } from '../organizations/orgs-enabled';
 import { isDriveLead, type RelationshipDrive } from './drive-relationship';
 import { loadEffectiveDriveMembership } from './org-drive-membership';
+import type { AccessActor } from './access-actor';
 
 export type AppUnparkVia = 'lead' | 'org-owner' | 'org-admin' | 'creator';
 
@@ -45,10 +47,13 @@ export function decideAppUnparkAuthority({ orgsEnabled, userId, drive, orgRole, 
 
 /** decideAppUnparkAuthority with its IO: the org role (org drives only) and the creator's membership. */
 export async function loadAppUnparkAuthority(
-  userId: string,
+  actor: AccessActor,
   drive: RelationshipDrive,
   costOwnerId: string | null,
 ): Promise<AppUnparkAuthority> {
+  // SEC-2/3: a credential the drive's org refuses has no authority in it.
+  if (!(await checkActorDriveAuthentication(actor, drive.id)).allowed) return { allowed: false };
+  const { userId } = actor;
   let orgRole: AppUnparkAuthorityInput['orgRole'] = null;
   if (ORGS_ENABLED && drive.orgId !== null && !isDriveLead(userId, drive)) {
     const [membership] = await db
@@ -66,12 +71,12 @@ export async function loadAppUnparkAuthority(
  * Whether `userId` may un-park this app — what the app pane asks to offer its Resume button to a
  * creator who does not manage the drive. False for a vanished drive.
  */
-export async function canUnparkPublishedApp(userId: string, app: { driveId: string; costOwnerId: string | null }): Promise<boolean> {
+export async function canUnparkPublishedApp(actor: AccessActor, app: { driveId: string; costOwnerId: string | null }): Promise<boolean> {
   const [drive] = await db
     .select({ id: drives.id, ownerId: drives.ownerId, orgId: drives.orgId, orgVisibility: drives.orgVisibility })
     .from(drives)
     .where(eq(drives.id, app.driveId))
     .limit(1);
   if (!drive) return false;
-  return (await loadAppUnparkAuthority(userId, drive, app.costOwnerId)).allowed;
+  return (await loadAppUnparkAuthority(actor, drive, app.costOwnerId)).allowed;
 }

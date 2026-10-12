@@ -147,9 +147,6 @@ SEAT-8
 # and "nothing is deleted" clauses are proven elsewhere only in part.
 SEAT-9
 SEC-1
-SEC-2
-SEC-3
-SEC-4
 # SPEND-1 (partial, ow-c2, C3, ow-fix-ungated-ai): every chat turn, /btw, consult, v1, image, pulse,
 # workflow, trigger and mention call gates first; context compaction and the memory cron now reserve
 # before their model call; a realtime voice call resolves its drive before connecting (a page

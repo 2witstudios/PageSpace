@@ -8,6 +8,7 @@ import { isFilePage } from '@pagespace/lib/content/page-types.config';
 import { PageType } from '@pagespace/lib/utils/enums';
 import { generatePresignedUrl } from '@/lib/presigned-url';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { actorFromVerifiedUser, deniedResponse } from '@/lib/auth/request-actor';
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -28,9 +29,9 @@ export async function GET(request: NextRequest, context: RouteParams) {
       return NextResponse.json({ error: 'Not found' }, { status: 404 });
     }
 
-    const canView = await canUserViewPage(user.id, page.id);
+    const canView = await canUserViewPage(actorFromVerifiedUser(user), page.id);
     if (!canView) {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+      return deniedResponse(actorFromVerifiedUser(user), page.id, NextResponse.json({ error: 'Forbidden' }, { status: 403 }));
     }
 
     const meta = page.extractionMetadata as { thumbnailKey?: string } | null;

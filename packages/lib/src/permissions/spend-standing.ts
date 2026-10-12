@@ -1,9 +1,11 @@
+import type { AccessActor } from './access-actor';
+import { checkActorDriveAuthentication } from './actor-authentication';
 import { db } from '@pagespace/db/db';
 import { and, eq } from '@pagespace/db/operators';
 import { drives } from '@pagespace/db/schema/core';
 import { orgMembers } from '@pagespace/db/schema/organizations';
 import { isDriveLead, isDriveMemberRelationship } from './drive-relationship';
-import { loadDriveRelationships } from './drive-relationship-loader';
+import { loadUserDriveRelationships } from './drive-relationship-loader';
 import { walletViewerRole, type WalletStanding } from './wallet-access';
 
 /**
@@ -42,7 +44,7 @@ export async function loadDriveSpendStanding(
 
   // The gate reads this for the caller's own request, whose drive access was already
   // decided (and audited) by the route; this read only classifies the spender.
-  const relationships = await loadDriveRelationships(userId, [drive], { audit: false, executor });
+  const relationships = await loadUserDriveRelationships(userId, [drive], { audit: false, executor });
   const relationship = relationships.get(drive.id);
   const isDriveMember = relationship ? isDriveMemberRelationship(relationship) : false;
 
@@ -113,7 +115,7 @@ export async function loadDriveWalletStanding(userId: string, driveId: string): 
     .limit(1);
   if (!drive || drive.isTrashed) return null;
 
-  const relationship = (await loadDriveRelationships(userId, [drive])).get(drive.id);
+  const relationship = (await loadUserDriveRelationships(userId, [drive])).get(drive.id);
   let orgRole: WalletStanding['orgRole'] = null;
   if (drive.orgId !== null) {
     const [membership] = await db
@@ -134,11 +136,13 @@ export async function loadDriveWalletStanding(userId: string, driveId: string): 
 }
 
 /**
- * Whether `userId` has a wallet view of `driveId` at all (wallet-access: member, guest, lead or
- * org admin). The realtime server asks it before joining the drive wallet room (X-4), so a
- * page-share collaborator, whose wallet read is a 404, never hears wallet:changed.
+ * Whether the actor has a wallet view of `driveId` at all (wallet-access: member, guest, lead or
+ * org admin), through a credential the drive's org admits (SEC-2/3, D-OW-45). The realtime server
+ * asks it before joining the drive wallet room (X-4), so a page-share collaborator, whose wallet
+ * read is a 404, never hears wallet:changed — nor does a credential the org's sign-in policy refuses.
  */
-export async function canViewDriveWallet(userId: string, driveId: string): Promise<boolean> {
-  const standing = await loadDriveWalletStanding(userId, driveId);
+export async function canViewDriveWallet(actor: AccessActor, driveId: string): Promise<boolean> {
+  if (!(await checkActorDriveAuthentication(actor, driveId)).allowed) return false;
+  const standing = await loadDriveWalletStanding(actor.userId, driveId);
   return standing !== null && walletViewerRole(standing) !== 'none';
 }

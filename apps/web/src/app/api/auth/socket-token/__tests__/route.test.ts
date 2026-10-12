@@ -109,6 +109,7 @@ describe('/api/auth/socket-token', () => {
 
       expect(sessionService.createSession).toHaveBeenCalledTimes(1);
       expect(sessionService.createSession).toHaveBeenCalledWith({
+        authentication: null,
         userId: 'test-user-id',
         type: 'socket',
         scopes: [],

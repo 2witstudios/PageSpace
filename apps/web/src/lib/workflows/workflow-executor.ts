@@ -41,6 +41,7 @@ import { getDrivePolicies } from '@pagespace/lib/organizations/policy-reader';
 import { agentsAutonomousDecision } from '@pagespace/lib/organizations/org-action-decisions';
 import { readWorkflowOwnership } from '@pagespace/lib/organizations/automation-ownership';
 import { claimedRunOwner } from '@pagespace/lib/permissions/automation-ownership';
+import { automationActor, type AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 export type WorkflowRunSource =
   | { table: 'cron'; id: null; triggerAt: Date | null }
@@ -87,6 +88,14 @@ export interface WorkflowExecutionResult {
  * augmentations injected by the trigger-fire path so executeWorkflow
  * doesn't need to know which kind of trigger it serves.
  */
+/**
+ * The actor every run reads and writes as (D-OW-34, D-OW-45): the workflow's creator, as an automation. No one signs in
+ * for a scheduled, triggered or manual run, so org sign-in policy does not apply; membership and every other policy do.
+ */
+function workflowActor(input: Pick<WorkflowExecutionInput, 'createdBy' | 'source'>): AccessActor {
+  return automationActor(input.createdBy, `workflow:${input.source.table}`);
+}
+
 export interface WorkflowExecutionInput {
   workflowId: string;
   workflowName: string;
@@ -462,6 +471,7 @@ async function runToolStep(
 
   const executionContext: ToolExecutionContext = {
     userId: input.createdBy,
+    accessActor: workflowActor(input),
     timezone: input.timezone,
     creditSpend: input.creditSpend,
   };
@@ -627,7 +637,7 @@ async function runExecution(
 
     // 4c. Load instruction page content if present
     if (input.instructionPageId) {
-      const instrContent = await loadInstructionPage(input.instructionPageId, input.createdBy);
+      const instrContent = await loadInstructionPage(input.instructionPageId, workflowActor(input));
       if (instrContent) {
         userMessage += '\n\n--- Detailed Instructions ---\n' + instrContent;
       }
@@ -671,7 +681,7 @@ async function runExecution(
     // Step 3b's own reasoning.
     const workflowSandboxEnabled = Boolean(agent.sandboxEnabled);
     const workflowSandboxTierEligible = workflowSandboxEnabled
-      ? await resolveSandboxToolEligibility(agent.driveId ?? null, input.createdBy)
+      ? await resolveSandboxToolEligibility(agent.driveId ?? null, workflowActor(input))
       : false;
     availableTools = filterToolsForSandboxEnablement(availableTools, workflowSandboxEnabled) as ToolSet;
     // Tier strips only COMPUTE tools — the chat-only session family stays
@@ -747,7 +757,7 @@ async function runExecution(
     }
     if (sessionBackedToolsActive) {
       const spawned = await spawnSession({
-        userId: input.createdBy,
+        actor: workflowActor(input),
         driveId: agent.driveId ?? input.driveId,
         name: `Workflow: ${input.workflowName}`.slice(0, 100),
       });
@@ -756,7 +766,7 @@ async function runExecution(
         try {
           await createConversationInSession({
             conversationId: boundConversationId,
-            userId: input.createdBy,
+            actor: workflowActor(input),
             agentPageId: agent.id,
             workspaceId: spawned.session.id,
             title: `Workflow: ${input.workflowName}`.slice(0, 100),
@@ -809,6 +819,7 @@ async function runExecution(
     // 7. Build execution context
     const executionContext: ToolExecutionContext = {
       userId: input.createdBy,
+      accessActor: workflowActor(input),
       timezone: input.timezone,
       creditSpend: input.creditSpend,
       aiProvider: agent.aiProvider ?? undefined,
@@ -1058,7 +1069,7 @@ async function buildTaskContext(taskItemId: string, triggerType: 'due_date' | 'c
   return parts.join('\n');
 }
 
-async function loadInstructionPage(pageId: string, userId: string): Promise<string | null> {
+async function loadInstructionPage(pageId: string, actor: AccessActor): Promise<string | null> {
   const [instrPage] = await db
     .select({ title: pages.title, content: pages.content, driveId: pages.driveId, isTrashed: pages.isTrashed })
     .from(pages)
@@ -1067,7 +1078,7 @@ async function loadInstructionPage(pageId: string, userId: string): Promise<stri
   if (!instrPage || instrPage.isTrashed || !instrPage.content) return null;
 
   if (instrPage.driveId) {
-    const hasAccess = await isUserDriveMember(userId, instrPage.driveId);
+    const hasAccess = await isUserDriveMember(actor, instrPage.driveId);
     if (!hasAccess) return null;
   } else {
     return null;

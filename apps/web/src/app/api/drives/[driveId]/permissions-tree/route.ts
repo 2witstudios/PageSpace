@@ -8,7 +8,8 @@ import { loadDriveRelationship } from '@pagespace/lib/permissions/drive-relation
 import { verifyAuth } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { getUserAccessLevel } from '@pagespace/lib/permissions/permissions';
+import { getGrantedAccessLevel } from '@pagespace/lib/permissions/permissions';
+import { actorFromVerifiedUser, deniedResponse } from '@/lib/auth/request-actor';
 
 interface PageNode {
   id: string;
@@ -49,8 +50,8 @@ export async function GET(
     }
 
     // The drive's lead or an effective ADMIN (the org-aware membership).
-    if (!canAdministerDrive(await loadDriveRelationship(user.id, drive[0]))) {
-      return NextResponse.json({ error: 'Only drive owners and admins can view permission tree' }, { status: 403 });
+    if (!canAdministerDrive(await loadDriveRelationship(actorFromVerifiedUser(user), drive[0]))) {
+      return deniedResponse(actorFromVerifiedUser(user), driveId, NextResponse.json({ error: 'Only drive owners and admins can view permission tree' }, { status: 403 }));
     }
 
     // Get all pages in the drive
@@ -125,7 +126,7 @@ export async function GET(
       if (explicit) {
         driveRootPermissions = explicit;
       } else {
-        const access = await getUserAccessLevel(targetUserId, driveId);
+        const access = await getGrantedAccessLevel(targetUserId, driveId);
         driveRootPermissions = access
           ? { canView: access.canView, canEdit: access.canEdit, canShare: access.canShare }
           : { canView: false, canEdit: false, canShare: false };

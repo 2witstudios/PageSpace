@@ -21,6 +21,7 @@ import type { CredentialStore } from '../credentials/store.js';
 import { EXIT_RUNTIME_ERROR, type ExitCode } from '../exit-codes.js';
 import type { OutputSink } from '../handler-context.js';
 import { missingCredentialsMessage, type AuthSource } from './resolve.js';
+import { formatCliError } from '../format-error.js';
 
 export interface DiscoveredTokenEndpoint {
   readonly tokenEndpoint: string;
@@ -146,7 +147,7 @@ export async function enforceAuth(deps: EnforceAuthDeps): Promise<ExitCode | nul
       return EXIT_RUNTIME_ERROR;
     }
 
-    deps.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    deps.stderr.write(`${formatCliError(error)}\n`);
     return EXIT_RUNTIME_ERROR;
   }
 }

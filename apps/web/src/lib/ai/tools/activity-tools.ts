@@ -21,7 +21,7 @@ import {
 } from '@pagespace/lib/content/diff-generator';
 import { readPageContent } from '@pagespace/lib/services/page-content-store';
 import type { ToolExecutionContext } from '../core/types';
-import { filterDriveIdsByAppTokenScope, canActorViewPage } from './actor-permissions';
+import { filterDriveIdsByAppTokenScope, canActorViewPage, toolActor } from './actor-permissions';
 
 /**
  * Activity tools for AI agents
@@ -436,7 +436,7 @@ When summarizing multiple changes, group them thematically and describe the over
           const accessChecks = await Promise.all(
             driveIds.map(async (driveId) => ({
               driveId,
-              hasAccess: await isUserDriveMember(userId, driveId),
+              hasAccess: await isUserDriveMember(toolActor(context as ToolExecutionContext), driveId),
             }))
           );
 
@@ -458,7 +458,7 @@ When summarizing multiple changes, group them thematically and describe the over
         } else {
           // The drives the user is a member of, owned or joined (org-aware: an implicit Open
           // member's drive is in it, a stale org row's or a pending invitation's is not).
-          targetDriveIds = await getMemberDriveIds(userId, { includeTrashed: false });
+          targetDriveIds = await getMemberDriveIds(toolActor(context as ToolExecutionContext), { includeTrashed: false });
         }
 
         // Ceiling a scoped MCP token to its allowed drives (no-op otherwise).

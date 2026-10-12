@@ -14,6 +14,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { computeSandboxEligibilityByDrive, membershipRowsOf, resolveEditableDriveIds } from './sandbox-eligibility-by-drive';
 import { loadDriveRelationships } from '@pagespace/lib/permissions/drive-relationship-loader';
 import { isOrgActive } from '@pagespace/lib/organizations/status';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 interface AgentSummary {
   id: string;
@@ -90,7 +91,7 @@ export async function GET(request: Request) {
     // otherwise a view-only custom-role member sees an enabled Shell item
     // that provisioning then rejects with insufficient_role.
     // The org-aware memberships, batched (one rows query plus the shared resolver's org queries).
-    const membershipRows = membershipRowsOf(await loadDriveRelationships(userId, accessibleDrives));
+    const membershipRows = membershipRowsOf(await loadDriveRelationships(actorFromAuth(auth), accessibleDrives));
     const customRoleIds = Array.from(
       new Set(membershipRows.filter((row) => row.role !== 'ADMIN' && row.customRoleId).map((row) => row.customRoleId as string)),
     );

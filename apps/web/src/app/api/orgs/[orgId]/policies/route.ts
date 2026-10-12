@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { apiError } from '@/lib/api/api-error';
 import { announceOrgChange } from '@pagespace/lib/organizations/org-change-events';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -10,6 +11,11 @@ import { authorizeOrgRequest, refuseDriveScopedToken, ORG_TOKEN_READ_AUTH, ORG_W
 import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
 
 type Context = { params: Promise<{ orgId: string }> };
+
+const SIGN_IN_REFUSAL = {
+  org_strong_sign_in_required: 'Changing this sign-in policy needs a strong sign-in: confirm it is you with your passkey.',
+  org_reauthentication_required: 'Changing this sign-in policy needs a recent sign-in: sign in again first.',
+} as const;
 
 /**
  * GET /api/orgs/[orgId]/policies (Spec POL-1) — Owner and Admins read the org's policies, defaults
@@ -55,8 +61,16 @@ export async function PATCH(request: Request, context: Context) {
     if (!parsed.ok) {
       return NextResponse.json({ error: 'Invalid request body', issues: parsed.issues, code: 'invalid_request' }, { status: 400 });
     }
-    const result = await updateOrgPolicies({ orgId, actorId: gate.userId, patch: parsed.patch });
+    const result = await updateOrgPolicies({ orgId, actorId: gate.userId, actorAuthentication: gate.authentication, patch: parsed.patch });
     if (!result.ok && result.reason === 'org_lapsed') return orgLapsedResponse(result.message);
+    if (!result.ok && (result.reason === 'org_strong_sign_in_required' || result.reason === 'org_reauthentication_required')) {
+      // D-OW-45: loosening a sign-in policy needs a credential that satisfies the policy in force.
+      return apiError(403, result.reason, SIGN_IN_REFUSAL[result.reason], { orgId });
+    }
+    if (!result.ok && result.reason === 'org_policy_would_lock_out_actor') {
+      // D-OW-47: the acting Admin's own credential would not meet the tightened policy; `requires` says what would.
+      return apiError(403, result.reason, 'Your own sign-in does not meet this policy, so saving it would lock you out of this organization.', { orgId, requires: result.requires });
+    }
     if (!result.ok && result.reason === 'open_role_floor') {
       return NextResponse.json({ error: OPEN_ROLE_FLOOR_RAISE_MESSAGE, code: 'org_policy', policy: 'openDriveRoleFloor', drives: result.drives }, { status: 403 });
     }
@@ -85,6 +99,8 @@ export async function PATCH(request: Request, context: Context) {
       restored: countByKind(result.restored),
       // POL-1: what it forbids but does not suspend (apps, envs, cross-drive agents, autonomy, models), by count.
       blocked: result.blocked.counts,
+      // POL-1 for the sign-in keys (D-OW-45): members and credentials a tightened sign-in policy now refuses, by count.
+      signInBlocked: result.signInBlocked,
       auditRecorded: result.auditRecorded,
       ...(publishedVisibility ? { publishedVisibility } : {}),
     });

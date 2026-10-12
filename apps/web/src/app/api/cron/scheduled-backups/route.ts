@@ -11,6 +11,7 @@ import { orgEntitlementTier } from '@pagespace/lib/billing/spend-target';
 import { isOrgLapsedForDrive } from '@pagespace/lib/organizations/status';
 import { resolvePersonalCapabilityTier } from '@pagespace/lib/billing/deployment-capability';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { automationActor } from '@pagespace/lib/permissions/access-actor';
 
 type BackupFrequency = 'daily' | 'weekly' | 'monthly';
 
@@ -86,7 +87,8 @@ export async function GET(request: Request) {
 
         let backupSucceeded = false;
         try {
-          const result = await createDriveBackup(schedule.driveId, schedule.ownerId, { source: 'scheduled' });
+          // A schedule runs as its owner with no one signing in (D-OW-34): an automation, not a credential.
+          const result = await createDriveBackup(schedule.driveId, automationActor(schedule.ownerId, 'scheduled-backup'), { source: 'scheduled' });
           backupSucceeded = result.success;
         } catch (err) {
           loggers.system.error('scheduled-backups: backup failed for drive', err as Error);

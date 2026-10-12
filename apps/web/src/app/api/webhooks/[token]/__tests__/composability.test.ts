@@ -125,6 +125,7 @@ vi.mock('@pagespace/lib/security/webhook-delivery-idempotency', () => ({
 
 const mockIsUserDriveMember = vi.fn();
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   isUserDriveMember: (...args: unknown[]) => mockIsUserDriveMember(...args),
 }));
 

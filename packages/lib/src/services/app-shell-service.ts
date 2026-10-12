@@ -50,6 +50,7 @@ import { loadPagePayload } from './page-payload-service';
 import { decryptUserRow } from '../auth/user-repository';
 import { listMemberDrives, type MemberDrive } from '../permissions/member-drives';
 import { isGuestRole } from '../permissions/guest-role';
+import type { AccessActor } from '../permissions/access-actor';
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -236,9 +237,10 @@ async function fetchDriveTree(tx: Tx, driveId: string): Promise<PageTreeNode[]> 
 }
 
 export async function loadAppShell(
-  userId: string,
+  actor: AccessActor,
   context: AppShellContext = {},
 ): Promise<AppShell> {
+  const { userId } = actor;
   if (!userId) {
     throw new Error('loadAppShell: userId is required');
   }
@@ -249,7 +251,7 @@ export async function loadAppShell(
     // Drives surfaced by the app shell = drives the user belongs to, owned or joined (org-aware).
     // Drives reached only via an explicit page grant are NOT promoted here: their metadata and
     // member list would leak to non-members.
-    const memberDrives = await listMemberDrives(userId, { includeTrashed: false, executor: tx });
+    const memberDrives = await listMemberDrives(actor, { includeTrashed: false, executor: tx });
     const driveIds = memberDrives.map((d) => d.driveId);
     const driveIdSet = new Set(driveIds);
 
@@ -266,7 +268,7 @@ export async function loadAppShell(
 
     let currentPage: AppShell['currentPage'];
     if (context.currentPageId) {
-      currentPage = await loadPagePayload(userId, context.currentPageId, tx);
+      currentPage = await loadPagePayload(actor, context.currentPageId, tx);
     }
 
     return {

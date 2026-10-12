@@ -196,7 +196,7 @@ describe('drive join request routes', () => {
         resourceType: 'drive_join_request',
         details: { operation: 'drive_join_request_approve', driveId: DRIVE, orgId: NORTHWIND, requesterId: LENA, admitted: true },
       }));
-      expect(recordOrgPowerDriveAction).toHaveBeenCalledWith(MARCUS, research, 'answer_join_request');
+      expect(recordOrgPowerDriveAction).toHaveBeenCalledWith(expect.objectContaining({ userId: MARCUS }), research, 'answer_join_request');
     });
 
     it('DRV-6 (partial) a denial is audited as a refusal', async () => {

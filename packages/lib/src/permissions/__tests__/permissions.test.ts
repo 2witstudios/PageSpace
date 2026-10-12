@@ -1,4 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+// The org sign-in gate (D-OW-45) reads policies through its own module; these tests are about the
+// resolvers behind it, so no org here sets a sign-in policy. Plain functions: a mock reset must not undo them.
+vi.mock('../actor-authentication', () => ({
+  checkActorDriveAuthentication: async () => ({ allowed: true }),
+  checkActorResourceAuthentication: async () => ({ allowed: true }),
+  filterDrivesForActor: async (_actor: unknown, ids: readonly string[]) => new Set(ids),
+  filterResourcesForActor: async (_actor: unknown, ids: readonly string[]) => new Set(ids),
+  explainOrgAuthenticationDenial: async () => null,
+}));
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -68,6 +77,7 @@ import {
 import { db } from '@pagespace/db/db';
 import { parseUserId, parsePageId } from '../../validators/id-validators';
 import { loggers } from '../../logging/logger-config';
+import { credentialActor } from '../access-actor';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -131,7 +141,7 @@ describe('getDriveIdsForUser', () => {
         }),
       } as unknown as ReturnType<typeof db.select>);
 
-    const result = await getDriveIdsForUser('user-1');
+    const result = await getDriveIdsForUser(credentialActor('user-1', null));
 
     expect(result).toContain('drive-owned');
     expect(result).toContain('drive-member');
@@ -153,7 +163,7 @@ describe('getDriveIdsForUser', () => {
         }),
       } as unknown as ReturnType<typeof db.select>);
 
-    const result = await getDriveIdsForUser('user-1');
+    const result = await getDriveIdsForUser(credentialActor('user-1', null));
     expect(result).toHaveLength(1);
     expect(result[0]).toBe(sameId);
   });
@@ -170,7 +180,7 @@ describe('getDriveIdsForUser', () => {
         }),
       } as unknown as ReturnType<typeof db.select>);
 
-    const result = await getDriveIdsForUser('user-1');
+    const result = await getDriveIdsForUser(credentialActor('user-1', null));
     expect(result).toHaveLength(0);
   });
 });
@@ -185,25 +195,25 @@ describe('getUserAccessLevel', () => {
 
   it('returns null for invalid userId', async () => {
     mockValidators(false, true);
-    const result = await getUserAccessLevel('bad-id', VALID_PAGE);
+    const result = await getUserAccessLevel(credentialActor('bad-id', null), VALID_PAGE);
     expect(result).toBeNull();
   });
 
   it('returns null for invalid pageId', async () => {
     mockValidators(true, false);
-    const result = await getUserAccessLevel(VALID_USER, 'bad-id');
+    const result = await getUserAccessLevel(credentialActor(VALID_USER, null), 'bad-id');
     expect(result).toBeNull();
   });
 
   it('logs debug message for invalid userId when silent=false', async () => {
     mockValidators(false, true);
-    await getUserAccessLevel('bad-id', VALID_PAGE, { silent: false });
+    await getUserAccessLevel(credentialActor('bad-id', null), VALID_PAGE, { silent: false });
     expect(loggers.api.debug).toHaveBeenCalled();
   });
 
   it('logs debug message for invalid pageId when silent=false', async () => {
     mockValidators(true, false);
-    await getUserAccessLevel(VALID_USER, 'bad-id', { silent: false });
+    await getUserAccessLevel(credentialActor(VALID_USER, null), 'bad-id', { silent: false });
     expect(loggers.api.debug).toHaveBeenCalled();
   });
 
@@ -225,7 +235,7 @@ describe('getUserAccessLevel', () => {
         }),
       } as unknown as ReturnType<typeof db.select>);
 
-    const result = await getUserAccessLevel(VALID_USER, VALID_PAGE);
+    const result = await getUserAccessLevel(credentialActor(VALID_USER, null), VALID_PAGE);
     expect(result).toBeNull();
   });
 
@@ -245,7 +255,7 @@ describe('getUserAccessLevel', () => {
         }),
       } as unknown as ReturnType<typeof db.select>);
 
-    await getUserAccessLevel(VALID_USER, VALID_PAGE, { silent: false });
+    await getUserAccessLevel(credentialActor(VALID_USER, null), VALID_PAGE, { silent: false });
     expect(loggers.api.debug).toHaveBeenCalled();
   });
 
@@ -258,7 +268,7 @@ describe('getUserAccessLevel', () => {
     const fromFn = vi.fn().mockReturnValue({ leftJoin: leftJoinFn });
     vi.mocked(db.select).mockReturnValue({ from: fromFn } as unknown as ReturnType<typeof db.select>);
 
-    const result = await getUserAccessLevel(VALID_USER, VALID_PAGE);
+    const result = await getUserAccessLevel(credentialActor(VALID_USER, null), VALID_PAGE);
     expect(result).toEqual({ canView: true, canEdit: true, canShare: true, canDelete: true });
   });
 
@@ -283,7 +293,7 @@ describe('getUserAccessLevel', () => {
         }),
       } as unknown as ReturnType<typeof db.select>);
 
-    const result = await getUserAccessLevel(VALID_USER, VALID_PAGE);
+    const result = await getUserAccessLevel(credentialActor(VALID_USER, null), VALID_PAGE);
     expect(result).toEqual({ canView: true, canEdit: true, canShare: true, canDelete: true });
   });
 
@@ -314,7 +324,7 @@ describe('getUserAccessLevel', () => {
         }),
       } as unknown as ReturnType<typeof db.select>);
 
-    const result = await getUserAccessLevel(VALID_USER, VALID_PAGE);
+    const result = await getUserAccessLevel(credentialActor(VALID_USER, null), VALID_PAGE);
     expect(result).toEqual({ canView: true, canEdit: false, canShare: false, canDelete: false });
   });
 
@@ -344,7 +354,7 @@ describe('getUserAccessLevel', () => {
         }),
       } as unknown as ReturnType<typeof db.select>);
 
-    const result = await getUserAccessLevel(VALID_USER, VALID_PAGE);
+    const result = await getUserAccessLevel(credentialActor(VALID_USER, null), VALID_PAGE);
     expect(result).toBeNull();
   });
 
@@ -374,7 +384,7 @@ describe('getUserAccessLevel', () => {
         }),
       } as unknown as ReturnType<typeof db.select>);
 
-    const result = await getUserAccessLevel(VALID_USER, VALID_PAGE, { silent: false });
+    const result = await getUserAccessLevel(credentialActor(VALID_USER, null), VALID_PAGE, { silent: false });
     expect(result).toBeNull();
     expect(loggers.api.debug).toHaveBeenCalledWith(
       expect.stringContaining('No explicit permissions found')
@@ -408,7 +418,7 @@ describe('getUserAccessLevel', () => {
         }),
       } as unknown as ReturnType<typeof db.select>);
 
-    const result = await getUserAccessLevel(VALID_USER, VALID_PAGE, { silent: false });
+    const result = await getUserAccessLevel(credentialActor(VALID_USER, null), VALID_PAGE, { silent: false });
     expect(result).toEqual({ canView: true, canEdit: false, canShare: false, canDelete: false });
     expect(loggers.api.debug).toHaveBeenCalledWith(
       expect.stringContaining('Found explicit permissions')
@@ -426,7 +436,7 @@ describe('getUserAccessLevel', () => {
       }),
     } as unknown as ReturnType<typeof db.select>);
 
-    const result = await getUserAccessLevel(VALID_USER, VALID_PAGE);
+    const result = await getUserAccessLevel(credentialActor(VALID_USER, null), VALID_PAGE);
     expect(result).toBeNull();
     expect(loggers.api.error).toHaveBeenCalled();
   });
@@ -450,7 +460,7 @@ describe('getUserAccessLevel', () => {
         }),
       } as unknown as ReturnType<typeof db.select>);
 
-    const result = await getUserAccessLevel(VALID_USER, VALID_PAGE);
+    const result = await getUserAccessLevel(credentialActor(VALID_USER, null), VALID_PAGE);
     expect(result).toBeNull();
   });
 
@@ -463,7 +473,7 @@ describe('getUserAccessLevel', () => {
     const fromFn = vi.fn().mockReturnValue({ leftJoin: leftJoinFn });
     vi.mocked(db.select).mockReturnValue({ from: fromFn } as unknown as ReturnType<typeof db.select>);
 
-    await getUserAccessLevel(VALID_USER, VALID_PAGE, { silent: false });
+    await getUserAccessLevel(credentialActor(VALID_USER, null), VALID_PAGE, { silent: false });
     expect(loggers.api.debug).toHaveBeenCalled();
   });
 
@@ -489,7 +499,7 @@ describe('getUserAccessLevel', () => {
         }),
       } as unknown as ReturnType<typeof db.select>);
 
-    const result = await getUserAccessLevel(VALID_USER, VALID_DRIVE);
+    const result = await getUserAccessLevel(credentialActor(VALID_USER, null), VALID_DRIVE);
     expect(result).toEqual({ canView: true, canEdit: true, canShare: true, canDelete: true });
   });
 
@@ -517,7 +527,7 @@ describe('getUserAccessLevel', () => {
         }),
       } as unknown as ReturnType<typeof db.select>);
 
-    const result = await getUserAccessLevel(VALID_USER, VALID_DRIVE);
+    const result = await getUserAccessLevel(credentialActor(VALID_USER, null), VALID_DRIVE);
     expect(result).toEqual({ canView: true, canEdit: true, canShare: true, canDelete: true });
   });
 
@@ -545,7 +555,7 @@ describe('getUserAccessLevel', () => {
         }),
       } as unknown as ReturnType<typeof db.select>);
 
-    const result = await getUserAccessLevel(VALID_USER, VALID_DRIVE);
+    const result = await getUserAccessLevel(credentialActor(VALID_USER, null), VALID_DRIVE);
     expect(result).toEqual({ canView: true, canEdit: true, canShare: false, canDelete: false });
   });
 
@@ -573,7 +583,7 @@ describe('getUserAccessLevel', () => {
         }),
       } as unknown as ReturnType<typeof db.select>);
 
-    const result = await getUserAccessLevel(VALID_USER, VALID_DRIVE);
+    const result = await getUserAccessLevel(credentialActor(VALID_USER, null), VALID_DRIVE);
     expect(result).toBeNull();
   });
 });
@@ -610,13 +620,13 @@ describe('canUserViewPage', () => {
 
   it('returns true when user has view access', async () => {
     setupAccessLevel({ canView: true, canEdit: false, canShare: false, canDelete: false });
-    const result = await canUserViewPage(VALID_USER, VALID_PAGE);
+    const result = await canUserViewPage(credentialActor(VALID_USER, null), VALID_PAGE);
     expect(result).toBe(true);
   });
 
   it('returns false when user has no access', async () => {
     setupAccessLevel(null);
-    const result = await canUserViewPage(VALID_USER, VALID_PAGE);
+    const result = await canUserViewPage(credentialActor(VALID_USER, null), VALID_PAGE);
     expect(result).toBe(false);
   });
 });
@@ -626,13 +636,13 @@ describe('canUserEditPage', () => {
 
   it('returns true when user is owner (edit=true)', async () => {
     setupAccessLevel({ canView: true, canEdit: true, canShare: true, canDelete: true });
-    const result = await canUserEditPage(VALID_USER, VALID_PAGE);
+    const result = await canUserEditPage(credentialActor(VALID_USER, null), VALID_PAGE);
     expect(result).toBe(true);
   });
 
   it('returns false when user has no access', async () => {
     setupAccessLevel(null);
-    const result = await canUserEditPage(VALID_USER, VALID_PAGE);
+    const result = await canUserEditPage(credentialActor(VALID_USER, null), VALID_PAGE);
     expect(result).toBe(false);
   });
 });
@@ -642,13 +652,13 @@ describe('canUserSharePage', () => {
 
   it('returns true when user is owner (share=true)', async () => {
     setupAccessLevel({ canView: true, canEdit: true, canShare: true, canDelete: true });
-    const result = await canUserSharePage(VALID_USER, VALID_PAGE);
+    const result = await canUserSharePage(credentialActor(VALID_USER, null), VALID_PAGE);
     expect(result).toBe(true);
   });
 
   it('returns false when no access', async () => {
     setupAccessLevel(null);
-    const result = await canUserSharePage(VALID_USER, VALID_PAGE);
+    const result = await canUserSharePage(credentialActor(VALID_USER, null), VALID_PAGE);
     expect(result).toBe(false);
   });
 });
@@ -658,13 +668,13 @@ describe('canUserDeletePage', () => {
 
   it('returns true when user is owner (delete=true)', async () => {
     setupAccessLevel({ canView: true, canEdit: true, canShare: true, canDelete: true });
-    const result = await canUserDeletePage(VALID_USER, VALID_PAGE);
+    const result = await canUserDeletePage(credentialActor(VALID_USER, null), VALID_PAGE);
     expect(result).toBe(true);
   });
 
   it('returns false when no access', async () => {
     setupAccessLevel(null);
-    const result = await canUserDeletePage(VALID_USER, VALID_PAGE);
+    const result = await canUserDeletePage(credentialActor(VALID_USER, null), VALID_PAGE);
     expect(result).toBe(false);
   });
 });
@@ -683,7 +693,7 @@ describe('isDriveOwnerOrAdmin', () => {
         }),
       } as unknown as ReturnType<typeof db.select>);
 
-    const result = await isDriveOwnerOrAdmin(VALID_USER, VALID_DRIVE);
+    const result = await isDriveOwnerOrAdmin(credentialActor(VALID_USER, null), VALID_DRIVE);
     expect(result).toBe(true);
   });
 
@@ -700,7 +710,7 @@ describe('isDriveOwnerOrAdmin', () => {
         }),
       } as unknown as ReturnType<typeof db.select>);
 
-    const result = await isDriveOwnerOrAdmin(VALID_USER, VALID_DRIVE);
+    const result = await isDriveOwnerOrAdmin(credentialActor(VALID_USER, null), VALID_DRIVE);
     expect(result).toBe(true);
   });
 
@@ -717,7 +727,7 @@ describe('isDriveOwnerOrAdmin', () => {
         }),
       } as unknown as ReturnType<typeof db.select>);
 
-    const result = await isDriveOwnerOrAdmin(VALID_USER, VALID_DRIVE);
+    const result = await isDriveOwnerOrAdmin(credentialActor(VALID_USER, null), VALID_DRIVE);
     expect(result).toBe(false);
   });
 
@@ -729,7 +739,7 @@ describe('isDriveOwnerOrAdmin', () => {
         }),
       } as unknown as ReturnType<typeof db.select>);
 
-    const result = await isDriveOwnerOrAdmin(VALID_USER, VALID_DRIVE);
+    const result = await isDriveOwnerOrAdmin(credentialActor(VALID_USER, null), VALID_DRIVE);
     expect(db.select).toHaveBeenCalledTimes(1);
     expect(result).toBe(false);
   });
@@ -748,7 +758,7 @@ describe('isUserDriveMember', () => {
       }),
     } as unknown as ReturnType<typeof db.select>);
 
-    const result = await isUserDriveMember(VALID_USER, VALID_DRIVE);
+    const result = await isUserDriveMember(credentialActor(VALID_USER, null), VALID_DRIVE);
     expect(result).toBe(true);
   });
 
@@ -765,7 +775,7 @@ describe('isUserDriveMember', () => {
         }),
       } as unknown as ReturnType<typeof db.select>);
 
-    const result = await isUserDriveMember(VALID_USER, VALID_DRIVE);
+    const result = await isUserDriveMember(credentialActor(VALID_USER, null), VALID_DRIVE);
     expect(result).toBe(true);
   });
 
@@ -782,7 +792,7 @@ describe('isUserDriveMember', () => {
         }),
       } as unknown as ReturnType<typeof db.select>);
 
-    const result = await isUserDriveMember(VALID_USER, VALID_DRIVE);
+    const result = await isUserDriveMember(credentialActor(VALID_USER, null), VALID_DRIVE);
     expect(result).toBe(false);
   });
 });
@@ -807,7 +817,7 @@ describe('getUserAccessiblePagesInDrive', () => {
         from: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue(allPageIds) }),
       } as unknown as ReturnType<typeof db.select>);
 
-    const result = await getUserAccessiblePagesInDrive(VALID_USER, VALID_DRIVE);
+    const result = await getUserAccessiblePagesInDrive(credentialActor(VALID_USER, null), VALID_DRIVE);
     expect(result).toEqual(['page-1', 'page-2']);
   });
 
@@ -831,7 +841,7 @@ describe('getUserAccessiblePagesInDrive', () => {
         from: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue(allPageIds) }),
       } as unknown as ReturnType<typeof db.select>);
 
-    const result = await getUserAccessiblePagesInDrive(VALID_USER, VALID_DRIVE);
+    const result = await getUserAccessiblePagesInDrive(credentialActor(VALID_USER, null), VALID_DRIVE);
     expect(result).toEqual(['page-1']);
   });
 
@@ -864,7 +874,7 @@ describe('getUserAccessiblePagesInDrive', () => {
         }),
       } as unknown as ReturnType<typeof db.select>);
 
-    const result = await getUserAccessiblePagesInDrive(VALID_USER, VALID_DRIVE);
+    const result = await getUserAccessiblePagesInDrive(credentialActor(VALID_USER, null), VALID_DRIVE);
     expect(result).toContain('non-private-page');
     expect(result).toContain('page-with-perm');
   });
@@ -891,7 +901,7 @@ describe('getUserAccessiblePagesInDrive', () => {
         }),
       } as unknown as ReturnType<typeof db.select>);
 
-    const result = await getUserAccessiblePagesInDrive(VALID_USER, VALID_DRIVE);
+    const result = await getUserAccessiblePagesInDrive(credentialActor(VALID_USER, null), VALID_DRIVE);
     expect(result).toEqual(['page-with-perm']);
   });
 });
@@ -909,7 +919,7 @@ describe('getUserAccessiblePagesInDriveWithDetails', () => {
       }),
     } as unknown as ReturnType<typeof db.select>);
 
-    const result = await getUserAccessiblePagesInDriveWithDetails(VALID_USER, VALID_DRIVE);
+    const result = await getUserAccessiblePagesInDriveWithDetails(credentialActor(VALID_USER, null), VALID_DRIVE);
     expect(result).toEqual([]);
   });
 
@@ -929,7 +939,7 @@ describe('getUserAccessiblePagesInDriveWithDetails', () => {
         }),
       } as unknown as ReturnType<typeof db.select>);
 
-    const result = await getUserAccessiblePagesInDriveWithDetails(VALID_USER, VALID_DRIVE);
+    const result = await getUserAccessiblePagesInDriveWithDetails(credentialActor(VALID_USER, null), VALID_DRIVE);
     expect(result).toHaveLength(1);
     expect(result[0].permissions).toEqual({ canView: true, canEdit: true, canShare: true, canDelete: true });
   });
@@ -968,7 +978,7 @@ describe('getUserAccessiblePagesInDriveWithDetails', () => {
         }),
       } as unknown as ReturnType<typeof db.select>);
 
-    const result = await getUserAccessiblePagesInDriveWithDetails(VALID_USER, VALID_DRIVE);
+    const result = await getUserAccessiblePagesInDriveWithDetails(credentialActor(VALID_USER, null), VALID_DRIVE);
     const openPage = result.find(p => p.id === 'non-private-1');
     const editPage = result.find(p => p.id === 'page-with-perm');
     expect(openPage?.permissions).toEqual({ canView: true, canEdit: false, canShare: false, canDelete: false });
@@ -989,7 +999,7 @@ describe('getUserDriveAccess', () => {
       }),
     } as unknown as ReturnType<typeof db.select>);
 
-    const result = await getUserDriveAccess(VALID_USER, VALID_DRIVE);
+    const result = await getUserDriveAccess(credentialActor(VALID_USER, null), VALID_DRIVE);
     expect(result).toBe(false);
   });
 
@@ -1000,7 +1010,7 @@ describe('getUserDriveAccess', () => {
       }),
     } as unknown as ReturnType<typeof db.select>);
 
-    const result = await getUserDriveAccess(VALID_USER, VALID_DRIVE);
+    const result = await getUserDriveAccess(credentialActor(VALID_USER, null), VALID_DRIVE);
     expect(result).toBe(true);
   });
 
@@ -1017,7 +1027,7 @@ describe('getUserDriveAccess', () => {
         }),
       } as unknown as ReturnType<typeof db.select>);
 
-    const result = await getUserDriveAccess(VALID_USER, VALID_DRIVE);
+    const result = await getUserDriveAccess(credentialActor(VALID_USER, null), VALID_DRIVE);
     expect(result).toBe(true);
   });
 
@@ -1043,7 +1053,7 @@ describe('getUserDriveAccess', () => {
         }),
       } as unknown as ReturnType<typeof db.select>);
 
-    const result = await getUserDriveAccess(VALID_USER, VALID_DRIVE);
+    const result = await getUserDriveAccess(credentialActor(VALID_USER, null), VALID_DRIVE);
     expect(result).toBe(true);
   });
 
@@ -1067,7 +1077,7 @@ describe('getUserDriveAccess', () => {
         }),
       } as unknown as ReturnType<typeof db.select>);
 
-    const result = await getUserDriveAccess(VALID_USER, VALID_DRIVE);
+    const result = await getUserDriveAccess(credentialActor(VALID_USER, null), VALID_DRIVE);
     expect(result).toBe(false);
   });
 
@@ -1078,7 +1088,7 @@ describe('getUserDriveAccess', () => {
       }),
     } as unknown as ReturnType<typeof db.select>);
 
-    const result = await getUserDriveAccess(VALID_USER, VALID_DRIVE);
+    const result = await getUserDriveAccess(credentialActor(VALID_USER, null), VALID_DRIVE);
     expect(result).toBe(false);
     expect(loggers.api.error).toHaveBeenCalled();
   });
@@ -1090,7 +1100,7 @@ describe('getUserDriveAccess', () => {
       }),
     } as unknown as ReturnType<typeof db.select>);
 
-    const result = await getUserDriveAccess(VALID_USER, VALID_DRIVE, { silent: false });
+    const result = await getUserDriveAccess(credentialActor(VALID_USER, null), VALID_DRIVE, { silent: false });
     expect(result).toBe(true);
     expect(loggers.api.debug).toHaveBeenCalledWith(
       expect.stringContaining('User is drive owner')
@@ -1110,7 +1120,7 @@ describe('getUserDriveAccess', () => {
         }),
       } as unknown as ReturnType<typeof db.select>);
 
-    const result = await getUserDriveAccess(VALID_USER, VALID_DRIVE, { silent: false });
+    const result = await getUserDriveAccess(credentialActor(VALID_USER, null), VALID_DRIVE, { silent: false });
     expect(result).toBe(true);
     expect(loggers.api.debug).toHaveBeenCalledWith(
       expect.stringContaining('User is a drive member')
@@ -1124,7 +1134,7 @@ describe('getUserDriveAccess', () => {
       }),
     } as unknown as ReturnType<typeof db.select>);
 
-    await getUserDriveAccess(VALID_USER, VALID_DRIVE, { silent: false });
+    await getUserDriveAccess(credentialActor(VALID_USER, null), VALID_DRIVE, { silent: false });
     expect(loggers.api.debug).toHaveBeenCalled();
   });
 
@@ -1150,7 +1160,7 @@ describe('getUserDriveAccess', () => {
         }),
       } as unknown as ReturnType<typeof db.select>);
 
-    const result = await getUserDriveAccess(VALID_USER, VALID_DRIVE, { silent: false });
+    const result = await getUserDriveAccess(credentialActor(VALID_USER, null), VALID_DRIVE, { silent: false });
     expect(result).toBe(true);
     // Should have logged "not a drive member - checking page permissions" and "Page access check result"
     expect(loggers.api.debug).toHaveBeenCalledWith(

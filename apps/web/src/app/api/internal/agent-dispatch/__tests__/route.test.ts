@@ -26,8 +26,11 @@ const loadServicePrincipalMock = vi.mocked(loadServicePrincipal);
 const getMessageByIdMock = vi.mocked(messageRepository.getMessageById);
 const dispatchChatTurnMock = vi.mocked(dispatchChatTurn);
 
+// The dispatching credential's ceremony evidence, carried in the signed hop (SEC-2/3).
+const EVIDENCE = { authenticatedAtMs: 1_760_000_000_000, assurance: 'user_verified_passkey' as const };
+
 const PAYLOAD: AgentDispatchPayload = {
-  v: 1,
+  v: 2,
   actingUserId: 'user-1',
   conversationId: 'worker-conversation-1',
   chatId: 'agent-page-1',
@@ -37,6 +40,7 @@ const PAYLOAD: AgentDispatchPayload = {
   browserSessionId: 'agent-dispatch-abc',
   messageId: 'message-1',
   text: 'hello',
+  authentication: EVIDENCE,
 };
 
 const PRINCIPAL = {
@@ -48,6 +52,7 @@ const PRINCIPAL = {
   adminRoleVersion: 1,
   allowedDriveIds: ['drive-a'],
   originatingMcpTokenId: 'mcp-token-1',
+  authentication: EVIDENCE,
 };
 
 function request(body: string, signatureHeader?: string): Request {
@@ -124,6 +129,13 @@ describe('POST /api/internal/agent-dispatch', () => {
     expect(dispatchChatTurnMock).not.toHaveBeenCalled();
   });
 
+  it('SEC-2 (partial) SEC-3 (partial) the worker principal carries the dispatching credential\'s evidence, re-parsed rather than trusted as shaped', async () => {
+    // Evidence from the future is not evidence: the receiver re-parses it, so a forged ceremony time fails closed.
+    await POST(signed({ ...PAYLOAD, authentication: { ...EVIDENCE, authenticatedAtMs: Date.now() + 60_000 } }));
+
+    expect(loadServicePrincipalMock).toHaveBeenCalledWith(expect.objectContaining({ authentication: null }));
+  });
+
   it('runs the turn as the user named in the signed payload', async () => {
     await POST(signed());
 
@@ -132,6 +144,7 @@ describe('POST /api/internal/agent-dispatch', () => {
       service: 'agent-dispatch',
       allowedDriveIds: ['drive-a'],
       originatingMcpTokenId: 'mcp-token-1',
+      authentication: EVIDENCE,
     });
     const turn = dispatchChatTurnMock.mock.calls[0][0];
     expect(turn.auth).toBe(PRINCIPAL);

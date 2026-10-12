@@ -345,7 +345,7 @@ describe('POST /api/pages', () => {
       }));
 
       expect(pageService.createPage).toHaveBeenCalledWith(
-        mockUserId,
+        expect.objectContaining({ userId: mockUserId }),
         expect.objectContaining({
           title: 'New Document',
           type: 'DOCUMENT',
@@ -375,7 +375,7 @@ describe('POST /api/pages', () => {
       }));
 
       expect(pageService.createPage).toHaveBeenCalledWith(
-        mockUserId,
+        expect.objectContaining({ userId: mockUserId }),
         expect.objectContaining({
           systemPrompt: 'You are a helpful assistant',
           enabledTools: ['read_page'],
@@ -403,7 +403,7 @@ describe('POST /api/pages', () => {
         await POST(createRequest({ title: 'Agent Doc', type: 'DOCUMENT', driveId: mockDriveId }));
 
         expect(pageService.createPage).toHaveBeenCalledWith(
-          mockUserId,
+          expect.objectContaining({ userId: mockUserId }),
           expect.objectContaining({ contentMode: 'markdown' }),
           expect.anything(),
         );
@@ -415,7 +415,7 @@ describe('POST /api/pages', () => {
         await POST(createRequest({ title: 'Human Doc', type: 'DOCUMENT', driveId: mockDriveId }));
 
         expect(pageService.createPage).toHaveBeenCalledWith(
-          mockUserId,
+          expect.objectContaining({ userId: mockUserId }),
           expect.objectContaining({ contentMode: undefined }),
           expect.anything(),
         );
@@ -436,7 +436,7 @@ describe('POST /api/pages', () => {
         }));
 
         expect(pageService.createPage).toHaveBeenCalledWith(
-          mockUserId,
+          expect.objectContaining({ userId: mockUserId }),
           expect.objectContaining({ contentMode: undefined }),
           expect.anything(),
         );
@@ -453,7 +453,7 @@ describe('POST /api/pages', () => {
         }));
 
         expect(pageService.createPage).toHaveBeenCalledWith(
-          mockUserId,
+          expect.objectContaining({ userId: mockUserId }),
           expect.objectContaining({ contentMode: 'markdown' }),
           expect.anything(),
         );
@@ -467,7 +467,7 @@ describe('POST /api/pages', () => {
         }));
 
         expect(pageService.createPage).toHaveBeenCalledWith(
-          mockUserId,
+          expect.objectContaining({ userId: mockUserId }),
           expect.objectContaining({ contentMode: 'html' }),
           expect.anything(),
         );
@@ -479,7 +479,7 @@ describe('POST /api/pages', () => {
         await POST(createRequest({ title: 'Agent Folder', type: 'FOLDER', driveId: mockDriveId }));
 
         expect(pageService.createPage).toHaveBeenCalledWith(
-          mockUserId,
+          expect.objectContaining({ userId: mockUserId }),
           expect.objectContaining({ contentMode: undefined }),
           expect.anything(),
         );
@@ -496,7 +496,7 @@ describe('POST /api/pages', () => {
       }));
 
       expect(pageService.createPage).toHaveBeenCalledWith(
-        mockUserId,
+        expect.objectContaining({ userId: mockUserId }),
         expect.objectContaining({ title: 'MCP Page' }),
         expect.objectContaining({
           context: { metadata: { source: 'mcp' } },
@@ -657,7 +657,7 @@ describe('POST /api/pages', () => {
       }));
 
       expect(pageService.createPage).toHaveBeenCalledWith(
-        mockUserId,
+        expect.objectContaining({ userId: mockUserId }),
         expect.objectContaining({ contentMode: 'markdown' }),
         expect.objectContaining({ authorizeEdit: expect.any(Function) }),
       );

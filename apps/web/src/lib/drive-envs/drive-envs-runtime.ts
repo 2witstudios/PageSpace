@@ -55,6 +55,7 @@ import { createHash, createPublicKey, randomBytes, verify as nodeVerify } from '
 import { createId } from '@paralleldrive/cuid2';
 import { loadServerSigningKey } from '@pagespace/lib/auth/env-bridge-signing-key';
 import { sessionService } from '@pagespace/lib/auth/session-service';
+import { MACHINE_CREDENTIAL_AUTHENTICATION } from '@pagespace/lib/auth/authentication-evidence';
 import {
   enrollLocalDriveEnv,
   issueLocalEnvChallenge,
@@ -69,6 +70,7 @@ import {
 } from '@pagespace/lib/services/drive-envs/drive-envs';
 import { admitDriveComputeCreator, admitDriveOrgActive } from '@pagespace/lib/billing/compute-gate';
 import { isOrgLapsedForDrive } from '@pagespace/lib/organizations/status';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 export { toDriveEnvDTO };
 export type { DriveEnvDTO };
@@ -191,6 +193,8 @@ async function localEnvIdentityServiceDeps(): Promise<LocalEnvIdentityServiceDep
     // (which validates `expectedType: 'user'`) will ever accept it.
     mintToken: (policy, machine) =>
       sessionService.createSession({
+        // A machine's bridge credential: no person signed in for it (D-OW-45).
+        authentication: MACHINE_CREDENTIAL_AUTHENTICATION,
         userId: machine.ownerId,
         type: policy.type,
         scopes: policy.scopes,
@@ -300,13 +304,13 @@ export async function deleteEnv(input: { envId: string; force: boolean }): Promi
 export async function ensureEnvSandboxForSession(input: {
   envId: string;
   intent: SpriteHolderProvisionIntent;
-  requesterId: string;
+  requester: AccessActor;
 }): Promise<EnsureSpriteHolderSandboxResult> {
   const [store, host, liveConnection] = await Promise.all([getDriveEnvStore(), getSandboxHost(), liveConnectionReader()]);
   return ensureDriveEnvSandbox({
     envId: input.envId,
     intent: input.intent,
-    requesterId: input.requesterId,
+    requester: input.requester,
     deps: {
       store,
       host,
@@ -345,23 +349,23 @@ async function localHostResolver({ envId }: { envId: string }) {
  * belongs to the drive, so this only ever sees a row that disappeared between
  * the two reads.
  */
-export async function gateLocalEnvBind(input: { envId: string; requesterId: string }): Promise<LocalEnvGateVerdict> {
+export async function gateLocalEnvBind(input: { envId: string; requester: AccessActor }): Promise<LocalEnvGateVerdict> {
   const [store, liveConnection] = await Promise.all([getDriveEnvStore(), liveConnectionReader()]);
   const row = await store.findById(input.envId);
   if (!row) return { ok: false, refusal: 'revoked' };
-  return gateLocalEnvForRequester({ row, requesterId: input.requesterId, deps: { store, resolvePayer: resolveDriveEnvPayer, liveConnection } });
+  return gateLocalEnvForRequester({ row, requester: input.requester, deps: { store, resolvePayer: resolveDriveEnvPayer, liveConnection } });
 }
 
 /**
  * Rebuild an env's machine — teardown, then the ONE provisioning core, bound to
  * the ENV's flavor of each seam.
  *
- * `requesterId` is who this provision authorizes as; `ensureDriveEnvSandbox`
+ * `requester` is who this provision authorizes as; `ensureDriveEnvSandbox`
  * holds the seams themselves (which keyspace the Sprite name folds in, who may
  * run code here, what a refusal is called), because a session's ensure needs
  * exactly the same ones.
  */
-export async function rebuildEnv(input: { envId: string; requesterId: string }): Promise<RebuildDriveEnvResult> {
+export async function rebuildEnv(input: { envId: string; requester: AccessActor }): Promise<RebuildDriveEnvResult> {
   // No `resolveLocalHost` on this path, and that is not an omission:
   // `rebuildDriveEnv` refuses a local env with `substrate_unsupported` before
   // it ever reaches the provisioner (rebuild is destroy-and-re-mint, and a
@@ -381,7 +385,7 @@ export async function rebuildEnv(input: { envId: string; requesterId: string }):
           // confirmed, so the row reads as machineless and the core takes its
           // `create` arm — through the same CAS every other provisioner runs.
           intent: 'ensure',
-          requesterId: input.requesterId,
+          requester: input.requester,
           deps: { store, host, resolvePayer: resolveDriveEnvPayer, getDriveOrgPolicies: driveOrgPolicies, liveConnection },
         }),
     },

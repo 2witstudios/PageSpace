@@ -28,7 +28,7 @@ vi.mock('@/lib/auth', () => ({
     auth?.tokenType === 'mcp' && (auth.allowedDriveIds?.length ?? 0) > 0,
   canPrincipalEditPage: vi.fn(async (auth: { userId: string }, pageId: string) => {
     const { canUserEditPage } = await import('@pagespace/lib/permissions/permissions');
-    return canUserEditPage(auth.userId, pageId);
+    return canUserEditPage(credentialActor(auth.userId, null), pageId);
   }),
 }));
 
@@ -39,6 +39,7 @@ vi.mock('@pagespace/lib/permissions/app-permissions', () => ({
 
 // Mock permissions (boundary)
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
     canUserEditPage: vi.fn(),
 }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -121,6 +122,7 @@ import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { driveAgentMembers } from '@pagespace/db/schema/members';
 import { pages } from '@pagespace/db/schema/core';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 // Test fixtures
 const mockUserId = 'user_123';
@@ -404,7 +406,7 @@ describe('POST /api/ai/page-agents/create', () => {
 
       expect(response.status).toBe(403);
       expect(body.error).toContain('Only drive owners');
-      expect(getAppDriveMembership).toHaveBeenCalledWith('token_123', mockDriveId);
+      expect(getAppDriveMembership).toHaveBeenCalledWith(expect.objectContaining({ userId: expect.any(String) }), 'token_123', mockDriveId);
     });
 
     // role === null means INHERIT: the key acts as its owner, so root creation
@@ -452,7 +454,7 @@ describe('POST /api/ai/page-agents/create', () => {
       expect(response.status).toBe(403);
       expect(body.error).toContain('Insufficient permissions');
       // Verify permission check was called with correct userId and pageId
-      expect(canUserEditPage).toHaveBeenCalledWith(mockUserId, 'parent_123');
+      expect(canUserEditPage).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }), 'parent_123');
     });
   });
 

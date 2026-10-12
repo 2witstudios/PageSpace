@@ -23,6 +23,7 @@ import { resolveGrantAuthority } from '@/lib/auth/oauth-grant-authority';
 import { recordDeviceApproval, verifyDeviceUserCode } from '@/lib/repositories/oauth-repository';
 import { requireStepUpGrant } from '@/app/api/auth/mcp-tokens/step-up-gate';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const bodySchema = z.object({
   userCode: z.string().min(1).max(32),
@@ -81,7 +82,7 @@ export async function POST(req: NextRequest) {
     if (lookup.outcome === 'ok' && lookup.scopes.length > 0) {
       const parsed = parseScopeList(lookup.scopes.join(' '));
       const authority =
-        parsed.ok && checkGrantAuthority(parsed.scopes, await resolveGrantAuthority(parsed.scopes, auth.userId));
+        parsed.ok && checkGrantAuthority(parsed.scopes, await resolveGrantAuthority(parsed.scopes, actorFromAuth(auth)));
 
       if (!authority || !authority.ok) {
         auditRequest(req, {

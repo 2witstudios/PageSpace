@@ -62,6 +62,7 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 
 import { presignAttachment, completeAttachment, cancelAttachment } from '../attachment-direct';
 import type { AttachmentTarget } from '@pagespace/lib/services/attachment-upload-core';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const HASH = 'a'.repeat(64);
 const PAGE_TARGET: AttachmentTarget = { type: 'page', pageId: 'page-1', driveId: 'drive-1' };
@@ -191,7 +192,7 @@ describe('completeAttachment', () => {
   });
 
   function completeArgs(over: Partial<Parameters<typeof completeAttachment>[0]> = {}) {
-    return { userId: 'user-1', target: PAGE_TARGET, request: req(), jobId: 'job-1', filename: 'photo.png', ...over };
+    return { actor: credentialActor('user-1', null), target: PAGE_TARGET, request: req(), jobId: 'job-1', filename: 'photo.png', ...over };
   }
 
   it('creates the file row + link with the verified MIME and returns the attachment', async () => {

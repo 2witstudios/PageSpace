@@ -261,7 +261,7 @@ describe('/api/drives/[driveId]/org', () => {
           details: { operation: 'org_visibility_change', orgId: NORTHWIND, from: 'OPEN', to: 'RESTRICTED' },
         })
       );
-      expect(recordOrgPowerDriveAction).toHaveBeenCalledWith(PRIYA, restricted, 'change_visibility');
+      expect(recordOrgPowerDriveAction).toHaveBeenCalledWith(expect.objectContaining({ userId: PRIYA }), restricted, 'change_visibility');
       expect(broadcastDriveEvent).toHaveBeenCalledWith(expect.objectContaining({ driveId: DRIVE, operation: 'updated' }), ['user-marcus', 'user-lena']);
     });
 

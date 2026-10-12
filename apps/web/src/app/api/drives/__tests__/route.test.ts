@@ -80,6 +80,7 @@ vi.mock('@pagespace/lib/permissions/membership-queries', () => ({
   resolveDriveWideCanEdit: vi.fn(),
 }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   getUserAccessLevel: vi.fn(),
 }));
 vi.mock('@pagespace/db/db', () => ({
@@ -97,6 +98,7 @@ import { getAppDriveMembership, hasAppDriveMembership } from '@pagespace/lib/per
 import { resolveDriveWideCanEdit } from '@pagespace/lib/permissions/membership-queries';
 import { getUserAccessLevel } from '@pagespace/lib/permissions/permissions';
 import { db } from '@pagespace/db/db';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 // ============================================================================
 // Test Helpers
@@ -178,21 +180,21 @@ describe('GET /api/drives', () => {
       const request = new Request('https://example.com/api/drives');
       await GET(request);
 
-      expect(listAccessibleDrives).toHaveBeenCalledWith(mockUserId, { includeTrash: false, tokenScopable: false });
+      expect(listAccessibleDrives).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }), { includeTrash: false, tokenScopable: false });
     });
 
     it('should pass includeTrash=true when query param is set', async () => {
       const request = new Request('https://example.com/api/drives?includeTrash=true');
       await GET(request);
 
-      expect(listAccessibleDrives).toHaveBeenCalledWith(mockUserId, { includeTrash: true, tokenScopable: false });
+      expect(listAccessibleDrives).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }), { includeTrash: true, tokenScopable: false });
     });
 
     it('should pass tokenScopable=true when query param is set', async () => {
       const request = new Request('https://example.com/api/drives?tokenScopable=true');
       await GET(request);
 
-      expect(listAccessibleDrives).toHaveBeenCalledWith(mockUserId, { includeTrash: false, tokenScopable: true });
+      expect(listAccessibleDrives).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }), { includeTrash: false, tokenScopable: true });
     });
   });
 
@@ -790,7 +792,7 @@ describe('GET /api/drives — scoped MCP canCreatePages', () => {
 
     expect(response.status).toBe(200);
     expect(body[0]).toMatchObject({ id: 'drive_scoped', canCreatePages: false });
-    expect(getUserAccessLevel).toHaveBeenCalledWith('user_123', 'drive_scoped');
+    expect(getUserAccessLevel).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user_123' }), 'drive_scoped');
   });
 });
 
@@ -799,8 +801,7 @@ vi.mock('@/lib/auth/principal-permissions', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/auth/principal-permissions')>();
   const permissions = await import('@pagespace/lib/permissions/permissions');
   return { ...actual,
-    getPrincipalAccessLevel: (auth: { userId: string }, resourceId: string) => permissions.getUserAccessLevel(auth.userId, resourceId),
+    getPrincipalAccessLevel: (auth: { userId: string }, resourceId: string) => permissions.getUserAccessLevel(credentialActor(auth.userId, null), resourceId),
   };
 });
 
-vi.mock('@pagespace/lib/organizations/authentication-policy', () => ({ checkDriveAuthentication: vi.fn().mockResolvedValue({ allowed: true }) }));

@@ -7,6 +7,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { maskIdentifier } from '@/lib/logging/mask';
 import { optionalAbsoluteInstant } from '@/lib/validation/date-params';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 
@@ -52,10 +53,10 @@ export async function GET(
   const canView = await canPrincipalViewPage(auth, pageId);
   if (!canView) {
     loggers.api.debug('[History:Route] Permission denied');
-    return NextResponse.json(
+    return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json(
       { error: 'Unauthorized - you do not have access to this page' },
       { status: 403 }
-    );
+    ));
   }
 
   // Parse query params

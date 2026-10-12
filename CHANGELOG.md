@@ -5,6 +5,8 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ## [Unreleased]
 
+- An organization's sign-in rules (require a passkey sign-in, maximum session age) now apply everywhere its content can be reached: pages, files, search, inbox, activity and Pulse, AI assistants and their tools, live collaboration (open documents and channels are closed when a session passes the maximum age), terminals and previews, uploads, and the CLI and MCP keys. A refused request answers `403` with `code: "org_strong_sign_in_required"` or `"org_reauthentication_required"` so you can sign in again; your personal drives and account settings stay reachable. Scheduled automations (workflows, triggers, scheduled backups, Pulse) keep running as their creator, since no one signs in for them.
+
 - Organization capabilities now require a verified payment or supported gift for the current subscription. A zero-dollar non-gift invoice or balance left from a previous subscription cannot activate an unpaid organization.
 
 - Billing now recognizes paid plans only by their configured Stripe price IDs. Unknown and retired prices no longer gain paid access or credit grants by matching a plan amount.
@@ -20,6 +22,18 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 - /btw side questions now work on every chat surface (dashboard assistant, right-sidebar chat, agent console) and /btw appears in the / command picker on all of them.
 
 ### Added
+
+- **Organization sign-in requirements** (shown once organizations are switched on) — an organization's
+  Security page can now require strong sign-in (a passkey confirmed on your device) and a maximum sign-in age
+  (15 minutes to 30 days) for everyone opening its drives, with a preview of how many members would have to
+  sign in again. Turning a requirement on first asks you to meet it yourself, so you never lock yourself out;
+  relaxing one needs a sign-in that meets the one in force. Someone who does not meet a requirement keeps their
+  account and personal drives: the app asks them to confirm it is them (passkey, or an emailed link for a
+  sign-in that is too old) without signing out, the Files page shows the organization's drives as locked
+  instead of hiding them, and the CLI and MCP tools say to run `pagespace login` (with a passkey when strong
+  sign-in is required). Every sign-in method now records how you signed in; sessions from before this change
+  must sign in again to open an organization's drives under these requirements. Single sign-on and SCIM are
+  out of scope and named as such on the Security page.
 
 - **Organizations in the CLI and on MCP keys** (shown once organizations are switched on) — `pagespace orgs
   list|get|members|drives|policies` and the matching `organizations.*` MCP tools read what the web already
@@ -41,6 +55,8 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 ### Changed
 
 - Failed organization payments now pause organization spending and access expansion immediately. Stripe-side trials do not grant organization access. Existing pages remain readable, and security restrictions still work.
+
+- Reactivating an organization now only pays what is owed or starts a new paid subscription. If the subscription was changed outside PageSpace (for example a trial, a pause or invoice billing set up in Stripe), Reactivate no longer tries to repair it: Owners and Admins are told it needs support and can contact us from the banner, and the organization is never shown as active until it really is. An organization whose subscription is switched to invoice billing in Stripe is treated as unpaid until support restores automatic payment.
 
 - Personal accounts now offer Free and Pro only. Business belongs to organizations; retired personal Business pricing and access exceptions have been removed.
 

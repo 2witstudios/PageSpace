@@ -5,6 +5,8 @@ import { centsFromCredits } from '../money-model';
 import {
   orgPoolRefillGrant,
   orgSubscriptionFundingBasis,
+  orgInvoiceFundingInput,
+  GIFT_SUBSCRIPTION_METADATA_TYPE,
   orgPoolListPriceGrantCents,
   orgInvoicePaidCents,
   selectOrgPoolRefillLines,
@@ -19,6 +21,8 @@ import {
   planLegRefund,
   planDonation,
   type StoredFundingLeg,
+  type OrgInvoice,
+  type OrgInvoiceLine,
   type DonationInput,
 } from '../wallet-funding';
 
@@ -574,5 +578,49 @@ describe('organization first-funding evidence', () => {
     { paid: 0, verified: true, gifted: true, own: false, expected: null },
   ])('recognizes only verified paid or own-subscription gift evidence: %j', ({ paid, verified, gifted, own, expected }) => {
     expect(orgSubscriptionFundingBasis({ lines: [base], amountPaidCents: paid, hasSubscriptionParent: true, hasVerifiedGiftPrice: verified, gifted, onOrgSubscription: own })).toBe(expected);
+  });
+});
+
+describe('orgInvoiceFundingInput — the ONE reading of an org invoice that funding proof and reactivation share', () => {
+  const PRICES = { basePriceId: 'price_base', seatPriceId: 'price_seat' };
+  const line = (price: string, amount: number, discount = 0): OrgInvoiceLine => ({
+    amount,
+    discount_amounts: discount ? [{ amount: discount }] : [],
+    pricing: { price_details: { price } },
+    parent: { subscription_item_details: { subscription_item: `si_${price}` } },
+  });
+  const invoice = (over: { lines?: OrgInvoiceLine[]; paid?: number; gift?: boolean; hasMore?: boolean; sub?: string | null } = {}): OrgInvoice => ({
+    amount_paid: over.paid ?? 5000,
+    subtotal: 5000,
+    billing_reason: 'subscription_create',
+    parent: over.sub === null ? null : { subscription_details: { subscription: over.sub ?? 'sub_1', metadata: over.gift ? { type: GIFT_SUBSCRIPTION_METADATA_TYPE } : {} } },
+    lines: { has_more: over.hasMore ?? false, data: over.lines ?? [line('price_base', 5000), line('price_seat', 0)] },
+  });
+  const basis = (inv: OrgInvoice, storedSubscriptionId: string | null = 'sub_1') =>
+    orgSubscriptionFundingBasis(orgInvoiceFundingInput(inv, { prices: PRICES, storedSubscriptionId }).input);
+
+  it('SEAT-8 (partial) a paid Business invoice is paid evidence', () => {
+    expect(basis(invoice())).toBe('paid');
+  });
+
+  it('SEAT-8 (partial) D-OW-30 money paid only for an ad-hoc line, with the Business base fully discounted, is no evidence', () => {
+    expect(basis(invoice({ lines: [line('price_base', 5000, 5000), line('price_seat', 0), { ...line('price_adhoc', 1000), parent: null }], paid: 1000 }))).toBeNull();
+  });
+
+  it('SEAT-8 (partial) a gift is evidence only on the stored subscription', () => {
+    const gift = invoice({ lines: [line('price_base', 5000, 5000), line('price_seat', 0)], paid: 0, gift: true });
+    expect(basis(gift)).toBe('gift');
+    expect(basis(gift, 'sub_other')).toBeNull();
+    expect(basis(gift, null)).toBeNull();
+  });
+
+  it('an invoice with no subscription parent is no evidence', () => {
+    expect(basis(invoice({ sub: null }))).toBeNull();
+  });
+
+  it('reports the lines it excluded, for the refill log', () => {
+    const adhoc = { ...line('price_adhoc', 1000), parent: null };
+    expect(orgInvoiceFundingInput(invoice({ lines: [line('price_base', 5000), line('price_seat', 0), adhoc] }), { prices: PRICES, storedSubscriptionId: 'sub_1' }).unrecognized)
+      .toEqual([{ priceId: 'price_adhoc', subscriptionItemId: null, amountCents: 1000 }]);
   });
 });

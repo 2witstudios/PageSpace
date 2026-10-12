@@ -4,6 +4,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { removeAgentFromDrive, setAgentDriveIncludeContext } from '@pagespace/lib/services/drive-agent-service';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
@@ -33,7 +34,7 @@ export async function PATCH(
     }
 
     const result = await setAgentDriveIncludeContext({
-      actingUserId: userId,
+      actor: actorFromAuth(auth),
       agentPageId: agentId,
       driveId,
       includeContext: parsed.data.includeContext,
@@ -75,7 +76,7 @@ export async function DELETE(
     const { agentId, driveId } = await context.params;
 
     const result = await removeAgentFromDrive({
-      actingUserId: userId,
+      actor: actorFromAuth(auth),
       agentPageId: agentId,
       driveId,
     });

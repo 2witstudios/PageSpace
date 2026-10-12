@@ -21,6 +21,7 @@ import { authenticateMCPRequest, isAuthError, isMCPAuthResult, getPrincipalAcces
 import { writeDeniedDetails } from '../write-denied-details';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 // Get drive slug from page for socket broadcasting
 async function getDriveIdFromPage(pageId: string): Promise<string | null> {
@@ -200,7 +201,7 @@ export async function POST(req: NextRequest) {
         hasAccessLevel: !!accessLevel,
         canView: accessLevel?.canView ?? false
       });
-      return new NextResponse('Forbidden', { status: 403 });
+      return deniedResponse(actorFromAuth(auth), pageId, new NextResponse('Forbidden', { status: 403 }));
     }
 
     // Validate write permissions for mutating operations
