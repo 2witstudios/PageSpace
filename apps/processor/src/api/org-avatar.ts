@@ -3,13 +3,19 @@
  * and served by the web app (GET /api/orgs/:orgId/avatar/:filename, members only). Every write
  * needs a service token BOUND to that org (createOrgServiceToken, minted only for its Owner and
  * Admins); the scope alone is not enough.
+ *
+ * An upload never overwrites or deletes: it writes a new file (avatar-<nonce>.<ext>) and returns its
+ * name. The web route switches the org's stored path to it and only then deletes the file it
+ * replaced, by name (DELETE /:orgId/:filename); DELETE /:orgId empties the folder when the org is gone.
  */
+import { randomBytes } from 'crypto';
 import { Router, Request, Response } from 'express';
 import multer from 'multer';
 import { PutObjectCommand, ListObjectsV2Command, DeleteObjectsCommand } from '@aws-sdk/client-s3';
 import {
   ORG_AVATAR_MAX_BYTES,
   ORG_AVATAR_MIME_TYPES,
+  isOrgAvatarFilename,
   orgAvatarFilename,
   orgAvatarStorageKey,
 } from '@pagespace/lib/organizations/org-avatar-core';
@@ -66,12 +72,12 @@ function refuseUnbound(req: Request<{ orgId: string }>, res: Response): boolean 
 router.post('/:orgId', upload.single('file'), async (req: Request<{ orgId: string }>, res: Response) => {
   if (refuseUnbound(req, res)) return;
   const { orgId } = req.params;
-  const filename = req.file ? orgAvatarFilename(req.file.mimetype) : null;
+  // A fresh name per upload: concurrent uploads never write the same object.
+  const filename = req.file ? orgAvatarFilename(req.file.mimetype, randomBytes(12).toString('hex')) : null;
   if (!req.file || !filename) {
     return res.status(400).json({ error: 'Upload a JPEG, PNG, GIF or WebP image' });
   }
   try {
-    await deleteOrgAvatars(orgId);
     await s3().send(new PutObjectCommand({
       Bucket: getS3Bucket(),
       Key: orgAvatarStorageKey(orgId, filename),
@@ -82,6 +88,22 @@ router.post('/:orgId', upload.single('file'), async (req: Request<{ orgId: strin
   } catch (error) {
     processorLogger.error('Org avatar upload error', error instanceof Error ? error : null);
     return res.status(500).json({ error: 'Failed to upload organization avatar' });
+  }
+});
+
+router.delete('/:orgId/:filename', async (req: Request<{ orgId: string; filename: string }>, res: Response) => {
+  if (refuseUnbound(req, res)) return;
+  const { orgId, filename } = req.params;
+  if (!isOrgAvatarFilename(filename)) return res.status(400).json({ error: 'Not an organization avatar file' });
+  try {
+    await s3().send(new DeleteObjectsCommand({
+      Bucket: getS3Bucket(),
+      Delete: { Objects: [{ Key: orgAvatarStorageKey(orgId, filename) }], Quiet: true },
+    }));
+    return res.json({ success: true });
+  } catch (error) {
+    processorLogger.error('Org avatar file deletion error', error instanceof Error ? error : null);
+    return res.status(500).json({ error: 'Failed to delete organization avatar' });
   }
 });
 

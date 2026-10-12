@@ -13,13 +13,19 @@ export async function mintOrgAvatarToken(orgId: string, userId: string): Promise
   return token;
 }
 
+/**
+ * POST writes a new file (the answer names it); DELETE with a filename removes that one file; DELETE
+ * without one empties the org's folder (only when the org itself is deleted).
+ */
 export function callOrgAvatarStorage(
   orgId: string,
   token: string,
-  init: { method: 'POST' | 'DELETE'; body?: FormData },
+  init: { method: 'POST' | 'DELETE'; body?: FormData; filename?: string },
 ): Promise<Response> {
-  return fetch(`${PROCESSOR_URL}/api/org-avatar/${encodeURIComponent(orgId)}`, {
-    ...init,
+  const { filename, ...request } = init;
+  const file = filename ? `/${encodeURIComponent(filename)}` : '';
+  return fetch(`${PROCESSOR_URL}/api/org-avatar/${encodeURIComponent(orgId)}${file}`, {
+    ...request,
     headers: { Authorization: `Bearer ${token}` },
     // Bounded so a stalled processor can't pin this request slot open.
     signal: AbortSignal.timeout(60_000),

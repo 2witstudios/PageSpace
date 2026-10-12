@@ -54,12 +54,29 @@ beforeEach(() => {
 });
 
 describe('ORG-1 (partial) the processor stores an org avatar only for a token bound to that org', () => {
-  it('stores the image under the org\'s own folder, named from its type (never the uploader\'s filename), replacing the old one', async () => {
-    const res = await request(createApp(boundTo('org_nw'), { mimetype: 'image/png' })).post('/org-avatar/org_nw');
+  it('writes each upload as a NEW file in the org\'s own folder, named from its type and a fresh nonce (never the uploader\'s filename), and deletes nothing', async () => {
+    const first = await request(createApp(boundTo('org_nw'), { mimetype: 'image/png' })).post('/org-avatar/org_nw');
+    const second = await request(createApp(boundTo('org_nw'), { mimetype: 'image/png' })).post('/org-avatar/org_nw');
+    expect(first.status).toBe(200);
+    expect(first.body.filename).toMatch(/^avatar-[a-z0-9]{1,32}\.png$/);
+    expect(second.body.filename).not.toBe(first.body.filename);
+    expect(commands('PutObject').map((c) => c.input)).toEqual([
+      expect.objectContaining({ Key: `org-avatars/org_nw/${first.body.filename}`, ContentType: 'image/png' }),
+      expect.objectContaining({ Key: `org-avatars/org_nw/${second.body.filename}`, ContentType: 'image/png' }),
+    ]);
+    // The old file goes only once the org points at the new one (the web route deletes it by name).
+    expect(commands('DeleteObjects')).toEqual([]);
+  });
+
+  it('deletes exactly the one named file, and refuses a name that is not an org avatar file', async () => {
+    const res = await request(createApp(boundTo('org_nw'))).delete('/org-avatar/org_nw/avatar-old123.png');
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ filename: 'avatar.png' });
-    expect(commands('DeleteObjects')[0].input).toMatchObject({ Delete: { Objects: [{ Key: 'org-avatars/org_nw/avatar.jpg' }] } });
-    expect(commands('PutObject')[0].input).toMatchObject({ Key: 'org-avatars/org_nw/avatar.png', ContentType: 'image/png' });
+    expect(commands('DeleteObjects')[0].input).toMatchObject({ Delete: { Objects: [{ Key: 'org-avatars/org_nw/avatar-old123.png' }] } });
+    expect(commands('ListObjectsV2')).toEqual([]);
+    for (const name of ['..%2F..%2Favatars%2Fu1%2Favatar.png', 'avatar.svg', 'other.png']) {
+      expect((await request(createApp(boundTo('org_nw'))).delete(`/org-avatar/org_nw/${name}`)).status).toBe(400);
+    }
+    expect((await request(createApp(boundTo('org_other'))).delete('/org-avatar/org_nw/avatar-old123.png')).status).toBe(403);
   });
 
   it('refuses a token bound to another org, to a user, or to nothing, and writes nothing', async () => {
@@ -77,7 +94,7 @@ describe('ORG-1 (partial) the processor stores an org avatar only for a token bo
     expect(commands('PutObject')).toEqual([]);
   });
 
-  it('removes every object in the org\'s avatar folder and nothing outside it', async () => {
+  it('on org deletion, removes every object in the org\'s avatar folder and nothing outside it', async () => {
     const res = await request(createApp(boundTo('org_nw'))).delete('/org-avatar/org_nw');
     expect(res.status).toBe(200);
     expect(commands('ListObjectsV2')[0].input).toMatchObject({ Prefix: 'org-avatars/org_nw/' });

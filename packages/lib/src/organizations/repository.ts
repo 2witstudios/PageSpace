@@ -267,13 +267,16 @@ export async function updateOrganization(
 }
 
 export type SetOrganizationAvatarResult =
-  | { ok: true; organization: OrgRecord }
+  /** previousAvatarUrl: the path this call replaced (its file is now the caller's to delete), or null. */
+  | { ok: true; organization: OrgRecord; previousAvatarUrl: string | null }
   | { ok: false; reason: 'not_found' | 'invalid_avatar' };
 
 /**
  * ORG-1: sets (or clears, with null) the org's avatar. Only this org's own PageSpace avatar path is
  * accepted — the file the avatar route stored — never an outside URL; the database refuses anything
- * else too (organizations_avatar_url_chk).
+ * else too (organizations_avatar_url_chk). The org row is locked while the old value is read and the
+ * new one written, so concurrent switches each replace a distinct path and the caller deletes exactly
+ * the file it replaced, never the stored one.
  */
 export async function setOrganizationAvatar(
   orgId: string,
@@ -281,8 +284,13 @@ export async function setOrganizationAvatar(
   actorId: string,
 ): Promise<SetOrganizationAvatarResult> {
   if (avatarUrl !== null && !isOrgAvatarPath(orgId, avatarUrl)) return { ok: false, reason: 'invalid_avatar' };
-  const [organization] = await db.update(organizations).set({ avatarUrl }).where(eq(organizations.id, orgId)).returning(ORG_RECORD);
-  if (!organization) return { ok: false, reason: 'not_found' };
+  const switched = await db.transaction(async (tx) => {
+    const [current] = await tx.select({ avatarUrl: organizations.avatarUrl }).from(organizations).where(eq(organizations.id, orgId)).for('update');
+    if (!current) return null;
+    const [organization] = await tx.update(organizations).set({ avatarUrl }).where(eq(organizations.id, orgId)).returning(ORG_RECORD);
+    return { organization, previousAvatarUrl: current.avatarUrl };
+  });
+  if (!switched) return { ok: false, reason: 'not_found' };
   await recordOrgAuditEventAfterCommit({
     orgId,
     eventType: 'org.updated',
@@ -291,7 +299,7 @@ export async function setOrganizationAvatar(
     resourceId: orgId,
     details: { fields: ['avatar'], removed: avatarUrl === null },
   });
-  return { ok: true, organization };
+  return { ok: true, ...switched };
 }
 
 /**

@@ -44,28 +44,56 @@ const upload = (file: File | null) => {
 };
 const png = () => new File([new Uint8Array([137, 80, 78, 71])], 'logo.png', { type: 'image/png' });
 const asRole = (role: OrgRole | null) => vi.mocked(findMembershipRole).mockResolvedValue(role);
+const OLD = `/api/orgs/${ORG}/avatar/avatar-old111.png`;
+const NEW_FILE = 'avatar-new222.png';
+const NEW = `/api/orgs/${ORG}/avatar/${NEW_FILE}`;
+/** The order storage writes and column switches happen in. */
+const calls: string[] = [];
+const stored = { avatarUrl: null as string | null };
 
 beforeEach(() => {
   vi.clearAllMocks();
+  calls.length = 0;
   vi.stubGlobal('fetch', fetchMock);
   vi.mocked(authenticateRequestWithOptions).mockResolvedValue(session);
-  fetchMock.mockResolvedValue(new Response(JSON.stringify({ filename: 'avatar.png' }), { status: 200 }));
-  vi.mocked(setOrganizationAvatar).mockImplementation(async (orgId, avatarUrl) => ({
-    ok: true,
-    organization: { id: orgId, name: 'Northwind Labs', slug: 'northwind', avatarUrl, ownerId: 'u_jono', stripeCustomerId: null, stripeSubscriptionId: null, seatAutoAdd: false, createdAt: new Date(), updatedAt: new Date() },
-  }));
+  stored.avatarUrl = OLD;
+  fetchMock.mockImplementation(async (_url: string, init: { method: string }) => {
+    calls.push(`storage ${init.method} ${_url.replace(/^.*\/api\/org-avatar\//, '')}`);
+    return new Response(JSON.stringify(init.method === 'POST' ? { filename: NEW_FILE } : { success: true }), { status: 200 });
+  });
+  vi.mocked(setOrganizationAvatar).mockImplementation(async (orgId, avatarUrl) => {
+    calls.push(`column ${avatarUrl}`);
+    const previousAvatarUrl = stored.avatarUrl;
+    stored.avatarUrl = avatarUrl;
+    return {
+      ok: true,
+      previousAvatarUrl,
+      organization: { id: orgId, name: 'Northwind Labs', slug: 'northwind', avatarUrl, ownerId: 'u_jono', stripeCustomerId: null, stripeSubscriptionId: null, seatAutoAdd: false, createdAt: new Date(), updatedAt: new Date() },
+    };
+  });
 });
 
 describe('ORG-1 (partial) uploading and removing the org avatar', () => {
-  it('an Admin uploads an image: it is stored through an org-bound token and the org records its PageSpace path', async () => {
+  it('an Admin uploads an image through an org-bound token: the new file is written, then the org is switched to it, then the file it replaced is deleted', async () => {
     asRole('ADMIN');
     const res = await POST(upload(png()), params);
     expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(body.organization.avatarUrl).toMatch(new RegExp(`^/api/orgs/${ORG}/avatar/avatar\\.png\\?v=\\d+$`));
+    expect((await res.json()).organization.avatarUrl).toBe(NEW);
     expect(createOrgServiceToken).toHaveBeenCalledWith('u_priya', ORG, ['org-avatars:write'], expect.any(String));
     expect(fetchMock).toHaveBeenCalledWith(expect.stringMatching(new RegExp(`/api/org-avatar/${ORG}$`)), expect.objectContaining({ method: 'POST', headers: { Authorization: 'Bearer ps_svc_org' } }));
-    expect(setOrganizationAvatar).toHaveBeenCalledWith(ORG, body.organization.avatarUrl, 'u_priya');
+    expect(calls).toEqual([`storage POST ${ORG}`, `column ${NEW}`, `storage DELETE ${ORG}/avatar-old111.png`]);
+  });
+
+  it('a first upload deletes nothing; an upload the org could not be switched to removes its own new file', async () => {
+    asRole('ADMIN');
+    stored.avatarUrl = null;
+    await POST(upload(png()), params);
+    expect(calls).toEqual([`storage POST ${ORG}`, `column ${NEW}`]);
+
+    calls.length = 0;
+    vi.mocked(setOrganizationAvatar).mockResolvedValueOnce({ ok: false, reason: 'not_found' });
+    expect((await POST(upload(png()), params)).status).toBe(404);
+    expect(calls).toEqual([`storage POST ${ORG}`, `storage DELETE ${ORG}/${NEW_FILE}`]);
   });
 
   it('a plain Member is refused and a non-member gets 404; nothing is stored', async () => {
@@ -88,18 +116,20 @@ describe('ORG-1 (partial) uploading and removing the org avatar', () => {
 
   it('a filename the storage service answers with that is not an org avatar file is never recorded', async () => {
     asRole('ADMIN');
-    fetchMock.mockResolvedValue(new Response(JSON.stringify({ filename: '../../avatars/u1/avatar.png' }), { status: 200 }));
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ filename: '../../avatars/u1/avatar.png' }), { status: 200 }));
     expect((await POST(upload(png()), params)).status).toBe(502);
     expect(setOrganizationAvatar).not.toHaveBeenCalled();
   });
 
-  it('removing deletes the stored file and clears the avatar', async () => {
+  it('removing clears the avatar first, then deletes the file it pointed to (and nothing when there was none)', async () => {
     asRole('ADMIN');
-    fetchMock.mockResolvedValue(new Response(JSON.stringify({ success: true }), { status: 200 }));
     const res = await DELETE(new Request('https://example.test', { method: 'DELETE' }), params);
     expect(res.status).toBe(200);
-    expect(fetchMock).toHaveBeenCalledWith(expect.stringMatching(new RegExp(`/api/org-avatar/${ORG}$`)), expect.objectContaining({ method: 'DELETE' }));
-    expect(setOrganizationAvatar).toHaveBeenCalledWith(ORG, null, 'u_priya');
+    expect(calls).toEqual(['column null', `storage DELETE ${ORG}/avatar-old111.png`]);
+
+    calls.length = 0;
+    await DELETE(new Request('https://example.test', { method: 'DELETE' }), params);
+    expect(calls).toEqual(['column null']);
   });
 });
 
@@ -107,21 +137,21 @@ describe('ORG-1 (partial) serving the org avatar', () => {
   it('a member gets the image bytes from the org\'s own folder; a non-member gets 404 and nothing is read', async () => {
     asRole('MEMBER');
     s3.send.mockResolvedValue({ Body: { transformToByteArray: async () => new Uint8Array([1, 2, 3]) } });
-    const res = await GET(new Request('https://example.test'), fileParams('avatar.png'));
+    const res = await GET(new Request('https://example.test'), fileParams('avatar-abc123.png'));
     expect(res.status).toBe(200);
     expect(res.headers.get('Content-Type')).toBe('image/png');
     expect(res.headers.get('X-Content-Type-Options')).toBe('nosniff');
-    expect(s3.send).toHaveBeenCalledWith(expect.objectContaining({ input: { Bucket: 'bucket', Key: `org-avatars/${ORG}/avatar.png` } }));
+    expect(s3.send).toHaveBeenCalledWith(expect.objectContaining({ input: { Bucket: 'bucket', Key: `org-avatars/${ORG}/avatar-abc123.png` } }));
 
     s3.send.mockClear();
     asRole(null);
-    expect((await GET(new Request('https://example.test'), fileParams('avatar.png'))).status).toBe(404);
+    expect((await GET(new Request('https://example.test'), fileParams('avatar-abc123.png'))).status).toBe(404);
     expect(s3.send).not.toHaveBeenCalled();
   });
 
   it('any filename other than an org avatar file is refused (no traversal into other storage)', async () => {
     asRole('MEMBER');
-    for (const filename of ['../avatars/u1/avatar.png', 'avatar.svg', 'other.png', 'avatar.png.html']) {
+    for (const filename of ['../avatars/u1/avatar-abc123.png', 'avatar-abc123.svg', 'avatar.png', 'avatar-abc123.png.html']) {
       expect((await GET(new Request('https://example.test'), fileParams(filename))).status).toBe(400);
     }
     expect(s3.send).not.toHaveBeenCalled();

@@ -185,15 +185,15 @@ describe('org services (real Postgres)', () => {
       expect(await createOrganization({ name: 'Copycat', slug: org.slug, ownerId: (await person('Copy Cat')).id })).toEqual({ ok: false, reason: 'slug_taken' });
 
       // Avatar: the uploaded file's PageSpace path is stored and read back; an outside URL never is.
-      const uploaded = orgAvatarPath(org.id, 'avatar.png', 1);
-      expect(await setOrganizationAvatar(org.id, uploaded, jono.id)).toMatchObject({ ok: true, organization: { avatarUrl: uploaded } });
+      const uploaded = orgAvatarPath(org.id, 'avatar-first1.png');
+      expect(await setOrganizationAvatar(org.id, uploaded, jono.id)).toMatchObject({ ok: true, organization: { avatarUrl: uploaded }, previousAvatarUrl: null });
       expect((await findOrganizationById(org.id))?.avatarUrl).toBe(uploaded);
-      for (const outside of ['https://tracker.example.com/pixel.png', orgAvatarPath('org_someone_else', 'avatar.png', 1)]) {
+      for (const outside of ['https://tracker.example.com/pixel.png', orgAvatarPath('org_someone_else', 'avatar-first1.png')]) {
         expect(await setOrganizationAvatar(org.id, outside, jono.id)).toEqual({ ok: false, reason: 'invalid_avatar' });
         await expect(db.update(organizations).set({ avatarUrl: outside }).where(eq(organizations.id, org.id))).rejects.toThrow();
       }
       expect((await findOrganizationById(org.id))?.avatarUrl).toBe(uploaded);
-      expect(await setOrganizationAvatar(org.id, null, jono.id)).toMatchObject({ ok: true, organization: { avatarUrl: null } });
+      expect(await setOrganizationAvatar(org.id, null, jono.id)).toMatchObject({ ok: true, organization: { avatarUrl: null }, previousAvatarUrl: uploaded });
 
       // One human Owner: an agent can neither own nor receive the org.
       const product = await seedDrive(jono.id, org.id, { name: 'Product' });
@@ -209,6 +209,21 @@ describe('org services (real Postgres)', () => {
       expect(await orgOwnerId(org.id)).toBe(priya.id);
       expect(await ownerRows(org.id)).toEqual([{ userId: priya.id }]);
       expect(await requireOrgRole(jono.id, org.id, 'MEMBER')).toEqual({ ok: true, role: 'ADMIN' });
+    });
+
+    it('ORG-1 (partial) switching the avatar returns the path it replaced, under the org row lock: concurrent switches each replace a distinct path, so every replaced file is deleted exactly once and the stored one is never deleted', async () => {
+      const { jono, org } = await seedNorthwind();
+      const initial = orgAvatarPath(org.id, 'avatar-initial.png');
+      await setOrganizationAvatar(org.id, initial, jono.id);
+      const uploads = ['a', 'b', 'c', 'd'].map((n) => orgAvatarPath(org.id, `avatar-${n}${createId().slice(0, 6)}.png`));
+
+      const results = await Promise.all(uploads.map((path) => setOrganizationAvatar(org.id, path, jono.id)));
+
+      const replaced = results.map((r) => (r.ok ? r.previousAvatarUrl : 'refused'));
+      const stored = (await findOrganizationById(org.id))?.avatarUrl;
+      // The replaced paths and the stored one are exactly the initial and every upload, each once.
+      expect([...replaced, stored].sort()).toEqual([initial, ...uploads].sort());
+      expect(replaced).not.toContain(stored);
     });
 
     it('ORG-1 (partial) a taken slug creates neither the org nor a membership row', async () => {

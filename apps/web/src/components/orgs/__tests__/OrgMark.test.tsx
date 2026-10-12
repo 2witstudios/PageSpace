@@ -18,7 +18,7 @@ describe('OrgMark', () => {
 
   it('falls back to the initial when the avatar URL does not load (a broken or disallowed URL)', () => {
     // jsdom never loads images, which is exactly the broken-URL case: the Avatar keeps its fallback.
-    render(<OrgMark name="Northwind Labs" avatarUrl="/api/orgs/org_nw/avatar/avatar.png?v=1" />);
+    render(<OrgMark name="Northwind Labs" avatarUrl="/api/orgs/org_nw/avatar/avatar-abc123.png" />);
     const mark = screen.getByRole('img', { name: 'Northwind Labs' });
     expect(mark.textContent).toBe('N');
     expect(mark.querySelector('img')).toBeNull();

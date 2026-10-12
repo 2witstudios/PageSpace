@@ -521,7 +521,7 @@ describe('org route behaviour', () => {
 
   it('ORG-1 (partial) deleting an org removes its stored avatar file, only once the delete has gone through', async () => {
     asRole('OWNER');
-    vi.mocked(repository.findOrganizationById).mockResolvedValue({ ...organization, avatarUrl: `/api/orgs/${ORG_ID}/avatar/avatar.png?v=1` });
+    vi.mocked(repository.findOrganizationById).mockResolvedValue({ ...organization, avatarUrl: `/api/orgs/${ORG_ID}/avatar/avatar-abc123.png` });
     vi.mocked(deleteOrganization).mockResolvedValueOnce({ ok: false, status: 403, reason: 'not_owner' });
     expect((await orgRoute.DELETE(req('DELETE', { drives: [] }), params({ orgId: ORG_ID }))).status).toBe(403);
     expect(callOrgAvatarStorage).not.toHaveBeenCalled();

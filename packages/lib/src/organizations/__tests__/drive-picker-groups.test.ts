@@ -4,7 +4,7 @@ import { groupPickerDrives } from '../drive-picker-groups';
 const d = (id: string, name: string, orgId: string | null = null) => ({ id, name, orgId });
 const orgs = [
   { id: 'o-northwind', name: 'Northwind Labs', avatarUrl: null, role: 'MEMBER' as const },
-  { id: 'o-acme', name: 'Acme', avatarUrl: '/api/orgs/o-acme/avatar/avatar.png?v=1', role: 'ADMIN' as const },
+  { id: 'o-acme', name: 'Acme', avatarUrl: '/api/orgs/o-acme/avatar/avatar-abc123.png', role: 'ADMIN' as const },
 ];
 
 describe('groupPickerDrives: the drive picker by owner', () => {
@@ -15,7 +15,7 @@ describe('groupPickerDrives: the drive picker by owner', () => {
       ['org', 'Northwind Labs', ['Design System', 'Product']],
       ['personal', 'Personal', ['Home']],
     ]);
-    expect(groups[0]).toMatchObject({ orgId: 'o-acme', avatarUrl: '/api/orgs/o-acme/avatar/avatar.png?v=1' });
+    expect(groups[0]).toMatchObject({ orgId: 'o-acme', avatarUrl: '/api/orgs/o-acme/avatar/avatar-abc123.png' });
   });
 
   it('DRV-9 (partial) the picker never shows a drive it was not given: grouping only regroups the accessible list', () => {

@@ -38,7 +38,7 @@ beforeEach(() => {
 
 describe('ORG-1 (partial) Org Settings › General sets the org avatar by uploading an image', () => {
   it('an Admin picks an image file; it is uploaded and the org is refetched (there is no URL field anywhere)', async () => {
-    mocks.uploadOrgAvatar.mockResolvedValue({ organization: { id: 'org_nw', avatarUrl: '/api/orgs/org_nw/avatar/avatar.png?v=1' } });
+    mocks.uploadOrgAvatar.mockResolvedValue({ organization: { id: 'org_nw', avatarUrl: '/api/orgs/org_nw/avatar/avatar-abc123.png' } });
     render(<OrgGeneralPage />);
     expect(screen.queryByLabelText(/url/i, { selector: 'input[type="url"]' })).not.toBeInTheDocument();
     const input = screen.getByLabelText('Upload avatar image');
@@ -51,7 +51,7 @@ describe('ORG-1 (partial) Org Settings › General sets the org avatar by upload
   });
 
   it('an existing avatar can be removed; a refused upload says why', async () => {
-    mocks.avatarUrl = '/api/orgs/org_nw/avatar/avatar.png?v=1';
+    mocks.avatarUrl = '/api/orgs/org_nw/avatar/avatar-abc123.png';
     mocks.removeOrgAvatar.mockResolvedValue({ organization: { id: 'org_nw', avatarUrl: null } });
     render(<OrgGeneralPage />);
     await userEvent.click(screen.getByRole('button', { name: 'Remove avatar' }));
