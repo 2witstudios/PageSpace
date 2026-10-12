@@ -38,6 +38,38 @@ before applying migrations 0338–0339 or starting the final application.
    Stripe inventory, future schedule, or manifest mismatch blocks **all** writes.
    Do not proceed unless the command exits successfully with `ready: true`.
 
+## Drain missed grants before the ratio flip deploys
+
+The final application sizes every included-credit grant at the A-11 ratio. The
+release before it granted 100% of what an invoice paid, and the ratio has no
+switch: there is no legacy-ratio code to repair an older invoice at its old
+terms (D-OW-17, D-OW-42, D-OW-54). So every grant owed under the old terms must
+be made BY THE OLD RELEASE, before the new images start:
+
+1. On the outgoing release, with webhook delivery still running, let Stripe's
+   pending `invoice.paid` retries land, then run the credit reconcile until it
+   reports no missed grants:
+
+   ```sh
+   # from the cron container (docker/cron/crontab runs the same call every 10 minutes)
+   cron-curl GET "$WEB_URL/api/cron/reconcile-credits"
+   ```
+
+2. Confirm in the target database that nothing is left for the new release to
+   repair:
+
+   ```sql
+   SELECT count(*) FROM credit_ledger WHERE "entryType" = 'missed_grant';
+   ```
+
+   The count must be 0. A row still waiting for a tier (indeterminate in the cron
+   output) needs a human before the window opens.
+
+3. Only then stop webhook deliveries and continue below. An invoice that was paid
+   before the window but whose webhook is first delivered after the new images
+   start, or a missed grant created after step 2, is granted at the new ratio;
+   record any such invoice id in the deployment evidence.
+
 ## Apply in the cutover maintenance window
 
 Stop application traffic, background billing jobs and webhook deliveries during
