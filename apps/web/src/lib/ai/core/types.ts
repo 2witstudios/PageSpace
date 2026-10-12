@@ -60,7 +60,11 @@ export interface ToolExecutionContext {
   // when it is not this context's `userId`: a manual workflow Run is gated as the person who
   // pressed it while the run reads content as the workflow's creator (review #2817 P2-3). Every
   // model call riding this turn gates and records its usage as them; absent, the context's user.
-  creditSpend?: { spend: SpendTarget; walletId?: string; userId?: string };
+  //
+  // `reservedHoldId` is a hold the CALLER already took for exactly the one ask_agent call it is
+  // about to make (the channel mention responder's per-reply hold): that call settles on it
+  // instead of reserving a second time, and does not pass it on to anything nested inside it.
+  creditSpend?: { spend: SpendTarget; walletId?: string; userId?: string; reservedHoldId?: string };
 
   // MCP token drive-scope restriction. Empty/undefined = full access (session auth
   // or an unscoped MCP token); non-empty = tools may only touch these drive IDs.

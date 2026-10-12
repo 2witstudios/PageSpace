@@ -1252,6 +1252,27 @@ describe('agent-communication-tools', () => {
         expect(AIMonitoring.trackUsage).not.toHaveBeenCalled();
       });
 
+      it('WAL-6 (partial) a channel mention reply is reserved ONCE: the responder\'s hold is settled by the reply, never doubled by a second reservation, and nothing nested inside reuses it', async () => {
+        // The wallet can afford the reply once: a second reservation would be refused.
+        mockGateUserCall.mockResolvedValue({ allowed: false, reason: 'source_refused', refusal: { source: 'drive_wallet', reason: 'source_empty', options: [] } });
+        const mentionSpend = { kind: 'automation' as const, driveId: 'drive-1', personPresent: true as const };
+
+        const result = await executeAskAgent(
+          { agentPath: '/test/agent', agentId: 'agent-1', question: 'Test question' },
+          {
+            toolCallId: '1', messages: [],
+            experimental_context: { userId: 'user-123', creditSpend: { spend: mentionSpend, walletId: 'w-drive-1', reservedHoldId: 'hold-mention' } } as ToolExecutionContext,
+          },
+        );
+
+        expect(result).toMatchObject({ success: true });
+        expect(mockGateUserCall).not.toHaveBeenCalled();
+        expect(AIMonitoring.trackUsage).toHaveBeenCalledWith(expect.objectContaining({ holdId: 'hold-mention', walletId: 'w-drive-1' }));
+        const nested = (vi.mocked(generateText).mock.calls[0][0] as { experimental_context: ToolExecutionContext }).experimental_context;
+        expect(nested.creditSpend?.reservedHoldId).toBeUndefined();
+        expect(nested.creditSpend?.walletId).toBe('w-drive-1');
+      });
+
       it('a sub-agent run that fails before the settle releases its hold at once', async () => {
         vi.mocked(generateText).mockRejectedValueOnce(new Error('provider down'));
 

@@ -772,6 +772,10 @@ export async function executeAskAgent(
         // Include chain tracking for activity logging (Tier 1)
         const nestedContext = {
           ...executionContext,
+          // A caller's reserved hold is this call's alone: nothing nested inside it may reuse it.
+          ...(executionContext?.creditSpend
+            ? { creditSpend: { ...executionContext.creditSpend, reservedHoldId: undefined } }
+            : {}),
           agentCallDepth: callDepth + 1,
           currentAgentId: agentId,
           locationContext: executionContext?.locationContext, // Explicitly preserve location context
@@ -841,9 +845,11 @@ export async function executeAskAgent(
           spend: askSpend,
           estCostCents: estimateChatHoldCentsForModel(resolvedModelName),
         });
-        let holdId: string | undefined;
-        let settleWalletId: string | undefined;
-        if (admission.gate) {
+        // The channel mention responder already reserved this reply (one hold per reply): settle on it.
+        const reservedHoldId = executionContext?.creditSpend?.reservedHoldId;
+        let holdId: string | undefined = reservedHoldId;
+        let settleWalletId: string | undefined = reservedHoldId ? executionContext?.creditSpend?.walletId : undefined;
+        if (admission.gate && !reservedHoldId) {
           const gate = await gateUserCall(billedUserId, { spend: admission.spend, estCostCents: admission.estCostCents });
           if (!gate.allowed) {
             loggers.ai.info('ask_agent refused by the credit gate', { agentId, userId: billedUserId, reason: gate.reason, refusal: gate.refusal?.reason });

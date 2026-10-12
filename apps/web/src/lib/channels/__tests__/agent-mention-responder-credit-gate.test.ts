@@ -203,10 +203,12 @@ describe('agent-mention-responder credit gate', () => {
 
     expect(mockCanConsumeAI).toHaveBeenCalledTimes(1);
     expect(mockAskAgentExecute).toHaveBeenCalledTimes(1);
-    // The reply settles on the wallet the gate reserved, not on the mentioner.
+    // The reply settles on the wallet the gate reserved, not on the mentioner — and on the ONE
+    // hold the responder took, which it hands in rather than having the reply reserve again.
     expect(mockAskAgentExecute.mock.calls[0][1].experimental_context.creditSpend).toEqual({
       spend: { kind: 'automation', driveId: 'drive-1', personPresent: true },
       walletId: 'w-drive-1',
+      reservedHoldId: 'hold-1',
     });
     expect(mockSendChannelExecute).toHaveBeenCalledTimes(1);
     expect(mockReleaseHold).toHaveBeenCalledTimes(1);
