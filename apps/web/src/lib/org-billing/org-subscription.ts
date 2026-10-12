@@ -330,20 +330,22 @@ export async function ensureOrgBusinessSubscription(
     }
 
     const history = await deps.stripe.listCustomerSubscriptions(customerId);
-    // Recover on the SAME subscription. A retrieve followed by cancel cannot
-    // condition cancellation on status and can destroy a concurrently paid plan.
-    for (const candidate of history) {
-      if (candidate.metadata?.[ORG_ID_METADATA_KEY] !== orgId || (candidate.status !== 'trialing' && candidate.status !== 'paused')) continue;
-      if (!orgSubscriptionItems(candidate, prices)) {
-        throw new OrgBillingError('not_an_org_business_subscription', 'Organization has an unverified live subscription; repair its prices before provisioning');
+    // Select once before any recovery write: a stale second subscription must
+    // never generate a second invoice or obstruct an already-active candidate.
+    let existing = pickAdoptableOrgSubscription(history, { orgId, prices });
+    if (existing && (existing.status === 'trialing' || existing.status === 'paused')) {
+      if (history.some(candidate => candidate.metadata?.[ORG_ID_METADATA_KEY] === orgId &&
+        isLiveOrgSubscriptionStatus(candidate.status) && candidate.status !== 'trialing' && candidate.status !== 'paused')) {
+        throw new OrgBillingError('not_an_org_business_subscription', 'Organization has another billable subscription; repair its prices before recovery');
       }
-      Object.assign(candidate, await deps.stripe.recoverSubscription(
-        candidate.id, prices,
-        orgStripeIdempotencyKey(orgId, 'subscription.recover', { subscriptionId: candidate.id }),
-      ));
-      if (candidate.status === 'trialing') throw new OrgBillingError('subscription_not_live', 'Trial recovery is pending; retry paid checkout');
+      existing = await deps.stripe.recoverSubscription(
+        existing.id, prices,
+        orgStripeIdempotencyKey(orgId, 'subscription.recover', { subscriptionId: existing.id }),
+      );
+      if (existing.status === 'trialing' || !isLiveOrgSubscriptionStatus(existing.status)) {
+        throw new OrgBillingError('subscription_not_live', 'Subscription changed during recovery; retry paid checkout');
+      }
     }
-    const existing = pickAdoptableOrgSubscription(history, { orgId, prices });
     let sub: OrgStripeSubscription;
     let kind: 'created' | 'adopted';
     if (existing) {

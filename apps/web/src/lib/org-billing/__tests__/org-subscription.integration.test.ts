@@ -234,6 +234,42 @@ describe('org Business subscription shell (real Postgres, in-memory Stripe)', ()
     expect(stripe.writes.createSubscription).toBe(1);
   });
 
+  it.each([false, true])('adopts one active subscription without recovering a stale paused candidate (unverified stale: %s)', async (unverified) => {
+    if (!dbAvailable) return;
+    const { orgId, deps, stripe } = await northwind(1);
+    const first = await ensureOrgBusinessSubscription(orgId, deps);
+    const active = stripe.subscriptions.get(first.linkage.stripeSubscriptionId)!;
+    active.status = 'active';
+    const stale = structuredClone(active);
+    stale.id = `${active.id}_stale`;
+    stale.status = 'paused';
+    stale.created -= 1;
+    if (unverified) stale.items.push({ id: 'si_unknown', priceId: 'price_unknown', quantity: 1 });
+    stripe.subscriptions.set(stale.id, stale);
+    await db.delete(orgSubscriptions).where(eq(orgSubscriptions.orgId, orgId));
+    const recovered = await provisionOrgSubscription(orgId, deps);
+    expect(recovered.result.linkage.stripeSubscriptionId).toBe(active.id);
+    expect(stripe.writes.recoverSubscription).toBe(0);
+    expect(stripe.writes.cancelSubscription).toBe(0);
+    expect(stripe.writes.createSubscription).toBe(1);
+  });
+
+  it('recovers only the selected subscription when two paused candidates exist', async () => {
+    if (!dbAvailable) return;
+    const { orgId, deps, stripe } = await northwind(1);
+    const first = await ensureOrgBusinessSubscription(orgId, deps);
+    const paused = stripe.subscriptions.get(first.linkage.stripeSubscriptionId)!;
+    paused.status = 'paused';
+    const second = { ...structuredClone(paused), id: `${paused.id}_second`, created: paused.created + 1 };
+    stripe.subscriptions.set(second.id, second);
+    await db.delete(orgSubscriptions).where(eq(orgSubscriptions.orgId, orgId));
+    const recovered = await provisionOrgSubscription(orgId, deps);
+    expect(recovered.result.linkage.stripeSubscriptionId).toBe(paused.id);
+    expect(stripe.subscriptions.get(second.id)?.status).toBe('paused');
+    expect(stripe.writes.recoverSubscription).toBe(1);
+    expect(stripe.writes.createSubscription).toBe(1);
+  });
+
   it('never announces successful recovery when a paused subscription has no payable invoice', async () => {
     if (!dbAvailable) return;
     const { orgId, deps, stripe } = await northwind(1);

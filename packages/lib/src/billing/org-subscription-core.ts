@@ -191,9 +191,11 @@ export interface OrgSubscriptionCandidate {
 /**
  * Recovery: when the database has no subscription for the org but Stripe does (a
  * create that succeeded before its row was written), adopt it instead of creating a
- * second. Only a live subscription stamped with THIS org and carrying the base price
- * qualifies; among several, the oldest, so the choice is deterministic.
+ * second. Require complete configured price identity. Preserve active subscriptions
+ * before payable ones, then trials/paused recovery candidates; age and ID break ties.
  */
+const recoveryRank = (status: string): number => status === 'active' ? 0 : status === 'trialing' || status === 'paused' ? 2 : 1;
+
 export function pickAdoptableOrgSubscription<C extends OrgSubscriptionCandidate>(
   candidates: ReadonlyArray<C>,
   input: { orgId: string; prices: OrgBusinessPrices },
@@ -203,9 +205,9 @@ export function pickAdoptableOrgSubscription<C extends OrgSubscriptionCandidate>
       (s) =>
         isLiveOrgSubscriptionStatus(s.status) &&
         s.metadata?.[ORG_ID_METADATA_KEY] === input.orgId &&
-        s.items.some((i) => i.priceId === input.prices.basePriceId),
+        orgSubscriptionItems(s, input.prices) !== null,
     )
-    .sort((a, b) => a.created - b.created || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    .sort((a, b) => recoveryRank(a.status) - recoveryRank(b.status) || a.created - b.created || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   return matches[0] ?? null;
 }
 
