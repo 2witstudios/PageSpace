@@ -5,6 +5,7 @@ import { findOrganizationNames } from '@pagespace/lib/organizations/repository';
 import { lockedOrgDrives, type OrgAuthenticationPolicy } from '@pagespace/lib/organizations/authentication-policy-core';
 import { ORGS_ENABLED } from '@pagespace/lib/organizations/orgs-enabled';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
 /**
@@ -29,6 +30,7 @@ export async function GET(request: Request) {
     );
     const locked = lockedOrgDrives({ drives, policies, authentication: auth.authentication ?? null, nowMs: Date.now() });
     const names = locked.length > 0 ? await findOrganizationNames([...new Set(locked.map((l) => l.orgId))]) : new Map<string, string>();
+    auditRequest(request, { eventType: 'data.read', userId: auth.userId, resourceType: 'drive', resourceId: 'locked', details: { count: locked.length } });
     return NextResponse.json(
       { locked: locked.map((l) => ({ ...l, orgName: names.get(l.orgId) ?? null })) },
       { headers: { 'Cache-Control': 'no-store' } },

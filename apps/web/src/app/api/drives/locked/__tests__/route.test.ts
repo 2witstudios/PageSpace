@@ -6,6 +6,7 @@ vi.mock('@/lib/auth', () => ({ authenticateRequestWithOptions: vi.fn(), isAuthEr
 vi.mock('@pagespace/lib/services/drive-service', () => ({ listAccessibleDrives: vi.fn() }));
 vi.mock('@pagespace/lib/organizations/policy-reader', () => ({ getOrgPolicies: vi.fn() }));
 vi.mock('@pagespace/lib/organizations/repository', () => ({ findOrganizationNames: vi.fn() }));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({ loggers: { api: { error: vi.fn() } } }));
 
 import { authenticateRequestWithOptions } from '@/lib/auth';
