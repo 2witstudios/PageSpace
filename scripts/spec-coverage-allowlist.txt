@@ -173,9 +173,6 @@ SPEND-7
 # balance or other consumer's spend, per role against Postgres and for MCP tokens ([D-OW-26]); the chip and
 # wallet page that display it are UI-8/UI-9.
 SPEND-9
-# SPEND-10 (partial, ow-c6): the lead's view carries spend by member, the org admin's the pool and the
-# unallocated balance; automation spend is labeled per person until C4 names the drive consumer.
-SPEND-10
 UI-1
 # UI-3 (partial, phase5-fixes): the drive chip (org mark, org in the tooltip) and the org chip on /orgs/* pages
 # (Main.dc.html:146) are tested in DashboardCrumb.org.test; back on the list until a reviewer agrees every clause is proven.
@@ -186,7 +183,7 @@ UI-7
 UI-8
 # UI-9 (partial, ow-c6 + ui-wallet-surfaces): the routes (ow-c6) and the Drive Settings › Wallet page
 # (per-viewer panels from the real projection, pause, caps, top-up, donate, rules) are tested; the
-# canvas's per-member "today" spend and "via automations" split have no read model yet.
+# canvas's per-member "today" spend has no read model yet (the spend-by-automation rows landed with SPEND-10, a2-spend10).
 UI-9
 # UI-10 (partial, ow-c6 + ui-wallet-surfaces): GET /api/wallets (with seat allowance, spent and left),
 # PUT /api/wallets/default and the Settings › Usage › Wallets page are tested; the canvas's per-drive

@@ -110,9 +110,16 @@ export function spendMeterPercent(spentCents: number, allocationCents: number): 
   return Math.max(0, Math.min(100, Math.round((spentCents / allocationCents) * 100)));
 }
 
-/** A spend-by-member row's name: the person (automation runs count under their creator, D-OW-34). */
-export function spendRowLabel(row: { displayName: string | null }): string {
+/** A spend row's name (SPEND-10): the person, or the automation by its workflow's name. */
+export function spendRowLabel(row: { kind: 'member' | 'automation'; displayName: string | null }): string {
+  if (row.kind === 'automation') return row.displayName ?? 'Deleted automation';
   return row.displayName ?? 'Former member';
+}
+
+/** An automation row's second line: that it is one, and who it runs as ([D-OW-34]); null for a person. */
+export function spendRowDetail(row: { kind: 'member' } | { kind: 'automation'; creatorName: string | null }): string | null {
+  if (row.kind === 'member') return null;
+  return row.creatorName ? `Automation · runs as ${row.creatorName}` : 'Automation';
 }
 
 /** A drive wallet's line in "You spend from" (UI-10): whose it is, and what an over or paused wallet does to your calls. */

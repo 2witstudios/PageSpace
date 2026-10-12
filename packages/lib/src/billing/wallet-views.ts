@@ -20,7 +20,7 @@
 
 import type { WalletViewer } from '../permissions/wallet-access';
 import { formatCreditCount } from './money-model';
-import { walletChainStatus, walletOwnRemainingCents, walletStatusFor, type FallbackRule, type OvershootFunderChoice, type SpendSourceKind, type WalletStatus } from './wallet-core';
+import { userConsumerKey, walletChainStatus, walletOwnRemainingCents, walletStatusFor, type FallbackRule, type OvershootFunderChoice, type SpendSourceKind, type WalletStatus } from './wallet-core';
 
 export interface DriveWalletRowFacts {
   id: string;
@@ -62,18 +62,89 @@ export interface ConsumerCapFacts {
   spentThisMonthCents: number;
 }
 
-export interface ConsumerSpend {
-  /** `user:<id>`: every row is a person; automation runs count under their creator (D-OW-34). */
-  consumerKey: string;
-  userId: string | null;
-  /** The person's name, so the UI never resolves an id (null when unknown). */
-  displayName: string | null;
+/**
+ * One row of this period's spend on a wallet (SPEND-10):
+ *   - member: a person's own spend, including what they triggered themselves (a manual Run, a
+ *     channel mention — a person's action, SPEND-6); keyed `user:<id>`.
+ *   - automation: what a workflow spent with no person present (a cron, a trigger), keyed
+ *     `automation:<workflowId>`. It runs on behalf of its creator ([D-OW-34]) and counts toward their
+ *     cap, but is listed as the automation so the lead sees it apart from the person.
+ */
+export type ConsumerSpend =
+  | {
+      kind: 'member';
+      consumerKey: string;
+      userId: string;
+      /** The person's name, so the UI never resolves an id (null when unknown). */
+      displayName: string | null;
+      spentCents: number;
+    }
+  | {
+      kind: 'automation';
+      consumerKey: string;
+      automationWorkflowId: string;
+      /** The workflow's name; null once the workflow is deleted (its spend stays listed). */
+      displayName: string | null;
+      /** Who it runs as now (the workflow's creator); null when unknown or deleted. */
+      creatorUserId: string | null;
+      creatorName: string | null;
+      spentCents: number;
+    };
+
+/** A spend row as the lead and admins see it: the amount also as a credit count. */
+export type ConsumerSpendView = ConsumerSpend & { spentCredits: string };
+
+/** One ledger group of this period's usage on a wallet: who it is recorded as, and the automation it ran for (null: none). */
+export interface ConsumerSpendGroup {
+  userId: string;
+  automationWorkflowId: string | null;
   spentCents: number;
 }
 
-/** A spend-by-member row as the lead and admins see it: the amount also as a credit count. */
-export interface ConsumerSpendView extends ConsumerSpend {
-  spentCredits: string;
+/** The names the spend rows carry, loaded by the shell: people by id, workflows by id. */
+export interface ConsumerSpendNames {
+  people: ReadonlyMap<string, string>;
+  automations: ReadonlyMap<string, { name: string; createdBy: string | null }>;
+}
+
+/** The key an automation's spend row is listed under (a person's is wallet-core `userConsumerKey`). */
+export function automationConsumerKey(workflowId: string): string {
+  return `automation:${workflowId}`;
+}
+
+/**
+ * The lead's spend list (SPEND-10) from the ledger's groups: a person's own spend is one member row;
+ * each automation is ONE row whoever it was recorded as this period (a workflow reassigned
+ * mid-period, [D-OW-36], stays one automation), never folded into its creator's member row. Largest
+ * first; a net refund below zero shows nothing spent.
+ */
+export function consumerSpendRows(groups: readonly ConsumerSpendGroup[], names: ConsumerSpendNames): ConsumerSpend[] {
+  const rows = new Map<string, ConsumerSpend>();
+  for (const g of groups) {
+    const cents = whole(g.spentCents);
+    const key = g.automationWorkflowId === null ? userConsumerKey(g.userId) : automationConsumerKey(g.automationWorkflowId);
+    const existing = rows.get(key);
+    if (existing) {
+      rows.set(key, { ...existing, spentCents: existing.spentCents + cents });
+    } else if (g.automationWorkflowId === null) {
+      rows.set(key, { kind: 'member', consumerKey: key, userId: g.userId, displayName: names.people.get(g.userId) ?? null, spentCents: cents });
+    } else {
+      const workflow = names.automations.get(g.automationWorkflowId);
+      const creatorUserId = workflow?.createdBy ?? null;
+      rows.set(key, {
+        kind: 'automation',
+        consumerKey: key,
+        automationWorkflowId: g.automationWorkflowId,
+        displayName: workflow?.name ?? null,
+        creatorUserId,
+        creatorName: creatorUserId ? names.people.get(creatorUserId) ?? null : null,
+        spentCents: cents,
+      });
+    }
+  }
+  return [...rows.values()]
+    .map((r) => ({ ...r, spentCents: Math.max(0, r.spentCents) }))
+    .sort((a, b) => b.spentCents - a.spentCents || a.consumerKey.localeCompare(b.consumerKey));
 }
 
 export interface PoolFacts {
@@ -219,10 +290,8 @@ function leadFields(facts: DriveWalletFacts): Omit<LeadWalletView, 'viewer'> {
     spentCredits: formatCreditCount(whole(w.spentCents)),
     topupRemainingCredits: formatCreditCount(whole(w.topupRemainingCents)),
     debtCredits: formatCreditCount(whole(w.debtCents)),
-    spendByConsumer: facts.spendByConsumer.map((s) => ({
-      consumerKey: s.consumerKey,
-      userId: s.userId,
-      displayName: s.displayName,
+    spendByConsumer: facts.spendByConsumer.map((s): ConsumerSpendView => ({
+      ...s,
       spentCents: whole(s.spentCents),
       spentCredits: formatCreditCount(whole(s.spentCents)),
     })),

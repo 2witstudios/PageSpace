@@ -15,7 +15,9 @@
 import { describe, it, expect, beforeAll, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import { createId } from '@paralleldrive/cuid2';
 import { db, pool } from '@pagespace/db/db';
-import { eq, inArray } from '@pagespace/db/operators';
+import { and, eq, inArray } from '@pagespace/db/operators';
+import { workflows } from '@pagespace/db/schema/workflows';
+import { consumeCredits } from '../../billing/credit-consume';
 import { users } from '@pagespace/db/schema/auth';
 import { drives } from '@pagespace/db/schema/core';
 import { conversations } from '@pagespace/db/schema/conversations';
@@ -39,6 +41,7 @@ import {
   getAlwaysOwnCredits,
   getConversationSpend,
   setConversationSpend,
+  getOrgPoolSplit,
 } from '../drive-wallet-service';
 
 vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
@@ -191,11 +194,51 @@ describe('drive-wallet service (orgs on, real Postgres)', () => {
     expect(read).toMatchObject({ ok: true, viewer: 'lead' });
     if (!read.ok || !read.wallet || read.wallet.viewer !== 'lead') throw new Error('expected a lead view');
     expect(read.wallet.spendByConsumer).toEqual([
-      { consumerKey: `user:${world.ids.marcus}`, userId: world.ids.marcus, displayName: 'Marcus Oyelaran', spentCents: MARCUS_SPEND, spentCredits: MARCUS_SPEND.toLocaleString('en-US') },
-      { consumerKey: `user:${world.ids.lena}`, userId: world.ids.lena, displayName: 'Lena Schulz', spentCents: LENA_SPEND, spentCredits: LENA_SPEND.toLocaleString('en-US') },
+      { kind: 'member', consumerKey: `user:${world.ids.marcus}`, userId: world.ids.marcus, displayName: 'Marcus Oyelaran', spentCents: MARCUS_SPEND, spentCredits: MARCUS_SPEND.toLocaleString('en-US') },
+      { kind: 'member', consumerKey: `user:${world.ids.lena}`, userId: world.ids.lena, displayName: 'Lena Schulz', spentCents: LENA_SPEND, spentCredits: LENA_SPEND.toLocaleString('en-US') },
     ]);
     expect(JSON.stringify(read)).not.toContain(String(POOL_CENTS));
     expect('pool' in read.wallet).toBe(false);
+  });
+
+  it("SPEND-10 the drive lead sees this period's spend by member and by automation (a creator's workflow spend listed as the automation, not merged into the member); an org Owner/Admin also sees every org wallet, the pool and the unallocated balance", async () => {
+    if (!world) return;
+    const w = world;
+    // Marcus's scheduled "Weekly digest" spends the drive wallet on his behalf (D-OW-34), and he makes a
+    // call of his own; both settle for real on the Product wallet.
+    const [digest] = await db.insert(workflows).values({ driveId: w.productId, createdBy: w.ids.marcus, name: 'Weekly digest', prompt: 'digest' }).returning();
+    expect(await consumeCredits({ aiUsageLogId: createId(), userId: w.ids.marcus, costDollars: 0.04, walletId: w.productWalletId, automationWorkflowId: digest.id })).toBe('settled');
+    expect(await consumeCredits({ aiUsageLogId: createId(), userId: w.ids.marcus, costDollars: 0.02, walletId: w.productWalletId })).toBe('settled');
+    const charged = async (automation: boolean) => -(await db.select({ applied: creditLedger.appliedCents, wf: creditLedger.automationWorkflowId }).from(creditLedger)
+      .where(and(eq(creditLedger.walletId, w.productWalletId), eq(creditLedger.userId, w.ids.marcus), eq(creditLedger.entryType, 'usage'))))
+      .filter((r) => (r.wf !== null) === automation)
+      .reduce((sum, r) => sum + (r.applied ?? 0), 0);
+    const digestCents = await charged(true);
+    const marcusCents = await charged(false);
+    expect(digestCents).toBeGreaterThan(0);
+
+    const lead = await getDriveWallet(w.ids.dana, w.productId, 'session');
+    if (!lead.ok || !lead.wallet || lead.wallet.viewer !== 'lead') throw new Error('expected a lead view');
+    expect(lead.wallet.spendByConsumer.map((r) => ({ kind: r.kind, label: r.displayName, cents: r.spentCents })).sort((a, b) => a.label!.localeCompare(b.label!))).toEqual([
+      { kind: 'member', label: 'Lena Schulz', cents: LENA_SPEND },
+      { kind: 'member', label: 'Marcus Oyelaran', cents: marcusCents },
+      { kind: 'automation', label: 'Weekly digest', cents: digestCents },
+    ]);
+    expect(lead.wallet.spendByConsumer.find((r) => r.kind === 'automation')).toMatchObject({ automationWorkflowId: digest.id, creatorUserId: w.ids.marcus, creatorName: 'Marcus Oyelaran' });
+
+    // A consumer sees none of it (SPEND-9).
+    const member = await getDriveWallet(w.ids.lena, w.productId, 'session');
+    expect(JSON.stringify(member)).not.toContain('Weekly digest');
+
+    // The org admin sees the same list, the pool and its unallocated balance, and every org wallet.
+    const admin = await getDriveWallet(w.ids.priya, w.productId, 'session');
+    if (!admin.ok || !admin.wallet || admin.wallet.viewer !== 'org_admin') throw new Error('expected an admin view');
+    expect(admin.wallet.spendByConsumer).toEqual(lead.wallet.spendByConsumer);
+    expect(admin.wallet.pool).toMatchObject({ walletId: w.poolId });
+    expect(admin.wallet.pool!.unallocatedCents).toBe(admin.wallet.pool!.availableCents - ((120_000 - (await walletRow(w.productWalletId)).spentCents) + 60_000));
+    const split = await getOrgPoolSplit(w.orgId);
+    expect(split).toMatchObject({ walletId: w.poolId, availableCents: admin.wallet.pool!.availableCents, unallocatedCents: admin.wallet.pool!.unallocatedCents });
+    expect(split.driveWallets.map((d) => d.walletId).sort()).toEqual([w.productWalletId, w.researchWalletId].sort());
   });
 
   it('SPEND-10 (partial) an ORG ADMIN sees every wallet field, the pool and the unallocated balance', async () => {

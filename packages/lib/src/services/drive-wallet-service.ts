@@ -23,6 +23,7 @@ import { conversations } from '@pagespace/db/schema/conversations';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { creditHolds, creditLedger } from '@pagespace/db/schema/credits';
 import { orgMembers } from '@pagespace/db/schema/organizations';
+import { workflows } from '@pagespace/db/schema/workflows';
 import {
   wallets,
   walletConsumerCaps,
@@ -61,6 +62,7 @@ import { planConsumerCapWrite, seatCapCheck, seatSpentCents, userConsumerKey, ut
 import { getOrgPolicies, readOrgSpendPolicy } from '../organizations/policy-reader';
 import {
   capRemainingCents,
+  consumerSpendRows,
   displayedWalletStatus,
   projectDriveWallet,
   poolUnallocatedCents,
@@ -254,22 +256,39 @@ async function myCapFacts(walletId: string, userId: string): Promise<DriveWallet
   };
 }
 
-/** Spend on the wallet this period, per consumer (SPEND-10). Loaded only for a viewer who may see it. */
+/** At most this many (person, automation) groups are listed, largest first; the wallet's spent total is the whole. */
+const SPEND_GROUPS_LISTED = 500;
+
+/**
+ * Spend on the wallet this period, per member and per automation (SPEND-10). Loaded only for a viewer
+ * who may see it. Grouped by who the usage is recorded as and the automation it ran for, then folded
+ * and named by wallet-views `consumerSpendRows` (a workflow by its name, its creator by theirs).
+ */
 async function spendByConsumer(walletId: string, since: Date | null): Promise<ConsumerSpend[]> {
-  const rows = await db
-    .select({ userId: creditLedger.userId, cents: sql<number>`coalesce(-sum(${creditLedger.appliedCents}), 0)::int` })
+  const cents = sql<number>`coalesce(-sum(${creditLedger.appliedCents}), 0)::int`;
+  const groups = await db
+    .select({ userId: creditLedger.userId, automationWorkflowId: creditLedger.automationWorkflowId, cents })
     .from(creditLedger)
     .where(and(
       eq(creditLedger.walletId, walletId),
       eq(creditLedger.entryType, 'usage'),
       since ? gte(creditLedger.createdAt, since) : undefined,
     ))
-    .groupBy(creditLedger.userId)
-    .limit(500);
-  const names = await userNamesById(rows.map((r) => r.userId));
-  return rows
-    .map((r) => ({ consumerKey: userConsumerKey(r.userId), userId: r.userId, displayName: names.get(r.userId) ?? null, spentCents: Math.max(0, Number(r.cents)) }))
-    .sort((a, b) => b.spentCents - a.spentCents || a.consumerKey.localeCompare(b.consumerKey));
+    .groupBy(creditLedger.userId, creditLedger.automationWorkflowId)
+    .orderBy(sql`${cents} DESC`)
+    .limit(SPEND_GROUPS_LISTED);
+  const workflowIds = [...new Set(groups.map((g) => g.automationWorkflowId).filter((id): id is string => id !== null))];
+  const flows = workflowIds.length === 0
+    ? []
+    : await db.select({ id: workflows.id, name: workflows.name, createdBy: workflows.createdBy }).from(workflows).where(inArray(workflows.id, workflowIds));
+  const people = await userNamesById([
+    ...groups.map((g) => g.userId),
+    ...flows.map((f) => f.createdBy).filter((id): id is string => id !== null),
+  ]);
+  return consumerSpendRows(
+    groups.map((g) => ({ userId: g.userId, automationWorkflowId: g.automationWorkflowId, spentCents: Number(g.cents) })),
+    { people, automations: new Map(flows.map((f) => [f.id, { name: f.name, createdBy: f.createdBy }])) },
+  );
 }
 
 /** People's display names by id (decrypted), so no wallet surface hands the UI a raw id alone (UI-9, UI-10). */

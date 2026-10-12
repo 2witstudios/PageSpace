@@ -69,7 +69,7 @@ const facts: DriveWalletFacts = {
     parentStatus: 'active',
   },
   myCap: { dailyCapCents: 2_000, monthlyCapCents: null, spentTodayCents: 500, spentThisMonthCents: 500 },
-  spendByConsumer: [{ consumerKey: 'user:u-priya', userId: 'u-priya', displayName: 'Priya Nair', spentCents: PRIYA_SPEND }],
+  spendByConsumer: [{ kind: 'member', consumerKey: 'user:u-priya', userId: 'u-priya', displayName: 'Priya Nair', spentCents: PRIYA_SPEND }],
   pool: { walletId: 'w-pool', availableCents: POOL_CENTS, outstandingChildAllocationsCents: 120_000 },
 };
 

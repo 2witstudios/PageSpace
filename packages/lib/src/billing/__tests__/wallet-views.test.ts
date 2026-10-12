@@ -7,12 +7,13 @@ import {
   walletRemainingCents,
   capRemainingCents,
   poolUnallocatedCents,
+  consumerSpendRows,
   CONSUMER_WALLET_FIELDS,
   type DriveWalletFacts,
 } from '../wallet-views';
 
 // Northwind Labs fixture: Product's wallet holds a 1,200-credit allocation under the
-// 9,000-credit pool; Marcus has spent 50 credits of it, Lena 30, the weekly digest 20.
+// 9,000-credit pool; Marcus has spent 50 credits of it, Lena 30, Priya 20 and her weekly digest 15.
 const c = (credits: number): number => Math.round(centsFromCredits(credits));
 
 const facts = (over: Partial<DriveWalletFacts> = {}): DriveWalletFacts => ({
@@ -35,9 +36,10 @@ const facts = (over: Partial<DriveWalletFacts> = {}): DriveWalletFacts => ({
   },
   myCap: { dailyCapCents: c(10), monthlyCapCents: null, spentTodayCents: c(4), spentThisMonthCents: c(50) },
   spendByConsumer: [
-    { consumerKey: 'user:u-marcus', userId: 'u-marcus', displayName: 'Marcus Oyelaran', spentCents: c(50) },
-    { consumerKey: 'user:u-lena', userId: 'u-lena', displayName: 'Lena Lead', spentCents: c(30) },
-    { consumerKey: 'user:u-priya', userId: 'u-priya', displayName: 'Priya Nair', spentCents: c(20) },
+    { kind: 'member', consumerKey: 'user:u-marcus', userId: 'u-marcus', displayName: 'Marcus Oyelaran', spentCents: c(50) },
+    { kind: 'member', consumerKey: 'user:u-lena', userId: 'u-lena', displayName: 'Lena Lead', spentCents: c(30) },
+    { kind: 'member', consumerKey: 'user:u-priya', userId: 'u-priya', displayName: 'Priya Nair', spentCents: c(20) },
+    { kind: 'automation', consumerKey: 'automation:wf-digest', automationWorkflowId: 'wf-digest', displayName: 'Weekly digest', creatorUserId: 'u-priya', creatorName: 'Priya Nair', spentCents: c(15) },
   ],
   pool: { walletId: 'w-pool', availableCents: c(9000), outstandingChildAllocationsCents: c(3000) },
   ...over,
@@ -93,6 +95,41 @@ describe('wallet-views: the numbers', () => {
   });
 });
 
+describe('wallet-views: spend by member and automation (SPEND-10)', () => {
+  const people = new Map([['u-priya', 'Priya Nair'], ['u-marcus', 'Marcus Oyelaran']]);
+  const automations = new Map([['wf-digest', { name: 'Weekly digest', createdBy: 'u-priya' }]]);
+
+  it("SPEND-10 (partial) a creator's workflow spend is its own automation row, never merged into the creator's member row", () => {
+    const rows = consumerSpendRows([
+      { userId: 'u-priya', automationWorkflowId: null, spentCents: c(20) },
+      { userId: 'u-priya', automationWorkflowId: 'wf-digest', spentCents: c(15) },
+      { userId: 'u-marcus', automationWorkflowId: null, spentCents: c(50) },
+    ], { people, automations });
+    expect(rows).toEqual([
+      { kind: 'member', consumerKey: 'user:u-marcus', userId: 'u-marcus', displayName: 'Marcus Oyelaran', spentCents: c(50) },
+      { kind: 'member', consumerKey: 'user:u-priya', userId: 'u-priya', displayName: 'Priya Nair', spentCents: c(20) },
+      { kind: 'automation', consumerKey: 'automation:wf-digest', automationWorkflowId: 'wf-digest', displayName: 'Weekly digest', creatorUserId: 'u-priya', creatorName: 'Priya Nair', spentCents: c(15) },
+    ]);
+  });
+
+  it('SPEND-10 (partial) one automation is one row whoever it ran as this period (reassigned mid-period); a deleted workflow keeps its spend, unnamed', () => {
+    const rows = consumerSpendRows([
+      { userId: 'u-priya', automationWorkflowId: 'wf-digest', spentCents: c(10) },
+      { userId: 'u-marcus', automationWorkflowId: 'wf-digest', spentCents: c(5) },
+      { userId: 'u-marcus', automationWorkflowId: 'wf-gone', spentCents: c(3) },
+    ], { people, automations });
+    expect(rows).toEqual([
+      { kind: 'automation', consumerKey: 'automation:wf-digest', automationWorkflowId: 'wf-digest', displayName: 'Weekly digest', creatorUserId: 'u-priya', creatorName: 'Priya Nair', spentCents: c(15) },
+      { kind: 'automation', consumerKey: 'automation:wf-gone', automationWorkflowId: 'wf-gone', displayName: null, creatorUserId: null, creatorName: null, spentCents: c(3) },
+    ]);
+  });
+
+  it('a refund that leaves a group below zero shows nothing spent, and an unknown person is unnamed', () => {
+    expect(consumerSpendRows([{ userId: 'u-x', automationWorkflowId: null, spentCents: -5 }], { people, automations }))
+      .toEqual([{ kind: 'member', consumerKey: 'user:u-x', userId: 'u-x', displayName: null, spentCents: 0 }]);
+  });
+});
+
 describe('wallet-views: the projection each viewer gets', () => {
   it('SPEND-9 (partial) a member sees exactly the consumer allowlist: remaining, status, own cap, donations switch — no pool, no funder balance, no other consumer\'s spend', () => {
     const view = projectDriveWallet('member', facts());
@@ -119,7 +156,7 @@ describe('wallet-views: the projection each viewer gets', () => {
     expect(Object.keys(projectDriveWallet('guest', facts())).sort()).toEqual([...CONSUMER_WALLET_FIELDS].sort());
   });
 
-  it('SPEND-10 (partial) the lead sees the wallet and spend by member (automation runs under their creator), but never the pool', () => {
+  it('SPEND-10 (partial) the lead sees the wallet and spend by member and by automation, but never the pool', () => {
     const view = projectDriveWallet('lead', facts());
     expect(view).toMatchObject({
       viewer: 'lead',
@@ -140,7 +177,7 @@ describe('wallet-views: the projection each viewer gets', () => {
       pool: { availableCredits: '9,000', unallocatedCredits: '6,000' },
     });
     if (view.viewer !== 'org_admin') throw new Error('expected an org admin view');
-    expect(view.spendByConsumer.map((s) => [s.displayName, s.spentCredits])).toEqual([['Marcus Oyelaran', '50'], ['Lena Lead', '30'], ['Priya Nair', '20']]);
+    expect(view.spendByConsumer.map((s) => [s.displayName, s.spentCredits])).toEqual([['Marcus Oyelaran', '50'], ['Lena Lead', '30'], ['Priya Nair', '20'], ['Weekly digest', '15']]);
     expect(JSON.stringify(view)).not.toContain('$');
   });
 
