@@ -14,6 +14,7 @@ import { isDriveOwnerOrAdmin, canUserSharePage, isUserDriveMember } from './perm
 import { getDrivePolicies } from '../organizations/policy-reader';
 import { decideOrgDriveAdmission } from './guest-admission';
 import { queueGuestForApproval, type ClaimedGuestApproval } from './guest-holds';
+import { publishOrgAuditEvents, stageOrgAuditEvents, type OrgAuditEvent, type StagedOrgAuditEvent } from '../audit/org-audit';
 import { shareLinkCreationDecision, shareLinkUsable } from '../organizations/sharing-decisions';
 import { checkDriveMayLoosen } from './org-lapse-guard';
 
@@ -586,7 +587,15 @@ export type ApprovedLinkAdmission =
  * the admission (guests not off, public share links not off); otherwise nothing is granted and the caller is told
  * why. The queue row is already claimed by the caller; nothing here can admit the same request twice.
  */
-export async function completeApprovedLinkAdmission(claim: ClaimedGuestApproval): Promise<ApprovedLinkAdmission> {
+/**
+ * `approval` (AUD-1): the approver's `org.guest.approved` event, staged inside the admission's own transaction, so it
+ * commits exactly when the guest is admitted and is published after.
+ */
+export async function completeApprovedLinkAdmission(claim: ClaimedGuestApproval, approval?: OrgAuditEvent): Promise<ApprovedLinkAdmission> {
+  let staged: StagedOrgAuditEvent[] = [];
+  const stageApproval = async (tx: Tx): Promise<void> => {
+    staged = approval ? await stageOrgAuditEvents(tx, [approval]) : [];
+  };
   const linkId = claim.request.linkId;
   if (!claim.userId || !linkId || (claim.origin !== 'drive_link' && claim.origin !== 'page_link')) return { ok: false, error: 'NOT_A_LINK_REQUEST' };
 
@@ -606,8 +615,13 @@ export async function completeApprovedLinkAdmission(claim: ClaimedGuestApproval)
       .limit(1);
     if (!link || !isValidShareLink(link) || !shareLinkUsable(policies, link)) return { ok: false, error: 'LINK_GONE' };
     const userId = claim.userId;
-    const inserted = await admittedWrite(link.driveId, userId, (tx) => insertDriveLinkMember(tx, userId, link));
+    const inserted = await admittedWrite(link.driveId, userId, async (tx) => {
+      const member = await insertDriveLinkMember(tx, userId, link);
+      await stageApproval(tx);
+      return member;
+    });
     if (!inserted) return { ok: false, error: 'POLICY_OFF' };
+    await publishOrgAuditEvents(staged);
     const { memberId, customRoleId } = inserted;
     await db.update(driveShareLinks).set({ useCount: sql`${driveShareLinks.useCount} + 1` }).where(eq(driveShareLinks.id, link.id));
     return { ok: true, driveId: link.driveId, userId: claim.userId, memberId, role: link.role, customRoleId, driveName: link.driveName, createdBy: link.createdBy };
@@ -626,7 +640,13 @@ export async function completeApprovedLinkAdmission(claim: ClaimedGuestApproval)
     .limit(1);
   if (!link || !isValidShareLink(link) || !shareLinkUsable(policies, link)) return { ok: false, error: 'LINK_GONE' };
   const userId = claim.userId;
-  if (!(await admittedWrite(link.driveId, userId, (tx) => insertPageLinkGuest(tx, userId, link)))) return { ok: false, error: 'POLICY_OFF' };
+  const admitted = await admittedWrite(link.driveId, userId, async (tx) => {
+    const guest = await insertPageLinkGuest(tx, userId, link);
+    await stageApproval(tx);
+    return guest;
+  });
+  if (!admitted) return { ok: false, error: 'POLICY_OFF' };
+  await publishOrgAuditEvents(staged);
   await db.update(pageShareLinks).set({ useCount: sql`${pageShareLinks.useCount} + 1` }).where(eq(pageShareLinks.id, link.id));
   return { ok: true, driveId: link.driveId, userId: claim.userId, memberId: null, role: 'GUEST', customRoleId: null, driveName: link.driveName, createdBy: null };
 }

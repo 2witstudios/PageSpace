@@ -8,6 +8,7 @@
  * therefore writes the drive_members row (as MEMBER, if missing) AND the
  * pagePermissions row in a single transaction.
  */
+import { stageOrgAuditEvents, type OrgAuditEvent } from '@pagespace/lib/audit/org-audit';
 
 import { db } from '@pagespace/db/db'
 import { eq, and, or, gt, lte, isNull } from '@pagespace/db/operators'
@@ -83,6 +84,8 @@ export const pageInviteRepository = {
     invitedBy: string;
     expiresAt: Date | null;
     now: Date;
+    /** AUD-1: an approver's `org.guest.approved`, HELD with the invitation until its email went out. */
+    approval?: OrgAuditEvent;
   }) {
     const { tokenHash, email, pageId, permissions, invitedBy, expiresAt, now } = input;
     return db.transaction(async (tx) => {
@@ -104,7 +107,8 @@ export const pageInviteRepository = {
         .insert(pendingPageInvites)
         .values({ tokenHash, email, pageId, permissions, invitedBy, expiresAt })
         .returning();
-      return row;
+      const approvalStaged = input.approval ? await stageOrgAuditEvents(tx, [input.approval], { hold: 'discard_if_unreleased' }) : [];
+      return { ...row, approvalStaged };
     });
   },
 

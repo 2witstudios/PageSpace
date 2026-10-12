@@ -19,6 +19,7 @@ import { and, eq } from '@pagespace/db/operators';
 import { driveRoles } from '@pagespace/db/schema/members';
 import { decideOrgDriveAdmission } from '@pagespace/lib/permissions/guest-admission';
 import { queueGuestForApproval } from '@pagespace/lib/permissions/guest-holds';
+import { discardStagedOrgAuditEvents, publishOrgAuditEvents, releaseStagedOrgAuditEvents, type OrgAuditEvent, type StagedOrgAuditEvent } from '@pagespace/lib/audit/org-audit';
 import { GUESTS_HELD_MESSAGE, guestsOffRefusal, type GuestAdmissionRefusal } from '@pagespace/lib/organizations/sharing-decisions';
 import { ORG_LAPSED_REFUSAL } from '@pagespace/lib/organizations/status-core';
 import { isOrgLapsedError } from '@pagespace/lib/permissions/org-lapse-guard';
@@ -110,8 +111,10 @@ export async function handleUserIdPath(args: {
   // Set ONLY when an Owner or Admin approved this guest from the queue (POL-2): the guests policy was applied when
   // the request was made, so replaying it must not queue it again.
   skipGuestPolicy?: boolean;
+  // AUD-1: that approver's `org.guest.approved`, committed in the admission's own transaction (never before or after).
+  approval?: OrgAuditEvent;
 }): Promise<Response> {
-  const { request, body, drive, driveId, inviterUserId, sourceEmail, skipVerificationCheck, skipGuestPolicy } = args;
+  const { request, body, drive, driveId, inviterUserId, sourceEmail, skipVerificationCheck, skipGuestPolicy, approval } = args;
   const { userId: invitedUserId, role, customRoleId, permissions } = body;
 
   // Review C1: a never-authenticated user (emailVerified IS NULL) must not be
@@ -148,6 +151,7 @@ export async function handleUserIdPath(args: {
         driveId,
         inviterUserId,
         skipGuestPolicy,
+        approval,
       });
     }
   }
@@ -195,15 +199,17 @@ export async function handleUserIdPath(args: {
       permissions,
       grantedBy: inviterUserId,
       validPageIds,
+      approval,
     });
     if ('refused' in result) {
       return result.refused === 'ORG_LAPSED' ? orgLapsedResponse() : admissionRefusalResponse(result.refusal);
     }
+    await publishOrgAuditEvents(result.staged);
     memberId = result.memberId;
     permissionsGranted = result.permissionsGranted;
   } else {
     // [D-OW-33] a re-invite may raise the role or widen grants: guarded in its transaction (402 while lapsed).
-    let upgraded: { permissionsGranted: number; skippedPageIds: string[] };
+    let upgraded: { permissionsGranted: number; skippedPageIds: string[]; staged: StagedOrgAuditEvent[] };
     try {
       upgraded = await driveInviteRepository.upgradeMemberWithPermissions({
         memberId: existingMember.id,
@@ -214,11 +220,13 @@ export async function handleUserIdPath(args: {
         permissions,
         grantedBy: inviterUserId,
         validPageIds,
+        approval,
       });
     } catch (error) {
       if (isOrgLapsedError(error)) return orgLapsedResponse();
       throw error;
     }
+    await publishOrgAuditEvents(upgraded.staged);
     for (const pageId of upgraded.skippedPageIds) {
       loggers.api.warn(`Invalid page ID ${pageId} for drive ${driveId}`);
     }
@@ -270,8 +278,10 @@ export async function handleEmailPath(args: {
   inviterUserId: string;
   // Set ONLY when an Owner or Admin approved this guest from the queue (POL-2).
   skipGuestPolicy?: boolean;
+  // AUD-1: that approver's `org.guest.approved`, held with the invitation until its email went out.
+  approval?: OrgAuditEvent;
 }): Promise<Response> {
-  const { request, body, drive, driveId, inviterUserId, skipGuestPolicy } = args;
+  const { request, body, drive, driveId, inviterUserId, skipGuestPolicy, approval } = args;
   // Email arrives already trimmed + lowercased by the Zod schema's pipe.
   const { email, role, customRoleId, permissions } = body;
 
@@ -346,6 +356,7 @@ export async function handleEmailPath(args: {
       sourceEmail: email,
       skipVerificationCheck: true,
       skipGuestPolicy,
+      approval,
     });
   }
 
@@ -404,7 +415,7 @@ export async function handleEmailPath(args: {
     expiryMinutes: expiryDays ? expiryDays * 24 * 60 : null,
   });
 
-  let pendingInvite: { id: string };
+  let pendingInvite: { id: string; approvalStaged?: StagedOrgAuditEvent[] };
   try {
     pendingInvite = await driveInviteRepository.createPendingInvite({
       tokenHash,
@@ -415,6 +426,7 @@ export async function handleEmailPath(args: {
       invitedBy: inviterUserId,
       expiresAt,
       now,
+      approval,
     });
   } catch (insertError) {
     // [D-OW-33] no invitation is issued while the drive's org is lapsed.
@@ -466,6 +478,8 @@ export async function handleEmailPath(args: {
     );
     try {
       await driveInviteRepository.deletePendingInvite(pendingInvite.id);
+      // The invitation was never sent: its approval event goes with it.
+      await discardStagedOrgAuditEvents(db, pendingInvite.approvalStaged ?? []);
     } catch (rollbackError) {
       loggers.api.error(
         'Rollback of pending_invites row failed after email send failure',
@@ -477,6 +491,12 @@ export async function handleEmailPath(args: {
       { error: 'Failed to send invitation email. Please try again.' },
       { status: 502 }
     );
+  }
+
+  // The invitation went out: its approval event (if any) is final now — released, then published.
+  if (pendingInvite.approvalStaged?.length) {
+    await releaseStagedOrgAuditEvents(db, pendingInvite.approvalStaged);
+    await publishOrgAuditEvents(pendingInvite.approvalStaged);
   }
 
   trackDriveOperation(inviterUserId, 'invite_member', driveId, {

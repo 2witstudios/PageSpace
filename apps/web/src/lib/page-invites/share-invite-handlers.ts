@@ -12,8 +12,10 @@ import { sendPendingPageShareInvitationEmail } from '@pagespace/lib/services/not
 import { decideOrgDriveAdmission } from '@pagespace/lib/permissions/guest-admission';
 import { admissionRefusalResponse } from '@/lib/drive-invites/invite-handlers';
 import { queueGuestForApproval } from '@pagespace/lib/permissions/guest-holds';
+import { discardStagedOrgAuditEvents, publishOrgAuditEvents, releaseStagedOrgAuditEvents, type OrgAuditEvent, type StagedOrgAuditEvent } from '@pagespace/lib/audit/org-audit';
 import { GUESTS_HELD_MESSAGE } from '@pagespace/lib/organizations/sharing-decisions';
 import type { PendingPagePermission } from '@pagespace/db/schema/pending-page-invites';
+import { db } from '@pagespace/db/db';
 import { pageInviteRepository } from '@/lib/repositories/page-invite-repository';
 import { isOrgLapsedError } from '@pagespace/lib/permissions/org-lapse-guard';
 import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
@@ -89,8 +91,10 @@ export async function sendPendingPageInvite(args: {
   permissions: PendingPagePermission[];
   expiryDays: number | null;
   inviterUserId: string;
+  /** AUD-1: an approver's `org.guest.approved` (POL-2 queue), held with the invitation until its email went out. */
+  approval?: OrgAuditEvent;
 }): Promise<Response> {
-  const { request, page, email, permissions, expiryDays, inviterUserId } = args;
+  const { request, page, email, permissions, expiryDays, inviterUserId, approval } = args;
   const pageId = page.id;
   const now = new Date();
 
@@ -113,7 +117,7 @@ export async function sendPendingPageInvite(args: {
     expiryMinutes: expiryDays ? expiryDays * 24 * 60 : null,
   });
 
-  let pendingInvite: { id: string };
+  let pendingInvite: { id: string; approvalStaged?: StagedOrgAuditEvent[] };
   try {
     pendingInvite = await pageInviteRepository.createPendingInvite({
       tokenHash,
@@ -123,6 +127,7 @@ export async function sendPendingPageInvite(args: {
       invitedBy: inviterUserId,
       expiresAt,
       now,
+      approval,
     });
   } catch (insertError) {
     // [D-OW-33] no invitation is issued while the drive's org is lapsed.
@@ -164,6 +169,8 @@ export async function sendPendingPageInvite(args: {
     );
     try {
       await pageInviteRepository.deletePendingInvite(pendingInvite.id);
+      // The invitation was never sent: its approval event goes with it.
+      await discardStagedOrgAuditEvents(db, pendingInvite.approvalStaged ?? []);
     } catch (rollbackError) {
       loggers.api.error(
         'Rollback of pending_page_invites row failed after email send failure',
@@ -172,6 +179,12 @@ export async function sendPendingPageInvite(args: {
       );
     }
     return NextResponse.json({ error: 'Failed to send invitation email. Please try again.' }, { status: 502 });
+  }
+
+  // The invitation went out: its approval event (if any) is final now — released, then published.
+  if (pendingInvite.approvalStaged?.length) {
+    await releaseStagedOrgAuditEvents(db, pendingInvite.approvalStaged);
+    await publishOrgAuditEvents(pendingInvite.approvalStaged);
   }
 
   trackPageOperation(inviterUserId, 'share', pageId, {

@@ -2,10 +2,9 @@ import { NextResponse } from 'next/server';
 import type { OrgApiErrorCode } from '@pagespace/lib/organizations/api-error-codes';
 import { z } from 'zod/v4';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { discardStagedOrgAuditEvents, publishOrgAuditEvents, releaseStagedOrgAuditEvents } from '@pagespace/lib/audit/org-audit';
 import { getOrgPolicies } from '@pagespace/lib/organizations/policy-reader';
 import { GUESTS_OFF_MESSAGE } from '@pagespace/lib/organizations/sharing-decisions';
-import { claimGuestApprovalDecision, markApprovedInvitation, requestGuestApproval, type ClaimedGuestApproval } from '@pagespace/lib/permissions/guest-holds';
+import { claimGuestApprovalDecision, guestDecisionAuditEvent, markApprovedInvitation, requestGuestApproval, type ClaimedGuestApproval } from '@pagespace/lib/permissions/guest-holds';
 import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
 import { createPermissionNotification } from '@pagespace/lib/notifications/notifications';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
@@ -91,25 +90,15 @@ export async function POST(request: Request, context: Context) {
 
     // [D-OW-33] approving admits an outsider (loosening), so a lapsed org is refused and the request stays queued;
     // declining only restricts and works whatever the org's billing.
-    // AUD-1: the claim stages the decision's event. A decline is published with it; an approval only once the
-    // admission below has run, and it is discarded when the request goes back on the queue or is refused.
+    // AUD-1: a decline's event commits with the claim. An approval's event is staged by the admission below, inside
+    // the admission's own transaction (held with an emailed invitation until it is sent), so it exists exactly when
+    // the guest was admitted: never for a refused or re-queued request, never lost after a committed one.
     const decided = await claimGuestApprovalDecision({ orgId, holdId, decision: parsed.data.decision, actorId: gate.userId });
     if (!decided.ok && decided.reason === 'org_lapsed') return orgLapsedResponse(decided.message);
     if (!decided.ok) return NextResponse.json({ error: 'Request not found', code: 'not_found' }, { status: 404 });
     if (parsed.data.decision === 'decline') return NextResponse.json({ decided: 'declined' });
 
-    const response = await approve(request, orgId, gate.userId, decided.claim).catch(async (error: unknown) => {
-      await discardStagedOrgAuditEvents(db, [decided.event]);
-      throw error;
-    });
-    if (response.ok) {
-      // The admission committed: release the event first (it can no longer be discarded), then publish it; a failed
-      // publish leaves it for the drainer.
-      await releaseStagedOrgAuditEvents(db, [decided.event]);
-      await publishOrgAuditEvents(decided.event);
-    } else {
-      await discardStagedOrgAuditEvents(db, [decided.event]);
-    }
+    const response = await approve(request, orgId, gate.userId, decided.claim);
     return response;
   } catch (error) {
     loggers.api.error('Error deciding a guest approval:', error as Error);
@@ -122,6 +111,7 @@ export async function POST(request: Request, context: Context) {
  * was admitted (the request is back on the queue, or there is nothing left to approve).
  */
 async function approve(request: Request, orgId: string, approverId: string, claim: ClaimedGuestApproval): Promise<Response> {
+  const approval = guestDecisionAuditEvent(claim, 'org.guest.approved', approverId);
   if (claim.origin === 'invite') {
     const drive = await driveInviteRepository.findDriveById(claim.driveId);
     if (!drive) return NextResponse.json({ error: 'Request not found', code: 'not_found' }, { status: 404 });
@@ -131,8 +121,8 @@ async function approve(request: Request, orgId: string, approverId: string, clai
     const permissions = req.permissions ?? [];
     const summary = { id: drive.id, name: drive.name, ownerId: drive.ownerId };
     const response = claim.userId
-      ? await handleUserIdPath({ request, body: { userId: claim.userId, role, customRoleId: req.customRoleId ?? null, permissions }, drive: summary, driveId: claim.driveId, inviterUserId, skipGuestPolicy: true })
-      : await handleEmailPath({ request, body: { email: claim.email ?? '', role, customRoleId: req.customRoleId ?? null, permissions, expiryDays: req.expiryDays ?? null }, drive: summary, driveId: claim.driveId, inviterUserId, skipGuestPolicy: true });
+      ? await handleUserIdPath({ request, body: { userId: claim.userId, role, customRoleId: req.customRoleId ?? null, permissions }, drive: summary, driveId: claim.driveId, inviterUserId, skipGuestPolicy: true, approval })
+      : await handleEmailPath({ request, body: { email: claim.email ?? '', role, customRoleId: req.customRoleId ?? null, permissions, expiryDays: req.expiryDays ?? null }, drive: summary, driveId: claim.driveId, inviterUserId, skipGuestPolicy: true, approval });
     if (!response.ok) {
       // The invite could not be carried out (an address that has since been invited, a suspended account, ...).
       // The request goes back on the queue rather than vanishing, and the approver is told why.
@@ -150,7 +140,7 @@ async function approve(request: Request, orgId: string, approverId: string, clai
   }
 
   if (claim.origin === 'page_grant') {
-    const granted = await completeApprovedPageGrant(claim);
+    const granted = await completeApprovedPageGrant(claim, approval);
     if (!granted.ok) {
       // Guests turned OFF between the check above and the grant's own locked re-check: the request is not the
       // approver's fault and must not vanish, so it goes back on the queue (it can be approved once allowed again).
@@ -185,6 +175,7 @@ async function approve(request: Request, orgId: string, approverId: string, clai
       permissions: invitePermissions(asked),
       expiryDays: req.expiryDays ?? null,
       inviterUserId: req.invitedBy ?? approverId,
+      approval,
     });
     if (!response.ok) {
       await requeue(claim);
@@ -197,7 +188,7 @@ async function approve(request: Request, orgId: string, approverId: string, clai
     return NextResponse.json({ decided: 'approved', result });
   }
 
-  const admitted = await completeApprovedLinkAdmission(claim);
+  const admitted = await completeApprovedLinkAdmission(claim, approval);
   if (!admitted.ok) {
     return NextResponse.json({ error: LINK_REFUSALS[admitted.error], code: LINK_REFUSAL_CODES[admitted.error] }, { status: 409 });
   }

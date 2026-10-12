@@ -637,11 +637,11 @@ export async function claimPendingGuestApproval(input: { orgId: string; holdId: 
 
 export type GuestApprovalDecisionClaim =
   /**
-   * `event` (AUD-1) is the decision's audit event, staged with the claim. A decline is final at commit; an approval
-   * is final only once the admission it replays has run, so the caller publishes it then (publishOrgAuditEvents) or
-   * discards it when the request goes back on the queue (discardStagedOrgAuditEvents).
+   * AUD-1: a decline's event is staged with the claim (the decline IS the claim) and published. An approval's event is
+   * not staged here: it is staged by the admission that carries it out, inside that admission's own transaction
+   * (guestDecisionAuditEvent), so it exists exactly when the admission committed.
    */
-  | { ok: true; claim: ClaimedGuestApproval; event: StagedOrgAuditEvent }
+  | { ok: true; claim: ClaimedGuestApproval }
   | { ok: false; reason: 'not_found' }
   | { ok: false; reason: typeof ORG_LAPSED_CODE; message: string };
 
@@ -652,21 +652,18 @@ export type GuestApprovalDecisionClaim =
  * as the claim, so an approval never takes a request off the queue it then cannot act on.
  */
 export async function claimGuestApprovalDecision(input: { orgId: string; holdId: string; decision: 'approve' | 'decline'; actorId: string }): Promise<GuestApprovalDecisionClaim> {
+  let declined = null as StagedOrgAuditEvent | null;
   const decided = await db.transaction(async (tx): Promise<GuestApprovalDecisionClaim> => {
+    declined = null;
     if (input.decision === 'approve' && !(await isOrgActive(input.orgId, { executor: tx }))) {
       return { ok: false, reason: ORG_LAPSED_CODE, message: ORG_LAPSED_MESSAGE };
     }
     const claim = await claimPendingGuestApproval({ orgId: input.orgId, holdId: input.holdId }, tx);
     if (!claim) return { ok: false, reason: 'not_found' };
-    const event = await stageOrgAuditEvent(
-      tx,
-      guestDecisionAuditEvent(claim, input.decision === 'approve' ? 'org.guest.approved' : 'org.guest.declined', input.actorId),
-      // An approval is real only once its admission commits: unreleased, it is discarded, never delivered.
-      input.decision === 'approve' ? { hold: 'discard_if_unreleased' } : {},
-    );
-    return { ok: true, claim, event };
+    if (input.decision === 'decline') declined = await stageOrgAuditEvent(tx, guestDecisionAuditEvent(claim, 'org.guest.declined', input.actorId));
+    return { ok: true, claim };
   });
-  if (decided.ok && input.decision === 'decline') await publishOrgAuditEvents(decided.event);
+  await publishOrgAuditEvents(declined);
   return decided;
 }
 

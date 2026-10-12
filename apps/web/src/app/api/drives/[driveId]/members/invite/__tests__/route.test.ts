@@ -206,7 +206,7 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
     } as never);
     vi.mocked(driveInviteRepository.createPendingInvite).mockResolvedValue({ id: 'inv_pending' } as never);
     vi.mocked(driveInviteRepository.deletePendingInvite).mockResolvedValue(undefined);
-    vi.mocked(driveInviteRepository.upgradeMemberWithPermissions).mockResolvedValue({ permissionsGranted: 0, skippedPageIds: [] });
+    vi.mocked(driveInviteRepository.upgradeMemberWithPermissions).mockResolvedValue({ permissionsGranted: 0, skippedPageIds: [], staged: [] });
     vi.mocked(driveInviteRepository.getValidPageIds).mockResolvedValue(['page_1']);
     vi.mocked(driveInviteRepository.findUserEmail).mockResolvedValue('invited@example.com');
     vi.mocked(driveInviteRepository.findUserVerificationStatusById).mockResolvedValue({

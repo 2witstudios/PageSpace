@@ -16,6 +16,7 @@ import { decideOrgDriveAdmission } from '@pagespace/lib/permissions/guest-admiss
 import type { GuestAdmissionRefusal } from '@pagespace/lib/organizations/sharing-decisions';
 import { consumeApprovedInvitation, requestGuestApproval } from '@pagespace/lib/permissions/guest-holds';
 import { OrgLapsedError, checkDriveMayLoosen, guardDriveAccess } from '@pagespace/lib/permissions/org-lapse-guard';
+import { stageOrgAuditEvents, type OrgAuditEvent, type StagedOrgAuditEvent } from '@pagespace/lib/audit/org-audit';
 
 export const driveInviteRepository = {
   async findDriveById(driveId: string) {
@@ -118,8 +119,10 @@ export const driveInviteRepository = {
     permissions: Array<{ pageId: string; canView: boolean; canEdit: boolean; canShare: boolean }>;
     grantedBy: string;
     validPageIds: Set<string>;
+    /** AUD-1: an approver's `org.guest.approved`, staged in this transaction so it commits exactly with the member. */
+    approval?: OrgAuditEvent;
   }): Promise<
-    | { memberId: string; permissionsGranted: number }
+    | { memberId: string; permissionsGranted: number; staged: StagedOrgAuditEvent[] }
     | { refused: 'GUEST_POLICY'; refusal: GuestAdmissionRefusal }
     | { refused: 'ORG_LAPSED' }
   > {
@@ -158,7 +161,8 @@ export const driveInviteRepository = {
         permissionsGranted += 1;
       }
 
-      return { memberId: member.id, permissionsGranted };
+      const staged = input.approval ? await stageOrgAuditEvents(tx, [input.approval]) : [];
+      return { memberId: member.id, permissionsGranted, staged };
     });
   },
 
@@ -176,7 +180,9 @@ export const driveInviteRepository = {
     permissions: Array<{ pageId: string; canView: boolean; canEdit: boolean; canShare: boolean }>;
     grantedBy: string;
     validPageIds: Set<string>;
-  }): Promise<{ permissionsGranted: number; skippedPageIds: string[] }> {
+    /** AUD-1: as for createAcceptedMemberWithPermissions. */
+    approval?: OrgAuditEvent;
+  }): Promise<{ permissionsGranted: number; skippedPageIds: string[]; staged: StagedOrgAuditEvent[] }> {
     return guardDriveAccess(db, input.driveId, { users: [input.userId], agents: false }, async (tx) => {
       await tx
         .update(driveMembers)
@@ -212,7 +218,8 @@ export const driveInviteRepository = {
         }
         permissionsGranted += 1;
       }
-      return { permissionsGranted, skippedPageIds };
+      const staged = input.approval ? await stageOrgAuditEvents(tx, [input.approval]) : [];
+      return { permissionsGranted, skippedPageIds, staged };
     });
   },
 
@@ -225,6 +232,12 @@ export const driveInviteRepository = {
     invitedBy: string;
     expiresAt: Date | null;
     now: Date;
+    /**
+     * AUD-1: an approver's `org.guest.approved`, staged with the invitation. The invitation is final only once its
+     * email went out (after this transaction), so it is HELD: the caller releases it on delivery or discards it with
+     * the row.
+     */
+    approval?: OrgAuditEvent;
   }) {
     const { tokenHash, email, driveId, role, customRoleId, invitedBy, expiresAt, now } = input;
     return db.transaction(async (tx) => {
@@ -247,7 +260,8 @@ export const driveInviteRepository = {
         .insert(pendingInvites)
         .values({ tokenHash, email, driveId, role, customRoleId, invitedBy, expiresAt })
         .returning();
-      return row;
+      const approvalStaged = input.approval ? await stageOrgAuditEvents(tx, [input.approval], { hold: 'discard_if_unreleased' }) : [];
+      return { ...row, approvalStaged };
     });
   },
 

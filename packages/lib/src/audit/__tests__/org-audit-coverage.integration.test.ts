@@ -56,8 +56,8 @@ import { workflows } from '@pagespace/db/schema/workflows';
 import { orgAuditOutbox } from '@pagespace/db/schema/organizations';
 import { orgGuestHolds } from '@pagespace/db/schema/org-guest-holds';
 import { securityAudit } from '../security-audit';
-import { drainOrgAuditOutbox, publishOrgAuditEvents, transactionWithOrgAudit } from '../org-audit';
-import { claimGuestApprovalDecision } from '../../permissions/guest-holds';
+import { drainOrgAuditOutbox, transactionWithOrgAudit } from '../org-audit';
+import { claimGuestApprovalDecision, guestDecisionAuditEvent } from '../../permissions/guest-holds';
 import { completeApprovedLinkAdmission } from '../../permissions/share-link-service';
 import { defaultAppUnparkDeps, unparkPublishedApp } from '../../services/app-hosting/app-unpark';
 import { driveEnvs } from '@pagespace/db/schema/drive-envs';
@@ -272,8 +272,8 @@ describe('every org mutation writes its event', () => {
     expect(await redeemDriveShareLink(ctxFor(omar.id), link.data.rawToken)).toMatchObject({ ok: false, error: 'PENDING_APPROVAL' });
     const approved = await claimGuestApprovalDecision({ orgId, holdId: await holdOf(omar.id), decision: 'approve', actorId: jono.id });
     if (!approved.ok) throw new Error('approve');
-    expect(await completeApprovedLinkAdmission(approved.claim)).toMatchObject({ ok: true });
-    await publishOrgAuditEvents(approved.event);
+    // The approval's event is staged by the admission itself, inside its transaction.
+    expect(await completeApprovedLinkAdmission(approved.claim, guestDecisionAuditEvent(approved.claim, 'org.guest.approved', jono.id))).toMatchObject({ ok: true });
 
     // ── compute (D-OW-28): an env handed to the lead, a parked app taken back ───────
     const envId = createId();
