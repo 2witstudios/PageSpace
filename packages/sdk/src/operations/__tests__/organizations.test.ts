@@ -124,6 +124,14 @@ describe('operations/organizations.ts — the five org reads', () => {
     expect(getOrgPolicies.outputSchema.safeParse({ policies: { ...POLICIES.policies, guests: 'sometimes' } }).success).toBe(false);
   });
 
+  it.each([
+    [null, true], [15, true], [43_200, true], [0, true],
+    [14, false], [1, false], [43_201, false], [15.5, false], [-1, false],
+  ])('SEC-3 (partial) maximumSessionAgeMinutes %s matches what the server can answer: %s', (value, ok) => {
+    // 0 is the strictest value a damaged stored age reads as (policies-core SPECS); 1..14 are never answered.
+    expect(getOrgPolicies.outputSchema.safeParse({ policies: { ...POLICIES.policies, maximumSessionAgeMinutes: value } }).success).toBe(ok);
+  });
+
   it('X-1 (partial) inputs are strict: an unknown argument is a client-side validation error', () => {
     expect(listMyOrganizations.inputSchema.safeParse({ extra: true }).success).toBe(false);
     expect(getOrganization.inputSchema.safeParse({ orgId: 'o1', extra: true }).success).toBe(false);
