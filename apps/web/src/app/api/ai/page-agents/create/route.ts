@@ -19,6 +19,7 @@ import { db } from '@pagespace/db/db';
 import { pages } from '@pagespace/db/schema/core';
 import { driveAgentMembers } from '@pagespace/db/schema/members';
 import { isDriveLead } from '@pagespace/lib/permissions/drive-relationship';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 /**
  * POST /api/ai/page-agents/create
@@ -88,7 +89,7 @@ export async function POST(request: Request) {
       // OWNER role (its role replaces its owner's identity); an inherited key
       // falls through to the user ownership check (it IS the owner acting).
       if (isScopedMCPAuth(auth)) {
-        const membership = await getAppDriveMembership(auth.tokenId, driveId);
+        const membership = await getAppDriveMembership(actorFromAuth(auth), auth.tokenId, driveId);
         if (!membership || (membership.role !== null && membership.role !== 'OWNER')) {
           auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'page_agent', resourceId: 'create', details: { reason: 'token_role_not_owner', driveId, method: 'POST' }, riskScore: 0.5 });
           return NextResponse.json(

@@ -93,7 +93,7 @@ vi.mock('@/lib/auth', () => ({
   checkMCPPageScope: vi.fn(),
   canPrincipalViewPage: vi.fn(async (auth: { userId: string }, pageId: string) => {
     const { canUserViewPage } = await import('@pagespace/lib/permissions/permissions');
-    return canUserViewPage(auth.userId, pageId);
+    return canUserViewPage(auth.userId as never, pageId);
   }),
 }));
 

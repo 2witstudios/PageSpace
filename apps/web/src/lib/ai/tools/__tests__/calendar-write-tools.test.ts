@@ -2,6 +2,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { assert } from './riteway';
 
 // Mock database and dependencies
+// Org sign-in policy (SEC-2/3) admits every actor here; tests that exercise a refusal override it.
+vi.mock('@pagespace/lib/permissions/actor-authentication', () => ({
+  checkActorResourceAuthentication: vi.fn(async () => ({ allowed: true })),
+  checkActorDriveAuthentication: vi.fn(async () => ({ allowed: true })),
+  filterDrivesForActor: vi.fn(async (_actor: unknown, ids: readonly string[]) => new Set(ids)),
+  filterResourcesForActor: vi.fn(async (_actor: unknown, ids: readonly string[]) => new Set(ids)),
+  explainOrgAuthenticationDenial: vi.fn(async () => null),
+}));
 vi.mock('@pagespace/db/db', () => ({
   db: {
     insert: vi.fn().mockReturnThis(),
@@ -182,6 +190,7 @@ import { getAllMemberUserIdsForEvent } from '@pagespace/lib/services/calendar-ev
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
 import { upsertCalendarTriggerWorkflowInTx } from '@/lib/workflows/calendar-trigger-helpers';
 import type { ToolExecutionContext } from '../../core/types';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const mockDb = vi.mocked(db);
 const mockIsUserDriveMember = vi.mocked(isUserDriveMember);
@@ -210,7 +219,7 @@ const createMockEvent = (overrides = {}) => ({
 const createAuthContext = (userId = 'user-123') => ({
   toolCallId: '1',
   messages: [],
-  experimental_context: { userId } as ToolExecutionContext,
+  experimental_context: { userId, accessActor: credentialActor(userId, null) } as ToolExecutionContext,
 });
 
 describe('calendar-write-tools', () => {
@@ -945,7 +954,7 @@ describe('calendar-write-tools', () => {
         toolCallId: '1',
         messages: [],
         experimental_context: {
-          userId: 'user-123',
+          userId: 'user-123', accessActor: credentialActor('user-123', null),
           mcpAllowedDriveIds: ['drive-A'],
           mcpTokenId: 'token-1',
         } as ToolExecutionContext,

@@ -51,13 +51,16 @@ import {
   commandExecutionDataFromPlan,
   commandSkipNoticeText,
 } from '../command-processor';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const mockCommandsFindFirst = db.query.commands.findFirst as unknown as Mock;
 const mockPagesFindMany = db.query.pages.findMany as unknown as Mock;
 const mockCanUserViewPage = vi.mocked(canUserViewPage);
 const mockIsUserDriveMember = vi.mocked(isUserDriveMember);
 
-const SENDER = 'usr9zmbrgj3atz4a98xxat96';
+const SENDER_ID = 'usr9zmbrgj3atz4a98xxat96';
+// The sender's credential: command usability is asked of it (D-OW-45).
+const SENDER = credentialActor(SENDER_ID, null);
 const CMD_ID = 'tz4a98xxat96iws9zmbrgj3a';
 const ENTRY_PAGE_ID = 'pge9zmbrgj3atz4a98xxat96';
 const DRIVE_ID = 'drv9zmbrgj3atz4a98xxat96';
@@ -68,7 +71,7 @@ const content = `/[release-checklist](${CMD_ID}:command) please run it`;
 function commandRow(overrides: Record<string, unknown> = {}) {
   return {
     id: CMD_ID,
-    userId: SENDER,
+    userId: SENDER_ID,
     driveId: null,
     trigger: 'release-checklist',
     description: 'Run the release checklist.',

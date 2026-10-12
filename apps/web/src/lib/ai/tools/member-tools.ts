@@ -9,7 +9,7 @@ import { connections } from '@pagespace/db/schema/social';
 import { decryptUserRow, decryptUserRows } from '@pagespace/lib/auth/user-repository';
 import { checkDriveAccess, listDriveMembers } from '@pagespace/lib/services/drive-member-service';
 import type { ToolExecutionContext } from '../core/types';
-import { driveDeniedByAppToken } from './actor-permissions';
+import { driveDeniedByAppToken, toolActor } from './actor-permissions';
 
 export const memberTools = {
   list_drive_members: tool({
@@ -25,7 +25,7 @@ export const memberTools = {
         return { success: false, error: 'This token does not have access to this drive' };
       }
 
-      const access = await checkDriveAccess(driveId, userId);
+      const access = await checkDriveAccess(driveId, toolActor(context as ToolExecutionContext));
       if (!access.drive) return { success: false, error: 'Drive not found' };
       if (!access.isOwner && !access.isMember) {
         return { success: false, error: 'You must be a drive member to view members' };

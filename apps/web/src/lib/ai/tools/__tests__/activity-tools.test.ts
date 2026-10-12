@@ -26,6 +26,7 @@ import { activityTools, filterAccessibleActivities, shouldContinuePaging } from 
 import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
 import { getMemberDriveIds } from '@pagespace/lib/permissions/member-drives';
 import type { ToolExecutionContext } from '../../core/types';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const mockIsUserDriveMember = vi.mocked(isUserDriveMember);
 
@@ -88,7 +89,7 @@ describe('activity-tools', () => {
       const context = {
         toolCallId: '1',
         messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       await expect(
@@ -101,12 +102,12 @@ describe('activity-tools', () => {
       const context = {
         toolCallId: '1',
         messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       const result = await activityTools.get_activity.execute!(createTestInput(), context);
 
-      expect(getMemberDriveIds).toHaveBeenCalledWith('user-123', { includeTrashed: false });
+      expect(getMemberDriveIds).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-123' }), { includeTrashed: false });
       expect(result).toMatchObject({ ok: true, drives: [] });
     });
 
@@ -138,7 +139,7 @@ describe('activity-tools', () => {
       const contextFor = (userId: string) => ({
         toolCallId: '1',
         messages: [],
-        experimental_context: { userId } as ToolExecutionContext,
+        experimental_context: { userId, accessActor: credentialActor(userId, null) } as ToolExecutionContext,
       });
       const guestResult = await activityTools.get_activity.execute!(createTestInput(), contextFor(guest.id));
       const memberResult = await activityTools.get_activity.execute!(createTestInput(), contextFor(member.id));

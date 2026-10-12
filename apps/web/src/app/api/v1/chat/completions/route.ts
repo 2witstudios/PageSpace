@@ -53,6 +53,7 @@ import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import { creditGateErrorResponse } from '@/lib/subscription/credit-gate-response';
 import { prepareHistoryForModel, finishModelRequest } from '@/lib/ai/core/context-assembly';
 import { capStepToolPayloads } from '@/lib/ai/core/cap-step-tool-payloads';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 export const maxDuration = 300;
 
@@ -328,7 +329,7 @@ export async function POST(request: Request): Promise<Response> {
       // route. An unbound (or auto-generated) page conversation is not
       // eligible (codex round 14): acquire answers no_session for it.
       const sandboxTierEligible = sandboxEnabled
-        ? await resolveSandboxToolEligibilityForConversation(incomingConversationId, 'page', authResult.userId)
+        ? await resolveSandboxToolEligibilityForConversation(incomingConversationId, 'page', actorFromAuth(authResult))
         : false;
       filteredTools = filterToolsForSandboxEnablement(filteredTools, sandboxEnabled) as ToolSet;
       // Tier strips only COMPUTE tools; the chat-only session family stays
@@ -370,7 +371,7 @@ export async function POST(request: Request): Promise<Response> {
       // route. An unbound (or auto-generated) page conversation is not
       // eligible (codex round 14): acquire answers no_session for it.
       const sandboxTierEligible = sandboxEnabled
-        ? await resolveSandboxToolEligibilityForConversation(incomingConversationId, 'page', authResult.userId)
+        ? await resolveSandboxToolEligibilityForConversation(incomingConversationId, 'page', actorFromAuth(authResult))
         : false;
       filteredTools = filterToolsForSandboxEnablement(filteredTools, sandboxEnabled) as ToolSet;
       // Tier strips only COMPUTE tools; the chat-only session family stays
@@ -638,6 +639,7 @@ export async function POST(request: Request): Promise<Response> {
       abortSignal: abortController.signal,
       experimental_context: {
         userId: authResult.userId,
+        accessActor: actorFromAuth(authResult),
         conversationId,
         timezone: userTimezone,
         aiProvider: page.aiProvider ?? undefined,

@@ -11,7 +11,9 @@ vi.mock('../expand-group-mentions', () => ({
 
 const mockCanUserViewPage = vi.fn();
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
-  canUserViewPage: (...args: unknown[]) => mockCanUserViewPage(...args),
+  // The audience question answered through the per-user mock the cases already drive.
+  getUsersWhoCanViewPage: async (pageId: string, ids: string[]) =>
+    new Set((await Promise.all(ids.map(async (id) => ((await mockCanUserViewPage(id, pageId)) ? id : null)))).filter((id): id is string => id !== null)),
 }));
 
 const mockCreateMentionNotification = vi.fn();

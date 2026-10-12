@@ -23,6 +23,7 @@ vi.mock('../../core/command-resolver', () => ({
 }));
 
 import { skillTools } from '../skill-tools';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 type ExecuteFn = (
   input: { name: string },
@@ -31,7 +32,7 @@ type ExecuteFn = (
 
 const execute = skillTools.load_skill.execute as unknown as ExecuteFn;
 
-const baseContext = { userId: 'user-1' } as ToolExecutionContext;
+const baseContext = { userId: 'user-1' , accessActor: credentialActor('user-1', null)} as ToolExecutionContext;
 
 const builtinWinner = (trigger: string) => ({
   id: `builtin:${trigger}`,
@@ -98,7 +99,7 @@ describe('load_skill', () => {
       { experimental_context: { ...baseContext, enabledTools: ['edit_sheet_cells'] } }
     );
 
-    expect(mockResolveBuiltin).toHaveBeenCalledWith('spreadsheets', 'user-1', { driveId: null });
+    expect(mockResolveBuiltin).toHaveBeenCalledWith('spreadsheets', expect.objectContaining({ userId: 'user-1' }), { driveId: null });
     expect(result).toContain('<skill_instructions name="spreadsheets">');
     expect(result).toContain('# Sheet skill body');
     expect(result).toContain('load_skill("spreadsheets")');
@@ -159,7 +160,7 @@ describe('load_skill', () => {
       { experimental_context: baseContext }
     );
 
-    expect(mockResolveById).toHaveBeenCalledWith('cmd1234567890', 'user-1', 'release-checklist');
+    expect(mockResolveById).toHaveBeenCalledWith('cmd1234567890', expect.objectContaining({ userId: 'user-1' }), 'release-checklist');
     expect(result).toContain('step 1');
     expect(result).toContain('NOT loaded');
     expect(result).toContain('child-1');
@@ -198,7 +199,7 @@ describe('load_skill', () => {
         },
       }
     );
-    expect(mockLoadAvailableCommands).toHaveBeenCalledWith('user-1', null);
+    expect(mockLoadAvailableCommands).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1' }), null);
 
     mockIsUserDriveMember.mockResolvedValue(true);
     await execute(
@@ -210,7 +211,7 @@ describe('load_skill', () => {
         },
       }
     );
-    expect(mockLoadAvailableCommands).toHaveBeenLastCalledWith('user-1', 'drive-1');
+    expect(mockLoadAvailableCommands).toHaveBeenLastCalledWith(expect.objectContaining({ userId: 'user-1' }), 'drive-1');
   });
 
   it('degrades unexpected errors to a soft failure string (never throws mid-turn)', async () => {

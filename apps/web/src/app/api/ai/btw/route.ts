@@ -26,6 +26,7 @@ import { priceInterruptedStep } from '@/lib/ai/core/interrupted-step-cost';
 import { createAdminRestrictedResponse, createSubscriptionRequiredResponse, requiresProSubscription } from '@/lib/subscription/rate-limit-middleware';
 import { creditGateErrorResponse } from '@/lib/subscription/credit-gate-response';
 import { buildSideQuestionSnapshot, createSideQuestionStream } from '@/lib/ai/btw/side-question';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 export const maxDuration = 60;
 const MAX_QUESTION_CHARS = 2_000;
@@ -55,13 +56,13 @@ export async function POST(request: Request) {
     const { conversationId, question } = body;
     if (typeof conversationId !== 'string' || typeof question !== 'string' || !question.trim() || question.length > MAX_QUESTION_CHARS) return NextResponse.json({ error: 'Invalid side question' }, { status: 400 });
     const [conversation] = await db.select({ userId: conversations.userId, isShared: conversations.isShared, type: conversations.type, contextId: conversations.contextId }).from(conversations).where(eq(conversations.id, conversationId)).limit(1);
-    if (!conversation || !(await canAccessConversation(userId, conversation))) {
+    if (!conversation || !(await canAccessConversation(actorFromAuth(auth), conversation))) {
       auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'ai_btw', resourceId: conversationId, details: { reason: 'conversation_not_accessible', method: 'POST' }, riskScore: 0.5 });
       return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
     }
 
     const trimmedQuestion = question.trim();
-    const snapshot = await buildSideQuestionSnapshot({ conversationId, readMessages: () => messageRepository.getMessagesByConversationId(conversationId), readPlan: async () => (await getActivePlan(conversationId, userId))?.title ?? null });
+    const snapshot = await buildSideQuestionSnapshot({ conversationId, readMessages: () => messageRepository.getMessagesByConversationId(conversationId), readPlan: async () => (await getActivePlan(conversationId, actorFromAuth(auth)))?.title ?? null });
 
     // Same admission as a chat turn, keyed off the provider that will ACTUALLY run
     // (resolveProviderModel is what createAIProvider resolves too).

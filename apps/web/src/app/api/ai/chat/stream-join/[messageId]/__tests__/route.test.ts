@@ -230,7 +230,7 @@ describe('GET /api/ai/chat/stream-join/[messageId]', () => {
       await GET(makeRequest(), makeContext(mockMessageId));
 
       expect(mockCanSubscribeToStream).toHaveBeenCalledWith({
-        userId: mockUserId,
+        actor: expect.objectContaining({ userId: mockUserId }),
         streamOwnerId: 'user-other',
         conversationId: mockConversationId,
       });
@@ -514,7 +514,7 @@ describe('GET /api/ai/chat/stream-join/[messageId]', () => {
 
       expect(response.status).toBe(200);
       expect(mockCanSubscribeToStream).toHaveBeenCalledWith({
-        userId: 'user-other',
+        actor: expect.objectContaining({ userId: 'user-other' }),
         streamOwnerId: mockUserId,
         conversationId: mockConversationId,
       });
@@ -1024,6 +1024,6 @@ vi.mock('@/lib/auth/principal-permissions', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/auth/principal-permissions')>();
   const permissions = await import('@pagespace/lib/permissions/permissions');
   return { ...actual,
-    canPrincipalViewPage: (auth: { userId: string }, resourceId: string) => permissions.canUserViewPage(auth.userId, resourceId),
+    canPrincipalViewPage: (auth: { userId: string }, resourceId: string) => permissions.canUserViewPage(auth.userId as never, resourceId),
   };
 });

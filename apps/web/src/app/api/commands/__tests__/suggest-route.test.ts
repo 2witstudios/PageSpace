@@ -160,7 +160,7 @@ describe('GET /api/commands/suggest', () => {
     expect(json.suggestions.map((s: { trigger: string }) => s.trigger).sort()).toEqual(
       withBuiltins('mine')
     );
-    expect(mockedBatchPermissions).toHaveBeenCalledWith(USER_ID, [
+    expect(mockedBatchPermissions).toHaveBeenCalledWith(expect.objectContaining({ userId: USER_ID }), [
       'page_ok',
       'page_denied',
     ]);
@@ -320,6 +320,6 @@ vi.mock('@/lib/auth/principal-permissions', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/auth/principal-permissions')>();
   const permissions = await import('@pagespace/lib/permissions/permissions');
   return { ...actual,
-    isPrincipalDriveMember: (auth: { userId: string }, resourceId: string) => permissions.isUserDriveMember(auth.userId, resourceId),
+    isPrincipalDriveMember: (auth: { userId: string }, resourceId: string) => permissions.isUserDriveMember(auth.userId as never, resourceId),
   };
 });

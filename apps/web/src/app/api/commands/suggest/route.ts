@@ -10,6 +10,7 @@ import {
   type CommandScope,
 } from '@pagespace/lib/commands/command-core';
 import { loadAvailableCommands } from '@/lib/commands/available-commands';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
 
@@ -64,7 +65,7 @@ export async function GET(request: Request) {
     // Shared with the /help built-in injection (available-commands.ts) so the
     // picker and the AI's command list can never drift apart. Membership for
     // driveId was verified above — the loader requires that contract.
-    const { winners, shadowed } = await loadAvailableCommands(userId, driveId || null);
+    const { winners, shadowed } = await loadAvailableCommands(actorFromAuth(auth), driveId || null);
 
     // q matching happens in JS over the caller's own small command set, so user
     // input never reaches a SQL LIKE pattern

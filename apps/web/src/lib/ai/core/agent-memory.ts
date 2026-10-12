@@ -15,6 +15,7 @@ import { eq, and } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { estimateTokens } from '@pagespace/lib/monitoring/ai-context-calculator';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -37,7 +38,7 @@ const TRUNCATION_MARKER = '\n\n[Agent Memory truncated at ~2k-token cap]';
  */
 export async function getAgentMemoryContext(
   agentPageId: string,
-  userId: string,
+  actor: AccessActor,
 ): Promise<string> {
   try {
     const [memoryPage] = await db
@@ -54,7 +55,7 @@ export async function getAgentMemoryContext(
 
     if (!memoryPage) return '';
 
-    const canView = await canUserViewPage(userId, memoryPage.id);
+    const canView = await canUserViewPage(actor, memoryPage.id);
     if (!canView) return '';
 
     const content = memoryPage.content ?? '';

@@ -1,5 +1,6 @@
 import { describe, it, vi, beforeEach, expect } from 'vitest';
 import { assert } from './riteway';
+import { automationActor } from '@pagespace/lib/permissions/access-actor';
 
 /**
  * Discovery Service Tests
@@ -170,7 +171,7 @@ describe('runDiscoveryPasses', () => {
       given: 'a user whose member drives come from the permissions layer',
       should: 'ask getMemberDriveIds (trash included, as before) for both the message and the activity scope',
       actual: mockGetMemberDriveIds.mock.calls,
-      expected: [['user-org-member', { includeTrashed: true }], ['user-org-member', { includeTrashed: true }]],
+      expected: [[automationActor('user-org-member', 'memory-discovery'), { includeTrashed: true }], [automationActor('user-org-member', 'memory-discovery'), { includeTrashed: true }]],
     });
   });
 

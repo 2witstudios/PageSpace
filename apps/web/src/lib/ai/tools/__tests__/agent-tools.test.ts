@@ -2,6 +2,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { ToolExecutionContext } from '../../core/types';
 
 // Mock repository seams - the proper boundary for tests
+// Org sign-in policy (SEC-2/3) admits every actor here; tests that exercise a refusal override it.
+vi.mock('@pagespace/lib/permissions/actor-authentication', () => ({
+  checkActorResourceAuthentication: vi.fn(async () => ({ allowed: true })),
+  checkActorDriveAuthentication: vi.fn(async () => ({ allowed: true })),
+  filterDrivesForActor: vi.fn(async (_actor: unknown, ids: readonly string[]) => new Set(ids)),
+  filterResourcesForActor: vi.fn(async (_actor: unknown, ids: readonly string[]) => new Set(ids)),
+  explainOrgAuthenticationDenial: vi.fn(async () => null),
+}));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
     canUserEditPage: vi.fn(),
 }));
@@ -64,6 +72,7 @@ import { agentRepository } from '@pagespace/lib/repositories/agent-repository';
 import { checkDriveAccess } from '@pagespace/lib/services/drive-member-service';
 import { broadcastPageEvent } from '@/lib/websocket';
 import { applyPageMutation } from '@/services/api/page-mutation-service';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const mockAgentRepository = vi.mocked(agentRepository);
 const mockCanUserEditPage = vi.mocked(canUserEditPage);
@@ -120,7 +129,7 @@ describe('agent-tools', () => {
       const context = {
         toolCallId: '1',
         messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       // Act & Assert
@@ -162,7 +171,7 @@ describe('agent-tools', () => {
       const context = {
         toolCallId: '1',
         messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       // Act & Assert
@@ -174,7 +183,7 @@ describe('agent-tools', () => {
       ).rejects.toThrow('Insufficient permissions to update this AI agent');
 
       // Verify permission check was called with correct params
-      expect(mockCanUserEditPage).toHaveBeenCalledWith('user-123', 'agent-1');
+      expect(mockCanUserEditPage).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-123' }), 'agent-1');
       // Verify applyPageMutation was NOT called
       expect(applyPageMutation).not.toHaveBeenCalled();
     });
@@ -206,7 +215,7 @@ describe('agent-tools', () => {
       const context = {
         toolCallId: '1',
         messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       // Act & Assert
@@ -261,7 +270,7 @@ describe('agent-tools', () => {
       const context = {
         toolCallId: '1',
         messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       // Act
@@ -318,7 +327,7 @@ describe('agent-tools', () => {
 
       await agentTools.update_agent_config.execute!(
         { agentPath: '/drive/agent', agentId: 'agent-1', enabledTools: [] },
-        { toolCallId: '1', messages: [], experimental_context: { userId: 'user-123' } as ToolExecutionContext },
+        { toolCallId: '1', messages: [], experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext },
       );
 
       expect(applyPageMutation).toHaveBeenCalledWith(
@@ -343,7 +352,7 @@ describe('agent-tools', () => {
 
       await agentTools.update_agent_config.execute!(
         { agentPath: '/drive/agent', agentId: 'agent-1', enabledTools: null },
-        { toolCallId: '1', messages: [], experimental_context: { userId: 'user-123' } as ToolExecutionContext },
+        { toolCallId: '1', messages: [], experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext },
       );
 
       expect(applyPageMutation).toHaveBeenCalledWith(
@@ -366,7 +375,7 @@ describe('agent-tools', () => {
 
       await agentTools.update_agent_config.execute!(
         { agentPath: '/drive/agent', agentId: 'agent-1', systemPrompt: 'New prompt' },
-        { toolCallId: '1', messages: [], experimental_context: { userId: 'user-123' } as ToolExecutionContext },
+        { toolCallId: '1', messages: [], experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext },
       );
 
       const call = vi.mocked(applyPageMutation).mock.calls.at(-1)?.[0] as { updates: Record<string, unknown> };
@@ -409,7 +418,7 @@ describe('agent-tools', () => {
       const context = {
         toolCallId: '1',
         messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       // Act
@@ -470,7 +479,7 @@ describe('agent-tools', () => {
       const context = {
         toolCallId: '1',
         messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       await expect(
@@ -515,7 +524,7 @@ describe('agent-tools', () => {
       const context = {
         toolCallId: '1',
         messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       await expect(
@@ -553,7 +562,7 @@ describe('agent-tools', () => {
       const context = {
         toolCallId: '1',
         messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       await expect(
@@ -599,7 +608,7 @@ describe('agent-tools', () => {
       const context = {
         toolCallId: '1',
         messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       const result = await agentTools.update_agent_config.execute!(
@@ -643,7 +652,7 @@ describe('agent-tools', () => {
       const context = {
         toolCallId: '1',
         messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       // Act
@@ -711,7 +720,7 @@ describe('agent-tools', () => {
       const context = {
         toolCallId: '1',
         messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       await expect(
@@ -721,7 +730,7 @@ describe('agent-tools', () => {
         )
       ).rejects.toThrow('Only the drive owner can change this agent\'s user-scoped access setting');
 
-      expect(mockCheckDriveAccess).toHaveBeenCalledWith('drive-1', 'user-123');
+      expect(mockCheckDriveAccess).toHaveBeenCalledWith('drive-1', expect.objectContaining({ userId: 'user-123' }));
       expect(applyPageMutation).not.toHaveBeenCalled();
     });
 
@@ -755,7 +764,7 @@ describe('agent-tools', () => {
       const context = {
         toolCallId: '1',
         messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       const result = await agentTools.update_agent_config.execute!(
@@ -805,7 +814,7 @@ describe('agent-tools', () => {
       const context = {
         toolCallId: '1',
         messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       it('writes sandboxEnabled — the one gate that was UI-only while 23 sibling fields were tool-writable', async () => {
@@ -939,7 +948,7 @@ describe('agent-tools', () => {
         {
           toolCallId: '1',
           messages: [],
-          experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+          experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
         }
       ) as Record<string, unknown>;
 
@@ -981,7 +990,7 @@ describe('agent-tools', () => {
       const context = {
         toolCallId: '1',
         messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       // Act & Assert
@@ -1009,7 +1018,7 @@ describe('agent-tools', () => {
       const context = {
         toolCallId: '1',
         messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       // Act & Assert

@@ -11,6 +11,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { checkDriveAccess } from '@pagespace/lib/services/drive-member-service';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { ZOOM_TRIGGER_EVENT_TYPES } from '@/lib/integrations/zoom/webhook-event-types';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -80,7 +81,7 @@ export async function POST(request: Request) {
     });
     if (!workflow) return NextResponse.json({ error: 'Workflow not found' }, { status: 404 });
 
-    const access = await checkDriveAccess(workflow.driveId, userId);
+    const access = await checkDriveAccess(workflow.driveId, actorFromAuth(auth));
     if (!access.drive) return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
     if (!access.isOwner && !access.isAdmin) {
       return NextResponse.json({ error: 'Only drive owners and admins can manage triggers' }, { status: 403 });

@@ -11,10 +11,17 @@ import { tool, type Tool } from 'ai';
 import { z } from 'zod';
 import type { GitToolRow } from './tools/types';
 import type { SandboxActorContext } from '@pagespace/lib/services/sandbox/tool-runners';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 export type OpenResult =
-  | { ok: true; userId: string; ctx: SandboxActorContext }
+  | { ok: true; userId: string; ctx: SandboxActorContext; actor: AccessActor }
   | { ok: false; error: { success: false; error: string } };
+
+/** An opened sandbox context and the actor its gate authorized: the run is provisioned as that same actor. */
+export interface GatedSandbox {
+  ctx: SandboxActorContext;
+  actor: AccessActor;
+}
 
 /**
  * The effect seams the generator injects. Built inside createSandboxGitTools so
@@ -22,15 +29,15 @@ export type OpenResult =
  */
 export interface GeneratorSeams {
   open: (options: unknown) => Promise<OpenResult>;
-  git: (cmd: 'git' | 'gh', args: string[], ctx: SandboxActorContext, cwd?: string) => Promise<unknown>;
+  git: (cmd: 'git' | 'gh', args: string[], gated: GatedSandbox, cwd?: string) => Promise<unknown>;
   withToken: (
     options: unknown,
-    run: (ctx: SandboxActorContext, token: string) => Promise<unknown>,
+    run: (gated: GatedSandbox, token: string) => Promise<unknown>,
   ) => Promise<unknown>;
   gitR: (
     cmd: 'git' | 'gh',
     args: string[],
-    ctx: SandboxActorContext,
+    gated: GatedSandbox,
     token: string,
     cwd?: string,
   ) => Promise<unknown>;
@@ -82,10 +89,10 @@ export function generateSandboxGitTools(
       if (row.exec === 'local') {
         const opened = await seams.open(options);
         if (!opened.ok) return opened.error;
-        return seams.git(row.cmd, built.args, opened.ctx, cwdOf(input));
+        return seams.git(row.cmd, built.args, { ctx: opened.ctx, actor: opened.actor }, cwdOf(input));
       }
-      return seams.withToken(options, (ctx, token) =>
-        seams.gitR(row.cmd, built.args, ctx, token, cwdOf(input)),
+      return seams.withToken(options, (gated, token) =>
+        seams.gitR(row.cmd, built.args, gated, token, cwdOf(input)),
       );
     };
 

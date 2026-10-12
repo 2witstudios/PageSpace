@@ -72,9 +72,8 @@ import { isMCPAuthResult, isServiceAuthResult, authSessionIdOf, checkMCPPageScop
  * other.
  */
 import { ConversationHistoryDeletedError } from '@/lib/repositories/resolve-or-create-conversation';
-// canUserViewPage stays user-level here: it gates mention-notification RECIPIENTS
-// (other users), not the requesting principal.
-import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
+// Mention-notification RECIPIENTS are an audience (third parties), so they resolve through getUsersWhoCanViewPage.
+import { getUsersWhoCanViewPage } from '@pagespace/lib/permissions/permissions';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { createAIProvider, updateUserProviderSettings, createProviderErrorResponse, isProviderError, type ProviderRequest } from '@/lib/ai/core/provider-factory';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
@@ -155,6 +154,7 @@ import { validateUserMessageFileParts, hasFileParts } from '@/lib/ai/core/valida
 import { hasVisionCapability } from '@/lib/ai/core/model-capabilities';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
 import { deriveConversationTitle } from '@/lib/repositories/derive-conversation-title';
+import { actorFromAuth } from '../../auth/request-actor';
 
 
 /**
@@ -368,6 +368,8 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     const { request, auth: authResult } = ctx;
     browserSessionId = ctx.browserSessionId;
     userId = authResult.userId;
+    // The turn's driver as the permission layer's actor: the request credential with its ceremony evidence (SEC-2/3).
+    const turnActor = actorFromAuth(authResult);
     loggers.ai.debug('AI Chat API: Authentication successful', { userId });
 
     // The parsed body, narrowed to the shape this strategy reads. The entry
@@ -877,7 +879,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
         // never sends to a model — respondWithHelpAnswer builds its own
         // "used" pill directly and does its own (single) command-list read.
         if (!isSoloHelpRequest) {
-          commandPlans = await planCommandExecutions(messageContent, userId!, {
+          commandPlans = await planCommandExecutions(messageContent, turnActor, {
             driveId: page.driveId,
           });
           turnTimer.mark('commands_planned');
@@ -1015,9 +1017,8 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
             .then(async (notifyIds) => {
               const candidates = notifyIds.filter((id) => id !== userId);
               if (candidates.length === 0) return;
-              const viewChecks = await Promise.all(
-                candidates.map(async (id) => ({ id, canView: await canUserViewPage(id, chatId!) }))
-              );
+              const viewers = await getUsersWhoCanViewPage(chatId!, candidates);
+              const viewChecks = candidates.map((id) => ({ id, canView: viewers.has(id) }));
               await Promise.allSettled(
                 viewChecks
                   .filter((e) => e.canView)
@@ -1106,7 +1107,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
       }
 
       return await respondWithHelpAnswer({
-        senderId: userId!,
+        sender: turnActor,
         driveId: page.driveId,
         originalMessages: messages,
         persist: (payload, messageId) =>
@@ -1312,7 +1313,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     // An UNBOUND page conversation is not eligible at all (codex round 14):
     // the acquire path never lazily mints page conversations a session.
     const sandboxTierEligible = sandboxEnabled
-      ? await resolveSandboxToolEligibilityForConversation(conversationId, 'page', userId)
+      ? await resolveSandboxToolEligibilityForConversation(conversationId, 'page', turnActor)
       : false;
     turnTimer.mark('sandbox_eligibility');
     filteredTools = filterToolsForSandboxEnablement(filteredTools, sandboxEnabled) as ToolSet;
@@ -1373,7 +1374,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     const eligibleSkills = listEligibleSkills(allowedToolNames);
     const userCommandCatalog =
       eligibleSkills.length > 0 || allowedToolNames.includes('load_skill')
-        ? await loadUserCommandCatalog(userId!, page.driveId ?? null, allowedToolNames)
+        ? await loadUserCommandCatalog(turnActor, page.driveId ?? null, allowedToolNames)
         : { catalogPrompt: '', searchEntries: [] };
     turnTimer.mark('commands_loaded');
     const exposure = applyToolExposureMode(filteredTools, toolExposureMode, ALWAYS_UPFRONT_TOOLS, [
@@ -1599,7 +1600,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     // page in ANOTHER drive — so the principal-aware check is required here. A
     // user-level check would leak an out-of-scope plan's title and id to a token
     // that may not reach that drive.
-    const planPointer = await getActivePlan(conversationId, userId, (pageId) =>
+    const planPointer = await getActivePlan(conversationId, turnActor, (pageId) =>
       canPrincipalViewPage(authResult, pageId),
     );
     turnTimer.mark('active_plan_loaded');
@@ -1613,7 +1614,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     // Build page tree context if enabled
     let pageTreePrompt = '';
     if (page.includePageTree && page.driveId) {
-      const pageTreeContext = await getPageTreeContext(userId, {
+      const pageTreeContext = await getPageTreeContext(turnActor, {
         scope: (page.pageTreeScope as 'children' | 'drive') || 'children',
         pageId: chatId,
         driveId: page.driveId,
@@ -1634,7 +1635,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     // the page, so it lives in the STABLE system section (not the volatile block).
     let agentMemoryPrompt = '';
     if (page.type === 'AI_CHAT') {
-      const memoryContent = await getAgentMemoryContext(chatId, userId);
+      const memoryContent = await getAgentMemoryContext(chatId, turnActor);
       turnTimer.mark('agent_memory_loaded');
       agentMemoryPrompt = buildAgentMemorySection(memoryContent);
     }
@@ -1906,6 +1907,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
                 : undefined,
               experimental_context: {
                 userId,
+                accessActor: turnActor,
                 timezone: userTimezone,
                 aiProvider: currentProvider,
                 aiModel: currentModel,

@@ -7,6 +7,7 @@ import { pages } from '@pagespace/db/schema/core';
 import { addAgentToDrive, listAgentDrives } from '@pagespace/lib/services/drive-agent-service';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -91,7 +92,7 @@ export async function POST(
     }
 
     const result = await addAgentToDrive({
-      actingUserId: userId,
+      actor: actorFromAuth(auth),
       agentPageId: agentId,
       driveId: parsed.data.driveId,
       includeContext: parsed.data.includeContext,

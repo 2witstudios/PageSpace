@@ -28,7 +28,7 @@ vi.mock('@/lib/auth', () => ({
     auth?.tokenType === 'mcp' && (auth.allowedDriveIds?.length ?? 0) > 0,
   canPrincipalEditPage: vi.fn(async (auth: { userId: string }, pageId: string) => {
     const { canUserEditPage } = await import('@pagespace/lib/permissions/permissions');
-    return canUserEditPage(auth.userId, pageId);
+    return canUserEditPage(auth.userId as never, pageId);
   }),
 }));
 
@@ -404,7 +404,7 @@ describe('POST /api/ai/page-agents/create', () => {
 
       expect(response.status).toBe(403);
       expect(body.error).toContain('Only drive owners');
-      expect(getAppDriveMembership).toHaveBeenCalledWith('token_123', mockDriveId);
+      expect(getAppDriveMembership).toHaveBeenCalledWith(expect.objectContaining({ userId: expect.any(String) }), 'token_123', mockDriveId);
     });
 
     // role === null means INHERIT: the key acts as its owner, so root creation

@@ -83,6 +83,7 @@ vi.mock('@pagespace/lib/permissions/permissions', () => ({
   isUserDriveMember: mockIsUserDriveMember,
 }));
 vi.mock('../actor-permissions', () => ({
+  toolActor: (ctx: { userId: string; accessActor?: unknown }) => ctx.accessActor ?? { via: 'credential', userId: ctx.userId, authentication: null },
   canActorEditPage: mockCanActorEditPage,
   canActorManageDrive: mockCanActorManageDrive,
   driveDeniedByAppToken: mockDriveDeniedByAppToken,
@@ -95,11 +96,12 @@ vi.mock('../../core/timestamp-utils', () => ({
 }));
 
 import { triggerTools } from '../trigger-tools';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 type TR = { success: boolean; error?: string; [key: string]: unknown };
 
 function ctx(overrides: Record<string, unknown> = {}) {
-  return { toolCallId: '1', messages: [], experimental_context: { userId: 'user-1', timezone: 'UTC', ...overrides } };
+  return { toolCallId: '1', messages: [], experimental_context: { userId: 'user-1', accessActor: credentialActor('user-1', null), timezone: 'UTC', ...overrides } };
 }
 
 const TRIGGER_AT = '2026-07-01T09:00:00Z';
@@ -185,7 +187,7 @@ describe('triggerTools.set_calendar_trigger', () => {
       ctx(),
     ) as unknown as TR;
     expect(result.success).toBe(true);
-    expect(mockIsUserDriveMember).toHaveBeenCalledWith('user-1', 'drive-1');
+    expect(mockIsUserDriveMember).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1' }), 'drive-1');
     expect(mockValidateCalendarAgentTrigger).toHaveBeenCalled();
   });
 

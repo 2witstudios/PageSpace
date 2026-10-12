@@ -2,6 +2,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { z } from 'zod';
 
 // Mock database and dependencies
+// Org sign-in policy (SEC-2/3) admits every actor here; tests that exercise a refusal override it.
+vi.mock('@pagespace/lib/permissions/actor-authentication', () => ({
+  checkActorResourceAuthentication: vi.fn(async () => ({ allowed: true })),
+  checkActorDriveAuthentication: vi.fn(async () => ({ allowed: true })),
+  filterDrivesForActor: vi.fn(async (_actor: unknown, ids: readonly string[]) => new Set(ids)),
+  filterResourcesForActor: vi.fn(async (_actor: unknown, ids: readonly string[]) => new Set(ids)),
+  explainOrgAuthenticationDenial: vi.fn(async () => null),
+}));
 vi.mock('@pagespace/db/db', () => ({
   db: {
     select: vi.fn().mockReturnThis(),
@@ -104,6 +112,7 @@ import type { ToolExecutionContext } from '../../core/types';
 import { checkSubTasksComplete } from '@/lib/tasks/completion-guard';
 import { syncTaskDueDateTrigger } from '@/lib/workflows/task-trigger-helpers';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const mockDb = vi.mocked(db);
 const mockCanUserEditPage = vi.mocked(canUserEditPage);
@@ -146,7 +155,7 @@ describe('task-management-tools', () => {
     it('rejects when taskId is missing, pointing callers to create_task', async () => {
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       await expect(
@@ -162,7 +171,7 @@ describe('task-management-tools', () => {
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       await expect(
@@ -190,7 +199,7 @@ describe('task-management-tools', () => {
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       await expect(
@@ -210,7 +219,7 @@ describe('task-management-tools', () => {
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       await expect(
@@ -235,7 +244,7 @@ describe('task-management-tools', () => {
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       await expect(
@@ -259,7 +268,7 @@ describe('task-management-tools', () => {
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       await expect(
@@ -294,7 +303,7 @@ describe('task-management-tools', () => {
 
         const context = {
           toolCallId: '1', messages: [],
-          experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+          experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
         };
 
         const result = await taskManagementTools.update_task.execute!(
@@ -351,7 +360,7 @@ describe('task-management-tools', () => {
 
         const context = {
           toolCallId: '1', messages: [],
-          experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+          experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
         };
 
         const result = await taskManagementTools.update_task.execute!(
@@ -428,7 +437,7 @@ describe('task-management-tools', () => {
 
         const context = {
           toolCallId: '1', messages: [],
-          experimental_context: { userId: 'user-123', timezone } as ToolExecutionContext,
+          experimental_context: { userId: 'user-123', accessActor: credentialActor('user-123', null), timezone } as ToolExecutionContext,
         };
 
         await taskManagementTools.update_task.execute!({ taskId: 'task-1', dueDate }, context);
@@ -504,7 +513,7 @@ describe('task-management-tools', () => {
 
         const context = {
           toolCallId: '1', messages: [],
-          experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+          experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
         };
 
         await taskManagementTools.update_task.execute!(
@@ -566,7 +575,7 @@ describe('task-management-tools', () => {
 
         const context = {
           toolCallId: '1', messages: [],
-          experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+          experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
         };
 
         await taskManagementTools.update_task.execute!(

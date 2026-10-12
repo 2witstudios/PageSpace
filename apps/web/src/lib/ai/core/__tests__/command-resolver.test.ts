@@ -46,6 +46,7 @@ import {
   isUserDriveMember,
 } from '@pagespace/lib/permissions/permissions';
 import { planCommandExecutions } from '../command-resolver';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const mockCommandsFindFirst = db.query.commands.findFirst as unknown as Mock;
 const mockCommandsFindMany = db.query.commands.findMany as unknown as Mock;
@@ -54,7 +55,9 @@ const mockCanUserViewPage = vi.mocked(canUserViewPage);
 const mockIsUserDriveMember = vi.mocked(isUserDriveMember);
 const mockBatchPermissions = vi.mocked(getBatchPagePermissions);
 
-const SENDER = 'usr9zmbrgj3atz4a98xxat96';
+const SENDER_ID = 'usr9zmbrgj3atz4a98xxat96';
+// The sender's credential: command usability is asked of it (D-OW-45).
+const SENDER = credentialActor(SENDER_ID, null);
 const CMD_ID = 'tz4a98xxat96iws9zmbrgj3a';
 const ENTRY_PAGE_ID = 'pge9zmbrgj3atz4a98xxat96';
 
@@ -63,7 +66,7 @@ const tokenContent = (label = 'release-checklist', id = CMD_ID) => `/[${label}](
 function personalCommandRow(overrides: Record<string, unknown> = {}) {
   return {
     id: CMD_ID,
-    userId: SENDER,
+    userId: SENDER_ID,
     driveId: null,
     trigger: 'release-checklist',
     description: 'Run the release checklist.',
@@ -139,7 +142,7 @@ describe('planCommandExecutions', () => {
     );
     const [plan] = await planCommandExecutions(tokenContent(), SENDER);
     expect(plan).toMatchObject({ kind: 'skip', reason: 'not_found' });
-    expect(mockIsUserDriveMember).toHaveBeenCalledWith(SENDER, 'drv9zmbrgj3atz4a98xxat96');
+    expect(mockIsUserDriveMember).toHaveBeenCalledWith(expect.objectContaining({ userId: SENDER_ID }), 'drv9zmbrgj3atz4a98xxat96');
   });
 
   it('skips with disabled for a usable but disabled command', async () => {
@@ -161,7 +164,7 @@ describe('planCommandExecutions', () => {
     mockCommandsFindFirst.mockResolvedValue(personalCommandRow());
     const [plan] = await planCommandExecutions(tokenContent(), SENDER);
     expect(plan).toMatchObject({ kind: 'skip', reason: 'no_access' });
-    expect(mockCanUserViewPage).toHaveBeenCalledWith(SENDER, ENTRY_PAGE_ID);
+    expect(mockCanUserViewPage).toHaveBeenCalledWith(expect.objectContaining({ userId: SENDER_ID }), ENTRY_PAGE_ID);
   });
 
   it('injects a personal command: serialized entry page + viewable children manifest', async () => {
@@ -170,7 +173,7 @@ describe('planCommandExecutions', () => {
       { id: 'child1aaaaaaaaaaaaaaaaaa', title: 'Rollback Plan', type: 'DOCUMENT' },
       { id: 'child2aaaaaaaaaaaaaaaaaa', title: 'Secret Notes', type: 'DOCUMENT' },
     ]);
-    mockCanUserViewPage.mockImplementation(async (_userId: string, pageId: string) => {
+    mockCanUserViewPage.mockImplementation(async (_actor: unknown, pageId: string) => {
       return pageId !== 'child2aaaaaaaaaaaaaaaaaa';
     });
 
@@ -335,7 +338,7 @@ describe('planCommandExecutions', () => {
 
     const personalListRow = (trigger: string) => ({
       id: `user-${trigger}`,
-      userId: SENDER,
+      userId: SENDER_ID,
       driveId: null,
       trigger,
       description: `Personal ${trigger}`,
@@ -373,7 +376,7 @@ describe('planCommandExecutions', () => {
       expect(section).toContain('Personal release-checklist');
       expect(section).toContain('/standup');
       expect(section).toContain('Drive standup');
-      expect(mockIsUserDriveMember).toHaveBeenCalledWith(SENDER, DRIVE_ID);
+      expect(mockIsUserDriveMember).toHaveBeenCalledWith(expect.objectContaining({ userId: SENDER_ID }), DRIVE_ID);
     });
 
     it('lists only builtins + personal commands when there is no drive context', async () => {

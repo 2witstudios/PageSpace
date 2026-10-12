@@ -169,7 +169,7 @@ describe('GET /api/commands', () => {
     const response = await GET(getRequest());
 
     expect(response.status).toBe(200);
-    expect(getMemberDriveIds).toHaveBeenCalledWith(USER_ID, { includeTrashed: false });
+    expect(getMemberDriveIds).toHaveBeenCalledWith(expect.objectContaining({ userId: USER_ID }), { includeTrashed: false });
     expect(mockedDb.select).not.toHaveBeenCalled();
     expect((await response.json()).commands[0]).toMatchObject({ scope: 'drive', driveId: 'drive_open_org' });
   });
@@ -196,7 +196,7 @@ describe('GET /api/commands', () => {
     // A GUEST row (redeemed page share link) does not make a drive's commands the caller's:
     // the drive set is getMemberDriveIds, which reads a GUEST row as no membership
     // (member-drives.integration.test.ts proves it on real Postgres).
-    expect(getMemberDriveIds).toHaveBeenCalledWith(USER_ID, { includeTrashed: false });
+    expect(getMemberDriveIds).toHaveBeenCalledWith(expect.objectContaining({ userId: USER_ID }), { includeTrashed: false });
   });
 
   it('enriches each command with entry page title, availability, and author name', async () => {
@@ -485,8 +485,8 @@ vi.mock('@/lib/auth/principal-permissions', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/auth/principal-permissions')>();
   const permissions = await import('@pagespace/lib/permissions/permissions');
   return { ...actual,
-    canPrincipalViewPage: (auth: { userId: string }, resourceId: string) => permissions.canUserViewPage(auth.userId, resourceId),
-    isPrincipalDriveMember: (auth: { userId: string }, resourceId: string) => permissions.isUserDriveMember(auth.userId, resourceId),
-    isPrincipalDriveOwnerOrAdmin: (auth: { userId: string }, resourceId: string) => permissions.isDriveOwnerOrAdmin(auth.userId, resourceId),
+    canPrincipalViewPage: (auth: { userId: string }, resourceId: string) => permissions.canUserViewPage(auth.userId as never, resourceId),
+    isPrincipalDriveMember: (auth: { userId: string }, resourceId: string) => permissions.isUserDriveMember(auth.userId as never, resourceId),
+    isPrincipalDriveOwnerOrAdmin: (auth: { userId: string }, resourceId: string) => permissions.isDriveOwnerOrAdmin(auth.userId as never, resourceId),
   };
 });

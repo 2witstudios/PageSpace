@@ -11,6 +11,7 @@ import { creditAdmission } from '@/lib/workflows/workflow-credit-gate';
 import type { GateReason } from '@pagespace/lib/billing/credit-core';
 import { creditGatePayload } from '@/lib/subscription/credit-gate-response';
 import { automationRunOwner } from '@pagespace/lib/permissions/automation-ownership';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 const MANAGEABLE_TRIGGER_TYPE = 'cron' as const;
@@ -37,7 +38,7 @@ export async function POST(
     return NextResponse.json({ error: 'Workflow not found' }, { status: 404 });
   }
 
-  const access = await checkDriveAccess(workflow.driveId, auth.userId);
+  const access = await checkDriveAccess(workflow.driveId, actorFromAuth(auth));
   if (!access.drive) {
     return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
   }

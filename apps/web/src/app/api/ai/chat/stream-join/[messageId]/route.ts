@@ -7,6 +7,7 @@ import { parseGlobalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import { canSubscribeToStream } from '@/lib/ai/core/stream-subscription-authz';
 import { resolveStreamJoinContext } from '@/lib/ai/core/stream-join-context';
 import { acquireRemoteChannel } from '@/lib/ai/core/remote-frame-follower';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 export const dynamic = 'force-dynamic';
 
@@ -92,7 +93,7 @@ export async function GET(
   // audited 403, which would write an authz-denial row per member per assistant message
   // and bury real signal. Clients already treat a failed join as benign.
   const canSubscribe = async (): Promise<boolean> => canSubscribeToStream({
-    userId,
+    actor: actorFromAuth(authResult),
     streamOwnerId: meta.userId,
     conversationId: meta.conversationId,
   });

@@ -57,7 +57,7 @@ vi.mock('@/lib/auth', () => ({
   checkMCPPageScope: vi.fn(),
   canPrincipalViewPage: vi.fn(async (auth: { userId: string }, pageId: string) => {
     const { canUserViewPage } = await import('@pagespace/lib/permissions/permissions');
-    return canUserViewPage(auth.userId, pageId);
+    return canUserViewPage(auth.userId as never, pageId);
   }),
 }));
 
@@ -700,7 +700,7 @@ describe('POST session binding (sessionId in body)', () => {
     const response = await POST(request, createContext(mockAgentId));
     expect(response.status).toBe(200);
     expect(runtime.createConversationInSession).toHaveBeenCalledWith(
-      expect.objectContaining({ agentPageId: mockAgentId, workspaceId: 'ses-1', userId: mockUserId }),
+      expect.objectContaining({ agentPageId: mockAgentId, workspaceId: 'ses-1', actor: expect.objectContaining({ userId: mockUserId }) }),
     );
   });
 

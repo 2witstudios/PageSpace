@@ -9,7 +9,7 @@ vi.mock('@/lib/auth', () => ({
   getAllowedDriveIds: vi.fn().mockReturnValue([]),
   getPrincipalBatchPagePermissions: vi.fn(async (auth: { userId: string }, pageIds: string[]) => {
     const { getBatchPagePermissions } = await import('@pagespace/lib/permissions/permissions');
-    return getBatchPagePermissions(auth.userId, pageIds);
+    return getBatchPagePermissions(credentialActor(auth.userId, null), pageIds);
   }),
 }));
 
@@ -52,6 +52,7 @@ import { authenticateRequestWithOptions, getAllowedDriveIds } from '@/lib/auth';
 import { db } from '@pagespace/db/db';
 import { getBatchPagePermissions } from '@pagespace/lib/permissions/permissions';
 import { inArray } from '@pagespace/db/operators';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 type PermLevel = { canView: boolean; canEdit: boolean; canShare: boolean; canDelete: boolean };
 const allow: PermLevel = { canView: true, canEdit: false, canShare: false, canDelete: false };

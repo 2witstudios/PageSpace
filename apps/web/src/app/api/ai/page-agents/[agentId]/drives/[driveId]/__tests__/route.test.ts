@@ -63,7 +63,7 @@ describe('PATCH /api/ai/page-agents/[agentId]/drives/[driveId]', () => {
     expect(response.status).toBe(200);
     expect(body.member).toMatchObject({ includeContext: true });
     expect(setAgentDriveIncludeContext).toHaveBeenCalledWith({
-      actingUserId: MOCK_USER_ID,
+      actor: expect.objectContaining({ userId: MOCK_USER_ID }),
       agentPageId: MOCK_AGENT_ID,
       driveId: MOCK_DRIVE_ID,
       includeContext: true,

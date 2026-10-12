@@ -22,6 +22,7 @@ import { db } from '@pagespace/db/db';
 import { getBatchPagePermissions } from '@pagespace/lib/permissions/permissions';
 import { BUILTIN_COMMANDS } from '@pagespace/lib/commands/command-core';
 import { loadAvailableCommands } from '../available-commands';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 // Expectations derive from the registry so adding a built-in (e.g. a new
 // skill) doesn't rewrite this file — these tests are about DB-command
@@ -84,7 +85,7 @@ describe('loadAvailableCommands', () => {
   it('returns built-ins plus the personal commands when there is no drive context', async () => {
     mockFindMany.mockResolvedValueOnce([personalRow('release-checklist')]);
 
-    const { winners } = await loadAvailableCommands(USER_ID, null);
+    const { winners } = await loadAvailableCommands(credentialActor(USER_ID, null), null);
 
     expect(winners.map((w) => w.trigger).sort()).toEqual(withBuiltins('release-checklist'));
     expect(winners.find((w) => w.trigger === 'help')).toMatchObject({
@@ -105,7 +106,7 @@ describe('loadAvailableCommands', () => {
       .mockResolvedValueOnce([personalRow('mine')])
       .mockResolvedValueOnce([driveRow('ours')]);
 
-    const { winners } = await loadAvailableCommands(USER_ID, DRIVE_ID);
+    const { winners } = await loadAvailableCommands(credentialActor(USER_ID, null), DRIVE_ID);
 
     expect(winners.map((w) => w.trigger).sort()).toEqual(withBuiltins('mine', 'ours'));
     expect(winners.find((w) => w.trigger === 'ours')).toMatchObject({
@@ -124,7 +125,7 @@ describe('loadAvailableCommands', () => {
       ])
       .mockResolvedValueOnce([]);
 
-    const { winners } = await loadAvailableCommands(USER_ID, DRIVE_ID);
+    const { winners } = await loadAvailableCommands(credentialActor(USER_ID, null), DRIVE_ID);
 
     expect(winners.map((w) => w.trigger).sort()).toEqual(withBuiltins('live'));
   });
@@ -137,7 +138,7 @@ describe('loadAvailableCommands', () => {
         driveRow('moved', { entryPage: { driveId: 'other-drive', isTrashed: false } }),
       ]);
 
-    const { winners } = await loadAvailableCommands(USER_ID, DRIVE_ID);
+    const { winners } = await loadAvailableCommands(credentialActor(USER_ID, null), DRIVE_ID);
 
     expect(winners.map((w) => w.trigger).sort()).toEqual(withBuiltins('stayed'));
   });
@@ -150,19 +151,19 @@ describe('loadAvailableCommands', () => {
       denyMatching(pageIds, 'hidden')
     );
 
-    const { winners } = await loadAvailableCommands(USER_ID, DRIVE_ID);
+    const { winners } = await loadAvailableCommands(credentialActor(USER_ID, null), DRIVE_ID);
 
     expect(winners.map((w) => w.trigger).sort()).toEqual(withBuiltins('drive-visible', 'visible'));
     // ONE batched check with the requesting user's identity covers both scopes
     expect(mockBatchPermissions).toHaveBeenCalledTimes(1);
     expect(mockBatchPermissions).toHaveBeenCalledWith(
-      USER_ID,
+      expect.objectContaining({ userId: USER_ID }),
       expect.arrayContaining(['page-visible', 'page-hidden', 'page-drive-visible', 'page-drive-hidden'])
     );
   });
 
   it('skips the permission query entirely when only built-ins are available', async () => {
-    const { winners } = await loadAvailableCommands(USER_ID, null);
+    const { winners } = await loadAvailableCommands(credentialActor(USER_ID, null), null);
     expect(winners.map((w) => w.trigger).sort()).toEqual(withBuiltins());
     expect(mockBatchPermissions).not.toHaveBeenCalled();
   });
@@ -172,7 +173,7 @@ describe('loadAvailableCommands', () => {
       .mockResolvedValueOnce([personalRow('help'), personalRow('deploy')])
       .mockResolvedValueOnce([driveRow('deploy')]);
 
-    const { winners, shadowed } = await loadAvailableCommands(USER_ID, DRIVE_ID);
+    const { winners, shadowed } = await loadAvailableCommands(credentialActor(USER_ID, null), DRIVE_ID);
 
     const help = winners.find((w) => w.trigger === 'help');
     expect(help?.scope).toBe('builtin');
@@ -190,7 +191,7 @@ describe('/btw built-in surfaces through loadAvailableCommands', () => {
   it('includes btw with clientHandled for a drive-less global context', async () => {
     mockFindMany.mockResolvedValue([]);
     mockBatchPermissions.mockResolvedValue(new Map());
-    const { winners } = await loadAvailableCommands('user_1', null);
+    const { winners } = await loadAvailableCommands(credentialActor('user_1', null), null);
     const btw = winners.find((c) => c.trigger === 'btw');
     expect(btw).toBeDefined();
     expect(btw?.clientHandled).toBe(true);
@@ -200,7 +201,7 @@ describe('/btw built-in surfaces through loadAvailableCommands', () => {
   it('includes btw with clientHandled inside a drive context too', async () => {
     mockFindMany.mockResolvedValue([]);
     mockBatchPermissions.mockResolvedValue(new Map());
-    const { winners } = await loadAvailableCommands('user_1', 'drive_1');
+    const { winners } = await loadAvailableCommands(credentialActor('user_1', null), 'drive_1');
     expect(winners.find((c) => c.trigger === 'btw')?.clientHandled).toBe(true);
   });
 });

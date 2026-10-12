@@ -11,6 +11,7 @@ import {
 import { broadcastAiConversationAdded, broadcastAiConversationRenamed, broadcastAiConversationDeleted } from '@/lib/websocket/socket-utils';
 import { resolveTriggeredBy } from '@/lib/websocket/broadcast-triggered-by';
 import { maskIdentifier } from '@/lib/logging/mask';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 // Auth options: PATCH and DELETE are write operations requiring CSRF protection
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -267,7 +268,7 @@ export async function DELETE(
       const outcome = await expelConversationFromSession({
         conversationId,
         workspaceId,
-        actingUserId: auth.userId,
+        actor: actorFromAuth(auth),
       });
 
       if (outcome === 'refused') {
@@ -286,7 +287,7 @@ export async function DELETE(
     // WRITE. A thread with no workspace is exactly what
     // `claimConversationInSession` admits, so a conditional call could never
     // reach the branch that needed it most.
-    await expelAfterDelete({ conversationId, actingUserId: auth.userId });
+    await expelAfterDelete({ conversationId, actor: actorFromAuth(auth) });
 
     // Audit log the deletion for security and compliance
     await conversationRepository.logConversationDeletion({

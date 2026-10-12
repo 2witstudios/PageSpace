@@ -189,6 +189,8 @@ export async function POST(request: Request) {
       {
         offerSdp: sdp,
         userId,
+        // The call runs as THIS credential on every bridge hop (SEC-2/3).
+        authentication: auth.authentication ?? null,
         ...(conversationId === undefined ? {} : { conversationId }),
         seed: binding.seed,
         instructions: binding.instructions,

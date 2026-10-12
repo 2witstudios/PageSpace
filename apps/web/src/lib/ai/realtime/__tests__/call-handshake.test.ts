@@ -113,6 +113,7 @@ function harness(
 const run = (deps: HandshakeDeps, conversationId?: string) =>
   runCallHandshake(deps, {
     offerSdp: OFFER_SDP,
+    authentication: null,
     userId: 'u1',
     ...(conversationId === undefined ? {} : { conversationId }),
   });
@@ -216,6 +217,7 @@ describe('runCallHandshake — the handoff to the realtime server', () => {
       callId: CALL_ID,
       secret: SECRET,
       userId: 'u1',
+      authentication: null,
       conversationId: 'conv1',
       tools: TOOLS,
       // The realtime server meters the call itself and can derive neither:
@@ -247,6 +249,7 @@ describe('runCallHandshake — the handoff to the realtime server', () => {
 
     await runCallHandshake(deps, {
       offerSdp: OFFER_SDP,
+      authentication: null,
       userId: 'u1',
       conversationId: 'conv1',
       seed,
@@ -411,6 +414,7 @@ describe('runCallHandshake — the bound assistant', () => {
 
     await runCallHandshake(deps, {
       offerSdp: OFFER_SDP,
+      authentication: null,
       userId: 'u1',
       conversationId: 'conv1',
       instructions: 'You are speaking out loud.',
@@ -439,7 +443,7 @@ describe('runCallHandshake — the drive the call spends in', () => {
   it('SPEND-1 (partial) given the bound conversation\'s drive, should carry it to the realtime server that meters the call', async () => {
     const { deps, calls } = harness();
 
-    await runCallHandshake(deps, { offerSdp: OFFER_SDP, userId: 'u1', conversationId: 'conv1', spendDriveId: 'drive-1' });
+    await runCallHandshake(deps, { offerSdp: OFFER_SDP, authentication: null, userId: 'u1', conversationId: 'conv1', spendDriveId: 'drive-1' });
 
     const handoff = calls.find((c) => c.url.includes(VOICE_BRIDGE_ROUTES.attach));
     const payload = JSON.parse(String(handoff?.init.body)) as Record<string, unknown>;

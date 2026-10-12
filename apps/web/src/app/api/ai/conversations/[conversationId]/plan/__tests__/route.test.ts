@@ -242,7 +242,7 @@ describe('GET /api/ai/conversations/[conversationId]/plan', () => {
     // passed only the owner could not express "shared AND page access" at all,
     // which is how it came to answer differently from its four siblings.
     expect(canAccessConversationMock).toHaveBeenCalledWith(
-      COLLABORATOR,
+      expect.objectContaining({ userId: COLLABORATOR }),
       expect.objectContaining({
         userId: OWNER,
         isShared: true,

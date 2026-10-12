@@ -2,6 +2,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { assert } from './riteway';
 
 // Mock database and dependencies
+// Org sign-in policy (SEC-2/3) admits every actor here; tests that exercise a refusal override it.
+vi.mock('@pagespace/lib/permissions/actor-authentication', () => ({
+  checkActorResourceAuthentication: vi.fn(async () => ({ allowed: true })),
+  checkActorDriveAuthentication: vi.fn(async () => ({ allowed: true })),
+  filterDrivesForActor: vi.fn(async (_actor: unknown, ids: readonly string[]) => new Set(ids)),
+  filterResourcesForActor: vi.fn(async (_actor: unknown, ids: readonly string[]) => new Set(ids)),
+  explainOrgAuthenticationDenial: vi.fn(async () => null),
+}));
 vi.mock('@pagespace/db/db', () => {
   const dbMock: Record<string, unknown> = {
     select: vi.fn().mockReturnThis(),
@@ -146,6 +154,7 @@ import { getUserAccessLevel, getUserAccessiblePagesInDriveWithDetails, getUserDr
 import { checkDriveAccess } from '@pagespace/lib/services/drive-member-service';
 import { fetchCachedImagePreset } from '../../core/image-preset-fetch';
 import type { ToolExecutionContext } from '../../core/types';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const mockDb = vi.mocked(db);
 const mockGetUserAccessLevel = vi.mocked(getUserAccessLevel);
@@ -168,7 +177,7 @@ const sheetTab = { id: 'tab-1', tabIndex: 0, name: 'Sheet1', rowCount: 500, colu
 const createAuthContext = (userId = 'user-123') => ({
   toolCallId: '1',
   messages: [],
-  experimental_context: { userId } as ToolExecutionContext,
+  experimental_context: { userId, accessActor: credentialActor(userId, null) } as ToolExecutionContext,
 });
 
 // Helper for mock access levels - getUserAccessLevel returns an object with permission booleans
@@ -224,7 +233,7 @@ describe('page-read-tools', () => {
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       const result = await pageReadTools.list_pages.execute!(
@@ -241,7 +250,7 @@ describe('page-read-tools', () => {
         toolCallId: '1',
         messages: [],
         experimental_context: {
-          userId: 'user-123',
+          userId: 'user-123', accessActor: credentialActor('user-123', null),
           locationContext: { currentDrive: { id: driveId, name: 'Work', slug: 'work' } },
         } as ToolExecutionContext,
       });
@@ -1126,7 +1135,7 @@ describe('page-read-tools', () => {
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'member-user' } as ToolExecutionContext,
+        experimental_context: { userId: 'member-user' , accessActor: credentialActor('member-user', null)} as ToolExecutionContext,
       };
 
       await expect(
@@ -1145,7 +1154,7 @@ describe('page-read-tools', () => {
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'owner-user' } as ToolExecutionContext,
+        experimental_context: { userId: 'owner-user' , accessActor: credentialActor('owner-user', null)} as ToolExecutionContext,
       };
 
       const result = await pageReadTools.list_trash.execute!(
@@ -1179,7 +1188,7 @@ describe('page-read-tools', () => {
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       await expect(
@@ -1755,7 +1764,7 @@ describe('page-read-tools', () => {
         toolCallId: '1',
         messages: [],
         experimental_context: {
-          userId,
+          userId, accessActor: credentialActor(userId, null),
           modelCapabilities: { hasVision: true, hasTools: true, model: 'gpt-5.4', provider: 'openai' },
         } as ToolExecutionContext,
       });

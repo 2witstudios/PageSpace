@@ -46,7 +46,7 @@ vi.mock('@/lib/auth', () => ({
   checkMCPPageScope: vi.fn(),
   canPrincipalEditPage: vi.fn(async (auth: { userId: string }, pageId: string) => {
     const { canUserEditPage } = await import('@pagespace/lib/permissions/permissions');
-    return canUserEditPage(auth.userId, pageId);
+    return canUserEditPage(auth.userId as never, pageId);
   }),
 }));
 
@@ -491,7 +491,7 @@ describe('DELETE /api/ai/page-agents/[agentId]/conversations/[conversationId]', 
 
       expect(expelAfterDelete).toHaveBeenCalledWith({
         conversationId: mockConversationId,
-        actingUserId: mockUserId,
+        actor: expect.objectContaining({ userId: mockUserId }),
       });
       expect(vi.mocked(expelAfterDelete).mock.invocationCallOrder[0]).toBeGreaterThan(
         vi.mocked(conversationRepository.softDeleteConversation).mock.invocationCallOrder[0],
@@ -514,7 +514,7 @@ describe('DELETE /api/ai/page-agents/[agentId]/conversations/[conversationId]', 
       expect(expelConversationFromSession).not.toHaveBeenCalled();
       expect(expelAfterDelete).toHaveBeenCalledWith({
         conversationId: mockConversationId,
-        actingUserId: mockUserId,
+        actor: expect.objectContaining({ userId: mockUserId }),
       });
       expect(vi.mocked(expelAfterDelete).mock.invocationCallOrder[0]).toBeGreaterThan(
         vi.mocked(conversationRepository.softDeleteConversation).mock.invocationCallOrder[0],
@@ -554,7 +554,7 @@ describe('DELETE /api/ai/page-agents/[agentId]/conversations/[conversationId]', 
       expect(expelConversationFromSession).toHaveBeenCalledWith({
         conversationId: mockConversationId,
         workspaceId: 'ses_1',
-        actingUserId: mockUserId,
+        actor: expect.objectContaining({ userId: mockUserId }),
       });
       expect(conversationRepository.softDeleteConversation).toHaveBeenCalledWith(mockAgentId, mockConversationId);
     });
