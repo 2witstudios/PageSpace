@@ -168,6 +168,12 @@ vi.mock('@/lib/repositories/conversation-repository', () => ({
     createConversation: vi.fn().mockResolvedValue(undefined),
   },
 }));
+// The pro-model gate for the funder's tier (WAL-8, POL-8). Default: entitled.
+const modelEntitlement = vi.hoisted(() => vi.fn(async (_input: { userId: string; provider: string; model: string; spend: unknown }) => ({ allowed: true } as { allowed: true } | { allowed: false; reason: 'provider_admin_only' | 'subscription_required' })));
+vi.mock('@/lib/ai/core/model-entitlement', () => ({
+  modelEntitlement,
+  MODEL_ENTITLEMENT_MESSAGES: { provider_admin_only: 'admin only', subscription_required: 'This model is available on paid plans, and whoever pays for this run is not on one.' },
+}));
 vi.mock('../../core/provider-factory', () => ({
   createAIProvider: vi.fn(),
   isProviderError: vi.fn(() => false),
@@ -609,6 +615,21 @@ describe('agent-communication-tools', () => {
             success: true,
           })
         );
+      });
+
+      it('POL-8 (partial) WAL-8 (partial) the pro-model gate takes the funder tier on the consult\'s spend, and refusal runs no model', async () => {
+        const spend = { kind: 'drive' as const, driveId: 'drive-1', chosen: null };
+        modelEntitlement.mockResolvedValueOnce({ allowed: false, reason: 'subscription_required' });
+        vi.mocked(AIMonitoring.trackUsage).mockClear();
+
+        const result = await executeAskAgent(
+          { agentPath: '/test/agent', agentId: 'agent-1', question: 'Test question' },
+          { toolCallId: '1', messages: [], experimental_context: { userId: 'user-123', creditSpend: { spend } } as ToolExecutionContext },
+        );
+
+        expect(modelEntitlement).toHaveBeenCalledWith({ userId: 'user-123', provider: 'openai', model: 'openai/gpt-5.4-nano', spend });
+        expect(JSON.stringify(result)).toContain('paid plans');
+        expect(AIMonitoring.trackUsage).not.toHaveBeenCalled();
       });
 
       it('should set parentAgentId from calling agent location context', async () => {

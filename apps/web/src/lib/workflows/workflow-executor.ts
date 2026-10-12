@@ -3,6 +3,7 @@ import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
 import { mergeToolSets } from '@/lib/ai/core/tool-utils';
 import { createId } from '@paralleldrive/cuid2';
 import { createAIProvider, isProviderError, type ProviderRequest } from '@/lib/ai/core/provider-factory';
+import { MODEL_ENTITLEMENT_MESSAGES, modelEntitlement } from '@/lib/ai/core/model-entitlement';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
 import { automationRunUnreserved, automationSpend } from '@pagespace/lib/billing/spend-target';
 import { ORGS_ENABLED } from '@pagespace/lib/organizations/orgs-enabled';
@@ -646,6 +647,18 @@ async function runExecution(
 
     if (isProviderError(providerResult)) {
       return { success: false, durationMs: Date.now() - startTime, error: `AI provider error: ${providerResult.error}` };
+    }
+
+    // The pro-model gate, for the tier of whoever funds this run (WAL-8, POL-8): the drive wallet's root owner for an
+    // automation, the presser's own for a manual Run that spends their credits. Keyed on the model that will run.
+    const entitlement = await modelEntitlement({
+      userId: input.creditSpend.userId ?? input.createdBy,
+      provider: providerResult.provider,
+      model: providerResult.modelName,
+      spend: input.creditSpend.spend,
+    });
+    if (!entitlement.allowed) {
+      return { success: false, durationMs: Date.now() - startTime, error: MODEL_ENTITLEMENT_MESSAGES[entitlement.reason] };
     }
 
     // 6. Filter tools based on agent's enabled tools

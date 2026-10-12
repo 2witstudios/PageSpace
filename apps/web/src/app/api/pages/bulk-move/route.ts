@@ -101,7 +101,9 @@ export async function POST(request: Request) {
     });
 
     if (!result.success) {
-      return NextResponse.json({ error: result.message }, { status: result.status });
+      // POL-8: an org-policy refusal names its policy, as every org refusal does.
+      const orgPolicy = result.code === 'ORG_POLICY' ? { code: 'org_policy', policy: result.policy } : {};
+      return NextResponse.json({ error: result.message, ...orgPolicy }, { status: result.status });
     }
 
     // Broadcast events

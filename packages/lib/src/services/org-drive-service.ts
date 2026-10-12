@@ -15,7 +15,12 @@
 
 import { db } from '@pagespace/db/db';
 import { and, eq, like, sql } from '@pagespace/db/operators';
-import { drives, type OrgDriveVisibility } from '@pagespace/db/schema/core';
+import { drives, pages, type OrgDriveVisibility } from '@pagespace/db/schema/core';
+import { PageType } from '../utils/enums';
+import { getOrgPolicies } from '../organizations/policy-reader';
+import type { OrgPolicies } from '../organizations/policies-core';
+import { agentModelSaveDecision } from '../organizations/org-action-decisions';
+import type { PolicyRefusal } from '../organizations/sharing-decisions';
 import { organizations, type OrgRole } from '@pagespace/db/schema/organizations';
 import { slugify } from '../utils/utils';
 import { resolveUniqueSlug } from './drive-guards';
@@ -79,6 +84,7 @@ export type MoveDriveResult =
   | { ok: true; drive: DriveRow; orgId: string; storageReattribution: StorageReattribution }
   | OrgDriveRefusal
   | OrgLapsedRefusal
+  | PolicyRefusal
   | DriveNotFound;
 
 /** A lapsed org (SEAT-9) refuses a new drive and a move in; moving a drive OUT stays open. */
@@ -129,6 +135,19 @@ async function openFloorCheck(tx: OrgDriveTx, input: { driveId: string | null; o
   return refusal ? { ok: false, code: 'POLICY_OPEN_ROLE_FLOOR', status: 403, message: refusal.message } : null;
 }
 
+/** POL-8: the first agent page in the drive whose stored provider/model the org does not allow, as its refusal. */
+async function agentModelMoveInRefusal(tx: OrgDriveTx, driveId: string, policies: OrgPolicies): Promise<PolicyRefusal | null> {
+  const agents = await tx
+    .select({ aiProvider: pages.aiProvider, aiModel: pages.aiModel })
+    .from(pages)
+    .where(and(eq(pages.driveId, driveId), eq(pages.type, PageType.AI_CHAT)));
+  for (const agent of agents) {
+    const decision = agentModelSaveDecision(policies, { provider: agent.aiProvider, modelId: agent.aiModel });
+    if (!decision.ok) return decision;
+  }
+  return null;
+}
+
 export async function moveDriveToOrg(
   actorId: string,
   driveId: string,
@@ -155,6 +174,10 @@ export async function moveDriveToOrg(
     // An unchosen visibility is the column default, Open.
     const floor = await openFloorCheck(tx, { driveId, orgId: input.orgId, visibilityAfter: input.orgVisibility ?? 'OPEN' });
     if (floor) return floor;
+    // POL-8: the drive's agent pages bring their stored provider/model into the org, which is a save there: refused
+    // when the org does not allow one, as moving or copying a page in is. Read under the org row lock taken above.
+    const modelRefusal = await agentModelMoveInRefusal(tx, driveId, await getOrgPolicies(input.orgId, tx));
+    if (modelRefusal) return modelRefusal;
 
     const slug = await freeOrgSlug(tx, input.orgId, drive.slug);
     const [moved] = await tx

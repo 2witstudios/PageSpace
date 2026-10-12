@@ -54,7 +54,8 @@ async function respond(
   operation: 'org_move_in' | 'org_move_out'
 ) {
   if (!result.ok) {
-    return NextResponse.json({ error: result.message, code: result.code }, { status: result.status });
+    // An org-policy refusal (POL-8) names its policy, as every org refusal does.
+    return NextResponse.json({ error: result.message, code: result.code, ...('policy' in result ? { policy: result.policy } : {}) }, { status: result.status });
   }
 
   auditRequest(request, {

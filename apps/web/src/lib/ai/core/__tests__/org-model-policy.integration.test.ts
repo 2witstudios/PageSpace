@@ -7,9 +7,12 @@
  *     applyPageMutation) and an agent page created with a chosen model are refused, and nothing is written;
  *   - offering one: the model list a drive's picker gets is the org's allowlist;
  *   - reading org content with one: a person's background model (memory discovery, pulse) leaves out the drives,
- *     and the pages in them, whose org does not allow it.
- * Only the model network call (`generateText`) and page-version blob storage are stubbed; every policy, drive, page
- * and user row is real. Every org, drive and user row is deleted; the pool is ended.
+ *     and the pages in them, whose org does not allow it;
+ *   - bringing one in: moving an agent page, or a whole drive, into an org that does not allow its model is refused;
+ * Only the model network call (`generateText`), page-version blob storage and the request's session are stubbed;
+ * every policy, drive, page and user row is real. Every row is deleted; the pool is ended. The payer-aware tier the
+ * shared pro-model gate (model-entitlement.ts) asks for is proven against real wallets in lib
+ * (billing/__tests__/entitlement-tier.integration.test.ts), where organizations can be switched on.
  */
 import { describe, it, expect, beforeAll, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import { createId } from '@paralleldrive/cuid2';
@@ -19,7 +22,7 @@ import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
 import { users } from '@pagespace/db/schema/auth';
 import { drives, pages } from '@pagespace/db/schema/core';
-import { organizations, orgMembers } from '@pagespace/db/schema/organizations';
+import { organizations, orgMembers, orgSubscriptions } from '@pagespace/db/schema/organizations';
 
 vi.mock('@pagespace/lib/services/page-version-service', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@pagespace/lib/services/page-version-service')>()),
@@ -38,6 +41,8 @@ vi.mock('@/lib/auth', async (importOriginal) => ({
   authenticateRequestWithOptions: vi.fn(async () => ({ userId: authed.userId, tokenVersion: 0, tokenType: 'session', sessionId: 's', role: 'user', adminRoleVersion: 0 })),
   isAuthError: vi.fn(() => false),
 }));
+// Organizations are live for this app's own reads (the move-in route answers); the lib dist reads its own constant.
+vi.mock('@pagespace/lib/organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 vi.mock('@/lib/websocket', async (importOriginal) => ({ ...(await importOriginal<typeof import('@/lib/websocket')>()), broadcastPageEvent: vi.fn(async () => undefined) }));
 
 import { createAIProvider, isProviderError } from '../provider-factory';
@@ -47,6 +52,8 @@ import { applyPageMutation, OrgModelPolicyError } from '@/services/api/page-muta
 import { pageService } from '@/services/api/page-service';
 import { generateTranscriptSummary } from '@/lib/integrations/zoom/generate-summary';
 import { POST as bulkCopy } from '@/app/api/pages/bulk-copy/route';
+import { PUT as moveDriveIn } from '@/app/api/drives/[driveId]/org/route';
+import { movePagesToDrive } from '@/services/api/page-cross-drive-move-service';
 
 const created = { userIds: [] as string[], driveIds: [] as string[], orgIds: [] as string[] };
 let dbAvailable = false;
@@ -72,6 +79,7 @@ const saveModel = (pair: { provider: string; model: string }) => applyPageMutati
 async function cleanup() {
   if (created.driveIds.length) await db.delete(drives).where(inArray(drives.id, created.driveIds));
   if (created.orgIds.length) {
+    await db.delete(orgSubscriptions).where(inArray(orgSubscriptions.orgId, created.orgIds));
     await db.delete(orgMembers).where(inArray(orgMembers.orgId, created.orgIds));
     await db.delete(organizations).where(inArray(organizations.id, created.orgIds));
   }
@@ -100,6 +108,7 @@ beforeEach(async () => {
   created.orgIds.push(orgId);
   await db.insert(organizations).values({ id: orgId, name: 'Northwind', slug: `nw-${createId()}`, ownerId: owner.id, policies: { modelAllowlist: [ALLOWED.model] } });
   await db.insert(orgMembers).values({ orgId, userId: owner.id, role: 'OWNER' });
+  await factories.createOrgSubscription(orgId, { status: 'active' });
   const orgDrive = (await factories.createDrive(owner.id, { orgId, orgVisibility: 'RESTRICTED' })).id;
   const personalDrive = (await factories.createDrive(owner.id)).id;
   created.driveIds.push(orgDrive, personalDrive);
@@ -121,7 +130,7 @@ afterAll(async () => {
   await pool.end();
 });
 
-describe('POL-8 (partial) the org model and provider allowlists govern every model use in its drives', () => {
+describe('POL-8 the org model and provider allowlists govern every model use in its drives: running, saving, copying, moving in, offering and reading', () => {
   it('running: a model or provider the drive\'s org does not allow is refused 403 naming the policy; an allowed one runs; no drive, or a personal drive, is never restricted', async () => {
     const run = (driveId: string | null, pair: { provider: string; model: string }) =>
       createAIProvider(w.owner, { selectedProvider: pair.provider, selectedModel: pair.model }, { driveId });
@@ -194,6 +203,46 @@ describe('POL-8 (partial) the org model and provider allowlists govern every mod
     await setPolicies({ modelAllowlist: [ALLOWED.model, REFUSED.model] });
     expect((await copy()).status).toBe(200);
     expect(await orgPages()).toBe(before + 1);
+  });
+
+  it('bringing in: moving an agent page into an org drive that does not allow its model is refused 403 naming the policy, and nothing moves', async () => {
+    const outsideAgent = (await factories.createPage(w.personalDrive, { type: 'AI_CHAT', aiProvider: REFUSED.provider, aiModel: REFUSED.model })).id;
+    const move = () => movePagesToDrive({
+      pageIds: [outsideAgent],
+      targetDriveId: w.orgDrive,
+      targetParentId: null,
+      userId: w.owner,
+      authorize: { isDriveInScope: async () => true, canAdministerDrive: async () => true, canEditPage: async () => true },
+    });
+    const driveOf = async () => (await db.select({ driveId: pages.driveId }).from(pages).where(eq(pages.id, outsideAgent)))[0]?.driveId;
+
+    expect(await move()).toMatchObject({ success: false, code: 'ORG_POLICY', status: 403, policy: 'modelAllowlist' });
+    expect(await driveOf()).toBe(w.personalDrive);
+
+    await setPolicies({ modelAllowlist: [ALLOWED.model, REFUSED.model] });
+    expect(await move()).toMatchObject({ success: true });
+    expect(await driveOf()).toBe(w.orgDrive);
+  });
+
+  it('bringing in: moving a drive whose agent the org does not allow into the org is refused 403 naming the policy, and the drive stays out', async () => {
+    const outsideDrive = (await factories.createDrive(w.owner)).id;
+    created.driveIds.push(outsideDrive);
+    await factories.createPage(outsideDrive, { type: 'AI_CHAT', aiProvider: REFUSED.provider, aiModel: REFUSED.model });
+    const moveIn = () => moveDriveIn(new Request(`http://localhost/api/drives/${outsideDrive}/org`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ orgId: w.orgId }),
+    }), { params: Promise.resolve({ driveId: outsideDrive }) });
+    const orgOf = async () => (await db.select({ orgId: drives.orgId }).from(drives).where(eq(drives.id, outsideDrive)))[0]?.orgId;
+
+    const refused = await moveIn();
+    expect(refused.status).toBe(403);
+    expect(await refused.json()).toMatchObject({ code: 'org_policy', policy: 'modelAllowlist' });
+    expect(await orgOf()).toBeNull();
+
+    await setPolicies({ modelAllowlist: [ALLOWED.model, REFUSED.model] });
+    expect((await moveIn()).status).toBe(200);
+    expect(await orgOf()).toBe(w.orgId);
   });
 
   it('offering: the model list an org drive offers is its allowlist; a personal drive offers the whole catalog (null)', async () => {
