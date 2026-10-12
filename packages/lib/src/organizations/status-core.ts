@@ -1,41 +1,21 @@
 /**
- * Org billing status — the pure decisions behind SEAT-9 (lapse) and the banner data
- * SEAT-6 allows each role to see. No IO: `status.ts` reads the stored subscription
- * and calls these.
- *
- * An org is in exactly one of four states:
- *   - `active`    paid and current;
- *   - `trialing`  Stripe reports a trial on the subscription. The app never starts one
- *                 ([D-OW-30]: no org trial); a subscription made in the Stripe dashboard
- *                 can still carry one, and it is read as Stripe states it;
- *   - `past_due`  a payment failed and Stripe is still retrying — the org keeps every
- *                 capability (a temporary decline is not a lapse), Owner and Admins
- *                 are told;
- *   - `lapsed`    not paid yet (a new org's first invoice is open), trial expired,
- *                 unpaid, canceled, or never subscribed (there is no free org tier,
- *                 A-7). Org drives stay readable; org-only capabilities
- *                 stop (SEAT-9). NOTHING is deleted or reallocated: lapse is a read of
- *                 the subscription, never a write to drives, members or wallets, so
- *                 leaving lapse restores exactly what was there.
- *
- * Where billing is off (onprem, tenant) there is no subscription to lapse: always
- * active.
- *
- * AN ORG WITH NO SUBSCRIPTION ROW is lapsed from the moment it exists ([D-OW-30],
- * amending SEAT-8's creation trial). D1 creates the org even when Stripe is unreachable
- * and leaves it unsubscribed (`billing.state = 'pending'`) for a retry; until a payment
- * lands it can spend nothing, so creating orgs never mints credit.
+ * SEAT-8/9 organization capability decisions. Only an active subscription grants
+ * capabilities in cloud. Payment retries and Stripe-side trials do not grant grace.
+ * Lapse is a read: member data and credit remain intact, and security tightening
+ * remains available. Billing-disabled deployments derive capability separately.
  */
 
-export const ORG_STATUSES = ['active', 'trialing', 'past_due', 'lapsed'] as const;
+export const ORG_STATUSES = ['active', 'lapsed'] as const;
 export type OrgStatus = (typeof ORG_STATUSES)[number];
 
 export type OrgLapseReason =
   | 'no_subscription'
-  | 'trial_expired'
+  | 'trial_unsupported'
+  | 'payment_failed'
   | 'unpaid'
   | 'canceled'
   | 'incomplete'
+  | 'manual_collection'
   | 'unknown_status';
 
 export type OrgStatusResult =
@@ -46,32 +26,9 @@ export type OrgStatusResult =
 export interface OrgSubscriptionState {
   /** Stripe status, or unverified_price when the mirror cannot verify the plan items. */
   status: string;
-  trialEnd: Date | null;
-  /**
-   * Start of the subscription's latest billing period. A subscription that never left its
-   * trial still has the trial as its period (it started before `trialEnd`); once paid,
-   * Stripe starts a new period at or after the trial end. That is how a canceled row
-   * tells "never paid" from "paid, then canceled" — `trialEnd` alone survives both.
-   */
-  currentPeriodStart: Date | null;
-  currentPeriodEnd: Date | null;
-  cancelAtPeriodEnd: boolean;
+  /** Stripe collection_method as mirrored: only charge_automatically can grant capability ([D-OW-44]). */
+  collectionMethod: string;
 }
-
-/** The subscription ended inside its trial: it had a trial, the trial is over, and its last period is the trial period. */
-function endedInTrial(sub: OrgSubscriptionState, now: Date): boolean {
-  if (sub.trialEnd === null || sub.trialEnd.getTime() > now.getTime()) return false;
-  return sub.currentPeriodStart !== null && sub.currentPeriodStart.getTime() < sub.trialEnd.getTime();
-}
-
-/**
- * How long a `trialing` row outlives its trial end before it reads as lapsed. Stripe
- * ends a trial with no card by canceling it (trial_settings missing_payment_method =
- * cancel), and that arrives as a webhook; if the webhook is lost the stored row would
- * say `trialing` forever. Past this grace the org lapses on its own; a late webhook
- * saying `active` (the card did land) lifts it again.
- */
-export const ORG_TRIAL_GRACE_MS = 24 * 60 * 60 * 1000;
 
 /** The SEAT-9 refusal, shown wherever an org-only capability is refused; restricting stays allowed (D-OW-33). No credit or price figure. */
 export const ORG_LAPSED_MESSAGE =
@@ -84,27 +41,25 @@ export const ORG_LAPSED_CODE = 'org_lapsed' as const;
 export function deriveOrgStatus(input: {
   billingEnabled: boolean;
   subscription: OrgSubscriptionState | null;
-  now: Date;
 }): OrgStatusResult {
   if (!input.billingEnabled) return { status: 'active', reason: null };
   const sub = input.subscription;
   // [D-OW-30]: no creation trial — an org nobody has paid for spends nothing.
   if (!sub) return { status: 'lapsed', reason: 'no_subscription' };
+  // [D-OW-44]: an invoice-billed subscription reads `active` before anything is paid, so only
+  // automatic collection can grant capability; anything else is lapsed whatever its status.
+  if (sub.collectionMethod !== 'charge_automatically') return { status: 'lapsed', reason: 'manual_collection' };
 
-  const trialOver = sub.trialEnd !== null && input.now.getTime() - sub.trialEnd.getTime() >= ORG_TRIAL_GRACE_MS;
   switch (sub.status) {
     case 'active':
       return { status: 'active', reason: null };
     case 'past_due':
-      return { status: 'past_due', reason: null };
+      return { status: 'lapsed', reason: 'payment_failed' };
     case 'trialing':
-      return trialOver ? { status: 'lapsed', reason: 'trial_expired' } : { status: 'trialing', reason: null };
+      return { status: 'lapsed', reason: 'trial_unsupported' };
     case 'canceled':
     case 'incomplete_expired':
-      // A trial Stripe canceled at its end (no card) is a trial that expired; a subscription
-      // that was paid past its trial and later canceled is a cancellation (it keeps its
-      // historical trialEnd, so the period — not trialEnd — decides).
-      return { status: 'lapsed', reason: endedInTrial(sub, input.now) ? 'trial_expired' : 'canceled' };
+      return { status: 'lapsed', reason: 'canceled' };
     case 'unpaid':
     case 'paused':
       return { status: 'lapsed', reason: 'unpaid' };
@@ -156,28 +111,22 @@ export function orgLapseTransition(before: OrgStatus | null, after: OrgStatus): 
 
 /**
  * What the org surfaces show about billing, per role. Owner and Admins see plan
- * detail (SEAT-6): the lapse reason, a failed payment, the trial end. A member sees
+ * detail (SEAT-6): the lapse reason. A member sees
  * only that the org is read-only while it is lapsed, and nothing otherwise.
  */
 export type OrgBillingNotice =
   | { kind: 'reactivate'; reason: OrgLapseReason; canManageBilling: true }
-  | { kind: 'payment_failed'; canManageBilling: true }
-  | { kind: 'trial'; trialEnd: string | null; canManageBilling: true }
   | { kind: 'read_only'; canManageBilling: false };
 
 export function orgBillingNotice(input: {
   result: OrgStatusResult;
   role: 'OWNER' | 'ADMIN' | 'MEMBER';
-  trialEnd: Date | null;
 }): OrgBillingNotice | null {
   const manages = input.role === 'OWNER' || input.role === 'ADMIN';
   const { result } = input;
   if (result.status === 'lapsed') {
     return manages ? { kind: 'reactivate', reason: result.reason, canManageBilling: true } : { kind: 'read_only', canManageBilling: false };
   }
-  if (!manages) return null;
-  if (result.status === 'past_due') return { kind: 'payment_failed', canManageBilling: true };
-  if (result.status === 'trialing') return { kind: 'trial', trialEnd: input.trialEnd?.toISOString() ?? null, canManageBilling: true };
   return null;
 }
 

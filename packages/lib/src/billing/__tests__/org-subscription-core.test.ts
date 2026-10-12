@@ -10,16 +10,17 @@ import {
   orgCustomerCreateParams,
   orgCustomerDetails,
   orgSubscriptionCreateKey,
-  orgSubscriptionHistory,
   orgExtraSeatQuantity,
   orgStripeIdempotencyKey,
   orgSubscriptionItems,
   orgPaymentStep,
   orgSubscriptionMayOwePayment,
-  pickAdoptableOrgSubscription,
+  planOrgReactivation,
   planSeatQuantitySync,
   type OrgBusinessPrices,
+  type OrgLatestInvoice,
   type OrgSubscriptionCandidate,
+  type OrgSubscriptionFacts,
 } from '../org-subscription-core';
 
 const PRICES: OrgBusinessPrices = { basePriceId: 'price_base', seatPriceId: 'price_seat' };
@@ -182,19 +183,6 @@ describe('the subscription generation — a new subscription after an ended one 
     expect(orgSubscriptionCreateKey(ORG, params, 'sub_b')).not.toBe(orgSubscriptionCreateKey(ORG, params, 'sub_a'));
     expect(orgSubscriptionCreateKey(ORG, params, null)).not.toBe(orgSubscriptionCreateKey(ORG, params, 'sub_a'));
   });
-
-  it('SEAT-1 (partial) the org\'s Stripe history counts every subscription stamped with it, ended ones included; the newest is the previous generation', () => {
-    const history = orgSubscriptionHistory(
-      [
-        candidate({ id: 'sub_old', status: 'canceled', created: 100 }),
-        candidate({ id: 'sub_new', status: 'incomplete_expired', created: 200 }),
-        candidate({ id: 'sub_other', created: 300, metadata: { [ORG_ID_METADATA_KEY]: 'org_other' } }),
-      ],
-      { orgId: ORG },
-    );
-    expect(history).toEqual({ previousSubscriptionId: 'sub_new' });
-    expect(orgSubscriptionHistory([], { orgId: ORG })).toEqual({ previousSubscriptionId: null });
-  });
 });
 
 describe('orgBillingLockKey', () => {
@@ -210,23 +198,130 @@ describe('isLiveOrgSubscriptionStatus', () => {
   });
 });
 
-describe('pickAdoptableOrgSubscription — recover a subscription Stripe has but the database lost', () => {
-  it('SEAT-1 (partial) adopts the live subscription stamped with this org and carrying the base price', () => {
-    expect(pickAdoptableOrgSubscription([candidate()], { orgId: ORG, prices: PRICES })?.id).toBe('sub_1');
+describe('planOrgReactivation — D-OW-44: reactivation only repairs states PageSpace itself creates', () => {
+  const payable: OrgLatestInvoice = { status: 'open', amountDueCents: 5000, clientSecret: 'pi_123_secret_abc' };
+  const facts = (overrides: Partial<OrgSubscriptionFacts> = {}): OrgSubscriptionFacts => ({
+    ...candidate(),
+    collectionMethod: 'charge_automatically',
+    latestInvoice: null,
+    ...overrides,
+  });
+  const plan = (subscriptions: OrgSubscriptionFacts[], storedSubscriptionId: string | null = 'sub_1') =>
+    planOrgReactivation({ orgId: ORG, prices: PRICES, storedSubscriptionId, subscriptions });
+  const support = (reason: string) => ({ kind: 'requires_support', reason });
+
+  describe('already_active', () => {
+    it('SEAT-1 (partial) the stored subscription, active in Stripe with the configured plan and automatic collection, is returned as it is', () => {
+      const sub = facts();
+      expect(plan([sub])).toEqual({ kind: 'already_active', subscription: sub, adopted: false, items: { baseItemId: 'si_base', seatItem: { id: 'si_seat', quantity: 0 } } });
+    });
+
+    it('SEAT-1 (partial) an active subscription Stripe has but the database lost (a create whose row was never written) is adopted', () => {
+      expect(plan([facts()], null)).toMatchObject({ kind: 'already_active', adopted: true });
+    });
   });
 
-  it('ignores canceled subscriptions, another org\'s stamp, and subscriptions without the base price', () => {
-    const list = [
-      candidate({ id: 'sub_canceled', status: 'canceled' }),
-      candidate({ id: 'sub_other', metadata: { [ORG_ID_METADATA_KEY]: 'org_other' } }),
-      candidate({ id: 'sub_nobase', items: [{ id: 'si', priceId: 'price_pro', quantity: 1 }] }),
+  describe('confirm_payment', () => {
+    it.each(['incomplete', 'past_due', 'unpaid'])('SEAT-9 (partial) a %s subscription with an open, owing, automatically collected invoice hands back its client secret', (status) => {
+      const sub = facts({ status, latestInvoice: payable });
+      expect(plan([sub])).toEqual({ kind: 'confirm_payment', subscription: sub, adopted: false, clientSecret: 'pi_123_secret_abc', items: { baseItemId: 'si_base', seatItem: { id: 'si_seat', quantity: 0 } } });
+    });
+
+    it('SEAT-1 (partial) a lost-row incomplete subscription awaiting its first payment is adopted and paid, never bought twice', () => {
+      expect(plan([facts({ status: 'incomplete', latestInvoice: payable })], null)).toMatchObject({ kind: 'confirm_payment', adopted: true });
+    });
+  });
+
+  describe('new_checkout', () => {
+    it('SEAT-8 (partial) an org with no subscription anywhere starts a paid checkout with no previous generation', () => {
+      expect(plan([], null)).toEqual({ kind: 'new_checkout', previousSubscriptionId: null });
+    });
+
+    it.each(['canceled', 'incomplete_expired'])('SEAT-9 (partial) an org whose subscription is %s re-subscribes; the new create key follows the newest ended subscription', (status) => {
+      const subs = [
+        facts({ id: 'sub_old', status: 'canceled', created: 100 }),
+        facts({ id: 'sub_new', status, created: 200 }),
+      ];
+      expect(plan(subs, 'sub_old')).toEqual({ kind: 'new_checkout', previousSubscriptionId: 'sub_new' });
+    });
+
+    it('a stored subscription Stripe no longer lists still names the previous generation', () => {
+      expect(plan([], 'sub_stored')).toEqual({ kind: 'new_checkout', previousSubscriptionId: 'sub_stored' });
+    });
+  });
+
+  describe('requires_support — anything PageSpace did not create is never repaired in place', () => {
+    it.each(['trialing', 'paused'] as const)('SEAT-9 (partial) a %s subscription (a Stripe-side trial or pause) needs support, even with an open invoice', (status) => {
+      expect(plan([facts({ status, latestInvoice: payable })])).toEqual(support(status));
+    });
+
+    it.each(['active', 'incomplete', 'past_due', 'unpaid'])('P1: a %s subscription switched to send_invoice collection needs support and never reads as active', (status) => {
+      expect(plan([facts({ status, collectionMethod: 'send_invoice', latestInvoice: payable })])).toEqual(support('manual_collection'));
+    });
+
+    const unpayable: Array<[string, OrgLatestInvoice | null]> = [
+      ['void', { ...payable, status: 'void' }],
+      ['uncollectible', { ...payable, status: 'uncollectible' }],
+      ['paid', { ...payable, status: 'paid', amountDueCents: 0 }],
+      ['draft', { ...payable, status: 'draft' }],
+      ['zero-amount', { ...payable, amountDueCents: 0 }],
+      ['secret-less', { ...payable, clientSecret: null }],
+      ['missing', null],
     ];
-    expect(pickAdoptableOrgSubscription(list, { orgId: ORG, prices: PRICES })).toBeNull();
+    for (const status of ['incomplete', 'past_due', 'unpaid']) {
+      it.each(unpayable)(`P2: a ${status} subscription whose latest invoice is %s needs support, never a success with nothing to pay`, (_label, latestInvoice) => {
+        expect(plan([facts({ status, latestInvoice })])).toEqual(support('no_payable_invoice'));
+      });
+    }
+
+    it('an unrecognized price identity (unknown base, missing seat item, extra item, truncated items) needs support', () => {
+      for (const items of [
+        [{ id: 'si_base', priceId: 'price_unknown', quantity: 1 }, { id: 'si_seat', priceId: 'price_seat', quantity: 0 }],
+        [{ id: 'si_base', priceId: 'price_base', quantity: 1 }],
+        [...candidate().items, { id: 'si_x', priceId: 'price_x', quantity: 1 }],
+      ]) {
+        expect(plan([facts({ items })])).toEqual(support('unrecognized_price'));
+      }
+      expect(plan([facts({ itemsHasMore: true })])).toEqual(support('unrecognized_price'));
+    });
+
+    it('zero trust on metadata: a live subscription on the org customer that is not stamped with this org (stamp removed, another org\'s stamp, made by hand) needs support, never a second checkout', () => {
+      const stamps: Array<Record<string, string> | null> = [null, {}, { [ORG_ID_METADATA_KEY]: 'org_other' }];
+      for (const metadata of stamps) {
+        expect(plan([facts({ status: 'past_due', latestInvoice: payable, metadata })])).toEqual(support('unrecognized_subscription'));
+        expect(plan([facts({ metadata })], null)).toEqual(support('unrecognized_subscription'));
+      }
+    });
+
+    it('zero trust on metadata: the stamped subscription plus any other live one on the customer, stamped or not, needs support', () => {
+      for (const metadata of [null, { [ORG_ID_METADATA_KEY]: 'org_other' }]) {
+        const subs = [facts(), facts({ id: 'sub_extra', created: 200, metadata })];
+        expect(plan(subs)).toEqual(support('multiple_live_subscriptions'));
+      }
+    });
+
+    it('ended subscriptions on the customer, stamped or not, never block checkout and name the previous generation', () => {
+      const subs = [facts({ id: 'sub_unstamped', status: 'canceled', created: 300, metadata: null }), facts({ id: 'sub_old', status: 'canceled', created: 100 })];
+      expect(plan(subs, null)).toEqual({ kind: 'new_checkout', previousSubscriptionId: 'sub_unstamped' });
+    });
+
+    it('a second live subscription stamped with the org needs support, whatever their statuses, and nothing is bought', () => {
+      const pairs: Array<[string, string]> = [['active', 'active'], ['active', 'incomplete'], ['past_due', 'trialing'], ['active', 'paused']];
+      for (const [a, b] of pairs) {
+        const subs = [facts({ id: 'sub_1', status: a, created: 100, latestInvoice: payable }), facts({ id: 'sub_2', status: b, created: 200, latestInvoice: payable })];
+        expect(plan(subs)).toEqual(support('multiple_live_subscriptions'));
+        expect(plan(subs, null)).toEqual(support('multiple_live_subscriptions'));
+      }
+    });
+
+    it('a status Stripe adds later is not guessed at', () => {
+      expect(plan([facts({ status: 'some_future_status', latestInvoice: payable })])).toEqual(support('unknown_status'));
+    });
   });
 
-  it('with more than one live match, adopts the oldest, deterministically', () => {
-    const list = [candidate({ id: 'sub_new', created: 200 }), candidate({ id: 'sub_old', created: 100 })];
-    expect(pickAdoptableOrgSubscription(list, { orgId: ORG, prices: PRICES })?.id).toBe('sub_old');
+  it('is deterministic: the order Stripe lists subscriptions in never changes the plan', () => {
+    const subs = [facts({ id: 'sub_a', status: 'canceled', created: 100 }), facts({ id: 'sub_b', status: 'canceled', created: 100 })];
+    expect(plan(subs, null)).toEqual(plan([...subs].reverse(), null));
   });
 });
 
@@ -235,12 +330,11 @@ describe('orgSubscriptionItems — the linkage stored on the org', () => {
     expect(orgSubscriptionItems(candidate(), PRICES)).toEqual({ baseItemId: 'si_base', seatItem: { id: 'si_seat', quantity: 0 } });
   });
 
-  it('reports a missing seat item as null, and a subscription without the base price as not an org Business subscription', () => {
-    expect(orgSubscriptionItems(candidate({ items: [{ id: 'si_base', priceId: 'price_base', quantity: 1 }] }), PRICES)).toEqual({
-      baseItemId: 'si_base',
-      seatItem: null,
-    });
+  it('a missing seat item, an unknown item or a subscription without the base price is not the org Business plan PageSpace creates', () => {
+    expect(orgSubscriptionItems(candidate({ items: [{ id: 'si_base', priceId: 'price_base', quantity: 1 }] }), PRICES)).toBeNull();
+    expect(orgSubscriptionItems(candidate({ items: [...candidate().items, { id: 'si_x', priceId: 'price_x', quantity: 1 }] }), PRICES)).toBeNull();
     expect(orgSubscriptionItems(candidate({ items: [{ id: 'si', priceId: 'price_pro', quantity: 1 }] }), PRICES)).toBeNull();
+    expect(orgSubscriptionItems(candidate({ itemsHasMore: true }), PRICES)).toBeNull();
   });
 });
 

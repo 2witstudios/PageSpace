@@ -14,6 +14,11 @@
  *     ({@link orgPaymentStep}); the pool is funded from that first real payment. A
  *     trial invoice paid $0 and granted $50 of pool credit, which was farmable by
  *     creating orgs over and over.
+ *   - SEAT-9 reactivation, [D-OW-44]: {@link planOrgReactivation} decides from Stripe's
+ *     current facts. It only repairs states PageSpace itself creates (no subscription, an
+ *     ended one, a payment owed on a payable invoice); anything changed outside PageSpace
+ *     (a trial, a pause, send_invoice collection, an unpayable invoice, other prices, a
+ *     second subscription) is refused for support, never mutated in place.
  *
  * Money amounts never come from here: the price ids are configuration handed in by
  * the caller, and what a credit is stays in money-model (MON-5). The seat count this
@@ -57,7 +62,6 @@ export type OrgStripeOperation =
   | 'customer.update'
   | 'subscription.create'
   | 'subscription.cancel'
-  | 'seat-item.create'
   | 'seat-quantity.update';
 
 function stableJson(value: unknown): string {
@@ -187,41 +191,6 @@ export interface OrgSubscriptionCandidate {
   itemsHasMore?: boolean;
 }
 
-/**
- * Recovery: when the database has no subscription for the org but Stripe does (a
- * create that succeeded before its row was written), adopt it instead of creating a
- * second. Only a live subscription stamped with THIS org and carrying the base price
- * qualifies; among several, the oldest, so the choice is deterministic.
- */
-export function pickAdoptableOrgSubscription<C extends OrgSubscriptionCandidate>(
-  candidates: ReadonlyArray<C>,
-  input: { orgId: string; prices: OrgBusinessPrices },
-): C | null {
-  const matches = candidates
-    .filter(
-      (s) =>
-        isLiveOrgSubscriptionStatus(s.status) &&
-        s.metadata?.[ORG_ID_METADATA_KEY] === input.orgId &&
-        s.items.some((i) => i.priceId === input.prices.basePriceId),
-    )
-    .sort((a, b) => a.created - b.created || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-  return matches[0] ?? null;
-}
-
-/**
- * The org's subscription history in Stripe: every subscription stamped with the org,
- * ENDED ones included. The newest is the generation a new subscription follows.
- */
-export function orgSubscriptionHistory(
-  candidates: ReadonlyArray<OrgSubscriptionCandidate>,
-  input: { orgId: string },
-): { previousSubscriptionId: string | null } {
-  const mine = candidates
-    .filter((s) => s.metadata?.[ORG_ID_METADATA_KEY] === input.orgId)
-    .sort((a, b) => b.created - a.created || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0));
-  return { previousSubscriptionId: mine[0]?.id ?? null };
-}
-
 /** The subscription's latest invoice, narrowed to what paying it needs. */
 export interface OrgLatestInvoice {
   /** Stripe invoice.status: draft | open | paid | uncollectible | void. */
@@ -260,19 +229,108 @@ export function orgPaymentStep(input: { subscriptionStatus: string; latestInvoic
 
 export interface OrgSubscriptionItemLinkage {
   baseItemId: string;
-  seatItem: { id: string; quantity: number } | null;
+  seatItem: { id: string; quantity: number };
 }
 
-/** Verified org item identity. A missing seat item may be repaired during adoption; all other ambiguity fails closed. */
+/**
+ * The verified item identity of the org Business plan PageSpace creates: exactly the base
+ * price once and the extra-seat price once, nothing else, every item on one page. Anything
+ * else (a missing seat item, an extra price, a truncated item list) is null: never mirrored as
+ * the plan, never repaired in place ([D-OW-44]).
+ */
 export function orgSubscriptionItems(sub: Pick<OrgSubscriptionCandidate, 'items' | 'itemsHasMore'>, prices: OrgBusinessPrices): OrgSubscriptionItemLinkage | null {
   if (sub.itemsHasMore || !prices.basePriceId || !prices.seatPriceId || prices.basePriceId === prices.seatPriceId) return null;
   const bases = sub.items.filter(i => i.priceId === prices.basePriceId);
   const seats = sub.items.filter(i => i.priceId === prices.seatPriceId);
-  if (bases.length !== 1 || seats.length > 1 || sub.items.length !== bases.length + seats.length) return null;
-  const base = bases[0];
-  const seat = seats[0];
-  if (base.quantity !== 1 || !base.id || (seat && (!seat.id || seat.id === base.id || !Number.isSafeInteger(seat.quantity) || seat.quantity < 0))) return null;
-  return { baseItemId: base.id, seatItem: seat ? { id: seat.id, quantity: seat.quantity } : null };
+  if (bases.length !== 1 || seats.length !== 1 || sub.items.length !== 2) return null;
+  const [base] = bases;
+  const [seat] = seats;
+  if (base.quantity !== 1 || !base.id || !seat.id || seat.id === base.id || !Number.isSafeInteger(seat.quantity) || seat.quantity < 0) return null;
+  return { baseItemId: base.id, seatItem: { id: seat.id, quantity: seat.quantity } };
+}
+
+/** A Stripe subscription as the reactivation decision reads it: what Stripe says NOW. */
+export interface OrgSubscriptionFacts extends OrgSubscriptionCandidate {
+  /** Stripe collection_method: charge_automatically | send_invoice. */
+  collectionMethod: string;
+  /**
+   * Its latest invoice. Read only for a subscription that may owe a payment
+   * ({@link orgSubscriptionMayOwePayment}); null for every other subscription and when it has none.
+   */
+  latestInvoice: OrgLatestInvoice | null;
+}
+
+/** Why a reactivation is refused for support: each is a state PageSpace never creates. */
+export type OrgReactivationSupportReason =
+  | 'multiple_live_subscriptions'
+  | 'unrecognized_subscription'
+  | 'unrecognized_price'
+  | 'manual_collection'
+  | 'trialing'
+  | 'paused'
+  | 'no_payable_invoice'
+  | 'unknown_status';
+
+export type OrgReactivationPlan<S extends OrgSubscriptionFacts = OrgSubscriptionFacts> =
+  /** The org's subscription is active: nothing to pay, nothing to write. */
+  | { kind: 'already_active'; subscription: S; adopted: boolean; items: OrgSubscriptionItemLinkage }
+  /** The org owes its first or a failed payment on an invoice the client can pay. */
+  | { kind: 'confirm_payment'; subscription: S; adopted: boolean; items: OrgSubscriptionItemLinkage; clientSecret: string }
+  /** The org has no live subscription: create the paid one, following `previousSubscriptionId`. */
+  | { kind: 'new_checkout'; previousSubscriptionId: string | null }
+  | { kind: 'requires_support'; reason: OrgReactivationSupportReason };
+
+const newestFirst = (a: OrgSubscriptionCandidate, b: OrgSubscriptionCandidate): number =>
+  b.created - a.created || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0);
+
+/**
+ * [D-OW-44] SEAT-8 / SEAT-9: what (re)activating the org's Business subscription may do, from
+ * Stripe's current facts alone. Reactivation only repairs states PageSpace itself creates:
+ *
+ *   - no live subscription on the org's customer (none ever, or every one ended) →
+ *     `new_checkout`, the one write the shell may make, keyed on the newest ended generation;
+ *   - exactly one, stamped with this org, with the configured plan items and automatic collection:
+ *       active → `already_active`; incomplete / past_due / unpaid whose latest invoice is open,
+ *       owes something and carries a confirmation secret → `confirm_payment`;
+ *   - everything else → `requires_support`: a second live subscription, one not stamped with
+ *     this org (zero trust on metadata: a removed stamp never makes a live subscription
+ *     disappear, so it can never lead to buying a second), an unrecognized price
+ *     identity, send_invoice collection, a Stripe-side trial or pause, a payment owed on an
+ *     invoice the client cannot pay (void, uncollectible, paid, draft, missing, no secret),
+ *     or a status this code does not know.
+ *
+ * `subscriptions` is EVERY subscription on the org's own Stripe customer, plus the stored one
+ * if Stripe's listing lacks it: the customer holds only org subscriptions, so nothing on it is
+ * filtered out by metadata. `adopted` says the subscription is not the stored one: a create
+ * whose row was lost.
+ * Pure and deterministic: the order Stripe lists subscriptions in never matters.
+ */
+export function planOrgReactivation<S extends OrgSubscriptionFacts>(input: {
+  orgId: string;
+  prices: OrgBusinessPrices;
+  storedSubscriptionId: string | null;
+  subscriptions: ReadonlyArray<S>;
+}): OrgReactivationPlan<S> {
+  const live = input.subscriptions.filter((s) => isLiveOrgSubscriptionStatus(s.status));
+  if (live.length === 0) {
+    const [newest] = [...input.subscriptions].sort(newestFirst);
+    return { kind: 'new_checkout', previousSubscriptionId: newest?.id ?? input.storedSubscriptionId };
+  }
+  if (live.length > 1) return { kind: 'requires_support', reason: 'multiple_live_subscriptions' };
+
+  const [subscription] = live;
+  if (subscription.metadata?.[ORG_ID_METADATA_KEY] !== input.orgId) return { kind: 'requires_support', reason: 'unrecognized_subscription' };
+  const items = orgSubscriptionItems(subscription, input.prices);
+  if (!items) return { kind: 'requires_support', reason: 'unrecognized_price' };
+  if (subscription.collectionMethod !== 'charge_automatically') return { kind: 'requires_support', reason: 'manual_collection' };
+  const adopted = subscription.id !== input.storedSubscriptionId;
+  if (subscription.status === 'active') return { kind: 'already_active', subscription, adopted, items };
+  if (subscription.status === 'trialing' || subscription.status === 'paused') return { kind: 'requires_support', reason: subscription.status };
+  if (!orgSubscriptionMayOwePayment(subscription.status)) return { kind: 'requires_support', reason: 'unknown_status' };
+  const payment = orgPaymentStep({ subscriptionStatus: subscription.status, latestInvoice: subscription.latestInvoice });
+  return payment.kind === 'confirm_payment'
+    ? { kind: 'confirm_payment', subscription, adopted, items, clientSecret: payment.clientSecret }
+    : { kind: 'requires_support', reason: 'no_payable_invoice' };
 }
 
 export interface StoredSeatItem {

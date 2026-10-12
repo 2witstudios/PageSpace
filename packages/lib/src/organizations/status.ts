@@ -41,46 +41,24 @@ export {
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type Executor = typeof db | Tx;
 
-export type OrgStatusRead = Readonly<{
-  result: OrgStatusResult;
-  subscription: OrgSubscriptionState | null;
-  /** When a Stripe-side trial ends; null with no subscription (there is no creation trial, [D-OW-30]). */
-  trialEnd: Date | null;
-}>;
-
 /**
- * The org's billing status and the stored subscription it was derived from. An org that
- * does not exist reads as lapsed (fail closed); callers check existence themselves.
+ * The org's status: active | lapsed (with why), derived from the stored subscription the
+ * webhook mirrors. An org that does not exist reads as lapsed (fail closed); callers check
+ * existence themselves.
  */
-export async function readOrgStatus(orgId: string, opts: { now?: Date; executor?: Executor } = {}): Promise<OrgStatusRead> {
+export async function getOrgStatus(orgId: string, opts: { executor?: Executor } = {}): Promise<OrgStatusResult> {
   const billingEnabled = isBillingEnabled();
-  if (!billingEnabled) return { result: { status: 'active', reason: null }, subscription: null, trialEnd: null };
-  const executor = opts.executor ?? db;
-  const [row] = await executor
-    .select({
-      orgId: organizations.id,
-      status: orgSubscriptions.status,
-      trialEnd: orgSubscriptions.trialEnd,
-      currentPeriodStart: orgSubscriptions.currentPeriodStart,
-      currentPeriodEnd: orgSubscriptions.currentPeriodEnd,
-      cancelAtPeriodEnd: orgSubscriptions.cancelAtPeriodEnd,
-    })
+  if (!billingEnabled) return { status: 'active', reason: null };
+  const [row] = await (opts.executor ?? db)
+    .select({ status: orgSubscriptions.status, collectionMethod: orgSubscriptions.collectionMethod })
     .from(organizations)
     .leftJoin(orgSubscriptions, eq(orgSubscriptions.orgId, organizations.id))
     .where(eq(organizations.id, orgId))
     .limit(1);
-  if (!row) return { result: { status: 'lapsed', reason: 'no_subscription' }, subscription: null, trialEnd: null };
+  if (!row) return { status: 'lapsed', reason: 'no_subscription' };
   const subscription: OrgSubscriptionState | null =
-    row.status === null
-      ? null
-      : { status: row.status, trialEnd: row.trialEnd, currentPeriodStart: row.currentPeriodStart, currentPeriodEnd: row.currentPeriodEnd, cancelAtPeriodEnd: row.cancelAtPeriodEnd ?? false };
-  const result = deriveOrgStatus({ billingEnabled, subscription, now: opts.now ?? new Date() });
-  return { result, subscription, trialEnd: subscription ? subscription.trialEnd : null };
-}
-
-/** The org's status: active | trialing | past_due | lapsed (with why). */
-export async function getOrgStatus(orgId: string, opts: { now?: Date; executor?: Executor } = {}): Promise<OrgStatusResult> {
-  return (await readOrgStatus(orgId, opts)).result;
+    row.status === null || row.collectionMethod === null ? null : { status: row.status, collectionMethod: row.collectionMethod };
+  return deriveOrgStatus({ billingEnabled, subscription });
 }
 
 /**
@@ -92,28 +70,27 @@ export async function isOrgLapsedForDrive(drive: { orgId: string | null } | null
 }
 
 /** SEAT-9: may the org use its org-only capabilities right now? False only while lapsed. */
-export async function isOrgActive(orgId: string, opts: { now?: Date; executor?: Executor } = {}): Promise<boolean> {
+export async function isOrgActive(orgId: string, opts: { executor?: Executor } = {}): Promise<boolean> {
   return (await getOrgStatus(orgId, opts)).status !== 'lapsed';
 }
 
 /**
  * SEAT-9 / SEAT-6: the billing notice the org surfaces show this caller — Owner and Admins
- * see plan detail (reactivate with the reason, a failed payment, the trial end), a member
+ * see plan detail (reactivate with the reason), a member
  * only the read-only notice while lapsed. Null where billing is off (onprem, tenant: the
  * billing gate hides it entirely) and whenever there is nothing to show.
  */
 export async function getOrgBillingNotice(
   orgId: string,
   role: 'OWNER' | 'ADMIN' | 'MEMBER',
-  opts: { now?: Date; executor?: Executor } = {},
+  opts: { executor?: Executor } = {},
 ): Promise<OrgBillingNotice | null> {
   if (!isBillingEnabled()) return null;
-  const read = await readOrgStatus(orgId, opts);
-  return orgBillingNotice({ result: read.result, role, trialEnd: read.trialEnd });
+  return orgBillingNotice({ result: await getOrgStatus(orgId, opts), role });
 }
 
 /** SEAT-9: the refusal an org-only capability returns (`{ ok: false, code: 'org_lapsed', message }`) or ok. */
-export async function checkOrgActive(orgId: string, opts: { now?: Date; executor?: Executor } = {}): Promise<OrgCapabilityCheck> {
+export async function checkOrgActive(orgId: string, opts: { executor?: Executor } = {}): Promise<OrgCapabilityCheck> {
   return orgStatusAllows(await getOrgStatus(orgId, opts));
 }
 

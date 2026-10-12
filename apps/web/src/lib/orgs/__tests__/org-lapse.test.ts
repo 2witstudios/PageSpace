@@ -5,10 +5,10 @@ import { orgIsLapsed, policyChangeAllowed, roleChangeAllowed, seatCapChangeAllow
 const policies: OrgPolicies = { ...DEFAULT_ORG_POLICIES, guests: 'approve', publicShareLinks: false, seatAllowanceCents: 150, providerAllowlist: ['anthropic', 'openai'] };
 
 describe('orgIsLapsed', () => {
-  it('SEAT-9 (partial): the reactivate and read_only notices mean lapsed; payment_failed and none do not', () => {
+  it('SEAT-9 (partial): reactivation including failed payment and read_only notices mean lapsed; no notice does not', () => {
     expect(orgIsLapsed({ kind: 'reactivate', reason: 'canceled', canManageBilling: true })).toBe(true);
     expect(orgIsLapsed({ kind: 'read_only', canManageBilling: false })).toBe(true);
-    expect(orgIsLapsed({ kind: 'payment_failed', canManageBilling: true })).toBe(false);
+    expect(orgIsLapsed({ kind: 'reactivate', reason: 'payment_failed', canManageBilling: true })).toBe(true);
     expect(orgIsLapsed(undefined)).toBe(false);
   });
 });

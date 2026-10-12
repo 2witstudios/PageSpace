@@ -13,8 +13,10 @@ import { OrgBillingError, orgSubscriptionSummary, provisionOrgSubscription } fro
  * client's card confirmation (Stripe Payment Element). The same call re-subscribes a
  * lapsed org (a new subscription after the old one ended) and hands a past_due or unpaid
  * org the secret for what it owes; paying lifts the lapse through the webhook with no
- * other step (review 3+4 P1-1). Idempotent: an org already subscribed gets its
- * subscription back. Absent where billing is off (onprem, tenant).
+ * other step (review 3+4 P1-1). A subscription changed outside PageSpace (a trial, a pause,
+ * send_invoice collection, an unpayable invoice, other prices, a second subscription) is a
+ * 409 `billing_requires_support` ([D-OW-44]), never a success. Idempotent: an org already
+ * subscribed gets its subscription back. Absent where billing is off (onprem, tenant).
  */
 export async function POST(request: Request, context: { params: Promise<{ orgId: string }> }) {
   const { orgId } = await context.params;
@@ -37,6 +39,13 @@ export async function POST(request: Request, context: { params: Promise<{ orgId:
   } catch (error) {
     if (error instanceof OrgBillingError) {
       if (error.code === 'org_not_found') return NextResponse.json({ error: 'Organization not found', code: 'org_not_found' }, { status: 404 });
+      if (error.code === 'billing_requires_support') {
+        // [D-OW-44]: changed outside PageSpace; never repaired in place, never reported as success.
+        return NextResponse.json(
+          { error: 'The subscription was changed outside PageSpace and needs support to reactivate.', code: 'billing_requires_support' },
+          { status: 409 },
+        );
+      }
       if (error.code === 'prices_not_configured') {
         loggers.api.error('Org billing prices are not configured', error);
         return NextResponse.json({ error: 'Organization billing is not available', code: 'billing_unavailable' }, { status: 503 });

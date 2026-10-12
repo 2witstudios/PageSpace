@@ -175,7 +175,7 @@ function setServiceDefaults() {
   vi.mocked(deliverOrgInvite).mockResolvedValue(undefined);
   vi.mocked(startOrgBusinessSubscription).mockResolvedValue({
     state: 'payment_required',
-    subscription: { status: 'incomplete', trialEnd: null, currentPeriodEnd: '2026-10-01T12:00:00.000Z', extraSeatQuantity: 0 },
+    subscription: { status: 'incomplete', currentPeriodEnd: '2026-10-01T12:00:00.000Z', extraSeatQuantity: 0 },
     payment: { kind: 'confirm_payment', clientSecret: 'pi_1_secret_x' },
   });
   vi.mocked(isEmailVerified).mockResolvedValue(true);
@@ -362,7 +362,7 @@ describe('org route behaviour', () => {
     const body = await res.json();
     expect(body.billing).toEqual({
       state: 'payment_required',
-      subscription: { status: 'incomplete', trialEnd: null, currentPeriodEnd: '2026-10-01T12:00:00.000Z', extraSeatQuantity: 0 },
+      subscription: { status: 'incomplete', currentPeriodEnd: '2026-10-01T12:00:00.000Z', extraSeatQuantity: 0 },
       payment: { kind: 'confirm_payment', clientSecret: 'pi_1_secret_x' },
     });
     expect(JSON.stringify(body)).not.toMatch(/cus_|sub_|si_/);

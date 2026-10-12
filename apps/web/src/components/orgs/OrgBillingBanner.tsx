@@ -2,14 +2,15 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTheme } from 'next-themes';
-import { AlertTriangle, CreditCard, Info, Loader2 } from 'lucide-react';
+import { AlertTriangle, Info, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import type { OrgBillingNotice } from '@pagespace/lib/organizations/status-core';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { StripeProvider } from '@/components/billing/StripeProvider';
+import { FeedbackDialog } from '@/components/shared/FeedbackDialog';
 import { openOrgBillingPortal, startOrgSubscription } from '@/lib/orgs/org-api';
-import { orgErrorMessage } from '@/lib/orgs/org-error-copy';
+import { ORG_ERROR_COPY, orgErrorCode, orgErrorMessage } from '@/lib/orgs/org-error-copy';
 import { cn } from '@/lib/utils/index';
 import { documentAllowsPaymentElement, paymentRouteFor } from '@/lib/orgs/payment-routes';
 import { OrgPaymentForm } from './OrgPaymentForm';
@@ -26,8 +27,10 @@ export async function goToOrgBillingPortal(orgId: string): Promise<void> {
 
 /**
  * The lapse banners (SEAT-9 / D-OW-33, canvas OrgLapsed) on every org surface, from GET
- * /api/orgs/[orgId] billingNotice: reactivate and payment_failed for the Owner and Admins, read_only
+ * /api/orgs/[orgId] billingNotice: reactivate for the Owner and Admins, read_only
  * for Members. Reactivating pays what is owed with the Payment Element (POST billing/subscription).
+ * A subscription changed outside PageSpace ([D-OW-44] `billing_requires_support`) is never
+ * reported as reactivated: the banner says so and opens the in-app support channel instead.
  */
 export function OrgBillingBanner({ orgId, orgName, notice, onReactivated }: {
   orgId: string;
@@ -38,6 +41,8 @@ export function OrgBillingBanner({ orgId, orgName, notice, onReactivated }: {
   const { resolvedTheme } = useTheme();
   const [busy, setBusy] = useState(false);
   const [clientSecret, setClientSecret] = useState<string | null>(null);
+  const [needsSupport, setNeedsSupport] = useState(false);
+  const [supportOpen, setSupportOpen] = useState(false);
   const stripeOptions = useMemo(
     () => (clientSecret ? { clientSecret, appearance: { theme: (resolvedTheme === 'dark' ? 'night' : 'stripe') as 'night' | 'stripe' } } : undefined),
     [clientSecret, resolvedTheme],
@@ -60,7 +65,8 @@ export function OrgBillingBanner({ orgId, orgName, notice, onReactivated }: {
         onReactivated?.();
       }
     } catch (error) {
-      toast.error(orgErrorMessage(error, 'Reactivation could not start. Try again.'));
+      if (orgErrorCode(error) === 'billing_requires_support') setNeedsSupport(true);
+      else toast.error(orgErrorMessage(error, 'Reactivation could not start. Try again.'));
     } finally {
       setBusy(false);
     }
@@ -75,15 +81,10 @@ export function OrgBillingBanner({ orgId, orgName, notice, onReactivated }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [notice?.kind]);
 
-  if (!notice || notice.kind === 'trial') return null;
+  if (!notice) return null;
 
-  const tone =
-    notice.kind === 'reactivate'
-      ? 'border-destructive/30 bg-destructive/5'
-      : notice.kind === 'payment_failed'
-        ? 'border-warning/40 bg-warning/10'
-        : 'border-border bg-card';
-  const Icon = notice.kind === 'read_only' ? Info : notice.kind === 'payment_failed' ? CreditCard : AlertTriangle;
+  const tone = notice.kind === 'reactivate' ? 'border-destructive/30 bg-destructive/5' : 'border-border bg-card';
+  const Icon = notice.kind === 'read_only' ? Info : AlertTriangle;
 
   return (
     <div role="status" className={cn('mb-8 flex items-start gap-2.5 rounded-xl border px-3.5 py-3', tone)}>
@@ -93,25 +94,26 @@ export function OrgBillingBanner({ orgId, orgName, notice, onReactivated }: {
           <>
             <span className="text-sm font-medium">{orgName} is unpaid and read-only</span>
             <span className="text-xs text-foreground/80">
-              The subscription has ended. Every drive stays readable. Spending credits, inviting, publishing, and loosening policies are paused until you reactivate. Restricting access still works.
+              Billing needs attention. Every drive stays readable. Spending credits, inviting, publishing, and loosening policies are paused until you reactivate. Restricting access still works.
             </span>
+            {needsSupport ? (
+              <span role="alert" className="text-xs font-medium text-destructive">
+                {ORG_ERROR_COPY.billing_requires_support}
+              </span>
+            ) : null}
             <div className="mt-1.5 flex flex-wrap gap-2">
-              <Button size="sm" onClick={() => void reactivate()} disabled={busy}>
-                {busy ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : null}
-                Reactivate
-              </Button>
+              {needsSupport ? (
+                <Button size="sm" onClick={() => setSupportOpen(true)}>
+                  Contact support
+                </Button>
+              ) : (
+                <Button size="sm" onClick={() => void reactivate()} disabled={busy}>
+                  {busy ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : null}
+                  Reactivate
+                </Button>
+              )}
               <Button size="sm" variant="ghost" onClick={() => void goToOrgBillingPortal(orgId)}>
                 Billing portal
-              </Button>
-            </div>
-          </>
-        ) : notice.kind === 'payment_failed' ? (
-          <>
-            <span className="text-sm font-medium">The last payment for {orgName} failed</span>
-            <span className="text-xs text-foreground/80">Update the card to keep {orgName} active.</span>
-            <div className="mt-1.5">
-              <Button size="sm" variant="outline" onClick={() => void goToOrgBillingPortal(orgId)}>
-                Update payment method
               </Button>
             </div>
           </>
@@ -124,6 +126,7 @@ export function OrgBillingBanner({ orgId, orgName, notice, onReactivated }: {
           </>
         )}
       </div>
+      <FeedbackDialog isOpen={supportOpen} onClose={() => setSupportOpen(false)} />
       <Dialog open={clientSecret !== null} onOpenChange={(open) => !open && setClientSecret(null)}>
         <DialogContent className="sm:max-w-[560px]">
           <DialogHeader>

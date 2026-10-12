@@ -30,9 +30,8 @@ vi.mock('@/lib/org-billing/org-subscription', async () => {
   return {
     OrgBillingError,
     provisionOrgSubscription: vi.fn(),
-    orgSubscriptionSummary: (l: { status: string; trialEnd: Date | null; currentPeriodEnd: Date | null; extraSeatQuantity: number }) => ({
+    orgSubscriptionSummary: (l: { status: string; currentPeriodEnd: Date | null; extraSeatQuantity: number }) => ({
       status: l.status,
-      trialEnd: l.trialEnd?.toISOString() ?? null,
       currentPeriodEnd: l.currentPeriodEnd?.toISOString() ?? null,
       extraSeatQuantity: l.extraSeatQuantity,
     }),
@@ -55,7 +54,6 @@ const linkage = {
   stripeSeatItemId: 'si_seat_hidden',
   extraSeatQuantity: 0,
   status: 'incomplete',
-  trialEnd: null,
   currentPeriodEnd: PERIOD_END,
 };
 const PAY = { kind: 'confirm_payment' as const, clientSecret: 'pi_123_secret_abc' };
@@ -94,7 +92,7 @@ describe('POST /api/orgs/[orgId]/billing/subscription', () => {
       expect(res.status).toBe(201);
       const body = await res.json();
       expect(body).toEqual({
-        subscription: { status: 'incomplete', trialEnd: null, currentPeriodEnd: PERIOD_END.toISOString(), extraSeatQuantity: 0 },
+        subscription: { status: 'incomplete', currentPeriodEnd: PERIOD_END.toISOString(), extraSeatQuantity: 0 },
         payment: { kind: 'confirm_payment', clientSecret: 'pi_123_secret_abc' },
       });
       expect(JSON.stringify(body)).not.toMatch(/cus_|sub_|si_/);
@@ -134,6 +132,18 @@ describe('POST /api/orgs/[orgId]/billing/subscription', () => {
     expect(dark.status).toBe(404);
     expect(await dark.json()).toEqual({ error: 'Not found' });
     expect(provisionOrgSubscription).not.toHaveBeenCalled();
+  });
+
+  it('SEAT-9 (partial) D-OW-44: a subscription changed outside PageSpace is a 409 billing_requires_support, never a success', async () => {
+    as('OWNER');
+    vi.mocked(provisionOrgSubscription).mockRejectedValueOnce(new OrgBillingError('billing_requires_support', 'x: manual_collection'));
+    const res = await call();
+    expect(res.status).toBe(409);
+    const body = await res.json();
+    expect(body.code).toBe('billing_requires_support');
+    expect(body).not.toHaveProperty('subscription');
+    expect(body).not.toHaveProperty('payment');
+    expect(JSON.stringify(body)).not.toMatch(/manual_collection/);
   });
 
   it('a Stripe failure is a retryable 502, unconfigured prices a 503, a vanished org a 404', async () => {

@@ -2297,6 +2297,20 @@
       "when": 1791764417285,
       "tag": "0339_drop_personal_grandfathering",
       "breakpoints": true
+    },
+    {
+      "idx": 330,
+      "version": "7",
+      "when": 1791811765438,
+      "tag": "0340_org_subscription_collection_method",
+      "breakpoints": true
+    },
+    {
+      "idx": 331,
+      "version": "7",
+      "when": 1791811791589,
+      "tag": "0341_drop_org_subscription_trial_end",
+      "breakpoints": true
     }
   ]
 }

@@ -41,7 +41,7 @@ describe('createOrgSeatCount', () => {
 });
 
 describe('nextStepAfterCreate', () => {
-  const sub = { status: 'incomplete', trialEnd: null, currentPeriodEnd: null, extraSeatQuantity: 0 };
+  const sub = { status: 'incomplete', currentPeriodEnd: null, extraSeatQuantity: 0 };
 
   it('UI-6 (partial): payment_required goes to the Payment Element with the client secret (no trial, D-OW-30)', () => {
     expect(nextStepAfterCreate({ state: 'payment_required', subscription: sub, payment: { kind: 'confirm_payment', clientSecret: 'cs_1' } }))
@@ -61,10 +61,10 @@ describe('nextStepAfterCreate', () => {
 describe('orgReadyForSetup', () => {
   it('is ready once the org has no lapse notice (paid, or billing off)', () => {
     expect(orgReadyForSetup(undefined)).toBe(true);
-    expect(orgReadyForSetup({ kind: 'payment_failed', canManageBilling: true })).toBe(true);
   });
 
-  it('is not ready while the org is still lapsed (the webhook has not landed)', () => {
+  it('is not ready while the org is still lapsed (the webhook has not landed or payment failed)', () => {
+    expect(orgReadyForSetup({ kind: 'reactivate', reason: 'payment_failed', canManageBilling: true })).toBe(false);
     expect(orgReadyForSetup({ kind: 'reactivate', reason: 'incomplete', canManageBilling: true })).toBe(false);
     expect(orgReadyForSetup({ kind: 'read_only', canManageBilling: false })).toBe(false);
   });
