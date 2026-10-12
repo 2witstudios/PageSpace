@@ -271,6 +271,35 @@ describe('org Business subscription shell (real Postgres, in-memory Stripe)', ()
     expect(stripe.writes.createSubscription).toBe(1);
   });
 
+  it.each([['trialing', false], ['trialing', true], ['paused', false], ['paused', true]] as const)('charges all current seats when recovering %s (missing=%s)', async (status, missing) => {
+    if (!dbAvailable) return;
+    const { orgId, deps, stripe } = await northwind(8);
+    const first = await ensureOrgBusinessSubscription(orgId, deps);
+    stripe.payLatestInvoice(first.linkage.stripeSubscriptionId);
+    const sub = stripe.subscriptions.get(first.linkage.stripeSubscriptionId)!;
+    sub.status = status;
+    sub.items = missing ? sub.items.slice(0, 1) : sub.items.map((item, index) => index === 1 ? { ...item, quantity: 0 } : item);
+    const recovered = await provisionOrgSubscription(orgId, deps);
+    expect(recovered.payment.kind).toBe('confirm_payment');
+    expect(recovered.result.linkage.extraSeatQuantity).toBe(3);
+    expect(await stripe.latestInvoice(sub.id)).toMatchObject({ amountDueCents: 8000 });
+    expect(stripe.writes.cancelSubscription).toBe(0);
+    expect(stripe.writes.createSubscription).toBe(1);
+  });
+
+  it('refuses recovery when another trial is still scheduled to become billable', async () => {
+    if (!dbAvailable) return;
+    const { orgId, deps, stripe } = await northwind(1);
+    const first = await ensureOrgBusinessSubscription(orgId, deps);
+    const trial = stripe.subscriptions.get(first.linkage.stripeSubscriptionId)!;
+    trial.status = 'trialing';
+    stripe.subscriptions.set(`${trial.id}_second`, { ...structuredClone(trial), id: `${trial.id}_second`, created: trial.created + 1 });
+    await db.delete(orgSubscriptions).where(eq(orgSubscriptions.orgId, orgId));
+    await expect(provisionOrgSubscription(orgId, deps)).rejects.toThrow('another billable subscription');
+    expect(stripe.writes.recoverSubscription).toBe(0);
+    expect(stripe.writes.createSubscription).toBe(1);
+  });
+
   it('recovers only the selected subscription when two paused candidates exist', async () => {
     if (!dbAvailable) return;
     const { orgId, deps, stripe } = await northwind(1);

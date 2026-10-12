@@ -330,10 +330,13 @@ export class FakeOrgStripe implements OrgBillingStripe {
     });
   }
 
-  async recoverSubscription(subscriptionId: string, _prices: import('@pagespace/lib/billing/org-subscription-core').OrgBusinessPrices, idempotencyKey: string): Promise<OrgStripeSubscription> {
+  async recoverSubscription(subscriptionId: string, prices: import('@pagespace/lib/billing/org-subscription-core').OrgBusinessPrices & { extraSeatQuantity: number }, idempotencyKey: string): Promise<OrgStripeSubscription> {
     const sub = this.subscriptions.get(subscriptionId);
     if (!sub) throw new Error(`No such subscription: '${subscriptionId}'`);
     if (sub.status !== 'trialing' && sub.status !== 'paused') return structuredClone(sub);
+    const seatItem = sub.items.find(item => item.priceId === prices.seatPriceId);
+    if (!seatItem) await this.createSubscriptionItem({ subscriptionId, priceId: prices.seatPriceId, quantity: prices.extraSeatQuantity }, `${idempotencyKey}:seats`);
+    else if (seatItem.quantity !== prices.extraSeatQuantity) await this.updateSubscriptionItemQuantity({ itemId: seatItem.id, quantity: prices.extraSeatQuantity, prorationBehavior: 'none' }, `${idempotencyKey}:seats`);
     return this.write('recoverSubscription', idempotencyKey, { subscriptionId }, () => {
       sub.status = 'past_due';
       sub.trialEnd = this.clock;
