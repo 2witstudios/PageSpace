@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTheme } from 'next-themes';
-import { AlertTriangle, CreditCard, Info, Loader2 } from 'lucide-react';
+import { AlertTriangle, Info, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import type { OrgBillingNotice } from '@pagespace/lib/organizations/status-core';
 import { Button } from '@/components/ui/button';
@@ -26,7 +26,7 @@ export async function goToOrgBillingPortal(orgId: string): Promise<void> {
 
 /**
  * The lapse banners (SEAT-9 / D-OW-33, canvas OrgLapsed) on every org surface, from GET
- * /api/orgs/[orgId] billingNotice: reactivate and payment_failed for the Owner and Admins, read_only
+ * /api/orgs/[orgId] billingNotice: reactivate for the Owner and Admins, read_only
  * for Members. Reactivating pays what is owed with the Payment Element (POST billing/subscription).
  */
 export function OrgBillingBanner({ orgId, orgName, notice, onReactivated }: {
@@ -75,15 +75,10 @@ export function OrgBillingBanner({ orgId, orgName, notice, onReactivated }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [notice?.kind]);
 
-  if (!notice || notice.kind === 'trial') return null;
+  if (!notice) return null;
 
-  const tone =
-    notice.kind === 'reactivate'
-      ? 'border-destructive/30 bg-destructive/5'
-      : notice.kind === 'payment_failed'
-        ? 'border-warning/40 bg-warning/10'
-        : 'border-border bg-card';
-  const Icon = notice.kind === 'read_only' ? Info : notice.kind === 'payment_failed' ? CreditCard : AlertTriangle;
+  const tone = notice.kind === 'reactivate' ? 'border-destructive/30 bg-destructive/5' : 'border-border bg-card';
+  const Icon = notice.kind === 'read_only' ? Info : AlertTriangle;
 
   return (
     <div role="status" className={cn('mb-8 flex items-start gap-2.5 rounded-xl border px-3.5 py-3', tone)}>
@@ -93,7 +88,7 @@ export function OrgBillingBanner({ orgId, orgName, notice, onReactivated }: {
           <>
             <span className="text-sm font-medium">{orgName} is unpaid and read-only</span>
             <span className="text-xs text-foreground/80">
-              The subscription has ended. Every drive stays readable. Spending credits, inviting, publishing, and loosening policies are paused until you reactivate. Restricting access still works.
+              Billing needs attention. Every drive stays readable. Spending credits, inviting, publishing, and loosening policies are paused until you reactivate. Restricting access still works.
             </span>
             <div className="mt-1.5 flex flex-wrap gap-2">
               <Button size="sm" onClick={() => void reactivate()} disabled={busy}>
@@ -102,16 +97,6 @@ export function OrgBillingBanner({ orgId, orgName, notice, onReactivated }: {
               </Button>
               <Button size="sm" variant="ghost" onClick={() => void goToOrgBillingPortal(orgId)}>
                 Billing portal
-              </Button>
-            </div>
-          </>
-        ) : notice.kind === 'payment_failed' ? (
-          <>
-            <span className="text-sm font-medium">The last payment for {orgName} failed</span>
-            <span className="text-xs text-foreground/80">Update the card to keep {orgName} active.</span>
-            <div className="mt-1.5">
-              <Button size="sm" variant="outline" onClick={() => void goToOrgBillingPortal(orgId)}>
-                Update payment method
               </Button>
             </div>
           </>

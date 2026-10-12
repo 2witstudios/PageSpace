@@ -78,7 +78,7 @@ export async function readOrgStatus(orgId: string, opts: { now?: Date; executor?
   return { result, subscription, trialEnd: subscription ? subscription.trialEnd : null };
 }
 
-/** The org's status: active | trialing | past_due | lapsed (with why). */
+/** The org's status: active | lapsed (with why). */
 export async function getOrgStatus(orgId: string, opts: { now?: Date; executor?: Executor } = {}): Promise<OrgStatusResult> {
   return (await readOrgStatus(orgId, opts)).result;
 }
@@ -98,7 +98,7 @@ export async function isOrgActive(orgId: string, opts: { now?: Date; executor?: 
 
 /**
  * SEAT-9 / SEAT-6: the billing notice the org surfaces show this caller — Owner and Admins
- * see plan detail (reactivate with the reason, a failed payment, the trial end), a member
+ * see plan detail (reactivate with the reason), a member
  * only the read-only notice while lapsed. Null where billing is off (onprem, tenant: the
  * billing gate hides it entirely) and whenever there is nothing to show.
  */
@@ -109,7 +109,7 @@ export async function getOrgBillingNotice(
 ): Promise<OrgBillingNotice | null> {
   if (!isBillingEnabled()) return null;
   const read = await readOrgStatus(orgId, opts);
-  return orgBillingNotice({ result: read.result, role, trialEnd: read.trialEnd });
+  return orgBillingNotice({ result: read.result, role });
 }
 
 /** SEAT-9: the refusal an org-only capability returns (`{ ok: false, code: 'org_lapsed', message }`) or ok. */

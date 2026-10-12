@@ -186,6 +186,22 @@ describe('org lapse gates (orgs on, real Postgres)', () => {
     expect(deliver).toHaveBeenCalledTimes(1);
   });
 
+  it.each(['past_due', 'trialing'])('SEAT-8 (partial) SEAT-9 (partial) %s preserves reads but refuses access expansion and compute without changing data', async (status) => {
+    if (!world) return;
+    const w = world;
+    const before = await footprint(w);
+    await setSubscription(w.orgId, status);
+    expect(await isOrgActive(w.orgId)).toBe(false);
+    expect(await canUserViewPage(w.ids.marcus, w.pageId)).toBe(true);
+    expect(await getUserDriveAccess(w.ids.dana, w.productId)).toBe(true);
+    expect(await createOrgDrive(w.ids.marcus, { name: 'Engineering', orgId: w.orgId }, deps)).toMatchObject({ ok: false, code: 'org_lapsed' });
+    expect(await createOrRotateInvitation({ actorRole: 'OWNER', orgId: w.orgId, email: `lapsed-${createId()}@northwind.test`, role: 'MEMBER', invitedBy: w.ids.jono, now: new Date(), deliver })).toMatchObject({ ok: false, reason: 'org_lapsed' });
+    expect(await admitDriveComputeCreator({ driveId: w.productId, userId: w.ids.dana })).toMatchObject({ allowed: false, code: 'org_lapsed' });
+    expect(await footprint(w)).toEqual(before);
+    await setSubscription(w.orgId, 'active');
+    expect(await admitDriveComputeCreator({ driveId: w.productId, userId: w.ids.dana })).toEqual({ allowed: true });
+  });
+
   it('SEAT-9 (partial) a pending invite survives the lapse untouched: resend is refused and its link is not rotated', async () => {
     if (!world) return;
     const w = world;
@@ -242,9 +258,9 @@ describe('org lapse gates (orgs on, real Postgres)', () => {
     const w = world;
     const before = await footprint(w);
     await setSubscription(w.orgId, 'past_due');
-    // past_due is Stripe still retrying: the org keeps working.
-    expect((await updateDriveWallet(w.ids.priya, w.productId, { allocationCents: 130_000 }, 'session')).ok).toBe(true);
-    await db.update(wallets).set({ monthlyAllowanceCents: 120_000 }).where(eq(wallets.id, w.productWalletId));
+    // A failed payment lapses immediately, before retries are exhausted.
+    expect(await updateDriveWallet(w.ids.priya, w.productId, { allocationCents: 130_000 }, 'session')).toMatchObject({ ok: false, code: 'org_lapsed' });
+    expect(await footprint(w)).toEqual(before);
 
     await setSubscription(w.orgId, 'unpaid');
     const lapsedRefusal = { ok: false, status: 402, code: 'org_lapsed', message: ORG_LAPSED_MESSAGE };

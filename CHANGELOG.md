@@ -30,6 +30,8 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Changed
 
+- Failed organization payments now pause organization spending and access expansion immediately. Stripe-side trials do not grant organization access. Existing pages remain readable, and security restrictions still work.
+
 - Personal accounts now offer Free and Pro only. Business belongs to organizations; retired personal Business pricing and access exceptions have been removed.
 
 - **A lapsed organization can no longer open things up** (organizations; off until organizations launch) —

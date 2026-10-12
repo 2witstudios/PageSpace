@@ -779,10 +779,12 @@ describe('Stripe webhook — org routing, idempotency, lapse (real Postgres, in-
     expect(await deliver(eventPayload('customer.subscription.updated', { ...snapshot, status: 'active' }))).toBe(200);
     expect((await getOrgStatus(org.orgId)).status).toBe('active');
 
-    // A failed payment: past_due keeps the org working.
+    // A failed payment lapses immediately, while Stripe retries.
     setStripeStatus(org, 'past_due');
     expect(await deliver(eventPayload('invoice.payment_failed', invoiceObject({ customer: org.customerId, subscriptionId: org.subscriptionId, metadata: orgMetadata(org.orgId), seats: 2, paid: false, billingReason: 'subscription_cycle', periodStart: 1_800_000_000 + 60 * DAY })))).toBe(200);
-    expect(await getOrgStatus(org.orgId)).toEqual({ status: 'past_due', reason: null });
+    expect(await getOrgStatus(org.orgId)).toEqual({ status: 'lapsed', reason: 'payment_failed' });
+    expect(await snapshotOf()).toEqual(walletsBefore);
+    expect(await legsOf()).toEqual(legsBefore);
 
     // Dunning gives up: unpaid → lapsed.
     setStripeStatus(org, 'unpaid');

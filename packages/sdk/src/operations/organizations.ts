@@ -80,7 +80,7 @@ export const getOrganization = defineOperation({
     }),
     /** The CALLER'S accepted org role, so a client renders by role without a second call. */
     viewer: z.object({ userId: z.string(), role: orgRoleSchema }),
-    /** The billing banner this caller qualifies for (lapse, failed payment, trial); absent when there is nothing to say. */
+    /** The billing banner this caller qualifies for (reactivation or member read-only notice); absent when there is nothing to say. */
     billingNotice: billingNoticeSchema,
   }),
   requiredScope: 'account',
