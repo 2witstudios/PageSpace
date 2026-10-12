@@ -50,20 +50,22 @@ vi.mock('@pagespace/lib/services/validated-service-token', () => ({
 vi.mock('@pagespace/lib/services/storage-limits', () => ({
   updateStorageUsage: mockUpdateStorageUsage,
   // No org drives here: every orphan's drive is personal (WAL-9 is covered in reap-orphaned-files.test.ts).
-  findDriveOrgIds: async () => new Map<string, string | null>(),
+  findDriveBillingFactsMap: async () => new Map<string, { ownerId: string; orgId: string | null }>(),
   // Mirrors the pure impl so the reaper's credit rules are exercised, not stubbed.
   computeStorageCreditOnUnlink: (input: {
     createdBy: string | null;
-    driveOrgId: string | null;
+    drive: { ownerId: string; orgId: string | null } | null;
     sizeBytes: number | string | null;
     deletedByThisCall: boolean;
     hadPhysicalBlob: boolean;
   }) => {
-    if (!input.deletedByThisCall || !input.hadPhysicalBlob || !input.createdBy) return null;
-    if (input.driveOrgId !== null) return null;
+    if (!input.deletedByThisCall || !input.hadPhysicalBlob) return null;
+    if (input.drive?.orgId) return null;
+    const payer = input.drive ? input.drive.ownerId : input.createdBy;
+    if (!payer) return null;
     const n = typeof input.sizeBytes === 'string' ? Number(input.sizeBytes) : (input.sizeBytes ?? 0);
     if (!Number.isFinite(n) || n <= 0) return null;
-    return { userId: input.createdBy, deltaBytes: -Math.floor(n) };
+    return { userId: payer, deltaBytes: -Math.floor(n) };
   },
 }));
 

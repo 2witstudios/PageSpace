@@ -34,6 +34,8 @@ vi.mock('@pagespace/db/db', () => ({
 }));
 // A collaborator with its own live-DB coverage — see
 // `apps/web/src/lib/repositories/__tests__/chat-mutation-matrix.integration.test.ts`.
+const { mockReattributeOwnerStorage } = vi.hoisted(() => ({ mockReattributeOwnerStorage: vi.fn() }));
+vi.mock('@pagespace/lib/services/storage-limits', () => ({ reattributeDriveOwnerStorageInTx: mockReattributeOwnerStorage }));
 vi.mock('@pagespace/lib/repositories/conversation-cleanup', () => ({
   deleteConversationsForDrive: vi.fn().mockResolvedValue({ conversations: 0, messages: 0 }),
 }));
@@ -149,8 +151,9 @@ describe('POST /api/account/handle-drive', () => {
     vi.clearAllMocks();
 
     vi.mocked(db.transaction).mockImplementation(async (fn) =>
-      fn({ delete: db.delete } as unknown as Parameters<typeof fn>[0]),
+      fn({ delete: db.delete, update: db.update } as unknown as Parameters<typeof fn>[0]),
     );
+    mockReattributeOwnerStorage.mockResolvedValue([]);
 
     // Setup default auth success
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(
@@ -307,6 +310,19 @@ describe('POST /api/account/handle-drive', () => {
       expect(loggers.auth.info).toHaveBeenCalledWith(
         `Drive ownership transferred: drive_abc from user_123 to admin_456`
       );
+    });
+
+    it('WAL-9 (partial) moves the personal drive\'s stored bytes to the new owner\'s quota in the same transaction as the owner change', async () => {
+      setupUpdateMock();
+
+      const response = await POST(new Request('https://example.com/api/account/handle-drive', {
+        method: 'POST',
+        body: JSON.stringify({ driveId: mockDriveId, action: 'transfer', newOwnerId: mockNewOwnerId }),
+      }));
+
+      expect(response.status).toBe(200);
+      expect(db.transaction).toHaveBeenCalledTimes(1);
+      expect(mockReattributeOwnerStorage).toHaveBeenCalledWith(expect.anything(), { driveId: mockDriveId, fromUserId: mockUserId, toUserId: mockNewOwnerId });
     });
 
     it('rejects transfer of a Home drive with 403 (Home stays bound to its owner)', async () => {

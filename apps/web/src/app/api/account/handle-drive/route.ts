@@ -9,6 +9,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { getActorInfo, logDriveActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { deleteConversationsForDrive } from '@pagespace/lib/repositories/conversation-cleanup';
+import { reattributeDriveOwnerStorageInTx } from '@pagespace/lib/services/storage-limits';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -86,11 +87,15 @@ export async function POST(req: Request) {
         );
       }
 
-      // Transfer ownership
-      await db
-        .update(drives)
-        .set({ ownerId: newOwnerId })
-        .where(eq(drives.id, driveId));
+      // Transfer ownership. A personal drive's stored bytes bill its owner (WAL-9), so they move
+      // to the new owner's quota in the same transaction as drives.ownerId.
+      await db.transaction(async (tx) => {
+        await tx
+          .update(drives)
+          .set({ ownerId: newOwnerId })
+          .where(eq(drives.id, driveId));
+        await reattributeDriveOwnerStorageInTx(tx, { driveId, fromUserId: drive.ownerId, toUserId: newOwnerId });
+      });
 
       // Log activity for audit trail
       const actorInfo = await getActorInfo(userId);

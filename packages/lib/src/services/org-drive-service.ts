@@ -170,9 +170,9 @@ export async function moveDriveToOrg(
       .where(eq(drives.id, driveId))
       .returning();
 
-    // O-9: the drive's bytes leave each uploader's personal quota in the same transaction that
-    // makes them the org's; the org's usage is derived from its drives, so it follows orgId.
-    const storageReattribution = await reattributeDriveStorageInTx(tx, { driveId, orgId: input.orgId, direction: 'into-org' });
+    // O-9: the drive's bytes leave its owner's personal quota in the same transaction that makes
+    // them the org's; the org's usage is derived from its drives, so it follows orgId.
+    const storageReattribution = await reattributeDriveStorageInTx(tx, { driveId, ownerId: drive.ownerId, orgId: input.orgId, direction: 'into-org' });
     const publish = await deps.syncOrgMembership(tx, { kind: 'move-in', driveId, orgId: input.orgId });
     // POL-2 (Review #2762 P1-1): the drive brings its outsiders with it. Under the org row lock taken above, the
     // org's guests policy decides them as it decides any admission: off parks them (restored when guests come back
@@ -228,8 +228,8 @@ export async function moveDriveOutOfOrg(
       .where(eq(drives.id, driveId))
       .returning();
 
-    // O-9: the drive's bytes go back onto each uploader's personal quota, atomically with orgId.
-    const storageReattribution = await reattributeDriveStorageInTx(tx, { driveId, orgId, direction: 'out-of-org' });
+    // O-9: the drive's bytes land on its owner's (the lead's) personal quota, atomically with orgId.
+    const storageReattribution = await reattributeDriveStorageInTx(tx, { driveId, ownerId: moved.ownerId, orgId, direction: 'out-of-org' });
     const publish = await deps.syncOrgMembership(tx, {
       kind: 'move-out',
       driveId,

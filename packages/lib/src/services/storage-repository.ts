@@ -4,7 +4,8 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { eq, sql, and, inArray, desc, isNull, or } from '@pagespace/db/operators';
+import { eq, sql, and, inArray, desc, isNull, isNotNull, or } from '@pagespace/db/operators';
+import type { DriveBillingFacts } from '../billing/sandbox-payer';
 import { users } from '@pagespace/db/schema/auth';
 import { pages, drives, storageEvents } from '@pagespace/db/schema/core';
 import { files } from '@pagespace/db/schema/storage';
@@ -21,7 +22,7 @@ export interface StorageDriftCandidate {
   userId: string;
   /** users.storageUsedBytes — the cached counter. */
   materializedBytes: number;
-  /** SUM(files.sizeBytes) for files.createdBy = userId outside org drives — the source of truth. */
+  /** SUM(files.sizeBytes) over the files billed to the user (billedToUser) — the source of truth. */
   derivedBytes: number;
 }
 
@@ -32,11 +33,16 @@ export interface DriveFileBytes {
 }
 
 /**
- * WAL-9, O-9: a personal quota counts only files OUTSIDE org drives. Bytes in an org drive bill
- * the org, whose usage is derived from its drives' files rows. A drive-less file (a DM
- * attachment) is personal. Used as a filter on a `files` LEFT JOIN `drives`.
+ * WAL-9, O-9: the files a person's quota counts — the payer seam "org if drives.orgId, else
+ * owner" applied to bytes. A file in one of their PERSONAL drives (no org) bills them as the
+ * drive's owner, whoever uploaded it; a drive-less file (a DM attachment) bills its uploader.
+ * Bytes in an org drive bill the org, whose usage is derived from its drives' files rows. Used
+ * as a filter on a `files` LEFT JOIN `drives`.
  */
-const personallyAttributed = or(isNull(files.driveId), isNull(drives.orgId));
+const billedToUser = (userId: string) => or(
+  and(isNotNull(files.driveId), eq(drives.ownerId, userId), isNull(drives.orgId)),
+  and(isNull(files.driveId), eq(files.createdBy, userId)),
+);
 
 const STORAGE_EVENT_CHUNK = 500;
 
@@ -85,14 +91,15 @@ export const storageRepository = {
              COALESCE(f.total, 0) AS "derivedBytes"
       FROM users u
       LEFT JOIN (
-        SELECT fi."createdBy", SUM(fi."sizeBytes") AS total, MAX(fi."createdAt") AS "lastCreatedAt"
+        -- WAL-9, O-9: a personal drive's bytes bill its OWNER; a drive-less attachment its
+        -- uploader; org-drive bytes bill the org, never a personal quota.
+        SELECT COALESCE(d."ownerId", fi."createdBy") AS payer, SUM(fi."sizeBytes") AS total, MAX(fi."createdAt") AS "lastCreatedAt"
         FROM files fi
         LEFT JOIN drives d ON d.id = fi."driveId"
-        WHERE fi."createdBy" IS NOT NULL
-          -- WAL-9, O-9: org-drive bytes bill the org, never the uploader's personal quota.
-          AND d."orgId" IS NULL
-        GROUP BY fi."createdBy"
-      ) f ON f."createdBy" = u.id
+        WHERE d."orgId" IS NULL
+          AND COALESCE(d."ownerId", fi."createdBy") IS NOT NULL
+        GROUP BY COALESCE(d."ownerId", fi."createdBy")
+      ) f ON f.payer = u.id
       WHERE ABS(ROUND(u."storageUsedBytes") - COALESCE(f.total, 0)) > ${Math.max(0, Math.round(toleranceBytes))}
         AND (f."lastCreatedAt" IS NULL OR f."lastCreatedAt" < now() - make_interval(secs => ${Math.max(0, cooldownSeconds)}))
     `);
@@ -122,7 +129,8 @@ export const storageRepository = {
     const [row] = await db
       .select({ createdAt: files.createdAt })
       .from(files)
-      .where(eq(files.createdBy, userId))
+      .leftJoin(drives, eq(drives.id, files.driveId))
+      .where(billedToUser(userId))
       .orderBy(desc(files.createdAt))
       .limit(1);
     return row?.createdAt ?? null;
@@ -141,17 +149,18 @@ export const storageRepository = {
   },
 
   /**
-   * H4: the reconcile population — every `files` row the user uploaded
-   * (createdBy = userId), across all drives, including trashed-but-unpurged
-   * files (the `files` row outlives a trashed page until the reaper deletes it).
-   * Returns raw byte values; the pure `sumStorageBytes` does the integer-safe sum.
+   * H4: the reconcile population — every `files` row billed to the user (billedToUser: their
+   * personal drives' files, whoever uploaded them, and their own drive-less attachments),
+   * including trashed-but-unpurged files (the `files` row outlives a trashed page until the
+   * reaper deletes it). Returns raw byte values; the pure `sumStorageBytes` does the
+   * integer-safe sum.
    */
-  findFilesByCreator: async (userId: string): Promise<Array<{ sizeBytes: number }>> => {
+  findFilesBilledToUser: async (userId: string): Promise<Array<{ sizeBytes: number }>> => {
     const rows = await db
       .select({ sizeBytes: files.sizeBytes })
       .from(files)
       .leftJoin(drives, eq(drives.id, files.driveId))
-      .where(and(eq(files.createdBy, userId), personallyAttributed));
+      .where(billedToUser(userId));
     return rows.map((r: { sizeBytes: number | string | null }) => ({
       sizeBytes: typeof r.sizeBytes === 'string' ? Number(r.sizeBytes) : (r.sizeBytes ?? 0),
     }));
@@ -179,10 +188,10 @@ export const storageRepository = {
     return result.rows.length > 0;
   },
 
-  /** The drive's orgId; undefined when the drive does not exist. */
-  findDriveOrgId: async (driveId: string): Promise<string | null | undefined> => {
-    const [row] = await db.select({ orgId: drives.orgId }).from(drives).where(eq(drives.id, driveId)).limit(1);
-    return row ? row.orgId : undefined;
+  /** The drive's billing facts (owner, org); undefined when the drive does not exist. */
+  findDriveBillingFacts: async (driveId: string): Promise<DriveBillingFacts | undefined> => {
+    const [row] = await db.select({ ownerId: drives.ownerId, orgId: drives.orgId }).from(drives).where(eq(drives.id, driveId)).limit(1);
+    return row ? { ownerId: row.ownerId, orgId: row.orgId ?? null } : undefined;
   },
 
   /** An org's derived storage usage: SUM(files.sizeBytes) over files in its drives (WAL-9). */
@@ -200,11 +209,11 @@ export const storageRepository = {
     return rows.map((r: { id: string }) => r.id);
   },
 
-  /** drives.orgId for each existing drive among `driveIds` (a missing drive is absent). */
-  findDriveOrgIds: async (driveIds: string[]): Promise<Map<string, string | null>> => {
+  /** The billing facts (owner, org) of each existing drive among `driveIds` (a missing drive is absent). */
+  findDriveBillingFactsMap: async (driveIds: string[]): Promise<Map<string, DriveBillingFacts>> => {
     if (driveIds.length === 0) return new Map();
-    const rows = await db.select({ id: drives.id, orgId: drives.orgId }).from(drives).where(inArray(drives.id, driveIds));
-    return new Map(rows.map((r: { id: string; orgId: string | null }) => [r.id, r.orgId]));
+    const rows = await db.select({ id: drives.id, ownerId: drives.ownerId, orgId: drives.orgId }).from(drives).where(inArray(drives.id, driveIds));
+    return new Map(rows.map((r: { id: string; ownerId: string; orgId: string | null }) => [r.id, { ownerId: r.ownerId, orgId: r.orgId ?? null }]));
   },
 
   /** One drive's files rows, read inside the move's transaction (O-9 re-attribution). */

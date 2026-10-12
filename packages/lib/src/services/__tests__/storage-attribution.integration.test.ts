@@ -3,9 +3,11 @@
  *
  * The pure rules are unit-tested in storage-attribution.test.ts. This file proves what only the
  * database can: an upload into an org drive leaves the uploader's personal counter alone and is
- * checked against the org's derived usage; a move in or out re-attributes byte counts exactly,
- * atomically with drives.orgId, with nothing double-counted or orphaned; and the reconcile's
- * basis agrees, so the cron never "corrects" an org drive's bytes back onto a person.
+ * checked against the org's derived usage; an upload into a PERSONAL drive bills the drive's
+ * owner, whoever uploads it (the payer seam "org if drives.orgId, else owner"); a move in or out,
+ * or a hand-over to a new owner, re-attributes byte counts exactly, atomically with the drive
+ * row, with nothing double-counted or orphaned; and the reconcile's basis agrees, so the cron
+ * never "corrects" bytes back onto anyone else.
  *
  * Locally:
  *     DATABASE_URL=... bun run --filter '@pagespace/lib' test:integration -- src/services/__tests__/storage-attribution.integration.test.ts
@@ -26,6 +28,7 @@ import {
   chargeStorageForStore,
   checkStorageQuotaForDrive,
   getOrgStorageQuota,
+  reattributeDriveOwnerStorageInTx,
   resolveUploadQuotaTarget,
   STORAGE_TIERS,
 } from '../storage-limits';
@@ -145,7 +148,7 @@ describe('uploads into an org drive', () => {
     expect((await getOrgStorageQuota(northwind)).usedBytes).toBe(1000);
   });
 
-  it('WAL-9 (partial) a store in a personal drive still charges the uploader (control)', async () => {
+  it('WAL-9 (partial) a store in your own personal drive charges you (control)', async () => {
     const personal = await seedDrive(lena);
     await setCounter(lena, 700);
 
@@ -153,6 +156,27 @@ describe('uploads into an org drive', () => {
 
     expect(payer).toEqual({ kind: 'user', userId: lena });
     expect(await counter(lena)).toBe(1000);
+  });
+
+  it('WAL-9 (partial) a member\'s store in SOMEONE ELSE\'s personal drive charges the drive owner, is checked on the owner\'s quota, and leaves the uploader untouched', async () => {
+    const marcusDrive = await seedDrive(marcus);
+    await setCounter(marcus, 100);
+    await setCounter(lena, 700);
+
+    const target = await resolveUploadQuotaTarget(lena, marcusDrive);
+    const payer = await chargeStorageForStore(lena, marcusDrive, 300, { eventType: 'upload' });
+
+    expect(target?.payer).toEqual({ kind: 'user', userId: marcus });
+    expect(target?.quota).toMatchObject({ userId: marcus });
+    expect(payer).toEqual({ kind: 'user', userId: marcus });
+    expect(await counter(marcus)).toBe(400);
+    expect(await counter(lena)).toBe(700);
+  });
+
+  it('WAL-9 (partial) a drive-less attachment (a DM) charges its uploader', async () => {
+    await setCounter(lena, 0);
+    expect(await chargeStorageForStore(lena, null, 50, { eventType: 'upload' })).toEqual({ kind: 'user', userId: lena });
+    expect(await counter(lena)).toBe(50);
   });
 
   it('WAL-9 (partial) an uploader whose personal quota is full can still upload into an org drive, and not into their own', async () => {
@@ -183,14 +207,15 @@ describe('uploads into an org drive', () => {
 });
 
 describe('moving a drive re-attributes its bytes', () => {
-  it('WAL-9 (partial) move in takes exactly each uploader\'s bytes off their counter and onto the org; move out puts exactly them back', async () => {
+  it('WAL-9 (partial) move in takes exactly the drive\'s bytes — every uploader\'s — off its OWNER\'s counter and onto the org; move out puts exactly them back on the owner', async () => {
     const product = await seedDrive(marcus);
     const marcusOther = await seedDrive(marcus);
     await seedFile(product, marcus, 1000);
     await seedFile(product, lena, 250);
     await seedFile(marcusOther, marcus, 500);
-    await setCounter(marcus, 1500);
-    await setCounter(lena, 250);
+    // While personal, every byte in Marcus's drives bills Marcus, Lena's upload included.
+    await setCounter(marcus, 1750);
+    await setCounter(lena, 0);
 
     const movedIn = await moveDriveToOrg(marcus, product, { orgId: northwind }, deps);
 
@@ -204,19 +229,20 @@ describe('moving a drive re-attributes its bytes', () => {
     const movedOut = await moveDriveOutOfOrg(jono, product, { implicitMembers: 'keep' }, deps);
 
     expect(movedOut).toMatchObject({ ok: true, storageReattribution: { status: 'applied', movedBytes: 1250 } });
-    expect(await counter(marcus)).toBe(1500);
-    expect(await counter(lena)).toBe(250);
+    expect(await counter(marcus)).toBe(1750);
+    expect(await counter(lena)).toBe(0);
     expect((await getOrgStorageQuota(northwind)).usedBytes).toBe(0);
   });
 
-  it('WAL-9 (partial) each re-attribution is logged per uploader with the drive, org and direction', async () => {
+  it('WAL-9 (partial) the re-attribution is logged on the owner\'s counter with the drive, org and direction', async () => {
     const product = await seedDrive(marcus);
     await seedFile(product, lena, 250);
-    await setCounter(lena, 250);
+    await setCounter(marcus, 250);
 
     await moveDriveToOrg(marcus, product, { orgId: northwind }, deps);
 
-    const events = await db.select().from(storageEvents).where(eq(storageEvents.userId, lena));
+    expect(await db.select().from(storageEvents).where(eq(storageEvents.userId, lena))).toEqual([]);
+    const events = await db.select().from(storageEvents).where(eq(storageEvents.userId, marcus));
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({
       eventType: 'reattribute',
@@ -240,17 +266,43 @@ describe('moving a drive re-attributes its bytes', () => {
   });
 });
 
+describe('handing a personal drive to a new owner re-attributes its bytes', () => {
+  it('WAL-9 (partial) every byte in the drive leaves the old owner\'s counter and lands on the new owner\'s, atomically with drives.ownerId', async () => {
+    const notes = await seedDrive(marcus);
+    await seedFile(notes, marcus, 600);
+    await seedFile(notes, lena, 400);
+    await setCounter(marcus, 1000);
+    await setCounter(lena, 5);
+
+    await db.transaction(async (tx) => {
+      await tx.update(drives).set({ ownerId: lena }).where(eq(drives.id, notes));
+      await reattributeDriveOwnerStorageInTx(tx, { driveId: notes, fromUserId: marcus, toUserId: lena });
+    });
+
+    expect(await counter(marcus)).toBe(0);
+    expect(await counter(lena)).toBe(1005);
+    expect(await calculateActualStorageUsage(lena)).toBe(1000);
+    expect(await calculateActualStorageUsage(marcus)).toBe(0);
+  });
+});
+
 describe('the reconcile agrees with the attribution', () => {
-  it('WAL-9 (partial) an uploader\'s derived usage excludes their files in org drives, so the cron never bills them back', async () => {
+  it('WAL-9 (partial) a person\'s derived usage is their personal drives\' files (whoever uploaded them) and their own DM attachments — never an org drive\'s, never another owner\'s drive — so the cron never bills bytes back onto the wrong person', async () => {
     const orgDrive = await seedDrive(marcus, northwind);
     const personal = await seedDrive(lena);
+    const marcusDrive = await seedDrive(marcus);
     await seedFile(orgDrive, lena, 1000);
     await seedFile(personal, lena, 40);
-    await seedFile(null, lena, 2); // a DM attachment: no drive, personal
-    await setCounter(lena, 42);
+    await seedFile(personal, marcus, 8); // Marcus uploaded into Lena's drive: Lena's bytes
+    await seedFile(marcusDrive, lena, 300); // Lena uploaded into Marcus's drive: Marcus's bytes
+    await seedFile(null, lena, 2); // a DM attachment: no drive, the uploader's
+    await setCounter(lena, 50);
+    await setCounter(marcus, 300);
 
-    expect(await calculateActualStorageUsage(lena)).toBe(42);
+    expect(await calculateActualStorageUsage(lena)).toBe(50);
+    expect(await calculateActualStorageUsage(marcus)).toBe(300);
     const candidates = await storageRepository.findStorageDriftCandidates(1, 0);
     expect(candidates.find((c) => c.userId === lena)).toBeUndefined();
+    expect(candidates.find((c) => c.userId === marcus)).toBeUndefined();
   });
 });
