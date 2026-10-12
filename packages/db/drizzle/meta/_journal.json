@@ -2318,6 +2318,13 @@
       "when": 1791772892501,
       "tag": "0342_device_authentication_evidence",
       "breakpoints": true
+    },
+    {
+      "idx": 333,
+      "version": "7",
+      "when": 1791773814980,
+      "tag": "0343_oauth_authentication_evidence",
+      "breakpoints": true
     }
   ]
 }

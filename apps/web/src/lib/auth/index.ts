@@ -1,3 +1,4 @@
+import { parseVerifiedAuthentication } from '@pagespace/lib/auth/authentication-evidence';
 import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db'
 import { eq, and, isNull } from '@pagespace/db/operators'
@@ -202,6 +203,8 @@ export async function validateMCPToken(token: string): Promise<MCPAuthDetails | 
         id: true,
         userId: true,
         isScoped: true,
+        authenticatedAt: true,
+        authenticationAssurance: true,
       },
       with: {
         user: {
@@ -269,6 +272,7 @@ export async function validateMCPToken(token: string): Promise<MCPAuthDetails | 
       tokenVersion: user.tokenVersion,
       adminRoleVersion: user.adminRoleVersion,
       tokenId: tokenRecord.id,
+      authentication: parseVerifiedAuthentication({ authenticatedAtMs: tokenRecord.authenticatedAt?.getTime(), assurance: tokenRecord.authenticationAssurance }, Date.now()),
       allowedDriveIds,
     };
   } catch (error) {
@@ -362,6 +366,7 @@ export async function validateOAuthAccessToken(token: string): Promise<OAuthAuth
       tokenVersion: user.tokenVersion,
       adminRoleVersion: user.adminRoleVersion,
       tokenId: record.id,
+      authentication: parseVerifiedAuthentication({ authenticatedAtMs: record.authenticatedAt?.getTime(), assurance: record.authenticationAssurance }, Date.now()),
       scopes: parsed.scopes,
       driveScopes,
       allowedDriveIds,

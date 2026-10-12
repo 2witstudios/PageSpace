@@ -436,6 +436,8 @@ describe('POST /api/oauth/authorize — approve', () => {
   });
 
   it('issues a single-use code hashed at rest and echoes state verbatim in the redirect target', async () => {
+    const authentication = { authenticatedAtMs: Date.now() - 3600000, assurance: 'user_verified_passkey' as const };
+    vi.mocked(consumeStepUpGrant).mockResolvedValue({ ok: true, authentication });
     const res = await POST(postRequest(approvalBody) as never);
     expect(res.status).toBe(200);
     const json = await res.json();
@@ -446,7 +448,8 @@ describe('POST /api/oauth/authorize — approve', () => {
     expect(code).toBeTruthy();
 
     expect(vi.mocked(createAuthorizationCode)).toHaveBeenCalledTimes(1);
-    const call = vi.mocked(createAuthorizationCode).mock.calls[0][0] as { codeHash: string };
+    const call = vi.mocked(createAuthorizationCode).mock.calls[0][0];
+    expect(call.authentication).toEqual(authentication);
     expect(call.codeHash).not.toBe(code);
     expect(call.codeHash).toMatch(/^[0-9a-f]{64}$/); // SHA3-256 hex digest, never the plaintext code
   });

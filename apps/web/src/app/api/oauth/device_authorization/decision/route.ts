@@ -69,6 +69,7 @@ export async function POST(req: NextRequest) {
 
   const normalized = normalizeUserCode(body.userCode);
 
+  let authentication = auth.authentication ?? null;
   if (body.action === 'approve') {
     const lookup = await verifyDeviceUserCode({ userCode: normalized, now: new Date() });
     // An empty scope list is a legitimate device-authorization request
@@ -104,12 +105,14 @@ export async function POST(req: NextRequest) {
           missingReason: 'device_decision_missing_step_up',
           invalidReason: 'device_decision_step_up_invalid',
         });
-        if (gate) return gate;
+        if ('error' in gate) return gate.error;
+        authentication = gate.authentication;
       }
     }
   }
 
   const result = await recordDeviceApproval({
+    authentication,
     userCode: normalized,
     action: body.action,
     userId: auth.userId,

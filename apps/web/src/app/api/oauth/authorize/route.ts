@@ -286,6 +286,7 @@ export async function POST(req: NextRequest) {
   const expiresAt = new Date(Date.now() + AUTHORIZATION_CODE_TTL_SECONDS * 1000);
 
   await createAuthorizationCode({
+    authentication: stepUpResult.authentication,
     clientDbId,
     userId: auth.userId,
     redirectUri: result.redirectUri,

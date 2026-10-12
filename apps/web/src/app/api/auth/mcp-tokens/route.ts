@@ -93,6 +93,8 @@ export async function POST(req: NextRequest) {
 
     // Use transaction to ensure token and drive scopes are created atomically
     const newToken = await sessionRepository.createMcpTokenWithDriveScopes({
+      authenticatedAt: auth.authentication ? new Date(auth.authentication.authenticatedAtMs) : null,
+      authenticationAssurance: auth.authentication?.assurance ?? null,
       userId,
       tokenHash,
       tokenPrefix,

@@ -44,6 +44,8 @@ export const sessionRepository = {
   async createMcpTokenWithDriveScopes(
     data: {
       userId: string;
+      authenticatedAt?: Date | null;
+      authenticationAssurance?: 'single_factor' | 'user_verified_passkey' | null;
       tokenHash: string;
       tokenPrefix: string;
       name: string;
@@ -58,6 +60,8 @@ export const sessionRepository = {
         .insert(mcpTokens)
         .values({
           userId: data.userId,
+          authenticatedAt: data.authenticatedAt ?? null,
+          authenticationAssurance: data.authenticationAssurance ?? null,
           tokenHash: data.tokenHash,
           tokenPrefix: data.tokenPrefix,
           name: data.name,

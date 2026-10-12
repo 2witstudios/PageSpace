@@ -69,6 +69,8 @@ function evalPredicate(pred: Predicate, row: Record<string, unknown>): boolean {
 }
 
 interface RefreshRow {
+  authenticatedAt?: Date | null;
+  authenticationAssurance?: 'single_factor' | 'user_verified_passkey' | null;
   id: string;
   tokenHash: string;
   tokenPrefix?: string;
@@ -85,6 +87,8 @@ interface RefreshRow {
 }
 
 interface AccessRow {
+  authenticatedAt?: Date | null;
+  authenticationAssurance?: 'single_factor' | 'user_verified_passkey' | null;
   tokenHash: string;
   familyId: string;
   userId: string;
@@ -551,5 +555,15 @@ describe('refreshTokenGrant â€” tokenVersion mismatch (global logout, ADR 0003 Â
     });
 
     expect(result.outcome).toBe('ok');
+  });
+});
+
+describe('SEC-3 (partial) OAuth credential ceremony provenance', () => {
+  it('copies the original ceremony to every issued credential without advancing its time', async () => {
+    const authentication = { authenticatedAt: new Date(Date.now() - 3600000), authenticationAssurance: 'user_verified_passkey' as const };
+    seedRefreshRow(authentication);
+    expect((await refreshTokenGrant({ refreshToken: REFRESH_TOKEN, clientDbId: CLIENT_DB_ID, requestedScope: null, now: new Date() })).outcome).toBe('ok');
+    expect(refreshRows[1]).toMatchObject(authentication);
+    expect(accessRows[0]).toMatchObject(authentication);
   });
 });

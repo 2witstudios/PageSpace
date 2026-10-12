@@ -34,9 +34,10 @@ describe('requireStepUpGrant', () => {
       invalidReason: 'mcp_token_mint_step_up_invalid',
     });
 
-    expect(result).not.toBeNull();
-    expect(result?.status).toBe(401);
-    expect(await result?.json()).toEqual({ error: 'step_up_required' });
+    expect('error' in result).toBe(true);
+    if (!('error' in result)) throw new Error('Expected step-up refusal');
+    expect(('error' in result ? result.error.status : undefined)).toBe(401);
+    expect(await ('error' in result ? result.error.json() : undefined)).toEqual({ error: 'step_up_required' });
     expect(consumeStepUpGrant).not.toHaveBeenCalled();
     expect(auditRequest).toHaveBeenCalledWith(
       req,
@@ -54,7 +55,7 @@ describe('requireStepUpGrant', () => {
       invalidReason: 'mcp_token_mint_step_up_invalid',
     });
 
-    expect(result?.status).toBe(401);
+    expect(('error' in result ? result.error.status : undefined)).toBe(401);
     expect(consumeStepUpGrant).not.toHaveBeenCalled();
   });
 
@@ -70,16 +71,17 @@ describe('requireStepUpGrant', () => {
       invalidReason: 'mcp_token_update_step_up_invalid',
     });
 
-    expect(result).not.toBeNull();
-    expect(result?.status).toBe(401);
-    expect(await result?.json()).toEqual({ error: 'step_up_required' });
+    expect('error' in result).toBe(true);
+    if (!('error' in result)) throw new Error('Expected step-up refusal');
+    expect(('error' in result ? result.error.status : undefined)).toBe(401);
+    expect(await ('error' in result ? result.error.json() : undefined)).toEqual({ error: 'step_up_required' });
     expect(auditRequest).toHaveBeenCalledWith(
       req,
       expect.objectContaining({ eventType: 'authz.access.denied', userId: 'user-1', details: { reason: 'mcp_token_update_step_up_invalid' } }),
     );
   });
 
-  it('returns null (proceed) once the grant is consumed, passing the given actionBinding through untouched', async () => {
+  it('returns verified evidence once the grant is consumed, passing the given actionBinding through untouched', async () => {
     vi.mocked(consumeStepUpGrant).mockResolvedValue({ ok: true, authentication: { authenticatedAtMs: Date.now() - 60000, assurance: 'user_verified_passkey' } });
 
     const actionBinding = { op: 'mint', name: 'Token', driveScopes: '[]' };
@@ -92,7 +94,7 @@ describe('requireStepUpGrant', () => {
       invalidReason: 'mcp_token_mint_step_up_invalid',
     });
 
-    expect(result).toBeNull();
+    expect(result).toEqual({ authentication: expect.objectContaining({ assurance: 'user_verified_passkey' }) });
     expect(consumeStepUpGrant).toHaveBeenCalledWith({ userId: 'user-1', token: 'ps_stepup_good', actionBinding });
     expect(auditRequest).not.toHaveBeenCalled();
   });
