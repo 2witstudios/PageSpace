@@ -1,1 +1,0 @@
-ALTER TABLE "organizations" ADD CONSTRAINT "organizations_avatar_url_chk" CHECK ("organizations"."avatarUrl" IS NULL OR "organizations"."avatarUrl" ~ ('^/api/orgs/' || "organizations"."id" || '/avatar/avatar\.(png|jpg|gif|webp)\?v=[0-9]+$'));

@@ -61,7 +61,7 @@ export const organizations = pgTable('organizations', {
   // Only this org's own avatar route, exactly as orgAvatarPath builds it: no other host, no other org.
   avatarUrlCheck: check(
     'organizations_avatar_url_chk',
-    sql`${table.avatarUrl} IS NULL OR ${table.avatarUrl} ~ ('^/api/orgs/' || ${table.id} || '/avatar/avatar\\.(png|jpg|gif|webp)\\?v=[0-9]+$')`,
+    sql`${table.avatarUrl} IS NULL OR ${table.avatarUrl} ~ ('^/api/orgs/' || ${table.id} || '/avatar/avatar-[a-z0-9]{1,32}\\.(png|jpg|gif|webp)$')`,
   ),
 }));
 
