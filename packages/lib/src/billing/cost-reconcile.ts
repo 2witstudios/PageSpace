@@ -122,15 +122,16 @@ async function bumpAttempts(aiUsageLogId: string): Promise<void> {
  * backfill pending sweep, an absent one is billed by its orphan sweep).
  *
  * Returns the wallet that base charge was billed to (WAL-5: reconciliation is keyed on
- * the wallet), or null when there is no base charge yet.
+ * the wallet) and the automation it ran for (SPEND-10, so the correction stays attributed),
+ * or null when there is no base charge yet.
  */
-async function usageLedgerWalletId(aiUsageLogId: string): Promise<string | null> {
+async function usageLedgerCharge(aiUsageLogId: string): Promise<{ walletId: string; automationWorkflowId: string | null } | null> {
   const rows = await db
-    .select({ walletId: creditLedger.walletId })
+    .select({ walletId: creditLedger.walletId, automationWorkflowId: creditLedger.automationWorkflowId })
     .from(creditLedger)
     .where(and(eq(creditLedger.aiUsageLogId, aiUsageLogId), eq(creditLedger.entryType, 'usage')))
     .limit(1);
-  return rows[0]?.walletId ?? null;
+  return rows[0] ?? null;
 }
 
 /**
@@ -144,7 +145,7 @@ async function usageLedgerWalletId(aiUsageLogId: string): Promise<string | null>
  */
 async function applyCorrection(
   userId: string,
-  walletId: string,
+  charge: { walletId: string; automationWorkflowId: string | null },
   drift: ReturnType<typeof computeCostDrift>,
   aiUsageLogId: string,
   generationIds: string[],
@@ -153,6 +154,7 @@ async function applyCorrection(
   // Signed nominal cents for the adjustment row: positive delta = more spend = negative
   // amount; negative delta = refund = positive amount. `|| 0` avoids storing -0.
   const amountCents = -Math.round(drift.deltaChargeMillicents / 1000) || 0;
+  const { walletId } = charge;
 
   return db.transaction(async (tx) => {
     const claimed = await tx
@@ -171,6 +173,7 @@ async function applyCorrection(
         reconcileGenerationKey: reconcileKey,
         markupBps: MARKUP_BPS,
         consumeStatus: 'applied',
+        automationWorkflowId: charge.automationWorkflowId,
       })
       .onConflictDoNothing({
         target: creditLedger.reconcileGenerationKey,
@@ -233,11 +236,11 @@ async function reconcileRow(row: PendingRow, fetcher: GenerationFetcher, now: Da
   }
 
   // Defer until the base usage charge exists: correcting drift before the base is billed
-  // would leave it unbilled AND mask the orphan from credit-backfill (see usageLedgerWalletId).
+  // would leave it unbilled AND mask the orphan from credit-backfill (see usageLedgerCharge).
   // Bump attempts so a row whose base never materializes eventually drops to 'unavailable'
   // rather than retrying forever. No /generation fetch is spent while deferred.
-  const walletId = await usageLedgerWalletId(row.id);
-  if (walletId === null) {
+  const charge = await usageLedgerCharge(row.id);
+  if (charge === null) {
     if (row.reconcileAttempts + 1 >= COST_RECONCILE_MAX_ATTEMPTS) {
       await markStatus(row.id, 'unavailable', now);
       return 'unavailable';
@@ -277,7 +280,7 @@ async function reconcileRow(row: PendingRow, fetcher: GenerationFetcher, now: Da
     return 'reconciled';
   }
 
-  const applied = await applyCorrection(row.userId, walletId, drift, row.id, ids);
+  const applied = await applyCorrection(row.userId, charge, drift, row.id, ids);
   await markStatus(row.id, 'reconciled', now);
   if (applied) void emitCreditsUpdated(row.userId);
   return 'corrected';

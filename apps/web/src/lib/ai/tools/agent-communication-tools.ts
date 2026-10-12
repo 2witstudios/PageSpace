@@ -930,6 +930,8 @@ export async function executeAskAgent(
           walletId: settleWalletId,
           // WAL-6b: the hold records the turn's fallback origin; carried too for a hold-less settle.
           fallbackFromWalletId: spendFallbackFromWalletId(askSpend),
+          // SPEND-10: a consultation inside an automation run is that automation's spend.
+          automationWorkflowId: executionContext?.creditSpend?.automationWorkflowId,
           success: true,
           metadata: { feature: 'ask_agent', agentCallDepth: callDepth + 1 },
         });

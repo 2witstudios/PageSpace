@@ -60,7 +60,10 @@ export interface ToolExecutionContext {
   // when it is not this context's `userId`: a manual workflow Run is gated as the person who
   // pressed it while the run reads content as the workflow's creator (review #2817 P2-3). Every
   // model call riding this turn gates and records its usage as them; absent, the context's user.
-  creditSpend?: { spend: SpendTarget; walletId?: string; userId?: string };
+  // `automationWorkflowId` is the workflow a run with no person present spends for (SPEND-10,
+  // automationWorkflowIdFor): every model call riding the run records it, so the drive lead sees
+  // that spend as the automation rather than merged into its creator.
+  creditSpend?: { spend: SpendTarget; walletId?: string; userId?: string; automationWorkflowId?: string };
 
   // MCP token drive-scope restriction. Empty/undefined = full access (session auth
   // or an unscoped MCP token); non-empty = tools may only touch these drive IDs.

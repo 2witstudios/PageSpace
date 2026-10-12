@@ -1327,6 +1327,11 @@ export interface AIUsageData {
   // (spendFallbackFromWalletId of the turn's target), so its overshoot never lands on the person.
   fallbackFromWalletId?: string;
 
+  // SPEND-10: the automation (workflow) this call ran for with no person present
+  // (automationWorkflowIdFor). Recorded on the usage row and the ledger claim, so the drive lead
+  // sees the spend as the automation rather than merged into its creator.
+  automationWorkflowId?: string;
+
   // What the spend is FOR: an AI call (the default) or compute (WAL-9). Written on the
   // ledger rows and stamped into metadata.spendKind, so the orphan recovery re-settles
   // with the same kind; compute on an org pool never counts toward a seat.
@@ -1585,6 +1590,7 @@ export async function trackAIUsage(data: AIUsageData): Promise<UsageTrackingOutc
         // WAL-5: the wallet this call is charged to, recorded WITH the usage row so the
         // orphan recovery re-settles on it — never re-derived onto the person's own wallet.
         ...(settleWalletId !== undefined ? { walletId: settleWalletId } : {}),
+        ...(data.automationWorkflowId ? { automationWorkflowId: data.automationWorkflowId } : {}),
         reconcileStatus,
       });
       // `writeAiUsage` CATCHES its own failure and returns null rather than
@@ -1637,6 +1643,7 @@ export async function trackAIUsage(data: AIUsageData): Promise<UsageTrackingOutc
           holdId: data.holdId,
           walletId: data.walletId,
           ...(data.fallbackFromWalletId ? { fallbackFromWalletId: data.fallbackFromWalletId } : {}),
+          ...(data.automationWorkflowId ? { automationWorkflowId: data.automationWorkflowId } : {}),
           spendKind: data.spendKind,
           // Scope the live balance push so the per-conversation usage monitor
           // refreshes the right view; the navbar widget updates regardless.

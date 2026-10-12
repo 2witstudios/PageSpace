@@ -1096,7 +1096,21 @@ describe('executeWorkflow', () => {
 
       expect(AIMonitoring.trackUsage).toHaveBeenCalledWith(expect.objectContaining({ walletId: 'w_product', source: 'workflow' }));
       const genCall = vi.mocked(generateText).mock.calls[0][0] as { experimental_context: { creditSpend?: unknown } };
-      expect(genCall.experimental_context.creditSpend).toEqual(creditSpend);
+      expect(genCall.experimental_context.creditSpend).toEqual({ ...creditSpend, automationWorkflowId: 'wf_1' });
+    });
+
+    test('SPEND-10 (partial) a run no person is present for records its workflow on its usage and hands it to its tools; a manual Run records none', async () => {
+      setupSelectChain([mockAgent], [mockDrive]);
+      const scheduled = { spend: { kind: 'automation' as const, driveId: 'drive_1' }, walletId: 'w_product', userId: 'user_creator' };
+      await executeWorkflow(createInputFixture({ createdBy: 'user_creator' }), { admit: vi.fn().mockResolvedValue({ admitted: true, release: vi.fn(), creditSpend: scheduled }) });
+      expect(AIMonitoring.trackUsage).toHaveBeenLastCalledWith(expect.objectContaining({ userId: 'user_creator', automationWorkflowId: 'wf_1' }));
+      const genCall = vi.mocked(generateText).mock.calls[0][0] as { experimental_context: { creditSpend?: { automationWorkflowId?: string } } };
+      expect(genCall.experimental_context.creditSpend?.automationWorkflowId).toBe('wf_1');
+
+      setupSelectChain([mockAgent], [mockDrive]);
+      const pressed = { spend: { kind: 'automation' as const, driveId: 'drive_1', personPresent: true as const }, walletId: 'w_product', userId: 'user_presser' };
+      await executeWorkflow(createInputFixture({ createdBy: 'user_creator' }), { admit: vi.fn().mockResolvedValue({ admitted: true, release: vi.fn(), creditSpend: pressed }) });
+      expect(AIMonitoring.trackUsage).toHaveBeenLastCalledWith(expect.objectContaining({ userId: 'user_presser', automationWorkflowId: undefined }));
     });
 
     test('SPEND-6 (partial) WAL-7 (partial) a MANUAL Run records its usage under the person who pressed Run (the consumer its gate bound), not the workflow\'s creator (review #2817 P2-3)', async () => {
