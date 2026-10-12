@@ -9,6 +9,7 @@ import {
   poolUnallocatedCents,
   CONSUMER_WALLET_FIELDS,
   consumerSpendFromBuckets,
+  DRIVE_WALLET_LIST_FIELDS,
   driveWalletListEntry,
   type DriveWalletFacts,
 } from '../wallet-views';
@@ -212,7 +213,7 @@ describe('driveWalletListEntry (UI-10: a drive wallet I spend from)', () => {
 
   it('SPEND-9 (partial) carries my own spend only: never the allocation, the wallet\'s total spend or anyone else\'s', () => {
     const entry = driveWalletListEntry({ ...row, monthlyAllowanceCents: c(9173), spentCents: c(4567) }, 'Product', 0);
-    expect(Object.keys(entry).sort()).toEqual(['driveId', 'driveName', 'mySpentCents', 'mySpentCredits', 'remainingCents', 'remainingCredits', 'status', 'walletId']);
+    expect(Object.keys(entry).sort()).toEqual([...DRIVE_WALLET_LIST_FIELDS].sort());
     expect(JSON.stringify(entry)).not.toMatch(/9173|9,173|4567|4,567/);
   });
 });

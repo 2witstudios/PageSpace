@@ -134,6 +134,26 @@ export const CONSUMER_WALLET_VIEW_KEYS = [
   'defaultSpendSource',
 ] as const;
 
+/**
+ * `DriveWalletListEntry` (`packages/lib/src/billing/wallet-views.ts`): a drive wallet the caller
+ * spends from — what is left, and what the caller spent from it this period (UI-10). Never the
+ * allocation or anyone else's spend (SPEND-9). `mySpent…` is optional so an older server parses.
+ */
+const driveWalletListEntrySchema = z.object({
+  driveId: z.string(),
+  driveName: z.string().nullable().optional(),
+  walletId: z.string(),
+  status: walletStatusSchema,
+  remainingCents: z.number(),
+  remainingCredits: z.string(),
+  mySpentCents: z.number().optional(),
+  /** `mySpentCents` as a credit count, rendered by the server's money model (MON-5). */
+  mySpentCredits: z.string().optional(),
+});
+
+/** The keys of a drive wallet list entry — the SDK's copy of lib's `DRIVE_WALLET_LIST_FIELDS` (drift-guarded). */
+export const DRIVE_WALLET_LIST_ENTRY_KEYS = Object.keys(driveWalletListEntrySchema.shape) as (keyof z.infer<typeof driveWalletListEntrySchema>)[];
+
 /** `MyWallets` (`packages/lib/src/services/drive-wallet-service.ts`), as a token reads it. */
 const myWalletsSchema = z.object({
   personal: z.object({
@@ -142,21 +162,12 @@ const myWalletsSchema = z.object({
     remainingCredits: z.string(),
     defaultSpendSource: spendSourceKindSchema.nullable(),
   }),
-  /** Drive wallets of drives the caller can open: the consumer amount only (SPEND-9). */
-  driveWallets: z.array(
-    z.object({ driveId: z.string(), driveName: z.string().nullable().optional(), walletId: z.string(), status: walletStatusSchema, remainingCents: z.number(), remainingCredits: z.string() }),
-  ),
+  /** Drive wallets of drives the caller can open: the consumer amount and their own spend only (SPEND-9, UI-10). */
+  driveWallets: z.array(driveWalletListEntrySchema),
   /** A seat on each org the caller belongs to (their own cap only, never the pool). */
   seats: z.array(z.object({ orgId: z.string(), orgName: z.string().nullable().optional(), walletId: z.string() })),
   funds: z.object({
-    driveWallets: z.array(z.object({
-      driveId: z.string(),
-      driveName: z.string().nullable().optional(),
-      walletId: z.string(),
-      status: walletStatusSchema.optional(),
-      remainingCents: z.number().optional(),
-      remainingCredits: z.string().optional(),
-    })),
+    driveWallets: z.array(driveWalletListEntrySchema.partial({ status: true, remainingCents: true, remainingCredits: true })),
     /** Always empty for a token ([D-OW-26]): a pool's balance is session-only (SPEND-10). */
     pools: z.array(z.never()).max(0),
     donations: z.array(

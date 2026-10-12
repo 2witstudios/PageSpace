@@ -123,6 +123,18 @@ export function consumerSpendFromBuckets(buckets: readonly ConsumerSpendBucket[]
     .sort((a, b) => b.spentCents - a.spentCents || a.consumerKey.localeCompare(b.consumerKey));
 }
 
+/** The keys of a drive wallet in my list: a test pins the entry to exactly these, and the SDK's copy is drift-guarded. */
+export const DRIVE_WALLET_LIST_FIELDS = [
+  'driveId',
+  'driveName',
+  'walletId',
+  'status',
+  'remainingCents',
+  'remainingCredits',
+  'mySpentCents',
+  'mySpentCredits',
+] as const;
+
 /** A drive wallet I spend from, as Settings › Usage › Wallets lists it (UI-10). */
 export interface DriveWalletListEntry {
   driveId: string;
