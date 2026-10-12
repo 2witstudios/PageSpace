@@ -36,12 +36,13 @@ vi.mock('../security-audit', async (importOriginal) => {
 import {
   discardStagedOrgAuditEvents,
   drainOrgAuditOutbox,
+  getOrgAuditBacklog,
   publishOrgAuditEvents,
   stageOrgAuditEvent,
   transactionWithOrgAudit,
   type OrgAuditEvent,
 } from '../org-audit';
-import { ORG_AUDIT_RETRY_BASE_MS, ORG_AUDIT_PENDING_HOLD_MS } from '../org-audit-outbox-core';
+import { ORG_AUDIT_DEAD_LETTER_ATTEMPTS, ORG_AUDIT_RETRY_BASE_MS, ORG_AUDIT_PENDING_HOLD_MS } from '../org-audit-outbox-core';
 
 const orgId = `org_${createId()}`;
 let actorId = '';
@@ -82,7 +83,7 @@ describe('the org audit outbox', () => {
       userId: actorId,
       resourceType: 'organization',
       resourceId: orgId,
-      details: { n: 1, orgId, driveId: 'drive_1' },
+      details: { n: 1, orgId, driveId: 'drive_1', occurredAt: expect.any(String), outboxId: expect.any(String) },
     }]);
     expect(await outboxRows()).toEqual([]);
   });
@@ -129,8 +130,8 @@ describe('the org audit outbox', () => {
   });
 
   it('AUD-1 (partial) an event of a change that is not final yet is held from the drainer, published once final, or discarded with an undo', async () => {
-    const kept = await db.transaction((tx) => stageOrgAuditEvent(tx, event({ eventType: 'org.invite.created' }), { pendingUntilFinal: true }));
-    const undone = await db.transaction((tx) => stageOrgAuditEvent(tx, event({ eventType: 'org.invite.resent' }), { pendingUntilFinal: true }));
+    const kept = await db.transaction((tx) => stageOrgAuditEvent(tx, event({ eventType: 'org.invite.created' }), { hold: 'deliver_if_unreleased' }));
+    const undone = await db.transaction((tx) => stageOrgAuditEvent(tx, event({ eventType: 'org.invite.resent' }), { hold: 'deliver_if_unreleased' }));
     await drainOrgAuditOutbox({ now: new Date(Date.now() + ORG_AUDIT_PENDING_HOLD_MS / 2) });
     expect(mine()).toEqual([]);
 
@@ -148,6 +149,50 @@ describe('the org audit outbox', () => {
     await drainOrgAuditOutbox({ now: new Date(Date.now() + 2 * 60 * 60_000) });
     expect(mine().map((e) => e.userId)).toEqual([undefined]);
     expect(await outboxRows()).toEqual([]);
+  });
+
+  it('AUD-1 (partial) a delayed event is dated by its change, not its delivery, and carries the outbox id a reader deduplicates on', async () => {
+    chain.refuse = 1;
+    const before = Date.now();
+    const [staged] = await transactionWithOrgAudit(async (tx, audit) => {
+      await audit(event());
+      return tx.select({ id: orgAuditOutbox.id }).from(orgAuditOutbox).where(eq(orgAuditOutbox.orgId, orgId));
+    });
+    await drainOrgAuditOutbox({ now: new Date(Date.now() + 2 * 60 * 60_000) });
+    const [delivered] = mine();
+    expect(delivered.details?.outboxId).toBe(staged.id);
+    const occurredAt = new Date(String(delivered.details?.occurredAt)).getTime();
+    expect(occurredAt).toBeGreaterThanOrEqual(before - 1000);
+    expect(occurredAt).toBeLessThanOrEqual(Date.now());
+  });
+
+  it('AUD-1 (partial) an event the chain refuses on every attempt is dead-lettered: kept, counted for admins, no longer retried', async () => {
+    chain.refuse = ORG_AUDIT_DEAD_LETTER_ATTEMPTS + 5;
+    await transactionWithOrgAudit((_tx, audit) => audit(event()));
+    let at = Date.now();
+    let deadLettered = 0;
+    for (let pass = 1; pass < ORG_AUDIT_DEAD_LETTER_ATTEMPTS + 3; pass += 1) {
+      at += 2 * 60 * 60_000;
+      deadLettered += (await drainOrgAuditOutbox({ now: new Date(at) })).deadLettered;
+    }
+    const [row] = await outboxRows();
+    expect(row.attempts).toBe(ORG_AUDIT_DEAD_LETTER_ATTEMPTS);
+    expect(row.deadLetteredAt).not.toBeNull();
+    expect(deadLettered).toBe(1);
+    expect((await getOrgAuditBacklog()).deadLettered).toBeGreaterThanOrEqual(1);
+    expect(mine()).toEqual([]);
+  });
+
+  it('AUD-1 (partial) a held approval whose admission never committed is discarded when its hold ends, never delivered', async () => {
+    const orphan = await db.transaction((tx) => stageOrgAuditEvent(tx, event({ eventType: 'org.guest.approved' }), { hold: 'discard_if_unreleased' }));
+    const released = await db.transaction((tx) => stageOrgAuditEvent(tx, event({ eventType: 'org.guest.approved', details: { released: true } }), { hold: 'discard_if_unreleased' }));
+    // Released while the chain is down: it is final now, so it must be retried, never discarded.
+    chain.refuse = 1;
+    await publishOrgAuditEvents(released);
+    expect(mine()).toEqual([]);
+    expect(await drainOrgAuditOutbox({ now: new Date(Date.now() + ORG_AUDIT_PENDING_HOLD_MS + 60_000) })).toMatchObject({ discarded: 1 });
+    expect(mine().map((e) => e.details?.released)).toEqual([true]);
+    expect(await db.select().from(orgAuditOutbox).where(eq(orgAuditOutbox.id, orphan.id))).toEqual([]);
   });
 
   it('AUD-1 (partial) a publish and the drainer racing for the same events deliver each exactly once', async () => {

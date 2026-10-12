@@ -13,12 +13,13 @@
  */
 import type { SecurityEventType } from '@pagespace/db/schema/security-audit';
 import { db } from '@pagespace/db/db';
-import { asc, eq, inArray, lte } from '@pagespace/db/operators';
+import { and, asc, eq, inArray, isNull, lte, sql } from '@pagespace/db/operators';
 import { orgAuditOutbox } from '@pagespace/db/schema/organizations';
 import { users } from '@pagespace/db/schema/auth';
 import { loggers } from '../logging/logger-config';
 import { securityAudit } from './security-audit';
-import { nextOrgAuditAttemptAt, ORG_AUDIT_DRAIN_BATCH, ORG_AUDIT_PENDING_HOLD_MS } from './org-audit-outbox-core';
+import { isOrgAuditDeadLetter, nextOrgAuditAttemptAt, orgAuditChainDetails, ORG_AUDIT_DRAIN_BATCH, ORG_AUDIT_PENDING_HOLD_MS } from './org-audit-outbox-core';
+import { notifyOrgAuditDeadLetter } from './security-audit-alerting';
 
 /**
  * Every org event, plus `authz.access.granted`: the ORG-4 record of org Owner/Admin power opening a drive, which the
@@ -57,7 +58,9 @@ export async function stageOrgAuditEvents(
   options: StageOptions = {},
 ): Promise<StagedOrgAuditEvent[]> {
   if (events.length === 0) return [];
-  const hold = options.pendingUntilFinal ? { nextAttemptAt: new Date(Date.now() + ORG_AUDIT_PENDING_HOLD_MS) } : {};
+  const hold = options.hold
+    ? { nextAttemptAt: new Date(Date.now() + ORG_AUDIT_PENDING_HOLD_MS), discardIfUnreleased: options.hold === 'discard_if_unreleased' }
+    : {};
   return executor
     .insert(orgAuditOutbox)
     .values(
@@ -82,10 +85,15 @@ export async function stageOrgAuditEvent(executor: OrgAuditExecutor, event: OrgA
 
 export interface StageOptions {
   /**
-   * The change commits now but is final only after a later step (an invitation's email). The drainer leaves the
-   * event alone for ORG_AUDIT_PENDING_HOLD_MS; the caller publishes it once final, or discards it with an undo.
+   * The change commits now but is final only after a later step. The drainer leaves the event alone for
+   * ORG_AUDIT_PENDING_HOLD_MS; the caller publishes it once final, or discards it with an undo. If the caller never
+   * does (the process stopped), the hold ends:
+   *   - `deliver_if_unreleased`: the committed change stands unless undone (an invitation whose email may or may not
+   *     have gone out still exists), so the event is delivered;
+   *   - `discard_if_unreleased`: the change is real only once a later step commits (a guest approval whose admission
+   *     may never have run), so the event is discarded, never delivered.
    */
-  pendingUntilFinal?: boolean;
+  hold?: 'deliver_if_unreleased' | 'discard_if_unreleased';
 }
 
 /** Withdraw staged events whose change was undone (in the undo's own transaction). */
@@ -103,23 +111,34 @@ async function appendToChain(row: OutboxRow): Promise<void> {
     userId: row.actorId ?? undefined,
     resourceType: row.resourceType,
     resourceId: row.resourceId,
-    details: { ...row.details, orgId: row.orgId, ...(row.driveId ? { driveId: row.driveId } : {}) },
+    details: orgAuditChainDetails(row),
   };
   loggers.security.info(`[Audit] ${entry.eventType}`, { ...entry });
   await securityAudit.logEvent(entry);
 }
 
-type Delivery = 'delivered' | 'retrying' | 'skipped';
+type Delivery = 'delivered' | 'retrying' | 'skipped' | 'discarded' | 'dead_lettered';
 
 /**
  * Deliver one staged event: lock its row (SKIP LOCKED, so a publish and the drainer never deliver it twice at once),
  * append it to the chain, delete the row. A refused append keeps the row, counts the attempt and schedules the next.
  * At least once: a crash between the append and the delete re-appends the same event on the next drain.
  */
-async function deliverOne(id: string, now: Date): Promise<Delivery> {
+async function deliverOne(id: string, now: Date, releasedHold: 'drainer' | null): Promise<Delivery> {
   return db.transaction(async (tx) => {
     const [row] = await tx.select().from(orgAuditOutbox).where(eq(orgAuditOutbox.id, id)).for('update', { skipLocked: true }).limit(1);
     if (!row) return 'skipped';
+    if (releasedHold === null && row.discardIfUnreleased) {
+      // The caller released it (its change is final): from now on it is an ordinary event, retried until delivered.
+      await tx.update(orgAuditOutbox).set({ discardIfUnreleased: false }).where(eq(orgAuditOutbox.id, id));
+    } else if (releasedHold !== null && row.discardIfUnreleased) {
+      // The hold ended without the caller releasing it: the change it described never became final.
+      await tx.delete(orgAuditOutbox).where(eq(orgAuditOutbox.id, id));
+      loggers.security.warn('[Audit] a held org event was never released by its change and is discarded', {
+        outboxId: id, eventType: row.eventType, orgId: row.orgId, resourceType: row.resourceType, resourceId: row.resourceId,
+      });
+      return 'discarded';
+    }
     // An actor whose account was deleted while the event waited is written as no one: the chain's user reference is
     // SET NULL on erasure, so this is exactly what a delivered row would hold by now (and the append cannot fail on it).
     const actorGone = row.actorId !== null && (await tx.select({ id: users.id }).from(users).where(eq(users.id, row.actorId)).limit(1)).length === 0;
@@ -128,10 +147,18 @@ async function deliverOne(id: string, now: Date): Promise<Delivery> {
     } catch (error) {
       const attempts = row.attempts + 1;
       const message = error instanceof Error ? error.message : String(error);
+      const dead = isOrgAuditDeadLetter(attempts);
       await tx
         .update(orgAuditOutbox)
-        .set({ attempts, lastError: message.slice(0, 500), nextAttemptAt: nextOrgAuditAttemptAt(attempts, now) })
+        .set({ attempts, lastError: message.slice(0, 500), nextAttemptAt: nextOrgAuditAttemptAt(attempts, now), ...(dead ? { deadLetteredAt: now } : {}) })
         .where(eq(orgAuditOutbox.id, id));
+      if (dead) {
+        loggers.security.error('[Audit] org event dead-lettered: the audit chain refused it on every attempt; it is kept, not delivered', {
+          outboxId: id, eventType: row.eventType, orgId: row.orgId, attempts, error: message,
+        });
+        await notifyOrgAuditDeadLetter({ outboxId: id, eventType: row.eventType, orgId: row.orgId, attempts, lastError: message });
+        return 'dead_lettered';
+      }
       loggers.security.warn('[Audit] org event append failed; it stays queued and will be retried', {
         outboxId: id,
         eventType: row.eventType,
@@ -155,7 +182,7 @@ export async function publishOrgAuditEvents(staged: readonly StagedOrgAuditEvent
   const now = new Date();
   for (const { id } of list) {
     try {
-      await deliverOne(id, now);
+      await deliverOne(id, now, null);
     } catch (error) {
       loggers.security.warn('[Audit] org event publish failed; the drainer will deliver it', {
         outboxId: id,
@@ -195,6 +222,10 @@ export async function transactionWithOrgAudit<T>(run: (tx: Tx, audit: StageOrgAu
 export interface OrgAuditDrainResult {
   delivered: number;
   retrying: number;
+  /** Held events whose change never became final, dropped this pass. */
+  discarded: number;
+  /** Events this pass gave up retrying (kept, alerted). */
+  deadLettered: number;
 }
 
 /**
@@ -206,14 +237,33 @@ export async function drainOrgAuditOutbox(options: { now?: Date; limit?: number 
   const due = await db
     .select({ id: orgAuditOutbox.id })
     .from(orgAuditOutbox)
-    .where(lte(orgAuditOutbox.nextAttemptAt, now))
+    .where(and(lte(orgAuditOutbox.nextAttemptAt, now), isNull(orgAuditOutbox.deadLetteredAt)))
     .orderBy(asc(orgAuditOutbox.seq))
     .limit(options.limit ?? ORG_AUDIT_DRAIN_BATCH);
-  const result: OrgAuditDrainResult = { delivered: 0, retrying: 0 };
+  const result: OrgAuditDrainResult = { delivered: 0, retrying: 0, discarded: 0, deadLettered: 0 };
+  const counter = { delivered: 'delivered', retrying: 'retrying', discarded: 'discarded', dead_lettered: 'deadLettered' } as const;
   for (const { id } of due) {
-    const outcome = await deliverOne(id, now);
-    if (outcome !== 'skipped') result[outcome] += 1;
+    const outcome = await deliverOne(id, now, 'drainer');
+    if (outcome !== 'skipped') result[counter[outcome]] += 1;
   }
   return result;
+}
+
+export interface OrgAuditBacklog {
+  /** Staged events not yet in the chain (held, due or backing off). */
+  queued: number;
+  /** Events the chain refused on every attempt: kept, no longer retried, need an operator. */
+  deadLettered: number;
+}
+
+/** The outbox as an admin sees it (the admin monitoring page). */
+export async function getOrgAuditBacklog(): Promise<OrgAuditBacklog> {
+  const [row] = await db
+    .select({
+      queued: sql<number>`count(*) filter (where ${orgAuditOutbox.deadLetteredAt} is null)::int`,
+      deadLettered: sql<number>`count(*) filter (where ${orgAuditOutbox.deadLetteredAt} is not null)::int`,
+    })
+    .from(orgAuditOutbox);
+  return { queued: Number(row?.queued ?? 0), deadLettered: Number(row?.deadLettered ?? 0) };
 }
 

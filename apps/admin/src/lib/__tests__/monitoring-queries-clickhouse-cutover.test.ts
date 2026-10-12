@@ -120,6 +120,10 @@ vi.mock('@pagespace/lib/billing/credit-pricing', () => ({
   NEGATIVE_MARGIN_FLOOR_BPS: 0,
 }));
 
+vi.mock('@pagespace/lib/audit/org-audit', () => ({
+  getOrgAuditBacklog: vi.fn(async () => ({ queued: 0, deadLettered: 0 })),
+}));
+
 vi.mock('@pagespace/lib/auth/user-repository', () => ({
   decryptUserDisplayFields: vi.fn(async (rows: unknown[]) => rows),
 }));

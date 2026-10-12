@@ -17,6 +17,8 @@ export interface SystemHealthData {
     userId: string | null;
   }>;
   activeUserCount: number;
+  /** AUD-1: org audit events waiting for the audit chain, and those it refused on every attempt (dead-lettered). */
+  orgAuditBacklog: { queued: number; deadLettered: number };
 }
 
 export interface UserActivityData {

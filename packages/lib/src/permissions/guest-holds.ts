@@ -661,7 +661,8 @@ export async function claimGuestApprovalDecision(input: { orgId: string; holdId:
     const event = await stageOrgAuditEvent(
       tx,
       guestDecisionAuditEvent(claim, input.decision === 'approve' ? 'org.guest.approved' : 'org.guest.declined', input.actorId),
-      { pendingUntilFinal: input.decision === 'approve' },
+      // An approval is real only once its admission commits: unreleased, it is discarded, never delivered.
+      input.decision === 'approve' ? { hold: 'discard_if_unreleased' } : {},
     );
     return { ok: true, claim, event };
   });

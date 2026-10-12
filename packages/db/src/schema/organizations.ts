@@ -254,6 +254,13 @@ export const orgAuditOutbox = pgTable('org_audit_outbox', {
   details: jsonb('details').$type<Record<string, unknown>>().notNull().default({}),
   attempts: integer('attempts').notNull().default(0),
   lastError: text('lastError'),
+  /**
+   * A held event (a change not final at commit) whose change may never become final — a guest approval whose
+   * admission did not commit — is discarded when its hold ends unreleased, never delivered.
+   */
+  discardIfUnreleased: boolean('discardIfUnreleased').notNull().default(false),
+  /** Set when the chain refused it ORG_AUDIT_DEAD_LETTER_ATTEMPTS times: kept, counted and alerted, no longer retried. */
+  deadLetteredAt: timestamp('deadLetteredAt', { mode: 'date' }),
   nextAttemptAt: timestamp('nextAttemptAt', { mode: 'date' }).default(utcNow).notNull(),
   createdAt: timestamp('createdAt', { mode: 'date' }).default(utcNow).notNull(),
 }, (table) => ({

@@ -20,6 +20,7 @@ import { getTierFromPrice } from './stripe/price-config';
 import { TIERS, type SubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { decryptUserDisplayFields } from '@pagespace/lib/auth/user-repository';
 import { maskEmail } from '@pagespace/lib/audit/mask-email';
+import { getOrgAuditBacklog } from '@pagespace/lib/audit/org-audit';
 import { isClickHouseEnabled, getClickHouseClient } from '@pagespace/lib/observability/clickhouse-client';
 import {
   getLogsByLevel as chGetLogsByLevel,
@@ -65,12 +66,14 @@ export async function getSystemHealth(startDate?: Date, endDate?: Date) {
   const chClient = clickHouseClientIfEnabled();
   if (chClient) {
     const window = { startDate, endDate };
-    const [logsByLevel, recentErrors, activeUserCount] = await Promise.all([
+    const [logsByLevel, recentErrors, activeUserCount, orgAuditBacklog] = await Promise.all([
       chGetLogsByLevel(chClient, window),
       chGetRecentErrors(chClient, window, 20),
       getActiveSessionUserCount(),
+      getOrgAuditBacklog(),
     ]);
     return {
+      orgAuditBacklog,
       logsByLevel,
       recentErrors: recentErrors.map((entry) => ({
         ...entry,
@@ -120,8 +123,10 @@ export async function getSystemHealth(startDate?: Date, endDate?: Date) {
   // Active users: distinct sessions touched in last 15 minutes (sessions.lastUsedAt is
   // updated non-blocking on every authenticated request — reliable signal)
   const activeUserCount = await getActiveSessionUserCount();
+  const orgAuditBacklog = await getOrgAuditBacklog();
 
   return {
+    orgAuditBacklog,
     logsByLevel: logsByLevel.map((entry) => ({
       level: entry.level,
       count: entry.count,

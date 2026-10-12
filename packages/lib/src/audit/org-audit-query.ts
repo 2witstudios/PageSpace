@@ -13,7 +13,7 @@
  * The rows are read through the resolved audit binding, the same store the chain writes to and the
  * verifier reads (the Admin PG when dedicated).
  */
-import { and, desc, eq, gte, inArray, lt, lte, or, sql } from '@pagespace/db/operators';
+import { and, desc, eq, inArray, lt, or, sql } from '@pagespace/db/operators';
 import { db } from '@pagespace/db/db';
 import { users } from '@pagespace/db/schema/auth';
 import { orgMembers } from '@pagespace/db/schema/organizations';
@@ -50,6 +50,9 @@ interface RawOrgAuditRow {
   details: Record<string, unknown> | null;
 }
 
+/** When the event's change happened: the staged time an outbox delivery carries, else the chain row's own time. */
+const occurredAt = sql`coalesce((${securityAuditLog.details}->>'occurredAt')::timestamptz at time zone 'utc', ${securityAuditLog.timestamp})`;
+
 async function readRows(orgId: string, filter: OrgAuditFilter, auditDb: SecurityAuditDatabase): Promise<RawOrgAuditRow[]> {
   const conditions = [
     sql`${securityAuditLog.details}->>'orgId' = ${orgId}`,
@@ -62,8 +65,9 @@ async function readRows(orgId: string, filter: OrgAuditFilter, auditDb: Security
       and(eq(securityAuditLog.resourceType, 'drive'), eq(securityAuditLog.resourceId, filter.driveId)),
     )!);
   }
-  if (filter.from) conditions.push(gte(securityAuditLog.timestamp, filter.from));
-  if (filter.to) conditions.push(lte(securityAuditLog.timestamp, filter.to));
+  // AUD-1: an outbox-delivered event is dated by its change (details.occurredAt), not by its delivery.
+  if (filter.from) conditions.push(sql`${occurredAt} >= ${filter.from.toISOString()}::timestamptz at time zone 'utc'`);
+  if (filter.to) conditions.push(sql`${occurredAt} <= ${filter.to.toISOString()}::timestamptz at time zone 'utc'`);
   if (filter.before !== null) conditions.push(lt(securityAuditLog.chainSeq, filter.before));
   return auditDb
     .select({
@@ -100,10 +104,10 @@ async function memberNames(orgId: string, actorIds: string[]): Promise<Map<strin
 function toEntry(row: RawOrgAuditRow, names: Map<string, string>): OrgAuditEntry | null {
   const category = categoryOfOrgEvent(row.eventType);
   if (category === null) return null;
-  const { orgId: _orgId, driveId, ...details } = row.details ?? {};
+  const { orgId: _orgId, driveId, occurredAt: stagedAt, outboxId: _outboxId, ...details } = row.details ?? {};
   const resourceDrive = row.resourceType === 'drive' ? row.resourceId : null;
   return {
-    timestamp: row.timestamp,
+    timestamp: typeof stagedAt === 'string' ? new Date(stagedAt) : row.timestamp,
     category,
     eventType: row.eventType,
     actorId: row.userId,
@@ -121,8 +125,17 @@ export async function queryOrgAuditEvents(orgId: string, filter: OrgAuditFilter,
   const rows = await readRows(orgId, filter, auditDb);
   const page = rows.slice(0, filter.limit);
   const names = await memberNames(orgId, [...new Set(page.map((r) => r.userId).filter((id): id is string => id !== null))]);
+  // AUD-1: outbox delivery is at least once; a re-delivered event (same outboxId) is shown once.
+  const seen = new Set<string>();
+  const unique = page.filter((row) => {
+    const outboxId = row.details?.outboxId;
+    if (typeof outboxId !== 'string') return true;
+    if (seen.has(outboxId)) return false;
+    seen.add(outboxId);
+    return true;
+  });
   return {
-    entries: page.map((row) => toEntry(row, names)).filter((e): e is OrgAuditEntry => e !== null),
+    entries: unique.map((row) => toEntry(row, names)).filter((e): e is OrgAuditEntry => e !== null),
     nextCursor: rows.length > filter.limit ? page[page.length - 1].chainSeq : null,
   };
 }

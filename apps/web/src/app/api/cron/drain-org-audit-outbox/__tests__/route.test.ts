@@ -5,10 +5,10 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-const { mockDrain, mockLogError } = vi.hoisted(() => ({ mockDrain: vi.fn(), mockLogError: vi.fn() }));
+const { mockDrain, mockBacklog, mockLogError } = vi.hoisted(() => ({ mockDrain: vi.fn(), mockBacklog: vi.fn(), mockLogError: vi.fn() }));
 
 vi.mock('@/lib/auth/cron-auth', () => ({ validateSignedCronRequest: vi.fn() }));
-vi.mock('@pagespace/lib/audit/org-audit', () => ({ drainOrgAuditOutbox: mockDrain }));
+vi.mock('@pagespace/lib/audit/org-audit', () => ({ drainOrgAuditOutbox: mockDrain, getOrgAuditBacklog: mockBacklog }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({ loggers: { system: { error: mockLogError } } }));
 vi.mock('next/server', () => ({
   NextResponse: {
@@ -26,6 +26,7 @@ describe('/api/cron/drain-org-audit-outbox', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(validateSignedCronRequest).mockReturnValue(null);
+    mockBacklog.mockResolvedValue({ queued: 0, deadLettered: 0 });
   });
 
   it('AUD-1 (partial) an unsigned request is refused and nothing is drained', async () => {
@@ -35,14 +36,22 @@ describe('/api/cron/drain-org-audit-outbox', () => {
   });
 
   it('AUD-1 (partial) drains the outbox and reports what it delivered', async () => {
-    mockDrain.mockResolvedValue({ delivered: 4, retrying: 0 });
+    mockDrain.mockResolvedValue({ delivered: 4, retrying: 0, discarded: 1, deadLettered: 0 });
     const res = await GET(request());
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ success: true, delivered: 4, retrying: 0 });
+    expect(await res.json()).toEqual({ success: true, delivered: 4, retrying: 0, discarded: 1, deadLettered: 0, queued: 0, deadLetteredTotal: 0 });
+  });
+
+  it('AUD-1 (partial) a dead-lettered event outstanding makes every run a 500 until an operator deals with it', async () => {
+    mockDrain.mockResolvedValue({ delivered: 0, retrying: 0, discarded: 0, deadLettered: 0 });
+    mockBacklog.mockResolvedValue({ queued: 1, deadLettered: 1 });
+    const res = await GET(request());
+    expect(res.status).toBe(500);
+    expect(await res.json()).toMatchObject({ deadLetteredTotal: 1 });
   });
 
   it('AUD-1 (partial) events the chain still refuses make the run a 500 so it pages', async () => {
-    mockDrain.mockResolvedValue({ delivered: 1, retrying: 2 });
+    mockDrain.mockResolvedValue({ delivered: 1, retrying: 2, discarded: 0, deadLettered: 0 });
     expect((await GET(request())).status).toBe(500);
     expect(mockLogError).toHaveBeenCalled();
   });
