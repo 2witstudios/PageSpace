@@ -221,6 +221,7 @@ describe('org access in the human drive resolvers (integration)', () => {
     const rows = await auditRowsFor([f.drives.finance.id]);
     expect(rows.find((r) => r.userId === f.people.priya.id)?.details).toEqual({
       via: 'org_admin', orgId: f.org.id, driveId: f.drives.finance.id, orgRole: 'ADMIN', orgVisibility: 'PRIVATE',
+      occurredAt: expect.any(String), outboxId: expect.any(String),
     });
     expect(rows.some((r) => r.userId === f.people.omar.id)).toBe(false);
   });

@@ -15,7 +15,7 @@ export type CapturedOrgEvent = {
 };
 
 export function orgEventOf(entry: AuditEvent): CapturedOrgEvent {
-  const { orgId, driveId, ...details } = (entry.details ?? {}) as Record<string, unknown>;
+  const { orgId, driveId, occurredAt: _occurredAt, outboxId: _outboxId, ...details } = (entry.details ?? {}) as Record<string, unknown>;
   return {
     orgId: String(orgId),
     ...(typeof driveId === 'string' ? { driveId } : {}),

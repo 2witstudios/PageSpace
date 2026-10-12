@@ -126,8 +126,10 @@ describe('org audit log on the real chain', () => {
   it('AUD-3 (partial) pages by keyset without gaps or repeats, and the CSV export reads in chunks with every value neutralized', async () => {
     const a = await org('Northwind');
     const total = 520; // more than one export chunk (500)
+    // Chain rows as the outbox delivers them, written straight to the chain: this test is about reading, and 520
+    // round trips through the outbox would only slow it down.
     for (let i = 0; i < total; i++) {
-      await recordOrgAuditEvent({ orgId: a.orgId, eventType: 'org.invite.created', actorId: a.owner.id, resourceType: 'organization_invitation', resourceId: i === 0 ? '=HYPERLINK("http://evil")' : `inv_${i}`, details: { n: i } });
+      await securityAudit.logEvent({ eventType: 'org.invite.created', userId: a.owner.id, resourceType: 'organization_invitation', resourceId: i === 0 ? '=HYPERLINK("http://evil")' : `inv_${i}`, details: { n: i, orgId: a.orgId, outboxId: `obx_${i}_${createId()}` } });
     }
     const seen: string[] = [];
     let before: string | undefined;
