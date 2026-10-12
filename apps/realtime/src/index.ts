@@ -1,5 +1,9 @@
 import './instrument';
-import { getDrivePolicies } from '@pagespace/lib/organizations/policy-reader';
+import { getDrivePolicies, getDriveAuthenticationPolicies, getResourceDriveIds } from '@pagespace/lib/organizations/policy-reader';
+import { credentialActor, type AccessActor } from '@pagespace/lib/permissions/access-actor';
+import { explainOrgAuthenticationDenial } from '@pagespace/lib/permissions/actor-authentication';
+import { createOrgRoomWatch, ORG_REAUTHENTICATION_REQUIRED_EVENT, type OrgRoomWatch } from './org-room-watch';
+import { ORG_CHANGED_EVENT } from '@pagespace/lib/realtime/org-wallet-events';
 import * as Sentry from '@sentry/node';
 import { createServer, IncomingMessage, ServerResponse } from 'http';
 import type { Duplex } from 'stream';
@@ -238,7 +242,7 @@ async function resolveDriveEnvPayer(driveId: string) {
  * function the web tier's `provisionSessionSandbox` calls, so a vanished
  * drive fails closed identically on both tiers.
  */
-async function ensureShellSessionSandbox({ workspaceId, userId }: { workspaceId: string; userId: string }): Promise<
+async function ensureShellSessionSandbox({ workspaceId, actor }: { workspaceId: string; actor: AccessActor }): Promise<
   { ok: true; sandboxId: string } | { ok: false; reason: string }
 > {
   const store = await dbAgentSessionStorePromise;
@@ -255,7 +259,7 @@ async function ensureShellSessionSandbox({ workspaceId, userId }: { workspaceId:
   const result = await ensureAgentSessionSandbox({
     row: { ...row, workspaceId: row.id },
     intent: 'ensure',
-    actor: { userId, tenantId },
+    actor: { access: actor, tenantId },
     deps: {
       store,
       host,
@@ -304,7 +308,7 @@ async function ensureShellSessionSandbox({ workspaceId, userId }: { workspaceId:
         ensureDriveEnvSandbox({
           envId,
           intent,
-          requesterId: userId,
+          requester: actor,
           deps: {
             store: await dbDriveEnvStorePromise,
             host,
@@ -405,13 +409,13 @@ const shellCheckAuth = buildShellCheckAuth({
     const store = await dbSessionShellStorePromise;
     return resolveSessionShellById({ shellId, deps: { store } });
   },
-  checkSessionAccess: async ({ requesterId, workspaceId }) => {
+  checkSessionAccess: async ({ requester, workspaceId }) => {
     const store = await dbAgentSessionStorePromise;
     const row = await store.findById(workspaceId);
     if (!row) return { allowed: false, reason: 'session_not_found' };
     const subject = { ownerId: row.ownerId, driveId: row.driveId };
     const decision = await checkAgentSessionAccess({
-      requesterId,
+      requester,
       workspaceId,
       deps: {
         // The row was just read; hand the wrapper the same subject rather than
@@ -431,7 +435,7 @@ const shellCheckAuth = buildShellCheckAuth({
     // fires — without it, a member who lost the capability could keep typing
     // into a live PTY.
     const allowedToRunCode = await canRunCodeForSession({
-      userId: requesterId,
+      actor: requester,
       driveId: subject.driveId,
       ownerId: subject.ownerId,
     });
@@ -550,16 +554,16 @@ const HEADLESS_ROWS = 24;
  * bills the session's payer, and writes a code-execution audit row.
  */
 const startHeadlessShell = async (
-  { shellId, userId }: { shellId: string; userId: string },
+  { shellId, actor }: { shellId: string; actor: AccessActor },
   abandoned: () => boolean,
 ) => {
-  const access = await shellCheckAuth({ userId, shellId });
+  const access = await shellCheckAuth({ actor, shellId });
   if (!access.ok) return undefined;
 
   const outcome = await ensureShellSession(shellSessionDeps, {
     access,
     target: { shellId },
-    userId,
+    actor,
     cols: HEADLESS_COLS,
     rows: HEADLESS_ROWS,
     abandoned,
@@ -593,8 +597,8 @@ const shellIoDeps = {
   // identity is never refreshed — correct but useless, since revocation would
   // then evict whoever happened to create the session rather than whoever is
   // driving it.
-  reauthorizeViewer: async ({ shellId, userId }: { shellId: string; userId: string }) => {
-    const decision = await shellCheckAuth({ userId, shellId });
+  reauthorizeViewer: async ({ shellId, actor }: { shellId: string; actor: AccessActor }) => {
+    const decision = await shellCheckAuth({ actor, shellId });
     return decision.ok;
   },
   // WAL-2: typing on someone's behalf runs compute as them — their cap, their window.
@@ -959,6 +963,13 @@ const requestListener = (req: IncomingMessage, res: ServerResponse) => {
 
                 const { channelId, event, payload } = parsed;
                 io.to(channelId).emit(event, payload);
+                // SEC-2/3: an org's policy changed — its members' sockets re-decide their org rooms now, not at the
+                // next timer (a tightened sign-in rule evicts at once).
+                if (event === ORG_CHANGED_EVENT && (payload as { change?: unknown })?.change === 'policy') {
+                    void io.in(channelId).fetchSockets().then((sockets) => {
+                        for (const s of sockets) void orgRoomWatches.get(s.id)?.recheck();
+                    });
+                }
                 loggers.realtime.debug('Broadcast event sent successfully', {
                     channelId,
                     event,
@@ -1234,6 +1245,26 @@ async function populateUserMetadata(socket: AuthSocket): Promise<void> {
   }
 }
 
+/** The sign-in policy governing each page or drive id, read live (null where no org governs). */
+async function readResourceAuthenticationPolicies(resourceIds: readonly string[]) {
+  const driveOf = await getResourceDriveIds(resourceIds);
+  const policies = await getDriveAuthenticationPolicies([...new Set(driveOf.values())]);
+  return new Map(resourceIds.map((id) => [id, policies.get(driveOf.get(id) ?? id) ?? null]));
+}
+
+/** One org-room watch per connected socket (SEC-3 eviction), so an org policy change can nudge them. */
+const orgRoomWatches = new Map<string, OrgRoomWatch>();
+
+/**
+ * After a join was refused: when the org's sign-in policy is why (SEC-2/3), tell the socket so the client can ask the
+ * person to sign in again, and answer true so the caller does not treat it as a protocol violation.
+ */
+async function emitSignInDenial(socket: AuthSocket, actor: AccessActor, resourceId: string): Promise<boolean> {
+  const code = await explainOrgAuthenticationDenial(actor, resourceId);
+  if (code) socket.emit(ORG_REAUTHENTICATION_REQUIRED_EVENT, { code, resourceId });
+  return code !== null;
+}
+
 io.use(async (socket: AuthSocket, next) => {
   // Extract connection metadata for logging
   const connectionMetadata = {
@@ -1281,6 +1312,8 @@ io.use(async (socket: AuthSocket, next) => {
       }
 
       socket.data.user = { id: sessionClaims.userId, name: 'Unknown', avatarUrl: null };
+      // SEC-2/3: the credential's ceremony evidence rides with the socket for every access check it makes.
+      socket.data.actor = credentialActor(sessionClaims.userId, sessionClaims.authentication);
       await populateUserMetadata(socket);
       loggers.realtime.info('Socket.IO: User authenticated via socket token', { userId: sessionClaims.userId });
       return next();
@@ -1300,6 +1333,7 @@ io.use(async (socket: AuthSocket, next) => {
       }
 
       socket.data.user = { id: sessionClaims.userId, name: 'Unknown', avatarUrl: null };
+      socket.data.actor = credentialActor(sessionClaims.userId, sessionClaims.authentication);
       await populateUserMetadata(socket);
       loggers.realtime.info('Socket.IO: User authenticated via session token', { userId: sessionClaims.userId });
       return next();
@@ -1317,6 +1351,18 @@ io.use(async (socket: AuthSocket, next) => {
 io.on('connection', (socket: AuthSocket) => {
   loggers.realtime.info('User connected', { socketId: socket.id });
   const user = socket.data.user;
+  // The socket's credential (D-OW-45). Every join below asks the org sign-in policy of it, and the watch evicts the
+  // socket from an org's rooms when that org's maximum session age elapses or its policy tightens.
+  const actor = socket.data.actor;
+  const orgRoomWatch = createOrgRoomWatch(socket, {
+    readPolicies: readResourceAuthenticationPolicies,
+    onLeft: (room) => socketRegistry.trackRoomLeave(socket.id, room),
+    now: () => Date.now(),
+    setTimer: (run, delayMs) => setTimeout(run, delayMs),
+    clearTimer: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+    onError: (error) => loggers.realtime.error('Org room re-check failed', error instanceof Error ? error : new Error(String(error)), { socketId: socket.id }),
+  });
+  orgRoomWatches.set(socket.id, orgRoomWatch);
 
   // Register socket in the registry for permission revocation tracking
   if (user?.id) {
@@ -1348,7 +1394,7 @@ io.on('connection', (socket: AuthSocket) => {
   }
 
   socket.on('join_channel', async (payload: unknown) => {
-    if (!user?.id) return;
+    if (!user?.id || !actor) return;
 
     // Validate payload before any DB query
     const validation = validatePageId(payload);
@@ -1360,13 +1406,16 @@ io.on('connection', (socket: AuthSocket) => {
     const pageId = validation.value;
 
     try {
-      const accessLevel = await getUserAccessLevel(user.id, pageId);
+      const accessLevel = await getUserAccessLevel(actor, pageId);
       if (accessLevel) {
         socket.join(pageId);
         socketRegistry.trackRoomJoin(socket.id, pageId);
+        void orgRoomWatch.track(pageId, pageId);
         loggers.realtime.debug('User joined channel', { userId: user.id, channelId: pageId });
       } else {
         loggers.realtime.warn('User denied access to channel', { userId: user.id, channelId: pageId });
+        // A sign-in policy refusal is an expected state (sign in again), not a protocol violation.
+        if (await emitSignInDenial(socket, actor, pageId)) return;
         socket.disconnect();
       }
     } catch (error) {
@@ -1386,11 +1435,12 @@ io.on('connection', (socket: AuthSocket) => {
     const pageId = validation.value;
     socket.leave(pageId);
     socketRegistry.trackRoomLeave(socket.id, pageId);
+    orgRoomWatch.untrack(pageId);
     loggers.realtime.debug('User left channel', { userId: user.id, channelId: pageId });
   });
 
   socket.on('join_drive', async (payload: unknown) => {
-    if (!user?.id) return;
+    if (!user?.id || !actor) return;
 
     // Validate payload before any DB query
     const validation = validateDriveId(payload);
@@ -1402,7 +1452,7 @@ io.on('connection', (socket: AuthSocket) => {
     const driveId = validation.value;
 
     try {
-      const hasAccess = await getUserDriveAccess(user.id, driveId);
+      const hasAccess = await getUserDriveAccess(actor, driveId);
       if (hasAccess) {
         const rooms = [driveRoom(driveId), driveCalendarRoom(driveId)];
         // X-4: wallet:changed reaches only people with a wallet view of the drive, never a
@@ -1411,6 +1461,7 @@ io.on('connection', (socket: AuthSocket) => {
         for (const room of rooms) {
           socket.join(room);
           socketRegistry.trackRoomJoin(socket.id, room);
+          void orgRoomWatch.track(room, driveId);
         }
         loggers.realtime.debug('User joined drive and drive calendar rooms', {
           userId: user.id,
@@ -1418,6 +1469,7 @@ io.on('connection', (socket: AuthSocket) => {
         });
       } else {
         loggers.realtime.warn('User denied access to drive', { userId: user.id, driveId });
+        await emitSignInDenial(socket, actor, driveId);
       }
     } catch (error) {
       loggers.realtime.error('Error joining drive', error as Error, { driveId });
@@ -1432,7 +1484,7 @@ io.on('connection', (socket: AuthSocket) => {
   // GLOBAL conversation (no page to share through) all deny for non-owners.
   socket.on('join_conversation', async (payload: unknown) => {
     const userId = user?.id;
-    if (!userId) return;
+    if (!userId || !actor) return;
 
     const validation = validateConversationId(payload);
     if (!validation.ok) {
@@ -1455,7 +1507,7 @@ io.on('connection', (socket: AuthSocket) => {
         .limit(1);
 
       const allowed =
-        conversation !== undefined && (await canAccessConversation(userId, conversation));
+        conversation !== undefined && (await canAccessConversation(actor, conversation));
       if (!allowed) {
         // Deny quietly (no disconnect): unlike join_channel, a stale join
         // attempt after an un-share is an expected client state, not a
@@ -1467,6 +1519,8 @@ io.on('connection', (socket: AuthSocket) => {
       const room = conversationRoom(conversationId);
       socket.join(room);
       socketRegistry.trackRoomJoin(socket.id, room);
+      // A page or drive conversation carries that org's content: watched like the page itself.
+      if (conversation.type !== 'global' && conversation.contextId) void orgRoomWatch.track(room, conversation.contextId);
       loggers.realtime.debug('User joined conversation room', { userId, room });
     } catch (error) {
       loggers.realtime.error('Error joining conversation', error as Error, { conversationId });
@@ -1482,7 +1536,7 @@ io.on('connection', (socket: AuthSocket) => {
   // shell bridge below re-adds that gate for itself).
   socket.on('join_session', async (payload: unknown) => {
     const userId = user?.id;
-    if (!userId) return;
+    if (!userId || !actor) return;
 
     const validation = validateSessionId(payload);
     if (!validation.ok) {
@@ -1497,7 +1551,7 @@ io.on('connection', (socket: AuthSocket) => {
       const row = await store.findById(workspaceId);
       const decision = row
         ? await checkAgentSessionAccess({
-            requesterId: userId,
+            requester: actor,
             workspaceId,
             deps: {
               // The row was just read; hand the wrapper the same subject
@@ -1520,6 +1574,7 @@ io.on('connection', (socket: AuthSocket) => {
       const room = sessionRoom(workspaceId);
       socket.join(room);
       socketRegistry.trackRoomJoin(socket.id, room);
+      if (row?.driveId) void orgRoomWatch.track(room, row.driveId);
       loggers.realtime.debug('User joined session layout room', { userId, room });
     } catch (error) {
       loggers.realtime.error('Error joining session layout room', error as Error, { workspaceId });
@@ -1539,6 +1594,7 @@ io.on('connection', (socket: AuthSocket) => {
     const room = sessionRoom(validation.value);
     socket.leave(room);
     socketRegistry.trackRoomLeave(socket.id, room);
+    orgRoomWatch.untrack(room);
     loggers.realtime.debug('User left session layout room', { userId, room });
   });
 
@@ -1555,6 +1611,7 @@ io.on('connection', (socket: AuthSocket) => {
     const room = conversationRoom(validation.value);
     socket.leave(room);
     socketRegistry.trackRoomLeave(socket.id, room);
+    orgRoomWatch.untrack(room);
     loggers.realtime.debug('User left conversation room', { userId, room });
   });
 
@@ -1639,6 +1696,7 @@ io.on('connection', (socket: AuthSocket) => {
     for (const room of rooms) {
       socket.leave(room);
       socketRegistry.trackRoomLeave(socket.id, room);
+      orgRoomWatch.untrack(room);
     }
     loggers.realtime.debug('User left drive and drive calendar rooms', {
       userId: user.id,
@@ -1648,7 +1706,7 @@ io.on('connection', (socket: AuthSocket) => {
 
   // Activity channel handlers - for real-time activity feed updates
   socket.on('join_activity_drive', async (payload: unknown) => {
-    if (!user?.id) return;
+    if (!user?.id || !actor) return;
 
     // Validate payload before any DB query
     const validation = validateDriveId(payload);
@@ -1660,14 +1718,16 @@ io.on('connection', (socket: AuthSocket) => {
     const driveId = validation.value;
 
     try {
-      const hasAccess = await getUserDriveAccess(user.id, driveId);
+      const hasAccess = await getUserDriveAccess(actor, driveId);
       if (hasAccess) {
         const activityRoom = driveActivityRoom(driveId);
         socket.join(activityRoom);
         socketRegistry.trackRoomJoin(socket.id, activityRoom);
+        void orgRoomWatch.track(activityRoom, driveId);
         loggers.realtime.debug('User joined activity drive room', { userId: user.id, room: activityRoom });
       } else {
         loggers.realtime.warn('User denied access to activity drive', { userId: user.id, driveId });
+        await emitSignInDenial(socket, actor, driveId);
       }
     } catch (error) {
       loggers.realtime.error('Error joining activity drive', error as Error, { driveId });
@@ -1675,7 +1735,7 @@ io.on('connection', (socket: AuthSocket) => {
   });
 
   socket.on('join_activity_page', async (payload: unknown) => {
-    if (!user?.id) return;
+    if (!user?.id || !actor) return;
 
     // Validate payload before any DB query
     const validation = validatePageId(payload);
@@ -1687,14 +1747,16 @@ io.on('connection', (socket: AuthSocket) => {
     const pageId = validation.value;
 
     try {
-      const accessLevel = await getUserAccessLevel(user.id, pageId);
+      const accessLevel = await getUserAccessLevel(actor, pageId);
       if (accessLevel) {
         const activityRoom = pageActivityRoom(pageId);
         socket.join(activityRoom);
         socketRegistry.trackRoomJoin(socket.id, activityRoom);
+        void orgRoomWatch.track(activityRoom, pageId);
         loggers.realtime.debug('User joined activity page room', { userId: user.id, room: activityRoom });
       } else {
         loggers.realtime.warn('User denied access to activity page', { userId: user.id, pageId });
+        await emitSignInDenial(socket, actor, pageId);
       }
     } catch (error) {
       loggers.realtime.error('Error joining activity page', error as Error, { pageId });
@@ -1716,6 +1778,7 @@ io.on('connection', (socket: AuthSocket) => {
     const activityRoom = driveActivityRoom(driveId);
     socket.leave(activityRoom);
     socketRegistry.trackRoomLeave(socket.id, activityRoom);
+    orgRoomWatch.untrack(activityRoom);
     loggers.realtime.debug('User left activity drive room', { userId: user.id, room: activityRoom });
   });
 
@@ -1734,12 +1797,13 @@ io.on('connection', (socket: AuthSocket) => {
     const activityRoom = pageActivityRoom(pageId);
     socket.leave(activityRoom);
     socketRegistry.trackRoomLeave(socket.id, activityRoom);
+    orgRoomWatch.untrack(activityRoom);
     loggers.realtime.debug('User left activity page room', { userId: user.id, room: activityRoom });
   });
 
   // Presence tracking: join a page as a viewer
   socket.on('presence:join_page', async (payload: unknown) => {
-    if (!user?.id) return;
+    if (!user?.id || !actor) return;
 
     const pageValidation = validatePresencePagePayload(payload);
     if (!pageValidation.ok) {
@@ -1750,7 +1814,7 @@ io.on('connection', (socket: AuthSocket) => {
 
     try {
       // Verify the user has access to this page
-      const accessLevel = await getUserAccessLevel(user.id, pageId);
+      const accessLevel = await getUserAccessLevel(actor, pageId);
       if (!accessLevel) {
         loggers.realtime.warn('Presence denied: no page access', { userId: user.id, pageId });
         return;
@@ -1908,6 +1972,8 @@ io.on('connection', (socket: AuthSocket) => {
   socket.on('app:logs:unsubscribe', (payload) => appLogHandlers.onUnsubscribe(payload));
 
   socket.on('disconnect', (reason) => {
+    orgRoomWatch.dispose();
+    orgRoomWatches.delete(socket.id);
     shellHandlers.onDisconnect();
     appLogHandlers.onDisconnect();
     // Clean up presence tracking and broadcast updates for affected pages

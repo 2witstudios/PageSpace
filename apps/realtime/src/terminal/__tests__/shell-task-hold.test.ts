@@ -6,6 +6,7 @@
  * handler with a recording fake controller and never touch a platform.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 import { buildShellHandlers } from '../shell-handler';
 import { createTerminalSessionMap } from '../terminal-session-map';
 import type { ShellCheckAuthFn, OpenShellFn, SocketLike } from '../shell-handler';
@@ -42,7 +43,7 @@ function makeShell(): PtyShell & { kill: ReturnType<typeof vi.fn>; setQuiesced: 
 }
 
 function makeSocket(id = 'sock1', userId = 'user1'): SocketLike & { emit: ReturnType<typeof vi.fn> } {
-  return { id, data: { user: { id: userId } }, emit: vi.fn() };
+  return { id, data: { user: { id: userId }, actor: credentialActor(userId, null) }, emit: vi.fn() };
 }
 
 function makeSprite() {

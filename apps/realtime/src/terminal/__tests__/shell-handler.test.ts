@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 /**
  * The realtime logger, mocked so the two UNRECOVERABLE-charge paths can be
@@ -50,7 +51,7 @@ function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
 }
 
 function makeSocket(id = 'sock1', userId = 'user1'): SocketLike & { emit: ReturnType<typeof vi.fn> } {
-  return { id, data: { user: { id: userId } }, emit: vi.fn() };
+  return { id, data: { user: { id: userId }, actor: credentialActor(userId, null) }, emit: vi.fn() };
 }
 
 /**
@@ -423,7 +424,7 @@ describe('buildShellHandlers', () => {
       const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload);
 
-      expect(checkAuth).toHaveBeenCalledWith({ userId: 'user1', shellId: 'shl-1' });
+      expect(checkAuth).toHaveBeenCalledWith({ actor: credentialActor('user1', null), shellId: 'shl-1' });
     });
 
     it('given openShell throws, should emit shell:error, release the slot, and not store session', async () => {
@@ -602,12 +603,14 @@ describe('buildShellHandlers', () => {
       expect(sessionMap.getByKey('shell:shl-1')).toBeDefined();
     });
 
-    it('given no authenticated user on the socket, should call checkAuth with an empty-string userId rather than throwing', async () => {
+    it('given no credential on the socket, should refuse the shell without calling checkAuth rather than throwing', async () => {
       socket.data.user = undefined;
+      socket.data.actor = undefined;
       const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload);
 
-      expect(checkAuth).toHaveBeenCalledWith(expect.objectContaining({ userId: '' }));
+      expect(checkAuth).not.toHaveBeenCalled();
+      expect(socket.emit).toHaveBeenCalledWith('shell:error', expect.objectContaining({ message: 'Shell access denied: unauthenticated' }));
     });
 
     it('given a reconnect while a prior disconnect\'s idle timer is still pending, should cancel the pending reap so the session survives past the original timeout', async () => {
@@ -1084,8 +1087,8 @@ describe('buildShellHandlers', () => {
       checkAuth.mockClear();
       await vi.advanceTimersByTimeAsync(60_000);
 
-      expect(checkAuth).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user1' }));
-      expect(checkAuth).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user2' }));
+      expect(checkAuth).toHaveBeenCalledWith(expect.objectContaining({ actor: expect.objectContaining({ userId: 'user1' }) }));
+      expect(checkAuth).toHaveBeenCalledWith(expect.objectContaining({ actor: expect.objectContaining({ userId: 'user2' }) }));
     });
 
     it('given the creator has left and a DIFFERENT user is watching, should re-auth the remaining viewer, not the creator', async () => {
@@ -1104,8 +1107,8 @@ describe('buildShellHandlers', () => {
       checkAuth.mockClear();
       await vi.advanceTimersByTimeAsync(60_000);
 
-      expect(checkAuth).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user2' }));
-      expect(checkAuth).not.toHaveBeenCalledWith(expect.objectContaining({ userId: 'user1' }));
+      expect(checkAuth).toHaveBeenCalledWith(expect.objectContaining({ actor: expect.objectContaining({ userId: 'user2' }) }));
+      expect(checkAuth).not.toHaveBeenCalledWith(expect.objectContaining({ actor: expect.objectContaining({ userId: 'user1' }) }));
     });
 
     it('given one of two attached users loses access, should evict ONLY that viewer — the other keeps streaming and the PTY survives (#2093)', async () => {
@@ -1117,8 +1120,8 @@ describe('buildShellHandlers', () => {
       await handlers2.onConnect(validPayload); // user2 joins
 
       // user2's access is revoked; user1 still passes.
-      checkAuth.mockImplementation(async ({ userId }: { userId: string }) =>
-        userId === 'user2' ? { ok: false, reason: 'permission_revoked' } : makeAuthSuccess(),
+      checkAuth.mockImplementation(async ({ actor }: { actor: { userId: string } }) =>
+        actor.userId === 'user2' ? { ok: false, reason: 'permission_revoked' } : makeAuthSuccess(),
       );
       await vi.advanceTimersByTimeAsync(60_000);
 
@@ -1137,6 +1140,28 @@ describe('buildShellHandlers', () => {
       // The revoked viewer's keystrokes no-op: eviction removed their binding.
       handlers2.onInput({ data: 'rm -rf /\n', connectionId: 'sock2' });
       expect(shell.write).not.toHaveBeenCalledWith('rm -rf /\n');
+    });
+
+    it('SEC-3 (partial) the re-auth tick checks each CREDENTIAL: a stale pane of a user is evicted while their fresh pane keeps the shell', async () => {
+      const fresh = credentialActor('user1', { authenticatedAtMs: Date.now(), assurance: 'user_verified_passkey' });
+      const stale = credentialActor('user1', { authenticatedAtMs: Date.now() - 86_400_000, assurance: 'single_factor' });
+      socket.data.actor = fresh;
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
+      await onConnect(validPayload);
+      const staleSocket = makeSocket('sock2', 'user1');
+      staleSocket.data.actor = stale;
+      const staleHandlers = buildShellHandlers({ sessionMap, openShell, checkAuth, socket: staleSocket, persistSpriteExecId });
+      await staleHandlers.onConnect(validPayload);
+
+      // The org's sign-in policy refuses the stale credential only (it reads as no access).
+      checkAuth.mockImplementation(async ({ actor }: { actor: unknown }) =>
+        actor === stale ? { ok: false, reason: 'drive_access_denied' } : makeAuthSuccess(),
+      );
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(staleSocket.emit).toHaveBeenCalledWith('shell:error', { message: 'Session access revoked', connectionId: 'sock2' });
+      expect(shell.kill).not.toHaveBeenCalled();
+      expect(socket.emit).not.toHaveBeenCalledWith('shell:error', expect.anything());
     });
 
     it('given the SOLE viewer loses access, should evict them AND tear the session down in the same tick — no grace for an unsupervised revoked process', async () => {
@@ -1233,7 +1258,7 @@ describe('buildShellHandlers', () => {
       await vi.advanceTimersByTimeAsync(60_000);
 
       expect(checkAuth).toHaveBeenCalledTimes(1);
-      expect(checkAuth).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user1' }));
+      expect(checkAuth).toHaveBeenCalledWith(expect.objectContaining({ actor: expect.objectContaining({ userId: 'user1' }) }));
     });
 
     it('given checkAuth THROWS for an attached viewer, should evict nobody this tick (fail-open — a DB blip is not a revocation)', async () => {
@@ -3060,7 +3085,7 @@ describe('ensureShellSession — headless start', () => {
 
   /** The headless shape: no viewer, no pane to abandon it, nothing to emit. */
   function headlessRequest(access: ReturnType<typeof makeAuthSuccess>) {
-    return { access, target, userId: 'user1', cols: 80, rows: 24, abandoned: () => false };
+    return { access, target, actor: credentialActor('user1', null), cols: 80, rows: 24, abandoned: () => false };
   }
 
   beforeEach(() => {
