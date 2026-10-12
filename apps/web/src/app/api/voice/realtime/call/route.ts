@@ -34,7 +34,8 @@ import { REALTIME_MAX_SESSION_SECONDS } from '@pagespace/lib/billing/credit-pric
 import { PAID_TIERS } from '@/lib/subscription/rate-limit-middleware';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
-import { resolveRealtimeModel } from '@/lib/ai/realtime/session';
+import { REALTIME_MODEL_VENDOR, resolveRealtimeModel } from '@/lib/ai/realtime/session';
+import { orgModelRefusal } from '@/lib/ai/core/provider-factory';
 import { runCallHandshake } from '@/lib/ai/realtime/call-handshake';
 import { loadVoiceBinding } from '@/lib/ai/realtime/binding-loader';
 import { voiceBindingDeps, voiceSpendDeps } from '@/lib/ai/realtime/voice-runtime-deps';
@@ -147,6 +148,23 @@ export async function POST(request: Request) {
       );
     }
 
+    // POL-8, before OpenAI is contacted: the conversation's history and its agent's instructions go to the realtime
+    // model, so the org of the drive the call belongs to (the conversation's drive, which is also the drive it spends
+    // in — SPEND-1) must allow that model and its vendor (D-OW-65). Refused with the policy's own code; nothing is
+    // minted and nothing is charged.
+    const model = resolveRealtimeModel(process.env);
+    const policyRefusal = await orgModelRefusal(
+      [spend.kind === 'drive' ? spend.driveId : null],
+      [{ modelId: model, provider: REALTIME_MODEL_VENDOR }],
+    );
+    if (policyRefusal) {
+      loggers.ai.info('Realtime voice call refused by the org model policy', { userId, code: policyRefusal.code });
+      return NextResponse.json(
+        { error: policyRefusal.error, code: policyRefusal.code, ...(policyRefusal.policy ? { policy: policyRefusal.policy } : {}) },
+        { status: policyRefusal.status },
+      );
+    }
+
     // Voice starts on a conversation that already exists, so the conversation is
     // what says which assistant is being talked to, what it was told to be, and
     // which tools its owner allowed it — as well as supplying the history
@@ -169,7 +187,7 @@ export async function POST(request: Request) {
         // Resolved explicitly rather than left to buildSessionConfig's default:
         // the env override is the entire per-deployment model escape hatch, and
         // a default applied deeper down would silently swallow it.
-        model: resolveRealtimeModel(process.env),
+        model,
         // Built with the instructions, from ONE exposure, and carried here on
         // the binding. They are two projections of a single decision — what
         // this agent may reach — and a session that advertises `tool_search`

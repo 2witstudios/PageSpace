@@ -27,6 +27,12 @@
 export const DEFAULT_REALTIME_MODEL = 'gpt-realtime-2.1';
 export const REALTIME_VOICE = 'marin';
 
+/**
+ * The vendor of every realtime model (D-OW-65: an org's provider allowlist names the vendor, not the transport or the
+ * managed key). What POL-8 judges a voice call and its tools by.
+ */
+export const REALTIME_MODEL_VENDOR = 'openai';
+
 /** The env var that overrides the model, named once so callers can't drift. */
 export const REALTIME_MODEL_ENV_VAR = 'OPENAI_REALTIME_MODEL';
 

@@ -64,6 +64,7 @@
 import type { Tool, ToolSet } from 'ai';
 import type { z } from 'zod';
 import type { ToolExecutionContext } from '../core/types';
+import { REALTIME_MODEL_VENDOR } from './session';
 import { PERSONAL_SPEND, conversationSpend, resolvedSpend } from '@pagespace/lib/billing/spend-target';
 import {
   clipToolName,
@@ -322,7 +323,7 @@ export const buildVoiceToolContext = (
       ? PERSONAL_SPEND
       : resolvedSpend(conversationSpend(request.spend.driveId, request.conversationId), request.spend.chosen ?? undefined, request.spend.fallbackFromWalletId),
   },
-  aiProvider: 'openai_voice',
+  aiProvider: REALTIME_MODEL_VENDOR,
   aiModel: model,
   requestOrigin: 'user',
   agentCallDepth: 0,

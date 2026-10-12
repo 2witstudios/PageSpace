@@ -57,8 +57,12 @@ export interface ProviderFactoryOptions {
   contentDriveIds?: readonly string[];
 }
 
-/** POL-8: the first refusal among the orgs of these drives for any of these (provider, model) uses, read now. */
-async function orgModelRefusal(
+/**
+ * POL-8: the first refusal among the orgs of these drives for any of these (provider, model) uses, read now. Every
+ * drive must allow every use (the intersection of their allowlists). Exported for model uses that do not go through
+ * an AI SDK provider (the realtime voice handshake).
+ */
+export async function orgModelRefusal(
   driveIds: ReadonlyArray<string | null | undefined>,
   uses: ReadonlyArray<{ modelId: string; provider: string }>,
 ): Promise<ProviderError | null> {

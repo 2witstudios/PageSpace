@@ -226,7 +226,7 @@ describe('buildVoiceToolContext', () => {
       conversationId: 'conv1',
       timezone: 'America/New_York',
       locationContext: { currentPage: { id: 'p1' } },
-      aiProvider: 'openai_voice',
+      aiProvider: 'openai',
       aiModel: 'gpt-realtime-2.1',
     });
   });

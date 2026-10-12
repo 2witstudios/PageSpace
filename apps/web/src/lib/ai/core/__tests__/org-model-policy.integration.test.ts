@@ -63,7 +63,8 @@ vi.mock('@/lib/auth', async (importOriginal) => ({
 vi.mock('@pagespace/lib/organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 vi.mock('@/lib/websocket', async (importOriginal) => ({ ...(await importOriginal<typeof import('@/lib/websocket')>()), broadcastPageEvent: vi.fn(async () => undefined) }));
 
-import { createAIProvider, isProviderError } from '../provider-factory';
+import { createAIProvider, isProviderError, orgModelRefusal } from '../provider-factory';
+import { REALTIME_MODEL_VENDOR, resolveRealtimeModel } from '@/lib/ai/realtime/session';
 import { resolveProviderModel } from '../ai-providers-config';
 import { offeredModels, scopeReadableByModel } from '../org-model-policy';
 import { applyPageMutation, OrgModelPolicyError } from '@/services/api/page-mutation-service';
@@ -200,6 +201,17 @@ describe('POL-8 the org model and provider allowlists govern every model use in 
     await setPolicies({ modelAllowlist: [model], providerAllowlist: [provider] });
     expect(await zoom()).toBe('- decided');
     expect(generateText).toHaveBeenCalledTimes(1);
+  });
+
+  it('voice: a realtime call in an org drive is judged by the realtime model and its vendor (D-OW-65) before the handshake — refused where the org does not allow them, allowed where it does', async () => {
+    const realtime = { modelId: resolveRealtimeModel({}), provider: REALTIME_MODEL_VENDOR };
+    await setPolicies({ providerAllowlist: ['anthropic'] });
+    expect(await orgModelRefusal([w.orgDrive], [realtime])).toMatchObject({ status: 403, code: 'org_policy', policy: 'providerAllowlist' });
+    await setPolicies({ providerAllowlist: ['openai'], modelAllowlist: [realtime.modelId] });
+    expect(await orgModelRefusal([w.orgDrive], [realtime])).toBeNull();
+    // No drive (a personal call) is never restricted.
+    await setPolicies({ providerAllowlist: ['anthropic'] });
+    expect(await orgModelRefusal([null], [realtime])).toBeNull();
   });
 
   it('saving: an agent page\'s provider/model write to a model the org does not allow is refused and nothing is written; an allowed one is saved', async () => {

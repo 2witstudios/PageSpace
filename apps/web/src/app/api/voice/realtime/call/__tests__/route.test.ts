@@ -51,6 +51,9 @@ vi.mock('@/lib/ai/realtime/voice-runtime-deps', () => ({ voiceBindingDeps: () =>
 const { mockResolveVoiceSpend } = vi.hoisted(() => ({ mockResolveVoiceSpend: vi.fn() }));
 vi.mock('@/lib/ai/realtime/voice-spend', () => ({ resolveVoiceSpend: mockResolveVoiceSpend }));
 vi.mock('@/lib/ai/core/ai-tools', () => ({ buildPageSpaceTools: () => ({}) }));
+// POL-8: the org model policy the route asks before the handshake (its own real-Postgres proof is the factory's).
+const { mockOrgModelRefusal } = vi.hoisted(() => ({ mockOrgModelRefusal: vi.fn() }));
+vi.mock('@/lib/ai/core/provider-factory', () => ({ orgModelRefusal: mockOrgModelRefusal }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: { ai: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() } },
@@ -72,8 +75,9 @@ function callRequest(body: unknown) {
 
 describe('POST /api/voice/realtime/call', () => {
   beforeEach(() => {
-    mockResolveVoiceSpend.mockResolvedValue({ kind: 'personal' });
     vi.clearAllMocks();
+    mockResolveVoiceSpend.mockResolvedValue({ kind: 'personal' });
+    mockOrgModelRefusal.mockResolvedValue(null);
     vi.unstubAllEnvs();
     mockAuth.mockResolvedValue({ userId: 'u1' });
     mockIsAuthError.mockReturnValue(false);
@@ -445,6 +449,36 @@ describe('POST /api/voice/realtime/call', () => {
 
       expect(response.status).toBe(403);
       expect(mockRunCallHandshake).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('the org model policy (POL-8)', () => {
+    it('POL-8 (partial) judges the realtime model and its vendor against the org of the drive the call belongs to, before OpenAI is contacted', async () => {
+      mockResolveVoiceSpend.mockResolvedValue({ kind: 'drive', driveId: 'drive-1' });
+      vi.stubEnv('OPENAI_REALTIME_MODEL', 'gpt-realtime-x');
+
+      await POST(callRequest({ sdp: 'v=0 offer', conversationId: 'conv1' }));
+
+      expect(mockOrgModelRefusal).toHaveBeenCalledWith(['drive-1'], [{ modelId: 'gpt-realtime-x', provider: 'openai' }]);
+      expect(mockRunCallHandshake).toHaveBeenCalledWith(expect.objectContaining({ model: 'gpt-realtime-x' }), expect.anything());
+    });
+
+    it('POL-8 (partial) a call in a drive whose org does not allow the realtime model is refused with the policy code; nothing is minted, no binding is loaded', async () => {
+      mockResolveVoiceSpend.mockResolvedValue({ kind: 'drive', driveId: 'drive-1' });
+      mockOrgModelRefusal.mockResolvedValue({ error: "This organization doesn't allow this model.", status: 403, code: 'org_policy', policy: 'providerAllowlist' });
+
+      const response = await POST(callRequest({ sdp: 'v=0 offer', conversationId: 'conv1' }));
+
+      expect(response.status).toBe(403);
+      expect(await response.json()).toEqual({ error: "This organization doesn't allow this model.", code: 'org_policy', policy: 'providerAllowlist' });
+      expect(mockRunCallHandshake).not.toHaveBeenCalled();
+      expect(mockLoadVoiceBinding).not.toHaveBeenCalled();
+    });
+
+    it('a personal (Global Assistant) call is judged with no drive, which no org restricts', async () => {
+      await POST(callRequest({ sdp: 'v=0 offer' }));
+      expect(mockOrgModelRefusal).toHaveBeenCalledWith([null], [expect.objectContaining({ provider: 'openai' })]);
+      expect(mockRunCallHandshake).toHaveBeenCalled();
     });
   });
 });
