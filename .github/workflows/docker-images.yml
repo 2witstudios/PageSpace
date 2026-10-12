@@ -250,6 +250,7 @@ jobs:
               if ! jq -e -f scripts/fly-migration-succeeded.jq /tmp/fly_machine.json >/dev/null; then
                 echo "ERROR: migration has no verified successful exit"
                 flyctl machine logs "$MACHINE_ID" --app pagespace-web 2>/dev/null || true
+                flyctl machine destroy "$MACHINE_ID" --app pagespace-web --force
                 exit 1
               fi
               break
@@ -351,6 +352,7 @@ jobs:
               if ! jq -e -f scripts/fly-migration-succeeded.jq /tmp/fly_admin_machine.json >/dev/null; then
                 echo "ERROR: migration has no verified successful exit"
                 flyctl machine logs "$MACHINE_ID" --app pagespace-web 2>/dev/null || true
+                flyctl machine destroy "$MACHINE_ID" --app pagespace-web --force
                 exit 1
               fi
               break
