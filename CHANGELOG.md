@@ -24,7 +24,9 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   create a drive in an organization, move drives in and out, change a drive's visibility or lead, and ask
   to join, approve, deny or withdraw drive join requests (`pagespace orgs …`, `pagespace drives …`). Money
   stays with a signed-in session: creating or deleting an organization, transferring ownership, seat caps,
-  billing, the credits pool and every wallet change refuse an access key by name. An access key scoped to
+  the seat allowance and wallet fallback policies, buying another seat (an access key may invite only into
+  seats already paid for), billing, the credits pool and every wallet change refuse an access key by name,
+  and the CLI asks before a change that can remove or suspend access. An access key scoped to
   specific drives is refused on organization actions and sees only its own drives in the directory, and
   an organization's sign-in requirements now apply to its own settings and admin actions too, for access
   keys and signed-in sessions alike.
