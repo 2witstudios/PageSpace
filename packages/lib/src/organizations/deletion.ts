@@ -32,6 +32,7 @@ import { publishDriveAccessEvents, type OrgMembershipSyncPorts } from '../servic
 import type { AffectedUser } from '../services/org-membership-sync-core';
 import { closeStaleDriveJoinRequests } from '../permissions/drive-join-request-closure';
 import { recordOrgAuditEventAfterCommit } from '../audit/org-audit';
+import { reattributeDriveStorageInTx } from '../services/storage-limits';
 
 export type DriveDeletionChoice =
   | { driveId: string; action: 'transfer'; toUserId: string }
@@ -195,6 +196,9 @@ export async function deleteOrganization(
           ...(step.trashed && !alreadyTrashed ? { isTrashed: true, trashedAt: input.now } : {}),
         })
         .where(eq(drives.id, step.driveId));
+      // WAL-9, O-9 (D-OW-64): the drive is personal now, so its bytes bill its new owner — moved
+      // onto their counter in this same transaction, exactly as a move out of the org does.
+      await reattributeDriveStorageInTx(tx, { driveId: step.driveId, ownerId: step.ownerId, orgId: input.orgId, direction: 'out-of-org' });
       // The former lead's OWNER row would keep them inside a drive that is no longer theirs, and
       // come back with it on restore; drop it as reassignLedOrgDrives does.
       if (before && before.ownerId !== step.ownerId) {

@@ -15,7 +15,8 @@ import { and, eq, inArray } from '@pagespace/db/operators';
 import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
 import { users, mcpTokens } from '@pagespace/db/schema/auth';
-import { drives } from '@pagespace/db/schema/core';
+import { drives, storageEvents } from '@pagespace/db/schema/core';
+import { files } from '@pagespace/db/schema/storage';
 import { driveAgentMembers, driveMembers, mcpTokenDrives } from '@pagespace/db/schema/members';
 import { driveShareLinks, pageShareLinks } from '@pagespace/db/schema/share-links';
 import { oauthAccessTokens, oauthClients, oauthRefreshTokens } from '@pagespace/db/schema/oauth';
@@ -524,6 +525,29 @@ describe('org services (real Postgres)', () => {
       expect(byId.get(research.id)).toMatchObject({ ownerId: jono.id, isTrashed: true });
       expect(await db.select().from(driveMembers).where(eq(driveMembers.driveId, product.id))).toEqual([]);
       expect(await db.select().from(organizations).where(eq(organizations.id, org.id))).toEqual([]);
+    });
+
+    it('WAL-9 (partial) deleting an org moves each leaving drive\'s stored bytes onto its new owner\'s quota in the same transaction (D-OW-64)', async () => {
+      const { jono, org } = await seedNorthwind({ paid: false });
+      const priya = await person('Priya Nair');
+      await addMember(org.id, priya.id, 'ADMIN');
+      const product = await seedDrive(jono.id, org.id, { name: 'Product' });
+      const fileIds = [createId(), createId()];
+      await db.insert(files).values([
+        { id: fileIds[0], driveId: product.id, createdBy: jono.id, sizeBytes: 300, storagePath: fileIds[0] },
+        { id: fileIds[1], driveId: product.id, createdBy: priya.id, sizeBytes: 200, storagePath: fileIds[1] },
+      ]);
+      const counter = async (userId: string) => Math.round((await db.select({ used: users.storageUsedBytes }).from(users).where(eq(users.id, userId)))[0]?.used ?? 0);
+
+      const result = await deleteOrganization({ actorId: jono.id, orgId: org.id, choices: [{ driveId: product.id, action: 'transfer', toUserId: priya.id }], now: new Date() }, noKick);
+
+      expect(result.ok).toBe(true);
+      expect(await counter(priya.id)).toBe(500);
+      expect(await counter(jono.id)).toBe(0);
+      const events = await db.select().from(storageEvents).where(eq(storageEvents.userId, priya.id));
+      expect(events).toEqual([expect.objectContaining({ eventType: 'reattribute', sizeDelta: 500 })]);
+      await db.delete(storageEvents).where(inArray(storageEvents.userId, [jono.id, priya.id]));
+      await db.delete(files).where(inArray(files.id, fileIds));
     });
 
     it('ORG-6 deleting an org refuses a transfer to someone outside the org and changes nothing', async () => {

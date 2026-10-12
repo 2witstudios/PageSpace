@@ -89,13 +89,26 @@ export async function POST(req: Request) {
 
       // Transfer ownership. A personal drive's stored bytes bill its owner (WAL-9), so they move
       // to the new owner's quota in the same transaction as drives.ownerId.
-      await db.transaction(async (tx) => {
+      // The drive row is LOCKED and re-read inside the transaction (D-OW-64): a concurrent move into
+      // an org (or another hand-over) between the check above and this write would otherwise move an
+      // org drive's bytes onto a person, or hand over a drive this caller no longer leads.
+      const transferred = await db.transaction(async (tx) => {
+        const [locked] = await tx
+          .select({ ownerId: drives.ownerId, orgId: drives.orgId })
+          .from(drives)
+          .where(eq(drives.id, driveId))
+          .for('update');
+        if (!locked || locked.orgId !== null || locked.ownerId !== userId) return false;
         await tx
           .update(drives)
           .set({ ownerId: newOwnerId })
           .where(eq(drives.id, driveId));
-        await reattributeDriveOwnerStorageInTx(tx, { driveId, fromUserId: drive.ownerId, toUserId: newOwnerId });
+        await reattributeDriveOwnerStorageInTx(tx, { driveId, fromUserId: locked.ownerId, toUserId: newOwnerId });
+        return true;
       });
+      if (!transferred) {
+        return Response.json({ error: 'This drive changed while the transfer was being made. Reload and try again.' }, { status: 409 });
+      }
 
       // Log activity for audit trail
       const actorInfo = await getActorInfo(userId);

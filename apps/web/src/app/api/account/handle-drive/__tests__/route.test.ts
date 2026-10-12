@@ -34,7 +34,7 @@ vi.mock('@pagespace/db/db', () => ({
 }));
 // A collaborator with its own live-DB coverage — see
 // `apps/web/src/lib/repositories/__tests__/chat-mutation-matrix.integration.test.ts`.
-const { mockReattributeOwnerStorage } = vi.hoisted(() => ({ mockReattributeOwnerStorage: vi.fn() }));
+const { mockReattributeOwnerStorage, mockLockedDrive } = vi.hoisted(() => ({ mockReattributeOwnerStorage: vi.fn(), mockLockedDrive: vi.fn() }));
 vi.mock('@pagespace/lib/services/storage-limits', () => ({ reattributeDriveOwnerStorageInTx: mockReattributeOwnerStorage }));
 vi.mock('@pagespace/lib/repositories/conversation-cleanup', () => ({
   deleteConversationsForDrive: vi.fn().mockResolvedValue({ conversations: 0, messages: 0 }),
@@ -150,10 +150,13 @@ describe('POST /api/account/handle-drive', () => {
   beforeEach(() => {
     vi.clearAllMocks();
 
+    // The transfer re-reads the drive row under FOR UPDATE inside its transaction (D-OW-64).
+    const lockedSelect = { from: () => ({ where: () => ({ for: () => mockLockedDrive() }) }) };
     vi.mocked(db.transaction).mockImplementation(async (fn) =>
-      fn({ delete: db.delete, update: db.update } as unknown as Parameters<typeof fn>[0]),
+      fn({ delete: db.delete, update: db.update, select: () => lockedSelect } as unknown as Parameters<typeof fn>[0]),
     );
     mockReattributeOwnerStorage.mockResolvedValue([]);
+    mockLockedDrive.mockResolvedValue([{ ownerId: 'user_123', orgId: null }]);
 
     // Setup default auth success
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(
@@ -310,6 +313,20 @@ describe('POST /api/account/handle-drive', () => {
       expect(loggers.auth.info).toHaveBeenCalledWith(
         `Drive ownership transferred: drive_abc from user_123 to admin_456`
       );
+    });
+
+    it('WAL-9 (partial) a drive moved into an org (or handed elsewhere) between the check and the write is refused 409 under the row lock — no owner change, no bytes moved (D-OW-64)', async () => {
+      const updateMock = setupUpdateMock();
+      mockLockedDrive.mockResolvedValue([{ ownerId: 'user_123', orgId: 'org-northwind' }]);
+
+      const response = await POST(new Request('https://example.com/api/account/handle-drive', {
+        method: 'POST',
+        body: JSON.stringify({ driveId: mockDriveId, action: 'transfer', newOwnerId: mockNewOwnerId }),
+      }));
+
+      expect(response.status).toBe(409);
+      expect(updateMock).not.toHaveBeenCalled();
+      expect(mockReattributeOwnerStorage).not.toHaveBeenCalled();
     });
 
     it('WAL-9 (partial) moves the personal drive\'s stored bytes to the new owner\'s quota in the same transaction as the owner change', async () => {
