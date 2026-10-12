@@ -254,6 +254,23 @@ describe('org Business subscription shell (real Postgres, in-memory Stripe)', ()
     expect(stripe.writes.createSubscription).toBe(1);
   });
 
+  it.each(['past_due', 'unpaid'])('rejects %s adoption while another unverified active subscription can bill', async (status) => {
+    if (!dbAvailable) return;
+    const { orgId, deps, stripe } = await northwind(1);
+    const first = await ensureOrgBusinessSubscription(orgId, deps);
+    const payable = stripe.subscriptions.get(first.linkage.stripeSubscriptionId)!;
+    payable.status = status;
+    const active = { ...structuredClone(payable), id: `${payable.id}_active`, status: 'active',
+      items: [...payable.items, { id: 'si_unknown', priceId: 'price_unknown', quantity: 1 }],
+    };
+    stripe.subscriptions.set(active.id, active);
+    await db.delete(orgSubscriptions).where(eq(orgSubscriptions.orgId, orgId));
+    await expect(provisionOrgSubscription(orgId, deps)).rejects.toThrow('another billable subscription');
+    expect(await db.query.orgSubscriptions.findFirst({ where: eq(orgSubscriptions.orgId, orgId) })).toBeUndefined();
+    expect(stripe.writes.recoverSubscription).toBe(0);
+    expect(stripe.writes.createSubscription).toBe(1);
+  });
+
   it('recovers only the selected subscription when two paused candidates exist', async () => {
     if (!dbAvailable) return;
     const { orgId, deps, stripe } = await northwind(1);

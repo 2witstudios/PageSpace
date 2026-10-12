@@ -333,11 +333,12 @@ export async function ensureOrgBusinessSubscription(
     // Select once before any recovery write: a stale second subscription must
     // never generate a second invoice or obstruct an already-active candidate.
     let existing = pickAdoptableOrgSubscription(history, { orgId, prices });
+    if (existing && existing.status !== 'active' && history.some(candidate =>
+      candidate.id !== existing?.id && candidate.metadata?.[ORG_ID_METADATA_KEY] === orgId &&
+      isLiveOrgSubscriptionStatus(candidate.status) && candidate.status !== 'trialing' && candidate.status !== 'paused')) {
+      throw new OrgBillingError('not_an_org_business_subscription', 'Organization has another billable subscription; repair its prices before recovery');
+    }
     if (existing && (existing.status === 'trialing' || existing.status === 'paused')) {
-      if (history.some(candidate => candidate.metadata?.[ORG_ID_METADATA_KEY] === orgId &&
-        isLiveOrgSubscriptionStatus(candidate.status) && candidate.status !== 'trialing' && candidate.status !== 'paused')) {
-        throw new OrgBillingError('not_an_org_business_subscription', 'Organization has another billable subscription; repair its prices before recovery');
-      }
       existing = await deps.stripe.recoverSubscription(
         existing.id, prices,
         orgStripeIdempotencyKey(orgId, 'subscription.recover', { subscriptionId: existing.id }),
@@ -613,6 +614,9 @@ export function stripeOrgBilling(client: Stripe): OrgBillingStripe {
       if (current.status !== 'trialing' && current.status !== 'paused') return subscription;
       if (!orgSubscriptionItems(subscription, prices)) {
         throw new OrgBillingError('not_an_org_business_subscription', 'Organization subscription prices changed during recovery');
+      }
+      if (current.collection_method !== 'charge_automatically') {
+        throw new OrgBillingError('not_an_org_business_subscription', 'Organization recovery requires automatic collection');
       }
       try {
         if (current.status === 'trialing') {

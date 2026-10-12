@@ -9,7 +9,16 @@ describe('Stripe org subscription adapter', () => {
   const subscription = (status: string) => ({
     id: 'sub_org', customer: 'cus_org', status, created: 1, metadata: {}, cancel_at_period_end: false,
     items: { has_more: false, data: [{ id: 'si_base', price: { id: 'price_base' }, quantity: 1 }, { id: 'si_seat', price: { id: 'price_seat' }, quantity: 0 }] },
-    latest_invoice: null,
+    latest_invoice: null, collection_method: 'charge_automatically',
+  });
+  it.each(['trialing', 'paused'])('rejects invoice-sent %s recovery before generating a payable invoice', async (status) => {
+    const update = vi.fn().mockResolvedValue(subscription('active'));
+    const resume = vi.fn().mockResolvedValue(subscription('active'));
+    const retrieve = vi.fn().mockResolvedValue({ ...subscription(status), collection_method: 'send_invoice' });
+    const client = { subscriptions: { retrieve, update, resume } } as unknown as Stripe;
+    await expect(stripeOrgBilling(client).recoverSubscription('sub_org', prices, 'recovery')).rejects.toThrow('automatic collection');
+    expect(update).not.toHaveBeenCalled();
+    expect(resume).not.toHaveBeenCalled();
   });
   it('preserves a trial that Stripe now reports as active', async () => {
     const cancel = vi.fn();
