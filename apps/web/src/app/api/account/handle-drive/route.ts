@@ -98,7 +98,7 @@ export async function POST(req: Request) {
           .from(drives)
           .where(eq(drives.id, driveId))
           .for('update');
-        if (!locked || locked.orgId !== null || locked.ownerId !== userId) return false;
+        if (!locked || locked.orgId !== null || !isDriveLead(userId, locked)) return false;
         await tx
           .update(drives)
           .set({ ownerId: newOwnerId })
