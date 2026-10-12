@@ -29,8 +29,9 @@
  * shell retrieves before it creates, so a gift interrupted between its writes completes on
  * any retry, and a gift revoked and given again reuses its coupon.
  *
- * One Stripe key per gift state transition: the subscription update of a gift and of a revoke
- * is keyed on the stored gift revision, which every gift and revoke bumps under the billing
+ * One Stripe key per gift state transition: the subscription update of a gift (subscription,
+ * revision, pinned seats) and of a revoke (subscription, revision) is keyed on the stored gift
+ * revision, which every gift and revoke bumps under the billing
  * lock. A retry of the SAME transition (the revision did not commit) replays its own request;
  * a later gift or revoke can never be answered with an earlier one's cached response.
  */
@@ -89,7 +90,8 @@ export interface OrgGiftCouponParams {
 
 export interface OrgGiftSubscriptionUpdate {
   discounts: [{ coupon: string }];
-  metadata: { type: typeof ORG_GIFT_METADATA_TYPE; giftedBy: string; reason: string; giftedExtraSeats: string };
+  /** No admin or reason here: those live in the audit trails, so a retried gift is the same request. */
+  metadata: { type: typeof ORG_GIFT_METADATA_TYPE; giftedExtraSeats: string };
   /** The seat item, held at the gifted quantity. */
   items: [{ id: string; quantity: number }];
   proration_behavior: 'none';
@@ -100,7 +102,7 @@ export interface OrgGiftSubscriptionUpdate {
 /** Removes the gift: '' clears the discounts and each metadata key (Stripe's unset convention). */
 export interface OrgUngiftSubscriptionUpdate {
   discounts: '';
-  metadata: { type: ''; giftedBy: ''; reason: ''; giftedExtraSeats: '' };
+  metadata: { type: ''; giftedExtraSeats: '' };
   proration_behavior: 'none';
 }
 
@@ -174,7 +176,7 @@ export function planOrgGift(facts: OrgGiftFacts): OrgGiftPlan {
   };
   const update: OrgGiftSubscriptionUpdate = {
     discounts: [{ coupon: coupon.id }],
-    metadata: { type: ORG_GIFT_METADATA_TYPE, giftedBy: facts.adminUserId, reason: facts.reason, giftedExtraSeats: String(facts.extraSeats) },
+    metadata: { type: ORG_GIFT_METADATA_TYPE, giftedExtraSeats: String(facts.extraSeats) },
     items: [{ id: stored.stripeSeatItemId, quantity: facts.extraSeats }],
     proration_behavior: 'none',
     ...(restoresNow ? { billing_cycle_anchor: 'now' as const } : {}),
@@ -188,7 +190,10 @@ export function planOrgGift(facts: OrgGiftFacts): OrgGiftPlan {
     coupon,
     couponKey: orgStripeIdempotencyKey(facts.orgId, 'gift.coupon.create', coupon),
     update,
-    updateKey: orgStripeIdempotencyKey(facts.orgId, 'gift.subscription.update', { subscriptionId, giftRevision: stored.giftRevision, update }),
+    // Keyed on the transition alone — subscription, gift revision, pinned seats — never the
+    // admin or the reason, so a retry after an ambiguous failure (applied in Stripe, reported as
+    // an error, rolled back here) replays the one update instead of applying it again.
+    updateKey: orgStripeIdempotencyKey(facts.orgId, 'gift.subscription.update', { subscriptionId, giftRevision: stored.giftRevision, giftedExtraSeats: facts.extraSeats }),
     restoresNow,
   };
 }
@@ -201,7 +206,7 @@ export function planOrgUngift(facts: OrgUngiftFacts): OrgUngiftPlan {
   const subscriptionId = stored.stripeSubscriptionId;
   const update: OrgUngiftSubscriptionUpdate = {
     discounts: '',
-    metadata: { type: '', giftedBy: '', reason: '', giftedExtraSeats: '' },
+    metadata: { type: '', giftedExtraSeats: '' },
     proration_behavior: 'none',
   };
   return {

@@ -41,7 +41,7 @@ describe('planOrgGift (SEAT-8 admin gift, D-OW-23, D-OW-54)', () => {
     expect(plan.giftedExtraSeats).toBe(2);
     expect(plan.coupon).toMatchObject({ id: orgGiftCouponId('sub_org'), percent_off: 100, duration: 'forever' });
     expect(plan.update.discounts).toEqual([{ coupon: plan.coupon.id }]);
-    expect(plan.update.metadata).toEqual({ type: ORG_GIFT_METADATA_TYPE, giftedBy: 'adm_1', reason: 'Design partner', giftedExtraSeats: '2' });
+    expect(plan.update.metadata).toEqual({ type: ORG_GIFT_METADATA_TYPE, giftedExtraSeats: '2' });
     expect(plan.update.items).toEqual([{ id: 'si_seat', quantity: 2 }]);
     expect(ORG_GIFT_METADATA_TYPE).toBe('gift_subscription');
     expect(plan.update.proration_behavior).toBe('none');
@@ -95,9 +95,12 @@ describe('planOrgGift (SEAT-8 admin gift, D-OW-23, D-OW-54)', () => {
     expect(b.couponKey).toBe(a.couponKey);
     expect(a.coupon.id).not.toBe(c.coupon.id);
     expect(a.couponKey).not.toBe(c.couponKey);
-    // The update itself is keyed on what it writes: the same request replays, another does not.
-    expect(planOrgGift(facts()).kind === 'gift' && (planOrgGift(facts()) as typeof a).updateKey).toBe(a.updateKey);
-    expect(b.updateKey).not.toBe(a.updateKey);
+    // The update is keyed on the transition (subscription, revision, seats), never the admin or
+    // the reason: a retry with a reworded reason is the same request and replays.
+    expect(b.updateKey).toBe(a.updateKey);
+    expect(b.update).toEqual(a.update);
+    const otherSeats = planOrgGift(facts({ extraSeats: 3 }));
+    expect(otherSeats.kind === 'gift' && otherSeats.updateKey).not.toBe(a.updateKey);
   });
 
   it('void keys are per org and invoice', () => {
@@ -153,7 +156,7 @@ describe('planOrgUngift (SEAT-8 revoke, D-OW-54)', () => {
     expect(plan.subscriptionId).toBe('sub_org');
     expect(plan.update).toEqual({
       discounts: '',
-      metadata: { type: '', giftedBy: '', reason: '', giftedExtraSeats: '' },
+      metadata: { type: '', giftedExtraSeats: '' },
       proration_behavior: 'none',
     });
     expect(plan.updateKey).toBe((planOrgUngift(ungift()) as typeof plan).updateKey);
