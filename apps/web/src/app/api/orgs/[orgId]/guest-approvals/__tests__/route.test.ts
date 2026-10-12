@@ -29,7 +29,7 @@ vi.mock('@pagespace/db/db', () => ({ db: {} }));
 vi.mock('@pagespace/lib/permissions/share-link-service', () => ({ completeApprovedLinkAdmission: vi.fn() }));
 vi.mock('@pagespace/lib/organizations/policy-reader', () => ({ getOrgPolicies: vi.fn() }));
 // AUD-1: the decision's event is staged by the claim (lib); the route publishes it, or discards it when nothing was admitted.
-vi.mock('@pagespace/lib/audit/org-audit', () => ({ publishOrgAuditEvents: vi.fn(async () => {}), discardStagedOrgAuditEvents: vi.fn(async () => {}) }));
+vi.mock('@pagespace/lib/audit/org-audit', () => ({ publishOrgAuditEvents: vi.fn(async () => {}), discardStagedOrgAuditEvents: vi.fn(async () => {}), releaseStagedOrgAuditEvents: vi.fn(async () => {}) }));
 vi.mock('@pagespace/lib/services/invites', () => ({ emitAcceptanceSideEffects: vi.fn(async () => {}) }));
 vi.mock('@/lib/auth/invite-acceptance-adapters', () => ({ buildAcceptancePorts: vi.fn(() => ({ ports: true })) }));
 vi.mock('@/lib/repositories/drive-invite-repository', () => ({ driveInviteRepository: { findDriveById: vi.fn() } }));
@@ -45,7 +45,7 @@ import { createPermissionNotification } from '@pagespace/lib/notifications/notif
 import { broadcastPageEvent } from '@/lib/websocket';
 import { completeApprovedLinkAdmission } from '@pagespace/lib/permissions/share-link-service';
 import { getOrgPolicies } from '@pagespace/lib/organizations/policy-reader';
-import { discardStagedOrgAuditEvents, publishOrgAuditEvents } from '@pagespace/lib/audit/org-audit';
+import { discardStagedOrgAuditEvents, publishOrgAuditEvents, releaseStagedOrgAuditEvents } from '@pagespace/lib/audit/org-audit';
 import { emitAcceptanceSideEffects } from '@pagespace/lib/services/invites';
 import { driveInviteRepository } from '@/lib/repositories/drive-invite-repository';
 import { handleEmailPath, handleUserIdPath } from '@/lib/drive-invites/invite-handlers';
@@ -153,6 +153,9 @@ describe('the approval queue routes', () => {
       body: { userId: 'user_chris', role: 'MEMBER', customRoleId: null, permissions: [{ pageId: 'p1', canView: true, canEdit: false, canShare: false }] },
     }));
     expect(publishOrgAuditEvents).toHaveBeenCalledWith({ id: 'evt_1' });
+    // Released before publishing: a committed admission's event can no longer be discarded, even if the publish fails.
+    expect(releaseStagedOrgAuditEvents).toHaveBeenCalledWith(expect.anything(), [{ id: 'evt_1' }]);
+    expect(vi.mocked(releaseStagedOrgAuditEvents).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(publishOrgAuditEvents).mock.invocationCallOrder[0]);
   });
 
   it('POL-2 (partial) an emailed invitee (no account) is invited by the email handler on approval', async () => {
@@ -171,6 +174,7 @@ describe('the approval queue routes', () => {
     expect(res.status).toBe(403);
     expect(requestGuestApproval).toHaveBeenCalledWith(expect.objectContaining({ orgId: ORG_ID, driveId: 'drive_1', userId: 'user_chris', origin: 'invite' }));
     expect(publishOrgAuditEvents).not.toHaveBeenCalled();
+    expect(releaseStagedOrgAuditEvents).not.toHaveBeenCalled();
     expect(discardStagedOrgAuditEvents).toHaveBeenCalledWith(expect.anything(), [{ id: 'evt_1' }]);
   });
 
@@ -238,6 +242,7 @@ describe('the approval queue routes', () => {
     expect(await res.json()).toMatchObject({ code: 'page_gone' });
     expect(requestGuestApproval).not.toHaveBeenCalled();
     expect(publishOrgAuditEvents).not.toHaveBeenCalled();
+    expect(releaseStagedOrgAuditEvents).not.toHaveBeenCalled();
     expect(discardStagedOrgAuditEvents).toHaveBeenCalledWith(expect.anything(), [{ id: 'evt_1' }]);
   });
 

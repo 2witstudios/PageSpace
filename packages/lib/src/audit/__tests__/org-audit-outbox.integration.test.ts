@@ -38,6 +38,7 @@ import {
   drainOrgAuditOutbox,
   getOrgAuditBacklog,
   publishOrgAuditEvents,
+  releaseStagedOrgAuditEvents,
   stageOrgAuditEvent,
   transactionWithOrgAudit,
   type OrgAuditEvent,
@@ -193,6 +194,14 @@ describe('the org audit outbox', () => {
     expect(await drainOrgAuditOutbox({ now: new Date(Date.now() + ORG_AUDIT_PENDING_HOLD_MS + 60_000) })).toMatchObject({ discarded: 1 });
     expect(mine().map((e) => e.details?.released)).toEqual([true]);
     expect(await db.select().from(orgAuditOutbox).where(eq(orgAuditOutbox.id, orphan.id))).toEqual([]);
+  });
+
+  it('AUD-1 (partial) a held approval released on its admission commit is never discarded, even if its publish never runs: the drainer delivers it', async () => {
+    const committed = await db.transaction((tx) => stageOrgAuditEvent(tx, event({ eventType: 'org.guest.approved', details: { committed: true } }), { hold: 'discard_if_unreleased' }));
+    await releaseStagedOrgAuditEvents(db, [committed]);
+    // No publish: the process stopped (or the publish failed) right after the release.
+    expect(await drainOrgAuditOutbox({ now: new Date(Date.now() + ORG_AUDIT_PENDING_HOLD_MS + 60_000) })).toMatchObject({ delivered: 1, discarded: 0 });
+    expect(mine().map((e) => e.details?.committed)).toEqual([true]);
   });
 
   it('AUD-1 (partial) a publish and the drainer racing for the same events deliver each exactly once', async () => {

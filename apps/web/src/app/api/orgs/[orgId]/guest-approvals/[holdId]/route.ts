@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import type { OrgApiErrorCode } from '@pagespace/lib/organizations/api-error-codes';
 import { z } from 'zod/v4';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { discardStagedOrgAuditEvents, publishOrgAuditEvents } from '@pagespace/lib/audit/org-audit';
+import { discardStagedOrgAuditEvents, publishOrgAuditEvents, releaseStagedOrgAuditEvents } from '@pagespace/lib/audit/org-audit';
 import { getOrgPolicies } from '@pagespace/lib/organizations/policy-reader';
 import { GUESTS_OFF_MESSAGE } from '@pagespace/lib/organizations/sharing-decisions';
 import { claimGuestApprovalDecision, markApprovedInvitation, requestGuestApproval, type ClaimedGuestApproval } from '@pagespace/lib/permissions/guest-holds';
@@ -102,8 +102,14 @@ export async function POST(request: Request, context: Context) {
       await discardStagedOrgAuditEvents(db, [decided.event]);
       throw error;
     });
-    if (response.ok) await publishOrgAuditEvents(decided.event);
-    else await discardStagedOrgAuditEvents(db, [decided.event]);
+    if (response.ok) {
+      // The admission committed: release the event first (it can no longer be discarded), then publish it; a failed
+      // publish leaves it for the drainer.
+      await releaseStagedOrgAuditEvents(db, [decided.event]);
+      await publishOrgAuditEvents(decided.event);
+    } else {
+      await discardStagedOrgAuditEvents(db, [decided.event]);
+    }
     return response;
   } catch (error) {
     loggers.api.error('Error deciding a guest approval:', error as Error);

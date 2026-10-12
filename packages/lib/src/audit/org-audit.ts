@@ -97,6 +97,20 @@ export interface StageOptions {
 }
 
 /** Withdraw staged events whose change was undone (in the undo's own transaction). */
+/**
+ * The change a `discard_if_unreleased` hold waited for has COMMITTED (a guest approval's admission): from now on the
+ * event is an ordinary one, delivered (and retried, and dead-lettered) like any other, never discarded. Release it as
+ * soon as the change commits, before publishing, so a failed publish leaves it for the drainer to deliver.
+ *
+ * The one window left: a process that dies between the change's commit and this release loses that approval's event
+ * (its hold ends unreleased and is discarded). The alternative, delivering unreleased holds, would record approvals
+ * whose admission never ran; the discard is logged with the event's ids so the record survives in the security log.
+ */
+export async function releaseStagedOrgAuditEvents(executor: OrgAuditExecutor, staged: readonly StagedOrgAuditEvent[]): Promise<void> {
+  if (staged.length === 0) return;
+  await executor.update(orgAuditOutbox).set({ discardIfUnreleased: false }).where(inArray(orgAuditOutbox.id, staged.map((s) => s.id)));
+}
+
 export async function discardStagedOrgAuditEvents(executor: OrgAuditExecutor, staged: readonly StagedOrgAuditEvent[]): Promise<void> {
   if (staged.length === 0) return;
   await executor.delete(orgAuditOutbox).where(inArray(orgAuditOutbox.id, staged.map((s) => s.id)));
@@ -134,8 +148,11 @@ async function deliverOne(id: string, now: Date, releasedHold: 'drainer' | null)
     } else if (releasedHold !== null && row.discardIfUnreleased) {
       // The hold ended without the caller releasing it: the change it described never became final.
       await tx.delete(orgAuditOutbox).where(eq(orgAuditOutbox.id, id));
-      loggers.security.warn('[Audit] a held org event was never released by its change and is discarded', {
+      // Either the change never committed (the intended case), or the process died between its commit and the release
+      // (the accepted trade-off, see releaseStagedOrgAuditEvents): the ids are logged so the record is not silent.
+      loggers.security.warn('[Audit] a held org event was not released (its change did not commit, or the process stopped before releasing it) and is discarded', {
         outboxId: id, eventType: row.eventType, orgId: row.orgId, resourceType: row.resourceType, resourceId: row.resourceId,
+        actorId: row.actorId, driveId: row.driveId, details: row.details, occurredAt: row.createdAt.toISOString(),
       });
       return 'discarded';
     }
@@ -184,7 +201,7 @@ export async function publishOrgAuditEvents(staged: readonly StagedOrgAuditEvent
     try {
       await deliverOne(id, now, null);
     } catch (error) {
-      loggers.security.warn('[Audit] org event publish failed; the drainer will deliver it', {
+      loggers.security.warn('[Audit] org event publish failed; it stays in the outbox for the drainer (a still-held event is delivered only once released)', {
         outboxId: id,
         error: error instanceof Error ? error.message : String(error),
       });
