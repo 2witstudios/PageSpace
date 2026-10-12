@@ -154,7 +154,7 @@ export async function mirrorOrgSubscription(
     return {
       kind: 'applied',
       orgId,
-      stripeStatus: fetched.status,
+      stripeStatus: next.status,
       cancelAtPeriodEnd: fetched.cancelAtPeriodEnd,
       previous: { stripeStatus: stored.status, cancelAtPeriodEnd: stored.cancelAtPeriodEnd },
       before,

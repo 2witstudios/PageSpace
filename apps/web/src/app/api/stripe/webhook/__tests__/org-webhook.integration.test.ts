@@ -327,6 +327,17 @@ describe('Stripe webhook — org routing, idempotency, lapse (real Postgres, in-
     expect(await deliver(eventPayload('customer.subscription.updated', snapshot))).toBe(200);
     expect((await getOrgStatus(org.orgId)).status).toBe('active');
     expect((await storedSub(org.orgId)).stripeBasePriceId).toBe(PRICES.basePriceId);
+    const auditFilter = parseOrgAuditFilter({ category: 'billing', limit: '100' });
+    if (!auditFilter.ok) throw new Error(auditFilter.error);
+    const audit = await queryOrgAuditEvents(org.orgId, auditFilter.filter);
+    expect(audit.entries.filter(entry => entry.eventType === 'org.billing.subscription_changed').map(entry => ({
+      to: entry.details.to, after: entry.details.orgStatusAfter,
+    }))).toEqual([
+      { to: 'active', after: 'active' },
+      { to: 'unverified_price', after: 'lapsed' },
+      { to: 'active', after: 'active' },
+      { to: 'incomplete', after: undefined },
+    ]);
   });
 
   it('mirrors current Stripe gift identity through signed subscription events and replay', async () => {
