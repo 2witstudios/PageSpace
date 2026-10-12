@@ -3014,6 +3014,11 @@
       "import": "./dist/organizations/sharing-decisions.js",
       "require": "./dist/organizations/sharing-decisions.js"
     },
+    "./organizations/authentication-policy": {
+      "types": "./dist/organizations/authentication-policy.d.ts",
+      "import": "./dist/organizations/authentication-policy.js",
+      "require": "./dist/organizations/authentication-policy.js"
+    },
     "./organizations/policy-reader": {
       "types": "./dist/organizations/policy-reader.d.ts",
       "import": "./dist/organizations/policy-reader.js",
@@ -3929,6 +3934,9 @@
       ],
       "organizations/sharing-decisions": [
         "./dist/organizations/sharing-decisions.d.ts"
+      ],
+      "organizations/authentication-policy": [
+        "./dist/organizations/authentication-policy.d.ts"
       ],
       "organizations/policy-reader": [
         "./dist/organizations/policy-reader.d.ts"

@@ -1,3 +1,5 @@
+import { checkDriveAuthentication, checkResourceAuthentication } from '@pagespace/lib/organizations/authentication-policy';
+vi.mock('@pagespace/lib/organizations/authentication-policy', () => ({ checkDriveAuthentication: vi.fn(), checkResourceAuthentication: vi.fn() }));
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
@@ -115,6 +117,8 @@ const FULL = { canView: true, canEdit: true, canShare: true, canDelete: true };
 const VIEW_ONLY = { canView: true, canEdit: false, canShare: false, canDelete: false };
 
 beforeEach(() => {
+  vi.mocked(checkDriveAuthentication).mockResolvedValue({ allowed: true });
+  vi.mocked(checkResourceAuthentication).mockResolvedValue({ allowed: true });
   vi.mocked(getEffectiveScopedDriveMembership).mockImplementation(async (scopes, _ownerUserId, driveId) =>
     vi.mocked(getScopedDriveMembership)(scopes, driveId));
 });
@@ -691,5 +695,44 @@ describe('getPrincipalDriveMembership', () => {
   it('returns null for a user with no drive access', async () => {
     vi.mocked(getUserDrivePermissions).mockResolvedValue(null);
     await expect(getPrincipalDriveMembership(sessionAuth, DRIVE_ID)).resolves.toBeNull();
+  });
+});
+
+describe('SEC-2 SEC-3 (partial) principal policy enforcement', () => {
+  it.each([sessionAuth, unscopedMcpAuth, scopedMcpAuth, accountOAuthAuth, scopedOAuthAuth])('denies page and drive capabilities for a rejected $tokenType credential', async (auth) => {
+    vi.mocked(checkDriveAuthentication).mockResolvedValue({ allowed: false, code: 'org_reauthentication_required' });
+    vi.mocked(checkResourceAuthentication).mockResolvedValue({ allowed: false, code: 'org_reauthentication_required' });
+    vi.mocked(getUserAccessLevel).mockResolvedValue(FULL);
+    vi.mocked(getAppAccessLevel).mockResolvedValue(FULL);
+    vi.mocked(getScopedAccessLevel).mockResolvedValue(FULL);
+    vi.mocked(canUserViewPage).mockResolvedValue(true);
+    vi.mocked(canUserEditPage).mockResolvedValue(true);
+    vi.mocked(canUserDeletePage).mockResolvedValue(true);
+    vi.mocked(canUserSharePage).mockResolvedValue(true);
+    expect(await getPrincipalAccessLevel(auth, PAGE_ID)).toBeNull();
+    for (const check of [canPrincipalViewPage, canPrincipalEditPage, canPrincipalDeletePage, canPrincipalSharePage, canManagePageWebhooks]) {
+      expect(await check(auth, PAGE_ID)).toBe(false);
+    }
+    for (const check of [isPrincipalDriveMember, getPrincipalDriveAccess, isPrincipalDriveOwnerOrAdmin]) {
+      expect(await check(auth, DRIVE_ID)).toBe(false);
+    }
+    expect(await getPrincipalDriveAccessLevel(auth, DRIVE_ID)).toBeNull();
+    expect(await getPrincipalDriveMembership(auth, DRIVE_ID)).toBeNull();
+    expect(await getPrincipalAccessiblePagesInDrive(auth, DRIVE_ID)).toEqual([]);
+    vi.mocked(getDriveIdsForUser).mockResolvedValue([DRIVE_ID]);
+    vi.mocked(hasAppDriveMembership).mockResolvedValue(true);
+    vi.mocked(hasScopedDriveMembership).mockResolvedValue(true);
+    expect(await getPrincipalDriveIds(auth)).toEqual([]);
+    vi.mocked(getBatchPagePermissions).mockResolvedValue(new Map([[PAGE_ID, FULL]]));
+    expect((await getPrincipalBatchPagePermissions(auth, [PAGE_ID])).get(PAGE_ID)).toEqual({ canView: false, canEdit: false, canShare: false, canDelete: false });
+  });
+
+  it('passes the exact credential evidence through a scoped dispatch', async () => {
+    const authentication = { authenticatedAtMs: 1700000000000, assurance: 'user_verified_passkey' as const };
+    vi.mocked(getAppAccessLevel).mockResolvedValue(FULL);
+    await getPrincipalAccessLevel({ ...base, tokenType: 'service', service: 'agent-dispatch', userId: USER_ID,
+      allowedDriveIds: [DRIVE_ID], originatingMcpTokenId: TOKEN_ID, authentication,
+    }, PAGE_ID);
+    expect(checkResourceAuthentication).toHaveBeenCalledWith(PAGE_ID, authentication);
   });
 });
