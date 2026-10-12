@@ -160,15 +160,6 @@ SEC-4
 # personal credits (no server-trusted drive); Zoom enrichment's payer is the #2731 ruling. ow-final-spend-gate
 # closed the gate's silent out-of-box switch (SPEND-4) and gave ask_agent its own reservation (WAL-6a).
 SPEND-1
-# SPEND-6 (partial): automations resolve to the drive wallet or skip, never a person, run as their creator
-# under the creator's cap ([D-OW-34], already in the Spec text), and a departed creator's automations are
-# disabled and flagged ([D-OW-36], automation-ownership.integration). ow-final-wallet-access closed D-OW-4 on
-# the mention/manual-Run path (a guest is refused unless the drive opens its wallet to guests, always capped)
-# and names a reached cap in the skip and the lead's notice (wallet-access-controls.integration). Still
-# unproven end to end: one real-Postgres test driving every executor (cron workflow, task trigger, calendar,
-# Zoom workflow trigger, page webhook, manual Run, mention) with only the model faked. Zoom transcript
-# ENRICHMENT on a personal destination still bills the owner's own credits (the #2731 ruling, lane A3's payer).
-SPEND-6
 SPEND-7
 UI-1
 # UI-3 (partial, phase5-fixes): the drive chip (org mark, org in the tooltip) and the org chip on /orgs/* pages
