@@ -34,6 +34,7 @@ import {
   orgEntitlementTier,
   type CallSpendInput,
   type WalletBalanceFacts,
+  agentCallSpend,
 } from '../spend-target';
 import type { SpendLeg } from '../wallet-core';
 
@@ -75,6 +76,29 @@ describe('orgEntitlementTier — the org tier follows its billing status', () =>
     expect(orgEntitlementTier(false)).toBe(ORG_ENTITLEMENT_TIER);
     expect(ORG_ENTITLEMENT_TIER).toBe('business');
     expect(orgEntitlementTier(true)).toBe('free');
+  });
+});
+
+describe('agentCallSpend — where an agent called from outside a turn (consult, /v1) spends', () => {
+  it('SPEND-7 (partial) a call named from a session in drive A spends in A, never in drive B where the agent page lives; the agent-page conversation (drive B) carries no stored source into A', () => {
+    expect(agentCallSpend({ agentDriveId: 'd-b', conversationId: 'c-1', clientThreadDriveId: null, namedSessionDriveId: 'd-a' }))
+      .toEqual({ kind: 'drive', driveId: 'd-a', chosen: null });
+  });
+
+  it('SPEND-7 (partial) an API client thread is its own session: it spends in the thread\'s drive with its stored source, and a named drive cannot move it', () => {
+    expect(agentCallSpend({ agentDriveId: 'd-b', conversationId: 'c-1', clientThreadDriveId: 'd-a', namedSessionDriveId: null }))
+      .toEqual({ kind: 'drive', driveId: 'd-a', chosen: null, conversationId: 'c-1' });
+    expect(agentCallSpend({ agentDriveId: 'd-b', conversationId: 'c-1', clientThreadDriveId: 'd-a', namedSessionDriveId: 'd-c' }))
+      .toEqual({ kind: 'drive', driveId: 'd-a', chosen: null, conversationId: 'c-1' });
+  });
+
+  it('SPEND-7 (partial) with no other session named, the agent-page conversation the call writes to is the session: the agent\'s drive, with that conversation\'s stored source', () => {
+    expect(agentCallSpend({ agentDriveId: 'd-b', conversationId: 'c-1', clientThreadDriveId: null, namedSessionDriveId: null }))
+      .toEqual({ kind: 'drive', driveId: 'd-b', chosen: null, conversationId: 'c-1' });
+    expect(agentCallSpend({ agentDriveId: 'd-b', conversationId: null, clientThreadDriveId: null, namedSessionDriveId: null }))
+      .toEqual({ kind: 'drive', driveId: 'd-b', chosen: null });
+    expect(agentCallSpend({ agentDriveId: 'd-b', conversationId: 'c-1', clientThreadDriveId: null, namedSessionDriveId: 'd-b' }))
+      .toEqual({ kind: 'drive', driveId: 'd-b', chosen: null, conversationId: 'c-1' });
   });
 });
 

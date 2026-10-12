@@ -20,6 +20,8 @@ vi.mock('@/lib/auth', () => ({
     const { canUserViewPage } = await import('@pagespace/lib/permissions/permissions');
     return canUserViewPage(auth.userId, pageId);
   }),
+  // SPEND-7: the caller is a member of drive-a (their session) and of no other drive named here.
+  isPrincipalDriveMember: vi.fn(async (_auth: unknown, driveId: string) => driveId === 'drive-a'),
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
@@ -206,6 +208,33 @@ describe('POST /api/ai/page-agents/consult — prepaid credit gate', () => {
       body: JSON.stringify({ agentId: 'agent-1', question: 'And now?', conversationId: 'conv-1' }),
     }));
     expect(vi.mocked(canConsumeAI).mock.calls[0]?.[2]?.spend).toEqual({ kind: 'drive', driveId: 'drive-1', chosen: null, conversationId: 'conv-1' });
+  });
+
+  it('SPEND-7 (partial) a consultation called from a session in drive A spends in A — its gate, its usage row and its org model policy — never in drive B where the agent lives, and carries no drive-B stored source', async () => {
+    vi.mocked(canConsumeAI).mockResolvedValue({ allowed: true, reason: 'ok', holdId: 'h-1', walletId: 'w-a' });
+    const res = await POST(new Request('https://example.com/api/ai/page-agents/consult', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ agentId: 'agent-1', question: 'Q?', sessionDriveId: 'drive-a' }),
+    }));
+    expect(res.status).toBe(200);
+    expect(vi.mocked(canConsumeAI).mock.calls[0]?.[2]?.spend).toEqual({ kind: 'drive', driveId: 'drive-a', chosen: null });
+    expect(vi.mocked(createAIProvider).mock.calls.at(-1)?.[2]).toEqual({ driveId: 'drive-a' });
+    const { AIMonitoring } = await import('@pagespace/lib/monitoring/ai-monitoring');
+    expect(AIMonitoring.trackUsage).toHaveBeenCalledWith(expect.objectContaining({ driveId: 'drive-a', walletId: 'w-a', holdId: 'h-1' }));
+  });
+
+  it('SPEND-7 (partial) a session drive the caller cannot use is refused 403 before anything is reserved — never swapped for the agent\'s drive', async () => {
+    vi.mocked(canConsumeAI).mockClear();
+    vi.mocked(generateText).mockClear();
+    const res = await POST(new Request('https://example.com/api/ai/page-agents/consult', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ agentId: 'agent-1', question: 'Q?', sessionDriveId: 'drive-not-mine' }),
+    }));
+    expect(res.status).toBe(403);
+    expect(canConsumeAI).not.toHaveBeenCalled();
+    expect(generateText).not.toHaveBeenCalled();
   });
 
   it('POL-8 (partial) the agent\'s drive is named to the provider factory, and an org-policy refusal is a 403 naming the policy, not a 500', async () => {

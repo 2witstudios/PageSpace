@@ -6,6 +6,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **`agents.ask` takes `sessionDriveId`.** When you consult an agent that lives in another drive
+  from work in drive A, pass A: the consultation spends, and its usage is recorded, in A rather
+  than in the agent's drive, under A's org model policy. You must be able to use A (403
+  otherwise). Omit it and the consultation runs in the agent's drive, as before. Needs a server
+  on API contract 1.4.0; an older server ignores the field.
 - **`wallets.getDriveWallet`, `wallets.list` and `wallets.getConversationSource` — wallet reads
   for a key.** `getDriveWallet({ driveId })` returns a drive's wallet as a consumer sees it: status,
   remaining credit, your own remaining daily/monthly cap (null = no cap), whether donations are on,

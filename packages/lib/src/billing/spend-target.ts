@@ -122,6 +122,37 @@ export function conversationSpend(driveId: string | null | undefined, conversati
 }
 
 /**
+ * SPEND-7: the target for an agent called from OUTSIDE a chat turn — a consultation, a /v1
+ * completion — which spends in the drive of the SESSION it runs in, never merely the drive the
+ * agent page lives in:
+ *
+ * - an API client thread (`conversations.type = 'client'`) IS a session, opened in its drive:
+ *   it spends there, with its stored source, and no named drive moves a known thread's spend;
+ * - otherwise the drive the caller names as its session (`namedSessionDriveId`, verified by the
+ *   shell: the caller may use that drive) — the conversation the call writes to then lives on
+ *   the agent's page in another drive, so its stored source does not travel with it;
+ * - otherwise the call's own conversation on the agent page is the session: the agent's drive.
+ *
+ * Every id here is SERVER-resolved (the thread's row, the agent page's row) or verified before
+ * it is passed; none is a drive the client merely claimed.
+ */
+export function agentCallSpend(input: {
+  agentDriveId: string;
+  /** The conversation the call answers or creates, or null for a stateless call. */
+  conversationId: string | null;
+  /** The drive of an API client thread the call continues; null for any other conversation. */
+  clientThreadDriveId: string | null;
+  /** The drive the caller names as the session it calls from, already verified; null for none. */
+  namedSessionDriveId: string | null;
+}): SpendTarget {
+  const conversationDriveId = input.clientThreadDriveId ?? input.agentDriveId;
+  const sessionDriveId = input.clientThreadDriveId ?? input.namedSessionDriveId ?? input.agentDriveId;
+  return sessionDriveId === conversationDriveId
+    ? conversationSpend(sessionDriveId, input.conversationId)
+    : driveSpend(sessionDriveId);
+}
+
+/**
  * The target for a person-less run in `driveId` (SPEND-6): it spends the drive wallet or
  * is skipped, never a person's credits or allowance. It is gated as its creator, whose caps on
  * that wallet bind ([D-OW-34]).

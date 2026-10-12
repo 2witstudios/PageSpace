@@ -19,6 +19,8 @@ vi.mock('@/lib/auth', () => ({
   isScopedMCPAuth: vi.fn(() => false),
   canPrincipalViewPage: vi.fn().mockResolvedValue(true),
   canPrincipalEditPage: vi.fn().mockResolvedValue(true),
+  // SPEND-7: the caller is a member of drive-a (their session) and of no other drive named here.
+  isPrincipalDriveMember: vi.fn(async (_auth: unknown, driveId: string) => driveId === 'drive-a'),
 }));
 
 vi.mock('@pagespace/db/db', () => ({
@@ -48,6 +50,7 @@ vi.mock('@/lib/repositories/conversation-repository', () => ({
       updatedAt: new Date(),
     }),
     createConversation: vi.fn().mockResolvedValue(undefined),
+    stampClientConversationPage: vi.fn().mockResolvedValue(undefined),
   },
 }));
 
@@ -318,6 +321,31 @@ describe('POST /api/v1/chat/completions', () => {
     vi.mocked(canConsumeAI).mockClear();
     await POST(makeRequest(validBody));
     expect(vi.mocked(canConsumeAI).mock.calls[0]?.[2]?.spend).toEqual({ kind: 'drive', driveId: 'drive-abc', chosen: null });
+  });
+
+  test('SPEND-7 (partial) a completion whose caller names its session in drive A (drive_context) spends in A, bills its usage row there, and carries no drive-B stored source', async () => {
+    vi.mocked(canConsumeAI).mockResolvedValue({ allowed: true, reason: 'ok', holdId: 'h1', walletId: 'w-a' });
+    const response = await POST(makeRequest({ ...validBody, conversation_id: 'conv-abc', drive_context: 'drive-a' }));
+    expect(response.status).toBe(200);
+    expect(vi.mocked(canConsumeAI).mock.calls[0]?.[2]?.spend).toEqual({ kind: 'drive', driveId: 'drive-a', chosen: null });
+    await response.text();
+    expect(AIMonitoring.trackUsage).toHaveBeenCalledWith(expect.objectContaining({ driveId: 'drive-a', walletId: 'w-a' }));
+  });
+
+  test('SPEND-7 (partial) an API client thread is a session in its own drive: it spends there with its stored source, and drive_context cannot move it', async () => {
+    const { conversationRepository } = await import('@/lib/repositories/conversation-repository');
+    vi.mocked(conversationRepository.getConversation).mockResolvedValueOnce({
+      id: 'conv-abc', userId: 'user-1', isActive: true, type: 'client', contextId: 'drive-c', title: null, createdAt: new Date(), updatedAt: new Date(),
+    } as never);
+    await POST(makeRequest({ ...validBody, conversation_id: 'conv-abc', drive_context: 'drive-a' }));
+    expect(vi.mocked(canConsumeAI).mock.calls[0]?.[2]?.spend).toEqual({ kind: 'drive', driveId: 'drive-c', chosen: null, conversationId: 'conv-abc' });
+  });
+
+  test('SPEND-7 (partial) a drive_context the caller cannot use is refused 403 before anything is reserved', async () => {
+    vi.mocked(canConsumeAI).mockClear();
+    const response = await POST(makeRequest({ ...validBody, drive_context: 'drive-not-mine' }));
+    expect(response.status).toBe(403);
+    expect(canConsumeAI).not.toHaveBeenCalled();
   });
 
   test('SPEND-4 (partial) a drive rule that moved the call to another source is reported on the stream response, from and to', async () => {

@@ -939,7 +939,9 @@ export async function executeAskAgent(
           totalTokens: response.totalUsage?.totalTokens,
           conversationId: activeConversationId,
           pageId: agentId,
-          driveId: targetAgent.driveId,
+          // SPEND-7: attributed to the drive of the session the call runs in (its spend target's),
+          // not the drive the agent page lives in; a call with no drive session names none.
+          driveId: spendDriveId(askSpend) ?? undefined,
           holdId,
           walletId: settleWalletId,
           // WAL-6b: the hold records the turn's fallback origin; carried too for a hold-less settle.

@@ -4,7 +4,7 @@ import { convertToModelMessages, generateText, stepCountIs, hasToolCall } from '
 import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
 import { mergeToolSets } from '@/lib/ai/core/tool-utils';
 import { filterToolsForMcpScope, filterToolsForImageGen, filterToolsForSandboxEnablement } from '@/lib/ai/core/tool-filtering';
-import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPPageScope, getAllowedDriveIds, isScopedMCPAuth, canPrincipalViewPage } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPPageScope, getAllowedDriveIds, isScopedMCPAuth, canPrincipalViewPage, isPrincipalDriveMember } from '@/lib/auth';
 import { AIMonitoring, discardUsageOutcome } from '@pagespace/lib/monitoring/ai-monitoring';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -31,7 +31,7 @@ import { conversationRepository } from '@/lib/repositories/conversation-reposito
 import { authorizePageConversation, type PageConversationAccess } from '@/lib/ai/core/authorize-page-conversation';
 import { createId } from '@paralleldrive/cuid2';
 import { canConsumeAI, resolveEntitlementTier } from '@pagespace/lib/billing/credit-gate';
-import { conversationSpend, resolvedSpend } from '@pagespace/lib/billing/spend-target';
+import { agentCallSpend, resolvedSpend, spendDriveId } from '@pagespace/lib/billing/spend-target';
 import { pinConversationSource } from '@pagespace/lib/billing/spend-resolution';
 import { spendFallbackHeaders, spendFallbackNotice, type SpendFallbackNotice } from '@pagespace/lib/billing/spend-fallback';
 import { isMeteringExempt } from '@pagespace/lib/ai/model-defaults';
@@ -153,7 +153,7 @@ async function getConfiguredModel(userId: string, agentConfig: { aiProvider?: st
     selectedModel,
   };
 
-  // POL-8: the org of the drive the consultation runs in (the agent's, where its spend is attributed).
+  // POL-8: the org of the drive the consultation runs in (its session's, where its spend is attributed, SPEND-7).
   const providerResult = await createAIProvider(userId, providerRequest, { driveId });
 
   if (isProviderError(providerResult)) {
@@ -221,7 +221,7 @@ export async function POST(request: Request) {
     const userId = auth.userId;
 
     const body = await request.json();
-    const { agentId, question, context, conversationId, newConversationId } = body;
+    const { agentId, question, context, conversationId, newConversationId, sessionDriveId } = body;
 
     if (!agentId || !question) {
       return NextResponse.json(
@@ -250,6 +250,17 @@ export async function POST(request: Request) {
     if (newConversationId !== undefined && (typeof newConversationId !== 'string' || !CUID2_PATTERN.test(newConversationId))) {
       return NextResponse.json(
         { error: 'newConversationId must be a CUID2 identifier' },
+        { status: 400 }
+      );
+    }
+
+    // SPEND-7: the drive of the session this consultation is called from, when the caller runs in
+    // one elsewhere (an agent working in drive A consulting an agent that lives in drive B). It is
+    // a claim until the caller's own membership of that drive is checked below; a drive they
+    // cannot use is refused, never silently swapped for the agent's.
+    if (sessionDriveId !== undefined && (typeof sessionDriveId !== 'string' || sessionDriveId.length === 0)) {
+      return NextResponse.json(
+        { error: 'sessionDriveId must be a drive id' },
         { status: 400 }
       );
     }
@@ -306,14 +317,30 @@ export async function POST(request: Request) {
     const { provider: effectiveProvider, model: effectiveModel } = resolveProviderModel(agent.aiProvider, agent.aiModel);
     const consumerTier = toPersonalSubscriptionTier(gateUser?.subscriptionTier);
 
-    // A consultation runs as a conversation on the agent's page, so its session is the
-    // agent's drive (SPEND-7). A continued conversation carries its stored source (SPEND-3);
-    // the gate reads it only when the caller owns that conversation, so an id not yet vetted
-    // here names nothing.
+    // SPEND-7: a consultation spends in the drive of the session it runs in — the drive the caller
+    // names as its session (once its membership is checked), else its own conversation on the
+    // agent's page, whose session is the agent's drive. A continued conversation carries its stored
+    // source (SPEND-3) only in its own drive; the gate reads it only when the caller owns that
+    // conversation, so an id not yet vetted here names nothing.
+    if (typeof sessionDriveId === 'string' && !(await isPrincipalDriveMember(auth, sessionDriveId))) {
+      auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'drive', resourceId: sessionDriveId, details: { reason: 'session_drive_denied', action: 'consult', method: 'POST' }, riskScore: 0.5 });
+      return NextResponse.json(
+        { error: 'sessionDriveId names a drive you cannot use' },
+        { status: 403 }
+      );
+    }
     // The address this consult writes to (see the persistence notes below), known before the
     // gate so a new conversation's preselected source can be pinned once it exists (SPEND-3).
     const activeConversationId: string = conversationId || newConversationId || createId();
-    let spend = conversationSpend(agent.driveId, activeConversationId);
+    let spend = agentCallSpend({
+      agentDriveId: agent.driveId,
+      conversationId: activeConversationId,
+      clientThreadDriveId: null,
+      namedSessionDriveId: typeof sessionDriveId === 'string' ? sessionDriveId : null,
+    });
+    // The drive the consultation runs in: its spend, its usage attribution and its org's model
+    // policy (POL-8) all follow the session, never merely the drive the agent page lives in.
+    const sessionDrive = spendDriveId(spend) ?? agent.driveId;
     let conversationSourceWalletId: string | undefined;
 
     // The SHARED entitlement decision a chat turn applies (generation-admission.ts): an
@@ -412,7 +439,7 @@ export async function POST(request: Request) {
     // for the repository's own explicit non-created outcomes.
     const createOutcome = await conversationRepository.createConversation(activeConversationId, userId, agentId);
     if (createOutcome === 'created' && conversationSourceWalletId) {
-      await pinConversationSource({ userId, conversationId: activeConversationId, driveId: agent.driveId, walletId: conversationSourceWalletId });
+      await pinConversationSource({ userId, conversationId: activeConversationId, driveId: sessionDrive, walletId: conversationSourceWalletId });
     }
 
     if (newConversationId && createOutcome !== 'created') {
@@ -529,7 +556,7 @@ export async function POST(request: Request) {
       const providerResult = await getConfiguredModel(userId, {
         aiProvider: agent.aiProvider,
         aiModel: agent.aiModel
-      }, agent.driveId);
+      }, sessionDrive);
       model = providerResult.model;
       resolvedProvider = providerResult.provider;
       resolvedModelName = providerResult.modelName;
@@ -792,7 +819,7 @@ export async function POST(request: Request) {
         outputTokens: usage?.outputTokens,
         totalTokens: usage?.totalTokens ?? (usage ? ((usage.inputTokens ?? 0) + (usage.outputTokens ?? 0)) : undefined),
         pageId: agentId,
-        driveId: agent.driveId,
+        driveId: sessionDrive,
         success: true,
         holdId,
         walletId,

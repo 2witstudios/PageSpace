@@ -18,6 +18,7 @@ import {
   isScopedMCPAuth,
   canPrincipalViewPage,
   canPrincipalEditPage,
+  isPrincipalDriveMember,
 } from '@/lib/auth';
 import { createAIProvider, isProviderError } from '@/lib/ai/core/provider-factory';
 import { buildSystemPrompt } from '@/lib/ai/core/system-prompt';
@@ -42,7 +43,7 @@ import { conversationRepository } from '@/lib/repositories/conversation-reposito
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { AIMonitoring, extractOpenRouterCostDollars, extractOpenRouterGenerationIds } from '@pagespace/lib/monitoring/ai-monitoring';
 import { canConsumeAI, resolveEntitlementTier } from '@pagespace/lib/billing/credit-gate';
-import { conversationSpend, resolvedSpend } from '@pagespace/lib/billing/spend-target';
+import { agentCallSpend, resolvedSpend, spendDriveId } from '@pagespace/lib/billing/spend-target';
 import { spendFallbackHeaders, spendFallbackNotice, type SpendFallbackNotice } from '@pagespace/lib/billing/spend-fallback';
 import { isMeteringExempt } from '@pagespace/lib/ai/model-defaults';
 import { resolveGenerationAdmission } from '@/lib/ai/core/generation-admission';
@@ -82,7 +83,7 @@ export async function POST(request: Request): Promise<Response> {
     return NextResponse.json({ error: validation.error }, { status: validation.status });
   }
 
-  const { pageId, model: modelName, messages, driveContext: _driveContext, conversationId: incomingConversationId, clientTools: rawClientTools, disableServerTools, clientManagesHistory } = validation.data;
+  const { pageId, model: modelName, messages, driveContext, conversationId: incomingConversationId, clientTools: rawClientTools, disableServerTools, clientManagesHistory } = validation.data;
 
   // Build the caller's client-side tool set. Tools registered without `execute` are returned
   // to the caller as native tool_calls — the SDK pauses, the caller executes locally, and the
@@ -154,6 +155,8 @@ export async function POST(request: Request): Promise<Response> {
   // requests collide on the same new ID. We still 403 on wrong owner and 404 on inactive.
   // Fail-closed: private by default. Only shared conversations get mention notifications.
   let isConversationShared = false;
+  // SPEND-7: an API client thread (`type='client'`) is a session opened in its drive.
+  let clientThreadDriveId: string | null = null;
   if (incomingConversationId) {
     const conv = await conversationRepository.getConversation(incomingConversationId);
     if (clientManagesHistory) {
@@ -196,15 +199,35 @@ export async function POST(request: Request): Promise<Response> {
       // re-anchoring a thread whose permissions already follow the first page.
       if (conv?.type === 'client') {
         await conversationRepository.stampClientConversationPage(incomingConversationId, pageId);
+        clientThreadDriveId = conv.contextId;
       }
     }
   }
+
+  // 5d. SPEND-7: the call spends in the drive of the session it runs in — a client thread's own
+  // drive, else the drive the caller names as its session (`drive_context`, once its membership
+  // is checked: a drive it cannot use is refused, never swapped for the agent's), else its own
+  // conversation on the agent page, whose session is the agent's drive. A thread carries its
+  // stored source (SPEND-3) only in its own drive; the gate reads it only when the caller owns
+  // that conversation. A stateless call has none.
+  if (driveContext !== undefined && !(await isPrincipalDriveMember(authResult, driveContext))) {
+    auditRequest(request, { eventType: 'authz.access.denied', userId: authResult.userId, resourceType: 'drive', resourceId: driveContext, details: { reason: 'session_drive_denied', method: 'POST' }, riskScore: 0.5 });
+    return NextResponse.json({ error: 'drive_context names a drive you cannot use' }, { status: 403 });
+  }
+  let spend = agentCallSpend({
+    agentDriveId: page.driveId,
+    conversationId: incomingConversationId ?? null,
+    clientThreadDriveId,
+    namedSessionDriveId: driveContext ?? null,
+  });
+  // The drive the call runs in: its spend, usage attribution and org model policy (POL-8).
+  const sessionDriveId = spendDriveId(spend) ?? page.driveId;
 
   // 6. Create AI provider from agent page config
   const providerResult = await createAIProvider(authResult.userId, {
     selectedProvider: page.aiProvider ?? undefined,
     selectedModel: page.aiModel ?? undefined,
-  }, { driveId: page.driveId });
+  }, { driveId: sessionDriveId });
   if (isProviderError(providerResult)) {
     return NextResponse.json({ error: providerResult.error, ...(providerResult.code ? { code: providerResult.code, policy: providerResult.policy } : {}) }, { status: providerResult.status });
   }
@@ -234,10 +257,6 @@ export async function POST(request: Request): Promise<Response> {
     .where(eq(users.id, authResult.userId));
 
   const consumerTier = toPersonalSubscriptionTier(gateUser?.subscriptionTier);
-  // The call is a conversation on the agent page, so its session is the page's drive
-  // (SPEND-7). A thread (conversation_id) carries its stored source (SPEND-3); the gate reads
-  // it only when the caller owns that conversation. A stateless call has none.
-  let spend = conversationSpend(page.driveId, incomingConversationId ?? null);
 
   // The SHARED entitlement decision a chat turn applies (generation-admission.ts): an
   // admin-only provider (the unmetered Z.ai Coder Plan) is a role block, so no one able to
@@ -624,6 +643,8 @@ export async function POST(request: Request): Promise<Response> {
         conversationId,
         messageId: assistantId,
         pageId,
+        // SPEND-7: attributed to the drive of the session the call ran in.
+        driveId: sessionDriveId,
         success: !aborted && !errored,
         holdId,
         walletId,
