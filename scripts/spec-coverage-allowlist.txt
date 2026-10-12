@@ -256,7 +256,6 @@ X-1
 # X-2: B3's "X-2 (partial)" test blocks ORGS_ENABLED while org tables are excluded from the GDPR
 # export; the export and account-deletion handling itself is the Phase 6 leaf yfmlkdchehmberwthwu6g7vt.
 X-2
-X-3
 # X-4 (realtime events for membership, visibility and wallet state): B4 proves one drive-member event
 # per affected user from the org membership sync, titled "X-4 (partial)"; wallet-state events and the
 # client updating without refresh are unproven until Wave C/F.
