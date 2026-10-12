@@ -31,6 +31,8 @@ export const GENERIC_API_ERROR_CODES = [
   // the client re-runs the ceremony (a passkey; or the person's usual sign-in) and retries.
   'org_strong_sign_in_required',
   'org_reauthentication_required',
+  // D-OW-47: tightening a sign-in policy the acting Admin's own credential would not meet (it would lock them out).
+  'org_policy_would_lock_out_actor',
 ] as const;
 
 /** Organization, membership, ownership, invitation, domain and guest-approval codes. */

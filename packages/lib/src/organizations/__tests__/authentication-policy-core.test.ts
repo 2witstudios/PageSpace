@@ -75,9 +75,28 @@ describe('changing a sign-in policy (D-OW-45)', () => {
     [unrestricted, strongOn],
     [unrestricted, hourly],
     [hourly, { ...hourly, maximumSessionAgeMinutes: 15 }],
-    [strongOn, strongOn],
-  ])('SEC-2 (partial) SEC-3 (partial) tightening or keeping a sign-in policy is always allowed, from any credential', (before, after) => {
-    expect(decideSignInPolicyChange({ before, after, authentication: null, nowMs })).toEqual({ allowed: true });
+  ])('SEC-2 (partial) SEC-3 (partial) tightening is allowed from a credential that satisfies the resulting policy (D-OW-47)', (before, after) => {
+    expect(decideSignInPolicyChange({ before, after, authentication: strong, nowMs })).toEqual({ allowed: true });
+  });
+  it('SEC-2 (partial) enabling strong sign-in from an emailed-link credential would lock the Admin out, so it is refused (D-OW-47)', () => {
+    expect(decideSignInPolicyChange({ before: unrestricted, after: strongOn, authentication: single, nowMs }))
+      .toEqual({ allowed: false, code: 'org_policy_would_lock_out_actor', requires: 'org_strong_sign_in_required' });
+  });
+  it('SEC-3 (partial) tightening the maximum age below the actor\'s own sign-in age is refused (D-OW-47)', () => {
+    const twentyMinutes = { ...single, authenticatedAtMs: nowMs - 20 * 60_000 };
+    expect(decideSignInPolicyChange({ before: hourly, after: { ...hourly, maximumSessionAgeMinutes: 15 }, authentication: twentyMinutes, nowMs }))
+      .toEqual({ allowed: false, code: 'org_policy_would_lock_out_actor', requires: 'org_reauthentication_required' });
+    expect(decideSignInPolicyChange({ before: hourly, after: { ...hourly, maximumSessionAgeMinutes: 30 }, authentication: twentyMinutes, nowMs })).toEqual({ allowed: true });
+  });
+  it('keeping the sign-in policy unchanged is never judged', () => {
+    expect(decideSignInPolicyChange({ before: strongOn, after: strongOn, authentication: null, nowMs })).toEqual({ allowed: true });
+  });
+  it('SEC-2 (partial) a mixed change must satisfy the policy in force (to loosen) and the resulting one (to tighten)', () => {
+    const mixed = { requireStrongSignIn: false, maximumSessionAgeMinutes: 15 };
+    expect(decideSignInPolicyChange({ before: strongOn, after: mixed, authentication: single, nowMs })).toEqual({ allowed: false, code: 'org_strong_sign_in_required' });
+    expect(decideSignInPolicyChange({ before: strongOn, after: mixed, authentication: { ...strong, authenticatedAtMs: nowMs - 20 * 60_000 }, nowMs }))
+      .toEqual({ allowed: false, code: 'org_policy_would_lock_out_actor', requires: 'org_reauthentication_required' });
+    expect(decideSignInPolicyChange({ before: strongOn, after: mixed, authentication: strong, nowMs })).toEqual({ allowed: true });
   });
   it('SEC-3 (partial) a damaged stored age is judged as the strictest valid age, so a fresh sign-in can repair it', () => {
     const damaged = { ...unrestricted, maximumSessionAgeMinutes: 0 };

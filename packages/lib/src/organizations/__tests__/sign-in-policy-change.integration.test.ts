@@ -96,8 +96,8 @@ afterAll(async () => {
 describe('changing an org sign-in policy (D-OW-45)', () => {
   beforeEach(() => setup({ paying: true }));
 
-  it('SEC-2 (partial) POL-1 (partial) requiring strong sign-in applies from any credential and audits who it now refuses, by count', async () => {
-    const result = await change(null, { requireStrongSignIn: true });
+  it('SEC-2 (partial) POL-1 (partial) requiring strong sign-in applies from a passkey credential and audits who it now refuses, by count', async () => {
+    const result = await change(passkey(), { requireStrongSignIn: true });
 
     // Refused: member 0's emailed-link session, member 1's, member 2's legacy one. Members left with none: 1 and 2.
     expect(result).toMatchObject({ ok: true, signInBlocked: { members: 2, credentials: 3 } });
@@ -106,12 +106,12 @@ describe('changing an org sign-in policy (D-OW-45)', () => {
   });
 
   it('SEC-3 (partial) POL-1 (partial) a maximum age audits the stale and evidence-less credentials it refuses', async () => {
-    const result = await change(null, { maximumSessionAgeMinutes: 60 });
+    const result = await change(passkey(), { maximumSessionAgeMinutes: 60 });
     expect(result).toMatchObject({ ok: true, signInBlocked: { members: 2, credentials: 2 } });
   });
 
   it('SEC-2 (partial) turning strong sign-in off is refused from an emailed-link credential and stores nothing', async () => {
-    await change(null, { requireStrongSignIn: true });
+    await change(passkey(), { requireStrongSignIn: true });
 
     expect(await change(emailLink(), { requireStrongSignIn: false })).toEqual({ ok: false, reason: 'org_strong_sign_in_required' });
     expect(await change(null, { requireStrongSignIn: false })).toEqual({ ok: false, reason: 'org_strong_sign_in_required' });
@@ -122,7 +122,7 @@ describe('changing an org sign-in policy (D-OW-45)', () => {
   });
 
   it('SEC-3 (partial) raising or removing the maximum age needs a credential fresher than the age in force', async () => {
-    await change(null, { maximumSessionAgeMinutes: 60 });
+    await change(passkey(), { maximumSessionAgeMinutes: 60 });
 
     expect(await change(emailLink(61), { maximumSessionAgeMinutes: null })).toEqual({ ok: false, reason: 'org_reauthentication_required' });
     expect((await getOrgPolicies(orgId)).maximumSessionAgeMinutes).toBe(60);
@@ -130,8 +130,22 @@ describe('changing an org sign-in policy (D-OW-45)', () => {
     expect((await getOrgPolicies(orgId)).maximumSessionAgeMinutes).toBe(120);
   });
 
+  it('SEC-2 (partial) enabling strong sign-in from an emailed-link credential is refused so the Admin cannot lock themselves out (D-OW-47)', async () => {
+    expect(await change(emailLink(), { requireStrongSignIn: true }))
+      .toEqual({ ok: false, reason: 'org_policy_would_lock_out_actor', requires: 'org_strong_sign_in_required' });
+    expect((await getOrgPolicies(orgId)).requireStrongSignIn).toBe(false);
+    expect(audit.events).toEqual([]);
+  });
+
+  it('SEC-3 (partial) a maximum age shorter than the Admin\'s own sign-in age is refused until they sign in again (D-OW-47)', async () => {
+    expect(await change(emailLink(30), { maximumSessionAgeMinutes: 15 }))
+      .toEqual({ ok: false, reason: 'org_policy_would_lock_out_actor', requires: 'org_reauthentication_required' });
+    expect((await getOrgPolicies(orgId)).maximumSessionAgeMinutes).toBeNull();
+    expect(await change(emailLink(), { maximumSessionAgeMinutes: 15 })).toMatchObject({ ok: true });
+  });
+
   it('a change that does not touch the sign-in keys is not judged by the actor credential', async () => {
-    await change(null, { requireStrongSignIn: true });
+    await change(passkey(), { requireStrongSignIn: true });
     expect(await change(null, { publicShareLinks: false })).toMatchObject({ ok: true, signInBlocked: null });
   });
 });
@@ -140,7 +154,7 @@ describe('a lapsed org (D-OW-33)', () => {
   beforeEach(() => setup({ paying: false }));
 
   it('SEC-2 (partial) may still tighten its sign-in policy', async () => {
-    expect(await change(null, { requireStrongSignIn: true, maximumSessionAgeMinutes: 15 })).toMatchObject({ ok: true });
+    expect(await change(passkey(), { requireStrongSignIn: true, maximumSessionAgeMinutes: 15 })).toMatchObject({ ok: true });
     const stored = await db.select({ policies: organizations.policies }).from(organizations).where(eq(organizations.id, orgId));
     expect(stored[0].policies).toMatchObject({ requireStrongSignIn: true, maximumSessionAgeMinutes: 15 });
   });

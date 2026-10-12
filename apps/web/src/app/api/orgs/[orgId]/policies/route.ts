@@ -67,6 +67,10 @@ export async function PATCH(request: Request, context: Context) {
       // D-OW-45: loosening a sign-in policy needs a credential that satisfies the policy in force.
       return apiError(403, result.reason, SIGN_IN_REFUSAL[result.reason], { orgId });
     }
+    if (!result.ok && result.reason === 'org_policy_would_lock_out_actor') {
+      // D-OW-47: the acting Admin's own credential would not meet the tightened policy; `requires` says what would.
+      return apiError(403, result.reason, 'Your own sign-in does not meet this policy, so saving it would lock you out of this organization.', { orgId, requires: result.requires });
+    }
     if (!result.ok && result.reason === 'open_role_floor') {
       return NextResponse.json({ error: OPEN_ROLE_FLOOR_RAISE_MESSAGE, code: 'org_policy', policy: 'openDriveRoleFloor', drives: result.drives }, { status: 403 });
     }

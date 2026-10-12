@@ -59,24 +59,41 @@ export function signInPolicyTightened(before: OrgAuthenticationPolicy, after: Or
   return signInPolicyLoosened(after, before);
 }
 
+export type SignInPolicyChangeDecision =
+  | { readonly allowed: true }
+  | { readonly allowed: false; readonly code: OrgAuthenticationDenialCode }
+  | { readonly allowed: false; readonly code: 'org_policy_would_lock_out_actor'; readonly requires: OrgAuthenticationDenialCode };
+
 /**
- * D-OW-45: loosening a sign-in policy (strong sign-in off, a longer or no maximum age) needs the acting credential to
- * satisfy the policy currently in force, so a stolen or stale Admin session cannot switch the protection off and walk
- * in. Tightening is always allowed ([D-OW-33]: billing never blocks security, and neither does a stale credential).
- * A damaged stored age (which reads as the strictest value and refuses everyone) is judged as the strictest VALID
- * age, so a freshly signed-in Admin can repair it rather than no one ever being able to.
+ * Who may change an org's sign-in policy, judged on the acting credential's server-verified evidence:
+ *   - D-OW-45, LOOSENING (strong sign-in off, a longer or no maximum age) needs a credential that satisfies the policy
+ *     in force, so a stolen or stale Admin session cannot switch the protection off and walk in. A damaged stored age
+ *     (which reads as the strictest value and refuses everyone) is judged as the strictest VALID age, so a freshly
+ *     signed-in Admin can repair it rather than no one ever being able to.
+ *   - D-OW-47, TIGHTENING (strong sign-in on, a shorter or new maximum age) needs a credential that satisfies the
+ *     RESULTING policy: the policy also governs the org's admin routes, so an Admin who could not meet it would lock
+ *     themselves out of the very page that sets it. `requires` names the ceremony that would let them make it.
+ * A mixed change must pass both. A change that leaves the two keys as they are is not judged. Billing never enters
+ * here ([D-OW-33]): a lapsed org may tighten on the same terms.
  */
 export function decideSignInPolicyChange(input: {
   readonly before: OrgAuthenticationPolicy;
   readonly after: OrgAuthenticationPolicy;
   readonly authentication: VerifiedAuthentication | null;
   readonly nowMs: number;
-}): OrgAuthenticationDecision {
+}): SignInPolicyChangeDecision {
   const { before, after, authentication, nowMs } = input;
-  if (!signInPolicyLoosened(before, after)) return { allowed: true };
-  const maximumAge = normalizeMaximumSessionAgeMinutes(before.maximumSessionAgeMinutes);
-  const inForce = { ...before, maximumSessionAgeMinutes: maximumAge === undefined ? MIN_MAXIMUM_SESSION_AGE_MINUTES : maximumAge };
-  return decideOrgAuthentication({ policy: inForce, authentication, nowMs });
+  if (signInPolicyLoosened(before, after)) {
+    const maximumAge = normalizeMaximumSessionAgeMinutes(before.maximumSessionAgeMinutes);
+    const inForce = { ...before, maximumSessionAgeMinutes: maximumAge === undefined ? MIN_MAXIMUM_SESSION_AGE_MINUTES : maximumAge };
+    const decision = decideOrgAuthentication({ policy: inForce, authentication, nowMs });
+    if (!decision.allowed) return decision;
+  }
+  if (signInPolicyTightened(before, after)) {
+    const decision = decideOrgAuthentication({ policy: after, authentication, nowMs });
+    if (!decision.allowed) return { allowed: false, code: 'org_policy_would_lock_out_actor', requires: decision.code };
+  }
+  return { allowed: true };
 }
 
 export type ReauthenticationDecision =

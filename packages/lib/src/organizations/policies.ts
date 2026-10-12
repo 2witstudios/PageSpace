@@ -80,7 +80,12 @@ export type UpdateOrgPoliciesResult =
    * D-OW-45: loosening a sign-in policy needs the acting credential to satisfy the policy in force (judged under the
    * org row's lock, against the stored value). Nothing is stored; the code says which ceremony would satisfy it.
    */
-  | { ok: false; reason: OrgAuthenticationDenialCode };
+  | { ok: false; reason: OrgAuthenticationDenialCode }
+  /**
+   * D-OW-47: tightening it needs the acting credential to satisfy the RESULTING policy, or the Admin would lock
+   * themselves out of the org's admin routes. Nothing is stored; `requires` names the ceremony that would.
+   */
+  | { ok: false; reason: 'org_policy_would_lock_out_actor'; requires: OrgAuthenticationDenialCode };
 
 const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
 
@@ -124,7 +129,7 @@ export async function updateOrgPolicies(input: {
     const signIn = decideSignInPolicyChange({
       before: signInPolicy(before), after: signInPolicy(after), authentication: actorAuthentication, nowMs: Date.now(),
     });
-    if (!signIn.allowed) return { lapsed: false as const, refused: false as const, signInRefused: signIn.code };
+    if (!signIn.allowed) return { lapsed: false as const, refused: false as const, signInRefused: signIn };
     if (after.openDriveRoleFloor !== before.openDriveRoleFloor) {
       const below = await openDrivesBelowFloor(tx, orgId, after.openDriveRoleFloor);
       if (below.length > 0) return { lapsed: false as const, refused: true as const, signInRefused: null, floor: after.openDriveRoleFloor, drives: below };
@@ -142,7 +147,12 @@ export async function updateOrgPolicies(input: {
   }));
   if (!done) return { ok: false, reason: 'not_found' };
   if (done.lapsed) return { ok: false, reason: ORG_LAPSED_CODE, message: ORG_LAPSED_MESSAGE };
-  if (done.signInRefused) return { ok: false, reason: done.signInRefused };
+  if (done.signInRefused) {
+    const refusal = done.signInRefused;
+    return refusal.code === 'org_policy_would_lock_out_actor'
+      ? { ok: false, reason: refusal.code, requires: refusal.requires }
+      : { ok: false, reason: refusal.code };
+  }
   if (done.refused) return { ok: false, reason: 'open_role_floor', floor: done.floor, drives: done.drives };
 
   const { after, changes, outcome, blocked, signInBlocked } = done;

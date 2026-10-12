@@ -178,6 +178,14 @@ describe('policies routes', () => {
     },
   );
 
+  it('SEC-2 (partial) tightening a sign-in policy the acting Admin would not meet answers 403 naming what would (D-OW-47)', async () => {
+    as('ADMIN');
+    vi.mocked(updateOrgPolicies).mockResolvedValue({ ok: false, reason: 'org_policy_would_lock_out_actor', requires: 'org_strong_sign_in_required' });
+    const res = await PATCH(req('PATCH', '', { requireStrongSignIn: true }), ctx);
+    expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({ code: 'org_policy_would_lock_out_actor', requires: 'org_strong_sign_in_required', orgId: ORG_ID });
+  });
+
   it('POL-1 (partial) who a tightened sign-in policy now refuses is reported by count', async () => {
     as('ADMIN');
     vi.mocked(updateOrgPolicies).mockResolvedValue({
