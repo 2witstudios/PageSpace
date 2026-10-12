@@ -765,6 +765,7 @@ describe('Stripe webhook — org routing, idempotency, lapse (real Postgres, in-
     const org = await northwind(7);
     const snapshot = { id: org.subscriptionId, object: 'subscription', customer: org.customerId, metadata: orgMetadata(org.orgId), status: 'active' };
     setStripeStatus(org, 'active');
+    await factories.fundOrgSubscription(org.orgId);
     expect(await deliver(eventPayload('customer.subscription.updated', snapshot))).toBe(200);
     expect((await getOrgStatus(org.orgId)).status).toBe('active');
 
