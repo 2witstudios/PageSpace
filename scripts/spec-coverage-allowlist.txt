@@ -168,11 +168,6 @@ UI-7
 # tested, each titled "UI-8 (partial)". Unproven: v1/chat/completions, consult and mentions still drop the
 # gate's fallback (SPEND-4, the spend-gate lane), and canvas page 2 fidelity needs a reviewer with the canvas.
 UI-8
-# UI-11 (partial, ow-final-ui): the hub gives a Member only the Drives directory (DRV-6, not a setting) and Leave,
-# the settings shell and routes refuse them, the Organization card is read-only, join-request approval is not
-# theirs, and the wallet page gives the consumer projection — each titled "UI-11 (partial)". "Every surface" has
-# no single matrix test yet (best proof: an e2e signed in as a seeded Member once ORGS_ENABLED flips).
-UI-11
 # WAL-1 (partial, ow-c1): the wallets table carries every WAL-1 field, the migration proves each
 # former credit_balances row became its user's personal root wallet to the cent, and the constraint
 # suite proves owner/subject/parent/status shapes; top-up "never expires" on child wallets is unproven
