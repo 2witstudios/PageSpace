@@ -9,6 +9,10 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 - Billing now recognizes paid plans only by their configured Stripe price IDs. Unknown and retired prices no longer gain paid access or credit grants by matching a plan amount.
 
+- Organization audit log: every org event is now saved together with the change it records, so an event can no longer go missing when the audit store is briefly unavailable; it is delivered as soon as the store recovers. Seat count changes made in Stripe (the customer portal or a support edit) now appear in the log too.
+
+- Organization model allowlists now apply everywhere: agent model changes, agent creation, copies and moves of agents into an org drive refuse disallowed models, the model picker in an org drive shows only allowed models, and Zoom summaries, compaction, memory and pulse respect each org's allowlist. Workflows, @mentions and agent-to-agent consults now check the model against the plan of whoever pays for the run.
+
 - /btw side questions now work on every chat surface (dashboard assistant, right-sidebar chat, agent console) and /btw appears in the / command picker on all of them.
 
 ### Added
