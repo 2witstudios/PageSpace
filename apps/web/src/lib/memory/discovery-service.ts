@@ -26,11 +26,13 @@ import { z } from 'zod';
 /**
  * The drives the user is a member of, owned or joined (org-aware), whose org lets the discovery model read them
  * (POL-8): discovery runs in no drive, but it reads org content, and an org that does not allow the model keeps
- * its content out.
+ * its content out. `allReadable` says no member drive was kept out, which is what lets discovery read the person's
+ * global-assistant conversations: they carry no drive, so any of those orgs' content may be in them.
  */
-async function readableMemberDriveIds(userId: string): Promise<string[]> {
-  const driveIds = await getMemberDriveIds(userId, { includeTrashed: true });
-  return (await scopeReadableByModel({ provider: BACKGROUND_HEAVY_PROVIDER, modelId: BACKGROUND_HEAVY_MODEL }, { driveIds })).driveIds;
+async function readableMemberDrives(userId: string): Promise<{ driveIds: string[]; allReadable: boolean }> {
+  const memberDriveIds = await getMemberDriveIds(userId, { includeTrashed: true });
+  const { driveIds } = await scopeReadableByModel({ provider: BACKGROUND_HEAVY_PROVIDER, modelId: BACKGROUND_HEAVY_MODEL }, { driveIds: memberDriveIds });
+  return { driveIds, allReadable: driveIds.length === memberDriveIds.length };
 }
 
 export type MemoryField = 'bio' | 'writingStyle' | 'rules';
@@ -197,10 +199,12 @@ async function gatherRecentConversations(
   lookbackDate.setDate(lookbackDate.getDate() - lookbackDays);
 
   const allMessages: ConversationMessage[] = [];
+  const { driveIds, allReadable } = await readableMemberDrives(userId);
 
   // Global/DM conversations. eq(type, 'global') is REQUIRED — see D6 comment
-  // in agent-epic "Agent-Session Single Source of Truth".
-  const globalMessages = await db
+  // in agent-epic "Agent-Session Single Source of Truth". POL-8: read only when
+  // every org the person is in allows the discovery model (see readableMemberDrives).
+  const globalMessages = !allReadable ? [] : await db
     .select({
       content: messages.content,
       role: messages.role,
@@ -230,7 +234,6 @@ async function gatherRecentConversations(
   );
 
   // Page agent conversations via drive membership.
-  const driveIds = await readableMemberDriveIds(userId);
 
   if (driveIds.length > 0) {
     const pageMessages = await db
@@ -278,7 +281,7 @@ async function gatherRecentActivity(
   const lookbackDate = new Date();
   lookbackDate.setDate(lookbackDate.getDate() - lookbackDays);
 
-  const driveIds = await readableMemberDriveIds(userId);
+  const { driveIds } = await readableMemberDrives(userId);
 
   if (driveIds.length === 0) return [];
 

@@ -11,6 +11,9 @@
  *   - bringing one in: moving an agent page, or a whole drive, into an org that does not allow its model is refused;
  *   - consulting one: ask_agent sends an agent's own drive content to its model, so the AGENT's org governs it as well
  *     as the caller's, whoever calls (the global assistant, or an agent in another org's drive);
+ *   - tools reading org content: a chat's tools (global assistant included) cannot read pages or drives of an org that
+ *     does not allow the model running the chat;
+ *   - generating images: the image model is built through the provider factory and judged by the same allowlists.
  * Only the model network call (`generateText`), page-version blob storage and the request's session are stubbed;
  * every policy, drive, page and user row is real. Every row is deleted; the pool is ended. The payer-aware tier the
  * shared pro-model gate (model-entitlement.ts) asks for is proven against real wallets in lib
@@ -59,7 +62,11 @@ import { movePagesToDrive } from '@/services/api/page-cross-drive-move-service';
 // The tool registry first: entering through one tool module would close an import cycle back into it half-built.
 import '@/lib/ai/core/ai-tools';
 import { executeAskAgent } from '@/lib/ai/tools/agent-communication-tools';
+import { canActorAccessDrive, canActorViewPage, getActorAccessiblePagesInDrive } from '@/lib/ai/tools/actor-permissions';
+import { pageReadTools } from '@/lib/ai/tools/page-read-tools';
+import { createImageProvider } from '../provider-factory';
 import { DEFAULT_MODEL } from '../ai-providers-config';
+import { DEFAULT_IMAGE_MODEL } from '../model-capabilities';
 import { driveSpend } from '@pagespace/lib/billing/spend-target';
 import type { ToolExecutionContext } from '../types';
 
@@ -272,6 +279,40 @@ describe('POL-8 the org model and provider allowlists govern every model use in 
 
     for (const result of [fromGlobal, fromOtherOrg]) expect(JSON.stringify(result)).toContain("doesn't allow that AI model");
     expect(generateText).not.toHaveBeenCalled();
+  });
+
+  it('tools reading org content: a chat\'s tools cannot read a page or drive of an org that does not allow the running model; with an allowed model they can', async () => {
+    const as = (pair: { provider: string; model: string }) => ({ userId: w.owner, aiProvider: pair.provider, aiModel: pair.model } as ToolExecutionContext);
+
+    expect(await canActorViewPage(as(REFUSED), w.orgDocPage)).toBe(false);
+    expect(await canActorAccessDrive(as(REFUSED), w.orgDrive)).toBe(false);
+    expect(await getActorAccessiblePagesInDrive(as(REFUSED), w.orgDrive)).toEqual([]);
+
+    expect(await canActorViewPage(as(ALLOWED), w.orgDocPage)).toBe(true);
+    expect(await canActorAccessDrive(as(ALLOWED), w.orgDrive)).toBe(true);
+    expect((await getActorAccessiblePagesInDrive(as(ALLOWED), w.orgDrive)).map((p) => p.id)).toContain(w.orgDocPage);
+
+    // A personal drive has no org: the running model never restricts it.
+    expect(await canActorAccessDrive(as(REFUSED), w.personalDrive)).toBe(true);
+  });
+
+  it('tools reading org content: the global assistant (no drive) reading an org page with read_page under a model the org does not allow is refused; under an allowed model it reads', async () => {
+    const readPage = pageReadTools.read_page.execute!;
+    const asGlobal = (pair: { provider: string; model: string }) => ({ toolCallId: 't', messages: [], experimental_context: { userId: w.owner, aiProvider: pair.provider, aiModel: pair.model } as ToolExecutionContext });
+    await db.update(pages).set({ content: '<p>Q3 revenue plan</p>' }).where(eq(pages.id, w.orgDocPage));
+
+    await expect(readPage({ title: 'Plan', pageId: w.orgDocPage }, asGlobal(REFUSED))).rejects.toThrow(/Insufficient permissions/);
+
+    expect(JSON.stringify(await readPage({ title: 'Plan', pageId: w.orgDocPage }, asGlobal(ALLOWED)))).toContain('Q3 revenue plan');
+  });
+
+  it('generating images: the image model is built through the provider factory and refused in a drive whose org does not allow it', async () => {
+    await setPolicies({ modelAllowlist: [ALLOWED.model] });
+    expect(await createImageProvider({ model: DEFAULT_IMAGE_MODEL }, { driveId: w.orgDrive })).toMatchObject({ status: 403, code: 'org_policy', policy: 'modelAllowlist' });
+    expect(isProviderError(await createImageProvider({ model: DEFAULT_IMAGE_MODEL }, { driveId: w.personalDrive }))).toBe(false);
+
+    await setPolicies({ modelAllowlist: [ALLOWED.model, DEFAULT_IMAGE_MODEL] });
+    expect(isProviderError(await createImageProvider({ model: DEFAULT_IMAGE_MODEL }, { driveId: w.orgDrive }))).toBe(false);
   });
 
   it('offering: the model list an org drive offers is its allowlist; a personal drive offers the whole catalog (null)', async () => {

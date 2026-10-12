@@ -195,6 +195,29 @@ describe('runDiscoveryPasses', () => {
     expect(vi.mocked(inArray).mock.calls.map((c) => c[1])).toEqual([['personal'], ['personal']]);
   });
 
+  it('POL-8 (partial) global-assistant conversations are read only when every org the person is in allows the discovery model (they carry no drive, so any org\'s content may be in them)', async () => {
+    const { runDiscoveryPasses } = await import('../discovery-service');
+    const { eq } = await import('@pagespace/db/operators');
+    const readsGlobal = () => vi.mocked(eq).mock.calls.some((c) => c[1] === 'global');
+    mockGenerateObject.mockResolvedValue({ object: { claims: [] }, usage: { inputTokens: 10, outputTokens: 5 } });
+
+    mockGetMemberDriveIds.mockResolvedValue(['personal', 'strict-org']);
+    const strictOrgOut = async (_use: unknown, scope: { driveIds: readonly string[] }) => ({ driveIds: scope.driveIds.filter((d) => d !== 'strict-org'), pageIds: [] });
+    mockScopeReadableByModel.mockImplementation(strictOrgOut);
+    setupDb(messages(10));
+    vi.mocked(eq).mockClear();
+    await runDiscoveryPasses('user-org-member');
+    expect(readsGlobal()).toBe(false);
+
+    mockScopeReadableByModel.mockImplementation(async (_use, scope) => ({ driveIds: [...scope.driveIds], pageIds: [] }));
+    setupDb(messages(10));
+    vi.mocked(eq).mockClear();
+    await runDiscoveryPasses('user-org-member');
+    expect(readsGlobal()).toBe(true);
+
+    mockGetMemberDriveIds.mockImplementation(async () => ['drive-1']);
+  });
+
   it('tags each claim with the field of the pass that produced it', async () => {
     setupDb(messages(10));
     // Every pass returns an untagged claim; the caller must assign the field so

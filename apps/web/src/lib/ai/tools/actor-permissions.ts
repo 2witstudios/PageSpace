@@ -25,6 +25,25 @@ import { PageType } from '@pagespace/lib/utils/enums';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
+import { getDrivePolicies } from '@pagespace/lib/organizations/policy-reader';
+import { modelDecision } from '@pagespace/lib/organizations/org-action-decisions';
+
+/**
+ * POL-8 at the tool boundary: content from drive X reaching a model is governed by X's org. A tool running for a chat
+ * whose model X's org does not allow may not read X — the global assistant (which runs in no drive) included. Read
+ * now, no cache. A context that names no model (a non-model caller) is not judged here.
+ */
+async function driveDeniedByModelPolicy(context: ToolExecutionContext, driveId: string): Promise<boolean> {
+  if (!context.aiProvider || !context.aiModel) return false;
+  const policies = (await getDrivePolicies(driveId))?.policies ?? null;
+  return !modelDecision(policies, { provider: context.aiProvider, modelId: context.aiModel }).ok;
+}
+
+async function pageDeniedByModelPolicy(context: ToolExecutionContext, pageId: string): Promise<boolean> {
+  if (!context.aiProvider || !context.aiModel) return false;
+  const [page] = await db.select({ driveId: pages.driveId }).from(pages).where(eq(pages.id, pageId)).limit(1);
+  return page ? driveDeniedByModelPolicy(context, page.driveId) : false;
+}
 
 export function getAgentPageId(context: ToolExecutionContext): string | undefined {
   return context.chatSource?.type === 'page' ? context.chatSource.agentPageId : undefined;
@@ -255,6 +274,7 @@ export async function canActorEditPage(
   pageId: string,
 ): Promise<boolean> {
   if (await pageOutsideMcpScope(context, pageId)) return false;
+  if (await pageDeniedByModelPolicy(context, pageId)) return false;
   if (await pageDeniedByAppToken(context, pageId, 'edit')) return false;
   const agentPageId = await resolveActingAgentId(context);
   if (agentPageId) {
@@ -284,6 +304,7 @@ export async function canActorViewPage(
   pageId: string,
 ): Promise<boolean> {
   if (await pageOutsideMcpScope(context, pageId)) return false;
+  if (await pageDeniedByModelPolicy(context, pageId)) return false;
   if (await pageDeniedByAppToken(context, pageId, 'view')) return false;
   const agentPageId = await resolveActingAgentId(context);
   if (agentPageId) {
@@ -327,6 +348,7 @@ export async function canActorAccessDrive(
   driveId: string,
 ): Promise<boolean> {
   if (driveOutsideMcpScope(context, driveId)) return false;
+  if (await driveDeniedByModelPolicy(context, driveId)) return false;
   // Membership ceiling only (not drive-level view): callers page-filter their
   // results via getActorAccessiblePagesInDrive / canActorViewPage, so a token
   // with only per-page custom-role grants keeps access to those pages.
@@ -401,6 +423,7 @@ export async function getActorAccessiblePagesInDrive(
   driveId: string,
 ): Promise<PageWithPermissions[]> {
   if (driveOutsideMcpScope(context, driveId)) return [];
+  if (await driveDeniedByModelPolicy(context, driveId)) return [];
   const agentPageId = await resolveActingAgentId(context);
   const actorPages = agentPageId
     ? await getAgentAccessiblePagesInDrive(agentPageId, driveId)
@@ -442,6 +465,7 @@ export async function driveDeniedByAppToken(
   need: 'view' | 'edit' | 'manage' = 'view',
 ): Promise<boolean> {
   if (driveOutsideMcpScope(context, driveId)) return true;
+  if (need !== 'manage' && (await driveDeniedByModelPolicy(context, driveId))) return true;
   if (!hasAppTokenCeiling(context)) return false;
   const membership = await getAppDriveMembership(context.mcpTokenId!, driveId);
   if (!membership) return true;
@@ -457,14 +481,14 @@ export async function driveDeniedByAppToken(
 
 /**
  * Role-aware variant of filterDriveIdsByMcpScope: drops drives outside the
- * token scope AND drives where the token's own role grants no view access.
+ * token scope, drives where the token's own role grants no view access, and
+ * drives whose org does not allow the running model (POL-8).
  */
 export async function filterDriveIdsByAppTokenScope(
   context: ToolExecutionContext,
   driveIds: string[],
 ): Promise<string[]> {
   const scoped = filterDriveIdsByMcpScope(context, driveIds);
-  if (!hasAppTokenCeiling(context)) return scoped;
   const results = await Promise.all(
     scoped.map(async (driveId) => (await driveDeniedByAppToken(context, driveId, 'view')) ? null : driveId),
   );

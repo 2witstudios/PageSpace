@@ -21,6 +21,13 @@ vi.mock('../../core/image-generation', async (orig) => ({
   ...(await orig<typeof import('../../core/image-generation')>()),
   generateImageBytes: (...a: unknown[]) => generateImageBytes(...a),
 }));
+// POL-8: the image client comes from the provider factory, which judges the org allowlists. Default: allowed.
+const IMAGE_CLIENT = { chat: vi.fn() };
+const createImageProvider = vi.fn<(...a: unknown[]) => Promise<unknown>>();
+vi.mock('../../core/provider-factory', () => ({
+  createImageProvider: (...a: unknown[]) => createImageProvider(...a),
+  isProviderError: (r: object) => 'error' in r,
+}));
 vi.mock('@/lib/upload/create-file-page', () => ({
   createImageFilePage: (...a: unknown[]) => createImageFilePage(...a),
   ImageStorageQuotaError: class ImageStorageQuotaError extends Error {},
@@ -87,6 +94,8 @@ const run = (input: Record<string, unknown>, ctx: Partial<ToolExecutionContext>)
   });
 
 beforeEach(() => {
+  createImageProvider.mockReset();
+  createImageProvider.mockResolvedValue({ client: IMAGE_CLIENT, provider: 'google', modelName: 'google/gemini-3.1-flash-image' });
   canConsumeAI.mockReset();
   releaseHold.mockReset();
   releaseHold.mockResolvedValue(undefined);
@@ -206,6 +215,18 @@ describe('generate_image destination', () => {
 
   // An explicitly named destination must fail loudly rather than silently
   // redirecting to Home — and it must fail BEFORE any spend.
+  it('POL-8 (partial) builds the image model through the provider factory for the turn\'s drive and the destination drive; a refusal reserves nothing and calls no model', async () => {
+    const creditSpend = { spend: { kind: 'automation', driveId: 'drive-work' }, walletId: 'w-drive-work' } as ToolExecutionContext['creditSpend'];
+    createImageProvider.mockResolvedValueOnce({ error: "This organization doesn't allow that AI model.", status: 403, code: 'org_policy', policy: 'modelAllowlist' });
+
+    const res = (await run({ prompt: 'a diagram' }, { ...admin({ creditSpend }), ...inDrive('drive-work') })) as { success: boolean; error?: string };
+
+    expect(createImageProvider).toHaveBeenCalledWith({ model: expect.any(String) }, { driveId: 'drive-work', contentDriveIds: ['drive-work'] });
+    expect(res).toMatchObject({ success: false, error: expect.stringContaining("doesn't allow that AI model") });
+    expect(canConsumeAI).not.toHaveBeenCalled();
+    expect(generateImageBytes).not.toHaveBeenCalled();
+  });
+
   it('rejects an unwritable explicit driveId without reserving credits or calling the provider', async () => {
     okGeneration();
     canActorEditPage.mockResolvedValue(false);
