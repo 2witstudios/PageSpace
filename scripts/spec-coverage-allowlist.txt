@@ -108,11 +108,6 @@ POL-2
 # list offered to the pickers is the public catalog and is not org-filtered (UI lane), and the hidden agent-model
 # writes (page-agents config) are not checked at save time, only at run time.
 POL-8
-# SEAT-2 (tier table: Free, Pro, Business $50 with 5 seats + $10/extra seat; Business is the org
-# plan — buying it creates the org — and is not sold to a lone user) re-added per review
-# 5230424182 on #2657: the tier table, prices and lone-user refusal are proven, so those tests are
-# titled "SEAT-2 (partial)"; "buying it creates the org" is unproven until Wave C creates orgs.
-SEAT-2
 SEAT-6
 # SEAT-7 (org subscription webhooks are idempotent and routed before the personal-tier handler) re-added
 # per review ow-irv-2739 (REQUEST CHANGES, P1-1) on #2739, head 96a7eaf8a: the integration test that

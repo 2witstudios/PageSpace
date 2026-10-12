@@ -3,6 +3,7 @@
  * renders exactly these, so what a plain Member can reach is decided and tested here.
  */
 import { orgRoleAtLeast } from '@pagespace/lib/organizations/org-roles';
+import { TIER_PLAN_LIMITS } from '@pagespace/lib/billing/subscription-tiers';
 import type { OrgRole } from './org-api';
 
 export type OrgHubIcon =
@@ -128,7 +129,7 @@ export function orgHubSections({ orgId, orgName, role, counts, billingEnabled, r
     sections.push({
       title: 'Billing',
       rows: [
-        { title: 'Plan & seats', description: 'Business plan · 5 seats included, extra seats added as people join', icon: 'plan', href: `${base}/billing`, ...(renewalLabel ? { badge: renewalLabel } : {}), available: true },
+        { title: 'Plan & seats', description: orgPlanRowDescription(), icon: 'plan', href: `${base}/billing`, ...(renewalLabel ? { badge: renewalLabel } : {}), available: true },
         { title: 'Usage', description: 'Credits pool and drive wallets across org drives', icon: 'usage', href: `${base}/billing#pool`, available: true },
       ],
     });
@@ -149,4 +150,10 @@ export function orgHubSections({ orgId, orgName, role, counts, billingEnabled, r
   }
 
   return sections;
+}
+
+/** The org plan's seat terms, from the one tier table (SEAT-2): never restated here. */
+function orgPlanRowDescription(): string {
+  const plan = TIER_PLAN_LIMITS.business;
+  return `${plan.name} plan · ${plan.includedSeats} seats included, extra seats added as people join`;
 }
