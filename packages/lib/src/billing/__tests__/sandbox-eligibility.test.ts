@@ -136,6 +136,18 @@ describe('resolveSandboxPayerTier', () => {
   });
 });
 
+describe('resolveSandboxPayerTier — an unresolvable drive', () => {
+  it("WAL-9 (partial) a drive session whose drive cannot be resolved confers no paid tier — the owner's own plan never stands in for the drive's", async () => {
+    const getUserSubscriptionTier = vi.fn(async (): Promise<SubscriptionTier> => 'pro');
+    const tier = await resolveSandboxPayerTier(
+      { driveId: 'd-gone', ownerId: 'pro-owner' },
+      { lookupDriveBillingFacts: async () => null, getUserSubscriptionTier },
+    );
+    expect(tier).toBe('free');
+    expect(getUserSubscriptionTier).not.toHaveBeenCalled();
+  });
+});
+
 describe('computeTierForDrive', () => {
   it("WAL-9 (partial) an org drive's compute follows the org's tier, not the lead's", () => {
     expect(computeTierForDrive({ orgId: 'org-1' }, 'free', false)).toBe('business');

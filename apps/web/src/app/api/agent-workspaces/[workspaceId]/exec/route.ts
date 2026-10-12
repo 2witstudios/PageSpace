@@ -43,6 +43,8 @@ const DENIAL_STATUS: Record<SandboxToolDenialReason, number> = {
   org_lapsed: 402,
   // WAL-2: the member's allowance of the pool is used up — the member waits, or an admin raises it.
   org_member_cap_reached: 402,
+  // WAL-9: the session's drive cannot be resolved (mid-delete), so no one can be billed.
+  payer_unresolved: 409,
   no_drive_access: 403,
   insufficient_role: 403,
   no_agent_access: 403,

@@ -59,9 +59,8 @@ describe('resolveEnvPayer', () => {
   });
 
   it('returns NULL when the drive cannot be resolved — there is no fallback, by design', async () => {
-    // The deliberate divergence from `resolveSessionPayer`, which falls back to the session's
-    // own owner. An env has no owner column to fall back to, and inventing one would bill a
-    // drive-owned machine to somebody who does not own it. Callers SKIP the cycle instead.
+    // The same rule as `resolveSessionPayer`: an unresolvable drive has no payer, and inventing
+    // one would bill a drive-owned machine to somebody who does not own it. Callers SKIP the cycle.
     const payer = await resolveEnvPayer({ driveId: 'drive-gone', lookupDriveBillingFacts: async () => null });
 
     expect(payer).toBeNull();
@@ -116,10 +115,10 @@ describe('resolveSessionPayer', () => {
     ).resolves.toEqual({ kind: 'org', orgId: 'org-northwind' });
   });
 
-  it('falls back to the session ownerId when the drive lookup finds nothing (a stale read mid-delete)', async () => {
+  it('WAL-9 (partial) a drive session whose drive cannot be resolved (a stale read mid-delete) has NO payer — never its owner, who may be a member of an org drive', async () => {
     await expect(
       resolveSessionPayer({ driveId: 'vanished-drive', ownerId: 'owner-1', lookupDriveBillingFacts: async () => null }),
-    ).resolves.toEqual({ kind: 'user', userId: 'owner-1' });
+    ).resolves.toBeNull();
   });
 
   it('is not a passthrough — a resolved drive owner beats a different session ownerId', async () => {

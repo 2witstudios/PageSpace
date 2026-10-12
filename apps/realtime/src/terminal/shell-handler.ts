@@ -587,7 +587,7 @@ async function rechargeAfterDrift(billing: SandboxBillingDeps, session: Terminal
   if (!session.charge || !ownerId || !actorId) return;
   try {
     const next = await billing.resolveCharge({ driveId: session.driveId ?? null, ownerId, actorId });
-    if (sameCharge(session.charge, next)) return;
+    if (next === null || sameCharge(session.charge, next)) return;
     loggers.realtime.warn('Shell session payer changed mid-session: the next window is held and settled on the new payer', {
       sessionKey,
       from: session.charge.kind,
@@ -797,6 +797,9 @@ export async function claimBillingWindow(
   return locked.acquired ? locked.result : { ok: false, message: CLAIM_RETRY_MESSAGE };
 }
 
+/** Said when the session's drive cannot be resolved, so there is no one to bill: the input was NOT sent. */
+const PAYER_UNRESOLVED_MESSAGE = "This terminal's drive could not be found, so there is no one to bill and your input was not sent.";
+
 /** Said when a claim could not run (lock not taken, settle failed): the input was NOT sent. */
 const CLAIM_RETRY_MESSAGE = 'Billing for this terminal is briefly busy, so your input was not sent. Try again.';
 
@@ -814,7 +817,11 @@ async function claimBillingWindowLocked(
   let next: ComputeCharge;
   let held: Awaited<ReturnType<SandboxBillingDeps['gate']>>;
   try {
-    next = await billing.resolveCharge({ driveId: session.driveId ?? null, ownerId: session.ownerId, actorId });
+    const resolved = await billing.resolveCharge({ driveId: session.driveId ?? null, ownerId: session.ownerId, actorId });
+    // WAL-9: a session whose drive cannot be resolved has no payer — the joining actor's input
+    // is not sent, and nobody (least of all the session's owner) is billed for it.
+    if (resolved === null) return { ok: false, message: PAYER_UNRESOLVED_MESSAGE };
+    next = resolved;
     held = await billing.gate({ charge: next });
   } catch (error) {
     loggers.realtime.error('Shell billing window could not be claimed for a joining actor', error instanceof Error ? error : new Error(String(error)), {

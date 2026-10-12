@@ -1002,16 +1002,12 @@ export async function reconcileSandboxStorage(
         continue;
       }
 
-      // Deliberately NOT the charge-time fallback (billing/sandbox-payer.ts's
-      // `resolveSessionPayer` falls back to the session owner when the lookup
-      // fails, which is right at CHARGE time — someone must pay for compute
-      // already consumed — and wrong here). A failed lookup during a storage
-      // sweep usually means a stale read of a drive mid-delete; billing it to an
-      // owner who may not be the drive owner would be a misattributed money
-      // movement we cannot take back, whereas skipping costs one cycle of
-      // accrual and self-corrects on the next tick. For an ENV there is not even
-      // a fallback available (`resolveEnvPayer`) — the skip is the only
-      // honest answer.
+      // The same rule as charge time (billing/sandbox-payer.ts's `resolveSessionPayer`
+      // has no payer for a drive it cannot resolve, WAL-9). A failed lookup during a
+      // storage sweep usually means a stale read of a drive mid-delete; billing it to an
+      // owner who may not be the drive owner would be a misattributed money movement we
+      // cannot take back, whereas skipping costs one cycle of accrual and self-corrects
+      // on the next tick.
       const charge = await subject.resolveCharge();
       if (!charge) {
         // Can't resolve who to bill (e.g. the drive vanished). Leave the

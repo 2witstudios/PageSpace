@@ -186,6 +186,27 @@ describe('buildShellCheckAuth — access half', () => {
     });
   });
 
+  it('WAL-9 (partial) a session whose drive cannot be resolved has no payer: the shell is refused payer_unresolved, no slot taken, never billed to the session owner', async () => {
+    let slots = 0;
+    const { deps } = buildDeps({
+      resolvePayer: async () => null,
+      acquireSlot: () => {
+        slots += 1;
+        return true;
+      },
+    });
+    const checkAuth = buildShellCheckAuth(deps);
+
+    const result = await checkAuth({ userId: 'member-ana', shellId: 'shl-1' });
+
+    assert({
+      given: 'a drive session whose drive vanished mid-delete',
+      should: 'refuse by name and take no slot',
+      actual: { result, slots },
+      expected: { result: { ok: false, reason: 'payer_unresolved' }, slots: 0 },
+    });
+  });
+
   it("WAL-9 (partial) an org-drive session carries the org charge and takes the slot on the ORG's tier — a free-tier requester is not refused", async () => {
     const tiers: string[] = [];
     const orgCharge = { kind: 'org' as const, orgId: 'org-northwind', userId: 'session-owner-1' };

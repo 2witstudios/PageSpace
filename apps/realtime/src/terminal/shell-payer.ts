@@ -3,7 +3,8 @@
  *
  * The session's DRIVE's payer through the one seam (WAL-9: the org pool for an org drive), recorded
  * under and capped against THE ACTOR connecting — never the session owner, since a drive session is
- * shared. A global-assistant session (or a vanished drive) attributes to the session owner instead.
+ * shared. A global-assistant session attributes to the session owner; a drive session whose drive
+ * cannot be resolved has no payer (null) and is refused — never billed to its owner (WAL-9).
  */
 import { lookupDriveBillingFacts, resolveSessionPayer } from '@pagespace/lib/billing/sandbox-payer';
 import { computeChargeFor } from '@pagespace/lib/billing/compute-charge';
@@ -21,6 +22,6 @@ export function makeResolveShellPayer(deps: ShellPayerDeps = { lookupDriveBillin
       ownerId: session.ownerId,
       lookupDriveBillingFacts: async () => facts,
     });
-    return { charge: computeChargeFor(payer, actorId), driveId: facts ? session.driveId : null };
+    return payer === null ? null : { charge: computeChargeFor(payer, actorId), driveId: facts ? session.driveId : null };
   };
 }

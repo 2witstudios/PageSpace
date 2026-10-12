@@ -87,6 +87,9 @@ export async function resolveSandboxPayerTier(
     ownerId: input.ownerId,
     lookupDriveBillingFacts: deps.lookupDriveBillingFacts,
   });
+  // A drive session whose drive cannot be resolved has no payer, so no paid tier (WAL-9): the
+  // run it would gate is refused anyway, and no person's plan stands in for the drive's.
+  if (payer === null) return 'free';
   if (payer.kind === 'org') {
     const lapsed = deps.isOrgLapsed ? await deps.isOrgLapsed(payer.orgId) : false;
     return computeChargeTier(computeChargeFor(payer, input.ownerId), 'free', lapsed);

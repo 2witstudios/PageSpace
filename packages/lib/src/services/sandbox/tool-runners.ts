@@ -127,7 +127,7 @@ export interface SandboxBillingDeps {
    * the drive's members: charging its owner would let a member at their cap keep running in a
    * drive-mate's session. Required, so no caller can silently default to the owner.
    */
-  resolveCharge: (input: { driveId: string | null; ownerId: string; actorId: string }) => Promise<ComputeCharge>;
+  resolveCharge: (input: { driveId: string | null; ownerId: string; actorId: string }) => Promise<ComputeCharge | null>;
   /**
    * Places a flat-estimate hold on the charge's wallet before the machine run begins.
    * `orgRefusal` names why an org pool refused (missing, paused, empty).
@@ -410,6 +410,8 @@ export type SandboxToolDenialReason =
   | 'org_lapsed'
   /** WAL-2: the member has used their allowance of the org pool (AI and compute share it). Nothing started. */
   | 'org_member_cap_reached'
+  /** WAL-9: the session's drive cannot be resolved, so nobody can be billed for the run. Nothing started. */
+  | 'payer_unresolved'
   | 'no_drive_access'
   | 'insufficient_role'
   | 'no_agent_access'
@@ -506,6 +508,7 @@ export const DENIAL_MESSAGES: Record<SandboxToolDenialReason, string> = {
   org_wallet_empty: ORG_COMPUTE_REFUSAL_MESSAGES.org_wallet_empty,
   org_lapsed: ORG_COMPUTE_REFUSAL_MESSAGES.org_lapsed,
   org_member_cap_reached: ORG_COMPUTE_REFUSAL_MESSAGES.org_member_cap_reached,
+  payer_unresolved: "This session's drive could not be found, so there is no one to bill for the run and nothing was started.",
   no_drive_access: 'You do not have access to run code in this drive.',
   insufficient_role: 'Running code requires edit access to this drive.',
   no_agent_access: 'This agent is not permitted to run code in this drive.',
@@ -716,6 +719,8 @@ export async function withMachineBilling<S>(
     // The person whose turn runs this tool, not the session's owner: a drive session is shared.
     actorId: ctx.userId,
   });
+  // WAL-9: a session whose drive cannot be resolved has no payer — refused, never billed to a person.
+  if (charge === null) return fail('payer_unresolved');
   // WAL-9: an org drive's run is held on the org pool. A missing, paused or empty pool
   // refuses here, before any machine is touched, and names the org state — it never
   // falls back to holding on a person's wallet.

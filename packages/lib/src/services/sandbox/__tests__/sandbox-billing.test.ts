@@ -85,10 +85,10 @@ describe('defaultSandboxBillingDeps.resolveCharge', () => {
     expect(mockCanConsumeAI).not.toHaveBeenCalled();
   });
 
-  it('falls back to the session ownerId when the drive cannot be resolved (a stale read mid-delete)', async () => {
+  it('WAL-9 (partial) a drive session whose drive cannot be resolved (a stale read mid-delete) has no charge — never its owner\'s wallet', async () => {
     mockDriveOwnerRow(undefined);
     const result = await defaultSandboxBillingDeps.resolveCharge({ driveId: 'vanished-drive', ownerId: 'owner-1', actorId: 'member-ana' });
-    expect(result).toEqual({ kind: 'user', userId: 'owner-1' });
+    expect(result).toBeNull();
   });
 });
 

@@ -68,7 +68,7 @@ export interface ShellCheckAuthDeps {
    * against `actorId` — the person connecting, who is the one running compute —
    * never the session's owner (a drive session is shared with drive members).
    */
-  resolvePayer: (session: AgentSessionAccessSubject, actorId: string) => Promise<{ charge: ComputeCharge; driveId: string | null }>;
+  resolvePayer: (session: AgentSessionAccessSubject, actorId: string) => Promise<{ charge: ComputeCharge; driveId: string | null } | null>;
   /** A user row's tier + email, or undefined when the row is missing. Called for the requester (audit email) and, when different, the payer (slot-eligibility tier). */
   getUser: (userId: string) => Promise<{ subscriptionTier: string | null; email: string | null } | undefined>;
   /** SEAT-9 / WAL-8: whether an org is lapsed — an org charge then confers no tier, so no slot (review #2761). */
@@ -131,7 +131,14 @@ export function buildShellCheckAuth(deps: ShellCheckAuthDeps): ShellCheckAuthFn 
 
     // WAL-9: an org drive's session charges the org pool. Whether the pool can pay is the
     // billing gate's hold at PTY start, which refuses a missing, paused or empty pool by name.
-    const { charge, driveId } = await deps.resolvePayer(access.session, userId);
+    // A drive session whose drive cannot be resolved has no payer (WAL-9): refused, never billed
+    // to the session's owner.
+    const payer = await deps.resolvePayer(access.session, userId);
+    if (payer === null) {
+      deps.logDenied('payer_unresolved', { userId, shellId, workspaceId: shell.workspaceId });
+      return { ok: false, reason: 'payer_unresolved' };
+    }
+    const { charge, driveId } = payer;
 
     // Decrypt the actor email BEFORE anything is reserved (a decrypt throw here
     // must not leak a reserved slot — same ordering the predecessor had).

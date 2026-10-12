@@ -18,11 +18,11 @@ describe('makeResolveShellPayer — who a terminal connect is charged to', () =>
     expect(await resolve(session('drive-1'), 'ben')).toEqual({ charge: { kind: 'user', userId: 'lead' }, driveId: 'drive-1' });
   });
 
-  it('a global-assistant session (no drive) is the session owner\'s, and a vanished drive drops its id', async () => {
+  it('WAL-9 (partial) a global-assistant session (no drive) is the session owner\'s; a drive session whose drive vanished has no payer — never its owner', async () => {
     const lookupDriveBillingFacts = vi.fn().mockResolvedValue(null);
     const resolve = makeResolveShellPayer({ lookupDriveBillingFacts });
     expect(await resolve(session(null), 'ben')).toEqual({ charge: { kind: 'user', userId: 'priya' }, driveId: null });
     expect(lookupDriveBillingFacts).not.toHaveBeenCalled();
-    expect(await resolve(session('gone'), 'ben')).toEqual({ charge: { kind: 'user', userId: 'priya' }, driveId: null });
+    expect(await resolve(session('gone'), 'ben')).toBeNull();
   });
 });
