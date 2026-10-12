@@ -123,7 +123,7 @@ export interface OrgBillingStripe {
     idempotencyKey: string,
   ): Promise<{ id: string; quantity: number }>;
   /** Cancel now; a subscription that is already over is left as it is. */
-  cancelSubscription(subscriptionId: string, idempotencyKey: string, expectedStatus?: 'trialing'): Promise<{ status: string }>;
+  cancelSubscription(subscriptionId: string, idempotencyKey: string, expectedStatus?: 'trialing' | 'paused'): Promise<{ status: string }>;
   /** The subscription's latest invoice with its confirmation secret, or null when it has none. */
   latestInvoice(subscriptionId: string): Promise<OrgLatestInvoice | null>;
   /** A Stripe billing-portal session on `customerId` (the org's). */
@@ -325,7 +325,7 @@ export async function ensureOrgBusinessSubscription(
     let [stored] = await tx.select().from(orgSubscriptions).where(eq(orgSubscriptions.orgId, orgId)).limit(1);
     if (stored && isLiveOrgSubscriptionStatus(stored.status)) {
       stored = await refreshStored(tx, stored, await deps.stripe.retrieveSubscription(stored.stripeSubscriptionId), prices);
-      if (isLiveOrgSubscriptionStatus(stored.status) && stored.status !== 'trialing') return { kind: 'existing' as const, linkage: toLinkage(stored, customerId) };
+      if (isLiveOrgSubscriptionStatus(stored.status) && stored.status !== 'trialing' && stored.status !== 'paused') return { kind: 'existing' as const, linkage: toLinkage(stored, customerId) };
     }
 
     const history = await deps.stripe.listCustomerSubscriptions(customerId);
@@ -333,23 +333,29 @@ export async function ensureOrgBusinessSubscription(
     // with the normal first-payment checkout. The ended generation remains in
     // history, so a lost cancellation/create response cannot cause a duplicate.
     for (const candidate of history) {
-      if (candidate.status !== 'trialing' || candidate.metadata?.[ORG_ID_METADATA_KEY] !== orgId) continue;
-      if (!orgSubscriptionItems(candidate, prices)) {
-        throw new OrgBillingError('not_an_org_business_subscription', 'Organization has an unverified live subscription; repair its prices before provisioning');
-      }
-      const canceled = await deps.stripe.cancelSubscription(
-        candidate.id,
-        orgStripeIdempotencyKey(orgId, 'subscription.cancel', { subscriptionId: candidate.id }),
-        'trialing',
-      );
-      if (isLiveOrgSubscriptionStatus(canceled.status)) {
-        // Payment may have completed after the inventory read. Preserve that
-        // subscription and re-read all its price/item evidence before adoption.
-        Object.assign(candidate, await deps.stripe.retrieveSubscription(candidate.id));
-        if (candidate.status === 'trialing') {
-          throw new OrgBillingError('subscription_not_live', 'Unsupported trial could not be ended for paid checkout');
+      if (candidate.metadata?.[ORG_ID_METADATA_KEY] !== orgId) continue;
+      // A trial can become paused while inventory is read. Handle that transition
+      // once in this request; repeated state changes fail for a safe retry.
+      for (let attempt = 0; attempt < 2 && (candidate.status === 'trialing' || candidate.status === 'paused'); attempt++) {
+        if (!orgSubscriptionItems(candidate, prices)) {
+          throw new OrgBillingError('not_an_org_business_subscription', 'Organization has an unverified live subscription; repair its prices before provisioning');
         }
-      } else candidate.status = canceled.status;
+        const expectedStatus = candidate.status;
+        const canceled = await deps.stripe.cancelSubscription(
+          candidate.id,
+          orgStripeIdempotencyKey(orgId, 'subscription.cancel', { subscriptionId: candidate.id }),
+          expectedStatus,
+        );
+        if (isLiveOrgSubscriptionStatus(canceled.status)) {
+          Object.assign(candidate, await deps.stripe.retrieveSubscription(candidate.id));
+          if (candidate.status === expectedStatus) {
+            throw new OrgBillingError('subscription_not_live', 'Unsupported trial could not be ended for paid checkout');
+          }
+        } else candidate.status = canceled.status;
+      }
+      if (candidate.status === 'trialing' || candidate.status === 'paused') {
+        throw new OrgBillingError('subscription_not_live', 'Subscription changed during recovery; retry paid checkout');
+      }
     }
     const existing = pickAdoptableOrgSubscription(history, { orgId, prices });
     let sub: OrgStripeSubscription;

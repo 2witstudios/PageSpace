@@ -328,7 +328,7 @@ export class FakeOrgStripe implements OrgBillingStripe {
     });
   }
 
-  async cancelSubscription(subscriptionId: string, idempotencyKey: string, expectedStatus?: 'trialing'): Promise<{ status: string }> {
+  async cancelSubscription(subscriptionId: string, idempotencyKey: string, expectedStatus?: 'trialing' | 'paused'): Promise<{ status: string }> {
     const sub = this.subscriptions.get(subscriptionId);
     if (!sub) throw new Error(`No such subscription: '${subscriptionId}'`);
     // Stripe refuses to cancel what is already over; the shell must not ask.
