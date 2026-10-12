@@ -35,6 +35,7 @@ import { isBillingEnabled } from '../deployment-mode';
 import { ORGS_ENABLED } from '../organizations/orgs-enabled';
 import { getDriveIdsForUser, getUserDriveAccess } from '../permissions/permissions';
 import { loadDriveWalletStanding, type DriveWalletStanding } from '../permissions/spend-standing';
+import { holdsOrgRole } from '../organizations/authorize-core';
 import {
   credentialRefusalFor,
   decideSeatCapWrite,
@@ -1199,7 +1200,7 @@ export async function listMyWallets(userId: string, credential: WalletCredential
       remainingCents: seat.remainingCents,
       remainingCredits: formatCreditCount(seat.remainingCents),
     });
-    if (credential === 'session' && (m.role === 'OWNER' || m.role === 'ADMIN')) {
+    if (credential === 'session' && holdsOrgRole(m.role, 'ADMIN')) {
       const facts = await poolFacts(m.orgId);
       if (facts) {
         const unallocatedCents = facts.availableCents - facts.outstandingChildAllocationsCents;

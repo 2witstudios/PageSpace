@@ -9,10 +9,11 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { and, eq } from '@pagespace/db/operators';
-import { orgMembers } from '@pagespace/db/schema/organizations';
+import { eq } from '@pagespace/db/operators';
 import { drives } from '@pagespace/db/schema/core';
 import { ORGS_ENABLED } from '../organizations/orgs-enabled';
+import { holdsOrgRole } from '../organizations/authorize-core';
+import { findMembershipRole } from '../organizations/repository';
 import { isDriveLead, type RelationshipDrive } from './drive-relationship';
 import { loadEffectiveDriveMembership } from './org-drive-membership';
 
@@ -34,9 +35,9 @@ export interface AppUnparkAuthorityInput {
 
 export function decideAppUnparkAuthority({ orgsEnabled, userId, drive, orgRole, costOwnerId, isDriveMember }: AppUnparkAuthorityInput): AppUnparkAuthority {
   if (isDriveLead(userId, drive)) return { allowed: true, via: 'lead' };
-  if (orgsEnabled && drive.orgId !== null) {
-    if (orgRole === 'OWNER') return { allowed: true, via: 'org-owner' };
-    if (orgRole === 'ADMIN') return { allowed: true, via: 'org-admin' };
+  // Org power through the one org authorization decision (ORG-5); `via` only names which seat it came from.
+  if (orgsEnabled && drive.orgId !== null && holdsOrgRole(orgRole, 'ADMIN')) {
+    return { allowed: true, via: holdsOrgRole(orgRole, 'OWNER') ? 'org-owner' : 'org-admin' };
   }
   // The creator, only while they can still reach the drive: one removed from it keeps nothing here.
   if (costOwnerId !== null && costOwnerId === userId && isDriveMember) return { allowed: true, via: 'creator' };
@@ -51,12 +52,7 @@ export async function loadAppUnparkAuthority(
 ): Promise<AppUnparkAuthority> {
   let orgRole: AppUnparkAuthorityInput['orgRole'] = null;
   if (ORGS_ENABLED && drive.orgId !== null && !isDriveLead(userId, drive)) {
-    const [membership] = await db
-      .select({ role: orgMembers.role })
-      .from(orgMembers)
-      .where(and(eq(orgMembers.orgId, drive.orgId), eq(orgMembers.userId, userId)))
-      .limit(1);
-    orgRole = membership?.role ?? null;
+    orgRole = await findMembershipRole(drive.orgId, userId);
   }
   const isDriveMember = costOwnerId === userId && (isDriveLead(userId, drive) || (await loadEffectiveDriveMembership(userId, drive)) !== null);
   return decideAppUnparkAuthority({ orgsEnabled: ORGS_ENABLED, userId, drive, orgRole, costOwnerId, isDriveMember });

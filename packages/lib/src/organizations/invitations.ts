@@ -19,6 +19,7 @@ import { normalizeEmail } from '../encryption/blind-index';
 import { isEmailAMember, isUniqueViolation, retryOnDeadlock } from './repository';
 import { getOrgPolicies } from './policy-reader';
 import { orgActorDecision } from './org-action-decisions';
+import { holdsOrgRole } from './authorize-core';
 import { policyRefusal, type PolicyRefusal } from './sharing-decisions';
 import { checkOrgActive, checkOrgMayLoosen, ORG_LAPSED_CODE, type OrgLapsedRefusal } from './status';
 import { admitSeat, recordSeatAdmissionEvents, type SeatAdmission, type SeatBillingPort } from './seat-service';
@@ -125,7 +126,8 @@ async function inviterRefusal(tx: Tx, orgId: string, actorRole: OrgRole, role: O
   const policies = await getOrgPolicies(orgId, tx);
   const who = orgActorDecision(policies.whoCanInvite, actorRole, 'invite');
   if (!who.ok) return who;
-  if (role === 'ADMIN' && actorRole === 'MEMBER') {
+  // Nobody hands out a role above their own (ORG-5's one rank rule): only an Owner or Admin invites an Admin.
+  if (!holdsOrgRole(actorRole, role)) {
     return policyRefusal('whoCanInvite', 'Only Owners and Admins can invite someone as an Admin.');
   }
   return null;
