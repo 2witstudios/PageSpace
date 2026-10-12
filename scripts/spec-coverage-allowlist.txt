@@ -52,11 +52,6 @@ DRV-9
 # A single test proving every clause (one definition, consumed by the lib/web/marketing/admin/CLI
 # formatters, the removed helpers gone, the grep) is still owed before the reviewer can agree.
 MON-5
-# MON-7 re-added per Review 2 ("removed; now wrong": liability summed personal roots only).
-# ow-fix-money-defs proves the liability clause on Postgres (org pools counted, a pool's allocation
-# never counted twice, "MON-7 (partial)"); the margin-as-charged-versus-cost clause has no test
-# naming MON-7 yet.
-MON-7
 # ORG-1 (name, slug, avatar, one human Owner; ownership is transferable), ORG-2 (Owner/Admin/Member;
 # many orgs per user; a user in no org sees no org UI) and ORG-3 (email invites with expiry, resend,
 # revoke, acceptance for new and existing accounts; a pending invite counts as a seat) re-added per
