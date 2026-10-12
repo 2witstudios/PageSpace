@@ -115,6 +115,7 @@ import {
   validateToolInput,
 } from './tool-convert.js';
 import { CLI_VERSION } from '../commands/version.js';
+import type { CredentialKind } from '../auth/credential-kind.js';
 
 /**
  * Every operation the SDK exports, across every domain (drives, pages,
@@ -248,6 +249,8 @@ export interface McpSdkClient {
 export interface CreateMcpServerOptions {
   readonly registry: OperationRegistry;
   readonly sdk: McpSdkClient;
+  /** Which class of credential the server calls with, so a sign-in denial names the right fix (a key needs a new key). */
+  readonly credentialKind?: CredentialKind;
   readonly serverInfo?: { readonly name: string; readonly version: string };
 }
 
@@ -289,7 +292,7 @@ export function createMcpServer(options: CreateMcpServerOptions): Server {
       const output = await sdk.invoke(op, validated.data);
       return formatSuccessResult(output) as CallToolResult;
     } catch (error) {
-      return formatSdkErrorResult(op, error) as CallToolResult;
+      return formatSdkErrorResult(op, error, options.credentialKind) as CallToolResult;
     }
   });
 

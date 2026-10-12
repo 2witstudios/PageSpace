@@ -190,9 +190,9 @@ describe('policies routes', () => {
     as('ADMIN');
     vi.mocked(updateOrgPolicies).mockResolvedValue({
       ok: true, policies: { ...DEFAULT_ORG_POLICIES, requireStrongSignIn: true }, changes: [{ key: 'requireStrongSignIn', from: false, to: true }],
-      suspended: [], restored: [], blocked: { counts: {}, total: 0, items: [] }, signInBlocked: { members: 3, credentials: 5 }, auditRecorded: true,
+      suspended: [], restored: [], blocked: { counts: {}, total: 0, items: [] }, signInBlocked: { members: 3, guests: 1, credentials: 5 }, auditRecorded: true,
     });
-    expect(await (await PATCH(req('PATCH', '', { requireStrongSignIn: true }), ctx)).json()).toMatchObject({ signInBlocked: { members: 3, credentials: 5 } });
+    expect(await (await PATCH(req('PATCH', '', { requireStrongSignIn: true }), ctx)).json()).toMatchObject({ signInBlocked: { members: 3, guests: 1, credentials: 5 } });
   });
 
   it('POL-1 (partial) a change that committed but was not audited is reported, not hidden', async () => {

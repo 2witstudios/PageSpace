@@ -148,6 +148,10 @@ const EXEMPT = new Map<string, Exemption>([
     ormReads: 1,
     reason: 'isOrgGuest asks whether a NON-member holds any row on the org\'s drives (pending included, on purpose: an invited outsider is a guest too) so verified-domain auto-join (SEC-1) can REFUSE to make them a member. It only ever withholds; it grants nothing.',
   }],
+  ['packages/lib/src/organizations/sign-in-blocked.ts', {
+    ormReads: 1,
+    reason: 'countOrgSignInBlocked (POL-1, D-OW-45) counts the org\'s guests by the isOrgGuest definition, pending included on purpose: an invited outsider meets the sign-in policy when they accept, so a policy change counts them. Counts only, no identities; it grants nothing.',
+  }],
   ['packages/lib/src/permissions/org-drive-directory.ts', {
     ormReads: 1,
     reason: 'The org Drives directory reads the viewer\'s OWN rows pending included, so decideDriveDirectoryEntry can tell a pending invitation (not joined, not requestable) from no row; an unaccepted row never counts as joined. Display for the viewer, behind the org-member gate.',

@@ -6,6 +6,7 @@ import {
   decideSignInPolicyChange,
   lockedOrgDrives,
   normalizeMaximumSessionAgeMinutes,
+  policyInForce,
   signInPolicyLoosened,
   signInPolicyTightened,
   type OrgAuthenticationPolicy,
@@ -33,7 +34,7 @@ describe('organization authentication policy decision', () => {
   it('SEC-3 (partial) immediately before expiry the original authentication remains usable', () => {
     expect(decideOrgAuthentication({ policy: { ...unrestricted, maximumSessionAgeMinutes: 15 }, authentication: { ...strong, authenticatedAtMs: nowMs - 15 * 60_000 + 1 }, nowMs })).toEqual({ allowed: true });
   });
-  it.each([null, { ...strong, authenticatedAtMs: NaN }, { ...strong, authenticatedAtMs: nowMs + 1 }, { ...strong, authenticatedAtMs: -1 }])('SEC-3 (partial) malformed, missing and future authentication evidence fails closed', (authentication) => {
+  it.each([null, { ...strong, authenticatedAtMs: NaN }, { ...strong, authenticatedAtMs: nowMs + 120_001 }, { ...strong, authenticatedAtMs: -1 }])('SEC-3 (partial) malformed, missing and future authentication evidence fails closed', (authentication) => {
     expect(decideOrgAuthentication({ policy: { ...unrestricted, maximumSessionAgeMinutes: 60 }, authentication, nowMs })).toEqual({ allowed: false, code: 'org_reauthentication_required' });
   });
   it('SEC-2 (partial) SEC-3 (partial) fresh single-factor evidence does not satisfy both policies', () => {
@@ -169,5 +170,11 @@ describe('counting who a sign-in policy blocks (POL-1, D-OW-45)', () => {
     expect(countSignInBlocked({ policy: { requireStrongSignIn: true, maximumSessionAgeMinutes: null }, credentials: rows, nowMs })).toEqual({ members: 2, credentials: 4 });
     expect(countSignInBlocked({ policy: unrestricted, credentials: rows, nowMs })).toEqual({ members: 0, credentials: 0 });
     expect(countSignInBlocked({ policy: unrestricted, credentials: [], nowMs })).toEqual({ members: 0, credentials: 0 });
+  });
+
+  it('SEC-3 (partial) the policy in force reads a damaged stored age as the strictest valid age, so it stays repairable', () => {
+    expect(policyInForce({ requireStrongSignIn: false, maximumSessionAgeMinutes: 0 })).toEqual({ requireStrongSignIn: false, maximumSessionAgeMinutes: 15 });
+    expect(policyInForce({ requireStrongSignIn: true, maximumSessionAgeMinutes: 60 })).toEqual({ requireStrongSignIn: true, maximumSessionAgeMinutes: 60 });
+    expect(policyInForce({ requireStrongSignIn: false, maximumSessionAgeMinutes: null })).toEqual({ requireStrongSignIn: false, maximumSessionAgeMinutes: null });
   });
 });

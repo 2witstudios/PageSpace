@@ -223,6 +223,17 @@ describe('formatSdkErrorResult — distinct, secret-free messages per SDK error 
     expect(result.content[0]?.text).not.toContain('drive:admin');
   });
 
+  it.each([
+    ['org_strong_sign_in_required', /passkey/],
+    ['org_reauthentication_required', /fresh sign-in/],
+  ] as const)('SEC-2 (partial) for an access key, a sign-in denial (%s) says to create a new key, not to log in (review #2866 B3)', (code, fix) => {
+    const result = formatSdkErrorResult(opWithScope, classifyHttpError(403, {}, { error: 'Refused', code }), 'key');
+    expect(result.content[0]?.text).toContain(code);
+    expect(result.content[0]?.text).toMatch(fix);
+    expect(result.content[0]?.text).toContain('Create a new key');
+    expect(result.content[0]?.text).not.toContain('pagespace login');
+  });
+
   it('maps an authentication failure to an actionable message', () => {
     const result = formatSdkErrorResult(globSearch, new FakeAuthenticationError('nope'));
     expect(result.content[0]?.text).toMatch(/login|PAGESPACE_TOKEN/i);

@@ -40,7 +40,7 @@ export function renderDrive(drive: DriveIdentity): string {
 }
 
 export const drivesListHandler: CommandHandler = async (ctx, intent) => {
-  const result = await callSdk(ctx.stderr, () => ctx.sdk.drives.list({ includeTrash: intent.flags.all || undefined }));
+  const result = await callSdk(ctx, () => ctx.sdk.drives.list({ includeTrash: intent.flags.all || undefined }));
   if (!result.ok) return EXIT_RUNTIME_ERROR;
 
   if (intent.flags.json) {
@@ -58,7 +58,7 @@ export const drivesCreateHandler: CommandHandler = async (ctx, intent) => {
     return EXIT_USAGE_ERROR;
   }
 
-  const result = await callSdk(ctx.stderr, () => ctx.sdk.drives.create({ name }));
+  const result = await callSdk(ctx, () => ctx.sdk.drives.create({ name }));
   if (!result.ok) return EXIT_RUNTIME_ERROR;
 
   if (intent.flags.json) {
@@ -76,7 +76,7 @@ export const drivesRenameHandler: CommandHandler = async (ctx, intent) => {
     return EXIT_USAGE_ERROR;
   }
 
-  const result = await callSdk(ctx.stderr, () => ctx.sdk.drives.rename({ driveId, name }));
+  const result = await callSdk(ctx, () => ctx.sdk.drives.rename({ driveId, name }));
   if (!result.ok) return EXIT_RUNTIME_ERROR;
 
   if (intent.flags.json) {
@@ -94,7 +94,7 @@ export const drivesUpdateContextHandler: CommandHandler = async (ctx, intent) =>
     return EXIT_USAGE_ERROR;
   }
 
-  const result = await callSdk(ctx.stderr, () => ctx.sdk.drives.updateContext({ driveId, drivePrompt }));
+  const result = await callSdk(ctx, () => ctx.sdk.drives.updateContext({ driveId, drivePrompt }));
   if (!result.ok) return EXIT_RUNTIME_ERROR;
 
   if (intent.flags.json) {
@@ -113,7 +113,7 @@ export const drivesSetHomePageHandler: CommandHandler = async (ctx, intent) => {
   }
 
   const homePageId = pageIdOrClear === '--clear' ? null : pageIdOrClear;
-  const result = await callSdk(ctx.stderr, () => ctx.sdk.drives.setHomePage({ driveId, homePageId }));
+  const result = await callSdk(ctx, () => ctx.sdk.drives.setHomePage({ driveId, homePageId }));
   if (!result.ok) return EXIT_RUNTIME_ERROR;
 
   if (intent.flags.json) {
@@ -133,7 +133,7 @@ export const drivesTrashHandler: CommandHandler = async (ctx, intent) => {
     return EXIT_USAGE_ERROR;
   }
 
-  const found = await callSdk(ctx.stderr, () => ctx.sdk.drives.list({}));
+  const found = await callSdk(ctx, () => ctx.sdk.drives.list({}));
   if (!found.ok) return EXIT_RUNTIME_ERROR;
 
   const drive = found.value.find((candidate) => candidate.id === driveId);
@@ -156,7 +156,7 @@ export const drivesTrashHandler: CommandHandler = async (ctx, intent) => {
     return EXIT_RUNTIME_ERROR;
   }
 
-  const result = await callSdk(ctx.stderr, () => ctx.sdk.drives.trash({ driveId, confirmDriveName: drive.name }));
+  const result = await callSdk(ctx, () => ctx.sdk.drives.trash({ driveId, confirmDriveName: drive.name }));
   if (!result.ok) return EXIT_RUNTIME_ERROR;
 
   if (intent.flags.json) {
@@ -174,7 +174,7 @@ export const drivesRestoreHandler: CommandHandler = async (ctx, intent) => {
     return EXIT_USAGE_ERROR;
   }
 
-  const result = await callSdk(ctx.stderr, () => ctx.sdk.drives.restore({ driveId }));
+  const result = await callSdk(ctx, () => ctx.sdk.drives.restore({ driveId }));
   if (!result.ok) return EXIT_RUNTIME_ERROR;
 
   if (intent.flags.json) {

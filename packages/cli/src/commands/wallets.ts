@@ -161,7 +161,7 @@ export const walletsDriveHandler: CommandHandler = async (ctx, intent) => {
     ctx.stderr.write(`${parsed.message}\n`);
     return EXIT_USAGE_ERROR;
   }
-  const result = await callSdk(ctx.stderr, () => ctx.sdk.wallets.getDriveWallet({ driveId: parsed.value.driveId }));
+  const result = await callSdk(ctx, () => ctx.sdk.wallets.getDriveWallet({ driveId: parsed.value.driveId }));
   if (!result.ok) return EXIT_RUNTIME_ERROR;
   ctx.stdout.write(intent.flags.json ? `${JSON.stringify(result.value)}\n` : renderDriveWallet(parsed.value.driveId, result.value));
   return EXIT_SUCCESS;
@@ -172,7 +172,7 @@ export const walletsListHandler: CommandHandler = async (ctx, intent) => {
     ctx.stderr.write(`${LIST_USAGE}\n`);
     return EXIT_USAGE_ERROR;
   }
-  const result = await callSdk(ctx.stderr, () => ctx.sdk.wallets.list({}));
+  const result = await callSdk(ctx, () => ctx.sdk.wallets.list({}));
   if (!result.ok) return EXIT_RUNTIME_ERROR;
   ctx.stdout.write(intent.flags.json ? `${JSON.stringify(result.value)}\n` : renderMyWallets(result.value));
   return EXIT_SUCCESS;
@@ -184,7 +184,7 @@ export const walletsSourceHandler: CommandHandler = async (ctx, intent) => {
     ctx.stderr.write(`${parsed.message}\n`);
     return EXIT_USAGE_ERROR;
   }
-  const result = await callSdk(ctx.stderr, () => ctx.sdk.wallets.getConversationSource(parsed.value));
+  const result = await callSdk(ctx, () => ctx.sdk.wallets.getConversationSource(parsed.value));
   if (!result.ok) return EXIT_RUNTIME_ERROR;
   ctx.stdout.write(intent.flags.json ? `${JSON.stringify(result.value)}\n` : renderConversationSource(result.value));
   return EXIT_SUCCESS;

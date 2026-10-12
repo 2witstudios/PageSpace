@@ -3,17 +3,19 @@
  * countSignInBlocked (authentication-policy-core.ts).
  *
  * A sign-in policy suspends nothing (a credential is judged when it is used), so "listed in the audit log" means the
- * number of the org's members holding no live credential the policy admits, and the number of live credentials it
- * refuses. Counts only: no identities, no PII. The credentials read are the long-lived ones a person signs in with:
- * user sessions (web, desktop, mobile), device tokens, MCP tokens and OAuth refresh tokens (CLI). Short-lived
- * derivatives (socket and access tokens) carry the same evidence as their parent and are not counted twice.
+ * number of the org's people holding no live credential the policy admits, and the number of live credentials it
+ * refuses. People are the org's members and its guests (DRV-8, D-OW-24: a non-member with a membership row on one of
+ * the org's drives, or a guest hold the org queued for them), since the policy is asked of a guest on the org's drives
+ * exactly as of a member. Counts only: no identities, no PII. The credentials read are the long-lived ones a person
+ * signs in with: user sessions (web, desktop, mobile), device tokens, MCP tokens and OAuth refresh tokens (CLI).
+ * Short-lived derivatives (socket and access tokens) carry the same evidence as their parent and are not counted twice.
  */
 import { db } from '@pagespace/db/db';
-import { and, eq, gt, isNull } from '@pagespace/db/operators';
+import { and, eq, gt, inArray, isNull } from '@pagespace/db/operators';
 import { deviceTokens, mcpTokens } from '@pagespace/db/schema/auth';
 import { sessions } from '@pagespace/db/schema/sessions';
 import { oauthRefreshTokens } from '@pagespace/db/schema/oauth';
-import { orgMembers } from '@pagespace/db/schema/organizations';
+import { listOrgPeople } from '../permissions/org-guest-footprint';
 import { parseVerifiedAuthentication, type VerifiedAuthentication } from '../auth/authentication-evidence';
 import { countSignInBlocked, type OrgAuthenticationPolicy } from './authentication-policy-core';
 
@@ -22,28 +24,29 @@ type Executor = typeof db | Tx;
 
 export interface SignInBlockedCounts {
   readonly members: number;
+  readonly guests: number;
   readonly credentials: number;
 }
 
 type Row = { userId: string; authenticatedAt: Date | null; authenticationAssurance: string | null };
+type Credential = { userId: string; authentication: VerifiedAuthentication | null };
 
-/** Every live credential an org member signs in with, with its evidence. */
-async function listMemberCredentials(executor: Executor, orgId: string, now: Date): Promise<Array<{ userId: string; authentication: VerifiedAuthentication | null }>> {
-  const member = (userColumn: typeof sessions.userId | typeof deviceTokens.userId | typeof mcpTokens.userId | typeof oauthRefreshTokens.userId) =>
-    and(eq(orgMembers.userId, userColumn), eq(orgMembers.orgId, orgId));
+/** Every live credential the given people sign in with, with its evidence. */
+async function listCredentials(executor: Executor, userIds: string[], now: Date): Promise<Credential[]> {
+  if (userIds.length === 0) return [];
   const [userSessions, devices, mcp, refresh] = await Promise.all([
     executor.select({ userId: sessions.userId, authenticatedAt: sessions.authenticatedAt, authenticationAssurance: sessions.authenticationAssurance })
-      .from(sessions).innerJoin(orgMembers, member(sessions.userId))
-      .where(and(eq(sessions.type, 'user'), isNull(sessions.revokedAt), gt(sessions.expiresAt, now))),
+      .from(sessions)
+      .where(and(inArray(sessions.userId, userIds), eq(sessions.type, 'user'), isNull(sessions.revokedAt), gt(sessions.expiresAt, now))),
     executor.select({ userId: deviceTokens.userId, authenticatedAt: deviceTokens.authenticatedAt, authenticationAssurance: deviceTokens.authenticationAssurance })
-      .from(deviceTokens).innerJoin(orgMembers, member(deviceTokens.userId))
-      .where(and(isNull(deviceTokens.revokedAt), gt(deviceTokens.expiresAt, now))),
+      .from(deviceTokens)
+      .where(and(inArray(deviceTokens.userId, userIds), isNull(deviceTokens.revokedAt), gt(deviceTokens.expiresAt, now))),
     executor.select({ userId: mcpTokens.userId, authenticatedAt: mcpTokens.authenticatedAt, authenticationAssurance: mcpTokens.authenticationAssurance })
-      .from(mcpTokens).innerJoin(orgMembers, member(mcpTokens.userId))
-      .where(isNull(mcpTokens.revokedAt)),
+      .from(mcpTokens)
+      .where(and(inArray(mcpTokens.userId, userIds), isNull(mcpTokens.revokedAt))),
     executor.select({ userId: oauthRefreshTokens.userId, authenticatedAt: oauthRefreshTokens.authenticatedAt, authenticationAssurance: oauthRefreshTokens.authenticationAssurance })
-      .from(oauthRefreshTokens).innerJoin(orgMembers, member(oauthRefreshTokens.userId))
-      .where(and(isNull(oauthRefreshTokens.revokedAt), isNull(oauthRefreshTokens.replacedByTokenId), gt(oauthRefreshTokens.expiresAt, now))),
+      .from(oauthRefreshTokens)
+      .where(and(inArray(oauthRefreshTokens.userId, userIds), isNull(oauthRefreshTokens.revokedAt), isNull(oauthRefreshTokens.replacedByTokenId), gt(oauthRefreshTokens.expiresAt, now))),
   ]);
   const nowMs = now.getTime();
   return ([...userSessions, ...devices, ...mcp, ...refresh] as Row[]).map((row) => ({
@@ -52,13 +55,17 @@ async function listMemberCredentials(executor: Executor, orgId: string, now: Dat
   }));
 }
 
-/** How many of the org's members, and how many of their live credentials, `policy` refuses at `now`. */
+/** How many of the org's members and guests, and how many of their live credentials, `policy` refuses at `now`. */
 export async function countOrgSignInBlocked(
   executor: Executor,
   orgId: string,
   policy: OrgAuthenticationPolicy,
   now: Date = new Date(),
 ): Promise<SignInBlockedCounts> {
-  const credentials = await listMemberCredentials(executor, orgId, now);
-  return countSignInBlocked({ policy, credentials, nowMs: now.getTime() });
+  const people = await listOrgPeople(orgId, executor);
+  const credentials = await listCredentials(executor, [...people.members, ...people.guests], now);
+  const nowMs = now.getTime();
+  const members = countSignInBlocked({ policy, credentials: credentials.filter((c) => people.members.has(c.userId)), nowMs });
+  const guests = countSignInBlocked({ policy, credentials: credentials.filter((c) => people.guests.has(c.userId)), nowMs });
+  return { members: members.members, guests: guests.members, credentials: members.credentials + guests.credentials };
 }
