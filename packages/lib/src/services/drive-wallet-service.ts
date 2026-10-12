@@ -21,6 +21,7 @@ import { and, eq, gt, gte, inArray, isNull, sql } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth';
 import { conversations } from '@pagespace/db/schema/conversations';
 import { drives, pages } from '@pagespace/db/schema/core';
+import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { creditHolds, creditLedger } from '@pagespace/db/schema/credits';
 import { orgMembers } from '@pagespace/db/schema/organizations';
 import {
@@ -60,13 +61,17 @@ import { loadSeatCapFactsForUsers } from '../billing/seat-allowance';
 import { planConsumerCapWrite, seatCapCheck, seatSpentCents, userConsumerKey, utcDayStartMs, utcMonthStartMs, type ConsumerCapWriteInput, type ConsumerCaps, type SpendSourceKind } from '../billing/wallet-core';
 import { getOrgPolicies, readOrgSpendPolicy } from '../organizations/policy-reader';
 import {
+  AUTOMATION_USAGE_SOURCE,
   capRemainingCents,
+  consumerSpendFromBuckets,
   displayedWalletStatus,
+  driveWalletListEntry,
   projectDriveWallet,
   poolUnallocatedCents,
   walletRemainingCents,
   type ConsumerSpend,
   type DriveWalletFacts,
+  type DriveWalletListEntry,
   type DriveWalletView,
   type PoolFacts,
 } from '../billing/wallet-views';
@@ -245,22 +250,29 @@ async function myCapFacts(walletId: string, userId: string): Promise<DriveWallet
   };
 }
 
-/** Spend on the wallet this period, per consumer (SPEND-10). Loaded only for a viewer who may see it. */
-async function spendByConsumer(walletId: string, since: Date | null): Promise<ConsumerSpend[]> {
+/**
+ * Spend on the wallet this period, per consumer, with today's part and the part automations spent on
+ * their behalf (SPEND-10, UI-9). Loaded only for a viewer who may see it. The ledger is grouped by
+ * (person, since today's UTC start, via an automation) and consumerSpendFromBuckets folds it.
+ */
+async function spendByConsumer(walletId: string, since: Date | null, now: Date = new Date()): Promise<ConsumerSpend[]> {
+  const dayStart = new Date(utcDayStartMs(now.getTime()));
+  const today = sql<boolean>`(${creditLedger.createdAt} >= ${dayStart})`;
+  const viaAutomation = sql<boolean>`coalesce(${aiUsageLogs.source} = ${AUTOMATION_USAGE_SOURCE}, false)`;
   const rows = await db
-    .select({ userId: creditLedger.userId, cents: sql<number>`coalesce(-sum(${creditLedger.appliedCents}), 0)::int` })
+    .select({ userId: creditLedger.userId, today, viaAutomation, cents: sql<number>`coalesce(-sum(${creditLedger.appliedCents}), 0)::int` })
     .from(creditLedger)
+    .leftJoin(aiUsageLogs, eq(aiUsageLogs.id, creditLedger.aiUsageLogId))
     .where(and(
       eq(creditLedger.walletId, walletId),
       eq(creditLedger.entryType, 'usage'),
       since ? gte(creditLedger.createdAt, since) : undefined,
     ))
-    .groupBy(creditLedger.userId)
-    .limit(500);
+    // By position: the two flags carry bound parameters, which Postgres cannot match to the select list.
+    .groupBy(sql`1`, sql`2`, sql`3`)
+    .limit(2000);
   const names = await userNamesById(rows.map((r) => r.userId));
-  return rows
-    .map((r) => ({ consumerKey: userConsumerKey(r.userId), userId: r.userId, displayName: names.get(r.userId) ?? null, spentCents: Math.max(0, Number(r.cents)) }))
-    .sort((a, b) => b.spentCents - a.spentCents || a.consumerKey.localeCompare(b.consumerKey));
+  return consumerSpendFromBuckets(rows.map((r) => ({ userId: r.userId, cents: Number(r.cents), today: r.today === true, viaAutomation: r.viaAutomation === true })), names);
 }
 
 /** People's display names by id (decrypted), so no wallet surface hands the UI a raw id alone (UI-9, UI-10). */
@@ -1085,8 +1097,8 @@ export async function donateToDrive(
  */
 export interface MyWallets {
   personal: { walletId: string; remainingCents: number; remainingCredits: string; defaultSpendSource: SpendSourceKind | null };
-  /** Drive wallets of drives I can open: the consumer amount only (SPEND-9), by drive name. */
-  driveWallets: { driveId: string; driveName: string | null; walletId: string; status: string; remainingCents: number; remainingCredits: string }[];
+  /** Drive wallets of drives I can open: the consumer amount and my own spend only (SPEND-9, UI-10), by drive name. */
+  driveWallets: DriveWalletListEntry[];
   /**
    * A seat on each org I belong to: my own allowance only, never the pool (SPEND-9), by org name.
    * The allowance, what I spent of it and what is left (D-OW-38 read model, seatAllowanceFor).
@@ -1104,7 +1116,7 @@ export interface MyWallets {
   }[];
   /** What I fund: drive wallets my personal wallet parents, pools I administer (SPEND-10), my donations. */
   funds: {
-    driveWallets: { driveId: string; driveName: string | null; walletId: string; status: string; remainingCents: number; remainingCredits: string }[];
+    driveWallets: DriveWalletListEntry[];
     pools: { orgId: string; orgName: string | null; walletId: string; availableCents: number; unallocatedCents: number; availableCredits: string; unallocatedCredits: string }[];
     donations: {
       walletId: string;
@@ -1117,6 +1129,26 @@ export interface MyWallets {
       createdAt: string;
     }[];
   };
+}
+
+/**
+ * What one person spent from each of these wallets in its current period (UI-10 "you spent N"): their
+ * own usage rows only, since each wallet's period start (all time for a wallet with none yet).
+ */
+async function mySpendByWallet(userId: string, walletIds: string[]): Promise<Map<string, number>> {
+  if (walletIds.length === 0) return new Map();
+  const rows = await db
+    .select({ walletId: creditLedger.walletId, cents: sql<number>`coalesce(-sum(${creditLedger.appliedCents}), 0)::int` })
+    .from(creditLedger)
+    .innerJoin(wallets, eq(wallets.id, creditLedger.walletId))
+    .where(and(
+      eq(creditLedger.userId, userId),
+      eq(creditLedger.entryType, 'usage'),
+      inArray(creditLedger.walletId, walletIds),
+      sql`(${wallets.monthlyPeriodStart} IS NULL OR ${creditLedger.createdAt} >= ${wallets.monthlyPeriodStart})`,
+    ))
+    .groupBy(creditLedger.walletId);
+  return new Map(rows.map((r) => [r.walletId, Number(r.cents)]));
 }
 
 export async function listMyWallets(userId: string, credential: WalletCredential): Promise<MyWallets> {
@@ -1167,10 +1199,10 @@ export async function listMyWallets(userId: string, credential: WalletCredential
       .where(and(eq(wallets.subjectType, 'drive'), inArray(wallets.subjectId, driveIds)))
       .limit(1000);
     const driveNames = await driveNamesById(rows.flatMap((r) => (r.subjectId ? [r.subjectId] : [])));
+    const mySpent = await mySpendByWallet(userId, rows.map((r) => r.id));
     for (const row of rows) {
       if (!row.subjectId) continue;
-      const remaining = walletRemainingCents(row);
-      const entry = { driveId: row.subjectId, driveName: driveNames.get(row.subjectId) ?? null, walletId: row.id, status: displayedWalletStatus(row), remainingCents: remaining, remainingCredits: formatCreditCount(remaining) };
+      const entry = driveWalletListEntry({ ...row, subjectId: row.subjectId }, driveNames.get(row.subjectId) ?? null, mySpent.get(row.id) ?? 0);
       result.driveWallets.push(entry);
       // The funder sees the balance of what they fund (UI-10), as its consumers do.
       if (row.parentWalletId === personalId) result.funds.driveWallets.push(entry);

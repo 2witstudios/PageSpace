@@ -8,6 +8,8 @@ import {
   capRemainingCents,
   poolUnallocatedCents,
   CONSUMER_WALLET_FIELDS,
+  consumerSpendFromBuckets,
+  driveWalletListEntry,
   type DriveWalletFacts,
 } from '../wallet-views';
 
@@ -33,9 +35,9 @@ const facts = (over: Partial<DriveWalletFacts> = {}): DriveWalletFacts => ({
   },
   myCap: { dailyCapCents: c(10), monthlyCapCents: null, spentTodayCents: c(4), spentThisMonthCents: c(50) },
   spendByConsumer: [
-    { consumerKey: 'user:u-marcus', userId: 'u-marcus', displayName: 'Marcus Oyelaran', spentCents: c(50) },
-    { consumerKey: 'user:u-lena', userId: 'u-lena', displayName: 'Lena Lead', spentCents: c(30) },
-    { consumerKey: 'drive:d-product', userId: null, displayName: null, spentCents: c(20) },
+    { consumerKey: 'user:u-marcus', userId: 'u-marcus', displayName: 'Marcus Oyelaran', spentCents: c(50), spentTodayCents: c(12), viaAutomationsCents: c(20) },
+    { consumerKey: 'user:u-lena', userId: 'u-lena', displayName: 'Lena Lead', spentCents: c(30), spentTodayCents: 0, viaAutomationsCents: 0 },
+    { consumerKey: 'drive:d-product', userId: null, displayName: null, spentCents: c(20), spentTodayCents: c(20), viaAutomationsCents: c(20) },
   ],
   pool: { walletId: 'w-pool', availableCents: c(9000), outstandingChildAllocationsCents: c(3000) },
   ...over,
@@ -139,6 +141,8 @@ describe('wallet-views: the projection each viewer gets', () => {
     });
     if (view.viewer !== 'org_admin') throw new Error('expected an org admin view');
     expect(view.spendByConsumer.map((s) => [s.displayName, s.spentCredits])).toEqual([['Marcus Oyelaran', '50'], ['Lena Lead', '30'], [null, '20']]);
+    // UI-9: today and via automations per member, as credit counts too.
+    expect(view.spendByConsumer.map((s) => [s.spentTodayCredits, s.viaAutomationsCredits])).toEqual([['12', '20'], ['0', '0'], ['20', '20']]);
     expect(JSON.stringify(view)).not.toContain('$');
   });
 
@@ -161,6 +165,54 @@ describe('wallet-views purity', () => {
   it('imports nothing that does I/O', () => {
     const src = readFileSync(fileURLToPath(new URL('../wallet-views.ts', import.meta.url)), 'utf8');
     const imports = [...src.matchAll(/from\s+'([^']+)'/g)].map((m) => m[1]);
-    expect(imports.sort()).toEqual(['../permissions/wallet-access', './money-model', './wallet-core']);
+    expect(imports.sort()).toEqual(['../monitoring/usage-source', '../permissions/wallet-access', './money-model', './wallet-core']);
+  });
+});
+
+describe('consumerSpendFromBuckets (UI-9: who spends, today and via automations)', () => {
+  const names = new Map([['u-marcus', 'Marcus Oyelaran'], ['u-lena', 'Lena Lead']]);
+
+  it('UI-9 (partial) folds a wallet\'s usage buckets into one row per person: spent this period, of which today and via automations', () => {
+    const rows = consumerSpendFromBuckets([
+      { userId: 'u-marcus', cents: 300, today: false, viaAutomation: false },
+      { userId: 'u-marcus', cents: 120, today: true, viaAutomation: false },
+      { userId: 'u-marcus', cents: 80, today: true, viaAutomation: true },
+      { userId: 'u-lena', cents: 50, today: false, viaAutomation: true },
+    ], names);
+    expect(rows).toEqual([
+      { consumerKey: 'user:u-marcus', userId: 'u-marcus', displayName: 'Marcus Oyelaran', spentCents: 500, spentTodayCents: 200, viaAutomationsCents: 80 },
+      { consumerKey: 'user:u-lena', userId: 'u-lena', displayName: 'Lena Lead', spentCents: 50, spentTodayCents: 0, viaAutomationsCents: 50 },
+    ]);
+  });
+
+  it('a refund bucket never shows negative spend, and an unknown name is null, never an id', () => {
+    const [row] = consumerSpendFromBuckets([{ userId: 'u-x', cents: -40, today: true, viaAutomation: false }], names);
+    expect(row).toMatchObject({ displayName: null, spentCents: 0, spentTodayCents: 0, viaAutomationsCents: 0 });
+  });
+
+  it('orders by spend, then by person, so the list is deterministic', () => {
+    const rows = consumerSpendFromBuckets([
+      { userId: 'u-b', cents: 10, today: false, viaAutomation: false },
+      { userId: 'u-a', cents: 10, today: false, viaAutomation: false },
+      { userId: 'u-c', cents: 99, today: false, viaAutomation: false },
+    ], names);
+    expect(rows.map((r) => r.userId)).toEqual(['u-c', 'u-a', 'u-b']);
+  });
+});
+
+describe('driveWalletListEntry (UI-10: a drive wallet I spend from)', () => {
+  const row = { id: 'w-product', subjectId: 'd-product', status: 'active' as const, monthlyAllowanceCents: c(1200), spentCents: c(100), topupRemainingCents: 0, debtCents: 0 };
+
+  it('UI-10 (partial) shows what is left and what I spent from it this period, both as credit counts', () => {
+    expect(driveWalletListEntry(row, 'Product', c(42))).toEqual({
+      driveId: 'd-product', driveName: 'Product', walletId: 'w-product', status: 'active',
+      remainingCents: c(1100), remainingCredits: '1,100', mySpentCents: c(42), mySpentCredits: '42',
+    });
+  });
+
+  it('SPEND-9 (partial) carries my own spend only: never the allocation, the wallet\'s total spend or anyone else\'s', () => {
+    const entry = driveWalletListEntry({ ...row, monthlyAllowanceCents: c(9173), spentCents: c(4567) }, 'Product', 0);
+    expect(Object.keys(entry).sort()).toEqual(['driveId', 'driveName', 'mySpentCents', 'mySpentCredits', 'remainingCents', 'remainingCredits', 'status', 'walletId']);
+    expect(JSON.stringify(entry)).not.toMatch(/9173|9,173|4567|4,567/);
   });
 });

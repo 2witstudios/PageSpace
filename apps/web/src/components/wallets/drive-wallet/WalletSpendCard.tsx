@@ -7,9 +7,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Progress } from '@/components/ui/progress';
 
 /**
- * Spend this month by member (Spec SPEND-10; canvas v9 DriveWallet): for the drive lead and org
- * admins only — the projection a member gets carries no such list. Automation runs count under
- * the member who created them (D-OW-34), so they are already inside that person's row.
+ * Spend this month by member (Spec SPEND-10, UI-9; canvas v9 DriveWallet): for the drive lead and
+ * org admins only — the projection a member gets carries no such list. Automation runs count under
+ * the member who created them (D-OW-34), so they are inside that person's row; each row says how
+ * much of it was today and how much via automations.
  */
 export function WalletSpendCard({ rows, spentCredits }: { rows: ConsumerSpendView[]; spentCredits: string }) {
   const top = Math.max(1, ...rows.map((r) => r.spentCents));
@@ -22,7 +23,7 @@ export function WalletSpendCard({ rows, spentCredits }: { rows: ConsumerSpendVie
           <Link href="/settings/usage" className="text-sm text-primary hover:underline">Full usage</Link>
         </div>
         <CardDescription>
-          {spentCredits} credits across {people} {people === 1 ? 'person' : 'people'}. Automation runs count under the member who created them.
+          {spentCredits} credits across {people} {people === 1 ? 'person' : 'people'}. Automation runs count under the member who created them, shown as via automations.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -32,7 +33,12 @@ export function WalletSpendCard({ rows, spentCredits }: { rows: ConsumerSpendVie
           <ul className="divide-y rounded-lg border">
             {rows.map((row) => (
               <li key={row.consumerKey} className="flex items-center gap-3 px-3 py-2.5 text-sm">
-                <span className="min-w-0 flex-1 truncate">{spendRowLabel(row)}</span>
+                <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                  <span className="truncate">{spendRowLabel(row)}</span>
+                  <span className="truncate text-xs text-muted-foreground" data-testid="wallet-spend-split">
+                    {row.spentTodayCredits} today · {row.viaAutomationsCredits} via automations
+                  </span>
+                </span>
                 <Progress value={spendMeterPercent(row.spentCents, top)} className="hidden w-32 sm:block" aria-hidden="true" />
                 <span className="w-28 text-right tabular-nums">{row.spentCredits} credits</span>
               </li>

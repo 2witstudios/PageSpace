@@ -20,12 +20,13 @@ import { users } from '@pagespace/db/schema/auth';
 import { drives } from '@pagespace/db/schema/core';
 import { conversations } from '@pagespace/db/schema/conversations';
 import { creditHolds, creditLedger } from '@pagespace/db/schema/credits';
+import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { organizations, orgMembers, orgSubscriptions } from '@pagespace/db/schema/organizations';
 import { wallets, walletFundingLegs, driveSpendOverrides, personalRootWalletOf } from '@pagespace/db/schema/wallets';
 import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
 import { CONSUMER_WALLET_FIELDS } from '../../billing/wallet-views';
-import { DEFAULT_SEAT_ALLOWANCE_CENTS } from '../../billing/wallet-core';
+import { DEFAULT_SEAT_ALLOWANCE_CENTS, utcDayStartMs } from '../../billing/wallet-core';
 import {
   getDriveWallet,
   createDriveWallet,
@@ -118,6 +119,7 @@ async function teardown(w: World): Promise<void> {
   await db.delete(conversations).where(inArray(conversations.userId, w.userIds));
   await db.delete(creditHolds).where(inArray(creditHolds.userId, w.userIds));
   await db.delete(creditLedger).where(inArray(creditLedger.userId, w.userIds));
+  await db.delete(aiUsageLogs).where(inArray(aiUsageLogs.userId, w.userIds));
   // Funding legs cascade with their wallet: deleting a leg first would leave its wallet's
   // top-up disagreeing with its legs, which the integration harness's invariant refuses.
   // Child wallets before their parent.
@@ -191,11 +193,33 @@ describe('drive-wallet service (orgs on, real Postgres)', () => {
     expect(read).toMatchObject({ ok: true, viewer: 'lead' });
     if (!read.ok || !read.wallet || read.wallet.viewer !== 'lead') throw new Error('expected a lead view');
     expect(read.wallet.spendByConsumer).toEqual([
-      { consumerKey: `user:${world.ids.marcus}`, userId: world.ids.marcus, displayName: 'Marcus Oyelaran', spentCents: MARCUS_SPEND, spentCredits: MARCUS_SPEND.toLocaleString('en-US') },
-      { consumerKey: `user:${world.ids.lena}`, userId: world.ids.lena, displayName: 'Lena Schulz', spentCents: LENA_SPEND, spentCredits: LENA_SPEND.toLocaleString('en-US') },
+      expect.objectContaining({ consumerKey: `user:${world.ids.marcus}`, userId: world.ids.marcus, displayName: 'Marcus Oyelaran', spentCents: MARCUS_SPEND, spentCredits: MARCUS_SPEND.toLocaleString('en-US') }),
+      expect.objectContaining({ consumerKey: `user:${world.ids.lena}`, userId: world.ids.lena, displayName: 'Lena Schulz', spentCents: LENA_SPEND, spentCredits: LENA_SPEND.toLocaleString('en-US') }),
     ]);
     expect(JSON.stringify(read)).not.toContain(String(POOL_CENTS));
     expect('pool' in read.wallet).toBe(false);
+  });
+
+  it('UI-9 (partial) the lead sees who spends with today\'s part and the part automations spent on their behalf, from the ledger and its usage logs', async () => {
+    if (!world) return;
+    // The fixture's rows land "now": move them to just before today's UTC start, still inside the
+    // period (which began a day ago), then add today's: one by hand, one by Marcus's workflow.
+    await db.update(creditLedger).set({ createdAt: new Date(utcDayStartMs(Date.now()) - 1) }).where(eq(creditLedger.walletId, world.productWalletId));
+    const [workflowLog] = await db.insert(aiUsageLogs).values({ userId: world.ids.marcus, provider: 'openrouter', model: 'm', source: 'workflow' }).returning({ id: aiUsageLogs.id });
+    const [chatLog] = await db.insert(aiUsageLogs).values({ userId: world.ids.marcus, provider: 'openrouter', model: 'm', source: 'chat' }).returning({ id: aiUsageLogs.id });
+    await db.insert(creditLedger).values([
+      { userId: world.ids.marcus, walletId: world.productWalletId, entryType: 'usage', bucket: 'monthly', amountCents: -70, appliedCents: -70, consumeStatus: 'applied', aiUsageLogId: workflowLog.id },
+      { userId: world.ids.marcus, walletId: world.productWalletId, entryType: 'usage', bucket: 'monthly', amountCents: -11, appliedCents: -11, consumeStatus: 'applied', aiUsageLogId: chatLog.id },
+    ]);
+    const read = await getDriveWallet(world.ids.dana, world.productId, 'session');
+    if (!read.ok || !read.wallet || read.wallet.viewer !== 'lead') throw new Error('expected a lead view');
+    const marcus = read.wallet.spendByConsumer.find((c) => c.userId === world?.ids.marcus);
+    expect(marcus).toMatchObject({ spentCents: MARCUS_SPEND + 81, spentTodayCents: 81, viaAutomationsCents: 70, spentTodayCredits: '81', viaAutomationsCredits: '70' });
+    expect(read.wallet.spendByConsumer.find((c) => c.userId === world?.ids.lena)).toMatchObject({ spentCents: LENA_SPEND, spentTodayCents: 0, viaAutomationsCents: 0 });
+
+    // A consumer never sees any of it (SPEND-9).
+    const member = await getDriveWallet(world.ids.marcus, world.productId, 'session');
+    expect(JSON.stringify(member)).not.toMatch(/spendByConsumer|viaAutomations|spentToday/);
   });
 
   it('SPEND-10 (partial) an ORG ADMIN sees every wallet field, the pool and the unallocated balance', async () => {
@@ -303,7 +327,13 @@ describe('drive-wallet service (orgs on, real Postgres)', () => {
   it('UI-10 (partial) SPEND-9 (partial) a member lists what they spend from (drive wallets, their seat) with no pool balance; an admin also lists the pool they fund', async () => {
     if (!world) return;
     const marcus = await listMyWallets(world.ids.marcus, 'session');
-    expect(marcus.driveWallets).toEqual([{ driveId: world.productId, driveName: 'Product', walletId: world.productWalletId, status: 'active', remainingCents: 120_000 - LENA_SPEND - MARCUS_SPEND, remainingCredits: (120_000 - LENA_SPEND - MARCUS_SPEND).toLocaleString('en-US') }]);
+    expect(marcus.driveWallets).toEqual([{
+      driveId: world.productId, driveName: 'Product', walletId: world.productWalletId, status: 'active',
+      remainingCents: 120_000 - LENA_SPEND - MARCUS_SPEND, remainingCredits: (120_000 - LENA_SPEND - MARCUS_SPEND).toLocaleString('en-US'),
+      mySpentCents: MARCUS_SPEND, mySpentCredits: MARCUS_SPEND.toLocaleString('en-US'),
+    }]);
+    // His own spend only: Lena's never appears in his list (SPEND-9).
+    expect(JSON.stringify(marcus.driveWallets)).not.toContain(String(LENA_SPEND));
     expect(marcus.seats).toEqual([expect.objectContaining({ orgId: world.orgId, orgName: 'Northwind Labs', walletId: world.poolId })]);
     expect(marcus.funds.pools).toEqual([]);
     expect(JSON.stringify(marcus)).not.toContain(String(POOL_CENTS));

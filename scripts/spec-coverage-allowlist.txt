@@ -167,14 +167,6 @@ UI-4
 UI-5
 UI-7
 UI-8
-# UI-9 (partial, ow-c6 + ui-wallet-surfaces): the routes (ow-c6) and the Drive Settings › Wallet page
-# (per-viewer panels from the real projection, pause, caps, top-up, donate, rules) are tested; the
-# canvas's per-member "today" spend and "via automations" split have no read model yet.
-UI-9
-# UI-10 (partial, ow-c6 + ui-wallet-surfaces): GET /api/wallets (with seat allowance, spent and left),
-# PUT /api/wallets/default and the Settings › Usage › Wallets page are tested; the canvas's per-drive
-# "you spent N" on a drive wallet you spend from has no read model yet.
-UI-10
 UI-11
 # WAL-1 (partial, ow-c1): the wallets table carries every WAL-1 field, the migration proves each
 # former credit_balances row became its user's personal root wallet to the cent, and the constraint

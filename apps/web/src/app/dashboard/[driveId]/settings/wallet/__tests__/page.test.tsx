@@ -67,7 +67,7 @@ const facts: DriveWalletFacts = {
     overshootChoice: null,
   },
   myCap: { dailyCapCents: 2_000, monthlyCapCents: null, spentTodayCents: 500, spentThisMonthCents: 500 },
-  spendByConsumer: [{ consumerKey: 'user:u-priya', userId: 'u-priya', displayName: 'Priya Nair', spentCents: PRIYA_SPEND }],
+  spendByConsumer: [{ consumerKey: 'user:u-priya', userId: 'u-priya', displayName: 'Priya Nair', spentCents: PRIYA_SPEND, spentTodayCents: 1_250, viaAutomationsCents: 7_300 }],
   pool: { walletId: 'w-pool', availableCents: POOL_CENTS, outstandingChildAllocationsCents: 120_000 },
 };
 
@@ -94,6 +94,21 @@ beforeEach(() => {
 });
 
 describe('Drive Settings › Wallet', () => {
+  it('UI-9 the Wallet page shows allocation, top-up, donations, who spends (with today and via automations), the fallback rule and spend this month', async () => {
+    viewAs('org_admin');
+    renderPage();
+    expect(screen.getByLabelText('Monthly allocation')).toBeTruthy();
+    expect(screen.getByText('One-off top-up')).toBeTruthy();
+    expect(screen.getByRole('switch', { name: 'Accept donations' })).toBeTruthy();
+    expect(screen.getByTestId('wallet-donate-card')).toBeTruthy();
+    expect(screen.getByRole('combobox', { name: 'Fallback rule' })).toBeTruthy();
+    const spend = screen.getByTestId('wallet-spend-card');
+    expect(within(spend).getByText('Spend this month')).toBeTruthy();
+    expect(spend.textContent).toContain('Priya Nair');
+    expect(spend.textContent).toContain('64,513 credits');
+    expect(within(spend).getByTestId('wallet-spend-split').textContent).toBe('1,250 today · 7,300 via automations');
+  });
+
   it('UI-9 (partial) SPEND-9 (partial) a MEMBER sees the remaining amount, their own cap and donate — never the pool, the allocation or anyone\'s spend', () => {
     viewAs('member');
     const { container } = renderPage();
