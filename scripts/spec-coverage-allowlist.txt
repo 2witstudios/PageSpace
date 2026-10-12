@@ -218,9 +218,6 @@ WAL-4
 # titled "WAL-5 (partial)". Still user-keyed: the gate's monthly reset and settle lock the personal
 # root by user (identical while every wallet charged is a personal root); C3 keys them on wallet.
 WAL-5
-# WAL-6 (partial, ow-c2): overshoot landing by funder choice, over state, once-per-period notice and
-# debt netting are pure logic; the hold/settle path, forgiveness at renewal and the notification are unproven.
-WAL-6
 # WAL-7 (partial, ow-c2): UTC caps, defaults and 80/100% thresholds are pure logic; caps on stored legs,
 # alert delivery and the kill switch control are unproven until C3/C6.
 WAL-7

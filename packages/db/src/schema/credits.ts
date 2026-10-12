@@ -40,7 +40,7 @@ export const creditLedger = pgTable('credit_ledger', {
   // WAL-5: the wallet this row moved money in or out of. For every row written before
   // wallets existed it is the user's personal root wallet (backfilled by 0303/0304).
   walletId: text('walletId').notNull().references(() => wallets.id, { onDelete: 'cascade' }),
-  entryType: text('entryType').notNull(), // 'monthly_grant' | 'topup_purchase' | 'usage' | 'adjustment' | 'missed_grant' (a paid invoice whose tier had no ratio: amountCents 0, for the reconcile cron to re-grant)
+  entryType: text('entryType').notNull(), // 'monthly_grant' | 'topup_purchase' | 'usage' | 'adjustment' | 'missed_grant' (a paid invoice whose tier had no ratio: amountCents 0, for the reconcile cron to re-grant) | 'donation' / 'wallet_topup' (a transfer pair: out of the payer, into the drive wallet) | 'allocation_draw' (a transfer pair: what a child wallet's spend drew from its parent's allocation, out of the parent and into the child) | 'seat_overshoot_month' / 'seat_overshoot_day' (attribution only, no money)
   bucket: text('bucket').notNull(), // 'monthly' | 'topup'
   amountCents: integer('amountCents').notNull(), // signed full intended charge: grants/purchases +, usage/debt -
   appliedCents: integer('appliedCents'), // signed amount actually decremented from the balance (usage rows). |applied| <= |amount|; the gap is debt recorded as an adjustment row.
@@ -59,6 +59,13 @@ export const creditLedger = pgTable('credit_ledger', {
   reconcileGenerationKey: text('reconcileGenerationKey'),
   /** AI spend, person-run compute or an env/app accrual — see {@link SPEND_KINDS}. Every kind counts toward the recorded person's seat. */
   spendKind: text('spendKind').$type<SpendKind>().default('ai').notNull(),
+  /**
+   * WAL-6b, on a usage CLAIM row: the chosen source's wallet a drive rule moved this call off (the
+   * hold's fallbackFromWalletId, or the turn's for a hold-less follow-on), recorded with the claim so
+   * a settle the backfill cron retries lands overshoot exactly where the in-line settle would have —
+   * never on the consumer. Null on every other row and on a call that did not fall back.
+   */
+  fallbackFromWalletId: text('fallbackFromWalletId').references(() => wallets.id, { onDelete: 'set null' }),
   createdAt: timestamp('createdAt', { mode: 'date', withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
   userIdx: index('credit_ledger_user_idx').on(table.userId, table.createdAt),

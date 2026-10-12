@@ -41,6 +41,11 @@ const MAX_PASSES = 50;
 export interface BackfillResult {
   retried: number;
   orphans: number;
+  /**
+   * Usage rows that cost money but name no wallet (WAL-6b fail closed): never charged to anyone
+   * by the sweep — they are reported here and logged for reconciliation.
+   */
+  unattributed: number;
   /** Stale holds reclaimed this run (a crashed stream's reservation never settled). */
   expiredHolds: number;
 }
@@ -101,7 +106,7 @@ export async function sweepExpiredHolds(opts: { now?: Date; userIds?: string[] }
 }
 
 export async function backfillCredits(): Promise<BackfillResult> {
-  if (!isBillingEnabled()) return { retried: 0, orphans: 0, expiredHolds: 0 };
+  if (!isBillingEnabled()) return { retried: 0, orphans: 0, unattributed: 0, expiredHolds: 0 };
 
   const now = new Date();
   const cutoff = new Date(now.getTime() - GRACE_MS);
@@ -111,6 +116,7 @@ export async function backfillCredits(): Promise<BackfillResult> {
 
   let retried = 0;
   let orphanCount = 0;
+  let unattributed = 0;
 
   // Fingerprint of the rows a pass fetched. If two consecutive passes fetch the
   // exact same set, nothing settled between them and re-running can't make
@@ -160,6 +166,9 @@ export async function backfillCredits(): Promise<BackfillResult> {
           notInArray(aiUsageLogs.provider, METERING_EXEMPT_PROVIDERS),
         ),
       )
+      // WAL-6b: rows that name a wallet first (ascending puts NULL last), so the unattributed rows
+      // the sweep never charges cannot fill a batch ahead of orphans it can settle.
+      .orderBy(aiUsageLogs.walletId)
       .limit(BATCH);
 
     if (pending.length === 0 && orphans.length === 0) break;
@@ -182,7 +191,7 @@ export async function backfillCredits(): Promise<BackfillResult> {
         if (action.kind === 'retry_pending') {
           await settlePendingLedgerRow(action.ledgerId);
           retried++;
-        } else {
+        } else if (action.kind === 'apply_orphan') {
           await consumeCredits({
             aiUsageLogId: action.aiUsageLogId,
             userId: action.userId,
@@ -190,8 +199,18 @@ export async function backfillCredits(): Promise<BackfillResult> {
             markupBpsOverride: action.markupBpsOverride,
             walletId: action.walletId,
             spendKind: action.spendKind,
+            ...(action.fallbackFromWalletId ? { fallbackFromWalletId: action.fallbackFromWalletId } : {}),
           });
           orphanCount++;
+        } else {
+          // WAL-6b fail closed: no wallet was chosen for this usage, so the sweep charges no one —
+          // never the recorded person by default. Reported for reconciliation, every run.
+          loggers.ai.error('billable AI usage names no wallet — not charged, left for reconciliation', new Error('unattributed usage'), {
+            aiUsageLogId: action.aiUsageLogId,
+            userId: action.userId,
+            costDollars: action.costDollars,
+          });
+          unattributed++;
         }
       } catch (error) {
         loggers.ai.warn('credit backfill action failed', {
@@ -222,5 +241,5 @@ export async function backfillCredits(): Promise<BackfillResult> {
     });
   }
 
-  return { retried, orphans: orphanCount, expiredHolds };
+  return { retried, orphans: orphanCount, unattributed, expiredHolds };
 }

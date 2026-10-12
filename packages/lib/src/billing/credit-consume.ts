@@ -24,7 +24,7 @@ import { wallets } from '@pagespace/db/schema/wallets';
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { and, eq, isNull, sql } from '@pagespace/db/operators';
 import { isBillingEnabled } from '../deployment-mode';
-import { chargeMillicents, accruePending, allocateSpend, applyPaymentToDebt } from './credit-core';
+import { chargeMillicents, accruePending, allocateSpend, applyPaymentToDebt, decideSettleTarget, type HoldSettleFacts, type SettleTarget } from './credit-core';
 import { allocateWalletSpend, settleOvershoot, seatOvershootDeltaMillicents, chosenSourceCharge, walletSourceKind, DEFAULT_OVERSHOOT_CHOICE, type ChosenSourceCharge, type OvershootFunderChoice } from './wallet-core';
 import { childWalletFunds, type WalletBalanceFacts } from './spend-target';
 import { readOrgSpendPolicy } from '../organizations/policy-reader';
@@ -35,7 +35,6 @@ import { parseWalletDraws, addWalletDraws, planWalletRefund, type WalletDraws } 
 import { MARKUP_BPS } from './credit-pricing';
 import { centsFromDollars } from './money-model';
 import { emitCreditsUpdated } from './credit-emit';
-import { ensurePersonalRootWalletId } from './personal-wallet';
 import { loggers } from '../logging/logger-config';
 import { notifyFunderOfWalletDebt } from './wallet-debt-notifier';
 import { notifyCapAlerts } from './wallet-cap-alerts';
@@ -55,15 +54,15 @@ export interface ConsumeCreditsInput {
   /**
    * The wallet the gate reserved on for this call (CreditGateResult.walletId), threaded
    * with the hold so the charge settles against exactly the wallet the call named (WAL-5).
-   * Absent only for callers that never gated a shared wallet (the reconcile cron's orphan
-   * path, un-gated system calls): those charge the payer's personal root wallet, as every
-   * charge did before wallets.
+   * A settle with no live hold and no wallet named charges NOTHING (WAL-6b fail closed,
+   * `unattributed`): it is logged and left for reconciliation, never defaulted onto the
+   * payer's own credits.
    */
   walletId?: string;
   /**
-   * WAL-6b for a call with NO hold of its own (a nested agent call inside a gated turn): the
-   * chosen wallet the turn's fallback moved off (spendFallbackFromWalletId of its target).
-   * A hold that names one wins; this only fills in where there is no hold to read it from.
+   * WAL-6b for a call whose hold cannot say it: the chosen wallet a drive rule moved the call
+   * off (a hold-less follow-on's turn origin, or the orphan sweep reading the usage row). A live
+   * hold that names one wins. Recorded on the claim row, so a retried settle lands the same way.
    */
   fallbackFromWalletId?: string;
   /**
@@ -134,13 +133,12 @@ async function decrementAndSettle(
   walletId: string,
   chargeMc: number,
   aiUsageLogId: string | null,
-  holdId: string | null = null,
-  spendKind: SpendKind = 'ai',
-  carriedFallbackFromWalletId: string | null = null,
+  holdId: string | null,
+  spendKind: SpendKind,
+  // WAL-6b: the source a drive rule moved this call off, as its claim row records it (the hold's,
+  // else what the caller carried), so the in-line settle and a cron retry land overshoot alike.
+  fallbackFromWalletId: string | null,
 ): Promise<SettleOutcome | null> {
-  // WAL-6b: the hold names the source a drive rule moved this call off, if it did; read before
-  // the hold is released below. A call with no hold uses what its turn carried.
-  const fallbackFromWalletId = (holdId ? await holdFallbackFromWalletId(tx, holdId) : null) ?? carriedFallbackFromWalletId;
   const settled = await chargeWallet(tx, walletId, chargeMc, aiUsageLogId, fallbackFromWalletId);
 
   // No balance row yet (e.g. an existing user before the gate lazy-inits one).
@@ -307,11 +305,6 @@ type LockedWallet = WalletBalanceFacts & {
   overshootChoice: OvershootFunderChoice | null;
   ownerType: 'user' | 'org';
 };
-
-async function holdFallbackFromWalletId(tx: Tx, holdId: string): Promise<string | null> {
-  const [hold] = await tx.select({ id: creditHolds.fallbackFromWalletId }).from(creditHolds).where(eq(creditHolds.id, holdId));
-  return hold?.id ?? null;
-}
 
 /**
  * WAL-6b: the chosen source a drive rule moved this call off, locked BEFORE the charged root in
@@ -632,39 +625,34 @@ async function settleOnChildWallet(
  *                 error, reported rather than folded into `deferred` so it cannot
  *                 be mistaken for work a cron will finish.
  */
-export type CreditSettleStatus = 'settled' | 'deferred' | 'unbillable' | 'refused';
+export type CreditSettleStatus = 'settled' | 'deferred' | 'unbillable' | 'refused' | 'unattributed';
 
 /** The wallet a hold reserves on, or null when the hold no longer exists (settled, released, expired). */
 export async function holdWalletId(holdId: string): Promise<string | null> {
-  const [hold] = await db.select({ walletId: creditHolds.walletId }).from(creditHolds).where(eq(creditHolds.id, holdId));
-  return hold?.walletId ?? null;
+  return (await holdSettleFacts(holdId))?.walletId ?? null;
+}
+
+/** What a live hold says about its call (its wallet and fallback origin), or null when it is gone. */
+export async function holdSettleFacts(holdId: string): Promise<HoldSettleFacts | null> {
+  const [hold] = await db
+    .select({ walletId: creditHolds.walletId, fallbackFromWalletId: creditHolds.fallbackFromWalletId })
+    .from(creditHolds)
+    .where(eq(creditHolds.id, holdId));
+  return hold ?? null;
 }
 
 /**
- * The wallet a call settles on (WAL-5). The gate's hold names the wallet the call was
- * admitted against. When the caller ALSO names the wallet it means to charge and the two
- * disagree, the settle FAILS CLOSED (review 5343636479 P1-1): neither wallet is charged.
- * Letting the hold win (#2726) turned a payer that changed mid-run — a drive moved into or
- * out of an org while its app was awake — into a charge on the wrong party, a person
- * paying for an org's compute, with only a log line as a trace. Callers whose payer can
- * change mid-run release and re-acquire the hold on the right wallet before settling
- * (app-lifecycle-metering, awake-meter); anything that still reaches here mismatched is
- * refused, not re-routed. With no hold (the reconcile cron, an expired hold), the caller's
- * wallet, else the payer's personal root, as before wallets.
+ * The wallet a call settles on (WAL-5) and the fallback origin it carries (WAL-6b), decided by
+ * the pure decideSettleTarget: the live hold's wallet, a mismatch refused (review 5343636479
+ * P1-1: callers whose payer can change mid-run re-acquire the hold first), the wallet the caller
+ * names, or — with neither — nothing at all (fail closed).
  */
-async function settleWalletId(
-  input: ConsumeCreditsInput,
-): Promise<{ walletId: string } | { mismatch: { holdWalletId: string; requestedWalletId: string } }> {
-  if (input.holdId) {
-    const held = await holdWalletId(input.holdId);
-    if (held !== null) {
-      if (input.walletId !== undefined && input.walletId !== held) {
-        return { mismatch: { holdWalletId: held, requestedWalletId: input.walletId } };
-      }
-      return { walletId: held };
-    }
-  }
-  return { walletId: input.walletId ?? (await ensurePersonalRootWalletId(db, input.userId)) };
+async function settleTarget(input: ConsumeCreditsInput): Promise<SettleTarget> {
+  return decideSettleTarget({
+    hold: input.holdId ? await holdSettleFacts(input.holdId) : null,
+    requestedWalletId: input.walletId,
+    carriedFallbackFromWalletId: input.fallbackFromWalletId ?? null,
+  });
 }
 
 /**
@@ -742,12 +730,25 @@ export async function consumeCredits(input: ConsumeCreditsInput): Promise<Credit
   // as debt, which their first grant then nets (see personal-wallet).
   let ledgerId: string;
   let walletId: string;
+  let fallbackFromWalletId: string | null;
   // The claim row's time: the window its call counts in (consumer-caps dates calls by it).
   let claimedAt = new Date();
   try {
-    const resolved = await settleWalletId(input);
-    if ('mismatch' in resolved) return await refuseMismatchedSettle(input, resolved.mismatch, realCostCents, markupBps);
+    const resolved = await settleTarget(input);
+    if (resolved.kind === 'mismatch') return await refuseMismatchedSettle(input, resolved, realCostCents, markupBps);
+    if (resolved.kind === 'unattributed') {
+      // WAL-6b fail closed: no wallet was chosen for this charge, so none is charged. The usage
+      // row stays unclaimed and names no wallet; the backfill sweep reports it, never bills it.
+      loggers.ai.error('credit settle UNATTRIBUTED: no live hold and no wallet named — nothing charged, left for reconciliation', new Error('settle names no wallet'), {
+        aiUsageLogId: input.aiUsageLogId,
+        userId: input.userId,
+        holdId: input.holdId,
+      });
+      if (input.holdId) await db.delete(creditHolds).where(eq(creditHolds.id, input.holdId));
+      return 'unattributed';
+    }
     walletId = resolved.walletId;
+    fallbackFromWalletId = resolved.fallbackFromWalletId;
     const claimed = await db
       .insert(creditLedger)
       .values({
@@ -762,6 +763,7 @@ export async function consumeCredits(input: ConsumeCreditsInput): Promise<Credit
         markupBps,
         consumeStatus: 'pending',
         spendKind: input.spendKind ?? 'ai',
+        fallbackFromWalletId,
       })
       // The unique index on aiUsageLogId is partial (WHERE aiUsageLogId IS NOT NULL
       // AND entryType = 'usage'); Postgres can only infer it as the conflict arbiter
@@ -839,7 +841,7 @@ export async function consumeCredits(input: ConsumeCreditsInput): Promise<Credit
         input.aiUsageLogId,
         input.holdId ?? null,
         input.spendKind ?? 'ai',
-        input.fallbackFromWalletId ?? null,
+        fallbackFromWalletId,
       );
     });
     // A committed transaction that decremented NOTHING (no balance row yet) left
@@ -917,6 +919,7 @@ export async function settlePendingLedgerRow(ledgerId: string): Promise<void> {
           aiUsageLogId: string | null;
           consumeStatus: string;
           spendKind: SpendKind;
+          fallbackFromWalletId: string | null;
           createdAt: Date;
         }
       | undefined;
@@ -927,7 +930,9 @@ export async function settlePendingLedgerRow(ledgerId: string): Promise<void> {
     const chargeMc = row.chargeMillicents ?? Math.abs(row.amountCents) * 1000;
     // Settle against the wallet the claim named (WAL-5), never re-derived from the user.
     // The debt row keeps the claim's kind, so compute debt never reads as a seat draw.
-    const outcome = await decrementAndSettle(tx, ledgerId, row.userId, row.walletId, chargeMc, row.aiUsageLogId, null, row.spendKind);
+    // WAL-6b: the claim carries the fallback origin, so a retried fallback settle lands overshoot
+    // where the in-line settle would have — never on the consumer.
+    const outcome = await decrementAndSettle(tx, ledgerId, row.userId, row.walletId, chargeMc, row.aiUsageLogId, null, row.spendKind, row.fallbackFromWalletId);
     if (outcome) settled = { userId: row.userId, walletId: row.walletId, outcome, at: row.createdAt };
   });
   // A pending row settled this run (cron retry): push the user's fresh balance so a

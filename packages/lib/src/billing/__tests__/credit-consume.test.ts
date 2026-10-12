@@ -13,15 +13,13 @@ const mockAiLogger = vi.hoisted(() => ({ debug: vi.fn(), warn: vi.fn(), error: v
 const mockEmitCreditsUpdated = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 
 vi.mock('@pagespace/db/db', () => ({ db: mockDb }));
-const mockEnsurePersonalRootWalletId = vi.hoisted(() => vi.fn().mockResolvedValue('w_root'));
 vi.mock('@pagespace/db/schema/wallets', () => ({
   wallets: { id: 'w.id', userId: 'w.userId', monthlyRemainingCents: 'w.monthly', topupRemainingCents: 'w.topup', pendingMillicents: 'w.pending', debtCents: 'w.debt' },
   personalRootWalletOf: vi.fn((userId: string) => ({ op: 'personalRootWalletOf', userId })),
 }));
-vi.mock('../personal-wallet', () => ({ ensurePersonalRootWalletId: mockEnsurePersonalRootWalletId }));
 vi.mock('@pagespace/db/schema/credits', () => ({
   creditLedger: { id: 'cl.id', aiUsageLogId: 'cl.aiUsageLogId', entryType: 'cl.entryType' },
-  creditHolds: { id: 'ch.id', walletId: 'ch.walletId' },
+  creditHolds: { id: 'ch.id', walletId: 'ch.walletId', fallbackFromWalletId: 'ch.fallbackFromWalletId' },
 }));
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((a, b) => ({ op: 'eq', a, b })),
@@ -68,7 +66,7 @@ describe('consumeCredits', () => {
 
   it('does nothing when billing is disabled (tenant/onprem)', async () => {
     mockIsBillingEnabled.mockReturnValue(false);
-    await consumeCredits({ aiUsageLogId: 'aul_1', userId: 'u1', costDollars: 1 });
+    await consumeCredits({ aiUsageLogId: 'aul_1', userId: 'u1', walletId: 'w_root', costDollars: 1 });
     expect(mockDb.insert).not.toHaveBeenCalled();
     expect(mockDb.transaction).not.toHaveBeenCalled();
   });
@@ -90,7 +88,7 @@ describe('consumeCredits', () => {
       await cb(tx);
     });
 
-    await consumeCredits({ aiUsageLogId: 'aul_1', userId: 'u1', costDollars: 1 });
+    await consumeCredits({ aiUsageLogId: 'aul_1', userId: 'u1', walletId: 'w_root', costDollars: 1 });
 
     expect(mockDb.transaction).toHaveBeenCalledTimes(1);
     expect(captured.balanceSet).toEqual({ monthlyRemainingCents: 0, topupRemainingCents: 950, pendingMillicents: 0 });
@@ -119,7 +117,7 @@ describe('consumeCredits', () => {
       await cb(tx);
     });
 
-    await consumeCredits({ aiUsageLogId: 'aul_short', userId: 'u1', costDollars: 1 });
+    await consumeCredits({ aiUsageLogId: 'aul_short', userId: 'u1', walletId: 'w_root', costDollars: 1 });
 
     expect(captured.balanceSet).toMatchObject({ monthlyRemainingCents: 0, topupRemainingCents: 0, pendingMillicents: 0 });
     // debtCents is bumped by the uncovered 100 via a `debtCents + 100` SQL expression.
@@ -161,7 +159,7 @@ describe('consumeCredits', () => {
       await cb(tx);
     });
 
-    await consumeCredits({ aiUsageLogId: 'aul_exp', userId: 'u1', costDollars: 1 });
+    await consumeCredits({ aiUsageLogId: 'aul_exp', userId: 'u1', walletId: 'w_root', costDollars: 1 });
 
     // Rollover: monthly drawn first (300 → 150), top-up untouched.
     expect(captured.balanceSet).toEqual({ monthlyRemainingCents: 150, topupRemainingCents: 1000, pendingMillicents: 0 });
@@ -183,7 +181,7 @@ describe('consumeCredits', () => {
       await cb(tx);
     });
 
-    await consumeCredits({ aiUsageLogId: 'aul_ok', userId: 'u1', costDollars: 1 });
+    await consumeCredits({ aiUsageLogId: 'aul_ok', userId: 'u1', walletId: 'w_root', costDollars: 1 });
     expect(insertCalled).toBe(false);
   });
 
@@ -206,7 +204,7 @@ describe('consumeCredits', () => {
       await cb(tx);
     });
 
-    await consumeCredits({ aiUsageLogId: 'aul_sub', userId: 'u1', costDollars: 0.0033 });
+    await consumeCredits({ aiUsageLogId: 'aul_sub', userId: 'u1', walletId: 'w_root', costDollars: 0.0033 });
 
     // Not skipped — the transaction ran and the fraction was banked.
     expect(mockDb.transaction).toHaveBeenCalledTimes(1);
@@ -221,7 +219,7 @@ describe('consumeCredits', () => {
     mockDb.insert.mockReturnValue({ values: vi.fn().mockReturnValue({ onConflictDoNothing: onConflict }) });
     mockDb.transaction.mockResolvedValue(undefined);
 
-    await consumeCredits({ aiUsageLogId: 'aul_1', userId: 'u1', costDollars: 1 });
+    await consumeCredits({ aiUsageLogId: 'aul_1', userId: 'u1', walletId: 'w_root', costDollars: 1 });
 
     expect(onConflict).toHaveBeenCalledTimes(1);
     const arg = onConflict.mock.calls[0][0] as { target?: unknown; where?: unknown };
@@ -239,21 +237,20 @@ describe('consumeCredits', () => {
     });
     mockDb.transaction.mockResolvedValue(undefined);
 
-    await consumeCredits({ aiUsageLogId: 'aul_1', userId: 'u1', costDollars: 0.0033 });
+    await consumeCredits({ aiUsageLogId: 'aul_1', userId: 'u1', walletId: 'w_root', costDollars: 0.0033 });
 
     // $0.0033 ×1.5 = 0.495 cents = 495 millicents; nominal whole-cent amount rounds to 0.
     expect(claimValues).toMatchObject({ entryType: 'usage', chargeMillicents: 495, amountCents: 0 });
-    // WAL-5: the claim names the payer's personal root wallet.
-    expect(mockEnsurePersonalRootWalletId).toHaveBeenCalledWith(mockDb, 'u1');
-    expect(claimValues).toMatchObject({ walletId: 'w_root' });
+    // WAL-5: the claim names the wallet the call named.
+    expect(claimValues).toMatchObject({ walletId: 'w_root', fallbackFromWalletId: null });
   });
 
-  it('WAL-5 (partial): defers without writing a claim when the payer wallet cannot be resolved', async () => {
-    mockEnsurePersonalRootWalletId.mockRejectedValueOnce(new Error('db down'));
+  it('WAL-6 (partial): with no live hold and no wallet named the settle FAILS CLOSED — no claim, no charge, never the person\'s own wallet by default', async () => {
+    mockDb.delete.mockReturnValue({ where: vi.fn().mockResolvedValue(undefined) });
+    const status = await consumeCredits({ aiUsageLogId: 'aul_nowallet', userId: 'u1', costDollars: 1, holdId: 'hold_expired' });
 
-    const status = await consumeCredits({ aiUsageLogId: 'aul_nowallet', userId: 'u1', costDollars: 1 });
-
-    expect(status).toBe('deferred');
+    expect(status).toBe('unattributed');
+    expect(mockAiLogger.error).toHaveBeenCalledWith(expect.stringContaining('UNATTRIBUTED'), expect.any(Error), expect.objectContaining({ aiUsageLogId: 'aul_nowallet', holdId: 'hold_expired' }));
     expect(mockDb.insert).not.toHaveBeenCalled();
     expect(mockDb.transaction).not.toHaveBeenCalled();
   });
@@ -272,7 +269,7 @@ describe('consumeCredits', () => {
     });
     mockDb.transaction.mockResolvedValue(undefined);
 
-    await consumeCredits({ aiUsageLogId: 'aul_override', userId: 'u1', costDollars: 1, markupBpsOverride: 20000 });
+    await consumeCredits({ aiUsageLogId: 'aul_override', userId: 'u1', walletId: 'w_root', costDollars: 1, markupBpsOverride: 20000 });
 
     expect(claimValues).toMatchObject({ chargeMillicents: 200000, markupBps: 20000 });
   });
@@ -291,7 +288,7 @@ describe('consumeCredits', () => {
       await cb(tx);
     });
 
-    await consumeCredits({ aiUsageLogId: 'aul_1', userId: 'u1', costDollars: 1 });
+    await consumeCredits({ aiUsageLogId: 'aul_1', userId: 'u1', walletId: 'w_root', costDollars: 1 });
 
     // Neither the balance nor the ledger is updated -> the row stays 'pending'.
     expect(update).not.toHaveBeenCalled();
@@ -308,7 +305,7 @@ describe('consumeCredits', () => {
       .mockReturnValueOnce({ set: (v: Record<string, unknown>) => { ledgerSet = v; return { where }; } })
       .mockReturnValue(usageWalletUpdate());
 
-    await consumeCredits({ aiUsageLogId: 'aul_free', userId: 'u1', costDollars: 0 });
+    await consumeCredits({ aiUsageLogId: 'aul_free', userId: 'u1', walletId: 'w_root', costDollars: 0 });
 
     expect(mockDb.transaction).not.toHaveBeenCalled();
     expect(mockDb.update).toHaveBeenCalledTimes(2);
@@ -317,15 +314,15 @@ describe('consumeCredits', () => {
   });
 
   it('skips an invalid cost (negative or non-finite) without claiming a ledger row', async () => {
-    await consumeCredits({ aiUsageLogId: 'aul_neg', userId: 'u1', costDollars: -5 });
-    await consumeCredits({ aiUsageLogId: 'aul_nan', userId: 'u1', costDollars: Number.NaN });
+    await consumeCredits({ aiUsageLogId: 'aul_neg', userId: 'u1', walletId: 'w_root', costDollars: -5 });
+    await consumeCredits({ aiUsageLogId: 'aul_nan', userId: 'u1', walletId: 'w_root', costDollars: Number.NaN });
     expect(mockDb.insert).not.toHaveBeenCalled();
     expect(mockDb.transaction).not.toHaveBeenCalled();
   });
 
   it('is idempotent: a duplicate aiUsageLogId (conflict) skips the decrement', async () => {
     mockDb.insert.mockReturnValue(claimReturning([])); // conflict -> no row returned
-    await consumeCredits({ aiUsageLogId: 'aul_dup', userId: 'u1', costDollars: 1 });
+    await consumeCredits({ aiUsageLogId: 'aul_dup', userId: 'u1', walletId: 'w_root', costDollars: 1 });
     expect(mockDb.transaction).not.toHaveBeenCalled();
   });
 
@@ -335,7 +332,7 @@ describe('consumeCredits', () => {
     // Never THROWS — but it no longer resolves as though nothing happened either:
     // `deferred` is what says the backfill cron still owes this charge.
     await expect(
-      consumeCredits({ aiUsageLogId: 'aul_1', userId: 'u1', costDollars: 1 }),
+      consumeCredits({ aiUsageLogId: 'aul_1', userId: 'u1', walletId: 'w_root', costDollars: 1 }),
     ).resolves.toBe('deferred');
     expect(mockAiLogger.warn).toHaveBeenCalled();
   });
@@ -345,7 +342,7 @@ describe('consumeCredits', () => {
     const fatal = Object.assign(new Error('sorry, too many clients already'), { code: '53300' });
     mockDb.transaction.mockRejectedValueOnce(Object.assign(new Error('Failed query: update "wallets"'), { cause: fatal }));
 
-    await expect(consumeCredits({ aiUsageLogId: 'aul_1', userId: 'u1', costDollars: 1 })).resolves.toBe('deferred');
+    await expect(consumeCredits({ aiUsageLogId: 'aul_1', userId: 'u1', walletId: 'w_root', costDollars: 1 })).resolves.toBe('deferred');
 
     expect(mockAiLogger.warn).toHaveBeenCalledWith('credit consume failed', expect.objectContaining({
       error: 'Failed query: update "wallets"',
@@ -369,7 +366,7 @@ describe('consumeCredits', () => {
         update: vi.fn().mockReturnValue({ set: () => ({ where: noopWhere }) }),
       });
     });
-    expect(await consumeCredits({ aiUsageLogId: 'aul_ok', userId: 'u1', costDollars: 1 })).toBe('settled');
+    expect(await consumeCredits({ aiUsageLogId: 'aul_ok', userId: 'u1', walletId: 'w_root', costDollars: 1 })).toBe('settled');
   });
 
   it('reports deferred when the transaction COMMITS but decremented nothing (no balance row yet)', async () => {
@@ -383,7 +380,7 @@ describe('consumeCredits', () => {
         update: vi.fn(),
       });
     });
-    expect(await consumeCredits({ aiUsageLogId: 'aul_nobal', userId: 'u1', costDollars: 1 })).toBe('deferred');
+    expect(await consumeCredits({ aiUsageLogId: 'aul_nobal', userId: 'u1', walletId: 'w_root', costDollars: 1 })).toBe('deferred');
   });
 
   it('reports deferred when the ledger CLAIM itself fails (no row for the pending sweep, orphan sweep owns it)', async () => {
@@ -394,33 +391,33 @@ describe('consumeCredits', () => {
         }),
       }),
     });
-    expect(await consumeCredits({ aiUsageLogId: 'aul_claim', userId: 'u1', costDollars: 1 })).toBe('deferred');
+    expect(await consumeCredits({ aiUsageLogId: 'aul_claim', userId: 'u1', walletId: 'w_root', costDollars: 1 })).toBe('deferred');
   });
 
   it('reports settled for a billing-disabled deployment and for an already-claimed duplicate', async () => {
     mockIsBillingEnabled.mockReturnValue(false);
-    expect(await consumeCredits({ aiUsageLogId: 'aul_off', userId: 'u1', costDollars: 1 })).toBe('settled');
+    expect(await consumeCredits({ aiUsageLogId: 'aul_off', userId: 'u1', walletId: 'w_root', costDollars: 1 })).toBe('settled');
 
     mockIsBillingEnabled.mockReturnValue(true);
     mockDb.insert.mockReturnValue(claimReturning([])); // conflict -> already consumed
-    expect(await consumeCredits({ aiUsageLogId: 'aul_dup2', userId: 'u1', costDollars: 1 })).toBe('settled');
+    expect(await consumeCredits({ aiUsageLogId: 'aul_dup2', userId: 'u1', walletId: 'w_root', costDollars: 1 })).toBe('settled');
   });
 
   it('reports unbillable for a cost that is not a finite non-negative number', async () => {
     // Neither settled nor recoverable: there is nothing for a cron to finish, which
     // is exactly why it is not folded into `deferred`.
-    expect(await consumeCredits({ aiUsageLogId: 'aul_bad', userId: 'u1', costDollars: Number.NaN })).toBe('unbillable');
+    expect(await consumeCredits({ aiUsageLogId: 'aul_bad', userId: 'u1', walletId: 'w_root', costDollars: Number.NaN })).toBe('unbillable');
   });
 
   it('reports settled for a zero-charge call and deferred when marking it skipped fails', async () => {
     mockDb.insert.mockReturnValue(claimReturning([{ id: 'led_zero' }]));
     const where = vi.fn().mockResolvedValue(undefined);
     mockDb.update.mockReturnValue({ set: () => ({ where }) });
-    expect(await consumeCredits({ aiUsageLogId: 'aul_free2', userId: 'u1', costDollars: 0 })).toBe('settled');
+    expect(await consumeCredits({ aiUsageLogId: 'aul_free2', userId: 'u1', walletId: 'w_root', costDollars: 0 })).toBe('settled');
 
     mockDb.insert.mockReturnValue(claimReturning([{ id: 'led_zero2' }]));
     mockDb.update.mockReturnValue({ set: () => ({ where: vi.fn().mockRejectedValue(new Error('boom')) }) });
-    expect(await consumeCredits({ aiUsageLogId: 'aul_free3', userId: 'u1', costDollars: 0 })).toBe('deferred');
+    expect(await consumeCredits({ aiUsageLogId: 'aul_free3', userId: 'u1', walletId: 'w_root', costDollars: 0 })).toBe('deferred');
   });
 
   it('releases the gate hold inside the settle transaction when a holdId is threaded through', async () => {
@@ -441,6 +438,7 @@ describe('consumeCredits', () => {
       };
       await cb(tx);
     });
+    mockDb.select.mockReturnValue({ from: () => ({ where: () => Promise.resolve([{ walletId: 'w_root', fallbackFromWalletId: null }]) }) });
 
     await consumeCredits({ aiUsageLogId: 'aul_1', userId: 'u1', costDollars: 1, holdId: 'hold_42' });
 
@@ -464,7 +462,7 @@ describe('consumeCredits', () => {
       await cb(tx);
     });
 
-    await consumeCredits({ aiUsageLogId: 'aul_1', userId: 'u1', costDollars: 1 });
+    await consumeCredits({ aiUsageLogId: 'aul_1', userId: 'u1', walletId: 'w_root', costDollars: 1 });
     expect(txDelete).not.toHaveBeenCalled();
   });
 
@@ -473,6 +471,7 @@ describe('consumeCredits', () => {
     mockDb.update.mockReturnValue({ set: () => ({ where: vi.fn().mockResolvedValue(undefined) }) });
     const deleteWhere = vi.fn().mockResolvedValue(undefined);
     mockDb.delete.mockReturnValue({ where: deleteWhere });
+    mockDb.select.mockReturnValue({ from: () => ({ where: () => Promise.resolve([{ walletId: 'w_root', fallbackFromWalletId: null }]) }) });
 
     await consumeCredits({ aiUsageLogId: 'aul_free', userId: 'u1', costDollars: 0, holdId: 'hold_free' });
 

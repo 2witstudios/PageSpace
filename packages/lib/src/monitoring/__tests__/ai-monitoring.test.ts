@@ -27,6 +27,7 @@ vi.mock('../../logging/logger-database', () => ({
 vi.mock('../../billing/credit-consume', () => ({
   consumeCredits: mockConsumeCredits,
   releaseHold: mockReleaseHold,
+  holdSettleFacts: vi.fn().mockResolvedValue(null),
 }));
 
 vi.mock('../../logging/logger-config', () => ({

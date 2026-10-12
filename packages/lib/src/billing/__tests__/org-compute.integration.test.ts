@@ -653,13 +653,13 @@ describe('a payer change while an app is awake', () => {
 // ---------------------------------------------------------------------------------------------
 
 describe('settling an org compute charge', () => {
-  it('WAL-9 (partial) a charge that names the org pool and compute lands there, marked compute — and a personal default stays ai', async () => {
+  it('WAL-9 (partial) a charge that names the org pool and compute lands there, marked compute — and one naming the member\'s own wallet stays ai', async () => {
     const w = (world = await build({ poolCents: FUNDED }));
     const [orgLog] = await db.insert(aiUsageLogs).values({ id: createId(), userId: w.leadId, provider: 'fly', model: 'x', cost: 0.5, source: 'terminal', timestamp: new Date() }).returning();
     const [aiLog] = await db.insert(aiUsageLogs).values({ id: createId(), userId: w.memberId, provider: 'openrouter', model: 'y', cost: 0.5, source: 'chat', timestamp: new Date() }).returning();
 
     await consumeCredits({ aiUsageLogId: orgLog.id, userId: w.leadId, costDollars: 0.5, walletId: w.poolId, spendKind: 'compute' });
-    await consumeCredits({ aiUsageLogId: aiLog.id, userId: w.memberId, costDollars: 0.5 });
+    await consumeCredits({ aiUsageLogId: aiLog.id, userId: w.memberId, walletId: w.memberWalletId, costDollars: 0.5 });
 
     const [orgRow] = await db.select().from(creditLedger).where(and(eq(creditLedger.aiUsageLogId, orgLog.id), eq(creditLedger.entryType, 'usage')));
     const [aiRow] = await db.select().from(creditLedger).where(and(eq(creditLedger.aiUsageLogId, aiLog.id), eq(creditLedger.entryType, 'usage')));

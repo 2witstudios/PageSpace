@@ -112,7 +112,7 @@ describe('the money path writes every row against the personal root wallet', () 
       const gate = await canConsumeAI(user.id, 'free', { spend: PERSONAL_SPEND });
       expect(gate.allowed).toBe(true);
       expect(await consumeCredits({ aiUsageLogId: `log_paid_${user.id}`, userId: user.id, costDollars: 0.1, holdId: gate.holdId })).toBe('settled');
-      expect(await consumeCredits({ aiUsageLogId: `log_free_${user.id}`, userId: user.id, costDollars: 0 })).toBe('settled');
+      expect(await consumeCredits({ aiUsageLogId: `log_free_${user.id}`, userId: user.id, walletId: gate.walletId, costDollars: 0 })).toBe('settled');
 
       const [root] = await db.select({ id: wallets.id }).from(wallets).where(personalRootWalletOf(user.id));
       const logs = await db.select({ id: aiUsageLogs.id, walletId: aiUsageLogs.walletId }).from(aiUsageLogs).where(eq(aiUsageLogs.userId, user.id));

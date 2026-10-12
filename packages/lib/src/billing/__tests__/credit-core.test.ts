@@ -16,6 +16,7 @@ import {
   applyPaymentToDebt,
   classifyStripeEvent,
   computeBackfillActions,
+  decideSettleTarget,
   orphanSpendKind,
   computeCostDrift,
   computeBalanceDrift,
@@ -576,9 +577,48 @@ describe('computeBackfillActions — orphan wallet and spend kind', () => {
     expect(action).toEqual({ kind: 'apply_orphan', aiUsageLogId: 'aul_org', userId: 'lead', costDollars: 0.02, walletId: 'pool-1', spendKind: 'compute' });
   });
 
-  it('an orphan that named no wallet keeps charging the personal root, as an AI call', () => {
-    const [action] = computeBackfillActions([], [{ aiUsageLogId: 'a', userId: 'u', costDollars: 1, walletId: null, metadata: {} }], {});
-    expect(action).toEqual({ kind: 'apply_orphan', aiUsageLogId: 'a', userId: 'u', costDollars: 1, spendKind: 'ai' });
+  it('WAL-6 (partial) an orphan that named no wallet is charged to NOBODY: it is left unattributed for reconciliation, never defaulted onto the person', () => {
+    for (const walletId of [null, undefined, '']) {
+      const [action] = computeBackfillActions([], [{ aiUsageLogId: 'a', userId: 'u', costDollars: 1, walletId, metadata: {} }], {});
+      expect(action).toEqual({ kind: 'unattributed_orphan', aiUsageLogId: 'a', userId: 'u', costDollars: 1 });
+    }
+  });
+
+  it('WAL-6 (partial) an orphan whose call fell back carries the chosen wallet it moved off into the re-settle, so its overshoot lands there and not on the consumer', () => {
+    const [action] = computeBackfillActions(
+      [],
+      [{ aiUsageLogId: 'a', userId: 'u', costDollars: 1, walletId: 'w-own', metadata: { fallbackFromWalletId: 'w-drive' } }],
+      {},
+    );
+    expect(action).toEqual({ kind: 'apply_orphan', aiUsageLogId: 'a', userId: 'u', costDollars: 1, walletId: 'w-own', spendKind: 'ai', fallbackFromWalletId: 'w-drive' });
+    // A malformed marker carries nothing.
+    expect(computeBackfillActions([], [{ aiUsageLogId: 'a', userId: 'u', costDollars: 1, walletId: 'w-own', metadata: { fallbackFromWalletId: 7 } }], {})[0])
+      .not.toHaveProperty('fallbackFromWalletId');
+  });
+});
+
+describe('decideSettleTarget — the wallet a settle charges (WAL-5, WAL-6b)', () => {
+  it('WAL-6 (partial) a live hold names the wallet, and its fallback origin wins over a carried one', () => {
+    expect(decideSettleTarget({ hold: { walletId: 'w-own', fallbackFromWalletId: 'w-drive' }, requestedWalletId: undefined, carriedFallbackFromWalletId: 'w-other' }))
+      .toEqual({ kind: 'charge', walletId: 'w-own', fallbackFromWalletId: 'w-drive' });
+    expect(decideSettleTarget({ hold: { walletId: 'w-own', fallbackFromWalletId: null }, requestedWalletId: 'w-own', carriedFallbackFromWalletId: 'w-drive' }))
+      .toEqual({ kind: 'charge', walletId: 'w-own', fallbackFromWalletId: 'w-drive' });
+  });
+
+  it('a charge naming another wallet than its live hold is refused: neither is charged', () => {
+    expect(decideSettleTarget({ hold: { walletId: 'w-pool', fallbackFromWalletId: null }, requestedWalletId: 'w-own', carriedFallbackFromWalletId: null }))
+      .toEqual({ kind: 'mismatch', holdWalletId: 'w-pool', requestedWalletId: 'w-own' });
+  });
+
+  it('with no live hold the wallet the caller names is charged, carrying its fallback origin', () => {
+    expect(decideSettleTarget({ hold: null, requestedWalletId: 'w-drive', carriedFallbackFromWalletId: null }))
+      .toEqual({ kind: 'charge', walletId: 'w-drive', fallbackFromWalletId: null });
+  });
+
+  it('WAL-6 (partial) with no live hold and no wallet named, the settle FAILS CLOSED: nothing is charged, never the person\'s own wallet by default', () => {
+    for (const requestedWalletId of [undefined, '']) {
+      expect(decideSettleTarget({ hold: null, requestedWalletId, carriedFallbackFromWalletId: 'w-drive' })).toEqual({ kind: 'unattributed' });
+    }
   });
 });
 
@@ -597,13 +637,13 @@ describe('computeBackfillActions', () => {
   it('plans a retry for each pending ledger row and an apply for each orphan usage row', () => {
     const actions = computeBackfillActions(
       [{ id: 'led_1' }, { id: 'led_2' }],
-      [{ aiUsageLogId: 'aul_1', userId: 'u1', costDollars: 0.5 }],
+      [{ aiUsageLogId: 'aul_1', userId: 'u1', costDollars: 0.5, walletId: 'w1' }],
       { terminal: 15000 },
     );
     expect(actions).toEqual([
       { kind: 'retry_pending', ledgerId: 'led_1' },
       { kind: 'retry_pending', ledgerId: 'led_2' },
-      { kind: 'apply_orphan', aiUsageLogId: 'aul_1', userId: 'u1', costDollars: 0.5, spendKind: 'ai' },
+      { kind: 'apply_orphan', aiUsageLogId: 'aul_1', userId: 'u1', costDollars: 0.5, walletId: 'w1', spendKind: 'ai' },
     ]);
   });
 
@@ -618,11 +658,11 @@ describe('computeBackfillActions', () => {
     // rather than silently falling back to the general AI markup.
     const actions = computeBackfillActions(
       [],
-      [{ aiUsageLogId: 'aul_term', userId: 'u1', costDollars: 0.02, source: 'terminal' }],
+      [{ aiUsageLogId: 'aul_term', userId: 'u1', costDollars: 0.02, source: 'terminal', walletId: 'w1' }],
       { terminal: 20000 }, // a distinct value from the general markup, so passthrough is provable
     );
     expect(actions).toEqual([
-      { kind: 'apply_orphan', aiUsageLogId: 'aul_term', userId: 'u1', costDollars: 0.02, markupBpsOverride: 20000, spendKind: 'ai' },
+      { kind: 'apply_orphan', aiUsageLogId: 'aul_term', userId: 'u1', costDollars: 0.02, markupBpsOverride: 20000, walletId: 'w1', spendKind: 'ai' },
     ]);
   });
 
@@ -632,14 +672,14 @@ describe('computeBackfillActions', () => {
     const actions = computeBackfillActions(
       [],
       [
-        { aiUsageLogId: 'aul_term', userId: 'u1', costDollars: 0.02, source: 'terminal' },
-        { aiUsageLogId: 'aul_voice', userId: 'u1', costDollars: 0.02, source: 'voice' },
+        { aiUsageLogId: 'aul_term', userId: 'u1', costDollars: 0.02, source: 'terminal', walletId: 'w1' },
+        { aiUsageLogId: 'aul_voice', userId: 'u1', costDollars: 0.02, source: 'voice', walletId: 'w1' },
       ],
       { terminal: 20000, voice: 18000 },
     );
     expect(actions).toEqual([
-      { kind: 'apply_orphan', aiUsageLogId: 'aul_term', userId: 'u1', costDollars: 0.02, markupBpsOverride: 20000, spendKind: 'ai' },
-      { kind: 'apply_orphan', aiUsageLogId: 'aul_voice', userId: 'u1', costDollars: 0.02, markupBpsOverride: 18000, spendKind: 'ai' },
+      { kind: 'apply_orphan', aiUsageLogId: 'aul_term', userId: 'u1', costDollars: 0.02, markupBpsOverride: 20000, walletId: 'w1', spendKind: 'ai' },
+      { kind: 'apply_orphan', aiUsageLogId: 'aul_voice', userId: 'u1', costDollars: 0.02, markupBpsOverride: 18000, walletId: 'w1', spendKind: 'ai' },
     ]);
   });
 
@@ -647,14 +687,14 @@ describe('computeBackfillActions', () => {
     const actions = computeBackfillActions(
       [],
       [
-        { aiUsageLogId: 'aul_chat', userId: 'u1', costDollars: 0.5, source: 'chat' },
-        { aiUsageLogId: 'aul_none', userId: 'u2', costDollars: 0.5 },
+        { aiUsageLogId: 'aul_chat', userId: 'u1', costDollars: 0.5, source: 'chat', walletId: 'w1' },
+        { aiUsageLogId: 'aul_none', userId: 'u2', costDollars: 0.5, walletId: 'w1' },
       ],
       { terminal: 20000 },
     );
     expect(actions).toEqual([
-      { kind: 'apply_orphan', aiUsageLogId: 'aul_chat', userId: 'u1', costDollars: 0.5, spendKind: 'ai' },
-      { kind: 'apply_orphan', aiUsageLogId: 'aul_none', userId: 'u2', costDollars: 0.5, spendKind: 'ai' },
+      { kind: 'apply_orphan', aiUsageLogId: 'aul_chat', userId: 'u1', costDollars: 0.5, walletId: 'w1', spendKind: 'ai' },
+      { kind: 'apply_orphan', aiUsageLogId: 'aul_none', userId: 'u2', costDollars: 0.5, walletId: 'w1', spendKind: 'ai' },
     ]);
     expect(actions[0]).not.toHaveProperty('markupBpsOverride');
     expect(actions[1]).not.toHaveProperty('markupBpsOverride');

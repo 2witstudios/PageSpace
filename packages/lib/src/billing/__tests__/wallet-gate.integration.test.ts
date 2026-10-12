@@ -29,13 +29,14 @@ import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
 import { loggers } from '../../logging/logger-config';
 import { canConsumeAI } from '../credit-gate';
-import { consumeCredits, recordSeatOvershoot, releaseHold } from '../credit-consume';
+import { consumeCredits, recordSeatOvershoot, releaseHold, settlePendingLedgerRow } from '../credit-consume';
+import { computeBackfillActions } from '../credit-core';
 import { PERSONAL_SPEND, conversationSpend, driveSpend, resolvedSpend, spendFallbackFromWalletId } from '../spend-target';
 import { DEFAULT_SEAT_ALLOWANCE_CENTS } from '../wallet-core';
 import { loadSeatCapFacts } from '../seat-allowance';
-import { applyOrgPoolRefill, donateToDriveWallet } from '../wallet-funding-shell';
+import { applyOrgPoolRefill, donateToDriveWallet, resetDueAllocations } from '../wallet-funding-shell';
 import { reconcileOpenRouterCosts } from '../cost-reconcile';
-import { createDriveWallet, getConversationSpend, setConversationSpend } from '../../services/drive-wallet-service';
+import { createDriveWallet, getConversationSpend, getDriveWallet, setConversationSpend } from '../../services/drive-wallet-service';
 import { pinConversationSource } from '../spend-resolution';
 import { gateComputeCharge } from '../compute-gate';
 import { computeChargeFor, driveAccrualChargeFor } from '../compute-charge';
@@ -1653,6 +1654,119 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
     const [log] = await db.insert(aiUsageLogs).values({ userId: w.marcusId, provider: 'openrouter', model: 'm', cost: 1 }).returning({ id: aiUsageLogs.id });
     await consumeCredits({ aiUsageLogId: log.id, userId: w.marcusId, costDollars: 1, holdId: gate.holdId, walletId: gate.walletId });
     expect((await walletRow(w.marcusWalletId)).debtCents).toBe(50);
+  });
+
+  it('WAL-6 (partial) a fallback settle the backfill cron RETRIES, and an orphan the sweep recovers, land overshoot exactly where the in-line settle would have — the chosen wallet\'s funder, never the consumer', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 5_000 });
+    const w = world;
+    const side = await personalDrive(w, { allocationCents: 0, fallbackRule: 'own_credits' });
+    await db.update(wallets).set({ monthlyRemainingCents: 100 }).where(eq(wallets.id, w.marcusWalletId));
+    try {
+      // The in-line settle fails after the claim: the claim stays pending, carrying the fallback origin.
+      const gate = await canConsumeAI(w.marcusId, 'free', { spend: driveSpend(side.driveId, 'drive_wallet') });
+      expect(gate).toMatchObject({ allowed: true, walletId: w.marcusWalletId, fallbackFromWalletId: side.walletId });
+      const [log] = await db.insert(aiUsageLogs).values({ userId: w.marcusId, provider: 'openrouter', model: 'm', cost: 1 }).returning({ id: aiUsageLogs.id });
+      const failOnce = vi.spyOn(db, 'transaction').mockRejectedValueOnce(new Error('connection reset'));
+      expect(await consumeCredits({ aiUsageLogId: log.id, userId: w.marcusId, costDollars: 1, holdId: gate.holdId, walletId: gate.walletId })).toBe('deferred');
+      failOnce.mockRestore();
+      const [claim] = await db.select().from(creditLedger).where(and(eq(creditLedger.aiUsageLogId, log.id), eq(creditLedger.entryType, 'usage')));
+      expect(claim).toMatchObject({ consumeStatus: 'pending', walletId: w.marcusWalletId, fallbackFromWalletId: side.walletId });
+
+      // The hold expires; the cron retries the claim with no hold to read the origin from.
+      await db.delete(creditHolds).where(eq(creditHolds.userId, w.marcusId));
+      await settlePendingLedgerRow(claim.id);
+      // 150¢: Marcus's 100¢, then 50¢ uncovered — onto Jono's root (the chosen wallet's parent), not Marcus.
+      expect(await walletRow(w.marcusWalletId)).toMatchObject({ monthlyRemainingCents: 0, debtCents: 0 });
+      expect((await walletRow(side.jonoRootId)).debtCents).toBe(50);
+
+      // An orphan (the usage row written, no claim at all) carries its wallet and origin on the row.
+      await db.update(wallets).set({ monthlyRemainingCents: 100 }).where(eq(wallets.id, w.marcusWalletId));
+      const [orphan] = await db.insert(aiUsageLogs).values({
+        userId: w.marcusId, provider: 'openrouter', model: 'm', cost: 1, walletId: w.marcusWalletId, metadata: { fallbackFromWalletId: side.walletId },
+      }).returning();
+      const [action] = computeBackfillActions([], [{ aiUsageLogId: orphan.id, userId: orphan.userId, costDollars: 1, walletId: orphan.walletId, metadata: orphan.metadata }], {});
+      expect(action).toMatchObject({ kind: 'apply_orphan', walletId: w.marcusWalletId, fallbackFromWalletId: side.walletId });
+      if (action.kind !== 'apply_orphan') throw new Error('expected an orphan settle');
+      expect(await consumeCredits(action)).toBe('settled');
+      expect((await walletRow(w.marcusWalletId)).debtCents).toBe(0);
+      expect((await walletRow(side.jonoRootId)).debtCents).toBe(100);
+    } finally {
+      await db.delete(creditLedger).where(eq(creditLedger.userId, w.marcusId));
+      await teardownPersonalDrive(side);
+    }
+  });
+
+  it('WAL-6 (partial) a settle whose hold expired and that names no wallet FAILS CLOSED: nothing is charged to anyone — not the person\'s own credits — and no usage row can be recovered onto them', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 5_000 });
+    const w = world;
+    const gate = await canConsumeAI(w.marcusId, 'free', { spend: driveSpend(w.productId, 'drive_wallet') });
+    expect(gate).toMatchObject({ allowed: true, walletId: w.productWalletId });
+    await db.delete(creditHolds).where(eq(creditHolds.userId, w.marcusId)); // expired and swept
+    const [log] = await db.insert(aiUsageLogs).values({ userId: w.marcusId, provider: 'openrouter', model: 'm', cost: 1 }).returning({ id: aiUsageLogs.id });
+
+    expect(await consumeCredits({ aiUsageLogId: log.id, userId: w.marcusId, costDollars: 1, holdId: gate.holdId })).toBe('unattributed');
+    expect(await consumeCredits({ aiUsageLogId: log.id, userId: w.marcusId, costDollars: 1 })).toBe('unattributed');
+
+    await expectNothingCharged(w);
+    expect((await walletRow(w.productWalletId)).spentCents).toBe(0);
+    expect(computeBackfillActions([], [{ aiUsageLogId: log.id, userId: w.marcusId, costDollars: 1, walletId: null, metadata: {} }], {}))
+      .toEqual([{ kind: 'unattributed_orphan', aiUsageLogId: log.id, userId: w.marcusId, costDollars: 1 }]);
+  });
+
+  it('WAL-6 overshoot on a covered drive-wallet reservation lands per the funder\'s choice (the pool\'s debt by default, the wallet\'s own when chosen), never on the member; the funder is told once per period; the pool\'s debt is forgiven by its next refill and the wallet\'s debt is netted by the next allocation reset', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 60, poolCents: 5_000 });
+    const w = world;
+
+    // (a) The gate reserves against the chosen wallet before the call; an uncovered reservation is refused.
+    const gate = await canConsumeAI(w.marcusId, 'pro', { spend: driveSpend(w.productId, 'drive_wallet') });
+    expect(gate).toMatchObject({ allowed: true, walletId: w.productWalletId });
+    expect((await holdsOf(w.marcusId)).map((h) => h.walletId)).toEqual([w.productWalletId]);
+    expect(await canConsumeAI(w.marcusId, 'pro', { spend: driveSpend(w.productId, 'drive_wallet') })).toMatchObject({ allowed: false });
+    if (gate.holdId) await releaseHold(gate.holdId);
+
+    // (b)(c) default: two overshooting calls — 60¢ from the allocation, 90¢ each into the POOL's debt.
+    await driveWalletCall(w, 1);
+    await driveWalletCall(w, 1);
+    expect((await walletRow(w.poolId)).debtCents).toBe(180);
+    expect(await walletRow(w.marcusWalletId)).toMatchObject({ monthlyRemainingCents: 5_000, debtCents: 0 });
+    // (e) the funder (the org Owner) is told once this period; the member never.
+    expect(await debtNoticesFor(w.jonoId)).toHaveLength(1);
+    expect(await debtNoticesFor(w.marcusId)).toEqual([]);
+
+    // (c) the funder chooses wallet debt: the next overshoot stays on Product itself.
+    await db.update(wallets).set({ overshootChoice: 'wallet_debt' }).where(eq(wallets.id, w.productWalletId));
+    await driveWalletCall(w, 1);
+    expect(await walletRow(w.productWalletId)).toMatchObject({ spentCents: 60, debtCents: 90 });
+    expect((await walletRow(w.poolId)).debtCents).toBe(180);
+    expect((await walletRow(w.marcusWalletId)).debtCents).toBe(0);
+    // (e) a wallet carrying debt shows "over" to whoever can see it.
+    expect(await getDriveWallet(w.marcusId, w.productId, 'session')).toMatchObject({ ok: true, wallet: { status: 'over' } });
+
+    // (d) the org's next invoice refills the pool: its debt is netted and forgiven, exactly as personal debt.
+    const poolBefore = await walletRow(w.poolId);
+    const [org] = await db.select().from(organizations).where(eq(organizations.id, w.orgId));
+    const startS = Math.floor(Date.now() / 1000) + 1;
+    expect(await applyOrgPoolRefill({
+      id: `in_${createId()}`,
+      customer: org.stripeCustomerId,
+      billing_reason: 'subscription_cycle',
+      amount_paid: 5000,
+      subtotal: 5000,
+      parent: { subscription_details: { subscription: `sub_${createId()}` } },
+      lines: { data: [{ amount: 5000, parent: { subscription_item_details: { subscription_item: 'si_org' } }, period: { start: startS, end: startS + 30 * 86_400 }, pricing: { price_details: { price: REFILL_PRICE_ID } } }] },
+    }, { active: true, basePriceId: REFILL_PRICE_ID, seatPriceId: REFILL_SEAT_PRICE_ID })).toMatchObject({ kind: 'granted', walletId: w.poolId });
+    const poolAfter = await walletRow(w.poolId);
+    expect(poolAfter.debtCents).toBe(0);
+    expect(poolAfter.monthlyRemainingCents).toBe(Math.max(0, poolBefore.monthlyRemainingCents - 180) + (poolAfter.monthlyAllowanceCents ?? 0));
+
+    // (d) Product's allocation resets on the pool's new period: its own debt is netted from the new allocation.
+    await resetDueAllocations({ now: new Date(startS * 1000 + 1_000) });
+    expect(await walletRow(w.productWalletId)).toMatchObject({ spentCents: 60, debtCents: 0 });
+    expect(await getDriveWallet(w.marcusId, w.productId, 'session')).toMatchObject({ ok: true, wallet: { status: 'active' } });
+    expect((await walletRow(w.marcusWalletId)).debtCents).toBe(0);
   });
 
   // ---------------------------------------------------------------------------

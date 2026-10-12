@@ -2325,6 +2325,13 @@
       "when": 1791773814980,
       "tag": "0343_oauth_authentication_evidence",
       "breakpoints": true
+    },
+    {
+      "idx": 334,
+      "version": "7",
+      "when": 1791811107113,
+      "tag": "0344_credit_ledger_fallback_from_wallet",
+      "breakpoints": true
     }
   ]
 }
