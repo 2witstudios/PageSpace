@@ -75,6 +75,7 @@ import { ConversationHistoryDeletedError } from '@/lib/repositories/resolve-or-c
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { createAIProvider, updateUserProviderSettings, createProviderErrorResponse, isProviderError, type ProviderRequest } from '@/lib/ai/core/provider-factory';
+import { toolModelContext } from '@/lib/ai/core/tool-model-context';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
 import { extractMessageContent, extractToolCalls, extractToolResults, sanitizeMessagesForModel, convertDbMessageToUIMessage } from '@/lib/ai/core/message-utils';
 import { messageRepository } from '@/lib/repositories/message-repository';
@@ -1905,8 +1906,8 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
               experimental_context: {
                 userId,
                 timezone: userTimezone,
-                aiProvider: currentProvider,
-                aiModel: currentModel,
+                // POL-8: the tools are judged by the model this turn resolved, not the raw selection.
+                ...toolModelContext(providerResult),
                 conversationId,
                 // Same normalized location the model prompt was built from, so
                 // the two can never disagree about which workspace is in view.

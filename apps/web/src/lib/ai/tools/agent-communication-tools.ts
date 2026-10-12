@@ -17,6 +17,7 @@ import { listAgentDrives, getAgentContextDrives } from '@pagespace/lib/services/
 import { listAccessibleDrives } from '@pagespace/lib/services/drive-service';
 import { filterToolsForMcpScope, filterToolsForSandboxEnablement } from '@/lib/ai/core/tool-filtering';
 import { createAIProvider, isProviderError, type ProviderRequest } from '@/lib/ai/core/provider-factory';
+import { toolModelContext } from '@/lib/ai/core/tool-model-context';
 import { sanitizeMessagesForModel, convertDbMessageToUIMessage } from '@/lib/ai/core/message-utils';
 import { messageRepository } from '@/lib/repositories/message-repository';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
@@ -711,13 +712,13 @@ export async function executeAskAgent(
         systemPrompt += `\n\nYou are being consulted by another agent or user${executionContext?.locationContext?.currentPage?.title ? ` (${executionContext.locationContext.currentPage.title})` : ''}. This is a persistent conversation - you have access to the full conversation history. Respond helpfully based on your expertise and the conversation context.`;
         
         // 8. Get configured model for agent
-        const { model, provider: resolvedProvider, modelName: resolvedModelName } =
-          await getConfiguredModel(userId, {
-            aiProvider: targetAgent.aiProvider,
-            aiModel: targetAgent.aiModel,
-            driveId: targetAgent.driveId,
-          }, executionContext?.creditSpend?.spend ?? PERSONAL_SPEND);
-        
+        const providerResult = await getConfiguredModel(userId, {
+          aiProvider: targetAgent.aiProvider,
+          aiModel: targetAgent.aiModel,
+          driveId: targetAgent.driveId,
+        }, executionContext?.creditSpend?.spend ?? PERSONAL_SPEND);
+        const { model, provider: resolvedProvider, modelName: resolvedModelName } = providerResult;
+
         // 9. Filter tools for agent. Nested calls inherit the top-level caller's MCP
         // drive scope via nestedContext below, so a scoped token must not be able to
         // reach create_drive (or other account-level-only tools) through a consulted
@@ -777,6 +778,8 @@ export async function executeAskAgent(
         // Include chain tracking for activity logging (Tier 1)
         const nestedContext = {
           ...executionContext,
+          // POL-8: the consulted agent's tools run under the model IT resolved, never the caller's.
+          ...toolModelContext(providerResult),
           agentCallDepth: callDepth + 1,
           currentAgentId: agentId,
           locationContext: executionContext?.locationContext, // Explicitly preserve location context

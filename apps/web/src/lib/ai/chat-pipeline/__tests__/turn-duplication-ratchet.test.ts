@@ -77,8 +77,12 @@ const SPEC = path.join(repoRoot(), 'docs/2.0-architecture/agent-sessions.md');
  * 160 → 159 (D-OW-42 final cutover): the turns' personal-tier reads (gate tier and
  * deployment capability) moved into `personalTurnTiers` in `turn-credit.ts`, replacing the
  * identical subscription-tier type import each turn carried.
+ *
+ * 159 → 160 (POL-8 tool boundary): both turns hand their tools the model they resolved
+ * through the shared `toolModelContext` (tool-model-context.ts) rather than a copied pair;
+ * the one new identical line is that shared module's import.
  */
-const RECORDED_IDENTICAL_LINES = 159;
+const RECORDED_IDENTICAL_LINES = 160;
 
 /** Substantive lines: no blanks, no comments, trimmed. */
 const substantiveLines = (file: string): string[] =>

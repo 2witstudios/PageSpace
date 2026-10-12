@@ -3,6 +3,7 @@ import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
 import { mergeToolSets } from '@/lib/ai/core/tool-utils';
 import { createId } from '@paralleldrive/cuid2';
 import { createAIProvider, isProviderError, type ProviderRequest } from '@/lib/ai/core/provider-factory';
+import { toolModelContext } from '@/lib/ai/core/tool-model-context';
 import { MODEL_ENTITLEMENT_MESSAGES, modelEntitlement } from '@/lib/ai/core/model-entitlement';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
 import { automationRunUnreserved, automationSpend } from '@pagespace/lib/billing/spend-target';
@@ -824,8 +825,8 @@ async function runExecution(
       userId: input.createdBy,
       timezone: input.timezone,
       creditSpend: input.creditSpend,
-      aiProvider: agent.aiProvider ?? undefined,
-      aiModel: agent.aiModel ?? undefined,
+      // POL-8: the tools are judged by the model this run resolved (an agent with no model runs the default).
+      ...toolModelContext(providerResult),
       conversationId,
       // The run's agent identity, exactly as the chat route passes it: the
       // session tools' `callerAgentPageId` reads `chatSource.agentPageId` so

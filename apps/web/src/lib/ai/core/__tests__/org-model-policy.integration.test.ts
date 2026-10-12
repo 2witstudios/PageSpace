@@ -27,6 +27,7 @@ import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
 import { users } from '@pagespace/db/schema/auth';
 import { drives, pages } from '@pagespace/db/schema/core';
+import { driveAgentMembers } from '@pagespace/db/schema/members';
 import { organizations, orgMembers, orgSubscriptions } from '@pagespace/db/schema/organizations';
 
 vi.mock('@pagespace/lib/services/page-version-service', async (importOriginal) => ({
@@ -37,7 +38,19 @@ vi.mock('@pagespace/lib/services/page-content-store', async (importOriginal) => 
   ...(await importOriginal<typeof import('@pagespace/lib/services/page-content-store')>()),
   writePageContent: vi.fn(async (content: string, format: string) => ({ ref: `${format}:test-${content.length}`, size: content.length, compressed: false, storedSize: content.length, compressionRatio: 1 })),
 }));
-const generateText = vi.hoisted(() => vi.fn(async () => ({ text: '- decided', usage: { inputTokens: 1, outputTokens: 1 } })));
+// A model run's tool loop, as generateText runs it: when the run hands the model `read_page`, the stub calls it once
+// with the run's own tool context (as the SDK would) on the page `toolRead.pageId` names, and records the outcome.
+const toolRead = vi.hoisted(() => ({ pageId: '', outcomes: [] as string[] }));
+interface StubTool { execute?: (args: unknown, options: { toolCallId: string; messages: never[]; experimental_context: unknown }) => Promise<unknown> }
+interface StubRun { tools?: Record<string, StubTool>; experimental_context?: unknown }
+const generateText = vi.hoisted(() => vi.fn(async (run?: StubRun) => {
+  const readPage = run?.tools?.read_page?.execute;
+  if (readPage && toolRead.pageId) {
+    toolRead.outcomes.push(await readPage({ title: 'Plan', pageId: toolRead.pageId }, { toolCallId: 't', messages: [], experimental_context: run?.experimental_context })
+      .then((result) => JSON.stringify(result), (error: unknown) => `refused: ${error instanceof Error ? error.message : String(error)}`));
+  }
+  return { text: '- decided', usage: { inputTokens: 1, outputTokens: 1 }, totalUsage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }, steps: [{ text: '- decided', toolCalls: [] }] };
+}));
 vi.mock('ai', async (importOriginal) => ({ ...(await importOriginal<typeof import('ai')>()), generateText }));
 // The bulk-copy route authenticates the drive owner's session; every permission check after that is real.
 const authed = vi.hoisted(() => ({ userId: '' }));
@@ -57,6 +70,7 @@ import { applyPageMutation, OrgModelPolicyError } from '@/services/api/page-muta
 import { pageService } from '@/services/api/page-service';
 import { generateTranscriptSummary } from '@/lib/integrations/zoom/generate-summary';
 import { POST as bulkCopy } from '@/app/api/pages/bulk-copy/route';
+import { POST as consult } from '@/app/api/ai/page-agents/consult/route';
 import { PUT as moveDriveIn } from '@/app/api/drives/[driveId]/org/route';
 import { movePagesToDrive } from '@/services/api/page-cross-drive-move-service';
 // The tool registry first: entering through one tool module would close an import cycle back into it half-built.
@@ -116,6 +130,8 @@ beforeAll(async () => {
 beforeEach(async () => {
   process.env.OPENROUTER_DEFAULT_API_KEY = 'test-key';
   generateText.mockClear();
+  toolRead.pageId = '';
+  toolRead.outcomes = [];
   if (!dbAvailable) return;
   const owner = await factories.createUser({ currentAiProvider: ALLOWED.provider, currentAiModel: ALLOWED.model });
   created.userIds.push(owner.id);
@@ -279,6 +295,59 @@ describe('POL-8 the org model and provider allowlists govern every model use in 
 
     for (const result of [fromGlobal, fromOtherOrg]) expect(JSON.stringify(result)).toContain("doesn't allow that AI model");
     expect(generateText).not.toHaveBeenCalled();
+  });
+
+  describe('tools reading org content through an agent run: judged by the model the run RESOLVED, never the caller\'s, never skipped', () => {
+    // Agent X lives in org A (Northwind, here allowing every model) and sets no model, so it runs DEFAULT_MODEL. X has
+    // been added to a drive of org B (a cross-drive agent), which allows only the non-default model (the one the other
+    // tests call REFUSED), so not DEFAULT_MODEL.
+    const crossDriveAgent = async () => {
+      await setPolicies({});
+      const orgB = createId();
+      created.orgIds.push(orgB);
+      await db.insert(organizations).values({ id: orgB, name: 'Contoso', slug: `co-${createId()}`, ownerId: w.owner, policies: { modelAllowlist: [REFUSED.model], crossDriveAgents: true } });
+      await db.insert(orgMembers).values({ orgId: orgB, userId: w.owner, role: 'OWNER' });
+      const orgBDrive = (await factories.createDrive(w.owner, { orgId: orgB, orgVisibility: 'RESTRICTED' })).id;
+      created.driveIds.push(orgBDrive);
+      const orgBDoc = (await factories.createPage(orgBDrive, { content: '<p>Contoso merger terms</p>' })).id;
+      const agentId = (await factories.createPage(w.orgDrive, { type: 'AI_CHAT', aiProvider: null, aiModel: null, title: 'Analyst', enabledTools: ['read_page'] })).id;
+      await db.insert(driveAgentMembers).values({ driveId: orgBDrive, agentPageId: agentId, role: 'MEMBER', addedBy: w.owner });
+      expect(REFUSED.model).not.toBe(DEFAULT_MODEL);
+      toolRead.pageId = orgBDoc;
+      return { agentId, orgBDoc };
+    };
+
+    it('ask_agent: the consulted agent\'s tools are judged by ITS resolved model (the default), not the caller\'s — refused org B\'s page', async () => {
+      const { agentId } = await crossDriveAgent();
+      const ask = (context: ToolExecutionContext) => executeAskAgent({ agentPath: '/Analyst', agentId, question: 'What are the terms?' }, { experimental_context: context });
+
+      // A caller running a model org B allows, and a caller naming no model (the global assistant's shape).
+      await ask({ userId: w.owner, aiProvider: REFUSED.provider, aiModel: REFUSED.model } as ToolExecutionContext);
+      await ask({ userId: w.owner } as ToolExecutionContext);
+
+      expect(toolRead.outcomes).toHaveLength(2);
+      for (const outcome of toolRead.outcomes) {
+        expect(outcome).toMatch(/^refused: .*Insufficient permissions/);
+        expect(outcome).not.toContain('Contoso merger terms');
+      }
+    });
+
+    it('consult route: an agent with no model is judged as the default it runs — refused org B\'s page', async () => {
+      const { agentId } = await crossDriveAgent();
+
+      const response = await consult(new Request('http://localhost/api/ai/page-agents/consult', { method: 'POST', body: JSON.stringify({ agentId, question: 'What are the terms?' }) }));
+
+      expect(response.status).toBe(200);
+      expect(toolRead.outcomes).toHaveLength(1);
+      expect(toolRead.outcomes[0]).toMatch(/^refused: .*Insufficient permissions/);
+    });
+
+    it('a context that runs a model but names no resolved model is refused (fail closed); a context that runs none is not judged', async () => {
+      const { orgBDoc } = await crossDriveAgent();
+
+      expect(await canActorViewPage({ userId: w.owner, runsModel: true } as ToolExecutionContext, orgBDoc)).toBe(false);
+      expect(await canActorViewPage({ userId: w.owner } as ToolExecutionContext, orgBDoc)).toBe(true);
+    });
   });
 
   it('tools reading org content: a chat\'s tools cannot read a page or drive of an org that does not allow the running model; with an allowed model they can', async () => {

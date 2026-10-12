@@ -20,6 +20,7 @@ import {
   canPrincipalEditPage,
 } from '@/lib/auth';
 import { createAIProvider, isProviderError } from '@/lib/ai/core/provider-factory';
+import { toolModelContext } from '@/lib/ai/core/tool-model-context';
 import { buildSystemPrompt } from '@/lib/ai/core/system-prompt';
 import { sanitizeMessagesForModel, extractMessageContent, convertDbMessageToUIMessage, extractToolResults } from '@/lib/ai/core/message-utils';
 import { messageRepository } from '@/lib/repositories/message-repository';
@@ -649,8 +650,8 @@ export async function POST(request: Request): Promise<Response> {
         userId: authResult.userId,
         conversationId,
         timezone: userTimezone,
-        aiProvider: page.aiProvider ?? undefined,
-        aiModel: page.aiModel ?? undefined,
+        // POL-8: the tools are judged by the model this run resolved (an agent with no model runs the default).
+        ...toolModelContext(providerResult),
         modelCapabilities: await getModelCapabilities(
           providerResult.modelName,
           providerResult.provider,

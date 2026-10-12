@@ -36,6 +36,18 @@ export function modelDecision(policies: OrgPolicies | null, use: { modelId: stri
   return agentModelSaveDecision(policies, { provider: use.provider, modelId: use.modelId });
 }
 
+/**
+ * POL-8 at the tool boundary: may a model run's tools read content governed by these policies? Judged by the provider
+ * and model the run RESOLVED (what actually runs). A run that names no resolved pair is refused — it fails closed,
+ * never passes — because its model cannot be shown to be allowed. Content with no org is never restricted.
+ */
+export function toolModelDecision(policies: OrgPolicies | null, run: { provider?: string; modelId?: string }): PolicyDecision {
+  if (policies === null) return { ok: true };
+  if (!run.provider || !run.modelId) return refuse('modelAllowlist', UNRESOLVED_MODEL_REFUSED);
+  return modelDecision(policies, { provider: run.provider, modelId: run.modelId });
+}
+
+const UNRESOLVED_MODEL_REFUSED = "This organization only lets AI models it allows read its content, and this run's model could not be determined.";
 const PROVIDER_REFUSED = "This organization doesn't allow that AI provider. Choose a model from an allowed provider.";
 const MODEL_REFUSED = "This organization doesn't allow that AI model. Choose one of the models it allows.";
 

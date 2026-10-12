@@ -12,6 +12,7 @@ const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 /** The repository-wide id contract: what `createId()` (cuid2) produces. */
 const CUID2_PATTERN = /^[a-z][a-z0-9]{1,31}$/;
 import { createAIProvider, isProviderError, type ProviderRequest } from '@/lib/ai/core/provider-factory';
+import { toolModelContext } from '@/lib/ai/core/tool-model-context';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
 import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
 import { getUserTimezone } from '@/lib/ai/core/personalization-utils';
@@ -545,8 +546,8 @@ export async function POST(request: Request) {
     const executionContext: ToolExecutionContext = {
       userId,
       timezone: userTimezone,
-      aiProvider: agent.aiProvider ?? undefined,
-      aiModel: agent.aiModel ?? undefined,
+      // POL-8: the tools are judged by the model this run resolved (an agent with no model runs the default).
+      ...toolModelContext({ provider: resolvedProvider, modelName: resolvedModelName }),
       conversationId: `agent-consult-${agentId}-${Date.now()}`,
       creditSpend: { spend, walletId },
       locationContext: {

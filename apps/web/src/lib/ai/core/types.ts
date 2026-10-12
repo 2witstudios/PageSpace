@@ -15,6 +15,9 @@ export interface ToolExecutionContext {
   // AI attribution for activity logging
   aiProvider?: string;
   aiModel?: string;
+  // POL-8: this context belongs to a model run, whose tools are judged by the org allowlists against aiProvider/aiModel
+  // — set together with them by toolModelContext() (provider-factory.ts). A model run missing either is refused.
+  runsModel?: true;
   locationContext?: {
     currentPage?: {
       id: string;

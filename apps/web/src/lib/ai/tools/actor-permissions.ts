@@ -26,21 +26,26 @@ import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
 import { getDrivePolicies } from '@pagespace/lib/organizations/policy-reader';
-import { modelDecision } from '@pagespace/lib/organizations/org-action-decisions';
+import { toolModelDecision } from '@pagespace/lib/organizations/org-action-decisions';
 
 /**
  * POL-8 at the tool boundary: content from drive X reaching a model is governed by X's org. A tool running for a chat
  * whose model X's org does not allow may not read X — the global assistant (which runs in no drive) included. Read
- * now, no cache. A context that names no model (a non-model caller) is not judged here.
+ * now, no cache. The model judged is the one the run resolved (toolModelContext); a model run that names no resolved
+ * pair is refused, never passed. Only a context that runs no model at all (no pair, not marked) is not judged here.
  */
+function judgesModel(context: ToolExecutionContext): boolean {
+  return Boolean(context.runsModel || context.aiProvider || context.aiModel);
+}
+
 async function driveDeniedByModelPolicy(context: ToolExecutionContext, driveId: string): Promise<boolean> {
-  if (!context.aiProvider || !context.aiModel) return false;
+  if (!judgesModel(context)) return false;
   const policies = (await getDrivePolicies(driveId))?.policies ?? null;
-  return !modelDecision(policies, { provider: context.aiProvider, modelId: context.aiModel }).ok;
+  return !toolModelDecision(policies, { provider: context.aiProvider, modelId: context.aiModel }).ok;
 }
 
 async function pageDeniedByModelPolicy(context: ToolExecutionContext, pageId: string): Promise<boolean> {
-  if (!context.aiProvider || !context.aiModel) return false;
+  if (!judgesModel(context)) return false;
   const [page] = await db.select({ driveId: pages.driveId }).from(pages).where(eq(pages.id, pageId)).limit(1);
   return page ? driveDeniedByModelPolicy(context, page.driveId) : false;
 }

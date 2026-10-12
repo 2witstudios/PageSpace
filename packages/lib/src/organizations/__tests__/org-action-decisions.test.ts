@@ -12,6 +12,7 @@ import {
   orgActorDecision,
   publishedAppsDecision,
   sandboxDecision,
+  toolModelDecision,
 } from '../org-action-decisions';
 
 const p = (over: Partial<typeof DEFAULT_ORG_POLICIES>) => ({ ...DEFAULT_ORG_POLICIES, ...over });
@@ -64,6 +65,24 @@ describe('modelDecision', () => {
 
   it('POL-8 (partial) a call with no org policies (a personal drive, the global assistant) is never restricted', () => {
     expect(modelDecision(null, { modelId: 'm', provider: 'x' }).ok).toBe(true);
+  });
+});
+
+describe('toolModelDecision (a model run\'s tools reading org content)', () => {
+  it('POL-8 (partial) the run\'s resolved provider and model are judged like any model use', () => {
+    const pol = p({ modelAllowlist: ['a/fast'] });
+    expect(toolModelDecision(pol, { provider: 'x', modelId: 'a/fast' }).ok).toBe(true);
+    expect(toolModelDecision(pol, { provider: 'x', modelId: 'b/slow' })).toMatchObject({ ok: false, status: 403, policy: 'modelAllowlist' });
+  });
+
+  it('POL-8 (partial) a run that names no resolved provider or model fails closed in an org drive, even one with no allowlist', () => {
+    expect(toolModelDecision(p({}), {})).toMatchObject({ ok: false, status: 403, code: 'org_policy', policy: 'modelAllowlist' });
+    expect(toolModelDecision(p({}), { provider: 'x' }).ok).toBe(false);
+    expect(toolModelDecision(p({}), { modelId: 'a/fast' }).ok).toBe(false);
+  });
+
+  it('POL-8 (partial) content with no org (null policies) is never restricted', () => {
+    expect(toolModelDecision(null, {}).ok).toBe(true);
   });
 });
 

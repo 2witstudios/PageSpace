@@ -49,6 +49,7 @@ import { startGenerationExclusive } from '@/lib/ai/core/start-generation-exclusi
 import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import { getAllowedDriveIds, authSessionIdOf, type AuthResult } from '@/lib/auth';
 import { createAIProvider, updateUserProviderSettings, createProviderErrorResponse, isProviderError, type ProviderRequest } from '@/lib/ai/core/provider-factory';
+import { toolModelContext } from '@/lib/ai/core/tool-model-context';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
 import { extractMessageContent, extractToolCalls, extractToolResults, sanitizeMessagesForModel, convertGlobalAssistantMessageToUIMessage } from '@/lib/ai/core/message-utils';
 import { messageRepository } from '@/lib/repositories/message-repository';
@@ -1399,8 +1400,8 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
             experimental_context: {
               userId,
               timezone: userTimezone,
-              aiProvider: currentProvider,
-              aiModel: currentModel,
+              // POL-8: the tools are judged by the model this turn resolved.
+              ...toolModelContext(providerResult),
               conversationId,
               locationContext,
               // Turn-start snapshot of the agent's working page — tools that
