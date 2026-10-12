@@ -20,7 +20,7 @@ import { mcpPost, resetMock, mockCallCount } from '../support/http';
 
 const CAP_CENTS = 25;
 
-test.use({ storageState: { cookies: [], origins: [] } });
+test.use({ storageState: { cookies: [], origins: [] }, extraHTTPHeaders: { 'X-Browser-Session-Id': 'e2e-metering-daily-cap' } });
 
 test('429 daily_cap_exceeded once the daily ceiling is reached; model not called, nothing billed past the cap', async ({ request }) => {
   const user = await seedUser({
@@ -42,7 +42,7 @@ test('429 daily_cap_exceeded once the daily ceiling is reached; model not called
   for (let i = 0; i < 5 && !capDenialSeen; i++) {
     const before = await mockCallCount(request);
     const res = await mcpPost(request, '/api/ai/chat', mcp, {
-      messages: [{ role: 'user', content: 'ping' }],
+      messages: [{ id: `metering-message-${i}`, role: 'user', parts: [{ type: 'text', text: 'ping' }] }],
       chatId,
     });
     statuses.push(res.status());
@@ -55,7 +55,7 @@ test('429 daily_cap_exceeded once the daily ceiling is reached; model not called
       // The denied (over-cap) call must NOT reach the model.
       expect(await mockCallCount(request)).toBe(before);
     } else {
-      expect(res.status(), 'a within-cap call is served normally').toBe(200);
+      expect(res.status(), `a within-cap call is served normally: ${await res.text()}`).toBe(200);
       await res.body(); // drain so settlement runs
     }
   }
