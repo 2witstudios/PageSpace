@@ -3,11 +3,22 @@ import { announceOrgChange } from '@pagespace/lib/organizations/org-change-event
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getOrgPolicies, updateOrgPolicies } from '@pagespace/lib/organizations/policies';
-import { OPEN_ROLE_FLOOR_RAISE_MESSAGE, validateOrgPoliciesPatch } from '@pagespace/lib/organizations/policies-core';
+import {
+  OPEN_ROLE_FLOOR_RAISE_MESSAGE,
+  delegatedPolicyPatchRefusal,
+  policiesForDelegatedCredential,
+  validateOrgPoliciesPatch,
+  type OrgPolicies,
+} from '@pagespace/lib/organizations/policies-core';
 import { reconcileOrgPublishedVisibility } from '@pagespace/lib/organizations/published-visibility';
 import { createPublishedObjectStore, isPublishConfigured } from '@/lib/canvas/published-storage';
 import { authorizeOrgRequest, ORG_TOKEN_READ_AUTH, ORG_TOKEN_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
 import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
+import { apiError } from '@/lib/api/api-error';
+
+/** [D-OW-26] A delegated key reads the policies without the money keys (wallet reads are consumer-only). */
+const policiesFor = (credential: 'session' | 'mcp', policies: OrgPolicies) =>
+  credential === 'session' ? policies : policiesForDelegatedCredential(policies);
 
 type Context = { params: Promise<{ orgId: string }> };
 
@@ -15,7 +26,8 @@ type Context = { params: Promise<{ orgId: string }> };
  * GET /api/orgs/[orgId]/policies (Spec POL-1) — Owner and Admins read the org's policies, defaults
  * filled in. A plain member sees no org settings (UI-11): the same 403 as any Admin-only read, and a
  * non-member gets the 404 of an org that does not exist. Session or MCP token (X-1); a drive-scoped
- * token is refused, since policies govern the whole org.
+ * token is refused, since policies govern the whole org. A key reads them without the money keys (seat allowance,
+ * wallet fallback): [D-OW-26] keeps a key to the consumer view of money.
  */
 export async function GET(request: Request, context: Context) {
   const { orgId } = await context.params;
@@ -24,7 +36,7 @@ export async function GET(request: Request, context: Context) {
   try {
     const policies = await getOrgPolicies(orgId);
     auditRequest(request, { eventType: 'data.read', userId: gate.userId, resourceType: 'organization_policies', resourceId: orgId, details: { orgId } });
-    return NextResponse.json({ policies });
+    return NextResponse.json({ policies: policiesFor(gate.credential, policies) });
   } catch (error) {
     loggers.api.error('Error reading organization policies:', error as Error);
     return NextResponse.json({ error: 'Failed to read policies', code: 'internal_error' }, { status: 500 });
@@ -53,6 +65,10 @@ export async function PATCH(request: Request, context: Context) {
     if (!parsed.ok) {
       return NextResponse.json({ error: 'Invalid request body', issues: parsed.issues, code: 'invalid_request' }, { status: 400 });
     }
+    // [D-OW-26] / D-OW-47: a key never sets a money policy (the seat allowance allocates org money, the wallet
+    // fallback picks what spend draws from); the whole patch is refused before anything is stored.
+    const moneyRefusal = gate.credential === 'session' ? null : delegatedPolicyPatchRefusal(parsed.patch);
+    if (moneyRefusal) return apiError(403, moneyRefusal.code, moneyRefusal.message, { policy: moneyRefusal.key });
     const result = await updateOrgPolicies({ orgId, actorId: gate.userId, patch: parsed.patch });
     if (!result.ok && result.reason === 'org_lapsed') return orgLapsedResponse(result.message);
     if (!result.ok && result.reason === 'open_role_floor') {
@@ -77,7 +93,7 @@ export async function PATCH(request: Request, context: Context) {
     // X-4: members see the change without a refresh (org:changed, no content).
     void announceOrgChange(orgId, 'policy');
     return NextResponse.json({
-      policies: result.policies,
+      policies: policiesFor(gate.credential, result.policies),
       changed: result.changes.map((c) => c.key),
       suspended: countByKind(result.suspended),
       restored: countByKind(result.restored),

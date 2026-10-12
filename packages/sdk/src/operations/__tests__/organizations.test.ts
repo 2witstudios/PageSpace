@@ -61,8 +61,6 @@ const POLICIES = {
     whoCanInvite: 'admins',
     whoCanCreateDrives: 'members',
     openDriveRoleFloor: 'view',
-    seatAllowanceCents: 3000,
-    walletFallback: 'refuse',
     modelAllowlist: null,
     providerAllowlist: null,
     agentsAutonomous: true,

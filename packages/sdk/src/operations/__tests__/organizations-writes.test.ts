@@ -194,8 +194,6 @@ describe('org writes — responses', () => {
       whoCanInvite: 'admins',
       whoCanCreateDrives: 'members',
       openDriveRoleFloor: 'view',
-      seatAllowanceCents: 3000,
-      walletFallback: 'refuse',
       modelAllowlist: null,
       providerAllowlist: null,
       agentsAutonomous: true,
@@ -207,6 +205,13 @@ describe('org writes — responses', () => {
     };
     const answer = { policies, changed: ['guests'], suspended: { guests: 2 }, restored: {}, blocked: {}, auditRecorded: true };
     expect(updateOrgPolicies.outputSchema.parse(answer)).toEqual(answer);
+  });
+
+  it('X-1 (partial) [D-OW-26] a key\'s policy change cannot name a money policy: the seat allowance and the wallet fallback are not inputs', () => {
+    expect(updateOrgPolicies.inputSchema.safeParse({ orgId: 'org_1', seatAllowanceCents: 3000 }).success).toBe(false);
+    expect(updateOrgPolicies.inputSchema.safeParse({ orgId: 'org_1', walletFallback: 'seat_allowance' }).success).toBe(false);
+    expect(ORG_POLICY_KEYS).not.toContain('seatAllowanceCents');
+    expect(ORG_POLICY_KEYS).not.toContain('walletFallback');
   });
 
   it('X-1 (partial) domain answers parse, including both verify outcomes', () => {

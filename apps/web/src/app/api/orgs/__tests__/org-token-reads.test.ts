@@ -181,7 +181,8 @@ describe('X-1 (partial) the five org reads over an MCP token', () => {
     vi.mocked(findMembershipRole).mockResolvedValue('ADMIN');
     const ok = await getPolicies(new Request(`https://x.test/api/orgs/${ORG}/policies`), context);
     expect(ok.status).toBe(200);
-    expect(await ok.json()).toEqual(policies);
+    // [D-OW-26] a key reads the policies without the money keys: the seat allowance is not shown.
+    expect(await ok.json()).toEqual({ policies: { guests: 'approve' } });
 
     vi.mocked(findMembershipRole).mockResolvedValue('MEMBER');
     const memberRefused = await getPolicies(new Request(`https://x.test/api/orgs/${ORG}/policies`), context);

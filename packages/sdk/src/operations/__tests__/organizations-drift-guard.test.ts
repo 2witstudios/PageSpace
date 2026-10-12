@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { OrgMemberDetail, OrgSummaryForUser } from '@pagespace/lib/organizations/repository';
-import type { OrgPolicies, OrgPoliciesPatch, SuspensionKind } from '@pagespace/lib/organizations/policies-core';
+import type { DelegatedOrgPolicies, SuspensionKind } from '@pagespace/lib/organizations/policies-core';
 import type { OrgDriveDirectoryEntry } from '@pagespace/lib/permissions/org-drive-directory';
 import type { SuspendedResourceType } from '@pagespace/lib/organizations/policy-suspension';
 import type { OrgAuditCategory } from '@pagespace/lib/audit/org-audit-query-core';
@@ -47,8 +47,8 @@ const roleIdentical: AssertExact<SdkRole, OrgSummaryForUser['role']> = true;
 const memberRoleIdentical: AssertExact<SdkRole, OrgMemberDetail['role']> = true;
 const viewerRoleIdentical: AssertExact<SdkRole, (typeof getOrganization.outputSchema)['_output']['viewer']['role']> = true;
 const visibilityIdentical: AssertExact<SdkVisibility, OrgDriveDirectoryEntry['orgVisibility']> = true;
-// The policy object is lib's `OrgPolicies`, key for key and type for type.
-const policiesIdentical: AssertExact<SdkPolicies, OrgPolicies> = true;
+// The policy object is lib's `DelegatedOrgPolicies` — OrgPolicies without the money keys a key may not read ([D-OW-26]).
+const policiesIdentical: AssertExact<SdkPolicies, DelegatedOrgPolicies> = true;
 // The directory entry's decision fields are lib's `DirectoryEntry` (extends into `OrgDriveDirectoryEntry`).
 const joinedIdentical: AssertExact<SdkDirectory['joined'], OrgDriveDirectoryEntry['joined']> = true;
 const joinRequestIdentical: AssertExact<SdkDirectory['joinRequest'], OrgDriveDirectoryEntry['joinRequest']> = true;
@@ -67,7 +67,7 @@ describe('operations/organizations.ts — drift guard vs @pagespace/lib canonica
     ]);
   });
 
-  it('X-1 (partial) the policy schema carries every key of lib OrgPolicies, same types', () => {
+  it('X-1 (partial) the policy schema carries every key of lib DelegatedOrgPolicies (no money key), same types', () => {
     expect(policiesIdentical).toBe(true);
     const keys = Object.keys(getOrgPolicies.outputSchema.shape.policies.shape);
     expect(keys.length).toBeGreaterThanOrEqual(17);
@@ -83,8 +83,8 @@ type SdkOutput<T extends { outputSchema: { _output: unknown } }> = T['outputSche
 
 // A role change or invite grants anything but OWNER (ownership moves only by transfer).
 const grantableIdentical: AssertExact<SdkInput<typeof changeOrgMemberRole>['role'], Exclude<OrgMemberDetail['role'], 'OWNER'>> = true;
-// A policy change names exactly lib's OrgPoliciesPatch keys, besides the org id.
-const patchKeysIdentical: AssertExact<Exclude<keyof SdkInput<typeof updateOrgPolicies>, 'orgId'>, keyof OrgPoliciesPatch> = true;
+// A policy change names exactly the non-money policy keys (lib DelegatedOrgPolicies), besides the org id.
+const patchKeysIdentical: AssertExact<Exclude<keyof SdkInput<typeof updateOrgPolicies>, 'orgId'>, keyof DelegatedOrgPolicies> = true;
 const suspensionKindIdentical: AssertExact<SdkOutput<typeof listOrgPolicySuspensions>['suspended'][number]['kind'], SuspensionKind> = true;
 const resourceTypeIdentical: AssertExact<SdkOutput<typeof listOrgPolicySuspensions>['suspended'][number]['resourceType'], SuspendedResourceType> = true;
 const auditCategoryIdentical: AssertExact<NonNullable<SdkInput<typeof getOrgAuditLog>['category']>, OrgAuditCategory> = true;

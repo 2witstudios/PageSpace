@@ -142,7 +142,12 @@ export const listOrgDriveDirectory = defineOperation({
     "List the organization's drive directory for you (any org member): every Open and Restricted drive with its visibility, whether you have joined it, your open join request, and its lead — the only place a Restricted drive is discovered before joining. Private drives appear only where you can already open them. A key scoped to specific drives sees only those drives here. The organization's sign-in policy (requireStrongSignIn, maximumSessionAgeMinutes) applies to the key: 403 org_strong_sign_in_required or org_reauthentication_required when its sign-in does not satisfy it.",
 });
 
-/** `OrgPolicies` (`packages/lib/src/organizations/policies-core.ts`) — every key always present, defaults filled in (POL-1). */
+/**
+ * `DelegatedOrgPolicies` (`packages/lib/src/organizations/policies-core.ts`): the org's policies, defaults
+ * filled in (POL-1), as a key reads them — WITHOUT the money keys (`seatAllowanceCents`, `walletFallback`).
+ * [D-OW-26] / D-OW-47: a key never sets money or a spend source and reads money only through the consumer
+ * view, so those two are a signed-in session's alone and are absent here.
+ */
 const orgPoliciesSchema = z.object({
   requireStrongSignIn: z.boolean(),
   maximumSessionAgeMinutes: z.number().int().nonnegative().max(43_200).nullable(),
@@ -153,9 +158,6 @@ const orgPoliciesSchema = z.object({
   whoCanInvite: z.enum(['admins', 'members']),
   whoCanCreateDrives: z.enum(['admins', 'members']),
   openDriveRoleFloor: z.enum(['view', 'edit']),
-  /** Per-consumer monthly seat allowance, whole cents of credit value. Never unlimited. */
-  seatAllowanceCents: z.number(),
-  walletFallback: z.enum(['refuse', 'seat_allowance', 'own_credits']),
   modelAllowlist: z.array(z.string()).nullable(),
   providerAllowlist: z.array(z.string()).nullable(),
   agentsAutonomous: z.boolean(),
@@ -174,7 +176,7 @@ export const getOrgPolicies = defineOperation({
   outputSchema: z.object({ policies: orgPoliciesSchema }),
   requiredScope: 'account',
   description:
-    "Read an organization's policies with a default filled in for every key (guests, sharing, publishing, invites, drive creation, the Open-drive role floor, the seat allowance and wallet fallback, model/provider/integration allowlists, agent autonomy, sandbox and environments). Owner and Admins only — a plain member is refused (403) and a non-member gets 404. Change them with organizations.updatePolicies. Requires a key with no drive restriction. The organization's sign-in policy (requireStrongSignIn, maximumSessionAgeMinutes) applies to the key: 403 org_strong_sign_in_required or org_reauthentication_required when its sign-in does not satisfy it.",
+    "Read an organization's policies with a default filled in for every key (guests, sharing, publishing, invites, drive creation, the Open-drive role floor, model/provider/integration allowlists, agent autonomy, sandbox and environments). The money policies (seat allowance, wallet fallback) are never shown to a key: they need a signed-in session. Owner and Admins only — a plain member is refused (403) and a non-member gets 404. Change them with organizations.updatePolicies. Requires a key with no drive restriction. The organization's sign-in policy (requireStrongSignIn, maximumSessionAgeMinutes) applies to the key: 403 org_strong_sign_in_required or org_reauthentication_required when its sign-in does not satisfy it.",
 });
 
 // ---------------------------------------------------------------------------
@@ -354,17 +356,16 @@ export const acceptOrgInvitation = defineOperation({
 // ---------------------------------------------------------------------------
 
 /**
- * A policy change: any subset of `OrgPolicies` keys, validated server-side by lib's
+ * A policy change: any subset of the non-money policy keys, validated server-side by lib's
  * `validateOrgPoliciesPatch` (unknown keys and invalid values are refused, nothing is partly
  * applied). `maximumSessionAgeMinutes` is 15–43200 minutes, or null for no maximum.
  */
 const orgPoliciesPatchShape = {
   ...orgPoliciesSchema.partial().shape,
   maximumSessionAgeMinutes: z.number().int().min(15).max(43_200).nullable().optional(),
-  seatAllowanceCents: z.number().int().nonnegative().optional(),
 };
 
-/** Every policy key a change may name — `OrgPolicies`'s keys, pinned by the drift guard. */
+/** Every policy key a key's change may name — lib's `DelegatedOrgPolicies` keys, pinned by the drift guard. */
 export const ORG_POLICY_KEYS = Object.keys(orgPoliciesSchema.shape) as ReadonlyArray<keyof typeof orgPoliciesSchema.shape>;
 
 export const updateOrgPolicies = defineOperation({
@@ -387,7 +388,7 @@ export const updateOrgPolicies = defineOperation({
     publishedVisibility: z.object({ parked: z.number(), restored: z.number(), failed: z.number() }).optional(),
   }),
   requiredScope: 'account',
-  description: `Change one or more organization policies, including the sign-in policy (requireStrongSignIn; maximumSessionAgeMinutes 15-43200, or null for none). Applies immediately; anything newly forbidden is suspended (never deleted) and counted in the answer. A lapsed org may only restrict. Owner and Admins only. ${KEY_RULES}`,
+  description: `Change one or more organization policies, including the sign-in policy (requireStrongSignIn; maximumSessionAgeMinutes 15-43200, or null for none). Applies immediately; anything newly forbidden is suspended (never deleted) and counted in the answer. A lapsed org may only restrict. The money policies (seatAllowanceCents, walletFallback) cannot be changed with a key: the server refuses them (mcp_token_cannot_move_money / mcp_token_cannot_change_spend_source), so they are not inputs here. Owner and Admins only. ${KEY_RULES}`,
 });
 
 /** `SuspensionKind` (`packages/lib/src/organizations/policies-core.ts`). */

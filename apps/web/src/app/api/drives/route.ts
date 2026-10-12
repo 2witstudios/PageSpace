@@ -204,7 +204,7 @@ export async function POST(request: Request) {
   if (orgId !== undefined) {
     const refused = await refuseOrgCredential(
       request,
-      { ok: true, userId, allowedDriveIds: [], authentication: auth.authentication ?? null },
+      { ok: true, userId, allowedDriveIds: [], authentication: auth.authentication ?? null, credential: auth.tokenType === 'session' ? 'session' : 'mcp' },
       orgId,
     );
     if (refused) return refused;

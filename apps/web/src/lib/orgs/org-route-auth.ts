@@ -45,8 +45,9 @@ export type OrgGate =
   /** `role` is the caller's org role, set by authorizeOrgRequest (not by authenticateOrgRequest).
    * `allowedDriveIds` is the token's drive restriction — empty for a session or an unscoped
    * token (full access); non-empty only on the directory, the one route that filters by it.
-   * `authentication` is the credential's verified sign-in evidence, for the org sign-in policy. */
-  | { ok: true; userId: string; role?: OrgRole; allowedDriveIds: string[]; authentication: VerifiedAuthentication | null }
+   * `authentication` is the credential's verified sign-in evidence, for the org sign-in policy.
+   * `credential` is how the caller authenticated: a delegated key ('mcp') never moves money ([D-OW-26]). */
+  | { ok: true; userId: string; role?: OrgRole; allowedDriveIds: string[]; authentication: VerifiedAuthentication | null; credential: 'session' | 'mcp' }
   | { ok: false; response: Response };
 
 /** 404 exactly as an unknown route would answer, so dark orgs reveal nothing. */
@@ -82,7 +83,13 @@ export async function authenticateOrgRequest(request: Request, options: AuthOpti
       response: apiError(403, 'token_scope_refused', 'This token is limited to specific drives and cannot act on organization-wide data'),
     };
   }
-  return { ok: true, userId: auth.userId, allowedDriveIds, authentication: auth.authentication ?? null };
+  return {
+    ok: true,
+    userId: auth.userId,
+    allowedDriveIds,
+    authentication: auth.authentication ?? null,
+    credential: auth.tokenType === 'session' ? 'session' : 'mcp',
+  };
 }
 
 /** The credential's drive restriction; empty = unrestricted (a session or an unscoped token). */

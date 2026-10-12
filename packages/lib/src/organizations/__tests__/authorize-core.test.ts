@@ -24,6 +24,11 @@ describe('authorize-core', () => {
   it('ORG-5 (partial) a missing or unknown role never holds any org role (fails closed)', () => {
     expect(holdsOrgRole(undefined, 'MEMBER')).toBe(false);
     expect(holdsOrgRole('GUEST' as OrgRole, 'MEMBER')).toBe(false);
+    // Prototype keys are not roles (an own key, not `in`).
+    for (const key of ['constructor', 'toString', '__proto__']) {
+      expect(holdsOrgRole(key as OrgRole, 'MEMBER')).toBe(false);
+      expect(holdsOrgRole('OWNER', key as OrgRole)).toBe(false);
+    }
     expect(decideOrgRole({ membershipRole: 'GUEST' as OrgRole, minRole: 'MEMBER' })).toEqual({ ok: false, status: 403, reason: 'insufficient_role' });
   });
 });
