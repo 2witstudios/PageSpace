@@ -9,6 +9,8 @@
  *   - reading org content with one: a person's background model (memory discovery, pulse) leaves out the drives,
  *     and the pages in them, whose org does not allow it;
  *   - bringing one in: moving an agent page, or a whole drive, into an org that does not allow its model is refused;
+ *   - consulting one: ask_agent sends an agent's own drive content to its model, so the AGENT's org governs it as well
+ *     as the caller's, whoever calls (the global assistant, or an agent in another org's drive);
  * Only the model network call (`generateText`), page-version blob storage and the request's session are stubbed;
  * every policy, drive, page and user row is real. Every row is deleted; the pool is ended. The payer-aware tier the
  * shared pro-model gate (model-entitlement.ts) asks for is proven against real wallets in lib
@@ -54,6 +56,12 @@ import { generateTranscriptSummary } from '@/lib/integrations/zoom/generate-summ
 import { POST as bulkCopy } from '@/app/api/pages/bulk-copy/route';
 import { PUT as moveDriveIn } from '@/app/api/drives/[driveId]/org/route';
 import { movePagesToDrive } from '@/services/api/page-cross-drive-move-service';
+// The tool registry first: entering through one tool module would close an import cycle back into it half-built.
+import '@/lib/ai/core/ai-tools';
+import { executeAskAgent } from '@/lib/ai/tools/agent-communication-tools';
+import { DEFAULT_MODEL } from '../ai-providers-config';
+import { driveSpend } from '@pagespace/lib/billing/spend-target';
+import type { ToolExecutionContext } from '../types';
 
 const created = { userIds: [] as string[], driveIds: [] as string[], orgIds: [] as string[] };
 let dbAvailable = false;
@@ -243,6 +251,27 @@ describe('POL-8 the org model and provider allowlists govern every model use in 
     await setPolicies({ modelAllowlist: [ALLOWED.model, REFUSED.model] });
     expect((await moveIn()).status).toBe(200);
     expect(await orgOf()).toBe(w.orgId);
+  });
+
+  it('consulting: ask_agent is judged by the TARGET agent\'s org — a global-assistant caller and a caller in another org\'s drive are refused an agent whose model its org does not allow, a null model falling back to the default', async () => {
+    // The agent sets no model: it runs DEFAULT_MODEL, which org A does not allow.
+    const agentId = (await factories.createPage(w.orgDrive, { type: 'AI_CHAT', aiProvider: null, aiModel: null, title: 'Analyst' })).id;
+    await setPolicies({ modelAllowlist: [REFUSED.model] });
+    expect(DEFAULT_MODEL).not.toBe(REFUSED.model);
+    const otherOrg = createId();
+    created.orgIds.push(otherOrg);
+    await db.insert(organizations).values({ id: otherOrg, name: 'Contoso', slug: `co-${createId()}`, ownerId: w.owner, policies: {} });
+    await db.insert(orgMembers).values({ orgId: otherOrg, userId: w.owner, role: 'OWNER' });
+    const otherOrgDrive = (await factories.createDrive(w.owner, { orgId: otherOrg, orgVisibility: 'RESTRICTED' })).id;
+    created.driveIds.push(otherOrgDrive);
+    const ask = (context: ToolExecutionContext) => executeAskAgent({ agentPath: '/Analyst', agentId, question: 'What changed?' }, { experimental_context: context });
+
+    generateText.mockClear();
+    const fromGlobal = await ask({ userId: w.owner } as ToolExecutionContext);
+    const fromOtherOrg = await ask({ userId: w.owner, creditSpend: { spend: driveSpend(otherOrgDrive) } } as ToolExecutionContext);
+
+    for (const result of [fromGlobal, fromOtherOrg]) expect(JSON.stringify(result)).toContain("doesn't allow that AI model");
+    expect(generateText).not.toHaveBeenCalled();
   });
 
   it('offering: the model list an org drive offers is its allowlist; a personal drive offers the whole catalog (null)', async () => {

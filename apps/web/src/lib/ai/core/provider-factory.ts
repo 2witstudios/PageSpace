@@ -21,7 +21,7 @@ import { isOnPrem } from '@pagespace/lib/deployment-mode';
 import { getDrivePolicies } from '@pagespace/lib/organizations/policy-reader';
 import { modelDecision } from '@pagespace/lib/organizations/org-action-decisions';
 import { getManagedProviderKey } from './ai-utils';
-import { ONPREM_ALLOWED_PROVIDERS, resolveProviderModel } from './ai-providers-config';
+import { AI_PROVIDERS, ONPREM_ALLOWED_PROVIDERS, resolveProviderModel } from './ai-providers-config';
 
 // The local/on-prem providers (ONPREM_ALLOWED_PROVIDERS = ollama/lmstudio/azure_openai)
 // serve runtime-discovered models that aren't in the static catalog, so catalog
@@ -49,6 +49,27 @@ export interface ProviderFactoryOptions {
    * global assistant without one, a person's own background services), which no org policy restricts.
    */
   driveId: string | null;
+  /**
+   * Other drives whose content this call sends to the model (POL-8): content from drive X reaching a model is governed
+   * by X's org too. ask_agent names the consulted agent's drive here, so the agent's org decides as well as the
+   * caller's, whoever calls.
+   */
+  contentDriveIds?: readonly string[];
+}
+
+/** POL-8: the first refusal among the orgs of these drives for any of these (provider, model) uses, read now. */
+async function orgModelRefusal(
+  driveIds: ReadonlyArray<string | null | undefined>,
+  uses: ReadonlyArray<{ modelId: string; provider: string }>,
+): Promise<ProviderError | null> {
+  for (const driveId of new Set(driveIds.filter((id): id is string => Boolean(id)))) {
+    const policies = (await getDrivePolicies(driveId))?.policies ?? null;
+    for (const use of uses) {
+      const decision = modelDecision(policies, use);
+      if (!decision.ok) return { error: decision.message, status: decision.status, code: decision.code, policy: decision.policy };
+    }
+  }
+  return null;
 }
 
 export interface ProviderResult {
@@ -100,14 +121,13 @@ export async function createAIProvider(
   // POL-8: the org's model and provider allowlists, read now (no cache). BOTH the pair that will run and the pair
   // that was asked for must be allowed: an allowlist that let the resolver swap a refused selection for the
   // default would run a model the org never allowed, and call it a success.
-  if (options.driveId) {
-    const policies = (await getDrivePolicies(options.driveId))?.policies ?? null;
-    const asked = selectedModel || selectedProvider ? { modelId: selectedModel ?? currentModel, provider: selectedProvider ?? currentProvider } : null;
-    for (const use of [{ modelId: currentModel, provider: currentProvider }, ...(asked ? [asked] : [])]) {
-      const decision = modelDecision(policies, use);
-      if (!decision.ok) return { error: decision.message, status: decision.status, code: decision.code, policy: decision.policy };
-    }
-  }
+  // Every drive whose content the call carries is judged: the governing drive and any named content drive.
+  const asked = selectedModel || selectedProvider ? { modelId: selectedModel ?? currentModel, provider: selectedProvider ?? currentProvider } : null;
+  const refusal = await orgModelRefusal(
+    [options.driveId, ...(options.contentDriveIds ?? [])],
+    [{ modelId: currentModel, provider: currentProvider }, ...(asked ? [asked] : [])],
+  );
+  if (refusal) return refusal;
 
   // Deployment policy: on-prem only permits the local/BAA-eligible providers.
   if (
@@ -281,10 +301,42 @@ export async function updateUserProviderSettings(
   }
 }
 
+export type OpenRouterImageClient = ReturnType<typeof createOpenRouter>;
+
+/**
+ * The provider (the catalog key) an OpenRouter model id belongs to: the catalog provider listing it, else its vendor
+ * prefix (an image model is not in the chat catalog). What the provider allowlist names.
+ */
+function providerOfModelId(modelId: string): string {
+  const listed = Object.entries(AI_PROVIDERS).find(([, cfg]) => modelId in cfg.models)?.[0];
+  return listed ?? modelId.split('/')[0];
+}
+
+/**
+ * The image-generation client (POL-8): built here, beside every other provider, so the drive's org model and provider
+ * allowlists judge the image model exactly as they judge a chat model. Refused, never substituted.
+ */
+export async function createImageProvider(
+  request: { model: string },
+  options: Pick<ProviderFactoryOptions, 'driveId' | 'contentDriveIds'>,
+): Promise<{ client: OpenRouterImageClient; provider: string; modelName: string } | ProviderError> {
+  const provider = providerOfModelId(request.model);
+  const refusal = await orgModelRefusal([options.driveId, ...(options.contentDriveIds ?? [])], [{ modelId: request.model, provider }]);
+  if (refusal) return refusal;
+  const managed = getManagedProviderKey('openrouter');
+  if (!managed?.apiKey) return notConfigured('OpenRouter');
+  const client = createOpenRouter({
+    apiKey: managed.apiKey,
+    ...(process.env.OPENROUTER_BASE_URL ? { baseURL: process.env.OPENROUTER_BASE_URL } : {}),
+    headers: { 'X-OpenRouter-Cache': 'true' },
+  });
+  return { client, provider, modelName: request.model };
+}
+
 export function createProviderErrorResponse(error: ProviderError): NextResponse {
   return NextResponse.json({ error: error.error }, { status: error.status });
 }
 
-export function isProviderError(result: ProviderResult | ProviderError): result is ProviderError {
+export function isProviderError<T extends object>(result: T | ProviderError): result is ProviderError {
   return 'error' in result;
 }

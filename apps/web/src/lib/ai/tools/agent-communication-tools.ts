@@ -46,7 +46,7 @@ const MAX_AGENT_DEPTH = 2;
  * Get configured AI model for agent using the centralized provider factory
  * Handles provider-specific setup and fallbacks
  */
-async function getConfiguredModel(userId: string, agentConfig: { aiProvider?: string | null; aiModel?: string | null }, spend: SpendTarget) {
+async function getConfiguredModel(userId: string, agentConfig: { aiProvider?: string | null; aiModel?: string | null; driveId: string }, spend: SpendTarget) {
   const { aiProvider, aiModel } = agentConfig;
 
   // Use default provider/model if agent doesn't have specific configuration
@@ -58,8 +58,9 @@ async function getConfiguredModel(userId: string, agentConfig: { aiProvider?: st
     selectedModel,
   };
 
-  // POL-8: the org of the drive this call runs in (its spend drive); none for personal spend.
-  const providerResult = await createAIProvider(userId, providerRequest, { driveId: spendDriveId(spend) });
+  // POL-8: the org of the drive this call runs in (its spend drive; none for personal spend) AND the org of the
+  // consulted agent's own drive, whose content (its prompt, its pages) reaches the model whoever calls.
+  const providerResult = await createAIProvider(userId, providerRequest, { driveId: spendDriveId(spend), contentDriveIds: [agentConfig.driveId] });
 
   if (isProviderError(providerResult)) {
     throw new Error(providerResult.error);
@@ -713,7 +714,8 @@ export async function executeAskAgent(
         const { model, provider: resolvedProvider, modelName: resolvedModelName } =
           await getConfiguredModel(userId, {
             aiProvider: targetAgent.aiProvider,
-            aiModel: targetAgent.aiModel
+            aiModel: targetAgent.aiModel,
+            driveId: targetAgent.driveId,
           }, executionContext?.creditSpend?.spend ?? PERSONAL_SPEND);
         
         // 9. Filter tools for agent. Nested calls inherit the top-level caller's MCP
