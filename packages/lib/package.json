@@ -2479,6 +2479,11 @@
       "import": "./dist/auth/authentication-evidence.js",
       "require": "./dist/auth/authentication-evidence.js"
     },
+    "./auth/reauthentication": {
+      "types": "./dist/auth/reauthentication.d.ts",
+      "import": "./dist/auth/reauthentication.js",
+      "require": "./dist/auth/reauthentication.js"
+    },
     "./auth/session-service": {
       "types": "./dist/auth/session-service.d.ts",
       "import": "./dist/auth/session-service.js",
@@ -3785,6 +3790,9 @@
       ],
       "auth/authentication-evidence": [
         "./dist/auth/authentication-evidence.d.ts"
+      ],
+      "auth/reauthentication": [
+        "./dist/auth/reauthentication.d.ts"
       ],
       "auth/session-service": [
         "./dist/auth/session-service.d.ts"
