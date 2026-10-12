@@ -10,12 +10,16 @@ import { SWRConfig } from 'swr';
 vi.mock('@pagespace/lib/organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 vi.mock('next/navigation', () => ({ useParams: () => ({ driveId: 'd-product' }), useRouter: () => ({ push: vi.fn() }) }));
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
-const api = vi.hoisted(() => ({ fetchWithAuth: vi.fn(), post: vi.fn(), del: vi.fn(async () => ({})) }));
+const api = vi.hoisted(() => ({
+  fetchWithAuth: vi.fn<(url: string) => Promise<unknown>>(),
+  post: vi.fn<(url: string, body?: unknown) => Promise<unknown>>(),
+  del: vi.fn<(url: string, body?: unknown) => Promise<unknown>>(async () => ({})),
+}));
 vi.mock('@/lib/auth/auth-fetch', async (importOriginal) => ({
   ApiRequestError: (await importOriginal<typeof import('@/lib/auth/auth-fetch')>()).ApiRequestError,
-  fetchWithAuth: (...a: unknown[]) => api.fetchWithAuth(...a),
-  post: (...a: unknown[]) => api.post(...a),
-  del: (...a: unknown[]) => api.del(...a),
+  fetchWithAuth: (url: string) => api.fetchWithAuth(url),
+  post: (url: string, body?: unknown) => api.post(url, body),
+  del: (url: string, body?: unknown) => api.del(url, body),
 }));
 vi.mock('@/hooks/useSocket', () => ({ useSocket: () => null }));
 vi.mock('@/hooks/useDebounce', () => ({ useDebounce: <T,>(v: T) => v }));
