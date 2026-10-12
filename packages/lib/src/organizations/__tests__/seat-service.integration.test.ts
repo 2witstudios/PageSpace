@@ -13,9 +13,9 @@ import { db } from '@pagespace/db/db';
 import { eq, inArray, sql } from '@pagespace/db/operators';
 import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
-import { users } from '@pagespace/db/schema/auth';
+import { mcpTokens, users } from '@pagespace/db/schema/auth';
 import { drives, pages } from '@pagespace/db/schema/core';
-import { driveAgentMembers, driveMembers } from '@pagespace/db/schema/members';
+import { driveAgentMembers, driveMembers, mcpTokenDrives } from '@pagespace/db/schema/members';
 import { pageShareLinks } from '@pagespace/db/schema/share-links';
 import { organizations, orgInvitations, orgMembers, orgSubscriptions } from '@pagespace/db/schema/organizations';
 import { wallets, walletFundingLegs } from '@pagespace/db/schema/wallets';
@@ -245,6 +245,55 @@ describe('seat accounting (real Postgres)', () => {
       expect(refused).toMatchObject({ ok: false, reason: 'seats_full' });
       expect(stripe.calls).toEqual([]);
       expect((await getSeatSummary(f.orgId)).held).toBe(5);
+    });
+    it('SEAT-3 seat quantity is accepted members plus live pending invites: a share-link guest, an invited-only drive guest, an AI agent on an org drive and a drive app token never change the count or the Stripe quantity; an expired invite stops counting', async () => {
+      const f = await buildOrg({ members: 4, autoAdd: true });
+      const stripe = new RecordingSeatStripe(0);
+      const held = async () => (await getSeatSummary(f.orgId)).held;
+      const session = (sessionId: string, userId: string) =>
+        EnforcedAuthContext.fromSession({ sessionId, userId, userRole: 'user', tokenVersion: 0, adminRoleVersion: 0, type: 'user', scopes: ['*'], expiresAt: new Date(Date.now() + HOUR) });
+      expect(await countOrgSeats(f.orgId)).toBe(4);
+
+      // A share-link redeemer (the real redemption path, D-OW-24) and an invited-only drive guest.
+      const [linkGuest, invitedGuest] = await factories.createUsers(2, { subscriptionTier: 'free' });
+      created.users.push(linkGuest.id, invitedGuest.id);
+      const link = await createPageShareLink(session('s1', f.ownerId), f.pageId, { permissions: ['VIEW'] });
+      if (!link.ok) throw new Error(`share link refused: ${link.error}`);
+      expect((await redeemPageShareLink(session('s2', linkGuest.id), link.data.rawToken)).ok).toBe(true);
+      await db.insert(driveMembers).values({ driveId: f.driveId, userId: invitedGuest.id, role: 'GUEST', acceptedAt: new Date() });
+
+      // An AI agent added to the org drive: a page, never a person.
+      const agent = await factories.createPage(f.driveId, { title: 'Helper', type: 'AI_CHAT' });
+      await db.insert(driveAgentMembers).values({ driveId: f.driveId, agentPageId: agent.id, addedBy: f.ownerId });
+
+      // A drive app: an MCP token scoped to the org drive, the row shape the drive Apps panel lists
+      // (mcp_tokens + mcp_token_drives, written by sessionRepository.createMcpTokenWithDriveScopes).
+      const [app] = await db
+        .insert(mcpTokens)
+        .values({ userId: f.ownerId, tokenHash: `hash-${createId()}`, tokenPrefix: 'mcp_app', name: 'Zapier', isScoped: true })
+        .returning({ id: mcpTokens.id });
+      await db.insert(mcpTokenDrives).values({ tokenId: app.id, driveId: f.driveId, role: 'MEMBER', addedBy: f.ownerId });
+
+      // None of them is a seat: the count, the summary, and Stripe are unchanged.
+      expect(await countOrgSeats(f.orgId)).toBe(4);
+      expect(await held()).toBe(4);
+      expect(stripe.calls).toEqual([]);
+
+      // A pending invite is a seat: the fifth fills the included five (no Stripe), the sixth raises
+      // the extra-seat quantity to exactly ONE — the guests, agent and app added nothing to it.
+      const fifth = await invite(f, stripe);
+      if (!fifth.ok) throw new Error('fifth invite refused');
+      expect(await held()).toBe(5);
+      expect(stripe.calls).toEqual([]);
+      expect((await invite(f, stripe)).ok).toBe(true);
+      expect(await held()).toBe(6);
+      expect(stripe.calls.map((c) => c.quantity)).toEqual([1]);
+      expect(await storedExtra(f.orgId)).toBe(1);
+
+      // An invite that expires stops holding its seat.
+      await db.update(orgInvitations).set({ expiresAt: new Date(Date.now() - HOUR) }).where(eq(orgInvitations.id, fifth.invitation.id));
+      expect(await countOrgSeats(f.orgId)).toBe(5);
+      expect(await held()).toBe(5);
     });
   });
 

@@ -184,6 +184,11 @@
       "import": "./dist/audit/audit-db-binding.js",
       "require": "./dist/audit/audit-db-binding.js"
     },
+    "./organizations/seats": {
+      "types": "./dist/organizations/seats.d.ts",
+      "import": "./dist/organizations/seats.js",
+      "require": "./dist/organizations/seats.js"
+    },
     "./organizations/seat-service": {
       "types": "./dist/organizations/seat-service.d.ts",
       "import": "./dist/organizations/seat-service.js",

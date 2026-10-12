@@ -16,7 +16,9 @@
  * proration). A replay of the same attempt is one request to Stripe; reaching the same
  * quantity again after another change is a new request. The quantity is ABSOLUTE, so even a
  * replay after Stripe's 24-hour key window sets a value Stripe already holds and prorates
- * nothing. Raises are prorated (SEAT-4); a release is not (SEAT-5: the period was paid).
+ * nothing. Raises are prorated (SEAT-4) unless the release already handed the period's seats
+ * back before the boundary (then re-adding is free, SEAT-5); a release is not prorated
+ * (SEAT-5: the period was paid).
  *
  * MID-FLIGHT FAILURE (Stripe runs inside the locked transaction, like D1's provisioning):
  *   - Stripe errors or is unreachable: the transaction rolls back; no invite, no stored
@@ -117,6 +119,8 @@ export async function admitSeat(
     purchasedExtra: sub?.extraSeatQuantity ?? 0,
     autoAdd: org?.seatAutoAdd ?? false,
     billingEnabled: isBillingEnabled(),
+    period: sub ? { end: sub.currentPeriodEnd, reconciledThrough: sub.seatsReconciledThrough } : null,
+    now: new Date(),
   });
   if (decision.action === 'admit') return { ok: true, raised: false };
   if (decision.action === 'refuse') {
@@ -138,18 +142,18 @@ export async function admitSeat(
     orgId: input.orgId,
     stored: { seatItemId: sub.stripeSeatItemId, extraSeatQuantity: sub.extraSeatQuantity, seatRevision: sub.seatRevision },
     seats: held + 1,
-    prorationBehavior: 'create_prorations',
+    prorationBehavior: decision.proration,
   });
   if (plan.kind === 'noop') return { ok: true, raised: false };
   const item = await port.setSeatQuantity(
-    { itemId: plan.itemId, quantity: plan.quantity, prorationBehavior: 'create_prorations' },
+    { itemId: plan.itemId, quantity: plan.quantity, prorationBehavior: decision.proration },
     plan.idempotencyKey,
   );
   await tx
     .update(orgSubscriptions)
     .set({ extraSeatQuantity: item.quantity, seatRevision: plan.nextRevision })
     .where(eq(orgSubscriptions.orgId, input.orgId));
-  loggers.api.info('org extra-seat quantity raised for an invite', { orgId: input.orgId, quantity: item.quantity, held: held + 1 });
+  loggers.api.info('org extra-seat quantity raised for an invite', { orgId: input.orgId, quantity: item.quantity, held: held + 1, proration: decision.proration });
   return { ok: true, raised: true, quantity: item.quantity };
 }
 

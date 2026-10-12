@@ -41,7 +41,9 @@ describe('seatQuantity', () => {
 });
 
 describe('decideSeatAdmission', () => {
-  const base = { held: 4, included: INCLUDED, purchasedExtra: 0, autoAdd: false, billingEnabled: true };
+  // Mid-period: the period ends in ten days and only its start boundary has been reconciled.
+  const midPeriod = { end: new Date(NOW.getTime() + 10 * 24 * HOUR), reconciledThrough: new Date(NOW.getTime() - 20 * 24 * HOUR) };
+  const base = { held: 4, included: INCLUDED, purchasedExtra: 0, autoAdd: false, billingEnabled: true, period: midPeriod, now: NOW };
 
   it('SEAT-4 (partial) a seat inside the included five needs no Stripe change, auto-add on or off', () => {
     expect(decideSeatAdmission({ ...base, held: 4 })).toEqual({ action: 'admit' });
@@ -49,7 +51,7 @@ describe('decideSeatAdmission', () => {
   });
 
   it('SEAT-4 (partial) the sixth seat with auto-add ON raises the quantity to one', () => {
-    expect(decideSeatAdmission({ ...base, held: 5, autoAdd: true })).toEqual({ action: 'raise', toExtra: 1 });
+    expect(decideSeatAdmission({ ...base, held: 5, autoAdd: true })).toEqual({ action: 'raise', toExtra: 1, proration: 'create_prorations' });
   });
 
   it('SEAT-4 (partial) the sixth seat with auto-add OFF is refused and names the purchased count', () => {
@@ -61,8 +63,20 @@ describe('decideSeatAdmission', () => {
     expect(decideSeatAdmission({ ...base, held: 5, purchasedExtra: 1, autoAdd: false })).toEqual({ action: 'admit' });
     expect(decideSeatAdmission({ ...base, held: 5, purchasedExtra: 1, autoAdd: true })).toEqual({ action: 'admit' });
     // ...but the seventh is not.
-    expect(decideSeatAdmission({ ...base, held: 6, purchasedExtra: 1, autoAdd: true })).toEqual({ action: 'raise', toExtra: 2 });
+    expect(decideSeatAdmission({ ...base, held: 6, purchasedExtra: 1, autoAdd: true })).toEqual({ action: 'raise', toExtra: 2, proration: 'create_prorations' });
     expect(decideSeatAdmission({ ...base, held: 6, purchasedExtra: 1, autoAdd: false })).toMatchObject({ action: 'refuse', purchased: 6 });
+  });
+
+  it('SEAT-5 (partial) a re-add after the pre-boundary release (the period end already reconciled, still inside the period) raises with NO proration: re-adding within the period never charges', () => {
+    const released = { end: new Date(NOW.getTime() + HOUR / 2), reconciledThrough: new Date(NOW.getTime() + HOUR / 2) };
+    expect(decideSeatAdmission({ ...base, held: 5, autoAdd: true, period: released })).toEqual({ action: 'raise', toExtra: 1, proration: 'none' });
+    // Before the release ran for this boundary the raise is a new seat: prorated (SEAT-4).
+    const unreleased = { end: released.end, reconciledThrough: midPeriod.reconciledThrough };
+    expect(decideSeatAdmission({ ...base, held: 5, autoAdd: true, period: unreleased })).toEqual({ action: 'raise', toExtra: 1, proration: 'create_prorations' });
+    // Once the boundary has passed the release belongs to the PAST period: a raise is prorated again.
+    expect(decideSeatAdmission({ ...base, held: 5, autoAdd: true, period: released, now: new Date(released.end.getTime() + 1) })).toMatchObject({ proration: 'create_prorations' });
+    // No live subscription (no period) prices nothing here: provisioning bills the real count.
+    expect(decideSeatAdmission({ ...base, held: 5, autoAdd: true, period: null })).toEqual({ action: 'raise', toExtra: 1, proration: 'create_prorations' });
   });
 
   it('SEAT-4 (partial) an org with no seat-billing (onprem, tenant) is never limited', () => {
@@ -134,5 +148,12 @@ describe('seatRefusalMessage', () => {
     expect(asOwner).toMatch(/automatic seat/i);
     expect(asOwner).toMatch(/revoke|remove/i);
     expect(`${asAdmin} ${asOwner}`).not.toMatch(/\$|credit/i);
+  });
+
+  it('SEAT-6 (partial) a Member is told no seat count: seat count is Owner/Admin only, and the message stays clear', () => {
+    const asMember = seatRefusalMessage({ purchased: 7, held: 7, actorRole: 'MEMBER' });
+    expect(asMember).not.toMatch(/\d/);
+    expect(asMember).toMatch(/seat/i);
+    expect(asMember).toMatch(/owner|admin/i);
   });
 });
