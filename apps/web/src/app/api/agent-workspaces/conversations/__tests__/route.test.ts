@@ -169,7 +169,7 @@ describe('GET /api/agent-workspaces/conversations', () => {
       const response = await GET(new Request('http://localhost/api/agent-workspaces/conversations'));
       const body = await response.json();
 
-      expect(mockGetBatchPagePermissions).toHaveBeenCalledWith('user-1', ['agent-1']);
+      expect(mockGetBatchPagePermissions).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1' }), ['agent-1']);
       expect(body.conversations).toEqual([wire(PAGE_ROW), wire(GLOBAL_ROW)]);
     });
 
@@ -207,7 +207,7 @@ describe('GET /api/agent-workspaces/conversations', () => {
       await GET(new Request('http://localhost/api/agent-workspaces/conversations'));
 
       expect(mockGetBatchPagePermissions).toHaveBeenCalledTimes(1);
-      expect(mockGetBatchPagePermissions).toHaveBeenCalledWith('user-1', ['agent-1']);
+      expect(mockGetBatchPagePermissions).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1' }), ['agent-1']);
     });
   });
 
@@ -368,7 +368,7 @@ describe('GET /api/agent-workspaces/conversations', () => {
       const response = await GET(new Request('http://localhost/api/agent-workspaces/conversations'));
       const body = await response.json();
 
-      expect(mockResolveDriveMembership).toHaveBeenCalledWith({ userId: 'user-1', driveId: 'drive-2' });
+      expect(mockResolveDriveMembership).toHaveBeenCalledWith({ actor: expect.objectContaining({ userId: 'user-1' }), driveId: 'drive-2' });
       expect(body.conversations).toEqual([wire(SESSION_GLOBAL_ROW), wire(GLOBAL_ROW)]);
     });
 

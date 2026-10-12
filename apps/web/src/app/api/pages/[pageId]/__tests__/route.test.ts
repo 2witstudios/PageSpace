@@ -137,6 +137,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackPageOperation } from '@pagespace/lib/monitoring/activity-tracker';
 import { jsonResponse } from '@pagespace/lib/utils/api-utils';
 import { db } from '@pagespace/db/db';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 // Test helpers
 const mockUserId = 'user_123';
@@ -263,7 +264,7 @@ describe('GET /api/pages/[pageId]', () => {
 
       expect(pageService.getPage).toHaveBeenCalledWith(
         mockPageId,
-        mockUserId,
+        expect.objectContaining({ userId: mockUserId }),
         // Principal-aware view authorization is injected by the route
         expect.objectContaining({ authorizeView: expect.any(Function) })
       );
@@ -432,7 +433,7 @@ describe('PATCH /api/pages/[pageId]', () => {
 
       expect(pageService.updatePage).toHaveBeenCalledWith(
         mockPageId,
-        mockUserId,
+        expect.objectContaining({ userId: mockUserId }),
         expect.objectContaining({
           title: 'Updated Title',
           content: '<p>New content</p>',
@@ -451,7 +452,7 @@ describe('PATCH /api/pages/[pageId]', () => {
 
       expect(pageService.updatePage).toHaveBeenCalledWith(
         mockPageId,
-        mockUserId,
+        expect.objectContaining({ userId: mockUserId }),
         expect.objectContaining({ title: 'MCP Update' }),
         expect.objectContaining({
           context: expect.objectContaining({
@@ -469,7 +470,7 @@ describe('PATCH /api/pages/[pageId]', () => {
 
       expect(pageService.updatePage).toHaveBeenCalledWith(
         mockPageId,
-        mockUserId,
+        expect.objectContaining({ userId: mockUserId }),
         expect.objectContaining({ title: 'Grouped' }),
         expect.objectContaining({
           context: expect.objectContaining({
@@ -487,7 +488,7 @@ describe('PATCH /api/pages/[pageId]', () => {
 
       expect(pageService.updatePage).toHaveBeenCalledWith(
         mockPageId,
-        mockUserId,
+        expect.objectContaining({ userId: mockUserId }),
         expect.objectContaining({ title: 'Concurrent' }),
         expect.objectContaining({ expectedRevision: 5 })
       );
@@ -822,7 +823,7 @@ describe('DELETE /api/pages/[pageId]', () => {
 
       expect(pageService.trashPage).toHaveBeenCalledWith(
         mockPageId,
-        mockUserId,
+        expect.objectContaining({ userId: mockUserId }),
         expect.objectContaining({ trashChildren: true, authorizeDelete: expect.any(Function) })
       );
     });
@@ -832,7 +833,7 @@ describe('DELETE /api/pages/[pageId]', () => {
 
       expect(pageService.trashPage).toHaveBeenCalledWith(
         mockPageId,
-        mockUserId,
+        expect.objectContaining({ userId: mockUserId }),
         expect.objectContaining({ trashChildren: true, authorizeDelete: expect.any(Function) })
       );
     });
@@ -842,7 +843,7 @@ describe('DELETE /api/pages/[pageId]', () => {
 
       expect(pageService.trashPage).toHaveBeenCalledWith(
         mockPageId,
-        mockUserId,
+        expect.objectContaining({ userId: mockUserId }),
         expect.objectContaining({ trashChildren: false, authorizeDelete: expect.any(Function) })
       );
     });
@@ -918,7 +919,7 @@ describe('DELETE /api/pages/[pageId]', () => {
 
       expect(pageService.trashPage).toHaveBeenCalledWith(
         mockPageId,
-        mockUserId,
+        expect.objectContaining({ userId: mockUserId }),
         expect.objectContaining({
           metadata: { source: 'mcp' },
         })
@@ -938,7 +939,7 @@ describe('DELETE /api/pages/[pageId]', () => {
       expect(response.status).toBe(200);
       expect(pageService.trashPage).toHaveBeenCalledWith(
         mockPageId,
-        mockUserId,
+        expect.objectContaining({ userId: mockUserId }),
         expect.objectContaining({ trashChildren: true })
       );
     });
@@ -998,6 +999,6 @@ vi.mock('@/lib/auth/principal-permissions', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/auth/principal-permissions')>();
   const permissions = await import('@pagespace/lib/permissions/permissions');
   return { ...actual,
-    canPrincipalSharePage: (auth: { userId: string }, resourceId: string) => permissions.canUserSharePage(auth.userId, resourceId),
+    canPrincipalSharePage: (auth: { userId: string }, resourceId: string) => permissions.canUserSharePage(credentialActor(auth.userId, null), resourceId),
   };
 });

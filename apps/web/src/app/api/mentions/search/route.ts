@@ -16,6 +16,7 @@ import { driveRoles } from '@pagespace/db/schema/members';
 import { MentionSuggestion, MentionType } from '@/types/mentions';
 import { findGuestAgentMembers, guestAgentSuggestion, shouldOfferGuestAgents } from '@/lib/mentions/guest-agent-members';
 import { z } from 'zod';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 /**
  * Build a multi-word search condition
@@ -207,7 +208,7 @@ export async function GET(request: Request) {
 
     if (crossDrive) {
       // Cross-drive search: get all drives user has access to (owned, member, page permissions)
-      targetDriveIds = await getDriveIdsForUser(userId);
+      targetDriveIds = await getDriveIdsForUser(actorFromAuth(auth));
 
       // Build context map for drive disambiguation
       if (targetDriveIds.length > 0) {

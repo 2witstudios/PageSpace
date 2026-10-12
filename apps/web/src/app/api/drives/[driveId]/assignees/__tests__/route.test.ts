@@ -72,6 +72,7 @@ import { ne } from '@pagespace/db/operators';
 import { getUserDriveAccess, canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { db } from '@pagespace/db/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 // ============================================================================
 // Test Helpers
@@ -445,7 +446,7 @@ describe('GET /api/drives/[driveId]/assignees', () => {
         } as never;
       });
 
-      vi.mocked(canUserViewPage).mockImplementation(async (_userId: string, pageId: string) => {
+      vi.mocked(canUserViewPage).mockImplementation(async (_actor, pageId: string) => {
         return pageId === 'agent-a';
       });
 
@@ -691,7 +692,7 @@ vi.mock('@/lib/auth/principal-permissions', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/auth/principal-permissions')>();
   const permissions = await import('@pagespace/lib/permissions/permissions');
   return { ...actual,
-    canPrincipalViewPage: (auth: { userId: string }, resourceId: string) => permissions.canUserViewPage(auth.userId, resourceId),
-    getPrincipalDriveAccess: (auth: { userId: string }, resourceId: string) => permissions.getUserDriveAccess(auth.userId, resourceId),
+    canPrincipalViewPage: (auth: { userId: string }, resourceId: string) => permissions.canUserViewPage(credentialActor(auth.userId, null), resourceId),
+    getPrincipalDriveAccess: (auth: { userId: string }, resourceId: string) => permissions.getUserDriveAccess(credentialActor(auth.userId, null), resourceId),
   };
 });

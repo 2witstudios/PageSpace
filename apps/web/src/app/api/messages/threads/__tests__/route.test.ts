@@ -188,7 +188,7 @@ describe('GET /api/messages/threads channel access (B7c)', () => {
     const response = await GET(new Request('http://localhost/api/messages/threads'));
 
     expect(response.status).toBe(200);
-    expect(getMemberDriveIds).toHaveBeenCalledWith(mockUserId, { includeTrashed: true });
+    expect(getMemberDriveIds).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }), { includeTrashed: true });
     const { __sqlText, __values } = channelSql();
     expect(__sqlText).not.toMatch(/drive_members/);
     expect(__sqlText).not.toMatch(/"ownerId"/);
@@ -205,7 +205,7 @@ describe('GET /api/messages/threads channel access (B7c)', () => {
     const body = await (await GET(new Request('http://localhost/api/messages/threads'))).json();
 
     expect(body.channels.map((c: { id: string }) => c.id)).toEqual(['ch_1']);
-    expect(getBatchPagePermissions).toHaveBeenCalledWith(mockUserId, ['ch_1', 'ch_secret']);
+    expect(getBatchPagePermissions).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }), ['ch_1', 'ch_secret']);
   });
 });
 
@@ -236,7 +236,7 @@ describe('GET /api/messages/threads channel access — pending invites', () => {
     expect(response.status).toBe(200);
     expect(body.channels.map((c: { id: string }) => c.id)).toEqual(['ch_accepted']);
     expect(JSON.stringify(body)).not.toContain('secret');
-    expect(getBatchPagePermissions).toHaveBeenCalledWith(mockUserId, ['ch_pending', 'ch_accepted']);
+    expect(getBatchPagePermissions).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }), ['ch_pending', 'ch_accepted']);
   });
 
   it('lists the same channel once the invite is accepted', async () => {

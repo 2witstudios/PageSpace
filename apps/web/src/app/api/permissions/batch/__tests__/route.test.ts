@@ -162,7 +162,7 @@ describe('POST /api/permissions/batch', () => {
       const request = createPostRequest({ pageIds });
       await POST(request as never);
 
-      expect(mockGetBatchPagePermissions).toHaveBeenCalledWith(mockUserId, pageIds);
+      expect(mockGetBatchPagePermissions).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }), pageIds);
     });
   });
 

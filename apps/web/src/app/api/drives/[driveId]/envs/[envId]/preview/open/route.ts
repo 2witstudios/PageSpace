@@ -31,6 +31,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { isDevPreviewConfigured } from '@pagespace/lib/services/sandbox/preview/dev-preview-env';
 import { resolveEnvInDrive } from '@/lib/drive-envs/drive-envs-runtime';
 import { isAllowedPreviewOpen, openPreviewForUser, signInOrDeny } from '@/lib/dev-preview/preview-runtime';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
 const ROUTE = 'drive-envs/preview/open';
@@ -55,7 +56,7 @@ export async function GET(request: Request, context: { params: Promise<{ driveId
     }
     if (!(await resolveEnvInDrive(envId, driveId))) return NextResponse.json({ error: 'Environment not found' }, { status: 404 });
 
-    const opened = await openPreviewForUser({ authorizeAs: { kind: 'env', id: envId }, userId: auth.userId, sessionId: auth.sessionId });
+    const opened = await openPreviewForUser({ authorizeAs: { kind: 'env', id: envId }, actor: actorFromAuth(auth), sessionId: auth.sessionId });
     if (!opened.ok) {
       if (opened.reason === 'not-authorized') {
         auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'dev_preview', resourceId: `env:${envId}`, details: { route: ROUTE, reason: opened.detail ?? 'not-authorized' } });

@@ -35,6 +35,7 @@ import { defaultRollbackDeps, withTx } from '../rollback/deps';
 import { rollbackDriveChange, rollbackMemberChange, rollbackPermissionChange } from '../rollback/rollback-executors';
 import { redoMemberChange, redoPermissionChange } from '../rollback/redo-executors';
 import type { ActivityLogForRollback } from '../rollback/types';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const created = { userIds: [] as string[], driveIds: [] as string[], orgIds: [] as string[] };
 let dbAvailable = false;
@@ -141,9 +142,9 @@ describe('pages moved into an org drive', () => {
     ]);
     await setGuests('off');
     expect(await move()).toMatchObject({ success: true, descendantCount: 2 });
-    expect(await getUserAccessLevel(w.outsider, w.personalPage)).toBeNull();
-    expect(await getUserAccessLevel(w.outsider, child)).toBeNull();
-    expect(await getUserAccessLevel(w.outsider, grandchild)).toBeNull();
+    expect(await getUserAccessLevel(credentialActor(w.outsider, null), w.personalPage)).toBeNull();
+    expect(await getUserAccessLevel(credentialActor(w.outsider, null), child)).toBeNull();
+    expect(await getUserAccessLevel(credentialActor(w.outsider, null), grandchild)).toBeNull();
     const [hold] = await db.select().from(orgGuestHolds).where(and(eq(orgGuestHolds.userId, w.outsider), eq(orgGuestHolds.state, 'suspended')));
     expect(hold.parked?.grants).toHaveLength(3);
   });

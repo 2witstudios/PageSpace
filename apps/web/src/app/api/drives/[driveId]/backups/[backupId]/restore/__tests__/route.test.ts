@@ -43,6 +43,7 @@ import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
 import { db } from '@pagespace/db/db';
 import { runPreRestoreSnapshot } from '@/services/api/restore-backup-service';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const mockAuth = (userId: string): SessionAuthResult => ({
   userId,
@@ -209,6 +210,6 @@ vi.mock('@/lib/auth/principal-permissions', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/auth/principal-permissions')>();
   const permissions = await import('@pagespace/lib/permissions/permissions');
   return { ...actual,
-    isPrincipalDriveOwnerOrAdmin: (auth: { userId: string }, resourceId: string) => permissions.isDriveOwnerOrAdmin(auth.userId, resourceId),
+    isPrincipalDriveOwnerOrAdmin: (auth: { userId: string }, resourceId: string) => permissions.isDriveOwnerOrAdmin(credentialActor(auth.userId, null), resourceId),
   };
 });

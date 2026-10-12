@@ -27,6 +27,7 @@ import {
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { rebuildEnv, resolveEnvInDrive } from '@/lib/drive-envs/drive-envs-runtime';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -54,7 +55,7 @@ export async function POST(request: Request, context: { params: Promise<{ driveI
       return NextResponse.json({ error: 'Environment not found' }, { status: 404 });
     }
 
-    const result = await rebuildEnv({ envId, requesterId: auth.userId });
+    const result = await rebuildEnv({ envId, requester: actorFromAuth(auth)});
     if (!result.ok) {
       if (result.reason === 'not_found') return NextResponse.json({ error: 'Environment not found' }, { status: 404 });
       // A LOCAL env is the user's own machine: there is no Sprite to replace, so

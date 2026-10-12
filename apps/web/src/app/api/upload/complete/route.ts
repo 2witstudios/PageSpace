@@ -17,6 +17,7 @@ import { getActorInfo, logFileActivity } from '@pagespace/lib/monitoring/activit
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { enqueueProcessorJob } from '@/lib/upload/processor-effects';
 import { checkObjectExists } from '@/lib/upload/s3-effects';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -203,12 +204,12 @@ export async function POST(request: Request) {
   // A scoped MCP token is its own drive member — uploads require the TOKEN's
   // role to grant edit, not the owning user's.
   if (isScopedMCPAuth(auth)) {
-    const level = await getAppDriveAccessLevel(auth.tokenId, driveId);
+    const level = await getAppDriveAccessLevel(actorFromAuth(auth), auth.tokenId, driveId);
     if (!level?.canEdit) {
       return NextResponse.json({ error: 'You do not have permission to upload to this drive' }, { status: 403 });
     }
   } else {
-    const drivePerms = await getUserDrivePermissions(userId, driveId);
+    const drivePerms = await getUserDrivePermissions(actorFromAuth(auth), driveId);
     if (!drivePerms) {
       return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
     }
@@ -326,7 +327,7 @@ export async function POST(request: Request) {
     });
 
     try {
-      await enqueueProcessorJob(userId, driveId, newPage.id);
+      await enqueueProcessorJob(actorFromAuth(auth), driveId, newPage.id);
     } catch (err) {
       // Best-effort by design, but the page now has no derived content
       // (thumbnails/OCR/extraction) until reprocessed — keep this loud.

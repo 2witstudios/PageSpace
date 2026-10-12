@@ -5,6 +5,7 @@ import { accountRepository } from '@pagespace/lib/repositories/account-repositor
 import { dataSubjectRequestRepository } from '@pagespace/lib/repositories/data-subject-request-repository';
 import { lodgeAndEnqueueErasure } from '@/lib/erasure/request-erasure';
 import { enqueueAccountErasure } from '@/lib/erasure/enqueue';
+import { actorFromVerifiedUser } from '@/lib/auth/request-actor';
 
 /**
  * Admin-gated Right-to-Erasure escalation (#908).
@@ -68,7 +69,7 @@ export const POST = withAdminAuth(async (admin, request) => {
         const jobId = await enqueueAccountErasure({
           requestId: existing.id,
           userId,
-          callerUserId: admin.id,
+          caller: actorFromVerifiedUser(admin),
         });
         await dataSubjectRequestRepository.markQueued(existing.id, jobId);
         loggers.auth.info(
@@ -99,7 +100,7 @@ export const POST = withAdminAuth(async (admin, request) => {
       subjectUserId: userId,
       subjectEmail: subject.email,
       stripeCustomerId: subject.stripeCustomerId,
-      callerUserId: admin.id,
+      caller: actorFromVerifiedUser(admin),
       requestedByType: 'admin',
       forceDelete,
       legalBasis: legalBasis ?? 'admin_escalation',

@@ -4,6 +4,7 @@ import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, checkMC
 import { getActivityById, previewRollback } from '@/services/api';
 import type { RollbackContext } from '@pagespace/lib/permissions/rollback-permissions';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 
@@ -89,7 +90,7 @@ export async function GET(
   auditRequest(request, { eventType: 'data.read', userId, resourceType: 'activity', resourceId: activityId });
 
   // Get rollback preview to determine eligibility
-  const preview = await previewRollback(activityId, userId, rollbackContext);
+  const preview = await previewRollback(activityId, actorFromAuth(auth), rollbackContext);
 
   return NextResponse.json({
     activity,

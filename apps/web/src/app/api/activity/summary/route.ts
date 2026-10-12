@@ -8,6 +8,7 @@ import { taskItems } from '@pagespace/db/schema/tasks'
 import { directMessages, dmConversations } from '@pagespace/db/schema/social';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session'] as const };
 
@@ -128,7 +129,7 @@ export async function GET(req: Request) {
     // Pages updated today / this week, counted over the pages the user can view (the canonical
     // accessiblePageIds set pulse scopes to): a private page, a page a custom role hides, or a page of
     // a drive the user does not belong to is never counted. Trashed pages are not in the set.
-    const visiblePageIds = await accessiblePageIds(userId);
+    const visiblePageIds = await accessiblePageIds(actorFromAuth(auth));
 
     let pagesUpdatedToday = 0;
     let pagesUpdatedThisWeek = 0;

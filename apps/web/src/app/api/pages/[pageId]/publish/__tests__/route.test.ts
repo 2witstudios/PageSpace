@@ -258,7 +258,7 @@ describe('POST /api/pages/[pageId]/publish', () => {
     // writes through this mocked `update` path — it's owned by the allocator).
     expect(updateWhere).toHaveBeenCalledTimes(1);
 
-    expect(rewriteCanvasAssets).toHaveBeenCalledWith({ html: '<p>hi</p>', userId: 'user-1', db: expect.any(Object) });
+    expect(rewriteCanvasAssets).toHaveBeenCalledWith({ html: '<p>hi</p>', actor: expect.objectContaining({ userId: 'user-1' }), db: expect.any(Object) });
     expect(renderPublishedPage).toHaveBeenCalledWith(expect.objectContaining({ html: '<p>hi</p>', title: 'Welcome', assetBaseUrl: 'https://test-publish.t3.tigrisfiles.io', faviconBaseUrl: 'https://pagespace.ai', pageUrl: 'https://acme.pagespace.site/welcome', description: 'hi' }));
     // With no noindex override, the resolver forwards the explicit index default.
     const firstCallArg = renderPublishedPage.mock.calls[0]?.[0] as Record<string, unknown>;

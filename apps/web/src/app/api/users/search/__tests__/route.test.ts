@@ -430,7 +430,7 @@ describe('GET /api/users/search', () => {
       expect(body.users[0]).not.toHaveProperty('email');
       // The route delegates the relationship scoping to the helper, passing the
       // caller id, an escaped LIKE pattern, and the result limit.
-      expect(searchRelatedProfilesByName).toHaveBeenCalledWith('user_123', '%priv%', 10);
+      expect(searchRelatedProfilesByName).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user_123' }), '%priv%', 10);
     });
 
     it('passes a LIKE-escaped pattern to the related branch so wildcards are literal', async () => {
@@ -441,7 +441,7 @@ describe('GET /api/users/search', () => {
       await GET(request);
 
       // `%%` must be escaped to `\%\%`, not passed through as a match-all wildcard.
-      expect(searchRelatedProfilesByName).toHaveBeenCalledWith('user_123', '%\\%\\%%', 10);
+      expect(searchRelatedProfilesByName).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user_123' }), '%\\%\\%%', 10);
     });
 
     it('de-dupes a user who is both a public match and a related match', async () => {

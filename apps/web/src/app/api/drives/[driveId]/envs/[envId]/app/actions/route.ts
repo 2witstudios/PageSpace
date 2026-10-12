@@ -39,6 +39,7 @@ import { resolveEnvInDrive } from '@/lib/drive-envs/drive-envs-runtime';
 import { stopPublishedApp, wakePublishedApp } from '@pagespace/lib/services/app-hosting/app-lifecycle-metering';
 import { unparkPublishedApp, type UnparkHeld } from '@pagespace/lib/services/app-hosting/app-unpark';
 import { findPublishedAppByEnvId, findPublishedAppById, toPublishedAppDTO } from '@/lib/app-hosting/published-app-dto';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 /** Why a parked app cannot be un-parked yet, in words for the person who asked. */
 const UNPARK_HELD_MESSAGES: Readonly<Record<UnparkHeld, string>> = {
@@ -92,7 +93,7 @@ export async function POST(request: Request, context: { params: Promise<{ driveI
     if (!canManage && !unparking) return denied();
 
     if (unparking) {
-      const unpark = await unparkPublishedApp({ publishedAppId: app.id, actorId: auth.userId });
+      const unpark = await unparkPublishedApp({ publishedAppId: app.id, actor: actorFromAuth(auth)});
       if (unpark.outcome === 'refused' && unpark.reason === 'forbidden') {
         auditRequest(request, {
           eventType: 'authz.access.denied',

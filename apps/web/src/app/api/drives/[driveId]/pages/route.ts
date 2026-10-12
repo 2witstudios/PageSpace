@@ -11,6 +11,8 @@ import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isScopedMCPAuth, getPrincipalAccessiblePagesInDrive } from '@/lib/auth';
 import { jsonResponse } from '@pagespace/lib/utils/api-utils';
+import { actorFromAuth } from '@/lib/auth/request-actor';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 
@@ -19,10 +21,10 @@ const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 // This prevents overwhelming users with indicators on old content they've never seen
 const UNREAD_INDICATOR_CUTOFF_DATE = new Date('2026-02-03T00:00:00.000Z');
 
-async function getPermittedPages(driveId: string, userId: string) {
+async function getPermittedPages(driveId: string, actor: AccessActor) {
   // The canonical page set: the org-aware membership (with its custom or default role), private
   // pages, and live explicit grants. Never a drive_members read of this route's own.
-  const permittedPageIds = await getUserAccessiblePagesInDrive(userId, driveId);
+  const permittedPageIds = await getUserAccessiblePagesInDrive(actor, driveId);
 
   if (permittedPageIds.length === 0) {
     return [];
@@ -106,7 +108,7 @@ export async function GET(
       pageResults = allPages.filter(p => accessibleIds.has(p.id));
     } else {
       // The drive's lead or an effective ADMIN (the org-aware membership) gets every page
-      if (canAdministerDrive(await loadDriveRelationship(userId, drive))) {
+      if (canAdministerDrive(await loadDriveRelationship(actorFromAuth(auth), drive))) {
         // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
         pageResults = await db.query.pages.findMany({
           where: and(
@@ -117,7 +119,7 @@ export async function GET(
         });
       } else {
         // If user does not own the drive and is not an admin, fetch only permitted pages and their ancestors
-        pageResults = await getPermittedPages(drive.id, userId);
+        pageResults = await getPermittedPages(drive.id, actorFromAuth(auth));
       }
     }
 

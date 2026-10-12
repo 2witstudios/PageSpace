@@ -11,6 +11,7 @@ import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPD
 import { getAppDriveMembership } from '@pagespace/lib/permissions/app-permissions';
 import { getActorInfo, logDriveActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { loadDriveLeadAuthority } from '@pagespace/lib/permissions/drive-relationship-loader';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -34,7 +35,7 @@ export async function POST(
     // ADMIN is not enough, mirroring the user-side ownership requirement.
     let scopedExplicitRole: 'OWNER' | 'ADMIN' | 'MEMBER' | null | undefined;
     if (isScopedMCPAuth(auth)) {
-      const membership = await getAppDriveMembership(auth.tokenId, driveId);
+      const membership = await getAppDriveMembership(actorFromAuth(auth), auth.tokenId, driveId);
       if (!membership) {
         return NextResponse.json({ error: 'Drive not found or access denied' }, { status: 404 });
       }
@@ -50,7 +51,7 @@ export async function POST(
     const found = await db.query.drives.findFirst({
       where: eq(drives.id, driveId),
     });
-    const drive = found && (!requireUserOwnership || (await loadDriveLeadAuthority(auth.userId, found, 'restore')).allowed)
+    const drive = found && (!requireUserOwnership || (await loadDriveLeadAuthority(actorFromAuth(auth), found, 'restore')).allowed)
       ? found
       : undefined;
 

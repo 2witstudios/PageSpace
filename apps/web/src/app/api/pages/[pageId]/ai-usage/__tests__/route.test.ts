@@ -93,6 +93,7 @@ vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
 // ── Imports (after mocks) ──────────────────────────────────────────────────
 
 import { GET } from '../../ai-usage/route';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -410,6 +411,6 @@ vi.mock('@/lib/auth/principal-permissions', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/auth/principal-permissions')>();
   const permissions = await import('@pagespace/lib/permissions/permissions');
   return { ...actual,
-    getPrincipalAccessLevel: (auth: { userId: string }, resourceId: string) => permissions.getUserAccessLevel(auth.userId, resourceId),
+    getPrincipalAccessLevel: (auth: { userId: string }, resourceId: string) => permissions.getUserAccessLevel(credentialActor(auth.userId, null), resourceId),
   };
 });

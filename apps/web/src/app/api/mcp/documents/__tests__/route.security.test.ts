@@ -175,7 +175,7 @@ describe('MCP Documents API - Security Tests', () => {
       const response = await POST(request);
 
       expect(response.status).toBe(403);
-      expect(mockGetUserAccessLevel).toHaveBeenCalledWith('user_123', 'page_123');
+      expect(mockGetUserAccessLevel).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user_123' }), 'page_123');
     });
 
     it('should deny read access when user has canView=false', async () => {
@@ -305,7 +305,7 @@ describe('MCP Documents API - Security Tests', () => {
       await POST(request);
 
       // Verify the permission check was called with correct parameters
-      expect(mockGetUserAccessLevel).toHaveBeenCalledWith('user_123', 'page_123');
+      expect(mockGetUserAccessLevel).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user_123' }), 'page_123');
     });
 
     it('should log security events when access is denied', async () => {
@@ -468,7 +468,7 @@ describe('MCP Documents API - Security Tests', () => {
       const response = await POST(request);
 
       expect(response.status).toBe(200);
-      expect(mockGetUserAccessLevel).toHaveBeenCalledWith('user_123', 'page_123');
+      expect(mockGetUserAccessLevel).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user_123' }), 'page_123');
       expect(mockGetAppAccessLevel).not.toHaveBeenCalled();
     });
 
@@ -493,7 +493,7 @@ describe('MCP Documents API - Security Tests', () => {
       const response = await POST(request);
 
       expect(response.status).toBe(200);
-      expect(mockGetAppAccessLevel).toHaveBeenCalledWith('token_456', 'page_123');
+      expect(mockGetAppAccessLevel).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user_123' }), 'token_456', 'page_123');
       expect(mockGetUserAccessLevel).not.toHaveBeenCalled();
     });
 

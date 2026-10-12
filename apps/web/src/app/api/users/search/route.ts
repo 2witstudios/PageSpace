@@ -4,6 +4,7 @@ import { eq, and, or, ilike, isNotNull } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { userProfiles } from '@pagespace/db/schema/members';
 import { verifyAuth } from '@/lib/auth';
+import { actorFromVerifiedUser } from '@/lib/auth/request-actor';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { userEmailMatch, decryptUserRows } from '@pagespace/lib/auth/user-repository';
@@ -102,7 +103,7 @@ export async function GET(request: Request) {
     // isPublic. Bounded in the database (name predicate + limit applied there,
     // relationship via correlated EXISTS), so cost scales with matches, not with
     // total drive membership. Carries no email (same public-profile shape, M3).
-    const relatedResults = await searchRelatedProfilesByName(user.id, searchPattern, limit);
+    const relatedResults = await searchRelatedProfilesByName(actorFromVerifiedUser(user), searchPattern, limit);
 
     // Also search by email (exact match for privacy).
     // emailVerified IS NOT NULL is the gate that closes Review C1: an admin

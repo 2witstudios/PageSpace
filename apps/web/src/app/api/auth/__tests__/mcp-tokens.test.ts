@@ -127,6 +127,8 @@ describe('/api/auth/mcp-tokens', () => {
 
         // Assert - verify repository was called with correct params
         expect(sessionRepository.createMcpTokenWithDriveScopes).toHaveBeenCalledWith({
+          authenticatedAt: null,
+          authenticationAssurance: null,
           name: 'My API Token',
           userId: 'test-user-id',
           tokenHash: 'mockTokenHash123',
@@ -165,6 +167,8 @@ describe('/api/auth/mcp-tokens', () => {
 
         // Assert - verify RESPONSE token has mcp_ prefix (DB stores hash, response returns raw token)
         expect(sessionRepository.createMcpTokenWithDriveScopes).toHaveBeenCalledWith({
+          authenticatedAt: null,
+          authenticationAssurance: null,
           name: 'My Token',
           userId: 'test-user-id',
           tokenHash: 'mockTokenHash123',
@@ -191,6 +195,8 @@ describe('/api/auth/mcp-tokens', () => {
 
         // Assert - verify token is associated with authenticated user
         expect(sessionRepository.createMcpTokenWithDriveScopes).toHaveBeenCalledWith({
+          authenticatedAt: null,
+          authenticationAssurance: null,
           name: 'My Token',
           userId: 'test-user-id',
           tokenHash: 'mockTokenHash123',

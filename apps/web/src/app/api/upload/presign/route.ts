@@ -14,6 +14,7 @@ import { releasePendingUpload } from '@pagespace/lib/services/pending-uploads';
 import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
 import { checkObjectExists, issuePresignedPutUrl } from '@/lib/upload/s3-effects';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 const PRESIGN_TTL = 900;
@@ -52,12 +53,12 @@ export async function POST(request: Request) {
   // A scoped MCP token is its own drive member — uploads require the TOKEN's
   // role to grant edit, not the owning user's.
   if (isScopedMCPAuth(auth)) {
-    const level = await getAppDriveAccessLevel(auth.tokenId, driveId);
+    const level = await getAppDriveAccessLevel(actorFromAuth(auth), auth.tokenId, driveId);
     if (!level?.canEdit) {
       return NextResponse.json({ error: 'You do not have permission to upload to this drive' }, { status: 403 });
     }
   } else {
-    const drivePerms = await getUserDrivePermissions(userId, driveId);
+    const drivePerms = await getUserDrivePermissions(actorFromAuth(auth), driveId);
     if (!drivePerms) {
       return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
     }

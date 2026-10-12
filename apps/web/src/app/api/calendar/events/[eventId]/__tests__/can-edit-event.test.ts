@@ -105,11 +105,11 @@ vi.mock('../../../../../../lib/auth', () => ({
   // so delegate to the mocked permissions fns to keep call-arg assertions.
   isPrincipalDriveMember: vi.fn(async (auth: { userId: string }, driveId: string) => {
     const { isUserDriveMember } = await import('@pagespace/lib/permissions/permissions');
-    return isUserDriveMember(auth.userId, driveId);
+    return isUserDriveMember(credentialActor(auth.userId, null), driveId);
   }),
   isPrincipalDriveOwnerOrAdmin: vi.fn(async (auth: { userId: string }, driveId: string) => {
     const { isDriveOwnerOrAdmin } = await import('@pagespace/lib/permissions/permissions');
-    return isDriveOwnerOrAdmin(auth.userId, driveId);
+    return isDriveOwnerOrAdmin(credentialActor(auth.userId, null), driveId);
   }),
 }));
 
@@ -126,6 +126,7 @@ import { PATCH } from '../route';
 import { db } from '@pagespace/db/db';
 import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
 import { authenticateRequestWithOptions } from '../../../../../../lib/auth';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 // ============================================================================
 // Test Helpers
@@ -263,7 +264,7 @@ describe('PATCH /api/calendar/events/[eventId] — canEditEvent auth policy', ()
     const response = await PATCH(createPatchRequest(), createContext());
     expect(response.status).toBe(200);
 
-    expect(isDriveOwnerOrAdmin).toHaveBeenCalledWith(ADMIN_ID, DRIVE_ID);
+    expect(isDriveOwnerOrAdmin).toHaveBeenCalledWith(expect.objectContaining({ userId: ADMIN_ID }), DRIVE_ID);
   });
 
   it('returns 200 when a drive owner edits a drive event', async () => {
@@ -275,7 +276,7 @@ describe('PATCH /api/calendar/events/[eventId] — canEditEvent auth policy', ()
     const response = await PATCH(createPatchRequest(), createContext());
     expect(response.status).toBe(200);
 
-    expect(isDriveOwnerOrAdmin).toHaveBeenCalledWith(OWNER_ID, DRIVE_ID);
+    expect(isDriveOwnerOrAdmin).toHaveBeenCalledWith(expect.objectContaining({ userId: OWNER_ID }), DRIVE_ID);
   });
 
   it('returns 403 when a regular drive member tries to edit', async () => {

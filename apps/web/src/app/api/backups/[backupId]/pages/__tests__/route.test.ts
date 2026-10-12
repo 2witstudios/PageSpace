@@ -30,6 +30,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
 import { db } from '@pagespace/db/db';
 import { readPageContent } from '@pagespace/lib/services/page-content-store';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const mockAuth = (userId: string): SessionAuthResult => ({
   userId,
@@ -107,7 +108,7 @@ describe('GET /api/backups/[backupId]/pages', () => {
   it('uses backup.driveId for permission check (not a URL param)', async () => {
     const res = await GET(makeRequest(backupId), makeParams(backupId));
     expect(res.status).toBe(200);
-    expect(isDriveOwnerOrAdmin).toHaveBeenCalledWith(userId, readyBackup.driveId);
+    expect(isDriveOwnerOrAdmin).toHaveBeenCalledWith(expect.objectContaining({ userId: userId }), readyBackup.driveId);
   });
 
   it('includeContent omitted → content field absent on nodes', async () => {
@@ -144,6 +145,6 @@ vi.mock('@/lib/auth/principal-permissions', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/auth/principal-permissions')>();
   const permissions = await import('@pagespace/lib/permissions/permissions');
   return { ...actual,
-    isPrincipalDriveOwnerOrAdmin: (auth: { userId: string }, resourceId: string) => permissions.isDriveOwnerOrAdmin(auth.userId, resourceId),
+    isPrincipalDriveOwnerOrAdmin: (auth: { userId: string }, resourceId: string) => permissions.isDriveOwnerOrAdmin(credentialActor(auth.userId, null), resourceId),
   };
 });

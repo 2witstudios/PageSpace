@@ -1,4 +1,5 @@
 import { createDriveBackup } from '@/services/api/drive-backup-service';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 export function decideSnapshotLabel(backupId: string): string {
   return `Auto-snapshot before restoring from ${backupId}`;
@@ -14,11 +15,11 @@ type PreRestoreResult =
 
 export async function runPreRestoreSnapshot(
   driveId: string,
-  userId: string,
+  actor: AccessActor,
   backupId: string,
 ): Promise<PreRestoreResult> {
   try {
-    const result = await createDriveBackup(driveId, userId, {
+    const result = await createDriveBackup(driveId, actor, {
       source: 'pre_restore',
       label: decideSnapshotLabel(backupId),
     });

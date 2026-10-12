@@ -30,6 +30,7 @@ vi.mock('@/lib/auth', () => ({
 
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { getUserAccessLevel } from '@pagespace/lib/permissions/permissions';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 // Helper to create mock SessionAuthResult
 const mockWebAuth = (userId: string): SessionAuthResult => ({
@@ -195,7 +196,7 @@ describe('GET /api/pages/[pageId]/permissions/check', () => {
       const response = await GET(createRequest(), { params: delayedParams });
 
       expect(response.status).toBe(200);
-      expect(getUserAccessLevel).toHaveBeenCalledWith(mockUserId, 'delayed_page_id');
+      expect(getUserAccessLevel).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }), 'delayed_page_id');
     });
   });
 });
@@ -205,6 +206,6 @@ vi.mock('@/lib/auth/principal-permissions', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/auth/principal-permissions')>();
   const permissions = await import('@pagespace/lib/permissions/permissions');
   return { ...actual,
-    getPrincipalAccessLevel: (auth: { userId: string }, resourceId: string) => permissions.getUserAccessLevel(auth.userId, resourceId),
+    getPrincipalAccessLevel: (auth: { userId: string }, resourceId: string) => permissions.getUserAccessLevel(credentialActor(auth.userId, null), resourceId),
   };
 });

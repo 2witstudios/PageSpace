@@ -88,7 +88,7 @@ describe('POST /api/admin/gdpr/erasure (force-delete escalation)', () => {
     const res = await post(erasurePost, { userId: 'u1', confirmation: 'ERASE u1' });
     expect(res.status).toBe(202);
     expect(lodgeAndEnqueueErasure).toHaveBeenCalledWith(
-      expect.objectContaining({ requestedByType: 'admin', forceDelete: true, callerUserId: 'admin_1' })
+      expect.objectContaining({ requestedByType: 'admin', forceDelete: true, caller: expect.objectContaining({ userId: 'admin_1' }) })
     );
   });
 
@@ -112,7 +112,7 @@ describe('POST /api/admin/gdpr/erasure (force-delete escalation)', () => {
     expect(body.requestId).toBe('dsr_blocked');
     expect(dataSubjectRequestRepository.setForceDelete).toHaveBeenCalledWith('dsr_blocked');
     expect(enqueueAccountErasure).toHaveBeenCalledWith(
-      expect.objectContaining({ requestId: 'dsr_blocked', userId: 'u1', callerUserId: 'admin_1' })
+      expect.objectContaining({ requestId: 'dsr_blocked', userId: 'u1', caller: expect.objectContaining({ userId: 'admin_1' }) })
     );
     expect(dataSubjectRequestRepository.markQueued).toHaveBeenCalledWith('dsr_blocked', 'job_2');
     // Must NOT create a brand-new request for the blocked one.

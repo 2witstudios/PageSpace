@@ -6,6 +6,7 @@ import {
   rewriteInterPageLinksForDrive,
   resolveUploadedImageAssetUrl,
 } from '../asset-pipeline';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 vi.mock('server-only', () => ({}));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -127,14 +128,14 @@ describe('rewriteCanvasAssets', () => {
 
   it('given no file IDs in the HTML, should return the HTML unchanged', async () => {
     const html = '<p>No files here</p>';
-    const result = await rewriteCanvasAssets({ html, userId: 'user-1', db: mockDb as never });
+    const result = await rewriteCanvasAssets({ html, actor: credentialActor('user-1', null), db: mockDb as never });
     expect(result.html).toBe(html);
     expect(mockDb.query.pages.findMany).not.toHaveBeenCalled();
   });
 
   it('given a longer endpoint that starts with /view, should leave it unchanged without querying files', async () => {
     const html = '<img src="/api/files/notARealFile/viewer">';
-    const result = await rewriteCanvasAssets({ html, userId: 'user-1', db: mockDb as never });
+    const result = await rewriteCanvasAssets({ html, actor: credentialActor('user-1', null), db: mockDb as never });
 
     expect(result.html).toBe(html);
     expect(mockDb.query.pages.findMany).not.toHaveBeenCalled();
@@ -146,7 +147,7 @@ describe('rewriteCanvasAssets', () => {
       { id: 'fileId1', contentHash: HASH_A, mimeType: 'image/png', extractionMetadata: null },
     ]);
 
-    const result = await rewriteCanvasAssets({ html, userId: 'user-1', db: mockDb as never });
+    const result = await rewriteCanvasAssets({ html, actor: credentialActor('user-1', null), db: mockDb as never });
 
     expect(result.html).toContain(`https://cdn.example.com/assets/${HASH_A}`);
     expect(result.html).not.toContain('/api/files/fileId1/view');
@@ -166,7 +167,7 @@ describe('rewriteCanvasAssets', () => {
       { id: 'fileId1', driveId: 'drive-1', contentHash: HASH_A, mimeType: 'image/png', extractionMetadata: null },
     ]);
 
-    const result = await rewriteCanvasAssets({ html, userId: 'user-1', db: mockDb as never });
+    const result = await rewriteCanvasAssets({ html, actor: credentialActor('user-1', null), db: mockDb as never });
 
     expect(result.html).toContain(`https://cdn.example.com/assets/${HASH_A}`);
     expect(result.html).not.toContain('/dashboard/drive-1/fileId1/view');
@@ -178,7 +179,7 @@ describe('rewriteCanvasAssets', () => {
       { id: 'fileId1', driveId: 'real-drive', contentHash: HASH_A, mimeType: 'image/png', extractionMetadata: null },
     ]);
 
-    const result = await rewriteCanvasAssets({ html, userId: 'user-1', db: mockDb as never });
+    const result = await rewriteCanvasAssets({ html, actor: credentialActor('user-1', null), db: mockDb as never });
 
     const { copyObjectToPublishBucket } = await import('../published-storage');
     expect(copyObjectToPublishBucket).not.toHaveBeenCalled();
@@ -194,7 +195,7 @@ describe('rewriteCanvasAssets', () => {
       { id: 'fileId1', driveId: 'real-drive', contentHash: HASH_A, mimeType: 'image/png', extractionMetadata: null },
     ]);
 
-    const result = await rewriteCanvasAssets({ html, userId: 'user-1', db: mockDb as never });
+    const result = await rewriteCanvasAssets({ html, actor: credentialActor('user-1', null), db: mockDb as never });
 
     expect(result.html).toContain(`https://cdn.example.com/assets/${HASH_A}`);
     expect(result.html).not.toContain('/api/files/fileId1/view');
@@ -205,7 +206,7 @@ describe('rewriteCanvasAssets', () => {
     const html = '<img src="/api/files/missingId/view">';
     mockDb.query.pages.findMany.mockResolvedValue([]); // not found
 
-    const result = await rewriteCanvasAssets({ html, userId: 'user-1', db: mockDb as never });
+    const result = await rewriteCanvasAssets({ html, actor: credentialActor('user-1', null), db: mockDb as never });
 
     expect(result.html).toContain('/api/files/missingId/view');
   });
@@ -216,7 +217,7 @@ describe('rewriteCanvasAssets', () => {
       { id: 'noHashId', contentHash: null, mimeType: 'image/jpeg', extractionMetadata: null },
     ]);
 
-    const result = await rewriteCanvasAssets({ html, userId: 'user-1', db: mockDb as never });
+    const result = await rewriteCanvasAssets({ html, actor: credentialActor('user-1', null), db: mockDb as never });
 
     expect(result.html).toContain('/api/files/noHashId/view');
   });
@@ -227,7 +228,7 @@ describe('rewriteCanvasAssets', () => {
       { id: 'hostileHash', contentHash: '../private-object', mimeType: 'image/png', extractionMetadata: null },
     ]);
 
-    const result = await rewriteCanvasAssets({ html, userId: 'user-1', db: mockDb as never });
+    const result = await rewriteCanvasAssets({ html, actor: credentialActor('user-1', null), db: mockDb as never });
 
     const { copyObjectToPublishBucket } = await import('../published-storage');
     expect(copyObjectToPublishBucket).not.toHaveBeenCalled();
@@ -242,7 +243,7 @@ describe('rewriteCanvasAssets', () => {
       { id: 'f2', contentHash: HASH_B, mimeType: 'image/jpeg', extractionMetadata: null },
     ]);
 
-    const result = await rewriteCanvasAssets({ html, userId: 'user-1', db: mockDb as never });
+    const result = await rewriteCanvasAssets({ html, actor: credentialActor('user-1', null), db: mockDb as never });
 
     expect(mockDb.query.pages.findMany).toHaveBeenCalledTimes(1);
     expect(result.html).toContain(`https://cdn.example.com/assets/${HASH_A}`);
@@ -256,10 +257,10 @@ describe('rewriteCanvasAssets', () => {
     ]);
     canUserViewPage.mockResolvedValue(false);
 
-    const result = await rewriteCanvasAssets({ html, userId: 'user-1', db: mockDb as never });
+    const result = await rewriteCanvasAssets({ html, actor: credentialActor('user-1', null), db: mockDb as never });
 
     const { copyObjectToPublishBucket } = await import('../published-storage');
-    expect(canUserViewPage).toHaveBeenCalledWith('user-1', 'privateFile');
+    expect(canUserViewPage).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1' }), 'privateFile');
     expect(copyObjectToPublishBucket).not.toHaveBeenCalled();
     expect(result.html).toContain('/api/files/privateFile/view');
   });
@@ -275,7 +276,7 @@ describe('rewriteCanvasAssets', () => {
       },
     ]);
 
-    const result = await rewriteCanvasAssets({ html, userId: 'user-1', db: mockDb as never });
+    const result = await rewriteCanvasAssets({ html, actor: credentialActor('user-1', null), db: mockDb as never });
 
     const { copyObjectToPublishBucket } = await import('../published-storage');
     expect(copyObjectToPublishBucket).toHaveBeenCalledWith({
@@ -295,7 +296,7 @@ describe('rewriteCanvasAssets', () => {
       { id: 'videoId', contentHash: HASH_C, mimeType: 'video/mp4', extractionMetadata: null },
     ]);
 
-    const result = await rewriteCanvasAssets({ html, userId: 'user-1', db: mockDb as never });
+    const result = await rewriteCanvasAssets({ html, actor: credentialActor('user-1', null), db: mockDb as never });
 
     expect(result.html).toContain('/api/files/videoId/thumbnail');
   });
@@ -308,7 +309,7 @@ describe('rewriteCanvasAssets', () => {
     const { copyObjectToPublishBucket } = await import('../published-storage');
     vi.mocked(copyObjectToPublishBucket).mockRejectedValueOnce(new Error('copy failed'));
 
-    const result = await rewriteCanvasAssets({ html, userId: 'user-1', db: mockDb as never });
+    const result = await rewriteCanvasAssets({ html, actor: credentialActor('user-1', null), db: mockDb as never });
 
     expect(result.html).toContain('/api/files/fileId1/view');
   });
@@ -646,7 +647,7 @@ describe('resolveUploadedImageAssetUrl', () => {
       extractionMetadata: null,
     });
 
-    const url = await resolveUploadedImageAssetUrl({ fileId: 'file-1', driveId: 'drive-1', userId: 'user-1', db: mockDb as never });
+    const url = await resolveUploadedImageAssetUrl({ fileId: 'file-1', driveId: 'drive-1', actor: credentialActor('user-1', null), db: mockDb as never });
 
     expect(url).toBe(`https://cdn.example.com/assets/${HASH_A}`);
     const { copyObjectToPublishBucket } = await import('../published-storage');
@@ -662,7 +663,7 @@ describe('resolveUploadedImageAssetUrl', () => {
   it('returns null when the page does not exist', async () => {
     mockDb.query.pages.findFirst.mockResolvedValue(undefined);
 
-    const url = await resolveUploadedImageAssetUrl({ fileId: 'missing', driveId: 'drive-1', userId: 'user-1', db: mockDb as never });
+    const url = await resolveUploadedImageAssetUrl({ fileId: 'missing', driveId: 'drive-1', actor: credentialActor('user-1', null), db: mockDb as never });
 
     expect(url).toBeNull();
   });
@@ -673,7 +674,7 @@ describe('resolveUploadedImageAssetUrl', () => {
     });
     canUserViewPage.mockResolvedValue(false);
 
-    const url = await resolveUploadedImageAssetUrl({ fileId: 'file-1', driveId: 'drive-1', userId: 'user-1', db: mockDb as never });
+    const url = await resolveUploadedImageAssetUrl({ fileId: 'file-1', driveId: 'drive-1', actor: credentialActor('user-1', null), db: mockDb as never });
 
     expect(url).toBeNull();
     const { copyObjectToPublishBucket } = await import('../published-storage');
@@ -685,7 +686,7 @@ describe('resolveUploadedImageAssetUrl', () => {
       id: 'file-1', driveId: 'drive-1', contentHash: null, mimeType: 'image/png', extractionMetadata: null,
     });
 
-    const url = await resolveUploadedImageAssetUrl({ fileId: 'file-1', driveId: 'drive-1', userId: 'user-1', db: mockDb as never });
+    const url = await resolveUploadedImageAssetUrl({ fileId: 'file-1', driveId: 'drive-1', actor: credentialActor('user-1', null), db: mockDb as never });
 
     expect(url).toBeNull();
   });
@@ -696,7 +697,7 @@ describe('resolveUploadedImageAssetUrl', () => {
     });
     canUserViewPage.mockRejectedValue(new Error('permission service down'));
 
-    const url = await resolveUploadedImageAssetUrl({ fileId: 'file-1', driveId: 'drive-1', userId: 'user-1', db: mockDb as never });
+    const url = await resolveUploadedImageAssetUrl({ fileId: 'file-1', driveId: 'drive-1', actor: credentialActor('user-1', null), db: mockDb as never });
 
     expect(url).toBeNull();
   });
@@ -709,7 +710,7 @@ describe('resolveUploadedImageAssetUrl', () => {
       id: 'file-1', driveId: 'other-drive', contentHash: HASH_A, mimeType: 'image/png', extractionMetadata: null,
     });
 
-    const url = await resolveUploadedImageAssetUrl({ fileId: 'file-1', driveId: 'drive-1', userId: 'user-1', db: mockDb as never });
+    const url = await resolveUploadedImageAssetUrl({ fileId: 'file-1', driveId: 'drive-1', actor: credentialActor('user-1', null), db: mockDb as never });
 
     expect(url).toBeNull();
     const { copyObjectToPublishBucket } = await import('../published-storage');
@@ -719,7 +720,7 @@ describe('resolveUploadedImageAssetUrl', () => {
   it('excludes trashed pages from the lookup', async () => {
     mockDb.query.pages.findFirst.mockResolvedValue(undefined); // simulates the isTrashed filter excluding the row
 
-    const url = await resolveUploadedImageAssetUrl({ fileId: 'file-1', driveId: 'drive-1', userId: 'user-1', db: mockDb as never });
+    const url = await resolveUploadedImageAssetUrl({ fileId: 'file-1', driveId: 'drive-1', actor: credentialActor('user-1', null), db: mockDb as never });
 
     expect(url).toBeNull();
     expect(mockDb.query.pages.findFirst).toHaveBeenCalledWith(

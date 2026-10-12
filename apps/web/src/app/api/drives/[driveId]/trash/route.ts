@@ -8,6 +8,7 @@ import { buildTree } from '@pagespace/lib/content/tree-utils'
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isScopedMCPAuth, isPrincipalDriveOwnerOrAdmin } from '@/lib/auth';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const };
 
@@ -52,7 +53,7 @@ export async function GET(request: Request, context: { params: Promise<DrivePara
     } else {
       // The drive's lead or an effective ADMIN (the org-aware membership: accepted rows only,
       // org Owner/Admin power, stale org rows counting for nothing).
-      if (!canAdministerDrive(await loadDriveRelationship(auth.userId, drive))) {
+      if (!canAdministerDrive(await loadDriveRelationship(actorFromAuth(auth), drive))) {
         return NextResponse.json(
           { error: 'Only drive owners and admins can view trash' },
           { status: 403 },

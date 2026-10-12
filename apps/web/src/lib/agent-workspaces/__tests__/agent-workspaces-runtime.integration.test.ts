@@ -47,6 +47,7 @@ import {
 } from '../agent-workspaces-runtime';
 import { SessionFullError } from '../create-conversation-in-workspace';
 import { requireDb } from '@pagespace/db/test/require-db';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 let dbAvailable = false;
 
@@ -161,13 +162,13 @@ describe('the cap is a property of the tree, enforced by the write that changes 
     const [first, second] = await Promise.allSettled([
       createConversationInSession({
         conversationId: createId(),
-        userId: owner.id,
+        actor: credentialActor(owner.id, null),
         agentPageId: agentPage.id,
         workspaceId: workspace.id,
       }),
       createConversationInSession({
         conversationId: createId(),
-        userId: owner.id,
+        actor: credentialActor(owner.id, null),
         agentPageId: agentPage.id,
         workspaceId: workspace.id,
       }),
@@ -201,11 +202,11 @@ describe('the cap is a property of the tree, enforced by the write that changes 
     const [createResult, claimResult] = await Promise.allSettled([
       createConversationInSession({
         conversationId: createId(),
-        userId: owner.id,
+        actor: credentialActor(owner.id, null),
         agentPageId: agentPage.id,
         workspaceId: workspace.id,
       }),
-      claimConversationInSession({ conversationId: claimable, userId: owner.id, workspaceId: workspace.id }),
+      claimConversationInSession({ conversationId: claimable, actor: credentialActor(owner.id, null), workspaceId: workspace.id }),
     ]);
 
     const isRefused = (o: PromiseSettledResult<unknown>) =>
@@ -240,13 +241,13 @@ describe('the cap is a property of the tree, enforced by the write that changes 
       .limit(1);
     const conversationId = member.targetId as string;
 
-    expect(await closeConversationInSession({ conversationId, userId: owner.id, workspaceId: workspace.id })).toBe(
+    expect(await closeConversationInSession({ conversationId, actor: credentialActor(owner.id, null), workspaceId: workspace.id })).toBe(
       'closed',
     );
     expect(await memberCountFor(workspace.id)).toBe(MAX_SESSION_CONVERSATIONS - 1);
 
     expect(
-      await reopenConversationInSession({ conversationId, userId: owner.id, workspaceId: workspace.id }),
+      await reopenConversationInSession({ conversationId, actor: credentialActor(owner.id, null), workspaceId: workspace.id }),
     ).toBe('reopened');
     expect(await memberCountFor(workspace.id)).toBe(MAX_SESSION_CONVERSATIONS);
   }, 20_000);
@@ -265,11 +266,11 @@ describe('the cap is a property of the tree, enforced by the write that changes 
       .limit(1);
     const conversationId = member.targetId as string;
 
-    await closeConversationInSession({ conversationId, userId: owner.id, workspaceId: workspace.id });
+    await closeConversationInSession({ conversationId, actor: credentialActor(owner.id, null), workspaceId: workspace.id });
     // Somebody else takes the freed slot.
     await createConversationInSession({
       conversationId: createId(),
-      userId: owner.id,
+      actor: credentialActor(owner.id, null),
       agentPageId: agentPage.id,
       workspaceId: workspace.id,
     });
@@ -281,7 +282,7 @@ describe('the cap is a property of the tree, enforced by the write that changes 
     // filled up in the meantime refuses"; this is that promise, kept in the
     // type. The route answers 409 rather than joining the 404 shape.
     expect(
-      await reopenConversationInSession({ conversationId, userId: owner.id, workspaceId: workspace.id }),
+      await reopenConversationInSession({ conversationId, actor: credentialActor(owner.id, null), workspaceId: workspace.id }),
     ).toBe('session_full');
     expect(await memberCountFor(workspace.id)).toBe(MAX_SESSION_CONVERSATIONS);
   }, 20_000);
@@ -310,8 +311,8 @@ describe('the write-once binding is the unique index, not a WHERE clause', () =>
     });
 
     const [resultA, resultB] = await Promise.all([
-      claimConversationInSession({ conversationId, userId: owner.id, workspaceId: workspaceA.id }),
-      claimConversationInSession({ conversationId, userId: owner.id, workspaceId: workspaceB.id }),
+      claimConversationInSession({ conversationId, actor: credentialActor(owner.id, null), workspaceId: workspaceA.id }),
+      claimConversationInSession({ conversationId, actor: credentialActor(owner.id, null), workspaceId: workspaceB.id }),
     ]);
 
     // The workspace lock is keyed PER WORKSPACE, so A and B take different keys
@@ -342,8 +343,8 @@ describe('the write-once binding is the unique index, not a WHERE clause', () =>
     });
 
     const outcomes = await Promise.all([
-      claimConversationInSession({ conversationId, userId: owner.id, workspaceId: workspace.id }),
-      claimConversationInSession({ conversationId, userId: owner.id, workspaceId: workspace.id }),
+      claimConversationInSession({ conversationId, actor: credentialActor(owner.id, null), workspaceId: workspace.id }),
+      claimConversationInSession({ conversationId, actor: credentialActor(owner.id, null), workspaceId: workspace.id }),
     ]);
 
     expect(outcomes.filter((o) => o === 'claimed')).toHaveLength(1);
@@ -373,7 +374,7 @@ describe('the write-once binding is the unique index, not a WHERE clause', () =>
       contextId: agentPage.id,
       isActive: true,
     });
-    expect(await claimConversationInSession({ conversationId, userId: owner.id, workspaceId: oldWorkspace.id })).toBe(
+    expect(await claimConversationInSession({ conversationId, actor: credentialActor(owner.id, null), workspaceId: oldWorkspace.id })).toBe(
       'claimed',
     );
 
@@ -381,7 +382,7 @@ describe('the write-once binding is the unique index, not a WHERE clause', () =>
     expect(await nodeFor(conversationId)).toBeNull();
     expect(await findWorkspaceOfConversation(conversationId)).toBeNull();
 
-    expect(await claimConversationInSession({ conversationId, userId: owner.id, workspaceId: newWorkspace.id })).toBe(
+    expect(await claimConversationInSession({ conversationId, actor: credentialActor(owner.id, null), workspaceId: newWorkspace.id })).toBe(
       'claimed',
     );
     expect(await memberCountFor(newWorkspace.id)).toBe(1);
@@ -405,7 +406,7 @@ describe('a conversation and its membership are one transaction', () => {
     await expect(
       createConversationInSession({
         conversationId,
-        userId: owner.id,
+        actor: credentialActor(owner.id, null),
         agentPageId: agentPage.id,
         workspaceId: workspace.id,
       }),
@@ -435,7 +436,7 @@ describe('a conversation and its membership are one transaction', () => {
       contextId: agentPage.id,
       isActive: true,
     });
-    await claimConversationInSession({ conversationId, userId: owner.id, workspaceId: workspaceA.id });
+    await claimConversationInSession({ conversationId, actor: credentialActor(owner.id, null), workspaceId: workspaceA.id });
 
     // Creating it AGAIN into another workspace: the row already exists, so the
     // squat guard says `exists` and the anchor check passes — the only thing
@@ -443,7 +444,7 @@ describe('a conversation and its membership are one transaction', () => {
     await expect(
       createConversationInSession({
         conversationId,
-        userId: owner.id,
+        actor: credentialActor(owner.id, null),
         agentPageId: agentPage.id,
         workspaceId: workspaceB.id,
       }),
@@ -460,7 +461,7 @@ describe('a conversation and its membership are one transaction', () => {
 
     await createConversationInSession({
       conversationId,
-      userId: owner.id,
+      actor: credentialActor(owner.id, null),
       agentPageId: agentPage.id,
       workspaceId: workspace.id,
     });
@@ -490,7 +491,7 @@ describe('every admission is PLACED — there is no unplaced membership', () => 
 
     await createConversationInSession({
       conversationId,
-      userId: owner.id,
+      actor: credentialActor(owner.id, null),
       agentPageId: agentPage.id,
       workspaceId: workspace.id,
     });
@@ -508,7 +509,7 @@ describe('every admission is PLACED — there is no unplaced membership', () => 
 
     await createConversationInSession({
       conversationId,
-      userId: owner.id,
+      actor: credentialActor(owner.id, null),
       agentPageId: agentPage.id,
       workspaceId: workspace.id,
       title: 'Researcher',
@@ -524,7 +525,7 @@ describe('every admission is PLACED — there is no unplaced membership', () => 
     const spawnerId = createId();
     await createConversationInSession({
       conversationId: spawnerId,
-      userId: owner.id,
+      actor: credentialActor(owner.id, null),
       agentPageId: agentPage.id,
       workspaceId: workspace.id,
       title: 'Caller',
@@ -533,7 +534,7 @@ describe('every admission is PLACED — there is no unplaced membership', () => 
     const workerId = createId();
     await createConversationInSession({
       conversationId: workerId,
-      userId: owner.id,
+      actor: credentialActor(owner.id, null),
       agentPageId: agentPage.id,
       workspaceId: workspace.id,
       title: 'Researcher',
@@ -552,7 +553,7 @@ describe('every admission is PLACED — there is no unplaced membership', () => 
     const conversationId = createId();
     const input = {
       conversationId,
-      userId: owner.id,
+      actor: credentialActor(owner.id, null),
       agentPageId: agentPage.id,
       workspaceId: workspace.id,
       title: 'Researcher',
@@ -573,14 +574,14 @@ describe('every admission is PLACED — there is no unplaced membership', () => 
     const conversationId = createId();
     await createConversationInSession({
       conversationId,
-      userId: owner.id,
+      actor: credentialActor(owner.id, null),
       agentPageId: agentPage.id,
       workspaceId: workspace.id,
     });
     const born = await nodeFor(conversationId);
     expect(born).not.toBeNull();
 
-    expect(await closeConversationInSession({ conversationId, userId: owner.id, workspaceId: workspace.id })).toBe(
+    expect(await closeConversationInSession({ conversationId, actor: credentialActor(owner.id, null), workspaceId: workspace.id })).toBe(
       'closed',
     );
     // The node is GONE. Closing used to park it — same row, null parent, still a
@@ -589,7 +590,7 @@ describe('every admission is PLACED — there is no unplaced membership', () => 
     expect(await nodeFor(conversationId)).toBeNull();
     expect(await memberCountFor(workspace.id)).toBe(0);
 
-    expect(await reopenConversationInSession({ conversationId, userId: owner.id, workspaceId: workspace.id })).toBe(
+    expect(await reopenConversationInSession({ conversationId, actor: credentialActor(owner.id, null), workspaceId: workspace.id })).toBe(
       'reopened',
     );
     const reopened = await nodeFor(conversationId);
@@ -673,7 +674,7 @@ describe('ensureGlobalSandboxSession — auto-provisioning the default Global As
       isActive: true,
     });
 
-    const result = await ensureGlobalSandboxSession(conversationId, owner.id);
+    const result = await ensureGlobalSandboxSession(conversationId, credentialActor(owner.id, null));
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -700,7 +701,7 @@ describe('ensureGlobalSandboxSession — auto-provisioning the default Global As
       isActive: true,
     });
 
-    const result = await ensureGlobalSandboxSession(conversationId, owner.id, 'Release Bot');
+    const result = await ensureGlobalSandboxSession(conversationId, credentialActor(owner.id, null), 'Release Bot');
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -724,7 +725,7 @@ describe('ensureGlobalSandboxSession — auto-provisioning the default Global As
       isActive: true,
     });
 
-    const result = await ensureGlobalSandboxSession(conversationId, owner.id);
+    const result = await ensureGlobalSandboxSession(conversationId, credentialActor(owner.id, null));
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -750,9 +751,9 @@ describe('ensureGlobalSandboxSession — auto-provisioning the default Global As
       contextId: null,
       isActive: true,
     });
-    await claimConversationInSession({ conversationId, userId: owner.id, workspaceId: existing.id });
+    await claimConversationInSession({ conversationId, actor: credentialActor(owner.id, null), workspaceId: existing.id });
 
-    const result = await ensureGlobalSandboxSession(conversationId, owner.id);
+    const result = await ensureGlobalSandboxSession(conversationId, credentialActor(owner.id, null));
 
     // The claim this call attempted lost (the conversation already had a home)
     // — it re-resolves through the conversation instead of failing, so a caller
@@ -785,8 +786,8 @@ describe('ensureGlobalSandboxSession — auto-provisioning the default Global As
     });
 
     const [a, b] = await Promise.all([
-      ensureGlobalSandboxSession(conversationId, owner.id),
-      ensureGlobalSandboxSession(conversationId, owner.id),
+      ensureGlobalSandboxSession(conversationId, credentialActor(owner.id, null)),
+      ensureGlobalSandboxSession(conversationId, credentialActor(owner.id, null)),
     ]);
 
     expect(a.ok).toBe(true);
@@ -825,7 +826,7 @@ describe('ensureGlobalSandboxSession — auto-provisioning the default Global As
       isActive: true,
     });
 
-    const result = await ensureGlobalSandboxSession(conversationId, owner.id);
+    const result = await ensureGlobalSandboxSession(conversationId, credentialActor(owner.id, null));
     expect(result).toEqual({ ok: false, reason: 'session_limit_reached' });
     expect(await nodeFor(conversationId)).toBeNull();
   });

@@ -17,6 +17,7 @@ import { isDevPreviewConfigured } from '@pagespace/lib/services/sandbox/preview/
 import { resolveEnvInDrive } from '@/lib/drive-envs/drive-envs-runtime';
 import { readDevPreviewStatusForUser } from '@/lib/dev-preview/preview-runtime';
 import { canManageDevPreview } from '@/lib/dev-preview/manage-decision';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
 const ROUTE = 'drive-envs/preview';
@@ -37,7 +38,7 @@ export async function GET(request: Request, context: { params: Promise<{ driveId
     const holder = { kind: 'env', id: envId } as const;
     // Independent reads, together (see the session route).
     const [result, manage] = await Promise.all([
-      readDevPreviewStatusForUser({ authorizeAs: holder, userId: auth.userId }),
+      readDevPreviewStatusForUser({ authorizeAs: holder, actor: actorFromAuth(auth)}),
       canManageDevPreview(auth, { holder, sessionOwnerId: null, driveId }),
     ]);
     if (!result.ok) {

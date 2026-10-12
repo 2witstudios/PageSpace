@@ -6,6 +6,7 @@ import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { pages, drives } from '@pagespace/db/schema/core';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { actorFromVerifiedUser } from '@/lib/auth/request-actor';
 
 const bodySchema = z.object({
   pageId: z.string().min(1),
@@ -39,7 +40,7 @@ export async function POST(request: Request) {
 
   const { pageId } = parsed.data;
 
-  const canView = await canUserViewPage(user.id, pageId);
+  const canView = await canUserViewPage(actorFromVerifiedUser(user), pageId);
   if (!canView) {
     return NextResponse.json({ error: 'Not found' }, { status: 404 });
   }

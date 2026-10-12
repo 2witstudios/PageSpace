@@ -7,6 +7,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getConnectionById } from '@pagespace/lib/integrations/repositories/connection-repository';
 import { listGrantsByConnection } from '@pagespace/lib/integrations/repositories/grant-repository';
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session'] as const };
 
@@ -36,7 +37,7 @@ export async function GET(
       }
     } else if (connection.driveId) {
       // Drive-scoped: only drive members can view grants
-      const access = await getDriveAccess(connection.driveId, auth.userId);
+      const access = await getDriveAccess(connection.driveId, actorFromAuth(auth));
       if (!access.isMember) {
         return NextResponse.json({ error: 'Access denied' }, { status: 403 });
       }

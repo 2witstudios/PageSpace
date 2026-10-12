@@ -32,6 +32,7 @@ import { db } from '@pagespace/db/db';
 import { getRoleById, updateDriveRole } from '@pagespace/lib/services/drive-role-service';
 import { getUserAccessLevel, isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
 import { permissionManagementService, rolePermissionService } from '../permission-management-service';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 type MockFn = ReturnType<typeof vi.fn>;
 const mockPagesFindFirst = (db as unknown as { query: { pages: { findFirst: MockFn } } }).query.pages.findFirst;
@@ -51,7 +52,7 @@ describe('rolePermissionService', () => {
   describe('setRolePagePermission', () => {
     it('should send a permissionsPatch for just the target page, not a full permissions replace', async () => {
       const result = await rolePermissionService.setRolePagePermission(
-        'user-1',
+        credentialActor('user-1', null),
         'page-1',
         'role-1',
         { canView: true, canEdit: true, canShare: false },
@@ -71,7 +72,7 @@ describe('rolePermissionService', () => {
 
     it('should reject canEdit/canShare without canView', async () => {
       const result = await rolePermissionService.setRolePagePermission(
-        'user-1',
+        credentialActor('user-1', null),
         'page-1',
         'role-1',
         { canView: false, canEdit: true, canShare: false },
@@ -83,7 +84,7 @@ describe('rolePermissionService', () => {
     it('should return 404 when role not found', async () => {
       mockGetRoleById.mockResolvedValueOnce(null);
       const result = await rolePermissionService.setRolePagePermission(
-        'user-1',
+        credentialActor('user-1', null),
         'page-1',
         'role-1',
         { canView: true, canEdit: false, canShare: false },
@@ -95,7 +96,7 @@ describe('rolePermissionService', () => {
     it('should return 404 when page not found', async () => {
       mockPagesFindFirst.mockResolvedValueOnce(null);
       const result = await rolePermissionService.setRolePagePermission(
-        'user-1',
+        credentialActor('user-1', null),
         'page-1',
         'role-1',
         { canView: true, canEdit: false, canShare: false },
@@ -107,7 +108,7 @@ describe('rolePermissionService', () => {
 
   describe('removeRolePagePermission', () => {
     it('should send a null permissionsPatch entry for just the target page, not a full permissions replace', async () => {
-      const result = await rolePermissionService.removeRolePagePermission('user-1', 'page-existing', 'role-1');
+      const result = await rolePermissionService.removeRolePagePermission(credentialActor('user-1', null), 'page-existing', 'role-1');
 
       expect(result).toEqual({ success: true });
       expect(mockUpdateDriveRole).toHaveBeenCalledWith('drive-1', 'role-1', {
@@ -119,7 +120,7 @@ describe('rolePermissionService', () => {
 
     it('should return 404 when role not found', async () => {
       mockGetRoleById.mockResolvedValueOnce(null);
-      const result = await rolePermissionService.removeRolePagePermission('user-1', 'page-1', 'role-1');
+      const result = await rolePermissionService.removeRolePagePermission(credentialActor('user-1', null), 'page-1', 'role-1');
       expect(result).toEqual({ success: false, error: 'Role not found', status: 404 });
       expect(mockUpdateDriveRole).not.toHaveBeenCalled();
     });
@@ -164,53 +165,53 @@ describe('permissionManagementService.canUserManagePermissions — pending invit
   it.each(['ADMIN', 'MEMBER'])('refuses a user whose %s invite is still pending', async (role) => {
     seed({ driveId: 'drive-1', userId: 'user-1', role, acceptedAt: null }, false);
 
-    await expect(permissionManagementService.canUserManagePermissions('user-1', 'page-1')).resolves.toBe(false);
+    await expect(permissionManagementService.canUserManagePermissions(credentialActor('user-1', null), 'page-1')).resolves.toBe(false);
   });
 
   it('allows the same user once the ADMIN invite is accepted', async () => {
     seed({ driveId: 'drive-1', userId: 'user-1', role: 'ADMIN', acceptedAt: new Date('2026-09-01') }, true);
 
-    await expect(permissionManagementService.canUserManagePermissions('user-1', 'page-1')).resolves.toBe(true);
-    expect(isDriveOwnerOrAdmin).toHaveBeenCalledWith('user-1', 'drive-1');
+    await expect(permissionManagementService.canUserManagePermissions(credentialActor('user-1', null), 'page-1')).resolves.toBe(true);
+    expect(isDriveOwnerOrAdmin).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1' }), 'drive-1');
   });
 
   it('refuses an accepted MEMBER without share rights', async () => {
     seed({ driveId: 'drive-1', userId: 'user-1', role: 'MEMBER', acceptedAt: new Date('2026-09-01') }, false);
 
-    await expect(permissionManagementService.canUserManagePermissions('user-1', 'page-1')).resolves.toBe(false);
+    await expect(permissionManagementService.canUserManagePermissions(credentialActor('user-1', null), 'page-1')).resolves.toBe(false);
   });
 
   it('allows the drive owner', async () => {
     seed({ driveId: 'drive-1', userId: 'someone-else', role: 'MEMBER', acceptedAt: new Date('2026-09-01') }, true);
 
-    await expect(permissionManagementService.canUserManagePermissions('owner-1', 'page-1')).resolves.toBe(true);
+    await expect(permissionManagementService.canUserManagePermissions(credentialActor('owner-1', null), 'page-1')).resolves.toBe(true);
   });
 
   it('refuses a non-member', async () => {
     seed({ driveId: 'drive-1', userId: 'someone-else', role: 'ADMIN', acceptedAt: new Date('2026-09-01') }, false);
 
-    await expect(permissionManagementService.canUserManagePermissions('user-1', 'page-1')).resolves.toBe(false);
+    await expect(permissionManagementService.canUserManagePermissions(credentialActor('user-1', null), 'page-1')).resolves.toBe(false);
   });
 
   it('allows anyone the page-level resolver already lets share, without a membership read', async () => {
     seed({ driveId: 'drive-1', userId: 'someone-else', role: 'MEMBER', acceptedAt: null }, false);
     vi.mocked(getUserAccessLevel).mockResolvedValue({ canView: true, canEdit: true, canShare: true, canDelete: false });
 
-    await expect(permissionManagementService.canUserManagePermissions('user-1', 'page-1')).resolves.toBe(true);
+    await expect(permissionManagementService.canUserManagePermissions(credentialActor('user-1', null), 'page-1')).resolves.toBe(true);
     expect(mockDb.select).not.toHaveBeenCalled();
   });
 
   it('X-6 (partial) a stale source=org ADMIN row manages nothing: the org-aware isDriveOwnerOrAdmin refuses, and the service reads no drive_members row of its own', async () => {
     seed({ driveId: 'drive-1', userId: 'user-1', role: 'ADMIN', acceptedAt: new Date('2026-09-01') }, false);
 
-    await expect(permissionManagementService.canUserManagePermissions('user-1', 'page-1')).resolves.toBe(false);
+    await expect(permissionManagementService.canUserManagePermissions(credentialActor('user-1', null), 'page-1')).resolves.toBe(false);
     expect(mockDb.select).not.toHaveBeenCalled();
   });
 
   it('ORG-4 (partial) an org Admin with no drive_members row manages page permissions on an org drive', async () => {
     seed({ driveId: 'drive-1', userId: 'someone-else', role: 'MEMBER', acceptedAt: null }, true);
 
-    await expect(permissionManagementService.canUserManagePermissions('org-admin-1', 'page-1')).resolves.toBe(true);
-    expect(isDriveOwnerOrAdmin).toHaveBeenCalledWith('org-admin-1', 'drive-1');
+    await expect(permissionManagementService.canUserManagePermissions(credentialActor('org-admin-1', null), 'page-1')).resolves.toBe(true);
+    expect(isDriveOwnerOrAdmin).toHaveBeenCalledWith(expect.objectContaining({ userId: 'org-admin-1' }), 'drive-1');
   });
 });

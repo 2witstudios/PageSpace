@@ -1,5 +1,3 @@
-import { checkDriveAuthentication, checkResourceAuthentication } from '@pagespace/lib/organizations/authentication-policy';
-vi.mock('@pagespace/lib/organizations/authentication-policy', () => ({ checkDriveAuthentication: vi.fn(), checkResourceAuthentication: vi.fn() }));
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
@@ -36,8 +34,12 @@ vi.mock('@pagespace/lib/permissions/app-permissions', () => ({
 }));
 
 const mockPagesFindFirst = vi.fn();
+const mockUsersFindFirst = vi.fn();
 vi.mock('@pagespace/db/db', () => ({
-  db: { query: { pages: { findFirst: (...args: unknown[]) => mockPagesFindFirst(...args) } } },
+  db: { query: {
+    pages: { findFirst: (...args: unknown[]) => mockPagesFindFirst(...args) },
+    users: { findFirst: (...args: unknown[]) => mockUsersFindFirst(...args) },
+  } },
 }));
 vi.mock('@pagespace/db/operators', () => ({ eq: (a: unknown, b: unknown) => ({ a, b }) }));
 vi.mock('@pagespace/db/schema/core', () => ({ pages: { id: 'pages.id' } }));
@@ -60,7 +62,7 @@ import {
   getPrincipalDriveAccessLevel,
   getPrincipalDriveMembership,
 } from '../principal-permissions';
-import type { AuthResult } from '../index';
+import { loadServicePrincipal, type AuthResult } from '../index';
 import {
   getUserAccessLevel,
   canUserViewPage,
@@ -117,8 +119,6 @@ const FULL = { canView: true, canEdit: true, canShare: true, canDelete: true };
 const VIEW_ONLY = { canView: true, canEdit: false, canShare: false, canDelete: false };
 
 beforeEach(() => {
-  vi.mocked(checkDriveAuthentication).mockResolvedValue({ allowed: true });
-  vi.mocked(checkResourceAuthentication).mockResolvedValue({ allowed: true });
   vi.mocked(getEffectiveScopedDriveMembership).mockImplementation(async (scopes, _ownerUserId, driveId) =>
     vi.mocked(getScopedDriveMembership)(scopes, driveId));
 });
@@ -152,21 +152,21 @@ describe('dispatch matrix — page-level checks', () => {
   it('getPrincipalAccessLevel: scoped token → app path with tokenId', async () => {
     vi.mocked(getAppAccessLevel).mockResolvedValue(VIEW_ONLY);
     expect(await getPrincipalAccessLevel(scopedMcpAuth, PAGE_ID)).toEqual(VIEW_ONLY);
-    expect(getAppAccessLevel).toHaveBeenCalledWith(TOKEN_ID, PAGE_ID);
+    expect(getAppAccessLevel).toHaveBeenCalledWith(expect.objectContaining({ userId: USER_ID }), TOKEN_ID, PAGE_ID);
     expect(getUserAccessLevel).not.toHaveBeenCalled();
   });
 
   it('getPrincipalAccessLevel: unscoped token → user path', async () => {
     vi.mocked(getUserAccessLevel).mockResolvedValue(FULL);
     expect(await getPrincipalAccessLevel(unscopedMcpAuth, PAGE_ID)).toEqual(FULL);
-    expect(getUserAccessLevel).toHaveBeenCalledWith(USER_ID, PAGE_ID);
+    expect(getUserAccessLevel).toHaveBeenCalledWith(expect.objectContaining({ userId: USER_ID }), PAGE_ID);
     expect(getAppAccessLevel).not.toHaveBeenCalled();
   });
 
   it('getPrincipalAccessLevel: session → user path', async () => {
     vi.mocked(getUserAccessLevel).mockResolvedValue(FULL);
     expect(await getPrincipalAccessLevel(sessionAuth, PAGE_ID)).toEqual(FULL);
-    expect(getUserAccessLevel).toHaveBeenCalledWith(USER_ID, PAGE_ID);
+    expect(getUserAccessLevel).toHaveBeenCalledWith(expect.objectContaining({ userId: USER_ID }), PAGE_ID);
     expect(getAppAccessLevel).not.toHaveBeenCalled();
   });
 
@@ -191,7 +191,7 @@ describe('dispatch matrix — page-level checks', () => {
   it('canPrincipalEditPage: unscoped token falls through to the user check', async () => {
     vi.mocked(canUserEditPage).mockResolvedValue(true);
     expect(await canPrincipalEditPage(unscopedMcpAuth, PAGE_ID)).toBe(true);
-    expect(canUserEditPage).toHaveBeenCalledWith(USER_ID, PAGE_ID);
+    expect(canUserEditPage).toHaveBeenCalledWith(expect.objectContaining({ userId: USER_ID }), PAGE_ID);
   });
 
   it('canPrincipalDeletePage / canPrincipalSharePage: scoped token keyed to app flags', async () => {
@@ -205,7 +205,7 @@ describe('dispatch matrix — page-level checks', () => {
   it('getPrincipalAccessLevel: drive-scoped OAuth token → scoped path with driveScopes+userId, indistinguishable from a scoped MCP token', async () => {
     vi.mocked(getScopedAccessLevel).mockResolvedValue(VIEW_ONLY);
     expect(await getPrincipalAccessLevel(scopedOAuthAuth, PAGE_ID)).toEqual(VIEW_ONLY);
-    expect(getScopedAccessLevel).toHaveBeenCalledWith(DRIVE_SCOPES, USER_ID, PAGE_ID);
+    expect(getScopedAccessLevel).toHaveBeenCalledWith(DRIVE_SCOPES, expect.objectContaining({ userId: USER_ID }), PAGE_ID);
     expect(getUserAccessLevel).not.toHaveBeenCalled();
     expect(getAppAccessLevel).not.toHaveBeenCalled();
   });
@@ -213,7 +213,7 @@ describe('dispatch matrix — page-level checks', () => {
   it('getPrincipalAccessLevel: account-scoped OAuth token → user path (full-user credential, like an unscoped MCP token)', async () => {
     vi.mocked(getUserAccessLevel).mockResolvedValue(FULL);
     expect(await getPrincipalAccessLevel(accountOAuthAuth, PAGE_ID)).toEqual(FULL);
-    expect(getUserAccessLevel).toHaveBeenCalledWith(USER_ID, PAGE_ID);
+    expect(getUserAccessLevel).toHaveBeenCalledWith(expect.objectContaining({ userId: USER_ID }), PAGE_ID);
     expect(getScopedAccessLevel).not.toHaveBeenCalled();
   });
 
@@ -237,14 +237,14 @@ describe('dispatch matrix — drive-level checks', () => {
   it('isPrincipalDriveMember: scoped token → token membership', async () => {
     vi.mocked(hasAppDriveMembership).mockResolvedValue(true);
     expect(await isPrincipalDriveMember(scopedMcpAuth, DRIVE_ID)).toBe(true);
-    expect(hasAppDriveMembership).toHaveBeenCalledWith(TOKEN_ID, DRIVE_ID);
+    expect(hasAppDriveMembership).toHaveBeenCalledWith(expect.objectContaining({ userId: USER_ID }), TOKEN_ID, DRIVE_ID);
     expect(isUserDriveMember).not.toHaveBeenCalled();
   });
 
   it('isPrincipalDriveMember: session → user membership', async () => {
     vi.mocked(isUserDriveMember).mockResolvedValue(false);
     expect(await isPrincipalDriveMember(sessionAuth, DRIVE_ID)).toBe(false);
-    expect(isUserDriveMember).toHaveBeenCalledWith(USER_ID, DRIVE_ID);
+    expect(isUserDriveMember).toHaveBeenCalledWith(expect.objectContaining({ userId: USER_ID }), DRIVE_ID);
   });
 
   it('getPrincipalDriveAccess: scoped token → token membership; unscoped → user access', async () => {
@@ -252,7 +252,7 @@ describe('dispatch matrix — drive-level checks', () => {
     expect(await getPrincipalDriveAccess(scopedMcpAuth, DRIVE_ID)).toBe(true);
     vi.mocked(getUserDriveAccess).mockResolvedValue(true);
     expect(await getPrincipalDriveAccess(unscopedMcpAuth, DRIVE_ID)).toBe(true);
-    expect(getUserDriveAccess).toHaveBeenCalledWith(USER_ID, DRIVE_ID);
+    expect(getUserDriveAccess).toHaveBeenCalledWith(expect.objectContaining({ userId: USER_ID }), DRIVE_ID);
   });
 
   it('isPrincipalDriveOwnerOrAdmin: scoped token with explicit role requires OWNER/ADMIN', async () => {
@@ -269,7 +269,7 @@ describe('dispatch matrix — drive-level checks', () => {
     vi.mocked(getAppDriveMembership).mockResolvedValue({ role: null, customRoleId: null, ownerUserId: USER_ID });
     vi.mocked(isDriveOwnerOrAdmin).mockResolvedValue(true);
     expect(await isPrincipalDriveOwnerOrAdmin(scopedMcpAuth, DRIVE_ID)).toBe(true);
-    expect(isDriveOwnerOrAdmin).toHaveBeenCalledWith(USER_ID, DRIVE_ID);
+    expect(isDriveOwnerOrAdmin).toHaveBeenCalledWith(expect.objectContaining({ userId: USER_ID }), DRIVE_ID);
 
     vi.mocked(isDriveOwnerOrAdmin).mockResolvedValue(false);
     expect(await isPrincipalDriveOwnerOrAdmin(scopedMcpAuth, DRIVE_ID)).toBe(false);
@@ -288,30 +288,30 @@ describe('dispatch matrix — drive-level checks', () => {
     expect(getDriveIdsForUser).not.toHaveBeenCalled();
 
     expect(await getPrincipalDriveIds(unscopedMcpAuth)).toEqual(['other-drive']);
-    expect(getDriveIdsForUser).toHaveBeenCalledWith(USER_ID);
+    expect(getDriveIdsForUser).toHaveBeenCalledWith(expect.objectContaining({ userId: USER_ID }));
   });
 
   it('getPrincipalAccessiblePagesInDrive: dispatches per principal', async () => {
     vi.mocked(getAppAccessiblePagesInDrive).mockResolvedValue([]);
     await getPrincipalAccessiblePagesInDrive(scopedMcpAuth, DRIVE_ID);
-    expect(getAppAccessiblePagesInDrive).toHaveBeenCalledWith(TOKEN_ID, DRIVE_ID);
+    expect(getAppAccessiblePagesInDrive).toHaveBeenCalledWith(expect.objectContaining({ userId: USER_ID }), TOKEN_ID, DRIVE_ID);
 
     vi.mocked(getUserAccessiblePagesInDriveWithDetails).mockResolvedValue([]);
     await getPrincipalAccessiblePagesInDrive(sessionAuth, DRIVE_ID);
-    expect(getUserAccessiblePagesInDriveWithDetails).toHaveBeenCalledWith(USER_ID, DRIVE_ID);
+    expect(getUserAccessiblePagesInDriveWithDetails).toHaveBeenCalledWith(expect.objectContaining({ userId: USER_ID }), DRIVE_ID);
   });
 
   it('isPrincipalDriveMember: drive-scoped OAuth token → scoped membership via driveScopes+userId', async () => {
     vi.mocked(hasScopedDriveMembership).mockResolvedValue(true);
     expect(await isPrincipalDriveMember(scopedOAuthAuth, DRIVE_ID)).toBe(true);
-    expect(hasScopedDriveMembership).toHaveBeenCalledWith(DRIVE_SCOPES, USER_ID, DRIVE_ID);
+    expect(hasScopedDriveMembership).toHaveBeenCalledWith(DRIVE_SCOPES, expect.objectContaining({ userId: USER_ID }), DRIVE_ID);
     expect(isUserDriveMember).not.toHaveBeenCalled();
   });
 
   it('getPrincipalDriveAccess: account-scoped OAuth token → user access (full-user credential)', async () => {
     vi.mocked(getUserDriveAccess).mockResolvedValue(true);
     expect(await getPrincipalDriveAccess(accountOAuthAuth, DRIVE_ID)).toBe(true);
-    expect(getUserDriveAccess).toHaveBeenCalledWith(USER_ID, DRIVE_ID);
+    expect(getUserDriveAccess).toHaveBeenCalledWith(expect.objectContaining({ userId: USER_ID }), DRIVE_ID);
   });
 
   it('isPrincipalDriveOwnerOrAdmin: scoped OAuth token with explicit ADMIN role → true; MEMBER → false', async () => {
@@ -328,7 +328,7 @@ describe('dispatch matrix — drive-level checks', () => {
     vi.mocked(getScopedDriveMembership).mockReturnValue({ role: null, customRoleId: null });
     vi.mocked(isDriveOwnerOrAdmin).mockResolvedValue(true);
     expect(await isPrincipalDriveOwnerOrAdmin(scopedOAuthAuth, DRIVE_ID)).toBe(true);
-    expect(isDriveOwnerOrAdmin).toHaveBeenCalledWith(USER_ID, DRIVE_ID);
+    expect(isDriveOwnerOrAdmin).toHaveBeenCalledWith(expect.objectContaining({ userId: USER_ID }), DRIVE_ID);
   });
 
   it('isPrincipalDriveOwnerOrAdmin: no matching OAuth scope row → false (no user fallback)', async () => {
@@ -347,7 +347,7 @@ describe('dispatch matrix — drive-level checks', () => {
   it('getPrincipalAccessiblePagesInDrive: drive-scoped OAuth token dispatches to getScopedAccessiblePagesInDrive', async () => {
     vi.mocked(getScopedAccessiblePagesInDrive).mockResolvedValue([]);
     await getPrincipalAccessiblePagesInDrive(scopedOAuthAuth, DRIVE_ID);
-    expect(getScopedAccessiblePagesInDrive).toHaveBeenCalledWith(DRIVE_SCOPES, USER_ID, DRIVE_ID);
+    expect(getScopedAccessiblePagesInDrive).toHaveBeenCalledWith(DRIVE_SCOPES, expect.objectContaining({ userId: USER_ID }), DRIVE_ID);
   });
 });
 
@@ -358,7 +358,7 @@ describe('getPrincipalBatchPagePermissions', () => {
     const expected = new Map([[PAGE_ID, FULL]]);
     vi.mocked(getBatchPagePermissions).mockResolvedValue(expected);
     expect(await getPrincipalBatchPagePermissions(sessionAuth, [PAGE_ID])).toBe(expected);
-    expect(getBatchPagePermissions).toHaveBeenCalledWith(USER_ID, [PAGE_ID]);
+    expect(getBatchPagePermissions).toHaveBeenCalledWith(expect.objectContaining({ userId: USER_ID }), [PAGE_ID]);
   });
 
   it('scoped token → resolves from the token-accessible page sets, denying everything else', async () => {
@@ -386,7 +386,7 @@ describe('getPrincipalBatchPagePermissions', () => {
     const result = await getPrincipalBatchPagePermissions(scopedOAuthAuth, [PAGE_ID, 'page_outside']);
     expect(result.get(PAGE_ID)).toEqual(VIEW_ONLY);
     expect(result.get('page_outside')).toEqual({ canView: false, canEdit: false, canShare: false, canDelete: false });
-    expect(getScopedAccessiblePagesInDrive).toHaveBeenCalledWith(DRIVE_SCOPES, USER_ID, DRIVE_ID);
+    expect(getScopedAccessiblePagesInDrive).toHaveBeenCalledWith(DRIVE_SCOPES, expect.objectContaining({ userId: USER_ID }), DRIVE_ID);
     expect(getBatchPagePermissions).not.toHaveBeenCalled();
   });
 
@@ -394,7 +394,7 @@ describe('getPrincipalBatchPagePermissions', () => {
     const expected = new Map([[PAGE_ID, FULL]]);
     vi.mocked(getBatchPagePermissions).mockResolvedValue(expected);
     expect(await getPrincipalBatchPagePermissions(accountOAuthAuth, [PAGE_ID])).toBe(expected);
-    expect(getBatchPagePermissions).toHaveBeenCalledWith(USER_ID, [PAGE_ID]);
+    expect(getBatchPagePermissions).toHaveBeenCalledWith(expect.objectContaining({ userId: USER_ID }), [PAGE_ID]);
   });
 });
 
@@ -509,7 +509,7 @@ describe('canManagePageWebhooks', () => {
   it('session principal who is drive owner/admin is allowed', async () => {
     vi.mocked(isDriveOwnerOrAdmin).mockResolvedValue(true);
     expect(await canManagePageWebhooks(sessionAuth, PAGE_ID)).toBe(true);
-    expect(isDriveOwnerOrAdmin).toHaveBeenCalledWith(USER_ID, DRIVE_ID);
+    expect(isDriveOwnerOrAdmin).toHaveBeenCalledWith(expect.objectContaining({ userId: USER_ID }), DRIVE_ID);
   });
 
   it('session principal who is a plain drive member is denied', async () => {
@@ -534,7 +534,7 @@ describe('canManagePageWebhooks', () => {
   it('an unscoped MCP token (acts as the full user) is evaluated on the user\'s own drive role', async () => {
     vi.mocked(isDriveOwnerOrAdmin).mockResolvedValue(true);
     expect(await canManagePageWebhooks(unscopedMcpAuth, PAGE_ID)).toBe(true);
-    expect(isDriveOwnerOrAdmin).toHaveBeenCalledWith(USER_ID, DRIVE_ID);
+    expect(isDriveOwnerOrAdmin).toHaveBeenCalledWith(expect.objectContaining({ userId: USER_ID }), DRIVE_ID);
   });
 
   it('a manage-keys-only credential is denied without resolving the page', async () => {
@@ -580,7 +580,7 @@ describe('a dispatched worker is authorized as the credential that STARTED the c
 
     const level = await getPrincipalAccessLevel(serviceFromScopedToken, PAGE_ID);
 
-    expect(getAppAccessLevel).toHaveBeenCalledWith(TOKEN_ID, PAGE_ID);
+    expect(getAppAccessLevel).toHaveBeenCalledWith(expect.objectContaining({ userId: USER_ID }), TOKEN_ID, PAGE_ID);
     expect(getUserAccessLevel).not.toHaveBeenCalled();
     expect(level?.canEdit).toBe(false);
   });
@@ -600,7 +600,7 @@ describe('a dispatched worker is authorized as the credential that STARTED the c
     vi.mocked(isUserDriveMember).mockResolvedValue(true);
 
     expect(await isPrincipalDriveMember(serviceFromScopedToken, DRIVE_ID)).toBe(true);
-    expect(hasAppDriveMembership).toHaveBeenCalledWith(TOKEN_ID, DRIVE_ID);
+    expect(hasAppDriveMembership).toHaveBeenCalledWith(expect.objectContaining({ userId: USER_ID }), TOKEN_ID, DRIVE_ID);
     expect(isUserDriveMember).not.toHaveBeenCalled();
 
     expect(await getPrincipalDriveIds(serviceFromScopedToken)).toEqual([DRIVE_ID]);
@@ -613,7 +613,7 @@ describe('a dispatched worker is authorized as the credential that STARTED the c
     vi.mocked(canUserViewPage).mockResolvedValue(true);
 
     expect(await canPrincipalViewPage(serviceFromSession, PAGE_ID)).toBe(true);
-    expect(canUserViewPage).toHaveBeenCalledWith(USER_ID, PAGE_ID);
+    expect(canUserViewPage).toHaveBeenCalledWith(expect.objectContaining({ userId: USER_ID }), PAGE_ID);
     expect(getAppAccessLevel).not.toHaveBeenCalled();
   });
 
@@ -638,21 +638,21 @@ describe('getPrincipalDriveAccessLevel', () => {
   it('resolves a scoped MCP token through the app-member resolver, keyed by the TOKEN', async () => {
     vi.mocked(getAppDriveAccessLevel).mockResolvedValue(VIEW_ONLY);
     await expect(getPrincipalDriveAccessLevel(scopedMcpAuth, DRIVE_ID)).resolves.toEqual(VIEW_ONLY);
-    expect(getAppDriveAccessLevel).toHaveBeenCalledWith(TOKEN_ID, DRIVE_ID);
+    expect(getAppDriveAccessLevel).toHaveBeenCalledWith(expect.objectContaining({ userId: USER_ID }), TOKEN_ID, DRIVE_ID);
     expect(getUserAccessLevel).not.toHaveBeenCalled();
   });
 
   it('resolves a drive-scoped OAuth token through the scope resolver', async () => {
     vi.mocked(getScopedDriveAccessLevel).mockResolvedValue(VIEW_ONLY);
     await expect(getPrincipalDriveAccessLevel(scopedOAuthAuth, DRIVE_ID)).resolves.toEqual(VIEW_ONLY);
-    expect(getScopedDriveAccessLevel).toHaveBeenCalledWith(DRIVE_SCOPES, USER_ID, DRIVE_ID);
+    expect(getScopedDriveAccessLevel).toHaveBeenCalledWith(DRIVE_SCOPES, expect.objectContaining({ userId: USER_ID }), DRIVE_ID);
   });
 
   it('resolves a session, an unscoped key and an account OAuth token as the user (drive-as-root-node)', async () => {
     for (const auth of [sessionAuth, unscopedMcpAuth, accountOAuthAuth]) {
       vi.mocked(getUserAccessLevel).mockResolvedValue(FULL);
       await expect(getPrincipalDriveAccessLevel(auth, DRIVE_ID)).resolves.toEqual(FULL);
-      expect(getUserAccessLevel).toHaveBeenCalledWith(USER_ID, DRIVE_ID);
+      expect(getUserAccessLevel).toHaveBeenCalledWith(expect.objectContaining({ userId: USER_ID }), DRIVE_ID);
     }
   });
 });
@@ -699,18 +699,52 @@ describe('getPrincipalDriveMembership', () => {
 });
 
 describe('SEC-2 (partial) SEC-3 (partial) principal policy enforcement', () => {
-  it.each([sessionAuth, unscopedMcpAuth, scopedMcpAuth, accountOAuthAuth, scopedOAuthAuth])('denies page and drive capabilities for a rejected $tokenType credential', async (auth) => {
-    vi.mocked(checkDriveAuthentication).mockResolvedValue({ allowed: false, code: 'org_reauthentication_required' });
-    vi.mocked(checkResourceAuthentication).mockResolvedValue({ allowed: false, code: 'org_reauthentication_required' });
+  const evidence = { authenticatedAtMs: 1700000000000, assurance: 'single_factor' as const };
+  const actorOf = (auth: AuthResult) => ({ via: 'credential', userId: auth.userId, authentication: auth.authentication ?? null });
+
+  it.each([sessionAuth, unscopedMcpAuth, scopedMcpAuth, accountOAuthAuth, scopedOAuthAuth])('asks every lib access function as the $tokenType credential, its ceremony evidence included', async (base) => {
+    vi.clearAllMocks();
+    const auth = { ...base, authentication: evidence } as AuthResult;
     vi.mocked(getUserAccessLevel).mockResolvedValue(FULL);
     vi.mocked(getAppAccessLevel).mockResolvedValue(FULL);
     vi.mocked(getScopedAccessLevel).mockResolvedValue(FULL);
-    vi.mocked(canUserViewPage).mockResolvedValue(true);
-    vi.mocked(canUserEditPage).mockResolvedValue(true);
-    vi.mocked(canUserDeletePage).mockResolvedValue(true);
-    vi.mocked(canUserSharePage).mockResolvedValue(true);
+    await getPrincipalAccessLevel(auth, PAGE_ID);
+    const calls = [
+      ...vi.mocked(getUserAccessLevel).mock.calls.map((c) => c[0]),
+      ...vi.mocked(getAppAccessLevel).mock.calls.map((c) => c[0]),
+      ...vi.mocked(getScopedAccessLevel).mock.calls.map((c) => c[1]),
+    ];
+    expect(calls).toEqual([actorOf(auth)]);
+  });
+
+  it.each([sessionAuth, unscopedMcpAuth, scopedMcpAuth, accountOAuthAuth, scopedOAuthAuth])('denies page and drive capabilities when the lib refuses a $tokenType credential', async (base) => {
+    const auth = { ...base, authentication: evidence } as AuthResult;
+    // The lib access functions apply the org sign-in policy themselves: a refused credential reads as no access.
+    vi.mocked(getUserAccessLevel).mockResolvedValue(null);
+    vi.mocked(getAppAccessLevel).mockResolvedValue(null);
+    vi.mocked(getScopedAccessLevel).mockResolvedValue(null);
+    vi.mocked(getAppDriveAccessLevel).mockResolvedValue(null);
+    vi.mocked(getScopedDriveAccessLevel).mockResolvedValue(null);
+    vi.mocked(getAppDriveMembership).mockResolvedValue(null);
+    vi.mocked(getEffectiveScopedDriveMembership).mockResolvedValue(null);
+    vi.mocked(getAppAccessiblePagesInDrive).mockResolvedValue([]);
+    vi.mocked(getScopedAccessiblePagesInDrive).mockResolvedValue([]);
+    vi.mocked(hasAppDriveMembership).mockResolvedValue(false);
+    vi.mocked(hasScopedDriveMembership).mockResolvedValue(false);
+    vi.mocked(canUserViewPage).mockResolvedValue(false);
+    vi.mocked(canUserEditPage).mockResolvedValue(false);
+    vi.mocked(canUserDeletePage).mockResolvedValue(false);
+    vi.mocked(canUserSharePage).mockResolvedValue(false);
+    vi.mocked(isUserDriveMember).mockResolvedValue(false);
+    vi.mocked(getUserDriveAccess).mockResolvedValue(false);
+    vi.mocked(isDriveOwnerOrAdmin).mockResolvedValue(false);
+    vi.mocked(getUserDrivePermissions).mockResolvedValue(null);
+    vi.mocked(getUserAccessiblePagesInDriveWithDetails).mockResolvedValue([]);
+    vi.mocked(getDriveIdsForUser).mockResolvedValue([]);
+    const deny = { canView: false, canEdit: false, canShare: false, canDelete: false };
+    vi.mocked(getBatchPagePermissions).mockResolvedValue(new Map([[PAGE_ID, deny]]));
     expect(await getPrincipalAccessLevel(auth, PAGE_ID)).toBeNull();
-    for (const check of [canPrincipalViewPage, canPrincipalEditPage, canPrincipalDeletePage, canPrincipalSharePage, canManagePageWebhooks]) {
+    for (const check of [canPrincipalViewPage, canPrincipalEditPage, canPrincipalDeletePage, canPrincipalSharePage]) {
       expect(await check(auth, PAGE_ID)).toBe(false);
     }
     for (const check of [isPrincipalDriveMember, getPrincipalDriveAccess, isPrincipalDriveOwnerOrAdmin]) {
@@ -719,20 +753,32 @@ describe('SEC-2 (partial) SEC-3 (partial) principal policy enforcement', () => {
     expect(await getPrincipalDriveAccessLevel(auth, DRIVE_ID)).toBeNull();
     expect(await getPrincipalDriveMembership(auth, DRIVE_ID)).toBeNull();
     expect(await getPrincipalAccessiblePagesInDrive(auth, DRIVE_ID)).toEqual([]);
-    vi.mocked(getDriveIdsForUser).mockResolvedValue([DRIVE_ID]);
-    vi.mocked(hasAppDriveMembership).mockResolvedValue(true);
-    vi.mocked(hasScopedDriveMembership).mockResolvedValue(true);
     expect(await getPrincipalDriveIds(auth)).toEqual([]);
-    vi.mocked(getBatchPagePermissions).mockResolvedValue(new Map([[PAGE_ID, FULL]]));
-    expect((await getPrincipalBatchPagePermissions(auth, [PAGE_ID])).get(PAGE_ID)).toEqual({ canView: false, canEdit: false, canShare: false, canDelete: false });
+    expect((await getPrincipalBatchPagePermissions(auth, [PAGE_ID])).get(PAGE_ID)).toEqual(deny);
   });
 
-  it('passes the exact credential evidence through a scoped dispatch', async () => {
+  it('SEC-2 (partial) SEC-3 (partial) a dispatched worker asks org content with the evidence its signed dispatch carried, as loadServicePrincipal loads it', async () => {
     const authentication = { authenticatedAtMs: 1700000000000, assurance: 'user_verified_passkey' as const };
+    mockUsersFindFirst.mockResolvedValue({ id: USER_ID, role: 'user', tokenVersion: 1, adminRoleVersion: 1, suspendedAt: null });
+    const auth = await loadServicePrincipal({
+      userId: USER_ID, service: 'agent-dispatch', allowedDriveIds: [DRIVE_ID], originatingMcpTokenId: TOKEN_ID, authentication,
+    });
     vi.mocked(getAppAccessLevel).mockResolvedValue(FULL);
-    await getPrincipalAccessLevel({ ...base, tokenType: 'service', service: 'agent-dispatch', userId: USER_ID,
-      allowedDriveIds: [DRIVE_ID], originatingMcpTokenId: TOKEN_ID, authentication,
-    }, PAGE_ID);
-    expect(checkResourceAuthentication).toHaveBeenCalledWith(PAGE_ID, authentication);
+
+    await getPrincipalAccessLevel(auth!, PAGE_ID);
+
+    expect(getAppAccessLevel).toHaveBeenCalledWith({ via: 'credential', userId: USER_ID, authentication }, TOKEN_ID, PAGE_ID);
+  });
+
+  it('SEC-2 (partial) a dispatch that carried no evidence resolves as a credential without any, which every org sign-in policy refuses', async () => {
+    mockUsersFindFirst.mockResolvedValue({ id: USER_ID, role: 'user', tokenVersion: 1, adminRoleVersion: 1, suspendedAt: null });
+    const auth = await loadServicePrincipal({
+      userId: USER_ID, service: 'agent-dispatch', allowedDriveIds: [], authentication: null,
+    });
+    vi.mocked(getUserAccessLevel).mockResolvedValue(FULL);
+
+    await getPrincipalAccessLevel(auth!, PAGE_ID);
+
+    expect(getUserAccessLevel).toHaveBeenCalledWith({ via: 'credential', userId: USER_ID, authentication: null }, PAGE_ID);
   });
 });

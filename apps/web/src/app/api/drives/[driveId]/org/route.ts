@@ -16,6 +16,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { safeParseBody } from '@/lib/validation/parse-body';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 /**
  * Org ownership of a drive (Spec DRV-2, O-10).
@@ -146,7 +147,7 @@ export async function PATCH(request: Request, context: RouteContext) {
       details: { operation: 'org_visibility_change', orgId: result.drive.orgId, from: result.from, to: result.to },
     });
     // ORG-4: a change made through org Owner/Admin power rather than as the lead is audited too.
-    await recordOrgPowerDriveAction(auth.userId, result.drive, 'change_visibility');
+    await recordOrgPowerDriveAction(actorFromAuth(auth), result.drive, 'change_visibility');
 
     // The change has committed: the sync already told each affected member; the drive update
     // broadcast is best-effort and never turns it into a 500.

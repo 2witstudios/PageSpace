@@ -26,7 +26,7 @@ vi.mock('../../../../../../lib/auth', () => ({
   checkMCPPageScope: vi.fn().mockResolvedValue(null),
   canPrincipalViewPage: vi.fn(async (auth: { userId: string }, pageId: string) => {
     const { canUserViewPage } = await import('@pagespace/lib/permissions/permissions');
-    return canUserViewPage(auth.userId, pageId);
+    return canUserViewPage(credentialActor(auth.userId, null), pageId);
   }),
 }));
 
@@ -44,6 +44,7 @@ import { getPageVersionHistory, getUserRetentionDays } from '../../../../../../s
 import { authenticateRequestWithOptions } from '../../../../../../lib/auth';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { isActivityEligibleForRollback } from '@pagespace/lib/permissions/rollback-permissions';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 // Test helpers
 const mockUserId = 'user_123';

@@ -143,7 +143,7 @@ describe('GET /api/sidebar/badges — channels', () => {
     grantView('ch_1');
 
     expect(await getChannels()).toBe(2);
-    expect(getMemberDriveIds).toHaveBeenCalledWith(mockUserId, { includeTrashed: true });
+    expect(getMemberDriveIds).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }), { includeTrashed: true });
     const { __sqlText, __values } = vi.mocked(db.execute).mock.calls[0][0] as unknown as { __sqlText: string; __values: unknown[] };
     expect(__sqlText).not.toMatch(/drive_members/);
     expect(__sqlText).not.toMatch(/"ownerId"/);

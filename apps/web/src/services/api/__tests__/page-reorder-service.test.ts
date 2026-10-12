@@ -40,6 +40,7 @@ import { db } from '@pagespace/db/db';
 import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
 import { applyPageMutation } from '../page-mutation-service';
 import { pageReorderService } from '../page-reorder-service';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 type MockFn = ReturnType<typeof vi.fn>;
 type MemberRow = { driveId: string; userId: string; role: string; acceptedAt: Date | null };
@@ -82,7 +83,7 @@ function seed(row: MemberRow, canonicalAnswer: boolean) {
 }
 
 const reorder = (userId: string) =>
-  pageReorderService.reorderPage({ pageId: 'page-1', newParentId: null, newPosition: 1, userId });
+  pageReorderService.reorderPage({ pageId: 'page-1', newParentId: null, newPosition: 1, actor: credentialActor(userId, null) });
 
 describe('pageReorderService.reorderPage — pending invites', () => {
   beforeEach(() => {
@@ -104,7 +105,7 @@ describe('pageReorderService.reorderPage — pending invites', () => {
     const result = await reorder('user-1');
 
     expect(result).toEqual({ success: true, driveId: 'drive-1', pageTitle: 'Page' });
-    expect(isDriveOwnerOrAdmin).toHaveBeenCalledWith('user-1', 'drive-1');
+    expect(isDriveOwnerOrAdmin).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1' }), 'drive-1');
     expect(applyPageMutation).toHaveBeenCalledTimes(1);
   });
 
@@ -161,6 +162,6 @@ describe('pageReorderService.reorderPage — org drives (B7c)', () => {
     const result = await reorder('org-admin-1');
 
     expect(result).toMatchObject({ success: true });
-    expect(isDriveOwnerOrAdmin).toHaveBeenCalledWith('org-admin-1', 'drive-1');
+    expect(isDriveOwnerOrAdmin).toHaveBeenCalledWith(expect.objectContaining({ userId: 'org-admin-1' }), 'drive-1');
   });
 });

@@ -7,6 +7,7 @@ import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-s
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { isOrgLapsedError } from '@pagespace/lib/permissions/org-lapse-guard';
 import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -35,7 +36,6 @@ export async function GET(
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
     if (isAuthError(auth)) return auth.error;
-    const userId = auth.userId;
 
     const { driveId, roleId } = await context.params;
 
@@ -43,7 +43,7 @@ export async function GET(
     if (scopeError) return scopeError;
 
     // Check if user has access to this drive
-    const access = await checkDriveAccessForRoles(driveId, userId);
+    const access = await checkDriveAccessForRoles(driveId, actorFromAuth(auth));
 
     if (!access.drive) {
       return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
@@ -86,7 +86,7 @@ export async function PATCH(
     if (scopeError) return scopeError;
 
     // Check if user is owner or admin
-    const access = await checkDriveAccessForRoles(driveId, userId);
+    const access = await checkDriveAccessForRoles(driveId, actorFromAuth(auth));
 
     if (!access.drive) {
       return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
@@ -200,7 +200,7 @@ export async function DELETE(
     if (scopeError) return scopeError;
 
     // Check if user is owner or admin
-    const access = await checkDriveAccessForRoles(driveId, userId);
+    const access = await checkDriveAccessForRoles(driveId, actorFromAuth(auth));
 
     if (!access.drive) {
       return NextResponse.json({ error: 'Drive not found' }, { status: 404 });

@@ -42,7 +42,7 @@ vi.mock('@/lib/auth', () => ({
   checkMCPDriveScope: vi.fn(() => null),
   isPrincipalDriveOwnerOrAdmin: vi.fn(async (auth: { userId: string }, driveId: string) => {
     const { isDriveOwnerOrAdmin } = await import('@pagespace/lib/permissions/permissions');
-    return isDriveOwnerOrAdmin(auth.userId, driveId);
+    return isDriveOwnerOrAdmin(credentialActor(auth.userId, null), driveId);
   }),
 }));
 
@@ -63,6 +63,7 @@ import {
   upsertCalendarTriggerWorkflow,
   removeCalendarTrigger,
 } from '@/lib/workflows/calendar-trigger-helpers';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const USER_ID = 'user_creator';
 const OUTSIDER_ID = 'user_outsider';

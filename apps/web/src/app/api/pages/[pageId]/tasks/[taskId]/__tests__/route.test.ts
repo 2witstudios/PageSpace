@@ -9,11 +9,11 @@ vi.mock('@/lib/auth', () => ({
   checkMCPPageScope: vi.fn().mockResolvedValue(null),
   canPrincipalEditPage: async (auth: { userId: string }, pageId: string) => {
     const { canUserEditPage } = await import('@pagespace/lib/permissions/permissions');
-    return canUserEditPage(auth.userId, pageId);
+    return canUserEditPage(credentialActor(auth.userId, null), pageId);
   },
   canPrincipalViewPage: async (auth: { userId: string }, pageId: string) => {
     const { canUserViewPage } = await import('@pagespace/lib/permissions/permissions');
-    return canUserViewPage(auth.userId, pageId);
+    return canUserViewPage(credentialActor(auth.userId, null), pageId);
   },
 }));
 
@@ -181,6 +181,7 @@ import { checkSubTasksComplete } from '@/lib/tasks/completion-guard';
 import { createTaskTriggerWorkflow, syncTaskDueDateTrigger } from '@/lib/workflows/task-trigger-helpers';
 import { reorderTaskPeers } from '@/lib/ai/tools/task-helpers';
 import { getUserTimezone } from '@/lib/ai/core/personalization-utils';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 // ---------- Helpers ----------
 

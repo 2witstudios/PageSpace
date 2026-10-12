@@ -9,6 +9,7 @@ import { drives } from '@pagespace/db/schema/core';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { parsePageTypesParam } from '@pagespace/lib/utils/enums';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const };
 
@@ -57,7 +58,7 @@ export async function GET(
     if (isScopedMCPAuth(auth)) {
       // Membership gate only — results below are filtered per page by the
       // TOKEN's own access, so per-page custom-role grants still work.
-      if (!(await hasAppDriveMembership(auth.tokenId, driveId))) {
+      if (!(await hasAppDriveMembership(actorFromAuth(auth), auth.tokenId, driveId))) {
         return NextResponse.json(
           { error: "You don't have access to this drive" },
           { status: 403 }
@@ -69,7 +70,7 @@ export async function GET(
         .where(eq(drives.id, driveId));
       drive = row ?? null;
     } else {
-      const accessInfo = await checkDriveAccessForSearch(driveId, userId);
+      const accessInfo = await checkDriveAccessForSearch(driveId, actorFromAuth(auth));
 
       if (!accessInfo.hasAccess) {
         return NextResponse.json(
@@ -94,10 +95,10 @@ export async function GET(
     // user filter is already correct for them.
     let tokenViewablePageIds: Set<string> | null = null;
     if (isScopedMCPAuth(auth)) {
-      const explicitMembership = await getAppDriveMembership(auth.tokenId, driveId);
+      const explicitMembership = await getAppDriveMembership(actorFromAuth(auth), auth.tokenId, driveId);
       if (explicitMembership && explicitMembership.role !== null) {
         tokenViewablePageIds = new Set(
-          (await getAppAccessiblePagesInDrive(auth.tokenId, driveId))
+          (await getAppAccessiblePagesInDrive(actorFromAuth(auth), auth.tokenId, driveId))
             .filter((p) => p.permissions.canView)
             .map((p) => p.id),
         );
@@ -106,7 +107,7 @@ export async function GET(
 
     const searchResults = await globSearchPages(
       driveId,
-      userId,
+      actorFromAuth(auth),
       pattern,
       drive.slug,
       {

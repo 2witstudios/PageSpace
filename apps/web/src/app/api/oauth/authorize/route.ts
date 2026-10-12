@@ -33,6 +33,7 @@ import { sessionRepository } from '@/lib/repositories/session-repository';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
 import { consumeStepUpGrant } from '@pagespace/lib/auth/step-up-service';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 function rateLimitedResponse(retryAfter: number): NextResponse {
   return NextResponse.json({ error: 'rate_limited', retryAfter }, { status: 429 });
@@ -235,7 +236,7 @@ export async function POST(req: NextRequest) {
   // completed WebAuthn/magic-link step-up shouldn't have to redo it just
   // because the request also happens to fail the scope cap — burn only once
   // every other check has already passed.
-  const authority = checkGrantAuthority(result.scopes, await resolveGrantAuthority(result.scopes, auth.userId));
+  const authority = checkGrantAuthority(result.scopes, await resolveGrantAuthority(result.scopes, actorFromAuth(auth)));
   if (!authority.ok) {
     return NextResponse.json({
       redirectUri: buildRedirectWithParams(result.redirectUri, { error: 'invalid_scope', state: result.state }),

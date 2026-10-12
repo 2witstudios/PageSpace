@@ -31,6 +31,7 @@ import { mcpTokens } from '@pagespace/db/schema/auth'
 import { pages } from '@pagespace/db/schema/core'
 import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
 import { isDriveLead } from '@pagespace/lib/permissions/drive-relationship';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -42,12 +43,11 @@ export async function GET(
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
     if (isAuthError(auth)) return auth.error;
-    const currentUserId = auth.userId;
 
     const { driveId, userId } = await context.params;
 
     // Check if user is owner or admin
-    const access = await checkDriveAccess(driveId, currentUserId);
+    const access = await checkDriveAccess(driveId, actorFromAuth(auth));
 
     if (!access.drive) {
       return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
@@ -113,7 +113,7 @@ export async function PATCH(
     }
 
     // Check if user is owner or admin
-    const access = await checkDriveAccess(driveId, currentUserId);
+    const access = await checkDriveAccess(driveId, actorFromAuth(auth));
 
     if (!access.drive) {
       return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
@@ -229,7 +229,7 @@ export async function DELETE(
     const { driveId, userId: targetUserId } = await context.params;
 
     // Check if current user is owner or admin
-    const access = await checkDriveAccess(driveId, currentUserId);
+    const access = await checkDriveAccess(driveId, actorFromAuth(auth));
 
     if (!access.drive) {
       return NextResponse.json({ error: 'Drive not found' }, { status: 404 });

@@ -11,6 +11,8 @@ import { ORGS_ENABLED } from '@pagespace/lib/organizations/orgs-enabled';
 import { requireOrgRole } from '@pagespace/lib/organizations/authorize';
 import { findMembershipRole } from '@pagespace/lib/organizations/repository';
 import type { OrgRole } from '@pagespace/db/schema/organizations';
+import { actorFromAuth } from '@/lib/auth/request-actor';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 // Writes stay session-only. READS admit an MCP token where the CLI/MCP mirror exists
 // (Spec X-1); OAuth access tokens are not admitted (the wallets routes' same posture).
@@ -27,7 +29,7 @@ export type OrgGate =
   /** `role` is the caller's org role, set by authorizeOrgRequest (not by authenticateOrgRequest).
    * `allowedDriveIds` is the token's drive restriction — empty for a session or an unscoped
    * token (full access), non-empty for a drive-scoped one. */
-  | { ok: true; userId: string; role?: OrgRole; allowedDriveIds: string[] }
+  | { ok: true; userId: string; role?: OrgRole; allowedDriveIds: string[]; /** The credential as an access actor, for drive-content checks (D-OW-45). */ actor: AccessActor }
   | { ok: false; response: Response };
 
 /** 404 exactly as an unknown route would answer, so dark orgs reveal nothing. */
@@ -46,7 +48,7 @@ export async function authenticateOrgRequest(request: Request, options: AuthOpti
   if (!ORGS_ENABLED) return { ok: false, response: orgsDisabledResponse() };
   const auth = await authenticateRequestWithOptions(request, options);
   if (isAuthError(auth)) return { ok: false, response: auth.error };
-  return { ok: true, userId: auth.userId, allowedDriveIds: tokenAllowedDriveIds(auth) };
+  return { ok: true, userId: auth.userId, allowedDriveIds: tokenAllowedDriveIds(auth), actor: actorFromAuth(auth) };
 }
 
 /** The credential's drive restriction; empty = unrestricted (a session or an unscoped token). */
@@ -99,5 +101,5 @@ export async function authorizeOrgRequest(
     });
     return { ok: false, response: apiError(decision.status, code, error) };
   }
-  return { ok: true, userId: gate.userId, role: decision.role, allowedDriveIds: gate.allowedDriveIds };
+  return { ok: true, userId: gate.userId, role: decision.role, allowedDriveIds: gate.allowedDriveIds, actor: gate.actor };
 }

@@ -9,6 +9,7 @@ import { publishHomePageAtRoot, PublishError } from '@/lib/canvas/publish-page';
 import { isPublishConfigured } from '@/lib/canvas/published-storage';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -57,7 +58,7 @@ export async function POST(
   }
 
   try {
-    const result = await publishHomePageAtRoot(driveId, userId);
+    const result = await publishHomePageAtRoot(driveId, actorFromAuth(auth));
 
     if (!result) {
       return NextResponse.json(

@@ -82,6 +82,7 @@ import { findGuestAgentMembers } from '@/lib/mentions/guest-agent-members';
 import { db } from '@pagespace/db/db';
 import * as dbOperators from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 // ============================================================================
 // Test Fixtures
@@ -169,7 +170,7 @@ describe('GET /api/mentions/search', () => {
 
       expect(response.status).toBe(403);
       expect(body.error).toBe('Access denied to the specified drive');
-      expect(getUserDriveAccess).toHaveBeenCalledWith(mockUserId, mockOtherDriveId);
+      expect(getUserDriveAccess).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }), mockOtherDriveId);
     });
 
     it('should call getUserDriveAccess when driveId is provided', async () => {
@@ -180,7 +181,7 @@ describe('GET /api/mentions/search', () => {
       await GET(request);
 
       // The critical security check: getUserDriveAccess is called to verify access
-      expect(getUserDriveAccess).toHaveBeenCalledWith(mockUserId, mockDriveId);
+      expect(getUserDriveAccess).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }), mockDriveId);
     });
 
     it('should NOT leak data about pages in unauthorized drives', async () => {
@@ -207,7 +208,7 @@ describe('GET /api/mentions/search', () => {
       await GET(request);
 
       // The critical security check: getDriveIdsForUser is used to limit search scope
-      expect(getDriveIdsForUser).toHaveBeenCalledWith(mockUserId);
+      expect(getDriveIdsForUser).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }));
       // getUserDriveAccess should NOT be called for cross-drive
       // (drive access is inherently enforced by getDriveIdsForUser)
       expect(getUserDriveAccess).not.toHaveBeenCalled();
@@ -235,7 +236,7 @@ describe('GET /api/mentions/search', () => {
 
       // The security fix: using getDriveIdsForUser instead of the old
       // getUserAccessibleDrives that only returned owned drives
-      expect(getDriveIdsForUser).toHaveBeenCalledWith(mockUserId);
+      expect(getDriveIdsForUser).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }));
     });
   });
 
@@ -267,7 +268,7 @@ describe('GET /api/mentions/search', () => {
       await GET(request);
 
       // getUserDriveAccess should be called
-      expect(getUserDriveAccess).toHaveBeenCalledWith('user_123', 'drive_unauthorized');
+      expect(getUserDriveAccess).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user_123' }), 'drive_unauthorized');
 
       // But page queries should NOT be made since access was denied
       // The db.select call for pages should not happen after access denial
@@ -286,7 +287,7 @@ describe('GET /api/mentions/search', () => {
       await GET(request);
 
       // The security fix: getUserDriveAccess checks owner, member, and page permissions
-      expect(getUserDriveAccess).toHaveBeenCalledWith(mockUserId, mockDriveId);
+      expect(getUserDriveAccess).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }), mockDriveId);
     });
 
     it('should deny access when getUserDriveAccess returns false regardless of membership type', async () => {
@@ -311,7 +312,7 @@ describe('GET /api/mentions/search', () => {
       await GET(request);
 
       // Drive access is checked first
-      expect(getUserDriveAccess).toHaveBeenCalledWith(mockUserId, mockDriveId);
+      expect(getUserDriveAccess).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }), mockDriveId);
       // Note: getUserAccessLevel would be called for each page result from DB
       // The exact calls depend on DB mock behavior
     });
@@ -463,7 +464,7 @@ describe('GET /api/mentions/search', () => {
       });
       // Membership is the grant: the requester's ACL on the agent's HOME page
       // is never consulted (it would deny — the home drive is not theirs).
-      expect(getUserAccessLevel).not.toHaveBeenCalledWith(mockUserId, guestAgentId);
+      expect(getUserAccessLevel).not.toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }), guestAgentId);
     });
 
     it('does not offer guest agents to a requester who is not a drive member (page-permission access only)', async () => {
@@ -609,7 +610,7 @@ vi.mock('@/lib/auth/principal-permissions', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/auth/principal-permissions')>();
   const permissions = await import('@pagespace/lib/permissions/permissions');
   return { ...actual,
-    getPrincipalAccessLevel: (auth: { userId: string }, resourceId: string) => permissions.getUserAccessLevel(auth.userId, resourceId),
-    getPrincipalDriveAccess: (auth: { userId: string }, resourceId: string) => permissions.getUserDriveAccess(auth.userId, resourceId),
+    getPrincipalAccessLevel: (auth: { userId: string }, resourceId: string) => permissions.getUserAccessLevel(credentialActor(auth.userId, null), resourceId),
+    getPrincipalDriveAccess: (auth: { userId: string }, resourceId: string) => permissions.getUserDriveAccess(credentialActor(auth.userId, null), resourceId),
   };
 });

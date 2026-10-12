@@ -5,6 +5,8 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ## [Unreleased]
 
+- An organization's sign-in rules (require a passkey sign-in, maximum session age) now apply everywhere its content can be reached: pages, files, search, inbox, activity and Pulse, AI assistants and their tools, live collaboration (open documents and channels are closed when a session passes the maximum age), terminals and previews, uploads, and the CLI and MCP keys. A refused request answers `403` with `code: "org_strong_sign_in_required"` or `"org_reauthentication_required"` so you can sign in again; your personal drives and account settings stay reachable. Scheduled automations (workflows, triggers, scheduled backups, Pulse) keep running as their creator, since no one signs in for them.
+
 - Organization capabilities now require a verified payment or supported gift for the current subscription. A zero-dollar non-gift invoice or balance left from a previous subscription cannot activate an unpaid organization.
 
 - Billing now recognizes paid plans only by their configured Stripe price IDs. Unknown and retired prices no longer gain paid access or credit grants by matching a plan amount.

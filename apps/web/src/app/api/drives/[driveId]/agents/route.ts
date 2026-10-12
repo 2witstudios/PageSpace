@@ -8,6 +8,7 @@ import { checkDriveAccess } from '@pagespace/lib/services/drive-member-service';
 import { addAgentToDrive } from '@pagespace/lib/services/drive-agent-service';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 interface DriveAgentSummary {
   id: string;
@@ -195,7 +196,7 @@ export async function POST(
 
     const { driveId } = await context.params;
 
-    const access = await checkDriveAccess(driveId, userId);
+    const access = await checkDriveAccess(driveId, actorFromAuth(auth));
     if (!access.drive) {
       return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
     }
@@ -215,7 +216,7 @@ export async function POST(
     // the caller against the agent + drive and caps the granted role at the
     // caller's own access.
     const result = await addAgentToDrive({
-      actingUserId: userId,
+      actor: actorFromAuth(auth),
       agentPageId,
       driveId,
       requestedRole: role,

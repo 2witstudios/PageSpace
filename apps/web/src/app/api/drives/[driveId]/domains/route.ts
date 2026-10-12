@@ -26,6 +26,7 @@ import { getDrivePolicies } from '@pagespace/lib/organizations/policy-reader';
 import { customDomainsDecision, publishingDecision } from '@pagespace/lib/organizations/sharing-decisions';
 import { OrgLapsedError, checkDriveMayLoosen, isOrgLapsedError } from '@pagespace/lib/permissions/org-lapse-guard';
 import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 /** Statuses whose cert is still advancing — worth a lazy reconcile on read. */
 const CERT_NON_TERMINAL = new Set(['verified', 'provisioning']);
@@ -65,7 +66,7 @@ export async function GET(
     if (scopeError) return scopeError;
 
     if (!(await isPrincipalDriveOwnerOrAdmin(auth, driveId))) {
-      return NextResponse.json({ error: 'Only drive owners and admins can view custom domains' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Only drive owners and admins can view custom domains' }, { status: 403 }));
     }
 
     const [domains, limit] = await Promise.all([

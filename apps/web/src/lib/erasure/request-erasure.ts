@@ -13,12 +13,13 @@ import {
 } from '@pagespace/lib/auth/apple/revoke-apple-tokens';
 import { stripe } from '@/lib/stripe/client';
 import { enqueueAccountErasure } from './enqueue';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 export interface LodgeErasureInput {
   subjectUserId: string;
   subjectEmail: string;
   stripeCustomerId: string | null;
-  callerUserId: string;
+  caller: AccessActor;
   requestedByType: DataSubjectRequesterType;
   forceDelete: boolean;
   legalBasis?: string | null;
@@ -53,7 +54,7 @@ export async function lodgeAndEnqueueErasure(input: LodgeErasureInput): Promise<
     subjectEmail: input.subjectEmail,
     requestType: 'erasure',
     forceDelete: input.forceDelete,
-    requestedByUserId: input.callerUserId,
+    requestedByUserId: input.caller.userId,
     requestedByType: input.requestedByType,
     legalBasis: input.legalBasis ?? null,
     receivedAt: now,
@@ -95,7 +96,7 @@ export async function lodgeAndEnqueueErasure(input: LodgeErasureInput): Promise<
     jobId = await enqueueAccountErasure({
       requestId: request.id,
       userId: input.subjectUserId,
-      callerUserId: input.callerUserId,
+      caller: input.caller,
     });
   } catch (error) {
     // The DSR row exists but no job was queued. Leaving it `pending` would make

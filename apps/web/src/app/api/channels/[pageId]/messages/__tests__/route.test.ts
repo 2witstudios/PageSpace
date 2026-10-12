@@ -652,9 +652,9 @@ describe('POST /api/channels/[pageId]/messages (thread reply)', () => {
       title: 'General',
       drive: { ownerId: 'owner-1', name: 'Workspace', slug: 'workspace' },
     });
-    // Sender (USER_ID) passes; the mentioned outsider does not.
-    const { canUserViewPage } = await import('@pagespace/lib/permissions/permissions');
-    vi.mocked(canUserViewPage).mockImplementation(async (uid) => uid === USER_ID);
+    // Sender (USER_ID) can view; the mentioned outsider cannot (a third-party audience question).
+    const { getUsersWhoCanViewPage } = await import('@pagespace/lib/permissions/permissions');
+    vi.mocked(getUsersWhoCanViewPage).mockImplementationOnce(async (_pageId, ids) => new Set(ids.filter((id) => id === USER_ID)));
 
     await callPost({
       content: 'hey @[Stranger](user-outsider:user)',

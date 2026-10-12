@@ -312,7 +312,7 @@ describe('POST /api/upload/complete', () => {
 
     it('enqueues the processor job after the DB transaction commits', async () => {
       await POST(makeRequest(VALID_BODY));
-      expect(enqueueProcessorJob).toHaveBeenCalledWith('user-1', 'drive-1', expect.any(String));
+      expect(enqueueProcessorJob).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1' }), 'drive-1', expect.any(String));
     });
 
     it('does not enqueue the processor job inside the DB transaction', async () => {

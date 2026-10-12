@@ -15,6 +15,7 @@ import { getMemberDriveIds, memberOfAnyDriveCondition, sharesMemberDrive } from 
 import { users } from '@pagespace/db/schema/auth';
 import { connections } from '@pagespace/db/schema/social';
 import type { PublicProfileRow } from './enumeration-safe';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 /**
  * True when the caller already shares context with the target: themselves, an
@@ -68,11 +69,12 @@ export async function callerCanViewUser(
  * memory is the caller's own drive ids, which is inherently bounded.
  */
 export async function searchRelatedProfilesByName(
-  callerId: string,
+  caller: AccessActor,
   usernamePattern: string,
   limit: number,
 ): Promise<PublicProfileRow[]> {
-  const callerDriveIds = await getMemberDriveIds(callerId, { includeTrashed: true });
+  const callerId = caller.userId;
+  const callerDriveIds = await getMemberDriveIds(caller, { includeTrashed: true });
 
   // Accepted connection with the caller, either direction.
   const connectedToCaller = exists(

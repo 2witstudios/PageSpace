@@ -14,6 +14,7 @@ import { trackDriveOperation } from '@pagespace/lib/monitoring/activity-tracker'
 import { syncPublishedHomeRoot, regeneratePublishedSiteFiles } from '@/lib/canvas/publish-page';
 import { resolveUploadedImageAssetUrl } from '@/lib/canvas/asset-pipeline';
 import { db } from '@pagespace/db/db';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -59,7 +60,6 @@ export async function GET(
     const scopeError = checkMCPDriveScope(auth, driveId);
     if (scopeError) return scopeError;
 
-    const userId = auth.userId;
 
     // A scoped MCP token is its own drive member — gate on and report the
     // TOKEN's membership, not the owning user's.
@@ -68,14 +68,14 @@ export async function GET(
       if (!drive) {
         return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
       }
-      const level = await getAppDriveAccessLevel(auth.tokenId, driveId);
+      const level = await getAppDriveAccessLevel(actorFromAuth(auth), auth.tokenId, driveId);
       if (!level?.canView) {
         return NextResponse.json({ error: 'Access denied' }, { status: 403 });
       }
-      const membership = await getAppDriveMembership(auth.tokenId, driveId);
+      const membership = await getAppDriveMembership(actorFromAuth(auth), auth.tokenId, driveId);
       if (membership?.role === null) {
         // Inherit: the key is its owner — present the owner's own relationship.
-        const inherited = await getDriveWithAccess(driveId, userId);
+        const inherited = await getDriveWithAccess(driveId, actorFromAuth(auth));
         if (inherited) return NextResponse.json(inherited);
       }
       return NextResponse.json({
@@ -87,7 +87,7 @@ export async function GET(
       });
     }
 
-    const driveWithAccess = await getDriveWithAccess(driveId, userId);
+    const driveWithAccess = await getDriveWithAccess(driveId, actorFromAuth(auth));
 
     if (!driveWithAccess) {
       // Check if drive exists at all for proper error
@@ -168,7 +168,7 @@ export async function PATCH(
 
     // A rename taken through org Owner/Admin power (an org drive the actor does not lead) is audited.
     if (validatedBody.name !== undefined) {
-      await recordOrgPowerDriveAction(userId, drive, 'rename');
+      await recordOrgPowerDriveAction(actorFromAuth(auth), drive, 'rename');
     }
 
     // A home page must be a non-trashed page belonging to this drive
@@ -200,7 +200,7 @@ export async function PATCH(
     // both are sent, the resolved file wins (it's the more specific action).
     let resolvedOgImageUrl = validatedBody.publishDefaultOgImageUrl;
     if (validatedBody.ogImageFileId) {
-      const resolved = await resolveUploadedImageAssetUrl({ fileId: validatedBody.ogImageFileId, driveId, userId, db });
+      const resolved = await resolveUploadedImageAssetUrl({ fileId: validatedBody.ogImageFileId, driveId, actor: actorFromAuth(auth), db });
       if (!resolved) {
         return NextResponse.json({ error: 'Selected image is unavailable or not accessible' }, { status: 400 });
       }
@@ -209,7 +209,7 @@ export async function PATCH(
 
     let resolvedFaviconUrl = validatedBody.publishFaviconUrl;
     if (validatedBody.faviconFileId) {
-      const resolved = await resolveUploadedImageAssetUrl({ fileId: validatedBody.faviconFileId, driveId, userId, db });
+      const resolved = await resolveUploadedImageAssetUrl({ fileId: validatedBody.faviconFileId, driveId, actor: actorFromAuth(auth), db });
       if (!resolved) {
         return NextResponse.json({ error: 'Selected favicon is unavailable or not accessible' }, { status: 400 });
       }
@@ -358,7 +358,7 @@ export async function DELETE(
     }
 
     // Trashing through org Owner/Admin power (an org drive the actor does not lead) is audited.
-    await recordOrgPowerDriveAction(userId, drive, 'trash');
+    await recordOrgPowerDriveAction(actorFromAuth(auth), drive, 'trash');
 
     // Get recipients BEFORE trashing (ensures we have valid member list)
     const recipientUserIds = await getDriveRecipientUserIds(driveId);

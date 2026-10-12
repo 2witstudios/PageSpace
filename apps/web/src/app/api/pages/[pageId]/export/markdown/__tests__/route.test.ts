@@ -55,7 +55,7 @@ vi.mock('@/lib/auth', () => ({
   checkMCPPageScope: vi.fn().mockResolvedValue(null),
   canPrincipalViewPage: vi.fn(async (auth: { userId: string }, pageId: string) => {
     const { canUserViewPage } = await import('@pagespace/lib/permissions/permissions');
-    return canUserViewPage(auth.userId, pageId);
+    return canUserViewPage(credentialActor(auth.userId, null), pageId);
   }),
 }));
 
@@ -71,6 +71,7 @@ import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { sanitizeFilename } from '@pagespace/lib/content/export-utils';
 import { trackPageOperation } from '@pagespace/lib/monitoring/activity-tracker';
 import TurndownService from 'turndown';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 // Helper to create mock SessionAuthResult
 const mockWebAuth = (userId: string): SessionAuthResult => ({

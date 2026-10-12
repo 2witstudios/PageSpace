@@ -107,15 +107,15 @@ vi.mock('@/lib/auth', () => ({
   filterDrivesByMCPScope: vi.fn((_: unknown, ids: string[]) => ids),
   isPrincipalDriveMember: vi.fn(async (auth: { userId: string }, driveId: string) => {
     const { isUserDriveMember } = await import('@pagespace/lib/permissions/permissions');
-    return isUserDriveMember(auth.userId, driveId);
+    return isUserDriveMember(credentialActor(auth.userId, null), driveId);
   }),
   getPrincipalDriveIds: vi.fn(async (auth: { userId: string }) => {
     const { getDriveIdsForUser } = await import('@pagespace/lib/permissions/permissions');
-    return getDriveIdsForUser(auth.userId);
+    return getDriveIdsForUser(credentialActor(auth.userId, null));
   }),
   canPrincipalViewPage: vi.fn(async (auth: { userId: string }, pageId: string) => {
     const { canUserViewPage } = await import('@pagespace/lib/permissions/permissions');
-    return canUserViewPage(auth.userId, pageId);
+    return canUserViewPage(credentialActor(auth.userId, null), pageId);
   }),
 }));
 
@@ -150,6 +150,7 @@ vi.mock('cron-parser', () => ({ CronExpressionParser: { parse: vi.fn() } }));
 import { POST } from '../route';
 import { db } from '@pagespace/db/db';
 import { authenticateRequestWithOptions } from '@/lib/auth';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const USER_ID = 'user-1';
 

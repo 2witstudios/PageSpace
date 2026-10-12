@@ -41,6 +41,7 @@ vi.mock('@pagespace/lib/integrations/repositories/grant-repository', () => ({
 import { DELETE } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const mockUserId = 'user_123';
 const mockAgentId = 'agent-1';
@@ -83,6 +84,6 @@ vi.mock('@/lib/auth/principal-permissions', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/auth/principal-permissions')>();
   const permissions = await import('@pagespace/lib/permissions/permissions');
   return { ...actual,
-    canPrincipalEditPage: (auth: { userId: string }, resourceId: string) => permissions.canUserEditPage(auth.userId, resourceId),
+    canPrincipalEditPage: (auth: { userId: string }, resourceId: string) => permissions.canUserEditPage(credentialActor(auth.userId, null), resourceId),
   };
 });

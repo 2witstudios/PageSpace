@@ -93,6 +93,7 @@ import { admitReentry } from '@pagespace/lib/permissions/guest-holds';
 import { guardDriveAccess } from '@pagespace/lib/permissions/org-lapse-guard';
 import { guardOpenRoleFloor } from '@pagespace/lib/organizations/open-role-floor';
 import { createChangeGroupId, inferChangeGroupType } from '@pagespace/lib/monitoring/change-group';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const created = { userIds: [] as string[], driveIds: [] as string[], orgIds: [] as string[] };
 
@@ -255,7 +256,7 @@ afterAll(async () => {
 
 describe('backups and restore preserve org context and wallet rows (X-3 (partial), real PG)', () => {
   it('X-3 (partial) a snapshot records the drive\'s orgId and orgVisibility; a personal drive\'s records nulls', async () => {
-    const result = await createDriveBackup(w.orgDriveId, w.ownerId, { source: 'manual' });
+    const result = await createDriveBackup(w.orgDriveId, credentialActor(w.ownerId, null), { source: 'manual' });
     expect(result.success).toBe(true);
 
     const [backup] = await db.select().from(driveBackups).where(eq(driveBackups.id, result.backupId!));
@@ -266,14 +267,14 @@ describe('backups and restore preserve org context and wallet rows (X-3 (partial
     // its (meaningless here) NOT NULL default.
     const personalDrive = await factories.createDrive(w.ownerId);
     created.driveIds.push(personalDrive.id);
-    const personal = await createDriveBackup(personalDrive.id, w.ownerId, { source: 'manual' });
+    const personal = await createDriveBackup(personalDrive.id, credentialActor(w.ownerId, null), { source: 'manual' });
     const [personalBackup] = await db.select().from(driveBackups).where(eq(driveBackups.id, personal.backupId!));
     expect(personalBackup.orgId).toBeNull();
     expect(personalBackup.orgVisibility).toBe('OPEN');
   });
 
   it('X-3 (partial) a restore never writes the snapshot\'s org context back: a drive that moved orgs after its backup stays where it moved', async () => {
-    const backup = await createDriveBackup(w.orgDriveId, w.ownerId, { source: 'manual' });
+    const backup = await createDriveBackup(w.orgDriveId, credentialActor(w.ownerId, null), { source: 'manual' });
     expect(backup.success).toBe(true);
 
     // The drive leaves Northwind for Southwind AFTER the snapshot was taken.
@@ -307,7 +308,7 @@ describe('backups and restore preserve org context and wallet rows (X-3 (partial
     w.walletBefore = before;
     const [legBefore] = await db.select().from(walletFundingLegs).where(eq(walletFundingLegs.walletId, w.driveWalletId));
 
-    const backup = await createDriveBackup(w.orgDriveId, w.ownerId, { source: 'manual' });
+    const backup = await createDriveBackup(w.orgDriveId, credentialActor(w.ownerId, null), { source: 'manual' });
     await restoreBackup(backup.backupId!);
 
     const [after] = await db.select().from(wallets).where(eq(wallets.id, w.driveWalletId));

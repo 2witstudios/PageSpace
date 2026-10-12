@@ -12,6 +12,7 @@ import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, getAll
 import { getAppDriveMembership } from '@pagespace/lib/permissions/app-permissions';
 import { movePagesToDrive } from '@/services/api/page-cross-drive-move-service';
 import { syncPublishedHomeRoot } from '@/lib/canvas/publish-page';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -72,7 +73,7 @@ export async function POST(request: Request) {
           });
 
           const tokenMembership = isScopedMCPAuth(auth)
-            ? await getAppDriveMembership(auth.tokenId, driveId)
+            ? await getAppDriveMembership(actorFromAuth(auth), auth.tokenId, driveId)
             : null;
           if (isScopedMCPAuth(auth) && tokenMembership?.role !== null) {
             // Explicit-role keys need OWNER/ADMIN; inherited keys (role null) fall
@@ -84,7 +85,7 @@ export async function POST(request: Request) {
 
           // The drive's lead or an effective OWNER/ADMIN (the org-aware membership reads ACCEPTED
           // rows only, so a pending ADMIN invitee cannot write into a drive they have not joined).
-          const role = driveRoleOf(await loadDriveRelationship(userId, targetDrive));
+          const role = driveRoleOf(await loadDriveRelationship(actorFromAuth(auth), targetDrive));
           return role === 'OWNER' || role === 'ADMIN';
         },
 

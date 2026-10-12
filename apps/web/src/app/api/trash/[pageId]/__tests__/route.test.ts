@@ -68,6 +68,7 @@ vi.mock('next/server', () => ({
 }));
 
 import { DELETE } from '../route';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 function makeRequest(): Request {
   return new Request('http://localhost:3000/api/trash/page-1', { method: 'DELETE' });
@@ -142,6 +143,6 @@ vi.mock('@/lib/auth/principal-permissions', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/auth/principal-permissions')>();
   const permissions = await import('@pagespace/lib/permissions/permissions');
   return { ...actual,
-    canPrincipalDeletePage: (auth: { userId: string }, resourceId: string) => permissions.canUserDeletePage(auth.userId, resourceId),
+    canPrincipalDeletePage: (auth: { userId: string }, resourceId: string) => permissions.canUserDeletePage(credentialActor(auth.userId, null), resourceId),
   };
 });

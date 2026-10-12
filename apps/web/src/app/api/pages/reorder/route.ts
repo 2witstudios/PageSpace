@@ -8,6 +8,7 @@ import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
 import { pageReorderService } from '@/services/api';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -65,7 +66,7 @@ export async function PATCH(request: Request) {
       pageId,
       newParentId,
       newPosition,
-      userId: auth.userId,
+      actor: actorFromAuth(auth),
       metadata: isMCP ? { source: 'mcp' } : undefined,
     });
 

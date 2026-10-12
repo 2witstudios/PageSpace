@@ -216,7 +216,7 @@ describe('POST /api/pages/tree', () => {
       const response = await POST(createRequest({ driveId: mockDriveId }));
 
       expect(response.status).toBe(200);
-      expect(loadDriveRelationship).toHaveBeenCalledWith(mockUserId, expect.objectContaining({ id: mockDriveId, ownerId: 'other_user' }));
+      expect(loadDriveRelationship).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }), expect.objectContaining({ id: mockDriveId, ownerId: 'other_user' }));
     });
 
     it('DRV-5 (partial) an implicit Open member with no drive_members row reads the tree, filtered to the canonical page set', async () => {
@@ -227,7 +227,7 @@ describe('POST /api/pages/tree', () => {
       const response = await POST(createRequest({ driveId: mockDriveId }));
 
       expect(response.status).toBe(200);
-      expect(getUserAccessiblePagesInDrive).toHaveBeenCalledWith(mockUserId, mockDriveId);
+      expect(getUserAccessiblePagesInDrive).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }), mockDriveId);
       expect(db.query.driveMembers.findFirst).not.toHaveBeenCalled();
     });
 
@@ -365,7 +365,7 @@ describe('POST /api/pages/tree', () => {
 
       await POST(createRequest({ driveId: mockDriveId }));
 
-      expect(getUserAccessiblePagesInDrive).toHaveBeenCalledWith(mockUserId, mockDriveId);
+      expect(getUserAccessiblePagesInDrive).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }), mockDriveId);
     });
 
     it('shows all pages when all are in the accessible set', async () => {

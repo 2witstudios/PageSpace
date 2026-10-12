@@ -5,6 +5,7 @@ import { db } from '@pagespace/db/db';
 import { eq, and, isNull } from '@pagespace/db/operators';
 import { mcpTokenDrives, driveRoles } from '@pagespace/db/schema/members';
 import { mcpTokens } from '@pagespace/db/schema/auth';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 /**
  * GET /api/drives/{driveId}/apps/members
@@ -17,11 +18,10 @@ export async function GET(
   try {
     const auth = await authenticateRequestWithOptions(request, { allow: ['session'] as const, requireCSRF: false });
     if (isAuthError(auth)) return auth.error;
-    const { userId } = auth;
 
     const { driveId } = await context.params;
 
-    const access = await checkDriveAccess(driveId, userId);
+    const access = await checkDriveAccess(driveId, actorFromAuth(auth));
     if (!access.drive) {
       return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
     }

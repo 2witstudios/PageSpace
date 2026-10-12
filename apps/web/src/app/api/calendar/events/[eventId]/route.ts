@@ -19,6 +19,7 @@ import {
 } from '@/lib/workflows/calendar-trigger-helpers';
 import { OrgLapsedError, checkCalendarVisibilityMayLoosen, isOrgLapsedError } from '@pagespace/lib/permissions/org-lapse-guard';
 import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -91,7 +92,7 @@ async function canAccessEvent(auth: AuthResult, event: typeof calendarEvents.$in
 
   // Check membership in home drive OR any shared drive for DRIVE-visible events
   if (event.visibility === 'DRIVE') {
-    return isUserMemberOfAnyEventDrive(userId, event);
+    return isUserMemberOfAnyEventDrive(actorFromAuth(auth), event);
   }
 
   return false;

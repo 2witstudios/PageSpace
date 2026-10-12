@@ -188,8 +188,8 @@ describe('GET /api/storage/info', () => {
       const res = await GET(request as never);
       const body = await res.json();
 
-      expect(getUserDriveAccess).toHaveBeenCalledWith('user_1', 'still-shared');
-      expect(getUserDriveAccess).toHaveBeenCalledWith('user_1', 'access-revoked');
+      expect(getUserDriveAccess).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user_1' }), 'still-shared');
+      expect(getUserDriveAccess).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user_1' }), 'access-revoked');
       const driveIds = body.storageByDrive.map((d: { driveId: string }) => d.driveId);
       expect(driveIds).toContain('still-shared');
       expect(driveIds).not.toContain('access-revoked');
@@ -228,7 +228,7 @@ describe('GET /api/storage/info', () => {
       const res = await GET(request as never);
       const body = await res.json();
 
-      expect(getBatchPagePermissions).toHaveBeenCalledWith('user_1', ['page-1']);
+      expect(getBatchPagePermissions).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user_1' }), ['page-1']);
       expect(body.recentFiles[0]).toMatchObject({ id: 'page-1', title: 'Real Title' });
       expect(body.largestFiles[0]).toMatchObject({ id: 'page-1', title: 'Real Title' });
     });

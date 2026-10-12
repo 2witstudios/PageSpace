@@ -82,7 +82,7 @@ describe('GET /dashboard/[driveId]/[pageId]/view', () => {
 
     expect(response.status).toBe(307);
     expect(response.headers.get('location')).toBe('https://files.example.com/signed-file-url');
-    expect(canUserViewPage).toHaveBeenCalledWith('user-1', 'file-1');
+    expect(canUserViewPage).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1' }), 'file-1');
     expect(generatePresignedUrl).toHaveBeenCalledWith(
       'a'.repeat(64),
       'original',
