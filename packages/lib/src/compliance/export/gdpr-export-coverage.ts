@@ -368,6 +368,9 @@ export const EXCLUDED_TABLES: Readonly<Record<string, string>> = {
     // the org and naming no person. The same answer as `subscriptions` — a billing
     // record whose Stripe-side copy is the org's to obtain from Stripe.
     'org_subscriptions',
+    // The verified first payment or gift of that org subscription (SEAT-8): keyed on the
+    // org and the Stripe ids, naming no person — the same answer as `org_subscriptions`.
+    'org_subscription_funding',
     // X-5 made this the single balance table. The subject's PERSONAL ROOT wallet
     // is their money and is exported (the `wallet` category). What stays out is
     // the rest of the table: an ORG pool's row is the org's money (SPEND-9/D18 —
