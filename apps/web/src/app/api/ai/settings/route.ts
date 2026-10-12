@@ -1,4 +1,4 @@
-import { toPersonalSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
+import { resolvePersonalCapabilityTier } from '@pagespace/lib/billing/deployment-capability';
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -63,7 +63,7 @@ export async function GET(request: Request) {
       currentProvider,
       currentModel,
       imageGenerationModel: user?.imageGenerationModel ?? null,
-      userSubscriptionTier: toPersonalSubscriptionTier(user?.subscriptionTier),
+      userSubscriptionTier: resolvePersonalCapabilityTier(user?.subscriptionTier),
       isAdmin: auth.role === 'admin',
       providers,
       isAnyProviderConfigured: Object.values(providers).some((p) => p.isAvailable),
@@ -155,7 +155,7 @@ export async function PATCH(request: Request) {
       return createAdminRestrictedResponse();
     }
 
-    if (requiresProSubscription(provider, model, toPersonalSubscriptionTier(user.subscriptionTier), auth.role === 'admin')) {
+    if (requiresProSubscription(provider, model, resolvePersonalCapabilityTier(user.subscriptionTier), auth.role === 'admin')) {
       return NextResponse.json(
         {
           error: 'Subscription required',

@@ -49,6 +49,8 @@ import { userPersonalization } from '@pagespace/db/schema/personalization';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 import { personalTiers } from '@pagespace/lib/billing/subscription-tiers';
+import { resolvePersonalCapabilityTier } from '@pagespace/lib/billing/deployment-capability';
+import { isMemoryAvailable } from '@pagespace/lib/billing/automation-preferences';
 import { runDiscoveryPasses } from '@/lib/memory/discovery-service';
 import {
   getCurrentPersonalizationPages,
@@ -76,7 +78,7 @@ import { errorLogFields } from '@pagespace/lib/logging/error-cause';
  * have anything learned, or the reverse — learning for users the product says
  * cannot have it. Neither failure is visible from either side alone.
  */
-const PAYING_TIERS = personalTiers().filter((tier) => tier !== 'free');
+const memoryEligiblePersonalTiers = () => personalTiers().filter((tier) => isMemoryAvailable(resolvePersonalCapabilityTier(tier)));
 
 const DELAY_BETWEEN_USERS_MS = 1000;
 
@@ -102,7 +104,7 @@ export async function POST(request: Request) {
           eq(sessions.type, 'user'),
           isNull(sessions.revokedAt),
           gte(sessions.lastUsedAt, sevenDaysAgo),
-          inArray(users.subscriptionTier, PAYING_TIERS)
+          inArray(users.subscriptionTier, memoryEligiblePersonalTiers())
         )
       )
       .groupBy(sessions.userId, users.subscriptionTier);

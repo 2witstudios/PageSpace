@@ -654,6 +654,11 @@
       "import": "./dist/observability/error-resolutions.js",
       "require": "./dist/observability/error-resolutions.js"
     },
+    "./billing/deployment-capability": {
+      "types": "./dist/billing/deployment-capability.d.ts",
+      "import": "./dist/billing/deployment-capability.js",
+      "require": "./dist/billing/deployment-capability.js"
+    },
     "./billing/subscription-tiers": {
       "types": "./dist/billing/subscription-tiers.d.ts",
       "import": "./dist/billing/subscription-tiers.js",

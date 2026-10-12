@@ -15,7 +15,7 @@ import { customDomains } from '@pagespace/db/schema/custom-domains';
 import { drives } from '@pagespace/db/schema/core';
 import { users } from '@pagespace/db/schema/auth';
 import { getPlan } from '@/lib/subscription/plans';
-import { toPersonalSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
+import { resolvePersonalCapabilityTier } from '@pagespace/lib/billing/deployment-capability';
 import { reconcileCustomDomainCert } from '@/lib/canvas/reconcile-cert';
 import { mirrorDriveToCustomHost } from '@/lib/canvas/custom-domain-mirror';
 import { renderDomainNotFoundOverride } from '@/lib/canvas/publish-page';
@@ -44,7 +44,7 @@ async function getMaxCustomDomainsForDrive(driveId: string): Promise<number> {
     .where(eq(drives.id, driveId))
     .limit(1);
 
-  const tier = (toPersonalSubscriptionTier(row?.tier));
+  const tier = (resolvePersonalCapabilityTier(row?.tier));
   return getPlan(tier).limits.maxCustomDomains;
 }
 

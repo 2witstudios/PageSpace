@@ -5,6 +5,7 @@
  */
 
 import { getDeploymentMode, type DeploymentMode } from '../deployment-mode';
+import { deploymentCapabilityTier } from './deployment-capability';
 import { resolveSessionPayer, type LookupDriveBillingFacts } from './sandbox-payer';
 import { computeChargeFor, computeChargeTier } from './compute-charge';
 import { orgEntitlementTier } from './spend-target';
@@ -12,9 +13,6 @@ import type { SubscriptionTier } from './subscription-tiers';
 
 /** Tiers for which the sandbox (Sprite compute, code execution, terminal) is available. */
 export const SANDBOX_ELIGIBLE_TIERS: readonly SubscriptionTier[] = ['pro', 'business'];
-
-/** Finite compute limits for billing-disabled deployments; operator overrides still apply. */
-export const DEPLOYMENT_EFFECTIVE_SANDBOX_TIER: SubscriptionTier = 'business';
 
 /**
  * PURE tier-table check: does this tier's PLAN include cloud machines?
@@ -38,7 +36,7 @@ export function resolveEffectiveSandboxTierForMode(
   tier: SubscriptionTier,
   mode: DeploymentMode,
 ): SubscriptionTier {
-  return mode === 'cloud' ? tier : DEPLOYMENT_EFFECTIVE_SANDBOX_TIER;
+  return deploymentCapabilityTier(tier, mode);
 }
 
 /** {@link resolveEffectiveSandboxTierForMode} against the running deployment's mode. */

@@ -1,4 +1,4 @@
-import { toPersonalSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
+import { resolvePersonalCapabilityTier } from '@pagespace/lib/billing/deployment-capability';
 import { tool } from 'ai';
 import { z } from 'zod';
 import { db } from '@pagespace/db/db';
@@ -35,7 +35,7 @@ async function loadUserGating(userId: string): Promise<{ isAdmin: boolean; tier:
     .limit(1);
   return {
     isAdmin: rows[0]?.role === 'admin',
-    tier: toPersonalSubscriptionTier(rows[0]?.tier),
+    tier: resolvePersonalCapabilityTier(rows[0]?.tier),
   };
 }
 

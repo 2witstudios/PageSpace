@@ -1,9 +1,9 @@
+import { DEPLOYMENT_CAPABILITY_TIER } from '../deployment-capability';
 import { readFileSync, readdirSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { describe, expect, it, vi, afterEach } from 'vitest';
 import {
   SANDBOX_ELIGIBLE_TIERS,
-  DEPLOYMENT_EFFECTIVE_SANDBOX_TIER,
   isSandboxAvailable,
   isSandboxTierEligible,
   resolveEffectiveSandboxTier,
@@ -50,7 +50,7 @@ describe('resolveEffectiveSandboxTierForMode — the single seam', () => {
 
   it('normalizes every stored tier to the tenant effective tier on tenant', () => {
     for (const tier of ALL_TIERS) {
-      expect(resolveEffectiveSandboxTierForMode(tier, 'tenant')).toBe(DEPLOYMENT_EFFECTIVE_SANDBOX_TIER);
+      expect(resolveEffectiveSandboxTierForMode(tier, 'tenant')).toBe(DEPLOYMENT_CAPABILITY_TIER);
     }
   });
 
@@ -64,18 +64,18 @@ describe('resolveEffectiveSandboxTierForMode — the single seam', () => {
   });
 
   it('resolves to an ELIGIBLE tier on tenant — a bypass that lands on an ineligible tier is no bypass', () => {
-    expect(isSandboxTierEligible(DEPLOYMENT_EFFECTIVE_SANDBOX_TIER)).toBe(true);
+    expect(isSandboxTierEligible(DEPLOYMENT_CAPABILITY_TIER)).toBe(true);
   });
 
   it('keeps a real ceiling on tenant rather than an unlimited sentinel', () => {
-    expect(ALL_TIERS).toContain(DEPLOYMENT_EFFECTIVE_SANDBOX_TIER);
+    expect(ALL_TIERS).toContain(DEPLOYMENT_CAPABILITY_TIER);
   });
 });
 
 describe('resolveEffectiveSandboxTier — the env-reading edge', () => {
   it('reads DEPLOYMENT_MODE, and treats anything unrecognized as cloud', () => {
     vi.stubEnv('DEPLOYMENT_MODE', 'tenant');
-    expect(resolveEffectiveSandboxTier('free')).toBe(DEPLOYMENT_EFFECTIVE_SANDBOX_TIER);
+    expect(resolveEffectiveSandboxTier('free')).toBe(DEPLOYMENT_CAPABILITY_TIER);
 
     vi.stubEnv('DEPLOYMENT_MODE', 'onprem');
     expect(resolveEffectiveSandboxTier('free')).toBe('business');

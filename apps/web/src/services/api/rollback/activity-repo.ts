@@ -1,4 +1,4 @@
-import { toPersonalSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
+import { resolvePersonalCapabilityTier } from '@pagespace/lib/billing/deployment-capability';
 /**
  * Activity repository shell.
  *
@@ -156,7 +156,7 @@ export async function loadUserRetentionDays(deps: RollbackDeps, userId: string):
       return { ok: true, value: FREE_RETENTION };
     }
 
-    const tier = toPersonalSubscriptionTier(user[0].subscriptionTier);
+    const tier = resolvePersonalCapabilityTier(user[0].subscriptionTier);
     return { ok: true, value: DEFAULT_RETENTION[tier] || FREE_RETENTION };
   } catch (error) {
     deps.logger.error('[RollbackService] Error getting user retention days', { userId, error: errorMessage(error) });

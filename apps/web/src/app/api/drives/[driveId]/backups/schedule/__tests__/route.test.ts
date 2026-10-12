@@ -154,6 +154,19 @@ describe('GET /api/drives/[driveId]/backups/schedule', () => {
       expect(body.enabled).toBe(false);
     });
 
+    it.each(['onprem', 'tenant'])('given %s personal Free, should retain scheduled backup capability', async (mode) => {
+      vi.stubEnv('DEPLOYMENT_MODE', mode);
+      try {
+        mockLimit.mockReset();
+        mockLimit.mockResolvedValueOnce([{ tier: 'free' }]).mockResolvedValueOnce([]);
+        const res = await GET(req(), ctx(DRIVE_ID));
+        expect(res.status).toBe(200);
+        expect((await res.json()).available).toBe(true);
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    });
+
     it('A-9 refuses retired personal Business backup entitlement', async () => {
       mockLimit.mockReset();
       mockLimit

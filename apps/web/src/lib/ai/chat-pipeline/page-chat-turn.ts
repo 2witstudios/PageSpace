@@ -1,3 +1,4 @@
+import { resolvePersonalCapabilityTier } from '@pagespace/lib/billing/deployment-capability';
 import { toPersonalSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 /**
  * The PAGE-AGENT chat turn — one of the two strategies behind the single
@@ -1151,7 +1152,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
       provider: currentProvider,
       model: currentModel,
       // WAL-8: the tier of whoever funds this call, as the gate resolved it.
-      subscriptionTier: credit.entitlementTier ?? toPersonalSubscriptionTier(user?.subscriptionTier),
+      subscriptionTier: credit.entitlementTier ?? resolvePersonalCapabilityTier(user?.subscriptionTier),
       isAdmin: isAdminUser,
       requiresProSubscription,
     });
@@ -1161,7 +1162,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
         userId,
         provider: currentProvider,
         model: currentModel,
-        subscriptionTier: toPersonalSubscriptionTier(user?.subscriptionTier)
+        subscriptionTier: resolvePersonalCapabilityTier(user?.subscriptionTier)
       });
       return createSubscriptionRequiredResponse();
     }
@@ -1929,7 +1930,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
                 } : undefined,
                 modelCapabilities: modelCapabilitiesForTools,
                 isAdmin: isAdminUser,
-                subscriptionTier: toPersonalSubscriptionTier(user?.subscriptionTier),
+                subscriptionTier: resolvePersonalCapabilityTier(user?.subscriptionTier),
                 imageGenerationModel: user?.imageGenerationModel ?? DEFAULT_IMAGE_MODEL,
                 creditSpend: credit,
                 chatSource: {

@@ -1,4 +1,4 @@
-import { toPersonalSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
+import { resolvePersonalCapabilityTier } from '@pagespace/lib/billing/deployment-capability';
 /**
  * The credit reservation each model call of the nightly memory cron takes before it runs
  * (SPEND-1). The cron learns a person's own profile from their own activity, outside any
@@ -56,7 +56,7 @@ export async function reserveMemoryCall(
       .select({ subscriptionTier: users.subscriptionTier })
       .from(users)
       .where(eq(users.id, userId));
-    if (!isMemoryAvailable(toPersonalSubscriptionTier(user?.subscriptionTier))) {
+    if (!isMemoryAvailable(resolvePersonalCapabilityTier(user?.subscriptionTier))) {
       return { allowed: false, reason: 'tier_not_eligible' };
     }
 

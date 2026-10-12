@@ -216,6 +216,19 @@ describe('GET /api/cron/scheduled-backups', () => {
     });
   });
 
+  it.each(['onprem', 'tenant'])('given %s personal Free, should execute a due scheduled backup', async (mode) => {
+    vi.stubEnv('DEPLOYMENT_MODE', mode);
+    try {
+      const schedule = makeSchedule({ ownerTier: 'free' });
+      mockLimit.mockResolvedValueOnce([schedule]).mockResolvedValue([]);
+      const response = await GET(req());
+      expect(await response.json()).toMatchObject({ fired: 1, skipped: 0 });
+      expect(createDriveBackup).toHaveBeenCalledWith(schedule.driveId, schedule.ownerId, { source: 'scheduled' });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   describe('free-tier drive owner (tier downgrade)', () => {
     it('does not call createDriveBackup and increments skipped', async () => {
       const schedule = makeSchedule({ ownerTier: 'free' });

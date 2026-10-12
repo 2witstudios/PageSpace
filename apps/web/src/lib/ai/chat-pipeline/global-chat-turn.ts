@@ -1,3 +1,4 @@
+import { resolvePersonalCapabilityTier } from '@pagespace/lib/billing/deployment-capability';
 import { toPersonalSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 /**
  * The GLOBAL-ASSISTANT chat turn — the second of the two strategies behind the
@@ -426,7 +427,7 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
         })
         .from(users)
         .where(eq(users.id, userId));
-      userSubscriptionTier = toPersonalSubscriptionTier(gateUser?.subscriptionTier);
+      userSubscriptionTier = resolvePersonalCapabilityTier(gateUser?.subscriptionTier);
       userImageGenerationModel = gateUser?.imageGenerationModel ?? null;
       // Metering-exempt providers (admin Z.ai Coder Plan) bill on a flat-rate external
       // subscription, so skip the credit gate entirely — no hold, no balance check —

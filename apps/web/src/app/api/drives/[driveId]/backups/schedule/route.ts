@@ -8,7 +8,7 @@ import { drives } from '@pagespace/db/schema/core';
 import { driveBackupSchedules } from '@pagespace/db/schema/versioning';
 import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
 import { MEMORY_PAYING_TIERS } from '@pagespace/lib/billing/automation-preferences';
-import { toPersonalSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
+import { resolvePersonalCapabilityTier } from '@pagespace/lib/billing/deployment-capability';
 import { validateTimezone } from '@/lib/workflows/cron-utils';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 
@@ -56,7 +56,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ driv
       return NextResponse.json({ error: 'Only drive owners and admins can access backup settings' }, { status: 403 });
     }
 
-    const tier = toPersonalSubscriptionTier(ownerRow[0]?.tier);
+    const tier = resolvePersonalCapabilityTier(ownerRow[0]?.tier);
     const available = MEMORY_PAYING_TIERS.includes(tier);
     const row = schedule[0];
 
@@ -98,7 +98,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ dr
       .where(eq(drives.id, driveId))
       .limit(1);
 
-    const tier = toPersonalSubscriptionTier(ownerRow?.tier);
+    const tier = resolvePersonalCapabilityTier(ownerRow?.tier);
     if (!MEMORY_PAYING_TIERS.includes(tier)) {
       return NextResponse.json({ error: 'pro_required', message: 'Automatic backups require a Pro plan or higher' }, { status: 402 });
     }

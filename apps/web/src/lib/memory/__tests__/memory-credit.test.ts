@@ -56,6 +56,18 @@ describe('reserveMemoryCall — the nightly memory cron reserves before each mod
     expect(mockGate).not.toHaveBeenCalled();
   });
 
+  it.each(['onprem', 'tenant'])('given %s personal Free, should retain Memory while respecting the credit gate', async (mode) => {
+    vi.stubEnv('DEPLOYMENT_MODE', mode);
+    try {
+      tierRows.value = [{ subscriptionTier: 'free' }];
+      mockGate.mockResolvedValue({ allowed: false, reason: 'daily_cap_exceeded' });
+      expect(await reserveMemoryCall('user-free', { provider: 'openrouter', model: 'm', inputChars: 400 })).toEqual({ allowed: false, reason: 'daily_cap_exceeded' });
+      expect(mockGate).toHaveBeenCalledOnce();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('refuses as gate_error when the gate throws, instead of failing the pass, with nothing reserved', async () => {
     mockGate.mockRejectedValue(new Error('lock timeout'));
     expect(await reserveMemoryCall('user-1', { provider: 'openrouter', model: 'm', inputChars: 400 })).toEqual({ allowed: false, reason: 'gate_error' });
