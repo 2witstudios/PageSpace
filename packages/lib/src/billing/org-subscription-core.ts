@@ -36,7 +36,7 @@
 
 import { createHash } from 'node:crypto';
 import { orgExtraSeatQuantity } from './org-plan-quote';
-import { GIFT_SUBSCRIPTION_METADATA_TYPE, ORG_POOL_FUNDS_GIFTS } from './wallet-funding';
+import { orgInvoiceFundingInput, orgInvoiceSubscriptionId, orgSubscriptionFundingBasis, type OrgInvoice } from './wallet-funding';
 
 /** Metadata key stamped on the org's Stripe customer and subscription. */
 export const ORG_ID_METADATA_KEY = 'pagespace_org_id';
@@ -199,10 +199,15 @@ export interface OrgLatestInvoice {
   status: string | null;
   /** Stripe invoice.amount_due, minor units. Read only to know whether anything is owed. */
   amountDueCents: number;
-  /** Stripe invoice.amount_paid, minor units. Read only to know whether money (not a $0 invoice) came in. */
-  amountPaidCents: number;
   /** invoice.confirmation_secret.client_secret: what the client confirms the card with. */
   clientSecret: string | null;
+  /** invoice.status_transitions.paid_at, Unix seconds; null until it is paid. */
+  paidAtSeconds: number | null;
+  /**
+   * The invoice as funding evidence, with EVERY line (the shell pages them in): what
+   * {@link orgInvoiceFundingInput} reads, exactly as the invoice.paid webhook does.
+   */
+  invoice: OrgInvoice;
 }
 
 export type OrgPaymentStep = { kind: 'none' } | { kind: 'confirm_payment'; clientSecret: string };
@@ -274,16 +279,32 @@ export function orgReactivationReadsInvoice(sub: { id: string; status: string },
 }
 
 /**
- * D-OW-30: whether an active, not-yet-funded subscription's latest invoice is funding Stripe
- * already has, which the invoice.paid webhook turns into the org_subscription_funding proof
- * (wallet-funding-shell). Money paid counts; a $0 invoice counts only as a gift on the org's
- * OWN (stored) subscription, the only gift that webhook funds. Anything else never funds.
+ * How long after its invoice was paid an active, unfunded subscription still reads as
+ * `funding_pending`. invoice.paid normally lands within seconds and Stripe's first retries of a
+ * failed delivery come within the hour; 30 minutes covers a slow or briefly failing webhook
+ * without leaving an owner on "activation is finishing" indefinitely. Past it, the proof is
+ * not coming by itself (the event was never delivered, or was handled before the funding table
+ * existed), so the owner is sent to support, who restores it (scripts/restore-org-funding-proof.ts).
+ * Nothing is written either way: a late webhook still records the proof and activates the org.
  */
-function orgFundingIsPending(subscription: OrgSubscriptionFacts, ownSubscription: boolean): boolean {
-  const invoice = subscription.latestInvoice;
-  if (invoice?.status !== 'paid') return false;
-  if (invoice.amountPaidCents > 0) return true;
-  return ORG_POOL_FUNDS_GIFTS && ownSubscription && subscription.metadata?.type === GIFT_SUBSCRIPTION_METADATA_TYPE;
+export const ORG_FUNDING_PENDING_WINDOW_SECONDS = 30 * 60;
+
+/**
+ * D-OW-30: whether an active, not-yet-funded subscription's latest invoice is funding evidence
+ * the invoice.paid webhook records as the org_subscription_funding proof. The SAME rule the
+ * webhook applies ({@link orgInvoiceFundingInput} then {@link orgSubscriptionFundingBasis}, on
+ * every line), on this subscription's own paid invoice, paid within the pending window.
+ */
+function orgFundingIsPending(
+  subscription: OrgSubscriptionFacts,
+  ctx: { prices: OrgBusinessPrices; storedSubscriptionId: string | null; nowSeconds: number },
+): boolean {
+  const latest = subscription.latestInvoice;
+  if (latest?.status !== 'paid' || latest.paidAtSeconds === null) return false;
+  if (ctx.nowSeconds - latest.paidAtSeconds > ORG_FUNDING_PENDING_WINDOW_SECONDS) return false;
+  if (latest.invoice.lines?.has_more !== false || orgInvoiceSubscriptionId(latest.invoice) !== subscription.id) return false;
+  const { input } = orgInvoiceFundingInput(latest.invoice, { prices: ctx.prices, storedSubscriptionId: ctx.storedSubscriptionId });
+  return orgSubscriptionFundingBasis(input) !== null;
 }
 
 /** Why a reactivation is refused for support: each is a state PageSpace never creates. */
@@ -309,6 +330,15 @@ export type OrgReactivationPlan<S extends OrgSubscriptionFacts = OrgSubscription
   /** The org has no live subscription: create the paid one, following `previousSubscriptionId`. */
   | { kind: 'new_checkout'; previousSubscriptionId: string | null }
   | { kind: 'requires_support'; reason: OrgReactivationSupportReason };
+
+/**
+ * Where the org's activation stands after provisioning (the route's `activation`):
+ *   - `active`: the subscription is active and its funding is verified;
+ *   - `payment_required`: the client confirms `payment` (a first or a failed payment);
+ *   - `funding_pending`: Stripe has the payment and the invoice.paid webhook is recording the
+ *     funding proof; nothing to pay, and the org reads as active once it lands (org:changed).
+ */
+export type OrgActivation = 'active' | 'payment_required' | 'funding_pending';
 
 const newestFirst = (a: OrgSubscriptionCandidate, b: OrgSubscriptionCandidate): number =>
   b.created - a.created || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0);
@@ -345,6 +375,8 @@ export function planOrgReactivation<S extends OrgSubscriptionFacts>(input: {
   subscriptions: ReadonlyArray<S>;
   /** The org's subscriptions with a verified funding proof (org_subscription_funding). */
   fundedSubscriptionIds: ReadonlySet<string>;
+  /** Now, Unix seconds: bounds how long a paid, unproven subscription stays pending. */
+  nowSeconds: number;
 }): OrgReactivationPlan<S> {
   const live = input.subscriptions.filter((s) => isLiveOrgSubscriptionStatus(s.status));
   if (live.length === 0) {
@@ -361,7 +393,7 @@ export function planOrgReactivation<S extends OrgSubscriptionFacts>(input: {
   const adopted = subscription.id !== input.storedSubscriptionId;
   if (subscription.status === 'active') {
     if (input.fundedSubscriptionIds.has(subscription.id)) return { kind: 'already_active', subscription, adopted, items };
-    return orgFundingIsPending(subscription, !adopted)
+    return orgFundingIsPending(subscription, { prices: input.prices, storedSubscriptionId: input.storedSubscriptionId, nowSeconds: input.nowSeconds })
       ? { kind: 'funding_pending', subscription, adopted, items }
       : { kind: 'requires_support', reason: 'unfunded_active' };
   }

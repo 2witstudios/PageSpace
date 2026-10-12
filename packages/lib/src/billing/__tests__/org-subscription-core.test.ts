@@ -18,6 +18,7 @@ import {
   orgReactivationReadsInvoice,
   planOrgReactivation,
   planSeatQuantitySync,
+  ORG_FUNDING_PENDING_WINDOW_SECONDS,
   type OrgBusinessPrices,
   type OrgLatestInvoice,
   type OrgSubscriptionCandidate,
@@ -27,6 +28,7 @@ import { GIFT_SUBSCRIPTION_METADATA_TYPE } from '../wallet-funding';
 
 const PRICES: OrgBusinessPrices = { basePriceId: 'price_base', seatPriceId: 'price_seat' };
 const ORG = 'org_northwind';
+const NOW = 1_800_000_000;
 
 function candidate(overrides: Partial<OrgSubscriptionCandidate> = {}): OrgSubscriptionCandidate {
   return {
@@ -117,7 +119,7 @@ describe('orgBusinessSubscriptionParams — the Business subscription Stripe is 
 });
 
 describe('orgPaymentStep — what the client must do to pay for the org subscription (a new org, or recovery from a lapse)', () => {
-  const openInvoice = { status: 'open', amountDueCents: 5000, amountPaidCents: 0, clientSecret: 'pi_123_secret_abc' };
+  const openInvoice = { status: 'open', amountDueCents: 5000, clientSecret: 'pi_123_secret_abc', paidAtSeconds: null, invoice: {} };
 
   it('SEAT-8 (partial) SEAT-9 (partial) a new or re-subscribed org whose subscription is incomplete gets the open invoice\'s client secret to confirm the card', () => {
     expect(orgPaymentStep({ subscriptionStatus: 'incomplete', latestInvoice: openInvoice })).toEqual({
@@ -201,7 +203,7 @@ describe('isLiveOrgSubscriptionStatus', () => {
 });
 
 describe('planOrgReactivation — D-OW-44: reactivation only repairs states PageSpace itself creates', () => {
-  const payable: OrgLatestInvoice = { status: 'open', amountDueCents: 5000, amountPaidCents: 0, clientSecret: 'pi_123_secret_abc' };
+  const payable: OrgLatestInvoice = { status: 'open', amountDueCents: 5000, clientSecret: 'pi_123_secret_abc', paidAtSeconds: null, invoice: {} };
   const facts = (overrides: Partial<OrgSubscriptionFacts> = {}): OrgSubscriptionFacts => ({
     ...candidate(),
     collectionMethod: 'charge_automatically',
@@ -212,7 +214,7 @@ describe('planOrgReactivation — D-OW-44: reactivation only repairs states Page
     subscriptions: OrgSubscriptionFacts[],
     storedSubscriptionId: string | null = 'sub_1',
     fundedSubscriptionIds: ReadonlySet<string> = new Set(['sub_1']),
-  ) => planOrgReactivation({ orgId: ORG, prices: PRICES, storedSubscriptionId, subscriptions, fundedSubscriptionIds });
+  ) => planOrgReactivation({ orgId: ORG, prices: PRICES, storedSubscriptionId, subscriptions, fundedSubscriptionIds, nowSeconds: NOW });
   const support = (reason: string) => ({ kind: 'requires_support', reason });
 
   describe('already_active', () => {
@@ -229,37 +231,68 @@ describe('planOrgReactivation — D-OW-44: reactivation only repairs states Page
   describe('an active subscription is only already_active once its funding is verified (D-OW-44 applied to funding, D-OW-30)', () => {
     const unfunded = new Set<string>();
     const items = { baseItemId: 'si_base', seatItem: { id: 'si_seat', quantity: 0 } };
-    const paid: OrgLatestInvoice = { status: 'paid', amountDueCents: 0, amountPaidCents: 5000, clientSecret: null };
+    const PAID_AT = NOW - 60;
+    const line = (price: string, amount: number, discount = 0) => ({
+      amount,
+      discount_amounts: discount ? [{ amount: discount }] : [],
+      pricing: { price_details: { price } },
+      parent: { subscription_item_details: { subscription_item: price === 'price_base' ? 'si_base' : 'si_seat' } },
+    });
+    const adhoc = { amount: 1000, pricing: { price_details: { price: 'price_adhoc' } }, parent: null };
+    /** A paid latest invoice, Stripe-shaped, with every line. */
+    const paidInvoice = (over: { lines?: Array<ReturnType<typeof line> | typeof adhoc>; paid?: number; gift?: boolean; hasMore?: boolean; sub?: string; paidAt?: number | null } = {}): OrgLatestInvoice => ({
+      status: 'paid',
+      amountDueCents: 0,
+      clientSecret: null,
+      paidAtSeconds: over.paidAt === undefined ? PAID_AT : over.paidAt,
+      invoice: {
+        amount_paid: over.paid ?? 5000,
+        subtotal: 5000,
+        billing_reason: 'subscription_create',
+        parent: { subscription_details: { subscription: over.sub ?? 'sub_1', metadata: over.gift ? { type: GIFT_SUBSCRIPTION_METADATA_TYPE } : {} } },
+        lines: { has_more: over.hasMore ?? false, data: over.lines ?? [line('price_base', 5000), line('price_seat', 0)] },
+      },
+    });
+    const giftLines = [line('price_base', 5000, 5000), line('price_seat', 0)];
     const giftMetadata = { [ORG_ID_METADATA_KEY]: ORG, kind: ORG_SUBSCRIPTION_KIND, type: GIFT_SUBSCRIPTION_METADATA_TYPE };
 
     it('SEAT-9 (partial) an active subscription with a recorded funding proof is already_active, whatever its latest invoice says', () => {
-      expect(plan([facts({ latestInvoice: { ...paid, amountPaidCents: 0 } })])).toMatchObject({ kind: 'already_active' });
+      expect(plan([facts({ latestInvoice: paidInvoice({ paid: 0 }) })])).toMatchObject({ kind: 'already_active' });
     });
 
-    it('SEAT-8 (partial) SEAT-9 (partial) active, unfunded, latest invoice paid with money: funding_pending — the payment is in and invoice.paid records the proof; nothing to pay, nothing to write', () => {
-      const sub = facts({ latestInvoice: paid });
+    it('SEAT-8 (partial) SEAT-9 (partial) active, unfunded, and its latest invoice is the evidence invoice.paid records (orgSubscriptionFundingBasis): funding_pending, nothing to pay, nothing to write', () => {
+      const sub = facts({ latestInvoice: paidInvoice() });
       expect(plan([sub], 'sub_1', unfunded)).toEqual({ kind: 'funding_pending', subscription: sub, adopted: false, items });
     });
 
     it('SEAT-9 (partial) a lost-row active subscription paid with money is adopted while its funding is pending', () => {
-      expect(plan([facts({ latestInvoice: paid })], null, unfunded)).toMatchObject({ kind: 'funding_pending', adopted: true });
+      expect(plan([facts({ latestInvoice: paidInvoice() })], null, unfunded)).toMatchObject({ kind: 'funding_pending', adopted: true });
     });
 
     it('SEAT-9 (partial) a $0 paid invoice on the org\'s own GIFTED subscription is funding_pending (a gift is verified funding)', () => {
-      const sub = facts({ metadata: giftMetadata, latestInvoice: { ...paid, amountPaidCents: 0 } });
+      const sub = facts({ metadata: giftMetadata, latestInvoice: paidInvoice({ lines: giftLines, paid: 0, gift: true }) });
       expect(plan([sub], 'sub_1', unfunded)).toMatchObject({ kind: 'funding_pending' });
     });
 
     it('SEAT-9 (partial) a gift on a subscription the org has not stored is not its own: the webhook refuses that gift, so it needs support', () => {
-      const sub = facts({ metadata: giftMetadata, latestInvoice: { ...paid, amountPaidCents: 0 } });
+      const sub = facts({ metadata: giftMetadata, latestInvoice: paidInvoice({ lines: giftLines, paid: 0, gift: true }) });
       expect(plan([sub], null, unfunded)).toEqual(support('unfunded_active'));
     });
 
+    it(`SEAT-9 (partial) pending is time-boxed: paid more than ORG_FUNDING_PENDING_WINDOW_SECONDS ago with still no proof means the webhook never recorded it, so support`, () => {
+      const at = (paidAt: number) => plan([facts({ latestInvoice: paidInvoice({ paidAt }) })], 'sub_1', unfunded);
+      expect(at(NOW - ORG_FUNDING_PENDING_WINDOW_SECONDS)).toMatchObject({ kind: 'funding_pending' });
+      expect(at(NOW - ORG_FUNDING_PENDING_WINDOW_SECONDS - 1)).toEqual(support('unfunded_active'));
+    });
+
     const neverFunding: Array<[string, OrgLatestInvoice | null]> = [
-      ['a $0 paid invoice that is not a gift (a 100% coupon, a trial-shaped invoice)', { ...paid, amountPaidCents: 0 }],
-      ['an open invoice', { ...paid, status: 'open', amountDueCents: 5000, amountPaidCents: 0, clientSecret: 'pi_secret' }],
-      ['a void invoice', { ...paid, status: 'void' }],
-      ['a draft invoice', { ...paid, status: 'draft' }],
+      ['a $0 paid invoice that is not a gift (a 100% coupon, a trial-shaped invoice)', paidInvoice({ lines: giftLines, paid: 0 })],
+      ['money paid only for an ad-hoc line while the Business base is fully discounted (the webhook records nothing)', paidInvoice({ lines: [...giftLines, adhoc], paid: 1000 })],
+      ['a truncated line list (never evidence)', paidInvoice({ hasMore: true })],
+      ['a paid invoice of another subscription', paidInvoice({ sub: 'sub_other' })],
+      ['a paid invoice with no paid-at time', paidInvoice({ paidAt: null })],
+      ['an open invoice', { ...paidInvoice(), status: 'open', amountDueCents: 5000, clientSecret: 'pi_secret' }],
+      ['a void invoice', { ...paidInvoice(), status: 'void' }],
       ['no invoice at all', null],
     ];
     it.each(neverFunding)('SEAT-8 (partial) D-OW-30: active and unfunded with %s needs support — Reactivate can never produce funding for it', (_label, latestInvoice) => {
@@ -267,7 +300,7 @@ describe('planOrgReactivation — D-OW-44: reactivation only repairs states Page
     });
 
     it('funding proof for another subscription does not fund this one', () => {
-      expect(plan([facts({ latestInvoice: { ...paid, amountPaidCents: 0 } })], 'sub_1', new Set(['sub_old']))).toEqual(support('unfunded_active'));
+      expect(plan([facts({ latestInvoice: paidInvoice({ lines: giftLines, paid: 0 }) })], 'sub_1', new Set(['sub_old']))).toEqual(support('unfunded_active'));
     });
 
     it('the invoice is read only where the decision needs it: a payment may be owed, or an active subscription is unfunded', () => {

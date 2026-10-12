@@ -6,6 +6,7 @@
  */
 import type { OrgBillingNotice } from '@pagespace/lib/organizations/status-core';
 import type { OrgPolicies as StoredOrgPolicies } from '@pagespace/lib/organizations/policies-core';
+import type { OrgActivation } from '@pagespace/lib/billing/org-subscription-core';
 import { fetchJSON, post, patch, put, del } from '@/lib/auth/auth-fetch';
 
 export type OrgRole = 'OWNER' | 'ADMIN' | 'MEMBER';
@@ -40,12 +41,6 @@ export interface OrgSubscriptionSummary {
 }
 
 export type OrgPaymentStep = { kind: 'none' } | { kind: 'confirm_payment'; clientSecret: string };
-
-/**
- * Where the org's activation stands after POST billing/subscription: `active` (funding verified),
- * `payment_required` (confirm `payment`), `funding_pending` (paid; the webhook is recording it).
- */
-export type OrgActivation = 'active' | 'payment_required' | 'funding_pending';
 
 export type OrgBillingStart =
   | { state: 'not_billed' }

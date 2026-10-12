@@ -67,6 +67,7 @@ import { isBillingEnabled } from '@pagespace/lib/deployment-mode';
 import { GIFT_SUBSCRIPTION_METADATA_TYPE } from '@pagespace/lib/billing/wallet-funding';
 import { stripe as appStripe } from '@/lib/stripe';
 import { stripeConfig } from '@/lib/stripe-config';
+import { completeInvoiceLinesWith } from '@/lib/stripe/invoice-lines';
 import {
   ORG_ID_METADATA_KEY,
   isLiveOrgSubscriptionStatus,
@@ -78,8 +79,10 @@ import {
   orgStripeIdempotencyKey,
   orgSubscriptionCreateKey,
   orgReactivationReadsInvoice,
+  orgSubscriptionItems,
   planOrgReactivation,
   planSeatQuantitySync,
+  type OrgActivation,
   type OrgBusinessPrices,
   type OrgBusinessSubscriptionParams,
   type OrgCustomerCreateParams,
@@ -147,6 +150,8 @@ export interface OrgBillingDeps {
   prices: () => OrgBusinessPrices;
   /** SEAT-3's count: accepted members plus live pending invites. */
   countSeats: (orgId: string) => Promise<number>;
+  /** The clock the funding-pending window is read against; the real one when absent. */
+  now?: () => Date;
 }
 
 export type OrgBillingErrorCode =
@@ -353,15 +358,6 @@ async function listOrgSubscriptions(
   return [...listed, await stripe.retrieveSubscription(storedSubscriptionId)];
 }
 
-/**
- * Where the org's activation stands after provisioning:
- *   - `active`: the subscription is active and its funding is verified;
- *   - `payment_required`: the client confirms `payment` (a first or a failed payment);
- *   - `funding_pending`: Stripe has the payment and the invoice.paid webhook is recording the
- *     funding proof; nothing to pay, and the org reads as active once it lands (org:changed).
- */
-export type OrgActivation = 'active' | 'payment_required' | 'funding_pending';
-
 export interface OrgProvisioning {
   result: EnsureOrgSubscriptionResult;
   payment: OrgPaymentStep;
@@ -410,7 +406,8 @@ export async function provisionOrgSubscription(
     const storedNow = subscriptions.find((sub) => sub.id === storedSubscriptionId);
     const refreshed = stored && storedNow ? await refreshStored(tx, stored, storedNow, prices) : stored;
 
-    let plan = planOrgReactivation({ orgId, prices, storedSubscriptionId, subscriptions, fundedSubscriptionIds: funded });
+    const nowSeconds = Math.floor((deps.now?.() ?? new Date()).getTime() / 1000);
+    let plan = planOrgReactivation({ orgId, prices, storedSubscriptionId, subscriptions, fundedSubscriptionIds: funded, nowSeconds });
     let created = false;
     if (plan.kind === 'new_checkout') {
       const params = orgBusinessSubscriptionParams({ orgId, customerId, seats: await deps.countSeats(orgId), prices });
@@ -422,9 +419,21 @@ export async function provisionOrgSubscription(
         storedSubscriptionId: sub.id,
         subscriptions: [...subscriptions.filter((other) => other.id !== sub.id), createdFacts],
         fundedSubscriptionIds: funded,
+        nowSeconds,
       });
       if (plan.kind === 'new_checkout') {
         throw new OrgBillingError('subscription_not_live', `Stripe returned subscription ${sub.id} already ${sub.status}`);
+      }
+      if (plan.kind === 'requires_support') {
+        // A subscription PageSpace just created (e.g. active at $0 through a customer credit or
+        // coupon: `unfunded_active`) is still a live Stripe subscription: the mirror points at it
+        // so the webhook keeps it in view and support can find it, and the refusal still stands.
+        const items = orgSubscriptionItems(sub, prices);
+        if (items) await storeSubscription(tx, orgId, sub, prices, items);
+        loggers.api.error('org subscription created during reactivation needs support', undefined, {
+          orgId, subscriptionId: sub.id, status: sub.status, reason: plan.reason, stored: items !== null,
+        });
+        return { kind: 'requires_support', reason: plan.reason };
       }
       created = true;
     }
@@ -642,13 +651,16 @@ export function stripeOrgBilling(client: Stripe): OrgBillingStripe {
     },
     async latestInvoice(subscriptionId) {
       const sub = await client.subscriptions.retrieve(subscriptionId, { expand: ['latest_invoice.confirmation_secret'] });
-      const invoice = sub.latest_invoice;
-      if (!invoice || typeof invoice === 'string') return null;
+      const latest = sub.latest_invoice;
+      if (!latest || typeof latest === 'string') return null;
+      // Funding evidence is read off EVERY line, exactly as invoice.paid reads it.
+      const invoice = await completeInvoiceLinesWith(client, latest);
       return {
         status: invoice.status ?? null,
         amountDueCents: invoice.amount_due,
-        amountPaidCents: invoice.amount_paid,
         clientSecret: invoice.confirmation_secret?.client_secret ?? null,
+        paidAtSeconds: invoice.status_transitions?.paid_at ?? null,
+        invoice,
       };
     },
     async createBillingPortalSession(customerId, returnUrl) {

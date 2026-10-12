@@ -25,6 +25,7 @@ import type {
   OrgCustomerDetails,
   OrgLatestInvoice,
 } from '@pagespace/lib/billing/org-subscription-core';
+import type { OrgInvoice } from '@pagespace/lib/billing/wallet-funding';
 
 interface FakeInvoice {
   id: string;
@@ -35,6 +36,8 @@ interface FakeInvoice {
   amountPaidCents: number;
   clientSecret: string;
   created: number;
+  /** Unix seconds; null until paid. */
+  paidAt: number | null;
 }
 
 /** The fake's list prices, minor units: the test Business base and extra seat. */
@@ -230,6 +233,7 @@ export class FakeOrgStripe implements OrgBillingStripe {
       amountPaidCents: 0,
       clientSecret: `pi_${id.slice(3)}_secret_fake`,
       created: (this.clock += 1),
+      paidAt: null,
     };
     this.invoices.set(sub.id, [...(this.invoices.get(sub.id) ?? []), invoice]);
     return invoice;
@@ -247,6 +251,7 @@ export class FakeOrgStripe implements OrgBillingStripe {
     if (!invoice || !sub) throw new Error(`No invoice to pay on '${subscriptionId}'`);
     invoice.status = 'paid';
     invoice.amountPaidCents = invoice.amountDueCents;
+    invoice.paidAt = this.clock += 1;
     sub.status = 'active';
   }
 
@@ -265,10 +270,37 @@ export class FakeOrgStripe implements OrgBillingStripe {
       ? {
           status: invoice.status,
           amountDueCents: invoice.status === 'paid' ? 0 : invoice.amountDueCents,
-          amountPaidCents: invoice.amountPaidCents,
           clientSecret: invoice.clientSecret,
+          paidAtSeconds: invoice.paidAt,
+          invoice: this.invoiceEvidence(subscriptionId),
         }
       : null;
+  }
+
+  /** Test helper: the latest invoice as Stripe hands it to the funding path (every line, the subscription snapshot). */
+  invoiceEvidence(subscriptionId: string): OrgInvoice {
+    const invoice = this.invoiceFor(subscriptionId);
+    const sub = this.subscriptions.get(subscriptionId);
+    if (!invoice || !sub) throw new Error(`No invoice on '${subscriptionId}'`);
+    const [base, seat] = sub.items;
+    const line = (item: { id: string; priceId: string }, amount: number) => ({
+      amount,
+      period: { start: sub.currentPeriodStart, end: sub.currentPeriodEnd },
+      pricing: { price_details: { price: item.priceId } },
+      parent: { subscription_item_details: { subscription_item: item.id } },
+    });
+    return {
+      id: invoice.id,
+      customer: invoice.customerId,
+      amount_paid: invoice.amountPaidCents,
+      subtotal: invoice.amountDueCents,
+      billing_reason: 'subscription_create',
+      parent: { subscription_details: { subscription: subscriptionId, metadata: { ...(sub.metadata ?? {}) } } },
+      lines: {
+        has_more: false,
+        data: [line(base, FAKE_BASE_CENTS), ...(seat ? [line(seat, invoice.amountDueCents - FAKE_BASE_CENTS)] : [])],
+      },
+    };
   }
 
   async createBillingPortalSession(customerId: string, returnUrl: string): Promise<{ url: string }> {
