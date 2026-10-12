@@ -264,7 +264,7 @@ describe('/api/admin/broadcasts', () => {
           createdByUserId: adminUserId,
         }),
       );
-      expect(mockEnqueue).toHaveBeenCalledWith({ broadcastId: 'bc_1', callerUserId: adminUserId });
+      expect(mockEnqueue).toHaveBeenCalledWith({ broadcastId: 'bc_1', caller: expect.objectContaining({ via: 'credential', userId: adminUserId }) });
       expect(mockRepo.markQueued).toHaveBeenCalledWith('bc_1', 'job_1');
       expect(mockRepo.markFailed).not.toHaveBeenCalled();
     });

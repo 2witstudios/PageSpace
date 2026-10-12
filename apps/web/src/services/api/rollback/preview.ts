@@ -30,6 +30,7 @@ import { getActivityById } from './activity-repo';
 import { resolveActivityContentSnapshot } from './content-snapshot';
 import type { RollbackDeps } from './deps';
 import type { ActivityLogForRollback } from './types';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 /**
  * Resolve the effective conflict fields for a preview: detect raw conflicts,
@@ -104,10 +105,11 @@ export async function previewFromActivity(
   action: ActivityAction,
   activity: ActivityLogForRollback,
   resolvedContentSnapshot: string | null,
-  userId: string,
+  actor: AccessActor,
   context: RollbackContext,
   options?: { force?: boolean; undoGroupActivityIds?: string[] }
 ): Promise<ActivityActionPreview> {
+  const userId = actor.userId;
   const force = options?.force ?? false;
   const undoGroupActivityIds = options?.undoGroupActivityIds ?? [];
   const targetValues = buildActionTargetValues(activity, resolvedContentSnapshot);
@@ -166,7 +168,7 @@ export async function previewFromActivity(
     resourceType: activity.resourceType,
   });
 
-  const permissionCheck = await deps.canUserRollback(userId, activity, context);
+  const permissionCheck = await deps.canUserRollback(actor, activity, context);
 
   deps.logger.debug('[Rollback:Preview] Permission check result', {
     canRollback: permissionCheck.canRollback,
@@ -833,10 +835,11 @@ export async function previewActivityAction(
   deps: RollbackDeps,
   action: ActivityAction,
   activityId: string,
-  userId: string,
+  actor: AccessActor,
   context: RollbackContext,
   options?: { force?: boolean; undoGroupActivityIds?: string[] }
 ): Promise<ActivityActionPreview> {
+  const userId = actor.userId;
   deps.logger.debug('[Rollback:Preview] Starting preview', { action, activityId, userId, context, force: options?.force ?? false });
 
   const activity = await getActivityById(deps, activityId);
@@ -846,5 +849,5 @@ export async function previewActivityAction(
   }
 
   const resolvedContentSnapshot = await resolveActivityContentSnapshot(deps, activity);
-  return previewFromActivity(deps, action, activity, resolvedContentSnapshot, userId, context, options);
+  return previewFromActivity(deps, action, activity, resolvedContentSnapshot, actor, context, options);
 }

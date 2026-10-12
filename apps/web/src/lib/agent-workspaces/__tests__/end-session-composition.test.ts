@@ -111,7 +111,7 @@ describe('endSession', () => {
     await runtime.endSession('ws-1');
     expect(destroyWorkspaceTree).toHaveBeenCalledWith({
       workspaceId: 'ws-1',
-      actingUserId: 'user-1',
+      actor: { via: 'automation', userId: 'user-1', reason: 'session-end-teardown' },
       requireEnded: true,
     });
   });

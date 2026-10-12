@@ -13,6 +13,7 @@ import { getConnectionWithProvider } from '@pagespace/lib/integrations/repositor
 import type { ToolDefinition, ToolBundle } from '@pagespace/lib/integrations/types';
 import { orgPolicyRefusalResponse } from '@/lib/orgs/org-policy-refusal-response';
 import { broadcastAgentGrantChanged } from '@/lib/websocket/socket-utils';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -119,7 +120,7 @@ export async function GET(
     // Verify user can view the agent
     const canEdit = await canPrincipalEditPage(auth, agentId);
     if (!canEdit) {
-      return NextResponse.json({ error: 'Access denied' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), agentId, NextResponse.json({ error: 'Access denied' }, { status: 403 }));
     }
 
     const grants = await listGrantsByAgent(db, agentId);
@@ -175,7 +176,7 @@ export async function POST(
   try {
     const canEdit = await canPrincipalEditPage(auth, agentId);
     if (!canEdit) {
-      return NextResponse.json({ error: 'Access denied' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), agentId, NextResponse.json({ error: 'Access denied' }, { status: 403 }));
     }
 
     const body = await request.json();
@@ -204,7 +205,7 @@ export async function POST(
     const isUserConnection = connection.userId === auth.userId;
     let isDriveMember = false;
     if (connection.driveId) {
-      const access = await getDriveAccess(connection.driveId, auth.userId);
+      const access = await getDriveAccess(connection.driveId, actorFromAuth(auth));
       isDriveMember = access.isMember;
     }
     if (!isUserConnection && !isDriveMember) {

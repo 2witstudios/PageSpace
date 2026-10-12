@@ -1,4 +1,4 @@
-import type { VerifiedAuthentication } from './authentication-evidence';
+import { ceremonyAuthentication, type VerifiedAuthentication } from './authentication-evidence';
 /**
  * Step-up Service (Phase 8 task d2wicbqyia6u30axz8j2j4ab)
  *
@@ -242,10 +242,10 @@ export async function verifyWebauthnStepUp(input: unknown): Promise<VerifyStepUp
     return { ok: false, error: { code: 'STEP_UP_INVALID' } };
   }
 
-  const stepUpToken = await mintStepUpGrant({ userId, actionBindingHash, authentication: {
-    authenticatedAtMs: Date.now(),
-    assurance: verification.authenticationInfo.userVerified === true ? 'user_verified_passkey' : 'single_factor',
-  } });
+  const stepUpToken = await mintStepUpGrant({ userId, actionBindingHash, authentication: ceremonyAuthentication(
+    { method: 'passkey', userVerified: verification.authenticationInfo.userVerified === true },
+    Date.now(),
+  ) });
   return { ok: true, data: { stepUpToken } };
 }
 
@@ -345,6 +345,6 @@ export async function completeMagicLinkStepUp(input: unknown): Promise<VerifySte
   const verdict = decideMagicLinkStepUpMetadata(parsed.data.metadata);
   if (verdict.outcome !== 'valid') return { ok: false, error: { code: 'STEP_UP_INVALID' } };
 
-  const stepUpToken = await mintStepUpGrant({ userId: parsed.data.userId, actionBindingHash: verdict.actionBindingHash, authentication: { authenticatedAtMs: Date.now(), assurance: 'single_factor' } });
+  const stepUpToken = await mintStepUpGrant({ userId: parsed.data.userId, actionBindingHash: verdict.actionBindingHash, authentication: ceremonyAuthentication({ method: 'magic_link' }, Date.now()) });
   return { ok: true, data: { stepUpToken } };
 }

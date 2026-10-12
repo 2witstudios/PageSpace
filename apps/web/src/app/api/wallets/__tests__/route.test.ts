@@ -82,7 +82,7 @@ describe('GET /api/wallets', () => {
     const res = await LIST(req('GET', '/api/wallets'));
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual(myWallets);
-    expect(listMyWallets).toHaveBeenCalledWith('u-marcus', 'session');
+    expect(listMyWallets).toHaveBeenCalledWith(expect.objectContaining({ userId: 'u-marcus' }), 'session');
   });
 
   it('X-1 (partial) an unscoped token may list; a drive-scoped token is refused (the list spans drives)', async () => {
@@ -183,6 +183,6 @@ describe('[D-OW-26] an MCP/CLI token on the account routes', () => {
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(token('u-marcus', []));
     vi.mocked(listMyWallets).mockResolvedValue(myWallets);
     await LIST(req('GET', '/api/wallets'));
-    expect(listMyWallets).toHaveBeenCalledWith('u-marcus', 'mcp');
+    expect(listMyWallets).toHaveBeenCalledWith(expect.objectContaining({ userId: 'u-marcus' }), 'mcp');
   });
 });

@@ -14,12 +14,17 @@ import { eq } from '@pagespace/db/operators';
 import { fileConversations, filePages } from '@pagespace/db/schema/storage';
 import { dmConversations } from '@pagespace/db/schema/social';
 import { canUserViewPage, isUserDriveMember } from './permissions';
+import type { AccessActor } from './access-actor';
+import { checkActorDriveAuthentication } from './actor-authentication';
 
 export async function canUserAccessFile(
-  userId: string,
+  actor: AccessActor,
   fileId: string,
   driveId: string | null
 ): Promise<boolean> {
+  const { userId } = actor;
+  // SEC-2/3: a file stored in an org drive is that org's content, whatever links it elsewhere.
+  if (driveId !== null && !(await checkActorDriveAuthentication(actor, driveId)).allowed) return false;
   const [linkedPages, linkedConversations] = await Promise.all([
     db
       .select({ pageId: filePages.pageId })
@@ -39,7 +44,7 @@ export async function canUserAccessFile(
 
   if (hasLinkages) {
     for (const { pageId } of linkedPages) {
-      if (await canUserViewPage(userId, pageId)) return true;
+      if (await canUserViewPage(actor, pageId)) return true;
     }
     for (const { participant1Id, participant2Id } of linkedConversations) {
       if (participant1Id === userId || participant2Id === userId) return true;
@@ -48,5 +53,5 @@ export async function canUserAccessFile(
   }
 
   if (driveId === null) return false;
-  return isUserDriveMember(userId, driveId);
+  return isUserDriveMember(actor, driveId);
 }

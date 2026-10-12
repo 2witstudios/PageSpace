@@ -10,6 +10,7 @@ import { FileActiveKeyStore } from './credentials/active-key.js';
 import { createCredentialStore } from './credentials/store.js';
 import type { OutputSink } from './handler-context.js';
 import { isLongRunningCommand, run } from './run.js';
+import { formatCliError } from './format-error.js';
 
 const stdout: OutputSink = { write: (chunk) => { process.stdout.write(chunk); } };
 const stderr: OutputSink = { write: (chunk) => { process.stderr.write(chunk); } };
@@ -70,6 +71,6 @@ run({
     flushAndExit(code);
   })
   .catch((error: unknown) => {
-    stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    stderr.write(`${formatCliError(error)}\n`);
     flushAndExit(1);
   });

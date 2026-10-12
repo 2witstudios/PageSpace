@@ -150,7 +150,9 @@ export const listOrgDriveDirectory = defineOperation({
  */
 const orgPoliciesSchema = z.object({
   requireStrongSignIn: z.boolean(),
-  maximumSessionAgeMinutes: z.number().int().nonnegative().max(43_200).nullable(),
+  // Whole minutes from 15 to 43,200 (30 days), or null for none. The server reads a damaged stored value as its
+  // strictest, 0 (no sign-in is fresh enough), so 0 is the one other value it can answer (policies-core SPECS).
+  maximumSessionAgeMinutes: z.union([z.literal(0), z.number().int().min(15).max(43_200)]).nullable(),
   guests: z.enum(['off', 'approve', 'on']),
   publicShareLinks: z.boolean(),
   publishWeb: z.boolean(),
@@ -430,6 +432,22 @@ export const listOrgPolicySuspensions = defineOperation({
   outputSchema: z.object({ suspended: z.array(suspendedListingSchema) }),
   requiredScope: 'account',
   description: `List what the organization's policies are holding suspended (share links, published pages, custom domains, integration connections, guests), by name, never content. Owner and Admins only. ${KEY_RULES}`,
+});
+
+/** `SignInBlockedCounts` (`packages/lib/src/organizations/sign-in-blocked.ts`). */
+export const previewOrgSignInPolicy = defineOperation({
+  name: 'organizations.previewSignInPolicy',
+  method: 'GET',
+  path: '/api/orgs/:orgId/policies/sign-in-preview',
+  inputSchema: z.strictObject({
+    ...orgIdInput,
+    requireStrongSignIn: z.boolean().optional(),
+    /** Whole minutes, 15-43200; omitted for no maximum. */
+    maximumSessionAgeMinutes: z.number().int().min(15).max(43200).optional(),
+  }),
+  outputSchema: z.object({ members: z.number(), credentials: z.number() }),
+  requiredScope: 'account',
+  description: `Before changing the sign-in policy: how many of the organization's members, and how many of their live credentials, a candidate policy (requireStrongSignIn; maximumSessionAgeMinutes 15-43200, omitted for none) would refuse right now. Counts only, no identities. Owner and Admins only. ${KEY_RULES}`,
 });
 
 // ---------------------------------------------------------------------------

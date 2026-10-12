@@ -95,7 +95,7 @@ describe('device-auth-utils', () => {
         testDeviceId,
         testPlatform,
         testTokenVersion,
-        {
+        { authentication: null,
           deviceName: 'Test iPhone',
           userAgent: 'PageSpace/1.0 iOS/17.0',
           ipAddress: '192.168.1.1',
@@ -126,7 +126,8 @@ describe('device-auth-utils', () => {
         testUserId,
         testDeviceId,
         testPlatform,
-        testTokenVersion
+        testTokenVersion,
+        { authentication: null }
       );
 
       const records = await db
@@ -144,7 +145,8 @@ describe('device-auth-utils', () => {
         testUserId,
         testDeviceId,
         testPlatform,
-        testTokenVersion
+        testTokenVersion,
+        { authentication: null }
       );
 
       const validated = await validateDeviceToken(token);
@@ -159,7 +161,8 @@ describe('device-auth-utils', () => {
         testUserId,
         testDeviceId,
         testPlatform,
-        testTokenVersion
+        testTokenVersion,
+        { authentication: null }
       );
 
       // Manually update expiration to past
@@ -178,7 +181,8 @@ describe('device-auth-utils', () => {
         testUserId,
         testDeviceId,
         testPlatform,
-        testTokenVersion
+        testTokenVersion,
+        { authentication: null }
       );
 
       // Revoke the token
@@ -194,7 +198,8 @@ describe('device-auth-utils', () => {
         testUserId,
         testDeviceId,
         testPlatform,
-        0 // version 0
+        0, // version 0
+        { authentication: null }
       );
 
       // Initially should validate successfully
@@ -237,7 +242,8 @@ describe('device-auth-utils', () => {
         testUserId,
         testDeviceId,
         testPlatform,
-        testTokenVersion
+        testTokenVersion,
+        { authentication: null }
       );
 
       // Wait a moment to ensure timestamp changes
@@ -259,7 +265,8 @@ describe('device-auth-utils', () => {
         testUserId,
         testDeviceId,
         testPlatform,
-        testTokenVersion
+        testTokenVersion,
+        { authentication: null }
       );
 
       await updateDeviceTokenActivity(id);
@@ -276,7 +283,7 @@ describe('device-auth-utils', () => {
 
   describe('validateOrCreateDeviceToken', () => {
     it('creates new token when none provided', async () => {
-      const result = await validateOrCreateDeviceToken({
+      const result = await validateOrCreateDeviceToken({ authentication: null,
         providedDeviceToken: null,
         userId: testUserId,
         deviceId: testDeviceId,
@@ -296,10 +303,11 @@ describe('device-auth-utils', () => {
         testUserId,
         testDeviceId,
         testPlatform,
-        testTokenVersion
+        testTokenVersion,
+        { authentication: null }
       );
 
-      const result = await validateOrCreateDeviceToken({
+      const result = await validateOrCreateDeviceToken({ authentication: null,
         providedDeviceToken: existingToken,
         userId: testUserId,
         deviceId: testDeviceId,
@@ -312,7 +320,7 @@ describe('device-auth-utils', () => {
     });
 
     it('creates new token when provided token is invalid', async () => {
-      const result = await validateOrCreateDeviceToken({
+      const result = await validateOrCreateDeviceToken({ authentication: null,
         providedDeviceToken: 'invalid.token.value',
         userId: testUserId,
         deviceId: testDeviceId,
@@ -330,7 +338,8 @@ describe('device-auth-utils', () => {
         testUserId,
         testDeviceId,
         testPlatform,
-        testTokenVersion
+        testTokenVersion,
+        { authentication: null }
       );
 
       // Create the different user that we're testing with
@@ -342,7 +351,7 @@ describe('device-auth-utils', () => {
         role: 'user',
       });
 
-      const result = await validateOrCreateDeviceToken({
+      const result = await validateOrCreateDeviceToken({ authentication: null,
         providedDeviceToken: existingToken,
         userId: 'different_user',
         deviceId: testDeviceId,
@@ -362,10 +371,11 @@ describe('device-auth-utils', () => {
         testUserId,
         testDeviceId,
         testPlatform,
-        testTokenVersion
+        testTokenVersion,
+        { authentication: null }
       );
 
-      const result = await validateOrCreateDeviceToken({
+      const result = await validateOrCreateDeviceToken({ authentication: null,
         providedDeviceToken: existingToken,
         userId: testUserId,
         deviceId: 'different_device',
@@ -382,10 +392,11 @@ describe('device-auth-utils', () => {
         testUserId,
         testDeviceId,
         'ios' as const,
-        testTokenVersion
+        testTokenVersion,
+        { authentication: null }
       );
 
-      const result = await validateOrCreateDeviceToken({
+      const result = await validateOrCreateDeviceToken({ authentication: null,
         providedDeviceToken: existingToken,
         userId: testUserId,
         deviceId: testDeviceId,
@@ -403,12 +414,12 @@ describe('device-auth-utils', () => {
         testDeviceId,
         testPlatform,
         testTokenVersion,
-        { ipAddress: '192.168.1.1' }
+        { authentication: null, ipAddress: '192.168.1.1' }
       );
 
       await new Promise((resolve) => setTimeout(resolve, 10));
 
-      await validateOrCreateDeviceToken({
+      await validateOrCreateDeviceToken({ authentication: null,
         providedDeviceToken: existingToken,
         userId: testUserId,
         deviceId: testDeviceId,
@@ -433,7 +444,8 @@ describe('device-auth-utils', () => {
         testUserId,
         testDeviceId,
         testPlatform,
-        testTokenVersion
+        testTokenVersion,
+        { authentication: null }
       );
 
       await revokeDeviceToken(id, 'user_action');
@@ -452,7 +464,8 @@ describe('device-auth-utils', () => {
         testUserId,
         testDeviceId,
         testPlatform,
-        testTokenVersion
+        testTokenVersion,
+        { authentication: null }
       );
 
       await revokeDeviceToken(id, 'user_action');

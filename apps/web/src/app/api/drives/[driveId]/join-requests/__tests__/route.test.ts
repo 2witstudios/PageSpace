@@ -11,8 +11,8 @@ import type { SessionAuthResult } from '@/lib/auth';
 const flags = vi.hoisted(() => ({ orgsEnabled: true }));
 
 // The org sign-in policy (SEC-2/3) has its own suites; here every credential meets it.
-vi.mock('@pagespace/lib/organizations/authentication-policy', () => ({
-  checkOrgAuthentication: vi.fn(async () => ({ allowed: true })),
+vi.mock('@pagespace/lib/permissions/actor-authentication', () => ({
+  checkActorOrgAuthentication: vi.fn(async () => ({ allowed: true })),
   drivePolicyOrgId: vi.fn(async () => null),
 }));
 vi.mock('@pagespace/lib/organizations/orgs-enabled', () => ({
@@ -201,7 +201,7 @@ describe('drive join request routes', () => {
         resourceType: 'drive_join_request',
         details: { operation: 'drive_join_request_approve', driveId: DRIVE, orgId: NORTHWIND, requesterId: LENA, admitted: true },
       }));
-      expect(recordOrgPowerDriveAction).toHaveBeenCalledWith(MARCUS, research, 'answer_join_request');
+      expect(recordOrgPowerDriveAction).toHaveBeenCalledWith(expect.objectContaining({ userId: MARCUS }), research, 'answer_join_request');
     });
 
     it('DRV-6 (partial) a denial is audited as a refusal', async () => {

@@ -48,13 +48,13 @@ vi.mock('@pagespace/lib/organizations/repository', async (importOriginal) => ({
   findMembershipRole: vi.fn(),
 }));
 // Everyone the role check admits is stopped by the sign-in policy, the gate's next step.
-vi.mock('@pagespace/lib/organizations/authentication-policy', () => ({
-  checkOrgAuthentication: vi.fn(async () => ({ allowed: false, code: 'org_reauthentication_required' })),
+vi.mock('@pagespace/lib/permissions/actor-authentication', () => ({
+  checkActorOrgAuthentication: vi.fn(async () => ({ allowed: false, code: 'org_reauthentication_required' })),
   drivePolicyOrgId: vi.fn(async () => null),
 }));
 
 import { findMembershipRole } from '@pagespace/lib/organizations/repository';
-import { checkOrgAuthentication } from '@pagespace/lib/organizations/authentication-policy';
+import { checkActorOrgAuthentication } from '@pagespace/lib/permissions/actor-authentication';
 
 /** How a handler admits credentials (org-route-auth's postures). */
 type Posture = 'token' | 'directory' | 'session-read' | 'money-write' | 'no-org';
@@ -108,6 +108,7 @@ const MATRIX: Record<string, Row> = {
   '/[orgId]/policies GET': { minRole: 'ADMIN', posture: 'token' },
   '/[orgId]/policies PATCH': { minRole: 'ADMIN', posture: 'token' },
   '/[orgId]/policies/suspended GET': { minRole: 'ADMIN', posture: 'token' },
+  '/[orgId]/policies/sign-in-preview GET': { minRole: 'ADMIN', posture: 'token' },
   '/[orgId]/pool GET': { minRole: 'ADMIN', posture: 'session-read' },
   '/[orgId]/seat-caps GET': { minRole: 'ADMIN', posture: 'session-read' },
   '/[orgId]/suppressions/clear POST': { minRole: 'ADMIN', posture: 'token' },
@@ -205,7 +206,7 @@ describe('ORG-5 every org route authorizes through the one shared org permission
           if (want.code === 'org_reauthentication_required') {
             // Admitted by requireOrgRole for this org and caller, then stopped by the gate's next step.
             expect(findMembershipRole).toHaveBeenCalledWith(ORG_ID, 'user_caller');
-            expect(checkOrgAuthentication).toHaveBeenCalledWith(ORG_ID, null);
+            expect(checkActorOrgAuthentication).toHaveBeenCalledWith(expect.objectContaining({ via: 'credential', userId: 'user_caller', authentication: null }), ORG_ID);
           }
           if (want.status === 401 || want.code === 'mcp_token_cannot_move_money' || want.code === 'token_scope_refused') {
             // Refused on the credential alone: no membership, and so no org fact, was read.

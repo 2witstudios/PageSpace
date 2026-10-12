@@ -57,12 +57,13 @@ vi.mock('@/lib/auth', () => ({
   checkMCPPageScope: vi.fn(),
   canPrincipalViewPage: vi.fn(async (auth: { userId: string }, pageId: string) => {
     const { canUserViewPage } = await import('@pagespace/lib/permissions/permissions');
-    return canUserViewPage(auth.userId, pageId);
+    return canUserViewPage(credentialActor(auth.userId, null), pageId);
   }),
 }));
 
 // Mock permissions (boundary)
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
     canUserViewPage: vi.fn(),
 }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -93,6 +94,7 @@ import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions'
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { broadcastAiConversationAdded } from '@/lib/websocket/socket-utils';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 // Test fixtures
 const mockUserId = 'user_123';
@@ -700,7 +702,7 @@ describe('POST session binding (sessionId in body)', () => {
     const response = await POST(request, createContext(mockAgentId));
     expect(response.status).toBe(200);
     expect(runtime.createConversationInSession).toHaveBeenCalledWith(
-      expect.objectContaining({ agentPageId: mockAgentId, workspaceId: 'ses-1', userId: mockUserId }),
+      expect.objectContaining({ agentPageId: mockAgentId, workspaceId: 'ses-1', actor: expect.objectContaining({ userId: mockUserId }) }),
     );
   });
 

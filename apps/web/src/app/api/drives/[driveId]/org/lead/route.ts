@@ -9,6 +9,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { authenticateOrgRequest, refuseDriveCredential, ORG_TOKEN_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
 import { safeParseBody } from '@/lib/validation/parse-body';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 /**
  * PUT /api/drives/[driveId]/org/lead — hand an org drive to a new lead (Spec DRV-1, D-OW-7).
@@ -52,7 +53,7 @@ export async function PUT(request: Request, context: RouteContext) {
       details: { operation: 'org_drive_lead_change', orgId: result.drive.orgId, fromUserId: result.fromUserId, toUserId: result.toUserId },
     });
     // ORG-4: judged on the drive as it was, so an org Admin who made themselves lead is still audited.
-    await recordOrgPowerDriveAction(auth.userId, { ...result.drive, ownerId: result.fromUserId }, 'change_lead');
+    await recordOrgPowerDriveAction(actorFromAuth(auth), { ...result.drive, ownerId: result.fromUserId }, 'change_lead');
 
     try {
       const recipients = await getDriveRecipientUserIds(driveId);

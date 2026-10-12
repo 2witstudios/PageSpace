@@ -6,6 +6,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { db } from '@pagespace/db/db'
 import { eq, and } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 // GET /api/workflows/agents?driveId=xxx - List AI_CHAT pages in a drive
 export async function GET(request: Request) {
@@ -21,7 +22,7 @@ export async function GET(request: Request) {
 
   const isMember = await isPrincipalDriveMember(auth, driveId);
   if (!isMember) {
-    return NextResponse.json({ error: 'Not a member of this drive' }, { status: 403 });
+    return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Not a member of this drive' }, { status: 403 }));
   }
 
   const agents = await db

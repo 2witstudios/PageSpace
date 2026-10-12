@@ -15,6 +15,7 @@ import { getUsersWhoCanViewPage } from '@pagespace/lib/permissions/permissions';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { isOrgLapsedError } from '@pagespace/lib/permissions/org-lapse-guard';
 import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -34,12 +35,13 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
 
   try {
     // Scoped MCP tokens authorize with their OWN drive-membership role.
-    const result = await pageService.getPage(pageId, userId, {
+    const result = await pageService.getPage(pageId, actorFromAuth(auth), {
       authorizeView: (id) => canPrincipalViewPage(auth, id),
     });
 
     if (!result.success) {
-      return NextResponse.json({ error: result.error }, { status: result.status });
+      const refused = NextResponse.json({ error: result.error }, { status: result.status });
+      return result.status === 403 ? deniedResponse(actorFromAuth(auth), pageId, refused) : refused;
     }
 
     auditRequest(req, { eventType: 'data.read', userId, resourceType: 'page', resourceId: pageId, details: { operation: 'read' } });
@@ -87,7 +89,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
     if (isPrivateUpdate !== undefined) {
       const canShare = await canPrincipalSharePage(auth, pageId);
       if (!canShare) {
-        return NextResponse.json({ error: 'Only page owners and drive admins can change page visibility' }, { status: 403 });
+        return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json({ error: 'Only page owners and drive admins can change page visibility' }, { status: 403 }));
       }
     }
 
@@ -112,7 +114,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
       ? { ...contentUpdates, isPrivate: isPrivateUpdate }
       : contentUpdates;
 
-    const result = await pageService.updatePage(pageId, userId, updates, {
+    const result = await pageService.updatePage(pageId, actorFromAuth(auth), updates, {
       expectedRevision,
       context,
       skipPermissionCheck: isPrivateUpdate !== undefined && Object.keys(contentUpdates).length === 0,
@@ -121,7 +123,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
     });
 
     if (!result.success) {
-      return NextResponse.json(
+      const refused = NextResponse.json(
         {
           error: result.error,
           currentRevision: result.currentRevision,
@@ -129,6 +131,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
         },
         { status: result.status }
       );
+      return result.status === 403 ? deniedResponse(actorFromAuth(auth), pageId, refused) : refused;
     }
 
     // Side effects: broadcast
@@ -234,7 +237,7 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ pageI
     const trashChildren = parsedBody?.trash_children ?? true;
 
     const isMCP = isMCPAuthResult(auth);
-    const result = await pageService.trashPage(pageId, userId, {
+    const result = await pageService.trashPage(pageId, actorFromAuth(auth), {
       trashChildren,
       metadata: isMCP ? { source: 'mcp' } : undefined,
       // Scoped MCP tokens authorize with their OWN drive-membership role.
@@ -242,7 +245,8 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ pageI
     });
 
     if (!result.success) {
-      return NextResponse.json({ error: result.error }, { status: result.status });
+      const refused = NextResponse.json({ error: result.error }, { status: result.status });
+      return result.status === 403 ? deniedResponse(actorFromAuth(auth), pageId, refused) : refused;
     }
 
     // Side effects: broadcast

@@ -10,6 +10,7 @@ import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { applyPageMutation } from '@/services/api/page-mutation-service';
 
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -37,7 +38,7 @@ export async function POST(
 
     const canEdit = await canPrincipalEditPage(auth, pageId);
     if (!canEdit) {
-      return NextResponse.json({ error: 'Insufficient permissions to reprocess this page' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json({ error: 'Insufficient permissions to reprocess this page' }, { status: 403 }));
     }
 
     // Reset status to pending with deterministic logging
@@ -62,7 +63,7 @@ export async function POST(
     
     // Create opaque service token for processor authentication (validates page permissions)
     const { token: serviceToken } = await createPageServiceToken(
-      userId,
+      actorFromAuth(auth),
       pageId,
       ['files:ingest'],
       '2m'

@@ -6,6 +6,7 @@ import { conversations } from '@pagespace/db/schema/conversations';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { canAccessConversation } from '@pagespace/lib/permissions/conversation-access';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 /**
  * `POST /api/ai/conversations/revs` — the reconnect watermark check
@@ -102,7 +103,7 @@ export async function POST(request: Request) {
     // own panes), so the parallelism would only buy a fan-out of page-access
     // queries for the rare shared row while costing an unbounded burst.
     for (const row of rows) {
-      const allowed = await canAccessConversation(userId, {
+      const allowed = await canAccessConversation(actorFromAuth(auth), {
         userId: row.userId,
         isShared: row.isShared,
         type: row.type,

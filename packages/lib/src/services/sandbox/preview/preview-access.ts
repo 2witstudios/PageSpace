@@ -37,6 +37,7 @@ import type { DevPreviewStore } from './dev-preview-store';
 import { decidePreviewForward, type PreviewAuthz, type PreviewForwardDecision } from './preview-forward-gate';
 import { PREVIEW_RELAY_SERVICE_NAME } from './preview-relay';
 import { isRoutableSpriteUrl } from './preview-proxy-policy';
+import type { AccessActor } from '../../../permissions/access-actor';
 
 /** The session row slice the access gather reads. */
 export interface PreviewSessionRow {
@@ -62,17 +63,17 @@ export interface PreviewAccessDeps {
   findSession(workspaceId: string): Promise<PreviewSessionRow | null>;
   findEnv(envId: string): Promise<PreviewEnvRow | null>;
   /** The requester's relationship to the DRIVE — the same resolver the session surface uses. */
-  resolveDriveMembership(input: { userId: string; driveId: string }): Promise<DriveMembership>;
+  resolveDriveMembership(input: { actor: AccessActor; driveId: string }): Promise<DriveMembership>;
   /** The drive's payer, for the wake gate; null when the drive is gone (fail closed). */
   resolveDrivePayer(driveId: string): Promise<{ payerId: string } | null>;
   /** The centralized code-execution gate — consulted ONLY when a forward would be a wake. */
-  canRunCode(input: { userId: string; driveId: string | null; ownerId: string }): Promise<CanRunCodeResult>;
+  canRunCode(input: { actor: AccessActor; driveId: string | null; ownerId: string }): Promise<CanRunCodeResult>;
   /**
    * Is the PageSpace session that minted this preview's cookie still usable?
    * The preview origin holds a signed cookie naming the session, never the
    * session's token, so this is the only way revocation can reach it.
    */
-  isSessionUsable(input: { sessionId: string; userId: string }): Promise<boolean>;
+  loadSessionActor(input: { sessionId: string; userId: string }): Promise<AccessActor | null>;
   /** A control-plane attach to the holder's sprite; null when the platform no longer has it. Must not wake. */
   attach(sandboxId: string): Promise<SandboxHandle | null>;
   previewStore: DevPreviewStore;
@@ -99,19 +100,19 @@ export type PreviewAuthorization =
  */
 export async function authorizePreviewHolder({
   holder,
-  userId,
+  actor,
   deps,
 }: {
   holder: DevPreviewHolderRef;
-  userId: string;
+  actor: AccessActor;
   deps: Pick<PreviewAccessDeps, 'findSession' | 'findEnv' | 'resolveDriveMembership' | 'resolveDrivePayer'>;
 }): Promise<PreviewAuthorization> {
   if (holder.kind === 'workspace') {
     const session = await deps.findSession(holder.id);
     if (!session) return { allowed: false, reason: 'session_not_found' };
     const driveMembership =
-      session.driveId === null ? null : await deps.resolveDriveMembership({ userId, driveId: session.driveId });
-    const decision = decideAgentSessionAccess({ requesterId: userId, session, driveMembership });
+      session.driveId === null ? null : await deps.resolveDriveMembership({ actor, driveId: session.driveId });
+    const decision = decideAgentSessionAccess({ requesterId: actor.userId, session, driveMembership });
     if (!decision.allowed) return decision;
     // An ENDED session may not show a preview, and for an env-bound one that
     // has to be said: ending it kills nothing in the environment, so the
@@ -135,7 +136,7 @@ export async function authorizePreviewHolder({
   if (!env) return { allowed: false, reason: 'env_not_found' };
   // A local env holds no sprite (CHECK-enforced); there is nothing to proxy.
   if (env.substrate !== 'sprite') return { allowed: false, reason: 'env_not_sprite' };
-  const membership = await deps.resolveDriveMembership({ userId, driveId: env.driveId });
+  const membership = await deps.resolveDriveMembership({ actor, driveId: env.driveId });
   // Any accepted member of the drive may VIEW an env's preview — the same bar
   // as the env routes' `isPrincipalDriveMember` GET gate. Spending the drive's
   // compute (a wake) is the stricter, separate question the wake gate asks.
@@ -204,14 +205,16 @@ export async function resolvePreviewTarget({
   // bump therefore cuts the preview on its very next request rather than
   // whenever the cookie happens to expire. Opaque refusal, like every other
   // denial in this family.
-  if (!(await deps.isSessionUsable({ sessionId, userId }))) {
+  // The session's ceremony evidence rides along: the drive's org sign-in policy is asked of THIS credential.
+  const actor = await deps.loadSessionActor({ sessionId, userId });
+  if (!actor) {
     return {
       decision: { kind: 'refuse', reason: 'not-authorized', status: 404, message: 'Not found', detail: 'session_revoked' },
       authorization: { allowed: false, reason: 'session_revoked' },
     };
   }
 
-  const authorization = await authorizePreviewHolder({ holder, userId, deps });
+  const authorization = await authorizePreviewHolder({ holder, actor, deps });
   const authz: PreviewAuthz = authorization.allowed ? { allowed: true } : authorization;
   if (!authorization.allowed) return { decision: { kind: 'refuse', reason: 'not-authorized', status: 404, message: 'Not found', detail: authorization.reason }, authorization };
 
@@ -253,7 +256,7 @@ export async function resolvePreviewTarget({
 
   let decision = decidePreviewForward({ featureEnabled, authz, state, power, wakeAuthorization: 'not-consulted' });
   if (decision.kind === 'needs-wake-gate') {
-    const wakeAuthorization = await deps.canRunCode({ userId, ...authorization.wakeSubject });
+    const wakeAuthorization = await deps.canRunCode({ actor, ...authorization.wakeSubject });
     decision = decidePreviewForward({ featureEnabled, authz, state, power, wakeAuthorization });
   }
   if (decision.kind !== 'forward') {

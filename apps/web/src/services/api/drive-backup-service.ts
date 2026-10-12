@@ -13,6 +13,7 @@ import { createChangeGroupId, inferChangeGroupType } from '@pagespace/lib/monito
 import { computePageStateHash, createPageVersion } from '@pagespace/lib/services/page-version-service'
 import { hashWithPrefix } from '@pagespace/lib/utils/hash-utils';
 import { detectPageContentFormat } from '@pagespace/lib/content/page-content-format';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 export type DriveBackupSource = 'manual' | 'scheduled' | 'pre_restore' | 'system';
 
@@ -76,12 +77,12 @@ export interface DriveBackupDetail extends DriveBackupSummary {
 
 
 export async function listAllUserBackups(
-  userId: string,
+  actor: AccessActor,
   options?: { limit?: number; offset?: number }
 ): Promise<{ success: boolean; backups: DriveBackupWithDriveName[]; total: number; error?: string }> {
   // Drives the user leads or administers (org-aware: an org Owner/Admin administers every drive of
   // the org, joined or not), not trashed.
-  const driveIds = await getAdministeredDriveIds(userId, { includeTrashed: false });
+  const driveIds = await getAdministeredDriveIds(actor, { includeTrashed: false });
 
   if (driveIds.length === 0) {
     return { success: true, backups: [], total: 0 };
@@ -128,10 +129,10 @@ export async function listAllUserBackups(
 
 export async function listDriveBackups(
   driveId: string,
-  userId: string,
+  actor: AccessActor,
   options?: { limit?: number; offset?: number }
 ): Promise<{ success: boolean; backups: DriveBackupSummary[]; error?: string; status?: number }> {
-  const canManage = await isDriveOwnerOrAdmin(userId, driveId);
+  const canManage = await isDriveOwnerOrAdmin(actor, driveId);
   if (!canManage) {
     return { success: false, backups: [], error: 'Only drive owners and admins can view backups', status: 403 };
   }
@@ -167,10 +168,11 @@ export async function listDriveBackups(
 
 export async function createDriveBackup(
   driveId: string,
-  userId: string,
+  actor: AccessActor,
   input: CreateDriveBackupInput = {}
 ): Promise<CreateDriveBackupResult> {
-  const canManage = await isDriveOwnerOrAdmin(userId, driveId);
+  const userId = actor.userId;
+  const canManage = await isDriveOwnerOrAdmin(actor, driveId);
   if (!canManage) {
     return { success: false, error: 'Only drive owners and admins can create backups' };
   }
@@ -443,9 +445,9 @@ export async function createDriveBackup(
 export async function getDriveBackupDetail(
   backupId: string,
   driveId: string,
-  userId: string,
+  actor: AccessActor,
 ): Promise<{ success: boolean; detail?: DriveBackupDetail; error?: string; status?: number }> {
-  const canManage = await isDriveOwnerOrAdmin(userId, driveId);
+  const canManage = await isDriveOwnerOrAdmin(actor, driveId);
   if (!canManage) {
     return { success: false, error: 'Only drive owners and admins can view backups', status: 403 };
   }

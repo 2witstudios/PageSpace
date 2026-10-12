@@ -17,6 +17,7 @@ import { VoiceSessionProvider } from "@/contexts/VoiceSessionContext";
 import { useBreakpoint } from "@/hooks/useBreakpoint";
 import { motion, AnimatePresence } from "motion/react";
 import { DebugPanel } from "./DebugPanel";
+import { OrgReauthenticationPrompt } from "@/components/auth/OrgReauthenticationPrompt";
 import { useLayoutStore } from "@/stores/useLayoutStore";
 import { useHasHydrated } from "@/hooks/useHasHydrated";
 import { usePerformanceMonitor } from "@/hooks/usePerformanceMonitor";
@@ -573,6 +574,8 @@ function Layout({ children }: LayoutProps) {
           </ResizablePanelGroup>
 
           <DebugPanel />
+          {/* D-OW-45: one prompt for every org sign-in denial the fetch layer reports. */}
+          <OrgReauthenticationPrompt />
         </div>
 
         {isSheetBreakpoint && (

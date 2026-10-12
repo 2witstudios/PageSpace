@@ -5,6 +5,7 @@
  * providing a clean seam for testing at the service level rather than the ORM level.
  */
 
+import { checkActorDriveAuthentication } from '../permissions/actor-authentication';
 import { db } from '@pagespace/db/db';
 import { eq, and, asc } from '@pagespace/db/operators';
 import { drives } from '@pagespace/db/schema/core';
@@ -15,6 +16,7 @@ import { loadEffectiveDriveMembership } from '../permissions/org-drive-membershi
 import { isDriveLead } from '../permissions/drive-relationship';
 import { guardOpenRoleFloor } from '../organizations/open-role-floor';
 import { guardDriveAccess, type DriveAccessScope } from '../permissions/org-lapse-guard';
+import type { AccessActor } from '../permissions/access-actor';
 
 /**
  * [D-OW-33] what a role write can change: who holds which role (members and agents follow a default, a deleted role
@@ -95,7 +97,7 @@ export interface DriveRoleAccessInfo {
  */
 export async function checkDriveAccessForRoles(
   driveId: string,
-  userId: string
+  actor: AccessActor
 ): Promise<DriveRoleAccessInfo> {
   const driveResult = await db
     .select()
@@ -113,6 +115,11 @@ export async function checkDriveAccessForRoles(
   }
 
   const drive = driveResult[0];
+  // SEC-2/3: a credential the drive's org refuses holds no role in it, lead or not.
+  if (!(await checkActorDriveAuthentication(actor, driveId)).allowed) {
+    return { isOwner: false, isAdmin: false, isMember: false, drive: { id: drive.id, name: drive.name, slug: drive.slug, ownerId: drive.ownerId } };
+  }
+  const { userId } = actor;
   const isOwner = isDriveLead(userId, drive);
 
   if (isOwner) {

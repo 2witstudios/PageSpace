@@ -91,7 +91,7 @@ describe('operations/organizations.ts — the five org reads', () => {
     const isOperation = (value: unknown): value is Operation =>
       typeof value === 'object' && value !== null && 'method' in value && 'path' in value;
     const ops = (Object.values(await import('../organizations.js')) as unknown[]).filter(isOperation);
-    expect(ops.length).toBe(33);
+    expect(ops.length).toBe(34);
     for (const op of ops) {
       expect(op.requiredScope, op.name).toBe('account');
       expect(op.description, op.name).toMatch(/no drive restriction|scoped to specific drives/);
@@ -129,6 +129,14 @@ describe('operations/organizations.ts — the five org reads', () => {
   it('X-1 (partial) policies parse with every key present (defaults filled in server-side)', () => {
     expect(getOrgPolicies.outputSchema.safeParse(POLICIES).success).toBe(true);
     expect(getOrgPolicies.outputSchema.safeParse({ policies: { ...POLICIES.policies, guests: 'sometimes' } }).success).toBe(false);
+  });
+
+  it.each([
+    [null, true], [15, true], [43_200, true], [0, true],
+    [14, false], [1, false], [43_201, false], [15.5, false], [-1, false],
+  ])('SEC-3 (partial) maximumSessionAgeMinutes %s matches what the server can answer: %s', (value, ok) => {
+    // 0 is the strictest value a damaged stored age reads as (policies-core SPECS); 1..14 are never answered.
+    expect(getOrgPolicies.outputSchema.safeParse({ policies: { ...POLICIES.policies, maximumSessionAgeMinutes: value } }).success).toBe(ok);
   });
 
   it('X-1 (partial) inputs are strict: an unknown argument is a client-side validation error', () => {

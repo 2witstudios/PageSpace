@@ -3,6 +3,7 @@ import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { sessionService } from '@pagespace/lib/auth/session-service';
+import { ceremonyAuthentication } from '@pagespace/lib/auth/authentication-evidence';
 import { verifyMagicLinkToken } from '@pagespace/lib/auth/magic-link-service';
 import { SESSION_DURATION_MS, ADMIN_SESSION_SERVICE } from '@pagespace/lib/auth/constants';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -96,6 +97,7 @@ export async function GET(req: Request) {
     await sessionService.revokeAdminUserSessions(userId, 'admin_login');
 
     const sessionToken = await sessionService.createSession({
+      authentication: ceremonyAuthentication({ method: 'magic_link' }, Date.now()),
       userId,
       type: 'user',
       scopes: [],

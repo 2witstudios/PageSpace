@@ -21,6 +21,7 @@ import { driveMembers } from '@pagespace/db/schema/members';
 import { factories } from '@pagespace/db/test/factories';
 import { createAccountFactsRepository } from '../account-facts-repository';
 import { cleanupNorthwind, northwind, type Fixture } from '../../permissions/__tests__/fixtures/northwind-org-drives';
+import { credentialActor } from '../../permissions/access-actor';
 
 const flags = vi.hoisted(() => ({ orgsEnabled: false }));
 vi.mock('../../organizations/orgs-enabled', () => ({
@@ -48,7 +49,7 @@ async function leads(f: Fixture, driveId: string): Promise<string[]> {
   const facts = createAccountFactsRepository();
   const out: string[] = [];
   for (const userId of everyone(f)) {
-    const role = await facts.driveRole({ driveId, userId });
+    const role = await facts.driveRole({ driveId, actor: credentialActor(userId, null) });
     if (role === 'OWNER' || role === 'ADMIN') out.push(userId);
   }
   return out.sort();
@@ -103,7 +104,7 @@ describe('AccountFactsRepository on the org-aware permission path (integration)'
     // ...and Kai's stale OWNER row on Product makes him no consenter (master's query ignored it
     // only because its role is OWNER, not ADMIN: the audience refuses it on principle).
     expect(product).not.toContain(f.people.kai.id);
-    expect(await facts.driveRole({ driveId: f.drives.product.id, userId: f.people.kai.id })).not.toBe('OWNER');
+    expect(await facts.driveRole({ driveId: f.drives.product.id, actor: credentialActor(f.people.kai.id, null) })).not.toBe('OWNER');
   });
 
   it('a pending ADMIN invitation grants no role and no consent, orgs dark or enabled', async () => {
@@ -114,14 +115,14 @@ describe('AccountFactsRepository on the org-aware permission path (integration)'
 
     for (const enabled of [false, true]) {
       flags.orgsEnabled = enabled;
-      expect(await facts.driveRole({ driveId: f.drives.finance.id, userId: invitee.id }), `driveRole orgs=${enabled}`).toBeNull();
+      expect(await facts.driveRole({ driveId: f.drives.finance.id, actor: credentialActor(invitee.id, null) }), `driveRole orgs=${enabled}`).toBeNull();
       expect(await facts.driveConsenters(f.drives.finance.id), `consenters orgs=${enabled}`).not.toContain(invitee.id);
     }
     // Once accepted, the same row does both.
     await db.update(driveMembers).set({ acceptedAt: new Date() })
       .where(and(eq(driveMembers.driveId, f.drives.finance.id), eq(driveMembers.userId, invitee.id)));
     flags.orgsEnabled = false;
-    expect(await facts.driveRole({ driveId: f.drives.finance.id, userId: invitee.id })).toBe('ADMIN');
+    expect(await facts.driveRole({ driveId: f.drives.finance.id, actor: credentialActor(invitee.id, null) })).toBe('ADMIN');
     expect(await facts.driveConsenters(f.drives.finance.id)).toContain(invitee.id);
   });
 });

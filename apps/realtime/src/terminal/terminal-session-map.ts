@@ -1,3 +1,4 @@
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 import type { PtyShell } from './sprites-shell';
 import type { TaskHoldController } from '@pagespace/lib/services/sandbox/sandbox-client/sprite-tasks';
 import type { ComputeCharge } from '@pagespace/lib/billing/compute-charge';
@@ -21,7 +22,8 @@ export const DETACHED_IDLE_MS = 30 * 60 * 1000;
  * report) would be built on it.
  */
 export type TerminalViewer = {
-  userId: string;
+  /** The viewer's credential: the re-auth tick asks every access question (org sign-in policy included) of it. */
+  actor: AccessActor;
   emitOutput(data: string): void;
   emitClosed(exitCode: number): void;
   emitError(message: string): void;
@@ -39,7 +41,7 @@ export type TerminalSession = {
    * still-running process cannot keep executing, unsupervised, until the
    * 30-min idle reap.
    */
-  lastViewerUserId: string;
+  lastViewerActor: AccessActor;
   /** Detachable exec session id on the Sprite, used to reattach after a WS drop. */
   spriteExecId?: string;
   /**

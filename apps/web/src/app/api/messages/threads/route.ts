@@ -8,6 +8,8 @@ import { decryptUsersByIdOnce } from '@pagespace/lib/auth/user-repository';
 import { getBatchPagePermissions } from '@pagespace/lib/permissions/permissions';
 import { getMemberDriveIds } from '@pagespace/lib/permissions/member-drives';
 import type { ConversationRow, ChannelThreadRow } from '@/types/messaging';
+import { actorFromAuth } from '@/lib/auth/request-actor';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
 const PERMISSION_BATCH_SIZE = 200;
@@ -22,7 +24,7 @@ export async function GET(request: Request) {
     // Fetch DMs and channels in parallel
     const [dmResults, channelResults] = await Promise.all([
       fetchDMConversations(userId),
-      fetchChannelsWithLastMessage(userId),
+      fetchChannelsWithLastMessage(actorFromAuth(auth)),
     ]);
 
     auditRequest(request, { eventType: 'data.read', userId, resourceType: 'message_threads', resourceId: 'self' });
@@ -149,9 +151,10 @@ async function fetchDMConversations(userId: string) {
 }
 
 // Fetch channels user has access to with their last message
-async function fetchChannelsWithLastMessage(userId: string) {
+async function fetchChannelsWithLastMessage(actor: AccessActor) {
+  const userId = actor.userId;
   // Candidate drives: the ones the user is a member of, owned or joined (org-aware).
-  const memberDriveIds = await getMemberDriveIds(userId, { includeTrashed: true });
+  const memberDriveIds = await getMemberDriveIds(actor, { includeTrashed: true });
   const channelDetails = await db.execute<ChannelThreadRow>(sql`
     WITH user_channels AS (
       SELECT DISTINCT
@@ -203,7 +206,7 @@ async function fetchChannelsWithLastMessage(userId: string) {
   const visibleRows: ChannelThreadRow[] = [];
   for (let i = 0; i < channelDetails.rows.length; i += PERMISSION_BATCH_SIZE) {
     const chunk = channelDetails.rows.slice(i, i + PERMISSION_BATCH_SIZE);
-    const permissions = await getBatchPagePermissions(userId, chunk.map((row) => row.id));
+    const permissions = await getBatchPagePermissions(actor, chunk.map((row) => row.id));
     visibleRows.push(...chunk.filter((row) => permissions.get(row.id)?.canView));
   }
 

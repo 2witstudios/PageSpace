@@ -7,6 +7,7 @@ import {
   resetFailedLoginAttempts,
 } from '@pagespace/lib/auth/account-lockout';
 import { sessionService } from '@pagespace/lib/auth/session-service';
+import { ceremonyAuthentication } from '@pagespace/lib/auth/authentication-evidence';
 import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
 import { createExchangeCode } from '@pagespace/lib/auth/exchange-codes';
 import { SESSION_DURATION_MS } from '@pagespace/lib/auth/constants';
@@ -209,7 +210,7 @@ export async function POST(req: Request) {
     }
 
     const { userId } = result.data;
-    const authentication = { authenticatedAtMs: Date.now(), assurance: result.data.userVerified ? 'user_verified_passkey' as const : 'single_factor' as const };
+    const authentication = ceremonyAuthentication({ method: 'passkey', userVerified: result.data.userVerified }, Date.now());
 
     // Successful passkey auth proves legitimacy — clear any accumulated failed
     // attempts / lock for this account.

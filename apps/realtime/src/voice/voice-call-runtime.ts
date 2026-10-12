@@ -29,6 +29,7 @@ import {
   type FunctionCall,
 } from '@pagespace/lib/realtime/voice-events';
 import type {
+  RealtimeAttachPayload,
   RealtimeSeedEventWire,
   VoiceAssistant,
   VoiceLocationContext,
@@ -66,6 +67,8 @@ export type VoiceCallRuntimeOptions = {
   /** That call's own ephemeral secret — the only credential this process holds. */
   readonly secret: string;
   readonly seed: readonly RealtimeSeedEventWire[];
+  /** The calling credential's ceremony evidence, echoed on every hop to web (SEC-2/3). */
+  readonly authentication: RealtimeAttachPayload['authentication'];
   readonly timezone?: string;
   readonly locationContext?: VoiceLocationContext;
   /**
@@ -92,7 +95,7 @@ export type VoiceCallRuntime = {
 export const startVoiceCallRuntime = (
   options: VoiceCallRuntimeOptions,
 ): VoiceCallRuntime => {
-  const { session, bridge, meter, secret, seed, timezone, locationContext, assistant } =
+  const { session, bridge, meter, secret, seed, authentication, timezone, locationContext, assistant } =
     options;
   const hangUp = options.hangUp ?? hangUpCall;
   const { callId, userId, conversationId } = session;
@@ -140,6 +143,7 @@ export const startVoiceCallRuntime = (
         kind: 'tool_started',
         callId,
         userId,
+        authentication,
         conversationId,
         toolCallId: call.callId,
         name: call.name,
@@ -170,6 +174,7 @@ export const startVoiceCallRuntime = (
       kind: 'tool_finished',
       callId,
       userId,
+      authentication,
       conversationId,
       messageId,
       toolCallId: call.callId,
@@ -197,6 +202,7 @@ export const startVoiceCallRuntime = (
       kind: 'tool',
       callId,
       userId,
+      authentication,
       ...(conversationId === undefined ? {} : { conversationId }),
       name: call.name,
       argumentsJson: call.argumentsJson,
@@ -289,6 +295,7 @@ export const startVoiceCallRuntime = (
       kind: 'transcript',
       callId,
       userId,
+      authentication,
       conversationId,
       role,
       text,

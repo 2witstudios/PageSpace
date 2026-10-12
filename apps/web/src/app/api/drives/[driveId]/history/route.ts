@@ -9,6 +9,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { maskIdentifier } from '@/lib/logging/mask';
 import { optionalAbsoluteInstant } from '@/lib/validation/date-params';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
 
@@ -51,10 +52,10 @@ export async function GET(
   const isAdmin = await isPrincipalDriveOwnerOrAdmin(auth, driveId);
   if (!isAdmin) {
     loggers.api.debug('[History:Route] Permission denied - not drive admin');
-    return NextResponse.json(
+    return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json(
       { error: 'Unauthorized - only drive owners and admins can view drive history' },
       { status: 403 }
-    );
+    ));
   }
 
   // Parse query params

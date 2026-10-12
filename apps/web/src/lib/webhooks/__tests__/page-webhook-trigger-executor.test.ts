@@ -28,6 +28,7 @@ vi.mock('@/lib/workflows/workflow-executor', () => ({
 
 const mockIsMember = vi.fn();
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   isUserDriveMember: (...args: unknown[]) => mockIsMember(...args),
 }));
 

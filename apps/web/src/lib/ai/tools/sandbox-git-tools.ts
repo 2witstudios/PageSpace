@@ -29,7 +29,6 @@
  */
 
 import type { Tool } from 'ai';
-import type { SandboxActorContext } from '@pagespace/lib/services/sandbox/tool-runners';
 import type { GitSandboxRunDeps } from '@pagespace/lib/services/sandbox/git-tool-runners';
 import { runGitInSandbox } from '@pagespace/lib/services/sandbox/git-tool-runners';
 import type { ResolveSandboxContext, SandboxGate } from './sandbox-tools';
@@ -38,9 +37,12 @@ import {
   generateSandboxGitTools,
   deriveToolNames,
   type GeneratorSeams,
+  type GatedSandbox,
   type OpenResult,
 } from './sandbox-git/generate-tools';
 import { SANDBOX_GIT_TOOL_ROWS } from './sandbox-git/tools/registry';
+import { toolActor } from './actor-permissions';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 // Tool names consumed by tool-filtering.ts to detect whether the sandbox git/gh
 // toolkit is active. DERIVED from the tool rows — never hand-maintained — so a
@@ -49,7 +51,8 @@ import { SANDBOX_GIT_TOOL_ROWS } from './sandbox-git/tools/registry';
 export const SANDBOX_GIT_TOOL_NAMES: readonly string[] = deriveToolNames(SANDBOX_GIT_TOOL_ROWS);
 
 export interface GitSandboxToolsDeps {
-  gitRunDeps: GitSandboxRunDeps;
+  /** The run deps, bound to the actor the gate authorized (provisioning re-checks code execution as them). */
+  gitRunDeps: (actor: AccessActor) => GitSandboxRunDeps;
   resolveContext: ResolveSandboxContext;
   gate: SandboxGate;
 }
@@ -75,14 +78,15 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
     const rawContext = readContext(options);
     const ctx = await resolveContext(rawContext);
     if ('error' in ctx) return { ok: false, error: { success: false, error: ctx.error } };
-    const decision = await gate(ctx);
+    if (!rawContext) return { ok: false, error: { success: false, error: 'User authentication required' } };
+    const decision = await gate(ctx, toolActor(rawContext));
     if (!decision.ok) return { ok: false, error: { success: false, error: decision.error } };
-    return { ok: true, userId: ctx.userId, ctx };
+    return { ok: true, userId: ctx.userId, ctx, actor: toolActor(rawContext) };
   };
 
   /** Direct-exec seam for local git commands (no token needed). */
-  const git = (cmd: 'git' | 'gh', args: string[], ctx: SandboxActorContext, cwd?: string) =>
-    runGitInSandbox({ cmd, args, cwd, ctx, deps: gitRunDeps });
+  const git = (cmd: 'git' | 'gh', args: string[], { ctx, actor }: GatedSandbox, cwd?: string) =>
+    runGitInSandbox({ cmd, args, cwd, ctx, deps: gitRunDeps(actor) });
 
   /**
    * For remote/gh tools: pre-checks the GitHub token before opening a sandbox.
@@ -90,23 +94,23 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
    */
   const withToken = async (
     options: unknown,
-    run: (ctx: SandboxActorContext, token: string) => Promise<unknown>,
+    run: (gated: GatedSandbox, token: string) => Promise<unknown>,
   ) => {
     const opened = await open(options);
     if (!opened.ok) return opened.error;
-    const token = await gitRunDeps.resolveGitHubToken(opened.userId);
+    const token = await gitRunDeps(opened.actor).resolveGitHubToken(opened.userId);
     if (!token) return NO_CONNECTION_ERROR;
-    return run(opened.ctx, token);
+    return run({ ctx: opened.ctx, actor: opened.actor }, token);
   };
 
   /** Remote-exec seam: passes the pre-resolved token to skip the second DB lookup. */
   const gitR = (
     cmd: 'git' | 'gh',
     args: string[],
-    ctx: SandboxActorContext,
+    { ctx, actor }: GatedSandbox,
     token: string,
     cwd?: string,
-  ) => runGitInSandbox({ cmd, args, cwd, ctx, deps: gitRunDeps, preResolvedToken: token });
+  ) => runGitInSandbox({ cmd, args, cwd, ctx, deps: gitRunDeps(actor), preResolvedToken: token });
 
   const seams: GeneratorSeams = { open, git, withToken, gitR };
   return generateSandboxGitTools(SANDBOX_GIT_TOOL_ROWS, seams);

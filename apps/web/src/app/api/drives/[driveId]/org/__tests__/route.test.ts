@@ -5,8 +5,8 @@ import type { SessionAuthResult } from '@/lib/auth';
 const { orgsFlag } = vi.hoisted(() => ({ orgsFlag: { enabled: true } }));
 
 // The org sign-in policy (SEC-2/3) has its own suites; here every credential meets it.
-vi.mock('@pagespace/lib/organizations/authentication-policy', () => ({
-  checkOrgAuthentication: vi.fn(async () => ({ allowed: true })),
+vi.mock('@pagespace/lib/permissions/actor-authentication', () => ({
+  checkActorOrgAuthentication: vi.fn(async () => ({ allowed: true })),
   drivePolicyOrgId: vi.fn(async () => null),
 }));
 vi.mock('@pagespace/lib/organizations/orgs-enabled', () => ({
@@ -266,7 +266,7 @@ describe('/api/drives/[driveId]/org', () => {
           details: { operation: 'org_visibility_change', orgId: NORTHWIND, from: 'OPEN', to: 'RESTRICTED' },
         })
       );
-      expect(recordOrgPowerDriveAction).toHaveBeenCalledWith(PRIYA, restricted, 'change_visibility');
+      expect(recordOrgPowerDriveAction).toHaveBeenCalledWith(expect.objectContaining({ userId: PRIYA }), restricted, 'change_visibility');
       expect(broadcastDriveEvent).toHaveBeenCalledWith(expect.objectContaining({ driveId: DRIVE, operation: 'updated' }), ['user-marcus', 'user-lena']);
     });
 

@@ -27,6 +27,7 @@ import {
   listOrgInvitations,
   listOrgMemberActivity,
   listOrgPolicySuspensions,
+  previewOrgSignInPolicy,
   listOrgTrashedDrives,
   ORG_POLICY_KEYS,
   reassignOrgAutomation,
@@ -240,6 +241,7 @@ describe('org admin reads — route, query, response', () => {
       [listOrgMemberActivity, '/api/orgs/o1/members/activity'],
       [listOrgInvitations, '/api/orgs/o1/invitations'],
       [listOrgPolicySuspensions, '/api/orgs/o1/policies/suspended'],
+      [previewOrgSignInPolicy, '/api/orgs/o1/policies/sign-in-preview'],
       [listOrgTrashedDrives, '/api/orgs/o1/drives/trashed'],
       [getOrgDriveUsage, '/api/orgs/o1/drives/usage'],
       [listOrgAutomations, '/api/orgs/o1/automations'],
@@ -263,6 +265,13 @@ describe('org admin reads — route, query, response', () => {
     expect(getOrgAuditLog.inputSchema.safeParse({ orgId: 'o1', limit: 501 }).success).toBe(false);
     expect(getOrgAuditLog.inputSchema.safeParse({ orgId: 'o1', category: 'gossip' }).success).toBe(false);
     expect(exportOrgAuditLog.inputSchema.safeParse({ orgId: 'o1', limit: 10 }).success).toBe(false);
+  });
+
+  it('X-1 (partial) the sign-in preview sends the candidate policy as query parameters the route reads', () => {
+    const request = buildRequest(previewOrgSignInPolicy, { orgId: 'o1', requireStrongSignIn: true, maximumSessionAgeMinutes: 60 }, config);
+    expect(request.url).toBe('https://pagespace.ai/api/orgs/o1/policies/sign-in-preview?maximumSessionAgeMinutes=60&requireStrongSignIn=true');
+    expect(previewOrgSignInPolicy.inputSchema.safeParse({ orgId: 'o1', maximumSessionAgeMinutes: 14 }).success).toBe(false);
+    expect(previewOrgSignInPolicy.outputSchema.safeParse({ members: 2, credentials: 3 }).success).toBe(true);
   });
 
   it('X-1 (partial) the audit export is CSV text, not JSON', () => {

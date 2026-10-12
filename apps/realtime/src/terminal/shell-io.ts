@@ -35,6 +35,7 @@
  * ever leave to arm it.
  */
 
+import { parseVerifiedAuthentication } from '@pagespace/lib/auth/authentication-evidence';
 import type { TerminalSession, TerminalSessionMap } from './terminal-session-map';
 import {
   shellReadPayloadSchema,
@@ -47,6 +48,7 @@ import {
   type ShellSendResult,
 } from '@pagespace/lib/agent-workspaces/shells-contract';
 import { resumeBillingClock } from './shell-handler';
+import { credentialActor, type AccessActor } from '@pagespace/lib/permissions/access-actor';
 import {
   MAX_SCROLLBACK_TAIL_BYTES,
   scrollbackLines,
@@ -70,6 +72,15 @@ export const DEFAULT_SCROLLBACK_TAIL_LINES = 100;
  * re-exported so importers of this bridge need not know where it lives.
  */
 export { MAX_SHELL_INPUT_BYTES };
+
+/**
+ * The actor a signed web→realtime IO request acts as: the named user with the calling credential's ceremony evidence,
+ * re-parsed here (D-OW-45: evidence is never fabricated, and a malformed or missing one is none, which every org
+ * sign-in policy refuses — SEC-2/3).
+ */
+export function signedCallerActor(userId: string, authentication: unknown): AccessActor {
+  return credentialActor(userId, parseVerifiedAuthentication(authentication, Date.now()));
+}
 
 export interface ShellIoDeps {
   sessionMap: Pick<TerminalSessionMap, 'getByKey'>;
@@ -96,7 +107,7 @@ export interface ShellIoDeps {
    * shell stays reserved until a human opens it" rather than failing.
    */
   startSession?: (
-    address: { shellId: string; userId: string },
+    address: { shellId: string; actor: AccessActor },
     abandoned: () => boolean,
   ) => Promise<TerminalSession | ShellStartRefusal | undefined>;
   /**
@@ -111,7 +122,7 @@ export interface ShellIoDeps {
    * Re-authorize a caller-supplied `userId` against a session it did not just
    * start.
    *
-   * `session.lastViewerUserId` is what the periodic re-auth tick evicts on, so
+   * `session.lastViewerActor` is what the periodic re-auth tick evicts on, so
    * whoever is recorded there is who the session's continued right to run is
    * checked against. On the START path that identity is authorized by
    * `startSession` in the same request. On a plain send it is not: the field
@@ -124,7 +135,7 @@ export interface ShellIoDeps {
    * an un-refreshed identity can cause a spurious eviction, whereas a forged one
    * would keep a revoked user's session alive.
    */
-  reauthorizeViewer?: (input: { shellId: string; userId: string }) => Promise<boolean>;
+  reauthorizeViewer?: (input: { shellId: string; actor: AccessActor }) => Promise<boolean>;
   /**
    * WAL-2: move a live session's billing window to an AUTHORIZED user typing into it on whose
    * behalf the web tier sends (shell-handler `claimBillingWindow`): gated against their own cap,
@@ -170,6 +181,7 @@ async function resolveOrStartSession(
   shellId: string,
   startPlan: Extract<ReturnType<typeof planSessionStart>, { ok: true }>,
   abandoned: () => boolean,
+  authentication: unknown,
 ): Promise<{ session: TerminalSession | undefined; started: boolean; reason?: string }> {
   const live = deps.sessionMap.getByKey(deps.sessionKeyFor(shellId));
   if (live !== undefined) return { session: live, started: false };
@@ -179,7 +191,7 @@ async function resolveOrStartSession(
   // begins at the first agent IO, not at the first human to open the pane.
   if (!startPlan.start) return { session: undefined, started: false };
 
-  const outcome = await deps.startSession?.({ shellId, userId: startPlan.userId }, abandoned);
+  const outcome = await deps.startSession?.({ shellId, actor: signedCallerActor(startPlan.userId, authentication) }, abandoned);
   if (outcome === undefined) return { session: undefined, started: false };
   if ('reason' in outcome) return { session: undefined, started: false, reason: outcome.reason };
   return { session: outcome, started: true };
@@ -217,9 +229,10 @@ async function reauthorizeSafely(
   deps: Pick<ShellIoDeps, 'reauthorizeViewer'>,
   shellId: string,
   userId: string,
+  authentication: unknown,
 ): Promise<boolean> {
   try {
-    return (await deps.reauthorizeViewer?.({ shellId, userId })) ?? false;
+    return (await deps.reauthorizeViewer?.({ shellId, actor: signedCallerActor(userId, authentication) })) ?? false;
   } catch {
     return false;
   }
@@ -250,7 +263,7 @@ export async function handleShellSendRequest(
   const startPlan = planSessionStart(payload, { addressable: true, hasStarter: deps.startSession !== undefined });
   if (!startPlan.ok) return { status: 400, body: { success: false, error: startPlan.error } };
 
-  const { session, started, reason } = await resolveOrStartSession(deps, payload.shellId, startPlan, abandoned);
+  const { session, started, reason } = await resolveOrStartSession(deps, payload.shellId, startPlan, abandoned, payload.authentication);
   // Nothing running, and nothing we could start: say so. Swallowing the
   // keystrokes with a 200 would let the caller believe a command it never ran
   // is running. This also covers the caller having ABANDONED the request
@@ -266,7 +279,7 @@ export async function handleShellSendRequest(
   // anything is written; the window then moves to them. A user at their cap cannot run compute
   // in a drive-mate's session by typing into it.
   if (deps.claimBillingWindow && payload.userId !== undefined && payload.userId !== session.actorId) {
-    const authorized = started ? true : await reauthorizeSafely(deps, payload.shellId, payload.userId);
+    const authorized = started ? true : await reauthorizeSafely(deps, payload.shellId, payload.userId, payload.authentication);
     if (!authorized || !(await deps.claimBillingWindow(session, payload.userId))) {
       return { status: 200, body: { success: true, live: true, delivered: false, reason: 'insolvent' } };
     }
@@ -286,7 +299,7 @@ export async function handleShellSendRequest(
   // family exists to remove. Attached sessions have no armed reap to move.
   if (session.viewers.size === 0) {
     // The detached re-auth tick (`shell-handler.ts`) checks ONLY
-    // `lastViewerUserId` while nobody is attached — it is the tick's whole
+    // `lastViewerActor` while nobody is attached — it is the tick's whole
     // notion of "who is this session's access decided against" for a
     // viewer-less session. Leaving it pinned to whoever last held that
     // identity (the creator, or an earlier sender) while a DIFFERENT
@@ -299,9 +312,9 @@ export async function handleShellSendRequest(
     // ESTABLISHED authorization for: `started` means `startSession` just
     // authorized them, otherwise an injected re-check must say so. Without
     // either, the field is ignored — see `reauthorizeViewer`.
-    if (payload.userId !== undefined && payload.userId !== session.lastViewerUserId) {
-      const authorized = started ? true : await reauthorizeSafely(deps, payload.shellId, payload.userId);
-      if (authorized) session.lastViewerUserId = payload.userId;
+    if (payload.userId !== undefined && payload.userId !== session.lastViewerActor.userId) {
+      const authorized = started ? true : await reauthorizeSafely(deps, payload.shellId, payload.userId, payload.authentication);
+      if (authorized) session.lastViewerActor = signedCallerActor(payload.userId, payload.authentication);
     }
     deps.rearmIdleReap?.(session);
   }
@@ -443,7 +456,7 @@ export async function handleShellReadRequest(
     // no other way to get one going, and answering "never started" to a caller
     // that just asked to read it is the dead end this removes. Only ever
     // reached for a single-id read.
-    const { session, started, reason } = await resolveOrStartSession(deps, shellId, startPlan, abandoned);
+    const { session, started, reason } = await resolveOrStartSession(deps, shellId, startPlan, abandoned, payload.authentication);
     if (!session) {
       return { shellId, live: false, hasOutput: false, viewers: 0, output: '', ...(reason ? { reason } : {}) };
     }
@@ -462,7 +475,7 @@ export async function handleShellReadRequest(
     // any of their reaps.
     if (payload.start === true && session.viewers.size === 0) {
       // Same reasoning as `handleShellSendRequest`'s identical block: the
-      // detached re-auth tick checks ONLY `lastViewerUserId` while nobody is
+      // detached re-auth tick checks ONLY `lastViewerActor` while nobody is
       // attached, so a DIFFERENT authorized user reading an already-live
       // session must become that identity — otherwise revoking the stale one
       // kills work the current reader is still authorized to run, and
@@ -474,9 +487,9 @@ export async function handleShellReadRequest(
       // present here (`planSessionStart` requires it whenever `start === true`),
       // but it is still a caller-supplied identity, and an HMAC signature says
       // who is calling, not on whose behalf.
-      if (payload.userId !== undefined && payload.userId !== session.lastViewerUserId) {
-        const authorized = await reauthorizeSafely(deps, shellId, payload.userId);
-        if (authorized) session.lastViewerUserId = payload.userId;
+      if (payload.userId !== undefined && payload.userId !== session.lastViewerActor.userId) {
+        const authorized = await reauthorizeSafely(deps, shellId, payload.userId, payload.authentication);
+        if (authorized) session.lastViewerActor = signedCallerActor(payload.userId, payload.authentication);
       }
       deps.rearmIdleReap?.(session);
     }

@@ -532,6 +532,7 @@ export {
   orgsRevokeInviteHandler,
   orgsSetPoliciesHandler,
   orgsSetRoleHandler,
+  orgsSignInPreviewHandler,
   orgsSuspendedHandler,
   orgsTrashedDrivesHandler,
   orgsUpdateHandler,

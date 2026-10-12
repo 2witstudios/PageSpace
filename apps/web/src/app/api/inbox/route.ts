@@ -11,6 +11,7 @@ import type { InboxItem, InboxResponse } from '@pagespace/lib/types';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
 import { toISOTimestamp } from '@/lib/utils/timestamp';
 import type { ChannelRow, DMRow } from '@/types/messaging';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 
@@ -47,7 +48,7 @@ export async function GET(request: Request) {
 
     // Channel candidate drives: the ones the user is a member of, owned or joined (org-aware).
     // getBatchPagePermissions below stays the access decision.
-    const memberDriveIds = type === 'dm' ? [] : await getMemberDriveIds(userId, { includeTrashed: true });
+    const memberDriveIds = type === 'dm' ? [] : await getMemberDriveIds(actorFromAuth(auth), { includeTrashed: true });
 
     if (driveId) {
       // Parse cursor - can be ISO timestamp or "id:<channelId>" for null timestamps
@@ -130,7 +131,7 @@ export async function GET(request: Request) {
       `);
 
       const channelPermissions = await getBatchPagePermissions(
-        userId,
+        actorFromAuth(auth),
         channelResults.rows.map((row) => row.id)
       );
       // Permission-filter BEFORE decrypting: a non-viewable channel's sender
@@ -315,7 +316,7 @@ export async function GET(request: Request) {
           LIMIT ${fetchLimit}
         `);
         const channelPermissions = await getBatchPagePermissions(
-          userId,
+          actorFromAuth(auth),
           channelResults.rows.map((row) => row.id)
         );
         // Permission-filter BEFORE decrypting: a non-viewable channel's sender

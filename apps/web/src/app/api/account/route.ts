@@ -14,6 +14,7 @@ import { planDriveDisposition } from '@pagespace/lib/compliance/erasure/drive-di
 import { dataSubjectRequestRepository } from '@pagespace/lib/repositories/data-subject-request-repository';
 import { sendVerificationEmail } from '@/lib/auth/send-verification-email';
 import { lodgeAndEnqueueErasure } from '@/lib/erasure/request-erasure';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const patchBodySchema = z
   .object({
@@ -266,7 +267,7 @@ export async function DELETE(req: Request) {
       subjectUserId: userId,
       subjectEmail: user.email,
       stripeCustomerId: user.stripeCustomerId,
-      callerUserId: userId,
+      caller: actorFromAuth(auth),
       requestedByType: 'self',
       forceDelete: false,
       subjectAppleLinked: user.appleId !== null,

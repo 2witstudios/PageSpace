@@ -21,6 +21,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { AIMonitoring, discardUsageOutcome } from '@pagespace/lib/monitoring/ai-monitoring';
 import { reserveMemoryCall, type MemoryGateRefusal } from './memory-credit';
 import { z } from 'zod';
+import { type AccessActor, automationActor } from '@pagespace/lib/permissions/access-actor';
 
 export type MemoryField = 'bio' | 'writingStyle' | 'rules';
 
@@ -220,7 +221,7 @@ async function gatherRecentConversations(
 
   // Page agent conversations via drive membership.
   // The drives the user is a member of, owned or joined (org-aware).
-  const driveIds = await getMemberDriveIds(userId, { includeTrashed: true });
+  const driveIds = await getMemberDriveIds(discoveryActor(userId), { includeTrashed: true });
 
   if (driveIds.length > 0) {
     const pageMessages = await db
@@ -258,6 +259,11 @@ async function gatherRecentConversations(
   return allMessages;
 }
 
+/** Discovery is a cron pass with no one signing in: it reads as the user, an automation (D-OW-34). */
+function discoveryActor(userId: string): AccessActor {
+  return automationActor(userId, 'memory-discovery');
+}
+
 /**
  * Gather recent activity patterns.
  */
@@ -269,7 +275,7 @@ async function gatherRecentActivity(
   lookbackDate.setDate(lookbackDate.getDate() - lookbackDays);
 
   // The drives the user is a member of, owned or joined (org-aware).
-  const driveIds = await getMemberDriveIds(userId, { includeTrashed: true });
+  const driveIds = await getMemberDriveIds(discoveryActor(userId), { includeTrashed: true });
 
   if (driveIds.length === 0) return [];
 

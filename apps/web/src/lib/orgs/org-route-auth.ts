@@ -11,9 +11,11 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { ORGS_ENABLED } from '@pagespace/lib/organizations/orgs-enabled';
 import { requireOrgRole } from '@pagespace/lib/organizations/authorize';
 import { findMembershipRole } from '@pagespace/lib/organizations/repository';
-import { checkOrgAuthentication, drivePolicyOrgId } from '@pagespace/lib/organizations/authentication-policy';
-import type { VerifiedAuthentication } from '@pagespace/lib/auth/authentication-evidence';
+import { checkActorOrgAuthentication, drivePolicyOrgId } from '@pagespace/lib/permissions/actor-authentication';
 import type { OrgRole } from '@pagespace/db/schema/organizations';
+import { actorFromAuth } from '@/lib/auth/request-actor';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
+import type { VerifiedAuthentication } from '@pagespace/lib/auth/authentication-evidence';
 
 // Credential postures (Spec X-1, [D-OW-26]). TOKEN options admit a session or an MCP key — the
 // CLI and MCP mirror every org route that is not a money move. MONEY options are the money moves
@@ -32,7 +34,7 @@ export const ORG_TOKEN_WRITE_AUTH = { allow: ['session', 'mcp'] as const, requir
 export const ORG_TOKEN_DIRECTORY_AUTH = { allow: ['session', 'mcp'] as const, requireCSRF: false, driveScopedTokens: 'filter' as const };
 export const ORG_MONEY_WRITE_AUTH = { allow: ['session', 'mcp'] as const, requireCSRF: true, delegatedCredentials: 'refuse_money_move' as const };
 
-type OrgAuthenticationDecision = Awaited<ReturnType<typeof checkOrgAuthentication>>;
+type OrgAuthenticationDecision = Awaited<ReturnType<typeof checkActorOrgAuthentication>>;
 
 type AuthOptions =
   | typeof ORG_READ_AUTH
@@ -45,9 +47,11 @@ export type OrgGate =
   /** `role` is the caller's org role, set by authorizeOrgRequest (not by authenticateOrgRequest).
    * `allowedDriveIds` is the token's drive restriction — empty for a session or an unscoped
    * token (full access); non-empty only on the directory, the one route that filters by it.
-   * `authentication` is the credential's verified sign-in evidence, for the org sign-in policy.
+   * `authentication` is the credential's server-verified sign-in evidence (null: none), for decisions that
+   * depend on how the caller signed in (D-OW-47: loosening a sign-in policy); `actor` is the same credential
+   * as the permission layer's actor, for the org sign-in policy and drive-content checks (D-OW-45).
    * `credential` is how the caller authenticated: a delegated key ('mcp') never moves money ([D-OW-26]). */
-  | { ok: true; userId: string; role?: OrgRole; allowedDriveIds: string[]; authentication: VerifiedAuthentication | null; credential: 'session' | 'mcp' }
+  | { ok: true; userId: string; role?: OrgRole; allowedDriveIds: string[]; authentication: VerifiedAuthentication | null; actor: AccessActor; credential: 'session' | 'mcp' }
   | { ok: false; response: Response };
 
 /** 404 exactly as an unknown route would answer, so dark orgs reveal nothing. */
@@ -88,6 +92,7 @@ export async function authenticateOrgRequest(request: Request, options: AuthOpti
     userId: auth.userId,
     allowedDriveIds,
     authentication: auth.authentication ?? null,
+    actor: actorFromAuth(auth),
     credential: auth.tokenType === 'session' ? 'session' : 'mcp',
   };
 }
@@ -128,7 +133,7 @@ function signInPolicyRefusal(
 }
 
 async function orgCredentialRefusal(request: Request, gate: Extract<OrgGate, { ok: true }>, orgId: string): Promise<Response | null> {
-  return signInPolicyRefusal(request, gate, await checkOrgAuthentication(orgId, gate.authentication), { resourceType: 'organization', resourceId: orgId });
+  return signInPolicyRefusal(request, gate, await checkActorOrgAuthentication(gate.actor, orgId), { resourceType: 'organization', resourceId: orgId });
 }
 
 /**
@@ -138,7 +143,7 @@ async function orgCredentialRefusal(request: Request, gate: Extract<OrgGate, { o
  * naming it; a non-member proceeds to the service, which refuses them. Null when the caller may proceed.
  */
 export async function refuseOrgCredential(request: Request, gate: Extract<OrgGate, { ok: true }>, orgId: string): Promise<Response | null> {
-  const decision = await checkOrgAuthentication(orgId, gate.authentication);
+  const decision = await checkActorOrgAuthentication(gate.actor, orgId);
   if (decision.allowed) return null;
   const member = await requireOrgRole(gate.userId, orgId, 'MEMBER', { findMembershipRole });
   return member.ok ? signInPolicyRefusal(request, gate, decision, { resourceType: 'organization', resourceId: orgId }) : null;

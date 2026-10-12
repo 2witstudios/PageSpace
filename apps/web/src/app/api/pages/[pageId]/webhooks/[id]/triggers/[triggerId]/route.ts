@@ -7,6 +7,7 @@ import { webhookTriggers } from '@pagespace/db/schema/webhook-triggers';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { authenticateRequestWithOptions, isAuthError, canManagePageWebhooks } from '@/lib/auth';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -43,7 +44,7 @@ export async function PATCH(
 
     const canManage = await canManagePageWebhooks(auth, pageId);
     if (!canManage) {
-      return NextResponse.json({ error: 'Only the drive owner or an admin can manage page webhooks' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json({ error: 'Only the drive owner or an admin can manage page webhooks' }, { status: 403 }));
     }
 
     let body: unknown;
@@ -97,7 +98,7 @@ export async function DELETE(
 
     const canManage = await canManagePageWebhooks(auth, pageId);
     if (!canManage) {
-      return NextResponse.json({ error: 'Only the drive owner or an admin can manage page webhooks' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json({ error: 'Only the drive owner or an admin can manage page webhooks' }, { status: 403 }));
     }
 
     const existing = await findOwnedTrigger(pageId, id, triggerId);

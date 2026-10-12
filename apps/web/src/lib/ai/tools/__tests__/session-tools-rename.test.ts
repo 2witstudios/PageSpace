@@ -29,6 +29,7 @@ import type { Tool } from 'ai';
 import { createSessionTools, type SessionToolsDeps } from '../session-tools';
 import type { ToolExecutionContext } from '../../core/types';
 import { assert } from './riteway';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const OWNER = 'user-owner';
 const OWN_WORKSPACE = 'ws-own';
@@ -79,7 +80,7 @@ function runWith(
   const tool = createSessionTools(deps).rename_workspace as Tool;
   const execute = tool.execute as (input: unknown, options: unknown) => Promise<Record<string, unknown>>;
   return execute(input, {
-    experimental_context: { userId: OWNER, conversationId: CONVERSATION, ...context } as ToolExecutionContext,
+    experimental_context: { userId: OWNER, accessActor: credentialActor(OWNER, null), conversationId: CONVERSATION, ...context } as ToolExecutionContext,
     toolCallId: 'call-1',
   });
 }
@@ -100,7 +101,7 @@ describe('rename_workspace: the workspace this conversation is in', () => {
       expected: { success: true, workspaceId: OWN_WORKSPACE, name: 'Deploy work' },
     });
     expect(deps.renameWorkspace).toHaveBeenCalledWith({
-      userId: OWNER,
+      actor: expect.objectContaining({ userId: OWNER }),
       workspaceId: OWN_WORKSPACE,
       name: 'Deploy work',
       allowedDriveIds: [],

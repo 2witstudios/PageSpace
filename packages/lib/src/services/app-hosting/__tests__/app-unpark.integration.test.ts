@@ -27,6 +27,7 @@ import { DEFAULT_SEAT_ALLOWANCE_CENTS } from '../../../billing/wallet-core';
 import { defaultAppRouterDeps } from '../router';
 import { canUnparkPublishedApp } from '../../../permissions/app-unpark-authority';
 import { defaultAppUnparkDeps, MEMBER_CAP_PARK_ERROR, releaseMemberCapParks, unparkPublishedApp, type AppUnparkDeps } from '../app-unpark';
+import { credentialActor } from '../../../permissions/access-actor';
 
 const audit = vi.hoisted(() => ({ events: [] as Array<Record<string, unknown>> }));
 vi.mock('../../../audit/org-audit', () => ({
@@ -213,7 +214,7 @@ describe('a parked app has a way back', () => {
     const w = (world = await build());
     const actorId = who(w);
 
-    expect(await unparkPublishedApp({ publishedAppId: w.appId, actorId }, deps)).toEqual({ outcome: 'unparked', via });
+    expect(await unparkPublishedApp({ publishedAppId: w.appId, actor: credentialActor(actorId, null) }, deps)).toEqual({ outcome: 'unparked', via });
     expect((await appRow(w)).status).toBe('stopped');
     expect(audit.events).toEqual([
       expect.objectContaining({ eventType: 'org.app.unparked', orgId: w.orgId, actorId, resourceType: 'published_app', resourceId: w.appId, driveId: w.driveId }),
@@ -225,14 +226,14 @@ describe('a parked app has a way back', () => {
     if (!dbAvailable) return;
     const w = (world = await build());
     const app = { driveId: w.driveId, costOwnerId: w.creatorId };
-    expect(await Promise.all([w.creatorId, w.leadId, w.orgAdminId, w.memberId].map((id) => canUnparkPublishedApp(id, app)))).toEqual([true, true, true, false]);
+    expect(await Promise.all([w.creatorId, w.leadId, w.orgAdminId, w.memberId].map((id) => canUnparkPublishedApp(credentialActor(id, null), app)))).toEqual([true, true, true, false]);
   });
 
   it('WAL-2 (partial) a plain member may not un-park it: refused, still parked, nothing audited', async () => {
     if (!dbAvailable) return;
     const w = (world = await build());
 
-    expect(await unparkPublishedApp({ publishedAppId: w.appId, actorId: w.memberId }, deps)).toEqual({ outcome: 'refused', reason: 'forbidden' });
+    expect(await unparkPublishedApp({ publishedAppId: w.appId, actor: credentialActor(w.memberId, null) }, deps)).toEqual({ outcome: 'refused', reason: 'forbidden' });
     expect((await appRow(w)).status).toBe('parked');
     expect(audit.events).toEqual([]);
   });
@@ -242,7 +243,7 @@ describe('a parked app has a way back', () => {
     const w = (world = await build());
     await atCap(w, w.creatorId);
 
-    expect(await unparkPublishedApp({ publishedAppId: w.appId, actorId: w.orgAdminId }, deps)).toEqual({
+    expect(await unparkPublishedApp({ publishedAppId: w.appId, actor: credentialActor(w.orgAdminId, null) }, deps)).toEqual({
       outcome: 'held',
       held: 'still_capped',
       gateReason: 'org_member_cap_reached',
@@ -253,7 +254,7 @@ describe('a parked app has a way back', () => {
     expect(await holdsOf(w)).toEqual([]);
 
     await refill(w);
-    expect(await unparkPublishedApp({ publishedAppId: w.appId, actorId: w.orgAdminId }, deps)).toEqual({ outcome: 'unparked', via: 'org-admin' });
+    expect(await unparkPublishedApp({ publishedAppId: w.appId, actor: credentialActor(w.orgAdminId, null) }, deps)).toEqual({ outcome: 'unparked', via: 'org-admin' });
     expect((await appRow(w)).costOwnerId).toBe(w.creatorId);
   });
 });

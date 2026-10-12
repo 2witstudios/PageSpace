@@ -18,6 +18,7 @@ import { decryptField } from '@pagespace/lib/encryption/field-crypto';
 import { SINCE_LAST_VISIT_THRESHOLD_MS } from '@pagespace/lib/home-signals/composer';
 import type { HomeContext, Signal } from '@pagespace/lib/home-signals/types';
 import { computeAllSignals, computeFootprint } from './compute-signals';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session'] as const };
 
@@ -118,7 +119,7 @@ export async function GET(req: Request) {
         .orderBy(desc(pulseSummaries.generatedAt))
         .limit(1),
       // User's drives: owned or joined (org-aware; page-level access does not count)
-      getMemberDriveIds(userId, { includeTrashed: true }),
+      getMemberDriveIds(actorFromAuth(auth), { includeTrashed: true }),
       // User conversations
       db.select({ id: dmConversations.id })
         .from(dmConversations)
@@ -136,7 +137,7 @@ export async function GET(req: Request) {
       // row required — that row is only lazily backfilled on first drive
       // access) and explicit page-level grants with no drive membership at
       // all, and excludes trashed pages and pages in trashed drives.
-      accessiblePageIds(userId),
+      accessiblePageIds(actorFromAuth(auth)),
     ]);
 
     const latestSummary = summaryResult[0] ?? null;

@@ -40,6 +40,7 @@ import {
   redoRoleChange,
   redoMessageChange,
 } from './redo-executors';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 /**
  * Result of executing a rollback
@@ -54,11 +55,11 @@ export interface RollbackResult extends ActivityActionResult {
 export async function previewRollback(
   deps: RollbackDeps,
   activityId: string,
-  userId: string,
+  actor: AccessActor,
   context: RollbackContext,
   options?: { force?: boolean; undoGroupActivityIds?: string[] }
 ): Promise<ActivityActionPreview> {
-  return previewActivityAction(deps, 'rollback', activityId, userId, context, options);
+  return previewActivityAction(deps, 'rollback', activityId, actor, context, options);
 }
 
 /** [D-OW-33] a page undo/redo can only change that page's privacy: snapshot just it. */
@@ -92,10 +93,11 @@ async function accessDriveId(deps: RollbackDeps, activity: { driveId: string | n
 export async function executeRollback(
   deps: RollbackDeps,
   activityId: string,
-  userId: string,
+  actor: AccessActor,
   context: RollbackContext,
   options?: { tx?: typeof db; force?: boolean; undoGroupActivityIds?: string[] }
 ): Promise<RollbackResult> {
+  const userId = actor.userId;
   const { tx, force, undoGroupActivityIds } = options ?? {};
   deps.logger.debug('[Rollback:Execute] Starting execution', { activityId, userId, context, usingTransaction: !!tx, force });
 
@@ -117,7 +119,7 @@ export async function executeRollback(
   }
 
   const resolvedContentSnapshot = await resolveActivityContentSnapshot(deps, activity);
-  const preview = await previewFromActivity(deps, action, activity, resolvedContentSnapshot, userId, context, { force, undoGroupActivityIds });
+  const preview = await previewFromActivity(deps, action, activity, resolvedContentSnapshot, actor, context, { force, undoGroupActivityIds });
 
   if (!preview.canExecute) {
     deps.logger.debug('[Rollback:Execute] Aborting - preview check failed', {

@@ -11,6 +11,7 @@ import { parseGlobalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import { isStreamRowLive, isProvablyDead } from '@/lib/ai/core/stream-liveness';
 import { filterSubscribableStreams } from '@/lib/ai/core/stream-subscription-authz';
 import { materializeInterruptedStream } from '@/lib/ai/core/materialize-interrupted-stream';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
 
@@ -103,7 +104,7 @@ export async function GET(request: Request) {
           details: { reason: 'page_view_denied', method: 'GET' },
           riskScore: 0.5,
         });
-        return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+        return deniedResponse(actorFromAuth(auth), channelId, NextResponse.json({ error: 'Forbidden' }, { status: 403 }));
       }
     }
 

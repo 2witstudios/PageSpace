@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { apiError } from '@/lib/api/api-error';
 import { announceOrgChange } from '@pagespace/lib/organizations/org-change-events';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -14,13 +15,17 @@ import { reconcileOrgPublishedVisibility } from '@pagespace/lib/organizations/pu
 import { createPublishedObjectStore, isPublishConfigured } from '@/lib/canvas/published-storage';
 import { authorizeOrgRequest, ORG_TOKEN_READ_AUTH, ORG_TOKEN_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
 import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
-import { apiError } from '@/lib/api/api-error';
 
 /** [D-OW-26] A delegated key reads the policies without the money keys (wallet reads are consumer-only). */
 const policiesFor = (credential: 'session' | 'mcp', policies: OrgPolicies) =>
   credential === 'session' ? policies : policiesForDelegatedCredential(policies);
 
 type Context = { params: Promise<{ orgId: string }> };
+
+const SIGN_IN_REFUSAL = {
+  org_strong_sign_in_required: 'Changing this sign-in policy needs a strong sign-in: confirm it is you with your passkey.',
+  org_reauthentication_required: 'Changing this sign-in policy needs a recent sign-in: sign in again first.',
+} as const;
 
 /**
  * GET /api/orgs/[orgId]/policies (Spec POL-1) — Owner and Admins read the org's policies, defaults
@@ -69,8 +74,16 @@ export async function PATCH(request: Request, context: Context) {
     // fallback picks what spend draws from); the whole patch is refused before anything is stored.
     const moneyRefusal = gate.credential === 'session' ? null : delegatedPolicyPatchRefusal(parsed.patch);
     if (moneyRefusal) return apiError(403, moneyRefusal.code, moneyRefusal.message, { policy: moneyRefusal.key });
-    const result = await updateOrgPolicies({ orgId, actorId: gate.userId, patch: parsed.patch });
+    const result = await updateOrgPolicies({ orgId, actorId: gate.userId, actorAuthentication: gate.authentication, patch: parsed.patch });
     if (!result.ok && result.reason === 'org_lapsed') return orgLapsedResponse(result.message);
+    if (!result.ok && (result.reason === 'org_strong_sign_in_required' || result.reason === 'org_reauthentication_required')) {
+      // D-OW-45: loosening a sign-in policy needs a credential that satisfies the policy in force.
+      return apiError(403, result.reason, SIGN_IN_REFUSAL[result.reason], { orgId });
+    }
+    if (!result.ok && result.reason === 'org_policy_would_lock_out_actor') {
+      // D-OW-47: the acting Admin's own credential would not meet the tightened policy; `requires` says what would.
+      return apiError(403, result.reason, 'Your own sign-in does not meet this policy, so saving it would lock you out of this organization.', { orgId, requires: result.requires });
+    }
     if (!result.ok && result.reason === 'open_role_floor') {
       return NextResponse.json({ error: OPEN_ROLE_FLOOR_RAISE_MESSAGE, code: 'org_policy', policy: 'openDriveRoleFloor', drives: result.drives }, { status: 403 });
     }
@@ -99,6 +112,8 @@ export async function PATCH(request: Request, context: Context) {
       restored: countByKind(result.restored),
       // POL-1: what it forbids but does not suspend (apps, envs, cross-drive agents, autonomy, models), by count.
       blocked: result.blocked.counts,
+      // POL-1 for the sign-in keys (D-OW-45): members and credentials a tightened sign-in policy now refuses, by count.
+      signInBlocked: result.signInBlocked,
       auditRecorded: result.auditRecorded,
       ...(publishedVisibility ? { publishedVisibility } : {}),
     });

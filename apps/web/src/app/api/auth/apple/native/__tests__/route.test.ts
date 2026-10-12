@@ -520,12 +520,13 @@ describe('POST /api/auth/apple/native', () => {
       expect(body.error).toBe('Session creation failed');
     });
 
-    it('creates session with correct params', async () => {
+    it('SEC-2 (partial) creates session with correct params, including Apple single-factor evidence (D-OW-45)', async () => {
       vi.mocked(getClientIP).mockReturnValue('192.168.1.1');
 
       await POST(createNativeRequest(validPayload));
 
       expect(sessionService.createSession).toHaveBeenCalledWith({
+        authentication: { authenticatedAtMs: expect.any(Number), assurance: 'single_factor' },
         userId: 'new-user-id',
         type: 'user',
         scopes: ['*'],
@@ -541,6 +542,7 @@ describe('POST /api/auth/apple/native', () => {
       await POST(createNativeRequest(validPayload));
 
       expect(sessionService.createSession).toHaveBeenCalledWith({
+        authentication: { authenticatedAtMs: expect.any(Number), assurance: 'single_factor' },
         userId: 'new-user-id',
         type: 'user',
         scopes: ['*'],
@@ -552,10 +554,11 @@ describe('POST /api/auth/apple/native', () => {
   });
 
   describe('device token creation', () => {
-    it('creates device token with correct parameters', async () => {
+    it('SEC-2 (partial) creates device token with correct parameters, carrying the same Apple evidence (D-OW-45)', async () => {
       await POST(createNativeRequest(validPayload));
 
       expect(validateOrCreateDeviceToken).toHaveBeenCalledWith({
+        authentication: { authenticatedAtMs: expect.any(Number), assurance: 'single_factor' },
         providedDeviceToken: undefined,
         userId: 'new-user-id',
         deviceId: 'device-123',
@@ -575,6 +578,7 @@ describe('POST /api/auth/apple/native', () => {
       }));
 
       expect(validateOrCreateDeviceToken).toHaveBeenCalledWith({
+        authentication: { authenticatedAtMs: expect.any(Number), assurance: 'single_factor' },
         providedDeviceToken: undefined,
         userId: 'new-user-id',
         deviceId: 'device-123',
@@ -593,6 +597,7 @@ describe('POST /api/auth/apple/native', () => {
       }));
 
       expect(validateOrCreateDeviceToken).toHaveBeenCalledWith({
+        authentication: { authenticatedAtMs: expect.any(Number), assurance: 'single_factor' },
         providedDeviceToken: undefined,
         userId: 'new-user-id',
         deviceId: 'device-123',

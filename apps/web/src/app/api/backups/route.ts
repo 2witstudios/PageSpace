@@ -3,6 +3,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { listAllUserBackups } from '@/services/api/drive-backup-service';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
 
@@ -26,7 +27,7 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: 'Invalid offset parameter' }, { status: 400 });
     }
 
-    const result = await listAllUserBackups(auth.userId, {
+    const result = await listAllUserBackups(actorFromAuth(auth), {
       limit: parsedLimit ?? undefined,
       offset: parsedOffset ?? undefined,
     });

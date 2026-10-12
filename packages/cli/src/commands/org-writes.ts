@@ -355,6 +355,32 @@ export const orgsSuspendedHandler = verbHandler({
   render: renderSuspended,
 });
 
+const SIGN_IN_PREVIEW_USAGE = 'Usage: pagespace orgs sign-in-preview <orgId> [--strong true|false] [--max-age <minutes>]';
+
+/** Pure. */
+export function renderSignInPreview(value: Out<'previewSignInPolicy'>): string {
+  return `This sign-in policy would refuse ${plural(value.members, 'member', 'members')} (${plural(value.credentials, 'live credential', 'live credentials')}) right now.\n`;
+}
+
+export const orgsSignInPreviewHandler = verbHandler({
+  usage: SIGN_IN_PREVIEW_USAGE,
+  positionals: 1,
+  flags: ['strong', 'max-age'],
+  build: ({ positionals: [orgId], options }): VerbArgsResult<In<'previewSignInPolicy'>> => {
+    const strong = options.strong === undefined ? ok(undefined) : oneOf(options.strong, ['true', 'false'] as const, '--strong', SIGN_IN_PREVIEW_USAGE);
+    if (!strong.ok) return strong;
+    const maxAge = options['max-age'];
+    if (maxAge !== undefined && !/^\d+$/.test(maxAge)) return { ok: false, message: `--max-age must be a whole number of minutes.\n${SIGN_IN_PREVIEW_USAGE}` };
+    return ok({
+      orgId,
+      ...(strong.value !== undefined ? { requireStrongSignIn: strong.value === 'true' } : {}),
+      ...(maxAge !== undefined ? { maximumSessionAgeMinutes: Number(maxAge) } : {}),
+    });
+  },
+  call: (sdk, input) => sdk.organizations.previewSignInPolicy(input),
+  render: renderSignInPreview,
+});
+
 export const orgsTrashedDrivesHandler = verbHandler({
   ...orgOnly('Usage: pagespace orgs trashed-drives <orgId>'),
   call: (sdk, input) => sdk.organizations.listTrashedDrives(input),

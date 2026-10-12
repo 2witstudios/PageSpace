@@ -81,6 +81,7 @@ vi.mock('@pagespace/lib/integrations/providers/builtin-providers', () => ({
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   canUserEditPage: vi.fn().mockResolvedValue(true),
 }));
 
@@ -132,6 +133,7 @@ import {
   DELETE as deleteAgentGrant,
 } from '../agents/[agentId]/integrations/[grantId]/route';
 import { GET as getConnGrants } from '../integrations/connections/[connectionId]/grants/route';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const makeRequest = (method: string, body?: object) =>
   new Request('http://localhost/api/test', {
@@ -232,6 +234,6 @@ vi.mock('@/lib/auth/principal-permissions', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/auth/principal-permissions')>();
   const permissions = await import('@pagespace/lib/permissions/permissions');
   return { ...actual,
-    canPrincipalEditPage: (auth: { userId: string }, resourceId: string) => permissions.canUserEditPage(auth.userId, resourceId),
+    canPrincipalEditPage: (auth: { userId: string }, resourceId: string) => permissions.canUserEditPage(credentialActor(auth.userId, null), resourceId),
   };
 });

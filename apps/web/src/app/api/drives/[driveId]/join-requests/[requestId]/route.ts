@@ -54,7 +54,7 @@ export async function PATCH(request: Request, context: RouteContext) {
       },
     });
     // ORG-4: answering through org Owner/Admin power rather than as the lead is audited too.
-    await recordOrgPowerDriveAction(gate.userId, result.drive, 'answer_join_request');
+    await recordOrgPowerDriveAction(gate.actor, result.drive, 'answer_join_request');
 
     return NextResponse.json({ request: result.request, admitted: result.admitted });
   } catch (error) {

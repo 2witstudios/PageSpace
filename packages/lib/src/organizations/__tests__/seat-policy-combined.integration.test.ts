@@ -125,7 +125,7 @@ describe('seat admission and the policy layer together (real Postgres)', () => {
     const afterGate = heldFor();
 
     // A policy change: organizations row lock and suspensions, committed while the billing lock is still held.
-    const changed = await updateOrgPolicies({ orgId: org.id, actorId: owner.id, patch: { seatAllowanceCents: 50, guests: 'off' } });
+    const changed = await updateOrgPolicies({ orgId: org.id, actorId: owner.id, actorAuthentication: null, patch: { seatAllowanceCents: 50, guests: 'off' } });
     expect(changed.ok).toBe(true);
     const afterPolicy = heldFor();
 

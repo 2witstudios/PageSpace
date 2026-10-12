@@ -40,6 +40,7 @@ import { and, eq, like, notInArray } from '@pagespace/db/operators';
 import { publishedApps, type PublishedApp } from '@pagespace/db/schema/published-apps';
 import { findPublishedAppByEnvId, toPublishedAppDTO } from '@/lib/app-hosting/published-app-dto';
 import { admitDriveComputeCreator, admitDriveOrgActive } from '@pagespace/lib/billing/compute-gate';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -54,7 +55,7 @@ export async function GET(request: Request, context: { params: Promise<{ driveId
     if (scopeError) return scopeError;
 
     if (!(await isPrincipalDriveMember(auth, driveId))) {
-      return NextResponse.json({ error: 'Not a member of this drive' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Not a member of this drive' }, { status: 403 }));
     }
 
     if (!(await resolveEnvInDrive(envId, driveId))) {
@@ -65,7 +66,7 @@ export async function GET(request: Request, context: { params: Promise<{ driveId
     if (!app) return NextResponse.json({ app: null });
     // Asked only of a parked app: whether this viewer may un-park it (its creator, the lead, an org
     // Owner/Admin), so the pane offers Resume to exactly the people the actions route admits.
-    const viewerCanUnpark = app.status === 'parked' ? await canUnparkPublishedApp(auth.userId, app) : false;
+    const viewerCanUnpark = app.status === 'parked' ? await canUnparkPublishedApp(actorFromAuth(auth), app) : false;
     return NextResponse.json({ app: toPublishedAppDTO(app, viewerCanUnpark) });
   } catch (error) {
     loggers.api.error('Failed to read published app', error instanceof Error ? error : new Error(String(error)));
@@ -256,7 +257,7 @@ export async function POST(request: Request, context: { params: Promise<{ driveI
       enqueued = await enqueuePublishBuild({
         publishedAppId: created.app.id,
         tarPath: snapshot.tarPath,
-        callerUserId: auth.userId,
+        caller: actorFromAuth(auth),
       });
     } finally {
       await snapshot.cleanup();

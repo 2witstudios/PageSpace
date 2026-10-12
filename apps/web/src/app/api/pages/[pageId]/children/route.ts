@@ -9,6 +9,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { jsonResponse } from '@pagespace/lib/utils/api-utils';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false } as const;
 
@@ -23,7 +24,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
 
   const canView = await canPrincipalViewPage(auth, pageId);
   if (!canView) {
-    return new NextResponse("Forbidden", { status: 403 });
+    return deniedResponse(actorFromAuth(auth), pageId, new NextResponse("Forbidden", { status: 403 }));
   }
 
   try {

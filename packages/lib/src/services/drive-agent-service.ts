@@ -9,11 +9,12 @@
  * settings, and the drive-side "invite agent" flow).
  */
 
+import { checkActorDriveAuthentication } from '../permissions/actor-authentication';
 import { db } from '@pagespace/db/db';
 import { eq, and, ne, isNotNull, inArray } from '@pagespace/db/operators';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { driveAgentMembers, driveMembers } from '@pagespace/db/schema/members';
-import { canUserEditPage, getUserDriveAccess, isDriveOwnerOrAdmin } from '../permissions/permissions';
+import { canUserEditPage, holdsDriveAccess, isDriveOwnerOrAdmin } from '../permissions/permissions';
 import { loadEffectiveDriveMembership } from '../permissions/org-drive-membership';
 import { customRoleBelongsToDrive, fetchCustomRolePermissions, holdsAcceptedGuestRow } from '../permissions/membership-queries';
 import type { CustomRolePerms } from '../permissions/membership-queries';
@@ -22,11 +23,12 @@ import { isDriveLead } from '../permissions/drive-relationship';
 import { getDrivePolicies } from '../organizations/policy-reader';
 import { crossDriveAgentsDecision } from '../organizations/org-action-decisions';
 import { checkDriveMayLoosen } from '../permissions/org-lapse-guard';
+import type { AccessActor } from '../permissions/access-actor';
 
 export type AgentDriveRole = 'MEMBER' | 'ADMIN';
 
 export interface AddAgentToDriveInput {
-  actingUserId: string;
+  actor: AccessActor;
   agentPageId: string;
   driveId: string;
   /** Explicit role request (drive-side invite). Omitted ⇒ inherit the granter's access. */
@@ -60,9 +62,21 @@ export interface AgentDriveMembership {
  * members and page-level collaborators are capped at MEMBER.
  */
 async function resolveGranterAccess(
-  userId: string,
+  actor: AccessActor,
   driveId: string,
-): Promise<{ canGrant: boolean; maxRole: AgentDriveRole; customRoleId: string | null; driveKind: string | null }> {
+): Promise<GranterAccess> {
+  // SEC-2/3: a credential the drive's org refuses grants nothing in it, lead or not.
+  if (!(await checkActorDriveAuthentication(actor, driveId)).allowed) return { canGrant: false, maxRole: 'MEMBER', customRoleId: null, driveKind: null };
+  return resolveGranterFacts(actor.userId, driveId);
+}
+
+type GranterAccess = { canGrant: boolean; maxRole: AgentDriveRole; customRoleId: string | null; driveKind: string | null };
+
+/**
+ * What `userId` could grant an agent in the drive, as membership facts with no credential in them: the actor path
+ * above asks the sign-in policy first; recapping what someone ALREADY granted (no one is signing in) reads this.
+ */
+async function resolveGranterFacts(userId: string, driveId: string): Promise<GranterAccess> {
   const [drive] = await db
     .select({ ownerId: drives.ownerId, kind: drives.kind, orgId: drives.orgId, orgVisibility: drives.orgVisibility })
     .from(drives)
@@ -96,7 +110,7 @@ async function resolveGranterAccess(
   }
 
   // Page-level collaborator only (no drive membership): may grant, capped at MEMBER.
-  const hasAccess = await getUserDriveAccess(userId, driveId);
+  const hasAccess = await holdsDriveAccess(userId, driveId);
   return { canGrant: hasAccess, maxRole: 'MEMBER', customRoleId: null, driveKind };
 }
 
@@ -106,7 +120,8 @@ async function resolveGranterAccess(
  * user's own access to the drive.
  */
 export async function addAgentToDrive(input: AddAgentToDriveInput): Promise<AddAgentToDriveResult> {
-  const { actingUserId, agentPageId, driveId, requestedRole, requestedCustomRoleId, includeContext } = input;
+  const { actor, agentPageId, driveId, requestedRole, requestedCustomRoleId, includeContext } = input;
+  const actingUserId = actor.userId;
 
   const [agentPage] = await db
     .select({ id: pages.id, type: pages.type, driveId: pages.driveId })
@@ -125,11 +140,11 @@ export async function addAgentToDrive(input: AddAgentToDriveInput): Promise<AddA
   // agent to a drive must require the same control. A view-only granter could
   // otherwise bind a shared agent to a private drive and leak that drive's
   // content to every user who can run the agent.
-  if (!(await canUserEditPage(actingUserId, agentPageId))) {
+  if (!(await canUserEditPage(actor, agentPageId))) {
     return { ok: false, status: 403, error: 'You do not have permission to manage this agent' };
   }
 
-  const granter = await resolveGranterAccess(actingUserId, driveId);
+  const granter = await resolveGranterAccess(actor, driveId);
   if (!granter.canGrant) {
     return { ok: false, status: 403, error: 'You do not have access to this drive' };
   }
@@ -204,11 +219,11 @@ export async function addAgentToDrive(input: AddAgentToDriveInput): Promise<AddA
  * removed. Allowed for users who control the agent or who own/admin the drive.
  */
 export async function removeAgentFromDrive(input: {
-  actingUserId: string;
+  actor: AccessActor;
   agentPageId: string;
   driveId: string;
 }): Promise<{ ok: true } | ServiceFailure> {
-  const { actingUserId, agentPageId, driveId } = input;
+  const { actor, agentPageId, driveId } = input;
 
   const [agentPage] = await db
     .select({ id: pages.id, driveId: pages.driveId })
@@ -222,8 +237,8 @@ export async function removeAgentFromDrive(input: {
   }
 
   const canManage =
-    (await canUserEditPage(actingUserId, agentPageId)) ||
-    (await isDriveOwnerOrAdmin(actingUserId, driveId));
+    (await canUserEditPage(actor, agentPageId)) ||
+    (await isDriveOwnerOrAdmin(actor, driveId));
   if (!canManage) {
     return { ok: false, status: 403, error: 'You cannot manage this agent membership' };
   }
@@ -245,12 +260,12 @@ export async function removeAgentFromDrive(input: {
  * `pages.includeDrivePrompt`, not this per-membership flag.
  */
 export async function setAgentDriveIncludeContext(input: {
-  actingUserId: string;
+  actor: AccessActor;
   agentPageId: string;
   driveId: string;
   includeContext: boolean;
 }): Promise<{ ok: true; member: typeof driveAgentMembers.$inferSelect } | ServiceFailure> {
-  const { actingUserId, agentPageId, driveId, includeContext } = input;
+  const { actor, agentPageId, driveId, includeContext } = input;
 
   const [agentPage] = await db
     .select({ id: pages.id, driveId: pages.driveId })
@@ -264,8 +279,8 @@ export async function setAgentDriveIncludeContext(input: {
   }
 
   const canManage =
-    (await canUserEditPage(actingUserId, agentPageId)) ||
-    (await isDriveOwnerOrAdmin(actingUserId, driveId));
+    (await canUserEditPage(actor, agentPageId)) ||
+    (await isDriveOwnerOrAdmin(actor, driveId));
   if (!canManage) {
     return { ok: false, status: 403, error: 'You cannot manage this agent membership' };
   }
@@ -416,7 +431,7 @@ export async function recapAgentMembershipsGrantedBy(
   } = {},
 ): Promise<string[]> {
   const executor = options.executor ?? db;
-  const granter = options.granter ?? await resolveGranterAccess(userId, driveId);
+  const granter = options.granter ?? await resolveGranterFacts(userId, driveId);
   // Still able to grant ADMIN ⇒ nothing to cap down (we only ever cap downward).
   if (granter.maxRole === 'ADMIN') return [];
 

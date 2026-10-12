@@ -12,6 +12,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isScopedMCPAuth, getPrincipalAccessiblePagesInDrive } from '@/lib/auth';
 import { getUserAccessiblePagesInDrive } from '@pagespace/lib/permissions/permissions';
 import { hasAppDriveMembership } from '@pagespace/lib/permissions/app-permissions';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -54,12 +55,12 @@ export async function POST(request: Request) {
 
     // Check authorization. A scoped MCP token is its own drive member — gate on
     // the TOKEN's membership, not the owning user's.
-    const relationship = isScopedMCPAuth(auth) ? null : await loadDriveRelationship(userId, drive);
+    const relationship = isScopedMCPAuth(auth) ? null : await loadDriveRelationship(actorFromAuth(auth), drive);
     if (isScopedMCPAuth(auth)) {
       // Membership gate only — the tree below is filtered to the TOKEN's
       // per-page view set, so per-page custom-role grants still work.
-      if (!(await hasAppDriveMembership(auth.tokenId, driveId))) {
-        return NextResponse.json({ error: 'Access denied' }, { status: 403 });
+      if (!(await hasAppDriveMembership(actorFromAuth(auth), auth.tokenId, driveId))) {
+        return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Access denied' }, { status: 403 }));
       }
     } else {
       // The drive's lead or an effective member (the org-aware membership reads ACCEPTED rows
@@ -70,7 +71,7 @@ export async function POST(request: Request) {
       const admitted = relationship !== null
         && (isDriveMemberRelationship(relationship) || await holdsAcceptedGuestRow(driveId, userId));
       if (!admitted) {
-        return NextResponse.json({ error: 'Access denied' }, { status: 403 });
+        return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Access denied' }, { status: 403 }));
       }
     }
 
@@ -93,7 +94,7 @@ export async function POST(request: Request) {
       const accessibleIds = new Set(accessible.map(page => page.id));
       visiblePages = pageResults.filter(page => accessibleIds.has(page.id));
     } else if (!relationship?.isOwner) {
-      const accessibleIds = new Set(await getUserAccessiblePagesInDrive(userId, driveId));
+      const accessibleIds = new Set(await getUserAccessiblePagesInDrive(actorFromAuth(auth), driveId));
       visiblePages = pageResults.filter(page => accessibleIds.has(page.id));
     }
 

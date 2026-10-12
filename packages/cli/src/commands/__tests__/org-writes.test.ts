@@ -25,6 +25,7 @@ import {
   orgsRemoveMemberHandler,
   orgsSetPoliciesHandler,
   orgsSetRoleHandler,
+  orgsSignInPreviewHandler,
   orgsUpdateHandler,
   orgsVerifyDomainHandler,
 } from '@pagespace/cli';
@@ -182,6 +183,20 @@ describe('pagespace orgs <write verbs>', () => {
     expect(await orgsSetPoliciesHandler(ctx, commandIntent(['o1', 'requireStrongSignIn=on', 'maximumSessionAgeMinutes=60', '--yes']))).toBe(EXIT_SUCCESS);
     expect(calls).toEqual([{ orgId: 'o1', requireStrongSignIn: true, maximumSessionAgeMinutes: 60 }]);
     expect(await orgsSetPoliciesHandler(createFakeContext(), commandIntent(['o1']))).toBe(EXIT_USAGE_ERROR);
+  });
+
+  it('X-1 (partial) sign-in-preview sends the candidate sign-in policy and prints the counts', async () => {
+    const calls: unknown[] = [];
+    const stdout = createRecordingSink();
+    const ctx = createFakeContext({
+      stdout,
+      sdk: fakeSdk({ organizations: { previewSignInPolicy: async (input: unknown) => (calls.push(input), { members: 2, credentials: 1 }) } }),
+    });
+    expect(await orgsSignInPreviewHandler(ctx, commandIntent(['o1', '--strong', 'true', '--max-age', '60']))).toBe(EXIT_SUCCESS);
+    expect(calls).toEqual([{ orgId: 'o1', requireStrongSignIn: true, maximumSessionAgeMinutes: 60 }]);
+    expect(stdout.lines.join('')).toBe('This sign-in policy would refuse 2 members (1 live credential) right now.\n');
+    expect(await orgsSignInPreviewHandler(createFakeContext(), commandIntent(['o1', '--strong', 'yes']))).toBe(EXIT_USAGE_ERROR);
+    expect(await orgsSignInPreviewHandler(createFakeContext(), commandIntent(['o1', '--max-age', '1h']))).toBe(EXIT_USAGE_ERROR);
   });
 
   it('X-1 (partial) policyChangeMayRestrict: true when any assignment can tighten access, false when every one only opens', () => {

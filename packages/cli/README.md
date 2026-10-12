@@ -247,6 +247,7 @@ orgs      list                                     # the organizations you belon
                                                    # a change that may tighten anything asks first; the money
                                                    # policies (seat allowance, wallet fallback) need a signed-in session
           suspended <orgId>                        # what the policies hold suspended (Owner/Admin)
+          sign-in-preview <orgId> [--strong true|false] [--max-age <minutes>]   # members/credentials a sign-in policy would refuse now
           audit <orgId> [--category <c>] [--type <t>] [--drive <id>] [--from <iso>] [--to <iso>] [--limit N] [--before <cursor>]
           audit-export <orgId> [same filters, no paging] > audit.csv
           automations <orgId>                      # automations whose creator left (Owner/Admin)

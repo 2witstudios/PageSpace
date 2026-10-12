@@ -16,7 +16,12 @@
  * Seat count, seat auto-add and billing are NOT policies (point-guard ruling): they are billing state
  * with their own columns. The two spend policies here (seat allowance amount, wallet fallback) are POL-7.
  */
-import { normalizeMaximumSessionAgeMinutes, type OrgAuthenticationPolicy } from './authentication-policy-core';
+import {
+  maximumSessionAgeNoLooser,
+  normalizeMaximumSessionAgeMinutes,
+  requireStrongSignInNoLooser,
+  type OrgAuthenticationPolicy,
+} from './authentication-policy-core';
 import { DEFAULT_SEAT_ALLOWANCE_CENTS, effectiveSpendPolicy, type FallbackRule, type SpendPolicy } from '../billing/wallet-core';
 
 export const GUEST_POLICIES = ['off', 'approve', 'on'] as const;
@@ -405,8 +410,8 @@ const notLooser = (before: boolean, after: boolean): boolean => before || !after
  * being classified. Equal values are not looser.
  */
 const NO_LOOSER: { [K in OrgPolicyKey]: (before: OrgPolicies[K], after: OrgPolicies[K]) => boolean } = {
-  requireStrongSignIn: (before, after) => !before || after,
-  maximumSessionAgeMinutes: (before, after) => before === null || (after !== null && after <= before),
+  requireStrongSignIn: requireStrongSignInNoLooser,
+  maximumSessionAgeMinutes: maximumSessionAgeNoLooser,
   guests: (b, a) => GUEST_RANK[a] <= GUEST_RANK[b],
   publicShareLinks: notLooser,
   publishWeb: notLooser,

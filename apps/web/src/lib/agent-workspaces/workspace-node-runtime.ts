@@ -81,6 +81,7 @@ import { emitContextFromRow } from '@/lib/repositories/conversation-rev';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { announceWithoutUnsucceeding } from './close-conversation-in-workspace';
 import { authorizePaneTargets, introducedPaneTargets, paneScopeDeps } from './authorize-pane-scope';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 /**
  * Who a resolved target list is being derived FOR.
@@ -89,7 +90,8 @@ import { authorizePaneTargets, introducedPaneTargets, paneScopeDeps } from './au
  * server-side placement helpers: they discard the response entirely, so
  * resolving a title for them would be authority spent on nothing.
  */
-export type TargetViewerId = string | null;
+/** Whose access resolves a target title (their credential, SEC-2/3 included); `null` resolves none. */
+export type TargetViewerId = AccessActor | null;
 
 /**
  * THE READ. `{rev, nodes, targets}` for one workspace.
@@ -101,13 +103,13 @@ export type TargetViewerId = string | null;
  */
 export async function readWorkspaceNodes(
   workspaceId: string,
-  viewerId: TargetViewerId,
+  viewer: TargetViewerId,
 ): Promise<WorkspaceNodeSnapshotResponse> {
   const snapshot = await readWorkspaceNodeSnapshot(db, workspaceId);
   return {
     rev: snapshot.rev,
     nodes: snapshot.nodes,
-    targets: await resolveTargets([{ workspaceId, nodes: snapshot.nodes }], viewerId, workspaceId),
+    targets: await resolveTargets([{ workspaceId, nodes: snapshot.nodes }], viewer, workspaceId),
   };
 }
 
@@ -130,14 +132,14 @@ export async function readWorkspaceNodes(
  */
 export async function readWorkspaceNodesBulk(
   workspaceIds: readonly string[],
-  viewerId: TargetViewerId,
+  viewer: TargetViewerId,
 ): Promise<Map<string, WorkspaceNodeSnapshotResponse>> {
   const answer = new Map<string, WorkspaceNodeSnapshotResponse>();
   if (workspaceIds.length === 0) return answer;
 
   const snapshots = await readWorkspaceNodeSnapshots(db, [...workspaceIds]);
   const subjects = [...snapshots].map(([workspaceId, snapshot]) => ({ workspaceId, nodes: snapshot.nodes }));
-  const targetsByWorkspace = await resolveTargetsByWorkspace(subjects, viewerId);
+  const targetsByWorkspace = await resolveTargetsByWorkspace(subjects, viewer);
 
   for (const [workspaceId, snapshot] of snapshots) {
     answer.set(workspaceId, {
@@ -341,9 +343,9 @@ class NodeWriteRefused extends Error {
 async function commitUnderLock(input: {
   workspaceId: string;
   /** Whose authority binds a NEW target. Always the acting HUMAN, never a model's word. */
-  actingUserId: string;
+  actor: AccessActor;
   /** Who the answer's titles are for; `null` resolves none, for callers that discard the body. */
-  viewerId: TargetViewerId;
+  viewer: TargetViewerId;
   produce: WriteProducer;
   /** See {@link WithinNodeWrite}. Runs once the write is DECIDED, before the gate and before it is persisted. */
   within?: WithinNodeWrite;
@@ -362,7 +364,7 @@ async function commitUnderLock(input: {
    */
   seed?: boolean;
 }): Promise<ApplyWorkspaceNodeWriteResult> {
-  const { workspaceId, actingUserId, viewerId, produce, within } = input;
+  const { workspaceId, actor, viewer, produce, within } = input;
   const seedIfMissing = input.seed ?? true;
 
   /**
@@ -446,7 +448,7 @@ async function commitUnderLock(input: {
     const introduced = introducedPaneTargets(before.nodes, decision.persist.put);
     if (introduced.length > 0) {
       const allowed = await authorizePaneTargets(
-        { viewerId: actingUserId, workspaceId, targets: introduced },
+        { viewer: actor, workspaceId, targets: introduced },
         // Bound to the TRANSACTION: the conversation or shell being introduced
         // may be one `within` just created, and containment against a row this
         // transaction cannot see would refuse the write that created it.
@@ -626,7 +628,7 @@ async function commitUnderLock(input: {
       status: 'conflict',
       code: 'target_already_shown',
       detail: chatIndexRefusalDetail(attemptedChatBindings),
-      snapshot: await readWorkspaceNodes(workspaceId, viewerId),
+      snapshot: await readWorkspaceNodes(workspaceId, viewer),
     };
   }
 
@@ -637,7 +639,7 @@ async function commitUnderLock(input: {
   // Titles resolve OUTSIDE the lock: they are derived display data, so a racing
   // rename just means this response carries the title from a moment ago — never
   // a reason to hold the per-workspace serializing lock over more IO.
-  const snapshot = await withTargets(workspaceId, outcome.snapshot, viewerId);
+  const snapshot = await withTargets(workspaceId, outcome.snapshot, viewer);
 
   if (outcome.kind === 'stale') return { status: 'stale', snapshot };
   // Through the SAME resolution as `stale`, deliberately. The refusal answers
@@ -674,13 +676,13 @@ export async function applyWorkspaceNodeWrite(input: {
   baseRev: number;
   put: readonly WireWorkspaceNode[];
   drop: readonly string[];
-  viewerId: string;
+  viewer: AccessActor;
 }): Promise<ApplyWorkspaceNodeWriteResult> {
-  const { workspaceId, baseRev, put, drop, viewerId } = input;
+  const { workspaceId, baseRev, put, drop, viewer } = input;
   return commitUnderLock({
     workspaceId,
-    actingUserId: viewerId,
-    viewerId,
+    actor: viewer,
+    viewer,
     produce: () => ({ status: 'write', baseRev, put, drop }),
   });
 }
@@ -704,16 +706,16 @@ export async function applyWorkspaceNodeWrite(input: {
 export async function applyWorkspaceNodeCommand(input: {
   workspaceId: string;
   /** The acting HUMAN. The ACL gate is theirs — never the model's word. */
-  actingUserId: string;
+  actor: AccessActor;
   run: (nodes: readonly WorkspaceNode[]) => CommandResult;
 }): Promise<ApplyWorkspaceNodeWriteResult> {
-  const { workspaceId, actingUserId, run } = input;
+  const { workspaceId, actor, run } = input;
   return commitUnderLock({
     workspaceId,
-    actingUserId,
+    actor,
     // Nothing reads the body: these callers report `changed` and discard the
     // rest, so resolving a title for them would be authority spent on nothing.
-    viewerId: null,
+    viewer: null,
     produce: (nodes, rev) => {
       const result = run(nodes);
       if (!result.ok) return { status: 'refused', code: result.code, detail: result.detail };
@@ -758,7 +760,7 @@ export async function applyWorkspaceNodeCommand(input: {
 export async function destroyWorkspaceTree(input: {
   workspaceId: string;
   /** The acting HUMAN. Nothing new is bound here, so the gate has nothing to judge — but the funnel takes one. */
-  actingUserId: string;
+  actor: AccessActor;
   /**
    * Destroy only while the workspace is STILL ENDED, checked inside this
    * write's own transaction. `endSession` passes true and is the only caller
@@ -787,8 +789,8 @@ export async function destroyWorkspaceTree(input: {
 }): Promise<ApplyWorkspaceNodeWriteResult> {
   return commitUnderLock({
     workspaceId: input.workspaceId,
-    actingUserId: input.actingUserId,
-    viewerId: null,
+    actor: input.actor,
+    viewer: null,
     ...(input.requireEnded === true
       ? {
           within: async (tx) => {
@@ -858,7 +860,7 @@ export async function destroyWorkspaceTree(input: {
 export async function applyWorkspaceMembershipWrite(input: {
   workspaceId: string;
   /** The acting HUMAN. The binding gate is theirs — never a model's word. */
-  actingUserId: string;
+  actor: AccessActor;
   run: (nodes: readonly WorkspaceNode[]) => MembershipResult;
   within?: WithinNodeWrite;
   /**
@@ -872,14 +874,14 @@ export async function applyWorkspaceMembershipWrite(input: {
    */
   seed?: boolean;
 }): Promise<ApplyWorkspaceNodeWriteResult> {
-  const { workspaceId, actingUserId, run, within, seed } = input;
+  const { workspaceId, actor, run, within, seed } = input;
   return commitUnderLock({
     workspaceId,
-    actingUserId,
+    actor,
     // Nothing reads the body: membership callers report what happened and
     // discard the rest, so resolving a title for them would be authority
     // spent on nothing.
-    viewerId: null,
+    viewer: null,
     ...(seed === undefined ? {} : { seed }),
     produce: (nodes, rev) => {
       const result = run(nodes);
@@ -893,12 +895,12 @@ export async function applyWorkspaceMembershipWrite(input: {
 async function withTargets(
   workspaceId: string,
   snapshot: WorkspaceNodeSnapshot,
-  viewerId: TargetViewerId,
+  viewer: TargetViewerId,
 ): Promise<WorkspaceNodeSnapshotResponse> {
   return {
     rev: snapshot.rev,
     nodes: snapshot.nodes,
-    targets: await resolveTargets([{ workspaceId, nodes: snapshot.nodes }], viewerId, workspaceId),
+    targets: await resolveTargets([{ workspaceId, nodes: snapshot.nodes }], viewer, workspaceId),
   };
 }
 
@@ -910,10 +912,10 @@ interface TargetSubject {
 
 async function resolveTargets(
   subjects: readonly TargetSubject[],
-  viewerId: TargetViewerId,
+  viewer: TargetViewerId,
   workspaceId: string,
 ): Promise<WorkspaceNodeTarget[]> {
-  const byWorkspace = await resolveTargetsByWorkspace(subjects, viewerId);
+  const byWorkspace = await resolveTargetsByWorkspace(subjects, viewer);
   return byWorkspace.get(workspaceId) ?? [];
 }
 
@@ -945,10 +947,10 @@ async function resolveTargets(
  */
 async function resolveTargetsByWorkspace(
   subjects: readonly TargetSubject[],
-  viewerId: TargetViewerId,
+  viewer: TargetViewerId,
 ): Promise<Map<string, WorkspaceNodeTarget[]>> {
   const empty = new Map<string, WorkspaceNodeTarget[]>();
-  if (viewerId === null) {
+  if (viewer === null) {
     for (const subject of subjects) empty.set(subject.workspaceId, []);
     return empty;
   }
@@ -1037,8 +1039,8 @@ async function resolveTargetsByWorkspace(
   ]);
 
   const [readablePages, accessibleConversations] = await Promise.all([
-    resolveReadablePages(pageRows, viewerId),
-    resolveAccessibleConversations(chatRows, viewerId),
+    resolveReadablePages(pageRows, viewer),
+    resolveAccessibleConversations(chatRows, viewer),
   ]);
 
   const owners = new Map(workspaceRows.map((row) => [row.id, row.ownerId]));
@@ -1091,7 +1093,7 @@ async function resolveTargetsByWorkspace(
       const containedHere = wanted.has(`chat:${row.id}`);
       if (!containedHere && !accessibleConversations.has(row.id)) continue;
       const title = redactConversationTitleForViewer({
-        viewerId,
+        viewerId: viewer.userId,
         workspaceOwnerId,
         conversation: { ownerId: row.userId, isShared: row.isShared === true, title: row.title },
       });
@@ -1117,10 +1119,10 @@ async function resolveTargetsByWorkspace(
 /** The subset of `pageRows` this viewer may actually read. */
 async function resolveReadablePages(
   pageRows: ReadonlyArray<{ id: string }>,
-  viewerId: string,
+  viewer: AccessActor,
 ): Promise<Set<string>> {
   const decided = await Promise.all(
-    pageRows.map(async (row) => ((await getUserAccessLevel(viewerId, row.id)) !== null ? row.id : null)),
+    pageRows.map(async (row) => ((await getUserAccessLevel(viewer, row.id)) !== null ? row.id : null)),
   );
   return new Set(decided.filter((id): id is string => id !== null));
 }
@@ -1133,14 +1135,14 @@ async function resolveReadablePages(
  */
 async function resolveAccessibleConversations(
   chatRows: ReadonlyArray<{ id: string; userId: string; isShared: boolean | null; type: string; contextId: string | null }>,
-  viewerId: string,
+  viewer: AccessActor,
 ): Promise<Set<string>> {
   const decided = await Promise.all(
     chatRows.map(async (row) => {
       const allowed = await canAccessConversation(
-        viewerId,
+        viewer,
         { userId: row.userId, isShared: row.isShared === true, type: row.type, contextId: row.contextId },
-        { getPageAccess: async (userId, pageId) => (await getUserAccessLevel(userId, pageId)) !== null },
+        { getPageAccess: async (actor, pageId) => (await getUserAccessLevel(actor, pageId)) !== null },
       );
       return allowed ? row.id : null;
     }),

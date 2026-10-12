@@ -31,6 +31,7 @@ import type {
   AgentSessionStore,
   DriveEnvSpritePointers,
 } from './agent-workspaces-store';
+import type { AccessActor } from '../../permissions/access-actor';
 
 export interface SpawnAgentSessionDeps {
   store: Pick<AgentSessionStore, 'createIfUnderLimit'>;
@@ -55,7 +56,7 @@ export interface SpawnAgentSessionDeps {
    * dep. Called only when the env's substrate is `local`; a Sprite env's spawn
    * is byte-identical to before.
    */
-  gateLocalEnvBind: (input: { envId: string; requesterId: string }) => Promise<LocalEnvGateVerdict>;
+  gateLocalEnvBind: (input: { envId: string; requester: AccessActor }) => Promise<LocalEnvGateVerdict>;
   /**
    * The most NOT-ENDED sessions this owner may hold. REQUIRED, mirroring
    * `checkConcurrency` in `agent-workspace-sprite.ts`: the ceiling used to be a
@@ -119,13 +120,14 @@ export type SpawnAgentSessionResult =
  * instant and as free as spawning outside one.
  */
 export async function spawnAgentSession({
-  ownerId,
+  owner,
   driveId,
   envId,
   name,
   deps,
 }: {
-  ownerId: string;
+  /** The spawning caller, who owns the session; a local env bind is gated on their credential. */
+  owner: AccessActor;
   /** null = a global-assistant session (user-scoped, outside any drive). */
   driveId: string | null;
   /**
@@ -137,6 +139,7 @@ export async function spawnAgentSession({
   name?: string | null;
   deps: SpawnAgentSessionDeps;
 }): Promise<SpawnAgentSessionResult> {
+  const ownerId = owner.userId;
   const boundEnvId = envId ?? null;
   if (boundEnvId !== null) {
     const env = await deps.findEnv(boundEnvId);
@@ -149,7 +152,7 @@ export async function spawnAgentSession({
     // row exists — a refused bind never leaves a session pointing at hardware
     // it may not use.
     if (env.substrate === 'local') {
-      const verdict = await deps.gateLocalEnvBind({ envId: boundEnvId, requesterId: ownerId });
+      const verdict = await deps.gateLocalEnvBind({ envId: boundEnvId, requester: owner });
       if (!verdict.ok) return { ok: false, reason: 'env_bind_refused', refusal: verdict.refusal, cause: verdict.cause };
     }
   }

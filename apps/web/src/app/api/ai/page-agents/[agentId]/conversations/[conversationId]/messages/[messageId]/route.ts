@@ -10,6 +10,7 @@ import {
   processMessageContentUpdate,
 } from '@/lib/repositories/message-repository';
 import { getState, invalidate } from '@/lib/ai/core/compaction/compaction-repository';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -56,10 +57,10 @@ export async function PATCH(
         agentId: maskIdentifier(agentId),
       });
       auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'page_agent_message', resourceId: messageId, details: { reason: 'no_edit_permission', agentId, conversationId, method: 'PATCH' }, riskScore: 0.5 });
-      return NextResponse.json(
+      return deniedResponse(actorFromAuth(auth), agentId, NextResponse.json(
         { error: 'You do not have permission to edit messages in this chat' },
         { status: 403 }
-      );
+      ));
     }
 
     // Get the message to verify it exists, is active, and belongs to this conversation
@@ -190,10 +191,10 @@ export async function DELETE(
         agentId: maskIdentifier(agentId),
       });
       auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'page_agent_message', resourceId: messageId, details: { reason: 'no_edit_permission', agentId, conversationId, method: 'DELETE' }, riskScore: 0.5 });
-      return NextResponse.json(
+      return deniedResponse(actorFromAuth(auth), agentId, NextResponse.json(
         { error: 'You do not have permission to delete messages in this chat' },
         { status: 403 }
-      );
+      ));
     }
 
     // Get the message to verify it exists, is active, and belongs to this conversation

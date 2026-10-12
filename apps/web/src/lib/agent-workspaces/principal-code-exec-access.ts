@@ -28,12 +28,13 @@
 import { getPrincipalDriveMembership, isDriveScopedPrincipal, type AuthResult } from '@/lib/auth';
 import { getUserDrivePermissions } from '@pagespace/lib/permissions/permissions';
 import { fetchCustomRolePermissions } from '@pagespace/lib/permissions/membership-queries';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 export async function canPrincipalRunCodeInDrive(auth: AuthResult, driveId: string): Promise<boolean> {
   const membership = await getPrincipalDriveMembership(auth, driveId);
   if (!membership) return false;
   if (membership.role === null || !isDriveScopedPrincipal(auth)) {
-    return (await getUserDrivePermissions(auth.userId, driveId))?.canEdit === true;
+    return (await getUserDrivePermissions(actorFromAuth(auth), driveId))?.canEdit === true;
   }
   if (membership.role === 'OWNER' || membership.role === 'ADMIN') return true;
   if (!membership.customRoleId) return true;

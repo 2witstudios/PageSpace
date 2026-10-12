@@ -144,9 +144,6 @@ SEAT-8
 # and "nothing is deleted" clauses are proven elsewhere only in part.
 SEAT-9
 SEC-1
-SEC-2
-SEC-3
-SEC-4
 # SPEND-1 (partial, ow-c2, C3, ow-fix-ungated-ai): every chat turn, /btw, consult, v1, image, pulse,
 # workflow, trigger and mention call gates first; context compaction and the memory cron now reserve
 # before their model call; a realtime voice call resolves its drive before connecting (a page
@@ -244,19 +241,7 @@ WAL-8
 # pool cannot stand in); cron storage accrual settles on the pool with no hold or gate, so it can put a
 # paused or empty pool into debt; the personal usage breakdown still lists org compute under the recorded person.
 WAL-9
-# X-2: B3's "X-2 (partial)" test blocks ORGS_ENABLED while org tables are excluded from the GDPR
-# export; the export and account-deletion handling itself is the Phase 6 leaf yfmlkdchehmberwthwu6g7vt.
-X-2
-X-3
 # X-4 (realtime events for membership, visibility and wallet state): B4 proves one drive-member event
 # per affected user from the org membership sync, titled "X-4 (partial)"; wallet-state events and the
 # client updating without refresh are unproven until Wave C/F.
 X-4
-# X-6 (Negative tests: non-member sees no other org's Open drive; a guest sees exactly one
-# drive; a disabled policy refuses; an empty chosen wallet charges nothing; an automation never
-# charges a person) needs org/wallet resolution logic that does not exist until Wave B/C lands.
-# The seam guards and the Northwind fixture shape check in this lane are real tests but they
-# check code STRUCTURE, not these five authorization/spend behaviors — they do not prove X-6 and
-# their names no longer claim it (PR #2642 review thread PRRT_kwDOPhnPxc6ioz-F). Only remove this
-# line once a test exercises one of the five behaviors above against real resolution logic.
-X-6

@@ -11,6 +11,7 @@ import type { SessionAuthResult, AuthError } from '@/lib/auth';
 const mockGetBatchPagePermissions = vi.fn();
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   getBatchPagePermissions: (...args: unknown[]) => mockGetBatchPagePermissions(...args),
 }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -162,7 +163,7 @@ describe('POST /api/permissions/batch', () => {
       const request = createPostRequest({ pageIds });
       await POST(request as never);
 
-      expect(mockGetBatchPagePermissions).toHaveBeenCalledWith(mockUserId, pageIds);
+      expect(mockGetBatchPagePermissions).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }), pageIds);
     });
   });
 

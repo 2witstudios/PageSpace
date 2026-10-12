@@ -25,6 +25,7 @@ import {
   isUniqueViolation,
   validateEntryPage,
 } from './command-route-helpers';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 // GET /api/commands - list commands visible to the caller:
 // their personal commands + drive commands of drives they belong to
@@ -35,7 +36,7 @@ export async function GET(request: Request) {
     const userId = auth.userId;
 
     // Drives the user is a member of (page-level access does not count), org-aware.
-    const memberDriveIds = filterDrivesByMCPScope(auth, await getMemberDriveIds(userId, { includeTrashed: false }));
+    const memberDriveIds = filterDrivesByMCPScope(auth, await getMemberDriveIds(actorFromAuth(auth), { includeTrashed: false }));
 
     // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
     const visible = await db.query.commands.findMany({
@@ -175,10 +176,10 @@ export async function POST(request: Request) {
       if (scopeError) return scopeError;
       const allowed = await isPrincipalDriveOwnerOrAdmin(auth, commandDriveId);
       if (!allowed) {
-        return NextResponse.json(
+        return deniedResponse(actorFromAuth(auth), commandDriveId, NextResponse.json(
           { error: 'Only the drive owner or admins can manage drive commands' },
           { status: 403 }
-        );
+        ));
       }
     }
 

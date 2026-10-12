@@ -75,7 +75,7 @@ afterAll(async () => {
 
 const VIEW = { canView: true, canEdit: false, canShare: false };
 const EDIT = { canView: true, canEdit: true, canShare: false };
-const setFloor = (openDriveRoleFloor: 'view' | 'edit') => updateOrgPolicies({ orgId: w.orgId, actorId: w.owner, patch: { openDriveRoleFloor } });
+const setFloor = (openDriveRoleFloor: 'view' | 'edit') => updateOrgPolicies({ orgId: w.orgId, actorId: w.owner, actorAuthentication: null, patch: { openDriveRoleFloor } });
 const role = (driveId: string, name: string, isDefault: boolean, driveWidePermissions: typeof VIEW | null) =>
   createDriveRole(driveId, { name, isDefault, permissions: {}, driveWidePermissions });
 const defaults = (driveId: string) => db.select().from(driveRoles).where(eq(driveRoles.driveId, driveId)).then((rs) => rs.filter((r) => r.isDefault).map((r) => r.name));
