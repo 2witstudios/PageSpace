@@ -289,6 +289,27 @@ describe('POST /api/v1/chat/completions', () => {
     expect({ status: response.status, code: body.code, policy: body.policy }).toEqual({ status: 403, code: 'org_policy', policy: 'modelAllowlist' });
   });
 
+  test('WAL-8 (partial) the plan is judged again on the source the gate HELD: a pre-read Business that the gate moved onto Free own credits is refused 403 and its hold freed (D-OW-64)', async () => {
+    const { createAIProvider } = await import('@/lib/ai/core/provider-factory');
+    const { resolveEntitlementTier } = await import('@pagespace/lib/billing/credit-gate');
+    const mode = process.env.DEPLOYMENT_MODE;
+    process.env.DEPLOYMENT_MODE = 'cloud';
+    try {
+      vi.mocked(createAIProvider).mockResolvedValueOnce({ model: {}, provider: 'openai', modelName: 'openai/gpt-6-sol' } as never);
+      vi.mocked(resolveEntitlementTier).mockResolvedValueOnce('business');
+      vi.mocked(canConsumeAI).mockResolvedValueOnce({ allowed: true, reason: 'ok', holdId: 'h-held', walletId: 'w-own', spendSource: 'own_credits', entitlementTier: 'free' });
+      vi.mocked(releaseHold).mockClear();
+
+      const refused = await POST(makeRequest(validBody));
+
+      expect(refused.status).toBe(403);
+      expect((await refused.json()).error).toBe('Subscription required');
+      expect(releaseHold).toHaveBeenCalledWith('h-held');
+    } finally {
+      process.env.DEPLOYMENT_MODE = mode;
+    }
+  });
+
   test('POL-8 (partial) WAL-8 (partial) the pro-model gate takes the tier of whoever FUNDS the call, resolved on its spend', async () => {
     const { createAIProvider } = await import('@/lib/ai/core/provider-factory');
     const { resolveEntitlementTier } = await import('@pagespace/lib/billing/credit-gate');

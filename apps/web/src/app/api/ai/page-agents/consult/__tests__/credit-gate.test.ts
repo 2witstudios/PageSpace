@@ -254,6 +254,22 @@ describe('POST /api/ai/page-agents/consult — prepaid credit gate', () => {
     expect(generateText).not.toHaveBeenCalled();
   });
 
+  it('WAL-8 (partial) the plan is judged again on the source the gate HELD: a pre-read Business the gate moved onto Free own credits is refused 403 and the model never runs (D-OW-64)', async () => {
+    const { resolveEntitlementTier } = await import('@pagespace/lib/billing/credit-gate');
+    const { isModelAllowedForTier } = await import('@/lib/ai/core/ai-providers-config');
+    vi.mocked(isModelAllowedForTier).mockImplementation((_model, tier) => tier === 'business');
+    vi.mocked(resolveEntitlementTier).mockResolvedValueOnce('business');
+    vi.mocked(canConsumeAI).mockResolvedValueOnce({ allowed: true, reason: 'ok', holdId: 'h-held', walletId: 'w-own', spendSource: 'own_credits', entitlementTier: 'free' });
+    vi.mocked(generateText).mockClear();
+
+    const refused = await POST(makeRequest());
+
+    expect(refused.status).toBe(403);
+    expect(await refused.json()).toMatchObject({ error: 'Subscription required' });
+    expect(generateText).not.toHaveBeenCalled();
+    vi.mocked(isModelAllowedForTier).mockImplementation(() => true);
+  });
+
   it('POL-8 (partial) WAL-8 (partial) the pro-model gate takes the tier of whoever FUNDS the call, resolved on the consult\'s spend', async () => {
     const { resolveEntitlementTier } = await import('@pagespace/lib/billing/credit-gate');
     const { isModelAllowedForTier } = await import('@/lib/ai/core/ai-providers-config');

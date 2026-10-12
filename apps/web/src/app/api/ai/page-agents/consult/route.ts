@@ -379,6 +379,22 @@ export async function POST(request: Request) {
       // The gate's reservation for this call, released when usage is billed below.
       holdId = creditGate.holdId;
       walletId = creditGate.walletId;
+      // WAL-8 (D-OW-64): the plan is judged again on the tier of the source the gate actually
+      // HELD — the pre-read above can judge a source the gate then moved off (a wallet drained in
+      // between, a rule's fallback). A refusal frees the hold in the finally and charges nothing.
+      if (creditGate.entitlementTier !== undefined) {
+        const held = resolveGenerationAdmission({
+          provider: effectiveProvider,
+          model: effectiveModel,
+          subscriptionTier: creditGate.entitlementTier,
+          isAdmin: gateUser?.role === 'admin',
+          requiresProSubscription,
+        });
+        if (!held.allowed) {
+          auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'page_agent', resourceId: agentId, details: { reason: held.reason, provider: effectiveProvider, action: 'consult', method: 'POST', stage: 'held_source' }, riskScore: 0.5 });
+          return held.reason === 'provider_admin_only' ? createAdminRestrictedResponse() : createSubscriptionRequiredResponse();
+        }
+      }
       spend = resolvedSpend(spend, creditGate.spendSource, creditGate.fallbackFromWalletId);
       spendFallback = spendFallbackNotice(creditGate);
       conversationSourceWalletId = creditGate.conversationSourceWalletId;

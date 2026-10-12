@@ -304,6 +304,22 @@ export async function POST(request: Request): Promise<Response> {
     walletId = creditGate.walletId;
     spend = resolvedSpend(spend, creditGate.spendSource, creditGate.fallbackFromWalletId);
     spendFallback = spendFallbackNotice(creditGate);
+    // WAL-8 (D-OW-64): the plan is judged again on the tier of the source the gate actually HELD;
+    // the pre-read can judge a source the gate then moved off. A refusal frees the hold at once.
+    if (creditGate.entitlementTier !== undefined) {
+      const held = resolveGenerationAdmission({
+        provider: effectiveProvider,
+        model: providerResult.modelName,
+        subscriptionTier: creditGate.entitlementTier,
+        isAdmin: gateUser?.role === 'admin',
+        requiresProSubscription,
+      });
+      if (!held.allowed) {
+        if (holdId) await releaseHold(holdId).catch(() => {});
+        auditRequest(request, { eventType: 'authz.access.denied', userId: authResult.userId, resourceType: 'openai_inference', resourceId: pageId, details: { reason: held.reason, provider: effectiveProvider, method: 'POST', stage: 'held_source' }, riskScore: 0.5 });
+        return held.reason === 'provider_admin_only' ? createAdminRestrictedResponse() : createSubscriptionRequiredResponse();
+      }
+    }
   }
 
   // Ownership of the hold transfers to the streaming lifecycle only once we return the
