@@ -91,7 +91,7 @@ export const TENANT_EXPORT_COLUMNS: Readonly<Record<ExportTableName, TableColumn
       'adminRoleVersion', 'currentAiProvider', 'currentAiModel',
       'imageGenerationModel', 'storageUsedBytes', 'activeUploads',
       'lastStorageCalculated',
-      'stripeCustomerId', 'subscriptionTier', 'subscriptionGrandfathered', 'tosAcceptedAt',
+      'stripeCustomerId', 'subscriptionTier', 'tosAcceptedAt',
       'failedLoginAttempts', 'lockedUntil', 'suspendedAt', 'suspendedReason',
       'timezone', 'createdAt', 'updatedAt', 'starterSkillsInstalledAt',
       'onboardingCompletedAt',

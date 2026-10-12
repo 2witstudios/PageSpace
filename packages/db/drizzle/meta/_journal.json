@@ -2283,6 +2283,20 @@
       "when": 1791761719558,
       "tag": "0337_org_subscription_gifted",
       "breakpoints": true
+    },
+    {
+      "idx": 328,
+      "version": "7",
+      "when": 1791764394902,
+      "tag": "0338_personal_billing_cutover_guard",
+      "breakpoints": true
+    },
+    {
+      "idx": 329,
+      "version": "7",
+      "when": 1791764417285,
+      "tag": "0339_drop_personal_grandfathering",
+      "breakpoints": true
     }
   ]
 }

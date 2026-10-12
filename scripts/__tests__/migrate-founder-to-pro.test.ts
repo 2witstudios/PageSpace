@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createStripeReader, parseMode, planFounderCutover, runFounderMigration, type LiveSubscription, type MigrationDeps, type MigrationUser } from '../migrate-founder-to-pro';
+import { createStripeReader, parseBusinessManifest, parseMode, planFounderCutover, runFounderMigration, type LiveSubscription, type MigrationDeps, type MigrationUser } from '../migrate-founder-to-pro';
 
 const PRO = 'price_pro';
 const person = (overrides: Partial<MigrationUser> = {}): MigrationUser => ({
@@ -17,17 +17,66 @@ function harness(people = [person()], live = liveSub()) {
     listCandidates: async () => people,
     readCustomerSubscriptions: async (id) => { reads.push(id); return [{ id: 'sub_user', ...live }]; },
     apply: async (updates) => {
-      for (const { user, tier } of updates) { writes.push(user.id); user.tier = tier; }
+      for (const { user, tier } of updates) { writes.push(user.id); user.tier = tier; user.grandfathered = false; }
     },
   };
   return { deps, writes, reads, people };
 }
 
 describe('D-OW-42 Founder cutover preflight', () => {
+  it('A-9 normalizes synthetic on-prem tiers without Stripe and refuses real billing evidence', async () => {
+    const h = harness([person({ tier: 'business', customerId: null, subscriptions: [] })]);
+    h.deps.billingEnabled = false;
+    h.deps.proPriceId = '';
+    expect(await runFounderMigration(h.deps, { apply: true })).toMatchObject({ ready: true, normalized: 1 });
+    expect(h.people[0].tier).toBe('free');
+    expect(h.reads).toEqual([]);
+    h.people[0].customerId = 'cus_unverified';
+    expect(await runFounderMigration(h.deps, { apply: true })).toMatchObject({ ready: false, normalized: 0 });
+  });
+  it('A-9 rejects a mistyped manifest user without writing any other candidate', async () => {
+    const h = harness();
+    h.deps.businessDestinations = new Map([['missing', 'pro']]);
+    expect((await runFounderMigration(h.deps, { apply: true })).ready).toBe(false);
+    expect(h.writes).toEqual([]);
+  });
+  it('A-9 requires an explicit Business destination and verifies it before normalizing', async () => {
+    const h = harness([person({ tier: 'business', grandfathered: true })]);
+    h.deps.businessDestinations = new Map([['user', 'pro']]);
+    expect(await runFounderMigration(h.deps, { apply: false })).toMatchObject({ ready: true, normalized: 1 });
+    expect(h.writes).toEqual([]);
+    expect(await runFounderMigration(h.deps, { apply: true })).toMatchObject({ ready: true, normalized: 1 });
+    expect(h.people[0]).toMatchObject({ tier: 'pro', grandfathered: false });
+    expect(await runFounderMigration(h.deps, { apply: true })).toMatchObject({ ready: true, normalized: 0 });
+  });
+  it('A-9 refuses a manifest destination that differs from verified Stripe evidence', async () => {
+    const h = harness([person({ tier: 'business', grandfathered: true })]);
+    h.deps.businessDestinations = new Map([['user', 'free']]);
+    expect((await runFounderMigration(h.deps, { apply: true })).ready).toBe(false);
+    expect(h.writes).toEqual([]);
+  });
+  it('A-9 permits explicit Free only after the personal subscription has ended', async () => {
+    const h = harness([person({ tier: 'business', grandfathered: true,
+      subscriptions: [{ id: 'sub_user', priceId: 'price_retired_business', status: 'canceled' }] })],
+    liveSub({ status: 'canceled', priceIds: ['price_retired_business'] }));
+    h.deps.businessDestinations = new Map([['user', 'free']]);
+    expect((await runFounderMigration(h.deps, { apply: true })).ready).toBe(true);
+    expect(h.people[0]).toMatchObject({ tier: 'free', grandfathered: false });
+  });
+  it('A-9 validates a versioned manifest and rejects duplicate or unknown destinations', () => {
+    expect(parseBusinessManifest({ version: 1, users: [{ userId: 'user', tier: 'pro' }] })).toEqual(new Map([['user', 'pro']]));
+    for (const invalid of [null, {}, { version: 2, users: [] },
+      { version: 1, users: [{ userId: 'user', tier: 'business' }] },
+      { version: 1, users: [{ userId: 'user', tier: 'pro' }, { userId: 'user', tier: 'free' }] }]) {
+      expect(() => parseBusinessManifest(invalid)).toThrow();
+    }
+  });
   it('defaults to dry-run and rejects contradictory or unknown arguments', () => {
     expect(parseMode([])).toEqual({ apply: false });
     expect(parseMode(['--dry-run'])).toEqual({ apply: false });
     expect(parseMode(['--apply'])).toEqual({ apply: true });
+    expect(parseMode(['--business-manifest', '/tmp/destinations.json', '--apply'])).toEqual({ apply: true, businessManifest: '/tmp/destinations.json' });
+    expect(() => parseMode(['--business-manifest'])).toThrow();
     expect(() => parseMode(['--apply', '--dry-run'])).toThrow();
     expect(() => parseMode(['--force'])).toThrow();
   });

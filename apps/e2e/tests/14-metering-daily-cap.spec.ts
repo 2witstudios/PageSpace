@@ -5,16 +5,16 @@ import { mcpPost, resetMock, mockCallCount } from '../support/http';
 /**
  * The per-user/day exposure cap, exercised against the real chat route. A runaway loop can
  * stay within the in-flight concurrency cap yet accrue real spend all day; the daily cap is
- * the backstop. With enforcement ON and a small DAILY_CAP_BUSINESS_CENTS, once a user's
+ * the backstop. With enforcement ON and a small DAILY_CAP_PRO_CENTS, once a user's
  * holds + charged spend would cross the ceiling the route must return 429 `daily_cap_exceeded`
  * — without calling the model and without billing past the cap.
  *
  * GOTCHA: dailyExposureCapForTier reads DAILY_CAP_<TIER>_CENTS at CALL time, in the WEB
  * SERVER's process, so it must be in the app's launch env, NOT set from inside this spec.
- * This spec uses the `business` tier so the cap it relies on (DAILY_CAP_BUSINESS_CENTS)
- * doesn't perturb the other metering specs (which use pro/free).
+ * Run this spec separately from the other metering specs against an app launched
+ * with the Pro cap below. Personal accounts support Free/Pro only.
  * Launch the app for this run with (in addition to README.metering.md):
- *   DAILY_CAP_BUSINESS_CENTS=25
+ *   DAILY_CAP_PRO_CENTS=25
  * With the 25¢ stub-model hold estimate, the first call fits the 25¢ cap and the next is denied.
  */
 
@@ -24,7 +24,7 @@ test.use({ storageState: { cookies: [], origins: [] } });
 
 test('429 daily_cap_exceeded once the daily ceiling is reached; model not called, nothing billed past the cap', async ({ request }) => {
   const user = await seedUser({
-    tier: 'business',
+    tier: 'pro',
     provider: 'openrouter',
     monthlyRemainingCents: 100_000, // abundant credits → the daily cap, not the balance, is the limiter
     monthlyAllowanceCents: 100_000,
@@ -60,7 +60,7 @@ test('429 daily_cap_exceeded once the daily ceiling is reached; model not called
     }
   }
 
-  // The cap actually fired (requires DAILY_CAP_BUSINESS_CENTS in the app env — see header).
+  // The cap actually fired (requires DAILY_CAP_PRO_CENTS in the app env — see header).
   expect(capDenialSeen, 'expected a daily_cap_exceeded denial within the burst').toBe(true);
   // At least one call got through before the cap — proves we were "driven past" a real ceiling,
   // not denied from the first request.
