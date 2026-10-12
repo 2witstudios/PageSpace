@@ -359,7 +359,10 @@ async function pushMinMachinesRunning(
 /** The facts `apps/web` reads off a Stripe subscription and hands to the mirror. */
 export interface DedicatedSubscriptionFacts {
   publishedAppId: string;
-  userId: string;
+  /** Who bought it — for a personal drive's app, also who pays. Null once that person is gone. */
+  userId: string | null;
+  /** WAL-9: the org billed, for an org drive's app; null for a personal drive's. */
+  orgId: string | null;
   stripeSubscriptionId: string;
   stripePriceId: string;
   guestPreset: string;
@@ -477,6 +480,7 @@ export async function recordDedicatedSubscription(
     const values = {
       publishedAppId: facts.publishedAppId,
       userId: facts.userId,
+      orgId: facts.orgId,
       stripeSubscriptionId: facts.stripeSubscriptionId,
       stripePriceId: facts.stripePriceId,
       guestPreset: facts.guestPreset,

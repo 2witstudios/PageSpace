@@ -31,6 +31,9 @@
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
+import type { OrgRole } from '@pagespace/db/schema/organizations';
+import { orgRoleAtLeast } from '../../organizations/org-roles';
+
 import type { PublishedAppStatus, PublishedAppTier } from '@pagespace/db/schema/published-apps';
 import type { MachineConfig } from '../fly/flaps-client';
 import {
@@ -500,4 +503,53 @@ export function planSubscriptionMirrorWrite({
   }
 
   return { apply: true };
+}
+
+// ── Who buys, and whose bill it is (WAL-9) ───────────────────────────────────
+
+/**
+ * The party a dedicated subscription is bought for: the payer seam ("org if
+ * drives.orgId, else owner") applied to a Stripe purchase. A personal drive's app
+ * is billed to its owner's own Stripe customer; an org drive's app to the ORG's
+ * (`organizations.stripeCustomerId`), recorded under the Owner or Admin who bought
+ * it — never on that person's card.
+ */
+export type DedicatedPurchaser =
+  | { kind: 'user'; userId: string }
+  | { kind: 'org'; orgId: string; buyerUserId: string };
+
+/**
+ * Why a purchase is refused. `not_found`, not a 403, for a caller with no billing
+ * authority over the app: they must not learn an app id exists by the shape of the
+ * refusal. A LAPSED org buys nothing new (SEAT-9); an org with no Stripe customer
+ * has nothing to bill.
+ */
+export type DedicatedPurchaseRefusal = 'not_found' | 'org_lapsed' | 'org_billing_unavailable';
+
+/**
+ * Whether `callerId` may buy (or cancel) an app's dedicated tier, and for whom
+ * (pure). Billing authority over a personal drive is its owner's alone — a role
+ * can be granted, "may spend this person's money" cannot; over an org drive it is
+ * the org's Owner or Admin, who manage its billing. A cancel only ever stops a
+ * charge, so neither a lapse nor a missing customer blocks it.
+ */
+export function decideDedicatedPurchaser(input: {
+  payer: { kind: 'user'; userId: string } | { kind: 'org'; orgId: string };
+  callerId: string;
+  /** The caller's role in the payer org; null when not a member (or the payer is a person). */
+  callerOrgRole: OrgRole | null;
+  action: 'buy' | 'cancel';
+  orgActive: boolean;
+  orgHasStripeCustomer: boolean;
+}): { ok: true; purchaser: DedicatedPurchaser } | { ok: false; reason: DedicatedPurchaseRefusal } {
+  const { payer } = input;
+  if (payer.kind === 'user') {
+    return payer.userId === input.callerId
+      ? { ok: true, purchaser: { kind: 'user', userId: payer.userId } }
+      : { ok: false, reason: 'not_found' };
+  }
+  if (!orgRoleAtLeast(input.callerOrgRole, 'ADMIN')) return { ok: false, reason: 'not_found' };
+  if (input.action === 'buy' && !input.orgActive) return { ok: false, reason: 'org_lapsed' };
+  if (input.action === 'buy' && !input.orgHasStripeCustomer) return { ok: false, reason: 'org_billing_unavailable' };
+  return { ok: true, purchaser: { kind: 'org', orgId: payer.orgId, buyerUserId: input.callerId } };
 }

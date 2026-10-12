@@ -42,33 +42,6 @@ export function destinationDriveSpend(
     : { userId: payer.userId, spend: PERSONAL_SPEND };
 }
 
-/**
- * The refusal for an org payer at the ONE charge site that still cannot bill an org: dedicated
- * published-app hosting, which is a Stripe subscription item on the payer's card, not a wallet
- * debit. Every WALLET compute site (sandbox runtime, terminal, browsers, environments,
- * published-app awake time, machine storage) charges the org pool through `compute-gate.ts`
- * (WAL-9) and no longer uses this. A dedicated purchase for an org drive is refused by name;
- * it never commits the lead's card for the org's app.
- */
-export const ORG_BILLING_PENDING = 'org_billing_pending' as const;
-
-export interface OrgBillingPendingRefusal {
-  code: typeof ORG_BILLING_PENDING;
-  orgId: string;
-  message: string;
-}
-
-export const ORG_BILLING_PENDING_MESSAGE =
-  "This drive belongs to an organization, and dedicated hosting can't be billed to an organization yet.";
-
-export type UserPayerResult = { ok: true; userId: string } | { ok: false; refusal: OrgBillingPendingRefusal };
-
-/** A person to charge, or the named interim refusal for an org payer. Never a substitute. */
-export function requireUserPayer(payer: BillingPayer): UserPayerResult {
-  if (payer.kind === 'user') return { ok: true, userId: payer.userId };
-  return { ok: false, refusal: { code: ORG_BILLING_PENDING, orgId: payer.orgId, message: ORG_BILLING_PENDING_MESSAGE } };
-}
-
 /** Resolves a drive's billing facts; null when it can't be resolved (e.g. a stale read mid-delete). */
 export type LookupDriveBillingFacts = (driveId: string) => Promise<DriveBillingFacts | null>;
 

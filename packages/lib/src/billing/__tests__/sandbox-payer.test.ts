@@ -12,9 +12,7 @@ import {
   resolveSessionPayer,
   resolveEnvPayer,
   resolveEnvCharge,
-  requireUserPayer,
   lookupDriveBillingFacts,
-  ORG_BILLING_PENDING,
   type DriveBillingFacts,
 } from '../sandbox-payer';
 
@@ -127,21 +125,6 @@ describe('resolveSessionPayer', () => {
     const b = await resolveSessionPayer({ driveId: 'd', ownerId: 'b', lookupDriveBillingFacts: lookup });
     expect(a).toEqual({ kind: 'user', userId: 'other-owner' });
     expect(b).toEqual({ kind: 'user', userId: 'other-owner' });
-  });
-});
-
-describe('requireUserPayer (dedicated hosting only: a Stripe card purchase cannot be made for an org)', () => {
-  it('passes a person through', () => {
-    expect(requireUserPayer({ kind: 'user', userId: 'owner-1' })).toEqual({ ok: true, userId: 'owner-1' });
-  });
-
-  it('WAL-9 (partial) refuses an org payer by name — it never substitutes a person', () => {
-    const result = requireUserPayer({ kind: 'org', orgId: 'org-northwind' });
-    expect(result).toEqual({
-      ok: false,
-      refusal: { code: ORG_BILLING_PENDING, orgId: 'org-northwind', message: expect.any(String) },
-    });
-    expect(ORG_BILLING_PENDING).toBe('org_billing_pending');
   });
 });
 

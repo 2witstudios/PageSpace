@@ -42,6 +42,8 @@ export async function handleDedicatedSubscriptionEvent(
 ): Promise<void> {
   const publishedAppId = subscription.metadata?.publishedAppId;
   const userId = subscription.metadata?.userId;
+  // WAL-9: the org billed, for an org drive's app (the purchase path stamps it).
+  const orgId = subscription.metadata?.orgId;
   const guestPreset = subscription.metadata?.guestPreset;
 
   // Prefer the metadata the purchase path stamped; fall back to the existing
@@ -50,11 +52,13 @@ export async function handleDedicatedSubscriptionEvent(
   // subscription). Only if BOTH are empty is there nothing to act on.
   const existing = await findDedicatedSubscriptionByStripeId(subscription.id);
   const resolvedAppId = publishedAppId ?? existing?.publishedAppId;
-  const resolvedUserId = userId ?? existing?.userId;
+  const resolvedUserId = userId ?? existing?.userId ?? null;
+  const resolvedOrgId = orgId ?? existing?.orgId ?? null;
   const resolvedPreset = guestPreset ?? existing?.guestPreset;
   const priceId = subscription.items?.data?.[0]?.price?.id ?? existing?.stripePriceId;
 
-  if (!resolvedAppId || !resolvedUserId || !resolvedPreset || !priceId) {
+  // A subscription names who pays: the org, or (a personal drive's app) the person.
+  if (!resolvedAppId || (!resolvedUserId && !resolvedOrgId) || !resolvedPreset || !priceId) {
     loggers.api.warn('Dedicated hosting subscription event could not be resolved to an app; acking', {
       eventId,
       stripeSubscriptionId: subscription.id,
@@ -68,6 +72,7 @@ export async function handleDedicatedSubscriptionEvent(
   const mirror = await recordDedicatedSubscription({
     publishedAppId: resolvedAppId,
     userId: resolvedUserId,
+    orgId: resolvedOrgId,
     stripeSubscriptionId: subscription.id,
     stripePriceId: priceId,
     guestPreset: resolvedPreset,
