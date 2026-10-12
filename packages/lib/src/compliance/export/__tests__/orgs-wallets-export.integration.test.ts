@@ -258,8 +258,8 @@ afterAll(async () => {
   await pool.end();
 });
 
-describe('GDPR export org + wallet scope (X-2 (partial), real PG)', () => {
-  it('X-2 (partial) exports the orgs the subject OWNS, and only those', async () => {
+describe('X-2 GDPR export carries the subject\'s org membership, wallets and donations, and no one else\'s (real PG)', () => {
+  it('X-2 exports the orgs the subject OWNS, and only those', async () => {
     expect(await collectUserOrganizations(database, subjectId)).toEqual([]);
     const owned = await collectUserOrganizations(database, ownerId);
     expect(owned.map((org) => org.id).sort()).toEqual([orgId, leftOrgId].sort());
@@ -269,7 +269,7 @@ describe('GDPR export org + wallet scope (X-2 (partial), real PG)', () => {
     }
   });
 
-  it('X-2 (partial) exports the subject\'s membership with THEIR seat allowance — not the pool balance, not the other member\'s allowance', async () => {
+  it('X-2 exports the subject\'s membership with THEIR seat allowance — not the pool balance, not the other member\'s allowance', async () => {
     const file = await collectUserOrgMembership(database, subjectId);
     expect(file.memberships).toHaveLength(1);
     expect(file.memberships[0]).toMatchObject({
@@ -284,7 +284,7 @@ describe('GDPR export org + wallet scope (X-2 (partial), real PG)', () => {
     expect(JSON.stringify(file.memberships)).not.toContain('9000');
   });
 
-  it('X-2 (partial) exports the subject\'s departures, join requests (with their own note) and guest holds — only their own', async () => {
+  it('X-2 exports the subject\'s departures, join requests (with their own note) and guest holds — only their own', async () => {
     const file = await collectUserOrgMembership(database, subjectId);
 
     expect(file.departures).toHaveLength(1);
@@ -306,7 +306,7 @@ describe('GDPR export org + wallet scope (X-2 (partial), real PG)', () => {
     expect(JSON.stringify(file.guestHolds)).not.toContain(otherMemberId);
   });
 
-  it('X-2 (partial) exports the personal root wallet and BOTH legs the subject funded — never the pool, never the other member\'s donation (SPEND-9 (partial), D18)', async () => {
+  it('X-2 exports the personal root wallet and BOTH legs the subject funded — never the pool, never the other member\'s donation (SPEND-9 (partial), D18)', async () => {
     const walletFile = await collectUserWallet(database, subjectId);
 
     expect(walletFile.wallet).toMatchObject({ id: subjectWalletId, monthlyRemainingCents: 1_234 });
@@ -336,7 +336,7 @@ describe('GDPR export org + wallet scope (X-2 (partial), real PG)', () => {
     expect(walletFile.spendOverrides).toEqual([{ driveId: orgDriveId, createdAt: expect.any(Date) }]);
   });
 
-  it('X-2 (partial) names the org on every drive row it exports — org drives and personal drives are distinguishable in the subject\'s own bundle', async () => {
+  it('X-2 names the org on every drive row it exports — org drives and personal drives are distinguishable in the subject\'s own bundle', async () => {
     const drivesExport = await collectUserDrives(database, subjectId);
     const byId = new Map(drivesExport.map((drive) => [drive.id, drive]));
     expect(byId.get(orgDriveId)?.orgId).toBe(orgId);
