@@ -106,6 +106,10 @@ vi.mock('@pagespace/db/db', () => ({
   db: { transaction: mockTransaction },
 }));
 
+vi.mock('@/lib/ai/core/org-model-policy', () => ({
+  agentModelSaveRefusal: vi.fn(),
+}));
+
 vi.mock('@pagespace/db/schema/members', () => ({
   driveAgentMembers: 'driveAgentMembers_table',
 }));
@@ -121,6 +125,7 @@ import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { driveAgentMembers } from '@pagespace/db/schema/members';
 import { pages } from '@pagespace/db/schema/core';
+import { agentModelSaveRefusal } from '@/lib/ai/core/org-model-policy';
 
 // Test fixtures
 const mockUserId = 'user_123';
@@ -177,6 +182,34 @@ describe('POST /api/ai/page-agents/create', () => {
 
     // Default: position calculation returns 1
     vi.mocked(pageAgentRepository.getNextPosition).mockResolvedValue(1);
+
+    // Default: the drive's org allows the model (or there is no org)
+    vi.mocked(agentModelSaveRefusal).mockResolvedValue({ ok: true });
+  });
+
+  describe('the org model allowlists (POL-8)', () => {
+    it('POL-8 (partial) a chosen model the drive\'s org does not allow is refused 403 naming the policy, and no agent is created', async () => {
+      vi.mocked(agentModelSaveRefusal).mockResolvedValue({ ok: false, code: 'org_policy', reason: 'org_policy', policy: 'modelAllowlist', status: 403, message: "This organization doesn't allow that AI model." });
+      const response = await POST(createRequest({
+        driveId: mockDriveId,
+        title: 'Test Agent',
+        systemPrompt: 'You are helpful.',
+        aiProvider: 'openrouter',
+        aiModel: 'openai/gpt-5.4-nano',
+      }));
+
+      expect(response.status).toBe(403);
+      expect(await response.json()).toMatchObject({ code: 'org_policy', policy: 'modelAllowlist' });
+      expect(agentModelSaveRefusal).toHaveBeenCalledWith(mockDriveId, { provider: 'openrouter', modelId: 'openai/gpt-5.4-nano' });
+      expect(mockTransaction).not.toHaveBeenCalled();
+    });
+
+    it('POL-8 (partial) with no model chosen, the product default is stored and judged when it runs, not at save', async () => {
+      const response = await POST(createRequest({ driveId: mockDriveId, title: 'Test Agent', systemPrompt: 'You are helpful.' }));
+
+      expect(response.status).toBe(200);
+      expect(agentModelSaveRefusal).not.toHaveBeenCalled();
+    });
   });
 
   describe('authentication', () => {

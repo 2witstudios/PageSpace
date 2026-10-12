@@ -41,12 +41,12 @@ import { describeErrorCause } from '@/lib/ai/openai-api/describe-error-cause';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { AIMonitoring, extractOpenRouterCostDollars, extractOpenRouterGenerationIds } from '@pagespace/lib/monitoring/ai-monitoring';
-import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
+import { canConsumeAI, resolveEntitlementTier } from '@pagespace/lib/billing/credit-gate';
 import { conversationSpend, resolvedSpend } from '@pagespace/lib/billing/spend-target';
 import { spendFallbackHeaders, spendFallbackNotice, type SpendFallbackNotice } from '@pagespace/lib/billing/spend-fallback';
 import { isMeteringExempt } from '@pagespace/lib/ai/model-defaults';
-import { ADMIN_ONLY_PROVIDERS } from '@/lib/ai/core/ai-providers-config';
-import { createAdminRestrictedResponse } from '@/lib/subscription/rate-limit-middleware';
+import { resolveGenerationAdmission } from '@/lib/ai/core/generation-admission';
+import { createAdminRestrictedResponse, createSubscriptionRequiredResponse, requiresProSubscription } from '@/lib/subscription/rate-limit-middleware';
 import { MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
 import { estimateChatHoldCentsForModel } from '@pagespace/lib/monitoring/chat-pricing';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
@@ -233,13 +233,26 @@ export async function POST(request: Request): Promise<Response> {
     .from(users)
     .where(eq(users.id, authResult.userId));
 
-  // Admin-only providers (the direct Z.ai Coder Plan) are unmetered and must never be
-  // reachable by a non-admin — otherwise any user able to drive a glm-configured agent
-  // could consume the admin subscription for free. The interactive chat routes enforce
-  // this; this MCP inference route must too.
-  if (ADMIN_ONLY_PROVIDERS.has(effectiveProvider) && gateUser?.role !== 'admin') {
-    auditRequest(request, { eventType: 'authz.access.denied', userId: authResult.userId, resourceType: 'openai_inference', resourceId: pageId, details: { reason: 'admin_only_provider', provider: effectiveProvider, method: 'POST' }, riskScore: 0.5 });
-    return createAdminRestrictedResponse();
+  const consumerTier = toPersonalSubscriptionTier(gateUser?.subscriptionTier);
+  // The call is a conversation on the agent page, so its session is the page's drive
+  // (SPEND-7). A thread (conversation_id) carries its stored source (SPEND-3); the gate reads
+  // it only when the caller owns that conversation. A stateless call has none.
+  let spend = conversationSpend(page.driveId, incomingConversationId ?? null);
+
+  // The SHARED entitlement decision a chat turn applies (generation-admission.ts): an
+  // admin-only provider (the unmetered Z.ai Coder Plan) is a role block, so no one able to
+  // drive a glm-configured agent consumes the admin subscription; a paid-tier model is a tier
+  // block — for the tier of whoever funds this call (WAL-8, POL-8), as the spend resolution names it.
+  const admission = resolveGenerationAdmission({
+    provider: effectiveProvider,
+    model: providerResult.modelName,
+    subscriptionTier: await resolveEntitlementTier(authResult.userId, consumerTier, spend),
+    isAdmin: gateUser?.role === 'admin',
+    requiresProSubscription,
+  });
+  if (!admission.allowed) {
+    auditRequest(request, { eventType: 'authz.access.denied', userId: authResult.userId, resourceType: 'openai_inference', resourceId: pageId, details: { reason: admission.reason, provider: effectiveProvider, method: 'POST' }, riskScore: 0.5 });
+    return admission.reason === 'provider_admin_only' ? createAdminRestrictedResponse() : createSubscriptionRequiredResponse();
   }
 
   // The gate's reservation for this call, released when usage is billed in onFinish.
@@ -249,15 +262,11 @@ export async function POST(request: Request): Promise<Response> {
   let holdId: string | undefined;
   // The wallet the hold was placed on, threaded to settlement with it (WAL-5).
   let walletId: string | undefined;
-  // The call is a conversation on the agent page, so its session is the page's drive
-  // (SPEND-7). A thread (conversation_id) carries its stored source (SPEND-3); the gate reads
-  // it only when the caller owns that conversation. A stateless call has none.
-  let spend = conversationSpend(page.driveId, incomingConversationId ?? null);
   // SPEND-4: a drive rule that moved the call to another source is reported on the response
   // (the X-Spend-Fallback-* headers), never applied silently.
   let spendFallback: SpendFallbackNotice | null = null;
   if (!isMeteringExempt(effectiveProvider)) {
-    const creditGate = await canConsumeAI(authResult.userId, toPersonalSubscriptionTier(gateUser?.subscriptionTier), {
+    const creditGate = await canConsumeAI(authResult.userId, consumerTier, {
       spend,
       estCostCents: estimateChatHoldCentsForModel(page.aiModel ?? undefined),
       maxInFlight: MAX_CHAT_INFLIGHT,

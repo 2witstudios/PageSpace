@@ -102,7 +102,7 @@ export async function compactField(
   const providerResult = await createAIProvider(userId, {
     selectedProvider: BACKGROUND_HEAVY_PROVIDER,
     selectedModel: BACKGROUND_HEAVY_MODEL,
-  });
+  }, { driveId: null });
 
   if (isProviderError(providerResult)) {
     loggers.api.error('Memory compaction: provider error', {

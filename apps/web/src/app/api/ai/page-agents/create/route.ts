@@ -12,6 +12,7 @@ import {
   toolSurfaceEcho,
 } from '@/lib/ai/core/agent-tool-surface';
 import { DEFAULT_PROVIDER, DEFAULT_MODEL, ONPREM_ALLOWED_PROVIDERS, isValidModel } from '@/lib/ai/core/ai-providers-config';
+import { agentModelSaveRefusal } from '@/lib/ai/core/org-model-policy';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { pageAgentRepository, type AgentData } from '@/lib/repositories/page-agent-repository';
@@ -155,6 +156,14 @@ export async function POST(request: Request) {
         { error: `Invalid AI model selection: ${agentProvider} / ${agentModel}` },
         { status: 400 }
       );
+    }
+
+    // POL-8: a model the caller chose must be one the drive's org allows (the product default is judged when it runs).
+    if (aiProvider && aiModel) {
+      const decision = await agentModelSaveRefusal(drive.id, { provider: agentProvider, modelId: agentModel });
+      if (!decision.ok) {
+        return NextResponse.json({ error: decision.message, code: decision.code, policy: decision.policy }, { status: decision.status });
+      }
     }
 
     // Get next position

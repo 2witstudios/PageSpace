@@ -12,7 +12,7 @@ import { estimateChatHoldCentsForModel } from '@pagespace/lib/monitoring/chat-pr
 import { isMeteringExempt } from '@pagespace/lib/ai/model-defaults';
 import { callAdmission } from '@pagespace/lib/billing/call-admission';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
-import type { SpendTarget } from '@pagespace/lib/billing/spend-target';
+import { spendDriveId, type SpendTarget } from '@pagespace/lib/billing/spend-target';
 import { createAIProvider, isProviderError } from '@/lib/ai/core/provider-factory';
 import { gateUserCall } from '@/lib/ai/core/user-credit-hold';
 import { maskIdentifier } from '@/lib/logging/mask';
@@ -116,7 +116,7 @@ export async function runCompaction(params: RunCompactionParams): Promise<void> 
     const providerResult = await createAIProvider(userId, {
       selectedProvider: provider,
       selectedModel: compactionModel,
-    });
+    }, { driveId: spendDriveId(spend) });
 
     if (isProviderError(providerResult)) {
       console.warn('[compaction] provider unavailable:', providerResult.error);

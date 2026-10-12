@@ -255,7 +255,7 @@ async function enrichTranscript(
       });
       return { summary: '', actionItems: [], skippedReason: 'no_drive_wallet' };
     }
-    const settleOn = { userId: billing.userId, walletId: hold.walletId };
+    const settleOn = { driveId: targetDriveId, userId: billing.userId, walletId: hold.walletId };
     const [summary, actionItems] = await Promise.all([
       connection.includeAiSummary ? generateTranscriptSummary(connection.userId, plainText, settleOn) : Promise.resolve(''),
       connection.includeActionItems ? extractActionItems(connection.userId, plainText, settleOn) : Promise.resolve([]),

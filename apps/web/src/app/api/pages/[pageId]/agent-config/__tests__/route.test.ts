@@ -64,6 +64,11 @@ const {
 vi.mock('@/services/api/page-mutation-service', () => ({
   applyPageMutation: (...args: unknown[]) => mockApplyPageMutation(...args),
   PageRevisionMismatchError: MockPageRevisionMismatchError,
+  // POL-8: the real mapping's shape — an error carrying an org-policy refusal becomes its 403 body.
+  orgModelPolicyErrorResponse: (error: unknown) => {
+    const refusal = (error as { refusal?: { message: string; code: string; policy: string; status: 403 } } | null)?.refusal;
+    return refusal ? { body: { error: refusal.message, code: refusal.code, policy: refusal.policy }, status: refusal.status } : null;
+  },
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -801,6 +806,19 @@ describe('PATCH /api/pages/[pageId]/agent-config', () => {
       expect(response.status).toBe(200);
       expect(body.success).toBe(true);
       expect(mockApplyPageMutation).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('the org model allowlists (POL-8)', () => {
+    it('POL-8 (partial) a model the drive\'s org does not allow is refused 403 naming the policy, not a 500', async () => {
+      mockApplyPageMutation.mockRejectedValueOnce(Object.assign(new Error('refused'), {
+        refusal: { message: "This organization doesn't allow that AI model.", code: 'org_policy', policy: 'modelAllowlist', status: 403 },
+      }));
+
+      const response = await PATCH(createPatchRequest({ systemPrompt: 'test' }), mockParams);
+
+      expect(response.status).toBe(403);
+      expect(await response.json()).toMatchObject({ code: 'org_policy', policy: 'modelAllowlist' });
     });
   });
 

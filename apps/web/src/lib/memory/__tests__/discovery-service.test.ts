@@ -15,6 +15,12 @@ vi.mock('@pagespace/lib/permissions/member-drives', () => ({
   getMemberDriveIds: (userId: string, options: { includeTrashed: boolean }) => mockGetMemberDriveIds(userId, options),
 }));
 
+// POL-8: the drives whose org lets the discovery model read them. Default: every drive.
+const mockScopeReadableByModel = vi.fn(async (_use: { provider: string; modelId: string }, scope: { driveIds: readonly string[] }) => ({ driveIds: [...scope.driveIds], pageIds: [] as string[] }));
+vi.mock('@/lib/ai/core/org-model-policy', () => ({
+  scopeReadableByModel: (use: { provider: string; modelId: string }, scope: { driveIds: readonly string[] }) => mockScopeReadableByModel(use, scope),
+}));
+
 const mockDbSelect = vi.fn();
 vi.mock('@pagespace/db/db', () => ({
   db: { select: (...args: unknown[]) => mockDbSelect(...args) },
@@ -172,6 +178,21 @@ describe('runDiscoveryPasses', () => {
       actual: mockGetMemberDriveIds.mock.calls,
       expected: [['user-org-member', { includeTrashed: true }], ['user-org-member', { includeTrashed: true }]],
     });
+  });
+
+  it('POL-8 (partial) reads only the member drives whose org allows the discovery model, for both scopes', async () => {
+    mockGetMemberDriveIds.mockResolvedValueOnce(['personal', 'strict-org']).mockResolvedValueOnce(['personal', 'strict-org']);
+    const strictOrgOut = async (_use: unknown, scope: { driveIds: readonly string[] }) => ({ driveIds: scope.driveIds.filter((d) => d !== 'strict-org'), pageIds: [] });
+    mockScopeReadableByModel.mockImplementationOnce(strictOrgOut).mockImplementationOnce(strictOrgOut);
+    setupDb(messages(10));
+    mockGenerateObject.mockResolvedValue({ object: { claims: [] }, usage: { inputTokens: 10, outputTokens: 5 } });
+
+    const { runDiscoveryPasses } = await import('../discovery-service');
+    await runDiscoveryPasses('user-org-member');
+    const { inArray } = await import('@pagespace/db/operators');
+
+    expect(mockScopeReadableByModel).toHaveBeenCalledWith({ provider: 'anthropic', modelId: 'anthropic/claude-sonnet-5' }, { driveIds: ['personal', 'strict-org'] });
+    expect(vi.mocked(inArray).mock.calls.map((c) => c[1])).toEqual([['personal'], ['personal']]);
   });
 
   it('tags each claim with the field of the pass that produced it', async () => {

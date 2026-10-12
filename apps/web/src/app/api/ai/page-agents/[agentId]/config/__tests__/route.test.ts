@@ -81,6 +81,11 @@ vi.mock('@/lib/ai/core/ai-tools', () => ({
 
 vi.mock('@/services/api/page-mutation-service', () => ({
   applyPageMutation: vi.fn(),
+  // POL-8: the real mapping's shape — an error carrying an org-policy refusal becomes its 403 body.
+  orgModelPolicyErrorResponse: (error: unknown) => {
+    const refusal = (error as { refusal?: { message: string; code: string; policy: string; status: 403 } } | null)?.refusal;
+    return refusal ? { body: { error: refusal.message, code: refusal.code, policy: refusal.policy }, status: refusal.status } : null;
+  },
   PageRevisionMismatchError: class PageRevisionMismatchError extends Error {
     currentRevision: number;
     expectedRevision?: number;

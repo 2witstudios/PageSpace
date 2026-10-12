@@ -10,7 +10,7 @@ import { validateAgentModelSelection } from '@/lib/ai/core/ai-providers-config';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
-import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
+import { applyPageMutation, orgModelPolicyErrorResponse, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
@@ -304,6 +304,9 @@ export async function PATCH(
           },
         });
       } catch (error) {
+        // POL-8: a model or provider the drive's org does not allow is refused, nothing saved.
+        const refused = orgModelPolicyErrorResponse(error);
+        if (refused) return NextResponse.json(refused.body, { status: refused.status });
         if (error instanceof PageRevisionMismatchError) {
           return NextResponse.json(
             {

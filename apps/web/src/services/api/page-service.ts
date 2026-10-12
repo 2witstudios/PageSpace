@@ -20,7 +20,7 @@ import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
 import { createChangeGroupId, inferChangeGroupType } from '@pagespace/lib/monitoring/change-group';
 import { logActivityWithTx, type DeferredWorkflowTrigger } from '@pagespace/lib/monitoring/activity-logger';
 import { createId } from '@paralleldrive/cuid2';
-import { applyPageMutation, PageRevisionMismatchError, type PageMutationContext } from './page-mutation-service';
+import { applyPageMutation, OrgModelPolicyError, PageRevisionMismatchError, type PageMutationContext } from './page-mutation-service';
 import { isSheetType } from '@pagespace/lib/sheets/sheet';
 import { readSheetDocument } from '@pagespace/lib/sheets/store';
 import { ensureTaskItemForPage, ensureTaskListForPage } from './task-sync-service';
@@ -30,6 +30,7 @@ import {
   MEMORY_PAGE_MOVE_ERROR,
 } from '@pagespace/lib/memory/memory-pages';
 import { OrgLapsedError, checkPageMayLoosen } from '@pagespace/lib/permissions/org-lapse-guard';
+import { agentModelSaveRefusal } from '@/lib/ai/core/org-model-policy';
 
 /**
  * Helper to convert DB page result to PageData type
@@ -588,6 +589,10 @@ export const pageService = {
           await applyPageMutation(mutation);
         }
       } catch (error) {
+        // POL-8: a model or provider the drive's org does not allow is refused, nothing saved.
+        if (error instanceof OrgModelPolicyError) {
+          return { success: false, error: error.message, status: error.refusal.status };
+        }
         if (error instanceof PageRevisionMismatchError) {
           return {
             success: false,
@@ -813,6 +818,13 @@ export const pageService = {
       if (!toolValidation.valid) {
         return { success: false, error: toolValidation.errors.join('. '), status: 400 };
       }
+    }
+
+    // POL-8: a model or provider the request sets must be one the drive's org allows. A defaulted pair (the
+    // creator's own selection) is not a choice made here; the provider factory judges it when it runs.
+    if (isAIChatPage(params.type as PageTypeEnum) && (params.aiProvider || params.aiModel)) {
+      const decision = await agentModelSaveRefusal(drive.id, { provider: params.aiProvider, modelId: params.aiModel });
+      if (!decision.ok) return { success: false, error: decision.message, status: decision.status };
     }
 
     // Get default AI settings for AI_CHAT pages

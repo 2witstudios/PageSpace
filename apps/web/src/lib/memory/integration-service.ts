@@ -288,7 +288,7 @@ Remember: You are writing the COMPLETE page, not just additions. Preserve what m
   const providerResult = await createAIProvider(userId, {
     selectedProvider: BACKGROUND_HEAVY_PROVIDER,
     selectedModel: BACKGROUND_HEAVY_MODEL,
-  });
+  }, { driveId: null });
 
   if (isProviderError(providerResult)) {
     loggers.api.error('Memory integration: provider error', {

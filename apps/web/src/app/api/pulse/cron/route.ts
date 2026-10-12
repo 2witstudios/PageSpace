@@ -33,6 +33,7 @@ import {
 import { readPageContent } from '@pagespace/lib/services/page-content-store';
 import { accessiblePageIds } from '@pagespace/lib/permissions/accessible-page-ids';
 import { getMemberDriveIds } from '@pagespace/lib/permissions/member-drives';
+import { scopeReadableByModel } from '@/lib/ai/core/org-model-policy';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { AIMonitoring, discardUsageOutcome, extractOpenRouterCostDollars, extractOpenRouterGenerationIds } from '@pagespace/lib/monitoring/ai-monitoring';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
@@ -233,12 +234,16 @@ async function buildAndPersistPulse(
   // accepted drive_members row required — that row is only lazily backfilled
   // on first drive access) and explicit page-level grants with no drive
   // membership at all, and excludes trashed pages and pages in trashed drives.
-  const [userDrives, accessiblePagesList] = await Promise.all([
+  const [userDrives, allAccessiblePages] = await Promise.all([
     // Owned or joined (org-aware; page-level access does not count)
     getMemberDriveIds(userId, { includeTrashed: true }),
     accessiblePageIds(userId),
   ]);
-  const driveIds = userDrives;
+  // POL-8: the digest's model reads only drives (and pages in drives) whose org allows it.
+  const { driveIds, pageIds: accessiblePagesList } = await scopeReadableByModel(
+    { provider: BACKGROUND_LIGHT_PROVIDER, modelId: BACKGROUND_LIGHT_MODEL },
+    { driveIds: userDrives, pageIds: allAccessiblePages },
+  );
   const accessiblePages = new Set(accessiblePagesList);
 
   // ========================================
@@ -904,7 +909,7 @@ What would be genuinely useful or interesting to say right now? Maybe it's an ob
   const providerResult = await createAIProvider(userId, {
     selectedProvider: BACKGROUND_LIGHT_PROVIDER,
     selectedModel: BACKGROUND_LIGHT_MODEL,
-  });
+  }, { driveId: null });
 
   if (isProviderError(providerResult)) {
     // Throws before any model call — the caller's finally releases the reservation.

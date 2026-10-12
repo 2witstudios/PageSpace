@@ -19,6 +19,7 @@ import { createChangeGroupId } from '@pagespace/lib/monitoring/change-group';
 import { ensureTaskItemForPage } from '@/services/api/task-sync-service';
 import { OrgLapsedError, checkDriveMayLoosen, isOrgLapsedError } from '@pagespace/lib/permissions/org-lapse-guard';
 import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
+import { assertAgentModelAllowed, orgModelPolicyErrorResponse } from '@/services/api/page-mutation-service';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -160,6 +161,7 @@ export async function POST(request: Request) {
         if (sourceDriveId !== targetDriveId && (await checkDriveMayLoosen(tx, sourceDriveId, true))) throw new OrgLapsedError();
       }
       for (const page of sourcePages) {
+        await assertCopiedAgentModelAllowed(targetDriveId, page);
         const newPageId = createId();
         copiedPages.push({ newId: newPageId, sourceTitle: page.title, sourceId: page.id });
 
@@ -269,12 +271,23 @@ export async function POST(request: Request) {
     });
   } catch (error) {
     if (isOrgLapsedError(error)) return orgLapsedResponse();
+    const refused = orgModelPolicyErrorResponse(error);
+    if (refused) return NextResponse.json(refused.body, { status: refused.status });
     loggers.api.error('Error bulk copying pages:', error as Error);
     return NextResponse.json(
       { error: 'Failed to copy pages' },
       { status: 500 }
     );
   }
+}
+
+/**
+ * POL-8: a copied agent page stores its provider/model in the target drive, which is a save there: refused (and the
+ * whole copy rolled back) when the target drive's org does not allow it.
+ */
+async function assertCopiedAgentModelAllowed(targetDriveId: string, page: { type: string; aiProvider: string | null; aiModel: string | null }): Promise<void> {
+  if (page.type !== PageType.AI_CHAT) return;
+  await assertAgentModelAllowed(targetDriveId, { provider: page.aiProvider, modelId: page.aiModel });
 }
 
 // Recursively copy children
@@ -296,6 +309,7 @@ async function copyChildrenRecursively(
   let copiedCount = 0;
 
   for (const child of children) {
+    await assertCopiedAgentModelAllowed(targetDriveId, child);
     const newChildId = createId();
 
     await tx.insert(pages).values({

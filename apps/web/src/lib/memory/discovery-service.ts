@@ -19,8 +19,19 @@ import { createAIProvider, isProviderError } from '@/lib/ai/core/provider-factor
 import { BACKGROUND_HEAVY_PROVIDER, BACKGROUND_HEAVY_MODEL } from '@/lib/ai/core/ai-providers-config';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { AIMonitoring, discardUsageOutcome } from '@pagespace/lib/monitoring/ai-monitoring';
+import { scopeReadableByModel } from '@/lib/ai/core/org-model-policy';
 import { reserveMemoryCall, type MemoryGateRefusal } from './memory-credit';
 import { z } from 'zod';
+
+/**
+ * The drives the user is a member of, owned or joined (org-aware), whose org lets the discovery model read them
+ * (POL-8): discovery runs in no drive, but it reads org content, and an org that does not allow the model keeps
+ * its content out.
+ */
+async function readableMemberDriveIds(userId: string): Promise<string[]> {
+  const driveIds = await getMemberDriveIds(userId, { includeTrashed: true });
+  return (await scopeReadableByModel({ provider: BACKGROUND_HEAVY_PROVIDER, modelId: BACKGROUND_HEAVY_MODEL }, { driveIds })).driveIds;
+}
 
 export type MemoryField = 'bio' | 'writingStyle' | 'rules';
 
@@ -219,8 +230,7 @@ async function gatherRecentConversations(
   );
 
   // Page agent conversations via drive membership.
-  // The drives the user is a member of, owned or joined (org-aware).
-  const driveIds = await getMemberDriveIds(userId, { includeTrashed: true });
+  const driveIds = await readableMemberDriveIds(userId);
 
   if (driveIds.length > 0) {
     const pageMessages = await db
@@ -268,8 +278,7 @@ async function gatherRecentActivity(
   const lookbackDate = new Date();
   lookbackDate.setDate(lookbackDate.getDate() - lookbackDays);
 
-  // The drives the user is a member of, owned or joined (org-aware).
-  const driveIds = await getMemberDriveIds(userId, { includeTrashed: true });
+  const driveIds = await readableMemberDriveIds(userId);
 
   if (driveIds.length === 0) return [];
 
@@ -312,7 +321,7 @@ async function runDiscoveryPass(
   const providerResult = await createAIProvider(userId, {
     selectedProvider: BACKGROUND_HEAVY_PROVIDER,
     selectedModel: BACKGROUND_HEAVY_MODEL,
-  });
+  }, { driveId: null });
 
   if (isProviderError(providerResult)) {
     loggers.api.warn(`Memory discovery ${passName} pass failed: provider error`, {

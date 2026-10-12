@@ -42,12 +42,13 @@ export interface ProviderFactoryOptions {
   /** Pre-loaded user row. When provided the factory skips its own DB select. */
   user?: UserProviderRow | null;
   /**
-   * The drive this call runs in (POL-8). When it belongs to an org, that org's model and provider allowlists
-   * are enforced here, at the one place every provider is constructed: the call is REFUSED, never
-   * quietly swapped for a default. Omit it only where there is no drive (the global assistant without a
-   * drive, background services for one person), which no org policy restricts.
+   * The drive whose org governs this call (POL-8): the drive of the session it runs in, the same drive its spend
+   * is attributed to (SPEND-7). When it belongs to an org, that org's model and provider allowlists are enforced
+   * here, at the one place every provider is constructed: the call is REFUSED, never quietly swapped for a default.
+   * REQUIRED, so no caller can forget it: `null` is a deliberate statement that the call runs in no drive (the
+   * global assistant without one, a person's own background services), which no org policy restricts.
    */
-  driveId?: string | null;
+  driveId: string | null;
 }
 
 export interface ProviderResult {
@@ -74,11 +75,11 @@ function notConfigured(provider: string): ProviderError {
 export async function createAIProvider(
   userId: string,
   request: ProviderRequest,
-  options?: ProviderFactoryOptions,
+  options: ProviderFactoryOptions,
 ): Promise<ProviderResult | ProviderError> {
   const { selectedProvider, selectedModel } = request;
 
-  const user = options?.user ?? (await db.select().from(users).where(eq(users.id, userId)))[0];
+  const user = options.user ?? (await db.select().from(users).where(eq(users.id, userId)))[0];
 
   // Resolve (provider, model) as one atomic pair, with catalog enforcement —
   // shared with the routes (credit gate, admin-only checks) via resolveProviderModel
@@ -99,7 +100,7 @@ export async function createAIProvider(
   // POL-8: the org's model and provider allowlists, read now (no cache). BOTH the pair that will run and the pair
   // that was asked for must be allowed: an allowlist that let the resolver swap a refused selection for the
   // default would run a model the org never allowed, and call it a success.
-  if (options?.driveId) {
+  if (options.driveId) {
     const policies = (await getDrivePolicies(options.driveId))?.policies ?? null;
     const asked = selectedModel || selectedProvider ? { modelId: selectedModel ?? currentModel, provider: selectedProvider ?? currentProvider } : null;
     for (const use of [{ modelId: currentModel, provider: currentProvider }, ...(asked ? [asked] : [])]) {
@@ -263,7 +264,7 @@ export async function updateUserProviderSettings(
   userId: string,
   selectedProvider?: string,
   selectedModel?: string,
-  options?: ProviderFactoryOptions,
+  options?: Pick<ProviderFactoryOptions, 'user'>,
 ): Promise<void> {
   if (!selectedProvider || !selectedModel) return;
 

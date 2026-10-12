@@ -10,7 +10,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { pageAgentRepository, type AgentConfigUpdate } from '@/lib/repositories/page-agent-repository';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
-import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
+import { applyPageMutation, orgModelPolicyErrorResponse, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
 import { resolveEnvInDrive } from '@/lib/drive-envs/drive-envs-runtime';
 
 const REMOVED_TOOL_NAMES = new Set(['import_from_github']);
@@ -262,6 +262,9 @@ export async function PUT(
       });
       updatedAgent = { ...agent, ...updateData };
     } catch (error) {
+      // POL-8: a model or provider the drive's org does not allow is refused, nothing saved.
+      const refused = orgModelPolicyErrorResponse(error);
+      if (refused) return NextResponse.json(refused.body, { status: refused.status });
       if (error instanceof PageRevisionMismatchError) {
         return NextResponse.json(
           {
