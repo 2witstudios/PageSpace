@@ -1,124 +1,110 @@
-import Link from 'next/link';
-import type { ReactNode, Ref, SyntheticEvent } from 'react';
+import type { ReactNode } from 'react';
 import { renderIcon } from '../../components/icon/icon.render';
 import {
-  overflowLinkClass,
-  overflowMenuClass,
-  railChipClass,
-  railHitClass,
-  railListClass,
-  railPinnedClass,
+  spineDividerClass,
+  spineListClass,
+  spineTileClass,
 } from '../rail-button/rail-button-class';
-import { renderRailButton, renderRailTooltip } from '../rail-button/rail-button.render';
-import type { OverflowItem, RailItem, RailItemId, RailPlace } from './rail-items';
+import { renderRailButton, renderRailTooltip, renderSpineCount } from '../rail-button/rail-button.render';
+import type { RailItem, RailItemId, RailPlace, SecondaryItem } from './rail-items';
 
 export type RailRenderProps = {
   readonly items: readonly RailItem[];
+  readonly tools: readonly SecondaryItem[];
   readonly settings: RailItem;
   readonly activeId: RailItemId | null;
   /** The active item's own URL is open, or a place inside its section. */
   readonly activeAt: RailPlace;
   readonly unread: Partial<Readonly<Record<RailItemId, number>>>;
+  /** Unread notifications, the bell's badge. */
+  readonly notifications: number;
+  /** Opens the ⌘K palette. */
+  readonly onSearch: () => void;
   /**
-   * Void action, present only while the open section's list is hidden: the
-   * active item then reopens it rather than navigating.
+   * Void action, present only while the open section's pane is hidden: the active item then
+   * reopens it rather than navigating.
    */
   readonly onReopen?: (() => void) | undefined;
-  /** Classic deep links for the current drive; null with no drive. */
-  readonly overflow: readonly OverflowItem[] | null;
-  readonly moreOpen: boolean;
-  readonly onMoreToggle: (open: boolean) => void;
-  /** The ⋯ disclosure, for the container's Escape and outside-press handling. */
-  readonly moreRef?: Ref<HTMLDetailsElement> | undefined;
-  /** Above the sections: the drive switcher on the brand chip. */
+  /** Above Search: the drive switcher's tile. */
   readonly brand: ReactNode;
-  /** Below Settings: the avatar menu. */
+  /** At the foot, below Drive settings: the avatar menu. */
   readonly footer: ReactNode;
 };
 
-const MORE = 'More';
-
-const item = (entry: RailItem, props: RailRenderProps): ReactNode => {
-  const active = entry.id === props.activeId;
-  return (
-    <li key={entry.id}>
-      {renderRailButton({
-        icon: entry.icon,
-        label: entry.label,
-        href: entry.href,
-        current: active ? props.activeAt : null,
-        unread: props.unread[entry.id] ?? 0,
-        onReopen: active ? props.onReopen : undefined,
-      })}
-    </li>
-  );
-};
-
-const moreChip = (enabled: boolean): ReactNode => (
-  <>
-    <span className={railChipClass(false, enabled)}>{renderIcon({ name: 'more', size: 18 })}</span>
-    {renderRailTooltip(MORE)}
-  </>
-);
+const NOTIFICATIONS = 'Notifications';
 
 /**
- * The ⋯ overflow: a native disclosure, so it opens from the keyboard and
- * reports its state without script. Its links leave imago for classic, so
- * they are plain anchors: Next's Link would put imago's basePath in front.
+ * Classic's notifications page, until imago's own popover lands (IMC-9.13). It is outside
+ * imago's basePath, so a plain anchor: Next's Link would put /imago in front of it.
  */
-const overflow = (props: RailRenderProps): ReactNode => {
-  const { overflow: links, moreOpen, onMoreToggle, moreRef } = props;
-  if (links === null) {
-    return (
-      <li>
-        <button type="button" className={railHitClass(false)} aria-label={MORE} disabled>
-          {moreChip(false)}
-        </button>
-      </li>
-    );
-  }
-  return (
-    <li>
-      <details
-        ref={moreRef}
-        className="relative"
-        open={moreOpen}
-        onToggle={(event: SyntheticEvent<HTMLDetailsElement>) => onMoreToggle(event.currentTarget.open)}
-      >
-        <summary className={`${railHitClass(true)} summary-plain`} aria-label={MORE}>
-          {moreChip(true)}
-        </summary>
-        <ul className={overflowMenuClass} aria-label="More destinations">
-          {links.map((link) => (
-            <li key={link.id}>
-              <Link href={link.href} className={overflowLinkClass}>
-                {renderIcon({ name: link.icon })}
-                {link.label}
-              </Link>
-            </li>
-          ))}
-        </ul>
-      </details>
-    </li>
-  );
-};
+const NOTIFICATIONS_HREF = '/notifications';
 
 /**
- * The frame's only persistent navigation, inside the shell's Primary nav:
- * the drive switcher, the sections, the ⋯ overflow below Tasks, and
- * Settings and the avatar pinned to the foot.
+ * The spine (SPEC v3, C-Files-Doc): the drive tile, Search (⌘K), Chat · Files · Messages ·
+ * Tasks, a divider, Calendar · Agents · Workflows · Activity · Members · Trash, then at the
+ * foot the bell, Drive settings and the avatar.
  */
 export function renderRail(props: RailRenderProps): ReactNode {
+  const { activeId, activeAt, unread, onReopen } = props;
+  const current = (id: RailItemId) => (id === activeId ? activeAt : null);
+  const bellName = props.notifications > 0 ? `${NOTIFICATIONS}, ${props.notifications} unread` : NOTIFICATIONS;
   return (
     <>
-      {props.brand === null ? null : <div className="mb-rail-y">{props.brand}</div>}
-      <ul className={railListClass}>
-        {props.items.map((entry) => item(entry, props))}
-        {overflow(props)}
+      {props.brand === null ? null : <div className="mb-2">{props.brand}</div>}
+      <button type="button" className={`${spineTileClass('small', false)} mb-2`} aria-label="Search" onClick={props.onSearch}>
+        {renderIcon({ name: 'search', size: 18 })}
+        {renderRailTooltip('Search  ⌘K')}
+      </button>
+      <ul className={spineListClass}>
+        {props.items.map((entry) => (
+          <li key={entry.id}>
+            {renderRailButton({
+              icon: entry.icon,
+              label: entry.label,
+              href: entry.href,
+              current: current(entry.id),
+              unread: unread[entry.id] ?? 0,
+              size: 'primary',
+              onReopen: entry.id === activeId ? onReopen : undefined,
+            })}
+          </li>
+        ))}
       </ul>
-      <ul className={railPinnedClass}>
-        {item(props.settings, props)}
-        {props.footer === null ? null : <li>{props.footer}</li>}
+      <span className={spineDividerClass} aria-hidden="true" />
+      <ul className={spineListClass}>
+        {props.tools.map((entry) => (
+          <li key={entry.id}>
+            {renderRailButton({
+              icon: entry.icon,
+              label: entry.label,
+              href: entry.href,
+              current: current(entry.id),
+              unread: 0,
+              onReopen: entry.id === activeId ? onReopen : undefined,
+            })}
+          </li>
+        ))}
+      </ul>
+      <div className="flex-1" />
+      <ul className={spineListClass}>
+        <li>
+          <a href={NOTIFICATIONS_HREF} className={spineTileClass('small', false)} aria-label={bellName}>
+            {renderIcon({ name: 'bell', size: 18 })}
+            {renderSpineCount(props.notifications)}
+            {renderRailTooltip(NOTIFICATIONS)}
+          </a>
+        </li>
+        <li>
+          {renderRailButton({
+            icon: props.settings.icon,
+            label: props.settings.label,
+            href: props.settings.href,
+            current: current(props.settings.id),
+            unread: 0,
+            onReopen: props.settings.id === activeId ? onReopen : undefined,
+          })}
+        </li>
+        {props.footer === null ? null : <li className="mt-2">{props.footer}</li>}
       </ul>
     </>
   );

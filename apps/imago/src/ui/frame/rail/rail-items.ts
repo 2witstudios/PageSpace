@@ -1,8 +1,8 @@
 import type { IconName } from '../../components/icon/icon-names';
-import type { Section, Stage } from '../stage/stage';
+import type { DriveTool, Section, Stage } from '../stage/stage';
 
-/** The rail's own destinations (DEC-6); the account is reached from the avatar. */
-export type RailItemId = Exclude<Section, 'account'>;
+/** The spine's destinations; the account is reached from the avatar. */
+export type RailItemId = Exclude<Section, 'account'> | DriveTool;
 
 export type RailItem = {
   readonly id: RailItemId;
@@ -12,14 +12,13 @@ export type RailItem = {
   readonly href: string | null;
 };
 
-export type OverflowItemId = 'calendar' | 'agents' | 'connections' | 'activity' | 'trash' | 'workflows';
-
-export type OverflowItem = {
-  readonly id: OverflowItemId;
+/** The six drive tools under the divider; Members is one of them (SPEC v3). */
+export type SecondaryItem = {
+  readonly id: DriveTool;
   readonly icon: IconName;
   readonly label: string;
-  /** Classic's route for the drive: root-relative, outside imago's basePath. */
-  readonly href: string;
+  /** The tool in the current drive, basePath-relative; null with no drive. */
+  readonly href: string | null;
 };
 
 const driveHref = (driveId: string | null, section: string): string | null => {
@@ -39,11 +38,11 @@ export const railItems = (driveId: string | null): readonly RailItem[] => [
   { id: 'tasks', icon: 'tasks', label: 'Tasks', href: driveHref(driveId, 'tasks') },
 ];
 
-/** Pinned to the foot of the rail: the drive's settings (IMG-10.1), not the account. */
+/** Pinned to the foot of the spine: the drive's settings (IMG-10.1), not the account. */
 export const settingsItem = (driveId: string | null): RailItem => ({
   id: 'settings',
   icon: 'settings',
-  label: 'Settings',
+  label: 'Drive settings',
   href: driveHref(driveId, 'settings'),
 });
 
@@ -55,21 +54,16 @@ export const classicHref = (driveId: string, path: string): string =>
   `/dashboard/${encodeURIComponent(driveId)}/${path}`;
 
 /**
- * The ⋯ overflow (D5, DEC-6): surfaces imago does not build this epic, as
- * deep links into classic for the same drive.
+ * Under the divider (SPEC v3 spine, C-Files-Doc): Calendar, Agents, Workflows, Activity,
+ * Members and Trash, each a route of the current drive.
  */
-export const overflowItems = (driveId: string): readonly OverflowItem[] => [
-  { id: 'calendar', icon: 'calendar', label: 'Calendar', href: `/${encodeURIComponent(driveId)}/calendar` },
-  { id: 'agents', icon: 'bot', label: 'Agents', href: `/${encodeURIComponent(driveId)}/agents` },
-  {
-    id: 'connections',
-    icon: 'connections',
-    label: 'Connections',
-    href: `/${encodeURIComponent(driveId)}/settings/integrations`,
-  },
-  { id: 'activity', icon: 'activity', label: 'Activity', href: `/${encodeURIComponent(driveId)}/activity` },
-  { id: 'trash', icon: 'trash', label: 'Trash', href: `/${encodeURIComponent(driveId)}/trash` },
-  { id: 'workflows', icon: 'activity', label: 'Workflows', href: `/${encodeURIComponent(driveId)}/workflows` },
+export const secondaryItems = (driveId: string | null): readonly SecondaryItem[] => [
+  { id: 'calendar', icon: 'calendar', label: 'Calendar', href: driveHref(driveId, 'calendar') },
+  { id: 'agents', icon: 'agents', label: 'Agents', href: driveHref(driveId, 'agents') },
+  { id: 'workflows', icon: 'workflows', label: 'Workflows', href: driveHref(driveId, 'workflows') },
+  { id: 'activity', icon: 'activity', label: 'Activity', href: driveHref(driveId, 'activity') },
+  { id: 'members', icon: 'members', label: 'Members', href: driveHref(driveId, 'members') },
+  { id: 'trash', icon: 'trash', label: 'Trash', href: driveHref(driveId, 'trash') },
 ];
 
 /**
@@ -80,8 +74,11 @@ export const railDrive = (stage: Stage, homeDriveId: string | null): string | nu
   stage.driveId ?? homeDriveId;
 
 /** The URL alone picks the active item; the account belongs to the avatar. */
-export const activeRailItem = (stage: Stage): RailItemId | null =>
-  stage.section === 'account' ? null : stage.section;
+export const activeRailItem = (stage: Stage): RailItemId | null => {
+  if (stage.section === 'account') return null;
+  if (stage.object?.kind === 'settings' && stage.object.tool !== undefined) return stage.object.tool;
+  return stage.section;
+};
 
 /**
  * Where the viewer is relative to the active item: on the URL it links to

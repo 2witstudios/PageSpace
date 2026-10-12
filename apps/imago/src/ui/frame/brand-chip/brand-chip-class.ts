@@ -1,8 +1,11 @@
 import { cn } from '../../cn';
 
-/** The drive's mark at the top of the rail: its initial on a raised 34px tile (myimago brand chip). */
+/** The drive tile at the top of the spine: its initial, spine blue on a near-white 36px tile (SPEC v3). */
 export const brandChipClass =
-  'flex size-rail-brand items-center justify-center rounded-lg border border-hairline bg-surface-raised font-semibold text-ink';
+  'flex size-spine-brand items-center justify-center rounded-spine-brand bg-spine-tile font-bold text-spine';
+
+/** The tile's control: the disclosure summary, with the tooltip beside it. */
+export const brandSummaryClass = 'group relative flex cursor-pointer summary-plain';
 
 /** The drive menu, opening beside the rail at the tooltip's offset, wide enough for drive names. */
 export const driveMenuClass =

@@ -50,7 +50,7 @@ describe('renderBrandChip()', () => {
       given: 'Alpha open',
       should: 'name the chip after Alpha and mark only Alpha as the current drive',
       actual: [
-        /<summary[^>]*aria-label="Switch drive, Alpha"/.test(html),
+        /<summary[^>]*aria-label="Switch drive: Alpha"/.test(html),
         html.match(/aria-current="[^"]+"/g),
         /aria-current="page"[^>]*href="\/d-alpha\/files"|href="\/d-alpha\/files"[^>]*aria-current="page"/.test(html),
       ],

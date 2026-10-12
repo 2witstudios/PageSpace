@@ -11,3 +11,7 @@ export const accountNameClass = 'px-2 py-row-y text-xs text-ink-muted';
 /** A link or a button in the menu: the same ~32px row either way. */
 export const accountItemClass =
   'flex w-full cursor-pointer items-center gap-2 rounded-md border-0 bg-transparent px-2 py-row-y text-left text-sm font-medium text-ink no-underline hover:bg-surface-overlay hover:no-underline';
+
+/** The avatar's control at the spine's foot; ringed while the account is open (SPEC v3). */
+export const avatarSummaryClass = (active: boolean): string =>
+  active ? 'group relative flex cursor-pointer summary-plain spine-avatar-ring' : 'group relative flex cursor-pointer summary-plain';

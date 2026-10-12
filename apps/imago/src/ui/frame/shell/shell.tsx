@@ -163,7 +163,7 @@ export function Shell({ children, homeDriveId, initialDrives }: ShellProps) {
             failed={error !== undefined}
           />
         }
-        footer={<AvatarMenu />}
+        footer={<AvatarMenu active={stage.section === 'account'} />}
       />
     ),
     list: missing ? null : listFor(stage, layout),

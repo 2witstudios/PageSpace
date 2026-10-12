@@ -6,6 +6,15 @@
   /* The spine: the blue column the stage sheet sits on. */
   --spine: light-dark(oklch(0.35 0.08 235), oklch(0.26 0.05 235));
   --spine-ink: light-dark(oklch(0.92 0.02 235), oklch(0.88 0.02 235));
+  /* On the spine: quiet and small icons, the hover and active fills, the
+     active marker and the divider (C-Files-Doc spine). */
+  --spine-quiet: light-dark(oklch(0.92 0.02 235 / 0.78), oklch(0.88 0.02 235 / 0.78));
+  --spine-dim: light-dark(oklch(0.92 0.02 235 / 0.62), oklch(0.88 0.02 235 / 0.62));
+  --spine-hover: light-dark(oklch(1 0 0 / 0.1), oklch(1 0 0 / 0.08));
+  --spine-active: light-dark(oklch(1 0 0 / 0.15), oklch(1 0 0 / 0.12));
+  --spine-marker: light-dark(oklch(0.8 0.12 235), oklch(0.8 0.12 235));
+  --spine-tile: light-dark(oklch(0.98 0.005 235), oklch(0.92 0.01 235));
+  --spine-on: light-dark(oklch(1 0 0), oklch(1 0 0));
   /* Imago's column and the tab bar: a breath of blue over the sheet. */
   --tint: light-dark(oklch(0.982 0.005 235), oklch(0.2 0.01 235));
   --tab-bar: light-dark(oklch(0.975 0.006 235), oklch(0.19 0.01 235));
@@ -35,6 +44,13 @@
 @theme inline {
   --color-spine: var(--spine);
   --color-spine-ink: var(--spine-ink);
+  --color-spine-quiet: var(--spine-quiet);
+  --color-spine-dim: var(--spine-dim);
+  --color-spine-hover: var(--spine-hover);
+  --color-spine-active: var(--spine-active);
+  --color-spine-marker: var(--spine-marker);
+  --color-spine-tile: var(--spine-tile);
+  --color-spine-on: var(--spine-on);
   --color-tint: var(--tint);
   --color-tab-bar: var(--tab-bar);
   --color-fill: var(--fill);
@@ -54,4 +70,42 @@
   --color-type-canvas: var(--type-canvas);
   --color-type-code: var(--type-code);
   --color-type-file: var(--type-file);
+}
+
+/* Spine geometry (C-Files-Doc): 48px primary tiles radius 12, 40px tool tiles
+   radius 10, the 36px drive tile radius 11, the 34px avatar; the active marker
+   is a 4px bar at the spine's edge, 24px tall beside a primary tile and 20px
+   beside a tool. */
+@theme {
+  --radius-spine-tile: 12px;
+  --radius-spine-brand: 11px;
+  --spacing-spine-marker: 4px;
+  --spacing-spine-marker-tall: 24px;
+  --spacing-spine-marker-short: 20px;
+  --spacing-spine-divider: 28px;
+  --spacing-spine-count: 16px;
+}
+
+/* The avatar while the account is open: a spine-blue gap, then the marker blue (C-Account-*). */
+@utility spine-avatar-ring {
+  border-radius: 9999px;
+  box-shadow: 0 0 0 2px var(--spine), 0 0 0 4px var(--spine-marker);
+}
+
+/* The active tab merges into the columns below: sheet white, hairline on its
+   left, right and top, no bottom edge (SPEC v3.3). */
+@utility tab-active-edge {
+  box-shadow:
+    inset 1px 0 0 var(--hairline),
+    inset -1px 0 0 var(--hairline),
+    inset 0 1px 0 var(--hairline);
+}
+
+@theme {
+  --spacing-tab-bar-top: 6px;
+  --spacing-tab-close: 16px;
+  --container-empty-middle: 380px;
+  --spacing-empty-row: 36px;
+  --spacing-ask-imago: 34px;
+  --spacing-ask-pill: 30px;
 }

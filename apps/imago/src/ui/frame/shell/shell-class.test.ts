@@ -95,10 +95,10 @@ describe('shell frame classes', () => {
   test('the rail', () => {
     assert({
       given: 'the rail slot',
-      should: 'be the one 64px glass column with a hairline, lifted above the panes',
+      should: 'be the one 72px spine-blue column, lifted above the panes',
       actual: railClass,
       expected:
-        'relative z-rail flex h-full w-rail-width flex-none flex-col items-center gap-rail-gap border-r border-hairline py-rail-y surface-glass',
+        'relative z-rail flex h-full w-rail-width flex-none flex-col items-center gap-rail-gap bg-spine py-rail-y text-spine-ink',
     });
   });
 
@@ -147,9 +147,9 @@ const token = (css: Root, name: string): string | undefined => {
 };
 
 describe('the rail above the panes', () => {
-  // `surface-glass` is a backdrop-filter, so the rail and the list pane are
-  // each a stacking context. Without a z-index of its own the rail paints
-  // under the later list pane, and so do its tooltips and the ⋯ menu.
+  // The list pane is glass (a backdrop-filter), so it is a stacking context
+  // painted after the rail. Without a z-index of its own the rail paints
+  // under it, and so do its tooltips and the drive and account menus.
   test('the rail is its own positioned layer over the panes', async () => {
     const list = listPaneClass('list');
     const pane = paneClass('w-list-pane');
@@ -160,8 +160,8 @@ describe('the rail above the panes', () => {
     const panes = [declarations(css, list), declarations(css, pane)];
 
     assert({
-      given: 'the glass rail beside a glass list pane',
-      should: 'position the rail with a named z-index token above 0, while the panes stay unlayered',
+      given: 'the opaque spine beside a glass list pane',
+      should: 'position the rail with a named z-index token above 0, without glass, while the panes stay unlayered',
       actual: [
         rail.has('backdrop-filter'),
         rail.get('position'),
@@ -169,7 +169,7 @@ describe('the rail above the panes', () => {
         Number(zToken === undefined ? Number.NaN : token(css, zToken)) > 0,
         panes.map((decls) => decls.has('z-index')),
       ],
-      expected: [true, 'relative', '--z-index-rail', true, [false, false]],
+      expected: [false, 'relative', '--z-index-rail', true, [false, false]],
     });
   });
 });

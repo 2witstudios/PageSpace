@@ -34,7 +34,7 @@ export function renderShell(props: ShellRenderProps): ReactNode {
       data-object={stage.object?.kind}
       data-hydrated={hydrated ? '' : undefined}
     >
-      <nav aria-label="Primary" className={railClass} data-slot="rail">
+      <nav aria-label="Sections" className={railClass} data-slot="rail">
         {rail}
       </nav>
       <Pane open={layout.list !== 'closed'} width={listSlotClass(layout)} slot="list">
