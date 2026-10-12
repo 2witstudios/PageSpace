@@ -61,10 +61,10 @@ describe('nextStepAfterCreate', () => {
 describe('orgReadyForSetup', () => {
   it('is ready once the org has no lapse notice (paid, or billing off)', () => {
     expect(orgReadyForSetup(undefined)).toBe(true);
-    expect(orgReadyForSetup({ kind: 'payment_failed', canManageBilling: true })).toBe(true);
   });
 
-  it('is not ready while the org is still lapsed (the webhook has not landed)', () => {
+  it('is not ready while the org is still lapsed (the webhook has not landed or payment failed)', () => {
+    expect(orgReadyForSetup({ kind: 'reactivate', reason: 'payment_failed', canManageBilling: true })).toBe(false);
     expect(orgReadyForSetup({ kind: 'reactivate', reason: 'incomplete', canManageBilling: true })).toBe(false);
     expect(orgReadyForSetup({ kind: 'read_only', canManageBilling: false })).toBe(false);
   });
