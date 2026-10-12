@@ -1,7 +1,7 @@
 import './instrument';
 import { getDrivePolicies, getDriveAuthenticationPolicies, getResourceDriveIds } from '@pagespace/lib/organizations/policy-reader';
 import { credentialActor, type AccessActor } from '@pagespace/lib/permissions/access-actor';
-import { createOrgRoomWatch, ORG_REAUTHENTICATION_REQUIRED_EVENT, type OrgRoomWatch } from './org-room-watch';
+import { createOrgRoomWatch, createPolicyChangeFanout, ORG_REAUTHENTICATION_REQUIRED_EVENT, type OrgRoomWatch } from './org-room-watch';
 import { ORG_CHANGED_EVENT } from '@pagespace/lib/realtime/org-wallet-events';
 import * as Sentry from '@sentry/node';
 import { createServer, IncomingMessage, ServerResponse } from 'http';
@@ -962,12 +962,11 @@ const requestListener = (req: IncomingMessage, res: ServerResponse) => {
 
                 const { channelId, event, payload } = parsed;
                 io.to(channelId).emit(event, payload);
-                // SEC-2/3: an org's policy changed — its members' sockets re-decide their org rooms now, not at the
-                // next timer (a tightened sign-in rule evicts at once).
-                if (event === ORG_CHANGED_EVENT && (payload as { change?: unknown })?.change === 'policy') {
-                    void io.in(channelId).fetchSockets().then((sockets) => {
-                        for (const s of sockets) void orgRoomWatches.get(s.id)?.recheck();
-                    });
+                // SEC-2/3: an org's policy changed — EVERY socket here re-decides its org rooms now, not at the next
+                // timer (a tightened sign-in rule evicts at once), guests and non-members included.
+                const orgChange = payload as { orgId?: unknown; change?: unknown };
+                if (event === ORG_CHANGED_EVENT && orgChange.change === 'policy' && typeof orgChange.orgId === 'string') {
+                    fanOutOrgPolicyChange(orgChange.orgId);
                 }
                 loggers.realtime.debug('Broadcast event sent successfully', {
                     channelId,
@@ -1253,6 +1252,11 @@ async function readResourceAuthenticationPolicies(resourceIds: readonly string[]
 
 /** One org-room watch per connected socket (SEC-3 eviction), so an org policy change can nudge them. */
 const orgRoomWatches = new Map<string, OrgRoomWatch>();
+const fanOutOrgPolicyChange = createPolicyChangeFanout({
+  watches: () => orgRoomWatches.values(),
+  now: () => Date.now(),
+  windowMs: 1_000,
+});
 
 /**
  * After a join was refused: when the org's sign-in policy is why (SEC-2/3), tell the socket so the client can ask the
@@ -1353,9 +1357,14 @@ io.on('connection', (socket: AuthSocket) => {
   // The socket's credential (D-OW-45). Every join below asks the org sign-in policy of it, and the watch evicts the
   // socket from an org's rooms when that org's maximum session age elapses or its policy tightens.
   const actor = socket.data.actor;
+  // App-log streams are tracked by the same watch (SEC-2/3); an eviction tears the stream down too.
+  let onOrgRoomEvicted: (room: string) => void = () => {};
   const orgRoomWatch = createOrgRoomWatch(socket, {
     readPolicies: readResourceAuthenticationPolicies,
-    onLeft: (room) => socketRegistry.trackRoomLeave(socket.id, room),
+    onLeft: (room) => {
+      socketRegistry.trackRoomLeave(socket.id, room);
+      onOrgRoomEvicted(room);
+    },
     now: () => Date.now(),
     setTimer: (run, delayMs) => setTimeout(run, delayMs),
     clearTimer: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
@@ -1964,7 +1973,8 @@ io.on('connection', (socket: AuthSocket) => {
 
   // Published-app log streaming (app:logs:* family): read-only fan-out of a
   // Fly app's NATS log firehose to every attached viewer — see app-logs/.
-  const appLogHandlers = buildAppLogHandlers(socket as unknown as AppLogSocketLike);
+  const appLogHandlers = buildAppLogHandlers(socket as unknown as AppLogSocketLike, undefined, orgRoomWatch);
+  onOrgRoomEvicted = (room) => appLogHandlers.onEvicted(room);
   socket.on('app:logs:subscribe', (payload) => {
     void appLogHandlers.onSubscribe(payload);
   });

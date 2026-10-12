@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { credentialActor } from '@pagespace/lib/permissions/access-actor';
-import { createOrgRoomWatch, ORG_REAUTHENTICATION_REQUIRED_EVENT } from '../org-room-watch';
+import { createOrgRoomWatch, createPolicyChangeFanout, ORG_REAUTHENTICATION_REQUIRED_EVENT, type OrgRoomWatch } from '../org-room-watch';
 
 const T0 = Date.parse('2026-10-12T12:00:00Z');
 const minutes = (n: number) => n * 60_000;
@@ -76,5 +76,43 @@ describe('org room watch', () => {
     await vi.advanceTimersByTimeAsync(minutes(30));
     expect(socket.leave).not.toHaveBeenCalled();
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  describe('policy-change fan-out', () => {
+    it("SEC-2 (partial) an org's policy change re-decides EVERY watch on the process: a guest (not an org member, so never sent org:changed) is evicted from the org drive's room at once", async () => {
+      const member = setup({ d: { requireStrongSignIn: false, maximumSessionAgeMinutes: null } });
+      const guest = setup({ d: { requireStrongSignIn: false, maximumSessionAgeMinutes: null } });
+      await member.watch.track('drive:d', 'd');
+      await guest.watch.track('drive:d', 'd');
+      const watches = new Map<string, OrgRoomWatch>([['member-socket', member.watch], ['guest-socket', guest.watch]]);
+      const fanOut = createPolicyChangeFanout({ watches: () => watches.values(), now: () => Date.now(), windowMs: 1_000 });
+
+      member.current.d = { requireStrongSignIn: true, maximumSessionAgeMinutes: null };
+      guest.current.d = { requireStrongSignIn: true, maximumSessionAgeMinutes: null };
+      fanOut('org-1');
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(guest.socket.leave).toHaveBeenCalledWith('drive:d');
+      expect(guest.socket.emit).toHaveBeenCalledWith(ORG_REAUTHENTICATION_REQUIRED_EVENT, { code: 'org_strong_sign_in_required', resourceId: 'd' });
+      expect(member.socket.leave).toHaveBeenCalledWith('drive:d');
+    });
+
+    it('SEC-2 (partial) the per-member org:changed repeats for one org are folded into one fan-out within the window; a later change fans out again', () => {
+      const recheck = vi.fn(async () => {});
+      const watch: OrgRoomWatch = { track: vi.fn(async () => {}), untrack: vi.fn(), recheck, dispose: vi.fn() };
+      const fanOut = createPolicyChangeFanout({ watches: () => [watch], now: () => Date.now(), windowMs: 1_000 });
+
+      fanOut('org-1');
+      fanOut('org-1');
+      fanOut('org-1');
+      expect(recheck).toHaveBeenCalledTimes(1);
+
+      fanOut('org-2');
+      expect(recheck).toHaveBeenCalledTimes(2);
+
+      vi.setSystemTime(T0 + 1_000);
+      fanOut('org-1');
+      expect(recheck).toHaveBeenCalledTimes(3);
+    });
   });
 });

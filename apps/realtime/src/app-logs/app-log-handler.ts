@@ -50,6 +50,23 @@ export type AppLogSocketLike = {
   emit(event: string, payload?: unknown): void;
 };
 
+/**
+ * The socket's org-room watch (SEC-2/3): an app's log stream is org content of the env's drive, so each subscription is
+ * tracked like a joined org room — the watch re-decides it at the credential's maximum-age expiry and on a policy
+ * change, and an eviction reaches `onEvicted`, which tears the stream down.
+ */
+export type AppLogWatchLink = {
+  track(room: string, resourceId: string): void | Promise<void>;
+  untrack(room: string): void;
+};
+
+const APP_LOG_ROOM_PREFIX = 'app-logs:';
+
+/** The pseudo-room an app's log stream is tracked under in the socket's org-room watch. */
+export function appLogRoom(flyAppName: string): string {
+  return `${APP_LOG_ROOM_PREFIX}${flyAppName}`;
+}
+
 function isSubscribePayload(payload: unknown): payload is { envId: string; flyAppName: string } {
   if (payload === null || typeof payload !== 'object') return false;
   const { envId, flyAppName } = payload as Record<string, unknown>;
@@ -79,7 +96,7 @@ async function resolveAuthorizedFlyAppName(
   actor: AccessActor,
   envId: string,
   claimedFlyAppName: string,
-): Promise<string | null> {
+): Promise<{ flyAppName: string; driveId: string } | null> {
   const [env] = await db
     .select({ driveId: driveEnvs.driveId })
     .from(driveEnvs)
@@ -102,18 +119,21 @@ async function resolveAuthorizedFlyAppName(
   // is refused rather than silently subscribed to a different app's logs.
   if (app.flyAppName !== claimedFlyAppName) return null;
 
-  return app.flyAppName;
+  return { flyAppName: app.flyAppName, driveId: env.driveId };
 }
 
 export type AppLogHandlers = {
   onSubscribe(payload: unknown): Promise<void>;
   onUnsubscribe(payload: unknown): void;
   onDisconnect(): void;
+  /** The org-room watch left `room`: when it is an app's log stream, stop streaming it to this socket. */
+  onEvicted(room: string): void;
 };
 
 export function buildAppLogHandlers(
   socket: AppLogSocketLike,
   sessionMap: AppLogSessionMap = sharedAppLogSessionMap,
+  watch?: AppLogWatchLink,
 ): AppLogHandlers {
   // Keyed per (socket, app), NOT per socket alone — a single socket watching
   // two apps' logs (two panes open, or switching apps without a reload) must
@@ -142,6 +162,7 @@ export function buildAppLogHandlers(
   function detach(flyAppName: string): void {
     const session = sessionMap.removeViewer(viewerKeyFor(flyAppName));
     activeApps.delete(flyAppName);
+    watch?.untrack(appLogRoom(flyAppName));
     if (session && session.viewers.size === 0) armIdleUnsubscribe(session.flyAppName);
   }
 
@@ -154,13 +175,14 @@ export function buildAppLogHandlers(
       const { envId, flyAppName: claimedFlyAppName } = payload;
 
       let flyAppName: string;
+      let driveId: string;
       try {
         const authorized = await resolveAuthorizedFlyAppName(actor, envId, claimedFlyAppName);
         if (!authorized) {
           loggers.realtime.warn('User denied access to app logs', { userId, envId, claimedFlyAppName });
           return;
         }
-        flyAppName = authorized;
+        ({ flyAppName, driveId } = authorized);
       } catch (error) {
         loggers.realtime.error('Failed to authorize app-log subscribe', error instanceof Error ? error : new Error(String(error)), {
           userId,
@@ -186,6 +208,7 @@ export function buildAppLogHandlers(
         }
         sessionMap.addViewer(flyAppName, viewerKey, viewer);
         activeApps.add(flyAppName);
+        void watch?.track(appLogRoom(flyAppName), driveId);
         return;
       }
 
@@ -207,12 +230,14 @@ export function buildAppLogHandlers(
           subscription.unsubscribe();
           sessionMap.addViewer(flyAppName, viewerKey, viewer);
           activeApps.add(flyAppName);
+          void watch?.track(appLogRoom(flyAppName), driveId);
           return;
         }
 
         sessionMap.setNew({ flyAppName, unsubscribe: subscription.unsubscribe, viewers: new Map() });
         sessionMap.addViewer(flyAppName, viewerKey, viewer);
         activeApps.add(flyAppName);
+        void watch?.track(appLogRoom(flyAppName), driveId);
       } catch (error) {
         loggers.realtime.error('Failed to subscribe to app logs', error instanceof Error ? error : new Error(String(error)), {
           flyAppName,
@@ -236,6 +261,14 @@ export function buildAppLogHandlers(
       for (const flyAppName of [...activeApps]) {
         detach(flyAppName);
       }
+    },
+
+    onEvicted(room) {
+      if (!room.startsWith(APP_LOG_ROOM_PREFIX)) return;
+      const flyAppName = room.slice(APP_LOG_ROOM_PREFIX.length);
+      if (!activeApps.has(flyAppName)) return;
+      detach(flyAppName);
+      socket.emit('app:logs:ended', { flyAppName, reason: 'org_sign_in' });
     },
   };
 }

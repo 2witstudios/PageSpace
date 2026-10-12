@@ -1,3 +1,5 @@
+import { filterResourcesForActor } from '@pagespace/lib/permissions/actor-authentication';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 import { NextResponse } from 'next/server';
 import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db';
@@ -94,11 +96,18 @@ export async function GET(request: Request): Promise<Response> {
     .limit(limit)
     .offset(offset);
 
+  // SEC-2/3 (D-OW-45): a page or drive conversation is that org's content, so one whose org's sign-in policy refuses
+  // this credential is not listed (its title and drive are org content too).
+  const actor = actorFromAuth(authResult);
+  const contextIds = rows.flatMap((row) => (row.type !== 'global' && row.contextId ? [row.contextId] : []));
+  const reachable = await filterResourcesForActor(actor, contextIds);
+  const listed = rows.filter((row) => row.type === 'global' || !row.contextId || reachable.has(row.contextId));
+
   auditRequest(request, { eventType: 'data.read', userId: authResult.userId, resourceType: 'conversation', resourceId: 'list', details: { driveId: queryResult.data.driveId }, riskScore: 0 });
 
   return NextResponse.json({
     object: 'list',
-    data: rows.map((row) => ({
+    data: listed.map((row) => ({
       id: row.id,
       object: 'conversation',
       created_at: Math.floor(row.createdAt.getTime() / 1000),

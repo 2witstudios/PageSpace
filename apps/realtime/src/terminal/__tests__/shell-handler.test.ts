@@ -1176,7 +1176,7 @@ describe('buildShellHandlers', () => {
       expect(sessionMap.getByKey('shell:shl-1')).toBeUndefined();
     });
 
-    it('given a DETACHED session whose checkAuth THROWS, should keep the session alive (fail-open in both tick shapes — no unhandled rejection)', async () => {
+    it('SEC-3 (partial) given a DETACHED session whose checkAuth THROWS, the re-auth tick fails closed: the unsupervised session is torn down (and the throw is caught — no unhandled rejection)', async () => {
       const { onConnect, onDisconnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload);
       onDisconnect(); // detach — the tick now checks lastViewerUserId
@@ -1184,8 +1184,8 @@ describe('buildShellHandlers', () => {
       checkAuth.mockRejectedValue(new Error('db blip'));
       await vi.advanceTimersByTimeAsync(60_000);
 
-      expect(shell.kill).not.toHaveBeenCalled();
-      expect(sessionMap.getByKey('shell:shl-1')).toBeDefined();
+      expect(shell.kill).toHaveBeenCalledWith('forced-teardown');
+      expect(sessionMap.getByKey('shell:shl-1')).toBeUndefined();
     });
 
     it('given an authorized viewer who joins WHILE the detached tick\'s checkAuth is in flight, should not tear the session down under them', async () => {
@@ -1261,16 +1261,34 @@ describe('buildShellHandlers', () => {
       expect(checkAuth).toHaveBeenCalledWith(expect.objectContaining({ actor: expect.objectContaining({ userId: 'user1' }) }));
     });
 
-    it('given checkAuth THROWS for an attached viewer, should evict nobody this tick (fail-open — a DB blip is not a revocation)', async () => {
+    it('SEC-3 (partial) given checkAuth THROWS for an attached viewer, the re-auth tick fails closed: the viewer whose credential cannot be re-decided is evicted', async () => {
       const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload);
 
       checkAuth.mockRejectedValue(new Error('db blip'));
       await vi.advanceTimersByTimeAsync(60_000);
 
+      expect(socket.emit).toHaveBeenCalledWith('shell:error', { message: 'Session access revoked', connectionId: 'sock1' });
+      expect(sessionMap.getBySocket(viewer('sock1'))).toBeUndefined();
+    });
+
+    it('SEC-3 (partial) given checkAuth THROWS for ONE of two credentials, the re-auth tick fails closed for that credential only: the other viewer keeps the shell', async () => {
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
+      await onConnect(validPayload);
+      const socket2 = makeSocket('sock2', 'user2');
+      const handlers2 = buildShellHandlers({ sessionMap, openShell, checkAuth, socket: socket2, persistSpriteExecId });
+      await handlers2.onConnect(validPayload);
+
+      checkAuth.mockImplementation(async ({ actor }: { actor: { userId: string } }) => {
+        if (actor.userId === 'user2') throw new Error('db blip');
+        return makeAuthSuccess();
+      });
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(socket2.emit).toHaveBeenCalledWith('shell:error', { message: 'Session access revoked', connectionId: 'sock2' });
+      expect(socket.emit).not.toHaveBeenCalledWith('shell:error', expect.anything());
       expect(shell.kill).not.toHaveBeenCalled();
       expect(sessionMap.getByKey('shell:shl-1')).toBeDefined();
-      expect(sessionMap.getBySocket(viewer('sock1'))).toBeDefined();
     });
   });
 
