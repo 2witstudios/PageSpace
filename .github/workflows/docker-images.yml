@@ -405,6 +405,9 @@ jobs:
             config_args=(--config /tmp/pagespace-cutover/pagespace-realtime.toml)
           fi
           flyctl deploy "${config_args[@]}" --app pagespace-realtime --image registry.fly.io/pagespace-realtime:latest --wait-timeout 300
+          if [ -f /tmp/pagespace-cutover/pagespace-realtime.machines.json ]; then
+            bash scripts/fly-billing-restore.sh /tmp/pagespace-cutover pagespace-realtime
+          fi
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
@@ -418,6 +421,9 @@ jobs:
             config_args=(--config /tmp/pagespace-cutover/pagespace-web.toml)
           fi
           flyctl deploy "${config_args[@]}" --app pagespace-web --image registry.fly.io/pagespace-web:latest --wait-timeout 300
+          if [ -f /tmp/pagespace-cutover/pagespace-web.machines.json ]; then
+            bash scripts/fly-billing-restore.sh /tmp/pagespace-cutover pagespace-web
+          fi
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
@@ -436,6 +442,9 @@ jobs:
             config_args=(--config /tmp/pagespace-cutover/pagespace-processor.toml)
           fi
           flyctl deploy "${config_args[@]}" --app pagespace-processor --image registry.fly.io/pagespace-processor:latest --wait-timeout 120
+          if [ -f /tmp/pagespace-cutover/pagespace-processor.machines.json ]; then
+            bash scripts/fly-billing-restore.sh /tmp/pagespace-cutover pagespace-processor
+          fi
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
@@ -449,6 +458,9 @@ jobs:
             config_args=(--config /tmp/pagespace-cutover/pagespace-admin.toml)
           fi
           flyctl deploy "${config_args[@]}" --app pagespace-admin --image registry.fly.io/pagespace-admin:latest --wait-timeout 300
+          if [ -f /tmp/pagespace-cutover/pagespace-admin.machines.json ]; then
+            bash scripts/fly-billing-restore.sh /tmp/pagespace-cutover pagespace-admin
+          fi
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
@@ -462,12 +474,17 @@ jobs:
             config_args=(--config /tmp/pagespace-cutover/pagespace-cron.toml)
           fi
           flyctl deploy "${config_args[@]}" --app pagespace-cron --image registry.fly.io/pagespace-cron:latest --wait-timeout 300
+          if [ -f /tmp/pagespace-cutover/pagespace-cron.machines.json ]; then
+            bash scripts/fly-billing-restore.sh /tmp/pagespace-cutover pagespace-cron
+          fi
 
           # Cron is a SINGLETON scheduler: exactly one machine must run, or scheduled jobs
           # (memory/pulse crons) double-fire. Reconcile to one machine, ensure it's started,
           # then VERIFY the invariant — if it can't be enforced, fail the deploy rather than
           # silently leave duplicate (double-firing) or stopped (non-firing) cron machines.
-          flyctl scale count 1 --app pagespace-cron --yes
+          if [ ! -f /tmp/pagespace-cutover/pagespace-cron.machines.json ]; then
+            flyctl scale count 1 --app pagespace-cron --yes
+          fi
           for id in $(flyctl machines list --app pagespace-cron --json | jq -r '.[].id'); do
             flyctl machine start "$id" --app pagespace-cron 2>/dev/null || true
           done

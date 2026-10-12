@@ -7,7 +7,16 @@ const dirs: string[] = [];
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 function run(mode = '') {
   const dir = mkdtempSync(join(tmpdir(), 'cutover-test-')); dirs.push(dir);
-  writeFileSync(join(dir, 'flyctl'), `#!/bin/bash\nprintf '%s\\n' "$*" >> "$CALLS"\nif [[ "$1 $2" == "config save" && "$MODE" == "save-fails" ]]; then exit 1; fi\nif [[ "$1 $2" == "machines list" ]]; then\n  if [[ "$MODE" == "remains" ]]; then echo '[{"id":"old","state":"stopped"}]'; else echo '[]'; fi\nfi\n`, { mode: 0o755 });
+  writeFileSync(join(dir, 'flyctl'), `#!/usr/bin/env node
++const fs = require('node:fs');
++const args = process.argv.slice(2);
++fs.appendFileSync(process.env.CALLS, args.join(' ') + '\\n');
++const app = args[args.indexOf('--app') + 1];
++const drained = process.env.CALLS + '.' + app;
++if (args[0] === 'config' && process.env.MODE === 'save-fails') process.exit(1);
++if (args[0] === 'scale') fs.writeFileSync(drained, 'yes');
++if (args[0] === 'machines') console.log(JSON.stringify(fs.existsSync(drained) && process.env.MODE !== 'remains' ? [] : [{ id: 'old', state: 'stopped', region: 'iad', config: { metadata: { fly_process_group: 'app' } } }]));
++`.replace(/^\+/gm, ''), { mode: 0o755 });
   const result = spawnSync('bash', [resolve('fly-billing-cutover.sh'), join(dir, 'configs')], { env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, MODE: mode, CALLS: join(dir, 'calls') }, encoding: 'utf8' });
   let calls = ''; try { calls = readFileSync(join(dir, 'calls'), 'utf8'); } catch { /* No calls if the script refuses before invoking Fly. */ }
   return { result, calls };
@@ -18,8 +27,9 @@ describe('Fly offline cutover', () => {
     expect(result.status).toBe(0);
     expect(calls.match(/config save/g)).toHaveLength(5);
     expect(calls.lastIndexOf('config save')).toBeLessThan(calls.indexOf('scale count'));
+    expect(calls.slice(0, calls.indexOf('scale count')).match(/machines list/g)).toHaveLength(5);
     for (const app of ['web', 'admin', 'realtime', 'processor', 'cron']) {
-      expect(calls).toContain(`scale count 0 --app pagespace-${app} --yes`);
+      expect(calls).toContain(`scale count app=0 --app pagespace-${app} --yes`);
       expect(calls).toContain(`machines list --app pagespace-${app} --json`);
     }
   });

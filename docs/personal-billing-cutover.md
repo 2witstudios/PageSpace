@@ -93,13 +93,16 @@ the old images still serve traffic. This assertion is not a substitute for drain
 
 After subscriber verification/apply and the maintenance-window preparation above,
 dispatch **Docker Images** on master with `billing_cutover=true`. The workflow saves
-the current Fly configuration for web, admin, realtime, processor and cron, scales
-all five application fleets to zero, and verifies that no machines remain (including
+the current Fly configuration and machine topology for web, admin, realtime,
+processor and cron, validates every process/region identity and the singleton
+cron count, then scales every recorded process group in all five fleets to zero, and verifies that no machines remain (including
 stopped machines, which Fly could auto-start). Only a successful drain passes the
 offline assertion to the migration machine. Application volumes and databases are
 not deleted. External schedulers/autoscalers must remain paused during this window.
 The deployment recreates each application with its saved configuration and final
-image. If migration or deployment fails, keep maintenance in place and recover with
+image, restores each recorded process/region count, removes deploy-seeded surplus
+regions, and verifies the resulting topology. An unrecognized machine inventory
+blocks draining; a restoration mismatch fails deployment. If migration or deployment fails, keep maintenance in place and recover with
 the final image; never restart an old image after the column drop. Later ordinary
 deploys pass without an offline assertion because the retired column is absent.
 
