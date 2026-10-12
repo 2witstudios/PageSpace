@@ -57,7 +57,16 @@ vi.mock('@/lib/org-billing/org-subscription', async (importOriginal) => {
   };
 });
 
+// SEAT-7: the personal funding path, observed (the real function still runs). Its own tier
+// check grants an org-priced invoice nothing, so only this spy can see whether the org fork
+// ran BEFORE it.
+vi.mock('@pagespace/lib/billing/credit-funding', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@pagespace/lib/billing/credit-funding')>();
+  return { ...actual, applyStripeFunding: vi.fn(actual.applyStripeFunding) };
+});
+
 import { POST } from '../route';
+import { applyStripeFunding } from '@pagespace/lib/billing/credit-funding';
 import { queryOrgAuditEvents } from '@pagespace/lib/audit/org-audit-query';
 import { resetAuditDbBindingForTests } from '@pagespace/lib/audit/audit-db-binding';
 import { resetDefaultSecurityAuditForTests } from '@pagespace/lib/audit/security-audit';
@@ -901,5 +910,82 @@ describe('Stripe webhook — org routing, idempotency, lapse (real Postgres, in-
     expect(after.subscriptionTier).toBe('free');
   });
 
+  it("SEAT-7 org subscription and invoice events are routed to the org BEFORE the personal-tier handler and are idempotent: with the Owner's users.stripeCustomerId equal to the ORG's customer, created/updated/deleted and invoice.paid each delivered twice and concurrently mirror and fund the org once and never change the Owner's tier, personal subscriptions or personal wallet", async () => {
+    if (!dbAvailable) return;
+    const org = await northwind(7);
+    // The hard case (review ow-irv-2739 P1-1): the personal handlers look a person up by
+    // users.stripeCustomerId, and here that IS the org's customer. Only the org fork running
+    // FIRST keeps these events away from the Owner's personal plan; moving it after
+    // handleSubscriptionChange / handleSubscriptionDeleted / handleInvoicePaid turns this red.
+    await db.update(users).set({ stripeCustomerId: org.customerId, subscriptionTier: 'pro' }).where(eq(users.id, org.ownerId));
+    const ownerBefore = (await db.select().from(users).where(eq(users.id, org.ownerId)))[0];
+    const personalSubsBefore = await db.select().from(subscriptions).where(eq(subscriptions.userId, org.ownerId));
+    const personalWalletsBefore = await db.select().from(wallets).where(eq(wallets.userId, org.ownerId));
 
+    const periodStart = 1_800_000_000;
+    // A full subscription object, so a personal handler that ran would act on it (not crash on it).
+    const snapshot = (type: string, status: string) => eventPayload(type, {
+      id: org.subscriptionId, object: 'subscription', customer: org.customerId, status, metadata: orgMetadata(org.orgId),
+      schedule: null, cancel_at_period_end: false,
+      items: { data: [{ id: 'si_org_base', price: { id: PRICES.basePriceId }, quantity: 1, current_period_start: periodStart, current_period_end: periodStart + 30 * DAY }] },
+    });
+    /** One event delivered twice in a row, then a second event id delivered twice at once; a retry told to come back is redelivered. */
+    const deliverTwiceAndConcurrently = async (make: () => string) => {
+      const first = make();
+      expect(await deliver(first)).toBe(200);
+      expect(await deliver(first)).toBe(200);
+      const racing = make();
+      const statuses = await Promise.all([deliver(racing), deliver(racing)]);
+      expect(statuses).toContain(200);
+      for (const status of statuses) expect([200, 500]).toContain(status);
+      expect(await deliver(racing)).toBe(200);
+    };
+
+    // created → mirrored once; a fresh event about the same state re-reads Stripe and changes nothing.
+    await deliverTwiceAndConcurrently(() => snapshot('customer.subscription.created', 'incomplete'));
+    const afterCreated = await storedSub(org.orgId);
+    expect(afterCreated.stripeSubscriptionId).toBe(org.subscriptionId);
+    const readsAfterCreated = org.stripe.reads.retrieveSubscription;
+    expect(await deliver(snapshot('customer.subscription.created', 'incomplete'))).toBe(200);
+    expect((await storedSub(org.orgId)).seatRevision).toBe(afterCreated.seatRevision);
+    expect(org.stripe.reads.retrieveSubscription).toBeGreaterThan(readsAfterCreated);
+
+    // updated (active) → mirrored; the replayed event is acked without a Stripe read.
+    setStripeStatus(org, 'active');
+    const updated = snapshot('customer.subscription.updated', 'active');
+    expect(await deliver(updated)).toBe(200);
+    const readsAfterUpdate = org.stripe.reads.retrieveSubscription;
+    const rowAfterUpdate = await storedSub(org.orgId);
+    expect(rowAfterUpdate.status).toBe('active');
+    expect(await deliver(updated)).toBe(200);
+    expect(org.stripe.reads.retrieveSubscription).toBe(readsAfterUpdate);
+    expect((await storedSub(org.orgId)).updatedAt).toEqual(rowAfterUpdate.updatedAt);
+    await deliverTwiceAndConcurrently(() => snapshot('customer.subscription.updated', 'active'));
+    expect((await storedSub(org.orgId)).status).toBe('active');
+
+    // invoice.paid → the ORG pool, funded exactly once across five deliveries of two event ids.
+    const invoice = invoiceObject({ customer: org.customerId, subscriptionId: org.subscriptionId, metadata: orgMetadata(org.orgId), seats: 2, paid: true, billingReason: 'subscription_cycle', periodStart: periodStart + 30 * DAY });
+    await deliverTwiceAndConcurrently(() => eventPayload('invoice.paid', invoice));
+    // The personal funding path never saw it.
+    expect(vi.mocked(applyStripeFunding).mock.calls.filter(([event]) => (event.data.object as { id?: string }).id === invoice.id)).toHaveLength(0);
+    const pool = await poolOf(org.orgId);
+    const grants = await ledgerRows(pool!.id);
+    expect(grants).toHaveLength(1);
+    expect(grants[0].stripeRef).toBe(invoice.id);
+    expect((await getOrgStatus(org.orgId)).status).toBe('active');
+
+    // deleted → the ORG lapses; the personal handler would have set the Owner to free.
+    org.stripe.endSubscription(org.subscriptionId, 'canceled');
+    await deliverTwiceAndConcurrently(() => snapshot('customer.subscription.deleted', 'canceled'));
+    expect((await getOrgStatus(org.orgId)).status).toBe('lapsed');
+    expect(await ledgerRows(pool!.id)).toHaveLength(1);
+
+    // The personal-tier path never ran: the Owner row, personal subscriptions and personal wallets are exactly as before.
+    const ownerAfter = (await db.select().from(users).where(eq(users.id, org.ownerId)))[0];
+    expect({ tier: ownerAfter.subscriptionTier, customer: ownerAfter.stripeCustomerId, updatedAt: ownerAfter.updatedAt })
+      .toEqual({ tier: 'pro', customer: org.customerId, updatedAt: ownerBefore.updatedAt });
+    expect(await db.select().from(subscriptions).where(eq(subscriptions.userId, org.ownerId))).toEqual(personalSubsBefore);
+    expect(await db.select().from(wallets).where(eq(wallets.userId, org.ownerId))).toEqual(personalWalletsBefore);
+    expect(await db.select().from(creditLedger).where(and(eq(creditLedger.userId, org.ownerId), sql`${creditLedger.walletId} <> ${pool!.id}`))).toHaveLength(0);
+  });
 });
