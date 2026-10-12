@@ -325,10 +325,27 @@ export async function ensureOrgBusinessSubscription(
     let [stored] = await tx.select().from(orgSubscriptions).where(eq(orgSubscriptions.orgId, orgId)).limit(1);
     if (stored && isLiveOrgSubscriptionStatus(stored.status)) {
       stored = await refreshStored(tx, stored, await deps.stripe.retrieveSubscription(stored.stripeSubscriptionId), prices);
-      if (isLiveOrgSubscriptionStatus(stored.status)) return { kind: 'existing' as const, linkage: toLinkage(stored, customerId) };
+      if (isLiveOrgSubscriptionStatus(stored.status) && stored.status !== 'trialing') return { kind: 'existing' as const, linkage: toLinkage(stored, customerId) };
     }
 
     const history = await deps.stripe.listCustomerSubscriptions(customerId);
+    // Trials are never entitled. An explicit purchase replaces a verified trial
+    // with the normal first-payment checkout. The ended generation remains in
+    // history, so a lost cancellation/create response cannot cause a duplicate.
+    for (const candidate of history) {
+      if (candidate.status !== 'trialing' || candidate.metadata?.[ORG_ID_METADATA_KEY] !== orgId) continue;
+      if (!orgSubscriptionItems(candidate, prices)) {
+        throw new OrgBillingError('not_an_org_business_subscription', 'Organization has an unverified live subscription; repair its prices before provisioning');
+      }
+      const canceled = await deps.stripe.cancelSubscription(
+        candidate.id,
+        orgStripeIdempotencyKey(orgId, 'subscription.cancel', { subscriptionId: candidate.id }),
+      );
+      if (isLiveOrgSubscriptionStatus(canceled.status)) {
+        throw new OrgBillingError('subscription_not_live', 'Unsupported trial could not be ended for paid checkout');
+      }
+      candidate.status = canceled.status;
+    }
     const existing = pickAdoptableOrgSubscription(history, { orgId, prices });
     let sub: OrgStripeSubscription;
     let kind: 'created' | 'adopted';
