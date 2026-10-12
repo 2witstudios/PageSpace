@@ -45,6 +45,11 @@ function makeRow(overrides: Partial<ReclaimRow> = {}): ReclaimRow {
 }
 
 let selectedRows: ReclaimRow[] = [];
+// Each compare-and-delete answers the next entry (rows deleted); an empty queue means it matched.
+let deleteResults: Array<Array<{ stripeSubscriptionId: string }>> = [];
+// What a re-read of one row returns (null: the row is gone).
+let rereadRow: ReclaimRow | null = null;
+const deleteCalls: number[] = [];
 const updateSetCalls: Array<Record<string, unknown>> = [];
 // Controls whether the CAS-guarded UPDATE "wins" (returns the updated row, as
 // a real `WHERE attempts = row.attempts` match would) or "loses" (returns
@@ -59,6 +64,8 @@ vi.mock('@pagespace/db/db', () => ({
           orderBy: () => ({
             limit: async () => selectedRows,
           }),
+          // The drain's re-read of one row after a compare-and-delete found it changed.
+          limit: async () => (rereadRow ? [rereadRow] : []),
         }),
       }),
     }),
@@ -72,13 +79,21 @@ vi.mock('@pagespace/db/db', () => ({
         };
       },
     }),
-    delete: () => ({ where: async () => undefined }),
+    delete: () => ({
+      where: () => ({
+        returning: async () => {
+          deleteCalls.push(1);
+          return deleteResults.shift() ?? [{ stripeSubscriptionId: 'sub_1' }];
+        },
+      }),
+    }),
   },
 }));
 
 vi.mock('@pagespace/db/schema/app-hosting-stripe-reclaims', () => ({
   appHostingStripeReclaims: {
     stripeSubscriptionId: 'stripeSubscriptionId',
+    cancelAt: 'cancelAt',
     attempts: 'attempts',
     recordedAt: 'recordedAt',
   },
@@ -89,6 +104,9 @@ import { drainAppHostingStripeReclaims, STRIPE_RECLAIM_MAX_ATTEMPTS } from '../s
 beforeEach(() => {
   vi.clearAllMocks();
   selectedRows = [];
+  deleteResults = [];
+  rereadRow = null;
+  deleteCalls.length = 0;
   updateSetCalls.length = 0;
   updateWinsCAS = true;
 });
@@ -161,5 +179,33 @@ describe('drainAppHostingStripeReclaims — exhaustion alert', () => {
     const result = await drainAppHostingStripeReclaims();
 
     expect(result).toMatchObject({ canceled: 0, failed: 1 });
+  });
+
+  it('WAL-9 (partial) a period-end release upgraded to "cancel now" while the drain worked is not discarded: the compare-and-delete misses, the row is re-read and cancelled immediately (D-OW-64)', async () => {
+    selectedRows = [makeRow({ cancelAt: 'period_end' })];
+    mockUpdate.mockResolvedValue({ status: 'active', cancel_at_period_end: true });
+    mockCancel.mockResolvedValue({ status: 'canceled' });
+    // The first delete (on cancelAt = period_end) matches nothing: the app was destroyed meanwhile.
+    deleteResults = [[], [{ stripeSubscriptionId: 'sub_1' }]];
+    rereadRow = makeRow({ cancelAt: 'now' });
+
+    const result = await drainAppHostingStripeReclaims();
+
+    expect(mockUpdate).toHaveBeenCalledWith('sub_1', { cancel_at_period_end: true });
+    expect(mockCancel).toHaveBeenCalledWith('sub_1');
+    expect(deleteCalls).toHaveLength(2);
+    expect(result).toMatchObject({ canceled: 1, failed: 0 });
+  });
+
+  it('a row another drain already removed is not re-processed', async () => {
+    selectedRows = [makeRow({ cancelAt: 'period_end' })];
+    mockUpdate.mockResolvedValue({ status: 'active', cancel_at_period_end: true });
+    deleteResults = [[]];
+    rereadRow = null;
+
+    const result = await drainAppHostingStripeReclaims();
+
+    expect(mockCancel).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ canceled: 1, failed: 0 });
   });
 });
