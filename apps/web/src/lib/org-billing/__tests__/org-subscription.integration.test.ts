@@ -15,11 +15,14 @@ import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import { db } from '@pagespace/db/db';
 import { eq, inArray } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
-import { organizations, orgMembers, orgSubscriptions } from '@pagespace/db/schema/organizations';
+import { organizations, orgMembers, orgSubscriptionFunding, orgSubscriptions } from '@pagespace/db/schema/organizations';
+import { creditLedger } from '@pagespace/db/schema/credits';
+import { wallets } from '@pagespace/db/schema/wallets';
 import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
 import { createOrganization } from '@pagespace/lib/organizations/repository';
 import { deleteOrganization } from '@pagespace/lib/organizations/deletion';
+import { applyOrgPoolRefill } from '@pagespace/lib/billing/wallet-funding-shell';
 import { checkOrgActive, getOrgStatus } from '@pagespace/lib/organizations/status';
 import { ORG_ID_METADATA_KEY, type OrgBusinessPrices } from '@pagespace/lib/billing/org-subscription-core';
 import {
@@ -97,7 +100,10 @@ describe('org Business subscription shell (real Postgres, in-memory Stripe)', ()
 
   afterAll(async () => {
     if (!dbAvailable) return;
+    if (userIds.length > 0) await db.delete(creditLedger).where(inArray(creditLedger.userId, userIds));
     if (orgIds.length > 0) {
+      await db.delete(wallets).where(inArray(wallets.orgId, orgIds));
+      await db.delete(orgSubscriptionFunding).where(inArray(orgSubscriptionFunding.orgId, orgIds));
       await db.delete(orgSubscriptions).where(inArray(orgSubscriptions.orgId, orgIds));
       await db.delete(orgMembers).where(inArray(orgMembers.orgId, orgIds));
       await db.delete(organizations).where(inArray(organizations.id, orgIds));
@@ -297,6 +303,74 @@ describe('org Business subscription shell (real Postgres, in-memory Stripe)', ()
       expect(stripe.writes).toEqual(before);
     });
 
+    /** What the invoice.paid webhook does with the paid invoice: the real funding shell, recording the proof. */
+    async function deliverInvoicePaid(org: { orgId: string; stripe: FakeOrgStripe }, subscriptionId: string) {
+      const invoice = org.stripe.invoiceFor(subscriptionId)!;
+      const sub = org.stripe.subscriptions.get(subscriptionId)!;
+      const line = (priceId: string, amount: number) => ({
+        amount,
+        period: { start: sub.currentPeriodStart, end: sub.currentPeriodEnd },
+        pricing: { price_details: { price: priceId } },
+        parent: { subscription_item_details: { subscription_item: sub.items.find((i) => i.priceId === priceId)!.id } },
+      });
+      return applyOrgPoolRefill(
+        {
+          id: invoice.id,
+          customer: invoice.customerId,
+          amount_paid: invoice.amountPaidCents,
+          subtotal: invoice.amountPaidCents,
+          billing_reason: 'subscription_create',
+          parent: { subscription_details: { subscription: subscriptionId, metadata: sub.metadata } },
+          lines: { has_more: false, data: [line(PRICES.basePriceId, invoice.amountPaidCents), line(PRICES.seatPriceId, 0)] },
+        },
+        { ...PRICES, active: true },
+      );
+    }
+
+    it('SEAT-9 (partial) an active subscription with verified funding is existing: no invoice read, no write, no payment step', async () => {
+      if (!dbAvailable) return;
+      process.env.DEPLOYMENT_MODE = 'cloud';
+      const org = await paidNorthwind();
+      expect((await deliverInvoicePaid(org, org.sub.id)).kind).toBe('granted');
+      const before = org.writes();
+      const invoiceReads = org.stripe.reads.latestInvoice;
+      const call = await provisionOrgSubscription(org.orgId, org.deps);
+      expect(call).toMatchObject({ result: { kind: 'existing', linkage: { status: 'active' } }, payment: { kind: 'none' }, activation: 'active' });
+      expect(org.stripe.writes).toEqual(before);
+      expect(org.stripe.reads.latestInvoice).toBe(invoiceReads);
+    });
+
+    it('SEAT-8 (partial) SEAT-9 (partial) never funded, but Stripe has the payment: funding_pending with no Stripe write; the webhook records the proof and the next call is active', async () => {
+      if (!dbAvailable) return;
+      process.env.DEPLOYMENT_MODE = 'cloud';
+      const org = await paidNorthwind();
+      expect(await getOrgStatus(org.orgId)).toEqual({ status: 'lapsed', reason: 'never_funded' });
+      const before = org.writes();
+      const pending = await provisionOrgSubscription(org.orgId, org.deps);
+      expect(pending).toMatchObject({ result: { kind: 'existing', linkage: { status: 'active' } }, payment: { kind: 'none' }, activation: 'funding_pending' });
+      expect(org.stripe.writes).toEqual(before);
+      expect(await db.select().from(orgSubscriptionFunding).where(eq(orgSubscriptionFunding.orgId, org.orgId))).toHaveLength(0);
+
+      expect((await deliverInvoicePaid(org, org.sub.id)).kind).toBe('granted');
+      expect(await getOrgStatus(org.orgId)).toEqual({ status: 'active', reason: null });
+      const active = await provisionOrgSubscription(org.orgId, org.deps);
+      expect(active).toMatchObject({ result: { kind: 'existing' }, payment: { kind: 'none' }, activation: 'active' });
+      expect(org.stripe.writes).toEqual(before);
+    });
+
+    it('SEAT-9 (partial) D-OW-30: active but nothing ever funded it (a $0 non-gift invoice) is refused for support — never existing, never a payment that cannot come', async () => {
+      if (!dbAvailable) return;
+      process.env.DEPLOYMENT_MODE = 'cloud';
+      const org = await paidNorthwind();
+      org.stripe.invoiceFor(org.sub.id)!.amountPaidCents = 0;
+      const before = org.writes();
+      await expect(provisionOrgSubscription(org.orgId, org.deps)).rejects.toMatchObject(requiresSupport);
+      expect(org.stripe.writes).toEqual(before);
+      expect((await deliverInvoicePaid(org, org.sub.id)).kind).toBe('nothing');
+      expect(await db.select().from(orgSubscriptionFunding).where(eq(orgSubscriptionFunding.orgId, org.orgId))).toHaveLength(0);
+      expect(await getOrgStatus(org.orgId)).toEqual({ status: 'lapsed', reason: 'never_funded' });
+    });
+
     it('a lost row whose subscription lacks the seat item (not a plan PageSpace creates) is refused for support, never repaired', async () => {
       if (!dbAvailable) return;
       const { orgId, deps, stripe } = await northwind(8);
@@ -329,8 +403,8 @@ describe('org Business subscription shell (real Postgres, in-memory Stripe)', ()
     if (!dbAvailable) return;
     const { orgId, deps, stripe, seats } = await northwind(1);
     const first = await ensureOrgBusinessSubscription(orgId, deps);
+    stripe.payLatestInvoice(first.linkage.stripeSubscriptionId);
     const live = stripe.subscriptions.get(first.linkage.stripeSubscriptionId)!;
-    live.status = 'active';
     const originalItems = live.items.map(item => ({ ...item }));
     live.items = live.items.map(item => item.priceId === PRICES.basePriceId ? { ...item, priceId: 'price_unknown' } : item);
     const writes = { ...stripe.writes };
@@ -757,8 +831,7 @@ describe('org Business subscription shell (real Postgres, in-memory Stripe)', ()
       if (!dbAvailable) return;
       const { orgId, deps, stripe } = await northwind(1);
       const first = await ensureOrgBusinessSubscription(orgId, deps);
-      const sub = stripe.subscriptions.get(first.linkage.stripeSubscriptionId);
-      if (sub) sub.status = 'active';
+      stripe.payLatestInvoice(first.linkage.stripeSubscriptionId);
       const again = await ensureOrgBusinessSubscription(orgId, deps);
       expect(again).toMatchObject({ kind: 'existing', linkage: { status: 'active' } });
       expect((await rowsFor(orgId))[0].status).toBe('active');

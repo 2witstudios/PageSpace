@@ -5,7 +5,7 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ## [Unreleased]
 
-- Organization capabilities now require a verified payment or supported gift for the current subscription. A zero-dollar non-gift invoice or balance left from a previous subscription cannot activate an unpaid organization.
+- Organization capabilities now require a verified payment or supported gift for the current subscription. A zero-dollar non-gift invoice or balance left from a previous subscription cannot activate an unpaid organization. Reactivate on such an organization now says what is happening: if the payment already went through it shows that activation is finishing and the page updates on its own; if nothing ever paid for the subscription it points you to support instead of suggesting a payment may still be pending.
 
 - Billing now recognizes paid plans only by their configured Stripe price IDs. Unknown and retired prices no longer gain paid access or credit grants by matching a plan amount.
 

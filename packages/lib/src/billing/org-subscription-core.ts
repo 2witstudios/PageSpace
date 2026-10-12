@@ -16,7 +16,8 @@
  *     creating orgs over and over.
  *   - SEAT-9 reactivation, [D-OW-44]: {@link planOrgReactivation} decides from Stripe's
  *     current facts. It only repairs states PageSpace itself creates (no subscription, an
- *     ended one, a payment owed on a payable invoice); anything changed outside PageSpace
+ *     ended one, a payment owed on a payable invoice); an active subscription counts only once
+ *     its funding is verified or its payment is in (D-OW-30); anything changed outside PageSpace
  *     (a trial, a pause, send_invoice collection, an unpayable invoice, other prices, a
  *     second subscription) is refused for support, never mutated in place.
  *
@@ -35,6 +36,7 @@
 
 import { createHash } from 'node:crypto';
 import { orgExtraSeatQuantity } from './org-plan-quote';
+import { GIFT_SUBSCRIPTION_METADATA_TYPE, ORG_POOL_FUNDS_GIFTS } from './wallet-funding';
 
 /** Metadata key stamped on the org's Stripe customer and subscription. */
 export const ORG_ID_METADATA_KEY = 'pagespace_org_id';
@@ -191,12 +193,14 @@ export interface OrgSubscriptionCandidate {
   itemsHasMore?: boolean;
 }
 
-/** The subscription's latest invoice, narrowed to what paying it needs. */
+/** The subscription's latest invoice, narrowed to what paying it (or knowing it was paid) needs. */
 export interface OrgLatestInvoice {
   /** Stripe invoice.status: draft | open | paid | uncollectible | void. */
   status: string | null;
   /** Stripe invoice.amount_due, minor units. Read only to know whether anything is owed. */
   amountDueCents: number;
+  /** Stripe invoice.amount_paid, minor units. Read only to know whether money (not a $0 invoice) came in. */
+  amountPaidCents: number;
   /** invoice.confirmation_secret.client_secret: what the client confirms the card with. */
   clientSecret: string | null;
 }
@@ -254,10 +258,32 @@ export interface OrgSubscriptionFacts extends OrgSubscriptionCandidate {
   /** Stripe collection_method: charge_automatically | send_invoice. */
   collectionMethod: string;
   /**
-   * Its latest invoice. Read only for a subscription that may owe a payment
-   * ({@link orgSubscriptionMayOwePayment}); null for every other subscription and when it has none.
+   * Its latest invoice. Read only where {@link orgReactivationReadsInvoice} says the decision
+   * needs it; null for every other subscription and when it has none.
    */
   latestInvoice: OrgLatestInvoice | null;
+}
+
+/**
+ * Whether the reactivation decision reads this subscription's latest invoice: it may owe a
+ * payment ({@link orgSubscriptionMayOwePayment}), or it is active without verified funding
+ * (only the invoice says whether the payment is already in).
+ */
+export function orgReactivationReadsInvoice(sub: { id: string; status: string }, fundedSubscriptionIds: ReadonlySet<string>): boolean {
+  return orgSubscriptionMayOwePayment(sub.status) || (sub.status === 'active' && !fundedSubscriptionIds.has(sub.id));
+}
+
+/**
+ * D-OW-30: whether an active, not-yet-funded subscription's latest invoice is funding Stripe
+ * already has, which the invoice.paid webhook turns into the org_subscription_funding proof
+ * (wallet-funding-shell). Money paid counts; a $0 invoice counts only as a gift on the org's
+ * OWN (stored) subscription, the only gift that webhook funds. Anything else never funds.
+ */
+function orgFundingIsPending(subscription: OrgSubscriptionFacts, ownSubscription: boolean): boolean {
+  const invoice = subscription.latestInvoice;
+  if (invoice?.status !== 'paid') return false;
+  if (invoice.amountPaidCents > 0) return true;
+  return ORG_POOL_FUNDS_GIFTS && ownSubscription && subscription.metadata?.type === GIFT_SUBSCRIPTION_METADATA_TYPE;
 }
 
 /** Why a reactivation is refused for support: each is a state PageSpace never creates. */
@@ -269,11 +295,15 @@ export type OrgReactivationSupportReason =
   | 'trialing'
   | 'paused'
   | 'no_payable_invoice'
+  /** Active in Stripe with no verified funding and no payment that could fund it (D-OW-30: a $0 invoice never funds). */
+  | 'unfunded_active'
   | 'unknown_status';
 
 export type OrgReactivationPlan<S extends OrgSubscriptionFacts = OrgSubscriptionFacts> =
-  /** The org's subscription is active: nothing to pay, nothing to write. */
+  /** The org's subscription is active and its funding is verified: nothing to pay, nothing to write. */
   | { kind: 'already_active'; subscription: S; adopted: boolean; items: OrgSubscriptionItemLinkage }
+  /** Active and paid in Stripe; the invoice.paid webhook has not recorded the proof yet. Nothing to pay, nothing to write. */
+  | { kind: 'funding_pending'; subscription: S; adopted: boolean; items: OrgSubscriptionItemLinkage }
   /** The org owes its first or a failed payment on an invoice the client can pay. */
   | { kind: 'confirm_payment'; subscription: S; adopted: boolean; items: OrgSubscriptionItemLinkage; clientSecret: string }
   /** The org has no live subscription: create the paid one, following `previousSubscriptionId`. */
@@ -290,14 +320,17 @@ const newestFirst = (a: OrgSubscriptionCandidate, b: OrgSubscriptionCandidate): 
  *   - no live subscription on the org's customer (none ever, or every one ended) →
  *     `new_checkout`, the one write the shell may make, keyed on the newest ended generation;
  *   - exactly one, stamped with this org, with the configured plan items and automatic collection:
- *       active → `already_active`; incomplete / past_due / unpaid whose latest invoice is open,
- *       owes something and carries a confirmation secret → `confirm_payment`;
+ *       active with a verified funding proof (`fundedSubscriptionIds`, org_subscription_funding)
+ *       → `already_active`; active, unfunded, whose latest invoice already carries the funding the
+ *       invoice.paid webhook records → `funding_pending`; incomplete / past_due / unpaid whose
+ *       latest invoice is open, owes something and carries a confirmation secret → `confirm_payment`;
  *   - everything else → `requires_support`: a second live subscription, one not stamped with
  *     this org (zero trust on metadata: a removed stamp never makes a live subscription
  *     disappear, so it can never lead to buying a second), an unrecognized price
  *     identity, send_invoice collection, a Stripe-side trial or pause, a payment owed on an
- *     invoice the client cannot pay (void, uncollectible, paid, draft, missing, no secret),
- *     or a status this code does not know.
+ *     invoice the client cannot pay (void, uncollectible, paid, draft, missing, no secret), an
+ *     active subscription nothing ever funded (a $0 non-gift invoice, an un-gifted 100% coupon:
+ *     `unfunded_active`, D-OW-30), or a status this code does not know.
  *
  * `subscriptions` is EVERY subscription on the org's own Stripe customer, plus the stored one
  * if Stripe's listing lacks it: the customer holds only org subscriptions, so nothing on it is
@@ -310,6 +343,8 @@ export function planOrgReactivation<S extends OrgSubscriptionFacts>(input: {
   prices: OrgBusinessPrices;
   storedSubscriptionId: string | null;
   subscriptions: ReadonlyArray<S>;
+  /** The org's subscriptions with a verified funding proof (org_subscription_funding). */
+  fundedSubscriptionIds: ReadonlySet<string>;
 }): OrgReactivationPlan<S> {
   const live = input.subscriptions.filter((s) => isLiveOrgSubscriptionStatus(s.status));
   if (live.length === 0) {
@@ -324,7 +359,12 @@ export function planOrgReactivation<S extends OrgSubscriptionFacts>(input: {
   if (!items) return { kind: 'requires_support', reason: 'unrecognized_price' };
   if (subscription.collectionMethod !== 'charge_automatically') return { kind: 'requires_support', reason: 'manual_collection' };
   const adopted = subscription.id !== input.storedSubscriptionId;
-  if (subscription.status === 'active') return { kind: 'already_active', subscription, adopted, items };
+  if (subscription.status === 'active') {
+    if (input.fundedSubscriptionIds.has(subscription.id)) return { kind: 'already_active', subscription, adopted, items };
+    return orgFundingIsPending(subscription, !adopted)
+      ? { kind: 'funding_pending', subscription, adopted, items }
+      : { kind: 'requires_support', reason: 'unfunded_active' };
+  }
   if (subscription.status === 'trialing' || subscription.status === 'paused') return { kind: 'requires_support', reason: subscription.status };
   if (!orgSubscriptionMayOwePayment(subscription.status)) return { kind: 'requires_support', reason: 'unknown_status' };
   const payment = orgPaymentStep({ subscriptionStatus: subscription.status, latestInvoice: subscription.latestInvoice });

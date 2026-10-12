@@ -41,6 +41,12 @@ export interface OrgSubscriptionSummary {
 
 export type OrgPaymentStep = { kind: 'none' } | { kind: 'confirm_payment'; clientSecret: string };
 
+/**
+ * Where the org's activation stands after POST billing/subscription: `active` (funding verified),
+ * `payment_required` (confirm `payment`), `funding_pending` (paid; the webhook is recording it).
+ */
+export type OrgActivation = 'active' | 'payment_required' | 'funding_pending';
+
 export type OrgBillingStart =
   | { state: 'not_billed' }
   | { state: 'payment_required'; subscription: OrgSubscriptionSummary; payment: { kind: 'confirm_payment'; clientSecret: string } }
@@ -133,7 +139,7 @@ export const postOrganization = (body: { name: string; slug: string }) =>
   post<CreateOrgResponse>('/api/orgs', body);
 
 export const startOrgSubscription = (orgId: string) =>
-  post<{ subscription: OrgSubscriptionSummary; payment: OrgPaymentStep }>(`/api/orgs/${orgId}/billing/subscription`);
+  post<{ subscription: OrgSubscriptionSummary; payment: OrgPaymentStep; activation: OrgActivation }>(`/api/orgs/${orgId}/billing/subscription`);
 
 export const openOrgBillingPortal = (orgId: string) => post<{ url: string }>(`/api/orgs/${orgId}/billing/portal`);
 

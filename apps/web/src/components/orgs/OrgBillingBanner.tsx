@@ -29,8 +29,11 @@ export async function goToOrgBillingPortal(orgId: string): Promise<void> {
  * The lapse banners (SEAT-9 / D-OW-33, canvas OrgLapsed) on every org surface, from GET
  * /api/orgs/[orgId] billingNotice: reactivate for the Owner and Admins, read_only
  * for Members. Reactivating pays what is owed with the Payment Element (POST billing/subscription).
- * A subscription changed outside PageSpace ([D-OW-44] `billing_requires_support`) is never
- * reported as reactivated: the banner says so and opens the in-app support channel instead.
+ * A subscription PageSpace cannot activate ([D-OW-44] `billing_requires_support`, including an
+ * active one nothing ever funded) is never reported as reactivated: the banner says so and opens
+ * the in-app support channel instead. A payment already in whose funding proof the webhook is
+ * still recording (`funding_pending`, [D-OW-30]) shows activation finishing — never success; the
+ * page's org:changed listener (useOrgRealtime) refreshes the notice away once the proof lands.
  */
 export function OrgBillingBanner({ orgId, orgName, notice, onReactivated }: {
   orgId: string;
@@ -42,6 +45,7 @@ export function OrgBillingBanner({ orgId, orgName, notice, onReactivated }: {
   const [busy, setBusy] = useState(false);
   const [clientSecret, setClientSecret] = useState<string | null>(null);
   const [needsSupport, setNeedsSupport] = useState(false);
+  const [activationPending, setActivationPending] = useState(false);
   const [supportOpen, setSupportOpen] = useState(false);
   const stripeOptions = useMemo(
     () => (clientSecret ? { clientSecret, appearance: { theme: (resolvedTheme === 'dark' ? 'night' : 'stripe') as 'night' | 'stripe' } } : undefined),
@@ -61,7 +65,9 @@ export function OrgBillingBanner({ orgId, orgName, notice, onReactivated }: {
       const res = await startOrgSubscription(orgId);
       if (res.payment.kind === 'confirm_payment') setClientSecret(res.payment.clientSecret);
       else {
-        toast.message('Billing refreshed. Payment confirmation may still be pending.');
+        // Nothing to pay. `active`: the notice was stale. `funding_pending`: the payment is in and
+        // org:changed arrives when the webhook records it. Either way one refresh, no success claim.
+        setActivationPending(res.activation === 'funding_pending');
         onReactivated?.();
       }
     } catch (error) {
@@ -101,12 +107,18 @@ export function OrgBillingBanner({ orgId, orgName, notice, onReactivated }: {
                 {ORG_ERROR_COPY.billing_requires_support}
               </span>
             ) : null}
+            {activationPending ? (
+              <span className="flex items-center gap-1.5 text-xs font-medium text-foreground/80">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                Payment received — activation is finishing; this page updates automatically.
+              </span>
+            ) : null}
             <div className="mt-1.5 flex flex-wrap gap-2">
               {needsSupport ? (
                 <Button size="sm" onClick={() => setSupportOpen(true)}>
                   Contact support
                 </Button>
-              ) : (
+              ) : activationPending ? null : (
                 <Button size="sm" onClick={() => void reactivate()} disabled={busy}>
                   {busy ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : null}
                   Reactivate

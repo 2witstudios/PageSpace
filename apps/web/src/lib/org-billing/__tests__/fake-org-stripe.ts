@@ -261,7 +261,14 @@ export class FakeOrgStripe implements OrgBillingStripe {
   async latestInvoice(subscriptionId: string): Promise<OrgLatestInvoice | null> {
     this.reads.latestInvoice += 1;
     const invoice = this.invoiceFor(subscriptionId);
-    return invoice ? { status: invoice.status, amountDueCents: invoice.status === 'paid' ? 0 : invoice.amountDueCents, clientSecret: invoice.clientSecret } : null;
+    return invoice
+      ? {
+          status: invoice.status,
+          amountDueCents: invoice.status === 'paid' ? 0 : invoice.amountDueCents,
+          amountPaidCents: invoice.amountPaidCents,
+          clientSecret: invoice.clientSecret,
+        }
+      : null;
   }
 
   async createBillingPortalSession(customerId: string, returnUrl: string): Promise<{ url: string }> {

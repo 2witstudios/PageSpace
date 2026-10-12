@@ -36,6 +36,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getOrgStatus } from '@pagespace/lib/organizations/status';
 import { applyOrgPoolRefill, type OrgPoolRefillOutcome } from '@pagespace/lib/billing/wallet-funding-shell';
 import { orgBillingLockKey } from '@pagespace/lib/billing/org-subscription-core';
+import { GIFT_SUBSCRIPTION_METADATA_TYPE } from '@pagespace/lib/billing/wallet-funding';
 import {
   orgInvoiceExtraSeats,
   planOrgSubscriptionPriceMirror,
@@ -138,7 +139,7 @@ export async function mirrorOrgSubscription(
       prices: { basePriceId: deps.basePriceId(), seatPriceId: deps.seatPriceId() },
     });
     const next = {
-      gifted: fetched.metadata?.type === 'gift_subscription',
+      gifted: fetched.metadata?.type === GIFT_SUBSCRIPTION_METADATA_TYPE,
       // [D-OW-44] mirrored with the status: an invoice-billed subscription never grants capability.
       collectionMethod: fetched.collectionMethod,
       currentPeriodStart: fetched.currentPeriodStart === null ? null : new Date(fetched.currentPeriodStart * 1000),

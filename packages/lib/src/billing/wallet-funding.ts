@@ -55,6 +55,14 @@ export const ORG_POOL_TIER = 'business' as const;
 export const ORG_POOL_FUNDS_GIFTS = true;
 
 /**
+ * `metadata.type` the admin gift-subscription route stamps on a Stripe subscription it
+ * creates (apps/admin .../gift-subscription/route.ts). The one place a gift is recognized:
+ * the invoice snapshot (personal and org funding), the subscription mirrors, and the
+ * reactivation decision all read this constant.
+ */
+export const GIFT_SUBSCRIPTION_METADATA_TYPE = 'gift_subscription';
+
+/**
  * The pool grant for an org subscription we fund ourselves (an admin gift): the
  * Business list price for the base plus `extraSeats` extra seats at the list seat
  * price, times the Business ratio. Integer cents; multiply before any divide.

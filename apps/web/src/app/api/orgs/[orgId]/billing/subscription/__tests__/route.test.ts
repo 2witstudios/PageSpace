@@ -81,7 +81,7 @@ beforeEach(() => {
   flags.billingEnabled = true;
   vi.mocked(isAuthError).mockImplementation((result) => 'error' in result);
   vi.mocked(authenticateRequestWithOptions).mockResolvedValue(session('user_priya'));
-  vi.mocked(provisionOrgSubscription).mockResolvedValue({ result: { kind: 'created', linkage }, payment: PAY });
+  vi.mocked(provisionOrgSubscription).mockResolvedValue({ result: { kind: 'created', linkage }, payment: PAY, activation: 'payment_required' });
 });
 
 describe('POST /api/orgs/[orgId]/billing/subscription', () => {
@@ -94,6 +94,7 @@ describe('POST /api/orgs/[orgId]/billing/subscription', () => {
       expect(body).toEqual({
         subscription: { status: 'incomplete', currentPeriodEnd: PERIOD_END.toISOString(), extraSeatQuantity: 0 },
         payment: { kind: 'confirm_payment', clientSecret: 'pi_123_secret_abc' },
+        activation: 'payment_required',
       });
       expect(JSON.stringify(body)).not.toMatch(/cus_|sub_|si_/);
     }
@@ -114,10 +115,19 @@ describe('POST /api/orgs/[orgId]/billing/subscription', () => {
 
   it('SEAT-1 (partial) a replay on a subscribed org answers 200 with the same subscription; a paid-up org gets no payment step', async () => {
     as('OWNER');
-    vi.mocked(provisionOrgSubscription).mockResolvedValue({ result: { kind: 'existing', linkage: { ...linkage, status: 'active' } }, payment: { kind: 'none' } });
+    vi.mocked(provisionOrgSubscription).mockResolvedValue({ result: { kind: 'existing', linkage: { ...linkage, status: 'active' } }, payment: { kind: 'none' }, activation: 'active' });
     const res = await call();
     expect(res.status).toBe(200);
-    expect((await res.json()).payment).toEqual({ kind: 'none' });
+    expect(await res.json()).toMatchObject({ payment: { kind: 'none' }, activation: 'active' });
+  });
+
+  it('SEAT-9 (partial) an active org whose payment is in but whose funding proof is not recorded yet answers 200 activation funding_pending: nothing to pay, and never reported as active', async () => {
+    as('OWNER');
+    vi.mocked(provisionOrgSubscription).mockResolvedValue({ result: { kind: 'existing', linkage: { ...linkage, status: 'active' } }, payment: { kind: 'none' }, activation: 'funding_pending' });
+    const res = await call();
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ payment: { kind: 'none' }, activation: 'funding_pending' });
+    expect(auditRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ details: expect.objectContaining({ activation: 'funding_pending' }) }));
   });
 
   it('SEAT-6 (partial) is absent where billing is off (onprem, tenant) and while orgs are dark', async () => {
@@ -134,16 +144,17 @@ describe('POST /api/orgs/[orgId]/billing/subscription', () => {
     expect(provisionOrgSubscription).not.toHaveBeenCalled();
   });
 
-  it('SEAT-9 (partial) D-OW-44: a subscription changed outside PageSpace is a 409 billing_requires_support, never a success', async () => {
+  it.each(['manual_collection', 'unfunded_active'])('SEAT-9 (partial) D-OW-44: a subscription PageSpace cannot activate (%s) is a 409 billing_requires_support, never a success', async (reason) => {
     as('OWNER');
-    vi.mocked(provisionOrgSubscription).mockRejectedValueOnce(new OrgBillingError('billing_requires_support', 'x: manual_collection'));
+    vi.mocked(provisionOrgSubscription).mockRejectedValueOnce(new OrgBillingError('billing_requires_support', `x: ${reason}`));
     const res = await call();
     expect(res.status).toBe(409);
     const body = await res.json();
     expect(body.code).toBe('billing_requires_support');
     expect(body).not.toHaveProperty('subscription');
     expect(body).not.toHaveProperty('payment');
-    expect(JSON.stringify(body)).not.toMatch(/manual_collection/);
+    expect(body).not.toHaveProperty('activation');
+    expect(JSON.stringify(body)).not.toContain(reason);
   });
 
   it('a Stripe failure is a retryable 502, unconfigured prices a 503, a vanished org a 404', async () => {

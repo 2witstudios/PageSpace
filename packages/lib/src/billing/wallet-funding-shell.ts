@@ -42,6 +42,7 @@ import { MONEY_MODEL_V2_ACTIVE, tierAllowanceCents } from './money-model';
 import { computeMonthlyRefill } from './credit-core';
 import { RENEWAL_CAPABLE_STATUSES, TIER_ALLOWANCE_REFILLS } from './credit-pricing';
 import {
+  GIFT_SUBSCRIPTION_METADATA_TYPE,
   orgPoolRefillGrant,
   orgSubscriptionFundingBasis,
   refillPool,
@@ -120,8 +121,6 @@ export type OrgPoolRefillOutcome =
   | { kind: 'granted'; orgId: string; walletId: string; allowanceCents: number }
   | { kind: 'duplicate'; orgId: string }
   | { kind: 'nothing'; orgId: string; reason: string };
-
-const GIFT_SUBSCRIPTION_METADATA_TYPE = 'gift_subscription';
 
 function customerIdOf(invoice: OrgInvoice): string | null {
   const c = invoice.customer;
