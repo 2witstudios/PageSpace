@@ -94,7 +94,7 @@ import {
   type OrgSubscriptionFacts,
   type OrgSubscriptionItemLinkage,
 } from '@pagespace/lib/billing/org-subscription-core';
-import { recordOrgAuditEvent } from '@pagespace/lib/audit/org-audit';
+import { transactionWithOrgAudit } from '@pagespace/lib/audit/org-audit';
 
 /** A Stripe subscription as the shell reads it. Unix seconds throughout. */
 export interface OrgStripeSubscription extends OrgSubscriptionCandidate {
@@ -392,7 +392,9 @@ export async function provisionOrgSubscription(
   const prices = configuredPrices(deps);
   const { customerId } = await ensureOrgStripeCustomer(orgId, deps);
 
-  const outcome = await db.transaction(async (tx): Promise<ProvisionOutcome> => {
+  // AUD-1: the subscription events are staged in this transaction (the outbox) and published after commit, which
+  // never throws: once Stripe's create and the stored row have committed, nothing after can fail the caller.
+  const outcome = await transactionWithOrgAudit(async (tx, audit): Promise<ProvisionOutcome> => {
     await lockOrgBilling(tx, orgId);
     // The org may have been deleted while this call waited for the lock: never create a
     // Stripe subscription for an org that is gone (the delete holds the same lock).
@@ -433,6 +435,15 @@ export async function provisionOrgSubscription(
         loggers.api.error('org subscription created during reactivation needs support', undefined, {
           orgId, subscriptionId: sub.id, status: sub.status, reason: plan.reason, stored: items !== null,
         });
+        // AUD-1: a live subscription PageSpace just created is a billing event even though it is refused, so the
+        // org's log (not only the app log) shows it.
+        await audit({
+          orgId,
+          eventType: 'org.billing.subscription_changed',
+          resourceType: 'org_subscription',
+          resourceId: orgId,
+          details: { source: 'provisioning', kind: 'created_requires_support', reason: plan.reason, to: sub.status, stored: items !== null },
+        });
         return { kind: 'requires_support', reason: plan.reason };
       }
       created = true;
@@ -445,6 +456,16 @@ export async function provisionOrgSubscription(
     const activation: OrgActivation =
       plan.kind === 'confirm_payment' ? 'payment_required' : plan.kind === 'funding_pending' ? 'funding_pending' : 'active';
     loggers.api.info('org business subscription linked', { orgId, subscriptionId: plan.subscription.id, kind, status: plan.subscription.status, payment: payment.kind, activation });
+    if (kind !== 'existing') {
+      // AUD-1: the org's subscription began (at creation, or a re-subscribe after one ended), committed with its row.
+      await audit({
+        orgId,
+        eventType: 'org.billing.subscription_changed',
+        resourceType: 'org_subscription',
+        resourceId: orgId,
+        details: { source: 'provisioning', kind, to: row.status },
+      });
+    }
     return { kind: 'linked', result: { kind, linkage: toLinkage(row, customerId) }, payment, activation };
   });
 
@@ -453,16 +474,6 @@ export async function provisionOrgSubscription(
     throw new OrgBillingError('billing_requires_support', `Organization ${orgId} billing needs support: ${outcome.reason}`);
   }
   const { result, payment, activation } = outcome;
-  if (result.kind !== 'existing') {
-    // AUD-1: the org's subscription began (at creation, or a re-subscribe after one ended).
-    await recordOrgAuditEvent({
-      orgId,
-      eventType: 'org.billing.subscription_changed',
-      resourceType: 'org_subscription',
-      resourceId: orgId,
-      details: { source: 'provisioning', kind: result.kind, to: result.linkage.status },
-    });
-  }
   return { result, payment, activation };
 }
 
