@@ -14,11 +14,14 @@ const titles = (sections: ReturnType<typeof orgHubSections>) => sections.map((s)
 const rows = (sections: ReturnType<typeof orgHubSections>) => sections.flatMap((s) => s.rows.map((r) => r.title));
 
 describe('orgHubSections', () => {
-  it('UI-11 (partial): a plain Member sees only Leave, no org settings', () => {
+  it('UI-11 (partial): a plain Member sees no org settings: only the Drives directory (DRV-6, not a setting) and Leave', () => {
     const sections = orgHubSections({ orgId: 'o1', orgName: 'Northwind Labs', role: 'MEMBER', counts, billingEnabled: true });
-    expect(titles(sections)).toEqual(['Membership']);
-    expect(rows(sections)).toEqual(['Leave Northwind Labs']);
-    expect(sections[0].rows[0]).toMatchObject({ action: 'leave' });
+    expect(titles(sections)).toEqual(['Drives', 'Membership']);
+    expect(rows(sections)).toEqual(['Drives directory', 'Leave Northwind Labs']);
+    expect(sections[0].rows[0]).toMatchObject({ href: '/orgs/o1/drives', available: true });
+    expect(sections[1].rows[0]).toMatchObject({ action: 'leave' });
+    // Nothing under /settings is offered to a Member.
+    expect(sections.flatMap((s) => s.rows).some((r) => r.href?.includes('/settings'))).toBe(false);
   });
 
   it('UI-1 (partial): an Admin sees the canvas groups in order, each row linking under /orgs/[orgId]/settings', () => {

@@ -64,7 +64,17 @@ export function orgHubSections({ orgId, orgName, role, counts, billingEnabled, r
     rows: [{ title: `Leave ${orgName}`, description: 'Lose access to its drives unless you were invited to them directly', icon: 'leave', action: 'leave', available: true }],
   };
 
-  if (!orgRoleAtLeast(role, 'ADMIN')) return [leave];
+  // UI-11: a plain Member gets no org settings. The Drives directory is not a setting: it is how a
+  // member finds and asks to join a Restricted drive (DRV-6), so it is theirs too.
+  if (!orgRoleAtLeast(role, 'ADMIN')) {
+    return [
+      {
+        title: 'Drives',
+        rows: [{ title: 'Drives directory', description: `Drives in ${orgName} you can open or ask to join`, icon: 'drives', href: `/orgs/${orgId}/drives`, available: true }],
+      },
+      leave,
+    ];
+  }
 
   const sections: OrgHubSection[] = [];
 

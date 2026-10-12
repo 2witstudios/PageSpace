@@ -63,9 +63,17 @@ describe('DriveSwitcherDialog with organizations', () => {
   it('DRV-9 (partial) shows nothing the person cannot open: an un-joined Restricted drive is never listed', () => {
     render(<DriveSwitcherDialog open onOpenChange={vi.fn()} />);
     expect(screen.queryByText('Finance')).toBeNull();
-    // Every option but the way out (All drives) and an org's settings is a drive.
-    const listed = screen.getAllByRole('option').map((o) => o.textContent ?? '').filter((t) => !/ settings$/.test(t));
+    // Every option but the way out (All drives), an org's settings and its directory is a drive.
+    const listed = screen.getAllByRole('option').map((o) => o.textContent ?? '').filter((t) => !/ settings$/.test(t) && !/^Browse .* drives$/.test(t));
     expect(listed.filter((t) => /Product|Customer Research|Home/.test(t)).length).toBe(listed.filter((t) => !/All drives/.test(t)).length);
+  });
+
+  it('DRV-6 (partial) each org group offers its Drives directory, where a Restricted drive is found and asked for', () => {
+    render(<DriveSwitcherDialog open onOpenChange={vi.fn()} />);
+    const browse = screen.getAllByRole('option').filter((o) => /^Browse .* drives$/.test(o.textContent ?? ''));
+    expect(browse.length).toBeGreaterThan(0);
+    fireEvent.click(browse[0]);
+    expect(push).toHaveBeenCalledWith(expect.stringMatching(/^\/orgs\/[^/]+\/drives$/));
   });
 
   it('DRV-5 (partial) DRV-9 (partial) the picker (the sidebar\'s drive switcher opens this same dialog) lists exactly what GET /api/drives answered: an Open drive of my org with no membership row appears under its org header', async () => {

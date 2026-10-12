@@ -16,6 +16,7 @@ import {
   orgKeys,
   type GuestApproval,
   type OrgDetail,
+  type OrgDriveDirectoryEntry,
   type OrgInvitation,
   type OrgMember,
   type OrgRole,
@@ -64,6 +65,14 @@ export function useOrgHubCounts(orgId: string, role: OrgRole | undefined): OrgHu
     guestApprovals: approvals.data?.total,
     ownerLeftAutomations: automations.data?.automations.length,
   };
+}
+
+/**
+ * The org Drives directory (DRV-6) for any member: what they can open or ask to join. The server
+ * lists to each member only what they may see there (decideDriveDirectoryEntry).
+ */
+export function useOrgDriveDirectory(orgId: string | undefined) {
+  return useSWR<{ drives: OrgDriveDirectoryEntry[] }>(ORGS_ENABLED && orgId ? orgKeys.drives(orgId) : null, orgFetcher, SWR_OPTIONS);
 }
 
 /** A read for Owner and Admins (the org settings pages); null key, no request, for anyone else. */

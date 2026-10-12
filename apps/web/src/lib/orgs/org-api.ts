@@ -252,3 +252,26 @@ export const reassignAutomation = (orgId: string, automation: Pick<OwnerLeftAuto
 
 export const deleteAutomation = (orgId: string, automation: Pick<OwnerLeftAutomation, 'kind' | 'id'>) =>
   del<{ deleted: true }>(`${orgKeys.automations(orgId)}/${automation.kind}/${automation.id}`);
+
+// ---------------------------------------------------------------------------
+// Restricted drives: join requests (DRV-6, D-OW-22)
+// ---------------------------------------------------------------------------
+
+/** A pending request as the drive lead and org admins see it (GET /api/drives/:id/join-requests). */
+export interface DriveJoinRequestView {
+  id: string;
+  userId: string;
+  name: string | null;
+  email: string;
+  image: string | null;
+  message: string | null;
+  requestedAt: string;
+}
+
+export const driveJoinRequestsKey = (driveId: string) => `/api/drives/${driveId}/join-requests`;
+
+export const requestToJoinDrive = (driveId: string, message?: string) =>
+  post<{ request: { id: string } }>(driveJoinRequestsKey(driveId), message ? { message } : {});
+
+export const answerDriveJoinRequest = (driveId: string, requestId: string, decision: 'approve' | 'deny') =>
+  patch<{ admitted: boolean }>(`${driveJoinRequestsKey(driveId)}/${requestId}`, { decision });
