@@ -1232,10 +1232,23 @@ body.keyboard-open {
 
 @plugin "../../node_modules/@tailwindcss/typography";
 
-@source "/Users/jono/dev/pagespace/.pu/worktrees/wt-i9qomi8c/apps/imago/src/retained";
-@source "/Users/jono/dev/pagespace/.pu/worktrees/wt-i9qomi8c/apps/imago/src/retained-adapters";
+@source "/Users/jono/production/PageSpace/.pu/worktrees/wt-j34xogg2/apps/imago/src/retained";
+@source "/Users/jono/production/PageSpace/.pu/worktrees/wt-j34xogg2/apps/imago/src/retained-adapters";
 
 @theme inline { --color-destructive-foreground: #fff; }
+/* Imago C v3 palette (IMC-1.2): the same names imago's own utilities use, so a
+   re-skinned classic component reads bg-spine, bg-tint, text-type-doc... The
+   values live once, on imago's :root (src/app/theme/v3.css). */
+@theme inline {
+  --color-spine: var(--spine); --color-spine-ink: var(--spine-ink); --color-tint: var(--tint);
+  --color-tab-bar: var(--tab-bar); --color-fill: var(--fill); --color-accent-deep: var(--accent-deep);
+  --color-status-success: var(--status-success); --color-status-warning: var(--status-warning);
+  --color-status-warning-ink: var(--status-warning-ink); --color-status-danger: var(--status-danger);
+  --color-badge: var(--badge); --color-badge-ink: var(--badge-ink);
+  --color-type-doc: var(--type-doc); --color-type-tasks: var(--type-tasks); --color-type-sheet: var(--type-sheet);
+  --color-type-channel: var(--type-channel); --color-type-folder: var(--type-folder); --color-type-agent: var(--type-agent);
+  --color-type-canvas: var(--type-canvas); --color-type-code: var(--type-code); --color-type-file: var(--type-file);
+}
 .dark { color-scheme: dark; }
 .retained-ui { isolation: isolate; }
 .middle-section-scroll { overflow-y: auto; }

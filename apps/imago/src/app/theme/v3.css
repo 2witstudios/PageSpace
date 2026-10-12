@@ -1,0 +1,57 @@
+/* Imago C · Blue Spine v3 tokens (IMC-1.2; SPEC "Tokens", PageSpace page
+   af2yxq84m92tg6kf431pwxne). The boards are light only; each colour carries
+   a dark value through light-dark() so the theme switch keeps working
+   (DEC-C4). Geometry lives in frame.css beside the stage widths it feeds. */
+:root {
+  /* The spine: the blue column the stage sheet sits on. */
+  --spine: light-dark(oklch(0.35 0.08 235), oklch(0.26 0.05 235));
+  --spine-ink: light-dark(oklch(0.92 0.02 235), oklch(0.88 0.02 235));
+  /* Imago's column and the tab bar: a breath of blue over the sheet. */
+  --tint: light-dark(oklch(0.982 0.005 235), oklch(0.2 0.01 235));
+  --tab-bar: light-dark(oklch(0.975 0.006 235), oklch(0.19 0.01 235));
+  /* Quiet fills: inputs, segmented tracks, hovered rows. */
+  --fill: light-dark(oklch(0.15 0.01 220 / 0.04), oklch(0.97 0 0 / 0.06));
+  /* Primary on text: links in chips, the selected row. */
+  --accent-deep: light-dark(oklch(0.38 0.16 235), oklch(0.78 0.12 235));
+  /* Status. Warning text uses the deeper step; the badge is the spine's amber. */
+  --status-success: light-dark(oklch(0.55 0.15 145), oklch(0.68 0.15 145));
+  --status-warning: light-dark(oklch(0.7 0.17 50), oklch(0.75 0.15 50));
+  --status-warning-ink: light-dark(oklch(0.55 0.17 50), oklch(0.8 0.13 50));
+  --status-danger: light-dark(oklch(0.577 0.245 27), oklch(0.66 0.2 27));
+  --badge: light-dark(oklch(0.7 0.17 50), oklch(0.75 0.15 50));
+  --badge-ink: light-dark(oklch(0.2 0.04 50), oklch(0.2 0.04 50));
+  /* Page-type hues (SPEC, as Spine.dc.html draws them). Documents use the primary. */
+  --type-doc: light-dark(oklch(0.5 0.16 235), oklch(0.66 0.14 235));
+  --type-tasks: light-dark(oklch(0.55 0.15 145), oklch(0.68 0.15 145));
+  --type-sheet: light-dark(oklch(0.52 0.13 160), oklch(0.66 0.12 160));
+  --type-channel: light-dark(oklch(0.55 0.14 300), oklch(0.7 0.12 300));
+  --type-folder: light-dark(oklch(0.62 0.12 75), oklch(0.74 0.12 75));
+  --type-agent: light-dark(oklch(0.55 0.15 25), oklch(0.7 0.14 25));
+  --type-canvas: light-dark(oklch(0.58 0.16 350), oklch(0.7 0.14 350));
+  --type-code: light-dark(oklch(0.45 0.03 250), oklch(0.72 0.03 250));
+  --type-file: light-dark(oklch(0.5 0.01 220), oklch(0.7 0.01 220));
+}
+
+@theme inline {
+  --color-spine: var(--spine);
+  --color-spine-ink: var(--spine-ink);
+  --color-tint: var(--tint);
+  --color-tab-bar: var(--tab-bar);
+  --color-fill: var(--fill);
+  --color-accent-deep: var(--accent-deep);
+  --color-status-success: var(--status-success);
+  --color-status-warning: var(--status-warning);
+  --color-status-warning-ink: var(--status-warning-ink);
+  --color-status-danger: var(--status-danger);
+  --color-badge: var(--badge);
+  --color-badge-ink: var(--badge-ink);
+  --color-type-doc: var(--type-doc);
+  --color-type-tasks: var(--type-tasks);
+  --color-type-sheet: var(--type-sheet);
+  --color-type-channel: var(--type-channel);
+  --color-type-folder: var(--type-folder);
+  --color-type-agent: var(--type-agent);
+  --color-type-canvas: var(--type-canvas);
+  --color-type-code: var(--type-code);
+  --color-type-file: var(--type-file);
+}
