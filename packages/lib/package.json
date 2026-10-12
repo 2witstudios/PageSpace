@@ -3014,10 +3014,15 @@
       "import": "./dist/organizations/sharing-decisions.js",
       "require": "./dist/organizations/sharing-decisions.js"
     },
-    "./organizations/authentication-policy": {
-      "types": "./dist/organizations/authentication-policy.d.ts",
-      "import": "./dist/organizations/authentication-policy.js",
-      "require": "./dist/organizations/authentication-policy.js"
+    "./permissions/access-actor": {
+      "types": "./dist/permissions/access-actor.d.ts",
+      "import": "./dist/permissions/access-actor.js",
+      "require": "./dist/permissions/access-actor.js"
+    },
+    "./permissions/actor-authentication": {
+      "types": "./dist/permissions/actor-authentication.d.ts",
+      "import": "./dist/permissions/actor-authentication.js",
+      "require": "./dist/permissions/actor-authentication.js"
     },
     "./organizations/policy-reader": {
       "types": "./dist/organizations/policy-reader.d.ts",
@@ -3935,8 +3940,11 @@
       "organizations/sharing-decisions": [
         "./dist/organizations/sharing-decisions.d.ts"
       ],
-      "organizations/authentication-policy": [
-        "./dist/organizations/authentication-policy.d.ts"
+      "permissions/access-actor": [
+        "./dist/permissions/access-actor.d.ts"
+      ],
+      "permissions/actor-authentication": [
+        "./dist/permissions/actor-authentication.d.ts"
       ],
       "organizations/policy-reader": [
         "./dist/organizations/policy-reader.d.ts"

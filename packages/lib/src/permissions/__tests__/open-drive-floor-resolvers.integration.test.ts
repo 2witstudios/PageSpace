@@ -39,6 +39,8 @@ import { getAppAccessLevel, getAppAccessiblePagesInDrive } from '../app-permissi
 import { accessiblePageIds } from '../accessible-page-ids';
 import { getDriveWithAccess, listAccessibleDrives } from '../../services/drive-service';
 import { updateOrgPolicies } from '../../organizations/policies';
+import { credentialActor } from '../access-actor';
+import { tokenOwnerActor } from './fixtures/token-owner-actor';
 
 const flags = vi.hoisted(() => ({ orgsEnabled: true }));
 vi.mock('../../organizations/orgs-enabled', () => ({
@@ -227,37 +229,37 @@ async function disagreements(h: Harbor, floor: OpenRoleFloor): Promise<{ lines: 
 
   for (const [personKey, person] of Object.entries(h.people) as Array<[PersonKey, Harbor['people'][PersonKey]]>) {
     const token = h.tokens.get(person.id) as string;
-    const listed = new Map((await listAccessibleDrives(person.id)).map((d) => [d.id, d.canCreatePages]));
+    const listed = new Map((await listAccessibleDrives(credentialActor(person.id, null))).map((d) => [d.id, d.canCreatePages]));
     // The SQL twin (pulse, activity summary, page payloads): view only, and trashed pages are out of it by design.
-    const sqlVisible = new Set(await accessiblePageIds(person.id));
+    const sqlVisible = new Set(await accessiblePageIds(credentialActor(person.id, null)));
     for (const driveKey of Object.keys(h.drives) as DriveKey[]) {
       const drive = h.drives[driveKey];
       const at = `${personKey}@${driveKey}`;
       const driveEdit = expectedDriveEdit(personKey, driveKey, floor);
-      check('getUserAccessLevel(drive root).canEdit', at, (await getUserAccessLevel(person.id, drive.id))?.canEdit === true, driveEdit);
-      check('getUserDrivePermissions.canEdit', at, (await getUserDrivePermissions(person.id, drive.id))?.canEdit === true, driveEdit);
+      check('getUserAccessLevel(drive root).canEdit', at, (await getUserAccessLevel(credentialActor(person.id, null), drive.id))?.canEdit === true, driveEdit);
+      check('getUserDrivePermissions.canEdit', at, (await getUserDrivePermissions(credentialActor(person.id, null), drive.id))?.canEdit === true, driveEdit);
       // An org Admin opens a RESTRICTED or PRIVATE drive but is not LISTED on it until joined (DRV-6).
       const listedForAdmin = personKey !== 'ada' || OPEN_DRIVES.includes(driveKey);
       check('listAccessibleDrives.canCreatePages', at, listed.get(drive.id) === true, driveEdit && listedForAdmin);
-      check('getDriveWithAccess.canCreatePages', at, (await getDriveWithAccess(drive.id, person.id))?.canCreatePages === true, driveEdit);
+      check('getDriveWithAccess.canCreatePages', at, (await getDriveWithAccess(drive.id, credentialActor(person.id, null)))?.canCreatePages === true, driveEdit);
 
       const drivePages = h.pages[driveKey];
       const pageIds = Object.values(drivePages).map((p) => p.id);
-      const batch = await getBatchPagePermissions(person.id, pageIds);
-      const tree = new Set(await getUserAccessiblePagesInDrive(person.id, drive.id));
-      const details = new Map((await getUserAccessiblePagesInDriveWithDetails(person.id, drive.id)).map((p) => [p.id, p.permissions]));
-      const appDetails = new Map((await getAppAccessiblePagesInDrive(token, drive.id)).map((p) => [p.id, p.permissions]));
+      const batch = await getBatchPagePermissions(credentialActor(person.id, null), pageIds);
+      const tree = new Set(await getUserAccessiblePagesInDrive(credentialActor(person.id, null), drive.id));
+      const details = new Map((await getUserAccessiblePagesInDriveWithDetails(credentialActor(person.id, null), drive.id)).map((p) => [p.id, p.permissions]));
+      const appDetails = new Map((await getAppAccessiblePagesInDrive(await tokenOwnerActor(token), token, drive.id)).map((p) => [p.id, p.permissions]));
       for (const [key, page] of Object.entries(drivePages)) {
         const pageKey = key as PageKey;
         const pageId = page.id;
         const pageAt = `${at}/${pageKey}`;
         const [view, edit] = expectedPage(personKey, driveKey, pageKey, floor);
-        check('getUserAccessLevel', pageAt, ve(await getUserAccessLevel(person.id, pageId)), [view, edit]);
+        check('getUserAccessLevel', pageAt, ve(await getUserAccessLevel(credentialActor(person.id, null), pageId)), [view, edit]);
         check('getBatchPagePermissions', pageAt, ve(batch.get(pageId)), [view, edit]);
         check('getUsersWhoCanViewPage', pageAt, (await getUsersWhoCanViewPage(pageId, [person.id])).has(person.id), view);
         check('getUserAccessiblePagesInDrive', pageAt, tree.has(pageId), view);
         check('getUserAccessiblePagesInDriveWithDetails', pageAt, ve(details.get(pageId)), [view, edit]);
-        check('getAppAccessLevel (inheriting key)', pageAt, ve(await getAppAccessLevel(token, pageId)), [view, edit]);
+        check('getAppAccessLevel (inheriting key)', pageAt, ve(await getAppAccessLevel(await tokenOwnerActor(token), token, pageId)), [view, edit]);
         check('getAppAccessiblePagesInDrive (inheriting key)', pageAt, ve(appDetails.get(pageId)), [view, edit]);
         check('accessiblePageIds (SQL twin)', pageAt, sqlVisible.has(pageId), view);
       }
@@ -332,10 +334,10 @@ describe('the Open-drive role floor is read by every implicit-membership resolve
     }
 
     flags.orgsEnabled = false;
-    expect(await getUserAccessLevel(h.people.ivy.id, h.pages.open.roadmap.id)).toBeNull();
-    expect(await getUserAccessLevel(h.people.sam.id, h.pages.open.secret.id)).toBeNull();
-    expect(await getUserAccessLevel(h.people.fay.id, h.pages.open.roadmap.id)).toBeNull();
-    expect(await getUserAccessLevel(h.people.gil.id, h.pages.open.roadmap.id)).toEqual({ canView: true, canEdit: false, canShare: false, canDelete: false });
+    expect(await getUserAccessLevel(credentialActor(h.people.ivy.id, null), h.pages.open.roadmap.id)).toBeNull();
+    expect(await getUserAccessLevel(credentialActor(h.people.sam.id, null), h.pages.open.secret.id)).toBeNull();
+    expect(await getUserAccessLevel(credentialActor(h.people.fay.id, null), h.pages.open.roadmap.id)).toBeNull();
+    expect(await getUserAccessLevel(credentialActor(h.people.gil.id, null), h.pages.open.roadmap.id)).toEqual({ canView: true, canEdit: false, canShare: false, canDelete: false });
   }, 180_000);
 
   it('POL-6 (partial) guests-off parking still wins: a parked outsider and a parked guest resolve nothing in any path, while the floor still holds for org members', async () => {
@@ -352,30 +354,30 @@ describe('the Open-drive role floor is read by every implicit-membership resolve
     for (const person of [h.people.oz, h.people.gus]) {
       const token = h.tokens.get(person.id) as string;
       for (const page of Object.values(h.pages.open)) {
-        expect(await getUserAccessLevel(person.id, page.id)).toBeNull();
-        expect(await getAppAccessLevel(token, page.id)).toBeNull();
-        expect((await getBatchPagePermissions(person.id, [page.id])).get(page.id)?.canView).toBe(false);
+        expect(await getUserAccessLevel(credentialActor(person.id, null), page.id)).toBeNull();
+        expect(await getAppAccessLevel(await tokenOwnerActor(token), token, page.id)).toBeNull();
+        expect((await getBatchPagePermissions(credentialActor(person.id, null), [page.id])).get(page.id)?.canView).toBe(false);
         expect((await getUsersWhoCanViewPage(page.id, [person.id])).size).toBe(0);
       }
-      expect(await getUserAccessiblePagesInDrive(person.id, h.drives.open.id)).toEqual([]);
-      expect(await getUserAccessiblePagesInDriveWithDetails(person.id, h.drives.open.id)).toEqual([]);
-      expect(await getUserDrivePermissions(person.id, h.drives.open.id)).toBeNull();
+      expect(await getUserAccessiblePagesInDrive(credentialActor(person.id, null), h.drives.open.id)).toEqual([]);
+      expect(await getUserAccessiblePagesInDriveWithDetails(credentialActor(person.id, null), h.drives.open.id)).toEqual([]);
+      expect(await getUserDrivePermissions(credentialActor(person.id, null), h.drives.open.id)).toBeNull();
     }
     // The org's implicit members keep the floor.
-    expect(await getUserAccessLevel(h.people.ivy.id, h.pages.open.secret.id)).toEqual({ canView: true, canEdit: true, canShare: false, canDelete: false });
+    expect(await getUserAccessLevel(credentialActor(h.people.ivy.id, null), h.pages.open.secret.id)).toEqual({ canView: true, canEdit: true, canShare: false, canDelete: false });
   }, 180_000);
 
   it('POL-6 (partial) the floor is read at resolution: lowering it in the policy lowers what the floor adds on the very next read, and never below the explicit grant', async () => {
     const h = await harbor();
     const { ivy, gil } = h.people;
     await setFloor(h.org.id, 'edit');
-    expect(await getUserAccessLevel(ivy.id, h.pages.open.roadmap.id)).toEqual({ canView: true, canEdit: true, canShare: false, canDelete: false });
+    expect(await getUserAccessLevel(credentialActor(ivy.id, null), h.pages.open.roadmap.id)).toEqual({ canView: true, canEdit: true, canShare: false, canDelete: false });
     await setFloor(h.org.id, 'view');
-    expect(await getUserAccessLevel(ivy.id, h.pages.open.roadmap.id)).toEqual({ canView: true, canEdit: false, canShare: false, canDelete: false });
+    expect(await getUserAccessLevel(credentialActor(ivy.id, null), h.pages.open.roadmap.id)).toEqual({ canView: true, canEdit: false, canShare: false, canDelete: false });
     // A damaged stored floor reads as view (fail closed: a floor only adds), never as edit.
     await db.update(organizations).set({ policies: { openDriveRoleFloor: 'admin' } }).where(eq(organizations.id, h.org.id));
-    expect(await getUserAccessLevel(gil.id, h.pages.open.roadmap.id)).toEqual({ canView: true, canEdit: false, canShare: false, canDelete: false });
-    expect(await getUserAccessLevel(ivy.id, h.pages.open.secret.id)).toEqual({ canView: true, canEdit: false, canShare: false, canDelete: false });
+    expect(await getUserAccessLevel(credentialActor(gil.id, null), h.pages.open.roadmap.id)).toEqual({ canView: true, canEdit: false, canShare: false, canDelete: false });
+    expect(await getUserAccessLevel(credentialActor(ivy.id, null), h.pages.open.secret.id)).toEqual({ canView: true, canEdit: false, canShare: false, canDelete: false });
   }, 180_000);
 
   it('POL-6 (partial) DRV-6 (partial) dark, the SQL twin still answers exactly what getUserAccessLevel answers, cell by cell (the org rules switch on with ORGS_ENABLED, never before)', async () => {
@@ -384,17 +386,17 @@ describe('the Open-drive role floor is read by every implicit-membership resolve
     flags.orgsEnabled = false;
     const lines: string[] = [];
     for (const [personKey, person] of Object.entries(h.people)) {
-      const sqlVisible = new Set(await accessiblePageIds(person.id));
+      const sqlVisible = new Set(await accessiblePageIds(credentialActor(person.id, null)));
       for (const [driveKey, drivePages] of Object.entries(h.pages)) {
         for (const [pageKey, page] of Object.entries(drivePages)) {
-          const ts = (await getUserAccessLevel(person.id, page.id))?.canView === true;
+          const ts = (await getUserAccessLevel(credentialActor(person.id, null), page.id))?.canView === true;
           if (sqlVisible.has(page.id) !== ts) lines.push(`${personKey}@${driveKey}/${pageKey}: sql ${sqlVisible.has(page.id)}, ts ${ts}`);
         }
       }
     }
     expect(lines).toEqual([]);
     // Not vacuous: dark, Sam's stale org row on the PRIVATE Ledger still opens it in both, as before orgs.
-    expect(await getUserAccessLevel(h.people.sam.id, h.pages.priv.roadmap.id)).not.toBeNull();
-    expect(await accessiblePageIds(h.people.sam.id)).toContain(h.pages.priv.roadmap.id);
+    expect(await getUserAccessLevel(credentialActor(h.people.sam.id, null), h.pages.priv.roadmap.id)).not.toBeNull();
+    expect(await accessiblePageIds(credentialActor(h.people.sam.id, null))).toContain(h.pages.priv.roadmap.id);
   }, 180_000);
 });

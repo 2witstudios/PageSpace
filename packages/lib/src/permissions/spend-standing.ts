@@ -3,7 +3,7 @@ import { and, eq } from '@pagespace/db/operators';
 import { drives } from '@pagespace/db/schema/core';
 import { orgMembers } from '@pagespace/db/schema/organizations';
 import { isDriveLead, isDriveMemberRelationship } from './drive-relationship';
-import { loadDriveRelationships } from './drive-relationship-loader';
+import { loadUserDriveRelationships } from './drive-relationship-loader';
 import { walletViewerRole, type WalletStanding } from './wallet-access';
 
 /**
@@ -42,7 +42,7 @@ export async function loadDriveSpendStanding(
 
   // The gate reads this for the caller's own request, whose drive access was already
   // decided (and audited) by the route; this read only classifies the spender.
-  const relationships = await loadDriveRelationships(userId, [drive], { audit: false, executor });
+  const relationships = await loadUserDriveRelationships(userId, [drive], { audit: false, executor });
   const relationship = relationships.get(drive.id);
   const isDriveMember = relationship ? isDriveMemberRelationship(relationship) : false;
 
@@ -113,7 +113,7 @@ export async function loadDriveWalletStanding(userId: string, driveId: string): 
     .limit(1);
   if (!drive || drive.isTrashed) return null;
 
-  const relationship = (await loadDriveRelationships(userId, [drive])).get(drive.id);
+  const relationship = (await loadUserDriveRelationships(userId, [drive])).get(drive.id);
   let orgRole: WalletStanding['orgRole'] = null;
   if (drive.orgId !== null) {
     const [membership] = await db

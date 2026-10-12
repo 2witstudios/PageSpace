@@ -33,7 +33,7 @@ import {
 } from '@pagespace/db/schema/wallets';
 import { isBillingEnabled } from '../deployment-mode';
 import { ORGS_ENABLED } from '../organizations/orgs-enabled';
-import { getDriveIdsForUser, getUserDriveAccess } from '../permissions/permissions';
+import { holdsDriveAccess, listDriveIdsHeldBy } from '../permissions/permissions';
 import { loadDriveWalletStanding, type DriveWalletStanding } from '../permissions/spend-standing';
 import {
   credentialRefusalFor,
@@ -1159,7 +1159,7 @@ export async function listMyWallets(userId: string, credential: WalletCredential
   if (!ORGS_ENABLED) return result;
 
   // The drives this person can open, through the one access model; nothing else is listed.
-  const driveIds = await getDriveIdsForUser(userId);
+  const driveIds = await listDriveIdsHeldBy(userId);
   if (driveIds.length > 0) {
     const rows = await db
       .select({ id: wallets.id, subjectId: wallets.subjectId, parentWalletId: wallets.parentWalletId, status: wallets.status, monthlyAllowanceCents: wallets.monthlyAllowanceCents, spentCents: wallets.spentCents, topupRemainingCents: wallets.topupRemainingCents, debtCents: wallets.debtCents })
@@ -1270,7 +1270,7 @@ export async function setAlwaysOwnCredits(
     await db.update(wallets).set({ alwaysOwnCredits: input.enabled }).where(and(eq(wallets.id, walletId), personalRootWalletOf(userId)));
     return { ok: true, driveId: null, enabled: input.enabled };
   }
-  if (!(await getUserDriveAccess(userId, input.driveId))) return notFound();
+  if (!(await holdsDriveAccess(userId, input.driveId))) return notFound();
   if (input.enabled) {
     await db.insert(driveSpendOverrides).values({ userId, driveId: input.driveId }).onConflictDoNothing();
   } else {

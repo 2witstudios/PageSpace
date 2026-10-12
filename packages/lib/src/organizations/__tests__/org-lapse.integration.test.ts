@@ -33,6 +33,7 @@ import { releaseHold } from '../../billing/credit-consume';
 import { resolveSandboxPayerTier } from '../../billing/sandbox-eligibility';
 import { lookupDriveBillingFacts } from '../../billing/sandbox-payer';
 import { getUserDriveAccess, canUserViewPage } from '../../permissions/permissions';
+import { credentialActor } from '../../permissions/access-actor';
 
 vi.mock('../orgs-enabled', () => ({ ORGS_ENABLED: true }));
 
@@ -202,8 +203,8 @@ describe('org lapse gates (orgs on, real Postgres)', () => {
     const before = await footprint(w);
     await setSubscription(w.orgId, status);
     expect(await isOrgActive(w.orgId)).toBe(false);
-    expect(await canUserViewPage(w.ids.marcus, w.pageId)).toBe(true);
-    expect(await getUserDriveAccess(w.ids.dana, w.productId)).toBe(true);
+    expect(await canUserViewPage(credentialActor(w.ids.marcus, null), w.pageId)).toBe(true);
+    expect(await getUserDriveAccess(credentialActor(w.ids.dana, null), w.productId)).toBe(true);
     expect(await createOrgDrive(w.ids.marcus, { name: 'Engineering', orgId: w.orgId }, deps)).toMatchObject({ ok: false, code: 'org_lapsed' });
     expect(await createOrRotateInvitation({ actorRole: 'OWNER', orgId: w.orgId, email: `lapsed-${createId()}@northwind.test`, role: 'MEMBER', invitedBy: w.ids.jono, now: new Date(), deliver })).toMatchObject({ ok: false, reason: 'org_lapsed' });
     expect(await admitDriveComputeCreator({ driveId: w.productId, userId: w.ids.dana })).toMatchObject({ allowed: false, code: 'org_lapsed' });
@@ -233,9 +234,9 @@ describe('org lapse gates (orgs on, real Postgres)', () => {
     const before = await footprint(w);
     await setSubscription(w.orgId, 'canceled');
 
-    expect(await getUserDriveAccess(w.ids.marcus, w.productId)).toBe(true);
-    expect(await canUserViewPage(w.ids.marcus, w.pageId)).toBe(true);
-    expect(await getUserDriveAccess(w.ids.dana, w.productId)).toBe(true);
+    expect(await getUserDriveAccess(credentialActor(w.ids.marcus, null), w.productId)).toBe(true);
+    expect(await canUserViewPage(credentialActor(w.ids.marcus, null), w.pageId)).toBe(true);
+    expect(await getUserDriveAccess(credentialActor(w.ids.dana, null), w.productId)).toBe(true);
     const read = await getDriveWallet(w.ids.priya, w.productId, 'session');
     expect(read.ok).toBe(true);
 
@@ -359,7 +360,7 @@ describe('org lapse gates (orgs on, real Postgres)', () => {
     expect(await footprint(w)).toEqual(before);
     expect(await db.select().from(creditLedger).where(eq(creditLedger.walletId, w.poolId))).toHaveLength(0);
     // Drives stay readable while lapsed (scenario step 10).
-    expect(await canUserViewPage(w.ids.dana, w.pageId)).toBe(true);
+    expect(await canUserViewPage(credentialActor(w.ids.dana, null), w.pageId)).toBe(true);
 
     // Reactivated (the webhook mirror reports active): no other step, everything is back.
     await setSubscription(w.orgId, 'active');

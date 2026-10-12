@@ -21,6 +21,7 @@ import { getDriveOwnerAsMember, listDriveMembers } from '../../services/drive-me
 import { listDrivePageLinkGuests } from '../drive-member-labels';
 import { canViewDriveWallet } from '../spend-standing';
 import { isDriveOwnerOrAdmin } from '../permissions';
+import { credentialActor } from '../access-actor';
 
 vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 
@@ -110,8 +111,8 @@ describe('drive Members labels and page-link guests (real Postgres)', () => {
   it('UI-5 (partial) the page-link guest list is gated to the lead and admins: a GUEST-role member is neither, so the members route answers it []', async () => {
     if (!ok) return;
     const piaId = ids.users[3];
-    expect(await isDriveOwnerOrAdmin(piaId, ids.driveId)).toBe(false);
-    expect(await isDriveOwnerOrAdmin(ids.users[0], ids.driveId)).toBe(true);
+    expect(await isDriveOwnerOrAdmin(credentialActor(piaId, null), ids.driveId)).toBe(false);
+    expect(await isDriveOwnerOrAdmin(credentialActor(ids.users[0], null), ids.driveId)).toBe(true);
   });
 
   it('X-4 (partial) only people with a wallet view may join the drive wallet room: the lead, a member and an invited guest can; a page-grant collaborator, a page-link GUEST, a departed member and an outsider cannot', async () => {

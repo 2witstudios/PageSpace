@@ -56,6 +56,7 @@ import { resolveDriveMembership } from '../../services/agent-workspaces/agent-wo
 import { loadAppShell } from '../../services/app-shell-service';
 import { accountRepository } from '../../repositories/account-repository';
 import { collectUserDrives } from '../../compliance/export/gdpr-export';
+import { credentialActor } from '../access-actor';
 
 const seededUserIds: string[] = [];
 
@@ -115,14 +116,14 @@ describe('redeemPageShareLink → GUEST (integration)', () => {
     expect(row?.acceptedAt).not.toBeNull();
 
     // The shared page: readable.
-    expect((await getUserAccessLevel(redeemer.id, shared.id))?.canView).toBe(true);
+    expect((await getUserAccessLevel(credentialActor(redeemer.id, null), shared.id))?.canView).toBe(true);
     // A different non-private page: not readable (rule 4 must not apply).
-    expect(await getUserAccessLevel(redeemer.id, other.id)).toBeNull();
+    expect(await getUserAccessLevel(credentialActor(redeemer.id, null), other.id)).toBeNull();
     // A channel: cannot read it, cannot post in it.
-    expect(await getUserAccessLevel(redeemer.id, channel.id)).toBeNull();
+    expect(await getUserAccessLevel(credentialActor(redeemer.id, null), channel.id)).toBeNull();
 
     // The batch path (sidebar, search, tree) agrees.
-    const batch = await getBatchPagePermissions(redeemer.id, [shared.id, other.id, channel.id]);
+    const batch = await getBatchPagePermissions(credentialActor(redeemer.id, null), [shared.id, other.id, channel.id]);
     expect(batch.get(shared.id)?.canView).toBe(true);
     expect(batch.get(other.id)?.canView).toBe(false);
     expect(batch.get(channel.id)?.canView).toBe(false);
@@ -134,12 +135,12 @@ describe('redeemPageShareLink → GUEST (integration)', () => {
     expect((await getUsersWhoCanViewPage(channel.id, [redeemer.id])).has(redeemer.id)).toBe(false);
 
     // The SQL twin (pulse, page payloads) agrees.
-    const fromSql = new Set(await accessiblePageIds(redeemer.id));
+    const fromSql = new Set(await accessiblePageIds(credentialActor(redeemer.id, null)));
     expect([shared.id, other.id, channel.id].filter((id) => fromSql.has(id))).toEqual([shared.id]);
 
     // The drive tree lists only the shared page.
-    expect(await getUserAccessiblePagesInDrive(redeemer.id, drive.id)).toEqual([shared.id]);
-    const detailed = await getUserAccessiblePagesInDriveWithDetails(redeemer.id, drive.id);
+    expect(await getUserAccessiblePagesInDrive(credentialActor(redeemer.id, null), drive.id)).toEqual([shared.id]);
+    const detailed = await getUserAccessiblePagesInDriveWithDetails(credentialActor(redeemer.id, null), drive.id);
     expect(detailed.map((p) => p.id)).toEqual([shared.id]);
   });
 
@@ -151,11 +152,11 @@ describe('redeemPageShareLink → GUEST (integration)', () => {
     expect((await redeemPageShareLink(ctxFor(redeemer.id), token)).ok).toBe(true);
 
     // Permission helpers.
-    expect(await isUserDriveMember(redeemer.id, drive.id)).toBe(false);
-    expect(await getUserDrivePermissions(redeemer.id, drive.id)).toBeNull();
+    expect(await isUserDriveMember(credentialActor(redeemer.id, null), drive.id)).toBe(false);
+    expect(await getUserDrivePermissions(credentialActor(redeemer.id, null), drive.id)).toBeNull();
     expect(await getMemberCustomRoleId(drive.id, redeemer.id)).toBeNull();
     // Drive-root access (drive-as-root-node): none.
-    expect(await getUserAccessLevel(redeemer.id, drive.id)).toBeNull();
+    expect(await getUserAccessLevel(credentialActor(redeemer.id, null), drive.id)).toBeNull();
     // A guest is not an established shared context for DMs, in either direction.
     expect(await usersShareDrive(redeemer.id, owner.id)).toBe(false);
     expect(await usersShareDrive(owner.id, redeemer.id)).toBe(false);
@@ -163,7 +164,7 @@ describe('redeemPageShareLink → GUEST (integration)', () => {
     expect(await usersShareDrive(member.id, redeemer.id)).toBe(false);
 
     // Member service: access, id lists, broadcast recipients, the Members page.
-    expect((await checkDriveAccess(drive.id, redeemer.id)).isMember).toBe(false);
+    expect((await checkDriveAccess(drive.id, credentialActor(redeemer.id, null))).isMember).toBe(false);
     // On the org-wallets branch the drive's member ids are its audience: the lead plus every
     // effective member (listDriveAudience). The guest is in neither.
     expect((await getDriveMemberUserIds(drive.id)).sort()).toEqual([owner.id, member.id].sort());
@@ -173,20 +174,20 @@ describe('redeemPageShareLink → GUEST (integration)', () => {
     expect(await getDriveMemberDetails(drive.id, redeemer.id)).toBeNull();
 
     // Drive service: not a member, no drive-wide create, not token-scopable.
-    expect((await getDriveAccess(drive.id, redeemer.id)).isMember).toBe(false);
-    expect(await getDriveWithAccess(drive.id, redeemer.id)).toBeNull();
-    expect((await getDriveAccessWithDrive(drive.id, redeemer.id))?.access.isMember).toBe(false);
-    const listed = (await listAccessibleDrives(redeemer.id)).find((d) => d.id === drive.id);
+    expect((await getDriveAccess(drive.id, credentialActor(redeemer.id, null))).isMember).toBe(false);
+    expect(await getDriveWithAccess(drive.id, credentialActor(redeemer.id, null))).toBeNull();
+    expect((await getDriveAccessWithDrive(drive.id, credentialActor(redeemer.id, null)))?.access.isMember).toBe(false);
+    const listed = (await listAccessibleDrives(credentialActor(redeemer.id, null))).find((d) => d.id === drive.id);
     expect(listed?.canCreatePages).toBe(false);
-    expect((await listAccessibleDrives(redeemer.id, { tokenScopable: true })).some((d) => d.id === drive.id)).toBe(false);
+    expect((await listAccessibleDrives(credentialActor(redeemer.id, null), { tokenScopable: true })).some((d) => d.id === drive.id)).toBe(false);
 
     // Roles pages, agent workspaces, app shell.
-    expect((await checkDriveAccessForRoles(drive.id, redeemer.id)).isMember).toBe(false);
-    expect(await resolveDriveMembership({ userId: redeemer.id, driveId: drive.id })).toBe('none');
-    const guestShell = await loadAppShell(redeemer.id, { activeDriveId: drive.id });
+    expect((await checkDriveAccessForRoles(drive.id, credentialActor(redeemer.id, null))).isMember).toBe(false);
+    expect(await resolveDriveMembership({ actor: credentialActor(redeemer.id, null), driveId: drive.id })).toBe('none');
+    const guestShell = await loadAppShell(credentialActor(redeemer.id, null), { activeDriveId: drive.id });
     expect(guestShell.drives.some((d) => d.id === drive.id)).toBe(false);
     expect(guestShell.activeDrive).toBeUndefined();
-    const memberShell = await loadAppShell(member.id, { activeDriveId: drive.id });
+    const memberShell = await loadAppShell(credentialActor(member.id, null), { activeDriveId: drive.id });
     expect(memberShell.driveMembers.some((m) => m.userId === redeemer.id)).toBe(false);
 
     // Calendar: an event shared INTO the guest's drive does not make the guest an attendee candidate.
@@ -195,8 +196,8 @@ describe('redeemPageShareLink → GUEST (integration)', () => {
       startAt: new Date(), endAt: new Date(Date.now() + 3600_000),
     }).returning();
     await db.insert(calendarEventDrives).values({ eventId: event.id, driveId: drive.id, sharedBy: owner.id });
-    expect(await isUserMemberOfAnyEventDrive(redeemer.id, { id: event.id, driveId: event.driveId })).toBe(false);
-    expect(await isUserMemberOfAnyEventDrive(member.id, { id: event.id, driveId: event.driveId })).toBe(true);
+    expect(await isUserMemberOfAnyEventDrive(credentialActor(redeemer.id, null), { id: event.id, driveId: event.driveId })).toBe(false);
+    expect(await isUserMemberOfAnyEventDrive(credentialActor(member.id, null), { id: event.id, driveId: event.driveId })).toBe(true);
     const attendees = await getAllMemberUserIdsForEvent(event.id, event.driveId);
     expect(attendees.has(member.id)).toBe(true);
     expect(attendees.has(redeemer.id)).toBe(false);
@@ -206,11 +207,11 @@ describe('redeemPageShareLink → GUEST (integration)', () => {
     expect((await collectUserDrives(db, redeemer.id)).some((d) => d.id === drive.id)).toBe(false);
 
     // Drive reach follows the page grant, not the guest row.
-    expect(await getUserDriveAccess(redeemer.id, drive.id)).toBe(true);
-    expect(await getDriveIdsForUser(redeemer.id)).toContain(drive.id);
+    expect(await getUserDriveAccess(credentialActor(redeemer.id, null), drive.id)).toBe(true);
+    expect(await getDriveIdsForUser(credentialActor(redeemer.id, null))).toContain(drive.id);
     await db.delete(pagePermissions).where(and(eq(pagePermissions.pageId, shared.id), eq(pagePermissions.userId, redeemer.id)));
-    expect(await getUserDriveAccess(redeemer.id, drive.id)).toBe(false);
-    expect(await getDriveIdsForUser(redeemer.id)).not.toContain(drive.id);
+    expect(await getUserDriveAccess(credentialActor(redeemer.id, null), drive.id)).toBe(false);
+    expect(await getDriveIdsForUser(credentialActor(redeemer.id, null))).not.toContain(drive.id);
   });
 
   it('does not let a guest block its drive owner from deleting their account', async () => {
@@ -237,18 +238,18 @@ describe('redeemPageShareLink → GUEST (integration)', () => {
     await db.update(driveMembers).set({ customRoleId: role.id })
       .where(and(eq(driveMembers.driveId, drive.id), eq(driveMembers.userId, redeemer.id)));
 
-    expect(await getUserAccessLevel(redeemer.id, hidden.id)).toBeNull();
-    expect(await getUserAccessLevel(redeemer.id, other.id)).toBeNull();
-    const batch = await getBatchPagePermissions(redeemer.id, [shared.id, other.id, hidden.id]);
+    expect(await getUserAccessLevel(credentialActor(redeemer.id, null), hidden.id)).toBeNull();
+    expect(await getUserAccessLevel(credentialActor(redeemer.id, null), other.id)).toBeNull();
+    const batch = await getBatchPagePermissions(credentialActor(redeemer.id, null), [shared.id, other.id, hidden.id]);
     expect(batch.get(shared.id)?.canView).toBe(true);
     expect(batch.get(other.id)?.canView).toBe(false);
     expect(batch.get(hidden.id)?.canView).toBe(false);
     expect((await getUsersWhoCanViewPage(hidden.id, [redeemer.id])).size).toBe(0);
-    expect(await getUserAccessiblePagesInDrive(redeemer.id, drive.id)).toEqual([shared.id]);
-    expect((await getUserAccessiblePagesInDriveWithDetails(redeemer.id, drive.id)).map((p) => p.id)).toEqual([shared.id]);
+    expect(await getUserAccessiblePagesInDrive(credentialActor(redeemer.id, null), drive.id)).toEqual([shared.id]);
+    expect((await getUserAccessiblePagesInDriveWithDetails(credentialActor(redeemer.id, null), drive.id)).map((p) => p.id)).toEqual([shared.id]);
     expect(await getDriveMemberUserIdsByCustomRole(drive.id, role.id)).toEqual([]);
     expect(await getMemberCustomRoleId(drive.id, redeemer.id)).toBeNull();
-    const fromSql = new Set(await accessiblePageIds(redeemer.id));
+    const fromSql = new Set(await accessiblePageIds(credentialActor(redeemer.id, null)));
     expect([shared.id, other.id, hidden.id].filter((id) => fromSql.has(id))).toEqual([shared.id]);
   });
 
@@ -273,7 +274,7 @@ describe('redeemPageShareLink → GUEST (integration)', () => {
     const ownDrive = await factories.createDrive(redeemer.id);
     const agent = await factories.createPage(ownDrive.id, { type: 'AI_CHAT' });
 
-    const result = await addAgentToDrive({ actingUserId: redeemer.id, agentPageId: agent.id, driveId: drive.id });
+    const result = await addAgentToDrive({ actor: credentialActor(redeemer.id, null), agentPageId: agent.id, driveId: drive.id });
 
     expect(result).toMatchObject({ ok: false, status: 403 });
   });
@@ -313,7 +314,7 @@ describe('redeemPageShareLink → GUEST (integration)', () => {
     expect((await redeemPageShareLink(ctxFor(redeemer.id), second.data.rawToken)).ok).toBe(true);
 
     expect((await membershipOf(drive.id, redeemer.id))?.role).toBe('GUEST');
-    expect((await getUserAccessLevel(redeemer.id, other.id))?.canView).toBe(true);
+    expect((await getUserAccessLevel(credentialActor(redeemer.id, null), other.id))?.canView).toBe(true);
   });
 
   it('lets a drive link turn a guest into a real member', async () => {
@@ -326,7 +327,7 @@ describe('redeemPageShareLink → GUEST (integration)', () => {
     expect(upgraded.ok).toBe(true);
 
     expect((await membershipOf(drive.id, redeemer.id))?.role).toBe('MEMBER');
-    expect(await isUserDriveMember(redeemer.id, drive.id)).toBe(true);
-    expect((await getUserAccessLevel(redeemer.id, other.id))?.canView).toBe(true);
+    expect(await isUserDriveMember(credentialActor(redeemer.id, null), drive.id)).toBe(true);
+    expect((await getUserAccessLevel(credentialActor(redeemer.id, null), other.id))?.canView).toBe(true);
   });
 });

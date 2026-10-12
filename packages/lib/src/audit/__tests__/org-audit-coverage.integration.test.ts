@@ -56,6 +56,7 @@ import { workflows } from '@pagespace/db/schema/workflows';
 import { defaultAppUnparkDeps, unparkPublishedApp } from '../../services/app-hosting/app-unpark';
 import { driveEnvs } from '@pagespace/db/schema/drive-envs';
 import { publishedApps } from '@pagespace/db/schema/published-apps';
+import { credentialActor } from '../../permissions/access-actor';
 
 vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 
@@ -244,7 +245,7 @@ describe('every org mutation writes its event', () => {
     // ── admin access to a Private drive (ORG-4) ──────────────────────────────────
     const finance = await factories.createDrive(lena.id, { name: 'Finance', slug: `finance-${createId()}`, orgId, orgVisibility: 'PRIVATE' });
     created.drives.push(finance.id);
-    expect(await getUserDriveAccess(priya.id, finance.id)).toBe(true);
+    expect(await getUserDriveAccess(credentialActor(priya.id, null), finance.id)).toBe(true);
 
     // ── policies, and a guest held by them ───────────────────────────────────────
     const link = await createDriveShareLink(ctxFor(marcus.id), productId, {});
@@ -265,7 +266,7 @@ describe('every org mutation writes its event', () => {
       id: appId, envId, driveId: productId, ownerId: tomas.id, costOwnerId: tomas.id, flyAppName: `pgs-${appId}`, networkName: 'published-apps',
       subdomain: `cov-${appId}`.toLowerCase(), machineId: `m-${appId}`, imageDigest: 'sha256:abc', status: 'parked', lastError: 'parked: test', tier: 'metered', updatedAt: new Date(),
     });
-    expect(await unparkPublishedApp({ publishedAppId: appId, actorId: jono.id }, {
+    expect(await unparkPublishedApp({ publishedAppId: appId, actor: credentialActor(jono.id, null) }, {
       ...defaultAppUnparkDeps,
       isEnabled: () => true,
       // The real payer resolution; the wallet gate is not what this story audits, so it admits the wake.

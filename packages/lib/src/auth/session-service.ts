@@ -4,6 +4,7 @@ import { hashToken } from './token-utils';
 import { IDLE_TIMEOUT_MS } from './constants';
 import { sessionRepository } from './session-repository';
 import { loggers } from '../logging/logger-config';
+import { type AccessActor, credentialActor } from '../permissions/access-actor';
 
 const SESSION_CLEANUP_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -122,8 +123,8 @@ export class SessionService {
   }
 
   /**
-   * Is the session that minted a DERIVED credential still usable, for this
-   * user? Read-only, and keyed on the session id rather than its token.
+   * The session that minted a DERIVED credential, as an access actor, while it
+   * is still usable for this user (null otherwise). Read-only, and keyed on the session id rather than its token.
    *
    * The dev-preview cookie is the caller: it is signed by us, names its
    * minting session, and is presented to a preview origin that never sees the
@@ -141,12 +142,12 @@ export class SessionService {
    * This runs per proxied subresource from an untrusted origin, and the next
    * real session use will do the lazy revoke anyway.
    */
-  async isSessionUsableById(sessionId: string, userId: string): Promise<boolean> {
+  async loadUsableSessionActor(sessionId: string, userId: string): Promise<AccessActor | null> {
     const session = await sessionRepository.findActiveSessionById(sessionId);
-    if (!session?.user) return false;
-    if (session.userId !== userId) return false;
-    if (session.user.suspendedAt) return false;
-    if (session.tokenVersion !== session.user.tokenVersion) return false;
+    if (!session?.user) return null;
+    if (session.userId !== userId) return null;
+    if (session.user.suspendedAt) return null;
+    if (session.tokenVersion !== session.user.tokenVersion) return null;
     // THE IDLE TIMEOUT APPLIES HERE TOO, and it is the revocation most likely
     // to matter for a preview: a frame left open in a background tab makes no
     // request that would trigger `validateSession`'s lazy revoke, so without
@@ -157,9 +158,13 @@ export class SessionService {
     if (IDLE_TIMEOUT_MS > 0) {
       const lastActivity = session.lastUsedAt ?? session.createdAt;
       const lastUsed = lastActivity instanceof Date ? lastActivity : new Date(lastActivity);
-      if (Date.now() - lastUsed.getTime() > IDLE_TIMEOUT_MS) return false;
+      if (Date.now() - lastUsed.getTime() > IDLE_TIMEOUT_MS) return null;
     }
-    return true;
+    // The session's own ceremony evidence: what the derived credential is, for every org sign-in check (SEC-2/3).
+    return credentialActor(userId, parseVerifiedAuthentication(
+      { authenticatedAtMs: session.authenticatedAt?.getTime(), assurance: session.authenticationAssurance },
+      Date.now(),
+    ));
   }
 
   /**

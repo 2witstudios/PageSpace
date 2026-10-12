@@ -1,4 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+// The org sign-in gate (D-OW-45) reads policies through its own module; these tests are about the
+// resolvers behind it, so no org here sets a sign-in policy. Plain functions: a mock reset must not undo them.
+vi.mock('../../permissions/actor-authentication', () => ({
+  checkActorDriveAuthentication: async () => ({ allowed: true }),
+  checkActorResourceAuthentication: async () => ({ allowed: true }),
+  filterDrivesForActor: async (_actor: unknown, ids: readonly string[]) => new Set(ids),
+  filterResourcesForActor: async (_actor: unknown, ids: readonly string[]) => new Set(ids),
+  explainOrgAuthenticationDenial: async () => null,
+}));
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -29,6 +38,7 @@ vi.mock('@pagespace/db/operators', () => ({
 import { driveRepository } from '../drive-repository';
 import { loadDriveLeadAuthority } from '../../permissions/drive-relationship-loader';
 import { db } from '@pagespace/db/db';
+import { credentialActor } from '../../permissions/access-actor';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -114,18 +124,18 @@ describe('driveRepository.findByIdForLeadAction', () => {
     vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRecord as never);
     vi.mocked(loadDriveLeadAuthority).mockResolvedValueOnce({ allowed: true, via: 'org-admin', orgId: 'org-1' });
 
-    expect(await driveRepository.findByIdForLeadAction('drive-1', 'priya', 'restore')).toEqual(driveRecord);
-    expect(loadDriveLeadAuthority).toHaveBeenCalledWith('priya', driveRecord, 'restore');
+    expect(await driveRepository.findByIdForLeadAction('drive-1', credentialActor('priya', null), 'restore')).toEqual(driveRecord);
+    expect(loadDriveLeadAuthority).toHaveBeenCalledWith(expect.objectContaining({ userId: 'priya' }), driveRecord, 'restore');
   });
 
   it('returns null when the drive is missing or the authority refuses', async () => {
     vi.mocked(db.query.drives.findFirst).mockResolvedValueOnce(undefined as never);
-    expect(await driveRepository.findByIdForLeadAction('drive-1', 'u', 'restore')).toBeNull();
+    expect(await driveRepository.findByIdForLeadAction('drive-1', credentialActor('u', null), 'restore')).toBeNull();
     expect(loadDriveLeadAuthority).not.toHaveBeenCalled();
 
     vi.mocked(db.query.drives.findFirst).mockResolvedValueOnce(driveRecord as never);
     vi.mocked(loadDriveLeadAuthority).mockResolvedValueOnce({ allowed: false });
-    expect(await driveRepository.findByIdForLeadAction('drive-1', 'nina', 'restore')).toBeNull();
+    expect(await driveRepository.findByIdForLeadAction('drive-1', credentialActor('nina', null), 'restore')).toBeNull();
   });
 });
 

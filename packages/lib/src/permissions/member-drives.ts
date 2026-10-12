@@ -8,6 +8,8 @@ import { decideListedDriveRole } from './org-drive-resolution';
 import { loadAcceptedRowsInDrives, resolveEffectiveDriveMemberships } from './org-drive-membership';
 import type { DriveMemberRole } from './org-access';
 import { DRIVE_MEMBERSHIP_ROLES, driveMembershipRole, driveMembershipRow } from './drive-member-role';
+import type { AccessActor } from './access-actor';
+import { filterDrivesForActor } from './actor-authentication';
 
 /**
  * The drives a person is a member of: the set every "my drives" aggregate (commands, activity,
@@ -37,7 +39,18 @@ export interface MemberDriveOptions {
   executor?: Pick<typeof db, 'select'>;
 }
 
-export async function listMemberDrives(userId: string, options: MemberDriveOptions): Promise<MemberDrive[]> {
+/**
+ * The actor's member drives. SEC-2/3 (D-OW-45): an org drive whose sign-in policy the actor's credential fails is
+ * not one of them here, so no "my drives" aggregate reads it.
+ */
+export async function listMemberDrives(actor: AccessActor, options: MemberDriveOptions): Promise<MemberDrive[]> {
+  const listed = await listMemberDrivesOf(actor.userId, options);
+  const allowed = await filterDrivesForActor(actor, listed.map((d) => d.driveId));
+  return listed.filter((d) => allowed.has(d.driveId));
+}
+
+/** listMemberDrives as membership facts about `userId`, with no credential in them (sharesMemberDrive). */
+async function listMemberDrivesOf(userId: string, options: MemberDriveOptions): Promise<MemberDrive[]> {
   const executor = options.executor ?? db;
   const notTrashed = options.includeTrashed ? undefined : eq(drives.isTrashed, false);
 
@@ -117,7 +130,13 @@ export async function listMemberDrives(userId: string, options: MemberDriveOptio
  * surface (the all-backups list) shows what isDriveOwnerOrAdmin opens. Org power over a PRIVATE drive
  * writes the ORG-4 audit, as every resolver path does. While dark: owned drives plus accepted ADMIN rows.
  */
-export async function getAdministeredDriveIds(userId: string, options: { includeTrashed: boolean }): Promise<string[]> {
+export async function getAdministeredDriveIds(actor: AccessActor, options: { includeTrashed: boolean }): Promise<string[]> {
+  const administered = await getAdministeredDriveIdsOf(actor.userId, options);
+  const allowed = await filterDrivesForActor(actor, administered);
+  return administered.filter((id) => allowed.has(id));
+}
+
+async function getAdministeredDriveIdsOf(userId: string, options: { includeTrashed: boolean }): Promise<string[]> {
   const notTrashed = options.includeTrashed ? undefined : eq(drives.isTrashed, false);
 
   const owned = await db.select({ id: drives.id }).from(drives).where(and(eq(drives.ownerId, userId), notTrashed));
@@ -155,8 +174,8 @@ export async function getAdministeredDriveIds(userId: string, options: { include
   return [...ownedIds, ...administered];
 }
 
-export async function getMemberDriveIds(userId: string, options: MemberDriveOptions): Promise<string[]> {
-  return (await listMemberDrives(userId, options)).map((d) => d.driveId);
+export async function getMemberDriveIds(actor: AccessActor, options: MemberDriveOptions): Promise<string[]> {
+  return (await listMemberDrives(actor, options)).map((d) => d.driveId);
 }
 
 /**
@@ -165,9 +184,9 @@ export async function getMemberDriveIds(userId: string, options: MemberDriveOpti
  */
 export async function sharesMemberDrive(userIdA: string, userIdB: string): Promise<boolean> {
   if (userIdA === userIdB) return false;
-  const aDriveIds = new Set(await getMemberDriveIds(userIdA, { includeTrashed: true }));
+  const aDriveIds = new Set((await listMemberDrivesOf(userIdA, { includeTrashed: true })).map((d) => d.driveId));
   if (aDriveIds.size === 0) return false;
-  return (await getMemberDriveIds(userIdB, { includeTrashed: true })).some((id) => aDriveIds.has(id));
+  return (await listMemberDrivesOf(userIdB, { includeTrashed: true })).some((d) => aDriveIds.has(d.driveId));
 }
 
 const ONE = { one: sql`1` };

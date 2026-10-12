@@ -46,6 +46,8 @@ import { createOrgDrive } from '../../services/org-drive-service';
 import { orgDriveServiceDeps } from '../../services/org-drive-service-deps';
 import { getOrgPolicies } from '../policy-reader';
 import { decideOrgDriveAdmission } from '../../permissions/guest-admission';
+import { credentialActor } from '../../permissions/access-actor';
+import { tokenOwnerActor } from '../../permissions/__tests__/fixtures/token-owner-actor';
 
 // Org-derived access is dark by default; a test that proves an org-shaped negative turns it on,
 // or the negative would hold only because the whole org branch is off.
@@ -778,14 +780,14 @@ describe('org services (real Postgres)', () => {
     if (!invite.ok) throw new Error('invite failed');
 
     // Control: the org branch is live, so an accepted member does open and list the Open drive.
-    expect(await getDriveAccess(product.id, marcus.id)).toMatchObject({ isMember: true });
-    expect((await listAccessibleDrives(marcus.id)).map((d) => d.id)).toContain(product.id);
+    expect(await getDriveAccess(product.id, credentialActor(marcus.id, null))).toMatchObject({ isMember: true });
+    expect((await listAccessibleDrives(credentialActor(marcus.id, null))).map((d) => d.id)).toContain(product.id);
 
     for (const drive of [product, finance, legal]) {
-      expect(await getDriveAccess(drive.id, tomas.id)).toEqual({ isOwner: false, isAdmin: false, isMember: false, role: null, customRoleId: null });
+      expect(await getDriveAccess(drive.id, credentialActor(tomas.id, null))).toEqual({ isOwner: false, isAdmin: false, isMember: false, role: null, customRoleId: null });
     }
-    expect(await getUserAccessLevel(tomas.id, productPage.id)).toBeNull();
-    const listed = (await listAccessibleDrives(tomas.id, { includeTrash: true })).map((d) => d.id);
+    expect(await getUserAccessLevel(credentialActor(tomas.id, null), productPage.id)).toBeNull();
+    const listed = (await listAccessibleDrives(credentialActor(tomas.id, null), { includeTrash: true })).map((d) => d.id);
     expect(listed).not.toContain(product.id);
     expect(listed).not.toContain(finance.id);
     expect(listed).not.toContain(legal.id);
@@ -836,14 +838,14 @@ describe('org services (real Postgres)', () => {
       for (const orgsEnabled of [false, true]) {
         flags.orgsEnabled = orgsEnabled;
         for (const drive of [product, finance]) {
-          expect(await getDriveAccess(drive.id, priya.id)).toEqual({ isOwner: false, isAdmin: false, isMember: false, role: null, customRoleId: null });
+          expect(await getDriveAccess(drive.id, credentialActor(priya.id, null))).toEqual({ isOwner: false, isAdmin: false, isMember: false, role: null, customRoleId: null });
         }
-        expect(await getUserAccessLevel(priya.id, productPage.id)).toBeNull();
-        expect(await getUserAccessLevel(priya.id, financePage.id)).toBeNull();
-        const listed = (await listAccessibleDrives(priya.id, { includeTrash: true })).map((d) => d.id);
+        expect(await getUserAccessLevel(credentialActor(priya.id, null), productPage.id)).toBeNull();
+        expect(await getUserAccessLevel(credentialActor(priya.id, null), financePage.id)).toBeNull();
+        const listed = (await listAccessibleDrives(credentialActor(priya.id, null), { includeTrash: true })).map((d) => d.id);
         expect(listed).not.toContain(product.id);
         expect(listed).not.toContain(finance.id);
-        expect(await getDriveAccess(product.id, marcus.id)).toMatchObject({ isOwner: true });
+        expect(await getDriveAccess(product.id, credentialActor(marcus.id, null))).toMatchObject({ isOwner: true });
       }
     });
 
@@ -993,7 +995,7 @@ describe('org services (real Postgres)', () => {
           db.select({ revokedAt: oauthAccessTokens.revokedAt }).from(oauthAccessTokens).where(eq(oauthAccessTokens.familyId, m.familyId)),
         ]);
         return {
-          key: await hasAppDriveMembership(m.tokenId, driveId),
+          key: await hasAppDriveMembership(await tokenOwnerActor(m.tokenId), m.tokenId, driveId),
           driveLink: driveLinks.length === 1,
           pageLink: pageLinks.length === 1,
           agent: agents.length === 1,

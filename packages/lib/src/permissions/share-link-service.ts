@@ -10,6 +10,7 @@ import type { SuspensionKind } from '@pagespace/db/schema/organizations';
 import { createId } from '@paralleldrive/cuid2';
 import { generateToken } from '../auth/token-utils';
 import { EnforcedAuthContext } from './enforced-context';
+import { checkActorDriveAuthentication } from './actor-authentication';
 import { isDriveOwnerOrAdmin, canUserSharePage, isUserDriveMember } from './permissions';
 import { getDrivePolicies } from '../organizations/policy-reader';
 import { decideOrgDriveAdmission } from './guest-admission';
@@ -233,7 +234,7 @@ export async function createDriveShareLink(
   driveId: string,
   opts: { role?: 'MEMBER' | 'ADMIN'; customRoleId?: string | null; expiresAt?: Date }
 ): Promise<ShareLinkResult<{ id: string; rawToken: string }>> {
-  const isAuthorized = await isDriveOwnerOrAdmin(ctx.userId, driveId);
+  const isAuthorized = await isDriveOwnerOrAdmin(ctx.actor, driveId);
   if (!isAuthorized) return { ok: false, error: 'UNAUTHORIZED' };
 
   const drive = await db.query.drives.findFirst({
@@ -294,7 +295,7 @@ export async function revokeDriveShareLink(
   if (rows.length === 0) return { ok: false, error: 'NOT_FOUND' };
 
   const link = rows[0];
-  const isAuthorized = await isDriveOwnerOrAdmin(ctx.userId, link.driveId);
+  const isAuthorized = await isDriveOwnerOrAdmin(ctx.actor, link.driveId);
   if (!isAuthorized) return { ok: false, error: 'UNAUTHORIZED' };
 
   await db
@@ -309,7 +310,7 @@ export async function listDriveShareLinks(
   ctx: EnforcedAuthContext,
   driveId: string
 ): Promise<ShareLinkResult<DriveShareLinkView[]>> {
-  const isAuthorized = await isDriveOwnerOrAdmin(ctx.userId, driveId);
+  const isAuthorized = await isDriveOwnerOrAdmin(ctx.actor, driveId);
   if (!isAuthorized) return { ok: false, error: 'UNAUTHORIZED' };
 
   const rows = await db
@@ -373,7 +374,9 @@ export async function redeemDriveShareLink(
   // link that does not exist: the holder learns nothing about the org, the drive or why.
   if (!(await linkUsableNow(link.driveId, link))) return { ok: false, error: 'NOT_FOUND' };
 
-  const alreadyMember = await isUserDriveMember(ctx.userId, link.driveId);
+  // SEC-2/3: joining through a link opens the drive, so the credential must be one the drive's org admits.
+  if (!(await checkActorDriveAuthentication(ctx.actor, link.driveId)).allowed) return { ok: false, error: 'NOT_FOUND' };
+  const alreadyMember = await isUserDriveMember(ctx.actor, link.driveId);
   if (alreadyMember) return { ok: false, error: 'ALREADY_MEMBER', driveId: link.driveId };
 
   // POL-2: an outsider redeeming a link to an org drive is a guest. Off answers like a link that does not exist;
@@ -431,7 +434,7 @@ export async function createPageShareLink(
     return { ok: false, error: 'INVALID_PERMISSIONS' };
   }
 
-  const isAuthorized = await canUserSharePage(ctx.userId, pageId);
+  const isAuthorized = await canUserSharePage(ctx.actor, pageId);
   if (!isAuthorized) return { ok: false, error: 'UNAUTHORIZED' };
 
   const pageRow = await db.query.pages.findFirst({
@@ -482,7 +485,7 @@ export async function revokePageShareLink(
   if (rows.length === 0) return { ok: false, error: 'NOT_FOUND' };
 
   const link = rows[0];
-  const isAuthorized = await canUserSharePage(ctx.userId, link.pageId);
+  const isAuthorized = await canUserSharePage(ctx.actor, link.pageId);
   if (!isAuthorized) return { ok: false, error: 'UNAUTHORIZED' };
 
   await db
@@ -497,7 +500,7 @@ export async function listPageShareLinks(
   ctx: EnforcedAuthContext,
   pageId: string
 ): Promise<ShareLinkResult<PageShareLinkView[]>> {
-  const isAuthorized = await canUserSharePage(ctx.userId, pageId);
+  const isAuthorized = await canUserSharePage(ctx.actor, pageId);
   if (!isAuthorized) return { ok: false, error: 'UNAUTHORIZED' };
 
   const rows = await db
@@ -548,6 +551,8 @@ export async function redeemPageShareLink(
   if (!(await linkUsableNow(row.driveId, row))) return { ok: false, error: 'NOT_FOUND' };
 
   const link = row;
+  // SEC-2/3: redeeming opens the page, so the credential must be one the page's org admits.
+  if (!(await checkActorDriveAuthentication(ctx.actor, link.driveId)).allowed) return { ok: false, error: 'NOT_FOUND' };
 
   const existingPerms = await db
     .select({ canView: pagePermissions.canView })

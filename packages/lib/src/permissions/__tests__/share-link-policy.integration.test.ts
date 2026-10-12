@@ -29,6 +29,7 @@ vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 vi.mock('../../audit/org-audit', () => ({ recordOrgAuditEvent: vi.fn(async () => {}), recordOrgAuditEventAfterCommit: vi.fn(async () => true) }));
 
 import { updateOrgPolicies } from '../../organizations/policies';
+import { credentialActor } from '../access-actor';
 
 const run = createId().slice(0, 8);
 const created = { userIds: [] as string[], driveIds: [] as string[], orgIds: [] as string[] };
@@ -246,7 +247,7 @@ describe('guests policy at redemption', () => {
     expect(await redeemPageShareLink(ctxFor(outsider), page.rawToken)).toEqual({ ok: false, error: 'PENDING_APPROVAL' });
 
     expect(await memberRow(outsider)).toEqual([]);
-    expect(await getUserAccessLevel(outsider, w.orgPage)).toBeNull();
+    expect(await getUserAccessLevel(credentialActor(outsider, null), w.orgPage)).toBeNull();
     const queue = await listPendingGuestApprovals(w.orgId, 10);
     // One queue row per person and drive: the page request refreshes the drive request (the later one wins).
     expect(queue.total).toBe(1);
@@ -271,7 +272,7 @@ describe('guests policy at redemption', () => {
     if (!claimedPage) throw new Error('expected a queued request');
     expect(await completeApprovedLinkAdmission(claimedPage)).toMatchObject({ ok: true, role: 'GUEST' });
     expect((await memberRow(pageGuest))[0].role).toBe('GUEST');
-    expect((await getUserAccessLevel(pageGuest, w.orgPage))?.canView).toBe(true);
+    expect((await getUserAccessLevel(credentialActor(pageGuest, null), w.orgPage))?.canView).toBe(true);
   });
 
   it('POL-2 (partial) approval re-checks the offer and the policy: a link revoked meanwhile, or guests turned OFF meanwhile, admits no one', async () => {

@@ -41,6 +41,7 @@ import { revokeDriveShareLink } from '../../permissions/share-link-service';
 import { EnforcedAuthContext } from '../../permissions/enforced-context';
 import { getUserAccessLevel } from '../../permissions/permissions';
 import { setDriveWalletCap, setSeatCap, updateDriveWallet } from '../../services/drive-wallet-service';
+import { credentialActor } from '../../permissions/access-actor';
 
 interface World {
   orgId: string;
@@ -162,24 +163,24 @@ describe('a lapsed org may still restrict (orgs on, real Postgres)', () => {
   it('SEAT-9 (partial) POL-2 (partial) while lapsed an Admin turns guests off: it is stored and the outsider is PARKED; turning them back on is refused and stores nothing; paid again, on goes through and the guest returns', async () => {
     if (!world) return;
     const w = world;
-    expect((await getUserAccessLevel(w.ids.gita, w.pageId))?.canView).toBe(true);
+    expect((await getUserAccessLevel(credentialActor(w.ids.gita, null), w.pageId))?.canView).toBe(true);
     await setSubscription(w.orgId, 'canceled');
     expect(await isOrgActive(w.orgId)).toBe(false);
 
     const off = await updateOrgPolicies({ orgId: w.orgId, actorId: w.ids.priya, patch: { guests: 'off' } });
     expect(off).toMatchObject({ ok: true, policies: { guests: 'off' } });
     expect((await getOrgPolicies(w.orgId)).guests).toBe('off');
-    expect(await getUserAccessLevel(w.ids.gita, w.pageId)).toBeNull();
+    expect(await getUserAccessLevel(credentialActor(w.ids.gita, null), w.pageId)).toBeNull();
 
     for (const guests of ['approve', 'on'] as const) {
       expect(await updateOrgPolicies({ orgId: w.orgId, actorId: w.ids.priya, patch: { guests } })).toEqual(lapsedPolicyRefusal);
       expect((await getOrgPolicies(w.orgId)).guests).toBe('off');
-      expect(await getUserAccessLevel(w.ids.gita, w.pageId)).toBeNull();
+      expect(await getUserAccessLevel(credentialActor(w.ids.gita, null), w.pageId)).toBeNull();
     }
 
     await setSubscription(w.orgId, 'active');
     expect(await updateOrgPolicies({ orgId: w.orgId, actorId: w.ids.priya, patch: { guests: 'on' } })).toMatchObject({ ok: true, policies: { guests: 'on' } });
-    expect((await getUserAccessLevel(w.ids.gita, w.pageId))?.canView).toBe(true);
+    expect((await getUserAccessLevel(credentialActor(w.ids.gita, null), w.pageId))?.canView).toBe(true);
   });
 
   it('SEAT-9 (partial) POL-1 (partial) while lapsed a batch of restrictions applies (share links suspended); a MIXED change is refused whole and stores nothing', async () => {
@@ -190,7 +191,7 @@ describe('a lapsed org may still restrict (orgs on, real Postgres)', () => {
     const mixed = await updateOrgPolicies({ orgId: w.orgId, actorId: w.ids.priya, patch: { guests: 'off', seatAllowanceCents: DEFAULT_ORG_POLICIES.seatAllowanceCents + 1 } });
     expect(mixed).toEqual(lapsedPolicyRefusal);
     expect(await getOrgPolicies(w.orgId)).toEqual(DEFAULT_ORG_POLICIES);
-    expect((await getUserAccessLevel(w.ids.gita, w.pageId))?.canView).toBe(true);
+    expect((await getUserAccessLevel(credentialActor(w.ids.gita, null), w.pageId))?.canView).toBe(true);
 
     const tightened = await updateOrgPolicies({
       orgId: w.orgId,

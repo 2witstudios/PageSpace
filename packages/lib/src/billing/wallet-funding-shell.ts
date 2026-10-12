@@ -36,7 +36,7 @@ import { subscriptions } from '@pagespace/db/schema/subscriptions';
 import { and, asc, eq, gt, inArray, isNotNull, isNull, lte, or, lt, sql } from '@pagespace/db/operators';
 import { alias } from 'drizzle-orm/pg-core';
 import { isBillingEnabled } from '../deployment-mode';
-import { getUserDriveAccess } from '../permissions/permissions';
+import { holdsDriveAccess } from '../permissions/permissions';
 import { loggers } from '../logging/logger-config';
 import { MONEY_MODEL_V2_ACTIVE, tierAllowanceCents } from './money-model';
 import { computeMonthlyRefill } from './credit-core';
@@ -667,7 +667,7 @@ export interface DonateInput {
 /**
  * WAL-4: donate a one-off amount from the donor's personal root wallet to a drive
  * wallet. The drive-visibility decision goes through the permissions module
- * (getUserDriveAccess) before anything is locked. In one transaction: the donor wallet
+ * (holdsDriveAccess) before anything is locked. In one transaction: the donor wallet
  * and the target wallet are locked (drive wallet first, then the donor root: the global order), the
  * plan is made from the locked rows, a non-refundable donation leg is written (its
  * sourceRef makes a replay a no-op), both balances move, and a ledger pair records the
@@ -683,7 +683,7 @@ export async function donateToDriveWallet(input: DonateInput): Promise<DonationO
   if (!target) return { kind: 'refused', reason: 'wallet_not_found' };
   const donorCanSeeDrive =
     target.subjectType === 'drive' && target.subjectId !== null
-      ? await getUserDriveAccess(input.donorUserId, target.subjectId)
+      ? await holdsDriveAccess(input.donorUserId, target.subjectId)
       : false;
 
   const sourceRef = `donation:${input.donationId}`;
