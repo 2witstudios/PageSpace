@@ -14,6 +14,7 @@ import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { dmConversations } from '@pagespace/db/schema/social';
 import { sessionService } from '../auth/session-service';
+import { MACHINE_CREDENTIAL_AUTHENTICATION } from '../auth/authentication-evidence';
 import { loggers } from '../logging/logger-config';
 import {
   createUploadServiceToken,
@@ -104,6 +105,7 @@ export async function createAttachmentUploadServiceToken(
       }
 
       const token = await sessionService.createSession({
+        authentication: MACHINE_CREDENTIAL_AUTHENTICATION,
         userId,
         type: 'service',
         scopes: UPLOAD_SCOPES as string[],

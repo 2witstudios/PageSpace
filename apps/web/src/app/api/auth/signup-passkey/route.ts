@@ -23,6 +23,7 @@ import {
   consumeAnyInviteIfPresent,
 } from '@/lib/auth/native-invite-acceptance';
 import { autoJoinVerifiedDomainAfterSignIn } from '@/lib/orgs/domain-auto-join';
+import { ceremonyAuthentication } from '@pagespace/lib/auth/authentication-evidence';
 
 const verifySchema = z.object({
   email: z.email(),
@@ -195,7 +196,10 @@ export async function POST(req: Request) {
     const { platform, deviceId, deviceName: deviceNameField } = validation.data;
 
     // Create session
+    // D-OW-45: the ceremony this route just verified, recorded on every credential it mints.
+    const authentication = ceremonyAuthentication({ method: 'passkey', userVerified: result.data.userVerified }, Date.now());
     const sessionToken = await sessionService.createSession({
+      authentication,
       userId,
       type: 'user',
       scopes: ['*'],
@@ -286,6 +290,7 @@ export async function POST(req: Request) {
     if (deviceId) {
       try {
         deviceTokenValue = await createDeviceToken({
+          authentication,
           userId, deviceId,
           tokenVersion: 1, // verifySignupRegistration creates users with tokenVersion: 1
           platform: platform || 'web',

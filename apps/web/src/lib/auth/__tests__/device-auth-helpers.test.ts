@@ -55,7 +55,7 @@ describe('device-auth-helpers', () => {
         isNew: true,
       });
 
-      const token = await createWebDeviceToken({
+      const token = await createWebDeviceToken({ authentication: null,
         userId: 'user-1',
         deviceId: 'device-abc',
         tokenVersion: 1,
@@ -80,7 +80,7 @@ describe('device-auth-helpers', () => {
         isNew: true,
       });
 
-      await createWebDeviceToken({
+      await createWebDeviceToken({ authentication: null,
         userId: 'user-1',
         deviceId: 'device-abc',
         tokenVersion: 1,
@@ -96,7 +96,7 @@ describe('device-auth-helpers', () => {
       vi.mocked(validateOrCreateDeviceToken).mockRejectedValue(new Error('DB error'));
 
       await expect(
-        createWebDeviceToken({ userId: 'user-1', deviceId: 'device-abc', tokenVersion: 1 }),
+        createWebDeviceToken({ authentication: null, userId: 'user-1', deviceId: 'device-abc', tokenVersion: 1 }),
       ).rejects.toThrow('DB error');
     });
   });

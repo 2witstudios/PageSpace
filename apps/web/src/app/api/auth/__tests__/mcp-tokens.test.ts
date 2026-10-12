@@ -132,6 +132,8 @@ describe('/api/auth/mcp-tokens', () => {
           tokenHash: 'mockTokenHash123',
           tokenPrefix: 'mcp_randomBas',
           isScoped: false,
+          authenticatedAt: null,
+          authenticationAssurance: null,
           drives: [],
         });
 
@@ -170,6 +172,8 @@ describe('/api/auth/mcp-tokens', () => {
           tokenHash: 'mockTokenHash123',
           tokenPrefix: 'mcp_randomBas',
           isScoped: false,
+          authenticatedAt: null,
+          authenticationAssurance: null,
           drives: [],
         });
         expect(body.token).toBe('mcp_randomBase64UrlString');
@@ -196,6 +200,8 @@ describe('/api/auth/mcp-tokens', () => {
           tokenHash: 'mockTokenHash123',
           tokenPrefix: 'mcp_randomBas',
           isScoped: false,
+          authenticatedAt: null,
+          authenticationAssurance: null,
           drives: [],
         });
       });

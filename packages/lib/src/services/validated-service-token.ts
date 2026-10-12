@@ -19,6 +19,7 @@ import {
 import { canUserAccessFile } from '../permissions/file-access';
 import { prepareUserWrite } from '../auth/user-repository';
 import { sessionService } from '../auth/session-service';
+import { MACHINE_CREDENTIAL_AUTHENTICATION } from '../auth/authentication-evidence';
 import { loggers } from '../logging/logger-config';
 
 /**
@@ -225,6 +226,7 @@ export async function createValidatedServiceToken(
   });
 
   const token = await sessionService.createSession({
+    authentication: MACHINE_CREDENTIAL_AUTHENTICATION,
     userId,
     type: 'service',
     scopes: grantedScopes as string[],
@@ -480,6 +482,7 @@ export async function createFileServiceToken(
   });
 
   const token = await sessionService.createSession({
+    authentication: MACHINE_CREDENTIAL_AUTHENTICATION,
     userId,
     type: 'service',
     scopes: grantedScopes as string[],
@@ -604,6 +607,7 @@ export async function createUploadServiceToken(
   });
 
   const token = await sessionService.createSession({
+    authentication: MACHINE_CREDENTIAL_AUTHENTICATION,
     userId,
     type: 'service',
     scopes: scopes as string[],
@@ -690,6 +694,7 @@ export async function createSystemFileDeleteToken(
   });
 
   const token = await sessionService.createSession({
+    authentication: MACHINE_CREDENTIAL_AUTHENTICATION,
     userId: SYSTEM_SERVICE_USER_ID,
     type: 'service',
     scopes: SYSTEM_FILE_DELETE_SCOPES as string[],
