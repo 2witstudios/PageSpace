@@ -16,7 +16,7 @@ untouched. Runtime credentials are not included in this record.
 `reuse-source-manifest.json` records the classic source closure and master base;
 `reuse-inventory.md` maps features to native routes and maintained boundaries.
 `evidence/*.png` are interim local captures, not exact-final-SHA visual approval.
-CI uploads fresh reuse screenshots as `imago-reuse-evidence`.
+CI uploaded fresh reuse screenshots as `imago-reuse-evidence` until spec 36 was removed during the Imago C v3 redesign (its user stories return on the PageSpace "E2E backlog — Imago C v3").
 
 ## Checks already observed
 
