@@ -10,7 +10,7 @@ import { sessions } from '@pagespace/db/schema/sessions';
 import { creditLedger, creditHolds } from '@pagespace/db/schema/credits';
 import { wallets, isPersonalRootWallet } from '@pagespace/db/schema/wallets';
 import { subscriptions } from '@pagespace/db/schema/subscriptions';
-import { orgSubscriptions } from '@pagespace/db/schema/organizations';
+import { orgSubscriptions, orgSubscriptionFunding } from '@pagespace/db/schema/organizations';
 import type { SQL } from '@pagespace/db/operators';
 import { computeBalanceDrift, isNegativeMargin } from '@pagespace/lib/billing/credit-core';
 import { BALANCE_DRIFT_TOLERANCE_CENTS, NEGATIVE_MARGIN_FLOOR_BPS } from '@pagespace/lib/billing/credit-pricing';
@@ -1143,6 +1143,7 @@ export async function getActiveSubscriptionsByTier(): Promise<SubscriptionsByTie
     )),
     db.select({ stripePriceId: orgSubscriptions.stripeBasePriceId }).from(orgSubscriptions).where(and(
       inArray(orgSubscriptions.status, ['active']), eq(orgSubscriptions.gifted, false),
+      sql`exists (select 1 from ${orgSubscriptionFunding} where ${orgSubscriptionFunding.orgId} = ${orgSubscriptions.orgId} and ${orgSubscriptionFunding.stripeSubscriptionId} = ${orgSubscriptions.stripeSubscriptionId})`,
     )),
   ]);
 

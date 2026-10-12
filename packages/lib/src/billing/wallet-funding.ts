@@ -198,6 +198,13 @@ export function orgInvoicePaidCents(input: Pick<OrgPoolRefillInput, 'lines' | 'a
   return Math.max(0, Math.min(net, wholeCents(input.amountPaidCents)));
 }
 
+/** First-payment entitlement is independent of credit ratios and sub-cent rounding. */
+export function orgSubscriptionFundingBasis(input: OrgPoolRefillInput): 'paid' | 'gift' | null {
+  if (!input.hasSubscriptionParent || input.hasVerifiedGiftPrice !== true) return null;
+  if (input.gifted === true) return input.onOrgSubscription === true && ORG_POOL_FUNDS_GIFTS ? 'gift' : null;
+  return orgInvoicePaidCents(input) > 0 ? 'paid' : null;
+}
+
 /**
  * MON-3: size the pool refill from what the org invoice PAID for its lines (the
  * Business base and the extra seats), net of discounts, times the Business ratio. More

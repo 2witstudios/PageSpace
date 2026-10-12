@@ -33,7 +33,7 @@ import { eq, sql } from '@pagespace/db/operators';
 import { orgSubscriptions } from '@pagespace/db/schema/organizations';
 import { findOrgIdByStripeCustomerId } from '@pagespace/lib/organizations/repository';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { isBillingEnabled } from '@pagespace/lib/deployment-mode';
+import { getOrgStatus } from '@pagespace/lib/organizations/status';
 import { applyOrgPoolRefill, type OrgPoolRefillOutcome } from '@pagespace/lib/billing/wallet-funding-shell';
 import { orgBillingLockKey } from '@pagespace/lib/billing/org-subscription-core';
 import {
@@ -43,7 +43,7 @@ import {
   routeBillingOwner,
   type BillingOwnerRoute,
 } from '@pagespace/lib/billing/org-webhook-core';
-import { deriveOrgStatus, orgLapseTransition, type OrgStatus, type OrgLapseTransition } from '@pagespace/lib/organizations/status-core';
+import { orgLapseTransition, type OrgStatus, type OrgLapseTransition } from '@pagespace/lib/organizations/status-core';
 import { stripeOrgBilling, type OrgBillingStripe } from '@/lib/org-billing/org-subscription';
 import { stripe as appStripe, type Stripe } from '@/lib/stripe';
 import { stripeConfig } from '@/lib/stripe-config';
@@ -130,7 +130,6 @@ export async function mirrorOrgSubscription(
     if (plan !== 'apply' || !stored) return { kind: 'ignored', orgId, reason: plan === 'apply' ? 'no_row' : plan };
 
     const fetched = await deps.stripe.retrieveSubscription(subscriptionId);
-    const billingEnabled = isBillingEnabled();
     // Review 3+4 P2-8: the seat item and its quantity as Stripe has them NOW (a change made
     // outside the app is mirrored, never left stale), alongside the status.
     const mirrorPatch = planOrgSubscriptionPriceMirror({
@@ -147,9 +146,10 @@ export async function mirrorOrgSubscription(
       cancelAtPeriodEnd: fetched.cancelAtPeriodEnd,
       ...mirrorPatch,
     };
-    const before = deriveOrgStatus({ billingEnabled, subscription: stored }).status;
+    // The status reads the mirrored row AND its funding proof (D-OW-30), so it is read, not derived from the row alone.
+    const before = (await getOrgStatus(orgId, { executor: tx })).status;
     await tx.update(orgSubscriptions).set(next).where(eq(orgSubscriptions.id, stored.id));
-    const after = deriveOrgStatus({ billingEnabled, subscription: next }).status;
+    const after = (await getOrgStatus(orgId, { executor: tx })).status;
     return {
       kind: 'applied',
       orgId,

@@ -10,6 +10,7 @@ export type OrgStatus = (typeof ORG_STATUSES)[number];
 
 export type OrgLapseReason =
   | 'no_subscription'
+  | 'never_funded'
   | 'trial_unsupported'
   | 'payment_failed'
   | 'unpaid'
@@ -28,6 +29,8 @@ export interface OrgSubscriptionState {
   status: string;
   /** Stripe collection_method as mirrored: only charge_automatically can grant capability ([D-OW-44]). */
   collectionMethod: string;
+  /** Verified invoice evidence for this exact org and subscription (org_subscription_funding). */
+  hasVerifiedFunding: boolean;
 }
 
 /** The SEAT-9 refusal, shown wherever an org-only capability is refused; restricting stays allowed (D-OW-33). No credit or price figure. */
@@ -52,7 +55,9 @@ export function deriveOrgStatus(input: {
 
   switch (sub.status) {
     case 'active':
-      return { status: 'active', reason: null };
+      return sub.hasVerifiedFunding === true
+        ? { status: 'active', reason: null }
+        : { status: 'lapsed', reason: 'never_funded' };
     case 'past_due':
       return { status: 'lapsed', reason: 'payment_failed' };
     case 'trialing':

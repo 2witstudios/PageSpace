@@ -11,8 +11,8 @@
  * everything exactly where it was.
  */
 import { db } from '@pagespace/db/db';
-import { eq } from '@pagespace/db/operators';
-import { organizations, orgSubscriptions } from '@pagespace/db/schema/organizations';
+import { and, eq, sql } from '@pagespace/db/operators';
+import { organizations, orgSubscriptions, orgSubscriptionFunding } from '@pagespace/db/schema/organizations';
 import { isBillingEnabled } from '../deployment-mode';
 import {
   decideOrgMayLoosen,
@@ -50,14 +50,21 @@ export async function getOrgStatus(orgId: string, opts: { executor?: Executor } 
   const billingEnabled = isBillingEnabled();
   if (!billingEnabled) return { status: 'active', reason: null };
   const [row] = await (opts.executor ?? db)
-    .select({ status: orgSubscriptions.status, collectionMethod: orgSubscriptions.collectionMethod })
+    .select({
+      status: orgSubscriptions.status,
+      collectionMethod: orgSubscriptions.collectionMethod,
+      hasVerifiedFunding: sql<boolean>`${orgSubscriptionFunding.id} IS NOT NULL`,
+    })
     .from(organizations)
     .leftJoin(orgSubscriptions, eq(orgSubscriptions.orgId, organizations.id))
+    .leftJoin(orgSubscriptionFunding, and(eq(orgSubscriptionFunding.orgId, organizations.id), eq(orgSubscriptionFunding.stripeSubscriptionId, orgSubscriptions.stripeSubscriptionId)))
     .where(eq(organizations.id, orgId))
     .limit(1);
   if (!row) return { status: 'lapsed', reason: 'no_subscription' };
   const subscription: OrgSubscriptionState | null =
-    row.status === null || row.collectionMethod === null ? null : { status: row.status, collectionMethod: row.collectionMethod };
+    row.status === null || row.collectionMethod === null
+      ? null
+      : { status: row.status, collectionMethod: row.collectionMethod, hasVerifiedFunding: row.hasVerifiedFunding };
   return deriveOrgStatus({ billingEnabled, subscription });
 }
 

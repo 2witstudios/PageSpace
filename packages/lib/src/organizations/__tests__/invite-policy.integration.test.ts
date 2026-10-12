@@ -44,6 +44,7 @@ beforeEach(async () => {
     orgId, stripeSubscriptionId: `sub_${createId()}`, stripeBasePriceId: 'pb', stripeBaseItemId: 'ib', stripeSeatPriceId: 'ps', stripeSeatItemId: 'is',
     extraSeatQuantity: 0, status: 'active', currentPeriodStart: new Date(Date.now() - 86_400_000), currentPeriodEnd: new Date(Date.now() + 29 * 86_400_000),
   });
+  await factories.fundOrgSubscription(orgId);
   w = { orgId, owner, admin, member };
 });
 

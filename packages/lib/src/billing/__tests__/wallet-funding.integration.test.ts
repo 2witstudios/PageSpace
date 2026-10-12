@@ -14,7 +14,7 @@ import { eq, inArray, and } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { drives } from '@pagespace/db/schema/core';
 import { driveMembers } from '@pagespace/db/schema/members';
-import { organizations, orgSubscriptions } from '@pagespace/db/schema/organizations';
+import { organizations, orgSubscriptions, orgSubscriptionFunding } from '@pagespace/db/schema/organizations';
 import { creditLedger } from '@pagespace/db/schema/credits';
 import { wallets, walletFundingLegs, personalRootWalletOf } from '@pagespace/db/schema/wallets';
 import { factories } from '@pagespace/db/test/factories';
@@ -25,6 +25,7 @@ import {
   donateToDriveWallet,
   refundFundingLeg,
 } from '../wallet-funding-shell';
+import { isOrgActive } from '../../organizations/status';
 import { drawWalletFundingLegs } from '../wallet-legs';
 
 let dbAvailable = false;
@@ -100,6 +101,36 @@ describe('wallet funding against Postgres', () => {
     ...line,
     parent: { subscription_item_details: { subscription_item: 'si_org' } },
     pricing: { price_details: { price: priceId } },
+  });
+
+  it.each([0, 1, 5000])('SEAT-8 (partial) first payment %s establishes proof independently of credit rounding and balance', async (paid) => {
+    if (!dbAvailable) return;
+    const owner = await user();
+    const [org] = await db.insert(organizations).values({ name: 'Proof', slug: `proof-${createId()}`, ownerId: owner, stripeCustomerId: `cus_${createId()}` }).returning();
+    created.orgs.push(org.id);
+    const subscriptionId = `sub_${createId()}`;
+    await db.insert(orgSubscriptions).values({ orgId: org.id, stripeSubscriptionId: subscriptionId, stripeBasePriceId: PRICES.basePriceId, stripeBaseItemId: 'si_base', stripeSeatPriceId: PRICES.seatPriceId, stripeSeatItemId: 'si_seat', status: 'active' });
+    expect(await isOrgActive(org.id)).toBe(false);
+    const invoice = { id: `in_${createId()}`, customer: org.stripeCustomerId, amount_paid: paid, subtotal: 5000, billing_reason: 'subscription_create', parent: { subscription_details: { subscription: subscriptionId } }, lines: { data: [priced(PRICES.basePriceId, { amount: 5000, period: { start: PERIOD_START_S, end: PERIOD_END_S } })] } };
+    await applyOrgPoolRefill(invoice, { ...PRICES, active: true });
+    expect(await isOrgActive(org.id)).toBe(paid > 0);
+    const receipts = await db.select().from(orgSubscriptionFunding).where(eq(orgSubscriptionFunding.orgId, org.id));
+    expect(receipts).toHaveLength(paid > 0 ? 1 : 0);
+    if (paid > 0) expect(receipts[0]).toMatchObject({ stripeSubscriptionId: subscriptionId, stripeInvoiceId: invoice.id, basis: 'paid', paidCents: paid });
+    await db.update(wallets).set({ monthlyRemainingCents: 0, topupRemainingCents: 0 }).where(eq(wallets.orgId, org.id));
+    expect(await isOrgActive(org.id)).toBe(paid > 0);
+    await applyOrgPoolRefill(invoice, { ...PRICES, active: true });
+    expect(await db.select().from(orgSubscriptionFunding).where(eq(orgSubscriptionFunding.orgId, org.id))).toHaveLength(paid > 0 ? 1 : 0);
+    if (paid === 5000) {
+      // An existing historical grant can recover missing proof without refilling its spent balance.
+      await db.delete(orgSubscriptionFunding).where(eq(orgSubscriptionFunding.orgId, org.id));
+      const beforeReplay = await db.select().from(wallets).where(eq(wallets.orgId, org.id));
+      expect((await applyOrgPoolRefill(invoice, { ...PRICES, active: true })).kind).toBe('duplicate');
+      expect(await isOrgActive(org.id)).toBe(true);
+      expect(await db.select().from(wallets).where(eq(wallets.orgId, org.id))).toEqual(beforeReplay);
+    }
+    await db.update(orgSubscriptions).set({ stripeSubscriptionId: `sub_replacement_${createId()}` }).where(eq(orgSubscriptions.orgId, org.id));
+    expect(await isOrgActive(org.id)).toBe(false);
   });
 
   it('MON-3 an org invoice paid for base + 3 extra seats refills the org pool with paid × ratio, once, and stamps the refill date', async () => {

@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { centsFromCredits } from '../money-model';
 import {
   orgPoolRefillGrant,
+  orgSubscriptionFundingBasis,
   orgPoolListPriceGrantCents,
   orgInvoicePaidCents,
   selectOrgPoolRefillLines,
@@ -561,5 +562,17 @@ describe('wallet-funding: the comped personal root roll', () => {
     for (const later of [now, now + 3_600_000, first.periodEndMs - 1]) {
       expect(comped(first.periodEndMs, later)).toEqual({ due: false });
     }
+  });
+});
+
+describe('organization first-funding evidence', () => {
+  it.each([
+    { paid: 1, verified: true, gifted: false, own: true, expected: 'paid' },
+    { paid: 0, verified: true, gifted: false, own: true, expected: null },
+    { paid: 5000, verified: false, gifted: false, own: true, expected: null },
+    { paid: 0, verified: true, gifted: true, own: true, expected: 'gift' },
+    { paid: 0, verified: true, gifted: true, own: false, expected: null },
+  ])('recognizes only verified paid or own-subscription gift evidence: %j', ({ paid, verified, gifted, own, expected }) => {
+    expect(orgSubscriptionFundingBasis({ lines: [base], amountPaidCents: paid, hasSubscriptionParent: true, hasVerifiedGiftPrice: verified, gifted, onOrgSubscription: own })).toBe(expected);
   });
 });

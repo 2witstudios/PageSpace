@@ -53,6 +53,7 @@ async function northwind() {
     stripeSeatPriceId: 'price_seat_test', stripeSeatItemId: `si_${createId()}`, status: 'active',
     currentPeriodStart: new Date(Date.now() - 86_400_000), currentPeriodEnd: new Date(Date.now() + 20 * 86_400_000),
   });
+  await factories.fundOrgSubscription(org.id);
   const domain = `northwind-${createId()}.com`;
   const claim = await addOrgDomain({ orgId: org.id, domain, actorId: jono.id });
   if (!claim.ok) throw new Error('domain');
