@@ -228,6 +228,7 @@ describe('SessionService', () => {
         adminRoleVersion: 0, type: 'user', scopes: ['read', 'write'],
         expiresAt, lastUsedAt: null, createdAt: new Date(),
         resourceType: null, resourceId: null, driveId: null,
+        authenticatedAt: null, authenticationAssurance: null,
         user: { id: 'user-1', tokenVersion: 1, role: 'admin', adminRoleVersion: 0, suspendedAt: null },
       });
 
@@ -245,6 +246,7 @@ describe('SessionService', () => {
         resourceType: undefined,
         resourceId: undefined,
         driveId: undefined,
+        authentication: null,
       });
       expect(sessionRepository.touchSession).toHaveBeenCalledWith('hashed_ps_sess_valid');
     });
