@@ -61,6 +61,8 @@ import { lookupDriveBillingFacts } from '../../billing/sandbox-payer';
 import { MACHINE_MARKUP_BPS } from '../../billing/credit-pricing';
 import { AIMonitoring } from '../../monitoring/ai-monitoring';
 import { computeSettleWalletId, UNSETTLED_COMPUTE } from '../../billing/compute-gate';
+import { reserveOrgPoolAccrual } from '../../billing/credit-gate';
+import { releaseHold } from '../../billing/credit-consume';
 import { computeSpendKind } from '../../billing/compute-charge';
 import { stampOrgComputeBillingEpoch } from '../../billing/org-compute-epoch';
 import { isOrgActive } from '../../organizations/status';
@@ -204,11 +206,17 @@ export const defaultReconcileSandboxStorageDeps: ReconcileSandboxStorageDeps = {
    * credit-ledger outage no longer looks identical to a successful charge, and the
    * reconcile can hold the watermark instead of closing the window over lost spend.
    */
-  async chargeStorage({ charge, driveId, subjectKind, subjectId, costDollars, gbMonths }) {
+  // WAL-9: an org row's accrual is held on the pool before it is charged — never past what the
+  // pool can cover, nothing at all while it is paused (credit-gate reserveOrgPoolAccrual).
+  reserveOrgAccrual: ({ charge, chargeMillicents }) =>
+    reserveOrgPoolAccrual({ orgId: charge.orgId, userId: charge.userId, chargeMillicents, spendKind: computeSpendKind(charge) }),
+  releaseAccrualHold: (holdId: string) => releaseHold(holdId),
+
+  async chargeStorage({ charge, driveId, subjectKind, subjectId, costDollars, gbMonths, hold }) {
     // WAL-9: an org drive's storage lands on the org pool, recorded under the person the
-    // charge names. A pool that no longer exists charges nothing (the window stays open) —
-    // never the recorded person's wallet.
-    const walletId = await computeSettleWalletId(charge);
+    // charge names, settled on the pool hold reserveOrgAccrual placed. A pool that no longer
+    // exists charges nothing (the window stays open) — never the recorded person's wallet.
+    const walletId = hold ? hold.walletId : await computeSettleWalletId(charge);
     if (walletId === null) return UNSETTLED_COMPUTE;
     return AIMonitoring.trackUsage({
       userId: charge.userId,
@@ -258,8 +266,10 @@ export const defaultReconcileSandboxStorageDeps: ReconcileSandboxStorageDeps = {
       // usage row while staying a valid non-negative duration.
       duration: 0,
       success: true,
-      // No holdId: a background reconcile charge, not gated against a
-      // pre-placed hold (mirrors reconcile-ai-cost's settle path).
+      // An org row settles on its pool hold, so the charge can never exceed what the pool
+      // covered (WAL-9). A personal row is a background reconcile charge with no hold
+      // (mirrors reconcile-ai-cost's settle path).
+      ...(hold ? { holdId: hold.holdId } : {}),
       costSource: 'list_price',
       // Same 1.5x substrate floor as active-runtime billing (machine-billing.ts),
       // independent of the shared AI MARKUP_BPS default.

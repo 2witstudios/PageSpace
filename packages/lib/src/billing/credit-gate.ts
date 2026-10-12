@@ -61,6 +61,7 @@ import { evaluateCaps, seatCapCheck, type RefusalReason, type SkipReason, type S
 import { loadSeatCapFacts } from './seat-allowance';
 import { holdsInScope, isComputeSpendKind, ledgerRowsInScope, personBoundScopeFor, type PersonBoundScope } from './person-bound-scope';
 import { readOrgSpendPolicy } from '../organizations/policy-reader';
+import { orgAccrualDecision } from './compute-charge';
 import type { SubscriptionTier } from '../services/subscription-utils';
 
 // The partial unique index credit_ledger_stripe_ref_unique is defined WHERE
@@ -973,4 +974,68 @@ export async function hasSpendableOrgPool(orgId: string): Promise<boolean> {
   const [pool] = await db.select(SHARED_WALLET_FACTS).from(wallets).where(orgPoolWhere(orgId)).limit(1);
   if (!pool || orgLegStatus(pool.status, !(await isOrgActive(orgId))) === 'paused') return false;
   return rootAvailableCents(pool, 0) > RESERVE_FLOOR_CENTS;
+}
+
+/**
+ * What the org pool answers for one BACKGROUND accrual (machine storage, WAL-9): a hold to settle
+ * that accrual on — never more than the pool can cover — or why nothing is charged. `unavailable`
+ * (the org has no pool) charges nothing and leaves the window open, as before; `unmetered` is a
+ * billing-off deployment, where no money moves.
+ */
+export type OrgPoolAccrualReservation =
+  | { kind: 'held'; holdId: string; walletId: string; chargeMillicents: number }
+  | { kind: 'forgive'; reason: 'org_wallet_paused' | 'org_wallet_empty' | 'nothing_to_charge' }
+  | { kind: 'unavailable' }
+  | { kind: 'unmetered' };
+
+/**
+ * reserveOrgPoolAccrual — hold the org pool for a background accrual BEFORE it is settled, so the
+ * cron that bills machine storage can never put a pool into debt (WAL-9). Under the pool's row
+ * lock, in one transaction: the pool's status (a LAPSED org reads paused, SEAT-9) and what it can
+ * still cover net of its debt and of every live hold against it and its children; the pure
+ * {@link orgAccrualDecision} then forgives a paused or empty pool's accrual, or holds the whole
+ * cents the accrual needs — capped at what the pool has. The caller settles on the hold (its
+ * charge at most `chargeMillicents`) or releases it.
+ *
+ * No per-member cap is asked here: storage is a standing cost no person can be refused out of,
+ * and the settle records any overshoot of the recorded person's allowance against them (D-OW-28,
+ * recordSeatOvershoot) while the pool — the payer — absorbs it.
+ */
+export async function reserveOrgPoolAccrual(input: {
+  orgId: string;
+  /** Who the hold and usage are recorded under (the session's owner, the env's cost owner). */
+  userId: string;
+  chargeMillicents: number;
+  spendKind: SpendKind;
+}): Promise<OrgPoolAccrualReservation> {
+  if (!isBillingEnabled()) return { kind: 'unmetered' };
+  const lapsed = !(await isOrgActive(input.orgId));
+  const now = new Date();
+  return db.transaction(async (tx): Promise<OrgPoolAccrualReservation> => {
+    const [pool] = await tx.select(SHARED_WALLET_FACTS).from(wallets).where(orgPoolWhere(input.orgId)).for('update');
+    if (!pool) return { kind: 'unavailable' };
+    const heldOnPool = sql`${creditHolds.walletId} = ${pool.id}`;
+    const heldOnChildren = sql`${creditHolds.walletId} IN (SELECT ${wallets.id} FROM ${wallets} WHERE ${wallets.parentWalletId} = ${pool.id})`;
+    const [agg] = await tx
+      .select({ reserved: sql<number>`coalesce(sum(${creditHolds.estCents}), 0)` })
+      .from(creditHolds)
+      .where(and(or(heldOnPool, heldOnChildren), gt(creditHolds.expiresAt, now)));
+    const decision = orgAccrualDecision({
+      poolStatus: orgLegStatus(pool.status, lapsed) === 'paused' ? 'paused' : 'active',
+      spendableCents: walletSpendableCents({ wallet: pool, ownReservedCents: Number(agg?.reserved ?? 0), parent: null }),
+      chargeMillicents: input.chargeMillicents,
+    });
+    if (decision.kind === 'forgive') return decision;
+    const [hold] = await tx
+      .insert(creditHolds)
+      .values({
+        userId: input.userId,
+        walletId: pool.id,
+        estCents: decision.holdCents,
+        expiresAt: new Date(holdExpiresAt(now.getTime(), CREDIT_HOLD_TTL_SECONDS * 1000)),
+        spendKind: input.spendKind,
+      })
+      .returning({ id: creditHolds.id });
+    return { kind: 'held', holdId: hold.id, walletId: pool.id, chargeMillicents: decision.chargeMillicents };
+  });
 }

@@ -55,12 +55,12 @@ const agentViewOnlyPerms: PermissionLevel = {
 // Fully-permissive deps; individual tests override the single field under test
 // so each test exercises exactly one denial path. Tier defaults to 'pro' (so
 // the tier gate stays out of the way of tests exercising other gates), and
-// `lookupDriveBillingFacts` defaults to null (payer falls back to the resolved
-// `ownerId`/`userId`), matching what most tests actually want to exercise.
+// `lookupDriveBillingFacts` defaults to a personal drive (its owner pays, on
+// the stubbed tier), matching what most tests actually want to exercise.
 function makeDeps(overrides: Partial<CanRunCodeDeps> = {}): CanRunCodeDeps {
   return {
     getUserDrivePermissions: async () => adminPerms,
-    lookupDriveBillingFacts: async () => null,
+    lookupDriveBillingFacts: async () => ({ ownerId: 'owner', orgId: null }),
     getUserSubscriptionTier: async () => 'pro',
     getAgentAccessLevel: async () => agentEditPerms,
     isCodeExecutionEnabled: () => true,
