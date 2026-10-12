@@ -160,9 +160,6 @@ SEC-4
 # personal credits (no server-trusted drive); Zoom enrichment's payer is the #2731 ruling. ow-final-spend-gate
 # closed the gate's silent out-of-box switch (SPEND-4) and gave ask_agent its own reservation (WAL-6a).
 SPEND-1
-# SPEND-2 (partial, ow-c6): GET /api/wallets/conversations/[id] answers the stored choice, the options and
-# the gate's own decision before the first message (the data the chip shows); the chip itself is UI-8.
-SPEND-2
 # SPEND-6 (partial, ow-c2): automations resolve to the drive wallet or skip, never a person; wiring every
 # automation kind and logging the skip are unproven until C4.
 # ow-lapse-automation: [D-OW-34] amends it — an automation runs on behalf of its creator, whose per-consumer cap
