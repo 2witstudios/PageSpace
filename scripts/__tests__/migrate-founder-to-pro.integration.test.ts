@@ -64,7 +64,7 @@ describe('D-OW-42 Founder migration PostgreSQL writes', () => {
     const store = createMigrationStore(db);
     const [observed] = await store.listCandidates();
     await pool.query('UPDATE users SET "subscriptionGrandfathered" = true WHERE id = $1', [user.id]);
-    await expect(store.apply([{ user: observed, tier: 'pro' }])).rejects.toThrow('evidence changed');
+    await expect(store.apply([{ user: observed, tier: 'pro' }], [observed])).rejects.toThrow('evidence changed');
     const guardSql = await readFile(new URL('../../packages/db/drizzle/0338_personal_billing_cutover_guard.sql', import.meta.url), 'utf8');
     await expect(pool.query(guardSql)).rejects.toThrow('users_retired_billing_cleared');
     expect((await store.listCandidates())[0].grandfathered).toBe(true);

@@ -113,7 +113,7 @@ export async function runFounderMigration(deps: MigrationDeps, options: { apply:
       .map((user) => `${user.id}: Stripe evidence exists on a billing-disabled deployment; verify it before normalization`);
     const updates: MigrationUpdate[] = candidates.filter((user) => user.tier !== 'free' || user.grandfathered)
       .map((user) => ({ user, tier: 'free' }));
-    if (options.apply && issues.length === 0 && updates.length > 0) await deps.apply(updates);
+    if (options.apply && issues.length === 0) await deps.apply(updates, candidates);
     return { ready: issues.length === 0, apply: options.apply, scanned: candidates.length, normalized: issues.length === 0 ? updates.length : 0, issues };
   }
   if (!deps.proPriceId) throw new Error('Configured Pro price is required');
