@@ -18,8 +18,8 @@
   --status-warning: light-dark(oklch(0.7 0.17 50), oklch(0.75 0.15 50));
   --status-warning-ink: light-dark(oklch(0.55 0.17 50), oklch(0.8 0.13 50));
   --status-danger: light-dark(oklch(0.577 0.245 27), oklch(0.66 0.2 27));
-  --badge: light-dark(oklch(0.7 0.17 50), oklch(0.75 0.15 50));
-  --badge-ink: light-dark(oklch(0.2 0.04 50), oklch(0.2 0.04 50));
+  --notice: light-dark(oklch(0.7 0.17 50), oklch(0.75 0.15 50));
+  --notice-ink: light-dark(oklch(0.2 0.04 50), oklch(0.2 0.04 50));
   /* Page-type hues (SPEC, as Spine.dc.html draws them). Documents use the primary. */
   --type-doc: light-dark(oklch(0.5 0.16 235), oklch(0.66 0.14 235));
   --type-tasks: light-dark(oklch(0.55 0.15 145), oklch(0.68 0.15 145));
@@ -43,8 +43,8 @@
   --color-status-warning: var(--status-warning);
   --color-status-warning-ink: var(--status-warning-ink);
   --color-status-danger: var(--status-danger);
-  --color-badge: var(--badge);
-  --color-badge-ink: var(--badge-ink);
+  --color-notice: var(--notice);
+  --color-notice-ink: var(--notice-ink);
   --color-type-doc: var(--type-doc);
   --color-type-tasks: var(--type-tasks);
   --color-type-sheet: var(--type-sheet);

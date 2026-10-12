@@ -58,7 +58,7 @@ describe('Imago C v3 tokens (IMC-1.2)', () => {
       given: 'the SPEC v3 token list',
       should: 'carry its light values exactly',
       actual: Object.fromEntries(
-        ['--spine', '--tint', '--tab-bar', '--fill', '--hairline', '--accent-deep', '--status-success', '--status-danger', '--badge',
+        ['--spine', '--tint', '--tab-bar', '--fill', '--hairline', '--accent-deep', '--status-success', '--status-danger', '--notice',
           '--type-tasks', '--type-sheet', '--type-channel', '--type-folder', '--type-agent', '--type-canvas', '--type-code', '--type-file']
           .map((name) => [name, light(name)]),
       ),
@@ -71,7 +71,7 @@ describe('Imago C v3 tokens (IMC-1.2)', () => {
         '--accent-deep': 'oklch(0.38 0.16 235)',
         '--status-success': 'oklch(0.55 0.15 145)',
         '--status-danger': 'oklch(0.577 0.245 27)',
-        '--badge': 'oklch(0.7 0.17 50)',
+        '--notice': 'oklch(0.7 0.17 50)',
         '--type-tasks': 'oklch(0.55 0.15 145)',
         '--type-sheet': 'oklch(0.52 0.13 160)',
         '--type-channel': 'oklch(0.55 0.14 300)',

@@ -334,16 +334,13 @@ describe('paneLayout()', () => {
     });
   });
 
-  test('only sections with a list collapse', () => {
-    // Type-level: a section with no list is not a collapsible section, so
-    // tsc rejects it (bun run typecheck fails if the type widens again).
-    // @ts-expect-error settings has no list to collapse
-    const settings: readonly HideableSection[] = ['settings'];
+  test('every section is a hideable section (SPEC v3.2)', () => {
+    const every: readonly HideableSection[] = ['chat', 'files', 'messages', 'tasks', 'settings', 'account'];
     assert({
-      given: 'a collapsed-sections value naming settings',
-      should: 'be rejected by the type (the value never reaches a layout)',
-      actual: settings.length,
-      expected: 1,
+      given: 'every section named as hideable',
+      should: 'accept them all: each left pane closes with Close sidebar',
+      actual: every.length,
+      expected: 6,
     });
   });
 });

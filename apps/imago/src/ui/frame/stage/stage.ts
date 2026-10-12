@@ -47,13 +47,14 @@ export const isListSection = (section: string): section is ListSection =>
   listSections.includes(section);
 
 /**
- * The sections whose list the viewer can hide: the list sections' trees and
- * the chat's history (the chat's own list, myimago ADR 0029 decision 2).
+ * Every section's left pane can be closed (SPEC v3.2: Close sidebar on every
+ * left pane), each section remembered on its own.
  */
-export type HideableSection = ListSection | 'chat';
+export type HideableSection = Section;
 
-export const isHideableSection = (section: string): section is HideableSection =>
-  section === 'chat' || isListSection(section);
+const sections: readonly string[] = ['chat', 'files', 'messages', 'tasks', 'settings', 'account'];
+
+export const isHideableSection = (section: string): section is HideableSection => sections.includes(section);
 
 /** First segments that name a route, never a drive. */
 const reserved: readonly string[] = ['dm', 'account', 'chat', 'settings', ...listSections];

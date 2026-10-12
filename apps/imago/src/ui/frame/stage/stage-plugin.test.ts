@@ -154,20 +154,13 @@ describe('stage transactions through the store', () => {
 });
 
 describe('collapsible sections', () => {
-  test('only a list section', () => {
+  test('every section, including settings and account (SPEC v3.2)', () => {
     const state = createInitialState();
-    // Type-level: settings has no list, so tsc rejects collapsing it
-    // (bun run typecheck fails if the transaction's type widens again).
-    // @ts-expect-error settings has no list to collapse
-    const next = collapseSection(state, 'settings');
-    // @ts-expect-error account has no list to expand
-    expandSection(state, 'account');
-
     assert({
-      given: 'collapsing a section that has no list',
-      should: 'be a type error (the call above only runs to prove it compiles out)',
-      actual: next === state,
-      expected: false,
+      given: 'settings and account collapsed',
+      should: 'record both: every left pane closes with Close sidebar',
+      actual: collapseSection(collapseSection(state, 'settings'), 'account').resources.collapsedSections,
+      expected: ['settings', 'account'],
     });
   });
 });
@@ -176,9 +169,66 @@ describe('stagePlugin slice', () => {
   test('its own resources and transactions', () => {
     assert({
       given: 'the stage slice',
-      should: 'start with no section collapsed and own the collapse and expand transactions',
+      should: 'start with no pane hidden and Imago open, and own the pane and Imago transactions',
       actual: [stagePlugin.resources(), Object.keys(stagePlugin.transactions).sort()],
-      expected: [{ collapsedSections: [] }, ['collapseSection', 'expandSection']],
+      expected: [
+        { collapsedSections: [], imagoCollapsed: false, imagoClosed: false },
+        ['closeImago', 'collapseImago', 'collapseSection', 'expandImago', 'expandSection', 'openImago'],
+      ],
+    });
+  });
+});
+
+describe('Imago column transactions (IMC-1.3)', () => {
+  const { collapseImago, expandImago, closeImago, openImago } = stagePlugin.transactions;
+  const start = createInitialState();
+
+  test('collapse and expand the docked column', () => {
+    assert({
+      given: 'Imago docked, collapsed, then expanded',
+      should: 'record collapsed and then clear it',
+      actual: [
+        collapseImago(start).resources.imagoCollapsed,
+        expandImago(collapseImago(start)).resources.imagoCollapsed,
+      ],
+      expected: [true, false],
+    });
+  });
+
+  test('close Imago on the ground', () => {
+    assert({
+      given: 'Imago closed on the ground',
+      should: 'record it closed',
+      actual: closeImago(start).resources.imagoClosed,
+      expected: true,
+    });
+  });
+
+  test('Ask Imago reopens it', () => {
+    const reopened = openImago(collapseImago(closeImago(start)));
+    assert({
+      given: 'Imago closed and collapsed, then Ask Imago',
+      should: 'open it and undo the collapse',
+      actual: [reopened.resources.imagoClosed, reopened.resources.imagoCollapsed],
+      expected: [false, false],
+    });
+  });
+
+  test('no change, same snapshot', () => {
+    assert({
+      given: 'expandImago on an expanded column',
+      should: 'return the same state',
+      actual: expandImago(start) === start,
+      expected: true,
+    });
+  });
+
+  test('every section can hide its pane', () => {
+    assert({
+      given: 'the settings section collapsed',
+      should: 'record it like any list section',
+      actual: collapseSection(start, 'settings').resources.collapsedSections,
+      expected: ['settings'],
     });
   });
 });
