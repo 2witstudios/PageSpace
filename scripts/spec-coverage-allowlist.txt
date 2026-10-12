@@ -166,6 +166,10 @@ UI-3
 UI-4
 UI-5
 UI-7
+# UI-8 (partial): the chip, popover and composer strip (spend-surfaces*), the refusal card in the chat error
+# banner, the automation spend line / skipped badge / owner-left state, and the /btw fallback notice are
+# tested, each titled "UI-8 (partial)". Unproven: v1/chat/completions, consult and mentions still drop the
+# gate's fallback (SPEND-4, the spend-gate lane), and canvas page 2 fidelity needs a reviewer with the canvas.
 UI-8
 UI-11
 # WAL-1 (partial, ow-c1): the wallets table carries every WAL-1 field, the migration proves each
