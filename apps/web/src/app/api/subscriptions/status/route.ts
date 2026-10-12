@@ -5,7 +5,7 @@ import { eq, and, inArray, desc } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { subscriptions } from '@pagespace/db/schema/subscriptions';
 import { getStorageConfigFromSubscription } from '@pagespace/lib/services/subscription-utils';
-import { TIERS, toSubscriptionTier, type SubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
+import { TIERS, toPersonalSubscriptionTier, type SubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { tierAllowanceCents } from '@pagespace/lib/billing/money-model';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
@@ -60,15 +60,13 @@ export async function GET(request: NextRequest) {
 
     // Compute storage config from subscription tier
     // Coerce the untyped column through the canonical vocabulary (schema contract).
-    const subscriptionTier = toSubscriptionTier(user.subscriptionTier);
+    const subscriptionTier = toPersonalSubscriptionTier(user.subscriptionTier);
     const storageConfig = getStorageConfigFromSubscription(subscriptionTier);
 
     auditRequest(request, { eventType: 'data.read', userId, resourceType: 'subscription_status', resourceId: 'self', details: { tier: subscriptionTier } });
 
     return NextResponse.json({
       subscriptionTier,
-      // A-9: a legacy $100 personal Business subscriber kept at their price.
-      subscriptionGrandfathered: user.subscriptionGrandfathered === true,
       stripeCustomerId: user.stripeCustomerId,
       subscription: subscription ? {
         status: subscription.status,

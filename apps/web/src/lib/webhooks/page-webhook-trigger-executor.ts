@@ -1,3 +1,4 @@
+import { toPersonalSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
@@ -17,7 +18,6 @@ import { automationSpend } from '@pagespace/lib/billing/spend-target';
 import { creditDeniedError } from '@/lib/workflows/workflow-credit-gate';
 import { WEBHOOK_DAILY_EXPOSURE_CAP_CENTS, CREDIT_HOLD_ESTIMATE_CENTS } from '@pagespace/lib/billing/credit-pricing';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
-import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { resolveSteps, hasAiStep, countAiSteps } from '@/lib/workflows/core/step-plan';
 import { frameWebhookPayloadPrompt } from './webhook-payload-framing';
@@ -216,7 +216,7 @@ export async function executePageWebhookTrigger(
         .where(eq(users.id, ownerId));
       const gate = await canConsumeAI(
         ownerId,
-        (owner?.subscriptionTier ?? 'free') as SubscriptionTier,
+        toPersonalSubscriptionTier(owner?.subscriptionTier),
         {
           spend,
           dailyCapCeilingCents: WEBHOOK_DAILY_EXPOSURE_CAP_CENTS,

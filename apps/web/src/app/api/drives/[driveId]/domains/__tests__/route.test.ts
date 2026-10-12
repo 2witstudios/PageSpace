@@ -423,7 +423,7 @@ describe('POST /api/drives/[driveId]/domains', () => {
   });
 
   it('calls auditRequest on success', async () => {
-    mockPostSelects({ ownerTier: 'business', domainCount: 0 });
+    mockPostSelects({ ownerTier: 'pro', domainCount: 0 });
     const inserted = { id: 'dom-1', driveId: DRIVE_ID, hostname: 'acme.com', status: 'pending', createdAt: new Date() };
     dbInsert.mockReturnValue({ values: vi.fn().mockReturnValue({ returning: vi.fn().mockResolvedValue([inserted]) }) });
 

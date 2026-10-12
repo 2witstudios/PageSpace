@@ -30,6 +30,8 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Changed
 
+- Personal accounts now offer Free and Pro only. Business belongs to organizations; retired personal Business pricing and access exceptions have been removed.
+
 - **A lapsed organization can no longer open things up** (organizations; off until organizations launch) —
   while its plan is unpaid or canceled, an organization's drives cannot be made more open (Private to
   Restricted or Open, Restricted to Open), a member cannot be made an Admin, and nobody from outside can be

@@ -8,15 +8,8 @@
  * `'free' | 'pro' | 'business'` (or any limit number below) anywhere else;
  * import from here instead.
  *
- * SEAT-2 / A-9: the vocabulary is Free, Pro (personal) and Business (the
- * organization plan). 'founder' is gone — its single subscriber moves to Pro
- * by a manual Stripe dashboard step ([D-OW-19]), and the legacy $100 personal
- * Business subscribers keep Business entitlements at their current price via
- * `users.subscriptionGrandfathered` (a flag, not a tier).
- *
- * Deliberately dependency-free and side-effect-free so it is safe in client
- * bundles (plan cards, the marketing site) and in services with their own
- * deploys (control-plane, admin).
+ * SEAT-2 / A-9: Free and Pro are personal; Business belongs to an organization.
+ * Founder and personal Business are retired by the verified one-time cutover.
  */
 
 /** Canonical tier vocabulary, in ascending plan order (lowest → highest). */
@@ -44,6 +37,13 @@ export function isSubscriptionTier(value: unknown): value is SubscriptionTier {
  */
 export function toSubscriptionTier(value: string | null | undefined): SubscriptionTier {
   return isSubscriptionTier(value) ? value : 'free';
+}
+
+export type PersonalSubscriptionTier = Exclude<SubscriptionTier, 'business'>;
+
+/** Stored personal accounts cannot acquire organization Business entitlement. */
+export function toPersonalSubscriptionTier(value: string | null | undefined): PersonalSubscriptionTier {
+  return value === 'pro' ? 'pro' : 'free';
 }
 
 /**
@@ -159,14 +159,9 @@ export function isOrgPlanTier(tier: SubscriptionTier): boolean {
   return TIER_PLAN_LIMITS[tier].isOrgPlan;
 }
 
-/**
- * The tiers a plan UI may offer a LONE user, in rank order: every tier that is
- * not an org plan. The Business card is shown to a person only when it is
- * already their plan (a grandfathered $100 personal subscriber), which callers
- * add back explicitly via `currentTier`.
- */
-export function personalTiers(currentTier?: SubscriptionTier): SubscriptionTier[] {
-  return TIERS.filter((tier) => !isOrgPlanTier(tier) || tier === currentTier);
+/** Personal plans in rank order; organization tiers never appear here. */
+export function personalTiers(): PersonalSubscriptionTier[] {
+  return TIERS.filter((tier) => tier !== 'business');
 }
 
 /**

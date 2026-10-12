@@ -13,7 +13,7 @@ import { eq } from '@pagespace/db/operators';
 import { drives } from '@pagespace/db/schema/core';
 import { users } from '@pagespace/db/schema/auth';
 import { getPlan } from '@/lib/subscription/plans';
-import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
+import { toPersonalSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { changePublishSubdomain, PublishError, PUBLISH_HOST } from '@/lib/canvas/publish-page';
 import { CUSTOM_SUBDOMAIN_UNAVAILABLE_MESSAGE } from '@/lib/subscription/plan-refusal-copy';
 
@@ -30,7 +30,7 @@ async function canChooseSubdomain(driveId: string): Promise<boolean> {
     .innerJoin(users, eq(drives.ownerId, users.id))
     .where(eq(drives.id, driveId))
     .limit(1);
-  const tier = ((row?.tier ?? 'free') as SubscriptionTier);
+  const tier = (toPersonalSubscriptionTier(row?.tier));
   return getPlan(tier).limits.canChooseSubdomain;
 }
 

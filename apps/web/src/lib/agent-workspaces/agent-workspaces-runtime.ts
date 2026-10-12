@@ -29,7 +29,7 @@ import {
   shouldRefreshMeasurement,
   SESSION_STORAGE_MEASUREMENT_THROTTLE_MS,
 } from '@pagespace/lib/services/sandbox/sandbox-storage-measure';
-import { toSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
+import { toPersonalSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import type { SandboxHandle } from '@pagespace/lib/services/sandbox/sandbox-host';
 import { getSandboxHost } from './sandbox-host-runtime';
 import { ensureEnvSandboxForSession, gateLocalEnvBind, getDriveEnvStore } from '@/lib/drive-envs/drive-envs-runtime';
@@ -1239,7 +1239,7 @@ export async function provisionSessionSandbox(
         });
         return checkAgentSessionConcurrency({
           ownerId,
-          tier: toSubscriptionTier(payer?.subscriptionTier),
+          tier: toPersonalSubscriptionTier(payer?.subscriptionTier),
           countLiveAgentSessions: (id) => store.countLive(id),
           alreadyProvisioned,
         });

@@ -1,3 +1,4 @@
+import { toPersonalSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 /**
  * The credit reservation each model call of the nightly memory cron takes before it runs
  * (SPEND-1). The cron learns a person's own profile from their own activity, outside any
@@ -19,7 +20,6 @@ import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import { PERSONAL_SPEND } from '@pagespace/lib/billing/spend-target';
 import { isMemoryAvailable } from '@pagespace/lib/billing/automation-preferences';
 import type { GateReason } from '@pagespace/lib/billing/credit-core';
-import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { isMeteringExempt } from '@pagespace/lib/ai/model-defaults';
 import { estimateChatHoldCentsForModel } from '@pagespace/lib/monitoring/chat-pricing';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -56,7 +56,7 @@ export async function reserveMemoryCall(
       .select({ subscriptionTier: users.subscriptionTier })
       .from(users)
       .where(eq(users.id, userId));
-    if (!isMemoryAvailable((user?.subscriptionTier ?? 'free') as SubscriptionTier)) {
+    if (!isMemoryAvailable(toPersonalSubscriptionTier(user?.subscriptionTier))) {
       return { allowed: false, reason: 'tier_not_eligible' };
     }
 

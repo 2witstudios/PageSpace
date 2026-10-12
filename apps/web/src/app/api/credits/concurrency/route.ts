@@ -6,7 +6,7 @@ import { requireAuth, isAuthError } from '@/lib/auth/auth-helpers';
 import { getLiveInFlightHolds } from '@pagespace/lib/billing/live-concurrency-query';
 import { MACHINE_MAX_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
 import { getCodeExecutionConcurrencyLimit } from '@pagespace/lib/services/sandbox/quota';
-import { toSubscriptionTier, type SubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
+import { toPersonalSubscriptionTier, type SubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 
 /**
@@ -42,7 +42,7 @@ export async function GET(request: NextRequest) {
       .where(eq(users.id, userId))
       .limit(1);
     const rawTier = rows[0]?.subscriptionTier;
-    const tier: SubscriptionTier = toSubscriptionTier(rawTier);
+    const tier: SubscriptionTier = toPersonalSubscriptionTier(rawTier);
 
     const count = await getLiveInFlightHolds(userId);
 

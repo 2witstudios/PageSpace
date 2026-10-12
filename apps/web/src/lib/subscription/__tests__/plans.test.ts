@@ -14,7 +14,6 @@ import {
   isPersonalPlanPriceId,
   type SubscriptionTier,
 } from '../plans';
-import { stripeConfig } from '../../stripe-config';
 
 describe('Subscription Plans', () => {
   describe('PLANS constant', () => {
@@ -198,16 +197,15 @@ describe('Subscription Plans', () => {
   describe('getPersonalPlans()', () => {
     it('SEAT-2 (partial) never offers the org plan (Business) to a lone user', () => {
       expect(getPersonalPlans().map((p) => p.id)).toEqual(['free', 'pro']);
-      expect(getPersonalPlans('free').map((p) => p.id)).toEqual(['free', 'pro']);
-      expect(getPersonalPlans('pro').map((p) => p.id)).toEqual(['free', 'pro']);
     });
 
-    it('A-9 a grandfathered Business subscriber still sees their own plan', () => {
-      expect(getPersonalPlans('business').map((p) => p.id)).toEqual(['free', 'pro', 'business']);
-    });
   });
 
   describe('isPersonalPlanPriceId()', () => {
+    it('rejects an empty price identity', () => {
+      expect(isPersonalPlanPriceId('')).toBe(false);
+    });
+
     it('SEAT-2 (partial) P1 (independent review) is true for the Pro price id — the one price a lone user may buy today', () => {
       expect(isPersonalPlanPriceId(PLANS.pro.stripePriceId!)).toBe(true);
     });
@@ -217,7 +215,7 @@ describe('Subscription Plans', () => {
     });
 
     it('is false for the grandfathered Founder price id — a removed tier is never re-purchasable', () => {
-      expect(isPersonalPlanPriceId(stripeConfig.grandfatheredPriceIds.founder)).toBe(false);
+      expect(isPersonalPlanPriceId('price_retired_founder')).toBe(false);
     });
 
     it('is false for an unrecognized price id — allowlist denies by default, it does not fall through', () => {

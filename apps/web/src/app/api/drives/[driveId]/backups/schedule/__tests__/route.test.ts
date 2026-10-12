@@ -154,7 +154,7 @@ describe('GET /api/drives/[driveId]/backups/schedule', () => {
       expect(body.enabled).toBe(false);
     });
 
-    it('returns available:true for business tier', async () => {
+    it('A-9 refuses retired personal Business backup entitlement', async () => {
       mockLimit.mockReset();
       mockLimit
         .mockResolvedValueOnce([{ tier: 'business' }])
@@ -163,7 +163,7 @@ describe('GET /api/drives/[driveId]/backups/schedule', () => {
       const res = await GET(req(), ctx(DRIVE_ID));
       const body = await res.json();
 
-      expect(body.available).toBe(true);
+      expect(body.available).toBe(false);
     });
   });
 

@@ -19,11 +19,6 @@ interface PlanCardProps {
   onManageBilling?: () => void;
   onCancelSchedule?: () => void;
   cancellingSchedule?: boolean;
-  /**
-   * A-9: the viewer is a grandfathered $100 personal Business subscriber. Their
-   * card is Business at the price they already pay, not the $50 org list price.
-   */
-  grandfathered?: boolean;
   className?: string;
 }
 
@@ -37,10 +32,8 @@ export function PlanCard({
   onManageBilling,
   onCancelSchedule,
   cancellingSchedule = false,
-  grandfathered = false,
   className,
 }: PlanCardProps) {
-  const showsGrandfatheredPrice = isCurrentPlan && grandfathered && plan.isOrgPlan;
   // MON-6 / SEAT-2: price, seat terms, and per-seat credits from the same source as the
   // marketing pricing page. Included credits stay on `plan`: withCreditOverrides may patch them.
   const facts = planFacts(plan.id);
@@ -213,19 +206,11 @@ export function PlanCard({
           <CardTitle className="text-xl font-bold">{plan.displayName}</CardTitle>
         </div>
         <div className="pt-2">
-          {showsGrandfatheredPrice ? (
-            <span className="text-lg font-semibold" data-testid="plan-price">Your current price</span>
-          ) : (
-            <>
-              <span className="text-3xl font-bold" data-testid="plan-price">{facts.priceCents > 0 ? facts.price : plan.price.formatted}</span>
-              {facts.period && (
-                <span className="text-sm text-muted-foreground">{facts.period}</span>
-              )}
-            </>
-          )}
+          <span className="text-3xl font-bold" data-testid="plan-price">{facts.priceCents > 0 ? facts.price : plan.price.formatted}</span>
+          {facts.period && <span className="text-sm text-muted-foreground">{facts.period}</span>}
         </div>
         {/* SEAT-2: Business is the org plan; A-7 / D-OW-30: no org trial, card at checkout. */}
-        {facts.org && !showsGrandfatheredPrice && (
+        {facts.org && (
           <div className="space-y-0.5 text-xs text-muted-foreground">
             <p data-testid="plan-seats">{facts.org.seatTerms}</p>
             <p data-testid="plan-seat-credits">{facts.org.extraSeatCredits}</p>

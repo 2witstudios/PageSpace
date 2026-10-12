@@ -192,7 +192,7 @@ describe('GET /api/subscriptions/status', () => {
       expect(body.storage.quota).toBe(2 * 1024 * 1024 * 1024); // 2GB
     });
 
-    it('should return business tier status with correct quota', async () => {
+    it('A-9 refuses a retired personal Business tier and omits grandfathering', async () => {
       mockSelectWhere.mockResolvedValueOnce([mockUser({
         subscriptionTier: 'business',
         stripeCustomerId: 'cus_123',
@@ -208,9 +208,10 @@ describe('GET /api/subscriptions/status', () => {
       const body = await response.json();
 
       expect(response.status).toBe(200);
-      expect(body.subscriptionTier).toBe('business');
-      expect(body.storage.tier).toBe('business');
-      expect(body.storage.quota).toBe(50 * 1024 * 1024 * 1024); // 50GB
+      expect(body.subscriptionTier).toBe('free');
+      expect(body).not.toHaveProperty('subscriptionGrandfathered');
+      expect(body.storage.tier).toBe('free');
+      expect(body.storage.quota).toBe(500 * 1024 * 1024);
     });
 
     it('should include cancelAtPeriodEnd status', async () => {
@@ -351,7 +352,7 @@ describe('GET /api/subscriptions/status', () => {
     const tierQuotaTests = [
       { tier: 'free', expectedQuota: 500 * 1024 * 1024, description: '500MB' },
       { tier: 'pro', expectedQuota: 2 * 1024 * 1024 * 1024, description: '2GB' },
-      { tier: 'business', expectedQuota: 50 * 1024 * 1024 * 1024, description: '50GB' },
+      { tier: 'business', expectedQuota: 500 * 1024 * 1024, description: 'Free fallback for retired personal Business' },
     ];
 
     for (const { tier, expectedQuota, description } of tierQuotaTests) {
@@ -374,7 +375,7 @@ describe('GET /api/subscriptions/status', () => {
 
         expect(response.status).toBe(200);
         expect(body.storage.quota).toBe(expectedQuota);
-        expect(body.storage.tier).toBe(tier);
+        expect(body.storage.tier).toBe(tier === 'business' ? 'free' : tier);
       });
     }
   });

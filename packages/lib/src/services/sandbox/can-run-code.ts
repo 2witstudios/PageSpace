@@ -124,7 +124,7 @@ const defaultDeps: CanRunCodeDeps = {
   lookupDriveBillingFacts: (driveId) =>
     import('../../billing/sandbox-payer').then((m) => m.lookupDriveBillingFacts(driveId)),
   getUserSubscriptionTier: async (userId) => {
-    const [{ db }, { eq }, { users }, { toSubscriptionTier }] = await Promise.all([
+    const [{ db }, { eq }, { users }, { toPersonalSubscriptionTier }] = await Promise.all([
       import('@pagespace/db/db'),
       import('@pagespace/db/operators'),
       import('@pagespace/db/schema/auth'),
@@ -134,7 +134,7 @@ const defaultDeps: CanRunCodeDeps = {
       where: eq(users.id, userId),
       columns: { subscriptionTier: true },
     });
-    return toSubscriptionTier(user?.subscriptionTier);
+    return toPersonalSubscriptionTier(user?.subscriptionTier);
   },
   getAgentAccessLevel: (agentPageId, targetPageId) =>
     import('../../permissions/agent-permissions').then((m) =>

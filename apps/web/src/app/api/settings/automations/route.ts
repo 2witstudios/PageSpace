@@ -9,7 +9,7 @@ import {
   buildAutomationView,
   validateAutomationPatch,
 } from '@pagespace/lib/billing/automation-preferences';
-import { toSubscriptionTier, type SubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
+import { toPersonalSubscriptionTier, type SubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { audit } from '@pagespace/lib/audit/audit-log';
 
@@ -33,7 +33,7 @@ async function loadAutomationState(userId: string) {
   ]);
 
   const rawTier = userRow[0]?.tier;
-  const tier: SubscriptionTier = toSubscriptionTier(rawTier);
+  const tier: SubscriptionTier = toPersonalSubscriptionTier(rawTier);
   return { tier, pulseRow: pulseRow[0], personalization: personalization[0] };
 }
 

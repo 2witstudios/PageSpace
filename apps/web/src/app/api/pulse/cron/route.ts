@@ -38,7 +38,7 @@ import { AIMonitoring, discardUsageOutcome, extractOpenRouterCostDollars, extrac
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
 import { PERSONAL_SPEND } from '@pagespace/lib/billing/spend-target';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
-import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
+import { toPersonalSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 import { PULSE_SYSTEM_PROMPT } from '../pulse-prompt';
 import { errorLogFields } from '@pagespace/lib/logging/error-cause';
@@ -168,7 +168,7 @@ async function generatePulseForUser(userId: string, now: Date): Promise<boolean>
   // legitimate scheduled summary once a heavy user hit their interactive ceiling). The
   // credit balance still gates it. No maxInFlight: the cron runs one generation per user
   // per tick, so there is no concurrency to bound.
-  const gate = await canConsumeAI(userId, (user.subscriptionTier ?? 'free') as SubscriptionTier, {
+  const gate = await canConsumeAI(userId, toPersonalSubscriptionTier(user.subscriptionTier), {
     // Pulse summarizes the person's own workspace and is not a drive session, so it
     // spends their personal credits (SPEND-8).
     spend: PERSONAL_SPEND,

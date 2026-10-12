@@ -1,3 +1,4 @@
+import { toPersonalSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -15,7 +16,6 @@ import { MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
 import { isMeteringExempt } from '@pagespace/lib/ai/model-defaults';
 import { estimateChatHoldCentsForModel } from '@pagespace/lib/monitoring/chat-pricing';
 import { AIMonitoring, estimateTokens, extractOpenRouterCostDollars, extractOpenRouterGenerationIds } from '@pagespace/lib/monitoring/ai-monitoring';
-import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { messageRepository } from '@/lib/repositories/message-repository';
 import { getActivePlan } from '@/lib/ai/core/plan-binding';
 import { createAIProvider } from '@/lib/ai/core/provider-factory';
@@ -67,7 +67,7 @@ export async function POST(request: Request) {
     // (resolveProviderModel is what createAIProvider resolves too).
     const [user] = await db.select({ subscriptionTier: users.subscriptionTier, role: users.role, currentAiProvider: users.currentAiProvider, currentAiModel: users.currentAiModel }).from(users).where(eq(users.id, userId)).limit(1);
     const { provider: effectiveProvider, model: effectiveModel } = resolveProviderModel(undefined, undefined, user?.currentAiProvider, user?.currentAiModel);
-    const consumerTier = (user?.subscriptionTier ?? 'free') as SubscriptionTier;
+    const consumerTier = toPersonalSubscriptionTier(user?.subscriptionTier);
     // A side question spends in the session of the conversation it asks about (SPEND-7):
     // a page or drive conversation's drive, or personal credits for a global one (SPEND-8).
     // It spends the source stored on that conversation (SPEND-3), or refuses (SPEND-4).

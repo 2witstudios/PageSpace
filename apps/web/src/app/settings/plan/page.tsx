@@ -27,8 +27,6 @@ import type { AppliedPromo } from '@/components/billing/PromoCodeInput';
 
 interface SubscriptionData {
   subscriptionTier: SubscriptionTier;
-  /** A-9: a legacy $100 personal Business subscriber kept at their price. */
-  subscriptionGrandfathered?: boolean;
   /**
    * MON-2 / D-OW-17: the server's included-credit figure, per tier, in whole
    * cents. Since MONEY_MODEL_V2_ACTIVE is a compile-time constant embedded
@@ -317,14 +315,13 @@ export default function PlanPage() {
     );
   }
 
-  // SEAT-2: Business is the org plan and is not offered to a lone user; it
-  // appears here only as the viewer's own (grandfathered) current plan.
+  // SEAT-2: personal settings offer Free and Pro; Business belongs to an org.
   // MON-2 / D-OW-17: patch each plan's credit-derived fields with the server's
   // planCredits (see the SubscriptionData.planCredits doc comment above for
   // why this still runs even though the client could now compute the same
   // number itself under the compile-time constant).
   const plans = withCreditOverrides(
-    getPersonalPlans(subscriptionData?.subscriptionTier),
+    getPersonalPlans(),
     subscriptionData?.planCredits,
   );
   const currentPlan = subscriptionData ? getPlan(subscriptionData.subscriptionTier) : getPlan('free');
@@ -439,7 +436,6 @@ export default function PlanPage() {
               onManageBilling={() => router.push('/settings/billing')}
               onCancelSchedule={handleCancelSchedule}
               cancellingSchedule={cancellingSchedule}
-              grandfathered={subscriptionData?.subscriptionGrandfathered === true}
               className={plan.highlighted ? 'relative z-10' : ''}
             />
           ))}

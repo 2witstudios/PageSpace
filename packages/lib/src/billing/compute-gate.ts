@@ -28,7 +28,7 @@ import { lookupDriveBillingFacts, resolveEnvCharge } from './sandbox-payer';
 import { MACHINE_HOLD_ESTIMATE_CENTS } from './credit-pricing';
 import { ensurePersonalRootWalletId } from './personal-wallet';
 import { isBillingEnabled } from '../deployment-mode';
-import { toSubscriptionTier, type SubscriptionTier } from './subscription-tiers';
+import { toPersonalSubscriptionTier, type SubscriptionTier } from './subscription-tiers';
 import type { UsageTrackingOutcome } from '../monitoring/ai-monitoring';
 import { isOrgActive } from '../organizations/status';
 import { ORG_LAPSED_MESSAGE } from '../organizations/status-core';
@@ -54,7 +54,7 @@ async function personalTier(userId: string): Promise<SubscriptionTier> {
     .from(users)
     .where(eq(users.id, userId))
     .limit(1);
-  return toSubscriptionTier(row?.subscriptionTier);
+  return toPersonalSubscriptionTier(row?.subscriptionTier);
 }
 
 /**

@@ -1,3 +1,4 @@
+import { toPersonalSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 /**
  * Voice Synthesis (TTS) API Route
  *
@@ -59,7 +60,7 @@ export async function POST(request: Request) {
     let tier: SubscriptionTier = 'free';
     if (isBillingEnabled()) {
       const user = await aiSettingsRepository.getUserSettings(userId);
-      tier = (user?.subscriptionTier ?? 'free') as SubscriptionTier;
+      tier = toPersonalSubscriptionTier(user?.subscriptionTier);
       if (!PAID_TIERS.has(tier)) {
         return NextResponse.json(
           {

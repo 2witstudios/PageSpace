@@ -1,3 +1,4 @@
+import { toPersonalSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 /**
  * The GLOBAL-ASSISTANT chat turn — the second of the two strategies behind the
  * single chat pipeline (`handle-chat-turn.ts`).
@@ -39,7 +40,6 @@ import { isMeteringExempt } from '@pagespace/lib/ai/model-defaults';
 import { estimateChatHoldCentsForModel } from '@pagespace/lib/monitoring/chat-pricing';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import { creditGateErrorResponse } from '@/lib/subscription/credit-gate-response';
-import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { broadcastChatUserMessage } from '@/lib/websocket';
 import { broadcastGlobalConversationAdded } from '@/lib/websocket/socket-utils';
 import { type StreamLifecycleHandle } from '@/lib/ai/core/stream-lifecycle';
@@ -426,7 +426,7 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
         })
         .from(users)
         .where(eq(users.id, userId));
-      userSubscriptionTier = gateUser?.subscriptionTier ?? undefined;
+      userSubscriptionTier = toPersonalSubscriptionTier(gateUser?.subscriptionTier);
       userImageGenerationModel = gateUser?.imageGenerationModel ?? null;
       // Metering-exempt providers (admin Z.ai Coder Plan) bill on a flat-rate external
       // subscription, so skip the credit gate entirely — no hold, no balance check —
@@ -448,7 +448,7 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
       const locationSpend = contextRef ? conversationSpend(locationContext?.currentDrive?.id, conversationId) : PERSONAL_SPEND;
       credit = { spend: locationSpend };
       if (!isMeteringExempt(gateProvider) && !isSoloHelpRequest) {
-        const creditGate = await canConsumeAI(userId, (gateUser?.subscriptionTier ?? 'free') as SubscriptionTier, {
+        const creditGate = await canConsumeAI(userId, toPersonalSubscriptionTier(gateUser?.subscriptionTier), {
           spend: locationSpend,
           estCostCents: estimateChatHoldCentsForModel(selectedModel),
           maxInFlight: MAX_CHAT_INFLIGHT,

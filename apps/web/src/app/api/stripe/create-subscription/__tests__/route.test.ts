@@ -328,7 +328,7 @@ describe('POST /api/stripe/create-subscription', () => {
   it('SEAT-2 (partial) P1 rejects a lone user checking out with the Business (org-plan) price id — the UI hides it, but the server must too', async () => {
     const request = createMockRequest('https://example.com/api/stripe/create-subscription', {
       method: 'POST',
-      body: JSON.stringify({ priceId: stripeConfig.priceIds.business }),
+      body: JSON.stringify({ priceId: 'price_retired_business' }),
     });
 
     const response = await POST(request);
@@ -342,7 +342,7 @@ describe('POST /api/stripe/create-subscription', () => {
   it('SEAT-2 (partial) P1 (independent review) rejects the grandfathered Founder price id — a removed tier is never re-purchasable', async () => {
     const request = createMockRequest('https://example.com/api/stripe/create-subscription', {
       method: 'POST',
-      body: JSON.stringify({ priceId: stripeConfig.grandfatheredPriceIds.founder }),
+      body: JSON.stringify({ priceId: 'price_retired_founder' }),
     });
 
     const response = await POST(request);

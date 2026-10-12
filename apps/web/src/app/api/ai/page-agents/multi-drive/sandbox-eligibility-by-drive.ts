@@ -1,5 +1,5 @@
 import { computeTierForDrive, isSandboxAvailable } from '@pagespace/lib/billing/sandbox-eligibility';
-import { toSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
+import { toPersonalSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { isDriveLead, type DriveRelationship } from '@pagespace/lib/permissions/drive-relationship';
 import { applyOpenDriveFloor } from '@pagespace/lib/permissions/open-drive-floor';
 import type { OpenRoleFloor } from '@pagespace/lib/organizations/policies-core';
@@ -31,7 +31,7 @@ export function computeSandboxEligibilityByDrive(
   /** SEAT-9 / WAL-8: the orgs of these drives that are lapsed — their drives offer no sandbox (review #2761). */
   lapsedOrgIds: ReadonlySet<string>,
 ): Map<string, boolean> {
-  const tierByOwnerId = new Map(ownerRows.map((row) => [row.id, toSubscriptionTier(row.subscriptionTier)]));
+  const tierByOwnerId = new Map(ownerRows.map((row) => [row.id, toPersonalSubscriptionTier(row.subscriptionTier)]));
   return new Map(
     driveOwners.map((drive) => {
       return [

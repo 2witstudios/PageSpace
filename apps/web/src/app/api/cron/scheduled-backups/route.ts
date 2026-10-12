@@ -7,7 +7,7 @@ import { users } from '@pagespace/db/schema/auth';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 import { createDriveBackup } from '@/services/api/drive-backup-service';
 import { MEMORY_PAYING_TIERS } from '@pagespace/lib/billing/automation-preferences';
-import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
+import { toPersonalSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 
 type BackupFrequency = 'daily' | 'weekly' | 'monthly';
@@ -70,7 +70,7 @@ export async function GET(request: Request) {
         const nextRunAt = computeNextRunAt(schedule.frequency as BackupFrequency, prevNextRunAt);
         const runAt = new Date();
 
-        const isProPlus = MEMORY_PAYING_TIERS.includes(schedule.ownerTier as SubscriptionTier);
+        const isProPlus = MEMORY_PAYING_TIERS.includes(toPersonalSubscriptionTier(schedule.ownerTier));
 
         if (!isProPlus) {
           await db.update(driveBackupSchedules)

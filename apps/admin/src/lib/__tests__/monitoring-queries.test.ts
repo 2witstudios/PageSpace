@@ -189,8 +189,8 @@ describe('getActiveSubscriptionsByTier', () => {
     resetQueue([
       { stripePriceId: 'price_legacy_pro' },
       { stripePriceId: 'price_legacy_pro' },
-      { stripePriceId: stripeConfig.grandfatheredPriceIds.founder },
-      { stripePriceId: stripeConfig.grandfatheredPriceIds.legacyBusiness },
+      { stripePriceId: 'price_retired_founder' },
+      { stripePriceId: 'price_retired_business' },
     ], [{ stripePriceId: stripeConfig.orgPriceIds.businessBase }]);
     mockPricesRetrieve.mockResolvedValue({ unit_amount: 2999 }); // legacy $29.99 pro
 

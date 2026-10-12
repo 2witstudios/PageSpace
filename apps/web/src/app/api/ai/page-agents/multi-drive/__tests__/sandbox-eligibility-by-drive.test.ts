@@ -59,6 +59,16 @@ describe('computeSandboxEligibilityByDrive', () => {
     expect(result.get('drive-1')).toBe(false);
   });
 
+  it.each(['business', 'founder'])('does not grant personal sandbox access for retired %s rows', (subscriptionTier) => {
+    const result = computeSandboxEligibilityByDrive(
+      [{ id: 'drive-1', ownerId: 'owner-1', orgId: null }],
+      [{ id: 'owner-1', subscriptionTier }],
+      editorOf('drive-1'),
+      new Set<string>(),
+    );
+    expect(result.get('drive-1')).toBe(false);
+  });
+
   it('defaults to free (ineligible) when the owner row is missing entirely', () => {
     const result = computeSandboxEligibilityByDrive(
       [{ id: 'drive-1', ownerId: 'owner-missing', orgId: null }],
@@ -102,7 +112,7 @@ describe('computeSandboxEligibilityByDrive', () => {
   it('marks everything ineligible while the code-execution kill switch is off', () => {
     const result = computeSandboxEligibilityByDrive(
       [{ id: 'drive-1', ownerId: 'owner-1', orgId: null }],
-      [{ id: 'owner-1', subscriptionTier: 'business' }],
+      [{ id: 'owner-1', subscriptionTier: 'pro' }],
       { userId: 'requester-1', editableDriveIds: new Set(['drive-1']), codeExecutionEnabled: false },
       new Set<string>(),
     );
@@ -133,7 +143,7 @@ describe('computeSandboxEligibilityByDrive', () => {
         { id: 'drive-b', ownerId: 'owner-1', orgId: null },
         { id: 'drive-c', ownerId: 'owner-1', orgId: null },
       ],
-      [{ id: 'owner-1', subscriptionTier: 'business' }],
+      [{ id: 'owner-1', subscriptionTier: 'pro' }],
       editorOf('drive-a', 'drive-b', 'drive-c'),
       new Set<string>(),
     );

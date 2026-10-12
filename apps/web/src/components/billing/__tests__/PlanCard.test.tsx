@@ -50,16 +50,11 @@ describe('PlanCard', () => {
     }
   });
 
-  it('A-9 a grandfathered Business subscriber sees their current plan at their current price, not the $50 list price', () => {
-    render(<PlanCard plan={PLANS.business} currentTier="business" isCurrentPlan grandfathered />);
-    expect(screen.getByTestId('plan-price').textContent).toBe('Your current price');
-    expect(screen.queryByTestId('plan-seats')).toBeNull();
+  it('A-9 Business always states its organization price and seat terms', () => {
+    render(<PlanCard plan={PLANS.business} currentTier="business" isCurrentPlan />);
+    expect(screen.getByTestId('plan-price').textContent).toBe('$50');
+    expect(screen.getByTestId('plan-seats')).toBeTruthy();
     expect(screen.getByText('Current Plan')).toBeTruthy();
-  });
-
-  it('A-9 the grandfathered flag changes nothing on a card that is not the current org plan', () => {
-    render(<PlanCard plan={PLANS.pro} currentTier="business" grandfathered />);
-    expect(screen.getByTestId('plan-price').textContent).toBe('$15');
   });
 
   it('MON-2 (independent review on #2649) a withCreditsCents-patched plan actually reaches the rendered card, not just the plain object', () => {

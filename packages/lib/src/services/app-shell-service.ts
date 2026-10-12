@@ -1,3 +1,4 @@
+import { toPersonalSubscriptionTier } from '../billing/subscription-tiers';
 /**
  * App-shell server fetcher.
  *
@@ -89,7 +90,7 @@ async function fetchUser(tx: Tx, userId: string): Promise<AppShellUser> {
     email: row.email,
     image: row.image,
     role: row.role,
-    subscriptionTier: row.subscriptionTier,
+    subscriptionTier: toPersonalSubscriptionTier(row.subscriptionTier),
     timezone: row.timezone,
     currentAiProvider: row.currentAiProvider,
     currentAiModel: row.currentAiModel,

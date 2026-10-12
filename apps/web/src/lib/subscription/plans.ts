@@ -97,7 +97,7 @@ export interface PlanDefinition {
 
 // Stripe Price IDs from hardcoded config (avoids Next.js build-time env var issues)
 const STRIPE_PRICE_ID_PRO = stripeConfig.priceIds.pro;
-const STRIPE_PRICE_ID_BUSINESS = stripeConfig.priceIds.business;
+const STRIPE_PRICE_ID_BUSINESS = stripeConfig.orgPriceIds.businessBase;
 
 // Storage/file-size/price/domain numbers derive from the canonical
 // TIER_PLAN_LIMITS table in @pagespace/lib/billing/subscription-tiers (a pure,
@@ -306,13 +306,9 @@ export function getAllPlans(): PlanDefinition[] {
   return PLAN_ORDER.map(tier => PLANS[tier]);
 }
 
-/**
- * SEAT-2: the plans a LONE user may be offered — every non-org plan, plus the
- * user's current plan when it is the org plan (a grandfathered $100 personal
- * Business subscriber keeps seeing, and managing, their own plan).
- */
-export function getPersonalPlans(currentTier?: SubscriptionTier): PlanDefinition[] {
-  return personalTiers(currentTier).map(tier => PLANS[tier]);
+/** Personal plan choices after the full cutover. */
+export function getPersonalPlans(): PlanDefinition[] {
+  return personalTiers().map(tier => PLANS[tier]);
 }
 
 export function getTierFromPriceId(priceId: string): SubscriptionTier | null {
@@ -343,5 +339,5 @@ export function getPlanFromPriceId(priceId: string): PlanDefinition | null {
  * become purchasable until it is added to PLANS as a personal tier's price.
  */
 export function isPersonalPlanPriceId(priceId: string): boolean {
-  return getPersonalPlans().some((plan) => plan.stripePriceId === priceId);
+  return Boolean(priceId) && getPersonalPlans().some((plan) => plan.stripePriceId === priceId);
 }

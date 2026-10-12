@@ -1,3 +1,4 @@
+import { toPersonalSubscriptionTier } from '../billing/subscription-tiers';
 import { getStorageConfigFromSubscription, STORAGE_TIERS, type SubscriptionTier } from './subscription-utils';
 import { storageRepository, type DrizzleTx } from './storage-repository';
 import { reserveUploadSlot } from './pending-uploads';
@@ -47,7 +48,7 @@ export async function getUserStorageQuota(userId: string): Promise<StorageQuota 
   if (!user) return null;
 
   // Compute storage config from subscription tier
-  const subscriptionTier = (user.subscriptionTier || 'free') as SubscriptionTier;
+  const subscriptionTier = toPersonalSubscriptionTier(user.subscriptionTier);
   const storageConfig = getStorageConfigFromSubscription(subscriptionTier);
 
   const quotaBytes = storageConfig.quotaBytes;
@@ -326,7 +327,7 @@ export async function reserveConcurrentUploadSlot(
   const user = await storageRepository.findUserForStorage(userId);
   if (!user) return false;
 
-  const subscriptionTier = (user.subscriptionTier || 'free') as SubscriptionTier;
+  const subscriptionTier = toPersonalSubscriptionTier(user.subscriptionTier);
   const storageConfig = getStorageConfigFromSubscription(subscriptionTier);
 
   return reserveUploadSlot(jobId, userId, fileSize, storageConfig.maxConcurrentUploads);

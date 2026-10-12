@@ -384,6 +384,11 @@ describe('readSpendableCents — the routing edge lean read', () => {
 });
 
 describe('resolveTier', () => {
+  it.each(['business', 'founder', 'unknown'])('A-9 gives no personal paid entitlement to %s', async (subscriptionTier) => {
+    userRows = [{ subscriptionTier }];
+    expect(await resolveTier('u1')).toBe('free');
+  });
+
   it('returns the stored subscription tier', async () => {
     userRows = [{ subscriptionTier: 'pro' }];
     expect(await resolveTier('u1')).toBe('pro');

@@ -40,7 +40,7 @@ import { PERSONAL_SPEND } from '@pagespace/lib/billing/spend-target';
 import { MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import { creditGateErrorResponse } from '@/lib/subscription/credit-gate-response';
-import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
+import { toPersonalSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 
 import { PULSE_SYSTEM_PROMPT } from '../pulse-prompt';
 
@@ -98,7 +98,7 @@ export async function POST(req: Request) {
     // NOT gated so a failed bill can't 500 the batch.
     // Model isn't resolved until the generation step below, so we let the hold use the
     // default flat estimate (estCostCents omitted) and just apply the chat concurrency cap.
-    const creditGate = await canConsumeAI(userId, (user.subscriptionTier ?? 'free') as SubscriptionTier, {
+    const creditGate = await canConsumeAI(userId, toPersonalSubscriptionTier(user.subscriptionTier), {
       // Pulse summarizes the person's own workspace and is not a drive session, so it
       // spends their personal credits (SPEND-8).
       spend: PERSONAL_SPEND,

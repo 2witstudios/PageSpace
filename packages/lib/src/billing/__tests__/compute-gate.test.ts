@@ -122,11 +122,11 @@ describe('hasSpendableComputeBalance', () => {
     expect(gate.hasSpendableBalance).not.toHaveBeenCalled();
   });
 
-  it("asks the person's balance on their own tier for a personal charge", async () => {
-    tierRow('business');
+  it.each([['pro', 'pro'], ['business', 'free'], ['founder', 'free']])("normalizes personal %s to %s before checking the balance", async (stored, expected) => {
+    tierRow(stored);
     gate.hasSpendableBalance.mockResolvedValue(true);
     expect(await hasSpendableComputeBalance(PERSON)).toBe(true);
-    expect(gate.hasSpendableBalance).toHaveBeenCalledWith('owner-1', 'business');
+    expect(gate.hasSpendableBalance).toHaveBeenCalledWith('owner-1', expected);
   });
 });
 

@@ -1,3 +1,4 @@
+import { toPersonalSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 /**
  * The PAGE-AGENT chat turn — one of the two strategies behind the single
  * chat pipeline (`handle-chat-turn.ts`).
@@ -48,7 +49,6 @@ import { estimateChatHoldCentsForModel } from '@pagespace/lib/monitoring/chat-pr
 import { makeOnStepFinishHandler } from '@/lib/ai/core/step-finish-handler';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import { creditGateErrorResponse } from '@/lib/subscription/credit-gate-response';
-import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { broadcastChatUserMessage } from '@/lib/websocket';
 import { type StreamLifecycleHandle } from '@/lib/ai/core/stream-lifecycle';
 import { pumpAndRespond, type TurnTimer } from '@/lib/ai/chat-pipeline/pump-and-respond';
@@ -769,7 +769,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     const pageSpend = conversationSpend(page.driveId, conversationId);
     credit = { spend: pageSpend };
     if (!isMeteringExempt(gateProvider) && !isSoloHelpRequest) {
-      const creditGate = await canConsumeAI(userId, (user?.subscriptionTier ?? 'free') as SubscriptionTier, {
+      const creditGate = await canConsumeAI(userId, toPersonalSubscriptionTier(user?.subscriptionTier), {
         spend: pageSpend,
         estCostCents: estimateChatHoldCentsForModel(selectedModel),
         maxInFlight: MAX_CHAT_INFLIGHT,
@@ -1151,7 +1151,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
       provider: currentProvider,
       model: currentModel,
       // WAL-8: the tier of whoever funds this call, as the gate resolved it.
-      subscriptionTier: credit.entitlementTier ?? user?.subscriptionTier ?? undefined,
+      subscriptionTier: credit.entitlementTier ?? toPersonalSubscriptionTier(user?.subscriptionTier),
       isAdmin: isAdminUser,
       requiresProSubscription,
     });
@@ -1161,7 +1161,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
         userId,
         provider: currentProvider,
         model: currentModel,
-        subscriptionTier: user?.subscriptionTier
+        subscriptionTier: toPersonalSubscriptionTier(user?.subscriptionTier)
       });
       return createSubscriptionRequiredResponse();
     }
@@ -1929,7 +1929,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
                 } : undefined,
                 modelCapabilities: modelCapabilitiesForTools,
                 isAdmin: isAdminUser,
-                subscriptionTier: user?.subscriptionTier,
+                subscriptionTier: toPersonalSubscriptionTier(user?.subscriptionTier),
                 imageGenerationModel: user?.imageGenerationModel ?? DEFAULT_IMAGE_MODEL,
                 creditSpend: credit,
                 chatSource: {
