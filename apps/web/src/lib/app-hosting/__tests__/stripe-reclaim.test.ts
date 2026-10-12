@@ -6,13 +6,14 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { mockCancel, mockCaptureMessage } = vi.hoisted(() => ({
+const { mockCancel, mockUpdate, mockCaptureMessage } = vi.hoisted(() => ({
   mockCancel: vi.fn(),
+  mockUpdate: vi.fn(),
   mockCaptureMessage: vi.fn(),
 }));
 
 vi.mock('@/lib/stripe', () => ({
-  stripe: { subscriptions: { cancel: mockCancel } },
+  stripe: { subscriptions: { cancel: mockCancel, update: mockUpdate } },
   Stripe: { errors: { StripeInvalidRequestError: class StripeInvalidRequestError extends Error {} } },
 }));
 vi.mock('@sentry/nextjs', () => ({ captureMessage: mockCaptureMessage }));
@@ -23,6 +24,7 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 type ReclaimRow = {
   stripeSubscriptionId: string;
   publishedAppId: string | null;
+  cancelAt: string;
   recordedAt: Date;
   attempts: number;
   lastAttemptAt: Date | null;
@@ -33,6 +35,7 @@ function makeRow(overrides: Partial<ReclaimRow> = {}): ReclaimRow {
   return {
     stripeSubscriptionId: 'sub_1',
     publishedAppId: 'app_1',
+    cancelAt: 'now',
     recordedAt: new Date(),
     attempts: 0,
     lastAttemptAt: null,
@@ -138,5 +141,25 @@ describe('drainAppHostingStripeReclaims — exhaustion alert', () => {
 
     expect(result.canceled).toBe(1);
     expect(mockCaptureMessage).not.toHaveBeenCalled();
+  });
+
+  it('WAL-9 (partial) a period-end release (its drive left the paying org) sets the subscription to end with the paid period — never an immediate cancel — and clears once Stripe confirms (D-OW-64)', async () => {
+    selectedRows = [makeRow({ cancelAt: 'period_end' })];
+    mockUpdate.mockResolvedValue({ status: 'active', cancel_at_period_end: true });
+
+    const result = await drainAppHostingStripeReclaims();
+
+    expect(mockUpdate).toHaveBeenCalledWith('sub_1', { cancel_at_period_end: true });
+    expect(mockCancel).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ canceled: 1, failed: 0 });
+  });
+
+  it('a period-end release Stripe did not confirm stays queued and counts as failed', async () => {
+    selectedRows = [makeRow({ cancelAt: 'period_end' })];
+    mockUpdate.mockResolvedValue({ status: 'active', cancel_at_period_end: false });
+
+    const result = await drainAppHostingStripeReclaims();
+
+    expect(result).toMatchObject({ canceled: 0, failed: 1 });
   });
 });

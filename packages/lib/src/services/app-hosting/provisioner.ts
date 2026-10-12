@@ -363,8 +363,10 @@ export async function destroyPublishedApp(
     if (subscription) {
       await tx
         .insert(appHostingStripeReclaims)
-        .values({ stripeSubscriptionId: subscription.stripeSubscriptionId, publishedAppId })
-        .onConflictDoNothing();
+        .values({ stripeSubscriptionId: subscription.stripeSubscriptionId, publishedAppId, cancelAt: 'now' })
+        // A pending period-end release (its drive left the org, D-OW-64) becomes an immediate
+        // cancel: the app is gone, so nobody pays for it a day longer.
+        .onConflictDoUpdate({ target: appHostingStripeReclaims.stripeSubscriptionId, set: { cancelAt: 'now' } });
     }
 
     await tx.delete(publishedApps).where(eq(publishedApps.id, publishedAppId));

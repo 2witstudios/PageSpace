@@ -1,5 +1,5 @@
 {
-  "id": "c38f1dd2-3823-46bc-a274-82a22cd4da98",
+  "id": "ce9da973-7204-4339-b48f-e0171ed5e6a1",
   "prevId": "9517bf88-a18c-4c16-9eda-94ac9be9d19d",
   "version": "7",
   "dialect": "postgresql",
@@ -23333,6 +23333,13 @@
           "primaryKey": false,
           "notNull": false
         },
+        "cancelAt": {
+          "name": "cancelAt",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'now'"
+        },
         "recordedAt": {
           "name": "recordedAt",
           "type": "timestamp with time zone",
@@ -23385,6 +23392,10 @@
         "app_hosting_stripe_reclaims_attempts_nonneg": {
           "name": "app_hosting_stripe_reclaims_attempts_nonneg",
           "value": "\"app_hosting_stripe_reclaims\".\"attempts\" >= 0"
+        },
+        "app_hosting_stripe_reclaims_cancel_at_known": {
+          "name": "app_hosting_stripe_reclaims_cancel_at_known",
+          "value": "\"app_hosting_stripe_reclaims\".\"cancelAt\" IN ('now', 'period_end')"
         }
       },
       "isRLSEnabled": false

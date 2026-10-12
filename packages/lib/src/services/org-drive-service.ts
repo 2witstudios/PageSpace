@@ -40,6 +40,7 @@ import { checkOrgActive, checkOrgMayLoosen, type OrgLapsedRefusal } from '../org
 import { removeFormerLeadOwnerRow } from '../permissions/org-drive-membership';
 import { getActorInfo, logActivityWithTx } from '../monitoring/activity-logger';
 import { reattributeDriveStorageInTx, type StorageReattributionResult } from './storage-limits';
+import { releaseOrgDedicatedHostingInTx } from './app-hosting/dedicated-release';
 import { recordOrgAuditEventAfterCommit } from '../audit/org-audit';
 
 export type OrgDriveTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -230,6 +231,8 @@ export async function moveDriveOutOfOrg(
 
     // O-9: the drive's bytes land on its owner's (the lead's) personal quota, atomically with orgId.
     const storageReattribution = await reattributeDriveStorageInTx(tx, { driveId, ownerId: moved.ownerId, orgId, direction: 'out-of-org' });
+    // WAL-9 (D-OW-64): the org stops paying for this drive's apps' dedicated hosting at period end.
+    await releaseOrgDedicatedHostingInTx(tx, { driveId, orgId });
     const publish = await deps.syncOrgMembership(tx, {
       kind: 'move-out',
       driveId,

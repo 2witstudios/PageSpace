@@ -9,6 +9,7 @@ import {
   applyMinMachinesRunning,
   classifySubscriptionKind,
   decideDedicatedPurchaser,
+  orgDedicatedSubscriptionsToRelease,
   dedicatedMonthlyFloorCents,
   findGuestPreset,
   guestPresetShape,
@@ -696,6 +697,24 @@ describe('decideDedicatedPurchaser — who buys an app\'s dedicated hosting, and
       should: 'be allowed: a cancel only stops a charge',
       actual: decideDedicatedPurchaser({ payer: org, callerId: 'admin-1', callerOrgRole: 'ADMIN', action: 'cancel', orgActive: false, orgHasStripeCustomer: false }),
       expected: { ok: true, purchaser: { kind: 'org', orgId: 'org-northwind', buyerUserId: 'admin-1' } },
+    });
+  });
+});
+
+describe('orgDedicatedSubscriptionsToRelease — what an org stops paying for when a drive leaves it (D-OW-64)', () => {
+  it('WAL-9 (partial) only the live subscriptions billing the leaving org; a terminal one, or one billing a person, is not the org\'s to stop', () => {
+    const rows = [
+      { stripeSubscriptionId: 'sub_live', orgId: 'org-1', status: 'active' },
+      { stripeSubscriptionId: 'sub_past_due', orgId: 'org-1', status: 'past_due' },
+      { stripeSubscriptionId: 'sub_over', orgId: 'org-1', status: 'canceled' },
+      { stripeSubscriptionId: 'sub_person', orgId: null, status: 'active' },
+      { stripeSubscriptionId: 'sub_other_org', orgId: 'org-2', status: 'active' },
+    ];
+    assert({
+      given: 'a drive leaving org-1',
+      should: 'release its live org-1 subscriptions only',
+      actual: orgDedicatedSubscriptionsToRelease(rows, 'org-1').map((r) => r.stripeSubscriptionId),
+      expected: ['sub_live', 'sub_past_due'],
     });
   });
 });

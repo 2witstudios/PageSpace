@@ -553,3 +553,16 @@ export function decideDedicatedPurchaser(input: {
   if (input.action === 'buy' && !input.orgHasStripeCustomer) return { ok: false, reason: 'org_billing_unavailable' };
   return { ok: true, purchaser: { kind: 'org', orgId: payer.orgId, buyerUserId: input.callerId } };
 }
+
+/**
+ * WAL-9 (D-OW-64): the dedicated subscriptions an org stops paying for when one of its drives
+ * LEAVES it (moved out, or the org deleted) — the ones that bill that org and are still live.
+ * Each is released at the end of the period the org has already paid for, never beyond it; a
+ * terminal one is already over, and one billing someone else is not the org's to stop (pure).
+ */
+export function orgDedicatedSubscriptionsToRelease<Row extends { stripeSubscriptionId: string; orgId: string | null; status: string }>(
+  rows: readonly Row[],
+  leavingOrgId: string,
+): Row[] {
+  return rows.filter((row) => row.orgId === leavingOrgId && !isTerminalSubscriptionStatus(row.status));
+}

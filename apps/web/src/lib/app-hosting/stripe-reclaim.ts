@@ -72,7 +72,12 @@ export async function drainAppHostingStripeReclaims(): Promise<DrainStripeReclai
 
   for (const row of batch) {
     try {
-      const subscription = await stripe.subscriptions.cancel(row.stripeSubscriptionId).catch((error: unknown) => {
+      // `period_end` (WAL-9, D-OW-64): the app's drive left the org paying for it, so the org's
+      // subscription ends with the period already paid for — set to cancel then, not now.
+      const stop = row.cancelAt === 'period_end'
+        ? stripe.subscriptions.update(row.stripeSubscriptionId, { cancel_at_period_end: true })
+        : stripe.subscriptions.cancel(row.stripeSubscriptionId);
+      const subscription = await stop.catch((error: unknown) => {
         // Already gone at Stripe (deleted account, or a prior tick's cancel that
         // committed there but crashed before this row could be removed) is the
         // success case, not a failure — the invariant this table protects
@@ -83,7 +88,10 @@ export async function drainAppHostingStripeReclaims(): Promise<DrainStripeReclai
         throw error;
       });
 
-      if (subscription === null || subscription.status === 'canceled') {
+      const stopped = subscription === null
+        || subscription.status === 'canceled'
+        || (row.cancelAt === 'period_end' && subscription.cancel_at_period_end === true);
+      if (stopped) {
         alreadyCanceled += subscription === null ? 1 : 0;
         canceled += subscription === null ? 0 : 1;
         await db.delete(appHostingStripeReclaims).where(eq(appHostingStripeReclaims.stripeSubscriptionId, row.stripeSubscriptionId));

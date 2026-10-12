@@ -20,6 +20,10 @@ import { and, eq, inArray, or } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { drives, storageEvents } from '@pagespace/db/schema/core';
 import { files } from '@pagespace/db/schema/storage';
+import { driveEnvs } from '@pagespace/db/schema/drive-envs';
+import { publishedApps } from '@pagespace/db/schema/published-apps';
+import { publishedAppSubscriptions } from '@pagespace/db/schema/published-app-subscriptions';
+import { appHostingStripeReclaims } from '@pagespace/db/schema/app-hosting-stripe-reclaims';
 import { organizations, orgMembers, orgSubscriptions, type OrgRole } from '@pagespace/db/schema/organizations';
 import { factories } from '@pagespace/db/test/factories';
 import { moveDriveToOrg, moveDriveOutOfOrg, type OrgDriveServiceDeps } from '../org-drive-service';
@@ -250,6 +254,33 @@ describe('moving a drive re-attributes its bytes', () => {
       totalSizeAfter: 0,
       metadata: { driveId: product, orgId: northwind, direction: 'into-org' },
     });
+  });
+
+  it('WAL-9 (partial) moving a drive out of the org queues its org-billed dedicated hosting to end at period end, in the move\'s transaction — never now, never a person\'s subscription (D-OW-64)', async () => {
+    const product = await seedDrive(marcus, northwind);
+    const envId = createId();
+    await db.insert(driveEnvs).values({ id: envId, driveId: product, name: `env-${envId}`, createdBy: marcus, updatedAt: new Date() } as never);
+    const appId = createId();
+    await db.insert(publishedApps).values({
+      id: appId, envId, driveId: product, ownerId: marcus, flyAppName: `pgs-${appId}`, networkName: 'published-apps',
+      subdomain: `rel-${appId}`, machineId: `m-${appId}`, status: 'running', tier: 'dedicated', imageDigest: 'sha256:abc', updatedAt: new Date(),
+    } as never);
+    const subId = `sub_${appId}`;
+    await db.insert(publishedAppSubscriptions).values({
+      publishedAppId: appId, userId: jono, orgId: northwind, stripeSubscriptionId: subId, stripePriceId: 'price_small',
+      guestPreset: 'shared-cpu-1x-512', status: 'active', currentPeriodStart: new Date(), currentPeriodEnd: new Date(Date.now() + 30 * 86_400_000),
+    });
+    try {
+      const moved = await moveDriveOutOfOrg(jono, product, { implicitMembers: 'keep' }, deps);
+
+      expect(moved.ok).toBe(true);
+      const [reclaim] = await db.select().from(appHostingStripeReclaims).where(eq(appHostingStripeReclaims.stripeSubscriptionId, subId));
+      expect(reclaim).toMatchObject({ publishedAppId: appId, cancelAt: 'period_end' });
+    } finally {
+      await db.delete(appHostingStripeReclaims).where(eq(appHostingStripeReclaims.stripeSubscriptionId, subId));
+      await db.delete(publishedApps).where(eq(publishedApps.id, appId));
+      await db.delete(driveEnvs).where(eq(driveEnvs.id, envId));
+    }
   });
 
   it('WAL-9 (partial) a refused move re-attributes nothing', async () => {
