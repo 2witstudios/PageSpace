@@ -1,5 +1,3 @@
-import { resolvePersonalCapabilityTier } from '@pagespace/lib/billing/deployment-capability';
-import { toPersonalSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 /**
  * The GLOBAL-ASSISTANT chat turn — the second of the two strategies behind the
  * single chat pipeline (`handle-chat-turn.ts`).
@@ -35,7 +33,7 @@ import { resolveProviderModel } from '@/lib/ai/core/ai-providers-config';
 import { MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
 import { PERSONAL_SPEND, conversationSpend } from '@pagespace/lib/billing/spend-target';
-import { UNGATED_TURN_CREDIT, turnCreditAfterGate, type TurnCredit } from './turn-credit';
+import { UNGATED_TURN_CREDIT, personalTurnTiers, turnCreditAfterGate, type TurnCredit } from './turn-credit';
 import { writeTurnPreamble } from './turn-preamble';
 import { isMeteringExempt } from '@pagespace/lib/ai/model-defaults';
 import { estimateChatHoldCentsForModel } from '@pagespace/lib/monitoring/chat-pricing';
@@ -427,7 +425,7 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
         })
         .from(users)
         .where(eq(users.id, userId));
-      userSubscriptionTier = resolvePersonalCapabilityTier(gateUser?.subscriptionTier);
+      userSubscriptionTier = personalTurnTiers(gateUser?.subscriptionTier).capability;
       userImageGenerationModel = gateUser?.imageGenerationModel ?? null;
       // Metering-exempt providers (admin Z.ai Coder Plan) bill on a flat-rate external
       // subscription, so skip the credit gate entirely — no hold, no balance check —
@@ -449,7 +447,7 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
       const locationSpend = contextRef ? conversationSpend(locationContext?.currentDrive?.id, conversationId) : PERSONAL_SPEND;
       credit = { spend: locationSpend };
       if (!isMeteringExempt(gateProvider) && !isSoloHelpRequest) {
-        const creditGate = await canConsumeAI(userId, toPersonalSubscriptionTier(gateUser?.subscriptionTier), {
+        const creditGate = await canConsumeAI(userId, personalTurnTiers(gateUser?.subscriptionTier).gate, {
           spend: locationSpend,
           estCostCents: estimateChatHoldCentsForModel(selectedModel),
           maxInFlight: MAX_CHAT_INFLIGHT,

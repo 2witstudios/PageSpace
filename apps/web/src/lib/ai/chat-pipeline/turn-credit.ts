@@ -1,6 +1,8 @@
 import type { CreditGateResult, SpendFallback } from '@pagespace/lib/billing/credit-gate';
 import { PERSONAL_SPEND, resolvedSpend, type SpendTarget } from '@pagespace/lib/billing/spend-target';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
+import { resolvePersonalCapabilityTier } from '@pagespace/lib/billing/deployment-capability';
+import { toPersonalSubscriptionTier, type PersonalSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 
 /**
  * What a chat turn's credit gate named, shared by the page and global turns so the two
@@ -18,6 +20,22 @@ export interface TurnCredit {
   walletId?: string;
   entitlementTier?: SubscriptionTier;
   fallback?: SpendFallback;
+}
+
+/**
+ * The caller's stored personal tier as a turn reads it, shared by both turns:
+ *   - `gate`: what the personal credit gate bills against; a retired personal Business row
+ *     reads as Free, never as a paid plan.
+ *   - `capability`: what the running deployment grants for features (billing-disabled
+ *     installations keep finite Business limits without a synthetic subscription).
+ */
+export interface PersonalTurnTiers {
+  gate: PersonalSubscriptionTier;
+  capability: SubscriptionTier;
+}
+
+export function personalTurnTiers(stored: string | null | undefined): PersonalTurnTiers {
+  return { gate: toPersonalSubscriptionTier(stored), capability: resolvePersonalCapabilityTier(stored) };
 }
 
 /** A turn that has not gated (yet, or at all: a flat-rate provider, a solo /help). */

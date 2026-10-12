@@ -73,8 +73,12 @@ const SPEC = path.join(repoRoot(), 'docs/2.0-architecture/agent-sessions.md');
  * 161 → 160 (lane ow-fix-2720): the global turn's spend-target import now also names
  * PERSONAL_SPEND (its spend drive comes only from the server-resolved contextRef), so that
  * import line is no longer identical to the page turn's.
+ *
+ * 160 → 159 (D-OW-42 final cutover): the turns' personal-tier reads (gate tier and
+ * deployment capability) moved into `personalTurnTiers` in `turn-credit.ts`, replacing the
+ * identical subscription-tier type import each turn carried.
  */
-const RECORDED_IDENTICAL_LINES = 160;
+const RECORDED_IDENTICAL_LINES = 159;
 
 /** Substantive lines: no blanks, no comments, trimmed. */
 const substantiveLines = (file: string): string[] =>
