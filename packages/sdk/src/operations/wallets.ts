@@ -57,7 +57,7 @@ const refusalReasonSchema = z.enum([
   'chosen_wallet_unavailable',
 ]);
 /** `SkipReason` (`packages/lib/src/billing/wallet-core.ts`). */
-const skipReasonSchema = z.enum(['drive_wallet_empty', 'drive_wallet_paused', 'no_drive_wallet', 'creator_departed']);
+const skipReasonSchema = z.enum(['drive_wallet_empty', 'drive_wallet_paused', 'no_drive_wallet', 'creator_departed', 'guest_drive_wallet_off', 'source_cap_reached']);
 
 /** A wallet a person may pick for a call: `SpendOption` / `SpendChoice` in lib. */
 const spendOptionSchema = z.object({ source: spendSourceKindSchema, walletId: z.string() });

@@ -97,6 +97,6 @@ describe.skipIf(!ok)('org pool split read model (real Postgres)', () => {
   });
 
   it('an org with no pool yet reports no pool', async () => {
-    expect(await getOrgPoolSplit(w.emptyOrgId)).toEqual({ walletId: null, availableCents: 0, unallocatedCents: 0, periodEnd: null, seats: { memberCount: 0, allowanceCents: 100, allocatedCents: 0, spentCents: 0 }, driveWallets: [], drivesWithoutWallet: [] });
+    expect(await getOrgPoolSplit(w.emptyOrgId)).toEqual({ walletId: null, status: null, availableCents: 0, unallocatedCents: 0, periodEnd: null, seats: { memberCount: 0, allowanceCents: 100, allocatedCents: 0, spentCents: 0 }, driveWallets: [], drivesWithoutWallet: [] });
   });
 });

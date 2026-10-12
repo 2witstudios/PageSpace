@@ -55,6 +55,7 @@ import { formatCreditCount } from '../billing/money-model';
 import { toPersonalSubscriptionTier } from '../billing/subscription-tiers';
 import { capChangeOnlyRestricts, planDeleteWallet, planOrgPoolPause, planTopUp, planWalletPatch, walletPatchOnlyRestricts, type DeleteBlocker, type WalletPatchInput } from '../billing/wallet-admin';
 import { donateToDriveWallet } from '../billing/wallet-funding-shell';
+import { readEffectiveConsumerCaps } from '../billing/consumer-caps';
 import { checkOrgActive } from '../organizations/status';
 import { findMembershipRole, findOrganizationNames, listOrgMembers } from '../organizations/repository';
 import { loadSeatCapFactsForUsers } from '../billing/seat-allowance';
@@ -240,17 +241,14 @@ async function usageCentsSince(walletId: string, userId: string, since: Date): P
   return Math.max(0, Number(row?.cents ?? 0));
 }
 
+/** The viewer's own caps here as the gate applies them (a guest is always capped, D-OW-4), and their spend. */
 async function myCapFacts(walletId: string, userId: string): Promise<DriveWalletFacts['myCap']> {
-  const [cap] = await db
-    .select({ dailyCapCents: walletConsumerCaps.dailyCapCents, monthlyCapCents: walletConsumerCaps.monthlyCapCents })
-    .from(walletConsumerCaps)
-    .where(and(eq(walletConsumerCaps.walletId, walletId), eq(walletConsumerCaps.consumerKey, userConsumerKey(userId))))
-    .limit(1);
+  const cap = await readEffectiveConsumerCaps(db, walletId, userId);
   if (!cap) return null;
   const nowMs = Date.now();
   return {
-    dailyCapCents: cap.dailyCapCents,
-    monthlyCapCents: cap.monthlyCapCents,
+    dailyCapCents: cap.dailyCents,
+    monthlyCapCents: cap.monthlyCents,
     spentTodayCents: await usageCentsSince(walletId, userId, new Date(utcDayStartMs(nowMs))),
     spentThisMonthCents: await usageCentsSince(walletId, userId, new Date(utcMonthStartMs(nowMs))),
   };

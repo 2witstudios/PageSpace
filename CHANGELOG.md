@@ -5,6 +5,15 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ## [Unreleased]
 
+- Organization Owners and Admins can pause the whole credits pool from Plan & seats: while paused, no seat and no drive wallet can spend from it. A paused pool's drive wallets show as paused.
+- Guests can no longer spend an organization drive's wallet by @mentioning an agent or pressing Run. An Admin can let a drive's guests spend its wallet (Drive Settings › Wallet › Guests); guests are then always held to spending caps (50 credits a day and 1,000 a month unless set lower).
+- The amount shown for a drive wallet in the "spending from" chip, strip and popover is now the wallet's own remaining amount, the same figure as the drive's Wallet page.
+- When an automation or mention is skipped because the person it runs as reached their cap, or is a guest the drive keeps off its wallet, the drive lead's notice now says so.
+- A donation to a drive wallet is now always kept whole as your gift; it no longer pays off the wallet's debt.
+- Zoom transcript summaries and action items spend the destination drive's wallet on personal drives too, never anyone's own credits; a drive without a wallet skips them.
+- The drive lead sees each automation's spend as its own row on the Wallet page, apart from the person who created it.
+- Inside a drive with no chat open, the header chip now shows what a new conversation there would spend from.
+
 - A conversation in a drive now keeps the source it started on. If that drive wallet is empty, paused or at your cap, the call is refused, names the wallet and offers your other options; it moves only where the drive's fallback rule allows, and the move is shown. It no longer switches to your own credits without telling you. Asking another agent (ask_agent) now reserves credits before the agent runs and is refused when the wallet cannot cover it.
 
 - Organization capabilities now require a verified payment or supported gift for the current subscription. A zero-dollar non-gift invoice or balance left from a previous subscription cannot activate an unpaid organization.
