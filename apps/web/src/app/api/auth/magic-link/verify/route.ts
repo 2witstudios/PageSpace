@@ -375,11 +375,13 @@ async function redeemMagicLink({
     // Continue with login anyway - email verification is secondary
   }
 
+  const authentication = { authenticatedAtMs: Date.now(), assurance: 'single_factor' as const };
+
   // Create new session
   const sessionToken = await sessionService.createSession({
     userId,
     type: 'user',
-    authentication: { authenticatedAtMs: Date.now(), assurance: 'single_factor' },
+    authentication,
     scopes: ['*'],
     expiresInMs: SESSION_DURATION_MS,
     deviceId: handoffDevice?.deviceId,
@@ -504,6 +506,7 @@ async function redeemMagicLink({
           emailVerified: userRow.emailVerified,
         };
         const { deviceToken } = await validateOrCreateDeviceToken({
+          authentication,
           providedDeviceToken: undefined,
           userId,
           deviceId: handoffDevice.deviceId,

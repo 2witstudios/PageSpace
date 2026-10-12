@@ -324,7 +324,7 @@ export async function POST(req: Request) {
         const user = await authRepository.findUserById(userId);
         if (user) {
           deviceTokenValue = await createDeviceToken({
-            userId, deviceId, tokenVersion: user.tokenVersion,
+            userId, deviceId, tokenVersion: user.tokenVersion, authentication,
             platform: platform || 'web',
             deviceName: deviceName || req.headers.get('user-agent') || (platform === 'desktop' ? 'Desktop App' : 'Web Browser'),
             userAgent: req.headers.get('user-agent') || undefined,

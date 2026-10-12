@@ -2474,6 +2474,11 @@
       "import": "./dist/auth/rate-limit-utils.js",
       "require": "./dist/auth/rate-limit-utils.js"
     },
+    "./auth/authentication-evidence": {
+      "types": "./dist/auth/authentication-evidence.d.ts",
+      "import": "./dist/auth/authentication-evidence.js",
+      "require": "./dist/auth/authentication-evidence.js"
+    },
     "./auth/session-service": {
       "types": "./dist/auth/session-service.d.ts",
       "import": "./dist/auth/session-service.js",
@@ -3762,6 +3767,9 @@
       ],
       "auth/rate-limit-utils": [
         "./dist/auth/rate-limit-utils.d.ts"
+      ],
+      "auth/authentication-evidence": [
+        "./dist/auth/authentication-evidence.d.ts"
       ],
       "auth/session-service": [
         "./dist/auth/session-service.d.ts"

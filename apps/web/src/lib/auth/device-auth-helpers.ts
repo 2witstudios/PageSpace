@@ -1,4 +1,4 @@
-import { sessionService } from '@pagespace/lib/auth/session-service';
+import { sessionService, type SessionClaims } from '@pagespace/lib/auth/session-service';
 import { validateOrCreateDeviceToken } from '@pagespace/lib/auth/device-auth-utils';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 
@@ -29,6 +29,7 @@ export async function revokeSessionsForLogin(
  * Works for all platforms — web, desktop, ios, android.
  */
 export async function createDeviceToken(params: {
+  authentication?: SessionClaims['authentication'];
   userId: string;
   deviceId: string;
   tokenVersion: number;
@@ -41,6 +42,7 @@ export async function createDeviceToken(params: {
   const platform = params.platform ?? 'web';
   const result = await validateOrCreateDeviceToken({
     providedDeviceToken: params.providedDeviceToken ?? null,
+    authentication: params.authentication,
     userId: params.userId,
     deviceId: params.deviceId,
     platform,

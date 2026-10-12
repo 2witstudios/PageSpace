@@ -12,6 +12,8 @@ import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { users, deviceTokens } from '@pagespace/db/schema/auth';
 import { createId } from '@paralleldrive/cuid2';
+import { atomicDeviceTokenRotation } from '@pagespace/db/transactions/auth-transactions';
+import { hashToken, getTokenPrefix } from '../auth/token-utils';
 
 describe('device-auth-utils', () => {
   const testUserId = 'user_test123';
@@ -35,6 +37,28 @@ describe('device-auth-utils', () => {
     await db.delete(deviceTokens).where(eq(deviceTokens.userId, testUserId));
     // Also clean up test user
     await db.delete(users).where(eq(users.id, testUserId));
+  });
+
+  it('SEC-3 (partial) rotating a device credential preserves its original verified ceremony', async () => {
+    const authentication = { authenticatedAtMs: Date.now() - 3600000, assurance: 'user_verified_passkey' as const };
+    const first = await createDeviceTokenRecord(testUserId, testDeviceId, testPlatform, testTokenVersion, { authentication });
+    const rotated = await atomicDeviceTokenRotation(first.token, {}, hashToken, getTokenPrefix, generateDeviceToken);
+    expect(rotated.success).toBe(true);
+    const current = await validateDeviceToken(rotated.newToken!);
+    expect(current?.authenticatedAt?.getTime()).toBe(authentication.authenticatedAtMs);
+    expect(current?.authenticationAssurance).toBe(authentication.assurance);
+  });
+
+  it('SEC-2 (partial) fresh login replaces the device secret instead of upgrading the old credential', async () => {
+    const before = { authenticatedAtMs: Date.now() - 3600000, assurance: 'single_factor' as const };
+    const after = { authenticatedAtMs: Date.now(), assurance: 'user_verified_passkey' as const };
+    const first = await createDeviceTokenRecord(testUserId, testDeviceId, testPlatform, testTokenVersion, { authentication: before });
+    const replacement = await validateOrCreateDeviceToken({ providedDeviceToken: first.token, userId: testUserId, deviceId: testDeviceId, platform: testPlatform, tokenVersion: testTokenVersion, authentication: after });
+    expect(replacement.deviceToken).not.toBe(first.token);
+    expect(await validateDeviceToken(first.token)).toBeNull();
+    const current = await validateDeviceToken(replacement.deviceToken);
+    expect(current?.authenticatedAt?.getTime()).toBe(after.authenticatedAtMs);
+    expect(current?.authenticationAssurance).toBe(after.assurance);
   });
 
   describe('generateDeviceToken', () => {
