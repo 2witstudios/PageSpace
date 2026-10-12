@@ -3,6 +3,7 @@ import {
   planOrgGift,
   planOrgUngift,
   parseOrgGiftMetadata,
+  MAX_GIFTED_EXTRA_SEATS,
   orgGiftCouponId,
   orgGiftVoidKey,
   orgGiftRefusalStatus,
@@ -42,7 +43,14 @@ describe('parseOrgGiftMetadata: Stripe is the single source of an applied gift (
     expect(parseOrgGiftMetadata(null)).toEqual({ typed: false, giftedExtraSeats: null });
   });
 
-  it.each([undefined, '', '-1', '1.5', 'two', '1e3', '9999999999'])('a gift with an invalid seat pin (%s) carries no seats', (raw) => {
+  it('D-OW-54 one bound for both doors: the admin route\'s maximum is the largest pin read back from Stripe', () => {
+    expect(MAX_GIFTED_EXTRA_SEATS).toBe(10_000);
+    expect(parseOrgGiftMetadata({ type: ORG_GIFT_METADATA_TYPE, giftedExtraSeats: String(MAX_GIFTED_EXTRA_SEATS) })).toEqual({ typed: true, giftedExtraSeats: MAX_GIFTED_EXTRA_SEATS });
+    expect(parseOrgGiftMetadata({ type: ORG_GIFT_METADATA_TYPE, giftedExtraSeats: String(MAX_GIFTED_EXTRA_SEATS + 1) })).toEqual({ typed: true, giftedExtraSeats: null });
+    expect(planOrgGift(facts({ extraSeats: MAX_GIFTED_EXTRA_SEATS + 1 }))).toEqual({ kind: 'refuse', reason: 'invalid_seat_count' });
+  });
+
+  it.each([undefined, '', '-1', '1.5', 'two', '1e3', '100000', '9999999999'])('a gift with an invalid seat pin (%s) carries no seats', (raw) => {
     const metadata: Record<string, string> = { type: ORG_GIFT_METADATA_TYPE };
     if (raw !== undefined) metadata.giftedExtraSeats = raw;
     expect(parseOrgGiftMetadata(metadata)).toEqual({ typed: true, giftedExtraSeats: null });

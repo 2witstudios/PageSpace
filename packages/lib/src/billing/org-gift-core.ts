@@ -49,6 +49,13 @@ import { isLiveOrgSubscriptionStatus, orgStripeIdempotencyKey } from './org-subs
 /** The subscription metadata `type` the funding path recognises as an admin gift. */
 export const ORG_GIFT_METADATA_TYPE = 'gift_subscription';
 
+/**
+ * The most extra seats an admin gift may pin (D-OW-54). One bound for both doors: the admin
+ * route refuses more, and a pin read back from Stripe metadata above it is invalid — so a
+ * tampered pin can never size a gift beyond what the audited route could have written.
+ */
+export const MAX_GIFTED_EXTRA_SEATS = 10_000;
+
 /** What a subscription's metadata says about an admin gift. */
 export interface OrgGiftMetadataState {
   /** The metadata says this is a gift (`type: gift_subscription`). */
@@ -59,7 +66,7 @@ export interface OrgGiftMetadataState {
 
 /**
  * Parse a Stripe subscription's gift metadata. A gift-typed subscription with a missing or
- * invalid seat pin (not a non-negative integer) reads `{ typed: true, giftedExtraSeats: null }`:
+ * invalid seat pin (not an integer in 0..{@link MAX_GIFTED_EXTRA_SEATS}) reads `{ typed: true, giftedExtraSeats: null }`:
  * the mirror treats it as NOT gifted for capability and reports it, and a new gift is refused
  * until it is revoked.
  */
@@ -67,7 +74,7 @@ export function parseOrgGiftMetadata(metadata: Record<string, string> | null | u
   if (metadata?.type !== ORG_GIFT_METADATA_TYPE) return { typed: false, giftedExtraSeats: null };
   const raw = metadata.giftedExtraSeats;
   const seats = typeof raw === 'string' && /^\d{1,9}$/.test(raw) ? Number(raw) : null;
-  return { typed: true, giftedExtraSeats: seats };
+  return { typed: true, giftedExtraSeats: seats !== null && seats <= MAX_GIFTED_EXTRA_SEATS ? seats : null };
 }
 
 export type OrgGiftRefusal =
@@ -193,7 +200,9 @@ function refuseCommon(facts: OrgUngiftFacts): OrgGiftRefusal | null {
 export function planOrgGift(facts: OrgGiftFacts): OrgGiftPlan {
   const common = refuseCommon(facts);
   if (common) return { kind: 'refuse', reason: common };
-  if (!Number.isInteger(facts.extraSeats) || facts.extraSeats < 0) return { kind: 'refuse', reason: 'invalid_seat_count' };
+  if (!Number.isInteger(facts.extraSeats) || facts.extraSeats < 0 || facts.extraSeats > MAX_GIFTED_EXTRA_SEATS) {
+    return { kind: 'refuse', reason: 'invalid_seat_count' };
+  }
   const stored = facts.stored as OrgGiftStored;
   if (stored.status === 'incomplete') return { kind: 'refuse', reason: 'awaiting_first_payment' };
   const restoresNow = LAPSED_INVOICING_STATUSES.has(stored.status);

@@ -172,6 +172,15 @@ export interface OrgPoolRefillInput {
   giftedExtraSeats?: number | null;
 }
 
+/**
+ * D-OW-54: only an invoice that paid NOTHING is funded as a gift. A paid invoice on a gift-typed
+ * subscription (a coupon removed, a tampered metadata) funds as an ordinary paid invoice — what
+ * it paid × ratio — never at the gift's list price.
+ */
+function isGiftFunded(input: Pick<OrgPoolRefillInput, 'gifted' | 'amountPaidCents'>): boolean {
+  return input.gifted === true && wholeCents(input.amountPaidCents) === 0;
+}
+
 /** The admin-pinned gifted extra seats, or null when there is no valid pin (fail closed). */
 function pinnedGiftSeats(input: Pick<OrgPoolRefillInput, 'giftedExtraSeats'>): number | null {
   const n = input.giftedExtraSeats;
@@ -200,7 +209,7 @@ export function orgInvoicePaidCents(input: Pick<OrgPoolRefillInput, 'lines' | 'a
 /** First-payment entitlement is independent of credit ratios and sub-cent rounding. */
 export function orgSubscriptionFundingBasis(input: OrgPoolRefillInput): 'paid' | 'gift' | null {
   if (!input.hasSubscriptionParent || input.hasVerifiedGiftPrice !== true) return null;
-  if (input.gifted === true) return input.onOrgSubscription === true && pinnedGiftSeats(input) !== null ? 'gift' : null;
+  if (isGiftFunded(input)) return input.onOrgSubscription === true && pinnedGiftSeats(input) !== null ? 'gift' : null;
   return orgInvoicePaidCents(input) > 0 ? 'paid' : null;
 }
 
@@ -218,7 +227,7 @@ export function orgPoolRefillGrant(input: OrgPoolRefillInput): InvoiceGrant {
   if (input.hasSubscriptionParent !== true) {
     return { paidCents, allowanceCents: 0, basis: 'none', reason: 'not_a_subscription_invoice' };
   }
-  if (input.gifted === true) {
+  if (isGiftFunded(input)) {
     // A gift on any subscription but the org's own funds a pool the org could never spend: the
     // org's status reads its own subscription, so it stays lapsed. Grant nothing (review #2761 P2-4).
     if (input.onOrgSubscription !== true) return { paidCents, allowanceCents: 0, basis: 'none', reason: 'gift_not_org_subscription' };

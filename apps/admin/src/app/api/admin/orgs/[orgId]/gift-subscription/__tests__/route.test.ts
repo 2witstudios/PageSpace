@@ -59,6 +59,8 @@ describe('POST /api/admin/orgs/[orgId]/gift-subscription', () => {
     ['a negative seat count', { reason: 'x', extraSeats: -1 }],
     ['a fractional seat count', { reason: 'x', extraSeats: 1.5 }],
     ['a string seat count', { reason: 'x', extraSeats: '3' }],
+    ['a seat count above the shared maximum (MAX_GIFTED_EXTRA_SEATS)', { reason: 'x', extraSeats: 10_001 }],
+    ['the 100000-seat tamper', { reason: 'x', extraSeats: 100_000 }],
   ])('refuses %s with 400', async (_label, body) => {
     const res = await POST(request('POST', body), ctx('org_1'));
     expect(res.status).toBe(400);

@@ -7,14 +7,14 @@ import { getUserFriendlyStripeError } from '@/lib/stripe-errors';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { giftOrgSubscription, ungiftOrgSubscription } from '@pagespace/lib/billing/org-gift';
-import { orgGiftRefusalStatus, type OrgGiftRefusal } from '@pagespace/lib/billing/org-gift-core';
+import { MAX_GIFTED_EXTRA_SEATS, orgGiftRefusalStatus, type OrgGiftRefusal } from '@pagespace/lib/billing/org-gift-core';
 
 type RouteContext = { params: Promise<{ orgId: string }> };
 
 const giftSchema = z.object({
   reason: z.string().trim().min(1, 'A reason is required to gift an organization').max(500),
   /** D-OW-54: extra seats beyond the Business base the gift covers; the gift is fixed at it. */
-  extraSeats: z.number().int().min(0).max(10_000),
+  extraSeats: z.number().int().min(0).max(MAX_GIFTED_EXTRA_SEATS),
 });
 
 const revokeSchema = z.object({

@@ -71,6 +71,7 @@ import { queryOrgAuditEvents } from '@pagespace/lib/audit/org-audit-query';
 import { resetAuditDbBindingForTests } from '@pagespace/lib/audit/audit-db-binding';
 import { resetDefaultSecurityAuditForTests } from '@pagespace/lib/audit/security-audit';
 import { parseOrgAuditFilter } from '@pagespace/lib/audit/org-audit-query-core';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 
 const WEBHOOK_SECRET = 'whsec_ow_d3_local_test_secret';
 const PRICES: OrgBusinessPrices = { basePriceId: stripeConfig.orgPriceIds.businessBase, seatPriceId: stripeConfig.orgPriceIds.extraSeat };
@@ -350,9 +351,18 @@ describe('Stripe webhook — org routing, idempotency, lapse (real Postgres, in-
     ]);
   });
 
-  it('D-OW-54 mirrors the current Stripe gift AND its pinned seats through signed subscription events and replay; a gift with no valid pin is not a gift', async () => {
+  it('D-OW-54 mirrors the current Stripe gift AND its pinned seats through signed subscription events and replay, auditing every change; a gift with no valid pin (or one above the admin bound, the 100000-seat tamper) is not a gift and is reported', async () => {
     if (!dbAvailable) return;
     const org = await northwind();
+    const giftAudit = async () => {
+      const parsed = parseOrgAuditFilter({ category: 'billing', limit: '100' });
+      if (!parsed.ok) throw new Error(parsed.error);
+      return (await queryOrgAuditEvents(org.orgId, parsed.filter)).entries
+        .filter((e) => e.details.change === 'gift')
+        .map((e) => [e.details.source, e.details.giftedExtraSeatsBefore, e.details.giftedExtraSeatsAfter, e.details.giftedAfter])
+        .reverse();
+    };
+    const errorLog = vi.spyOn(loggers.api, 'error');
     expect((await storedSub(org.orgId)).gifted).toBe(false);
     const live = org.stripe.subscriptions.get(org.subscriptionId)!;
     live.metadata = { ...live.metadata, type: 'gift_subscription', giftedExtraSeats: '2' };
@@ -362,7 +372,19 @@ describe('Stripe webhook — org routing, idempotency, lapse (real Postgres, in-
     expect(await storedSub(org.orgId)).toMatchObject({ gifted: true, giftedExtraSeats: 2 });
     expect(await deliver(gift)).toBe(200);
     expect(await storedSub(org.orgId)).toMatchObject({ gifted: true, giftedExtraSeats: 2 });
-    // A gift-typed subscription without a valid pin (a hand edit): not a gift for capability.
+    // The gift and its seats changed once; the replay changed nothing and is not audited again.
+    expect(await giftAudit()).toEqual([['stripe_webhook', null, 2, true]]);
+
+    // The tamper: someone with Stripe write access pins 100000 seats. Above the admin route's
+    // bound, so not a gift for capability or funding; reported and audited.
+    errorLog.mockClear();
+    live.metadata.giftedExtraSeats = '100000';
+    expect(await deliver(eventPayload('customer.subscription.updated', snapshot))).toBe(200);
+    expect(await storedSub(org.orgId)).toMatchObject({ gifted: false, giftedExtraSeats: null });
+    expect(errorLog).toHaveBeenCalledWith(expect.stringContaining('without a valid giftedExtraSeats'), undefined, expect.objectContaining({ orgId: org.orgId }));
+    expect(await giftAudit()).toEqual([['stripe_webhook', null, 2, true], ['stripe_webhook', 2, null, false]]);
+
+    // A pin that is not a number at all: the same.
     live.metadata.giftedExtraSeats = '-3';
     expect(await deliver(eventPayload('customer.subscription.updated', snapshot))).toBe(200);
     expect(await storedSub(org.orgId)).toMatchObject({ gifted: false, giftedExtraSeats: null });
@@ -370,6 +392,8 @@ describe('Stripe webhook — org routing, idempotency, lapse (real Postgres, in-
     delete live.metadata.giftedExtraSeats;
     expect(await deliver(eventPayload('customer.subscription.updated', snapshot))).toBe(200);
     expect(await storedSub(org.orgId)).toMatchObject({ gifted: false, giftedExtraSeats: null });
+    expect(await giftAudit()).toHaveLength(2);
+    errorLog.mockRestore();
   });
 
   it("SEAT-7 (partial) org subscription webhooks are routed to the org before the personal-tier handler and are idempotent: each event delivered twice applies once and never touches the Owner's personal plan", async () => {

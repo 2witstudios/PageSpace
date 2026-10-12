@@ -84,6 +84,15 @@ describe('wallet-funding: org pool refill', () => {
     expect(grant.allowanceCents).toBe(4200);
   });
 
+  it('SEAT-8 (partial) D-OW-54 a PAID invoice on a gift-typed subscription funds as a paid invoice (what it paid × ratio), never at the gift list price', () => {
+    const paidGift = orgPoolRefillGrant({
+      lines: [base, seats(3)], hasVerifiedGiftPrice: true, amountPaidCents: 8000, hasSubscriptionParent: true,
+      billingReason: 'subscription_cycle', subtotalCents: 8000, gifted: true, onOrgSubscription: true, giftedExtraSeats: 10_000,
+    });
+    expect(paidGift).toEqual({ paidCents: 8000, allowanceCents: 4800, basis: 'paid', reason: 'paid' });
+    expect(orgSubscriptionFundingBasis({ lines: [base], amountPaidCents: 5000, hasSubscriptionParent: true, hasVerifiedGiftPrice: true, gifted: true, onOrgSubscription: true, giftedExtraSeats: 10_000 })).toBe('paid');
+  });
+
   it('SEAT-8 (partial) D-OW-54 a gift invoice with no admin-pinned seat quantity (a gift made outside the admin route) funds nothing and is no funding evidence', () => {
     const gift = { lines: [giftedBase], hasVerifiedGiftPrice: true, amountPaidCents: 0, hasSubscriptionParent: true, billingReason: 'subscription_cycle', subtotalCents: 5000, gifted: true, onOrgSubscription: true };
     for (const giftedExtraSeats of [null, undefined, -1, 1.5]) {

@@ -98,6 +98,11 @@ function logUnapplied(route: Exclude<BillingOwnerRoute, { kind: 'org' } | { kind
   });
 }
 
+interface MirroredGift {
+  gifted: boolean;
+  giftedExtraSeats: number | null;
+}
+
 export type OrgMirrorOutcome =
   | {
       kind: 'applied';
@@ -106,6 +111,8 @@ export type OrgMirrorOutcome =
       cancelAtPeriodEnd: boolean;
       /** What org_subscriptions held before this mirror: a change is an AUD-1 billing event. */
       previous: { stripeStatus: string; cancelAtPeriodEnd: boolean };
+      /** D-OW-54: the gift as stored before and as mirrored from Stripe now; a change is audited. */
+      gift: { before: MirroredGift; after: MirroredGift };
       before: OrgStatus;
       after: OrgStatus;
       transition: OrgLapseTransition | null;
@@ -168,6 +175,10 @@ export async function mirrorOrgSubscription(
       stripeStatus: next.status,
       cancelAtPeriodEnd: fetched.cancelAtPeriodEnd,
       previous: { stripeStatus: stored.status, cancelAtPeriodEnd: stored.cancelAtPeriodEnd },
+      gift: {
+        before: { gifted: stored.gifted === true, giftedExtraSeats: stored.giftedExtraSeats },
+        after: { gifted: next.gifted, giftedExtraSeats: next.giftedExtraSeats },
+      },
       before,
       after,
       transition: orgLapseTransition(before, after),
@@ -190,6 +201,28 @@ export async function mirrorOrgSubscription(
         orgStatusBefore: outcome.before,
         orgStatusAfter: outcome.after,
         ...(outcome.transition ? { transition: outcome.transition } : {}),
+      },
+    });
+  }
+  if (
+    outcome.kind === 'applied' &&
+    (outcome.gift.before.gifted !== outcome.gift.after.gifted || outcome.gift.before.giftedExtraSeats !== outcome.gift.after.giftedExtraSeats)
+  ) {
+    // D-OW-54 zero trust on Stripe metadata: a gift or its pinned seats that changed in Stripe
+    // (the admin route, or anyone else with Stripe write access) is on the org's own record.
+    await recordOrgAuditEventAfterCommit({
+      orgId,
+      eventType: 'org.billing.subscription_changed',
+      resourceType: 'org_subscription',
+      resourceId: orgId,
+      details: {
+        source: 'stripe_webhook',
+        eventId,
+        change: 'gift',
+        giftedBefore: outcome.gift.before.gifted,
+        giftedAfter: outcome.gift.after.gifted,
+        giftedExtraSeatsBefore: outcome.gift.before.giftedExtraSeats,
+        giftedExtraSeatsAfter: outcome.gift.after.giftedExtraSeats,
       },
     });
   }
