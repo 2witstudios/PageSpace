@@ -23,6 +23,9 @@ export const ORG_ERROR_COPY: Record<OrgApiErrorCode, string> = {
   no_billing_customer: 'This organization has no billing account yet.',
   billing_provider_unreachable: 'We could not reach the payment provider. Try again in a moment.',
   email_verification_required: 'Verify your email address first.',
+  org_strong_sign_in_required: 'This organization requires strong sign-in. Confirm it is you with your passkey, then try again.',
+  org_reauthentication_required: 'This organization asks you to sign in again. Confirm it is you, then try again.',
+  org_policy_would_lock_out_actor: 'Your own sign-in does not meet this policy yet, so saving it would lock you out. Confirm it is you first, then save.',
 
   // organization lifecycle
   slug_taken: 'That organization URL is already taken. Choose another.',

@@ -15,6 +15,18 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **Organization sign-in requirements** (shown once organizations are switched on) — an organization's
+  Security page can now require strong sign-in (a passkey confirmed on your device) and a maximum sign-in age
+  (15 minutes to 30 days) for everyone opening its drives, with a preview of how many members would have to
+  sign in again. Turning a requirement on first asks you to meet it yourself, so you never lock yourself out;
+  relaxing one needs a sign-in that meets the one in force. Someone who does not meet a requirement keeps their
+  account and personal drives: the app asks them to confirm it is them (passkey, or an emailed link for a
+  sign-in that is too old) without signing out, the Files page shows the organization's drives as locked
+  instead of hiding them, and the CLI and MCP tools say to run `pagespace login` (with a passkey when strong
+  sign-in is required). Every sign-in method now records how you signed in; sessions from before this change
+  must sign in again to open an organization's drives under these requirements. Single sign-on and SCIM are
+  out of scope and named as such on the Security page.
+
 - **Organizations in the CLI and on MCP keys** (shown once organizations are switched on) — `pagespace orgs
   list|get|members|drives|policies` and the matching `organizations.*` MCP tools read what the web already
   shows: your organizations and your role in each, the member roster, the drive directory (including

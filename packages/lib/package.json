@@ -2479,6 +2479,11 @@
       "import": "./dist/auth/authentication-evidence.js",
       "require": "./dist/auth/authentication-evidence.js"
     },
+    "./auth/reauthentication": {
+      "types": "./dist/auth/reauthentication.d.ts",
+      "import": "./dist/auth/reauthentication.js",
+      "require": "./dist/auth/reauthentication.js"
+    },
     "./auth/session-service": {
       "types": "./dist/auth/session-service.d.ts",
       "import": "./dist/auth/session-service.js",
@@ -3023,6 +3028,16 @@
       "types": "./dist/permissions/actor-authentication.d.ts",
       "import": "./dist/permissions/actor-authentication.js",
       "require": "./dist/permissions/actor-authentication.js"
+    },
+    "./organizations/authentication-policy-core": {
+      "types": "./dist/organizations/authentication-policy-core.d.ts",
+      "import": "./dist/organizations/authentication-policy-core.js",
+      "require": "./dist/organizations/authentication-policy-core.js"
+    },
+    "./organizations/sign-in-blocked": {
+      "types": "./dist/organizations/sign-in-blocked.d.ts",
+      "import": "./dist/organizations/sign-in-blocked.js",
+      "require": "./dist/organizations/sign-in-blocked.js"
     },
     "./organizations/policy-reader": {
       "types": "./dist/organizations/policy-reader.d.ts",
@@ -3781,6 +3796,9 @@
       "auth/authentication-evidence": [
         "./dist/auth/authentication-evidence.d.ts"
       ],
+      "auth/reauthentication": [
+        "./dist/auth/reauthentication.d.ts"
+      ],
       "auth/session-service": [
         "./dist/auth/session-service.d.ts"
       ],
@@ -3945,6 +3963,12 @@
       ],
       "permissions/actor-authentication": [
         "./dist/permissions/actor-authentication.d.ts"
+      ],
+      "organizations/authentication-policy-core": [
+        "./dist/organizations/authentication-policy-core.d.ts"
+      ],
+      "organizations/sign-in-blocked": [
+        "./dist/organizations/sign-in-blocked.d.ts"
       ],
       "organizations/policy-reader": [
         "./dist/organizations/policy-reader.d.ts"

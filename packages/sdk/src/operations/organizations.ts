@@ -141,7 +141,9 @@ export const listOrgDriveDirectory = defineOperation({
 /** `OrgPolicies` (`packages/lib/src/organizations/policies-core.ts`) — every key always present, defaults filled in (POL-1). */
 const orgPoliciesSchema = z.object({
   requireStrongSignIn: z.boolean(),
-  maximumSessionAgeMinutes: z.number().int().nonnegative().max(43_200).nullable(),
+  // Whole minutes from 15 to 43,200 (30 days), or null for none. The server reads a damaged stored value as its
+  // strictest, 0 (no sign-in is fresh enough), so 0 is the one other value it can answer (policies-core SPECS).
+  maximumSessionAgeMinutes: z.union([z.literal(0), z.number().int().min(15).max(43_200)]).nullable(),
   guests: z.enum(['off', 'approve', 'on']),
   publicShareLinks: z.boolean(),
   publishWeb: z.boolean(),

@@ -858,6 +858,7 @@ describe('passkey-service', () => {
           credential: { id: 'cred-id', publicKey: new Uint8Array([1, 2, 3]), counter: 0 },
           credentialDeviceType: 'multiDevice',
           credentialBackedUp: true,
+          userVerified: true,
         },
       });
 
@@ -877,6 +878,8 @@ describe('passkey-service', () => {
       if (result.ok) {
         expect(result.data.userId).toBe('test-cuid');
         expect(result.data.passkeyId).toBe('test-cuid');
+        // SEC-2 (D-OW-45): the signup ceremony's user verification is reported so the session records it.
+        expect(result.data.userVerified).toBe(true);
       }
     });
 

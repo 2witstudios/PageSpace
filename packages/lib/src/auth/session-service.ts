@@ -66,7 +66,14 @@ export interface SessionValidationFailure {
 export type SessionValidationResult = SessionValidationSuccess | SessionValidationFailure;
 
 export interface CreateSessionOptions {
-  authentication?: VerifiedAuthentication | null;
+  /**
+   * REQUIRED, so no sign-in path can forget it (D-OW-45). A sign-in route passes the evidence of the ceremony it just
+   * verified (`ceremonyAuthentication`); a derived credential passes its parent's evidence unchanged. `null` is named
+   * explicitly by exactly two kinds of caller: machine credentials no person signed in for (service tokens, drive-env
+   * bridge tokens), and credentials derived from a parent minted before evidence existed. Org sign-in policies refuse
+   * null evidence, so neither can open an org drive under a policy.
+   */
+  authentication: VerifiedAuthentication | null;
   userId: string;
   type: 'user' | 'service' | 'mcp' | 'device' | 'socket';
   scopes: string[];

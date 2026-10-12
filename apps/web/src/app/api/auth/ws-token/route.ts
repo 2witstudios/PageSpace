@@ -48,7 +48,7 @@ export async function POST(request: Request) {
   const wsPolicy = getWsTokenPolicy();
   const token = await sessionService.createSession({
     userId: user.id,
-    authentication: user.authentication,
+    authentication: user.authentication ?? null,
     type: wsPolicy.type,
     scopes: wsPolicy.scopes,
     expiresInMs: wsPolicy.ttlMs,

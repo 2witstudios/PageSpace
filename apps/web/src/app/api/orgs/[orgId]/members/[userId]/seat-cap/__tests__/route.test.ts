@@ -25,7 +25,7 @@ const req = (method: string, body?: unknown) => new Request('https://example.com
 describe('/api/orgs/[orgId]/members/[userId]/seat-cap', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(authorizeOrgRequest).mockResolvedValue({ ok: true, userId: 'u-ana', role: 'ADMIN', allowedDriveIds: [], actor: credentialActor('u-ana', null) });
+    vi.mocked(authorizeOrgRequest).mockResolvedValue({ ok: true, userId: 'u-ana', role: 'ADMIN', allowedDriveIds: [], authentication: null, actor: credentialActor('u-ana', null) });
   });
 
   it('WAL-7 (partial) an Admin\'s PUT reaches the service with the windows; DELETE clears', async () => {

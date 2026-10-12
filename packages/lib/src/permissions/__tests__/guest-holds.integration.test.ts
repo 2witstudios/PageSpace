@@ -109,7 +109,7 @@ afterAll(async () => {
   await pool.end();
 });
 
-const setGuests = (guests: 'off' | 'approve' | 'on', orgId = w.orgId) => updateOrgPolicies({ orgId, actorId: w.owner, patch: { guests } });
+const setGuests = (guests: 'off' | 'approve' | 'on', orgId = w.orgId) => updateOrgPolicies({ orgId, actorId: w.owner, actorAuthentication: null, patch: { guests } });
 
 /** A full guest: a MEMBER-role invite with a view grant on `page` and an edit grant on `page2`. */
 async function seedMemberGuest() {

@@ -111,7 +111,7 @@ function ctxFor(userId: string): EnforcedAuthContext {
   return EnforcedAuthContext.fromSession(claims);
 }
 
-const setGuests = (guests: 'off' | 'approve' | 'on') => updateOrgPolicies({ orgId: w.orgId, actorId: w.owner, patch: { guests } });
+const setGuests = (guests: 'off' | 'approve' | 'on') => updateOrgPolicies({ orgId: w.orgId, actorId: w.owner, actorAuthentication: null, patch: { guests } });
 const VIEW = { canView: true, canEdit: false, canShare: false, canDelete: false };
 const EDIT = { canView: true, canEdit: true, canShare: false, canDelete: false };
 const grant = (targetUserId: string, permissions = VIEW, pageId = w.page, actor = w.owner) =>

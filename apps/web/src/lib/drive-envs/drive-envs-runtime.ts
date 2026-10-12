@@ -55,6 +55,7 @@ import { createHash, createPublicKey, randomBytes, verify as nodeVerify } from '
 import { createId } from '@paralleldrive/cuid2';
 import { loadServerSigningKey } from '@pagespace/lib/auth/env-bridge-signing-key';
 import { sessionService } from '@pagespace/lib/auth/session-service';
+import { MACHINE_CREDENTIAL_AUTHENTICATION } from '@pagespace/lib/auth/authentication-evidence';
 import {
   enrollLocalDriveEnv,
   issueLocalEnvChallenge,
@@ -192,6 +193,8 @@ async function localEnvIdentityServiceDeps(): Promise<LocalEnvIdentityServiceDep
     // (which validates `expectedType: 'user'`) will ever accept it.
     mintToken: (policy, machine) =>
       sessionService.createSession({
+        // A machine's bridge credential: no person signed in for it (D-OW-45).
+        authentication: MACHINE_CREDENTIAL_AUTHENTICATION,
         userId: machine.ownerId,
         type: policy.type,
         scopes: policy.scopes,

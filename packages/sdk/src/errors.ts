@@ -61,21 +61,41 @@ export abstract class PageSpaceError extends Error {
   }
 }
 
+/**
+ * An organization's sign-in policy refused the credential (D-OW-45): strong sign-in (a passkey) is required, or the
+ * sign-in is older than the org allows. Actionable: sign in again (`pagespace login`), with a passkey for the first.
+ */
+export type OrgSignInRequirement = 'org_strong_sign_in_required' | 'org_reauthentication_required';
+
+const ORG_SIGN_IN_REQUIREMENTS: ReadonlySet<string> = new Set<OrgSignInRequirement>([
+  'org_strong_sign_in_required',
+  'org_reauthentication_required',
+]);
+
+const isOrgSignInRequirement = (value: unknown): value is OrgSignInRequirement =>
+  typeof value === 'string' && ORG_SIGN_IN_REQUIREMENTS.has(value);
+
 export class AuthenticationError extends PageSpaceError {
   readonly code = 'AUTHENTICATION_ERROR' as const;
   readonly status = 401 as const;
+  /** Set only when the body's `code` is exactly one of the two org sign-in codes. */
+  readonly orgSignInRequirement: OrgSignInRequirement | null;
 
-  constructor(message: string, operation?: string) {
+  constructor(message: string, operation?: string, orgSignInRequirement: OrgSignInRequirement | null = null) {
     super(message, operation);
+    this.orgSignInRequirement = orgSignInRequirement;
   }
 }
 
 export class PermissionDeniedError extends PageSpaceError {
   readonly code = 'PERMISSION_DENIED' as const;
   readonly status = 403 as const;
+  /** Set only when the body's `code` is exactly one of the two org sign-in codes. */
+  readonly orgSignInRequirement: OrgSignInRequirement | null;
 
-  constructor(message: string, operation?: string) {
+  constructor(message: string, operation?: string, orgSignInRequirement: OrgSignInRequirement | null = null) {
     super(message, operation);
+    this.orgSignInRequirement = orgSignInRequirement;
   }
 }
 
@@ -245,6 +265,13 @@ export function isPermissionDeniedError(error: unknown): error is PermissionDeni
   return hasErrorCode(error, 'PERMISSION_DENIED');
 }
 
+/** Realm-independent: the org sign-in requirement a 401/403 carries, or null (D-OW-45). */
+export function orgSignInRequirementOf(error: unknown): OrgSignInRequirement | null {
+  if (!isAuthenticationError(error) && !isPermissionDeniedError(error)) return null;
+  const value = (error as { orgSignInRequirement?: unknown }).orgSignInRequirement;
+  return isOrgSignInRequirement(value) ? value : null;
+}
+
 export function isNotFoundError(error: unknown): error is NotFoundError {
   return hasErrorCode(error, 'NOT_FOUND');
 }
@@ -359,12 +386,13 @@ export function classifyHttpError(
   operation?: string,
 ): PageSpaceError {
   const message = extractMessage(status, body);
+  const orgSignIn = isPlainObject(body) && isOrgSignInRequirement(body.code) ? body.code : null;
 
   switch (status) {
     case 401:
-      return new AuthenticationError(message, operation);
+      return new AuthenticationError(message, operation, orgSignIn);
     case 403:
-      return new PermissionDeniedError(message, operation);
+      return new PermissionDeniedError(message, operation, orgSignIn);
     case 404:
       return new NotFoundError(message, operation);
     case 400:

@@ -3,6 +3,7 @@ import path from 'path';
 import 'dotenv/config';
 import { factories } from '@pagespace/db/test/factories';
 import { sessionService } from '../../packages/lib/src/auth/session-service';
+import { ceremonyAuthentication } from '../../packages/lib/src/auth/authentication-evidence';
 import { seedNorthwind } from './fixtures/northwind';
 
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -45,6 +46,8 @@ export default async function globalSetup() {
   const user = await factories.createUser();
   const drive = await factories.createDrive(user.id);
   const token = await sessionService.createSession({
+    // Test fixture: stands in for an emailed-link sign-in (D-OW-45).
+    authentication: ceremonyAuthentication({ method: 'magic_link' }, Date.now()),
     userId: user.id,
     type: 'user',
     scopes: [],
