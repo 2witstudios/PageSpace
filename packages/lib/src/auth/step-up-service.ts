@@ -1,3 +1,4 @@
+import type { VerifiedAuthentication } from './authentication-evidence';
 /**
  * Step-up Service (Phase 8 task d2wicbqyia6u30axz8j2j4ab)
  *
@@ -45,6 +46,7 @@ import {
   STEP_UP_MAGIC_LINK_EXPIRY_MINUTES,
 } from './step-up-constants';
 import {
+  readStepUpAuthentication,
   computeActionBindingHash,
   decideStepUpChallenge,
   decideStepUpGrant,
@@ -70,16 +72,18 @@ export type VerifyStepUpResult =
   | { readonly ok: true; readonly data: { readonly stepUpToken: string } }
   | { readonly ok: false; readonly error: StepUpError };
 
-export type ConsumeStepUpGrantResult = { readonly ok: true } | { readonly ok: false; readonly error: StepUpError };
+export type ConsumeStepUpGrantResult = { readonly ok: true; readonly authentication: VerifiedAuthentication } | { readonly ok: false; readonly error: StepUpError };
 
 export type RequestMagicLinkStepUpResult = { readonly ok: true } | { readonly ok: false; readonly error: StepUpError };
 
 const mintStepUpGrant = async ({
   userId,
   actionBindingHash,
+  authentication,
 }: {
   readonly userId: string;
   readonly actionBindingHash: string;
+  readonly authentication: VerifiedAuthentication;
 }): Promise<string> => {
   const { token, hash, tokenPrefix } = generateToken('ps_stepup');
   const expiresAt = new Date(Date.now() + STEP_UP_GRANT_EXPIRY_MINUTES * 60 * 1000);
@@ -91,7 +95,7 @@ const mintStepUpGrant = async ({
     tokenPrefix,
     type: 'stepup_grant',
     expiresAt,
-    metadata: JSON.stringify({ actionBindingHash }),
+    metadata: JSON.stringify({ actionBindingHash, authentication }),
   });
 
   return token;
@@ -238,7 +242,10 @@ export async function verifyWebauthnStepUp(input: unknown): Promise<VerifyStepUp
     return { ok: false, error: { code: 'STEP_UP_INVALID' } };
   }
 
-  const stepUpToken = await mintStepUpGrant({ userId, actionBindingHash });
+  const stepUpToken = await mintStepUpGrant({ userId, actionBindingHash, authentication: {
+    authenticatedAtMs: Date.now(),
+    assurance: verification.authenticationInfo.userVerified === true ? 'user_verified_passkey' : 'single_factor',
+  } });
   return { ok: true, data: { stepUpToken } };
 }
 
@@ -265,6 +272,9 @@ export async function consumeStepUpGrant(input: unknown): Promise<ConsumeStepUpG
     return { ok: false, error: { code: 'STEP_UP_REQUIRED' } };
   }
 
+  const authentication = readStepUpAuthentication(grantRow.metadata, Date.now());
+  if (!authentication) return { ok: false, error: { code: 'STEP_UP_REQUIRED' } };
+
   const consumed = await db
     .update(verificationTokens)
     .set({ usedAt: new Date() })
@@ -275,7 +285,7 @@ export async function consumeStepUpGrant(input: unknown): Promise<ConsumeStepUpG
     return { ok: false, error: { code: 'STEP_UP_REQUIRED' } };
   }
 
-  return { ok: true };
+  return { ok: true, authentication };
 }
 
 const requestMagicLinkStepUpSchema = z.object({
@@ -335,6 +345,6 @@ export async function completeMagicLinkStepUp(input: unknown): Promise<VerifySte
   const verdict = decideMagicLinkStepUpMetadata(parsed.data.metadata);
   if (verdict.outcome !== 'valid') return { ok: false, error: { code: 'STEP_UP_INVALID' } };
 
-  const stepUpToken = await mintStepUpGrant({ userId: parsed.data.userId, actionBindingHash: verdict.actionBindingHash });
+  const stepUpToken = await mintStepUpGrant({ userId: parsed.data.userId, actionBindingHash: verdict.actionBindingHash, authentication: { authenticatedAtMs: Date.now(), assurance: 'single_factor' } });
   return { ok: true, data: { stepUpToken } };
 }

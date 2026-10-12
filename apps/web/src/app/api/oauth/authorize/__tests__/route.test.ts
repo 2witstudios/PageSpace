@@ -91,7 +91,7 @@ function getRequest(overrides: Record<string, string | undefined> = {}): Request
 beforeEach(() => {
   vi.clearAllMocks();
   checkDistributedRateLimit.mockResolvedValue(ALLOWED);
-  vi.mocked(consumeStepUpGrant).mockResolvedValue({ ok: true });
+  vi.mocked(consumeStepUpGrant).mockResolvedValue({ ok: true, authentication: { authenticatedAtMs: Date.now() - 60000, assurance: 'user_verified_passkey' } });
   // appOrigin() (issue #1908 hardening) only trusts this configured value —
   // never x-forwarded-host/x-forwarded-proto. Matches the real deployment,
   // where NEXT_PUBLIC_APP_URL is baked into the build image.

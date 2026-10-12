@@ -171,7 +171,7 @@ describe('step-up-service', () => {
       if (!result.ok) expect(result.error.code).toBe('STEP_UP_INVALID');
     });
 
-    it('mints a step-up grant token on a valid, correctly-bound assertion', async () => {
+    it.each([true, false])('SEC-2 (partial) records server-verified passkey assurance (UV=%s)', async (userVerified) => {
       mockDb.query.verificationTokens.findFirst.mockResolvedValue({
         id: 'challenge-1',
         usedAt: null,
@@ -187,7 +187,7 @@ describe('step-up-service', () => {
       });
       mockVerifyAuthResponse.mockResolvedValue({
         verified: true,
-        authenticationInfo: { newCounter: 1 },
+        authenticationInfo: { newCounter: 1, userVerified },
       });
 
       const result = await verifyWebauthnStepUp({
@@ -198,6 +198,10 @@ describe('step-up-service', () => {
       });
 
       expect(result.ok).toBe(true);
+      const minted = mockDb.insert.mock.results.at(-1)!.value.values.mock.calls[0][0];
+      expect(JSON.parse(minted.metadata).authentication).toEqual({
+        authenticatedAtMs: expect.any(Number), assurance: userVerified ? 'user_verified_passkey' : 'single_factor',
+      });
       if (result.ok) expect(result.data.stepUpToken).toBe('ps_stepup_rawtoken');
     });
 
@@ -320,17 +324,27 @@ describe('step-up-service', () => {
     });
 
     it('accepts and consumes a valid, correctly-bound, same-user grant', async () => {
+      const authentication = { authenticatedAtMs: Date.now() - 60000, assurance: 'user_verified_passkey' };
       mockDb.query.verificationTokens.findFirst.mockResolvedValue({
         id: 'grant-1',
         userId: 'user-1',
         usedAt: null,
         expiresAt: new Date(Date.now() + 60_000),
-        metadata: JSON.stringify({ actionBindingHash }),
+        metadata: JSON.stringify({ actionBindingHash, authentication }),
       });
 
       const result = await consumeStepUpGrant({ userId: 'user-1', token: 'ps_stepup_x', actionBinding });
 
-      expect(result.ok).toBe(true);
+      expect(result).toEqual({ ok: true, authentication });
+    });
+
+    it.each([undefined, { authenticatedAtMs: Date.now() + 86400000, assurance: 'user_verified_passkey' }])('SEC-3 (partial) fails closed when grant ceremony evidence is absent or invalid', async (authentication) => {
+      mockDb.query.verificationTokens.findFirst.mockResolvedValue({
+        id: 'grant-1', userId: 'user-1', usedAt: null, expiresAt: new Date(Date.now() + 60000),
+        metadata: JSON.stringify({ actionBindingHash, authentication }),
+      });
+      expect(await consumeStepUpGrant({ userId: 'user-1', token: 'ps_stepup_x', actionBinding })).toEqual({ ok: false, error: { code: 'STEP_UP_REQUIRED' } });
+      expect(mockDb.update).not.toHaveBeenCalled();
     });
 
     it('rejects an mcp-token mint grant when presented against the update (PATCH) action binding for the same name + drive scopes, and vice versa', async () => {
@@ -361,7 +375,7 @@ describe('step-up-service', () => {
         userId: 'user-1',
         usedAt: null,
         expiresAt: new Date(Date.now() + 60_000),
-        metadata: JSON.stringify({ actionBindingHash }),
+        metadata: JSON.stringify({ actionBindingHash, authentication: { authenticatedAtMs: Date.now() - 60000, assurance: 'single_factor' } }),
       });
       // `decideStepUpGrant` saw `usedAt: null` and approved consumption, but
       // the atomic `usedAt IS NULL` update's `.returning()` comes back empty
@@ -458,6 +472,8 @@ describe('step-up-service', () => {
       });
 
       expect(result.ok).toBe(true);
+      const minted = mockDb.insert.mock.results.at(-1)!.value.values.mock.calls[0][0];
+      expect(JSON.parse(minted.metadata).authentication).toEqual({ authenticatedAtMs: expect.any(Number), assurance: 'single_factor' });
       if (result.ok) expect(result.data.stepUpToken).toBe('ps_stepup_rawtoken');
     });
   });

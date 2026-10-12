@@ -80,7 +80,7 @@ describe('requireStepUpGrant', () => {
   });
 
   it('returns null (proceed) once the grant is consumed, passing the given actionBinding through untouched', async () => {
-    vi.mocked(consumeStepUpGrant).mockResolvedValue({ ok: true });
+    vi.mocked(consumeStepUpGrant).mockResolvedValue({ ok: true, authentication: { authenticatedAtMs: Date.now() - 60000, assurance: 'user_verified_passkey' } });
 
     const actionBinding = { op: 'mint', name: 'Token', driveScopes: '[]' };
     const result = await requireStepUpGrant({
