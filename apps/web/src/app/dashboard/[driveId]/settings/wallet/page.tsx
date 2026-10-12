@@ -98,7 +98,7 @@ function WalletSections({ driveId, driveName, orgName, read, memberNames, capsRe
         <>
           <WalletBalanceCard driveId={driveId} driveName={driveName} orgName={orgName} wallet={wallet} panels={panels} onChanged={refresh} />
           {panels.rules && 'allocationCents' in wallet && (
-            <WalletRulesCard driveId={driveId} orgName={orgName} wallet={wallet} editable={panels.editRules} onChanged={refresh} />
+            <WalletRulesCard driveId={driveId} orgName={orgName} wallet={wallet} editable={panels.editRules} guestsEditable={panels.editAllocation} onChanged={refresh} />
           )}
           {panels.caps && <WalletCapsCard driveId={driveId} orgName={orgName} memberNames={memberNames} editable={panels.editCaps} revision={capsRevision} />}
           {panels.spendByMember && 'spendByConsumer' in wallet && <WalletSpendCard rows={wallet.spendByConsumer} spentCredits={wallet.spentCredits} />}

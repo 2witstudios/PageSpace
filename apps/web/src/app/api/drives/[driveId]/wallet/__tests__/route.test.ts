@@ -208,15 +208,20 @@ describe('POST / PATCH / DELETE /api/drives/[driveId]/wallet', () => {
 });
 
 describe('POST top-up and donate', () => {
-  it.each([
-    ['top-up', TOP_UP, topUpDriveWallet, 'topUp'],
-    ['donate', DONATE, donateToDrive, 'donation'],
-  ] as const)('WAL-3 (partial) WAL-4 (partial) %s passes amount and idempotency key through and answers the leg', async (_name, handler, service, key) => {
-    vi.mocked(service).mockResolvedValue({ ok: true, legId: 'leg-1', amountCents: 1_000, paidDebtCents: 0, duplicate: false });
-    const res = await handler(req('POST', '', { amountCents: 1_000, idempotencyKey: 'key-00000001' }), context);
+  it('WAL-3 (partial) a top-up passes amount and idempotency key through and answers the leg and the debt it paid', async () => {
+    vi.mocked(topUpDriveWallet).mockResolvedValue({ ok: true, legId: 'leg-1', amountCents: 1_000, paidDebtCents: 0, duplicate: false });
+    const res = await TOP_UP(req('POST', '', { amountCents: 1_000, idempotencyKey: 'key-00000001' }), context);
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ [key]: { legId: 'leg-1', amountCents: 1_000, paidDebtCents: 0, duplicate: false } });
-    expect(service).toHaveBeenCalledWith('u-marcus', DRIVE, { amountCents: 1_000, idempotencyKey: 'key-00000001' }, 'session');
+    expect(await res.json()).toEqual({ topUp: { legId: 'leg-1', amountCents: 1_000, paidDebtCents: 0, duplicate: false } });
+    expect(topUpDriveWallet).toHaveBeenCalledWith('u-marcus', DRIVE, { amountCents: 1_000, idempotencyKey: 'key-00000001' }, 'session');
+  });
+
+  it('WAL-4 (partial) a donation passes amount and idempotency key through and answers the leg (a donation pays no debt)', async () => {
+    vi.mocked(donateToDrive).mockResolvedValue({ ok: true, legId: 'leg-1', amountCents: 1_000, duplicate: false });
+    const res = await DONATE(req('POST', '', { amountCents: 1_000, idempotencyKey: 'key-00000001' }), context);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ donation: { legId: 'leg-1', amountCents: 1_000, duplicate: false } });
+    expect(donateToDrive).toHaveBeenCalledWith('u-marcus', DRIVE, { amountCents: 1_000, idempotencyKey: 'key-00000001' }, 'session');
   });
 
   it.each([

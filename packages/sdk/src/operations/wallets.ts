@@ -93,6 +93,7 @@ const LEAD_AND_ADMIN_ONLY_FIELDS = {
   periodEnd: absent,
   fallbackRule: absent,
   overshootChoice: absent,
+  guestSpendEnabled: absent,
   spendByConsumer: absent,
   pool: absent,
 } as const;

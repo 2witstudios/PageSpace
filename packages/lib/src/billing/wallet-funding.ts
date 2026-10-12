@@ -589,7 +589,6 @@ export interface DonationTarget {
   donationsEnabled: boolean;
   /** SUM of the wallet's funding legs' remaining (mirrored on wallets.topupRemainingCents). */
   legsRemainingCents: number;
-  debtCents: number;
 }
 
 export interface DonationInput {
@@ -614,9 +613,9 @@ export type DonationPlan =
       kind: 'donate';
       amountCents: number;
       donor: { monthlyRemainingCents: number; topupRemainingCents: number; spentMonthly: number; spentTopup: number };
-      /** The new donation leg: the whole gift, less whatever paid the wallet's debt. */
+      /** The new donation leg: the whole gift, never netted against the wallet's debt. */
       leg: { originalCents: number; remainingCents: number; nonRefundable: true };
-      target: { topupRemainingCents: number; debtCents: number; paidDebtCents: number };
+      target: { topupRemainingCents: number };
     }
   | { kind: 'refuse'; reason: DonationRefusal };
 
@@ -628,8 +627,11 @@ export type DonationPlan =
  * donor into debt and is never partial.
  *
  * The donor's balance is drawn monthly first, then top-up (the spend order). The drive
- * wallet receives it as its own non-refundable funding leg (D-OW-13) that lasts until
- * spent (WAL-3), paying the wallet's debt first exactly as a top-up does.
+ * wallet receives the WHOLE gift as its own non-refundable funding leg (D-OW-13) that lasts
+ * until spent (WAL-3). Unlike an owner's top-up, a donation never pays the wallet's debt:
+ * wallet debt is the funder's chosen landing for an overage (WAL-6c), netted from their next
+ * allocation (WAL-6d), and a donor's money funds spend made after it — attributable to them,
+ * never an overage that preceded it.
  */
 export function planDonation(input: DonationInput): DonationPlan {
   const amount = input.amountCents;
@@ -646,7 +648,6 @@ export function planDonation(input: DonationInput): DonationPlan {
   if (available < amount) return { kind: 'refuse', reason: 'insufficient_funds' };
 
   const draw = allocateSpend(b, amount);
-  const landed = applyPaymentToDebt(input.target.debtCents, input.target.legsRemainingCents, amount);
   return {
     kind: 'donate',
     amountCents: amount,
@@ -656,7 +657,7 @@ export function planDonation(input: DonationInput): DonationPlan {
       spentMonthly: draw.spentMonthly,
       spentTopup: draw.spentTopup,
     },
-    leg: { originalCents: amount, remainingCents: amount - landed.paidDebt, nonRefundable: true },
-    target: { topupRemainingCents: landed.topupCents, debtCents: landed.debtCents, paidDebtCents: landed.paidDebt },
+    leg: { originalCents: amount, remainingCents: amount, nonRefundable: true },
+    target: { topupRemainingCents: Math.max(0, input.target.legsRemainingCents) + amount },
   };
 }

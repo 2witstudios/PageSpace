@@ -154,6 +154,10 @@ export const revokeOrgInvitation = (orgId: string, invitationId: string) =>
 
 export const setOrgSeatAutoAdd = (orgId: string, autoAdd: boolean) => patch<{ autoAdd: boolean }>(orgKeys.seats(orgId), { autoAdd });
 
+/** WAL-7: the org pool's kill switch (Owner and Admins). A paused pool funds no seat and no drive wallet. */
+export const setOrgPoolPaused = (orgId: string, paused: boolean) =>
+  patch<{ walletId: string; status: 'active' | 'paused' | 'over' }>(`${orgKeys.detail(orgId)}/pool`, { paused });
+
 interface DriveMembersResponse {
   members: { userId: string; user: { email: string } }[];
 }

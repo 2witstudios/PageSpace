@@ -680,7 +680,7 @@ export async function refundFundingLeg(legId: string, cents: number): Promise<Le
 // ---------------------------------------------------------------------------
 
 export type DonationOutcome =
-  | { kind: 'donated'; legId: string; amountCents: number; paidDebtCents: number }
+  | { kind: 'donated'; legId: string; amountCents: number }
   | { kind: 'duplicate'; legId: string | null }
   | { kind: 'refused'; reason: DonationRefusal | 'wallet_not_found' | 'billing_disabled' | 'drive_moved' };
 
@@ -775,7 +775,6 @@ export async function donateToDriveWallet(input: DonateInput): Promise<DonationO
         subjectType: drive.subjectType,
         donationsEnabled: drive.donationsEnabled,
         legsRemainingCents: drive.topupRemainingCents,
-        debtCents: drive.debtCents,
       },
     });
     if (plan.kind === 'refuse') return { kind: 'refused', reason: plan.reason };
@@ -808,11 +807,7 @@ export async function donateToDriveWallet(input: DonateInput): Promise<DonationO
       .where(eq(wallets.id, donor.id));
     await tx
       .update(wallets)
-      .set({
-        topupRemainingCents: plan.target.topupRemainingCents,
-        debtCents: plan.target.debtCents,
-        ...(drive.status === 'over' && plan.target.debtCents === 0 ? { status: 'active' as const } : {}),
-      })
+      .set({ topupRemainingCents: plan.target.topupRemainingCents })
       .where(eq(wallets.id, drive.id));
 
     await tx.insert(creditLedger).values([
@@ -838,6 +833,6 @@ export async function donateToDriveWallet(input: DonateInput): Promise<DonationO
       },
     ]);
 
-    return { kind: 'donated', legId: leg[0].id, amountCents: plan.amountCents, paidDebtCents: plan.target.paidDebtCents };
+    return { kind: 'donated', legId: leg[0].id, amountCents: plan.amountCents };
   });
 }

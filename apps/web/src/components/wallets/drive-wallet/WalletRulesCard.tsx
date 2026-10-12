@@ -32,15 +32,17 @@ interface WalletRulesCardProps {
   orgName: string | null;
   wallet: LeadWalletView | OrgAdminWalletView;
   editable: boolean;
+  /** D-OW-4: whether this viewer may open the wallet to guests (the money authority, `allocate`). */
+  guestsEditable: boolean;
   onChanged: () => Promise<unknown>;
 }
 
 /**
  * "What spends from this wallet" (Spec UI-9, SPEND-3, SPEND-6, WAL-4; canvas v9 DriveWallet): the
- * drive's default source, how automations spend (as a person, D-OW-34), guests (their own credits
- * until the per-drive switch exists, D-OW-4), the fallback rule and donations on/off.
+ * drive's default source, how automations spend (as a person, D-OW-34), whether guests may spend it
+ * (off by default and always within their caps, D-OW-4), the fallback rule and donations on/off.
  */
-export function WalletRulesCard({ driveId, orgName, wallet, editable, onChanged }: WalletRulesCardProps) {
+export function WalletRulesCard({ driveId, orgName, wallet, editable, guestsEditable, onChanged }: WalletRulesCardProps) {
   const [pending, setPending] = useState<string | null>(null);
 
   const save = async (field: string, body: Record<string, unknown>) => {
@@ -81,8 +83,13 @@ export function WalletRulesCard({ driveId, orgName, wallet, editable, onChanged 
           <Badge variant="outline">As a person</Badge>
         </Row>
         {orgName && (
-          <Row title="Guests" detail={`People outside ${orgName} invited to this drive.`}>
-            <Badge variant="outline">Their own credits</Badge>
+          <Row title="Guests" detail={`People outside ${orgName} invited to this drive. Off: they spend their own credits. On: they may spend this wallet too, always within their caps.`}>
+            <Switch
+              checked={wallet.guestSpendEnabled}
+              disabled={!guestsEditable || pending !== null}
+              onCheckedChange={(checked) => void save('guests', { guestSpendEnabled: checked })}
+              aria-label="Guests may spend this wallet"
+            />
           </Row>
         )}
         <Row title="When the wallet runs out" detail={orgName ? 'Org policy. A drive lead can only make this stricter.' : 'What a call does once this month’s allocation is spent.'}>

@@ -37,7 +37,7 @@ export async function POST(request: Request, context: RouteContext) {
       resourceId: driveId,
       details: { operation: 'donate_to_drive_wallet', amountCents: result.amountCents, legId: result.legId, duplicate: result.duplicate },
     });
-    return NextResponse.json({ donation: { legId: result.legId, amountCents: result.amountCents, paidDebtCents: result.paidDebtCents, duplicate: result.duplicate } });
+    return NextResponse.json({ donation: { legId: result.legId, amountCents: result.amountCents, duplicate: result.duplicate } });
   } catch (error) {
     loggers.api.error('Error in donate_to_drive_wallet:', error as Error);
     return NextResponse.json({ error: 'Failed to move the funds', code: 'internal_error' }, { status: 500 });

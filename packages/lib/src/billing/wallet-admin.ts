@@ -32,6 +32,8 @@ export interface WalletPatchInput {
   defaultSpendSource?: SpendSourceKind | null;
   /** WAL-6c: where this wallet's overshoot lands, the funder's choice; null restores the default. */
   overshootChoice?: OvershootFunderChoice | null;
+  /** D-OW-4: whether the drive's guests may spend this wallet (always within their caps). */
+  guestSpendEnabled?: boolean;
 }
 
 export interface WalletPatchSet {
@@ -41,6 +43,7 @@ export interface WalletPatchSet {
   donationsEnabled?: boolean;
   defaultSpendSource?: SpendSourceKind | null;
   overshootChoice?: OvershootFunderChoice | null;
+  guestSpendEnabled?: boolean;
 }
 
 export type WalletPatchPlan =
@@ -78,8 +81,31 @@ export function planWalletPatch(input: WalletPatchInput, current: { status: Wall
     actions.add('allocate');
     set.overshootChoice = input.overshootChoice;
   }
+  if (input.guestSpendEnabled !== undefined) {
+    // D-OW-4: opening the wallet to guests lets people outside the org spend the funder's money, so it
+    // takes the same money authority as an allocation: the org admins on an org drive (wallet-access).
+    actions.add('allocate');
+    set.guestSpendEnabled = input.guestSpendEnabled;
+  }
   if (actions.size === 0) return { kind: 'refuse', reason: 'nothing_to_change' };
   return { kind: 'patch', actions: [...actions], set };
+}
+
+// ---------------------------------------------------------------------------
+// The org pool's kill switch (WAL-7)
+// ---------------------------------------------------------------------------
+
+export type PoolPausePlan = { kind: 'set'; status: WalletStatus } | { kind: 'refuse'; reason: 'org_lapsed' };
+
+/**
+ * Pause or resume an org pool (WAL-7 "a kill switch pauses a wallet"). A paused pool funds nothing:
+ * no seat, no drive wallet under it (walletChainStatus), no org compute. Pausing always applies — it
+ * only restricts, and billing never blocks restricting ([D-OW-33]); resuming adds spend, an org-only
+ * capability a lapsed org does not have (SEAT-9). Resuming lands on `over` while the pool carries debt.
+ */
+export function planOrgPoolPause(input: { paused: boolean; debtCents: number; orgActive: boolean }): PoolPausePlan {
+  if (!input.paused && !input.orgActive) return { kind: 'refuse', reason: 'org_lapsed' };
+  return { kind: 'set', status: walletStatusFor({ paused: input.paused, debtCents: input.debtCents }) };
 }
 
 // ---------------------------------------------------------------------------
@@ -96,6 +122,7 @@ export function walletPatchOnlyRestricts(input: WalletPatchInput): boolean {
     paused: (v) => v === true,
     fallbackRule: (v) => v === 'refuse',
     donationsEnabled: (v) => v === false,
+    guestSpendEnabled: (v) => v === false,
     allocationCents: () => false,
     defaultSpendSource: () => false,
     overshootChoice: () => false,

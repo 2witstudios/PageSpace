@@ -52,12 +52,12 @@ import { listSpendChoices, resolveCallSpend, seatAllowanceFor, seatAllowancesFor
 import { conversationSpend, type CallSpendDecision } from '../billing/spend-target';
 import { formatCreditCount } from '../billing/money-model';
 import { toPersonalSubscriptionTier } from '../billing/subscription-tiers';
-import { capChangeOnlyRestricts, planDeleteWallet, planTopUp, planWalletPatch, walletPatchOnlyRestricts, type DeleteBlocker, type WalletPatchInput } from '../billing/wallet-admin';
+import { capChangeOnlyRestricts, planDeleteWallet, planOrgPoolPause, planTopUp, planWalletPatch, walletPatchOnlyRestricts, type DeleteBlocker, type WalletPatchInput } from '../billing/wallet-admin';
 import { donateToDriveWallet } from '../billing/wallet-funding-shell';
 import { checkOrgActive } from '../organizations/status';
 import { findMembershipRole, findOrganizationNames, listOrgMembers } from '../organizations/repository';
 import { loadSeatCapFactsForUsers } from '../billing/seat-allowance';
-import { planConsumerCapWrite, seatCapCheck, seatSpentCents, userConsumerKey, utcDayStartMs, utcMonthStartMs, type ConsumerCapWriteInput, type ConsumerCaps, type SpendSourceKind } from '../billing/wallet-core';
+import { planConsumerCapWrite, seatCapCheck, seatSpentCents, userConsumerKey, utcDayStartMs, utcMonthStartMs, type ConsumerCapWriteInput, type ConsumerCaps, type SpendSourceKind, type WalletStatus } from '../billing/wallet-core';
 import { getOrgPolicies, readOrgSpendPolicy } from '../organizations/policy-reader';
 import {
   capRemainingCents,
@@ -168,7 +168,15 @@ const WALLET_ROW = {
   donationsEnabled: wallets.donationsEnabled,
   defaultSpendSource: wallets.defaultSpendSource,
   overshootChoice: wallets.overshootChoice,
+  guestSpendEnabled: wallets.guestSpendEnabled,
 } as const;
+
+/** A wallet's own status (WAL-7: a drive wallet's parent's kill switch pauses it), or null when there is none. */
+async function walletStatusById(walletId: string | null): Promise<WalletStatus | null> {
+  if (walletId === null) return null;
+  const [row] = await db.select({ status: wallets.status }).from(wallets).where(eq(wallets.id, walletId)).limit(1);
+  return row?.status ?? null;
+}
 
 async function driveWalletRow(executor: Pick<typeof db, 'select'>, driveId: string) {
   const [row] = await executor
@@ -183,6 +191,7 @@ async function orgPoolRow(executor: Pick<typeof db, 'select'>, orgId: string) {
   const [row] = await executor
     .select({
       id: wallets.id,
+      status: wallets.status,
       monthlyRemainingCents: wallets.monthlyRemainingCents,
       topupRemainingCents: wallets.topupRemainingCents,
       debtCents: wallets.debtCents,
@@ -333,6 +342,8 @@ async function readView(userId: string, access: WalletAccess): Promise<DriveWall
       donationsEnabled: row.donationsEnabled,
       defaultSpendSource: row.defaultSpendSource,
       overshootChoice: row.overshootChoice,
+      guestSpendEnabled: row.guestSpendEnabled,
+      parentStatus: await walletStatusById(row.parentWalletId),
     },
     myCap: await myCapFacts(row.id, userId),
     spendByConsumer: seesSpend ? await spendByConsumer(row.id, row.monthlyPeriodStart) : [],
@@ -477,7 +488,7 @@ export async function updateDriveWallet(
   hooks: WalletWriteHooks = {},
 ): Promise<DriveWalletRead | WalletServiceError> {
   // Every field of a change is a write (allocate, pause, rules): a token may make none of them.
-  const refused = refuseCredential(credential, input.allocationCents !== undefined || input.overshootChoice !== undefined ? 'allocate' : input.paused !== undefined ? 'pause' : 'set_rules');
+  const refused = refuseCredential(credential, input.allocationCents !== undefined || input.overshootChoice !== undefined || input.guestSpendEnabled !== undefined ? 'allocate' : input.paused !== undefined ? 'pause' : 'set_rules');
   if (refused) return refused;
   const access = await walletAccess(userId, driveId, credential);
   if (!access.ok) return access;
@@ -901,6 +912,48 @@ export async function setSeatCap(
   return { ok: true, walletId: pool.id, caps: await capsOnWallet(pool.id) };
 }
 
+/**
+ * The org pool's kill switch (WAL-7): pause or resume the pool. Callers authorize (PATCH
+ * /api/orgs/[orgId]/pool: Owner and Admins, session only). A paused pool funds nothing — no seat,
+ * no drive wallet under it, no org compute — so every gate refuses source_paused until it resumes.
+ * Pausing applies even while the org is lapsed ([D-OW-33]); resuming does not (SEAT-9). Decided on
+ * the pool row locked FOR UPDATE, so it cannot race a refill or a settle into a stale status.
+ */
+export async function setOrgPoolPaused(
+  userId: string,
+  orgId: string,
+  paused: boolean,
+): Promise<{ ok: true; walletId: string; status: WalletStatus } | WalletServiceError> {
+  const active = await checkOrgActive(orgId);
+  const outcome = await db.transaction(async (tx): Promise<{ ok: true; walletId: string; status: WalletStatus; from: WalletStatus } | WalletServiceError> => {
+    const [pool] = await tx
+      .select({ id: wallets.id, status: wallets.status, debtCents: wallets.debtCents })
+      .from(wallets)
+      .where(and(eq(wallets.ownerType, 'org'), eq(wallets.orgId, orgId), isNull(wallets.subjectType), isNull(wallets.parentWalletId)))
+      .for('update');
+    if (!pool) return { ok: false, status: 409, code: 'no_org_pool', message: 'This organization has no pool yet' };
+    const plan = planOrgPoolPause({ paused, debtCents: pool.debtCents, orgActive: active.ok });
+    // Only a lapsed org is refused (SEAT-9: it may pause, never resume).
+    if (plan.kind === 'refuse' && !active.ok) return { ok: false, status: active.status, code: active.code, message: active.message };
+    if (plan.kind === 'refuse') return { ok: false, status: 409, code: 'org_lapsed', message: 'This organization is lapsed' };
+    if (plan.status !== pool.status) await tx.update(wallets).set({ status: plan.status }).where(eq(wallets.id, pool.id));
+    return { ok: true, walletId: pool.id, status: plan.status, from: pool.status };
+  });
+  if (!outcome.ok) return outcome;
+  if (outcome.from !== outcome.status) {
+    await recordOrgAuditEventAfterCommit({
+      orgId,
+      eventType: 'org.wallet.allocation_changed',
+      actorId: userId,
+      resourceType: 'org_pool',
+      resourceId: outcome.walletId,
+      details: { operation: paused ? 'pause_pool' : 'resume_pool', from: outcome.from, to: outcome.status },
+    });
+    void announceOrgChange(orgId, 'wallet');
+  }
+  return { ok: true, walletId: outcome.walletId, status: outcome.status };
+}
+
 /** One member's seat as Members & seats shows it (WAL-7, D-OW-38 "seat allowance remaining"). */
 export interface OrgSeatCapView {
   userId: string;
@@ -970,6 +1023,8 @@ export async function listOrgSeatCaps(orgId: string, now: Date = new Date()): Pr
 export interface OrgPoolSplit {
   /** The org pool, or null before the first payment funds one. */
   walletId: string | null;
+  /** The pool's status as shown (WAL-7: `paused` is its kill switch, `over` its debt); null without a pool. */
+  status: WalletStatus | null;
   /** What the pool can still spend this period (refill + top-ups − debt − holds). */
   availableCents: number;
   /** Of that, what no drive wallet's allocation still claims (poolUnallocatedCents). May be negative. */
@@ -992,7 +1047,7 @@ export async function getOrgPoolSplit(orgId: string, now: Date = new Date()): Pr
   const pool = await orgPoolRow(db, orgId);
   const facts = await poolFacts(orgId);
   if (!pool || !facts) {
-    return { walletId: null, availableCents: 0, unallocatedCents: 0, periodEnd: null, seats: { memberCount: Number(memberCount), allowanceCents: policies.seatAllowanceCents, allocatedCents: Number(memberCount) * policies.seatAllowanceCents, spentCents: 0 }, driveWallets: [], drivesWithoutWallet: [] };
+    return { walletId: null, status: null, availableCents: 0, unallocatedCents: 0, periodEnd: null, seats: { memberCount: Number(memberCount), allowanceCents: policies.seatAllowanceCents, allocatedCents: Number(memberCount) * policies.seatAllowanceCents, spentCents: 0 }, driveWallets: [], drivesWithoutWallet: [] };
   }
   // The gate's own seat facts per member (windowed by the seat period, each call netted to >= 0): never a
   // second ledger sum (review P2-4).
@@ -1011,11 +1066,12 @@ export async function getOrgPoolSplit(orgId: string, now: Date = new Date()): Pr
   const withWallet = new Set(children.flatMap((c) => (c.driveId ? [c.driveId] : [])));
   const driveWallets = children
     .flatMap((c) => (c.driveId && names.has(c.driveId)
-      ? [{ driveId: c.driveId, driveName: names.get(c.driveId) as string, walletId: c.id, allocationCents: c.allocationCents, spentCents: c.spentCents, status: displayedWalletStatus(c) }]
+      ? [{ driveId: c.driveId, driveName: names.get(c.driveId) as string, walletId: c.id, allocationCents: c.allocationCents, spentCents: c.spentCents, status: displayedWalletStatus({ ...c, parentStatus: pool.status }) }]
       : []))
     .sort((a, b) => a.driveName.localeCompare(b.driveName));
   return {
     walletId: pool.id,
+    status: displayedWalletStatus(pool),
     availableCents: facts.availableCents,
     unallocatedCents: poolUnallocatedCents(facts),
     periodEnd: pool.monthlyPeriodEnd?.toISOString() ?? null,
@@ -1032,7 +1088,7 @@ export async function donateToDrive(
   input: { amountCents: number; idempotencyKey: string },
   credential: WalletCredential,
   hooks: WalletWriteHooks = {},
-): Promise<{ ok: true; legId: string | null; amountCents: number; paidDebtCents: number; duplicate: boolean } | WalletServiceError> {
+): Promise<{ ok: true; legId: string | null; amountCents: number; duplicate: boolean } | WalletServiceError> {
   const refused = refuseCredential(credential, 'donate');
   if (refused) return refused;
   const access = await walletAccess(userId, driveId, credential);
@@ -1053,11 +1109,11 @@ export async function donateToDrive(
     afterDriveLock: hooks.afterDriveLock,
   });
   if (outcome.kind === 'donated') {
-    await recordOrgWalletEvent(access.standing, userId, 'org.wallet.donated', { amountCents: outcome.amountCents, paidDebtCents: outcome.paidDebtCents, legId: outcome.legId });
+    await recordOrgWalletEvent(access.standing, userId, 'org.wallet.donated', { amountCents: outcome.amountCents, legId: outcome.legId });
     void announceDriveWalletChange(driveId, 'balance');
-    return { ok: true, legId: outcome.legId, amountCents: outcome.amountCents, paidDebtCents: outcome.paidDebtCents, duplicate: false };
+    return { ok: true, legId: outcome.legId, amountCents: outcome.amountCents, duplicate: false };
   }
-  if (outcome.kind === 'duplicate') return { ok: true, legId: outcome.legId, amountCents: input.amountCents, paidDebtCents: 0, duplicate: true };
+  if (outcome.kind === 'duplicate') return { ok: true, legId: outcome.legId, amountCents: input.amountCents, duplicate: true };
   switch (outcome.reason) {
     case 'insufficient_funds':
       return { ok: false, status: 402, code: outcome.reason, message: 'Your balance cannot cover this donation' };

@@ -1,8 +1,11 @@
 import { NextResponse } from 'next/server';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { getOrgPoolSplit } from '@pagespace/lib/services/drive-wallet-service';
-import { authorizeOrgRequest, ORG_READ_AUTH } from '@/lib/orgs/org-route-auth';
+import { z } from 'zod';
+import { getOrgPoolSplit, setOrgPoolPaused } from '@pagespace/lib/services/drive-wallet-service';
+import { authorizeOrgRequest, ORG_READ_AUTH, ORG_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
+import { safeParseBody } from '@/lib/validation/parse-body';
+import { walletErrorResponse } from '@/lib/wallets/wallet-route';
 
 /**
  * GET /api/orgs/[orgId]/pool — the org pool and where it goes: available, unallocated, seats and every
@@ -26,5 +29,36 @@ export async function GET(request: Request, context: { params: Promise<{ orgId: 
   } catch (error) {
     loggers.api.error('Error reading the organization pool:', error as Error);
     return NextResponse.json({ error: 'Failed to load the credits pool', code: 'internal_error' }, { status: 500 });
+  }
+}
+
+const poolPauseSchema = z.object({ paused: z.boolean() }).strict();
+
+/**
+ * PATCH /api/orgs/[orgId]/pool `{ paused }` — the org pool's kill switch (WAL-7). Owner and Admins, a
+ * real session only (a token never changes a wallet, [D-OW-26]). A paused pool funds nothing: no seat,
+ * no drive wallet under it, no org compute. Pausing applies while the org is lapsed; resuming does not
+ * (SEAT-9, [D-OW-33]). Answers `{ walletId, status }`.
+ */
+export async function PATCH(request: Request, context: { params: Promise<{ orgId: string }> }) {
+  const { orgId } = await context.params;
+  const gate = await authorizeOrgRequest(request, orgId, 'ADMIN', ORG_WRITE_AUTH);
+  if (!gate.ok) return gate.response;
+  const parsed = await safeParseBody(request, poolPauseSchema);
+  if (!parsed.success) return parsed.response;
+  try {
+    const result = await setOrgPoolPaused(gate.userId, orgId, parsed.data.paused);
+    if (!result.ok) return walletErrorResponse(result);
+    auditRequest(request, {
+      eventType: 'data.write',
+      userId: gate.userId,
+      resourceType: 'organization',
+      resourceId: orgId,
+      details: { operation: parsed.data.paused ? 'pause_org_pool' : 'resume_org_pool', status: result.status },
+    });
+    return NextResponse.json({ walletId: result.walletId, status: result.status });
+  } catch (error) {
+    loggers.api.error('Error pausing or resuming the organization pool:', error as Error);
+    return NextResponse.json({ error: 'Failed to change the credits pool', code: 'internal_error' }, { status: 500 });
   }
 }

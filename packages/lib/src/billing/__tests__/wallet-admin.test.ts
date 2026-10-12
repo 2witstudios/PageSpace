@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { centsFromCredits } from '../money-model';
-import { planWalletPatch, planTopUp, planDeleteWallet, MAX_WALLET_CENTS } from '../wallet-admin';
+import { planWalletPatch, planTopUp, planDeleteWallet, planOrgPoolPause, walletPatchOnlyRestricts, MAX_WALLET_CENTS } from '../wallet-admin';
 
 const c = (credits: number): number => Math.round(centsFromCredits(credits));
 
@@ -98,5 +98,31 @@ describe('wallet-admin purity', () => {
     const src = readFileSync(fileURLToPath(new URL('../wallet-admin.ts', import.meta.url)), 'utf8');
     const imports = [...src.matchAll(/from\s+'([^']+)'/g)].map((m) => m[1]);
     expect(imports.sort()).toEqual(['../permissions/wallet-access', './credit-core', './wallet-core']);
+  });
+});
+
+describe('the drive\'s guest switch (D-OW-4)', () => {
+  const current = { status: 'active' as const, debtCents: 0 };
+  it('SPEND-6 (partial) opening a drive wallet to guests lets outsiders spend the funder\'s money, so it takes the money authority (allocate)', () => {
+    expect(planWalletPatch({ guestSpendEnabled: true }, current)).toEqual({ kind: 'patch', actions: ['allocate'], set: { guestSpendEnabled: true } });
+    expect(planWalletPatch({ guestSpendEnabled: false }, current)).toEqual({ kind: 'patch', actions: ['allocate'], set: { guestSpendEnabled: false } });
+  });
+
+  it('SPEND-6 (partial) closing the wallet to guests only restricts (a lapsed org may still do it, D-OW-33); opening it does not', () => {
+    expect(walletPatchOnlyRestricts({ guestSpendEnabled: false })).toBe(true);
+    expect(walletPatchOnlyRestricts({ guestSpendEnabled: true })).toBe(false);
+  });
+});
+
+describe('planOrgPoolPause — the org pool\'s kill switch (WAL-7)', () => {
+  it('WAL-7 (partial) pausing the pool always applies, even while the org is lapsed (D-OW-33: billing never blocks restricting)', () => {
+    expect(planOrgPoolPause({ paused: true, debtCents: 0, orgActive: true })).toEqual({ kind: 'set', status: 'paused' });
+    expect(planOrgPoolPause({ paused: true, debtCents: c(3), orgActive: false })).toEqual({ kind: 'set', status: 'paused' });
+  });
+
+  it('WAL-7 (partial) resuming restores active, or over while the pool carries debt; a lapsed org cannot resume its pool (SEAT-9)', () => {
+    expect(planOrgPoolPause({ paused: false, debtCents: 0, orgActive: true })).toEqual({ kind: 'set', status: 'active' });
+    expect(planOrgPoolPause({ paused: false, debtCents: c(3), orgActive: true })).toEqual({ kind: 'set', status: 'over' });
+    expect(planOrgPoolPause({ paused: false, debtCents: 0, orgActive: false })).toEqual({ kind: 'refuse', reason: 'org_lapsed' });
   });
 });

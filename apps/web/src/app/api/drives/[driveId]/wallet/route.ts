@@ -44,6 +44,8 @@ const patchSchema = z.object({
   defaultSpendSource: z.enum(SPEND_SOURCE_KINDS).nullable().optional(),
   // WAL-6c: where the wallet's overshoot lands (the funder's choice); null restores the default.
   overshootChoice: z.enum(OVERSHOOT_FUNDER_CHOICES).nullable().optional(),
+  // D-OW-4: whether the drive's guests may spend its wallet (always within their caps).
+  guestSpendEnabled: z.boolean().optional(),
 }).strict();
 
 export async function GET(request: Request, context: RouteContext) {

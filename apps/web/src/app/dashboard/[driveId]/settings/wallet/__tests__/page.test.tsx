@@ -65,6 +65,8 @@ const facts: DriveWalletFacts = {
     donationsEnabled: true,
     defaultSpendSource: 'drive_wallet',
     overshootChoice: null,
+    guestSpendEnabled: false,
+    parentStatus: 'active',
   },
   myCap: { dailyCapCents: 2_000, monthlyCapCents: null, spentTodayCents: 500, spentThisMonthCents: 500 },
   spendByConsumer: [{ consumerKey: 'user:u-priya', userId: 'u-priya', displayName: 'Priya Nair', spentCents: PRIYA_SPEND }],
@@ -142,6 +144,21 @@ describe('Drive Settings › Wallet', () => {
     renderPage();
     expect(screen.getByText(/Automations spend this drive's wallet only and never fall back to anyone's own credits/)).toBeTruthy();
     expect(screen.queryByText(/caps and fallback apply/)).toBeNull();
+  });
+
+  it('SPEND-6 (partial) D-OW-4: an ORG ADMIN opens the wallet to guests (off by default); the drive lead sees the switch but cannot turn it', async () => {
+    viewAs('org_admin');
+    const { unmount } = renderPage();
+    const guests = screen.getByRole('switch', { name: 'Guests may spend this wallet' });
+    expect(guests.getAttribute('aria-checked')).toBe('false');
+    fireEvent.click(guests);
+    await waitFor(() => expect(api.patch).toHaveBeenCalledWith('/api/drives/d-product/wallet', { guestSpendEnabled: true }));
+    unmount();
+    viewAs('lead', { guestSpendEnabled: true });
+    renderPage();
+    const leadSwitch = screen.getByRole('switch', { name: 'Guests may spend this wallet' });
+    expect(leadSwitch.getAttribute('aria-checked')).toBe('true');
+    expect(leadSwitch.hasAttribute('disabled')).toBe(true);
   });
 
   it('WAL-7 (partial) the pause switch pauses the wallet (the kill switch) and the status reads Paused', async () => {

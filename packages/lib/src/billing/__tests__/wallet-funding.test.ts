@@ -426,7 +426,7 @@ describe('wallet-funding: donations', () => {
     amountCents: 700,
     donorCanSeeDrive: true,
     donor: { walletId: 'w-ana', isPersonalRoot: true, balance: { monthlyCents: 500, topupCents: 1000, debtCents: 0 }, heldCents: 0 },
-    target: { walletId: 'w-product', subjectType: 'drive', donationsEnabled: true, legsRemainingCents: 200, debtCents: 0 },
+    target: { walletId: 'w-product', subjectType: 'drive', donationsEnabled: true, legsRemainingCents: 200 },
     ...over,
   });
 
@@ -436,13 +436,16 @@ describe('wallet-funding: donations', () => {
       amountCents: 700,
       donor: { monthlyRemainingCents: 0, topupRemainingCents: 800, spentMonthly: 500, spentTopup: 200 },
       leg: { originalCents: 700, remainingCents: 700, nonRefundable: true },
-      target: { topupRemainingCents: 900, debtCents: 0, paidDebtCents: 0 },
+      target: { topupRemainingCents: 900 },
     });
   });
 
-  it('a donation pays the drive wallet debt first; the leg keeps only what is left', () => {
-    const plan = planDonation(input({ target: { ...input().target, debtCents: 300 } }));
-    expect(plan).toMatchObject({ leg: { originalCents: 700, remainingCents: 400 }, target: { topupRemainingCents: 600, debtCents: 0, paidDebtCents: 300 } });
+  it('WAL-4 (partial) D-OW-13: a donation never pays the wallet\'s debt — the whole gift is the donor\'s leg; the plan writes no debt at all', () => {
+    // A funder who chose wallet debt (WAL-6c) nets it from their next allocation (WAL-6d); a donor's
+    // money funds spend made after it, attributable to them, never an overage that preceded it.
+    const plan = planDonation(input());
+    expect(plan).toMatchObject({ leg: { originalCents: 700, remainingCents: 700 } });
+    expect(plan.kind === 'donate' ? Object.keys(plan.target) : []).toEqual(['topupRemainingCents']);
   });
 
   it.each([
