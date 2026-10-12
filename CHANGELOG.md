@@ -7,7 +7,7 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 - Organization capabilities now require a verified payment or supported gift for the current subscription. A zero-dollar non-gift invoice or balance left from a previous subscription cannot activate an unpaid organization.
 
-- Included credits now follow the published money model: each Pro or Business payment includes credits worth a set share of what it paid, rather than its full price, and the plan cards, pricing page and Plan & seats page show the new monthly figures. Top-up packs are unchanged. A gifted organization's pool is funded the same way from the list price; staff gift an organization from the admin console, on the organization's own subscription.
+- Included credits now follow the published money model: each Pro or Business payment includes credits worth a set share of what it paid, rather than its full price, and the plan cards, pricing page and Plan & seats page show the new monthly figures. Top-up packs are unchanged. A gifted organization's pool is funded the same way from the list price; staff gift an organization from the admin console, on the organization's own subscription, for a fixed number of seats (inviting past them is refused until the gift changes), and can revoke the gift; gifting a lapsed organization cancels its unpaid renewal invoice and restores it at once.
 
 - Organization seats: re-adding someone in the last hour of a billing period no longer charges a proration, and a member who hits the seat limit is no longer told how many seats the organization has. On self-hosted and dedicated deployments every organization billing page and endpoint is absent for everyone.
 

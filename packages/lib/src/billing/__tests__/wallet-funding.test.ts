@@ -54,22 +54,42 @@ describe('wallet-funding: org pool refill', () => {
 
   it('MON-3 D-OW-30 a $0 trial-shaped org invoice (subscription_create, paid 0, subtotal 0) grants NOTHING: the pool is funded only from what was actually paid', () => {
     const grant = orgPoolRefillGrant(
-      { lines: [{ amount: 0 }], amountPaidCents: 0, hasSubscriptionParent: true, billingReason: 'subscription_create', subtotalCents: 0, extraSeats: 3 },
+      { lines: [{ amount: 0 }], amountPaidCents: 0, hasSubscriptionParent: true, billingReason: 'subscription_create', subtotalCents: 0 },
     );
     expect(grant).toEqual({ paidCents: 0, allowanceCents: 0, basis: 'none', reason: 'zero_amount' });
   });
 
   it('MON-3 D-OW-30 the FIRST real payment funds the pool from what it actually paid: base + 2 seats, 7000 paid → 4200', () => {
-    const first = { lines: [base, seats(2)], amountPaidCents: 7000, hasSubscriptionParent: true, billingReason: 'subscription_create', subtotalCents: 7000, extraSeats: 2 };
+    const first = { lines: [base, seats(2)], amountPaidCents: 7000, hasSubscriptionParent: true, billingReason: 'subscription_create', subtotalCents: 7000 };
     expect(orgPoolRefillGrant(first)).toEqual({ paidCents: 7000, allowanceCents: 4200, basis: 'paid', reason: 'paid' });
   });
 
   it('D-OW-23 a gifted org subscription (the admin path) is still funded at list price × ratio through the one named function', () => {
     const grant = orgPoolRefillGrant(
-      { lines: [giftedBase], hasVerifiedGiftPrice: true, amountPaidCents: 0, hasSubscriptionParent: true, billingReason: 'subscription_cycle', subtotalCents: 5000, gifted: true, onOrgSubscription: true },
+      { lines: [giftedBase], hasVerifiedGiftPrice: true, amountPaidCents: 0, hasSubscriptionParent: true, billingReason: 'subscription_cycle', subtotalCents: 5000, gifted: true, onOrgSubscription: true, giftedExtraSeats: 0 },
     );
     expect(grant).toMatchObject({ allowanceCents: orgPoolListPriceGrantCents(0), basis: 'list', reason: 'gifted' });
     expect(orgPoolListPriceGrantCents(0)).toBe(3000);
+  });
+
+  it('SEAT-8 (partial) D-OW-54 a gift funds list × ratio for exactly the seats the admin pinned, never the seats the invoice billed', () => {
+    // The Owner kept 10 throwaway invites live across the boundary: the gift invoice bills 10
+    // extra seats at $0. The admin pinned 2, so the pool is funded for 2.
+    const giftedSeats = { amount: SEAT_CENTS * 10, discount_amounts: [{ amount: SEAT_CENTS * 10 }] };
+    const grant = orgPoolRefillGrant({
+      lines: [giftedBase, giftedSeats], hasVerifiedGiftPrice: true, amountPaidCents: 0, hasSubscriptionParent: true,
+      billingReason: 'subscription_cycle', subtotalCents: 15000, gifted: true, onOrgSubscription: true, giftedExtraSeats: 2,
+    });
+    expect(grant).toEqual({ paidCents: 0, allowanceCents: orgPoolListPriceGrantCents(2), basis: 'list', reason: 'gifted' });
+    expect(grant.allowanceCents).toBe(4200);
+  });
+
+  it('SEAT-8 (partial) D-OW-54 a gift invoice with no admin-pinned seat quantity (a gift made outside the admin route) funds nothing and is no funding evidence', () => {
+    const gift = { lines: [giftedBase], hasVerifiedGiftPrice: true, amountPaidCents: 0, hasSubscriptionParent: true, billingReason: 'subscription_cycle', subtotalCents: 5000, gifted: true, onOrgSubscription: true };
+    for (const giftedExtraSeats of [null, undefined, -1, 1.5]) {
+      expect(orgPoolRefillGrant({ ...gift, giftedExtraSeats })).toEqual({ paidCents: 0, allowanceCents: 0, basis: 'none', reason: 'gift_quantity_unknown' });
+      expect(orgSubscriptionFundingBasis({ ...gift, giftedExtraSeats })).toBeNull();
+    }
   });
 
   it('D-OW-23 review #2761 P2-4: a gift NOT on the org\'s own subscription (a separately created gift subscription the org never mirrors) grants nothing — fail closed, no money into a pool the org cannot spend', () => {
@@ -77,7 +97,7 @@ describe('wallet-funding: org pool refill', () => {
     for (const onOrgSubscription of [false, undefined]) {
       expect(orgPoolRefillGrant({ ...gift, onOrgSubscription })).toEqual({ paidCents: 0, allowanceCents: 0, basis: 'none', reason: 'gift_not_org_subscription' });
     }
-    expect(orgPoolRefillGrant({ ...gift, onOrgSubscription: true })).toMatchObject({ basis: 'list', reason: 'gifted' });
+    expect(orgPoolRefillGrant({ ...gift, onOrgSubscription: true, giftedExtraSeats: 0 })).toMatchObject({ basis: 'list', reason: 'gifted' });
   });
 
   it('a 100% coupon on a non-gifted org subscription grants nothing: the line keeps list price, its discount takes it to 0', () => {
@@ -155,7 +175,7 @@ describe('wallet-funding: org pool refill', () => {
       ], PRICES);
       expect(orgPoolRefillGrant({
         lines: selection.refillLines, hasVerifiedGiftPrice: selection.hasVerifiedGiftPrice,
-        amountPaidCents: 0, hasSubscriptionParent: true, gifted: true, onOrgSubscription: true,
+        amountPaidCents: 0, hasSubscriptionParent: true, gifted: true, onOrgSubscription: true, giftedExtraSeats: 0,
       }).allowanceCents).toBe(0);
     });
 
@@ -165,7 +185,7 @@ describe('wallet-funding: org pool refill', () => {
       }], PRICES);
       expect(orgPoolRefillGrant({
         lines: selection.refillLines, hasVerifiedGiftPrice: selection.hasVerifiedGiftPrice,
-        amountPaidCents: 0, hasSubscriptionParent: true, gifted: true, onOrgSubscription: true,
+        amountPaidCents: 0, hasSubscriptionParent: true, gifted: true, onOrgSubscription: true, giftedExtraSeats: 0,
       }).allowanceCents).toBe(0);
     });
 
@@ -550,6 +570,6 @@ describe('organization first-funding evidence', () => {
     { paid: 0, verified: true, gifted: true, own: true, expected: 'gift' },
     { paid: 0, verified: true, gifted: true, own: false, expected: null },
   ])('recognizes only verified paid or own-subscription gift evidence: %j', ({ paid, verified, gifted, own, expected }) => {
-    expect(orgSubscriptionFundingBasis({ lines: [base], amountPaidCents: paid, hasSubscriptionParent: true, hasVerifiedGiftPrice: verified, gifted, onOrgSubscription: own })).toBe(expected);
+    expect(orgSubscriptionFundingBasis({ lines: [base], amountPaidCents: paid, hasSubscriptionParent: true, hasVerifiedGiftPrice: verified, gifted, onOrgSubscription: own, giftedExtraSeats: gifted ? 0 : null })).toBe(expected);
   });
 });

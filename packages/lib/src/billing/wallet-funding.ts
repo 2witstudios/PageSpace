@@ -165,8 +165,17 @@ export interface OrgPoolRefillInput {
    * reads its status from). A gift elsewhere funds nothing; absent reads as false (fail closed).
    */
   onOrgSubscription?: boolean;
-  /** Extra seats on the subscription, for sizing a gift at list price. */
-  extraSeats?: number;
+  /**
+   * D-OW-54: the extra seats the admin pinned when gifting (org_subscriptions.giftedExtraSeats),
+   * the ONLY quantity a gift is sized from. null/absent: not an admin-pinned gift.
+   */
+  giftedExtraSeats?: number | null;
+}
+
+/** The admin-pinned gifted extra seats, or null when there is no valid pin (fail closed). */
+function pinnedGiftSeats(input: Pick<OrgPoolRefillInput, 'giftedExtraSeats'>): number | null {
+  const n = input.giftedExtraSeats;
+  return typeof n === 'number' && Number.isInteger(n) && n >= 0 ? n : null;
 }
 
 function wholeCents(value: number | null | undefined): number {
@@ -191,7 +200,7 @@ export function orgInvoicePaidCents(input: Pick<OrgPoolRefillInput, 'lines' | 'a
 /** First-payment entitlement is independent of credit ratios and sub-cent rounding. */
 export function orgSubscriptionFundingBasis(input: OrgPoolRefillInput): 'paid' | 'gift' | null {
   if (!input.hasSubscriptionParent || input.hasVerifiedGiftPrice !== true) return null;
-  if (input.gifted === true) return input.onOrgSubscription === true ? 'gift' : null;
+  if (input.gifted === true) return input.onOrgSubscription === true && pinnedGiftSeats(input) !== null ? 'gift' : null;
   return orgInvoicePaidCents(input) > 0 ? 'paid' : null;
 }
 
@@ -199,8 +208,8 @@ export function orgSubscriptionFundingBasis(input: OrgPoolRefillInput): 'paid' |
  * MON-3: size the pool refill from what the org invoice PAID for its lines (the
  * Business base and the extra seats), net of discounts, times the Business ratio. More
  * seats paid means a bigger pool through the same derivation, with no second constant.
- * A gifted org subscription is funded at list price × ratio ([D-OW-23], D-OW-16 extended
- * to orgs). There is no org trial ([D-OW-30]): a $0 invoice that is not a gift — a
+ * A gifted org subscription is funded at list price × ratio for the admin-pinned gifted
+ * seats ([D-OW-23], [D-OW-54], D-OW-16 extended to orgs). There is no org trial ([D-OW-30]): a $0 invoice that is not a gift — a
  * trial-shaped subscription_create, or a 100% coupon on a non-gifted subscription
  * (D-OW-16d) — grants nothing, so creating orgs never mints credit.
  */
@@ -214,7 +223,11 @@ export function orgPoolRefillGrant(input: OrgPoolRefillInput): InvoiceGrant {
     // org's status reads its own subscription, so it stays lapsed. Grant nothing (review #2761 P2-4).
     if (input.onOrgSubscription !== true) return { paidCents, allowanceCents: 0, basis: 'none', reason: 'gift_not_org_subscription' };
     if (input.hasVerifiedGiftPrice !== true) return { paidCents, allowanceCents: 0, basis: 'none', reason: 'no_ratio' };
-    const allowanceCents = orgPoolListPriceGrantCents(input.extraSeats ?? 0);
+    // D-OW-54: sized for exactly the seats the admin pinned — never the invoice's seat line,
+    // which a gifted Owner could inflate for free with throwaway invites.
+    const seats = pinnedGiftSeats(input);
+    if (seats === null) return { paidCents, allowanceCents: 0, basis: 'none', reason: 'gift_quantity_unknown' };
+    const allowanceCents = orgPoolListPriceGrantCents(seats);
     return allowanceCents > 0
       ? { paidCents, allowanceCents, basis: 'list', reason: 'gifted' }
       : { paidCents, allowanceCents: 0, basis: 'none', reason: 'no_ratio' };

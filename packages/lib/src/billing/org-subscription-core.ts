@@ -61,7 +61,9 @@ export type OrgStripeOperation =
   | 'seat-item.create'
   | 'seat-quantity.update'
   | 'gift.coupon.create'
-  | 'gift.subscription.update';
+  | 'gift.subscription.update'
+  | 'gift.subscription.revoke'
+  | 'gift.invoice.void';
 
 function stableJson(value: unknown): string {
   if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null';

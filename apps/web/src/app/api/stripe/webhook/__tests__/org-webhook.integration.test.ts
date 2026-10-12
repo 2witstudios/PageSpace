@@ -467,7 +467,7 @@ describe('Stripe webhook — org routing, idempotency, lapse (real Postgres, in-
       setStripeStatus(org, 'active');
       fakeHolder.current = org.stripe;
       expect(await deliver(eventPayload('invoice.paid', firstPaid))).toBe(200);
-      const expected = orgPoolRefillGrant({ lines: firstPaid.lines.data, amountPaidCents: firstPaid.amount_paid, hasSubscriptionParent: true, billingReason: 'subscription_create', subtotalCents: firstPaid.subtotal, extraSeats: seats }).allowanceCents;
+      const expected = orgPoolRefillGrant({ lines: firstPaid.lines.data, amountPaidCents: firstPaid.amount_paid, hasSubscriptionParent: true, billingReason: 'subscription_create', subtotalCents: firstPaid.subtotal }).allowanceCents;
       expect(expected).toBeGreaterThan(0);
       const pool = await poolOf(org.orgId);
       expect(pool?.monthlyRemainingCents).toBe(expected);
@@ -505,10 +505,12 @@ describe('Stripe webhook — org routing, idempotency, lapse (real Postgres, in-
     expect(strayPool === null ? 0 : strayPool.monthlyRemainingCents).toBe(0);
     if (strayPool) expect(await ledgerRows(strayPool.id)).toHaveLength(0);
 
-    // The gift coupon on the org's OWN subscription (the runbook procedure): funded at list × ratio.
+    // An admin gift on the org's OWN subscription, pinned at 2 extra seats (the admin route
+    // writes the pin; D-OW-54): funded at list × ratio for exactly those seats.
     const own = await northwind(7);
     fakeHolder.current = own.stripe;
     setStripeStatus(own, 'active');
+    await db.update(orgSubscriptions).set({ giftedExtraSeats: 2 }).where(eq(orgSubscriptions.orgId, own.orgId));
     const ownGift = invoiceObject({ customer: own.customerId, subscriptionId: own.subscriptionId, metadata: giftMeta(own.orgId), seats: 2, paid: false, billingReason: 'subscription_cycle', periodStart: 1_800_000_000 });
     expect(await deliver(eventPayload('invoice.paid', ownGift))).toBe(200);
     expect((await getOrgStatus(own.orgId)).status).toBe('active');
@@ -538,7 +540,6 @@ describe('Stripe webhook — org routing, idempotency, lapse (real Postgres, in-
       hasSubscriptionParent: true,
       billingReason: 'subscription_create',
       subtotalCents: invoice.subtotal,
-      extraSeats: 2,
     }).allowanceCents;
     expect(expected).toBeGreaterThan(0);
 

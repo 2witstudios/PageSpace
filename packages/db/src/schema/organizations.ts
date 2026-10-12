@@ -124,6 +124,11 @@ export const orgSubscriptions = pgTable('org_subscriptions', {
   status: text('status').notNull(),
   // null = not yet verified from Stripe; reporting must not assume it is paid.
   gifted: boolean('gifted'),
+  // SEAT-8 / D-OW-54: the extra seats an admin gift pins (base seats implied), set by the admin
+  // gift and cleared by its revoke; null when not gifted that way. While set, the seat item is
+  // held at this quantity, auto-add is refused past it, and a gift invoice funds the pool for
+  // exactly this many seats — never the invoice's live seat count.
+  giftedExtraSeats: integer('giftedExtraSeats'),
   trialEnd: timestamp('trialEnd', { mode: 'date' }),
   currentPeriodStart: timestamp('currentPeriodStart', { mode: 'date' }),
   currentPeriodEnd: timestamp('currentPeriodEnd', { mode: 'date' }),

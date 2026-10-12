@@ -37,7 +37,6 @@ import { getOrgStatus } from '@pagespace/lib/organizations/status';
 import { applyOrgPoolRefill, type OrgPoolRefillOutcome } from '@pagespace/lib/billing/wallet-funding-shell';
 import { orgBillingLockKey } from '@pagespace/lib/billing/org-subscription-core';
 import {
-  orgInvoiceExtraSeats,
   planOrgSubscriptionPriceMirror,
   planOrgSubscriptionMirror,
   routeBillingOwner,
@@ -234,11 +233,9 @@ export async function handleOrgInvoicePaid(
     logUnapplied(route, eventId, invoice.id ?? null);
     return null;
   }
-  const extraSeats = await invoiceExtraSeats(route.orgId, invoice, deps);
   // MON-3: the refill sums only the Business base and extra-seat lines, recognized by the
   // configured org price ids; stored subscription item ids cannot establish entitlement.
   const refill = await applyOrgPoolRefill(invoice, {
-    extraSeats,
     basePriceId: deps.basePriceId(),
     seatPriceId: deps.seatPriceId(),
   });
@@ -260,21 +257,6 @@ export async function handleOrgInvoicePaymentFailed(
   }
   const subscriptionId = invoiceSubscriptionId(invoice);
   return subscriptionId ? mirrorOrgSubscription(route.orgId, subscriptionId, eventId, deps) : null;
-}
-
-/**
- * The extra seats the invoice billed, for sizing a gift at list price: the
- * invoice's own seat line (a count), else the stored subscription's quantity, else 0.
- */
-async function invoiceExtraSeats(orgId: string, invoice: Stripe.Invoice, deps: OrgWebhookDeps): Promise<number> {
-  const fromInvoice = orgInvoiceExtraSeats(invoice.lines?.data ?? [], deps.seatPriceId());
-  if (fromInvoice !== null) return fromInvoice;
-  const [stored] = await db
-    .select({ extraSeatQuantity: orgSubscriptions.extraSeatQuantity })
-    .from(orgSubscriptions)
-    .where(eq(orgSubscriptions.orgId, orgId))
-    .limit(1);
-  return stored?.extraSeatQuantity ?? 0;
 }
 
 /** Production wiring: the app's Stripe client (read only here) and the configured seat price. */

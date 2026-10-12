@@ -26,11 +26,11 @@ import type {
   OrgLatestInvoice,
 } from '@pagespace/lib/billing/org-subscription-core';
 
-interface FakeInvoice {
+export interface FakeInvoice {
   id: string;
   customerId: string;
   subscriptionId: string;
-  status: 'open' | 'paid';
+  status: 'open' | 'paid' | 'void';
   amountDueCents: number;
   amountPaidCents: number;
   clientSecret: string;
@@ -223,7 +223,7 @@ export class FakeOrgStripe implements OrgBillingStripe {
     });
   }
 
-  private addInvoice(sub: OrgStripeSubscription, amountDueCents: number): FakeInvoice {
+  addInvoice(sub: OrgStripeSubscription, amountDueCents: number): FakeInvoice {
     const id = this.nextId('in');
     const invoice: FakeInvoice = {
       id,

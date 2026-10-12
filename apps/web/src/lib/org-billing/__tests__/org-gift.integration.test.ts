@@ -8,9 +8,16 @@
  *     what was paid × the included-credit ratio;
  *   - an admin gift, through the same lib shell the admin route calls
  *     (apps/admin .../orgs/[orgId]/gift-subscription), is written ON the org's stored
- *     subscription; the $0 invoice Stripe then issues carries the metadata the gift wrote
- *     and funds the pool at list price × ratio;
+ *     subscription for a pinned number of extra seats (D-OW-54); it voids the lapsed org's
+ *     open renewal invoice first, and the $0 invoice Stripe then issues — carrying the
+ *     metadata the gift wrote — lifts the lapse through the webhook and funds the pool at
+ *     list price × ratio for the pinned seats;
  *   - a gift invoice on any other subscription funds nothing.
+ *
+ * A second test covers the rest of D-OW-54: an interrupted gift completes on retry with its
+ * one coupon; past the gifted seats an invite is refused even with auto-add on; a gift invoice
+ * billing seats the Owner inflated funds only the pinned seats; and a revoke takes the gift
+ * off, after which a re-gift reuses the coupon.
  *
  * Stripe is the in-memory FakeOrgStripe (provisioning + the webhook's mirror read) plus a
  * gift port that writes into that same fake, so the gift invoice's metadata is derived from
@@ -34,7 +41,9 @@ import { ORG_ID_METADATA_KEY, ORG_SUBSCRIPTION_KIND, type OrgBusinessPrices } fr
 import { orgPoolListPriceGrantCents } from '@pagespace/lib/billing/wallet-funding';
 import { allowanceCentsForPaidCents, centsFromDollars, tierListPriceCents } from '@pagespace/lib/billing/money-model';
 import { TIER_PLAN_LIMITS } from '@pagespace/lib/billing/subscription-tiers';
-import { giftOrgSubscription, type OrgGiftStripe } from '@pagespace/lib/billing/org-gift';
+import { giftOrgSubscription, ungiftOrgSubscription, type OrgGiftStripe } from '@pagespace/lib/billing/org-gift';
+import { orgInvitations } from '@pagespace/db/schema/organizations';
+import { admitSeat } from '@pagespace/lib/organizations/seat-service';
 import { stripeConfig } from '@/lib/stripe-config';
 import { ensureOrgBusinessSubscription, type OrgBillingDeps, type OrgBillingStripe } from '@/lib/org-billing/org-subscription';
 import { FakeOrgStripe } from './fake-org-stripe';
@@ -67,22 +76,80 @@ const userIds: string[] = [];
 const eventIds: string[] = [];
 let dbAvailable = false;
 
-/** The admin gift's two Stripe writes, applied to the same in-memory Stripe the org lives in. */
+/** A $0 invoice Stripe issued for the gift, with the metadata and seat count it was issued with. */
+interface IssuedGiftInvoice {
+  id: string;
+  subscriptionId: string;
+  metadata: Record<string, string>;
+  extraSeats: number;
+}
+
+/**
+ * The admin gift's Stripe calls, applied to the same in-memory Stripe the org lives in. Faithful
+ * to what the gift relies on: metadata keys merge (an empty string removes one), a discount of
+ * '' removes the coupon, a billing-cycle reset issues a $0 invoice at once (paid, since the
+ * coupon zeroes it), and a subscription is `active` only once none of its invoices is open —
+ * a failed renewal left open keeps it lapsed whatever else is paid.
+ */
 class FakeGiftStripe implements OrgGiftStripe {
   coupons: Array<{ id: string; percentOff: number }> = [];
+  couponCreates = 0;
   discounts = new Map<string, string[]>();
   updates: Array<{ subscriptionId: string; anchorNow: boolean; proration: string }> = [];
+  issued: IssuedGiftInvoice[] = [];
+  voided: string[] = [];
+  failNextUpdate: Error | null = null;
   constructor(private readonly org: FakeOrgStripe) {}
+  async retrieveCoupon(id: string) {
+    return this.coupons.find((c) => c.id === id) ?? null;
+  }
   async createCoupon(params: Parameters<OrgGiftStripe['createCoupon']>[0]) {
+    if (this.coupons.some((c) => c.id === params.id)) throw new Error('resource_already_exists: Coupon already exists.');
+    this.couponCreates += 1;
     this.coupons.push({ id: params.id, percentOff: params.percent_off });
     return { id: params.id };
   }
+  async listOpenInvoiceIds(subscriptionId: string) {
+    return (this.org.invoices.get(subscriptionId) ?? []).filter((i) => i.status === 'open').map((i) => i.id);
+  }
+  async voidInvoice(invoiceId: string) {
+    const invoice = [...this.org.invoices.values()].flat().find((i) => i.id === invoiceId);
+    if (!invoice || invoice.status !== 'open') throw new Error(`Invoice '${invoiceId}' is not open`);
+    invoice.status = 'void';
+    this.voided.push(invoiceId);
+  }
   async updateSubscription(subscriptionId: string, params: Parameters<OrgGiftStripe['updateSubscription']>[1]) {
+    if (this.failNextUpdate) {
+      const error = this.failNextUpdate;
+      this.failNextUpdate = null;
+      throw error;
+    }
     const sub = this.org.subscriptions.get(subscriptionId);
     if (!sub) throw new Error(`No such subscription: '${subscriptionId}'`);
-    sub.metadata = { ...sub.metadata, ...params.metadata }; // Stripe merges metadata keys on update
-    this.discounts.set(subscriptionId, params.discounts.map((d) => d.coupon));
-    this.updates.push({ subscriptionId, anchorNow: params.billing_cycle_anchor === 'now', proration: params.proration_behavior });
+    const metadata: Record<string, string> = { ...sub.metadata };
+    for (const [k, v] of Object.entries(params.metadata)) {
+      if (v === '') delete metadata[k];
+      else metadata[k] = v;
+    }
+    sub.metadata = metadata;
+    this.discounts.set(subscriptionId, params.discounts === '' ? [] : params.discounts.map((d) => d.coupon));
+    if ('items' in params) {
+      for (const item of params.items) {
+        const target = sub.items.find((i) => i.id === item.id);
+        if (!target) throw new Error(`No such subscription item: '${item.id}'`);
+        target.quantity = item.quantity;
+      }
+    }
+    const anchorNow = 'billing_cycle_anchor' in params && params.billing_cycle_anchor === 'now';
+    this.updates.push({ subscriptionId, anchorNow, proration: params.proration_behavior });
+    if (anchorNow) {
+      const invoice = this.org.addInvoice(sub, 0);
+      invoice.status = 'paid';
+      const seatItem = sub.items.find((i) => i.priceId === PRICES.seatPriceId);
+      this.issued.push({ id: invoice.id, subscriptionId, metadata: { ...metadata }, extraSeats: seatItem?.quantity ?? 0 });
+      const open = (this.org.invoices.get(subscriptionId) ?? []).some((i) => i.status === 'open');
+      if (!open) sub.status = 'active';
+    }
     return { id: sub.id, status: sub.status };
   }
 }
@@ -108,7 +175,7 @@ async function northwind(seats: number): Promise<Org> {
 }
 
 /** A Business invoice: the base and `extraSeats` seat lines, at list (`paid`) or zeroed by a 100% coupon. */
-function invoiceObject(spec: { customer: string; subscriptionId: string; metadata: Record<string, string>; extraSeats: number; paid: boolean; billingReason: string; periodStart: number }) {
+function invoiceObject(spec: { customer: string; subscriptionId: string; metadata: Record<string, string>; extraSeats: number; paid: boolean; billingReason: string; periodStart: number; id?: string }) {
   const periodEnd = spec.periodStart + 30 * DAY;
   const lines = [
     { amount: spec.paid ? BASE_CENTS : 0, parent: { subscription_item_details: { subscription_item: 'si_base' } }, discount_amounts: [], quantity: 1, pricing: { price_details: { price: PRICES.basePriceId } }, period: { start: spec.periodStart, end: periodEnd } },
@@ -116,7 +183,7 @@ function invoiceObject(spec: { customer: string; subscriptionId: string; metadat
   ];
   const total = lines.reduce((sum, l) => sum + l.amount, 0);
   return {
-    id: `in_seat8_${Math.random().toString(36).slice(2, 12)}`,
+    id: spec.id ?? `in_seat8_${Math.random().toString(36).slice(2, 12)}`,
     object: 'invoice',
     currency: 'usd',
     customer: spec.customer,
@@ -187,7 +254,7 @@ describe('SEAT-8 an org exists only paid or gifted (real Postgres, in-memory Str
     }
   });
 
-  it('SEAT-8 creation starts one Business subscription awaiting a card with no trial and nothing funded (org lapsed); the first real paid invoice funds the pool at paid × ratio; an admin gift on the org\'s OWN subscription funds list × ratio; a gift on any other subscription funds nothing', async () => {
+  it('SEAT-8 creation starts one Business subscription awaiting a card with no trial and nothing funded (org lapsed); the first real paid invoice funds the pool at paid × ratio; an admin gift on the org\'s OWN subscription voids the lapsed renewal, lifts the lapse through its own $0 invoice and funds list × ratio for the pinned seats; a gift on any other subscription funds nothing', async () => {
     if (!dbAvailable) return;
     const extraSeats = 2;
     const org = await northwind(TIER_PLAN_LIMITS.business.includedSeats + extraSeats);
@@ -205,7 +272,7 @@ describe('SEAT-8 an org exists only paid or gifted (real Postgres, in-memory Str
 
     // An admin cannot gift a subscription Stripe will expire: refused, no Stripe write.
     const gift = new FakeGiftStripe(org.stripe);
-    expect(await giftOrgSubscription({ orgId: org.orgId, adminUserId: ADMIN_ID, reason: 'Design partner' }, gift)).toEqual({ kind: 'refused', reason: 'awaiting_first_payment' });
+    expect(await giftOrgSubscription({ orgId: org.orgId, adminUserId: ADMIN_ID, reason: 'Design partner', extraSeats }, gift)).toEqual({ kind: 'refused', reason: 'awaiting_first_payment' });
     expect(gift.coupons).toHaveLength(0);
 
     // 2. The first REAL payment funds the pool at what was paid × ratio.
@@ -219,20 +286,32 @@ describe('SEAT-8 an org exists only paid or gifted (real Postgres, in-memory Str
     expect(await poolCents(org.orgId)).toBe(paidGrant);
     expect((await getOrgStatus(org.orgId)).status).toBe('active');
 
-    // The renewal fails: the org lapses (past_due).
-    org.stripe.openRenewalInvoice(org.subscriptionId, 'past_due');
+    // The renewal fails: the org lapses (past_due), with that renewal invoice still open.
+    const renewal = org.stripe.openRenewalInvoice(org.subscriptionId, 'past_due');
     expect(await deliver('customer.subscription.updated', { id: org.subscriptionId, object: 'subscription', customer: org.customerId, status: 'past_due', metadata: meta })).toBe(200);
     expect((await getOrgStatus(org.orgId)).status).toBe('lapsed');
 
-    // 3. The admin gift: written ON the stored subscription, invoiced now because the org is lapsed.
-    const gifted = await giftOrgSubscription({ orgId: org.orgId, adminUserId: ADMIN_ID, reason: 'Design partner' }, gift);
-    expect(gifted).toMatchObject({ kind: 'gifted', subscriptionId: org.subscriptionId, restoresNow: true });
+    // 3. The admin gift, pinned at the org's 2 extra seats: it voids the open renewal first
+    // (no more retries charging the gifted period), then is written ON the stored subscription,
+    // re-anchored so Stripe issues the $0 gift invoice now.
+    const gifted = await giftOrgSubscription({ orgId: org.orgId, adminUserId: ADMIN_ID, reason: 'Design partner', extraSeats }, gift);
+    expect(gifted).toMatchObject({ kind: 'gifted', subscriptionId: org.subscriptionId, restoresNow: true, giftedExtraSeats: extraSeats, voidedInvoiceIds: [renewal.id] });
+    expect(renewal.status).toBe('void');
     expect(gift.updates).toEqual([{ subscriptionId: org.subscriptionId, anchorNow: true, proration: 'none' }]);
     expect(gift.coupons).toEqual([{ id: gift.discounts.get(org.subscriptionId)?.[0], percentOff: 100 }]);
-    // Stripe's $0 gift invoice carries the subscription metadata the gift wrote, and the subscription is paid up.
+    const [pinned] = await db.select({ giftedExtraSeats: orgSubscriptions.giftedExtraSeats }).from(orgSubscriptions).where(eq(orgSubscriptions.orgId, org.orgId));
+    expect(pinned.giftedExtraSeats).toBe(extraSeats);
+    // Nothing is hand-set: the org is still lapsed until Stripe's own events for the gift arrive.
+    expect((await getOrgStatus(org.orgId)).status).toBe('lapsed');
+
+    // Stripe's events for the gift: the subscription (as Stripe now holds it) and the $0 invoice
+    // it issued, carrying the metadata the gift wrote.
+    expect(gift.issued).toHaveLength(1);
+    const issued = gift.issued[0];
     const giftedSub = org.stripe.subscriptions.get(org.subscriptionId)!;
-    giftedSub.status = 'active';
-    const giftInvoice = invoiceObject({ customer: org.customerId, subscriptionId: org.subscriptionId, metadata: { ...(giftedSub.metadata ?? {}) }, extraSeats, paid: false, billingReason: 'subscription_update', periodStart: 1_800_000_000 + 40 * DAY });
+    expect(giftedSub.status).toBe('active'); // only because the failed renewal was voided
+    expect(await deliver('customer.subscription.updated', { id: org.subscriptionId, object: 'subscription', customer: org.customerId, status: giftedSub.status, metadata: giftedSub.metadata })).toBe(200);
+    const giftInvoice = invoiceObject({ id: issued.id, customer: org.customerId, subscriptionId: org.subscriptionId, metadata: issued.metadata, extraSeats: issued.extraSeats, paid: false, billingReason: 'subscription_update', periodStart: 1_800_000_000 + 40 * DAY });
     expect(giftInvoice.amount_paid).toBe(0);
     expect(await deliver('invoice.paid', giftInvoice)).toBe(200);
     const listGrant = orgPoolListPriceGrantCents(extraSeats);
@@ -242,15 +321,76 @@ describe('SEAT-8 an org exists only paid or gifted (real Postgres, in-memory Str
     const [stored] = await db.select({ gifted: orgSubscriptions.gifted }).from(orgSubscriptions).where(eq(orgSubscriptions.orgId, org.orgId));
     expect(stored.gifted).toBe(true);
     // Once gifted, a second gift is refused (fail closed, no second coupon).
-    expect(await giftOrgSubscription({ orgId: org.orgId, adminUserId: ADMIN_ID, reason: 'again' }, gift)).toEqual({ kind: 'refused', reason: 'already_gifted' });
-    expect(gift.coupons).toHaveLength(1);
+    expect(await giftOrgSubscription({ orgId: org.orgId, adminUserId: ADMIN_ID, reason: 'again', extraSeats }, gift)).toEqual({ kind: 'refused', reason: 'already_gifted' });
+    expect(gift.couponCreates).toBe(1);
 
     // 4. A gift invoice on ANY other subscription (an operator's separate one) funds nothing.
     const before = await poolCents(org.orgId);
-    const stray = invoiceObject({ customer: org.customerId, subscriptionId: 'sub_seat8_separate_gift', metadata: { ...(giftedSub.metadata ?? {}) }, extraSeats, paid: false, billingReason: 'subscription_cycle', periodStart: 1_800_000_000 + 80 * DAY });
+    const stray = invoiceObject({ customer: org.customerId, subscriptionId: 'sub_seat8_separate_gift', metadata: issued.metadata, extraSeats, paid: false, billingReason: 'subscription_cycle', periodStart: 1_800_000_000 + 80 * DAY });
     expect(await deliver('invoice.paid', stray)).toBe(200);
     expect(await poolCents(org.orgId)).toBe(before);
     const pool = await poolOf(org.orgId);
     expect(await db.select().from(creditLedger).where(eq(creditLedger.walletId, pool!.id))).toHaveLength(2);
+  });
+
+  it('SEAT-8 (partial) D-OW-54 a gift is fixed at its pinned seats: an interrupted gift completes on retry with one coupon, throwaway invites cannot raise it or its funding, and a revoke takes it off so a re-gift reuses the coupon', async () => {
+    if (!dbAvailable) return;
+    const pinnedSeats = 2;
+    const org = await northwind(TIER_PLAN_LIMITS.business.includedSeats + pinnedSeats);
+    const meta = { kind: ORG_SUBSCRIPTION_KIND, [ORG_ID_METADATA_KEY]: org.orgId };
+    org.stripe.payLatestInvoice(org.subscriptionId);
+    const firstPaid = invoiceObject({ customer: org.customerId, subscriptionId: org.subscriptionId, metadata: meta, extraSeats: pinnedSeats, paid: true, billingReason: 'subscription_create', periodStart: 1_810_000_000 });
+    expect(await deliver('invoice.paid', firstPaid)).toBe(200);
+    expect((await getOrgStatus(org.orgId)).status).toBe('active');
+
+    // Resumable: the coupon is created, then the subscription update fails. Nothing is pinned
+    // (the transaction rolled back); a retry with another reason reuses the one coupon.
+    const gift = new FakeGiftStripe(org.stripe);
+    gift.failNextUpdate = new Error('An error occurred with our connection to Stripe.');
+    await expect(giftOrgSubscription({ orgId: org.orgId, adminUserId: ADMIN_ID, reason: 'First try', extraSeats: pinnedSeats }, gift)).rejects.toThrow(/connection/);
+    expect(gift.couponCreates).toBe(1);
+    const [afterFailure] = await db.select({ giftedExtraSeats: orgSubscriptions.giftedExtraSeats }).from(orgSubscriptions).where(eq(orgSubscriptions.orgId, org.orgId));
+    expect(afterFailure.giftedExtraSeats).toBeNull();
+    expect(await giftOrgSubscription({ orgId: org.orgId, adminUserId: ADMIN_ID, reason: 'Second try, new reason', extraSeats: pinnedSeats }, gift)).toMatchObject({ kind: 'gifted', giftedExtraSeats: pinnedSeats });
+    expect(gift.couponCreates).toBe(1);
+    const sub = org.stripe.subscriptions.get(org.subscriptionId)!;
+    expect(sub.items.find((i) => i.priceId === PRICES.seatPriceId)?.quantity).toBe(pinnedSeats);
+    expect(await deliver('customer.subscription.updated', { id: org.subscriptionId, object: 'subscription', customer: org.customerId, status: sub.status, metadata: sub.metadata })).toBe(200);
+
+    // The throwaway-invite attack: auto-add on, invites up to the gifted seats are admitted and
+    // the next is refused — a gift is never raised.
+    await db.update(organizations).set({ seatAutoAdd: true }).where(eq(organizations.id, org.orgId));
+    const invite = (n: number) => ({
+      orgId: org.orgId,
+      email: `throwaway${n}-${Math.random().toString(36).slice(2, 8)}@example.test`,
+      tokenHash: `seat8-${Math.random().toString(36).slice(2)}-${n}`,
+      expiresAt: new Date(Date.now() + 7 * DAY * 1000),
+    });
+    // The Owner holds one seat; 6 live invites fill the 7 gifted seats.
+    await db.insert(orgInvitations).values(Array.from({ length: TIER_PLAN_LIMITS.business.includedSeats + pinnedSeats - 1 }, (_, n) => invite(n)));
+    const refused = await db.transaction((tx) => admitSeat(tx, { orgId: org.orgId, actorRole: 'OWNER' }));
+    expect(refused).toMatchObject({ ok: false, status: 402, purchased: TIER_PLAN_LIMITS.business.includedSeats + pinnedSeats });
+    expect(refused.ok === false && refused.message).toMatch(/gift/i);
+    expect(sub.items.find((i) => i.priceId === PRICES.seatPriceId)?.quantity).toBe(pinnedSeats);
+
+    // Even a gift invoice billing 10 extra seats (a quantity raised outside the app) funds only the pinned 2.
+    const before = await poolCents(org.orgId);
+    const inflated = invoiceObject({ customer: org.customerId, subscriptionId: org.subscriptionId, metadata: { ...sub.metadata }, extraSeats: 10, paid: false, billingReason: 'subscription_cycle', periodStart: 1_810_000_000 + 30 * DAY });
+    expect(await deliver('invoice.paid', inflated)).toBe(200);
+    expect((await poolCents(org.orgId)) - before).toBe(orgPoolListPriceGrantCents(pinnedSeats));
+
+    // Revoke: the coupon and the gift metadata come off; the pin is released.
+    expect(await ungiftOrgSubscription({ orgId: org.orgId, adminUserId: ADMIN_ID, reason: 'Partnership ended' }, gift)).toMatchObject({ kind: 'ungifted', subscriptionId: org.subscriptionId });
+    expect(gift.discounts.get(org.subscriptionId)).toEqual([]);
+    expect(sub.metadata?.type).toBeUndefined();
+    expect(sub.metadata?.giftedExtraSeats).toBeUndefined();
+    const [revoked] = await db.select({ gifted: orgSubscriptions.gifted, giftedExtraSeats: orgSubscriptions.giftedExtraSeats }).from(orgSubscriptions).where(eq(orgSubscriptions.orgId, org.orgId));
+    expect(revoked).toEqual({ gifted: false, giftedExtraSeats: null });
+    expect(await ungiftOrgSubscription({ orgId: org.orgId, adminUserId: ADMIN_ID, reason: 'again' }, gift)).toEqual({ kind: 'refused', reason: 'not_gifted' });
+
+    // A re-gift reuses the subscription's coupon instead of colliding with it.
+    expect(await giftOrgSubscription({ orgId: org.orgId, adminUserId: ADMIN_ID, reason: 'Back on', extraSeats: 3 }, gift)).toMatchObject({ kind: 'gifted', giftedExtraSeats: 3 });
+    expect(gift.couponCreates).toBe(1);
+    await db.delete(orgInvitations).where(eq(orgInvitations.orgId, org.orgId));
   });
 });

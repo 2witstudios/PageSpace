@@ -39,6 +39,7 @@ import { isBillingEnabled } from '../deployment-mode';
 import { getUserDriveAccess } from '../permissions/permissions';
 import { loggers } from '../logging/logger-config';
 import { tierAllowanceCents } from './money-model';
+import { orgBillingLockKey } from './org-subscription-core';
 import { computeMonthlyRefill } from './credit-core';
 import { RENEWAL_CAPABLE_STATUSES, TIER_ALLOWANCE_REFILLS } from './credit-pricing';
 import {
@@ -140,8 +141,6 @@ function hasSubscriptionParent(invoice: OrgInvoice): boolean {
 }
 
 export interface OrgPoolRefillOptions {
-  /** Extra seats on the subscription, for a gift funded at list price ([D-OW-23]). */
-  extraSeats?: number;
   /**
    * MON-3: the configured org plan price ids (stripe-config orgPriceIds) — the Business
    * base and the extra-seat item. Only lines on these prices refill the pool;
@@ -176,14 +175,21 @@ export async function applyOrgPoolRefill(invoice: OrgInvoice, opts: OrgPoolRefil
 
   const lines = invoice.lines?.data ?? [];
   const gifted = invoice.parent?.subscription_details?.metadata?.type === GIFT_SUBSCRIPTION_METADATA_TYPE;
-  // The gift gate requires the invoice to belong to the org's own subscription.
-  const [stored] = await db
-    .select({
-      stripeSubscriptionId: orgSubscriptions.stripeSubscriptionId,
-    })
-    .from(orgSubscriptions)
-    .where(eq(orgSubscriptions.orgId, org.id))
-    .limit(1);
+  // The gift gate requires the invoice to belong to the org's own subscription, and a gift is
+  // sized from the seats the admin pinned (D-OW-54). Read under the org's billing lock, so a
+  // gift being written right now (org-gift holds the lock across its Stripe writes) is seen
+  // committed, never half-applied.
+  const [stored] = await db.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${orgBillingLockKey(org.id)}, 0))`);
+    return tx
+      .select({
+        stripeSubscriptionId: orgSubscriptions.stripeSubscriptionId,
+        giftedExtraSeats: orgSubscriptions.giftedExtraSeats,
+      })
+      .from(orgSubscriptions)
+      .where(eq(orgSubscriptions.orgId, org.id))
+      .limit(1);
+  });
   const onOrgSubscription =
     gifted && invoiceSubscriptionIdOf(invoice) !== null && stored?.stripeSubscriptionId === invoiceSubscriptionIdOf(invoice);
 
@@ -213,7 +219,7 @@ export async function applyOrgPoolRefill(invoice: OrgInvoice, opts: OrgPoolRefil
     subtotalCents: invoice.subtotal,
     gifted,
     onOrgSubscription,
-    extraSeats: opts.extraSeats,
+    giftedExtraSeats: stored?.giftedExtraSeats ?? null,
   };
   const grant = orgPoolRefillGrant(grantInput);
   const basis = orgSubscriptionFundingBasis(grantInput);

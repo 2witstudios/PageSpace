@@ -121,6 +121,7 @@ export async function admitSeat(
     billingEnabled: isBillingEnabled(),
     period: sub ? { end: sub.currentPeriodEnd, reconciledThrough: sub.seatsReconciledThrough } : null,
     now: new Date(),
+    giftedExtraSeats: sub?.giftedExtraSeats ?? null,
   });
   if (decision.action === 'admit') return { ok: true, raised: false };
   if (decision.action === 'refuse') {
@@ -128,7 +129,7 @@ export async function admitSeat(
       ok: false,
       status: 402,
       reason: SEAT_REFUSED_CODE,
-      message: seatRefusalMessage({ purchased: decision.purchased, held: decision.held, actorRole: input.actorRole }),
+      message: seatRefusalMessage({ purchased: decision.purchased, held: decision.held, actorRole: input.actorRole, reason: decision.reason }),
       purchased: decision.purchased,
       held: decision.held,
     };
@@ -212,6 +213,7 @@ function releaseOrgSeatsInTx(
       reconciledThrough: sub.seatsReconciledThrough,
       now: input.now,
       leadMs: input.leadMs,
+      giftedExtraSeats: sub.giftedExtraSeats,
     };
     const markReconciled = async (boundary: Date, extra: { extraSeatQuantity?: number; seatRevision?: number } = {}) => {
       await tx

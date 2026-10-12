@@ -1,0 +1,1 @@
+ALTER TABLE "org_subscriptions" ADD COLUMN "giftedExtraSeats" integer;

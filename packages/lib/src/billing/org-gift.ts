@@ -1,16 +1,18 @@
 /**
- * org-gift — the I/O shell of an admin gifting an organization (Spec SEAT-8, [D-OW-23]);
- * the decision is org-gift-core's planOrgGift.
+ * org-gift — the I/O shell of an admin gifting an organization and revoking that gift (Spec
+ * SEAT-8, [D-OW-23], [D-OW-54]); the decisions are org-gift-core's planOrgGift / planOrgUngift.
  *
- * Zero trust: the org and its subscription id are re-read from the database under the
- * org's billing lock (the lock provisioning, seat sync and the webhook mirror hold), never
- * taken from the request. Stripe is reached only through {@link OrgGiftStripe}, so the
- * admin route passes its client and tests pass an in-memory one. Each write carries an
- * idempotency key, so a retried request replays instead of gifting twice.
+ * Zero trust: the org and its subscription are re-read from the database under the org's
+ * billing lock (the lock provisioning, seat sync, the webhook mirror and the pool refill's
+ * gift read hold), never taken from the request. Stripe is reached only through
+ * {@link OrgGiftStripe}, so the admin routes pass their client and tests pass an in-memory
+ * one. Each write carries an idempotency key, and the coupon is retrieved before it is
+ * created, so a gift interrupted between its writes completes on any retry.
  *
- * Funding is NOT written here: the gift's $0 invoice reaches the webhook's invoice.paid,
- * and the one funding path (applyOrgPoolRefill) funds the pool at list × ratio because the
- * invoice is on the org's own subscription and carries the gift metadata.
+ * Funding is NOT written here: the gift's $0 invoices reach the webhook's invoice.paid, and
+ * the one funding path (applyOrgPoolRefill) funds the pool at list × ratio for the pinned
+ * gifted seats because the invoice is on the org's own subscription and carries the gift
+ * metadata.
  */
 import { db } from '@pagespace/db/db';
 import { eq, sql } from '@pagespace/db/operators';
@@ -21,41 +23,102 @@ import { recordOrgAuditEventAfterCommit } from '../audit/org-audit';
 import { findMembershipRole, findOrganizationById } from '../organizations/repository';
 import { orgBillingLockKey } from './org-subscription-core';
 import {
+  orgGiftVoidKey,
   planOrgGift,
+  planOrgUngift,
   type OrgGiftCouponParams,
   type OrgGiftRefusal,
+  type OrgGiftStored,
   type OrgGiftSubscriptionUpdate,
+  type OrgUngiftSubscriptionUpdate,
 } from './org-gift-core';
 
-/** The two Stripe writes a gift makes — narrow, so tests supply an in-memory Stripe. */
+/** The Stripe calls a gift and its revoke make — narrow, so tests supply an in-memory Stripe. */
 export interface OrgGiftStripe {
+  /** The coupon, or null when Stripe has none with this id. */
+  retrieveCoupon(id: string): Promise<{ id: string } | null>;
   createCoupon(params: OrgGiftCouponParams, idempotencyKey: string): Promise<{ id: string }>;
-  updateSubscription(subscriptionId: string, params: OrgGiftSubscriptionUpdate, idempotencyKey: string): Promise<{ id: string; status: string }>;
+  /** Ids of the subscription's invoices still open (unpaid, collectable). */
+  listOpenInvoiceIds(subscriptionId: string): Promise<string[]>;
+  voidInvoice(invoiceId: string, idempotencyKey: string): Promise<void>;
+  updateSubscription(
+    subscriptionId: string,
+    params: OrgGiftSubscriptionUpdate | OrgUngiftSubscriptionUpdate,
+    idempotencyKey: string,
+  ): Promise<{ id: string; status: string }>;
 }
 
 export type OrgGiftResult =
   | { kind: 'refused'; reason: OrgGiftRefusal }
-  | { kind: 'gifted'; subscriptionId: string; couponId: string; status: string; restoresNow: boolean };
+  | {
+      kind: 'gifted';
+      subscriptionId: string;
+      couponId: string;
+      status: string;
+      restoresNow: boolean;
+      giftedExtraSeats: number;
+      voidedInvoiceIds: string[];
+    };
+
+export type OrgUngiftResult =
+  | { kind: 'refused'; reason: OrgGiftRefusal }
+  | { kind: 'ungifted'; subscriptionId: string; status: string };
+
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+async function lockAndReadStored(tx: Tx, orgId: string): Promise<OrgGiftStored | null> {
+  await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${orgBillingLockKey(orgId)}, 0))`);
+  const [row] = await tx
+    .select({
+      stripeSubscriptionId: orgSubscriptions.stripeSubscriptionId,
+      stripeSeatItemId: orgSubscriptions.stripeSeatItemId,
+      status: orgSubscriptions.status,
+      gifted: orgSubscriptions.gifted,
+      giftedExtraSeats: orgSubscriptions.giftedExtraSeats,
+    })
+    .from(orgSubscriptions)
+    .where(eq(orgSubscriptions.orgId, orgId))
+    .limit(1);
+  return row ? { ...row, gifted: row.gifted === true } : null;
+}
+
+async function readOrg(orgId: string, adminUserId: string) {
+  const found = await findOrganizationById(orgId);
+  return found ? { adminRole: await findMembershipRole(orgId, adminUserId) } : null;
+}
 
 export async function giftOrgSubscription(
-  input: { orgId: string; adminUserId: string; reason: string },
+  input: { orgId: string; adminUserId: string; reason: string; extraSeats: number },
   stripe: OrgGiftStripe,
 ): Promise<OrgGiftResult> {
-  const found = await findOrganizationById(input.orgId);
-  const org = found ? { adminRole: await findMembershipRole(input.orgId, input.adminUserId) } : null;
+  const org = await readOrg(input.orgId, input.adminUserId);
   const result = await db.transaction(async (tx): Promise<OrgGiftResult> => {
-    await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${orgBillingLockKey(input.orgId)}, 0))`);
-    const [stored] = await tx
-      .select({ stripeSubscriptionId: orgSubscriptions.stripeSubscriptionId, status: orgSubscriptions.status, gifted: orgSubscriptions.gifted })
-      .from(orgSubscriptions)
-      .where(eq(orgSubscriptions.orgId, input.orgId))
-      .limit(1);
-    const plan = planOrgGift({ ...input, billingEnabled: isBillingEnabled(), org, stored: stored ? { ...stored, gifted: stored.gifted === true } : null });
+    const stored = await lockAndReadStored(tx, input.orgId);
+    const plan = planOrgGift({ ...input, billingEnabled: isBillingEnabled(), org, stored });
     if (plan.kind === 'refuse') return { kind: 'refused', reason: plan.reason };
 
-    const coupon = await stripe.createCoupon(plan.coupon, plan.couponKey);
+    // The pin is written first, in this transaction: it commits only with the gift, and the
+    // pool refill reads it under this same lock, so a gift invoice never sees a half-applied gift.
+    await tx
+      .update(orgSubscriptions)
+      .set({ giftedExtraSeats: plan.giftedExtraSeats })
+      .where(eq(orgSubscriptions.orgId, input.orgId));
+
+    // A lapsed org's failed renewal must not keep retrying a charge on the gifted period.
+    const voidedInvoiceIds = await stripe.listOpenInvoiceIds(plan.subscriptionId);
+    for (const invoiceId of voidedInvoiceIds) await stripe.voidInvoice(invoiceId, orgGiftVoidKey(input.orgId, invoiceId));
+
+    const coupon = (await stripe.retrieveCoupon(plan.coupon.id)) ?? (await stripe.createCoupon(plan.coupon, plan.couponKey));
     const sub = await stripe.updateSubscription(plan.subscriptionId, plan.update, plan.updateKey);
-    return { kind: 'gifted', subscriptionId: sub.id, couponId: coupon.id, status: sub.status, restoresNow: plan.restoresNow };
+    return {
+      kind: 'gifted',
+      subscriptionId: sub.id,
+      couponId: coupon.id,
+      status: sub.status,
+      restoresNow: plan.restoresNow,
+      giftedExtraSeats: plan.giftedExtraSeats,
+      voidedInvoiceIds,
+    };
   });
 
   if (result.kind === 'refused') {
@@ -70,7 +133,51 @@ export async function giftOrgSubscription(
     actorId: input.adminUserId,
     resourceType: 'org_subscription',
     resourceId: input.orgId,
-    details: { source: 'admin_gift', stripeSubscriptionId: result.subscriptionId, couponId: result.couponId, restoresNow: result.restoresNow },
+    details: {
+      source: 'admin_gift',
+      stripeSubscriptionId: result.subscriptionId,
+      couponId: result.couponId,
+      restoresNow: result.restoresNow,
+      giftedExtraSeats: result.giftedExtraSeats,
+      voidedInvoiceIds: result.voidedInvoiceIds,
+    },
+  });
+  return result;
+}
+
+/**
+ * Revoke an admin gift: the coupon and gift metadata come off the org's own subscription with
+ * no proration, so the org pays from its next renewal; the pinned seats are released.
+ */
+export async function ungiftOrgSubscription(
+  input: { orgId: string; adminUserId: string; reason: string },
+  stripe: OrgGiftStripe,
+): Promise<OrgUngiftResult> {
+  const org = await readOrg(input.orgId, input.adminUserId);
+  const result = await db.transaction(async (tx): Promise<OrgUngiftResult> => {
+    const stored = await lockAndReadStored(tx, input.orgId);
+    const plan = planOrgUngift({ ...input, billingEnabled: isBillingEnabled(), org, stored });
+    if (plan.kind === 'refuse') return { kind: 'refused', reason: plan.reason };
+    await tx
+      .update(orgSubscriptions)
+      .set({ giftedExtraSeats: null, gifted: false })
+      .where(eq(orgSubscriptions.orgId, input.orgId));
+    const sub = await stripe.updateSubscription(plan.subscriptionId, plan.update, plan.updateKey);
+    return { kind: 'ungifted', subscriptionId: sub.id, status: sub.status };
+  });
+
+  if (result.kind === 'refused') {
+    loggers.api.info('admin org ungift refused', { orgId: input.orgId, adminUserId: input.adminUserId, reason: result.reason });
+    return result;
+  }
+  loggers.api.info('admin revoked org gift', { orgId: input.orgId, adminUserId: input.adminUserId, ...result });
+  await recordOrgAuditEventAfterCommit({
+    orgId: input.orgId,
+    eventType: 'org.billing.subscription_changed',
+    actorId: input.adminUserId,
+    resourceType: 'org_subscription',
+    resourceId: input.orgId,
+    details: { source: 'admin_ungift', stripeSubscriptionId: result.subscriptionId },
   });
   return result;
 }

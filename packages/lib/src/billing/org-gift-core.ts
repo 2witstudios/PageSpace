@@ -1,6 +1,6 @@
 /**
- * org-gift-core — the pure decision behind an admin gifting an organization (Spec SEAT-8,
- * [D-OW-23], [D-OW-30]).
+ * org-gift-core — the pure decisions behind an admin gifting an organization, and revoking
+ * that gift (Spec SEAT-8, [D-OW-23], [D-OW-30], [D-OW-54]).
  *
  * A gift is applied ON the org's own stored subscription — never a separate one — so the
  * one funding path (wallet-funding-shell applyOrgPoolRefill) sees an invoice whose
@@ -9,13 +9,24 @@
  * subscription funds nothing (`gift_not_org_subscription`), which is why this module only
  * ever plans a write to the subscription id read from the database.
  *
- * What a gift writes: a single-use 100% `forever` coupon and the gift metadata, in one
- * subscription update with no proration. An ACTIVE org keeps the period it already paid
- * for and its next invoice is the first $0 gift invoice. A LAPSED org (past_due, unpaid)
- * has its billing cycle reset to now, so Stripe issues the $0 gift invoice immediately and
- * the lapse lifts at once. An org whose first invoice is still open (`incomplete`) is
- * refused: Stripe expires that subscription after 23 hours whatever is written to it, so
- * the gift waits for a subscription Stripe will invoice again.
+ * [D-OW-54] the admin pins the gift's seats: `extraSeats` beyond the Business base. The
+ * shell stores the pin (org_subscriptions.giftedExtraSeats) and the seat item is set to it;
+ * while it stands, the seat item is held there, auto-add is refused past it, and each gift
+ * invoice funds exactly that many seats — never the invoice's seat line, which a gifted
+ * Owner could inflate for free with throwaway invites.
+ *
+ * What a gift writes: the subscription's open invoices are voided first (a lapsed org's
+ * failed renewal must not keep retrying a charge, or reach dunning, on a gifted period),
+ * then one 100% `forever` coupon and the gift metadata in a single subscription update with
+ * no proration. An ACTIVE org keeps the period it already paid for and its next invoice is
+ * the first $0 gift invoice. A LAPSED org (past_due, unpaid) has its billing cycle reset to
+ * now, so Stripe issues the $0 gift invoice immediately and the lapse lifts at once. An org
+ * whose first invoice is still open (`incomplete`) is refused: Stripe expires that
+ * subscription after 23 hours whatever is written to it.
+ *
+ * Resumable: the coupon id and its creation key depend on the subscription alone, and the
+ * shell retrieves before it creates, so a gift interrupted between its writes completes on
+ * any retry, and a gift revoked and given again reuses its coupon.
  */
 import type { OrgRole } from '@pagespace/db/schema/organizations';
 import { isLiveOrgSubscriptionStatus, orgStripeIdempotencyKey } from './org-subscription-core';
@@ -26,38 +37,63 @@ export const ORG_GIFT_METADATA_TYPE = 'gift_subscription';
 export type OrgGiftRefusal =
   | 'billing_disabled'
   | 'org_not_found'
-  | 'self_gift'
+  | 'admin_is_member'
+  | 'invalid_seat_count'
   | 'no_subscription'
   | 'awaiting_first_payment'
   | 'subscription_not_live'
-  | 'already_gifted';
+  | 'already_gifted'
+  | 'not_gifted';
 
-/** What the shell read from the database; nothing here comes from the request but the reason. */
+/** The stored org subscription, as the shell read it under the billing lock. */
+export interface OrgGiftStored {
+  stripeSubscriptionId: string;
+  stripeSeatItemId: string;
+  status: string;
+  /** Mirrored from Stripe's subscription metadata. */
+  gifted: boolean;
+  /** The admin-pinned gifted extra seats, or null. */
+  giftedExtraSeats: number | null;
+}
+
+/** What the shell read from the database; nothing here comes from the request but the reason and seats. */
 export interface OrgGiftFacts {
   orgId: string;
   adminUserId: string;
   reason: string;
+  /** Extra seats beyond the Business base the gift covers (D-OW-54). */
+  extraSeats: number;
   billingEnabled: boolean;
   /** The org, with the gifting admin's own role in it (null when not a member). */
   org: { adminRole: OrgRole | null } | null;
-  stored: { stripeSubscriptionId: string; status: string; gifted: boolean } | null;
+  stored: OrgGiftStored | null;
 }
+
+export type OrgUngiftFacts = Omit<OrgGiftFacts, 'extraSeats'>;
 
 export interface OrgGiftCouponParams {
   id: string;
   percent_off: 100;
   duration: 'forever';
-  max_redemptions: 1;
   name: string;
-  metadata: { giftedOrgId: string; giftedBy: string; reason: string };
+  metadata: { giftedOrgId: string; stripeSubscriptionId: string };
 }
 
 export interface OrgGiftSubscriptionUpdate {
   discounts: [{ coupon: string }];
-  metadata: { type: typeof ORG_GIFT_METADATA_TYPE; giftedBy: string; reason: string };
+  metadata: { type: typeof ORG_GIFT_METADATA_TYPE; giftedBy: string; reason: string; giftedExtraSeats: string };
+  /** The seat item, held at the gifted quantity. */
+  items: [{ id: string; quantity: number }];
   proration_behavior: 'none';
   /** Set only for a lapsed org: Stripe invoices the $0 gift now. */
   billing_cycle_anchor?: 'now';
+}
+
+/** Removes the gift: '' clears the discounts and each metadata key (Stripe's unset convention). */
+export interface OrgUngiftSubscriptionUpdate {
+  discounts: '';
+  metadata: { type: ''; giftedBy: ''; reason: ''; giftedExtraSeats: '' };
+  proration_behavior: 'none';
 }
 
 export type OrgGiftPlan =
@@ -65,6 +101,9 @@ export type OrgGiftPlan =
   | {
       kind: 'gift';
       subscriptionId: string;
+      giftedExtraSeats: number;
+      /** Void the subscription's open invoices before the update (always: only a lapsed one has any). */
+      voidOpenInvoices: true;
       coupon: OrgGiftCouponParams;
       couponKey: string;
       update: OrgGiftSubscriptionUpdate;
@@ -73,45 +112,92 @@ export type OrgGiftPlan =
       restoresNow: boolean;
     };
 
+export type OrgUngiftPlan =
+  | { kind: 'refuse'; reason: OrgGiftRefusal }
+  | { kind: 'ungift'; subscriptionId: string; update: OrgUngiftSubscriptionUpdate; updateKey: string };
+
 /** Statuses a lapsed org's subscription has while Stripe still invoices it. */
 const LAPSED_INVOICING_STATUSES: ReadonlySet<string> = new Set(['past_due', 'unpaid']);
 
+/** The gift coupon for a subscription: one per subscription, reused across retries and re-gifts. */
+export function orgGiftCouponId(stripeSubscriptionId: string): string {
+  return `GIFT_ORG_${stripeSubscriptionId}`;
+}
+
+/** The idempotency key for voiding one of the org's open invoices as part of a gift. */
+export function orgGiftVoidKey(orgId: string, invoiceId: string): string {
+  return orgStripeIdempotencyKey(orgId, 'gift.invoice.void', { invoiceId });
+}
+
+/**
+ * The checks a gift and its revoke share. An admin who belongs to the org in ANY role draws on
+ * the pool a gift funds, so membership of any kind refuses (self-dealing, like the personal
+ * route's own-account guard).
+ */
+function refuseCommon(facts: OrgUngiftFacts): OrgGiftRefusal | null {
+  if (!facts.billingEnabled) return 'billing_disabled';
+  if (!facts.org) return 'org_not_found';
+  if (facts.org.adminRole !== null) return 'admin_is_member';
+  if (!facts.stored) return 'no_subscription';
+  return null;
+}
+
 export function planOrgGift(facts: OrgGiftFacts): OrgGiftPlan {
-  if (!facts.billingEnabled) return { kind: 'refuse', reason: 'billing_disabled' };
-  if (!facts.org) return { kind: 'refuse', reason: 'org_not_found' };
-  if (facts.org.adminRole === 'OWNER') return { kind: 'refuse', reason: 'self_gift' };
-  const stored = facts.stored;
-  if (!stored) return { kind: 'refuse', reason: 'no_subscription' };
+  const common = refuseCommon(facts);
+  if (common) return { kind: 'refuse', reason: common };
+  if (!Number.isInteger(facts.extraSeats) || facts.extraSeats < 0) return { kind: 'refuse', reason: 'invalid_seat_count' };
+  const stored = facts.stored as OrgGiftStored;
   if (stored.status === 'incomplete') return { kind: 'refuse', reason: 'awaiting_first_payment' };
   const restoresNow = LAPSED_INVOICING_STATUSES.has(stored.status);
   if (!isLiveOrgSubscriptionStatus(stored.status) || (stored.status !== 'active' && !restoresNow)) {
     return { kind: 'refuse', reason: 'subscription_not_live' };
   }
-  if (stored.gifted) return { kind: 'refuse', reason: 'already_gifted' };
+  if (stored.gifted || stored.giftedExtraSeats !== null) return { kind: 'refuse', reason: 'already_gifted' };
 
   const subscriptionId = stored.stripeSubscriptionId;
   const coupon: OrgGiftCouponParams = {
-    id: `GIFT_ORG_${subscriptionId}`,
+    id: orgGiftCouponId(subscriptionId),
     percent_off: 100,
     duration: 'forever',
-    max_redemptions: 1,
     name: `Gift for organization ${facts.orgId}`,
-    metadata: { giftedOrgId: facts.orgId, giftedBy: facts.adminUserId, reason: facts.reason },
+    metadata: { giftedOrgId: facts.orgId, stripeSubscriptionId: subscriptionId },
   };
   const update: OrgGiftSubscriptionUpdate = {
     discounts: [{ coupon: coupon.id }],
-    metadata: { type: ORG_GIFT_METADATA_TYPE, giftedBy: facts.adminUserId, reason: facts.reason },
+    metadata: { type: ORG_GIFT_METADATA_TYPE, giftedBy: facts.adminUserId, reason: facts.reason, giftedExtraSeats: String(facts.extraSeats) },
+    items: [{ id: stored.stripeSeatItemId, quantity: facts.extraSeats }],
     proration_behavior: 'none',
     ...(restoresNow ? { billing_cycle_anchor: 'now' as const } : {}),
   };
   return {
     kind: 'gift',
     subscriptionId,
+    giftedExtraSeats: facts.extraSeats,
+    voidOpenInvoices: true,
     coupon,
     couponKey: orgStripeIdempotencyKey(facts.orgId, 'gift.coupon.create', coupon),
     update,
     updateKey: orgStripeIdempotencyKey(facts.orgId, 'gift.subscription.update', { subscriptionId, update }),
     restoresNow,
+  };
+}
+
+export function planOrgUngift(facts: OrgUngiftFacts): OrgUngiftPlan {
+  const common = refuseCommon(facts);
+  if (common) return { kind: 'refuse', reason: common };
+  const stored = facts.stored as OrgGiftStored;
+  if (!stored.gifted && stored.giftedExtraSeats === null) return { kind: 'refuse', reason: 'not_gifted' };
+  const subscriptionId = stored.stripeSubscriptionId;
+  const update: OrgUngiftSubscriptionUpdate = {
+    discounts: '',
+    metadata: { type: '', giftedBy: '', reason: '', giftedExtraSeats: '' },
+    proration_behavior: 'none',
+  };
+  return {
+    kind: 'ungift',
+    subscriptionId,
+    update,
+    updateKey: orgStripeIdempotencyKey(facts.orgId, 'gift.subscription.revoke', { subscriptionId, update }),
   };
 }
 
@@ -121,12 +207,14 @@ export function orgGiftRefusalStatus(reason: OrgGiftRefusal): 400 | 404 | 409 {
     case 'billing_disabled':
     case 'org_not_found':
       return 404;
-    case 'self_gift':
+    case 'admin_is_member':
+    case 'invalid_seat_count':
       return 400;
     case 'no_subscription':
     case 'awaiting_first_payment':
     case 'subscription_not_live':
     case 'already_gifted':
+    case 'not_gifted':
       return 409;
   }
 }

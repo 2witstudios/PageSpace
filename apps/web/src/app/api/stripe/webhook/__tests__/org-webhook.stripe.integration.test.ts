@@ -186,7 +186,6 @@ describe.skipIf(!TEST_KEY)('Stripe webhook org branch with real Stripe TEST even
       hasSubscriptionParent: true,
       billingReason: invoice.billing_reason,
       subtotalCents: invoice.subtotal,
-      extraSeats: 2,
     });
     expect(expected).toMatchObject({ basis: 'paid', reason: 'paid', paidCents: 7000 });
     expect(pool?.monthlyRemainingCents).toBe(expected.allowanceCents);
@@ -290,7 +289,6 @@ describe.skipIf(!TEST_KEY)('Stripe webhook org branch with real Stripe TEST even
       hasSubscriptionParent: true,
       billingReason: secondInvoice.billing_reason,
       subtotalCents: secondInvoice.subtotal,
-      extraSeats: 1,
     });
     expect(grant).toMatchObject({ basis: 'paid', paidCents: 6000 });
     const pool = await poolOf(orgId);

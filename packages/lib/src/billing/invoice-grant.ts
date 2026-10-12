@@ -68,7 +68,13 @@ export type GrantReason =
    * subscription. The org reads lapsed on such a subscription and could never spend a grant, so
    * none is made (fail closed); the operator applies the gift to the org's own subscription.
    */
-  | 'gift_not_org_subscription';
+  | 'gift_not_org_subscription'
+  /**
+   * D-OW-54: an org gift invoice whose subscription carries no admin-pinned gifted seat
+   * quantity (a gift made outside the admin route). The gift is sized only from that pin —
+   * never the invoice's live seat count, which the recipient controls — so none is made.
+   */
+  | 'gift_quantity_unknown';
 
 export interface InvoiceGrant {
   /** What the invoice actually paid, in whole cents — recorded on the ledger row for audit. */
