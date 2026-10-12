@@ -20,7 +20,7 @@
 
 import type { WalletViewer } from '../permissions/wallet-access';
 import { formatCreditCount } from './money-model';
-import { walletStatusFor, type FallbackRule, type OvershootFunderChoice, type SpendSourceKind, type WalletStatus } from './wallet-core';
+import { walletChainStatus, walletOwnRemainingCents, walletStatusFor, type FallbackRule, type OvershootFunderChoice, type SpendSourceKind, type WalletStatus } from './wallet-core';
 
 export interface DriveWalletRowFacts {
   id: string;
@@ -37,6 +37,10 @@ export interface DriveWalletRowFacts {
   defaultSpendSource: SpendSourceKind | null;
   /** WAL-6c: the funder's overshoot choice; null is the default (absorb into the parent). */
   overshootChoice: OvershootFunderChoice | null;
+  /** D-OW-4: the drive opened its wallet to guests. */
+  guestSpendEnabled: boolean;
+  /** WAL-7: the parent's status (the org pool or the owner's wallet); a paused parent pauses this wallet. */
+  parentStatus: WalletStatus | null;
 }
 
 /**
@@ -44,8 +48,10 @@ export interface DriveWalletRowFacts {
  * — derived from the row on every read, so it can never lag the debt (an overshoot raises debt
  * in the settle, a refill or top-up clears it; neither has to remember to restamp a status).
  */
-export function displayedWalletStatus(w: { status: WalletStatus; debtCents: number }): WalletStatus {
-  return walletStatusFor({ paused: w.status === 'paused', debtCents: w.debtCents });
+export function displayedWalletStatus(w: { status: WalletStatus; debtCents: number; parentStatus?: WalletStatus | null }): WalletStatus {
+  // WAL-7: a paused parent (the org pool's kill switch) pauses every wallet it funds, so it shows paused.
+  const paused = walletChainStatus(w.status, w.parentStatus ?? null) === 'paused';
+  return walletStatusFor({ paused, debtCents: w.debtCents });
 }
 
 /** The viewer's own cap on this wallet (WAL-7) and their spend in the current UTC windows. */
@@ -91,8 +97,12 @@ const whole = (cents: number): number => (Number.isFinite(cents) ? Math.round(ce
 
 /** The wallet's own remaining budget: allocation left + top-ups − debt, never below zero. */
 export function walletRemainingCents(wallet: Pick<DriveWalletRowFacts, 'monthlyAllowanceCents' | 'spentCents' | 'topupRemainingCents' | 'debtCents'>): number {
-  const allocationLeft = Math.max(0, whole(wallet.monthlyAllowanceCents) - whole(wallet.spentCents));
-  return Math.max(0, allocationLeft + Math.max(0, whole(wallet.topupRemainingCents)) - Math.max(0, whole(wallet.debtCents)));
+  return walletOwnRemainingCents({
+    allocationCents: whole(wallet.monthlyAllowanceCents),
+    allocationSpentCents: whole(wallet.spentCents),
+    topupLegs: [{ legId: 'topup', funder: 'owner', donorUserId: null, remainingCents: whole(wallet.topupRemainingCents) }],
+    debtCents: whole(wallet.debtCents),
+  });
 }
 
 export interface CapRemaining {
@@ -161,6 +171,8 @@ export interface LeadWalletView extends Omit<ConsumerWalletView, 'viewer'> {
   fallbackRule: FallbackRule | null;
   /** WAL-6c: where this wallet's overshoot lands; null is the default (absorb into the parent). */
   overshootChoice: OvershootFunderChoice | null;
+  /** D-OW-4: whether the drive's guests may spend this wallet (always within their caps). */
+  guestSpendEnabled: boolean;
   /** The amounts above as credit counts, so the client never converts (money model). */
   allocationCredits: string;
   spentCredits: string;
@@ -202,6 +214,7 @@ function leadFields(facts: DriveWalletFacts): Omit<LeadWalletView, 'viewer'> {
     periodEnd: w.monthlyPeriodEnd?.toISOString() ?? null,
     fallbackRule: w.fallbackRule,
     overshootChoice: w.overshootChoice,
+    guestSpendEnabled: w.guestSpendEnabled,
     allocationCredits: formatCreditCount(whole(w.monthlyAllowanceCents)),
     spentCredits: formatCreditCount(whole(w.spentCents)),
     topupRemainingCredits: formatCreditCount(whole(w.topupRemainingCents)),

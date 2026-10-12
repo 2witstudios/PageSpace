@@ -28,6 +28,8 @@ const facts: DriveWalletFacts = {
     donationsEnabled: true,
     defaultSpendSource: 'drive_wallet',
     overshootChoice: null,
+    guestSpendEnabled: false,
+    parentStatus: 'active',
   },
   myCap: { dailyCapCents: 2000, monthlyCapCents: null, spentTodayCents: 2000, spentThisMonthCents: 2000 },
   spendByConsumer: [{ consumerKey: 'user:u-priya', userId: 'u-priya', displayName: 'Priya Nair', spentCents: 645 }],

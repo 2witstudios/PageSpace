@@ -25,7 +25,7 @@ import { loggers } from '../logging/logger-config';
 import { walletFunderUserIds } from '../permissions/wallet-funders';
 import { readOrgSpendPolicy } from '../organizations/policy-reader';
 import { capAlertCopy, capAlertsDue, type CapWindowSpend } from './cap-alerts-core';
-import { consumerSettledCents, readConsumerCaps } from './consumer-caps';
+import { consumerSettledCents, readEffectiveConsumerCaps } from './consumer-caps';
 import { loadSeatCapFacts } from './seat-allowance';
 import { seatPeriodStartMs, seatSpentCents, userConsumerKey, utcDayStartMs, utcMonthStartMs, type CapWindow } from './wallet-core';
 
@@ -47,7 +47,7 @@ interface LegWindows {
 }
 
 async function driveLegWindows(wallet: { id: string; subjectId: string | null }, userId: string, now: Date): Promise<LegWindows | null> {
-  const caps = await readConsumerCaps(db, wallet.id, userId);
+  const caps = await readEffectiveConsumerCaps(db, wallet.id, userId);
   if (!caps) return null;
   const dayStart = new Date(utcDayStartMs(now.getTime()));
   const monthStart = new Date(utcMonthStartMs(now.getTime()));

@@ -30,6 +30,8 @@ const facts = (over: Partial<DriveWalletFacts> = {}): DriveWalletFacts => ({
     donationsEnabled: true,
     defaultSpendSource: null,
     overshootChoice: null,
+    guestSpendEnabled: false,
+    parentStatus: 'active',
   },
   myCap: { dailyCapCents: c(10), monthlyCapCents: null, spentTodayCents: c(4), spentThisMonthCents: c(50) },
   spendByConsumer: [
@@ -162,5 +164,20 @@ describe('wallet-views purity', () => {
     const src = readFileSync(fileURLToPath(new URL('../wallet-views.ts', import.meta.url)), 'utf8');
     const imports = [...src.matchAll(/from\s+'([^']+)'/g)].map((m) => m[1]);
     expect(imports.sort()).toEqual(['../permissions/wallet-access', './money-model', './wallet-core']);
+  });
+});
+
+describe('wallet-views: the kill switch and the guest switch', () => {
+  it('WAL-7 (partial) a drive wallet under a paused pool shows paused to every viewer, its own status untouched', () => {
+    const underPausedPool = facts({ wallet: { ...facts().wallet, parentStatus: 'paused' } });
+    expect(projectDriveWallet('member', underPausedPool).status).toBe('paused');
+    expect(projectDriveWallet('org_admin', underPausedPool).status).toBe('paused');
+    expect(projectDriveWallet('member', facts()).status).toBe('active');
+  });
+
+  it('SPEND-9 (partial) the guest switch is shown to the lead and admins who run it, never in the consumer projection', () => {
+    const open = facts({ wallet: { ...facts().wallet, guestSpendEnabled: true } });
+    expect(projectDriveWallet('lead', open)).toMatchObject({ guestSpendEnabled: true });
+    expect(Object.keys(projectDriveWallet('guest', open)).sort()).toEqual([...CONSUMER_WALLET_FIELDS].sort());
   });
 });

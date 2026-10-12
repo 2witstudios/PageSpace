@@ -16,7 +16,7 @@ import { db } from '@pagespace/db/db';
 import { sql } from '@pagespace/db/operators';
 import { notifications } from '@pagespace/db/schema/notifications';
 import { automationSkipNotices } from '@pagespace/db/schema/wallets';
-import { skipNoticePeriodStart } from './automation-skip-notice';
+import { automationSkipNoticeMessage, skipNoticePeriodStart } from './automation-skip-notice';
 import type { SkipReason } from './wallet-core';
 
 export interface AutomationSkipNoticeInput {
@@ -54,9 +54,7 @@ export async function notifyLeadOfAutomationSkip(input: AutomationSkipNoticeInpu
       userId: input.leadUserId,
       type: 'AUTOMATION_SKIPPED',
       title: 'An automation was skipped',
-      message: input.walletId === null
-        ? 'An automation in this drive was skipped because the drive has no wallet to pay for it. Automations spend only the drive wallet.'
-        : 'An automation in this drive was skipped because the drive wallet cannot cover it. Add credits to the drive wallet to resume.',
+      message: automationSkipNoticeMessage(input.reason),
       driveId: input.driveId,
       metadata: { walletId: input.walletId, reason: input.reason },
     });

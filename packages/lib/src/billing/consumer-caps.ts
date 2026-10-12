@@ -18,8 +18,10 @@
 import type { db } from '@pagespace/db/db';
 import { and, eq, gt, gte, inArray, sql } from '@pagespace/db/operators';
 import { creditHolds, creditLedger } from '@pagespace/db/schema/credits';
-import { walletConsumerCaps } from '@pagespace/db/schema/wallets';
+import { orgMembers } from '@pagespace/db/schema/organizations';
+import { walletConsumerCaps, wallets } from '@pagespace/db/schema/wallets';
 import {
+  consumerCapsInForce,
   evaluateCaps,
   seatSpentCents,
   userConsumerKey,
@@ -41,6 +43,37 @@ export async function readConsumerCaps(executor: Reader, walletId: string, userI
     .where(and(eq(walletConsumerCaps.walletId, walletId), eq(walletConsumerCaps.consumerKey, userConsumerKey(userId))))
     .limit(1);
   return row ?? null;
+}
+
+/**
+ * Whether `userId` is a GUEST on `walletId` (D-OW-4, DRV-8): the wallet is an org's subject
+ * wallet (an org drive's) and they hold no accepted membership of that org. A personal drive's
+ * wallet has no guests. Read through `executor`, so the gate re-derives it under its own lock
+ * rather than trusting what resolution read.
+ */
+export async function isGuestOnWallet(executor: Reader, walletId: string, userId: string): Promise<boolean> {
+  const [wallet] = await executor
+    .select({ orgId: wallets.orgId, subjectType: wallets.subjectType })
+    .from(wallets)
+    .where(eq(wallets.id, walletId))
+    .limit(1);
+  if (!wallet || wallet.subjectType === null || wallet.orgId === null) return false;
+  const [member] = await executor
+    .select({ id: orgMembers.id })
+    .from(orgMembers)
+    .where(and(eq(orgMembers.orgId, wallet.orgId), eq(orgMembers.userId, userId)))
+    .limit(1);
+  return member === undefined;
+}
+
+/**
+ * The caps that bind `userId` on `walletId` (wallet-core consumerCapsInForce): their stored caps,
+ * and for a guest each unset window at its D-OW-31 default. Null: no cap (a member with no row).
+ * Every reader of a consumer's caps — the gate, resolution, the alerts, their own view — asks here.
+ */
+export async function readEffectiveConsumerCaps(executor: Reader, walletId: string, userId: string): Promise<ConsumerCaps | null> {
+  const stored = await readConsumerCaps(executor, walletId, userId);
+  return consumerCapsInForce(stored, { isGuest: await isGuestOnWallet(executor, walletId, userId) });
 }
 
 /** Settled spend per window, whole cents rounded up, of `userId` on `walletId`. */
@@ -81,14 +114,15 @@ export interface ConsumerCapFacts {
 }
 
 /**
- * The caps facts for one person on one drive-wallet leg at `now`, or null when they have no caps
- * there. Run it inside the gate's transaction (under the wallet's row lock) for the decision.
+ * The caps facts for one person on one drive-wallet leg at `now`, or null when no cap binds them
+ * there (readEffectiveConsumerCaps: a guest is always capped). Run it inside the gate's
+ * transaction (under the wallet's row lock) for the decision.
  */
 export async function loadConsumerCapFacts(
   executor: Reader,
   input: { walletId: string; userId: string; now: Date },
 ): Promise<ConsumerCapFacts | null> {
-  const caps = await readConsumerCaps(executor, input.walletId, input.userId);
+  const caps = await readEffectiveConsumerCaps(executor, input.walletId, input.userId);
   if (!caps) return null;
   const nowMs = input.now.getTime();
   const dayStart = new Date(utcDayStartMs(nowMs));

@@ -28,6 +28,7 @@ import {
   sourceToPin,
   effectiveDefaultSpendSource,
   sourceOfWallet,
+  driveWalletConsumerRemainingCents,
   NO_STORED_CHOICE,
   PERSONAL_ROOT_NOT_YET_CREATED,
   ORG_ENTITLEMENT_TIER,
@@ -429,7 +430,7 @@ describe('spend-target: the stored choice (conversations.chosenWalletId, wallets
     expect(sourceToPin(input({ chosen: null, stored: stored({ chosenWalletId: 'w-deleted' }) }))).toBeNull();
     expect(sourceToPin(input({ chosen: 'drive_wallet', followOn: true, stored: NO_STORED_CHOICE }))).toBeNull();
     expect(sourceToPin(input({ chosen: null, stored: NO_STORED_CHOICE, userOverride: { alwaysOwnCredits: true, alwaysOwnCreditsInDrive: false } }))).toBeNull();
-    expect(sourceToPin(automationSpendInput({ driveId: 'd-product', driveWallet: walletLeg('w-product', 'active', c(10)), walletOwnerTier: 'business', reservationCents: c(1) }))).toBeNull();
+    expect(sourceToPin(automationSpendInput({ driveId: 'd-product', driveWallet: walletLeg('w-product', 'active', c(10)), walletOwnerTier: 'business', reservationCents: c(1), gatedAsGuest: false, guestsMaySpendDriveWallet: false }))).toBeNull();
     expect(sourceToPin(input({ chosen: null, stored: stored({ personalDefault: 'seat_allowance' }), seatAllowance: null, driveWallet: null, personal: null }))).toBeNull();
   });
 
@@ -511,6 +512,8 @@ describe('spend-target: automations', () => {
       driveWallet: walletLeg('w-product', 'active', c(1200)),
       walletOwnerTier: ORG_ENTITLEMENT_TIER,
       reservationCents: c(5),
+      gatedAsGuest: false,
+      guestsMaySpendDriveWallet: false,
       ...over,
     });
 
@@ -526,7 +529,7 @@ describe('spend-target: automations', () => {
 
   it('SPEND-6 (partial) an automation names its drive as the consumer, never a person', () => {
     expect(automationSpend('d-product')).toEqual({ kind: 'automation', driveId: 'd-product' });
-    expect(automation().actor).toEqual({ kind: 'automation', driveId: 'd-product' });
+    expect(automation().actor).toEqual({ kind: 'automation', driveId: 'd-product', gatedAsGuest: false });
   });
 
   it('SPEND-6 (partial) an automation offers the gate no personal leg and no seat to reach', () => {
@@ -580,6 +583,19 @@ describe('spend-target: automations', () => {
   ] as const)('SPEND-6 (partial) an automation whose drive wallet is %s skips and charges zero', (_label, driveWallet, expected) => {
     expect(decideCallSpend(automation({ driveWallet }))).toEqual(expected);
   });
+
+  it('SPEND-6 (partial) D-OW-4: a run gated as a guest (their @mention, their Run) skips while the drive keeps guests off its wallet, and spends it once the switch is on', () => {
+    expect(decideCallSpend(automation({ gatedAsGuest: true })))
+      .toEqual({ kind: 'skip', reason: 'guest_drive_wallet_off', walletId: 'w-product', chargeCents: 0 });
+    expect(decideCallSpend(automation({ gatedAsGuest: true, guestsMaySpendDriveWallet: true })))
+      .toMatchObject({ kind: 'spend', source: 'drive_wallet', walletId: 'w-product' });
+  });
+
+  it('SPEND-6 (partial) a run whose person\'s cap is spent skips by name, so the lead is told why', () => {
+    const capped = cappedConsumerLeg(walletLeg('w-product', 'active', c(1200)), { dailyRemainingCents: 0, monthlyRemainingCents: null });
+    expect(decideCallSpend(automation({ driveWallet: capped })))
+      .toEqual({ kind: 'skip', reason: 'source_cap_reached', walletId: 'w-product', chargeCents: 0 });
+  });
 });
 
 describe('spend-target purity', () => {
@@ -605,6 +621,21 @@ describe('spend-target: a drive-wallet leg capped per consumer', () => {
   it('WAL-7 (partial) a spent cap refuses the drive wallet by name (source_cap_reached), and the fallback rule may then move the call', () => {
     const capped = cappedConsumerLeg(leg, { dailyRemainingCents: 0, monthlyRemainingCents: c(40) });
     expect(decideCallSpend(input({ driveWallet: capped }))).toMatchObject({ kind: 'refuse', source: 'drive_wallet', reason: 'source_cap_reached', chargeCents: 0 });
+  });
+});
+
+describe('spend-target: what a consumer sees of a drive wallet (SPEND-9)', () => {
+  // Product's wallet: 1,200 allocated, 200 spent, a 50 top-up — under a pool holding 30.
+  const product = wallet({ id: 'w-product', parentWalletId: 'w-pool', monthlyAllowanceCents: c(1200), spentCents: c(200), topupRemainingCents: c(50) });
+
+  it('SPEND-9 (partial) the remaining amount is the wallet\'s own (allocation left + top-ups − debt), never bounded by what the parent holds', () => {
+    expect(driveWalletConsumerRemainingCents(product, null)).toBe(c(1050));
+    expect(driveWalletConsumerRemainingCents({ ...product, debtCents: c(100) }, null)).toBe(c(950));
+  });
+
+  it('SPEND-9 (partial) a consumer\'s own remaining cap bounds what they see, and only that', () => {
+    expect(driveWalletConsumerRemainingCents(product, { dailyRemainingCents: c(7), monthlyRemainingCents: c(400) })).toBe(c(7));
+    expect(driveWalletConsumerRemainingCents(product, { dailyRemainingCents: null, monthlyRemainingCents: c(4000) })).toBe(c(1050));
   });
 });
 
