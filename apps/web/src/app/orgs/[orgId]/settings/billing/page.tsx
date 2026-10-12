@@ -32,8 +32,6 @@ function Stat({ value, label }: { value: string; label: string }) {
 const STATUS_BADGE = {
   reactivate: { tone: 'danger', label: 'Lapsed' },
   read_only: { tone: 'danger', label: 'Lapsed' },
-  payment_failed: { tone: 'restricted', label: 'Payment failed' },
-  trial: { tone: 'pending', label: 'Trial' },
 } as const;
 
 function BillingBody({ orgId, orgName, role, notice }: OrgSettingsContext) {

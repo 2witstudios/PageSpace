@@ -1143,6 +1143,8 @@ export async function getActiveSubscriptionsByTier(): Promise<SubscriptionsByTie
     )),
     db.select({ stripePriceId: orgSubscriptions.stripeBasePriceId }).from(orgSubscriptions).where(and(
       inArray(orgSubscriptions.status, ['active']), eq(orgSubscriptions.gifted, false),
+      // [D-OW-44]: send_invoice reads active before anything is collected; only automatic collection pays.
+      eq(orgSubscriptions.collectionMethod, 'charge_automatically'),
       sql`exists (select 1 from ${orgSubscriptionFunding} where ${orgSubscriptionFunding.orgId} = ${orgSubscriptions.orgId} and ${orgSubscriptionFunding.stripeSubscriptionId} = ${orgSubscriptions.stripeSubscriptionId})`,
     )),
   ]);
