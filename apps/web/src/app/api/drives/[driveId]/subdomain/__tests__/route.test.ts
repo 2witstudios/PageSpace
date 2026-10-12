@@ -198,7 +198,7 @@ describe('PATCH /api/drives/[driveId]/subdomain', () => {
     const body = await response.json();
 
     expect(response.status).toBe(200);
-    expect(changePublishSubdomain).toHaveBeenCalledWith(mockDriveId, 'new-name', mockUserId);
+    expect(changePublishSubdomain).toHaveBeenCalledWith(mockDriveId, 'new-name', expect.objectContaining({ userId: mockUserId }));
     expect(body.subdomain).toBe('new-name');
     expect(body.url).toBe('https://new-name.pagespace.site');
   });

@@ -19,8 +19,10 @@ import {
 import { canUserAccessFile } from '../permissions/file-access';
 import { prepareUserWrite } from '../auth/user-repository';
 import { sessionService } from '../auth/session-service';
+import { MACHINE_CREDENTIAL_AUTHENTICATION } from '../auth/authentication-evidence';
 import { loggers } from '../logging/logger-config';
 import { requireOrgRole } from '../organizations/authorize';
+import { type AccessActor, derivedCredentialEvidence } from '../permissions/access-actor';
 
 /**
  * Service scope types - defines allowed permission scopes
@@ -145,8 +147,8 @@ export interface PermissionSet {
  * Options for creating a validated service token
  */
 export interface ValidatedTokenOptions {
-  /** User requesting the token */
-  userId: string;
+  /** Who is requesting the token: their access decides the scopes, and the token carries their ceremony evidence. */
+  actor: AccessActor;
   /** Type of resource being accessed */
   resourceType: ResourceType;
   /** ID of the resource (pageId, driveId, or userId for 'user' type) */
@@ -185,15 +187,16 @@ export async function createValidatedServiceToken(
   options: ValidatedTokenOptions
 ): Promise<ValidatedTokenResult> {
   const {
-    userId,
+    actor,
     resourceType,
     resourceId,
     requestedScopes,
     expiresIn = '5m',
   } = options;
+  const { userId } = actor;
 
   // Get user's actual permissions for this resource
-  const permissions = await getPermissionsForResource(userId, resourceType, resourceId);
+  const permissions = await getPermissionsForResource(actor, resourceType, resourceId);
 
   if (!permissions) {
     loggers.api.warn('Service token denied: no access to resource', {
@@ -232,6 +235,8 @@ export async function createValidatedServiceToken(
   const token = await sessionService.createSession({
     userId,
     type: 'service',
+    // The processor re-checks access with this token, so it carries the minting credential's evidence (SEC-2/3).
+    authentication: derivedCredentialEvidence(actor),
     scopes: grantedScopes as string[],
     resourceType,
     resourceId,
@@ -250,14 +255,15 @@ export async function createValidatedServiceToken(
  * Get user's permissions for a specific resource
  */
 async function getPermissionsForResource(
-  userId: string,
+  actor: AccessActor,
   resourceType: ResourceType,
   resourceId: string
 ): Promise<PermissionSet | null> {
+  const { userId } = actor;
   switch (resourceType) {
     case 'page': {
       // Get full permission set for the page
-      const perms = await getUserAccessLevel(userId, resourceId);
+      const perms = await getUserAccessLevel(actor, resourceId);
       if (!perms) {
         return null;
       }
@@ -271,7 +277,7 @@ async function getPermissionsForResource(
 
     case 'drive': {
       // Get granular drive permissions (excludes page-level collaborators)
-      const drivePerms = await getUserDrivePermissions(userId, resourceId);
+      const drivePerms = await getUserDrivePermissions(actor, resourceId);
       if (!drivePerms) {
         // Page collaborators must use page-scoped tokens instead
         return null;
@@ -379,13 +385,13 @@ function filterScopesByPermissions(
  * Convenience function for creating a page-scoped service token
  */
 export async function createPageServiceToken(
-  userId: string,
+  actor: AccessActor,
   pageId: string,
   scopes: ServiceScope[],
   expiresIn?: string
 ): Promise<ValidatedTokenResult> {
   return createValidatedServiceToken({
-    userId,
+    actor,
     resourceType: 'page',
     resourceId: pageId,
     requestedScopes: scopes,
@@ -397,13 +403,13 @@ export async function createPageServiceToken(
  * Convenience function for creating a drive-scoped service token
  */
 export async function createDriveServiceToken(
-  userId: string,
+  actor: AccessActor,
   driveId: string,
   scopes: ServiceScope[],
   expiresIn?: string
 ): Promise<ValidatedTokenResult> {
   return createValidatedServiceToken({
-    userId,
+    actor,
     resourceType: 'drive',
     resourceId: driveId,
     driveId, // Pass driveId as claim for processor validation
@@ -416,14 +422,14 @@ export async function createDriveServiceToken(
  * Convenience function for creating a user-scoped service token (e.g., avatars)
  */
 export async function createUserServiceToken(
-  userId: string,
+  actor: AccessActor,
   scopes: ServiceScope[],
   expiresIn?: string
 ): Promise<ValidatedTokenResult> {
   return createValidatedServiceToken({
-    userId,
+    actor,
     resourceType: 'user',
-    resourceId: userId,
+    resourceId: actor.userId,
     requestedScopes: scopes,
     expiresIn,
   });
@@ -434,13 +440,13 @@ export async function createUserServiceToken(
  * only to the org's Owner and Admins, and bound to that org.
  */
 export async function createOrgServiceToken(
-  userId: string,
+  actor: AccessActor,
   orgId: string,
   scopes: ServiceScope[],
   expiresIn?: string
 ): Promise<ValidatedTokenResult> {
   return createValidatedServiceToken({
-    userId,
+    actor,
     resourceType: 'organization',
     resourceId: orgId,
     requestedScopes: scopes,
@@ -457,11 +463,12 @@ export async function createOrgServiceToken(
  * minted.
  */
 export async function createFileServiceToken(
-  userId: string,
+  actor: AccessActor,
   fileId: string,
   scopes: ServiceScope[],
   expiresIn?: string
 ): Promise<ValidatedTokenResult> {
+  const { userId } = actor;
   const file = await db.query.files.findFirst({
     where: eq(files.id, fileId),
     columns: { driveId: true, storagePath: true },
@@ -476,7 +483,7 @@ export async function createFileServiceToken(
     throw new Error(`User has no access to file:${fileId}`);
   }
 
-  const hasAccess = await canUserAccessFile(userId, fileId, file.driveId);
+  const hasAccess = await canUserAccessFile(actor, fileId, file.driveId);
   if (!hasAccess) {
     loggers.api.warn('File service token denied: no access to file', {
       userId,
@@ -517,6 +524,7 @@ export async function createFileServiceToken(
   const token = await sessionService.createSession({
     userId,
     type: 'service',
+    authentication: derivedCredentialEvidence(actor),
     scopes: grantedScopes as string[],
     resourceType: 'file',
     resourceId: contentHash,
@@ -543,8 +551,8 @@ const UPLOAD_SCOPES: ServiceScope[] = ['files:write', 'files:ingest'];
  * Options for creating an upload service token
  */
 export interface UploadTokenOptions {
-  /** User requesting the token */
-  userId: string;
+  /** Who is uploading: their access decides, and the token carries their ceremony evidence. */
+  actor: AccessActor;
   /** Drive where the file will be uploaded */
   driveId: string;
   /** New page ID being created for the upload */
@@ -574,7 +582,8 @@ export interface UploadTokenOptions {
 export async function createUploadServiceToken(
   options: UploadTokenOptions
 ): Promise<ValidatedTokenResult> {
-  const { userId, driveId, pageId, parentId, expiresIn = '10m', scopes = UPLOAD_SCOPES } = options;
+  const { actor, driveId, pageId, parentId, expiresIn = '10m', scopes = UPLOAD_SCOPES } = options;
+  const { userId } = actor;
 
   let hasPermission = false;
   let permissionSource: 'parent_page' | 'drive';
@@ -607,12 +616,12 @@ export async function createUploadServiceToken(
     }
 
     // Check parent page edit permission
-    const pagePerms = await getUserAccessLevel(userId, parentId);
+    const pagePerms = await getUserAccessLevel(actor, parentId);
     hasPermission = pagePerms?.canEdit ?? false;
     permissionSource = 'parent_page';
   } else {
     // Uploading to drive root - check drive membership
-    const drivePerms = await getUserDrivePermissions(userId, driveId);
+    const drivePerms = await getUserDrivePermissions(actor, driveId);
     hasPermission = drivePerms?.canEdit ?? false;
     permissionSource = 'drive';
   }
@@ -641,6 +650,7 @@ export async function createUploadServiceToken(
   const token = await sessionService.createSession({
     userId,
     type: 'service',
+    authentication: derivedCredentialEvidence(actor),
     scopes: scopes as string[],
     resourceType: 'page',
     resourceId: pageId,
@@ -725,6 +735,7 @@ export async function createSystemFileDeleteToken(
   });
 
   const token = await sessionService.createSession({
+    authentication: MACHINE_CREDENTIAL_AUTHENTICATION,
     userId: SYSTEM_SERVICE_USER_ID,
     type: 'service',
     scopes: SYSTEM_FILE_DELETE_SCOPES as string[],

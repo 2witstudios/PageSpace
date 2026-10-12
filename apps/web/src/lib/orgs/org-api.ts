@@ -6,6 +6,7 @@
  */
 import type { OrgBillingNotice } from '@pagespace/lib/organizations/status-core';
 import type { OrgPolicies as StoredOrgPolicies } from '@pagespace/lib/organizations/policies-core';
+import type { OrgActivation } from '@pagespace/lib/billing/org-subscription-core';
 import { fetchJSON, fetchWithAuth, post, patch, put, del, ApiRequestError } from '@/lib/auth/auth-fetch';
 
 export type OrgRole = 'OWNER' | 'ADMIN' | 'MEMBER';
@@ -35,7 +36,6 @@ export interface OrgDetail {
 
 export interface OrgSubscriptionSummary {
   status: string;
-  trialEnd: string | null;
   currentPeriodEnd: string | null;
   extraSeatQuantity: number;
 }
@@ -134,7 +134,7 @@ export const postOrganization = (body: { name: string; slug: string }) =>
   post<CreateOrgResponse>('/api/orgs', body);
 
 export const startOrgSubscription = (orgId: string) =>
-  post<{ subscription: OrgSubscriptionSummary; payment: OrgPaymentStep }>(`/api/orgs/${orgId}/billing/subscription`);
+  post<{ subscription: OrgSubscriptionSummary; payment: OrgPaymentStep; activation: OrgActivation }>(`/api/orgs/${orgId}/billing/subscription`);
 
 export const openOrgBillingPortal = (orgId: string) => post<{ url: string }>(`/api/orgs/${orgId}/billing/portal`);
 

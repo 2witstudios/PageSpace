@@ -12,9 +12,10 @@ import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { listAgentDrives } from '@pagespace/lib/services/drive-agent-service';
 import type { ToolExecutionContext } from '../core/types';
-import { resolveActingAgentId, filterDriveIdsByAppTokenScope, driveDeniedByAppToken, isMcpScoped, canActorManageDrive } from './actor-permissions';
+import { resolveActingAgentId, filterDriveIdsByAppTokenScope, driveDeniedByAppToken, isMcpScoped, canActorManageDrive, toolActor } from './actor-permissions';
 import { syncPublishedHomeRoot } from '@/lib/canvas/publish-page';
 import { loadDriveLeadAuthority } from '@pagespace/lib/permissions/drive-relationship-loader';
+import { derivedCredentialEvidence } from '@pagespace/lib/permissions/access-actor';
 
 // Helper: Extract AI attribution context with actor info for activity logging
 async function getAiContextWithActor(context: ToolExecutionContext) {
@@ -93,7 +94,7 @@ export const driveTools = {
       try {
         // Full user-scoped reach: owned + member + page-permission drives,
         // excluding trashed ones (same source multi_drive_list_agents uses).
-        const accessibleDrives = await listAccessibleDrives(userId);
+        const accessibleDrives = await listAccessibleDrives(toolActor(context as ToolExecutionContext));
 
         // Ceiling a scoped MCP token to its allowed drives + its own role's
         // view access (no-op otherwise).
@@ -164,9 +165,9 @@ export const driveTools = {
       try {
         // DRV-3: the one create every door uses — personal, or org-owned from creation when orgId
         // names an org the user may create drives in (decided server-side by createOrgDrive). The
-        // tool carries no credential evidence, so an org that demands a strong or recent sign-in
-        // refuses it (fail closed).
-        const created = await createDriveForCaller({ userId, name, orgId, drivePrompt: driveContext || null, authentication: null });
+        // org's sign-in policy is judged on the turn's credential evidence (D-OW-45); an automation
+        // carries none, so an org that demands a strong or recent sign-in refuses it (fail closed).
+        const created = await createDriveForCaller({ userId, name, orgId, drivePrompt: driveContext || null, authentication: derivedCredentialEvidence(toolActor(context as ToolExecutionContext)) });
         if (!created.ok) throw new Error(created.error);
         const newDrive = created.drive;
 
@@ -259,7 +260,7 @@ export const driveTools = {
         const found = await db.query.drives.findFirst({
           where: eq(drives.id, driveId),
         });
-        const drive = found && (await loadDriveLeadAuthority(userId, found, 'rename')).allowed ? found : undefined;
+        const drive = found && (await loadDriveLeadAuthority(toolActor(context as ToolExecutionContext), found, 'rename')).allowed ? found : undefined;
 
         if (!drive) {
           throw new Error('Drive not found or you do not have permission to rename it');
@@ -367,7 +368,7 @@ This context persists across conversations and helps provide better assistance. 
 
       try {
         // Get drive and access info in a single operation (eliminates duplicate query)
-        const result = await getDriveAccessWithDrive(driveId, userId);
+        const result = await getDriveAccessWithDrive(driveId, toolActor(execContext as ToolExecutionContext));
 
         if (!result) {
           throw new Error('Drive not found');

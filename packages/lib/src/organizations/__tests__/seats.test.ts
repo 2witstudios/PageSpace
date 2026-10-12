@@ -41,7 +41,7 @@ describe('seatQuantity', () => {
 });
 
 describe('decideSeatAdmission', () => {
-  const base = { held: 4, included: INCLUDED, purchasedExtra: 0, autoAdd: false, billingEnabled: true };
+  const base = { held: 4, included: INCLUDED, purchasedExtra: 0, autoAdd: false, billingEnabled: true, credential: 'session' as const };
 
   it('SEAT-4 (partial) a seat inside the included five needs no Stripe change, auto-add on or off', () => {
     expect(decideSeatAdmission({ ...base, held: 4 })).toEqual({ action: 'admit' });
@@ -67,6 +67,19 @@ describe('decideSeatAdmission', () => {
 
   it('SEAT-4 (partial) an org with no seat-billing (onprem, tenant) is never limited', () => {
     expect(decideSeatAdmission({ ...base, held: 500, billingEnabled: false })).toEqual({ action: 'admit' });
+  });
+
+  it('X-1 (partial) [D-OW-26] a delegated key never raises the seat quantity: a seat past the purchased count is refused by name, auto-add or not', () => {
+    const key = { ...base, credential: 'mcp' as const };
+    expect(decideSeatAdmission({ ...key, held: 5, autoAdd: true })).toEqual({ action: 'refuse', reason: 'delegated_raise', purchased: 5, held: 5 });
+    expect(decideSeatAdmission({ ...key, held: 5, autoAdd: false })).toMatchObject({ action: 'refuse', reason: 'auto_add_off' });
+  });
+
+  it('X-1 (partial) [D-OW-26] within the purchased seats a delegated key is admitted like a session', () => {
+    const key = { ...base, credential: 'mcp' as const };
+    expect(decideSeatAdmission({ ...key, held: 4 })).toEqual({ action: 'admit' });
+    expect(decideSeatAdmission({ ...key, held: 5, purchasedExtra: 1, autoAdd: true })).toEqual({ action: 'admit' });
+    expect(decideSeatAdmission({ ...key, held: 500, billingEnabled: false })).toEqual({ action: 'admit' });
   });
 });
 

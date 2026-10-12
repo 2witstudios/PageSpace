@@ -42,6 +42,7 @@ import { admitDriveComputeCreator, admitDriveOrgActive, gateComputeCharge } from
 import { releaseHold } from '../../billing/credit-consume';
 import { defaultReconcileSandboxStorageDeps } from '../../services/sandbox/sandbox-storage-billing';
 import { reconcileSandboxStorage, MAX_BILLABLE_SPAN_MS, type ReconcileSandboxStorageDeps } from '../../services/sandbox/sandbox-storage-reconcile';
+import { credentialActor } from '../../permissions/access-actor';
 
 vi.mock('../orgs-enabled', () => ({ ORGS_ENABLED: true }));
 
@@ -221,28 +222,28 @@ describe('a lapsed org, every capability at once (orgs on, real Postgres)', () =
   it('SEAT-9 (partial) lapsed: reads kept; every capability that adds access or spend refused; storage not charged; nothing deleted; restricting still works; paid again, everything is back', async () => {
     if (!dbAvailable) return;
     const hold = await requestGuestApproval({ orgId, driveId: productId, userId: ids.omar, origin: 'invite', request: { role: 'MEMBER' }, requestedBy: ids.dana });
-    await setDriveWalletCap(ids.priya, productId, ids.marcus, { dailyCents: 300, monthlyCents: 3_000 }, 'session');
+    await setDriveWalletCap(credentialActor(ids.priya, null), productId, ids.marcus, { dailyCents: 300, monthlyCents: 3_000 }, 'session');
     await setSubscription('canceled');
     const before = await footprint();
 
     // Reads: every org drive stays readable to its members, and the wallet view still answers.
-    expect(await getUserDriveAccess(ids.marcus, productId)).toBe(true);
-    expect(await canUserViewPage(ids.marcus, pageId)).toBe(true);
-    expect((await getDriveWallet(ids.priya, productId, 'session')).ok).toBe(true);
+    expect(await getUserDriveAccess(credentialActor(ids.marcus, null), productId)).toBe(true);
+    expect(await canUserViewPage(credentialActor(ids.marcus, null), pageId)).toBe(true);
+    expect((await getDriveWallet(credentialActor(ids.priya, null), productId, 'session')).ok).toBe(true);
 
     // Inviting.
-    expect(await createOrRotateInvitation({ orgId, email: `new-${createId()}@northwind.test`, role: 'MEMBER', invitedBy: ids.priya, now: new Date(), deliver }))
+    expect(await createOrRotateInvitation({ credential: 'session', orgId, email: `new-${createId()}@northwind.test`, role: 'MEMBER', invitedBy: ids.priya, now: new Date(), deliver }))
       .toEqual({ ok: false, status: 402, reason: 'org_lapsed', message: ORG_LAPSED_MESSAGE });
     expect(deliver).not.toHaveBeenCalled();
     // Creating an org drive, or taking one in.
     expect(await createOrgDrive(ids.marcus, { authentication: null, name: 'Engineering', orgId }, deps)).toMatchObject({ ok: false, code: 'org_lapsed', status: 402 });
     expect(await moveDriveToOrg(ids.dana, personalDriveId, { orgId }, deps)).toMatchObject({ ok: false, code: 'org_lapsed', status: 402 });
     // The pool and allocations.
-    expect(await updateDriveWallet(ids.priya, productId, { allocationCents: 130_000 }, 'session')).toEqual(lapsedWallet);
-    expect(await topUpDriveWallet(ids.priya, productId, { amountCents: 500, idempotencyKey: createId() }, 'session')).toEqual(lapsedWallet);
+    expect(await updateDriveWallet(credentialActor(ids.priya, null), productId, { allocationCents: 130_000 }, 'session')).toEqual(lapsedWallet);
+    expect(await topUpDriveWallet(credentialActor(ids.priya, null), productId, { amountCents: 500, idempotencyKey: createId() }, 'session')).toEqual(lapsedWallet);
     // Loosening policies or caps.
-    expect(await updateOrgPolicies({ orgId, actorId: ids.priya, patch: { seatAllowanceCents: DEFAULT_ORG_POLICIES.seatAllowanceCents + 1 } })).toEqual(lapsedPolicy);
-    expect(await setDriveWalletCap(ids.priya, productId, ids.marcus, { dailyCents: 400 }, 'session')).toEqual(lapsedWallet);
+    expect(await updateOrgPolicies({ actorAuthentication: null, orgId, actorId: ids.priya, patch: { seatAllowanceCents: DEFAULT_ORG_POLICIES.seatAllowanceCents + 1 } })).toEqual(lapsedPolicy);
+    expect(await setDriveWalletCap(credentialActor(ids.priya, null), productId, ids.marcus, { dailyCents: 400 }, 'session')).toEqual(lapsedWallet);
     expect(await setSeatCap(ids.priya, orgId, ids.dana, { monthlyCents: DEFAULT_ORG_POLICIES.seatAllowanceCents + 1, dailyCents: null })).toEqual(lapsedWallet);
     // Approving a guest.
     expect(await claimGuestApprovalDecision({ orgId, holdId: hold.holdId, decision: 'approve' })).toEqual(lapsedPolicy);
@@ -266,9 +267,9 @@ describe('a lapsed org, every capability at once (orgs on, real Postgres)', () =
 
     // Restricting still works ([D-OW-33]): tighten a policy, lower a cap, pause the wallet, decline a guest,
     // revoke a share link and an invitation, remove a member.
-    expect(await updateOrgPolicies({ orgId, actorId: ids.priya, patch: { publicShareLinks: false } })).toMatchObject({ ok: true });
-    expect(await setDriveWalletCap(ids.priya, productId, ids.marcus, { dailyCents: 100 }, 'session')).toMatchObject({ ok: true });
-    expect(await updateDriveWallet(ids.priya, productId, { paused: true }, 'session')).toMatchObject({ ok: true });
+    expect(await updateOrgPolicies({ actorAuthentication: null, orgId, actorId: ids.priya, patch: { publicShareLinks: false } })).toMatchObject({ ok: true });
+    expect(await setDriveWalletCap(credentialActor(ids.priya, null), productId, ids.marcus, { dailyCents: 100 }, 'session')).toMatchObject({ ok: true });
+    expect(await updateDriveWallet(credentialActor(ids.priya, null), productId, { paused: true }, 'session')).toMatchObject({ ok: true });
     const second = await requestGuestApproval({ orgId, driveId: productId, userId: ids.gita, origin: 'invite', request: { role: 'MEMBER' }, requestedBy: ids.dana });
     expect(await claimGuestApprovalDecision({ orgId, holdId: second.holdId, decision: 'decline' })).toMatchObject({ ok: true });
     expect(await revokeDriveShareLink(ctxFor(ids.dana), linkId)).toEqual({ ok: true, data: undefined });
@@ -277,10 +278,10 @@ describe('a lapsed org, every capability at once (orgs on, real Postgres)', () =
 
     // Paid again: the refused capabilities are back, with no other step.
     await setSubscription('active');
-    expect((await createOrRotateInvitation({ orgId, email: `back-${createId()}@northwind.test`, role: 'MEMBER', invitedBy: ids.priya, now: new Date(), deliver })).ok).toBe(true);
+    expect((await createOrRotateInvitation({ credential: 'session', orgId, email: `back-${createId()}@northwind.test`, role: 'MEMBER', invitedBy: ids.priya, now: new Date(), deliver })).ok).toBe(true);
     expect((await createOrgDrive(ids.dana, { authentication: null, name: 'Engineering', orgId }, deps)).ok).toBe(true);
     expect(await claimGuestApprovalDecision({ orgId, holdId: hold.holdId, decision: 'approve' })).toMatchObject({ ok: true });
-    expect(await updateDriveWallet(ids.priya, productId, { paused: false }, 'session')).toMatchObject({ ok: true });
+    expect(await updateDriveWallet(credentialActor(ids.priya, null), productId, { paused: false }, 'session')).toMatchObject({ ok: true });
     const admitted = await gateComputeCharge({ kind: 'org', orgId, userId: ids.dana }, { estCostCents: 50 });
     expect(admitted).toMatchObject({ allowed: true, walletId: poolId });
     if (admitted.allowed && admitted.holdId) await releaseHold(admitted.holdId);

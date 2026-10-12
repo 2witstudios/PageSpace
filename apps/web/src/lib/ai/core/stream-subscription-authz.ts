@@ -5,6 +5,7 @@ import {
   canAccessConversation,
   decideConversationAccess,
 } from '@pagespace/lib/permissions/conversation-access';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 /**
  * Who may SUBSCRIBE to a server-owned stream.
@@ -28,15 +29,16 @@ import {
  * not replace it.
  */
 export const canSubscribeToStream = async ({
-  userId,
+  actor,
   streamOwnerId,
   conversationId,
 }: {
-  userId: string;
+  /** The subscriber's credential: a shared page conversation is opened through it (sign-in policy included). */
+  actor: AccessActor;
   streamOwnerId: string;
   conversationId: string;
 }): Promise<boolean> => {
-  if (streamOwnerId === userId) return true;
+  if (streamOwnerId === actor.userId) return true;
 
   const [conversation] = await db
     .select({
@@ -50,7 +52,7 @@ export const canSubscribeToStream = async ({
     .limit(1);
 
   if (!conversation) return false;
-  return canAccessConversation(userId, conversation);
+  return canAccessConversation(actor, conversation);
 };
 
 /**

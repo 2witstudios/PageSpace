@@ -1,3 +1,4 @@
+import { credentialActor } from '../../../../permissions/access-actor';
 /**
  * The two writers, in one process, against one store — the interleavings the
  * lock exists for.
@@ -19,7 +20,7 @@ import { buildPreviewRelaySpec, PREVIEW_RELAY_SERVICE_NAME } from '../preview-re
 const NOW = new Date('2026-09-07T12:00:00.000Z');
 const INSTANCE = 'inst-live';
 const HOLDER: DevPreviewHolderRef = { kind: 'env', id: 'env1' };
-const ACTOR = { userId: 'u1', wakeSubject: { driveId: 'd1', ownerId: 'owner' } };
+const ACTOR = { actor: credentialActor('u1', null), wakeSubject: { driveId: 'd1', ownerId: 'owner' } };
 
 /**
  * ONE store both tiers write to, enforcing the same compare-and-set the real

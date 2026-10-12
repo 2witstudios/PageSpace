@@ -57,7 +57,7 @@ afterAll(async () => {
 const setWho = (whoCanInvite: string | undefined) => db.update(organizations).set({ policies: whoCanInvite === undefined ? {} : { whoCanInvite } }).where(eq(organizations.id, w.orgId));
 /** The inviter's role is read from org_members inside the service; each id below holds the role named. */
 const invite = (invitedBy: string, role: 'MEMBER' | 'ADMIN' = 'MEMBER') =>
-  createOrRotateInvitation({ orgId: w.orgId, email: `p-${createId()}@northwind.test`, role, invitedBy, now: new Date(), deliver });
+  createOrRotateInvitation({ credential: 'session', orgId: w.orgId, email: `p-${createId()}@northwind.test`, role, invitedBy, now: new Date(), deliver });
 const invitations = () => db.select().from(orgInvitations).where(eq(orgInvitations.orgId, w.orgId));
 
 describe('who can invite', () => {
@@ -96,14 +96,14 @@ describe('who can invite', () => {
     if (!issued.ok) throw new Error('setup');
     await setWho('members');
 
-    const asMember = await resendInvitation({ orgId: w.orgId, invitationId: issued.invitation.id, actorId: w.member, now: new Date(), deliver });
+    const asMember = await resendInvitation({ credential: 'session', orgId: w.orgId, invitationId: issued.invitation.id, actorId: w.member, now: new Date(), deliver });
     expect(asMember).toMatchObject({ ok: false, status: 403, code: 'org_policy' });
     await setWho('admins');
-    const asAdmin = await resendInvitation({ orgId: w.orgId, invitationId: issued.invitation.id, actorId: w.admin, now: new Date(), deliver });
+    const asAdmin = await resendInvitation({ credential: 'session', orgId: w.orgId, invitationId: issued.invitation.id, actorId: w.admin, now: new Date(), deliver });
     expect(asAdmin.ok).toBe(true);
     const plain = await invite(w.owner);
     if (!plain.ok) throw new Error('setup');
     await setWho('admins');
-    expect(await resendInvitation({ orgId: w.orgId, invitationId: plain.invitation.id, actorId: w.member, now: new Date(), deliver })).toMatchObject({ ok: false, code: 'org_policy' });
+    expect(await resendInvitation({ credential: 'session', orgId: w.orgId, invitationId: plain.invitation.id, actorId: w.member, now: new Date(), deliver })).toMatchObject({ ok: false, code: 'org_policy' });
   });
 });

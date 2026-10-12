@@ -9,6 +9,7 @@ import { db } from '@pagespace/db/db';
 import { eq, and } from '@pagespace/db/operators';
 import { drives, type OrgDriveVisibility } from '@pagespace/db/schema/core';
 import { loadDriveLeadAuthority, type DriveLeadAction } from '../permissions/drive-relationship-loader';
+import type { AccessActor } from '../permissions/access-actor';
 
 // Types for repository operations
 export interface DriveRecord {
@@ -58,7 +59,7 @@ export const driveRepository = {
    */
   findByIdForLeadAction: async (
     driveId: string,
-    userId: string,
+    actor: AccessActor,
     action: DriveLeadAction
   ): Promise<DriveRecord | null> => {
     const drive = await db.query.drives.findFirst({
@@ -66,7 +67,7 @@ export const driveRepository = {
     });
     if (!drive) return null;
 
-    const authority = await loadDriveLeadAuthority(userId, drive, action);
+    const authority = await loadDriveLeadAuthority(actor, drive, action);
     return authority.allowed ? (drive as DriveRecord) : null;
   },
 

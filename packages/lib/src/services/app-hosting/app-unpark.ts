@@ -43,6 +43,7 @@ import { isAppHostingEnabled, resolveDailyAwakeSecondsCap } from './app-hosting-
 import { planDailyAwakeCap, utcDayOf } from './app-metering-core';
 import { isCreditMetered } from './dedicated-tier';
 import { planTransition } from './provisioner-core';
+import type { AccessActor } from '../../permissions/access-actor';
 
 export const MEMBER_CAP_PARK_ERROR = `parked: ${MEMBER_CAP_PARK_REASON}`;
 
@@ -117,11 +118,11 @@ export type UnparkPublishedAppResult =
   | { outcome: 'held'; held: UnparkHeld; gateReason?: string };
 
 /**
- * MANUAL un-park by `actorId`. The authority is decided in the permissions module; the cap is
+ * MANUAL un-park by `actor`. The authority is decided in the permissions module; the cap is
  * re-checked and a still-capped app is REFUSED (`held: still_capped`), not re-attributed.
  */
 export async function unparkPublishedApp(
-  input: { publishedAppId: string; actorId: string },
+  input: { publishedAppId: string; actor: AccessActor },
   deps: AppUnparkDeps = defaultAppUnparkDeps,
 ): Promise<UnparkPublishedAppResult> {
   if (!deps.isEnabled()) return { outcome: 'refused', reason: 'disabled' };
@@ -134,7 +135,7 @@ export async function unparkPublishedApp(
     .limit(1);
   if (!drive) return { outcome: 'refused', reason: 'not_found' };
 
-  const authority = await loadAppUnparkAuthority(input.actorId, drive, row.costOwnerId);
+  const authority = await loadAppUnparkAuthority(input.actor, drive, row.costOwnerId);
   if (!authority.allowed) return { outcome: 'refused', reason: 'forbidden' };
   if (row.status !== 'parked') return { outcome: 'refused', reason: 'not_parked' };
 
@@ -147,7 +148,7 @@ export async function unparkPublishedApp(
       await recordOrgAuditEvent({
         orgId: drive.orgId,
         eventType: 'org.app.unparked',
-        actorId: input.actorId,
+        actorId: input.actor.userId,
         resourceType: 'published_app',
         resourceId: row.id,
         driveId: row.driveId,

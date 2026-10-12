@@ -19,6 +19,7 @@ import {
   type DevPreviewUserActionDeps,
 } from '../dev-preview-status';
 import { PREVIEW_RELAY_SERVICE_NAME, SPRITE_HTTP_PORT, buildPreviewRelaySpec } from '../preview-relay';
+import { credentialActor } from '../../../../permissions/access-actor';
 
 const NOW = new Date('2026-09-06T12:00:00.000Z');
 const INSTANCE = 'inst-live';
@@ -269,7 +270,7 @@ function statusDeps(over: Partial<DevPreviewStatusDeps> & { calls?: string[] } =
 describe('gatherDevPreviewStatus — authorize, attach, fold; never a probe', () => {
   it('an env member gets the live state with the slot explained from the realtime snapshot, and no exec ever runs', async () => {
     const d = statusDeps();
-    const result = await gatherDevPreviewStatus({ authorizeAs: ENV, holder: ENV, userId: 'u1', deps: d });
+    const result = await gatherDevPreviewStatus({ authorizeAs: ENV, holder: ENV, actor: credentialActor('u1', null), deps: d });
     if (!result.ok) throw new Error('expected ok');
     assert({ given: 'member + live relay + snapshot', should: 'be live with a known relay-held slot', actual: [result.status.state.status, result.status.slot.known && result.status.slot.holder, result.status.sandbox, result.status.openPath], expected: ['live', 'relay', 'attached', '/api/drives/d1/envs/env1/preview/open'] });
     assert({ given: 'the gather', should: 'never exec', actual: d.calls.includes('exec'), expected: false });
@@ -278,18 +279,18 @@ describe('gatherDevPreviewStatus — authorize, attach, fold; never a probe', ()
 
   it('a LEGACY sprite (name over the budget, so its URL cannot resolve) reads as down/unrepairable BEFORE the frame is opened — from the name alone, no control-plane read', async () => {
     const legacy = statusDeps({ attach: async () => ({ ...fakeHandle({ relay: relayService(5173) }), sandboxId: `pgs-env-${'a'.repeat(55)}` }) });
-    const r1 = await gatherDevPreviewStatus({ authorizeAs: ENV, holder: ENV, userId: 'u1', deps: legacy });
+    const r1 = await gatherDevPreviewStatus({ authorizeAs: ENV, holder: ENV, actor: credentialActor('u1', null), deps: legacy });
     if (!r1.ok) throw new Error('expected ok');
     assert({ given: 'a 63-char sprite name', should: 'be down, unrepairable, with the sentence', actual: [r1.status.state.status, 'repairable' in r1.status.state ? r1.status.state.repairable : null, r1.status.state.message], expected: ['down', false, SPRITE_URL_UNRESOLVABLE_MESSAGE] });
     const current = statusDeps({ attach: async () => ({ ...fakeHandle({ relay: relayService(5173) }), sandboxId: `pgs-env-${'a'.repeat(40)}` }) });
-    const r2 = await gatherDevPreviewStatus({ authorizeAs: ENV, holder: ENV, userId: 'u1', deps: current });
+    const r2 = await gatherDevPreviewStatus({ authorizeAs: ENV, holder: ENV, actor: credentialActor('u1', null), deps: current });
     if (!r2.ok) throw new Error('expected ok');
     assert({ given: 'a 48-char sprite name', should: 'stay live', actual: r2.status.state.status, expected: 'live' });
   });
 
   it('a refused user gets the decider reason and NO control-plane read', async () => {
     const d = statusDeps({ resolveDriveMembership: async () => 'none' });
-    const result = await gatherDevPreviewStatus({ authorizeAs: ENV, holder: ENV, userId: 'u1', deps: d });
+    const result = await gatherDevPreviewStatus({ authorizeAs: ENV, holder: ENV, actor: credentialActor('u1', null), deps: d });
     assert({ given: 'no membership', should: 'refuse with the reason', actual: result, expected: { ok: false, reason: 'not-authorized', detail: 'drive_access_denied' } });
     assert({ given: 'a refusal', should: 'not attach or ask realtime', actual: d.calls.some((c) => c === 'attach' || c === 'readListeners' || c === 'services.get'), expected: false });
   });
@@ -298,14 +299,14 @@ describe('gatherDevPreviewStatus — authorize, attach, fold; never a probe', ()
     const d = statusDeps({
       findSession: async () => ({ id: 'ws1', ownerId: 'owner', driveId: 'd1', envId: 'env1', sandboxId: null, spriteTornDownAt: null, endedAt: null }),
     });
-    const result = await gatherDevPreviewStatus({ authorizeAs: WS, holder: ENV, userId: 'u1', deps: d });
+    const result = await gatherDevPreviewStatus({ authorizeAs: WS, holder: ENV, actor: credentialActor('u1', null), deps: d });
     if (!result.ok) throw new Error('expected ok');
     assert({ given: 'env-bound session', should: 'be the env preview reached via the session route', actual: [result.status.holder, result.status.openPath, result.status.state.status], expected: [ENV, '/api/agent-workspaces/ws1/preview/open', 'live'] });
   });
 
   it('a holder with no live sprite is absent: the row is read (so a stale one still surfaces as none) and nothing is attached', async () => {
     const d = statusDeps({ findEnv: async () => ({ id: 'env1', driveId: 'd1', substrate: 'sprite', sandboxId: null, spriteTornDownAt: null }) });
-    const result = await gatherDevPreviewStatus({ authorizeAs: ENV, holder: ENV, userId: 'u1', deps: d });
+    const result = await gatherDevPreviewStatus({ authorizeAs: ENV, holder: ENV, actor: credentialActor('u1', null), deps: d });
     if (!result.ok) throw new Error('expected ok');
     assert({ given: 'no sandbox', should: 'be absent/none', actual: [result.status.sandbox, result.status.state.status, result.status.canStop], expected: ['absent', 'none', false] });
     assert({ given: 'no sandbox', should: 'not attach', actual: d.calls.includes('attach'), expected: false });
@@ -313,14 +314,14 @@ describe('gatherDevPreviewStatus — authorize, attach, fold; never a probe', ()
 
   it('a sprite the platform cannot attach is unreachable, folded without listeners', async () => {
     const d = statusDeps({ attach: async () => null });
-    const result = await gatherDevPreviewStatus({ authorizeAs: ENV, holder: ENV, userId: 'u1', deps: d });
+    const result = await gatherDevPreviewStatus({ authorizeAs: ENV, holder: ENV, actor: credentialActor('u1', null), deps: d });
     if (!result.ok) throw new Error('expected ok');
     assert({ given: 'attach → null', should: 'be unreachable / instance-unknown, slot unknown', actual: [result.status.sandbox, result.status.state.status, result.status.slot], expected: ['unreachable', 'instance-unknown', { known: false }] });
   });
 
   it('a null snapshot from realtime renders the LAST-KNOWN state honestly (relay status carries it) with the slot unknown', async () => {
     const d = statusDeps({ readListeners: async () => ({ detection: 'unavailable', listeners: null }) });
-    const result = await gatherDevPreviewStatus({ authorizeAs: ENV, holder: ENV, userId: 'u1', deps: d });
+    const result = await gatherDevPreviewStatus({ authorizeAs: ENV, holder: ENV, actor: credentialActor('u1', null), deps: d });
     if (!result.ok) throw new Error('expected ok');
     assert({ given: 'no snapshot', should: 'still be live, slot unknown', actual: [result.status.state.status, result.status.slot], expected: ['live', { known: false }] });
   });
@@ -328,7 +329,7 @@ describe('gatherDevPreviewStatus — authorize, attach, fold; never a probe', ()
 
 // -----------------------------------------------------------------------------
 
-const ACTOR = { userId: 'u1', wakeSubject: { driveId: 'd1', ownerId: 'owner' } };
+const ACTOR = { actor: credentialActor('u1', null), wakeSubject: { driveId: 'd1', ownerId: 'owner' } };
 
 function actionDeps(over: Partial<DevPreviewUserActionDeps> & { calls?: string[]; store?: ReturnType<typeof fakeStore> } = {}) {
   const calls = over.calls ?? [];
@@ -337,7 +338,7 @@ function actionDeps(over: Partial<DevPreviewUserActionDeps> & { calls?: string[]
     previewStore: store,
     attach: async () => fakeHandle({ relay: relayService(5173), calls }),
     readListeners: async () => ({ detection: 'unavailable', listeners: null }),
-    canRunCode: async (input) => { calls.push(`canRunCode:${input.userId}:${input.driveId}:${input.ownerId}`); return { ok: true }; },
+    canRunCode: async (input) => { calls.push(`canRunCode:${input.actor.userId}:${input.driveId}:${input.ownerId}`); return { ok: true }; },
     now: () => NOW,
     ...over,
   };
@@ -406,7 +407,7 @@ describe('applyDevPreviewUserAction — intent first, then ONE reconcile through
       store,
       calls: trackedCalls,
       attach: async () => fakeHandle({ relay: relayService(5173, { status: 'failed' }), calls: trackedCalls }),
-      canRunCode: async (input) => { trackedCalls.push(`canRunCode:${input.userId}:${input.driveId}:${input.ownerId}`); return { ok: false, reason: 'no_capability' as never }; },
+      canRunCode: async (input) => { trackedCalls.push(`canRunCode:${input.actor.userId}:${input.driveId}:${input.ownerId}`); return { ok: false, reason: 'no_capability' as never }; },
     });
     const result = await applyDevPreviewUserAction({ holder: ENV, action: { kind: 'resume' }, ...ACTOR, deps });
     assert({ given: 'a payer who may not run code', should: 'refuse the resume with the gate reason', actual: result, expected: { ok: false, reason: 'wake-not-allowed', detail: 'no_capability' } });

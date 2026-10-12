@@ -1,4 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+// The org sign-in gate (D-OW-45) reads policies through its own module; these tests are about the
+// resolvers behind it, so no org here sets a sign-in policy. Plain functions: a mock reset must not undo them.
+vi.mock('../actor-authentication', () => ({
+  checkActorDriveAuthentication: async () => ({ allowed: true }),
+  checkActorResourceAuthentication: async () => ({ allowed: true }),
+  filterDrivesForActor: async (_actor: unknown, ids: readonly string[]) => new Set(ids),
+  filterResourcesForActor: async (_actor: unknown, ids: readonly string[]) => new Set(ids),
+  explainOrgAuthenticationDenial: async () => null,
+}));
 
 vi.mock('@pagespace/db/db', () => ({
   db: {
@@ -63,6 +72,7 @@ vi.mock('../../validators/id-validators', () => ({
 
 import { getUserAccessiblePagesInDrive, getUserAccessiblePagesInDriveWithDetails } from '../permissions';
 import { db } from '@pagespace/db/db';
+import { credentialActor } from '../access-actor';
 
 const VALID_USER = 'clxxxxxxxxxxxxxxxxxxxxxxx';
 const VALID_DRIVE = 'clzzzzzzzzzzzzzzzzzzzzzzz';
@@ -129,7 +139,7 @@ describe('getUserAccessiblePagesInDrive — custom role path', () => {
       // 7. explicit permissions
       .mockReturnValueOnce(mockChainLeftJoinWhere([]));
 
-    const result = await getUserAccessiblePagesInDrive(VALID_USER, VALID_DRIVE);
+    const result = await getUserAccessiblePagesInDrive(credentialActor(VALID_USER, null), VALID_DRIVE);
     expect(result).toContain('private-page');
   });
 
@@ -149,7 +159,7 @@ describe('getUserAccessiblePagesInDrive — custom role path', () => {
       // 7. explicit permissions (none)
       .mockReturnValueOnce(mockChainLeftJoinWhere([]));
 
-    const result = await getUserAccessiblePagesInDrive(VALID_USER, VALID_DRIVE);
+    const result = await getUserAccessiblePagesInDrive(credentialActor(VALID_USER, null), VALID_DRIVE);
     expect(result).not.toContain('stale-page');
     expect(result).toHaveLength(0);
   });
@@ -168,7 +178,7 @@ describe('getUserAccessiblePagesInDrive — custom role path', () => {
       // 6. explicit permissions (none)
       .mockReturnValueOnce(mockChainLeftJoinWhere([]));
 
-    const result = await getUserAccessiblePagesInDrive(VALID_USER, VALID_DRIVE);
+    const result = await getUserAccessiblePagesInDrive(credentialActor(VALID_USER, null), VALID_DRIVE);
     expect(result).not.toContain('private-page');
     expect(result).toHaveLength(0);
   });
@@ -187,7 +197,7 @@ describe('getUserAccessiblePagesInDrive — custom role path', () => {
       // 6. explicit permissions (none)
       .mockReturnValueOnce(mockChainLeftJoinWhere([]));
 
-    const result = await getUserAccessiblePagesInDrive(VALID_USER, VALID_DRIVE);
+    const result = await getUserAccessiblePagesInDrive(credentialActor(VALID_USER, null), VALID_DRIVE);
     expect(result).not.toContain('non-private-page');
     expect(result).toHaveLength(0);
   });
@@ -200,7 +210,7 @@ describe('getUserAccessiblePagesInDrive — custom role path', () => {
       .mockReturnValueOnce(mockChainWhere([{ permissions: {}, driveWidePermissions: { canView: false, canEdit: false, canShare: false } }]))
       .mockReturnValueOnce(mockChainLeftJoinWhere([]));
 
-    const result = await getUserAccessiblePagesInDrive(VALID_USER, VALID_DRIVE);
+    const result = await getUserAccessiblePagesInDrive(credentialActor(VALID_USER, null), VALID_DRIVE);
     expect(result).toHaveLength(0);
   });
 
@@ -215,7 +225,7 @@ describe('getUserAccessiblePagesInDrive — custom role path', () => {
       // 5. explicit permissions
       .mockReturnValueOnce(mockChainLeftJoinWhere([]));
 
-    const result = await getUserAccessiblePagesInDrive(VALID_USER, VALID_DRIVE);
+    const result = await getUserAccessiblePagesInDrive(credentialActor(VALID_USER, null), VALID_DRIVE);
     expect(result).toContain('non-private-page');
     // drive, one effective membership read (admin and member alike), non-private pages, explicit grants
     expect(db.select).toHaveBeenCalledTimes(4);
@@ -246,7 +256,7 @@ describe('getUserAccessiblePagesInDriveWithDetails — custom role path', () => 
       // 7. explicit pages (none)
       .mockReturnValueOnce(mockChainInnerJoinWhere([]));
 
-    const result = await getUserAccessiblePagesInDriveWithDetails(VALID_USER, VALID_DRIVE);
+    const result = await getUserAccessiblePagesInDriveWithDetails(credentialActor(VALID_USER, null), VALID_DRIVE);
     const page = result.find(p => p.id === 'page-1');
     expect(page).toBeDefined();
     expect(page?.permissions).toEqual({ canView: true, canEdit: true, canShare: false, canDelete: false });
@@ -270,7 +280,7 @@ describe('getUserAccessiblePagesInDriveWithDetails — custom role path', () => 
       // 6. explicit pages (none)
       .mockReturnValueOnce(mockChainInnerJoinWhere([]));
 
-    const result = await getUserAccessiblePagesInDriveWithDetails(VALID_USER, VALID_DRIVE);
+    const result = await getUserAccessiblePagesInDriveWithDetails(credentialActor(VALID_USER, null), VALID_DRIVE);
     expect(result.find(p => p.id === 'non-private-page')).toBeUndefined();
     expect(result).toHaveLength(0);
   });
@@ -288,7 +298,7 @@ describe('getUserAccessiblePagesInDriveWithDetails — custom role path', () => 
       // no role pages query — no canView=true entries in rolePerms
       .mockReturnValueOnce(mockChainInnerJoinWhere([]));
 
-    const result = await getUserAccessiblePagesInDriveWithDetails(VALID_USER, VALID_DRIVE);
+    const result = await getUserAccessiblePagesInDriveWithDetails(credentialActor(VALID_USER, null), VALID_DRIVE);
     expect(result).toHaveLength(0);
   });
 
@@ -311,7 +321,7 @@ describe('getUserAccessiblePagesInDriveWithDetails — custom role path', () => 
       // 7. explicit pages (none)
       .mockReturnValueOnce(mockChainInnerJoinWhere([]));
 
-    const result = await getUserAccessiblePagesInDriveWithDetails(VALID_USER, VALID_DRIVE);
+    const result = await getUserAccessiblePagesInDriveWithDetails(credentialActor(VALID_USER, null), VALID_DRIVE);
     const page = result.find(p => p.id === 'private-1');
     expect(page).toBeDefined();
     expect(page?.permissions).toEqual({ canView: true, canEdit: false, canShare: false, canDelete: false });

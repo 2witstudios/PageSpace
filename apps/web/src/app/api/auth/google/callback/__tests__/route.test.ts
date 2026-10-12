@@ -488,10 +488,20 @@ describe('GET /api/auth/google/callback', () => {
 
       expect(validateOrCreateDeviceToken).toHaveBeenCalledWith(
         expect.objectContaining({
+          authentication: { authenticatedAtMs: expect.any(Number), assurance: 'single_factor' },
           deviceId: 'dev-abc',
           deviceName: 'My Mac',
         })
       );
+    });
+
+    it('SEC-2 (partial) a Google callback records single-factor evidence on the session it creates (D-OW-45)', async () => {
+      const before = Date.now();
+      await GET(createCallbackRequest({ code: 'valid-code', state: createSignedState({ platform: 'web' }) }));
+
+      const [options] = vi.mocked(sessionService.createSession).mock.calls[0];
+      expect(options.authentication).toEqual({ authenticatedAtMs: expect.any(Number), assurance: 'single_factor' });
+      expect(options.authentication?.authenticatedAtMs).toBeGreaterThanOrEqual(before);
     });
 
     it('uses data.returnUrl default when missing from signed state', async () => {
@@ -942,6 +952,7 @@ describe('GET /api/auth/google/callback', () => {
 
       expect(validateOrCreateDeviceToken).toHaveBeenCalledWith(
         expect.objectContaining({
+          authentication: { authenticatedAtMs: expect.any(Number), assurance: 'single_factor' },
           deviceName: 'TestBrowser/1.0',
         })
       );
@@ -1055,6 +1066,7 @@ describe('GET /api/auth/google/callback', () => {
 
       expect(validateOrCreateDeviceToken).toHaveBeenCalledWith(
         expect.objectContaining({
+          authentication: { authenticatedAtMs: expect.any(Number), assurance: 'single_factor' },
           deviceId: 'mock-cuid',
           platform: 'ios',
         })
@@ -1096,6 +1108,7 @@ describe('GET /api/auth/google/callback', () => {
 
       expect(validateOrCreateDeviceToken).toHaveBeenCalledWith(
         expect.objectContaining({
+          authentication: { authenticatedAtMs: expect.any(Number), assurance: 'single_factor' },
           deviceName: 'iOS App',
         })
       );

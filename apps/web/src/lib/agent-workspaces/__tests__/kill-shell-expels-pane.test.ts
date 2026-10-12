@@ -31,6 +31,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { WorkspaceNode } from '@pagespace/lib/agent-workspaces/workspace-node';
 import type { MembershipResult } from '@pagespace/lib/agent-workspaces/workspace-membership';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const WORKSPACE = 'ws-1';
 const SHELL = 'shell-1';
@@ -118,7 +119,7 @@ beforeEach(() => {
 
 describe('killShellById', () => {
   it('EXPELS the pane bound to the shell, in the write that drops its row', async () => {
-    const result = await killShellById({ shellId: SHELL, actingUserId: ACTOR });
+    const result = await killShellById({ shellId: SHELL, actor: credentialActor(ACTOR, null) });
 
     expect(result).toEqual({ ok: true, killed: true, panes: { paneCount: 1, nodeId: 'n-shell' } });
     // Addressed by TARGET, not by node id — the caller knows which shell it
@@ -127,12 +128,12 @@ describe('killShellById', () => {
     // And the workspace it wrote to is the shell's own, read off the row rather
     // than taken from a caller that could name a different one.
     expect(membershipWrite).toHaveBeenCalledWith(
-      expect.objectContaining({ workspaceId: WORKSPACE, actingUserId: ACTOR }),
+      expect.objectContaining({ workspaceId: WORKSPACE, actor: expect.objectContaining({ userId: ACTOR }) }),
     );
   });
 
   it('leaves every OTHER pane exactly where it was', async () => {
-    await killShellById({ shellId: SHELL, actingUserId: ACTOR });
+    await killShellById({ shellId: SHELL, actor: credentialActor(ACTOR, null) });
     expect(tree.nodes.map((node) => node.id)).toEqual([WORKSPACE, 'n-chat']);
   });
 
@@ -145,7 +146,7 @@ describe('killShellById', () => {
     // queued behind a sleepy VM, which is exactly what `destroyWorkspaceTree`
     // refuses to do. The database half stays inside, because the row and the
     // node agreeing is what the transaction is actually for.
-    await killShellById({ shellId: SHELL, actingUserId: ACTOR });
+    await killShellById({ shellId: SHELL, actor: credentialActor(ACTOR, null) });
 
     expect(order).toEqual(['attach', 'killSession', 'lock', 'remove']);
   });
@@ -156,7 +157,7 @@ describe('killShellById', () => {
     // `not_a_member` is what a user clicking Close produces every time.
     tree.nodes = tree.nodes.filter((node) => node.id !== 'n-shell');
 
-    const result = await killShellById({ shellId: SHELL, actingUserId: ACTOR });
+    const result = await killShellById({ shellId: SHELL, actor: credentialActor(ACTOR, null) });
 
     // `nodeId` is null because there was no pane left to close — not because
     // the kill failed to name the one it closed.
@@ -170,7 +171,7 @@ describe('killShellById', () => {
     // reached the transaction and unwound; it no longer gets that far.
     host.attach.mockRejectedValue(new Error('control plane unreachable'));
 
-    const result = await killShellById({ shellId: SHELL, actingUserId: ACTOR });
+    const result = await killShellById({ shellId: SHELL, actor: credentialActor(ACTOR, null) });
 
     expect(result).toEqual({ ok: false, reason: 'error' });
     expect(membershipWrite).not.toHaveBeenCalled();
@@ -184,7 +185,7 @@ describe('killShellById', () => {
     // cannot show — the defect this function closes, mirrored.
     shellStore.remove.mockRejectedValue(new Error('write failed'));
 
-    await expect(killShellById({ shellId: SHELL, actingUserId: ACTOR })).rejects.toThrow('write failed');
+    await expect(killShellById({ shellId: SHELL, actor: credentialActor(ACTOR, null) })).rejects.toThrow('write failed');
     expect(tree.nodes.find((node) => node.id === 'n-shell')).toBeDefined();
   });
 
@@ -201,7 +202,7 @@ describe('killShellById', () => {
       // The read inside the transaction: one started in between.
       .mockResolvedValue({ id: SHELL, workspaceId: WORKSPACE, spriteExecId: 'exec-late' });
 
-    await expect(killShellById({ shellId: SHELL, actingUserId: ACTOR })).resolves.toEqual({
+    await expect(killShellById({ shellId: SHELL, actor: credentialActor(ACTOR, null) })).resolves.toEqual({
       ok: false,
       reason: 'error',
     });
@@ -217,7 +218,7 @@ describe('killShellById', () => {
     // shell goes exactly as it would after a successful kill.
     host.attach.mockResolvedValue(null);
 
-    const result = await killShellById({ shellId: SHELL, actingUserId: ACTOR });
+    const result = await killShellById({ shellId: SHELL, actor: credentialActor(ACTOR, null) });
 
     expect(result).toMatchObject({ ok: true, killed: true });
     expect(tree.nodes.find((node) => node.id === 'n-shell')).toBeUndefined();
@@ -226,7 +227,7 @@ describe('killShellById', () => {
   it('never reaches for the sandbox when no PTY was ever opened', async () => {
     shellStore.findById.mockResolvedValue({ id: SHELL, workspaceId: WORKSPACE, spriteExecId: null });
 
-    const result = await killShellById({ shellId: SHELL, actingUserId: ACTOR });
+    const result = await killShellById({ shellId: SHELL, actor: credentialActor(ACTOR, null) });
 
     expect(result).toMatchObject({ ok: true, killed: true });
     expect(host.attach).not.toHaveBeenCalled();
@@ -240,7 +241,7 @@ describe('killShellById', () => {
     // writing nothing into it, putting a tree row back on a session that had
     // just ended. `destroyWorkspaceTree` carries the same flag for the same
     // reason.
-    await killShellById({ shellId: SHELL, actingUserId: ACTOR });
+    await killShellById({ shellId: SHELL, actor: credentialActor(ACTOR, null) });
     expect(membershipWrite).toHaveBeenCalledWith(expect.objectContaining({ seed: false }));
   });
 
@@ -249,7 +250,7 @@ describe('killShellById', () => {
     // there has no workspace to address a membership write to.
     shellStore.findById.mockResolvedValue(null);
 
-    const result = await killShellById({ shellId: SHELL, actingUserId: ACTOR });
+    const result = await killShellById({ shellId: SHELL, actor: credentialActor(ACTOR, null) });
 
     expect(result).toEqual({ ok: true, killed: false, panes: null });
     expect(membershipWrite).not.toHaveBeenCalled();
@@ -267,7 +268,7 @@ describe('killShellById', () => {
       target: { kind: 'page', id: 'page-1' },
     });
 
-    const result = await killShellById({ shellId: SHELL, actingUserId: ACTOR });
+    const result = await killShellById({ shellId: SHELL, actor: credentialActor(ACTOR, null) });
 
     expect(result).toMatchObject({ panes: { paneCount: 2, nodeId: 'n-shell' } });
   });

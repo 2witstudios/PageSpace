@@ -414,7 +414,7 @@ describe('DELETE /api/ai/global/[id]', () => {
 
       expect(expelAfterDelete).toHaveBeenCalledWith({
         conversationId: mockConversationId,
-        actingUserId: mockUserId,
+        actor: expect.objectContaining({ userId: mockUserId }),
       });
       expect(vi.mocked(expelAfterDelete).mock.invocationCallOrder[0]).toBeGreaterThan(
         vi.mocked(globalConversationRepository.softDeleteConversation).mock.invocationCallOrder[0],
@@ -442,7 +442,7 @@ describe('DELETE /api/ai/global/[id]', () => {
       expect(expelConversationFromSession).not.toHaveBeenCalled();
       expect(expelAfterDelete).toHaveBeenCalledWith({
         conversationId: mockConversationId,
-        actingUserId: mockUserId,
+        actor: expect.objectContaining({ userId: mockUserId }),
       });
       expect(vi.mocked(expelAfterDelete).mock.invocationCallOrder[0]).toBeGreaterThan(
         vi.mocked(globalConversationRepository.softDeleteConversation).mock.invocationCallOrder[0],
@@ -486,7 +486,7 @@ describe('DELETE /api/ai/global/[id]', () => {
       expect(expelConversationFromSession).toHaveBeenCalledWith({
         conversationId: mockConversationId,
         workspaceId: 'ses_1',
-        actingUserId: mockUserId,
+        actor: expect.objectContaining({ userId: mockUserId }),
       });
       expect(globalConversationRepository.softDeleteConversation).toHaveBeenCalledWith(mockUserId, mockConversationId);
     });

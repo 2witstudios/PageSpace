@@ -8,6 +8,7 @@ import { getActorInfo, logTokenActivity } from '@pagespace/lib/monitoring/activi
 import { normalizeDriveScopes } from '@pagespace/lib/auth/mcp-token-scopes';
 import { validateDriveScopeAccess } from '@pagespace/lib/services/drive-service';
 import { rejectScopedOAuth } from '../scope-guard';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 // 'oauth' lets the pagespace CLI (`pagespace keys revoke`) authenticate
 // with an OAuth access token instead of a session cookie. Revocation only
@@ -109,7 +110,7 @@ export async function PATCH(
     // Validate drive access for each scope (same logic as POST /create)
     if (driveScopes.length > 0) {
       const { invalidDriveIds, unauthorizedRoles, invalidCustomRoles, unauthorizedCustomRoles, explicitRoleWithoutMembership } =
-        await validateDriveScopeAccess(driveScopes, userId);
+        await validateDriveScopeAccess(driveScopes, actorFromAuth(auth));
 
       if (invalidDriveIds.length > 0) {
         return NextResponse.json(

@@ -121,12 +121,12 @@ describe('POST /api/agent-workspaces/[workspaceId]/shells', () => {
     expect(response.status).toBe(201);
     expect(await response.json()).toEqual({ shell: SHELL });
     expect(order).toEqual(['provision', 'spawn']);
-    expect(mockSpawnShell).toHaveBeenCalledWith({ workspaceId: SESSION_ID, ownerId: 'user-1', name: undefined });
+    expect(mockSpawnShell).toHaveBeenCalledWith({ workspaceId: SESSION_ID, owner: expect.objectContaining({ userId: 'user-1' }), name: undefined });
   });
 
   it('given a requested name, should pass it through for the pure planner to validate', async () => {
     await post({ name: 'build' });
-    expect(mockSpawnShell).toHaveBeenCalledWith({ workspaceId: SESSION_ID, ownerId: 'user-1', name: 'build' });
+    expect(mockSpawnShell).toHaveBeenCalledWith({ workspaceId: SESSION_ID, owner: expect.objectContaining({ userId: 'user-1' }), name: 'build' });
   });
 
   it('given the pane the user picked into, should forward it as a placement preference', async () => {
@@ -136,7 +136,7 @@ describe('POST /api/agent-workspaces/[workspaceId]/shells', () => {
     await post({ activeNodeId: 'node-7' });
     expect(mockSpawnShell).toHaveBeenCalledWith({
       workspaceId: SESSION_ID,
-      ownerId: 'user-1',
+      owner: expect.objectContaining({ userId: 'user-1' }),
       name: undefined,
       activeNodeId: 'node-7',
     });
@@ -145,13 +145,13 @@ describe('POST /api/agent-workspaces/[workspaceId]/shells', () => {
   it('given a non-string pane preference, should spawn without one rather than refuse', async () => {
     // A preference, not an instruction: an unusable one is dropped, never a 400.
     await post({ activeNodeId: 42 });
-    expect(mockSpawnShell).toHaveBeenCalledWith({ workspaceId: SESSION_ID, ownerId: 'user-1', name: undefined });
+    expect(mockSpawnShell).toHaveBeenCalledWith({ workspaceId: SESSION_ID, owner: expect.objectContaining({ userId: 'user-1' }), name: undefined });
   });
 
   it('given no body at all, should still spawn with an auto-label', async () => {
     const response = await post();
     expect(response.status).toBe(201);
-    expect(mockSpawnShell).toHaveBeenCalledWith({ workspaceId: SESSION_ID, ownerId: 'user-1', name: undefined });
+    expect(mockSpawnShell).toHaveBeenCalledWith({ workspaceId: SESSION_ID, owner: expect.objectContaining({ userId: 'user-1' }), name: undefined });
   });
 
   it('given a non-string name, should 400 before touching anything', async () => {

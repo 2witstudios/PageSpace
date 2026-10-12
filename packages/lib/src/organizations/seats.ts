@@ -32,6 +32,7 @@
  */
 
 import type { OrgRole } from '@pagespace/db/schema/organizations';
+import { holdsOrgRole } from './authorize-core';
 
 /**
  * How long before the billing period's end a freed seat is handed back. The renewal invoice
@@ -59,13 +60,17 @@ export function seatQuantity(input: { members: number; pendingInvites: number; i
 export type SeatAdmissionDecision =
   | { action: 'admit' }
   | { action: 'raise'; toExtra: number }
-  | { action: 'refuse'; reason: 'auto_add_off'; purchased: number; held: number };
+  | { action: 'refuse'; reason: 'auto_add_off' | 'delegated_raise'; purchased: number; held: number };
 
 /**
  * May ONE more seat be taken? `held` is the count BEFORE this seat (read under the org's
  * billing lock, so it is the truth the decision and the write both see). `purchasedExtra` is
  * the quantity Stripe was last set to, 0 while the org has no live subscription yet (its
  * provisioning prices the real count when it happens, D1).
+ *
+ * [D-OW-26] A raise is a money move (a prorated Stripe charge), so a delegated credential (an MCP/CLI
+ * key) is never admitted one: past the purchased seats it is refused as `delegated_raise`; within
+ * them it is admitted like a session.
  */
 export function decideSeatAdmission(input: {
   held: number;
@@ -73,6 +78,7 @@ export function decideSeatAdmission(input: {
   purchasedExtra: number;
   autoAdd: boolean;
   billingEnabled: boolean;
+  credential: 'session' | 'mcp';
 }): SeatAdmissionDecision {
   if (!input.billingEnabled) return { action: 'admit' };
   assertCount('held', input.held);
@@ -81,6 +87,7 @@ export function decideSeatAdmission(input: {
   const after = input.held + 1;
   if (after <= purchased) return { action: 'admit' };
   if (!input.autoAdd) return { action: 'refuse', reason: 'auto_add_off', purchased, held: input.held };
+  if (input.credential !== 'session') return { action: 'refuse', reason: 'delegated_raise', purchased, held: input.held };
   return { action: 'raise', toExtra: Math.max(0, after - input.included) };
 }
 
@@ -163,7 +170,7 @@ export function decideSeatRelease(input: {
 export function seatRefusalMessage(input: { purchased: number; held: number; actorRole: OrgRole }): string {
   const plural = input.purchased === 1 ? 'seat' : 'seats';
   const state = `All ${input.purchased} ${plural} in this organization are taken (members and pending invitations).`;
-  return input.actorRole === 'OWNER'
+  return holdsOrgRole(input.actorRole, 'OWNER')
     ? `${state} Turn on automatic seat purchase in billing to add seats as you invite, or revoke an invitation or remove a member to free one.`
     : `${state} Ask the organization Owner to turn on automatic seat purchase or to free a seat.`;
 }

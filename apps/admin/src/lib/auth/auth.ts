@@ -1,3 +1,4 @@
+import type { VerifiedAuthentication } from '@pagespace/lib/auth/authentication-evidence';
 import { NextResponse } from 'next/server';
 import { sessionService } from '@pagespace/lib/auth/session-service';
 import { logSecurityEvent } from '@pagespace/lib/logging/logger-config';
@@ -11,6 +12,8 @@ export interface VerifiedAdminUser {
   role: 'admin';
   tokenVersion: number;
   adminRoleVersion: number;
+  /** The session's ceremony evidence, carried into any credential derived from it (D-OW-45). */
+  authentication: VerifiedAuthentication | null;
 }
 
 export type AdminRouteContext = { params: Promise<Record<string, string>> };
@@ -34,6 +37,7 @@ async function authenticateSession(request: Request): Promise<VerifiedAdminUser 
     role: claims.userRole as 'admin',
     tokenVersion: claims.tokenVersion,
     adminRoleVersion: claims.adminRoleVersion,
+    authentication: claims.authentication ?? null,
   };
 }
 

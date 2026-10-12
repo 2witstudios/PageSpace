@@ -14,6 +14,7 @@ import { canUserEditPage, canUserViewPage } from '../permissions/permissions';
 import { listDriveAudience } from '../permissions/drive-audience';
 import type { DriveRoleOfHuman } from '../permissions/account-permissions';
 import type { UserId } from './grant';
+import type { AccessActor } from '../permissions/access-actor';
 
 /** A drive's admin list is small; this bounds a pathological one. */
 const MAX_CONSENTERS = 100;
@@ -21,10 +22,10 @@ const MAX_CONSENTERS = 100;
 export type AccountFactsRepository = {
   /** The drive of a live (untrashed) page; null when it does not exist. */
   readonly pageDrive: (pageId: string) => Promise<string | null>;
-  readonly driveRole: (input: { readonly driveId: string; readonly userId: string }) => Promise<DriveRoleOfHuman>;
+  readonly driveRole: (input: { readonly driveId: string; readonly actor: AccessActor }) => Promise<DriveRoleOfHuman>;
   /** The drive owner and its effective ADMINs, sorted — the consenters an agent-page account pins. */
   readonly driveConsenters: (driveId: string) => Promise<readonly UserId[]>;
-  readonly pagePermission: (input: { readonly userId: string; readonly pageId: string }) => Promise<'edit' | 'view' | 'none'>;
+  readonly pagePermission: (input: { readonly actor: AccessActor; readonly pageId: string }) => Promise<'edit' | 'view' | 'none'>;
 };
 
 export function createAccountFactsRepository(): AccountFactsRepository {
@@ -34,8 +35,8 @@ export function createAccountFactsRepository(): AccountFactsRepository {
       return rows[0]?.driveId ?? null;
     },
 
-    async driveRole({ driveId, userId }) {
-      const access = await getDriveAccess(driveId, userId);
+    async driveRole({ driveId, actor }) {
+      const access = await getDriveAccess(driveId, actor);
       return access.role === 'OWNER' || access.role === 'ADMIN' || access.role === 'MEMBER' ? access.role : null;
     },
 
@@ -54,9 +55,9 @@ export function createAccountFactsRepository(): AccountFactsRepository {
       return [...ids].sort() as UserId[];
     },
 
-    async pagePermission({ userId, pageId }) {
-      if (await canUserEditPage(userId, pageId)) return 'edit';
-      return (await canUserViewPage(userId, pageId)) ? 'view' : 'none';
+    async pagePermission({ actor, pageId }) {
+      if (await canUserEditPage(actor, pageId)) return 'edit';
+      return (await canUserViewPage(actor, pageId)) ? 'view' : 'none';
     },
   };
 }

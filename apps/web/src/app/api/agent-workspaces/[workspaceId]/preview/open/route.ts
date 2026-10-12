@@ -25,6 +25,7 @@ import { resolveDevPreviewHolder } from '@pagespace/lib/services/sandbox/preview
 import { findSessionRecord } from '@/lib/agent-workspaces/agent-workspaces-runtime';
 import { workspaceNotFoundOrDenied } from '@/lib/agent-workspaces/workspace-unavailable-response';
 import { isAllowedPreviewOpen, openPreviewForUser, signInOrDeny } from '@/lib/dev-preview/preview-runtime';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
 const ROUTE = 'agent-workspaces/[workspaceId]/preview/open';
@@ -53,7 +54,7 @@ export async function GET(request: Request, context: { params: Promise<{ workspa
     // Authorization is the SESSION's (the user reached the preview through
     // the session); the grant is minted for the HOLDER — the env's origin for
     // an env-bound session, the session's own otherwise.
-    const opened = await openPreviewForUser({ authorizeAs: { kind: 'workspace', id: session.id }, mintFor: holder, userId: auth.userId, sessionId: auth.sessionId });
+    const opened = await openPreviewForUser({ authorizeAs: { kind: 'workspace', id: session.id }, mintFor: holder, actor: actorFromAuth(auth), sessionId: auth.sessionId });
     if (!opened.ok) {
       return workspaceNotFoundOrDenied(request, auth.userId, workspaceId, opened.reason === 'not-authorized' ? opened.detail ?? 'not-authorized' : opened.reason, ROUTE);
     }

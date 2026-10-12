@@ -32,6 +32,7 @@ import {
 } from './can-run-code';
 import { checkCodeExecutionQuota, type CodeExecutionQuotaDecision } from './quota';
 import { ORG_LAPSED_MESSAGE } from '../../organizations/status-core';
+import type { AccessActor } from '../../permissions/access-actor';
 
 export type SandboxToolGateDenialReason =
   | 'kill_switch_off'
@@ -94,9 +95,10 @@ const defaultDeps: SandboxToolGateDeps = {
 };
 
 export interface SandboxToolGateInput {
-  userId: string;
+  /** Who is running the tool: their credential decides drive access, sign-in policy included. */
+  actor: AccessActor;
   driveId?: string;
-  /** The session's own owner — distinct from `userId` (the actor) — so the
+  /** The session's own owner — distinct from the actor — so the
    *  tier-eligibility gate inside `canRunCode` resolves the PAYER correctly. */
   ownerId?: string;
   tenantId?: string;
@@ -107,7 +109,7 @@ export interface SandboxToolGateInput {
 }
 
 export async function gateSandboxToolCall({
-  userId,
+  actor,
   driveId,
   ownerId,
   tenantId,
@@ -121,14 +123,14 @@ export async function gateSandboxToolCall({
     // before any DB round-trip in authz or quota.
     if (!deps.isEnabled()) return deny('kill_switch_off');
 
-    const authorization = await deps.authorize({ userId, driveId, ownerId, requestOrigin, agentPageId });
+    const authorization = await deps.authorize({ actor, driveId, ownerId, requestOrigin, agentPageId });
     if (!authorization.ok) {
       // canRunCode's reasons are a subset of the gate's; map the kill-switch
       // value through to the gate reason and pass the authz reasons straight.
       return deny(authorization.reason);
     }
 
-    const quota = await deps.checkQuota({ userId, driveId, tenantId, tier });
+    const quota = await deps.checkQuota({ userId: actor.userId, driveId, tenantId, tier });
     if (!quota.allowed) return deny(quota.reason);
 
     return { ok: true };

@@ -53,7 +53,7 @@ describe('/api/drives/[driveId]/wallet/caps', () => {
     const res = await GET(req('GET', ''), { params: Promise.resolve({ driveId: DRIVE }) });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ walletId: 'w-product', caps });
-    expect(listDriveWalletCaps).toHaveBeenCalledWith('u-ana', DRIVE, 'session');
+    expect(listDriveWalletCaps).toHaveBeenCalledWith(expect.objectContaining({ userId: 'u-ana' }), DRIVE, 'session');
   });
 
   it('a token scoped to another drive reads nothing', async () => {
@@ -67,9 +67,9 @@ describe('/api/drives/[driveId]/wallet/caps', () => {
     vi.mocked(setDriveWalletCap).mockResolvedValue({ ok: true, walletId: 'w-product', caps });
     const put = await PUT(req('PUT', '/u-marcus', { dailyCapCents: 30, monthlyCapCents: null }), { params: Promise.resolve({ driveId: DRIVE, userId: 'u-marcus' }) });
     expect(put.status).toBe(200);
-    expect(setDriveWalletCap).toHaveBeenLastCalledWith('u-ana', DRIVE, 'u-marcus', { dailyCents: 30, monthlyCents: null }, 'session');
+    expect(setDriveWalletCap).toHaveBeenLastCalledWith(expect.objectContaining({ userId: 'u-ana' }), DRIVE, 'u-marcus', { dailyCents: 30, monthlyCents: null }, 'session');
     await DELETE(req('DELETE', '/u-marcus'), { params: Promise.resolve({ driveId: DRIVE, userId: 'u-marcus' }) });
-    expect(setDriveWalletCap).toHaveBeenLastCalledWith('u-ana', DRIVE, 'u-marcus', null, 'session');
+    expect(setDriveWalletCap).toHaveBeenLastCalledWith(expect.objectContaining({ userId: 'u-ana' }), DRIVE, 'u-marcus', null, 'session');
   });
 
   it('a malformed cap is a 400 before the service is asked', async () => {

@@ -1,5 +1,7 @@
 /**
- * Spec ID-coverage gate (Organizations & Wallets, requirement X-6 / Sequence Spec lane A4).
+ * Spec ID-coverage gate (Organizations & Wallets, Sequence Spec lane A4). It enforces the epic's
+ * test-naming contract below and is not itself a Spec requirement: X-6 is the negative-tests
+ * requirement, proven in packages/lib/src/__tests__/x6-negative-matrix.integration.test.ts.
  *
  * The Spec (PageSpace page drc7x34unhc0ty1dc0u1j3gy) numbers every requirement:
  * ORG-n, DRV-n, SEAT-n, WAL-n, MON-n, SPEND-n, POL-n, SEC-n, AUD-n, UI-n, X-n. The epic's

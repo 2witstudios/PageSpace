@@ -12,6 +12,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { reapOrphanedFiles } from '@/lib/storage/reap-orphaned-files';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -82,7 +83,7 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ pageI
 
   const canDelete = await canPrincipalDeletePage(auth, pageId);
   if (!canDelete) {
-    return new NextResponse("Forbidden", { status: 403 });
+    return deniedResponse(actorFromAuth(auth), pageId, new NextResponse("Forbidden", { status: 403 }));
   }
 
   try {

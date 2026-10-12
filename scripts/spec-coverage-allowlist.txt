@@ -53,9 +53,6 @@ MON-7
 # list (apps/web components/orgs/__tests__/no-org-ui.test.tsx; ruling: the Create organization entry is the one
 # affordance a no-org user sees). A test crossing both packages is not possible in one run, so it stays here.
 ORG-2
-# ORG-5 (one shared org permission function used by web routes, CLI, and MCP): B3 routes all go
-# through requireOrgRole, titled "ORG-5 (partial)"; CLI and MCP use it in Wave G (X-1).
-ORG-5
 # POL-1 (policies stored once per org and read through one function, no route reads the org row directly; a
 # change applies immediately; anything newly forbidden is suspended, not deleted, and listed in the audit log)
 # re-added per Review 3+4 (page v3pbwr7hy45eu1t2w6qbxm3e, P2-7 "removed but not proven"). ow-policy-integrity:
@@ -121,9 +118,6 @@ SEAT-8
 # the publish route itself (apps/web publish-page.ts, server-only) is asserted only through its checkOrgActive guard.
 SEAT-9
 SEC-1
-SEC-2
-SEC-3
-SEC-4
 # SPEND-1 (partial, ow-c2, C3, ow-fix-ungated-ai): every chat turn, /btw, consult, v1, image, pulse,
 # workflow, trigger and mention call gates first; context compaction and the memory cron now reserve
 # before their model call; a realtime voice call resolves its drive before connecting (a page
@@ -210,27 +204,9 @@ WAL-8
 # pool cannot stand in); cron storage accrual settles on the pool with no hold or gate, so it can put a
 # paused or empty pool into debt; the personal usage breakdown still lists org compute under the recorded person.
 WAL-9
-# X-1 (partial, ow-c6 + ow-p6-x1): wallet READS and the five org READS (orgs list/get, members,
-# drive directory, policies) are mirrored for CLI/MCP, gated by the same requireOrgRole the web
-# routes run; per [D-OW-26] a token may not move money or change a spend source, and every org
-# WRITE is session-only on the server today, so no write is mirrored. Whether X-1's "where the web
-# does" also demands write parity is a reviewer call; until then the bare ID stays here.
-X-1
-# X-2: B3's "X-2 (partial)" test blocks ORGS_ENABLED while org tables are excluded from the GDPR
-# export; the export and account-deletion handling itself is the Phase 6 leaf yfmlkdchehmberwthwu6g7vt.
-X-2
-X-3
 # X-4 (partial): one drive-member event per affected user from the org membership sync (B4); wallet:changed
 # and org:changed contracts; org rename/avatar, delete (audience read before), invitation create/revoke and
 # accept announce org:changed; the app shell's listener refetches GET /api/orgs so the picker regroups and
 # renames without reload (useMyOrgs.shared-cache). Unproven in one test: a two-context run where a visibility
 # change updates another member's sidebar live (an e2e in E2E_SPECS once ORGS_ENABLED flips).
 X-4
-# X-6 (Negative tests: non-member sees no other org's Open drive; a guest sees exactly one
-# drive; a disabled policy refuses; an empty chosen wallet charges nothing; an automation never
-# charges a person) needs org/wallet resolution logic that does not exist until Wave B/C lands.
-# The seam guards and the Northwind fixture shape check in this lane are real tests but they
-# check code STRUCTURE, not these five authorization/spend behaviors — they do not prove X-6 and
-# their names no longer claim it (PR #2642 review thread PRRT_kwDOPhnPxc6ioz-F). Only remove this
-# line once a test exercises one of the five behaviors above against real resolution logic.
-X-6

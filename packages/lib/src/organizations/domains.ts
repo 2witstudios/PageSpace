@@ -439,7 +439,7 @@ export async function autoJoinVerifiedDomainOrg(
       departureSuppressed: await isDepartureSuppressed(tx, orgId, email),
       hasOpenInvite: openInvite !== undefined,
       isOrgGuest: isMember ? false : await isOrgGuest(orgId, input.userId, tx),
-      orgActive: (await checkOrgActive(orgId, { executor: tx, now: input.now })).ok,
+      orgActive: (await checkOrgActive(orgId, { executor: tx })).ok,
     });
     if (decision.action === 'skip') {
       return { result: { kind: 'skipped', reason: decision.reason }, sync: null, domain, rejoinOrgId: isAuditedRejoinSkip(decision.reason) ? orgId : null };
@@ -447,7 +447,7 @@ export async function autoJoinVerifiedDomainOrg(
     if (decision.action === 'refuse') return { result: { kind: 'refused', orgId, reason: decision.reason }, sync: null, domain };
 
     // The joiner takes a seat like an invite does; no inviter, so the refusal reads for a member.
-    const seat: SeatAdmission = await admitSeat(tx, { orgId, actorRole: 'MEMBER' }, input.seatBilling);
+    const seat: SeatAdmission = await admitSeat(tx, { orgId, actorRole: 'MEMBER', credential: 'session' }, input.seatBilling);
     admission = seat;
     if (!seat.ok) return { result: { kind: 'refused', orgId, reason: 'seats_full', message: seat.message }, sync: null, domain };
 

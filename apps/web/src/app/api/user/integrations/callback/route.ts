@@ -1,3 +1,4 @@
+import { parseVerifiedAuthentication } from '@pagespace/lib/auth/authentication-evidence';
 import { NextResponse } from 'next/server';
 import { getDrivePolicies } from '@pagespace/lib/organizations/policy-reader';
 import { integrationDecision } from '@pagespace/lib/organizations/org-action-decisions';
@@ -15,6 +16,7 @@ import { createConnection, findUserConnection, findDriveConnection, updateConnec
 import type { OAuth2Config } from '@pagespace/lib/integrations/types';
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';
 import { isSafeReturnUrl } from '@/lib/auth';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const integrationCallbackSchema = z.object({
   code: z.string().min(1, 'Authorization code is required').max(4096),
@@ -62,6 +64,7 @@ export async function GET(request: Request) {
     // Verify and decode state
     const stateData = verifySignedState<{
       userId: string;
+      authentication?: unknown;
       providerId: string;
       name: string;
       visibility?: string;
@@ -135,7 +138,9 @@ export async function GET(request: Request) {
     // Upsert connection — drive-scoped or user-scoped
     if (driveId) {
       // Drive-scoped connection: verify user has admin access
-      const access = await getDriveAccess(driveId, userId);
+      // The initiating credential, re-parsed from the signed state: an org's sign-in policy applies to it here too.
+      const actor = credentialActor(userId, parseVerifiedAuthentication(stateData.authentication, Date.now()));
+      const access = await getDriveAccess(driveId, actor);
       if (!access.isOwner && !access.isAdmin) {
         loggers.auth.warn('OAuth callback: user lacks admin access to drive', { userId, driveId });
         return NextResponse.redirect(new URL(`${defaultReturn}?error=access_denied`, baseUrl));

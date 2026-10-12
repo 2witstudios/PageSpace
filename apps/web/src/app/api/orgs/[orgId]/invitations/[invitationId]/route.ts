@@ -3,7 +3,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { revokeInvitation } from '@pagespace/lib/organizations/invitations';
 import { announceOrgChange } from '@pagespace/lib/organizations/org-change-events';
-import { authorizeOrgRequest, ORG_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
+import { authorizeOrgRequest, ORG_TOKEN_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
 
 /** DELETE /api/orgs/[orgId]/invitations/[invitationId] — revoke an open invite; Owner and Admins (ORG-3). */
 export async function DELETE(
@@ -11,7 +11,7 @@ export async function DELETE(
   context: { params: Promise<{ orgId: string; invitationId: string }> },
 ) {
   const { orgId, invitationId } = await context.params;
-  const gate = await authorizeOrgRequest(request, orgId, 'ADMIN', ORG_WRITE_AUTH);
+  const gate = await authorizeOrgRequest(request, orgId, 'ADMIN', ORG_TOKEN_WRITE_AUTH);
   if (!gate.ok) return gate.response;
   try {
     const revoked = await revokeInvitation({ orgId, invitationId, actorId: gate.userId });

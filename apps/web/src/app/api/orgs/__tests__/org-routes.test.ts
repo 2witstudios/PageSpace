@@ -7,12 +7,17 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
-import type { SessionAuthResult, AuthError } from '@/lib/auth';
+import type { MCPAuthResult, SessionAuthResult, AuthError } from '@/lib/auth';
 import type { OrgRole } from '@pagespace/db/schema/organizations';
 
 const flags = vi.hoisted(() => ({ orgsEnabled: true }));
 const endSubscriptionPort = vi.hoisted(() => async () => {});
 
+// The org sign-in policy (SEC-2/3) has its own suites; here every credential meets it.
+vi.mock('@pagespace/lib/permissions/actor-authentication', () => ({
+  checkActorOrgAuthentication: vi.fn(async () => ({ allowed: true })),
+  drivePolicyOrgId: vi.fn(async () => null),
+}));
 vi.mock('@pagespace/lib/organizations/orgs-enabled', () => ({
   get ORGS_ENABLED() {
     return flags.orgsEnabled;
@@ -22,6 +27,7 @@ vi.mock('@pagespace/lib/organizations/orgs-enabled', () => ({
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(),
+  getAllowedDriveIds: (auth: { allowedDriveIds?: string[] }) => auth.allowedDriveIds ?? [],
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -194,7 +200,7 @@ function setServiceDefaults() {
   vi.mocked(deliverOrgInvite).mockResolvedValue(undefined);
   vi.mocked(startOrgBusinessSubscription).mockResolvedValue({
     state: 'payment_required',
-    subscription: { status: 'incomplete', trialEnd: null, currentPeriodEnd: '2026-10-01T12:00:00.000Z', extraSeatQuantity: 0 },
+    subscription: { status: 'incomplete', currentPeriodEnd: '2026-10-01T12:00:00.000Z', extraSeatQuantity: 0 },
     payment: { kind: 'confirm_payment', clientSecret: 'pi_1_secret_x' },
   });
   vi.mocked(isEmailVerified).mockResolvedValue(true);
@@ -218,7 +224,8 @@ interface RouteCase {
   successStatus: number;
   /** Reads authenticate without CSRF; every mutation must require it. */
   csrf: boolean;
-  /** Credential types admitted. The five X-1 token reads admit an MCP key; everything else is session-only. */
+  /** Credential types admitted. Every org route but the X-1 exclusions (card-checkout create, org delete,
+   * ownership transfer, billing and money views) admits an MCP key. */
   allow: readonly string[];
   /** The service the route must not reach when authorization refuses. */
   service: () => unknown;
@@ -227,31 +234,31 @@ interface RouteCase {
 const ROUTES: RouteCase[] = [
   { name: 'GET /api/orgs', csrf: false, minRole: null, successStatus: 200, allow: ['session', 'mcp'], service: () => repository.listOrganizationsForUser,
     call: () => orgsRoute.GET(req('GET')) },
-  { name: 'POST /api/orgs', csrf: true, minRole: null, successStatus: 201, allow: ['session'], service: () => repository.createOrganization,
+  { name: 'POST /api/orgs', csrf: true, minRole: null, successStatus: 201, allow: ['session', 'mcp'], service: () => repository.createOrganization,
     call: () => orgsRoute.POST(req('POST', { name: 'Northwind Labs', slug: 'northwind' })) },
   { name: 'GET /api/orgs/[orgId]', csrf: false, minRole: 'MEMBER', successStatus: 200, allow: ['session', 'mcp'], service: () => repository.findOrganizationById,
     call: () => orgRoute.GET(req('GET'), params({ orgId: ORG_ID })) },
-  { name: 'PATCH /api/orgs/[orgId]', csrf: true, minRole: 'ADMIN', successStatus: 200, allow: ['session'], service: () => repository.updateOrganization,
+  { name: 'PATCH /api/orgs/[orgId]', csrf: true, minRole: 'ADMIN', successStatus: 200, allow: ['session', 'mcp'], service: () => repository.updateOrganization,
     call: () => orgRoute.PATCH(req('PATCH', { name: 'Northwind' }), params({ orgId: ORG_ID })) },
-  { name: 'DELETE /api/orgs/[orgId]', csrf: true, minRole: 'OWNER', successStatus: 200, allow: ['session'], service: () => deleteOrganization,
+  { name: 'DELETE /api/orgs/[orgId]', csrf: true, minRole: 'OWNER', successStatus: 200, allow: ['session', 'mcp'], service: () => deleteOrganization,
     call: () => orgRoute.DELETE(req('DELETE', { drives: [] }), params({ orgId: ORG_ID })) },
   { name: 'GET /api/orgs/[orgId]/members', csrf: false, minRole: 'MEMBER', successStatus: 200, allow: ['session', 'mcp'], service: () => repository.listOrgMembers,
     call: () => membersRoute.GET(req('GET'), params({ orgId: ORG_ID })) },
-  { name: 'PATCH /api/orgs/[orgId]/members/[userId]', csrf: true, minRole: 'ADMIN', successStatus: 200, allow: ['session'], service: () => membership.changeMemberRole,
+  { name: 'PATCH /api/orgs/[orgId]/members/[userId]', csrf: true, minRole: 'ADMIN', successStatus: 200, allow: ['session', 'mcp'], service: () => membership.changeMemberRole,
     call: () => memberRoute.PATCH(req('PATCH', { role: 'ADMIN' }), params({ orgId: ORG_ID, userId: 'user_marcus' })) },
-  { name: 'DELETE /api/orgs/[orgId]/members/[userId]', csrf: true, minRole: 'ADMIN', successStatus: 200, allow: ['session'], service: () => membership.removeMember,
+  { name: 'DELETE /api/orgs/[orgId]/members/[userId]', csrf: true, minRole: 'ADMIN', successStatus: 200, allow: ['session', 'mcp'], service: () => membership.removeMember,
     call: () => memberRoute.DELETE(req('DELETE'), params({ orgId: ORG_ID, userId: 'user_marcus' })) },
-  { name: 'POST /api/orgs/[orgId]/transfer-ownership', csrf: true, minRole: 'OWNER', successStatus: 200, allow: ['session'], service: () => membership.transferOwnership,
+  { name: 'POST /api/orgs/[orgId]/transfer-ownership', csrf: true, minRole: 'OWNER', successStatus: 200, allow: ['session', 'mcp'], service: () => membership.transferOwnership,
     call: () => transferRoute.POST(req('POST', { toUserId: 'user_priya' }), params({ orgId: ORG_ID })) },
-  { name: 'GET /api/orgs/[orgId]/invitations', csrf: false, minRole: 'ADMIN', successStatus: 200, allow: ['session'], service: () => invitations.listOpenInvitations,
+  { name: 'GET /api/orgs/[orgId]/invitations', csrf: false, minRole: 'ADMIN', successStatus: 200, allow: ['session', 'mcp'], service: () => invitations.listOpenInvitations,
     call: () => invitationsRoute.GET(req('GET'), params({ orgId: ORG_ID })) },
-  { name: 'POST /api/orgs/[orgId]/invitations', csrf: true, minRole: 'MEMBER', successStatus: 201, allow: ['session'], service: () => invitations.createOrRotateInvitation,
+  { name: 'POST /api/orgs/[orgId]/invitations', csrf: true, minRole: 'MEMBER', successStatus: 201, allow: ['session', 'mcp'], service: () => invitations.createOrRotateInvitation,
     call: () => invitationsRoute.POST(req('POST', { email: 'marcus@northwind.test' }), params({ orgId: ORG_ID })) },
-  { name: 'DELETE /api/orgs/[orgId]/invitations/[invitationId]', csrf: true, minRole: 'ADMIN', successStatus: 200, allow: ['session'], service: () => invitations.revokeInvitation,
+  { name: 'DELETE /api/orgs/[orgId]/invitations/[invitationId]', csrf: true, minRole: 'ADMIN', successStatus: 200, allow: ['session', 'mcp'], service: () => invitations.revokeInvitation,
     call: () => invitationRoute.DELETE(req('DELETE'), params({ orgId: ORG_ID, invitationId: 'inv_1' })) },
-  { name: 'POST /api/orgs/[orgId]/invitations/[invitationId]/resend', csrf: true, minRole: 'MEMBER', successStatus: 200, allow: ['session'], service: () => invitations.resendInvitation,
+  { name: 'POST /api/orgs/[orgId]/invitations/[invitationId]/resend', csrf: true, minRole: 'MEMBER', successStatus: 200, allow: ['session', 'mcp'], service: () => invitations.resendInvitation,
     call: () => resendRoute.POST(req('POST'), params({ orgId: ORG_ID, invitationId: 'inv_1' })) },
-  { name: 'POST /api/orgs/invitations/accept', csrf: true, minRole: null, successStatus: 200, allow: ['session'], service: () => invitations.acceptInvitation,
+  { name: 'POST /api/orgs/invitations/accept', csrf: true, minRole: null, successStatus: 200, allow: ['session', 'mcp'], service: () => invitations.acceptInvitation,
     call: () => acceptRoute.POST(req('POST', { token: 'ps_orginv_t' })) },
 ];
 
@@ -396,7 +403,7 @@ describe('org route behaviour', () => {
     const body = await res.json();
     expect(body.billing).toEqual({
       state: 'payment_required',
-      subscription: { status: 'incomplete', trialEnd: null, currentPeriodEnd: '2026-10-01T12:00:00.000Z', extraSeatQuantity: 0 },
+      subscription: { status: 'incomplete', currentPeriodEnd: '2026-10-01T12:00:00.000Z', extraSeatQuantity: 0 },
       payment: { kind: 'confirm_payment', clientSecret: 'pi_1_secret_x' },
     });
     expect(JSON.stringify(body)).not.toMatch(/cus_|sub_|si_/);
@@ -532,7 +539,7 @@ describe('org route behaviour', () => {
     expect(callOrgAvatarStorage).not.toHaveBeenCalled();
 
     expect((await orgRoute.DELETE(req('DELETE', { drives: [] }), params({ orgId: ORG_ID }))).status).toBe(200);
-    expect(mintOrgAvatarToken).toHaveBeenCalledWith(ORG_ID, CALLER);
+    expect(mintOrgAvatarToken).toHaveBeenCalledWith(ORG_ID, expect.objectContaining({ via: 'credential', userId: CALLER }));
     expect(callOrgAvatarStorage).toHaveBeenCalledWith(ORG_ID, 'ps_svc_org', { method: 'DELETE' });
   });
 
@@ -698,5 +705,33 @@ describe('org route behaviour', () => {
     const res = await acceptRoute.POST(req('POST', { token: 'ps_orginv_t' }));
     expect(res.status).toBe(402);
     expect(await res.json()).toEqual({ error: ORG_LAPSED_MESSAGE, code: 'org_lapsed' });
+  });
+});
+
+describe('invites by a delegated key never buy a seat ([D-OW-26])', () => {
+  const key = (): MCPAuthResult => ({ userId: CALLER, tokenVersion: 0, tokenType: 'mcp', tokenId: 'tok', role: 'user', adminRoleVersion: 0, allowedDriveIds: [] });
+  const raiseRefused = { ok: false as const, status: 403 as const, reason: 'mcp_token_cannot_move_money' as const, message: 'An access token cannot buy another seat', purchased: 5, held: 5 };
+
+  it('X-1 (partial) an invite and a resend tell the service the caller is a key, and a seat raise it refuses answers 403 by name', async () => {
+    vi.mocked(repository.findMembershipRole).mockResolvedValue('ADMIN');
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(key());
+    vi.mocked(invitations.createOrRotateInvitation).mockResolvedValue(raiseRefused);
+    vi.mocked(invitations.resendInvitation).mockResolvedValue(raiseRefused);
+
+    const created = await invitationsRoute.POST(req('POST', { email: 'marcus@northwind.test' }), params({ orgId: ORG_ID }));
+    expect(created.status).toBe(403);
+    expect((await created.json()).code).toBe('mcp_token_cannot_move_money');
+    expect(invitations.createOrRotateInvitation).toHaveBeenCalledWith(expect.objectContaining({ credential: 'mcp' }));
+
+    const resent = await resendRoute.POST(req('POST'), params({ orgId: ORG_ID, invitationId: 'inv_1' }));
+    expect(resent.status).toBe(403);
+    expect((await resent.json()).code).toBe('mcp_token_cannot_move_money');
+    expect(invitations.resendInvitation).toHaveBeenCalledWith(expect.objectContaining({ credential: 'mcp' }));
+  });
+
+  it('X-1 (partial) a session invite is passed through as a session, which may buy a seat', async () => {
+    vi.mocked(repository.findMembershipRole).mockResolvedValue('ADMIN');
+    expect((await invitationsRoute.POST(req('POST', { email: 'marcus@northwind.test' }), params({ orgId: ORG_ID }))).status).toBe(201);
+    expect(invitations.createOrRotateInvitation).toHaveBeenCalledWith(expect.objectContaining({ credential: 'session' }));
   });
 });

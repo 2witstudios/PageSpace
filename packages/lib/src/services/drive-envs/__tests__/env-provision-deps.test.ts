@@ -51,6 +51,7 @@ import {
   type SandboxHandle,
   type SandboxHost,
 } from '../../sandbox/sandbox-host';
+import { credentialActor } from '../../../permissions/access-actor';
 
 const ENV_ID = 'env-1';
 const DRIVE_ID = 'drive-1';
@@ -97,7 +98,7 @@ function deps(tier: 'pro' | 'free' = 'pro') {
   return buildEnvProvisionDeps({
     row: envRow,
     payer: { payerId: DRIVE_OWNER_ID, tier },
-    requesterId: REQUESTER_ID,
+    requester: credentialActor(REQUESTER_ID, null),
     store: noopStore,
     host: noopHost,
   });
@@ -136,7 +137,7 @@ describe('buildEnvProvisionDeps', () => {
     await deps().authorize();
 
     expect(canRunCode).toHaveBeenCalledWith({
-      userId: REQUESTER_ID,
+      actor: expect.objectContaining({ userId: REQUESTER_ID }),
       driveId: DRIVE_ID,
       ownerId: DRIVE_OWNER_ID,
       requestOrigin: 'user',
@@ -209,7 +210,7 @@ describe('ensureDriveEnvSandbox', () => {
     const result = await ensureDriveEnvSandbox({
       envId: ENV_ID,
       intent: 'ensure',
-      requesterId: REQUESTER_ID,
+      requester: credentialActor(REQUESTER_ID, null),
       deps: {
         store: { ...noopStore, findById: async () => null, findLocalByEnvId: async () => null },
         host: noopHost,
@@ -226,7 +227,7 @@ describe('ensureDriveEnvSandbox', () => {
     const result = await ensureDriveEnvSandbox({
       envId: ENV_ID,
       intent: 'ensure',
-      requesterId: REQUESTER_ID,
+      requester: credentialActor(REQUESTER_ID, null),
       deps: {
         store: { ...noopStore, findById: async () => envRow, findLocalByEnvId: async () => null },
         host: { ...noopHost, provision } as never,
@@ -245,7 +246,7 @@ describe('ensureDriveEnvSandbox', () => {
     const result = await ensureDriveEnvSandbox({
       envId: ENV_ID,
       intent: 'ensure',
-      requesterId: REQUESTER_ID,
+      requester: credentialActor(REQUESTER_ID, null),
       deps: {
         store: { ...noopStore, findById: async () => envRow, findLocalByEnvId: async () => null },
         host: noopHost,
@@ -307,7 +308,7 @@ describe('ensureDriveEnvSandbox', () => {
       const result = await ensureDriveEnvSandbox({
         envId: ENV_ID,
         intent: 'ensure',
-        requesterId: REQUESTER_ID,
+        requester: credentialActor(REQUESTER_ID, null),
         deps: {
           store: { ...noopStore, findById: async () => localRow, findLocalByEnvId: async () => input.sibling },
           host: host.host,
@@ -448,7 +449,7 @@ describe('ensureDriveEnvSandbox', () => {
       canRunCode.mockResolvedValue({ ok: false, reason: 'no_drive_access' });
       const { result, host } = await ensureLocal({ sibling: sibling() });
       expect(result).toEqual({ ok: false, reason: 'local_refused', refusal: 'code_exec_denied', detail: 'no_drive_access' });
-      expect(canRunCode).toHaveBeenCalledWith({ userId: REQUESTER_ID, driveId: DRIVE_ID, ownerId: DRIVE_OWNER_ID, requestOrigin: 'user' });
+      expect(canRunCode).toHaveBeenCalledWith({ actor: expect.objectContaining({ userId: REQUESTER_ID }), driveId: DRIVE_ID, ownerId: DRIVE_OWNER_ID, requestOrigin: 'user' });
       expect(host.provision).not.toHaveBeenCalled();
     });
 
@@ -470,7 +471,7 @@ describe('ensureDriveEnvSandbox', () => {
       const control = await ensureDriveEnvSandbox({
         envId: ENV_ID,
         intent: 'ensure',
-        requesterId: REQUESTER_ID,
+        requester: credentialActor(REQUESTER_ID, null),
         deps: {
           store: { ...noopStore, findById: async () => envRow, findLocalByEnvId: async () => null },
           host: host.host,

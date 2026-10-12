@@ -8,11 +8,11 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 vi.mock('@pagespace/lib/logging/logger-config', () => ({ loggers: { api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() } } }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
 vi.mock('@/lib/orgs/org-route-auth', () => ({
-  authorizeOrgRequest: vi.fn(async () => ({ ok: true, userId: 'user_owner', role: 'OWNER', allowedDriveIds: [] })),
-  refuseDriveScopedToken: vi.fn(() => null),
+  authorizeOrgRequest: vi.fn(async () => ({ ok: true, userId: 'user_owner', role: 'OWNER', allowedDriveIds: [], authentication: null, credential: 'session' })),
   ORG_READ_AUTH: {},
   ORG_TOKEN_READ_AUTH: {},
-  ORG_WRITE_AUTH: {},
+  ORG_TOKEN_WRITE_AUTH: {},
+  ORG_MONEY_WRITE_AUTH: {},
 }));
 vi.mock('@pagespace/lib/organizations/org-change-events', () => ({
   announceOrgChange: vi.fn(async () => undefined),

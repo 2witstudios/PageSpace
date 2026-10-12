@@ -7,6 +7,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { safeParseBody } from '@/lib/validation/parse-body';
 import { WALLET_WRITE_AUTH, walletCredentialOf, walletErrorResponse } from '@/lib/wallets/wallet-route';
 import { consumerCapSchema } from '@/lib/wallets/consumer-cap-schema';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 type RouteContext = { params: Promise<{ driveId: string; userId: string }> };
 
@@ -33,7 +34,7 @@ async function write(request: Request, context: RouteContext, clear: boolean) {
   }
   try {
     const result = await setDriveWalletCap(
-      auth.userId,
+      actorFromAuth(auth),
       driveId,
       consumerId,
       input,

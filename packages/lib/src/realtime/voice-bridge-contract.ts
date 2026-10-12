@@ -249,10 +249,21 @@ export type VoiceAssistant = z.infer<typeof voiceAssistantSchema>;
  * for an unbound or Global Assistant call, which spends the caller's personal credits
  * (SPEND-8). The realtime server meters every window on it (call-metering.ts).
  */
+/**
+ * The calling credential's ceremony evidence (SEC-2/3, D-OW-45): taken from the session that started the call,
+ * carried unchanged on every hop, re-parsed by the web tier, which authorizes tools and transcript writes through it.
+ * Null or absent when that credential carried none, which every org sign-in policy refuses.
+ */
+export const voiceCallAuthenticationSchema = z.object({
+  authenticatedAtMs: z.number().int().nonnegative(),
+  assurance: z.enum(['single_factor', 'user_verified_passkey']),
+}).nullable().optional();
+
 export const realtimeAttachPayloadSchema = z.object({
   callId: realtimeCallIdSchema,
   secret: ephemeralSecretSchema,
   userId: z.string().min(1),
+  authentication: voiceCallAuthenticationSchema,
   conversationId: z.string().min(1).optional(),
   tools: z.array(realtimeToolSchema).default([]),
   model: z.string().min(1),
@@ -310,6 +321,7 @@ export const voiceToolDispatchSchema = z.object({
   kind: z.literal('tool'),
   callId: realtimeCallIdSchema,
   userId: z.string().min(1),
+  authentication: voiceCallAuthenticationSchema,
   conversationId: z.string().min(1).optional(),
   name: z.string().min(1),
   argumentsJson: z.string(),
@@ -330,6 +342,7 @@ export const voiceTranscriptSchema = z.object({
   kind: z.literal('transcript'),
   callId: realtimeCallIdSchema,
   userId: z.string().min(1),
+  authentication: voiceCallAuthenticationSchema,
   conversationId: z.string().min(1),
   role: z.enum(['user', 'assistant']),
   text: z.string().min(1),
@@ -357,6 +370,7 @@ export const voiceTranscriptSchema = z.object({
 const toolActivityCore = {
   callId: realtimeCallIdSchema,
   userId: z.string().min(1),
+  authentication: voiceCallAuthenticationSchema,
   conversationId: z.string().min(1),
   /** OpenAI's `function_call.call_id` — what the two phases agree on. */
   toolCallId: z.string().min(1),

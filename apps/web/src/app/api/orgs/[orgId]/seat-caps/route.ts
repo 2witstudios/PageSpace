@@ -7,7 +7,8 @@ import { authorizeOrgRequest, ORG_READ_AUTH } from '@/lib/orgs/org-route-auth';
 /**
  * GET /api/orgs/[orgId]/seat-caps — every member's seat caps, the monthly limit in force and what is
  * left (read model, D-OW-38 "seat allowance remaining"; WAL-7; UI-7). Owner and Admins, who are the
- * ones who may set the caps (PUT /api/orgs/[orgId]/members/[userId]/seat-cap).
+ * ones who may set the caps (PUT /api/orgs/[orgId]/members/[userId]/seat-cap). Session only ([D-OW-26]:
+ * every member's remaining spend is an admin money view, outside the consumer allowlist a key reads).
  */
 export async function GET(request: Request, context: { params: Promise<{ orgId: string }> }) {
   const { orgId } = await context.params;

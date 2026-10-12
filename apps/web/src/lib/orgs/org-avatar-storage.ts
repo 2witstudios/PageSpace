@@ -4,12 +4,13 @@
  * (createOrgServiceToken); the processor refuses any other binding.
  */
 import { createOrgServiceToken } from '@pagespace/lib/services/validated-service-token';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 const PROCESSOR_URL = process.env.PROCESSOR_URL || 'http://processor:3003';
 
 /** Minted while the caller still holds the org (an org delete mints it before the org is gone). */
-export async function mintOrgAvatarToken(orgId: string, userId: string): Promise<string> {
-  const { token } = await createOrgServiceToken(userId, orgId, ['org-avatars:write'], '5m');
+export async function mintOrgAvatarToken(orgId: string, actor: AccessActor): Promise<string> {
+  const { token } = await createOrgServiceToken(actor, orgId, ['org-avatars:write'], '5m');
   return token;
 }
 

@@ -8,6 +8,7 @@ import { AUTOMATION_OWNER_LEFT_CODE, AUTOMATION_OWNER_LEFT_ERROR } from '@pagesp
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { authenticateRequestWithOptions, isAuthError, canManagePageWebhooks } from '@/lib/auth';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -38,7 +39,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ pageI
 
     const canManage = await canManagePageWebhooks(auth, pageId);
     if (!canManage) {
-      return NextResponse.json({ error: 'Only the drive owner or an admin can manage page webhooks' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json({ error: 'Only the drive owner or an admin can manage page webhooks' }, { status: 403 }));
     }
 
     let body: unknown;
@@ -88,7 +89,7 @@ export async function DELETE(request: Request, context: { params: Promise<{ page
 
     const canManage = await canManagePageWebhooks(auth, pageId);
     if (!canManage) {
-      return NextResponse.json({ error: 'Only the drive owner or an admin can manage page webhooks' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json({ error: 'Only the drive owner or an admin can manage page webhooks' }, { status: 403 }));
     }
 
     const existing = await findOwnedWebhook(pageId, id);

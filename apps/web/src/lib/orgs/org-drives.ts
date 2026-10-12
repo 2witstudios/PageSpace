@@ -1,4 +1,5 @@
 /** The org Drives page (UI-7, canvas Drives): pure pieces. */
+import { orgRoleAtLeast } from '@pagespace/lib/organizations/org-roles';
 import type { OrgDriveDirectoryEntry } from './org-api';
 
 export function driveMembersLabel(usage: { memberCount: number; guestCount: number } | undefined): string {
@@ -39,7 +40,7 @@ export function mayAnswerJoinRequests(
   orgRole: 'OWNER' | 'ADMIN' | 'MEMBER' | undefined,
 ): boolean {
   if (!drive.orgId || drive.orgVisibility !== 'RESTRICTED') return false;
-  return drive.isOwned || orgRole === 'OWNER' || orgRole === 'ADMIN';
+  return drive.isOwned || orgRoleAtLeast(orgRole, 'ADMIN');
 }
 
 /**

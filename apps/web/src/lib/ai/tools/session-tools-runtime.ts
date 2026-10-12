@@ -103,6 +103,7 @@ import {
 } from './session-tools';
 import { createShellIo, realtimeShellIoTransport } from './shell-io';
 import { conversationPageId } from '@pagespace/lib/conversations/conversation-page';
+import { derivedCredentialEvidence, type AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 // ---------------------------------------------------------------------------
 // Worker dispatch through the standard chat pipeline
@@ -206,7 +207,8 @@ export async function dispatchThroughChatPipeline(input: {
   conversationId: string;
   agentPageId: string | null;
   input: string;
-  userId: string;
+  /** The dispatching caller: the worker runs as them, with their credential's ceremony evidence (SEC-2/3). */
+  actor: AccessActor;
   depth: number;
   wait: boolean;
   scope: { allowedDriveIds: string[]; mcpTokenId?: string };
@@ -231,8 +233,8 @@ export async function dispatchThroughChatPipeline(input: {
   const url = `${base}/api/internal/agent-dispatch`;
 
   const { body, signatureHeader } = signAgentDispatch({
-    v: 1,
-    actingUserId: input.userId,
+    v: 2,
+    actingUserId: input.actor.userId,
     conversationId: input.conversationId,
     chatId: input.agentPageId,
     depth: input.depth,
@@ -243,6 +245,8 @@ export async function dispatchThroughChatPipeline(input: {
     browserSessionId: `agent-dispatch-${createId()}`,
     messageId: createId(),
     text: input.input,
+    // The worker opens org drives exactly as far as the dispatching credential could.
+    authentication: derivedCredentialEvidence(input.actor),
   });
 
   const requestHeaders: Record<string, string> = {
@@ -426,12 +430,13 @@ async function listWorkspaceWorkers({
  * does not entitle you to it. See the comment on the filter.
  */
 async function listOwnWorkspaces({
-  userId,
+  actor,
   excludeWorkspaceId,
 }: {
-  userId: string;
+  actor: AccessActor;
   excludeWorkspaceId?: string;
 }): Promise<OwnWorkspaceSummary[]> {
+  const { userId } = actor;
   // The exclusion runs AFTER `listSessions`' own listing cap, not as a
   // query-level filter before it — deliberately, not an oversight: a
   // pre-cap exclusion would need a new filter shape on the shared store
@@ -468,7 +473,7 @@ async function listOwnWorkspaces({
   const membershipByDrive = new Map(
     await Promise.all(
       driveIds.map(
-        async (driveId) => [driveId, await resolveDriveMembership({ userId, driveId })] as const,
+        async (driveId) => [driveId, await resolveDriveMembership({ actor, driveId })] as const,
       ),
     ),
   );
@@ -562,19 +567,20 @@ const MAX_MEMBER_VISIBLE_WORKSPACES = 100;
  * Bounded by {@link MAX_MEMBER_VISIBLE_WORKSPACES} (see its doc).
  */
 async function listSharedWorkspaces({
-  userId,
+  actor,
   excludeWorkspaceId,
 }: {
-  userId: string;
+  actor: AccessActor;
   excludeWorkspaceId?: string;
 }): Promise<SharedWorkspaceSummary[]> {
-  const candidateDriveIds = await getDriveIdsForUser(userId);
+  const { userId } = actor;
+  const candidateDriveIds = await getDriveIdsForUser(actor);
   if (candidateDriveIds.length === 0) return [];
 
   const memberships = await Promise.all(
     candidateDriveIds.map(async (driveId) => ({
       driveId,
-      membership: await resolveDriveMembership({ userId, driveId }),
+      membership: await resolveDriveMembership({ actor, driveId }),
     })),
   );
 
@@ -714,8 +720,9 @@ type CallerSessionResolution =
  */
 export async function resolveCallerSessionForWorker(
   callerConversationId: string,
-  ownerId: string,
+  owner: AccessActor,
 ): Promise<CallerSessionResolution> {
+  const ownerId = owner.userId;
   const existing = await findSessionForConversation(callerConversationId);
   if (existing) {
     // A bound session is used AS IS — but "bound" is not "still allowed". The
@@ -728,7 +735,7 @@ export async function resolveCallerSessionForWorker(
     // `decideAgentSessionAccess` reads owner + drive membership and never
     // lifecycle state, so an ENDED session still resolves here exactly as
     // #2335 requires. Only revocation refuses.
-    const access = await checkSessionAccess(ownerId, existing.id);
+    const access = await checkSessionAccess(owner, existing.id);
     if (!access.allowed) return { ok: false, reason: 'not_permitted' };
     return { ok: true, session: existing };
   }
@@ -739,20 +746,20 @@ export async function resolveCallerSessionForWorker(
   }
 
   if (conversation.type === 'global') {
-    return mapEnsured(await ensureGlobalSandboxSession(callerConversationId, ownerId));
+    return mapEnsured(await ensureGlobalSandboxSession(callerConversationId, owner));
   }
 
   if (conversation.type === 'page' && conversation.contextId !== null) {
     const agent = await conversationRepository.getAiAgent(conversation.contextId);
     if (!agent) return { ok: false, reason: 'no_session' };
-    if (!(await canUserViewPage(ownerId, agent.id))) return { ok: false, reason: 'not_permitted' };
-    const access = await checkAccessForSubject(ownerId, {
+    if (!(await canUserViewPage(owner, agent.id))) return { ok: false, reason: 'not_permitted' };
+    const access = await checkAccessForSubject(owner, {
       ownerId,
       driveId: agent.driveId,
     });
     if (!access.allowed) return { ok: false, reason: 'not_permitted' };
     return mapEnsured(
-      await ensureDriveSessionForConversation(callerConversationId, ownerId, agent.driveId, agent.title),
+      await ensureDriveSessionForConversation(callerConversationId, owner, agent.driveId, agent.title),
     );
   }
 
@@ -785,7 +792,8 @@ type CreateWorkerSessionFailure = Extract<
 async function resolveWorkerPlacement(input: {
   workspace: string | undefined;
   callerConversationId: string;
-  ownerId: string;
+  /** The caller, who owns the worker: every placement gate is asked of their credential. */
+  actor: AccessActor;
   agentPageId: string | null;
   /** The calling credential's drive ceiling; `[]` = unscoped. */
   allowedDriveIds: string[];
@@ -795,11 +803,12 @@ async function resolveWorkerPlacement(input: {
   | { ok: true; workspaceId: string; unwind: (() => Promise<void>) | null }
   | CreateWorkerSessionFailure
 > {
-  const { workspace, callerConversationId, ownerId, agentPageId, allowedDriveIds, workspaceName } = input;
+  const { workspace, callerConversationId, actor, agentPageId, allowedDriveIds, workspaceName } = input;
+  const ownerId = actor.userId;
 
   if (workspace === undefined) {
     // The caller's own workspace — minted if it has none.
-    const resolved = await resolveCallerSessionForWorker(callerConversationId, ownerId);
+    const resolved = await resolveCallerSessionForWorker(callerConversationId, actor);
     if (!resolved.ok) {
       if (resolved.reason === 'session_limit_reached') {
         return { ok: false, reason: 'session_limit_reached', detail: 'You are at your active-session limit — end an existing session first.' };
@@ -840,7 +849,7 @@ async function resolveWorkerPlacement(input: {
         envId = agent.defaultEnvId;
       }
     }
-    const access = await checkAccessForSubject(ownerId, { ownerId, driveId });
+    const access = await checkAccessForSubject(actor, { ownerId, driveId });
     if (!access.allowed) {
       return { ok: false, reason: 'not_permitted', detail: 'You are not permitted to start a workspace there.' };
     }
@@ -873,7 +882,7 @@ async function resolveWorkerPlacement(input: {
         });
       name = nextUniqueSessionName(baseLabel, existingNames);
     }
-    const spawned = await spawnSession({ userId: ownerId, driveId, envId, name });
+    const spawned = await spawnSession({ actor, driveId, envId, name });
     if (!spawned.ok) {
       return spawned.reason === 'session_limit_reached'
         ? { ok: false, reason: 'session_limit_reached', detail: 'You are at your active-session limit — end an existing session first.' }
@@ -906,7 +915,7 @@ async function resolveWorkerPlacement(input: {
   const withinScope =
     allowedDriveIds.length === 0 ||
     isDriveWithinCredentialScope(allowedDriveIds, (await describeWorkspace(workspace)).workspaceDriveId);
-  const access = withinScope ? await checkSessionAccess(ownerId, workspace) : { allowed: false as const };
+  const access = withinScope ? await checkSessionAccess(actor, workspace) : { allowed: false as const };
   if (!access.allowed) {
     // Missing, foreign, and not-a-member all read identically — an
     // id-guessing caller learns nothing.
@@ -1006,12 +1015,12 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
     // verbs route wires it (security review HIGH 2). Resolving a conversation's
     // binding says the workspace is addressable, never that it is still usable
     // — drive membership can be revoked out from under a permanent binding.
-    checkWorkspaceAccess: (userId, workspaceId) => checkSessionAccess(userId, workspaceId),
+    checkWorkspaceAccess: (actor, workspaceId) => checkSessionAccess(actor, workspaceId),
     // The END variant, through the SAME wrapper the verbs route uses — which is
     // where `canRunCode` is already gathered, so routing through it rather than
     // re-deciding here is what keeps the capability gate live without a second
     // wiring for it to drift from.
-    checkWorkspaceEndAccess: (userId, workspaceId) => checkSessionEndAccess(userId, workspaceId),
+    checkWorkspaceEndAccess: (actor, workspaceId) => checkSessionEndAccess(actor, workspaceId),
 
     // Relabel a workspace. Owner-only, and the SAME rule the PATCH route
     // applies, resolved through the same `findSessionRecord` + `renameSession`
@@ -1022,7 +1031,7 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
     // not exist, one owned by someone else, and one outside the calling
     // credential's drives must be indistinguishable to the model, or the
     // refusals become an enumeration oracle over workspace ids.
-    renameWorkspace: async ({ userId, workspaceId, name, allowedDriveIds }) => {
+    renameWorkspace: async ({ actor, workspaceId, name, allowedDriveIds }) => {
       const row = await findSessionRecord(workspaceId);
       if (!row) return { ok: false, reason: 'not_found_or_denied' };
       // BOTH gates the route applies, in the same order and for the same
@@ -1034,13 +1043,13 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
       // it denies even the OWNER once they lose the workspace's drive
       // ("losing the drive loses its working contexts"), and without it a
       // revoked owner could still rename here while every route 404s them.
-      const access = await checkSessionAccess(userId, workspaceId);
+      const access = await checkSessionAccess(actor, workspaceId);
       if (!access.allowed) return { ok: false, reason: 'not_found_or_denied' };
       // Reached is not the same as yours to relabel — a drive member may use a
       // colleague's workspace and still not get to retitle it in their sidebar.
       // THE SAME decision the PATCH route applies, imported rather than
       // re-implemented, so "one rule with two callers" is literally true.
-      if (!decideAgentSessionRenameAccess({ requesterId: userId, session: row }).allowed) {
+      if (!decideAgentSessionRenameAccess({ requesterId: actor.userId, session: row }).allowed) {
         return { ok: false, reason: 'not_found_or_denied' };
       }
       // A rename is a WRITE, so the credential ceiling applies exactly as it
@@ -1110,13 +1119,13 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
     // listing frees its cap slot here too by construction, not by mirroring.
     countOpenConversations: (workspaceId) => countOpenConversations(workspaceId),
 
-    canUseAgent: async (userId, agentPageId) => {
+    canUseAgent: async (actor, agentPageId) => {
       const page = await db.query.pages.findFirst({
         where: and(eq(pages.id, agentPageId), eq(pages.type, 'AI_CHAT'), eq(pages.isTrashed, false)),
         columns: { id: true },
       });
       if (!page) return false;
-      return canUserViewPage(userId, agentPageId);
+      return canUserViewPage(actor, agentPageId);
     },
 
     describeAgentToolSurface: async (agentPageId) => {
@@ -1141,7 +1150,7 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
       return { ...surface, notes: surfaceModule.formatAgentToolSurfaceNotes(surface) };
     },
 
-    describeWorkerComputeShortfall: async ({ workspaceId, userId, granted }) => {
+    describeWorkerComputeShortfall: async ({ workspaceId, actor, granted }) => {
       // Lazily, for the same cycle reason `describeAgentToolSurface` explains.
       const { SANDBOX_COMPUTE_TOOL_NAMES } = await import('../core/tool-filtering');
       // `null` granted = unrestricted (no allowlist, or a global worker): the
@@ -1158,9 +1167,9 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
       // inputs, so this predicts rather than guesses.
       const { workspaceOwnerId, workspaceDriveId } = await describeWorkspace(workspaceId);
       const eligible = await canRunCodeForSession({
-        userId,
+        actor,
         driveId: workspaceDriveId,
-        ownerId: workspaceOwnerId ?? userId,
+        ownerId: workspaceOwnerId ?? actor.userId,
       });
       if (eligible) return null;
 
@@ -1178,19 +1187,20 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
       );
     },
 
-    createWorkerSession: async ({ conversationId, callerConversationId, ownerId, agentPageId, name, workspace, allowedDriveIds, workspaceName }) => {
+    createWorkerSession: async ({ conversationId, callerConversationId, actor, agentPageId, name, workspace, allowedDriveIds, workspaceName }) => {
+      const ownerId = actor.userId;
       // `workspaceName` must be forwarded, not just accepted: this destructure
       // is an explicit field list, so a new input silently vanishes here
       // otherwise — which is exactly what happened on the first cut, leaving
       // `spawn_session`'s workspaceName inert while every type still checked.
-      const placement = await resolveWorkerPlacement({ workspace, callerConversationId, ownerId, agentPageId, allowedDriveIds, workspaceName });
+      const placement = await resolveWorkerPlacement({ workspace, callerConversationId, actor, agentPageId, allowedDriveIds, workspaceName });
       if (!placement.ok) return placement;
       const { workspaceId, unwind } = placement;
 
       try {
         await createConversationInSession({
           conversationId,
-          userId: ownerId,
+          actor,
           agentPageId,
           workspaceId,
           // The spawning conversation shares this grid when the worker lands in
@@ -1239,8 +1249,8 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
     // snapshot the `/nodes` GET serves, so a model and a browser never see
     // different names — or different trees — for the same workspace; the write
     // is the same single writer behind that route.
-    readPaneGrid: async (workspaceId, viewerId) => {
-      const snapshot = await readWorkspaceNodes(workspaceId, viewerId);
+    readPaneGrid: async (workspaceId, viewer) => {
+      const snapshot = await readWorkspaceNodes(workspaceId, viewer);
       if (snapshot.nodes.length === 0) return null;
       // Titles ride BESIDE the tree because they are authority and the tree is
       // not; the model is one viewer, so they are folded back in here for it.
@@ -1269,8 +1279,8 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
     // The model names a COMMAND; the server compiles it against the tree it
     // holds under the lock. A command whose target id no longer exists is
     // refused by the algebra, never clamped into something else.
-    applyLayoutCommand: async ({ workspaceId, actingUserId, command }) =>
-      applyLayoutCommandForWorkspace({ workspaceId, actingUserId, run: layoutCommand(command) }),
+    applyLayoutCommand: async ({ workspaceId, actor, command }) =>
+      applyLayoutCommandForWorkspace({ workspaceId, actor, run: layoutCommand(command) }),
 
     dispatch: dispatchThroughChatPipeline,
 
@@ -1332,13 +1342,13 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
       return { ok: true, spriteTornDown: false };
     },
 
-    ensureOwnSessionSandbox: async ({ conversationId, userId, agentPageId }) => {
+    ensureOwnSessionSandbox: async ({ conversationId, actor, agentPageId }) => {
       void agentPageId;
       const row = await findSessionForConversation(conversationId);
       if (!row) {
         return { ok: false, error: "This conversation has no session — open it inside a session to use shells." };
       }
-      const provisioned = await provisionSessionSandbox(row, userId);
+      const provisioned = await provisionSessionSandbox(row, actor);
       if (!provisioned.ok) {
         return {
           ok: false,
@@ -1351,12 +1361,12 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
       return { ok: true };
     },
 
-    spawnShell: async ({ conversationId, ownerId, name }) => {
+    spawnShell: async ({ conversationId, actor, name }) => {
       // The pure layer hands the CALLER's conversation id; shells hang off the
       // WORKSPACE, so resolve the working context first.
       const session = await findSessionForConversation(conversationId);
       if (!session) return { ok: false, reason: 'no_session' };
-      const spawned = await spawnShell({ workspaceId: session.id, ownerId, name });
+      const spawned = await spawnShell({ workspaceId: session.id, owner: actor, name });
       if (!spawned.ok) return { ok: false, reason: spawned.reason };
       return { ok: true, shell: spawned.shell, panes: spawned.panes };
     },
@@ -1381,8 +1391,8 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
       };
     },
 
-    killShell: async ({ shellId, actingUserId }) => {
-      const killed = await killShellById({ shellId, actingUserId });
+    killShell: async ({ shellId, actor }) => {
+      const killed = await killShellById({ shellId, actor });
       if (!killed.ok) return { ok: false, reason: killed.reason };
       return { ok: true, killed: killed.killed, panes: killed.panes };
     },

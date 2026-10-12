@@ -2301,42 +2301,42 @@
     {
       "idx": 330,
       "version": "7",
-      "when": 1791767513387,
-      "tag": "0340_org_subscription_funding",
+      "when": 1791811765438,
+      "tag": "0340_org_subscription_collection_method",
       "breakpoints": true
     },
     {
       "idx": 331,
       "version": "7",
-      "when": 1791771356674,
-      "tag": "0341_credential_authentication_evidence",
+      "when": 1791811791589,
+      "tag": "0341_drop_org_subscription_trial_end",
       "breakpoints": true
     },
     {
       "idx": 332,
       "version": "7",
-      "when": 1791772892501,
-      "tag": "0342_device_authentication_evidence",
+      "when": 1791812566533,
+      "tag": "0342_org_subscription_funding",
       "breakpoints": true
     },
     {
       "idx": 333,
       "version": "7",
-      "when": 1791773814980,
-      "tag": "0343_oauth_authentication_evidence",
+      "when": 1791830722697,
+      "tag": "0343_credential_authentication_evidence",
       "breakpoints": true
     },
     {
       "idx": 334,
       "version": "7",
-      "when": 1791826534572,
+      "when": 1791844225814,
       "tag": "0344_clear_external_org_avatars",
       "breakpoints": true
     },
     {
       "idx": 335,
       "version": "7",
-      "when": 1791826549740,
+      "when": 1791844247796,
       "tag": "0345_org_avatar_upload_only",
       "breakpoints": true
     }

@@ -3,6 +3,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { getBatchPagePermissions } from '@pagespace/lib/permissions/permissions';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
@@ -81,7 +82,7 @@ export async function POST(request: NextRequest) {
 
     const startTime = Date.now();
 
-    const permissionsMap = await getBatchPagePermissions(userId, pageIds);
+    const permissionsMap = await getBatchPagePermissions(actorFromAuth(auth), pageIds);
 
     const endTime = Date.now();
     const duration = endTime - startTime;

@@ -33,6 +33,7 @@ import { getActorInfo, logFileActivity } from '@pagespace/lib/monitoring/activit
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { checkObjectExists, issuePresignedPutUrl } from './s3-effects';
 import { verifyAttachmentBytes, type AttachmentVerifyResult } from './attachment-verify-effect';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 const PRESIGN_TTL = 900;
 
@@ -132,7 +133,7 @@ export async function presignAttachment(args: PresignAttachmentArgs): Promise<Or
 }
 
 export interface CompleteAttachmentArgs {
-  userId: string;
+  actor: AccessActor;
   target: AttachmentTarget;
   request: Request;
   jobId: string;
@@ -146,7 +147,8 @@ export interface CompleteAttachmentArgs {
  * target-agnostic FileAttachment the client references when sending the message.
  */
 export async function completeAttachment(args: CompleteAttachmentArgs): Promise<OrchestratorResult> {
-  const { userId, target, request, jobId, filename } = args;
+  const { actor, target, request, jobId, filename } = args;
+  const userId = actor.userId;
 
   // hash/size/mime + target come from the presign-reserved slot, never the body —
   // and the slot must be an attachment slot bound to *this* target.
@@ -166,7 +168,7 @@ export async function completeAttachment(args: CompleteAttachmentArgs): Promise<
   // semaphore's stale-slot sweep and the user hits their concurrency cap meanwhile.
   let verify: AttachmentVerifyResult;
   try {
-    verify = await verifyAttachmentBytes({ userId, target, contentHash });
+    verify = await verifyAttachmentBytes({ actor, target, contentHash });
   } catch (err) {
     uploadSemaphore.releaseUploadSlot(jobId);
     await releasePendingUpload(jobId).catch(() => undefined);

@@ -2,6 +2,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { assert } from './riteway';
 
 // Mock database and dependencies
+// Org sign-in policy (SEC-2/3) admits every actor here; tests that exercise a refusal override it.
+vi.mock('@pagespace/lib/permissions/actor-authentication', () => ({
+  checkActorResourceAuthentication: vi.fn(async () => ({ allowed: true })),
+  checkActorDriveAuthentication: vi.fn(async () => ({ allowed: true })),
+  filterDrivesForActor: vi.fn(async (_actor: unknown, ids: readonly string[]) => new Set(ids)),
+  filterResourcesForActor: vi.fn(async (_actor: unknown, ids: readonly string[]) => new Set(ids)),
+  explainOrgAuthenticationDenial: vi.fn(async () => null),
+}));
 vi.mock('@pagespace/db/db', () => ({
   db: {
     select: vi.fn().mockReturnThis(),
@@ -52,6 +60,7 @@ vi.mock('@pagespace/db/schema/calendar', () => ({
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   isUserDriveMember: vi.fn(),
   getDriveIdsForUser: vi.fn(),
 }));
@@ -85,6 +94,7 @@ import { db } from '@pagespace/db/db';
 import { isUserDriveMember, getDriveIdsForUser } from '@pagespace/lib/permissions/permissions';
 import { isUserMemberOfAnyEventDrive } from '@pagespace/lib/services/calendar-event-drive-service';
 import type { ToolExecutionContext } from '../../core/types';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const mockDb = vi.mocked(db);
 const mockIsUserDriveMember = vi.mocked(isUserDriveMember);
@@ -116,7 +126,7 @@ const createMockEvent = (overrides = {}) => ({
 const createAuthContext = (userId = 'user-123', timezone?: string) => ({
   toolCallId: '1',
   messages: [],
-  experimental_context: { userId, ...(timezone && { timezone }) } as ToolExecutionContext,
+  experimental_context: { userId, accessActor: credentialActor(userId, null), ...(timezone && { timezone }) } as ToolExecutionContext,
 });
 
 describe('calendar-read-tools', () => {

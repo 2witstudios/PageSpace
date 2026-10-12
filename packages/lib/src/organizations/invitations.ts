@@ -19,6 +19,7 @@ import { normalizeEmail } from '../encryption/blind-index';
 import { isEmailAMember, isUniqueViolation, retryOnDeadlock } from './repository';
 import { getOrgPolicies } from './policy-reader';
 import { orgActorDecision } from './org-action-decisions';
+import { holdsOrgRole } from './authorize-core';
 import { policyRefusal, type PolicyRefusal } from './sharing-decisions';
 import { checkOrgActive, checkOrgMayLoosen, ORG_LAPSED_CODE, type OrgLapsedRefusal } from './status';
 import { admitSeat, recordSeatAdmissionEvents, type SeatAdmission, type SeatBillingPort } from './seat-service';
@@ -151,7 +152,8 @@ async function inviterRefusal(tx: Tx, orgId: string, actorRole: OrgRole, role: O
   const policies = await getOrgPolicies(orgId, tx);
   const who = orgActorDecision(policies.whoCanInvite, actorRole, 'invite');
   if (!who.ok) return who;
-  if (role === 'ADMIN' && actorRole === 'MEMBER') {
+  // Nobody hands out a role above their own (ORG-5's one rank rule): only an Owner or Admin invites an Admin.
+  if (!holdsOrgRole(actorRole, role)) {
     return policyRefusal('whoCanInvite', 'Only Owners and Admins can invite someone as an Admin.');
   }
   return null;
@@ -192,6 +194,8 @@ export async function createOrRotateInvitation(input: {
   deliver: InviteDelivery;
   /** Stripe's seat item, for an auto-add raise (SEAT-4). Only a raise needs it. */
   seatBilling?: SeatBillingPort;
+  /** How the inviter authenticated: a delegated key ('mcp') never buys a seat ([D-OW-26]). */
+  credential: 'session' | 'mcp';
 }): Promise<IssueInvitationResult> {
   let issued: Issued;
   let seat = null as SeatAdmission | null;
@@ -201,7 +205,7 @@ export async function createOrRotateInvitation(input: {
       const actor = await lockInviterRole(tx, input.orgId, input.invitedBy);
       if (!actor.ok) return actor;
       // SEAT-9: inviting is an org-only capability; a lapsed org is refused before any write.
-      const active = await checkOrgActive(input.orgId, { executor: tx, now: input.now });
+      const active = await checkOrgActive(input.orgId, { executor: tx });
       if (!active.ok) return lapsedRefusal(active);
       // POL-5: who may invite, read here in the same transaction and before anything is written.
       const refusal = await inviterRefusal(tx, input.orgId, actor.role, input.role);
@@ -226,7 +230,7 @@ export async function createOrRotateInvitation(input: {
       // SEAT-3/4/5: a new or rotated invite holds a seat. Decided under the org's billing lock,
       // after the address is known to need one and before anything is written; an auto-add
       // raise and this invite commit or roll back together.
-      seat = await admitSeat(tx, { orgId: input.orgId, actorRole: actor.role }, input.seatBilling);
+      seat = await admitSeat(tx, { orgId: input.orgId, actorRole: actor.role, credential: input.credential }, input.seatBilling);
       if (!seat.ok) return seat;
 
       const { token, hash } = generateToken(ORG_INVITE_TOKEN_PREFIX);
@@ -337,6 +341,8 @@ export async function resendInvitation(input: {
   deliver: InviteDelivery;
   /** Stripe's seat item, for an auto-add raise when the resent invite was expired (SEAT-4). */
   seatBilling?: SeatBillingPort;
+  /** How the inviter authenticated: a delegated key ('mcp') never buys a seat ([D-OW-26]). */
+  credential: 'session' | 'mcp';
 }): Promise<ResendInvitationResult> {
   const { token, hash } = generateToken(ORG_INVITE_TOKEN_PREFIX);
   let seat = null as SeatAdmission | null;
@@ -352,7 +358,7 @@ export async function resendInvitation(input: {
     const actor = await lockInviterRole(tx, input.orgId, input.actorId);
     if (!actor.ok) return actor;
     // SEAT-9: a re-sent invite is an invite; the pending one keeps its link and its seat.
-    const active = await checkOrgActive(input.orgId, { executor: tx, now: input.now });
+    const active = await checkOrgActive(input.orgId, { executor: tx });
     if (!active.ok) return lapsedRefusal(active);
     const [previous] = await tx
       .select()
@@ -370,7 +376,7 @@ export async function resendInvitation(input: {
     const refusal = await inviterRefusal(tx, input.orgId, actor.role, previous.role);
     if (refusal) return refusal;
     if (!isLiveInvite(previous, input.now)) {
-      seat = await admitSeat(tx, { orgId: input.orgId, actorRole: actor.role }, input.seatBilling);
+      seat = await admitSeat(tx, { orgId: input.orgId, actorRole: actor.role, credential: input.credential }, input.seatBilling);
       if (!seat.ok) return seat;
     }
     const [invitation] = await tx

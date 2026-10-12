@@ -10,6 +10,7 @@ import { authenticateRequestWithOptions, isAuthError, getAllowedDriveIds } from 
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
 import { checkDriveMayLoosen } from '@pagespace/lib/permissions/org-lapse-guard';
 import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -112,7 +113,7 @@ export async function GET(
         });
 
         if (!isAttendee) {
-          const isMember = await isUserMemberOfAnyEventDrive(userId, event);
+          const isMember = await isUserMemberOfAnyEventDrive(actorFromAuth(auth), event);
           if (!isMember) {
             return NextResponse.json(
               { error: 'Access denied - you do not have access to this event' },

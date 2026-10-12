@@ -8,6 +8,7 @@ import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '
 import { canPrincipalEditPage, canPrincipalViewPage } from '@/lib/auth'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { broadcastTaskEvent } from '@/lib/websocket';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -40,7 +41,7 @@ export async function GET(
 
   const canView = await canPrincipalViewPage(auth, pageId);
   if (!canView) {
-    return NextResponse.json({ error: 'Access denied' }, { status: 403 });
+    return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json({ error: 'Access denied' }, { status: 403 }));
   }
 
   const taskList = await db.query.taskLists.findFirst({
@@ -108,7 +109,7 @@ export async function POST(
 
   const canEdit = await canPrincipalEditPage(auth, pageId);
   if (!canEdit) {
-    return NextResponse.json({ error: 'You need edit permission to manage statuses' }, { status: 403 });
+    return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json({ error: 'You need edit permission to manage statuses' }, { status: 403 }));
   }
 
   const body = await req.json();
@@ -223,7 +224,7 @@ export async function PUT(
 
   const canEdit = await canPrincipalEditPage(auth, pageId);
   if (!canEdit) {
-    return NextResponse.json({ error: 'You need edit permission to manage statuses' }, { status: 403 });
+    return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json({ error: 'You need edit permission to manage statuses' }, { status: 403 }));
   }
 
   const body = await req.json();
@@ -313,7 +314,7 @@ export async function DELETE(
 
   const canEdit = await canPrincipalEditPage(auth, pageId);
   if (!canEdit) {
-    return NextResponse.json({ error: 'You need edit permission to manage statuses' }, { status: 403 });
+    return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json({ error: 'You need edit permission to manage statuses' }, { status: 403 }));
   }
 
   const { searchParams } = new URL(req.url);

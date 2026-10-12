@@ -106,6 +106,7 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   getUserAccessiblePagesInDrive: vi.fn(),
 }));
 // The org-aware relationship is the gate (its pure role decisions stay real).
@@ -307,7 +308,7 @@ describe('GET /api/drives/[driveId]/pages', () => {
       const response = await GET(createRequest() as never, createContext(mockDriveId));
 
       expect(response.status).toBe(200);
-      expect(loadDriveRelationship).toHaveBeenCalledWith(mockUserId, expect.objectContaining({ orgId: 'org_1', orgVisibility: 'PRIVATE' }));
+      expect(loadDriveRelationship).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }), expect.objectContaining({ orgId: 'org_1', orgVisibility: 'PRIVATE' }));
       expect(getUserAccessiblePagesInDrive).not.toHaveBeenCalled();
     });
   });
@@ -340,7 +341,7 @@ describe('GET /api/drives/[driveId]/pages', () => {
 
       // No drive_members read of this route's own: getUserAccessiblePagesInDrive gives a GUEST
       // row only its explicit grants (share-link-guest.integration.test.ts, real Postgres).
-      expect(getUserAccessiblePagesInDrive).toHaveBeenCalledWith(mockUserId, mockDriveId);
+      expect(getUserAccessiblePagesInDrive).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }), mockDriveId);
     });
 
     it('should fetch permitted pages and ancestors when member has some permissions', async () => {
@@ -367,7 +368,7 @@ describe('GET /api/drives/[driveId]/pages', () => {
       });
       const executeArgs = mockExecute.mock.calls[0];
       expect(executeArgs[0]).toHaveProperty('type', 'sql');
-      expect(getUserAccessiblePagesInDrive).toHaveBeenCalledWith(mockUserId, mockDriveId);
+      expect(getUserAccessiblePagesInDrive).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }), mockDriveId);
     });
 
     it('DRV-5 (partial) an implicit Open member with no row sees exactly the pages the canonical resolver gives their drive default role', async () => {
@@ -382,7 +383,7 @@ describe('GET /api/drives/[driveId]/pages', () => {
 
       expect(response.status).toBe(200);
       expect(await response.json()).toEqual([expect.objectContaining({ id: 'page_1' })]);
-      expect(getUserAccessiblePagesInDrive).toHaveBeenCalledWith(mockUserId, mockDriveId);
+      expect(getUserAccessiblePagesInDrive).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }), mockDriveId);
     });
 
     it('X-6 (partial) a stale source=org ADMIN row opens nothing beyond the canonical page set: the route never reads drive_members', async () => {

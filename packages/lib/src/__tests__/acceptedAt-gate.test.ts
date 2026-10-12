@@ -44,6 +44,18 @@ function extractFunctionBody(source: string, fnName: string): string {
   return source.slice(start, end);
 }
 
+/**
+ * The body of a module-private function (D-OW-45: the userId resolvers behind the actor API are not exported), up to
+ * its closing brace at column 0.
+ */
+function extractPrivateBody(source: string, fnName: string): string {
+  const start = source.indexOf(`\nasync function ${fnName}(`);
+  if (start === -1) {
+    throw new Error(`Private function not found: ${fnName}`);
+  }
+  return source.slice(start, source.indexOf('\n}\n', start) + 2);
+}
+
 const GATE = /isNotNull\s*\(\s*driveMembers\.acceptedAt\s*\)/;
 /** Reads membership through the shared org-aware loader, whose lookup carries GATE. */
 const DELEGATES = /loadEffectiveDriveMembership\(/;
@@ -135,8 +147,11 @@ describe('drive-service.ts', () => {
 describe('permissions/permissions.ts', () => {
   const source = read('permissions/permissions.ts');
 
+  // The exported actor API asks the org sign-in policy and delegates to these module-private resolvers (D-OW-45),
+  // which is where the membership reads live.
   it('getDriveIdsForUser memberDrives query gates pending rows (regression: pending member drives would appear in the access-list used by callers like search and pulse)', () => {
-    const body = extractFunctionBody(source, 'getDriveIdsForUser');
+    expect(extractFunctionBody(source, 'getDriveIdsForUser')).toMatch(/resolveDriveIdsForUser\(/);
+    const body = extractPrivateBody(source, 'resolveDriveIdsForUser');
     expect(body).toMatch(GATE);
     // The org-aware body (ORGS_ENABLED) reads its own rows with the same gate.
     const start = source.indexOf('async function getDriveIdsForUserWithOrgs');
@@ -145,20 +160,24 @@ describe('permissions/permissions.ts', () => {
   });
 
   it.each([
-    'isDriveOwnerOrAdmin',
-    'isUserDriveMember',
-    'getUserAccessiblePagesInDrive',
-    'getUserAccessiblePagesInDriveWithDetails',
-    'getUserDriveAccess',
-    'getUserDrivePermissions',
-  ])('%s reads membership only through the shared loader (regression: a local drive_members read could skip the pending-row gate or the org rules)', (fn) => {
-    const body = extractFunctionBody(source, fn);
+    ['isDriveOwnerOrAdmin', 'resolveIsDriveOwnerOrAdmin'],
+    ['isUserDriveMember', 'resolveIsDriveMember'],
+    ['getUserAccessiblePagesInDrive', 'resolveAccessiblePagesInDrive'],
+    ['getUserAccessiblePagesInDriveWithDetails', 'resolveAccessiblePagesInDriveWithDetails'],
+    ['getUserDriveAccess', 'resolveDriveAccess'],
+    ['getUserDrivePermissions', 'resolveDrivePermissions'],
+  ])('%s reads membership only through the shared loader (regression: a local drive_members read could skip the pending-row gate or the org rules)', (fn, resolver) => {
+    expect(extractFunctionBody(source, fn)).toMatch(new RegExp(`${resolver}\\(`));
+    const body = extractPrivateBody(source, resolver);
     expect(body).toMatch(DELEGATES);
     expect(body).not.toMatch(/\.from\(driveMembers\)/);
   });
 
-  it.each(['getBatchPagePermissions', 'getUsersWhoCanViewPage'])('%s joins only accepted rows (regression: a pending row would reach the effective-membership pass)', (fn) => {
-    const body = extractFunctionBody(source, fn);
+  it.each([
+    ['getBatchPagePermissions', (s: string) => extractPrivateBody(s, 'resolveBatchPagePermissions')],
+    ['getUsersWhoCanViewPage', (s: string) => extractFunctionBody(s, 'getUsersWhoCanViewPage')],
+  ] as const)('%s joins only accepted rows (regression: a pending row would reach the effective-membership pass)', (_fn, bodyOf) => {
+    const body = bodyOf(source);
     expect(body).toMatch(GATE);
     expect(body).toMatch(/withEffectiveMembership\(/);
   });

@@ -28,8 +28,10 @@ import {
   isServerError,
   isTimeoutError,
   isValidationError,
+  orgSignInRequirementOf,
   type Operation,
 } from '@pagespace/sdk';
+import { ORG_SIGN_IN_HINTS } from '../format-error.js';
 
 export interface McpJsonSchema {
   readonly type: 'object';
@@ -126,6 +128,11 @@ export function formatSuccessResult(output: unknown): McpCallResult {
  * law bans).
  */
 export function formatSdkErrorResult(op: Operation, error: unknown): McpCallResult {
+  // D-OW-45: an organization's sign-in policy refused the credential. Name the code and the fix.
+  const signIn = orgSignInRequirementOf(error);
+  if (signIn) {
+    return textResult(`Refused by an organization's sign-in policy for "${op.name}" (${signIn}). ${ORG_SIGN_IN_HINTS[signIn]}`, true);
+  }
   if (isPermissionDeniedError(error)) {
     const scope = op.requiredScope ? ` Requires "${op.requiredScope}" scope.` : '';
     return textResult(`Permission denied for "${op.name}".${scope}`, true);
