@@ -7,6 +7,7 @@ import { NextResponse } from 'next/server';
 import { apiError } from '@/lib/api/api-error';
 import { authenticateRequestWithOptions, isAuthError, getAllowedDriveIds, type AuthResult } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { isBillingEnabled } from '@pagespace/lib/deployment-mode';
 import { ORGS_ENABLED } from '@pagespace/lib/organizations/orgs-enabled';
 import { requireOrgRole } from '@pagespace/lib/organizations/authorize';
 import { findMembershipRole } from '@pagespace/lib/organizations/repository';
@@ -35,8 +36,9 @@ export const orgsDisabledResponse = (): Response => NextResponse.json({ error: '
 
 /**
  * Billing is off on this deployment (onprem, tenant): the org exists but has no plan, seats or
- * subscription. Distinguishable from orgs being dark by its code, and only answered to a caller
- * the org gate already admitted, so it reveals nothing to an outsider.
+ * subscription. Distinguishable from orgs being dark by its code. Answered to every
+ * authenticated caller before any org lookup (authorizeOrgBillingRequest), so it is the same for
+ * every org id and every role and reveals nothing about the org.
  */
 export const billingUnavailableResponse = (): Response =>
   apiError(404, 'billing_unavailable', 'Organization billing is not available on this deployment');
@@ -83,6 +85,32 @@ export async function authorizeOrgRequest(
 ): Promise<OrgGate> {
   const gate = await authenticateOrgRequest(request, options);
   if (!gate.ok) return gate;
+  return authorizeAuthenticated(request, gate, orgId, minRole);
+}
+
+/**
+ * The gate for the org BILLING routes (SEAT-6): dark check and authentication, then the billing
+ * gate, then the org role. Billing off (onprem, tenant) is one answer, 404 billing_unavailable,
+ * for every role and every org id, so the routes are absent there rather than "forbidden to some".
+ */
+export async function authorizeOrgBillingRequest(
+  request: Request,
+  orgId: string,
+  minRole: OrgRole,
+  options: AuthOptions,
+): Promise<OrgGate> {
+  const gate = await authenticateOrgRequest(request, options);
+  if (!gate.ok) return gate;
+  if (!isBillingEnabled()) return { ok: false, response: billingUnavailableResponse() };
+  return authorizeAuthenticated(request, gate, orgId, minRole);
+}
+
+async function authorizeAuthenticated(
+  request: Request,
+  gate: Extract<OrgGate, { ok: true }>,
+  orgId: string,
+  minRole: OrgRole,
+): Promise<OrgGate> {
   // The lookup is passed explicitly rather than left to requireOrgRole's default, so the
   // gate's IO is visible at this seam (and a test fakes it by its package specifier; the
   // built lib's internal relative import could never be intercepted).

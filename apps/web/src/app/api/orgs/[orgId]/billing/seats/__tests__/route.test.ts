@@ -12,14 +12,17 @@ const { mockGate, mockSummary, mockSet, mockBilling, mockAudit } = vi.hoisted(()
   mockAudit: vi.fn(),
 }));
 
+// The billing gate's composition (billing off answers before the role check) is the real
+// org-route-auth's, proven in org-billing-visibility.integration.test.ts; here it is modelled.
 vi.mock('@/lib/orgs/org-route-auth', () => ({
-  authorizeOrgRequest: mockGate,
-  billingUnavailableResponse: () => new Response(JSON.stringify({ error: 'Organization billing is not available on this deployment', code: 'billing_unavailable' }), { status: 404 }),
+  authorizeOrgBillingRequest: (...args: unknown[]) =>
+    mockBilling()
+      ? mockGate(...args)
+      : { ok: false, response: new Response(JSON.stringify({ error: 'Organization billing is not available on this deployment', code: 'billing_unavailable' }), { status: 404 }) },
   ORG_READ_AUTH: {},
   ORG_WRITE_AUTH: {},
 }));
 vi.mock('@pagespace/lib/organizations/seat-service', () => ({ getSeatSummary: mockSummary, setSeatAutoAdd: mockSet }));
-vi.mock('@pagespace/lib/deployment-mode', () => ({ isBillingEnabled: mockBilling }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: mockAudit }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({ loggers: { api: { error: vi.fn() } } }));
 
