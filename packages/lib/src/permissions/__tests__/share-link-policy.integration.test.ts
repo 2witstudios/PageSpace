@@ -106,8 +106,8 @@ afterAll(async () => {
   await pool.end();
 });
 
-const off = () => updateOrgPolicies({ orgId: w.orgId, actorId: w.owner, patch: { publicShareLinks: false } });
-const on = () => updateOrgPolicies({ orgId: w.orgId, actorId: w.owner, patch: { publicShareLinks: true } });
+const off = () => updateOrgPolicies({ orgId: w.orgId, actorId: w.owner, actorAuthentication: null, patch: { publicShareLinks: false } });
+const on = () => updateOrgPolicies({ orgId: w.orgId, actorId: w.owner, actorAuthentication: null, patch: { publicShareLinks: true } });
 const newUser = async () => {
   const u = await factories.createUser();
   created.userIds.push(u.id);
@@ -202,7 +202,7 @@ describe('redemption and preview', () => {
 
   it('POL-3 (partial) another org turning its links off changes nothing here', async () => {
     const { drive } = await makeLinks();
-    await updateOrgPolicies({ orgId: w.otherOrg, actorId: (await db.select({ o: organizations.ownerId }).from(organizations).where(eq(organizations.id, w.otherOrg)))[0].o, patch: { publicShareLinks: false } });
+    await updateOrgPolicies({ orgId: w.otherOrg, actorId: (await db.select({ o: organizations.ownerId }).from(organizations).where(eq(organizations.id, w.otherOrg)))[0].o, actorAuthentication: null, patch: { publicShareLinks: false } });
 
     expect((await redeemDriveShareLink(ctxFor(await newUser()), drive.rawToken)).ok).toBe(true);
     const members = await db.select().from(driveMembers).where(and(eq(driveMembers.driveId, w.orgDrive)));
@@ -211,7 +211,7 @@ describe('redemption and preview', () => {
 });
 
 describe('guests policy at redemption', () => {
-  const setGuests = (guests: 'off' | 'approve' | 'on') => updateOrgPolicies({ orgId: w.orgId, actorId: w.owner, patch: { guests } });
+  const setGuests = (guests: 'off' | 'approve' | 'on') => updateOrgPolicies({ orgId: w.orgId, actorId: w.owner, actorAuthentication: null, patch: { guests } });
   const orgMemberUser = async () => {
     const id = await newUser();
     await db.insert(orgMembers).values({ orgId: w.orgId, userId: id, role: 'MEMBER' });

@@ -341,7 +341,7 @@ describe('the Open-drive role floor is read by every implicit-membership resolve
   it('POL-6 (partial) guests-off parking still wins: a parked outsider and a parked guest resolve nothing in any path, while the floor still holds for org members', async () => {
     const h = await harbor();
     await setFloor(h.org.id, 'edit');
-    const parked = await updateOrgPolicies({ orgId: h.org.id, actorId: h.people.ada.id, patch: { guests: 'off' } });
+    const parked = await updateOrgPolicies({ orgId: h.org.id, actorId: h.people.ada.id, actorAuthentication: null, patch: { guests: 'off' } });
     expect(parked).toMatchObject({ ok: true });
 
     const { lines } = await disagreements(h, 'edit');

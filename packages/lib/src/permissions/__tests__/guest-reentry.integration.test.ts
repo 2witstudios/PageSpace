@@ -97,7 +97,7 @@ afterAll(async () => {
 });
 
 const setGuests = async (guests: 'off' | 'approve' | 'on') => {
-  const r = await updateOrgPolicies({ orgId: w.orgId, actorId: w.owner, patch: { guests } });
+  const r = await updateOrgPolicies({ orgId: w.orgId, actorId: w.owner, actorAuthentication: null, patch: { guests } });
   if (!r.ok) throw new Error(`guests ${guests} refused`);
 };
 const EDIT = { canView: true, canEdit: true, canShare: false, canDelete: false };
@@ -352,7 +352,7 @@ describe('approve mode replays exactly what was held (independent re-verify of #
     let policySettled = false;
     await db.transaction(async (tx) => {
       await lockOrgsOfDrivesForShare(tx, { driveIds: [], pageIds: [w.orgPage] });
-      const change = updateOrgPolicies({ orgId: w.orgId, actorId: w.owner, patch: { guests: 'off' } }).finally(() => { policySettled = true; });
+      const change = updateOrgPolicies({ orgId: w.orgId, actorId: w.owner, actorAuthentication: null, patch: { guests: 'off' } }).finally(() => { policySettled = true; });
       await new Promise((r) => setTimeout(r, 300));
       expect(policySettled).toBe(false);
       void change;

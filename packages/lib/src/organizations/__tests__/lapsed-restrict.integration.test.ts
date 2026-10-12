@@ -166,19 +166,19 @@ describe('a lapsed org may still restrict (orgs on, real Postgres)', () => {
     await setSubscription(w.orgId, 'canceled');
     expect(await isOrgActive(w.orgId)).toBe(false);
 
-    const off = await updateOrgPolicies({ orgId: w.orgId, actorId: w.ids.priya, patch: { guests: 'off' } });
+    const off = await updateOrgPolicies({ orgId: w.orgId, actorId: w.ids.priya, actorAuthentication: null, patch: { guests: 'off' } });
     expect(off).toMatchObject({ ok: true, policies: { guests: 'off' } });
     expect((await getOrgPolicies(w.orgId)).guests).toBe('off');
     expect(await getUserAccessLevel(w.ids.gita, w.pageId)).toBeNull();
 
     for (const guests of ['approve', 'on'] as const) {
-      expect(await updateOrgPolicies({ orgId: w.orgId, actorId: w.ids.priya, patch: { guests } })).toEqual(lapsedPolicyRefusal);
+      expect(await updateOrgPolicies({ orgId: w.orgId, actorId: w.ids.priya, actorAuthentication: null, patch: { guests } })).toEqual(lapsedPolicyRefusal);
       expect((await getOrgPolicies(w.orgId)).guests).toBe('off');
       expect(await getUserAccessLevel(w.ids.gita, w.pageId)).toBeNull();
     }
 
     await setSubscription(w.orgId, 'active');
-    expect(await updateOrgPolicies({ orgId: w.orgId, actorId: w.ids.priya, patch: { guests: 'on' } })).toMatchObject({ ok: true, policies: { guests: 'on' } });
+    expect(await updateOrgPolicies({ orgId: w.orgId, actorId: w.ids.priya, actorAuthentication: null, patch: { guests: 'on' } })).toMatchObject({ ok: true, policies: { guests: 'on' } });
     expect((await getUserAccessLevel(w.ids.gita, w.pageId))?.canView).toBe(true);
   });
 
@@ -187,7 +187,7 @@ describe('a lapsed org may still restrict (orgs on, real Postgres)', () => {
     const w = world;
     await setSubscription(w.orgId, 'unpaid');
 
-    const mixed = await updateOrgPolicies({ orgId: w.orgId, actorId: w.ids.priya, patch: { guests: 'off', seatAllowanceCents: DEFAULT_ORG_POLICIES.seatAllowanceCents + 1 } });
+    const mixed = await updateOrgPolicies({ orgId: w.orgId, actorId: w.ids.priya, actorAuthentication: null, patch: { guests: 'off', seatAllowanceCents: DEFAULT_ORG_POLICIES.seatAllowanceCents + 1 } });
     expect(mixed).toEqual(lapsedPolicyRefusal);
     expect(await getOrgPolicies(w.orgId)).toEqual(DEFAULT_ORG_POLICIES);
     expect((await getUserAccessLevel(w.ids.gita, w.pageId))?.canView).toBe(true);
@@ -195,13 +195,14 @@ describe('a lapsed org may still restrict (orgs on, real Postgres)', () => {
     const tightened = await updateOrgPolicies({
       orgId: w.orgId,
       actorId: w.ids.priya,
+      actorAuthentication: null,
       patch: { publicShareLinks: false, publishWeb: false, seatAllowanceCents: 0, modelAllowlist: ['anthropic/claude'], cloudSandbox: false, whoCanCreateDrives: 'admins' },
     });
     expect(tightened).toMatchObject({ ok: true });
     const [link] = await db.select({ suspended: driveShareLinks.suspendedByPolicy }).from(driveShareLinks).where(eq(driveShareLinks.id, w.linkId));
     expect(link.suspended).not.toBeNull();
     // Loosening any one of them back is refused while lapsed.
-    expect(await updateOrgPolicies({ orgId: w.orgId, actorId: w.ids.priya, patch: { publicShareLinks: true } })).toEqual(lapsedPolicyRefusal);
+    expect(await updateOrgPolicies({ orgId: w.orgId, actorId: w.ids.priya, actorAuthentication: null, patch: { publicShareLinks: true } })).toEqual(lapsedPolicyRefusal);
     expect((await getOrgPolicies(w.orgId)).publicShareLinks).toBe(false);
   });
 

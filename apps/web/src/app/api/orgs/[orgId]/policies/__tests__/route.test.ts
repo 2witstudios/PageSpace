@@ -65,6 +65,7 @@ beforeEach(() => {
     suspended: [{ kind: 'publicShareLinks', resourceType: 'drive_share_link', id: 'l1', driveId: 'd1' }],
     restored: [],
     blocked: { counts: {}, total: 0, items: [] },
+    signInBlocked: null,
     auditRecorded: true,
   });
 });
@@ -106,7 +107,7 @@ describe('policies routes', () => {
     as('ADMIN');
     const res = await PATCH(req('PATCH', '', { publicShareLinks: false }), ctx);
     expect(res.status).toBe(200);
-    expect(updateOrgPolicies).toHaveBeenCalledWith({ orgId: ORG_ID, actorId: 'user_priya', patch: { publicShareLinks: false } });
+    expect(updateOrgPolicies).toHaveBeenCalledWith({ orgId: ORG_ID, actorId: 'user_priya', actorAuthentication: null, patch: { publicShareLinks: false } });
     expect(await res.json()).toMatchObject({ changed: ['publicShareLinks'], suspended: { publicShareLinks: 1 }, restored: {}, auditRecorded: true });
   });
 
@@ -119,6 +120,7 @@ describe('policies routes', () => {
       suspended: [],
       restored: [],
       blocked: { counts: { publishedApps: 2 }, total: 2, items: [] },
+      signInBlocked: null,
       auditRecorded: true,
     });
     expect(await (await PATCH(req('PATCH', '', { publishedApps: false }), ctx)).json()).toMatchObject({ blocked: { publishedApps: 2 } });
@@ -153,12 +155,41 @@ describe('policies routes', () => {
     as('ADMIN');
     const res = await PATCH(req('PATCH', '', { guests: 'off' }), ctx);
     expect(res.status).toBe(200);
-    expect(updateOrgPolicies).toHaveBeenCalledWith({ orgId: ORG_ID, actorId: 'user_priya', patch: { guests: 'off' } });
+    expect(updateOrgPolicies).toHaveBeenCalledWith({ orgId: ORG_ID, actorId: 'user_priya', actorAuthentication: null, patch: { guests: 'off' } });
+  });
+
+  it('SEC-2 (partial) SEC-3 (partial) the acting credential\'s evidence reaches lib, where loosening a sign-in policy is judged (D-OW-45)', async () => {
+    as('ADMIN');
+    const authentication = { authenticatedAtMs: Date.now() - 1000, assurance: 'user_verified_passkey' as const };
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ ...session('user_priya'), authentication });
+    await PATCH(req('PATCH', '', { requireStrongSignIn: false }), ctx);
+    expect(updateOrgPolicies).toHaveBeenCalledWith({ orgId: ORG_ID, actorId: 'user_priya', actorAuthentication: authentication, patch: { requireStrongSignIn: false } });
+  });
+
+  it.each(['org_strong_sign_in_required', 'org_reauthentication_required'] as const)(
+    'SEC-2 (partial) SEC-3 (partial) a sign-in loosening refused for the credential answers 403 with the actionable code %s',
+    async (code) => {
+      as('OWNER');
+      vi.mocked(updateOrgPolicies).mockResolvedValue({ ok: false, reason: code });
+      const res = await PATCH(req('PATCH', '', { requireStrongSignIn: false }), ctx);
+      expect(res.status).toBe(403);
+      expect(await res.json()).toMatchObject({ code, orgId: ORG_ID });
+      expect(reconcileOrgPublishedVisibility).not.toHaveBeenCalled();
+    },
+  );
+
+  it('POL-1 (partial) who a tightened sign-in policy now refuses is reported by count', async () => {
+    as('ADMIN');
+    vi.mocked(updateOrgPolicies).mockResolvedValue({
+      ok: true, policies: { ...DEFAULT_ORG_POLICIES, requireStrongSignIn: true }, changes: [{ key: 'requireStrongSignIn', from: false, to: true }],
+      suspended: [], restored: [], blocked: { counts: {}, total: 0, items: [] }, signInBlocked: { members: 3, credentials: 5 }, auditRecorded: true,
+    });
+    expect(await (await PATCH(req('PATCH', '', { requireStrongSignIn: true }), ctx)).json()).toMatchObject({ signInBlocked: { members: 3, credentials: 5 } });
   });
 
   it('POL-1 (partial) a change that committed but was not audited is reported, not hidden', async () => {
     as('OWNER');
-    vi.mocked(updateOrgPolicies).mockResolvedValue({ ok: true, policies: { ...DEFAULT_ORG_POLICIES }, changes: [], suspended: [], restored: [], blocked: { counts: {}, total: 0, items: [] }, auditRecorded: false });
+    vi.mocked(updateOrgPolicies).mockResolvedValue({ ok: true, policies: { ...DEFAULT_ORG_POLICIES }, changes: [], suspended: [], restored: [], blocked: { counts: {}, total: 0, items: [] }, signInBlocked: null, auditRecorded: false });
     expect((await (await PATCH(req('PATCH', '', { guests: 'on' }), ctx)).json()).auditRecorded).toBe(false);
   });
 
@@ -177,6 +208,7 @@ describe('policies routes', () => {
         suspended: [],
         restored: [],
         blocked: { counts: {}, total: 0, items: [] },
+        signInBlocked: null,
         auditRecorded: true,
       });
 

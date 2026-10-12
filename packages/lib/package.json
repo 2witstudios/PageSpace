@@ -3024,6 +3024,11 @@
       "import": "./dist/organizations/authentication-policy-core.js",
       "require": "./dist/organizations/authentication-policy-core.js"
     },
+    "./organizations/sign-in-blocked": {
+      "types": "./dist/organizations/sign-in-blocked.d.ts",
+      "import": "./dist/organizations/sign-in-blocked.js",
+      "require": "./dist/organizations/sign-in-blocked.js"
+    },
     "./organizations/policy-reader": {
       "types": "./dist/organizations/policy-reader.d.ts",
       "import": "./dist/organizations/policy-reader.js",
@@ -3945,6 +3950,9 @@
       ],
       "organizations/authentication-policy-core": [
         "./dist/organizations/authentication-policy-core.d.ts"
+      ],
+      "organizations/sign-in-blocked": [
+        "./dist/organizations/sign-in-blocked.d.ts"
       ],
       "organizations/policy-reader": [
         "./dist/organizations/policy-reader.d.ts"

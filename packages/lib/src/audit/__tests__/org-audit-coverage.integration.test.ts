@@ -249,11 +249,11 @@ describe('every org mutation writes its event', () => {
     // ── policies, and a guest held by them ───────────────────────────────────────
     const link = await createDriveShareLink(ctxFor(marcus.id), productId, {});
     if (!link.ok) throw new Error('share link');
-    expect((await updateOrgPolicies({ orgId, actorId: jono.id, patch: { publicShareLinks: false } })).ok).toBe(true);
-    expect((await updateOrgPolicies({ orgId, actorId: jono.id, patch: { publicShareLinks: true, guests: 'approve' } })).ok).toBe(true);
+    expect((await updateOrgPolicies({ orgId, actorId: jono.id, actorAuthentication: null, patch: { publicShareLinks: false } })).ok).toBe(true);
+    expect((await updateOrgPolicies({ orgId, actorId: jono.id, actorAuthentication: null, patch: { publicShareLinks: true, guests: 'approve' } })).ok).toBe(true);
     // POL-1: a page agent on a model the org then stops allowing is listed as blocked (org.policy.blocked).
     await factories.createPage(productId, { type: 'AI_CHAT', aiProvider: 'openai', aiModel: 'gpt-old' });
-    expect((await updateOrgPolicies({ orgId, actorId: jono.id, patch: { modelAllowlist: ['gpt-new'] } })).ok).toBe(true);
+    expect((await updateOrgPolicies({ orgId, actorId: jono.id, actorAuthentication: null, patch: { modelAllowlist: ['gpt-new'] } })).ok).toBe(true);
     expect(await redeemDriveShareLink(ctxFor(chris.id), link.data.rawToken)).toMatchObject({ ok: false, error: 'PENDING_APPROVAL' });
 
     // ── compute (D-OW-28): an env handed to the lead, a parked app taken back ───────
