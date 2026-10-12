@@ -763,10 +763,10 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 ### Changed
 
 - **Credits are counted, not priced** — every credit amount in the app, on the plan page, and on the
-  marketing site now reads as a whole-number count with thousands separators ("1,500 credits",
-  "192 credits left"), never as a dollar figure or a fraction, and a credit has one definition
-  everywhere: 100 credits per dollar of credit value. Nothing changes about what you are granted
-  or charged; the same balance that used to show as "15" now shows as "1,500". The included
+  marketing site now reads as a whole-number count with thousands separators, never as a dollar
+  figure or a fraction, and a credit has one definition everywhere (the pricing page states the
+  rate). Nothing changes about what you are granted or charged; a balance that used to show as a
+  dollar-like amount now shows as the matching whole credit count. The included
   allowance behind a paid plan is derived from the plan's price rather than kept in a separate
   table, and the admin billing view lists it as included credits.
 - **Plans are Free, Pro, and Business; Founder is retired** — the pricing page and the in-app plan

@@ -3,11 +3,14 @@
  * (Spec MON-1..MON-8, A-11).
  *
  * A credit is not a dollar. This module is the only place that states:
- *   - MARKUP_BPS: what real provider cost is marked up by before it is charged;
+ *   - MARKUP_BPS: what real provider cost is marked up by before it is charged (and
+ *     MACHINE_MARKUP_BPS, its separately floored twin for Machine substrate cost);
  *   - CREDITS_PER_DOLLAR: the purchase and display rate of a credit;
  *   - INCLUDED_CREDIT_RATIO_BPS: the share of a subscription's price paid that is
  *     granted back as credit value each period;
  *   - FREE_STARTER_CREDITS: the one-time free grant, a plain count;
+ *   - the org seat allowance default and ceiling, and the per-consumer cap defaults
+ *     ([D-OW-31]);
  *   - CREDIT_PACKS and the custom top-up bounds, as credit counts priced from the
  *     rate with no ratio (MON-4);
  *   - the conversions between cents, credits, and dollars, and the one formatter
@@ -33,6 +36,34 @@ import { TIER_PLAN_LIMITS, isSubscriptionTier, type SubscriptionTier } from './s
 
 /** Markup applied to real provider cost, in basis points. 15000 = 1.5×. */
 export const MARKUP_BPS = envInt('CREDIT_MARKUP_BPS', 15000);
+
+/**
+ * Absolute floor for {@link MACHINE_MARKUP_BPS} — 15000bps (1.5x). The whole
+ * point of that constant is to GUARANTEE Machine billing never falls below
+ * 1.5x real substrate cost, independent of {@link MARKUP_BPS}; an env
+ * misconfiguration (typo, someone mirroring a reduced AI markup) must not be
+ * able to silently violate that guarantee. Only a value BELOW this floor is
+ * clamped up — a deliberately higher markup passes through unclamped, since
+ * there is no stated ceiling.
+ */
+export const MACHINE_MARKUP_FLOOR_BPS = 15000;
+
+/**
+ * Markup applied to Machine substrate cost, in basis points — the
+ * founder-set floor of 1.5× real substrate cost. Deliberately a SEPARATE env
+ * var and constant from {@link MARKUP_BPS} (not derived from it): AI-model
+ * pricing and substrate-runtime pricing are different economics that may
+ * diverge, so lowering `CREDIT_MARKUP_BPS` for AI billing must never silently
+ * lower what a Machine is charged. Threaded into `consumeCredits` via
+ * `markupBpsOverride` (see machine-billing.ts's `trackUsage`) so the real
+ * settle path enforces this floor independent of the shared default. Clamped
+ * to {@link MACHINE_MARKUP_FLOOR_BPS} so a misconfigured env var can raise
+ * the markup but never lower it below the documented floor.
+ */
+export const MACHINE_MARKUP_BPS = Math.max(
+  envInt('MACHINE_MARKUP_BPS', MACHINE_MARKUP_FLOOR_BPS),
+  MACHINE_MARKUP_FLOOR_BPS,
+);
 
 /**
  * One dollar is 100 cents. Stated once; every cents↔dollars conversion goes through here.
@@ -66,6 +97,29 @@ export const INCLUDED_CREDIT_RATIO_BPS: Record<SubscriptionTier, number> = {
  * unchanged from the previous $5 starter grant.
  */
 export const FREE_STARTER_CREDITS = 500;
+
+/**
+ * The org's default seat allowance, in credits a month per member (WAL-2, the POL-7 policy
+ * default and the fallback when an org sets none): D20.5's 100. Its own figure on purpose:
+ * [D-OW-31] moved the per-consumer cap defaults and left the seat allowance where it was, so a
+ * cap edit must never move what every member may draw from every pool.
+ */
+export const DEFAULT_SEAT_ALLOWANCE_CREDITS = 100;
+
+/**
+ * The most a seat allowance may be set to: 10,000,000 cents of credit value a month per
+ * member. A ceiling exists so "a very large number" is not "unlimited by another name": the
+ * cap arithmetic multiplies cents into millicents, and an unbounded value would walk toward
+ * 2^53 there.
+ */
+export const MAX_SEAT_ALLOWANCE_CENTS = 10_000_000;
+
+/**
+ * Per-consumer cap defaults when an admin enables caps without naming values, in credits
+ * ([D-OW-31]: 50 a day and 1,000 a month, replacing D20.5's 10/100, which sat below one image
+ * or uncatalogued model's hold and so refused every such call).
+ */
+export const DEFAULT_CONSUMER_CAP_CREDITS = { daily: 50, monthly: 1_000 } as const;
 
 /**
  * The included-credit ratio for `tier`, in basis points. 0 for the free tier and for
@@ -173,6 +227,11 @@ export function chargedCentsFromProviderDollars(realCostDollars: number, markupB
 /** Millicents (the accrual unit) → cents, unrounded. */
 export function centsFromMillicents(millicents: number): number {
   return millicents / MILLICENTS_PER_CENT;
+}
+
+/** Cents → millicents (the accrual unit). */
+export function millicentsFromCents(cents: number): number {
+  return cents * MILLICENTS_PER_CENT;
 }
 
 /**

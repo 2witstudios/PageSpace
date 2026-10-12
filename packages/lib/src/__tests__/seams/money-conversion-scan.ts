@@ -615,3 +615,31 @@ export function findCopyHits(src: string, pattern: RegExp): ConversionHit[] {
   pattern.lastIndex = 0;
   return hits;
 }
+
+/**
+ * MON-1 definition scan: a constant of the money model's vocabulary — a markup, the
+ * credit rate, the included-credit ratio, an allowance, a starter grant, a pack, a
+ * per-consumer cap default, a top-up bound — whose initializer carries a numeric
+ * literal. Outside money-model.ts that is a second statement of the money model; a
+ * constant DERIVED from money-model (`centsFromCredits(DEFAULT_SEAT_ALLOWANCE_CREDITS)`)
+ * has no literal and passes. Comments and string contents are masked first, so an env
+ * var name or prose never counts.
+ */
+export const MONEY_MODEL_VOCABULARY =
+  /MARKUP|CREDITS_PER_DOLLAR|CREDIT_RATIO|ALLOWANCE|STARTER_CREDITS|CREDIT_PACK|CONSUMER_CAP|CAP_CREDITS|TOPUP_(?:MIN|MAX)_CREDITS/;
+
+const CONST_DECLARATION = /\b(?:const|let|var)\s+([A-Z][A-Z0-9_]*)\b[^=;]*=([^;]{0,400})/g;
+const NUMERIC_LITERAL = /(?<![\w.$])\d/;
+
+/** Declarations in `src` that state a money-model figure (see {@link MONEY_MODEL_VOCABULARY}). */
+export function findMoneyModelDefinitions(src: string): ConversionHit[] {
+  const masked = maskSource(src);
+  const hits: ConversionHit[] = [];
+  for (const match of masked.matchAll(CONST_DECLARATION)) {
+    const [, name, initializer] = match;
+    if (!MONEY_MODEL_VOCABULARY.test(name) || !NUMERIC_LITERAL.test(initializer)) continue;
+    const line = masked.slice(0, match.index).split('\n').length;
+    hits.push({ line, text: `${name} = ${initializer.trim().split('\n')[0]}` });
+  }
+  return hits;
+}

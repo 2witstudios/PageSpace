@@ -17,6 +17,7 @@
  * with their own columns. The two spend policies here (seat allowance amount, wallet fallback) are POL-7.
  */
 import { normalizeMaximumSessionAgeMinutes, type OrgAuthenticationPolicy } from './authentication-policy-core';
+import { MAX_SEAT_ALLOWANCE_CENTS } from '../billing/money-model';
 import { DEFAULT_SEAT_ALLOWANCE_CENTS, effectiveSpendPolicy, type FallbackRule, type SpendPolicy } from '../billing/wallet-core';
 
 export const GUEST_POLICIES = ['off', 'approve', 'on'] as const;
@@ -100,12 +101,8 @@ const allowlist = (raw: unknown): string[] | null | undefined => {
   return [...new Set(cleaned)];
 };
 
-/**
- * The most a seat allowance may be set to: 10,000,000 cents ($100,000 a month per member). A ceiling
- * exists so "a very large number" is not "unlimited by another name": the cap arithmetic multiplies
- * cents into millicents, and an unbounded value would walk toward 2^53 there.
- */
-export const MAX_SEAT_ALLOWANCE_CENTS = 10_000_000;
+/** The most a seat allowance may be set to (money-model, MON-1). */
+export { MAX_SEAT_ALLOWANCE_CENTS };
 
 /**
  * Whole non-negative cents, at most MAX_SEAT_ALLOWANCE_CENTS. There is NO unlimited seat allowance: the credit gate already reads a missing

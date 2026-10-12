@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { listFiles } from '../../__tests__/seams/walk';
 import { REPO_ROOT, listSourceFiles } from '../../__tests__/seams/walk';
 import {
   CREDIT_FIGURE,
@@ -8,6 +9,7 @@ import {
   KNOWN_LIMITS,
   findConversionsInSource,
   findCopyHits,
+  findMoneyModelDefinitions,
   isMoneyName,
 } from '../../__tests__/seams/money-conversion-scan';
 
@@ -225,5 +227,84 @@ describe('MON-1 (partial) no published copy states a credit figure or names the 
   it('MON-1 (partial) no marketing page or email names the removed Founder plan', () => {
     const hits = copyHits(FOUNDER_COPY_ROOTS, FOUNDER_PLAN);
     expect(hits, `Founder plan named in copy (removed, A-9):\n${hits.join('\n')}`).toEqual([]);
+  });
+});
+
+/**
+ * MON-1 in full: money-model.ts is the one module that states the money model. Four scans,
+ * one claim:
+ *   1. no constant of the money model's vocabulary (a markup, the rate, the ratio, an
+ *      allowance, a starter grant, a pack, a per-consumer cap default, a top-up bound) is
+ *      declared with a numeric literal in any app, package or script but money-model.ts;
+ *   2. no file multiplies or divides a money value by 100 (the credit-to-money conversion);
+ *   3. no app, legal page or email template states a literal credit figure;
+ *   4. no doc and not the CHANGELOG states one either. The organizations-wallets spec is the
+ *      one exemption: it is the decision record the module implements (A-11, WAL-7), not a
+ *      second statement a user reads as the product's figure.
+ */
+const DOC_ROOTS = ['docs'] as const;
+const SPEC_OF_RECORD = 'docs/specs/organizations-wallets.md';
+const MARKDOWN = /\.md$/;
+const docHits = (files: readonly string[]) =>
+  files.flatMap((f) =>
+    readFileSync(join(REPO_ROOT, f), 'utf8')
+      .split('\n')
+      .flatMap((line, i) => {
+        CREDIT_FIGURE.lastIndex = 0;
+        return CREDIT_FIGURE.test(line) ? [`${f}:${i + 1}: ${line.trim()}`] : [];
+      }),
+  );
+
+describe('MON-1 money-model.ts is the only file that states MARKUP_BPS, CREDITS_PER_DOLLAR, INCLUDED_CREDIT_RATIO_BPS, an allowance, a cap default, a pack size or a credit-to-money conversion: a scan of apps, packages, scripts, docs, the CHANGELOG, legal copy and email templates finds none elsewhere', () => {
+  it.each([
+    ['an allowance in credits', 'export const DEFAULT_SEAT_ALLOWANCE_CENTS: number = Math.round(centsFromCredits(100));'],
+    ['a cap default object', 'export const DEFAULT_CONSUMER_CAPS = {\n  dailyCents: centsFromCredits(50),\n  monthlyCents: centsFromCredits(1_000),\n};'],
+    ['a markup floor', 'export const MACHINE_MARKUP_FLOOR_BPS = 15000;'],
+    ['a second rate', 'const CREDITS_PER_DOLLAR = 100;'],
+    ['a ratio', 'const INCLUDED_CREDIT_RATIO_BPS = { pro: 6000 };'],
+    ['a pack', "const CREDIT_PACKS = { pack_10: { credits: 1000 } };"],
+    ['an allowance ceiling', 'export const MAX_SEAT_ALLOWANCE_CENTS = 10_000_000;'],
+  ])('the definition rule flags %s', (_label, code) => {
+    expect(findMoneyModelDefinitions(code)).toHaveLength(1);
+  });
+
+  it.each([
+    ['a constant derived from money-model', 'export const DEFAULT_SEAT_ALLOWANCE_CENTS = centsFromCredits(DEFAULT_SEAT_ALLOWANCE_CREDITS);'],
+    ['a boolean table', 'export const TIER_ALLOWANCE_REFILLS = { free: false, pro: true };'],
+    ['an env name in a string', "export const MACHINE_MARKUP_BPS = Math.max(envInt('MACHINE_MARKUP_BPS', FLOOR), FLOOR);"],
+    ['an unrelated constant', 'const BATCH = 200;'],
+    ['a comment', '// const CREDITS_PER_DOLLAR = 100;'],
+  ])('the definition rule ignores %s', (_label, code) => {
+    expect(findMoneyModelDefinitions(code)).toHaveLength(0);
+  });
+
+  it('no app, package or script but money-model.ts declares a money-model figure', () => {
+    const hits = listSourceFiles(ROOTS)
+      .filter((f) => f !== MONEY_MODEL)
+      .flatMap((f) => findMoneyModelDefinitions(readFileSync(join(REPO_ROOT, f), 'utf8')).map((h) => `${f}:${h.line}: ${h.text}`));
+    expect(hits, `Money-model figure(s) stated outside ${MONEY_MODEL}:\n${hits.join('\n')}`).toEqual([]);
+    // The module itself does state them: the scan is not vacuous.
+    expect(findMoneyModelDefinitions(readFileSync(join(REPO_ROOT, MONEY_MODEL), 'utf8')).length).toBeGreaterThanOrEqual(8);
+  });
+
+  it('no file outside money-model.ts converts credits or cents to money', () => {
+    const hits = listSourceFiles(ROOTS)
+      .filter((f) => f !== MONEY_MODEL)
+      .flatMap((f) => findConversionsInSource(readFileSync(join(REPO_ROOT, f), 'utf8')).map((h) => `${f}:${h.line}: ${h.text}`));
+    expect(hits).toEqual([]);
+  });
+
+  it('no app, legal page or email template states a literal credit figure', () => {
+    const files = listSourceFiles(COPY_ROOTS);
+    expect(files.some((f) => f.startsWith('apps/marketing/src/app/terms/'))).toBe(true);
+    expect(copyHits(COPY_ROOTS, CREDIT_FIGURE)).toEqual([]);
+  });
+
+  it('no doc and not the CHANGELOG states a literal credit figure (the spec of record excepted)', () => {
+    const docs = listFiles(DOC_ROOTS, MARKDOWN).filter((f) => f !== SPEC_OF_RECORD);
+    expect(docs.length).toBeGreaterThan(10);
+    expect(docHits(['CHANGELOG.md', ...docs])).toEqual([]);
+    // The exemption is real: the spec of record does state A-11's figures.
+    expect(docHits([SPEC_OF_RECORD]).length).toBeGreaterThan(0);
   });
 });
