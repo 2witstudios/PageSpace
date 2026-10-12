@@ -561,7 +561,7 @@ export interface DebtNoticeWallet {
 /**
  * WAL-6e: whose debt notice a settle that left `debtWallet` in debt raises, if any. The FUNDER
  * is told — never the consumer who spent:
- *   - a child (drive or agent) wallet carrying its own debt (the funder chose wallet_debt): the
+ *   - a child (drive) wallet carrying its own debt (the funder chose wallet_debt): the
  *     funder is whoever owns its PARENT, the wallet that funds its allocation;
  *   - an org POOL in debt (it absorbed a drive's overshoot, a seat's, or org compute's): the org;
  *   - a PERSONAL root in debt is a funder's notice only when it absorbed a CHILD wallet's
@@ -571,7 +571,7 @@ export interface DebtNoticeWallet {
  */
 export function debtNoticeFunder(input: {
   debtWallet: DebtNoticeWallet;
-  /** The wallet the call charged: a child when the debt came from a drive or agent wallet. */
+  /** The wallet the call charged: a child when the debt came from a drive wallet. */
   chargedWalletIsChild: boolean;
 }): 'parent' | 'self' | null {
   const wallet = input.debtWallet;

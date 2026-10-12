@@ -461,9 +461,8 @@ describe('wallet-funding: donations', () => {
     expect(planDonation(input({ target: { ...input().target, donationsEnabled: false } }))).toEqual({ kind: 'refuse', reason: 'donations_disabled' });
   });
 
-  it('refuses a target that is not a drive wallet (a personal wallet or an agent page)', () => {
+  it('refuses a target that is not a drive wallet (a personal wallet)', () => {
     expect(planDonation(input({ target: { ...input().target, subjectType: null } }))).toEqual({ kind: 'refuse', reason: 'not_a_drive_wallet' });
-    expect(planDonation(input({ target: { ...input().target, subjectType: 'agent_page' } }))).toEqual({ kind: 'refuse', reason: 'not_a_drive_wallet' });
   });
 
   it('refuses a source that is not the donor personal wallet, and a wallet donating to itself', () => {

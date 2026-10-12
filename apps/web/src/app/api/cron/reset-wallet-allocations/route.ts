@@ -13,7 +13,7 @@ import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
  * First it rolls the personal root of every comped paid account (no renewal-capable
  * subscription, so invoice.paid will never renew it) whose period has ended: once, onto
  * the period starting at its stored UTC renewal date. The credit gate no longer rolls
- * anything (ew9v06jeb). Then it resets every CHILD wallet (a drive or agent-page wallet)
+ * anything (ew9v06jeb). Then it resets every CHILD wallet (a drive wallet)
  * whose governing period has started since its own: an org drive's allocation on the org
  * pool's refill date, a personal drive's on its owner's personal renewal — so a child
  * under a root rolled this run resets in the same run. Spend returns to zero, wallet debt

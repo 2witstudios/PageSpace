@@ -1891,7 +1891,7 @@ export interface UserFundingLegExport {
   id: string;
   walletId: string;
   walletOwnerType: 'user' | 'org';
-  walletSubjectType: 'drive' | 'agent_page' | null;
+  walletSubjectType: 'drive' | null;
   walletSubjectDriveName: string | null;
   funderKind: 'owner' | 'donation';
   originalCents: number;

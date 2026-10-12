@@ -21,7 +21,7 @@ describe('liabilityWalletKind names the three wallet shapes', () => {
     expect(liabilityWalletKind({ ownerType: 'org', hasSubject: false, hasParent: false })).toBe('org_pool');
   });
 
-  it('MON-7 (partial) anything with a subject or a parent is a child (drive or agent) wallet', () => {
+  it('MON-7 (partial) anything with a subject or a parent is a child (drive) wallet', () => {
     expect(liabilityWalletKind({ ownerType: 'org', hasSubject: true, hasParent: true })).toBe('child');
     expect(liabilityWalletKind({ ownerType: 'user', hasSubject: true, hasParent: true })).toBe('child');
     expect(liabilityWalletKind({ ownerType: 'user', hasSubject: true, hasParent: false })).toBe('child');

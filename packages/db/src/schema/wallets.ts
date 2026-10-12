@@ -15,7 +15,7 @@ import { drives } from './core';
  * Shapes (WAL-2):
  *   - personal root wallet: ownerType 'user', no subject, no parent. One per user.
  *   - org pool:             ownerType 'org', no subject, no parent. One per org.
- *   - drive / agent wallet: a subject (drive or agent page), normally a parent (the org
+ *   - drive wallet:         a drive subject, normally a parent (the org
  *                           pool for org drives, the owner's personal wallet for
  *                           personal drives).
  *
@@ -38,13 +38,14 @@ import { drives } from './core';
  * user still cascades their personal wallet exactly as it cascaded their credit_balances
  * row (and an org's with the org). `ownerType` names which one is set; a CHECK keeps the
  * two in agreement. The subject is a soft link (subjectType + subjectId): its lifecycle
- * belongs to the lanes that create drive and agent wallets.
+ * belongs to the drive (D-OW-59: a drive is the only subject a wallet has).
  */
 
 export const WALLET_OWNER_TYPES = ['user', 'org'] as const;
 export type WalletOwnerType = (typeof WALLET_OWNER_TYPES)[number];
 
-export const WALLET_SUBJECT_TYPES = ['drive', 'agent_page'] as const;
+/** D-OW-59: a drive is the only wallet subject; there are no agent-page wallets. */
+export const WALLET_SUBJECT_TYPES = ['drive'] as const;
 export type WalletSubjectType = (typeof WALLET_SUBJECT_TYPES)[number];
 
 /** WAL-1. `paused` is the kill switch (WAL-7); `over` carries debt (WAL-6e). Mirrors wallet-core `WalletStatus`. */
@@ -135,7 +136,7 @@ export const wallets = pgTable('wallets', {
   orgPoolUnique: uniqueIndex('wallets_org_pool_unique')
     .on(table.orgId)
     .where(sql`"ownerType" = 'org' AND "subjectType" IS NULL AND "parentWalletId" IS NULL`),
-  // A drive or agent page has at most one wallet.
+  // A drive has at most one wallet.
   subjectUnique: uniqueIndex('wallets_subject_unique')
     .on(table.subjectType, table.subjectId)
     .where(sql`"subjectId" IS NOT NULL`),
@@ -149,7 +150,7 @@ export const wallets = pgTable('wallets', {
   ),
   subjectTypeValid: check(
     'wallets_subject_type_valid',
-    sql`${table.subjectType} IS NULL OR ${table.subjectType} IN ('drive', 'agent_page')`,
+    sql`${table.subjectType} IS NULL OR ${table.subjectType} = 'drive'`,
   ),
   // Both or neither: a subject type without an id (or the reverse) names nothing.
   subjectComplete: check('wallets_subject_complete', sql`(${table.subjectType} IS NULL) = (${table.subjectId} IS NULL)`),

@@ -13,7 +13,7 @@
  *   - org pool (org-owned, no subject, no parent): its monthlyRemainingCents is the org's
  *     refilled grant (MON-3) outstanding, counted exactly as a personal root's. Before C5
  *     created pools the report read personal roots only and missed this (Review 2).
- *   - child wallet (a drive or agent wallet, under a pool or a personal root):
+ *   - child wallet (a drive wallet, under a pool or a personal root):
  *       · its allocation (monthlyAllowanceCents − spentCents) is NOT counted — it is a
  *         budget drawn on the parent as spend happens, so the parent still holds that
  *         money; counting it would count the pool twice.
@@ -28,7 +28,7 @@ export type LiabilityWalletKind = 'personal_root' | 'org_pool' | 'child';
 
 export interface WalletShape {
   ownerType: 'user' | 'org';
-  /** subjectType IS NOT NULL: a drive or agent wallet. */
+  /** subjectType IS NOT NULL: a drive wallet. */
   hasSubject: boolean;
   /** parentWalletId IS NOT NULL. */
   hasParent: boolean;

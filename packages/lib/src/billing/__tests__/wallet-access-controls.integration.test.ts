@@ -196,31 +196,30 @@ describe('wallet access, visibility and controls (orgs on, real Postgres)', () =
     await pool.end();
   });
 
-  describe('WAL-1 one wallets table holds every balance: a personal root (the per-user balance), an org pool, a drive wallet and an agent-page wallet, each with owner, optional subject, optional parent, monthly allocation, spent, top-up remainder, UTC period and status; a top-up never expires across an allocation reset', () => {
+  describe('WAL-1 one wallets table holds every balance: a personal root (the per-user balance), an org pool and a drive wallet — a drive the only subject (D-OW-59) — each with owner, optional subject, optional parent, monthly allocation, spent, top-up remainder, UTC period and status; a top-up never expires across an allocation reset', () => {
     it('every wallet shape is a row of one table, and the per-user balance reads the personal root wallet', async () => {
       const w = world as World;
       // There is no second balance store: credit_balances is gone, renamed in place into wallets (X-5).
       const [legacy] = (await db.execute(sql`SELECT to_regclass('public.credit_balances') AS t`)).rows as { t: string | null }[];
       expect(legacy.t).toBeNull();
-      const [agentWallet] = await db.insert(wallets).values({
-        ownerType: 'org', orgId: w.orgId, subjectType: 'agent_page', subjectId: w.agentPageId, parentWalletId: w.productWalletId, monthlyAllowanceCents: 200,
-      }).returning();
 
       const shapes = await db
         .select({ id: wallets.id, ownerType: wallets.ownerType, userId: wallets.userId, orgId: wallets.orgId, subjectType: wallets.subjectType, subjectId: wallets.subjectId, parentWalletId: wallets.parentWalletId, status: wallets.status })
         .from(wallets)
-        .where(inArray(wallets.id, [w.jonoRootId, w.poolId, w.productWalletId, agentWallet.id]));
+        .where(inArray(wallets.id, [w.jonoRootId, w.poolId, w.productWalletId]));
       const byId = new Map(shapes.map((s) => [s.id, s]));
       expect(byId.get(w.jonoRootId)).toMatchObject({ ownerType: 'user', userId: w.jonoId, orgId: null, subjectType: null, parentWalletId: null, status: 'active' });
       expect(byId.get(w.poolId)).toMatchObject({ ownerType: 'org', orgId: w.orgId, userId: null, subjectType: null, parentWalletId: null });
       expect(byId.get(w.productWalletId)).toMatchObject({ ownerType: 'org', subjectType: 'drive', subjectId: w.productId, parentWalletId: w.poolId });
-      expect(byId.get(agentWallet.id)).toMatchObject({ subjectType: 'agent_page', subjectId: w.agentPageId, parentWalletId: w.productWalletId });
+      // A drive is the only subject: an agent page (or anything else) is refused by the table (D-OW-59).
+      await expect(db.insert(wallets).values({
+        ownerType: 'org', orgId: w.orgId, subjectType: 'agent_page' as 'drive', subjectId: w.agentPageId, parentWalletId: w.productWalletId,
+      })).rejects.toThrow();
       // Status is one of three; anything else is refused by the table.
       await expect(db.update(wallets).set({ status: 'frozen' as 'paused' }).where(eq(wallets.id, w.poolId))).rejects.toThrow();
 
       // The per-user balance IS the personal root wallet: Jono's 9,000 cents, not the drive wallet he owns.
       expect(await getCreditBalance(w.jonoId, 'pro')).toMatchObject({ monthly: { remaining: 9_000 } });
-      await db.delete(wallets).where(eq(wallets.id, agentWallet.id));
     });
 
     it('a drive wallet\'s top-up survives its allocation reset; spent returns to zero and the period moves to the parent\'s', async () => {

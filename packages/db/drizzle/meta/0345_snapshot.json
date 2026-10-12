@@ -1,5 +1,5 @@
 {
-  "id": "56b3f0c3-402d-42c9-8e16-105840c4b7f7",
+  "id": "bfcefb64-3cd7-4500-ab49-d007b25535fd",
   "prevId": "814cd47f-1f4b-43f6-8e39-dcf8c3c30b44",
   "version": "7",
   "dialect": "postgresql",
@@ -19773,7 +19773,7 @@
         },
         "wallets_subject_type_valid": {
           "name": "wallets_subject_type_valid",
-          "value": "\"wallets\".\"subjectType\" IS NULL OR \"wallets\".\"subjectType\" IN ('drive', 'agent_page')"
+          "value": "\"wallets\".\"subjectType\" IS NULL OR \"wallets\".\"subjectType\" = 'drive'"
         },
         "wallets_subject_complete": {
           "name": "wallets_subject_complete",

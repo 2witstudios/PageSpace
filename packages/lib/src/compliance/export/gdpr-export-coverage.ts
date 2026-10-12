@@ -372,7 +372,7 @@ export const EXCLUDED_TABLES: Readonly<Record<string, string>> = {
     // is their money and is exported (the `wallet` category). What stays out is
     // the rest of the table: an ORG pool's row is the org's money (SPEND-9/D18 —
     // a member's export carries their seat allowance, with their membership),
-    // and a drive/agent wallet's row is the drive's budget, disclosed to a
+    // and a drive wallet's row is the drive's budget, disclosed to a
     // consumer only as "can I spend" at call time, not as a copy.
     'wallet_consumer_caps',
     // The per-consumer cap rows on org pools ARE disclosed — as the seat
@@ -380,7 +380,7 @@ export const EXCLUDED_TABLES: Readonly<Record<string, string>> = {
     // of the table is the funder's configuration of their own wallet: a cap
     // another funder set, or one the subject set FOR someone else, is that
     // relationship's record, not the subject's.
-    // Funds moved into a drive/agent wallet (0318): legs the SUBJECT funded are
+    // Funds moved into a drive wallet (0318): legs the SUBJECT funded are
     // exported under `wallet` (their donations and their top-ups — the money is
     // theirs and, on a donation, is now the drive's). An org pool's refill legs
     // name the ORG as funder and stay the org's record.

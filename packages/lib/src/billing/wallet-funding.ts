@@ -585,7 +585,7 @@ export interface DonorWallet {
 
 export interface DonationTarget {
   walletId: string;
-  subjectType: 'drive' | 'agent_page' | null;
+  subjectType: 'drive' | null;
   donationsEnabled: boolean;
   /** SUM of the wallet's funding legs' remaining (mirrored on wallets.topupRemainingCents). */
   legsRemainingCents: number;
