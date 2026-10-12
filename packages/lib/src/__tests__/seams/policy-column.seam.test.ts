@@ -61,6 +61,16 @@ describe('the organizations.policies seam', () => {
     expect(hits(`${imp}await db.execute(sql\`select * from \${organizations}\`);`)).toEqual(['raw sql text']);
     expect(hits("const q = 'SELECT policies FROM organizations';\nawait db.execute(sql.raw(q));")).toEqual(['raw sql text']);
     expect(hits('await db.execute(sql`update organizations set name = ${n} returning *`);')).toEqual(['raw sql text']);
+    expect(hits('await db.execute(sql`select row_to_json(o) from organizations o`);')).toEqual(['raw sql text']);
+    expect(hits('await db.execute(sql`select to_jsonb(o) as org from organizations o where o.id = ${id}`);')).toEqual(['raw sql text']);
+    expect(hits('await db.execute(sql`select json_agg(o) from organizations o`);')).toEqual(['raw sql text']);
+    expect(hits("await db.execute(sql`select ${sql.identifier('policies')} from organizations where id = ${id}`);")).toEqual(['raw sql text']);
+    expect(hits("await db.execute(sql`select ${sql.raw('policies')} from organizations`);")).toEqual(['raw sql text']);
+    // A table from a dynamic import or require, destructured or read off it.
+    expect(hits("const { organizations } = await import('@pagespace/db/schema/organizations');\nconst c = organizations.policies;")).toEqual(['organizations.policies']);
+    expect(hits("const { organizations: t } = require('@pagespace/db/schema');\nawait db.select().from(t);")).toEqual(['whole row: from(organizations) under an unnamed select']);
+    expect(hits("const schema = await import('@pagespace/db/schema');\nconst c = schema.organizations.policies;")).toEqual(['organizations.policies']);
+    expect(hits("const c = (await import('@pagespace/db/schema/organizations')).organizations.policies;")).toEqual(['organizations.policies']);
   });
 
   it('the scanner leaves alone the shapes that name their columns', () => {
@@ -72,6 +82,8 @@ describe('the organizations.policies seam', () => {
     expect(hits(`${imp}const RECORD = { id: organizations.id, name: organizations.name } as const;\nawait db.select(RECORD).from(organizations);\nawait db.insert(organizations).values(v).returning(RECORD);`)).toEqual([]);
     expect(hits(`${imp}const RECORD = { ...getTableColumns(organizations) };\nawait db.select(RECORD).from(organizations);`)).toEqual(['unclassified use of the organizations table', 'whole row: from(organizations) under an unnamed select']);
     expect(hits(`${imp}await db.execute(sql\`select id from \${organizations} where slug = \${s}\`);`)).toEqual([]);
+    expect(hits("await db.execute(sql`select ${sql.identifier('name')} from organizations where id = ${id}`);")).toEqual([]);
+    expect(hits("const { orgMembers } = await import('@pagespace/db/schema/organizations');")).toEqual([]);
     expect(hits('// select * from organizations\nconst a = 1;')).toEqual([]);
     expect(hits("const label = 'Organization policies';")).toEqual([]);
     expect(hits("import type { OrgPolicies } from '@pagespace/lib/organizations/policies-core';")).toEqual([]);

@@ -16,7 +16,10 @@
  * Anything else — `getTableColumns(organizations)`, passing the table to a helper, `organizations['x']`, a
  * destructure — is reported. So are the relational API (`query.organizations`, a computed `query[…]` key, a
  * `with: { organization … }` relation) and raw SQL text (a `sql` tag, `sql.raw`, a string handed to `db.execute`) that
- * reads FROM / JOINs the organizations table with `policies` or a `*` in it (`select *`, `o.*`, `returning *`).
+ * reads FROM / JOINs the organizations table with `policies`, a `*` (`select *`, `o.*`, `returning *`) or a whole-row
+ * function (`row_to_json(o)`, `to_jsonb(o)`, `json_agg(o)`, …). An identifier spliced in (`sql.identifier('policies')`,
+ * `sql.raw('…')`) counts as its text, and a table obtained from a dynamic `import()` / `require()` of a schema module
+ * (destructured, or read off it) is the table.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -37,6 +40,8 @@ const SQL_READS_TABLE = /\b(?:from|join|update|into)\s+"?organizations"?(?![\w$]
 const SQL_NAMES_COLUMN = /(?:^|[^\w$])"?policies"?(?![\w$])/i;
 /** `select *`, `o.*`, `returning *`: every column, the policies one included. */
 const SQL_STAR = /(?:\bselect\s+(?:distinct\s+)?\*|[\w"]\.\*|\breturning\s+\*)/i;
+/** Functions that turn a whole row into a value: every column, the policies one included. */
+const SQL_WHOLE_ROW = /\b(?:row_to_json|to_jsonb?|jsonb?_agg|jsonb?_build_array|array_agg|hstore|jsonb?_populate_record)\s*\(/i;
 /** A module specifier or file path (`@pagespace/lib/organizations/policies`) is not SQL. */
 const PATH_LIKE = /^[\w@.~/-]+$/;
 const SOURCE_CALLS = new Set(['from', 'innerJoin', 'leftJoin', 'rightJoin', 'fullJoin', 'crossJoin']);
@@ -99,6 +104,21 @@ function bindingsOf(sf: ts.SourceFile): Bindings {
       if (fromSchema && (el.propertyName ?? el.name).text === TABLE) aliases.add(el.name.text);
     }
   }
+  // `const { organizations } = await import('…schema…')` / `= require('…schema…')`, and `const s = await import(…)`.
+  const visitDynamic = (node: ts.Node): void => {
+    if (ts.isVariableDeclaration(node) && node.initializer && schemaModuleLoad(node.initializer)) {
+      if (ts.isObjectBindingPattern(node.name)) {
+        for (const el of node.name.elements) {
+          const key = el.propertyName ?? el.name;
+          if (ts.isIdentifier(key) && key.text === TABLE && ts.isIdentifier(el.name)) aliases.add(el.name.text);
+        }
+      } else if (ts.isIdentifier(node.name)) {
+        namespaces.add(node.name.text);
+      }
+    }
+    ts.forEachChild(node, visitDynamic);
+  };
+  visitDynamic(sf);
   // A local of the bare name that is not the table (a component's `organizations` prop) is not the table; a free
   // `organizations` that nothing declares fails closed as the table.
   const collect = (node: ts.Node): void => {
@@ -110,10 +130,22 @@ function bindingsOf(sf: ts.SourceFile): Bindings {
   return { aliases, namespaces };
 }
 
+/** `import('…schema…')` or `require('…schema…')`, awaited or not, in parentheses or not. */
+function schemaModuleLoad(node: ts.Node): boolean {
+  let cur: ts.Node = node;
+  while (ts.isAwaitExpression(cur) || ts.isParenthesizedExpression(cur) || ts.isAsExpression(cur)) cur = cur.expression;
+  if (!ts.isCallExpression(cur) || cur.arguments.length < 1) return false;
+  const isLoader = cur.expression.kind === ts.SyntaxKind.ImportKeyword || (ts.isIdentifier(cur.expression) && cur.expression.text === 'require');
+  const spec = cur.arguments[0];
+  // A computed specifier could name any module: it fails closed as a schema load.
+  return isLoader && (!ts.isStringLiteralLike(spec) || SCHEMA_MODULE.test(spec.text));
+}
+
 function isTableRef(node: ts.Node, b: Bindings): boolean {
   if (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isNonNullExpression(node)) return isTableRef(node.expression, b);
   if (ts.isIdentifier(node)) return b.aliases.has(node.text);
-  return ts.isPropertyAccessExpression(node) && node.name.text === TABLE && ts.isIdentifier(node.expression) && b.namespaces.has(node.expression.text);
+  if (!ts.isPropertyAccessExpression(node) || node.name.text !== TABLE) return false;
+  return (ts.isIdentifier(node.expression) && b.namespaces.has(node.expression.text)) || schemaModuleLoad(node.expression);
 }
 
 /** The `select(...)` call at the root of a query-builder chain, walking receivers down from `node`. */
@@ -189,13 +221,21 @@ function classifyTableUse(ref: ts.Expression, b: Bindings): string | null {
   return `unclassified use of the ${TABLE} table`;
 }
 
+/** The text a spliced identifier or raw fragment puts into SQL: `sql.identifier('policies')`, `sql.raw('…')`. */
+function splicedText(expr: ts.Expression): string | null {
+  if (!ts.isCallExpression(expr) || !ts.isPropertyAccessExpression(expr.expression)) return null;
+  if (!['identifier', 'raw'].includes(expr.expression.name.text)) return null;
+  const parts = expr.arguments.filter(ts.isStringLiteralLike).map((a) => a.text);
+  return parts.length > 0 ? parts.join('.') : null;
+}
+
 /** The SQL text a string or template literal spells, with a table-alias substitution rendered as the table name. */
 function literalText(node: ts.Node, b: Bindings): string | null {
   if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) return node.text;
   if (!ts.isTemplateExpression(node)) return null;
   let text = node.head.text;
   for (const span of node.templateSpans) {
-    text += isTableRef(span.expression, b) ? ` ${TABLE} ` : ' ? ';
+    text += isTableRef(span.expression, b) ? ` ${TABLE} ` : ` ${splicedText(span.expression) ?? '?'} `;
     text += span.literal.text;
   }
   return text;
@@ -241,7 +281,7 @@ export function scanSourceForPolicyColumnReads(file: string, source: string): Po
       }
     } else {
       const text = literalText(node, b);
-      if (text !== null && !PATH_LIKE.test(text) && SQL_READS_TABLE.test(text) && (SQL_NAMES_COLUMN.test(text) || SQL_STAR.test(text))) report(node, 'raw sql text');
+      if (text !== null && !PATH_LIKE.test(text) && SQL_READS_TABLE.test(text) && (SQL_NAMES_COLUMN.test(text) || SQL_STAR.test(text) || SQL_WHOLE_ROW.test(text))) report(node, 'raw sql text');
       if (ts.isTemplateExpression(node)) {
         // The spans' literal text is already judged as part of the whole; their expressions are code to visit.
         for (const span of node.templateSpans) if (!isTableRef(span.expression, b)) visit(span.expression);
