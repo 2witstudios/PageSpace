@@ -14,6 +14,8 @@
  */
 import { describe, it, expect, beforeAll, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import { createId } from '@paralleldrive/cuid2';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { db, pool } from '@pagespace/db/db';
 import { and, eq, inArray, sql } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
@@ -37,7 +39,7 @@ import { loadSeatCapFacts } from '../seat-allowance';
 import { applyOrgPoolRefill, donateToDriveWallet, resetDueAllocations, resetDuePeriods } from '../wallet-funding-shell';
 import { reconcileOpenRouterCosts } from '../cost-reconcile';
 import { createDriveWallet, getConversationSpend, getDriveWallet, setConversationSpend, topUpDriveWallet } from '../../services/drive-wallet-service';
-import { walletDriftAlerts } from '../wallet-reconcile';
+import { unattributedUsage, walletDriftAlerts } from '../wallet-reconcile';
 import { pinConversationSource } from '../spend-resolution';
 import { gateComputeCharge } from '../compute-gate';
 import { computeChargeFor, driveAccrualChargeFor } from '../compute-charge';
@@ -1700,6 +1702,34 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
     }
   });
 
+  it('WAL-6 (partial) a cost-reconcile UNDERCHARGE on a fallback call lands its overshoot where the chosen wallet would have — its funder, never the consumer', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 5_000 });
+    const w = world;
+    const side = await personalDrive(w, { allocationCents: 0, fallbackRule: 'own_credits' });
+    await db.update(wallets).set({ monthlyRemainingCents: 200 }).where(eq(wallets.id, w.marcusWalletId));
+    try {
+      const gate = await canConsumeAI(w.marcusId, 'free', { spend: driveSpend(side.driveId, 'drive_wallet') });
+      expect(gate).toMatchObject({ allowed: true, walletId: w.marcusWalletId, fallbackFromWalletId: side.walletId });
+      const gen = `gen-fallback-${createId()}`;
+      const [log] = await db.insert(aiUsageLogs).values({
+        userId: w.marcusId, provider: 'openrouter', model: 'm', cost: 1,
+        timestamp: new Date(Date.now() - 10 * 60_000), reconcileStatus: 'pending', reconcileAttempts: 0, metadata: { generationIds: [gen] },
+      }).returning({ id: aiUsageLogs.id });
+      // 150¢ fits Marcus's 200¢: no overshoot at the settle.
+      expect(await consumeCredits({ aiUsageLogId: log.id, userId: w.marcusId, costDollars: 1, holdId: gate.holdId, walletId: gate.walletId })).toBe('settled');
+      expect(await walletRow(w.marcusWalletId)).toMatchObject({ monthlyRemainingCents: 50, debtCents: 0 });
+
+      // The call really cost $2: 150¢ more — 50¢ from Marcus, the 100¢ uncovered onto Jono's root.
+      await reconcileOpenRouterCosts({ fetcher: async (id) => (id === gen ? { totalCost: 2 } : 'not_found') });
+      expect(await walletRow(w.marcusWalletId)).toMatchObject({ monthlyRemainingCents: 0, debtCents: 0 });
+      expect((await walletRow(side.jonoRootId)).debtCents).toBe(100);
+    } finally {
+      await db.delete(creditLedger).where(eq(creditLedger.userId, w.marcusId));
+      await teardownPersonalDrive(side);
+    }
+  });
+
   it('WAL-6 (partial) a settle whose hold expired and that names no wallet FAILS CLOSED: nothing is charged to anyone — not the person\'s own credits — and no usage row can be recovered onto them', async () => {
     if (!dbAvailable) return;
     world = await build({ productAllocationCents: 1_000, poolCents: 5_000 });
@@ -1714,6 +1744,10 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
 
     await expectNothingCharged(w);
     expect((await walletRow(w.productWalletId)).spentCents).toBe(0);
+    // Marked terminal on first detection — the orphan sweep never rescans it — and counted for the admin panel.
+    const [marked] = await db.select({ metadata: aiUsageLogs.metadata }).from(aiUsageLogs).where(eq(aiUsageLogs.id, log.id));
+    expect(marked.metadata).toMatchObject({ unattributedAt: expect.any(String) });
+    expect((await unattributedUsage()).count).toBeGreaterThanOrEqual(1);
     expect(computeBackfillActions([], [{ aiUsageLogId: log.id, userId: w.marcusId, costDollars: 1, walletId: null, metadata: {} }], {}))
       .toEqual([{ kind: 'unattributed_orphan', aiUsageLogId: log.id, userId: w.marcusId, costDollars: 1 }]);
   });
@@ -1901,6 +1935,35 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
     expect(await walletRow(w.productWalletId)).toMatchObject({ spentCents: 1_000, topupRemainingCents: 150 });
     expect(await legsOf()).toEqual([['owner', 100], ['donation', 50]]);
     await expectWalletLegInvariant([w.productWalletId]);
+  });
+
+  it('WAL-5 the cutover opens every wallet\'s books: a wallet whose balance moved before the ledger recorded it (pre-cutover) gets one opening_balance row and reconciles at zero drift; re-running opens nothing twice; a drift planted after the cutover is caught', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 5_000 });
+    const w = world;
+    // Pre-cutover: balances with no rows at all (the pool, Marcus) or rows that do not add up (Product).
+    await db.update(wallets).set({ debtCents: 30 }).where(eq(wallets.id, w.productWalletId));
+    await db.insert(creditLedger).values({ userId: w.marcusId, walletId: w.productWalletId, entryType: 'wallet_topup', bucket: 'topup', amountCents: 40, appliedCents: 40, consumeStatus: 'applied' });
+    const ids = [w.poolId, w.productWalletId, w.marcusWalletId];
+    expect((await walletDriftAlerts({ toleranceCents: 0, limit: 10, walletIds: ids })).map((a) => a.walletId).sort()).toEqual([...ids].sort());
+
+    const migration = readFileSync(fileURLToPath(new URL('../../../../db/drizzle/0345_wallet_opening_balance.sql', import.meta.url)), 'utf8');
+    await db.execute(sql.raw(migration));
+    await db.execute(sql.raw(migration));
+
+    const opening = await db.select().from(creditLedger).where(and(inArray(creditLedger.walletId, ids), eq(creditLedger.entryType, 'opening_balance')));
+    expect(opening.map((r) => [r.walletId, r.amountCents, r.userId]).sort()).toEqual([
+      [w.marcusWalletId, 5_000, w.marcusId],
+      [w.poolId, 5_000, w.jonoId], // an org's wallet is recorded under its owner
+      [w.productWalletId, -30 - 40, w.jonoId],
+    ].sort());
+    expect(await walletDriftAlerts({ toleranceCents: 0, limit: 10, walletIds: ids })).toEqual([]);
+
+    // Post-cutover: a change that bypasses the ledger is caught.
+    await db.update(wallets).set({ monthlyRemainingCents: 4_990 }).where(eq(wallets.id, w.marcusWalletId));
+    expect(await walletDriftAlerts({ toleranceCents: 0, limit: 10, walletIds: ids })).toEqual([
+      expect.objectContaining({ walletId: w.marcusWalletId, kind: 'personal_root', driftCents: -10 }),
+    ]);
   });
 
   it('WAL-5 every balance change is a ledger row, forgiveness included: a pool whose refill forgives most of its debt, a drive wallet whose debt is netted at its allocation reset and a person whose renewal clamps their debt away each reconcile with their own rows at zero drift — and a change made without a row is still caught', async () => {

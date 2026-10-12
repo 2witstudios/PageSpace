@@ -66,6 +66,12 @@ export function allocationTransferRows(input: {
  * the wallet's net by the debt cleared, so it is a row like every other balance change.
  */
 export const DEBT_FORGIVEN_ENTRY = 'debt_forgiven' as const;
+/**
+ * The cutover's one row per wallet (migration 0345_wallet_opening_balance): its net at cutover less
+ * what its earlier rows already account for, so reconciliation is exact from the cutover forward.
+ * The migration's SQL mirrors {@link ledgerMovementCents} as of that cutover.
+ */
+export const OPENING_BALANCE_ENTRY = 'opening_balance' as const;
 /** An owner funding leg refunded out of a drive wallet (money leaves it): the leg's cents, negative. */
 export const LEG_REFUND_ENTRY = 'leg_refund' as const;
 export const ALLOCATION_RESET_ENTRY = 'allocation_reset' as const;
@@ -110,7 +116,7 @@ export function rowTotals(row: { entryType: string; amountCents: number; applied
 }
 
 /** Entry types whose `amountCents` is the money that moved (a grant or purchase lands in full). */
-const CREDITED_IN_FULL = new Set<string>(['monthly_grant', 'topup_purchase', 'missed_grant', DEBT_FORGIVEN_ENTRY, ALLOCATION_RESET_ENTRY]);
+const CREDITED_IN_FULL = new Set<string>(['monthly_grant', 'topup_purchase', 'missed_grant', DEBT_FORGIVEN_ENTRY, ALLOCATION_RESET_ENTRY, OPENING_BALANCE_ENTRY]);
 /** Entry types that move what `appliedCents` says (null: nothing has moved yet, e.g. a pending claim). */
 const APPLIED_ONLY = new Set<string>(['usage', 'donation', 'wallet_topup', ALLOCATION_DRAW_ENTRY, LEG_REFUND_ENTRY]);
 /** Attribution rows: they move no money. */
@@ -118,7 +124,8 @@ const NO_MONEY = new Set(['seat_overshoot_month', 'seat_overshoot_day']);
 
 /**
  * The signed cents rows moved on their wallet's NET balance (monthly + top-up − debt):
- *   - a grant or purchase, or debt cleared without payment (forgiven, netted at a reset): its amount;
+ *   - a grant or purchase, debt cleared without payment (forgiven, netted at a reset), or the
+ *     cutover's opening balance: its amount;
  *   - a usage claim, a transfer (donation, top-up, allocation draw), a leg refund: what it applied;
  *   - an `adjustment`: what it applied, else its amount — a debt row (overshoot landing on this
  *     wallet) applies nothing to the buckets and raises debt by its amount;

@@ -8,9 +8,12 @@
 
 import { db } from '@pagespace/db/db';
 import { creditLedger } from '@pagespace/db/schema/credits';
+import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
+import { UNATTRIBUTED_USAGE_MARKER } from './credit-consume';
 import { wallets } from '@pagespace/db/schema/wallets';
 import { eq, inArray, sql } from '@pagespace/db/operators';
 import { computeWalletDrift, ledgerMovementCents } from './wallet-ledger-core';
+import { centsFromDollars } from './money-model';
 
 /** Which wallet drifted: a person's root, an org's pool, or a drive's wallet. */
 export type DriftWalletKind = 'personal_root' | 'org_pool' | 'drive_wallet';
@@ -105,4 +108,20 @@ export async function walletDriftAlerts(input: { toleranceCents: number; limit: 
     .filter((r): r is WalletDriftAlert => r !== null)
     .sort((a, b) => Math.abs(b.driftCents) - Math.abs(a.driftCents))
     .slice(0, input.limit);
+}
+
+/** Billable usage that names no wallet (WAL-6b fail closed), waiting for an operator to reconcile. */
+export interface UnattributedUsage {
+  count: number;
+  /** Their summed real provider cost, whole cents (nothing was charged for it). */
+  realCostCents: number;
+}
+
+/** The usage rows marked unattributed by the settle or the backfill sweep (credit-consume markUsageUnattributed). */
+export async function unattributedUsage(): Promise<UnattributedUsage> {
+  const [row] = await db
+    .select({ count: sql<number>`count(*)::int`, cost: sql<number>`coalesce(sum(${aiUsageLogs.cost}), 0)` })
+    .from(aiUsageLogs)
+    .where(sql`(${aiUsageLogs.metadata} ->> ${UNATTRIBUTED_USAGE_MARKER}) IS NOT NULL`);
+  return { count: Number(row?.count ?? 0), realCostCents: centsFromDollars(Number(row?.cost ?? 0)) };
 }

@@ -358,15 +358,21 @@ export async function canConsumeAI(
   // The drive-wallet reads (and the permissions they go through) load only when a drive
   // session can resolve to a shared wallet: while orgs are dark, and for a call with no
   // drive, the personal root is answered with no reads, exactly as before wallets.
-  const decision: CallSpendDecision & { pinnedWalletId?: string } = resolvesDriveWallets({ orgsEnabled: ORGS_ENABLED, target: opts.spend })
-    ? await (await import('./spend-resolution')).resolveCallSpend({
+  const resolution = resolvesDriveWallets({ orgsEnabled: ORGS_ENABLED, target: opts.spend })
+    ? await import('./spend-resolution')
+    : null;
+  const decision: CallSpendDecision & { preselectedWalletId?: string } = resolution
+    ? await resolution.resolveCallSpend({
         userId,
         consumerTier: tier,
         target: opts.spend,
         reservationCents: reservation,
-        pinConversationSource: true,
       })
     : personalRootDecision(tier);
+  // SPEND-3: resolution named the source a conversation's first call preselected; persist it now.
+  const pinned = resolution
+    ? await resolution.persistPreselectedSource({ userId, target: opts.spend, preselectedWalletId: decision.preselectedWalletId })
+    : undefined;
   if (decision.kind !== 'spend') {
     return {
       allowed: false,
@@ -398,7 +404,6 @@ export async function canConsumeAI(
         ? { ...personal, spendSource: 'own_credits', entitlementTier: decision.entitlementTier }
         : personal);
   if (!result.allowed) return result;
-  const pinned = decision.pinnedWalletId;
   const withPin: CreditGateResult = pinned ? { ...result, conversationSourceWalletId: pinned } : result;
   const carried: CreditGateResult = fallbackFromWalletId ? { ...withPin, fallbackFromWalletId } : withPin;
   if (fallback === undefined) return carried;

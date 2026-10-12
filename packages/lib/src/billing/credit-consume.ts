@@ -642,6 +642,21 @@ async function settleOnChildWallet(
  */
 export type CreditSettleStatus = 'settled' | 'deferred' | 'unbillable' | 'refused' | 'unattributed';
 
+/**
+ * The metadata key that marks a usage row whose charge names no wallet (WAL-6b fail closed): set
+ * once, when it is first found, so the orphan sweep never rescans it and the admin panel can count
+ * what is waiting for reconciliation. Its value is when it was found.
+ */
+export const UNATTRIBUTED_USAGE_MARKER = 'unattributedAt';
+
+/** Mark `aiUsageLogId` unattributed (terminal for the sweeps), once; a no-op when already marked. */
+export async function markUsageUnattributed(aiUsageLogId: string, now: Date = new Date()): Promise<void> {
+  await db
+    .update(aiUsageLogs)
+    .set({ metadata: sql`coalesce(${aiUsageLogs.metadata}, '{}'::jsonb) || jsonb_build_object(${UNATTRIBUTED_USAGE_MARKER}::text, ${now.toISOString()}::text)` })
+    .where(and(eq(aiUsageLogs.id, aiUsageLogId), sql`(${aiUsageLogs.metadata} ->> ${UNATTRIBUTED_USAGE_MARKER}) IS NULL`));
+}
+
 /** The wallet a hold reserves on, or null when the hold no longer exists (settled, released, expired). */
 export async function holdWalletId(holdId: string): Promise<string | null> {
   return (await holdSettleFacts(holdId))?.walletId ?? null;
@@ -760,6 +775,7 @@ export async function consumeCredits(input: ConsumeCreditsInput): Promise<Credit
         holdId: input.holdId,
       });
       if (input.holdId) await db.delete(creditHolds).where(eq(creditHolds.id, input.holdId));
+      await markUsageUnattributed(input.aiUsageLogId);
       return 'unattributed';
     }
     walletId = resolved.walletId;

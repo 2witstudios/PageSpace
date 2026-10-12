@@ -13,7 +13,7 @@ import { subscriptions } from '@pagespace/db/schema/subscriptions';
 import { orgSubscriptions, orgSubscriptionFunding } from '@pagespace/db/schema/organizations';
 import type { SQL } from '@pagespace/db/operators';
 import { isNegativeMargin } from '@pagespace/lib/billing/credit-core';
-import { walletDriftAlerts, type DriftWalletKind } from '@pagespace/lib/billing/wallet-reconcile';
+import { unattributedUsage, walletDriftAlerts, type DriftWalletKind, type UnattributedUsage } from '@pagespace/lib/billing/wallet-reconcile';
 import { BALANCE_DRIFT_TOLERANCE_CENTS, NEGATIVE_MARGIN_FLOOR_BPS } from '@pagespace/lib/billing/credit-pricing';
 import { CENTS_PER_DOLLAR } from '@pagespace/lib/billing/money-model';
 import { readCreditLiability } from '@pagespace/lib/billing/credit-liability-query';
@@ -757,8 +757,9 @@ export interface BalanceDriftRow {
 /**
  * Wallets whose net (monthly + top-up − debt) disagrees with their OWN ledger rows beyond tolerance
  * (WAL-5): every personal root, org pool and drive wallet, every money-moving entry type counted,
- * through the one lib reader (walletDriftAlerts). Forgiveness at a renewal or an allocation reset
- * moves no money and writes no row, so a flag means "look at this wallet". Worst drift first.
+ * through the one lib reader (walletDriftAlerts). Every balance change is a row — forgiveness at a
+ * renewal (debt_forgiven), netting at an allocation reset (allocation_reset), the cutover's
+ * opening_balance — so any drift is a change that bypassed the ledger. Worst drift first.
  */
 export async function getBalanceDriftAlerts(
   toleranceCents: number = BALANCE_DRIFT_TOLERANCE_CENTS,
@@ -783,6 +784,14 @@ export async function getBalanceDriftAlerts(
     driftCents: a.driftCents,
     debtCents: a.debtCents,
   }));
+}
+
+/**
+ * Billable AI usage that names no wallet (WAL-6b fail closed): never charged, marked terminal when
+ * first found, and counted here so an operator reconciles it.
+ */
+export async function getUnattributedUsage(): Promise<UnattributedUsage> {
+  return unattributedUsage();
 }
 
 export interface NegativeMarginRow {

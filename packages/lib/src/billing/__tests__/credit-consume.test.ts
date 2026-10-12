@@ -247,9 +247,13 @@ describe('consumeCredits', () => {
 
   it('WAL-6 (partial): with no live hold and no wallet named the settle FAILS CLOSED — no claim, no charge, never the person\'s own wallet by default', async () => {
     mockDb.delete.mockReturnValue({ where: vi.fn().mockResolvedValue(undefined) });
+    const markWhere = vi.fn().mockResolvedValue(undefined);
+    mockDb.update.mockReturnValue({ set: vi.fn(() => ({ where: markWhere })) });
     const status = await consumeCredits({ aiUsageLogId: 'aul_nowallet', userId: 'u1', costDollars: 1, holdId: 'hold_expired' });
 
     expect(status).toBe('unattributed');
+    // The usage row is marked terminal, so no sweep rescans it.
+    expect(markWhere).toHaveBeenCalledTimes(1);
     expect(mockAiLogger.error).toHaveBeenCalledWith(expect.stringContaining('UNATTRIBUTED'), expect.any(Error), expect.objectContaining({ aiUsageLogId: 'aul_nowallet', holdId: 'hold_expired' }));
     expect(mockDb.insert).not.toHaveBeenCalled();
     expect(mockDb.transaction).not.toHaveBeenCalled();

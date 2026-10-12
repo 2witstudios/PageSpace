@@ -2332,6 +2332,13 @@
       "when": 1791811107113,
       "tag": "0344_credit_ledger_fallback_from_wallet",
       "breakpoints": true
+    },
+    {
+      "idx": 335,
+      "version": "7",
+      "when": 1791828083477,
+      "tag": "0345_wallet_opening_balance",
+      "breakpoints": true
     }
   ]
 }
