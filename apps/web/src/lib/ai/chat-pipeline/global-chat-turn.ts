@@ -50,6 +50,7 @@ import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import { getAllowedDriveIds, authSessionIdOf, type AuthResult } from '@/lib/auth';
 import { createAIProvider, updateUserProviderSettings, createProviderErrorResponse, isProviderError, type ProviderRequest } from '@/lib/ai/core/provider-factory';
 import { toolModelContext } from '@/lib/ai/core/tool-model-context';
+import { commandsForModel } from '@/lib/ai/core/command-model-policy';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
 import { extractMessageContent, extractToolCalls, extractToolResults, sanitizeMessagesForModel, convertGlobalAssistantMessageToUIMessage } from '@/lib/ai/core/message-utils';
 import { messageRepository } from '@/lib/repositories/message-repository';
@@ -706,6 +707,9 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
       return createProviderErrorResponse(providerResult);
     }
     turnTimer.mark('provider_ready');
+
+    // POL-8: a command's pages reach this turn's model only when their org allows the model it resolved.
+    ({ plans: commandPlans, prompt: commandSystemPrompt } = await commandsForModel(commandPlans, toolModelContext(providerResult)));
 
     const { model, provider: currentProvider, modelName: currentModel } = providerResult;
 

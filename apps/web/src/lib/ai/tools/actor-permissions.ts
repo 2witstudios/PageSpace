@@ -34,20 +34,31 @@ import { toolModelDecision } from '@pagespace/lib/organizations/org-action-decis
  * now, no cache. The model judged is the one the run resolved (toolModelContext); a model run that names no resolved
  * pair is refused, never passed. Only a context that runs no model at all (no pair, not marked) is not judged here.
  */
-function judgesModel(context: ToolExecutionContext): boolean {
+/** The part of a tool context the POL-8 model check reads. */
+export type ModelRunFields = Pick<ToolExecutionContext, 'runsModel' | 'aiProvider' | 'aiModel'>;
+
+function judgesModel(context: ModelRunFields): boolean {
   return Boolean(context.runsModel || context.aiProvider || context.aiModel);
 }
 
-async function driveDeniedByModelPolicy(context: ToolExecutionContext, driveId: string): Promise<boolean> {
+async function driveDeniedByModelPolicy(context: ModelRunFields, driveId: string): Promise<boolean> {
   if (!judgesModel(context)) return false;
   const policies = (await getDrivePolicies(driveId))?.policies ?? null;
   return !toolModelDecision(policies, { provider: context.aiProvider, modelId: context.aiModel }).ok;
 }
 
-async function pageDeniedByModelPolicy(context: ToolExecutionContext, pageId: string): Promise<boolean> {
+async function pageDeniedByModelPolicy(context: ModelRunFields, pageId: string): Promise<boolean> {
   if (!judgesModel(context)) return false;
   const [page] = await db.select({ driveId: pages.driveId }).from(pages).where(eq(pages.id, pageId)).limit(1);
   return page ? driveDeniedByModelPolicy(context, page.driveId) : false;
+}
+
+/**
+ * POL-8 for content injected into a run outside a tool call (a command's pages): the same model check the tools
+ * get, without the access check the caller has already made.
+ */
+export async function pageReadableByModel(context: ModelRunFields, pageId: string): Promise<boolean> {
+  return !(await pageDeniedByModelPolicy(context, pageId));
 }
 
 export function getAgentPageId(context: ToolExecutionContext): string | undefined {

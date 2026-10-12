@@ -72,6 +72,7 @@ vi.mock('@pagespace/lib/permissions/agent-permissions', () => ({
 vi.mock('@/lib/ai/tools/actor-permissions', () => ({
   canActorEditPage: vi.fn().mockResolvedValue(true),
   canActorConsultAgent: vi.fn().mockResolvedValue(true),
+  pageReadableByModel: vi.fn().mockResolvedValue(true),
 }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
   canUserViewPage: vi.fn(),

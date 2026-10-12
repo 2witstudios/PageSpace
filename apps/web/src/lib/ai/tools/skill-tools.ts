@@ -31,6 +31,7 @@ import {
   type CommandExecutionPlan,
 } from '../core/command-processor';
 import type { ToolExecutionContext } from '../core/types';
+import { commandsForModel } from '../core/command-model-policy';
 
 const skillLogger = loggers.ai.child({ module: 'skill-tools' });
 
@@ -99,7 +100,9 @@ export const skillTools = {
         }
 
         const plan = await resolveCommandInjectionById(winner.id, userId, name);
-        return planToResult(plan, name);
+        // POL-8: the command's pages reach this run's model only when their org allows it.
+        const [judged] = (await commandsForModel([plan], ctx ?? {})).plans;
+        return planToResult(judged, name);
       } catch (error) {
         skillLogger.error('load_skill failed; returning soft error', error as Error, {
           skill: name,

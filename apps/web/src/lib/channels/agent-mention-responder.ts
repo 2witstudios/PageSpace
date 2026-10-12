@@ -14,12 +14,13 @@ import { notifyMentionedUsers } from '@/lib/channels/notify-mentioned-users';
 import { acquireMentionCreditHold } from '@/lib/channels/mention-credit-gate';
 import { processMentionsInMessage } from '@/lib/ai/core/mention-processor';
 import {
-  buildCommandPromptSection,
   commandExecutionDataFromPlan,
   isSoloBuiltinCommandIgnoringMentions,
   type CommandExecutionData,
 } from '@/lib/ai/core/command-processor';
 import { planCommandExecutions } from '@/lib/ai/core/command-resolver';
+import { commandsForModel } from '@/lib/ai/core/command-model-policy';
+import { agentRunModel, toolModelContext, type AgentRunModel } from '@/lib/ai/core/tool-model-context';
 import { loadHelpAnswerText } from '@/lib/commands/help-answer';
 import { buildThreadPreview } from '@pagespace/lib/services/preview';
 import { decryptField } from '@pagespace/lib/encryption/field-crypto';
@@ -53,6 +54,8 @@ export interface MentionedAgent {
   enabledTools: string[] | null;
   /** Whether this agent's configured model (falling back to DEFAULT_MODEL) supports vision. */
   hasVision: boolean;
+  /** POL-8: the provider and model this agent's reply will run (its configured pair, else the default). */
+  runModel: AgentRunModel;
 }
 
 export interface RecentChannelMessage {
@@ -235,6 +238,7 @@ export async function resolveMentionedAgents(content: string): Promise<Mentioned
       title: page.title || 'Agent',
       enabledTools: Array.isArray(page.enabledTools) ? page.enabledTools : null,
       hasVision: hasVisionCapability(page.aiModel || DEFAULT_MODEL),
+      runModel: agentRunModel(page),
     });
   }
 
@@ -711,12 +715,6 @@ export async function triggerMentionedAgentResponses(
       : await planCommandExecutions(params.content, params.userId, {
           driveId: params.driveId ?? null,
         });
-    const commandContext = buildCommandPromptSection(commandPlans);
-    const commandExecution = isSoloHelpMention
-      ? [{ label: 'help', status: 'used' as const }]
-      : commandPlans.length > 0
-        ? commandPlans.map(commandExecutionDataFromPlan)
-        : undefined;
 
     // isSoloHelpMention computed above (before command resolution). The
     // answer itself is sender-scoped (the human's command list), not
@@ -725,6 +723,14 @@ export async function triggerMentionedAgentResponses(
     for (const agent of eligibleAgents) {
       try {
         const mentionConversationId = mentionConversationIdFor(params.channelId, agent.id);
+        // POL-8: a command's pages reach this agent's model only when their org allows the model its reply runs.
+        const agentCommands = await commandsForModel(commandPlans, toolModelContext(agent.runModel));
+        const commandContext = agentCommands.prompt;
+        const commandExecution = isSoloHelpMention
+          ? [{ label: 'help', status: 'used' as const }]
+          : agentCommands.plans.length > 0
+            ? agentCommands.plans.map(commandExecutionDataFromPlan)
+            : undefined;
 
         let replyContent: string;
         if (isSoloHelpMention) {

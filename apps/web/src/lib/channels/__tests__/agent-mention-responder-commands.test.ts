@@ -47,6 +47,7 @@ vi.mock('@pagespace/lib/permissions/agent-permissions', () => ({
 vi.mock('@/lib/ai/tools/actor-permissions', () => ({
   canActorEditPage: vi.fn().mockResolvedValue(true),
   canActorConsultAgent: vi.fn().mockResolvedValue(true),
+  pageReadableByModel: vi.fn().mockResolvedValue(true),
 }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
   canUserViewPage: vi.fn(),
@@ -102,6 +103,8 @@ import { channelTools } from '@/lib/ai/tools/channel-tools';
 import { planCommandExecutions } from '@/lib/ai/core/command-resolver';
 import { loadHelpAnswerText } from '@/lib/commands/help-answer';
 import type { CommandExecutionPlan } from '@/lib/ai/core/command-processor';
+import { pageReadableByModel } from '@/lib/ai/tools/actor-permissions';
+import { DEFAULT_MODEL } from '@/lib/ai/core/ai-providers-config';
 import { triggerMentionedAgentResponses } from '../agent-mention-responder';
 
 const mockPagesFindMany = db.query.pages.findMany as unknown as Mock;
@@ -149,6 +152,7 @@ const skipPlan: CommandExecutionPlan = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(pageReadableByModel).mockResolvedValue(true);
   mockPagesFindMany.mockResolvedValue([
     { id: 'agent-1', title: 'Helper', enabledTools: ['send_channel_message'] },
   ]);
@@ -184,6 +188,19 @@ describe('triggerMentionedAgentResponses — universal commands', () => {
     const askArgs = mockAskAgentExecute.mock.calls[0][0] as { context: string };
     expect(askArgs.context).toContain('Step 1: run tests');
     expect(askArgs.context).toContain('/release-checklist');
+  });
+
+  it('POL-8: a command page whose org does not allow the model the agent runs (its default) is skipped, not injected', async () => {
+    mockPlanCommandExecutions.mockResolvedValue([injectPlan]);
+    vi.mocked(pageReadableByModel).mockResolvedValue(false);
+    await triggerMentionedAgentResponses(baseParams);
+
+    // Judged against the pair the agent's reply resolves: it sets no model, so the default.
+    expect(pageReadableByModel).toHaveBeenCalledWith(expect.objectContaining({ aiModel: DEFAULT_MODEL, runsModel: true }), 'entry-1');
+    const askArgs = mockAskAgentExecute.mock.calls[0][0] as { context: string };
+    expect(askArgs.context).not.toContain('Step 1: run tests');
+    const sendOptions = mockSendChannelExecute.mock.calls[0][1] as { experimental_context: { commandExecution?: unknown } };
+    expect(sendOptions.experimental_context.commandExecution).toEqual([{ label: 'release-checklist', status: 'skipped', reason: 'no_access' }]);
   });
 
   it('passes the skip notice into the ask context for a skipped command', async () => {

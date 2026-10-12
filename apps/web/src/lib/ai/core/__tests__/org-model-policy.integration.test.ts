@@ -83,6 +83,11 @@ import { DEFAULT_MODEL } from '../ai-providers-config';
 import { DEFAULT_IMAGE_MODEL } from '../model-capabilities';
 import { driveSpend } from '@pagespace/lib/billing/spend-target';
 import type { ToolExecutionContext } from '../types';
+import { commands } from '@pagespace/db/schema/commands';
+import { skillTools } from '@/lib/ai/tools/skill-tools';
+import { planCommandExecutions } from '../command-resolver';
+import { commandsForModel } from '../command-model-policy';
+import { toolModelContext } from '../tool-model-context';
 
 const created = { userIds: [] as string[], driveIds: [] as string[], orgIds: [] as string[] };
 let dbAvailable = false;
@@ -373,6 +378,44 @@ describe('POL-8 the org model and provider allowlists govern every model use in 
     await expect(readPage({ title: 'Plan', pageId: w.orgDocPage }, asGlobal(REFUSED))).rejects.toThrow(/Insufficient permissions/);
 
     expect(JSON.stringify(await readPage({ title: 'Plan', pageId: w.orgDocPage }, asGlobal(ALLOWED)))).toContain('Q3 revenue plan');
+  });
+
+  describe('commands reading org content: a command page reaches a run\'s model only when its org allows that model', () => {
+    // The person's own command, whose entry page (and its one child) live in the org drive, which allows only ALLOWED.
+    const orgCommand = async () => {
+      await db.update(pages).set({ content: '<p>Q3 release checklist</p>' }).where(eq(pages.id, w.orgDocPage));
+      await factories.createPage(w.orgDrive, { parentId: w.orgDocPage, title: 'Rollback runbook' });
+      const [command] = await db.insert(commands).values({ userId: w.owner, createdById: w.owner, trigger: 'release-plan', description: 'How we ship', entryPageId: w.orgDocPage }).returning({ id: commands.id });
+      return command.id;
+    };
+    const run = (pair: { provider: string; model: string }) => toolModelContext({ provider: pair.provider, modelName: pair.model });
+
+    it('load_skill: a command whose page\'s org does not allow the run\'s model is not loaded; under an allowed model it is', async () => {
+      await orgCommand();
+      const loadSkill = skillTools.load_skill.execute!;
+      const load = (pair: { provider: string; model: string }) => loadSkill({ name: 'release-plan' }, { toolCallId: 't', messages: [], experimental_context: { userId: w.owner, ...run(pair) } as ToolExecutionContext });
+
+      const refused = String(await load(REFUSED));
+      expect(refused).not.toContain('Q3 release checklist');
+      expect(refused).not.toContain('Rollback runbook');
+      expect(refused).toContain('could not be loaded');
+
+      expect(String(await load(ALLOWED))).toContain('Q3 release checklist');
+    });
+
+    it('slash commands: a command chip whose page\'s org does not allow the turn\'s model is skipped, not injected; under an allowed model it is injected', async () => {
+      const commandId = await orgCommand();
+      const planned = await planCommandExecutions(`/[release-plan](${commandId}:command) ship it`, w.owner, { driveId: w.orgDrive });
+
+      const refused = await commandsForModel(planned, run(REFUSED));
+      expect(refused.plans).toEqual([expect.objectContaining({ kind: 'skip', reason: 'no_access', commandId })]);
+      expect(refused.prompt).not.toContain('Q3 release checklist');
+      expect(refused.prompt).not.toContain('Rollback runbook');
+
+      const allowed = await commandsForModel(planned, run(ALLOWED));
+      expect(allowed.prompt).toContain('Q3 release checklist');
+      expect(allowed.prompt).toContain('Rollback runbook');
+    });
   });
 
   it('generating images: the image model is built through the provider factory and refused in a drive whose org does not allow it', async () => {

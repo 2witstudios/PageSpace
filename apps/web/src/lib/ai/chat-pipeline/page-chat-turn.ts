@@ -76,6 +76,7 @@ import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { createAIProvider, updateUserProviderSettings, createProviderErrorResponse, isProviderError, type ProviderRequest } from '@/lib/ai/core/provider-factory';
 import { toolModelContext } from '@/lib/ai/core/tool-model-context';
+import { commandsForModel } from '@/lib/ai/core/command-model-policy';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
 import { extractMessageContent, extractToolCalls, extractToolResults, sanitizeMessagesForModel, convertDbMessageToUIMessage } from '@/lib/ai/core/message-utils';
 import { messageRepository } from '@/lib/repositories/message-repository';
@@ -1241,6 +1242,9 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
       return createProviderErrorResponse(providerResult);
     }
     turnTimer.mark('provider_ready');
+
+    // POL-8: a command's pages reach this turn's model only when their org allows the model it resolved.
+    ({ plans: commandPlans, prompt: commandSystemPrompt } = await commandsForModel(commandPlans, toolModelContext(providerResult)));
 
     // Use the resolved (provider, model) for billing. providerResult carries the
     // real backend provider/model after the factory's catalog substitution.
