@@ -13,6 +13,24 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **Organization Drives directory and join requests** (shown once organizations are switched on) — every
+  member, not only admins, can open the organization's Drives directory from the organization page or
+  "Browse … drives" in the drive picker: the drives they can open, and the Restricted drives they can ask
+  to join, with an optional note. The drive lead and organization Owners and Admins see pending requests
+  on the drive's Members page and approve or decline them.
+
+- **Unpaid-organization banner everywhere in the organization** (shown once organizations are switched
+  on) — the reactivate banner (Owner and Admins) and the read-only notice (members) now show on every
+  organization page and on every page of an organization drive, not only in organization settings.
+
+- **Who spends, today and via automations** — a drive wallet's "Spend this month" list shows, per
+  member, how much was spent today and how much came from automations run on their behalf. Settings ›
+  Usage › Wallets shows what you spent from each drive wallet this month.
+
+- **Organization changes update live** — renaming an organization, changing its avatar, deleting it, and
+  sending or revoking invitations update the drive picker, the header and organization pages for every
+  member without a refresh.
+
 - **Joining an organization from the invitation email** (shown once organizations are switched on) — the
   invitation link now opens a page that lets you join: sign in or create an account with the invited
   address (by any sign-in method) and you land in the organization; if you are already signed in, one click
