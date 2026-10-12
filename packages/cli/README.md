@@ -153,7 +153,7 @@ drives    list [--all]                # --all includes trashed drives
           set-lead <driveId> <userId>                  # hand an org drive to another org member
           join-requests <driveId>                      # pending requests on a Restricted drive (lead/Owner/Admin)
           request-join <driveId> [--message <text>]    # ask to join a Restricted org drive
-          answer-join <driveId> <requestId> <approve|deny>
+          answer-join <driveId> <requestId> <approve|deny> [--yes]   # deny asks first
           withdraw-join <driveId> <requestId>
 
 roles     list <driveId>
@@ -229,7 +229,7 @@ orgs      list                                     # the organizations you belon
           update <orgId> [--name <name>] [--slug <slug>] [--avatar-url <https url>|none]   # Owner/Admin
           members <orgId>                          # the member roster with roles
           activity <orgId>                         # each member's drive count and last activity (Owner/Admin)
-          set-role <orgId> <userId> <ADMIN|MEMBER> # Owner/Admin
+          set-role <orgId> <userId> <ADMIN|MEMBER> [--yes]   # Owner/Admin; MEMBER (a possible demotion) asks first
           remove-member <orgId> <userId> [--yes]   # Owner/Admin
           leave <orgId> [--yes]
           invitations <orgId>                      # open invitations (Owner/Admin)
@@ -242,8 +242,10 @@ orgs      list                                     # the organizations you belon
           trashed-drives <orgId>                   # Owner/Admin
           drive-usage <orgId>                      # people, guests and storage per org drive (Owner/Admin)
           policies <orgId>                         # the org's policies (Owner/Admin)
-          set-policies <orgId> <key>=<value> …     # e.g. guests=approve requireStrongSignIn=on
+          set-policies <orgId> <key>=<value> … [--yes]   # e.g. guests=approve requireStrongSignIn=on
                                                    # maximumSessionAgeMinutes=480|none modelAllowlist=a,b|none
+                                                   # a change that may tighten anything asks first; the money
+                                                   # policies (seat allowance, wallet fallback) need a signed-in session
           suspended <orgId>                        # what the policies hold suspended (Owner/Admin)
           audit <orgId> [--category <c>] [--type <t>] [--drive <id>] [--from <iso>] [--to <iso>] [--limit N] [--before <cursor>]
           audit-export <orgId> [same filters, no paging] > audit.csv
@@ -252,7 +254,7 @@ orgs      list                                     # the organizations you belon
           reassign-automation <orgId> <workflow|page_webhook> <id> <newOwnerId>
           guests <orgId>                           # Owner/Admin
           guest-approvals <orgId>                  # guests waiting under the "approve" policy (Owner/Admin)
-          answer-guest <orgId> <holdId> <approve|decline>
+          answer-guest <orgId> <holdId> <approve|decline> [--yes]   # decline asks first
           domains <orgId>                          # domain claims and their TXT records (Owner/Admin)
           add-domain <orgId> <domain>
           remove-domain <orgId> <domainId> [--yes]

@@ -95,7 +95,7 @@ export const drivesRequestJoinHandler = verbHandler({
   render: ({ request }) => `Asked to join drive ${request.driveId} (request ${request.id}, ${request.status}).\n`,
 });
 
-const ANSWER_USAGE = 'Usage: pagespace drives answer-join <driveId> <requestId> <approve|deny>';
+const ANSWER_USAGE = 'Usage: pagespace drives answer-join <driveId> <requestId> <approve|deny> [--yes]';
 
 export const drivesAnswerJoinHandler = verbHandler({
   usage: ANSWER_USAGE,
@@ -104,6 +104,7 @@ export const drivesAnswerJoinHandler = verbHandler({
     const decision = oneOf(value, JOIN_REQUEST_DECISIONS, 'Decision', ANSWER_USAGE);
     return decision.ok ? ok({ driveId, requestId, decision: decision.value }) : decision;
   },
+  confirm: ({ requestId, decision }) => (decision === 'deny' ? `Deny join request ${requestId}? The requester does not get in. [y/N] ` : null),
   call: (sdk, input) => sdk.drives.answerJoinRequest(input),
   render: ({ request, admitted }) => `Request ${request.id} ${request.status}${admitted ? '; the requester is now a member' : ''}.\n`,
 });

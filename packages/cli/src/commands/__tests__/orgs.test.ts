@@ -69,8 +69,6 @@ const POLICIES = {
     whoCanInvite: 'admins' as const,
     whoCanCreateDrives: 'members' as const,
     openDriveRoleFloor: 'view' as const,
-    seatAllowanceCents: 3000,
-    walletFallback: 'refuse' as const,
     modelAllowlist: ['m1'],
     providerAllowlist: null,
     agentsAutonomous: true,
@@ -136,7 +134,7 @@ describe('orgs rendering', () => {
     expect(text).toContain('maximumSessionAgeMinutes: (none)');
     expect(text).toContain('guests: approve');
     expect(text).toContain('publicShareLinks: off');
-    expect(text).toContain('seatAllowanceCents: 3000');
+    expect(text).not.toContain('seatAllowanceCents');
     expect(text).toContain('modelAllowlist: m1');
     expect(text).toContain('providerAllowlist: (none)');
     expect(text).toContain('integrationsAllowlist: (nothing allowed)');

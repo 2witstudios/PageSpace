@@ -15,6 +15,8 @@ import {
   renderPolicyChange,
   renderSuspended,
   orgsAcceptInviteHandler,
+  orgsAnswerGuestHandler,
+  policyChangeMayRestrict,
   orgsAuditExportHandler,
   orgsAuditHandler,
   orgsDeleteAutomationHandler,
@@ -73,7 +75,6 @@ describe('orgs set-policies — key=value (pure)', () => {
       },
     });
     expect(parsePolicyAssignments(['maximumSessionAgeMinutes=none'])).toEqual({ ok: true, value: { maximumSessionAgeMinutes: null } });
-    expect(parsePolicyAssignments(['publishWeb=false', 'seatAllowanceCents=3000'])).toEqual({ ok: true, value: { publishWeb: false, seatAllowanceCents: 3000 } });
   });
 
   it('X-1 (partial) refuses unknown keys, malformed pairs, repeats and bad values before the network', () => {
@@ -82,7 +83,9 @@ describe('orgs set-policies — key=value (pure)', () => {
     expect(parsePolicyAssignments(['guests=on', 'guests=off']).ok).toBe(false);
     expect(parsePolicyAssignments(['requireStrongSignIn=maybe']).ok).toBe(false);
     expect(parsePolicyAssignments(['maximumSessionAgeMinutes=soon']).ok).toBe(false);
-    expect(parsePolicyAssignments(['seatAllowanceCents=none']).ok).toBe(false);
+    // [D-OW-26] the money policies are not a key's to set: refused as unknown before the network.
+    expect(parsePolicyAssignments(['seatAllowanceCents=3000']).ok).toBe(false);
+    expect(parsePolicyAssignments(['walletFallback=seat_allowance']).ok).toBe(false);
   });
 });
 
@@ -176,9 +179,45 @@ describe('pagespace orgs <write verbs>', () => {
         },
       }),
     });
-    expect(await orgsSetPoliciesHandler(ctx, commandIntent(['o1', 'requireStrongSignIn=on', 'maximumSessionAgeMinutes=60']))).toBe(EXIT_SUCCESS);
+    expect(await orgsSetPoliciesHandler(ctx, commandIntent(['o1', 'requireStrongSignIn=on', 'maximumSessionAgeMinutes=60', '--yes']))).toBe(EXIT_SUCCESS);
     expect(calls).toEqual([{ orgId: 'o1', requireStrongSignIn: true, maximumSessionAgeMinutes: 60 }]);
     expect(await orgsSetPoliciesHandler(createFakeContext(), commandIntent(['o1']))).toBe(EXIT_USAGE_ERROR);
+  });
+
+  it('X-1 (partial) policyChangeMayRestrict: true when any assignment can tighten access, false when every one only opens', () => {
+    expect(policyChangeMayRestrict({ publishWeb: false })).toBe(true);
+    expect(policyChangeMayRestrict({ requireStrongSignIn: true })).toBe(true);
+    expect(policyChangeMayRestrict({ maximumSessionAgeMinutes: 60 })).toBe(true);
+    expect(policyChangeMayRestrict({ guests: 'approve' })).toBe(true);
+    expect(policyChangeMayRestrict({ whoCanInvite: 'admins' })).toBe(true);
+    expect(policyChangeMayRestrict({ openDriveRoleFloor: 'view' })).toBe(true);
+    expect(policyChangeMayRestrict({ modelAllowlist: ['m1'] })).toBe(true);
+    expect(policyChangeMayRestrict({ publishWeb: true, guests: 'on', whoCanCreateDrives: 'members', requireStrongSignIn: false, maximumSessionAgeMinutes: null, modelAllowlist: null, openDriveRoleFloor: 'edit' })).toBe(false);
+  });
+
+  it('X-1 (partial) verbs that can remove or suspend access need --yes: a tightening policy change, a role set to MEMBER, a declined guest', async () => {
+    let called = false;
+    const sdk = fakeSdk({
+      organizations: {
+        updatePolicies: async () => ((called = true), { policies: {}, changed: [], suspended: {}, restored: {}, blocked: {}, auditRecorded: true }),
+        changeMemberRole: async () => ((called = true), { userId: 'u2', role: 'MEMBER' }),
+        answerGuestApproval: async () => ((called = true), { decided: 'declined' }),
+      },
+    });
+    for (const [handler, argv] of [
+      [orgsSetPoliciesHandler, ['o1', 'publishWeb=off']],
+      [orgsSetRoleHandler, ['o1', 'u2', 'MEMBER']],
+      [orgsAnswerGuestHandler, ['o1', 'h1', 'decline']],
+    ] as const) {
+      const stderr = createRecordingSink();
+      expect(await handler(createFakeContext({ sdk, stderr }), commandIntent([...argv]))).toBe(EXIT_RUNTIME_ERROR);
+      expect(stderr.lines.join('')).toContain('--yes');
+    }
+    expect(called).toBe(false);
+    // Opening things up, promoting and approving ask nothing.
+    expect(await orgsSetPoliciesHandler(createFakeContext({ sdk }), commandIntent(['o1', 'publishWeb=on']))).toBe(EXIT_SUCCESS);
+    expect(await orgsSetRoleHandler(createFakeContext({ sdk }), commandIntent(['o1', 'u2', 'ADMIN']))).toBe(EXIT_SUCCESS);
+    expect(await orgsAnswerGuestHandler(createFakeContext({ sdk }), commandIntent(['o1', 'h1', 'approve']))).toBe(EXIT_SUCCESS);
   });
 
   it('X-1 (partial) destructive verbs refuse without --yes in a non-interactive session and never call the SDK', async () => {

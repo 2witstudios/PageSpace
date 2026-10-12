@@ -83,19 +83,43 @@ export function parsePolicyAssignments(assignments: readonly string[]): VerbArgs
       patch[key] = on;
     } else if (LIST_POLICIES.has(key)) {
       patch[key] = raw === 'none' ? null : raw === '' ? [] : raw.split(',').map((item) => item.trim()).filter((item) => item.length > 0);
-    } else if (key === 'maximumSessionAgeMinutes' || key === 'seatAllowanceCents') {
-      if (key === 'maximumSessionAgeMinutes' && raw === 'none') {
+    } else if (key === 'maximumSessionAgeMinutes') {
+      if (raw === 'none') {
         patch[key] = null;
       } else if (/^\d+$/.test(raw)) {
         patch[key] = Number(raw);
       } else {
-        return { ok: false, message: `${key} must be a whole number${key === 'maximumSessionAgeMinutes' ? ' of minutes, or none' : ''}.` };
+        return { ok: false, message: `${key} must be a whole number of minutes, or none.` };
       }
     } else {
       patch[key] = raw;
     }
   }
   return ok(patch);
+}
+
+/**
+ * The value of each policy that only ever OPENS access (or adds no requirement). Any other value may
+ * tighten something — suspend share links, published pages, guests or integrations, or demand a new
+ * sign-in — relative to whatever the org has now, which the CLI does not read before asking.
+ */
+const OPENING_VALUES: Readonly<Record<string, unknown>> = {
+  requireStrongSignIn: false,
+  maximumSessionAgeMinutes: null,
+  guests: 'on',
+  whoCanInvite: 'members',
+  whoCanCreateDrives: 'members',
+  openDriveRoleFloor: 'edit',
+  modelAllowlist: null,
+  providerAllowlist: null,
+  integrationsAllowlist: null,
+};
+
+/** Pure: whether a policy change may restrict anything (so `set-policies` asks for `--yes`). Switches open when on. */
+export function policyChangeMayRestrict(patch: Readonly<Record<string, unknown>>): boolean {
+  return Object.entries(patch).some(([key, value]) =>
+    BOOLEAN_POLICIES.has(key) && key !== 'requireStrongSignIn' ? value !== true : value !== OPENING_VALUES[key],
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -237,12 +261,14 @@ export const orgsActivityHandler = verbHandler({
 });
 
 export const orgsSetRoleHandler = verbHandler({
-  usage: 'Usage: pagespace orgs set-role <orgId> <userId> <ADMIN|MEMBER>',
+  usage: 'Usage: pagespace orgs set-role <orgId> <userId> <ADMIN|MEMBER> [--yes]',
   positionals: 3,
   build: ({ positionals: [orgId, userId, role] }): VerbArgsResult<In<'changeMemberRole'>> => {
-    const parsed = oneOf(role, GRANTABLE_ROLES, 'Role', 'Usage: pagespace orgs set-role <orgId> <userId> <ADMIN|MEMBER>');
+    const parsed = oneOf(role, GRANTABLE_ROLES, 'Role', 'Usage: pagespace orgs set-role <orgId> <userId> <ADMIN|MEMBER> [--yes]');
     return parsed.ok ? ok({ orgId, userId, role: parsed.value }) : parsed;
   },
+  // MEMBER can be a demotion: an Admin loses org-wide power over every drive.
+  confirm: ({ orgId, userId, role }) => (role === 'MEMBER' ? `Set ${userId} to MEMBER in organization ${orgId}? An Admin loses access to every drive they reached through the org. [y/N] ` : null),
   call: (sdk, input) => sdk.organizations.changeMemberRole(input),
   render: (value) => `${value.userId} is now ${value.role}.\n`,
 });
@@ -315,6 +341,10 @@ export const orgsSetPoliciesHandler = verbHandler({
     const patch = parsePolicyAssignments(assignments);
     return patch.ok ? ok({ orgId, ...patch.value } as In<'updatePolicies'>) : patch;
   },
+  confirm: ({ orgId, ...patch }) =>
+    policyChangeMayRestrict(patch)
+      ? `Change the policies of organization ${orgId}? Tightening a policy suspends what it now forbids (share links, published pages, guests, integrations) org-wide, or asks members to sign in again. [y/N] `
+      : null,
   call: (sdk, input) => sdk.organizations.updatePolicies(input),
   render: renderPolicyChange,
 });
@@ -436,12 +466,13 @@ export const orgsGuestApprovalsHandler = verbHandler({
 });
 
 export const orgsAnswerGuestHandler = verbHandler({
-  usage: 'Usage: pagespace orgs answer-guest <orgId> <holdId> <approve|decline>',
+  usage: 'Usage: pagespace orgs answer-guest <orgId> <holdId> <approve|decline> [--yes]',
   positionals: 3,
   build: ({ positionals: [orgId, holdId, decision] }): VerbArgsResult<In<'answerGuestApproval'>> => {
-    const parsed = oneOf(decision, ['approve', 'decline'] as const, 'Decision', 'Usage: pagespace orgs answer-guest <orgId> <holdId> <approve|decline>');
+    const parsed = oneOf(decision, ['approve', 'decline'] as const, 'Decision', 'Usage: pagespace orgs answer-guest <orgId> <holdId> <approve|decline> [--yes]');
     return parsed.ok ? ok({ orgId, holdId, decision: parsed.value }) : parsed;
   },
+  confirm: ({ holdId, decision }) => (decision === 'decline' ? `Decline guest request ${holdId}? The guest does not get in. [y/N] ` : null),
   call: (sdk, input) => sdk.organizations.answerGuestApproval(input),
   render: (value, input) => `Guest request ${input.holdId} ${value.decided}.\n`,
 });

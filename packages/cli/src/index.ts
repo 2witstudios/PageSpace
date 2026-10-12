@@ -536,6 +536,7 @@ export {
   orgsTrashedDrivesHandler,
   orgsUpdateHandler,
   orgsVerifyDomainHandler,
+  policyChangeMayRestrict,
 } from './commands/org-writes.js';
 
 // Org ownership of a drive (X-1; DRV-1..DRV-4, DRV-6).

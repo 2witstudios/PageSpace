@@ -3,8 +3,8 @@
  * `--flag value` options, one SDK call, one rendered line. Argv parsing is pure
  * (`parseVerbArgs`); a verb's own `build` turns the parsed strings into the operation's input
  * (pure, returns a usage error instead of throwing); `ctx.sdk` is the only I/O edge, through
- * `callSdk`. A verb whose operation is destructive names a `confirm` question and goes through
- * the shared confirmation gate (`--yes`, or a TTY "y").
+ * `callSdk`. A verb that can remove or suspend access names a `confirm` question (null when this
+ * particular input cannot) and goes through the shared confirmation gate (`--yes`, or a TTY "y").
  *
  * Verbs only ASK; the server decides (the web's requireOrgRole, the org's sign-in policy, the
  * key's scope) and its refusal is printed as-is with exit 1.
@@ -74,8 +74,8 @@ export interface VerbSpec<TInput, TOutput> {
   readonly call: (sdk: PageSpaceClient, input: TInput) => Promise<TOutput>;
   /** Pure: the human rendering (`--json` prints the raw answer instead). */
   readonly render: (value: TOutput, input: TInput) => string;
-  /** Set for a destructive verb: the confirmation question. */
-  readonly confirm?: (input: TInput) => string;
+  /** Set for a verb that can remove or suspend access: the confirmation question, or null when this input cannot. */
+  readonly confirm?: (input: TInput) => string | null;
 }
 
 /** The handler for one verb: parse, build, confirm when destructive, call, render. */
@@ -87,8 +87,9 @@ export function verbHandler<TInput, TOutput>(spec: VerbSpec<TInput, TOutput>): C
       ctx.stderr.write(`${input.message}\n`);
       return EXIT_USAGE_ERROR;
     }
-    if (spec.confirm) {
-      const confirmation = await confirmDestructive(spec.confirm(input.value), { isTTY: ctx.isTTY, yes: intent.flags.yes, prompt: ctx.prompt });
+    const question = spec.confirm?.(input.value) ?? null;
+    if (question !== null) {
+      const confirmation = await confirmDestructive(question, { isTTY: ctx.isTTY, yes: intent.flags.yes, prompt: ctx.prompt });
       if (!confirmation.ok) {
         ctx.stderr.write(`${confirmationFailureMessage(confirmation)}\n`);
         return EXIT_RUNTIME_ERROR;

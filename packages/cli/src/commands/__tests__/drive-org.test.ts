@@ -104,6 +104,17 @@ describe('pagespace drives <org verbs>', () => {
     expect(stdout.lines.join('')).toBe('Request jr1 approved; the requester is now a member.\n');
   });
 
+  it('X-1 (partial) denying a join request needs --yes', async () => {
+    let called = false;
+    const sdk = fakeSdk({ drives: { answerJoinRequest: async () => ((called = true), { request: { ...JOIN_REQUEST, status: 'denied' }, admitted: false }) } });
+    const stderr = createRecordingSink();
+    expect(await drivesAnswerJoinHandler(createFakeContext({ sdk, stderr }), commandIntent(['d1', 'jr1', 'deny']))).toBe(EXIT_RUNTIME_ERROR);
+    expect(stderr.lines.join('')).toContain('--yes');
+    expect(called).toBe(false);
+    expect(await drivesAnswerJoinHandler(createFakeContext({ sdk }), commandIntent(['d1', 'jr1', 'deny', '--yes']))).toBe(EXIT_SUCCESS);
+    expect(called).toBe(true);
+  });
+
   it('X-1 (partial) request-join passes the optional message', async () => {
     const calls: unknown[] = [];
     const ctx = createFakeContext({ sdk: fakeSdk({ drives: { requestToJoin: async (input: unknown) => (calls.push(input), { request: JOIN_REQUEST }) } }) });
