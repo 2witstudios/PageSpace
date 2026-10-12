@@ -45,7 +45,6 @@ type WriteOp =
   | 'createCustomer'
   | 'updateCustomer'
   | 'createSubscription'
-  | 'createSubscriptionItem'
   | 'updateSubscriptionItemQuantity'
   | 'cancelSubscription';
 
@@ -63,7 +62,6 @@ export class FakeOrgStripe implements OrgBillingStripe {
     createCustomer: 0,
     updateCustomer: 0,
     createSubscription: 0,
-    createSubscriptionItem: 0,
     updateSubscriptionItemQuantity: 0,
     cancelSubscription: 0,
   };
@@ -210,7 +208,6 @@ export class FakeOrgStripe implements OrgBillingStripe {
         created,
         metadata: { ...params.metadata },
         items: params.items.map((item) => ({ id: this.nextId('si'), priceId: item.price, quantity: item.quantity })),
-        trialEnd: null,
         currentPeriodStart: created,
         currentPeriodEnd: created + 30 * 86_400,
         cancelAtPeriodEnd: false,
@@ -298,19 +295,6 @@ export class FakeOrgStripe implements OrgBillingStripe {
   async listCustomerSubscriptions(customerId: string): Promise<OrgStripeSubscription[]> {
     this.reads.listCustomerSubscriptions += 1;
     return [...this.subscriptions.values()].filter((s) => s.customerId === customerId).map((s) => structuredClone(s));
-  }
-
-  async createSubscriptionItem(
-    params: { subscriptionId: string; priceId: string; quantity: number },
-    idempotencyKey: string,
-  ): Promise<{ id: string; quantity: number }> {
-    return this.write('createSubscriptionItem', idempotencyKey, params, () => {
-      const sub = this.subscriptions.get(params.subscriptionId);
-      if (!sub) throw new Error(`No such subscription: '${params.subscriptionId}'`);
-      const item = { id: this.nextId('si'), priceId: params.priceId, quantity: params.quantity };
-      sub.items = [...sub.items, item];
-      return { id: item.id, quantity: item.quantity };
-    });
   }
 
   async updateSubscriptionItemQuantity(

@@ -30,9 +30,8 @@ vi.mock('@/lib/org-billing/org-subscription', async () => {
   return {
     OrgBillingError,
     provisionOrgSubscription: vi.fn(),
-    orgSubscriptionSummary: (l: { status: string; trialEnd: Date | null; currentPeriodEnd: Date | null; extraSeatQuantity: number }) => ({
+    orgSubscriptionSummary: (l: { status: string; currentPeriodEnd: Date | null; extraSeatQuantity: number }) => ({
       status: l.status,
-      trialEnd: l.trialEnd?.toISOString() ?? null,
       currentPeriodEnd: l.currentPeriodEnd?.toISOString() ?? null,
       extraSeatQuantity: l.extraSeatQuantity,
     }),
@@ -55,7 +54,6 @@ const linkage = {
   stripeSeatItemId: 'si_seat_hidden',
   extraSeatQuantity: 0,
   status: 'incomplete',
-  trialEnd: null,
   currentPeriodEnd: PERIOD_END,
 };
 const PAY = { kind: 'confirm_payment' as const, clientSecret: 'pi_123_secret_abc' };
@@ -94,7 +92,7 @@ describe('POST /api/orgs/[orgId]/billing/subscription', () => {
       expect(res.status).toBe(201);
       const body = await res.json();
       expect(body).toEqual({
-        subscription: { status: 'incomplete', trialEnd: null, currentPeriodEnd: PERIOD_END.toISOString(), extraSeatQuantity: 0 },
+        subscription: { status: 'incomplete', currentPeriodEnd: PERIOD_END.toISOString(), extraSeatQuantity: 0 },
         payment: { kind: 'confirm_payment', clientSecret: 'pi_123_secret_abc' },
       });
       expect(JSON.stringify(body)).not.toMatch(/cus_|sub_|si_/);

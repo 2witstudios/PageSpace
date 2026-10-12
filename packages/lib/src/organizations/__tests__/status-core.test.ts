@@ -11,49 +11,43 @@ import {
   type OrgSubscriptionState,
 } from '../status-core';
 
-const NOW = new Date('2026-09-27T12:00:00Z');
-const DAY = 24 * 60 * 60 * 1000;
-
 function sub(status: string, over: Partial<OrgSubscriptionState> = {}): OrgSubscriptionState {
-  return {
-    status,
-    trialEnd: null,
-    currentPeriodStart: new Date(NOW.getTime() - 10 * DAY),
-    currentPeriodEnd: new Date(NOW.getTime() + 20 * DAY),
-    cancelAtPeriodEnd: false,
-    ...over,
-  };
+  return { status, collectionMethod: 'charge_automatically', ...over };
 }
 
 describe('deriveOrgStatus', () => {
   it('SEAT-9 (partial) billing disabled (onprem, tenant) is always active, with or without a subscription row', () => {
-    expect(deriveOrgStatus({ billingEnabled: false, subscription: null, now: NOW })).toEqual({ status: 'active', reason: null });
-    expect(deriveOrgStatus({ billingEnabled: false, subscription: sub('canceled'), now: NOW })).toEqual({ status: 'active', reason: null });
+    expect(deriveOrgStatus({ billingEnabled: false, subscription: null })).toEqual({ status: 'active', reason: null });
+    expect(deriveOrgStatus({ billingEnabled: false, subscription: sub('canceled') })).toEqual({ status: 'active', reason: null });
   });
 
   it('SEAT-9 (partial) SEAT-8 (partial) D-OW-30 an org with no subscription row is lapsed from the moment it exists: there is no creation trial and no free org tier', () => {
     // Created just now and not yet paid (or Stripe was unreachable): nothing to spend until a payment lands.
-    expect(deriveOrgStatus({ billingEnabled: true, subscription: null, now: NOW })).toEqual({ status: 'lapsed', reason: 'no_subscription' });
-    expect(deriveOrgStatus({ billingEnabled: true, subscription: null, now: new Date(NOW.getTime() + 365 * DAY) })).toEqual({ status: 'lapsed', reason: 'no_subscription' });
+    expect(deriveOrgStatus({ billingEnabled: true, subscription: null })).toEqual({ status: 'lapsed', reason: 'no_subscription' });
   });
 
   it('SEAT-9 (partial) SEAT-8 (partial) D-OW-30 a new org whose first invoice is not paid yet (incomplete) is lapsed until the card is confirmed', () => {
-    expect(deriveOrgStatus({ billingEnabled: true, subscription: sub('incomplete'), now: NOW })).toEqual({ status: 'lapsed', reason: 'incomplete' });
+    expect(deriveOrgStatus({ billingEnabled: true, subscription: sub('incomplete') })).toEqual({ status: 'lapsed', reason: 'incomplete' });
   });
 
   it('SEAT-9 (partial) a subscription row decides alone: a new org whose trial Stripe already canceled is lapsed', () => {
-    expect(deriveOrgStatus({ billingEnabled: true, subscription: sub('canceled'), now: NOW })).toEqual({ status: 'lapsed', reason: 'canceled' });
+    expect(deriveOrgStatus({ billingEnabled: true, subscription: sub('canceled') })).toEqual({ status: 'lapsed', reason: 'canceled' });
   });
 
   it('SEAT-9 (partial) a failed payment lapses immediately while active remains usable', () => {
-    expect(deriveOrgStatus({ billingEnabled: true, subscription: sub('active'), now: NOW }).status).toBe('active');
-    expect(deriveOrgStatus({ billingEnabled: true, subscription: sub('past_due'), now: NOW })).toEqual({ status: 'lapsed', reason: 'payment_failed' });
+    expect(deriveOrgStatus({ billingEnabled: true, subscription: sub('active') }).status).toBe('active');
+    expect(deriveOrgStatus({ billingEnabled: true, subscription: sub('past_due') })).toEqual({ status: 'lapsed', reason: 'payment_failed' });
   });
 
-  it('SEAT-8 (partial) SEAT-9 (partial) a Stripe-side trial never grants organization capability, with any trial end', () => {
-    for (const trialEnd of [null, new Date(NOW.getTime() + DAY), NOW, new Date(NOW.getTime() - DAY)]) {
-      expect(deriveOrgStatus({ billingEnabled: true, subscription: sub('trialing', { trialEnd }), now: NOW })).toEqual({ status: 'lapsed', reason: 'trial_unsupported' });
+  it('SEAT-8 (partial) SEAT-9 (partial) a Stripe-side trial never grants organization capability', () => {
+    expect(deriveOrgStatus({ billingEnabled: true, subscription: sub('trialing') })).toEqual({ status: 'lapsed', reason: 'trial_unsupported' });
+  });
+
+  it('SEAT-9 (partial) D-OW-44: a subscription not charged automatically (send_invoice) never grants capability, whatever its status', () => {
+    for (const status of ['active', 'past_due', 'trialing', 'unpaid']) {
+      expect(deriveOrgStatus({ billingEnabled: true, subscription: sub(status, { collectionMethod: 'send_invoice' }) })).toEqual({ status: 'lapsed', reason: 'manual_collection' });
     }
+    expect(deriveOrgStatus({ billingEnabled: false, subscription: sub('active', { collectionMethod: 'send_invoice' }) })).toEqual({ status: 'active', reason: null });
   });
 
   it('SEAT-9 (partial) canceled, unpaid, incomplete_expired, paused and incomplete are lapsed with their reason', () => {
@@ -65,12 +59,12 @@ describe('deriveOrgStatus', () => {
       ['incomplete', 'incomplete'],
     ];
     for (const [status, reason] of cases) {
-      expect(deriveOrgStatus({ billingEnabled: true, subscription: sub(status), now: NOW })).toEqual({ status: 'lapsed', reason });
+      expect(deriveOrgStatus({ billingEnabled: true, subscription: sub(status) })).toEqual({ status: 'lapsed', reason });
     }
   });
 
   it('SEAT-9 (partial) an unrecognised Stripe status fails closed to lapsed', () => {
-    expect(deriveOrgStatus({ billingEnabled: true, subscription: sub('something_new'), now: NOW })).toEqual({ status: 'lapsed', reason: 'unknown_status' });
+    expect(deriveOrgStatus({ billingEnabled: true, subscription: sub('something_new') })).toEqual({ status: 'lapsed', reason: 'unknown_status' });
   });
 });
 
@@ -111,7 +105,7 @@ describe('orgBillingNotice', () => {
   });
 
   it('SEAT-6 (partial) SEAT-9 (partial) failed-payment details reach managers while members see only read-only', () => {
-    const result = deriveOrgStatus({ billingEnabled: true, subscription: sub('past_due'), now: NOW });
+    const result = deriveOrgStatus({ billingEnabled: true, subscription: sub('past_due') });
     for (const role of ['OWNER', 'ADMIN'] as const) {
       expect(orgBillingNotice({ result, role })).toEqual({ kind: 'reactivate', reason: 'payment_failed', canManageBilling: true });
     }

@@ -20,6 +20,7 @@ import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
 import { createOrganization } from '@pagespace/lib/organizations/repository';
 import { deleteOrganization } from '@pagespace/lib/organizations/deletion';
+import { checkOrgActive, getOrgStatus } from '@pagespace/lib/organizations/status';
 import { ORG_ID_METADATA_KEY, type OrgBusinessPrices } from '@pagespace/lib/billing/org-subscription-core';
 import {
   ensureOrgStripeCustomer,
@@ -124,7 +125,6 @@ describe('org Business subscription shell (real Postgres, in-memory Stripe)', ()
     const [sub] = [...stripe.subscriptions.values()];
     expect(org.stripeSubscriptionId).toBe(sub.id);
     expect(sub.status).toBe('incomplete');
-    expect(sub.trialEnd).toBeNull();
     expect(sub.items.map((i) => [i.priceId, i.quantity])).toEqual([
       [PRICES.basePriceId, 1],
       [PRICES.seatPriceId, 0],
@@ -141,7 +141,7 @@ describe('org Business subscription shell (real Postgres, in-memory Stripe)', ()
       extraSeatQuantity: 0,
       status: 'incomplete',
     });
-    expect(rows[0].trialEnd).toBeNull();
+    expect(rows[0].collectionMethod).toBe('charge_automatically');
   });
 
   it('A-8 an org created with 7 seats starts at extra-seat quantity 2', async () => {
@@ -228,6 +228,41 @@ describe('org Business subscription shell (real Postgres, in-memory Stripe)', ()
       await expect(provisionOrgSubscription(orgId, deps)).rejects.toMatchObject(requiresSupport);
       expect(stripe.writes).toEqual(before);
       expect((await rowsFor(orgId))[0].status).toBe(status);
+    });
+
+    it('SEAT-9 (partial) P2: after a send_invoice refusal the stored mirror lapses the org and its capabilities stay refused', async () => {
+      if (!dbAvailable) return;
+      const { orgId, deps, sub } = await paidNorthwind();
+      expect(await getOrgStatus(orgId)).toEqual({ status: 'active', reason: null });
+      sub.collectionMethod = 'send_invoice';
+      await expect(provisionOrgSubscription(orgId, deps)).rejects.toMatchObject(requiresSupport);
+      expect((await rowsFor(orgId))[0]).toMatchObject({ status: 'active', collectionMethod: 'send_invoice' });
+      expect(await getOrgStatus(orgId)).toEqual({ status: 'lapsed', reason: 'manual_collection' });
+      expect(await checkOrgActive(orgId)).toMatchObject({ ok: false, code: 'org_lapsed' });
+    });
+
+    it('P1 zero trust on metadata: a live stored subscription whose org stamp was removed is refused for support, never bought again', async () => {
+      if (!dbAvailable) return;
+      const { orgId, deps, stripe, sub, writes } = await paidNorthwind();
+      stripe.openRenewalInvoice(sub.id, 'past_due');
+      sub.metadata = {};
+      const before = writes();
+      await expect(provisionOrgSubscription(orgId, deps)).rejects.toMatchObject(requiresSupport);
+      expect(stripe.writes).toEqual(before);
+      expect(stripe.liveSubscriptions(sub.customerId)).toHaveLength(1);
+    });
+
+    it('P1 zero trust on metadata: an unstamped live subscription made by hand on the org customer is refused for support, never bought around', async () => {
+      if (!dbAvailable) return;
+      const { orgId, deps, stripe, sub, writes } = await paidNorthwind();
+      stripe.subscriptions.set(`${sub.id}_manual`, { ...structuredClone(sub), id: `${sub.id}_manual`, created: sub.created + 1, metadata: null });
+      for (const storedEnded of [false, true]) {
+        // Even with the stored subscription ended, the hand-made one still blocks a new checkout.
+        if (storedEnded) stripe.endSubscription(sub.id);
+        const before = writes();
+        await expect(provisionOrgSubscription(orgId, deps)).rejects.toMatchObject(requiresSupport);
+        expect(stripe.writes).toEqual(before);
+      }
     });
 
     it('a second live subscription stamped with the org is refused for support; nothing is bought or canceled', async () => {
@@ -423,7 +458,6 @@ describe('org Business subscription shell (real Postgres, in-memory Stripe)', ()
     expect(again.linkage.stripeSubscriptionId).not.toBe(first.linkage.stripeSubscriptionId);
     const fresh = stripe.subscriptions.get(again.linkage.stripeSubscriptionId);
     expect(fresh?.status).toBe('incomplete');
-    expect(fresh?.trialEnd).toBeNull();
     const rows = await rowsFor(orgId);
     expect(rows).toHaveLength(1);
     expect(rows[0].stripeSubscriptionId).toBe(again.linkage.stripeSubscriptionId);
@@ -488,7 +522,7 @@ describe('org Business subscription shell (real Postgres, in-memory Stripe)', ()
     const [sub] = [...stripe.subscriptions.values()];
     expect(start).toEqual({
       state: 'payment_required',
-      subscription: { status: 'incomplete', trialEnd: null, currentPeriodEnd: expect.any(String), extraSeatQuantity: 0 },
+      subscription: { status: 'incomplete', currentPeriodEnd: expect.any(String), extraSeatQuantity: 0 },
       payment: { kind: 'confirm_payment', clientSecret: stripe.invoiceFor(sub.id)?.clientSecret },
     });
     expect(JSON.stringify(start)).not.toMatch(/cus_|sub_|si_|in_/);
@@ -716,7 +750,7 @@ describe('org Business subscription shell (real Postgres, in-memory Stripe)', ()
       const again = await ensureOrgBusinessSubscription(orgId, deps);
       expect(again.kind).toBe('created');
       expect(again.linkage.stripeSubscriptionId).not.toBe(first.linkage.stripeSubscriptionId);
-      expect(stripe.subscriptions.get(again.linkage.stripeSubscriptionId)?.trialEnd).toBeNull();
+      expect(stripe.subscriptions.get(again.linkage.stripeSubscriptionId)?.status).toBe('incomplete');
     });
 
     it('SEAT-1 a stored subscription still live in Stripe has its mirrored status refreshed (incomplete → active)', async () => {
@@ -741,7 +775,7 @@ describe('org Business subscription shell (real Postgres, in-memory Stripe)', ()
 
       const retry = await ensureOrgBusinessSubscription(orgId, deps);
       expect(retry.linkage.stripeSubscriptionId).not.toBe(lost.id);
-      expect(stripe.subscriptions.get(retry.linkage.stripeSubscriptionId)?.trialEnd).toBeNull();
+      expect(stripe.subscriptions.get(retry.linkage.stripeSubscriptionId)?.status).toBe('incomplete');
     });
 
     it('A-8 (P2-2) the seat count is taken under the billing lock: two concurrent changes end at the LATER count', async () => {

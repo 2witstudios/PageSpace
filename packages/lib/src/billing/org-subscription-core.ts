@@ -62,7 +62,6 @@ export type OrgStripeOperation =
   | 'customer.update'
   | 'subscription.create'
   | 'subscription.cancel'
-  | 'seat-item.create'
   | 'seat-quantity.update';
 
 function stableJson(value: unknown): string {
@@ -264,6 +263,7 @@ export interface OrgSubscriptionFacts extends OrgSubscriptionCandidate {
 /** Why a reactivation is refused for support: each is a state PageSpace never creates. */
 export type OrgReactivationSupportReason =
   | 'multiple_live_subscriptions'
+  | 'unrecognized_subscription'
   | 'unrecognized_price'
   | 'manual_collection'
   | 'trialing'
@@ -287,17 +287,22 @@ const newestFirst = (a: OrgSubscriptionCandidate, b: OrgSubscriptionCandidate): 
  * [D-OW-44] SEAT-8 / SEAT-9: what (re)activating the org's Business subscription may do, from
  * Stripe's current facts alone. Reactivation only repairs states PageSpace itself creates:
  *
- *   - no live subscription stamped with the org (none ever, or every one ended) →
+ *   - no live subscription on the org's customer (none ever, or every one ended) →
  *     `new_checkout`, the one write the shell may make, keyed on the newest ended generation;
- *   - exactly one, with the configured plan items and automatic collection:
+ *   - exactly one, stamped with this org, with the configured plan items and automatic collection:
  *       active → `already_active`; incomplete / past_due / unpaid whose latest invoice is open,
  *       owes something and carries a confirmation secret → `confirm_payment`;
- *   - everything else → `requires_support`: a second live subscription, an unrecognized price
+ *   - everything else → `requires_support`: a second live subscription, one not stamped with
+ *     this org (zero trust on metadata: a removed stamp never makes a live subscription
+ *     disappear, so it can never lead to buying a second), an unrecognized price
  *     identity, send_invoice collection, a Stripe-side trial or pause, a payment owed on an
  *     invoice the client cannot pay (void, uncollectible, paid, draft, missing, no secret),
  *     or a status this code does not know.
  *
- * `adopted` says the subscription is not the stored one: a create whose row was lost.
+ * `subscriptions` is EVERY subscription on the org's own Stripe customer, plus the stored one
+ * if Stripe's listing lacks it: the customer holds only org subscriptions, so nothing on it is
+ * filtered out by metadata. `adopted` says the subscription is not the stored one: a create
+ * whose row was lost.
  * Pure and deterministic: the order Stripe lists subscriptions in never matters.
  */
 export function planOrgReactivation<S extends OrgSubscriptionFacts>(input: {
@@ -306,15 +311,15 @@ export function planOrgReactivation<S extends OrgSubscriptionFacts>(input: {
   storedSubscriptionId: string | null;
   subscriptions: ReadonlyArray<S>;
 }): OrgReactivationPlan<S> {
-  const mine = input.subscriptions.filter((s) => s.metadata?.[ORG_ID_METADATA_KEY] === input.orgId);
-  const live = mine.filter((s) => isLiveOrgSubscriptionStatus(s.status));
+  const live = input.subscriptions.filter((s) => isLiveOrgSubscriptionStatus(s.status));
   if (live.length === 0) {
-    const [newest] = [...mine].sort(newestFirst);
+    const [newest] = [...input.subscriptions].sort(newestFirst);
     return { kind: 'new_checkout', previousSubscriptionId: newest?.id ?? input.storedSubscriptionId };
   }
   if (live.length > 1) return { kind: 'requires_support', reason: 'multiple_live_subscriptions' };
 
   const [subscription] = live;
+  if (subscription.metadata?.[ORG_ID_METADATA_KEY] !== input.orgId) return { kind: 'requires_support', reason: 'unrecognized_subscription' };
   const items = orgSubscriptionItems(subscription, input.prices);
   if (!items) return { kind: 'requires_support', reason: 'unrecognized_price' };
   if (subscription.collectionMethod !== 'charge_automatically') return { kind: 'requires_support', reason: 'manual_collection' };

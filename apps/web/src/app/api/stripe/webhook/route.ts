@@ -279,8 +279,8 @@ export async function POST(request: NextRequest) {
             });
             break;
           }
-          // An org's failed payment mirrors its subscription (past_due keeps the org
-          // working and tells Owner and Admins; Stripe's dunning decides the lapse).
+          // An org's failed payment mirrors its subscription: past_due lapses the org at
+          // once (SEAT-9) and Owner and Admins see the reactivate banner.
           if (await withFundingRetry(event.id, () => routeOrgInvoicePaymentFailed(invoice, event.id))) break;
           await handlePaymentFailed(invoice);
           break;

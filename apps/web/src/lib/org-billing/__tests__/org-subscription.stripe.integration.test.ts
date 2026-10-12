@@ -149,7 +149,7 @@ describe.skipIf(!TEST_KEY)('org Business subscription against the Stripe TEST AP
     expect(payment.kind).toBe('confirm_payment');
 
     const [row] = await db.select().from(orgSubscriptions).where(eq(orgSubscriptions.orgId, orgId));
-    expect(row).toMatchObject({ stripeSubscriptionId: sub.id, status: 'incomplete', extraSeatQuantity: 0, trialEnd: null });
+    expect(row).toMatchObject({ stripeSubscriptionId: sub.id, status: 'incomplete', extraSeatQuantity: 0, collectionMethod: 'charge_automatically' });
     expect(row.stripeBaseItemId).toBe(sub.items.data[0].id);
     expect(row.stripeSeatItemId).toBe(sub.items.data[1].id);
     const [org] = await db.select().from(organizations).where(eq(organizations.id, orgId));

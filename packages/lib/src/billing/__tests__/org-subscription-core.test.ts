@@ -241,18 +241,12 @@ describe('planOrgReactivation — D-OW-44: reactivation only repairs states Page
       const subs = [
         facts({ id: 'sub_old', status: 'canceled', created: 100 }),
         facts({ id: 'sub_new', status, created: 200 }),
-        facts({ id: 'sub_other_org', created: 300, metadata: { [ORG_ID_METADATA_KEY]: 'org_other' } }),
       ];
       expect(plan(subs, 'sub_old')).toEqual({ kind: 'new_checkout', previousSubscriptionId: 'sub_new' });
     });
 
     it('a stored subscription Stripe no longer lists still names the previous generation', () => {
       expect(plan([], 'sub_stored')).toEqual({ kind: 'new_checkout', previousSubscriptionId: 'sub_stored' });
-    });
-
-    it('a live subscription stamped with another org, or not stamped at all, is not this org\'s and does not block checkout', () => {
-      const subs = [facts({ id: 'sub_x', metadata: { [ORG_ID_METADATA_KEY]: 'org_other' } }), facts({ id: 'sub_y', metadata: null })];
-      expect(plan(subs, null)).toEqual({ kind: 'new_checkout', previousSubscriptionId: null });
     });
   });
 
@@ -289,6 +283,26 @@ describe('planOrgReactivation — D-OW-44: reactivation only repairs states Page
         expect(plan([facts({ items })])).toEqual(support('unrecognized_price'));
       }
       expect(plan([facts({ itemsHasMore: true })])).toEqual(support('unrecognized_price'));
+    });
+
+    it('zero trust on metadata: a live subscription on the org customer that is not stamped with this org (stamp removed, another org\'s stamp, made by hand) needs support, never a second checkout', () => {
+      const stamps: Array<Record<string, string> | null> = [null, {}, { [ORG_ID_METADATA_KEY]: 'org_other' }];
+      for (const metadata of stamps) {
+        expect(plan([facts({ status: 'past_due', latestInvoice: payable, metadata })])).toEqual(support('unrecognized_subscription'));
+        expect(plan([facts({ metadata })], null)).toEqual(support('unrecognized_subscription'));
+      }
+    });
+
+    it('zero trust on metadata: the stamped subscription plus any other live one on the customer, stamped or not, needs support', () => {
+      for (const metadata of [null, { [ORG_ID_METADATA_KEY]: 'org_other' }]) {
+        const subs = [facts(), facts({ id: 'sub_extra', created: 200, metadata })];
+        expect(plan(subs)).toEqual(support('multiple_live_subscriptions'));
+      }
+    });
+
+    it('ended subscriptions on the customer, stamped or not, never block checkout and name the previous generation', () => {
+      const subs = [facts({ id: 'sub_unstamped', status: 'canceled', created: 300, metadata: null }), facts({ id: 'sub_old', status: 'canceled', created: 100 })];
+      expect(plan(subs, null)).toEqual({ kind: 'new_checkout', previousSubscriptionId: 'sub_unstamped' });
     });
 
     it('a second live subscription stamped with the org needs support, whatever their statuses, and nothing is bought', () => {

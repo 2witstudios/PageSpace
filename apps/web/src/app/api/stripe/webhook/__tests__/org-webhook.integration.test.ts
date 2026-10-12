@@ -31,7 +31,7 @@ import { stripeEvents, subscriptions } from '@pagespace/db/schema/subscriptions'
 import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
 import { createOrganization } from '@pagespace/lib/organizations/repository';
-import { getOrgStatus } from '@pagespace/lib/organizations/status';
+import { checkOrgActive, getOrgStatus } from '@pagespace/lib/organizations/status';
 import { ORG_ID_METADATA_KEY, ORG_SUBSCRIPTION_KIND, type OrgBusinessPrices } from '@pagespace/lib/billing/org-subscription-core';
 import { orgPoolListPriceGrantCents, orgPoolRefillGrant } from '@pagespace/lib/billing/wallet-funding';
 import { centsFromDollars, tierListPriceCents } from '@pagespace/lib/billing/money-model';
@@ -202,11 +202,10 @@ async function seedDriveWallet(orgId: string, poolId: string, topupCents: number
   });
 }
 
-function setStripeStatus(org: Org, status: string, extra: Partial<{ trialEnd: number | null }> = {}): void {
+function setStripeStatus(org: Org, status: string): void {
   const sub = org.stripe.subscriptions.get(org.subscriptionId);
   if (!sub) throw new Error('no fake subscription');
   sub.status = status;
-  if ('trialEnd' in extra) sub.trialEnd = extra.trialEnd ?? null;
 }
 
 /**
@@ -751,6 +750,25 @@ describe('Stripe webhook — org routing, idempotency, lapse (real Postgres, in-
     const staleSnapshot = { id: org.subscriptionId, object: 'subscription', customer: org.customerId, status: 'past_due', metadata: orgMetadata(org.orgId) };
     expect(await deliver(eventPayload('customer.subscription.updated', staleSnapshot))).toBe(200);
     expect((await storedSub(org.orgId)).status).toBe('active');
+    expect((await getOrgStatus(org.orgId)).status).toBe('active');
+  });
+
+  it('SEAT-9 (partial) D-OW-44: an active subscription switched to send_invoice lapses the org through the webhook, and switching back restores it', async () => {
+    if (!dbAvailable) return;
+    const org = await northwind(7);
+    const snapshot = { id: org.subscriptionId, object: 'subscription', customer: org.customerId, metadata: orgMetadata(org.orgId), status: 'active' };
+    setStripeStatus(org, 'active');
+    expect(await deliver(eventPayload('customer.subscription.updated', snapshot))).toBe(200);
+    expect((await getOrgStatus(org.orgId)).status).toBe('active');
+
+    org.stripe.subscriptions.get(org.subscriptionId)!.collectionMethod = 'send_invoice';
+    expect(await deliver(eventPayload('customer.subscription.updated', snapshot))).toBe(200);
+    expect((await storedSub(org.orgId)).collectionMethod).toBe('send_invoice');
+    expect(await getOrgStatus(org.orgId)).toEqual({ status: 'lapsed', reason: 'manual_collection' });
+    expect(await checkOrgActive(org.orgId)).toMatchObject({ ok: false, code: 'org_lapsed' });
+
+    org.stripe.subscriptions.get(org.subscriptionId)!.collectionMethod = 'charge_automatically';
+    expect(await deliver(eventPayload('customer.subscription.updated', snapshot))).toBe(200);
     expect((await getOrgStatus(org.orgId)).status).toBe('active');
   });
 

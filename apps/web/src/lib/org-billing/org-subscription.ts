@@ -93,7 +93,6 @@ export interface OrgStripeSubscription extends OrgSubscriptionCandidate {
   customerId: string;
   /** Stripe collection_method: charge_automatically | send_invoice. */
   collectionMethod: string;
-  trialEnd: number | null;
   currentPeriodStart: number | null;
   currentPeriodEnd: number | null;
   cancelAtPeriodEnd: boolean;
@@ -124,10 +123,6 @@ export interface OrgBillingStripe {
   createSubscription(params: OrgBusinessSubscriptionParams, idempotencyKey: string): Promise<OrgStripeSubscription>;
   retrieveSubscription(subscriptionId: string): Promise<OrgStripeSubscription>;
   listCustomerSubscriptions(customerId: string): Promise<OrgStripeSubscription[]>;
-  createSubscriptionItem(
-    params: { subscriptionId: string; priceId: string; quantity: number },
-    idempotencyKey: string,
-  ): Promise<{ id: string; quantity: number }>;
   updateSubscriptionItemQuantity(
     params: { itemId: string; quantity: number; prorationBehavior: SeatProrationBehavior },
     idempotencyKey: string,
@@ -178,7 +173,6 @@ export interface OrgSubscriptionLinkage {
   stripeSeatItemId: string;
   extraSeatQuantity: number;
   status: string;
-  trialEnd: Date | null;
   currentPeriodEnd: Date | null;
 }
 
@@ -220,7 +214,6 @@ function toLinkage(row: OrgSubscription, stripeCustomerId: string): OrgSubscript
     stripeSeatItemId: row.stripeSeatItemId,
     extraSeatQuantity: row.extraSeatQuantity,
     status: row.status,
-    trialEnd: row.trialEnd,
     currentPeriodEnd: row.currentPeriodEnd,
   };
 }
@@ -282,7 +275,7 @@ async function storeSubscription(
     extraSeatQuantity: items.seatItem.quantity,
     status: sub.status,
     gifted: sub.metadata?.type === 'gift_subscription',
-    trialEnd: fromUnix(sub.trialEnd),
+    collectionMethod: sub.collectionMethod,
     currentPeriodStart: fromUnix(sub.currentPeriodStart),
     currentPeriodEnd: fromUnix(sub.currentPeriodEnd),
     cancelAtPeriodEnd: sub.cancelAtPeriodEnd,
@@ -303,7 +296,7 @@ async function refreshStored(tx: Tx, stored: OrgSubscription, sub: OrgStripeSubs
     .set({
       ...planOrgSubscriptionPriceMirror({ stored, subscription: sub, prices }),
       gifted: sub.metadata?.type === 'gift_subscription',
-      trialEnd: fromUnix(sub.trialEnd),
+      collectionMethod: sub.collectionMethod,
       currentPeriodStart: fromUnix(sub.currentPeriodStart),
       currentPeriodEnd: fromUnix(sub.currentPeriodEnd),
       cancelAtPeriodEnd: sub.cancelAtPeriodEnd,
@@ -314,23 +307,34 @@ async function refreshStored(tx: Tx, stored: OrgSubscription, sub: OrgStripeSubs
 }
 
 /**
- * Stripe's facts for the reactivation decision: every subscription on the org's customer,
- * each one stamped with the org that may owe a payment carrying its latest invoice.
+ * Stripe's facts for the reactivation decision, each subscription that may owe a payment
+ * carrying its latest invoice.
  */
 async function readSubscriptionFacts(
   stripe: OrgBillingStripe,
-  orgId: string,
   subscriptions: ReadonlyArray<OrgStripeSubscription>,
 ): Promise<OrgStripeSubscriptionFacts[]> {
   return Promise.all(
     subscriptions.map(async (sub) => ({
       ...sub,
-      latestInvoice:
-        sub.metadata?.[ORG_ID_METADATA_KEY] === orgId && orgSubscriptionMayOwePayment(sub.status)
-          ? await stripe.latestInvoice(sub.id)
-          : null,
+      latestInvoice: orgSubscriptionMayOwePayment(sub.status) ? await stripe.latestInvoice(sub.id) : null,
     })),
   );
+}
+
+/**
+ * Zero trust on metadata: EVERY subscription on the org's own customer (it holds only org
+ * subscriptions), plus the stored one if Stripe's listing lacks it, so neither a removed
+ * stamp nor a subscription made by hand can hide a live subscription from the decision.
+ */
+async function listOrgSubscriptions(
+  stripe: OrgBillingStripe,
+  customerId: string,
+  storedSubscriptionId: string | null,
+): Promise<OrgStripeSubscription[]> {
+  const listed = await stripe.listCustomerSubscriptions(customerId);
+  if (storedSubscriptionId === null || listed.some((sub) => sub.id === storedSubscriptionId)) return listed;
+  return [...listed, await stripe.retrieveSubscription(storedSubscriptionId)];
 }
 
 type ProvisionOutcome =
@@ -366,17 +370,17 @@ export async function provisionOrgSubscription(
     if (!org) throw new OrgBillingError('org_not_found', `Organization ${orgId} not found`);
 
     const [stored] = await tx.select().from(orgSubscriptions).where(eq(orgSubscriptions.orgId, orgId)).limit(1);
-    const subscriptions = await readSubscriptionFacts(deps.stripe, orgId, await deps.stripe.listCustomerSubscriptions(customerId));
-    const storedNow = stored ? subscriptions.find((sub) => sub.id === stored.stripeSubscriptionId) : undefined;
-    const refreshed = stored && storedNow ? await refreshStored(tx, stored, storedNow, prices) : stored;
     const storedSubscriptionId = stored?.stripeSubscriptionId ?? null;
+    const subscriptions = await readSubscriptionFacts(deps.stripe, await listOrgSubscriptions(deps.stripe, customerId, storedSubscriptionId));
+    const storedNow = subscriptions.find((sub) => sub.id === storedSubscriptionId);
+    const refreshed = stored && storedNow ? await refreshStored(tx, stored, storedNow, prices) : stored;
 
     let plan = planOrgReactivation({ orgId, prices, storedSubscriptionId, subscriptions });
     let created = false;
     if (plan.kind === 'new_checkout') {
       const params = orgBusinessSubscriptionParams({ orgId, customerId, seats: await deps.countSeats(orgId), prices });
       const sub = await deps.stripe.createSubscription(params, orgSubscriptionCreateKey(orgId, params, plan.previousSubscriptionId));
-      const [createdFacts] = await readSubscriptionFacts(deps.stripe, orgId, [sub]);
+      const [createdFacts] = await readSubscriptionFacts(deps.stripe, [sub]);
       plan = planOrgReactivation({
         orgId,
         prices,
@@ -527,7 +531,6 @@ function toOrgStripeSubscription(sub: Stripe.Subscription): OrgStripeSubscriptio
     metadata: sub.metadata ?? null,
     itemsHasMore: sub.items.has_more,
     items: items.map((i) => ({ id: i.id, priceId: i.price.id, quantity: i.quantity ?? 0 })),
-    trialEnd: sub.trial_end ?? null,
     currentPeriodStart: periodItem?.current_period_start ?? null,
     currentPeriodEnd: periodItem?.current_period_end ?? null,
     cancelAtPeriodEnd: sub.cancel_at_period_end,
@@ -578,13 +581,6 @@ export function stripeOrgBilling(client: Stripe): OrgBillingStripe {
         subs.push(toOrgStripeSubscription(sub));
       }
       return subs;
-    },
-    async createSubscriptionItem(params, idempotencyKey) {
-      const item = await client.subscriptionItems.create(
-        { subscription: params.subscriptionId, price: params.priceId, quantity: params.quantity, proration_behavior: 'none' },
-        { idempotencyKey },
-      );
-      return { id: item.id, quantity: item.quantity ?? 0 };
     },
     async cancelSubscription(subscriptionId, idempotencyKey) {
       const current = await client.subscriptions.retrieve(subscriptionId);
@@ -644,7 +640,6 @@ export function defaultOrgBillingDeps(): OrgBillingDeps {
 /** What a route may show about the org's subscription: never a Stripe id. */
 export interface OrgSubscriptionSummary {
   status: string;
-  trialEnd: string | null;
   currentPeriodEnd: string | null;
   extraSeatQuantity: number;
 }
@@ -652,7 +647,6 @@ export interface OrgSubscriptionSummary {
 export function orgSubscriptionSummary(linkage: OrgSubscriptionLinkage): OrgSubscriptionSummary {
   return {
     status: linkage.status,
-    trialEnd: linkage.trialEnd?.toISOString() ?? null,
     currentPeriodEnd: linkage.currentPeriodEnd?.toISOString() ?? null,
     extraSeatQuantity: linkage.extraSeatQuantity,
   };

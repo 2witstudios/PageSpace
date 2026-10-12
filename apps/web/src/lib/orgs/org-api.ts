@@ -35,7 +35,6 @@ export interface OrgDetail {
 
 export interface OrgSubscriptionSummary {
   status: string;
-  trialEnd: string | null;
   currentPeriodEnd: string | null;
   extraSeatQuantity: number;
 }
