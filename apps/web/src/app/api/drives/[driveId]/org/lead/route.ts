@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { ORGS_ENABLED } from '@pagespace/lib/organizations/orgs-enabled';
 import { changeOrgDriveLead } from '@pagespace/lib/services/org-drive-service';
 import { orgDriveServiceDeps } from '@pagespace/lib/services/org-drive-service-deps';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
@@ -8,7 +7,7 @@ import { recordOrgPowerDriveAction } from '@pagespace/lib/permissions/drive-rela
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateOrgRequest, refuseDriveCredential, ORG_TOKEN_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
 import { safeParseBody } from '@/lib/validation/parse-body';
 
 /**
@@ -18,10 +17,9 @@ import { safeParseBody } from '@/lib/validation/parse-body';
  * lead's OWNER row move together in one transaction; each person keeps only their own membership,
  * and both are told in realtime.
  *
- * Session only: CLI and MCP parity is Wave G (X-1). Dark while ORGS_ENABLED is false.
+ * A session or an unscoped MCP key (X-1: `drives.setOrgLead`); the org's sign-in policy applies to the
+ * credential. Authority is the service's, through requireOrgRole (ORG-5). Dark while ORGS_ENABLED is false.
  */
-
-const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
 const leadSchema = z.object({
   userId: z.string().min(1),
@@ -30,11 +28,11 @@ const leadSchema = z.object({
 type RouteContext = { params: Promise<{ driveId: string }> };
 
 export async function PUT(request: Request, context: RouteContext) {
-  if (!ORGS_ENABLED) return NextResponse.json({ error: 'Not found' }, { status: 404 });
-
   const { driveId } = await context.params;
-  const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
-  if (isAuthError(auth)) return auth.error;
+  const auth = await authenticateOrgRequest(request, ORG_TOKEN_WRITE_AUTH);
+  if (!auth.ok) return auth.response;
+  const refused = await refuseDriveCredential(request, auth, driveId);
+  if (refused) return refused;
 
   const parsed = await safeParseBody(request, leadSchema);
   if (!parsed.success) return parsed.response;

@@ -3,7 +3,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
 import { confirmDomainProofEmail } from '@pagespace/lib/organizations/domains';
-import { authenticateOrgRequest, ORG_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
+import { authenticateOrgRequest, ORG_TOKEN_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
 import { domainProofConfirmSchema } from '@/lib/orgs/org-schemas';
 
 const CONFIRM_ERRORS = {
@@ -19,7 +19,7 @@ const CONFIRM_ERRORS = {
  * that account is who the audit row names. Not an org member route: the confirmer is often IT, not a member.
  */
 export async function POST(request: Request) {
-  const gate = await authenticateOrgRequest(request, ORG_WRITE_AUTH);
+  const gate = await authenticateOrgRequest(request, ORG_TOKEN_WRITE_AUTH);
   if (!gate.ok) return gate.response;
   try {
     const limit = await checkDistributedRateLimit(`org_domain_confirm:${gate.userId}`, DISTRIBUTED_RATE_LIMITS.MAGIC_LINK);

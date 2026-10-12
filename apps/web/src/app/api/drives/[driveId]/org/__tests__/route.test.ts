@@ -4,6 +4,11 @@ import type { SessionAuthResult } from '@/lib/auth';
 
 const { orgsFlag } = vi.hoisted(() => ({ orgsFlag: { enabled: true } }));
 
+// The org sign-in policy (SEC-2/3) has its own suites; here every credential meets it.
+vi.mock('@pagespace/lib/organizations/authentication-policy', () => ({
+  checkOrgAuthentication: vi.fn(async () => ({ allowed: true })),
+  drivePolicyOrgId: vi.fn(async () => null),
+}));
 vi.mock('@pagespace/lib/organizations/orgs-enabled', () => ({
   get ORGS_ENABLED() {
     return orgsFlag.enabled;
@@ -185,12 +190,12 @@ describe('/api/drives/[driveId]/org', () => {
       expect(moveDriveToOrg).not.toHaveBeenCalled();
     });
 
-    it('is session-only with CSRF', async () => {
+    it('X-1 (partial) admits a session (with CSRF) or an MCP key', async () => {
       vi.mocked(moveDriveToOrg).mockResolvedValue({ ok: false, code: 'NOT_DRIVE_OWNER', status: 403, message: 'no' });
 
       await PUT(request('PUT', { orgId: NORTHWIND }), context);
 
-      expect(authenticateRequestWithOptions).toHaveBeenCalledWith(expect.any(Request), { allow: ['session'], requireCSRF: true });
+      expect(authenticateRequestWithOptions).toHaveBeenCalledWith(expect.any(Request), { allow: ['session', 'mcp'], requireCSRF: true });
     });
   });
 

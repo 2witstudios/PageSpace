@@ -27,6 +27,9 @@ export const GENERIC_API_ERROR_CODES = [
   'no_billing_customer',
   'billing_provider_unreachable',
   'email_verification_required',
+  // SEC-2/3: the credential does not meet the org's sign-in policy (authentication-policy-core)
+  'org_strong_sign_in_required',
+  'org_reauthentication_required',
 ] as const;
 
 /** Organization, membership, ownership, invitation, domain and guest-approval codes. */

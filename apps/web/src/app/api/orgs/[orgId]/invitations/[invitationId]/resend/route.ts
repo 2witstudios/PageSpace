@@ -3,7 +3,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
 import { resendInvitation } from '@pagespace/lib/organizations/invitations';
-import { authorizeOrgRequest, ORG_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
+import { authorizeOrgRequest, ORG_TOKEN_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
 import { deliverOrgInvite } from '@/lib/orgs/org-invite-delivery';
 import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
 import { orgRefusalResponse } from '@/lib/orgs/org-refusal-response';
@@ -22,7 +22,7 @@ export async function POST(
 ) {
   const { orgId, invitationId } = await context.params;
   // Any member reaches the service: who may invite (and so resend) is the org's policy (POL-5), decided there.
-  const gate = await authorizeOrgRequest(request, orgId, 'MEMBER', ORG_WRITE_AUTH);
+  const gate = await authorizeOrgRequest(request, orgId, 'MEMBER', ORG_TOKEN_WRITE_AUTH);
   if (!gate.ok) return gate.response;
   try {
     const limit = await checkDistributedRateLimit(

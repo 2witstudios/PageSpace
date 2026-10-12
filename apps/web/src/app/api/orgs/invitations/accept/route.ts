@@ -3,7 +3,7 @@ import { announceOrgChange } from '@pagespace/lib/organizations/org-change-event
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { acceptInvitation } from '@pagespace/lib/organizations/invitations';
-import { authenticateOrgRequest, ORG_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
+import { authenticateOrgRequest, ORG_TOKEN_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
 import { inviteAcceptSchema } from '@/lib/orgs/org-schemas';
 import { ORG_LAPSED_MESSAGE } from '@pagespace/lib/organizations/status-core';
 
@@ -23,7 +23,7 @@ const REFUSALS = {
  * an account created from the email link and for an existing account.
  */
 export async function POST(request: Request) {
-  const gate = await authenticateOrgRequest(request, ORG_WRITE_AUTH);
+  const gate = await authenticateOrgRequest(request, ORG_TOKEN_WRITE_AUTH);
   if (!gate.ok) return gate.response;
   try {
     const parsed = inviteAcceptSchema.safeParse(await request.json().catch(() => null));

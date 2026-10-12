@@ -10,7 +10,7 @@ import { NextResponse } from 'next/server';
 vi.mock('@pagespace/lib/services/drive-wallet-service', () => ({ setSeatCap: vi.fn() }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({ loggers: { api: { error: vi.fn() } } }));
-vi.mock('@/lib/orgs/org-route-auth', () => ({ authorizeOrgRequest: vi.fn(), ORG_WRITE_AUTH: { allow: ['session'], requireCSRF: true } }));
+vi.mock('@/lib/orgs/org-route-auth', () => ({ authorizeOrgRequest: vi.fn(), ORG_MONEY_WRITE_AUTH: { allow: ['session', 'mcp'], requireCSRF: true, delegatedCredentials: 'refuse_money_move' } }));
 
 import { PUT, DELETE } from '../route';
 import { setSeatCap } from '@pagespace/lib/services/drive-wallet-service';
@@ -24,7 +24,7 @@ const req = (method: string, body?: unknown) => new Request('https://example.com
 describe('/api/orgs/[orgId]/members/[userId]/seat-cap', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(authorizeOrgRequest).mockResolvedValue({ ok: true, userId: 'u-ana', role: 'ADMIN', allowedDriveIds: [] });
+    vi.mocked(authorizeOrgRequest).mockResolvedValue({ ok: true, userId: 'u-ana', role: 'ADMIN', allowedDriveIds: [], authentication: null });
   });
 
   it('WAL-7 (partial) an Admin\'s PUT reaches the service with the windows; DELETE clears', async () => {

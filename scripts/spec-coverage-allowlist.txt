@@ -82,9 +82,6 @@ ORG-3
 # resolvers, and audit it on a PRIVATE drive through the same deduped event (accessiblePageIds, loadPagePayload;
 # "ORG-4 (partial)" in org-admin-access-audit.integration). Other ORG-4 clauses were not re-verified there.
 ORG-4
-# ORG-5 (one shared org permission function used by web routes, CLI, and MCP): B3 routes all go
-# through requireOrgRole, titled "ORG-5 (partial)"; CLI and MCP use it in Wave G (X-1).
-ORG-5
 # POL-1 (policies stored once per org and read through one function, no route reads the org row directly; a
 # change applies immediately; anything newly forbidden is suspended, not deleted, and listed in the audit log)
 # re-added per Review 3+4 (page v3pbwr7hy45eu1t2w6qbxm3e, P2-7 "removed but not proven"). ow-policy-integrity:

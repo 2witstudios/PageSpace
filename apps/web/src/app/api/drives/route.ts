@@ -13,6 +13,7 @@ import { drives as drivesTable, ORG_DRIVE_VISIBILITIES } from '@pagespace/db/sch
 import { ORGS_ENABLED } from '@pagespace/lib/organizations/orgs-enabled';
 import { createOrgDrive } from '@pagespace/lib/services/org-drive-service';
 import { orgDriveServiceDeps } from '@pagespace/lib/services/org-drive-service-deps';
+import { refuseOrgCredential } from '@/lib/orgs/org-route-auth';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -197,12 +198,16 @@ export async function POST(request: Request) {
   if (orgId !== undefined && !ORGS_ENABLED) {
     return NextResponse.json({ error: 'Not found' }, { status: 404 });
   }
-  // Creating in an org is session-only, like the org move routes; CLI and MCP parity is Wave G.
-  if (orgId !== undefined && auth.tokenType !== 'session') {
-    return NextResponse.json(
-      { error: 'Creating a drive in an organization requires a signed-in session; tokens cannot do this yet.' },
-      { status: 403 }
+  // Creating in an org (DRV-3) admits an unscoped MCP key like the drive-org routes (X-1: `drives.create`
+  // with orgId; checkMCPCreateScope above already refused a scoped key). The target org's sign-in policy
+  // applies to the credential, asked only of a member of it; createOrgDrive authorizes through requireOrgRole.
+  if (orgId !== undefined) {
+    const refused = await refuseOrgCredential(
+      request,
+      { ok: true, userId, allowedDriveIds: [], authentication: auth.authentication ?? null },
+      orgId,
     );
+    if (refused) return refused;
   }
 
   try {

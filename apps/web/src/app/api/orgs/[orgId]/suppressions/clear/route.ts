@@ -3,7 +3,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
 import { clearDepartureSuppression } from '@pagespace/lib/organizations/departure-suppression';
-import { authorizeOrgRequest, ORG_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
+import { authorizeOrgRequest, ORG_TOKEN_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
 import { suppressionClearSchema } from '@/lib/orgs/org-schemas';
 
 type Context = { params: Promise<{ orgId: string }> };
@@ -16,7 +16,7 @@ type Context = { params: Promise<{ orgId: string }> };
  */
 export async function POST(request: Request, context: Context) {
   const { orgId } = await context.params;
-  const gate = await authorizeOrgRequest(request, orgId, 'ADMIN', ORG_WRITE_AUTH);
+  const gate = await authorizeOrgRequest(request, orgId, 'ADMIN', ORG_TOKEN_WRITE_AUTH);
   if (!gate.ok) return gate.response;
   try {
     const limit = await checkDistributedRateLimit(`org_suppression_clear:${orgId}:${gate.userId}`, DISTRIBUTED_RATE_LIMITS.API);

@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { listOrgMemberActivity } from '@pagespace/lib/permissions/org-read-models';
-import { authorizeOrgRequest, ORG_READ_AUTH } from '@/lib/orgs/org-route-auth';
+import { authorizeOrgRequest, ORG_TOKEN_READ_AUTH } from '@/lib/orgs/org-route-auth';
 
 /**
  * GET /api/orgs/[orgId]/members/activity — each member's drive count and last activity (read model, D-OW-38; UI-7). Owner and Admins only: the
@@ -10,7 +10,7 @@ import { authorizeOrgRequest, ORG_READ_AUTH } from '@/lib/orgs/org-route-auth';
  */
 export async function GET(request: Request, context: { params: Promise<{ orgId: string }> }) {
   const { orgId } = await context.params;
-  const gate = await authorizeOrgRequest(request, orgId, 'ADMIN', ORG_READ_AUTH);
+  const gate = await authorizeOrgRequest(request, orgId, 'ADMIN', ORG_TOKEN_READ_AUTH);
   if (!gate.ok) return gate.response;
   try {
     const activity = await listOrgMemberActivity(orgId);

@@ -97,6 +97,8 @@ import { getAppDriveMembership, hasAppDriveMembership } from '@pagespace/lib/per
 import { resolveDriveWideCanEdit } from '@pagespace/lib/permissions/membership-queries';
 import { getUserAccessLevel } from '@pagespace/lib/permissions/permissions';
 import { db } from '@pagespace/db/db';
+import { checkOrgAuthentication } from '@pagespace/lib/organizations/authentication-policy';
+import { findMembershipRole } from '@pagespace/lib/organizations/repository';
 
 // ============================================================================
 // Test Helpers
@@ -518,20 +520,43 @@ describe('POST /api/drives', () => {
       expect((await post({ name: 'Finance', orgId: 'org-northwind', orgVisibility: 'SECRET' })).status).toBe(400);
     });
 
-    it('DRV-3 (partial) a bearer-token request cannot create a drive in an org until CLI and MCP parity in Wave G', async () => {
+    it('X-1 (partial) DRV-3 (partial) an unscoped MCP key creates a drive in an org through createOrgDrive, like a session', async () => {
       vi.mocked(authenticateRequestWithOptions).mockResolvedValue({
         ...mockWebAuth(mockUserId),
         tokenType: 'mcp',
       } as unknown as SessionAuthResult);
+      vi.mocked(createOrgDrive).mockResolvedValue({ ok: true, drive: orgDriveRow });
+
+      const response = await post({ name: 'Engineering', orgId: 'org-northwind' });
+
+      expect(response.status).toBe(201);
+      expect(createOrgDrive).toHaveBeenCalledWith(mockUserId, { name: 'Engineering', orgId: 'org-northwind', orgVisibility: undefined }, orgDriveServiceDeps);
+    });
+
+    it("SEC-2 (partial) a credential below the target org's sign-in policy is refused by name for a member of that org, and nothing is created", async () => {
+      vi.mocked(checkOrgAuthentication).mockResolvedValueOnce({ allowed: false, code: 'org_strong_sign_in_required' });
+      vi.mocked(findMembershipRole).mockResolvedValueOnce('MEMBER');
 
       const response = await post({ name: 'Engineering', orgId: 'org-northwind' });
 
       expect(response.status).toBe(403);
-      expect((await response.json()).error).toBe(
-        'Creating a drive in an organization requires a signed-in session; tokens cannot do this yet.'
-      );
+      expect((await response.json()).code).toBe('org_strong_sign_in_required');
       expect(createOrgDrive).not.toHaveBeenCalled();
-      expect(createDrive).not.toHaveBeenCalled();
+    });
+
+    it('SEC-2 (partial) a non-member naming an org learns nothing of its sign-in policy: the service refuses them', async () => {
+      vi.mocked(checkOrgAuthentication).mockResolvedValueOnce({ allowed: false, code: 'org_strong_sign_in_required' });
+      vi.mocked(findMembershipRole).mockResolvedValueOnce(null);
+      vi.mocked(createOrgDrive).mockResolvedValue({
+        ok: false,
+        code: 'NOT_ORG_MEMBER',
+        status: 403,
+        message: 'You must be a member of the organization to create a drive in it.',
+      });
+
+      const response = await post({ name: 'Engineering', orgId: 'org-northwind' });
+
+      expect((await response.json()).code).toBe('NOT_ORG_MEMBER');
     });
 
     it('an orgId answers 404 and creates nothing while ORGS_ENABLED is false', async () => {
@@ -803,4 +828,9 @@ vi.mock('@/lib/auth/principal-permissions', async (importOriginal) => {
   };
 });
 
-vi.mock('@pagespace/lib/organizations/authentication-policy', () => ({ checkDriveAuthentication: vi.fn().mockResolvedValue({ allowed: true }) }));
+vi.mock('@pagespace/lib/organizations/repository', () => ({ findMembershipRole: vi.fn().mockResolvedValue(null) }));
+vi.mock('@pagespace/lib/organizations/authentication-policy', () => ({
+  checkDriveAuthentication: vi.fn().mockResolvedValue({ allowed: true }),
+  checkOrgAuthentication: vi.fn().mockResolvedValue({ allowed: true }),
+  drivePolicyOrgId: vi.fn().mockResolvedValue(null),
+}));

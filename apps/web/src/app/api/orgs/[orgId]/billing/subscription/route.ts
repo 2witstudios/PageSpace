@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { isBillingEnabled } from '@pagespace/lib/deployment-mode';
-import { authorizeOrgRequest, billingUnavailableResponse, ORG_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
+import { authorizeOrgRequest, billingUnavailableResponse, ORG_MONEY_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
 import { OrgBillingError, orgSubscriptionSummary, provisionOrgSubscription } from '@/lib/org-billing/org-subscription';
 
 /**
@@ -18,7 +18,7 @@ import { OrgBillingError, orgSubscriptionSummary, provisionOrgSubscription } fro
  */
 export async function POST(request: Request, context: { params: Promise<{ orgId: string }> }) {
   const { orgId } = await context.params;
-  const gate = await authorizeOrgRequest(request, orgId, 'ADMIN', ORG_WRITE_AUTH);
+  const gate = await authorizeOrgRequest(request, orgId, 'ADMIN', ORG_MONEY_WRITE_AUTH);
   if (!gate.ok) return gate.response;
   if (!isBillingEnabled()) return billingUnavailableResponse();
   try {

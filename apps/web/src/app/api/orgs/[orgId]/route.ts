@@ -4,7 +4,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { findOrganizationById, updateOrganization } from '@pagespace/lib/organizations/repository';
 import { deleteOrganization } from '@pagespace/lib/organizations/deletion';
 import { getOrgBillingNotice } from '@pagespace/lib/organizations/status';
-import { authorizeOrgRequest, refuseDriveScopedToken, ORG_TOKEN_READ_AUTH, ORG_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
+import { authorizeOrgRequest, ORG_TOKEN_READ_AUTH, ORG_TOKEN_WRITE_AUTH, ORG_MONEY_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
 import { orgDeleteSchema, orgUpdateSchema } from '@/lib/orgs/org-schemas';
 import { endOrgSubscriptionPort } from '@/lib/org-billing/org-subscription';
 
@@ -22,8 +22,6 @@ export async function GET(request: Request, context: Context) {
   const { orgId } = await context.params;
   const gate = await authorizeOrgRequest(request, orgId, 'MEMBER', ORG_TOKEN_READ_AUTH);
   if (!gate.ok) return gate.response;
-  const scoped = refuseDriveScopedToken(gate);
-  if (scoped) return scoped;
   try {
     const org = await findOrganizationById(orgId);
     if (!org) return NextResponse.json({ error: 'Organization not found', code: 'org_not_found' }, { status: 404 });
@@ -47,10 +45,10 @@ export async function GET(request: Request, context: Context) {
   }
 }
 
-/** PATCH /api/orgs/[orgId] — name, slug, avatar; Owner and Admins. */
+/** PATCH /api/orgs/[orgId] — name, slug, avatar; Owner and Admins. Session or an unscoped MCP key (X-1). */
 export async function PATCH(request: Request, context: Context) {
   const { orgId } = await context.params;
-  const gate = await authorizeOrgRequest(request, orgId, 'ADMIN', ORG_WRITE_AUTH);
+  const gate = await authorizeOrgRequest(request, orgId, 'ADMIN', ORG_TOKEN_WRITE_AUTH);
   if (!gate.ok) return gate.response;
   try {
     const parsed = orgUpdateSchema.safeParse(await request.json().catch(() => null));
@@ -79,13 +77,14 @@ export async function PATCH(request: Request, context: Context) {
 }
 
 /**
- * DELETE /api/orgs/[orgId] — Owner only (ORG-6). Body names a destination for
+ * DELETE /api/orgs/[orgId] — Owner only (ORG-6). Session only: it ends the org's Stripe subscription
+ * (billing is never delegated to a key; X-1 exclusion table). Body names a destination for
  * every live org drive; trashed drives go to the Owner's trash. The response and
  * one audit event per drive list where each drive went.
  */
 export async function DELETE(request: Request, context: Context) {
   const { orgId } = await context.params;
-  const gate = await authorizeOrgRequest(request, orgId, 'OWNER', ORG_WRITE_AUTH);
+  const gate = await authorizeOrgRequest(request, orgId, 'OWNER', ORG_MONEY_WRITE_AUTH);
   if (!gate.ok) return gate.response;
   try {
     const parsed = orgDeleteSchema.safeParse(await request.json().catch(() => null));

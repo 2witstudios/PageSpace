@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { ORG_DRIVE_VISIBILITIES } from '@pagespace/db/schema/core';
-import { ORGS_ENABLED } from '@pagespace/lib/organizations/orgs-enabled';
 import {
   changeDriveVisibility,
   moveDriveOutOfOrg,
@@ -14,7 +13,7 @@ import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-s
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateOrgRequest, refuseDriveCredential, refuseOrgCredential, ORG_TOKEN_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
 import { safeParseBody } from '@/lib/validation/parse-body';
 
 /**
@@ -26,10 +25,11 @@ import { safeParseBody } from '@/lib/validation/parse-body';
  * PATCH  changes an org drive's visibility (DRV-4): its lead or an org Owner or Admin. The org
  *        membership sync runs in the same transaction, so materialized rows follow.
  *
- * Session only: CLI and MCP parity is Wave G (X-1). Dark while ORGS_ENABLED is false.
+ * A session or an unscoped MCP key (X-1: `drives.moveToOrg`, `drives.moveOutOfOrg`,
+ * `drives.setOrgVisibility`); the org gate refuses a drive-scoped key and the org's sign-in policy
+ * applies to the credential (the drive's org, and the target org on a move in). Authority is the
+ * service's, through requireOrgRole (ORG-5). Dark while ORGS_ENABLED is false.
  */
-
-const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
 const moveInSchema = z.object({
   orgId: z.string().min(1),
@@ -83,14 +83,14 @@ async function respond(
 }
 
 export async function PUT(request: Request, context: RouteContext) {
-  if (!ORGS_ENABLED) return NextResponse.json({ error: 'Not found' }, { status: 404 });
-
   const { driveId } = await context.params;
-  const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
-  if (isAuthError(auth)) return auth.error;
+  const auth = await authenticateOrgRequest(request, ORG_TOKEN_WRITE_AUTH);
+  if (!auth.ok) return auth.response;
 
   const parsed = await safeParseBody(request, moveInSchema);
   if (!parsed.success) return parsed.response;
+  const refused = (await refuseDriveCredential(request, auth, driveId)) ?? (await refuseOrgCredential(request, auth, parsed.data.orgId));
+  if (refused) return refused;
 
   try {
     const result = await moveDriveToOrg(auth.userId, driveId, parsed.data, orgDriveServiceDeps);
@@ -102,11 +102,11 @@ export async function PUT(request: Request, context: RouteContext) {
 }
 
 export async function DELETE(request: Request, context: RouteContext) {
-  if (!ORGS_ENABLED) return NextResponse.json({ error: 'Not found' }, { status: 404 });
-
   const { driveId } = await context.params;
-  const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
-  if (isAuthError(auth)) return auth.error;
+  const auth = await authenticateOrgRequest(request, ORG_TOKEN_WRITE_AUTH);
+  if (!auth.ok) return auth.response;
+  const refused = await refuseDriveCredential(request, auth, driveId);
+  if (refused) return refused;
 
   const parsed = await safeParseBody(request, moveOutSchema);
   if (!parsed.success) return parsed.response;
@@ -121,11 +121,11 @@ export async function DELETE(request: Request, context: RouteContext) {
 }
 
 export async function PATCH(request: Request, context: RouteContext) {
-  if (!ORGS_ENABLED) return NextResponse.json({ error: 'Not found' }, { status: 404 });
-
   const { driveId } = await context.params;
-  const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
-  if (isAuthError(auth)) return auth.error;
+  const auth = await authenticateOrgRequest(request, ORG_TOKEN_WRITE_AUTH);
+  if (!auth.ok) return auth.response;
+  const refused = await refuseDriveCredential(request, auth, driveId);
+  if (refused) return refused;
 
   const parsed = await safeParseBody(request, visibilitySchema);
   if (!parsed.success) return parsed.response;
