@@ -244,7 +244,7 @@ describe('org Business subscription shell (real Postgres, in-memory Stripe)', ()
     stale.id = `${active.id}_stale`;
     stale.status = 'paused';
     stale.created -= 1;
-    if (unverified) stale.items.push({ id: 'si_unknown', priceId: 'price_unknown', quantity: 1 });
+    if (unverified) stale.items = [...stale.items, { id: 'si_unknown', priceId: 'price_unknown', quantity: 1 }];
     stripe.subscriptions.set(stale.id, stale);
     await db.delete(orgSubscriptions).where(eq(orgSubscriptions.orgId, orgId));
     const recovered = await provisionOrgSubscription(orgId, deps);
