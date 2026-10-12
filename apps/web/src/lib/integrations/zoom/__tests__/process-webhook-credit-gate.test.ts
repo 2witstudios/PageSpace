@@ -261,6 +261,8 @@ describe('processZoomWebhook AI enrichment credit gate', () => {
     expect(mockCanConsumeAI.mock.calls[0][0]).toBe('user-1');
     expect(mockCanConsumeAI.mock.calls[0][2].spend).toEqual(DRIVE_AUTOMATION);
     expect(mockCanConsumeAI.mock.calls[0][2].spend).not.toEqual({ kind: 'personal' });
+    // SPEND-10: both enrichment calls are listed as this connection's "Zoom transcripts" automation.
+    expect(mockTrackUsage.mock.calls.map(([usage]) => usage.automationWorkflowId)).toEqual([`zoom-transcripts:${connection.id}`, `zoom-transcripts:${connection.id}`]);
   });
 
   it('SPEND-6 (partial) given the destination\'s wallet skips the run (no wallet, empty, the creator gone), should still create the page without enrichment or charge and record why', async () => {

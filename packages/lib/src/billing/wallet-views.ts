@@ -20,6 +20,7 @@
 
 import type { WalletViewer } from '../permissions/wallet-access';
 import { formatCreditCount } from './money-model';
+import { isZoomTranscriptsAutomationRef, ZOOM_TRANSCRIPTS_AUTOMATION_NAME } from './automation-attribution';
 import { userConsumerKey, walletChainStatus, walletOwnRemainingCents, walletStatusFor, type FallbackRule, type OvershootFunderChoice, type SpendSourceKind, type WalletStatus } from './wallet-core';
 
 export interface DriveWalletRowFacts {
@@ -128,6 +129,17 @@ export function consumerSpendRows(groups: readonly ConsumerSpendGroup[], names: 
       rows.set(key, { ...existing, spentCents: existing.spentCents + cents });
     } else if (g.automationWorkflowId === null) {
       rows.set(key, { kind: 'member', consumerKey: key, userId: g.userId, displayName: names.people.get(g.userId) ?? null, spentCents: cents });
+    } else if (isZoomTranscriptsAutomationRef(g.automationWorkflowId)) {
+      // A Zoom connection's enrichment runs as the connection's owner: the person it is recorded under.
+      rows.set(key, {
+        kind: 'automation',
+        consumerKey: key,
+        automationWorkflowId: g.automationWorkflowId,
+        displayName: ZOOM_TRANSCRIPTS_AUTOMATION_NAME,
+        creatorUserId: g.userId,
+        creatorName: names.people.get(g.userId) ?? null,
+        spentCents: cents,
+      });
     } else {
       const workflow = names.automations.get(g.automationWorkflowId);
       const creatorUserId = workflow?.createdBy ?? null;

@@ -43,6 +43,8 @@ export interface RunCompactionParams {
    * provider and owns the conversation.
    */
   billedUserId?: string;
+  /** SPEND-10: the automation (workflow) the turn ran for when no person was present; its usage is listed as it. */
+  automationWorkflowId?: string;
 }
 
 async function summarize(
@@ -186,6 +188,7 @@ export async function runCompaction(params: RunCompactionParams): Promise<void> 
         source: 'compaction',
         holdId,
         walletId,
+        automationWorkflowId: params.automationWorkflowId,
         success: true,
       });
     };

@@ -545,6 +545,7 @@ export function createResolveSandboxActorContext(
       // WAL-9: an org drive's compute runs on the org's tier, not the lead's own plan.
       tier: computeTierForDrive(drive, toPersonalSubscriptionTier(payerRow?.subscriptionTier), await isOrgLapsedForDrive(drive)),
       turnId,
+      ...(context?.creditSpend?.automationWorkflowId ? { automationWorkflowId: context.creditSpend.automationWorkflowId } : {}),
     };
 
     // driveId present (a page agent's drive, or a global conversation bound

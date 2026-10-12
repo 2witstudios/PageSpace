@@ -905,7 +905,7 @@ export async function executeAskAgent(
         // runCompaction gates and reserves on the caller's spend target before its own model
         // call, and skips (persisting nothing) when that source cannot cover it.
         if (prepared.pendingCompaction) {
-          void runCompaction({ ...prepared.pendingCompaction, billedUserId: executionContext?.creditSpend?.userId });
+          void runCompaction({ ...prepared.pendingCompaction, billedUserId: executionContext?.creditSpend?.userId, automationWorkflowId: executionContext?.creditSpend?.automationWorkflowId });
         }
 
         // Settle the sub-agent run on its own hold. totalUsage meters every tool-loop round-trip

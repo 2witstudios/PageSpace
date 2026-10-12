@@ -14,3 +14,22 @@ export function automationWorkflowIdFor(target: SpendTarget, workflowId: string 
   if (target.kind !== 'automation' || target.personPresent === true) return undefined;
   return typeof workflowId === 'string' && workflowId.length > 0 ? workflowId : undefined;
 }
+
+const ZOOM_TRANSCRIPTS_PREFIX = 'zoom-transcripts:';
+
+/**
+ * SPEND-10: the automation reference for a Zoom connection's transcript enrichment. It is an automation
+ * (SPEND-6: a person-less trigger spending its destination drive's wallet) with no workflow behind it,
+ * so its spend is listed as the connection's "Zoom transcripts" rather than as its owner's own.
+ */
+export function zoomTranscriptsAutomationRef(connectionId: string): string {
+  return `${ZOOM_TRANSCRIPTS_PREFIX}${connectionId}`;
+}
+
+/** Whether a recorded automation reference is a Zoom connection's enrichment (not a workflow id). */
+export function isZoomTranscriptsAutomationRef(ref: string): boolean {
+  return ref.startsWith(ZOOM_TRANSCRIPTS_PREFIX);
+}
+
+/** What the drive lead's spend list calls a Zoom connection's enrichment. */
+export const ZOOM_TRANSCRIPTS_AUTOMATION_NAME = 'Zoom transcripts';

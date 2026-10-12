@@ -13,7 +13,7 @@ export async function generateTranscriptSummary(
    * Who the usage is recorded against and the wallet the enrichment's credit hold reserved
    * (process-webhook's payer seam on the destination drive). Omitted: the user, their own root.
    */
-  billing?: { userId: string; walletId?: string },
+  billing?: { userId: string; walletId?: string; automationWorkflowId?: string },
 ): Promise<string> {
   try {
     const provider = await createAIProvider(userId, {});
@@ -41,6 +41,7 @@ export async function generateTranscriptSummary(
         : undefined,
       success: true,
       walletId: billing?.walletId,
+      automationWorkflowId: billing?.automationWorkflowId,
       metadata: { feature: 'zoom_summary' },
     }));
 

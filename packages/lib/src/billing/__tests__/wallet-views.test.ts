@@ -11,6 +11,7 @@ import {
   CONSUMER_WALLET_FIELDS,
   type DriveWalletFacts,
 } from '../wallet-views';
+import { zoomTranscriptsAutomationRef } from '../automation-attribution';
 
 // Northwind Labs fixture: Product's wallet holds a 1,200-credit allocation under the
 // 9,000-credit pool; Marcus has spent 50 credits of it, Lena 30, Priya 20 and her weekly digest 15.
@@ -77,10 +78,11 @@ describe('wallet-views: the numbers', () => {
     expect(JSON.stringify(view)).not.toContain('$');
   });
 
-  it('SPEND-9 (partial) the remaining amount is the wallet\'s OWN budget (allocation left + top-ups − debt), never capped by — so never revealing — the pool', () => {
+  it('SPEND-9 (partial) the remaining amount is the wallet\'s OWN budget (top-ups + allocation left net of debt, D-OW-60), never capped by — so never revealing — the pool', () => {
     expect(walletRemainingCents(facts().wallet)).toBe(c(1200) - c(100) + c(40));
     expect(walletRemainingCents({ ...facts().wallet, spentCents: c(1300), topupRemainingCents: 0 })).toBe(0);
-    expect(walletRemainingCents({ ...facts().wallet, debtCents: c(2000) })).toBe(0);
+    // Debt beyond the allocation left never eats the top-up.
+    expect(walletRemainingCents({ ...facts().wallet, debtCents: c(2000) })).toBe(c(40));
   });
 
   it('SPEND-9 (partial) a consumer\'s remaining cap is per window; an unset cap is unlimited (null)', () => {
@@ -121,6 +123,13 @@ describe('wallet-views: spend by member and automation (SPEND-10)', () => {
     expect(rows).toEqual([
       { kind: 'automation', consumerKey: 'automation:wf-digest', automationWorkflowId: 'wf-digest', displayName: 'Weekly digest', creatorUserId: 'u-priya', creatorName: 'Priya Nair', spentCents: c(15) },
       { kind: 'automation', consumerKey: 'automation:wf-gone', automationWorkflowId: 'wf-gone', displayName: null, creatorUserId: null, creatorName: null, spentCents: c(3) },
+    ]);
+  });
+
+  it('SPEND-10 (partial) a Zoom connection\'s transcript enrichment is its own automation row, named, running as the connection\'s owner', () => {
+    const ref = zoomTranscriptsAutomationRef('zc-1');
+    expect(consumerSpendRows([{ userId: 'u-marcus', automationWorkflowId: ref, spentCents: c(4) }], { people, automations })).toEqual([
+      { kind: 'automation', consumerKey: `automation:${ref}`, automationWorkflowId: ref, displayName: 'Zoom transcripts', creatorUserId: 'u-marcus', creatorName: 'Marcus Oyelaran', spentCents: c(4) },
     ]);
   });
 
@@ -200,7 +209,7 @@ describe('wallet-views purity', () => {
   it('imports nothing that does I/O', () => {
     const src = readFileSync(fileURLToPath(new URL('../wallet-views.ts', import.meta.url)), 'utf8');
     const imports = [...src.matchAll(/from\s+'([^']+)'/g)].map((m) => m[1]);
-    expect(imports.sort()).toEqual(['../permissions/wallet-access', './money-model', './wallet-core']);
+    expect(imports.sort()).toEqual(['../permissions/wallet-access', './automation-attribution', './money-model', './wallet-core']);
   });
 });
 
