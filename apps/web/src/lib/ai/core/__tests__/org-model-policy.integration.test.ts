@@ -121,7 +121,7 @@ afterAll(async () => {
   await pool.end();
 });
 
-describe('POL-8 the org model and provider allowlists govern every model use in its drives', () => {
+describe('POL-8 (partial) the org model and provider allowlists govern every model use in its drives', () => {
   it('running: a model or provider the drive\'s org does not allow is refused 403 naming the policy; an allowed one runs; no drive, or a personal drive, is never restricted', async () => {
     const run = (driveId: string | null, pair: { provider: string; model: string }) =>
       createAIProvider(w.owner, { selectedProvider: pair.provider, selectedModel: pair.model }, { driveId });
