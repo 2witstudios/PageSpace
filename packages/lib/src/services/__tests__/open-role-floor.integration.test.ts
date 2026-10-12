@@ -22,7 +22,6 @@ import { driveMembers, driveRoles } from '@pagespace/db/schema/members';
 import { organizations, orgMembers, orgSubscriptions } from '@pagespace/db/schema/organizations';
 
 vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
-vi.mock('../../audit/org-audit', () => ({ recordOrgAuditEvent: vi.fn(async () => {}), recordOrgAuditEventAfterCommit: vi.fn(async () => true) }));
 
 import { updateOrgPolicies } from '../../organizations/policies';
 import { OpenRoleFloorError, createDriveRole, deleteDriveRole, updateDriveRole } from '../drive-role-service';

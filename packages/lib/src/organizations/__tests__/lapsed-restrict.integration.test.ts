@@ -26,10 +26,6 @@ import { requireDb } from '@pagespace/db/test/require-db';
 
 vi.mock('../orgs-enabled', () => ({ ORGS_ENABLED: true }));
 // The org audit chain is a separate store this suite does not assert; nothing may be left in it.
-vi.mock('../../audit/org-audit', () => ({
-  recordOrgAuditEvent: vi.fn(async () => {}),
-  recordOrgAuditEventAfterCommit: vi.fn(async () => true),
-}));
 
 import { getOrgPolicies, updateOrgPolicies } from '../policies';
 import { DEFAULT_ORG_POLICIES } from '../policies-core';
@@ -232,18 +228,18 @@ describe('a lapsed org may still restrict (orgs on, real Postgres)', () => {
     const hold = await requestGuestApproval({ orgId: w.orgId, driveId: w.productId, userId: w.ids.omar, origin: 'invite', request: { role: 'MEMBER' }, requestedBy: w.ids.dana });
     await setSubscription(w.orgId, 'canceled');
 
-    expect(await claimGuestApprovalDecision({ orgId: w.orgId, holdId: hold.holdId, decision: 'approve' })).toEqual(lapsedPolicyRefusal);
+    expect(await claimGuestApprovalDecision({ orgId: w.orgId, holdId: hold.holdId, decision: 'approve', actorId: w.ids.jono })).toEqual(lapsedPolicyRefusal);
     expect(await db.select({ id: orgGuestHolds.id }).from(orgGuestHolds).where(eq(orgGuestHolds.id, hold.holdId))).toHaveLength(1);
 
     // Paid again, the same request can be approved: it is claimed off the queue for the invite handlers to admit.
     await setSubscription(w.orgId, 'active');
-    expect(await claimGuestApprovalDecision({ orgId: w.orgId, holdId: hold.holdId, decision: 'approve' })).toMatchObject({ ok: true, claim: { holdId: hold.holdId, userId: w.ids.omar } });
+    expect(await claimGuestApprovalDecision({ orgId: w.orgId, holdId: hold.holdId, decision: 'approve', actorId: w.ids.jono })).toMatchObject({ ok: true, claim: { holdId: hold.holdId, userId: w.ids.omar } });
 
     // Declining needs no paid org.
     const second = await requestGuestApproval({ orgId: w.orgId, driveId: w.productId, userId: w.ids.gita, origin: 'invite', request: { role: 'MEMBER' }, requestedBy: w.ids.dana });
     await setSubscription(w.orgId, 'unpaid');
-    expect(await claimGuestApprovalDecision({ orgId: w.orgId, holdId: second.holdId, decision: 'decline' })).toMatchObject({ ok: true, claim: { holdId: second.holdId } });
-    expect(await claimGuestApprovalDecision({ orgId: w.orgId, holdId: 'nope', decision: 'decline' })).toEqual({ ok: false, reason: 'not_found' });
+    expect(await claimGuestApprovalDecision({ orgId: w.orgId, holdId: second.holdId, decision: 'decline', actorId: w.ids.jono })).toMatchObject({ ok: true, claim: { holdId: second.holdId } });
+    expect(await claimGuestApprovalDecision({ orgId: w.orgId, holdId: 'nope', decision: 'decline', actorId: w.ids.jono })).toEqual({ ok: false, reason: 'not_found' });
   });
 
   it('SEAT-9 (partial) WAL-7 (partial) while lapsed a drive wallet can be PAUSED (the kill switch) but not resumed; money-moving writes stay refused', async () => {

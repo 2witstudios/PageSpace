@@ -23,7 +23,7 @@ import { and, eq, inArray, isNotNull } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { drives } from '@pagespace/db/schema/core';
 import { driveMembers } from '@pagespace/db/schema/members';
-import { orgMembers } from '@pagespace/db/schema/organizations';
+import { orgAuditOutbox, orgMembers } from '@pagespace/db/schema/organizations';
 import { getDriveAccess, listAccessibleDrives } from '../../services/drive-service';
 import { canAdministerDrive, driveRoleOf, isDriveLead, type RelationshipDrive } from '../drive-relationship';
 import { loadDriveLeadAuthority, loadDriveRelationship, loadDriveRelationships } from '../drive-relationship-loader';
@@ -367,6 +367,13 @@ describe('B7c: the gate primitives agree with the canonical resolvers (integrati
     const listBefore = await countQueries(() => listMemberDrives(priya, { includeTrashed: true }));
     // The first call claims Priya's ORG-4 audit window on Finance; count the warm calls.
     await getAdministeredDriveIds(priya, { includeTrashed: true });
+    // That claim's audit record is staged and delivered off the request (AUD-1 outbox): let it land, so its
+    // queries are not counted against the warm calls.
+    await vi.waitFor(async () => {
+      const rows = await securityAudit.queryEvents({ eventType: 'authz.access.granted', resourceId: f.drives.finance.id });
+      expect(rows.some((r) => r.userId === priya)).toBe(true);
+      expect(await db.select({ id: orgAuditOutbox.id }).from(orgAuditOutbox).where(eq(orgAuditOutbox.driveId, f.drives.finance.id))).toEqual([]);
+    }, { timeout: 10_000, interval: 100 });
     const adminBefore = await countQueries(() => getAdministeredDriveIds(priya, { includeTrashed: true }));
     for (let i = 0; i < 12; i++) {
       await factories.createDrive(f.people.lena.id, { name: `Extra ${i}`, slug: `extra-${i}-${Date.now()}`, orgId: f.org.id, orgVisibility: 'OPEN' });

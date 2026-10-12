@@ -14,8 +14,8 @@
  * A personal drive's automations keep the behaviour they had: account deletion removes them (what
  * the creator column's cascade used to do), and leaving an org never reaches them.
  *
- * The disable step runs inside the caller's transaction (leaveOrganization, account deletion); the
- * `org.automation.owner_left` events are written after it commits (recordOwnerLeftAutomations).
+ * The disable step runs inside the caller's transaction (leaveOrganization, account deletion), which stages the
+ * `org.automation.owner_left` events in it too (stageOwnerLeftAutomations, AUD-1).
  */
 import { db } from '@pagespace/db/db';
 import { and, asc, eq, inArray, isNotNull, isNull, or, sql } from '@pagespace/db/operators';
@@ -27,7 +27,7 @@ import { calendarEvents } from '@pagespace/db/schema/calendar';
 import { taskItems } from '@pagespace/db/schema/tasks';
 import { taskTriggers } from '@pagespace/db/schema/task-triggers';
 import { orgMembers, type OrgRole } from '@pagespace/db/schema/organizations';
-import { recordOrgAuditEvent, recordOrgAuditEventAfterCommit } from '../audit/org-audit';
+import { stageOrgAuditEvents, transactionWithOrgAudit, type OrgAuditEvent, type OrgAuditExecutor, type StagedOrgAuditEvent } from '../audit/org-audit';
 import { loadDriveSpendStanding } from '../permissions/spend-standing';
 import {
   decideOwnerLeftAutomationAction,
@@ -166,21 +166,23 @@ function groupByLead(rows: { id: string; leadId: string }[]): Map<string, string
 }
 
 /**
- * Record each flagged automation as `org.automation.owner_left`, AFTER the departure's transaction
- * commits (a rolled-back leave leaves no event). Ids only, never names or content.
+ * Each flagged automation as `org.automation.owner_left`, staged in the departure's transaction (a rolled-back leave
+ * leaves no event). Ids only, never names or content.
  */
-export async function recordOwnerLeftAutomations(items: readonly OwnerLeftAutomation[], actorId?: string): Promise<void> {
-  for (const item of items) {
-    await recordOrgAuditEventAfterCommit({
-      orgId: item.orgId,
-      eventType: 'org.automation.owner_left',
-      ...(actorId ? { actorId } : {}),
-      resourceType: item.kind,
-      resourceId: item.id,
-      driveId: item.driveId,
-      details: { formerOwnerId: item.formerOwnerId, reason: item.reason },
-    });
-  }
+export function ownerLeftAutomationAuditEvents(items: readonly OwnerLeftAutomation[], actorId?: string): OrgAuditEvent[] {
+  return items.map((item) => ({
+    orgId: item.orgId,
+    eventType: 'org.automation.owner_left',
+    ...(actorId ? { actorId } : {}),
+    resourceType: item.kind,
+    resourceId: item.id,
+    driveId: item.driveId,
+    details: { formerOwnerId: item.formerOwnerId, reason: item.reason },
+  }));
+}
+
+export function stageOwnerLeftAutomations(executor: OrgAuditExecutor, items: readonly OwnerLeftAutomation[], actorId?: string): Promise<StagedOrgAuditEvent[]> {
+  return stageOrgAuditEvents(executor, ownerLeftAutomationAuditEvents(items, actorId));
 }
 
 // ── Admin: list, reassign, delete ──────────────────────────────────────────────
@@ -279,11 +281,10 @@ export interface ReassignOwnerLeftAutomationInput {
  * Hand an owner-left automation to `newOwnerId` and switch it back on. From then on it runs as the new
  * owner and their per-consumer caps bind it ([D-OW-34]); a calendar trigger of the workflow is
  * scheduled by them too. Owner/Admin only, for an accepted member who can reach the drive
- * (permissions/automation-ownership). Audited `org.automation.reassigned` inside the transaction, so
- * a reassignment the chain refuses does not happen.
+ * (permissions/automation-ownership). Audited `org.automation.reassigned`, staged in the transaction.
  */
 export async function reassignOwnerLeftAutomation(input: ReassignOwnerLeftAutomationInput): Promise<OwnerLeftAutomationResult> {
-  return db.transaction(async (tx) => {
+  return transactionWithOrgAudit(async (tx, audit) => {
     const roles = await lockOrgRoles(tx, input.orgId, [input.actorId, input.newOwnerId]);
     const actorRole = roles.get(input.actorId) ?? null;
     const automation = actorRole === null ? null : await lockAutomation(tx, input.kind, input.id);
@@ -312,7 +313,7 @@ export async function reassignOwnerLeftAutomation(input: ReassignOwnerLeftAutoma
         .set({ createdBy: input.newOwnerId, ownerLeftAt: null, isEnabled: true })
         .where(eq(pageWebhooks.id, input.id));
     }
-    await recordOrgAuditEvent({
+    await audit({
       orgId: input.orgId,
       eventType: 'org.automation.reassigned',
       actorId: input.actorId,
@@ -327,10 +328,10 @@ export async function reassignOwnerLeftAutomation(input: ReassignOwnerLeftAutoma
 
 /**
  * Delete an owner-left automation (a workflow takes its triggers with it). Owner/Admin only. Audited
- * `org.automation.deleted` inside the transaction.
+ * `org.automation.deleted`, staged in the transaction.
  */
 export async function deleteOwnerLeftAutomation(input: { orgId: string; actorId: string; kind: AutomationKind; id: string }): Promise<OwnerLeftAutomationResult> {
-  return db.transaction(async (tx) => {
+  return transactionWithOrgAudit(async (tx, audit) => {
     const actorRole = (await lockOrgRoles(tx, input.orgId, [input.actorId])).get(input.actorId) ?? null;
     const automation = actorRole === null ? null : await lockAutomation(tx, input.kind, input.id);
     const decision = decideOwnerLeftAutomationAction({ actorRole, orgId: input.orgId, automation, action: { kind: 'delete' } });
@@ -338,7 +339,7 @@ export async function deleteOwnerLeftAutomation(input: { orgId: string; actorId:
 
     if (input.kind === 'workflow') await tx.delete(workflows).where(eq(workflows.id, input.id));
     else await tx.delete(pageWebhooks).where(eq(pageWebhooks.id, input.id));
-    await recordOrgAuditEvent({
+    await audit({
       orgId: input.orgId,
       eventType: 'org.automation.deleted',
       actorId: input.actorId,

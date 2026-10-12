@@ -14,6 +14,8 @@
  * unchanged — which also finds nobody for a customer that is no user's.
  */
 import { ORG_ID_METADATA_KEY, ORG_SUBSCRIPTION_KIND, orgSubscriptionItems, isLiveOrgSubscriptionStatus, type OrgSubscriptionCandidate, type OrgBusinessPrices } from './org-subscription-core';
+import type { OrgAuditEvent } from '../audit/org-audit';
+import type { OrgLapseTransition, OrgStatus } from '../organizations/status-core';
 
 export type BillingOwnerRoute =
   | { kind: 'org'; orgId: string }
@@ -142,4 +144,59 @@ export function planOrgSubscriptionPriceMirror(input: {
     stripeBasePriceId: patch !== null ? input.prices.basePriceId : '',
     stripeSeatPriceId: patch !== null ? input.prices.seatPriceId : '',
   };
+}
+
+/** What the mirror compares, before and after one Stripe re-read. */
+export interface MirroredOrgSubscriptionState {
+  status: string;
+  cancelAtPeriodEnd: boolean;
+  extraSeatQuantity: number;
+}
+
+/**
+ * AUD-1: the org events one subscription mirror writes, staged with the mirror's own write. A change of status or
+ * cancel-at-period-end is a billing event; a change of the extra-seat quantity is a SEAT event — the mirror only ever
+ * sees a quantity it did not set itself (every change the app makes stores its quantity first), so it is a change
+ * made on Stripe's side (the dashboard, the customer portal, support). A redelivery that mirrors the same state writes
+ * nothing.
+ */
+export function orgSubscriptionMirrorAuditEvents(input: {
+  orgId: string;
+  eventId: string;
+  previous: MirroredOrgSubscriptionState;
+  next: MirroredOrgSubscriptionState;
+  orgStatusBefore: OrgStatus;
+  orgStatusAfter: OrgStatus;
+  transition: OrgLapseTransition | null;
+}): OrgAuditEvent[] {
+  const { orgId, eventId, previous, next } = input;
+  const events: OrgAuditEvent[] = [];
+  if (previous.status !== next.status || previous.cancelAtPeriodEnd !== next.cancelAtPeriodEnd) {
+    events.push({
+      orgId,
+      eventType: 'org.billing.subscription_changed',
+      resourceType: 'org_subscription',
+      resourceId: orgId,
+      details: {
+        source: 'stripe_webhook',
+        eventId,
+        from: previous.status,
+        to: next.status,
+        cancelAtPeriodEnd: next.cancelAtPeriodEnd,
+        orgStatusBefore: input.orgStatusBefore,
+        orgStatusAfter: input.orgStatusAfter,
+        ...(input.transition ? { transition: input.transition } : {}),
+      },
+    });
+  }
+  if (previous.extraSeatQuantity !== next.extraSeatQuantity) {
+    events.push({
+      orgId,
+      eventType: 'org.seat.quantity_changed',
+      resourceType: 'organization',
+      resourceId: orgId,
+      details: { reason: 'stripe_side_change', source: 'stripe_webhook', eventId, from: previous.extraSeatQuantity, to: next.extraSeatQuantity },
+    });
+  }
+  return events;
 }

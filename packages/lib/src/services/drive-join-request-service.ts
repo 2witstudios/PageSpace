@@ -32,7 +32,7 @@ import {
 import { loadDriveMemberRowState } from '../permissions/org-drive-membership';
 import { findStaleDriveJoinRequests } from '../permissions/drive-join-request-closure';
 import { admitDriveJoiner, publishOrgMembershipSyncEvents, type OrgMembershipSyncResult } from './org-membership-sync';
-import { recordOrgAuditEventAfterCommit } from '../audit/org-audit';
+import { transactionWithOrgAudit } from '../audit/org-audit';
 import { checkOrgMayLoosen, type OrgLapsedRefusal } from '../organizations/status';
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -106,7 +106,7 @@ export async function requestToJoinDrive(
   driveId: string,
   input: { message?: string | null } = {},
 ): Promise<RequestToJoinResult> {
-  const result = await retryOnDeadlock(() => db.transaction(async (tx): Promise<RequestToJoinResult> => {
+  return retryOnDeadlock(() => transactionWithOrgAudit(async (tx, audit): Promise<RequestToJoinResult> => {
     const drive = await lockOrgDrive(tx, driveId);
     const requesterOrgRole = drive ? await orgRoleOf(tx, drive.orgId, actorId) : null;
     const requesterRow = drive ? await loadDriveMemberRowState(tx, driveId, actorId) : null;
@@ -127,19 +127,9 @@ export async function requestToJoinDrive(
       .insert(driveJoinRequests)
       .values({ driveId, userId: actorId, message })
       .returning();
+    await audit({ orgId: drive.orgId, driveId, eventType: 'org.drive.join_requested', actorId, resourceType: 'drive_join_request', resourceId: created.id });
     return { ok: true, created: true, request: created, drive: target };
   }));
-  if (result.ok && result.created) {
-    await recordOrgAuditEventAfterCommit({
-      orgId: result.drive.orgId,
-      driveId,
-      eventType: 'org.drive.join_requested',
-      actorId,
-      resourceType: 'drive_join_request',
-      resourceId: result.request.id,
-    });
-  }
-  return result;
 }
 
 /** The drive a request was answered on, as the ORG-4 org-power audit needs it. */
@@ -174,7 +164,7 @@ export async function answerDriveJoinRequest(
   requestId: string,
   decision: 'approve' | 'deny',
 ): Promise<JoinRequestAnswerResult> {
-  const outcome = await retryOnDeadlock(() => db.transaction(async (tx) => {
+  const outcome = await retryOnDeadlock(() => transactionWithOrgAudit(async (tx, audit) => {
     const drive = await lockOrgDrive(tx, driveId);
     const request = drive ? await lockRequest(tx, driveId, requestId) : null;
     if (!drive || !request) return { result: requestNotFound(), sync: null };
@@ -218,6 +208,15 @@ export async function answerDriveJoinRequest(
       })
       .where(and(eq(driveJoinRequests.id, requestId), eq(driveJoinRequests.status, 'pending')))
       .returning();
+    await audit({
+      orgId: drive.orgId,
+      driveId,
+      eventType: verdict.action === 'approve' ? 'org.drive.join_approved' : 'org.drive.join_declined',
+      actorId,
+      resourceType: 'drive_join_request',
+      resourceId: requestId,
+      details: { requesterId: request.userId, admitted },
+    });
 
     const result: JoinRequestAnswerResult = {
       ok: true,
@@ -230,17 +229,6 @@ export async function answerDriveJoinRequest(
   }));
 
   if (outcome.sync) await publishOrgMembershipSyncEvents(outcome.sync);
-  if (outcome.result.ok) {
-    await recordOrgAuditEventAfterCommit({
-      orgId: outcome.result.drive.orgId,
-      driveId,
-      eventType: outcome.result.action === 'approve' ? 'org.drive.join_approved' : 'org.drive.join_declined',
-      actorId,
-      resourceType: 'drive_join_request',
-      resourceId: requestId,
-      details: { requesterId: outcome.result.request.userId, admitted: outcome.result.admitted },
-    });
-  }
   return outcome.result;
 }
 
@@ -248,8 +236,7 @@ export type WithdrawResult = { ok: true; request: DriveJoinRequest } | JoinReque
 
 /** The requester takes back their own pending request; they may ask again later. */
 export async function withdrawDriveJoinRequest(actorId: string, driveId: string, requestId: string): Promise<WithdrawResult> {
-  let orgId = null as string | null;
-  const result = await retryOnDeadlock(() => db.transaction(async (tx): Promise<WithdrawResult> => {
+  return retryOnDeadlock(() => transactionWithOrgAudit(async (tx, audit): Promise<WithdrawResult> => {
     const drive = await lockOrgDrive(tx, driveId);
     const request = drive ? await lockRequest(tx, driveId, requestId) : null;
     if (!request) return requestNotFound();
@@ -262,20 +249,11 @@ export async function withdrawDriveJoinRequest(actorId: string, driveId: string,
       .set({ status: 'withdrawn', decidedAt: sql`(now() at time zone 'utc')` })
       .where(and(eq(driveJoinRequests.id, requestId), eq(driveJoinRequests.status, 'pending')))
       .returning();
-    orgId = drive?.orgId ?? null;
+    if (drive?.orgId) {
+      await audit({ orgId: drive.orgId, driveId, eventType: 'org.drive.join_withdrawn', actorId, resourceType: 'drive_join_request', resourceId: requestId });
+    }
     return { ok: true, request: withdrawn };
   }));
-  if (result.ok && orgId !== null) {
-    await recordOrgAuditEventAfterCommit({
-      orgId,
-      driveId,
-      eventType: 'org.drive.join_withdrawn',
-      actorId,
-      resourceType: 'drive_join_request',
-      resourceId: requestId,
-    });
-  }
-  return result;
 }
 
 export interface PendingJoinRequest {

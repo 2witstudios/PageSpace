@@ -45,7 +45,7 @@ import { checkOrgActive, checkOrgMayLoosen, type OrgLapsedRefusal } from '../org
 import { removeFormerLeadOwnerRow } from '../permissions/org-drive-membership';
 import { getActorInfo, logActivityWithTx } from '../monitoring/activity-logger';
 import { reattributeDriveStorageInTx, type StorageReattributionResult } from './storage-limits';
-import { recordOrgAuditEventAfterCommit } from '../audit/org-audit';
+import { transactionWithOrgAudit } from '../audit/org-audit';
 
 export type OrgDriveTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -156,7 +156,7 @@ export async function moveDriveToOrg(
 ): Promise<MoveDriveResult> {
   // Org row before drive row, as every org-drive path locks (org deletion, joins, move-out); a
   // leave that reassigns a led drive locks both in one statement, so a deadlock retries whole.
-  const outcome = await retryOnOrgSlugConflict(() => retryOnDeadlock(() => db.transaction(async (tx) => {
+  const outcome = await retryOnOrgSlugConflict(() => retryOnDeadlock(() => transactionWithOrgAudit(async (tx, audit) => {
     const orgExists = await lockOrg(tx, input.orgId);
     const drive = await lockDrive(tx, driveId);
     if (!drive) return driveNotFound();
@@ -201,6 +201,7 @@ export async function moveDriveToOrg(
     // org's guests policy decides them as it decides any admission: off parks them (restored when guests come back
     // on), approve queues them for an Owner or Admin, on leaves them. The move itself is never refused for it.
     const heldGuests = await holdOrgGuestsUnderPolicy(tx, { orgId: input.orgId, driveId });
+    await audit({ orgId: input.orgId, driveId, eventType: 'org.drive.moved_in', actorId, resourceType: 'drive', resourceId: driveId, details: { orgVisibility: moved.orgVisibility } });
     return { ok: true as const, drive: moved, storageReattribution, publish, heldGuests };
   })));
 
@@ -208,15 +209,6 @@ export async function moveDriveToOrg(
   const { publish, heldGuests, ...moved } = outcome;
   await publish();
   await kickSuspendedGuests(heldGuests);
-  await recordOrgAuditEventAfterCommit({
-    orgId: input.orgId,
-    driveId,
-    eventType: 'org.drive.moved_in',
-    actorId,
-    resourceType: 'drive',
-    resourceId: driveId,
-    details: { orgVisibility: moved.drive.orgVisibility },
-  });
   return { ...moved, orgId: input.orgId };
 }
 
@@ -226,7 +218,7 @@ export async function moveDriveOutOfOrg(
   input: { implicitMembers: ImplicitMembersChoice | null },
   deps: OrgDriveServiceDeps
 ): Promise<MoveDriveResult> {
-  const outcome = await retryOnDeadlock(() => db.transaction(async (tx) => {
+  const outcome = await retryOnDeadlock(() => transactionWithOrgAudit(async (tx, audit) => {
     // The org row before the drive row: org deletion and joining an org lock in that order, and
     // taking the drive first would close a lock cycle with either.
     const [current] = await tx.select({ orgId: drives.orgId }).from(drives).where(eq(drives.id, driveId));
@@ -259,21 +251,13 @@ export async function moveDriveOutOfOrg(
       orgId,
       implicitMembers: verdict.implicitMembers,
     });
+    await audit({ orgId, driveId, eventType: 'org.drive.moved_out', actorId, resourceType: 'drive', resourceId: driveId, details: { implicitMembers: input.implicitMembers } });
     return { ok: true as const, drive: moved, orgId, storageReattribution, publish };
   }));
 
   if (!outcome.ok) return outcome;
   const { publish, ...rest } = outcome;
   await publish();
-  await recordOrgAuditEventAfterCommit({
-    orgId: rest.orgId,
-    driveId,
-    eventType: 'org.drive.moved_out',
-    actorId,
-    resourceType: 'drive',
-    resourceId: driveId,
-    details: { implicitMembers: input.implicitMembers },
-  });
   return rest;
 }
 
@@ -282,7 +266,7 @@ export async function createOrgDrive(
   input: { name: string; orgId: string; orgVisibility?: OrgDriveVisibility },
   deps: OrgDriveServiceDeps
 ): Promise<CreateOrgDriveResult> {
-  const outcome = await retryOnOrgSlugConflict(() => db.transaction(async (tx) => {
+  const outcome = await retryOnOrgSlugConflict(() => transactionWithOrgAudit(async (tx, audit) => {
     const orgExists = await lockOrg(tx, input.orgId);
     const actorOrgRole = orgExists ? await deps.getOrgRole(tx, input.orgId, actorId) : null;
     const creationPolicy = orgExists ? await deps.getOrgDriveCreationPolicy(tx, input.orgId) : 'members';
@@ -310,21 +294,13 @@ export async function createOrgDrive(
     const publishSubdomain = await allocatePublishSubdomain(created.id, slug, tx);
 
     const publish = await deps.syncOrgMembership(tx, { kind: 'create', driveId: created.id, orgId: input.orgId });
+    await audit({ orgId: input.orgId, driveId: created.id, eventType: 'org.drive.created', actorId, resourceType: 'drive', resourceId: created.id, details: { orgVisibility: created.orgVisibility } });
     return { ok: true as const, drive: { ...created, publishSubdomain }, publish };
   }));
 
   if (!outcome.ok) return outcome;
   const { publish, ...created } = outcome;
   await publish();
-  await recordOrgAuditEventAfterCommit({
-    orgId: input.orgId,
-    driveId: created.drive.id,
-    eventType: 'org.drive.created',
-    actorId,
-    resourceType: 'drive',
-    resourceId: created.drive.id,
-    details: { orgVisibility: created.drive.orgVisibility },
-  });
   return created;
 }
 
@@ -367,7 +343,7 @@ export async function changeDriveVisibility(
   input: { orgVisibility: OrgDriveVisibility },
   deps: OrgDriveServiceDeps
 ): Promise<ChangeVisibilityResult> {
-  const outcome = await retryOnDeadlock(() => db.transaction(async (tx) => {
+  const outcome = await retryOnDeadlock(() => transactionWithOrgAudit(async (tx, audit) => {
     const locked = await lockDriveWithOrg(tx, driveId, actorId, deps);
     if (!locked) return driveNotFound();
     const { drive, actorOrgRole } = locked;
@@ -390,23 +366,13 @@ export async function changeDriveVisibility(
       .where(eq(drives.id, driveId))
       .returning();
     const publish = await deps.syncOrgMembership(tx, { kind: 'visibility', driveId, orgId: drive.orgId });
+    await audit({ orgId: drive.orgId, driveId, eventType: 'org.drive.visibility_changed', actorId, resourceType: 'drive', resourceId: driveId, details: { from: verdict.from, to: verdict.to } });
     return { ok: true as const, changed: true, drive: updated, from: verdict.from, to: verdict.to, publish };
   }));
 
   if (!outcome.ok) return outcome;
   const { publish, ...changed } = outcome;
   await publish();
-  if (changed.changed && changed.drive.orgId !== null) {
-    await recordOrgAuditEventAfterCommit({
-      orgId: changed.drive.orgId,
-      driveId,
-      eventType: 'org.drive.visibility_changed',
-      actorId,
-      resourceType: 'drive',
-      resourceId: driveId,
-      details: { from: changed.from, to: changed.to },
-    });
-  }
   return changed;
 }
 
@@ -429,7 +395,7 @@ export async function changeOrgDriveLead(
   input: { newLeadId: string },
   deps: OrgDriveServiceDeps
 ): Promise<ChangeLeadResult> {
-  const outcome = await retryOnDeadlock(() => db.transaction(async (tx) => {
+  const outcome = await retryOnDeadlock(() => transactionWithOrgAudit(async (tx, audit) => {
     const locked = await lockDriveWithOrg(tx, driveId, actorId, deps);
     if (!locked) return driveNotFound();
     const { drive, actorOrgRole } = locked;
@@ -480,22 +446,20 @@ export async function changeOrgDriveLead(
       fromUserId: verdict.fromUserId,
       toUserId: verdict.toUserId,
     });
+    await audit({
+      orgId: drive.orgId,
+      driveId,
+      eventType: 'org.drive.lead_changed',
+      actorId,
+      resourceType: 'drive',
+      resourceId: driveId,
+      details: { fromUserId: verdict.fromUserId, toUserId: verdict.toUserId, reason: 'lead_changed' },
+    });
     return { ok: true as const, changed: true, drive: updated, fromUserId: verdict.fromUserId, toUserId: verdict.toUserId, publish };
   }));
 
   if (!outcome.ok) return outcome;
   const { publish, ...changed } = outcome;
   await publish();
-  if (changed.changed && changed.drive.orgId !== null) {
-    await recordOrgAuditEventAfterCommit({
-      orgId: changed.drive.orgId,
-      driveId,
-      eventType: 'org.drive.lead_changed',
-      actorId,
-      resourceType: 'drive',
-      resourceId: driveId,
-      details: { fromUserId: changed.fromUserId, toUserId: changed.toUserId, reason: 'lead_changed' },
-    });
-  }
   return changed;
 }

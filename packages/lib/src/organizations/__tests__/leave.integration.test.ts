@@ -435,7 +435,7 @@ describe('leave and delete cascades (Postgres)', () => {
     const leaving = leaveOrganization(lead.id, org.id);
     let leaveSettled = false;
     void leaving.finally(() => { leaveSettled = true; }).catch(() => {});
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    await new Promise((resolve) => setTimeout(resolve, 1500));
     const finishedWhileShared = leaveSettled;
 
     release();

@@ -102,6 +102,13 @@
 # retried before the boundary. Idempotent; a replayed write carries the same idempotency key.
 */15 * * * * flock -n /run/release-org-seats.lock cron-curl GET __WEB_URL__/api/cron/release-org-seats >> /var/log/cron/release-org-seats.log 2>&1 || echo "$(date -u) tick skipped (lock held) or request failed" >> /var/log/cron/release-org-seats.log
 
+# Org audit outbox drain - Every minute
+# Every org change stages its audit event in the same transaction and publishes it right after
+# commit (AUD-1). An event that publish could not deliver (the audit chain refused it, or the
+# process stopped in between) stays queued; this tick appends every due one to the security
+# audit chain, retrying a refused append with a capped backoff. Nothing is ever dropped.
+* * * * * flock -n /run/drain-org-audit-outbox.lock cron-curl GET __WEB_URL__/api/cron/drain-org-audit-outbox >> /var/log/cron/drain-org-audit-outbox.log 2>&1 || echo "$(date -u) tick skipped (lock held) or request failed" >> /var/log/cron/drain-org-audit-outbox.log
+
 # Machine storage reconcile - Hourly
 # Bills each Terminal Machine's persistent storage from its last persisted
 # measurement (see machine-storage-reconcile.ts in @pagespace/lib); watermarks

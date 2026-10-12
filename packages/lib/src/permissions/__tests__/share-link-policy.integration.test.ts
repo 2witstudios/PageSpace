@@ -26,7 +26,6 @@ import { claimPendingGuestApproval, listPendingGuestApprovals } from '../guest-h
 import { getUserAccessLevel } from '../permissions';
 
 vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
-vi.mock('../../audit/org-audit', () => ({ recordOrgAuditEvent: vi.fn(async () => {}), recordOrgAuditEventAfterCommit: vi.fn(async () => true) }));
 
 import { updateOrgPolicies } from '../../organizations/policies';
 

@@ -24,11 +24,9 @@ vi.mock('@/lib/repositories/page-invite-repository', () => ({
 
 // POL-2: the route asks the org's guests policy before granting or inviting. Default: a drive with no org, allowed.
 const decideOrgDriveAdmission = vi.hoisted(() => vi.fn());
-const requestGuestApproval = vi.hoisted(() => vi.fn());
-const recordOrgAuditEvent = vi.hoisted(() => vi.fn());
+const queueGuestForApproval = vi.hoisted(() => vi.fn());
 vi.mock('@pagespace/lib/permissions/guest-admission', () => ({ decideOrgDriveAdmission }));
-vi.mock('@pagespace/lib/permissions/guest-holds', () => ({ requestGuestApproval }));
-vi.mock('@pagespace/lib/audit/org-audit', () => ({ recordOrgAuditEvent }));
+vi.mock('@pagespace/lib/permissions/guest-holds', () => ({ queueGuestForApproval }));
 
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
@@ -158,8 +156,7 @@ describe('POST /api/pages/[pageId]/share-invite', () => {
     vi.mocked(pageInviteRepository.createDirectPagePermission).mockResolvedValue({ id: 'perm_new' });
     vi.mocked(pageInviteRepository.findExistingPagePermission).mockResolvedValue(null);
     decideOrgDriveAdmission.mockResolvedValue({ decision: 'allow', orgId: null });
-    requestGuestApproval.mockImplementation(async (input: { origin: string }) => ({ holdId: 'hold_1', origin: input.origin }));
-    recordOrgAuditEvent.mockResolvedValue(undefined);
+    queueGuestForApproval.mockImplementation(async (input: { origin: string }) => ({ holdId: 'hold_1', origin: input.origin }));
 
     vi.mocked(checkDistributedRateLimit).mockResolvedValue({ allowed: true });
     vi.mocked(createInviteToken).mockReturnValue({
@@ -546,7 +543,7 @@ describe('POST /api/pages/[pageId]/share-invite', () => {
 
       expect(response.status).toBe(202);
       expect(await response.json()).toMatchObject({ kind: 'pending_approval', holdId: 'hold_1' });
-      expect(requestGuestApproval).toHaveBeenCalledWith({
+      expect(queueGuestForApproval.mock.calls.map((c) => c[0])).toContainEqual({
         orgId: 'org_1',
         driveId: 'drive_xyz',
         userId: 'user_outside',
@@ -554,7 +551,8 @@ describe('POST /api/pages/[pageId]/share-invite', () => {
         request: { permissions: [{ pageId: mockPageId, canView: true, canEdit: true, canShare: false }], invitedBy: mockUserId },
         requestedBy: mockUserId,
       });
-      expect(recordOrgAuditEvent).toHaveBeenCalledWith(expect.objectContaining({ orgId: 'org_1', eventType: 'org.guest.requested' }));
+      // AUD-1: queued and audited together (one transaction), with the inviter as the actor.
+      expect(queueGuestForApproval.mock.calls[0][1]).toBe(mockUserId);
       expect(pageInviteRepository.createDirectPagePermission).not.toHaveBeenCalled();
     });
 
@@ -564,7 +562,7 @@ describe('POST /api/pages/[pageId]/share-invite', () => {
       const response = await POST(buildPost(mockPageId, { ...validBody, expiryDays: 7 }), createContext(mockPageId));
 
       expect(response.status).toBe(202);
-      expect(requestGuestApproval).toHaveBeenCalledWith(expect.objectContaining({
+      expect(queueGuestForApproval.mock.calls.map((c) => c[0])).toContainEqual(expect.objectContaining({
         email: 'new@example.com',
         origin: 'page_invite',
         request: { pageId: mockPageId, permissions: [{ pageId: mockPageId, canView: true, canEdit: false, canShare: false }], expiryDays: 7, invitedBy: mockUserId },

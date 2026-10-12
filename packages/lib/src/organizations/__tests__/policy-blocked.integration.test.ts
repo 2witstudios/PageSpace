@@ -24,12 +24,21 @@ import { workflows } from '@pagespace/db/schema/workflows';
 import { organizations, orgMembers, orgSubscriptions } from '@pagespace/db/schema/organizations';
 
 const audit = vi.hoisted(() => ({ events: [] as Array<Record<string, unknown>> }));
-vi.mock('../../audit/org-audit', () => ({
-  recordOrgAuditEvent: vi.fn(async (event: Record<string, unknown>) => {
-    audit.events.push(event);
-  }),
-  recordOrgAuditEventAfterCommit: vi.fn(async () => true),
-}));
+// AUD-1: the code under test stages its org events in the outbox; the chain append is captured here, so what this
+// suite sees is exactly what was staged, committed and delivered.
+vi.mock('../../audit/security-audit', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../audit/security-audit')>();
+  const { orgEventOf } = await import('../../audit/__tests__/capture-org-audit');
+  return {
+    ...actual,
+    securityAudit: {
+      ...actual.securityAudit,
+      logEvent: vi.fn(async (entry: import('../../audit/security-audit').AuditEvent) => {
+        audit.events.push(orgEventOf(entry));
+      }),
+    },
+  };
+});
 
 import { updateOrgPolicies } from '../policies';
 

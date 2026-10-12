@@ -24,7 +24,7 @@ import { orgDepartureSuppressions, orgMemberDepartures } from '@pagespace/db/sch
 import { decryptUserRow, getUserIndexKey } from '../auth/user-repository';
 import { computeBlindIndex } from '../encryption/blind-index';
 import { suppressionAddress } from './domains-core';
-import { recordOrgAuditEventAfterCommit } from '../audit/org-audit';
+import { transactionWithOrgAudit } from '../audit/org-audit';
 import { loggers } from '../logging/logger-config';
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -101,17 +101,19 @@ export async function isDepartureSuppressed(executor: Executor, orgId: string, e
 export async function clearDepartureSuppression(input: { orgId: string; email: string; actorId: string }): Promise<boolean> {
   const emailHash = departureSuppressionHash(input.email);
   if (emailHash === null) return false;
-  const cleared = await db
-    .delete(orgDepartureSuppressions)
-    .where(and(eq(orgDepartureSuppressions.orgId, input.orgId), eq(orgDepartureSuppressions.emailHash, emailHash)))
-    .returning({ id: orgDepartureSuppressions.id });
-  if (cleared.length === 0) return false;
-  await recordOrgAuditEventAfterCommit({
-    orgId: input.orgId,
-    eventType: 'org.member.suppression_cleared',
-    actorId: input.actorId,
-    resourceType: 'org_departure_suppression',
-    resourceId: cleared[0].id,
+  return transactionWithOrgAudit(async (tx, audit) => {
+    const cleared = await tx
+      .delete(orgDepartureSuppressions)
+      .where(and(eq(orgDepartureSuppressions.orgId, input.orgId), eq(orgDepartureSuppressions.emailHash, emailHash)))
+      .returning({ id: orgDepartureSuppressions.id });
+    if (cleared.length === 0) return false;
+    await audit({
+      orgId: input.orgId,
+      eventType: 'org.member.suppression_cleared',
+      actorId: input.actorId,
+      resourceType: 'org_departure_suppression',
+      resourceId: cleared[0].id,
+    });
+    return true;
   });
-  return true;
 }

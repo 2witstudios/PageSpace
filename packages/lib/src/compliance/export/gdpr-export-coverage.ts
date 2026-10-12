@@ -482,6 +482,8 @@ export const EXCLUDED_TABLES: Readonly<Record<string, string>> = {
     'An org\'s domain claim (SEC-1): the domain, its public DNS challenge and the hash of a mailed proof link. Organization configuration, not the subject\'s data; the one personal field is createdBy, an attribution the org\'s audit trail also carries. Account deletion nulls it (ON DELETE SET NULL).',
   org_departure_suppressions:
     'PERMANENT, deliberate post-erasure suppression record [D-OW-27], like a do-not-contact list: when a member who left or was removed from an org deletes their account, the org keeps only a KEYED blind index (HMAC-SHA256 under the server index key) of their normalized email, so a new account with that address is not auto-joined back by a verified domain (SEC-1). It holds no user id and no recoverable email, so it cannot be tied to a data subject or exported to one; account deletion WRITES it (the retained minimum) rather than removing it. It goes with the org, and an org Admin can clear it by typing the address.',
+  org_audit_outbox:
+    'A transient delivery queue for org audit events (AUD-1): each row is an org event staged with its change and deleted once appended to the security audit chain, normally within the same request. It holds ids and counts only (an actor id, never content or names), and the audit chain row it becomes is the record; like the other outboxes it is operational plumbing, not the subject\'s data.',
 };
 
 /** Every table the registry has a decision for. */

@@ -11,9 +11,8 @@ import { createInviteToken } from '@pagespace/lib/auth/invite-token';
 import { sendPendingPageShareInvitationEmail } from '@pagespace/lib/services/notification-email-service';
 import { decideOrgDriveAdmission } from '@pagespace/lib/permissions/guest-admission';
 import { admissionRefusalResponse } from '@/lib/drive-invites/invite-handlers';
-import { requestGuestApproval } from '@pagespace/lib/permissions/guest-holds';
+import { queueGuestForApproval } from '@pagespace/lib/permissions/guest-holds';
 import { GUESTS_HELD_MESSAGE } from '@pagespace/lib/organizations/sharing-decisions';
-import { recordOrgAuditEvent } from '@pagespace/lib/audit/org-audit';
 import type { PendingPagePermission } from '@pagespace/db/schema/pending-page-invites';
 import { pageInviteRepository } from '@/lib/repositories/page-invite-repository';
 import { isOrgLapsedError } from '@pagespace/lib/permissions/org-lapse-guard';
@@ -58,32 +57,24 @@ export async function pageShareGuestPolicyResponse(input: {
   if (admission.decision === 'refuse') return admissionRefusalResponse(admission.refusal);
   if (!admission.orgId) return null;
   const grant = { pageId: page.id, ...pageFlags(permissions) };
+  // AUD-1: queued and audited in one transaction.
   const item = verifiedUserId
-    ? await requestGuestApproval({
+    ? await queueGuestForApproval({
       orgId: admission.orgId,
       driveId: page.driveId,
       userId: verifiedUserId,
       origin: 'page_grant',
       request: { permissions: [grant], invitedBy: inviterUserId },
       requestedBy: inviterUserId,
-    })
-    : await requestGuestApproval({
+    }, inviterUserId)
+    : await queueGuestForApproval({
       orgId: admission.orgId,
       driveId: page.driveId,
       email,
       origin: 'page_invite',
       request: { pageId: page.id, permissions: [grant], expiryDays, invitedBy: inviterUserId },
       requestedBy: inviterUserId,
-    });
-  await recordOrgAuditEvent({
-    orgId: admission.orgId,
-    eventType: 'org.guest.requested',
-    actorId: inviterUserId,
-    resourceType: 'drive',
-    resourceId: page.driveId,
-    driveId: page.driveId,
-    details: { holdId: item.holdId, origin: item.origin, target: verifiedUserId ? 'user' : 'email' },
-  }).catch((error) => loggers.api.error('Page share queued but its audit event was not recorded', error as Error));
+    }, inviterUserId);
   return NextResponse.json({ kind: 'pending_approval', holdId: item.holdId, message: GUESTS_HELD_MESSAGE }, { status: 202 });
 }
 

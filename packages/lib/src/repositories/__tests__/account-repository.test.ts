@@ -44,8 +44,16 @@ vi.mock('@pagespace/db/operators', () => ({
 vi.mock('../../organizations/leave', () => ({
   leaveAllOrganizations: vi.fn().mockResolvedValue([]),
   reassignLedOrgDrives: vi.fn().mockResolvedValue([]),
-  recordComputeReattributions: vi.fn().mockResolvedValue(undefined),
+  computeReattributionAuditEvents: vi.fn(() => []),
 }));
+// AUD-1: deleteUser's org events are staged in its own transaction; the stage is a spy.
+const stageAudit = vi.hoisted(() => vi.fn());
+vi.mock('../../audit/org-audit', async () => {
+  const { db } = await import('@pagespace/db/db');
+  return {
+    transactionWithOrgAudit: (run: (tx: unknown, audit: typeof stageAudit) => Promise<unknown>) => db.transaction((tx) => run(tx, stageAudit)),
+  };
+});
 // [D-OW-27] The suppression write is proven against Postgres in organizations/__tests__/
 // departure-suppression.integration.test.ts; here only its place in deleteUser.
 vi.mock('../../organizations/departure-suppression', () => ({
@@ -55,7 +63,7 @@ vi.mock('../../organizations/departure-suppression', () => ({
 // automation-ownership.integration.test.ts; here only its place in deleteUser.
 vi.mock('../../organizations/automation-ownership', () => ({
   prepareAutomationsForAccountDeletion: vi.fn().mockResolvedValue([]),
-  recordOwnerLeftAutomations: vi.fn().mockResolvedValue(undefined),
+  ownerLeftAutomationAuditEvents: vi.fn((items: Array<{ id: string }>) => items.map((i) => ({ eventType: 'org.automation.owner_left', resourceId: i.id }))),
 }));
 vi.mock('../conversation-cleanup', () => ({
   deleteConversationsForDrive: vi.fn().mockResolvedValue({ conversations: 0, messages: 0 }),
@@ -68,7 +76,7 @@ vi.mock('../conversation-cleanup', () => ({
 import { accountRepository } from '../account-repository';
 import { db } from '@pagespace/db/db';
 import { deleteConversationsForDrive } from '../conversation-cleanup';
-import { prepareAutomationsForAccountDeletion, recordOwnerLeftAutomations } from '../../organizations/automation-ownership';
+import { ownerLeftAutomationAuditEvents, prepareAutomationsForAccountDeletion } from '../../organizations/automation-ownership';
 import { leaveAllOrganizations, reassignLedOrgDrives } from '../../organizations/leave';
 import { recordDepartureSuppressions } from '../../organizations/departure-suppression';
 
@@ -248,7 +256,7 @@ describe('accountRepository.deleteUser', () => {
     expect(vi.mocked(recordDepartureSuppressions).mock.invocationCallOrder[0]).toBeLessThan(deleteOrder);
   });
 
-  it('SPEND-6 (partial) the org automations are flagged in the same transaction, after leaving and reassigning, before the users row goes; audited once committed ([D-OW-36])', async () => {
+  it('SPEND-6 (partial) the org automations are flagged in the same transaction, after leaving and reassigning, before the users row goes; audited in that transaction ([D-OW-36], AUD-1)', async () => {
     const tx = setupTxDelete(vi.fn().mockResolvedValue(undefined));
     const flagged = [{ orgId: 'org-1', kind: 'workflow' as const, id: 'wf-1', driveId: 'drive-1', formerOwnerId: 'user-1', reason: 'account_deleted' as const }];
     vi.mocked(prepareAutomationsForAccountDeletion).mockResolvedValueOnce(flagged);
@@ -259,8 +267,9 @@ describe('accountRepository.deleteUser', () => {
     const prepareOrder = vi.mocked(prepareAutomationsForAccountDeletion).mock.invocationCallOrder[0];
     expect(vi.mocked(reassignLedOrgDrives).mock.invocationCallOrder[0]).toBeLessThan(prepareOrder);
     expect(prepareOrder).toBeLessThan(tx.delete.mock.invocationCallOrder[0]);
-    expect(recordOwnerLeftAutomations).toHaveBeenCalledWith(flagged);
-    expect(vi.mocked(recordOwnerLeftAutomations).mock.invocationCallOrder[0]).toBeGreaterThan(tx.delete.mock.invocationCallOrder[0]);
+    expect(ownerLeftAutomationAuditEvents).toHaveBeenCalledWith(flagged);
+    expect(stageAudit).toHaveBeenCalledWith(expect.objectContaining({ eventType: 'org.automation.owner_left', resourceId: 'wf-1' }));
+    expect(stageAudit.mock.invocationCallOrder[0]).toBeGreaterThan(tx.delete.mock.invocationCallOrder[0]);
   });
 
   it('O-7 does not delete the users row when leaving an org is refused', async () => {

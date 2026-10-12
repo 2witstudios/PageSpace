@@ -25,6 +25,16 @@ export async function getOrgPolicies(orgId: string, executor: Executor = db, opt
 }
 
 /**
+ * The policy WRITER's read (organizations/policies.ts): the stored value as it is, unparsed so a patch merges onto
+ * exactly what is stored, with the org row held FOR UPDATE until the writer's transaction commits. Null when the org
+ * does not exist.
+ */
+export async function lockStoredOrgPolicies(tx: Tx, orgId: string): Promise<{ stored: unknown } | null> {
+  const [row] = await tx.select({ policies: organizations.policies }).from(organizations).where(eq(organizations.id, orgId)).for('update').limit(1);
+  return row ? { stored: row.policies } : null;
+}
+
+/**
  * `forShare` (inside a transaction only): hold the org row FOR SHARE until the caller commits. The policy writer
  * takes the row FOR UPDATE, so a decision made under this lock and the write it guards serialize with a policy
  * change: either the write commits first and the change's suspension sees it, or the decision sees the new policy.

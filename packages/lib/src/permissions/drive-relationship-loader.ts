@@ -2,7 +2,7 @@ import { db } from '@pagespace/db/db';
 import { and, eq } from '@pagespace/db/operators';
 import { orgMembers } from '@pagespace/db/schema/organizations';
 import { ORGS_ENABLED } from '../organizations/orgs-enabled';
-import { securityAudit, type AuditEvent } from '../audit/security-audit';
+import { recordOrgAuditEvent } from '../audit/org-audit';
 import { loggers } from '../logging/logger-config';
 import {
   loadAcceptedRowsInDrives,
@@ -80,16 +80,17 @@ async function writeOrgPowerDriveAction(
   action: DriveLeadAction,
   authority: { via: 'org-owner' | 'org-admin'; orgId: string },
 ): Promise<void> {
-  const event: AuditEvent = {
-    eventType: 'authz.access.granted',
-    userId,
-    resourceType: 'drive',
-    resourceId: drive.id,
-    details: { via: authority.via === 'org-owner' ? 'org_owner' : 'org_admin', action, orgId: authority.orgId, orgVisibility: drive.orgVisibility },
-  };
-  loggers.security.info(`[Audit] ${event.eventType}`, { ...event });
   try {
-    await securityAudit.logEvent(event);
+    // AUD-1: through the org audit outbox, durable once staged.
+    await recordOrgAuditEvent({
+      orgId: authority.orgId,
+      driveId: drive.id,
+      eventType: 'authz.access.granted',
+      actorId: userId,
+      resourceType: 'drive',
+      resourceId: drive.id,
+      details: { via: authority.via === 'org-owner' ? 'org_owner' : 'org_admin', action, orgVisibility: drive.orgVisibility },
+    });
   } catch (error) {
     loggers.security.error('[Audit] org lead-action audit write failed', {
       userId,

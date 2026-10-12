@@ -9,8 +9,7 @@
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { organizations, type SuspensionKind } from '@pagespace/db/schema/organizations';
-import { recordOrgAuditEvent } from '../audit/org-audit';
-import { loggers } from '../logging/logger-config';
+import { publishOrgAuditEvents, stageOrgAuditEvents, type OrgAuditEvent } from '../audit/org-audit';
 import {
   mergeOrgPolicies,
   newlyBlockedKinds,
@@ -22,7 +21,7 @@ import {
   type OrgPoliciesPatch,
   type OrgPolicyKey,
 } from './policies-core';
-import { getOrgPolicies } from './policy-reader';
+import { getOrgPolicies, lockStoredOrgPolicies } from './policy-reader';
 import { retryOnDeadlock } from './repository';
 import { applySuspension, type PolicySuspensionItem } from './policy-suspension';
 import { listPolicyBlockedItems, type PolicyBlockedItems } from './policy-blocked-items';
@@ -52,8 +51,6 @@ export type UpdateOrgPoliciesResult =
       restored: PolicySuspensionItem[];
       /** What the change newly forbids that is blocked where it is used rather than suspended (counts, a bounded list). */
       blocked: PolicyBlockedItems;
-      /** False when the change committed but the audit chain rejected an append; the caller must surface it. */
-      auditRecorded: boolean;
     }
   | { ok: false; reason: 'not_found' }
   /**
@@ -78,20 +75,54 @@ function countsByKind(items: readonly PolicySuspensionItem[]): Record<string, nu
   return out;
 }
 
+const listed = (items: ReadonlyArray<{ kind: string; resourceType: string; id: string; driveId: string | null }>) =>
+  items.slice(0, AUDIT_LISTED_IDS).map((i) => ({ kind: i.kind, type: i.resourceType, id: i.id, driveId: i.driveId }));
+
+/**
+ * POL-1 / AUD-1: the events one policy change writes — the change itself (key, old and new value), and what it
+ * newly suspended, restored, or forbids without suspending (blocked), each counted in full and listed up to
+ * AUDIT_LISTED_IDS. A change that changed nothing writes nothing.
+ */
+export function policyChangeAuditEvents(input: {
+  orgId: string;
+  actorId: string;
+  changes: readonly PolicyChange[];
+  suspended: readonly PolicySuspensionItem[];
+  restored: readonly PolicySuspensionItem[];
+  blocked: PolicyBlockedItems;
+}): OrgAuditEvent[] {
+  const { orgId, actorId, changes, suspended, restored, blocked } = input;
+  if (changes.length === 0) return [];
+  const base = { orgId, actorId, resourceType: 'organization', resourceId: orgId } as const;
+  const events: OrgAuditEvent[] = [{ ...base, eventType: 'org.policy.changed', details: { changes: changes.map((c) => ({ key: c.key, from: c.from, to: c.to })) } }];
+  for (const [eventType, items] of [['org.policy.suspended', suspended], ['org.policy.restored', restored]] as const) {
+    if (items.length === 0) continue;
+    events.push({ ...base, eventType, details: { counts: countsByKind(items), total: items.length, listed: listed(items), truncated: items.length > AUDIT_LISTED_IDS } });
+  }
+  if (blocked.total > 0) {
+    events.push({
+      ...base,
+      eventType: 'org.policy.blocked',
+      details: { counts: blocked.counts, total: blocked.total, listed: listed(blocked.items), truncated: blocked.items.length < blocked.total || blocked.items.length > AUDIT_LISTED_IDS },
+    });
+  }
+  return events;
+}
+
 /**
  * Apply a validated patch. While the org is lapsed only a change that restricts applies ([D-OW-33]). The row lock, the stored policies and every suspension or restore commit in
  * ONE transaction, so there is no moment where the policy says off and an existing link is still live
- * for lack of a marker. The audit rows are written after commit (the audit chain is a different store).
+ * for lack of a marker. Its audit events are staged in that same transaction (AUD-1) and published after commit.
  */
 export async function updateOrgPolicies(input: { orgId: string; actorId: string; patch: OrgPoliciesPatch }): Promise<UpdateOrgPoliciesResult> {
   const { orgId, actorId, patch } = input;
   // A policy change can be chosen as a deadlock victim by a concurrent multi-step write (re-verify N6); it rolls back
   // whole, so it is simply run again.
   const done = await retryOnDeadlock(() => db.transaction(async (tx) => {
-    const [row] = await tx.select({ policies: organizations.policies }).from(organizations).where(eq(organizations.id, orgId)).for('update').limit(1);
+    const row = await lockStoredOrgPolicies(tx, orgId);
     if (!row) return null;
-    const before = parseOrgPolicies(row.policies);
-    const stored = mergeOrgPolicies(row.policies, patch);
+    const before = parseOrgPolicies(row.stored);
+    const stored = mergeOrgPolicies(row.stored, patch);
     const after = parseOrgPolicies(stored);
     // [D-OW-33] read under the org row's lock, so the change judged is the one stored.
     if (!policyChangeOnlyRestricts(before, after) && !(await isOrgActive(orgId, { executor: tx }))) return { lapsed: true as const };
@@ -105,67 +136,22 @@ export async function updateOrgPolicies(input: { orgId: string; actorId: string;
     const blocked = await listPolicyBlockedItems(tx, orgId, after, newlyBlockedKinds(before, after), AUDIT_LISTED_IDS);
     await tx.update(organizations).set({ policies: stored }).where(eq(organizations.id, orgId));
     const changes: PolicyChange[] = ORG_POLICY_KEYS.filter((k) => !same(before[k], after[k])).map((key) => ({ key, from: before[key], to: after[key] }));
-    return { lapsed: false as const, refused: false as const, after, changes, outcome, blocked };
+    // AUD-1: the change's events commit with it (the outbox), listing what it suspended, restored and blocked.
+    const staged = await stageOrgAuditEvents(tx, policyChangeAuditEvents({ orgId, actorId, changes, suspended: outcome.suspended, restored: outcome.restored, blocked }));
+    return { lapsed: false as const, refused: false as const, after, changes, outcome, blocked, staged };
   }));
   if (!done) return { ok: false, reason: 'not_found' };
   if (done.lapsed) return { ok: false, reason: ORG_LAPSED_CODE, message: ORG_LAPSED_MESSAGE };
   if (done.refused) return { ok: false, reason: 'open_role_floor', floor: done.floor, drives: done.drives };
 
-  const { after, changes, outcome, blocked } = done;
+  const { after, changes, outcome, blocked, staged } = done;
   // Realtime: a parked guest must stop receiving events in the drive's rooms now, not at their next reconnect.
   // Best effort and never throws; the per-event permission recheck is the enforcement either way.
   await kickSuspendedGuests(
     outcome.suspended.filter((i) => i.kind === 'guests' && i.userId).map((i) => ({ holdId: i.id, driveId: i.driveId, userId: i.userId ?? null, email: null, origin: 'invite' as const, createdAt: new Date() })),
   );
-  let auditRecorded = true;
-  if (changes.length > 0) {
-    try {
-      await recordOrgAuditEvent({
-        orgId,
-        eventType: 'org.policy.changed',
-        actorId,
-        resourceType: 'organization',
-        resourceId: orgId,
-        details: { changes: changes.map((c) => ({ key: c.key, from: c.from, to: c.to })) },
-      });
-      for (const [eventType, items] of [['org.policy.suspended', outcome.suspended], ['org.policy.restored', outcome.restored]] as const) {
-        if (items.length === 0) continue;
-        await recordOrgAuditEvent({
-          orgId,
-          eventType,
-          actorId,
-          resourceType: 'organization',
-          resourceId: orgId,
-          details: {
-            counts: countsByKind(items),
-            total: items.length,
-            listed: items.slice(0, AUDIT_LISTED_IDS).map((i) => ({ kind: i.kind, type: i.resourceType, id: i.id, driveId: i.driveId })),
-            truncated: items.length > AUDIT_LISTED_IDS,
-          },
-        });
-      }
-      // POL-1: what the change forbids but does not suspend is listed too, so the log shows everything it reached.
-      if (blocked.total > 0) {
-        await recordOrgAuditEvent({
-          orgId,
-          eventType: 'org.policy.blocked',
-          actorId,
-          resourceType: 'organization',
-          resourceId: orgId,
-          details: {
-            counts: blocked.counts,
-            total: blocked.total,
-            listed: blocked.items.slice(0, AUDIT_LISTED_IDS).map((i) => ({ kind: i.kind, type: i.resourceType, id: i.id, driveId: i.driveId })),
-            truncated: blocked.items.length < blocked.total || blocked.items.length > AUDIT_LISTED_IDS,
-          },
-        });
-      }
-    } catch (error) {
-      auditRecorded = false;
-      loggers.security.error('Org policy change committed but its audit event was not recorded', error as Error, { orgId });
-    }
-  }
-  return { ok: true, policies: after, changes, suspended: outcome.suspended, restored: outcome.restored, blocked, auditRecorded };
+  await publishOrgAuditEvents(staged);
+  return { ok: true, policies: after, changes, suspended: outcome.suspended, restored: outcome.restored, blocked };
 }
 
 export type { SuspensionKind };

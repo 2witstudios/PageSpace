@@ -15,7 +15,6 @@
  * only for org drives: a personal drive's compute is its owner's wallet whoever created it, and a
  * dark deployment's membership answer has no org layer to consult. Never throws.
  */
-import { db } from '@pagespace/db/db';
 import { and, eq } from '@pagespace/db/operators';
 import { driveEnvs } from '@pagespace/db/schema/drive-envs';
 import { publishedApps } from '@pagespace/db/schema/published-apps';
@@ -23,7 +22,8 @@ import { loggers } from '../logging/logger-config';
 import { errorLogFields } from '../logging/error-cause';
 import { listCostOwnersOutsideTheirDrive, type CostOwnerOutsideDrive } from '../permissions/cost-owners-outside-drive';
 import { ORGS_ENABLED } from './orgs-enabled';
-import { recordComputeReattributions, type ComputeReattribution } from './leave';
+import { computeReattributionAuditEvents, type ComputeReattribution } from './leave';
+import { transactionWithOrgAudit } from '../audit/org-audit';
 
 export interface ReattributeRemovedCreatorsResult {
   outcome: 'disabled' | 'swept';
@@ -50,7 +50,7 @@ export async function reattributeRemovedCreators(): Promise<ReattributeRemovedCr
   result.examined = pairs.length;
   for (const pair of pairs) {
     try {
-      const items: ComputeReattribution[] = await db.transaction(async (tx) => {
+      const items: ComputeReattribution[] = await transactionWithOrgAudit(async (tx, audit) => {
         const envRows = await tx
           .update(driveEnvs)
           .set({ costOwnerId: null })
@@ -62,14 +62,15 @@ export async function reattributeRemovedCreators(): Promise<ReattributeRemovedCr
           .where(and(eq(publishedApps.driveId, pair.driveId), eq(publishedApps.costOwnerId, pair.costOwnerId)))
           .returning({ id: publishedApps.id });
         const base = { orgId: pair.orgId, driveId: pair.driveId, formerCostOwnerId: pair.costOwnerId, reason: 'removed_from_drive' as const };
-        return [
+        const reattributed: ComputeReattribution[] = [
           ...envRows.map((r) => ({ ...base, kind: 'drive_env' as const, id: r.id })),
           ...appRows.map((r) => ({ ...base, kind: 'published_app' as const, id: r.id })),
         ];
+        // AUD-1: with the update, so a rolled-back update never leaves an event behind.
+        await audit(...computeReattributionAuditEvents(reattributed));
+        return reattributed;
       });
       result.reattributed += items.length;
-      // After commit: a rolled-back update never leaves an event behind.
-      await recordComputeReattributions(items);
     } catch (error) {
       result.failed += 1;
       loggers.api.error('Creator re-attribution failed for one drive member — retried next sweep', undefined, {

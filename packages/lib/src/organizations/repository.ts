@@ -19,7 +19,7 @@ import {
 } from '@pagespace/db/schema/organizations';
 import { decryptUserRows, userEmailMatch } from '../auth/user-repository';
 import { decideOrgOwnerCandidate, loadOrgPrincipalKind } from './owner-candidate';
-import { recordOrgAuditEventAfterCommit } from '../audit/org-audit';
+import { transactionWithOrgAudit } from '../audit/org-audit';
 import { NEW_ORG_POLICIES } from './policies-core';
 
 const UNIQUE_VIOLATION = '23505';
@@ -212,7 +212,7 @@ export async function createOrganization(input: {
   ownerId: string;
 }): Promise<CreateOrganizationResult> {
   try {
-    const result = await db.transaction(async (tx): Promise<CreateOrganizationResult> => {
+    return await transactionWithOrgAudit(async (tx, audit): Promise<CreateOrganizationResult> => {
       const candidate = decideOrgOwnerCandidate(await loadOrgPrincipalKind(tx, input.ownerId));
       if (!candidate.ok) return { ok: false, reason: candidate.reason };
       const [org] = await tx
@@ -220,19 +220,9 @@ export async function createOrganization(input: {
         .values({ name: input.name, slug: input.slug, avatarUrl: input.avatarUrl ?? null, ownerId: input.ownerId, policies: { ...NEW_ORG_POLICIES } })
         .returning(ORG_RECORD);
       await tx.insert(orgMembers).values({ orgId: org.id, userId: input.ownerId, role: 'OWNER' });
+      await audit({ orgId: org.id, eventType: 'org.created', actorId: input.ownerId, resourceType: 'organization', resourceId: org.id, details: { slug: org.slug } });
       return { ok: true, organization: org };
     });
-    if (result.ok) {
-      await recordOrgAuditEventAfterCommit({
-        orgId: result.organization.id,
-        eventType: 'org.created',
-        actorId: input.ownerId,
-        resourceType: 'organization',
-        resourceId: result.organization.id,
-        details: { slug: result.organization.slug },
-      });
-    }
-    return result;
   } catch (error) {
     if (isUniqueViolation(error)) return { ok: false, reason: 'slug_taken' };
     throw error;
@@ -249,17 +239,12 @@ export async function updateOrganization(
   actorId?: string,
 ): Promise<UpdateOrganizationResult> {
   try {
-    const [organization] = await db.update(organizations).set(patch).where(eq(organizations.id, orgId)).returning(ORG_RECORD);
-    if (!organization) return { ok: false, reason: 'not_found' };
-    await recordOrgAuditEventAfterCommit({
-      orgId,
-      eventType: 'org.updated',
-      actorId,
-      resourceType: 'organization',
-      resourceId: orgId,
-      details: { fields: Object.keys(patch).sort() },
+    return await transactionWithOrgAudit(async (tx, audit): Promise<UpdateOrganizationResult> => {
+      const [organization] = await tx.update(organizations).set(patch).where(eq(organizations.id, orgId)).returning(ORG_RECORD);
+      if (!organization) return { ok: false, reason: 'not_found' };
+      await audit({ orgId, eventType: 'org.updated', actorId, resourceType: 'organization', resourceId: orgId, details: { fields: Object.keys(patch).sort() } });
+      return { ok: true, organization };
     });
-    return { ok: true, organization };
   } catch (error) {
     if (isUniqueViolation(error)) return { ok: false, reason: 'slug_taken' };
     throw error;

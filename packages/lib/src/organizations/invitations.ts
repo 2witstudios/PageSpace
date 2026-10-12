@@ -21,8 +21,8 @@ import { getOrgPolicies } from './policy-reader';
 import { orgActorDecision } from './org-action-decisions';
 import { policyRefusal, type PolicyRefusal } from './sharing-decisions';
 import { checkOrgActive, checkOrgMayLoosen, ORG_LAPSED_CODE, type OrgLapsedRefusal } from './status';
-import { admitSeat, recordSeatAdmissionEvents, type SeatAdmission, type SeatBillingPort } from './seat-service';
-import { recordOrgAuditEventAfterCommit } from '../audit/org-audit';
+import { admitSeat, seatAdmissionAuditEvents, type SeatAdmission, type SeatBillingPort } from './seat-service';
+import { discardStagedOrgAuditEvents, publishOrgAuditEvents, stageOrgAuditEvent, stageOrgAuditEvents, transactionWithOrgAudit, type StagedOrgAuditEvent } from '../audit/org-audit';
 import {
   publishOrgMembershipSyncEvents,
   syncOrgMemberAccess,
@@ -167,9 +167,14 @@ export async function createOrRotateInvitation(input: {
   seatBilling?: SeatBillingPort;
 }): Promise<IssueInvitationResult> {
   let issued: Issued;
-  let seat = null as SeatAdmission | null;
+  // AUD-1: staged with the invite. The seat events are final at commit; the invite's own event only once its email
+  // went out (held back from the drainer until then, and discarded with the invite if the email fails).
+  let seatEvents: StagedOrgAuditEvent[] = [];
+  let inviteEvent = null as StagedOrgAuditEvent | null;
   try {
     issued = await db.transaction(async (tx): Promise<Issued> => {
+      seatEvents = [];
+      inviteEvent = null;
       await lockOrgInviteAddress(tx, input.orgId, input.email);
       // SEAT-9: inviting is an org-only capability; a lapsed org is refused before any write.
       const active = await checkOrgActive(input.orgId, { executor: tx, now: input.now });
@@ -197,24 +202,32 @@ export async function createOrRotateInvitation(input: {
       // SEAT-3/4/5: a new or rotated invite holds a seat. Decided under the org's billing lock,
       // after the address is known to need one and before anything is written; an auto-add
       // raise and this invite commit or roll back together.
-      seat = await admitSeat(tx, { orgId: input.orgId, actorRole: input.actorRole }, input.seatBilling);
+      const seat = await admitSeat(tx, { orgId: input.orgId, actorRole: input.actorRole }, input.seatBilling);
+      seatEvents = await stageOrgAuditEvents(tx, seatAdmissionAuditEvents({ orgId: input.orgId, actorId: input.invitedBy, admission: seat, operation: 'invite' }));
       if (!seat.ok) return seat;
 
       const { token, hash } = generateToken(ORG_INVITE_TOKEN_PREFIX);
       const expiresAt = inviteExpiryFrom(input.now);
-      if (decision.action === 'rotate' && openInvite) {
-        const [invitation] = await tx
+      const previous = decision.action === 'rotate' && openInvite ? openInvite : null;
+      const [invitation] = previous
+        ? await tx
           .update(orgInvitations)
           .set({ tokenHash: hash, expiresAt, role: input.role, invitedBy: input.invitedBy })
-          .where(eq(orgInvitations.id, decision.invitationId))
+          .where(eq(orgInvitations.id, previous.id))
+          .returning()
+        : await tx
+          .insert(orgInvitations)
+          .values({ orgId: input.orgId, email: input.email, role: input.role, tokenHash: hash, invitedBy: input.invitedBy, expiresAt })
           .returning();
-        return { ok: true, invitation, token, previous: openInvite };
-      }
-      const [invitation] = await tx
-        .insert(orgInvitations)
-        .values({ orgId: input.orgId, email: input.email, role: input.role, tokenHash: hash, invitedBy: input.invitedBy, expiresAt })
-        .returning();
-      return { ok: true, invitation, token, previous: null };
+      inviteEvent = await stageOrgAuditEvent(tx, {
+        orgId: input.orgId,
+        eventType: 'org.invite.created',
+        actorId: input.invitedBy,
+        resourceType: 'organization_invitation',
+        resourceId: invitation.id,
+        details: { role: invitation.role, rotated: previous !== null },
+      }, { pendingUntilFinal: true });
+      return { ok: true, invitation, token, previous };
     });
   } catch (error) {
     // Defence in depth: the open-invite unique index still refuses a duplicate.
@@ -222,7 +235,7 @@ export async function createOrRotateInvitation(input: {
     throw error;
   }
   // A raise is bought (and a refusal decided) whatever happens to the email below.
-  if (seat) await recordSeatAdmissionEvents({ orgId: input.orgId, actorId: input.invitedBy, admission: seat, operation: 'invite' });
+  await publishOrgAuditEvents(seatEvents);
   if (!issued.ok) return issued;
 
   const { invitation, token, previous } = issued;
@@ -235,24 +248,21 @@ export async function createOrRotateInvitation(input: {
       eq(orgInvitations.tokenHash, invitation.tokenHash),
       isNull(orgInvitations.acceptedAt),
     );
-    if (previous) {
-      await db
-        .update(orgInvitations)
-        .set({ tokenHash: previous.tokenHash, expiresAt: previous.expiresAt, role: previous.role, invitedBy: previous.invitedBy })
-        .where(stillOurs);
-    } else {
-      await db.delete(orgInvitations).where(stillOurs);
-    }
+    const staged = inviteEvent;
+    await db.transaction(async (tx) => {
+      if (previous) {
+        await tx
+          .update(orgInvitations)
+          .set({ tokenHash: previous.tokenHash, expiresAt: previous.expiresAt, role: previous.role, invitedBy: previous.invitedBy })
+          .where(stillOurs);
+      } else {
+        await tx.delete(orgInvitations).where(stillOurs);
+      }
+      await discardStagedOrgAuditEvents(tx, staged ? [staged] : []);
+    });
     return { ok: false, status: 502, reason: 'delivery_failed', cause };
   }
-  await recordOrgAuditEventAfterCommit({
-    orgId: input.orgId,
-    eventType: 'org.invite.created',
-    actorId: input.invitedBy,
-    resourceType: 'organization_invitation',
-    resourceId: invitation.id,
-    details: { role: invitation.role, rotated: previous !== null },
-  });
+  await publishOrgAuditEvents(inviteEvent);
   return { ok: true, invitation: toPublic(invitation), token, rotated: previous !== null };
 }
 
@@ -297,8 +307,12 @@ export async function resendInvitation(input: {
   seatBilling?: SeatBillingPort;
 }): Promise<ResendInvitationResult> {
   const { token, hash } = generateToken(ORG_INVITE_TOKEN_PREFIX);
-  let seat = null as SeatAdmission | null;
+  // AUD-1: as for a new invite, the seat events are final at commit and the resend's own once its email went out.
+  let seatEvents: StagedOrgAuditEvent[] = [];
+  let resendEvent = null as StagedOrgAuditEvent | null;
   const rotated = await db.transaction(async (tx) => {
+    seatEvents = [];
+    resendEvent = null;
     // The address lock first, as creation and acceptance take it, so a resend and a fresh invite
     // for the same address serialize (the billing lock below is always taken after it).
     const [peek] = await tx
@@ -326,7 +340,8 @@ export async function resendInvitation(input: {
     const refusal = await inviterRefusal(tx, input.orgId, input.actorRole, previous.role);
     if (refusal) return refusal;
     if (!isLiveInvite(previous, input.now)) {
-      seat = await admitSeat(tx, { orgId: input.orgId, actorRole: input.actorRole }, input.seatBilling);
+      const seat = await admitSeat(tx, { orgId: input.orgId, actorRole: input.actorRole }, input.seatBilling);
+      seatEvents = await stageOrgAuditEvents(tx, seatAdmissionAuditEvents({ orgId: input.orgId, actorId: input.actorId, admission: seat, operation: 'resend' }));
       if (!seat.ok) return seat;
     }
     const [invitation] = await tx
@@ -334,58 +349,65 @@ export async function resendInvitation(input: {
       .set({ tokenHash: hash, expiresAt: inviteExpiryFrom(input.now) })
       .where(eq(orgInvitations.id, previous.id))
       .returning();
+    resendEvent = await stageOrgAuditEvent(tx, {
+      orgId: input.orgId,
+      eventType: 'org.invite.resent',
+      actorId: input.actorId,
+      resourceType: 'organization_invitation',
+      resourceId: invitation.id,
+      details: { wasExpired: !isLiveInvite(previous, input.now) },
+    }, { pendingUntilFinal: true });
     return { previous, invitation };
   });
-  if (seat) await recordSeatAdmissionEvents({ orgId: input.orgId, actorId: input.actorId, admission: seat, operation: 'resend' });
+  await publishOrgAuditEvents(seatEvents);
   if (!rotated) return { ok: false, status: 404, reason: 'not_found' };
   if ('ok' in rotated) return rotated;
 
   try {
     await input.deliver(toPublic(rotated.invitation), token);
   } catch (cause) {
-    await db
-      .update(orgInvitations)
-      .set({ tokenHash: rotated.previous.tokenHash, expiresAt: rotated.previous.expiresAt })
-      .where(
-        and(
-          eq(orgInvitations.id, rotated.previous.id),
-          eq(orgInvitations.tokenHash, hash),
-          isNull(orgInvitations.acceptedAt),
-        ),
-      );
+    const staged = resendEvent;
+    await db.transaction(async (tx) => {
+      await tx
+        .update(orgInvitations)
+        .set({ tokenHash: rotated.previous.tokenHash, expiresAt: rotated.previous.expiresAt })
+        .where(
+          and(
+            eq(orgInvitations.id, rotated.previous.id),
+            eq(orgInvitations.tokenHash, hash),
+            isNull(orgInvitations.acceptedAt),
+          ),
+        );
+      await discardStagedOrgAuditEvents(tx, staged ? [staged] : []);
+    });
     return { ok: false, status: 502, reason: 'delivery_failed', cause };
   }
-  await recordOrgAuditEventAfterCommit({
-    orgId: input.orgId,
-    eventType: 'org.invite.resent',
-    actorId: input.actorId,
-    resourceType: 'organization_invitation',
-    resourceId: rotated.invitation.id,
-    details: { wasExpired: !isLiveInvite(rotated.previous, input.now) },
-  });
+  await publishOrgAuditEvents(resendEvent);
   return { ok: true, invitation: toPublic(rotated.invitation), token };
 }
 
 export async function revokeInvitation(input: { orgId: string; invitationId: string; actorId?: string }): Promise<boolean> {
-  const deleted = await db
-    .delete(orgInvitations)
-    .where(
-      and(
-        eq(orgInvitations.id, input.invitationId),
-        eq(orgInvitations.orgId, input.orgId),
-        isNull(orgInvitations.acceptedAt),
-      ),
-    )
-    .returning({ id: orgInvitations.id });
-  if (deleted.length === 0) return false;
-  await recordOrgAuditEventAfterCommit({
-    orgId: input.orgId,
-    eventType: 'org.invite.revoked',
-    actorId: input.actorId,
-    resourceType: 'organization_invitation',
-    resourceId: input.invitationId,
+  return transactionWithOrgAudit(async (tx, audit) => {
+    const deleted = await tx
+      .delete(orgInvitations)
+      .where(
+        and(
+          eq(orgInvitations.id, input.invitationId),
+          eq(orgInvitations.orgId, input.orgId),
+          isNull(orgInvitations.acceptedAt),
+        ),
+      )
+      .returning({ id: orgInvitations.id });
+    if (deleted.length === 0) return false;
+    await audit({
+      orgId: input.orgId,
+      eventType: 'org.invite.revoked',
+      actorId: input.actorId,
+      resourceType: 'organization_invitation',
+      resourceId: input.invitationId,
+    });
+    return true;
   });
-  return true;
 }
 
 export type AcceptInvitationResult =
@@ -427,7 +449,7 @@ export async function acceptInvitation(
   const tokenHash = hashToken(input.token);
   // A join locks the org row then its drives; a leave that reassigns a led drive locks drive and
   // org rows in one statement, so the two can still deadlock. The acceptance rolls back whole.
-  const outcome = await retryOnDeadlock(() => db.transaction(async (tx): Promise<{ result: AcceptInvitationResult; sync: OrgMembershipSyncResult | null }> => {
+  const outcome = await retryOnDeadlock(() => transactionWithOrgAudit(async (tx, audit): Promise<{ result: AcceptInvitationResult; sync: OrgMembershipSyncResult | null }> => {
     // Take the address lock (shared with invite creation) before the row lock.
     const [peek] = await tx
       .select({ orgId: orgInvitations.orgId, email: orgInvitations.email })
@@ -489,6 +511,16 @@ export async function acceptInvitation(
       sync = await deps.syncMemberAccess(invite.orgId, input.userId, { tx });
     }
     await tx.update(orgInvitations).set({ acceptedAt: input.now }).where(eq(orgInvitations.id, invite.id));
+    if (decision.action === 'join') {
+      await audit({
+        orgId: invite.orgId,
+        eventType: 'org.member.joined',
+        actorId: input.userId,
+        resourceType: 'user',
+        resourceId: input.userId,
+        details: { role: invite.role, via: 'invitation' },
+      });
+    }
     return {
       result: {
         ok: true,
@@ -500,15 +532,5 @@ export async function acceptInvitation(
     };
   }));
   if (outcome.sync) await deps.publishSyncEvents(outcome.sync);
-  if (outcome.result.ok && outcome.result.joined) {
-    await recordOrgAuditEventAfterCommit({
-      orgId: outcome.result.orgId,
-      eventType: 'org.member.joined',
-      actorId: input.userId,
-      resourceType: 'user',
-      resourceId: input.userId,
-      details: { role: outcome.result.role, via: 'invitation' },
-    });
-  }
   return outcome.result;
 }

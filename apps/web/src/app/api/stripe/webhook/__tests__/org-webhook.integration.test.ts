@@ -484,6 +484,24 @@ describe('Stripe webhook — org routing, idempotency, lapse (real Postgres, in-
     expect(await storedSub(org.orgId)).toMatchObject({ extraSeatQuantity: 3, seatRevision: before.seatRevision + 1 });
   });
 
+  it('AUD-1 (partial) a seat count changed on Stripe\'s side writes one org seat event naming both quantities, committed with the mirror; a replay writes none', async () => {
+    if (!dbAvailable) return;
+    const org = await northwind(7);
+    const sub = org.stripe.subscriptions.get(org.subscriptionId);
+    if (!sub) throw new Error('no fake subscription');
+    // The customer portal (or a support edit) lowers the seat item from 2 to 1.
+    sub.items = sub.items.map((i) => (i.priceId === PRICES.seatPriceId ? { ...i, quantity: 1 } : i));
+    const updated = eventPayload('customer.subscription.updated', { id: org.subscriptionId, object: 'subscription', customer: org.customerId, status: sub.status, metadata: orgMetadata(org.orgId) });
+    expect(await deliver(updated)).toBe(200);
+    expect(await deliver(updated)).toBe(200);
+    const seatsFilter = parseOrgAuditFilter({ category: 'seats', limit: '100' });
+    if (!seatsFilter.ok) throw new Error(seatsFilter.error);
+    const seats = await queryOrgAuditEvents(org.orgId, seatsFilter.filter);
+    expect(seats.entries.filter((e) => e.eventType === 'org.seat.quantity_changed' && e.details.source === 'stripe_webhook').map((e) => ({ from: e.details.from, to: e.details.to, reason: e.details.reason }))).toEqual([
+      { from: 2, to: 1, reason: 'stripe_side_change' },
+    ]);
+  });
+
   it('D-OW-23 review #2761 P2-4: a GIFT funds the pool at list × ratio only on the org\'s OWN subscription; a gift on a separately created subscription (never mirrored, so the org stays lapsed) funds nothing', async () => {
     if (!dbAvailable) return;
     const giftMeta = (orgId: string) => ({ ...orgMetadata(orgId), type: 'gift_subscription' });

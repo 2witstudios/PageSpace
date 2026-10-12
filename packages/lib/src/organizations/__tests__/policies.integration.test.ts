@@ -21,16 +21,24 @@ import { publishedPages } from '@pagespace/db/schema/published-pages';
 import { driveShareLinks, pageShareLinks } from '@pagespace/db/schema/share-links';
 
 const audit = vi.hoisted(() => ({ events: [] as Array<Record<string, unknown>>, failNext: false }));
-vi.mock('../../audit/org-audit', () => ({
-  recordOrgAuditEvent: vi.fn(async (event: Record<string, unknown>) => {
-    if (audit.failNext) throw new Error('audit chain unavailable');
-    audit.events.push(event);
-  }),
-  // Other mutations' org events (membership, drives) are not what this suite asserts.
-  recordOrgAuditEventAfterCommit: vi.fn(async () => true),
-}));
+// AUD-1: policy events are staged in the outbox with the change; the chain append is captured (and can be refused).
+vi.mock('../../audit/security-audit', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../audit/security-audit')>();
+  const { orgEventOf } = await import('../../audit/__tests__/capture-org-audit');
+  return {
+    ...actual,
+    securityAudit: {
+      ...actual.securityAudit,
+      logEvent: vi.fn(async (entry: import('../../audit/security-audit').AuditEvent) => {
+        if (audit.failNext) throw new Error('audit chain unavailable');
+        audit.events.push(orgEventOf(entry));
+      }),
+    },
+  };
+});
 
 import { getOrgPolicies, updateOrgPolicies } from '../policies';
+import { drainOrgAuditOutbox } from '../../audit/org-audit';
 import { DEFAULT_ORG_POLICIES } from '../policies-core';
 import { listPolicySuspensions } from '../policy-suspension';
 
@@ -270,14 +278,19 @@ describe('the audit trail of a change', () => {
     expect(audit.events.map((e) => e.eventType)).toEqual(['org.policy.changed', 'org.policy.restored']);
   });
 
-  it('POL-1 (partial) a rejected audit append does not undo the committed change but is reported to the caller', async () => {
+  it('AUD-1 (partial) POL-1 (partial) a rejected audit append neither undoes the committed change nor loses its events: they stay queued and the drainer delivers them', async () => {
     const live = await link(w.orgDrive);
     audit.failNext = true;
     const res = await updateOrgPolicies({ orgId, actorId: w.owner, patch: { publicShareLinks: false } });
-    if (!res.ok) throw new Error('expected ok');
-    expect(res.auditRecorded).toBe(false);
+    expect(res.ok).toBe(true);
     expect((await getOrgPolicies(orgId)).publicShareLinks).toBe(false);
     expect((await marker(driveShareLinks, live)).m).toBe('publicShareLinks');
+    expect(audit.events).toEqual([]);
+
+    audit.failNext = false;
+    // Past every backoff: the drainer appends what the chain refused, in order.
+    await drainOrgAuditOutbox({ now: new Date(Date.now() + 2 * 60 * 60_000) });
+    expect(audit.events.filter((e) => e.orgId === orgId).map((e) => e.eventType)).toEqual(['org.policy.changed', 'org.policy.suspended']);
   });
 });
 

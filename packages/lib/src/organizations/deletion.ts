@@ -20,7 +20,6 @@
  *   and the returned steps name every drive's destination for the confirmation and
  *   for the per-drive audit event the caller writes.
  */
-import { db } from '@pagespace/db/db';
 import { and, eq, inArray, sql } from '@pagespace/db/operators';
 import { drives } from '@pagespace/db/schema/core';
 import { driveMembers } from '@pagespace/db/schema/members';
@@ -31,7 +30,7 @@ import { revokeOrgDriveGrantsForMembers } from './leave';
 import { publishDriveAccessEvents, type OrgMembershipSyncPorts } from '../services/org-membership-sync';
 import type { AffectedUser } from '../services/org-membership-sync-core';
 import { closeStaleDriveJoinRequests } from '../permissions/drive-join-request-closure';
-import { recordOrgAuditEventAfterCommit } from '../audit/org-audit';
+import { transactionWithOrgAudit } from '../audit/org-audit';
 
 export type DriveDeletionChoice =
   | { driveId: string; action: 'transfer'; toUserId: string }
@@ -148,7 +147,7 @@ export async function deleteOrganization(
 ): Promise<DeleteOrganizationResult> {
   const toKick: RevokedRow[] = [];
   let subscriptionEnded = false;
-  const result = await db.transaction(async (tx): Promise<DeleteOrganizationResult> => {
+  const result = await transactionWithOrgAudit(async (tx, audit): Promise<DeleteOrganizationResult> => {
     // The billing lock FIRST (before the org row lock, the order provisioning takes them
     // in): a provisioning in flight finishes and its subscription is seen and ended
     // below, or it starts after and finds the org gone. Never a live Stripe
@@ -250,23 +249,21 @@ export async function deleteOrganization(
     }
 
     await tx.delete(organizations).where(eq(organizations.id, input.orgId));
-    return { ok: true, steps: plan.steps };
-  });
-  if (result.ok) {
     // AUD-1: the last event under this org, naming where each drive went (ids only) and whether its
-    // subscription was ended.
-    await recordOrgAuditEventAfterCommit({
+    // subscription was ended, committed with the deletion.
+    await audit({
       orgId: input.orgId,
       eventType: 'org.deleted',
       actorId: input.actorId,
       resourceType: 'organization',
       resourceId: input.orgId,
       details: {
-        drives: result.steps.map((step) => ({ driveId: step.driveId, destination: step.destination, ownerId: step.ownerId })),
+        drives: plan.steps.map((step) => ({ driveId: step.driveId, destination: step.destination, ownerId: step.ownerId })),
         subscriptionEnded,
       },
     });
-  }
+    return { ok: true, steps: plan.steps };
+  });
   // Once committed, and best effort: each person gets one member_removed event naming the drives
   // they lost (the sidebar and picker refresh on it) and a room kick per drive, 20 at a time.
   if (result.ok && toKick.length > 0) {

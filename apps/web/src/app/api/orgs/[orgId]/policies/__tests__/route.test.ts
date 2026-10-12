@@ -65,7 +65,6 @@ beforeEach(() => {
     suspended: [{ kind: 'publicShareLinks', resourceType: 'drive_share_link', id: 'l1', driveId: 'd1' }],
     restored: [],
     blocked: { counts: {}, total: 0, items: [] },
-    auditRecorded: true,
   });
 });
 
@@ -107,7 +106,7 @@ describe('policies routes', () => {
     const res = await PATCH(req('PATCH', '', { publicShareLinks: false }), ctx);
     expect(res.status).toBe(200);
     expect(updateOrgPolicies).toHaveBeenCalledWith({ orgId: ORG_ID, actorId: 'user_priya', patch: { publicShareLinks: false } });
-    expect(await res.json()).toMatchObject({ changed: ['publicShareLinks'], suspended: { publicShareLinks: 1 }, restored: {}, auditRecorded: true });
+    expect(await res.json()).toMatchObject({ changed: ['publicShareLinks'], suspended: { publicShareLinks: 1 }, restored: {} });
   });
 
   it('POL-1 (partial) what a change blocks without suspending (apps, envs, agents, autonomy, models) is reported by count', async () => {
@@ -119,8 +118,7 @@ describe('policies routes', () => {
       suspended: [],
       restored: [],
       blocked: { counts: { publishedApps: 2 }, total: 2, items: [] },
-      auditRecorded: true,
-    });
+      });
     expect(await (await PATCH(req('PATCH', '', { publishedApps: false }), ctx)).json()).toMatchObject({ blocked: { publishedApps: 2 } });
   });
 
@@ -156,12 +154,6 @@ describe('policies routes', () => {
     expect(updateOrgPolicies).toHaveBeenCalledWith({ orgId: ORG_ID, actorId: 'user_priya', patch: { guests: 'off' } });
   });
 
-  it('POL-1 (partial) a change that committed but was not audited is reported, not hidden', async () => {
-    as('OWNER');
-    vi.mocked(updateOrgPolicies).mockResolvedValue({ ok: true, policies: { ...DEFAULT_ORG_POLICIES }, changes: [], suspended: [], restored: [], blocked: { counts: {}, total: 0, items: [] }, auditRecorded: false });
-    expect((await (await PATCH(req('PATCH', '', { guests: 'on' }), ctx)).json()).auditRecorded).toBe(false);
-  });
-
   it('POL-1 (partial) the routes are dark with the orgs flag off', async () => {
     flags.orgsEnabled = false;
     as('OWNER');
@@ -177,8 +169,7 @@ describe('policies routes', () => {
         suspended: [],
         restored: [],
         blocked: { counts: {}, total: 0, items: [] },
-        auditRecorded: true,
-      });
+          });
 
     it('POL-4 (partial) a change to publishing moves the org\'s sites in the bucket right away and reports what moved', async () => {
       as('ADMIN');

@@ -13,9 +13,8 @@ import { EnforcedAuthContext } from './enforced-context';
 import { isDriveOwnerOrAdmin, canUserSharePage, isUserDriveMember } from './permissions';
 import { getDrivePolicies } from '../organizations/policy-reader';
 import { decideOrgDriveAdmission } from './guest-admission';
-import { requestGuestApproval, type ClaimedGuestApproval } from './guest-holds';
+import { queueGuestForApproval, type ClaimedGuestApproval } from './guest-holds';
 import { shareLinkCreationDecision, shareLinkUsable } from '../organizations/sharing-decisions';
-import { recordOrgAuditEventAfterCommit } from '../audit/org-audit';
 import { checkDriveMayLoosen } from './org-lapse-guard';
 
 // ============================================================================
@@ -23,18 +22,6 @@ import { checkDriveMayLoosen } from './org-lapse-guard';
 // ============================================================================
 
 
-/** AUD-1: a link redemption the org's guest policy queued for approval (POL-2). The redeemer is the actor. */
-async function recordGuestHeldEvent(orgId: string, driveId: string, userId: string, holdId: string, origin: 'drive_link' | 'page_link'): Promise<void> {
-  await recordOrgAuditEventAfterCommit({
-    orgId,
-    driveId,
-    eventType: 'org.guest.requested',
-    actorId: userId,
-    resourceType: 'drive',
-    resourceId: driveId,
-    details: { holdId, origin, target: 'user' },
-  });
-}
 
 export type ShareLinkError =
   | 'UNAUTHORIZED'
@@ -381,15 +368,15 @@ export async function redeemDriveShareLink(
   const admission = await decideOrgDriveAdmission({ driveId: link.driveId, userId: ctx.userId });
   if (admission.decision === 'refuse') return { ok: false, error: 'NOT_FOUND' };
   if (admission.decision === 'hold' && admission.orgId) {
-    const item = await requestGuestApproval({
+    // AUD-1: queued and audited together; the redeemer is the actor.
+    await queueGuestForApproval({
       orgId: admission.orgId,
       driveId: link.driveId,
       userId: ctx.userId,
       origin: 'drive_link',
       request: { linkId: link.id, role: link.role === 'ADMIN' ? 'ADMIN' : 'MEMBER', customRoleId: link.customRoleId },
       requestedBy: link.createdBy,
-    });
-    await recordGuestHeldEvent(admission.orgId, link.driveId, ctx.userId, item.holdId, 'drive_link');
+    }, ctx.userId);
     return { ok: false, error: 'PENDING_APPROVAL', driveId: link.driveId };
   }
 
@@ -561,15 +548,14 @@ export async function redeemPageShareLink(
   const admission = await decideOrgDriveAdmission({ driveId: link.driveId, userId: ctx.userId });
   if (admission.decision === 'refuse') return { ok: false, error: 'NOT_FOUND' };
   if (admission.decision === 'hold' && admission.orgId) {
-    const item = await requestGuestApproval({
+    await queueGuestForApproval({
       orgId: admission.orgId,
       driveId: link.driveId,
       userId: ctx.userId,
       origin: 'page_link',
       request: { linkId: link.id, pageId: link.pageId },
       requestedBy: null,
-    });
-    await recordGuestHeldEvent(admission.orgId, link.driveId, ctx.userId, item.holdId, 'page_link');
+    }, ctx.userId);
     return { ok: false, error: 'PENDING_APPROVAL' };
   }
 

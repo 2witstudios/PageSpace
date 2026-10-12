@@ -40,6 +40,7 @@ import {
   orgInvoiceExtraSeats,
   planOrgSubscriptionPriceMirror,
   planOrgSubscriptionMirror,
+  orgSubscriptionMirrorAuditEvents,
   routeBillingOwner,
   type BillingOwnerRoute,
 } from '@pagespace/lib/billing/org-webhook-core';
@@ -48,7 +49,7 @@ import { stripeOrgBilling, type OrgBillingStripe } from '@/lib/org-billing/org-s
 import { stripe as appStripe, type Stripe } from '@/lib/stripe';
 import { stripeConfig } from '@/lib/stripe-config';
 import { invoiceSubscriptionId } from './dedicated-routing';
-import { recordOrgAuditEventAfterCommit } from '@pagespace/lib/audit/org-audit';
+import { transactionWithOrgAudit } from '@pagespace/lib/audit/org-audit';
 
 export interface OrgWebhookDeps {
   /** Only the read: the mirror re-fetches the subscription, it never writes to Stripe. */
@@ -124,7 +125,7 @@ export async function mirrorOrgSubscription(
   eventId: string,
   deps: OrgWebhookDeps,
 ): Promise<OrgMirrorOutcome> {
-  const outcome = await db.transaction(async (tx): Promise<OrgMirrorOutcome> => {
+  const outcome = await transactionWithOrgAudit(async (tx, audit): Promise<OrgMirrorOutcome> => {
     await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${orgBillingLockKey(orgId)}, 0))`);
     const [stored] = await tx.select().from(orgSubscriptions).where(eq(orgSubscriptions.orgId, orgId)).limit(1);
     const plan = planOrgSubscriptionMirror({ storedSubscriptionId: stored?.stripeSubscriptionId ?? null, fetchedSubscriptionId: subscriptionId });
@@ -150,6 +151,17 @@ export async function mirrorOrgSubscription(
     const before = (await getOrgStatus(orgId, { executor: tx, now })).status;
     await tx.update(orgSubscriptions).set(next).where(eq(orgSubscriptions.id, stored.id));
     const after = (await getOrgStatus(orgId, { executor: tx, now })).status;
+    const transition = orgLapseTransition(before, after);
+    // AUD-1: committed with the mirror — a billing change, and a seat quantity changed on Stripe's side.
+    await audit(...orgSubscriptionMirrorAuditEvents({
+      orgId,
+      eventId,
+      previous: { status: stored.status, cancelAtPeriodEnd: stored.cancelAtPeriodEnd, extraSeatQuantity: stored.extraSeatQuantity },
+      next: { status: next.status, cancelAtPeriodEnd: next.cancelAtPeriodEnd, extraSeatQuantity: next.extraSeatQuantity ?? stored.extraSeatQuantity },
+      orgStatusBefore: before,
+      orgStatusAfter: after,
+      transition,
+    }));
     return {
       kind: 'applied',
       orgId,
@@ -158,29 +170,10 @@ export async function mirrorOrgSubscription(
       previous: { stripeStatus: stored.status, cancelAtPeriodEnd: stored.cancelAtPeriodEnd },
       before,
       after,
-      transition: orgLapseTransition(before, after),
+      transition,
     };
   });
 
-  if (outcome.kind === 'applied' && (outcome.previous.stripeStatus !== outcome.stripeStatus || outcome.previous.cancelAtPeriodEnd !== outcome.cancelAtPeriodEnd)) {
-    // AUD-1: a billing event, only when something changed (a redelivered event mirrors the same state).
-    await recordOrgAuditEventAfterCommit({
-      orgId,
-      eventType: 'org.billing.subscription_changed',
-      resourceType: 'org_subscription',
-      resourceId: orgId,
-      details: {
-        source: 'stripe_webhook',
-        eventId,
-        from: outcome.previous.stripeStatus,
-        to: outcome.stripeStatus,
-        cancelAtPeriodEnd: outcome.cancelAtPeriodEnd,
-        orgStatusBefore: outcome.before,
-        orgStatusAfter: outcome.after,
-        ...(outcome.transition ? { transition: outcome.transition } : {}),
-      },
-    });
-  }
   if (outcome.kind === 'applied' && outcome.before !== outcome.after) {
     // X-4: a lapse or a reactivation changes what every member may do — their surfaces refetch.
     void announceOrgChange(orgId, 'status');

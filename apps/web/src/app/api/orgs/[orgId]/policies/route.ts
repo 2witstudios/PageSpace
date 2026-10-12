@@ -85,7 +85,6 @@ export async function PATCH(request: Request, context: Context) {
       restored: countByKind(result.restored),
       // POL-1: what it forbids but does not suspend (apps, envs, cross-drive agents, autonomy, models), by count.
       blocked: result.blocked.counts,
-      auditRecorded: result.auditRecorded,
       ...(publishedVisibility ? { publishedVisibility } : {}),
     });
   } catch (error) {

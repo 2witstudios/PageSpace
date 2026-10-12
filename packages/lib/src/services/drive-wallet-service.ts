@@ -70,7 +70,7 @@ import {
   type DriveWalletView,
   type PoolFacts,
 } from '../billing/wallet-views';
-import { recordOrgAuditEventAfterCommit } from '../audit/org-audit';
+import { transactionWithOrgAudit, type OrgAuditEvent } from '../audit/org-audit';
 import { decryptUserRow } from '../auth/user-repository';
 import type { OrgApiErrorCode } from '../organizations/api-error-codes';
 import { announceDriveWalletChange, announceWalletChange } from '../billing/wallet-change-events';
@@ -383,23 +383,15 @@ async function lockDriveOrgStanding(tx: Tx, driveId: string, expectedOrgId: stri
   return drive.orgId === expectedOrgId ? null : driveMoved();
 }
 
-/** AUD-1: a change to an ORG drive's wallet, once committed. A personal drive's wallet is no org's business. */
-async function recordOrgWalletEvent(
+/** AUD-1: a change to an ORG drive's wallet, staged with the change. A personal drive's wallet is no org's business. */
+function orgWalletEvents(
   standing: { orgId: string | null; driveId: string },
   userId: string,
   eventType: 'org.wallet.allocation_changed' | 'org.wallet.topped_up' | 'org.wallet.donated',
   details: Record<string, unknown>,
-): Promise<void> {
-  if (standing.orgId === null) return;
-  await recordOrgAuditEventAfterCommit({
-    orgId: standing.orgId,
-    driveId: standing.driveId,
-    eventType,
-    actorId: userId,
-    resourceType: 'drive_wallet',
-    resourceId: standing.driveId,
-    details,
-  });
+): OrgAuditEvent[] {
+  if (standing.orgId === null) return [];
+  return [{ orgId: standing.orgId, driveId: standing.driveId, eventType, actorId: userId, resourceType: 'drive_wallet', resourceId: standing.driveId, details }];
 }
 
 /**
@@ -425,7 +417,7 @@ export async function createDriveWallet(
 
   const { standing } = access;
   await hooks.afterAccess?.();
-  const created = await db.transaction(async (tx) => {
+  const created = await transactionWithOrgAudit(async (tx, audit) => {
     const moved = await lockDriveOrgStanding(tx, driveId, standing.orgId);
     if (moved) return moved;
     await hooks.afterDriveLock?.();
@@ -456,14 +448,15 @@ export async function createDriveWallet(
       })
       .onConflictDoNothing({ target: [wallets.subjectType, wallets.subjectId], where: sql`"subjectId" IS NOT NULL` })
       .returning({ id: wallets.id });
-    return inserted.length > 0 ? ('created' as const) : ('exists' as const);
+    if (inserted.length === 0) return 'exists' as const;
+    await audit(...orgWalletEvents(standing, userId, 'org.wallet.allocation_changed', { operation: 'create', allocationCents: input.allocationCents }));
+    return 'created' as const;
   });
   if (typeof created === 'object') return created;
   if (created === 'no_parent') {
     return { ok: false, status: 409, code: 'no_org_pool', message: 'This organization has no pool to allocate from yet' };
   }
   if (created === 'exists') return { ok: false, status: 409, code: 'wallet_exists', message: 'This drive already has a wallet' };
-  await recordOrgWalletEvent(standing, userId, 'org.wallet.allocation_changed', { operation: 'create', allocationCents: input.allocationCents });
   void announceDriveWalletChange(driveId, 'allocation');
   return readView(userId, access);
 }
@@ -484,9 +477,8 @@ export async function updateDriveWallet(
   const lapsed = walletPatchOnlyRestricts(input) ? null : await requireOrgActiveForWrite(access);
   if (lapsed) return lapsed;
 
-  let applied: Record<string, unknown> = {};
   await hooks.afterAccess?.();
-  const outcome = await db.transaction(async (tx): Promise<WalletServiceError | null> => {
+  const outcome = await transactionWithOrgAudit(async (tx, audit): Promise<WalletServiceError | null> => {
     const moved = await lockDriveOrgStanding(tx, driveId, access.standing.orgId);
     if (moved) return moved;
     await hooks.afterDriveLock?.();
@@ -505,11 +497,10 @@ export async function updateDriveWallet(
       if (denied) return denied;
     }
     await tx.update(wallets).set(plan.set).where(eq(wallets.id, row.id));
-    applied = { ...plan.set };
+    await audit(...orgWalletEvents(access.standing, userId, 'org.wallet.allocation_changed', { operation: 'update', changes: { ...plan.set } }));
     return null;
   });
   if (outcome) return outcome;
-  await recordOrgWalletEvent(access.standing, userId, 'org.wallet.allocation_changed', { operation: 'update', changes: applied });
   void announceDriveWalletChange(driveId, input.allocationCents !== undefined ? 'allocation' : input.paused !== undefined ? 'status' : 'rules');
   return readView(userId, access);
 }
@@ -529,7 +520,7 @@ export async function deleteDriveWallet(
   if (denied) return denied;
 
   await hooks.afterAccess?.();
-  const deleted = await db.transaction(async (tx): Promise<{ ok: true } | WalletServiceError> => {
+  return transactionWithOrgAudit(async (tx, audit): Promise<{ ok: true } | WalletServiceError> => {
     const moved = await lockDriveOrgStanding(tx, driveId, access.standing.orgId);
     if (moved) return moved;
     await hooks.afterDriveLock?.();
@@ -558,10 +549,9 @@ export async function deleteDriveWallet(
       return { ok: false, status: 409, code: plan.reason, message: 'This wallet has moved money; pause it instead of deleting it', blockers: plan.blockers };
     }
     await tx.delete(wallets).where(eq(wallets.id, row.id));
+    await audit(...orgWalletEvents(access.standing, userId, 'org.wallet.allocation_changed', { operation: 'delete' }));
     return { ok: true };
   });
-  if (deleted.ok) await recordOrgWalletEvent(access.standing, userId, 'org.wallet.allocation_changed', { operation: 'delete' });
-  return deleted;
 }
 
 // ---------------------------------------------------------------------------
@@ -597,7 +587,7 @@ export async function topUpDriveWallet(
   if (!payerId) return { ok: false, status: 409, code: 'no_org_pool', message: 'This organization has no pool to pay from' };
 
   await hooks.afterAccess?.();
-  const result = await db.transaction(async (tx) => {
+  const result = await transactionWithOrgAudit(async (tx, audit) => {
     // The payer was chosen from the drive's org; a move since then would fund it from the wrong one.
     const moved = await lockDriveOrgStanding(tx, driveId, standing.orgId);
     if (moved) return moved;
@@ -691,12 +681,10 @@ export async function topUpDriveWallet(
         consumeStatus: 'applied',
       },
     ]);
+    await audit(...orgWalletEvents(standing, userId, 'org.wallet.topped_up', { amountCents: plan.amountCents, paidDebtCents: plan.target.paidDebtCents, legId: leg.id }));
     return { ok: true as const, legId: leg.id, amountCents: plan.amountCents, paidDebtCents: plan.target.paidDebtCents, duplicate: false };
   });
-  if (result.ok && !result.duplicate) {
-    await recordOrgWalletEvent(standing, userId, 'org.wallet.topped_up', { amountCents: result.amountCents, paidDebtCents: result.paidDebtCents, legId: result.legId });
-    void announceDriveWalletChange(driveId, 'balance');
-  }
+  if (result.ok && !result.duplicate) void announceDriveWalletChange(driveId, 'balance');
   return result;
 }
 
@@ -799,9 +787,15 @@ export async function setDriveWalletCap(
   // became an org's mid-request (drive_moved).
   // A drive-wallet leg with no cap row (or a null window) has no cap there.
   const restrictOnly = lapsed ? async (): Promise<RestrictOnly> => ({ refusal: lapsed, effective: (caps: ConsumerCaps | null): ConsumerCaps => caps ?? { dailyCents: null, monthlyCents: null } }) : undefined;
-  const written = await writeConsumerCap(row.id, consumerId, input, (tx) => lockDriveOrgStanding(tx, driveId, access.standing.orgId), restrictOnly);
+  const written = await writeConsumerCap(
+    row.id,
+    consumerId,
+    input,
+    orgWalletEvents(access.standing, userId, 'org.wallet.allocation_changed', { operation: input === null ? 'clear_consumer_cap' : 'set_consumer_cap', consumerId }),
+    (tx) => lockDriveOrgStanding(tx, driveId, access.standing.orgId),
+    restrictOnly,
+  );
   if (written) return written;
-  await recordOrgWalletEvent(access.standing, userId, 'org.wallet.allocation_changed', { operation: input === null ? 'clear_consumer_cap' : 'set_consumer_cap', consumerId });
   void announceWalletChange(row.id, 'caps');
   return { ok: true, walletId: row.id, caps: await capsOnWallet(row.id) };
 }
@@ -820,12 +814,14 @@ async function writeConsumerCap(
   walletId: string,
   consumerId: string,
   input: ConsumerCapWriteInput | null,
+  /** AUD-1: the org events of a write that applies, staged with it. */
+  auditEvents: readonly OrgAuditEvent[],
   guard?: (tx: Tx) => Promise<WalletServiceError | null>,
   /** Resolved inside the write's transaction (after `guard`), so what it reads is read under that transaction's locks. */
   restrictOnlyIn?: (tx: Tx) => Promise<RestrictOnly>,
 ): Promise<WalletServiceError | null> {
   const consumerKey = userConsumerKey(consumerId);
-  return db.transaction(async (tx): Promise<WalletServiceError | null> => {
+  return transactionWithOrgAudit(async (tx, audit): Promise<WalletServiceError | null> => {
     const blocked = guard ? await guard(tx) : null;
     if (blocked) return blocked;
     const restrictOnly = restrictOnlyIn ? await restrictOnlyIn(tx) : undefined;
@@ -837,6 +833,7 @@ async function writeConsumerCap(
     if (input === null) {
       if (restrictOnly && !capChangeOnlyRestricts(restrictOnly.effective(existing ?? null), restrictOnly.effective(null))) return restrictOnly.refusal;
       await tx.delete(walletConsumerCaps).where(and(eq(walletConsumerCaps.walletId, walletId), eq(walletConsumerCaps.consumerKey, consumerKey)));
+      await audit(...auditEvents);
       return null;
     }
     const plan = planConsumerCapWrite(input, existing ?? null);
@@ -849,6 +846,7 @@ async function writeConsumerCap(
         target: [walletConsumerCaps.walletId, walletConsumerCaps.consumerKey],
         set: { dailyCapCents: plan.caps.dailyCents, monthlyCapCents: plan.caps.monthlyCents, updatedAt: new Date() },
       });
+    await audit(...auditEvents);
     return null;
   });
 }
@@ -887,16 +885,22 @@ export async function setSeatCap(
           effective: (caps: ConsumerCaps | null): ConsumerCaps => ({ dailyCents: caps?.dailyCents ?? null, monthlyCents: caps?.monthlyCents ?? allowance }),
         };
       };
-  const written = await writeConsumerCap(pool.id, consumerId, input, undefined, restrictOnly);
+  const written = await writeConsumerCap(
+    pool.id,
+    consumerId,
+    input,
+    [{
+      orgId,
+      eventType: 'org.wallet.allocation_changed',
+      actorId: userId,
+      resourceType: 'org_pool',
+      resourceId: pool.id,
+      details: { operation: input === null ? 'clear_seat_cap' : 'set_seat_cap', consumerId },
+    }],
+    undefined,
+    restrictOnly,
+  );
   if (written) return written;
-  await recordOrgAuditEventAfterCommit({
-    orgId,
-    eventType: 'org.wallet.allocation_changed',
-    actorId: userId,
-    resourceType: 'org_pool',
-    resourceId: pool.id,
-    details: { operation: input === null ? 'clear_seat_cap' : 'set_seat_cap', consumerId },
-  });
   void announceOrgChange(orgId, 'seat_caps');
   return { ok: true, walletId: pool.id, caps: await capsOnWallet(pool.id) };
 }
@@ -1051,9 +1055,9 @@ export async function donateToDrive(
     // Re-checked under the drive row's lock inside the donation's transaction (see lockDriveOrgStanding).
     expectedDrive: { driveId, orgId: access.standing.orgId },
     afterDriveLock: hooks.afterDriveLock,
+    auditEvents: (donated) => orgWalletEvents(access.standing, userId, 'org.wallet.donated', donated),
   });
   if (outcome.kind === 'donated') {
-    await recordOrgWalletEvent(access.standing, userId, 'org.wallet.donated', { amountCents: outcome.amountCents, paidDebtCents: outcome.paidDebtCents, legId: outcome.legId });
     void announceDriveWalletChange(driveId, 'balance');
     return { ok: true, legId: outcome.legId, amountCents: outcome.amountCents, paidDebtCents: outcome.paidDebtCents, duplicate: false };
   }

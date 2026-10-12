@@ -28,13 +28,13 @@ import { publishedApps } from '@pagespace/db/schema/published-apps';
 import { walletConsumerCaps, wallets } from '@pagespace/db/schema/wallets';
 import { userConsumerKey } from '../billing/wallet-core';
 import { holdOrgGuestsUnderPolicy } from '../permissions/guest-holds';
-import { recordOrgAuditEvent } from '../audit/org-audit';
+import { publishOrgAuditEvents, stageOrgAuditEvents, type OrgAuditEvent, type OrgAuditExecutor, type StagedOrgAuditEvent } from '../audit/org-audit';
 import { getActorInfo, logActivityWithTx } from '../monitoring/activity-logger';
 import { parseScopeList } from '../auth/oauth/scopes';
 import { closeStaleDriveJoinRequests } from '../permissions/drive-join-request-closure';
-import { recordLeaveEvents } from './org-events';
+import { stageLeaveEvents } from './org-events';
 import { recordDepartureSuppression } from './departure-suppression';
-import { disableDepartedCreatorAutomations, recordOwnerLeftAutomations, type OwnerLeftAutomation } from './automation-ownership';
+import { disableDepartedCreatorAutomations, stageOwnerLeftAutomations, type OwnerLeftAutomation } from './automation-ownership';
 
 /** A Drizzle transaction handle. */
 export type LeaveTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -365,30 +365,31 @@ export interface ComputeReattribution {
 }
 
 /**
- * [D-OW-28] Record each re-attribution as an `org.compute.reattributed` event. Called AFTER the
- * leave's transaction commits (the audit chain is written outside it), so a rolled-back leave
- * never leaves an event behind. Ids only, never names.
+ * [D-OW-28] Each re-attribution as an `org.compute.reattributed` event, staged in the transaction that re-attributed
+ * it (AUD-1), so a rolled-back leave never leaves an event behind. Ids only, never names.
  */
-export async function recordComputeReattributions(items: readonly ComputeReattribution[], actorId?: string): Promise<void> {
-  for (const item of items) {
-    await recordOrgAuditEvent({
-      orgId: item.orgId,
-      eventType: 'org.compute.reattributed',
-      ...(actorId ? { actorId } : {}),
-      resourceType: item.kind,
-      resourceId: item.id,
-      driveId: item.driveId,
-      details: { formerCostOwnerId: item.formerCostOwnerId, costOwner: 'drive_lead', ...(item.reason ? { reason: item.reason } : {}) },
-    });
-  }
+export function computeReattributionAuditEvents(items: readonly ComputeReattribution[], actorId?: string): OrgAuditEvent[] {
+  return items.map((item) => ({
+    orgId: item.orgId,
+    eventType: 'org.compute.reattributed',
+    ...(actorId ? { actorId } : {}),
+    resourceType: item.kind,
+    resourceId: item.id,
+    driveId: item.driveId,
+    details: { formerCostOwnerId: item.formerCostOwnerId, costOwner: 'drive_lead', ...(item.reason ? { reason: item.reason } : {}) },
+  }));
+}
+
+export function stageComputeReattributions(executor: OrgAuditExecutor, items: readonly ComputeReattribution[], actorId?: string): Promise<StagedOrgAuditEvent[]> {
+  return stageOrgAuditEvents(executor, computeReattributionAuditEvents(items, actorId));
 }
 
 export interface LeaveOrganizationOptions {
   reason?: LeadReassignmentReason;
   actor?: LeaveActor;
-  /** Collects every [D-OW-28] re-attribution a caller holding the transaction must audit after commit. */
+  /** Collects every [D-OW-28] re-attribution a caller holding the transaction must stage for audit. */
   collectReattributed?: ComputeReattribution[];
-  /** Collects every [D-OW-36] owner-left automation a caller holding the transaction must audit after commit. */
+  /** Collects every [D-OW-36] owner-left automation a caller holding the transaction must stage for audit. */
   collectOwnerLeft?: OwnerLeftAutomation[];
   /** How the membership ended, as org_member_departures records it; default 'left' ('account_deleted' with that reason). */
   departure?: OrgDepartureReason;
@@ -406,15 +407,21 @@ export async function leaveOrganization(
   options: LeaveOrganizationOptions = {},
 ): Promise<LeaveOrganizationResult> {
   if (!tx) {
-    const result = await db.transaction((own) => leaveOrganization(userId, orgId, own, options));
-    // Inside a caller's transaction (removal, account deletion) the caller records the event, and the
-    // [D-OW-28] re-attributions, once ITS transaction commits.
-    if (result.ok) {
-      await recordLeaveEvents({ orgId, userId, actorId: userId, eventType: 'org.member.left', reason: options.reason, reassigned: result.reassigned });
-      await recordComputeReattributions(result.computeReattributed);
-      await recordOwnerLeftAutomations(result.automationsOwnerLeft, userId);
-    }
-    return result;
+    // Inside a caller's transaction (removal, account deletion) the caller stages the events. Here the leave is its
+    // own change: its events (AUD-1) commit with it and are published after.
+    const done = await db.transaction(async (own) => {
+      const result = await leaveOrganization(userId, orgId, own, options);
+      const staged = result.ok
+        ? [
+          ...(await stageLeaveEvents(own, { orgId, userId, actorId: userId, eventType: 'org.member.left', reason: options.reason, reassigned: result.reassigned })),
+          ...(await stageComputeReattributions(own, result.computeReattributed)),
+          ...(await stageOwnerLeftAutomations(own, result.automationsOwnerLeft, userId)),
+        ]
+        : [];
+      return { result, staged };
+    });
+    await publishOrgAuditEvents(done.staged);
+    return done.result;
   }
 
   const [membership] = await tx

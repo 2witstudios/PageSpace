@@ -23,11 +23,23 @@ import { orgGuestHolds } from '@pagespace/db/schema/org-guest-holds';
 import type { SessionClaims } from '../../auth/session-service';
 
 vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
-vi.mock('../../audit/org-audit', () => ({ recordOrgAuditEvent: vi.fn(async () => {}), recordOrgAuditEventAfterCommit: vi.fn(async () => true) }));
+const audit = vi.hoisted(() => ({ events: [] as Array<Record<string, unknown>> }));
+vi.mock('../../audit/security-audit', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../audit/security-audit')>();
+  const { orgEventOf } = await import('../../audit/__tests__/capture-org-audit');
+  return {
+    ...actual,
+    securityAudit: {
+      ...actual.securityAudit,
+      logEvent: vi.fn(async (entry: import('../../audit/security-audit').AuditEvent) => {
+        audit.events.push(orgEventOf(entry));
+      }),
+    },
+  };
+});
 vi.mock('../revocation-kick', () => ({ kickForDriveMembershipRevocation: vi.fn(async () => {}), kickForPagePermissionRevocation: vi.fn(async () => {}) }));
 vi.mock('../../monitoring/activity-logger', () => ({ logPermissionActivity: vi.fn(), getActorInfo: vi.fn(async () => ({ actorEmail: 'a@x', actorDisplayName: 'A' })) }));
 
-import { recordOrgAuditEvent } from '../../audit/org-audit';
 import { updateOrgPolicies } from '../../organizations/policies';
 import { EnforcedAuthContext } from '../enforced-context';
 import { grantPagePermission } from '../permission-mutations';
@@ -68,7 +80,7 @@ async function cleanup() {
 }
 
 beforeEach(async () => {
-  vi.mocked(recordOrgAuditEvent).mockClear();
+  audit.events.length = 0;
   const mk = async () => {
     const u = await factories.createUser();
     created.userIds.push(u.id);
@@ -137,7 +149,7 @@ describe('grantPagePermission asks the guests policy', () => {
     expect(hold.request).toEqual({ permissions: [{ pageId: w.page, ...EDIT }], invitedBy: w.owner });
     if (result.ok || result.error.code !== 'GUEST_APPROVAL_PENDING') throw new Error('expected a queued grant');
     expect(result.error.holdId).toBe(hold.id);
-    expect(recordOrgAuditEvent).toHaveBeenCalledWith(expect.objectContaining({ orgId: w.orgId, eventType: 'org.guest.requested', details: expect.objectContaining({ origin: 'page_grant', holdId: hold.id }) }));
+    expect(audit.events).toContainEqual(expect.objectContaining({ orgId: w.orgId, eventType: 'org.guest.requested', details: expect.objectContaining({ origin: 'page_grant', holdId: hold.id }) }));
   });
 
   it('POL-2 (partial) guests ON grants the outsider at once, as before', async () => {

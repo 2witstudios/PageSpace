@@ -220,7 +220,7 @@ describe('org access in the human drive resolvers (integration)', () => {
     }, { timeout: 10_000, interval: 200 });
     const rows = await auditRowsFor([f.drives.finance.id]);
     expect(rows.find((r) => r.userId === f.people.priya.id)?.details).toEqual({
-      via: 'org_admin', orgId: f.org.id, orgRole: 'ADMIN', orgVisibility: 'PRIVATE',
+      via: 'org_admin', orgId: f.org.id, driveId: f.drives.finance.id, orgRole: 'ADMIN', orgVisibility: 'PRIVATE',
     });
     expect(rows.some((r) => r.userId === f.people.omar.id)).toBe(false);
   });

@@ -17,7 +17,7 @@ import path from 'node:path';
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db';
-import { eq, inArray } from '@pagespace/db/operators';
+import { and, eq, inArray } from '@pagespace/db/operators';
 import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
 import { users } from '@pagespace/db/schema/auth';
@@ -50,9 +50,15 @@ import { applyOrgPoolRefill } from '../../billing/wallet-funding-shell';
 import { hashToken } from '../../auth/token-utils';
 import { accountRepository } from '../../repositories/account-repository';
 import { clearDepartureSuppression } from '../../organizations/departure-suppression';
-import { recordComputeReattributions } from '../../organizations/leave';
+import { computeReattributionAuditEvents } from '../../organizations/leave';
 import { deleteOwnerLeftAutomation, reassignOwnerLeftAutomation } from '../../organizations/automation-ownership';
 import { workflows } from '@pagespace/db/schema/workflows';
+import { orgAuditOutbox } from '@pagespace/db/schema/organizations';
+import { orgGuestHolds } from '@pagespace/db/schema/org-guest-holds';
+import { securityAudit } from '../security-audit';
+import { drainOrgAuditOutbox, publishOrgAuditEvents, transactionWithOrgAudit } from '../org-audit';
+import { claimGuestApprovalDecision } from '../../permissions/guest-holds';
+import { completeApprovedLinkAdmission } from '../../permissions/share-link-service';
 import { defaultAppUnparkDeps, unparkPublishedApp } from '../../services/app-hosting/app-unpark';
 import { driveEnvs } from '@pagespace/db/schema/drive-envs';
 import { publishedApps } from '@pagespace/db/schema/published-apps';
@@ -61,11 +67,8 @@ vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 
 /** Types only apps/web writes, with the file that writes each (checked statically below). */
 const WEB_EMITTED: Partial<Record<OrgAuditCatalogType, string[]>> = {
-  'org.guest.approved': ['apps/web/src/app/api/orgs/[orgId]/guest-approvals/[holdId]/route.ts'],
-  'org.guest.declined': ['apps/web/src/app/api/orgs/[orgId]/guest-approvals/[holdId]/route.ts'],
   'org.billing.subscription_changed': [
     'apps/web/src/lib/org-billing/org-subscription.ts',
-    'apps/web/src/app/api/stripe/webhook/org-handlers.ts',
   ],
 };
 
@@ -165,8 +168,15 @@ describe('every org mutation writes its event', () => {
     resetAudit();
   });
 
-  it('AUD-1 (partial) AUD-2 (partial) the Northwind story through the real services leaves a row of every lib-emitted type, under the org, on a chain that still verifies', async () => {
+  it('AUD-1 AUD-2 (partial) every org-scoped event class (membership, seats, invites, policy changes, visibility, drive moves, admin access to a Private drive, wallet allocations, donations, billing) is committed with its change and reaches the org log even when the audit chain refuses every append, on a chain that still verifies', async () => {
     const domain = `northwind-${createId()}.com`;
+    // AUD-1 durability: for the whole story the chain refuses every org event. Each must still exist (staged in the
+    // outbox with its change) and arrive once the drainer runs against a healthy chain.
+    const appendOrgEvent = securityAudit.logEvent;
+    const refuseOrgEvents = vi.spyOn(securityAudit, 'logEvent').mockImplementation(async (entry) => {
+      if (entry.details && 'orgId' in entry.details) throw new Error('audit chain unavailable');
+      return appendOrgEvent(entry);
+    });
     const jono = await person('Jono');
     const priya = await person('Priya Nair');
     const marcus = await person('Marcus Oyelaran');
@@ -255,11 +265,20 @@ describe('every org mutation writes its event', () => {
     await factories.createPage(productId, { type: 'AI_CHAT', aiProvider: 'openai', aiModel: 'gpt-old' });
     expect((await updateOrgPolicies({ orgId, actorId: jono.id, patch: { modelAllowlist: ['gpt-new'] } })).ok).toBe(true);
     expect(await redeemDriveShareLink(ctxFor(chris.id), link.data.rawToken)).toMatchObject({ ok: false, error: 'PENDING_APPROVAL' });
+    // An Owner declines Chris; a second outsider is approved (the approval is final once its admission ran).
+    const holdOf = async (userId: string) => (await db.select({ id: orgGuestHolds.id }).from(orgGuestHolds).where(and(eq(orgGuestHolds.driveId, productId), eq(orgGuestHolds.userId, userId))))[0].id;
+    expect(await claimGuestApprovalDecision({ orgId, holdId: await holdOf(chris.id), decision: 'decline', actorId: jono.id })).toMatchObject({ ok: true });
+    const omar = await person('Omar Haddad');
+    expect(await redeemDriveShareLink(ctxFor(omar.id), link.data.rawToken)).toMatchObject({ ok: false, error: 'PENDING_APPROVAL' });
+    const approved = await claimGuestApprovalDecision({ orgId, holdId: await holdOf(omar.id), decision: 'approve', actorId: jono.id });
+    if (!approved.ok) throw new Error('approve');
+    expect(await completeApprovedLinkAdmission(approved.claim)).toMatchObject({ ok: true });
+    await publishOrgAuditEvents(approved.event);
 
     // ── compute (D-OW-28): an env handed to the lead, a parked app taken back ───────
     const envId = createId();
     await db.insert(driveEnvs).values({ id: envId, driveId: productId, name: `env-${envId}`, createdBy: tomas.id, costOwnerId: null, sandboxId: `sbx-${envId}` });
-    await recordComputeReattributions([{ orgId, kind: 'drive_env', id: envId, driveId: productId, formerCostOwnerId: tomas.id }], jono.id);
+    await transactionWithOrgAudit((_tx, audit) => audit(...computeReattributionAuditEvents([{ orgId, kind: 'drive_env', id: envId, driveId: productId, formerCostOwnerId: tomas.id }], jono.id)));
     const appId = createId();
     await db.insert(publishedApps).values({
       id: appId, envId, driveId: productId, ownerId: tomas.id, costOwnerId: tomas.id, flyAppName: `pgs-${appId}`, networkName: 'published-apps',
@@ -320,9 +339,18 @@ describe('every org mutation writes its event', () => {
     expect((await leaveOrganization(tomas.id, orgId)).ok).toBe(true);
     expect((await transferOwnership({ orgId, actorId: jono.id, targetId: priya.id })).ok).toBe(true);
 
-    // Every event so far is in the org's log.
-    await vi.waitFor(async () => expect(await typesFor(orgId)).toContain('authz.access.granted'), { timeout: 10_000, interval: 100 });
+    // Nothing has reached the chain, and nothing is lost: every event is queued.
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(await typesFor(orgId)).toEqual(new Set());
+    expect((await db.select({ id: orgAuditOutbox.id }).from(orgAuditOutbox).where(eq(orgAuditOutbox.orgId, orgId))).length).toBeGreaterThan(40);
+
+    // The chain recovers; the drainer (past every backoff) delivers all of it.
+    refuseOrgEvents.mockRestore();
+    const later = new Date(Date.now() + 2 * 60 * 60_000);
+    for (let pass = 0; pass < 5; pass += 1) await drainOrgAuditOutbox({ now: later });
+    expect(await db.select({ id: orgAuditOutbox.id }).from(orgAuditOutbox).where(eq(orgAuditOutbox.orgId, orgId))).toEqual([]);
     const beforeDelete = await typesFor(orgId);
+    expect(beforeDelete).toContain('authz.access.granted');
 
     const orgDriveIds = (await db.select({ id: drives.id }).from(drives).where(eq(drives.orgId, orgId))).map((d) => d.id);
     await db.delete(wallets).where(inArray(wallets.parentWalletId, db.select({ id: wallets.id }).from(wallets).where(eq(wallets.orgId, orgId))));

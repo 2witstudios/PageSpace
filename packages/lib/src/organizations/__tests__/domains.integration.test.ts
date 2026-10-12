@@ -48,12 +48,21 @@ import type { SeatBillingPort } from '../seat-service';
 vi.mock('../orgs-enabled', () => ({ ORGS_ENABLED: true }));
 
 const audit = vi.hoisted(() => ({ events: [] as Array<Record<string, unknown>> }));
-vi.mock('../../audit/org-audit', () => ({
-  recordOrgAuditEventAfterCommit: async (event: Record<string, unknown>) => {
-    audit.events.push(event);
-    return true;
-  },
-}));
+// AUD-1: the code under test stages its org events in the outbox; the chain append is captured here, so what this
+// suite sees is exactly what was staged, committed and delivered.
+vi.mock('../../audit/security-audit', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../audit/security-audit')>();
+  const { orgEventOf } = await import('../../audit/__tests__/capture-org-audit');
+  return {
+    ...actual,
+    securityAudit: {
+      ...actual.securityAudit,
+      logEvent: vi.fn(async (entry: import('../../audit/security-audit').AuditEvent) => {
+        audit.events.push(orgEventOf(entry));
+      }),
+    },
+  };
+});
 
 const HOUR = 3_600_000;
 const created = { orgs: [] as string[], users: [] as string[] };

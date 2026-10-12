@@ -54,7 +54,7 @@ import {
   type DonationRefusal,
   type LegRefundPlan,
 } from './wallet-funding';
-import { recordOrgAuditEventAfterCommit } from '../audit/org-audit';
+import { transactionWithOrgAudit, type OrgAuditEvent, type StageOrgAudit } from '../audit/org-audit';
 import { announceOrgChange } from '../organizations/org-change-events';
 import { drives } from '@pagespace/db/schema/core';
 
@@ -220,23 +220,24 @@ export async function applyOrgPoolRefill(invoice: OrgInvoice, opts: OrgPoolRefil
   const grant = orgPoolRefillGrant(grantInput, opts.active ?? MONEY_MODEL_V2_ACTIVE);
   const basis = orgSubscriptionFundingBasis(grantInput);
   const stripeSubscriptionId = invoiceSubscriptionIdOf(invoice);
-  const recordFunding = async (tx: Tx): Promise<boolean> => {
+  // AUD-1: verified funding is a billing event, staged with the funding row it records.
+  const recordFunding = async (tx: Tx, audit: StageOrgAudit): Promise<boolean> => {
     if (!basis || !stripeSubscriptionId) return false;
     const inserted = await tx.insert(orgSubscriptionFunding).values({
       orgId: org.id, stripeSubscriptionId, stripeInvoiceId: stripeRef, basis, paidCents: grant.paidCents,
     }).onConflictDoNothing().returning({ id: orgSubscriptionFunding.id });
-    return inserted.length > 0;
-  };
-  const announceFunding = async (recorded: boolean): Promise<void> => {
-    if (!recorded) return;
-    await recordOrgAuditEventAfterCommit({
+    if (inserted.length === 0) return false;
+    await audit({
       orgId: org.id, eventType: 'org.billing.subscription_changed', resourceType: 'org_subscription', resourceId: org.id,
       details: { source: 'verified_funding', stripeSubscriptionId, invoiceId: stripeRef, basis, paidCents: grant.paidCents },
     });
-    void announceOrgChange(org.id, 'status');
+    return true;
+  };
+  const announceFunding = (recorded: boolean): void => {
+    if (recorded) void announceOrgChange(org.id, 'status');
   };
   if (grant.allowanceCents <= 0) {
-    await announceFunding(await db.transaction(recordFunding));
+    announceFunding(await transactionWithOrgAudit(recordFunding));
     if (grant.reason === 'gift_not_org_subscription') {
       // An operator gifted a subscription the org never mirrors: no credit lands in a pool the org
       // cannot spend. Fix it by applying the gift coupon to the org's own subscription (runbook).
@@ -253,7 +254,7 @@ export async function applyOrgPoolRefill(invoice: OrgInvoice, opts: OrgPoolRefil
   // no more move the pool's reset date than its amount may fund the pool.
   const period = invoiceServicePeriodMs({ lines: selection.refillLines, periodStart: invoice.period_start, periodEnd: invoice.period_end });
 
-  const result = await db.transaction(async (tx) => {
+  const result = await transactionWithOrgAudit(async (tx, audit) => {
     await tx.insert(wallets).values({ ownerType: 'org', orgId: org.id }).onConflictDoNothing(ORG_POOL_ARBITER);
     const [pool] = await tx
       .select({
@@ -268,7 +269,7 @@ export async function applyOrgPoolRefill(invoice: OrgInvoice, opts: OrgPoolRefil
       .limit(1);
     if (!pool) throw new Error(`org pool for ${org.id} could not be found or created`);
 
-    const fundingRecorded = await recordFunding(tx);
+    const fundingRecorded = await recordFunding(tx, audit);
     const inserted = await tx
       .insert(creditLedger)
       .values({
@@ -309,20 +310,20 @@ export async function applyOrgPoolRefill(invoice: OrgInvoice, opts: OrgPoolRefil
           : {}),
       })
       .where(eq(wallets.id, pool.id));
+    // AUD-1: a billing event, with the refill. Once per invoice: a redelivery is a duplicate above and writes nothing.
+    await audit({
+      orgId: org.id,
+      eventType: 'org.billing.pool_refilled',
+      resourceType: 'wallet',
+      resourceId: pool.id,
+      details: { invoiceId: stripeRef, allowanceCents: grant.allowanceCents, paidCents: grant.paidCents, basis: grant.basis },
+    });
     return { kind: 'granted' as const, walletId: pool.id, fundingRecorded };
   });
 
-  await announceFunding(result.fundingRecorded);
+  announceFunding(result.fundingRecorded);
   if (result.kind === 'duplicate') return { kind: 'duplicate', orgId: org.id };
   loggers.api.info('org pool refill applied', { orgId: org.id, stripeRef, allowanceCents: grant.allowanceCents, basis: grant.basis });
-  // AUD-1: a billing event. Once per invoice: a redelivery is a duplicate above and writes nothing.
-  await recordOrgAuditEventAfterCommit({
-    orgId: org.id,
-    eventType: 'org.billing.pool_refilled',
-    resourceType: 'wallet',
-    resourceId: result.walletId,
-    details: { invoiceId: stripeRef, allowanceCents: grant.allowanceCents, paidCents: grant.paidCents, basis: grant.basis },
-  });
   return { kind: 'granted', orgId: org.id, walletId: result.walletId, allowanceCents: grant.allowanceCents };
 }
 
@@ -662,6 +663,8 @@ export interface DonateInput {
   expectedDrive?: { driveId: string; orgId: string | null };
   /** Test seam: runs inside the transaction once the drive row is held. */
   afterDriveLock?: () => Promise<void>;
+  /** AUD-1: the org events of a donation that landed, staged in the donation's own transaction. */
+  auditEvents?: (donated: { legId: string; amountCents: number; paidDebtCents: number }) => OrgAuditEvent[];
 }
 
 /**
@@ -687,7 +690,7 @@ export async function donateToDriveWallet(input: DonateInput): Promise<DonationO
       : false;
 
   const sourceRef = `donation:${input.donationId}`;
-  return db.transaction(async (tx): Promise<DonationOutcome> => {
+  return transactionWithOrgAudit(async (tx, audit): Promise<DonationOutcome> => {
     if (input.expectedDrive) {
       // Before any wallet row: the drive row, then wallets, the order a move takes them in.
       const [drive] = await tx.select({ orgId: drives.orgId }).from(drives).where(eq(drives.id, input.expectedDrive.driveId)).for('share');
@@ -802,6 +805,8 @@ export async function donateToDriveWallet(input: DonateInput): Promise<DonationO
       },
     ]);
 
-    return { kind: 'donated', legId: leg[0].id, amountCents: plan.amountCents, paidDebtCents: plan.target.paidDebtCents };
+    const donated = { legId: leg[0].id, amountCents: plan.amountCents, paidDebtCents: plan.target.paidDebtCents };
+    await audit(...(input.auditEvents?.(donated) ?? []));
+    return { kind: 'donated', ...donated };
   });
 }

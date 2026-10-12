@@ -78,7 +78,7 @@ import {
   type OrgPaymentStep,
   type OrgSubscriptionCandidate,
 } from '@pagespace/lib/billing/org-subscription-core';
-import { recordOrgAuditEventAfterCommit } from '@pagespace/lib/audit/org-audit';
+import { recordOrgAuditEvent } from '@pagespace/lib/audit/org-audit';
 
 /** A Stripe subscription as the shell reads it. Unix seconds throughout. */
 export interface OrgStripeSubscription extends OrgSubscriptionCandidate {
@@ -391,7 +391,7 @@ export async function ensureOrgBusinessSubscription(
   });
   if (result.kind !== 'existing') {
     // AUD-1: the org's subscription began (at creation, or a re-subscribe after one ended).
-    await recordOrgAuditEventAfterCommit({
+    await recordOrgAuditEvent({
       orgId,
       eventType: 'org.billing.subscription_changed',
       resourceType: 'org_subscription',

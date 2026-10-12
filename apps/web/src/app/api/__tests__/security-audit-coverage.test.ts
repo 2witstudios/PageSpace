@@ -21,10 +21,11 @@ const API_DIR = join(__dirname, '..');
  * adapter, logSecurityEvent adapter, withAdminAuth wrapper, and the
  * `agent-workspaces/[workspaceId]` family's shared not-found/denied helpers
  * (`workspace-unavailable-response.ts`, review #2261/5) — both call
- * `auditRequest` internally, one hop removed from the route file.
+ * `auditRequest` internally, one hop removed from the route file. And the org audit outbox (AUD-1): a route that
+ * publishes the org events its change staged, or drains them into the chain.
  */
 const AUDIT_CALL_PATTERN =
-  /securityAudit\.|logAuditEvent\(|logAuthEvent\(|logSecurityEvent\(|withAdminAuth[<(]|audit\(|auditRequest\(|auditSessionAccessDenial\(|workspaceNotFoundOrDenied\(/;
+  /securityAudit\.|logAuditEvent\(|logAuthEvent\(|logSecurityEvent\(|withAdminAuth[<(]|audit\(|auditRequest\(|auditSessionAccessDenial\(|workspaceNotFoundOrDenied\(|publishOrgAuditEvents\(|drainOrgAuditOutbox\(/;
 
 /**
  * Routes explicitly exempt from audit coverage.

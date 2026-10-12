@@ -98,11 +98,9 @@ vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
 
 // POL-2: the invite handlers ask the org's guests policy before adding an outsider. Default: no org, allowed.
 const decideOrgDriveAdmission = vi.hoisted(() => vi.fn());
-const requestGuestApproval = vi.hoisted(() => vi.fn());
-const recordOrgAuditEvent = vi.hoisted(() => vi.fn());
+const queueGuestForApproval = vi.hoisted(() => vi.fn());
 vi.mock('@pagespace/lib/permissions/guest-admission', () => ({ decideOrgDriveAdmission }));
-vi.mock('@pagespace/lib/permissions/guest-holds', () => ({ requestGuestApproval }));
-vi.mock('@pagespace/lib/audit/org-audit', () => ({ recordOrgAuditEvent }));
+vi.mock('@pagespace/lib/permissions/guest-holds', () => ({ queueGuestForApproval }));
 
 import { POST } from '../route';
 import { driveInviteRepository } from '@/lib/repositories/drive-invite-repository';
@@ -190,8 +188,7 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
     vi.mocked(isAuthError).mockReturnValue(false);
     vi.mocked(isEmailVerified).mockResolvedValue(true);
     decideOrgDriveAdmission.mockResolvedValue({ decision: 'allow', orgId: null });
-    requestGuestApproval.mockResolvedValue({ holdId: 'hold_1' });
-    recordOrgAuditEvent.mockResolvedValue(undefined);
+    queueGuestForApproval.mockResolvedValue({ holdId: 'hold_1' });
 
     vi.mocked(driveInviteRepository.findDriveById).mockResolvedValue(mockDrive as never);
     vi.mocked(loadDriveRelationship).mockImplementation(async (userId, drive) =>
@@ -1171,7 +1168,7 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
       expect(res.status).toBe(403);
       expect(await res.json()).toMatchObject({ code: 'org_policy', policy: 'guests' });
       expect(driveInviteRepository.createAcceptedMemberWithPermissions).not.toHaveBeenCalled();
-      expect(requestGuestApproval).not.toHaveBeenCalled();
+      expect(queueGuestForApproval).not.toHaveBeenCalled();
     });
 
     it('POL-2 (partial) guests APPROVE queues an outsider added by user id: 202, the request stored with what was asked, NOTHING granted', async () => {
@@ -1181,7 +1178,7 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
 
       expect(res.status).toBe(202);
       expect(await res.json()).toMatchObject({ kind: 'pending_approval', holdId: 'hold_1' });
-      expect(requestGuestApproval).toHaveBeenCalledWith(expect.objectContaining({
+      expect(queueGuestForApproval.mock.calls.map((c) => c[0])).toContainEqual(expect.objectContaining({
         orgId: 'org_1',
         driveId: mockDriveId,
         userId: mockInvitedUserId,
@@ -1190,14 +1187,15 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
         requestedBy: mockUserId,
       }));
       expect(driveInviteRepository.createAcceptedMemberWithPermissions).not.toHaveBeenCalled();
-      expect(recordOrgAuditEvent).toHaveBeenCalledWith(expect.objectContaining({ eventType: 'org.guest.requested', orgId: 'org_1' }));
+      // AUD-1: queued and audited together (one transaction), with the inviter as the actor.
+      expect(queueGuestForApproval.mock.calls[0][1]).toBe(mockUserId);
     });
 
     it('POL-2 (partial) guests ON (or a personal drive) adds them exactly as before', async () => {
       const res = await POST(buildPost(mockDriveId, userIdBody), createContext(mockDriveId));
       expect(res.status).toBe(200);
       expect(driveInviteRepository.createAcceptedMemberWithPermissions).toHaveBeenCalled();
-      expect(requestGuestApproval).not.toHaveBeenCalled();
+      expect(queueGuestForApproval).not.toHaveBeenCalled();
     });
 
     it('POL-2 (partial) guests turned OFF between the check and the write: the write refuses and the route answers 403 naming the policy', async () => {
@@ -1220,7 +1218,7 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
       expect(body).toMatchObject({ code: 'org_lapsed' });
       expect(body.policy).toBeUndefined();
       expect(driveInviteRepository.createAcceptedMemberWithPermissions).not.toHaveBeenCalled();
-      expect(requestGuestApproval).not.toHaveBeenCalled();
+      expect(queueGuestForApproval).not.toHaveBeenCalled();
     });
 
     it('SEAT-9 (partial) [D-OW-33] the org lapsing between the check and the write: the write refuses and the route answers 402 org_lapsed', async () => {
@@ -1239,7 +1237,7 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
 
       expect(res.status).toBe(200);
       expect(driveInviteRepository.createAcceptedMemberWithPermissions).toHaveBeenCalled();
-      expect(requestGuestApproval).not.toHaveBeenCalled();
+      expect(queueGuestForApproval).not.toHaveBeenCalled();
     });
 
     it('POL-2 (partial) an already-accepted member whose role is being changed is not an admission: the policy is not consulted', async () => {
@@ -1274,7 +1272,7 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
       const res = await POST(buildPost(mockDriveId, { email: 'New.Person@Example.com', role: 'MEMBER', expiryDays: 7 }), createContext(mockDriveId));
 
       expect(res.status).toBe(202);
-      expect(requestGuestApproval).toHaveBeenCalledWith(expect.objectContaining({ orgId: 'org_1', email: 'new.person@example.com', origin: 'invite', request: expect.objectContaining({ role: 'MEMBER', expiryDays: 7 }) }));
+      expect(queueGuestForApproval.mock.calls.map((c) => c[0])).toContainEqual(expect.objectContaining({ orgId: 'org_1', email: 'new.person@example.com', origin: 'invite', request: expect.objectContaining({ role: 'MEMBER', expiryDays: 7 }) }));
       expect(driveInviteRepository.createPendingInvite).not.toHaveBeenCalled();
       expect(sendPendingDriveInvitationEmail).not.toHaveBeenCalled();
     });

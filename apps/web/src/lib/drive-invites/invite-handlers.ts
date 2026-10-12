@@ -18,10 +18,9 @@ import { db } from '@pagespace/db/db';
 import { and, eq } from '@pagespace/db/operators';
 import { driveRoles } from '@pagespace/db/schema/members';
 import { decideOrgDriveAdmission } from '@pagespace/lib/permissions/guest-admission';
-import { requestGuestApproval } from '@pagespace/lib/permissions/guest-holds';
+import { queueGuestForApproval } from '@pagespace/lib/permissions/guest-holds';
 import { GUESTS_HELD_MESSAGE, guestsOffRefusal, type GuestAdmissionRefusal } from '@pagespace/lib/organizations/sharing-decisions';
 import { ORG_LAPSED_REFUSAL } from '@pagespace/lib/organizations/status-core';
-import { recordOrgAuditEvent } from '@pagespace/lib/audit/org-audit';
 import { isOrgLapsedError } from '@pagespace/lib/permissions/org-lapse-guard';
 import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
 import type { GuestHoldRequest } from '@pagespace/db/schema/org-guest-holds';
@@ -59,23 +58,15 @@ async function guestPolicyResponse(input: {
   if (admission.decision === 'allow') return null;
   if (admission.decision === 'refuse') return admissionRefusalResponse(admission.refusal);
   if (!admission.orgId) return null;
-  const item = await requestGuestApproval({
+  // AUD-1: queued and audited in one transaction.
+  const item = await queueGuestForApproval({
     orgId: admission.orgId,
     driveId: input.driveId,
     ...(input.userId ? { userId: input.userId } : { email: input.email }),
     origin: input.hold.origin,
     request: input.hold.request,
     requestedBy: input.requestedBy,
-  });
-  await recordOrgAuditEvent({
-    orgId: admission.orgId,
-    eventType: 'org.guest.requested',
-    actorId: input.requestedBy,
-    resourceType: 'drive',
-    resourceId: input.driveId,
-    driveId: input.driveId,
-    details: { holdId: item.holdId, origin: input.hold.origin, target: input.userId ? 'user' : 'email' },
-  }).catch((error) => loggers.api.error('Guest request queued but its audit event was not recorded', error as Error));
+  }, input.requestedBy);
   return NextResponse.json(
     { kind: 'pending_approval', holdId: item.holdId, message: GUESTS_HELD_MESSAGE },
     { status: 202 },

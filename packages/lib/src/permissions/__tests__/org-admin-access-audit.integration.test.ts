@@ -11,6 +11,8 @@ import { createId } from '@paralleldrive/cuid2';
 import { db, pool } from '@pagespace/db/db';
 import { and, eq } from '@pagespace/db/operators';
 import { rateLimitBuckets } from '@pagespace/db/schema/rate-limit-buckets';
+import { orgAuditOutbox } from '@pagespace/db/schema/organizations';
+import { drainOrgAuditOutbox } from '../../audit/org-audit';
 import { resetAuditDbBindingForTests } from '../../audit/audit-db-binding';
 import { resetDefaultSecurityAuditForTests, securityAudit } from '../../audit/security-audit';
 import { canUserViewPage, getBatchPagePermissions, getUserAccessLevel, getUserDriveAccess, getUsersWhoCanViewPage } from '../permissions';
@@ -38,6 +40,11 @@ vi.mock('../../organizations/orgs-enabled', () => ({
 async function accessRows(userId: string, driveId: string) {
   const rows = await securityAudit.queryEvents({ eventType: 'authz.access.granted', resourceId: driveId });
   return rows.filter((r) => r.userId === userId);
+}
+
+/** The staged records of `driveId` still waiting for the chain (AUD-1 outbox). */
+async function queued(driveId: string) {
+  return db.select({ id: orgAuditOutbox.id }).from(orgAuditOutbox).where(eq(orgAuditOutbox.driveId, driveId));
 }
 
 async function claimRow({ key, windowStart }: { key: string; windowStart: Date }) {
@@ -173,7 +180,7 @@ describe('ORG-4 (partial) audit dedupe (integration)', () => {
     expect(await accessRows(priya.id, f.drives.product.id)).toEqual([]);
   }, 60_000);
 
-  it('ORG-4 (partial) a failed audit write releases the window, so the next access in the same window still writes the record', async () => {
+  it('ORG-4 (partial) AUD-1 (partial) a refused chain append loses nothing: the record stays queued, the window stays claimed, and the drainer delivers it once', async () => {
     const f = await northwind();
     const { priya } = f.people;
     const finance = f.drives.finance.id;
@@ -183,16 +190,20 @@ describe('ORG-4 (partial) audit dedupe (integration)', () => {
     const failOnce = vi.spyOn(securityAudit, 'logEvent').mockRejectedValueOnce(new Error('audit store down'));
     try {
       expect(await getUserAccessLevel(priya.id, salaries)).toMatchObject({ canView: true });
-      // The write is fire-and-forget from the resolver: wait until the failed write has released the claim.
       const claim = orgAdminAuditClaim({ userId: priya.id, driveId: finance, orgId: f.org.id, orgRole: 'ADMIN' }, new Date());
       await vi.waitFor(async () => {
         expect(failOnce).toHaveBeenCalledTimes(1);
-        expect(await claimRow(claim)).toEqual([]);
+        expect(await queued(finance)).toHaveLength(1);
       }, { timeout: 10_000, interval: 100 });
       expect(await accessRows(priya.id, finance)).toEqual([]);
-
+      // The record is durable, so the window is not reopened: a second access writes nothing new.
+      expect(await claimRow(claim)).toHaveLength(1);
       await getUserAccessLevel(priya.id, salaries);
+      expect(await queued(finance)).toHaveLength(1);
+
+      await drainOrgAuditOutbox({ now: new Date(Date.now() + 2 * 60 * 60_000) });
       expect(await settledCount(priya.id, finance, 1)).toBe(1);
+      expect(await queued(finance)).toEqual([]);
     } finally {
       failOnce.mockRestore();
     }

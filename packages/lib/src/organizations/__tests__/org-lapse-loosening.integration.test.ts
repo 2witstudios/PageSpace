@@ -28,10 +28,6 @@ import { requireDb } from '@pagespace/db/test/require-db';
 
 vi.mock('../orgs-enabled', () => ({ ORGS_ENABLED: true }));
 // The org audit chain is a separate store this suite does not assert; nothing may be left in it.
-vi.mock('../../audit/org-audit', () => ({
-  recordOrgAuditEvent: vi.fn(async () => {}),
-  recordOrgAuditEventAfterCommit: vi.fn(async () => true),
-}));
 
 import { ORG_LAPSED_MESSAGE, ORG_LAPSED_REFUSAL } from '../status';
 import { acceptInvitation } from '../invitations';
