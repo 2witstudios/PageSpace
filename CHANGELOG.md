@@ -5,6 +5,18 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ## [Unreleased]
 
+- Paid models and voice now follow whoever pays for the call. Inside an organization's drive, its plan applies to a member on the drive wallet or their seat; on someone's personal drive wallet, the drive owner's plan applies; on your own credits, your own plan applies. This now holds for agent consultations, the OpenAI-compatible API, workflows, @mentions, agents asking agents, text-to-speech and voice calls.
+
+- Text-to-speech and Global Assistant voice calls made inside a drive now spend from that drive's wallet, like a typed message there, instead of always using your personal credits. Speech or a call whose drive cannot be determined is refused and charges nothing.
+
+- An agent consulted from work in another drive (`agents.ask` with `sessionDriveId`, or `drive_context` on the OpenAI-compatible API) now spends and records its usage in that drive, not the agent's own. API threads spend in the drive they were opened in.
+
+- Storage in someone else's personal drive now counts against the drive owner's quota, not the member who uploaded it. Moving a drive into or out of an organization, or handing a personal drive to a new owner, moves its storage with it. Direct-message attachments still count against the sender.
+
+- Machine storage in an organization's drive never puts the organization's credits pool into debt: a paused pool is not charged, and a pool that can't cover the full amount is charged only what it has. An organization's Owner or Admin can now buy dedicated (always-on) hosting for an app in an organization drive; it is billed to the organization, not to a person's card.
+
+- The personal usage breakdown now shows only spend from your own credits. Compute you run in an organization's drive is the organization's spend and no longer appears there.
+
 - A conversation in a drive now keeps the source it started on. If that drive wallet is empty, paused or at your cap, the call is refused, names the wallet and offers your other options; it moves only where the drive's fallback rule allows, and the move is shown. It no longer switches to your own credits without telling you. Asking another agent (ask_agent) now reserves credits before the agent runs and is refused when the wallet cannot cover it.
 
 - Organization capabilities now require a verified payment or supported gift for the current subscription. A zero-dollar non-gift invoice or balance left from a previous subscription cannot activate an unpaid organization.
