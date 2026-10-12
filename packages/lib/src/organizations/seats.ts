@@ -60,13 +60,17 @@ export function seatQuantity(input: { members: number; pendingInvites: number; i
 export type SeatAdmissionDecision =
   | { action: 'admit' }
   | { action: 'raise'; toExtra: number }
-  | { action: 'refuse'; reason: 'auto_add_off'; purchased: number; held: number };
+  | { action: 'refuse'; reason: 'auto_add_off' | 'delegated_raise'; purchased: number; held: number };
 
 /**
  * May ONE more seat be taken? `held` is the count BEFORE this seat (read under the org's
  * billing lock, so it is the truth the decision and the write both see). `purchasedExtra` is
  * the quantity Stripe was last set to, 0 while the org has no live subscription yet (its
  * provisioning prices the real count when it happens, D1).
+ *
+ * [D-OW-26] A raise is a money move (a prorated Stripe charge), so a delegated credential (an MCP/CLI
+ * key) is never admitted one: past the purchased seats it is refused as `delegated_raise`; within
+ * them it is admitted like a session.
  */
 export function decideSeatAdmission(input: {
   held: number;
@@ -74,6 +78,7 @@ export function decideSeatAdmission(input: {
   purchasedExtra: number;
   autoAdd: boolean;
   billingEnabled: boolean;
+  credential: 'session' | 'mcp';
 }): SeatAdmissionDecision {
   if (!input.billingEnabled) return { action: 'admit' };
   assertCount('held', input.held);
@@ -82,6 +87,7 @@ export function decideSeatAdmission(input: {
   const after = input.held + 1;
   if (after <= purchased) return { action: 'admit' };
   if (!input.autoAdd) return { action: 'refuse', reason: 'auto_add_off', purchased, held: input.held };
+  if (input.credential !== 'session') return { action: 'refuse', reason: 'delegated_raise', purchased, held: input.held };
   return { action: 'raise', toExtra: Math.max(0, after - input.included) };
 }
 

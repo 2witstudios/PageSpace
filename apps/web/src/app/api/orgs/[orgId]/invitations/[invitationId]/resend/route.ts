@@ -42,6 +42,8 @@ export async function POST(
       actorRole: gate.role ?? 'MEMBER',
       actorId: gate.userId,
       seatBilling: defaultSeatBilling(),
+      // [D-OW-26] a key never buys a seat: the service refuses a raise it would need.
+      credential: gate.credential,
       now: new Date(),
       deliver: (invitation, token) =>
         deliverOrgInvite({
@@ -60,6 +62,9 @@ export async function POST(
       }
       if (result.reason === 'org_lapsed') return orgLapsedResponse(result.message);
       if (result.reason === 'org_policy') return orgPolicyRefusalResponse(result);
+      if (result.reason === 'mcp_token_cannot_move_money') {
+        return orgRefusalResponse({ status: result.status, message: result.message, code: result.reason });
+      }
       if (result.reason === 'seats_full') {
         auditRequest(request, {
           eventType: 'authz.access.denied',

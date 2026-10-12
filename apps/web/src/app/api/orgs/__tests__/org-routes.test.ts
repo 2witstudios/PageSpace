@@ -7,7 +7,7 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
-import type { SessionAuthResult, AuthError } from '@/lib/auth';
+import type { MCPAuthResult, SessionAuthResult, AuthError } from '@/lib/auth';
 import type { OrgRole } from '@pagespace/db/schema/organizations';
 
 const flags = vi.hoisted(() => ({ orgsEnabled: true }));
@@ -27,6 +27,7 @@ vi.mock('@pagespace/lib/organizations/orgs-enabled', () => ({
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(),
+  getAllowedDriveIds: (auth: { allowedDriveIds?: string[] }) => auth.allowedDriveIds ?? [],
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -639,5 +640,33 @@ describe('org route behaviour', () => {
     const res = await acceptRoute.POST(req('POST', { token: 'ps_orginv_t' }));
     expect(res.status).toBe(402);
     expect(await res.json()).toEqual({ error: ORG_LAPSED_MESSAGE, code: 'org_lapsed' });
+  });
+});
+
+describe('invites by a delegated key never buy a seat ([D-OW-26])', () => {
+  const key = (): MCPAuthResult => ({ userId: CALLER, tokenVersion: 0, tokenType: 'mcp', tokenId: 'tok', role: 'user', adminRoleVersion: 0, allowedDriveIds: [] });
+  const raiseRefused = { ok: false as const, status: 403 as const, reason: 'mcp_token_cannot_move_money' as const, message: 'An access token cannot buy another seat', purchased: 5, held: 5 };
+
+  it('X-1 (partial) an invite and a resend tell the service the caller is a key, and a seat raise it refuses answers 403 by name', async () => {
+    vi.mocked(repository.findMembershipRole).mockResolvedValue('ADMIN');
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(key());
+    vi.mocked(invitations.createOrRotateInvitation).mockResolvedValue(raiseRefused);
+    vi.mocked(invitations.resendInvitation).mockResolvedValue(raiseRefused);
+
+    const created = await invitationsRoute.POST(req('POST', { email: 'marcus@northwind.test' }), params({ orgId: ORG_ID }));
+    expect(created.status).toBe(403);
+    expect((await created.json()).code).toBe('mcp_token_cannot_move_money');
+    expect(invitations.createOrRotateInvitation).toHaveBeenCalledWith(expect.objectContaining({ credential: 'mcp' }));
+
+    const resent = await resendRoute.POST(req('POST'), params({ orgId: ORG_ID, invitationId: 'inv_1' }));
+    expect(resent.status).toBe(403);
+    expect((await resent.json()).code).toBe('mcp_token_cannot_move_money');
+    expect(invitations.resendInvitation).toHaveBeenCalledWith(expect.objectContaining({ credential: 'mcp' }));
+  });
+
+  it('X-1 (partial) a session invite is passed through as a session, which may buy a seat', async () => {
+    vi.mocked(repository.findMembershipRole).mockResolvedValue('ADMIN');
+    expect((await invitationsRoute.POST(req('POST', { email: 'marcus@northwind.test' }), params({ orgId: ORG_ID }))).status).toBe(201);
+    expect(invitations.createOrRotateInvitation).toHaveBeenCalledWith(expect.objectContaining({ credential: 'session' }));
   });
 });

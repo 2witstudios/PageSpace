@@ -110,7 +110,7 @@ describe('seat admission and the policy layer together (real Postgres)', () => {
 
     const stripe = new SlowStripe();
     const invite = createOrRotateInvitation({
-      orgId: org.id, email: `new-${createId()}@northwind.test`, role: 'MEMBER', invitedBy: owner.id, actorRole: 'OWNER', now: new Date(), deliver: async () => {}, seatBilling: stripe,
+      orgId: org.id, email: `new-${createId()}@northwind.test`, role: 'MEMBER', invitedBy: owner.id, actorRole: 'OWNER', credential: 'session', now: new Date(), deliver: async () => {}, seatBilling: stripe,
     });
     // Let the invite reach Stripe: it now holds the org billing lock for SLOW_STRIPE_MS.
     while (stripe.startedAt === 0) await new Promise((resolve) => setTimeout(resolve, 10));

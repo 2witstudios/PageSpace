@@ -206,14 +206,14 @@ describe('every org mutation writes its event', () => {
     const stripe = new FakeSeatStripe();
     const tokens: string[] = [];
     const invited = await createOrRotateInvitation({
-      orgId, email: tomasEmail, role: 'MEMBER', invitedBy: jono.id, actorRole: 'OWNER', now: new Date(), seatBilling: stripe,
+      orgId, email: tomasEmail, role: 'MEMBER', invitedBy: jono.id, actorRole: 'OWNER', credential: 'session', now: new Date(), seatBilling: stripe,
       deliver: async (_i, token) => { tokens.push(token); },
     });
     if (!invited.ok) throw new Error(`invite: ${invited.reason}`);
     expect(await setSeatAutoAdd(orgId, false, jono.id)).toBe(true);
-    const refused = await createOrRotateInvitation({ orgId, email: `x-${createId()}@invitee.test`, role: 'MEMBER', invitedBy: jono.id, actorRole: 'OWNER', now: new Date(), deliver });
+    const refused = await createOrRotateInvitation({ orgId, email: `x-${createId()}@invitee.test`, role: 'MEMBER', invitedBy: jono.id, actorRole: 'OWNER', credential: 'session', now: new Date(), deliver });
     expect(refused).toMatchObject({ ok: false, reason: 'seats_full' });
-    const resent = await resendInvitation({ orgId, invitationId: invited.invitation.id, actorRole: 'OWNER', actorId: jono.id, now: new Date(), deliver: async (_i, token) => { tokens.push(token); } });
+    const resent = await resendInvitation({ orgId, invitationId: invited.invitation.id, actorRole: 'OWNER', credential: 'session', actorId: jono.id, now: new Date(), deliver: async (_i, token) => { tokens.push(token); } });
     expect(resent.ok).toBe(true);
     expect(await acceptInvitation({ token: tokens[tokens.length - 1], userId: tomas.id, now: new Date() })).toMatchObject({ ok: true, joined: true });
     const [stale] = await db.insert(orgInvitations).values({ orgId, email: `y-${createId()}@invitee.test`, role: 'MEMBER', tokenHash: hashToken(createId()), invitedBy: jono.id, expiresAt: new Date(Date.now() + 86_400_000) }).returning();

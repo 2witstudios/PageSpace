@@ -167,6 +167,8 @@ export async function createOrRotateInvitation(input: {
   deliver: InviteDelivery;
   /** Stripe's seat item, for an auto-add raise (SEAT-4). Only a raise needs it. */
   seatBilling?: SeatBillingPort;
+  /** How the inviter authenticated: a delegated key ('mcp') never buys a seat ([D-OW-26]). */
+  credential: 'session' | 'mcp';
 }): Promise<IssueInvitationResult> {
   let issued: Issued;
   let seat = null as SeatAdmission | null;
@@ -199,7 +201,7 @@ export async function createOrRotateInvitation(input: {
       // SEAT-3/4/5: a new or rotated invite holds a seat. Decided under the org's billing lock,
       // after the address is known to need one and before anything is written; an auto-add
       // raise and this invite commit or roll back together.
-      seat = await admitSeat(tx, { orgId: input.orgId, actorRole: input.actorRole }, input.seatBilling);
+      seat = await admitSeat(tx, { orgId: input.orgId, actorRole: input.actorRole, credential: input.credential }, input.seatBilling);
       if (!seat.ok) return seat;
 
       const { token, hash } = generateToken(ORG_INVITE_TOKEN_PREFIX);
@@ -297,6 +299,8 @@ export async function resendInvitation(input: {
   deliver: InviteDelivery;
   /** Stripe's seat item, for an auto-add raise when the resent invite was expired (SEAT-4). */
   seatBilling?: SeatBillingPort;
+  /** How the inviter authenticated: a delegated key ('mcp') never buys a seat ([D-OW-26]). */
+  credential: 'session' | 'mcp';
 }): Promise<ResendInvitationResult> {
   const { token, hash } = generateToken(ORG_INVITE_TOKEN_PREFIX);
   let seat = null as SeatAdmission | null;
@@ -328,7 +332,7 @@ export async function resendInvitation(input: {
     const refusal = await inviterRefusal(tx, input.orgId, input.actorRole, previous.role);
     if (refusal) return refusal;
     if (!isLiveInvite(previous, input.now)) {
-      seat = await admitSeat(tx, { orgId: input.orgId, actorRole: input.actorRole }, input.seatBilling);
+      seat = await admitSeat(tx, { orgId: input.orgId, actorRole: input.actorRole, credential: input.credential }, input.seatBilling);
       if (!seat.ok) return seat;
     }
     const [invitation] = await tx
