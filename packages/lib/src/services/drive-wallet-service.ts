@@ -50,7 +50,7 @@ import {
 } from '../permissions/wallet-access';
 import { ensurePersonalRootWalletId } from '../billing/personal-wallet';
 import { listSpendChoices, resolveCallSpend, seatAllowanceFor, seatAllowancesFor, type SpendChoice } from '../billing/spend-resolution';
-import { conversationSpend, type CallSpendDecision } from '../billing/spend-target';
+import { conversationSpend, driveSpend, type CallSpendDecision } from '../billing/spend-target';
 import { formatCreditCount } from '../billing/money-model';
 import { toPersonalSubscriptionTier } from '../billing/subscription-tiers';
 import { capChangeOnlyRestricts, planDeleteWallet, planOrgPoolPause, planTopUp, planWalletPatch, walletPatchOnlyRestricts, type DeleteBlocker, type WalletPatchInput } from '../billing/wallet-admin';
@@ -1419,6 +1419,36 @@ export async function getConversationSpend(userId: string, conversationId: strin
     recordRefusal: false,
   });
   return { ok: true, conversationId, driveId: sessionDriveId, chosenWalletId: conversation.chosenWalletId, options, resolved };
+}
+
+export interface DriveSpendRead {
+  ok: true;
+  driveId: string;
+  /** What this person may pick in the drive, by wallet. */
+  options: SpendChoice[];
+  /** What a NEW conversation here would spend, as the gate would decide it now. */
+  resolved: CallSpendDecision;
+}
+
+/**
+ * The drive's source as the header chip shows it while the person is inside the drive with no
+ * conversation in view (SPEND-2: "in the header chip while inside a drive"): the options and what
+ * a new conversation's first call would preselect (the drive's default, then the person's), from
+ * the same resolver the gate uses — a zero-cost preview, nothing reserved, no refusal logged,
+ * nothing pinned. A drive the person cannot open is 404, so its existence is not revealed.
+ */
+export async function getDriveSpend(userId: string, driveId: string): Promise<DriveSpendRead | WalletServiceError> {
+  if (!(await getUserDriveAccess(userId, driveId))) return notFound();
+  const [user] = await db.select({ tier: users.subscriptionTier }).from(users).where(eq(users.id, userId)).limit(1);
+  const options = await listSpendChoices(userId, driveId);
+  const resolved = await resolveCallSpend({
+    userId,
+    consumerTier: toPersonalSubscriptionTier(user?.tier),
+    target: driveSpend(driveId),
+    reservationCents: 0,
+    recordRefusal: false,
+  });
+  return { ok: true, driveId, options, resolved };
 }
 
 /**

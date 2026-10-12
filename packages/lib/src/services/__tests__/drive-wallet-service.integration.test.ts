@@ -42,6 +42,7 @@ import {
   getConversationSpend,
   setConversationSpend,
   getOrgPoolSplit,
+  getDriveSpend,
 } from '../drive-wallet-service';
 
 vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
@@ -481,6 +482,23 @@ describe('drive-wallet service (orgs on, real Postgres)', () => {
     expect(inResearch.ok && inResearch.options.map((o) => o.source)).toEqual(['own_credits']);
     expect(await setConversationSpend(world.ids.marcus, globalConv.id, world.researchWalletId, 'session', world.researchId)).toMatchObject({ ok: false, status: 400 });
   });
+  it('SPEND-2 (partial) inside a drive with no conversation the chip reads the drive: its options and what a new conversation would spend, with nothing stored; one source for a person with no shared leg; a drive they cannot open is 404', async () => {
+    if (!world) return;
+    const convBefore = await db.select().from(conversations).where(eq(conversations.userId, world.ids.marcus));
+    const read = await getDriveSpend(world.ids.marcus, world.productId);
+    expect(read).toMatchObject({ ok: true, driveId: world.productId, resolved: { kind: 'spend', source: 'drive_wallet', walletId: world.productWalletId } });
+    expect(read.ok && read.options.map((o) => o.source)).toEqual(['drive_wallet', 'seat_allowance', 'own_credits']);
+    // A read: no conversation is created or pinned, and nothing is reserved.
+    expect(await db.select().from(conversations).where(eq(conversations.userId, world.ids.marcus))).toEqual(convBefore);
+    expect(await db.select().from(creditHolds).where(eq(creditHolds.userId, world.ids.marcus))).toEqual([]);
+    // Chris is a guest of Product (no seat, no drive wallet by default): one source, so the personal chip stays.
+    const guest = await getDriveSpend(world.ids.chris, world.productId);
+    expect(guest.ok && guest.options.map((o) => o.source)).toEqual(['own_credits']);
+    // Marcus has not joined the Restricted drive; the outsider cannot open Product.
+    expect(await getDriveSpend(world.ids.marcus, world.researchId)).toMatchObject({ ok: false, status: 404 });
+    expect(await getDriveSpend(world.ids.outsider, world.productId)).toMatchObject({ ok: false, status: 404 });
+  });
+
   // -------------------------------------------------------------------------
   // [D-OW-26] a delegated MCP/CLI token never moves money or redirects spend
   // -------------------------------------------------------------------------

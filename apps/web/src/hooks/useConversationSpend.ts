@@ -97,3 +97,48 @@ export function useConversationSpend(conversationId: string | null, options: { d
 
   return { spend: data ?? null, error, isLoading, choose, refresh: mutate };
 }
+
+/** `GET /api/wallets/drives/[driveId]` (Spec SPEND-2): a drive's options and what a new conversation there would spend. */
+export interface DriveSpend {
+  driveId: string;
+  options: SurfaceChoice[];
+  resolved: SurfaceDecision;
+}
+
+export function driveSpendKey(driveId: string | null): string | null {
+  return ORGS_ENABLED && driveId ? `/api/wallets/drives/${encodeURIComponent(driveId)}` : null;
+}
+
+const driveFetcher = async (url: string): Promise<DriveSpend | null> => {
+  const response = await fetchWithAuth(url);
+  if (response.status === 404) return null;
+  if (!response.ok) throw new Error(`Failed to fetch: ${response.status}`);
+  return response.json();
+};
+
+/**
+ * SPEND-2: the source of the drive the person is in while no conversation is in view, so the
+ * header chip still names it there. Read only (a choice is per conversation, SPEND-3); refetched
+ * on the drive's `wallet:changed` and on `credits:updated`, never polled. Dark while orgs are off.
+ */
+export function useDriveSpend(driveId: string | null) {
+  const key = driveSpendKey(driveId);
+  const { data, mutate } = useSWR<DriveSpend | null>(key, driveFetcher, { revalidateOnFocus: false });
+  const socket = useSocketStore((state) => state.socket);
+
+  useEffect(() => {
+    if (!socket || !key) return;
+    const onWallet = (payload: { driveId?: string }) => {
+      if (payload?.driveId && payload.driveId === driveId) void mutate();
+    };
+    const onCredits = () => void mutate();
+    socket.on(WALLET_CHANGED_EVENT, onWallet);
+    socket.on('credits:updated', onCredits);
+    return () => {
+      socket.off(WALLET_CHANGED_EVENT, onWallet);
+      socket.off('credits:updated', onCredits);
+    };
+  }, [socket, key, driveId, mutate]);
+
+  return { spend: data ?? null };
+}
