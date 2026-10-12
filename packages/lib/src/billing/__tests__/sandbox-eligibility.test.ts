@@ -3,7 +3,7 @@ import { fileURLToPath } from 'url';
 import { describe, expect, it, vi, afterEach } from 'vitest';
 import {
   SANDBOX_ELIGIBLE_TIERS,
-  TENANT_EFFECTIVE_SANDBOX_TIER,
+  DEPLOYMENT_EFFECTIVE_SANDBOX_TIER,
   isSandboxAvailable,
   isSandboxTierEligible,
   resolveEffectiveSandboxTier,
@@ -41,19 +41,16 @@ describe('resolveEffectiveSandboxTierForMode — the single seam', () => {
     }
   });
 
-  it('leaves the stored tier alone on onprem — onprem is deliberately NOT exempt', () => {
+  it('given onprem personal tiers, should retain deployment compute capability', () => {
     for (const tier of ALL_TIERS) {
-      expect(resolveEffectiveSandboxTierForMode(tier, 'onprem')).toBe(tier);
+      expect(resolveEffectiveSandboxTierForMode(tier, 'onprem')).toBe('business');
     }
-    // The whole point, stated as a fact rather than an absence: a free-tier
-    // onprem payer is still refused, because onprem's answer to code execution
-    // is a local shell bridge, not a Sprite this deployment can reach.
-    expect(isSandboxTierEligible(resolveEffectiveSandboxTierForMode('free', 'onprem'))).toBe(false);
+    expect(isSandboxTierEligible(resolveEffectiveSandboxTierForMode('free', 'onprem'))).toBe(true);
   });
 
   it('normalizes every stored tier to the tenant effective tier on tenant', () => {
     for (const tier of ALL_TIERS) {
-      expect(resolveEffectiveSandboxTierForMode(tier, 'tenant')).toBe(TENANT_EFFECTIVE_SANDBOX_TIER);
+      expect(resolveEffectiveSandboxTierForMode(tier, 'tenant')).toBe(DEPLOYMENT_EFFECTIVE_SANDBOX_TIER);
     }
   });
 
@@ -67,21 +64,21 @@ describe('resolveEffectiveSandboxTierForMode — the single seam', () => {
   });
 
   it('resolves to an ELIGIBLE tier on tenant — a bypass that lands on an ineligible tier is no bypass', () => {
-    expect(isSandboxTierEligible(TENANT_EFFECTIVE_SANDBOX_TIER)).toBe(true);
+    expect(isSandboxTierEligible(DEPLOYMENT_EFFECTIVE_SANDBOX_TIER)).toBe(true);
   });
 
   it('keeps a real ceiling on tenant rather than an unlimited sentinel', () => {
-    expect(ALL_TIERS).toContain(TENANT_EFFECTIVE_SANDBOX_TIER);
+    expect(ALL_TIERS).toContain(DEPLOYMENT_EFFECTIVE_SANDBOX_TIER);
   });
 });
 
 describe('resolveEffectiveSandboxTier — the env-reading edge', () => {
   it('reads DEPLOYMENT_MODE, and treats anything unrecognized as cloud', () => {
     vi.stubEnv('DEPLOYMENT_MODE', 'tenant');
-    expect(resolveEffectiveSandboxTier('free')).toBe(TENANT_EFFECTIVE_SANDBOX_TIER);
+    expect(resolveEffectiveSandboxTier('free')).toBe(DEPLOYMENT_EFFECTIVE_SANDBOX_TIER);
 
     vi.stubEnv('DEPLOYMENT_MODE', 'onprem');
-    expect(resolveEffectiveSandboxTier('free')).toBe('free');
+    expect(resolveEffectiveSandboxTier('free')).toBe('business');
 
     vi.stubEnv('DEPLOYMENT_MODE', '');
     expect(resolveEffectiveSandboxTier('free')).toBe('free');
@@ -112,9 +109,9 @@ describe('isSandboxAvailable — the gate', () => {
     }
   });
 
-  it('still refuses free on onprem', () => {
+  it('given onprem personal Free, should allow deployment compute', () => {
     vi.stubEnv('DEPLOYMENT_MODE', 'onprem');
-    expect(isSandboxAvailable('free')).toBe(false);
+    expect(isSandboxAvailable('free')).toBe(true);
     expect(isSandboxAvailable('pro')).toBe(true);
   });
 });

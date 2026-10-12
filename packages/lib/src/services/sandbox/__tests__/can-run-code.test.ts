@@ -182,15 +182,18 @@ describe('canRunCode', () => {
     }
   });
 
-  it('given an ONPREM deployment and a free-tier payer, should still deny — the bypass is tenant-only', async () => {
+  it('given onprem personal Free, should preserve capability and every authorization guard', async () => {
     vi.stubEnv('DEPLOYMENT_MODE', 'onprem');
     try {
-      const result = await canRunCode({
-        userId: 'u1',
-        driveId: 'd1',
-        deps: makeDeps({ getUserSubscriptionTier: async () => 'free' }),
+      const run = (overrides: Partial<CanRunCodeDeps> = {}) => canRunCode({
+        userId: 'u1', driveId: 'd1',
+        deps: makeDeps({ getUserSubscriptionTier: async () => 'free', ...overrides }),
       });
-      expect(result).toEqual({ ok: false, reason: 'tier_ineligible' });
+      expect(await run()).toEqual({ ok: true });
+      expect(await run({ isCodeExecutionEnabled: () => false })).toEqual({ ok: false, reason: 'kill_switch_off' });
+      expect(await run({ getUserDrivePermissions: async () => null })).toEqual({ ok: false, reason: 'no_drive_access' });
+      expect(await run({ getUserDrivePermissions: async () => viewerPerms })).toEqual({ ok: false, reason: 'insufficient_role' });
+      expect(await run({ getDriveOrgPolicies: async () => ({ ...DEFAULT_ORG_POLICIES, cloudSandbox: false }) })).toEqual({ ok: false, reason: 'org_policy' });
     } finally {
       vi.unstubAllEnvs();
     }
