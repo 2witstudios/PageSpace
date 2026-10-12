@@ -742,7 +742,7 @@ describe('org services (real Postgres)', () => {
       const paused = new Promise<void>((resolve) => { resume = resolve; });
       let synced: () => void = () => {};
       const syncedInside = new Promise<void>((resolve) => { synced = resolve; });
-      const creating = createOrgDrive(jono.id, { name: 'Roadmap', orgId: org.id }, {
+      const creating = createOrgDrive(jono.id, { authentication: null, name: 'Roadmap', orgId: org.id }, {
         ...orgDriveServiceDeps,
         syncOrgMembership: async (tx, call) => {
           await orgDriveServiceDeps.syncOrgMembership(tx, call);

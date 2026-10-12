@@ -4,10 +4,10 @@
  * one it is org-owned from creation through createOrgDrive, which decides membership and the
  * "who can create org drives" policy inside its transaction (requireOrgRole, the one org permission
  * function). Creating a drive is not a money move, so a token may do it ([D-OW-26]); the org's
- * credential policy (SEC-2/SEC-3) still applies to the credential that asks.
+ * sign-in policy (SEC-2/SEC-3) still applies to the credential that asks, judged by createOrgDrive
+ * after membership.
  */
 import { ORGS_ENABLED } from '@pagespace/lib/organizations/orgs-enabled';
-import { checkOrgAuthentication } from '@pagespace/lib/organizations/authentication-policy';
 import type { VerifiedAuthentication } from '@pagespace/lib/auth/authentication-evidence';
 import { createDrive, type DriveWithAccess } from '@pagespace/lib/services/drive-service';
 import { createOrgDrive } from '@pagespace/lib/services/org-drive-service';
@@ -41,13 +41,11 @@ export async function createDriveForCaller(input: CreateDriveForCallerInput): Pr
   // Dark while orgs are: answered exactly like an unknown org.
   if (!ORGS_ENABLED) return { ok: false, status: 404, error: 'Not found' };
 
-  const credential = await checkOrgAuthentication(input.orgId, input.authentication);
-  if (!credential.allowed) {
-    return { ok: false, status: 403, error: 'This organization requires a stronger or more recent sign-in.', code: credential.code };
-  }
+  // Membership, the who-can-create policy and then the org's sign-in policy are all decided inside the
+  // create transaction, in that order, so a non-member learns nothing about the org's sign-in policy.
   const created = await createOrgDrive(
     input.userId,
-    { name, orgId: input.orgId, orgVisibility: input.orgVisibility, drivePrompt: input.drivePrompt },
+    { name, orgId: input.orgId, orgVisibility: input.orgVisibility, drivePrompt: input.drivePrompt, authentication: input.authentication ?? null },
     orgDriveServiceDeps,
   );
   if (!created.ok) return { ok: false, status: created.status, error: created.message, code: created.code };

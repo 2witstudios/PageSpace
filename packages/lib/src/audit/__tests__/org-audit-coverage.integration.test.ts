@@ -221,7 +221,7 @@ describe('every org mutation writes its event', () => {
     expect((await changeMemberRole({ orgId, actorId: jono.id, targetId: marcus.id, newRole: 'ADMIN' })).ok).toBe(true);
 
     // ── drives: create, visibility, join requests, move in and out, lead ──────────
-    const product = await createOrgDrive(lena.id, { name: 'Product', orgId }, deps);
+    const product = await createOrgDrive(lena.id, { authentication: null, name: 'Product', orgId }, deps);
     if (!product.ok) throw new Error('create drive');
     const productId = product.drive.id;
     created.drives.push(productId);

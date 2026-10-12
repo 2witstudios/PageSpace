@@ -3,7 +3,7 @@ import { eq } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
 import type { VerifiedAuthentication } from '../auth/authentication-evidence';
 import { decideOrgAuthentication, type OrgAuthenticationDecision } from './authentication-policy-core';
-import { getDrivePolicies, getOrgPolicies } from './policy-reader';
+import { getDrivePolicies } from './policy-reader';
 
 /** Credential policy is an additional restriction; callers must still establish resource permissions. */
 export async function checkDriveAuthentication(
@@ -14,14 +14,6 @@ export async function checkDriveAuthentication(
   return governing
     ? decideOrgAuthentication({ policy: governing.policies, authentication: authentication ?? null, nowMs: Date.now() })
     : { allowed: true };
-}
-
-/** The org's credential policy for an act inside the org that names no drive yet (creating an org drive, DRV-3). */
-export async function checkOrgAuthentication(
-  orgId: string,
-  authentication: VerifiedAuthentication | null | undefined,
-): Promise<OrgAuthenticationDecision> {
-  return decideOrgAuthentication({ policy: await getOrgPolicies(orgId), authentication: authentication ?? null, nowMs: Date.now() });
 }
 
 /** Permission APIs also accept a drive ID as their root resource. */

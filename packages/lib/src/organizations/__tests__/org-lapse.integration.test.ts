@@ -204,7 +204,7 @@ describe('org lapse gates (orgs on, real Postgres)', () => {
     expect(await isOrgActive(w.orgId)).toBe(false);
     expect(await canUserViewPage(w.ids.marcus, w.pageId)).toBe(true);
     expect(await getUserDriveAccess(w.ids.dana, w.productId)).toBe(true);
-    expect(await createOrgDrive(w.ids.marcus, { name: 'Engineering', orgId: w.orgId }, deps)).toMatchObject({ ok: false, code: 'org_lapsed' });
+    expect(await createOrgDrive(w.ids.marcus, { authentication: null, name: 'Engineering', orgId: w.orgId }, deps)).toMatchObject({ ok: false, code: 'org_lapsed' });
     expect(await createOrRotateInvitation({ orgId: w.orgId, email: `lapsed-${createId()}@northwind.test`, role: 'MEMBER', invitedBy: w.ids.jono, now: new Date(), deliver })).toMatchObject({ ok: false, reason: 'org_lapsed' });
     expect(await admitDriveComputeCreator({ driveId: w.productId, userId: w.ids.dana })).toMatchObject({ allowed: false, code: 'org_lapsed' });
     expect(await footprint(w)).toEqual(before);
@@ -247,7 +247,7 @@ describe('org lapse gates (orgs on, real Postgres)', () => {
     const w = world;
     await setSubscription(w.orgId, 'canceled');
 
-    const created = await createOrgDrive(w.ids.marcus, { name: 'Engineering', orgId: w.orgId }, deps);
+    const created = await createOrgDrive(w.ids.marcus, { authentication: null, name: 'Engineering', orgId: w.orgId }, deps);
     expect(created).toEqual({ ok: false, code: 'org_lapsed', status: 402, message: ORG_LAPSED_MESSAGE });
     const movedIn = await moveDriveToOrg(w.ids.dana, w.personalDriveId, { orgId: w.orgId }, deps);
     expect(movedIn).toMatchObject({ ok: false, code: 'org_lapsed', status: 402 });
@@ -259,7 +259,7 @@ describe('org lapse gates (orgs on, real Postgres)', () => {
 
     // Reactivated: creation works again.
     await setSubscription(w.orgId, 'active');
-    const again = await createOrgDrive(w.ids.marcus, { name: 'Engineering', orgId: w.orgId }, deps);
+    const again = await createOrgDrive(w.ids.marcus, { authentication: null, name: 'Engineering', orgId: w.orgId }, deps);
     expect(again.ok).toBe(true);
   });
 

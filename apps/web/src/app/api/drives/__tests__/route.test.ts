@@ -97,7 +97,6 @@ import { getAppDriveMembership, hasAppDriveMembership } from '@pagespace/lib/per
 import { resolveDriveWideCanEdit } from '@pagespace/lib/permissions/membership-queries';
 import { getUserAccessLevel } from '@pagespace/lib/permissions/permissions';
 import { db } from '@pagespace/db/db';
-import { checkOrgAuthentication } from '@pagespace/lib/organizations/authentication-policy';
 
 // ============================================================================
 // Test Helpers
@@ -469,7 +468,7 @@ describe('POST /api/drives', () => {
       expect(response.status).toBe(201);
       expect(createOrgDrive).toHaveBeenCalledWith(
         mockUserId,
-        { name: 'Engineering', orgId: 'org-northwind', orgVisibility: undefined },
+        { name: 'Engineering', orgId: 'org-northwind', orgVisibility: undefined, authentication: null },
         orgDriveServiceDeps
       );
       expect(createDrive).not.toHaveBeenCalled();
@@ -512,7 +511,7 @@ describe('POST /api/drives', () => {
       await post({ name: 'Finance', orgId: 'org-northwind', orgVisibility: 'PRIVATE' });
       expect(createOrgDrive).toHaveBeenCalledWith(
         mockUserId,
-        { name: 'Finance', orgId: 'org-northwind', orgVisibility: 'PRIVATE' },
+        { name: 'Finance', orgId: 'org-northwind', orgVisibility: 'PRIVATE', authentication: null },
         orgDriveServiceDeps
       );
 
@@ -532,14 +531,16 @@ describe('POST /api/drives', () => {
       expect(createOrgDrive).toHaveBeenCalledWith(mockUserId, expect.objectContaining({ orgId: 'org-northwind' }), orgDriveServiceDeps);
     });
 
-    it('DRV-3 (partial) a credential the org\'s sign-in policy refuses cannot create a drive there, and nothing is created', async () => {
-      vi.mocked(checkOrgAuthentication).mockResolvedValueOnce({ allowed: false, code: 'org_strong_sign_in_required' });
+    it('DRV-3 (partial) the asking credential\'s sign-in evidence goes to createOrgDrive, which judges the org\'s sign-in policy after membership; its refusal is relayed', async () => {
+      const authentication = { authenticatedAtMs: 1, assurance: 'single_factor' as const };
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ ...mockWebAuth(mockUserId), authentication } as unknown as SessionAuthResult);
+      vi.mocked(createOrgDrive).mockResolvedValueOnce({ ok: false, code: 'org_strong_sign_in_required', status: 403, message: 'This organization requires a stronger or more recent sign-in.' });
 
       const response = await post({ name: 'Engineering', orgId: 'org-northwind' });
 
       expect(response.status).toBe(403);
       expect((await response.json()).code).toBe('org_strong_sign_in_required');
-      expect(createOrgDrive).not.toHaveBeenCalled();
+      expect(createOrgDrive).toHaveBeenCalledWith(mockUserId, expect.objectContaining({ orgId: 'org-northwind', authentication }), orgDriveServiceDeps);
     });
 
     it('an orgId answers 404 and creates nothing while ORGS_ENABLED is false', async () => {
@@ -811,7 +812,4 @@ vi.mock('@/lib/auth/principal-permissions', async (importOriginal) => {
   };
 });
 
-vi.mock('@pagespace/lib/organizations/authentication-policy', () => ({
-  checkDriveAuthentication: vi.fn().mockResolvedValue({ allowed: true }),
-  checkOrgAuthentication: vi.fn().mockResolvedValue({ allowed: true }),
-}));
+vi.mock('@pagespace/lib/organizations/authentication-policy', () => ({ checkDriveAuthentication: vi.fn().mockResolvedValue({ allowed: true }) }));

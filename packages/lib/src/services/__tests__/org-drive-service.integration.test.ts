@@ -426,7 +426,7 @@ describe('createOrgDrive', () => {
     const orgDriveCount = async () => (await db.select({ id: drives.id }).from(drives).where(eq(drives.orgId, northwind))).length;
 
     await setPolicy('members');
-    const created = await createOrgDrive(marcus, { name: `Engineering ${run}`, orgId: northwind }, production);
+    const created = await createOrgDrive(marcus, { authentication: null, name: `Engineering ${run}`, orgId: northwind }, production);
     if (!created.ok) throw new Error(`refused: ${created.code}`);
     expect(await readDrive(created.drive.id)).toMatchObject({ orgId: northwind, orgVisibility: 'OPEN', ownerId: marcus });
     const rows = await db.select({ userId: driveMembers.userId, source: driveMembers.source }).from(driveMembers).where(eq(driveMembers.driveId, created.drive.id));
@@ -437,15 +437,15 @@ describe('createOrgDrive', () => {
     expect(audit.map((e) => e.resourceId)).toEqual([created.drive.id]);
 
     await setPolicy('admins');
-    expect(await createOrgDrive(marcus, { name: `Refused ${run}`, orgId: northwind }, production)).toMatchObject({ ok: false, code: 'POLICY_FORBIDS_CREATE', status: 403 });
-    expect(await createOrgDrive(chris, { name: `Sneaky ${run}`, orgId: northwind }, production)).toMatchObject({ ok: false, code: 'NOT_ORG_MEMBER', status: 403 });
+    expect(await createOrgDrive(marcus, { authentication: null, name: `Refused ${run}`, orgId: northwind }, production)).toMatchObject({ ok: false, code: 'POLICY_FORBIDS_CREATE', status: 403 });
+    expect(await createOrgDrive(chris, { authentication: null, name: `Sneaky ${run}`, orgId: northwind }, production)).toMatchObject({ ok: false, code: 'NOT_ORG_MEMBER', status: 403 });
     expect(await orgDriveCount()).toBe(1);
-    expect(await createOrgDrive(priya, { name: `Finance ${run}`, orgId: northwind }, production)).toMatchObject({ ok: true, drive: { orgId: northwind, ownerId: priya } });
+    expect(await createOrgDrive(priya, { authentication: null, name: `Finance ${run}`, orgId: northwind }, production)).toMatchObject({ ok: true, drive: { orgId: northwind, ownerId: priya } });
     expect(await orgDriveCount()).toBe(2);
   });
 
   it('DRV-4 a drive created in an org without a chosen visibility is Open', async () => {
-    const result = await createOrgDrive(marcus, { name: 'Engineering', orgId: northwind }, deps);
+    const result = await createOrgDrive(marcus, { authentication: null, name: 'Engineering', orgId: northwind }, deps);
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -458,8 +458,20 @@ describe('createOrgDrive', () => {
     expect(published).toEqual([{ call: syncCalls[0], orgIdAtPublish: northwind }]);
   });
 
+  it('DRV-3 (partial) the org sign-in policy is judged only after membership, inside the create: an outsider learns only that they are not a member; a member with a weak sign-in is refused by the policy; a strong one creates', async () => {
+    await db.update(organizations).set({ policies: { guests: 'on', requireStrongSignIn: true } }).where(eq(organizations.id, northwind));
+    const weak = { authenticatedAtMs: Date.now(), assurance: 'single_factor' as const };
+    const strong = { authenticatedAtMs: Date.now(), assurance: 'user_verified_passkey' as const };
+
+    expect(await createOrgDrive(chris, { name: `Probe ${run}`, orgId: northwind, authentication: weak }, deps)).toMatchObject({ ok: false, code: 'NOT_ORG_MEMBER', status: 403 });
+    expect(await createOrgDrive(marcus, { name: `Weak ${run}`, orgId: northwind, authentication: weak }, deps)).toMatchObject({ ok: false, code: 'org_strong_sign_in_required', status: 403 });
+    expect(await createOrgDrive(marcus, { name: `Nothing ${run}`, orgId: northwind, authentication: null }, deps)).toMatchObject({ ok: false, code: 'org_strong_sign_in_required' });
+    expect((await db.select({ id: drives.id }).from(drives).where(eq(drives.orgId, northwind))).length).toBe(0);
+    expect(await createOrgDrive(marcus, { name: `Strong ${run}`, orgId: northwind, authentication: strong }, deps)).toMatchObject({ ok: true });
+  });
+
   it('DRV-3 (partial) a drive created in an org keeps a chosen visibility', async () => {
-    const result = await createOrgDrive(priya, { name: 'Finance', orgId: northwind, orgVisibility: 'PRIVATE' }, deps);
+    const result = await createOrgDrive(priya, { authentication: null, name: 'Finance', orgId: northwind, orgVisibility: 'PRIVATE' }, deps);
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -467,7 +479,7 @@ describe('createOrgDrive', () => {
   });
 
   it('DRV-3 (partial) a user outside the org cannot create a drive in it, and nothing is inserted', async () => {
-    const result = await createOrgDrive(chris, { name: `Sneaky ${run}`, orgId: northwind }, deps);
+    const result = await createOrgDrive(chris, { authentication: null, name: `Sneaky ${run}`, orgId: northwind }, deps);
 
     expect(result).toMatchObject({ ok: false, code: 'NOT_ORG_MEMBER' });
     expect(await db.select().from(drives).where(eq(drives.ownerId, chris))).toEqual([]);
@@ -476,15 +488,15 @@ describe('createOrgDrive', () => {
   it('DRV-3 (partial) the creation policy seam is consulted: admins-only refuses a Member', async () => {
     const adminsOnly: OrgDriveServiceDeps = { ...deps, getOrgDriveCreationPolicy: async () => 'admins' };
 
-    expect(await createOrgDrive(marcus, { name: 'Engineering', orgId: northwind }, adminsOnly)).toMatchObject({
+    expect(await createOrgDrive(marcus, { authentication: null, name: 'Engineering', orgId: northwind }, adminsOnly)).toMatchObject({
       ok: false,
       code: 'POLICY_FORBIDS_CREATE',
     });
   });
 
   it('DRV-3 (partial) two org drives with the same name get distinct slugs in the org', async () => {
-    const first = await createOrgDrive(marcus, { name: `Design System ${run}`, orgId: northwind }, deps);
-    const second = await createOrgDrive(lena, { name: `Design System ${run}`, orgId: northwind }, deps);
+    const first = await createOrgDrive(marcus, { authentication: null, name: `Design System ${run}`, orgId: northwind }, deps);
+    const second = await createOrgDrive(lena, { authentication: null, name: `Design System ${run}`, orgId: northwind }, deps);
 
     expect(first.ok && second.ok).toBe(true);
     if (!first.ok || !second.ok) return;
@@ -494,9 +506,9 @@ describe('createOrgDrive', () => {
   it('DRV-3 (partial) concurrent creates of the same name in one org all succeed with distinct slugs', async () => {
     const name = `Marketing Site ${run}`;
     const results = await Promise.all([
-      createOrgDrive(marcus, { name, orgId: northwind }, deps),
-      createOrgDrive(lena, { name, orgId: northwind }, deps),
-      createOrgDrive(priya, { name, orgId: northwind }, deps),
+      createOrgDrive(marcus, { authentication: null, name, orgId: northwind }, deps),
+      createOrgDrive(lena, { authentication: null, name, orgId: northwind }, deps),
+      createOrgDrive(priya, { authentication: null, name, orgId: northwind }, deps),
     ]);
 
     const slugs = results.map((r) => (r.ok ? r.drive.slug : r.code)).sort();
@@ -599,7 +611,7 @@ describe('with the production wiring: authorization', () => {
   });
 
   it('DRV-3 (partial) a user outside the org cannot create a drive in it, and nothing is inserted (real requireOrgRole)', async () => {
-    const result = await createOrgDrive(chris, { name: `Outsider ${run}`, orgId: northwind }, orgDriveServiceDeps);
+    const result = await createOrgDrive(chris, { authentication: null, name: `Outsider ${run}`, orgId: northwind }, orgDriveServiceDeps);
 
     expect(result).toMatchObject({ ok: false, code: 'NOT_ORG_MEMBER' });
     expect(await db.select().from(drives).where(eq(drives.orgId, northwind))).toEqual([]);
@@ -640,7 +652,7 @@ describe('with the production wiring: authorization', () => {
         const pending = (
           operation === 'move-in' && personalId
             ? moveDriveToOrg(marcus, personalId, { orgId: northwind }, orgDriveServiceDeps)
-            : createOrgDrive(marcus, { name: `Race ${run}`, orgId: northwind }, orgDriveServiceDeps)
+            : createOrgDrive(marcus, { authentication: null, name: `Race ${run}`, orgId: northwind }, orgDriveServiceDeps)
         ).then(
           (result) => ({ result }),
           (error: unknown) => ({ error })

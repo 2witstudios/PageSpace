@@ -60,9 +60,6 @@ vi.mock('@pagespace/lib/services/drive-service', () => ({
   })),
 }));
 vi.mock('@pagespace/lib/organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
-vi.mock('@pagespace/lib/organizations/authentication-policy', () => ({
-  checkOrgAuthentication: vi.fn().mockResolvedValue({ allowed: true }),
-}));
 vi.mock('@pagespace/lib/services/org-drive-service', () => ({ createOrgDrive: vi.fn() }));
 vi.mock('@pagespace/lib/services/org-drive-service-deps', () => ({ orgDriveServiceDeps: { production: true } }));
 
