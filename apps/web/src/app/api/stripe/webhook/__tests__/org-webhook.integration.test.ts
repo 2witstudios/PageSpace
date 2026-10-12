@@ -837,6 +837,38 @@ describe('Stripe webhook — org routing, idempotency, lapse (real Postgres, in-
     expect(owner.tier).toBe('pro');
   });
 
+  it('SEAT-2 (partial) a subscription webhook waits for the user lock before locking its mirror', async () => {
+    const person = await factories.createUser({ stripeCustomerId: `cus_lock_${Date.now()}` });
+    userIds.push(person.id);
+    const subscription = {
+      id: `sub_lock_${Date.now()}`, customer: person.stripeCustomerId, status: 'active',
+      metadata: {}, schedule: null, cancel_at_period_end: false,
+      items: { data: [{ id: 'si_lock', price: { id: stripeConfig.priceIds.pro }, current_period_start: 1_800_000_000, current_period_end: 1_802_592_000 }] },
+    };
+    expect(await deliver(eventPayload('customer.subscription.created', subscription))).toBe(200);
+    let delivery: Promise<number> | undefined;
+    try {
+      await db.transaction(async (tx) => {
+        await tx.select({ id: users.id }).from(users).where(eq(users.id, person.id)).for('update');
+        const backend = await tx.execute(sql`select pg_backend_pid() as pid`);
+        const pid = Number(backend.rows[0].pid);
+        subscription.items.data[0].price.id = 'price_unknown_replacement';
+        delivery = deliver(eventPayload('customer.subscription.updated', subscription));
+        await vi.waitFor(async () => {
+          const blocked = await db.execute(sql`select count(*)::int as n from pg_stat_activity where ${pid} = any(pg_blocking_pids(pid))`);
+          expect(Number(blocked.rows[0].n)).toBeGreaterThan(0);
+        });
+        // This would fail with 55P03 if the webhook took the mirror first. No
+        // sleep or deadlock timeout is needed to prove the ordering.
+        await tx.execute(sql`select id from subscriptions where "stripeSubscriptionId" = ${subscription.id} for update nowait`);
+      });
+    } finally {
+      if (delivery) expect(await delivery).toBe(200);
+    }
+    const [after] = await db.select().from(users).where(eq(users.id, person.id));
+    expect(after.subscriptionTier).toBe('free');
+  });
+
   it.each([false, true])('SEAT-2 (partial) a replaced or extra price item cannot restore previous entitlement (%s)', async (extraItem) => {
     const person = await factories.createUser({ stripeCustomerId: `cus_identity_${Date.now()}` });
     userIds.push(person.id);

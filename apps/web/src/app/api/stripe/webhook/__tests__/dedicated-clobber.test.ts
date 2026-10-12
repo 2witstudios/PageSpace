@@ -67,6 +67,7 @@ const mockDb = vi.hoisted(() => {
     }),
     transaction: async (cb: (tx: unknown) => Promise<void>) => {
       await cb({
+        select: () => ({ from: () => ({ where: () => ({ for: async () => state.userRows }) }) }),
         insert: () => ({ values: () => ({ onConflictDoUpdate: async () => undefined }) }),
         update: recordUpdate,
       });

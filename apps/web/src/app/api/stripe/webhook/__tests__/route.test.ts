@@ -47,6 +47,7 @@ const mockDeleteWhere = vi.fn();
 vi.mock('@pagespace/db/db', () => {
   // Create a mock transaction function
   const mockTx = {
+    select: vi.fn(() => ({ from: () => ({ where: () => ({ for: async () => [{ id: 'user_123' }] }) }) })),
     insert: vi.fn(() => ({
       values: mockTxInsertValues.mockReturnValue({
         onConflictDoUpdate: mockTxInsertOnConflictDoUpdate,
@@ -537,6 +538,17 @@ describe('POST /api/stripe/webhook', () => {
           subscriptionTier: 'pro',
         })
       );
+    });
+
+    it('a failed personal subscription transaction clears its claim for Stripe redelivery', async () => {
+      const event = mockStripeEvent('customer.subscription.updated', mockSubscription());
+      mockStripeWebhooksConstructEvent.mockReturnValue(event);
+      mockTxInsertOnConflictDoUpdate.mockRejectedValueOnce(new Error('deadlock detected'));
+      const request = new Request('https://example.com/api/stripe/webhook', {
+        method: 'POST', body: JSON.stringify(event), headers: { 'stripe-signature': 'valid_signature' },
+      }) as unknown as import('next/server').NextRequest;
+      expect((await POST(request)).status).toBe(500);
+      expect(mockDeleteWhere).toHaveBeenCalledWith(expect.objectContaining({ value: event.id }));
     });
 
     it('SEAT-2 (partial) a retired personal Business subscription cannot retain paid entitlement', async () => {

@@ -185,7 +185,7 @@ export async function POST(request: NextRequest) {
           // Retryable, the owner lookup included: a throw outside the wrapper would mark
           // the event processed and lose it.
           if (await withFundingRetry(event.id, () => routeOrgSubscriptionEvent(subscription, event.id))) break;
-          await handleSubscriptionChange(subscription);
+          await withFundingRetry(event.id, () => handleSubscriptionChange(subscription));
           break;
         }
 
@@ -208,7 +208,7 @@ export async function POST(request: NextRequest) {
           // Same org fork: an org subscription ending lapses the ORG (SEAT-9) and never
           // sets a person's tier to free.
           if (await withFundingRetry(event.id, () => routeOrgSubscriptionEvent(subscription, event.id))) break;
-          await handleSubscriptionDeleted(subscription);
+          await withFundingRetry(event.id, () => handleSubscriptionDeleted(subscription));
           break;
         }
 
@@ -520,6 +520,8 @@ async function handleSubscriptionChange(subscription: Stripe.Subscription) {
 
   // Use transaction to ensure subscription and user updates are atomic
   await db.transaction(async (tx) => {
+    // Shared order with reconciliation, deletion and cutover: user, then mirror.
+    await tx.select({ id: users.id }).from(users).where(eq(users.id, userId)).for('update');
     // Upsert subscription record
     const isGifted = subscription.metadata?.type === 'gift_subscription';
     await tx.insert(subscriptions).values({
