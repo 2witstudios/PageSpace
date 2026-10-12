@@ -35,7 +35,7 @@ afterEach(async () => {
   if (userIds.length) await db.delete(users).where(inArray(users.id, userIds.splice(0)));
 });
 
-describe('SEC-2 SEC-3 (partial) credential evidence in PostgreSQL', () => {
+describe('SEC-2 (partial) SEC-3 (partial) credential evidence in PostgreSQL', () => {
   it('keeps the consent ceremony through code exchange and repeated OAuth refresh', async () => {
     const f = await fixture();
     const code = createId();

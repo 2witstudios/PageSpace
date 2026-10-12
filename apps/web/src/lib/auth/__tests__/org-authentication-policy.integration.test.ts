@@ -37,7 +37,7 @@ afterEach(async () => {
   if (userIds.length) await db.delete(users).where(inArray(users.id, userIds.splice(0)));
 });
 
-describe('SEC-2 SEC-3 (partial) organization credential policy against PostgreSQL', () => {
+describe('SEC-2 (partial) SEC-3 (partial) organization credential policy against PostgreSQL', () => {
   it('denies org content to an old credential while preserving its personal access and permitting a separate fresh credential', async () => {
     const f = await fixture();
     const old: AuthResult = { ...f.auth, authentication: { authenticatedAtMs: Date.now() - 3600000, assurance: 'user_verified_passkey' } };

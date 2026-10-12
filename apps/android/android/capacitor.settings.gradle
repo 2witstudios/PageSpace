@@ -2,6 +2,9 @@
 include ':capacitor-android'
 project(':capacitor-android').projectDir = new File('../../../node_modules/.bun/@capacitor+android@7.6.5+abcf0b523ff3394e/node_modules/@capacitor/android/capacitor')
 
+include ':capawesome-capacitor-badge'
+project(':capawesome-capacitor-badge').projectDir = new File('../../../node_modules/.bun/@capawesome+capacitor-badge@7.0.1+abcf0b523ff3394e/node_modules/@capawesome/capacitor-badge/android')
+
 include ':capacitor-app'
 project(':capacitor-app').projectDir = new File('../../../node_modules/.bun/@capacitor+app@7.1.2+abcf0b523ff3394e/node_modules/@capacitor/app/android')
 

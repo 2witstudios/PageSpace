@@ -698,7 +698,7 @@ describe('getPrincipalDriveMembership', () => {
   });
 });
 
-describe('SEC-2 SEC-3 (partial) principal policy enforcement', () => {
+describe('SEC-2 (partial) SEC-3 (partial) principal policy enforcement', () => {
   it.each([sessionAuth, unscopedMcpAuth, scopedMcpAuth, accountOAuthAuth, scopedOAuthAuth])('denies page and drive capabilities for a rejected $tokenType credential', async (auth) => {
     vi.mocked(checkDriveAuthentication).mockResolvedValue({ allowed: false, code: 'org_reauthentication_required' });
     vi.mocked(checkResourceAuthentication).mockResolvedValue({ allowed: false, code: 'org_reauthentication_required' });
