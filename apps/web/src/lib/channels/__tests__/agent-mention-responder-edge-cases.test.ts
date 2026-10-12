@@ -122,6 +122,7 @@ import { canUserViewPage, isUserDriveMember } from '@pagespace/lib/permissions/p
 import { executeAskAgent } from '@/lib/ai/tools/agent-communication-tools';
 import { channelTools } from '@/lib/ai/tools/channel-tools';
 import { triggerMentionedAgentResponses } from '../agent-mention-responder';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const mockPagesFindMany = db.query.pages.findMany as unknown as Mock;
 const mockChannelMessagesFindMany = db.query.channelMessages.findMany as unknown as Mock;
@@ -175,7 +176,7 @@ function commandRow(overrides: Record<string, unknown> = {}) {
 }
 
 const params = {
-  userId: SENDER,
+  sender: credentialActor(SENDER, null),
   channelId: 'channel-1',
   channelTitle: 'General',
   sourceMessageId: 'msg-1',

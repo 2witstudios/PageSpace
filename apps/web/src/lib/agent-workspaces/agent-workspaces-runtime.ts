@@ -110,7 +110,7 @@ import {
   type ClaimConversationOutcome,
   type ClaimConversationInSessionDeps,
 } from '@/lib/agent-workspaces/claim-conversation-in-workspace';
-import { type AccessActor, automationActor } from '@pagespace/lib/permissions/access-actor';
+import { type AccessActor, automationActor, inDrives } from '@pagespace/lib/permissions/access-actor';
 
 export { isCodeExecutionEnabled };
 
@@ -1376,8 +1376,8 @@ export async function endSession(workspaceId: string): Promise<EndAgentSessionRe
     // an admission that reopened this session between the stamp above and the
     // write below keeps its tree instead of having it wiped out from under it.
     // See the flag's own doc for the ghost that produces.
-    // Binds nothing, so no credential is judged: the owner, as the system teardown it is.
-    const destroyed = await destroyWorkspaceTree({ workspaceId, actor: automationActor(ownerId, 'session-end-teardown'), requireEnded: true });
+    // Binds nothing, so no credential is judged: the owner, as the system teardown it is, reaching no drive.
+    const destroyed = await destroyWorkspaceTree({ workspaceId, actor: automationActor(ownerId, 'session-end-teardown', inDrives()), requireEnded: true });
     if (destroyed.status === 'refused' && destroyed.code === 'session_reopened') {
       // Not a failure: the session is live again because someone put work into
       // it, and the tree that work created is the one that should stand.

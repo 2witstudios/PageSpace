@@ -34,7 +34,7 @@ import { mirrorPublishedPageToHosts, mirror404ToHosts, getActiveDomainRecords } 
 import { checkOrgActive } from '@pagespace/lib/organizations/status';
 import { getOrgPolicies } from '@pagespace/lib/organizations/policy-reader';
 import { publishingDecision } from '@pagespace/lib/organizations/sharing-decisions';
-import { type AccessActor, automationActor } from '@pagespace/lib/permissions/access-actor';
+import { type AccessActor, automationActor, inDrives } from '@pagespace/lib/permissions/access-actor';
 
 export const PUBLISH_HOST = 'pagespace.site';
 const FAVICON_BASE_URL = 'https://pagespace.ai';
@@ -745,7 +745,7 @@ async function renderNotFoundPageHtml(params: {
       currentPageId: pageId,
       currentPath: '',
       // No natural current user here (see above): the drive owner, as a system regeneration, not a sign-in.
-      actor: automationActor(ownerId, 'publish-regeneration'),
+      actor: automationActor(ownerId, 'publish-regeneration', inDrives(driveId)),
       siteMode: page.siteMode,
     });
     const { meta } = prepared;

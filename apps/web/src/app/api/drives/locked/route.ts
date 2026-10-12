@@ -4,7 +4,7 @@ import { getOrgPolicies } from '@pagespace/lib/organizations/policy-reader';
 import { findOrganizationNames } from '@pagespace/lib/organizations/repository';
 import { lockedOrgDrives, type OrgAuthenticationPolicy } from '@pagespace/lib/organizations/authentication-policy-core';
 import { ORGS_ENABLED } from '@pagespace/lib/organizations/orgs-enabled';
-import { automationActor } from '@pagespace/lib/permissions/access-actor';
+import { HELD_DRIVES, automationActor } from '@pagespace/lib/permissions/access-actor';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
@@ -27,7 +27,7 @@ export async function GET(request: Request) {
     // The drives the PERSON holds, without this credential's sign-in check (which would hide exactly the locked
     // ones): ids and names only, no content, so it is asked as a system listing of their own memberships. Which of
     // them this credential may open is then decided below against the same policy the access seam applies.
-    const drives = await listAccessibleDrives(automationActor(auth.userId, 'locked-drive-listing'));
+    const drives = await listAccessibleDrives(automationActor(auth.userId, 'locked-drive-listing', HELD_DRIVES));
     const orgIds = [...new Set(drives.flatMap((d) => (d.orgId ? [d.orgId] : [])))];
     const policies = new Map<string, OrgAuthenticationPolicy>(
       await Promise.all(orgIds.map(async (orgId) => [orgId, await getOrgPolicies(orgId)] as const)),

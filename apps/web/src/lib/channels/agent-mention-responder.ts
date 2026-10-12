@@ -40,7 +40,7 @@ import {
 } from '@/lib/channels/build-recent-image-file-parts';
 import { getDrivePolicies } from '@pagespace/lib/organizations/policy-reader';
 import { agentsAutonomousDecision } from '@pagespace/lib/organizations/org-action-decisions';
-import { automationActor, type AccessActor } from '@pagespace/lib/permissions/access-actor';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 const channelMentionLogger = loggers.ai.child({ module: 'channel-agent-mentions' });
 
@@ -72,7 +72,12 @@ export interface RecentChannelMessage {
 }
 
 export interface TriggerMentionedAgentResponsesParams {
-  userId: string;
+  /**
+   * The person who posted the mention, as the credential of the request that posted it (D-OW-62): the mentioner gate,
+   * the reply's tools, attachments and commands all run under it, so an org's sign-in policy applies to a mention
+   * exactly as to that request. Never an automation.
+   */
+  sender: AccessActor;
   channelId: string;
   channelTitle: string;
   channelType?: string;
@@ -424,7 +429,7 @@ function buildMentionerContext(
   creditSpend?: ToolExecutionContext['creditSpend'],
 ): ToolExecutionContext {
   return {
-    userId: params.userId,
+    userId: params.sender.userId,
     accessActor: mentionActor(params),
     conversationId,
     locationContext,
@@ -450,7 +455,7 @@ function buildAgentActorContext(
   commandExecution?: CommandExecutionData[],
 ): ToolExecutionContext {
   return {
-    userId: params.userId,
+    userId: params.sender.userId,
     accessActor: mentionActor(params),
     conversationId,
     locationContext,
@@ -464,13 +469,9 @@ function buildAgentActorContext(
   } as ToolExecutionContext;
 }
 
-/**
- * The actor a mention reply runs as: the person who sent the message, as an automation (D-OW-34) — the reply is
- * produced after their request returned, not under their live credential, so sign-in policy does not apply; their
- * membership and every other policy does.
- */
-function mentionActor(params: Pick<TriggerMentionedAgentResponsesParams, 'userId'>): AccessActor {
-  return automationActor(params.userId, 'agent-mention');
+/** The actor a mention reply runs as: the sender's credential from the request that posted the mention (D-OW-62). */
+function mentionActor(params: Pick<TriggerMentionedAgentResponsesParams, 'sender'>): AccessActor {
+  return params.sender;
 }
 
 function mentionConversationIdFor(channelId: string, agentId: string): string {
@@ -744,7 +745,7 @@ export async function triggerMentionedAgentResponses(
         } else {
           // SPEND-6: the reply spends the channel's drive wallet or is skipped — never the
           // sender's credits — gated before the model call and settled on that wallet.
-          const hold = await acquireMentionCreditHold({ userId: params.userId, driveId: params.driveId });
+          const hold = await acquireMentionCreditHold({ userId: params.sender.userId, driveId: params.driveId });
           if (!hold.allowed) {
             channelMentionLogger.warn('Mentioned agent skipped (credit gate denied)', {
               channelId: params.channelId,
@@ -816,7 +817,7 @@ export async function triggerMentionedAgentResponses(
           // to the resulting follower set so other followers see the reply
           // in their inbox even though it was posted by the agent.
           await postAgentThreadReply({
-            userId: params.userId,
+            userId: params.sender.userId,
             channelId: params.channelId,
             content: replyContent,
             parentId: trimmedParent,

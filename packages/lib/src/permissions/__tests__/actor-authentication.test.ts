@@ -6,7 +6,7 @@ vi.mock('../../organizations/policy-reader', () => ({
 }));
 
 import { getDriveAuthenticationPolicies, getResourceDriveIds } from '../../organizations/policy-reader';
-import { automationActor, credentialActor } from '../access-actor';
+import { automationActor, credentialActor, inDrives } from '../access-actor';
 import {
   checkActorDriveAuthentication,
   explainOrgAuthenticationDenial,
@@ -48,8 +48,10 @@ describe('the actor sign-in shell', () => {
     expect([...(await filterResourcesForActor(stale, ['page-org-1', 'page-mine']))]).toEqual(['page-mine']);
   });
 
-  it('SEC-2 (partial) an automation is admitted without reading any policy', async () => {
-    const actor = automationActor('user-1', 'workflow');
+  it('SEC-2 (partial) an automation is admitted inside its scope without reading any policy, and refused outside it', async () => {
+    const actor = automationActor('user-1', 'workflow', inDrives(ORG_DRIVE));
+    expect(await checkActorDriveAuthentication(actor, PERSONAL_DRIVE)).toEqual({ allowed: false, code: 'automation_out_of_scope' });
+    expect([...(await filterDrivesForActor(actor, [ORG_DRIVE, PERSONAL_DRIVE]))]).toEqual([ORG_DRIVE]);
     expect(await checkActorDriveAuthentication(actor, ORG_DRIVE)).toEqual({ allowed: true });
     expect([...(await filterDrivesForActor(actor, [ORG_DRIVE]))]).toEqual([ORG_DRIVE]);
     expect(getDriveAuthenticationPolicies).not.toHaveBeenCalled();
