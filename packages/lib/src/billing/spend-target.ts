@@ -17,7 +17,6 @@ import {
   childSpendableCents,
   coveredSpendOptions,
   entitlementTierFor,
-  legCovers,
   resolveSpendSource,
   seatLegSpendableCents,
   legSpendableCents,
@@ -431,12 +430,15 @@ export type ChosenSource =
  * conversation onto another source (SPEND-4).
  *
  * The person's "drive's wallet, if it has one" default — never set (canvas v9 UsageWallets shows it
- * selected) or saved, one code path — is the drive's wallet when they may spend one here and it can
- * pay this call now, otherwise their own credits if they can; with neither, nothing is preselected.
- * Any other default they set is honoured or skipped. The drive's own default (set by its lead) is a
- * drive policy and is taken as stored.
+ * selected) or saved, one code path — is the drive's wallet whenever they may spend one here, and
+ * their own credits only where the drive has none for them. Preselection is by KIND, never by
+ * balance: a paused, capped or empty drive wallet is still the preselected source, so the call
+ * refuses naming it with the remaining options, or moves only where the drive's rule allows a
+ * fallback that the turn reports (SPEND-4). It never lands silently on another wallet. Any other
+ * default they set is honoured or skipped. The drive's own default (set by its lead) is a drive
+ * policy and is taken as stored.
  */
-export function chooseSource(turnSource: SpendSourceKind | null, stored: StoredSpendChoice, legs: CallSpendLegs & { reservationCents: number }): ChosenSource {
+export function chooseSource(turnSource: SpendSourceKind | null, stored: StoredSpendChoice, legs: CallSpendLegs): ChosenSource {
   if (turnSource !== null) return { kind: 'source', source: turnSource, via: 'turn' };
   if (stored.chosenWalletId !== null) {
     const source = sourceOfWallet(stored.chosenWalletId, legs);
@@ -447,14 +449,11 @@ export function chooseSource(turnSource: SpendSourceKind | null, stored: StoredS
     return { kind: 'source', source: stored.driveDefault, via: 'drive_default' };
   }
   // The person's default. "The drive's wallet, if it has one" — saved or never set (Settings shows it selected either
-  // way) — is ONE path: the first of drive wallet, own credits that can pay this call NOW (not paused, not at the
-  // person's cap, not short of the reservation), so it never lands on a refusal or on a fallback nobody chose. With
-  // neither, nothing is preselected and the person is asked (SPEND-4 no_source_chosen).
+  // way) — is ONE path: the first of drive wallet, own credits that this person may spend here at all. What the
+  // source holds is the gate's question, never preselection's: an uncovered drive wallet refuses by name or takes the
+  // drive's reported fallback, so a conversation never moves wallets silently (SPEND-4).
   if (effectiveDefaultSpendSource(stored.personalDefault) === 'drive_wallet') {
-    const outOfBox = OUT_OF_BOX_SOURCES.find((source) => {
-      const leg = available.includes(source) ? legOf(legs, source) : null;
-      return leg !== null && legCovers(leg, legs.reservationCents);
-    });
+    const outOfBox = OUT_OF_BOX_SOURCES.find((source) => available.includes(source));
     return outOfBox ? { kind: 'source', source: outOfBox, via: 'out_of_box' } : { kind: 'none' };
   }
   // Any other default the person set (own credits, their seat) is honoured where they may spend it, else skipped.
@@ -467,11 +466,6 @@ export function chooseSource(turnSource: SpendSourceKind | null, stored: StoredS
 /** SPEND-3: the default a person has, as Settings shows it selected: the stored one, else the drive's wallet. */
 export function effectiveDefaultSpendSource(personalDefault: SpendSourceKind | null): SpendSourceKind {
   return personalDefault ?? 'drive_wallet';
-}
-
-/** The leg of a source this person may spend (availableSources has already said they may). */
-function legOf(legs: CallSpendLegs, source: SpendSourceKind): SpendLeg | null {
-  return source === 'drive_wallet' ? legs.driveWallet : source === 'seat_allowance' ? legs.seatAllowance : legs.personal;
 }
 
 /** SPEND-3: what the "drive's wallet, if it has one" default spends from, in order. */
@@ -628,6 +622,24 @@ export function decideCallSpend(input: CallSpendInput): CallSpendDecision {
       consumerTier: input.consumerTier,
     }),
   };
+}
+
+/**
+ * SPEND-3: the source a conversation's first gated call preselected, to be stored as the
+ * conversation's own (conversations.chosenWalletId) so it is chosen ONCE and persists for it —
+ * a later change of the drive's or the person's default, or the wallet emptying, never moves it.
+ * Only a preselection is pinned (the drive's default, the person's, the out-of-box default, or a
+ * sole source): null when the conversation already stores a choice (valid or stale), for a
+ * follow-on call (its turn's first call pinned), under the always-own-credits override (an
+ * absolute switch, not a choice for this conversation), for an automation, or when nothing was
+ * preselected. Pinned by kind whatever the source holds — an empty pinned source refuses by name.
+ */
+export function sourceToPin(input: CallSpendInput): SpendSourceKind | null {
+  if (input.actor.kind === 'automation' || input.followOn === true || input.chosen !== null) return null;
+  if (input.userOverride.alwaysOwnCredits || input.userOverride.alwaysOwnCreditsInDrive) return null;
+  const choice = chooseSource(null, input.stored ?? NO_STORED_CHOICE, input);
+  if (choice.kind === 'source') return choice.via === 'conversation' ? null : choice.source;
+  return choice.kind === 'none' ? preselectSoleSource(null, input) : null;
 }
 
 /**

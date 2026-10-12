@@ -34,7 +34,7 @@ import { requiresProSubscription, createSubscriptionRequiredResponse, createAdmi
 import { resolveProviderModel } from '@/lib/ai/core/ai-providers-config';
 import { MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
-import { PERSONAL_SPEND, conversationSpend } from '@pagespace/lib/billing/spend-target';
+import { conversationSpend } from '@pagespace/lib/billing/spend-target';
 import { UNGATED_TURN_CREDIT, turnCreditAfterGate, type TurnCredit } from './turn-credit';
 import { writeTurnPreamble } from './turn-preamble';
 import { isMeteringExempt } from '@pagespace/lib/ai/model-defaults';
@@ -185,8 +185,10 @@ interface GlobalChatRequestBody {
   conversationId?: string;
   selectedProvider?: string;
   selectedModel?: string;
-  /** Deprecated: server-resolved from contextRef when present, kept 1+ release for old clients. */
-  locationContext?: LocationContext | null;
+  /**
+   * Where the person is, as a reference the SERVER resolves and permission-checks. The only way a
+   * global-assistant turn is inside a drive: without it the turn has no drive (SPEND-8).
+   */
   contextRef?: ContextRef;
   isReadOnly?: boolean;
   webSearchEnabled?: boolean;
@@ -314,14 +316,13 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
       conversationId,
       selectedProvider: requestBody.selectedProvider,
       selectedModel: requestBody.selectedModel,
-      hasLocationContext: !!requestBody.locationContext
+      hasContextRef: !!requestBody.contextRef
     });
 
     const {
       messages: requestMessages, // Used ONLY to extract new user message, NOT for conversation history
       selectedProvider,
       selectedModel,
-      locationContext: legacyLocationContext, // Deprecated: server-resolved from contextRef when present, kept 1+ release for old clients
       contextRef,
       isReadOnly,
       webSearchEnabled,
@@ -336,15 +337,22 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
       return NextResponse.json({ error: 'messages are required' }, { status: 400 });
     }
 
+    // The client-computed `locationContext` body is gone (full cutover): a turn inside a drive
+    // names it by `contextRef`, which the server resolves. A body still carrying the old field
+    // claims a drive the server cannot verify, so it is refused rather than run as a no-drive
+    // turn on the person's own credits (SPEND-8 is only for a turn with NO drive).
+    if ('locationContext' in (ctx.body as object)) {
+      return NextResponse.json({ error: 'locationContext is no longer accepted; send contextRef' }, { status: 400 });
+    }
+
     loggers.api.debug('Global Assistant Chat API: Validation passed', { messageCount: requestMessages.length, conversationId });
 
-    // Server-resolved (and permission-checked) from contextRef when the client sent
-    // one — a contextRef pointing at a page/drive the caller cannot view resolves to
-    // null here rather than trusting whatever the client claimed. Falls back to the
-    // legacy client-computed locationContext only for old clients that never sent a
-    // contextRef at all. Deferred until after the required-field check above so an
-    // invalid request (no messages) fails fast without an extra DB round-trip.
-    const locationContext = contextRef
+    // Server-resolved (and permission-checked) from contextRef — a contextRef pointing at a
+    // page/drive the caller cannot view resolves to null here rather than trusting whatever the
+    // client claimed. No contextRef: no location, no drive. Deferred until after the
+    // required-field check above so an invalid request (no messages) fails fast without an
+    // extra DB round-trip.
+    const locationContext: LocationContext | null = contextRef
       ? await resolveRequestContext(auth, contextRef, (denied) => {
           auditRequest(request, {
             eventType: 'authz.access.denied',
@@ -355,7 +363,7 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
             riskScore: 0.3,
           });
         })
-      : legacyLocationContext;
+      : null;
 
     const userMessageForValidation = requestMessages[requestMessages.length - 1];
 
@@ -440,13 +448,11 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
       // it costs nothing — skip the gate entirely rather than take a hold that
       // would need special-cased release on the short-circuit path.
       // The global assistant spends in the drive the person is in (SPEND-7) — only a drive
-      // the SERVER resolved from contextRef, which is permission-checked. The legacy body's
-      // locationContext is client-supplied and unchecked, so it never names a spend drive:
-      // without a contextRef the call spends personal credits (SPEND-8), as with no drive, and
-      // no stored choice is read against a client-supplied drive. With one, the conversation's
-      // stored source (SPEND-3) is read only if the caller owns it (the gate's shell filters on
-      // owner), since this runs before the conversation is resolved.
-      const locationSpend = contextRef ? conversationSpend(locationContext?.currentDrive?.id, conversationId) : PERSONAL_SPEND;
+      // the SERVER resolved from contextRef, which is permission-checked. With no drive the
+      // call spends personal credits (SPEND-8). The conversation's stored source (SPEND-3) is
+      // read only if the caller owns it (the gate's shell filters on owner), since this runs
+      // before the conversation is resolved.
+      const locationSpend = conversationSpend(locationContext?.currentDrive?.id, conversationId);
       credit = { spend: locationSpend };
       if (!isMeteringExempt(gateProvider) && !isSoloHelpRequest) {
         const creditGate = await canConsumeAI(userId, toPersonalSubscriptionTier(gateUser?.subscriptionTier), {
@@ -700,8 +706,8 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
       selectedModel,
     };
 
-    // POL-8: the org of the drive the turn runs in (the same server-resolved drive the spend uses; none without a contextRef).
-    const providerResult = await createAIProvider(userId, providerRequest, { driveId: contextRef ? (locationContext?.currentDrive?.id ?? null) : null });
+    // POL-8: the org of the drive the turn runs in (the same server-resolved drive the spend uses).
+    const providerResult = await createAIProvider(userId, providerRequest, { driveId: locationContext?.currentDrive?.id ?? null });
 
     if (isProviderError(providerResult)) {
       return createProviderErrorResponse(providerResult);

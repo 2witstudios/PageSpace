@@ -44,6 +44,7 @@ import { MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
 import { conversationSpend } from '@pagespace/lib/billing/spend-target';
 import { UNGATED_TURN_CREDIT, turnCreditAfterGate, type TurnCredit } from './turn-credit';
+import { pinConversationSource } from '@pagespace/lib/billing/spend-resolution';
 import { writeTurnPreamble } from './turn-preamble';
 import { isMeteringExempt } from '@pagespace/lib/ai/model-defaults';
 import { estimateChatHoldCentsForModel } from '@pagespace/lib/monitoring/chat-pricing';
@@ -769,6 +770,9 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     // gate resolves or refuses (SPEND-3, SPEND-4); the turn never writes it.
     const pageSpend = conversationSpend(page.driveId, conversationId);
     credit = { spend: pageSpend };
+    // SPEND-3: the source the gate preselected for a conversation with none stored. A first turn
+    // gates before its row exists, so it is pinned right after the row is created (below).
+    let conversationSourceWalletId: string | undefined;
     if (!isMeteringExempt(gateProvider) && !isSoloHelpRequest) {
       const creditGate = await canConsumeAI(userId, toPersonalSubscriptionTier(user?.subscriptionTier), {
         spend: pageSpend,
@@ -781,6 +785,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
       }
       holdId = creditGate.holdId;
       credit = turnCreditAfterGate(pageSpend, creditGate);
+      conversationSourceWalletId = creditGate.conversationSourceWalletId;
       availableBalanceCents =
         holdId && creditGate.balanceSnapshot
           ? creditGate.balanceSnapshot.netSpendableCents
@@ -820,6 +825,9 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
           conversationId,
           userId,
         });
+      }
+      if (created === 'created' && conversationSourceWalletId) {
+        await pinConversationSource({ userId: userId!, conversationId, driveId: page.driveId, walletId: conversationSourceWalletId });
       }
     } catch (error) {
       loggers.ai.error('AI Chat API: Failed to ensure conversation row', error as Error, {

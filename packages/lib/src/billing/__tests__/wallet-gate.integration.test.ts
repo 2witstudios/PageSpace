@@ -29,13 +29,14 @@ import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
 import { loggers } from '../../logging/logger-config';
 import { canConsumeAI } from '../credit-gate';
-import { consumeCredits, recordSeatOvershoot } from '../credit-consume';
+import { consumeCredits, recordSeatOvershoot, releaseHold } from '../credit-consume';
 import { PERSONAL_SPEND, conversationSpend, driveSpend, resolvedSpend, spendFallbackFromWalletId } from '../spend-target';
 import { DEFAULT_SEAT_ALLOWANCE_CENTS } from '../wallet-core';
 import { loadSeatCapFacts } from '../seat-allowance';
 import { applyOrgPoolRefill, donateToDriveWallet } from '../wallet-funding-shell';
 import { reconcileOpenRouterCosts } from '../cost-reconcile';
-import { createDriveWallet } from '../../services/drive-wallet-service';
+import { createDriveWallet, getConversationSpend, setConversationSpend } from '../../services/drive-wallet-service';
+import { pinConversationSource } from '../spend-resolution';
 import { gateComputeCharge } from '../compute-gate';
 import { computeChargeFor, driveAccrualChargeFor } from '../compute-charge';
 import { expectWalletLegInvariant } from '../../test/wallet-leg-invariant';
@@ -419,6 +420,33 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
     expect(gate).toMatchObject({ allowed: true, walletId: world.marcusWalletId, spendSource: 'own_credits' });
   });
 
+  it('SPEND-8 the global assistant with no drive spends personal credits: its no-drive turn target reserves and settles on the caller\'s personal root, whatever drive wallet, seat or stored choice they have elsewhere — none is read or touched', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 5_000 });
+    const w = world;
+    // Marcus is a member of a funded org drive, with a seat, and his global conversation even stores the drive wallet.
+    const [globalConv] = await db.insert(conversations).values({ userId: w.marcusId, type: 'global', chosenWalletId: w.productWalletId, updatedAt: new Date() }).returning({ id: conversations.id });
+    // What the global turn names with no server-resolved drive (no contextRef): the personal target.
+    const target = conversationSpend(null, globalConv.id);
+    expect(target).toEqual(PERSONAL_SPEND);
+
+    const gate = await canConsumeAI(w.marcusId, 'free', { spend: target });
+    expect(gate).toMatchObject({ allowed: true, walletId: w.marcusWalletId, spendSource: 'own_credits' });
+    expect((await holdsOf(w.marcusId)).map((h) => h.walletId)).toEqual([w.marcusWalletId]);
+    const [log] = await db.insert(aiUsageLogs).values({ userId: w.marcusId, provider: 'openrouter', model: 'm', cost: 0.1 }).returning({ id: aiUsageLogs.id });
+    expect(await consumeCredits({ aiUsageLogId: log.id, userId: w.marcusId, costDollars: 0.1, holdId: gate.holdId, walletId: gate.walletId })).toBe('settled');
+
+    // 15¢ off his own credits; the drive wallet, the pool and the stored choice untouched.
+    expect((await walletRow(w.marcusWalletId)).monthlyRemainingCents).toBe(5_000 - 15);
+    expect((await walletRow(w.productWalletId)).spentCents).toBe(0);
+    expect((await walletRow(w.poolId)).monthlyRemainingCents).toBe(5_000);
+    expect((await ledgerOf(w.marcusId)).map((r) => [r.entryType, r.walletId, r.appliedCents])).toEqual([['usage', w.marcusWalletId, -15]]);
+    const [usage] = await db.select({ walletId: aiUsageLogs.walletId }).from(aiUsageLogs).where(eq(aiUsageLogs.id, log.id));
+    expect(usage.walletId).toBe(w.marcusWalletId);
+    expect(await holdsOf(w.marcusId)).toEqual([]);
+    expect((await db.select({ id: conversations.chosenWalletId }).from(conversations).where(eq(conversations.id, globalConv.id)))[0].id).toBe(w.productWalletId);
+  });
+
   it('WAL-6 (partial) a drive wallet is never reserved past what it can cover: its holds count against it', async () => {
     if (!dbAvailable) return;
     // 60¢ allocation: one 25¢ reservation leaves 35¢, and a second would leave 10¢ — at or
@@ -561,8 +589,11 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
     const personal = await canConsumeAI(world.marcusId, 'free', { spend: conversationSpend(world.productId, conversationId) });
     expect(personal).toMatchObject({ allowed: true, walletId: world.marcusWalletId, spendSource: 'own_credits' });
 
+    // A NEW conversation after the drive sets a default: the drive's default wins. (The first
+    // conversation keeps the source its first call pinned — see the SPEND-3 scenario.)
     await db.update(wallets).set({ defaultSpendSource: 'drive_wallet' }).where(eq(wallets.id, world.productWalletId));
-    const drive = await canConsumeAI(world.marcusId, 'free', { spend: conversationSpend(world.productId, conversationId) });
+    const next = await conversationIn(world.productId, world.marcusId, null);
+    const drive = await canConsumeAI(world.marcusId, 'free', { spend: conversationSpend(world.productId, next) });
     expect(drive).toMatchObject({ allowed: true, walletId: world.productWalletId, spendSource: 'drive_wallet' });
   });
   it('SPEND-3 (partial) a stored choice is read only from the caller\'s OWN conversation: naming someone else\'s conversation chooses nothing', async () => {
@@ -1430,6 +1461,120 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
       expect(gate).toEqual({ allowed: false, reason: 'source_refused', refusal: { source: 'drive_wallet', reason: 'source_empty', options: ['own_credits'] } });
       await expectNothingCharged(w);
     } finally {
+      await teardownPersonalDrive(side);
+    }
+  });
+
+  // ---------------------------------------------------------------------------
+  // SPEND-3 / SPEND-4: a conversation's source is chosen once and persists for it, and the gate
+  // never moves it to another wallet without saying so.
+  // ---------------------------------------------------------------------------
+
+  const chosenWalletOf = async (conversationId: string) =>
+    (await db.select({ id: conversations.chosenWalletId }).from(conversations).where(eq(conversations.id, conversationId)))[0]?.id ?? null;
+
+  /** Gate Marcus's turn in `conversationId` of `driveId` and release the hold at once (nothing settles). */
+  async function turn(w: World, driveId: string, conversationId: string) {
+    const gate = await canConsumeAI(w.marcusId, 'free', { spend: conversationSpend(driveId, conversationId) });
+    if (gate.allowed && gate.holdId) await releaseHold(gate.holdId);
+    return gate;
+  }
+
+  it('SPEND-3 a conversation\'s source is chosen once and persists for it: the first call pins the drive\'s default over the person\'s; later default changes and an emptied wallet never move it; an explicit switch replaces it and persists; with no drive default the person\'s Settings default is pinned', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 5_000 });
+    const w = world;
+    await db.update(wallets).set({ defaultSpendSource: 'drive_wallet' }).where(eq(wallets.id, w.productWalletId));
+    await db.update(wallets).set({ defaultSpendSource: 'own_credits' }).where(eq(wallets.id, w.marcusWalletId));
+    const conv = await conversationIn(w.productId, w.marcusId, null);
+
+    // First call: the drive's default before the person's, pinned on the conversation.
+    expect(await turn(w, w.productId, conv)).toMatchObject({ allowed: true, walletId: w.productWalletId, spendSource: 'drive_wallet', conversationSourceWalletId: w.productWalletId });
+    expect(await chosenWalletOf(conv)).toBe(w.productWalletId);
+
+    // The lead and the person both change their defaults: the conversation keeps its source.
+    await db.update(wallets).set({ defaultSpendSource: 'seat_allowance' }).where(inArray(wallets.id, [w.productWalletId, w.marcusWalletId]));
+    expect(await turn(w, w.productId, conv)).toMatchObject({ allowed: true, walletId: w.productWalletId, spendSource: 'drive_wallet' });
+
+    // The wallet empties: the conversation is still on it — refused by name, never re-preselected onto the seat.
+    await db.update(wallets).set({ spentCents: 1_000 }).where(eq(wallets.id, w.productWalletId));
+    expect(await turn(w, w.productId, conv)).toEqual({
+      allowed: false, reason: 'source_refused', refusal: { source: 'drive_wallet', reason: 'source_empty', options: ['seat_allowance', 'own_credits'] },
+    });
+    expect(await chosenWalletOf(conv)).toBe(w.productWalletId);
+
+    // An explicit switch replaces it, and persists across turns.
+    expect(await setConversationSpend(w.marcusId, conv, w.marcusWalletId, 'session')).toMatchObject({ ok: true, chosenWalletId: w.marcusWalletId });
+    for (let i = 0; i < 2; i++) {
+      expect(await turn(w, w.productId, conv)).toMatchObject({ allowed: true, walletId: w.marcusWalletId, spendSource: 'own_credits' });
+    }
+    expect(await chosenWalletOf(conv)).toBe(w.marcusWalletId);
+
+    // A new conversation in a drive with no default of its own: the person's Settings default is pinned.
+    await db.update(wallets).set({ defaultSpendSource: null }).where(eq(wallets.id, w.productWalletId));
+    await db.update(wallets).set({ defaultSpendSource: 'own_credits' }).where(eq(wallets.id, w.marcusWalletId));
+    const next = await conversationIn(w.productId, w.marcusId, null);
+    expect(await turn(w, w.productId, next)).toMatchObject({ allowed: true, walletId: w.marcusWalletId, spendSource: 'own_credits' });
+    expect(await chosenWalletOf(next)).toBe(w.marcusWalletId);
+    expect(await holdsOf(w.marcusId)).toEqual([]);
+  });
+
+  it('SPEND-3 (partial) a first turn gates before its conversation row exists: the gate returns the preselected wallet and its creator pins it once created; a pin never lands on another drive\'s or a global conversation, and never replaces a stored choice', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 5_000 });
+    const w = world;
+    const fresh = createId();
+
+    const gate = await turn(w, w.productId, fresh);
+    expect(gate).toMatchObject({ allowed: true, walletId: w.productWalletId, conversationSourceWalletId: w.productWalletId });
+    await db.insert(conversations).values({ id: fresh, userId: w.marcusId, type: 'drive', contextId: w.productId, updatedAt: new Date() });
+    await pinConversationSource({ userId: w.marcusId, conversationId: fresh, driveId: w.productId, walletId: gate.conversationSourceWalletId as string });
+    expect(await chosenWalletOf(fresh)).toBe(w.productWalletId);
+
+    // Never replaces what is stored.
+    await pinConversationSource({ userId: w.marcusId, conversationId: fresh, driveId: w.productId, walletId: w.marcusWalletId });
+    expect(await chosenWalletOf(fresh)).toBe(w.productWalletId);
+    // Another drive's conversation, a global conversation, and someone else's conversation are never pinned.
+    const elsewhere = await conversationIn(createId(), w.marcusId, null);
+    const [global] = await db.insert(conversations).values({ userId: w.marcusId, type: 'global', updatedAt: new Date() }).returning({ id: conversations.id });
+    const jonos = await conversationIn(w.productId, w.jonoId, null);
+    for (const [conversationId, userId] of [[elsewhere, w.marcusId], [global.id, w.marcusId], [jonos, w.marcusId]] as const) {
+      await pinConversationSource({ userId, conversationId, driveId: w.productId, walletId: w.productWalletId });
+      expect(await chosenWalletOf(conversationId)).toBeNull();
+    }
+  });
+
+  it('SPEND-4 the gate never picks a different wallet silently: a preselected drive wallet that empties refuses naming it with the remaining options and charges nothing; under the drive\'s fallback rule the call moves only with the move reported to the turn and to the chip\'s preview (from, to, the wallet held)', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 5_000 });
+    const w = world;
+    const side = await personalDrive(w, { allocationCents: 1_000, fallbackRule: 'refuse' });
+    try {
+      // Out of the box (nothing chosen, no default): the drive's wallet, pinned.
+      const conv = await conversationIn(side.driveId, w.marcusId, null);
+      expect(await turn(w, side.driveId, conv)).toMatchObject({ allowed: true, walletId: side.walletId, spendSource: 'drive_wallet' });
+      expect((await turn(w, side.driveId, conv)).fallback).toBeUndefined();
+
+      // Emptied: refused BY NAME with the remaining option, nothing held, nothing charged — never own credits.
+      for (const emptied of [{ spentCents: 1_000 }, { spentCents: 0, status: 'paused' as const }]) {
+        await db.update(wallets).set({ status: 'active', ...emptied }).where(eq(wallets.id, side.walletId));
+        const refused = await turn(w, side.driveId, conv);
+        expect(refused).toMatchObject({ allowed: false, reason: 'source_refused', refusal: { source: 'drive_wallet', options: ['own_credits'] } });
+        await expectNothingCharged(w);
+      }
+
+      // The drive's rule allows a fallback: the call moves, and the move travels with the answer.
+      await db.update(wallets).set({ status: 'active', spentCents: 1_000, fallbackRule: 'own_credits' }).where(eq(wallets.id, side.walletId));
+      const moved = await canConsumeAI(w.marcusId, 'free', { spend: conversationSpend(side.driveId, conv) });
+      expect(moved).toMatchObject({ allowed: true, walletId: w.marcusWalletId, spendSource: 'own_credits', fallback: { from: 'drive_wallet', to: 'own_credits' }, fallbackFromWalletId: side.walletId });
+      expect((await holdsOf(w.marcusId)).map((h) => [h.walletId, h.fallbackFromWalletId])).toEqual([[w.marcusWalletId, side.walletId]]);
+      if (moved.holdId) await releaseHold(moved.holdId);
+      // The conversation's own source is unchanged; the chip's preview names the source it moved to, as a fallback.
+      expect(await chosenWalletOf(conv)).toBe(side.walletId);
+      const preview = await getConversationSpend(w.marcusId, conv);
+      expect(preview).toMatchObject({ ok: true, chosenWalletId: side.walletId, resolved: { kind: 'spend', source: 'own_credits', walletId: w.marcusWalletId, fallbackApplied: true, fallbackFrom: 'drive_wallet' } });
+    } finally {
+      await db.delete(conversations).where(eq(conversations.userId, w.marcusId));
       await teardownPersonalDrive(side);
     }
   });

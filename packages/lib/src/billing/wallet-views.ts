@@ -57,7 +57,7 @@ export interface ConsumerCapFacts {
 }
 
 export interface ConsumerSpend {
-  /** `user:<id>` for a person, `drive:<id>` for the drive's automations (SPEND-6). */
+  /** `user:<id>`: every row is a person; automation runs count under their creator (D-OW-34). */
   consumerKey: string;
   userId: string | null;
   /** The person's name, so the UI never resolves an id (null when unknown). */

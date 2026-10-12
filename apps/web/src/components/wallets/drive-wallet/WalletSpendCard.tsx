@@ -13,7 +13,7 @@ import { Progress } from '@/components/ui/progress';
  */
 export function WalletSpendCard({ rows, spentCredits }: { rows: ConsumerSpendView[]; spentCredits: string }) {
   const top = Math.max(1, ...rows.map((r) => r.spentCents));
-  const people = rows.filter((r) => r.consumerKey.startsWith('user:')).length;
+  const people = rows.length;
   return (
     <Card data-testid="wallet-spend-card">
       <CardHeader>

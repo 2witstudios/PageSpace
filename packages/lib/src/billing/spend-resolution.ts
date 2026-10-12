@@ -14,7 +14,7 @@
  */
 
 import { loadConsumerCapFacts } from './consumer-caps';
-import { drives } from '@pagespace/db/schema/core';
+import { drives, pages } from '@pagespace/db/schema/core';
 import { formatCreditCount } from './money-model';
 import { seatCapCheck, seatSpentCents } from './wallet-core';
 import { db } from '@pagespace/db/db';
@@ -44,7 +44,9 @@ import {
   seatAllowanceLeg,
   walletLeg,
   walletSpendableCents,
+  sourceToPin,
   type CallSpendDecision,
+  type CallSpendInput,
   type SpendTarget,
   type StoredSpendChoice,
   type WalletBalanceFacts,
@@ -149,6 +151,35 @@ async function chosenWalletOf(userId: string, conversationId: string | null | un
     .where(and(eq(conversations.id, conversationId), eq(conversations.userId, userId)))
     .limit(1);
   return row?.chosenWalletId ?? null;
+}
+
+/**
+ * SPEND-3: store `walletId` as the source of `userId`'s conversation, once — only while it stores
+ * none, so an explicit choice (the conversation-spend route) or an earlier pin always wins and a
+ * replay is a no-op. Only a conversation whose own drive is `driveId` (a page conversation on a
+ * page of that drive, a drive or API-client conversation of it) is pinned, so a caller-supplied
+ * id the route has not vetted yet can never pin another drive's wallet onto a conversation. A
+ * GLOBAL conversation is never pinned: its drive is wherever the person is (SPEND-7), so a drive
+ * wallet stored for it would refuse the moment they move drives. A conversation whose row does
+ * not exist yet (a first turn gates before it is created) is pinned by its creator right after
+ * the insert, with the wallet the gate returned.
+ */
+export async function pinConversationSource(input: { userId: string; conversationId: string; driveId: string; walletId: string }): Promise<void> {
+  await db
+    .update(conversations)
+    .set({ chosenWalletId: input.walletId })
+    .where(and(
+      eq(conversations.id, input.conversationId),
+      eq(conversations.userId, input.userId),
+      isNull(conversations.chosenWalletId),
+      or(
+        and(inArray(conversations.type, ['drive', 'client']), eq(conversations.contextId, input.driveId)),
+        and(
+          eq(conversations.type, 'page'),
+          inArray(conversations.contextId, db.select({ id: pages.id }).from(pages).where(eq(pages.driveId, input.driveId))),
+        ),
+      ),
+    ));
 }
 
 /** SPEND-5: whether `userId` turned "Always my own credits" on for `driveId`. */
@@ -278,7 +309,12 @@ export async function resolveCallSpend(input: {
   now?: Date;
   /** Log a refusal (SPEND-4). Off for a read-only question that is not the gate itself. */
   recordRefusal?: boolean;
-}): Promise<CallSpendDecision> {
+  /**
+   * SPEND-3: store this call's preselected source as the conversation's own (the gate's first
+   * call of a turn). Off for a read-only question, which must never write.
+   */
+  pinConversationSource?: boolean;
+}): Promise<CallSpendDecision & { pinnedWalletId?: string }> {
   const { userId, consumerTier, target } = input;
   if (!resolvesDriveWallets({ orgsEnabled: ORGS_ENABLED, target }) || target.kind === 'personal') {
     return personalRootDecision(consumerTier);
@@ -376,7 +412,7 @@ export async function resolveCallSpend(input: {
       ? await tierOf(standing.ownerId)
       : consumerTier;
 
-  const decision = decideCallSpend({
+  const callInput: CallSpendInput = {
     actor,
     driveWallet: driveLeg,
     seatAllowance: seatLeg,
@@ -398,7 +434,8 @@ export async function resolveCallSpend(input: {
     reservationCents: input.reservationCents,
     walletOwnerTier,
     consumerTier,
-  });
+  };
+  const decision = decideCallSpend(callInput);
 
   if (decision.kind !== 'spend' && input.recordRefusal !== false) {
     // SPEND-4: the refusal is recorded, naming the source and what was offered instead.
@@ -413,7 +450,25 @@ export async function resolveCallSpend(input: {
       orgLapsed,
     });
   }
-  return decision;
+  const pinned = input.pinConversationSource === true && typeof target.conversationId === 'string' && target.conversationId.length > 0
+    ? await pinPreselectedSource(userId, target.conversationId, target.driveId, callInput)
+    : null;
+  return pinned ? { ...decision, pinnedWalletId: pinned } : decision;
+}
+
+/**
+ * SPEND-3: the wallet of the source this conversation's first call preselected (spend-target
+ * `sourceToPin`), stored as its own. Own credits name the person's root wallet, created bare if
+ * it does not exist yet (the gate grants into a bare row as it always has).
+ */
+async function pinPreselectedSource(userId: string, conversationId: string, driveId: string, callInput: CallSpendInput): Promise<string | null> {
+  const source = sourceToPin(callInput);
+  if (source === null) return null;
+  const leg = source === 'drive_wallet' ? callInput.driveWallet : source === 'seat_allowance' ? callInput.seatAllowance : callInput.personal;
+  if (!leg) return null;
+  const walletId = leg.walletId === PERSONAL_ROOT_NOT_YET_CREATED ? await ensurePersonalRootWalletId(db, userId) : leg.walletId;
+  await pinConversationSource({ userId, conversationId, driveId, walletId });
+  return walletId;
 }
 
 /** One source a person may pick for a call, named by the wallet it spends. */

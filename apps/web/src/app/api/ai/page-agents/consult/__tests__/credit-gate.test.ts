@@ -193,9 +193,9 @@ describe('POST /api/ai/page-agents/consult — prepaid credit gate', () => {
     expect(generateText).not.toHaveBeenCalled();
   });
 
-  it('SPEND-3 (partial) SPEND-7 (partial) a consult spends in the agent\'s drive and names the conversation it continues, never a source', async () => {
+  it('SPEND-3 (partial) SPEND-7 (partial) a consult spends in the agent\'s drive and names the conversation it writes to (a new one too, so its first call\'s source is pinned), never a source', async () => {
     await POST(makeRequest());
-    expect(vi.mocked(canConsumeAI).mock.calls[0]?.[2]?.spend).toEqual({ kind: 'drive', driveId: 'drive-1', chosen: null });
+    expect(vi.mocked(canConsumeAI).mock.calls[0]?.[2]?.spend).toEqual({ kind: 'drive', driveId: 'drive-1', chosen: null, conversationId: expect.any(String) });
     vi.mocked(canConsumeAI).mockClear();
     await POST(new Request('https://example.com/api/ai/page-agents/consult', {
       method: 'POST',

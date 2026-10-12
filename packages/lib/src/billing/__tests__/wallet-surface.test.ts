@@ -120,10 +120,9 @@ describe('walletPeriodCopy, fundedByCopy, spendMeterPercent, spendRowLabel', () 
     expect(spendMeterPercent(10, 0)).toBe(0);
   });
 
-  it('SPEND-10 (partial) a spend row is the person by name; the drive\'s own automations (before D-OW-34) read as automations', () => {
-    expect(spendRowLabel({ consumerKey: 'user:u1', displayName: 'Priya Nair' })).toBe('Priya Nair');
-    expect(spendRowLabel({ consumerKey: 'user:u1', displayName: null })).toBe('Former member');
-    expect(spendRowLabel({ consumerKey: 'drive:d1', displayName: null })).toBe('Automations');
+  it('SPEND-10 (partial) a spend row is the person by name, or a former member', () => {
+    expect(spendRowLabel({ displayName: 'Priya Nair' })).toBe('Priya Nair');
+    expect(spendRowLabel({ displayName: null })).toBe('Former member');
   });
 });
 
@@ -131,10 +130,10 @@ describe('spendFromRowCopy: a drive wallet in Settings › Usage › Wallets', (
   it('UI-10 (partial) an over or paused wallet you spend from says what happens to your calls', () => {
     expect(spendFromRowCopy({ status: 'active', orgName: 'Northwind Labs' })).toBe('Northwind Labs');
     expect(spendFromRowCopy({ status: 'over', orgName: 'Northwind Labs' })).toBe("Northwind Labs · over budget, your calls follow the drive's fallback rule");
-    expect(spendFromRowCopy({ status: 'paused', orgName: 'Northwind Labs' })).toBe('Northwind Labs · paused by whoever funds it, your calls move to the next source');
+    expect(spendFromRowCopy({ status: 'paused', orgName: 'Northwind Labs' })).toBe('Northwind Labs · paused by whoever funds it, your calls follow the drive\'s fallback rule');
     expect(spendFromRowCopy({ status: 'active', orgName: null })).toBe('Shared drive');
     expect(spendFromRowCopy({ status: 'active', orgName: null, fundedByMe: true })).toBe('From your credits');
-    expect(spendFromRowCopy({ status: 'paused', orgName: null, fundedByMe: true })).toBe('From your credits · paused by whoever funds it, your calls move to the next source');
+    expect(spendFromRowCopy({ status: 'paused', orgName: null, fundedByMe: true })).toBe('From your credits · paused by whoever funds it, your calls follow the drive\'s fallback rule');
   });
 });
 

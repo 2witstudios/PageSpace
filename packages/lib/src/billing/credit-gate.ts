@@ -53,6 +53,7 @@ import {
   resolvesDriveWallets,
   rootAvailableCents,
   walletSpendableCents,
+  type CallSpendDecision,
   type SpendTarget,
   type WalletBalanceFacts,
 } from './spend-target';
@@ -200,6 +201,13 @@ export interface CreditGateResult extends GateResult {
   fallbackFromWalletId?: string;
   /** Set only on an org pool refusal because the org is LAPSED (SEAT-9): the pool reads paused, and the org must reactivate. */
   orgLapsed?: true;
+  /**
+   * SPEND-3: the wallet this call's preselection stored as its conversation's source (the gate
+   * pins it when the row exists). A turn that creates its conversation row AFTER the gate pins it
+   * right after the insert with this id (pinConversationSource), so the first call's source is
+   * the conversation's from its first message.
+   */
+  conversationSourceWalletId?: string;
 }
 
 /** Normalize the caller-supplied daily ceiling: zero/negative/absent → null (off). */
@@ -350,12 +358,13 @@ export async function canConsumeAI(
   // The drive-wallet reads (and the permissions they go through) load only when a drive
   // session can resolve to a shared wallet: while orgs are dark, and for a call with no
   // drive, the personal root is answered with no reads, exactly as before wallets.
-  const decision = resolvesDriveWallets({ orgsEnabled: ORGS_ENABLED, target: opts.spend })
+  const decision: CallSpendDecision & { pinnedWalletId?: string } = resolvesDriveWallets({ orgsEnabled: ORGS_ENABLED, target: opts.spend })
     ? await (await import('./spend-resolution')).resolveCallSpend({
         userId,
         consumerTier: tier,
         target: opts.spend,
         reservationCents: reservation,
+        pinConversationSource: true,
       })
     : personalRootDecision(tier);
   if (decision.kind !== 'spend') {
@@ -389,7 +398,9 @@ export async function canConsumeAI(
         ? { ...personal, spendSource: 'own_credits', entitlementTier: decision.entitlementTier }
         : personal);
   if (!result.allowed) return result;
-  const carried: CreditGateResult = fallbackFromWalletId ? { ...result, fallbackFromWalletId } : result;
+  const pinned = decision.pinnedWalletId;
+  const withPin: CreditGateResult = pinned ? { ...result, conversationSourceWalletId: pinned } : result;
+  const carried: CreditGateResult = fallbackFromWalletId ? { ...withPin, fallbackFromWalletId } : withPin;
   if (fallback === undefined) return carried;
   loggers.ai.info('spend source fell back', {
     userId,

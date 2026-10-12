@@ -1326,9 +1326,9 @@ async function ownConversation(userId: string, conversationId: string, globalDri
  * ownConversation).
  *
  * For a GLOBAL conversation the preview is only as good as the drive the client names: the
- * turn itself spends in a drive only when the server resolved it from a contextRef, and a
- * legacy request without one spends personal credits and reads no stored choice (#2726). A
- * client must therefore preview with the same drive its turns will carry in their contextRef.
+ * turn itself spends in the drive the server resolved from its contextRef (none: personal
+ * credits, SPEND-8). A client must therefore preview with the same drive its turns will carry
+ * in their contextRef.
  */
 export async function getConversationSpend(userId: string, conversationId: string, globalDriveId: string | null = null): Promise<ConversationSpendRead | WalletServiceError> {
   const conversation = await ownConversation(userId, conversationId, globalDriveId);
@@ -1347,10 +1347,11 @@ export async function getConversationSpend(userId: string, conversationId: strin
 }
 
 /**
- * Choose (or clear, with null) the wallet a conversation spends from (SPEND-3). The ONLY
- * writer of conversations.chosenWalletId: a turn never changes it. The wallet must be one of
- * this person's options in the conversation's drive now; the gate re-resolves it on every call
- * anyway, and refuses it if it stops being one.
+ * Choose (or clear, with null) the wallet a conversation spends from (SPEND-3). The person's
+ * explicit switch, and the only writer that may REPLACE conversations.chosenWalletId: the gate
+ * only fills it once, while empty, with the source the first call preselected. The wallet must
+ * be one of this person's options in the conversation's drive now; the gate re-resolves it on
+ * every call anyway, and refuses it if it stops being one.
  */
 export async function setConversationSpend(
   userId: string,

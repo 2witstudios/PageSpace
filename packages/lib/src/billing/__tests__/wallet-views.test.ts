@@ -35,7 +35,7 @@ const facts = (over: Partial<DriveWalletFacts> = {}): DriveWalletFacts => ({
   spendByConsumer: [
     { consumerKey: 'user:u-marcus', userId: 'u-marcus', displayName: 'Marcus Oyelaran', spentCents: c(50) },
     { consumerKey: 'user:u-lena', userId: 'u-lena', displayName: 'Lena Lead', spentCents: c(30) },
-    { consumerKey: 'drive:d-product', userId: null, displayName: null, spentCents: c(20) },
+    { consumerKey: 'user:u-priya', userId: 'u-priya', displayName: 'Priya Nair', spentCents: c(20) },
   ],
   pool: { walletId: 'w-pool', availableCents: c(9000), outstandingChildAllocationsCents: c(3000) },
   ...over,
@@ -117,7 +117,7 @@ describe('wallet-views: the projection each viewer gets', () => {
     expect(Object.keys(projectDriveWallet('guest', facts())).sort()).toEqual([...CONSUMER_WALLET_FIELDS].sort());
   });
 
-  it('SPEND-10 (partial) the lead sees the wallet and spend by member and automation, but never the pool', () => {
+  it('SPEND-10 (partial) the lead sees the wallet and spend by member (automation runs under their creator), but never the pool', () => {
     const view = projectDriveWallet('lead', facts());
     expect(view).toMatchObject({
       viewer: 'lead',
@@ -138,7 +138,7 @@ describe('wallet-views: the projection each viewer gets', () => {
       pool: { availableCredits: '9,000', unallocatedCredits: '6,000' },
     });
     if (view.viewer !== 'org_admin') throw new Error('expected an org admin view');
-    expect(view.spendByConsumer.map((s) => [s.displayName, s.spentCredits])).toEqual([['Marcus Oyelaran', '50'], ['Lena Lead', '30'], [null, '20']]);
+    expect(view.spendByConsumer.map((s) => [s.displayName, s.spentCredits])).toEqual([['Marcus Oyelaran', '50'], ['Lena Lead', '30'], ['Priya Nair', '20']]);
     expect(JSON.stringify(view)).not.toContain('$');
   });
 

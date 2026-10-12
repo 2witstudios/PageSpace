@@ -31,6 +31,7 @@ import { authorizePageConversation, type PageConversationAccess } from '@/lib/ai
 import { createId } from '@paralleldrive/cuid2';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
 import { conversationSpend, resolvedSpend } from '@pagespace/lib/billing/spend-target';
+import { pinConversationSource } from '@pagespace/lib/billing/spend-resolution';
 import { spendFallbackHeaders, spendFallbackNotice, type SpendFallbackNotice } from '@pagespace/lib/billing/spend-fallback';
 import { isMeteringExempt } from '@pagespace/lib/ai/model-defaults';
 import { MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
@@ -319,7 +320,11 @@ export async function POST(request: Request) {
     // agent's drive (SPEND-7). A continued conversation carries its stored source (SPEND-3);
     // the gate reads it only when the caller owns that conversation, so an id not yet vetted
     // here names nothing.
-    let spend = conversationSpend(agent.driveId, conversationId ?? null);
+    // The address this consult writes to (see the persistence notes below), known before the
+    // gate so a new conversation's preselected source can be pinned once it exists (SPEND-3).
+    const activeConversationId: string = conversationId || newConversationId || createId();
+    let spend = conversationSpend(agent.driveId, activeConversationId);
+    let conversationSourceWalletId: string | undefined;
     // SPEND-4: a drive rule that moved the call to another source is reported in the answer
     // (`spendFallback` and the X-Spend-Fallback-* headers), never applied silently.
     let spendFallback: SpendFallbackNotice | null = null;
@@ -338,6 +343,7 @@ export async function POST(request: Request) {
       walletId = creditGate.walletId;
       spend = resolvedSpend(spend, creditGate.spendSource, creditGate.fallbackFromWalletId);
       spendFallback = spendFallbackNotice(creditGate);
+      conversationSourceWalletId = creditGate.conversationSourceWalletId;
     }
 
     // Get the drive information for context awareness
@@ -383,8 +389,6 @@ export async function POST(request: Request) {
     // winner, which is precisely what this refusal exists to prevent. So the
     // outcome of the write is the decision, and it is only ever safe to ignore
     // it for an id this route minted itself.
-    const activeConversationId: string = conversationId || newConversationId || createId();
-
     // Eagerly ensure a conversations row exists so this conversation is
     // listable via GET .../conversations, which joins against `conversations`
     // to scope results to their owner (mirrors apps/web/src/app/api/ai/chat/route.ts).
@@ -397,6 +401,9 @@ export async function POST(request: Request) {
     // outer handler as a 500, which is both true and retryable. 409 is reserved
     // for the repository's own explicit non-created outcomes.
     const createOutcome = await conversationRepository.createConversation(activeConversationId, userId, agentId);
+    if (createOutcome === 'created' && conversationSourceWalletId) {
+      await pinConversationSource({ userId, conversationId: activeConversationId, driveId: agent.driveId, walletId: conversationSourceWalletId });
+    }
 
     if (newConversationId && createOutcome !== 'created') {
       auditRequest(request, {

@@ -157,30 +157,18 @@ SEC-4
 # name rather than charge personal credits inside a drive, and its tools spend the call's source.
 # The module guard proves this per FILE (apps/web and apps/realtime), checks one gating caller per
 # pinned module, and lists its known limits. Still partial: Global Assistant voice and TTS spend
-# personal credits (no server-trusted drive); Zoom enrichment's payer is the #2731 ruling; the
-# gate's silent fallback (SPEND-4) is open in ow-fix-spend-controls.
+# personal credits (no server-trusted drive); Zoom enrichment's payer is the #2731 ruling. ow-final-spend-gate
+# closed the gate's silent out-of-box switch (SPEND-4) and gave ask_agent its own reservation (WAL-6a).
 SPEND-1
 # SPEND-2 (partial, ow-c6): GET /api/wallets/conversations/[id] answers the stored choice, the options and
 # the gate's own decision before the first message (the data the chip shows); the chip itself is UI-8.
 SPEND-2
-# SPEND-3 (partial, ow-c6): conversations.chosenWalletId (0310) is written only by the explicit source route,
-# re-resolved by the gate on every call (a stale id refuses), and preselection follows the drive default then
-# the person's default, proven against Postgres; the Settings surface that sets the default is UI-10.
-SPEND-3
-# SPEND-4 (partial, ow-c2, ow-fix-spend-controls): empty chosen source refuses, names it, offers the rest,
-# charges zero (a seat refused by its allowance says so in the 402); a drive-rule fallback reaches the gate
-# result ({from,to}), both chat streams (data-spend-fallback) and both chat renderers (SpendFallbackNotice).
-# Unproven: the header chip and strip (UI-8); the non-chat surfaces (v1/chat/completions, btw, consult,
-# mentions) drop gate.fallback, so their fallback is logged only; overshoot on a fallback call landing per
-# WAL-6(b).
-SPEND-4
 # SPEND-6 (partial, ow-c2): automations resolve to the drive wallet or skip, never a person; wiring every
 # automation kind and logging the skip are unproven until C4.
 # ow-lapse-automation: [D-OW-34] amends it — an automation runs on behalf of its creator, whose per-consumer cap
 # binds it (consumer-caps.integration self-firing trigger). Stays listed until the Spec text is amended.
 SPEND-6
 SPEND-7
-SPEND-8
 # SPEND-9 (partial, ow-c6): members and guests get the consumer allowlist (remaining, own cap) with no pool
 # balance or other consumer's spend, per role against Postgres and for MCP tokens ([D-OW-26]); the chip and
 # wallet page that display it are UI-8/UI-9.

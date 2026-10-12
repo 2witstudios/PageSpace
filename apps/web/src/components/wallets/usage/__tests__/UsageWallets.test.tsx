@@ -54,7 +54,7 @@ describe('Settings › Usage › Wallets', () => {
     const [product, research, side] = screen.getAllByTestId('usage-wallet-drive').map((r) => r.textContent ?? '');
     expect(side).toContain('From your credits');
     expect(product).toContain('Product wallet');
-    expect(research).toContain('paused by whoever funds it, your calls move to the next source');
+    expect(research).toContain('paused by whoever funds it, your calls follow the drive\'s fallback rule');
     expect(research).toContain('Paused');
   });
 
