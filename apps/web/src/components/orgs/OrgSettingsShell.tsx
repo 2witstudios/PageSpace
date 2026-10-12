@@ -9,7 +9,6 @@ import { orgErrorMessage } from '@/lib/orgs/org-error-copy';
 import { orgIsLapsed } from '@/lib/orgs/org-lapse';
 import type { OrgDetail, OrgRole } from '@/lib/orgs/org-api';
 import { OrgPageContainer, OrgPageHeader } from './OrgPageHeader';
-import { OrgBillingBanner } from './OrgBillingBanner';
 
 export interface OrgSettingsContext {
   orgId: string;
@@ -23,8 +22,9 @@ export interface OrgSettingsContext {
 }
 
 /**
- * Every org settings page below the hub: loads the org, keeps it live (org:changed), shows the lapse
- * banner, and refuses a plain Member (UI-11: a Member sees no org settings; the routes refuse too).
+ * Every org settings page below the hub: loads the org, keeps it live (org:changed), and refuses a
+ * plain Member (UI-11: a Member sees no org settings; the routes refuse too). The lapse banner is the
+ * app shell's (OrgSurfaceBanner, SEAT-9); `lapsed` here disables what a lapsed org may not change.
  */
 export function OrgSettingsShell({ title, description, wide = true, minRole = 'ADMIN', children }: {
   title: string;
@@ -69,7 +69,6 @@ export function OrgSettingsShell({ title, description, wide = true, minRole = 'A
   return (
     <OrgPageContainer wide={wide}>
       <OrgPageHeader {...back} title={title} description={description(orgName)} />
-      <OrgBillingBanner orgId={orgId} orgName={orgName} notice={org.billingNotice} onReactivated={() => void mutate()} />
       {children({ orgId, org, orgName, role, lapsed: orgIsLapsed(org.billingNotice), notice: org.billingNotice, refresh: () => void mutate() })}
     </OrgPageContainer>
   );

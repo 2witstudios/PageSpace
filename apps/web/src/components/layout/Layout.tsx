@@ -4,6 +4,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { useSocket } from "@/hooks/useSocket";
 import { useAccessRevocation } from "@/hooks/useAccessRevocation";
 import { useOrgRealtime } from "@/hooks/useOrgs";
+import { OrgSurfaceBanner } from "@/components/orgs/OrgSurfaceBanner";
 import { useNotificationToasts } from "@/hooks/useNotificationToasts";
 import { useDesktopNotifications } from "@/hooks/useDesktopNotifications";
 import { useNativeBadgeSync } from "@/hooks/useNativeBadgeSync";
@@ -502,6 +503,8 @@ function Layout({ children }: LayoutProps) {
                       </motion.div>
                     )}
                   </AnimatePresence>
+                  {/* SEAT-9: the lapse banner on every org surface (org pages, open org drives) */}
+                  <OrgSurfaceBanner />
                   {children ? (
                     <div className="flex flex-1 flex-col min-h-0 overflow-y-auto pb-[env(safe-area-inset-bottom)]">
                       {children}
