@@ -4,6 +4,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { channelMessageRepository } from '@pagespace/lib/services/channel-message-repository';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -29,10 +30,10 @@ export async function POST(req: Request, { params }: RouteParams) {
 
   const canView = await canPrincipalViewPage(auth, pageId);
   if (!canView) {
-    return NextResponse.json(
+    return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json(
       { error: 'You need view permission to follow threads in this channel' },
       { status: 403 }
-    );
+    ));
   }
 
   const message = await channelMessageRepository.findChannelMessageInPage({
@@ -78,10 +79,10 @@ export async function DELETE(req: Request, { params }: RouteParams) {
 
   const canView = await canPrincipalViewPage(auth, pageId);
   if (!canView) {
-    return NextResponse.json(
+    return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json(
       { error: 'You need view permission to manage thread follows' },
       { status: 403 }
-    );
+    ));
   }
 
   const message = await channelMessageRepository.findChannelMessageInPage({

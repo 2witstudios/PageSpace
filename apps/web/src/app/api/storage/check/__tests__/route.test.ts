@@ -23,6 +23,7 @@ vi.mock('@pagespace/lib/services/storage-limits', () => ({
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   getUserDrivePermissions: vi.fn(),
 }));
 
@@ -237,7 +238,7 @@ describe('GET /api/storage/check', () => {
 
       expect(res.status).toBe(200);
       expect(body.allowed).toBe(true);
-      expect(getUserDrivePermissions).toHaveBeenCalledWith('user_1', 'drive_org');
+      expect(getUserDrivePermissions).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user_1' }), 'drive_org');
       expect(resolveUploadQuotaTarget).toHaveBeenCalledWith('user_1', 'drive_org');
       expect(body.quota).toMatchObject({ orgId: 'org_northwind' });
     });

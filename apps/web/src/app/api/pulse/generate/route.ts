@@ -43,6 +43,7 @@ import { creditGateErrorResponse } from '@/lib/subscription/credit-gate-response
 import { toPersonalSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 
 import { PULSE_SYSTEM_PROMPT } from '../pulse-prompt';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session'] as const };
 
@@ -137,8 +138,8 @@ export async function POST(req: Request) {
     // membership at all, and excludes trashed pages and pages in trashed drives.
     const [userDrives, accessiblePagesList] = await Promise.all([
       // Owned or joined (org-aware; page-level access does not count)
-      getMemberDriveIds(userId, { includeTrashed: true }),
-      accessiblePageIds(userId),
+      getMemberDriveIds(actorFromAuth(auth), { includeTrashed: true }),
+      accessiblePageIds(actorFromAuth(auth)),
     ]);
     const driveIds = userDrives;
     const accessiblePages = new Set(accessiblePagesList);

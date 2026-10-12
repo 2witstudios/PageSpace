@@ -4,7 +4,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { changeMemberRole, removeMember, type MembershipRefusal } from '@pagespace/lib/organizations/membership';
 import { ORG_LAPSED_MESSAGE } from '@pagespace/lib/organizations/status-core';
-import { authorizeOrgRequest, ORG_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
+import { authorizeOrgRequest, ORG_TOKEN_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
 import { memberRoleUpdateSchema } from '@/lib/orgs/org-schemas';
 
 type Context = { params: Promise<{ orgId: string; userId: string }> };
@@ -25,7 +25,7 @@ const REFUSAL_MESSAGES: Record<MembershipRefusal, string> = {
 /** PATCH /api/orgs/[orgId]/members/[userId] — Owner and Admins change a role (ORG-2). */
 export async function PATCH(request: Request, context: Context) {
   const { orgId, userId: targetId } = await context.params;
-  const gate = await authorizeOrgRequest(request, orgId, 'ADMIN', ORG_WRITE_AUTH);
+  const gate = await authorizeOrgRequest(request, orgId, 'ADMIN', ORG_TOKEN_WRITE_AUTH);
   if (!gate.ok) return gate.response;
   try {
     const parsed = memberRoleUpdateSchema.safeParse(await request.json().catch(() => null));
@@ -58,7 +58,7 @@ export async function PATCH(request: Request, context: Context) {
  */
 export async function DELETE(request: Request, context: Context) {
   const { orgId, userId: targetId } = await context.params;
-  const gate = await authorizeOrgRequest(request, orgId, 'ADMIN', ORG_WRITE_AUTH);
+  const gate = await authorizeOrgRequest(request, orgId, 'ADMIN', ORG_TOKEN_WRITE_AUTH);
   if (!gate.ok) return gate.response;
   try {
     const result = await removeMember({ orgId, actorId: gate.userId, targetId });

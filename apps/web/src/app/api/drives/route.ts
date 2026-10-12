@@ -1,4 +1,3 @@
-import { checkDriveAuthentication } from '@pagespace/lib/organizations/authentication-policy';
 import type { AuthResult } from '@/lib/auth';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
@@ -20,6 +19,7 @@ import { jsonResponse } from '@pagespace/lib/utils/api-utils';
 import { getActorInfo, logDriveActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { safeParseBody } from '@/lib/validation/parse-body';
 import { isDriveLead } from '@pagespace/lib/permissions/drive-relationship';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -129,34 +129,32 @@ export async function GET(req: Request) {
         auth,
         getMembership: async (driveId) => {
           // Review #2849 r5 (P2): EVERY key row, inherit or explicit, lists only while its owner is a current member.
-          const membership = await getAppDriveMembership(auth.tokenId, driveId);
+          const membership = await getAppDriveMembership(actorFromAuth(auth), auth.tokenId, driveId);
           if (!membership) return null;
-          return (await hasAppDriveMembership(auth.tokenId, driveId)) ? membership : null;
+          return (await hasAppDriveMembership(actorFromAuth(auth), auth.tokenId, driveId)) ? membership : null;
         },
       });
     } else if (isScopedOAuthAuth(auth)) {
       if (isManageKeysOnly(auth)) {
-        drives = await listAccessibleDrives(userId, { includeTrash, tokenScopable });
+        drives = await listAccessibleDrives(actorFromAuth(auth), { includeTrash, tokenScopable });
       } else if (auth.allowedDriveIds.length > 0) {
         drives = await listScopedDrivesWithMembership({
           scopedDriveIds: auth.allowedDriveIds,
           includeTrash,
           auth,
           getMembership: async (driveId) => {
-            const membership = await getEffectiveScopedDriveMembership(auth.driveScopes, auth.userId, driveId);
+            const membership = await getEffectiveScopedDriveMembership(auth.driveScopes, actorFromAuth(auth), driveId);
             if (!membership) return null;
-            return (await hasScopedDriveMembership(auth.driveScopes, auth.userId, driveId)) ? membership : null;
+            return (await hasScopedDriveMembership(auth.driveScopes, actorFromAuth(auth), driveId)) ? membership : null;
           },
         });
       } else {
         drives = [];
       }
     } else {
-      drives = await listAccessibleDrives(userId, { includeTrash, tokenScopable });
+      drives = await listAccessibleDrives(actorFromAuth(auth), { includeTrash, tokenScopable });
     }
 
-    const allowed = await Promise.all(drives.map(drive => checkDriveAuthentication(drive.id, auth.authentication)));
-    drives = drives.filter((_drive, index) => allowed[index].allowed);
 
     loggers.api.debug('[DEBUG] Drives API - Found drives:', {
       count: drives.length,

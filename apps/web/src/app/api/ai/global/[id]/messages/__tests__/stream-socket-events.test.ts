@@ -866,7 +866,7 @@ describe('POST /api/ai/global/[id]/messages — lifecycle handoff', () => {
       expect(response).toBe(await mockRespondWithHelpAnswer.mock.results[0].value);
       expect(mockCanConsumeAI).not.toHaveBeenCalled();
       expect(mockRespondWithHelpAnswer).toHaveBeenCalledWith(
-        expect.objectContaining({ senderId: 'user-1' })
+        expect.objectContaining({ sender: expect.objectContaining({ userId: 'user-1' }) })
       );
     });
 

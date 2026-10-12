@@ -26,6 +26,8 @@ import { getAppAccessLevel, getScopedAccessLevel, hasAppDriveMembership } from '
 import { getUserAccessLevel } from '../../permissions/permissions';
 import { changeMemberRole, removeMember } from '../membership';
 import { cleanupNorthwind, northwind } from '../../permissions/__tests__/fixtures/northwind-org-drives';
+import { credentialActor } from '../../permissions/access-actor';
+import { tokenOwnerActor } from '../../permissions/__tests__/fixtures/token-owner-actor';
 
 const flags = vi.hoisted(() => ({ orgsEnabled: true }));
 vi.mock('../../organizations/orgs-enabled', () => ({
@@ -125,26 +127,26 @@ describe('org member removal and demotion revoke what the membership handed out 
     const orgGrant = await oauthGrant(eve.id, [`drive:${f.drives.research.id}:member`, `drive:${f.drives.product.id}`]);
     const ownGrant = await oauthGrant(eve.id, [`drive:${evesNotes.id}`]);
 
-    expect(await hasAppDriveMembership(key, f.drives.product.id)).toBe(true);
-    expect(await getAppAccessLevel(key, f.pages.researchPage.id)).toMatchObject({ canView: true });
+    expect(await hasAppDriveMembership(await tokenOwnerActor(key), key, f.drives.product.id)).toBe(true);
+    expect(await getAppAccessLevel(await tokenOwnerActor(key), key, f.pages.researchPage.id)).toMatchObject({ canView: true });
     expect(await findOAuthAccessTokenByValue(orgGrant.accessToken)).not.toBeNull();
-    expect(await getScopedAccessLevel(orgGrant.driveScopes, eve.id, f.pages.researchPage.id)).toMatchObject({ canView: true });
+    expect(await getScopedAccessLevel(orgGrant.driveScopes, credentialActor(eve.id, null), f.pages.researchPage.id)).toMatchObject({ canView: true });
 
     expect(await removeMember({ orgId: f.org.id, actorId: priya.id, targetId: eve.id })).toEqual({ ok: true });
 
-    expect(await hasAppDriveMembership(key, f.drives.product.id)).toBe(false);
-    expect(await getAppAccessLevel(key, f.pages.productPage.id)).toBeNull();
-    expect(await getAppAccessLevel(key, f.pages.researchPage.id)).toBeNull();
+    expect(await hasAppDriveMembership(await tokenOwnerActor(key), key, f.drives.product.id)).toBe(false);
+    expect(await getAppAccessLevel(await tokenOwnerActor(key), key, f.pages.productPage.id)).toBeNull();
+    expect(await getAppAccessLevel(await tokenOwnerActor(key), key, f.pages.researchPage.id)).toBeNull();
     expect(await findOAuthAccessTokenByValue(orgGrant.accessToken)).toBeNull();
     expect(await refreshDecision(orgGrant.refreshId)).toMatchObject({ reason: 'org_access_revoked', decision: { ok: false } });
 
-    expect(await getAppAccessLevel(key, evesPage.id)).toMatchObject({ canView: true });
+    expect(await getAppAccessLevel(await tokenOwnerActor(key), key, evesPage.id)).toMatchObject({ canView: true });
     expect(await findOAuthAccessTokenByValue(ownGrant.accessToken)).not.toBeNull();
     expect(await refreshDecision(ownGrant.refreshId)).toMatchObject({ reason: null, decision: { ok: true } });
     // Eve is now an outsider. Under Northwind's guests policy, approve (the default, [D-OW-41]), the invited row she
     // kept waits for an Owner or Admin: she holds nothing until one approves it (POL-2), and it is not lost.
-    expect(await getUserAccessLevel(eve.id, f.pages.researchPage.id)).toBeNull();
-    expect(await getUserAccessLevel(eve.id, f.pages.productPage.id)).toBeNull();
+    expect(await getUserAccessLevel(credentialActor(eve.id, null), f.pages.researchPage.id)).toBeNull();
+    expect(await getUserAccessLevel(credentialActor(eve.id, null), f.pages.productPage.id)).toBeNull();
     expect(await db.select().from(orgGuestHolds).where(and(eq(orgGuestHolds.orgId, f.org.id), eq(orgGuestHolds.userId, eve.id), eq(orgGuestHolds.state, 'pending_approval')))).toHaveLength(1);
   });
 
@@ -180,7 +182,7 @@ describe('org member removal and demotion revoke what the membership handed out 
     expect(await exists('agent', financeAgent)).toBeNull();
     expect(await exists('driveLink', financeDriveLink)).toBeNull();
     expect(await exists('pageLink', financePageLink)).toBeNull();
-    expect(await hasAppDriveMembership(financeKey, f.drives.finance.id)).toBe(false);
+    expect(await hasAppDriveMembership(await tokenOwnerActor(financeKey), financeKey, f.drives.finance.id)).toBe(false);
     expect(await findOAuthAccessTokenByValue(financeGrant.accessToken)).toBeNull();
 
     // Product: admin-only artifacts go, Member-creatable ones stay.
@@ -189,9 +191,9 @@ describe('org member removal and demotion revoke what the membership handed out 
     expect(await exists('driveLink', productDriveLink)).toBeNull();
     expect(await exists('pageLink', productPageLink)).toBeNull();
     expect(await exists('pageLink', productSharedPageLink)).not.toBeNull();
-    expect(await hasAppDriveMembership(productKey, f.drives.product.id)).toBe(true);
+    expect(await hasAppDriveMembership(await tokenOwnerActor(productKey), productKey, f.drives.product.id)).toBe(true);
     expect(await findOAuthAccessTokenByValue(productGrant.accessToken)).not.toBeNull();
-    expect(await getUserAccessLevel(priya.id, f.pages.productPage.id)).toMatchObject({ canView: true, canShare: false });
+    expect(await getUserAccessLevel(credentialActor(priya.id, null), f.pages.productPage.id)).toMatchObject({ canView: true, canShare: false });
 
     // Omar: nothing revoked on Finance.
     expect(await exists('agent', omarAgent)).toMatchObject({ role: 'ADMIN' });

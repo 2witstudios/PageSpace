@@ -10,15 +10,16 @@ vi.mock('@/lib/auth', () => ({
   checkMCPPageScope: vi.fn().mockResolvedValue(null),
   canPrincipalViewPage: async (auth: { userId: string }, pageId: string) => {
     const { canUserViewPage } = await import('@pagespace/lib/permissions/permissions');
-    return canUserViewPage(auth.userId, pageId);
+    return canUserViewPage(credentialActor(auth.userId, null), pageId);
   },
   canPrincipalEditPage: async (auth: { userId: string }, pageId: string) => {
     const { canUserEditPage } = await import('@pagespace/lib/permissions/permissions');
-    return canUserEditPage(auth.userId, pageId);
+    return canUserEditPage(credentialActor(auth.userId, null), pageId);
   },
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   canUserViewPage: vi.fn(),
   canUserEditPage: vi.fn(),
 }));
@@ -230,6 +231,7 @@ import { getUserTimezone } from '@/lib/ai/core/personalization-utils';
 import { db } from '@pagespace/db/db';
 import { inArray, notInArray, ilike, gt, lte, sql } from '@pagespace/db/operators';
 import { broadcastTaskEvent } from '@/lib/websocket';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const assert = ({ given, should, actual, expected }: {
   given: string; should: string; actual: unknown; expected: unknown;

@@ -198,6 +198,15 @@ export const MAX_SCROLLBACK_TAIL_LINES = 10_000;
 export const shellStartRequestSchema = z.object({
   start: z.boolean().optional(),
   userId: z.string().min(1).optional(),
+  /**
+   * The calling credential's ceremony evidence (SEC-2/3, D-OW-45), carried unchanged like every derived
+   * credential's: the bridge authorizes `userId` through it, so an org's sign-in policy applies to headless shell IO
+   * exactly as to a socket. Absent or null: no evidence, which every sign-in policy refuses. Re-parsed by the bridge.
+   */
+  authentication: z.object({
+    authenticatedAtMs: z.number().int().nonnegative(),
+    assurance: z.enum(['single_factor', 'user_verified_passkey']),
+  }).nullable().optional(),
 });
 
 export type ShellStartRequest = z.infer<typeof shellStartRequestSchema>;

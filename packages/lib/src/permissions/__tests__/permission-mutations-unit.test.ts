@@ -1,4 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+// The org sign-in gate (D-OW-45) reads policies through its own module; these tests are about the
+// resolvers behind it, so no org here sets a sign-in policy. Plain functions: a mock reset must not undo them.
+vi.mock('../actor-authentication', () => ({
+  checkActorDriveAuthentication: async () => ({ allowed: true }),
+  checkActorResourceAuthentication: async () => ({ allowed: true }),
+  filterDrivesForActor: async (_actor: unknown, ids: readonly string[]) => new Set(ids),
+  filterResourcesForActor: async (_actor: unknown, ids: readonly string[]) => new Set(ids),
+  explainOrgAuthenticationDenial: async () => null,
+}));
 import { createId } from '@paralleldrive/cuid2';
 
 // ---------------------------------------------------------------------------
@@ -42,9 +51,11 @@ vi.mock('../enforced-context', () => ({
   EnforcedAuthContext: class {
     userId: string;
     userRole: string;
+    actor: { via: 'credential'; userId: string; authentication: null };
     constructor(userId: string, userRole: string) {
       this.userId = userId;
       this.userRole = userRole;
+      this.actor = { via: 'credential', userId, authentication: null };
     }
     static fromSession(claims: { userId: string; userRole: string; scopes: string[] }) {
       const ctx = new (this as unknown as new(u: string, r: string) => { userId: string; userRole: string })(claims.userId, claims.userRole);

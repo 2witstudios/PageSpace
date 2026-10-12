@@ -2,6 +2,7 @@ import type { OrgRole } from '@pagespace/db/schema/organizations';
 import type { OrgDriveVisibility } from '@pagespace/db/schema/core';
 import { homeDriveActionError, isHomeDrive } from '../services/drive-guards';
 import { isDriveLead } from '../permissions/drive-relationship';
+import { holdsOrgRole } from './authorize-core';
 
 /**
  * Org-owned drives: who may move a drive into or out of an org, who may create one
@@ -68,11 +69,12 @@ const refuse = (
   message: string
 ): OrgDriveRefusal => ({ ok: false, code, status, message });
 
-const isOrgAdmin = (role: OrgRole | null): boolean => role === 'OWNER' || role === 'ADMIN';
+/** Org Owner or Admin power, through the one org authorization decision (ORG-5). */
+const isOrgAdmin = (role: OrgRole | null): boolean => holdsOrgRole(role, 'ADMIN');
 
 /** The lead (drives.ownerId) of an org drive must be a member of that org (O-7). */
 export function canLeadOrgDrive(orgRole: OrgRole | null): boolean {
-  return orgRole !== null;
+  return holdsOrgRole(orgRole, 'MEMBER');
 }
 
 export function decideMoveDriveIntoOrg({

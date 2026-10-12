@@ -6,6 +6,7 @@ import { donateToDrive } from '@pagespace/lib/services/drive-wallet-service';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { safeParseBody } from '@/lib/validation/parse-body';
 import { WALLET_WRITE_AUTH, walletCredentialOf, walletErrorResponse } from '@/lib/wallets/wallet-route';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 /**
  * POST /api/drives/[driveId]/wallet/donate — Donate from the caller's own balance to a drive's wallet (Spec WAL-4): anyone who can open the drive, unless its lead turned donations off. A non-refundable donation leg recorded with the donor (D-OW-13); one per idempotency key. 402 when the caller's balance cannot cover it.
@@ -28,7 +29,7 @@ export async function POST(request: Request, context: RouteContext) {
   const parsed = await safeParseBody(request, schema);
   if (!parsed.success) return parsed.response;
   try {
-    const result = await donateToDrive(auth.userId, driveId, parsed.data, walletCredentialOf(auth));
+    const result = await donateToDrive(actorFromAuth(auth), driveId, parsed.data, walletCredentialOf(auth));
     if (!result.ok) return walletErrorResponse(result);
     auditRequest(request, {
       eventType: 'data.write',

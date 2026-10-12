@@ -22,6 +22,10 @@ vi.mock('@pagespace/lib/organizations/repository', () => ({
 vi.mock('@pagespace/lib/services/validated-service-token', () => ({
   createOrgServiceToken: vi.fn().mockResolvedValue({ token: 'ps_svc_org', grantedScopes: ['org-avatars:write'] }),
 }));
+vi.mock('@pagespace/lib/permissions/actor-authentication', () => ({
+  checkActorOrgAuthentication: vi.fn(async () => ({ allowed: true })),
+  drivePolicyOrgId: vi.fn(async () => null),
+}));
 vi.mock('@/lib/presigned-url', () => ({ getS3Client: () => s3, getS3Bucket: () => 'bucket' }));
 
 import { POST, DELETE } from '../route';
@@ -79,7 +83,7 @@ describe('ORG-1 (partial) uploading and removing the org avatar', () => {
     const res = await POST(upload(png()), params);
     expect(res.status).toBe(200);
     expect((await res.json()).organization.avatarUrl).toBe(NEW);
-    expect(createOrgServiceToken).toHaveBeenCalledWith('u_priya', ORG, ['org-avatars:write'], expect.any(String));
+    expect(createOrgServiceToken).toHaveBeenCalledWith(expect.objectContaining({ via: 'credential', userId: 'u_priya' }), ORG, ['org-avatars:write'], expect.any(String));
     expect(fetchMock).toHaveBeenCalledWith(expect.stringMatching(new RegExp(`/api/org-avatar/${ORG}$`)), expect.objectContaining({ method: 'POST', headers: { Authorization: 'Bearer ps_svc_org' } }));
     expect(calls).toEqual([`storage POST ${ORG}`, `column ${NEW}`, `storage DELETE ${ORG}/avatar-old111.png`]);
   });

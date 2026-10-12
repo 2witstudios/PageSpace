@@ -53,7 +53,7 @@ export async function resolveChannelTarget(request: Request, pageId: string): Pr
     return { ok: false, response: NextResponse.json({ error: 'Channel has no associated drive' }, { status: 400 }) };
   }
 
-  const canEdit = await canUserEditPage(ctx.userId, pageId);
+  const canEdit = await canUserEditPage(ctx.actor, pageId);
   if (!canEdit) {
     auditRequest(request, {
       eventType: 'authz.access.denied',

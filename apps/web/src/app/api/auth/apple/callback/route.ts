@@ -31,6 +31,7 @@ import {
   consumeAnyInviteIfPresent,
 } from '@/lib/auth/native-invite-acceptance';
 import { autoJoinVerifiedDomainAfterSignIn } from '@/lib/orgs/domain-auto-join';
+import { ceremonyAuthentication } from '@pagespace/lib/auth/authentication-evidence';
 
 // Apple sends name info as JSON in the 'user' field (only on first authorization)
 const appleUserSchema = z.object({
@@ -236,7 +237,10 @@ export async function POST(req: Request) {
     await revokeSessionsForLogin(user.id, deviceId, 'new_login', 'Apple OAuth');
 
     // Create new session
+    // D-OW-45: the ceremony this route just verified, recorded on every credential it mints.
+    const authentication = ceremonyAuthentication({ method: 'apple' }, Date.now());
     const sessionToken = await sessionService.createSession({
+      authentication,
       userId: user.id,
       type: 'user',
       scopes: ['*'],
@@ -327,6 +331,7 @@ export async function POST(req: Request) {
       }
 
       const { deviceToken: deviceTokenValue } = await validateOrCreateDeviceToken({
+        authentication,
         providedDeviceToken: undefined,
         userId: user.id,
         deviceId: deviceId,
@@ -401,6 +406,7 @@ export async function POST(req: Request) {
       const iosDeviceId = deviceId || createId();
 
       const { deviceToken: deviceTokenValue } = await validateOrCreateDeviceToken({
+        authentication,
         providedDeviceToken: undefined,
         userId: user.id,
         deviceId: iosDeviceId,
@@ -448,6 +454,7 @@ export async function POST(req: Request) {
     if (deviceId) {
       try {
         webDeviceTokenValue = await createWebDeviceToken({
+          authentication,
           userId: user.id, deviceId, tokenVersion: user.tokenVersion,
           deviceName: deviceName || req.headers.get('user-agent') || 'Web Browser',
           userAgent: req.headers.get('user-agent') || undefined,

@@ -4,7 +4,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
 import { parseOrgAuditFilter } from '@pagespace/lib/audit/org-audit-query-core';
 import { exportOrgAuditCsv } from '@pagespace/lib/audit/org-audit-query';
-import { authorizeOrgRequest, ORG_READ_AUTH } from '@/lib/orgs/org-route-auth';
+import { authorizeOrgRequest, ORG_TOKEN_READ_AUTH } from '@/lib/orgs/org-route-auth';
 import { orgAuditFilterInput } from '@/lib/orgs/org-audit-filter';
 
 type Context = { params: Promise<{ orgId: string }> };
@@ -17,7 +17,7 @@ type Context = { params: Promise<{ orgId: string }> };
  */
 export async function GET(request: Request, context: Context) {
   const { orgId } = await context.params;
-  const gate = await authorizeOrgRequest(request, orgId, 'ADMIN', ORG_READ_AUTH);
+  const gate = await authorizeOrgRequest(request, orgId, 'ADMIN', ORG_TOKEN_READ_AUTH);
   if (!gate.ok) return gate.response;
   try {
     const parsed = parseOrgAuditFilter({ ...orgAuditFilterInput(new URL(request.url)), limit: null, before: null });

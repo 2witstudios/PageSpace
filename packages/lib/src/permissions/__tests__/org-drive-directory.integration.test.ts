@@ -28,6 +28,7 @@ import { getDriveAccess, listAccessibleDrives } from '../../services/drive-servi
 import { syncDriveOrgMembership } from '../../services/org-membership-sync';
 import { countOrgSeats } from '../../organizations/repository';
 import { accountRepository } from '../../repositories/account-repository';
+import { credentialActor } from '../access-actor';
 
 vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 
@@ -133,18 +134,18 @@ describe('listOrgDriveDirectory', () => {
     const requested = await requestToJoinDrive(lena, d.research);
     if (!requested.ok) throw new Error(requested.code);
     expect((await directoryOf(lena))?.Research).toEqual({ visibility: 'RESTRICTED', joined: false, joinRequest: 'pending', canRequest: false });
-    expect((await listAccessibleDrives(lena)).map((x) => x.id)).not.toContain(d.research);
+    expect((await listAccessibleDrives(credentialActor(lena, null))).map((x) => x.id)).not.toContain(d.research);
 
     await answerDriveJoinRequest(marcus, d.research, requested.request.id, 'approve');
 
     expect((await directoryOf(lena))?.Research).toEqual({ visibility: 'RESTRICTED', joined: true, joinRequest: null, canRequest: false });
-    expect((await listAccessibleDrives(lena)).map((x) => x.id)).toContain(d.research);
-    expect(await getDriveAccess(d.research, lena)).toMatchObject({ isMember: true, role: 'MEMBER' });
+    expect((await listAccessibleDrives(credentialActor(lena, null))).map((x) => x.id)).toContain(d.research);
+    expect(await getDriveAccess(d.research, credentialActor(lena, null))).toMatchObject({ isMember: true, role: 'MEMBER' });
   });
 
   it('DRV-6 (partial) a Restricted drive is in the directory but never in the picker or sidebar for a member who has not joined, even an org Admin', async () => {
     for (const userId of [lena, priya]) {
-      expect((await listAccessibleDrives(userId)).map((x) => x.id)).not.toContain(d.research);
+      expect((await listAccessibleDrives(credentialActor(userId, null))).map((x) => x.id)).not.toContain(d.research);
       expect(await directoryOf(userId)).toHaveProperty('Research');
     }
   });
@@ -153,31 +154,31 @@ describe('listOrgDriveDirectory', () => {
     // Discovery: the directory lists Research as requestable to members who have not joined.
     expect((await directoryOf(lena))?.Research).toMatchObject({ visibility: 'RESTRICTED', joined: false, joinRequest: null, canRequest: true });
     for (const member of [lena, nina]) {
-      expect((await listAccessibleDrives(member)).map((x) => x.id)).not.toContain(d.research);
+      expect((await listAccessibleDrives(credentialActor(member, null))).map((x) => x.id)).not.toContain(d.research);
     }
 
     // A member asks to join. The request alone grants nothing.
     const asked = await requestToJoinDrive(lena, d.research);
     if (!asked.ok) throw new Error(asked.code);
-    expect((await listAccessibleDrives(lena)).map((x) => x.id)).not.toContain(d.research);
-    expect(await getDriveAccess(d.research, lena)).toMatchObject({ isMember: false, role: null });
+    expect((await listAccessibleDrives(credentialActor(lena, null))).map((x) => x.id)).not.toContain(d.research);
+    expect(await getDriveAccess(d.research, credentialActor(lena, null))).toMatchObject({ isMember: false, role: null });
     expect(await getDriveRecipientUserIds(d.research)).not.toContain(lena);
 
     // The drive lead approves; Lena is in, and the picker now lists the drive.
     expect(await answerDriveJoinRequest(marcus, d.research, asked.request.id, 'approve'))
       .toMatchObject({ ok: true, action: 'approve', admitted: true });
-    expect((await listAccessibleDrives(lena)).map((x) => x.id)).toContain(d.research);
-    expect(await getDriveAccess(d.research, lena)).toMatchObject({ isMember: true, role: 'MEMBER' });
+    expect((await listAccessibleDrives(credentialActor(lena, null))).map((x) => x.id)).toContain(d.research);
+    expect(await getDriveAccess(d.research, credentialActor(lena, null))).toMatchObject({ isMember: true, role: 'MEMBER' });
 
     // The same on a second Restricted drive, with an org Admin approving.
     const playbook = await seedDrive('Playbook', 'RESTRICTED');
     const ninaAsked = await requestToJoinDrive(nina, playbook);
     if (!ninaAsked.ok) throw new Error(ninaAsked.code);
-    expect((await listAccessibleDrives(nina)).map((x) => x.id)).not.toContain(playbook);
+    expect((await listAccessibleDrives(credentialActor(nina, null))).map((x) => x.id)).not.toContain(playbook);
     expect(await answerDriveJoinRequest(priya, playbook, ninaAsked.request.id, 'approve'))
       .toMatchObject({ ok: true, action: 'approve', admitted: true });
-    expect((await listAccessibleDrives(nina)).map((x) => x.id)).toContain(playbook);
-    expect(await getDriveAccess(playbook, nina)).toMatchObject({ isMember: true, role: 'MEMBER' });
+    expect((await listAccessibleDrives(credentialActor(nina, null))).map((x) => x.id)).toContain(playbook);
+    expect(await getDriveAccess(playbook, credentialActor(nina, null))).toMatchObject({ isMember: true, role: 'MEMBER' });
   });
 });
 
@@ -210,7 +211,7 @@ describe('drive recipient lists', () => {
     expect(pending).toMatchObject({ source: 'invite', role: 'ADMIN', acceptedAt: null });
 
     expect(await getDriveRecipientUserIds(d.product)).toContain(nina);
-    expect(await getDriveAccess(d.product, nina)).toMatchObject({ isMember: true, role: 'MEMBER' });
+    expect(await getDriveAccess(d.product, credentialActor(nina, null))).toMatchObject({ isMember: true, role: 'MEMBER' });
   });
 
   it('DRV-5 (partial) accepting that invitation makes it their direct row with its own role; declining leaves their org-derived access intact', async () => {
@@ -232,8 +233,8 @@ describe('drive recipient lists', () => {
       ['lena', 'org', 'MEMBER'],
       ['nina', 'invite', 'ADMIN'],
     ]);
-    expect(await getDriveAccess(d.product, nina)).toMatchObject({ isAdmin: true, role: 'ADMIN' });
-    expect(await getDriveAccess(d.product, lena)).toMatchObject({ isMember: true, role: 'MEMBER', customRoleId: defaultRole.id });
+    expect(await getDriveAccess(d.product, credentialActor(nina, null))).toMatchObject({ isAdmin: true, role: 'ADMIN' });
+    expect(await getDriveAccess(d.product, credentialActor(lena, null))).toMatchObject({ isMember: true, role: 'MEMBER', customRoleId: defaultRole.id });
     const recipients = await getDriveRecipientUserIds(d.product);
     expect(recipients).toContain(nina);
     expect(recipients).toContain(lena);
@@ -254,10 +255,10 @@ describe('D-OW-24 a GUEST row (a redeemed page share link) is no membership', ()
     expect((await directoryOf(lena))?.Research).toEqual({ visibility: 'RESTRICTED', joined: false, joinRequest: null, canRequest: true });
     expect(await directoryOf(nina)).not.toHaveProperty('Finance');
     // (a) access and listing
-    expect(await getDriveAccess(d.research, lena)).toMatchObject({ isMember: false, role: null });
-    expect(await getDriveAccess(d.finance, nina)).toMatchObject({ isMember: false, role: null });
-    expect((await listAccessibleDrives(lena)).map((x) => x.id)).not.toContain(d.research);
-    expect((await listAccessibleDrives(nina)).map((x) => x.id)).not.toContain(d.finance);
+    expect(await getDriveAccess(d.research, credentialActor(lena, null))).toMatchObject({ isMember: false, role: null });
+    expect(await getDriveAccess(d.finance, credentialActor(nina, null))).toMatchObject({ isMember: false, role: null });
+    expect((await listAccessibleDrives(credentialActor(lena, null))).map((x) => x.id)).not.toContain(d.research);
+    expect((await listAccessibleDrives(credentialActor(nina, null))).map((x) => x.id)).not.toContain(d.finance);
     // (d) recipients, member lists and co-membership (Chris holds a real row on Research)
     expect(await getDriveRecipientUserIds(d.research)).not.toContain(lena);
     expect(await getDriveMemberUserIds(d.research)).not.toContain(lena);
@@ -271,8 +272,8 @@ describe('D-OW-24 a GUEST row (a redeemed page share link) is no membership', ()
     // Positive control: the very same row as a MEMBER is every one of those things.
     await db.update(driveMembers).set({ role: 'MEMBER' }).where(rowOn(d.research, lena));
     expect((await directoryOf(lena))?.Research).toMatchObject({ joined: true, canRequest: false });
-    expect(await getDriveAccess(d.research, lena)).toMatchObject({ isMember: true, role: 'MEMBER' });
-    expect((await listAccessibleDrives(lena)).map((x) => x.id)).toContain(d.research);
+    expect(await getDriveAccess(d.research, credentialActor(lena, null))).toMatchObject({ isMember: true, role: 'MEMBER' });
+    expect((await listAccessibleDrives(credentialActor(lena, null))).map((x) => x.id)).toContain(d.research);
     expect(await getDriveRecipientUserIds(d.research)).toContain(lena);
     expect(await getDriveMemberUserIds(d.research)).toContain(lena);
     expect(await usersShareDrive(lena, chris)).toBe(true);

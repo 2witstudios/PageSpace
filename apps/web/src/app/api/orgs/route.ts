@@ -7,9 +7,8 @@ import { getOrgPolicies } from '@pagespace/lib/organizations/policy-reader';
 import { canCreateOrgDrive } from '@pagespace/lib/organizations/org-drive-ownership';
 import {
   authenticateOrgRequest,
-  refuseDriveScopedToken,
   ORG_TOKEN_READ_AUTH,
-  ORG_WRITE_AUTH,
+  ORG_MONEY_WRITE_AUTH,
 } from '@/lib/orgs/org-route-auth';
 import { orgCreateSchema } from '@/lib/orgs/org-schemas';
 import { startOrgBusinessSubscription } from '@/lib/org-billing/org-subscription';
@@ -23,8 +22,6 @@ import { startOrgBusinessSubscription } from '@/lib/org-billing/org-subscription
 export async function GET(request: Request) {
   const gate = await authenticateOrgRequest(request, ORG_TOKEN_READ_AUTH);
   if (!gate.ok) return gate.response;
-  const scoped = refuseDriveScopedToken(gate);
-  if (scoped) return scoped;
   try {
     const organizations = await Promise.all(
       (await listOrganizationsForUser(gate.userId)).map(async (org) => {
@@ -57,7 +54,7 @@ export async function GET(request: Request) {
  * provisions it.
  */
 export async function POST(request: Request) {
-  const gate = await authenticateOrgRequest(request, ORG_WRITE_AUTH);
+  const gate = await authenticateOrgRequest(request, ORG_MONEY_WRITE_AUTH);
   if (!gate.ok) return gate.response;
   try {
     const parsed = orgCreateSchema.safeParse(await request.json().catch(() => null));

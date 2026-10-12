@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 import {
   createTerminalSessionMap,
   appendScrollback,
@@ -18,7 +19,7 @@ function fakeSession(sessionKey = 'key1', sandboxId = 'sbx1'): TerminalSession {
     command: { write: vi.fn(), kill: vi.fn(), resize: vi.fn(), setViewerAttached: vi.fn(), isQuiesced: () => false },
     sandboxId,
     sessionKey,
-    lastViewerUserId: 'user1',
+    lastViewerActor: credentialActor('user1', null),
     releaseSlot: vi.fn(),
     viewers: new Map(),
     scrollback: [],

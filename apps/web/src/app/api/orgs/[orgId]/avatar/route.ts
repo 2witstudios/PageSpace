@@ -10,7 +10,7 @@ import {
   orgAvatarPath,
 } from '@pagespace/lib/organizations/org-avatar-core';
 import { apiError } from '@/lib/api/api-error';
-import { authorizeOrgRequest, ORG_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
+import { authorizeOrgRequest, ORG_SESSION_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
 import { callOrgAvatarStorage, mintOrgAvatarToken } from '@/lib/orgs/org-avatar-storage';
 
 type Context = { params: Promise<{ orgId: string }> };
@@ -38,7 +38,7 @@ function avatarResponse(organization: { id: string; avatarUrl: string | null }) 
  */
 export async function POST(request: Request, context: Context) {
   const { orgId } = await context.params;
-  const gate = await authorizeOrgRequest(request, orgId, 'ADMIN', ORG_WRITE_AUTH);
+  const gate = await authorizeOrgRequest(request, orgId, 'ADMIN', ORG_SESSION_WRITE_AUTH);
   if (!gate.ok) return gate.response;
   try {
     const form = await request.formData().catch(() => null);
@@ -52,7 +52,7 @@ export async function POST(request: Request, context: Context) {
 
     const body = new FormData();
     body.append('file', file);
-    const token = await mintOrgAvatarToken(orgId, gate.userId);
+    const token = await mintOrgAvatarToken(orgId, gate.actor);
     const stored = await callOrgAvatarStorage(orgId, token, { method: 'POST', body });
     const result: unknown = await stored.json().catch(() => null);
     const filename = result && typeof result === 'object' && 'filename' in result ? result.filename : null;
@@ -86,10 +86,10 @@ export async function POST(request: Request, context: Context) {
 /** DELETE /api/orgs/[orgId]/avatar — clear the org's avatar, then remove the file it pointed to; Owner and Admins. */
 export async function DELETE(request: Request, context: Context) {
   const { orgId } = await context.params;
-  const gate = await authorizeOrgRequest(request, orgId, 'ADMIN', ORG_WRITE_AUTH);
+  const gate = await authorizeOrgRequest(request, orgId, 'ADMIN', ORG_SESSION_WRITE_AUTH);
   if (!gate.ok) return gate.response;
   try {
-    const token = await mintOrgAvatarToken(orgId, gate.userId);
+    const token = await mintOrgAvatarToken(orgId, gate.actor);
     const saved = await setOrganizationAvatar(orgId, null, gate.userId);
     if (!saved.ok) return apiError(404, 'org_not_found', 'Organization not found');
     await removeFile(orgId, token, saved.previousAvatarUrl && orgAvatarFilenameFromPath(orgId, saved.previousAvatarUrl));

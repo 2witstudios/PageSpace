@@ -1,3 +1,4 @@
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 import type { TerminalSessionMap, TerminalSession, TerminalViewer } from './terminal-session-map';
 import { DETACHED_IDLE_MS, appendScrollback, broadcastOutput, broadcastClosed } from './terminal-session-map';
 import type { OpenPtyShellArgs, PtyShell } from './sprites-shell';
@@ -127,7 +128,7 @@ export type ShellCheckAuthResult =
     }
   | { ok: false; reason: string };
 
-export type ShellCheckAuthFn = (args: { userId: string; shellId: string }) => Promise<ShellCheckAuthResult>;
+export type ShellCheckAuthFn = (args: { actor: AccessActor; shellId: string }) => Promise<ShellCheckAuthResult>;
 
 /** An authorized connect — the `ok` arm of a check-auth result. */
 export type ShellAccessGranted = Extract<ShellCheckAuthResult, { ok: true }>;
@@ -171,7 +172,7 @@ export type OpenShellFn = (args: OpenPtyShellArgs) => PtyShell;
 
 export type SocketLike = {
   id: string;
-  data: { user?: { id: string } };
+  data: { user?: { id: string }; actor?: AccessActor };
   emit(event: string, payload?: unknown): void;
 };
 
@@ -485,7 +486,7 @@ function removeViewer(
   sessionMap.detach(viewerKey);
   if (session.viewers.size > 0) return;
   // The last viewer out is who the detached re-auth tick keeps checking.
-  if (viewer) session.lastViewerUserId = viewer.userId;
+  if (viewer) session.lastViewerActor = viewer.actor;
   // No viewer is left watching this PTY: stop the shell's watchdog reconnect
   // loop (sprites-shell.ts's `planWatchdogResponse`) so an idle detached shell
   // stops waking the Sprite every ~45s for nobody. This only quiets OUR exec
@@ -1094,8 +1095,8 @@ export interface EnsureShellSessionRequest {
   /** The ALREADY-GRANTED access verdict for this target — `sessionKey`, `charge`, `driveId`, and the uncalled `resolveSandbox` thunk. */
   access: ShellAccessGranted;
   target: ShellTarget;
-  /** Who this session is being started FOR — the re-auth tick's identity while nobody is attached. */
-  userId: string;
+  /** Who this session is being started FOR (their credential) — the re-auth tick's identity while nobody is attached. */
+  actor: AccessActor;
   /** Already clamped by the caller (the contract schema clamps on parse). */
   cols: number;
   rows: number;
@@ -1168,7 +1169,7 @@ export async function ensureShellSession(
   request: EnsureShellSessionRequest,
 ): Promise<EnsureShellSessionResult> {
   const { sessionMap, openShell, checkAuth, persistSpriteExecId, billing, createTaskHold, persistColdTail } = deps;
-  const { access, target, userId, cols, rows, viewer } = request;
+  const { access, target, actor, cols, rows, viewer } = request;
   const { shellId } = target;
   const { sessionKey } = access;
   /** Bundled once — see `SessionEndDeps`. Every teardown-path call below threads this through instead of `billing` alone. */
@@ -1328,7 +1329,7 @@ export async function ensureShellSession(
       command: null as unknown as PtyShell,
       sandboxId,
       sessionKey,
-      lastViewerUserId: userId,
+      lastViewerActor: actor,
       spriteExecId: attachSessionId,
       releaseSlot,
       charge: access.charge,
@@ -1556,16 +1557,18 @@ export async function ensureShellSession(
       reauthing = true;
       try {
         const attachedViewers = [...liveSession.viewers.entries()];
-        const userIds = attachedViewers.length > 0
-          ? [...new Set(attachedViewers.map(([, v]) => v.userId))]
-          : [liveSession.lastViewerUserId];
+        // Each distinct CREDENTIAL is checked, not each user: two panes of one person can hold different
+        // credentials (a fresh sign-in and a stale one), and an org's sign-in policy (SEC-2/3) refuses per credential.
+        const actors = attachedViewers.length > 0
+          ? [...new Set(attachedViewers.map(([, v]) => v.actor))]
+          : [liveSession.lastViewerActor];
 
-        const revoked = new Set<string>();
+        const revoked = new Set<AccessActor>();
         await Promise.all(
-          userIds.map(async (uid) => {
+          actors.map(async (actor) => {
             try {
-              const result = await checkAuth({ userId: uid, shellId });
-              if (!result.ok) revoked.add(uid);
+              const result = await checkAuth({ actor, shellId });
+              if (!result.ok) revoked.add(actor);
             } catch (error) {
               // Fail-open — see above. Absent from `revoked` can only ever
               // mean "not revoked", so an error needs no sentinel encoding.
@@ -1587,7 +1590,7 @@ export async function ensureShellSession(
         }
 
         for (const [viewerKey, attached] of attachedViewers) {
-          if (!revoked.has(attached.userId)) continue;
+          if (!revoked.has(attached.actor)) continue;
           // Still the SAME viewer entry? It may have detached during the await —
           // and a same-key rejoin is a fresh object, checked next tick.
           if (liveSession.viewers.get(viewerKey) !== attached) continue;
@@ -1604,7 +1607,7 @@ export async function ensureShellSession(
         // harm the multi-viewer change removed. If viewers exist now, they
         // were either checked this tick (and the revoked ones evicted) or
         // they joined mid-check and are checked next tick.
-        if (liveSession.viewers.size === 0 && revoked.has(liveSession.lastViewerUserId)) {
+        if (liveSession.viewers.size === 0 && revoked.has(liveSession.lastViewerActor)) {
           teardownShellSession(sessionEndDeps, sessionMap, liveSession, sessionKey, -2);
         }
       } finally {
@@ -1779,8 +1782,8 @@ export function buildShellHandlers({
    * payload shapes, the connectionId tag the client routes panes by) is
    * spelled exactly once and joiner panes can never drift from creator panes.
    */
-  const makeViewer = (connectionId: string, userId: string): TerminalViewer => ({
-    userId,
+  const makeViewer = (connectionId: string, actor: AccessActor): TerminalViewer => ({
+    actor,
     emitOutput: (data) => socket.emit('shell:output', { data, connectionId }),
     emitClosed: (exitCode) => socket.emit('shell:closed', { exitCode, connectionId }),
     emitError: (message) => socket.emit('shell:error', { message, connectionId }),
@@ -1799,7 +1802,7 @@ export function buildShellHandlers({
    * and a cold-path racer that lost a double-mount (see `onConnect`) — both are
    * "someone else's PTY is already live under this key; join it".
    */
-  function attachToLiveSession(session: TerminalSession, connectionId: string, viewerUserId: string) {
+  function attachToLiveSession(session: TerminalSession, connectionId: string, viewerActor: AccessActor) {
     // Registration first, and all three tracking structures in one
     // uninterrupted block: the registry entry, its socket binding, and this
     // socket's connection set are pure Map/Set writes that cannot throw, so
@@ -1811,7 +1814,7 @@ export function buildShellHandlers({
     // `viewers.size` never returns to zero and the last-viewer transition —
     // the reap, the slot release, the billing settle behind it — never fires
     // for the life of the process.
-    session.viewers.set(socketKey(connectionId), makeViewer(connectionId, viewerUserId));
+    session.viewers.set(socketKey(connectionId), makeViewer(connectionId, viewerActor));
     sessionMap.addBinding(session.sessionKey, socketKey(connectionId));
     activeConnectionIds.add(connectionId);
     if (session.idleTimer !== undefined) {
@@ -1821,7 +1824,7 @@ export function buildShellHandlers({
     // The most recent attacher — the identity the re-auth tick falls back to
     // while the session is detached. Attached viewers are each checked
     // individually off the registry entry added above.
-    session.lastViewerUserId = viewerUserId;
+    session.lastViewerActor = viewerActor;
     // A viewer is here: let the shell reattach lazily if its watchdog went quiet
     // while detached (sprites-shell.ts's `setViewerAttached`) — a no-op when a
     // live viewer already has the connection up, since output is already flowing.
@@ -1933,7 +1936,12 @@ export function buildShellHandlers({
     // Dimensions were clamped by the contract schema on parse.
     const { shellId, cols, rows } = value;
 
-    const userId = socket.data.user?.id ?? '';
+    // The connecting credential (SEC-2/3): its org sign-in policy decides here and on every re-auth tick.
+    const actor = socket.data.actor;
+    if (!actor) {
+      socket.emit('shell:error', { message: 'Shell access denied: unauthenticated', connectionId });
+      return;
+    }
 
     // The access check is DB-only, reserves no concurrency slot, and the
     // session key derives from the shellId without the Sprite — so the live
@@ -1941,7 +1949,7 @@ export function buildShellHandlers({
     // woken or written policy to a Sprite. A tab-back inside the detached
     // grace window is therefore decided on the strength of the access check
     // alone: milliseconds, not the seconds a sandbox resolution costs.
-    const accessResult = await checkAuth({ userId, shellId });
+    const accessResult = await checkAuth({ actor, shellId });
     const existingSession = accessResult.ok ? sessionMap.getByKey(accessResult.sessionKey) : undefined;
     const plan = planConnect({ accessResult, existingSession });
 
@@ -1960,7 +1968,7 @@ export function buildShellHandlers({
       if (abandoned(connectionId)) return;
       // WAL-2 (review 5407898542 P2-3): watching a live PTY moves no money — the window moves to
       // whoever TYPES (onInput / claimTypingWindow), gated against their own cap then.
-      attachToLiveSession(plan.session, connectionId, userId);
+      attachToLiveSession(plan.session, connectionId, actor);
       return;
     }
 
@@ -1974,10 +1982,10 @@ export function buildShellHandlers({
       {
         access: plan.access,
         target: { shellId },
-        userId,
+        actor,
         cols,
         rows,
-        viewer: { key: socketKey(connectionId), viewer: makeViewer(connectionId, userId) },
+        viewer: { key: socketKey(connectionId), viewer: makeViewer(connectionId, actor) },
         abandoned: () => abandoned(connectionId),
         // Synchronous with the install, so `ready` cannot be overtaken by the
         // shell's own first output — see `onStarted`. This is also where the
@@ -2016,7 +2024,7 @@ export function buildShellHandlers({
       // reattach path above: a pane that has left must not take the session the
       // creator is watching. The creator settles its own abandonment.
       if (abandoned(connectionId)) return;
-      attachToLiveSession(outcome.session, connectionId, userId);
+      attachToLiveSession(outcome.session, connectionId, actor);
       return;
     }
 

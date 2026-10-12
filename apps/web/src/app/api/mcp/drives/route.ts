@@ -11,6 +11,7 @@ import { getAppDriveMembership, hasAppDriveMembership } from '@pagespace/lib/per
 import { authenticateMCPRequest, isAuthError, isMCPAuthResult } from '@/lib/auth';
 import { getActorInfo, logDriveActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { listAccessibleDrives } from '@pagespace/lib/services/drive-service';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 // Schema for drive creation. orgId: create the drive in that org (DRV-3).
 const createDriveSchema = z.object({
@@ -95,7 +96,7 @@ export async function GET(req: NextRequest) {
     }
 
     // Get all drives user has access to (owned + shared via membership)
-    const allAccessibleDrives = await listAccessibleDrives(userId);
+    const allAccessibleDrives = await listAccessibleDrives(actorFromAuth(auth));
 
     // Filter by token scope if applicable
     let filteredDrives;
@@ -110,11 +111,11 @@ export async function GET(req: NextRequest) {
         await Promise.all(
           allowedDriveIds.map(async (driveId) => {
             // Review #2849 r5 (P2): a key lists a drive only while its owner is a current member, whichever row it holds.
-            if (tokenId && !(await hasAppDriveMembership(tokenId, driveId))) return null;
+            if (tokenId && !(await hasAppDriveMembership(actorFromAuth(auth), tokenId, driveId))) return null;
             const userView = accessibleById.get(driveId);
             if (userView) return userView;
             if (!tokenId) return null;
-            const membership = await getAppDriveMembership(tokenId, driveId);
+            const membership = await getAppDriveMembership(actorFromAuth(auth), tokenId, driveId);
             if (!membership || membership.role === null) return null; // dangling inherit
             const drive = await db.query.drives.findFirst({ where: eq(drives.id, driveId) });
             if (!drive || drive.isTrashed) return null;

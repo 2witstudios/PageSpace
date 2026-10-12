@@ -23,6 +23,7 @@ import {
 import { runPreRestoreSnapshot } from '@/services/api/restore-backup-service';
 import { guardDriveAccess, isOrgLapsedError } from '@pagespace/lib/permissions/org-lapse-guard';
 import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -40,7 +41,7 @@ export async function POST(
     // 1. Permission check
     const isAdmin = await isPrincipalDriveOwnerOrAdmin(auth, driveId);
     if (!isAdmin) {
-      return NextResponse.json({ error: 'Access denied' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Access denied' }, { status: 403 }));
     }
 
     // 2. Load and validate backup
@@ -58,7 +59,7 @@ export async function POST(
     }
 
     // 4. Pre-restore snapshot (outside transaction — must survive even if restore rolls back)
-    const snapshot = await runPreRestoreSnapshot(driveId, auth.userId, backupId);
+    const snapshot = await runPreRestoreSnapshot(driveId, actorFromAuth(auth), backupId);
     if (!snapshot.success) {
       loggers.api.error('Pre-restore snapshot failed', new Error(snapshot.error));
       return NextResponse.json(

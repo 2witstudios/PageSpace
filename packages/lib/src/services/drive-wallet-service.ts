@@ -34,7 +34,9 @@ import {
 import { isBillingEnabled } from '../deployment-mode';
 import { ORGS_ENABLED } from '../organizations/orgs-enabled';
 import { getDriveIdsForUser, getUserDriveAccess } from '../permissions/permissions';
+import { checkActorDriveAuthentication } from '../permissions/actor-authentication';
 import { loadDriveWalletStanding, type DriveWalletStanding } from '../permissions/spend-standing';
+import { holdsOrgRole } from '../organizations/authorize-core';
 import {
   credentialRefusalFor,
   decideSeatCapWrite,
@@ -75,6 +77,7 @@ import { decryptUserRow } from '../auth/user-repository';
 import type { OrgApiErrorCode } from '../organizations/api-error-codes';
 import { announceDriveWalletChange, announceWalletChange } from '../billing/wallet-change-events';
 import { announceOrgChange } from '../organizations/org-change-events';
+import type { AccessActor, OrgAuthenticationDenialCode } from '../permissions/access-actor';
 
 export interface WalletServiceError {
   ok: false;
@@ -86,6 +89,14 @@ export interface WalletServiceError {
 }
 
 const notFound = (message = 'Drive not found'): WalletServiceError => ({ ok: false, status: 404, code: 'not_found', message });
+const signInRequired = (code: OrgAuthenticationDenialCode): WalletServiceError => ({
+  ok: false,
+  status: 403,
+  code,
+  message: code === 'org_strong_sign_in_required'
+    ? 'This organization requires you to sign in with a passkey to open its content.'
+    : 'Sign in again to open this organization’s content.',
+});
 const forbidden = (action: WalletAction): WalletServiceError => ({
   ok: false,
   status: 403,
@@ -117,10 +128,14 @@ interface WalletAccess {
   actions: WalletAction[];
 }
 
-async function walletAccess(userId: string, driveId: string, credential: WalletCredential): Promise<WalletAccess | WalletServiceError> {
+async function walletAccess(actor: AccessActor, driveId: string, credential: WalletCredential): Promise<WalletAccess | WalletServiceError> {
   if (!ORGS_ENABLED) return notFound();
-  const standing = await loadDriveWalletStanding(userId, driveId);
+  const standing = await loadDriveWalletStanding(actor.userId, driveId);
   if (!standing) return notFound();
+  // SEC-2/3 (D-OW-45): reading or spending an org drive's wallet is org content, so a credential the drive's org
+  // refuses is refused here — with the code that lets the person sign in again, since they hold standing on it.
+  const signIn = await checkActorDriveAuthentication(actor, driveId);
+  if (!signIn.allowed) return signInRequired(signIn.code);
   const role = walletViewerRole(standing);
   if (role === 'none') return notFound();
   // [D-OW-26] a token reads as a consumer and may take no write, whatever the person's role.
@@ -342,8 +357,9 @@ async function readView(userId: string, access: WalletAccess): Promise<DriveWall
 }
 
 /** GET a drive's wallet as this person may see it (SPEND-9, SPEND-10, UI-9). */
-export async function getDriveWallet(userId: string, driveId: string, credential: WalletCredential): Promise<DriveWalletRead | WalletServiceError> {
-  const access = await walletAccess(userId, driveId, credential);
+export async function getDriveWallet(actor: AccessActor, driveId: string, credential: WalletCredential): Promise<DriveWalletRead | WalletServiceError> {
+  const userId = actor.userId;
+  const access = await walletAccess(actor, driveId, credential);
   if (!access.ok) return access;
   return readView(userId, access);
 }
@@ -408,15 +424,16 @@ async function recordOrgWalletEvent(
  * (D-OW-12); the reset sweep keeps it there.
  */
 export async function createDriveWallet(
-  userId: string,
+  actor: AccessActor,
   driveId: string,
   input: { allocationCents: number },
   credential: WalletCredential,
   hooks: WalletWriteHooks = {},
 ): Promise<DriveWalletRead | WalletServiceError> {
+  const userId = actor.userId;
   const refused = refuseCredential(credential, 'create');
   if (refused) return refused;
-  const access = await walletAccess(userId, driveId, credential);
+  const access = await walletAccess(actor, driveId, credential);
   if (!access.ok) return access;
   const denied = requireAction(access, 'create') ?? (await requireOrgActiveForWrite(access));
   if (denied) return denied;
@@ -470,16 +487,17 @@ export async function createDriveWallet(
 
 /** Change a drive wallet's allocation, pause state, rules or default source; each field is its own action. */
 export async function updateDriveWallet(
-  userId: string,
+  actor: AccessActor,
   driveId: string,
   input: WalletPatchInput,
   credential: WalletCredential,
   hooks: WalletWriteHooks = {},
 ): Promise<DriveWalletRead | WalletServiceError> {
+  const userId = actor.userId;
   // Every field of a change is a write (allocate, pause, rules): a token may make none of them.
   const refused = refuseCredential(credential, input.allocationCents !== undefined || input.overshootChoice !== undefined ? 'allocate' : input.paused !== undefined ? 'pause' : 'set_rules');
   if (refused) return refused;
-  const access = await walletAccess(userId, driveId, credential);
+  const access = await walletAccess(actor, driveId, credential);
   if (!access.ok) return access;
   const lapsed = walletPatchOnlyRestricts(input) ? null : await requireOrgActiveForWrite(access);
   if (lapsed) return lapsed;
@@ -516,14 +534,15 @@ export async function updateDriveWallet(
 
 /** Delete a drive wallet that never moved money; anything else is paused instead (wallet-admin). */
 export async function deleteDriveWallet(
-  userId: string,
+  actor: AccessActor,
   driveId: string,
   credential: WalletCredential,
   hooks: WalletWriteHooks = {},
 ): Promise<{ ok: true } | WalletServiceError> {
+  const userId = actor.userId;
   const refused = refuseCredential(credential, 'delete');
   if (refused) return refused;
-  const access = await walletAccess(userId, driveId, credential);
+  const access = await walletAccess(actor, driveId, credential);
   if (!access.ok) return access;
   const denied = requireAction(access, 'delete') ?? (await requireOrgActiveForWrite(access));
   if (denied) return denied;
@@ -573,15 +592,16 @@ export async function deleteDriveWallet(
  * lead's own personal wallet for a personal drive. One owner funding leg per `idempotencyKey`.
  */
 export async function topUpDriveWallet(
-  userId: string,
+  actor: AccessActor,
   driveId: string,
   input: { amountCents: number; idempotencyKey: string },
   credential: WalletCredential,
   hooks: WalletWriteHooks = {},
 ): Promise<{ ok: true; legId: string; amountCents: number; paidDebtCents: number; duplicate: boolean } | WalletServiceError> {
+  const userId = actor.userId;
   const refused = refuseCredential(credential, 'top_up');
   if (refused) return refused;
-  const access = await walletAccess(userId, driveId, credential);
+  const access = await walletAccess(actor, driveId, credential);
   if (!access.ok) return access;
   const denied = requireAction(access, 'top_up') ?? (await requireOrgActiveForWrite(access));
   if (denied) return denied;
@@ -759,8 +779,9 @@ const invalidCap = (): WalletServiceError => ({ ok: false, status: 400, code: 'i
 const notAConsumer = (): WalletServiceError => ({ ok: false, status: 404, code: 'not_a_consumer', message: 'That person cannot spend in this drive' });
 
 /** The caps set on a drive's wallet, per person (WAL-7). For whoever may set them, and the lead. */
-export async function listDriveWalletCaps(userId: string, driveId: string, credential: WalletCredential): Promise<WalletCapsRead | WalletServiceError> {
-  const access = await walletAccess(userId, driveId, credential);
+export async function listDriveWalletCaps(actor: AccessActor, driveId: string, credential: WalletCredential): Promise<WalletCapsRead | WalletServiceError> {
+  const userId = actor.userId;
+  const access = await walletAccess(actor, driveId, credential);
   if (!access.ok) return access;
   if (!access.actions.includes('set_caps') && !access.actions.includes('view_spend_by_member')) return forbidden('set_caps');
   const row = await driveWalletRow(db, driveId);
@@ -775,16 +796,17 @@ export async function listDriveWalletCaps(userId: string, driveId: string, crede
  * in the drive. `null` input clears the row (unlimited within the wallet).
  */
 export async function setDriveWalletCap(
-  userId: string,
+  actor: AccessActor,
   driveId: string,
   consumerId: string,
   input: ConsumerCapWriteInput | null,
   credential: WalletCredential,
   hooks: WalletWriteHooks = {},
 ): Promise<WalletCapsRead | WalletServiceError> {
+  const userId = actor.userId;
   const refused = refuseCredential(credential, 'set_caps');
   if (refused) return refused;
-  const access = await walletAccess(userId, driveId, credential);
+  const access = await walletAccess(actor, driveId, credential);
   if (!access.ok) return access;
   const denied = requireAction(access, 'set_caps');
   if (denied) return denied;
@@ -1027,15 +1049,16 @@ export async function getOrgPoolSplit(orgId: string, now: Date = new Date()): Pr
 
 /** Donate from the caller's own balance to the drive's wallet (WAL-4); the donation shell re-checks visibility. */
 export async function donateToDrive(
-  userId: string,
+  actor: AccessActor,
   driveId: string,
   input: { amountCents: number; idempotencyKey: string },
   credential: WalletCredential,
   hooks: WalletWriteHooks = {},
 ): Promise<{ ok: true; legId: string | null; amountCents: number; paidDebtCents: number; duplicate: boolean } | WalletServiceError> {
+  const userId = actor.userId;
   const refused = refuseCredential(credential, 'donate');
   if (refused) return refused;
-  const access = await walletAccess(userId, driveId, credential);
+  const access = await walletAccess(actor, driveId, credential);
   if (!access.ok) return access;
   const denied = requireAction(access, 'donate') ?? (await requireOrgActiveForWrite(access));
   if (denied) return denied;
@@ -1119,7 +1142,8 @@ export interface MyWallets {
   };
 }
 
-export async function listMyWallets(userId: string, credential: WalletCredential): Promise<MyWallets> {
+export async function listMyWallets(actor: AccessActor, credential: WalletCredential): Promise<MyWallets> {
+  const userId = actor.userId;
   const personalId = await ensurePersonalRootWalletId(db, userId);
   const [personal] = await db
     .select({ monthlyRemainingCents: wallets.monthlyRemainingCents, topupRemainingCents: wallets.topupRemainingCents, debtCents: wallets.debtCents, defaultSpendSource: wallets.defaultSpendSource })
@@ -1158,8 +1182,8 @@ export async function listMyWallets(userId: string, credential: WalletCredential
 
   if (!ORGS_ENABLED) return result;
 
-  // The drives this person can open, through the one access model; nothing else is listed.
-  const driveIds = await getDriveIdsForUser(userId);
+  // The drives this credential can open, through the one access model (sign-in policy included); nothing else is listed.
+  const driveIds = await getDriveIdsForUser(actor);
   if (driveIds.length > 0) {
     const rows = await db
       .select({ id: wallets.id, subjectId: wallets.subjectId, parentWalletId: wallets.parentWalletId, status: wallets.status, monthlyAllowanceCents: wallets.monthlyAllowanceCents, spentCents: wallets.spentCents, topupRemainingCents: wallets.topupRemainingCents, debtCents: wallets.debtCents })
@@ -1199,7 +1223,7 @@ export async function listMyWallets(userId: string, credential: WalletCredential
       remainingCents: seat.remainingCents,
       remainingCredits: formatCreditCount(seat.remainingCents),
     });
-    if (credential === 'session' && (m.role === 'OWNER' || m.role === 'ADMIN')) {
+    if (credential === 'session' && holdsOrgRole(m.role, 'ADMIN')) {
       const facts = await poolFacts(m.orgId);
       if (facts) {
         const unallocatedCents = facts.availableCents - facts.outstandingChildAllocationsCents;
@@ -1259,10 +1283,11 @@ export async function getAlwaysOwnCredits(
  * Session only ([D-OW-26]): a token cannot change what an account spends from.
  */
 export async function setAlwaysOwnCredits(
-  userId: string,
+  actor: AccessActor,
   input: { driveId: string | null; enabled: boolean },
   credential: WalletCredential,
 ): Promise<{ ok: true; driveId: string | null; enabled: boolean } | WalletServiceError> {
+  const userId = actor.userId;
   const refused = refuseCredential(credential, 'set_spend_override');
   if (refused) return refused;
   if (input.driveId === null) {
@@ -1270,7 +1295,7 @@ export async function setAlwaysOwnCredits(
     await db.update(wallets).set({ alwaysOwnCredits: input.enabled }).where(and(eq(wallets.id, walletId), personalRootWalletOf(userId)));
     return { ok: true, driveId: null, enabled: input.enabled };
   }
-  if (!(await getUserDriveAccess(userId, input.driveId))) return notFound();
+  if (!(await getUserDriveAccess(actor, input.driveId))) return notFound();
   if (input.enabled) {
     await db.insert(driveSpendOverrides).values({ userId, driveId: input.driveId }).onConflictDoNothing();
   } else {

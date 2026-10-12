@@ -8,6 +8,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { broadcastInboxEvent } from '@/lib/websocket/socket-utils';
 import { markPageNotificationsRead } from '@pagespace/lib/notifications/notifications';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
@@ -34,7 +35,7 @@ export async function POST(
 
   const canView = await canPrincipalViewPage(auth, pageId);
   if (!canView) {
-    return NextResponse.json({ error: 'Access denied' }, { status: 403 });
+    return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json({ error: 'Access denied' }, { status: 403 }));
   }
 
   // Upsert the read status

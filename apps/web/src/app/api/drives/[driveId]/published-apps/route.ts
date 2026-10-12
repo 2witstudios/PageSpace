@@ -24,6 +24,7 @@ import { eq } from '@pagespace/db/operators';
 import { publishedApps } from '@pagespace/db/schema/published-apps';
 import { driveEnvs } from '@pagespace/db/schema/drive-envs';
 import { resolvePublishedAppsApex } from '@pagespace/lib/services/app-hosting/routing-env';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 
@@ -37,7 +38,7 @@ export async function GET(request: Request, context: { params: Promise<{ driveId
     if (scopeError) return scopeError;
 
     if (!(await isPrincipalDriveMember(auth, driveId))) {
-      return NextResponse.json({ error: 'Not a member of this drive' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Not a member of this drive' }, { status: 403 }));
     }
 
     const rows = await db

@@ -23,6 +23,7 @@
 import { describe, it, expect } from 'vitest';
 import { factories } from '@pagespace/db/test/factories';
 import { getUsersWhoCanViewPage, getBatchPagePermissions } from '../permissions';
+import { credentialActor } from '../access-actor';
 
 /**
  * The invariant: asking "who can see this page" and asking each of them "can
@@ -34,7 +35,7 @@ async function expectAgreesWithPerUserCheck(pageId: string, candidateIds: string
 
   const perUser = new Set<string>();
   for (const userId of candidateIds) {
-    const perms = await getBatchPagePermissions(userId, [pageId]);
+    const perms = await getBatchPagePermissions(credentialActor(userId, null), [pageId]);
     if (perms.get(pageId)?.canView) perUser.add(userId);
   }
 

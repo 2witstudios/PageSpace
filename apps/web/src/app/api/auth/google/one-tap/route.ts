@@ -27,6 +27,7 @@ import {
   consumeAnyInviteIfPresent,
 } from '@/lib/auth/native-invite-acceptance';
 import { autoJoinVerifiedDomainAfterSignIn } from '@/lib/orgs/domain-auto-join';
+import { ceremonyAuthentication } from '@pagespace/lib/auth/authentication-evidence';
 
 const oneTapSchema = z.object({
   credential: z.string().min(1, 'Credential is required'),
@@ -245,7 +246,10 @@ export async function POST(req: Request) {
     await revokeSessionsForLogin(user.id, deviceId, 'new_login', 'Google One Tap');
 
     // Create new session
+    // D-OW-45: the ceremony this route just verified, recorded on every credential it mints.
+    const authentication = ceremonyAuthentication({ method: 'google' }, Date.now());
     const sessionToken = await sessionService.createSession({
+      authentication,
       userId: user.id,
       type: 'user',
       scopes: ['*'],
@@ -293,6 +297,7 @@ export async function POST(req: Request) {
     if (deviceId) {
       try {
         deviceTokenValue = await createDeviceToken({
+          authentication,
           userId: user.id, deviceId, tokenVersion: user.tokenVersion,
           platform: platform || 'web',
           deviceName: deviceName || req.headers.get('user-agent') || (platform === 'desktop' ? 'Desktop App' : 'Web Browser'),

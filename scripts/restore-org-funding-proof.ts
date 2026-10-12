@@ -5,8 +5,7 @@ import type Stripe from 'stripe';
 import type { db as appDb } from '@pagespace/db/db';
 import { organizations, orgSubscriptions, orgSubscriptionFunding } from '@pagespace/db/schema/organizations';
 import { eq } from '@pagespace/db/operators';
-import type { OrgInvoice } from '@pagespace/lib/billing/wallet-funding-shell';
-import { orgInvoicePaidCents, orgSubscriptionFundingBasis, selectOrgPoolRefillLines } from '@pagespace/lib/billing/wallet-funding';
+import { orgInvoiceFundingInput, orgInvoicePaidCents, orgSubscriptionFundingBasis, type OrgInvoice } from '@pagespace/lib/billing/wallet-funding';
 
 export interface OrgBinding { orgId: string; customerId: string; subscriptionId: string }
 export interface FundingProof extends OrgBinding { invoiceId: string; basis: 'paid' | 'gift'; paidCents: number }
@@ -29,12 +28,7 @@ export function planFundingProof(org: OrgBinding, invoice: PaidInvoice, prices: 
     throw new Error('Invoice does not belong to the current organization subscription');
   }
   if (!prices.basePriceId || !prices.seatPriceId || prices.basePriceId === prices.seatPriceId) throw new Error('Organization price configuration is incomplete or ambiguous');
-  const selected = selectOrgPoolRefillLines(invoice.lines.data ?? [], prices);
-  const input = {
-    lines: selected.refillLines, hasVerifiedGiftPrice: selected.hasVerifiedGiftPrice,
-    amountPaidCents: invoice.amount_paid, hasSubscriptionParent: true,
-    gifted: invoice.parent?.subscription_details?.metadata?.type === 'gift_subscription', onOrgSubscription: true,
-  };
+  const { input } = orgInvoiceFundingInput(invoice, { prices, storedSubscriptionId: org.subscriptionId });
   const basis = orgSubscriptionFundingBasis(input);
   if (!basis) throw new Error('Invoice has no verified organization funding');
   return { ...org, invoiceId: invoice.id, basis, paidCents: orgInvoicePaidCents(input) };

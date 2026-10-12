@@ -109,7 +109,7 @@ describe('seat admission and the policy layer together (real Postgres)', () => {
     await db.insert(wallets).values({ ownerType: 'org', orgId: org.id, subjectType: 'drive', subjectId: drive.id, parentWalletId: poolWallet.id, monthlyAllowanceCents: 1_000 });
 
     const stripe = new SlowStripe();
-    const invite = createOrRotateInvitation({
+    const invite = createOrRotateInvitation({ credential: 'session',
       orgId: org.id, email: `new-${createId()}@northwind.test`, role: 'MEMBER', invitedBy: owner.id, now: new Date(), deliver: async () => {}, seatBilling: stripe,
     });
     // Let the invite reach Stripe: it now holds the org billing lock for SLOW_STRIPE_MS.
@@ -125,7 +125,7 @@ describe('seat admission and the policy layer together (real Postgres)', () => {
     const afterGate = heldFor();
 
     // A policy change: organizations row lock and suspensions, committed while the billing lock is still held.
-    const changed = await updateOrgPolicies({ orgId: org.id, actorId: owner.id, patch: { seatAllowanceCents: 50, guests: 'off' } });
+    const changed = await updateOrgPolicies({ orgId: org.id, actorId: owner.id, actorAuthentication: null, patch: { seatAllowanceCents: 50, guests: 'off' } });
     expect(changed.ok).toBe(true);
     const afterPolicy = heldFor();
 

@@ -19,9 +19,22 @@
  *          but the database never recorded is adopted even after the key window.
  *   - The customer id commits on its own before the subscription is attempted, so a
  *     subscription failure never loses the customer.
- *   - A stored subscription is re-read from Stripe before it is reported, so one Stripe
- *     ended (an unpaid first invoice expired, a cancel) is seen as ended even before the
- *     webhook mirror (D3) updates the row, and the org can subscribe again.
+ *   - ZERO TRUST: every call re-reads the org's subscriptions from Stripe (and the latest
+ *     invoice of any that may owe a payment or is active without verified funding) and the
+ *     org's funding proofs before deciding; the stored row is never the
+ *     basis of a write. One Stripe ended (an unpaid first invoice expired, a cancel) is seen
+ *     as ended even before the webhook mirror (D3) updates the row, and the org can
+ *     subscribe again.
+ *   - REACTIVATION ([D-OW-44], SEAT-9): the pure {@link planOrgReactivation} decides from
+ *     those facts, and the shell performs at most the ONE write its plan names — creating
+ *     the paid subscription for `new_checkout`. A payment owed on a payable invoice hands
+ *     back its secret with no write. An active subscription is only active once its funding is
+ *     verified (org_subscription_funding); one whose payment is in but not yet recorded is
+ *     `funding_pending` with no write, and one nothing funded is refused ([D-OW-30]).
+ *     Anything changed outside PageSpace (a trial, a pause,
+ *     send_invoice collection, an unpayable invoice, other prices, a second subscription)
+ *     is refused as `billing_requires_support`, never mutated in place and never reported
+ *     as success.
  *   - PAYING ([D-OW-30], review 3+4 P1-1): there is no org trial. A new subscription —
  *     at creation, or a re-subscribe after a lapse — starts `incomplete` with its first
  *     invoice open, and {@link provisionOrgSubscription} hands the client that invoice's
@@ -47,12 +60,14 @@ import { planOrgSubscriptionPriceMirror } from '@pagespace/lib/billing/org-webho
 import { db } from '@pagespace/db/db';
 import { eq, and, isNull, sql } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
-import { organizations, orgSubscriptions, type OrgSubscription } from '@pagespace/db/schema/organizations';
+import { organizations, orgSubscriptionFunding, orgSubscriptions, type OrgSubscription } from '@pagespace/db/schema/organizations';
 import { countOrgSeats } from '@pagespace/lib/organizations/repository';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { isBillingEnabled } from '@pagespace/lib/deployment-mode';
+import { GIFT_SUBSCRIPTION_METADATA_TYPE } from '@pagespace/lib/billing/wallet-funding';
 import { stripe as appStripe } from '@/lib/stripe';
 import { stripeConfig } from '@/lib/stripe-config';
+import { completeInvoiceLinesWith } from '@/lib/stripe/invoice-lines';
 import {
   ORG_ID_METADATA_KEY,
   isLiveOrgSubscriptionStatus,
@@ -61,29 +76,31 @@ import {
   orgCustomerCreateKey,
   orgCustomerCreateParams,
   orgCustomerDetails,
-  orgExtraSeatQuantity,
   orgStripeIdempotencyKey,
   orgSubscriptionCreateKey,
-  orgSubscriptionHistory,
+  orgReactivationReadsInvoice,
   orgSubscriptionItems,
-  orgPaymentStep,
-  orgSubscriptionMayOwePayment,
-  pickAdoptableOrgSubscription,
+  planOrgReactivation,
   planSeatQuantitySync,
+  type OrgActivation,
   type OrgBusinessPrices,
   type OrgBusinessSubscriptionParams,
   type OrgCustomerCreateParams,
   type OrgCustomerDetails,
   type OrgLatestInvoice,
   type OrgPaymentStep,
+  type OrgReactivationSupportReason,
   type OrgSubscriptionCandidate,
+  type OrgSubscriptionFacts,
+  type OrgSubscriptionItemLinkage,
 } from '@pagespace/lib/billing/org-subscription-core';
 import { recordOrgAuditEventAfterCommit } from '@pagespace/lib/audit/org-audit';
 
 /** A Stripe subscription as the shell reads it. Unix seconds throughout. */
 export interface OrgStripeSubscription extends OrgSubscriptionCandidate {
   customerId: string;
-  trialEnd: number | null;
+  /** Stripe collection_method: charge_automatically | send_invoice. */
+  collectionMethod: string;
   currentPeriodStart: number | null;
   currentPeriodEnd: number | null;
   cancelAtPeriodEnd: boolean;
@@ -114,17 +131,12 @@ export interface OrgBillingStripe {
   createSubscription(params: OrgBusinessSubscriptionParams, idempotencyKey: string): Promise<OrgStripeSubscription>;
   retrieveSubscription(subscriptionId: string): Promise<OrgStripeSubscription>;
   listCustomerSubscriptions(customerId: string): Promise<OrgStripeSubscription[]>;
-  createSubscriptionItem(
-    params: { subscriptionId: string; priceId: string; quantity: number },
-    idempotencyKey: string,
-  ): Promise<{ id: string; quantity: number }>;
   updateSubscriptionItemQuantity(
     params: { itemId: string; quantity: number; prorationBehavior: SeatProrationBehavior },
     idempotencyKey: string,
   ): Promise<{ id: string; quantity: number }>;
   /** Cancel now; a subscription that is already over is left as it is. */
   cancelSubscription(subscriptionId: string, idempotencyKey: string): Promise<{ status: string }>;
-  recoverSubscription(subscriptionId: string, prices: OrgBusinessPrices, idempotencyKey: string): Promise<OrgStripeSubscription>;
   /** The subscription's latest invoice with its confirmation secret, or null when it has none. */
   latestInvoice(subscriptionId: string): Promise<OrgLatestInvoice | null>;
   /** A Stripe billing-portal session on `customerId` (the org's). */
@@ -138,14 +150,17 @@ export interface OrgBillingDeps {
   prices: () => OrgBusinessPrices;
   /** SEAT-3's count: accepted members plus live pending invites. */
   countSeats: (orgId: string) => Promise<number>;
+  /** The clock the funding-pending window is read against; the real one when absent. */
+  now?: () => Date;
 }
 
 export type OrgBillingErrorCode =
   | 'org_not_found'
   | 'prices_not_configured'
-  | 'not_an_org_business_subscription'
   /** Stripe answered a create with a subscription that is already over; never stored as live. */
   | 'subscription_not_live'
+  /** [D-OW-44] the subscription was changed outside PageSpace; support repairs it, never an in-place mutation. */
+  | 'billing_requires_support'
   /** The org has no Stripe customer yet: nothing to open a portal on. */
   | 'no_billing_customer';
 
@@ -168,7 +183,6 @@ export interface OrgSubscriptionLinkage {
   stripeSeatItemId: string;
   extraSeatQuantity: number;
   status: string;
-  trialEnd: Date | null;
   currentPeriodEnd: Date | null;
 }
 
@@ -177,6 +191,9 @@ export type EnsureOrgSubscriptionResult = {
   kind: 'created' | 'adopted' | 'existing';
   linkage: OrgSubscriptionLinkage;
 };
+
+/** A Stripe subscription with the facts the reactivation decision reads. */
+type OrgStripeSubscriptionFacts = OrgStripeSubscription & OrgSubscriptionFacts;
 
 export type SeatSyncResult = { kind: 'updated' | 'noop'; quantity: number } | { kind: 'no_subscription' };
 
@@ -207,7 +224,6 @@ function toLinkage(row: OrgSubscription, stripeCustomerId: string): OrgSubscript
     stripeSeatItemId: row.stripeSeatItemId,
     extraSeatQuantity: row.extraSeatQuantity,
     status: row.status,
-    trialEnd: row.trialEnd,
     currentPeriodEnd: row.currentPeriodEnd,
   };
 }
@@ -258,19 +274,18 @@ async function storeSubscription(
   orgId: string,
   sub: OrgStripeSubscription,
   prices: OrgBusinessPrices,
-  seatItem: { id: string; quantity: number },
-  baseItemId: string,
+  items: OrgSubscriptionItemLinkage,
 ): Promise<OrgSubscription> {
   const values = {
     stripeSubscriptionId: sub.id,
     stripeBasePriceId: prices.basePriceId,
-    stripeBaseItemId: baseItemId,
+    stripeBaseItemId: items.baseItemId,
     stripeSeatPriceId: prices.seatPriceId,
-    stripeSeatItemId: seatItem.id,
-    extraSeatQuantity: seatItem.quantity,
+    stripeSeatItemId: items.seatItem.id,
+    extraSeatQuantity: items.seatItem.quantity,
     status: sub.status,
-    gifted: sub.metadata?.type === 'gift_subscription',
-    trialEnd: fromUnix(sub.trialEnd),
+    gifted: sub.metadata?.type === GIFT_SUBSCRIPTION_METADATA_TYPE,
+    collectionMethod: sub.collectionMethod,
     currentPeriodStart: fromUnix(sub.currentPeriodStart),
     currentPeriodEnd: fromUnix(sub.currentPeriodEnd),
     cancelAtPeriodEnd: sub.cancelAtPeriodEnd,
@@ -290,8 +305,8 @@ async function refreshStored(tx: Tx, stored: OrgSubscription, sub: OrgStripeSubs
     .update(orgSubscriptions)
     .set({
       ...planOrgSubscriptionPriceMirror({ stored, subscription: sub, prices }),
-      gifted: sub.metadata?.type === 'gift_subscription',
-      trialEnd: fromUnix(sub.trialEnd),
+      gifted: sub.metadata?.type === GIFT_SUBSCRIPTION_METADATA_TYPE,
+      collectionMethod: sub.collectionMethod,
       currentPeriodStart: fromUnix(sub.currentPeriodStart),
       currentPeriodEnd: fromUnix(sub.currentPeriodEnd),
       cancelAtPeriodEnd: sub.cancelAtPeriodEnd,
@@ -301,94 +316,143 @@ async function refreshStored(tx: Tx, stored: OrgSubscription, sub: OrgStripeSubs
   return row;
 }
 
+/** The org's subscriptions with a verified funding proof, read under the billing lock. */
+async function fundedSubscriptionIds(tx: Tx, orgId: string): Promise<ReadonlySet<string>> {
+  const rows = await tx
+    .select({ stripeSubscriptionId: orgSubscriptionFunding.stripeSubscriptionId })
+    .from(orgSubscriptionFunding)
+    .where(eq(orgSubscriptionFunding.orgId, orgId));
+  return new Set(rows.map((row) => row.stripeSubscriptionId));
+}
+
 /**
- * SEAT-1, SEAT-8, A-8: the org's Business subscription — the base price plus the
- * extra-seat item at max(0, seats − 5), with no trial ([D-OW-30]): a new subscription
- * starts `incomplete`, waiting for its first payment. Idempotent: an org that
- * already has a live subscription gets it back with no Stripe write (one status read);
- * one Stripe has but the database lost is adopted; one that ended is followed by a new
- * subscription whose create key names the ended one.
+ * Stripe's facts for the reactivation decision, each subscription whose decision needs its
+ * invoice ({@link orgReactivationReadsInvoice}: it may owe a payment, or it is active without
+ * verified funding) carrying its latest invoice.
  */
-export async function ensureOrgBusinessSubscription(
+async function readSubscriptionFacts(
+  stripe: OrgBillingStripe,
+  subscriptions: ReadonlyArray<OrgStripeSubscription>,
+  funded: ReadonlySet<string>,
+): Promise<OrgStripeSubscriptionFacts[]> {
+  return Promise.all(
+    subscriptions.map(async (sub) => ({
+      ...sub,
+      latestInvoice: orgReactivationReadsInvoice(sub, funded) ? await stripe.latestInvoice(sub.id) : null,
+    })),
+  );
+}
+
+/**
+ * Zero trust on metadata: EVERY subscription on the org's own customer (it holds only org
+ * subscriptions), plus the stored one if Stripe's listing lacks it, so neither a removed
+ * stamp nor a subscription made by hand can hide a live subscription from the decision.
+ */
+async function listOrgSubscriptions(
+  stripe: OrgBillingStripe,
+  customerId: string,
+  storedSubscriptionId: string | null,
+): Promise<OrgStripeSubscription[]> {
+  const listed = await stripe.listCustomerSubscriptions(customerId);
+  if (storedSubscriptionId === null || listed.some((sub) => sub.id === storedSubscriptionId)) return listed;
+  return [...listed, await stripe.retrieveSubscription(storedSubscriptionId)];
+}
+
+export interface OrgProvisioning {
+  result: EnsureOrgSubscriptionResult;
+  payment: OrgPaymentStep;
+  activation: OrgActivation;
+}
+
+type ProvisionOutcome =
+  | ({ kind: 'linked' } & OrgProvisioning)
+  | { kind: 'requires_support'; reason: OrgReactivationSupportReason };
+
+/**
+ * SEAT-1, SEAT-8, SEAT-9, A-8, [D-OW-44]: make sure the org has its Business subscription
+ * and say what the client must do to pay for it. The one entry point org creation and the
+ * (re-)subscribe route use. Under the org's billing lock it reads Stripe's facts, mirrors
+ * the stored row from them, and follows {@link planOrgReactivation}:
+ *   - already_active → no write, no payment step (active, funding verified);
+ *   - funding_pending → no Stripe write, no payment step: active and paid in Stripe, the
+ *     invoice.paid webhook records the funding proof ([D-OW-30]);
+ *   - confirm_payment → no Stripe write; the open invoice's client secret (a new org, a
+ *     lost-row create, a past_due or unpaid org);
+ *   - new_checkout → the ONE write: a new subscription (base + seat item at max(0, seats − 5),
+ *     no trial, [D-OW-30]) keyed on the generation it follows; Stripe's answer is decided
+ *     again with the same rules, so a create is never reported as success on its own;
+ *   - requires_support → the mirror refresh commits, then `billing_requires_support` throws
+ *     (including an active subscription nothing ever funded: `unfunded_active`).
+ * Idempotent: a replay finds the same subscription and the same invoice.
+ */
+export async function provisionOrgSubscription(
   orgId: string,
   deps: OrgBillingDeps = defaultOrgBillingDeps(),
-): Promise<EnsureOrgSubscriptionResult> {
+): Promise<OrgProvisioning> {
   const prices = configuredPrices(deps);
   const { customerId } = await ensureOrgStripeCustomer(orgId, deps);
 
-  const result = await db.transaction(async (tx) => {
+  const outcome = await db.transaction(async (tx): Promise<ProvisionOutcome> => {
     await lockOrgBilling(tx, orgId);
     // The org may have been deleted while this call waited for the lock: never create a
     // Stripe subscription for an org that is gone (the delete holds the same lock).
     const [org] = await tx.select({ id: organizations.id }).from(organizations).where(eq(organizations.id, orgId)).limit(1);
     if (!org) throw new OrgBillingError('org_not_found', `Organization ${orgId} not found`);
 
-    let [stored] = await tx.select().from(orgSubscriptions).where(eq(orgSubscriptions.orgId, orgId)).limit(1);
-    if (stored && isLiveOrgSubscriptionStatus(stored.status)) {
-      stored = await refreshStored(tx, stored, await deps.stripe.retrieveSubscription(stored.stripeSubscriptionId), prices);
-      if (isLiveOrgSubscriptionStatus(stored.status) && stored.status !== 'trialing' && stored.status !== 'paused') return { kind: 'existing' as const, linkage: toLinkage(stored, customerId) };
-    }
+    const [stored] = await tx.select().from(orgSubscriptions).where(eq(orgSubscriptions.orgId, orgId)).limit(1);
+    const funded = await fundedSubscriptionIds(tx, orgId);
+    const storedSubscriptionId = stored?.stripeSubscriptionId ?? null;
+    const subscriptions = await readSubscriptionFacts(deps.stripe, await listOrgSubscriptions(deps.stripe, customerId, storedSubscriptionId), funded);
+    const storedNow = subscriptions.find((sub) => sub.id === storedSubscriptionId);
+    const refreshed = stored && storedNow ? await refreshStored(tx, stored, storedNow, prices) : stored;
 
-    const history = await deps.stripe.listCustomerSubscriptions(customerId);
-    // Select once before any recovery write: a stale second subscription must
-    // never generate a second invoice or obstruct an already-active candidate.
-    let existing = pickAdoptableOrgSubscription(history, { orgId, prices });
-    if (existing && existing.status !== 'active' && history.some(candidate =>
-      candidate.id !== existing?.id && candidate.metadata?.[ORG_ID_METADATA_KEY] === orgId &&
-      isLiveOrgSubscriptionStatus(candidate.status) && candidate.status !== 'trialing' && candidate.status !== 'paused')) {
-      throw new OrgBillingError('not_an_org_business_subscription', 'Organization has another billable subscription; repair its prices before recovery');
-    }
-    if (existing && (existing.status === 'trialing' || existing.status === 'paused')) {
-      existing = await deps.stripe.recoverSubscription(
-        existing.id, prices,
-        orgStripeIdempotencyKey(orgId, 'subscription.recover', { subscriptionId: existing.id }),
-      );
-      if (existing.status === 'trialing' || !isLiveOrgSubscriptionStatus(existing.status)) {
-        throw new OrgBillingError('subscription_not_live', 'Subscription changed during recovery; retry paid checkout');
-      }
-    }
-    let sub: OrgStripeSubscription;
-    let kind: 'created' | 'adopted';
-    if (existing) {
-      sub = existing;
-      kind = 'adopted';
-    } else {
-      if (history.some(candidate => isLiveOrgSubscriptionStatus(candidate.status) && candidate.metadata?.[ORG_ID_METADATA_KEY] === orgId)) {
-        throw new OrgBillingError('not_an_org_business_subscription', 'Organization has an unverified live subscription; repair its prices before provisioning');
-      }
-      const seats = await deps.countSeats(orgId);
-      const seen = orgSubscriptionHistory(history, { orgId });
-      const params = orgBusinessSubscriptionParams({ orgId, customerId, seats, prices });
-      // The generation this subscription follows: Stripe's newest for the org (it also
-      // sees a lost create that has since ended), else the stored one, else none.
-      const previous = seen.previousSubscriptionId ?? stored?.stripeSubscriptionId ?? null;
-      sub = await deps.stripe.createSubscription(params, orgSubscriptionCreateKey(orgId, params, previous));
-      if (!isLiveOrgSubscriptionStatus(sub.status)) {
+    const nowSeconds = Math.floor((deps.now?.() ?? new Date()).getTime() / 1000);
+    let plan = planOrgReactivation({ orgId, prices, storedSubscriptionId, subscriptions, fundedSubscriptionIds: funded, nowSeconds });
+    let created = false;
+    if (plan.kind === 'new_checkout') {
+      const params = orgBusinessSubscriptionParams({ orgId, customerId, seats: await deps.countSeats(orgId), prices });
+      const sub = await deps.stripe.createSubscription(params, orgSubscriptionCreateKey(orgId, params, plan.previousSubscriptionId));
+      const [createdFacts] = await readSubscriptionFacts(deps.stripe, [sub], funded);
+      plan = planOrgReactivation({
+        orgId,
+        prices,
+        storedSubscriptionId: sub.id,
+        subscriptions: [...subscriptions.filter((other) => other.id !== sub.id), createdFacts],
+        fundedSubscriptionIds: funded,
+        nowSeconds,
+      });
+      if (plan.kind === 'new_checkout') {
         throw new OrgBillingError('subscription_not_live', `Stripe returned subscription ${sub.id} already ${sub.status}`);
       }
-      kind = 'created';
+      if (plan.kind === 'requires_support') {
+        // A subscription PageSpace just created (e.g. active at $0 through a customer credit or
+        // coupon: `unfunded_active`) is still a live Stripe subscription: the mirror points at it
+        // so the webhook keeps it in view and support can find it, and the refusal still stands.
+        const items = orgSubscriptionItems(sub, prices);
+        if (items) await storeSubscription(tx, orgId, sub, prices, items);
+        loggers.api.error('org subscription created during reactivation needs support', undefined, {
+          orgId, subscriptionId: sub.id, status: sub.status, reason: plan.reason, stored: items !== null,
+        });
+        return { kind: 'requires_support', reason: plan.reason };
+      }
+      created = true;
     }
+    if (plan.kind === 'requires_support') return { kind: 'requires_support', reason: plan.reason };
 
-    const items = orgSubscriptionItems(sub, prices);
-    if (!items) {
-      throw new OrgBillingError('not_an_org_business_subscription', `Subscription ${sub.id} has no Business base item`);
-    }
-    // An adopted subscription made outside this path may lack the seat item: add it at
-    // the org's current extra-seat quantity, never 0 (that would under-bill until the next
-    // membership change).
-    let seatItem = items.seatItem;
-    if (!seatItem) {
-      const quantity = orgExtraSeatQuantity(await deps.countSeats(orgId));
-      seatItem = await deps.stripe.createSubscriptionItem(
-        { subscriptionId: sub.id, priceId: prices.seatPriceId, quantity },
-        orgStripeIdempotencyKey(orgId, 'seat-item.create', { subscriptionId: sub.id, priceId: prices.seatPriceId, quantity }),
-      );
-    }
-
-    const row = await storeSubscription(tx, orgId, sub, prices, seatItem, items.baseItemId);
-    loggers.api.info('org business subscription linked', { orgId, subscriptionId: sub.id, kind, status: sub.status });
-    return { kind, linkage: toLinkage(row, customerId) };
+    const kind = created ? 'created' : plan.adopted ? 'adopted' : 'existing';
+    const row = kind === 'existing' && refreshed ? refreshed : await storeSubscription(tx, orgId, plan.subscription, prices, plan.items);
+    const payment: OrgPaymentStep = plan.kind === 'confirm_payment' ? { kind: 'confirm_payment', clientSecret: plan.clientSecret } : { kind: 'none' };
+    const activation: OrgActivation =
+      plan.kind === 'confirm_payment' ? 'payment_required' : plan.kind === 'funding_pending' ? 'funding_pending' : 'active';
+    loggers.api.info('org business subscription linked', { orgId, subscriptionId: plan.subscription.id, kind, status: plan.subscription.status, payment: payment.kind, activation });
+    return { kind: 'linked', result: { kind, linkage: toLinkage(row, customerId) }, payment, activation };
   });
+
+  if (outcome.kind === 'requires_support') {
+    loggers.api.warn('org subscription was changed outside PageSpace; reactivation needs support', { orgId, reason: outcome.reason });
+    throw new OrgBillingError('billing_requires_support', `Organization ${orgId} billing needs support: ${outcome.reason}`);
+  }
+  const { result, payment, activation } = outcome;
   if (result.kind !== 'existing') {
     // AUD-1: the org's subscription began (at creation, or a re-subscribe after one ended).
     await recordOrgAuditEventAfterCommit({
@@ -399,7 +463,7 @@ export async function ensureOrgBusinessSubscription(
       details: { source: 'provisioning', kind: result.kind, to: result.linkage.status },
     });
   }
-  return result;
+  return { result, payment, activation };
 }
 
 /**
@@ -460,36 +524,6 @@ export function endOrgSubscriptionPort(
   };
 }
 
-/**
- * What paying for the org's subscription needs right now (review 3+4 P1-1): the latest
- * invoice's confirmation secret when the subscription owes its first or a failed payment,
- * else nothing. Read from Stripe only when the status can owe anything.
- */
-export async function orgPaymentStepFor(
-  linkage: Pick<OrgSubscriptionLinkage, 'stripeSubscriptionId' | 'status'>,
-  deps: OrgBillingDeps = defaultOrgBillingDeps(),
-): Promise<OrgPaymentStep> {
-  if (!orgSubscriptionMayOwePayment(linkage.status)) return { kind: 'none' };
-  const latestInvoice = await deps.stripe.latestInvoice(linkage.stripeSubscriptionId);
-  const payment = orgPaymentStep({ subscriptionStatus: linkage.status, latestInvoice });
-  if (linkage.status === 'paused' && payment.kind === 'none') throw new OrgBillingError('subscription_not_live', 'Subscription recovery is awaiting a payable invoice; retry');
-  return payment;
-}
-
-/**
- * SEAT-8, SEAT-9 recovery: make sure the org has its Business subscription and say what
- * the client must do to pay for it. The one entry point org creation and the
- * (re-)subscribe route use: a new org, a lapsed org re-subscribing, and an org whose card
- * failed all get the open invoice's client secret; an org that owes nothing gets none.
- */
-export async function provisionOrgSubscription(
-  orgId: string,
-  deps: OrgBillingDeps = defaultOrgBillingDeps(),
-): Promise<{ result: EnsureOrgSubscriptionResult; payment: OrgPaymentStep }> {
-  const result = await ensureOrgBusinessSubscription(orgId, deps);
-  return { result, payment: await orgPaymentStepFor(result.linkage, deps) };
-}
-
 /** The org's own Stripe customer as stored, or null. Never a member's customer. */
 async function storedOrgCustomerId(orgId: string): Promise<string | null> {
   const [org] = await db
@@ -539,11 +573,11 @@ function toOrgStripeSubscription(sub: Stripe.Subscription): OrgStripeSubscriptio
     id: sub.id,
     customerId: typeof sub.customer === 'string' ? sub.customer : sub.customer.id,
     status: sub.status,
+    collectionMethod: sub.collection_method,
     created: sub.created,
     metadata: sub.metadata ?? null,
     itemsHasMore: sub.items.has_more,
     items: items.map((i) => ({ id: i.id, priceId: i.price.id, quantity: i.quantity ?? 0 })),
-    trialEnd: sub.trial_end ?? null,
     currentPeriodStart: periodItem?.current_period_start ?? null,
     currentPeriodEnd: periodItem?.current_period_end ?? null,
     cancelAtPeriodEnd: sub.cancel_at_period_end,
@@ -595,49 +629,11 @@ export function stripeOrgBilling(client: Stripe): OrgBillingStripe {
       }
       return subs;
     },
-    async createSubscriptionItem(params, idempotencyKey) {
-      const item = await client.subscriptionItems.create(
-        { subscription: params.subscriptionId, price: params.priceId, quantity: params.quantity, proration_behavior: 'none' },
-        { idempotencyKey },
-      );
-      return { id: item.id, quantity: item.quantity ?? 0 };
-    },
     async cancelSubscription(subscriptionId, idempotencyKey) {
       const current = await client.subscriptions.retrieve(subscriptionId);
       if (!isLiveOrgSubscriptionStatus(current.status)) return { status: current.status };
       const canceled = await client.subscriptions.cancel(subscriptionId, {}, { idempotencyKey });
       return { status: canceled.status };
-    },
-    async recoverSubscription(subscriptionId, prices, idempotencyKey) {
-      const current = await client.subscriptions.retrieve(subscriptionId, { expand: ['latest_invoice'] });
-      const subscription = toOrgStripeSubscription(current);
-      if (current.status !== 'trialing' && current.status !== 'paused') return subscription;
-      if (!orgSubscriptionItems(subscription, prices)) {
-        throw new OrgBillingError('not_an_org_business_subscription', 'Organization subscription prices changed during recovery');
-      }
-      if (current.collection_method !== 'charge_automatically') {
-        throw new OrgBillingError('not_an_org_business_subscription', 'Organization recovery requires automatic collection');
-      }
-      try {
-        if (current.status === 'trialing') {
-          return toOrgStripeSubscription(await client.subscriptions.update(subscriptionId, {
-            trial_end: 'now', payment_behavior: 'default_incomplete', proration_behavior: 'none',
-            trial_settings: { end_behavior: { missing_payment_method: 'create_invoice' } },
-          }, { idempotencyKey: `${idempotencyKey}:end-trial` }));
-        }
-        const invoice = typeof current.latest_invoice === 'object' ? current.latest_invoice : null;
-        // A lost resume response or retry must reuse its open resumption invoice.
-        if (invoice?.status === 'open' && invoice.amount_due > 0) return subscription;
-        const invoiceId = typeof current.latest_invoice === 'string' ? current.latest_invoice : invoice?.id ?? 'none';
-        return toOrgStripeSubscription(await client.subscriptions.resume(subscriptionId, {
-          billing_cycle_anchor: 'now', proration_behavior: 'none',
-        }, { idempotencyKey: `${idempotencyKey}:resume:${invoiceId}` }));
-      } catch (error) {
-        // A concurrent successful payment can make resume invalid. Preserve it.
-        const fresh = await client.subscriptions.retrieve(subscriptionId);
-        if (fresh.status === 'active') return toOrgStripeSubscription(fresh);
-        throw error;
-      }
     },
     async updateCustomer(customerId, details, idempotencyKey) {
       await client.customers.update(customerId, details, { idempotencyKey });
@@ -655,12 +651,16 @@ export function stripeOrgBilling(client: Stripe): OrgBillingStripe {
     },
     async latestInvoice(subscriptionId) {
       const sub = await client.subscriptions.retrieve(subscriptionId, { expand: ['latest_invoice.confirmation_secret'] });
-      const invoice = sub.latest_invoice;
-      if (!invoice || typeof invoice === 'string') return null;
+      const latest = sub.latest_invoice;
+      if (!latest || typeof latest === 'string') return null;
+      // Funding evidence is read off EVERY line, exactly as invoice.paid reads it.
+      const invoice = await completeInvoiceLinesWith(client, latest);
       return {
         status: invoice.status ?? null,
         amountDueCents: invoice.amount_due,
         clientSecret: invoice.confirmation_secret?.client_secret ?? null,
+        paidAtSeconds: invoice.status_transitions?.paid_at ?? null,
+        invoice,
       };
     },
     async createBillingPortalSession(customerId, returnUrl) {
@@ -691,7 +691,6 @@ export function defaultOrgBillingDeps(): OrgBillingDeps {
 /** What a route may show about the org's subscription: never a Stripe id. */
 export interface OrgSubscriptionSummary {
   status: string;
-  trialEnd: string | null;
   currentPeriodEnd: string | null;
   extraSeatQuantity: number;
 }
@@ -699,7 +698,6 @@ export interface OrgSubscriptionSummary {
 export function orgSubscriptionSummary(linkage: OrgSubscriptionLinkage): OrgSubscriptionSummary {
   return {
     status: linkage.status,
-    trialEnd: linkage.trialEnd?.toISOString() ?? null,
     currentPeriodEnd: linkage.currentPeriodEnd?.toISOString() ?? null,
     extraSeatQuantity: linkage.extraSeatQuantity,
   };
@@ -711,10 +709,11 @@ export function orgSubscriptionSummary(linkage: OrgSubscriptionLinkage): OrgSubs
  *   - `not_billed` where billing is off (onprem, tenant) — no Stripe call is made;
  *   - `payment_required` with the subscription awaiting its first payment and the client
  *     secret the client confirms a card with (the usual answer);
- *   - `subscribed` when nothing is owed (a subscription already paid for);
- *   - `pending` when Stripe could not be reached: the org exists without a
- *     subscription, nothing half-written, and POST /api/orgs/[orgId]/billing/subscription
- *     provisions it on retry. Either way the org spends nothing until it has paid.
+ *   - `subscribed` when nothing is owed and the funding is verified;
+ *   - `pending` when Stripe could not be reached (the org exists without a subscription,
+ *     nothing half-written), or the payment is in but its funding proof is not recorded yet:
+ *     POST /api/orgs/[orgId]/billing/subscription provisions it, or reports it activating, on
+ *     retry. Either way the org spends nothing until it has paid.
  */
 export type OrgBillingStart =
   | { state: 'not_billed' }
@@ -728,9 +727,10 @@ export async function startOrgBusinessSubscription(
 ): Promise<OrgBillingStart> {
   if (!isBillingEnabled()) return { state: 'not_billed' };
   try {
-    const { result, payment } = await provisionOrgSubscription(orgId, deps);
+    const { result, payment, activation } = await provisionOrgSubscription(orgId, deps);
     const subscription = orgSubscriptionSummary(result.linkage);
-    return payment.kind === 'confirm_payment' ? { state: 'payment_required', subscription, payment } : { state: 'subscribed', subscription };
+    if (payment.kind === 'confirm_payment') return { state: 'payment_required', subscription, payment };
+    return activation === 'active' ? { state: 'subscribed', subscription } : { state: 'pending' };
   } catch (error) {
     loggers.api.error('org business subscription could not start; the org is left unsubscribed and retryable', error as Error, { orgId });
     return { state: 'pending' };

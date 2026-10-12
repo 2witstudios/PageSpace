@@ -6,6 +6,7 @@ import { topUpDriveWallet } from '@pagespace/lib/services/drive-wallet-service';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { safeParseBody } from '@/lib/validation/parse-body';
 import { WALLET_WRITE_AUTH, walletCredentialOf, walletErrorResponse } from '@/lib/wallets/wallet-route';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 /**
  * POST /api/drives/[driveId]/wallet/top-up — Top up a drive's wallet from its funder (Spec WAL-3): the org pool for an org drive (org admins only), the lead's own wallet for a personal drive. A refundable owner funding leg; one per idempotency key (a replay moves nothing). 402 when the funder cannot cover it.
@@ -28,7 +29,7 @@ export async function POST(request: Request, context: RouteContext) {
   const parsed = await safeParseBody(request, schema);
   if (!parsed.success) return parsed.response;
   try {
-    const result = await topUpDriveWallet(auth.userId, driveId, parsed.data, walletCredentialOf(auth));
+    const result = await topUpDriveWallet(actorFromAuth(auth), driveId, parsed.data, walletCredentialOf(auth));
     if (!result.ok) return walletErrorResponse(result);
     auditRequest(request, {
       eventType: 'data.write',

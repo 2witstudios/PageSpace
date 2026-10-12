@@ -61,7 +61,7 @@ describe('POST /app/actions — resuming a parked app un-parks it', () => {
   it('WAL-2 (partial) a drive member who may un-park (the creator) gets it un-parked as THEMSELVES and then woken through the gate', async () => {
     const response = await POST(post('resume'), params);
     expect(response.status).toBe(200);
-    expect(unparkPublishedApp).toHaveBeenCalledWith({ publishedAppId: APP_ID, actorId: USER_ID });
+    expect(unparkPublishedApp).toHaveBeenCalledWith({ publishedAppId: APP_ID, actor: expect.objectContaining({ userId: USER_ID }) });
     expect(vi.mocked(wakePublishedApp).mock.invocationCallOrder[0]).toBeGreaterThan(vi.mocked(unparkPublishedApp).mock.invocationCallOrder[0]);
   });
 

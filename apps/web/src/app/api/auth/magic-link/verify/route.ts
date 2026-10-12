@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { sessionService } from '@pagespace/lib/auth/session-service';
+import { ceremonyAuthentication } from '@pagespace/lib/auth/authentication-evidence';
 import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
 import { SESSION_DURATION_MS } from '@pagespace/lib/auth/constants';
 import { createExchangeCode } from '@pagespace/lib/auth/exchange-codes';
@@ -375,7 +376,7 @@ async function redeemMagicLink({
     // Continue with login anyway - email verification is secondary
   }
 
-  const authentication = { authenticatedAtMs: Date.now(), assurance: 'single_factor' as const };
+  const authentication = ceremonyAuthentication({ method: 'magic_link' }, Date.now());
 
   // Create new session
   const sessionToken = await sessionService.createSession({

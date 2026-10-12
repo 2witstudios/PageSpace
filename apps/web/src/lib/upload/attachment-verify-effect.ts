@@ -2,6 +2,7 @@ import {
   createAttachmentUploadServiceToken,
 } from '@pagespace/lib/services/attachment-upload';
 import type { AttachmentTarget } from '@pagespace/lib/services/attachment-upload-core';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 /**
  * Web→processor seam for synchronous attachment byte-verification. The bytes are
@@ -55,13 +56,13 @@ export function interpretVerifyResponse(status: number, body: ProcessorVerifyBod
  * mapped failure the route can surface.
  */
 export async function verifyAttachmentBytes(args: {
-  userId: string;
+  actor: AccessActor;
   target: AttachmentTarget;
   contentHash: string;
 }): Promise<AttachmentVerifyResult> {
-  const { userId, target, contentHash } = args;
+  const { actor, target, contentHash } = args;
 
-  const { token } = await createAttachmentUploadServiceToken({ userId, target });
+  const { token } = await createAttachmentUploadServiceToken({ actor, target });
 
   const res = await fetch(`${PROCESSOR_URL}/api/verify`, {
     method: 'POST',

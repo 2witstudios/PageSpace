@@ -45,12 +45,19 @@ vi.mock('@pagespace/db/schema/chat', () => ({
   channelReadStatus: { userId: 'userId', channelId: 'channelId' },
 }));
 
-vi.mock('@pagespace/lib/permissions/permissions', () => ({
+vi.mock('@pagespace/lib/permissions/permissions', () => {
+  const canUserViewPage = vi.fn().mockResolvedValue(true);
+  return {
     canUserEditPage: vi.fn(),
-    canUserViewPage: vi.fn().mockResolvedValue(true),
-}));
+    canUserViewPage,
+    // The audience question (who else can see the channel) answered through the same per-user mock.
+    getUsersWhoCanViewPage: vi.fn(async (pageId: string, ids: string[]) =>
+      new Set((await Promise.all(ids.map(async (id) => ((await canUserViewPage(id, pageId)) ? id : null)))).filter((id): id is string => id !== null))),
+  };
+});
 
 vi.mock('../actor-permissions', () => ({
+  toolActor: (ctx: { userId: string; accessActor?: unknown }) => ctx.accessActor ?? { via: 'credential', userId: ctx.userId, authentication: null },
   canActorEditPage: vi.fn(),
   canActorViewPage: vi.fn(),
   canActorDeletePage: vi.fn(),
@@ -120,6 +127,7 @@ import { broadcastInboxEvent } from '@/lib/websocket/socket-utils';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { channelMessageRepository, type ChannelMessageRow } from '@pagespace/lib/services/channel-message-repository';
 import type { ToolExecutionContext } from '../../core/types';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const mockCanActorEditPage = vi.mocked(canActorEditPage);
 const mockGetActorInfo = vi.mocked(getActorInfo);
@@ -207,7 +215,7 @@ describe('channel-tools', () => {
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       await expect(
@@ -237,7 +245,7 @@ describe('channel-tools', () => {
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       const result = await executeToolAs(
@@ -267,7 +275,7 @@ describe('channel-tools', () => {
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       await expect(
@@ -301,7 +309,7 @@ describe('channel-tools', () => {
       const context = {
         toolCallId: '1', messages: [],
         experimental_context: {
-          userId: 'user-123',
+          userId: 'user-123', accessActor: credentialActor('user-123', null),
           chatSource: { type: 'global' },
         } as ToolExecutionContext,
       };
@@ -336,7 +344,7 @@ describe('channel-tools', () => {
       const context = {
         toolCallId: '1', messages: [],
         experimental_context: {
-          userId: 'user-123',
+          userId: 'user-123', accessActor: credentialActor('user-123', null),
           chatSource: {
             type: 'page',
             agentPageId: 'agent-1',
@@ -373,7 +381,7 @@ describe('channel-tools', () => {
       const context = {
         toolCallId: '1', messages: [],
         experimental_context: {
-          userId: 'user-123',
+          userId: 'user-123', accessActor: credentialActor('user-123', null),
           chatSource: { type: 'global' },
         } as ToolExecutionContext,
       };
@@ -409,7 +417,7 @@ describe('channel-tools', () => {
       const context = {
         toolCallId: '1', messages: [],
         experimental_context: {
-          userId: 'user-123',
+          userId: 'user-123', accessActor: credentialActor('user-123', null),
           chatSource: {
             type: 'page',
             agentPageId: 'agent-1',
@@ -439,7 +447,7 @@ describe('channel-tools', () => {
 
       const result = await executeToolAs(
         { channelId: 'ch-1', content: 'Hello' },
-        { toolCallId: '1', messages: [], experimental_context: { userId: 'user-123', chatSource: { type: 'global' } } as ToolExecutionContext },
+        { toolCallId: '1', messages: [], experimental_context: { userId: 'user-123', accessActor: credentialActor('user-123', null), chatSource: { type: 'global' } } as ToolExecutionContext },
       );
 
       expect(result.success).toBe(true);
@@ -471,7 +479,7 @@ describe('channel-tools', () => {
       const context = {
         toolCallId: '1', messages: [],
         experimental_context: {
-          userId: 'user-123',
+          userId: 'user-123', accessActor: credentialActor('user-123', null),
         } as ToolExecutionContext,
       };
 
@@ -488,7 +496,7 @@ describe('channel-tools', () => {
     it('rejects empty message content', async () => {
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       await expect(
@@ -514,7 +522,7 @@ describe('channel-tools', () => {
       const context = {
         toolCallId: '1', messages: [],
         experimental_context: {
-          userId: 'user-123',
+          userId: 'user-123', accessActor: credentialActor('user-123', null),
           chatSource: { type: 'page', agentPageId: 'agent-1', agentTitle: 'ResearchBot' },
         } as ToolExecutionContext,
       };
@@ -550,7 +558,7 @@ describe('channel-tools', () => {
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       await expect(
@@ -588,7 +596,7 @@ describe('channel-tools', () => {
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       await expect(
@@ -604,7 +612,7 @@ describe('channel-tools', () => {
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       const result = await executeDeleteAs(
@@ -622,7 +630,7 @@ describe('channel-tools', () => {
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       await expect(
@@ -639,7 +647,7 @@ describe('channel-tools', () => {
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       const result = await executeDeleteAs(
@@ -673,7 +681,7 @@ describe('channel-tools', () => {
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       const result = await executeDeleteAs(
@@ -691,7 +699,7 @@ describe('channel-tools', () => {
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       const result = await executeDeleteAs(
@@ -708,7 +716,7 @@ describe('channel-tools', () => {
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       const result = await executeDeleteAs(
@@ -745,7 +753,7 @@ describe('channel-tools', () => {
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       const result = await executeDeleteAs(

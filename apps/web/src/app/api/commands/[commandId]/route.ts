@@ -21,6 +21,7 @@ import {
   isUniqueViolation,
   validateEntryPage,
 } from '../command-route-helpers';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 type RouteContext = { params: Promise<{ commandId: string }> };
 
@@ -55,9 +56,9 @@ async function loadCommandForManage(
   const allowed = await isPrincipalDriveOwnerOrAdmin(auth, command.driveId as string);
   if (!allowed) {
     return {
-      error: NextResponse.json(
+      error: await deniedResponse(actorFromAuth(auth), command.driveId, NextResponse.json(
         { error: 'Only the drive owner or admins can manage drive commands' },
-        { status: 403 }
+        { status: 403 })
       ),
     };
   }

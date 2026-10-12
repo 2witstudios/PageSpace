@@ -18,7 +18,7 @@
  * Requires a live `DATABASE_URL` with migrations applied; fails loudly without
  * one (requireDb), following the erasure suite's integration tests.
  */
-import { describe, it, expect, beforeAll, beforeEach, afterEach, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import { createId } from '@paralleldrive/cuid2';
 import { and, eq, inArray } from 'drizzle-orm';
 import { db } from '@pagespace/db/db';
@@ -37,10 +37,12 @@ import {
   walletConsumerCaps,
 } from '@pagespace/db/schema/wallets';
 import { workflows } from '@pagespace/db/schema/workflows';
+import { activityLogs } from '@pagespace/db/schema/monitoring';
 import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
 import { accountRepository } from '../../../repositories/account-repository';
 import { LeaveOrganizationRefusedError } from '../../../organizations/leave';
+import { securityAudit } from '../../../audit/security-audit';
 
 const created = {
   userIds: [] as string[],
@@ -183,8 +185,8 @@ afterAll(async () => {
   await pool.end();
 });
 
-describe('account deletion in an org (X-2 (partial), real PG)', () => {
-  it('X-2 (partial) deletes the member, not the org: org, owner membership and drive survive; the membership and its departure record go; the org keeps only the keyed suppression', async () => {
+describe('X-2 account deletion in an org accounts for membership, wallets and donations (real PG)', () => {
+  it('X-2 deletes the member, not the org: org, owner membership and drive survive; the membership and its departure record go; the org keeps only the keyed suppression', async () => {
     await accountRepository.deleteUser(w.memberId);
 
     const [org] = await db.select().from(organizations).where(eq(organizations.id, w.orgId));
@@ -206,7 +208,7 @@ describe('account deletion in an org (X-2 (partial), real PG)', () => {
     }
   });
 
-  it('X-2 (partial) the donation leg survives the donor: amounts intact for the org\'s audit, donor identity dropped', async () => {
+  it('X-2 the donation leg survives the donor: amounts intact for the org\'s audit, donor identity dropped', async () => {
     await accountRepository.deleteUser(w.memberId);
 
     const [leg] = await db.select().from(walletFundingLegs).where(eq(walletFundingLegs.id, w.donationLegId));
@@ -219,7 +221,7 @@ describe('account deletion in an org (X-2 (partial), real PG)', () => {
     expect(leg.funderUserId).toBeNull();
   });
 
-  it('X-2 (partial) the personal root wallet goes with the account; the org\'s drive wallet and pool are untouched', async () => {
+  it('X-2 the personal root wallet goes with the account; the org\'s drive wallet and pool are untouched', async () => {
     await accountRepository.deleteUser(w.memberId);
 
     // The personal root wallet cascades, exactly as their credit_balances row did.
@@ -241,7 +243,7 @@ describe('account deletion in an org (X-2 (partial), real PG)', () => {
     expect(caps).toEqual([]);
   });
 
-  it('X-2 (partial) [D-OW-36] their org-drive automation is disabled and flagged owner-left, never deleted', async () => {
+  it('X-2 [D-OW-36] their org-drive automation is disabled and flagged owner-left, never deleted', async () => {
     await accountRepository.deleteUser(w.memberId);
 
     const [workflow] = await db.select().from(workflows).where(eq(workflows.id, w.workflowId));
@@ -252,7 +254,47 @@ describe('account deletion in an org (X-2 (partial), real PG)', () => {
     expect(workflow.createdBy).toBeNull();
   });
 
-  it('X-2 (partial) ORG-6: deleting an org Owner is refused and changes nothing', async () => {
+  it('X-2 deleting an org drive\'s lead reassigns the drive to the org Owner with an audit event (D-OW-7)', async () => {
+    // The member leads a second org drive, holding the lead's OWNER self-heal row on it.
+    const led = await factories.createDrive(w.memberId, { orgId: w.orgId, orgVisibility: 'RESTRICTED' });
+    created.driveIds.push(led.id);
+    await db.insert(driveMembers).values({ driveId: led.id, userId: w.memberId, role: 'OWNER', acceptedAt: new Date() });
+    const audit = vi.spyOn(securityAudit, 'logEvent').mockResolvedValue(undefined);
+    let audited: unknown[];
+    try {
+      await accountRepository.deleteUser(w.memberId);
+    } finally {
+      audited = audit.mock.calls.map(([event]) => event);
+      audit.mockRestore();
+    }
+
+    // drives.ownerId cascades: without the reassignment the org drive would have been deleted.
+    const [drive] = await db.select({ ownerId: drives.ownerId, orgId: drives.orgId, orgVisibility: drives.orgVisibility })
+      .from(drives).where(eq(drives.id, led.id));
+    expect(drive).toEqual({ ownerId: w.ownerId, orgId: w.orgId, orgVisibility: 'RESTRICTED' });
+    expect(await db.select().from(driveMembers).where(eq(driveMembers.driveId, led.id))).toEqual([]);
+    // The drive's activity log records the transfer, by the anonymized deleted user, never their address.
+    const transfers = await db.select().from(activityLogs)
+      .where(and(eq(activityLogs.resourceId, led.id), eq(activityLogs.operation, 'ownership_transfer')));
+    expect(transfers).toHaveLength(1);
+    expect(transfers[0]).toMatchObject({
+      userId: null,
+      actorDisplayName: 'Deleted User',
+      previousValues: { ownerId: w.memberId },
+      newValues: { ownerId: w.ownerId },
+      metadata: { orgId: w.orgId, reason: 'account_deleted' },
+    });
+    // The org's own audit trail (AUD-1) records the lead change, with no actor: the account is gone.
+    expect(audited).toContainEqual(expect.objectContaining({
+      eventType: 'org.drive.lead_changed',
+      userId: undefined,
+      resourceType: 'drive',
+      resourceId: led.id,
+      details: { fromUserId: w.memberId, toUserId: w.ownerId, reason: 'account_deleted', orgId: w.orgId, driveId: led.id },
+    }));
+  });
+
+  it('X-2 ORG-6: deleting an org Owner is refused and changes nothing', async () => {
     await expect(accountRepository.deleteUser(w.ownerId)).rejects.toBeInstanceOf(LeaveOrganizationRefusedError);
 
     const [org] = await db.select().from(organizations).where(eq(organizations.id, w.orgId));

@@ -1,6 +1,6 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
+import { getUsersWhoCanViewPage } from '@pagespace/lib/permissions/permissions';
 import { canActorEditPage } from './actor-permissions';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getActorInfo, logMessageActivity } from '@pagespace/lib/monitoring/activity-logger';
@@ -197,14 +197,10 @@ export const channelTools = {
               ? content.substring(0, 100) + '...'
               : content;
 
-            const memberPermissions = await Promise.all(
-              members
-                .filter(m => !treatAsSelfAuthored || m.userId !== userId)
-                .map(async member => ({
-                  userId: member.userId,
-                  canView: await canUserViewPage(member.userId, channelId),
-                }))
-            );
+            // Who else can see the channel is an audience question about third parties, not the caller's access.
+            const candidates = members.filter(m => !treatAsSelfAuthored || m.userId !== userId).map(m => m.userId);
+            const viewers = await getUsersWhoCanViewPage(channelId, candidates);
+            const memberPermissions = candidates.map(memberId => ({ userId: memberId, canView: viewers.has(memberId) }));
 
             const broadcastPromises = memberPermissions
               .filter(m => m.canView)

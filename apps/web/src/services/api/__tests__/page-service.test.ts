@@ -53,6 +53,7 @@ vi.mock('@pagespace/db/schema/auth', () => ({ users: {} }));
 vi.mock('@pagespace/db/schema/core', () => ({ pages: {}, drives: {} }));
 vi.mock('@pagespace/db/schema/members', () => ({ driveAgentMembers: {} }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   canUserViewPage: vi.fn(),
   canUserEditPage: vi.fn().mockResolvedValue(true),
   canUserDeletePage: vi.fn(),
@@ -107,6 +108,7 @@ vi.mock('../task-sync-service', () => ({
 }));
 
 import { pageService } from '../page-service';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 describe('pageService.createPage — TASK_LIST seeding', () => {
   beforeEach(() => {
@@ -142,7 +144,7 @@ describe('pageService.createPage — TASK_LIST seeding', () => {
       isPaginated: null,
     }]);
 
-    const result = await pageService.createPage('user-123', {
+    const result = await pageService.createPage(credentialActor('user-123', null), {
       title: 'My Tasks',
       type: 'TASK_LIST',
       driveId: 'drive-1',
@@ -182,7 +184,7 @@ describe('pageService.createPage — TASK_LIST seeding', () => {
       isPaginated: null,
     }]);
 
-    const result = await pageService.createPage('user-123', {
+    const result = await pageService.createPage(credentialActor('user-123', null), {
       title: 'My Doc',
       type: 'DOCUMENT',
       driveId: 'drive-1',
@@ -230,7 +232,7 @@ describe('pageService.createPage — the per-agent sandbox switch', () => {
   });
 
   it('stores the switch on an AI_CHAT page', async () => {
-    const result = await pageService.createPage('user-123', {
+    const result = await pageService.createPage(credentialActor('user-123', null), {
       title: 'Scraper Runner',
       type: 'AI_CHAT',
       driveId: 'drive-1',
@@ -245,7 +247,7 @@ describe('pageService.createPage — the per-agent sandbox switch', () => {
   });
 
   it('leaves it to the column default when the caller says nothing', async () => {
-    await pageService.createPage('user-123', {
+    await pageService.createPage(credentialActor('user-123', null), {
       title: 'Scraper Runner',
       type: 'AI_CHAT',
       driveId: 'drive-1',

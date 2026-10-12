@@ -5,7 +5,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { findOrganizationById, updateOrganization } from '@pagespace/lib/organizations/repository';
 import { deleteOrganization } from '@pagespace/lib/organizations/deletion';
 import { getOrgBillingNotice } from '@pagespace/lib/organizations/status';
-import { authorizeOrgRequest, refuseDriveScopedToken, ORG_TOKEN_READ_AUTH, ORG_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
+import { authorizeOrgRequest, ORG_TOKEN_READ_AUTH, ORG_TOKEN_WRITE_AUTH, ORG_MONEY_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
 import { orgDeleteSchema, orgUpdateSchema } from '@/lib/orgs/org-schemas';
 import { endOrgSubscriptionPort } from '@/lib/org-billing/org-subscription';
 
@@ -14,8 +14,8 @@ type Context = { params: Promise<{ orgId: string }> };
 /**
  * GET /api/orgs/[orgId] — any member. `viewer.role` is the CALLER'S accepted org role
  * (OWNER | ADMIN | MEMBER), so the hub renders by role without a second call. `billingNotice` is the banner this caller sees on
- * org surfaces (SEAT-9): Owner and Admins get plan detail (reactivate + reason, a failed
- * payment, the trial end), a member only the read-only notice while the org is lapsed
+ * org surfaces (SEAT-9): Owner and Admins get plan detail (reactivate + the lapse reason),
+ * a member only the read-only notice while the org is lapsed
  * (SEAT-6). Absent where billing is off (onprem, tenant) and when there is nothing to say.
  * Session or MCP token (X-1); a drive-scoped token is refused, since the org is wider than any drive scope.
  */
@@ -23,8 +23,6 @@ export async function GET(request: Request, context: Context) {
   const { orgId } = await context.params;
   const gate = await authorizeOrgRequest(request, orgId, 'MEMBER', ORG_TOKEN_READ_AUTH);
   if (!gate.ok) return gate.response;
-  const scoped = refuseDriveScopedToken(gate);
-  if (scoped) return scoped;
   try {
     const org = await findOrganizationById(orgId);
     if (!org) return NextResponse.json({ error: 'Organization not found', code: 'org_not_found' }, { status: 404 });
@@ -48,10 +46,10 @@ export async function GET(request: Request, context: Context) {
   }
 }
 
-/** PATCH /api/orgs/[orgId] — name and slug; Owner and Admins (the avatar is uploaded: ./avatar). */
+/** PATCH /api/orgs/[orgId] — name and slug; Owner and Admins (the avatar is uploaded: ./avatar). Session or an unscoped MCP key (X-1). */
 export async function PATCH(request: Request, context: Context) {
   const { orgId } = await context.params;
-  const gate = await authorizeOrgRequest(request, orgId, 'ADMIN', ORG_WRITE_AUTH);
+  const gate = await authorizeOrgRequest(request, orgId, 'ADMIN', ORG_TOKEN_WRITE_AUTH);
   if (!gate.ok) return gate.response;
   try {
     const parsed = orgUpdateSchema.safeParse(await request.json().catch(() => null));
@@ -80,13 +78,14 @@ export async function PATCH(request: Request, context: Context) {
 }
 
 /**
- * DELETE /api/orgs/[orgId] — Owner only (ORG-6). Body names a destination for
+ * DELETE /api/orgs/[orgId] — Owner only (ORG-6). Session only: it ends the org's Stripe subscription
+ * (billing is never delegated to a key; X-1 exclusion table). Body names a destination for
  * every live org drive; trashed drives go to the Owner's trash. The response and
  * one audit event per drive list where each drive went.
  */
 export async function DELETE(request: Request, context: Context) {
   const { orgId } = await context.params;
-  const gate = await authorizeOrgRequest(request, orgId, 'OWNER', ORG_WRITE_AUTH);
+  const gate = await authorizeOrgRequest(request, orgId, 'OWNER', ORG_MONEY_WRITE_AUTH);
   if (!gate.ok) return gate.response;
   try {
     const parsed = orgDeleteSchema.safeParse(await request.json().catch(() => null));
@@ -98,7 +97,7 @@ export async function DELETE(request: Request, context: Context) {
     // the delete rather than leave a deleted org billed).
     // ORG-1: the stored avatar file goes with the org. Its token is minted now, while the caller
     // still holds the org; it is used only once the delete has committed.
-    const avatarToken = (await findOrganizationById(orgId))?.avatarUrl ? await mintOrgAvatarToken(orgId, gate.userId) : null;
+    const avatarToken = (await findOrganizationById(orgId))?.avatarUrl ? await mintOrgAvatarToken(orgId, gate.actor) : null;
     const result = await deleteOrganization(
       { actorId: gate.userId, orgId, choices: parsed.data.drives, now: new Date() },
       { endSubscription: endOrgSubscriptionPort() },

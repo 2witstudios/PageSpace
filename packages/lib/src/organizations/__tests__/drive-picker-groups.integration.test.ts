@@ -15,6 +15,7 @@ import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
 import { listAccessibleDrives } from '../../services/drive-service';
 import { groupPickerDrives } from '../drive-picker-groups';
+import { credentialActor } from '../../permissions/access-actor';
 
 vi.mock('../orgs-enabled', () => ({ ORGS_ENABLED: true }));
 
@@ -63,7 +64,7 @@ afterAll(async () => {
 describe('the drive picker over the real accessible-drives list', () => {
   it('DRV-9 (partial) an org member sees the Open drive under the org and their own under Personal; an un-joined RESTRICTED and an uninvited PRIVATE drive appear nowhere', async () => {
     if (!ready) return;
-    const accessible = await listAccessibleDrives(tomasId);
+    const accessible = await listAccessibleDrives(credentialActor(tomasId, null));
     const groups = groupPickerDrives(accessible, [{ id: orgId, name: 'Northwind Labs', avatarUrl: null, role: 'MEMBER' }]);
     expect(groups.map((g) => [g.label, g.drives.map((d) => d.name)])).toEqual([
       ['Northwind Labs', ['Product']],

@@ -21,10 +21,19 @@ The `drive_members.suspended_by_policy` column from milestone 1 is deprecated an
 - **Tenant export** (`scripts/lib/tenant-export-columns.ts`) carries drives, members, pages and the rest of its table
   list. Share links, published pages, custom domains and integration connections are not in it, so a suspended link,
   page or domain does not travel: nothing arrives at the destination, suspended or not. Published and parked bucket
-  objects are not bundled either. A PARKED guest is not in `drive_members` and not exported, so a guest the org suspended
-  does not gain access by moving (fail closed). The deprecated marker column is excluded with that reason.
-- **GDPR export**: `org_guest_holds` is registered as a temporary exclusion under X-2 (Phase 6 adds the collector);
-  account deletion removes it (`userId` cascades).
+  objects are not bundled either. The deprecated marker column is excluded with that reason.
+- **Parked guests travel still parked.** Since X-3 the tenant bundle carries `org_guest_holds` for each carried drive
+  (`scripts/lib/org-wallet-selection.ts`), including a `suspended` hold's full `parked` snapshot (member row, page grants,
+  token scopes). Only the hold travels: a parked guest has no `drive_members` or `page_permissions` rows, so there are none
+  to export, and the guest arrives with NO access on the destination, exactly as on the source (fail closed). A hold
+  naming a person who is not in the bundle stays behind (its `userId` would have nothing to reference), and so does
+  their access. The parked access comes back only through `restoreOrgGuests` on the destination, when that org turns
+  guests back on, and then like any restore: only for a drive still in the org, and re-checked against the
+  destination's live rows (`reinsertHeldAccess`): a grant comes back only for a page still in that drive, a token scope
+  only for a token that exists there, and an inviter, granter or custom role that is not there is nulled, never
+  re-created (Review #2762 P2-1). MCP tokens are not in the bundle, so parked token scopes do not come back.
+- **GDPR export**: `org_guest_holds` rows are read on the subject's own holds (the `orgMembership` category); account
+  deletion removes them (`userId` cascades).
 
 ## What moving a drive out of an org does
 

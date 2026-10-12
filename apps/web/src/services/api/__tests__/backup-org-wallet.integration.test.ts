@@ -1,6 +1,8 @@
 /**
- * Backups and restore preserve orgId, visibility and wallet rows, against a
- * REAL Postgres (Spec X-3).
+ * In-product backups and restore against a REAL Postgres (Spec X-3): a snapshot
+ * RECORDS the drive's orgId and visibility, a restore never RE-APPLIES them, and
+ * wallet rows are left exactly as they are. (The tenant migration half of X-3 —
+ * where org and wallet rows DO travel — is scripts/__tests__/tenant-org-wallet-roundtrip.test.ts.)
  *
  * What existed before this leaf: the snapshot recorded pages, permissions,
  * members, roles and files — and NOTHING about the drive's org context; the
@@ -13,7 +15,7 @@
  *
  *   1. a snapshot RECORDS the drive's orgId and orgVisibility (new columns);
  *   2. a restore never writes those (possibly stale) values back: a drive
- *      that moved orgs since its backup stays where it moved to;
+ *      that moved orgs, or left its org, since its backup stays where it is;
  *   3. a drive wallet's row survives a restore unchanged — the backup does
  *      not carry wallets and the restore must not need to.
  *
@@ -93,6 +95,7 @@ import { admitReentry } from '@pagespace/lib/permissions/guest-holds';
 import { guardDriveAccess } from '@pagespace/lib/permissions/org-lapse-guard';
 import { guardOpenRoleFloor } from '@pagespace/lib/organizations/open-role-floor';
 import { createChangeGroupId, inferChangeGroupType } from '@pagespace/lib/monitoring/change-group';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const created = { userIds: [] as string[], driveIds: [] as string[], orgIds: [] as string[] };
 
@@ -253,9 +256,9 @@ afterAll(async () => {
   await pool.end();
 });
 
-describe('backups and restore preserve org context and wallet rows (X-3 (partial), real PG)', () => {
-  it('X-3 (partial) a snapshot records the drive\'s orgId and orgVisibility; a personal drive\'s records nulls', async () => {
-    const result = await createDriveBackup(w.orgDriveId, w.ownerId, { source: 'manual' });
+describe('X-3 in-product backups record org context, restore never re-applies it, and leave wallet rows untouched (real PG)', () => {
+  it('X-3 a snapshot records the drive\'s orgId and orgVisibility; a personal drive\'s records nulls', async () => {
+    const result = await createDriveBackup(w.orgDriveId, credentialActor(w.ownerId, null), { source: 'manual' });
     expect(result.success).toBe(true);
 
     const [backup] = await db.select().from(driveBackups).where(eq(driveBackups.id, result.backupId!));
@@ -266,14 +269,14 @@ describe('backups and restore preserve org context and wallet rows (X-3 (partial
     // its (meaningless here) NOT NULL default.
     const personalDrive = await factories.createDrive(w.ownerId);
     created.driveIds.push(personalDrive.id);
-    const personal = await createDriveBackup(personalDrive.id, w.ownerId, { source: 'manual' });
+    const personal = await createDriveBackup(personalDrive.id, credentialActor(w.ownerId, null), { source: 'manual' });
     const [personalBackup] = await db.select().from(driveBackups).where(eq(driveBackups.id, personal.backupId!));
     expect(personalBackup.orgId).toBeNull();
     expect(personalBackup.orgVisibility).toBe('OPEN');
   });
 
-  it('X-3 (partial) a restore never writes the snapshot\'s org context back: a drive that moved orgs after its backup stays where it moved', async () => {
-    const backup = await createDriveBackup(w.orgDriveId, w.ownerId, { source: 'manual' });
+  it('X-3 a restore never writes the snapshot\'s org context back: a drive that moved orgs after its backup stays where it moved', async () => {
+    const backup = await createDriveBackup(w.orgDriveId, credentialActor(w.ownerId, null), { source: 'manual' });
     expect(backup.success).toBe(true);
 
     // The drive leaves Northwind for Southwind AFTER the snapshot was taken.
@@ -298,7 +301,23 @@ describe('backups and restore preserve org context and wallet rows (X-3 (partial
     expect(backupRow.orgVisibility).toBe('RESTRICTED');
   });
 
-  it('X-3 (partial) a drive wallet\'s row survives a restore round-trip byte-identical', async () => {
+  it('X-3 a restore never moves a drive back into an org: a drive taken out of its org after the backup stays personal', async () => {
+    const backup = await createDriveBackup(w.orgDriveId, credentialActor(w.ownerId, null), { source: 'manual' });
+    expect(backup.success).toBe(true);
+
+    // The drive leaves Northwind AFTER the snapshot. Re-applying the snapshot's org context would
+    // put it back under Northwind's members and policies without anyone moving it (POL-2 re-entry).
+    await db.update(drives).set({ orgId: null, orgVisibility: 'OPEN' }).where(eq(drives.id, w.orgDriveId));
+
+    await restoreBackup(backup.backupId!);
+
+    const [drive] = await db.select().from(drives).where(eq(drives.id, w.orgDriveId));
+    expect({ orgId: drive.orgId, orgVisibility: drive.orgVisibility }).toEqual({ orgId: null, orgVisibility: 'OPEN' });
+    const [backupRow] = await db.select().from(driveBackups).where(eq(driveBackups.id, backup.backupId!));
+    expect({ orgId: backupRow.orgId, orgVisibility: backupRow.orgVisibility }).toEqual({ orgId: w.orgId, orgVisibility: 'RESTRICTED' });
+  });
+
+  it('X-3 a drive wallet\'s row survives a restore round-trip byte-identical', async () => {
     // The WHOLE row, not a cherry-picked subset: comparing a few hand-picked
     // columns would let a restore that reset `spentCents` (free money), the
     // status, the period fields or the allowance pass unnoticed. Every column
@@ -307,7 +326,7 @@ describe('backups and restore preserve org context and wallet rows (X-3 (partial
     w.walletBefore = before;
     const [legBefore] = await db.select().from(walletFundingLegs).where(eq(walletFundingLegs.walletId, w.driveWalletId));
 
-    const backup = await createDriveBackup(w.orgDriveId, w.ownerId, { source: 'manual' });
+    const backup = await createDriveBackup(w.orgDriveId, credentialActor(w.ownerId, null), { source: 'manual' });
     await restoreBackup(backup.backupId!);
 
     const [after] = await db.select().from(wallets).where(eq(wallets.id, w.driveWalletId));

@@ -20,6 +20,7 @@ import {
 } from '@/lib/auth';
 import { decryptTaskUserRelations } from '@/lib/tasks/decrypt-task-relations';
 import { optionalAbsoluteInstant, exclusiveEndBound } from '@/lib/validation/date-params';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 
@@ -115,10 +116,10 @@ export async function GET(request: Request) {
       // Verify the principal (user, or the token itself when drive-scoped) can view the drive
       const canViewDrive = await isPrincipalDriveMember(auth, params.driveId);
       if (!canViewDrive) {
-        return NextResponse.json(
+        return deniedResponse(actorFromAuth(auth), params.driveId, NextResponse.json(
           { error: 'Unauthorized - you do not have access to this drive' },
           { status: 403 }
-        );
+        ));
       }
 
       const scopeError = checkMCPDriveScope(auth, params.driveId);

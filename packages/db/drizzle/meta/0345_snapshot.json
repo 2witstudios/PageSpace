@@ -1,6 +1,6 @@
 {
-  "id": "e6c0c9eb-31b3-4f8e-893c-2afbd6bb1848",
-  "prevId": "5a5fd6e4-75e7-49f2-bcfc-0d46656d23f6",
+  "id": "26dea859-358c-4efb-bf18-2f0dfbfb5cd2",
+  "prevId": "a7709f6c-9d6b-417f-89b4-dc7d7db40686",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -26190,11 +26190,12 @@
           "primaryKey": false,
           "notNull": false
         },
-        "trialEnd": {
-          "name": "trialEnd",
-          "type": "timestamp",
+        "collectionMethod": {
+          "name": "collectionMethod",
+          "type": "text",
           "primaryKey": false,
-          "notNull": false
+          "notNull": true,
+          "default": "'charge_automatically'"
         },
         "currentPeriodStart": {
           "name": "currentPeriodStart",

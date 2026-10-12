@@ -21,6 +21,7 @@ import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { resolveSteps, hasAiStep, countAiSteps } from '@/lib/workflows/core/step-plan';
 import { frameWebhookPayloadPrompt } from './webhook-payload-framing';
+import { automationActor } from '@pagespace/lib/permissions/access-actor';
 
 const logger = loggers.api.child({ module: 'page-webhook-trigger-executor' });
 
@@ -119,7 +120,8 @@ export async function executePageWebhookTrigger(
 
     // 3. Billing resolves to the workflow's owner — verify they still belong to
     //    the workflow's drive before spending their credit.
-    const hasDriveAccess = await isUserDriveMember(ownerId, workflow.driveId);
+    // An automation runs as its owner (D-OW-34): membership applies, sign-in policy does not.
+    const hasDriveAccess = await isUserDriveMember(automationActor(ownerId, 'page-webhook-trigger'), workflow.driveId);
     if (!hasDriveAccess) {
       return {
         success: false,

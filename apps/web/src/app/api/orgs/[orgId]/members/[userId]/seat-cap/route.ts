@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { setSeatCap } from '@pagespace/lib/services/drive-wallet-service';
-import { authorizeOrgRequest, ORG_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
+import { authorizeOrgRequest, ORG_MONEY_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
 import { safeParseBody } from '@/lib/validation/parse-body';
 import { consumerCapSchema } from '@/lib/wallets/consumer-cap-schema';
 import { walletErrorResponse } from '@/lib/wallets/wallet-route';
@@ -16,10 +16,13 @@ type Context = { params: Promise<{ orgId: string; userId: string }> };
  * PUT     `{ dailyCapCents?, monthlyCapCents? }` (whole cents; null = no cap in that window; the
  *         monthly window is this member's seat allowance). Answers `{ walletId, caps }`.
  * DELETE  clears it: the member's seat falls back to the org's allowance.
+ *
+ * Session only ([D-OW-26]): a cap decides how much of the org pool a member may spend — it is audited as
+ * org.wallet.allocation_changed — so it is an allocation, which a delegated key never makes.
  */
 async function write(request: Request, context: Context, clear: boolean) {
   const { orgId, userId: consumerId } = await context.params;
-  const gate = await authorizeOrgRequest(request, orgId, 'ADMIN', ORG_WRITE_AUTH);
+  const gate = await authorizeOrgRequest(request, orgId, 'ADMIN', ORG_MONEY_WRITE_AUTH);
   if (!gate.ok) return gate.response;
   let input: ConsumerCapWriteInput | null = null;
   if (!clear) {

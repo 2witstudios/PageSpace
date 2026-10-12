@@ -417,6 +417,7 @@ describe('POST /api/auth/apple/callback', () => {
       // Desktop platform should use device info from state
       expect(validateOrCreateDeviceToken).toHaveBeenCalledWith(
         expect.objectContaining({
+          authentication: { authenticatedAtMs: expect.any(Number), assurance: 'single_factor' },
           deviceId: 'dev-abc',
           deviceName: 'My Mac',
         })
@@ -435,6 +436,15 @@ describe('POST /api/auth/apple/callback', () => {
       const location = response.headers.get('Location')!;
 
       expect(location).toContain('/dashboard');
+    });
+
+    it('SEC-2 (partial) an Apple callback records single-factor evidence on the session it creates (D-OW-45)', async () => {
+      const before = Date.now();
+      await POST(createCallbackRequest({ id_token: 'valid-token', state: createSignedState({ platform: 'web' }) }));
+
+      const [options] = vi.mocked(sessionService.createSession).mock.calls[0];
+      expect(options.authentication).toEqual({ authenticatedAtMs: expect.any(Number), assurance: 'single_factor' });
+      expect(options.authentication?.authenticatedAtMs).toBeGreaterThanOrEqual(before);
     });
   });
 
@@ -984,6 +994,7 @@ describe('POST /api/auth/apple/callback', () => {
 
       expect(validateOrCreateDeviceToken).toHaveBeenCalledWith(
         expect.objectContaining({
+          authentication: { authenticatedAtMs: expect.any(Number), assurance: 'single_factor' },
           deviceName: 'TestBrowser/1.0',
         })
       );
@@ -1027,6 +1038,7 @@ describe('POST /api/auth/apple/callback', () => {
       // Should use createId() as fallback for deviceId
       expect(validateOrCreateDeviceToken).toHaveBeenCalledWith(
         expect.objectContaining({
+          authentication: { authenticatedAtMs: expect.any(Number), assurance: 'single_factor' },
           deviceId: 'mock-cuid',
           platform: 'ios',
         })

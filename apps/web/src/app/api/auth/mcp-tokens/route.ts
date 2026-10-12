@@ -8,6 +8,7 @@ import { getActorInfo, logTokenActivity } from '@pagespace/lib/monitoring/activi
 import { generateToken } from '@pagespace/lib/auth/token-utils';
 import { validateDriveScopeAccess } from '@pagespace/lib/services/drive-service';
 import { rejectScopedOAuth } from './scope-guard';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 // 'oauth' lets the pagespace CLI (which never holds a session cookie —
 // `pagespace keys list` authenticates with an OAuth access token from
@@ -52,7 +53,7 @@ export async function POST(req: NextRequest) {
 
     if (uniqueDriveScopes.length > 0) {
       const { invalidDriveIds, unauthorizedRoles, invalidCustomRoles, unauthorizedCustomRoles, explicitRoleWithoutMembership } =
-        await validateDriveScopeAccess(uniqueDriveScopes, userId);
+        await validateDriveScopeAccess(uniqueDriveScopes, actorFromAuth(auth));
 
       if (invalidDriveIds.length > 0) {
         return NextResponse.json(

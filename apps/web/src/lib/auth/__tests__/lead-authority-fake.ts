@@ -7,6 +7,7 @@
  */
 import { vi } from 'vitest';
 import { decideDriveLeadAuthority } from '@pagespace/lib/permissions/drive-relationship';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 type OrgRole = 'OWNER' | 'ADMIN' | 'MEMBER';
 
@@ -22,10 +23,11 @@ export const leadAuthority = {
 };
 
 export const loadDriveLeadAuthority = vi.fn(async (
-  userId: string,
+  actor: AccessActor,
   drive: { id: string; ownerId: string; orgId: string | null },
   action: string,
 ) => {
+  const { userId } = actor;
   const authority = decideDriveLeadAuthority({
     orgsEnabled: leadAuthority.orgsEnabled,
     userId,
@@ -55,9 +57,9 @@ export const LEAD_ACTION_DRIVES = {
 };
 
 export const recordOrgPowerDriveAction = vi.fn(async (
-  userId: string,
+  actor: AccessActor,
   drive: { id: string; ownerId: string; orgId: string | null },
   action: string,
 ) => {
-  await loadDriveLeadAuthority(userId, drive, action);
+  await loadDriveLeadAuthority(actor, drive, action);
 });

@@ -6,7 +6,7 @@ import { isEmailVerified } from '@pagespace/lib/auth/verification-utils';
 import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
 import { createOrRotateInvitation, listOpenInvitations } from '@pagespace/lib/organizations/invitations';
 import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
-import { authorizeOrgRequest, ORG_READ_AUTH, ORG_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
+import { authorizeOrgRequest, ORG_TOKEN_READ_AUTH, ORG_TOKEN_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
 import { inviteCreateSchema } from '@/lib/orgs/org-schemas';
 import { deliverOrgInvite } from '@/lib/orgs/org-invite-delivery';
 import { orgRefusalResponse } from '@/lib/orgs/org-refusal-response';
@@ -18,7 +18,7 @@ type Context = { params: Promise<{ orgId: string }> };
 /** GET /api/orgs/[orgId]/invitations — open invites; Owner and Admins. */
 export async function GET(request: Request, context: Context) {
   const { orgId } = await context.params;
-  const gate = await authorizeOrgRequest(request, orgId, 'ADMIN', ORG_READ_AUTH);
+  const gate = await authorizeOrgRequest(request, orgId, 'ADMIN', ORG_TOKEN_READ_AUTH);
   if (!gate.ok) return gate.response;
   try {
     const invitations = await listOpenInvitations(orgId);
@@ -47,7 +47,7 @@ export async function GET(request: Request, context: Context) {
 export async function POST(request: Request, context: Context) {
   const { orgId } = await context.params;
   // Any member reaches the service: who may invite is the org's policy (POL-5), decided there.
-  const gate = await authorizeOrgRequest(request, orgId, 'MEMBER', ORG_WRITE_AUTH);
+  const gate = await authorizeOrgRequest(request, orgId, 'MEMBER', ORG_TOKEN_WRITE_AUTH);
   if (!gate.ok) return gate.response;
   try {
     if (!(await isEmailVerified(gate.userId))) {
@@ -76,6 +76,8 @@ export async function POST(request: Request, context: Context) {
       role,
       invitedBy: gate.userId,
       seatBilling: defaultSeatBilling(),
+      // [D-OW-26] a key never buys a seat: the service refuses a raise it would need.
+      credential: gate.credential,
       now: new Date(),
       deliver: (_invitation, token) => deliverOrgInvite({ orgId, inviterId: gate.userId, email, role, token }),
     });
@@ -89,6 +91,9 @@ export async function POST(request: Request, context: Context) {
       if (result.reason === 'not_member') return apiError(404, 'org_not_found', 'Organization not found');
       if (result.reason === 'org_lapsed') return orgLapsedResponse(result.message);
       if (result.reason === 'org_policy') return orgPolicyRefusalResponse(result);
+      if (result.reason === 'mcp_token_cannot_move_money') {
+        return orgRefusalResponse({ status: result.status, message: result.message, code: result.reason });
+      }
       if (result.reason === 'seats_full') {
         // The Owner finds this refusal in the audit trail even when an Admin hit it.
         auditRequest(request, {

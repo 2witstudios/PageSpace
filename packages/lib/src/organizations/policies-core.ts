@@ -16,7 +16,12 @@
  * Seat count, seat auto-add and billing are NOT policies (point-guard ruling): they are billing state
  * with their own columns. The two spend policies here (seat allowance amount, wallet fallback) are POL-7.
  */
-import { normalizeMaximumSessionAgeMinutes, type OrgAuthenticationPolicy } from './authentication-policy-core';
+import {
+  maximumSessionAgeNoLooser,
+  normalizeMaximumSessionAgeMinutes,
+  requireStrongSignInNoLooser,
+  type OrgAuthenticationPolicy,
+} from './authentication-policy-core';
 import { DEFAULT_SEAT_ALLOWANCE_CENTS, effectiveSpendPolicy, type FallbackRule, type SpendPolicy } from '../billing/wallet-core';
 
 export const GUEST_POLICIES = ['off', 'approve', 'on'] as const;
@@ -83,7 +88,15 @@ interface FieldSpec<V> {
   strictest: V;
   /** Returns the normalized value, or undefined when `raw` is not a valid value for the key. */
   normalize: (raw: unknown) => V | undefined;
+  /**
+   * [D-OW-26] Whether setting the key moves org money (an allocation of the pool) or changes what spend
+   * draws from. Either is session-only: a delegated credential (MCP/CLI key) may neither set nor read it.
+   */
+  money: PolicyMoney;
 }
+
+/** What a policy key does to money ([D-OW-26]): nothing, allocates org money, or redirects spend. */
+export type PolicyMoney = 'none' | 'moves_money' | 'spend_source';
 
 const oneOf =
   <T extends string>(values: readonly T[]) =>
@@ -116,34 +129,79 @@ const wholeCents = (raw: unknown): number | undefined =>
   typeof raw === 'number' && Number.isSafeInteger(raw) && raw >= 0 && raw <= MAX_SEAT_ALLOWANCE_CENTS ? raw : undefined;
 
 const SPECS: { [K in OrgPolicyKey]: FieldSpec<OrgPolicies[K]> } = {
-  requireStrongSignIn: { default: false, strictest: true, normalize: bool },
-  maximumSessionAgeMinutes: { default: null, strictest: 0, normalize: normalizeMaximumSessionAgeMinutes },
+  requireStrongSignIn: { default: false, strictest: true, normalize: bool, money: 'none' },
+  maximumSessionAgeMinutes: { default: null, strictest: 0, normalize: normalizeMaximumSessionAgeMinutes, money: 'none' },
   // [D-OW-41] Outsiders wait for an Owner or Admin unless the org chooses otherwise. New orgs also store it
   // explicitly (NEW_ORG_POLICIES), so a later change of this default never silently moves an existing org.
-  guests: { default: 'approve', strictest: 'off', normalize: oneOf(GUEST_POLICIES) },
-  publicShareLinks: { default: true, strictest: false, normalize: bool },
-  publishWeb: { default: true, strictest: false, normalize: bool },
-  customDomains: { default: true, strictest: false, normalize: bool },
-  whoCanInvite: { default: 'admins', strictest: 'admins', normalize: oneOf(ACTOR_POLICIES) },
+  guests: { default: 'approve', strictest: 'off', normalize: oneOf(GUEST_POLICIES), money: 'none' },
+  publicShareLinks: { default: true, strictest: false, normalize: bool, money: 'none' },
+  publishWeb: { default: true, strictest: false, normalize: bool, money: 'none' },
+  customDomains: { default: true, strictest: false, normalize: bool, money: 'none' },
+  whoCanInvite: { default: 'admins', strictest: 'admins', normalize: oneOf(ACTOR_POLICIES), money: 'none' },
   // Every member may create org drives today (DRV-3 without a policy), so that is the default; a damaged value is admins only.
-  whoCanCreateDrives: { default: 'members', strictest: 'admins', normalize: oneOf(ACTOR_POLICIES) },
+  whoCanCreateDrives: { default: 'members', strictest: 'admins', normalize: oneOf(ACTOR_POLICIES), money: 'none' },
   // A FLOOR is a minimum: a higher floor gives org members MORE in Open drives. So the value that fails closed is the
   // lowest one, view (it adds nothing to what a drive chose), never edit (Review 3+4: `edit` here failed open).
-  openDriveRoleFloor: { default: 'view', strictest: 'view', normalize: oneOf(OPEN_ROLE_FLOORS) },
-  seatAllowanceCents: { default: DEFAULT_SEAT_ALLOWANCE_CENTS, strictest: 0, normalize: wholeCents },
-  walletFallback: { default: 'refuse', strictest: 'refuse', normalize: oneOf(WALLET_FALLBACKS) },
+  openDriveRoleFloor: { default: 'view', strictest: 'view', normalize: oneOf(OPEN_ROLE_FLOORS), money: 'none' },
+  seatAllowanceCents: { default: DEFAULT_SEAT_ALLOWANCE_CENTS, strictest: 0, normalize: wholeCents, money: 'moves_money' },
+  walletFallback: { default: 'refuse', strictest: 'refuse', normalize: oneOf(WALLET_FALLBACKS), money: 'spend_source' },
   // An invalid allowlist reads as EMPTY (nothing allowed), never as null (everything allowed).
-  modelAllowlist: { default: null, strictest: [], normalize: allowlist },
-  providerAllowlist: { default: null, strictest: [], normalize: allowlist },
-  agentsAutonomous: { default: true, strictest: false, normalize: bool },
-  crossDriveAgents: { default: true, strictest: false, normalize: bool },
-  cloudSandbox: { default: true, strictest: false, normalize: bool },
-  persistentEnvironments: { default: true, strictest: false, normalize: bool },
-  publishedApps: { default: true, strictest: false, normalize: bool },
-  integrationsAllowlist: { default: null, strictest: [], normalize: allowlist },
+  modelAllowlist: { default: null, strictest: [], normalize: allowlist, money: 'none' },
+  providerAllowlist: { default: null, strictest: [], normalize: allowlist, money: 'none' },
+  agentsAutonomous: { default: true, strictest: false, normalize: bool, money: 'none' },
+  crossDriveAgents: { default: true, strictest: false, normalize: bool, money: 'none' },
+  cloudSandbox: { default: true, strictest: false, normalize: bool, money: 'none' },
+  persistentEnvironments: { default: true, strictest: false, normalize: bool, money: 'none' },
+  publishedApps: { default: true, strictest: false, normalize: bool, money: 'none' },
+  integrationsAllowlist: { default: null, strictest: [], normalize: allowlist, money: 'none' },
 };
 
 export const ORG_POLICY_KEYS = Object.keys(SPECS) as OrgPolicyKey[];
+
+/** Each key's money classification, read from its spec (one table, so a new key cannot ship unclassified). */
+export const ORG_POLICY_MONEY: Readonly<Record<OrgPolicyKey, PolicyMoney>> = Object.freeze(
+  Object.fromEntries(ORG_POLICY_KEYS.map((k) => [k, SPECS[k].money])) as Record<OrgPolicyKey, PolicyMoney>,
+);
+
+/** The policy keys a delegated credential may neither set nor read ([D-OW-26]). */
+export const MONEY_POLICY_KEYS: readonly OrgPolicyKey[] = Object.freeze(ORG_POLICY_KEYS.filter((k) => ORG_POLICY_MONEY[k] !== 'none'));
+
+/** The money keys as a type, pinned to MONEY_POLICY_KEYS by the policies-money guard. */
+export type MoneyPolicyKey = 'seatAllowanceCents' | 'walletFallback';
+/** The policies as a delegated credential reads them: every money key left out. */
+export type DelegatedOrgPolicies = Omit<OrgPolicies, MoneyPolicyKey>;
+
+export interface DelegatedPolicyRefusal {
+  code: 'mcp_token_cannot_move_money' | 'mcp_token_cannot_change_spend_source';
+  key: OrgPolicyKey;
+  message: string;
+}
+
+const moneyOf = (key: string): PolicyMoney => ORG_POLICY_MONEY[key as OrgPolicyKey] ?? 'none';
+
+/**
+ * [D-OW-26] A delegated credential's policy patch: refused when it names any money key, moving money
+ * named before a spend-source change. Null when the patch touches no money.
+ */
+export function delegatedPolicyPatchRefusal(patch: OrgPoliciesPatch): DelegatedPolicyRefusal | null {
+  const named = (Object.keys(patch) as OrgPolicyKey[]).filter((k) => moneyOf(k) !== 'none');
+  const moves = named.find((k) => moneyOf(k) === 'moves_money');
+  if (moves) {
+    return { code: 'mcp_token_cannot_move_money', key: moves, message: `An access token cannot change ${moves}: it allocates organization money. Sign in to change it` };
+  }
+  const source = named[0];
+  if (source) {
+    return { code: 'mcp_token_cannot_change_spend_source', key: source, message: `An access token cannot change ${source}: it decides what spend draws from. Sign in to change it` };
+  }
+  return null;
+}
+
+/** The policies a delegated credential reads ([D-OW-26]: wallet reads are consumer-only): no money key. */
+export function policiesForDelegatedCredential(policies: OrgPolicies): DelegatedOrgPolicies {
+  return Object.fromEntries(
+    Object.entries(policies).filter(([k]) => moneyOf(k) === 'none'),
+  ) as DelegatedOrgPolicies;
+}
 
 export const DEFAULT_ORG_POLICIES: Readonly<OrgPolicies> = Object.freeze(
   Object.fromEntries(ORG_POLICY_KEYS.map((k) => [k, SPECS[k].default])) as unknown as OrgPolicies,
@@ -352,8 +410,8 @@ const notLooser = (before: boolean, after: boolean): boolean => before || !after
  * being classified. Equal values are not looser.
  */
 const NO_LOOSER: { [K in OrgPolicyKey]: (before: OrgPolicies[K], after: OrgPolicies[K]) => boolean } = {
-  requireStrongSignIn: (before, after) => !before || after,
-  maximumSessionAgeMinutes: (before, after) => before === null || (after !== null && after <= before),
+  requireStrongSignIn: requireStrongSignInNoLooser,
+  maximumSessionAgeMinutes: maximumSessionAgeNoLooser,
   guests: (b, a) => GUEST_RANK[a] <= GUEST_RANK[b],
   publicShareLinks: notLooser,
   publishWeb: notLooser,

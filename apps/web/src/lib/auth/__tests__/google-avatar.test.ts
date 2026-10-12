@@ -100,7 +100,7 @@ describe('google-avatar', () => {
     });
 
     expect(result).toMatch(/^\/api\/avatar\/user-123\/avatar\.png\?t=\d+$/);
-    expect(createUserServiceToken).toHaveBeenCalledWith('user-123', ['avatars:write'], '5m');
+    expect(createUserServiceToken).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-123' }), ['avatars:write'], '5m');
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
