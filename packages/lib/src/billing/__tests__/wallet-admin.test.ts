@@ -131,7 +131,8 @@ describe('planDriveWalletRehome — a drive that changes owner takes its wallet 
   const period = { id: 'w-pool', periodStart: new Date('2026-10-01T00:00:00Z'), periodEnd: new Date('2026-11-01T00:00:00Z') };
 
   it('WAL-2 (partial) moved into an org, the wallet is the org\'s under its pool; the old funder\'s allocation and debt do not follow', () => {
-    expect(planDriveWalletRehome({ status: 'over', debtCents: c(30), overshootChoice: 'wallet_debt', to: { ownerType: 'org', orgId: 'o-northwind', parent: period } })).toEqual({
+    expect(planDriveWalletRehome({ status: 'over', debtCents: c(30), overshootChoice: 'wallet_debt', liveHoldCount: 0, to: { ownerType: 'org', orgId: 'o-northwind', parent: period } })).toEqual({
+      kind: 'rehome',
       set: {
         ownerType: 'org', orgId: 'o-northwind', userId: null, parentWalletId: 'w-pool',
         monthlyAllowanceCents: 0, spentCents: 0, debtCents: 0, status: 'active', overshootChoice: 'wallet_debt',
@@ -143,14 +144,19 @@ describe('planDriveWalletRehome — a drive that changes owner takes its wallet 
 
   it('WAL-2 (partial) moved out, the wallet is the lead\'s under their personal root; a paused wallet stays paused', () => {
     const root = { id: 'w-lena', periodStart: null, periodEnd: null };
-    expect(planDriveWalletRehome({ status: 'paused', debtCents: 0, overshootChoice: null, to: { ownerType: 'user', userId: 'u-lena', parent: root } })).toMatchObject({
+    expect(planDriveWalletRehome({ status: 'paused', debtCents: 0, overshootChoice: null, liveHoldCount: 0, to: { ownerType: 'user', userId: 'u-lena', parent: root } })).toMatchObject({
       set: { ownerType: 'user', userId: 'u-lena', orgId: null, parentWalletId: 'w-lena', status: 'paused', monthlyAllowanceCents: 0 },
       forgivenDebtCents: 0,
     });
   });
 
   it('an org with no pool yet leaves the wallet without a parent, and without an overshoot choice to absorb into one', () => {
-    expect(planDriveWalletRehome({ status: 'active', debtCents: 0, overshootChoice: 'absorb_to_parent', to: { ownerType: 'org', orgId: 'o-new', parent: null } }).set)
-      .toMatchObject({ parentWalletId: null, overshootChoice: null, monthlyPeriodStart: null, monthlyPeriodEnd: null });
+    expect(planDriveWalletRehome({ status: 'active', debtCents: 0, overshootChoice: 'absorb_to_parent', liveHoldCount: 0, to: { ownerType: 'org', orgId: 'o-new', parent: null } }))
+      .toMatchObject({ set: { parentWalletId: null, overshootChoice: null, monthlyPeriodStart: null, monthlyPeriodEnd: null } });
+  });
+
+  it('WAL-6 (partial) a wallet with calls in flight is not re-homed: they would settle on the new funder, who never authorized them', () => {
+    expect(planDriveWalletRehome({ status: 'active', debtCents: 0, overshootChoice: null, liveHoldCount: 1, to: { ownerType: 'user', userId: 'u-lena', parent: period } }))
+      .toEqual({ kind: 'refuse', reason: 'calls_in_flight' });
   });
 });

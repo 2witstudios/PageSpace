@@ -105,6 +105,22 @@ describe('OrgDriveCard on Drive Settings › General', () => {
     expect((within(dialog).getByRole('button', { name: 'Remove them' }) as HTMLButtonElement).disabled).toBe(false);
   });
 
+  it('D-OW-60 the move-out dialog says the wallet\'s top-ups and donations travel with the drive; a move refused for calls in flight says to retry', async () => {
+    orgs.role = 'ADMIN';
+    api.del.mockRejectedValueOnce(new ApiRequestError('raw', 409, { error: 'raw', code: 'drive_wallet_calls_in_flight' }));
+    renderCard(drive({}));
+    fireEvent.click(screen.getByRole('button', { name: 'Move out of Northwind Labs' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByTestId('org-move-out-wallet-note').textContent).toMatch(/top-ups and donations it holds, including credits Northwind Labs added, travel with the drive/);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Keep them as invited' }));
+    await waitFor(() => expect(within(dialog).getByRole('alert').textContent).toContain('AI calls in progress. Try moving the drive again'));
+  });
+
+  it('D-OW-60 moving a personal drive in says its wallet\'s top-ups and donations travel with it', () => {
+    renderCard(drive({ orgId: null, isOwned: true }));
+    expect(screen.getByTestId('org-move-in-card').textContent).toMatch(/top-ups and donations it holds travel with the drive/);
+  });
+
   it('DRV-2 (partial) the owner of a personal drive can move it into one of their orgs; Home never offers it', async () => {
     renderCard(drive({ orgId: null, isOwned: true }));
     fireEvent.click(screen.getByRole('button', { name: 'Move into organization' }));

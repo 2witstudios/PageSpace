@@ -92,6 +92,14 @@ const driveNotFound = (): DriveNotFound => ({
   message: 'Drive not found',
 });
 
+/** [D-OW-60] the drive's wallet has AI calls in flight: the move waits for them to settle. */
+const driveWalletInUse = (): OrgDriveRefusal => ({
+  ok: false,
+  code: 'drive_wallet_calls_in_flight',
+  status: 409,
+  message: "This drive's wallet has AI calls in progress. Try moving the drive again in a minute, once they finish.",
+});
+
 async function lockDrive(tx: OrgDriveTx, driveId: string): Promise<DriveRow | null> {
   const [row] = await tx.select().from(drives).where(eq(drives.id, driveId)).for('update');
   return row ?? null;
@@ -157,6 +165,11 @@ export async function moveDriveToOrg(
     const floor = await openFloorCheck(tx, { driveId, orgId: input.orgId, visibilityAfter: input.orgVisibility ?? 'OPEN' });
     if (floor) return floor;
 
+    // [D-OW-60] the drive's wallet becomes the org's, under its pool, in this same transaction — refused,
+    // before anything is written, while calls are in flight on it.
+    const rehomed = await rehomeDriveWalletInTx(tx, { driveId, actorId, to: { kind: 'org', orgId: input.orgId } });
+    if (!rehomed.ok) return driveWalletInUse();
+
     const slug = await freeOrgSlug(tx, input.orgId, drive.slug);
     const [moved] = await tx
       .update(drives)
@@ -174,8 +187,6 @@ export async function moveDriveToOrg(
     // O-9: the drive's bytes leave each uploader's personal quota in the same transaction that
     // makes them the org's; the org's usage is derived from its drives, so it follows orgId.
     const storageReattribution = await reattributeDriveStorageInTx(tx, { driveId, orgId: input.orgId, direction: 'into-org' });
-    // [D-OW-60] the drive's wallet becomes the org's, under its pool, in this same transaction.
-    await rehomeDriveWalletInTx(tx, { driveId, actorId, to: { kind: 'org', orgId: input.orgId } });
     const publish = await deps.syncOrgMembership(tx, { kind: 'move-in', driveId, orgId: input.orgId });
     // POL-2 (Review #2762 P1-1): the drive brings its outsiders with it. Under the org row lock taken above, the
     // org's guests policy decides them as it decides any admission: off parks them (restored when guests come back
@@ -223,6 +234,11 @@ export async function moveDriveOutOfOrg(
     if (!verdict.ok) return verdict;
     if (orgId === null) throw new Error('Unreachable: move-out admitted a drive with no org');
 
+    // [D-OW-60] the drive's wallet becomes its lead's, under their personal root, in this same transaction —
+    // refused, before anything is written, while calls are in flight on it.
+    const rehomed = await rehomeDriveWalletInTx(tx, { driveId, actorId, to: { kind: 'personal', leadUserId: drive.ownerId } });
+    if (!rehomed.ok) return driveWalletInUse();
+
     // The lead (ownerId) stays; the drive becomes their personal drive. Personal slugs are
     // not unique per owner, so the slug is kept as is.
     const [moved] = await tx
@@ -233,8 +249,6 @@ export async function moveDriveOutOfOrg(
 
     // O-9: the drive's bytes go back onto each uploader's personal quota, atomically with orgId.
     const storageReattribution = await reattributeDriveStorageInTx(tx, { driveId, orgId, direction: 'out-of-org' });
-    // [D-OW-60] the drive's wallet becomes its lead's, under their personal root, in this same transaction.
-    await rehomeDriveWalletInTx(tx, { driveId, actorId, to: { kind: 'personal', leadUserId: moved.ownerId } });
     const publish = await deps.syncOrgMembership(tx, {
       kind: 'move-out',
       driveId,

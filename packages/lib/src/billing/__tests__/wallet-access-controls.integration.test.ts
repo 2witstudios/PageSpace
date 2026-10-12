@@ -25,7 +25,7 @@ import { automationSkipNotices, walletCapAlerts, walletConsumerCaps, walletFundi
 import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
 import { canConsumeAI } from '../credit-gate';
-import { consumeCredits } from '../credit-consume';
+import { consumeCredits, releaseHold } from '../credit-consume';
 import { getCreditBalance } from '../credit-balance';
 import { automationSpend, driveSpend, personTriggeredSpend } from '../spend-target';
 import { listSpendChoices } from '../spend-resolution';
@@ -492,6 +492,40 @@ describe('wallet access, visibility and controls (orgs on, real Postgres)', () =
         .toMatchObject({ allowed: true, walletId: w.productWalletId });
       const view = await getDriveWallet(w.chrisId, w.productId, 'session');
       expect(view.ok && view.wallet && 'myCap' in view.wallet ? view.wallet.myCap : null).toMatchObject({ dailyRemainingCents: null, monthlyRemainingCents: null });
+    });
+
+    it('WAL-6 (partial) a drive is not moved OUT while a call is in flight on its wallet: Marcus\'s org-authorized call never settles on Lena\'s own credits', async () => {
+      const w = world as World;
+      const hold = await canConsumeAI(w.marcusId, 'free', { spend: driveSpend(w.productId, 'drive_wallet'), estCostCents: 5 });
+      expect(hold).toMatchObject({ allowed: true, walletId: w.productWalletId });
+      const before = await walletRow(w.productWalletId);
+
+      expect(await moveDriveOutOfOrg(w.jonoId, w.productId, { implicitMembers: 'keep' }, moveDeps))
+        .toMatchObject({ ok: false, code: 'drive_wallet_calls_in_flight', status: 409, message: expect.stringContaining('Try moving the drive again') });
+      // Nothing moved: the drive is still the org's, its wallet untouched.
+      expect((await db.select({ orgId: drives.orgId }).from(drives).where(eq(drives.id, w.productId)))[0].orgId).toBe(w.orgId);
+      expect(await walletRow(w.productWalletId)).toMatchObject({ ownerType: 'org', parentWalletId: w.poolId, monthlyAllowanceCents: before.monthlyAllowanceCents });
+
+      // The call settles on the org pool that authorized it; then the move goes through.
+      const [log] = await db.insert(aiUsageLogs).values({ userId: w.marcusId, provider: 'openrouter', model: 'm', cost: 1 }).returning({ id: aiUsageLogs.id });
+      expect(await consumeCredits({ aiUsageLogId: log.id, userId: w.marcusId, costDollars: 1, holdId: hold.allowed ? hold.holdId : undefined, walletId: w.productWalletId })).toBe('settled');
+      expect(await moveDriveOutOfOrg(w.jonoId, w.productId, { implicitMembers: 'keep' }, moveDeps)).toMatchObject({ ok: true });
+      const lenaRoot = (await db.select().from(wallets).where(and(eq(wallets.userId, w.lenaId), sql`${wallets.subjectType} IS NULL`)))[0];
+      expect(lenaRoot.debtCents).toBe(0);
+      expect((await walletRow(w.poolId)).monthlyRemainingCents).toBe(POOL_CENTS - 150);
+    });
+
+    it('WAL-6 (partial) a drive is not moved INTO the org while a call is in flight on its wallet: the org pool never pays for a personal call', async () => {
+      const w = world as World;
+      const hold = await canConsumeAI(w.marcusId, 'free', { spend: driveSpend(w.sideId, 'drive_wallet'), estCostCents: 5 });
+      expect(hold).toMatchObject({ allowed: true, walletId: w.sideWalletId });
+      expect(await moveDriveToOrg(w.jonoId, w.sideId, { orgId: w.orgId }, moveDeps)).toMatchObject({ ok: false, code: 'drive_wallet_calls_in_flight' });
+      expect((await db.select({ orgId: drives.orgId }).from(drives).where(eq(drives.id, w.sideId)))[0].orgId).toBeNull();
+      expect(await walletRow(w.sideWalletId)).toMatchObject({ ownerType: 'user', parentWalletId: w.jonoRootId });
+
+      await releaseHold(hold.allowed && hold.holdId ? hold.holdId : '');
+      expect(await moveDriveToOrg(w.jonoId, w.sideId, { orgId: w.orgId }, moveDeps)).toMatchObject({ ok: true });
+      expect(await walletRow(w.sideWalletId)).toMatchObject({ ownerType: 'org', parentWalletId: w.poolId });
     });
 
     it('WAL-4 (partial) a donation to a wallet in debt is spendable at once: debt nets the allocation, never the donation', async () => {

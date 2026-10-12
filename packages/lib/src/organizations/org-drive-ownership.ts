@@ -37,7 +37,9 @@ export type OrgDriveRefusalCode =
   // POL-6: the drive would be Open with a default role below the org's floor.
   | 'POLICY_OPEN_ROLE_FLOOR'
   | 'NOT_DRIVE_LEAD_OR_ORG_ADMIN'
-  | 'TARGET_NOT_ORG_MEMBER';
+  | 'TARGET_NOT_ORG_MEMBER'
+  // [D-OW-60] the drive's wallet has AI calls in flight; moving it would settle them on the new funder.
+  | 'drive_wallet_calls_in_flight';
 
 export interface OrgDriveRefusal {
   ok: false;

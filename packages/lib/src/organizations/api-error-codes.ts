@@ -89,6 +89,8 @@ export const WALLET_ERROR_CODES = [
   'no_wallet',
   'wallet_exists',
   'wallet_in_use',
+  // [D-OW-60] a drive move refused while AI calls are in flight on the drive's wallet.
+  'drive_wallet_calls_in_flight',
   'wallet_not_available',
   'invalid_amount',
   'nothing_to_change',

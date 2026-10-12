@@ -124,6 +124,7 @@ export type RehomeTo =
   | { ownerType: 'user'; userId: string; parent: RehomeParent | null };
 
 export interface DriveWalletRehomePlan {
+  kind: 'rehome';
   set: {
     ownerType: 'org' | 'user';
     orgId: string | null;
@@ -153,10 +154,18 @@ export function planDriveWalletRehome(input: {
   status: WalletStatus;
   debtCents: number;
   overshootChoice: OvershootFunderChoice | null;
+  /**
+   * Live holds on the wallet and on any wallet whose holds draw through it. A call in flight settles
+   * on the wallet's parent AT SETTLE, so re-homing under it would charge its cost to the new funder,
+   * who never authorized it: the move is refused until those calls settle, as wallet deletion is.
+   */
+  liveHoldCount: number;
   to: RehomeTo;
-}): DriveWalletRehomePlan {
+}): DriveWalletRehomePlan | { kind: 'refuse'; reason: 'calls_in_flight' } {
+  if (input.liveHoldCount > 0) return { kind: 'refuse', reason: 'calls_in_flight' };
   const parent = input.to.parent;
   return {
+    kind: 'rehome',
     set: {
       ownerType: input.to.ownerType,
       orgId: input.to.ownerType === 'org' ? input.to.orgId : null,
