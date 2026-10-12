@@ -38,7 +38,7 @@ export interface ReadLock {
  * many orgs) at once: one read per chunk of orgs, never one per drive or page. Every id asked for gets an answer,
  * parsed as getOrgPolicies parses it (unset: the default, damaged: view, the value that adds nothing).
  */
-export async function getOpenDriveRoleFloors(orgIds: readonly string[], executor: Executor = db): Promise<Map<string, OpenRoleFloor>> {
+export async function getOpenDriveRoleFloors(orgIds: readonly string[], executor: Pick<typeof db, 'select'> = db): Promise<Map<string, OpenRoleFloor>> {
   const unique = [...new Set(orgIds)];
   const stored = new Map<string, unknown>();
   for (let i = 0; i < unique.length; i += ORG_ID_CHUNK) {

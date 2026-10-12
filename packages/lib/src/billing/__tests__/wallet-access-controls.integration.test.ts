@@ -33,6 +33,9 @@ import { centsFromCredits } from '../money-model';
 import { DEFAULT_CONSUMER_CAPS } from '../wallet-core';
 import { CONSUMER_WALLET_FIELDS } from '../wallet-views';
 import { refundFundingLeg, resetDueAllocations } from '../wallet-funding-shell';
+import { walletDriftAlerts } from '../wallet-reconcile';
+import { moveDriveOutOfOrg, moveDriveToOrg, type OrgDriveServiceDeps } from '../../services/org-drive-service';
+import type { OrgRole } from '@pagespace/db/schema/organizations';
 import {
   donateToDrive,
   getDriveSpend,
@@ -167,6 +170,15 @@ async function settledCall(w: World, userId: string, costDollars: number): Promi
 }
 
 const credits = (n: number): number => Math.round(centsFromCredits(n));
+
+const moveDeps: OrgDriveServiceDeps = {
+  getOrgRole: async (tx, orgId, userId) => {
+    const [row] = await tx.select({ role: orgMembers.role }).from(orgMembers).where(and(eq(orgMembers.orgId, orgId), eq(orgMembers.userId, userId)));
+    return (row?.role ?? null) as OrgRole | null;
+  },
+  syncOrgMembership: async () => async () => {},
+  getOrgDriveCreationPolicy: async () => 'members',
+};
 
 describe('wallet access, visibility and controls (orgs on, real Postgres)', () => {
   beforeAll(async () => {
@@ -435,6 +447,65 @@ describe('wallet access, visibility and controls (orgs on, real Postgres)', () =
       const guestView = await getDriveWallet(w.chrisId, w.productId, 'session');
       expect(guestView.ok && guestView.wallet && 'myCap' in guestView.wallet ? guestView.wallet.myCap : null)
         .toMatchObject({ dailyRemainingCents: credits(50), monthlyRemainingCents: credits(1_000) });
+    });
+  });
+
+  describe('D-OW-60: a drive move re-homes its wallet, guest standing follows the drive, debt never nets a donation', () => {
+    it('SPEND-6 (partial) WAL-2 (partial) a drive moved INTO the org: its wallet is the org\'s under the pool, and a guest spends it only with the switch on, always capped', async () => {
+      const w = world as World;
+      // Side's wallet carries 150¢ of wallet debt (WAL-6c), landed as an overshoot debt row would land it.
+      await db.update(wallets).set({ spentCents: 200, debtCents: 150, status: 'over', topupRemainingCents: 0 }).where(eq(wallets.id, w.sideWalletId));
+      await db.insert(creditLedger).values({ userId: w.jonoId, walletId: w.sideWalletId, entryType: 'adjustment', bucket: 'monthly', amountCents: -150, consumeStatus: 'applied' });
+      expect(await walletDriftAlerts({ toleranceCents: 0, limit: 10, walletIds: [w.sideWalletId] })).toEqual([]);
+      expect(await moveDriveToOrg(w.jonoId, w.sideId, { orgId: w.orgId }, moveDeps)).toMatchObject({ ok: true });
+
+      // Same row: the org's now, under its pool; the old funder's allocation and debt stayed behind (forgiven, ledgered).
+      expect(await walletRow(w.sideWalletId)).toMatchObject({ ownerType: 'org', orgId: w.orgId, userId: null, parentWalletId: w.poolId, monthlyAllowanceCents: 0, spentCents: 0, debtCents: 0, status: 'active' });
+      expect(await walletDriftAlerts({ toleranceCents: 0, limit: 10, walletIds: [w.sideWalletId] })).toEqual([]);
+      expect(await updateDriveWallet(w.anaId, w.sideId, { allocationCents: 2_000 }, 'session')).toMatchObject({ ok: true });
+      // Chris, outside Northwind, is invited onto the moved drive: a guest of it now.
+      await factories.createDriveMember(w.sideId, w.chrisId, { source: 'invite' });
+
+      // Chris is a guest now: refused while the switch is off, capped at the default when it is on.
+      expect(await canConsumeAI(w.chrisId, 'free', { spend: driveSpend(w.sideId, 'drive_wallet'), estCostCents: 5 }))
+        .toMatchObject({ allowed: false, refusal: { reason: 'guest_drive_wallet_off' } });
+      expect(await updateDriveWallet(w.anaId, w.sideId, { guestSpendEnabled: true }, 'session')).toMatchObject({ ok: true });
+      expect(await canConsumeAI(w.chrisId, 'free', { spend: driveSpend(w.sideId, 'drive_wallet'), estCostCents: credits(60) }))
+        .toMatchObject({ allowed: false, refusal: { reason: 'source_cap_reached' } });
+      expect(await canConsumeAI(w.chrisId, 'free', { spend: driveSpend(w.sideId, 'drive_wallet'), estCostCents: 5 }))
+        .toMatchObject({ allowed: true, walletId: w.sideWalletId });
+      const view = await getDriveWallet(w.chrisId, w.sideId, 'session');
+      expect(view.ok && view.wallet && 'myCap' in view.wallet ? view.wallet.myCap : null).toMatchObject({ dailyRemainingCents: expect.any(Number), monthlyRemainingCents: expect.any(Number) });
+    });
+
+    it('SPEND-6 (partial) WAL-2 (partial) a drive moved OUT of the org: its wallet is the lead\'s under their root, and its members are not guests', async () => {
+      const w = world as World;
+      await donateToDrive(w.marcusId, w.productId, { amountCents: 300, idempotencyKey: createId() }, 'session');
+      expect(await moveDriveOutOfOrg(w.jonoId, w.productId, { implicitMembers: 'keep' }, moveDeps)).toMatchObject({ ok: true });
+      const lenaRoot = (await db.select().from(wallets).where(and(eq(wallets.userId, w.lenaId), sql`${wallets.subjectType} IS NULL`)))[0];
+      // Same row, the lead's now under their root; the donation leg moved with it.
+      expect(await walletRow(w.productWalletId)).toMatchObject({ ownerType: 'user', userId: w.lenaId, orgId: null, parentWalletId: lenaRoot.id, monthlyAllowanceCents: 0, topupRemainingCents: 300 });
+      expect(await db.select().from(walletFundingLegs).where(eq(walletFundingLegs.walletId, w.productWalletId))).toHaveLength(1);
+
+      // Chris (outside the former org) is a member of a personal drive now — no guest switch, no guest cap.
+      expect(await canConsumeAI(w.chrisId, 'free', { spend: driveSpend(w.productId, 'drive_wallet'), estCostCents: credits(60) }))
+        .toMatchObject({ allowed: true, walletId: w.productWalletId });
+      const view = await getDriveWallet(w.chrisId, w.productId, 'session');
+      expect(view.ok && view.wallet && 'myCap' in view.wallet ? view.wallet.myCap : null).toMatchObject({ dailyRemainingCents: null, monthlyRemainingCents: null });
+    });
+
+    it('WAL-4 (partial) a donation to a wallet in debt is spendable at once: debt nets the allocation, never the donation', async () => {
+      const w = world as World;
+      await db.update(wallets).set({ spentCents: PRODUCT_ALLOCATION, debtCents: 300, status: 'over' }).where(eq(wallets.id, w.productWalletId));
+      expect(await canConsumeAI(w.marcusId, 'free', { spend: driveSpend(w.productId, 'drive_wallet'), estCostCents: 100 }))
+        .toMatchObject({ allowed: false, refusal: { reason: 'source_empty' } });
+      await donateToDrive(w.chrisId, w.productId, { amountCents: 200, idempotencyKey: createId() }, 'session');
+      expect((await listSpendChoices(w.marcusId, w.productId)).find((o) => o.source === 'drive_wallet')?.remainingCents).toBe(200);
+      const gate = await canConsumeAI(w.marcusId, 'free', { spend: driveSpend(w.productId, 'drive_wallet'), estCostCents: 100 });
+      expect(gate).toMatchObject({ allowed: true, walletId: w.productWalletId });
+      const [log] = await db.insert(aiUsageLogs).values({ userId: w.marcusId, provider: 'openrouter', model: 'm', cost: 0.5 }).returning({ id: aiUsageLogs.id });
+      expect(await consumeCredits({ aiUsageLogId: log.id, userId: w.marcusId, costDollars: 0.5, holdId: gate.allowed ? gate.holdId : undefined, walletId: gate.allowed ? gate.walletId : undefined })).toBe('settled');
+      expect(await walletRow(w.productWalletId)).toMatchObject({ topupRemainingCents: 125, debtCents: 300 });
     });
   });
 

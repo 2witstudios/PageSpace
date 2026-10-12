@@ -349,29 +349,39 @@ function allocationRemainingCents(wallet: WalletFunds): number {
   return Math.max(0, wholeNonNegative(wallet.allocationCents) - wholeNonNegative(wallet.allocationSpentCents));
 }
 
+/**
+ * [D-OW-60] What of this period's allocation the wallet can still draw: its allocation left, less its
+ * debt. Debt nets against the allocation only — the funder's money — never against top-ups or
+ * donations, which stay spendable at once even on an `over` wallet. Never negative.
+ */
+function allocationNetOfDebtCents(wallet: WalletFunds): number {
+  return Math.max(0, allocationRemainingCents(wallet) - wholeNonNegative(wallet.debtCents));
+}
+
+function legsRemainingCents(wallet: WalletFunds): number {
+  return wallet.topupLegs.reduce((sum, leg) => sum + wholeNonNegative(leg.remainingCents), 0);
+}
+
 function balanceAvailableCents(balance: Balance): number {
   return balance.monthlyCents + balance.topupCents - Math.max(0, balance.debtCents ?? 0);
 }
 
 /**
- * What a child wallet can spend now: its remaining allocation (no more than the parent
- * can cover), plus its funding legs, less its debt. Never negative.
+ * What a child wallet can spend now: its funding legs, plus its allocation left net of its debt
+ * (no more than the parent can cover) — [D-OW-60]: debt never nets against top-ups or donations.
  */
 export function childSpendableCents(wallet: WalletFunds, parentAvailableCents: number): number {
-  const fromAllocation = Math.min(allocationRemainingCents(wallet), wholeNonNegative(parentAvailableCents));
-  const fromLegs = wallet.topupLegs.reduce((sum, leg) => sum + wholeNonNegative(leg.remainingCents), 0);
-  return Math.max(0, fromAllocation + fromLegs - wholeNonNegative(wallet.debtCents));
+  return Math.min(allocationNetOfDebtCents(wallet), wholeNonNegative(parentAvailableCents)) + legsRemainingCents(wallet);
 }
 
 /**
- * A child wallet's OWN remaining budget: its allocation left plus its funding legs, less its debt,
- * never negative — what the wallet holds for its consumers, NOT bounded by what its parent can
+ * A child wallet's OWN remaining budget: its funding legs plus its allocation left net of its debt
+ * ([D-OW-60]), never negative — what the wallet holds for its consumers, NOT bounded by what its parent can
  * cover (SPEND-9: the parent's balance is never disclosed through it). The gate decides on
  * {@link childSpendableCents}; every surface shows this.
  */
 export function walletOwnRemainingCents(wallet: WalletFunds): number {
-  const fromLegs = wallet.topupLegs.reduce((sum, leg) => sum + wholeNonNegative(leg.remainingCents), 0);
-  return Math.max(0, allocationRemainingCents(wallet) + fromLegs - wholeNonNegative(wallet.debtCents));
+  return allocationNetOfDebtCents(wallet) + legsRemainingCents(wallet);
 }
 
 export interface CapRemaining {
@@ -414,7 +424,8 @@ export interface WalletSpendResult {
  */
 export function allocateWalletSpend(input: WalletSpendInput): WalletSpendResult {
   const amount = wholeNonNegative(input.amountCents);
-  const allocationDraw = Math.min(amount, allocationRemainingCents(input.wallet), wholeNonNegative(balanceAvailableCents(input.parent)));
+  // [D-OW-60] the allocation is drawable only as far as the wallet's debt leaves it; the legs carry the rest.
+  const allocationDraw = Math.min(amount, allocationNetOfDebtCents(input.wallet), wholeNonNegative(balanceAvailableCents(input.parent)));
   const parentDraw = allocateSpend(input.parent, allocationDraw);
 
   let remaining = amount - parentDraw.appliedCents;

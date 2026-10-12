@@ -55,7 +55,7 @@ import { formatCreditCount } from '../billing/money-model';
 import { toPersonalSubscriptionTier } from '../billing/subscription-tiers';
 import { capChangeOnlyRestricts, planDeleteWallet, planOrgPoolPause, planTopUp, planWalletPatch, walletPatchOnlyRestricts, type DeleteBlocker, type WalletPatchInput } from '../billing/wallet-admin';
 import { donateToDriveWallet } from '../billing/wallet-funding-shell';
-import { readEffectiveConsumerCaps } from '../billing/consumer-caps';
+import { isGuestOnDriveWallet, readEffectiveConsumerCaps } from '../billing/consumer-caps';
 import { checkOrgActive } from '../organizations/status';
 import { findMembershipRole, findOrganizationNames, listOrgMembers } from '../organizations/repository';
 import { loadSeatCapFactsForUsers } from '../billing/seat-allowance';
@@ -243,7 +243,7 @@ async function usageCentsSince(walletId: string, userId: string, since: Date): P
 
 /** The viewer's own caps here as the gate applies them (a guest is always capped, D-OW-4), and their spend. */
 async function myCapFacts(walletId: string, userId: string): Promise<DriveWalletFacts['myCap']> {
-  const cap = await readEffectiveConsumerCaps(db, walletId, userId);
+  const cap = await readEffectiveConsumerCaps(db, walletId, userId, { isGuest: await isGuestOnDriveWallet(db, walletId, userId) });
   if (!cap) return null;
   const nowMs = Date.now();
   return {
@@ -318,8 +318,9 @@ async function orgNamesById(orgIds: string[]): Promise<Map<string, string>> {
 async function poolFacts(orgId: string): Promise<PoolFacts | null> {
   const pool = await orgPoolRow(db, orgId);
   if (!pool) return null;
+  // [D-OW-60] what a child may still draw of its allocation is net of its debt.
   const [children] = await db
-    .select({ outstanding: sql<number>`coalesce(sum(greatest(${wallets.monthlyAllowanceCents} - ${wallets.spentCents}, 0)), 0)::int` })
+    .select({ outstanding: sql<number>`coalesce(sum(greatest(${wallets.monthlyAllowanceCents} - ${wallets.spentCents} - ${wallets.debtCents}, 0)), 0)::int` })
     .from(wallets)
     .where(eq(wallets.parentWalletId, pool.id));
   const held = await liveHeldCents(db, [], [pool.id]);

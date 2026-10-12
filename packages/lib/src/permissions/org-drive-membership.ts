@@ -130,11 +130,12 @@ export async function resolveEffectiveDriveMemberships(
     executor,
     candidates.filter((_, i) => needsDefaultRole[i]).map(({ drive }) => drive.id),
   );
-  // POL-6: read once per org, only where an org MEMBER resolves an OPEN drive (the only place a floor can apply).
+  // POL-6: read once per org, only where an org MEMBER resolves an OPEN drive (the only place a floor can apply), through
+  // the caller's executor: a gate deciding under its row locks must not wait on a second pool connection.
   const floors = await getOpenDriveRoleFloors(candidates.flatMap((_, i) => {
     const orgId = facts[i].orgId;
     return orgId !== null && orgRoleOf(i) === 'MEMBER' && facts[i].orgVisibility === 'OPEN' ? [orgId] : [];
-  }));
+  }), executor);
 
   return candidates.map(({ userId, drive, row }, i) => {
     const orgId = facts[i].orgId;

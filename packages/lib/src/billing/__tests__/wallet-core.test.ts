@@ -39,6 +39,7 @@ import {
   debtNoticeFunder,
   debtNoticePeriodStartMs,
   consumerCapsInForce,
+  walletOwnRemainingCents,
   walletChainStatus,
   driveWalletOpenTo,
 } from '../wallet-core';
@@ -479,6 +480,11 @@ describe('allocation math', () => {
       c(1325),
     ],
     ['wallet debt nets from what is spendable', productFunds({ allocationSpentCents: c(1200), debtCents: c(40) }), c(9000), 0],
+    // D-OW-60: debt nets against the allocation only, never against top-ups or donations.
+    ['D-OW-60 debt never nets against a donation: an over wallet\'s donation is spendable at once', productFunds({ allocationSpentCents: c(1200), debtCents: c(40), topupLegs: [{ legId: 'd1', funder: 'donation', donorUserId: 'u-ana', remainingCents: c(100) }] }), c(9000), c(100)],
+    ['D-OW-60 debt beyond the allocation left stays off the legs', productFunds({ allocationSpentCents: c(1170), debtCents: c(40), topupLegs: [{ legId: 'o1', funder: 'owner', donorUserId: null, remainingCents: c(100) }] }), c(9000), c(100)],
+    ['D-OW-60 debt within the allocation left nets from it', productFunds({ allocationSpentCents: c(1000), debtCents: c(40), topupLegs: [{ legId: 'o1', funder: 'owner', donorUserId: null, remainingCents: c(100) }] }), c(9000), c(260)],
+    ['D-OW-60 the parent bounds the allocation net of debt', productFunds({ allocationSpentCents: c(1000), debtCents: c(40) }), c(100), c(100)],
     ['a non-finite parent balance covers nothing from the allocation', productFunds(), Number.NaN, 0],
   ])('WAL-3 (partial) childSpendableCents: %s', (_label, funds, parentAvailable, expected) => {
     expect(childSpendableCents(funds, parentAvailable)).toBe(expected);
@@ -933,3 +939,21 @@ describe('the chosen source a fallback moved off, from its wallet row', () => {
   });
 });
 
+
+describe('D-OW-60: debt nets against the allocation, never against top-ups or donations', () => {
+  const funds = (over: Partial<WalletFunds>): WalletFunds => ({ allocationCents: c(1200), allocationSpentCents: c(1200), topupLegs: [{ legId: 'd1', funder: 'donation', donorUserId: 'u-ana', remainingCents: c(100) }], debtCents: c(40), ...over });
+
+  it('WAL-6 (partial) a wallet\'s own remaining is its legs plus what of the allocation the debt leaves', () => {
+    expect(walletOwnRemainingCents(funds({}))).toBe(c(100));
+    expect(walletOwnRemainingCents(funds({ allocationSpentCents: c(1000) }))).toBe(c(260));
+  });
+
+  it('WAL-6 (partial) a settle draws the allocation only as far as the debt leaves it, then the legs', () => {
+    const r = allocateWalletSpend({ parent: { monthlyCents: c(9000), topupCents: 0, debtCents: 0 }, wallet: funds({ allocationSpentCents: c(1170) }), amountCents: c(50) });
+    expect(r.allocationDrawCents).toBe(0);
+    expect(r.legDraws).toEqual([{ legId: 'd1', cents: c(50) }]);
+    const within = allocateWalletSpend({ parent: { monthlyCents: c(9000), topupCents: 0, debtCents: 0 }, wallet: funds({ allocationSpentCents: c(1000) }), amountCents: c(200) });
+    expect(within.allocationDrawCents).toBe(c(160));
+    expect(within.legDraws).toEqual([{ legId: 'd1', cents: c(40) }]);
+  });
+});

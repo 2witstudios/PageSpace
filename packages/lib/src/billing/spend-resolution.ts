@@ -270,15 +270,16 @@ async function resolveAutomationSpend(input: {
   const driveWallet = standing && mayDraw ? await driveWalletOf(standing.driveId) : null;
   // SEAT-9: a lapsed org's drive wallet reads as paused, so the run SKIPS — never a person.
   const orgLapsed = await orgLapsedFor(standing?.orgId);
-  const { leg: uncappedLeg } = await driveWalletLeg(driveWallet, input.now, [], orgLapsed);
-  const leg = uncappedLeg && driveWallet
-    ? cappedConsumerLeg(uncappedLeg, (await loadConsumerCapFacts(db, { walletId: driveWallet.id, userId: input.userId, now: input.now }))?.remaining ?? null)
-    : uncappedLeg;
   const gatedAs = personActor(input.userId, {
     orgId: standing?.orgId ?? null,
     isDriveMember: standing?.isDriveMember ?? false,
     isOrgMember: standing?.isOrgMember ?? false,
   });
+  const gatedAsGuest = gatedAs.kind === 'person' && gatedAs.isGuest;
+  const { leg: uncappedLeg } = await driveWalletLeg(driveWallet, input.now, [], orgLapsed);
+  const leg = uncappedLeg && driveWallet
+    ? cappedConsumerLeg(uncappedLeg, (await loadConsumerCapFacts(db, { walletId: driveWallet.id, userId: input.userId, now: input.now, isGuest: gatedAsGuest }))?.remaining ?? null)
+    : uncappedLeg;
   // WAL-8: the drive wallet's root owner governs — the org inside org drives, the drive
   // owner (whose personal wallet funds the drive wallet) on a personal drive.
   const walletOwnerTier: SubscriptionTier = standing?.orgId
@@ -291,7 +292,7 @@ async function resolveAutomationSpend(input: {
     driveWallet: leg,
     walletOwnerTier,
     reservationCents: input.reservationCents,
-    gatedAsGuest: gatedAs.kind === 'person' && gatedAs.isGuest,
+    gatedAsGuest,
     guestsMaySpendDriveWallet: driveWallet?.guestSpendEnabled ?? false,
   }));
   if (decision.kind === 'skip' && input.recordSkip) {
@@ -388,7 +389,7 @@ export async function resolveCallSpend(input: {
   // WAL-7: this person's own caps on the drive wallet bound their leg of it; a spent cap refuses
   // by name (source_cap_reached). The gate re-checks under the wallet's lock.
   const driveLeg = uncappedDriveLeg && driveWallet
-    ? cappedConsumerLeg(uncappedDriveLeg, (await loadConsumerCapFacts(db, { walletId: driveWallet.id, userId, now }))?.remaining ?? null)
+    ? cappedConsumerLeg(uncappedDriveLeg, (await loadConsumerCapFacts(db, { walletId: driveWallet.id, userId, now, isGuest: actor.kind === 'person' && actor.isGuest }))?.remaining ?? null)
     : uncappedDriveLeg;
   // WAL-2: a seat is the pool capped per consumer — never more than what is left of this
   // person's monthly allowance this pool period (D-OW-12). The gate re-checks it under the lock.
@@ -563,7 +564,7 @@ export async function listSpendChoices(userId: string, driveId: string | null): 
       // SPEND-9: the wallet's own remaining amount bounded by their own caps — never a figure bounded by the
       // pool or the funder's personal wallet behind it. Whether that parent can cover a call is the gate's
       // question; when it cannot, the call is refused by name (source_empty), and no balance is disclosed.
-      const caps = (await loadConsumerCapFacts(db, { walletId: driveWallet.id, userId, now }))?.remaining ?? null;
+      const caps = (await loadConsumerCapFacts(db, { walletId: driveWallet.id, userId, now, isGuest: actor.kind === 'person' && actor.isGuest }))?.remaining ?? null;
       out.push(choice('drive_wallet', driveWallet.id, names, driveWalletConsumerRemainingCents(driveWallet, caps)));
     }
     if (source === 'seat_allowance' && pool && standing?.orgId) {

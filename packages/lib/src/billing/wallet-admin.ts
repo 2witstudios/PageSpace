@@ -109,6 +109,73 @@ export function planOrgPoolPause(input: { paused: boolean; debtCents: number; or
 }
 
 // ---------------------------------------------------------------------------
+// A drive that changes owner re-homes its wallet ([D-OW-60])
+// ---------------------------------------------------------------------------
+
+/** The wallet a drive wallet will draw on after the move, with its period (null: none yet). */
+export interface RehomeParent {
+  id: string;
+  periodStart: Date | null;
+  periodEnd: Date | null;
+}
+
+export type RehomeTo =
+  | { ownerType: 'org'; orgId: string; parent: RehomeParent | null }
+  | { ownerType: 'user'; userId: string; parent: RehomeParent | null };
+
+export interface DriveWalletRehomePlan {
+  set: {
+    ownerType: 'org' | 'user';
+    orgId: string | null;
+    userId: string | null;
+    parentWalletId: string | null;
+    monthlyAllowanceCents: number;
+    spentCents: number;
+    debtCents: number;
+    status: WalletStatus;
+    overshootChoice: OvershootFunderChoice | null;
+    monthlyPeriodStart: Date | null;
+    monthlyPeriodEnd: Date | null;
+  };
+  /** The wallet debt cleared by the move, ledgered as forgiven so reconciliation stays exact. */
+  forgivenDebtCents: number;
+}
+
+/**
+ * [D-OW-60] Re-home a drive wallet when its drive moves into an org (owner the org, parent its pool) or
+ * out of one (owner the drive lead, parent their personal root). The wallet row keeps its id, so its
+ * funding legs and its ledger move with it. The move commits nobody's money: the allocation (a budget
+ * against the OLD funder) is cleared for the new funder to set, and wallet debt the old funder chose to
+ * carry (WAL-6c, netted from THEIR next allocation) is forgiven rather than charged to the new one. The
+ * kill switch survives; the period follows the new parent (D-OW-12).
+ */
+export function planDriveWalletRehome(input: {
+  status: WalletStatus;
+  debtCents: number;
+  overshootChoice: OvershootFunderChoice | null;
+  to: RehomeTo;
+}): DriveWalletRehomePlan {
+  const parent = input.to.parent;
+  return {
+    set: {
+      ownerType: input.to.ownerType,
+      orgId: input.to.ownerType === 'org' ? input.to.orgId : null,
+      userId: input.to.ownerType === 'user' ? input.to.userId : null,
+      parentWalletId: parent?.id ?? null,
+      monthlyAllowanceCents: 0,
+      spentCents: 0,
+      debtCents: 0,
+      status: walletStatusFor({ paused: input.status === 'paused', debtCents: 0 }),
+      // The CHECK refuses an overshoot choice on a wallet with no parent to absorb into.
+      overshootChoice: parent ? input.overshootChoice : null,
+      monthlyPeriodStart: parent?.periodStart ?? null,
+      monthlyPeriodEnd: parent?.periodEnd ?? null,
+    },
+    forgivenDebtCents: Math.max(0, Math.round(Number.isFinite(input.debtCents) ? input.debtCents : 0)),
+  };
+}
+
+// ---------------------------------------------------------------------------
 // [D-OW-33] what a LAPSED org may still change: only what restricts
 // ---------------------------------------------------------------------------
 

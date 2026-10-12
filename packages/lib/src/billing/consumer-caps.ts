@@ -18,7 +18,6 @@
 import type { db } from '@pagespace/db/db';
 import { and, eq, gt, gte, inArray, sql } from '@pagespace/db/operators';
 import { creditHolds, creditLedger } from '@pagespace/db/schema/credits';
-import { orgMembers } from '@pagespace/db/schema/organizations';
 import { walletConsumerCaps, wallets } from '@pagespace/db/schema/wallets';
 import {
   consumerCapsInForce,
@@ -46,34 +45,51 @@ export async function readConsumerCaps(executor: Reader, walletId: string, userI
 }
 
 /**
- * Whether `userId` is a GUEST on `walletId` (D-OW-4, DRV-8): the wallet is an org's subject
- * wallet (an org drive's) and they hold no accepted membership of that org. A personal drive's
- * wallet has no guests. Read through `executor`, so the gate re-derives it under its own lock
- * rather than trusting what resolution read.
+ * Whether `userId` is a GUEST of the drive `walletId` funds (D-OW-4, DRV-8), decided [D-OW-60] from
+ * the drive's CURRENT org by the one rule resolution uses (spend-target `personActor` over the
+ * permissions module's `loadDriveSpendStanding`) — never from the wallet row, which can lag a drive
+ * move. A wallet with no drive subject has no guests; a drive that is gone fails closed (a guest).
+ * Read through `executor`, so the gate re-derives it in its own transaction, under its locks.
  */
-export async function isGuestOnWallet(executor: Reader, walletId: string, userId: string): Promise<boolean> {
+/** The guest-standing modules, loaded once on first use (see isGuestOnDriveWallet). */
+let guestStandingModules: Promise<[typeof import('../permissions/spend-standing'), typeof import('./spend-target')]> | null = null;
+
+/**
+ * Load the modules isGuestOnDriveWallet reads standing through. The gate calls it BEFORE it takes its
+ * row locks, so a cold module load never runs while it holds a wallet locked.
+ */
+export function loadGuestStandingModules(): Promise<[typeof import('../permissions/spend-standing'), typeof import('./spend-target')]> {
+  // Loaded on use: the permissions loaders bring field crypto, which must stay out of credit-consume's
+  // static (client-reachable) import graph (wallet-cap-alerts imports this module).
+  guestStandingModules ??= Promise.all([import('../permissions/spend-standing'), import('./spend-target')]);
+  return guestStandingModules;
+}
+
+export async function isGuestOnDriveWallet(executor: Reader, walletId: string, userId: string): Promise<boolean> {
   const [wallet] = await executor
-    .select({ orgId: wallets.orgId, subjectType: wallets.subjectType })
+    .select({ subjectType: wallets.subjectType, subjectId: wallets.subjectId })
     .from(wallets)
     .where(eq(wallets.id, walletId))
     .limit(1);
-  if (!wallet || wallet.subjectType === null || wallet.orgId === null) return false;
-  const [member] = await executor
-    .select({ id: orgMembers.id })
-    .from(orgMembers)
-    .where(and(eq(orgMembers.orgId, wallet.orgId), eq(orgMembers.userId, userId)))
-    .limit(1);
-  return member === undefined;
+  if (!wallet || wallet.subjectType !== 'drive' || wallet.subjectId === null) return false;
+  const [{ loadDriveSpendStanding }, { personActor }] = await loadGuestStandingModules();
+  const standing = await loadDriveSpendStanding(userId, wallet.subjectId, executor);
+  const actor = personActor(userId, {
+    orgId: standing?.orgId ?? null,
+    isDriveMember: standing?.isDriveMember ?? false,
+    isOrgMember: standing?.isOrgMember ?? false,
+  });
+  return actor.kind === 'person' && actor.isGuest;
 }
 
 /**
  * The caps that bind `userId` on `walletId` (wallet-core consumerCapsInForce): their stored caps,
  * and for a guest each unset window at its D-OW-31 default. Null: no cap (a member with no row).
- * Every reader of a consumer's caps — the gate, resolution, the alerts, their own view — asks here.
+ * Every reader of a consumer's caps — the gate, resolution, the alerts, their own view — asks here,
+ * passing the guest standing it derived once (isGuestOnDriveWallet, or the resolved actor).
  */
-export async function readEffectiveConsumerCaps(executor: Reader, walletId: string, userId: string): Promise<ConsumerCaps | null> {
-  const stored = await readConsumerCaps(executor, walletId, userId);
-  return consumerCapsInForce(stored, { isGuest: await isGuestOnWallet(executor, walletId, userId) });
+export async function readEffectiveConsumerCaps(executor: Reader, walletId: string, userId: string, consumer: { isGuest: boolean }): Promise<ConsumerCaps | null> {
+  return consumerCapsInForce(await readConsumerCaps(executor, walletId, userId), consumer);
 }
 
 /** Settled spend per window, whole cents rounded up, of `userId` on `walletId`. */
@@ -120,9 +136,9 @@ export interface ConsumerCapFacts {
  */
 export async function loadConsumerCapFacts(
   executor: Reader,
-  input: { walletId: string; userId: string; now: Date },
+  input: { walletId: string; userId: string; now: Date; isGuest: boolean },
 ): Promise<ConsumerCapFacts | null> {
-  const caps = await readEffectiveConsumerCaps(executor, input.walletId, input.userId);
+  const caps = await readEffectiveConsumerCaps(executor, input.walletId, input.userId, { isGuest: input.isGuest });
   if (!caps) return null;
   const nowMs = input.now.getTime();
   const dayStart = new Date(utcDayStartMs(nowMs));

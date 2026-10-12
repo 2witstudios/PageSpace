@@ -4,7 +4,7 @@
  *
  * The decisions are pure (organizations/org-drive-ownership.ts); this module is the IO edge.
  * Each operation runs in one transaction: lock the drive, lock the org, read the actor's org
- * role, decide, write drives.orgId, re-attribute the drive's stored bytes (O-9), and run the
+ * role, decide, write drives.orgId, re-attribute the drive's stored bytes (O-9), re-home its wallet ([D-OW-60]), and run the
  * org-membership sync, so a refused or failed move leaves the drive and every quota exactly as
  * they were.
  *
@@ -41,6 +41,7 @@ import { removeFormerLeadOwnerRow } from '../permissions/org-drive-membership';
 import { getActorInfo, logActivityWithTx } from '../monitoring/activity-logger';
 import { reattributeDriveStorageInTx, type StorageReattributionResult } from './storage-limits';
 import { recordOrgAuditEventAfterCommit } from '../audit/org-audit';
+import { rehomeDriveWalletInTx } from '../billing/drive-wallet-rehome';
 
 export type OrgDriveTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -173,6 +174,8 @@ export async function moveDriveToOrg(
     // O-9: the drive's bytes leave each uploader's personal quota in the same transaction that
     // makes them the org's; the org's usage is derived from its drives, so it follows orgId.
     const storageReattribution = await reattributeDriveStorageInTx(tx, { driveId, orgId: input.orgId, direction: 'into-org' });
+    // [D-OW-60] the drive's wallet becomes the org's, under its pool, in this same transaction.
+    await rehomeDriveWalletInTx(tx, { driveId, actorId, to: { kind: 'org', orgId: input.orgId } });
     const publish = await deps.syncOrgMembership(tx, { kind: 'move-in', driveId, orgId: input.orgId });
     // POL-2 (Review #2762 P1-1): the drive brings its outsiders with it. Under the org row lock taken above, the
     // org's guests policy decides them as it decides any admission: off parks them (restored when guests come back
@@ -230,6 +233,8 @@ export async function moveDriveOutOfOrg(
 
     // O-9: the drive's bytes go back onto each uploader's personal quota, atomically with orgId.
     const storageReattribution = await reattributeDriveStorageInTx(tx, { driveId, orgId, direction: 'out-of-org' });
+    // [D-OW-60] the drive's wallet becomes its lead's, under their personal root, in this same transaction.
+    await rehomeDriveWalletInTx(tx, { driveId, actorId, to: { kind: 'personal', leadUserId: moved.ownerId } });
     const publish = await deps.syncOrgMembership(tx, {
       kind: 'move-out',
       driveId,
