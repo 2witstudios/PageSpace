@@ -21,24 +21,16 @@ import {
   hasAppDriveMembership,
 } from '@pagespace/lib/permissions/app-permissions';
 import { checkDriveAccess } from '@pagespace/lib/services/drive-member-service';
-import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 import { checkActorDriveAuthentication, checkActorResourceAuthentication, dropWithheldDerivedPages } from '@pagespace/lib/permissions/actor-authentication';
 import { PageType } from '@pagespace/lib/utils/enums';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
 
-/**
- * The access actor this tool call runs as (D-OW-45): the credential that drove the turn, or the automation that
- * runs as its creator. Its user must be the context's user; a context that disagrees with itself refuses, never
- * guesses.
- */
-export function toolActor(context: ToolExecutionContext): AccessActor {
-  if (context.accessActor.userId !== context.userId) {
-    throw new Error('Tool context actor does not match its user');
-  }
-  return context.accessActor;
-}
+// toolActor lives in its own dependency-free module: tool-name catalogs the browser imports (sandbox-tools,
+// sandbox-git-tools) need it, and this module pulls the server-only permission layer.
+import { toolActor } from './tool-actor';
+export { toolActor };
 
 /**
  * SEC-2/3: the org sign-in policy of the page's (or drive's) org, asked of the person (or automation) driving the

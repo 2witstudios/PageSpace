@@ -41,7 +41,7 @@ import {
   type OpenResult,
 } from './sandbox-git/generate-tools';
 import { SANDBOX_GIT_TOOL_ROWS } from './sandbox-git/tools/registry';
-import { toolActor } from './actor-permissions';
+import { toolActor } from './tool-actor';
 import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 // Tool names consumed by tool-filtering.ts to detect whether the sandbox git/gh
