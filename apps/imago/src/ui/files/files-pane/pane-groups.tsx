@@ -12,9 +12,10 @@ export const paneGroupLabelClass =
   'flex w-full cursor-pointer items-center gap-1 border-0 bg-transparent px-2 pt-3 pb-1 text-left text-2xs font-medium tracking-wide text-ink-muted uppercase';
 
 /** A favorite or recent: a 30px row, type icon, title and its age. */
-export const paneRowClass = (current: boolean): string =>
+export const paneRowClass = (current: boolean, roomy = false): string =>
   cn(
-    'flex h-pane-row items-center gap-2 rounded-md px-2 text-sm no-underline hover:no-underline',
+    'flex items-center gap-2 rounded-md px-2 text-sm no-underline hover:no-underline',
+    roomy ? 'h-phone-row' : 'h-pane-row',
     current ? 'bg-accent-soft font-medium text-accent-deep' : 'text-ink hover:bg-fill',
   );
 
@@ -37,12 +38,14 @@ export type PaneRowProps = {
   readonly current: boolean;
   /** The age beside a recent (now, 1h); none for a favorite. */
   readonly meta?: string;
+  /** A phone row: 44px tall. */
+  readonly roomy?: boolean;
 };
 
-export function PaneRow({ href, title, type, current, meta }: PaneRowProps) {
+export function PaneRow({ href, title, type, current, meta, roomy = false }: PaneRowProps) {
   const look = pageTypeIcons[type];
   return (
-    <Link href={href} prefetch={true} className={paneRowClass(current)} aria-current={current ? 'page' : undefined}>
+    <Link href={href} prefetch={true} className={paneRowClass(current, roomy)} aria-current={current ? 'page' : undefined}>
       <span className={look.hue} aria-hidden="true">
         {renderIcon({ name: look.icon, size: 15 })}
       </span>

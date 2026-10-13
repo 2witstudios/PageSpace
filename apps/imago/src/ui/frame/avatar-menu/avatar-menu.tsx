@@ -47,8 +47,9 @@ export const profileFrom = (body: unknown): Profile => {
  * The avatar menu, bound to the viewer's profile, the credit balance, the page's theme, the
  * feedback dialog, the verify-email action and web's logout.
  * `active`: the account is open, so the avatar carries the spine's ring.
+ * `more`: the phone bar's More item, which opens this same menu.
  */
-export function AvatarMenu({ active = false }: { readonly active?: boolean } = {}) {
+export function AvatarMenu({ active = false, more }: { readonly active?: boolean; readonly more?: { readonly notifications: number } } = {}) {
   const { data } = useSWR<unknown>(ME);
   const { data: creditsBody } = useSWR<unknown>(CREDITS);
   const { open, setOpen, ref } = useDisclosure();
@@ -82,6 +83,7 @@ export function AvatarMenu({ active = false }: { readonly active?: boolean } = {
         verifyEmail: profile.emailVerified === false ? { onVerify: () => { setOpen(false); void resend(); } } : null,
         detailsRef: ref,
         active,
+        more,
       })}
       <FeedbackDialog isOpen={feedbackOpen} onClose={() => setFeedbackOpen(false)} />
     </>

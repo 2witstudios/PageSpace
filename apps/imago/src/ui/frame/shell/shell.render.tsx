@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import type { Columns } from '../stage/columns';
 import type { PaneLayout, Stage } from '../stage/stage';
 import { Pane } from '../pane/pane';
+import type { ViewportTier } from '../viewport/viewport-tier';
 import {
   chatSlotClass,
   columnsRowClass,
@@ -9,6 +10,7 @@ import {
   listSlotClass,
   objectSlotClass,
   railClass,
+  scrimClass,
   shellClass,
   stageSheetClass,
 } from './shell-class';
@@ -32,6 +34,14 @@ export type ShellRenderProps = {
   readonly empty: ReactNode;
   /** The ⌘K palette: drawn over every pane, so it sits outside them. */
   readonly palette: ReactNode;
+  /** Below 1280px Imago floats; below 1024px the pane does too. Desktop when omitted. */
+  readonly tier?: ViewportTier;
+  /** Void action: the scrim behind the Imago sheet was pressed. */
+  readonly onDismissImago?: () => void;
+  /** Void action: the scrim behind the pane sheet was pressed. */
+  readonly onDismissPane?: () => void;
+  /** Under the Electron desktop app: the frame marks itself so the desktop CSS insets the spine. */
+  readonly desktopFrame?: boolean;
 };
 
 /**
@@ -43,6 +53,7 @@ export type ShellRenderProps = {
  */
 export function renderShell(props: ShellRenderProps): ReactNode {
   const { stage, layout, columns, hydrated, rail, banner, tabBar, list, object, chat, empty, palette } = props;
+  const tier = props.tier ?? 'desktop';
   return (
     <div
       className={shellClass}
@@ -51,22 +62,34 @@ export function renderShell(props: ShellRenderProps): ReactNode {
       data-list-hidden={layout.listHidden}
       data-object={stage.object?.kind}
       data-imago={columns.imago}
+      data-tier={tier}
       data-hydrated={hydrated ? '' : undefined}
+      data-desktop-frame={props.desktopFrame ? '' : undefined}
     >
-      <nav aria-label="Sections" className={railClass} data-slot="rail">
+      <nav aria-label="Sections" className={railClass} data-slot="rail" data-desktop-drag="">
         {rail}
       </nav>
       <div className={stageSheetClass} data-slot="stage">
         {banner}
         {tabBar}
         <div className={columnsRowClass}>
-          <Pane open={layout.list !== 'closed'} width={listSlotClass(columns, layout.list)} slot="list">
+          {columns.paneSheet ? (
+            <button type="button" className={scrimClass} aria-label="Dismiss sidebar" onClick={props.onDismissPane} />
+          ) : null}
+          {columns.imago === 'overlay' ? (
+            <button type="button" className={scrimClass} aria-label="Dismiss Imago overlay" onClick={props.onDismissImago} />
+          ) : null}
+          <Pane open={layout.list !== 'closed'} width={listSlotClass(columns, layout.list, tier)} slot="list">
             {list}
           </Pane>
           <Pane open={columns.page} width={objectSlotClass(columns)} slot="object">
             {object}
           </Pane>
-          <Pane open={columns.imago === 'docked' || columns.imago === 'ground'} width={chatSlotClass(columns)} slot="chat">
+          <Pane
+            open={columns.imago === 'docked' || columns.imago === 'overlay' || columns.imago === 'ground'}
+            width={chatSlotClass(columns, tier)}
+            slot="chat"
+          >
             {chat}
           </Pane>
           <Pane open={columns.imago === 'none'} width={emptySlotClass(columns)} slot="empty">

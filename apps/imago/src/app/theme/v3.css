@@ -159,6 +159,17 @@
 
 /* Share in the page head (SPEC v3: outlined, 30px, radius 8, identical everywhere). The trigger
    is classic's ShareDialog button, re-skinned here rather than forked. */
+/* A page on a phone (C-Resp-Phone-Doc): the Formatting toolbar scrolls sideways and its tools are at least 38px. */
+@utility phone-doc-body {
+  & [role='toolbar'] {
+    overflow-x: auto;
+  }
+  & [role='toolbar'] button {
+    min-block-size: var(--spacing-phone-tap);
+    min-inline-size: var(--spacing-phone-tap);
+  }
+}
+
 @utility share-trigger {
   & button {
     height: 30px;
@@ -171,4 +182,17 @@
     font-size: 13px;
     font-weight: 500;
   }
+}
+
+/* Responsive tiers (C-Resp-Tablet-Doc, C-Resp-Phone-Tree): the pane docks at 236px and Imago is a
+   340px sheet between 1024 and 1279; a phone has a 52px head, a 64px bottom bar and 44px rows. */
+@theme {
+  --spacing-pane-overlay: 236px;
+  --spacing-chat-overlay: 340px;
+  --spacing-phone-head: 52px;
+  --spacing-phone-bar: 64px;
+  --spacing-phone-row: 44px;
+  --spacing-phone-ask-bottom: 80px;
+  --spacing-phone-tap: 38px;
+  --spacing-phone-sheet-row: 48px;
 }

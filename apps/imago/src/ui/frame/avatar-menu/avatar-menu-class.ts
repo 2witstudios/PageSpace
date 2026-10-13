@@ -41,3 +41,13 @@ export const accountCountClass = 'ml-auto text-xs tabular-nums text-ink-muted';
 
 /** The "Unverified" tag on the Verify Email row. */
 export const accountBadgeClass = 'ml-auto rounded-md px-2 py-1 text-xs font-medium text-status-warning-ink bg-status-warning/10';
+
+/** The phone More item opens its menu upwards from the bar, over the page. */
+export const phoneAccountMenuClass =
+  'absolute right-0 bottom-full z-popover mb-2 m-0 flex w-max list-none flex-col gap-1 rounded-lg border border-hairline p-1 shadow-2 surface-glass-raised';
+
+/** More in the bottom bar: the same shape as its neighbours (phone-bar-class.ts). */
+export const phoneMoreClass = (active: boolean): string =>
+  `relative flex flex-1 cursor-pointer summary-plain flex-col items-center justify-center gap-0.5 rounded-xl text-2xs ${
+    active ? 'font-semibold text-spine-on' : 'font-medium text-spine-dim'
+  }`;

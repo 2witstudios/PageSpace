@@ -131,7 +131,7 @@ describe('shell frame classes', () => {
       actual: [stageSheetClass, columnsRowClass],
       expected: [
         'mt-2 flex min-w-0 flex-1 flex-col overflow-hidden rounded-tl-stage bg-background shadow-sheet',
-        'flex min-h-0 flex-1',
+        'relative flex min-h-0 flex-1',
       ],
     });
   });

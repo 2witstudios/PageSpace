@@ -47,7 +47,7 @@ export type TabBarRenderProps = {
  */
 export function renderTabBar(props: TabBarRenderProps): ReactNode {
   return (
-    <div role="tablist" aria-label="Open pages" className={tabBarClass}>
+    <div role="tablist" aria-label="Open pages" data-desktop-drag="" className={tabBarClass}>
       <div className="flex items-center gap-1 pr-2">
         <button type="button" className={tabControlClass} aria-label="Back" title="Back" disabled={!props.canBack} onClick={props.onBack}>
           {renderIcon({ name: 'chevronLeft', size: 15 })}
