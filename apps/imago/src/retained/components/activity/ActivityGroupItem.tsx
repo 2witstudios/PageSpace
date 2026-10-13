@@ -28,6 +28,8 @@ interface ActivityGroupItemProps {
   context?: RollbackContext;
   onRollback?: (activityId: string, force: boolean) => Promise<ActivityActionResult>;
   onRollbackToPointSuccess?: () => void;
+  /** Ids of changes a later rollback already undid, from the same timeline. */
+  rolledBackIds?: ReadonlySet<string>;
   defaultOpen?: boolean;
 }
 
@@ -64,6 +66,7 @@ export function ActivityGroupItem({
   context,
   onRollback,
   onRollbackToPointSuccess,
+  rolledBackIds,
   defaultOpen = false,
 }: ActivityGroupItemProps) {
   const [isOpen, setIsOpen] = useState(defaultOpen);
@@ -161,6 +164,7 @@ export function ActivityGroupItem({
                 context={context}
                 onRollback={onRollback}
                 onRollbackToPointSuccess={onRollbackToPointSuccess}
+                rolledBack={rolledBackIds?.has(activity.id) ?? false}
               />
             ))}
           </div>

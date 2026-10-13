@@ -1,34 +1,15 @@
-"use client";
+'use client';
 
-import { usePageTree } from "@/retained/hooks/usePageTree";
-import PageTree from "@/retained/components/layout/left-sidebar/page-tree/PageTree";
-import { useParams } from "@/retained-adapters/navigation";
-import { useDriveStore } from "@/retained/hooks/useDrive";
-import { useEffect } from "react";
+import { useParams, useRouter, useSearchParams } from '@/retained-adapters/navigation';
+import { TrashView } from '@/ui/tools/trash/trash-view';
+import { trashFilterFrom } from '@/ui/tools/trash/trash-model';
 
+/** The trash middle; the Files pane beside it is the shell's. */
 export default function TrashPage() {
   const params = useParams();
   const driveId = params.driveId as string;
-  const { tree, isLoading, isError, mutate } = usePageTree(driveId, true);
-  const drives = useDriveStore((state) => state.drives);
-  const fetchDrives = useDriveStore((state) => state.fetchDrives);
-  
-  const drive = drives.find(d => d.id === driveId);
+  const router = useRouter();
+  const filter = trashFilterFrom(useSearchParams().get('type'));
 
-  // Fetch drives if not already loaded
-  useEffect(() => {
-    if (driveId && !drive) {
-      fetchDrives();
-    }
-  }, [driveId, drive, fetchDrives]);
-
-  if (isLoading) return <div>Loading...</div>;
-  if (isError) return <div>Failed to load trash.</div>;
-
-  return (
-    <div className="p-4">
-      <h1 className="text-2xl font-bold mb-4">Trash</h1>
-      <PageTree driveId={driveId} initialTree={tree} mutate={mutate} isTrashView={true} />
-    </div>
-  );
+  return <TrashView driveId={driveId} filter={filter} onFilterChange={(href) => router.replace(href)} />;
 }
