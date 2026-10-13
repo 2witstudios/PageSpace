@@ -30,6 +30,7 @@ vi.mock('../../audit/org-audit', () => ({
 
 import { updateOrgPolicies } from '../policies';
 import { getOrgPolicies } from '../policy-reader';
+import { countOrgSignInBlocked } from '../sign-in-blocked';
 
 const created = { userIds: [] as string[], orgIds: [] as string[], driveIds: [] as string[] };
 let orgId: string;
@@ -129,6 +130,15 @@ describe('changing an org sign-in policy (D-OW-45)', () => {
     expect(result).toMatchObject({ ok: true, signInBlocked: { members: 2, guests: 1, credentials: 4 } });
     expect(blockedEvent()).toMatchObject({ details: { signIn: { members: 2, guests: 1, credentials: 4 } } });
     expect(JSON.stringify(blockedEvent())).not.toContain(guest);
+  });
+
+  it('POL-1 (partial) the count reads people in chunks, and every chunking counts the same (review #2866 B: no bind-parameter limit)', async () => {
+    const strongOnly = { requireStrongSignIn: true, maximumSessionAgeMinutes: null };
+    const whole = await countOrgSignInBlocked(db, orgId, strongOnly);
+    expect(whole.members).toBeGreaterThan(1);
+    for (const chunkSize of [1, 2]) {
+      expect(await countOrgSignInBlocked(db, orgId, strongOnly, new Date(), chunkSize)).toEqual(whole);
+    }
   });
 
   it('SEC-3 (partial) POL-1 (partial) a maximum age audits the stale and evidence-less credentials it refuses', async () => {

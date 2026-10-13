@@ -31,9 +31,22 @@ export interface SignInBlockedCounts {
 type Row = { userId: string; authenticatedAt: Date | null; authenticationAssurance: string | null };
 type Credential = { userId: string; authentication: VerifiedAuthentication | null };
 
-/** Every live credential the given people sign in with, with its evidence. */
-async function listCredentials(executor: Executor, userIds: string[], now: Date): Promise<Credential[]> {
-  if (userIds.length === 0) return [];
+/** Ids per credential read: well under Postgres's bind-parameter limit, as the policy reader chunks. */
+export const BLOCKED_COUNT_CHUNK = 500;
+
+/**
+ * Every live credential the given people sign in with, with its evidence, read `chunkSize` people at a time: an org of
+ * any size stays under the bind-parameter limit, so a tightening is never refused for its count (review #2866 B).
+ */
+async function listCredentials(executor: Executor, userIds: string[], now: Date, chunkSize: number): Promise<Credential[]> {
+  const out: Credential[] = [];
+  for (let i = 0; i < userIds.length; i += chunkSize) {
+    out.push(...(await listCredentialsOf(executor, userIds.slice(i, i + chunkSize), now)));
+  }
+  return out;
+}
+
+async function listCredentialsOf(executor: Executor, userIds: string[], now: Date): Promise<Credential[]> {
   const [userSessions, devices, mcp, refresh] = await Promise.all([
     executor.select({ userId: sessions.userId, authenticatedAt: sessions.authenticatedAt, authenticationAssurance: sessions.authenticationAssurance })
       .from(sessions)
@@ -61,9 +74,10 @@ export async function countOrgSignInBlocked(
   orgId: string,
   policy: OrgAuthenticationPolicy,
   now: Date = new Date(),
+  chunkSize: number = BLOCKED_COUNT_CHUNK,
 ): Promise<SignInBlockedCounts> {
   const people = await listOrgPeople(orgId, executor);
-  const credentials = await listCredentials(executor, [...people.members, ...people.guests], now);
+  const credentials = await listCredentials(executor, [...people.members, ...people.guests], now, chunkSize);
   const nowMs = now.getTime();
   const members = countSignInBlocked({ policy, credentials: credentials.filter((c) => people.members.has(c.userId)), nowMs });
   const guests = countSignInBlocked({ policy, credentials: credentials.filter((c) => people.guests.has(c.userId)), nowMs });

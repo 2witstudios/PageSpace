@@ -105,6 +105,15 @@ describe('changing a sign-in policy (D-OW-45)', () => {
     expect(decideSignInPolicyChange({ before: damaged, after: hourly, authentication: single, nowMs })).toEqual({ allowed: true });
     expect(decideSignInPolicyChange({ before: damaged, after: hourly, authentication: { ...single, authenticatedAtMs: nowMs - 15 * 60_000 }, nowMs })).toEqual({ allowed: false, code: 'org_reauthentication_required' });
   });
+  it('SEC-2 (partial) D-OW-53(3) turning strong sign-in on while the stored age is damaged is judged at the 15-minute floor, so a fresh passkey can do it (no re-auth loop)', () => {
+    const damaged = { ...unrestricted, maximumSessionAgeMinutes: 0 };
+    const damagedStrong = { requireStrongSignIn: true, maximumSessionAgeMinutes: 0 };
+    expect(decideSignInPolicyChange({ before: damaged, after: damagedStrong, authentication: strong, nowMs })).toEqual({ allowed: true });
+    expect(decideSignInPolicyChange({ before: damaged, after: damagedStrong, authentication: single, nowMs }))
+      .toEqual({ allowed: false, code: 'org_policy_would_lock_out_actor', requires: 'org_strong_sign_in_required' });
+    expect(decideSignInPolicyChange({ before: damaged, after: damagedStrong, authentication: { ...strong, authenticatedAtMs: nowMs - 16 * 60_000 }, nowMs }))
+      .toEqual({ allowed: false, code: 'org_policy_would_lock_out_actor', requires: 'org_reauthentication_required' });
+  });
   it('signInPolicyLoosened names only a change that admits more credentials', () => {
     expect(signInPolicyLoosened(strongOn, unrestricted)).toBe(true);
     expect(signInPolicyLoosened(hourly, { ...hourly, maximumSessionAgeMinutes: 61 })).toBe(true);

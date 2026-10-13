@@ -115,7 +115,9 @@ export function decideSignInPolicyChange(input: {
     if (!decision.allowed) return decision;
   }
   if (signInPolicyTightened(before, after)) {
-    const decision = decideOrgAuthentication({ policy: after, authentication, nowMs });
+    // D-OW-53(3): judged against the policy as it will be in force, so a damaged stored age left in place reads as the
+    // 15-minute floor here too, and turning strong sign-in on stays decidable instead of refusing every credential.
+    const decision = decideOrgAuthentication({ policy: policyInForce(after), authentication, nowMs });
     if (!decision.allowed) return { allowed: false, code: 'org_policy_would_lock_out_actor', requires: decision.code };
   }
   return { allowed: true };
