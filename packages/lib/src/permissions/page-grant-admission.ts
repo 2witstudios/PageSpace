@@ -13,6 +13,7 @@ import { users } from '@pagespace/db/schema/auth';
 import { pagePermissions } from '@pagespace/db/schema/members';
 import { getDrivePolicies } from '../organizations/policy-reader';
 import { grantStillLive, reinsertHeldAccess, type ClaimedGuestApproval } from './guest-holds';
+import { publishOrgAuditEvents, stageOrgAuditEvents, type OrgAuditEvent, type StagedOrgAuditEvent } from '../audit/org-audit';
 
 export type ApprovedPageGrant =
   | { ok: true; driveId: string; userId: string; pageIds: string[] }
@@ -23,14 +24,20 @@ export type ApprovedPageGrant =
  * guests policy is read again (it may have turned off since the request) and only pages still in the drive are
  * granted; if none is left, nothing is.
  */
-export async function completeApprovedPageGrant(claim: ClaimedGuestApproval): Promise<ApprovedPageGrant> {
+/**
+ * `approval` (AUD-1): the approver's `org.guest.approved` event, staged inside this grant's transaction, so it commits
+ * exactly when the grant does, and published after.
+ */
+export async function completeApprovedPageGrant(claim: ClaimedGuestApproval, approval?: OrgAuditEvent): Promise<ApprovedPageGrant> {
   const asked = claim.request.permissions ?? [];
   const member = claim.request.member ?? null;
   const tokenScopes = claim.request.tokenScopes ?? [];
   if (claim.origin !== 'page_grant' || !claim.userId || (asked.length === 0 && !member && tokenScopes.length === 0)) return { ok: false, error: 'NOT_A_PAGE_GRANT' };
   const userId = claim.userId;
 
-  return db.transaction(async (tx) => {
+  let staged: StagedOrgAuditEvent[] = [];
+  const granted = await db.transaction(async (tx) => {
+    staged = [];
     // Read under the org row's share lock: a concurrent switch to OFF either parks this grant or is seen here.
     const policies = (await getDrivePolicies(claim.driveId, tx, { forShare: true }))?.policies ?? null;
     if (policies?.guests === 'off') return { ok: false, error: 'POLICY_OFF' } as const;
@@ -56,6 +63,9 @@ export async function completeApprovedPageGrant(claim: ClaimedGuestApproval): Pr
         .values({ pageId: p.pageId, userId, ...flags, grantedBy, grantedAt: new Date() })
         .onConflictDoUpdate({ target: [pagePermissions.pageId, pagePermissions.userId], set: { ...flags, grantedBy, grantedAt: new Date() } });
     }
+    if (approval) staged = await stageOrgAuditEvents(tx, [approval]);
     return { ok: true, driveId: claim.driveId, userId, pageIds: grants.map((p) => p.pageId) } as const;
   });
+  await publishOrgAuditEvents(staged);
+  return granted;
 }

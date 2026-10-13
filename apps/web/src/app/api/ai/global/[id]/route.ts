@@ -8,6 +8,7 @@ import {
   expelConversationFromSession,
   findWorkspaceOfConversation,
 } from '@/lib/agent-workspaces/agent-workspaces-runtime';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -145,7 +146,7 @@ export async function DELETE(
       const outcome = await expelConversationFromSession({
         conversationId: id,
         workspaceId,
-        actingUserId: userId,
+        actor: actorFromAuth(auth),
       });
 
       if (outcome === 'refused') {
@@ -166,7 +167,7 @@ export async function DELETE(
     // reach the case this exists for. It re-resolves the workspace rather than
     // trusting the read, and when nothing raced, which is nearly always, it is
     // one indexed read and no write at all.
-    await expelAfterDelete({ conversationId: id, actingUserId: userId });
+    await expelAfterDelete({ conversationId: id, actor: actorFromAuth(auth) });
 
     auditRequest(request, { eventType: 'data.delete', userId, resourceType: 'global_chat', resourceId: id, details: {
       action: 'delete_conversation',

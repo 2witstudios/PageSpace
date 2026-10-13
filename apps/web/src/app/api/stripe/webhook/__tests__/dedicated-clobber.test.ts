@@ -147,6 +147,9 @@ vi.mock('@pagespace/lib/services/app-hosting/dedicated-tier-service', () => ({
   recordDedicatedSubscription: mockRecordSubscription,
   syncAppTierToSubscription: mockSyncTier,
   findDedicatedSubscriptionByStripeId: mockFindByStripeId,
+  // The payer from stored rows (D-OW-64): the mirror's when it exists, else the app's personal drive owner.
+  resolveDedicatedPayer: async ({ mirror }: { mirror: { userId: string | null; orgId: string | null } | null }) =>
+    mirror ? { userId: mirror.userId, orgId: mirror.orgId } : { userId: 'user_1', orgId: null },
 }));
 
 import { POST } from '../route';

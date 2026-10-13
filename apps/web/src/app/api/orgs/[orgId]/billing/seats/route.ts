@@ -3,9 +3,8 @@ import { announceOrgChange } from '@pagespace/lib/organizations/org-change-event
 import { z } from 'zod';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { isBillingEnabled } from '@pagespace/lib/deployment-mode';
 import { getSeatSummary, setSeatAutoAdd } from '@pagespace/lib/organizations/seat-service';
-import { authorizeOrgRequest, billingUnavailableResponse, ORG_READ_AUTH, ORG_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
+import { authorizeOrgBillingRequest, ORG_READ_AUTH, ORG_MONEY_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
 
 type Context = { params: Promise<{ orgId: string }> };
 
@@ -18,9 +17,8 @@ const bodySchema = z.object({ autoAdd: z.boolean() }).strict();
  */
 export async function GET(request: Request, context: Context) {
   const { orgId } = await context.params;
-  const gate = await authorizeOrgRequest(request, orgId, 'ADMIN', ORG_READ_AUTH);
+  const gate = await authorizeOrgBillingRequest(request, orgId, 'ADMIN', ORG_READ_AUTH);
   if (!gate.ok) return gate.response;
-  if (!isBillingEnabled()) return billingUnavailableResponse();
   try {
     const { currentPeriodEnd, ...summary } = await getSeatSummary(orgId);
     return NextResponse.json({ seats: { ...summary, currentPeriodEnd: currentPeriodEnd?.toISOString() ?? null } });
@@ -37,9 +35,8 @@ export async function GET(request: Request, context: Context) {
  */
 export async function PATCH(request: Request, context: Context) {
   const { orgId } = await context.params;
-  const gate = await authorizeOrgRequest(request, orgId, 'OWNER', ORG_WRITE_AUTH);
+  const gate = await authorizeOrgBillingRequest(request, orgId, 'OWNER', ORG_MONEY_WRITE_AUTH);
   if (!gate.ok) return gate.response;
-  if (!isBillingEnabled()) return billingUnavailableResponse();
   const parsed = bodySchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) {
     return NextResponse.json({ error: 'Invalid request body', issues: parsed.error.issues, code: 'invalid_request' }, { status: 400 });

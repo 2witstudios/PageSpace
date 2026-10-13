@@ -2,7 +2,7 @@ import { db } from '@pagespace/db/db';
 import { and, eq } from '@pagespace/db/operators';
 import { rateLimitBuckets } from '@pagespace/db/schema/rate-limit-buckets';
 import type { OrgRole } from '@pagespace/db/schema/organizations';
-import { securityAudit, type AuditEvent } from '../audit/security-audit';
+import { recordOrgAuditEvent } from '../audit/org-audit';
 import { loggers } from '../logging/logger-config';
 
 /**
@@ -153,19 +153,19 @@ export async function releaseOrgAdminAuditWindow({ key, windowStart }: OrgAdminA
 }
 
 /**
- * The same dual write as audit() (structured log, then the audit chain), but awaited so a failed
- * append is seen. The details carry ids only, so audit()'s PII sanitizing has nothing to strip.
+ * AUD-1: through the org audit outbox, so the record is durable once this resolves (a refused chain append is
+ * retried, never dropped); a failure to stage it is seen by the caller. The details carry ids only.
  */
 async function writeOrgAdminAccessEvent({ userId, driveId, orgId, orgRole }: OrgAdminAccess): Promise<void> {
-  const event: AuditEvent = {
+  await recordOrgAuditEvent({
+    orgId,
+    driveId,
     eventType: 'authz.access.granted',
-    userId,
+    actorId: userId,
     resourceType: 'drive',
     resourceId: driveId,
-    details: { via: 'org_admin', orgId, orgRole, orgVisibility: 'PRIVATE' },
-  };
-  loggers.security.info(`[Audit] ${event.eventType}`, { ...event });
-  await securityAudit.logEvent(event);
+    details: { via: 'org_admin', orgRole, orgVisibility: 'PRIVATE' },
+  });
 }
 
 const defaultAuditor = createOrgAdminAccessAuditor({

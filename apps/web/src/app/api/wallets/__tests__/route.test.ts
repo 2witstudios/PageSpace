@@ -15,6 +15,7 @@ vi.mock('@pagespace/lib/services/drive-wallet-service', () => ({
   setPersonalDefaultSource: vi.fn(),
   getConversationSpend: vi.fn(),
   setConversationSpend: vi.fn(),
+  getDriveSpend: vi.fn(),
 }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -28,14 +29,15 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: (r: unknown) => typeof r === 'object' && r !== null && 'error' in r,
   isMCPAuthResult: (r: { tokenType?: string }) => r.tokenType === 'mcp',
   getAllowedDriveIds: (r: { allowedDriveIds?: string[] }) => r.allowedDriveIds ?? [],
-  checkMCPDriveScope: () => null,
+  checkMCPDriveScope: vi.fn(() => null),
 }));
 
 import { GET as LIST } from '../route';
 import { PUT as SET_DEFAULT } from '../default/route';
 import { GET as GET_SOURCE, PUT as SET_SOURCE } from '../conversations/[conversationId]/route';
-import { listMyWallets, setPersonalDefaultSource, getConversationSpend, setConversationSpend } from '@pagespace/lib/services/drive-wallet-service';
-import { authenticateRequestWithOptions } from '@/lib/auth';
+import { GET as GET_DRIVE_SOURCE } from '../drives/[driveId]/route';
+import { listMyWallets, setPersonalDefaultSource, getConversationSpend, setConversationSpend, getDriveSpend } from '@pagespace/lib/services/drive-wallet-service';
+import { authenticateRequestWithOptions, checkMCPDriveScope } from '@/lib/auth';
 
 const session = (userId: string): SessionAuthResult => ({
   userId, tokenVersion: 0, tokenType: 'session', sessionId: 's-1', role: 'user', adminRoleVersion: 0,
@@ -54,7 +56,7 @@ const req = (method: string, url: string, body?: unknown) =>
 // Typed as the service's own results, so a fixture cannot drift from the real response shape.
 const myWallets: MyWallets = {
   personal: { walletId: 'w-marcus', remainingCents: 5_000, remainingCredits: '5,000', defaultSpendSource: null },
-  driveWallets: [{ driveId: 'd-product', driveName: 'Product', walletId: 'w-product', status: 'active', remainingCents: 116_442, remainingCredits: '116,442' }],
+  driveWallets: [{ driveId: 'd-product', driveName: 'Product', walletId: 'w-product', status: 'active', remainingCents: 116_442, remainingCredits: '116,442', mySpentCents: 0, mySpentCredits: '0' }],
   seats: [{ orgId: 'o-northwind', orgName: 'Northwind Labs', walletId: 'w-pool', allowanceCents: 15_000, allowanceCredits: '15,000', spentCents: 9_600, spentCredits: '9,600', remainingCents: 5_400, remainingCredits: '5,400' }],
   funds: { driveWallets: [], pools: [], donations: [] },
 };
@@ -82,7 +84,7 @@ describe('GET /api/wallets', () => {
     const res = await LIST(req('GET', '/api/wallets'));
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual(myWallets);
-    expect(listMyWallets).toHaveBeenCalledWith('u-marcus', 'session');
+    expect(listMyWallets).toHaveBeenCalledWith(expect.objectContaining({ userId: 'u-marcus' }), 'session');
   });
 
   it('X-1 (partial) an unscoped token may list; a drive-scoped token is refused (the list spans drives)', async () => {
@@ -183,6 +185,32 @@ describe('[D-OW-26] an MCP/CLI token on the account routes', () => {
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(token('u-marcus', []));
     vi.mocked(listMyWallets).mockResolvedValue(myWallets);
     await LIST(req('GET', '/api/wallets'));
-    expect(listMyWallets).toHaveBeenCalledWith('u-marcus', 'mcp');
+    expect(listMyWallets).toHaveBeenCalledWith(expect.objectContaining({ userId: 'u-marcus' }), 'mcp');
+  });
+});
+
+describe('/api/wallets/drives/[driveId]', () => {
+  const drive = { params: Promise.resolve({ driveId: 'd-product' }) };
+
+  it('SPEND-2 (partial) GET answers the drive\'s options and what a new conversation there would spend, for the header chip with no conversation open', async () => {
+    vi.mocked(getDriveSpend).mockResolvedValue({ ok: true, driveId: 'd-product', options: sourceRead.options, resolved: sourceRead.resolved });
+    const res = await GET_DRIVE_SOURCE(req('GET', '/api/wallets/drives/d-product'), drive);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ driveId: 'd-product', options: sourceRead.options, resolved: sourceRead.resolved });
+    expect(getDriveSpend).toHaveBeenCalledWith(expect.objectContaining({ userId: 'u-marcus' }), 'd-product');
+  });
+
+  it('a drive the caller cannot open is the service\'s 404', async () => {
+    vi.mocked(getDriveSpend).mockResolvedValue({ ok: false, status: 404, code: 'not_found', message: 'Drive not found' });
+    const res = await GET_DRIVE_SOURCE(req('GET', '/api/wallets/drives/d-product'), drive);
+    expect(res.status).toBe(404);
+  });
+
+  it('X-1 (partial) a token whose scope excludes the drive is refused before the service is asked', async () => {
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(token('u-marcus', ['d-other']));
+    vi.mocked(checkMCPDriveScope).mockReturnValueOnce(NextResponse.json({ error: 'scope' }, { status: 403 }));
+    const res = await GET_DRIVE_SOURCE(req('GET', '/api/wallets/drives/d-product'), drive);
+    expect(res.status).toBe(403);
+    expect(getDriveSpend).not.toHaveBeenCalled();
   });
 });

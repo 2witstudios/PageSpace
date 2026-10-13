@@ -1,5 +1,6 @@
+import { getPrincipalAccessLevel, getPrincipalDriveAccess } from '@/lib/auth/principal-permissions';
 import { NextResponse } from 'next/server';
-import { getUserAccessLevel, getUserDriveAccess, getDriveIdsForUser } from '@pagespace/lib/permissions/permissions';
+import { getDriveIdsForUser } from '@pagespace/lib/permissions/permissions';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -15,6 +16,7 @@ import { driveRoles } from '@pagespace/db/schema/members';
 import { MentionSuggestion, MentionType } from '@/types/mentions';
 import { findGuestAgentMembers, guestAgentSuggestion, shouldOfferGuestAgents } from '@/lib/mentions/guest-agent-members';
 import { z } from 'zod';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 /**
  * Build a multi-word search condition
@@ -127,6 +129,7 @@ export async function GET(request: Request) {
     loggers.api.debug('[API] Authentication failed', {});
     return auth.error;
   }
+  const actor = actorFromAuth(auth);
 
   const userId = auth.userId;
 
@@ -206,7 +209,7 @@ export async function GET(request: Request) {
 
     if (crossDrive) {
       // Cross-drive search: get all drives user has access to (owned, member, page permissions)
-      targetDriveIds = await getDriveIdsForUser(userId);
+      targetDriveIds = await getDriveIdsForUser(actor);
 
       // Build context map for drive disambiguation
       if (targetDriveIds.length > 0) {
@@ -226,14 +229,14 @@ export async function GET(request: Request) {
       loggers.api.debug('[API] Cross-drive search', { driveCount: targetDriveIds.length });
     } else {
       // Within-drive search: verify user has access to the specified drive
-      const hasAccess = await getUserDriveAccess(userId, driveId!);
+      const hasAccess = await getPrincipalDriveAccess(auth, driveId!);
 
       if (!hasAccess) {
         loggers.api.debug('[API] User does not have access to drive', { userId, driveId });
-        return NextResponse.json(
+        return deniedResponse(actor, driveId!, NextResponse.json(
           { error: 'Access denied to the specified drive' },
           { status: 403 }
-        );
+        ));
       }
 
       targetDriveIds = [driveId!];
@@ -383,7 +386,7 @@ export async function GET(request: Request) {
         // entirely of eligible candidates, not just whatever's left of it
         // after an after-the-fact skip.
 
-        const accessLevel = await getUserAccessLevel(userId, page.id);
+        const accessLevel = await getPrincipalAccessLevel(auth, page.id);
         if (!accessLevel) continue;
 
         // All page types are now under 'page' mention type

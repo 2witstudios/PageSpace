@@ -57,12 +57,6 @@ export const DRIVE_ACCESS_GATE_ALLOWLIST: AccessGateAllowlist = {
   'apps/web/src/app/api/ai/conversations/[conversationId]/plan/route.ts': {
     DELETE: { ownerCompares: 1, reason: NOT_A_DRIVE("row.ownerId is the AI conversation's userId") },
   },
-  'apps/web/src/app/api/app-hosting/apps/[appId]/dedicated/route.ts': {
-    authorize: {
-      ownerCompares: 1,
-      reason: "payer gate: dedicated app hosting is bought by the drive's owner on their own card (lookupDriveBillingFacts); an org drive is refused as org_billing_pending (WAL-9), not an access decision",
-    },
-  },
   'apps/web/src/app/api/cron/scheduled-backups/route.ts': {
     GET: { ownerCompares: 1, reason: PAYER },
   },
@@ -235,10 +229,10 @@ export const DRIVE_ACCESS_GATE_ALLOWLIST: AccessGateAllowlist = {
   },
   'packages/lib/src/services/drive-service.ts': {
     getHomeDrive: { ownerCompares: 1, reason: "looks up the user's own HOME drive (never an org drive)" },
-    listAccessibleDrives: {
+    listUserDrives: {
       ownerCompares: 4,
       reads: 1,
-      reason: 'the accessible-drives resolver itself (B7): its dark body is owned drives plus accepted rows; while ORGS_ENABLED it delegates to listAccessibleDrivesWithOrgs',
+      reason: 'the accessible-drives resolver itself (B7), behind the org sign-in filter in listAccessibleDrives (D-OW-45): its dark body is owned drives plus accepted rows; while ORGS_ENABLED listAccessibleDrives uses listAccessibleDrivesWithOrgs',
     },
     listAccessibleDrivesWithOrgs: {
       ownerCompares: 2,
@@ -251,6 +245,16 @@ export const DRIVE_ACCESS_GATE_ALLOWLIST: AccessGateAllowlist = {
   },
   'packages/lib/src/services/storage-repository.ts': {
     findUserDriveIds: { ownerCompares: 1, reason: `storage quota: ${OWN_LEAD_INVENTORY} (billing)` },
+    billedToUser: {
+      ownerCompares: 1,
+      reason: "storage payer seam (WAL-9): a personal drive's bytes bill its owner, so the owner's quota counts that drive's files; billing, not an access decision",
+    },
+  },
+  'apps/web/src/lib/storage/storage-info-repository.ts': {
+    findUserFileRows: {
+      ownerCompares: 1,
+      reason: "storage payer seam (WAL-9): the caller's own storage breakdown lists the files billed to them — their personal drives' files; billing display, grants nothing",
+    },
   },
 };
 

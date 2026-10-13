@@ -1,3 +1,4 @@
+import type { AccessActor } from '../access-actor';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { factories } from '@pagespace/db/test/factories';
 import { db } from '@pagespace/db/db';
@@ -7,6 +8,7 @@ import { pages, drives } from '@pagespace/db/schema/core';
 import { pagePermissions, driveMembers } from '@pagespace/db/schema/members';
 import { getUserAccessLevel, canUserViewPage, canUserEditPage, canUserDeletePage, canUserSharePage } from '../permissions';
 import { createId } from '@paralleldrive/cuid2';
+import { automationActor, credentialActor, inDrives } from '../access-actor';
 
 describe('Zero-Trust Permission Boundaries (Integration)', () => {
   let testUser: Awaited<ReturnType<typeof factories.createUser>>;
@@ -47,7 +49,7 @@ describe('Zero-Trust Permission Boundaries (Integration)', () => {
         grantedBy: testUser.id,
       });
 
-      const result = await getUserAccessLevel(otherUser.id, testPage.id);
+      const result = await getUserAccessLevel(credentialActor(otherUser.id, null), testPage.id);
       expect(result).toBeNull();
     });
 
@@ -63,7 +65,7 @@ describe('Zero-Trust Permission Boundaries (Integration)', () => {
         grantedBy: testUser.id,
       });
 
-      const result = await getUserAccessLevel(otherUser.id, testPage.id);
+      const result = await getUserAccessLevel(credentialActor(otherUser.id, null), testPage.id);
       expect(result).toBeNull();
     });
 
@@ -81,7 +83,7 @@ describe('Zero-Trust Permission Boundaries (Integration)', () => {
 
       await new Promise((resolve) => setTimeout(resolve, 50));
 
-      const result = await getUserAccessLevel(otherUser.id, testPage.id);
+      const result = await getUserAccessLevel(credentialActor(otherUser.id, null), testPage.id);
       expect(result).toBeNull();
     });
   });
@@ -100,7 +102,7 @@ describe('Zero-Trust Permission Boundaries (Integration)', () => {
         grantedBy: testUser.id,
       });
 
-      const result = await getUserAccessLevel(otherUser.id, testPage.id);
+      const result = await getUserAccessLevel(credentialActor(otherUser.id, null), testPage.id);
 
       expect(result).not.toBeNull();
       expect(result?.canView).toBe(true);
@@ -119,7 +121,7 @@ describe('Zero-Trust Permission Boundaries (Integration)', () => {
         grantedBy: testUser.id,
       });
 
-      const result = await getUserAccessLevel(otherUser.id, testPage.id);
+      const result = await getUserAccessLevel(credentialActor(otherUser.id, null), testPage.id);
 
       expect(result).not.toBeNull();
       expect(result?.canView).toBe(true);
@@ -141,7 +143,7 @@ describe('Zero-Trust Permission Boundaries (Integration)', () => {
         grantedBy: testUser.id,
       });
 
-      const result = await getUserAccessLevel(otherUser.id, testPage.id);
+      const result = await getUserAccessLevel(credentialActor(otherUser.id, null), testPage.id);
 
       expect(result).not.toBeNull();
       expect(result?.canView).toBe(true);
@@ -150,7 +152,7 @@ describe('Zero-Trust Permission Boundaries (Integration)', () => {
 
   describe('owner always has full access', () => {
     it('given drive owner, should have full access to all pages in drive', async () => {
-      const result = await getUserAccessLevel(testUser.id, testPage.id);
+      const result = await getUserAccessLevel(credentialActor(testUser.id, null), testPage.id);
 
       expect(result).toEqual({
         canView: true,
@@ -169,7 +171,7 @@ describe('Zero-Trust Permission Boundaries (Integration)', () => {
         grantedBy: otherUser.id,
       });
 
-      const result = await getUserAccessLevel(testUser.id, testPage.id);
+      const result = await getUserAccessLevel(credentialActor(testUser.id, null), testPage.id);
 
       expect(result).toEqual({
         canView: true,
@@ -187,8 +189,8 @@ describe('Zero-Trust Permission Boundaries (Integration)', () => {
         aiModel: 'anthropic/claude-3-sonnet',
       });
 
-      const folderAccess = await getUserAccessLevel(testUser.id, folderPage.id);
-      const aiChatAccess = await getUserAccessLevel(testUser.id, aiChatPage.id);
+      const folderAccess = await getUserAccessLevel(credentialActor(testUser.id, null), folderPage.id);
+      const aiChatAccess = await getUserAccessLevel(credentialActor(testUser.id, null), aiChatPage.id);
 
       expect(folderAccess?.canEdit).toBe(true);
       expect(aiChatAccess?.canEdit).toBe(true);
@@ -197,13 +199,13 @@ describe('Zero-Trust Permission Boundaries (Integration)', () => {
 
   describe('non-owner denied without explicit permissions', () => {
     it('given non-owner without any permissions, should return null', async () => {
-      const result = await getUserAccessLevel(otherUser.id, testPage.id);
+      const result = await getUserAccessLevel(credentialActor(otherUser.id, null), testPage.id);
       expect(result).toBeNull();
     });
 
     it('given random user not in system, should return null for any page', async () => {
       const randomUserId = createId();
-      const result = await getUserAccessLevel(randomUserId, testPage.id);
+      const result = await getUserAccessLevel(credentialActor(randomUserId, null), testPage.id);
       expect(result).toBeNull();
     });
 
@@ -216,7 +218,7 @@ describe('Zero-Trust Permission Boundaries (Integration)', () => {
         grantedBy: testUser.id,
       });
 
-      const result = await getUserAccessLevel(otherUser.id, testPage.id);
+      const result = await getUserAccessLevel(credentialActor(otherUser.id, null), testPage.id);
 
       expect(result?.canView).toBe(true);
       expect(result?.canEdit).toBe(false);
@@ -229,7 +231,7 @@ describe('Zero-Trust Permission Boundaries (Integration)', () => {
     it('given user with ADMIN role on drive, should have full access to all pages', async () => {
       await factories.createDriveMember(testDrive.id, otherUser.id, { role: 'ADMIN' });
 
-      const result = await getUserAccessLevel(otherUser.id, testPage.id);
+      const result = await getUserAccessLevel(credentialActor(otherUser.id, null), testPage.id);
 
       expect(result).toEqual({
         canView: true,
@@ -250,7 +252,7 @@ describe('Zero-Trust Permission Boundaries (Integration)', () => {
         grantedBy: testUser.id,
       });
 
-      const result = await getUserAccessLevel(otherUser.id, testPage.id);
+      const result = await getUserAccessLevel(credentialActor(otherUser.id, null), testPage.id);
 
       expect(result).toEqual({
         canView: true,
@@ -266,9 +268,9 @@ describe('Zero-Trust Permission Boundaries (Integration)', () => {
       const secondPage = await factories.createPage(testDrive.id);
       const thirdPage = await factories.createPage(testDrive.id);
 
-      const access1 = await getUserAccessLevel(otherUser.id, testPage.id);
-      const access2 = await getUserAccessLevel(otherUser.id, secondPage.id);
-      const access3 = await getUserAccessLevel(otherUser.id, thirdPage.id);
+      const access1 = await getUserAccessLevel(credentialActor(otherUser.id, null), testPage.id);
+      const access2 = await getUserAccessLevel(credentialActor(otherUser.id, null), secondPage.id);
+      const access3 = await getUserAccessLevel(credentialActor(otherUser.id, null), thirdPage.id);
 
       expect(access1?.canEdit).toBe(true);
       expect(access2?.canEdit).toBe(true);
@@ -281,7 +283,7 @@ describe('Zero-Trust Permission Boundaries (Integration)', () => {
       // testPage defaults to isPrivate: false (non-private)
       await factories.createDriveMember(testDrive.id, otherUser.id, { role: 'MEMBER' });
 
-      const result = await getUserAccessLevel(otherUser.id, testPage.id);
+      const result = await getUserAccessLevel(credentialActor(otherUser.id, null), testPage.id);
 
       expect(result).toEqual({ canView: true, canEdit: false, canShare: false, canDelete: false });
     });
@@ -290,7 +292,7 @@ describe('Zero-Trust Permission Boundaries (Integration)', () => {
       const privatePage = await factories.createPage(testDrive.id, { isPrivate: true });
       await factories.createDriveMember(testDrive.id, otherUser.id, { role: 'MEMBER' });
 
-      const result = await getUserAccessLevel(otherUser.id, privatePage.id);
+      const result = await getUserAccessLevel(credentialActor(otherUser.id, null), privatePage.id);
 
       expect(result).toBeNull();
     });
@@ -306,7 +308,7 @@ describe('Zero-Trust Permission Boundaries (Integration)', () => {
         grantedBy: testUser.id,
       });
 
-      const result = await getUserAccessLevel(otherUser.id, testPage.id);
+      const result = await getUserAccessLevel(credentialActor(otherUser.id, null), testPage.id);
 
       expect(result?.canView).toBe(true);
       expect(result?.canEdit).toBe(true);
@@ -328,9 +330,9 @@ describe('Zero-Trust Permission Boundaries (Integration)', () => {
       });
 
       // testPage: explicit grant → canEdit
-      const access1 = await getUserAccessLevel(otherUser.id, testPage.id);
+      const access1 = await getUserAccessLevel(credentialActor(otherUser.id, null), testPage.id);
       // secondPage: MEMBER default → canView only
-      const access2 = await getUserAccessLevel(otherUser.id, secondPage.id);
+      const access2 = await getUserAccessLevel(credentialActor(otherUser.id, null), secondPage.id);
 
       expect(access1?.canView).toBe(true);
       expect(access1?.canEdit).toBe(true);
@@ -350,7 +352,7 @@ describe('Zero-Trust Permission Boundaries (Integration)', () => {
         grantedBy: testUser.id,
       });
 
-      const result = await getUserAccessLevel(otherUser.id, privatePage.id);
+      const result = await getUserAccessLevel(credentialActor(otherUser.id, null), privatePage.id);
 
       expect(result?.canView).toBe(true);
       expect(result?.canEdit).toBe(false);
@@ -358,89 +360,96 @@ describe('Zero-Trust Permission Boundaries (Integration)', () => {
 
     it('given non-member with no permissions, cannot read non-private page', async () => {
       // otherUser has no drive membership at all
-      const result = await getUserAccessLevel(otherUser.id, testPage.id);
+      const result = await getUserAccessLevel(credentialActor(otherUser.id, null), testPage.id);
 
       expect(result).toBeNull();
     });
   });
 
   describe('input validation boundary', () => {
+    // The actor type makes a bad user id unrepresentable at compile time, and credentialActor refuses an empty one;
+    // an actor forged past both (an untyped caller) still meets the runtime id validation.
+    const malformedActor = (userId: unknown) => ({ via: 'credential', userId, authentication: null }) as unknown as AccessActor;
+
+    it('an actor with no user cannot be constructed', () => {
+      expect(() => credentialActor('', null)).toThrow();
+    });
+
     it('given null userId, should deny access', async () => {
-      const result = await getUserAccessLevel(null, testPage.id);
+      const result = await getUserAccessLevel(malformedActor(null), testPage.id);
       expect(result).toBeNull();
     });
 
     it('given undefined userId, should deny access', async () => {
-      const result = await getUserAccessLevel(undefined, testPage.id);
+      const result = await getUserAccessLevel(malformedActor(undefined), testPage.id);
       expect(result).toBeNull();
     });
 
     it('given empty string userId, should deny access', async () => {
-      const result = await getUserAccessLevel('', testPage.id);
+      const result = await getUserAccessLevel(malformedActor(''), testPage.id);
       expect(result).toBeNull();
     });
 
     it('given SQL injection attempt in userId, should deny access safely', async () => {
-      const result = await getUserAccessLevel("'; DROP TABLE users; --", testPage.id);
+      const result = await getUserAccessLevel(credentialActor("'; DROP TABLE users; --", null), testPage.id);
       expect(result).toBeNull();
     });
 
     it('given null pageId, should deny access', async () => {
-      const result = await getUserAccessLevel(testUser.id, null);
+      const result = await getUserAccessLevel(credentialActor(testUser.id, null), null);
       expect(result).toBeNull();
     });
 
     it('given empty string pageId, should deny access', async () => {
-      const result = await getUserAccessLevel(testUser.id, '');
+      const result = await getUserAccessLevel(credentialActor(testUser.id, null), '');
       expect(result).toBeNull();
     });
 
     it('given numeric input for userId, should deny access', async () => {
-      const result = await getUserAccessLevel(12345, testPage.id);
+      const result = await getUserAccessLevel(malformedActor(12345), testPage.id);
       expect(result).toBeNull();
     });
 
     it('given object input for pageId, should deny access', async () => {
-      const result = await getUserAccessLevel(testUser.id, { $ne: '' });
+      const result = await getUserAccessLevel(credentialActor(testUser.id, null), { $ne: '' });
       expect(result).toBeNull();
     });
 
     it('given excessively long userId, should deny access', async () => {
       const longId = 'a'.repeat(1000);
-      const result = await getUserAccessLevel(longId, testPage.id);
+      const result = await getUserAccessLevel(credentialActor(longId, null), testPage.id);
       expect(result).toBeNull();
     });
 
     it('given excessively long pageId, should deny access', async () => {
       const longId = 'a'.repeat(1000);
-      const result = await getUserAccessLevel(testUser.id, longId);
+      const result = await getUserAccessLevel(credentialActor(testUser.id, null), longId);
       expect(result).toBeNull();
     });
   });
 
   describe('convenience functions deny by default', () => {
-    it('canUserViewPage returns false for invalid userId', async () => {
-      const result = await canUserViewPage('', testPage.id);
-      expect(result).toBe(false);
+    it('an actor cannot be built for an empty user id, as a credential or as an automation', () => {
+      expect(() => credentialActor('', null)).toThrow('An access actor needs a user');
+      expect(() => automationActor('', 'zero-trust test', inDrives(testDrive.id))).toThrow('An access actor needs a user');
     });
 
-    it('canUserEditPage returns false for invalid userId', async () => {
-      const result = await canUserEditPage('', testPage.id);
-      expect(result).toBe(false);
+    it('every convenience function denies an actor whose user does not exist', async () => {
+      const ghost = credentialActor(`ghost_${createId()}`, null);
+      expect(await canUserViewPage(ghost, testPage.id)).toBe(false);
+      expect(await canUserEditPage(ghost, testPage.id)).toBe(false);
+      expect(await canUserSharePage(ghost, testPage.id)).toBe(false);
+      expect(await canUserDeletePage(ghost, testPage.id)).toBe(false);
     });
 
-    it('canUserSharePage returns false for invalid userId', async () => {
-      const result = await canUserSharePage('', testPage.id);
-      expect(result).toBe(false);
-    });
-
-    it('canUserDeletePage returns false for invalid userId', async () => {
-      const result = await canUserDeletePage('', testPage.id);
-      expect(result).toBe(false);
+    it('an automation actor for a user that does not exist is denied too, even scoped to the page\'s own drive', async () => {
+      const ghost = automationActor(`ghost_${createId()}`, 'zero-trust test', inDrives(testDrive.id));
+      expect(await canUserViewPage(ghost, testPage.id)).toBe(false);
+      expect(await canUserEditPage(ghost, testPage.id)).toBe(false);
     });
 
     it('canUserViewPage returns false for user without permissions', async () => {
-      const result = await canUserViewPage(otherUser.id, testPage.id);
+      const result = await canUserViewPage(credentialActor(otherUser.id, null), testPage.id);
       expect(result).toBe(false);
     });
 
@@ -453,7 +462,7 @@ describe('Zero-Trust Permission Boundaries (Integration)', () => {
         grantedBy: testUser.id,
       });
 
-      const result = await canUserViewPage(otherUser.id, testPage.id);
+      const result = await canUserViewPage(credentialActor(otherUser.id, null), testPage.id);
       expect(result).toBe(true);
     });
   });
@@ -461,19 +470,19 @@ describe('Zero-Trust Permission Boundaries (Integration)', () => {
   describe('non-existent resource handling', () => {
     it('given non-existent page (valid CUID2), should return null', async () => {
       const nonExistentPageId = createId();
-      const result = await getUserAccessLevel(testUser.id, nonExistentPageId);
+      const result = await getUserAccessLevel(credentialActor(testUser.id, null), nonExistentPageId);
       expect(result).toBeNull();
     });
 
     it('given non-existent page, canUserViewPage returns false', async () => {
       const nonExistentPageId = createId();
-      const result = await canUserViewPage(testUser.id, nonExistentPageId);
+      const result = await canUserViewPage(credentialActor(testUser.id, null), nonExistentPageId);
       expect(result).toBe(false);
     });
 
     it('given non-existent user but valid page, should return null', async () => {
       const nonExistentUserId = createId();
-      const result = await getUserAccessLevel(nonExistentUserId, testPage.id);
+      const result = await getUserAccessLevel(credentialActor(nonExistentUserId, null), testPage.id);
       expect(result).toBeNull();
     });
   });
@@ -488,12 +497,12 @@ describe('Zero-Trust Permission Boundaries (Integration)', () => {
         grantedBy: testUser.id,
       });
 
-      const beforeRevoke = await getUserAccessLevel(otherUser.id, testPage.id);
+      const beforeRevoke = await getUserAccessLevel(credentialActor(otherUser.id, null), testPage.id);
       expect(beforeRevoke?.canView).toBe(true);
 
       await db.delete(pagePermissions).where(eq(pagePermissions.id, permission.id));
 
-      const afterRevoke = await getUserAccessLevel(otherUser.id, testPage.id);
+      const afterRevoke = await getUserAccessLevel(credentialActor(otherUser.id, null), testPage.id);
       expect(afterRevoke).toBeNull();
     });
 
@@ -509,12 +518,12 @@ describe('Zero-Trust Permission Boundaries (Integration)', () => {
         grantedBy: testUser.id,
       });
 
-      const beforeExpiry = await getUserAccessLevel(otherUser.id, testPage.id);
+      const beforeExpiry = await getUserAccessLevel(credentialActor(otherUser.id, null), testPage.id);
       expect(beforeExpiry?.canView).toBe(true);
 
       await new Promise((resolve) => setTimeout(resolve, 700));
 
-      const afterExpiry = await getUserAccessLevel(otherUser.id, testPage.id);
+      const afterExpiry = await getUserAccessLevel(credentialActor(otherUser.id, null), testPage.id);
       expect(afterExpiry).toBeNull();
     });
   });

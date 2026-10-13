@@ -150,6 +150,7 @@ import { db } from '@pagespace/db/db';
 import { canUserRollback, isRollbackableOperation } from '@pagespace/lib/permissions/rollback-permissions';
 import { logRollbackActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { ORG_LAPSED_MESSAGE } from '@pagespace/lib/organizations/status-core';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 /** Matches the mock shape defined in vi.mock('@pagespace/db/db') above */
 type MockFn = ReturnType<typeof vi.fn>;
@@ -296,7 +297,7 @@ describe('rollback-service', () => {
         }),
       });
 
-      const result = await previewRollback('nonexistent', mockUserId, 'page');
+      const result = await previewRollback('nonexistent', credentialActor(mockUserId, null), 'page');
 
       expect(result.canExecute).toBe(false);
       expect(result.reason).toBe('Activity not found');
@@ -314,7 +315,7 @@ describe('rollback-service', () => {
       });
       mockIsRollbackableOperation.mockReturnValue(false);
 
-      const result = await previewRollback(mockActivityId, mockUserId, 'page');
+      const result = await previewRollback(mockActivityId, credentialActor(mockUserId, null), 'page');
 
       expect(result.canExecute).toBe(false);
       expect(result.reason).toContain("Cannot rollback 'create'");
@@ -334,7 +335,7 @@ describe('rollback-service', () => {
       });
       mockIsRollbackableOperation.mockReturnValue(true);
 
-      const result = await previewRollback(mockActivityId, mockUserId, 'page');
+      const result = await previewRollback(mockActivityId, credentialActor(mockUserId, null), 'page');
 
       expect(result.canExecute).toBe(false);
       expect(result.reason).toBe('No values to restore');
@@ -355,7 +356,7 @@ describe('rollback-service', () => {
         reason: 'You need edit permission',
       });
 
-      const result = await previewRollback(mockActivityId, mockUserId, 'page');
+      const result = await previewRollback(mockActivityId, credentialActor(mockUserId, null), 'page');
 
       expect(result.canExecute).toBe(false);
       expect(result.reason).toBe('You need edit permission');
@@ -389,7 +390,7 @@ describe('rollback-service', () => {
       mockIsRollbackableOperation.mockReturnValue(true);
       mockCanUserRollback.mockResolvedValue({ canRollback: true });
 
-      const result = await previewRollback(mockActivityId, mockUserId, 'page');
+      const result = await previewRollback(mockActivityId, credentialActor(mockUserId, null), 'page');
 
       expect(result.canExecute).toBe(true);
       expect(result.targetValues).toEqual(mockActivity.previousValues);
@@ -423,7 +424,7 @@ describe('rollback-service', () => {
       mockCanUserRollback.mockResolvedValue({ canRollback: true });
 
       // Without force=true, conflict detection blocks rollback
-      const result = await previewRollback(mockActivityId, mockUserId, 'page');
+      const result = await previewRollback(mockActivityId, credentialActor(mockUserId, null), 'page');
 
       expect(result.canExecute).toBe(false);
       expect(result.hasConflict).toBe(true);
@@ -459,7 +460,7 @@ describe('rollback-service', () => {
       mockCanUserRollback.mockResolvedValue({ canRollback: true });
 
       // With force=true, rollback proceeds with warning
-      const result = await previewRollback(mockActivityId, mockUserId, 'page', { force: true });
+      const result = await previewRollback(mockActivityId, credentialActor(mockUserId, null), 'page', { force: true });
 
       expect(result.canExecute).toBe(true);
       expect(result.hasConflict).toBe(true);
@@ -487,7 +488,7 @@ describe('rollback-service', () => {
       mockIsRollbackableOperation.mockReturnValue(true);
       mockCanUserRollback.mockResolvedValue({ canRollback: true });
 
-      const result = await previewRollback(mockActivityId, mockUserId, 'page');
+      const result = await previewRollback(mockActivityId, credentialActor(mockUserId, null), 'page');
 
       expect(result.canExecute).toBe(false);
       expect(result.reason).toBe('Resource no longer exists');
@@ -538,7 +539,7 @@ describe('rollback-service', () => {
       mockIsRollbackableOperation.mockReturnValue(true);
       mockCanUserRollback.mockResolvedValue({ canRollback: true });
 
-      const result = await previewRollback(mockActivityId, mockUserId, 'page');
+      const result = await previewRollback(mockActivityId, credentialActor(mockUserId, null), 'page');
 
       expect(result.hasConflict).toBe(false);
       expect(result.conflictFields).toEqual([]);
@@ -560,7 +561,7 @@ describe('rollback-service', () => {
         }),
       });
 
-      const result = await executeRollback(mockActivityId, mockUserId, 'page');
+      const result = await executeRollback(mockActivityId, credentialActor(mockUserId, null), 'page');
 
       expect(result.success).toBe(false);
       expect(result.message).toBe('Activity not found');
@@ -608,7 +609,7 @@ describe('rollback-service', () => {
       mockIsRollbackableOperation.mockReturnValue(true);
       mockCanUserRollback.mockResolvedValue({ canRollback: true });
 
-      const result = await executeRollback(mockActivityId, mockUserId, 'page');
+      const result = await executeRollback(mockActivityId, credentialActor(mockUserId, null), 'page');
 
       expect(result.success).toBe(true);
       expect(result.message).toBe('Change undone');
@@ -661,7 +662,7 @@ describe('rollback-service', () => {
       // OrgLapsedError carries the lapse copy as its message; the guard refuses BEFORE running the write here.
       vi.mocked(guardDriveAccess).mockImplementationOnce(async () => { throw new Error(ORG_LAPSED_MESSAGE); });
 
-      const result = await executeRollback(mockActivityId, mockUserId, 'page');
+      const result = await executeRollback(mockActivityId, credentialActor(mockUserId, null), 'page');
 
       expect(result.success).toBe(false);
       expect(result.message).toBe(ORG_LAPSED_MESSAGE);
@@ -713,7 +714,7 @@ describe('rollback-service', () => {
       mockIsRollbackableOperation.mockReturnValue(true);
       mockCanUserRollback.mockResolvedValue({ canRollback: true });
 
-      const result = await executeRollback(mockActivityId, mockUserId, 'page');
+      const result = await executeRollback(mockActivityId, credentialActor(mockUserId, null), 'page');
 
       expect(result.success).toBe(true);
       const updateArg = mockUpdateSet.mock.calls[0][0] as Record<string, unknown>;
@@ -759,7 +760,7 @@ describe('rollback-service', () => {
       mockIsRollbackableOperation.mockReturnValue(true);
       mockCanUserRollback.mockResolvedValue({ canRollback: true });
 
-      const result = await executeRollback(mockActivityId, mockUserId, 'page');
+      const result = await executeRollback(mockActivityId, credentialActor(mockUserId, null), 'page');
 
       expect(result.success).toBe(false);
       expect(result.message).toBe('Database connection failed');
@@ -800,7 +801,7 @@ describe('rollback-service', () => {
       mockIsRollbackableOperation.mockReturnValue(true);
       mockCanUserRollback.mockResolvedValue({ canRollback: true });
 
-      const result = await executeRollback(mockActivityId, mockUserId, 'page');
+      const result = await executeRollback(mockActivityId, credentialActor(mockUserId, null), 'page');
 
       expect(result.success).toBe(false);
       expect(result.message).toBe('No values to restore');
@@ -850,7 +851,7 @@ describe('rollback-service', () => {
       mockIsRollbackableOperation.mockReturnValue(true);
       mockCanUserRollback.mockResolvedValue({ canRollback: true });
 
-      const result = await executeRollback(mockActivityId, mockUserId, 'page');
+      const result = await executeRollback(mockActivityId, credentialActor(mockUserId, null), 'page');
 
       expect(result.success).toBe(true);
       expect(db.delete).toHaveBeenCalled();
@@ -882,7 +883,7 @@ describe('rollback-service', () => {
       // OrgLapsedError carries the SEAT-9 copy as its message; the rollback reports that message.
       vi.mocked(guardDriveAccess).mockImplementationOnce(async () => { throw new Error(ORG_LAPSED_MESSAGE); });
 
-      const result = await executeRollback(mockActivityId, mockUserId, 'page');
+      const result = await executeRollback(mockActivityId, credentialActor(mockUserId, null), 'page');
 
       // Scoped to the person the revoke was about (review P3).
       expect(guardDriveAccess).toHaveBeenCalledWith(expect.anything(), mockDriveId, { users: ['target_user'] }, expect.any(Function));
@@ -926,7 +927,7 @@ describe('rollback-service', () => {
       mockIsRollbackableOperation.mockReturnValue(true);
       mockCanUserRollback.mockResolvedValue({ canRollback: true });
 
-      const result = await executeRollback(mockActivityId, mockUserId, 'page');
+      const result = await executeRollback(mockActivityId, credentialActor(mockUserId, null), 'page');
 
       expect(result.success).toBe(true);
       expect(db.insert).toHaveBeenCalled();

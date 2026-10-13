@@ -3,10 +3,8 @@
  * figure on the page changes with them. A number typed into the page would stay put.
  *
  * Changed here: list prices (Pro $20, Business $80), the org seat terms (4 seats, $12 per
- * extra seat), the top-up pack (2,000 credits), and the ratio (active, D-OW-17). credit-copy
- * calls tierAllowanceCents/allowanceCentsForPaidCents without `active`, and mocking the
- * exported constant would not reach those defaults, so the calls are routed to the real
- * functions with `active = true` passed explicitly (as in credit-copy.flag-on.test.ts).
+ * extra seat) and the top-up pack (2,000 credits). The included credits are A-11's ratio of
+ * the changed prices.
  */
 import { describe, expect, it, vi } from 'vitest';
 import { DOLLAR_BESIDE_CREDITS, renderCards } from './pricing-cards';
@@ -31,14 +29,11 @@ vi.mock('@pagespace/lib/billing/money-model', async (importOriginal) => {
   return {
     ...actual,
     CREDIT_PACKS: { pack_20: { id: 'pack_20', credits: 2000, label: '2,000 credits' } },
-    tierAllowanceCents: (tier: string) => actual.tierAllowanceCents(tier, true),
-    allowanceCentsForPaidCents: (paidCents: number, tier: Parameters<typeof actual.allowanceCentsForPaidCents>[1]) =>
-      actual.allowanceCentsForPaidCents(paidCents, tier, true),
   };
 });
 
 describe('the pricing page follows the money model when its constants change', () => {
-  it('MON-6 (partial) every card figure moves with the changed prices, seat terms, pack, and ratio', async () => {
+  it('MON-6 (partial) every card figure moves with the changed prices, seat terms and pack', async () => {
     const { default: PricingPage } = await import('../page');
     const { cards, text } = renderCards(<PricingPage />);
 
@@ -57,7 +52,7 @@ describe('the pricing page follows the money model when its constants change', (
     // The committed figures are gone from the cards: nothing was typed in by hand.
     expect(cards.pro['plan-price']).not.toBe('$15');
     expect(cards.business['plan-price']).not.toBe('$50');
-    expect(text).not.toMatch(/5 seats included|\$10 per extra seat|1,500 credits|1,000 credits per \$10/);
+    expect(text).not.toMatch(/5 seats included|\$10 per extra seat|900 credits|1,000 credits per \$10/);
     expect(text).not.toMatch(DOLLAR_BESIDE_CREDITS);
   });
 });

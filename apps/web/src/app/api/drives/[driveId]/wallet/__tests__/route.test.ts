@@ -80,9 +80,9 @@ const consumerWallet: ConsumerWalletView = {
 const { viewer: _consumerViewer, ...consumerFields } = consumerWallet;
 const leadWallet: LeadWalletView = {
   ...consumerFields, viewer: 'lead', allocationCents: 120_000, spentCents: 3_558, topupRemainingCents: 0, debtCents: 0,
-  periodStart: null, periodEnd: null, fallbackRule: null, overshootChoice: null,
+  periodStart: null, periodEnd: null, fallbackRule: null, overshootChoice: null, guestSpendEnabled: false,
   allocationCredits: '120,000', spentCredits: '3,558', topupRemainingCredits: '0', debtCredits: '0',
-  spendByConsumer: [{ consumerKey: 'user:u-lena', userId: 'u-lena', displayName: 'Lena Schulz', spentCents: 1_337, spentCredits: '1,337' }],
+  spendByConsumer: [{ consumerKey: 'user:u-lena', userId: 'u-lena', displayName: 'Lena Schulz', spentCents: 1_337, spentCredits: '1,337', spentTodayCents: 0, spentTodayCredits: '0', viaAutomationsCents: 0, viaAutomationsCredits: '0', automations: [] }],
 };
 const { viewer: _leadViewer, ...leadFields } = leadWallet;
 const adminWallet: OrgAdminWalletView = { ...leadFields, viewer: 'org_admin', pool: { walletId: 'w-pool', availableCents: 900_017, unallocatedCents: 780_459, availableCredits: '900,017', unallocatedCredits: '780,459' } };
@@ -109,7 +109,7 @@ describe('GET /api/drives/[driveId]/wallet', () => {
     const res = await GET(req('GET'), context);
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ viewer: read.viewer, actions: read.actions, wallet: read.wallet });
-    expect(getDriveWallet).toHaveBeenCalledWith('u-marcus', DRIVE, 'session');
+    expect(getDriveWallet).toHaveBeenCalledWith(expect.objectContaining({ userId: 'u-marcus' }), DRIVE, 'session');
   });
 
   it('SPEND-9 (partial) a member\'s response carries no pool balance and no other consumer\'s spend', async () => {
@@ -158,7 +158,7 @@ describe('POST / PATCH / DELETE /api/drives/[driveId]/wallet', () => {
     vi.mocked(createDriveWallet).mockResolvedValue({ ok: true, viewer: 'org_admin', actions: [], wallet: adminWallet });
     const res = await POST(req('POST', '', { allocationCents: 120_000 }), context);
     expect(res.status).toBe(201);
-    expect(createDriveWallet).toHaveBeenCalledWith('u-marcus', DRIVE, { allocationCents: 120_000 }, 'session');
+    expect(createDriveWallet).toHaveBeenCalledWith(expect.objectContaining({ userId: 'u-marcus' }), DRIVE, { allocationCents: 120_000 }, 'session');
     expect(auditRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: 'data.write', resourceType: 'drive_wallet', resourceId: DRIVE }));
   });
 
@@ -176,7 +176,7 @@ describe('POST / PATCH / DELETE /api/drives/[driveId]/wallet', () => {
     for (const overshootChoice of ['wallet_debt', 'absorb_to_parent', null] as const) {
       const res = await PATCH(req('PATCH', '', { overshootChoice }), context);
       expect(res.status).toBe(200);
-      expect(updateDriveWallet).toHaveBeenLastCalledWith('u-marcus', DRIVE, { overshootChoice }, 'session');
+      expect(updateDriveWallet).toHaveBeenLastCalledWith(expect.objectContaining({ userId: 'u-marcus' }), DRIVE, { overshootChoice }, 'session');
     }
   });
 
@@ -184,7 +184,7 @@ describe('POST / PATCH / DELETE /api/drives/[driveId]/wallet', () => {
     vi.mocked(updateDriveWallet).mockResolvedValue({ ok: true, viewer: 'lead', actions: [], wallet: leadWallet });
     const res = await PATCH(req('PATCH', '', { paused: true, fallbackRule: null, defaultSpendSource: 'drive_wallet' }), context);
     expect(res.status).toBe(200);
-    expect(updateDriveWallet).toHaveBeenCalledWith('u-marcus', DRIVE, { paused: true, fallbackRule: null, defaultSpendSource: 'drive_wallet' }, 'session');
+    expect(updateDriveWallet).toHaveBeenCalledWith(expect.objectContaining({ userId: 'u-marcus' }), DRIVE, { paused: true, fallbackRule: null, defaultSpendSource: 'drive_wallet' }, 'session');
     for (const body of [{ defaultSpendSource: 'org_pool' }, { fallbackRule: 'anything' }, { status: 'active' }, { overshootChoice: 'consumer' }]) {
       expect((await PATCH(req('PATCH', '', body), context)).status, JSON.stringify(body)).toBe(400);
     }
@@ -208,15 +208,20 @@ describe('POST / PATCH / DELETE /api/drives/[driveId]/wallet', () => {
 });
 
 describe('POST top-up and donate', () => {
-  it.each([
-    ['top-up', TOP_UP, topUpDriveWallet, 'topUp'],
-    ['donate', DONATE, donateToDrive, 'donation'],
-  ] as const)('WAL-3 (partial) WAL-4 (partial) %s passes amount and idempotency key through and answers the leg', async (_name, handler, service, key) => {
-    vi.mocked(service).mockResolvedValue({ ok: true, legId: 'leg-1', amountCents: 1_000, paidDebtCents: 0, duplicate: false });
-    const res = await handler(req('POST', '', { amountCents: 1_000, idempotencyKey: 'key-00000001' }), context);
+  it('WAL-3 (partial) a top-up passes amount and idempotency key through and answers the leg and the debt it paid', async () => {
+    vi.mocked(topUpDriveWallet).mockResolvedValue({ ok: true, legId: 'leg-1', amountCents: 1_000, paidDebtCents: 0, duplicate: false });
+    const res = await TOP_UP(req('POST', '', { amountCents: 1_000, idempotencyKey: 'key-00000001' }), context);
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ [key]: { legId: 'leg-1', amountCents: 1_000, paidDebtCents: 0, duplicate: false } });
-    expect(service).toHaveBeenCalledWith('u-marcus', DRIVE, { amountCents: 1_000, idempotencyKey: 'key-00000001' }, 'session');
+    expect(await res.json()).toEqual({ topUp: { legId: 'leg-1', amountCents: 1_000, paidDebtCents: 0, duplicate: false } });
+    expect(topUpDriveWallet).toHaveBeenCalledWith(expect.objectContaining({ userId: 'u-marcus' }), DRIVE, { amountCents: 1_000, idempotencyKey: 'key-00000001' }, 'session');
+  });
+
+  it('WAL-4 (partial) a donation passes amount and idempotency key through and answers the leg (a donation pays no debt)', async () => {
+    vi.mocked(donateToDrive).mockResolvedValue({ ok: true, legId: 'leg-1', amountCents: 1_000, duplicate: false });
+    const res = await DONATE(req('POST', '', { amountCents: 1_000, idempotencyKey: 'key-00000001' }), context);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ donation: { legId: 'leg-1', amountCents: 1_000, duplicate: false } });
+    expect(donateToDrive).toHaveBeenCalledWith(expect.objectContaining({ userId: 'u-marcus' }), DRIVE, { amountCents: 1_000, idempotencyKey: 'key-00000001' }, 'session');
   });
 
   it.each([
@@ -267,6 +272,6 @@ describe('[D-OW-26] an MCP/CLI token on the drive wallet', () => {
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(token('u-priya', [DRIVE]));
     vi.mocked(getDriveWallet).mockResolvedValue({ ok: true, viewer: 'member', actions: ['view'], wallet: consumerWallet });
     await GET(req('GET'), context);
-    expect(getDriveWallet).toHaveBeenCalledWith('u-priya', DRIVE, 'mcp');
+    expect(getDriveWallet).toHaveBeenCalledWith(expect.objectContaining({ userId: 'u-priya' }), DRIVE, 'mcp');
   });
 });

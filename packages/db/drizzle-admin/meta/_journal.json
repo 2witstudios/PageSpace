@@ -78,6 +78,13 @@
       "when": 1791132617571,
       "tag": "0010_security_audit_org_index",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1791832802374,
+      "tag": "0011_security_audit_org_occurred_outbox",
+      "breakpoints": true
     }
   ]
 }

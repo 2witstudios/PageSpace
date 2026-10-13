@@ -21,17 +21,26 @@ import { wallets } from '@pagespace/db/schema/wallets';
 import { createDriveWallet, donateToDrive, updateDriveWallet } from '../drive-wallet-service';
 import { moveDriveOutOfOrg, type OrgDriveServiceDeps } from '../org-drive-service';
 import { orgDriveServiceDeps } from '../org-drive-service-deps';
+import { credentialActor } from '../../permissions/access-actor';
 
 vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 
 const audit = vi.hoisted(() => ({ events: [] as Array<Record<string, unknown>> }));
-vi.mock('../../audit/org-audit', () => ({
-  recordOrgAuditEvent: vi.fn(async () => {}),
-  recordOrgAuditEventAfterCommit: vi.fn(async (event: Record<string, unknown>) => {
-    audit.events.push(event);
-    return true;
-  }),
-}));
+// AUD-1: the code under test stages its org events in the outbox; the chain append is captured here, so what this
+// suite sees is exactly what was staged, committed and delivered.
+vi.mock('../../audit/security-audit', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../audit/security-audit')>();
+  const { orgEventOf } = await import('../../audit/__tests__/capture-org-audit');
+  return {
+    ...actual,
+    securityAudit: {
+      ...actual.securityAudit,
+      logEvent: vi.fn(async (entry: import('../../audit/security-audit').AuditEvent) => {
+        audit.events.push(orgEventOf(entry));
+      }),
+    },
+  };
+});
 
 const deps: OrgDriveServiceDeps = { ...orgDriveServiceDeps, syncOrgMembership: async () => async () => {} };
 const HOLD_MS = 400;
@@ -54,8 +63,8 @@ async function northwind() {
   await db.insert(wallets).values({ ownerType: 'org', orgId: org.id, monthlyRemainingCents: 900_000 });
   // Marcus's own credits, so he can donate.
   await db.insert(wallets).values({ userId: marcus.id, monthlyRemainingCents: 5_000, monthlyPeriodStart: new Date(), monthlyPeriodEnd: new Date(Date.now() + 20 * 86_400_000) });
-  expect(await createDriveWallet(jono.id, product.id, { allocationCents: 10_000 }, 'session')).toMatchObject({ ok: true });
-  await updateDriveWallet(jono.id, product.id, { donationsEnabled: true }, 'session');
+  expect(await createDriveWallet(credentialActor(jono.id, null), product.id, { allocationCents: 10_000 }, 'session')).toMatchObject({ ok: true });
+  await updateDriveWallet(credentialActor(jono.id, null), product.id, { donationsEnabled: true }, 'session');
   audit.events.length = 0;
   return { orgId: org.id, jono, marcus, driveId: product.id };
 }
@@ -102,7 +111,7 @@ describe('drive wallet events follow the drive\'s org at commit', () => {
 
   it('AUD-1 (partial) a move that lands between the access decision and the write refuses the write: nothing changes, and no event is filed under the org the drive left', async () => {
     const w = await northwind();
-    const result = await updateDriveWallet(w.jono.id, w.driveId, { paused: true }, 'session', {
+    const result = await updateDriveWallet(credentialActor(w.jono.id, null), w.driveId, { paused: true }, 'session', {
       afterAccess: async () => {
         expect((await moveDriveOutOfOrg(w.jono.id, w.driveId, { implicitMembers: 'keep' }, deps)).ok).toBe(true);
       },
@@ -117,7 +126,7 @@ describe('drive wallet events follow the drive\'s org at commit', () => {
     let moveSettled = false;
     let move: Promise<unknown> = Promise.resolve();
     let movedWhileHeld = true;
-    const result = await updateDriveWallet(w.jono.id, w.driveId, { paused: true }, 'session', {
+    const result = await updateDriveWallet(credentialActor(w.jono.id, null), w.driveId, { paused: true }, 'session', {
       afterDriveLock: async () => {
         move = moveDriveOutOfOrg(w.jono.id, w.driveId, { implicitMembers: 'keep' }, deps).finally(() => { moveSettled = true; });
         await sleep(HOLD_MS);
@@ -134,7 +143,7 @@ describe('drive wallet events follow the drive\'s org at commit', () => {
   it('AUD-1 (partial) a donation is held to the same rule: a move in between refuses it and moves no money', async () => {
     const w = await northwind();
     const before = await walletOf(w.driveId);
-    const result = await donateToDrive(w.marcus.id, w.driveId, { amountCents: 100, idempotencyKey: createId() }, 'session', {
+    const result = await donateToDrive(credentialActor(w.marcus.id, null), w.driveId, { amountCents: 100, idempotencyKey: createId() }, 'session', {
       afterAccess: async () => {
         expect((await moveDriveOutOfOrg(w.jono.id, w.driveId, { implicitMembers: 'keep' }, deps)).ok).toBe(true);
       },

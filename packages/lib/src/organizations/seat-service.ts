@@ -16,7 +16,9 @@
  * proration). A replay of the same attempt is one request to Stripe; reaching the same
  * quantity again after another change is a new request. The quantity is ABSOLUTE, so even a
  * replay after Stripe's 24-hour key window sets a value Stripe already holds and prorates
- * nothing. Raises are prorated (SEAT-4); a release is not (SEAT-5: the period was paid).
+ * nothing. Raises are prorated (SEAT-4) unless the release already handed the period's seats
+ * back before the boundary (then re-adding is free, SEAT-5); a release is not prorated
+ * (SEAT-5: the period was paid).
  *
  * MID-FLIGHT FAILURE (Stripe runs inside the locked transaction, like D1's provisioning):
  *   - Stripe errors or is unreachable: the transaction rolls back; no invite, no stored
@@ -41,7 +43,7 @@ import { isBillingEnabled } from '../deployment-mode';
 import { isLiveOrgSubscriptionStatus, orgBillingLockKey, planSeatQuantitySync } from '../billing/org-subscription-core';
 import { TIER_PLAN_LIMITS } from '../billing/subscription-tiers';
 import { loggers } from '../logging/logger-config';
-import { recordOrgAuditEventAfterCommit } from '../audit/org-audit';
+import { transactionWithOrgAudit, type OrgAuditEvent } from '../audit/org-audit';
 import { countOrgSeatParts } from './repository';
 import {
   SEAT_RELEASE_LEAD_MS,
@@ -90,7 +92,14 @@ async function loadLiveSubscription(tx: Tx, orgId: string) {
 export type SeatAdmission =
   /** `quantity` is the extra-seat quantity Stripe now bills, set when this admission raised it. */
   | { ok: true; raised: boolean; quantity?: number }
-  | { ok: false; status: 402; reason: typeof SEAT_REFUSED_CODE; message: string; purchased: number; held: number };
+  | { ok: false; status: 402; reason: typeof SEAT_REFUSED_CODE; message: string; purchased: number; held: number }
+  /** [D-OW-26] A delegated key would need a seat raise (a money move): nothing is taken or bought. */
+  | { ok: false; status: 403; reason: typeof SEAT_RAISE_BY_KEY_CODE; message: string; purchased: number; held: number };
+
+/** The refusal code of a seat raise a delegated key asked for ([D-OW-26]). */
+export const SEAT_RAISE_BY_KEY_CODE = 'mcp_token_cannot_move_money' as const;
+export const SEAT_RAISE_BY_KEY_MESSAGE =
+  'An access token cannot buy another seat: every purchased seat is taken. Sign in to invite, or free a seat first';
 
 /**
  * May ONE more seat be taken for this org, inside the caller's transaction? Takes the billing
@@ -102,7 +111,8 @@ export type SeatAdmission =
  */
 export async function admitSeat(
   tx: Tx,
-  input: { orgId: string; actorRole: OrgRole },
+  /** `credential`: a delegated key ('mcp') is never admitted a seat raise ([D-OW-26], decideSeatAdmission). */
+  input: { orgId: string; actorRole: OrgRole; credential: 'session' | 'mcp' },
   port?: SeatBillingPort,
 ): Promise<SeatAdmission> {
   await lockOrgBilling(tx, input.orgId);
@@ -117,14 +127,21 @@ export async function admitSeat(
     purchasedExtra: sub?.extraSeatQuantity ?? 0,
     autoAdd: org?.seatAutoAdd ?? false,
     billingEnabled: isBillingEnabled(),
+    period: sub ? { end: sub.currentPeriodEnd, reconciledThrough: sub.seatsReconciledThrough } : null,
+    now: new Date(),
+    giftedExtraSeats: sub?.giftedExtraSeats ?? null,
+    credential: input.credential,
   });
   if (decision.action === 'admit') return { ok: true, raised: false };
+  if (decision.action === 'refuse' && decision.reason === 'delegated_raise') {
+    return { ok: false, status: 403, reason: SEAT_RAISE_BY_KEY_CODE, message: SEAT_RAISE_BY_KEY_MESSAGE, purchased: decision.purchased, held: decision.held };
+  }
   if (decision.action === 'refuse') {
     return {
       ok: false,
       status: 402,
       reason: SEAT_REFUSED_CODE,
-      message: seatRefusalMessage({ purchased: decision.purchased, held: decision.held, actorRole: input.actorRole }),
+      message: seatRefusalMessage({ purchased: decision.purchased, held: decision.held, actorRole: input.actorRole, reason: decision.reason }),
       purchased: decision.purchased,
       held: decision.held,
     };
@@ -138,18 +155,18 @@ export async function admitSeat(
     orgId: input.orgId,
     stored: { seatItemId: sub.stripeSeatItemId, extraSeatQuantity: sub.extraSeatQuantity, seatRevision: sub.seatRevision },
     seats: held + 1,
-    prorationBehavior: 'create_prorations',
+    prorationBehavior: decision.proration,
   });
   if (plan.kind === 'noop') return { ok: true, raised: false };
   const item = await port.setSeatQuantity(
-    { itemId: plan.itemId, quantity: plan.quantity, prorationBehavior: 'create_prorations' },
+    { itemId: plan.itemId, quantity: plan.quantity, prorationBehavior: decision.proration },
     plan.idempotencyKey,
   );
   await tx
     .update(orgSubscriptions)
     .set({ extraSeatQuantity: item.quantity, seatRevision: plan.nextRevision })
     .where(eq(orgSubscriptions.orgId, input.orgId));
-  loggers.api.info('org extra-seat quantity raised for an invite', { orgId: input.orgId, quantity: item.quantity, held: held + 1 });
+  loggers.api.info('org extra-seat quantity raised for an invite', { orgId: input.orgId, quantity: item.quantity, held: held + 1, proration: decision.proration });
   return { ok: true, raised: true, quantity: item.quantity };
 }
 
@@ -171,88 +188,90 @@ export async function releaseOrgSeats(
   input: { orgId: string; now: Date; leadMs?: number },
   port: SeatBillingPort,
 ): Promise<SeatReleaseOutcome> {
-  const outcome = await releaseOrgSeatsInTx(input, port);
-  if (outcome.kind === 'released' || outcome.kind === 'restored') {
-    // AUD-1: the period boundary changed what Stripe bills (a system action, no actor).
-    await recordOrgAuditEventAfterCommit({
-      orgId: input.orgId,
-      eventType: 'org.seat.quantity_changed',
-      resourceType: 'organization',
-      resourceId: input.orgId,
-      details: {
-        reason: outcome.kind === 'released' ? 'period_end_release' : 'period_end_restore',
-        quantity: outcome.quantity,
-        ...(outcome.catchUp ? { catchUp: true } : {}),
-      },
-    });
-  }
-  return outcome;
+  return transactionWithOrgAudit(async (tx, audit) => {
+    const outcome = await releaseOrgSeatsInTx(tx, input, port);
+    if (outcome.kind === 'released' || outcome.kind === 'restored') {
+      // AUD-1: the period boundary changed what Stripe bills (a system action, no actor).
+      await audit({
+        orgId: input.orgId,
+        eventType: 'org.seat.quantity_changed',
+        resourceType: 'organization',
+        resourceId: input.orgId,
+        details: {
+          reason: outcome.kind === 'released' ? 'period_end_release' : 'period_end_restore',
+          quantity: outcome.quantity,
+          ...(outcome.catchUp ? { catchUp: true } : {}),
+        },
+      });
+    }
+    return outcome;
+  });
 }
 
-function releaseOrgSeatsInTx(
+async function releaseOrgSeatsInTx(
+  tx: Tx,
   input: { orgId: string; now: Date; leadMs?: number },
   port: SeatBillingPort,
 ): Promise<SeatReleaseOutcome> {
-  return db.transaction(async (tx): Promise<SeatReleaseOutcome> => {
-    await lockOrgBilling(tx, input.orgId);
-    const sub = await loadLiveSubscription(tx, input.orgId);
-    if (!sub) return { kind: 'no_subscription' };
-    const parts = await countOrgSeatParts(input.orgId, tx);
-    const { held } = seatQuantity({ ...parts, included: INCLUDED });
-    const common = {
-      held,
-      included: INCLUDED,
-      currentPeriodStart: sub.currentPeriodStart,
-      currentPeriodEnd: sub.currentPeriodEnd,
-      cancelAtPeriodEnd: sub.cancelAtPeriodEnd,
-      reconciledThrough: sub.seatsReconciledThrough,
-      now: input.now,
-      leadMs: input.leadMs,
-    };
-    const markReconciled = async (boundary: Date, extra: { extraSeatQuantity?: number; seatRevision?: number } = {}) => {
-      await tx
-        .update(orgSubscriptions)
-        .set({ seatsReconciledThrough: boundary, ...extra })
-        .where(eq(orgSubscriptions.orgId, input.orgId));
-    };
+  await lockOrgBilling(tx, input.orgId);
+  const sub = await loadLiveSubscription(tx, input.orgId);
+  if (!sub) return { kind: 'no_subscription' };
+  const parts = await countOrgSeatParts(input.orgId, tx);
+  const { held } = seatQuantity({ ...parts, included: INCLUDED });
+  const common = {
+    held,
+    included: INCLUDED,
+    currentPeriodStart: sub.currentPeriodStart,
+    currentPeriodEnd: sub.currentPeriodEnd,
+    cancelAtPeriodEnd: sub.cancelAtPeriodEnd,
+    reconciledThrough: sub.seatsReconciledThrough,
+    now: input.now,
+    leadMs: input.leadMs,
+    giftedExtraSeats: sub.giftedExtraSeats,
+  };
+  const markReconciled = async (boundary: Date, extra: { extraSeatQuantity?: number; seatRevision?: number } = {}) => {
+    await tx
+      .update(orgSubscriptions)
+      .set({ seatsReconciledThrough: boundary, ...extra })
+      .where(eq(orgSubscriptions.orgId, input.orgId));
+  };
 
-    // Mid-period (or a first-sight baseline) nothing is read from Stripe.
-    const early = decideSeatRelease({ ...common, purchasedExtra: sub.extraSeatQuantity });
-    if (early.action === 'keep' && early.reason === 'baseline') {
-      await markReconciled(early.boundary);
-      return { kind: 'kept', reason: 'baseline' };
-    }
-    if (early.action === 'keep' && early.reason !== 'nothing_unused') return { kind: 'kept', reason: early.reason };
+  // Mid-period (or a first-sight baseline) nothing is read from Stripe.
+  const early = decideSeatRelease({ ...common, purchasedExtra: sub.extraSeatQuantity });
+  if (early.action === 'keep' && early.reason === 'baseline') {
+    await markReconciled(early.boundary);
+    return { kind: 'kept', reason: 'baseline' };
+  }
+  if (early.action === 'keep' && early.reason !== 'nothing_unused') return { kind: 'kept', reason: early.reason };
 
-    // At a boundary, Stripe's own quantity is the truth the decision is made against.
-    const actual = await port.readSeatQuantity(sub.stripeSeatItemId);
-    const decision = decideSeatRelease({ ...common, purchasedExtra: actual });
-    if (decision.action === 'keep') {
-      if (decision.reason === 'nothing_unused' || decision.reason === 'baseline') {
-        await markReconciled(decision.boundary, actual !== sub.extraSeatQuantity ? { extraSeatQuantity: actual } : {});
-      } else if (actual !== sub.extraSeatQuantity) {
-        await tx.update(orgSubscriptions).set({ extraSeatQuantity: actual }).where(eq(orgSubscriptions.orgId, input.orgId));
-      }
-      return { kind: 'kept', reason: decision.reason };
+  // At a boundary, Stripe's own quantity is the truth the decision is made against.
+  const actual = await port.readSeatQuantity(sub.stripeSeatItemId);
+  const decision = decideSeatRelease({ ...common, purchasedExtra: actual });
+  if (decision.action === 'keep') {
+    if (decision.reason === 'nothing_unused' || decision.reason === 'baseline') {
+      await markReconciled(decision.boundary, actual !== sub.extraSeatQuantity ? { extraSeatQuantity: actual } : {});
+    } else if (actual !== sub.extraSeatQuantity) {
+      await tx.update(orgSubscriptions).set({ extraSeatQuantity: actual }).where(eq(orgSubscriptions.orgId, input.orgId));
     }
-    const prorationBehavior: SeatProration = decision.proration;
-    // A boundary already behind us was missed (or the row was stale): this run is its catch-up.
-    const catchUp = decision.boundary.getTime() <= input.now.getTime();
-    const plan = planSeatQuantitySync({
-      orgId: input.orgId,
-      stored: { seatItemId: sub.stripeSeatItemId, extraSeatQuantity: actual, seatRevision: sub.seatRevision },
-      seats: held,
-      prorationBehavior,
-    });
-    if (plan.kind === 'noop') {
-      await markReconciled(decision.boundary);
-      return { kind: 'kept', reason: 'nothing_unused' };
-    }
-    const item = await port.setSeatQuantity({ itemId: plan.itemId, quantity: plan.quantity, prorationBehavior }, plan.idempotencyKey);
-    await markReconciled(decision.boundary, { extraSeatQuantity: item.quantity, seatRevision: plan.nextRevision });
-    loggers.api.info('org extra-seat quantity reconciled at the period boundary', { orgId: input.orgId, action: decision.action, quantity: item.quantity, held, catchUp, boundary: decision.boundary });
-    return decision.action === 'release' ? { kind: 'released', quantity: item.quantity, catchUp } : { kind: 'restored', quantity: item.quantity, catchUp };
+    return { kind: 'kept', reason: decision.reason };
+  }
+  const prorationBehavior: SeatProration = decision.proration;
+  // A boundary already behind us was missed (or the row was stale): this run is its catch-up.
+  const catchUp = decision.boundary.getTime() <= input.now.getTime();
+  const plan = planSeatQuantitySync({
+    orgId: input.orgId,
+    stored: { seatItemId: sub.stripeSeatItemId, extraSeatQuantity: actual, seatRevision: sub.seatRevision },
+    seats: held,
+    prorationBehavior,
   });
+  if (plan.kind === 'noop') {
+    await markReconciled(decision.boundary);
+    return { kind: 'kept', reason: 'nothing_unused' };
+  }
+  const item = await port.setSeatQuantity({ itemId: plan.itemId, quantity: plan.quantity, prorationBehavior }, plan.idempotencyKey);
+  await markReconciled(decision.boundary, { extraSeatQuantity: item.quantity, seatRevision: plan.nextRevision });
+  loggers.api.info('org extra-seat quantity reconciled at the period boundary', { orgId: input.orgId, action: decision.action, quantity: item.quantity, held, catchUp, boundary: decision.boundary });
+  return decision.action === 'release' ? { kind: 'released', quantity: item.quantity, catchUp } : { kind: 'restored', quantity: item.quantity, catchUp };
 }
 
 export interface SeatSweepResult {
@@ -314,33 +333,28 @@ export async function releaseDueSeats(input: { now: Date; leadMs?: number }, por
 
 /** SEAT-4's switch. Returns false when the org does not exist. */
 export async function setSeatAutoAdd(orgId: string, autoAdd: boolean, actorId?: string): Promise<boolean> {
-  const updated = await db.update(organizations).set({ seatAutoAdd: autoAdd }).where(eq(organizations.id, orgId)).returning({ id: organizations.id });
-  if (updated.length === 0) return false;
-  await recordOrgAuditEventAfterCommit({
-    orgId,
-    eventType: 'org.seat.auto_add_changed',
-    actorId,
-    resourceType: 'organization',
-    resourceId: orgId,
-    details: { autoAdd },
+  return transactionWithOrgAudit(async (tx, audit) => {
+    const updated = await tx.update(organizations).set({ seatAutoAdd: autoAdd }).where(eq(organizations.id, orgId)).returning({ id: organizations.id });
+    if (updated.length === 0) return false;
+    await audit({ orgId, eventType: 'org.seat.auto_add_changed', actorId, resourceType: 'organization', resourceId: orgId, details: { autoAdd } });
+    return true;
   });
-  return true;
 }
 
 /**
- * AUD-1 seat events of an admission, once the invite (or join) that took the seat has committed: the
- * raise when one was bought, or the refusal when none could be granted.
+ * AUD-1 seat events of an admission, staged in the transaction of the invite (or join) that took the seat: the raise
+ * when one was bought, or the refusal when none could be granted. An admission that bought nothing writes nothing.
  */
-export async function recordSeatAdmissionEvents(input: {
+export function seatAdmissionAuditEvents(input: {
   orgId: string;
   actorId?: string;
   admission: SeatAdmission;
   /** What took (or tried to take) the seat: 'invite', 'resend', 'auto_join'. */
   operation: string;
-}): Promise<void> {
+}): OrgAuditEvent[] {
   const { admission } = input;
-  if (admission.ok && !admission.raised) return;
-  await recordOrgAuditEventAfterCommit({
+  if (admission.ok && !admission.raised) return [];
+  return [{
     orgId: input.orgId,
     eventType: admission.ok ? 'org.seat.quantity_changed' : 'org.seat.refused',
     actorId: input.actorId,
@@ -349,7 +363,7 @@ export async function recordSeatAdmissionEvents(input: {
     details: admission.ok
       ? { reason: input.operation, quantity: admission.quantity ?? null }
       : { operation: input.operation, purchased: admission.purchased, held: admission.held },
-  });
+  }];
 }
 
 export interface SeatSummary {

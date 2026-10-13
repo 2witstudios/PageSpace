@@ -19,6 +19,8 @@ import { createChangeGroupId } from '@pagespace/lib/monitoring/change-group';
 import { ensureTaskItemForPage } from '@/services/api/task-sync-service';
 import { OrgLapsedError, checkDriveMayLoosen, isOrgLapsedError } from '@pagespace/lib/permissions/org-lapse-guard';
 import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
+import { assertAgentModelAllowed, orgModelPolicyErrorResponse } from '@/services/api/page-mutation-service';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -68,7 +70,7 @@ export async function POST(request: Request) {
     // is its own drive member — use the TOKEN's role, not its owning user's.
     let canEditDrive: boolean;
     const tokenMembership = isScopedMCPAuth(auth)
-      ? await getAppDriveMembership(auth.tokenId, targetDriveId)
+      ? await getAppDriveMembership(actorFromAuth(auth), auth.tokenId, targetDriveId)
       : null;
     if (isScopedMCPAuth(auth) && tokenMembership?.role !== null) {
       // Explicit-role keys need OWNER/ADMIN; inherited keys (role null) fall
@@ -77,7 +79,7 @@ export async function POST(request: Request) {
     } else {
       // The drive's lead or an effective OWNER/ADMIN (the org-aware membership reads ACCEPTED rows
       // only, so a pending ADMIN invitee cannot write into a drive they have not joined).
-      const role = driveRoleOf(await loadDriveRelationship(userId, targetDrive));
+      const role = driveRoleOf(await loadDriveRelationship(actorFromAuth(auth), targetDrive));
       canEditDrive = role === 'OWNER' || role === 'ADMIN';
     }
 
@@ -130,10 +132,10 @@ export async function POST(request: Request) {
     for (const page of sourcePages) {
       const canView = await canPrincipalViewPage(auth, page.id);
       if (!canView) {
-        return NextResponse.json(
+        return deniedResponse(actorFromAuth(auth), page.id, NextResponse.json(
           { error: `You do not have permission to copy page: ${page.title}` },
           { status: 403 }
-        );
+        ));
       }
     }
 
@@ -160,6 +162,7 @@ export async function POST(request: Request) {
         if (sourceDriveId !== targetDriveId && (await checkDriveMayLoosen(tx, sourceDriveId, true))) throw new OrgLapsedError();
       }
       for (const page of sourcePages) {
+        await assertCopiedAgentModelAllowed(targetDriveId, page);
         const newPageId = createId();
         copiedPages.push({ newId: newPageId, sourceTitle: page.title, sourceId: page.id });
 
@@ -269,12 +272,23 @@ export async function POST(request: Request) {
     });
   } catch (error) {
     if (isOrgLapsedError(error)) return orgLapsedResponse();
+    const refused = orgModelPolicyErrorResponse(error);
+    if (refused) return NextResponse.json(refused.body, { status: refused.status });
     loggers.api.error('Error bulk copying pages:', error as Error);
     return NextResponse.json(
       { error: 'Failed to copy pages' },
       { status: 500 }
     );
   }
+}
+
+/**
+ * POL-8: a copied agent page stores its provider/model in the target drive, which is a save there: refused (and the
+ * whole copy rolled back) when the target drive's org does not allow it.
+ */
+async function assertCopiedAgentModelAllowed(targetDriveId: string, page: { type: string; aiProvider: string | null; aiModel: string | null }): Promise<void> {
+  if (page.type !== PageType.AI_CHAT) return;
+  await assertAgentModelAllowed(targetDriveId, { provider: page.aiProvider, modelId: page.aiModel });
 }
 
 // Recursively copy children
@@ -296,6 +310,7 @@ async function copyChildrenRecursively(
   let copiedCount = 0;
 
   for (const child of children) {
+    await assertCopiedAgentModelAllowed(targetDriveId, child);
     const newChildId = createId();
 
     await tx.insert(pages).values({

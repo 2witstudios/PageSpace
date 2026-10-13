@@ -89,6 +89,8 @@ let selectedTables: unknown[] = [];
 let writtenTables: unknown[] = [];
 /** When true, the guarded insert returns nothing — i.e. another publish won the race. */
 let insertConflicts = false;
+/** Every `onConflictDoUpdate` set the destroy path asked for. */
+const conflictUpdates: Array<Record<string, unknown>> = [];
 /** Every `onConflictDoNothing({target})` the insert path asked for, in order. */
 let conflictTargets: unknown[] = [];
 
@@ -230,6 +232,12 @@ beforeEach(() => {
           return {
             returning: () => Promise.resolve(insertConflicts ? [] : [{ ...ROW, ...row }]),
           };
+        },
+        // The destroy path's reclaim outbox upsert: an immediate cancel overrides a pending
+        // period-end release (D-OW-64).
+        onConflictDoUpdate: (config: { set: Record<string, unknown> }) => {
+          conflictUpdates.push(config.set);
+          return Promise.resolve(undefined);
         },
         // mintDeployToken inserts without .returning()
         then: (resolve: (v: unknown) => unknown) => Promise.resolve(undefined).then(resolve),
@@ -580,8 +588,10 @@ describe('destroyPublishedApp', () => {
       'db:delete',
     ]);
     expect(insertedRows).toContainEqual(
-      expect.objectContaining({ stripeSubscriptionId: 'sub_123', publishedAppId: 'app1' }),
+      expect.objectContaining({ stripeSubscriptionId: 'sub_123', publishedAppId: 'app1', cancelAt: 'now' }),
     );
+    // A pending period-end release for the same subscription becomes an immediate cancel (D-OW-64).
+    expect(conflictUpdates).toContainEqual({ cancelAt: 'now' });
   });
 
   it('given the Fly delete fails, should keep the row so the teardown can be retried', async () => {

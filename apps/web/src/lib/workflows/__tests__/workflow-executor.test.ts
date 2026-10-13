@@ -119,6 +119,12 @@ vi.mock('@paralleldrive/cuid2', () => ({
   init: vi.fn(() => vi.fn(() => 'test-cuid')),
 }));
 
+// The pro-model gate for the funder's tier (WAL-8, POL-8). Default: entitled.
+const modelEntitlement = vi.hoisted(() => vi.fn(async (_input: { userId: string; provider: string; model: string; spend: unknown }) => ({ allowed: true } as { allowed: true } | { allowed: false; reason: 'provider_admin_only' | 'subscription_required' })));
+vi.mock('@/lib/ai/core/model-entitlement', () => ({
+  modelEntitlement,
+  MODEL_ENTITLEMENT_MESSAGES: { provider_admin_only: 'admin only', subscription_required: 'This model is available on paid plans, and whoever pays for this run is not on one.' },
+}));
 vi.mock('@/lib/ai/core/provider-factory', () => ({
   createAIProvider: vi.fn(),
   isProviderError: vi.fn(),
@@ -180,6 +186,7 @@ vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   isUserDriveMember: vi.fn(),
 }));
 
@@ -253,6 +260,7 @@ function setupSelectChain(...results: unknown[][]) {
 describe('executeWorkflow', () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    modelEntitlement.mockResolvedValue({ allowed: true });
     // resetAllMocks wipes implementations — restore the session-mint defaults
     // (spawn refused ⇒ the executor degrades to running without sandbox tools).
     mockSpawnSession.mockResolvedValue({ ok: false, reason: 'spawn_failed' });
@@ -341,6 +349,19 @@ describe('executeWorkflow', () => {
     expect(vi.mocked(createAIProvider)).toHaveBeenCalledWith(input.createdBy, expect.anything(), { driveId: input.driveId });
     expect(result.success).toBe(false);
     expect(result.error).toContain("doesn't allow that AI model");
+  });
+
+  test('POL-8 (partial) WAL-8 (partial) the pro-model gate takes the run\'s funder tier on its spend: a model the funder is not entitled to fails the run before any model call', async () => {
+    setupSelectChain([mockAgent], [mockDrive]);
+    vi.mocked(isProviderError).mockReturnValue(false);
+    vi.mocked(createAIProvider).mockResolvedValue({ model: {}, provider: 'openai', modelName: 'openai/gpt-6-sol' } as never);
+    modelEntitlement.mockResolvedValueOnce({ allowed: false, reason: 'subscription_required' });
+    const input = createInputFixture();
+
+    const result = await executeWorkflow(input);
+
+    expect(modelEntitlement).toHaveBeenCalledWith({ userId: input.createdBy, provider: 'openai', model: 'openai/gpt-6-sol', spend: { kind: 'automation', driveId: input.driveId } });
+    expect(result).toMatchObject({ success: false, error: expect.stringContaining('paid plans') });
   });
 
   describe('the org autonomy policy', () => {
@@ -525,7 +546,7 @@ describe('executeWorkflow', () => {
       const result = await executeWorkflow(createInputFixture());
 
       expect(result.success).toBe(true);
-      expect(mockResolveSandboxToolEligibility).toHaveBeenCalledWith('drive_abc', 'user_123');
+      expect(mockResolveSandboxToolEligibility).toHaveBeenCalledWith('drive_abc', expect.objectContaining({ via: 'automation', userId: 'user_123' }));
       const genCall = vi.mocked(generateText).mock.calls[0][0] as Record<string, unknown>;
       const toolKeys = Object.keys(genCall.tools as object);
       expect(toolKeys).toContain('list_pages');
@@ -1096,7 +1117,21 @@ describe('executeWorkflow', () => {
 
       expect(AIMonitoring.trackUsage).toHaveBeenCalledWith(expect.objectContaining({ walletId: 'w_product', source: 'workflow' }));
       const genCall = vi.mocked(generateText).mock.calls[0][0] as { experimental_context: { creditSpend?: unknown } };
-      expect(genCall.experimental_context.creditSpend).toEqual(creditSpend);
+      expect(genCall.experimental_context.creditSpend).toEqual({ ...creditSpend, automationRef: 'workflow:wf_1' });
+    });
+
+    test('SPEND-10 (partial) a run no person is present for records its workflow on its usage and hands it to its tools; a manual Run records none', async () => {
+      setupSelectChain([mockAgent], [mockDrive]);
+      const scheduled = { spend: { kind: 'automation' as const, driveId: 'drive_1' }, walletId: 'w_product', userId: 'user_creator' };
+      await executeWorkflow(createInputFixture({ createdBy: 'user_creator' }), { admit: vi.fn().mockResolvedValue({ admitted: true, release: vi.fn(), creditSpend: scheduled }) });
+      expect(AIMonitoring.trackUsage).toHaveBeenLastCalledWith(expect.objectContaining({ userId: 'user_creator', automationRef: 'workflow:wf_1' }));
+      const genCall = vi.mocked(generateText).mock.calls[0][0] as { experimental_context: { creditSpend?: { automationRef?: string } } };
+      expect(genCall.experimental_context.creditSpend?.automationRef).toBe('workflow:wf_1');
+
+      setupSelectChain([mockAgent], [mockDrive]);
+      const pressed = { spend: { kind: 'automation' as const, driveId: 'drive_1', personPresent: true as const }, walletId: 'w_product', userId: 'user_presser' };
+      await executeWorkflow(createInputFixture({ createdBy: 'user_creator' }), { admit: vi.fn().mockResolvedValue({ admitted: true, release: vi.fn(), creditSpend: pressed }) });
+      expect(AIMonitoring.trackUsage).toHaveBeenLastCalledWith(expect.objectContaining({ userId: 'user_presser', automationRef: undefined }));
     });
 
     test('SPEND-6 (partial) WAL-7 (partial) a MANUAL Run records its usage under the person who pressed Run (the consumer its gate bound), not the workflow\'s creator (review #2817 P2-3)', async () => {
@@ -1201,6 +1236,7 @@ describe('executeWorkflow — explicit step chains', () => {
 
   beforeEach(() => {
     vi.resetAllMocks();
+    modelEntitlement.mockResolvedValue({ allowed: true });
     // resetAllMocks wipes implementations — restore the session-mint defaults
     // (spawn refused ⇒ the executor degrades to running without sandbox tools).
     mockSpawnSession.mockResolvedValue({ ok: false, reason: 'spawn_failed' });

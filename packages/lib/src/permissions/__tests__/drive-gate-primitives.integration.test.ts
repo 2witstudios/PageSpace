@@ -23,7 +23,7 @@ import { and, eq, inArray, isNotNull } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { drives } from '@pagespace/db/schema/core';
 import { driveMembers } from '@pagespace/db/schema/members';
-import { orgMembers } from '@pagespace/db/schema/organizations';
+import { orgAuditOutbox, orgMembers } from '@pagespace/db/schema/organizations';
 import { getDriveAccess, listAccessibleDrives } from '../../services/drive-service';
 import { canAdministerDrive, driveRoleOf, isDriveLead, type RelationshipDrive } from '../drive-relationship';
 import { loadDriveLeadAuthority, loadDriveRelationship, loadDriveRelationships } from '../drive-relationship-loader';
@@ -32,6 +32,7 @@ import { resetDefaultSecurityAuditForTests, securityAudit } from '../../audit/se
 import { getAdministeredDriveIds, getMemberDriveIds, listMemberDrives, memberOfAnyDriveCondition, sharesMemberDrive } from '../member-drives';
 import { listDriveAudiences } from '../drive-audience';
 import { cleanupNorthwind, createUser, northwind } from './fixtures/northwind-org-drives';
+import { credentialActor } from '../access-actor';
 
 const flags = vi.hoisted(() => ({ orgsEnabled: false }));
 vi.mock('../../organizations/orgs-enabled', () => ({
@@ -86,7 +87,7 @@ async function legacyInlineMemberDrives(userId: string, includeTrashed: boolean)
 }
 
 const memberDriveKeys = async (userId: string, includeTrashed: boolean) =>
-  (await listMemberDrives(userId, { includeTrashed }))
+  (await listMemberDrives(credentialActor(userId, null), { includeTrashed }))
     .map((d) => `${d.driveId}:${d.isOwner ? 'OWNER*' : d.role}`)
     .sort();
 
@@ -94,17 +95,17 @@ const memberDriveKeys = async (userId: string, includeTrashed: boolean) =>
 async function relationshipDisagreements(f: Fixture) {
   const out: string[] = [];
   for (const [name, person] of Object.entries(f.people)) {
-    const batch = await loadDriveRelationships(person.id, f.allDrives);
+    const batch = await loadDriveRelationships(credentialActor(person.id, null), f.allDrives);
     for (const drive of f.allDrives) {
       const where = `${name} on ${f.nameOf.get(drive.id)}`;
-      const access = await getDriveAccess(drive.id, person.id);
+      const access = await getDriveAccess(drive.id, credentialActor(person.id, null));
       const expected = {
         isOwner: access.isOwner,
         admin: access.isOwner || access.isAdmin,
         member: access.isOwner || access.isMember,
         role: access.role,
       };
-      const single = await loadDriveRelationship(person.id, drive);
+      const single = await loadDriveRelationship(credentialActor(person.id, null), drive);
       const answer = (r: typeof single | undefined) => r && {
         isOwner: r.isOwner,
         admin: canAdministerDrive(r),
@@ -132,10 +133,10 @@ async function memberDriveDisagreements(f: Fixture) {
   const out: string[] = [];
   for (const [name, person] of Object.entries(f.people)) {
     for (const includeTrashed of [true, false]) {
-      const listed = await listAccessibleDrives(person.id, { includeTrash: includeTrashed });
+      const listed = await listAccessibleDrives(credentialActor(person.id, null), { includeTrash: includeTrashed });
       const expected: string[] = [];
       for (const d of listed) {
-        const access = await getDriveAccess(d.id, person.id);
+        const access = await getDriveAccess(d.id, credentialActor(person.id, null));
         if (access.isOwner) expected.push(`${d.id}:OWNER*`);
         else if (access.isMember) expected.push(`${d.id}:${d.role}`);
       }
@@ -145,7 +146,7 @@ async function memberDriveDisagreements(f: Fixture) {
         const label = (keys: string[]) => keys.map((k) => `${f.nameOf.get(k.split(':')[0])}:${k.split(':')[1]}`);
         out.push(`listMemberDrives(${includeTrashed ? 'with trash' : 'no trash'}): ${name} answered ${JSON.stringify(label(actual))}, canonical ${JSON.stringify(label(expected))}`);
       }
-      const ids = (await getMemberDriveIds(person.id, { includeTrashed })).sort();
+      const ids = (await getMemberDriveIds(credentialActor(person.id, null), { includeTrashed })).sort();
       if (JSON.stringify(ids) !== JSON.stringify(expected.map((k) => k.split(':')[0]))) {
         out.push(`getMemberDriveIds: ${name} disagrees with listMemberDrives`);
       }
@@ -163,7 +164,7 @@ async function sqlConditionDisagreements(f: Fixture) {
       .where(and(inArray(users.id, everyone), memberOfAnyDriveCondition(users.id, [drive.id])));
     const actual = new Set(rows.map((r) => r.id));
     for (const [name, person] of Object.entries(f.people)) {
-      const expected = (await getMemberDriveIds(person.id, { includeTrashed: true })).includes(drive.id);
+      const expected = (await getMemberDriveIds(credentialActor(person.id, null), { includeTrashed: true })).includes(drive.id);
       if (actual.has(person.id) !== expected) {
         out.push(`memberOfAnyDriveCondition: ${name} on ${f.nameOf.get(drive.id)} answered ${actual.has(person.id)}, listMemberDrives ${expected}`);
       }
@@ -212,7 +213,7 @@ describe('B7c: the gate primitives agree with the canonical resolvers (integrati
 
     // Non-vacuity: the shapes the inline gates got wrong.
     const rel = (userId: string, drive: { id: string }) =>
-      loadDriveRelationship(userId, f.allDrives.find((d) => d.id === drive.id) as RelationshipDrive);
+      loadDriveRelationship(credentialActor(userId, null), f.allDrives.find((d) => d.id === drive.id) as RelationshipDrive);
     expect(canAdministerDrive(await rel(f.people.priya.id, f.drives.finance))).toBe(true); // org Admin, no valid row
     expect(driveRoleOf(await rel(f.people.nina.id, f.drives.product))).toBe('MEMBER'); // implicit Open member, no row
     expect(driveRoleOf(await rel(f.people.marcus.id, f.drives.finance))).toBeNull(); // stale source='org' row
@@ -229,7 +230,7 @@ describe('B7c: the gate primitives agree with the canonical resolvers (integrati
     expect(await memberDriveDisagreements(f)).toEqual([]);
 
     const names = async (userId: string) =>
-      (await listMemberDrives(userId, { includeTrashed: true })).map((d) => f.nameOf.get(d.driveId)).sort();
+      (await listMemberDrives(credentialActor(userId, null), { includeTrashed: true })).map((d) => f.nameOf.get(d.driveId)).sort();
     expect(await names(f.people.nina.id)).toEqual(['Marcus Archive', 'Marcus Notes', 'Product']);
     expect(await names(f.people.marcus.id)).toEqual(['Marcus Archive', 'Marcus Notes', 'Product']);
     expect(await names(f.people.dana.id)).toEqual(['Acme Wiki', 'Marcus Notes']);
@@ -257,10 +258,10 @@ describe('B7c: the gate primitives agree with the canonical resolvers (integrati
         for (const drive of f.allDrives) {
           const [row] = await db.select({ isTrashed: drives.isTrashed }).from(drives).where(eq(drives.id, drive.id));
           if (!includeTrashed && row.isTrashed) continue;
-          const access = await getDriveAccess(drive.id, person.id);
+          const access = await getDriveAccess(drive.id, credentialActor(person.id, null));
           if (access.isOwner || access.isAdmin) expected.push(drive.id);
         }
-        const actual = (await getAdministeredDriveIds(person.id, { includeTrashed })).filter((id) => f.nameOf.has(id)).sort();
+        const actual = (await getAdministeredDriveIds(credentialActor(person.id, null), { includeTrashed })).filter((id) => f.nameOf.has(id)).sort();
         if (JSON.stringify(actual) !== JSON.stringify(expected.sort())) {
           out.push(`getAdministeredDriveIds(${includeTrashed}): ${name} answered ${JSON.stringify(actual.map((id) => f.nameOf.get(id)))}, canonical ${JSON.stringify(expected.map((id) => f.nameOf.get(id)))}`);
         }
@@ -268,7 +269,7 @@ describe('B7c: the gate primitives agree with the canonical resolvers (integrati
     }
     expect(out).toEqual([]);
     // Non-vacuity: Priya administers PRIVATE Finance and RESTRICTED Research without joining them.
-    const priya = (await getAdministeredDriveIds(f.people.priya.id, { includeTrashed: false })).map((id) => f.nameOf.get(id)).sort();
+    const priya = (await getAdministeredDriveIds(credentialActor(f.people.priya.id, null), { includeTrashed: false })).map((id) => f.nameOf.get(id)).sort();
     expect(priya).toEqual(['Customer Research', 'Finance', 'Product']);
   });
 
@@ -279,7 +280,7 @@ describe('B7c: the gate primitives agree with the canonical resolvers (integrati
       const admins = await db.select({ driveId: driveMembers.driveId }).from(driveMembers).innerJoin(drives, eq(drives.id, driveMembers.driveId))
         .where(and(eq(driveMembers.userId, person.id), eq(driveMembers.role, 'ADMIN'), isNotNull(driveMembers.acceptedAt), eq(drives.isTrashed, false)));
       const expected = [...new Set([...owned.map((d) => d.id), ...admins.map((d) => d.driveId)])].sort();
-      expect((await getAdministeredDriveIds(person.id, { includeTrashed: false })).sort(), name).toEqual(expected);
+      expect((await getAdministeredDriveIds(credentialActor(person.id, null), { includeTrashed: false })).sort(), name).toEqual(expected);
     }
   });
 
@@ -306,7 +307,7 @@ describe('B7c: the gate primitives agree with the canonical resolvers (integrati
     }
     expect(await sqlConditionDisagreements(f)).toEqual([]);
     // Non-vacuity: dark, Marcus's stale Finance org row still makes Finance his (the pre-org answer).
-    expect((await getMemberDriveIds(f.people.marcus.id, { includeTrashed: true }))).toContain(f.drives.finance.id);
+    expect((await getMemberDriveIds(credentialActor(f.people.marcus.id, null), { includeTrashed: true }))).toContain(f.drives.finance.id);
     expect(await sharesMemberDrive(f.people.dana.id, f.people.lena.id)).toBe(true);
   });
 
@@ -319,7 +320,7 @@ describe('B7c: the gate primitives agree with the canonical resolvers (integrati
     for (const drive of f.allDrives) {
       const expected: string[] = [];
       for (const [name, person] of Object.entries(f.people)) {
-        const access = await getDriveAccess(drive.id, person.id);
+        const access = await getDriveAccess(drive.id, credentialActor(person.id, null));
         if (access.isOwner || access.isMember) expected.push(`${name}:${access.role}`);
       }
       const nameOf = new Map(Object.entries(f.people).map(([name, p]) => [p.id, name]));
@@ -359,26 +360,34 @@ describe('B7c: the gate primitives agree with the canonical resolvers (integrati
     // Nina (org MEMBER) opens no PRIVATE drive through org power, so no ORG-4 audit claim (deduped per
     // window by B7b) is counted: this measures resolution alone. Product needs its default role in both.
     const nina = f.people.nina.id;
-    const few = await countQueries(() => loadDriveRelationships(nina, f.allDrives.filter((d) => d.id === f.drives.product.id)));
-    const many = await countQueries(() => loadDriveRelationships(nina, f.allDrives));
+    const few = await countQueries(() => loadDriveRelationships(credentialActor(nina, null), f.allDrives.filter((d) => d.id === f.drives.product.id)));
+    const many = await countQueries(() => loadDriveRelationships(credentialActor(nina, null), f.allDrives));
     expect(many).toBe(few);
-    expect(few).toBe(4); // accepted rows, org roles, default roles, the orgs' Open-drive floors (POL-6, once per batch)
+    // the drives' org sign-in policies (SEC-2/3, once per batch), accepted rows, org roles, default roles, the orgs' Open-drive floors (POL-6, once per batch)
+    expect(few).toBe(5);
 
-    const listBefore = await countQueries(() => listMemberDrives(priya, { includeTrashed: true }));
+    const listBefore = await countQueries(() => listMemberDrives(credentialActor(priya, null), { includeTrashed: true }));
     // The first call claims Priya's ORG-4 audit window on Finance; count the warm calls.
-    await getAdministeredDriveIds(priya, { includeTrashed: true });
-    const adminBefore = await countQueries(() => getAdministeredDriveIds(priya, { includeTrashed: true }));
+    await getAdministeredDriveIds(credentialActor(priya, null), { includeTrashed: true });
+    // That claim's audit record is staged and delivered off the request (AUD-1 outbox): let it land, so its
+    // queries are not counted against the warm calls.
+    await vi.waitFor(async () => {
+      const rows = await securityAudit.queryEvents({ eventType: 'authz.access.granted', resourceId: f.drives.finance.id });
+      expect(rows.some((r) => r.userId === priya)).toBe(true);
+      expect(await db.select({ id: orgAuditOutbox.id }).from(orgAuditOutbox).where(eq(orgAuditOutbox.driveId, f.drives.finance.id))).toEqual([]);
+    }, { timeout: 10_000, interval: 100 });
+    const adminBefore = await countQueries(() => getAdministeredDriveIds(credentialActor(priya, null), { includeTrashed: true }));
     for (let i = 0; i < 12; i++) {
       await factories.createDrive(f.people.lena.id, { name: `Extra ${i}`, slug: `extra-${i}-${Date.now()}`, orgId: f.org.id, orgVisibility: 'OPEN' });
     }
-    const listAfter = await countQueries(() => listMemberDrives(priya, { includeTrashed: true }));
+    const listAfter = await countQueries(() => listMemberDrives(credentialActor(priya, null), { includeTrashed: true }));
     expect(listAfter).toBe(listBefore);
-    expect(await countQueries(() => getAdministeredDriveIds(priya, { includeTrashed: true }))).toBe(adminBefore);
+    expect(await countQueries(() => getAdministeredDriveIds(credentialActor(priya, null), { includeTrashed: true }))).toBe(adminBefore);
 
     const oneAudience = await countQueries(() => listDriveAudiences([f.drives.product.id]));
     const allAudiences = await countQueries(() => listDriveAudiences(f.allDrives.map((d) => d.id)));
     expect(allAudiences).toBe(oneAudience);
-    expect((await getMemberDriveIds(priya, { includeTrashed: true })).length).toBe(13);
+    expect((await getMemberDriveIds(credentialActor(priya, null), { includeTrashed: true })).length).toBe(13);
   });
 
   describe('lead actions (rename, trash, restore, permanent delete) on org drives', () => {
@@ -394,16 +403,16 @@ describe('B7c: the gate primitives agree with the canonical resolvers (integrati
 
       for (const action of ['rename', 'trash', 'restore', 'permanent_delete'] as const) {
         for (const drive of orgDrives) {
-          expect(await loadDriveLeadAuthority(f.people.lena.id, rel(drive), action)).toEqual({ allowed: true, via: 'lead' });
-          expect(await loadDriveLeadAuthority(f.people.jono.id, rel(drive), action)).toEqual({ allowed: true, via: 'org-owner', orgId: f.org.id });
-          expect(await loadDriveLeadAuthority(f.people.priya.id, rel(drive), action)).toEqual({ allowed: true, via: 'org-admin', orgId: f.org.id });
+          expect(await loadDriveLeadAuthority(credentialActor(f.people.lena.id, null), rel(drive), action)).toEqual({ allowed: true, via: 'lead' });
+          expect(await loadDriveLeadAuthority(credentialActor(f.people.jono.id, null), rel(drive), action)).toEqual({ allowed: true, via: 'org-owner', orgId: f.org.id });
+          expect(await loadDriveLeadAuthority(credentialActor(f.people.priya.id, null), rel(drive), action)).toEqual({ allowed: true, via: 'org-admin', orgId: f.org.id });
           // An org MEMBER (even one holding an invited ADMIN row) and a non-member with a stale org row.
-          expect(await loadDriveLeadAuthority(f.people.nina.id, rel(drive), action)).toEqual({ allowed: false });
-          expect(await loadDriveLeadAuthority(f.people.dana.id, rel(drive), action)).toEqual({ allowed: false });
+          expect(await loadDriveLeadAuthority(credentialActor(f.people.nina.id, null), rel(drive), action)).toEqual({ allowed: false });
+          expect(await loadDriveLeadAuthority(credentialActor(f.people.dana.id, null), rel(drive), action)).toEqual({ allowed: false });
         }
-        expect(await loadDriveLeadAuthority(f.people.marcus.id, rel(f.drives.personal), action)).toEqual({ allowed: true, via: 'lead' });
-        expect(await loadDriveLeadAuthority(f.people.priya.id, rel(f.drives.personal), action)).toEqual({ allowed: false });
-        expect(await loadDriveLeadAuthority(f.people.nina.id, rel(f.drives.personal), action)).toEqual({ allowed: false }); // invited ADMIN on a personal drive
+        expect(await loadDriveLeadAuthority(credentialActor(f.people.marcus.id, null), rel(f.drives.personal), action)).toEqual({ allowed: true, via: 'lead' });
+        expect(await loadDriveLeadAuthority(credentialActor(f.people.priya.id, null), rel(f.drives.personal), action)).toEqual({ allowed: false });
+        expect(await loadDriveLeadAuthority(credentialActor(f.people.nina.id, null), rel(f.drives.personal), action)).toEqual({ allowed: false }); // invited ADMIN on a personal drive
       }
 
       // One row per org-power action, on every visibility; none for the lead or for a refusal.
@@ -422,9 +431,9 @@ describe('B7c: the gate primitives agree with the canonical resolvers (integrati
     it('while ORGS_ENABLED is false only the drive lead may take a lead-only action', async () => {
       const f = await gateFixture();
       const finance = f.allDrives.find((d) => d.id === f.drives.finance.id) as RelationshipDrive;
-      expect(await loadDriveLeadAuthority(f.people.lena.id, finance, 'rename')).toEqual({ allowed: true, via: 'lead' });
-      expect(await loadDriveLeadAuthority(f.people.jono.id, finance, 'rename')).toEqual({ allowed: false });
-      expect(await loadDriveLeadAuthority(f.people.priya.id, finance, 'rename')).toEqual({ allowed: false });
+      expect(await loadDriveLeadAuthority(credentialActor(f.people.lena.id, null), finance, 'rename')).toEqual({ allowed: true, via: 'lead' });
+      expect(await loadDriveLeadAuthority(credentialActor(f.people.jono.id, null), finance, 'rename')).toEqual({ allowed: false });
+      expect(await loadDriveLeadAuthority(credentialActor(f.people.priya.id, null), finance, 'rename')).toEqual({ allowed: false });
     });
   });
 });

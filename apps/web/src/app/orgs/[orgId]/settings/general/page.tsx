@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useSWRConfig } from 'swr';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -11,11 +11,54 @@ import { useOrgAdminRead } from '@/hooks/useOrgs';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { OrgMark } from '@/components/orgs/OrgMark';
 import { OrgSettingsShell, type OrgSettingsContext } from '@/components/orgs/OrgSettingsShell';
-import { isOrgKey, orgKeys, patchOrganization, type OrgMember } from '@/lib/orgs/org-api';
+import { isOrgKey, orgKeys, patchOrganization, removeOrgAvatar, uploadOrgAvatar, type OrgMember } from '@/lib/orgs/org-api';
+import { ApiRequestError } from '@/lib/auth/auth-fetch';
+import { ORG_AVATAR_MIME_TYPES } from '@pagespace/lib/organizations/org-avatar-core';
 import { orgErrorMessage } from '@/lib/orgs/org-error-copy';
 import { isValidOrgSlug } from '@/lib/orgs/org-slug';
 
 const EDITING_ID = 'org-general';
+const AVATAR_ACCEPT = ORG_AVATAR_MIME_TYPES.filter((type) => type !== 'image/jpg').join(',');
+
+/**
+ * ORG-1: the org avatar is an image uploaded to PageSpace (JPEG, PNG, GIF or WebP, up to 5 MB) and
+ * served by PageSpace to members; there is no way to point it at a URL.
+ */
+function AvatarControl({ orgId, hasAvatar, onChanged }: { orgId: string; hasAvatar: boolean; onChanged: () => void }) {
+  const input = useRef<HTMLInputElement>(null);
+  const [busy, setBusy] = useState(false);
+  const run = async (work: () => Promise<unknown>, failure: string) => {
+    setBusy(true);
+    try {
+      await work();
+      onChanged();
+    } catch (error) {
+      // The avatar route's refusals are written for people (type, size); anything else gets the fallback.
+      toast.error(error instanceof ApiRequestError && error.status === 400 ? error.message : orgErrorMessage(error, failure));
+    } finally {
+      setBusy(false);
+      if (input.current) input.current.value = '';
+    }
+  };
+  const onFile = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file) void run(() => uploadOrgAvatar(orgId, file), 'The image could not be uploaded.');
+  };
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <input ref={input} id="org-general-avatar" type="file" accept={AVATAR_ACCEPT} className="sr-only" aria-label="Upload avatar image" onChange={onFile} disabled={busy} />
+      <Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => input.current?.click()}>
+        {hasAvatar ? 'Change image' : 'Upload image'}
+      </Button>
+      {hasAvatar ? (
+        <Button type="button" variant="ghost" size="sm" disabled={busy} onClick={() => void run(() => removeOrgAvatar(orgId), 'The image could not be removed.')}>
+          Remove avatar
+        </Button>
+      ) : null}
+      <p className="w-full text-xs text-muted-foreground">JPEG, PNG, GIF or WebP, up to 5 MB.</p>
+    </div>
+  );
+}
 
 function GeneralBody({ orgId, org, role }: OrgSettingsContext) {
   const { mutate } = useSWRConfig();
@@ -63,7 +106,7 @@ function GeneralBody({ orgId, org, role }: OrgSettingsContext) {
     <div className="space-y-6">
       <Card>
         <CardHeader>
-          <CardTitle>Name and URL</CardTitle>
+          <CardTitle>Name, avatar and URL</CardTitle>
           <CardDescription>How the organization appears in drive pickers, invitations and the audit log.</CardDescription>
         </CardHeader>
         <CardContent>
@@ -75,6 +118,11 @@ function GeneralBody({ orgId, org, role }: OrgSettingsContext) {
                 <Input id="org-general-name" value={name} onChange={(e) => setName(e.target.value)} maxLength={100} />
               </div>
             </div>
+            <AvatarControl
+              orgId={orgId}
+              hasAvatar={org.organization.avatarUrl !== null}
+              onChanged={() => void mutate((k) => isOrgKey(orgId, k) || k === orgKeys.mine())}
+            />
             <div className="space-y-1.5">
               <Label htmlFor="org-general-slug">URL name</Label>
               <Input id="org-general-slug" value={slug} onChange={(e) => setSlug(e.target.value.toLowerCase())} maxLength={48} />
@@ -98,7 +146,7 @@ function GeneralBody({ orgId, org, role }: OrgSettingsContext) {
 
 export default function OrgGeneralPage() {
   return (
-    <OrgSettingsShell title="General" wide={false} description={(orgName) => `Name, URL, and who owns ${orgName}.`}>
+    <OrgSettingsShell title="General" wide={false} description={(orgName) => `Name, avatar, URL, and who owns ${orgName}.`}>
       {(ctx) => <GeneralBody {...ctx} />}
     </OrgSettingsShell>
   );

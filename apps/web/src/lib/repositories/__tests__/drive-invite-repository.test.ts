@@ -379,7 +379,7 @@ describe('driveInviteRepository.createPendingInvite', () => {
       now,
     });
 
-    expect(result).toEqual(inserted);
+    expect(result).toEqual({ ...inserted, approvalStaged: [] });
     expect(txInsertValues).toHaveBeenCalledWith(
       expect.objectContaining({
         tokenHash: 'h1',
@@ -680,7 +680,7 @@ describe('driveInviteRepository.createAcceptedMemberWithPermissions and the gues
     const { insert } = setupTx();
     decideOrgDriveAdmission.mockResolvedValue({ decision: 'hold', orgId: 'org_1' });
 
-    expect(await driveInviteRepository.createAcceptedMemberWithPermissions(input)).toEqual({ memberId: 'mem_1', permissionsGranted: 1 });
+    expect(await driveInviteRepository.createAcceptedMemberWithPermissions(input)).toEqual({ memberId: 'mem_1', permissionsGranted: 1, staged: [] });
     expect(insert).toHaveBeenCalledTimes(2);
   });
 });
@@ -757,7 +757,7 @@ describe('driveInviteRepository [D-OW-33] a lapsed org only restricts', () => {
     it('SEAT-9 (partial) [D-OW-33] sets the role and writes each valid grant inside guardDriveAccess, scoped to the person', async () => {
       const { updateSet, insertValues } = setupGuardTx(null);
 
-      expect(await driveInviteRepository.upgradeMemberWithPermissions(input)).toEqual({ permissionsGranted: 1, skippedPageIds: ['page_gone'] });
+      expect(await driveInviteRepository.upgradeMemberWithPermissions(input)).toEqual({ permissionsGranted: 1, skippedPageIds: ['page_gone'], staged: [] });
       expect(updateSet).toHaveBeenCalledWith({ role: 'MEMBER', customRoleId: null });
       expect(insertValues).toHaveBeenCalledWith(expect.objectContaining({ pageId: 'page_1', userId: 'u1', canView: true, canDelete: false }));
       const { guardDriveAccess } = await import('@pagespace/lib/permissions/org-lapse-guard');

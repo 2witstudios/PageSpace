@@ -20,6 +20,7 @@ import { sessions } from '@pagespace/db/schema/sessions';
 import { notifications } from '@pagespace/db/schema/notifications';
 import { displayPreferences } from '@pagespace/db/schema/display-preferences';
 import { userPersonalization, personalizationCandidates } from '@pagespace/db/schema/personalization';
+import { pulseSummaries } from '@pagespace/db/schema/dashboard';
 import { userHotkeyPreferences } from '@pagespace/db/schema/hotkeys';
 import { userAutomationPreferences } from '@pagespace/db/schema/automation-preferences';
 import { userToastNotificationPreferences } from '@pagespace/db/schema/toast-notification-preferences';
@@ -32,6 +33,8 @@ import { orgGuestHolds } from '@pagespace/db/schema/org-guest-holds';
 import { wallets, walletFundingLegs, driveSpendOverrides, walletConsumerCaps } from '@pagespace/db/schema/wallets';
 import { getClickHouseGdprClient } from '../../observability/clickhouse-client';
 import { isGuestRole } from '../../permissions/guest-role';
+import type { OrgAuthenticationDenialCode } from '../../permissions/access-actor';
+import type { ExportSignInGate } from './export-sign-in-gate';
 import {
   collectChUserSystemLogs,
   collectChUserApiMetrics,
@@ -316,6 +319,51 @@ export interface UserPersonalizationExport {
  * `claim` that exists solely for deduplication, so it carries no information
  * the subject cannot already read in `claim`.
  */
+/**
+ * One Pulse summary the AI wrote for the subject: a digest of their own workspace activity, addressed to them.
+ * `contextData` (the raw activity snapshot it was generated from) is not carried: everything in it is exported under
+ * its own category (pages, tasks, messages, notifications, calendar), and the generation metadata names no one.
+ */
+export interface UserPulseSummaryExport {
+  summary: string;
+  greeting: string | null;
+  type: string;
+  periodStart: Date;
+  periodEnd: Date;
+  generatedAt: Date;
+}
+
+/**
+ * Content the export left out because an org's sign-in policy refuses the credential that requested it (SEC-2/3,
+ * D-OW-62). Recorded in the manifest so the subject knows to sign in again (or with a passkey) and export again.
+ *
+ *   - `orgDriveContent`: the pages, sheets and tags of org drives (`count` = drives).
+ *   - `orgDriveMessages`, `orgDriveFiles`, `orgDriveTasks`, `orgDriveActivity`: what the subject wrote, uploaded, listed
+ *     or did in such a drive (`count` = messages, files, task lists, activity entries). Global AI conversations and
+ *     direct messages belong to no drive and are always carried.
+ *   - `memoryPages`: memory pages restating content distilled from org drives (`count` = pages).
+ *   - `pulseSummaries`, `personalizationCandidates`: rows derived from org drives (`count` = rows).
+ *   - `personalization`: the distilled memory (About You, Communication, Rules) in personalization.json (`count` = 1).
+ */
+export type ExportWithheldCategory =
+  | 'orgDriveContent'
+  | 'orgDriveMessages'
+  | 'orgDriveFiles'
+  | 'orgDriveTasks'
+  | 'orgDriveActivity'
+  | 'memoryPages'
+  | 'pulseSummaries'
+  | 'personalization'
+  | 'personalizationCandidates';
+
+export interface ExportWithheld {
+  category: ExportWithheldCategory;
+  count: number;
+  code: OrgAuthenticationDenialCode;
+  /** The refusing orgs, sorted. */
+  orgIds: string[];
+}
+
 export interface UserPersonalizationCandidateExport {
   /** Which profile page this claim was staged for. */
   field: string;
@@ -506,6 +554,9 @@ export interface AllUserData {
   settings: UserSettingsExport;
   personalization: UserPersonalizationExport | null;
   personalizationCandidates: UserPersonalizationCandidateExport[];
+  pulseSummaries: UserPulseSummaryExport[];
+  /** What this bundle left out under an org sign-in policy (SEC-2/3); written to the manifest, never a file. */
+  withheld: ExportWithheld[];
   agentWorkspaces: UserAgentWorkspaceExport[];
   agentAccounts: UserAgentAccountsExport;
   streamState: UserStreamStateExport[];
@@ -1053,7 +1104,10 @@ export async function collectUserFiles(database: DB, userId: string): Promise<Us
   return result;
 }
 
-export async function collectUserActivity(database: DB, userId: string): Promise<UserActivityExport[]> {
+/** An activity entry as collected, with the drive and page it happened in; the gate strips them. */
+export type CollectedActivity = UserActivityExport & { driveId: string | null; pageId: string | null };
+
+export async function collectUserActivity(database: DB, userId: string): Promise<CollectedActivity[]> {
   const result = await database
     .select({
       id: activityLogs.id,
@@ -1062,6 +1116,8 @@ export async function collectUserActivity(database: DB, userId: string): Promise
       resourceId: activityLogs.resourceId,
       timestamp: activityLogs.timestamp,
       metadata: activityLogs.metadata,
+      driveId: activityLogs.driveId,
+      pageId: activityLogs.pageId,
     })
     .from(activityLogs)
     .where(eq(activityLogs.userId, userId));
@@ -1164,7 +1220,10 @@ export async function collectUserAiUsage(database: DB, userId: string): Promise<
   return result;
 }
 
-export async function collectUserTasks(database: DB, userId: string): Promise<UserTaskExport[]> {
+/** A task list as collected, with the page it lives on (null for a conversation's list); the gate strips it. */
+export type CollectedTaskList = UserTaskExport & { pageId: string | null };
+
+export async function collectUserTasks(database: DB, userId: string): Promise<CollectedTaskList[]> {
   const lists = await database
     .select({
       id: taskLists.id,
@@ -1179,7 +1238,7 @@ export async function collectUserTasks(database: DB, userId: string): Promise<Us
   const listPageIds = lists.map(l => l.pageId).filter((id): id is string => id != null);
 
   if (listPageIds.length === 0) {
-    return lists.map(list => ({ listId: list.id, listTitle: list.title, items: [] }));
+    return lists.map(list => ({ listId: list.id, listTitle: list.title, pageId: list.pageId ?? null, items: [] }));
   }
 
   const allItems = await database
@@ -1209,6 +1268,7 @@ export async function collectUserTasks(database: DB, userId: string): Promise<Us
   return lists.map(list => ({
     listId: list.id,
     listTitle: list.title,
+    pageId: list.pageId ?? null,
     items: (itemsByListPageId.get(list.pageId ?? '') ?? []).map(item => ({
       id: item.id,
       title: item.title,
@@ -1316,7 +1376,7 @@ export async function collectUserSettings(database: DB, userId: string): Promise
  * silently emptied itself after a migration is exactly the kind of omission the
  * export coverage guard exists to prevent.
  */
-export async function collectUserPersonalization(database: DB, userId: string): Promise<UserPersonalizationExport | null> {
+export async function collectUserPersonalization(database: DB, userId: string): Promise<CollectedPersonalization | null> {
   const result = await database
     .select({
       bio: userPersonalization.bio,
@@ -1328,6 +1388,7 @@ export async function collectUserPersonalization(database: DB, userId: string): 
       bioPageId: userPersonalization.bioPageId,
       writingStylePageId: userPersonalization.writingStylePageId,
       rulesPageId: userPersonalization.rulesPageId,
+      memoryOrgIds: userPersonalization.memoryOrgIds,
     })
     .from(userPersonalization)
     .where(eq(userPersonalization.userId, userId))
@@ -1336,7 +1397,7 @@ export async function collectUserPersonalization(database: DB, userId: string): 
   const row = result[0];
   if (!row) return null;
 
-  const { bioPageId, writingStylePageId, rulesPageId, ...profile } = row;
+  const { bioPageId, writingStylePageId, rulesPageId, memoryOrgIds, ...profile } = row;
   // Truthiness, not `!== null`: a pointer can arrive undefined as well as null
   // (an older row, or a projection that omits the column), and an undefined id
   // would otherwise reach `inArray` as a phantom lookup.
@@ -1344,7 +1405,8 @@ export async function collectUserPersonalization(database: DB, userId: string): 
     (id): id is string => Boolean(id),
   );
 
-  if (pageIds.length === 0) return profile;
+  const provenance = { memoryOrgIds: memoryOrgIds ?? [] };
+  if (pageIds.length === 0) return { ...profile, ...provenance };
 
   const memoryPages = await database
     .select({ id: pages.id, content: pages.content, isTrashed: pages.isTrashed })
@@ -1364,8 +1426,12 @@ export async function collectUserPersonalization(database: DB, userId: string): 
       ? (contentById.get(writingStylePageId) ?? null)
       : profile.writingStyle,
     rules: rulesPageId ? (contentById.get(rulesPageId) ?? null) : profile.rules,
+    ...provenance,
   };
 }
+
+/** The profile as collected, with the orgs its distilled memory drew on (D-OW-62); the gate strips the provenance. */
+export type CollectedPersonalization = UserPersonalizationExport & { memoryOrgIds: string[] };
 
 /**
  * Every inference the memory cron staged about the subject — promoted, declined
@@ -1380,7 +1446,7 @@ export async function collectUserPersonalization(database: DB, userId: string): 
 export async function collectUserPersonalizationCandidates(
   database: DB,
   userId: string,
-): Promise<UserPersonalizationCandidateExport[]> {
+): Promise<CollectedPersonalizationCandidate[]> {
   const rows = await database
     .select({
       field: personalizationCandidates.field,
@@ -1391,6 +1457,7 @@ export async function collectUserPersonalizationCandidates(
       lastSeenAt: personalizationCandidates.lastSeenAt,
       promotedAt: personalizationCandidates.promotedAt,
       rejectedAt: personalizationCandidates.rejectedAt,
+      orgIds: personalizationCandidates.orgIds,
     })
     .from(personalizationCandidates)
     .where(eq(personalizationCandidates.userId, userId));
@@ -1398,6 +1465,29 @@ export async function collectUserPersonalizationCandidates(
   return [...rows].sort(
     (a, b) => new Date(a.firstSeenAt).getTime() - new Date(b.firstSeenAt).getTime(),
   );
+}
+
+/** A candidate as collected, with the orgs whose drives fed it (D-OW-62); the gate strips the provenance. */
+export type CollectedPersonalizationCandidate = UserPersonalizationCandidateExport & { orgIds: string[] };
+
+/** A Pulse summary as collected, with the orgs whose drives fed it (D-OW-62); the gate strips the provenance. */
+export type CollectedPulseSummary = UserPulseSummaryExport & { orgIds: string[] };
+
+/** Every Pulse summary written for the subject, oldest first (in memory, as for candidates). */
+export async function collectUserPulseSummaries(database: DB, userId: string): Promise<CollectedPulseSummary[]> {
+  const rows = await database
+    .select({
+      summary: pulseSummaries.summary,
+      greeting: pulseSummaries.greeting,
+      type: pulseSummaries.type,
+      periodStart: pulseSummaries.periodStart,
+      periodEnd: pulseSummaries.periodEnd,
+      generatedAt: pulseSummaries.generatedAt,
+      orgIds: pulseSummaries.orgIds,
+    })
+    .from(pulseSummaries)
+    .where(eq(pulseSummaries.userId, userId));
+  return [...rows].sort((a, b) => new Date(a.generatedAt).getTime() - new Date(b.generatedAt).getTime());
 }
 
 /**
@@ -1891,7 +1981,7 @@ export interface UserFundingLegExport {
   id: string;
   walletId: string;
   walletOwnerType: 'user' | 'org';
-  walletSubjectType: 'drive' | 'agent_page' | null;
+  walletSubjectType: 'drive' | null;
   walletSubjectDriveName: string | null;
   funderKind: 'owner' | 'donation';
   originalCents: number;
@@ -2103,17 +2193,20 @@ export async function collectUserWallet(database: DB, userId: string): Promise<U
   return { wallet: walletRows[0] ?? null, fundingLegs, spendOverrides };
 }
 
-export async function collectAllUserData(database: DB, userId: string): Promise<AllUserData | null> {
+export async function collectAllUserData(database: DB, userId: string, gate: ExportSignInGate): Promise<AllUserData | null> {
   const profile = await collectUserProfile(database, userId);
   if (!profile) return null;
 
   const userDrives = await collectUserDrives(database, userId);
-  const driveIds = userDrives.map(d => d.id);
+  // SEC-2/3: the content of an org drive whose sign-in policy refuses the requesting credential is left out (the drive
+  // itself stays listed in drives.json); the manifest says so.
+  const refusedDrives = await gate.refusedDrives(userDrives.map(d => d.id));
+  const driveIds = userDrives.map(d => d.id).filter(id => !refusedDrives.has(id));
 
   // Positional: this destructuring order must exactly match the Promise.all array
   // order below (each collector returns a differently-shaped array, so TypeScript
   // cannot catch a reorder/insert mismatch here).
-  const [userPages, userSheets, userMessages, userFiles, activity, userSystemLogs, userApiMetrics, userErrorLogs, aiUsage, tasks, userSessions, userNotifications, userDisplayPreferences, userSettings, userPersonalizationData, userPersonalizationCandidates, userAgentWorkspaces, userAgentAccounts, userStreamState, userContentTags, userLocalEnvironments, userOrganizations, userOrgMembership, userWallet] = await Promise.all([
+  const [collectedPages, userSheets, collectedMessages, collectedFiles, collectedActivity, userSystemLogs, userApiMetrics, userErrorLogs, aiUsage, collectedTasks, userSessions, userNotifications, userDisplayPreferences, userSettings, collectedPersonalization, collectedCandidates, collectedPulse, userAgentWorkspaces, userAgentAccounts, userStreamState, userContentTags, userLocalEnvironments, userOrganizations, userOrgMembership, userWallet] = await Promise.all([
     collectUserPages(database, userId, driveIds),
     collectUserSheets(database, userId, driveIds),
     collectUserMessages(database, userId),
@@ -2130,6 +2223,7 @@ export async function collectAllUserData(database: DB, userId: string): Promise<
     collectUserSettings(database, userId),
     collectUserPersonalization(database, userId),
     collectUserPersonalizationCandidates(database, userId),
+    collectUserPulseSummaries(database, userId),
     collectUserAgentWorkspaces(database, userId),
     collectUserAgentAccounts(database, userId),
     collectUserStreamState(database, userId),
@@ -2139,6 +2233,72 @@ export async function collectAllUserData(database: DB, userId: string): Promise<
     collectUserOrgMembership(database, userId),
     collectUserWallet(database, userId),
   ]);
+
+  const withheld = new WithheldLedger();
+  for (const [driveId, code] of refusedDrives) {
+    const orgId = userDrives.find(d => d.id === driveId)?.orgId;
+    withheld.add('orgDriveContent', 1, code, orgId ? [orgId] : []);
+  }
+
+  // What the subject wrote, uploaded, listed or did inside an org drive the credential is refused is that drive's
+  // content too (SEC-2/3). Pages resolve to their drive in one batched read; drives the subject no longer belongs to
+  // are decided as well.
+  const pageDrive = await driveOfPages(database, [
+    ...collectedMessages.flatMap(m => (m.source === 'ai_chat' || m.source === 'channel') && m.pageId ? [m.pageId] : []),
+    ...collectedTasks.flatMap(t => t.pageId ? [t.pageId] : []),
+    ...collectedActivity.flatMap(a => !a.driveId && a.pageId ? [a.pageId] : []),
+  ]);
+  const messageDrive = (m: UserMessageExport) =>
+    (m.source === 'ai_chat' || m.source === 'channel') && m.pageId ? pageDrive.get(m.pageId) ?? null : null;
+  const taskDrive = (t: CollectedTaskList) => (t.pageId ? pageDrive.get(t.pageId) ?? null : null);
+  const activityDrive = (a: CollectedActivity) => a.driveId ?? (a.pageId ? pageDrive.get(a.pageId) ?? null : null);
+  const decided = new Set(userDrives.map(d => d.id));
+  const undecided = [...new Set([
+    ...collectedMessages.map(messageDrive),
+    ...collectedFiles.map(f => f.driveId),
+    ...collectedTasks.map(taskDrive),
+    ...collectedActivity.map(activityDrive),
+  ].filter((id): id is string => id !== null && !decided.has(id)))];
+  const authoredRefused = new Map([...refusedDrives, ...(await gate.refusedDrives(undecided))]);
+  const orgOfDrive = new Map(userDrives.map(d => [d.id, d.orgId ?? null]));
+  for (const [id, orgId] of await orgOfDrives(database, [...authoredRefused.keys()].filter(id => !orgOfDrive.has(id)))) {
+    orgOfDrive.set(id, orgId);
+  }
+  const keepOutsideRefused = <Row>(rows: readonly Row[], driveOf: (row: Row) => string | null, category: ExportWithheldCategory): Row[] =>
+    rows.filter((row) => {
+      const driveId = driveOf(row);
+      const code = driveId ? authoredRefused.get(driveId) : undefined;
+      if (!code || !driveId) return true;
+      const orgId = orgOfDrive.get(driveId);
+      withheld.add(category, 1, code, orgId ? [orgId] : []);
+      return false;
+    });
+  const userMessages = keepOutsideRefused(collectedMessages, messageDrive, 'orgDriveMessages');
+  const userFiles = keepOutsideRefused(collectedFiles, f => f.driveId, 'orgDriveFiles');
+  const tasks: UserTaskExport[] = keepOutsideRefused(collectedTasks, taskDrive, 'orgDriveTasks')
+    .map(({ pageId: _pageId, ...list }) => list);
+  const activity: UserActivityExport[] = keepOutsideRefused(collectedActivity, activityDrive, 'orgDriveActivity')
+    .map(({ driveId: _driveId, pageId: _pageId, ...entry }) => entry);
+
+  const refusedMemoryPages = await gate.refusedDerivedPages(collectedPages.map(p => p.id));
+  for (const refusal of refusedMemoryPages.values()) withheld.add('memoryPages', 1, refusal.code, refusal.orgIds);
+  const userPages = collectedPages.filter(p => !refusedMemoryPages.has(p.id));
+
+  let userPersonalizationData: UserPersonalizationExport | null = null;
+  if (collectedPersonalization) {
+    const { memoryOrgIds, ...personalization } = collectedPersonalization;
+    const access = await gate.derivedContent(memoryOrgIds);
+    if (access.allowed) {
+      userPersonalizationData = personalization;
+    } else {
+      // The memory text (pages, or the legacy columns before backfill) is withheld; the settings around it are not.
+      userPersonalizationData = { ...personalization, bio: null, writingStyle: null, rules: null };
+      withheld.add('personalization', 1, access.code, access.orgIds);
+    }
+  }
+
+  const userPersonalizationCandidates = await keepAdmitted(collectedCandidates, gate, 'personalizationCandidates', withheld);
+  const userPulseSummaries = await keepAdmitted(collectedPulse, gate, 'pulseSummaries', withheld);
 
   return {
     profile,
@@ -2159,6 +2319,8 @@ export async function collectAllUserData(database: DB, userId: string): Promise<
     settings: userSettings,
     personalization: userPersonalizationData,
     personalizationCandidates: userPersonalizationCandidates,
+    pulseSummaries: userPulseSummaries,
+    withheld: withheld.entries(),
     agentWorkspaces: userAgentWorkspaces,
     agentAccounts: userAgentAccounts,
     streamState: userStreamState,
@@ -2168,4 +2330,68 @@ export async function collectAllUserData(database: DB, userId: string): Promise<
     orgMembership: userOrgMembership,
     wallet: userWallet,
   };
+}
+
+/** Groups what the export left out by category and code, summing counts and uniting the refusing orgs. */
+class WithheldLedger {
+  private readonly byKey = new Map<string, ExportWithheld>();
+
+  add(category: ExportWithheldCategory, count: number, code: OrgAuthenticationDenialCode, orgIds: readonly string[]): void {
+    const key = `${category}:${code}`;
+    const entry = this.byKey.get(key) ?? { category, count: 0, code, orgIds: [] };
+    this.byKey.set(key, { ...entry, count: entry.count + count, orgIds: [...new Set([...entry.orgIds, ...orgIds])].sort() });
+  }
+
+  entries(): ExportWithheld[] {
+    return [...this.byKey.values()];
+  }
+}
+
+/** The rows the gate admits (by each row's contributing orgs), provenance stripped; the rest are recorded as withheld. */
+async function keepAdmitted<Row extends { orgIds: string[] }>(
+  rows: readonly Row[],
+  gate: ExportSignInGate,
+  category: ExportWithheldCategory,
+  withheld: WithheldLedger,
+): Promise<Omit<Row, 'orgIds'>[]> {
+  const kept: Omit<Row, 'orgIds'>[] = [];
+  const decided = new Map<string, Awaited<ReturnType<ExportSignInGate['derivedContent']>>>();
+  for (const { orgIds, ...row } of rows) {
+    const key = [...(orgIds ?? [])].sort().join(',');
+    const access = decided.get(key) ?? (await gate.derivedContent(orgIds ?? []));
+    decided.set(key, access);
+    if (access.allowed) kept.push(row);
+    else withheld.add(category, 1, access.code, access.orgIds);
+  }
+  return kept;
+}
+
+const EXPORT_ID_CHUNK = 500;
+
+/** The drive of each of `pageIds` (absent: no such page), one read per chunk. */
+async function driveOfPages(database: DB, pageIds: readonly string[]): Promise<Map<string, string>> {
+  const unique = [...new Set(pageIds)];
+  const out = new Map<string, string>();
+  for (let i = 0; i < unique.length; i += EXPORT_ID_CHUNK) {
+    const rows = await database
+      .select({ id: pages.id, driveId: pages.driveId })
+      .from(pages)
+      .where(inArray(pages.id, unique.slice(i, i + EXPORT_ID_CHUNK)));
+    for (const row of rows) out.set(row.id, row.driveId);
+  }
+  return out;
+}
+
+/** The org governing each of `driveIds` (null: a personal drive), one read per chunk. */
+async function orgOfDrives(database: DB, driveIds: readonly string[]): Promise<Map<string, string | null>> {
+  const unique = [...new Set(driveIds)];
+  const out = new Map<string, string | null>();
+  for (let i = 0; i < unique.length; i += EXPORT_ID_CHUNK) {
+    const rows = await database
+      .select({ id: drives.id, orgId: drives.orgId })
+      .from(drives)
+      .where(inArray(drives.id, unique.slice(i, i + EXPORT_ID_CHUNK)));
+    for (const row of rows) out.set(row.id, row.orgId);
+  }
+  return out;
 }

@@ -13,9 +13,10 @@ import { driveMembers } from '@pagespace/db/schema/members';
 import { organizations } from '@pagespace/db/schema/organizations';
 import { deleteConversationsForDrive } from './conversation-cleanup';
 import { decryptUserRow } from '../auth/user-repository';
-import { leaveAllOrganizations, reassignLedOrgDrives, recordComputeReattributions, type ComputeReattribution } from '../organizations/leave';
-import { recordLeaveEvents } from '../organizations/org-events';
-import { prepareAutomationsForAccountDeletion, recordOwnerLeftAutomations, type OwnerLeftAutomation } from '../organizations/automation-ownership';
+import { computeReattributionAuditEvents, leaveAllOrganizations, reassignLedOrgDrives, type ComputeReattribution } from '../organizations/leave';
+import { leaveAuditEvents } from '../organizations/org-events';
+import { ownerLeftAutomationAuditEvents, prepareAutomationsForAccountDeletion, type OwnerLeftAutomation } from '../organizations/automation-ownership';
+import { transactionWithOrgAudit } from '../audit/org-audit';
 import { recordDepartureSuppressions } from '../organizations/departure-suppression';
 import { createAnonymizedActorEmail } from '../compliance/anonymize';
 
@@ -123,12 +124,11 @@ export const accountRepository = {
    * the erasure has anonymized the user's activity.
    */
   deleteUser: async (userId: string): Promise<void> => {
-    // [D-OW-28] The departing member's environments and apps go to each drive's lead; audited
-    // once the deletion commits.
-    const reattributed: ComputeReattribution[] = [];
-    // [D-OW-36] Their org-drive automations are disabled and flagged, never deleted; audited once committed.
-    const ownerLeft: OwnerLeftAutomation[] = [];
-    const left = await db.transaction(async (tx) => {
+    await transactionWithOrgAudit(async (tx, audit) => {
+      // [D-OW-28] The departing member's environments and apps go to each drive's lead, and [D-OW-36] their
+      // org-drive automations are disabled and flagged, never deleted: all audited with the deletion.
+      const reattributed: ComputeReattribution[] = [];
+      const ownerLeft: OwnerLeftAutomation[] = [];
       const options = {
         reason: 'account_deleted' as const,
         actor: { actorEmail: createAnonymizedActorEmail(userId), actorDisplayName: 'Deleted User' },
@@ -147,15 +147,14 @@ export const accountRepository = {
       // hash of the address, so a new account with it is not auto-joined back (SEC-1).
       await recordDepartureSuppressions(tx, userId);
       await tx.delete(users).where(eq(users.id, userId));
-      return orgsLeft;
+      // AUD-1, committed with the deletion. No actor: the account no longer exists to be named (the audit row's user
+      // reference would point at a deleted user); the person is the event's resource.
+      await audit(
+        ...orgsLeft.flatMap(({ orgId, reassigned }) => leaveAuditEvents({ orgId, userId, eventType: 'org.member.left', reason: 'account_deleted', reassigned })),
+        ...computeReattributionAuditEvents(reattributed),
+        ...ownerLeftAutomationAuditEvents(ownerLeft),
+      );
     });
-    // AUD-1, once committed. No actor: the account no longer exists to be named (the audit row's user
-    // reference would point at a deleted user); the person is the event's resource.
-    for (const { orgId, reassigned } of left) {
-      await recordLeaveEvents({ orgId, userId, eventType: 'org.member.left', reason: 'account_deleted', reassigned });
-    }
-    await recordComputeReattributions(reattributed);
-    await recordOwnerLeftAutomations(ownerLeft);
   },
 
   /**

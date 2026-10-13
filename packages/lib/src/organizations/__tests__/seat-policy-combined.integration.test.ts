@@ -36,7 +36,6 @@ import { updateOrgPolicies } from '../policies';
 import type { SeatBillingPort } from '../seat-service';
 
 vi.mock('../orgs-enabled', () => ({ ORGS_ENABLED: true }));
-vi.mock('../../audit/org-audit', () => ({ recordOrgAuditEvent: vi.fn(async () => {}), recordOrgAuditEventAfterCommit: vi.fn(async () => true) }));
 
 const SLOW_STRIPE_MS = 2_000;
 const COST_25C = 0.1666667;
@@ -109,8 +108,8 @@ describe('seat admission and the policy layer together (real Postgres)', () => {
     await db.insert(wallets).values({ ownerType: 'org', orgId: org.id, subjectType: 'drive', subjectId: drive.id, parentWalletId: poolWallet.id, monthlyAllowanceCents: 1_000 });
 
     const stripe = new SlowStripe();
-    const invite = createOrRotateInvitation({
-      orgId: org.id, email: `new-${createId()}@northwind.test`, role: 'MEMBER', invitedBy: owner.id, actorRole: 'OWNER', now: new Date(), deliver: async () => {}, seatBilling: stripe,
+    const invite = createOrRotateInvitation({ credential: 'session',
+      orgId: org.id, email: `new-${createId()}@northwind.test`, role: 'MEMBER', invitedBy: owner.id, now: new Date(), deliver: async () => {}, seatBilling: stripe,
     });
     // Let the invite reach Stripe: it now holds the org billing lock for SLOW_STRIPE_MS.
     while (stripe.startedAt === 0) await new Promise((resolve) => setTimeout(resolve, 10));
@@ -125,7 +124,7 @@ describe('seat admission and the policy layer together (real Postgres)', () => {
     const afterGate = heldFor();
 
     // A policy change: organizations row lock and suspensions, committed while the billing lock is still held.
-    const changed = await updateOrgPolicies({ orgId: org.id, actorId: owner.id, patch: { seatAllowanceCents: 50, guests: 'off' } });
+    const changed = await updateOrgPolicies({ orgId: org.id, actorId: owner.id, actorAuthentication: null, patch: { seatAllowanceCents: 50, guests: 'off' } });
     expect(changed.ok).toBe(true);
     const afterPolicy = heldFor();
 

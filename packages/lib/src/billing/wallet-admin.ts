@@ -32,6 +32,8 @@ export interface WalletPatchInput {
   defaultSpendSource?: SpendSourceKind | null;
   /** WAL-6c: where this wallet's overshoot lands, the funder's choice; null restores the default. */
   overshootChoice?: OvershootFunderChoice | null;
+  /** D-OW-4: whether the drive's guests may spend this wallet (always within their caps). */
+  guestSpendEnabled?: boolean;
 }
 
 export interface WalletPatchSet {
@@ -41,6 +43,7 @@ export interface WalletPatchSet {
   donationsEnabled?: boolean;
   defaultSpendSource?: SpendSourceKind | null;
   overshootChoice?: OvershootFunderChoice | null;
+  guestSpendEnabled?: boolean;
 }
 
 export type WalletPatchPlan =
@@ -78,8 +81,107 @@ export function planWalletPatch(input: WalletPatchInput, current: { status: Wall
     actions.add('allocate');
     set.overshootChoice = input.overshootChoice;
   }
+  if (input.guestSpendEnabled !== undefined) {
+    // D-OW-4: opening the wallet to guests lets people outside the org spend the funder's money, so it
+    // takes the same money authority as an allocation: the org admins on an org drive (wallet-access).
+    actions.add('allocate');
+    set.guestSpendEnabled = input.guestSpendEnabled;
+  }
   if (actions.size === 0) return { kind: 'refuse', reason: 'nothing_to_change' };
   return { kind: 'patch', actions: [...actions], set };
+}
+
+// ---------------------------------------------------------------------------
+// The org pool's kill switch (WAL-7)
+// ---------------------------------------------------------------------------
+
+export type PoolPausePlan = { kind: 'set'; status: WalletStatus } | { kind: 'refuse'; reason: 'org_lapsed' };
+
+/**
+ * Pause or resume an org pool (WAL-7 "a kill switch pauses a wallet"). A paused pool funds nothing:
+ * no seat, no drive wallet under it (walletChainStatus), no org compute. Pausing always applies — it
+ * only restricts, and billing never blocks restricting ([D-OW-33]); resuming adds spend, an org-only
+ * capability a lapsed org does not have (SEAT-9). Resuming lands on `over` while the pool carries debt.
+ */
+export function planOrgPoolPause(input: { paused: boolean; debtCents: number; orgActive: boolean }): PoolPausePlan {
+  if (!input.paused && !input.orgActive) return { kind: 'refuse', reason: 'org_lapsed' };
+  return { kind: 'set', status: walletStatusFor({ paused: input.paused, debtCents: input.debtCents }) };
+}
+
+// ---------------------------------------------------------------------------
+// A drive that changes owner re-homes its wallet ([D-OW-60])
+// ---------------------------------------------------------------------------
+
+/** The wallet a drive wallet will draw on after the move, with its period (null: none yet). */
+export interface RehomeParent {
+  id: string;
+  periodStart: Date | null;
+  periodEnd: Date | null;
+}
+
+export type RehomeTo =
+  | { ownerType: 'org'; orgId: string; parent: RehomeParent | null }
+  | { ownerType: 'user'; userId: string; parent: RehomeParent | null };
+
+export interface DriveWalletRehomePlan {
+  kind: 'rehome';
+  set: {
+    ownerType: 'org' | 'user';
+    orgId: string | null;
+    userId: string | null;
+    parentWalletId: string | null;
+    monthlyAllowanceCents: number;
+    spentCents: number;
+    debtCents: number;
+    status: WalletStatus;
+    overshootChoice: OvershootFunderChoice | null;
+    monthlyPeriodStart: Date | null;
+    monthlyPeriodEnd: Date | null;
+  };
+  /** The wallet debt cleared by the move, ledgered as forgiven so reconciliation stays exact. */
+  forgivenDebtCents: number;
+}
+
+/**
+ * [D-OW-60] Re-home a drive wallet when its drive moves into an org (owner the org, parent its pool) or
+ * out of one (owner the drive lead, parent their personal root). The wallet row keeps its id, so its
+ * funding legs and its ledger move with it. The move commits nobody's money: the allocation (a budget
+ * against the OLD funder) is cleared for the new funder to set, and wallet debt the old funder chose to
+ * carry (WAL-6c, netted from THEIR next allocation) is forgiven rather than charged to the new one. The
+ * kill switch survives; the period follows the new parent (D-OW-12).
+ */
+export function planDriveWalletRehome(input: {
+  status: WalletStatus;
+  debtCents: number;
+  overshootChoice: OvershootFunderChoice | null;
+  /**
+   * Live holds on the wallet and on any wallet whose holds draw through it. A call in flight settles
+   * on the wallet's parent AT SETTLE, so re-homing under it would charge its cost to the new funder,
+   * who never authorized it: the move is refused until those calls settle, as wallet deletion is.
+   */
+  liveHoldCount: number;
+  to: RehomeTo;
+}): DriveWalletRehomePlan | { kind: 'refuse'; reason: 'calls_in_flight' } {
+  if (input.liveHoldCount > 0) return { kind: 'refuse', reason: 'calls_in_flight' };
+  const parent = input.to.parent;
+  return {
+    kind: 'rehome',
+    set: {
+      ownerType: input.to.ownerType,
+      orgId: input.to.ownerType === 'org' ? input.to.orgId : null,
+      userId: input.to.ownerType === 'user' ? input.to.userId : null,
+      parentWalletId: parent?.id ?? null,
+      monthlyAllowanceCents: 0,
+      spentCents: 0,
+      debtCents: 0,
+      status: walletStatusFor({ paused: input.status === 'paused', debtCents: 0 }),
+      // The CHECK refuses an overshoot choice on a wallet with no parent to absorb into.
+      overshootChoice: parent ? input.overshootChoice : null,
+      monthlyPeriodStart: parent?.periodStart ?? null,
+      monthlyPeriodEnd: parent?.periodEnd ?? null,
+    },
+    forgivenDebtCents: Math.max(0, Math.round(Number.isFinite(input.debtCents) ? input.debtCents : 0)),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -96,6 +198,7 @@ export function walletPatchOnlyRestricts(input: WalletPatchInput): boolean {
     paused: (v) => v === true,
     fallbackRule: (v) => v === 'refuse',
     donationsEnabled: (v) => v === false,
+    guestSpendEnabled: (v) => v === false,
     allocationCents: () => false,
     defaultSpendSource: () => false,
     overshootChoice: () => false,

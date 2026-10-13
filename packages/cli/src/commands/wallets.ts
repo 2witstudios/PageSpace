@@ -1,5 +1,5 @@
 /**
- * `pagespace wallets drive|list|source` — READ-ONLY wallet verbs (Spec X-1, narrowed by
+ * `pagespace wallets drive|list|source|drive-source|always-own-credits` — READ-ONLY wallet verbs (Spec X-1, narrowed by
  * [D-OW-26]). Thin projections over the `wallets.*` SDK operations; argv parsing and
  * rendering are pure, `ctx.sdk` is the only I/O edge.
  *
@@ -18,6 +18,7 @@ import type { PageSpaceClient } from '@pagespace/sdk';
 import { EXIT_RUNTIME_ERROR, EXIT_SUCCESS, EXIT_USAGE_ERROR } from '../exit-codes.js';
 import type { CommandHandler } from '../router/router.js';
 import { callSdk } from './sdk-error.js';
+import { verbHandler } from './verb.js';
 
 type DriveWalletResult = Awaited<ReturnType<PageSpaceClient['wallets']['getDriveWallet']>>;
 type MyWalletsResult = Awaited<ReturnType<PageSpaceClient['wallets']['list']>>;
@@ -161,7 +162,7 @@ export const walletsDriveHandler: CommandHandler = async (ctx, intent) => {
     ctx.stderr.write(`${parsed.message}\n`);
     return EXIT_USAGE_ERROR;
   }
-  const result = await callSdk(ctx.stderr, () => ctx.sdk.wallets.getDriveWallet({ driveId: parsed.value.driveId }));
+  const result = await callSdk(ctx, () => ctx.sdk.wallets.getDriveWallet({ driveId: parsed.value.driveId }));
   if (!result.ok) return EXIT_RUNTIME_ERROR;
   ctx.stdout.write(intent.flags.json ? `${JSON.stringify(result.value)}\n` : renderDriveWallet(parsed.value.driveId, result.value));
   return EXIT_SUCCESS;
@@ -172,7 +173,7 @@ export const walletsListHandler: CommandHandler = async (ctx, intent) => {
     ctx.stderr.write(`${LIST_USAGE}\n`);
     return EXIT_USAGE_ERROR;
   }
-  const result = await callSdk(ctx.stderr, () => ctx.sdk.wallets.list({}));
+  const result = await callSdk(ctx, () => ctx.sdk.wallets.list({}));
   if (!result.ok) return EXIT_RUNTIME_ERROR;
   ctx.stdout.write(intent.flags.json ? `${JSON.stringify(result.value)}\n` : renderMyWallets(result.value));
   return EXIT_SUCCESS;
@@ -184,8 +185,49 @@ export const walletsSourceHandler: CommandHandler = async (ctx, intent) => {
     ctx.stderr.write(`${parsed.message}\n`);
     return EXIT_USAGE_ERROR;
   }
-  const result = await callSdk(ctx.stderr, () => ctx.sdk.wallets.getConversationSource(parsed.value));
+  const result = await callSdk(ctx, () => ctx.sdk.wallets.getConversationSource(parsed.value));
   if (!result.ok) return EXIT_RUNTIME_ERROR;
   ctx.stdout.write(intent.flags.json ? `${JSON.stringify(result.value)}\n` : renderConversationSource(result.value));
   return EXIT_SUCCESS;
 };
+
+/** Pure: what a new conversation in a drive would spend from (SPEND-2), as the header chip shows it. */
+export function renderDriveSource(value: Awaited<ReturnType<PageSpaceClient['wallets']['getDriveSource']>>): string {
+  return [
+    `Drive ${value.driveId}`,
+    `  a new conversation: ${renderResolvedSpend(value.resolved)}`,
+    ...section('  options:', value.options.map((o) => `    ${sourceLabel(o.source)}  ${o.walletId}`)),
+    '',
+  ].join('\n');
+}
+
+/** `pagespace wallets drive-source <driveId>` — read only; choosing a source needs a session ([D-OW-26]). */
+export const walletsDriveSourceHandler = verbHandler({
+  usage: 'Usage: pagespace wallets drive-source <driveId>',
+  positionals: 1,
+  build: ({ positionals: [driveId] }) => ({ ok: true, value: { driveId } }),
+  call: (sdk, input: { driveId: string }) => sdk.wallets.getDriveSource(input),
+  render: (value) => renderDriveSource(value),
+});
+
+/** Pure: the "Always my own credits" switches as on/off lines (SPEND-5). */
+export function renderAlwaysOwnCredits(
+  value: Awaited<ReturnType<PageSpaceClient['wallets']['getAlwaysOwnCredits']>>,
+  driveId: string | undefined,
+): string {
+  return [
+    `Always my own credits: ${value.alwaysOwnCredits ? 'on' : 'off'}`,
+    ...(driveId === undefined ? [] : [`  in drive ${driveId}: ${value.alwaysOwnCreditsInDrive ? 'on' : 'off'}`]),
+    '',
+  ].join('\n');
+}
+
+/** `pagespace wallets always-own-credits [--drive <driveId>]` — read the switches; setting them needs a session ([D-OW-26]). */
+export const walletsAlwaysOwnCreditsHandler = verbHandler({
+  usage: 'Usage: pagespace wallets always-own-credits [--drive <driveId>]',
+  positionals: 0,
+  flags: ['drive'],
+  build: ({ options }) => ({ ok: true, value: options.drive !== undefined ? { driveId: options.drive } : {} }),
+  call: (sdk, input: { driveId?: string }) => sdk.wallets.getAlwaysOwnCredits(input),
+  render: (value, input) => renderAlwaysOwnCredits(value, input.driveId),
+});

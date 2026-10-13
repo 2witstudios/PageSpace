@@ -20,7 +20,6 @@
  *   and the returned steps name every drive's destination for the confirmation and
  *   for the per-drive audit event the caller writes.
  */
-import { db } from '@pagespace/db/db';
 import { and, eq, inArray, sql } from '@pagespace/db/operators';
 import { drives } from '@pagespace/db/schema/core';
 import { driveMembers } from '@pagespace/db/schema/members';
@@ -31,7 +30,9 @@ import { revokeOrgDriveGrantsForMembers } from './leave';
 import { publishDriveAccessEvents, type OrgMembershipSyncPorts } from '../services/org-membership-sync';
 import type { AffectedUser } from '../services/org-membership-sync-core';
 import { closeStaleDriveJoinRequests } from '../permissions/drive-join-request-closure';
-import { recordOrgAuditEventAfterCommit } from '../audit/org-audit';
+import { transactionWithOrgAudit } from '../audit/org-audit';
+import { reattributeDriveStorageInTx } from '../services/storage-limits';
+import { releaseDedicatedHostingInTx } from '../services/app-hosting/dedicated-release';
 
 export type DriveDeletionChoice =
   | { driveId: string; action: 'transfer'; toUserId: string }
@@ -148,7 +149,7 @@ export async function deleteOrganization(
 ): Promise<DeleteOrganizationResult> {
   const toKick: RevokedRow[] = [];
   let subscriptionEnded = false;
-  const result = await db.transaction(async (tx): Promise<DeleteOrganizationResult> => {
+  const result = await transactionWithOrgAudit(async (tx, audit): Promise<DeleteOrganizationResult> => {
     // The billing lock FIRST (before the org row lock, the order provisioning takes them
     // in): a provisioning in flight finishes and its subscription is seen and ended
     // below, or it starts after and finds the org gone. Never a live Stripe
@@ -195,6 +196,11 @@ export async function deleteOrganization(
           ...(step.trashed && !alreadyTrashed ? { isTrashed: true, trashedAt: input.now } : {}),
         })
         .where(eq(drives.id, step.driveId));
+      // WAL-9, O-9 (D-OW-64): the drive is personal now, so its bytes bill its new owner — moved
+      // onto their counter in this same transaction, exactly as a move out of the org does.
+      await reattributeDriveStorageInTx(tx, { driveId: step.driveId, ownerId: step.ownerId, orgId: input.orgId, direction: 'out-of-org' });
+      // WAL-9 (D-OW-64): the deleted org stops paying for this drive's apps' dedicated hosting at period end.
+      await releaseDedicatedHostingInTx(tx, { driveId: step.driveId, formerPayer: { kind: 'org', orgId: input.orgId } });
       // The former lead's OWNER row would keep them inside a drive that is no longer theirs, and
       // come back with it on restore; drop it as reassignLedOrgDrives does.
       if (before && before.ownerId !== step.ownerId) {
@@ -250,23 +256,21 @@ export async function deleteOrganization(
     }
 
     await tx.delete(organizations).where(eq(organizations.id, input.orgId));
-    return { ok: true, steps: plan.steps };
-  });
-  if (result.ok) {
     // AUD-1: the last event under this org, naming where each drive went (ids only) and whether its
-    // subscription was ended.
-    await recordOrgAuditEventAfterCommit({
+    // subscription was ended, committed with the deletion.
+    await audit({
       orgId: input.orgId,
       eventType: 'org.deleted',
       actorId: input.actorId,
       resourceType: 'organization',
       resourceId: input.orgId,
       details: {
-        drives: result.steps.map((step) => ({ driveId: step.driveId, destination: step.destination, ownerId: step.ownerId })),
+        drives: plan.steps.map((step) => ({ driveId: step.driveId, destination: step.destination, ownerId: step.ownerId })),
         subscriptionEnded,
       },
     });
-  }
+    return { ok: true, steps: plan.steps };
+  });
   // Once committed, and best effort: each person gets one member_removed event naming the drives
   // they lost (the sidebar and picker refresh on it) and a room kick per drive, 20 at a time.
   if (result.ok && toKick.length > 0) {

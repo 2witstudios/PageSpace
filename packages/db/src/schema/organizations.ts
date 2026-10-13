@@ -1,7 +1,8 @@
-import { pgTable, text, timestamp, jsonb, pgEnum, index, uniqueIndex, unique, integer, boolean, check } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, jsonb, pgEnum, index, uniqueIndex, unique, integer, boolean, check, bigserial } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import { users } from './auth';
+import type { SecurityEventType } from './security-audit';
 
 /**
  * Organizations — a drive owner that is not a person (Spec ORG, DRV).
@@ -41,6 +42,8 @@ export const organizations = pgTable('organizations', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
   name: text('name').notNull(),
   slug: text('slug').unique().notNull(),
+  // ORG-1: an image PageSpace stores and serves, never an outside URL (organizations_avatar_url_chk
+  // below; the pure rule is lib organizations/org-avatar-core.ts).
   avatarUrl: text('avatarUrl'),
   ownerId: text('ownerId').notNull().references(() => users.id, { onDelete: 'restrict' }),
   // Org-wide policies (Spec POL). Shape is owned by the policy reader in lib;
@@ -56,6 +59,11 @@ export const organizations = pgTable('organizations', {
   updatedAt: timestamp('updatedAt', { mode: 'date' }).default(utcNow).notNull().$onUpdate(() => new Date()),
 }, (table) => ({
   ownerIdx: index('organizations_owner_id_idx').on(table.ownerId),
+  // Only this org's own avatar route, exactly as orgAvatarPath builds it: no other host, no other org.
+  avatarUrlCheck: check(
+    'organizations_avatar_url_chk',
+    sql`${table.avatarUrl} IS NULL OR ${table.avatarUrl} ~ ('^/api/orgs/' || ${table.id} || '/avatar/avatar-[a-z0-9]{1,32}\\.(png|jpg|gif|webp)$')`,
+  ),
 }));
 
 export const orgMembers = pgTable('org_members', {
@@ -124,6 +132,15 @@ export const orgSubscriptions = pgTable('org_subscriptions', {
   status: text('status').notNull(),
   // null = not yet verified from Stripe; reporting must not assume it is paid.
   gifted: boolean('gifted'),
+  // SEAT-8 / D-OW-54: the extra seats an admin gift pins (base seats implied), set by the admin
+  // gift and cleared by its revoke; null when not gifted that way. While set, the seat item is
+  // held at this quantity, auto-add is refused past it, and a gift invoice funds the pool for
+  // exactly this many seats — never the invoice's live seat count.
+  giftedExtraSeats: integer('giftedExtraSeats'),
+  // D-OW-54: bumped by every admin gift and revoke, under the org billing lock, and part of
+  // each one's Stripe idempotency key: one key per gift state transition, so a later gift or
+  // revoke is never answered with an earlier one's cached response.
+  giftRevision: integer('giftRevision').default(0).notNull(),
   // [D-OW-44] Stripe collection_method, mirrored with the status: only charge_automatically can
   // grant capability (status-core). Every writer sets it from Stripe; the default only backfills
   // rows that existed before the column, all of which PageSpace created automatically collected.
@@ -230,6 +247,38 @@ export const orgDepartureSuppressions = pgTable('org_departure_suppressions', {
   createdAt: timestamp('createdAt', { mode: 'date' }).default(utcNow).notNull(),
 }, (table) => ({
   orgEmailKey: unique('org_departure_suppressions_org_email_key').on(table.orgId, table.emailHash),
+}));
+
+/**
+ * AUD-1: the transactional outbox for org audit events. The audit store is the security audit chain (AUD-2: no new
+ * audit table), which may live in a different database (the Admin PG), so an org change cannot append to it in its own
+ * transaction. Instead the change inserts its event HERE, in the same transaction: the event exists if and only if
+ * the change committed. A delivery right after commit, and a retrying drainer for anything left (the cron route),
+ * append it to the chain and delete the row; a failed append stays queued with a backoff, never dropped.
+ *
+ * No foreign keys: an event outlives what it describes (an org's deletion is itself an event). Rows hold ids and
+ * counts only (the event's details), never content or names, and are transient.
+ */
+export const orgAuditOutbox = pgTable('org_audit_outbox', {
+  id: text('id').primaryKey().$defaultFn(() => createId()),
+  /** Staging order: the events of one change share a timestamp, and the chain receives them in this order. */
+  seq: bigserial('seq', { mode: 'number' }).notNull(),
+  orgId: text('orgId').notNull(),
+  // Every org event, and the ORG-4 record of org power opening a drive (`authz.access.granted` with the org dimension).
+  eventType: text('eventType').$type<Extract<SecurityEventType, `org.${string}`> | 'authz.access.granted'>().notNull(),
+  actorId: text('actorId'),
+  resourceType: text('resourceType').notNull(),
+  resourceId: text('resourceId').notNull(),
+  driveId: text('driveId'),
+  details: jsonb('details').$type<Record<string, unknown>>().notNull().default({}),
+  attempts: integer('attempts').notNull().default(0),
+  lastError: text('lastError'),
+  /** Set when the chain refused it ORG_AUDIT_DEAD_LETTER_ATTEMPTS times: kept, counted and alerted, no longer retried. */
+  deadLetteredAt: timestamp('deadLetteredAt', { mode: 'date' }),
+  nextAttemptAt: timestamp('nextAttemptAt', { mode: 'date' }).default(utcNow).notNull(),
+  createdAt: timestamp('createdAt', { mode: 'date' }).default(utcNow).notNull(),
+}, (table) => ({
+  nextAttemptIdx: index('org_audit_outbox_next_attempt_idx').on(table.nextAttemptAt),
 }));
 
 export const organizationsRelations = relations(organizations, ({ one, many }) => ({

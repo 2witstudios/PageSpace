@@ -6,6 +6,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **`agents.ask` takes `sessionDriveId`.** When you consult an agent that lives in another drive
+  from work in drive A, pass A: the consultation spends, and its usage is recorded, in A rather
+  than in the agent's drive, under A's org model policy. You must be able to use A (403
+  otherwise). Omit it and the consultation runs in the agent's drive, as before. Needs a server
+  on API contract 1.4.0; an older server ignores the field.
 - **`wallets.getDriveWallet`, `wallets.list` and `wallets.getConversationSource` — wallet reads
   for a key.** `getDriveWallet({ driveId })` returns a drive's wallet as a consumer sees it: status,
   remaining credit, your own remaining daily/monthly cap (null = no cap), whether donations are on,
@@ -16,6 +21,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   wallets you may pick there, and what the next AI call would spend (`resolved`, discriminated on
   `kind`: `spend`, `refuse` or `skip`). `list` and `getConversationSource` need a key with no drive
   restriction. Amounts are cents of credit value — render them as credits, not money.
+- **`wallets.getDriveSource({ driveId })`** returns what a new conversation in a drive would spend
+  from: the wallets you may pick there and the gate's decision now (`resolved`), nothing reserved.
 - **Reads only, by design.** An access key never moves money or changes a spend source: creating,
   allocating, pausing, topping up or donating to a wallet, and setting a default or a
   conversation's source, need a signed-in session, and the server refuses a key on each by name

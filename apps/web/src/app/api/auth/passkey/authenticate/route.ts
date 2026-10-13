@@ -7,6 +7,7 @@ import {
   resetFailedLoginAttempts,
 } from '@pagespace/lib/auth/account-lockout';
 import { sessionService } from '@pagespace/lib/auth/session-service';
+import { ceremonyAuthentication } from '@pagespace/lib/auth/authentication-evidence';
 import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
 import { createExchangeCode } from '@pagespace/lib/auth/exchange-codes';
 import { SESSION_DURATION_MS } from '@pagespace/lib/auth/constants';
@@ -209,6 +210,7 @@ export async function POST(req: Request) {
     }
 
     const { userId } = result.data;
+    const authentication = ceremonyAuthentication({ method: 'passkey', userVerified: result.data.userVerified }, Date.now());
 
     // Successful passkey auth proves legitimacy — clear any accumulated failed
     // attempts / lock for this account.
@@ -225,6 +227,7 @@ export async function POST(req: Request) {
     const sessionToken = await sessionService.createSession({
       userId,
       type: 'user',
+      authentication,
       scopes: ['*'],
       expiresInMs: SESSION_DURATION_MS,
       deviceId,
@@ -289,7 +292,10 @@ export async function POST(req: Request) {
 
     const invitedDriveId = inviteResult?.invitedDriveId ?? null;
     const successRedirect =
-      inviteResult?.kind === 'connection'
+      // ORG-3: the org hub once joined; the invite page (which says why) when refused.
+      inviteResult?.orgLandingPath
+        ? inviteResult.orgLandingPath
+        : inviteResult?.kind === 'connection'
         ? '/dashboard/connections?connection_requested=1'
         : inviteResult?.kind === 'page' && invitedDriveId && inviteResult.invitedPageId
           ? `/dashboard/${invitedDriveId}/pages/${inviteResult.invitedPageId}?invited=1`
@@ -322,7 +328,7 @@ export async function POST(req: Request) {
         const user = await authRepository.findUserById(userId);
         if (user) {
           deviceTokenValue = await createDeviceToken({
-            userId, deviceId, tokenVersion: user.tokenVersion,
+            userId, deviceId, tokenVersion: user.tokenVersion, authentication,
             platform: platform || 'web',
             deviceName: deviceName || req.headers.get('user-agent') || (platform === 'desktop' ? 'Desktop App' : 'Web Browser'),
             userAgent: req.headers.get('user-agent') || undefined,

@@ -9,8 +9,11 @@ import {
   ORG_COMPUTE_REFUSAL_MESSAGES,
   type ComputeCharge,
   sameCharge,
+  capAccrualCostDollars,
+  orgAccrualDecision,
 } from '../compute-charge';
 import { ORG_ENTITLEMENT_TIER } from '../spend-target';
+import { chargeMillicents } from '../credit-core';
 import { ORG_LAPSED_MESSAGE } from '../../organizations/status-core';
 
 describe('computeChargeFor', () => {
@@ -142,5 +145,41 @@ describe('sameCharge', () => {
   it('WAL-9 (partial) an org charge and a personal charge are never the same payer, in either order, even when the person is the one recorded', () => {
     expect(sameCharge(org('o1', 'p1'), user('p1'))).toBe(false);
     expect(sameCharge(user('p1'), org('o1', 'p1'))).toBe(false);
+  });
+});
+
+describe('orgAccrualDecision — a background accrual on an org pool (machine storage) never spends past zero', () => {
+  it('WAL-9 (partial) a PAUSED pool is charged nothing: the accrual is forgiven, never held or debited', () => {
+    expect(orgAccrualDecision({ poolStatus: 'paused', spendableCents: 5_000, chargeMillicents: 12_345 })).toEqual({ kind: 'forgive', reason: 'org_wallet_paused' });
+  });
+
+  it('WAL-9 (partial) a pool with nothing spendable is charged nothing: forgiven, never put into debt', () => {
+    expect(orgAccrualDecision({ poolStatus: 'active', spendableCents: 0, chargeMillicents: 12_345 })).toEqual({ kind: 'forgive', reason: 'org_wallet_empty' });
+  });
+
+  it('WAL-9 (partial) a pool that covers the accrual is held for all of it, rounded up to whole cents', () => {
+    expect(orgAccrualDecision({ poolStatus: 'active', spendableCents: 5_000, chargeMillicents: 12_345 }))
+      .toEqual({ kind: 'hold', holdCents: 13, chargeMillicents: 12_345 });
+  });
+
+  it('WAL-9 (partial) a pool that cannot cover it is held for what it has and charged at most that — the rest is forgiven, never debt', () => {
+    expect(orgAccrualDecision({ poolStatus: 'active', spendableCents: 7, chargeMillicents: 12_345 }))
+      .toEqual({ kind: 'hold', holdCents: 7, chargeMillicents: 7_000 });
+  });
+
+  it('nothing to charge reserves nothing', () => {
+    expect(orgAccrualDecision({ poolStatus: 'active', spendableCents: 50, chargeMillicents: 0 })).toEqual({ kind: 'forgive', reason: 'nothing_to_charge' });
+  });
+});
+
+describe('capAccrualCostDollars — the provider cost whose marked-up charge fits a cap', () => {
+  it('WAL-9 (partial) leaves a cost that fits alone, and scales one that does not so its charge never exceeds the cap', () => {
+    expect(capAccrualCostDollars({ costDollars: 0.1, markupBps: 15_000, capMillicents: 1_000_000 })).toBe(0.1);
+    for (const cap of [1, 999, 7_000, 12_344]) {
+      const capped = capAccrualCostDollars({ costDollars: 0.0823, markupBps: 15_000, capMillicents: cap });
+      expect(chargeMillicents(capped, 15_000)).toBeLessThanOrEqual(cap);
+      expect(chargeMillicents(capped, 15_000)).toBeGreaterThanOrEqual(cap - 1);
+    }
+    expect(capAccrualCostDollars({ costDollars: 0.0823, markupBps: 15_000, capMillicents: 0 })).toBe(0);
   });
 });

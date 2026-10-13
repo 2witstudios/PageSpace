@@ -30,6 +30,7 @@ import { planLocalProvision } from '../../env-bridge/plan-local-provision';
 import type { CanRunCodeResult, CodeExecutionDenialReason } from '../sandbox/can-run-code';
 import { deriveLocalEnvStatus } from './drive-envs';
 import type { DriveEnvRecord, DriveEnvStore } from './drive-envs-store';
+import type { AccessActor } from '../../permissions/access-actor';
 
 /** Every way a local env refuses at the server; `substrate_unsupported` is the provisioner's word for "allowed, but nothing here can attach yet". */
 export type LocalEnvRefusal = BindDenyReason | 'substrate_unsupported';
@@ -136,7 +137,7 @@ export async function gateLocalEnv({
  * (and its database) at all. `decideBind` treats owner and admin alike, so
  * the helper's single boolean is exactly the distinction it needs.
  */
-export async function resolveDriveActorRole({ userId, driveId }: { userId: string; driveId: string }): Promise<ActorRole> {
+export async function resolveDriveActorRole({ actor, driveId }: { actor: AccessActor; driveId: string }): Promise<ActorRole> {
   const { isDriveOwnerOrAdmin } = await import('../../permissions/permissions');
-  return (await isDriveOwnerOrAdmin(userId, driveId)) ? 'admin' : 'member';
+  return (await isDriveOwnerOrAdmin(actor, driveId)) ? 'admin' : 'member';
 }

@@ -48,12 +48,21 @@ import type { SeatBillingPort } from '../seat-service';
 vi.mock('../orgs-enabled', () => ({ ORGS_ENABLED: true }));
 
 const audit = vi.hoisted(() => ({ events: [] as Array<Record<string, unknown>> }));
-vi.mock('../../audit/org-audit', () => ({
-  recordOrgAuditEventAfterCommit: async (event: Record<string, unknown>) => {
-    audit.events.push(event);
-    return true;
-  },
-}));
+// AUD-1: the code under test stages its org events in the outbox; the chain append is captured here, so what this
+// suite sees is exactly what was staged, committed and delivered.
+vi.mock('../../audit/security-audit', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../audit/security-audit')>();
+  const { orgEventOf } = await import('../../audit/__tests__/capture-org-audit');
+  return {
+    ...actual,
+    securityAudit: {
+      ...actual.securityAudit,
+      logEvent: vi.fn(async (entry: import('../../audit/security-audit').AuditEvent) => {
+        audit.events.push(orgEventOf(entry));
+      }),
+    },
+  };
+});
 
 const HOUR = 3_600_000;
 const created = { orgs: [] as string[], users: [] as string[] };
@@ -434,7 +443,9 @@ describe('verified email domains (real Postgres)', () => {
       const marcus = await person(`marcus@${domain}`);
       const result = await autoJoinVerifiedDomainOrg({ userId: marcus.id, now: new Date() });
       expect(result).toMatchObject({ kind: 'refused', orgId: org.id, reason: 'seats_full' });
-      expect(result.kind === 'refused' && result.reason === 'seats_full' && result.message).toMatch(/All 5 seats in this organization are taken/);
+      expect(result.kind === 'refused' && result.reason === 'seats_full' && result.message).toMatch(/Every seat in this organization is taken/);
+      // The person signing in is not an Owner or Admin: never told the seat count (SEAT-6).
+      expect(result.kind === 'refused' && result.reason === 'seats_full' && result.message).not.toMatch(/\d/);
       expect(await membership(org.id, marcus.id)).toBeNull();
       expect(await countOrgSeats(org.id)).toBe(5);
       expect(audit.events[audit.events.length - 1]).toMatchObject({ orgId: org.id, eventType: 'org.member.auto_join_refused', details: { reason: 'seats_full' } });
@@ -525,8 +536,8 @@ describe('verified email domains (real Postgres)', () => {
 
       if (join === 'invitation') {
         const tokens: string[] = [];
-        const invited = await createOrRotateInvitation({
-          orgId: org.id, email, role: 'MEMBER', invitedBy: jono.id, actorRole: 'OWNER', now: new Date(),
+        const invited = await createOrRotateInvitation({ credential: 'session',
+          orgId: org.id, email, role: 'MEMBER', invitedBy: jono.id, now: new Date(),
           deliver: async (_i, token) => { tokens.push(token); },
         });
         if (!invited.ok) throw new Error(`invite: ${invited.reason}`);

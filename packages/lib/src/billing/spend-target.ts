@@ -17,10 +17,10 @@ import {
   childSpendableCents,
   coveredSpendOptions,
   entitlementTierFor,
-  legCovers,
   resolveSpendSource,
   seatLegSpendableCents,
   legSpendableCents,
+  walletOwnRemainingCents,
   type CapRemaining,
   type DriveSpendRule,
   type RefusalReason,
@@ -120,6 +120,37 @@ export function conversationSpend(driveId: string | null | undefined, conversati
   return target.kind === 'drive' && typeof conversationId === 'string' && conversationId.length > 0
     ? { ...target, conversationId }
     : target;
+}
+
+/**
+ * SPEND-7: the target for an agent called from OUTSIDE a chat turn — a consultation, a /v1
+ * completion — which spends in the drive of the SESSION it runs in, never merely the drive the
+ * agent page lives in:
+ *
+ * - an API client thread (`conversations.type = 'client'`) IS a session, opened in its drive:
+ *   it spends there, with its stored source, and no named drive moves a known thread's spend;
+ * - otherwise the drive the caller names as its session (`namedSessionDriveId`, verified by the
+ *   shell: the caller may use that drive) — the conversation the call writes to then lives on
+ *   the agent's page in another drive, so its stored source does not travel with it;
+ * - otherwise the call's own conversation on the agent page is the session: the agent's drive.
+ *
+ * Every id here is SERVER-resolved (the thread's row, the agent page's row) or verified before
+ * it is passed; none is a drive the client merely claimed.
+ */
+export function agentCallSpend(input: {
+  agentDriveId: string;
+  /** The conversation the call answers or creates, or null for a stateless call. */
+  conversationId: string | null;
+  /** The drive of an API client thread the call continues; null for any other conversation. */
+  clientThreadDriveId: string | null;
+  /** The drive the caller names as the session it calls from, already verified; null for none. */
+  namedSessionDriveId: string | null;
+}): SpendTarget {
+  const conversationDriveId = input.clientThreadDriveId ?? input.agentDriveId;
+  const sessionDriveId = input.clientThreadDriveId ?? input.namedSessionDriveId ?? input.agentDriveId;
+  return sessionDriveId === conversationDriveId
+    ? conversationSpend(sessionDriveId, input.conversationId)
+    : driveSpend(sessionDriveId);
 }
 
 /**
@@ -306,6 +337,17 @@ export function reservedAgainstCents(
   }, 0);
 }
 
+/**
+ * SPEND-9: what a consumer is shown as a drive wallet's remaining amount — the wallet's OWN budget
+ * (allocation left + top-up legs − debt), bounded by their own remaining caps. Never bounded by
+ * what its parent holds: a figure derived from the org pool or the funder's personal wallet would
+ * disclose it. When the parent cannot cover a call the gate refuses it (source_empty) instead.
+ */
+export function driveWalletConsumerRemainingCents(wallet: WalletBalanceFacts, caps: CapRemaining | null): number {
+  const own = walletOwnRemainingCents(childWalletFunds(wallet));
+  return caps === null ? own : legSpendableCents(own, caps);
+}
+
 /** One wallet as a SpendLeg for wallet-core. */
 export function walletLeg(walletId: string, status: WalletStatus, spendableCents: number): SpendLeg {
   return { walletId, status, spendableCents: Math.max(0, whole(spendableCents)) };
@@ -431,12 +473,15 @@ export type ChosenSource =
  * conversation onto another source (SPEND-4).
  *
  * The person's "drive's wallet, if it has one" default — never set (canvas v9 UsageWallets shows it
- * selected) or saved, one code path — is the drive's wallet when they may spend one here and it can
- * pay this call now, otherwise their own credits if they can; with neither, nothing is preselected.
- * Any other default they set is honoured or skipped. The drive's own default (set by its lead) is a
- * drive policy and is taken as stored.
+ * selected) or saved, one code path — is the drive's wallet whenever they may spend one here, and
+ * their own credits only where the drive has none for them. Preselection is by KIND, never by
+ * balance: a paused, capped or empty drive wallet is still the preselected source, so the call
+ * refuses naming it with the remaining options, or moves only where the drive's rule allows a
+ * fallback that the turn reports (SPEND-4). It never lands silently on another wallet. Any other
+ * default they set is honoured or skipped. The drive's own default (set by its lead) is a drive
+ * policy and is taken as stored.
  */
-export function chooseSource(turnSource: SpendSourceKind | null, stored: StoredSpendChoice, legs: CallSpendLegs & { reservationCents: number }): ChosenSource {
+export function chooseSource(turnSource: SpendSourceKind | null, stored: StoredSpendChoice, legs: CallSpendLegs): ChosenSource {
   if (turnSource !== null) return { kind: 'source', source: turnSource, via: 'turn' };
   if (stored.chosenWalletId !== null) {
     const source = sourceOfWallet(stored.chosenWalletId, legs);
@@ -447,14 +492,11 @@ export function chooseSource(turnSource: SpendSourceKind | null, stored: StoredS
     return { kind: 'source', source: stored.driveDefault, via: 'drive_default' };
   }
   // The person's default. "The drive's wallet, if it has one" — saved or never set (Settings shows it selected either
-  // way) — is ONE path: the first of drive wallet, own credits that can pay this call NOW (not paused, not at the
-  // person's cap, not short of the reservation), so it never lands on a refusal or on a fallback nobody chose. With
-  // neither, nothing is preselected and the person is asked (SPEND-4 no_source_chosen).
+  // way) — is ONE path: the first of drive wallet, own credits that this person may spend here at all. What the
+  // source holds is the gate's question, never preselection's: an uncovered drive wallet refuses by name or takes the
+  // drive's reported fallback, so a conversation never moves wallets silently (SPEND-4).
   if (effectiveDefaultSpendSource(stored.personalDefault) === 'drive_wallet') {
-    const outOfBox = OUT_OF_BOX_SOURCES.find((source) => {
-      const leg = available.includes(source) ? legOf(legs, source) : null;
-      return leg !== null && legCovers(leg, legs.reservationCents);
-    });
+    const outOfBox = OUT_OF_BOX_SOURCES.find((source) => available.includes(source));
     return outOfBox ? { kind: 'source', source: outOfBox, via: 'out_of_box' } : { kind: 'none' };
   }
   // Any other default the person set (own credits, their seat) is honoured where they may spend it, else skipped.
@@ -467,11 +509,6 @@ export function chooseSource(turnSource: SpendSourceKind | null, stored: StoredS
 /** SPEND-3: the default a person has, as Settings shows it selected: the stored one, else the drive's wallet. */
 export function effectiveDefaultSpendSource(personalDefault: SpendSourceKind | null): SpendSourceKind {
   return personalDefault ?? 'drive_wallet';
-}
-
-/** The leg of a source this person may spend (availableSources has already said they may). */
-function legOf(legs: CallSpendLegs, source: SpendSourceKind): SpendLeg | null {
-  return source === 'drive_wallet' ? legs.driveWallet : source === 'seat_allowance' ? legs.seatAllowance : legs.personal;
 }
 
 /** SPEND-3: what the "drive's wallet, if it has one" default spends from, in order. */
@@ -534,17 +571,22 @@ export type CallSpendDecision =
  */
 export function automationSpendInput(input: {
   driveId: string;
+  /** The drive wallet as the person the run is gated as may draw it (their caps bound it, WAL-7). */
   driveWallet: SpendLeg | null;
   /** The tier of the drive wallet's ROOT owner: the org for org drives, the drive owner otherwise (WAL-8). */
   walletOwnerTier: SubscriptionTier;
   reservationCents: number;
+  /** The person the run is gated as is a guest of the drive (D-OW-4). */
+  gatedAsGuest: boolean;
+  /** The drive's guest switch (wallets.guestSpendEnabled, D-OW-4). */
+  guestsMaySpendDriveWallet: boolean;
 }): CallSpendInput {
   return {
-    actor: { kind: 'automation', driveId: input.driveId },
+    actor: { kind: 'automation', driveId: input.driveId, gatedAsGuest: input.gatedAsGuest },
     driveWallet: input.driveWallet,
     seatAllowance: null,
     personal: null,
-    driveRule: { fallback: 'refuse', guestsMaySpendDriveWallet: false },
+    driveRule: { fallback: 'refuse', guestsMaySpendDriveWallet: input.guestsMaySpendDriveWallet },
     chosen: null,
     userOverride: { alwaysOwnCredits: false, alwaysOwnCreditsInDrive: false },
     reservationCents: input.reservationCents,
@@ -628,6 +670,24 @@ export function decideCallSpend(input: CallSpendInput): CallSpendDecision {
       consumerTier: input.consumerTier,
     }),
   };
+}
+
+/**
+ * SPEND-3: the source a conversation's first gated call preselected, to be stored as the
+ * conversation's own (conversations.chosenWalletId) so it is chosen ONCE and persists for it —
+ * a later change of the drive's or the person's default, or the wallet emptying, never moves it.
+ * Only a preselection is pinned (the drive's default, the person's, the out-of-box default, or a
+ * sole source): null when the conversation already stores a choice (valid or stale), for a
+ * follow-on call (its turn's first call pinned), under the always-own-credits override (an
+ * absolute switch, not a choice for this conversation), for an automation, or when nothing was
+ * preselected. Pinned by kind whatever the source holds — an empty pinned source refuses by name.
+ */
+export function sourceToPin(input: CallSpendInput): SpendSourceKind | null {
+  if (input.actor.kind === 'automation' || input.followOn === true || input.chosen !== null) return null;
+  if (input.userOverride.alwaysOwnCredits || input.userOverride.alwaysOwnCreditsInDrive) return null;
+  const choice = chooseSource(null, input.stored ?? NO_STORED_CHOICE, input);
+  if (choice.kind === 'source') return choice.via === 'conversation' ? null : choice.source;
+  return choice.kind === 'none' ? preselectSoleSource(null, input) : null;
 }
 
 /**

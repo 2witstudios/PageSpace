@@ -13,6 +13,7 @@ vi.mock('@paralleldrive/cuid2', async (importOriginal) => ({
 }));
 
 import { respondWithHelpAnswer } from '../help-responder';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const ANSWER_TEXT = 'Here are the commands available to you:\n\n- **/help** (built-in) — List the commands.';
 
@@ -34,21 +35,21 @@ describe('respondWithHelpAnswer', () => {
     const persist = vi.fn().mockResolvedValue(undefined);
 
     const response = await respondWithHelpAnswer({
-      senderId: 'user-1',
+      sender: credentialActor('user-1', null),
       driveId: 'drive-1',
       originalMessages,
       persist,
     });
 
     expect(response).toBeInstanceOf(Response);
-    expect(mockLoadHelpAnswerText).toHaveBeenCalledWith('user-1', 'drive-1');
+    expect(mockLoadHelpAnswerText).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1' }), 'drive-1');
   });
 
   it('persists exactly once, synchronously inside execute, with the generated messageId and the loaded answer as content', async () => {
     const persist = vi.fn().mockResolvedValue(undefined);
 
     const response = await respondWithHelpAnswer({
-      senderId: 'user-1',
+      sender: credentialActor('user-1', null),
       driveId: null,
       originalMessages,
       persist,
@@ -65,7 +66,7 @@ describe('respondWithHelpAnswer', () => {
     const persist = vi.fn().mockResolvedValue(undefined);
 
     const response = await respondWithHelpAnswer({
-      senderId: 'user-1',
+      sender: credentialActor('user-1', null),
       driveId: null,
       originalMessages,
       persist,
@@ -83,7 +84,7 @@ describe('respondWithHelpAnswer', () => {
     const persist = vi.fn().mockRejectedValue(new Error('db down'));
 
     const response = await respondWithHelpAnswer({
-      senderId: 'user-1',
+      sender: credentialActor('user-1', null),
       driveId: null,
       originalMessages,
       persist,
@@ -101,7 +102,7 @@ describe('respondWithHelpAnswer', () => {
     // a fruitless poll, and an empty bubble over a locked composer. The client cannot infer
     // this; the server has to say.
     const response = await respondWithHelpAnswer({
-      senderId: 'user-1',
+      sender: credentialActor('user-1', null),
       driveId: null,
       originalMessages,
       persist: vi.fn().mockResolvedValue(true),

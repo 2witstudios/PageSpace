@@ -11,7 +11,7 @@
  * Requires DATABASE_URL → a migrated Postgres; fails loudly without one (requireDb).
  * Deletes every row it creates, children first, users last.
  */
-import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import { db } from '@pagespace/db/db';
 import { eq, inArray } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
@@ -39,6 +39,16 @@ import {
 /** The provisioning result alone, for the tests that do not look at the payment step. */
 const ensureOrgBusinessSubscription = async (orgId: string, deps: OrgBillingDeps) => (await provisionOrgSubscription(orgId, deps)).result;
 import { FakeOrgStripe } from './fake-org-stripe';
+import { createRequire } from 'node:module';
+import type { AuditEvent, SecurityAuditService } from '@pagespace/lib/audit/security-audit';
+import type { drainOrgAuditOutbox as DrainOrgAuditOutbox } from '@pagespace/lib/audit/org-audit';
+import { orgAuditOutbox } from '@pagespace/db/schema/organizations';
+
+// The org-subscription shell reaches lib's BUILT (CommonJS) audit modules, a different instance from what an ESM import
+// here would give, so the chain append is captured on that instance.
+const requireLib = createRequire(import.meta.url);
+const { securityAudit } = requireLib('@pagespace/lib/audit/security-audit') as { securityAudit: SecurityAuditService };
+const { drainOrgAuditOutbox } = requireLib('@pagespace/lib/audit/org-audit') as { drainOrgAuditOutbox: typeof DrainOrgAuditOutbox };
 
 const PRICES: OrgBusinessPrices = { basePriceId: 'price_base_test', seatPriceId: 'price_seat_test' };
 
@@ -194,7 +204,7 @@ describe('org Business subscription shell (real Postgres, in-memory Stripe)', ()
       const { result } = await provisionOrgSubscription(org.orgId, org.deps);
       const subscriptionId = result.linkage.stripeSubscriptionId;
       org.stripe.payLatestInvoice(subscriptionId);
-      if (opts.funded ?? true) await applyOrgPoolRefill(org.stripe.invoiceEvidence(subscriptionId), { ...PRICES, active: true });
+      if (opts.funded ?? true) await applyOrgPoolRefill(org.stripe.invoiceEvidence(subscriptionId), PRICES);
       await provisionOrgSubscription(org.orgId, org.deps);
       const sub = org.stripe.subscriptions.get(subscriptionId)!;
       return { ...org, sub, writes: () => ({ ...org.stripe.writes }) };
@@ -312,7 +322,7 @@ describe('org Business subscription shell (real Postgres, in-memory Stripe)', ()
 
     /** What the invoice.paid webhook does with the paid invoice: the real funding shell, recording the proof. */
     async function deliverInvoicePaid(org: { stripe: FakeOrgStripe }, subscriptionId: string) {
-      return applyOrgPoolRefill(org.stripe.invoiceEvidence(subscriptionId), { ...PRICES, active: true });
+      return applyOrgPoolRefill(org.stripe.invoiceEvidence(subscriptionId), PRICES);
     }
 
     it('SEAT-9 (partial) an active subscription with verified funding is existing: no invoice read, no write, no payment step', async () => {
@@ -931,5 +941,91 @@ describe('org Business subscription shell (real Postgres, in-memory Stripe)', ()
       expect(stripe.writes.cancelSubscription).toBe(1);
       expect(await rowsFor(orgId)).toHaveLength(0);
     });
+  });
+});
+
+/**
+ * AUD-1: provisioning's billing event is staged in its own transaction (the outbox), so it exists exactly when the
+ * subscription row does, and publishing it can never fail a call whose Stripe create has committed. The chain append
+ * is captured here; `refuse` makes it fail.
+ */
+describe('org subscription provisioning audit (AUD-1, real Postgres, in-memory Stripe)', () => {
+  const chain = { appended: [] as AuditEvent[], refuse: false };
+  const billingEvents = (orgId: string) =>
+    chain.appended.filter((e) => e.details?.orgId === orgId && e.eventType === 'org.billing.subscription_changed').map((e) => e.details);
+  const queued = (orgId: string) => db.select({ id: orgAuditOutbox.id }).from(orgAuditOutbox).where(eq(orgAuditOutbox.orgId, orgId));
+
+  beforeAll(async () => {
+    try {
+      await db.select({ id: orgAuditOutbox.id }).from(orgAuditOutbox).limit(1);
+      dbAvailable = true;
+    } catch (error) {
+      requireDb('org-subscription.integration.test.ts (audit)', error);
+    }
+    vi.spyOn(securityAudit, 'logEvent').mockImplementation(async (entry) => {
+      if (chain.refuse) throw new Error('audit chain unavailable');
+      chain.appended.push(entry);
+    });
+  });
+  afterAll(async () => {
+    vi.restoreAllMocks();
+    // This suite runs after the first one's cleanup: remove what IT created the same way.
+    if (!dbAvailable) return;
+    if (orgIds.length > 0) {
+      await db.delete(wallets).where(inArray(wallets.orgId, orgIds));
+      await db.delete(orgSubscriptionFunding).where(inArray(orgSubscriptionFunding.orgId, orgIds));
+      await db.delete(orgSubscriptions).where(inArray(orgSubscriptions.orgId, orgIds));
+      await db.delete(orgMembers).where(inArray(orgMembers.orgId, orgIds));
+      await db.delete(organizations).where(inArray(organizations.id, orgIds));
+    }
+    if (userIds.length > 0) await db.delete(users).where(inArray(users.id, userIds));
+  });
+  afterEach(() => {
+    chain.appended.length = 0;
+    chain.refuse = false;
+  });
+
+  it('AUD-1 (partial) the subscription a provisioning creates is audited with its row; a replay that changes nothing writes nothing', async () => {
+    if (!dbAvailable) return;
+    process.env.DEPLOYMENT_MODE = 'cloud';
+    const { orgId, deps } = await northwind(1);
+    const first = await provisionOrgSubscription(orgId, deps);
+    expect(billingEvents(orgId)).toEqual([expect.objectContaining({ source: 'provisioning', kind: 'created', to: first.result.linkage.status })]);
+    await provisionOrgSubscription(orgId, deps);
+    expect(billingEvents(orgId)).toHaveLength(1);
+    expect(await queued(orgId)).toEqual([]);
+  });
+
+  it('AUD-1 (partial) with the audit chain down, a committed Stripe create still succeeds for the caller; its event stays queued and the drainer delivers it', async () => {
+    if (!dbAvailable) return;
+    process.env.DEPLOYMENT_MODE = 'cloud';
+    const { orgId, deps } = await northwind(1);
+    chain.refuse = true;
+    const provisioned = await provisionOrgSubscription(orgId, deps);
+    expect(provisioned.result.kind).toBe('created');
+    expect(await rowsFor(orgId)).toHaveLength(1);
+    expect(billingEvents(orgId)).toEqual([]);
+    expect(await queued(orgId)).not.toEqual([]);
+    chain.refuse = false;
+    await drainOrgAuditOutbox({ now: new Date(Date.now() + 2 * 60 * 60_000) });
+    expect(billingEvents(orgId)).toEqual([expect.objectContaining({ source: 'provisioning', kind: 'created' })]);
+  });
+
+  it('AUD-1 (partial) a subscription PageSpace just created that is refused for support is stored AND audited, so the org log shows a live subscription that only the app log showed before', async () => {
+    if (!dbAvailable) return;
+    process.env.DEPLOYMENT_MODE = 'cloud';
+    const { orgId, deps, stripe } = await northwind(1);
+    const first = await provisionOrgSubscription(orgId, deps);
+    stripe.endSubscription(first.result.linkage.stripeSubscriptionId);
+    const create = stripe.createSubscription.bind(stripe);
+    stripe.createSubscription = async (params, key) => {
+      const sub = await create(params, key);
+      const invoice = stripe.invoiceFor(sub.id)!;
+      Object.assign(invoice, { status: 'paid', amountPaidCents: 0, paidAt: sub.created });
+      stripe.subscriptions.get(sub.id)!.status = 'active';
+      return { ...sub, status: 'active' };
+    };
+    await expect(provisionOrgSubscription(orgId, deps)).rejects.toMatchObject({ code: 'billing_requires_support' });
+    expect(billingEvents(orgId)).toContainEqual(expect.objectContaining({ source: 'provisioning', kind: 'created_requires_support', reason: 'unfunded_active', to: 'active', stored: true }));
   });
 });

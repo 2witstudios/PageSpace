@@ -20,6 +20,7 @@ import { driveEnvs } from '@pagespace/db/schema/drive-envs';
 import { driveEnvLocal } from '@pagespace/db/schema/drive-env-local';
 import { factories } from '@pagespace/db/test/factories';
 import { collectUserLocalEnvironments, collectAllUserData } from '../gdpr-export';
+import { OPERATOR_EXPORT_GATE } from '../export-sign-in-gate';
 
 const createdUsers: string[] = [];
 const createdDrives: string[] = [];
@@ -86,7 +87,7 @@ describe('collectUserLocalEnvironments (real Postgres)', () => {
     const subject = await seedSubject();
     const [env] = await db.insert(driveEnvs).values({ driveId: subject.drive.id, name: 'm', substrate: 'local' }).returning();
     await db.insert(driveEnvLocal).values({ envId: env!.id, ownerId: subject.user.id, label: 'all', enrollmentId: `enr_${env!.id}`, machinePublicKey: 'pk', machineKeyFingerprint: 'fp', serverKeyId: 'k1' });
-    const all = await collectAllUserData(db, subject.user.id);
+    const all = await collectAllUserData(db, subject.user.id, OPERATOR_EXPORT_GATE);
     expect(all?.localEnvironments.map((r) => r.label)).toEqual(['all']);
     await db.delete(driveEnvs).where(eq(driveEnvs.id, env!.id));
   });

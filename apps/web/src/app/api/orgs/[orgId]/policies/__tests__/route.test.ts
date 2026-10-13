@@ -4,17 +4,26 @@
  * role fails here.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import type { SessionAuthResult } from '@/lib/auth';
+import type { MCPAuthResult, SessionAuthResult } from '@/lib/auth';
 import type { OrgRole } from '@pagespace/db/schema/organizations';
 
 const flags = vi.hoisted(() => ({ orgsEnabled: true }));
 
+// The org sign-in policy (SEC-2/3) has its own suites; here every credential meets it.
+vi.mock('@pagespace/lib/permissions/actor-authentication', () => ({
+  checkActorOrgAuthentication: vi.fn(async () => ({ allowed: true })),
+  drivePolicyOrgId: vi.fn(async () => null),
+}));
 vi.mock('@pagespace/lib/organizations/orgs-enabled', () => ({
   get ORGS_ENABLED() {
     return flags.orgsEnabled;
   },
 }));
-vi.mock('@/lib/auth', () => ({ authenticateRequestWithOptions: vi.fn(), isAuthError: vi.fn() }));
+vi.mock('@/lib/auth', () => ({
+  authenticateRequestWithOptions: vi.fn(),
+  isAuthError: vi.fn(),
+  getAllowedDriveIds: (auth: { allowedDriveIds?: string[] }) => auth.allowedDriveIds ?? [],
+}));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: { api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() } },
 }));
@@ -34,7 +43,7 @@ import { getOrgPolicies, updateOrgPolicies } from '@pagespace/lib/organizations/
 import { listPolicySuspensions } from '@pagespace/lib/organizations/policy-suspension';
 import { reconcileOrgPublishedVisibility } from '@pagespace/lib/organizations/published-visibility';
 import { isPublishConfigured } from '@/lib/canvas/published-storage';
-import { DEFAULT_ORG_POLICIES } from '@pagespace/lib/organizations/policies-core';
+import { DEFAULT_ORG_POLICIES, MONEY_POLICY_KEYS, ORG_POLICY_MONEY } from '@pagespace/lib/organizations/policies-core';
 import { GET, PATCH } from '../route';
 import { GET as GET_SUSPENDED } from '../suspended/route';
 
@@ -65,7 +74,7 @@ beforeEach(() => {
     suspended: [{ kind: 'publicShareLinks', resourceType: 'drive_share_link', id: 'l1', driveId: 'd1' }],
     restored: [],
     blocked: { counts: {}, total: 0, items: [] },
-    auditRecorded: true,
+    signInBlocked: null,
   });
 });
 
@@ -106,8 +115,8 @@ describe('policies routes', () => {
     as('ADMIN');
     const res = await PATCH(req('PATCH', '', { publicShareLinks: false }), ctx);
     expect(res.status).toBe(200);
-    expect(updateOrgPolicies).toHaveBeenCalledWith({ orgId: ORG_ID, actorId: 'user_priya', patch: { publicShareLinks: false } });
-    expect(await res.json()).toMatchObject({ changed: ['publicShareLinks'], suspended: { publicShareLinks: 1 }, restored: {}, auditRecorded: true });
+    expect(updateOrgPolicies).toHaveBeenCalledWith({ orgId: ORG_ID, actorId: 'user_priya', actorAuthentication: null, patch: { publicShareLinks: false } });
+    expect(await res.json()).toMatchObject({ changed: ['publicShareLinks'], suspended: { publicShareLinks: 1 }, restored: {} });
   });
 
   it('POL-1 (partial) what a change blocks without suspending (apps, envs, agents, autonomy, models) is reported by count', async () => {
@@ -119,7 +128,7 @@ describe('policies routes', () => {
       suspended: [],
       restored: [],
       blocked: { counts: { publishedApps: 2 }, total: 2, items: [] },
-      auditRecorded: true,
+      signInBlocked: null,
     });
     expect(await (await PATCH(req('PATCH', '', { publishedApps: false }), ctx)).json()).toMatchObject({ blocked: { publishedApps: 2 } });
   });
@@ -153,13 +162,44 @@ describe('policies routes', () => {
     as('ADMIN');
     const res = await PATCH(req('PATCH', '', { guests: 'off' }), ctx);
     expect(res.status).toBe(200);
-    expect(updateOrgPolicies).toHaveBeenCalledWith({ orgId: ORG_ID, actorId: 'user_priya', patch: { guests: 'off' } });
+    expect(updateOrgPolicies).toHaveBeenCalledWith({ orgId: ORG_ID, actorId: 'user_priya', actorAuthentication: null, patch: { guests: 'off' } });
   });
 
-  it('POL-1 (partial) a change that committed but was not audited is reported, not hidden', async () => {
-    as('OWNER');
-    vi.mocked(updateOrgPolicies).mockResolvedValue({ ok: true, policies: { ...DEFAULT_ORG_POLICIES }, changes: [], suspended: [], restored: [], blocked: { counts: {}, total: 0, items: [] }, auditRecorded: false });
-    expect((await (await PATCH(req('PATCH', '', { guests: 'on' }), ctx)).json()).auditRecorded).toBe(false);
+  it('SEC-2 (partial) SEC-3 (partial) the acting credential\'s evidence reaches lib, where loosening a sign-in policy is judged (D-OW-45)', async () => {
+    as('ADMIN');
+    const authentication = { authenticatedAtMs: Date.now() - 1000, assurance: 'user_verified_passkey' as const };
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ ...session('user_priya'), authentication });
+    await PATCH(req('PATCH', '', { requireStrongSignIn: false }), ctx);
+    expect(updateOrgPolicies).toHaveBeenCalledWith({ orgId: ORG_ID, actorId: 'user_priya', actorAuthentication: authentication, patch: { requireStrongSignIn: false } });
+  });
+
+  it.each(['org_strong_sign_in_required', 'org_reauthentication_required'] as const)(
+    'SEC-2 (partial) SEC-3 (partial) a sign-in loosening refused for the credential answers 403 with the actionable code %s',
+    async (code) => {
+      as('OWNER');
+      vi.mocked(updateOrgPolicies).mockResolvedValue({ ok: false, reason: code });
+      const res = await PATCH(req('PATCH', '', { requireStrongSignIn: false }), ctx);
+      expect(res.status).toBe(403);
+      expect(await res.json()).toMatchObject({ code, orgId: ORG_ID });
+      expect(reconcileOrgPublishedVisibility).not.toHaveBeenCalled();
+    },
+  );
+
+  it('SEC-2 (partial) tightening a sign-in policy the acting Admin would not meet answers 403 naming what would (D-OW-47)', async () => {
+    as('ADMIN');
+    vi.mocked(updateOrgPolicies).mockResolvedValue({ ok: false, reason: 'org_policy_would_lock_out_actor', requires: 'org_strong_sign_in_required' });
+    const res = await PATCH(req('PATCH', '', { requireStrongSignIn: true }), ctx);
+    expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({ code: 'org_policy_would_lock_out_actor', requires: 'org_strong_sign_in_required', orgId: ORG_ID });
+  });
+
+  it('POL-1 (partial) who a tightened sign-in policy now refuses is reported by count', async () => {
+    as('ADMIN');
+    vi.mocked(updateOrgPolicies).mockResolvedValue({
+      ok: true, policies: { ...DEFAULT_ORG_POLICIES, requireStrongSignIn: true }, changes: [{ key: 'requireStrongSignIn', from: false, to: true }],
+      suspended: [], restored: [], blocked: { counts: {}, total: 0, items: [] }, signInBlocked: { members: 3, guests: 1, credentials: 5 },
+    });
+    expect(await (await PATCH(req('PATCH', '', { requireStrongSignIn: true }), ctx)).json()).toMatchObject({ signInBlocked: { members: 3, guests: 1, credentials: 5 } });
   });
 
   it('POL-1 (partial) the routes are dark with the orgs flag off', async () => {
@@ -177,7 +217,7 @@ describe('policies routes', () => {
         suspended: [],
         restored: [],
         blocked: { counts: {}, total: 0, items: [] },
-        auditRecorded: true,
+        signInBlocked: null,
       });
 
     it('POL-4 (partial) a change to publishing moves the org\'s sites in the bucket right away and reports what moved', async () => {
@@ -215,5 +255,35 @@ describe('policies routes', () => {
       await PATCH(req('PATCH', '', { publishWeb: false }), ctx);
       expect(reconcileOrgPublishedVisibility).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe('money policy keys and delegated keys ([D-OW-26], D-OW-47)', () => {
+  const key = (): MCPAuthResult => ({ userId: 'user_priya', tokenVersion: 0, tokenType: 'mcp', tokenId: 'tok', role: 'user', adminRoleVersion: 0, allowedDriveIds: [] });
+
+  it.each(MONEY_POLICY_KEYS.map((k) => [k] as const))('X-1 (partial) an Admin key setting %s is refused by name and nothing is stored', async (moneyKey) => {
+    as('ADMIN');
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(key());
+    const res = await PATCH(req('PATCH', '', { publishWeb: false, [moneyKey]: DEFAULT_ORG_POLICIES[moneyKey] }), ctx);
+    expect(res.status).toBe(403);
+    expect((await res.json()).code).toBe(ORG_POLICY_MONEY[moneyKey] === 'moves_money' ? 'mcp_token_cannot_move_money' : 'mcp_token_cannot_change_spend_source');
+    expect(updateOrgPolicies).not.toHaveBeenCalled();
+  });
+
+  it('X-1 (partial) a key changes non-money policies and reads them back without any money key; a session reads and sets them all', async () => {
+    as('ADMIN');
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(key());
+    const patched = await PATCH(req('PATCH', '', { publicShareLinks: false }), ctx);
+    expect(patched.status).toBe(200);
+    const read = await (await GET(req('GET'), ctx)).json();
+    const written = await patched.json();
+    for (const moneyKey of MONEY_POLICY_KEYS) {
+      expect(read.policies).not.toHaveProperty(moneyKey);
+      expect(written.policies).not.toHaveProperty(moneyKey);
+    }
+
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(session('user_priya'));
+    expect((await (await GET(req('GET'), ctx)).json()).policies).toEqual(DEFAULT_ORG_POLICIES);
+    expect((await PATCH(req('PATCH', '', { seatAllowanceCents: 5000, walletFallback: 'own_credits' }), ctx)).status).toBe(200);
   });
 });

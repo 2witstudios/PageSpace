@@ -1,32 +1,47 @@
 import { NextResponse } from 'next/server';
+import { apiError } from '@/lib/api/api-error';
 import { announceOrgChange } from '@pagespace/lib/organizations/org-change-events';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getOrgPolicies, updateOrgPolicies } from '@pagespace/lib/organizations/policies';
-import { OPEN_ROLE_FLOOR_RAISE_MESSAGE, validateOrgPoliciesPatch } from '@pagespace/lib/organizations/policies-core';
+import {
+  OPEN_ROLE_FLOOR_RAISE_MESSAGE,
+  delegatedPolicyPatchRefusal,
+  policiesForDelegatedCredential,
+  validateOrgPoliciesPatch,
+  type OrgPolicies,
+} from '@pagespace/lib/organizations/policies-core';
 import { reconcileOrgPublishedVisibility } from '@pagespace/lib/organizations/published-visibility';
 import { createPublishedObjectStore, isPublishConfigured } from '@/lib/canvas/published-storage';
-import { authorizeOrgRequest, refuseDriveScopedToken, ORG_TOKEN_READ_AUTH, ORG_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
+import { authorizeOrgRequest, ORG_TOKEN_READ_AUTH, ORG_TOKEN_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
 import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
 
+/** [D-OW-26] A delegated key reads the policies without the money keys (wallet reads are consumer-only). */
+const policiesFor = (credential: 'session' | 'mcp', policies: OrgPolicies) =>
+  credential === 'session' ? policies : policiesForDelegatedCredential(policies);
+
 type Context = { params: Promise<{ orgId: string }> };
+
+const SIGN_IN_REFUSAL = {
+  org_strong_sign_in_required: 'Changing this sign-in policy needs a strong sign-in: confirm it is you with your passkey.',
+  org_reauthentication_required: 'Changing this sign-in policy needs a recent sign-in: sign in again first.',
+} as const;
 
 /**
  * GET /api/orgs/[orgId]/policies (Spec POL-1) — Owner and Admins read the org's policies, defaults
  * filled in. A plain member sees no org settings (UI-11): the same 403 as any Admin-only read, and a
  * non-member gets the 404 of an org that does not exist. Session or MCP token (X-1); a drive-scoped
- * token is refused, since policies govern the whole org.
+ * token is refused, since policies govern the whole org. A key reads them without the money keys (seat allowance,
+ * wallet fallback): [D-OW-26] keeps a key to the consumer view of money.
  */
 export async function GET(request: Request, context: Context) {
   const { orgId } = await context.params;
   const gate = await authorizeOrgRequest(request, orgId, 'ADMIN', ORG_TOKEN_READ_AUTH);
   if (!gate.ok) return gate.response;
-  const scoped = refuseDriveScopedToken(gate);
-  if (scoped) return scoped;
   try {
     const policies = await getOrgPolicies(orgId);
     auditRequest(request, { eventType: 'data.read', userId: gate.userId, resourceType: 'organization_policies', resourceId: orgId, details: { orgId } });
-    return NextResponse.json({ policies });
+    return NextResponse.json({ policies: policiesFor(gate.credential, policies) });
   } catch (error) {
     loggers.api.error('Error reading organization policies:', error as Error);
     return NextResponse.json({ error: 'Failed to read policies', code: 'internal_error' }, { status: 500 });
@@ -48,15 +63,27 @@ const countByKind = (items: readonly { kind: string }[]): Record<string, number>
  */
 export async function PATCH(request: Request, context: Context) {
   const { orgId } = await context.params;
-  const gate = await authorizeOrgRequest(request, orgId, 'ADMIN', ORG_WRITE_AUTH);
+  const gate = await authorizeOrgRequest(request, orgId, 'ADMIN', ORG_TOKEN_WRITE_AUTH);
   if (!gate.ok) return gate.response;
   try {
     const parsed = validateOrgPoliciesPatch(await request.json().catch(() => null));
     if (!parsed.ok) {
       return NextResponse.json({ error: 'Invalid request body', issues: parsed.issues, code: 'invalid_request' }, { status: 400 });
     }
-    const result = await updateOrgPolicies({ orgId, actorId: gate.userId, patch: parsed.patch });
+    // [D-OW-26] / D-OW-47: a key never sets a money policy (the seat allowance allocates org money, the wallet
+    // fallback picks what spend draws from); the whole patch is refused before anything is stored.
+    const moneyRefusal = gate.credential === 'session' ? null : delegatedPolicyPatchRefusal(parsed.patch);
+    if (moneyRefusal) return apiError(403, moneyRefusal.code, moneyRefusal.message, { policy: moneyRefusal.key });
+    const result = await updateOrgPolicies({ orgId, actorId: gate.userId, actorAuthentication: gate.authentication, patch: parsed.patch });
     if (!result.ok && result.reason === 'org_lapsed') return orgLapsedResponse(result.message);
+    if (!result.ok && (result.reason === 'org_strong_sign_in_required' || result.reason === 'org_reauthentication_required')) {
+      // D-OW-45: loosening a sign-in policy needs a credential that satisfies the policy in force.
+      return apiError(403, result.reason, SIGN_IN_REFUSAL[result.reason], { orgId });
+    }
+    if (!result.ok && result.reason === 'org_policy_would_lock_out_actor') {
+      // D-OW-47: the acting Admin's own credential would not meet the tightened policy; `requires` says what would.
+      return apiError(403, result.reason, 'Your own sign-in does not meet this policy, so saving it would lock you out of this organization.', { orgId, requires: result.requires });
+    }
     if (!result.ok && result.reason === 'open_role_floor') {
       return NextResponse.json({ error: OPEN_ROLE_FLOOR_RAISE_MESSAGE, code: 'org_policy', policy: 'openDriveRoleFloor', drives: result.drives }, { status: 403 });
     }
@@ -79,13 +106,14 @@ export async function PATCH(request: Request, context: Context) {
     // X-4: members see the change without a refresh (org:changed, no content).
     void announceOrgChange(orgId, 'policy');
     return NextResponse.json({
-      policies: result.policies,
+      policies: policiesFor(gate.credential, result.policies),
       changed: result.changes.map((c) => c.key),
       suspended: countByKind(result.suspended),
       restored: countByKind(result.restored),
       // POL-1: what it forbids but does not suspend (apps, envs, cross-drive agents, autonomy, models), by count.
       blocked: result.blocked.counts,
-      auditRecorded: result.auditRecorded,
+      // POL-1 for the sign-in keys (D-OW-45): members and credentials a tightened sign-in policy now refuses, by count.
+      signInBlocked: result.signInBlocked,
       ...(publishedVisibility ? { publishedVisibility } : {}),
     });
   } catch (error) {

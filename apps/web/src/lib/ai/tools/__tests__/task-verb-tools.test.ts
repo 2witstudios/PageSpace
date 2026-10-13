@@ -4,6 +4,14 @@ import { z } from 'zod';
 // Mock database and dependencies (mirrors task-management-tools.test.ts so the
 // shared task-helpers exercised by the new verb tools resolve against the same
 // in-memory db mock — no real DB).
+// Org sign-in policy (SEC-2/3) admits every actor here; tests that exercise a refusal override it.
+vi.mock('@pagespace/lib/permissions/actor-authentication', () => ({
+  checkActorResourceAuthentication: vi.fn(async () => ({ allowed: true })),
+  checkActorDriveAuthentication: vi.fn(async () => ({ allowed: true })),
+  filterDrivesForActor: vi.fn(async (_actor: unknown, ids: readonly string[]) => new Set(ids)),
+  filterResourcesForActor: vi.fn(async (_actor: unknown, ids: readonly string[]) => new Set(ids)),
+  explainOrgAuthenticationDenial: vi.fn(async () => null),
+}));
 vi.mock('@pagespace/db/db', () => ({
   db: {
     select: vi.fn().mockReturnThis(),
@@ -84,6 +92,7 @@ vi.mock('@/lib/workflows/task-trigger-helpers', () => ({
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   canUserEditPage: vi.fn(),
   canUserViewPage: vi.fn(),
   getUserDriveAccess: vi.fn(),
@@ -123,6 +132,7 @@ import { db } from '@pagespace/db/db';
 import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import { broadcastTaskEvent } from '@/lib/websocket';
 import type { ToolExecutionContext } from '../../core/types';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const mockDb = vi.mocked(db);
 const mockCanUserEditPage = vi.mocked(canUserEditPage);
@@ -131,7 +141,7 @@ const mockBroadcastTaskEvent = vi.mocked(broadcastTaskEvent);
 const context = {
   toolCallId: '1',
   messages: [],
-  experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+  experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
 };
 
 describe('task verb tools', () => {
@@ -269,7 +279,7 @@ describe('task verb tools', () => {
 
       await taskManagementTools.create_task.execute!(
         { pageId: 'page-1', title: 'New Task', dueDate },
-        { ...context, experimental_context: { userId: 'user-123', timezone } as ToolExecutionContext },
+        { ...context, experimental_context: { userId: 'user-123', accessActor: credentialActor('user-123', null), timezone } as ToolExecutionContext },
       );
 
       return (capturedTaskInsert as Record<string, unknown> | null)?.dueDate as Date | null;

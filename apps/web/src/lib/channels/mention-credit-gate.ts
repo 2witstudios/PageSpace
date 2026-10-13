@@ -25,9 +25,11 @@ export type MentionCreditHold =
  * recorded against, and bounds the fan-out: mention after mention is capped in flight
  * like chat.
  *
- * The reply is billed inside executeAskAgent (trackUsage, no holdId) on
- * `creditSpend.walletId`, so the hold only reserves headroom while the reply runs;
- * the caller calls `release` once it settles. `release` is idempotent.
+ * ONE reservation per reply: the hold rides into executeAskAgent as
+ * `creditSpend.reservedHoldId`, which settles the reply on it (on `creditSpend.walletId`)
+ * instead of reserving again — a wallet that can afford the reply once is never refused
+ * for a second, phantom hold. The caller still calls `release` afterwards for the paths
+ * that never reach the settle; `release` is idempotent (a settled hold is already gone).
  */
 export async function acquireMentionCreditHold(input: {
   userId: string;
@@ -54,7 +56,7 @@ export async function acquireMentionCreditHold(input: {
   let released = false;
   return {
     allowed: true,
-    creditSpend: { spend, walletId: gate.walletId },
+    creditSpend: { spend, walletId: gate.walletId, ...(holdId ? { reservedHoldId: holdId } : {}) },
     release: () => {
       if (released || !holdId) return;
       released = true;

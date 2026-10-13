@@ -166,10 +166,10 @@ describe('reconcileMissedGrants concurrency (Postgres)', () => {
         consumeStatus: 'applied',
       });
 
-      const result = await reconcileMissedGrants({ priceTier, active: true });
+      const result = await reconcileMissedGrants({ priceTier });
 
       expect(result.reconciled).toBeGreaterThanOrEqual(1);
-      // 60% of the 1,500¢ paid, never the whole payment the inactive ratio (100%) would give.
+      // 60% of the 1,500¢ paid, never the whole payment.
       const [balance] = await db.select().from(wallets).where(personalRootWalletOf(user.id));
       expect(balance.monthlyRemainingCents).toBe(900);
       const [row] = await db.select().from(creditLedger).where(eq(creditLedger.id, ledgerId));

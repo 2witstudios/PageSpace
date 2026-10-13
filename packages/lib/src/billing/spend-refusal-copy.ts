@@ -32,6 +32,8 @@ const SKIP_REASON_KEYS: Record<SkipReason, true> = {
   drive_wallet_paused: true,
   no_drive_wallet: true,
   creator_departed: true,
+  guest_drive_wallet_off: true,
+  source_cap_reached: true,
 };
 
 export const REFUSAL_REASONS = Object.keys(REFUSAL_REASON_KEYS) as RefusalReason[];
@@ -165,6 +167,8 @@ const SKIP_COPY: Record<SkipReason, (input: SkipCopyInput) => string> = {
   drive_wallet_paused: (i) => `${wallet(i)} is paused.`,
   no_drive_wallet: () => 'this drive has no wallet to run automations from.',
   creator_departed: (i) => `${creator(i)} is no longer in ${i.orgName ?? 'this drive'}, so nothing runs as them.`,
+  guest_drive_wallet_off: (i) => `${creator(i)} is a guest and can't spend from ${wallet(i)}.`,
+  source_cap_reached: (i) => `${creator(i)} reached their cap on ${wallet(i)}.`,
 };
 
 /** A run refused at its creator's leg reads as the creator's (D-OW-34: it spends as them). */

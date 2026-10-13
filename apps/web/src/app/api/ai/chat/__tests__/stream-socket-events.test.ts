@@ -89,15 +89,16 @@ vi.mock('@/lib/auth', () => ({
   authSessionIdOf: vi.fn<typeof import('@/lib/auth').authSessionIdOf>((result) => (result.tokenType === 'session' ? result.sessionId : undefined)),
   canPrincipalViewPage: vi.fn(async (auth: { userId: string }, pageId: string) => {
     const { canUserViewPage } = await import('@pagespace/lib/permissions/permissions');
-    return canUserViewPage(auth.userId, pageId);
+    return canUserViewPage(credentialActor(auth.userId, null), pageId);
   }),
   canPrincipalEditPage: vi.fn(async (auth: { userId: string }, pageId: string) => {
     const { canUserEditPage } = await import('@pagespace/lib/permissions/permissions');
-    return canUserEditPage(auth.userId, pageId);
+    return canUserEditPage(credentialActor(auth.userId, null), pageId);
   }),
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   canUserViewPage: vi.fn().mockResolvedValue(true),
   canUserEditPage: vi.fn().mockResolvedValue(true),
 }));
@@ -493,6 +494,7 @@ import { streamText, type UIMessageChunk } from 'ai';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 import { createAIProvider } from '@/lib/ai/core/provider-factory';
 import { pipeUIMessageStreamStrippingStart } from '@/lib/ai/core/stream-pipe-utils';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 /** A signal that reports aborted=true — simulates onAbort having already fired. */
 const abortedSignal = (): AbortSignal => {
@@ -1126,7 +1128,7 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
       expect(response).toBe(await mockRespondWithHelpAnswer.mock.results[0].value);
       expect(mockCanConsumeAI).not.toHaveBeenCalled();
       expect(mockRespondWithHelpAnswer).toHaveBeenCalledWith(
-        expect.objectContaining({ senderId: 'user-1', driveId: 'drive-1' })
+        expect.objectContaining({ sender: expect.objectContaining({ userId: 'user-1' }), driveId: 'drive-1' })
       );
     });
 
@@ -1759,4 +1761,14 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
       }
     });
   });
+});
+
+// Route contracts stub authorization; policy decisions are covered by principal-permissions integration tests.
+vi.mock('@/lib/auth/principal-permissions', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/auth/principal-permissions')>();
+  const permissions = await import('@pagespace/lib/permissions/permissions');
+  return { ...actual,
+    canPrincipalViewPage: (auth: { userId: string }, resourceId: string) => permissions.canUserViewPage(credentialActor(auth.userId, null), resourceId),
+    canPrincipalEditPage: (auth: { userId: string }, resourceId: string) => permissions.canUserEditPage(credentialActor(auth.userId, null), resourceId),
+  };
 });

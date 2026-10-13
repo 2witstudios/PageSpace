@@ -30,8 +30,11 @@ export const defaultSandboxBillingDeps: SandboxBillingDeps = {
   // in when the run started. An org drive's session charges the ORG POOL (WAL-9), recorded under
   // the ACTOR — the person who caused the run, whose per-member cap it counts toward — never the
   // session's owner (a drive session is shared) and never anyone's own wallet.
+  // A drive session whose drive cannot be resolved has no payer (null): the run is refused,
+  // never billed to the session's owner.
   async resolveCharge({ driveId, ownerId, actorId }) {
-    return computeChargeFor(await resolveSessionPayer({ driveId, ownerId, lookupDriveBillingFacts }), actorId);
+    const payer = await resolveSessionPayer({ driveId, ownerId, lookupDriveBillingFacts });
+    return payer === null ? null : computeChargeFor(payer, actorId);
   },
 
   async gate({ charge }) {

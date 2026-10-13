@@ -87,6 +87,9 @@ export const EXPORTED_TABLES: Readonly<Record<string, ExportCategory>> = {
   // this about you and did not act on it" is exactly the processing a subject
   // access request exists to disclose.
   personalization_candidates: 'personalizationCandidates',
+  // Digests the AI wrote FOR the subject from their workspace activity: content addressed to them, carried in full
+  // (only when the requesting credential may read the org content it drew on, SEC-2/3 — see export-sign-in-gate).
+  pulse_summaries: 'pulseSummaries',
   // Art 15(3) is a right to a COPY, not to visibility. These were excluded on
   // the reasoning that the subject can read them in Settings — see the
   // `settings` collector for why that was not a basis (review finding).
@@ -332,9 +335,10 @@ export const EXCLUDED_TABLES: Readonly<Record<string, string>> = {
     // the same answer as `subscriptions` below, for the same reason. It records a
     // recurring charge for a DRIVE's infrastructure: which app is always-on, at
     // which guest size, on which Stripe price, and whether that subscription is
-    // paying. `userId` is the payer denormalized from the drive owner, so the row
-    // says who is billed for the drive's machine rather than anything the subject
-    // authored or that describes them. The subject's own billing relationship is
+    // paying. `userId` is the buyer (for a personal drive, the owner who pays) and
+    // `orgId` the org billed for an org drive's app (WAL-9), so the row says who is
+    // billed for the drive's machine rather than anything the subject authored or
+    // that describes them. The subject's own billing relationship is
     // already the account-plan `subscriptions` row and the credit ledger, all
     // excluded on this same rationale; the Stripe-side record of the charge is the
     // subject's to obtain from Stripe, and is not duplicated into a PageSpace
@@ -375,7 +379,7 @@ export const EXCLUDED_TABLES: Readonly<Record<string, string>> = {
     // is their money and is exported (the `wallet` category). What stays out is
     // the rest of the table: an ORG pool's row is the org's money (SPEND-9/D18 —
     // a member's export carries their seat allowance, with their membership),
-    // and a drive/agent wallet's row is the drive's budget, disclosed to a
+    // and a drive wallet's row is the drive's budget, disclosed to a
     // consumer only as "can I spend" at call time, not as a copy.
     'wallet_consumer_caps',
     // The per-consumer cap rows on org pools ARE disclosed — as the seat
@@ -383,7 +387,7 @@ export const EXCLUDED_TABLES: Readonly<Record<string, string>> = {
     // of the table is the funder's configuration of their own wallet: a cap
     // another funder set, or one the subject set FOR someone else, is that
     // relationship's record, not the subject's.
-    // Funds moved into a drive/agent wallet (0318): legs the SUBJECT funded are
+    // Funds moved into a drive wallet (0318): legs the SUBJECT funded are
     // exported under `wallet` (their donations and their top-ups — the money is
     // theirs and, on a donation, is now the drive's). An org pool's refill legs
     // name the ORG as funder and stay the org's record.
@@ -398,6 +402,12 @@ export const EXCLUDED_TABLES: Readonly<Record<string, string>> = {
     // Which WAL-7 cap alert (80% / 100%) was sent for a consumer's window this period (0332): a
     // once-per-threshold throttle stamp. The alert itself is exported under `notifications`.
     'credit_holds',
+    // [D-OW-58] ledger rows are the WALLET's financial records. The subject's own money — their
+    // personal root wallet — is exported under `wallet`; rows on wallets they do not own (an org
+    // pool, a drive wallet: allocation draws, usage, debt landed on a funder) are that wallet's
+    // books. On erasure those rows are KEPT with the person anonymised (credit_ledger.userId ON
+    // DELETE SET NULL, read as a "former member"); the subject's own root and its rows go with
+    // the user row (wallets.userId and credit_ledger.walletId cascade).
     'credit_ledger',
   ),
 
@@ -437,7 +447,6 @@ export const EXCLUDED_TABLES: Readonly<Record<string, string>> = {
     'agent_workspace_node_revs',
     'ai_pending_abort_intents',
     'conversation_compactions',
-    'pulse_summaries',
     'user_page_views',
     'message_drafts',
   ),
@@ -485,6 +494,8 @@ export const EXCLUDED_TABLES: Readonly<Record<string, string>> = {
     'An org\'s domain claim (SEC-1): the domain, its public DNS challenge and the hash of a mailed proof link. Organization configuration, not the subject\'s data; the one personal field is createdBy, an attribution the org\'s audit trail also carries. Account deletion nulls it (ON DELETE SET NULL).',
   org_departure_suppressions:
     'PERMANENT, deliberate post-erasure suppression record [D-OW-27], like a do-not-contact list: when a member who left or was removed from an org deletes their account, the org keeps only a KEYED blind index (HMAC-SHA256 under the server index key) of their normalized email, so a new account with that address is not auto-joined back by a verified domain (SEC-1). It holds no user id and no recoverable email, so it cannot be tied to a data subject or exported to one; account deletion WRITES it (the retained minimum) rather than removing it. It goes with the org, and an org Admin can clear it by typing the address.',
+  org_audit_outbox:
+    'A transient delivery queue for org audit events (AUD-1): each row is an org event staged with its change and deleted once appended to the security audit chain, normally within the same request. It holds ids and counts only (an actor id, never content or names), and the audit chain row it becomes is the record; like the other outboxes it is operational plumbing, not the subject\'s data.',
 };
 
 /** Every table the registry has a decision for. */

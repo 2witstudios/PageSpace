@@ -27,7 +27,7 @@ import type {
 } from '@pagespace/lib/billing/org-subscription-core';
 import type { OrgInvoice } from '@pagespace/lib/billing/wallet-funding';
 
-interface FakeInvoice {
+export interface FakeInvoice {
   id: string;
   customerId: string;
   subscriptionId: string;
@@ -222,7 +222,7 @@ export class FakeOrgStripe implements OrgBillingStripe {
     });
   }
 
-  private addInvoice(sub: OrgStripeSubscription, amountDueCents: number): FakeInvoice {
+  addInvoice(sub: OrgStripeSubscription, amountDueCents: number): FakeInvoice {
     const id = this.nextId('in');
     const invoice: FakeInvoice = {
       id,

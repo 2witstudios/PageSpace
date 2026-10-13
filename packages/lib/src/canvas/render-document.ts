@@ -356,19 +356,91 @@ export { escapeHtml };
 function unwrapFullDocument(html: string): string {
   if (!/<html(?=[\s/>])/i.test(html)) return html;
 
-  const headMatch = html.match(/<head(?=[\s/>])[^>]*>([\s\S]*?)<\/head(?=[\s/>])[^>]*>/i);
-  const headStyles = headMatch ? (headMatch[1].match(/<style(?=[\s/>])[^>]*>[\s\S]*?<\/style(?=[\s/>])[^>]*>/gi) ?? []).join('\n') : '';
+  const headInner = blockInner(html, /<head(?=[\s/>])/gi, /<\/head(?=[\s/>])/gi, 'first');
+  const headStyles = headInner !== null ? (headInner.match(/<style(?=[\s/>])[^>]*>[\s\S]*?<\/style(?=[\s/>])[^>]*>/gi) ?? []).join('\n') : '';
 
-  const bodyMatch = html.match(/<body(?=[\s/>])[^>]*>([\s\S]*)<\/body(?=[\s/>])[^>]*>/i);
-  if (bodyMatch) return headStyles + bodyMatch[1];
+  const bodyInner = blockInner(html, /<body(?=[\s/>])/gi, /<\/body(?=[\s/>])/gi, 'last');
+  if (bodyInner !== null) return headStyles + bodyInner;
 
   // No explicit <body> tag (malformed/partial document) — best-effort: strip
   // the doctype/html/head wrapper and keep whatever's left.
-  const stripped = html
-    .replace(/<!doctype[^>]*>/gi, '')
-    .replace(/<\/?html(?=[\s/>])[^>]*>/gi, '')
-    .replace(/<head(?=[\s/>])[^>]*>[\s\S]*?<\/head(?=[\s/>])[^>]*>/gi, '');
+  const stripped = removeHeadBlocks(removeTags(removeTags(html, /<!doctype/gi), /<\/?html(?=[\s/>])/gi));
   return headStyles + stripped;
+}
+
+/**
+ * The index just past the `>` that closes the tag whose name `prefix` matched at `at`, or -1 when no `>` follows.
+ * One forward scan (indexOf), never a `[^>]*>` retried from every start: on a document full of unclosed tags that
+ * regex is quadratic.
+ */
+function tagEnd(html: string, at: number, prefix: string): number {
+  const close = html.indexOf('>', at + prefix.length);
+  return close === -1 ? -1 : close + 1;
+}
+
+/**
+ * The content between the first `opener` tag (that has a `>`) and its closing tag: the NEAREST close for `first`
+ * (a lazy match), the LAST for `last` (a greedy one); null when there is none. Forward scans only: a `[\s\S]*` match
+ * retried from every opener is quadratic on a document full of unclosed tags.
+ */
+function blockInner(html: string, opener: RegExp, closer: RegExp, which: 'first' | 'last'): string | null {
+  opener.lastIndex = 0;
+  const opened = opener.exec(html);
+  if (!opened) return null;
+  const start = tagEnd(html, opened.index, opened[0]);
+  if (start === -1) return null;
+  const lastGt = html.lastIndexOf('>');
+  let found: RegExpExecArray | null = null;
+  closer.lastIndex = start;
+  for (let m = closer.exec(html); m; m = closer.exec(html)) {
+    // A close tag counts only when some `>` ends it.
+    if (m.index + m[0].length > lastGt) break;
+    found = m;
+    if (which === 'first') break;
+  }
+  return found === null ? null : html.slice(start, found.index);
+}
+
+/** Remove every tag whose name `opener` (global, matching only the tag's fixed prefix) finds, up to its `>`. */
+function removeTags(html: string, opener: RegExp): string {
+  let out = '';
+  let from = 0;
+  opener.lastIndex = 0;
+  for (let m = opener.exec(html); m; m = opener.exec(html)) {
+    const end = tagEnd(html, m.index, m[0]);
+    // No `>` after this tag: none after any later one either, so nothing else can close.
+    if (end === -1) break;
+    out += html.slice(from, m.index);
+    from = end;
+    opener.lastIndex = end;
+  }
+  return out + html.slice(from);
+}
+
+/**
+ * Remove every `<head …>…</head …>` block, each to its NEAREST close tag (what a lazy regex would match), by
+ * scanning forward: a lazy `[\s\S]*?` retried from every `<head` is quadratic on a document full of unclosed heads.
+ */
+function removeHeadBlocks(html: string): string {
+  const open = /<head(?=[\s/>])/gi;
+  const close = /<\/head(?=[\s/>])/gi;
+  let out = '';
+  let from = 0;
+  for (;;) {
+    open.lastIndex = from;
+    const opened = open.exec(html);
+    if (!opened) break;
+    const body = tagEnd(html, opened.index, opened[0]);
+    if (body === -1) break;
+    close.lastIndex = body;
+    const closed = close.exec(html);
+    if (!closed) break;
+    const end = tagEnd(html, closed.index, closed[0]);
+    if (end === -1) break;
+    out += html.slice(from, opened.index);
+    from = end;
+  }
+  return out + html.slice(from);
 }
 
 /**
@@ -431,24 +503,33 @@ function extractAndSanitizeStyles(html: string, allowedHttpsHosts?: string[], no
   // `-`/`:` and could truncate an author script mid-block, corrupting it).
   const scriptOrStyle = /<script(?=[\s/>])[^>]*>[\s\S]*?<\/script(?=[\s/>])[^>]*>|<style(?=[\s/>])[^>]*>([\s\S]*?)<\/style(?=[\s/>])[^>]*>/gi;
   const cssParts: string[] = [];
-  const body = html.replace(scriptOrStyle, (match, styleContent: string | undefined) => {
-    // styleContent is the capture group; defined only when a real <style>
-    // element matched (not a <script> block).
-    if (styleContent !== undefined) {
-      cssParts.push(
-        sanitizeCSS(
-          styleContent,
-          allowAnyHttpsUrl
-            ? { allowAnyHttpsUrl: true }
-            : allowedHttpsHosts?.length
-              ? { allowedHttpsHosts }
-              : undefined,
-        ),
-      );
-      return '';
-    }
-    return nonce ? stampScriptNonce(match, nonce) : match; // <script> block — leave verbatim (unless nonce is stamped)
-  });
+  // Removing a style block can splice its neighbours into a NEW one (`<sty<style></style>le>`), so
+  // passes repeat until one removes nothing: no unsanitized <style> survives. Script blocks are
+  // consumed whole on every pass (a `<style>` inside one is script text) and stamped only once.
+  let body = html;
+  for (let pass = 0, removed = true; removed; pass += 1) {
+    removed = false;
+    body = body.replace(scriptOrStyle, (match, styleContent: string | undefined) => {
+      // styleContent is the capture group; defined only when a real <style>
+      // element matched (not a <script> block).
+      if (styleContent !== undefined) {
+        removed = true;
+        cssParts.push(
+          sanitizeCSS(
+            styleContent,
+            allowAnyHttpsUrl
+              ? { allowAnyHttpsUrl: true }
+              : allowedHttpsHosts?.length
+                ? { allowedHttpsHosts }
+                : undefined,
+          ),
+        );
+        return '';
+      }
+      // <script> block — leave verbatim (unless nonce is stamped, on the first pass only)
+      return nonce && pass === 0 ? stampScriptNonce(match, nonce) : match;
+    });
+  }
   return { css: cssParts.join('\n'), body };
 }
 

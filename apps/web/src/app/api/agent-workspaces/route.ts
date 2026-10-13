@@ -68,6 +68,7 @@ import {
 } from '@pagespace/lib/agent-workspaces/session-contract';
 import type { LocalEnvRefusal } from '@pagespace/lib/services/drive-envs/local-env-gate';
 import { ORG_LAPSED_MESSAGE } from '@pagespace/lib/organizations/status-core';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 /** C1: how a LOCAL env's typed bind refusal maps to a status. Policy ⇒ 403, machine state ⇒ 409. */
 const LOCAL_BIND_REFUSAL_STATUS = {
@@ -115,6 +116,7 @@ const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 export async function GET(request: Request) {
   const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
   if (isAuthError(auth)) return auth.error;
+  const actor = actorFromAuth(auth);
 
   const url = new URL(request.url);
   const driveId = url.searchParams.get('driveId');
@@ -160,7 +162,7 @@ export async function GET(request: Request) {
       // grid snapshot. One statement for one workspace and for fifty, and the
       // titles are resolved once per viewer beside the nodes, never inside
       // them.
-      readWorkspaceNodesBulk(workspaceIds, auth.userId),
+      readWorkspaceNodesBulk(workspaceIds, actor),
     ]);
     const withChildren = sessions.map((session) => {
       // Every workspace ASKED FOR has an entry; this fallback covers only a
@@ -298,6 +300,7 @@ function applyAgentDefaultEnv(
 export async function POST(request: Request) {
   const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
   if (isAuthError(auth)) return auth.error;
+  const actor = actorFromAuth(auth);
 
   let body: {
     driveId?: unknown;
@@ -407,7 +410,7 @@ export async function POST(request: Request) {
       // `workspaceId` in exactly this situation (see `maskOrDrop`); this keeps
       // the two consistent instead of letting the 409 disclose what the
       // listing deliberately hides. Reported by review on #2386.
-      const access = await checkSessionAccess(auth.userId, existingWorkspaceId);
+      const access = await checkSessionAccess(actor, existingWorkspaceId);
       return NextResponse.json(
         {
           error: 'That conversation already belongs to a session',
@@ -494,7 +497,7 @@ export async function POST(request: Request) {
     });
   }
 
-  const access = await checkAccessForSubject(auth.userId, {
+  const access = await checkAccessForSubject(actor, {
     ownerId: auth.userId,
     driveId,
   });
@@ -541,7 +544,7 @@ export async function POST(request: Request) {
     name = nextUniqueSessionName(baseLabel, existingNames);
   }
 
-  const spawned = await spawnSession({ userId: auth.userId, driveId, envId, name });
+  const spawned = await spawnSession({ actor, driveId, envId, name });
   if (!spawned.ok) {
     if (spawned.reason === 'session_limit_reached') {
       // The atomic backstop caught what the pre-check above missed — a
@@ -581,7 +584,7 @@ export async function POST(request: Request) {
     // (`[workspaceId]/shells/route.ts` POST, lines 88-167): a shell always
     // needs a live sandbox, so unlike the conversation path this provisions
     // eagerly rather than waiting for the first tool call.
-    const provisioned = await provisionSessionSandbox(spawned.session, auth.userId);
+    const provisioned = await provisionSessionSandbox(spawned.session, actor);
     if (!provisioned.ok) {
       await endSession(spawned.session.id).catch(() => {});
       // A plan-limit refusal is not an infrastructure failure — same split the
@@ -632,7 +635,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Could not start a session' }, { status: 502 });
     }
 
-    const shellSpawned = await spawnShell({ workspaceId: spawned.session.id, ownerId: auth.userId });
+    const shellSpawned = await spawnShell({ workspaceId: spawned.session.id, owner: actor });
     if (!shellSpawned.ok) {
       // The session row exists but its first shell failed: end it rather than
       // leave an empty workspace the model says cannot exist.
@@ -676,7 +679,7 @@ export async function POST(request: Request) {
     const conversationId = claimConversationId as string;
     const outcome = await claimConversationInSession({
       conversationId,
-      userId: auth.userId,
+      actor,
       workspaceId: spawned.session.id,
     });
     if (outcome !== 'claimed' && outcome !== 'already_in_session') {
@@ -713,7 +716,7 @@ export async function POST(request: Request) {
         const raceWinnerWorkspaceId = await findWorkspaceOfConversation(conversationId).catch(() => null);
         const raceWinnerOpenable =
           raceWinnerWorkspaceId !== null &&
-          (await checkSessionAccess(auth.userId, raceWinnerWorkspaceId).then(
+          (await checkSessionAccess(actor, raceWinnerWorkspaceId).then(
             (a) => a.allowed,
             () => false,
           ));
@@ -753,7 +756,7 @@ export async function POST(request: Request) {
   try {
     await createConversationInSession({
       conversationId,
-      userId: auth.userId,
+      actor,
       agentPageId,
       workspaceId: spawned.session.id,
     });

@@ -55,10 +55,10 @@ import { startDedicatedSubscription, cancelDedicatedSubscription } from '../dedi
 const NOW = Math.floor(Date.now() / 1000);
 const user = { id: 'user_1', email: 'a@b.c', name: 'A', stripeCustomerId: 'cus_1' };
 
-function buy() {
+function buy(payer: Parameters<typeof startDedicatedSubscription>[0]['payer'] = { kind: 'user', user }) {
   return startDedicatedSubscription({
     publishedAppId: 'app_1',
-    user,
+    payer,
     guestPreset: 'shared-cpu-1x-512',
   });
 }
@@ -67,6 +67,7 @@ function buy() {
 const mirror = (status: string) => ({
   publishedAppId: 'app_1',
   userId: 'user_1',
+  orgId: null,
   stripeSubscriptionId: 'sub_old',
   stripePriceId: 'price_old',
   guestPreset: 'shared-cpu-1x-512',
@@ -156,7 +157,7 @@ describe('the purchase is refused before Stripe is touched', () => {
     mockFindForApp.mockResolvedValue(null);
     const result = await startDedicatedSubscription({
       publishedAppId: 'app_1',
-      user,
+      payer: { kind: 'user', user },
       guestPreset: 'shared-cpu-64x-262144',
     });
     expect(result).toEqual({ ok: false, reason: 'guest_preset_not_allowed' });
@@ -204,6 +205,29 @@ describe('a successful purchase', () => {
     const args = mockSubscriptionsCreate.mock.calls[0][0];
     expect(args.metadata.kind).toBe('published_app_dedicated');
     expect(args.metadata.publishedAppId).toBe('app_1');
+  });
+
+  it('WAL-9 (partial) an org drive\'s app is subscribed on the ORG\'s Stripe customer, stamped and mirrored with the org and the buyer — the buyer\'s card is never asked for', async () => {
+    mockFindForApp.mockResolvedValue(null);
+    const { getOrCreateStripeCustomer } = await import('@/lib/stripe-customer');
+    vi.mocked(getOrCreateStripeCustomer).mockClear();
+
+    await buy({ kind: 'org', orgId: 'org_northwind', stripeCustomerId: 'cus_org', buyerUserId: 'user_admin' });
+
+    const args = mockSubscriptionsCreate.mock.calls[0][0];
+    expect(args.customer).toBe('cus_org');
+    expect(args.metadata).toMatchObject({ orgId: 'org_northwind', userId: 'user_admin' });
+    expect(getOrCreateStripeCustomer).not.toHaveBeenCalled();
+    expect(mockRecord).toHaveBeenCalledWith(expect.objectContaining({ orgId: 'org_northwind', userId: 'user_admin' }));
+  });
+
+  it('WAL-9 (partial) a personal drive\'s app is subscribed on its owner\'s own customer, with no org', async () => {
+    mockFindForApp.mockResolvedValue(null);
+    await buy();
+    const args = mockSubscriptionsCreate.mock.calls[0][0];
+    expect(args.customer).toBe('cus_1');
+    expect(args.metadata.orgId).toBeUndefined();
+    expect(mockRecord).toHaveBeenCalledWith(expect.objectContaining({ orgId: null, userId: 'user_1' }));
   });
 
   it('does NOT make the app dedicated — entitlement waits for Stripe', async () => {

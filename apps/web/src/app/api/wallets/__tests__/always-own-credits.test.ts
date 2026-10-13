@@ -54,7 +54,7 @@ describe('PUT /api/wallets/always-own-credits', () => {
     const res = await PUT(req('PUT', '/api/wallets/always-own-credits', { driveId: null, enabled: true }));
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ driveId: null, enabled: true });
-    expect(setAlwaysOwnCredits).toHaveBeenCalledWith('u-marcus', { driveId: null, enabled: true }, 'session');
+    expect(setAlwaysOwnCredits).toHaveBeenCalledWith(expect.objectContaining({ userId: 'u-marcus' }), { driveId: null, enabled: true }, 'session');
     expect(auditRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
       eventType: 'data.write', userId: 'u-marcus', details: { operation: 'set_always_own_credits', driveId: null, enabled: true },
     }));
@@ -64,7 +64,7 @@ describe('PUT /api/wallets/always-own-credits', () => {
     vi.mocked(setAlwaysOwnCredits).mockResolvedValue({ ok: true, driveId: 'd-product', enabled: false });
     const res = await PUT(req('PUT', '/api/wallets/always-own-credits', { driveId: 'd-product', enabled: false }));
     expect(res.status).toBe(200);
-    expect(setAlwaysOwnCredits).toHaveBeenCalledWith('u-marcus', { driveId: 'd-product', enabled: false }, 'session');
+    expect(setAlwaysOwnCredits).toHaveBeenCalledWith(expect.objectContaining({ userId: 'u-marcus' }), { driveId: 'd-product', enabled: false }, 'session');
   });
 
   it.each([
@@ -84,7 +84,7 @@ describe('PUT /api/wallets/always-own-credits', () => {
     const refused = await PUT(req('PUT', '/api/wallets/always-own-credits', { driveId: null, enabled: true }));
     expect(refused.status).toBe(403);
     expect(await refused.json()).toMatchObject({ code: 'mcp_token_cannot_change_spend_source' });
-    expect(setAlwaysOwnCredits).toHaveBeenCalledWith('u-marcus', { driveId: null, enabled: true }, 'mcp');
+    expect(setAlwaysOwnCredits).toHaveBeenCalledWith(expect.objectContaining({ userId: 'u-marcus' }), { driveId: null, enabled: true }, 'mcp');
 
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(session('u-marcus'));
     vi.mocked(setAlwaysOwnCredits).mockResolvedValue({ ok: false, status: 404, code: 'not_found', message: 'Drive not found' });

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { skipNoticePeriodStart, shouldNotifyLeadOfSkip } from '../automation-skip-notice';
+import { automationSkipNoticeMessage, skipNoticePeriodStart, shouldNotifyLeadOfSkip } from '../automation-skip-notice';
 
 const utc = (iso: string): Date => new Date(iso);
 
@@ -60,8 +60,19 @@ describe('automation skip notice: once per period', () => {
 });
 
 describe('automation skip notice purity', () => {
-  it('imports nothing', () => {
+  it('imports nothing but the skip reasons\' type from pure wallet-core', () => {
     const src = readFileSync(fileURLToPath(new URL('../automation-skip-notice.ts', import.meta.url)), 'utf8');
-    expect([...src.matchAll(/from\s+'([^']+)'/g)].map((m) => m[1])).toEqual([]);
+    expect([...src.matchAll(/from\s+'([^']+)'/g)].map((m) => m[1])).toEqual(['./wallet-core']);
+    expect(src).toMatch(/import type \{ SkipReason \} from '\.\/wallet-core'/);
+  });
+});
+
+describe('automationSkipNoticeMessage — the lead is told why', () => {
+  it('SPEND-6 (partial) a reached cap and a guest kept off the wallet are named, not reported as an empty wallet', () => {
+    expect(automationSkipNoticeMessage('source_cap_reached')).toMatch(/reached their spending cap/);
+    expect(automationSkipNoticeMessage('guest_drive_wallet_off')).toMatch(/guest/);
+    expect(automationSkipNoticeMessage('drive_wallet_empty')).toMatch(/cannot cover it/);
+    expect(automationSkipNoticeMessage('drive_wallet_paused')).toMatch(/paused/);
+    expect(automationSkipNoticeMessage('no_drive_wallet')).toMatch(/no wallet/);
   });
 });

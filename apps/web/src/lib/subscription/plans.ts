@@ -222,10 +222,9 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
  * MON-2: patch a plan's credit-derived fields with a server-supplied cents value.
  *
  * `PLANS` is a module-level constant built once, using this module's OWN evaluation
- * of the money model (`MONTHLY_CREDIT_CENTS`, computed via `MONEY_MODEL_V2_ACTIVE`).
- * D-OW-17 made that constant identical in every process, including a `'use client'`
- * browser bundle — `PLANS`'s own build-time number is now correct there too, not
- * just on the server. This function, and the `planCredits` fetch it patches from,
+ * of the money model (`MONTHLY_CREDIT_CENTS`). The ratio is a literal in the shared
+ * source, identical in every process including a `'use client'` browser bundle —
+ * `PLANS`'s own build-time number is correct there too, not just on the server. This function, and the `planCredits` fetch it patches from,
  * remain correct to keep: they are simply no longer load-bearing for a client/server
  * asymmetry that no longer exists (see money-model.ts's module doc comment for why
  * an env var, and then a client mirror of one, couldn't guarantee that on their own).

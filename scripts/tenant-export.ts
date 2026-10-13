@@ -20,9 +20,11 @@ import { mkdir, writeFile, copyFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import path from 'path';
 import { resolvePathWithin } from '@pagespace/lib/security/path-validator';
+import { TABLE_IMPORT_ORDER } from './lib/migration-types';
 import type {
   ExportOptions,
   ExportManifest,
+  ExportTableName,
   ManifestTableCounts,
   DbClient,
 } from './lib/migration-types';
@@ -40,6 +42,16 @@ import {
   exportColumns as cols,
   deferredColumns,
 } from './lib/tenant-export-columns';
+import {
+  orgSelectionWhere,
+  migratingOrgIds,
+  walletCandidateWhere,
+  keptWalletIds,
+  orgWalletSelectionWhere,
+  type OrgWalletScope,
+  type ScopedOrgWalletTable,
+  type WalletRef,
+} from './lib/org-wallet-selection';
 
 // ─── Column definitions per table ──────────────────────────────
 // The per-table column lists live in ./lib/tenant-export-columns.ts, and are
@@ -155,6 +167,52 @@ function unbindOutOfBundleTargets(
   }
 }
 
+/**
+ * Tables whose INSERT forgives ONLY a primary-key conflict (`buildInsert`'s
+ * `conflictTarget`): a re-imported bundle is still a no-op, and a collision on
+ * any OTHER unique index raises and aborts the bundle instead of dropping the
+ * row in silence.
+ *
+ *  - `agent_workspace_nodes`: its chat index is GLOBAL — a conversation is bound
+ *    to at most one node anywhere — so a destination that already holds one of
+ *    these threads would otherwise skip the node and lose the thread's place in
+ *    its workspace (see `buildInsert`'s docblock for the measured behaviour).
+ *  - `organizations`: a slug already taken in the destination would otherwise
+ *    skip the org, and every org drive would then fail on its FK with a message
+ *    that names the drive rather than the slug.
+ *  - every org and wallet table: a secondary unique key already taken in the
+ *    destination (an org slug, a root wallet, a funding leg's `sourceRef`, a
+ *    Stripe subscription id, a verified domain, an invitation token hash, a
+ *    membership) would otherwise skip the row in silence — an org whose drives
+ *    then fail on their FK, a balance replaced by the destination's, a funding
+ *    leg gone so the wallet's top-up no longer equals its legs (D-OW-13).
+ */
+export const CONFLICT_TARGETS: Partial<Record<ExportTableName, readonly string[]>> = {
+  agent_workspace_nodes: ['rootId', 'id'],
+  organizations: ['id'],
+  org_members: ['id'],
+  org_invitations: ['id'],
+  org_subscriptions: ['id'],
+  org_subscription_funding: ['id'],
+  org_domains: ['id'],
+  org_member_departures: ['id'],
+  org_departure_suppressions: ['id'],
+  org_guest_holds: ['id'],
+  drive_join_requests: ['id'],
+  wallets: ['id'],
+  wallet_funding_legs: ['id'],
+  wallet_consumer_caps: ['walletId', 'consumerKey'],
+  wallet_debt_notices: ['walletId'],
+  wallet_cap_alerts: ['walletId', 'consumerKey', 'capWindow', 'periodStart', 'threshold'],
+  drive_spend_overrides: ['userId', 'driveId'],
+  automation_skip_notices: ['driveId'],
+};
+
+/** `org_member_departures` → `orgMemberDepartures`, the manifest's key for a table. */
+function manifestKey(table: ExportTableName): string {
+  return table.replace(/_([a-z])/g, (_, c: string) => c.toUpperCase());
+}
+
 export interface ExportResult {
   manifest: ExportManifest;
   sqlStatements: string;
@@ -202,6 +260,13 @@ export async function exportData(
 
   const drivesData = await queryRows(db, sql.raw(
     `SELECT * FROM drives WHERE id IN (${driveIn})`,
+  ));
+
+  // The orgs the bundle carries (Spec X-3): every org a carried drive names —
+  // `drives.orgId` is a RESTRICT FK, so the drive cannot land without it — and
+  // every org a requested user belongs to. See ./lib/org-wallet-selection.ts.
+  const organizationsData = await queryRows(db, sql.raw(
+    `SELECT * FROM organizations WHERE ${orgSelectionWhere(driveIn, userIn)} ORDER BY id`,
   ));
 
   const driveRolesData = await queryRows(db, sql.raw(
@@ -266,6 +331,13 @@ export async function exportData(
   // …and the owners of the conversations pulled in above (NOT NULL + FK'd)
   for (const conversation of conversationsData) {
     if (conversation.userId) referencedUserIds.add(conversation.userId as string);
+  }
+  // …and every carried drive's lead and org's Owner (`drives.ownerId`,
+  // `organizations.ownerId`: both NOT NULL + FK'd). An Open org drive reaches
+  // the bundle through a member's materialized row while its lead may not be
+  // migrating; without the lead's row the drive's INSERT aborts the import.
+  for (const row of [...drivesData, ...organizationsData]) {
+    referencedUserIds.add(row.ownerId as string);
   }
 
   // Fetch any additional referenced users not in original set
@@ -512,7 +584,116 @@ export async function exportData(
     `SELECT * FROM favorites WHERE "userId" IN (${userIn})`,
   ));
 
-  // 3. Build SQL
+  /**
+   * Organizations & wallets (Spec X-3). Which rows travel — a migrating org
+   * whole, a referenced org without its money, personal wallets only with
+   * their requested owner — is ./lib/org-wallet-selection.ts, shared with
+   * tenant-validate so the two cannot disagree.
+   */
+  const orgIdSet = new Set(organizationsData.map((o) => o.id as string));
+  const migratingOrgIn = toSqlInList(migratingOrgIds(
+    organizationsData.map((o) => ({ id: o.id as string, ownerId: o.ownerId as string })),
+    userIdSet,
+  ));
+  const walletCandidates = await queryRows(db, sql.raw(
+    `SELECT id, "subjectType", "subjectId", "parentWalletId" FROM wallets`
+    + ` WHERE ${walletCandidateWhere(userIn, migratingOrgIn)}`,
+  ));
+  const walletIdSet = new Set(keptWalletIds(
+    walletCandidates.map((w): WalletRef => ({
+      id: w.id as string,
+      subjectType: w.subjectType as string | null,
+      subjectId: w.subjectId as string | null,
+      parentWalletId: w.parentWalletId as string | null,
+    })),
+    { driveIds: new Set(driveIds), pageIds: pageIdSet },
+  ));
+  const orgWalletScope: OrgWalletScope = {
+    driveIn,
+    allUserIn,
+    orgIn: toSqlInList(orgIdSet),
+    migratingOrgIn,
+    walletIn: toSqlInList(walletIdSet),
+  };
+  const scopedRows = (table: ScopedOrgWalletTable, orderBy: string) => queryRows(db, sql.raw(
+    `SELECT * FROM ${table} WHERE ${orgWalletSelectionWhere(table, orgWalletScope)} ORDER BY ${orderBy}`,
+  ));
+
+  const orgMembersData = await scopedRows('org_members', 'id');
+  nullifyOrphanedUserRefs(orgMembersData, allExportedUserIdSet, 'invitedBy');
+  const orgInvitationsData = await scopedRows('org_invitations', 'id');
+  nullifyOrphanedUserRefs(orgInvitationsData, allExportedUserIdSet, 'invitedBy');
+  const orgSubscriptionsData = await scopedRows('org_subscriptions', 'id');
+  const orgSubscriptionFundingData = await scopedRows('org_subscription_funding', 'id');
+  const orgDomainsData = await scopedRows('org_domains', 'id');
+  nullifyOrphanedUserRefs(orgDomainsData, allExportedUserIdSet, 'createdBy');
+  const orgMemberDeparturesData = await scopedRows('org_member_departures', 'id');
+  const orgDepartureSuppressionsData = await scopedRows('org_departure_suppressions', 'id');
+  const orgGuestHoldsData = await scopedRows('org_guest_holds', 'id');
+  nullifyOrphanedUserRefs(orgGuestHoldsData, allExportedUserIdSet, 'requestedBy');
+  const driveJoinRequestsData = await scopedRows('drive_join_requests', 'id');
+  nullifyOrphanedUserRefs(driveJoinRequestsData, allExportedUserIdSet, 'decidedBy');
+  const walletsData = await scopedRows('wallets', 'id');
+  const walletFundingLegsData = await scopedRows('wallet_funding_legs', 'id');
+  // A donor or funding org that stays behind is dropped from the leg, never the
+  // leg itself: the money stays the wallet's, as on account deletion (X-2).
+  nullifyOrphanedUserRefs(walletFundingLegsData, allExportedUserIdSet, 'funderUserId');
+  nullifyOrphanedRefs(walletFundingLegsData, orgIdSet, 'funderOrgId');
+  const walletConsumerCapsData = await scopedRows('wallet_consumer_caps', '"walletId", "consumerKey"');
+  const walletDebtNoticesData = await scopedRows('wallet_debt_notices', '"walletId"');
+  const walletCapAlertsData = await scopedRows(
+    'wallet_cap_alerts',
+    '"walletId", "consumerKey", "capWindow", "periodStart", threshold',
+  );
+  const driveSpendOverridesData = await scopedRows('drive_spend_overrides', '"userId", "driveId"');
+  const automationSkipNoticesData = await scopedRows('automation_skip_notices', '"driveId"');
+  // SPEND-3's choice travels with a carried wallet and clears otherwise.
+  nullifyOrphanedRefs(conversationsData, walletIdSet, 'chosenWalletId');
+
+  // 3. Build SQL — one INSERT per table, in TABLE_IMPORT_ORDER, which is FK
+  // order (tenant-export-columns.test.ts derives that from the schema).
+  const rowsByTable: Record<ExportTableName, Record<string, unknown>[]> = {
+    users: usersData,
+    user_profiles: userProfilesData,
+    organizations: organizationsData,
+    drives: drivesData,
+    drive_roles: driveRolesData,
+    drive_members: driveMembersData,
+    pages: pagesData,
+    tags: tagsData,
+    agent_workspaces: agentSessionsData,
+    agent_workspace_shells: agentShellsData,
+    agent_workspace_nodes: workspaceNodesData,
+    conversations: conversationsData,
+    messages: messagesData,
+    channel_messages: channelMessagesData,
+    channel_message_reactions: channelReactionsData,
+    channel_read_status: channelReadStatusData,
+    content_tags: contentTagsData,
+    files: filesData,
+    file_pages: filePagesData,
+    page_permissions: pagePermissionsData,
+    mentions: mentionsData,
+    user_mentions: userMentionsData,
+    favorites: favoritesData,
+    org_members: orgMembersData,
+    org_invitations: orgInvitationsData,
+    org_subscriptions: orgSubscriptionsData,
+    org_subscription_funding: orgSubscriptionFundingData,
+    org_domains: orgDomainsData,
+    org_member_departures: orgMemberDeparturesData,
+    org_departure_suppressions: orgDepartureSuppressionsData,
+    org_guest_holds: orgGuestHoldsData,
+    drive_join_requests: driveJoinRequestsData,
+    wallets: walletsData,
+    wallet_funding_legs: walletFundingLegsData,
+    wallet_consumer_caps: walletConsumerCapsData,
+    wallet_debt_notices: walletDebtNoticesData,
+    wallet_cap_alerts: walletCapAlertsData,
+    drive_spend_overrides: driveSpendOverridesData,
+    automation_skip_notices: automationSkipNoticesData,
+  };
+
   const sqlParts: string[] = [
     '-- PageSpace Tenant Data Export',
     `-- Exported at: ${new Date().toISOString()}`,
@@ -520,103 +701,24 @@ export async function exportData(
     '',
     'BEGIN;',
     '',
-    buildInsert('users', cols('users'), usersData),
-    buildInsert('user_profiles', cols('user_profiles'), userProfilesData),
-    buildInsert('drives', cols('drives'), drivesData),
-    buildInsert('drive_roles', cols('drive_roles'), driveRolesData),
-    buildInsert('drive_members', cols('drive_members'), driveMembersData),
-    buildInsert('pages', cols('pages'), pagesData),
+  ];
+  for (const table of TABLE_IMPORT_ORDER) {
+    sqlParts.push(buildInsert(table, cols(table), rowsByTable[table], CONFLICT_TARGETS[table]));
     // `drives` and `pages` reference each other, so neither insert can carry
     // its forward FK. The drive's page pointers (`homePageId`,
     // `not_found_page_id`) are set here, once the pages exist.
-    buildDeferredUpdate('drives', deferredColumns('drives'), drivesData),
-    buildInsert('tags', cols('tags'), tagsData),
-    // `agent_workspaces` sits with `conversations` and before it by convention
-    // rather than by an FK now — nothing on a conversation row references a
-    // session. A session row still needs its drive and owner, both above.
-    buildInsert('agent_workspaces', cols('agent_workspaces'), agentSessionsData),
-    // Both of this table's FKs (`workspaceId`, `ownerId`) are NOT NULL, so it
-    // must follow `agent_workspaces` and `users`. It does NOT have to precede
-    // `conversations` — nothing references a shell — but it sits with its
-    // parent to keep the session's rows together.
-    buildInsert('agent_workspace_shells', cols('agent_workspace_shells'), agentShellsData),
-    /**
-     * The session's tree, after the session its `rootId` FKs. Nothing else
-     * constrains its position: `targetId` carries no foreign key, so it does
-     * not have to follow `conversations` or `pages`.
-     *
-     * THE CONFLICT TARGET IS THE PRIMARY KEY, AND IT IS LOAD-BEARING. This
-     * table's `UNIQUE (targetId) WHERE targetKind = 'chat'` is GLOBAL — a
-     * conversation is bound to at most one node anywhere — so a destination
-     * that already holds one of these threads makes the incoming node a
-     * duplicate key. Under the bundle's usual untargeted `ON CONFLICT DO
-     * NOTHING`, Postgres forgives ANY unique violation, and the node would be
-     * skipped in silence: the import reports success and one thread is missing
-     * from the workspace it belongs to, which is the exact failure mode this
-     * table was carried to prevent. Naming `("rootId", "id")` makes the primary
-     * key the only forgiven conflict — a re-imported bundle is still a no-op —
-     * and a collision on the chat index raises, aborting the single
-     * BEGIN/COMMIT the whole bundle replays in. The import fails loudly with
-     * the constraint name, nothing lands, and the operator resolves a real
-     * conflict between two databases rather than discovering it months later
-     * as a thread that is simply not there.
-     */
-    buildInsert(
-      'agent_workspace_nodes',
-      cols('agent_workspace_nodes'),
-      workspaceNodesData,
-      ['rootId', 'id'],
-    ),
-    // `conversations` MUST precede `messages`: the latter has a real
-    // (non-deferrable) FK onto the former, and the whole bundle replays inside
-    // one BEGIN/COMMIT, so an out-of-order INSERT aborts the entire import.
-    // Insert order in this list is FK order, not table-name order.
-    buildInsert('conversations', cols('conversations'), conversationsData),
-    buildInsert('messages', cols('messages'), messagesData),
-    buildInsert('channel_messages', cols('channel_messages'), channelMessagesData),
-    buildInsert('channel_message_reactions', cols('channel_message_reactions'), channelReactionsData),
-    buildInsert('channel_read_status', cols('channel_read_status'), channelReadStatusData),
-    // After BOTH message tables, not beside `tags`: a row's FK may point at
-    // either one, so it cannot be inserted until both exist.
-    buildInsert('content_tags', cols('content_tags'), contentTagsData),
-    buildInsert('files', cols('files'), filesData),
-    buildInsert('file_pages', cols('file_pages'), filePagesData),
-    buildInsert('page_permissions', cols('page_permissions'), pagePermissionsData),
-    buildInsert('mentions', cols('mentions'), mentionsData),
-    buildInsert('user_mentions', cols('user_mentions'), userMentionsData),
-    buildInsert('favorites', cols('favorites'), favoritesData),
-    '',
-    'COMMIT;',
-    '',
-  ];
+    if (table === 'pages') {
+      sqlParts.push(buildDeferredUpdate('drives', deferredColumns('drives'), drivesData));
+    }
+  }
+  sqlParts.push('', 'COMMIT;', '');
 
   const sqlContent = sqlParts.filter(Boolean).join('\n');
 
   // 4. Build manifest
-  const tableCounts: ManifestTableCounts = {
-    users: usersData.length,
-    userProfiles: userProfilesData.length,
-    drives: drivesData.length,
-    driveRoles: driveRolesData.length,
-    driveMembers: driveMembersData.length,
-    pages: pagesData.length,
-    channelMessages: channelMessagesData.length,
-    channelMessageReactions: channelReactionsData.length,
-    channelReadStatus: channelReadStatusData.length,
-    agentWorkspaces: agentSessionsData.length,
-    agentWorkspaceShells: agentShellsData.length,
-    agentWorkspaceNodes: workspaceNodesData.length,
-    conversations: conversationsData.length,
-    messages: messagesData.length,
-    files: filesData.length,
-    filePages: filePagesData.length,
-    pagePermissions: pagePermissionsData.length,
-    tags: tagsData.length,
-    contentTags: contentTagsData.length,
-    mentions: mentionsData.length,
-    userMentions: userMentionsData.length,
-    favorites: favoritesData.length,
-  };
+  const tableCounts = Object.fromEntries(
+    TABLE_IMPORT_ORDER.map((table) => [manifestKey(table), rowsByTable[table].length]),
+  ) as ManifestTableCounts;
 
   // 5. Copy file blobs and compute checksums
   const fileChecksums = [];

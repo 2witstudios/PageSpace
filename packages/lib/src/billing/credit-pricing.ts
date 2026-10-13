@@ -16,7 +16,7 @@ import { envBool, envFloat, envInt } from './env-parse';
  * Markup applied to real provider cost, in basis points. Defined ONCE in
  * money-model (MON-1); re-exported here for the existing import sites.
  */
-export { MARKUP_BPS } from './money-model';
+export { MARKUP_BPS, MACHINE_MARKUP_BPS, MACHINE_MARKUP_FLOOR_BPS } from './money-model';
 
 /**
  * Discount factor (basis points of the input rate) applied to CACHED input tokens in
@@ -258,33 +258,6 @@ export const MACHINE_HOLD_ESTIMATE_CENTS = envInt('MACHINE_HOLD_ESTIMATE_CENTS',
  */
 export const MACHINE_MAX_INFLIGHT = envInt('MACHINE_MAX_INFLIGHT', 50);
 
-/**
- * Absolute floor for {@link MACHINE_MARKUP_BPS} — 15000bps (1.5x). The whole
- * point of that constant is to GUARANTEE Machine billing never falls below
- * 1.5x real substrate cost, independent of {@link MARKUP_BPS}; an env
- * misconfiguration (typo, someone mirroring a reduced AI markup) must not be
- * able to silently violate that guarantee. Only a value BELOW this floor is
- * clamped up — a deliberately higher markup passes through unclamped, since
- * there is no stated ceiling.
- */
-export const MACHINE_MARKUP_FLOOR_BPS = 15000;
-
-/**
- * Markup applied to Machine substrate cost, in basis points — the
- * founder-set floor of 1.5× real substrate cost. Deliberately a SEPARATE env
- * var and constant from {@link MARKUP_BPS} (not derived from it): AI-model
- * pricing and substrate-runtime pricing are different economics that may
- * diverge, so lowering `CREDIT_MARKUP_BPS` for AI billing must never silently
- * lower what a Machine is charged. Threaded into `consumeCredits` via
- * `markupBpsOverride` (see machine-billing.ts's `trackUsage`) so the real
- * settle path enforces this floor independent of the shared default. Clamped
- * to {@link MACHINE_MARKUP_FLOOR_BPS} so a misconfigured env var can raise
- * the markup but never lower it below the documented floor.
- */
-export const MACHINE_MARKUP_BPS = Math.max(
-  envInt('MACHINE_MARKUP_BPS', MACHINE_MARKUP_FLOOR_BPS),
-  MACHINE_MARKUP_FLOOR_BPS,
-);
 
 /**
  * Published Sprites rates, in USD per resource-hour (tasks/terminal.md: active
@@ -490,7 +463,7 @@ export function openRouterBaseUrl(): string {
  * Tolerance (whole cents) for the account-level balance-drift detector: a user's
  * materialized buckets may diverge from the ledger-implied amount beyond this before the
  * admin panel flags them. Generous because monthly resets / debt-forgiveness legitimately
- * break exact reconciliation (see computeBalanceDrift). Default 10¢.
+ * break exact reconciliation (see wallet-ledger-core computeWalletDrift). Default 10¢.
  */
 export const BALANCE_DRIFT_TOLERANCE_CENTS = envInt('BALANCE_DRIFT_TOLERANCE_CENTS', 10);
 

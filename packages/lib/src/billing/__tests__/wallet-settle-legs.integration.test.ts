@@ -18,7 +18,7 @@
 import { describe, it, expect, beforeAll, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import { createId } from '@paralleldrive/cuid2';
 import { db, pool } from '@pagespace/db/db';
-import { eq, inArray, asc, sql } from '@pagespace/db/operators';
+import { and, eq, inArray, asc, sql } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { drives } from '@pagespace/db/schema/core';
 import { creditHolds, creditLedger } from '@pagespace/db/schema/credits';
@@ -289,6 +289,9 @@ describe('a drive-wallet settle and the funding legs (real Postgres)', () => {
 
     expect(await refundFundingLeg(world.ownerLegId, 350)).toMatchObject({ kind: 'refund', cents: 350, remainingCents: 0 });
     expect(await legInvariant(world.driveWalletId)).toEqual({ topupRemainingCents: 0, legsTotal: 0 });
+    // WAL-5: the money that left the wallet is a row on it, exactly once (the refused request wrote none).
+    const refunds = await db.select().from(creditLedger).where(and(eq(creditLedger.walletId, world.driveWalletId), eq(creditLedger.entryType, 'leg_refund')));
+    expect(refunds.map((r) => r.amountCents)).toEqual([-350]);
   });
 
   it('WAL-5 (partial) a settle that names no wallet settles on the wallet its hold was placed on, never the personal root', async () => {

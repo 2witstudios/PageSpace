@@ -6,6 +6,7 @@ import { pagePermissions } from '@pagespace/db/schema/members';
 import { decryptUserRow } from '@pagespace/lib/auth/user-repository';
 import { getUserAccessLevel, isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
 import { listDriveRoles, getRoleById, updateDriveRole } from '@pagespace/lib/services/drive-role-service';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 /**
  * User info for permission display
@@ -69,16 +70,16 @@ export const permissionManagementService = {
   /**
    * Check if user can view the permission list for a page
    */
-  async canUserViewPermissions(userId: string, pageId: string): Promise<boolean> {
-    const accessLevel = await getUserAccessLevel(userId, pageId);
+  async canUserViewPermissions(actor: AccessActor, pageId: string): Promise<boolean> {
+    const accessLevel = await getUserAccessLevel(actor, pageId);
     return accessLevel?.canShare || false;
   },
 
   /**
    * Check if user can manage (grant/revoke) permissions for a page
    */
-  async canUserManagePermissions(userId: string, pageId: string): Promise<boolean> {
-    const accessLevel = await getUserAccessLevel(userId, pageId);
+  async canUserManagePermissions(actor: AccessActor, pageId: string): Promise<boolean> {
+    const accessLevel = await getUserAccessLevel(actor, pageId);
     if (accessLevel?.canShare) return true;
 
     // Check if owner or admin
@@ -90,7 +91,7 @@ export const permissionManagementService = {
     if (!page?.drive) return false;
 
     // Owner or ACCEPTED admin — a pending ADMIN invite grants nothing.
-    return isDriveOwnerOrAdmin(userId, page.drive.id);
+    return isDriveOwnerOrAdmin(actor, page.drive.id);
   },
 
   /**
@@ -215,7 +216,7 @@ export const rolePermissionService = {
   },
 
   async setRolePagePermission(
-    actorUserId: string,
+    actor: AccessActor,
     pageId: string,
     roleId: string,
     permissions: RolePermissionFlags,
@@ -224,7 +225,7 @@ export const rolePermissionService = {
       return { success: false, error: 'canView must be true when canEdit or canShare is set', status: 400 };
     }
 
-    const canManage = await permissionManagementService.canUserManagePermissions(actorUserId, pageId);
+    const canManage = await permissionManagementService.canUserManagePermissions(actor, pageId);
     if (!canManage) return { success: false, error: 'Insufficient permissions', status: 403 };
 
     const page = await db.query.pages.findFirst({
@@ -253,11 +254,11 @@ export const rolePermissionService = {
   },
 
   async removeRolePagePermission(
-    actorUserId: string,
+    actor: AccessActor,
     pageId: string,
     roleId: string,
   ): Promise<RolePermResult> {
-    const canManage = await permissionManagementService.canUserManagePermissions(actorUserId, pageId);
+    const canManage = await permissionManagementService.canUserManagePermissions(actor, pageId);
     if (!canManage) return { success: false, error: 'Insufficient permissions', status: 403 };
 
     const page = await db.query.pages.findFirst({

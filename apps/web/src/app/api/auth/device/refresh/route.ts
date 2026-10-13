@@ -1,3 +1,4 @@
+import { parseVerifiedAuthentication } from '@pagespace/lib/auth/authentication-evidence';
 import { z } from 'zod/v4';
 import { atomicDeviceTokenRotation, type DeviceRotationResult } from '@pagespace/db/transactions/auth-transactions';
 import { authRepository } from '@/lib/repositories/auth-repository';
@@ -197,6 +198,10 @@ export async function POST(req: Request) {
     // Web platform: Create session and set cookie (no JWT tokens in response)
     if (deviceRecord.platform === 'web') {
       const sessionToken = await sessionService.createSession({
+      authentication: parseVerifiedAuthentication({
+        authenticatedAtMs: deviceRecord.authenticatedAt?.getTime(),
+        assurance: deviceRecord.authenticationAssurance,
+      }, Date.now()),
         userId: user.id,
         type: 'user',
         scopes: ['*'],
@@ -232,6 +237,10 @@ export async function POST(req: Request) {
 
     // Mobile/desktop: Return session token in JSON (no refresh token - devices use device tokens)
     const sessionToken = await sessionService.createSession({
+      authentication: parseVerifiedAuthentication({
+        authenticatedAtMs: deviceRecord.authenticatedAt?.getTime(),
+        assurance: deviceRecord.authenticationAssurance,
+      }, Date.now()),
       userId: user.id,
       type: 'user',
       scopes: ['*'],

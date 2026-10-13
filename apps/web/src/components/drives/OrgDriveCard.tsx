@@ -185,6 +185,9 @@ function OrgOwnedCard({ drive, org, leadName, onChanged }: { drive: Drive; org: 
                   <DialogTitle>Move {drive.name} out of {org.name}?</DialogTitle>
                   <DialogDescription>Org members who reach it only because it is Open lose access unless you keep them as invited members.</DialogDescription>
                 </DialogHeader>
+                <p className="text-sm text-muted-foreground" data-testid="org-move-out-wallet-note">
+                  Its wallet moves with it to the lead: the top-ups and donations it holds, including credits {org.name} added, travel with the drive. Its monthly allocation from {org.name} ends; the lead sets a new one.
+                </p>
                 {moveOutError ? <p role="alert" className="text-sm text-destructive">{moveOutError}</p> : null}
                 <DialogFooter className="gap-2">
                   <Button variant="outline" disabled={pending} onClick={() => void moveOut('remove')}>
@@ -225,7 +228,7 @@ function MoveInCard({ drive, organizations, onChanged }: { drive: Drive; organiz
       <CardHeader>
         <CardTitle>Organization</CardTitle>
         <CardDescription>
-          {drive.name} belongs to you. Move it into an organization so the org pays for it and its rules apply. Members, roles, pages and publishing stay as they are; you stay its lead.
+          {drive.name} belongs to you. Move it into an organization so the org pays for it and its rules apply. Members, roles, pages and publishing stay as they are; you stay its lead. Its wallet moves too: the top-ups and donations it holds travel with the drive, and the organization sets its monthly allocation.
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-3 sm:flex-row sm:items-center">

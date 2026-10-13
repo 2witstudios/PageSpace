@@ -35,11 +35,8 @@ function perTier<T>(f: (tier: SubscriptionTier) => T): Record<SubscriptionTier, 
  *
  * D-OW-17: correct EVERYWHERE, unconditionally — a build-time prerender, a
  * per-request server render, and a "use client" browser bundle all compile this
- * module from the same source at the same commit, so they all embed the same
- * `MONEY_MODEL_V2_ACTIVE` literal. There is no env var to read differently per
- * process and no client/server asymmetry left to patch around; see money-model.ts's
- * module doc comment for why earlier revisions of this fix (a server env var, then a
- * `NEXT_PUBLIC_` mirror, then a server-computed patch) each failed to guarantee that.
+ * module from the same source, and the ratio is a literal in money-model, never an
+ * env var read differently per process.
  *
  * `apps/web/src/lib/subscription/plans.ts`'s `withCreditOverrides` (and the
  * `*ForCents` functions below it calls) still exist and are still correct to use —
@@ -105,8 +102,7 @@ export function includedCreditsPhraseForCents(tier: SubscriptionTier, cents: num
 /**
  * MON-6: the plan card's "included credits" fact — an integer credit COUNT, never a
  * dollar figure. "900 credits included each month" for refilling paid tiers, "500
- * credits to start" for the free tier's one-time grant. Sized by money-model, so
- * flipping `MONEY_MODEL_V2_ACTIVE` (a commit, D-OW-17) flips this copy everywhere.
+ * credits to start" for the free tier's one-time grant. Sized by money-model.
  */
 export function includedCreditsPhrase(tier: SubscriptionTier): string {
   return includedCreditsPhraseForCents(tier, MONTHLY_CREDIT_CENTS[tier]);
@@ -159,7 +155,7 @@ export interface PlanFacts {
   price: string;
   /** "/month" for a paid tier, null for free. */
   period: string | null;
-  /** MON-6 second fact: "1,500 credits included each month" / "500 credits to start". */
+  /** MON-6 second fact: "900 credits included each month" / "500 credits to start". */
   includedCredits: string;
   /** MON-6 third fact: "1,000 credits per $10". */
   topUpRate: string;
@@ -168,10 +164,9 @@ export interface PlanFacts {
 
 /**
  * MON-6 / SEAT-2 / UI-12: the plan-card facts for `tier`, every number derived from
- * the tier table and money-model. `active` defaults to the committed ratio constant
- * (D-OW-17); tests pass it to render both sides of the migration-day flip.
+ * the tier table and money-model.
  */
-export function planFacts(tier: SubscriptionTier, active?: boolean): PlanFacts {
+export function planFacts(tier: SubscriptionTier): PlanFacts {
   const limits = TIER_PLAN_LIMITS[tier];
   const priceCents = tierListPriceCents(tier);
   return {
@@ -180,16 +175,16 @@ export function planFacts(tier: SubscriptionTier, active?: boolean): PlanFacts {
     priceCents,
     price: formatDollars(priceCents),
     period: priceCents > 0 ? '/month' : null,
-    includedCredits: includedCreditsPhraseForCents(tier, tierAllowanceCents(tier, active)),
+    includedCredits: includedCreditsPhraseForCents(tier, tierAllowanceCents(tier)),
     topUpRate: topUpRatePhrase(),
-    org: limits.isOrgPlan ? orgPlanFacts(tier, active) : null,
+    org: limits.isOrgPlan ? orgPlanFacts(tier) : null,
   };
 }
 
-function orgPlanFacts(tier: SubscriptionTier, active?: boolean): OrgPlanFacts {
+function orgPlanFacts(tier: SubscriptionTier): OrgPlanFacts {
   const limits = TIER_PLAN_LIMITS[tier];
   const extraSeatPriceCents = centsFromDollars(limits.extraSeatUsd);
-  const seatCredits = formatCreditCount(allowanceCentsForPaidCents(extraSeatPriceCents, tier, active));
+  const seatCredits = formatCreditCount(allowanceCentsForPaidCents(extraSeatPriceCents, tier));
   return {
     includedSeats: limits.includedSeats,
     extraSeatPriceCents,

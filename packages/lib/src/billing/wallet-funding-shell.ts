@@ -36,10 +36,12 @@ import { subscriptions } from '@pagespace/db/schema/subscriptions';
 import { and, asc, eq, gt, inArray, isNotNull, isNull, lte, or, lt, sql } from '@pagespace/db/operators';
 import { alias } from 'drizzle-orm/pg-core';
 import { isBillingEnabled } from '../deployment-mode';
-import { getUserDriveAccess } from '../permissions/permissions';
+import { holdsDriveAccess } from '../permissions/permissions';
 import { loggers } from '../logging/logger-config';
-import { MONEY_MODEL_V2_ACTIVE, tierAllowanceCents } from './money-model';
-import { computeMonthlyRefill } from './credit-core';
+import { tierAllowanceCents } from './money-model';
+import { orgBillingLockKey } from './org-subscription-core';
+import { computeMonthlyRefill, forgivenAtRefillCents } from './credit-core';
+import { debtClearedRow, ALLOCATION_RESET_ENTRY, DEBT_FORGIVEN_ENTRY, LEG_REFUND_ENTRY } from './wallet-ledger-core';
 import { RENEWAL_CAPABLE_STATUSES, TIER_ALLOWANCE_REFILLS } from './credit-pricing';
 import {
   orgInvoiceFundingInput,
@@ -56,7 +58,7 @@ import {
   type OrgInvoice,
   type LegRefundPlan,
 } from './wallet-funding';
-import { recordOrgAuditEventAfterCommit } from '../audit/org-audit';
+import { transactionWithOrgAudit, type OrgAuditEvent, type StageOrgAudit } from '../audit/org-audit';
 import { announceOrgChange } from '../organizations/org-change-events';
 import { drives } from '@pagespace/db/schema/core';
 
@@ -102,8 +104,6 @@ function customerIdOf(invoice: OrgInvoice): string | null {
 }
 
 export interface OrgPoolRefillOptions {
-  /** Extra seats on the subscription, for a gift funded at list price ([D-OW-23]). */
-  extraSeats?: number;
   /**
    * MON-3: the configured org plan price ids (stripe-config orgPriceIds) — the Business
    * base and the extra-seat item. Only lines on these prices refill the pool;
@@ -111,8 +111,6 @@ export interface OrgPoolRefillOptions {
    */
   basePriceId?: string;
   seatPriceId?: string;
-  /** D-OW-17 test seam only; production callers never pass it. */
-  active?: boolean;
 }
 
 /**
@@ -145,19 +143,28 @@ export async function applyOrgPoolRefill(invoice: OrgInvoice, opts: OrgPoolRefil
     throw new Error(`org pool refill requires every line of invoice ${stripeRef}; expand the invoice before funding`);
   }
 
-  // The gift gate requires the invoice to belong to the org's own subscription.
-  const [stored] = await db
-    .select({ stripeSubscriptionId: orgSubscriptions.stripeSubscriptionId })
-    .from(orgSubscriptions)
-    .where(eq(orgSubscriptions.orgId, org.id))
-    .limit(1);
+  // The gift gate requires the invoice to belong to the org's own subscription, and a gift is
+  // sized from the seats the admin pinned (D-OW-54). Read under the org's billing lock, so a
+  // gift being written right now (org-gift holds the lock across its Stripe writes) is seen
+  // committed, never half-applied.
+  const [stored] = await db.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${orgBillingLockKey(org.id)}, 0))`);
+    return tx
+      .select({
+        stripeSubscriptionId: orgSubscriptions.stripeSubscriptionId,
+        giftedExtraSeats: orgSubscriptions.giftedExtraSeats,
+      })
+      .from(orgSubscriptions)
+      .where(eq(orgSubscriptions.orgId, org.id))
+      .limit(1);
+  });
   // MON-3: the pool refills only from the Business base and extra-seat lines. An ad-hoc
   // invoice item (or any line on an unrecognized price) is excluded and logged with its
   // price id and amount, so a misconfiguration is visible instead of silently funding the pool.
   const { input: grantInput, unrecognized } = orgInvoiceFundingInput(invoice, {
     prices: { basePriceId: opts.basePriceId, seatPriceId: opts.seatPriceId },
     storedSubscriptionId: stored?.stripeSubscriptionId ?? null,
-    extraSeats: opts.extraSeats,
+    giftedExtraSeats: stored?.giftedExtraSeats ?? null,
   });
   for (const line of unrecognized) {
     loggers.api.warn('org pool refill: invoice line is not the Business base or an extra-seat item; excluded', {
@@ -169,29 +176,31 @@ export async function applyOrgPoolRefill(invoice: OrgInvoice, opts: OrgPoolRefil
     });
   }
 
-  const grant = orgPoolRefillGrant(grantInput, opts.active ?? MONEY_MODEL_V2_ACTIVE);
+  const grant = orgPoolRefillGrant(grantInput);
   const basis = orgSubscriptionFundingBasis(grantInput);
   const stripeSubscriptionId = orgInvoiceSubscriptionId(invoice);
-  const recordFunding = async (tx: Tx): Promise<boolean> => {
+  // AUD-1: verified funding is a billing event, staged with the funding row it records.
+  const recordFunding = async (tx: Tx, audit: StageOrgAudit): Promise<boolean> => {
     if (!basis || !stripeSubscriptionId) return false;
     const inserted = await tx.insert(orgSubscriptionFunding).values({
       orgId: org.id, stripeSubscriptionId, stripeInvoiceId: stripeRef, basis, paidCents: grant.paidCents,
     }).onConflictDoNothing().returning({ id: orgSubscriptionFunding.id });
-    return inserted.length > 0;
-  };
-  const announceFunding = async (recorded: boolean): Promise<void> => {
-    if (!recorded) return;
-    await recordOrgAuditEventAfterCommit({
+    if (inserted.length === 0) return false;
+    await audit({
       orgId: org.id, eventType: 'org.billing.subscription_changed', resourceType: 'org_subscription', resourceId: org.id,
       details: { source: 'verified_funding', stripeSubscriptionId, invoiceId: stripeRef, basis, paidCents: grant.paidCents },
     });
-    void announceOrgChange(org.id, 'status');
+    return true;
+  };
+  const announceFunding = (recorded: boolean): void => {
+    if (recorded) void announceOrgChange(org.id, 'status');
   };
   if (grant.allowanceCents <= 0) {
-    await announceFunding(await db.transaction(recordFunding));
+    announceFunding(await transactionWithOrgAudit(recordFunding));
     if (grant.reason === 'gift_not_org_subscription') {
-      // An operator gifted a subscription the org never mirrors: no credit lands in a pool the org
-      // cannot spend. Fix it by applying the gift coupon to the org's own subscription (runbook).
+      // A gift on a subscription the org never mirrors: no credit lands in a pool the org cannot
+      // spend. Gift an org only through the admin route (POST /api/admin/orgs/[orgId]/gift-subscription,
+      // lib billing/org-gift), which writes the gift ON the org's own stored subscription.
       loggers.api.error('org pool refill REFUSED: gift invoice is not on the org\'s own subscription', undefined, {
         orgId: org.id,
         stripeRef,
@@ -205,7 +214,7 @@ export async function applyOrgPoolRefill(invoice: OrgInvoice, opts: OrgPoolRefil
   // no more move the pool's reset date than its amount may fund the pool.
   const period = invoiceServicePeriodMs({ lines: grantInput.lines, periodStart: invoice.period_start, periodEnd: invoice.period_end });
 
-  const result = await db.transaction(async (tx) => {
+  const result = await transactionWithOrgAudit(async (tx, audit) => {
     await tx.insert(wallets).values({ ownerType: 'org', orgId: org.id }).onConflictDoNothing(ORG_POOL_ARBITER);
     const [pool] = await tx
       .select({
@@ -220,7 +229,7 @@ export async function applyOrgPoolRefill(invoice: OrgInvoice, opts: OrgPoolRefil
       .limit(1);
     if (!pool) throw new Error(`org pool for ${org.id} could not be found or created`);
 
-    const fundingRecorded = await recordFunding(tx);
+    const fundingRecorded = await recordFunding(tx, audit);
     const inserted = await tx
       .insert(creditLedger)
       .values({
@@ -238,6 +247,9 @@ export async function applyOrgPoolRefill(invoice: OrgInvoice, opts: OrgPoolRefil
     if (inserted.length === 0) return { kind: 'duplicate' as const, walletId: pool.id, fundingRecorded };
 
     const refill = refillPool(pool, grant.allowanceCents);
+    // WAL-5: debt the clamp forgives is a balance change, so it is a row in this transaction.
+    const forgiven = debtClearedRow({ entryType: DEBT_FORGIVEN_ENTRY, userId: org.ownerId, walletId: pool.id, clearedCents: forgivenAtRefillCents(grant.allowanceCents, pool.monthlyRemainingCents, pool.debtCents) });
+    if (forgiven) await tx.insert(creditLedger).values(forgiven);
     // Stripe does not order invoice.paid deliveries: an older invoice settled late
     // (dunning) still refills once, but it must never move the pool's period — the
     // date its org allocations reset on — backwards.
@@ -261,20 +273,20 @@ export async function applyOrgPoolRefill(invoice: OrgInvoice, opts: OrgPoolRefil
           : {}),
       })
       .where(eq(wallets.id, pool.id));
+    // AUD-1: a billing event, with the refill. Once per invoice: a redelivery is a duplicate above and writes nothing.
+    await audit({
+      orgId: org.id,
+      eventType: 'org.billing.pool_refilled',
+      resourceType: 'wallet',
+      resourceId: pool.id,
+      details: { invoiceId: stripeRef, allowanceCents: grant.allowanceCents, paidCents: grant.paidCents, basis: grant.basis },
+    });
     return { kind: 'granted' as const, walletId: pool.id, fundingRecorded };
   });
 
-  await announceFunding(result.fundingRecorded);
+  announceFunding(result.fundingRecorded);
   if (result.kind === 'duplicate') return { kind: 'duplicate', orgId: org.id };
   loggers.api.info('org pool refill applied', { orgId: org.id, stripeRef, allowanceCents: grant.allowanceCents, basis: grant.basis });
-  // AUD-1: a billing event. Once per invoice: a redelivery is a duplicate above and writes nothing.
-  await recordOrgAuditEventAfterCommit({
-    orgId: org.id,
-    eventType: 'org.billing.pool_refilled',
-    resourceType: 'wallet',
-    resourceId: result.walletId,
-    details: { invoiceId: stripeRef, allowanceCents: grant.allowanceCents, paidCents: grant.paidCents, basis: grant.basis },
-  });
   return { kind: 'granted', orgId: org.id, walletId: result.walletId, allowanceCents: grant.allowanceCents };
 }
 
@@ -482,6 +494,14 @@ async function rollOneRoot(userId: string, now: Date): Promise<boolean> {
       .onConflictDoNothing(STRIPE_REF_ARBITER)
       .returning({ id: creditLedger.id });
     if (claimed.length === 0) return false;
+    // WAL-5: debt the clamp forgives is a balance change, so it is a row in this transaction.
+    const forgiven = debtClearedRow({
+      entryType: DEBT_FORGIVEN_ENTRY,
+      userId,
+      walletId: locked.id,
+      clearedCents: forgivenAtRefillCents(tierAllowanceCents(tier), locked.monthlyRemainingCents ?? 0, locked.debtCents ?? 0),
+    });
+    if (forgiven) await tx.insert(creditLedger).values(forgiven);
     await tx
       .update(wallets)
       .set({
@@ -510,6 +530,8 @@ async function resetOne(
         spentCents: wallets.spentCents,
         debtCents: wallets.debtCents,
         status: wallets.status,
+        userId: wallets.userId,
+        orgId: wallets.orgId,
       })
       .from(wallets)
       .where(eq(wallets.id, walletId))
@@ -540,7 +562,18 @@ async function resetOne(
       })
       .where(and(eq(wallets.id, walletId), or(isNull(wallets.monthlyPeriodStart), lt(wallets.monthlyPeriodStart, newStart))))
       .returning({ id: wallets.id });
-    return updated.length > 0;
+    if (updated.length === 0) return false;
+    // WAL-5 / WAL-6d: the wallet's debt netted from its new allocation clears with no payment, a
+    // balance change recorded in this transaction (under the wallet's person, else its org's owner).
+    const cleared = Math.max(0, locked.debtCents) - Math.max(0, plan.debtCents);
+    if (cleared > 0) {
+      const ownerId = locked.userId
+        ?? (locked.orgId ? (await tx.select({ ownerId: organizations.ownerId }).from(organizations).where(eq(organizations.id, locked.orgId)))[0]?.ownerId : undefined);
+      const row = ownerId ? debtClearedRow({ entryType: ALLOCATION_RESET_ENTRY, userId: ownerId, walletId, clearedCents: cleared }) : null;
+      if (row) await tx.insert(creditLedger).values(row);
+      else loggers.api.error('allocation reset cleared debt on a wallet with no owner to record it under', new Error('no owner'), { walletId, cleared });
+    }
+    return true;
   });
 }
 
@@ -587,6 +620,17 @@ export async function refundFundingLeg(legId: string, cents: number): Promise<Le
       .update(wallets)
       .set({ topupRemainingCents: sql`${wallets.topupRemainingCents} - ${plan.cents}` })
       .where(eq(wallets.id, row.walletId));
+    // WAL-5: money leaving the wallet for a refund is a row in this transaction, under its funder
+    // (else the wallet's person, else its org's owner).
+    const [walletOwner] = await tx.select({ userId: wallets.userId, orgId: wallets.orgId }).from(wallets).where(eq(wallets.id, row.walletId));
+    const recordedUnder = row.funderUserId
+      ?? walletOwner?.userId
+      ?? (walletOwner?.orgId ? (await tx.select({ ownerId: organizations.ownerId }).from(organizations).where(eq(organizations.id, walletOwner.orgId)))[0]?.ownerId : undefined);
+    if (recordedUnder) {
+      await tx.insert(creditLedger).values({ userId: recordedUnder, walletId: row.walletId, entryType: LEG_REFUND_ENTRY, bucket: 'topup', amountCents: -plan.cents, appliedCents: -plan.cents, consumeStatus: 'applied' });
+    } else {
+      loggers.api.error('funding-leg refund on a wallet with no owner to record it under', new Error('no owner'), { walletId: row.walletId, legId });
+    }
     return plan;
   });
 }
@@ -596,7 +640,7 @@ export async function refundFundingLeg(legId: string, cents: number): Promise<Le
 // ---------------------------------------------------------------------------
 
 export type DonationOutcome =
-  | { kind: 'donated'; legId: string; amountCents: number; paidDebtCents: number }
+  | { kind: 'donated'; legId: string; amountCents: number }
   | { kind: 'duplicate'; legId: string | null }
   | { kind: 'refused'; reason: DonationRefusal | 'wallet_not_found' | 'billing_disabled' | 'drive_moved' };
 
@@ -614,12 +658,14 @@ export interface DonateInput {
   expectedDrive?: { driveId: string; orgId: string | null };
   /** Test seam: runs inside the transaction once the drive row is held. */
   afterDriveLock?: () => Promise<void>;
+  /** AUD-1: the org events of a donation that landed, staged in the donation's own transaction. */
+  auditEvents?: (donated: { legId: string; amountCents: number }) => OrgAuditEvent[];
 }
 
 /**
  * WAL-4: donate a one-off amount from the donor's personal root wallet to a drive
  * wallet. The drive-visibility decision goes through the permissions module
- * (getUserDriveAccess) before anything is locked. In one transaction: the donor wallet
+ * (holdsDriveAccess) before anything is locked. In one transaction: the donor wallet
  * and the target wallet are locked (drive wallet first, then the donor root: the global order), the
  * plan is made from the locked rows, a non-refundable donation leg is written (its
  * sourceRef makes a replay a no-op), both balances move, and a ledger pair records the
@@ -635,11 +681,11 @@ export async function donateToDriveWallet(input: DonateInput): Promise<DonationO
   if (!target) return { kind: 'refused', reason: 'wallet_not_found' };
   const donorCanSeeDrive =
     target.subjectType === 'drive' && target.subjectId !== null
-      ? await getUserDriveAccess(input.donorUserId, target.subjectId)
+      ? await holdsDriveAccess(input.donorUserId, target.subjectId)
       : false;
 
   const sourceRef = `donation:${input.donationId}`;
-  return db.transaction(async (tx): Promise<DonationOutcome> => {
+  return transactionWithOrgAudit(async (tx, audit): Promise<DonationOutcome> => {
     if (input.expectedDrive) {
       // Before any wallet row: the drive row, then wallets, the order a move takes them in.
       const [drive] = await tx.select({ orgId: drives.orgId }).from(drives).where(eq(drives.id, input.expectedDrive.driveId)).for('share');
@@ -691,7 +737,6 @@ export async function donateToDriveWallet(input: DonateInput): Promise<DonationO
         subjectType: drive.subjectType,
         donationsEnabled: drive.donationsEnabled,
         legsRemainingCents: drive.topupRemainingCents,
-        debtCents: drive.debtCents,
       },
     });
     if (plan.kind === 'refuse') return { kind: 'refused', reason: plan.reason };
@@ -724,11 +769,7 @@ export async function donateToDriveWallet(input: DonateInput): Promise<DonationO
       .where(eq(wallets.id, donor.id));
     await tx
       .update(wallets)
-      .set({
-        topupRemainingCents: plan.target.topupRemainingCents,
-        debtCents: plan.target.debtCents,
-        ...(drive.status === 'over' && plan.target.debtCents === 0 ? { status: 'active' as const } : {}),
-      })
+      .set({ topupRemainingCents: plan.target.topupRemainingCents })
       .where(eq(wallets.id, drive.id));
 
     await tx.insert(creditLedger).values([
@@ -754,6 +795,9 @@ export async function donateToDriveWallet(input: DonateInput): Promise<DonationO
       },
     ]);
 
-    return { kind: 'donated', legId: leg[0].id, amountCents: plan.amountCents, paidDebtCents: plan.target.paidDebtCents };
+    // [D-OW-60] a donation is kept whole as the donor's gift: it pays no debt, so its event names none.
+    const donated = { legId: leg[0].id, amountCents: plan.amountCents };
+    await audit(...(input.auditEvents?.(donated) ?? []));
+    return { kind: 'donated', ...donated };
   });
 }

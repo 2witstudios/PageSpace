@@ -15,7 +15,6 @@ import { customDomains } from '@pagespace/db/schema/custom-domains';
 import { organizations, orgMembers, orgSubscriptions } from '@pagespace/db/schema/organizations';
 
 vi.mock('../orgs-enabled', () => ({ ORGS_ENABLED: true }));
-vi.mock('../../audit/org-audit', () => ({ recordOrgAuditEvent: vi.fn(async () => {}), recordOrgAuditEventAfterCommit: vi.fn(async () => true) }));
 
 import { updateOrgPolicies } from '../policies';
 import type { PublishedObjectStore } from '../published-visibility-core';
@@ -117,7 +116,7 @@ afterAll(async () => {
   await pool.end();
 });
 
-const set = (patch: Record<string, unknown>) => updateOrgPolicies({ orgId: w.orgId, actorId: w.owner, patch });
+const set = (patch: Record<string, unknown>) => updateOrgPolicies({ orgId: w.orgId, actorId: w.owner, actorAuthentication: null, patch });
 const publicKeys = (prefix: string) => [...w.store.objects.keys()].filter((k) => k.startsWith(`published/${prefix}/`));
 const parkedKeys = (prefix: string) => [...w.store.objects.keys()].filter((k) => k.startsWith(`suspended/${prefix}/`));
 

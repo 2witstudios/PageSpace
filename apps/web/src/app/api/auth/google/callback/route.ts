@@ -31,6 +31,7 @@ import {
   consumeAnyInviteIfPresent,
 } from '@/lib/auth/native-invite-acceptance';
 import { autoJoinVerifiedDomainAfterSignIn } from '@/lib/orgs/domain-auto-join';
+import { ceremonyAuthentication } from '@pagespace/lib/auth/authentication-evidence';
 
 const client = new OAuth2Client(
   process.env.GOOGLE_OAUTH_CLIENT_ID,
@@ -247,7 +248,10 @@ export async function GET(req: Request) {
     await revokeSessionsForLogin(user.id, deviceId, 'new_login', 'Google OAuth');
 
     // Create new session
+    // D-OW-45: the ceremony this route just verified, recorded on every credential it mints.
+    const authentication = ceremonyAuthentication({ method: 'google' }, Date.now());
     const sessionToken = await sessionService.createSession({
+      authentication,
       userId: user.id,
       type: 'user',
       scopes: ['*'],
@@ -323,6 +327,7 @@ export async function GET(req: Request) {
 
       // Generate device token (now opaque ps_dev_* token)
       const { deviceToken: deviceTokenValue } = await validateOrCreateDeviceToken({
+        authentication,
         providedDeviceToken: undefined,
         userId: user.id,
         deviceId: deviceId,
@@ -417,6 +422,7 @@ export async function GET(req: Request) {
 
       // Generate device token
       const { deviceToken: deviceTokenValue } = await validateOrCreateDeviceToken({
+        authentication,
         providedDeviceToken: undefined,
         userId: user.id,
         deviceId: iosDeviceId,
@@ -480,6 +486,7 @@ export async function GET(req: Request) {
     if (deviceId) {
       try {
         webDeviceTokenValue = await createWebDeviceToken({
+          authentication,
           userId: user.id, deviceId, tokenVersion: user.tokenVersion,
           deviceName: deviceName || req.headers.get('user-agent') || 'Web Browser',
           userAgent: req.headers.get('user-agent') || undefined,
@@ -492,7 +499,10 @@ export async function GET(req: Request) {
       }
     }
 
-    if (oauthInviteResult.kind === 'page' && oauthInviteResult.invitedDriveId && oauthInviteResult.invitedPageId) {
+    if (oauthInviteResult.orgLandingPath) {
+      // ORG-3: the org hub once joined; the invite page (which says why) when refused.
+      returnUrl = oauthInviteResult.orgLandingPath;
+    } else if (oauthInviteResult.kind === 'page' && oauthInviteResult.invitedDriveId && oauthInviteResult.invitedPageId) {
       returnUrl = `/dashboard/${oauthInviteResult.invitedDriveId}/pages/${oauthInviteResult.invitedPageId}?invited=1`;
     } else if (oauthInviteResult.kind === 'connection') {
       returnUrl = `/dashboard/connections?connection_requested=1`;

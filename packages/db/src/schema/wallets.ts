@@ -15,7 +15,7 @@ import { drives } from './core';
  * Shapes (WAL-2):
  *   - personal root wallet: ownerType 'user', no subject, no parent. One per user.
  *   - org pool:             ownerType 'org', no subject, no parent. One per org.
- *   - drive / agent wallet: a subject (drive or agent page), normally a parent (the org
+ *   - drive wallet:         a drive subject, normally a parent (the org
  *                           pool for org drives, the owner's personal wallet for
  *                           personal drives).
  *
@@ -38,13 +38,14 @@ import { drives } from './core';
  * user still cascades their personal wallet exactly as it cascaded their credit_balances
  * row (and an org's with the org). `ownerType` names which one is set; a CHECK keeps the
  * two in agreement. The subject is a soft link (subjectType + subjectId): its lifecycle
- * belongs to the lanes that create drive and agent wallets.
+ * belongs to the drive (D-OW-59: a drive is the only subject a wallet has).
  */
 
 export const WALLET_OWNER_TYPES = ['user', 'org'] as const;
 export type WalletOwnerType = (typeof WALLET_OWNER_TYPES)[number];
 
-export const WALLET_SUBJECT_TYPES = ['drive', 'agent_page'] as const;
+/** D-OW-59: a drive is the only wallet subject; there are no agent-page wallets. */
+export const WALLET_SUBJECT_TYPES = ['drive'] as const;
 export type WalletSubjectType = (typeof WALLET_SUBJECT_TYPES)[number];
 
 /** WAL-1. `paused` is the kill switch (WAL-7); `over` carries debt (WAL-6e). Mirrors wallet-core `WalletStatus`. */
@@ -103,6 +104,10 @@ export const wallets = pgTable('wallets', {
   status: text('status').$type<WalletStatusValue>().default('active').notNull(),
   // WAL-4: the drive lead can turn donations off. On by default.
   donationsEnabled: boolean('donationsEnabled').default(true).notNull(),
+  // D-OW-4: whether the drive's GUESTS (drive members outside its org, DRV-8) may spend this drive
+  // wallet. Off by default; when on, a guest is still always bound by per-consumer caps (WAL-7).
+  // Meaningful only on a drive wallet: the CHECK refuses it on a root wallet.
+  guestSpendEnabled: boolean('guestSpendEnabled').default(false).notNull(),
   fallbackRule: text('fallbackRule').$type<WalletFallbackRuleValue>(),
   // SPEND-3 preselection. On a DRIVE wallet it is the drive's default (set by whoever
   // administers the wallet); on a PERSONAL ROOT wallet it is the person's own default from
@@ -131,7 +136,7 @@ export const wallets = pgTable('wallets', {
   orgPoolUnique: uniqueIndex('wallets_org_pool_unique')
     .on(table.orgId)
     .where(sql`"ownerType" = 'org' AND "subjectType" IS NULL AND "parentWalletId" IS NULL`),
-  // A drive or agent page has at most one wallet.
+  // A drive has at most one wallet.
   subjectUnique: uniqueIndex('wallets_subject_unique')
     .on(table.subjectType, table.subjectId)
     .where(sql`"subjectId" IS NOT NULL`),
@@ -145,7 +150,7 @@ export const wallets = pgTable('wallets', {
   ),
   subjectTypeValid: check(
     'wallets_subject_type_valid',
-    sql`${table.subjectType} IS NULL OR ${table.subjectType} IN ('drive', 'agent_page')`,
+    sql`${table.subjectType} IS NULL OR ${table.subjectType} = 'drive'`,
   ),
   // Both or neither: a subject type without an id (or the reverse) names nothing.
   subjectComplete: check('wallets_subject_complete', sql`(${table.subjectType} IS NULL) = (${table.subjectId} IS NULL)`),
@@ -165,6 +170,11 @@ export const wallets = pgTable('wallets', {
     // A known kind, and never on an org pool: no one spends a pool "by default" (the seat is
     // a source, the pool is not a place a default can live).
     sql`${table.defaultSpendSource} IS NULL OR (${table.defaultSpendSource} IN ('drive_wallet', 'seat_allowance', 'own_credits') AND NOT (${table.ownerType} = 'org' AND ${table.subjectType} IS NULL))`,
+  ),
+
+  guestSpendOnSubjectWallet: check(
+    'wallets_guest_spend_subject_wallet',
+    sql`NOT ${table.guestSpendEnabled} OR ${table.subjectType} IS NOT NULL`,
   ),
 
   alwaysOwnCreditsOnPersonalRoot: check(

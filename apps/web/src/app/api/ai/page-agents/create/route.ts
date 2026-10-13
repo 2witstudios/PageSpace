@@ -12,6 +12,7 @@ import {
   toolSurfaceEcho,
 } from '@/lib/ai/core/agent-tool-surface';
 import { DEFAULT_PROVIDER, DEFAULT_MODEL, ONPREM_ALLOWED_PROVIDERS, isValidModel } from '@/lib/ai/core/ai-providers-config';
+import { agentModelSaveRefusal } from '@/lib/ai/core/org-model-policy';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { pageAgentRepository, type AgentData } from '@/lib/repositories/page-agent-repository';
@@ -19,6 +20,7 @@ import { db } from '@pagespace/db/db';
 import { pages } from '@pagespace/db/schema/core';
 import { driveAgentMembers } from '@pagespace/db/schema/members';
 import { isDriveLead } from '@pagespace/lib/permissions/drive-relationship';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 /**
  * POST /api/ai/page-agents/create
@@ -32,6 +34,8 @@ export async function POST(request: Request) {
       return auth.error;
     }
     const { userId } = auth;
+    // Read once, up front: whether a drive-scoped MCP token is calling decides which tools it may enable.
+    const mcpScoped = isScopedMCPAuth(auth);
 
     const body = await request.json();
     const { driveId, parentId, title, systemPrompt, enabledTools, aiProvider, aiModel, welcomeMessage, sandboxEnabled } = body;
@@ -78,17 +82,17 @@ export async function POST(request: Request) {
       const canEdit = await canPrincipalEditPage(auth, parentId);
       if (!canEdit) {
         auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'page_agent', resourceId: 'create', details: { reason: 'no_edit_permission_on_parent', parentId, driveId, method: 'POST' }, riskScore: 0.5 });
-        return NextResponse.json(
+        return deniedResponse(actorFromAuth(auth), parentId, NextResponse.json(
           { error: 'Insufficient permissions to create agents in this folder' },
           { status: 403 }
-        );
+        ));
       }
     } else {
       // Creating at root level — owner-only. An explicit-role key needs the
       // OWNER role (its role replaces its owner's identity); an inherited key
       // falls through to the user ownership check (it IS the owner acting).
-      if (isScopedMCPAuth(auth)) {
-        const membership = await getAppDriveMembership(auth.tokenId, driveId);
+      if (mcpScoped) {
+        const membership = await getAppDriveMembership(actorFromAuth(auth), auth.tokenId, driveId);
         if (!membership || (membership.role !== null && membership.role !== 'OWNER')) {
           auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'page_agent', resourceId: 'create', details: { reason: 'token_role_not_owner', driveId, method: 'POST' }, riskScore: 0.5 });
           return NextResponse.json(
@@ -110,7 +114,7 @@ export async function POST(request: Request) {
     // account-level-only tool (e.g. create_drive) — mirrors the runtime
     // chat/consult tool-list filtering.
     if (enabledTools && enabledTools.length > 0) {
-      const availableToolNames = Object.keys(filterToolsForMcpScope(pageSpaceTools, isScopedMCPAuth(auth)));
+      const availableToolNames = Object.keys(filterToolsForMcpScope(pageSpaceTools, mcpScoped));
       const invalidTools = enabledTools.filter((toolName: string) => !availableToolNames.includes(toolName));
       if (invalidTools.length > 0) {
         return NextResponse.json(
@@ -155,6 +159,14 @@ export async function POST(request: Request) {
         { error: `Invalid AI model selection: ${agentProvider} / ${agentModel}` },
         { status: 400 }
       );
+    }
+
+    // POL-8: a model the caller chose must be one the drive's org allows (the product default is judged when it runs).
+    if (aiProvider && aiModel) {
+      const decision = await agentModelSaveRefusal(drive.id, { provider: agentProvider, modelId: agentModel });
+      if (!decision.ok) {
+        return NextResponse.json({ error: decision.message, code: decision.code, policy: decision.policy }, { status: decision.status });
+      }
     }
 
     // Get next position
@@ -230,7 +242,7 @@ export async function POST(request: Request) {
       sandboxEnabled: Boolean(agentData.sandboxEnabled),
       // Creation does not set the exposure mode, so it is the column default.
       toolExposureMode: 'upfront',
-      registeredToolNames: Object.keys(filterToolsForMcpScope(pageSpaceTools, isScopedMCPAuth(auth))),
+      registeredToolNames: Object.keys(filterToolsForMcpScope(pageSpaceTools, mcpScoped)),
     });
     const toolSurfaceNotes = formatConfigSurfaceNotes(toolSurface);
 

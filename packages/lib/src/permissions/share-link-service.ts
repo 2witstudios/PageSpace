@@ -10,12 +10,13 @@ import type { SuspensionKind } from '@pagespace/db/schema/organizations';
 import { createId } from '@paralleldrive/cuid2';
 import { generateToken } from '../auth/token-utils';
 import { EnforcedAuthContext } from './enforced-context';
+import { checkActorDriveAuthentication } from './actor-authentication';
 import { isDriveOwnerOrAdmin, canUserSharePage, isUserDriveMember } from './permissions';
 import { getDrivePolicies } from '../organizations/policy-reader';
 import { decideOrgDriveAdmission } from './guest-admission';
-import { requestGuestApproval, type ClaimedGuestApproval } from './guest-holds';
+import { queueGuestForApproval, type ClaimedGuestApproval } from './guest-holds';
+import { publishOrgAuditEvents, stageOrgAuditEvents, type OrgAuditEvent, type StagedOrgAuditEvent } from '../audit/org-audit';
 import { shareLinkCreationDecision, shareLinkUsable } from '../organizations/sharing-decisions';
-import { recordOrgAuditEventAfterCommit } from '../audit/org-audit';
 import { checkDriveMayLoosen } from './org-lapse-guard';
 
 // ============================================================================
@@ -23,18 +24,6 @@ import { checkDriveMayLoosen } from './org-lapse-guard';
 // ============================================================================
 
 
-/** AUD-1: a link redemption the org's guest policy queued for approval (POL-2). The redeemer is the actor. */
-async function recordGuestHeldEvent(orgId: string, driveId: string, userId: string, holdId: string, origin: 'drive_link' | 'page_link'): Promise<void> {
-  await recordOrgAuditEventAfterCommit({
-    orgId,
-    driveId,
-    eventType: 'org.guest.requested',
-    actorId: userId,
-    resourceType: 'drive',
-    resourceId: driveId,
-    details: { holdId, origin, target: 'user' },
-  });
-}
 
 export type ShareLinkError =
   | 'UNAUTHORIZED'
@@ -233,7 +222,7 @@ export async function createDriveShareLink(
   driveId: string,
   opts: { role?: 'MEMBER' | 'ADMIN'; customRoleId?: string | null; expiresAt?: Date }
 ): Promise<ShareLinkResult<{ id: string; rawToken: string }>> {
-  const isAuthorized = await isDriveOwnerOrAdmin(ctx.userId, driveId);
+  const isAuthorized = await isDriveOwnerOrAdmin(ctx.actor, driveId);
   if (!isAuthorized) return { ok: false, error: 'UNAUTHORIZED' };
 
   const drive = await db.query.drives.findFirst({
@@ -294,7 +283,7 @@ export async function revokeDriveShareLink(
   if (rows.length === 0) return { ok: false, error: 'NOT_FOUND' };
 
   const link = rows[0];
-  const isAuthorized = await isDriveOwnerOrAdmin(ctx.userId, link.driveId);
+  const isAuthorized = await isDriveOwnerOrAdmin(ctx.actor, link.driveId);
   if (!isAuthorized) return { ok: false, error: 'UNAUTHORIZED' };
 
   await db
@@ -309,7 +298,7 @@ export async function listDriveShareLinks(
   ctx: EnforcedAuthContext,
   driveId: string
 ): Promise<ShareLinkResult<DriveShareLinkView[]>> {
-  const isAuthorized = await isDriveOwnerOrAdmin(ctx.userId, driveId);
+  const isAuthorized = await isDriveOwnerOrAdmin(ctx.actor, driveId);
   if (!isAuthorized) return { ok: false, error: 'UNAUTHORIZED' };
 
   const rows = await db
@@ -373,7 +362,9 @@ export async function redeemDriveShareLink(
   // link that does not exist: the holder learns nothing about the org, the drive or why.
   if (!(await linkUsableNow(link.driveId, link))) return { ok: false, error: 'NOT_FOUND' };
 
-  const alreadyMember = await isUserDriveMember(ctx.userId, link.driveId);
+  // SEC-2/3: joining through a link opens the drive, so the credential must be one the drive's org admits.
+  if (!(await checkActorDriveAuthentication(ctx.actor, link.driveId)).allowed) return { ok: false, error: 'NOT_FOUND' };
+  const alreadyMember = await isUserDriveMember(ctx.actor, link.driveId);
   if (alreadyMember) return { ok: false, error: 'ALREADY_MEMBER', driveId: link.driveId };
 
   // POL-2: an outsider redeeming a link to an org drive is a guest. Off answers like a link that does not exist;
@@ -381,15 +372,15 @@ export async function redeemDriveShareLink(
   const admission = await decideOrgDriveAdmission({ driveId: link.driveId, userId: ctx.userId });
   if (admission.decision === 'refuse') return { ok: false, error: 'NOT_FOUND' };
   if (admission.decision === 'hold' && admission.orgId) {
-    const item = await requestGuestApproval({
+    // AUD-1: queued and audited together; the redeemer is the actor.
+    await queueGuestForApproval({
       orgId: admission.orgId,
       driveId: link.driveId,
       userId: ctx.userId,
       origin: 'drive_link',
       request: { linkId: link.id, role: link.role === 'ADMIN' ? 'ADMIN' : 'MEMBER', customRoleId: link.customRoleId },
       requestedBy: link.createdBy,
-    });
-    await recordGuestHeldEvent(admission.orgId, link.driveId, ctx.userId, item.holdId, 'drive_link');
+    }, ctx.userId);
     return { ok: false, error: 'PENDING_APPROVAL', driveId: link.driveId };
   }
 
@@ -431,7 +422,7 @@ export async function createPageShareLink(
     return { ok: false, error: 'INVALID_PERMISSIONS' };
   }
 
-  const isAuthorized = await canUserSharePage(ctx.userId, pageId);
+  const isAuthorized = await canUserSharePage(ctx.actor, pageId);
   if (!isAuthorized) return { ok: false, error: 'UNAUTHORIZED' };
 
   const pageRow = await db.query.pages.findFirst({
@@ -482,7 +473,7 @@ export async function revokePageShareLink(
   if (rows.length === 0) return { ok: false, error: 'NOT_FOUND' };
 
   const link = rows[0];
-  const isAuthorized = await canUserSharePage(ctx.userId, link.pageId);
+  const isAuthorized = await canUserSharePage(ctx.actor, link.pageId);
   if (!isAuthorized) return { ok: false, error: 'UNAUTHORIZED' };
 
   await db
@@ -497,7 +488,7 @@ export async function listPageShareLinks(
   ctx: EnforcedAuthContext,
   pageId: string
 ): Promise<ShareLinkResult<PageShareLinkView[]>> {
-  const isAuthorized = await canUserSharePage(ctx.userId, pageId);
+  const isAuthorized = await canUserSharePage(ctx.actor, pageId);
   if (!isAuthorized) return { ok: false, error: 'UNAUTHORIZED' };
 
   const rows = await db
@@ -548,6 +539,8 @@ export async function redeemPageShareLink(
   if (!(await linkUsableNow(row.driveId, row))) return { ok: false, error: 'NOT_FOUND' };
 
   const link = row;
+  // SEC-2/3: redeeming opens the page, so the credential must be one the page's org admits.
+  if (!(await checkActorDriveAuthentication(ctx.actor, link.driveId)).allowed) return { ok: false, error: 'NOT_FOUND' };
 
   const existingPerms = await db
     .select({ canView: pagePermissions.canView })
@@ -561,15 +554,14 @@ export async function redeemPageShareLink(
   const admission = await decideOrgDriveAdmission({ driveId: link.driveId, userId: ctx.userId });
   if (admission.decision === 'refuse') return { ok: false, error: 'NOT_FOUND' };
   if (admission.decision === 'hold' && admission.orgId) {
-    const item = await requestGuestApproval({
+    await queueGuestForApproval({
       orgId: admission.orgId,
       driveId: link.driveId,
       userId: ctx.userId,
       origin: 'page_link',
       request: { linkId: link.id, pageId: link.pageId },
       requestedBy: null,
-    });
-    await recordGuestHeldEvent(admission.orgId, link.driveId, ctx.userId, item.holdId, 'page_link');
+    }, ctx.userId);
     return { ok: false, error: 'PENDING_APPROVAL' };
   }
 
@@ -600,7 +592,15 @@ export type ApprovedLinkAdmission =
  * the admission (guests not off, public share links not off); otherwise nothing is granted and the caller is told
  * why. The queue row is already claimed by the caller; nothing here can admit the same request twice.
  */
-export async function completeApprovedLinkAdmission(claim: ClaimedGuestApproval): Promise<ApprovedLinkAdmission> {
+/**
+ * `approval` (AUD-1): the approver's `org.guest.approved` event, staged inside the admission's own transaction, so it
+ * commits exactly when the guest is admitted and is published after.
+ */
+export async function completeApprovedLinkAdmission(claim: ClaimedGuestApproval, approval?: OrgAuditEvent): Promise<ApprovedLinkAdmission> {
+  let staged: StagedOrgAuditEvent[] = [];
+  const stageApproval = async (tx: Tx): Promise<void> => {
+    staged = approval ? await stageOrgAuditEvents(tx, [approval]) : [];
+  };
   const linkId = claim.request.linkId;
   if (!claim.userId || !linkId || (claim.origin !== 'drive_link' && claim.origin !== 'page_link')) return { ok: false, error: 'NOT_A_LINK_REQUEST' };
 
@@ -620,8 +620,13 @@ export async function completeApprovedLinkAdmission(claim: ClaimedGuestApproval)
       .limit(1);
     if (!link || !isValidShareLink(link) || !shareLinkUsable(policies, link)) return { ok: false, error: 'LINK_GONE' };
     const userId = claim.userId;
-    const inserted = await admittedWrite(link.driveId, userId, (tx) => insertDriveLinkMember(tx, userId, link));
+    const inserted = await admittedWrite(link.driveId, userId, async (tx) => {
+      const member = await insertDriveLinkMember(tx, userId, link);
+      await stageApproval(tx);
+      return member;
+    });
     if (!inserted) return { ok: false, error: 'POLICY_OFF' };
+    await publishOrgAuditEvents(staged);
     const { memberId, customRoleId } = inserted;
     await db.update(driveShareLinks).set({ useCount: sql`${driveShareLinks.useCount} + 1` }).where(eq(driveShareLinks.id, link.id));
     return { ok: true, driveId: link.driveId, userId: claim.userId, memberId, role: link.role, customRoleId, driveName: link.driveName, createdBy: link.createdBy };
@@ -640,7 +645,13 @@ export async function completeApprovedLinkAdmission(claim: ClaimedGuestApproval)
     .limit(1);
   if (!link || !isValidShareLink(link) || !shareLinkUsable(policies, link)) return { ok: false, error: 'LINK_GONE' };
   const userId = claim.userId;
-  if (!(await admittedWrite(link.driveId, userId, (tx) => insertPageLinkGuest(tx, userId, link)))) return { ok: false, error: 'POLICY_OFF' };
+  const admitted = await admittedWrite(link.driveId, userId, async (tx) => {
+    const guest = await insertPageLinkGuest(tx, userId, link);
+    await stageApproval(tx);
+    return guest;
+  });
+  if (!admitted) return { ok: false, error: 'POLICY_OFF' };
+  await publishOrgAuditEvents(staged);
   await db.update(pageShareLinks).set({ useCount: sql`${pageShareLinks.useCount} + 1` }).where(eq(pageShareLinks.id, link.id));
   return { ok: true, driveId: link.driveId, userId: claim.userId, memberId: null, role: 'GUEST', customRoleId: null, driveName: link.driveName, createdBy: null };
 }

@@ -7,7 +7,7 @@
  * the org UI shows. Every number comes from the tier table and the money-model module.
  */
 import { TIER_PLAN_LIMITS } from './subscription-tiers';
-import { MONEY_MODEL_V2_ACTIVE, allowanceCentsForPaidCents, centsFromDollars, tierListPriceCents } from './money-model';
+import { allowanceCentsForPaidCents, centsFromDollars, tierListPriceCents } from './money-model';
 
 const ORG_TIER = 'business' as const;
 
@@ -43,7 +43,7 @@ export interface OrgPlanQuote {
 }
 
 /** The monthly list price and included credits for `seats` seats on the org plan. */
-export function orgPlanQuote(seats: number, active: boolean = MONEY_MODEL_V2_ACTIVE): OrgPlanQuote {
+export function orgPlanQuote(seats: number): OrgPlanQuote {
   const extraSeats = orgExtraSeatQuantity(seats);
   const totalCents = orgListPriceCents(extraSeats);
   const extraSeatPriceCents = centsFromDollars(TIER_PLAN_LIMITS[ORG_TIER].extraSeatUsd);
@@ -55,6 +55,6 @@ export function orgPlanQuote(seats: number, active: boolean = MONEY_MODEL_V2_ACT
     extraSeatPriceCents,
     extraSeatsCents: extraSeatPriceCents * extraSeats,
     totalCents,
-    includedCreditCents: allowanceCentsForPaidCents(totalCents, ORG_TIER, active),
+    includedCreditCents: allowanceCentsForPaidCents(totalCents, ORG_TIER),
   };
 }

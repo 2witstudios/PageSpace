@@ -21,7 +21,8 @@
  * Requires DATABASE_URL → a running Postgres with migrations applied
  * (scripts/test-with-db.sh, port 5433). FAILS LOUDLY when no DB is reachable.
  */
-import { describe, it, beforeAll, vi } from 'vitest';
+import { describe, it, beforeAll, expect, vi } from 'vitest';
+import { createId } from '@paralleldrive/cuid2';
 import { assert } from '@/hooks/__tests__/riteway';
 import { db } from '@pagespace/db/db';
 import { eq, asc } from '@pagespace/db/operators';
@@ -30,6 +31,16 @@ import { taskItems, taskLists, taskStatusConfigs } from '@pagespace/db/schema/ta
 import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
 import { ensureTaskItemForPage } from '@/services/api/task-sync-service';
+// Imported statically, NOT inside beforeAll. Loading the route graph costs
+// ~2.5s of transform+evaluate on an idle machine; inside a hook that cost is
+// charged against hookTimeout (10s) and, under a loaded parallel run, blew it
+// intermittently. At module scope it is collection work, which no hook or test
+// timeout races. vi.mock calls are hoisted above these imports, so the routes
+// still bind the mocks below.
+import * as listTasksRoute from '../route';
+import * as taskItemRoute from '../[taskId]/route';
+import * as statusesRoute from '../statuses/route';
+import { createTask } from '@/lib/ai/tools/task-helpers';
 
 let currentUserId = '';
 
@@ -50,6 +61,7 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
 // it uses. Its permission check is the only thing standing between the test and
 // the real DB writes it exists to inspect.
 vi.mock('@/lib/ai/tools/actor-permissions', () => ({
+  toolActor: (ctx: { userId: string; accessActor?: unknown }) => ctx.accessActor ?? { via: 'credential', userId: ctx.userId, authentication: null },
   canActorEditPage: vi.fn(async () => true),
   canActorViewPage: vi.fn(async () => true),
   canActorAccessDrive: vi.fn(async () => true),
@@ -65,8 +77,53 @@ const CUSTOM_STATUSES = [
 ];
 
 let dbAvailable = false;
-let listTasksRoute: typeof import('../route');
-let taskItemRoute: typeof import('../[taskId]/route');
+
+type User = Awaited<ReturnType<typeof factories.createUser>>;
+type Drive = Awaited<ReturnType<typeof factories.createDrive>>;
+type PageRow = typeof pages.$inferSelect;
+type PageSeed = Partial<typeof pages.$inferInsert> & Pick<typeof pages.$inferInsert, 'type'>;
+type StatusSeed = Omit<typeof taskStatusConfigs.$inferInsert, 'taskListId'>;
+
+/**
+ * One owner and one drive for the whole file, built once in beforeAll. Every
+ * test isolates itself by the page subtree it seeds (all reads and assertions
+ * key on its own page ids / parentIds), so a shared owner and drive changes
+ * nothing a test observes — it only removes two round trips per test.
+ */
+let owner: User;
+let drive: Drive;
+
+/**
+ * Insert a batch of pages in ONE statement, returned in seed order. Ids are
+ * generated client-side so a seed can name a parent that sits in the same
+ * batch (FK checks on a multi-row INSERT run at end of statement).
+ */
+async function insertPages(seeds: PageSeed[]): Promise<PageRow[]> {
+  const rows = seeds.map((seed, i) => ({
+    id: createId(),
+    driveId: drive.id,
+    title: `Page ${i}`,
+    position: i,
+    ...seed,
+  }));
+  const created = await db.insert(pages).values(rows).returning();
+  const byId = new Map(created.map((p) => [p.id, p]));
+  return rows.map((row) => {
+    const page = byId.get(row.id);
+    if (!page) throw new Error(`insertPages: page ${row.id} was not returned`);
+    return page;
+  });
+}
+
+/** A task_lists row for a page, plus its status vocabulary (if any). */
+async function seedList(pageId: string, statuses: StatusSeed[], title = 'Root'): Promise<string> {
+  const id = createId();
+  await db.insert(taskLists).values({ id, userId: owner.id, pageId, title, status: 'pending' });
+  if (statuses.length > 0) {
+    await db.insert(taskStatusConfigs).values(statuses.map((s) => ({ taskListId: id, ...s })));
+  }
+  return id;
+}
 
 async function slugsFor(pageId: string): Promise<string[]> {
   const list = await db.query.taskLists.findFirst({ where: eq(taskLists.pageId, pageId) });
@@ -86,24 +143,18 @@ async function slugsFor(pageId: string): Promise<string[]> {
  * makes, and the one that lazily creates the sub-list.
  */
 async function seedCustomisedTree() {
-  const owner = await factories.createUser();
-  currentUserId = owner.id;
-  const drive = await factories.createDrive(owner.id);
-  const listPage = await factories.createPage(drive.id, { type: 'TASK_LIST' });
+  const listPageId = createId();
+  const [listPage, taskPage] = await insertPages([
+    { id: listPageId, type: 'TASK_LIST' },
+    { parentId: listPageId, type: 'TASK_LIST', title: 'Parent task' },
+  ]);
 
-  const [rootList] = await db.insert(taskLists).values({
-    userId: owner.id, pageId: listPage.id, title: 'Root', status: 'pending',
-  }).returning();
-  await db.insert(taskStatusConfigs).values(
-    CUSTOM_STATUSES.map((s) => ({ taskListId: rootList.id, ...s })),
-  );
-
-  const taskPage = await factories.createPage(drive.id, {
-    parentId: listPage.id, type: 'TASK_LIST', title: 'Parent task',
-  });
-  const [task] = await db.insert(taskItems)
-    .values({ userId: owner.id, pageId: taskPage.id, status: 'icebox' })
-    .returning();
+  const [, [task]] = await Promise.all([
+    seedList(listPage.id, CUSTOM_STATUSES),
+    db.insert(taskItems)
+      .values({ userId: owner.id, pageId: taskPage.id, status: 'icebox' })
+      .returning(),
+  ]);
 
   return { owner, drive, listPage, taskPage, task };
 }
@@ -124,8 +175,9 @@ describe('sub-list status vocabulary inheritance', () => {
       dbAvailable = false;
       return;
     }
-    listTasksRoute = await import('../route');
-    taskItemRoute = await import('../[taskId]/route');
+    owner = await factories.createUser();
+    currentUserId = owner.id;
+    drive = await factories.createDrive(owner.id);
   });
 
   it('seeds a new sub-list with its ancestor vocabulary, not the defaults', async () => {
@@ -274,25 +326,17 @@ describe('sub-list status vocabulary inheritance', () => {
     // pairs, and one loses the race. ON CONFLICT DO NOTHING absorbs that; a
     // catch would have to correctly identify a DrizzleQueryError first.
     if (!dbAvailable) return;
-    const owner = await factories.createUser();
-    currentUserId = owner.id;
-    const drive = await factories.createDrive(owner.id);
-    const listPage = await factories.createPage(drive.id, { type: 'TASK_LIST' });
-    const [rootList] = await db.insert(taskLists).values({
-      userId: owner.id, pageId: listPage.id, title: 'Root', status: 'pending',
-    }).returning();
-    await db.insert(taskStatusConfigs).values(
-      CUSTOM_STATUSES.map((c) => ({ taskListId: rootList.id, ...c })),
-    );
-
-    // A child task whose own list exists but was never given configs.
-    const taskPage = await factories.createPage(drive.id, {
-      parentId: listPage.id, type: 'TASK_LIST',
-    });
-    await db.insert(taskItems).values({ userId: owner.id, pageId: taskPage.id, status: 'icebox' });
-    await db.insert(taskLists).values({
-      userId: owner.id, pageId: taskPage.id, title: 'Sub', status: 'pending',
-    });
+    const listPageId = createId();
+    const [listPage, taskPage] = await insertPages([
+      { id: listPageId, type: 'TASK_LIST' },
+      // A child task whose own list exists but was never given configs.
+      { parentId: listPageId, type: 'TASK_LIST' },
+    ]);
+    await Promise.all([
+      seedList(listPage.id, CUSTOM_STATUSES),
+      db.insert(taskItems).values({ userId: owner.id, pageId: taskPage.id, status: 'icebox' }),
+      seedList(taskPage.id, [], 'Sub'),
+    ]);
 
     const [a, b] = await Promise.all([getTasks(taskPage.id), getTasks(taskPage.id)]);
 
@@ -312,15 +356,13 @@ describe('sub-list status vocabulary inheritance', () => {
 
   it('still seeds the defaults for a list with no task-list ancestor', async () => {
     if (!dbAvailable) return;
-    const owner = await factories.createUser();
-    currentUserId = owner.id;
-    const drive = await factories.createDrive(owner.id);
     // A root list sits under the drive or a folder — it is nobody's sub-list, so
     // there is nothing to inherit and the defaults are correct.
-    const folder = await factories.createPage(drive.id, { type: 'FOLDER' });
-    const listPage = await factories.createPage(drive.id, {
-      parentId: folder.id, type: 'TASK_LIST',
-    });
+    const folderId = createId();
+    const [, listPage] = await insertPages([
+      { id: folderId, type: 'FOLDER' },
+      { parentId: folderId, type: 'TASK_LIST' },
+    ]);
 
     await getTasks(listPage.id);
 
@@ -341,13 +383,12 @@ describe('sub-list status vocabulary inheritance', () => {
     // The other test terminates on a missing parentId and never evaluates the
     // type check at all, so removing that check left it green.
     if (!dbAvailable) return;
-    const { drive, listPage } = await seedCustomisedTree();
-    const folder = await factories.createPage(drive.id, {
-      parentId: listPage.id, type: 'FOLDER',
-    });
-    const nested = await factories.createPage(drive.id, {
-      parentId: folder.id, type: 'TASK_LIST',
-    });
+    const { listPage } = await seedCustomisedTree();
+    const folderId = createId();
+    const [, nested] = await insertPages([
+      { id: folderId, parentId: listPage.id, type: 'FOLDER' },
+      { parentId: folderId, type: 'TASK_LIST' },
+    ]);
 
     await getTasks(nested.id);
 
@@ -367,29 +408,25 @@ describe('sub-list status vocabulary inheritance', () => {
     // define, which PATCH rejects with a 400 and which nothing else repairs:
     // backfillMissingTaskItems only visits pages with no row at all.
     if (!dbAvailable) return;
-    const { owner, drive, taskPage } = await seedCustomisedTree();
+    const { taskPage } = await seedCustomisedTree();
     // A sub-list that exists but was never given configs, holding a task left
     // on the built-in default.
-    await db.insert(taskLists).values({
-      userId: owner.id, pageId: taskPage.id, title: 'Sub', status: 'pending',
-    });
-    const legacyChild = await factories.createPage(drive.id, {
-      parentId: taskPage.id, type: 'TASK_LIST',
-    });
-    await db.insert(taskItems).values({
-      userId: owner.id, pageId: legacyChild.id, status: 'pending',
-    });
-    // A row already on a slug the inherited vocabulary DOES define, and on the
-    // wrong side of its own completedAt. It must be left exactly as it is: the
-    // group disagreeing with completedAt is a state the product already
-    // tolerates (a status can be regrouped in place), and "repairing" it here
-    // would either reverse a deliberate regroup or fabricate a completion time.
-    const alreadyValid = await factories.createPage(drive.id, {
-      parentId: taskPage.id, type: 'TASK_LIST',
-    });
-    await db.insert(taskItems).values({
-      userId: owner.id, pageId: alreadyValid.id, status: 'shipped', completedAt: null,
-    });
+    const [legacyChild, alreadyValid] = await insertPages([
+      { parentId: taskPage.id, type: 'TASK_LIST' },
+      { parentId: taskPage.id, type: 'TASK_LIST' },
+    ]);
+    await Promise.all([
+      seedList(taskPage.id, [], 'Sub'),
+      db.insert(taskItems).values([
+        { userId: owner.id, pageId: legacyChild.id, status: 'pending' },
+        // A row already on a slug the inherited vocabulary DOES define, and on the
+        // wrong side of its own completedAt. It must be left exactly as it is: the
+        // group disagreeing with completedAt is a state the product already
+        // tolerates (a status can be regrouped in place), and "repairing" it here
+        // would either reverse a deliberate regroup or fabricate a completion time.
+        { userId: owner.id, pageId: alreadyValid.id, status: 'shipped', completedAt: null },
+      ]),
+    ]);
 
     await getTasks(taskPage.id);
 
@@ -421,22 +458,24 @@ describe('sub-list status vocabulary inheritance', () => {
     // it and the badge renders the raw slug. 250 rows is past the 200 the
     // row-at-a-time version was capped at.
     if (!dbAvailable) return;
-    const { owner, drive, taskPage } = await seedCustomisedTree();
-    await db.insert(taskLists).values({
-      userId: owner.id, pageId: taskPage.id, title: 'Sub', status: 'pending',
-    });
-    const children = await Promise.all(
-      Array.from({ length: 250 }, () => factories.createPage(drive.id, {
-        parentId: taskPage.id, type: 'TASK_LIST',
-      })),
-    );
+    const { taskPage } = await seedCustomisedTree();
+    // 250 pages in ONE statement — this used to be 250 concurrent single-row
+    // inserts, all contending for the pool at once.
+    const [children] = await Promise.all([
+      insertPages(Array.from({ length: 250 }, () => ({
+        parentId: taskPage.id, type: 'TASK_LIST' as const,
+      }))),
+      seedList(taskPage.id, [], 'Sub'),
+    ]);
+    // A fixed timestamp: what matters is null vs. not-null, not the clock.
+    const completedAt = new Date('2026-01-01T00:00:00Z');
     await db.insert(taskItems).values(children.map((child, i) => ({
       userId: owner.id,
       pageId: child.id,
       status: 'pending',
       // Half already finished: a completed row must land on a DONE slug, not be
       // swept to the open one along with everything else.
-      completedAt: i % 2 === 0 ? new Date() : null,
+      completedAt: i % 2 === 0 ? completedAt : null,
     })));
 
     await getTasks(taskPage.id);
@@ -469,36 +508,31 @@ describe('sub-list status vocabulary inheritance', () => {
     // task would be rewritten to an open one. 260 statuses puts the done one
     // well beyond the 200 the first version of this read.
     if (!dbAvailable) return;
-    const owner = await factories.createUser();
-    currentUserId = owner.id;
-    const drive = await factories.createDrive(owner.id);
-    const listPage = await factories.createPage(drive.id, { type: 'TASK_LIST' });
-    const [rootList] = await db.insert(taskLists).values({
-      userId: owner.id, pageId: listPage.id, title: 'Root', status: 'pending',
-    }).returning();
-    await db.insert(taskStatusConfigs).values([
-      { taskListId: rootList.id, slug: 'icebox', name: 'Icebox', color: 'x', group: 'todo' as const, position: 0 },
-      ...Array.from({ length: 258 }, (_, i) => ({
-        taskListId: rootList.id, slug: `stage-${i}`, name: `Stage ${i}`,
-        color: 'x', group: 'in_progress' as const, position: i + 1,
-      })),
-      { taskListId: rootList.id, slug: 'shipped', name: 'Shipped', color: 'x', group: 'done' as const, position: 259 },
-    ]);
-
-    const taskPage = await factories.createPage(drive.id, {
-      parentId: listPage.id, type: 'TASK_LIST',
-    });
-    await db.insert(taskItems).values({ userId: owner.id, pageId: taskPage.id });
-    await db.insert(taskLists).values({
-      userId: owner.id, pageId: taskPage.id, title: 'Sub', status: 'pending',
-    });
+    const listPageId = createId();
+    const taskPageId = createId();
     // Two legacy rows: one on a slug the vocabulary DOES define but only past
     // the window, and one genuinely undefined AND already complete.
-    const keepMe = await factories.createPage(drive.id, { parentId: taskPage.id, type: 'TASK_LIST' });
-    const moveMe = await factories.createPage(drive.id, { parentId: taskPage.id, type: 'TASK_LIST' });
-    await db.insert(taskItems).values([
-      { userId: owner.id, pageId: keepMe.id, status: 'stage-250' },
-      { userId: owner.id, pageId: moveMe.id, status: 'pending', completedAt: new Date() },
+    const [listPage, taskPage, keepMe, moveMe] = await insertPages([
+      { id: listPageId, type: 'TASK_LIST' },
+      { id: taskPageId, parentId: listPageId, type: 'TASK_LIST' },
+      { parentId: taskPageId, type: 'TASK_LIST' },
+      { parentId: taskPageId, type: 'TASK_LIST' },
+    ]);
+    await Promise.all([
+      seedList(listPage.id, [
+        { slug: 'icebox', name: 'Icebox', color: 'x', group: 'todo' as const, position: 0 },
+        ...Array.from({ length: 258 }, (_, i) => ({
+          slug: `stage-${i}`, name: `Stage ${i}`,
+          color: 'x', group: 'in_progress' as const, position: i + 1,
+        })),
+        { slug: 'shipped', name: 'Shipped', color: 'x', group: 'done' as const, position: 259 },
+      ]),
+      seedList(taskPage.id, [], 'Sub'),
+      db.insert(taskItems).values([
+        { userId: owner.id, pageId: taskPage.id },
+        { userId: owner.id, pageId: keepMe.id, status: 'stage-250' },
+        { userId: owner.id, pageId: moveMe.id, status: 'pending', completedAt: new Date('2026-01-01T00:00:00Z') },
+      ]),
     ]);
 
     await getTasks(taskPage.id);
@@ -525,25 +559,19 @@ describe('sub-list status vocabulary inheritance', () => {
     // slugs and took one — and resolveSeedCompletedAt then stamped completedAt.
     // The task was born finished, on creation, from an inline "+ Add a task".
     if (!dbAvailable) return;
-    const owner = await factories.createUser();
-    currentUserId = owner.id;
-    const drive = await factories.createDrive(owner.id);
-    const listPage = await factories.createPage(drive.id, { type: 'TASK_LIST' });
-    const [list] = await db.insert(taskLists).values({
-      userId: owner.id, pageId: listPage.id, title: 'Root', status: 'pending',
-    }).returning();
+    const listPageId = createId();
+    const [listPage, created] = await insertPages([
+      { id: listPageId, type: 'TASK_LIST' },
+      { parentId: listPageId, type: 'TASK_LIST' },
+    ]);
     // No 'pending' anywhere, 210 done-group statuses, and the only open one last.
-    await db.insert(taskStatusConfigs).values([
+    await seedList(listPage.id, [
       ...Array.from({ length: 210 }, (_, i) => ({
-        taskListId: list.id, slug: `arch-${i}`, name: `Archived ${i}`,
+        slug: `arch-${i}`, name: `Archived ${i}`,
         color: 'x', group: 'done' as const, position: i,
       })),
-      { taskListId: list.id, slug: 'fresh', name: 'Fresh', color: 'x', group: 'todo' as const, position: 210 },
+      { slug: 'fresh', name: 'Fresh', color: 'x', group: 'todo' as const, position: 210 },
     ]);
-
-    const created = await factories.createPage(drive.id, {
-      parentId: listPage.id, type: 'TASK_LIST',
-    });
     await ensureTaskItemForPage(db, {
       pageId: created.id, pageType: 'TASK_LIST', parentId: listPage.id, userId: owner.id,
     });
@@ -565,28 +593,28 @@ describe('sub-list status vocabulary inheritance', () => {
     // which is where the first-by-position config sits. Untested until now: the
     // whole suite stayed green with the fallback's ordering reversed.
     if (!dbAvailable) return;
-    const owner = await factories.createUser();
-    currentUserId = owner.id;
-    const drive = await factories.createDrive(owner.id);
-    const listPage = await factories.createPage(drive.id, { type: 'TASK_LIST' });
-    const [rootList] = await db.insert(taskLists).values({
-      userId: owner.id, pageId: listPage.id, title: 'Root', status: 'pending',
-    }).returning();
-    await db.insert(taskStatusConfigs).values([
-      { taskListId: rootList.id, slug: 'first', name: 'First', color: 'x', group: 'todo' as const, position: 0 },
-      { taskListId: rootList.id, slug: 'middle', name: 'Middle', color: 'x', group: 'in_progress' as const, position: 1 },
-      { taskListId: rootList.id, slug: 'last', name: 'Last', color: 'x', group: 'in_progress' as const, position: 2 },
+    const listPageId = createId();
+    const taskPageId = createId();
+    const [listPage, taskPage, legacy] = await insertPages([
+      { id: listPageId, type: 'TASK_LIST' },
+      { id: taskPageId, parentId: listPageId, type: 'TASK_LIST' },
+      { parentId: taskPageId, type: 'TASK_LIST' },
     ]);
-
-    const taskPage = await factories.createPage(drive.id, { parentId: listPage.id, type: 'TASK_LIST' });
-    await db.insert(taskItems).values({ userId: owner.id, pageId: taskPage.id, status: 'first' });
-    await db.insert(taskLists).values({
-      userId: owner.id, pageId: taskPage.id, title: 'Sub', status: 'pending',
-    });
-    const legacy = await factories.createPage(drive.id, { parentId: taskPage.id, type: 'TASK_LIST' });
-    await db.insert(taskItems).values({
-      userId: owner.id, pageId: legacy.id, status: 'pending', completedAt: new Date(),
-    });
+    await Promise.all([
+      seedList(listPage.id, [
+        { slug: 'first', name: 'First', color: 'x', group: 'todo' as const, position: 0 },
+        { slug: 'middle', name: 'Middle', color: 'x', group: 'in_progress' as const, position: 1 },
+        { slug: 'last', name: 'Last', color: 'x', group: 'in_progress' as const, position: 2 },
+      ]),
+      seedList(taskPage.id, [], 'Sub'),
+      db.insert(taskItems).values([
+        { userId: owner.id, pageId: taskPage.id, status: 'first' },
+        {
+          userId: owner.id, pageId: legacy.id, status: 'pending',
+          completedAt: new Date('2026-01-01T00:00:00Z'),
+        },
+      ]),
+    ]);
 
     await getTasks(taskPage.id);
 
@@ -609,23 +637,17 @@ describe('sub-list status vocabulary inheritance', () => {
     // finished, counted in its parent's completed total, satisfying the
     // completion guard, with its due-date trigger disabled.
     if (!dbAvailable) return;
-    const owner = await factories.createUser();
-    currentUserId = owner.id;
-    const drive = await factories.createDrive(owner.id);
-    const listPage = await factories.createPage(drive.id, { type: 'TASK_LIST' });
-    const [list] = await db.insert(taskLists).values({
-      userId: owner.id, pageId: listPage.id, title: 'Root', status: 'pending',
-    }).returning();
-    await db.insert(taskStatusConfigs).values([
-      // 'pending' still exists, but it means DONE here.
-      { taskListId: list.id, slug: 'pending', name: 'Filed', color: 'x', group: 'done' as const, position: 0 },
-      { taskListId: list.id, slug: 'doing', name: 'Doing', color: 'x', group: 'todo' as const, position: 1 },
-      { taskListId: list.id, slug: 'shipped', name: 'Shipped', color: 'x', group: 'done' as const, position: 2 },
+    const listPageId = createId();
+    const [listPage, created] = await insertPages([
+      { id: listPageId, type: 'TASK_LIST' },
+      { parentId: listPageId, type: 'TASK_LIST' },
     ]);
-
-    const created = await factories.createPage(drive.id, {
-      parentId: listPage.id, type: 'TASK_LIST',
-    });
+    await seedList(listPage.id, [
+      // 'pending' still exists, but it means DONE here.
+      { slug: 'pending', name: 'Filed', color: 'x', group: 'done' as const, position: 0 },
+      { slug: 'doing', name: 'Doing', color: 'x', group: 'todo' as const, position: 1 },
+      { slug: 'shipped', name: 'Shipped', color: 'x', group: 'done' as const, position: 2 },
+    ]);
     await ensureTaskItemForPage(db, {
       pageId: created.id, pageType: 'TASK_LIST', parentId: listPage.id, userId: owner.id,
     });
@@ -648,16 +670,10 @@ describe('sub-list status vocabulary inheritance', () => {
     // done row with a null completedAt reads as complete to the client while
     // every counter that asks the database counts `completedAt IS NOT NULL`.
     if (!dbAvailable) return;
-    const owner = await factories.createUser();
-    currentUserId = owner.id;
-    const drive = await factories.createDrive(owner.id);
-    const listPage = await factories.createPage(drive.id, { type: 'TASK_LIST' });
-    const [list] = await db.insert(taskLists).values({
-      userId: owner.id, pageId: listPage.id, title: 'Root', status: 'pending',
-    }).returning();
-    await db.insert(taskStatusConfigs).values([
-      { taskListId: list.id, slug: 'shipped', name: 'Shipped', color: 'x', group: 'done' as const, position: 0 },
-      { taskListId: list.id, slug: 'filed', name: 'Filed', color: 'x', group: 'done' as const, position: 1 },
+    const [listPage] = await insertPages([{ type: 'TASK_LIST' }]);
+    await seedList(listPage.id, [
+      { slug: 'shipped', name: 'Shipped', color: 'x', group: 'done' as const, position: 0 },
+      { slug: 'filed', name: 'Filed', color: 'x', group: 'done' as const, position: 1 },
     ]);
 
     const res = await listTasksRoute.POST(
@@ -691,18 +707,9 @@ describe('sub-list status vocabulary inheritance', () => {
     // below it only runs when a status was passed explicitly, so nothing caught
     // it. It also never stamped completedAt, the last born-complete door.
     if (!dbAvailable) return;
-    const owner = await factories.createUser();
-    currentUserId = owner.id;
-    const drive = await factories.createDrive(owner.id);
-    const listPage = await factories.createPage(drive.id, { type: 'TASK_LIST' });
-    const [list] = await db.insert(taskLists).values({
-      userId: owner.id, pageId: listPage.id, title: 'Root', status: 'pending',
-    }).returning();
-    await db.insert(taskStatusConfigs).values(
-      CUSTOM_STATUSES.map((c) => ({ taskListId: list.id, ...c })),
-    );
+    const [listPage] = await insertPages([{ type: 'TASK_LIST' }]);
+    await seedList(listPage.id, CUSTOM_STATUSES);
 
-    const { createTask } = await import('@/lib/ai/tools/task-helpers');
     const ctx = { timezone: 'UTC' } as never;
     await createTask(ctx, owner.id, { pageId: listPage.id, title: 'From an agent' } as never);
     await createTask(ctx, owner.id, {
@@ -736,8 +743,7 @@ describe('sub-list status vocabulary inheritance', () => {
     // and the AI tool were the last two seeding the built-ins; reverting either
     // used to leave every test in its directory green.
     if (!dbAvailable) return;
-    const { drive, taskPage } = await seedCustomisedTree();
-    const statusesRoute = await import('../statuses/route');
+    const { taskPage } = await seedCustomisedTree();
 
     const res = await statusesRoute.POST(
       new Request(`http://localhost/api/pages/${taskPage.id}/tasks/statuses`, {
@@ -748,7 +754,6 @@ describe('sub-list status vocabulary inheritance', () => {
       { params: Promise.resolve({ pageId: taskPage.id }) },
     );
     expect(res.status).toBe(201);
-    void drive;
 
     assert({
       given: 'a sub-list first initialised by adding a status to it',
@@ -766,7 +771,6 @@ describe('sub-list status vocabulary inheritance', () => {
     // other lazy-init, or the sub-list is born with the four built-ins.
     if (!dbAvailable) return;
     const { owner, taskPage } = await seedCustomisedTree();
-    const { createTask } = await import('@/lib/ai/tools/task-helpers');
 
     await createTask({ timezone: 'UTC' } as never, owner.id, {
       pageId: taskPage.id, title: 'First child',
@@ -788,23 +792,21 @@ describe('sub-list status vocabulary inheritance', () => {
     // moving it to an open status then left the stamp behind: a non-done row
     // that every `completedAt IS NOT NULL` counter still reads as finished.
     if (!dbAvailable) return;
-    const owner = await factories.createUser();
-    currentUserId = owner.id;
-    const drive = await factories.createDrive(owner.id);
-    const listPage = await factories.createPage(drive.id, { type: 'TASK_LIST' });
-    // A list row with NO status configs, so PATCH takes its built-in branch.
-    await db.insert(taskLists).values({
-      userId: owner.id, pageId: listPage.id, title: 'Plain', status: 'pending',
-    });
-    const taskPage = await factories.createPage(drive.id, {
-      parentId: listPage.id, type: 'TASK_LIST',
-    });
-    const [row] = await db.insert(taskItems).values({
-      userId: owner.id, pageId: taskPage.id, status: 'shipped', completedAt: new Date(),
-    }).returning();
+    const listPageId = createId();
+    const [listPage, taskPage] = await insertPages([
+      { id: listPageId, type: 'TASK_LIST' },
+      { parentId: listPageId, type: 'TASK_LIST' },
+    ]);
+    const [, [row]] = await Promise.all([
+      // A list row with NO status configs, so PATCH takes its built-in branch.
+      seedList(listPage.id, [], 'Plain'),
+      db.insert(taskItems).values({
+        userId: owner.id, pageId: taskPage.id, status: 'shipped',
+        completedAt: new Date('2026-01-01T00:00:00Z'),
+      }).returning(),
+    ]);
 
-    const patchRoute = await import('../[taskId]/route');
-    const res = await patchRoute.PATCH(
+    const res = await taskItemRoute.PATCH(
       new Request(`http://localhost/api/pages/${listPage.id}/tasks/${row.id}`, {
         method: 'PATCH',
         headers: { 'content-type': 'application/json' },

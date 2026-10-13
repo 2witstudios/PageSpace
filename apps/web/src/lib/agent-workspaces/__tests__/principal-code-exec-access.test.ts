@@ -12,7 +12,8 @@ vi.mock('@/lib/auth', () => ({
   getPrincipalDriveMembership: mocks.getPrincipalDriveMembership,
   isDriveScopedPrincipal: mocks.isDriveScopedPrincipal,
 }));
-vi.mock('@pagespace/lib/permissions/permissions', () => ({ getUserDrivePermissions: mocks.getUserDrivePermissions }));
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null), getUserDrivePermissions: mocks.getUserDrivePermissions }));
 vi.mock('@pagespace/lib/permissions/membership-queries', () => ({ fetchCustomRolePermissions: mocks.fetchCustomRolePermissions }));
 
 import { canPrincipalRunCodeInDrive } from '../principal-code-exec-access';
@@ -32,7 +33,7 @@ describe('canPrincipalRunCodeInDrive', () => {
     mocks.getUserDrivePermissions.mockResolvedValue(drivePermissions(true));
 
     expect(await canPrincipalRunCodeInDrive(auth, 'drive-1')).toBe(true);
-    expect(mocks.getUserDrivePermissions).toHaveBeenCalledWith('user-1', 'drive-1');
+    expect(mocks.getUserDrivePermissions).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1' }), 'drive-1');
     expect(mocks.fetchCustomRolePermissions).not.toHaveBeenCalled();
 
     mocks.getUserDrivePermissions.mockResolvedValue(drivePermissions(false));

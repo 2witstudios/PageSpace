@@ -7,6 +7,7 @@
  * `organizations-drift-guard.test.ts`.
  */
 import { describe, expect, it } from 'vitest';
+import type { Operation } from '../../registry/define.js';
 import {
   getOrgPolicies,
   getOrganization,
@@ -51,6 +52,8 @@ const DIRECTORY = {
 
 const POLICIES = {
   policies: {
+    requireStrongSignIn: false,
+    maximumSessionAgeMinutes: null,
     guests: 'approve',
     publicShareLinks: true,
     publishWeb: true,
@@ -58,8 +61,6 @@ const POLICIES = {
     whoCanInvite: 'admins',
     whoCanCreateDrives: 'members',
     openDriveRoleFloor: 'view',
-    seatAllowanceCents: 3000,
-    walletFallback: 'refuse',
     modelAllowlist: null,
     providerAllowlist: null,
     agentsAutonomous: true,
@@ -86,11 +87,19 @@ describe('operations/organizations.ts — the five org reads', () => {
     }
   });
 
-  it('X-1 (partial) reads only: the file declares no non-GET operation', async () => {
-    const source = await import('node:fs').then((fs) => fs.promises.readFile(new URL('../organizations.ts', import.meta.url), 'utf-8'));
-    const methods = [...source.matchAll(/method: '(\w+)'/g)].map((m) => m[1]);
-    expect(methods.length).toBe(5);
-    expect(methods.every((m) => m === 'GET')).toBe(true);
+  it('X-1 (partial) every operation in the file carries account scope and a description that states the key rules', async () => {
+    const isOperation = (value: unknown): value is Operation =>
+      typeof value === 'object' && value !== null && 'method' in value && 'path' in value;
+    const ops = (Object.values(await import('../organizations.js')) as unknown[]).filter(isOperation);
+    expect(ops.length).toBe(34);
+    for (const op of ops) {
+      expect(op.requiredScope, op.name).toBe('account');
+      expect(op.description, op.name).toMatch(/no drive restriction|scoped to specific drives/);
+      // Accepting an invite and confirming a domain mail are not acts IN an org yet: no org policy governs them.
+      if (op.name !== 'organizations.acceptInvitation' && op.name !== 'organizations.confirmDomainEmail') {
+        expect(op.description, op.name).toMatch(/sign-in/);
+      }
+    }
   });
 
   it('X-1 (partial) orgs.list parses the route response and strips unknown fields', () => {
@@ -120,6 +129,14 @@ describe('operations/organizations.ts — the five org reads', () => {
   it('X-1 (partial) policies parse with every key present (defaults filled in server-side)', () => {
     expect(getOrgPolicies.outputSchema.safeParse(POLICIES).success).toBe(true);
     expect(getOrgPolicies.outputSchema.safeParse({ policies: { ...POLICIES.policies, guests: 'sometimes' } }).success).toBe(false);
+  });
+
+  it.each([
+    [null, true], [15, true], [43_200, true], [0, true],
+    [14, false], [1, false], [43_201, false], [15.5, false], [-1, false],
+  ])('SEC-3 (partial) maximumSessionAgeMinutes %s matches what the server can answer: %s', (value, ok) => {
+    // 0 is the strictest value a damaged stored age reads as (policies-core SPECS); 1..14 are never answered.
+    expect(getOrgPolicies.outputSchema.safeParse({ policies: { ...POLICIES.policies, maximumSessionAgeMinutes: value } }).success).toBe(ok);
   });
 
   it('X-1 (partial) inputs are strict: an unknown argument is a client-side validation error', () => {

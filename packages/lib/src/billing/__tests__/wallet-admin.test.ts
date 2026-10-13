@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { centsFromCredits } from '../money-model';
-import { planWalletPatch, planTopUp, planDeleteWallet, MAX_WALLET_CENTS } from '../wallet-admin';
+import { planWalletPatch, planTopUp, planDeleteWallet, planOrgPoolPause, planDriveWalletRehome, walletPatchOnlyRestricts, MAX_WALLET_CENTS } from '../wallet-admin';
 
 const c = (credits: number): number => Math.round(centsFromCredits(credits));
 
@@ -98,5 +98,65 @@ describe('wallet-admin purity', () => {
     const src = readFileSync(fileURLToPath(new URL('../wallet-admin.ts', import.meta.url)), 'utf8');
     const imports = [...src.matchAll(/from\s+'([^']+)'/g)].map((m) => m[1]);
     expect(imports.sort()).toEqual(['../permissions/wallet-access', './credit-core', './wallet-core']);
+  });
+});
+
+describe('the drive\'s guest switch (D-OW-4)', () => {
+  const current = { status: 'active' as const, debtCents: 0 };
+  it('SPEND-6 (partial) opening a drive wallet to guests lets outsiders spend the funder\'s money, so it takes the money authority (allocate)', () => {
+    expect(planWalletPatch({ guestSpendEnabled: true }, current)).toEqual({ kind: 'patch', actions: ['allocate'], set: { guestSpendEnabled: true } });
+    expect(planWalletPatch({ guestSpendEnabled: false }, current)).toEqual({ kind: 'patch', actions: ['allocate'], set: { guestSpendEnabled: false } });
+  });
+
+  it('SPEND-6 (partial) closing the wallet to guests only restricts (a lapsed org may still do it, D-OW-33); opening it does not', () => {
+    expect(walletPatchOnlyRestricts({ guestSpendEnabled: false })).toBe(true);
+    expect(walletPatchOnlyRestricts({ guestSpendEnabled: true })).toBe(false);
+  });
+});
+
+describe('planOrgPoolPause — the org pool\'s kill switch (WAL-7)', () => {
+  it('WAL-7 (partial) pausing the pool always applies, even while the org is lapsed (D-OW-33: billing never blocks restricting)', () => {
+    expect(planOrgPoolPause({ paused: true, debtCents: 0, orgActive: true })).toEqual({ kind: 'set', status: 'paused' });
+    expect(planOrgPoolPause({ paused: true, debtCents: c(3), orgActive: false })).toEqual({ kind: 'set', status: 'paused' });
+  });
+
+  it('WAL-7 (partial) resuming restores active, or over while the pool carries debt; a lapsed org cannot resume its pool (SEAT-9)', () => {
+    expect(planOrgPoolPause({ paused: false, debtCents: 0, orgActive: true })).toEqual({ kind: 'set', status: 'active' });
+    expect(planOrgPoolPause({ paused: false, debtCents: c(3), orgActive: true })).toEqual({ kind: 'set', status: 'over' });
+    expect(planOrgPoolPause({ paused: false, debtCents: 0, orgActive: false })).toEqual({ kind: 'refuse', reason: 'org_lapsed' });
+  });
+});
+
+describe('planDriveWalletRehome — a drive that changes owner takes its wallet with it (D-OW-60)', () => {
+  const period = { id: 'w-pool', periodStart: new Date('2026-10-01T00:00:00Z'), periodEnd: new Date('2026-11-01T00:00:00Z') };
+
+  it('WAL-2 (partial) moved into an org, the wallet is the org\'s under its pool; the old funder\'s allocation and debt do not follow', () => {
+    expect(planDriveWalletRehome({ status: 'over', debtCents: c(30), overshootChoice: 'wallet_debt', liveHoldCount: 0, to: { ownerType: 'org', orgId: 'o-northwind', parent: period } })).toEqual({
+      kind: 'rehome',
+      set: {
+        ownerType: 'org', orgId: 'o-northwind', userId: null, parentWalletId: 'w-pool',
+        monthlyAllowanceCents: 0, spentCents: 0, debtCents: 0, status: 'active', overshootChoice: 'wallet_debt',
+        monthlyPeriodStart: period.periodStart, monthlyPeriodEnd: period.periodEnd,
+      },
+      forgivenDebtCents: c(30),
+    });
+  });
+
+  it('WAL-2 (partial) moved out, the wallet is the lead\'s under their personal root; a paused wallet stays paused', () => {
+    const root = { id: 'w-lena', periodStart: null, periodEnd: null };
+    expect(planDriveWalletRehome({ status: 'paused', debtCents: 0, overshootChoice: null, liveHoldCount: 0, to: { ownerType: 'user', userId: 'u-lena', parent: root } })).toMatchObject({
+      set: { ownerType: 'user', userId: 'u-lena', orgId: null, parentWalletId: 'w-lena', status: 'paused', monthlyAllowanceCents: 0 },
+      forgivenDebtCents: 0,
+    });
+  });
+
+  it('an org with no pool yet leaves the wallet without a parent, and without an overshoot choice to absorb into one', () => {
+    expect(planDriveWalletRehome({ status: 'active', debtCents: 0, overshootChoice: 'absorb_to_parent', liveHoldCount: 0, to: { ownerType: 'org', orgId: 'o-new', parent: null } }))
+      .toMatchObject({ set: { parentWalletId: null, overshootChoice: null, monthlyPeriodStart: null, monthlyPeriodEnd: null } });
+  });
+
+  it('WAL-6 (partial) a wallet with calls in flight is not re-homed: they would settle on the new funder, who never authorized them', () => {
+    expect(planDriveWalletRehome({ status: 'active', debtCents: 0, overshootChoice: null, liveHoldCount: 1, to: { ownerType: 'user', userId: 'u-lena', parent: period } }))
+      .toEqual({ kind: 'refuse', reason: 'calls_in_flight' });
   });
 });

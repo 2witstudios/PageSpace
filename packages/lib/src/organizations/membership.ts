@@ -14,12 +14,12 @@ import { decideOrgRole } from './authorize';
 import { roleChangeOnlyRestricts } from './org-roles';
 import { checkOrgMayLoosen, type ORG_LAPSED_CODE } from './status';
 import { loadOrgPrincipalKind, type OrgPrincipalKind } from './owner-candidate';
-import { leaveOrganization, recordComputeReattributions, type ComputeReattribution, type LeadReassignment } from './leave';
-import { recordOwnerLeftAutomations, type OwnerLeftAutomation } from './automation-ownership';
+import { computeReattributionAuditEvents, leaveOrganization, type ComputeReattribution } from './leave';
+import { ownerLeftAutomationAuditEvents, type OwnerLeftAutomation } from './automation-ownership';
 import { revokeForDemotion } from './demotion';
 import { getActorInfo } from '../monitoring/activity-logger';
-import { recordOrgAuditEventAfterCommit } from '../audit/org-audit';
-import { recordLeaveEvents } from './org-events';
+import { transactionWithOrgAudit } from '../audit/org-audit';
+import { leaveAuditEvents } from './org-events';
 
 export type MembershipDecision =
   | { ok: true }
@@ -158,8 +158,7 @@ export async function changeMemberRole(input: {
   targetId: string;
   newRole: OrgRole;
 }): Promise<MembershipDecision> {
-  let fromRole = null as OrgRole | null;
-  const result = await db.transaction(async (tx) => {
+  return transactionWithOrgAudit(async (tx, audit) => {
     const roles = await lockActorAndTargetRoles(tx, input.orgId, input.actorId, input.targetId);
     const decision = decideRoleChange({ ...input, ...roles });
     if (!decision.ok) return decision;
@@ -168,7 +167,6 @@ export async function changeMemberRole(input: {
       const lapsed = await checkOrgMayLoosen(tx, input.orgId, !roleChangeOnlyRestricts(roles.targetRole, input.newRole));
       if (lapsed) return { ok: false, status: lapsed.status, reason: lapsed.code };
     }
-    fromRole = roles.targetRole;
     await tx
       .update(orgMembers)
       .set({ role: input.newRole })
@@ -181,19 +179,18 @@ export async function changeMemberRole(input: {
         toRole: input.newRole,
       });
     }
+    if (roles.targetRole !== input.newRole) {
+      await audit({
+        orgId: input.orgId,
+        eventType: 'org.member.role_changed',
+        actorId: input.actorId,
+        resourceType: 'user',
+        resourceId: input.targetId,
+        details: { from: roles.targetRole, to: input.newRole },
+      });
+    }
     return decision;
   });
-  if (result.ok && fromRole !== input.newRole) {
-    await recordOrgAuditEventAfterCommit({
-      orgId: input.orgId,
-      eventType: 'org.member.role_changed',
-      actorId: input.actorId,
-      resourceType: 'user',
-      resourceId: input.targetId,
-      details: { from: fromRole, to: input.newRole },
-    });
-  }
-  return result;
 }
 
 /**
@@ -206,12 +203,10 @@ export async function removeMember(input: {
   actorId: string;
   targetId: string;
 }): Promise<MembershipDecision> {
-  let reassigned: LeadReassignment[] = [];
-  // [D-OW-28] Audited after the removal commits, never for a removal that rolled back.
-  const reattributed: ComputeReattribution[] = [];
-  // [D-OW-36] Likewise the removed member's automations, disabled and flagged in this transaction.
-  const ownerLeft: OwnerLeftAutomation[] = [];
-  const result = await db.transaction(async (tx): Promise<MembershipDecision> => {
+  return transactionWithOrgAudit(async (tx, audit): Promise<MembershipDecision> => {
+    // [D-OW-28] and [D-OW-36]: what the cascade re-attributed and flagged, audited with the removal.
+    const reattributed: ComputeReattribution[] = [];
+    const ownerLeft: OwnerLeftAutomation[] = [];
     const roles = await lockActorAndTargetRoles(tx, input.orgId, input.actorId, input.targetId);
     const decision = decideMemberRemoval({ ...input, ...roles });
     if (!decision.ok) return decision;
@@ -225,15 +220,13 @@ export async function removeMember(input: {
       collectOwnerLeft: ownerLeft,
     });
     if (!left.ok) return { ok: false, status: 404, reason: 'target_not_member' };
-    reassigned = left.reassigned;
+    await audit(
+      ...leaveAuditEvents({ orgId: input.orgId, userId: input.targetId, actorId: input.actorId, eventType: 'org.member.removed', reassigned: left.reassigned }),
+      ...computeReattributionAuditEvents(reattributed, input.actorId),
+      ...ownerLeftAutomationAuditEvents(ownerLeft, input.actorId),
+    );
     return decision;
   });
-  if (result.ok) {
-    await recordLeaveEvents({ orgId: input.orgId, userId: input.targetId, actorId: input.actorId, eventType: 'org.member.removed', reassigned });
-    await recordComputeReattributions(reattributed, input.actorId);
-    await recordOwnerLeftAutomations(ownerLeft, input.actorId);
-  }
-  return result;
 }
 
 /**
@@ -247,8 +240,7 @@ export async function transferOwnership(input: {
   actorId: string;
   targetId: string;
 }): Promise<MembershipDecision> {
-  let previousOwnerId = null as string | null;
-  const result = await db.transaction(async (tx): Promise<MembershipDecision> => {
+  return transactionWithOrgAudit(async (tx, audit): Promise<MembershipDecision> => {
     const [org] = await tx
       .select({ ownerId: organizations.ownerId })
       .from(organizations)
@@ -275,18 +267,14 @@ export async function transferOwnership(input: {
       .set({ role: 'OWNER' })
       .where(and(eq(orgMembers.orgId, input.orgId), eq(orgMembers.userId, input.targetId)));
     await tx.update(organizations).set({ ownerId: input.targetId }).where(eq(organizations.id, input.orgId));
-    previousOwnerId = org.ownerId;
-    return decision;
-  });
-  if (result.ok) {
-    await recordOrgAuditEventAfterCommit({
+    await audit({
       orgId: input.orgId,
       eventType: 'org.ownership.transferred',
       actorId: input.actorId,
       resourceType: 'organization',
       resourceId: input.orgId,
-      details: { fromUserId: previousOwnerId, toUserId: input.targetId },
+      details: { fromUserId: org.ownerId, toUserId: input.targetId },
     });
-  }
-  return result;
+    return decision;
+  });
 }

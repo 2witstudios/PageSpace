@@ -81,7 +81,7 @@ beforeEach(() => {
   // never need it, and recordDeviceApproval independently re-validates.
   verifyDeviceUserCode.mockResolvedValue({ outcome: 'not_found' });
   getDriveAccess.mockResolvedValue({ isOwner: true, isAdmin: true, isMember: true, role: 'OWNER' });
-  consumeStepUpGrant.mockResolvedValue({ ok: true });
+  consumeStepUpGrant.mockResolvedValue({ ok: true, authentication: { authenticatedAtMs: 1700000000000, assurance: 'user_verified_passkey' } });
   getMemberCustomRoleId.mockResolvedValue(null);
   customRoleBelongsToDrive.mockResolvedValue(true);
 });
@@ -251,7 +251,7 @@ describe('POST /api/oauth/device_authorization/decision — P1b: grant-authority
   it('allows approving a scope the user has authority to grant', async () => {
     verifyDeviceUserCode.mockResolvedValue({ outcome: 'ok', clientId: 'pagespace-cli', scopes: ['drive:abc12345:member'] });
     getDriveAccess.mockResolvedValue({ isOwner: true, isAdmin: true, isMember: true, role: 'OWNER' });
-  consumeStepUpGrant.mockResolvedValue({ ok: true });
+  consumeStepUpGrant.mockResolvedValue({ ok: true, authentication: { authenticatedAtMs: 1700000000000, assurance: 'user_verified_passkey' } });
     recordDeviceApproval.mockResolvedValue({ outcome: 'approved' });
 
     const res = await POST(decisionRequest({ userCode: 'ABCD-EFGH', action: 'approve' }) as never);
@@ -321,6 +321,7 @@ describe('POST /api/oauth/device_authorization/decision — step-up gate on cred
       recordDeviceApproval.mockResolvedValue({ outcome: 'approved' });
 
       await POST(decisionRequest({ userCode: 'ABCD-EFGH', action: 'approve', stepUpToken: 'grant' }) as never);
+      expect(recordDeviceApproval).toHaveBeenCalledWith(expect.objectContaining({ authentication: { authenticatedAtMs: 1700000000000, assurance: 'user_verified_passkey' } }));
 
       // Bound to the user code AND the scope string, so a grant obtained for
       // one device approval cannot be replayed against another.

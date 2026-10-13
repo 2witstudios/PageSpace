@@ -23,6 +23,7 @@ import { conversations } from '@pagespace/db/schema/conversations';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { creditHolds, creditLedger } from '@pagespace/db/schema/credits';
 import { orgMembers } from '@pagespace/db/schema/organizations';
+import { workflows } from '@pagespace/db/schema/workflows';
 import {
   wallets,
   walletConsumerCaps,
@@ -34,7 +35,9 @@ import {
 import { isBillingEnabled } from '../deployment-mode';
 import { ORGS_ENABLED } from '../organizations/orgs-enabled';
 import { getDriveIdsForUser, getUserDriveAccess } from '../permissions/permissions';
+import { checkActorDriveAuthentication } from '../permissions/actor-authentication';
 import { loadDriveWalletStanding, type DriveWalletStanding } from '../permissions/spend-standing';
+import { holdsOrgRole } from '../organizations/authorize-core';
 import {
   credentialRefusalFor,
   decideSeatCapWrite,
@@ -49,32 +52,38 @@ import {
 } from '../permissions/wallet-access';
 import { ensurePersonalRootWalletId } from '../billing/personal-wallet';
 import { listSpendChoices, resolveCallSpend, seatAllowanceFor, seatAllowancesFor, type SpendChoice } from '../billing/spend-resolution';
-import { conversationSpend, type CallSpendDecision } from '../billing/spend-target';
+import { conversationSpend, driveSpend, type CallSpendDecision } from '../billing/spend-target';
 import { formatCreditCount } from '../billing/money-model';
 import { toPersonalSubscriptionTier } from '../billing/subscription-tiers';
-import { capChangeOnlyRestricts, planDeleteWallet, planTopUp, planWalletPatch, walletPatchOnlyRestricts, type DeleteBlocker, type WalletPatchInput } from '../billing/wallet-admin';
+import { capChangeOnlyRestricts, planDeleteWallet, planOrgPoolPause, planTopUp, planWalletPatch, walletPatchOnlyRestricts, type DeleteBlocker, type WalletPatchInput } from '../billing/wallet-admin';
 import { donateToDriveWallet } from '../billing/wallet-funding-shell';
+import { isGuestOnDriveWallet, readEffectiveConsumerCaps } from '../billing/consumer-caps';
 import { checkOrgActive } from '../organizations/status';
 import { findMembershipRole, findOrganizationNames, listOrgMembers } from '../organizations/repository';
 import { loadSeatCapFactsForUsers } from '../billing/seat-allowance';
-import { planConsumerCapWrite, seatCapCheck, seatSpentCents, userConsumerKey, utcDayStartMs, utcMonthStartMs, type ConsumerCapWriteInput, type ConsumerCaps, type SpendSourceKind } from '../billing/wallet-core';
+import { planConsumerCapWrite, seatCapCheck, seatSpentCents, userConsumerKey, utcDayStartMs, utcMonthStartMs, type ConsumerCapWriteInput, type ConsumerCaps, type SpendSourceKind, type WalletStatus } from '../billing/wallet-core';
 import { getOrgPolicies, readOrgSpendPolicy } from '../organizations/policy-reader';
 import {
   capRemainingCents,
+  consumerSpendRows,
+  workflowIdsToName,
   displayedWalletStatus,
+  driveWalletListEntry,
   projectDriveWallet,
   poolUnallocatedCents,
   walletRemainingCents,
   type ConsumerSpend,
   type DriveWalletFacts,
+  type DriveWalletListEntry,
   type DriveWalletView,
   type PoolFacts,
 } from '../billing/wallet-views';
-import { recordOrgAuditEventAfterCommit } from '../audit/org-audit';
+import { transactionWithOrgAudit, type OrgAuditEvent } from '../audit/org-audit';
 import { decryptUserRow } from '../auth/user-repository';
 import type { OrgApiErrorCode } from '../organizations/api-error-codes';
 import { announceDriveWalletChange, announceWalletChange } from '../billing/wallet-change-events';
 import { announceOrgChange } from '../organizations/org-change-events';
+import type { AccessActor, OrgAuthenticationDenialCode } from '../permissions/access-actor';
 
 export interface WalletServiceError {
   ok: false;
@@ -86,6 +95,14 @@ export interface WalletServiceError {
 }
 
 const notFound = (message = 'Drive not found'): WalletServiceError => ({ ok: false, status: 404, code: 'not_found', message });
+const signInRequired = (code: OrgAuthenticationDenialCode): WalletServiceError => ({
+  ok: false,
+  status: 403,
+  code,
+  message: code === 'org_strong_sign_in_required'
+    ? 'This organization requires you to sign in with a passkey to open its content.'
+    : 'Sign in again to open this organization’s content.',
+});
 const forbidden = (action: WalletAction): WalletServiceError => ({
   ok: false,
   status: 403,
@@ -117,10 +134,14 @@ interface WalletAccess {
   actions: WalletAction[];
 }
 
-async function walletAccess(userId: string, driveId: string, credential: WalletCredential): Promise<WalletAccess | WalletServiceError> {
+async function walletAccess(actor: AccessActor, driveId: string, credential: WalletCredential): Promise<WalletAccess | WalletServiceError> {
   if (!ORGS_ENABLED) return notFound();
-  const standing = await loadDriveWalletStanding(userId, driveId);
+  const standing = await loadDriveWalletStanding(actor.userId, driveId);
   if (!standing) return notFound();
+  // SEC-2/3 (D-OW-45): reading or spending an org drive's wallet is org content, so a credential the drive's org
+  // refuses is refused here — with the code that lets the person sign in again, since they hold standing on it.
+  const signIn = await checkActorDriveAuthentication(actor, driveId);
+  if (!signIn.allowed) return signIn.code === 'automation_out_of_scope' ? notFound() : signInRequired(signIn.code);
   const role = walletViewerRole(standing);
   if (role === 'none') return notFound();
   // [D-OW-26] a token reads as a consumer and may take no write, whatever the person's role.
@@ -168,7 +189,15 @@ const WALLET_ROW = {
   donationsEnabled: wallets.donationsEnabled,
   defaultSpendSource: wallets.defaultSpendSource,
   overshootChoice: wallets.overshootChoice,
+  guestSpendEnabled: wallets.guestSpendEnabled,
 } as const;
+
+/** A wallet's own status (WAL-7: a drive wallet's parent's kill switch pauses it), or null when there is none. */
+async function walletStatusById(walletId: string | null): Promise<WalletStatus | null> {
+  if (walletId === null) return null;
+  const [row] = await db.select({ status: wallets.status }).from(wallets).where(eq(wallets.id, walletId)).limit(1);
+  return row?.status ?? null;
+}
 
 async function driveWalletRow(executor: Pick<typeof db, 'select'>, driveId: string) {
   const [row] = await executor
@@ -183,6 +212,7 @@ async function orgPoolRow(executor: Pick<typeof db, 'select'>, orgId: string) {
   const [row] = await executor
     .select({
       id: wallets.id,
+      status: wallets.status,
       monthlyRemainingCents: wallets.monthlyRemainingCents,
       topupRemainingCents: wallets.topupRemainingCents,
       debtCents: wallets.debtCents,
@@ -229,38 +259,56 @@ async function usageCentsSince(walletId: string, userId: string, since: Date): P
   return Math.max(0, Number(row?.cents ?? 0));
 }
 
+/** The viewer's own caps here as the gate applies them (a guest is always capped, D-OW-4), and their spend. */
 async function myCapFacts(walletId: string, userId: string): Promise<DriveWalletFacts['myCap']> {
-  const [cap] = await db
-    .select({ dailyCapCents: walletConsumerCaps.dailyCapCents, monthlyCapCents: walletConsumerCaps.monthlyCapCents })
-    .from(walletConsumerCaps)
-    .where(and(eq(walletConsumerCaps.walletId, walletId), eq(walletConsumerCaps.consumerKey, userConsumerKey(userId))))
-    .limit(1);
+  const cap = await readEffectiveConsumerCaps(db, walletId, userId, { isGuest: await isGuestOnDriveWallet(db, walletId, userId) });
   if (!cap) return null;
   const nowMs = Date.now();
   return {
-    dailyCapCents: cap.dailyCapCents,
-    monthlyCapCents: cap.monthlyCapCents,
+    dailyCapCents: cap.dailyCents,
+    monthlyCapCents: cap.monthlyCents,
     spentTodayCents: await usageCentsSince(walletId, userId, new Date(utcDayStartMs(nowMs))),
     spentThisMonthCents: await usageCentsSince(walletId, userId, new Date(utcMonthStartMs(nowMs))),
   };
 }
 
-/** Spend on the wallet this period, per consumer (SPEND-10). Loaded only for a viewer who may see it. */
-async function spendByConsumer(walletId: string, since: Date | null): Promise<ConsumerSpend[]> {
-  const rows = await db
-    .select({ userId: creditLedger.userId, cents: sql<number>`coalesce(-sum(${creditLedger.appliedCents}), 0)::int` })
+/** At most this many (person, automation, today) groups are read, largest first; the wallet's spent total is the whole. */
+const SPEND_GROUPS_LISTED = 2000;
+
+/**
+ * Spend on the wallet this period (UI-9, SPEND-10, D-OW-67): the ledger grouped by who each usage row is recorded as,
+ * the automation it ran for, and whether it falls since today's UTC start; consumerSpendRows folds it into one row
+ * per member (a deleted account's spend one unnamed row) with their automations nested, named by the shell.
+ */
+async function spendByConsumer(walletId: string, since: Date | null, now: Date = new Date()): Promise<ConsumerSpend[]> {
+  const dayStart = new Date(utcDayStartMs(now.getTime()));
+  const today = sql<boolean>`(${creditLedger.createdAt} >= ${dayStart})`;
+  const cents = sql<number>`coalesce(-sum(${creditLedger.appliedCents}), 0)::int`;
+  const groups = await db
+    .select({ userId: creditLedger.userId, automationRef: creditLedger.automationRef, today, cents })
     .from(creditLedger)
     .where(and(
       eq(creditLedger.walletId, walletId),
       eq(creditLedger.entryType, 'usage'),
       since ? gte(creditLedger.createdAt, since) : undefined,
     ))
-    .groupBy(creditLedger.userId)
-    .limit(500);
-  const names = await userNamesById(rows.map((r) => r.userId));
-  return rows
-    .map((r) => ({ consumerKey: userConsumerKey(r.userId), userId: r.userId, displayName: names.get(r.userId) ?? null, spentCents: Math.max(0, Number(r.cents)) }))
-    .sort((a, b) => b.spentCents - a.spentCents || a.consumerKey.localeCompare(b.consumerKey));
+    // By position: the today flag carries a bound parameter, which Postgres cannot match to the select list.
+    .groupBy(sql`1`, sql`2`, sql`3`)
+    .orderBy(sql`${cents} DESC`)
+    .limit(SPEND_GROUPS_LISTED);
+  const spent = groups.map((g) => ({ userId: g.userId, automationRef: g.automationRef, today: g.today === true, spentCents: Number(g.cents) }));
+  const workflowIds = workflowIdsToName(spent);
+  const flows = workflowIds.length === 0
+    ? []
+    : await db.select({ id: workflows.id, name: workflows.name, createdBy: workflows.createdBy }).from(workflows).where(inArray(workflows.id, workflowIds));
+  const people = await userNamesById([
+    ...groups.flatMap((g) => (g.userId === null ? [] : [g.userId])),
+    ...flows.flatMap((f) => (f.createdBy === null ? [] : [f.createdBy])),
+  ]);
+  return consumerSpendRows(
+    spent,
+    { people, automations: new Map(flows.map((f) => [f.id, { name: f.name, createdBy: f.createdBy }])) },
+  );
 }
 
 /** People's display names by id (decrypted), so no wallet surface hands the UI a raw id alone (UI-9, UI-10). */
@@ -292,8 +340,9 @@ async function orgNamesById(orgIds: string[]): Promise<Map<string, string>> {
 async function poolFacts(orgId: string): Promise<PoolFacts | null> {
   const pool = await orgPoolRow(db, orgId);
   if (!pool) return null;
+  // [D-OW-60] what a child may still draw of its allocation is net of its debt.
   const [children] = await db
-    .select({ outstanding: sql<number>`coalesce(sum(greatest(${wallets.monthlyAllowanceCents} - ${wallets.spentCents}, 0)), 0)::int` })
+    .select({ outstanding: sql<number>`coalesce(sum(greatest(${wallets.monthlyAllowanceCents} - ${wallets.spentCents} - ${wallets.debtCents}, 0)), 0)::int` })
     .from(wallets)
     .where(eq(wallets.parentWalletId, pool.id));
   const held = await liveHeldCents(db, [], [pool.id]);
@@ -333,6 +382,8 @@ async function readView(userId: string, access: WalletAccess): Promise<DriveWall
       donationsEnabled: row.donationsEnabled,
       defaultSpendSource: row.defaultSpendSource,
       overshootChoice: row.overshootChoice,
+      guestSpendEnabled: row.guestSpendEnabled,
+      parentStatus: await walletStatusById(row.parentWalletId),
     },
     myCap: await myCapFacts(row.id, userId),
     spendByConsumer: seesSpend ? await spendByConsumer(row.id, row.monthlyPeriodStart) : [],
@@ -342,8 +393,9 @@ async function readView(userId: string, access: WalletAccess): Promise<DriveWall
 }
 
 /** GET a drive's wallet as this person may see it (SPEND-9, SPEND-10, UI-9). */
-export async function getDriveWallet(userId: string, driveId: string, credential: WalletCredential): Promise<DriveWalletRead | WalletServiceError> {
-  const access = await walletAccess(userId, driveId, credential);
+export async function getDriveWallet(actor: AccessActor, driveId: string, credential: WalletCredential): Promise<DriveWalletRead | WalletServiceError> {
+  const userId = actor.userId;
+  const access = await walletAccess(actor, driveId, credential);
   if (!access.ok) return access;
   return readView(userId, access);
 }
@@ -383,23 +435,15 @@ async function lockDriveOrgStanding(tx: Tx, driveId: string, expectedOrgId: stri
   return drive.orgId === expectedOrgId ? null : driveMoved();
 }
 
-/** AUD-1: a change to an ORG drive's wallet, once committed. A personal drive's wallet is no org's business. */
-async function recordOrgWalletEvent(
+/** AUD-1: a change to an ORG drive's wallet, staged with the change. A personal drive's wallet is no org's business. */
+function orgWalletEvents(
   standing: { orgId: string | null; driveId: string },
   userId: string,
   eventType: 'org.wallet.allocation_changed' | 'org.wallet.topped_up' | 'org.wallet.donated',
   details: Record<string, unknown>,
-): Promise<void> {
-  if (standing.orgId === null) return;
-  await recordOrgAuditEventAfterCommit({
-    orgId: standing.orgId,
-    driveId: standing.driveId,
-    eventType,
-    actorId: userId,
-    resourceType: 'drive_wallet',
-    resourceId: standing.driveId,
-    details,
-  });
+): OrgAuditEvent[] {
+  if (standing.orgId === null) return [];
+  return [{ orgId: standing.orgId, driveId: standing.driveId, eventType, actorId: userId, resourceType: 'drive_wallet', resourceId: standing.driveId, details }];
 }
 
 /**
@@ -408,15 +452,16 @@ async function recordOrgWalletEvent(
  * (D-OW-12); the reset sweep keeps it there.
  */
 export async function createDriveWallet(
-  userId: string,
+  actor: AccessActor,
   driveId: string,
   input: { allocationCents: number },
   credential: WalletCredential,
   hooks: WalletWriteHooks = {},
 ): Promise<DriveWalletRead | WalletServiceError> {
+  const userId = actor.userId;
   const refused = refuseCredential(credential, 'create');
   if (refused) return refused;
-  const access = await walletAccess(userId, driveId, credential);
+  const access = await walletAccess(actor, driveId, credential);
   if (!access.ok) return access;
   const denied = requireAction(access, 'create') ?? (await requireOrgActiveForWrite(access));
   if (denied) return denied;
@@ -425,7 +470,7 @@ export async function createDriveWallet(
 
   const { standing } = access;
   await hooks.afterAccess?.();
-  const created = await db.transaction(async (tx) => {
+  const created = await transactionWithOrgAudit(async (tx, audit) => {
     const moved = await lockDriveOrgStanding(tx, driveId, standing.orgId);
     if (moved) return moved;
     await hooks.afterDriveLock?.();
@@ -456,37 +501,38 @@ export async function createDriveWallet(
       })
       .onConflictDoNothing({ target: [wallets.subjectType, wallets.subjectId], where: sql`"subjectId" IS NOT NULL` })
       .returning({ id: wallets.id });
-    return inserted.length > 0 ? ('created' as const) : ('exists' as const);
+    if (inserted.length === 0) return 'exists' as const;
+    await audit(...orgWalletEvents(standing, userId, 'org.wallet.allocation_changed', { operation: 'create', allocationCents: input.allocationCents }));
+    return 'created' as const;
   });
   if (typeof created === 'object') return created;
   if (created === 'no_parent') {
     return { ok: false, status: 409, code: 'no_org_pool', message: 'This organization has no pool to allocate from yet' };
   }
   if (created === 'exists') return { ok: false, status: 409, code: 'wallet_exists', message: 'This drive already has a wallet' };
-  await recordOrgWalletEvent(standing, userId, 'org.wallet.allocation_changed', { operation: 'create', allocationCents: input.allocationCents });
   void announceDriveWalletChange(driveId, 'allocation');
   return readView(userId, access);
 }
 
 /** Change a drive wallet's allocation, pause state, rules or default source; each field is its own action. */
 export async function updateDriveWallet(
-  userId: string,
+  actor: AccessActor,
   driveId: string,
   input: WalletPatchInput,
   credential: WalletCredential,
   hooks: WalletWriteHooks = {},
 ): Promise<DriveWalletRead | WalletServiceError> {
+  const userId = actor.userId;
   // Every field of a change is a write (allocate, pause, rules): a token may make none of them.
-  const refused = refuseCredential(credential, input.allocationCents !== undefined || input.overshootChoice !== undefined ? 'allocate' : input.paused !== undefined ? 'pause' : 'set_rules');
+  const refused = refuseCredential(credential, input.allocationCents !== undefined || input.overshootChoice !== undefined || input.guestSpendEnabled !== undefined ? 'allocate' : input.paused !== undefined ? 'pause' : 'set_rules');
   if (refused) return refused;
-  const access = await walletAccess(userId, driveId, credential);
+  const access = await walletAccess(actor, driveId, credential);
   if (!access.ok) return access;
   const lapsed = walletPatchOnlyRestricts(input) ? null : await requireOrgActiveForWrite(access);
   if (lapsed) return lapsed;
 
-  let applied: Record<string, unknown> = {};
   await hooks.afterAccess?.();
-  const outcome = await db.transaction(async (tx): Promise<WalletServiceError | null> => {
+  const outcome = await transactionWithOrgAudit(async (tx, audit): Promise<WalletServiceError | null> => {
     const moved = await lockDriveOrgStanding(tx, driveId, access.standing.orgId);
     if (moved) return moved;
     await hooks.afterDriveLock?.();
@@ -505,31 +551,31 @@ export async function updateDriveWallet(
       if (denied) return denied;
     }
     await tx.update(wallets).set(plan.set).where(eq(wallets.id, row.id));
-    applied = { ...plan.set };
+    await audit(...orgWalletEvents(access.standing, userId, 'org.wallet.allocation_changed', { operation: 'update', changes: { ...plan.set } }));
     return null;
   });
   if (outcome) return outcome;
-  await recordOrgWalletEvent(access.standing, userId, 'org.wallet.allocation_changed', { operation: 'update', changes: applied });
   void announceDriveWalletChange(driveId, input.allocationCents !== undefined ? 'allocation' : input.paused !== undefined ? 'status' : 'rules');
   return readView(userId, access);
 }
 
 /** Delete a drive wallet that never moved money; anything else is paused instead (wallet-admin). */
 export async function deleteDriveWallet(
-  userId: string,
+  actor: AccessActor,
   driveId: string,
   credential: WalletCredential,
   hooks: WalletWriteHooks = {},
 ): Promise<{ ok: true } | WalletServiceError> {
+  const userId = actor.userId;
   const refused = refuseCredential(credential, 'delete');
   if (refused) return refused;
-  const access = await walletAccess(userId, driveId, credential);
+  const access = await walletAccess(actor, driveId, credential);
   if (!access.ok) return access;
   const denied = requireAction(access, 'delete') ?? (await requireOrgActiveForWrite(access));
   if (denied) return denied;
 
   await hooks.afterAccess?.();
-  const deleted = await db.transaction(async (tx): Promise<{ ok: true } | WalletServiceError> => {
+  return transactionWithOrgAudit(async (tx, audit): Promise<{ ok: true } | WalletServiceError> => {
     const moved = await lockDriveOrgStanding(tx, driveId, access.standing.orgId);
     if (moved) return moved;
     await hooks.afterDriveLock?.();
@@ -558,10 +604,9 @@ export async function deleteDriveWallet(
       return { ok: false, status: 409, code: plan.reason, message: 'This wallet has moved money; pause it instead of deleting it', blockers: plan.blockers };
     }
     await tx.delete(wallets).where(eq(wallets.id, row.id));
+    await audit(...orgWalletEvents(access.standing, userId, 'org.wallet.allocation_changed', { operation: 'delete' }));
     return { ok: true };
   });
-  if (deleted.ok) await recordOrgWalletEvent(access.standing, userId, 'org.wallet.allocation_changed', { operation: 'delete' });
-  return deleted;
 }
 
 // ---------------------------------------------------------------------------
@@ -573,15 +618,16 @@ export async function deleteDriveWallet(
  * lead's own personal wallet for a personal drive. One owner funding leg per `idempotencyKey`.
  */
 export async function topUpDriveWallet(
-  userId: string,
+  actor: AccessActor,
   driveId: string,
   input: { amountCents: number; idempotencyKey: string },
   credential: WalletCredential,
   hooks: WalletWriteHooks = {},
 ): Promise<{ ok: true; legId: string; amountCents: number; paidDebtCents: number; duplicate: boolean } | WalletServiceError> {
+  const userId = actor.userId;
   const refused = refuseCredential(credential, 'top_up');
   if (refused) return refused;
-  const access = await walletAccess(userId, driveId, credential);
+  const access = await walletAccess(actor, driveId, credential);
   if (!access.ok) return access;
   const denied = requireAction(access, 'top_up') ?? (await requireOrgActiveForWrite(access));
   if (denied) return denied;
@@ -597,7 +643,7 @@ export async function topUpDriveWallet(
   if (!payerId) return { ok: false, status: 409, code: 'no_org_pool', message: 'This organization has no pool to pay from' };
 
   await hooks.afterAccess?.();
-  const result = await db.transaction(async (tx) => {
+  const result = await transactionWithOrgAudit(async (tx, audit) => {
     // The payer was chosen from the drive's org; a move since then would fund it from the wrong one.
     const moved = await lockDriveOrgStanding(tx, driveId, standing.orgId);
     if (moved) return moved;
@@ -691,12 +737,10 @@ export async function topUpDriveWallet(
         consumeStatus: 'applied',
       },
     ]);
+    await audit(...orgWalletEvents(standing, userId, 'org.wallet.topped_up', { amountCents: plan.amountCents, paidDebtCents: plan.target.paidDebtCents, legId: leg.id }));
     return { ok: true as const, legId: leg.id, amountCents: plan.amountCents, paidDebtCents: plan.target.paidDebtCents, duplicate: false };
   });
-  if (result.ok && !result.duplicate) {
-    await recordOrgWalletEvent(standing, userId, 'org.wallet.topped_up', { amountCents: result.amountCents, paidDebtCents: result.paidDebtCents, legId: result.legId });
-    void announceDriveWalletChange(driveId, 'balance');
-  }
+  if (result.ok && !result.duplicate) void announceDriveWalletChange(driveId, 'balance');
   return result;
 }
 
@@ -759,8 +803,9 @@ const invalidCap = (): WalletServiceError => ({ ok: false, status: 400, code: 'i
 const notAConsumer = (): WalletServiceError => ({ ok: false, status: 404, code: 'not_a_consumer', message: 'That person cannot spend in this drive' });
 
 /** The caps set on a drive's wallet, per person (WAL-7). For whoever may set them, and the lead. */
-export async function listDriveWalletCaps(userId: string, driveId: string, credential: WalletCredential): Promise<WalletCapsRead | WalletServiceError> {
-  const access = await walletAccess(userId, driveId, credential);
+export async function listDriveWalletCaps(actor: AccessActor, driveId: string, credential: WalletCredential): Promise<WalletCapsRead | WalletServiceError> {
+  const userId = actor.userId;
+  const access = await walletAccess(actor, driveId, credential);
   if (!access.ok) return access;
   if (!access.actions.includes('set_caps') && !access.actions.includes('view_spend_by_member')) return forbidden('set_caps');
   const row = await driveWalletRow(db, driveId);
@@ -775,16 +820,17 @@ export async function listDriveWalletCaps(userId: string, driveId: string, crede
  * in the drive. `null` input clears the row (unlimited within the wallet).
  */
 export async function setDriveWalletCap(
-  userId: string,
+  actor: AccessActor,
   driveId: string,
   consumerId: string,
   input: ConsumerCapWriteInput | null,
   credential: WalletCredential,
   hooks: WalletWriteHooks = {},
 ): Promise<WalletCapsRead | WalletServiceError> {
+  const userId = actor.userId;
   const refused = refuseCredential(credential, 'set_caps');
   if (refused) return refused;
-  const access = await walletAccess(userId, driveId, credential);
+  const access = await walletAccess(actor, driveId, credential);
   if (!access.ok) return access;
   const denied = requireAction(access, 'set_caps');
   if (denied) return denied;
@@ -799,9 +845,15 @@ export async function setDriveWalletCap(
   // became an org's mid-request (drive_moved).
   // A drive-wallet leg with no cap row (or a null window) has no cap there.
   const restrictOnly = lapsed ? async (): Promise<RestrictOnly> => ({ refusal: lapsed, effective: (caps: ConsumerCaps | null): ConsumerCaps => caps ?? { dailyCents: null, monthlyCents: null } }) : undefined;
-  const written = await writeConsumerCap(row.id, consumerId, input, (tx) => lockDriveOrgStanding(tx, driveId, access.standing.orgId), restrictOnly);
+  const written = await writeConsumerCap(
+    row.id,
+    consumerId,
+    input,
+    orgWalletEvents(access.standing, userId, 'org.wallet.allocation_changed', { operation: input === null ? 'clear_consumer_cap' : 'set_consumer_cap', consumerId }),
+    (tx) => lockDriveOrgStanding(tx, driveId, access.standing.orgId),
+    restrictOnly,
+  );
   if (written) return written;
-  await recordOrgWalletEvent(access.standing, userId, 'org.wallet.allocation_changed', { operation: input === null ? 'clear_consumer_cap' : 'set_consumer_cap', consumerId });
   void announceWalletChange(row.id, 'caps');
   return { ok: true, walletId: row.id, caps: await capsOnWallet(row.id) };
 }
@@ -820,12 +872,14 @@ async function writeConsumerCap(
   walletId: string,
   consumerId: string,
   input: ConsumerCapWriteInput | null,
+  /** AUD-1: the org events of a write that applies, staged with it. */
+  auditEvents: readonly OrgAuditEvent[],
   guard?: (tx: Tx) => Promise<WalletServiceError | null>,
   /** Resolved inside the write's transaction (after `guard`), so what it reads is read under that transaction's locks. */
   restrictOnlyIn?: (tx: Tx) => Promise<RestrictOnly>,
 ): Promise<WalletServiceError | null> {
   const consumerKey = userConsumerKey(consumerId);
-  return db.transaction(async (tx): Promise<WalletServiceError | null> => {
+  return transactionWithOrgAudit(async (tx, audit): Promise<WalletServiceError | null> => {
     const blocked = guard ? await guard(tx) : null;
     if (blocked) return blocked;
     const restrictOnly = restrictOnlyIn ? await restrictOnlyIn(tx) : undefined;
@@ -837,6 +891,7 @@ async function writeConsumerCap(
     if (input === null) {
       if (restrictOnly && !capChangeOnlyRestricts(restrictOnly.effective(existing ?? null), restrictOnly.effective(null))) return restrictOnly.refusal;
       await tx.delete(walletConsumerCaps).where(and(eq(walletConsumerCaps.walletId, walletId), eq(walletConsumerCaps.consumerKey, consumerKey)));
+      await audit(...auditEvents);
       return null;
     }
     const plan = planConsumerCapWrite(input, existing ?? null);
@@ -849,6 +904,7 @@ async function writeConsumerCap(
         target: [walletConsumerCaps.walletId, walletConsumerCaps.consumerKey],
         set: { dailyCapCents: plan.caps.dailyCents, monthlyCapCents: plan.caps.monthlyCents, updatedAt: new Date() },
       });
+    await audit(...auditEvents);
     return null;
   });
 }
@@ -887,18 +943,67 @@ export async function setSeatCap(
           effective: (caps: ConsumerCaps | null): ConsumerCaps => ({ dailyCents: caps?.dailyCents ?? null, monthlyCents: caps?.monthlyCents ?? allowance }),
         };
       };
-  const written = await writeConsumerCap(pool.id, consumerId, input, undefined, restrictOnly);
+  const written = await writeConsumerCap(
+    pool.id,
+    consumerId,
+    input,
+    [{
+      orgId,
+      eventType: 'org.wallet.allocation_changed',
+      actorId: userId,
+      resourceType: 'org_pool',
+      resourceId: pool.id,
+      details: { operation: input === null ? 'clear_seat_cap' : 'set_seat_cap', consumerId },
+    }],
+    undefined,
+    restrictOnly,
+  );
   if (written) return written;
-  await recordOrgAuditEventAfterCommit({
-    orgId,
-    eventType: 'org.wallet.allocation_changed',
-    actorId: userId,
-    resourceType: 'org_pool',
-    resourceId: pool.id,
-    details: { operation: input === null ? 'clear_seat_cap' : 'set_seat_cap', consumerId },
-  });
   void announceOrgChange(orgId, 'seat_caps');
   return { ok: true, walletId: pool.id, caps: await capsOnWallet(pool.id) };
+}
+
+/**
+ * The org pool's kill switch (WAL-7): pause or resume the pool. Callers authorize (PATCH
+ * /api/orgs/[orgId]/pool: Owner and Admins, session only). A paused pool funds nothing — no seat,
+ * no drive wallet under it, no org compute — so every gate refuses source_paused until it resumes.
+ * Pausing applies even while the org is lapsed ([D-OW-33]); resuming does not (SEAT-9). Decided on
+ * the pool row locked FOR UPDATE, so it cannot race a refill or a settle into a stale status.
+ */
+export async function setOrgPoolPaused(
+  userId: string,
+  orgId: string,
+  paused: boolean,
+): Promise<{ ok: true; walletId: string; status: WalletStatus } | WalletServiceError> {
+  const active = await checkOrgActive(orgId);
+  // AUD-1: a status change's event commits with it (the outbox).
+  const outcome = await transactionWithOrgAudit(async (tx, audit): Promise<{ ok: true; walletId: string; status: WalletStatus; from: WalletStatus } | WalletServiceError> => {
+    const [pool] = await tx
+      .select({ id: wallets.id, status: wallets.status, debtCents: wallets.debtCents })
+      .from(wallets)
+      .where(and(eq(wallets.ownerType, 'org'), eq(wallets.orgId, orgId), isNull(wallets.subjectType), isNull(wallets.parentWalletId)))
+      .for('update');
+    if (!pool) return { ok: false, status: 409, code: 'no_org_pool', message: 'This organization has no pool yet' };
+    const plan = planOrgPoolPause({ paused, debtCents: pool.debtCents, orgActive: active.ok });
+    // Only a lapsed org is refused (SEAT-9: it may pause, never resume).
+    if (plan.kind === 'refuse' && !active.ok) return { ok: false, status: active.status, code: active.code, message: active.message };
+    if (plan.kind === 'refuse') return { ok: false, status: 409, code: 'org_lapsed', message: 'This organization is lapsed' };
+    if (plan.status !== pool.status) {
+      await tx.update(wallets).set({ status: plan.status }).where(eq(wallets.id, pool.id));
+      await audit({
+        orgId,
+        eventType: 'org.wallet.allocation_changed',
+        actorId: userId,
+        resourceType: 'org_pool',
+        resourceId: pool.id,
+        details: { operation: paused ? 'pause_pool' : 'resume_pool', from: pool.status, to: plan.status },
+      });
+    }
+    return { ok: true, walletId: pool.id, status: plan.status, from: pool.status };
+  });
+  if (!outcome.ok) return outcome;
+  if (outcome.from !== outcome.status) void announceOrgChange(orgId, 'wallet');
+  return { ok: true, walletId: outcome.walletId, status: outcome.status };
 }
 
 /** One member's seat as Members & seats shows it (WAL-7, D-OW-38 "seat allowance remaining"). */
@@ -970,6 +1075,8 @@ export async function listOrgSeatCaps(orgId: string, now: Date = new Date()): Pr
 export interface OrgPoolSplit {
   /** The org pool, or null before the first payment funds one. */
   walletId: string | null;
+  /** The pool's status as shown (WAL-7: `paused` is its kill switch, `over` its debt); null without a pool. */
+  status: WalletStatus | null;
   /** What the pool can still spend this period (refill + top-ups − debt − holds). */
   availableCents: number;
   /** Of that, what no drive wallet's allocation still claims (poolUnallocatedCents). May be negative. */
@@ -992,7 +1099,7 @@ export async function getOrgPoolSplit(orgId: string, now: Date = new Date()): Pr
   const pool = await orgPoolRow(db, orgId);
   const facts = await poolFacts(orgId);
   if (!pool || !facts) {
-    return { walletId: null, availableCents: 0, unallocatedCents: 0, periodEnd: null, seats: { memberCount: Number(memberCount), allowanceCents: policies.seatAllowanceCents, allocatedCents: Number(memberCount) * policies.seatAllowanceCents, spentCents: 0 }, driveWallets: [], drivesWithoutWallet: [] };
+    return { walletId: null, status: null, availableCents: 0, unallocatedCents: 0, periodEnd: null, seats: { memberCount: Number(memberCount), allowanceCents: policies.seatAllowanceCents, allocatedCents: Number(memberCount) * policies.seatAllowanceCents, spentCents: 0 }, driveWallets: [], drivesWithoutWallet: [] };
   }
   // The gate's own seat facts per member (windowed by the seat period, each call netted to >= 0): never a
   // second ledger sum (review P2-4).
@@ -1011,11 +1118,12 @@ export async function getOrgPoolSplit(orgId: string, now: Date = new Date()): Pr
   const withWallet = new Set(children.flatMap((c) => (c.driveId ? [c.driveId] : [])));
   const driveWallets = children
     .flatMap((c) => (c.driveId && names.has(c.driveId)
-      ? [{ driveId: c.driveId, driveName: names.get(c.driveId) as string, walletId: c.id, allocationCents: c.allocationCents, spentCents: c.spentCents, status: displayedWalletStatus(c) }]
+      ? [{ driveId: c.driveId, driveName: names.get(c.driveId) as string, walletId: c.id, allocationCents: c.allocationCents, spentCents: c.spentCents, status: displayedWalletStatus({ ...c, parentStatus: pool.status }) }]
       : []))
     .sort((a, b) => a.driveName.localeCompare(b.driveName));
   return {
     walletId: pool.id,
+    status: displayedWalletStatus(pool),
     availableCents: facts.availableCents,
     unallocatedCents: poolUnallocatedCents(facts),
     periodEnd: pool.monthlyPeriodEnd?.toISOString() ?? null,
@@ -1027,15 +1135,16 @@ export async function getOrgPoolSplit(orgId: string, now: Date = new Date()): Pr
 
 /** Donate from the caller's own balance to the drive's wallet (WAL-4); the donation shell re-checks visibility. */
 export async function donateToDrive(
-  userId: string,
+  actor: AccessActor,
   driveId: string,
   input: { amountCents: number; idempotencyKey: string },
   credential: WalletCredential,
   hooks: WalletWriteHooks = {},
-): Promise<{ ok: true; legId: string | null; amountCents: number; paidDebtCents: number; duplicate: boolean } | WalletServiceError> {
+): Promise<{ ok: true; legId: string | null; amountCents: number; duplicate: boolean } | WalletServiceError> {
+  const userId = actor.userId;
   const refused = refuseCredential(credential, 'donate');
   if (refused) return refused;
-  const access = await walletAccess(userId, driveId, credential);
+  const access = await walletAccess(actor, driveId, credential);
   if (!access.ok) return access;
   const denied = requireAction(access, 'donate') ?? (await requireOrgActiveForWrite(access));
   if (denied) return denied;
@@ -1051,13 +1160,13 @@ export async function donateToDrive(
     // Re-checked under the drive row's lock inside the donation's transaction (see lockDriveOrgStanding).
     expectedDrive: { driveId, orgId: access.standing.orgId },
     afterDriveLock: hooks.afterDriveLock,
+    auditEvents: (donated) => orgWalletEvents(access.standing, userId, 'org.wallet.donated', donated),
   });
   if (outcome.kind === 'donated') {
-    await recordOrgWalletEvent(access.standing, userId, 'org.wallet.donated', { amountCents: outcome.amountCents, paidDebtCents: outcome.paidDebtCents, legId: outcome.legId });
     void announceDriveWalletChange(driveId, 'balance');
-    return { ok: true, legId: outcome.legId, amountCents: outcome.amountCents, paidDebtCents: outcome.paidDebtCents, duplicate: false };
+    return { ok: true, legId: outcome.legId, amountCents: outcome.amountCents, duplicate: false };
   }
-  if (outcome.kind === 'duplicate') return { ok: true, legId: outcome.legId, amountCents: input.amountCents, paidDebtCents: 0, duplicate: true };
+  if (outcome.kind === 'duplicate') return { ok: true, legId: outcome.legId, amountCents: input.amountCents, duplicate: true };
   switch (outcome.reason) {
     case 'insufficient_funds':
       return { ok: false, status: 402, code: outcome.reason, message: 'Your balance cannot cover this donation' };
@@ -1085,8 +1194,8 @@ export async function donateToDrive(
  */
 export interface MyWallets {
   personal: { walletId: string; remainingCents: number; remainingCredits: string; defaultSpendSource: SpendSourceKind | null };
-  /** Drive wallets of drives I can open: the consumer amount only (SPEND-9), by drive name. */
-  driveWallets: { driveId: string; driveName: string | null; walletId: string; status: string; remainingCents: number; remainingCredits: string }[];
+  /** Drive wallets of drives I can open: the consumer amount and my own spend only (SPEND-9, UI-10), by drive name. */
+  driveWallets: DriveWalletListEntry[];
   /**
    * A seat on each org I belong to: my own allowance only, never the pool (SPEND-9), by org name.
    * The allowance, what I spent of it and what is left (D-OW-38 read model, seatAllowanceFor).
@@ -1104,7 +1213,7 @@ export interface MyWallets {
   }[];
   /** What I fund: drive wallets my personal wallet parents, pools I administer (SPEND-10), my donations. */
   funds: {
-    driveWallets: { driveId: string; driveName: string | null; walletId: string; status: string; remainingCents: number; remainingCredits: string }[];
+    driveWallets: DriveWalletListEntry[];
     pools: { orgId: string; orgName: string | null; walletId: string; availableCents: number; unallocatedCents: number; availableCredits: string; unallocatedCredits: string }[];
     donations: {
       walletId: string;
@@ -1119,7 +1228,28 @@ export interface MyWallets {
   };
 }
 
-export async function listMyWallets(userId: string, credential: WalletCredential): Promise<MyWallets> {
+/**
+ * What one person spent from each of these wallets in its current period (UI-10 "you spent N"): their
+ * own usage rows only, since each wallet's period start (all time for a wallet with none yet).
+ */
+async function mySpendByWallet(userId: string, walletIds: string[]): Promise<Map<string, number>> {
+  if (walletIds.length === 0) return new Map();
+  const rows = await db
+    .select({ walletId: creditLedger.walletId, cents: sql<number>`coalesce(-sum(${creditLedger.appliedCents}), 0)::int` })
+    .from(creditLedger)
+    .innerJoin(wallets, eq(wallets.id, creditLedger.walletId))
+    .where(and(
+      eq(creditLedger.userId, userId),
+      eq(creditLedger.entryType, 'usage'),
+      inArray(creditLedger.walletId, walletIds),
+      sql`(${wallets.monthlyPeriodStart} IS NULL OR ${creditLedger.createdAt} >= ${wallets.monthlyPeriodStart})`,
+    ))
+    .groupBy(creditLedger.walletId);
+  return new Map(rows.map((r) => [r.walletId, Number(r.cents)]));
+}
+
+export async function listMyWallets(actor: AccessActor, credential: WalletCredential): Promise<MyWallets> {
+  const userId = actor.userId;
   const personalId = await ensurePersonalRootWalletId(db, userId);
   const [personal] = await db
     .select({ monthlyRemainingCents: wallets.monthlyRemainingCents, topupRemainingCents: wallets.topupRemainingCents, debtCents: wallets.debtCents, defaultSpendSource: wallets.defaultSpendSource })
@@ -1158,8 +1288,8 @@ export async function listMyWallets(userId: string, credential: WalletCredential
 
   if (!ORGS_ENABLED) return result;
 
-  // The drives this person can open, through the one access model; nothing else is listed.
-  const driveIds = await getDriveIdsForUser(userId);
+  // The drives this credential can open, through the one access model (sign-in policy included); nothing else is listed.
+  const driveIds = await getDriveIdsForUser(actor);
   if (driveIds.length > 0) {
     const rows = await db
       .select({ id: wallets.id, subjectId: wallets.subjectId, parentWalletId: wallets.parentWalletId, status: wallets.status, monthlyAllowanceCents: wallets.monthlyAllowanceCents, spentCents: wallets.spentCents, topupRemainingCents: wallets.topupRemainingCents, debtCents: wallets.debtCents })
@@ -1167,10 +1297,10 @@ export async function listMyWallets(userId: string, credential: WalletCredential
       .where(and(eq(wallets.subjectType, 'drive'), inArray(wallets.subjectId, driveIds)))
       .limit(1000);
     const driveNames = await driveNamesById(rows.flatMap((r) => (r.subjectId ? [r.subjectId] : [])));
+    const mySpent = await mySpendByWallet(userId, rows.map((r) => r.id));
     for (const row of rows) {
       if (!row.subjectId) continue;
-      const remaining = walletRemainingCents(row);
-      const entry = { driveId: row.subjectId, driveName: driveNames.get(row.subjectId) ?? null, walletId: row.id, status: displayedWalletStatus(row), remainingCents: remaining, remainingCredits: formatCreditCount(remaining) };
+      const entry = driveWalletListEntry({ ...row, subjectId: row.subjectId }, driveNames.get(row.subjectId) ?? null, mySpent.get(row.id) ?? 0);
       result.driveWallets.push(entry);
       // The funder sees the balance of what they fund (UI-10), as its consumers do.
       if (row.parentWalletId === personalId) result.funds.driveWallets.push(entry);
@@ -1199,7 +1329,7 @@ export async function listMyWallets(userId: string, credential: WalletCredential
       remainingCents: seat.remainingCents,
       remainingCredits: formatCreditCount(seat.remainingCents),
     });
-    if (credential === 'session' && (m.role === 'OWNER' || m.role === 'ADMIN')) {
+    if (credential === 'session' && holdsOrgRole(m.role, 'ADMIN')) {
       const facts = await poolFacts(m.orgId);
       if (facts) {
         const unallocatedCents = facts.availableCents - facts.outstandingChildAllocationsCents;
@@ -1259,10 +1389,11 @@ export async function getAlwaysOwnCredits(
  * Session only ([D-OW-26]): a token cannot change what an account spends from.
  */
 export async function setAlwaysOwnCredits(
-  userId: string,
+  actor: AccessActor,
   input: { driveId: string | null; enabled: boolean },
   credential: WalletCredential,
 ): Promise<{ ok: true; driveId: string | null; enabled: boolean } | WalletServiceError> {
+  const userId = actor.userId;
   const refused = refuseCredential(credential, 'set_spend_override');
   if (refused) return refused;
   if (input.driveId === null) {
@@ -1270,7 +1401,7 @@ export async function setAlwaysOwnCredits(
     await db.update(wallets).set({ alwaysOwnCredits: input.enabled }).where(and(eq(wallets.id, walletId), personalRootWalletOf(userId)));
     return { ok: true, driveId: null, enabled: input.enabled };
   }
-  if (!(await getUserDriveAccess(userId, input.driveId))) return notFound();
+  if (!(await getUserDriveAccess(actor, input.driveId))) return notFound();
   if (input.enabled) {
     await db.insert(driveSpendOverrides).values({ userId, driveId: input.driveId }).onConflictDoNothing();
   } else {
@@ -1326,9 +1457,9 @@ async function ownConversation(userId: string, conversationId: string, globalDri
  * ownConversation).
  *
  * For a GLOBAL conversation the preview is only as good as the drive the client names: the
- * turn itself spends in a drive only when the server resolved it from a contextRef, and a
- * legacy request without one spends personal credits and reads no stored choice (#2726). A
- * client must therefore preview with the same drive its turns will carry in their contextRef.
+ * turn itself spends in the drive the server resolved from its contextRef (none: personal
+ * credits, SPEND-8). A client must therefore preview with the same drive its turns will carry
+ * in their contextRef.
  */
 export async function getConversationSpend(userId: string, conversationId: string, globalDriveId: string | null = null): Promise<ConversationSpendRead | WalletServiceError> {
   const conversation = await ownConversation(userId, conversationId, globalDriveId);
@@ -1346,11 +1477,43 @@ export async function getConversationSpend(userId: string, conversationId: strin
   return { ok: true, conversationId, driveId: sessionDriveId, chosenWalletId: conversation.chosenWalletId, options, resolved };
 }
 
+export interface DriveSpendRead {
+  ok: true;
+  driveId: string;
+  /** What this person may pick in the drive, by wallet. */
+  options: SpendChoice[];
+  /** What a NEW conversation here would spend, as the gate would decide it now. */
+  resolved: CallSpendDecision;
+}
+
 /**
- * Choose (or clear, with null) the wallet a conversation spends from (SPEND-3). The ONLY
- * writer of conversations.chosenWalletId: a turn never changes it. The wallet must be one of
- * this person's options in the conversation's drive now; the gate re-resolves it on every call
- * anyway, and refuses it if it stops being one.
+ * The drive's source as the header chip shows it while the person is inside the drive with no
+ * conversation in view (SPEND-2: "in the header chip while inside a drive"): the options and what
+ * a new conversation's first call would preselect (the drive's default, then the person's), from
+ * the same resolver the gate uses — a zero-cost preview, nothing reserved, no refusal logged,
+ * nothing pinned. A drive the person cannot open is 404, so its existence is not revealed.
+ */
+export async function getDriveSpend(actor: AccessActor, driveId: string): Promise<DriveSpendRead | WalletServiceError> {
+  const userId = actor.userId;
+  if (!(await getUserDriveAccess(actor, driveId))) return notFound();
+  const [user] = await db.select({ tier: users.subscriptionTier }).from(users).where(eq(users.id, userId)).limit(1);
+  const options = await listSpendChoices(userId, driveId);
+  const resolved = await resolveCallSpend({
+    userId,
+    consumerTier: toPersonalSubscriptionTier(user?.tier),
+    target: driveSpend(driveId),
+    reservationCents: 0,
+    recordRefusal: false,
+  });
+  return { ok: true, driveId, options, resolved };
+}
+
+/**
+ * Choose (or clear, with null) the wallet a conversation spends from (SPEND-3). The person's
+ * explicit switch, and the only writer that may REPLACE conversations.chosenWalletId: the gate
+ * only fills it once, while empty, with the source the first call preselected. The wallet must
+ * be one of this person's options in the conversation's drive now; the gate re-resolves it on
+ * every call anyway, and refuses it if it stops being one.
  */
 export async function setConversationSpend(
   userId: string,

@@ -14,6 +14,8 @@
  * unchanged — which also finds nobody for a customer that is no user's.
  */
 import { ORG_ID_METADATA_KEY, ORG_SUBSCRIPTION_KIND, orgSubscriptionItems, isLiveOrgSubscriptionStatus, type OrgSubscriptionCandidate, type OrgBusinessPrices } from './org-subscription-core';
+import type { OrgAuditEvent } from '../audit/org-audit';
+import type { OrgLapseTransition, OrgStatus } from '../organizations/status-core';
 
 export type BillingOwnerRoute =
   | { kind: 'org'; orgId: string }
@@ -37,37 +39,6 @@ export function routeBillingOwner(input: {
   }
   if (taggedKind || taggedOrgId !== null) return { kind: 'org_unlinked', taggedOrgId };
   return { kind: 'person' };
-}
-
-/** Structural subset of a Stripe invoice line read for the seat count. */
-export interface OrgInvoiceSeatLine {
-  quantity?: number | null;
-  pricing?: { price_details?: { price?: string | { id?: string | null } | null } | null } | null;
-}
-
-/**
- * The extra seats an org invoice billed: the quantity on its extra-seat price line — a
- * COUNT, never an amount (amounts come only from the money model). Sizes the pool of a
- * gift at list price ([D-OW-23]; there is no org trial, [D-OW-30]) from the invoice itself, so an invoice.paid
- * that beats the provisioning commit still funds the seats it billed. With several
- * lines for the seat price (prorations), the largest positive quantity is the period's
- * count. Null when the invoice has no seat line or the seat price is not configured.
- */
-export function orgInvoiceExtraSeats(
-  lines: ReadonlyArray<OrgInvoiceSeatLine | null | undefined>,
-  seatPriceId: string,
-): number | null {
-  if (!seatPriceId) return null;
-  let seats: number | null = null;
-  for (const line of lines) {
-    const price = line?.pricing?.price_details?.price;
-    const priceId = typeof price === 'string' ? price : price?.id ?? null;
-    if (priceId !== seatPriceId) continue;
-    const quantity = line?.quantity;
-    if (typeof quantity !== 'number' || !Number.isInteger(quantity) || quantity < 0) continue;
-    seats = seats === null ? quantity : Math.max(seats, quantity);
-  }
-  return seats;
 }
 
 export type OrgSubscriptionMirrorPlan = 'apply' | 'ignore_other_subscription' | 'no_row';
@@ -140,4 +111,59 @@ export function planOrgSubscriptionPriceMirror(input: {
     stripeBasePriceId: patch !== null ? input.prices.basePriceId : '',
     stripeSeatPriceId: patch !== null ? input.prices.seatPriceId : '',
   };
+}
+
+/** What the mirror compares, before and after one Stripe re-read. */
+export interface MirroredOrgSubscriptionState {
+  status: string;
+  cancelAtPeriodEnd: boolean;
+  extraSeatQuantity: number;
+}
+
+/**
+ * AUD-1: the org events one subscription mirror writes, staged with the mirror's own write. A change of status or
+ * cancel-at-period-end is a billing event; a change of the extra-seat quantity is a SEAT event — the mirror only ever
+ * sees a quantity it did not set itself (every change the app makes stores its quantity first), so it is a change
+ * made on Stripe's side (the dashboard, the customer portal, support). A redelivery that mirrors the same state writes
+ * nothing.
+ */
+export function orgSubscriptionMirrorAuditEvents(input: {
+  orgId: string;
+  eventId: string;
+  previous: MirroredOrgSubscriptionState;
+  next: MirroredOrgSubscriptionState;
+  orgStatusBefore: OrgStatus;
+  orgStatusAfter: OrgStatus;
+  transition: OrgLapseTransition | null;
+}): OrgAuditEvent[] {
+  const { orgId, eventId, previous, next } = input;
+  const events: OrgAuditEvent[] = [];
+  if (previous.status !== next.status || previous.cancelAtPeriodEnd !== next.cancelAtPeriodEnd) {
+    events.push({
+      orgId,
+      eventType: 'org.billing.subscription_changed',
+      resourceType: 'org_subscription',
+      resourceId: orgId,
+      details: {
+        source: 'stripe_webhook',
+        eventId,
+        from: previous.status,
+        to: next.status,
+        cancelAtPeriodEnd: next.cancelAtPeriodEnd,
+        orgStatusBefore: input.orgStatusBefore,
+        orgStatusAfter: input.orgStatusAfter,
+        ...(input.transition ? { transition: input.transition } : {}),
+      },
+    });
+  }
+  if (previous.extraSeatQuantity !== next.extraSeatQuantity) {
+    events.push({
+      orgId,
+      eventType: 'org.seat.quantity_changed',
+      resourceType: 'organization',
+      resourceId: orgId,
+      details: { reason: 'stripe_side_change', source: 'stripe_webhook', eventId, from: previous.extraSeatQuantity, to: next.extraSeatQuantity },
+    });
+  }
+  return events;
 }

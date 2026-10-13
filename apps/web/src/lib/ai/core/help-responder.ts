@@ -14,6 +14,7 @@ import { COMMAND_EXECUTION_PART_TYPE } from '@/lib/ai/core/command-processor';
 import { buildAssistantPersistencePayload, type AssistantPersistencePayload } from '@/lib/ai/core/persistAssistantParts';
 import { loadHelpAnswerText } from '@/lib/commands/help-answer';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 /**
  * Shared stream shape: writes the "Using /help" pill and the answer text,
@@ -70,7 +71,7 @@ function buildHelpAnswerStream(
 
 /** Page-chat entry point (apps/web/src/app/api/ai/chat/route.ts). */
 export async function respondWithHelpAnswer(params: {
-  senderId: string;
+  sender: AccessActor;
   driveId: string | null;
   originalMessages: UIMessage[];
   /**
@@ -81,7 +82,7 @@ export async function respondWithHelpAnswer(params: {
    */
   persist: (payload: AssistantPersistencePayload, messageId: string) => Promise<unknown>;
 }): Promise<Response> {
-  const answerText = await loadHelpAnswerText(params.senderId, params.driveId);
+  const answerText = await loadHelpAnswerText(params.sender, params.driveId);
   const messageId = createId();
 
   return buildHelpAnswerStream(messageId, answerText, params.originalMessages, (payload) =>

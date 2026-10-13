@@ -3,7 +3,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { addOrgDomain, listOrgDomains } from '@pagespace/lib/organizations/domains';
 import { MAX_ORG_DOMAINS, dnsRecordName, dnsRecordValue } from '@pagespace/lib/organizations/domains-core';
-import { authorizeOrgRequest, ORG_READ_AUTH, ORG_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
+import { authorizeOrgRequest, ORG_TOKEN_READ_AUTH, ORG_TOKEN_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
 import { domainAddSchema } from '@/lib/orgs/org-schemas';
 
 type Context = { params: Promise<{ orgId: string }> };
@@ -25,7 +25,7 @@ const withDnsRecord = <T extends { domain: string; dnsToken: string }>(claim: T)
 /** GET /api/orgs/[orgId]/domains — the org's domain claims and their status (SEC-1); Owner and Admins. */
 export async function GET(request: Request, context: Context) {
   const { orgId } = await context.params;
-  const gate = await authorizeOrgRequest(request, orgId, 'ADMIN', ORG_READ_AUTH);
+  const gate = await authorizeOrgRequest(request, orgId, 'ADMIN', ORG_TOKEN_READ_AUTH);
   if (!gate.ok) return gate.response;
   try {
     const domains = await listOrgDomains(orgId);
@@ -43,7 +43,7 @@ export async function GET(request: Request, context: Context) {
  */
 export async function POST(request: Request, context: Context) {
   const { orgId } = await context.params;
-  const gate = await authorizeOrgRequest(request, orgId, 'ADMIN', ORG_WRITE_AUTH);
+  const gate = await authorizeOrgRequest(request, orgId, 'ADMIN', ORG_TOKEN_WRITE_AUTH);
   if (!gate.ok) return gate.response;
   try {
     const parsed = domainAddSchema.safeParse(await request.json().catch(() => null));

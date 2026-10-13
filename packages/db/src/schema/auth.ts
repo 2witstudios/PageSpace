@@ -111,6 +111,8 @@ export const users = pgTable('users', {
 }));
 
 export const deviceTokens = pgTable('device_tokens', {
+  authenticatedAt: timestamp('authenticatedAt', { mode: 'date' }),
+  authenticationAssurance: text('authenticationAssurance', { enum: ['single_factor', 'user_verified_passkey'] }),
   id: text('id').primaryKey().$defaultFn(() => createId()),
   userId: text('userId').notNull().references(() => users.id, { onDelete: 'cascade' }),
 
@@ -156,6 +158,8 @@ export const deviceTokens = pgTable('device_tokens', {
 });
 
 export const mcpTokens = pgTable('mcp_tokens', {
+  authenticatedAt: timestamp('authenticatedAt', { mode: 'date' }),
+  authenticationAssurance: text('authenticationAssurance', { enum: ['single_factor', 'user_verified_passkey'] }),
   id: text('id').primaryKey().$defaultFn(() => createId()),
   userId: text('userId').notNull().references(() => users.id, { onDelete: 'cascade' }),
 

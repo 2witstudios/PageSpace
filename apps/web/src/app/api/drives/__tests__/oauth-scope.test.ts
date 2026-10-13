@@ -133,7 +133,7 @@ describe('GET /api/drives — OAuth credentials', () => {
     const body = await response.json();
 
     expect(response.status).toBe(200);
-    expect(listAccessibleDrives).toHaveBeenCalledWith('user-manage-keys', { includeTrash: false, tokenScopable: true });
+    expect(listAccessibleDrives).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-manage-keys' }), { includeTrash: false, tokenScopable: true });
     expect(body.map((drive: { id: string }) => drive.id)).toEqual(['drive-a', 'drive-b']);
     expect(db.query.drives.findMany).not.toHaveBeenCalled();
   });
@@ -156,7 +156,7 @@ describe('GET /api/drives — OAuth credentials', () => {
     const body = await response.json();
 
     expect(response.status).toBe(200);
-    expect(listAccessibleDrives).toHaveBeenCalledWith('user-account', { includeTrash: false, tokenScopable: false });
+    expect(listAccessibleDrives).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-account' }), { includeTrash: false, tokenScopable: false });
     expect(body.map((drive: { id: string }) => drive.id)).toEqual(['drive-account']);
     expect(db.query.drives.findMany).not.toHaveBeenCalled();
   });
@@ -213,7 +213,7 @@ describe('GET /api/drives — OAuth credentials', () => {
     expect(listAccessibleDrives).not.toHaveBeenCalled();
     expect(hasScopedDriveMembership).toHaveBeenCalledWith(
       [{ driveId: 'drive-1', role: null, customRoleId: null }],
-      'test-user-id',
+      expect.objectContaining({ userId: 'test-user-id' }),
       'drive-1',
     );
   });
@@ -233,3 +233,4 @@ describe('GET /api/drives — OAuth credentials', () => {
     expect(body[0]).toMatchObject({ id: 'drive-1', role: 'MEMBER', isOwned: false });
   });
 });
+

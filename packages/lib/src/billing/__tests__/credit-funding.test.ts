@@ -152,7 +152,7 @@ const invoiceEvent = {
   },
 };
 
-// Same invoice shape with a different amount actually paid (promo, proration, $0 trial start).
+// Same invoice shape with a different amount actually paid (promo, proration, a $0 gift).
 function paidInvoiceEvent(amountPaid: number | undefined, extra: Record<string, unknown> = {}) {
   return {
     id: 'evt_inv',
@@ -221,9 +221,9 @@ describe('applyStripeFunding', () => {
 
     await applyStripeFunding(invoiceEvent, { tier: 'pro' });
 
-    // Flag off: 100% of the $15 paid = today's Pro allowance.
+    // A-11: 60% of the $15 paid.
     const allowance = tierAllowanceCents('pro');
-    expect(allowance).toBe(1500);
+    expect(allowance).toBe(900);
     expect(cap.ledgerValues).toMatchObject({
       userId: 'u1',
       // WAL-5: the grant names the payer's personal root wallet, resolved inside the tx.
@@ -457,7 +457,7 @@ describe('applyStripeFunding', () => {
     });
 
     // A verified Pro invoice supplies its identity independently of the cache.
-    await applyStripeFunding(paidInvoiceEvent(tierAllowanceCents('pro')), { tier: 'pro' });
+    await applyStripeFunding(paidInvoiceEvent(tierListPriceCents('pro')), { tier: 'pro' });
 
     const allowance = tierAllowanceCents('pro');
     expect(allowance).not.toBe(tierAllowanceCents('free'));
@@ -541,12 +541,9 @@ describe('applyStripeFunding', () => {
       });
     }
 
-    // D-OW-17: applyStripeFunding calls grantForInvoice/allowanceCentsForPaidCents
-    // with no `active` argument, so it always uses the money-model default
-    // (MONEY_MODEL_V2_ACTIVE = false in this PR — the legacy 100% pass-through).
-    // The ratio math itself, at BOTH active=true and active=false, is covered
-    // directly (no shell, no mocks) in money-model.test.ts and invoice-grant.test.ts;
-    // these tests only prove the funding shell wires amount_paid through correctly.
+    // The ratio math itself is covered directly (no shell, no mocks) in
+    // money-model.test.ts and invoice-grant.test.ts; these tests prove the funding
+    // shell wires amount_paid through the ratio (A-11: 60%).
     it('MON-2 sizes the grant as amount_paid × the default ratio, not the tier list price, and records paidCents on the ledger row', async () => {
       const cap: Captured = {};
       refill(cap);
@@ -554,7 +551,7 @@ describe('applyStripeFunding', () => {
       await applyStripeFunding(paidInvoiceEvent(1500), { tier: 'pro' });
 
       const expected = allowanceCentsForPaidCents(1500, 'pro');
-      expect(expected).toBe(1500);
+      expect(expected).toBe(900);
       expect(cap.ledgerValues).toMatchObject({
         entryType: 'monthly_grant',
         amountCents: expected,
@@ -562,25 +559,6 @@ describe('applyStripeFunding', () => {
         stripeRef: 'in_123',
       });
       expect(cap.balanceSet).toMatchObject({ monthlyRemainingCents: expected, monthlyAllowanceCents: expected });
-    });
-
-    it('D-OW-17 test seam: passing { active: true } through applyStripeFunding actually applies the 60% ratio, proving the shell does not just pass amount_paid straight through', async () => {
-      // Distinguishes "the shell wires the ratio math" from "the shell forwards
-      // paidCents" — with the constant false (default), both look identical
-      // (100% pass-through). `active` is a test-only override on FundingOptions
-      // (never set by the real webhook route); reverting the `active` plumbing
-      // in credit-funding.ts, or the `active ? ratio : LEGACY_RATIO` branch in
-      // money-model.ts, makes this assertion fail while every default-flag test
-      // above stays green.
-      const cap: Captured = {};
-      refill(cap);
-
-      await applyStripeFunding(paidInvoiceEvent(1500), { tier: 'pro', active: true });
-
-      const expected = allowanceCentsForPaidCents(1500, 'pro', true);
-      expect(expected).toBe(900);
-      expect(cap.ledgerValues).toMatchObject({ entryType: 'monthly_grant', amountCents: 900, paidCents: 1500 });
-      expect(cap.balanceSet).toMatchObject({ monthlyRemainingCents: 900, monthlyAllowanceCents: 900 });
     });
 
     it('MON-2 a 50%-off invoice grants half the list grant', async () => {
@@ -666,7 +644,7 @@ describe('applyStripeFunding', () => {
         await applyStripeFunding(paidInvoiceEvent(0, { subtotal: 1500, billing_reason: 'subscription_cycle' }), { tier: 'pro' });
 
         const list = allowanceCentsForPaidCents(tierListPriceCents('pro'), 'pro');
-        expect(list).toBe(1500);
+        expect(list).toBe(900);
         expect(cap.ledgerValues).toMatchObject({ amountCents: list, paidCents: 0, stripeRef: 'in_123' });
         expect(cap.balanceSet).toMatchObject({ monthlyRemainingCents: list, monthlyAllowanceCents: list });
         expect(mockApiLogger.info).toHaveBeenCalledWith(
@@ -675,20 +653,17 @@ describe('applyStripeFunding', () => {
         );
       });
 
-      it('MON-2 (a) a subscription created with a trial (subscription_create, $0, subtotal 0) grants list price × the default ratio', async () => {
-        selectUserThenSubscriptions(PRO_USER, [{ gifted: false, status: 'trialing' }]);
+      it('D-OW-30 nothing creates trials: a $0 subscription_create invoice (subtotal 0) on a non-gifted subscription grants nothing', async () => {
+        selectUserThenSubscriptions(PRO_USER, [{ gifted: false, status: 'active' }]);
         const cap: Captured = {};
         mockDb.transaction.mockImplementation(async (cb: (tx: unknown) => Promise<void>) => {
-          await cb(refillTx(cap, [{ id: 'led_trial' }], 0));
+          await cb(refillTx(cap, [{ id: 'led_zero_create' }], 0));
         });
 
         await applyStripeFunding(paidInvoiceEvent(0, { subtotal: 0, billing_reason: 'subscription_create' }), { tier: 'pro' });
 
-        expect(cap.ledgerValues).toMatchObject({ amountCents: 1500, paidCents: 0 });
-        expect(mockApiLogger.info).toHaveBeenCalledWith(
-          'credit funding: monthly refill applied',
-          expect.objectContaining({ basis: 'list', reason: 'trial' }),
-        );
+        expect(mockDb.transaction).not.toHaveBeenCalled();
+        expect(cap.ledgerValues).toBeUndefined();
       });
 
       it('MON-2 (b) a proration-only / subscription_update invoice that paid $0 grants nothing (subscription_update is grant-eligible as a KIND; $0 paid is $0 granted)', async () => {
@@ -726,7 +701,7 @@ describe('applyStripeFunding', () => {
         await applyStripeFunding(paidInvoiceEvent(1200, { subtotal: 1500, billing_reason: 'subscription_cycle' }), { tier: 'pro' });
 
         expect(cap.ledgerValues).toMatchObject({ amountCents: allowanceCentsForPaidCents(1200, 'pro'), paidCents: 1200 });
-        expect(allowanceCentsForPaidCents(1200, 'pro')).toBe(1200);
+        expect(allowanceCentsForPaidCents(1200, 'pro')).toBe(720);
       });
 
       it('MON-2 (d) a 100% coupon on a NON-gifted subscription grants nothing — admin gifting is the door', async () => {
@@ -744,13 +719,13 @@ describe('applyStripeFunding', () => {
       });
     });
 
-    it('MON-2 / D-OW-17 a full-price invoice grants 100% of what it paid under the current default (MONEY_MODEL_V2_ACTIVE = false)', async () => {
+    it('MON-2 / D-OW-17 a full-price invoice grants A-11\'s 60% of what it paid', async () => {
       const cap: Captured = {};
       refill(cap);
 
       await applyStripeFunding(paidInvoiceEvent(1500), { tier: 'pro' });
 
-      expect(cap.ledgerValues).toMatchObject({ amountCents: 1500, paidCents: 1500 });
+      expect(cap.ledgerValues).toMatchObject({ amountCents: 900, paidCents: 1500 });
     });
   });
 });

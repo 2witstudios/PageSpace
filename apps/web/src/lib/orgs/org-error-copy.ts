@@ -25,6 +25,9 @@ export const ORG_ERROR_COPY: Record<OrgApiErrorCode, string> = {
   billing_requires_support:
     'This organization\'s subscription was changed outside PageSpace, so it cannot be reactivated here. Contact support and we will fix it. Nothing has been deleted.',
   email_verification_required: 'Verify your email address first.',
+  org_strong_sign_in_required: 'This organization requires strong sign-in. Confirm it is you with your passkey, then try again.',
+  org_reauthentication_required: 'This organization asks you to sign in again. Confirm it is you, then try again.',
+  org_policy_would_lock_out_actor: 'Your own sign-in does not meet this policy yet, so saving it would lock you out. Confirm it is you first, then save.',
 
   // organization lifecycle
   slug_taken: 'That organization URL is already taken. Choose another.',
@@ -88,6 +91,7 @@ export const ORG_ERROR_COPY: Record<OrgApiErrorCode, string> = {
   no_wallet: 'This drive has no wallet.',
   wallet_exists: 'This drive already has a wallet.',
   wallet_in_use: 'This wallet has been used, so it cannot be deleted. Pause it instead.',
+  drive_wallet_calls_in_flight: "This drive's wallet has AI calls in progress. Try moving the drive again in a minute, once they finish.",
   wallet_not_available: 'That wallet is not available to you.',
   invalid_amount: 'Enter a whole number of credits within the allowed range for this action.',
   nothing_to_change: 'Nothing changed.',

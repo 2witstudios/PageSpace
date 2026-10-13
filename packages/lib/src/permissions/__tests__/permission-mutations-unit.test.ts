@@ -1,4 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+// The org sign-in gate (D-OW-45) reads policies through its own module; these tests are about the
+// resolvers behind it, so no org here sets a sign-in policy. Plain functions: a mock reset must not undo them.
+vi.mock('../actor-authentication', () => ({
+  checkActorDriveAuthentication: async () => ({ allowed: true }),
+  checkActorResourceAuthentication: async () => ({ allowed: true }),
+  filterDrivesForActor: async (_actor: unknown, ids: readonly string[]) => new Set(ids),
+  filterResourcesForActor: async (_actor: unknown, ids: readonly string[]) => new Set(ids),
+  explainOrgAuthenticationDenial: async () => null,
+}));
 import { createId } from '@paralleldrive/cuid2';
 
 // ---------------------------------------------------------------------------
@@ -42,9 +51,11 @@ vi.mock('../enforced-context', () => ({
   EnforcedAuthContext: class {
     userId: string;
     userRole: string;
+    actor: { via: 'credential'; userId: string; authentication: null };
     constructor(userId: string, userRole: string) {
       this.userId = userId;
       this.userRole = userRole;
+      this.actor = { via: 'credential', userId, authentication: null };
     }
     static fromSession(claims: { userId: string; userRole: string; scopes: string[] }) {
       const ctx = new (this as unknown as new(u: string, r: string) => { userId: string; userRole: string })(claims.userId, claims.userRole);
@@ -67,10 +78,16 @@ vi.mock('../revocation-kick', () => ({
 // POL-2: a widening grant asks the org's guests policy. Default: a drive with no org, allowed.
 const decideOrgDriveAdmission = vi.hoisted(() => vi.fn());
 const requestGuestApproval = vi.hoisted(() => vi.fn());
-const recordOrgAuditEvent = vi.hoisted(() => vi.fn());
+const stageAudit = vi.hoisted(() => vi.fn());
 vi.mock('../guest-admission', () => ({ decideOrgDriveAdmission }));
 vi.mock('../guest-holds', () => ({ requestGuestApproval }));
-vi.mock('../../audit/org-audit', () => ({ recordOrgAuditEvent }));
+// AUD-1: the grant's transaction carries its audit stage; the stage itself is a spy.
+vi.mock('../../audit/org-audit', async () => {
+  const { db } = await import('@pagespace/db/db');
+  return {
+    transactionWithOrgAudit: (run: (tx: unknown, audit: typeof stageAudit) => Promise<unknown>) => db.transaction((tx) => run(tx, stageAudit)),
+  };
+});
 
 // ---------------------------------------------------------------------------
 // Imports after mocks
@@ -700,7 +717,7 @@ describe('revokePagePermission', () => {
 describe('grantPagePermission and the guests policy', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    recordOrgAuditEvent.mockResolvedValue(undefined);
+    stageAudit.mockResolvedValue(undefined);
   });
 
   it('POL-2 (partial) a refused admission writes nothing and answers GUEST_POLICY_OFF', async () => {
@@ -735,7 +752,7 @@ describe('grantPagePermission and the guests policy', () => {
       requestedBy: ACTOR_ID,
     }, tx);
     expect(tx.insert).not.toHaveBeenCalled();
-    expect(recordOrgAuditEvent).toHaveBeenCalledWith(expect.objectContaining({ orgId: 'org_1', eventType: 'org.guest.requested' }));
+    expect(stageAudit).toHaveBeenCalledWith(expect.objectContaining({ orgId: 'org_1', eventType: 'org.guest.requested' }));
   });
 
   it('POL-2 (partial) narrowing a grant the target already holds never asks the policy', async () => {

@@ -71,7 +71,7 @@ async function personalWalletId(userId: string): Promise<string> {
 }
 
 /** A ledger row; written against the user's personal root wallet unless the test names one (WAL-5). */
-type LedgerRow = Omit<typeof creditLedger.$inferInsert, 'walletId'> & { walletId?: string };
+type LedgerRow = Omit<typeof creditLedger.$inferInsert, 'walletId' | 'userId'> & { userId: string; walletId?: string };
 async function insertLedger(row: LedgerRow): Promise<void> {
   const walletId = row.walletId ?? (await personalWalletId(row.userId));
   await db.insert(creditLedger).values({ ...row, walletId });
@@ -128,14 +128,14 @@ describe('account-alerts monitoring queries (Postgres)', () => {
 
       const mine = new Set(createdUserIds);
       const rows = await getBalanceDriftAlerts(undefined, BIG_LIMIT); // default 10¢ tolerance
-      const mineRows = rows.filter((r) => mine.has(r.userId));
+      const mineRows = rows.filter((r) => r.userId !== null && mine.has(r.userId));
 
       expect(mineRows.map((r) => r.userId)).toEqual([flag.id, buckets.id]); // sorted by |drift| desc
       expect(mineRows[0]).toMatchObject({
-        userId: flag.id, expectedSpendableCents: 700, materializedSpendableCents: 800, driftCents: 100,
+        userId: flag.id, expectedNetCents: 700, materializedNetCents: 800, driftCents: 100,
       });
       expect(mineRows[1]).toMatchObject({
-        userId: buckets.id, expectedSpendableCents: 1350, materializedSpendableCents: 1300, driftCents: -50,
+        userId: buckets.id, expectedNetCents: 1350, materializedNetCents: 1300, driftCents: -50,
       });
       // The within-tolerance account is not flagged at all.
       expect(rows.some((r) => r.userId === ok.id)).toBe(false);
@@ -224,7 +224,7 @@ describe('account-alerts monitoring queries (Postgres)', () => {
 
       const mine = new Set(createdUserIds);
       const rows = await getNegativeMarginAccounts(undefined, undefined, 0, BIG_LIMIT);
-      const mineRows = rows.filter((r) => mine.has(r.userId));
+      const mineRows = rows.filter((r) => r.userId !== null && mine.has(r.userId));
 
       // The query's flagged set (restricted to this test's users) must equal what the pure
       // helper would flag on the same data.

@@ -261,8 +261,7 @@ describe('/api/auth/mcp-tokens (additional coverage)', () => {
         expect(validateDriveScopeAccess).toHaveBeenCalledTimes(1);
         expect(validateDriveScopeAccess).toHaveBeenCalledWith(
           [{ id: 'drive-1', role: null, customRoleId: undefined }],
-          'test-user-id'
-        );
+          expect.objectContaining({ userId: 'test-user-id' }));
 
         // Repository should be called with deduplicated drives.
         // Legacy driveIds carry no role: stored role is null (inherit owner).

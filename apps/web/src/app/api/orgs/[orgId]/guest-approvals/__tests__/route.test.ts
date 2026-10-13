@@ -7,6 +7,11 @@ import type { SessionAuthResult } from '@/lib/auth';
 import type { OrgRole } from '@pagespace/db/schema/organizations';
 
 const flags = vi.hoisted(() => ({ orgsEnabled: true }));
+// The org sign-in policy (SEC-2/3) has its own suites; here every credential meets it.
+vi.mock('@pagespace/lib/permissions/actor-authentication', () => ({
+  checkActorOrgAuthentication: vi.fn(async () => ({ allowed: true })),
+  drivePolicyOrgId: vi.fn(async () => null),
+}));
 vi.mock('@pagespace/lib/organizations/orgs-enabled', () => ({
   get ORGS_ENABLED() {
     return flags.orgsEnabled;
@@ -22,13 +27,14 @@ vi.mock('@pagespace/lib/permissions/guest-holds', () => ({
   claimGuestApprovalDecision: vi.fn(),
   requestGuestApproval: vi.fn(),
   markApprovedInvitation: vi.fn(async () => {}),
+  // AUD-1: the approval event the route hands every admission to stage in its own transaction.
+  guestDecisionAuditEvent: vi.fn((claim: { holdId: string }, eventType: string, actorId: string) => ({ eventType, actorId, holdId: claim.holdId })),
 }));
 vi.mock('@pagespace/lib/notifications/notifications', () => ({ createPermissionNotification: vi.fn(async () => {}) }));
 vi.mock('@/lib/websocket', () => ({ broadcastPageEvent: vi.fn(async () => {}), createPageEventPayload: vi.fn((driveId: string, pageId: string, operation: string) => ({ driveId, pageId, operation })) }));
 vi.mock('@pagespace/db/db', () => ({ db: {} }));
 vi.mock('@pagespace/lib/permissions/share-link-service', () => ({ completeApprovedLinkAdmission: vi.fn() }));
 vi.mock('@pagespace/lib/organizations/policy-reader', () => ({ getOrgPolicies: vi.fn() }));
-vi.mock('@pagespace/lib/audit/org-audit', () => ({ recordOrgAuditEvent: vi.fn(async () => {}) }));
 vi.mock('@pagespace/lib/services/invites', () => ({ emitAcceptanceSideEffects: vi.fn(async () => {}) }));
 vi.mock('@/lib/auth/invite-acceptance-adapters', () => ({ buildAcceptancePorts: vi.fn(() => ({ ports: true })) }));
 vi.mock('@/lib/repositories/drive-invite-repository', () => ({ driveInviteRepository: { findDriveById: vi.fn() } }));
@@ -44,7 +50,6 @@ import { createPermissionNotification } from '@pagespace/lib/notifications/notif
 import { broadcastPageEvent } from '@/lib/websocket';
 import { completeApprovedLinkAdmission } from '@pagespace/lib/permissions/share-link-service';
 import { getOrgPolicies } from '@pagespace/lib/organizations/policy-reader';
-import { recordOrgAuditEvent } from '@pagespace/lib/audit/org-audit';
 import { emitAcceptanceSideEffects } from '@pagespace/lib/services/invites';
 import { driveInviteRepository } from '@/lib/repositories/drive-invite-repository';
 import { handleEmailPath, handleUserIdPath } from '@/lib/drive-invites/invite-handlers';
@@ -124,7 +129,7 @@ describe('the approval queue routes', () => {
     const res = await decide({ decision: 'approve' });
     expect(res.status).toBe(402);
     expect(await res.json()).toEqual({ error: 'Reactivate to continue.', code: 'org_lapsed' });
-    expect(claimGuestApprovalDecision).toHaveBeenCalledWith({ orgId: ORG_ID, holdId: 'hold_1', decision: 'approve' });
+    expect(claimGuestApprovalDecision).toHaveBeenCalledWith({ orgId: ORG_ID, holdId: 'hold_1', decision: 'approve', actorId: 'user_priya' });
     expect(handleUserIdPath).not.toHaveBeenCalled();
     expect(handleEmailPath).not.toHaveBeenCalled();
   });
@@ -135,7 +140,7 @@ describe('the approval queue routes', () => {
     const res = await decide({ decision: 'decline' });
     expect(await res.json()).toEqual({ decided: 'declined' });
     expect(handleUserIdPath).not.toHaveBeenCalled();
-    expect(recordOrgAuditEvent).toHaveBeenCalledWith(expect.objectContaining({ eventType: 'org.guest.declined', actorId: 'user_priya', driveId: 'drive_1' }));
+    expect(claimGuestApprovalDecision).toHaveBeenCalledWith({ orgId: ORG_ID, holdId: 'hold_1', decision: 'decline', actorId: 'user_priya' });
   });
 
   it('POL-2 (partial) approving an invite replays it through the SAME handler as the original inviter, with the policy skipped so it is not queued again', async () => {
@@ -149,7 +154,8 @@ describe('the approval queue routes', () => {
       skipGuestPolicy: true,
       body: { userId: 'user_chris', role: 'MEMBER', customRoleId: null, permissions: [{ pageId: 'p1', canView: true, canEdit: false, canShare: false }] },
     }));
-    expect(recordOrgAuditEvent).toHaveBeenCalledWith(expect.objectContaining({ eventType: 'org.guest.approved' }));
+    // AUD-1: the approver's event rides into the admission, which stages it in its own transaction.
+    expect(handleUserIdPath).toHaveBeenCalledWith(expect.objectContaining({ approval: { eventType: 'org.guest.approved', actorId: 'user_priya', holdId: 'hold_1' } }));
   });
 
   it('POL-2 (partial) an emailed invitee (no account) is invited by the email handler on approval', async () => {
@@ -167,7 +173,6 @@ describe('the approval queue routes', () => {
     const res = await decide({ decision: 'approve' });
     expect(res.status).toBe(403);
     expect(requestGuestApproval).toHaveBeenCalledWith(expect.objectContaining({ orgId: ORG_ID, driveId: 'drive_1', userId: 'user_chris', origin: 'invite' }));
-    expect(recordOrgAuditEvent).not.toHaveBeenCalledWith(expect.objectContaining({ eventType: 'org.guest.approved' }));
   });
 
   it('POL-2 (partial) approving while guests are OFF is refused before the queue is touched: the policy outranks the approver', async () => {
@@ -220,8 +225,7 @@ describe('the approval queue routes', () => {
     vi.mocked(completeApprovedPageGrant).mockResolvedValue({ ok: true, driveId: 'drive_1', userId: 'user_chris', pageIds: ['p1'] });
     const res = await decide({ decision: 'approve' });
     expect(await res.json()).toEqual({ decided: 'approved', driveId: 'drive_1', pageIds: ['p1'] });
-    expect(completeApprovedPageGrant).toHaveBeenCalledWith(expect.objectContaining({ holdId: 'hold_1', origin: 'page_grant' }));
-    expect(recordOrgAuditEvent).toHaveBeenCalledWith(expect.objectContaining({ eventType: 'org.guest.approved' }));
+    expect(completeApprovedPageGrant).toHaveBeenCalledWith(expect.objectContaining({ holdId: 'hold_1', origin: 'page_grant' }), { eventType: 'org.guest.approved', actorId: 'user_priya', holdId: 'hold_1' });
     expect(handleUserIdPath).not.toHaveBeenCalled();
   });
 
@@ -233,7 +237,6 @@ describe('the approval queue routes', () => {
     expect(res.status).toBe(409);
     expect(await res.json()).toMatchObject({ code: 'page_gone' });
     expect(requestGuestApproval).not.toHaveBeenCalled();
-    expect(recordOrgAuditEvent).not.toHaveBeenCalled();
   });
 
   it('POL-2 (partial) approving a queued page invitation by email sends it through the SAME handler as the share-invite route, as the original sharer', async () => {

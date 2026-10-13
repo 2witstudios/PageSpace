@@ -4,7 +4,8 @@ import { convertToModelMessages, generateText, stepCountIs, hasToolCall } from '
 import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
 import { mergeToolSets } from '@/lib/ai/core/tool-utils';
 import { filterToolsForMcpScope, filterToolsForImageGen, filterToolsForSandboxEnablement } from '@/lib/ai/core/tool-filtering';
-import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPPageScope, getAllowedDriveIds, isScopedMCPAuth, canPrincipalViewPage } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPPageScope, getAllowedDriveIds, isScopedMCPAuth, canPrincipalViewPage, isPrincipalDriveMember } from '@/lib/auth';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 import { AIMonitoring, discardUsageOutcome } from '@pagespace/lib/monitoring/ai-monitoring';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -12,11 +13,13 @@ const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 /** The repository-wide id contract: what `createId()` (cuid2) produces. */
 const CUID2_PATTERN = /^[a-z][a-z0-9]{1,31}$/;
 import { createAIProvider, isProviderError, type ProviderRequest } from '@/lib/ai/core/provider-factory';
+import { toolModelContext } from '@/lib/ai/core/tool-model-context';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
 import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
 import { getUserTimezone } from '@/lib/ai/core/personalization-utils';
-import { DEFAULT_PROVIDER, DEFAULT_MODEL, ADMIN_ONLY_PROVIDERS, resolveProviderModel } from '@/lib/ai/core/ai-providers-config';
-import { createAdminRestrictedResponse } from '@/lib/subscription/rate-limit-middleware';
+import { DEFAULT_PROVIDER, DEFAULT_MODEL, resolveProviderModel } from '@/lib/ai/core/ai-providers-config';
+import { resolveGenerationAdmission } from '@/lib/ai/core/generation-admission';
+import { createAdminRestrictedResponse, createSubscriptionRequiredResponse, requiresProSubscription } from '@/lib/subscription/rate-limit-middleware';
 import type { ToolExecutionContext } from '@/lib/ai/core/types';
 import { supportsTemperature } from '@/lib/ai/core/model-capabilities';
 import { db } from '@pagespace/db/db'
@@ -29,8 +32,9 @@ import { messageRepository } from '@/lib/repositories/message-repository';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
 import { authorizePageConversation, type PageConversationAccess } from '@/lib/ai/core/authorize-page-conversation';
 import { createId } from '@paralleldrive/cuid2';
-import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
-import { conversationSpend, resolvedSpend } from '@pagespace/lib/billing/spend-target';
+import { canConsumeAI, resolveEntitlementTier } from '@pagespace/lib/billing/credit-gate';
+import { agentCallSpend, resolvedSpend, spendDriveId } from '@pagespace/lib/billing/spend-target';
+import { pinConversationSource } from '@pagespace/lib/billing/spend-resolution';
 import { spendFallbackHeaders, spendFallbackNotice, type SpendFallbackNotice } from '@pagespace/lib/billing/spend-fallback';
 import { isMeteringExempt } from '@pagespace/lib/ai/model-defaults';
 import { MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
@@ -139,7 +143,7 @@ function formatToolExecutionResults(steps: unknown[]): string {
  * Get configured AI model for agent using the centralized provider factory
  * Handles provider-specific setup and fallbacks
  */
-async function getConfiguredModel(userId: string, agentConfig: { aiProvider?: string | null; aiModel?: string | null }, driveId: string | null) {
+async function getConfiguredModel(userId: string, agentConfig: { aiProvider?: string | null; aiModel?: string | null }, drives: { driveId: string; agentDriveId: string }) {
   const { aiProvider, aiModel } = agentConfig;
 
   // Use default provider/model if agent doesn't have specific configuration
@@ -151,8 +155,9 @@ async function getConfiguredModel(userId: string, agentConfig: { aiProvider?: st
     selectedModel,
   };
 
-  // POL-8: the org of the drive the consultation runs in (the agent's, where its spend is attributed).
-  const providerResult = await createAIProvider(userId, providerRequest, { driveId });
+  // POL-8: the org of the drive the consultation runs in (its session's, where its spend is attributed, SPEND-7)
+  // AND the org of the drive the agent lives in — the intersection of both allowlists (D-OW-64).
+  const providerResult = await createAIProvider(userId, providerRequest, { driveId: drives.driveId, contentDriveIds: [drives.agentDriveId] });
 
   if (isProviderError(providerResult)) {
     // An org-policy refusal keeps its status and policy so the route can answer 403 (POL-8), not a 500.
@@ -219,7 +224,7 @@ export async function POST(request: Request) {
     const userId = auth.userId;
 
     const body = await request.json();
-    const { agentId, question, context, conversationId, newConversationId } = body;
+    const { agentId, question, context, conversationId, newConversationId, sessionDriveId } = body;
 
     if (!agentId || !question) {
       return NextResponse.json(
@@ -248,6 +253,17 @@ export async function POST(request: Request) {
     if (newConversationId !== undefined && (typeof newConversationId !== 'string' || !CUID2_PATTERN.test(newConversationId))) {
       return NextResponse.json(
         { error: 'newConversationId must be a CUID2 identifier' },
+        { status: 400 }
+      );
+    }
+
+    // SPEND-7: the drive of the session this consultation is called from, when the caller runs in
+    // one elsewhere (an agent working in drive A consulting an agent that lives in drive B). It is
+    // a claim until the caller's own membership of that drive is checked below; a drive they
+    // cannot use is refused, never silently swapped for the agent's.
+    if (sessionDriveId !== undefined && (typeof sessionDriveId !== 'string' || sessionDriveId.length === 0)) {
+      return NextResponse.json(
+        { error: 'sessionDriveId must be a drive id' },
         { status: 400 }
       );
     }
@@ -284,10 +300,10 @@ export async function POST(request: Request) {
     const canView = await canPrincipalViewPage(auth, agentId);
     if (!canView) {
       auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'page_agent', resourceId: agentId, details: { reason: 'no_view_permission', action: 'consult', method: 'POST' }, riskScore: 0.5 });
-      return NextResponse.json(
+      return deniedResponse(actorFromAuth(auth), agentId, NextResponse.json(
         { error: 'Insufficient permissions to consult this agent' },
         { status: 403 }
-      );
+      ));
     }
 
     // Prepaid credit gate: block out-of-credits users before any model invocation.
@@ -301,30 +317,59 @@ export async function POST(request: Request) {
     // an agent configured with `glm` + an invalid model resolves to the metered
     // default, so both the admin gate and the credit gate must key off this, not the
     // raw agent config.
-    const { provider: effectiveProvider } = resolveProviderModel(agent.aiProvider, agent.aiModel);
+    const { provider: effectiveProvider, model: effectiveModel } = resolveProviderModel(agent.aiProvider, agent.aiModel);
+    const consumerTier = toPersonalSubscriptionTier(gateUser?.subscriptionTier);
 
-    // Admin-only providers (the direct Z.ai Coder Plan) are unmetered and must never
-    // be reachable by a non-admin — otherwise any viewer of a glm-configured shared
-    // agent could consume the admin subscription for free. The interactive chat routes
-    // enforce this; the consult + v1 routes must too.
-    if (ADMIN_ONLY_PROVIDERS.has(effectiveProvider) && gateUser?.role !== 'admin') {
-      auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'page_agent', resourceId: agentId, details: { reason: 'admin_only_provider', provider: effectiveProvider, action: 'consult', method: 'POST' }, riskScore: 0.5 });
-      return createAdminRestrictedResponse();
+    // SPEND-7: a consultation spends in the drive of the session it runs in — the drive the caller
+    // names as its session (once its membership is checked), else its own conversation on the
+    // agent's page, whose session is the agent's drive. A continued conversation carries its stored
+    // source (SPEND-3) only in its own drive; the gate reads it only when the caller owns that
+    // conversation, so an id not yet vetted here names nothing.
+    if (typeof sessionDriveId === 'string' && !(await isPrincipalDriveMember(auth, sessionDriveId))) {
+      auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'drive', resourceId: sessionDriveId, details: { reason: 'session_drive_denied', action: 'consult', method: 'POST' }, riskScore: 0.5 });
+      return NextResponse.json(
+        { error: 'sessionDriveId names a drive you cannot use' },
+        { status: 403 }
+      );
+    }
+    // The address this consult writes to (see the persistence notes below), known before the
+    // gate so a new conversation's preselected source can be pinned once it exists (SPEND-3).
+    const activeConversationId: string = conversationId || newConversationId || createId();
+    let spend = agentCallSpend({
+      agentDriveId: agent.driveId,
+      conversationId: activeConversationId,
+      clientThreadDriveId: null,
+      namedSessionDriveId: typeof sessionDriveId === 'string' ? sessionDriveId : null,
+    });
+    // The drive the consultation runs in: its spend, its usage attribution and its org's model
+    // policy (POL-8) all follow the session, never merely the drive the agent page lives in.
+    const sessionDrive = spendDriveId(spend) ?? agent.driveId;
+    let conversationSourceWalletId: string | undefined;
+
+    // The SHARED entitlement decision a chat turn applies (generation-admission.ts): an
+    // admin-only provider is a role block (a viewer of a glm-configured shared agent must
+    // never consume the admin subscription), a paid-tier model a tier block — for the tier
+    // of whoever funds this call (WAL-8, POL-8), as the spend resolution names it.
+    const admission = resolveGenerationAdmission({
+      provider: effectiveProvider,
+      model: effectiveModel,
+      subscriptionTier: await resolveEntitlementTier(userId, consumerTier, spend),
+      isAdmin: gateUser?.role === 'admin',
+      requiresProSubscription,
+    });
+    if (!admission.allowed) {
+      auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'page_agent', resourceId: agentId, details: { reason: admission.reason, provider: effectiveProvider, action: 'consult', method: 'POST' }, riskScore: 0.5 });
+      return admission.reason === 'provider_admin_only' ? createAdminRestrictedResponse() : createSubscriptionRequiredResponse();
     }
 
     // Metering-exempt providers (admin Z.ai Coder Plan) bill on a flat-rate external
     // subscription, so skip the gate entirely — no hold, no balance check — and never
     // debit at settle (see isMeteringExempt in trackAIUsage).
-    // A consultation runs as a conversation on the agent's page, so its session is the
-    // agent's drive (SPEND-7). A continued conversation carries its stored source (SPEND-3);
-    // the gate reads it only when the caller owns that conversation, so an id not yet vetted
-    // here names nothing.
-    let spend = conversationSpend(agent.driveId, conversationId ?? null);
     // SPEND-4: a drive rule that moved the call to another source is reported in the answer
     // (`spendFallback` and the X-Spend-Fallback-* headers), never applied silently.
     let spendFallback: SpendFallbackNotice | null = null;
     if (!isMeteringExempt(effectiveProvider)) {
-      const creditGate = await canConsumeAI(userId, toPersonalSubscriptionTier(gateUser?.subscriptionTier), {
+      const creditGate = await canConsumeAI(userId, consumerTier, {
         spend,
         estCostCents: estimateChatHoldCentsForModel(agent.aiModel ?? undefined),
         maxInFlight: MAX_CHAT_INFLIGHT,
@@ -336,8 +381,25 @@ export async function POST(request: Request) {
       // The gate's reservation for this call, released when usage is billed below.
       holdId = creditGate.holdId;
       walletId = creditGate.walletId;
+      // WAL-8 (D-OW-64): the plan is judged again on the tier of the source the gate actually
+      // HELD — the pre-read above can judge a source the gate then moved off (a wallet drained in
+      // between, a rule's fallback). A refusal frees the hold in the finally and charges nothing.
+      if (creditGate.entitlementTier !== undefined) {
+        const held = resolveGenerationAdmission({
+          provider: effectiveProvider,
+          model: effectiveModel,
+          subscriptionTier: creditGate.entitlementTier,
+          isAdmin: gateUser?.role === 'admin',
+          requiresProSubscription,
+        });
+        if (!held.allowed) {
+          auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'page_agent', resourceId: agentId, details: { reason: held.reason, provider: effectiveProvider, action: 'consult', method: 'POST', stage: 'held_source' }, riskScore: 0.5 });
+          return held.reason === 'provider_admin_only' ? createAdminRestrictedResponse() : createSubscriptionRequiredResponse();
+        }
+      }
       spend = resolvedSpend(spend, creditGate.spendSource, creditGate.fallbackFromWalletId);
       spendFallback = spendFallbackNotice(creditGate);
+      conversationSourceWalletId = creditGate.conversationSourceWalletId;
     }
 
     // Get the drive information for context awareness
@@ -383,8 +445,6 @@ export async function POST(request: Request) {
     // winner, which is precisely what this refusal exists to prevent. So the
     // outcome of the write is the decision, and it is only ever safe to ignore
     // it for an id this route minted itself.
-    const activeConversationId: string = conversationId || newConversationId || createId();
-
     // Eagerly ensure a conversations row exists so this conversation is
     // listable via GET .../conversations, which joins against `conversations`
     // to scope results to their owner (mirrors apps/web/src/app/api/ai/chat/route.ts).
@@ -397,6 +457,9 @@ export async function POST(request: Request) {
     // outer handler as a 500, which is both true and retryable. 409 is reserved
     // for the repository's own explicit non-created outcomes.
     const createOutcome = await conversationRepository.createConversation(activeConversationId, userId, agentId);
+    if (createOutcome === 'created' && conversationSourceWalletId) {
+      await pinConversationSource({ userId, conversationId: activeConversationId, driveId: sessionDrive, walletId: conversationSourceWalletId });
+    }
 
     if (newConversationId && createOutcome !== 'created') {
       auditRequest(request, {
@@ -512,7 +575,7 @@ export async function POST(request: Request) {
       const providerResult = await getConfiguredModel(userId, {
         aiProvider: agent.aiProvider,
         aiModel: agent.aiModel
-      }, agent.driveId);
+      }, { driveId: sessionDrive, agentDriveId: agent.driveId });
       model = providerResult.model;
       resolvedProvider = providerResult.provider;
       resolvedModelName = providerResult.modelName;
@@ -534,9 +597,10 @@ export async function POST(request: Request) {
     // Build execution context for tool execution
     const executionContext: ToolExecutionContext = {
       userId,
+      accessActor: actorFromAuth(auth),
       timezone: userTimezone,
-      aiProvider: agent.aiProvider ?? undefined,
-      aiModel: agent.aiModel ?? undefined,
+      // POL-8: the tools are judged by the model this run resolved (an agent with no model runs the default).
+      ...toolModelContext({ provider: resolvedProvider, modelName: resolvedModelName }),
       conversationId: `agent-consult-${agentId}-${Date.now()}`,
       creditSpend: { spend, walletId },
       locationContext: {
@@ -775,7 +839,7 @@ export async function POST(request: Request) {
         outputTokens: usage?.outputTokens,
         totalTokens: usage?.totalTokens ?? (usage ? ((usage.inputTokens ?? 0) + (usage.outputTokens ?? 0)) : undefined),
         pageId: agentId,
-        driveId: agent.driveId,
+        driveId: sessionDrive,
         success: true,
         holdId,
         walletId,

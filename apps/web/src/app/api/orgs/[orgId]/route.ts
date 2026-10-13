@@ -1,10 +1,12 @@
 import { NextResponse } from 'next/server';
+import { callOrgAvatarStorage, mintOrgAvatarToken } from '@/lib/orgs/org-avatar-storage';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { findOrganizationById, updateOrganization } from '@pagespace/lib/organizations/repository';
 import { deleteOrganization } from '@pagespace/lib/organizations/deletion';
 import { getOrgBillingNotice } from '@pagespace/lib/organizations/status';
-import { authorizeOrgRequest, refuseDriveScopedToken, ORG_TOKEN_READ_AUTH, ORG_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
+import { announceOrgChange, announceOrgChangeTo, orgChangeAudience } from '@pagespace/lib/organizations/org-change-events';
+import { authorizeOrgRequest, ORG_TOKEN_READ_AUTH, ORG_TOKEN_WRITE_AUTH, ORG_MONEY_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
 import { orgDeleteSchema, orgUpdateSchema } from '@/lib/orgs/org-schemas';
 import { endOrgSubscriptionPort } from '@/lib/org-billing/org-subscription';
 
@@ -22,8 +24,6 @@ export async function GET(request: Request, context: Context) {
   const { orgId } = await context.params;
   const gate = await authorizeOrgRequest(request, orgId, 'MEMBER', ORG_TOKEN_READ_AUTH);
   if (!gate.ok) return gate.response;
-  const scoped = refuseDriveScopedToken(gate);
-  if (scoped) return scoped;
   try {
     const org = await findOrganizationById(orgId);
     if (!org) return NextResponse.json({ error: 'Organization not found', code: 'org_not_found' }, { status: 404 });
@@ -47,10 +47,10 @@ export async function GET(request: Request, context: Context) {
   }
 }
 
-/** PATCH /api/orgs/[orgId] — name, slug, avatar; Owner and Admins. */
+/** PATCH /api/orgs/[orgId] — name and slug; Owner and Admins (the avatar is uploaded: ./avatar). Session or an unscoped MCP key (X-1). */
 export async function PATCH(request: Request, context: Context) {
   const { orgId } = await context.params;
-  const gate = await authorizeOrgRequest(request, orgId, 'ADMIN', ORG_WRITE_AUTH);
+  const gate = await authorizeOrgRequest(request, orgId, 'ADMIN', ORG_TOKEN_WRITE_AUTH);
   if (!gate.ok) return gate.response;
   try {
     const parsed = orgUpdateSchema.safeParse(await request.json().catch(() => null));
@@ -70,6 +70,8 @@ export async function PATCH(request: Request, context: Context) {
       resourceId: orgId,
       details: { operation: 'update_organization', fields: Object.keys(parsed.data) },
     });
+    // X-4: the picker header, the crumb and the org pages show the new name without a refresh.
+    void announceOrgChange(orgId, 'profile');
     const { id, name, slug, avatarUrl, ownerId, createdAt } = result.organization;
     return NextResponse.json({ organization: { id, name, slug, avatarUrl, ownerId, createdAt } });
   } catch (error) {
@@ -79,13 +81,14 @@ export async function PATCH(request: Request, context: Context) {
 }
 
 /**
- * DELETE /api/orgs/[orgId] — Owner only (ORG-6). Body names a destination for
+ * DELETE /api/orgs/[orgId] — Owner only (ORG-6). Session only: it ends the org's Stripe subscription
+ * (billing is never delegated to a key; X-1 exclusion table). Body names a destination for
  * every live org drive; trashed drives go to the Owner's trash. The response and
  * one audit event per drive list where each drive went.
  */
 export async function DELETE(request: Request, context: Context) {
   const { orgId } = await context.params;
-  const gate = await authorizeOrgRequest(request, orgId, 'OWNER', ORG_WRITE_AUTH);
+  const gate = await authorizeOrgRequest(request, orgId, 'OWNER', ORG_MONEY_WRITE_AUTH);
   if (!gate.ok) return gate.response;
   try {
     const parsed = orgDeleteSchema.safeParse(await request.json().catch(() => null));
@@ -95,6 +98,11 @@ export async function DELETE(request: Request, context: Context) {
     // The service re-checks the caller is still the Owner under the org row lock, and ends
     // the org's live Stripe subscription inside its transaction (a Stripe failure refuses
     // the delete rather than leave a deleted org billed).
+    // ORG-1: the stored avatar file goes with the org. Its token is minted now, while the caller
+    // still holds the org; it is used only once the delete has committed.
+    const avatarToken = (await findOrganizationById(orgId))?.avatarUrl ? await mintOrgAvatarToken(orgId, gate.actor) : null;
+    // X-4: after the delete the org has no members to read, so who to tell is read now.
+    const audience = await orgChangeAudience(orgId, 'deleted');
     const result = await deleteOrganization(
       { actorId: gate.userId, orgId, choices: parsed.data.drives, now: new Date() },
       { endSubscription: endOrgSubscriptionPort() },
@@ -129,6 +137,12 @@ export async function DELETE(request: Request, context: Context) {
       resourceId: orgId,
       details: { operation: 'delete_organization', driveCount: result.steps.length },
     });
+    void announceOrgChangeTo(orgId, 'deleted', audience);
+    if (avatarToken) {
+      // Best effort: the org is already gone; a leftover file is logged, never a failed delete.
+      const removed = await callOrgAvatarStorage(orgId, avatarToken, { method: 'DELETE' }).catch((error: unknown) => error);
+      if (!(removed instanceof Response) || !removed.ok) loggers.api.warn('Deleted organization avatar file was not removed', { orgId });
+    }
     return NextResponse.json({ deleted: true, drives: result.steps });
   } catch (error) {
     loggers.api.error('Error deleting organization:', error as Error);

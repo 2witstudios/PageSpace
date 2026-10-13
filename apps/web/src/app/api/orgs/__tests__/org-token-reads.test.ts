@@ -14,6 +14,11 @@ import type { OrgRole } from '@pagespace/db/schema/organizations';
 
 const flags = vi.hoisted(() => ({ orgsEnabled: true }));
 
+// The org sign-in policy (SEC-2/3) has its own suites; here every credential meets it.
+vi.mock('@pagespace/lib/permissions/actor-authentication', () => ({
+  checkActorOrgAuthentication: vi.fn(async () => ({ allowed: true })),
+  drivePolicyOrgId: vi.fn(async () => null),
+}));
 vi.mock('@pagespace/lib/organizations/orgs-enabled', () => ({
   get ORGS_ENABLED() {
     return flags.orgsEnabled;
@@ -45,6 +50,10 @@ vi.mock('@pagespace/lib/organizations/status', () => ({
 }));
 vi.mock('@pagespace/lib/permissions/org-drive-directory', () => ({ listOrgDriveDirectory: vi.fn() }));
 vi.mock('@pagespace/lib/organizations/policies', () => ({ getOrgPolicies: vi.fn() }));
+vi.mock('@pagespace/lib/organizations/policy-reader', async () => {
+  const { parseOrgPolicies } = await import('@pagespace/lib/organizations/policies-core');
+  return { getOrgPolicies: vi.fn(async () => parseOrgPolicies({})) };
+});
 
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { findMembershipRole, findOrganizationById, listOrganizationsForUser, listOrgMembers } from '@pagespace/lib/organizations/repository';
@@ -135,7 +144,9 @@ describe('X-1 (partial) the five org reads over an MCP token', () => {
   it('orgs list: an unscoped token reads the caller\'s orgs; a drive-scoped token is refused before any read', async () => {
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(token());
     expect((await listOrgs(new Request('https://x.test/api/orgs'))).status).toBe(200);
-    expect(await (await listOrgs(new Request('https://x.test/api/orgs'))).json()).toEqual(orgsList);
+    expect(await (await listOrgs(new Request('https://x.test/api/orgs'))).json()).toEqual({
+      organizations: orgsList.organizations.map((org) => ({ ...org, canCreateDrives: true })),
+    });
 
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(token(['drive-open']));
     const refused = await listOrgs(new Request('https://x.test/api/orgs'));
@@ -176,7 +187,8 @@ describe('X-1 (partial) the five org reads over an MCP token', () => {
     vi.mocked(findMembershipRole).mockResolvedValue('ADMIN');
     const ok = await getPolicies(new Request(`https://x.test/api/orgs/${ORG}/policies`), context);
     expect(ok.status).toBe(200);
-    expect(await ok.json()).toEqual(policies);
+    // [D-OW-26] a key reads the policies without the money keys: the seat allowance is not shown.
+    expect(await ok.json()).toEqual({ policies: { guests: 'approve' } });
 
     vi.mocked(findMembershipRole).mockResolvedValue('MEMBER');
     const memberRefused = await getPolicies(new Request(`https://x.test/api/orgs/${ORG}/policies`), context);

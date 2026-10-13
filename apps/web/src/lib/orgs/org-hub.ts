@@ -3,6 +3,7 @@
  * renders exactly these, so what a plain Member can reach is decided and tested here.
  */
 import { orgRoleAtLeast } from '@pagespace/lib/organizations/org-roles';
+import { TIER_PLAN_LIMITS } from '@pagespace/lib/billing/subscription-tiers';
 import type { OrgRole } from './org-api';
 
 export type OrgHubIcon =
@@ -64,7 +65,17 @@ export function orgHubSections({ orgId, orgName, role, counts, billingEnabled, r
     rows: [{ title: `Leave ${orgName}`, description: 'Lose access to its drives unless you were invited to them directly', icon: 'leave', action: 'leave', available: true }],
   };
 
-  if (!orgRoleAtLeast(role, 'ADMIN')) return [leave];
+  // UI-11: a plain Member gets no org settings. The Drives directory is not a setting: it is how a
+  // member finds and asks to join a Restricted drive (DRV-6), so it is theirs too.
+  if (!orgRoleAtLeast(role, 'ADMIN')) {
+    return [
+      {
+        title: 'Drives',
+        rows: [{ title: 'Drives directory', description: `Drives in ${orgName} you can open or ask to join`, icon: 'drives', href: `/orgs/${orgId}/drives`, available: true }],
+      },
+      leave,
+    ];
+  }
 
   const sections: OrgHubSection[] = [];
 
@@ -128,7 +139,7 @@ export function orgHubSections({ orgId, orgName, role, counts, billingEnabled, r
     sections.push({
       title: 'Billing',
       rows: [
-        { title: 'Plan & seats', description: 'Business plan · 5 seats included, extra seats added as people join', icon: 'plan', href: `${base}/billing`, ...(renewalLabel ? { badge: renewalLabel } : {}), available: true },
+        { title: 'Plan & seats', description: orgPlanRowDescription(), icon: 'plan', href: `${base}/billing`, ...(renewalLabel ? { badge: renewalLabel } : {}), available: true },
         { title: 'Usage', description: 'Credits pool and drive wallets across org drives', icon: 'usage', href: `${base}/billing#pool`, available: true },
       ],
     });
@@ -149,4 +160,10 @@ export function orgHubSections({ orgId, orgName, role, counts, billingEnabled, r
   }
 
   return sections;
+}
+
+/** The org plan's seat terms, from the one tier table (SEAT-2): never restated here. */
+function orgPlanRowDescription(): string {
+  const plan = TIER_PLAN_LIMITS.business;
+  return `${plan.name} plan · ${plan.includedSeats} seats included, extra seats added as people join`;
 }

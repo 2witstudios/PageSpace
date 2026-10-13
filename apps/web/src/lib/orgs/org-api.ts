@@ -7,7 +7,7 @@
 import type { OrgBillingNotice } from '@pagespace/lib/organizations/status-core';
 import type { OrgPolicies as StoredOrgPolicies } from '@pagespace/lib/organizations/policies-core';
 import type { OrgActivation } from '@pagespace/lib/billing/org-subscription-core';
-import { fetchJSON, post, patch, put, del } from '@/lib/auth/auth-fetch';
+import { fetchJSON, fetchWithAuth, post, patch, put, del, ApiRequestError } from '@/lib/auth/auth-fetch';
 
 export type OrgRole = 'OWNER' | 'ADMIN' | 'MEMBER';
 
@@ -149,10 +149,33 @@ export const leaveOrganization = (orgId: string) => post<{ left: true }>(`/api/o
 export const patchOrganization = (orgId: string, body: { name?: string; slug?: string }) =>
   patch<{ organization: Organization }>(orgKeys.detail(orgId), body);
 
+/**
+ * ORG-1: upload the org's avatar image (Owner and Admins). fetchWithAuth, not post(): the browser
+ * must set the multipart boundary. A refusal throws ApiRequestError, as every org call does.
+ */
+export async function uploadOrgAvatar(orgId: string, file: File): Promise<{ organization: { id: string; avatarUrl: string | null } }> {
+  const body = new FormData();
+  body.append('file', file);
+  const response = await fetchWithAuth(`/api/orgs/${orgId}/avatar`, { method: 'POST', body });
+  const data: unknown = await response.json().catch(() => null);
+  if (!response.ok) {
+    const message = data && typeof data === 'object' && 'error' in data && typeof data.error === 'string' ? data.error : 'The image could not be uploaded.';
+    throw new ApiRequestError(message, response.status, data ?? undefined);
+  }
+  return data as { organization: { id: string; avatarUrl: string | null } };
+}
+
+export const removeOrgAvatar = (orgId: string) =>
+  del<{ organization: { id: string; avatarUrl: string | null } }>(`/api/orgs/${orgId}/avatar`);
+
 export const revokeOrgInvitation = (orgId: string, invitationId: string) =>
   del<{ revoked: true }>(`${orgKeys.invitations(orgId)}/${invitationId}`);
 
 export const setOrgSeatAutoAdd = (orgId: string, autoAdd: boolean) => patch<{ autoAdd: boolean }>(orgKeys.seats(orgId), { autoAdd });
+
+/** WAL-7: the org pool's kill switch (Owner and Admins). A paused pool funds no seat and no drive wallet. */
+export const setOrgPoolPaused = (orgId: string, paused: boolean) =>
+  patch<{ walletId: string; status: 'active' | 'paused' | 'over' }>(`${orgKeys.detail(orgId)}/pool`, { paused });
 
 interface DriveMembersResponse {
   members: { userId: string; user: { email: string } }[];
@@ -233,3 +256,26 @@ export const reassignAutomation = (orgId: string, automation: Pick<OwnerLeftAuto
 
 export const deleteAutomation = (orgId: string, automation: Pick<OwnerLeftAutomation, 'kind' | 'id'>) =>
   del<{ deleted: true }>(`${orgKeys.automations(orgId)}/${automation.kind}/${automation.id}`);
+
+// ---------------------------------------------------------------------------
+// Restricted drives: join requests (DRV-6, D-OW-22)
+// ---------------------------------------------------------------------------
+
+/** A pending request as the drive lead and org admins see it (GET /api/drives/:id/join-requests). */
+export interface DriveJoinRequestView {
+  id: string;
+  userId: string;
+  name: string | null;
+  email: string;
+  image: string | null;
+  message: string | null;
+  requestedAt: string;
+}
+
+export const driveJoinRequestsKey = (driveId: string) => `/api/drives/${driveId}/join-requests`;
+
+export const requestToJoinDrive = (driveId: string, message?: string) =>
+  post<{ request: { id: string } }>(driveJoinRequestsKey(driveId), message ? { message } : {});
+
+export const answerDriveJoinRequest = (driveId: string, requestId: string, decision: 'approve' | 'deny') =>
+  patch<{ admitted: boolean }>(`${driveJoinRequestsKey(driveId)}/${requestId}`, { decision });

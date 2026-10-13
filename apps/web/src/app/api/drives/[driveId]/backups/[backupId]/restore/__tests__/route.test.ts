@@ -16,6 +16,7 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
 }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   isDriveOwnerOrAdmin: vi.fn(),
 }));
 vi.mock('@pagespace/db/db', () => ({
@@ -43,6 +44,7 @@ import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
 import { db } from '@pagespace/db/db';
 import { runPreRestoreSnapshot } from '@/services/api/restore-backup-service';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const mockAuth = (userId: string): SessionAuthResult => ({
   userId,
@@ -202,4 +204,13 @@ describe('POST /api/drives/[driveId]/backups/[backupId]/restore', () => {
     await POST(makeRequest(driveId, backupId), makeParams(driveId, backupId));
     expect(snapshotCalledAt).toBeLessThan(txCalledAt);
   });
+});
+
+// Route contracts stub authorization; policy decisions are covered by principal-permissions integration tests.
+vi.mock('@/lib/auth/principal-permissions', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/auth/principal-permissions')>();
+  const permissions = await import('@pagespace/lib/permissions/permissions');
+  return { ...actual,
+    isPrincipalDriveOwnerOrAdmin: (auth: { userId: string }, resourceId: string) => permissions.isDriveOwnerOrAdmin(credentialActor(auth.userId, null), resourceId),
+  };
 });

@@ -132,6 +132,19 @@ describe('provider-factory', () => {
         expect(getDrivePolicies).toHaveBeenCalledWith('drive-1');
       });
 
+      it('POL-8 (partial) an agent run in a session of another drive is judged by BOTH drives\' orgs: the agent\'s org refusing is enough, whatever the session drive allows (D-OW-64)', async () => {
+        process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
+        getDrivePolicies.mockImplementation(async (driveId: string) => (driveId === 'agent-drive' ? orgPolicies({ modelAllowlist: ['some/other-model'] }) : null));
+
+        const result = await createAIProvider('user-123', {}, { driveId: 'session-drive', contentDriveIds: ['agent-drive'] });
+
+        expect(isProviderError(result)).toBe(true);
+        if (isProviderError(result)) expect(result).toMatchObject({ status: 403, code: 'org_policy', policy: 'modelAllowlist' });
+        expect(getDrivePolicies).toHaveBeenCalledWith('session-drive');
+        expect(getDrivePolicies).toHaveBeenCalledWith('agent-drive');
+        expect(createOpenRouter).not.toHaveBeenCalled();
+      });
+
       it('POL-8 (partial) a provider the org does not allow is refused, independently of the model list', async () => {
         process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
         getDrivePolicies.mockResolvedValue(orgPolicies({ providerAllowlist: ['google'] }));
@@ -160,7 +173,7 @@ describe('provider-factory', () => {
 
       it('POL-8 (partial) no drive, or a drive with no org, is never restricted and reads no policy when no drive is named', async () => {
         process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
-        expect(isProviderError(await createAIProvider('user-123', {}))).toBe(false);
+        expect(isProviderError(await createAIProvider('user-123', {}, { driveId: null }))).toBe(false);
         expect(getDrivePolicies).not.toHaveBeenCalled();
         expect(isProviderError(await createAIProvider('user-123', {}, { driveId: 'personal-drive' }))).toBe(false);
       });
@@ -178,7 +191,7 @@ describe('provider-factory', () => {
       it('routes the unset default through OpenRouter with the default model', async () => {
         process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
 
-        const result = await createAIProvider('user-123', {});
+        const result = await createAIProvider('user-123', {}, { driveId: null });
 
         expect(isProviderError(result)).toBe(false);
         if (!isProviderError(result)) {
@@ -190,7 +203,7 @@ describe('provider-factory', () => {
       });
 
       it('returns 503 when OPENROUTER_DEFAULT_API_KEY is unset', async () => {
-        const result = await createAIProvider('user-123', {});
+        const result = await createAIProvider('user-123', {}, { driveId: null });
 
         expect(isProviderError(result)).toBe(true);
         if (isProviderError(result)) {
@@ -214,7 +227,7 @@ describe('provider-factory', () => {
         const result = await createAIProvider('user-123', {
           selectedProvider: provider,
           selectedModel: model,
-        });
+        }, { driveId: null });
 
         expect(isProviderError(result)).toBe(false);
         if (!isProviderError(result)) {
@@ -244,7 +257,7 @@ describe('provider-factory', () => {
         const result = await createAIProvider('user-123', {
           selectedProvider: provider,
           selectedModel: model,
-        });
+        }, { driveId: null });
 
         expect(isProviderError(result)).toBe(true);
         if (isProviderError(result)) {
@@ -259,7 +272,7 @@ describe('provider-factory', () => {
         await createAIProvider('user-123', {
           selectedProvider: 'anthropic',
           selectedModel: 'anthropic/claude-opus-4.7',
-        });
+        }, { driveId: null });
 
         expect(createOpenRouter).toHaveBeenCalledWith({
           apiKey: 'or-key',
@@ -274,7 +287,7 @@ describe('provider-factory', () => {
         const result = await createAIProvider('user-123', {
           selectedProvider: 'totally-unknown',
           selectedModel: 'totally-unknown/model',
-        });
+        }, { driveId: null });
 
         expect(isProviderError(result)).toBe(false);
         if (!isProviderError(result)) {
@@ -293,7 +306,7 @@ describe('provider-factory', () => {
         const result = await createAIProvider('user-123', {
           selectedProvider: 'openai',
           selectedModel: 'openai/not-a-real-model',
-        });
+        }, { driveId: null });
 
         expect(isProviderError(result)).toBe(false);
         if (!isProviderError(result)) {
@@ -309,7 +322,7 @@ describe('provider-factory', () => {
         await createAIProvider('user-123', {
           selectedProvider: 'anthropic',
           selectedModel: 'anthropic/claude-opus-4.7',
-        });
+        }, { driveId: null });
 
         expect(mockOpenRouterChat).toHaveBeenCalledWith('anthropic/claude-opus-4.7', {
           usage: { include: true },
@@ -329,7 +342,7 @@ describe('provider-factory', () => {
         await createAIProvider('user-123', {
           selectedProvider: 'openai',
           selectedModel: 'openai/gpt-5.4',
-        });
+        }, { driveId: null });
 
         expect(createOpenRouter).toHaveBeenCalledWith({
           apiKey: 'or-key',
@@ -346,7 +359,7 @@ describe('provider-factory', () => {
         const result = await createAIProvider('user-123', {
           selectedProvider: 'ollama',
           selectedModel: 'llama3.2',
-        });
+        }, { driveId: null });
 
         expect(isProviderError(result)).toBe(false);
         expect(createOllama).toHaveBeenCalledWith(expect.objectContaining({
@@ -357,7 +370,7 @@ describe('provider-factory', () => {
       it('ollama returns 503 when OLLAMA_BASE_URL is unset', async () => {
         const result = await createAIProvider('user-123', {
           selectedProvider: 'ollama',
-        });
+        }, { driveId: null });
 
         expect(isProviderError(result)).toBe(true);
         if (isProviderError(result)) expect(result.status).toBe(503);
@@ -369,7 +382,7 @@ describe('provider-factory', () => {
         const result = await createAIProvider('user-123', {
           selectedProvider: 'lmstudio',
           selectedModel: 'local-model',
-        });
+        }, { driveId: null });
 
         expect(isProviderError(result)).toBe(false);
         expect(createOpenAICompatible).toHaveBeenCalledWith(expect.objectContaining({
@@ -385,7 +398,7 @@ describe('provider-factory', () => {
         const result = await createAIProvider('user-123', {
           selectedProvider: 'azure_openai',
           selectedModel: 'gpt-4',
-        });
+        }, { driveId: null });
 
         expect(isProviderError(result)).toBe(false);
         expect(createOpenAICompatible).toHaveBeenCalledWith(expect.objectContaining({
@@ -401,7 +414,7 @@ describe('provider-factory', () => {
         const result = await createAIProvider('user-123', {
           selectedProvider: 'azure_openai',
           selectedModel: 'gpt-4',
-        });
+        }, { driveId: null });
 
         expect(isProviderError(result)).toBe(true);
         if (isProviderError(result)) expect(result.status).toBe(503);
@@ -417,7 +430,7 @@ describe('provider-factory', () => {
         const result = await createAIProvider('user-123', {
           selectedProvider: 'ollama',
           selectedModel: 'llama3.2',
-        });
+        }, { driveId: null });
 
         expect(isProviderError(result)).toBe(true);
         if (isProviderError(result)) expect(result.error).toContain('blocked');
@@ -432,7 +445,7 @@ describe('provider-factory', () => {
         const result = await createAIProvider('user-123', {
           selectedProvider: 'anthropic',
           selectedModel: 'anthropic/claude-sonnet-4.6',
-        });
+        }, { driveId: null });
 
         expect(isProviderError(result)).toBe(true);
         if (isProviderError(result)) {
@@ -448,7 +461,7 @@ describe('provider-factory', () => {
         const result = await createAIProvider('user-123', {
           selectedProvider: 'ollama',
           selectedModel: 'llama3.2',
-        });
+        }, { driveId: null });
 
         expect(isProviderError(result)).toBe(false);
       });
@@ -458,7 +471,7 @@ describe('provider-factory', () => {
         process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
 
         // No selectedProvider → falls back to DEFAULT_PROVIDER (openai), a cloud vendor.
-        const result = await createAIProvider('user-123', {});
+        const result = await createAIProvider('user-123', {}, { driveId: null });
 
         expect(isProviderError(result)).toBe(true);
         if (isProviderError(result)) {
@@ -475,7 +488,7 @@ describe('provider-factory', () => {
         ]);
         process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
 
-        const result = await createAIProvider('user-123', {});
+        const result = await createAIProvider('user-123', {}, { driveId: null });
 
         expect(isProviderError(result)).toBe(false);
         if (!isProviderError(result)) {
@@ -489,7 +502,7 @@ describe('provider-factory', () => {
 
         const result = await createAIProvider('user-123', {
           selectedProvider: 'totally-not-a-provider',
-        });
+        }, { driveId: null });
 
         expect(isProviderError(result)).toBe(true);
         if (isProviderError(result)) {
@@ -550,7 +563,7 @@ describe('provider-factory', () => {
       const result = await createAIProvider('user-123', {
         selectedProvider: 'anthropic',
         selectedModel: 'anthropic/claude-sonnet-4.6',
-      }, { user: preloaded });
+      }, { user: preloaded, driveId: null });
 
       expect(isProviderError(result)).toBe(false);
       // The DB should not have been queried for the user row
@@ -563,7 +576,7 @@ describe('provider-factory', () => {
       const preloaded = { currentAiProvider: 'google', currentAiModel: 'google/gemini-2.5-pro' };
 
       // No selectedProvider/model → falls back to user defaults
-      const result = await createAIProvider('user-123', {}, { user: preloaded });
+      const result = await createAIProvider('user-123', {}, { user: preloaded, driveId: null });
 
       expect(isProviderError(result)).toBe(false);
       if (!isProviderError(result)) {

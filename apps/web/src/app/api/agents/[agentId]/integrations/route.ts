@@ -1,3 +1,4 @@
+import { canPrincipalEditPage } from '@/lib/auth/principal-permissions';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
@@ -5,13 +6,14 @@ import { isOnPrem } from '@pagespace/lib/deployment-mode';
 import { db } from '@pagespace/db/db';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
+
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';
 import { listGrantsByAgent, createGrant, findGrant } from '@pagespace/lib/integrations/repositories/grant-repository';
 import { getConnectionWithProvider } from '@pagespace/lib/integrations/repositories/connection-repository';
 import type { ToolDefinition, ToolBundle } from '@pagespace/lib/integrations/types';
 import { orgPolicyRefusalResponse } from '@/lib/orgs/org-policy-refusal-response';
 import { broadcastAgentGrantChanged } from '@/lib/websocket/socket-utils';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -116,9 +118,9 @@ export async function GET(
 
   try {
     // Verify user can view the agent
-    const canEdit = await canUserEditPage(auth.userId, agentId);
+    const canEdit = await canPrincipalEditPage(auth, agentId);
     if (!canEdit) {
-      return NextResponse.json({ error: 'Access denied' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), agentId, NextResponse.json({ error: 'Access denied' }, { status: 403 }));
     }
 
     const grants = await listGrantsByAgent(db, agentId);
@@ -172,9 +174,9 @@ export async function POST(
   if (isAuthError(auth)) return auth.error;
 
   try {
-    const canEdit = await canUserEditPage(auth.userId, agentId);
+    const canEdit = await canPrincipalEditPage(auth, agentId);
     if (!canEdit) {
-      return NextResponse.json({ error: 'Access denied' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), agentId, NextResponse.json({ error: 'Access denied' }, { status: 403 }));
     }
 
     const body = await request.json();
@@ -203,7 +205,7 @@ export async function POST(
     const isUserConnection = connection.userId === auth.userId;
     let isDriveMember = false;
     if (connection.driveId) {
-      const access = await getDriveAccess(connection.driveId, auth.userId);
+      const access = await getDriveAccess(connection.driveId, actorFromAuth(auth));
       isDriveMember = access.isMember;
     }
     if (!isUserConnection && !isDriveMember) {

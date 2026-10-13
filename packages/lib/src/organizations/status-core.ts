@@ -4,6 +4,7 @@
  * Lapse is a read: member data and credit remain intact, and security tightening
  * remains available. Billing-disabled deployments derive capability separately.
  */
+import { holdsOrgRole } from './authorize-core';
 
 export const ORG_STATUSES = ['active', 'lapsed'] as const;
 export type OrgStatus = (typeof ORG_STATUSES)[number];
@@ -127,7 +128,7 @@ export function orgBillingNotice(input: {
   result: OrgStatusResult;
   role: 'OWNER' | 'ADMIN' | 'MEMBER';
 }): OrgBillingNotice | null {
-  const manages = input.role === 'OWNER' || input.role === 'ADMIN';
+  const manages = holdsOrgRole(input.role, 'ADMIN');
   const { result } = input;
   if (result.status === 'lapsed') {
     return manages ? { kind: 'reactivate', reason: result.reason, canManageBilling: true } : { kind: 'read_only', canManageBilling: false };

@@ -80,6 +80,7 @@ vi.mock('@pagespace/lib/permissions/membership-queries', () => ({
   resolveDriveWideCanEdit: vi.fn(),
 }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   getUserAccessLevel: vi.fn(),
 }));
 vi.mock('@pagespace/db/db', () => ({
@@ -97,6 +98,7 @@ import { getAppDriveMembership, hasAppDriveMembership } from '@pagespace/lib/per
 import { resolveDriveWideCanEdit } from '@pagespace/lib/permissions/membership-queries';
 import { getUserAccessLevel } from '@pagespace/lib/permissions/permissions';
 import { db } from '@pagespace/db/db';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 // ============================================================================
 // Test Helpers
@@ -178,21 +180,21 @@ describe('GET /api/drives', () => {
       const request = new Request('https://example.com/api/drives');
       await GET(request);
 
-      expect(listAccessibleDrives).toHaveBeenCalledWith(mockUserId, { includeTrash: false, tokenScopable: false });
+      expect(listAccessibleDrives).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }), { includeTrash: false, tokenScopable: false });
     });
 
     it('should pass includeTrash=true when query param is set', async () => {
       const request = new Request('https://example.com/api/drives?includeTrash=true');
       await GET(request);
 
-      expect(listAccessibleDrives).toHaveBeenCalledWith(mockUserId, { includeTrash: true, tokenScopable: false });
+      expect(listAccessibleDrives).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }), { includeTrash: true, tokenScopable: false });
     });
 
     it('should pass tokenScopable=true when query param is set', async () => {
       const request = new Request('https://example.com/api/drives?tokenScopable=true');
       await GET(request);
 
-      expect(listAccessibleDrives).toHaveBeenCalledWith(mockUserId, { includeTrash: false, tokenScopable: true });
+      expect(listAccessibleDrives).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }), { includeTrash: false, tokenScopable: true });
     });
   });
 
@@ -468,7 +470,7 @@ describe('POST /api/drives', () => {
       expect(response.status).toBe(201);
       expect(createOrgDrive).toHaveBeenCalledWith(
         mockUserId,
-        { name: 'Engineering', orgId: 'org-northwind', orgVisibility: undefined },
+        { name: 'Engineering', orgId: 'org-northwind', orgVisibility: undefined, authentication: null },
         orgDriveServiceDeps
       );
       expect(createDrive).not.toHaveBeenCalled();
@@ -511,27 +513,36 @@ describe('POST /api/drives', () => {
       await post({ name: 'Finance', orgId: 'org-northwind', orgVisibility: 'PRIVATE' });
       expect(createOrgDrive).toHaveBeenCalledWith(
         mockUserId,
-        { name: 'Finance', orgId: 'org-northwind', orgVisibility: 'PRIVATE' },
+        { name: 'Finance', orgId: 'org-northwind', orgVisibility: 'PRIVATE', authentication: null },
         orgDriveServiceDeps
       );
 
       expect((await post({ name: 'Finance', orgId: 'org-northwind', orgVisibility: 'SECRET' })).status).toBe(400);
     });
 
-    it('DRV-3 (partial) a bearer-token request cannot create a drive in an org until CLI and MCP parity in Wave G', async () => {
+    it('X-1 (partial) DRV-3 (partial) an unscoped token may create a drive in an org (D-OW-26 forbids only money moves); the same org decision runs', async () => {
       vi.mocked(authenticateRequestWithOptions).mockResolvedValue({
         ...mockWebAuth(mockUserId),
         tokenType: 'mcp',
       } as unknown as SessionAuthResult);
+      vi.mocked(createOrgDrive).mockResolvedValue({ ok: true, drive: orgDriveRow });
+
+      const response = await post({ name: 'Engineering', orgId: 'org-northwind' });
+
+      expect(response.status).toBe(201);
+      expect(createOrgDrive).toHaveBeenCalledWith(mockUserId, expect.objectContaining({ orgId: 'org-northwind' }), orgDriveServiceDeps);
+    });
+
+    it('DRV-3 (partial) the asking credential\'s sign-in evidence goes to createOrgDrive, which judges the org\'s sign-in policy after membership; its refusal is relayed', async () => {
+      const authentication = { authenticatedAtMs: 1, assurance: 'single_factor' as const };
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ ...mockWebAuth(mockUserId), authentication } as unknown as SessionAuthResult);
+      vi.mocked(createOrgDrive).mockResolvedValueOnce({ ok: false, code: 'org_strong_sign_in_required', status: 403, message: 'This organization requires a stronger or more recent sign-in.' });
 
       const response = await post({ name: 'Engineering', orgId: 'org-northwind' });
 
       expect(response.status).toBe(403);
-      expect((await response.json()).error).toBe(
-        'Creating a drive in an organization requires a signed-in session; tokens cannot do this yet.'
-      );
-      expect(createOrgDrive).not.toHaveBeenCalled();
-      expect(createDrive).not.toHaveBeenCalled();
+      expect((await response.json()).code).toBe('org_strong_sign_in_required');
+      expect(createOrgDrive).toHaveBeenCalledWith(mockUserId, expect.objectContaining({ orgId: 'org-northwind', authentication }), orgDriveServiceDeps);
     });
 
     it('an orgId answers 404 and creates nothing while ORGS_ENABLED is false', async () => {
@@ -790,6 +801,15 @@ describe('GET /api/drives — scoped MCP canCreatePages', () => {
 
     expect(response.status).toBe(200);
     expect(body[0]).toMatchObject({ id: 'drive_scoped', canCreatePages: false });
-    expect(getUserAccessLevel).toHaveBeenCalledWith('user_123', 'drive_scoped');
+    expect(getUserAccessLevel).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user_123' }), 'drive_scoped');
   });
+});
+
+// Route contracts stub authorization; policy decisions are covered by principal-permissions integration tests.
+vi.mock('@/lib/auth/principal-permissions', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/auth/principal-permissions')>();
+  const permissions = await import('@pagespace/lib/permissions/permissions');
+  return { ...actual,
+    getPrincipalAccessLevel: (auth: { userId: string }, resourceId: string) => permissions.getUserAccessLevel(credentialActor(auth.userId, null), resourceId),
+  };
 });

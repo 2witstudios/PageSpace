@@ -8,6 +8,8 @@ import {
   PUBLISHED_APP_GUEST_PRESETS,
   applyMinMachinesRunning,
   classifySubscriptionKind,
+  decideDedicatedPurchaser,
+  dedicatedSubscriptionsToRelease,
   dedicatedMonthlyFloorCents,
   findGuestPreset,
   guestPresetShape,
@@ -634,6 +636,99 @@ describe('isTerminalSubscriptionStatus', () => {
       should: 'not be absorbing',
       actual: ['active', 'trialing', 'past_due', 'incomplete'].map(isTerminalSubscriptionStatus),
       expected: [false, false, false, false],
+    });
+  });
+});
+
+describe('decideDedicatedPurchaser — who buys an app\'s dedicated hosting, and whose bill it is (WAL-9)', () => {
+  const personal = { kind: 'user' as const, userId: 'owner-1' };
+  const org = { kind: 'org' as const, orgId: 'org-northwind' };
+  const ok = { orgActive: true, orgHasStripeCustomer: true };
+
+  it('WAL-9 (partial) a personal drive\'s app is bought by its owner, on their own card; anyone else is told it does not exist', () => {
+    assert({
+      given: 'the drive owner',
+      should: 'buy as themselves',
+      actual: decideDedicatedPurchaser({ payer: personal, callerId: 'owner-1', callerOrgRole: null, action: 'buy', ...ok }),
+      expected: { ok: true, purchaser: { kind: 'user', userId: 'owner-1' } },
+    });
+    assert({
+      given: 'someone else',
+      should: 'answer not found',
+      actual: decideDedicatedPurchaser({ payer: personal, callerId: 'member-2', callerOrgRole: 'ADMIN', action: 'buy', ...ok }),
+      expected: { ok: false, reason: 'not_found' },
+    });
+  });
+
+  it('WAL-9 (partial) an org drive\'s app is billed to the ORG, bought by an org Owner or Admin — never refused for being an org\'s, never on the buyer\'s card', () => {
+    for (const role of ['OWNER', 'ADMIN'] as const) {
+      assert({
+        given: `an org ${role}`,
+        should: 'buy for the org, recorded as the buyer',
+        actual: decideDedicatedPurchaser({ payer: org, callerId: 'admin-1', callerOrgRole: role, action: 'buy', ...ok }),
+        expected: { ok: true, purchaser: { kind: 'org', orgId: 'org-northwind', buyerUserId: 'admin-1' } },
+      });
+    }
+    for (const role of ['MEMBER', null] as const) {
+      assert({
+        given: `a ${role ?? 'non-member'} (the drive lead included, unless an Admin)`,
+        should: 'answer not found',
+        actual: decideDedicatedPurchaser({ payer: org, callerId: 'lead-1', callerOrgRole: role, action: 'buy', ...ok }),
+        expected: { ok: false, reason: 'not_found' },
+      });
+    }
+  });
+
+  it('WAL-9 (partial) a LAPSED org buys nothing new, and an org with no Stripe customer cannot be billed — both refused by name; cancelling stays open', () => {
+    assert({
+      given: 'a lapsed org',
+      should: 'refuse org_lapsed',
+      actual: decideDedicatedPurchaser({ payer: org, callerId: 'admin-1', callerOrgRole: 'ADMIN', action: 'buy', orgActive: false, orgHasStripeCustomer: true }),
+      expected: { ok: false, reason: 'org_lapsed' },
+    });
+    assert({
+      given: 'an org with no Stripe customer',
+      should: 'refuse org_billing_unavailable',
+      actual: decideDedicatedPurchaser({ payer: org, callerId: 'admin-1', callerOrgRole: 'OWNER', action: 'buy', orgActive: true, orgHasStripeCustomer: false }),
+      expected: { ok: false, reason: 'org_billing_unavailable' },
+    });
+    assert({
+      given: 'a cancel on a lapsed org',
+      should: 'be allowed: a cancel only stops a charge',
+      actual: decideDedicatedPurchaser({ payer: org, callerId: 'admin-1', callerOrgRole: 'ADMIN', action: 'cancel', orgActive: false, orgHasStripeCustomer: false }),
+      expected: { ok: true, purchaser: { kind: 'org', orgId: 'org-northwind', buyerUserId: 'admin-1' } },
+    });
+  });
+});
+
+describe('dedicatedSubscriptionsToRelease — what a drive\'s former payer stops paying for (D-OW-64)', () => {
+  it('WAL-9 (partial) only the live subscriptions billing the leaving org; a terminal one, or one billing a person, is not the org\'s to stop', () => {
+    const rows = [
+      { stripeSubscriptionId: 'sub_live', orgId: 'org-1', status: 'active' },
+      { stripeSubscriptionId: 'sub_past_due', orgId: 'org-1', status: 'past_due' },
+      { stripeSubscriptionId: 'sub_over', orgId: 'org-1', status: 'canceled' },
+      { stripeSubscriptionId: 'sub_person', orgId: null, status: 'active' },
+      { stripeSubscriptionId: 'sub_other_org', orgId: 'org-2', status: 'active' },
+    ];
+    assert({
+      given: 'a drive leaving org-1',
+      should: 'release its live org-1 subscriptions only',
+      actual: dedicatedSubscriptionsToRelease(rows, { kind: 'org', orgId: 'org-1' }).map((r) => r.stripeSubscriptionId),
+      expected: ['sub_live', 'sub_past_due'],
+    });
+  });
+
+  it('WAL-9 (partial) a personal drive moving into an org releases only its owner\'s live personal subscriptions — never one an org already pays for', () => {
+    const rows = [
+      { stripeSubscriptionId: 'sub_mine', orgId: null, status: 'active' },
+      { stripeSubscriptionId: 'sub_mine_over', orgId: null, status: 'incomplete_expired' },
+      { stripeSubscriptionId: 'sub_org', orgId: 'org-1', status: 'active' },
+    ];
+    assert({
+      given: 'a personal drive moving into an org',
+      should: 'release the owner\'s live personal subscription only',
+      actual: dedicatedSubscriptionsToRelease(rows, { kind: 'user' }).map((r) => r.stripeSubscriptionId),
+      expected: ['sub_mine'],
     });
   });
 });

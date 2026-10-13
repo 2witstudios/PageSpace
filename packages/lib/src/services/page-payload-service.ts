@@ -27,7 +27,10 @@ import type {
 } from '../types';
 import { PageType } from '../utils/enums';
 import { readSheetDocument } from '../sheets/store';
-import { accessiblePageIdsSource, auditOrgPowerAccess, type OrgPowerRow } from '../permissions/accessible-page-ids';
+import { auditOrgPowerAccess, type OrgPowerRow } from '../permissions/accessible-page-ids';
+import { accessiblePageIdsSource } from '../permissions/accessible-page-ids-source';
+import { checkActorResourceAuthentication } from '../permissions/actor-authentication';
+import type { AccessActor } from '../permissions/access-actor';
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type Runner = typeof db | Tx;
@@ -260,12 +263,18 @@ async function buildContext(runner: Runner, page: Page): Promise<PagePayloadCont
 }
 
 export async function loadPagePayload(
-  userId: string,
+  actor: AccessActor,
   pageId: string,
   tx?: Tx,
 ): Promise<PagePayload> {
+  const { userId } = actor;
   if (!userId) throw new Error('loadPagePayload: userId is required');
   if (!pageId) throw new Error('loadPagePayload: pageId is required');
+  // SEC-2/3 (D-OW-45): the visibility function knows nothing of the credential. A page and its breadcrumb live in one
+  // drive, so one org sign-in check covers the whole payload.
+  if (!(await checkActorResourceAuthentication(actor, pageId)).allowed) {
+    throw new Error(`loadPagePayload: page ${pageId} is not accessible to user ${userId}`);
+  }
 
   const run = async (runner: Runner): Promise<PagePayload> => {
     await ensurePageAccessible(runner, userId, pageId);

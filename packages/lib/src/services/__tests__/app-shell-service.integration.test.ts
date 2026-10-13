@@ -16,6 +16,7 @@ import { pagePermissions, driveMembers } from '@pagespace/db/schema/members';
 import { connections } from '@pagespace/db/schema/social';
 import { loadAppShell } from '../app-shell-service';
 import { cleanupNorthwind, northwind } from '../../permissions/__tests__/fixtures/northwind-org-drives';
+import { credentialActor } from '../../permissions/access-actor';
 
 const flags = vi.hoisted(() => ({ orgsEnabled: false }));
 vi.mock('../../organizations/orgs-enabled', () => ({
@@ -59,7 +60,7 @@ describe('loadAppShell (integration)', () => {
       acceptedAt: new Date(),
     });
 
-    const shell = await loadAppShell(callerUser.id);
+    const shell = await loadAppShell(credentialActor(callerUser.id, null));
 
     expect(shell.user.id).toBe(callerUser.id);
     expect(shell.user.email).toBe(callerUser.email);
@@ -95,7 +96,7 @@ describe('loadAppShell (integration)', () => {
     const otherDrive = await factories.createDrive(otherUser.id);
     await factories.createPage(otherDrive.id);
 
-    const shell = await loadAppShell(callerUser.id);
+    const shell = await loadAppShell(credentialActor(callerUser.id, null));
 
     expect(shell.drives.map((d) => d.id)).toEqual([callerDrive.id]);
     expect(shell.driveMembers.every((m) => m.driveId === callerDrive.id)).toBe(true);
@@ -118,7 +119,7 @@ describe('loadAppShell (integration)', () => {
       canDelete: false,
     });
 
-    const shell = await loadAppShell(callerUser.id, { activeDriveId: otherDrive.id });
+    const shell = await loadAppShell(credentialActor(callerUser.id, null), { activeDriveId: otherDrive.id });
 
     expect(shell.drives.map((d) => d.id)).not.toContain(otherDrive.id);
     expect(shell.driveMembers.some((m) => m.driveId === otherDrive.id)).toBe(false);
@@ -136,7 +137,7 @@ describe('loadAppShell (integration)', () => {
       acceptedAt: null,
     });
 
-    const shell = await loadAppShell(callerUser.id);
+    const shell = await loadAppShell(credentialActor(callerUser.id, null));
 
     expect(shell.drives.map((d) => d.id)).not.toContain(pendingDrive.id);
     expect(shell.driveMembers.some((m) => m.driveId === pendingDrive.id)).toBe(false);
@@ -154,7 +155,7 @@ describe('loadAppShell (integration)', () => {
     // Trashed page should NOT appear in the tree.
     await factories.createPage(drive.id, { isTrashed: true, trashedAt: new Date() });
 
-    const shell = await loadAppShell(callerUser.id, { activeDriveId: drive.id });
+    const shell = await loadAppShell(credentialActor(callerUser.id, null), { activeDriveId: drive.id });
 
     expect(shell.activeDrive?.driveId).toBe(drive.id);
     const treeIds = shell.activeDrive?.tree.map((n) => n.id).sort() ?? [];
@@ -167,7 +168,7 @@ describe('loadAppShell (integration)', () => {
     const otherDrive = await factories.createDrive(stranger.id);
     await factories.createPage(otherDrive.id);
 
-    const shell = await loadAppShell(callerUser.id, { activeDriveId: otherDrive.id });
+    const shell = await loadAppShell(credentialActor(callerUser.id, null), { activeDriveId: otherDrive.id });
 
     expect(shell.activeDrive).toBeUndefined();
   });
@@ -177,7 +178,7 @@ describe('loadAppShell (integration)', () => {
     const drive = await factories.createDrive(callerUser.id);
     const page = await factories.createPage(drive.id, { type: 'DOCUMENT', title: 'Hello' });
 
-    const shell = await loadAppShell(callerUser.id, { currentPageId: page.id });
+    const shell = await loadAppShell(credentialActor(callerUser.id, null), { currentPageId: page.id });
 
     expect(shell.currentPage?.page.id).toBe(page.id);
     expect(shell.currentPage?.page.title).toBe('Hello');
@@ -186,7 +187,7 @@ describe('loadAppShell (integration)', () => {
   });
 
   it('throws when the caller user does not exist', async () => {
-    await expect(loadAppShell('does-not-exist')).rejects.toThrow(/user not found/);
+    await expect(loadAppShell(credentialActor('does-not-exist', null))).rejects.toThrow(/user not found/);
   });
 
   describe('org drives (B7c)', () => {
@@ -196,7 +197,7 @@ describe('loadAppShell (integration)', () => {
     }, 120_000);
 
     const shellDrives = async (userId: string) =>
-      (await loadAppShell(userId)).drives.map((d) => `${d.name}:${d.role}:${d.isOwned ? 'owned' : 'joined'}`).sort();
+      (await loadAppShell(credentialActor(userId, null))).drives.map((d) => `${d.name}:${d.role}:${d.isOwned ? 'owned' : 'joined'}`).sort();
 
     it('DRV-5 (partial) X-6 (partial) the shell lists what the org-aware member-drive set lists: an implicit Open member with no row, never a stale org row, and the lead of an org drive owns it', async () => {
       flags.orgsEnabled = true;

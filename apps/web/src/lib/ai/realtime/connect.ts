@@ -81,6 +81,8 @@ export type VoiceConnection = {
   readonly maxDurationMs: number | undefined;
   /** SPEND-4: the call's opening gate moved it to another source (the route's `spendFallback`); null otherwise. */
   readonly spendFallback: SpendFallbackNotice | null;
+  /** POL-8: why the conversation's earlier messages were left out of this call, or null when they were not. */
+  readonly historyWithheld: string | null;
   /** The stream this connection OWNS. Stopped by `stop`, and only by `stop`. */
   readonly microphone: MediaStream;
   /** Silence or unsilence the mic without renegotiating or dropping the call. */
@@ -404,6 +406,7 @@ export const connectVoiceCall = async (
   let attached: boolean;
   let maxDurationMs: number | undefined;
   let spendFallback: SpendFallbackNotice | null = null;
+  let historyWithheld: string | null = null;
   try {
     const body = (await response.json()) as {
       callId?: unknown;
@@ -411,6 +414,7 @@ export const connectVoiceCall = async (
       attached?: unknown;
       maxDurationMs?: unknown;
       spendFallback?: unknown;
+      historyWithheld?: unknown;
     };
     if (typeof body.callId !== 'string' || body.callId.length === 0) {
       stop();
@@ -433,6 +437,7 @@ export const connectVoiceCall = async (
     maxDurationMs =
       typeof body.maxDurationMs === 'number' ? body.maxDurationMs : undefined;
     spendFallback = readSpendFallbackBody(body.spendFallback);
+    historyWithheld = typeof body.historyWithheld === 'string' && body.historyWithheld.length > 0 ? body.historyWithheld : null;
 
     await peer.setRemoteDescription({ type: 'answer', sdp: body.answerSdp });
   } catch (error) {
@@ -451,6 +456,7 @@ export const connectVoiceCall = async (
       attached,
       maxDurationMs,
       spendFallback,
+      historyWithheld,
       microphone,
       setMicrophoneEnabled,
       stop,

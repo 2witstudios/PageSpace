@@ -1,3 +1,4 @@
+import { parseVerifiedAuthentication } from './authentication-evidence';
 /**
  * Pure decision core for the step-up ceremony (Phase 8 task
  * d2wicbqyia6u30axz8j2j4ab). Every function here takes already-fetched data
@@ -145,3 +146,7 @@ export const parseMagicLinkStepUpNext = (metadata: string | null): string | null
   const parsed = safeParseJsonObject(metadata);
   return typeof parsed?.next === 'string' ? parsed.next : null;
 };
+
+/** Evidence belongs to this action-bound grant, never to the user's other credentials. */
+export const readStepUpAuthentication = (metadata: string | null, nowMs: number) =>
+  parseVerifiedAuthentication(safeParseJsonObject(metadata)?.authentication, nowMs);

@@ -35,11 +35,13 @@ export async function goToOrgBillingPortal(orgId: string): Promise<void> {
  * still recording (`funding_pending`, [D-OW-30]) shows activation finishing — never success; the
  * page's org:changed listener (useOrgRealtime) refreshes the notice away once the proof lands.
  */
-export function OrgBillingBanner({ orgId, orgName, notice, onReactivated }: {
+export function OrgBillingBanner({ orgId, orgName, notice, onReactivated, className = 'mb-8' }: {
   orgId: string;
   orgName: string;
   notice: OrgBillingNotice | undefined;
   onReactivated?: () => void;
+  /** Spacing around the banner where it is placed. */
+  className?: string;
 }) {
   const { resolvedTheme } = useTheme();
   const [busy, setBusy] = useState(false);
@@ -93,7 +95,7 @@ export function OrgBillingBanner({ orgId, orgName, notice, onReactivated }: {
   const Icon = notice.kind === 'read_only' ? Info : AlertTriangle;
 
   return (
-    <div role="status" className={cn('mb-8 flex items-start gap-2.5 rounded-xl border px-3.5 py-3', tone)}>
+    <div role="status" className={cn('flex items-start gap-2.5 rounded-xl border px-3.5 py-3', className, tone)}>
       <Icon className={cn('mt-0.5 h-4 w-4 flex-shrink-0', notice.kind === 'reactivate' ? 'text-destructive' : 'text-muted-foreground')} />
       <div className="flex min-w-0 flex-1 flex-col gap-1">
         {notice.kind === 'reactivate' ? (

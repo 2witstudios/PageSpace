@@ -10,6 +10,11 @@ import type { SessionAuthResult } from '@/lib/auth';
 
 const flags = vi.hoisted(() => ({ orgsEnabled: true }));
 
+// The org sign-in policy (SEC-2/3) has its own suites; here every credential meets it.
+vi.mock('@pagespace/lib/permissions/actor-authentication', () => ({
+  checkActorOrgAuthentication: vi.fn(async () => ({ allowed: true })),
+  drivePolicyOrgId: vi.fn(async () => null),
+}));
 vi.mock('@pagespace/lib/organizations/orgs-enabled', () => ({
   get ORGS_ENABLED() {
     return flags.orgsEnabled;
@@ -108,7 +113,7 @@ describe('drive join request routes', () => {
     }
   });
 
-  it('DRV-6 (partial) mutations require a session with CSRF; reads a session without it', async () => {
+  it('DRV-6 (partial) X-1 (partial) mutations admit a session with CSRF or an MCP key; reads without CSRF', async () => {
     vi.mocked(requestToJoinDrive).mockResolvedValue({ ok: true, created: true, request: pendingRequest as never, drive: research });
     vi.mocked(listPendingDriveJoinRequests).mockResolvedValue({ ok: true, requests: [] });
 
@@ -116,8 +121,8 @@ describe('drive join request routes', () => {
     await GET(call('GET'), driveContext);
 
     expect(vi.mocked(authenticateRequestWithOptions).mock.calls.map(([, options]) => options)).toEqual([
-      { allow: ['session'], requireCSRF: true },
-      { allow: ['session'], requireCSRF: false },
+      { allow: ['session', 'mcp'], requireCSRF: true },
+      { allow: ['session', 'mcp'], requireCSRF: false },
     ]);
   });
 
@@ -172,7 +177,7 @@ describe('drive join request routes', () => {
       const listed = await GET(call('GET'), driveContext);
       expect(listed.status).toBe(200);
       expect(await listed.json()).toEqual({ requests: [{ id: REQUEST_ID, userId: LENA }] });
-      expect(listPendingDriveJoinRequests).toHaveBeenCalledWith(MARCUS, DRIVE);
+      expect(listPendingDriveJoinRequests).toHaveBeenCalledWith(expect.objectContaining({ userId: MARCUS }), DRIVE);
 
       vi.mocked(listPendingDriveJoinRequests).mockResolvedValueOnce({ ok: false, code: 'NOT_APPROVER', status: 403, message: 'no' });
       expect((await GET(call('GET'), driveContext)).status).toBe(403);
@@ -190,13 +195,13 @@ describe('drive join request routes', () => {
 
       expect(response.status).toBe(200);
       expect(await response.json()).toMatchObject({ admitted: true, request: { status: 'approved' } });
-      expect(answerDriveJoinRequest).toHaveBeenCalledWith(MARCUS, DRIVE, REQUEST_ID, 'approve');
+      expect(answerDriveJoinRequest).toHaveBeenCalledWith(expect.objectContaining({ userId: MARCUS }), DRIVE, REQUEST_ID, 'approve');
       expect(auditRequest).toHaveBeenCalledWith(expect.any(Request), expect.objectContaining({
         userId: MARCUS,
         resourceType: 'drive_join_request',
         details: { operation: 'drive_join_request_approve', driveId: DRIVE, orgId: NORTHWIND, requesterId: LENA, admitted: true },
       }));
-      expect(recordOrgPowerDriveAction).toHaveBeenCalledWith(MARCUS, research, 'answer_join_request');
+      expect(recordOrgPowerDriveAction).toHaveBeenCalledWith(expect.objectContaining({ userId: MARCUS }), research, 'answer_join_request');
     });
 
     it('DRV-6 (partial) a denial is audited as a refusal', async () => {

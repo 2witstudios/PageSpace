@@ -1,3 +1,4 @@
+import { isPrincipalDriveOwnerOrAdmin } from '@/lib/auth/principal-permissions';
 import { NextResponse } from 'next/server';
 import { OpenRoleFloorError, guardOpenRoleFloor } from '@pagespace/lib/organizations/open-role-floor';
 import { admitReentry } from '@pagespace/lib/permissions/guest-holds';
@@ -6,7 +7,7 @@ import { eq, inArray } from '@pagespace/db/operators';
 import { driveBackups, driveBackupPermissions, driveBackupMembers, driveBackupRoles } from '@pagespace/db/schema/versioning';
 import { pagePermissions, driveMembers, driveRoles } from '@pagespace/db/schema/members';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
+
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { createChangeGroupId, inferChangeGroupType } from '@pagespace/lib/monitoring/change-group';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -22,6 +23,7 @@ import {
 import { runPreRestoreSnapshot } from '@/services/api/restore-backup-service';
 import { guardDriveAccess, isOrgLapsedError } from '@pagespace/lib/permissions/org-lapse-guard';
 import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -37,9 +39,9 @@ export async function POST(
 
   try {
     // 1. Permission check
-    const isAdmin = await isDriveOwnerOrAdmin(auth.userId, driveId);
+    const isAdmin = await isPrincipalDriveOwnerOrAdmin(auth, driveId);
     if (!isAdmin) {
-      return NextResponse.json({ error: 'Access denied' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Access denied' }, { status: 403 }));
     }
 
     // 2. Load and validate backup
@@ -57,7 +59,7 @@ export async function POST(
     }
 
     // 4. Pre-restore snapshot (outside transaction — must survive even if restore rolls back)
-    const snapshot = await runPreRestoreSnapshot(driveId, auth.userId, backupId);
+    const snapshot = await runPreRestoreSnapshot(driveId, actorFromAuth(auth), backupId);
     if (!snapshot.success) {
       loggers.api.error('Pre-restore snapshot failed', new Error(snapshot.error));
       return NextResponse.json(

@@ -77,8 +77,21 @@ const SPEC = path.join(repoRoot(), 'docs/2.0-architecture/agent-sessions.md');
  * 160 → 159 (D-OW-42 final cutover): the turns' personal-tier reads (gate tier and
  * deployment capability) moved into `personalTurnTiers` in `turn-credit.ts`, replacing the
  * identical subscription-tier type import each turn carried.
+ *
+ * 159 → 160 (spend-gate, SPEND-8 cutover): the global turn no longer names PERSONAL_SPEND (a
+ * turn with no server-resolved drive has no drive, so conversationSpend covers it), which makes
+ * its spend-target import byte-identical to the page turn's again — the 161 → 160 step undone.
+ * Both turns need that one import; there is nothing to extract.
+ *
+ * 160 → 161 (POL-8 tool boundary): both turns hand their tools the model they resolved
+ * through the shared `toolModelContext` (tool-model-context.ts) rather than a copied pair;
+ * the one new identical line is that shared module's import.
+ *
+ * 161 → 163 (POL-8 command pages): both turns judge their command chips against the
+ * model they resolved through the shared `commandsForModel` (command-model-policy.ts);
+ * the two new identical lines are its import and its one call.
  */
-const RECORDED_IDENTICAL_LINES = 159;
+const RECORDED_IDENTICAL_LINES = 163;
 
 /** Substantive lines: no blanks, no comments, trimmed. */
 const substantiveLines = (file: string): string[] =>

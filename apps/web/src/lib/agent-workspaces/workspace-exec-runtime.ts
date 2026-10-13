@@ -24,6 +24,7 @@ import {
 import type { AgentSessionRecord } from '@pagespace/lib/services/agent-workspaces/agent-workspaces-store';
 import { buildRealSandboxRunDeps, productionSandboxGate } from '@/lib/ai/tools/sandbox-tools-runtime';
 import { isOrgLapsedForDrive } from '@pagespace/lib/organizations/status';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 /** The opaque conversation scope key an exec run carries (it has no chat conversation). */
 const workspaceExecScopeKey = (workspaceId: string): string => `workspace-exec:${workspaceId}`;
@@ -74,11 +75,13 @@ type WorkspaceExecResult =
 export async function execInWorkspace(input: {
   session: AgentSessionRecord;
   ctx: SandboxActorContext;
+  /** The requester's credential: the gate and the provisioning re-check both ask code execution of it. */
+  actor: AccessActor;
   command: string;
   cwd?: string;
   timeoutMs?: number;
 }): Promise<WorkspaceExecResult> {
-  const decision = await productionSandboxGate(input.ctx);
+  const decision = await productionSandboxGate(input.ctx, input.actor);
   if (!decision.ok) {
     return {
       success: false,
@@ -93,6 +96,6 @@ export async function execInWorkspace(input: {
     cwd: input.cwd,
     timeoutMs: input.timeoutMs,
     ctx: input.ctx,
-    deps: buildRealSandboxRunDeps({ resolveSession: async () => ({ ok: true, session }) }),
+    deps: buildRealSandboxRunDeps({ actor: input.actor, resolveSession: async () => ({ ok: true, session }) }),
   });
 }

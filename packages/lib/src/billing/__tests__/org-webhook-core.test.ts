@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { ORG_ID_METADATA_KEY, ORG_SUBSCRIPTION_KIND } from '../org-subscription-core';
-import { routeBillingOwner, orgInvoiceExtraSeats, planOrgSubscriptionMirror, planOrgSeatItemMirror, planOrgSubscriptionPriceMirror } from '../org-webhook-core';
+import { routeBillingOwner, planOrgSubscriptionMirror, planOrgSeatItemMirror, planOrgSubscriptionPriceMirror, orgSubscriptionMirrorAuditEvents } from '../org-webhook-core';
 
 const ORG = 'org_northwind';
 
@@ -35,30 +35,6 @@ describe('routeBillingOwner', () => {
       orgId: ORG,
       taggedOrgId: 'org_other',
     });
-  });
-});
-
-describe('orgInvoiceExtraSeats', () => {
-  const SEAT = 'price_seat';
-  const line = (price: string | { id: string } | null, quantity: number | null) => ({
-    quantity,
-    pricing: price === null ? null : { price_details: { price } },
-  });
-
-  it('A-8 the extra seats an org invoice billed are the quantity on its extra-seat line (a count, not an amount)', () => {
-    expect(orgInvoiceExtraSeats([line('price_base', 1), line(SEAT, 10)], SEAT)).toBe(10);
-    expect(orgInvoiceExtraSeats([line('price_base', 1), line({ id: SEAT }, 2)], SEAT)).toBe(2);
-    expect(orgInvoiceExtraSeats([line('price_base', 1), line(SEAT, 0)], SEAT)).toBe(0);
-  });
-
-  it('A-8 an invoice with no extra-seat line, or no configured seat price, reports null (the caller falls back)', () => {
-    expect(orgInvoiceExtraSeats([line('price_base', 1)], SEAT)).toBeNull();
-    expect(orgInvoiceExtraSeats([line(SEAT, 3)], '')).toBeNull();
-    expect(orgInvoiceExtraSeats([line(SEAT, null)], SEAT)).toBeNull();
-  });
-
-  it('A-8 proration lines for the seat price do not stack: the largest positive quantity is the period seat count', () => {
-    expect(orgInvoiceExtraSeats([line(SEAT, 2), line(SEAT, 3), line('price_base', 1)], SEAT)).toBe(3);
   });
 });
 
@@ -132,5 +108,45 @@ describe('org subscription price mirror', () => {
 
   it('restores configured price identities when the complete collection verifies', () => {
     expect(planOrgSubscriptionPriceMirror({ stored, subscription: { status: 'active', items: [...items].reverse() }, prices })).toEqual({ status: 'active', stripeBasePriceId: 'price_base', stripeSeatPriceId: 'price_seat' });
+  });
+});
+
+describe('orgSubscriptionMirrorAuditEvents', () => {
+  const unchanged = { status: 'active', cancelAtPeriodEnd: false, extraSeatQuantity: 2 };
+  const base = { orgId: ORG, eventId: 'evt_1', previous: unchanged, next: unchanged, orgStatusBefore: 'active' as const, orgStatusAfter: 'active' as const, transition: null };
+
+  it('AUD-1 (partial) a redelivered event that mirrors the same state writes nothing', () => {
+    expect(orgSubscriptionMirrorAuditEvents(base)).toEqual([]);
+  });
+
+  it('AUD-1 (partial) a seat quantity changed on Stripe\'s side (dashboard, portal, support) is an org seat event naming both quantities', () => {
+    expect(orgSubscriptionMirrorAuditEvents({ ...base, next: { ...unchanged, extraSeatQuantity: 3 } })).toEqual([{
+      orgId: ORG,
+      eventType: 'org.seat.quantity_changed',
+      resourceType: 'organization',
+      resourceId: ORG,
+      details: { reason: 'stripe_side_change', source: 'stripe_webhook', eventId: 'evt_1', from: 2, to: 3 },
+    }]);
+  });
+
+  it('AUD-1 (partial) a status or cancel-at-period-end change is a billing event carrying the lapse transition', () => {
+    const events = orgSubscriptionMirrorAuditEvents({
+      ...base,
+      next: { ...unchanged, status: 'past_due' },
+      orgStatusAfter: 'lapsed',
+      transition: 'entered_lapse',
+    });
+    expect(events).toEqual([{
+      orgId: ORG,
+      eventType: 'org.billing.subscription_changed',
+      resourceType: 'org_subscription',
+      resourceId: ORG,
+      details: { source: 'stripe_webhook', eventId: 'evt_1', from: 'active', to: 'past_due', cancelAtPeriodEnd: false, orgStatusBefore: 'active', orgStatusAfter: 'lapsed', transition: 'entered_lapse' },
+    }]);
+  });
+
+  it('AUD-1 (partial) a mirror that changes both writes both events, billing first', () => {
+    const events = orgSubscriptionMirrorAuditEvents({ ...base, next: { status: 'active', cancelAtPeriodEnd: true, extraSeatQuantity: 0 } });
+    expect(events.map((e) => e.eventType)).toEqual(['org.billing.subscription_changed', 'org.seat.quantity_changed']);
   });
 });

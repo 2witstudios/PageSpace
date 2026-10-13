@@ -46,18 +46,25 @@ import { canConsumeAI } from '../../billing/credit-gate';
 import { consumeCredits } from '../../billing/credit-consume';
 import { automationSpend } from '../../billing/spend-target';
 import { setDriveWalletCap } from '../../services/drive-wallet-service';
+import { credentialActor } from '../../permissions/access-actor';
 
 vi.mock('../orgs-enabled', () => ({ ORGS_ENABLED: true }));
 const audit = vi.hoisted(() => ({ events: [] as Array<Record<string, unknown>> }));
-vi.mock('../../audit/org-audit', () => ({
-  recordOrgAuditEvent: vi.fn(async (event: Record<string, unknown>) => {
-    audit.events.push(event);
-  }),
-  recordOrgAuditEventAfterCommit: vi.fn(async (event: Record<string, unknown>) => {
-    audit.events.push(event);
-    return true;
-  }),
-}));
+// AUD-1: the code under test stages its org events in the outbox; the chain append is captured here, so what this
+// suite sees is exactly what was staged, committed and delivered.
+vi.mock('../../audit/security-audit', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../audit/security-audit')>();
+  const { orgEventOf } = await import('../../audit/__tests__/capture-org-audit');
+  return {
+    ...actual,
+    securityAudit: {
+      ...actual.securityAudit,
+      logEvent: vi.fn(async (entry: import('../../audit/security-audit').AuditEvent) => {
+        audit.events.push(orgEventOf(entry));
+      }),
+    },
+  };
+});
 
 let dbAvailable = false;
 const originalMode = process.env.DEPLOYMENT_MODE;
@@ -246,7 +253,7 @@ describe('[D-OW-36] an org drive\'s automations outlive their creator (orgs on, 
     world = await build();
     const w = world;
     await leaveOrganization(w.marcusId, w.orgId);
-    await setDriveWalletCap(w.anaId, w.productId, w.lenaId, { dailyCents: 30, monthlyCents: null }, 'session');
+    await setDriveWalletCap(credentialActor(w.anaId, null), w.productId, w.lenaId, { dailyCents: 30, monthlyCents: null }, 'session');
 
     const nextRunAt = new Date(Date.now() + 1_800_000);
     expect(await reassignOwnerLeftAutomation({ orgId: w.orgId, actorId: w.anaId, kind: 'workflow', id: w.hourlyId, newOwnerId: w.lenaId, nextRunAt: () => nextRunAt }))
@@ -429,7 +436,7 @@ describe('[D-OW-36] an org drive\'s automations outlive their creator (orgs on, 
     expect(ownerLeftEvents().some((e) => 'actorId' in e)).toBe(false);
 
     // An Admin reassigns one to Lena: it runs as her, under her cap.
-    await setDriveWalletCap(w.anaId, w.productId, w.lenaId, { dailyCents: 30, monthlyCents: null }, 'session');
+    await setDriveWalletCap(credentialActor(w.anaId, null), w.productId, w.lenaId, { dailyCents: 30, monthlyCents: null }, 'session');
     expect(await reassignOwnerLeftAutomation({ orgId: w.orgId, actorId: w.anaId, kind: 'workflow', id: w.hourlyId, newOwnerId: w.lenaId })).toEqual({ ok: true });
     const owner = await runOwner(w.hourlyId);
     expect(owner).toEqual({ runs: true, ownerId: w.lenaId });

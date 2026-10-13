@@ -1741,6 +1741,15 @@ describe('runBashInSandbox — machine billing (Terminal Epic 3)', () => {
     expect(result).toMatchObject({ success: false, reason: 'org_wallet_paused' });
   });
 
+  it('WAL-9 (partial) a session whose drive cannot be resolved has no payer: refused payer_unresolved before any hold, never billed to a person', async () => {
+    const { billing, gateCalls, trackUsageCalls } = makeBilling({ resolveCharge: async () => null });
+    const { deps } = makeDeps({ billing, resolveBillingSession: makeBillingSession({ driveId: 'vanished-drive' }) });
+    const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
+    expect(result).toMatchObject({ success: false, reason: 'payer_unresolved' });
+    expect(gateCalls).toEqual([]);
+    expect(trackUsageCalls).toEqual([]);
+  });
+
   it("forwards ctx.agentPageId as pageId to trackUsage (purely descriptive per-agent attribution), so usage-breakdown can attribute cost to the right agent page", async () => {
     const clock = makeMutableClock(new Date('2026-06-01T12:00:00.000Z').getTime());
     const sandbox = makeSandbox({

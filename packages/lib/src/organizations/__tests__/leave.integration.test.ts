@@ -23,6 +23,7 @@ import { leaveOrganization, reassignLedOrgDrives, LeaveOrganizationRefusedError 
 import { accountRepository } from '../../repositories/account-repository';
 import { getUserDriveAccess } from '../../permissions/permissions';
 import { updateDriveLastAccessed } from '../../services/drive-service';
+import { credentialActor } from '../../permissions/access-actor';
 
 let dbAvailable = false;
 const createdUserIds: string[] = [];
@@ -179,7 +180,7 @@ describe('leave and delete cascades (Postgres)', () => {
 
     expect(result).toMatchObject({ ok: true, revoked: { orgMembershipRows: 0 } });
     expect(await db.select().from(driveMembers).where(eq(driveMembers.id, invite.id))).toHaveLength(1);
-    expect(await getUserDriveAccess(leaver.id, privateOrgDrive.id)).toBe(true);
+    expect(await getUserDriveAccess(credentialActor(leaver.id, null), privateOrgDrive.id)).toBe(true);
   });
 
   it('O-7 leaving an org reassigns the drives the leaver leads to the org Owner with an audit event', async () => {
@@ -432,15 +433,20 @@ describe('leave and delete cascades (Postgres)', () => {
     });
     await orgShared;
 
+    // The leave must finish while the share is still held. A leave that wanted the row
+    // exclusively would wait for `release()`, which only runs after this race, so it can
+    // only lose: the deadline is a hang guard, not a timing assumption.
     const leaving = leaveOrganization(lead.id, org.id);
-    let leaveSettled = false;
-    void leaving.finally(() => { leaveSettled = true; }).catch(() => {});
-    await new Promise((resolve) => setTimeout(resolve, 300));
-    const finishedWhileShared = leaveSettled;
+    let deadline: ReturnType<typeof setTimeout> | undefined;
+    const whileShared = await Promise.race([
+      leaving.then((result) => ({ finished: true as const, result })),
+      new Promise<{ finished: false }>((resolve) => { deadline = setTimeout(() => resolve({ finished: false }), 10_000); }),
+    ]);
+    clearTimeout(deadline);
 
     release();
     await holder;
-    expect(finishedWhileShared).toBe(true);
+    expect(whileShared.finished).toBe(true);
     expect(await leaving).toMatchObject({ ok: true, reassigned: [{ driveId: led.id, toUserId: owner.id }] });
   });
 

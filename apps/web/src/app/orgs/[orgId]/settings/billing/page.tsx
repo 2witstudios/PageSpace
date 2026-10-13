@@ -16,7 +16,7 @@ import { useOrgAdminRead, useOrgSeats, useOrgWalletRealtime } from '@/hooks/useO
 import { OrgBadge } from '@/components/orgs/OrgBadge';
 import { goToOrgBillingPortal } from '@/components/orgs/OrgBillingBanner';
 import { OrgSettingsShell, type OrgSettingsContext } from '@/components/orgs/OrgSettingsShell';
-import { isOrgKey, orgReadKeys, setOrgSeatAutoAdd, type OrgPoolSplit } from '@/lib/orgs/org-api';
+import { isOrgKey, orgReadKeys, setOrgPoolPaused, setOrgSeatAutoAdd, type OrgPoolSplit } from '@/lib/orgs/org-api';
 import { invoiceLine, planFigures, poolFigures, seatFigures, type OrgInvoice } from '@/lib/orgs/org-billing';
 import { orgErrorCode, orgErrorMessage } from '@/lib/orgs/org-error-copy';
 
@@ -41,6 +41,7 @@ function BillingBody({ orgId, orgName, role, notice }: OrgSettingsContext) {
   const pool = useOrgAdminRead<OrgPoolSplit>(orgReadKeys.pool(orgId), role).data;
   const invoices = useOrgAdminRead<{ invoices: OrgInvoice[]; hasMore: boolean }>(orgReadKeys.invoices(orgId), role).data?.invoices;
   const [savingAuto, setSavingAuto] = useState(false);
+  const [savingPause, setSavingPause] = useState(false);
   // X-4: drive wallet spend, status and the pool refresh live (wallet:changed).
   useOrgWalletRealtime(orgId, pool?.driveWallets.map((w) => w.driveId) ?? []);
   const isOwner = orgRoleAtLeast(role, 'OWNER');
@@ -65,6 +66,20 @@ function BillingBody({ orgId, orgName, role, notice }: OrgSettingsContext) {
       toast.error(orgErrorMessage(error, 'The seat setting could not be changed.'));
     } finally {
       setSavingAuto(false);
+    }
+  };
+
+  // WAL-7: the pool's kill switch. Paused, it funds nothing: no seat, no drive wallet under it.
+  const togglePoolPaused = async (paused: boolean) => {
+    setSavingPause(true);
+    try {
+      await setOrgPoolPaused(orgId, paused);
+      toast.success(paused ? 'The credits pool is paused' : 'The credits pool is spending again');
+      void mutate((k) => isOrgKey(orgId, k));
+    } catch (error) {
+      toast.error(orgErrorMessage(error, 'The credits pool could not be changed.'));
+    } finally {
+      setSavingPause(false);
     }
   };
 
@@ -134,6 +149,22 @@ function BillingBody({ orgId, orgName, role, notice }: OrgSettingsContext) {
         <CardContent className="space-y-4">
           {pf && pool ? (
             <>
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-background px-4 py-3" data-testid="org-pool-pause">
+                <div className="flex min-w-0 flex-col gap-0.5">
+                  <span className="text-sm font-medium">Pause spending</span>
+                  <span className="text-xs text-muted-foreground">
+                    {pool.status === 'paused'
+                      ? 'Paused: no seat and no drive wallet can spend from the pool until you resume it.'
+                      : 'Stops every seat and drive wallet that draws on the pool at once.'}
+                  </span>
+                </div>
+                <Switch
+                  checked={pool.status === 'paused'}
+                  disabled={savingPause}
+                  onCheckedChange={(checked) => void togglePoolPaused(checked)}
+                  aria-label="Pause the credits pool"
+                />
+              </div>
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
                 <Stat {...pf.unallocated} />
                 <Stat {...pf.seats} />

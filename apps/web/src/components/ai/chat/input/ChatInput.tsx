@@ -438,6 +438,7 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
           selectedModel={currentModel}
           onProviderModelChange={handleProviderModelChange}
           hideModelSelector={hideModelSelector}
+          modelPolicyDriveId={commandDriveId ?? driveId ?? null}
           disabled={isStreaming || effectiveDisabled}
           compact={compact}
           leading={

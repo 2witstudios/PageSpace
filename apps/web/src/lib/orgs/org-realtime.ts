@@ -6,9 +6,12 @@
 import type { OrgChangedPayload, WalletChangedPayload } from '@pagespace/lib/realtime/org-wallet-events';
 import { isOrgKey, orgKeys, orgReadKeys } from './org-api';
 
+/** Changes that alter my org list (GET /api/orgs): my role, the lapse flag, the name, or the org itself. */
+const LIST_CHANGES: ReadonlySet<OrgChangedPayload['change']> = new Set(['membership', 'status', 'profile', 'deleted']);
+
 /** A key matcher for SWR's `mutate(matcher)`. */
 export function orgChangeRefreshes(payload: OrgChangedPayload, viewedOrgId: string | undefined): (key: unknown) => boolean {
-  const refreshesList = payload.change === 'membership' || payload.change === 'status';
+  const refreshesList = LIST_CHANGES.has(payload.change);
   return (key) => {
     if (typeof key !== 'string') return false;
     if (refreshesList && key === orgKeys.mine()) return true;

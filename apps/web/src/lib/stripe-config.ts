@@ -15,9 +15,10 @@ interface StripeConfig {
   /** The only purchasable personal plan (SEAT-2, A-9). */
   priceIds: { pro: string };
   /**
-   * The ORGANIZATION plan's two prices (SEAT-2, A-8): the Business base
-   * ($50/month, 5 seats included) and the extra seat ($10/month per seat beyond
-   * 5), billed as two items of one org subscription. Ids only — every money
+   * The ORGANIZATION plan's two prices (SEAT-2, A-8): the Business base (its
+   * included seats) and the extra seat (per seat beyond them), billed as two
+   * items of one org subscription; the amounts and seat count are the tier
+   * table's (TIER_PLAN_LIMITS.business), never restated here. Ids only — every money
    * amount the product shows or grants comes from the money-model module and
    * the tier table, never from these prices (MON-5). An empty id means the
    * price does not exist in that mode yet, and org provisioning refuses to run
@@ -36,8 +37,8 @@ const config: Record<'test' | 'live', StripeConfig> = {
       pro: 'price_1Sdbh6PCGvbSozob1IBfmSuv',        // $15/month
     },
     orgPriceIds: {
-      businessBase: 'price_1UK59APCGvbSozobgDCKr4zB', // $50/month org base, 5 seats included (D-OW-20)
-      extraSeat: 'price_1UK59APCGvbSozobTxuoHMeP',    // $10/month per extra seat (D-OW-20)
+      businessBase: 'price_1UK59APCGvbSozobgDCKr4zB', // org base (D-OW-20)
+      extraSeat: 'price_1UK59APCGvbSozobTxuoHMeP',    // per extra seat (D-OW-20)
     },
   },
   live: {

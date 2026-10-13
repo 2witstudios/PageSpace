@@ -31,7 +31,7 @@ import { db } from '@pagespace/db/db';
 import { and, eq } from '@pagespace/db/operators';
 import { drives } from '@pagespace/db/schema/core';
 import { publishedApps, type PublishedApp } from '@pagespace/db/schema/published-apps';
-import { recordOrgAuditEvent } from '../../audit/org-audit';
+import { transactionWithOrgAudit, type OrgAuditEvent } from '../../audit/org-audit';
 import { loggers } from '../../logging/logger-config';
 import { errorLogFields } from '../../logging/error-cause';
 import { getDrivePolicies } from '../../organizations/policy-reader';
@@ -43,6 +43,7 @@ import { isAppHostingEnabled, resolveDailyAwakeSecondsCap } from './app-hosting-
 import { planDailyAwakeCap, utcDayOf } from './app-metering-core';
 import { isCreditMetered } from './dedicated-tier';
 import { planTransition } from './provisioner-core';
+import type { AccessActor } from '../../permissions/access-actor';
 
 export const MEMBER_CAP_PARK_ERROR = `parked: ${MEMBER_CAP_PARK_REASON}`;
 
@@ -98,17 +99,24 @@ async function checkUnparkable(row: PublishedApp, deps: AppUnparkDeps): Promise<
   return { ok: true };
 }
 
-/** `parked → stopped`, guarded on the status AND the park reason that was judged. */
-async function writeUnpark(row: PublishedApp): Promise<boolean> {
+/**
+ * `parked → stopped`, guarded on the status AND the park reason that was judged. `auditEvents` (AUD-1) commit with
+ * the transition, only when it lands.
+ */
+async function writeUnpark(row: PublishedApp, auditEvents: readonly OrgAuditEvent[] = []): Promise<boolean> {
   const plan = planTransition(row.status, 'stopped', { imageDigest: row.imageDigest, machineId: row.machineId, tier: row.tier });
   if (!plan.allowed) return false;
   const reasonGuard = row.lastError === null ? undefined : eq(publishedApps.lastError, row.lastError);
-  const [moved] = await db
-    .update(publishedApps)
-    .set({ status: 'stopped', lastError: null })
-    .where(and(eq(publishedApps.id, row.id), eq(publishedApps.status, 'parked'), reasonGuard))
-    .returning({ id: publishedApps.id });
-  return moved !== undefined;
+  return transactionWithOrgAudit(async (tx, audit) => {
+    const [moved] = await tx
+      .update(publishedApps)
+      .set({ status: 'stopped', lastError: null })
+      .where(and(eq(publishedApps.id, row.id), eq(publishedApps.status, 'parked'), reasonGuard))
+      .returning({ id: publishedApps.id });
+    if (!moved) return false;
+    await audit(...auditEvents);
+    return true;
+  });
 }
 
 export type UnparkPublishedAppResult =
@@ -117,11 +125,11 @@ export type UnparkPublishedAppResult =
   | { outcome: 'held'; held: UnparkHeld; gateReason?: string };
 
 /**
- * MANUAL un-park by `actorId`. The authority is decided in the permissions module; the cap is
+ * MANUAL un-park by `actor`. The authority is decided in the permissions module; the cap is
  * re-checked and a still-capped app is REFUSED (`held: still_capped`), not re-attributed.
  */
 export async function unparkPublishedApp(
-  input: { publishedAppId: string; actorId: string },
+  input: { publishedAppId: string; actor: AccessActor },
   deps: AppUnparkDeps = defaultAppUnparkDeps,
 ): Promise<UnparkPublishedAppResult> {
   if (!deps.isEnabled()) return { outcome: 'refused', reason: 'disabled' };
@@ -134,30 +142,24 @@ export async function unparkPublishedApp(
     .limit(1);
   if (!drive) return { outcome: 'refused', reason: 'not_found' };
 
-  const authority = await loadAppUnparkAuthority(input.actorId, drive, row.costOwnerId);
+  const authority = await loadAppUnparkAuthority(input.actor, drive, row.costOwnerId);
   if (!authority.allowed) return { outcome: 'refused', reason: 'forbidden' };
   if (row.status !== 'parked') return { outcome: 'refused', reason: 'not_parked' };
 
   const check = await checkUnparkable(row, deps);
   if (!check.ok) return { outcome: 'held', held: check.held, ...(check.gateReason ? { gateReason: check.gateReason } : {}) };
-  if (!(await writeUnpark(row))) return { outcome: 'refused', reason: 'raced' };
-
-  if (drive.orgId) {
-    try {
-      await recordOrgAuditEvent({
-        orgId: drive.orgId,
-        eventType: 'org.app.unparked',
-        actorId: input.actorId,
-        resourceType: 'published_app',
-        resourceId: row.id,
-        driveId: row.driveId,
-        details: { via: authority.via, parkedFor: row.lastError, costOwnerId: row.costOwnerId },
-      });
-    } catch (error) {
-      // The un-park has landed; a lost audit append is logged, never a reason to re-park.
-      loggers.security.error('[Audit] org.app.unparked append failed', { publishedAppId: row.id, ...errorLogFields(error) });
-    }
-  }
+  const unparkedEvent: OrgAuditEvent[] = drive.orgId
+    ? [{
+      orgId: drive.orgId,
+      eventType: 'org.app.unparked',
+      actorId: input.actor.userId,
+      resourceType: 'published_app',
+      resourceId: row.id,
+      driveId: row.driveId,
+      details: { via: authority.via, parkedFor: row.lastError, costOwnerId: row.costOwnerId },
+    }]
+    : [];
+  if (!(await writeUnpark(row, unparkedEvent))) return { outcome: 'refused', reason: 'raced' };
   return { outcome: 'unparked', via: authority.via };
 }
 

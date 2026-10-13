@@ -25,6 +25,7 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   isDriveOwnerOrAdmin: vi.fn(),
 }));
 
@@ -67,6 +68,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
 import { db } from '@pagespace/db/db';
 import { validateTimezone } from '@/lib/workflows/cron-utils';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 // ============================================================================
 // Helpers
@@ -230,7 +232,7 @@ describe('GET /api/drives/[driveId]/backups/schedule', () => {
       await GET(req(), ctx(DRIVE_ID));
       // isDriveOwnerOrAdmin is mocked separately; db.select covers tier + schedule
       expect(db.select).toHaveBeenCalledTimes(2);
-      expect(isDriveOwnerOrAdmin).toHaveBeenCalledWith(USER_ID, DRIVE_ID);
+      expect(isDriveOwnerOrAdmin).toHaveBeenCalledWith(expect.objectContaining({ userId: USER_ID }), DRIVE_ID);
     });
   });
 
@@ -414,4 +416,13 @@ describe('PATCH /api/drives/[driveId]/backups/schedule', () => {
       expect(mockOnConflictDoUpdate).toHaveBeenCalledTimes(1);
     });
   });
+});
+
+// Route contracts stub authorization; policy decisions are covered by principal-permissions integration tests.
+vi.mock('@/lib/auth/principal-permissions', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/auth/principal-permissions')>();
+  const permissions = await import('@pagespace/lib/permissions/permissions');
+  return { ...actual,
+    isPrincipalDriveOwnerOrAdmin: (auth: { userId: string }, resourceId: string) => permissions.isDriveOwnerOrAdmin(credentialActor(auth.userId, null), resourceId),
+  };
 });

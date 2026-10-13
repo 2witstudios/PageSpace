@@ -28,7 +28,7 @@ vi.mock('@/lib/auth', () => ({
     auth?.tokenType === 'mcp' && (auth.allowedDriveIds?.length ?? 0) > 0,
   canPrincipalEditPage: vi.fn(async (auth: { userId: string }, pageId: string) => {
     const { canUserEditPage } = await import('@pagespace/lib/permissions/permissions');
-    return canUserEditPage(auth.userId, pageId);
+    return canUserEditPage(credentialActor(auth.userId, null), pageId);
   }),
 }));
 
@@ -39,6 +39,7 @@ vi.mock('@pagespace/lib/permissions/app-permissions', () => ({
 
 // Mock permissions (boundary)
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
     canUserEditPage: vi.fn(),
 }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -106,6 +107,10 @@ vi.mock('@pagespace/db/db', () => ({
   db: { transaction: mockTransaction },
 }));
 
+vi.mock('@/lib/ai/core/org-model-policy', () => ({
+  agentModelSaveRefusal: vi.fn(),
+}));
+
 vi.mock('@pagespace/db/schema/members', () => ({
   driveAgentMembers: 'driveAgentMembers_table',
 }));
@@ -121,6 +126,8 @@ import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { driveAgentMembers } from '@pagespace/db/schema/members';
 import { pages } from '@pagespace/db/schema/core';
+import { agentModelSaveRefusal } from '@/lib/ai/core/org-model-policy';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 // Test fixtures
 const mockUserId = 'user_123';
@@ -177,6 +184,34 @@ describe('POST /api/ai/page-agents/create', () => {
 
     // Default: position calculation returns 1
     vi.mocked(pageAgentRepository.getNextPosition).mockResolvedValue(1);
+
+    // Default: the drive's org allows the model (or there is no org)
+    vi.mocked(agentModelSaveRefusal).mockResolvedValue({ ok: true });
+  });
+
+  describe('the org model allowlists (POL-8)', () => {
+    it('POL-8 (partial) a chosen model the drive\'s org does not allow is refused 403 naming the policy, and no agent is created', async () => {
+      vi.mocked(agentModelSaveRefusal).mockResolvedValue({ ok: false, code: 'org_policy', reason: 'org_policy', policy: 'modelAllowlist', status: 403, message: "This organization doesn't allow that AI model." });
+      const response = await POST(createRequest({
+        driveId: mockDriveId,
+        title: 'Test Agent',
+        systemPrompt: 'You are helpful.',
+        aiProvider: 'openrouter',
+        aiModel: 'openai/gpt-5.4-nano',
+      }));
+
+      expect(response.status).toBe(403);
+      expect(await response.json()).toMatchObject({ code: 'org_policy', policy: 'modelAllowlist' });
+      expect(agentModelSaveRefusal).toHaveBeenCalledWith(mockDriveId, { provider: 'openrouter', modelId: 'openai/gpt-5.4-nano' });
+      expect(mockTransaction).not.toHaveBeenCalled();
+    });
+
+    it('POL-8 (partial) with no model chosen, the product default is stored and judged when it runs, not at save', async () => {
+      const response = await POST(createRequest({ driveId: mockDriveId, title: 'Test Agent', systemPrompt: 'You are helpful.' }));
+
+      expect(response.status).toBe(200);
+      expect(agentModelSaveRefusal).not.toHaveBeenCalled();
+    });
   });
 
   describe('authentication', () => {
@@ -404,7 +439,7 @@ describe('POST /api/ai/page-agents/create', () => {
 
       expect(response.status).toBe(403);
       expect(body.error).toContain('Only drive owners');
-      expect(getAppDriveMembership).toHaveBeenCalledWith('token_123', mockDriveId);
+      expect(getAppDriveMembership).toHaveBeenCalledWith(expect.objectContaining({ userId: expect.any(String) }), 'token_123', mockDriveId);
     });
 
     // role === null means INHERIT: the key acts as its owner, so root creation
@@ -452,7 +487,7 @@ describe('POST /api/ai/page-agents/create', () => {
       expect(response.status).toBe(403);
       expect(body.error).toContain('Insufficient permissions');
       // Verify permission check was called with correct userId and pageId
-      expect(canUserEditPage).toHaveBeenCalledWith(mockUserId, 'parent_123');
+      expect(canUserEditPage).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }), 'parent_123');
     });
   });
 

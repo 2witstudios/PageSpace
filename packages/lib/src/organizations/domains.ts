@@ -22,7 +22,7 @@ import { users } from '@pagespace/db/schema/auth';
 import { orgDomains, orgInvitations, orgMemberDepartures, orgMembers, organizations, type OrgDomain } from '@pagespace/db/schema/organizations';
 import { generateToken, hashToken } from '../auth/token-utils';
 import { decryptUserRow } from '../auth/user-repository';
-import { recordOrgAuditEventAfterCommit } from '../audit/org-audit';
+import { discardStagedOrgAuditEvents, publishOrgAuditEvents, stageOrgAuditEvent, transactionWithOrgAudit } from '../audit/org-audit';
 import { loggers } from '../logging/logger-config';
 import { isOrgGuest } from '../permissions/org-guest-footprint';
 import { isDepartureSuppressed } from './departure-suppression';
@@ -48,7 +48,7 @@ import {
 import { lockOrgInviteAddress } from './invitations';
 import { ORGS_ENABLED } from './orgs-enabled';
 import { isUniqueViolation, retryOnDeadlock } from './repository';
-import { admitSeat, recordSeatAdmissionEvents, type SeatAdmission, type SeatBillingPort } from './seat-service';
+import { admitSeat, seatAdmissionAuditEvents, type SeatAdmission, type SeatBillingPort } from './seat-service';
 import { checkOrgActive } from './status';
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -95,7 +95,7 @@ export async function addOrgDomain(
   const { domain } = normalized;
   let row: OrgDomain;
   try {
-    const result = await db.transaction(async (tx): Promise<OrgDomain | 'claimed' | 'full'> => {
+    const result = await transactionWithOrgAudit(async (tx, audit): Promise<OrgDomain | 'claimed' | 'full'> => {
       // The org's claim count is decided under a per-org lock (taken before the domain lock, the one
       // order), so two adds at once cannot both take the last place.
       await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`org_domains_of:${input.orgId}`}, 0))`);
@@ -109,6 +109,7 @@ export async function addOrgDomain(
         .insert(orgDomains)
         .values({ orgId: input.orgId, domain, dnsToken: randomBytes(16).toString('hex'), createdBy: input.actorId })
         .returning();
+      await audit({ orgId: input.orgId, eventType: 'org.domain.added', actorId: input.actorId, resourceType: 'org_domain', resourceId: inserted.id, details: { domain } });
       return inserted;
     });
     if (result === 'claimed') return { ok: false, status: 409, reason: 'claimed_by_another_org' };
@@ -118,14 +119,6 @@ export async function addOrgDomain(
     if (isUniqueViolation(error)) return { ok: false, status: 409, reason: 'already_added' };
     throw error;
   }
-  await recordOrgAuditEventAfterCommit({
-    orgId: input.orgId,
-    eventType: 'org.domain.added',
-    actorId: input.actorId,
-    resourceType: 'org_domain',
-    resourceId: row.id,
-    details: { domain },
-  });
   return { ok: true, domain: toPublic(row) };
 }
 
@@ -157,7 +150,7 @@ async function verifyClaim(input: {
 }, hooks: DomainVerificationHooks = {}): Promise<VerifyOrgDomainResult> {
   let outcome: VerifyOrgDomainResult;
   try {
-    outcome = await db.transaction(async (tx): Promise<VerifyOrgDomainResult> => {
+    outcome = await transactionWithOrgAudit(async (tx, audit): Promise<VerifyOrgDomainResult> => {
       const [peek] = await tx.select({ domain: orgDomains.domain }).from(orgDomains).where(eq(orgDomains.id, input.claimId)).limit(1);
       if (!peek) return { ok: false, status: 404, reason: 'not_found' };
       await lockDomain(tx, peek.domain);
@@ -177,21 +170,19 @@ async function verifyClaim(input: {
         .set({ verifiedAt: input.now, verifiedMethod: input.method, emailTokenHash: null, emailTokenExpiresAt: null })
         .where(eq(orgDomains.id, claim.id))
         .returning();
+      await audit({
+        orgId: verified.orgId,
+        eventType: 'org.domain.verified',
+        actorId: input.actorId,
+        resourceType: 'org_domain',
+        resourceId: verified.id,
+        details: { domain: verified.domain, method: input.method },
+      });
       return { ok: true, domain: toPublic(verified), alreadyVerified: false };
     });
   } catch (error) {
     if (isUniqueViolation(error)) return { ok: false, status: 409, reason: 'claimed_by_another_org' };
     throw error;
-  }
-  if (outcome.ok && !outcome.alreadyVerified) {
-    await recordOrgAuditEventAfterCommit({
-      orgId: outcome.domain.orgId,
-      eventType: 'org.domain.verified',
-      actorId: input.actorId,
-      resourceType: 'org_domain',
-      resourceId: outcome.domain.id,
-      details: { domain: outcome.domain.domain, method: input.method },
-    });
   }
   return outcome;
 }
@@ -258,6 +249,7 @@ export async function sendDomainProofEmail(input: {
 }): Promise<SendDomainProofResult> {
   const { token, hash } = generateToken(DOMAIN_EMAIL_TOKEN_PREFIX);
   const expiresAt = new Date(input.now.getTime() + DOMAIN_EMAIL_PROOF_TTL_MS);
+  // AUD-1: staged with the token, final once the link went out (held back from the drainer until then).
   const stored = await db.transaction(async (tx) => {
     const [claim] = await tx
       .select()
@@ -273,26 +265,30 @@ export async function sendDomainProofEmail(input: {
       .update(orgDomains)
       .set({ emailTokenHash: hash, emailTokenExpiresAt: expiresAt, emailSentTo: to })
       .where(eq(orgDomains.id, claim.id));
-    return { ok: true, claim, to } as const;
+    const event = await stageOrgAuditEvent(tx, {
+      orgId: input.orgId,
+      eventType: 'org.domain.verification_sent',
+      actorId: input.actorId,
+      resourceType: 'org_domain',
+      resourceId: claim.id,
+      details: { domain: claim.domain, mailbox: input.mailbox },
+    }, { held: true });
+    return { ok: true, claim, to, event } as const;
   });
   if (!stored.ok) return stored;
   try {
     await input.deliver({ to: stored.to, domain: stored.claim.domain, token, expiresAt });
   } catch (cause) {
-    await db
-      .update(orgDomains)
-      .set({ emailTokenHash: null, emailTokenExpiresAt: null })
-      .where(and(eq(orgDomains.id, stored.claim.id), eq(orgDomains.emailTokenHash, hash)));
+    await db.transaction(async (tx) => {
+      await tx
+        .update(orgDomains)
+        .set({ emailTokenHash: null, emailTokenExpiresAt: null })
+        .where(and(eq(orgDomains.id, stored.claim.id), eq(orgDomains.emailTokenHash, hash)));
+      await discardStagedOrgAuditEvents(tx, [stored.event]);
+    });
     return { ok: false, status: 502, reason: 'delivery_failed', cause };
   }
-  await recordOrgAuditEventAfterCommit({
-    orgId: input.orgId,
-    eventType: 'org.domain.verification_sent',
-    actorId: input.actorId,
-    resourceType: 'org_domain',
-    resourceId: stored.claim.id,
-    details: { domain: stored.claim.domain, mailbox: input.mailbox },
-  });
+  await publishOrgAuditEvents(stored.event);
   return { ok: true, sentTo: stored.to, expiresAt };
 }
 
@@ -329,20 +325,22 @@ export async function confirmDomainProofEmail(
 
 /** Un-verify and forget a claim. Stops future auto-joins; nobody already in is removed. */
 export async function removeOrgDomain(input: { orgId: string; domainId: string; actorId: string }): Promise<boolean> {
-  const [removed] = await db
-    .delete(orgDomains)
-    .where(and(eq(orgDomains.id, input.domainId), eq(orgDomains.orgId, input.orgId)))
-    .returning();
-  if (!removed) return false;
-  await recordOrgAuditEventAfterCommit({
-    orgId: input.orgId,
-    eventType: 'org.domain.removed',
-    actorId: input.actorId,
-    resourceType: 'org_domain',
-    resourceId: removed.id,
-    details: { domain: removed.domain, wasVerified: removed.verifiedAt !== null },
+  return transactionWithOrgAudit(async (tx, audit) => {
+    const [removed] = await tx
+      .delete(orgDomains)
+      .where(and(eq(orgDomains.id, input.domainId), eq(orgDomains.orgId, input.orgId)))
+      .returning();
+    if (!removed) return false;
+    await audit({
+      orgId: input.orgId,
+      eventType: 'org.domain.removed',
+      actorId: input.actorId,
+      resourceType: 'org_domain',
+      resourceId: removed.id,
+      details: { domain: removed.domain, wasVerified: removed.verifiedAt !== null },
+    });
+    return true;
   });
-  return true;
 }
 
 export type AutoJoinResult =
@@ -366,8 +364,6 @@ type JoinOutcome =
     result: AutoJoinResult;
     sync: OrgMembershipSyncResult | null;
     domain: string;
-    /** [D-OW-27] Set when a departed person's re-join was turned away: the org whose log records it. */
-    rejoinOrgId?: string | null;
   };
 
 /**
@@ -397,8 +393,16 @@ export async function autoJoinVerifiedDomainOrg(
   if (!verified) return { kind: 'skipped', reason: 'no_verified_domain' };
   const orgId = verified.orgId;
 
-  let admission = null as SeatAdmission | null;
-  const outcome = await retryOnDeadlock(() => db.transaction(async (tx): Promise<JoinOutcome> => {
+  const outcome = await retryOnDeadlock(() => transactionWithOrgAudit(async (tx, audit): Promise<JoinOutcome> => {
+    // AUD-1: whatever is decided below, its event commits with it. Ids and the domain only, never the address.
+    const refusedRejoin = (refusedOrgId: string, reason: string) => audit({
+      orgId: refusedOrgId,
+      eventType: 'org.member.auto_join_refused',
+      actorId: input.userId,
+      resourceType: 'user',
+      resourceId: input.userId,
+      details: { domain, reason },
+    });
     // The invite-acceptance lock order: address, org row, then (inside admitSeat) billing.
     await lockOrgInviteAddress(tx, orgId, email);
     await tx.select({ id: organizations.id }).from(organizations).where(eq(organizations.id, orgId)).for('update');
@@ -442,54 +446,42 @@ export async function autoJoinVerifiedDomainOrg(
       orgActive: (await checkOrgActive(orgId, { executor: tx })).ok,
     });
     if (decision.action === 'skip') {
-      return { result: { kind: 'skipped', reason: decision.reason }, sync: null, domain, rejoinOrgId: isAuditedRejoinSkip(decision.reason) ? orgId : null };
+      // [D-OW-27] A departed person tried to come back and was turned away: the Owner sees that someone tried, by
+      // account id and domain, never by address (a suppression holds only a keyed hash of it).
+      if (isAuditedRejoinSkip(decision.reason)) await refusedRejoin(orgId, decision.reason);
+      return { result: { kind: 'skipped', reason: decision.reason }, sync: null, domain };
     }
-    if (decision.action === 'refuse') return { result: { kind: 'refused', orgId, reason: decision.reason }, sync: null, domain };
+    // The Owner finds a refused join in the audit trail; the person simply is not added.
+    if (decision.action === 'refuse') {
+      await refusedRejoin(orgId, decision.reason);
+      return { result: { kind: 'refused', orgId, reason: decision.reason }, sync: null, domain };
+    }
 
     // The joiner takes a seat like an invite does; no inviter, so the refusal reads for a member.
-    const seat: SeatAdmission = await admitSeat(tx, { orgId, actorRole: 'MEMBER' }, input.seatBilling);
-    admission = seat;
-    if (!seat.ok) return { result: { kind: 'refused', orgId, reason: 'seats_full', message: seat.message }, sync: null, domain };
+    const seat: SeatAdmission = await admitSeat(tx, { orgId, actorRole: 'MEMBER', credential: 'session' }, input.seatBilling);
+    if (!seat.ok) {
+      await refusedRejoin(orgId, 'seats_full');
+      return { result: { kind: 'refused', orgId, reason: 'seats_full', message: seat.message }, sync: null, domain };
+    }
 
     await tx.insert(orgMembers).values({ orgId, userId: input.userId, role: 'MEMBER' });
     const sync = await deps.syncMemberAccess(orgId, input.userId, { tx });
+    await audit(
+      ...seatAdmissionAuditEvents({ orgId, actorId: input.userId, admission: seat, operation: 'auto_join' }),
+      {
+        orgId,
+        eventType: 'org.member.auto_joined',
+        actorId: input.userId,
+        resourceType: 'user',
+        resourceId: input.userId,
+        details: { domain, role: 'MEMBER', seatRaised: seat.raised },
+      },
+    );
     return { result: { kind: 'joined', orgId, seatRaised: seat.raised }, sync, domain };
   }));
 
   if (outcome.sync) await deps.publishSyncEvents(outcome.sync);
   const { result } = outcome;
-  if (result.kind === 'joined') {
-    if (admission) await recordSeatAdmissionEvents({ orgId: result.orgId, actorId: input.userId, admission, operation: 'auto_join' });
-    await recordOrgAuditEventAfterCommit({
-      orgId: result.orgId,
-      eventType: 'org.member.auto_joined',
-      actorId: input.userId,
-      resourceType: 'user',
-      resourceId: input.userId,
-      details: { domain: outcome.domain, role: 'MEMBER', seatRaised: result.seatRaised },
-    });
-  } else if (result.kind === 'skipped' && outcome.rejoinOrgId) {
-    // [D-OW-27] A departed person tried to come back and was turned away: the Owner sees that someone tried, by
-    // account id and domain, never by address (a suppression holds only a keyed hash of it).
-    await recordOrgAuditEventAfterCommit({
-      orgId: outcome.rejoinOrgId,
-      eventType: 'org.member.auto_join_refused',
-      actorId: input.userId,
-      resourceType: 'user',
-      resourceId: input.userId,
-      details: { domain: outcome.domain, reason: result.reason },
-    });
-  } else if (result.kind === 'refused') {
-    // The Owner finds a refused join in the audit trail; the person simply is not added.
-    await recordOrgAuditEventAfterCommit({
-      orgId: result.orgId,
-      eventType: 'org.member.auto_join_refused',
-      actorId: input.userId,
-      resourceType: 'user',
-      resourceId: input.userId,
-      details: { domain: outcome.domain, reason: result.reason },
-    });
-    loggers.api.info('verified-domain auto-join refused', { orgId: result.orgId, reason: result.reason });
-  }
+  if (result.kind === 'refused') loggers.api.info('verified-domain auto-join refused', { orgId: result.orgId, reason: result.reason });
   return result;
 }

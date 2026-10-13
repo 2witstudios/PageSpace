@@ -123,16 +123,20 @@ describe('org audit log on the real chain', () => {
     expect((await queryOrgAuditEvents(b.orgId, filter({ driveId: acmeDrive }))).entries).toHaveLength(1);
   });
 
-  it('AUD-3 (partial) pages by keyset without gaps or repeats, and the CSV export reads in chunks with every value neutralized', async () => {
+  it('AUD-3 (partial) AUD-1 (partial) pages by keyset without gaps or repeats — a re-delivered event once, even across pages — and the CSV export reads in chunks with every value neutralized', async () => {
     const a = await org('Northwind');
-    const total = 520; // more than one export chunk (500)
-    for (let i = 0; i < total; i++) {
-      await recordOrgAuditEvent({ orgId: a.orgId, eventType: 'org.invite.created', actorId: a.owner.id, resourceType: 'organization_invitation', resourceId: i === 0 ? '=HYPERLINK("http://evil")' : `inv_${i}`, details: { n: i } });
-    }
+    // A small log paged in small pages and chunks: the same keyset paths as 500-row chunks, without 500 appends.
+    const total = 12;
+    const PAGE = 5;
+    const row = (i: number) => ({ eventType: 'org.invite.created' as const, userId: a.owner.id, resourceType: 'organization_invitation', resourceId: i === 0 ? '=HYPERLINK("http://evil")' : `inv_${i}`, details: { n: i, orgId: a.orgId, outboxId: `obx_${i}_${a.orgId}` } });
+    for (let i = 0; i < total; i++) await securityAudit.logEvent(row(i));
+    // The outbox re-delivered the first event after all the others (a crash between append and delete): its two
+    // copies are more than a page apart.
+    await securityAudit.logEvent(row(0));
     const seen: string[] = [];
     let before: string | undefined;
     for (;;) {
-      const page = await queryOrgAuditEvents(a.orgId, filter({ limit: '200', ...(before ? { before } : {}) }));
+      const page = await queryOrgAuditEvents(a.orgId, filter({ limit: String(PAGE), ...(before ? { before } : {}) }));
       seen.push(...page.entries.map((e) => String(e.resourceId)));
       if (page.nextCursor === null) break;
       before = String(page.nextCursor);
@@ -142,14 +146,29 @@ describe('org audit log on the real chain', () => {
 
     const { limit: _l, before: _b, ...exportFilter } = filter();
     const chunks: string[] = [];
-    for await (const chunk of exportOrgAuditCsv(a.orgId, exportFilter)) chunks.push(chunk);
-    expect(chunks.length).toBeGreaterThanOrEqual(3); // header, then two data chunks
+    for await (const chunk of exportOrgAuditCsv(a.orgId, exportFilter, { exportChunk: PAGE })) chunks.push(chunk);
+    expect(chunks.length).toBeGreaterThanOrEqual(4); // header, then three data chunks
     const lines = chunks.join('').trimEnd().split('\r\n');
     expect(lines[0]).toBe('timestamp,category,event_type,actor_id,actor_name,resource_type,resource_id,drive_id,details');
     expect(lines).toHaveLength(total + 1);
     const evil = lines.find((line) => line.includes('HYPERLINK'));
     expect(evil).toContain(`"'=HYPERLINK(""http://evil"")"`);
     expect(lines.some((line) => line.includes(a.orgId))).toBe(false);
+  });
+
+  it('AUD-1 (partial) AUD-3 (partial) an event delivered late is dated and filtered by when its change happened, and a re-delivered copy is shown once', async () => {
+    const a = await org('Northwind');
+    const occurredAt = new Date(Date.now() - 2 * 60 * 60_000);
+    const delivered = { eventType: 'org.member.role_changed' as const, userId: a.owner.id, resourceType: 'user', resourceId: a.outsider.id, details: { from: 'MEMBER', to: 'ADMIN', orgId: a.orgId, occurredAt: occurredAt.toISOString(), outboxId: `obx_${createId()}` } };
+    // The outbox delivered it hours after the change, twice (a crash between the append and the delete).
+    await securityAudit.logEvent(delivered);
+    await securityAudit.logEvent(delivered);
+    const all = await queryOrgAuditEvents(a.orgId, filter());
+    expect(all.entries).toHaveLength(1);
+    expect(all.entries[0].timestamp.toISOString()).toBe(occurredAt.toISOString());
+    expect(all.entries[0].details).toEqual({ from: 'MEMBER', to: 'ADMIN' });
+    expect((await queryOrgAuditEvents(a.orgId, filter({ to: new Date(occurredAt.getTime() + 60_000).toISOString() }))).entries).toHaveLength(1);
+    expect((await queryOrgAuditEvents(a.orgId, filter({ from: new Date(occurredAt.getTime() + 60_000).toISOString() }))).entries).toEqual([]);
   });
 
   it('AUD-2 org events are rows of the existing security audit chain (no table of their own), hash-linked like every other row, and the chain still verifies', async () => {

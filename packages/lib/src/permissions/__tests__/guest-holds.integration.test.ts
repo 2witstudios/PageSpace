@@ -20,7 +20,6 @@ import { organizations, orgMembers, orgSubscriptions } from '@pagespace/db/schem
 import { orgGuestHolds } from '@pagespace/db/schema/org-guest-holds';
 
 vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
-vi.mock('../../audit/org-audit', () => ({ recordOrgAuditEvent: vi.fn(async () => {}), recordOrgAuditEventAfterCommit: vi.fn(async () => true) }));
 vi.mock('../revocation-kick', () => ({ kickForDriveMembershipRevocation: vi.fn(async () => {}) }));
 
 import { updateOrgPolicies } from '../../organizations/policies';
@@ -33,6 +32,7 @@ import {
   requestGuestApproval,
   suspendOrgGuests,
 } from '../guest-holds';
+import { credentialActor } from '../access-actor';
 
 const run = createId().slice(0, 8);
 const created = { userIds: [] as string[], driveIds: [] as string[], orgIds: [] as string[] };
@@ -108,7 +108,7 @@ afterAll(async () => {
   await pool.end();
 });
 
-const setGuests = (guests: 'off' | 'approve' | 'on', orgId = w.orgId) => updateOrgPolicies({ orgId, actorId: w.owner, patch: { guests } });
+const setGuests = (guests: 'off' | 'approve' | 'on', orgId = w.orgId) => updateOrgPolicies({ orgId, actorId: w.owner, actorAuthentication: null, patch: { guests } });
 
 /** A full guest: a MEMBER-role invite with a view grant on `page` and an edit grant on `page2`. */
 async function seedMemberGuest() {
@@ -131,23 +131,23 @@ describe('guests off PARKS existing guests', () => {
   it('POL-1 (partial) POL-2 (partial) X-6 (partial) the real resolver sees no access for a parked guest — not the drive, not the pages they were given — and full access again after restore', async () => {
     await seedMemberGuest();
     await seedPageGuest();
-    expect(await isUserDriveMember(w.guest, w.orgDrive)).toBe(true);
-    expect((await getUserAccessLevel(w.guest, w.page))?.canView).toBe(true);
-    expect((await getUserAccessLevel(w.pageGuest, w.page))?.canView).toBe(true);
+    expect(await isUserDriveMember(credentialActor(w.guest, null), w.orgDrive)).toBe(true);
+    expect((await getUserAccessLevel(credentialActor(w.guest, null), w.page))?.canView).toBe(true);
+    expect((await getUserAccessLevel(credentialActor(w.pageGuest, null), w.page))?.canView).toBe(true);
 
     await setGuests('off');
 
-    expect(await isUserDriveMember(w.guest, w.orgDrive)).toBe(false);
-    expect(await getUserAccessLevel(w.guest, w.page)).toBeNull();
-    expect(await getUserAccessLevel(w.guest, w.page2)).toBeNull();
+    expect(await isUserDriveMember(credentialActor(w.guest, null), w.orgDrive)).toBe(false);
+    expect(await getUserAccessLevel(credentialActor(w.guest, null), w.page)).toBeNull();
+    expect(await getUserAccessLevel(credentialActor(w.guest, null), w.page2)).toBeNull();
     // A page-link guest (GUEST row + one grant) loses the page too: the grant lived outside the member row.
-    expect(await getUserAccessLevel(w.pageGuest, w.page)).toBeNull();
+    expect(await getUserAccessLevel(credentialActor(w.pageGuest, null), w.page)).toBeNull();
 
     await setGuests('on');
 
-    expect(await isUserDriveMember(w.guest, w.orgDrive)).toBe(true);
-    expect(await getUserAccessLevel(w.guest, w.page2)).toMatchObject({ canView: true, canEdit: true });
-    expect((await getUserAccessLevel(w.pageGuest, w.page))?.canView).toBe(true);
+    expect(await isUserDriveMember(credentialActor(w.guest, null), w.orgDrive)).toBe(true);
+    expect(await getUserAccessLevel(credentialActor(w.guest, null), w.page2)).toMatchObject({ canView: true, canEdit: true });
+    expect((await getUserAccessLevel(credentialActor(w.pageGuest, null), w.page))?.canView).toBe(true);
   });
 
   it('POL-1 (partial) nothing is destroyed: the hold carries the whole member row and every grant, and restore puts back exactly those columns', async () => {
@@ -247,9 +247,9 @@ describe('guests off PARKS existing guests', () => {
 describe('the approval queue', () => {
   it('POL-2 (partial) a queued outsider holds NO access — no member row, no grant — until an Owner or Admin acts', async () => {
     await requestGuestApproval({ orgId: w.orgId, driveId: w.orgDrive, userId: w.guest, origin: 'invite', request: { role: 'MEMBER', invitedBy: w.owner }, requestedBy: w.owner });
-    expect(await isUserDriveMember(w.guest, w.orgDrive)).toBe(false);
+    expect(await isUserDriveMember(credentialActor(w.guest, null), w.orgDrive)).toBe(false);
     expect(await memberRows(w.guest)).toEqual([]);
-    expect(await getUserAccessLevel(w.guest, w.page)).toBeNull();
+    expect(await getUserAccessLevel(credentialActor(w.guest, null), w.page)).toBeNull();
     expect((await listPendingGuestApprovals(w.orgId, 10)).total).toBe(1);
   });
 

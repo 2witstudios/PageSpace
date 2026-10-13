@@ -329,7 +329,7 @@ describe('GET /api/subscriptions/status', () => {
   });
 
   describe('MON-2 planCredits', () => {
-    it('returns the server-derived included-credit figure per tier, matching tierAllowanceCents\'s own default (D-OW-17: MONEY_MODEL_V2_ACTIVE = false, a code constant identical everywhere)', async () => {
+    it('returns the server-derived included-credit figure per tier, matching tierAllowanceCents (A-11: Pro 900)', async () => {
       mockSelectWhere.mockResolvedValueOnce([mockUser()]);
 
       const request = new Request('https://example.com/api/subscriptions/status', {
@@ -343,8 +343,8 @@ describe('GET /api/subscriptions/status', () => {
       expect(body.planCredits).toEqual(
         Object.fromEntries(TIERS.map((tier) => [tier, tierAllowanceCents(tier)])),
       );
-      // Pinned: D-OW-17's constant-false default grants 100% of list price (free = starter grant).
-      expect(body.planCredits).toEqual({ free: 500, pro: 1500, business: 5000 });
+      // Pinned: A-11's 60% of list price (free = starter grant).
+      expect(body.planCredits).toEqual({ free: 500, pro: 900, business: 3000 });
     });
   });
 

@@ -65,6 +65,8 @@ import {
   legacyIsUserMemberOfAnyEventDrive,
   legacyResolveDriveMembership,
 } from './fixtures/pre-b7b-sibling-resolvers';
+import { credentialActor } from '../access-actor';
+import { tokenOwnerActor } from './fixtures/token-owner-actor';
 
 const flags = vi.hoisted(() => ({ orgsEnabled: false }));
 vi.mock('../../organizations/orgs-enabled', () => ({
@@ -176,42 +178,42 @@ async function disagreementsFor(m: Matrix, personName: string, userId: string, d
   };
 
   const owner = drive.ownerId === userId;
-  const access = await getDriveAccess(drive.id, userId);
+  const access = await getDriveAccess(drive.id, credentialActor(userId, null));
   const member = owner || access.isMember;
   const admin = owner || access.isAdmin;
   const role = access.role;
 
-  check('isUserDriveMember', await isUserDriveMember(userId, drive.id), member);
-  check('isDriveOwnerOrAdmin', await isDriveOwnerOrAdmin(userId, drive.id), admin);
-  check('getUserDriveAccess', await getUserDriveAccess(userId, drive.id), member || await hasPageShareIn(userId, drive.id));
-  const drivePerms = await getUserDrivePermissions(userId, drive.id);
+  check('isUserDriveMember', await isUserDriveMember(credentialActor(userId, null), drive.id), member);
+  check('isDriveOwnerOrAdmin', await isDriveOwnerOrAdmin(credentialActor(userId, null), drive.id), admin);
+  check('getUserDriveAccess', await getUserDriveAccess(credentialActor(userId, null), drive.id), member || await hasPageShareIn(userId, drive.id));
+  const drivePerms = await getUserDrivePermissions(credentialActor(userId, null), drive.id);
   check('getUserDrivePermissions', drivePerms && { hasAccess: drivePerms.hasAccess, isOwner: drivePerms.isOwner, isAdmin: drivePerms.isAdmin, isMember: drivePerms.isMember },
     owner ? { hasAccess: true, isOwner: true, isAdmin: false, isMember: false }
       : member ? { hasAccess: true, isOwner: false, isAdmin: admin, isMember: true } : null);
-  const memberAccess = await checkDriveAccess(drive.id, userId);
+  const memberAccess = await checkDriveAccess(drive.id, credentialActor(userId, null));
   check('checkDriveAccess', [memberAccess.isOwner, memberAccess.isAdmin, memberAccess.isMember], [owner, admin, member]);
-  const roleAccess = await checkDriveAccessForRoles(drive.id, userId);
+  const roleAccess = await checkDriveAccessForRoles(drive.id, credentialActor(userId, null));
   check('checkDriveAccessForRoles', [roleAccess.isOwner, roleAccess.isAdmin, roleAccess.isMember], [owner, admin, member]);
-  check('resolveDriveMembership', await resolveDriveMembership({ userId, driveId: drive.id }),
+  check('resolveDriveMembership', await resolveDriveMembership({ actor: credentialActor(userId, null), driveId: drive.id }),
     owner ? 'owner' : admin ? 'admin' : member ? 'member' : 'none');
-  check('isUserMemberOfAnyEventDrive', await isUserMemberOfAnyEventDrive(userId, { id: createId(), driveId: drive.id }), member);
-  check('hasAppDriveMembership (inheriting key)', await hasAppDriveMembership(m.tokens.get(userId) as string, drive.id), member);
+  check('isUserMemberOfAnyEventDrive', await isUserMemberOfAnyEventDrive(credentialActor(userId, null), { id: createId(), driveId: drive.id }), member);
+  check('hasAppDriveMembership (inheriting key)', await hasAppDriveMembership(await tokenOwnerActor(m.tokens.get(userId) as string), m.tokens.get(userId) as string, drive.id), member);
   check('hasScopedDriveMembership (inheriting scope)',
-    await hasScopedDriveMembership([{ driveId: drive.id, role: null, customRoleId: null }], userId, drive.id), member);
+    await hasScopedDriveMembership([{ driveId: drive.id, role: null, customRoleId: null }], credentialActor(userId, null), drive.id), member);
 
-  const root = await getUserAccessLevel(userId, drive.id);
+  const root = await getUserAccessLevel(credentialActor(userId, null), drive.id);
   check('getUserAccessLevel (drive root)', root && { canView: root.canView, canShare: root.canShare },
     member ? { canView: true, canShare: admin } : null);
   check('getDriveAccess role', role, owner ? 'OWNER' : admin ? 'ADMIN' : member ? 'MEMBER' : null);
 
   const drivePages = await pagesOf(drive.id);
   const pageIds = drivePages.map((p) => p.id);
-  const batch = await getBatchPagePermissions(userId, pageIds);
-  const tree = new Set(await getUserAccessiblePagesInDrive(userId, drive.id));
-  const treeWithDetails = new Map((await getUserAccessiblePagesInDriveWithDetails(userId, drive.id)).map((p) => [p.id, p.permissions]));
-  const sqlVisible = new Set(await accessiblePageIds(userId));
+  const batch = await getBatchPagePermissions(credentialActor(userId, null), pageIds);
+  const tree = new Set(await getUserAccessiblePagesInDrive(credentialActor(userId, null), drive.id));
+  const treeWithDetails = new Map((await getUserAccessiblePagesInDriveWithDetails(credentialActor(userId, null), drive.id)).map((p) => [p.id, p.permissions]));
+  const sqlVisible = new Set(await accessiblePageIds(credentialActor(userId, null)));
   for (const pageId of pageIds) {
-    const canonical = (await getUserAccessLevel(userId, pageId)) ?? DENY;
+    const canonical = (await getUserAccessLevel(credentialActor(userId, null), pageId)) ?? DENY;
     const page = `${where} page ${pageId}`;
     const checkPage = (resolver: string, actual: unknown, expected: unknown) => {
       if (JSON.stringify(actual) !== JSON.stringify(expected)) {
@@ -237,8 +239,8 @@ async function matrixDisagreements(m: Matrix) {
     for (const drive of Object.values(m.drives)) {
       out.push(...await disagreementsFor(m, name, person.id, drive));
     }
-    const listed = (await listAccessibleDrives(person.id, { includeTrash: true })).map((d) => d.id).sort();
-    const ids = (await getDriveIdsForUser(person.id)).sort();
+    const listed = (await listAccessibleDrives(credentialActor(person.id, null), { includeTrash: true })).map((d) => d.id).sort();
+    const ids = (await getDriveIdsForUser(credentialActor(person.id, null))).sort();
     if (JSON.stringify(ids) !== JSON.stringify(listed)) {
       out.push(`getDriveIdsForUser: ${name} answered ${JSON.stringify(ids)}, listAccessibleDrives ${JSON.stringify(listed)}`);
     }
@@ -290,23 +292,23 @@ describe('B7b: every human drive resolver answers with one org-aware membership 
     };
 
     for (const [name, person] of everyone) {
-      same('getDriveIdsForUser', name, await getDriveIdsForUser(person.id), await legacyGetDriveIdsForUser(person.id));
+      same('getDriveIdsForUser', name, await getDriveIdsForUser(credentialActor(person.id, null)), await legacyGetDriveIdsForUser(person.id));
       for (const drive of drives) {
         const at = `${name} ${drive.name}`;
-        same('isDriveOwnerOrAdmin', at, await isDriveOwnerOrAdmin(person.id, drive.id), await legacyIsDriveOwnerOrAdmin(person.id, drive.id));
-        same('isUserDriveMember', at, await isUserDriveMember(person.id, drive.id), await legacyIsUserDriveMember(person.id, drive.id));
-        same('getUserAccessiblePagesInDrive', at, await getUserAccessiblePagesInDrive(person.id, drive.id), await legacyGetUserAccessiblePagesInDrive(person.id, drive.id));
-        same('getUserAccessiblePagesInDriveWithDetails', at, await getUserAccessiblePagesInDriveWithDetails(person.id, drive.id), await legacyGetUserAccessiblePagesInDriveWithDetails(person.id, drive.id));
-        same('getUserDriveAccess', at, await getUserDriveAccess(person.id, drive.id), await legacyGetUserDriveAccess(person.id, drive.id));
-        same('getUserDrivePermissions', at, await getUserDrivePermissions(person.id, drive.id), await legacyGetUserDrivePermissions(person.id, drive.id));
+        same('isDriveOwnerOrAdmin', at, await isDriveOwnerOrAdmin(credentialActor(person.id, null), drive.id), await legacyIsDriveOwnerOrAdmin(person.id, drive.id));
+        same('isUserDriveMember', at, await isUserDriveMember(credentialActor(person.id, null), drive.id), await legacyIsUserDriveMember(person.id, drive.id));
+        same('getUserAccessiblePagesInDrive', at, await getUserAccessiblePagesInDrive(credentialActor(person.id, null), drive.id), await legacyGetUserAccessiblePagesInDrive(person.id, drive.id));
+        same('getUserAccessiblePagesInDriveWithDetails', at, await getUserAccessiblePagesInDriveWithDetails(credentialActor(person.id, null), drive.id), await legacyGetUserAccessiblePagesInDriveWithDetails(person.id, drive.id));
+        same('getUserDriveAccess', at, await getUserDriveAccess(credentialActor(person.id, null), drive.id), await legacyGetUserDriveAccess(person.id, drive.id));
+        same('getUserDrivePermissions', at, await getUserDrivePermissions(credentialActor(person.id, null), drive.id), await legacyGetUserDrivePermissions(person.id, drive.id));
         same('getMemberCustomRoleId', at, await getMemberCustomRoleId(drive.id, person.id), await legacyGetMemberCustomRoleId(drive.id, person.id));
-        same('checkDriveAccess', at, await checkDriveAccess(drive.id, person.id), await legacyCheckDriveAccess(drive.id, person.id));
-        same('checkDriveAccessForRoles', at, await checkDriveAccessForRoles(drive.id, person.id), await legacyCheckDriveAccessForRoles(drive.id, person.id));
-        same('resolveDriveMembership', at, await resolveDriveMembership({ userId: person.id, driveId: drive.id }), await legacyResolveDriveMembership({ userId: person.id, driveId: drive.id }));
-        same('isUserMemberOfAnyEventDrive', at, await isUserMemberOfAnyEventDrive(person.id, { id: eventId, driveId: drive.id }), await legacyIsUserMemberOfAnyEventDrive(person.id, { id: eventId, driveId: drive.id }));
+        same('checkDriveAccess', at, await checkDriveAccess(drive.id, credentialActor(person.id, null)), await legacyCheckDriveAccess(drive.id, person.id));
+        same('checkDriveAccessForRoles', at, await checkDriveAccessForRoles(drive.id, credentialActor(person.id, null)), await legacyCheckDriveAccessForRoles(drive.id, person.id));
+        same('resolveDriveMembership', at, await resolveDriveMembership({ actor: credentialActor(person.id, null), driveId: drive.id }), await legacyResolveDriveMembership({ userId: person.id, driveId: drive.id }));
+        same('isUserMemberOfAnyEventDrive', at, await isUserMemberOfAnyEventDrive(credentialActor(person.id, null), { id: eventId, driveId: drive.id }), await legacyIsUserMemberOfAnyEventDrive(person.id, { id: eventId, driveId: drive.id }));
 
         const pageIds = (await pagesOf(drive.id)).map((p) => p.id);
-        const liveBatch = await getBatchPagePermissions(person.id, pageIds);
+        const liveBatch = await getBatchPagePermissions(credentialActor(person.id, null), pageIds);
         const legacyBatch = await legacyGetBatchPagePermissions(person.id, pageIds);
         for (const pageId of pageIds) {
           const pageAt = `${at} ${pageId}`;
@@ -362,22 +364,22 @@ describe('B7b: every human drive resolver answers with one org-aware membership 
     // The fixes, by value: the legacy answers were the leaks.
     expect(await legacyCheckDriveAccessForRoles(m.drives.finance.id, m.people.tomas.id)).toMatchObject({ isAdmin: true, isMember: true });
     expect((await legacyGetBatchPagePermissions(m.people.marcus.id, [hiring])).get(hiring)?.canView).toBe(true);
-    expect((await getBatchPagePermissions(m.people.marcus.id, [hiring])).get(hiring)?.canView).toBe(false);
+    expect((await getBatchPagePermissions(credentialActor(m.people.marcus.id, null), [hiring])).get(hiring)?.canView).toBe(false);
     expect(await legacyGetUsersWhoCanViewPage(hiring, [m.people.marcus.id])).toEqual(new Set([m.people.marcus.id]));
     expect((await legacyGetBatchPagePermissions(m.people.marcus.id, [boardDeck])).get(boardDeck)).toEqual({ canView: false, canEdit: true, canShare: false, canDelete: false });
-    expect((await getBatchPagePermissions(m.people.marcus.id, [boardDeck])).get(boardDeck)).toEqual(DENY);
+    expect((await getBatchPagePermissions(credentialActor(m.people.marcus.id, null), [boardDeck])).get(boardDeck)).toEqual(DENY);
     // The GUEST fix, by value: the legacy answer was a membership; the live one is only Gus's grants.
     const gus = m.people.gus.id;
     expect(await legacyIsUserDriveMember(gus, m.drives.product.id)).toBe(true);
-    expect(await isUserDriveMember(gus, m.drives.product.id)).toBe(false);
+    expect(await isUserDriveMember(credentialActor(gus, null), m.drives.product.id)).toBe(false);
     expect((await legacyGetBatchPagePermissions(gus, [boardDeck])).get(boardDeck)?.canView).toBe(true);
-    expect((await getBatchPagePermissions(gus, [boardDeck, m.pages.productPage.id])).get(boardDeck)).toEqual(DENY);
-    expect((await getBatchPagePermissions(gus, [m.pages.productPage.id])).get(m.pages.productPage.id)?.canView).toBe(true);
-    expect(await isUserMemberOfAnyEventDrive(gus, { id: createId(), driveId: m.drives.product.id })).toBe(false);
-    expect(await resolveDriveMembership({ userId: gus, driveId: m.drives.personal.id })).toBe('none');
+    expect((await getBatchPagePermissions(credentialActor(gus, null), [boardDeck, m.pages.productPage.id])).get(boardDeck)).toEqual(DENY);
+    expect((await getBatchPagePermissions(credentialActor(gus, null), [m.pages.productPage.id])).get(m.pages.productPage.id)?.canView).toBe(true);
+    expect(await isUserMemberOfAnyEventDrive(credentialActor(gus, null), { id: createId(), driveId: m.drives.product.id })).toBe(false);
+    expect(await resolveDriveMembership({ actor: credentialActor(gus, null), driveId: m.drives.personal.id })).toBe('none');
     // Not vacuous while dark: stale org rows still open drives exactly as before orgs.
-    expect(await isUserDriveMember(m.people.marcus.id, m.drives.finance.id)).toBe(true);
-    expect(await isUserDriveMember(m.people.priya.id, m.drives.research.id)).toBe(false);
+    expect(await isUserDriveMember(credentialActor(m.people.marcus.id, null), m.drives.finance.id)).toBe(true);
+    expect(await isUserDriveMember(credentialActor(m.people.priya.id, null), m.drives.research.id)).toBe(false);
   }, 180_000);
 
   it('ORG-4 (partial) DRV-5 (partial) DRV-6 (partial) X-6 (partial) POL-6 (partial) the consistency matrix: for every person and drive, every sibling resolver agrees with getDriveAccess and getUserAccessLevel', async () => {
@@ -388,16 +390,16 @@ describe('B7b: every human drive resolver answers with one org-aware membership 
 
     // Not vacuous: the canonical answers cover every shape the matrix is meant to tell apart.
     const { priya, nina, marcus, dana, fred, kai, chris, tomas, jono } = m.people;
-    expect(await getDriveAccess(m.drives.finance.id, priya.id)).toMatchObject({ isAdmin: true });
-    expect(await getDriveAccess(m.drives.finance.id, jono.id)).toMatchObject({ isAdmin: true });
-    expect(await getDriveAccess(m.drives.product.id, nina.id)).toMatchObject({ isMember: true, isAdmin: false });
-    expect(await getDriveAccess(m.drives.research.id, marcus.id)).toMatchObject({ isMember: false });
-    expect(await getDriveAccess(m.drives.product.id, dana.id)).toMatchObject({ isMember: false });
-    expect(await getDriveAccess(m.drives.research.id, fred.id)).toMatchObject({ isMember: false });
-    expect(await getDriveAccess(m.drives.product.id, kai.id)).toMatchObject({ isMember: true });
-    expect(await getDriveAccess(m.drives.product.id, chris.id)).toMatchObject({ isMember: true });
-    expect(await getDriveAccess(m.drives.finance.id, tomas.id)).toMatchObject({ isMember: false });
-    expect(await getUserAccessLevel(m.people.lu.id, m.pages.personalPage.id)).toBeNull();
+    expect(await getDriveAccess(m.drives.finance.id, credentialActor(priya.id, null))).toMatchObject({ isAdmin: true });
+    expect(await getDriveAccess(m.drives.finance.id, credentialActor(jono.id, null))).toMatchObject({ isAdmin: true });
+    expect(await getDriveAccess(m.drives.product.id, credentialActor(nina.id, null))).toMatchObject({ isMember: true, isAdmin: false });
+    expect(await getDriveAccess(m.drives.research.id, credentialActor(marcus.id, null))).toMatchObject({ isMember: false });
+    expect(await getDriveAccess(m.drives.product.id, credentialActor(dana.id, null))).toMatchObject({ isMember: false });
+    expect(await getDriveAccess(m.drives.research.id, credentialActor(fred.id, null))).toMatchObject({ isMember: false });
+    expect(await getDriveAccess(m.drives.product.id, credentialActor(kai.id, null))).toMatchObject({ isMember: true });
+    expect(await getDriveAccess(m.drives.product.id, credentialActor(chris.id, null))).toMatchObject({ isMember: true });
+    expect(await getDriveAccess(m.drives.finance.id, credentialActor(tomas.id, null))).toMatchObject({ isMember: false });
+    expect(await getUserAccessLevel(credentialActor(m.people.lu.id, null), m.pages.personalPage.id)).toBeNull();
     // The Board deck's role entry sets canEdit without canView: every implicit Open member (Nina, Kai)
     // and Marcus's synced row resolve it through the default role. The entry itself grants nothing (#2672):
     // its canEdit never leaks. What they hold there is Northwind's Open-drive floor (POL-6, the default view):
@@ -407,8 +409,8 @@ describe('B7b: every human drive resolver answers with one org-aware membership 
     const viewFloor = { canView: true, canEdit: false, canShare: false, canDelete: false };
     for (const person of [nina, kai, marcus]) {
       expect(await getMemberCustomRoleId(m.drives.product.id, person.id), person.name).toBe(m.productDefaultRoleId);
-      expect(await getUserAccessLevel(person.id, m.boardDeck.id), person.name).toEqual(viewFloor);
-      expect((await getBatchPagePermissions(person.id, [m.boardDeck.id])).get(m.boardDeck.id), person.name).toEqual(viewFloor);
+      expect(await getUserAccessLevel(credentialActor(person.id, null), m.boardDeck.id), person.name).toEqual(viewFloor);
+      expect((await getBatchPagePermissions(credentialActor(person.id, null), [m.boardDeck.id])).get(m.boardDeck.id), person.name).toEqual(viewFloor);
     }
   }, 180_000);
 
@@ -418,10 +420,10 @@ describe('B7b: every human drive resolver answers with one org-aware membership 
     for (const enabled of [false, true]) {
       flags.orgsEnabled = enabled;
       for (const options of [{}, { includeTrash: true }]) {
-        expect((await listAccessibleDrives(lu.id, options)).map((d) => d.id), `orgs ${enabled}`).not.toContain(m.drives.personal.id);
+        expect((await listAccessibleDrives(credentialActor(lu.id, null), options)).map((d) => d.id), `orgs ${enabled}`).not.toContain(m.drives.personal.id);
       }
-      expect(await getDriveIdsForUser(lu.id)).not.toContain(m.drives.personal.id);
-      expect(await getUserDriveAccess(lu.id, m.drives.personal.id)).toBe(false);
+      expect(await getDriveIdsForUser(credentialActor(lu.id, null))).not.toContain(m.drives.personal.id);
+      expect(await getUserDriveAccess(credentialActor(lu.id, null), m.drives.personal.id)).toBe(false);
     }
   });
 
@@ -436,7 +438,7 @@ describe('B7b: every human drive resolver answers with one org-aware membership 
     expect(await getMemberCustomRoleId(m.drives.finance.id, priya.id)).toBeNull();
     expect(await getMemberCustomRoleId(m.drives.product.id, chris.id)).toBeNull();
     // The default role's drive-wide edit reaches the drive-wide permission reader too.
-    expect(await getUserDrivePermissions(nina.id, m.drives.product.id)).toEqual({ hasAccess: true, isOwner: false, isAdmin: false, isMember: true, canEdit: true });
+    expect(await getUserDrivePermissions(credentialActor(nina.id, null), m.drives.product.id)).toEqual({ hasAccess: true, isOwner: false, isAdmin: false, isMember: true, canEdit: true });
   });
 
   it('a pending invitation counts for nothing in any routed resolver, dark or enabled', async () => {
@@ -447,27 +449,27 @@ describe('B7b: every human drive resolver answers with one org-aware membership 
       flags.orgsEnabled = enabled;
       for (const drive of [m.drives.finance, m.drives.personal]) {
         const at = `orgs ${enabled ? 'on' : 'off'}, ${drive.name}`;
-        expect(await isUserDriveMember(tomas.id, drive.id), at).toBe(false);
-        expect(await isDriveOwnerOrAdmin(tomas.id, drive.id), at).toBe(false);
-        expect(await getUserDriveAccess(tomas.id, drive.id), at).toBe(false);
-        expect(await getUserDrivePermissions(tomas.id, drive.id), at).toBeNull();
-        expect(await getUserAccessiblePagesInDrive(tomas.id, drive.id), at).toEqual([]);
-        expect(await getUserAccessiblePagesInDriveWithDetails(tomas.id, drive.id), at).toEqual([]);
+        expect(await isUserDriveMember(credentialActor(tomas.id, null), drive.id), at).toBe(false);
+        expect(await isDriveOwnerOrAdmin(credentialActor(tomas.id, null), drive.id), at).toBe(false);
+        expect(await getUserDriveAccess(credentialActor(tomas.id, null), drive.id), at).toBe(false);
+        expect(await getUserDrivePermissions(credentialActor(tomas.id, null), drive.id), at).toBeNull();
+        expect(await getUserAccessiblePagesInDrive(credentialActor(tomas.id, null), drive.id), at).toEqual([]);
+        expect(await getUserAccessiblePagesInDriveWithDetails(credentialActor(tomas.id, null), drive.id), at).toEqual([]);
         const pageIds = (await pagesOf(drive.id)).map((p) => p.id);
-        expect([...(await getBatchPagePermissions(tomas.id, pageIds)).values()], at).toEqual(pageIds.map(() => DENY));
+        expect([...(await getBatchPagePermissions(credentialActor(tomas.id, null), pageIds)).values()], at).toEqual(pageIds.map(() => DENY));
         for (const pageId of pageIds) {
           expect((await getUsersWhoCanViewPage(pageId, [tomas.id])).size, at).toBe(0);
           expect(await revokePagePermission(ctxFor(tomas.id), { pageId, targetUserId: m.zed.id }), at)
             .toEqual({ ok: false, error: { code: 'PAGE_NOT_ACCESSIBLE', pageId } });
         }
-        expect(await getDriveIdsForUser(tomas.id), at).not.toContain(drive.id);
-        expect(await checkDriveAccess(drive.id, tomas.id), at).toMatchObject({ isOwner: false, isAdmin: false, isMember: false });
+        expect(await getDriveIdsForUser(credentialActor(tomas.id, null)), at).not.toContain(drive.id);
+        expect(await checkDriveAccess(drive.id, credentialActor(tomas.id, null)), at).toMatchObject({ isOwner: false, isAdmin: false, isMember: false });
         // checkDriveAccessForRoles read pending rows before B7b: a pending ADMIN managed roles.
-        expect(await checkDriveAccessForRoles(drive.id, tomas.id), at).toMatchObject({ isOwner: false, isAdmin: false, isMember: false });
+        expect(await checkDriveAccessForRoles(drive.id, credentialActor(tomas.id, null)), at).toMatchObject({ isOwner: false, isAdmin: false, isMember: false });
         expect(await getMemberCustomRoleId(drive.id, tomas.id), at).toBeNull();
-        expect(await resolveDriveMembership({ userId: tomas.id, driveId: drive.id }), at).toBe('none');
-        expect(await isUserMemberOfAnyEventDrive(tomas.id, { id: createId(), driveId: drive.id }), at).toBe(false);
-        expect(await hasAppDriveMembership(m.tokens.get(tomas.id) as string, drive.id), at).toBe(false);
+        expect(await resolveDriveMembership({ actor: credentialActor(tomas.id, null), driveId: drive.id }), at).toBe('none');
+        expect(await isUserMemberOfAnyEventDrive(credentialActor(tomas.id, null), { id: createId(), driveId: drive.id }), at).toBe(false);
+        expect(await hasAppDriveMembership(await tokenOwnerActor(m.tokens.get(tomas.id) as string), m.tokens.get(tomas.id) as string, drive.id), at).toBe(false);
       }
     }
   });
@@ -479,7 +481,7 @@ describe('B7b: every human drive resolver answers with one org-aware membership 
     const full = { canView: true, canEdit: true, canShare: true, canDelete: true };
 
     // Priya (org Admin, no Finance row) reaches the Salaries page through org power.
-    expect(await getUserAccessLevel(priya.id, m.pages.financePrivatePage.id)).toEqual(full);
+    expect(await getUserAccessLevel(credentialActor(priya.id, null), m.pages.financePrivatePage.id)).toEqual(full);
 
     // Her agent, living in her own drive, gains nothing in Finance from her org role.
     const priyaNotes = await factories.createDrive(priya.id, { name: 'Priya Notes', slug: `priya-${createId()}` });
@@ -487,16 +489,16 @@ describe('B7b: every human drive resolver answers with one org-aware membership 
     expect(await hasAgentDriveMembership(agent.id, m.drives.finance.id)).toBe(false);
     expect(await getAgentAccessLevel(agent.id, m.pages.financePage.id)).toBeNull();
     // Granted as MEMBER through her org power, it reads what a MEMBER reads: never the private page.
-    const granted = await addAgentToDrive({ actingUserId: priya.id, agentPageId: agent.id, driveId: m.drives.finance.id, requestedRole: 'MEMBER' });
+    const granted = await addAgentToDrive({ actor: credentialActor(priya.id, null), agentPageId: agent.id, driveId: m.drives.finance.id, requestedRole: 'MEMBER' });
     expect(granted.ok).toBe(true);
     expect(await getAgentAccessLevel(agent.id, m.pages.financePrivatePage.id)).toBeNull();
 
     // An explicit MEMBER key scope means MEMBER, whatever its owner's org role.
     const [explicitKey] = await db.insert(mcpTokens).values({ userId: priya.id, tokenHash: `hash-${createId()}`, tokenPrefix: 'mcp_test', name: 'explicit', isScoped: true }).returning();
     await db.insert(mcpTokenDrives).values({ tokenId: explicitKey.id, driveId: m.drives.finance.id, role: 'MEMBER' });
-    expect(await getAppAccessLevel(explicitKey.id, m.pages.financePrivatePage.id)).toBeNull();
+    expect(await getAppAccessLevel(await tokenOwnerActor(explicitKey.id), explicitKey.id, m.pages.financePrivatePage.id)).toBeNull();
     // The inheriting key is Priya, only there.
-    expect(await getAppAccessLevel(m.tokens.get(priya.id) as string, m.pages.financePrivatePage.id)).toEqual(full);
+    expect(await getAppAccessLevel(await tokenOwnerActor(m.tokens.get(priya.id) as string), m.tokens.get(priya.id) as string, m.pages.financePrivatePage.id)).toEqual(full);
 
     await db.delete(driveAgentMembers).where(inArray(driveAgentMembers.agentPageId, [agent.id]));
   });
@@ -514,14 +516,14 @@ describe('B7b: every human drive resolver answers with one org-aware membership 
     const ninaAgent = await agentFor(nina.id, 'Nina');
     const tomasAgent = await agentFor(tomas.id, 'Tomas');
 
-    const inherited = await addAgentToDrive({ actingUserId: priya.id, agentPageId: priyaAgent.id, driveId: m.drives.finance.id });
+    const inherited = await addAgentToDrive({ actor: credentialActor(priya.id, null), agentPageId: priyaAgent.id, driveId: m.drives.finance.id });
     expect(inherited).toMatchObject({ ok: true, member: { role: 'ADMIN' } });
-    expect(await addAgentToDrive({ actingUserId: nina.id, agentPageId: ninaAgent.id, driveId: m.drives.finance.id }))
+    expect(await addAgentToDrive({ actor: credentialActor(nina.id, null), agentPageId: ninaAgent.id, driveId: m.drives.finance.id }))
       .toEqual({ ok: false, status: 403, error: 'You do not have access to this drive' });
-    expect(await addAgentToDrive({ actingUserId: tomas.id, agentPageId: tomasAgent.id, driveId: m.drives.finance.id }))
+    expect(await addAgentToDrive({ actor: credentialActor(tomas.id, null), agentPageId: tomasAgent.id, driveId: m.drives.finance.id }))
       .toEqual({ ok: false, status: 403, error: 'You do not have access to this drive' });
     // An implicit Open member is capped to MEMBER and carries the drive's default role.
-    expect(await addAgentToDrive({ actingUserId: nina.id, agentPageId: ninaAgent.id, driveId: m.drives.product.id }))
+    expect(await addAgentToDrive({ actor: credentialActor(nina.id, null), agentPageId: ninaAgent.id, driveId: m.drives.product.id }))
       .toMatchObject({ ok: true, member: { role: 'MEMBER', customRoleId: m.productDefaultRoleId } });
   });
 });

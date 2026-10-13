@@ -13,7 +13,6 @@ import { drives } from '@pagespace/db/schema/core';
 import { organizations, orgMembers, orgSubscriptions } from '@pagespace/db/schema/organizations';
 
 vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
-vi.mock('../../audit/org-audit', () => ({ recordOrgAuditEvent: vi.fn(async () => {}), recordOrgAuditEventAfterCommit: vi.fn(async () => true) }));
 
 import { createOrgDrive, moveDriveToOrg, type OrgDriveServiceDeps } from '../org-drive-service';
 import { orgDriveServiceDeps } from '../org-drive-service-deps';
@@ -61,31 +60,31 @@ const orgDriveCount = () => db.$count(drives, eq(drives.orgId, w.orgId));
 
 describe('creating an org drive', () => {
   it('POL-5 with no policy stored every member may create (today\'s behaviour); an outsider may not', async () => {
-    expect((await createOrgDrive(w.member, { name: 'Product', orgId: w.orgId }, deps)).ok).toBe(true);
-    expect(await createOrgDrive(w.outsider, { name: 'X', orgId: w.orgId }, deps)).toMatchObject({ ok: false, status: 403, code: 'NOT_ORG_MEMBER' });
+    expect((await createOrgDrive(w.member, { authentication: null, name: 'Product', orgId: w.orgId }, deps)).ok).toBe(true);
+    expect(await createOrgDrive(w.outsider, { authentication: null, name: 'X', orgId: w.orgId }, deps)).toMatchObject({ ok: false, status: 403, code: 'NOT_ORG_MEMBER' });
   });
 
   it('POL-5 with admins only, a Member is refused and nothing is created; Owner and Admin still create', async () => {
     await setWho('admins');
-    expect(await createOrgDrive(w.member, { name: 'Nope', orgId: w.orgId }, deps)).toMatchObject({ ok: false, status: 403, code: 'POLICY_FORBIDS_CREATE' });
+    expect(await createOrgDrive(w.member, { authentication: null, name: 'Nope', orgId: w.orgId }, deps)).toMatchObject({ ok: false, status: 403, code: 'POLICY_FORBIDS_CREATE' });
     expect(await orgDriveCount()).toBe(0);
-    expect((await createOrgDrive(w.admin, { name: 'A', orgId: w.orgId }, deps)).ok).toBe(true);
-    expect((await createOrgDrive(w.owner, { name: 'B', orgId: w.orgId }, deps)).ok).toBe(true);
+    expect((await createOrgDrive(w.admin, { authentication: null, name: 'A', orgId: w.orgId }, deps)).ok).toBe(true);
+    expect((await createOrgDrive(w.owner, { authentication: null, name: 'B', orgId: w.orgId }, deps)).ok).toBe(true);
   });
 
   it('POL-5 the policy is read at each call: flipping it applies to the very next create, no restart', async () => {
     await setWho('admins');
-    expect((await createOrgDrive(w.member, { name: 'One', orgId: w.orgId }, deps)).ok).toBe(false);
+    expect((await createOrgDrive(w.member, { authentication: null, name: 'One', orgId: w.orgId }, deps)).ok).toBe(false);
     await setWho('members');
-    expect((await createOrgDrive(w.member, { name: 'Two', orgId: w.orgId }, deps)).ok).toBe(true);
+    expect((await createOrgDrive(w.member, { authentication: null, name: 'Two', orgId: w.orgId }, deps)).ok).toBe(true);
     await setWho('admins');
-    expect((await createOrgDrive(w.member, { name: 'Three', orgId: w.orgId }, deps)).ok).toBe(false);
+    expect((await createOrgDrive(w.member, { authentication: null, name: 'Three', orgId: w.orgId }, deps)).ok).toBe(false);
   });
 
   it('POL-5 (partial) a damaged stored value fails closed to admins only', async () => {
     await setWho('banana');
-    expect((await createOrgDrive(w.member, { name: 'X', orgId: w.orgId }, deps)).ok).toBe(false);
-    expect((await createOrgDrive(w.admin, { name: 'Y', orgId: w.orgId }, deps)).ok).toBe(true);
+    expect((await createOrgDrive(w.member, { authentication: null, name: 'X', orgId: w.orgId }, deps)).ok).toBe(false);
+    expect((await createOrgDrive(w.admin, { authentication: null, name: 'Y', orgId: w.orgId }, deps)).ok).toBe(true);
   });
 });
 

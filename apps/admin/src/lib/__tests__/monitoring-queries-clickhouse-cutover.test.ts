@@ -111,13 +111,16 @@ vi.mock('@pagespace/db/operators', () => ({
 }));
 
 vi.mock('@pagespace/lib/billing/credit-core', () => ({
-  computeBalanceDrift: vi.fn(),
   isNegativeMargin: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/billing/credit-pricing', () => ({
   BALANCE_DRIFT_TOLERANCE_CENTS: 100,
   NEGATIVE_MARGIN_FLOOR_BPS: 0,
+}));
+
+vi.mock('@pagespace/lib/audit/org-audit', () => ({
+  getOrgAuditBacklog: vi.fn(async () => ({ queued: 0, deadLettered: 0 })),
 }));
 
 vi.mock('@pagespace/lib/auth/user-repository', () => ({

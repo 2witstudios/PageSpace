@@ -21,16 +21,24 @@ import { publishedPages } from '@pagespace/db/schema/published-pages';
 import { driveShareLinks, pageShareLinks } from '@pagespace/db/schema/share-links';
 
 const audit = vi.hoisted(() => ({ events: [] as Array<Record<string, unknown>>, failNext: false }));
-vi.mock('../../audit/org-audit', () => ({
-  recordOrgAuditEvent: vi.fn(async (event: Record<string, unknown>) => {
-    if (audit.failNext) throw new Error('audit chain unavailable');
-    audit.events.push(event);
-  }),
-  // Other mutations' org events (membership, drives) are not what this suite asserts.
-  recordOrgAuditEventAfterCommit: vi.fn(async () => true),
-}));
+// AUD-1: policy events are staged in the outbox with the change; the chain append is captured (and can be refused).
+vi.mock('../../audit/security-audit', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../audit/security-audit')>();
+  const { orgEventOf } = await import('../../audit/__tests__/capture-org-audit');
+  return {
+    ...actual,
+    securityAudit: {
+      ...actual.securityAudit,
+      logEvent: vi.fn(async (entry: import('../../audit/security-audit').AuditEvent) => {
+        if (audit.failNext) throw new Error('audit chain unavailable');
+        audit.events.push(orgEventOf(entry));
+      }),
+    },
+  };
+});
 
 import { getOrgPolicies, updateOrgPolicies } from '../policies';
+import { drainOrgAuditOutbox } from '../../audit/org-audit';
 import { DEFAULT_ORG_POLICIES } from '../policies-core';
 import { listPolicySuspensions } from '../policy-suspension';
 
@@ -123,20 +131,20 @@ describe('the policy reader', () => {
   });
 
   it('POL-1 (partial) a change is read back on the very next call with no restart or cache to expire', async () => {
-    await updateOrgPolicies({ orgId, actorId: w.owner, patch: { guests: 'off' } });
+    await updateOrgPolicies({ orgId, actorId: w.owner, actorAuthentication: null, patch: { guests: 'off' } });
     expect((await getOrgPolicies(orgId)).guests).toBe('off');
-    await updateOrgPolicies({ orgId, actorId: w.owner, patch: { guests: 'approve' } });
+    await updateOrgPolicies({ orgId, actorId: w.owner, actorAuthentication: null, patch: { guests: 'approve' } });
     expect((await getOrgPolicies(orgId)).guests).toBe('approve');
   });
 
   it('POL-1 (partial) one org\'s policy change never shows in another org', async () => {
-    await updateOrgPolicies({ orgId, actorId: w.owner, patch: { publicShareLinks: false } });
+    await updateOrgPolicies({ orgId, actorId: w.owner, actorAuthentication: null, patch: { publicShareLinks: false } });
     expect((await getOrgPolicies(otherOrgId)).publicShareLinks).toBe(true);
   });
 
   it('POL-1 (partial) an unknown org reads as defaults and cannot be updated', async () => {
     expect(await getOrgPolicies('nope')).toEqual(DEFAULT_ORG_POLICIES);
-    expect(await updateOrgPolicies({ orgId: 'nope', actorId: w.owner, patch: { guests: 'off' } })).toEqual({ ok: false, reason: 'not_found' });
+    expect(await updateOrgPolicies({ orgId: 'nope', actorId: w.owner, actorAuthentication: null, patch: { guests: 'off' } })).toEqual({ ok: false, reason: 'not_found' });
   });
 });
 
@@ -149,7 +157,7 @@ describe('suspend, never delete', () => {
     const personal = await link(w.personalDrive, { createdBy: w.outsider });
     const otherOrg = await link(w.otherOrgDrive, { createdBy: w.owner });
 
-    const res = await updateOrgPolicies({ orgId, actorId: w.owner, patch: { publicShareLinks: false } });
+    const res = await updateOrgPolicies({ orgId, actorId: w.owner, actorAuthentication: null, patch: { publicShareLinks: false } });
     if (!res.ok) throw new Error('expected ok');
     expect(res.suspended.map((s) => s.id).sort()).toEqual([live, livePage].sort());
 
@@ -174,8 +182,8 @@ describe('suspend, never delete', () => {
   it('POL-1 (partial) turning public share links back on restores exactly the suspended links and leaves the inactive one inactive', async () => {
     const live = await link(w.orgDrive);
     const inactive = await link(w.orgDrive, { isActive: false });
-    await updateOrgPolicies({ orgId, actorId: w.owner, patch: { publicShareLinks: false } });
-    const back = await updateOrgPolicies({ orgId, actorId: w.owner, patch: { publicShareLinks: true } });
+    await updateOrgPolicies({ orgId, actorId: w.owner, actorAuthentication: null, patch: { publicShareLinks: false } });
+    const back = await updateOrgPolicies({ orgId, actorId: w.owner, actorAuthentication: null, patch: { publicShareLinks: true } });
     if (!back.ok) throw new Error('expected ok');
     expect(back.restored.map((r) => r.id)).toEqual([live]);
     expect(await marker(driveShareLinks, live)).toEqual({ m: null, active: true });
@@ -185,19 +193,19 @@ describe('suspend, never delete', () => {
 
   it('POL-1 (partial) a link an admin deactivates WHILE it is suspended stays inactive after the policy is turned back on', async () => {
     const live = await link(w.orgDrive);
-    await updateOrgPolicies({ orgId, actorId: w.owner, patch: { publicShareLinks: false } });
+    await updateOrgPolicies({ orgId, actorId: w.owner, actorAuthentication: null, patch: { publicShareLinks: false } });
     await db.update(driveShareLinks).set({ isActive: false }).where(eq(driveShareLinks.id, live));
 
-    await updateOrgPolicies({ orgId, actorId: w.owner, patch: { publicShareLinks: true } });
+    await updateOrgPolicies({ orgId, actorId: w.owner, actorAuthentication: null, patch: { publicShareLinks: true } });
 
     expect(await marker(driveShareLinks, live)).toEqual({ m: null, active: false });
   });
 
   it('POL-1 (partial) re-applying the same policy changes nothing and writes no audit row', async () => {
     await link(w.orgDrive);
-    await updateOrgPolicies({ orgId, actorId: w.owner, patch: { publicShareLinks: false } });
+    await updateOrgPolicies({ orgId, actorId: w.owner, actorAuthentication: null, patch: { publicShareLinks: false } });
     audit.events.length = 0;
-    const again = await updateOrgPolicies({ orgId, actorId: w.owner, patch: { publicShareLinks: false } });
+    const again = await updateOrgPolicies({ orgId, actorId: w.owner, actorAuthentication: null, patch: { publicShareLinks: false } });
     if (!again.ok) throw new Error('expected ok');
     expect(again.changes).toEqual([]);
     expect(again.suspended).toEqual([]);
@@ -210,15 +218,15 @@ describe('suspend, never delete', () => {
     const [dom] = await db.insert(customDomains).values({ driveId: w.orgDrive, hostname: `a-${run}.example.test` }).returning({ id: customDomains.id });
     const [plat] = await db.insert(customDomains).values({ driveId: w.orgDrive, hostname: `b-${run}.example.test`, platformOwned: true }).returning({ id: customDomains.id });
 
-    await updateOrgPolicies({ orgId, actorId: w.owner, patch: { publishWeb: false } });
+    await updateOrgPolicies({ orgId, actorId: w.owner, actorAuthentication: null, patch: { publishWeb: false } });
     expect((await db.select().from(publishedPages).where(eq(publishedPages.id, pub.id)))[0].suspendedByPolicy).toBe('publishedPages');
     expect((await db.select().from(customDomains).where(eq(customDomains.id, dom.id)))[0].suspendedByPolicy).toBeNull();
 
-    await updateOrgPolicies({ orgId, actorId: w.owner, patch: { customDomains: false } });
+    await updateOrgPolicies({ orgId, actorId: w.owner, actorAuthentication: null, patch: { customDomains: false } });
     expect((await db.select().from(customDomains).where(eq(customDomains.id, dom.id)))[0].suspendedByPolicy).toBe('customDomains');
     expect((await db.select().from(customDomains).where(eq(customDomains.id, plat.id)))[0].suspendedByPolicy).toBeNull();
 
-    await updateOrgPolicies({ orgId, actorId: w.owner, patch: { publishWeb: true, customDomains: true } });
+    await updateOrgPolicies({ orgId, actorId: w.owner, actorAuthentication: null, patch: { publishWeb: true, customDomains: true } });
     expect((await db.select().from(publishedPages).where(eq(publishedPages.id, pub.id)))[0].suspendedByPolicy).toBeNull();
     expect((await db.select().from(customDomains).where(eq(customDomains.id, dom.id)))[0].suspendedByPolicy).toBeNull();
   });
@@ -238,17 +246,17 @@ describe('suspend, never delete', () => {
     const personalConn = await conn(sl, w.personalDrive);
     const m = async (id: string) => (await db.select({ m: integrationConnections.suspendedByPolicy }).from(integrationConnections).where(eq(integrationConnections.id, id)))[0].m;
 
-    await updateOrgPolicies({ orgId, actorId: w.owner, patch: { integrationsAllowlist: [`github-${run}`] } });
+    await updateOrgPolicies({ orgId, actorId: w.owner, actorAuthentication: null, patch: { integrationsAllowlist: [`github-${run}`] } });
     expect(await m(ghConn)).toBeNull();
     expect(await m(slConn)).toBe('integrations');
     expect(await m(personalConn)).toBeNull();
 
-    await updateOrgPolicies({ orgId, actorId: w.owner, patch: { integrationsAllowlist: [`github-${run}`, `slack-${run}`] } });
+    await updateOrgPolicies({ orgId, actorId: w.owner, actorAuthentication: null, patch: { integrationsAllowlist: [`github-${run}`, `slack-${run}`] } });
     expect(await m(slConn)).toBeNull();
 
-    await updateOrgPolicies({ orgId, actorId: w.owner, patch: { integrationsAllowlist: [] } });
+    await updateOrgPolicies({ orgId, actorId: w.owner, actorAuthentication: null, patch: { integrationsAllowlist: [] } });
     expect(await m(ghConn)).toBe('integrations');
-    await updateOrgPolicies({ orgId, actorId: w.owner, patch: { integrationsAllowlist: null } });
+    await updateOrgPolicies({ orgId, actorId: w.owner, actorAuthentication: null, patch: { integrationsAllowlist: null } });
     expect(await m(ghConn)).toBeNull();
     expect(await m(slConn)).toBeNull();
   });
@@ -257,7 +265,7 @@ describe('suspend, never delete', () => {
 describe('the audit trail of a change', () => {
   it('POL-1 (partial) a change writes a policy event naming the key, old and new value, and one suspended event listing what was suspended', async () => {
     const live = await link(w.orgDrive);
-    await updateOrgPolicies({ orgId, actorId: w.owner, patch: { publicShareLinks: false } });
+    await updateOrgPolicies({ orgId, actorId: w.owner, actorAuthentication: null, patch: { publicShareLinks: false } });
     const types = audit.events.map((e) => e.eventType);
     expect(types).toEqual(['org.policy.changed', 'org.policy.suspended']);
     expect(audit.events[0]).toMatchObject({ orgId, actorId: w.owner, details: { changes: [{ key: 'publicShareLinks', from: true, to: false }] } });
@@ -266,18 +274,23 @@ describe('the audit trail of a change', () => {
     expect(suspended.listed.map((l) => l.id)).toEqual([live]);
 
     audit.events.length = 0;
-    await updateOrgPolicies({ orgId, actorId: w.owner, patch: { publicShareLinks: true } });
+    await updateOrgPolicies({ orgId, actorId: w.owner, actorAuthentication: null, patch: { publicShareLinks: true } });
     expect(audit.events.map((e) => e.eventType)).toEqual(['org.policy.changed', 'org.policy.restored']);
   });
 
-  it('POL-1 (partial) a rejected audit append does not undo the committed change but is reported to the caller', async () => {
+  it('AUD-1 (partial) POL-1 (partial) a rejected audit append neither undoes the committed change nor loses its events: they stay queued and the drainer delivers them', async () => {
     const live = await link(w.orgDrive);
     audit.failNext = true;
-    const res = await updateOrgPolicies({ orgId, actorId: w.owner, patch: { publicShareLinks: false } });
-    if (!res.ok) throw new Error('expected ok');
-    expect(res.auditRecorded).toBe(false);
+    const res = await updateOrgPolicies({ orgId, actorId: w.owner, actorAuthentication: null, patch: { publicShareLinks: false } });
+    expect(res.ok).toBe(true);
     expect((await getOrgPolicies(orgId)).publicShareLinks).toBe(false);
     expect((await marker(driveShareLinks, live)).m).toBe('publicShareLinks');
+    expect(audit.events).toEqual([]);
+
+    audit.failNext = false;
+    // Past every backoff: the drainer appends what the chain refused, in order.
+    await drainOrgAuditOutbox({ now: new Date(Date.now() + 2 * 60 * 60_000) });
+    expect(audit.events.filter((e) => e.orgId === orgId).map((e) => e.eventType)).toEqual(['org.policy.changed', 'org.policy.suspended']);
   });
 });
 

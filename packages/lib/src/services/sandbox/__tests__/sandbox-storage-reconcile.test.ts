@@ -174,6 +174,9 @@ function makeDeps(over: Partial<ReconcileSandboxStorageDeps> = {}): {
     now: () => new Date('2026-07-01T00:00:00.000Z'),
     // Org compute billing went live long before every default watermark: nothing forgiven.
     orgComputeBillingEpoch: async () => new Date(0),
+    // An org pool that covers every accrual in full, unless a test says otherwise.
+    reserveOrgAccrual: async ({ chargeMillicents }) => ({ kind: 'held', holdId: 'hold-pool', walletId: 'pool-northwind', chargeMillicents }),
+    releaseAccrualHold: async () => {},
     ...over,
   };
   return { deps, chargeCalls, agentSessionAdvanceCalls, driveEnvAdvanceCalls, publishedAppAdvanceCalls };
@@ -347,6 +350,71 @@ describe('reconcileSandboxStorage', () => {
     expect(driveEnvAdvanceCalls).toHaveLength(1);
     // One status read per org per tick, however many rows it owns.
     expect(asked).toEqual(['org-northwind']);
+  });
+
+  it('WAL-9 (partial) a PAUSED or EMPTY org pool is charged nothing for storage: the window closes uncharged (forgiven, never debt), counted by name', async () => {
+    for (const reason of ['org_wallet_paused', 'org_wallet_empty'] as const) {
+      const { deps, chargeCalls, driveEnvAdvanceCalls } = makeDeps({
+        listDriveEnvSprites: async () => [driveEnv({ driveId: 'org-drive' })],
+        lookupDriveBillingFacts: async () => ({ ownerId: 'lead-marcus', orgId: 'org-northwind' }),
+        reserveOrgAccrual: async () => ({ kind: 'forgive', reason }),
+      });
+      const result = await reconcileSandboxStorage(deps);
+      expect(chargeCalls).toEqual([]);
+      expect(result).toMatchObject({ charged: 0, failed: 0, skipped: 0, orgPoolForgiven: 1, billableRows: 0 });
+      expect(driveEnvAdvanceCalls).toHaveLength(1);
+    }
+  });
+
+  it('WAL-9 (partial) an org pool that covers only part of an accrual is held for that part and charged no more — on its hold, the rest forgiven', async () => {
+    const reserved: Array<{ chargeMillicents: number; charge: unknown }> = [];
+    const full = makeDeps({
+      listDriveEnvSprites: async () => [driveEnv({ driveId: 'org-drive', costOwnerId: 'member-ana' })],
+      lookupDriveBillingFacts: async () => ({ ownerId: 'lead-marcus', orgId: 'org-northwind' }),
+    });
+    await reconcileSandboxStorage(full.deps);
+    const fullCost = full.chargeCalls[0]?.costDollars ?? 0;
+
+    const { deps, chargeCalls } = makeDeps({
+      listDriveEnvSprites: async () => [driveEnv({ driveId: 'org-drive', costOwnerId: 'member-ana' })],
+      lookupDriveBillingFacts: async () => ({ ownerId: 'lead-marcus', orgId: 'org-northwind' }),
+      reserveOrgAccrual: async (input) => {
+        reserved.push(input);
+        return { kind: 'held', holdId: 'hold-part', walletId: 'pool-northwind', chargeMillicents: 1 };
+      },
+    });
+    const result = await reconcileSandboxStorage(deps);
+
+    expect(reserved).toEqual([{ charge: { kind: 'org', orgId: 'org-northwind', userId: 'member-ana', accrual: true }, chargeMillicents: expect.any(Number) }]);
+    expect(fullCost).toBeGreaterThan(0);
+    expect(chargeCalls).toHaveLength(1);
+    expect(chargeCalls[0].hold).toEqual({ holdId: 'hold-part', walletId: 'pool-northwind' });
+    expect(chargeCalls[0].costDollars).toBeLessThan(fullCost);
+    expect(result).toMatchObject({ charged: 1, orgPoolCapped: 1 });
+  });
+
+  it('WAL-9 (partial) a personal row is never held on any pool; an org hold whose charge throws is released, and the window stays open', async () => {
+    const reserve = vi.fn();
+    const personal = makeDeps({ listAgentSessionSprites: async () => [agentSession()], reserveOrgAccrual: reserve });
+    await reconcileSandboxStorage(personal.deps);
+    expect(reserve).not.toHaveBeenCalled();
+    expect(personal.chargeCalls[0]?.hold).toBeUndefined();
+
+    const released: string[] = [];
+    const { deps, driveEnvAdvanceCalls } = makeDeps({
+      listDriveEnvSprites: async () => [driveEnv({ driveId: 'org-drive' })],
+      lookupDriveBillingFacts: async () => ({ ownerId: 'lead-marcus', orgId: 'org-northwind' }),
+      chargeStorage: async () => {
+        throw new Error('ledger down');
+      },
+      releaseAccrualHold: async (holdId) => {
+        released.push(holdId);
+      },
+    });
+    const result = await reconcileSandboxStorage(deps);
+    expect(released).toEqual(['hold-pool']);
+    expect(driveEnvAdvanceCalls).toEqual([]);
+    expect(result).toMatchObject({ charged: 0, failed: 1 });
   });
 
   it('SEAT-9 (partial) D-OW-32: a paid org (not lapsed) is charged as before', async () => {

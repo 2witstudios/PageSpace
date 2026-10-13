@@ -22,6 +22,7 @@ import { orgEntitlementTier } from './spend-target';
 import { ORG_LAPSED_MESSAGE } from '../organizations/status-core';
 import type { SubscriptionTier } from './subscription-tiers';
 import type { SpendKind } from '@pagespace/db/schema/credits';
+import { chargeMillicents } from './credit-core';
 
 /**
  * What one compute charge debits. `userId` is always a real person: the payer themselves for a
@@ -135,4 +136,53 @@ export function orgComputeRefusalOf(answer: CreditGateResult): OrgComputeGateRef
   if (answer.refusal?.reason === 'source_paused') return 'org_wallet_paused';
   if (answer.refusal?.reason === 'source_cap_reached') return 'org_member_cap_reached';
   return 'org_wallet_empty';
+}
+
+/**
+ * What a BACKGROUND accrual on an org pool — machine storage, settled by the reconcile cron after
+ * the fact, with no person waiting to be refused — does with the pool it lands on (WAL-9). The
+ * pool is never spent past zero by design:
+ *
+ * - a PAUSED pool spends nothing, so the accrual is forgiven (the window closes uncharged), as a
+ *   LAPSED org's is (D-OW-32, decided before this is asked);
+ * - a pool with nothing spendable is charged nothing: the accrual is forgiven, never debt;
+ * - otherwise the pool is HELD for what the accrual costs, or for what it can still cover when that
+ *   is less — and the charge settled on that hold never exceeds it. What the pool could not cover
+ *   is forgiven.
+ *
+ * `spendableCents` is the pool's balance net of its debt and of every live hold against it and its
+ * children, read under its row lock (credit-gate `reserveOrgPoolAccrual`). Whole cents are held;
+ * `chargeMillicents` is what the settle may charge, at most the hold.
+ */
+export type OrgAccrualDecision =
+  | { kind: 'forgive'; reason: 'org_wallet_paused' | 'org_wallet_empty' | 'nothing_to_charge' }
+  | { kind: 'hold'; holdCents: number; chargeMillicents: number };
+
+export function orgAccrualDecision(input: {
+  poolStatus: 'active' | 'paused';
+  spendableCents: number;
+  chargeMillicents: number;
+}): OrgAccrualDecision {
+  if (input.poolStatus === 'paused') return { kind: 'forgive', reason: 'org_wallet_paused' };
+  if (input.chargeMillicents <= 0) return { kind: 'forgive', reason: 'nothing_to_charge' };
+  const spendable = Math.max(0, Math.floor(input.spendableCents));
+  if (spendable === 0) return { kind: 'forgive', reason: 'org_wallet_empty' };
+  const charge = Math.min(input.chargeMillicents, spendable * 1000);
+  return { kind: 'hold', holdCents: Math.ceil(charge / 1000), chargeMillicents: charge };
+}
+
+/**
+ * The provider cost whose marked-up charge (credit-core `chargeMillicents`) fits `capMillicents`:
+ * the cost itself when it fits, else the cost scaled down until its charge is at most the cap (and
+ * within a millicent of it). How an accrual the pool can only partly cover is priced at what it
+ * covers — the settle charges from the cost, so the cap must hold on the cost.
+ */
+export function capAccrualCostDollars(input: { costDollars: number; markupBps: number; capMillicents: number }): number {
+  const full = chargeMillicents(input.costDollars, input.markupBps);
+  if (full <= input.capMillicents) return input.costDollars;
+  if (input.capMillicents <= 0) return 0;
+  let scaled = input.costDollars * (input.capMillicents / full);
+  // Rounding in chargeMillicents can land one millicent over; shave until it does not.
+  while (chargeMillicents(scaled, input.markupBps) > input.capMillicents) scaled *= 1 - 1e-6;
+  return scaled;
 }

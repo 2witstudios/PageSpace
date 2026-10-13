@@ -3,7 +3,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
 import { sendDomainProofEmail, verifyOrgDomainByDns } from '@pagespace/lib/organizations/domains';
-import { authorizeOrgRequest, ORG_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
+import { authorizeOrgRequest, ORG_TOKEN_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
 import { domainVerifySchema } from '@/lib/orgs/org-schemas';
 import { deliverDomainProof } from '@/lib/orgs/org-domain-delivery';
 
@@ -28,7 +28,7 @@ const tooMany = (retryAfter: number | undefined) =>
  */
 export async function POST(request: Request, context: Context) {
   const { orgId, domainId } = await context.params;
-  const gate = await authorizeOrgRequest(request, orgId, 'ADMIN', ORG_WRITE_AUTH);
+  const gate = await authorizeOrgRequest(request, orgId, 'ADMIN', ORG_TOKEN_WRITE_AUTH);
   if (!gate.ok) return gate.response;
   try {
     const parsed = domainVerifySchema.safeParse(await request.json().catch(() => null));

@@ -6,6 +6,7 @@
  * grantedBy is derived from ctx.userId, never accepted as parameter.
  */
 
+import { checkActorResourceAuthentication } from './actor-authentication';
 import { z } from 'zod';
 import { db } from '@pagespace/db/db';
 import { and, eq, isNotNull } from '@pagespace/db/operators';
@@ -24,8 +25,9 @@ import { requestGuestApproval } from './guest-holds';
 import { GUESTS_HELD_MESSAGE, GUESTS_OFF_MESSAGE, pageGrantWidensAccess } from '../organizations/sharing-decisions';
 import { ORG_LAPSED_MESSAGE } from '../organizations/status-core';
 import { checkDriveMayLoosen } from './org-lapse-guard';
-import { recordOrgAuditEvent } from '../audit/org-audit';
+import { transactionWithOrgAudit } from '../audit/org-audit';
 import { loggers } from '../logging/logger-config';
+import type { AccessActor } from './access-actor';
 
 // ============================================================================
 // Error Types
@@ -107,9 +109,14 @@ interface PageForSharing {
  * This prevents information leakage about page existence.
  */
 async function getPageIfCanShare(
-  userId: string,
+  actor: AccessActor,
   pageId: string
 ): Promise<{ ok: true; page: PageForSharing } | { ok: false; error: PermissionMutationError }> {
+  // SEC-2/3: a credential the page's org refuses cannot share it, exactly as if it could not see it.
+  if (!(await checkActorResourceAuthentication(actor, pageId)).allowed) {
+    return { ok: false, error: { code: 'PAGE_NOT_ACCESSIBLE', pageId } };
+  }
+  const { userId } = actor;
   // Get page with drive info
   const pageWithDrive = await db
     .select({
@@ -246,7 +253,7 @@ export async function grantPagePermission(
   }
 
   // 4. Authorization - can user share this page?
-  const pageResult = await getPageIfCanShare(ctx.userId, pageId);
+  const pageResult = await getPageIfCanShare(ctx.actor, pageId);
   if (!pageResult.ok) {
     return { ok: false, error: pageResult.error };
   }
@@ -275,7 +282,7 @@ export async function grantPagePermission(
   }
 
   // 6. Transaction - upsert permission (insert-first to prevent race conditions)
-  const outcome = await db.transaction(async (tx) => {
+  const outcome = await transactionWithOrgAudit(async (tx, audit) => {
     // POL-2, at the moment the grant would be written: a grant that gives an outsider more than they hold admits
     // them to the org drive's content, so the org's guests policy decides it. Off writes nothing; approve queues
     // exactly this grant for an Owner or Admin and writes nothing. Narrowing a grant is never asked.
@@ -297,6 +304,16 @@ export async function grantPagePermission(
           request: { permissions: [{ pageId, ...permissions }], invitedBy: ctx.userId },
           requestedBy: ctx.userId,
         }, tx);
+        // AUD-1: the queued grant and its event commit together.
+        await audit({
+          orgId: admission.orgId,
+          eventType: 'org.guest.requested',
+          actorId: ctx.userId,
+          resourceType: 'drive',
+          resourceId: page.driveId,
+          driveId: page.driveId,
+          details: { holdId: item.holdId, origin: 'page_grant', target: 'user' },
+        });
         return { kind: 'held', orgId: admission.orgId, holdId: item.holdId } as const;
       }
       // [D-OW-33] a wider grant loosens access, for an org member too: refused while the drive's org is lapsed.
@@ -354,15 +371,6 @@ export async function grantPagePermission(
   if (outcome.kind === 'refused') return { ok: false, error: { code: 'GUEST_POLICY_OFF', message: GUESTS_OFF_MESSAGE } };
   if (outcome.kind === 'lapsed') return { ok: false, error: { code: 'ORG_LAPSED', message: ORG_LAPSED_MESSAGE } };
   if (outcome.kind === 'held') {
-    await recordOrgAuditEvent({
-      orgId: outcome.orgId,
-      eventType: 'org.guest.requested',
-      actorId: ctx.userId,
-      resourceType: 'drive',
-      resourceId: page.driveId,
-      driveId: page.driveId,
-      details: { holdId: outcome.holdId, origin: 'page_grant', target: 'user' },
-    }).catch((error) => loggers.api.error('Page grant queued but its audit event was not recorded', error as Error));
     return { ok: false, error: { code: 'GUEST_APPROVAL_PENDING', holdId: outcome.holdId, message: GUESTS_HELD_MESSAGE } };
   }
   const result = { permissionId: outcome.permissionId, isUpdate: outcome.isUpdate };
@@ -418,7 +426,7 @@ export async function revokePagePermission(
   }
 
   // 3. Authorization - can user share (and thus revoke) this page?
-  const pageResult = await getPageIfCanShare(ctx.userId, pageId);
+  const pageResult = await getPageIfCanShare(ctx.actor, pageId);
   if (!pageResult.ok) {
     return { ok: false, error: pageResult.error };
   }

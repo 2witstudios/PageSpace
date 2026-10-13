@@ -45,6 +45,7 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
   auditRequest: vi.fn(),
 }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   canUserViewPage: vi.fn(),
   isDriveOwnerOrAdmin: vi.fn(),
   isUserDriveMember: vi.fn(),
@@ -83,6 +84,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
 import { authenticateRequestWithOptions, canPrincipalViewPage, filterDrivesByMCPScope, checkMCPDriveScope } from '@/lib/auth';
 import { decryptUsersByIdOnce } from '@pagespace/lib/auth/user-repository';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const mockedAuth = vi.mocked(authenticateRequestWithOptions);
 const mockedDb = vi.mocked(db, true);
@@ -169,7 +171,7 @@ describe('GET /api/commands', () => {
     const response = await GET(getRequest());
 
     expect(response.status).toBe(200);
-    expect(getMemberDriveIds).toHaveBeenCalledWith(USER_ID, { includeTrashed: false });
+    expect(getMemberDriveIds).toHaveBeenCalledWith(expect.objectContaining({ userId: USER_ID }), { includeTrashed: false });
     expect(mockedDb.select).not.toHaveBeenCalled();
     expect((await response.json()).commands[0]).toMatchObject({ scope: 'drive', driveId: 'drive_open_org' });
   });
@@ -196,7 +198,7 @@ describe('GET /api/commands', () => {
     // A GUEST row (redeemed page share link) does not make a drive's commands the caller's:
     // the drive set is getMemberDriveIds, which reads a GUEST row as no membership
     // (member-drives.integration.test.ts proves it on real Postgres).
-    expect(getMemberDriveIds).toHaveBeenCalledWith(USER_ID, { includeTrashed: false });
+    expect(getMemberDriveIds).toHaveBeenCalledWith(expect.objectContaining({ userId: USER_ID }), { includeTrashed: false });
   });
 
   it('enriches each command with entry page title, availability, and author name', async () => {
@@ -454,7 +456,7 @@ describe('POST /api/commands', () => {
     expect(response.status).toBe(201);
     const json = await response.json();
     expect(json.command.scope).toBe('drive');
-    expect(mockedIsOwnerOrAdmin).toHaveBeenCalledWith(USER_ID, 'drive_1');
+    expect(mockedIsOwnerOrAdmin).toHaveBeenCalledWith(expect.objectContaining({ userId: USER_ID }), 'drive_1');
   });
 
   it('stamps createdById with the caller on create', async () => {
@@ -478,4 +480,15 @@ describe('POST /api/commands', () => {
     const response = await POST(postRequest([1, 2, 3]));
     expect(response.status).toBe(400);
   });
+});
+
+// Route contracts stub authorization; policy decisions are covered by principal-permissions integration tests.
+vi.mock('@/lib/auth/principal-permissions', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/auth/principal-permissions')>();
+  const permissions = await import('@pagespace/lib/permissions/permissions');
+  return { ...actual,
+    canPrincipalViewPage: (auth: { userId: string }, resourceId: string) => permissions.canUserViewPage(credentialActor(auth.userId, null), resourceId),
+    isPrincipalDriveMember: (auth: { userId: string }, resourceId: string) => permissions.isUserDriveMember(credentialActor(auth.userId, null), resourceId),
+    isPrincipalDriveOwnerOrAdmin: (auth: { userId: string }, resourceId: string) => permissions.isDriveOwnerOrAdmin(credentialActor(auth.userId, null), resourceId),
+  };
 });

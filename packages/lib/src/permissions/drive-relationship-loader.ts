@@ -2,7 +2,7 @@ import { db } from '@pagespace/db/db';
 import { and, eq } from '@pagespace/db/operators';
 import { orgMembers } from '@pagespace/db/schema/organizations';
 import { ORGS_ENABLED } from '../organizations/orgs-enabled';
-import { securityAudit, type AuditEvent } from '../audit/security-audit';
+import { recordOrgAuditEvent } from '../audit/org-audit';
 import { loggers } from '../logging/logger-config';
 import {
   loadAcceptedRowsInDrives,
@@ -17,14 +17,20 @@ import {
   type DriveRelationship,
   type RelationshipDrive,
 } from './drive-relationship';
+import type { AccessActor } from './access-actor';
+import { checkActorDriveAuthentication, filterDrivesForActor } from './actor-authentication';
 
 /** The IO around the drive relationship decisions in drive-relationship.ts. */
 
 export const LEAD_RELATIONSHIP: DriveRelationship = { isOwner: true, membership: null };
 
-export async function loadDriveRelationship(userId: string, drive: RelationshipDrive): Promise<DriveRelationship> {
-  if (isDriveLead(userId, drive)) return LEAD_RELATIONSHIP;
-  return { isOwner: false, membership: await loadEffectiveDriveMembership(userId, drive) };
+/** No relationship at all: what a credential the drive's org refuses holds, lead or not (SEC-2/3). */
+const NO_RELATIONSHIP: DriveRelationship = { isOwner: false, membership: null };
+
+export async function loadDriveRelationship(actor: AccessActor, drive: RelationshipDrive): Promise<DriveRelationship> {
+  if (!(await checkActorDriveAuthentication(actor, drive.id)).allowed) return NO_RELATIONSHIP;
+  if (isDriveLead(actor.userId, drive)) return LEAD_RELATIONSHIP;
+  return { isOwner: false, membership: await loadEffectiveDriveMembership(actor.userId, drive) };
 }
 
 /**
@@ -32,6 +38,21 @@ export async function loadDriveRelationship(userId: string, drive: RelationshipD
  * shared resolver's (at most two) org queries, however many drives.
  */
 export async function loadDriveRelationships(
+  actor: AccessActor,
+  driveList: RelationshipDrive[],
+  options: ResolveMembershipsOptions = { audit: true },
+): Promise<Map<string, DriveRelationship>> {
+  const allowed = await filterDrivesForActor(actor, driveList.map((drive) => drive.id));
+  const relationships = await loadUserDriveRelationships(actor.userId, driveList.filter((drive) => allowed.has(drive.id)), options);
+  for (const drive of driveList) if (!allowed.has(drive.id)) relationships.set(drive.id, NO_RELATIONSHIP);
+  return relationships;
+}
+
+/**
+ * loadDriveRelationships as membership facts about `userId`, with no credential in them: for a wallet's standing
+ * (spend-standing), which decides what someone may fund or be billed for, not whether a credential may open content.
+ */
+export async function loadUserDriveRelationships(
   userId: string,
   driveList: RelationshipDrive[],
   options: ResolveMembershipsOptions = { audit: true },
@@ -80,16 +101,17 @@ async function writeOrgPowerDriveAction(
   action: DriveLeadAction,
   authority: { via: 'org-owner' | 'org-admin'; orgId: string },
 ): Promise<void> {
-  const event: AuditEvent = {
-    eventType: 'authz.access.granted',
-    userId,
-    resourceType: 'drive',
-    resourceId: drive.id,
-    details: { via: authority.via === 'org-owner' ? 'org_owner' : 'org_admin', action, orgId: authority.orgId, orgVisibility: drive.orgVisibility },
-  };
-  loggers.security.info(`[Audit] ${event.eventType}`, { ...event });
   try {
-    await securityAudit.logEvent(event);
+    // AUD-1: through the org audit outbox, durable once staged.
+    await recordOrgAuditEvent({
+      orgId: authority.orgId,
+      driveId: drive.id,
+      eventType: 'authz.access.granted',
+      actorId: userId,
+      resourceType: 'drive',
+      resourceId: drive.id,
+      details: { via: authority.via === 'org-owner' ? 'org_owner' : 'org_admin', action, orgVisibility: drive.orgVisibility },
+    });
   } catch (error) {
     loggers.security.error('[Audit] org lead-action audit write failed', {
       userId,
@@ -106,10 +128,12 @@ async function writeOrgPowerDriveAction(
  * Owner/Admin power is what allows the action.
  */
 export async function loadDriveLeadAuthority(
-  userId: string,
+  actor: AccessActor,
   drive: RelationshipDrive,
   action: DriveLeadAction,
 ): Promise<DriveLeadAuthority> {
+  if (!(await checkActorDriveAuthentication(actor, drive.id)).allowed) return { allowed: false };
+  const { userId } = actor;
   if (isDriveLead(userId, drive)) return { allowed: true, via: 'lead' };
   if (!ORGS_ENABLED || drive.orgId === null) return { allowed: false };
 
@@ -124,9 +148,9 @@ export async function loadDriveLeadAuthority(
  * drive and does not lead it. Writes nothing for the lead, a personal drive, or while dark.
  */
 export async function recordOrgPowerDriveAction(
-  userId: string,
+  actor: AccessActor,
   drive: RelationshipDrive,
   action: DriveLeadAction,
 ): Promise<void> {
-  await loadDriveLeadAuthority(userId, drive, action);
+  await loadDriveLeadAuthority(actor, drive, action);
 }

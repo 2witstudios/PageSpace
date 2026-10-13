@@ -59,6 +59,8 @@ export function policyChangeSummary(result: {
 
 /** Each policy's name as the Policies page shows it. Exhaustive: a new policy without a label fails tsc. */
 export const POLICY_LABELS: Record<OrgPolicyKey, string> = {
+  requireStrongSignIn: 'Require strong sign-in',
+  maximumSessionAgeMinutes: 'Maximum sign-in age',
   guests: 'Guests',
   publicShareLinks: 'Public share links',
   publishWeb: 'Publish pages to the web',

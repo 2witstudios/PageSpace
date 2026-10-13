@@ -24,7 +24,6 @@ import { organizations, orgMembers, orgSubscriptions } from '@pagespace/db/schem
 import { orgGuestHolds } from '@pagespace/db/schema/org-guest-holds';
 
 vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
-vi.mock('../../audit/org-audit', () => ({ recordOrgAuditEvent: vi.fn(async () => {}), recordOrgAuditEventAfterCommit: vi.fn(async () => true) }));
 vi.mock('../revocation-kick', () => ({ kickForDriveMembershipRevocation: vi.fn(async () => {}), kickForPagePermissionRevocation: vi.fn(async () => {}) }));
 
 import { updateOrgPolicies } from '../../organizations/policies';
@@ -35,6 +34,7 @@ import { getUserAccessLevel } from '../permissions';
 import { admitReentry, claimPendingGuestApproval, consumeApprovedInvitation, holdOrgGuestsUnderPolicy, listPendingGuestApprovalViews, markApprovedInvitation } from '../guest-holds';
 import { lockOrgsOfDrivesForShare } from '../../organizations/policy-reader';
 import { completeApprovedPageGrant } from '../page-grant-admission';
+import { credentialActor } from '../access-actor';
 
 const deps: OrgDriveServiceDeps = { ...orgDriveServiceDeps, syncOrgMembership: async () => async () => {} };
 const created = { userIds: [] as string[], driveIds: [] as string[], orgIds: [] as string[] };
@@ -97,7 +97,7 @@ afterAll(async () => {
 });
 
 const setGuests = async (guests: 'off' | 'approve' | 'on') => {
-  const r = await updateOrgPolicies({ orgId: w.orgId, actorId: w.owner, patch: { guests } });
+  const r = await updateOrgPolicies({ orgId: w.orgId, actorId: w.owner, actorAuthentication: null, patch: { guests } });
   if (!r.ok) throw new Error(`guests ${guests} refused`);
 };
 const EDIT = { canView: true, canEdit: true, canShare: false, canDelete: false };
@@ -119,18 +119,18 @@ describe('a drive moved into an org brings its outsiders under the guests policy
   it('POL-2 (partial) X-6 (partial) guests OFF: the moved drive\'s outsider loses the member row, the edit grant and the token scope — parked, restored when guests come back on', async () => {
     await setGuests('off');
     const { drive, page, tokenId } = await personalDriveWithOutsider();
-    expect((await getUserAccessLevel(w.outsider, page))?.canEdit).toBe(true);
+    expect((await getUserAccessLevel(credentialActor(w.outsider, null), page))?.canEdit).toBe(true);
 
     expect(await moveDriveToOrg(w.owner, drive, { orgId: w.orgId, orgVisibility: 'RESTRICTED' }, deps)).toMatchObject({ ok: true });
 
-    expect(await getUserAccessLevel(w.outsider, page)).toBeNull();
+    expect(await getUserAccessLevel(credentialActor(w.outsider, null), page)).toBeNull();
     expect(await db.select().from(mcpTokenDrives).where(eq(mcpTokenDrives.driveId, drive))).toEqual([]);
     const [hold] = await holds('suspended');
     expect(hold.parked?.member).toMatchObject({ userId: w.outsider, driveId: drive });
     expect(hold.parked?.tokenScopes).toEqual([expect.objectContaining({ tokenId, role: 'MEMBER' })]);
 
     await setGuests('on');
-    expect((await getUserAccessLevel(w.outsider, page))?.canEdit).toBe(true);
+    expect((await getUserAccessLevel(credentialActor(w.outsider, null), page))?.canEdit).toBe(true);
     expect(await db.select({ role: mcpTokenDrives.role }).from(mcpTokenDrives).where(eq(mcpTokenDrives.driveId, drive))).toEqual([{ role: 'MEMBER' }]);
   });
 
@@ -139,7 +139,7 @@ describe('a drive moved into an org brings its outsiders under the guests policy
     const { drive, page } = await personalDriveWithOutsider();
     await moveDriveToOrg(w.owner, drive, { orgId: w.orgId, orgVisibility: 'RESTRICTED' }, deps);
 
-    expect(await getUserAccessLevel(w.outsider, page)).toBeNull();
+    expect(await getUserAccessLevel(credentialActor(w.outsider, null), page)).toBeNull();
     const [pending] = await holds('pending_approval');
     expect(pending).toMatchObject({ origin: 'page_grant', driveId: drive });
     expect(pending.request.permissions).toEqual([{ pageId: page, ...EDIT, expiresAt: null }]);
@@ -147,7 +147,7 @@ describe('a drive moved into an org brings its outsiders under the guests policy
     const claim = await claimPendingGuestApproval({ orgId: w.orgId, holdId: pending.id });
     if (!claim) throw new Error('claim');
     expect(await completeApprovedPageGrant(claim)).toMatchObject({ ok: true });
-    expect((await getUserAccessLevel(w.outsider, page))?.canEdit).toBe(true);
+    expect((await getUserAccessLevel(credentialActor(w.outsider, null), page))?.canEdit).toBe(true);
     expect(await db.select().from(driveMembers).where(and(eq(driveMembers.driveId, drive), eq(driveMembers.userId, w.outsider)))).toHaveLength(1);
   });
 
@@ -156,7 +156,7 @@ describe('a drive moved into an org brings its outsiders under the guests policy
     const { drive, page } = await personalDriveWithOutsider();
     await db.insert(driveMembers).values({ driveId: drive, userId: w.member, role: 'MEMBER', acceptedAt: new Date() });
     await moveDriveToOrg(w.owner, drive, { orgId: w.orgId, orgVisibility: 'RESTRICTED' }, deps);
-    expect((await getUserAccessLevel(w.outsider, page))?.canEdit).toBe(true);
+    expect((await getUserAccessLevel(credentialActor(w.outsider, null), page))?.canEdit).toBe(true);
     expect(await db.select().from(orgGuestHolds).where(eq(orgGuestHolds.orgId, w.orgId))).toEqual([]);
   });
 });
@@ -166,11 +166,11 @@ describe('a member who leaves becomes an outsider of what they kept', () => {
     await db.insert(driveMembers).values({ driveId: w.orgDrive, userId: w.member, role: 'MEMBER', source: 'invite', acceptedAt: new Date() });
     await db.insert(pagePermissions).values({ pageId: w.orgPage, userId: w.member, ...EDIT, grantedBy: w.owner });
     await setGuests('off');
-    expect((await getUserAccessLevel(w.member, w.orgPage))?.canEdit).toBe(true);
+    expect((await getUserAccessLevel(credentialActor(w.member, null), w.orgPage))?.canEdit).toBe(true);
 
     expect(await leaveOrganization(w.member, w.orgId)).toMatchObject({ ok: true, heldAsGuest: 1 });
 
-    expect(await getUserAccessLevel(w.member, w.orgPage)).toBeNull();
+    expect(await getUserAccessLevel(credentialActor(w.member, null), w.orgPage)).toBeNull();
     expect(await holds('suspended', w.member)).toHaveLength(1);
   });
 
@@ -277,7 +277,7 @@ describe('approve mode replays exactly what was held (independent re-verify of #
     if (!claim) throw new Error('claim');
     await completeApprovedPageGrant(claim);
 
-    expect(await getUserAccessLevel(w.outsider, expiredPage)).toBeNull();
+    expect(await getUserAccessLevel(credentialActor(w.outsider, null), expiredPage)).toBeNull();
     const [kept] = await db.select().from(pagePermissions).where(and(eq(pagePermissions.userId, w.outsider), eq(pagePermissions.pageId, soonPage)));
     expect(kept.expiresAt?.toISOString()).toBe(soon.toISOString());
   });
@@ -352,7 +352,7 @@ describe('approve mode replays exactly what was held (independent re-verify of #
     let policySettled = false;
     await db.transaction(async (tx) => {
       await lockOrgsOfDrivesForShare(tx, { driveIds: [], pageIds: [w.orgPage] });
-      const change = updateOrgPolicies({ orgId: w.orgId, actorId: w.owner, patch: { guests: 'off' } }).finally(() => { policySettled = true; });
+      const change = updateOrgPolicies({ orgId: w.orgId, actorId: w.owner, actorAuthentication: null, patch: { guests: 'off' } }).finally(() => { policySettled = true; });
       await new Promise((r) => setTimeout(r, 300));
       expect(policySettled).toBe(false);
       void change;

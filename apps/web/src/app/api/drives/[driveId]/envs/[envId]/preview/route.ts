@@ -17,6 +17,7 @@ import { isDevPreviewConfigured } from '@pagespace/lib/services/sandbox/preview/
 import { resolveEnvInDrive } from '@/lib/drive-envs/drive-envs-runtime';
 import { readDevPreviewStatusForUser } from '@/lib/dev-preview/preview-runtime';
 import { canManageDevPreview } from '@/lib/dev-preview/manage-decision';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
 const ROUTE = 'drive-envs/preview';
@@ -30,14 +31,14 @@ export async function GET(request: Request, context: { params: Promise<{ driveId
 
     if (!(await isPrincipalDriveMember(auth, driveId))) {
       auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'drive', resourceId: driveId, details: { route: ROUTE, envId } });
-      return NextResponse.json({ error: 'Not a member of this drive' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Not a member of this drive' }, { status: 403 }));
     }
     if (!(await resolveEnvInDrive(envId, driveId))) return NextResponse.json({ error: 'Environment not found' }, { status: 404 });
 
     const holder = { kind: 'env', id: envId } as const;
     // Independent reads, together (see the session route).
     const [result, manage] = await Promise.all([
-      readDevPreviewStatusForUser({ authorizeAs: holder, userId: auth.userId }),
+      readDevPreviewStatusForUser({ authorizeAs: holder, actor: actorFromAuth(auth)}),
       canManageDevPreview(auth, { holder, sessionOwnerId: null, driveId }),
     ]);
     if (!result.ok) {
