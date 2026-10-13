@@ -202,3 +202,67 @@ describe('find in page (IMC-9.10)', () => {
     });
   });
 });
+
+describe('find shortcut edge cases and updatedAt parsing (IMC-9.10)', () => {
+  const ShortcutProbe = () => {
+    useFindShortcut();
+    return null;
+  };
+  const pressFind = () => {
+    const modifier = getEffectiveBinding('editing.find').startsWith('Ctrl+') ? { ctrlKey: true } : { metaKey: true };
+    const event = new KeyboardEvent('keydown', { key: 'f', ...modifier, bubbles: true, cancelable: true });
+    document.dispatchEvent(event);
+    return event;
+  };
+
+  beforeEach(() => useFindStore.getState().reset());
+
+  test('ignores keys that are not the find binding', () => {
+    mount(<ShortcutProbe />);
+    const event = new KeyboardEvent('keydown', { key: 'g', bubbles: true, cancelable: true });
+    document.dispatchEvent(event);
+    assert({ given: 'an unrelated key', should: 'leave find closed', actual: [useFindStore.getState().isOpen, event.defaultPrevented], expected: [false, false] });
+  });
+
+  test('leaves the shortcut to Monaco while it has focus', () => {
+    mount(<ShortcutProbe />);
+    const monaco = document.createElement('div');
+    monaco.className = 'monaco-editor';
+    const input = document.createElement('input');
+    monaco.append(input);
+    document.body.append(monaco);
+    input.focus();
+    const event = pressFind();
+    monaco.remove();
+    assert({ given: 'focus inside Monaco', should: 'not open find', actual: [useFindStore.getState().isOpen, event.defaultPrevented], expected: [false, false] });
+  });
+
+  test('a second press while open focuses and selects the find field', () => {
+    mount(<ShortcutProbe />);
+    const field = document.createElement('input');
+    field.setAttribute('data-find-field', '');
+    field.value = 'owner';
+    document.body.append(field);
+    useFindStore.setState({ isOpen: true });
+    pressFind();
+    const focused = document.activeElement === field;
+    field.remove();
+    assert({ given: 'find already open', should: 'focus the find field', actual: focused, expected: true });
+  });
+
+  test('a second press while open with no field on screen does nothing harmful', () => {
+    mount(<ShortcutProbe />);
+    useFindStore.setState({ isOpen: true });
+    const event = pressFind();
+    assert({ given: 'find open without a field', should: 'still cancel the browser find', actual: event.defaultPrevented, expected: true });
+  });
+
+  test('editedAtOf accepts a Date, and rejects other types and invalid dates', () => {
+    assert({
+      given: 'a Date, a number, and an unparseable string',
+      should: 'return the Date, then null, then null',
+      actual: [editedAtOf({ updatedAt: NOW })?.toISOString(), editedAtOf({ updatedAt: 5 }), editedAtOf({ updatedAt: 'not a date' }), editedAtOf('x')],
+      expected: [NOW.toISOString(), null, null, null],
+    });
+  });
+});

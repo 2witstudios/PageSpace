@@ -18,7 +18,7 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
 // The URL is the shell's only input besides the store. Next's router is the
 // seam: a navigation is a new pathname with the same layout still mounted.
-const navigation = vi.hoisted(() => ({ pathname: '/drive-1' }));
+const navigation = vi.hoisted(() => ({ pathname: '/drive-1' as string | null }));
 vi.mock('next/navigation', () => ({
   usePathname: () => navigation.pathname,
   // The palette navigates through the router; its own suite proves where.
@@ -164,6 +164,11 @@ vi.mock('@/ui/chat/chat-history/chat-history', async () => {
   };
 });
 
+// A drive tool's pane loads its own data; its suites prove it. Here it only has to be in the list slot.
+vi.mock('@/ui/frame/tool-pane/tool-pane', () => ({
+  ToolPane: ({ tool, driveId }: { tool: string; driveId: string }) => h('div', { 'data-tool-pane': `${tool}:${driveId}` }),
+}));
+
 const { Shell } = await import('./shell');
 
 let root: Root | null = null;
@@ -189,19 +194,19 @@ const initialDrives = [
 /** The rail's live badge count listens on the tab's realtime connection. */
 const realtime = fakeRealtime();
 
-const render = () =>
+const render = (homeDriveId: string | null = 'home-1') =>
   act(() => {
     root?.render(
       h(RealtimeProvider, {
         client: realtime.client,
-        children: h(Shell, { homeDriveId: 'home-1', initialDrives, children: h(Route) }),
+        children: h(Shell, { homeDriveId, initialDrives, children: h(Route) }),
       }),
     );
   });
 
-const navigate = (pathname: string) => {
+const navigate = (pathname: string, homeDriveId: string | null = 'home-1') => {
   navigation.pathname = pathname;
-  render();
+  render(homeDriveId);
 };
 
 const slot = (name: string): HTMLElement => {
@@ -240,6 +245,49 @@ afterEach(() => {
 });
 
 describe('Shell', () => {
+  test('a drive tool fills the list with its pane and names the object for the tool', () => {
+    navigate('/drive-1/members');
+    assert({
+      given: 'a drive tool address',
+      should: 'mount that tool pane for the drive and title the object column with the tool',
+      actual: [
+        slot('list').querySelector<HTMLElement>('[data-tool-pane]')?.dataset.toolPane,
+        slot('object').querySelector('section')?.getAttribute('aria-label') ?? container.querySelector('section[aria-label="Members"]')?.getAttribute('aria-label'),
+      ],
+      expected: ['members:drive-1', 'Members'],
+    });
+  });
+
+  test('screens that open Imago folded fold it on entry', () => {
+    render();
+    navigate('/drive-1/calendar');
+    assert({
+      given: 'entering a folded screen',
+      should: 'collapse Imago in the store',
+      actual: getUiState().resources.imagoCollapsed,
+      expected: true,
+    });
+  });
+
+  test('without a Home drive the not-found page offers no way home, and the account stage still renders', () => {
+    render(null);
+    navigate('/drive-9', null);
+    const missingHome = container.querySelector('a[href="/null"]');
+    navigate('/account', null);
+    assert({
+      given: 'a viewer with no Home drive on an unknown drive, then on the account',
+      should: 'link nowhere and keep the shell mounted',
+      actual: [missingHome, slot('list').querySelector('nav')?.getAttribute('aria-label')],
+      expected: [null, 'Account'],
+    });
+  });
+
+  test('a missing pathname is read as the root', () => {
+    navigation.pathname = null;
+    render();
+    assert({ given: 'no pathname from the router', should: 'still render the shell', actual: container.firstElementChild !== null, expected: true });
+  });
+
   test('one shell across every navigation', () => {
     render();
     const before = ['rail', 'stage', 'list', 'object', 'chat', 'empty'].map(slot);

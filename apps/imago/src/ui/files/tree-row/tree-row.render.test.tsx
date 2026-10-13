@@ -182,3 +182,15 @@ describe('renderTreeRows() multi-select and row actions (IMC-9.6, IMC-9.3)', () 
     });
   });
 });
+
+describe('renderTreeRows() pending rows that are not open', () => {
+  test('a row being created that is not the open page carries no current marker', () => {
+    const markup = html({ pendingIds: ['roadmap'], selectedId: 'other' });
+    assert({
+      given: 'a pending row that is not the open page',
+      should: 'draw it busy without aria-current',
+      actual: [/<span[^>]*aria-busy="true"/.test(markup), /aria-busy="true"[^>]*aria-current/.test(markup)],
+      expected: [true, false],
+    });
+  });
+});

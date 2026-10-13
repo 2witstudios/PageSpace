@@ -85,3 +85,23 @@ describe('MultiSelectToolbar (IMC-9.6)', () => {
     expect(sel.exit).not.toHaveBeenCalled();
   });
 });
+
+describe('MultiSelectToolbar without a trashed callback', () => {
+  it('trashes and exits even when the host does not ask to hear about it', async () => {
+    state.client.apiFetch.mockResolvedValue({ trashedCount: 3 });
+    const sel = selection();
+    render(<MultiSelectToolbar selection={sel} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Move to Trash' }));
+    await waitFor(() => expect(sel.exit).toHaveBeenCalled());
+  });
+
+  it('tells the host which pages were trashed when it listens', async () => {
+    state.client.apiFetch.mockResolvedValue({ trashedCount: 3 });
+    const onTrashed = vi.fn();
+    render(<MultiSelectToolbar selection={selection()} onTrashed={onTrashed} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Move to Trash' }));
+    await waitFor(() => expect(onTrashed).toHaveBeenCalledWith(['a', 'b', 'c']));
+  });
+});

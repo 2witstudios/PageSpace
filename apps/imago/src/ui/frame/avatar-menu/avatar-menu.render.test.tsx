@@ -143,3 +143,35 @@ describe('renderAvatarMenu()', () => {
     });
   });
 });
+
+describe('avatar menu without optional account details', () => {
+  test('a name without an email shows no email line', () => {
+    const html = markup({ email: null });
+    assert({
+      given: 'a profile with a name but no email',
+      should: 'show the name and no email',
+      actual: [html.includes('Ada Lovelace'), html.includes('ada@example.com')],
+      expected: [true, false],
+    });
+  });
+
+  test('a plan with no reset date shows just the plan', () => {
+    const html = markup({ credits: { ...card, resets: null } });
+    assert({
+      given: 'credits on a plan that does not reset',
+      should: 'name the plan without a resets note',
+      actual: [html.includes('Pro</span>'), html.includes('resets')],
+      expected: [true, false],
+    });
+  });
+
+  test('credits with no plan show no plan line and a bare Billing row', () => {
+    const html = markup({ credits: { ...card, plan: null, resets: null } });
+    assert({
+      given: 'credits with no plan name',
+      should: 'label the billing row "Billing" with no plan in brackets',
+      actual: [html.includes('Billing ('), rows(html).some((row) => row.startsWith('Billing →'))],
+      expected: [false, true],
+    });
+  });
+});

@@ -117,3 +117,14 @@ describe('usersFrom()', () => {
     });
   });
 });
+
+describe('usersFrom() and resultsFrom() with unusable entries', () => {
+  test('skips users without an id and non-object entries', () => {
+    assert({
+      given: 'a user with an empty id, a user with a numeric id, and junk',
+      should: 'list none of them',
+      actual: usersFrom([{ id: '', label: 'Ghost', type: 'user' }, { id: 7, label: 'Num', type: 'user' }, null, 'x']),
+      expected: [],
+    });
+  });
+});

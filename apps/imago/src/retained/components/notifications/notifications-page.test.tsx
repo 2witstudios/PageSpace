@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act } from 'react';
-import { afterEach, beforeEach, describe, test, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, test, vi } from 'vitest';
 import { assert } from 'riteway/vitest';
 import { mount, unmountAll } from '@/ui/test-support/dom';
 import { useNotificationStore } from '@/retained/stores/useNotificationStore';
@@ -14,6 +14,11 @@ const push = vi.hoisted(() => vi.fn());
 
 vi.mock('@/retained/lib/auth/auth-fetch', () => ({ fetchWithAuth, patch, del }));
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push }) }));
+
+// A fixed midday clock so "22 minutes ago" and the Today/Yesterday groups do not depend on when the suite runs.
+vi.useFakeTimers({ toFake: ['Date'] });
+vi.setSystemTime(new Date('2026-10-12T12:00:00'));
+afterAll(() => vi.useRealTimers());
 
 const NOW = Date.now();
 const minutesAgo = (minutes: number) => new Date(NOW - minutes * 60_000);

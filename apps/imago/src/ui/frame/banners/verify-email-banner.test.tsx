@@ -5,7 +5,7 @@ import { assert } from 'riteway/vitest';
 import { ImagoSWRProvider } from '@/api/swr-provider';
 import { fakeWeb } from '../../test-support/fake-web';
 import { click, mount, unmountAll } from '../../test-support/dom';
-import { RESEND_VERIFICATION, resetVerifyEmailSent, useVerifyEmailBanner } from './verify-email-banner';
+import { RESEND_VERIFICATION, resetVerifyEmailSent, useVerifyEmail, useVerifyEmailBanner } from './verify-email-banner';
 import { renderBannerSlot } from './banner-slot.render';
 
 const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
@@ -128,5 +128,94 @@ describe('useVerifyEmailBanner()', () => {
       actual: [toast.error.mock.calls.length, bannerOf(container)?.textContent?.includes('Resend Verification Email')],
       expected: [1, true],
     });
+  });
+
+  test('a second Resend press while one is in flight sends nothing more', async () => {
+    let release: (response: Response) => void = () => undefined;
+    const fake = web(false, () => new Promise<Response>((resolve) => (release = resolve)));
+    const container = mount(
+      <ImagoSWRProvider client={fake.client}>
+        <Slot />
+      </ImagoSWRProvider>,
+    );
+    await settle(() => {
+      if (bannerOf(container) === null) throw new Error('not shown');
+    });
+    const resend = bannerOf(container)?.querySelector('button') as HTMLButtonElement;
+    // The press handler runs before React disables the button, as a fast double click does.
+    click(resend);
+    resend.disabled = false;
+    click(resend);
+    await settle(() => {
+      if (fake.count(`POST ${RESEND_VERIFICATION}`) === 0) throw new Error('not requested');
+    });
+    release(Response.json({ message: 'sent' }));
+    await settle(() => {
+      if (toast.success.mock.calls.length === 0) throw new Error('not sent');
+    });
+
+    assert({
+      given: 'Resend pressed twice before the first send finished',
+      should: 'post once',
+      actual: fake.count(`POST ${RESEND_VERIFICATION}`),
+      expected: 1,
+    });
+  });
+
+  test('the sent copy omits the address when the profile has none', async () => {
+    const fake = fakeWeb({
+      'GET /api/auth/me': () => Response.json({ id: 'u', name: 'Ada', emailVerified: false }),
+      [`POST ${RESEND_VERIFICATION}`]: () => Response.json({ message: 'sent' }),
+    });
+    const container = mount(
+      <ImagoSWRProvider client={fake.client}>
+        <Slot />
+      </ImagoSWRProvider>,
+    );
+    await settle(() => {
+      if (bannerOf(container) === null) throw new Error('not shown');
+    });
+    click(bannerOf(container)?.querySelector('button') as HTMLButtonElement);
+    await settle(() => {
+      if (!bannerOf(container)?.textContent?.includes('Verification email sent!')) throw new Error('not sent');
+    });
+
+    assert({
+      given: 'a profile without an email address',
+      should: 'say the email was sent without naming an address',
+      actual: bannerOf(container)?.textContent?.includes('Please check your inbox.') && !bannerOf(container)?.textContent?.includes(' at '),
+      expected: true,
+    });
+  });
+
+  test('resend called again while sending is ignored', async () => {
+    let release: (response: Response) => void = () => undefined;
+    const fake = web(false, () => new Promise<Response>((resolve) => (release = resolve)));
+    let latest: ReturnType<typeof useVerifyEmail> | null = null;
+    function Probe() {
+      latest = useVerifyEmail();
+      return null;
+    }
+    mount(
+      <ImagoSWRProvider client={fake.client}>
+        <Probe />
+      </ImagoSWRProvider>,
+    );
+    await settle(() => {
+      if (latest?.unverified !== true) throw new Error('profile not loaded');
+    });
+    act(() => void latest?.resend());
+    await settle(() => {
+      if (latest?.sending !== true) throw new Error('not sending');
+    });
+    await act(async () => {
+      await latest?.resend();
+    });
+    release(Response.json({ message: 'sent' }));
+    await settle(() => {
+      if (latest?.sending !== false) throw new Error('still sending');
+    });
+
+    assert({ given: 'resend called during a send', should: 'post only once', actual: fake.count(`POST ${RESEND_VERIFICATION}`), expected: 1 });
   });
 });

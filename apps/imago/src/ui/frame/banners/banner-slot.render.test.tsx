@@ -41,4 +41,16 @@ describe('renderBannerSlot()', () => {
       expected: [true, true, true, true, true],
     });
   });
+
+  test('a banner with no actions renders only its message', () => {
+    const html = renderToString(
+      h('div', null, renderBannerSlot({ id: 'conflict', priority: 80, tone: 'danger', message: 'Edit conflict.' })),
+    );
+    assert({
+      given: 'a banner without actions',
+      should: 'render the message and no action container',
+      actual: [html.includes('Edit conflict.'), html.includes('<button')],
+      expected: [true, false]
+    });
+  });
 });
