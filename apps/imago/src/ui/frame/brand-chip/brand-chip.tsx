@@ -1,5 +1,7 @@
 'use client';
 
+import { usePathname } from '@/retained-adapters/navigation';
+import { useMyOrganizations } from '@/retained/hooks/useMyOrganizations';
 import { useState } from 'react';
 import DriveSwitcherDialog from '@/retained/components/layout/navbar/DriveSwitcherDialog';
 import type { DriveSummary } from '../drives/drives';
@@ -20,11 +22,16 @@ export type BrandChipProps = {
  * for none of its stores.
  */
 export function BrandChip({ currentId, drives }: BrandChipProps) {
+  const pathname = usePathname();
+  const { orgById } = useMyOrganizations();
+  const orgId = /^\/orgs\/([^/]+)(?:\/|$)/.exec(pathname ?? '')?.[1];
+  const organization = orgId ? orgById(orgId) : null;
   const [open, setOpen] = useState(false);
   const [opened, setOpened] = useState(false);
   return renderBrandChip({
     currentId,
     drives,
+    organization,
     open,
     onToggle: () => {
       setOpened(true);

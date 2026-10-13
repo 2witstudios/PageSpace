@@ -26,6 +26,7 @@ import { Button } from '@/retained/components/ui/button';
 import { Input } from '@/retained/components/ui/input';
 import { Switch } from '@/retained/components/ui/switch';
 import { fetchWithAuth, post, patch, del } from '@/retained/lib/auth/auth-fetch';
+import { AutomationSkipNote, AutomationSpendLine, isSpendSkip } from '@/retained/components/wallets/AutomationSpendState';
 import { useAuthStore } from '@/retained/stores/useAuthStore';
 
 interface WebhookRow {
@@ -35,6 +36,7 @@ interface WebhookRow {
   isEnabled: boolean;
   lastFiredAt: string | null;
   lastFireError: string | null;
+  ownerLeftAt?: string | null;
 }
 
 interface PageWebhooksDialogProps {
@@ -422,7 +424,11 @@ function PageWebhooksDialogImpl({ open, onOpenChange, pageId, pageType }: PageWe
                       <span className="text-xs font-mono text-muted-foreground truncate block">
                         …{webhook.webhookToken.slice(-8)}
                       </span>
-                      {webhook.lastFireError && (
+                      {webhook.ownerLeftAt ? (
+                        <AutomationSpendLine creatorName={null} walletLabel={null} ownerLeft />
+                      ) : isSpendSkip(webhook.lastFireError) ? (
+                        <AutomationSkipNote error={webhook.lastFireError} driveId={null} className="text-xs text-muted-foreground mt-1" />
+                      ) : webhook.lastFireError && (
                         <p className="text-xs text-destructive mt-1">Last delivery failed: {webhook.lastFireError}</p>
                       )}
                     </div>

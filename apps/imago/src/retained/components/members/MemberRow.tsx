@@ -1,5 +1,6 @@
 'use client';
 
+import { GuestBadge, MemberSourceBadge } from './PageLinkGuestsSection';
 import { Trash2 } from 'lucide-react';
 import { Button } from '@/retained/components/ui/button';
 import { Badge } from '@/retained/components/ui/badge';
@@ -8,6 +9,8 @@ import Link from '@/retained-adapters/link';
 
 interface MemberRowProps {
   member: {
+    source?: 'invite' | 'org' | 'lead';
+    isGuest?: boolean;
     id: string;
     userId: string;
     role: string;
@@ -34,12 +37,13 @@ interface MemberRowProps {
       share: number;
     };
   };
+  orgLabels?: boolean;
   driveId: string;
   currentUserRole: 'OWNER' | 'ADMIN' | 'MEMBER';
   onRemove: () => void;
 }
 
-export function MemberRow({ member, driveId, currentUserRole, onRemove }: MemberRowProps) {
+export function MemberRow({ member, driveId, orgLabels = false, currentUserRole, onRemove }: MemberRowProps) {
   const canManage = currentUserRole === 'OWNER' || currentUserRole === 'ADMIN';
   const displayName = member.profile?.displayName || member.user.name || member.user.email || 'Unknown User';
   const initials = displayName
@@ -125,6 +129,8 @@ export function MemberRow({ member, driveId, currentUserRole, onRemove }: Member
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             <p className="font-medium truncate">{displayName}</p>
+            {orgLabels && member.isGuest && member.role !== 'GUEST' && <GuestBadge />}
+            {orgLabels && member.source && <MemberSourceBadge source={member.source} />}
             {member.profile?.username && (
               <span className="text-sm text-gray-500 dark:text-gray-400">@{member.profile.username}</span>
             )}

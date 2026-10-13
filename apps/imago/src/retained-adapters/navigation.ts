@@ -73,7 +73,8 @@ export function useRouter() {
 }
 
 /** Retained readers see their established route grammar; writes translate back. */
-export function classicPathname(pathname: string): string {
+export function classicPathname(pathname: string | null): string {
+  if (pathname === null) return '/dashboard';
   if (pathname === '/account/wallets') return '/settings/usage/wallets';
   if (pathname === '/account/organizations') return '/settings';
   if (pathname === '/orgs' || pathname.startsWith('/orgs/')) return pathname;

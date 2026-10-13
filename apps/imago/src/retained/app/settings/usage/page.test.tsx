@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, test, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { assert } from 'riteway/vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import UsagePage from './page';
@@ -107,11 +107,11 @@ describe('UsagePage (/account/usage)', () => {
       given: 'a Pro balance of 9 of 15 monthly credits left',
       should: 'show the left and allowance as whole credits and the used portion on the progress bar',
       actual: {
-        balance: screen.getByText('/ 15 credits').previousElementSibling?.textContent,
-        used: screen.getByText('6 of 15 used', { exact: false }) !== null,
+        balance: screen.getByText('/ 1,500 credits').previousElementSibling?.textContent,
+        used: screen.getByText('600 of 1,500 used', { exact: false }) !== null,
         bar: bar.tagName,
       },
-      expected: { balance: '9', used: true, bar: 'DIV' },
+      expected: { balance: '900', used: true, bar: 'DIV' },
     });
   });
 
@@ -156,7 +156,7 @@ describe('UsagePage (/account/usage)', () => {
       },
       expected: {
         headers: ['Agent', 'Runtime', 'Calls', 'Credits'],
-        row: 'Sandbox A2m35',
+        row: 'Sandbox A2m3500',
         environment: true,
         inFlight: true,
       },
@@ -221,4 +221,10 @@ describe('UsagePage (/account/usage)', () => {
       expected: true,
     });
   });
+});
+
+test('Usage always exposes the native wallet directory, including when billing controls are hidden', () => {
+  state.billingHidden = true;
+  render(<UsagePage />);
+  expect(screen.getByRole('link', { name: 'Wallets' }).getAttribute('href')).toBe('/account/wallets');
 });

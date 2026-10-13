@@ -113,3 +113,8 @@ describe('pageTabOf()', () => {
     });
   });
 });
+
+
+test('organization settings have account screen labels instead of a fictitious drive', () => {
+  assert({ given: 'the org hub and its wallet pool billing destination', should: 'name their actual screens', actual: [tabLabelFor('/orgs/org-1/settings'), tabLabelFor('/orgs/org-1/settings/billing')], expected: [{ kind: 'screen', title: 'Organization settings' }, { kind: 'screen', title: 'Plan & seats' }] });
+});

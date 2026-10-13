@@ -30,6 +30,7 @@ export type ChatPaneRenderProps = {
   readonly leading?: ReactNode;
   /** The head's closing control: Collapse Imago or Close Imago. */
   readonly trailing?: ReactNode;
+  readonly source?: ReactNode;
   /** What the agent answers against: the drive, the section, or the open object. */
   readonly contextLabel: string;
   /** Oldest first; undefined while the conversation loads. */
@@ -61,6 +62,7 @@ const renderHead = (props: ChatPaneRenderProps): ReactNode => (
     {props.picker}
     {renderChip(props.chip)}
     <span className="flex-1" />
+    {props.source ?? null}
     <button
       type="button"
       className={headControlClass}

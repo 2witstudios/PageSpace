@@ -12,10 +12,21 @@
 
 interface StripeConfig {
   publishableKey: string;
-  priceIds: {
-    pro: string;
-    founder: string;
-    business: string;
+  /** The only purchasable personal plan (SEAT-2, A-9). */
+  priceIds: { pro: string };
+  /**
+   * The ORGANIZATION plan's two prices (SEAT-2, A-8): the Business base (its
+   * included seats) and the extra seat (per seat beyond them), billed as two
+   * items of one org subscription; the amounts and seat count are the tier
+   * table's (TIER_PLAN_LIMITS.business), never restated here. Ids only — every money
+   * amount the product shows or grants comes from the money-model module and
+   * the tier table, never from these prices (MON-5). An empty id means the
+   * price does not exist in that mode yet, and org provisioning refuses to run
+   * (fails closed) rather than guess.
+   */
+  orgPriceIds: {
+    businessBase: string;
+    extraSeat: string;
   };
 }
 
@@ -24,16 +35,21 @@ const config: Record<'test' | 'live', StripeConfig> = {
     publishableKey: 'pk_test_51S2LlZPCGvbSozobCg5nWBQeS8xHHYQqsbLZxAjzWnTL2o2BSSRtafSH36n4iaKe52Mmj2dGk2ybJtN5yLN6QCjX00JFh3a7MY',
     priceIds: {
       pro: 'price_1Sdbh6PCGvbSozob1IBfmSuv',        // $15/month
-      founder: 'price_1SdbhePCGvbSozobuNjSn5j0',    // $50/month
-      business: 'price_1SdbhfPCGvbSozobpTMXfqkX',   // $100/month
+    },
+    orgPriceIds: {
+      businessBase: 'price_1UK59APCGvbSozobgDCKr4zB', // org base (D-OW-20)
+      extraSeat: 'price_1UK59APCGvbSozobTxuoHMeP',    // per extra seat (D-OW-20)
     },
   },
   live: {
     publishableKey: 'pk_live_51S2LlQPRnBcvXFso7Y3yM21QcIuHM3b6Iz1VdOZ7d51aVaZvITRSs7M5KVpKF3jih2p2t59xwlR4Jr8DwIydW9Ht00KeOaUd35',
     priceIds: {
       pro: 'price_1SdfbXPRnBcvXFsoRbjnaQFS',        // $15/month
-      founder: 'price_1SdfbbPRnBcvXFsofn7L1leP',    // $50/month
-      business: 'price_1SdfbePRnBcvXFsoCvpJsSxw',   // $100/month
+    },
+    // Not created in live mode yet: org provisioning refuses while these are empty.
+    orgPriceIds: {
+      businessBase: '',
+      extraSeat: '',
     },
   },
 };

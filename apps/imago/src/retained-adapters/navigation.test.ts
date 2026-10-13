@@ -72,3 +72,7 @@ it('maps wallet and organization entrypoints to their native destinations', () =
 it('org settings use the account shell without a fictitious orgs drive', () => {
   expect(stageFor('/orgs/org-1/settings/members')).toEqual({ driveId: null, section: 'account', list: 'tree', object: { kind: 'account' } });
 });
+
+it('a pathname unavailable during hydration does not claim a drive or throw', () => {
+  expect(classicPathname(null)).toBe('/dashboard');
+});

@@ -249,3 +249,9 @@ describe('PageWebhooksDialog', () => {
     });
   });
 });
+
+test('a departed trigger creator shows Owner left rather than a raw failure', async () => {
+  fixtures.listing = { webhooks: [hook({ ownerLeftAt: '2026-09-01T00:00:00Z', lastFireError: 'AI credit gate denied: source_refused (creator_departed)' })] };
+  open();
+  await settle(() => assert({ given: 'a departed trigger creator', should: 'show the owner-left status instead of raw billing failure', actual: { ownerLeft: bodyText().includes('Owner left'), rawError: bodyText().includes('AI credit gate denied') }, expected: { ownerLeft: true, rawError: false } }));
+});

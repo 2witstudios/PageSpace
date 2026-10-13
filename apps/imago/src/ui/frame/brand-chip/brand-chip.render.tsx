@@ -9,6 +9,7 @@ export type BrandChipRenderProps = {
   readonly currentId: string | null;
   /** The viewer's drives as the API listed them; null until they arrive. */
   readonly drives: readonly DriveSummary[] | null;
+  readonly organization?: { readonly name: string } | null;
   readonly open: boolean;
   /** Void action: the tile was pressed. */
   readonly onToggle: () => void;
@@ -26,8 +27,8 @@ const initial = (name: string): string => name.trim().slice(0, 1).toUpperCase();
  */
 export function renderBrandChip(props: BrandChipRenderProps): ReactNode {
   const { drives, currentId, open, onToggle, switcher } = props;
-  const current = drives?.find((drive) => drive.id === currentId) ?? null;
-  const label = current === null ? 'Switch drive' : `Switch drive: ${current.name}`;
+  const current = props.organization ?? drives?.find((drive) => drive.id === currentId) ?? null;
+  const label = current === null ? 'Switch drive' : props.organization ? `Switch workspace: ${current.name}` : `Switch drive: ${current.name}`;
   return (
     <div className="relative">
       <button type="button" className={brandSummaryClass} aria-label={label} aria-haspopup="dialog" aria-expanded={open} onClick={onToggle}>

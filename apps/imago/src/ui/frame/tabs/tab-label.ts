@@ -79,9 +79,10 @@ const decode = (segment: string): string => {
 
 /** A tab's label source, from its path alone. */
 export const tabLabelFor = (path: string): TabLabel => {
-  const [first = '', second = '', third = ''] = path.split('/').filter(Boolean).map(decode);
+  const [first = '', second = '', third = '', fourth = ''] = path.split('/').filter(Boolean).map(decode);
   if (first === 'p') return { kind: 'page', pageId: second };
   if (first === 'dm') return { kind: 'conversation', conversationId: second };
+  if (first === 'orgs') return screen(third === 'drives' ? 'Drives' : ({ general: 'General', members: 'Members & seats', drives: 'Drives', policies: 'Policies', security: 'Security', billing: 'Plan & seats', audit: 'Audit log', attention: 'Needs your attention', danger: 'Danger zone' } as Readonly<Record<string, string>>)[fourth], 'Organization settings');
   if (first === 'account') return screen(ACCOUNT[second], 'Account');
   if (first === 'notifications') return screen('Notifications', 'Notifications');
   if (second === 'files' || second === 'messages' || second === 'tasks') return { kind: 'page', pageId: third };

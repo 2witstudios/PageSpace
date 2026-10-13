@@ -4,10 +4,18 @@ import {
   TIERS as CANONICAL_PLAN_ORDER,
   TIER_PLAN_LIMITS,
   formatTierBytes,
+  personalTiers,
   type SubscriptionTier,
 } from '@pagespace/lib/billing/subscription-tiers';
 import { stripeConfig } from '../stripe-config';
-import { MONTHLY_CREDIT_CENTS, monthlyCreditsPhrase } from './credits';
+import {
+  MONTHLY_CREDIT_CENTS,
+  monthlyCreditsPhrase,
+  monthlyCreditsPhraseForCents,
+  includedCreditsPhrase,
+  includedCreditsPhraseForCents,
+  topUpRatePhrase,
+} from './credits';
 
 export type { SubscriptionTier };
 
@@ -35,6 +43,21 @@ export interface PlanDefinition {
   iconColor: string;
   accentColor: string;
   description: string;
+  /**
+   * MON-6: the three facts a plan card states separately — the price
+   * (`price`), the included credits (an integer count, never a dollar figure)
+   * and the top-up rate. Both strings come from ./credits, the one in-app
+   * source for credit copy.
+   */
+  includedCredits: string;
+  topUpRate: string;
+  /**
+   * SEAT-2: whether this is the organization plan. An org plan is not offered
+   * to a lone user — see getPersonalPlans() — and states its seat terms.
+   */
+  isOrgPlan: boolean;
+  includedSeats: number;
+  extraSeatUsd: number;
   limits: {
     /**
      * Monthly included AI-credit allowance, in whole cents of customer-facing credit
@@ -74,7 +97,7 @@ export interface PlanDefinition {
 
 // Stripe Price IDs from hardcoded config (avoids Next.js build-time env var issues)
 const STRIPE_PRICE_ID_PRO = stripeConfig.priceIds.pro;
-const STRIPE_PRICE_ID_BUSINESS = stripeConfig.priceIds.business;
+const STRIPE_PRICE_ID_BUSINESS = stripeConfig.orgPriceIds.businessBase;
 
 // Storage/file-size/price/domain numbers derive from the canonical
 // TIER_PLAN_LIMITS table in @pagespace/lib/billing/subscription-tiers (a pure,
@@ -97,6 +120,17 @@ function planLimits(tier: SubscriptionTier): PlanDefinition['limits'] {
   };
 }
 
+function planTerms(tier: SubscriptionTier): Pick<PlanDefinition, 'includedCredits' | 'topUpRate' | 'isOrgPlan' | 'includedSeats' | 'extraSeatUsd'> {
+  const limits = TIER_PLAN_LIMITS[tier];
+  return {
+    includedCredits: includedCreditsPhrase(tier),
+    topUpRate: topUpRatePhrase(),
+    isOrgPlan: limits.isOrgPlan,
+    includedSeats: limits.includedSeats,
+    extraSeatUsd: limits.extraSeatUsd,
+  };
+}
+
 const storagePhrase = (tier: SubscriptionTier) =>
   `${formatTierBytes(TIER_PLAN_LIMITS[tier].quotaBytes)} storage`;
 const maxFilePhrase = (tier: SubscriptionTier) =>
@@ -112,6 +146,7 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
     iconColor: 'text-blue-500',
     accentColor: 'border-border bg-card/50',
     description: 'Perfect for getting started with PageSpace',
+    ...planTerms('free'),
     limits: planLimits('free'),
     features: [
       { name: monthlyCreditsPhrase('free'), included: true },
@@ -140,12 +175,13 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
     icon: Crown,
     iconColor: 'text-amber-500',
     accentColor: 'border-border bg-muted/80',
-    description: 'Best for professionals and growing teams',
+    description: 'Best for professionals',
     highlighted: true,
     stripePriceId: STRIPE_PRICE_ID_PRO,
+    ...planTerms('pro'),
     limits: planLimits('pro'),
     features: [
-      { name: monthlyCreditsPhrase('pro'), included: true, description: '3x more than Free' },
+      { name: monthlyCreditsPhrase('pro'), included: true, description: 'Refills every month; unused credits carry over' },
       { name: 'Buy more credits anytime', included: true },
       { name: 'Standard + Pro AI models', included: true, description: 'Advanced AI reasoning' },
       { name: storagePhrase('pro'), included: true, description: '4x more than Free' },
@@ -164,11 +200,12 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
     icon: Shield,
     iconColor: 'text-violet-500',
     accentColor: 'border-border bg-card/50',
-    description: 'Enterprise-grade features for large teams',
+    description: 'For teams: an organization with seats, a shared credit pool, and org-owned drives',
     stripePriceId: STRIPE_PRICE_ID_BUSINESS,
+    ...planTerms('business'),
     limits: planLimits('business'),
     features: [
-      { name: monthlyCreditsPhrase('business'), included: true, description: '20x more than Free' },
+      { name: monthlyCreditsPhrase('business'), included: true, description: 'One shared pool for the organization, larger with every extra seat' },
       { name: 'Buy more credits anytime', included: true },
       { name: 'Standard + Pro AI models', included: true, description: 'Maximum AI reasoning' },
       { name: storagePhrase('business'), included: true, description: '100x more than Free' },
@@ -180,6 +217,53 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
     ],
   },
 };
+
+/**
+ * MON-2: patch a plan's credit-derived fields with a server-supplied cents value.
+ *
+ * `PLANS` is a module-level constant built once, using this module's OWN evaluation
+ * of the money model (`MONTHLY_CREDIT_CENTS`). The ratio is a literal in the shared
+ * source, identical in every process including a `'use client'` browser bundle —
+ * `PLANS`'s own build-time number is correct there too, not just on the server. This function, and the `planCredits` fetch it patches from,
+ * remain correct to keep: they are simply no longer load-bearing for a client/server
+ * asymmetry that no longer exists (see money-model.ts's module doc comment for why
+ * an env var, and then a client mirror of one, couldn't guarantee that on their own).
+ *
+ * This function patches a `PlanDefinition`'s credit-derived fields with a supplied
+ * number — `includedCredits`, `limits.monthlyCreditsCents`, and the credit line
+ * inside `features` — without touching anything else. The credit feature is matched
+ * by its CURRENT text (`monthlyCreditsPhrase(plan.id)`, exactly how `PLANS` built it
+ * above) rather than assumed to be at a fixed index, so reordering a tier's
+ * `features` array can never silently patch the wrong line.
+ */
+export function withCreditsCents(plan: PlanDefinition, cents: number): PlanDefinition {
+  const creditFeatureName = monthlyCreditsPhrase(plan.id);
+  return {
+    ...plan,
+    includedCredits: includedCreditsPhraseForCents(plan.id, cents),
+    limits: { ...plan.limits, monthlyCreditsCents: cents },
+    features: plan.features.map((feature) =>
+      feature.name === creditFeatureName ? { ...feature, name: monthlyCreditsPhraseForCents(plan.id, cents) } : feature,
+    ),
+  };
+}
+
+/**
+ * Apply `withCreditsCents` across a list of plans wherever `creditsCentsByTier` has
+ * an entry for that plan's tier; a plan with no entry is returned unchanged (the
+ * module's own build-time number, shown only for the instant before the server
+ * response with `planCredits` arrives).
+ */
+export function withCreditOverrides(
+  plans: PlanDefinition[],
+  creditsCentsByTier?: Partial<Record<SubscriptionTier, number>>,
+): PlanDefinition[] {
+  if (!creditsCentsByTier) return plans;
+  return plans.map((plan) => {
+    const cents = creditsCentsByTier[plan.id];
+    return cents === undefined ? plan : withCreditsCents(plan, cents);
+  });
+}
 
 export const PLAN_ORDER: readonly SubscriptionTier[] = CANONICAL_PLAN_ORDER;
 
@@ -221,6 +305,11 @@ export function getAllPlans(): PlanDefinition[] {
   return PLAN_ORDER.map(tier => PLANS[tier]);
 }
 
+/** Personal plan choices after the full cutover. */
+export function getPersonalPlans(): PlanDefinition[] {
+  return personalTiers().map(tier => PLANS[tier]);
+}
+
 export function getTierFromPriceId(priceId: string): SubscriptionTier | null {
   for (const tier of PLAN_ORDER) {
     if (PLANS[tier].stripePriceId === priceId) {
@@ -233,4 +322,21 @@ export function getTierFromPriceId(priceId: string): SubscriptionTier | null {
 export function getPlanFromPriceId(priceId: string): PlanDefinition | null {
   const tier = getTierFromPriceId(priceId);
   return tier ? PLANS[tier] : null;
+}
+
+/**
+ * SEAT-2 P1 fix (independent review, allowlist inversion — Vision principle 6,
+ * "fail closed, deny by default"): whether `priceId` is a price a LONE user
+ * may buy or switch to today. This is an ALLOWLIST — every non-org tier's
+ * CURRENT `stripePriceId` from the one tier table — not a blocklist of the
+ * org plan's id. The previous blocklist form (`!isOrgPlanId`) let the
+ * grandfathered Founder price, a future Wave-C price move, and any other
+ * unrecognized price id all fall through as "not org, so allowed"; a lone
+ * user could POST any of those straight to /api/stripe/create-subscription or
+ * /update-subscription. This form denies by default: a price id is only ever
+ * accepted because it IS on the list, so a new Stripe price cannot silently
+ * become purchasable until it is added to PLANS as a personal tier's price.
+ */
+export function isPersonalPlanPriceId(priceId: string): boolean {
+  return Boolean(priceId) && getPersonalPlans().some((plan) => plan.stripePriceId === priceId);
 }

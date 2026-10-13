@@ -323,3 +323,8 @@ describe('AssistantSessionChat — command picker scope', () => {
   render(<SessionChat agent={agentFixture()} conversationId="new-thread" context="page" isReadOnly initialSend={{ id: 'first-send', text: 'Blocked turn' }} />);
   expect(handleSend).not.toHaveBeenCalled();
 });
+
+it('registers the agent conversation and its own drive for source, refusal and fallback controls', () => {
+  const { container } = render(<SessionChat agent={agentFixture()} conversationId="conv-wallet" context="page" />);
+  expect(container.querySelector('[data-spend-surface]')?.getAttribute('data-spend-surface')).toBe('conv-wallet');
+});

@@ -15,6 +15,7 @@ import { usePageTree } from '@/retained/hooks/usePageTree';
 import { findNodeAndParent } from '@/retained/lib/tree/tree-utils';
 import { useEditingStore } from '@/retained/stores/useEditingStore';
 import { PagePickerPopover } from '@/retained/components/common/PagePickerPopover';
+import { OrgDriveCard } from '@/retained/components/drives/OrgDriveCard';
 import { toast } from 'sonner';
 import { fetchWithAuth, patch } from '@/retained/lib/auth/auth-fetch';
 import { homeDriveActionError } from '@pagespace/lib/services/drive-guards';
@@ -25,6 +26,8 @@ import { ImagoAccessSection } from '@/ui/settings/imago-access/imago-access-sect
 interface DriveMember {
   id: string;
   userId: string;
+  isGuest?: boolean;
+  source?: 'invite' | 'org' | 'lead';
   user: { id: string; email: string; name?: string };
   profile?: { username?: string; avatar?: string | null };
 }
@@ -212,6 +215,8 @@ export default function GeneralSettingsPage() {
           </div>
         </SettingsGroup>
       </SettingsSection>
+
+      <OrgDriveCard drive={drive} leadName={membersData?.members?.find(member => member.source === 'lead')?.user?.name ?? null} onChanged={() => void fetchDrives(false, true)} />
 
       <SettingsSection
         title="Home page"

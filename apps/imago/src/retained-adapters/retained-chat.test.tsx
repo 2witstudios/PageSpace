@@ -19,6 +19,7 @@ vi.mock('./chat-attachments', () => ({ useChatAttachments: () => ({ attachments:
 vi.mock('@/retained/components/ai/chat/input', () => ({ ChatInput: (props: ChatInputProps) => <><textarea aria-label={props.inputLabel} value={props.value} disabled={props.disabled} onChange={event => props.onChange(event.target.value)} /><button disabled={props.disabled} onClick={props.onSend}>Send</button></> }));
 vi.mock('@/retained/components/agents/chat/SessionChat', () => ({ default: (props: SessionChatProps) => { boundary.session = props; return <div data-conversation={props.conversationId} />; } }));
 vi.mock('@/retained/components/agents/chat/AssistantSessionChat', () => ({ default: () => <div data-global-assistant="" /> }));
+vi.mock('@/ui/chat/spend-strip/spend-strip', () => ({ SpendStrip: (props: { conversationId: string | null; driveId: string | null; onChooseDraftSource?: (walletId: string) => Promise<void> }) => <div data-spend-conversation={props.conversationId ?? 'new'} data-spend-drive={props.driveId ?? 'personal'}><button type="button" data-start-wallet="" disabled={!props.onChooseDraftSource} onClick={() => void props.onChooseDraftSource?.('own')}>Change source</button></div> }));
 const { RetainedChat } = await import('./retained-chat');
 
 beforeEach(() => { setUiState(createInitialState()); useRetainedChatSelection.getState().select(null); boundary.canEdit = true; boundary.session = null; });
@@ -32,13 +33,14 @@ function show(create: FakeRoute = () => Response.json({ conversationId: 'created
   const web = fakeWeb({
     'GET /api/pages/a1': () => Response.json({ id: 'a1', title: 'Support', driveId: 'd1', aiModel: '' }),
     'POST /api/ai/page-agents/a1/conversations': create,
+    'PUT /api/wallets/conversations/created': () => Response.json({ conversationId: 'created', driveId: 'd1', chosenWalletId: 'own', options: [], resolved: { kind: 'spend', source: 'own_credits', walletId: 'own', fallbackApplied: false, fallbackFrom: null } }),
   });
   const container = mount(<ImagoSWRProvider client={web.client}><Host /></ImagoSWRProvider>);
   return { container, web };
 }
 function send(container: HTMLElement, text: string) {
   act(() => { dispatch(transactions.setChatDraft, text); });
-  act(() => { container.querySelector('button')!.click(); });
+  act(() => { [...container.querySelectorAll('button')].find(button => button.textContent === 'Send')!.click(); });
 }
 
 it('names the first-message composer after the agent, as the session composer is', async () => {
@@ -90,7 +92,7 @@ it('deduplicates a pending first send and recovers its draft if the selection ch
   let release: (response: Response) => void = () => {};
   const pending = new Promise<Response>(resolve => { release = resolve; });
   const { container, web } = show(() => pending); await settle(); send(container, 'Pending'); await settle();
-  act(() => { container.querySelector('button')!.click(); });
+  act(() => { [...container.querySelectorAll('button')].find(button => button.textContent === 'Send')!.click(); });
   expect(web.requests.filter(request => request.method === 'POST')).toHaveLength(1);
   act(() => useRetainedChatSelection.getState().select({ sessionId: 'w1', conversationId: 'global', agentId: null, driveId: null, isReadOnly: false }));
   release(Response.json({ conversationId: 'created' })); await settle();
@@ -173,4 +175,21 @@ it('passes the host composer settings to the open conversation', async () => {
   showWith({ conversationId: 'c1', placeholder: 'Ask about this page…', ownsCreditsAlert: true });
   await settle();
   expect(boundary.session?.imagoComposer).toMatchObject({ placeholder: 'Ask about this page…', ownsCreditsAlert: true });
+});
+
+it('the first-message spend preview follows the selected agent drive', async () => {
+  const { container } = show(); await settle();
+  expect(container.querySelector('[data-spend-drive]')?.getAttribute('data-spend-drive')).toBe('d1');
+  expect(container.querySelector('[data-spend-conversation]')?.getAttribute('data-spend-conversation')).toBe('new');
+});
+
+it('choosing a wallet explicitly materializes an empty agent conversation before the first message', async () => {
+  const { container, web } = show(); await settle();
+  act(() => { container.querySelector<HTMLButtonElement>('[data-start-wallet]')!.click(); });
+  await settle();
+  expect(web.requests.filter(request => request.method === 'POST')).toHaveLength(1);
+  expect(web.writes().map(request => [request.method, request.url, request.body])).toEqual([['POST', '/api/ai/page-agents/a1/conversations', { walletId: 'own' }]]);
+  expect(boundary.session?.conversationId).toBe('created');
+  expect(boundary.session?.initialSend).toBeUndefined();
+  expect(getUiState().resources.chatDraft).toBe('');
 });

@@ -12,9 +12,8 @@ export const creditsLabel = (amount: number): string => {
 export type SpendSource = { readonly label: string; readonly left: string };
 
 /**
- * Where a turn is spending from. On this base only the personal balance exists, so every
- * surface spends from "Your credits"; drive wallets and seat allowances come with the orgs
- * branch (IMC-8.18). Billing off (tenant, on-prem) shows no strip at all.
+ * The personal-only preview before a driveless conversation exists. Drive and conversation
+ * sources use the wallet routes, never this balance fallback. Billing off hides this personal preview.
  */
 export const spendSourceOf = (body: unknown): SpendSource | null => {
   if (typeof body !== 'object' || body === null) return null;
