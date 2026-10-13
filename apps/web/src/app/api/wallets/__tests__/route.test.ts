@@ -131,19 +131,19 @@ describe('/api/wallets/conversations/[conversationId]', () => {
     const res = await GET_SOURCE(req('GET', '/api/wallets/conversations/c-1'), conv);
     const { ok: _ok, ...body } = sourceRead;
     expect(await res.json()).toEqual(body);
-    expect(getConversationSpend).toHaveBeenCalledWith('u-marcus', 'c-1', null);
+    expect(getConversationSpend).toHaveBeenCalledWith(expect.objectContaining({ userId: 'u-marcus', via: 'credential' }), 'c-1', null);
   });
 
   it('SPEND-3 (partial) a global conversation passes ?driveId= as the context for its options', async () => {
     vi.mocked(getConversationSpend).mockResolvedValue(sourceRead);
     await GET_SOURCE(req('GET', '/api/wallets/conversations/c-1?driveId=d-product'), conv);
-    expect(getConversationSpend).toHaveBeenCalledWith('u-marcus', 'c-1', 'd-product');
+    expect(getConversationSpend).toHaveBeenCalledWith(expect.objectContaining({ userId: 'u-marcus', via: 'credential' }), 'c-1', 'd-product');
   });
 
   it('SPEND-3 (partial) PUT stores a wallet or clears it, CSRF on a session; the service\'s refusal is passed on', async () => {
     vi.mocked(setConversationSpend).mockResolvedValue(sourceRead);
     expect((await SET_SOURCE(req('PUT', '/api/wallets/conversations/c-1', { walletId: 'w-pool' }), conv)).status).toBe(200);
-    expect(setConversationSpend).toHaveBeenCalledWith('u-marcus', 'c-1', 'w-pool', 'session', null);
+    expect(setConversationSpend).toHaveBeenCalledWith(expect.objectContaining({ userId: 'u-marcus', via: 'credential' }), 'c-1', 'w-pool', 'session', null);
     expect(vi.mocked(authenticateRequestWithOptions).mock.calls[0][1]).toEqual({ allow: ['session', 'mcp'], requireCSRF: true });
 
     vi.mocked(setConversationSpend).mockResolvedValue({ ok: false, status: 400, code: 'wallet_not_available', message: 'no' });
@@ -179,7 +179,7 @@ describe('[D-OW-26] an MCP/CLI token on the account routes', () => {
       expect(res.status).toBe(403);
       expect(await res.json()).toEqual({ error: refusal.message, code: 'mcp_token_cannot_change_spend_source' });
     }
-    expect(setConversationSpend).toHaveBeenCalledWith('u-marcus', 'c-1', 'w-pool', 'mcp', null);
+    expect(setConversationSpend).toHaveBeenCalledWith(expect.objectContaining({ userId: 'u-marcus', via: 'credential' }), 'c-1', 'w-pool', 'mcp', null);
     expect(setPersonalDefaultSource).toHaveBeenCalledWith('u-marcus', 'own_credits', 'mcp');
   });
 

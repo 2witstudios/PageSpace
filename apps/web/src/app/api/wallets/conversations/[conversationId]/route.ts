@@ -47,7 +47,7 @@ export async function GET(request: Request, context: RouteContext) {
   const scopeError = refuseScopedTokenForAccountRead(auth);
   if (scopeError) return scopeError;
   try {
-    const result = await getConversationSpend(auth.userId, conversationId, globalDriveIdOf(request));
+    const result = await getConversationSpend(actorFromAuth(auth), conversationId, globalDriveIdOf(request));
     if (!result.ok) return walletErrorResponse(result);
     auditRequest(request, {
       eventType: 'data.read',
@@ -77,7 +77,7 @@ export async function PUT(request: Request, context: RouteContext) {
     if (parsed.data.createGlobalDraft) {
       // Drafts stay local while viewed. Only an explicit session choice may
       // create one, after validating its source; the insert carries the choice
-      // atomically so a concurrent first send never gates against a default.
+      // atomically so the new row is never published with an intermediate default source.
       const refusal = credentialRefusalFor(credential, 'set_conversation_source');
       if (refusal) return walletErrorResponse({ ok: false, status: 403, ...refusal });
       if (!driveId) return walletErrorResponse({ ok: false, status: 400, code: 'invalid_request', message: 'A draft source choice requires a drive context' });
@@ -89,8 +89,8 @@ export async function PUT(request: Request, context: RouteContext) {
       created = (await resolveOrCreateConversation(auth.userId, conversationId, undefined, { initialChosenWalletId: parsed.data.walletId })).isNew;
     }
     const result = created
-      ? await getConversationSpend(auth.userId, conversationId, driveId)
-      : await setConversationSpend(auth.userId, conversationId, parsed.data.walletId, credential, driveId);
+      ? await getConversationSpend(actorFromAuth(auth), conversationId, driveId)
+      : await setConversationSpend(actorFromAuth(auth), conversationId, parsed.data.walletId, credential, driveId);
     if (!result.ok) return walletErrorResponse(result);
     auditRequest(request, {
       eventType: 'data.write',

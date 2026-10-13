@@ -47,6 +47,8 @@ import { computeChargeFor, driveAccrualChargeFor } from '../compute-charge';
 import { expectWalletLegInvariant } from '../../test/wallet-leg-invariant';
 import { credentialActor } from '../../permissions/access-actor';
 
+const accountActor = (userId: string) => credentialActor(userId, { authenticatedAtMs: Date.now(), assurance: 'user_verified_passkey' });
+
 // A pass-through of the real resolution with a seam AFTER it returns: a test can change the
 // world between the unlocked resolution and gateSharedWallet's locked re-read (SPEND-4).
 const afterResolution = vi.hoisted(() => ({ run: null as null | (() => Promise<void>) }));
@@ -1510,7 +1512,7 @@ describe('the wallet-aware credit gate (real Postgres)', () => {
     expect(await chosenWalletOf(conv)).toBe(w.productWalletId);
 
     // An explicit switch replaces it, and persists across turns.
-    expect(await setConversationSpend(w.marcusId, conv, w.marcusWalletId, 'session')).toMatchObject({ ok: true, chosenWalletId: w.marcusWalletId });
+    expect(await setConversationSpend(accountActor(w.marcusId), conv, w.marcusWalletId, 'session')).toMatchObject({ ok: true, chosenWalletId: w.marcusWalletId });
     for (let i = 0; i < 2; i++) {
       expect(await turn(w, w.productId, conv)).toMatchObject({ allowed: true, walletId: w.marcusWalletId, spendSource: 'own_credits' });
     }
@@ -1577,7 +1579,7 @@ describe('the wallet-aware credit gate (real Postgres)', () => {
       if (moved.holdId) await releaseHold(moved.holdId);
       // The conversation's own source is unchanged; the chip's preview names the source it moved to, as a fallback.
       expect(await chosenWalletOf(conv)).toBe(side.walletId);
-      const preview = await getConversationSpend(w.marcusId, conv);
+      const preview = await getConversationSpend(accountActor(w.marcusId), conv);
       expect(preview).toMatchObject({ ok: true, chosenWalletId: side.walletId, resolved: { kind: 'spend', source: 'own_credits', walletId: w.marcusWalletId, fallbackApplied: true, fallbackFrom: 'drive_wallet' } });
     } finally {
       await db.delete(conversations).where(eq(conversations.userId, w.marcusId));
@@ -1979,7 +1981,7 @@ describe('the wallet-aware credit gate (real Postgres)', () => {
     const ids = [w.poolId, w.productWalletId, w.marcusWalletId];
     expect((await walletDriftAlerts({ toleranceCents: 0, limit: 10, walletIds: ids })).map((a) => a.walletId).sort()).toEqual([...ids].sort());
 
-    const migration = readFileSync(fileURLToPath(new URL('../../../../db/drizzle/0350_wallet_opening_balance.sql', import.meta.url)), 'utf8');
+    const migration = readFileSync(fileURLToPath(new URL('../../../../db/drizzle/0372_wallet_opening_balance.sql', import.meta.url)), 'utf8');
     await db.execute(sql.raw(migration));
     await db.execute(sql.raw(migration));
 

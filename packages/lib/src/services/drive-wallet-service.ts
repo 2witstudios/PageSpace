@@ -29,7 +29,7 @@ import {
   type SpendSourceKindValue,
 } from '@pagespace/db/schema/wallets';
 import { isBillingEnabled } from '../deployment-mode';
-import { getDriveIdsForUser, getUserDriveAccess } from '../permissions/permissions';
+import { getDriveIdsForUser, getUserDriveAccess, holdsDriveAccess } from '../permissions/permissions';
 import { checkActorDriveAuthentication } from '../permissions/actor-authentication';
 import { loadDriveWalletStanding, type DriveWalletStanding } from '../permissions/spend-standing';
 import { holdsOrgRole } from '../organizations/authorize-core';
@@ -1441,6 +1441,17 @@ async function ownConversation(userId: string, conversationId: string, globalDri
   return { id: row.id, chosenWalletId: row.chosenWalletId, sessionDriveId };
 }
 
+async function conversationDriveRefusal(actor: AccessActor, driveId: string | null): Promise<WalletServiceError | null> {
+  if (!driveId) return null;
+  // Standing precedes the policy explanation: someone who cannot reach the
+  // drive learns nothing about its sign-in policy. Page grantees retain their
+  // own-credit options, even when they hold no drive-wallet membership.
+  if (!(await holdsDriveAccess(actor.userId, driveId))) return notFound();
+  const signIn = await checkActorDriveAuthentication(actor, driveId);
+  if (signIn.allowed) return null;
+  return signIn.code === 'automation_out_of_scope' ? notFound() : signInRequired(signIn.code);
+}
+
 /**
  * The conversation's source as the person will see it before sending (SPEND-2): the stored
  * choice, the options, and the gate's own decision for a zero-cost preview (nothing reserved,
@@ -1452,10 +1463,13 @@ async function ownConversation(userId: string, conversationId: string, globalDri
  * credits, SPEND-8). A client must therefore preview with the same drive its turns will carry
  * in their contextRef.
  */
-export async function getConversationSpend(userId: string, conversationId: string, globalDriveId: string | null = null): Promise<ConversationSpendRead | WalletServiceError> {
+export async function getConversationSpend(actor: AccessActor, conversationId: string, globalDriveId: string | null = null): Promise<ConversationSpendRead | WalletServiceError> {
+  const userId = actor.userId;
   const conversation = await ownConversation(userId, conversationId, globalDriveId);
   if (!conversation) return notFound('Conversation not found');
   const { sessionDriveId } = conversation;
+  const refusal = await conversationDriveRefusal(actor, sessionDriveId);
+  if (refusal) return refusal;
   const [user] = await db.select({ tier: users.subscriptionTier }).from(users).where(eq(users.id, userId)).limit(1);
   const options = await listSpendChoices(userId, sessionDriveId);
   const resolved = await resolveCallSpend({
@@ -1507,7 +1521,7 @@ export async function getDriveSpend(actor: AccessActor, driveId: string): Promis
  * every call anyway, and refuses it if it stops being one.
  */
 export async function setConversationSpend(
-  userId: string,
+  actor: AccessActor,
   conversationId: string,
   walletId: string | null,
   credential: WalletCredential,
@@ -1515,8 +1529,11 @@ export async function setConversationSpend(
 ): Promise<ConversationSpendRead | WalletServiceError> {
   const refused = refuseCredential(credential, 'set_conversation_source');
   if (refused) return refused;
+  const userId = actor.userId;
   const conversation = await ownConversation(userId, conversationId, globalDriveId);
   if (!conversation) return notFound('Conversation not found');
+  const refusal = await conversationDriveRefusal(actor, conversation.sessionDriveId);
+  if (refusal) return refusal;
   if (walletId !== null) {
     const options = await listSpendChoices(userId, conversation.sessionDriveId);
     if (!options.some((o) => o.walletId === walletId)) {
@@ -1527,5 +1544,5 @@ export async function setConversationSpend(
     .update(conversations)
     .set({ chosenWalletId: walletId })
     .where(and(eq(conversations.id, conversationId), eq(conversations.userId, userId)));
-  return getConversationSpend(userId, conversationId, globalDriveId);
+  return getConversationSpend(actor, conversationId, globalDriveId);
 }
