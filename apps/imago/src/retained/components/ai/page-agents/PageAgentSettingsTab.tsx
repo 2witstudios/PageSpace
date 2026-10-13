@@ -70,6 +70,10 @@ interface PageAgentSettingsTabProps {
    * the very tabs/buttons the user needs to leave Settings with, so the
    * host's Save button shows the confirmation inline instead. */
   onSaved?: () => void;
+  /** The category to show, chosen by a host with its own sub-nav (the
+   * agent page's settings sub-nav). When set, the in-form category menu
+   * and its back link are not drawn; omit it for the drill-in menu. */
+  category?: AgentSettingsCategory;
 }
 
 function ApiModelIdCard({ pageId }: { pageId: string }) {
@@ -110,6 +114,8 @@ function ApiModelIdCard({ pageId }: { pageId: string }) {
 
 export interface PageAgentSettingsTabRef {
   submitForm: () => void;
+  /** Drops every unsaved edit and returns the form to the saved config. */
+  discardChanges: () => void;
   isSaving: boolean;
 }
 
@@ -127,6 +133,22 @@ interface FormData {
   sandboxEnabled: boolean;
   defaultEnvId: string | null;
 }
+
+/** The form values a saved config shows; provider and model fall back to the parent's selection. */
+const formValuesFor = (config: AgentConfig, selectedProvider: string, selectedModel: string): FormData => ({
+  systemPrompt: config.systemPrompt,
+  enabledTools: config.enabledTools,
+  aiProvider: config.aiProvider || selectedProvider || '',
+  aiModel: config.aiModel || selectedModel || '',
+  includeDrivePrompt: config.includeDrivePrompt ?? false,
+  agentDefinition: config.agentDefinition || '',
+  visibleToGlobalAssistant: config.visibleToGlobalAssistant ?? true,
+  includePageTree: config.includePageTree ?? false,
+  pageTreeScope: config.pageTreeScope ?? 'children',
+  toolExposureMode: config.toolExposureMode ?? 'upfront',
+  sandboxEnabled: config.sandboxEnabled ?? false,
+  defaultEnvId: config.defaultEnvId ?? null,
+});
 
 const SETTINGS_ITEMS: AgentSettingsMenuItem[] = [
   {
@@ -174,14 +196,19 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
   isProviderConfigured,
   onSavingChange,
   onDirtyChange,
-  onSaved
+  onSaved,
+  category,
 }, ref) => {
   // Stable per-MOUNT identifier — distinguishes this instance from another
   // Settings surface for the SAME agent mounted elsewhere (see the
   // useEditingStore registration below, round 20).
   const mountId = useId();
   const [isSaving, setIsSaving] = useState(false);
-  const [category, setCategory] = useState<AgentSettingsCategory | null>(null);
+  // Drill-in state, used only when no `category` is passed (the classic
+  // panes). A host with its own sub-nav passes `category` and this is unused.
+  const [drilledCategory, setDrilledCategory] = useState<AgentSettingsCategory | null>(null);
+  const isDrillIn = category === undefined;
+  const activeCategory = isDrillIn ? drilledCategory : category;
   const settingsMenuRef = useRef<HTMLDivElement>(null);
   const isInitialCategoryRender = useRef(true);
 
@@ -197,10 +224,10 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
       isInitialCategoryRender.current = false;
       return;
     }
-    if (category === null) {
+    if (activeCategory === null) {
       settingsMenuRef.current?.querySelector<HTMLButtonElement>('button')?.focus();
     }
-  }, [category]);
+  }, [activeCategory]);
   // Shared across every mounted Settings surface for this agent (keyed by
   // driveId in SWR's cache) — see useAgentMembership for why a per-instance
   // useState here previously let two Settings surfaces for the same agent
@@ -306,20 +333,7 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
     if (!config) return;
     if (formIsDirty && !justSavedOwnConfigRef.current) return;
     justSavedOwnConfigRef.current = false;
-    reset({
-      systemPrompt: config.systemPrompt,
-      enabledTools: config.enabledTools,
-      aiProvider: config.aiProvider || selectedProvider || '',
-      aiModel: config.aiModel || selectedModel || '',
-      includeDrivePrompt: config.includeDrivePrompt ?? false,
-      agentDefinition: config.agentDefinition || '',
-      visibleToGlobalAssistant: config.visibleToGlobalAssistant ?? true,
-      includePageTree: config.includePageTree ?? false,
-      pageTreeScope: config.pageTreeScope ?? 'children',
-      toolExposureMode: config.toolExposureMode ?? 'upfront',
-      sandboxEnabled: config.sandboxEnabled ?? false,
-      defaultEnvId: config.defaultEnvId ?? null,
-    });
+    reset(formValuesFor(config, selectedProvider, selectedModel));
   }, [config, reset, selectedProvider, selectedModel, formIsDirty]);
 
   // Fetch Ollama models dynamically
@@ -544,13 +558,28 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
     [onModelChange],
   );
 
-  // Expose form submission to parent component
+  // Drops every unsaved edit: the form goes back to the saved config, and a
+  // provider/model picked here but not saved goes back to the saved values.
+  const discardChanges = useCallback(() => {
+    if (!config) return;
+    if (providerTouchedRef.current || modelTouchedRef.current) {
+      providerTouchedRef.current = false;
+      modelTouchedRef.current = false;
+      if (config.aiProvider) onProviderChange(config.aiProvider);
+      if (config.aiModel) onModelChange(config.aiModel);
+    }
+    reset(formValuesFor(config, selectedProvider, selectedModel));
+    onDirtyChange?.(false);
+  }, [config, reset, selectedProvider, selectedModel, onProviderChange, onModelChange, onDirtyChange]);
+
+  // Expose form submission and discard to the parent component
   useImperativeHandle(ref, () => ({
     submitForm: () => {
       handleSubmit(onSubmit)();
     },
+    discardChanges,
     isSaving
-  }), [handleSubmit, onSubmit, isSaving]);
+  }), [handleSubmit, onSubmit, discardChanges, isSaving]);
 
   // Mirror dirty state out to the host's own Save button (rendered outside
   // this component — see AgentPageView/AgentPanes) so it can show an
@@ -658,27 +687,29 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
   return (
     <div className="mx-auto w-full max-w-2xl p-4">
       <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col space-y-6">
-        {category === null ? (
-          <AgentSettingsMenu ref={settingsMenuRef} items={SETTINGS_ITEMS} selectCategory={setCategory} />
+        {activeCategory === null ? (
+          <AgentSettingsMenu ref={settingsMenuRef} items={SETTINGS_ITEMS} selectCategory={setDrilledCategory} />
         ) : (
           <>
             <div className="space-y-2">
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                className="-ml-2"
-                onClick={() => setCategory(null)}
-              >
-                <ChevronLeft className="mr-1 h-4 w-4" />
-                Agent Settings
-              </Button>
+              {isDrillIn && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="-ml-2"
+                  onClick={() => setDrilledCategory(null)}
+                >
+                  <ChevronLeft className="mr-1 h-4 w-4" />
+                  Agent Settings
+                </Button>
+              )}
               <h2 ref={focusOnMount} tabIndex={-1} className="text-xl font-semibold outline-none">
-                {SETTINGS_ITEMS.find((item) => item.key === category)?.title}
+                {SETTINGS_ITEMS.find((item) => item.key === activeCategory)?.title}
               </h2>
             </div>
 
-            {category === 'behavior' && (
+            {activeCategory === 'behavior' && (
               <>
         {/* API Model ID */}
         <ApiModelIdCard pageId={pageId} />
@@ -904,7 +935,7 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
               </>
             )}
 
-            {category === 'access' && (
+            {activeCategory === 'access' && (
               <>
         {/* Drive Membership */}
         <Card>
@@ -987,7 +1018,7 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
               </>
             )}
 
-            {category === 'tools' && (
+            {activeCategory === 'tools' && (
               <>
         {/* Sandbox — successor to the old Machine Access card, minus the
             machine topology: there is nothing to pick, because the sandbox
@@ -1190,11 +1221,11 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
               </>
             )}
 
-            {category === 'integrations' && (
+            {activeCategory === 'integrations' && (
               <AgentIntegrationsPanel pageId={pageId} driveId={driveId} />
             )}
 
-            {category === 'accounts' && <AgentAccountsPanel scope={{ kind: 'agent_page', pageId }} />}
+            {activeCategory === 'accounts' && <AgentAccountsPanel scope={{ kind: 'agent_page', pageId }} />}
           </>
         )}
       </form>

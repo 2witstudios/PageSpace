@@ -31,7 +31,7 @@ function HomeWelcome() {
   </div>;
 }
 
-export function RetainedChat({ agentId, name, conversationId, resolving, placeholder, aboveComposer, home }: {
+export function RetainedChat({ agentId, name, conversationId, resolving, placeholder, aboveComposer, home, isolated }: {
   agentId: string | null; name: string; conversationId: string | null; resolving: boolean;
   /** Imago's chat home (section 'chat'): a new, empty conversation greets the user with the Home line. */
   home?: boolean;
@@ -39,8 +39,15 @@ export function RetainedChat({ agentId, name, conversationId, resolving, placeho
   placeholder?: string;
   /** Imago's spend strip, directly above the composer (IMC-2.4). */
   aboveComposer?: React.ReactNode;
+  /**
+   * Stay on `agentId` and this conversation, ignoring the global selection (the agent page's Chat
+   * tab, IMC-3.11): selecting an agent elsewhere must not move this chat, and this chat must not
+   * move the Imago column.
+   */
+  isolated?: boolean;
 }) {
-  const selection = useRetainedChatSelection(state => state.selection);
+  const sharedSelection = useRetainedChatSelection(state => state.selection);
+  const selection = isolated ? null : sharedSelection;
   const selectedAgentId = selection ? selection.agentId : agentId;
   const { permissions } = usePermissions(selectedAgentId);
   const client = useApiClient();
@@ -69,7 +76,7 @@ export function RetainedChat({ agentId, name, conversationId, resolving, placeho
     dispatch(transactions.setChatDraft, '');
     try {
       const id = await createConversation(client, agentId);
-      if (latest.current !== agentId || useRetainedChatSelection.getState().selection !== null) {
+      if (latest.current !== agentId || (!isolated && useRetainedChatSelection.getState().selection !== null)) {
         restoreDraft(text);
         return;
       }

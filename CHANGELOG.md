@@ -26,6 +26,8 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
   A public link that no longer works now says so.
 
+- **Imago's settings (C · Blue Spine)** — agent and canvas settings open with a category list beside the form, which you can fold away with "Close settings menu". Editing an agent's settings shows a bar with "Unsaved changes to …", Discard and Save. A published canvas's strip shows its URL, Settings (publish title, description, share image and search visibility), Copy link and Unpublish.
+
 - **Imago reuses the full PageSpace feature UI** — native editors and file viewers, page creation and sharing, rich chat controls and results, messaging, tasks, agent sessions and account/drive settings now stay inside the persistent Imago shell. Classic PageSpace and rollout defaults are preserved.
 
 - **Right-sidebar chat input is a single compact card** — attach, tools, model picker and one send/stop button now share one toolbar row under the text box instead of stacking a separate model selector above it. While a reply is streaming, a queue button appears next to Stop once you've typed something, so you can still queue a follow-up on phones.
