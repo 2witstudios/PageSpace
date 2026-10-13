@@ -14,6 +14,11 @@ vi.mock('@/retained-adapters/retained-chat', async () => {
   };
 });
 
+vi.mock('@/retained-adapters/agent-settings', async () => {
+  const { createElement: h } = await import('react');
+  return { AgentSettings: () => h('div', { 'data-testid': 'agent-settings-form' }) };
+});
+
 vi.mock('@/retained-adapters/link', async () => {
   const { createElement: h } = await import('react');
   return {
@@ -185,6 +190,17 @@ describe('AgentPage', () => {
         rows: ['Behavior', 'Access', 'Tools', 'Integrations', 'Accounts'].every((title) => text.includes(title)),
       },
       expected: { heading: true, rows: true },
+    });
+  });
+
+  test('keeps classic\'s settings form reachable under the rows', () => {
+    window.history.replaceState(null, '', '/?tab=settings');
+    const container = mount(createElement(AgentPage, props));
+    assert({
+      given: 'the Settings tab before the category sub-nav exists',
+      should: 'render the settings form under the rows',
+      actual: container.querySelector('[data-testid="agent-settings-form"]') !== null,
+      expected: true,
     });
   });
 

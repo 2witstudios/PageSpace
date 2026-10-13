@@ -1,5 +1,6 @@
 'use client';
 
+import { AgentSettings } from '@/retained-adapters/agent-settings';
 import { useCallback, useEffect, useState } from 'react';
 import { Bot, Cable, History, KeyRound, MessageSquare, Plus, Settings, Shield, Wrench, type LucideIcon } from 'lucide-react';
 import { toast } from 'sonner';
@@ -223,7 +224,13 @@ export function AgentPage({ page, driveId, pageId }: PageTypeProps) {
       {view === 'history' && (
         <AgentHistory pageId={pageId} currentConversationId={conversationId} onOpen={openConversation} onDeleted={deleted} />
       )}
-      {view === 'settings' && <AgentSettingsRows title={page.title} />}
+      {view === 'settings' && (
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <AgentSettingsRows title={page.title} />
+          {/* Classic's settings form stays reachable under the rows until the category sub-nav (IMC-3.12) opens each one. */}
+          <AgentSettings pageId={pageId} driveId={driveId} title={page.title} />
+        </div>
+      )}
     </div>
   );
 }
