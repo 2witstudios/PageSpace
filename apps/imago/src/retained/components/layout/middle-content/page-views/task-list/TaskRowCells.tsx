@@ -12,7 +12,7 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from '@/retained/components/ui/dropdown-menu';
 import {
-  MoreHorizontal, Pencil, Trash2, FileText, Zap, Bell,
+  MoreHorizontal, Pencil, Trash2, FileText, Zap,
   ChevronRight, ChevronDown, ListPlus,
 } from 'lucide-react';
 import { cn } from '@/retained/lib/utils';
@@ -35,6 +35,7 @@ import {
 } from './task-tree-core';
 import { useTaskTree } from './task-tree-context';
 import { SubTaskProgress } from './SubTaskProgress';
+import { TaskTriggerBadge } from './TaskTriggerBadge';
 
 /** How many of the three bars a priority fills; the board's Pri. column. */
 const PRIORITY_BARS: Record<TaskPriority, number> = { low: 1, medium: 2, high: 3 };
@@ -239,17 +240,11 @@ export function TaskRowCells({
             onUpdate={(assigneeIds) => handlers.onMultiAssigneeChange?.(loc, assigneeIds)}
             disabled={!canEdit}
           />
-          {canEdit && (task.activeTriggerCount ?? 0) > 0 && (
-            <button
-              type="button"
-              onClick={() => openTriggerDialog(task, listPageId)}
-              title="Agent trigger configured — click to edit"
-              aria-label="Agent trigger configured — click to edit"
-              className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-amber-300/60 bg-amber-50 text-amber-700 hover:bg-amber-100 dark:border-amber-700/50 dark:bg-amber-950/40 dark:text-amber-300"
-            >
-              <Bell className="h-3 w-3" />
-              <span className="sr-only">Agent trigger configured</span>
-            </button>
+          {canEdit && (
+            <TaskTriggerBadge
+              count={task.activeTriggerCount ?? 0}
+              onOpen={() => openTriggerDialog(task, listPageId)}
+            />
           )}
         </div>
       </TableCell>
