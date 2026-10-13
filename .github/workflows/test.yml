@@ -23,9 +23,9 @@ name: Test Suite
 # `synchronize` runs, for the reason above.
 on:
   push:
-    branches: [main, master, develop, pu/flash-sandbox, pu/panes-agent, pu/org-wallets]
+    branches: [main, master, develop, pu/flash-sandbox, pu/panes-agent]
   pull_request:
-    branches: [main, master, develop, pu/flash-sandbox, pu/panes-agent, pu/org-wallets]
+    branches: [main, master, develop, pu/flash-sandbox, pu/panes-agent, 'pu/**']
   workflow_dispatch:
 
 # A newer push to the same PR makes the older run irrelevant, so cancel it:
