@@ -65,9 +65,21 @@ const ACCOUNT: Readonly<Record<string, string>> = {
 
 const screen = (title: string | undefined, fallback: string): TabLabel => ({ kind: 'screen', title: title ?? fallback });
 
+/**
+ * A path segment, read raw when its percent-encoding is malformed: a mistyped URL or a
+ * stored tab can hold one, and a throwing decode would take the tab bar down with it.
+ */
+const decode = (segment: string): string => {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return segment;
+  }
+};
+
 /** A tab's label source, from its path alone. */
 export const tabLabelFor = (path: string): TabLabel => {
-  const [first = '', second = '', third = ''] = path.split('/').filter(Boolean).map(decodeURIComponent);
+  const [first = '', second = '', third = ''] = path.split('/').filter(Boolean).map(decode);
   if (first === 'p') return { kind: 'page', pageId: second };
   if (first === 'dm') return { kind: 'conversation', conversationId: second };
   if (first === 'account') return screen(ACCOUNT[second], 'Account');

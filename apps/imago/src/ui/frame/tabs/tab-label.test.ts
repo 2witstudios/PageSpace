@@ -43,6 +43,35 @@ describe('tabLabelFor() (IMC-1.5)', () => {
       expected: { kind: 'conversation', conversationId: 'c1' },
     });
   });
+
+  test('a segment that is not valid percent-encoding', () => {
+    assert({
+      given: 'a path whose segment carries a malformed escape, as a mistyped URL or stored tab can',
+      should: 'read the raw segment rather than throw while rendering',
+      actual: [
+        tabLabelFor('/d1/files/%E0'),
+        tabLabelFor('/dm/%E0'),
+        tabLabelFor('/d1/settings/%E0'),
+      ],
+      expected: [
+        { kind: 'page', pageId: '%E0' },
+        { kind: 'conversation', conversationId: '%E0' },
+        { kind: 'screen', title: 'Drive settings' },
+      ],
+    });
+  });
+
+  test('a segment that is valid percent-encoding', () => {
+    assert({
+      given: 'a path whose ids are percent-encoded',
+      should: 'read the decoded ids',
+      actual: [tabLabelFor('/d1/files/%70%31'), tabLabelFor('/%64%31/files/p1')],
+      expected: [
+        { kind: 'page', pageId: 'p1' },
+        { kind: 'page', pageId: 'p1' },
+      ],
+    });
+  });
 });
 
 describe('tabLabelFor() notifications (IMC-9.14)', () => {

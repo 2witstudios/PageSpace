@@ -155,6 +155,27 @@ describe('stageFor() unknown and malformed paths', () => {
     });
   });
 
+  test('a drive tool with trailing segments', () => {
+    assert({
+      given: 'a drive tool addressed with the segments no tool route holds, or more than Members’ one',
+      should: 'fall back to the drive’s chat, keeping only the real Members sub-routes',
+      actual: [
+        stageFor('/drive-1/calendar/anything'),
+        stageFor('/drive-1/trash/a/b/c'),
+        stageFor('/drive-1/members/u1'),
+        stageFor('/drive-1/members/invite'),
+        stageFor('/drive-1/members/u1/extra'),
+      ],
+      expected: [
+        driveChat,
+        driveChat,
+        stageFor('/drive-1/members'),
+        stageFor('/drive-1/members'),
+        driveChat,
+      ],
+    });
+  });
+
   test('unknown shapes with no drive', () => {
     assert({
       given: 'a user-level route with extra segments',

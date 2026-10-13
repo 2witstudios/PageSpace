@@ -112,6 +112,10 @@ const driveStage = (driveId: string, rest: readonly string[]): Stage => {
     return { driveId, section: 'settings', list: 'tree', object: { kind: 'settings' } };
   }
   if (isDriveTool(section)) {
+    // Only Members has sub-routes (a member profile, the invite form); every other
+    // tool is one screen, so any deeper path is one no route holds (stage.test).
+    if (section !== 'members' && id !== undefined) return driveChat(driveId);
+    if (section === 'members' && extra.length > 0) return driveChat(driveId);
     return {
       driveId,
       section: 'settings',
