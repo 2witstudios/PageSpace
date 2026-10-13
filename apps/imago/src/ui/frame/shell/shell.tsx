@@ -30,10 +30,16 @@ import { sectionPath } from '../tabs/tabs-model';
 import { columnsFor, type Columns } from '../stage/columns';
 import { AccountNavPane, DriveSettingsNavPane } from '../../settings/settings-nav/settings-nav-pane';
 import { Rail } from '../rail/rail';
+import { PhoneAsk } from '../phone/phone-ask';
+import { PhoneBottomBar } from '../phone/phone-bar';
+import { PhoneFilesHeader } from '../phone/phone-files-header';
+import { renderPhoneShell } from '../phone/phone-shell.render';
+import { useViewportTier } from '../viewport/use-viewport-tier';
 import { railDrive } from '../rail/rail-items';
 import {
   imagoStartsCollapsedAt,
   isHideableSection,
+  type HideableSection,
   isListSection,
   paneLayout,
   stageFor,
@@ -66,6 +72,7 @@ const titles: Readonly<Record<Section, string>> = {
 };
 
 const selectCollapsed = (state: UiState) => state.resources.collapsedSections;
+const selectPaneSheetOpen = (state: UiState) => state.resources.paneSheetOpen;
 const selectImagoCollapsed = (state: UiState) => state.resources.imagoCollapsed;
 const selectImagoClosed = (state: UiState) => state.resources.imagoClosed;
 
@@ -80,6 +87,7 @@ const notFoundColumns: Columns = {
   pane: false,
   page: true,
   imago: 'docked',
+  paneSheet: false,
   showSidebarIn: null,
   askPill: false,
   collapseImago: true,
@@ -116,7 +124,7 @@ const rowsFor = (stage: Stage): ReactNode => {
  * The left pane: the chat's history, a section's list or tree, or the settings and account
  * navs. Files draws its own pane, since its head carries New page beside Close sidebar.
  */
-const listFor = (stage: Stage, layout: PaneLayout): ReactNode => {
+const listFor = (stage: Stage, layout: PaneLayout, phoneDrive?: { readonly name: string | null }): ReactNode => {
   if (layout.list === 'closed') return null;
   if (stage.section === 'chat') return <ChatHistory />;
   if (stage.section === 'settings' && stage.driveId !== null && stage.object?.kind === 'settings' && stage.object.tool !== undefined) {
@@ -142,6 +150,11 @@ const listFor = (stage: Stage, layout: PaneLayout): ReactNode => {
         selectedPageId={stage.object?.kind === 'page' ? stage.object.pageId : null}
         variant={layout.list}
         title={titles.files}
+        phoneHeader={
+          phoneDrive === undefined
+            ? undefined
+            : (newPage) => <PhoneFilesHeader driveName={phoneDrive.name} title={titles.files} newPage={newPage} />
+        }
       />
     );
   }
@@ -174,15 +187,35 @@ export function Shell({ children, homeDriveId, initialDrives }: ShellProps) {
   useEffect(() => {
     if (imagoStartsCollapsedAt(pathname)) dispatch(transactions.collapseImago, undefined);
   }, [pathname]);
+  const tier = useViewportTier();
+  const phone = tier === 'phone';
+  const paneSheetOpen = useUiState(selectPaneSheetOpen);
+  // Navigating from the narrow pane sheet closes it, so the page it opened is not left covered.
+  useEffect(() => {
+    dispatch(transactions.closePaneSheet, undefined);
+  }, [pathname]);
+  // Below 1024px (not phone) the pane is a sheet: hidden until Show sidebar, whatever desktop remembers.
+  const sheetSections = (): readonly HideableSection[] =>
+    !isHideableSection(stage.section)
+      ? collapsedSections
+      : paneSheetOpen
+        ? collapsedSections.filter((entry) => entry !== stage.section)
+        : [...collapsedSections, stage.section];
+  const effectiveCollapsed = tier === 'narrow' ? sheetSections() : collapsedSections;
   const missing = driveStatus(drives, stage.driveId) === 'missing';
-  const layout = missing ? notFoundLayout : paneLayout(stage, { collapsedSections });
+  // A phone has no left pane to collapse: its list is a screen of its own.
+  const layout = missing ? notFoundLayout : paneLayout(stage, { collapsedSections: phone ? [] : effectiveCollapsed });
   const columns = missing
     ? notFoundColumns
-    : columnsFor(stage, {
-        paneCollapsed: isHideableSection(stage.section) && collapsedSections.includes(stage.section),
-        imagoCollapsed,
-        imagoClosed,
-      });
+    : columnsFor(
+        stage,
+        {
+          paneCollapsed: !phone && isHideableSection(stage.section) && effectiveCollapsed.includes(stage.section),
+          imagoCollapsed,
+          imagoClosed,
+        },
+        tier,
+      );
   const drive = drives?.find((entry) => entry.id === stage.driveId);
   const title = missing ? 'Not found' : stage.object?.kind === 'settings' && stage.object.title ? stage.object.title : titles[stage.section];
   const hydrated = useHydrated();
@@ -192,10 +225,57 @@ export function Shell({ children, homeDriveId, initialDrives }: ShellProps) {
       <ClosePage href={sectionPath(stage)} />
     </span>
   );
+  const objectColumn = (
+    <section className={columnClass} aria-label={title}>
+      {!missing && stage.object?.kind === 'page' ? (
+        <PageHead pageId={stage.object.pageId} leading={opener(stage, columns, 'page')} trailing={pageTrailing} />
+      ) : !missing && stage.object?.kind === 'conversation' ? (
+        <ConversationHead conversationId={stage.object.conversationId} leading={opener(stage, columns, 'page')} trailing={pageTrailing} />
+      ) : (
+        renderPaneHeader({ title, leading: opener(stage, columns, 'page'), actions: missing ? null : pageTrailing })
+      )}
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        {missing ? renderNotFound({ ...DRIVE_NOT_FOUND, homeHref: homeHref(homeDriveId) }) : children}
+      </div>
+    </section>
+  );
+  const chatColumn = (
+    <ChatPane
+      stage={stage}
+      driveName={drive?.name}
+      homeDriveId={homeDriveId}
+      leading={opener(stage, columns, 'imago')}
+      trailing={columns.collapseImago ? <CollapseImago /> : columns.closeImago ? <CloseImago /> : null}
+    />
+  );
+  if (phone) {
+    // One column (C-Resp-Phone-Tree): the page the URL names; else the section's own screen.
+    const onTree = stage.section === 'files' && stage.object === null && stage.driveId !== null && !missing;
+    const listScreen = missing ? null : listFor(stage, layout, onTree ? { name: drive?.name ?? null } : undefined);
+    const screen =
+      stage.object !== null || missing
+        ? objectColumn
+        : stage.section === 'chat'
+          ? chatColumn
+          : (listScreen ?? objectColumn);
+    return renderPhoneShell({
+      stage,
+      hydrated,
+      screen,
+      ask: onTree && stage.driveId !== null ? <PhoneAsk href={`/${encodeURIComponent(stage.driveId)}`} /> : null,
+      bar: <PhoneBottomBar stage={stage} driveId={railDrive(stage, homeDriveId)} />,
+      palette: <CommandPalette stage={stage} homeDriveId={homeDriveId} drives={drives} />,
+    });
+  }
   return renderShell({
     stage,
     layout,
     columns,
+    tier,
+    onDismissImago: () => dispatch(transactions.collapseImago, undefined),
+    onDismissPane: () => {
+      if (isHideableSection(stage.section)) dispatch(transactions.collapseSection, stage.section);
+    },
     hydrated,
     rail: (
       <Rail
@@ -211,29 +291,8 @@ export function Shell({ children, homeDriveId, initialDrives }: ShellProps) {
     banner: <AppBanner />,
     tabBar: <TabBar stage={stage} driveKey={railDrive(stage, homeDriveId) ?? 'home'} />,
     list: missing ? null : listFor(stage, layout),
-    object: (
-      <section className={columnClass} aria-label={title}>
-        {!missing && stage.object?.kind === 'page' ? (
-          <PageHead pageId={stage.object.pageId} leading={opener(stage, columns, 'page')} trailing={pageTrailing} />
-        ) : !missing && stage.object?.kind === 'conversation' ? (
-          <ConversationHead conversationId={stage.object.conversationId} leading={opener(stage, columns, 'page')} trailing={pageTrailing} />
-        ) : (
-          renderPaneHeader({ title, leading: opener(stage, columns, 'page'), actions: missing ? null : pageTrailing })
-        )}
-        <div className="min-h-0 flex-1 overflow-y-auto">
-          {missing ? renderNotFound({ ...DRIVE_NOT_FOUND, homeHref: homeHref(homeDriveId) }) : children}
-        </div>
-      </section>
-    ),
-    chat: (
-      <ChatPane
-        stage={stage}
-        driveName={drive?.name}
-        homeDriveId={homeDriveId}
-        leading={opener(stage, columns, 'imago')}
-        trailing={columns.collapseImago ? <CollapseImago /> : columns.closeImago ? <CloseImago /> : null}
-      />
-    ),
+    object: objectColumn,
+    chat: chatColumn,
     empty: <EmptyMiddle driveId={railDrive(stage, homeDriveId)} leading={opener(stage, columns, 'empty')} />,
     palette: <CommandPalette stage={stage} homeDriveId={homeDriveId} drives={drives} />,
   });

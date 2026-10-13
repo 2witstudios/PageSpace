@@ -1,7 +1,8 @@
 import Link from 'next/link';
 import type { ReactNode, Ref, SyntheticEvent } from 'react';
 import { renderAvatar } from '../../components/avatar/avatar.render';
-import { renderRailTooltip } from '../rail-button/rail-button.render';
+import { renderIcon } from '../../components/icon/icon.render';
+import { renderRailTooltip, renderSpineCount } from '../rail-button/rail-button.render';
 import {
   accountBadgeClass,
   accountCountClass,
@@ -18,6 +19,8 @@ import {
   creditsMeterClass,
   creditsMeterFillClass,
   creditsNoteClass,
+  phoneAccountMenuClass,
+  phoneMoreClass,
 } from './avatar-menu-class';
 import { countOf, type CreditsCard } from './avatar-menu-model';
 
@@ -53,6 +56,11 @@ export type AvatarMenuRenderProps = {
   readonly detailsRef?: Ref<HTMLDetailsElement> | undefined;
   /** The account is open: the avatar carries the spine's active ring. */
   readonly active?: boolean;
+  /**
+   * The phone bottom bar's More item (C-Resp-Phone-Tree): the same menu behind a bar item named
+   * "More, {n} notifications", opening upwards instead of beside the spine.
+   */
+  readonly more?: { readonly notifications: number } | undefined;
 };
 
 /**
@@ -75,19 +83,31 @@ export function renderAvatarMenu(props: AvatarMenuRenderProps): ReactNode {
     verifyEmail,
     detailsRef,
     active = false,
+    more,
   } = props;
   return (
     <details
       ref={detailsRef}
-      className="relative"
+      className={more === undefined ? 'relative' : 'relative flex flex-1'}
       open={open}
       onToggle={(event: SyntheticEvent<HTMLDetailsElement>) => onToggle(event.currentTarget.open)}
     >
-      <summary className={avatarSummaryClass(active)} aria-label="Account menu">
-        {renderAvatar({ name: name ?? '', src: image ?? undefined, size: 'md' })}
-        {renderRailTooltip('Account')}
-      </summary>
-      <ul className={accountMenuClass} aria-label="Account">
+      {more === undefined ? (
+        <summary className={avatarSummaryClass(active)} aria-label="Account menu">
+          {renderAvatar({ name: name ?? '', src: image ?? undefined, size: 'md' })}
+          {renderRailTooltip('Account')}
+        </summary>
+      ) : (
+        <summary
+          className={phoneMoreClass(active)}
+          aria-label={more.notifications > 0 ? `More, ${more.notifications} notifications` : 'More'}
+        >
+          {renderIcon({ name: 'more', size: 21 })}
+          More
+          {renderSpineCount(more.notifications)}
+        </summary>
+      )}
+      <ul className={more === undefined ? accountMenuClass : phoneAccountMenuClass} aria-label="Account">
         {name === null ? null : (
           <li className={accountHeadClass} data-account-name="">
             <span className={accountNameClass}>{name}</span>

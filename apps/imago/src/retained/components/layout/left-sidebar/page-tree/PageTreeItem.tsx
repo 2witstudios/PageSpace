@@ -78,6 +78,8 @@ export interface PageTreeItemProps {
   onOpenCreateDialog: (parentId: string | null) => void;
   mutate: () => void;
   isTrashView?: boolean;
+  /** Phone rows are 44px tall (C-Resp-Phone-Tree). */
+  roomyRows?: boolean;
   // For file drop indicators
   fileDragState?: {
     overId: string | null;
@@ -100,6 +102,7 @@ export const PageTreeItem = React.memo(function PageTreeItem({
   onOpenCreateDialog,
   mutate,
   isTrashView = false,
+  roomyRows = false,
   fileDragState,
 }: PageTreeItemProps) {
   // Silence unused var - projected is passed but only needed for future use
@@ -321,6 +324,7 @@ export const PageTreeItem = React.memo(function PageTreeItem({
                 !isActive && !showDropIndicator &&
                   "hover:bg-gray-200 dark:hover:bg-gray-700",
                 params.pageId === item.id && "bg-gray-200 dark:bg-gray-700",
+                roomyRows && "min-h-[44px]",
                 isInMultiSelectMode && isPageSelected && "bg-primary/10 dark:bg-primary/20 ring-1 ring-primary/50"
               )}
               style={{ paddingLeft: `${depth * 8 + 16}px` }}

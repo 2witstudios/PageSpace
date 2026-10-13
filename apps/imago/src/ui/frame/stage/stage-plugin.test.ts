@@ -77,9 +77,9 @@ describe('expandSection()', () => {
 
     assert({
       given: 'a section expanded that was never collapsed',
-      should: 'return the same snapshot so nothing re-renders',
-      actual: expandSection(state, 'files') === state,
-      expected: true,
+      should: 'leave the collapsed list as it is and only open the narrow pane sheet',
+      actual: [expandSection(state, 'files').resources.collapsedSections === state.resources.collapsedSections, expandSection(state, 'files').resources.paneSheetOpen],
+      expected: [true, true],
     });
   });
 });
@@ -169,11 +169,11 @@ describe('stagePlugin slice', () => {
   test('its own resources and transactions', () => {
     assert({
       given: 'the stage slice',
-      should: 'start with no pane hidden and Imago open, and own the pane and Imago transactions',
+      should: 'start with no pane hidden, the narrow sheet shut and Imago open, and own the pane and Imago transactions',
       actual: [stagePlugin.resources(), Object.keys(stagePlugin.transactions).sort()],
       expected: [
-        { collapsedSections: [], imagoCollapsed: false, imagoClosed: false },
-        ['closeImago', 'collapseImago', 'collapseSection', 'expandImago', 'expandSection', 'openImago'],
+        { collapsedSections: [], imagoCollapsed: false, imagoClosed: false, paneSheetOpen: false },
+        ['closeImago', 'closePaneSheet', 'collapseImago', 'collapseSection', 'expandImago', 'expandSection', 'openImago'],
       ],
     });
   });

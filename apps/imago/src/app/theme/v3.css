@@ -172,3 +172,14 @@
     font-weight: 500;
   }
 }
+
+/* Responsive tiers (C-Resp-Tablet-Doc, C-Resp-Phone-Tree): the pane docks at 236px and Imago is a
+   340px sheet between 1024 and 1279; a phone has a 52px head, a 64px bottom bar and 44px rows. */
+@theme {
+  --spacing-pane-overlay: 236px;
+  --spacing-chat-overlay: 340px;
+  --spacing-phone-head: 52px;
+  --spacing-phone-bar: 64px;
+  --spacing-phone-row: 44px;
+  --spacing-phone-ask-bottom: 80px;
+}
