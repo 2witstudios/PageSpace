@@ -93,7 +93,10 @@ const renderPlan = async () => {
       <PlanPage />
     </SWRConfig>,
   );
-  await screen.findByRole('heading', { level: 1, name: 'Plan' });
+  // The "Plan" heading renders inside the loading state, so waiting on it left every
+  // synchronous query below racing the plan data under a full coverage run; the lede
+  // only exists once the data has loaded.
+  await screen.findByText(/^You're on /);
   return view;
 };
 
