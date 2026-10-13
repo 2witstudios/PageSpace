@@ -51,6 +51,7 @@ interface PageTreeOptions {
   pageId?: string;  // Required when scope is 'children'
   driveId: string;
   maxNodes?: number;
+  allowedDriveIds?: readonly string[];
 }
 
 /**
@@ -65,6 +66,7 @@ export async function getPageTreeContext(
   options: PageTreeOptions
 ): Promise<string> {
   const { scope, pageId, driveId, maxNodes = 200 } = options;
+  if (options.allowedDriveIds?.length && !options.allowedDriveIds.includes(driveId)) return '';
 
   try {
     // Check user has access to drive
@@ -128,7 +130,7 @@ export async function getPageTreeContext(
  */
 export async function getDriveListSummary(
   actor: AccessActor,
-  options: { excludedDriveIds?: ReadonlySet<string> } = {},
+  options: { excludedDriveIds?: ReadonlySet<string>; allowedDriveIds?: readonly string[] } = {},
 ): Promise<string> {
   try {
     // Get all non-trashed drives, minus any the caller's agent is kept out of
@@ -136,7 +138,8 @@ export async function getDriveListSummary(
       .select({ id: drives.id, name: drives.name })
       .from(drives)
       .where(eq(drives.isTrashed, false)))
-      .filter((drive) => !options.excludedDriveIds?.has(drive.id));
+      .filter((drive) => !options.excludedDriveIds?.has(drive.id) &&
+        (!options.allowedDriveIds?.length || options.allowedDriveIds.includes(drive.id)));
 
     // Filter to drives the user has access to (parallel permission checks)
     const accessChecks = await Promise.all(

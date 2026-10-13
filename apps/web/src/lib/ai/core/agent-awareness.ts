@@ -68,7 +68,7 @@ async function queryDriveAgents(driveId: string): Promise<DriveAgent[]> {
  */
 export async function buildAgentAwarenessPrompt(
   actor: AccessActor,
-  options: { canDelegate?: boolean; excludedDriveIds?: ReadonlySet<string> } = {},
+  options: { canDelegate?: boolean; excludedDriveIds?: ReadonlySet<string>; allowedDriveIds?: readonly string[] } = {},
 ): Promise<string> {
   try {
     // Every live drive, minus any the caller's agent is kept out of (Imago).
@@ -76,7 +76,8 @@ export async function buildAgentAwarenessPrompt(
       .select({ id: drives.id, name: drives.name })
       .from(drives)
       .where(eq(drives.isTrashed, false)))
-      .filter((drive) => !options.excludedDriveIds?.has(drive.id));
+      .filter((drive) => !options.excludedDriveIds?.has(drive.id) &&
+        (!options.allowedDriveIds?.length || options.allowedDriveIds.includes(drive.id)));
 
     const accessibleDrives: Array<{ id: string; name: string }> = [];
     for (const drive of allDrives) {

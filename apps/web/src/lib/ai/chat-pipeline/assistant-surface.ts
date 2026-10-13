@@ -148,7 +148,7 @@ export interface AssistantContextInput {
   readOnly: boolean;
   /** Whether the drive tree / all-drives summary is included. */
   showPageTree: boolean;
-  /** The caller's token drive scope (empty = unscoped), for the Home-drive hint. */
+  /** The caller's token drive ceiling (empty = unscoped), for every derived context read. */
   allowedDriveIds: readonly string[];
   /** Imago only: the drives its user keeps it out of. */
   excludedDriveIds?: ReadonlySet<string>;
@@ -170,7 +170,13 @@ export interface AssistantContext {
 
 /** The Global Assistant's context for a caller at a location. */
 export async function buildAssistantContext(input: AssistantContextInput): Promise<AssistantContext> {
-  const { actor, location, readOnly, showPageTree, allowedDriveIds, timer } = input;
+  const { actor, readOnly, showPageTree, allowedDriveIds, timer } = input;
+  // Legacy location hints have not passed resolveRequestContext. A scoped caller
+  // must name an admitted drive before any hint, prompt or tree enters the model.
+  const location = allowedDriveIds.length > 0 &&
+    (!input.location?.currentDrive || !allowedDriveIds.includes(input.location.currentDrive.id))
+    ? null
+    : input.location;
   const excludedDriveIds = input.excludedDriveIds ?? NO_EXCLUSIONS;
 
   const [personalization, userTimezone] = await Promise.all([
@@ -224,6 +230,7 @@ export async function buildAssistantContext(input: AssistantContextInput): Promi
   // the model does not have makes it attempt delegation that silently fails.
   const agentAwarenessPrompt = await buildAgentAwarenessPrompt(actor, {
     canDelegate: !readOnly,
+    allowedDriveIds,
     ...(excludedDriveIds.size > 0 && { excludedDriveIds }),
   });
   timer?.mark('agent_awareness_built');
@@ -231,13 +238,13 @@ export async function buildAssistantContext(input: AssistantContextInput): Promi
   let pageTreePrompt = '';
   if (showPageTree) {
     if (driveInView) {
-      const treeContext = await getPageTreeContext(actor, { scope: 'drive', driveId: driveInView });
+      const treeContext = await getPageTreeContext(actor, { scope: 'drive', driveId: driveInView, allowedDriveIds });
       timer?.mark('page_tree_loaded');
       if (treeContext) {
         pageTreePrompt = `\n\n## WORKSPACE STRUCTURE\n\nHere is the complete workspace structure:\n\n${treeContext}`;
       }
     } else {
-      const driveSummary = await getDriveListSummary(actor, excludedDriveIds.size > 0 ? { excludedDriveIds } : {});
+      const driveSummary = await getDriveListSummary(actor, { allowedDriveIds, ...(excludedDriveIds.size > 0 && { excludedDriveIds }) });
       timer?.mark('drive_summary_loaded');
       if (driveSummary) {
         pageTreePrompt = `\n\n## ACCESSIBLE WORKSPACES\n\n${driveSummary}`;
