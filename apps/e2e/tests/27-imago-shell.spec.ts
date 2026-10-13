@@ -194,9 +194,13 @@ test.describe('signed in', () => {
    * open; with none it jumps straight there.
    */
   const paintedListWidths = async (page: Page): Promise<number[]> => {
-    // A drive tool (Activity) has no left pane, so Files slides its list open from width 0.
-    await page.goto(imagoPath(homeDriveId, 'activity'));
-    const files = await whenHydrated(page, railLink(page, 'Files'));
+    // Every drive tool now has a left pane of its own, so start where the left pane is closed:
+    // the chat with its history hidden. Files then slides its list open from width 0.
+    await page.goto(imagoPath(homeDriveId));
+    const hide = await whenHydrated(page, listPane(page).getByRole('button', { name: 'Close sidebar', exact: true }));
+    await hide.click();
+    await expect.poll(() => widthOf(listPane(page))).toBe(0);
+    const files = railLink(page, 'Files');
     await page.evaluate(() => {
       const pane = document.querySelector('[data-slot="list"]');
       const record = window as Window & { __widths?: number[] };

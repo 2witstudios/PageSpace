@@ -340,13 +340,18 @@ describe('paneLayout()', () => {
     });
   });
 
-  test('a drive tool has no pane', () => {
-    const every: readonly HideableSection[] = ['chat', 'files', 'messages', 'tasks', 'settings', 'account'];
+  test('a drive tool has its pane, and it hides with Close sidebar', () => {
     assert({
-      given: 'a drive tool with every section collapsed',
-      should: 'have no pane to hide, so report none hidden',
-      actual: paneLayout(stageFor('/drive-1/members'), { collapsedSections: every }),
-      expected: { list: 'closed', listHidden: false, object: true },
+      given: 'a drive tool, open and then with its section collapsed',
+      should: 'show the 260px pane, then report it hidden',
+      actual: [
+        paneLayout(stageFor('/drive-1/members'), { collapsedSections: [] }),
+        paneLayout(stageFor('/drive-1/members'), { collapsedSections: ['settings'] }),
+      ],
+      expected: [
+        { list: 'tree', listHidden: false, object: true },
+        { list: 'closed', listHidden: true, object: true },
+      ],
     });
   });
 

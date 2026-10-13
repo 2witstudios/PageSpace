@@ -1,8 +1,8 @@
-import RetainedPage from '@/retained/app/dashboard/[driveId]/calendar/page';
-import type { ComponentProps } from 'react';
 import { getViewer } from '@/lib/auth/get-viewer';
+import { CalendarMiddle } from '@/ui/tools/calendar/calendar-middle';
 
-export default async function Page(props: ComponentProps<typeof RetainedPage> & object) {
+export default async function Page({ params }: { readonly params: Promise<{ readonly driveId: string }> }) {
+  const { driveId } = await params;
   await getViewer();
-  return <RetainedPage {...props} />;
+  return <CalendarMiddle driveId={driveId} />;
 }

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useMemo, useEffect } from 'react';
+import { useState, useCallback, useMemo, useEffect, type SetStateAction } from 'react';
 import { useRouter, useSearchParams } from '@/retained-adapters/navigation';
 import { format, addMonths, subMonths, addWeeks, subWeeks, addDays, subDays } from 'date-fns';
 import { Bot, ChevronLeft, ChevronRight, Plus, Calendar as CalendarIcon, List, LayoutGrid, Clock, PanelLeft, User } from 'lucide-react';
@@ -38,12 +38,32 @@ import {
   getDriveCalendarColor,
 } from './calendar-types';
 import { useAuthStore } from '@/retained/stores/useAuthStore';
+import { EventPopover } from '@/ui/tools/calendar/event-popover';
+import { defaultNewEventRange } from '@/ui/tools/calendar/calendar-state';
+import { WEEK_STARTS_ON } from '@/ui/tools/calendar/calendar-state';
+
+/**
+ * The Calendar tool's middle (C-Drive-Calendar). The shell's pane and toolbar own the view, the
+ * visible date, the open event and event creation, so this grid takes them as props, and draws no
+ * header or sidebar of its own.
+ */
+export interface EmbeddedCalendarState {
+  readonly viewMode: CalendarViewMode;
+  readonly currentDate: Date;
+  readonly openEventId: string | null;
+  readonly composing: boolean;
+  readonly onViewModeChange: (view: CalendarViewMode) => void;
+  readonly onDateChange: (date: Date) => void;
+  readonly onOpenEventChange: (eventId: string | null) => void;
+  readonly onComposingChange: (composing: boolean) => void;
+}
 
 interface CalendarViewProps {
   context: 'user' | 'drive';
   driveId?: string;
   driveName?: string;
   className?: string;
+  embedded?: EmbeddedCalendarState;
 }
 
 interface GoogleCalendarStatusResponse {
@@ -61,7 +81,7 @@ const googleCalendarStatusFetcher = async (url: string): Promise<GoogleCalendarS
   return response.json();
 };
 
-export function CalendarView({ context, driveId, driveName: _driveName, className }: CalendarViewProps) {
+export function CalendarView({ context, driveId, driveName: _driveName, className, embedded }: CalendarViewProps) {
   const { tier } = useDeviceTier();
   const shouldUseMobileCalendar = tier === 'mobile';
 
@@ -73,14 +93,28 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
   const deepLinkEventId = searchParams.get('eventId');
   const deepLinkDate = searchParams.get('date');
 
-  const [currentDate, setCurrentDate] = useState(() => {
+  const [localDate, setLocalDate] = useState(() => {
     if (deepLinkDate) {
       const d = new Date(deepLinkDate);
       if (!isNaN(d.getTime())) return d;
     }
     return new Date();
   });
-  const [viewMode, setViewMode] = useState<CalendarViewMode>('month');
+  const [localViewMode, setLocalViewMode] = useState<CalendarViewMode>('month');
+  const currentDate = embedded ? embedded.currentDate : localDate;
+  const viewMode = embedded ? embedded.viewMode : localViewMode;
+  const embeddedDateChange = embedded?.onDateChange;
+  const setCurrentDate = useCallback(
+    (next: SetStateAction<Date>) => {
+      if (!embeddedDateChange) {
+        setLocalDate(next);
+        return;
+      }
+      embeddedDateChange(typeof next === 'function' ? next(currentDate) : next);
+    },
+    [embeddedDateChange, currentDate],
+  );
+  const setViewMode = embedded ? embedded.onViewModeChange : setLocalViewMode;
   const [showTasks, setShowTasks] = useState(true);
   const [selectedEvent, setSelectedEvent] = useState<CalendarEvent | null>(null);
   const [isEventModalOpen, setIsEventModalOpen] = useState(false);
@@ -120,6 +154,8 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
   // already on the calendar opens the new event too. If the target isn't in the
   // current window yet, jump the view to its date so the fetch includes it.
   useEffect(() => {
+    // Embedded: the shell's URL state carries the open event and the date.
+    if (embedded) return;
     if (!deepLinkEventId || deepLinkEventId === handledDeepLinkId) return;
     const match = events.find((e) => e.id === deepLinkEventId);
     if (match) {
@@ -134,7 +170,7 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
         setCurrentDate(target);
       }
     }
-  }, [deepLinkEventId, deepLinkDate, handledDeepLinkId, events, currentDate]);
+  }, [deepLinkEventId, deepLinkDate, handledDeepLinkId, events, currentDate, setCurrentDate, embedded]);
 
   // Drive filtering (root calendar only)
   const drives = useDriveStore((s) => s.drives);
@@ -248,7 +284,7 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
         setCurrentDate((d) => subMonths(d, 1));
         break;
     }
-  }, [viewMode]);
+  }, [viewMode, setCurrentDate]);
 
   const handleNext = useCallback(() => {
     switch (viewMode) {
@@ -265,15 +301,19 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
         setCurrentDate((d) => addMonths(d, 1));
         break;
     }
-  }, [viewMode]);
+  }, [viewMode, setCurrentDate]);
 
   const handleToday = useCallback(() => {
     setCurrentDate(new Date());
-  }, []);
+  }, [setCurrentDate]);
 
   // Calendar handlers
   const handlers: CalendarHandlers = {
     onEventClick: (event) => {
+      if (embedded) {
+        embedded.onOpenEventChange(event.id);
+        return;
+      }
       setSelectedEvent(event);
       setNewEventDefaults(null);
       setIsEventModalOpen(true);
@@ -332,7 +372,7 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
         agentTrigger: agentTrigger ?? undefined,
       }, driveOverride);
     }
-    setIsEventModalOpen(false);
+    closeEventModal();
   };
 
   const handleRsvp = useCallback(async (status: AttendeeStatus) => {
@@ -419,6 +459,11 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
     [selectedEvent, removeAttendee]
   );
 
+  const closeEventModal = () => {
+    setIsEventModalOpen(false);
+    embedded?.onComposingChange(false);
+  };
+
   // Get header title based on view mode
   const getHeaderTitle = () => {
     switch (viewMode) {
@@ -432,6 +477,34 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
         return format(currentDate, 'MMMM yyyy');
     }
   };
+
+  // Embedded: the composer opens while the shell's Event button has it open.
+  const composing = embedded?.composing ?? false;
+  useEffect(() => {
+    if (!composing) return;
+    const range = defaultNewEventRange(currentDate, new Date());
+    setSelectedEvent(null);
+    setNewEventDefaults({ startAt: range.startAt, endAt: range.endAt, allDay: false });
+    setIsEventModalOpen(true);
+  }, [composing, currentDate]);
+
+  const popoverEvent = embedded?.openEventId ? events.find((e) => e.id === embedded.openEventId) ?? null : null;
+
+  const eventModal = (
+    <EventModal
+      isOpen={isEventModalOpen}
+      onClose={closeEventModal}
+      event={selectedEvent}
+      defaultValues={newEventDefaults}
+      onSave={handleEventSave}
+      onDelete={selectedEvent ? async () => { await handlers.onEventDelete(selectedEvent.id); } : undefined}
+      onRsvp={handleRsvp}
+      onAddAttendee={handleAddAttendee}
+      onRemoveAttendee={handleRemoveAttendee}
+      driveId={effectiveModalDriveId}
+      context={effectiveModalContext}
+    />
+  );
 
   if (error) {
     return (
@@ -465,28 +538,15 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
           onShowAllCalendars={showAll}
           onHideAllCalendars={() => hideAll(allCalendarKeys)}
         />
-        {/* Event modal - shared between mobile and desktop */}
-        <EventModal
-          isOpen={isEventModalOpen}
-          onClose={() => setIsEventModalOpen(false)}
-          event={selectedEvent}
-          defaultValues={newEventDefaults}
-          onSave={handleEventSave}
-          onDelete={selectedEvent ? async () => { await handlers.onEventDelete(selectedEvent.id); } : undefined}
-          onRsvp={handleRsvp}
-          onAddAttendee={handleAddAttendee}
-          onRemoveAttendee={handleRemoveAttendee}
-          driveId={effectiveModalDriveId}
-          context={effectiveModalContext}
-        />
+        {eventModal}
       </div>
     );
   }
 
   return (
-    <div className={cn('flex flex-col h-full', className)}>
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 px-4 py-3 border-b bg-background">
+    <div className={cn('relative flex flex-col h-full', className)}>
+      {/* Header (the shell's toolbar stands in for it when embedded) */}
+      {embedded ? null : <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 px-4 py-3 border-b bg-background">
         <div className="flex items-center gap-3">
           {/* Sidebar toggle (root calendar only) */}
           {isUserContext && (
@@ -657,7 +717,7 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
             <span className="hidden sm:inline">New Event</span>
           </Button>
         </div>
-      </div>
+      </div>}
 
       {/* Calendar body: sidebar + content */}
       <div className="flex flex-1 overflow-hidden">
@@ -705,6 +765,7 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
                   handlers={handlers}
                   driveColorMap={driveColorMap}
                   context={context}
+                  weekStartsOn={embedded ? WEEK_STARTS_ON : 0}
                 />
               )}
               {viewMode === 'day' && (
@@ -733,20 +794,21 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
         </div>
       </div>
 
-      {/* Event modal */}
-      <EventModal
-        isOpen={isEventModalOpen}
-        onClose={() => setIsEventModalOpen(false)}
-        event={selectedEvent}
-        defaultValues={newEventDefaults}
-        onSave={handleEventSave}
-        onDelete={selectedEvent ? async () => { await handlers.onEventDelete(selectedEvent.id); } : undefined}
-        onRsvp={handleRsvp}
-        onAddAttendee={handleAddAttendee}
-        onRemoveAttendee={handleRemoveAttendee}
-        driveId={effectiveModalDriveId}
-        context={effectiveModalContext}
-      />
+      {popoverEvent ? (
+        <EventPopover
+          event={popoverEvent}
+          onClose={() => embedded?.onOpenEventChange(null)}
+          onEdit={() => {
+            embedded?.onOpenEventChange(null);
+            setSelectedEvent(popoverEvent);
+            setNewEventDefaults(null);
+            setIsEventModalOpen(true);
+          }}
+          onGoing={() => updateRsvp(popoverEvent.id, 'ACCEPTED').then(() => undefined)}
+        />
+      ) : null}
+
+      {eventModal}
     </div>
   );
 }
