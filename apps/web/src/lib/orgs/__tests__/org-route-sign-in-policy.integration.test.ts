@@ -8,7 +8,7 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db';
-import { inArray } from '@pagespace/db/operators';
+import { and, eq, inArray } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { organizations, orgMembers } from '@pagespace/db/schema/organizations';
 import { factories } from '@pagespace/db/test/factories';
@@ -25,6 +25,7 @@ import { POST as invite } from '@/app/api/orgs/[orgId]/invitations/route';
 import { PATCH as changeMember } from '@/app/api/orgs/[orgId]/members/[userId]/route';
 import { POST as addDomain } from '@/app/api/orgs/[orgId]/domains/route';
 import { POST as transferOwnership } from '@/app/api/orgs/[orgId]/transfer-ownership/route';
+import { POST as leave } from '@/app/api/orgs/[orgId]/leave/route';
 
 const MINUTE = 60_000;
 const created = { users: [] as string[], orgs: [] as string[] };
@@ -113,5 +114,23 @@ describe('SEC-2 (partial) SEC-3 (partial) the org admin routes ask the org sign-
     const f = await acme({ maximumSessionAgeMinutes: 3 });
     const res = await adminActions(f, await session(f.admin.id, evidence('single_factor')), await session(f.owner.id, evidence('single_factor'))).addDomain();
     expect((await res.json())?.code).not.toBe('org_reauthentication_required');
+  });
+});
+
+describe('leaving an org only restricts, so it never asks for a qualifying sign-in (D-OW-33 spirit, review #2866 B)', () => {
+  it('SEC-2 (partial) SEC-3 (partial) a member on a single-factor or stale session leaves a passkey-only, short-age org', async () => {
+    const f = await acme({ requireStrongSignIn: true, maximumSessionAgeMinutes: 15 });
+    const token = await session(f.member.id, evidence('single_factor', 30 * MINUTE));
+    const res = await leave(post(`https://app.test/api/orgs/${f.org.id}/leave`, token, {}), { params: Promise.resolve({ orgId: f.org.id }) });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ left: true });
+    expect(await db.select().from(orgMembers).where(and(eq(orgMembers.orgId, f.org.id), eq(orgMembers.userId, f.member.id)))).toEqual([]);
+  });
+
+  it('a non-member still cannot "leave" (role check unchanged)', async () => {
+    const f = await acme({ requireStrongSignIn: true });
+    const token = await session(f.outsider.id, evidence('user_verified_passkey'));
+    const res = await leave(post(`https://app.test/api/orgs/${f.org.id}/leave`, token, {}), { params: Promise.resolve({ orgId: f.org.id }) });
+    expect(res.status).toBe(404);
   });
 });
