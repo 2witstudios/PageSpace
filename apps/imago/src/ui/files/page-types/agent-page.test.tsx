@@ -3,20 +3,23 @@ import { createElement } from 'react';
 import { afterEach, beforeEach, describe, test, vi } from 'vitest';
 import { assert } from 'riteway/vitest';
 import { click, mount, unmountAll } from '@/ui/test-support/dom';
+import { getUiState, setUiState } from '@/ui/store/store';
+import { dispatch, transactions } from '@/ui/store/transactions';
 import type { TreePage } from '@/retained/hooks/usePageTree';
-import { AgentPage, agentSettingsItems, agentViewFrom } from './agent-page';
+import { useSettingsSubnavStore } from '@/ui/files/settings-subnav/settings-subnav-store';
+import { AgentPage, agentCategoryFrom, agentSettingsItems, agentViewFrom } from './agent-page';
 
 vi.mock('@/retained-adapters/retained-chat', async () => {
   const { createElement: h } = await import('react');
   return {
-    RetainedChat: (props: { agentId: string | null; conversationId: string | null }) =>
-      h('div', { 'data-testid': 'retained-chat', 'data-agent': props.agentId, 'data-conversation': props.conversationId }),
+    RetainedChat: (props: { agentId: string | null; conversationId: string | null; isolated?: boolean }) =>
+      h('div', {
+        'data-testid': 'retained-chat',
+        'data-agent': props.agentId,
+        'data-conversation': props.conversationId,
+        'data-isolated': String(props.isolated === true),
+      }),
   };
-});
-
-vi.mock('@/retained-adapters/agent-settings', async () => {
-  const { createElement: h } = await import('react');
-  return { AgentSettings: () => h('div', { 'data-testid': 'agent-settings-form' }) };
 });
 
 vi.mock('@/retained-adapters/link', async () => {
@@ -24,6 +27,14 @@ vi.mock('@/retained-adapters/link', async () => {
   return {
     default: (props: { href: string; className?: string; children?: unknown }) =>
       h('a', { href: props.href, className: props.className }, props.children as never),
+  };
+});
+
+vi.mock('@/retained-adapters/agent-settings', async () => {
+  const { createElement: h } = await import('react');
+  return {
+    AgentSettings: (props: { pageId: string; category: string; categoryTitle: string }) =>
+      h('div', { 'data-testid': 'agent-settings', 'data-agent': props.pageId, 'data-category': props.category, 'data-title': props.categoryTitle }),
   };
 });
 
@@ -62,6 +73,7 @@ vi.mock('@/ui/chat/use-chat-data/use-chat-data', () => ({
 
 beforeEach(() => {
   window.history.replaceState(null, '', '/');
+  useSettingsSubnavStore.setState({ open: true });
 });
 
 afterEach(unmountAll);
@@ -193,17 +205,6 @@ describe('AgentPage', () => {
     });
   });
 
-  test('keeps classic\'s settings form reachable under the rows', () => {
-    window.history.replaceState(null, '', '/?tab=settings');
-    const container = mount(createElement(AgentPage, props));
-    assert({
-      given: 'the Settings tab before the category sub-nav exists',
-      should: 'render the settings form under the rows',
-      actual: container.querySelector('[data-testid="agent-settings-form"]') !== null,
-      expected: true,
-    });
-  });
-
   test('does not mount the chat on the Settings tab', () => {
     window.history.replaceState(null, '', '/?tab=settings');
     const container = mount(createElement(AgentPage, props));
@@ -212,6 +213,136 @@ describe('AgentPage', () => {
       should: 'not render the chat in the Settings view',
       actual: container.querySelector('[data-testid="retained-chat"]'),
       expected: null,
+    });
+  });
+});
+
+describe('AgentPage entry and the Imago column (IMC-3.11)', () => {
+  test('folds Imago to the Ask pill and selects this agent for the side chat', () => {
+    dispatch(transactions.expandImago, undefined);
+    mount(createElement(AgentPage, props));
+    assert({
+      given: 'the viewer entering an agent page with Imago open',
+      should: 'collapse Imago and point the side chat at this agent',
+      actual: { collapsed: getUiState().resources.imagoCollapsed, agent: getUiState().resources.chatAgent },
+      expected: { collapsed: true, agent: { id: 'a1', title: 'Launch Agent' } },
+    });
+  });
+
+  test('hands the side chat back to its agent on leaving the page', () => {
+    dispatch(transactions.selectAgent, null);
+    mount(createElement(AgentPage, props));
+    unmountAll();
+    assert({
+      given: 'Imago talking as Imago, then an agent page entered and left',
+      should: 'leave the side chat with Imago again',
+      actual: getUiState().resources.chatAgent,
+      expected: null,
+    });
+  });
+
+  test('keeps the middle chat isolated from the Imago column', () => {
+    const container = mount(createElement(AgentPage, props));
+    assert({
+      given: 'the Chat tab of an agent page',
+      should: 'mount the chat isolated from the shared selection',
+      actual: container.querySelector('[data-testid="retained-chat"]')?.getAttribute('data-isolated'),
+      expected: 'true',
+    });
+  });
+
+  test('folds Imago again on entering a different agent page', () => {
+    setUiState({ ...getUiState(), resources: { ...getUiState().resources, imagoCollapsed: false } });
+    mount(createElement(AgentPage, { ...props, pageId: 'a2', page: { ...page, id: 'a2' } as TreePage }));
+    assert({
+      given: 'Imago reopened, then another agent page is entered',
+      should: 'fold it again, since that is a new entry',
+      actual: getUiState().resources.imagoCollapsed,
+      expected: true,
+    });
+  });
+});
+
+describe('agentCategoryFrom', () => {
+  test('reads a known category from the URL and falls back to Behavior', () => {
+    assert({
+      given: 'the category values tools, a made-up value and none',
+      should: 'name the matching category, with Behavior as the fallback',
+      actual: ['tools', 'nope', null].map(agentCategoryFrom),
+      expected: ['tools', 'behavior', 'behavior'],
+    });
+  });
+});
+
+describe('AgentPage settings sub-nav', () => {
+  const settingsNav = (container: HTMLElement) => container.querySelector('nav[aria-label="Agent settings"]');
+  const navRows = (container: HTMLElement) =>
+    Array.from(settingsNav(container)?.querySelectorAll<HTMLButtonElement>('button:not([aria-label])') ?? []);
+
+  test('renders a persistent Agent settings nav beside the Behavior form by default', () => {
+    window.history.replaceState(null, '', '/?tab=settings');
+    const container = mount(createElement(AgentPage, props));
+    assert({
+      given: 'the Settings tab with no category in the URL',
+      should: 'render the Agent settings nav with Behavior current and its form beside it',
+      actual: {
+        nav: settingsNav(container) !== null,
+        current: navRows(container).map((row) => row.getAttribute('aria-current')),
+        form: container.querySelector('[data-testid="agent-settings"]')?.getAttribute('data-category'),
+      },
+      expected: { nav: true, current: ['page', null, null, null, null], form: 'behavior' },
+    });
+  });
+
+  test('opens the category named in the URL', () => {
+    window.history.replaceState(null, '', '/?tab=settings&category=tools');
+    const container = mount(createElement(AgentPage, props));
+    assert({
+      given: 'a page address carrying category=tools',
+      should: 'mark the Tools row current and pass tools to the form',
+      actual: {
+        current: navRows(container).map((row) => row.getAttribute('aria-current')),
+        form: container.querySelector('[data-testid="agent-settings"]')?.getAttribute('data-category'),
+        title: container.querySelector('[data-testid="agent-settings"]')?.getAttribute('data-title'),
+      },
+      expected: { current: [null, null, 'page', null, null], form: 'tools', title: 'Tools' },
+    });
+  });
+
+  test('selecting a row shows that category and writes it to the URL', () => {
+    window.history.replaceState(null, '', '/?tab=settings');
+    const container = mount(createElement(AgentPage, props));
+    const access = navRows(container)[1];
+    if (access) click(access);
+    assert({
+      given: 'a click on the Access row',
+      should: 'show the Access form and write category=access into the URL',
+      actual: {
+        form: container.querySelector('[data-testid="agent-settings"]')?.getAttribute('data-category'),
+        url: new URL(window.location.href).searchParams.get('category'),
+        tab: new URL(window.location.href).searchParams.get('tab'),
+      },
+      expected: { form: 'access', url: 'access', tab: 'settings' },
+    });
+  });
+
+  test('collapses to a Show settings menu button and back', () => {
+    window.history.replaceState(null, '', '/?tab=settings');
+    const container = mount(createElement(AgentPage, props));
+    const close = container.querySelector<HTMLButtonElement>('button[aria-label="Close settings menu"]');
+    if (close) click(close);
+    const collapsed = {
+      nav: settingsNav(container) === null,
+      show: container.querySelector('button[aria-label="Show settings menu"]') !== null,
+      form: container.querySelector('[data-testid="agent-settings"]') !== null,
+    };
+    const show = container.querySelector<HTMLButtonElement>('button[aria-label="Show settings menu"]');
+    if (show) click(show);
+    assert({
+      given: 'Close settings menu then Show settings menu',
+      should: 'hide the nav with the form still shown, then bring the nav back',
+      actual: { collapsed, reopened: settingsNav(container) !== null },
+      expected: { collapsed: { nav: true, show: true, form: true }, reopened: true },
     });
   });
 });

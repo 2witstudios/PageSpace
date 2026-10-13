@@ -22,6 +22,7 @@ import { tabLabelFor } from '../../frame/tabs/tab-label';
 import { AgentPicker } from '../agent-picker/agent-picker';
 import { SpendStrip } from '../spend-strip/spend-strip';
 import { ChipsRow } from '../chips-row/chips-row';
+import { SideChatEmpty } from '../side-chat-empty/side-chat-empty';
 import { ImagoHistory } from '../imago-history/imago-history';
 import { FilesIntro } from '../files-intro/files-intro';
 import { usePathname } from 'next/navigation';
@@ -121,7 +122,9 @@ export function ChatPane({ stage, driveName, homeDriveId, leading = null, traili
   } : chosenAgent;
   // The Files ground: no page open, so the column opens with the drive's page count (IMC-2.12).
   const filesGround = stage.section === 'files' && stage.object === null && stage.driveId !== null;
-  const thread = view === 'history' ? <ImagoHistory agentId={agentId} activeId={conversationId} /> : <div ref={chatHost} className={context.density === 'roomy' ? 'mx-auto h-full min-h-0 w-full max-w-imago-ground' : 'h-full min-h-0'}><RetainedChat home={stage.section === 'chat'} agentId={agentId} name={agentName} conversationId={conversationId} resolving={resolving} placeholder={context.placeholder} aboveComposer={<><ChipsRow conversationId={conversationId} agentId={agentId} driveId={stage.driveId ?? undefined} /><SpendStrip /></>} /></div>;
+  // A side chat with an agent beside a page, before its first message: the invitation and chips (IMC-3.11).
+  const sideChatEmpty = chosenAgent !== null && stage.object?.kind === 'page' && conversationId === null && !resolving;
+  const thread = view === 'history' ? <ImagoHistory agentId={agentId} activeId={conversationId} /> : <div ref={chatHost} className={context.density === 'roomy' ? 'mx-auto h-full min-h-0 w-full max-w-imago-ground' : 'h-full min-h-0'}><RetainedChat home={stage.section === 'chat'} agentId={agentId} name={agentName} conversationId={conversationId} resolving={resolving} placeholder={context.placeholder} aboveComposer={<>{sideChatEmpty ? <SideChatEmpty agentName={agentName} /> : null}<ChipsRow conversationId={conversationId} agentId={agentId} driveId={stage.driveId ?? undefined} /><SpendStrip /></>} /></div>;
   return renderChatPane({
     density: context.density,
     agentName: headerAgent?.title ?? agentName,

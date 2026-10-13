@@ -1,17 +1,21 @@
 'use client';
 
-import { AgentSettings } from '@/retained-adapters/agent-settings';
 import { useCallback, useEffect, useState } from 'react';
 import { Bot, Cable, History, KeyRound, MessageSquare, Plus, Settings, Shield, Wrench, type LucideIcon } from 'lucide-react';
 import { toast } from 'sonner';
 import Link from '@/retained-adapters/link';
 import { RetainedChat } from '@/retained-adapters/retained-chat';
-import { AgentSettingsMenu, type AgentSettingsMenuItem } from '@/retained/components/ai/page-agents/AgentSettingsMenu';
+import type { AgentSettingsCategory, AgentSettingsMenuItem } from '@/retained/components/ai/page-agents/AgentSettingsMenu';
+import { AgentSettings } from '@/retained-adapters/agent-settings';
 import PageAgentHistoryTab from '@/retained/components/ai/page-agents/PageAgentHistoryTab';
 import { fetchWithAuth } from '@/retained/lib/auth/auth-fetch';
 import { buildAgentSelectionUrl } from '@/retained/lib/agents/agent-selection';
 import { useAgentConversations } from '@/ui/chat/use-chat-data/use-chat-data';
+import { imagoStartsCollapsed } from '@/ui/frame/stage/stage';
 import { ToolbarStrip } from '@/ui/frame/toolbar-strip/toolbar-strip';
+import { SettingsSubnav } from '@/ui/files/settings-subnav/settings-subnav';
+import { getUiState } from '@/ui/store/store';
+import { dispatch, transactions } from '@/ui/store/transactions';
 import type { PageTypeProps } from './shared';
 
 /** The three faces of an agent page's middle (C-Files-AiChat): the Agent views tabs. */
@@ -23,17 +27,27 @@ const TAB_PARAM = 'tab';
 /** The view a `?tab=` value names; anything else (or none) is the Chat tab. */
 export const agentViewFrom = (value: string | null): AgentView => AGENT_VIEWS.find((view) => view === value) ?? 'chat';
 
+/** The category the Settings tab opens on when the address names none. */
+const DEFAULT_CATEGORY: AgentSettingsCategory = 'behavior';
+const CATEGORY_PARAM = 'category';
+
 /**
- * The five category rows of the Settings tab, with the board's copy. Their sub-nav
- * (what a row opens) is IMC-3.12, so a row does nothing yet.
+ * The five category rows of the Settings tab, with the board's copy. The settings sub-nav lists
+ * them and the selected one's form draws beside it (IMC-3.12).
  */
-export const agentSettingsItems = (): AgentSettingsMenuItem[] => [
-  { key: 'behavior', title: 'Behavior', description: 'Model, instructions, identity, and workspace context', icon: Bot },
-  { key: 'access', title: 'Access', description: 'Drive membership and the drives this agent can reach', icon: Shield },
-  { key: 'tools', title: 'Tools', description: 'Sandbox, default tools, and how tools are exposed', icon: Wrench },
-  { key: 'integrations', title: 'Integrations', description: 'Integration tools and incoming webhooks', icon: Cable },
-  { key: 'accounts', title: 'Accounts', description: 'API keys this agent can use without ever seeing them', icon: KeyRound },
+const AGENT_SETTINGS_ITEMS: readonly AgentSettingsMenuItem[] = [
+  { key: 'behavior', title: 'Behavior', description: 'Model, instructions, identity, workspace context', icon: Bot },
+  { key: 'access', title: 'Access', description: 'Drive membership and reachable drives', icon: Shield },
+  { key: 'tools', title: 'Tools', description: 'Sandbox, default tools, exposure', icon: Wrench },
+  { key: 'integrations', title: 'Integrations', description: 'Integration tools and webhooks', icon: Cable },
+  { key: 'accounts', title: 'Accounts', description: 'API keys it can use unseen', icon: KeyRound },
 ];
+
+export const agentSettingsItems = (): readonly AgentSettingsMenuItem[] => AGENT_SETTINGS_ITEMS;
+
+/** The settings category a `?category=` value names; anything else (or none) is Behavior. */
+export const agentCategoryFrom = (value: string | null): AgentSettingsCategory =>
+  AGENT_SETTINGS_ITEMS.find((item) => item.key === value)?.key ?? DEFAULT_CATEGORY;
 
 /** A failed change to a conversation says so; the list stays as the server has it. */
 const reportFailure = (error: unknown): void => {
@@ -152,38 +166,52 @@ function AgentHistory({
   );
 }
 
-/** The Settings tab: the five category rows (C-Files-AiChat Settings). */
-function AgentSettingsRows({ title }: { readonly title: string }) {
-  return (
-    <div className="min-h-0 flex-1 overflow-auto px-6 py-6">
-      <div className="mx-auto flex w-full flex-col">
-        <h2 className="m-0 mb-1 text-sm font-semibold">Agent settings</h2>
-        <p className="mb-4 text-xs text-ink-muted">How {title} thinks, what it can reach, and what it can use.</p>
-        <AgentSettingsMenu items={agentSettingsItems()} selectCategory={() => undefined} />
-      </div>
-    </div>
-  );
-}
-
 /**
  * An agent page in the v3 middle (C-Files-AiChat): the Agent views strip, then the Chat, History
- * or Settings view. The tab lives in `?tab=` so a reload or a shared link keeps it. The side chat
- * and the settings sub-nav are IMC-3.11 and 3.12.
+ * or Settings view. The tab lives in `?tab=` so a reload or a shared link keeps it. The middle chat
+ * is isolated from the Imago column's agent (IMC-3.11). The Settings view is the settings sub-nav
+ * (IMC-3.12) with its category in `?category=`.
  */
 export function AgentPage({ page, driveId, pageId }: PageTypeProps) {
   const [view, setViewState] = useState<AgentView>('chat');
+  const [category, setCategoryState] = useState<AgentSettingsCategory>(DEFAULT_CATEGORY);
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [chatKey, setChatKey] = useState(0);
 
   // Read the tab once the page is on the client: the server has no address bar to read from.
   useEffect(() => {
-    setViewState(agentViewFrom(new URLSearchParams(window.location.search).get(TAB_PARAM)));
+    const params = new URLSearchParams(window.location.search);
+    setViewState(agentViewFrom(params.get(TAB_PARAM)));
+    setCategoryState(agentCategoryFrom(params.get(CATEGORY_PARAM)));
   }, []);
+
+  // Entering the agent page folds Imago to its Ask pill (IMC-3.11). Keyed on the page, not on
+  // every render, so a viewer who reopens Imago is not folded back.
+  useEffect(() => {
+    if (imagoStartsCollapsed(page.type)) dispatch(transactions.collapseImago, undefined);
+  }, [pageId, page.type]);
+
+  // Ask opens the side chat with this agent, so entering the page selects it there; leaving hands
+  // the column back to the agent it had, so opening an object never changes the agent for good.
+  useEffect(() => {
+    const before = getUiState().resources.chatAgent;
+    dispatch(transactions.selectAgent, { id: pageId, title: page.title });
+    return () => {
+      if (getUiState().resources.chatAgent?.id === pageId) dispatch(transactions.selectAgent, before);
+    };
+  }, [pageId, page.title]);
 
   const select = useCallback((next: AgentView) => {
     setViewState(next);
     const url = new URL(window.location.href);
     url.searchParams.set(TAB_PARAM, next);
+    window.history.replaceState(window.history.state, '', url);
+  }, []);
+
+  const selectCategory = useCallback((next: AgentSettingsCategory) => {
+    setCategoryState(next);
+    const url = new URL(window.location.href);
+    url.searchParams.set(CATEGORY_PARAM, next);
     window.history.replaceState(window.history.state, '', url);
   }, []);
 
@@ -218,18 +246,27 @@ export function AgentPage({ page, driveId, pageId }: PageTypeProps) {
       />
       {view === 'chat' && (
         <div className="flex min-h-0 flex-1 flex-col">
-          <RetainedChat key={chatKey} agentId={pageId} name={page.title} conversationId={conversationId} resolving={false} />
+          <RetainedChat key={chatKey} agentId={pageId} name={page.title} conversationId={conversationId} resolving={false} isolated />
         </div>
       )}
       {view === 'history' && (
         <AgentHistory pageId={pageId} currentConversationId={conversationId} onOpen={openConversation} onDeleted={deleted} />
       )}
       {view === 'settings' && (
-        <div className="min-h-0 flex-1 overflow-y-auto">
-          <AgentSettingsRows title={page.title} />
-          {/* Classic's settings form stays reachable under the rows until the category sub-nav (IMC-3.12) opens each one. */}
-          <AgentSettings pageId={pageId} driveId={driveId} title={page.title} />
-        </div>
+        <SettingsSubnav
+          navLabel="Agent settings"
+          heading="Settings"
+          items={agentSettingsItems()}
+          selected={category}
+          onSelect={selectCategory}
+        >
+          <AgentSettings
+            pageId={pageId}
+            driveId={driveId}
+            category={category}
+            categoryTitle={AGENT_SETTINGS_ITEMS.find((item) => item.key === category)?.title ?? ''}
+          />
+        </SettingsSubnav>
       )}
     </div>
   );

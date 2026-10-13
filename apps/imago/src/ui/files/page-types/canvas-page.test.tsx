@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, test, vi } from 'vitest';
 import { assert } from 'riteway/vitest';
 import { act } from 'react';
-import { mount, unmountAll } from '../../test-support/dom';
+import { click, mount, unmountAll } from '../../test-support/dom';
 import { usePublishStatusStore, EMPTY_PUBLISH_SETTINGS, type PublishStatus } from '@/retained/stores/usePublishStatusStore';
 import type { TreePage } from '@/retained/hooks/usePageTree';
 
@@ -113,20 +113,55 @@ describe('CanvasPage Page tools strip', () => {
     });
     assert({
       given: 'a published canvas whose content has changed since publish',
-      should: 'offer the Republish action as the last control in the strip',
-      actual: buttons.at(-1),
-      expected: 'Republish',
+      should: 'offer Republish ahead of Settings, Copy link and Unpublish',
+      actual: buttons.slice(-4),
+      expected: ['Republish', 'Settings', 'Copy link', 'Unpublish'],
     });
   });
 
-  test('shows only the Published chip when the published copy is current', () => {
+  test('shows the Published chip, the URL and the publish controls when the published copy is current', () => {
     const container = mount(<CanvasPage page={page} driveId="d1" pageId={PAGE_ID} />);
     const buttons = Array.from(strip(container).querySelectorAll('button')).map((button) => button.textContent);
     assert({
       given: 'a published canvas with no unpublished changes',
-      should: 'show "Published" and no Republish action',
-      actual: [strip(container).textContent?.includes('Published'), buttons.includes('Republish')],
-      expected: [true, false],
+      should: 'show "Published", the URL, and Settings, Copy link and Unpublish with no Republish action',
+      actual: {
+        chip: strip(container).textContent?.includes('Published'),
+        url: strip(container).querySelector('a')?.getAttribute('href'),
+        controls: buttons.slice(-3),
+        republish: buttons.includes('Republish'),
+      },
+      expected: {
+        chip: true,
+        url: 'https://launch.studio.example/waitlist-page',
+        controls: ['Settings', 'Copy link', 'Unpublish'],
+        republish: false,
+      },
+    });
+  });
+
+  test('opens the Publish settings dialog from the strip', () => {
+    const container = mount(<CanvasPage page={page} driveId="d1" pageId={PAGE_ID} />);
+    const settings = strip(container).querySelector<HTMLButtonElement>('button[aria-label="Publish settings"]');
+    if (settings) click(settings);
+    const dialog = document.querySelector('[role="dialog"]')?.textContent ?? '';
+    assert({
+      given: 'a published canvas and the strip Settings button',
+      should: 'open the Publish settings dialog with Save & republish',
+      actual: { title: dialog.includes('Publish settings'), save: dialog.includes('Save & republish') },
+      expected: { title: true, save: true },
+    });
+  });
+
+  test('offers Publish instead of the URL controls when the canvas is not published', () => {
+    seed(publishedStatus({ published: false, url: null }));
+    const container = mount(<CanvasPage page={page} driveId="d1" pageId={PAGE_ID} />);
+    const buttons = Array.from(strip(container).querySelectorAll('button')).map((button) => button.textContent);
+    assert({
+      given: 'a canvas that is not published',
+      should: 'offer Publish and no Unpublish or Copy link',
+      actual: { publish: buttons.includes('Publish'), unpublish: buttons.includes('Unpublish'), copy: buttons.includes('Copy link') },
+      expected: { publish: true, unpublish: false, copy: false },
     });
   });
 
