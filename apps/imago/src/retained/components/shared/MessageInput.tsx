@@ -51,6 +51,8 @@ export interface MessageInputProps {
   parentId?: string;
   /** Render the "Also send to channel/DM" checkbox in the footer (thread mode only) */
   showAlsoSendToParent?: boolean;
+  /** Label for the also-send checkbox (thread mode) */
+  alsoSendToParentLabel?: string;
   /** Placeholder text */
   placeholder?: string;
   /** Author + snippet for the quote-reply chip rendered above the input row.
@@ -85,6 +87,7 @@ export const MessageInput = forwardRef<ChannelInputRef, MessageInputProps>(
       attachmentsEnabled = true,
       parentId,
       showAlsoSendToParent = false,
+      alsoSendToParentLabel,
       placeholder,
       quotedPreview,
       onClearQuote,
@@ -125,6 +128,7 @@ export const MessageInput = forwardRef<ChannelInputRef, MessageInputProps>(
         attachmentsEnabled={attachmentsEnabled}
         parentId={parentId}
         showAlsoSendToParent={showAlsoSendToParent}
+        alsoSendToParentLabel={alsoSendToParentLabel}
         editingSessionKey={buildEditingSessionKey(source, contextId, parentId)}
         quotedPreview={quotedPreview}
         onClearQuote={onClearQuote}

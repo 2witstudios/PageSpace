@@ -598,9 +598,10 @@ test('direct messaging creates a destination and sends through native conversati
   await factories.createDriveMember(user.homeDriveId, recipient.id, { role: 'MEMBER' });
   const page = await open(browser, baseURL!, '/imago/dm/new');
   const object = page.locator('[data-slot="object"]');
-  await object.getByPlaceholder('Search connections and drive members...').fill('Reuse recipient');
-  await object.getByText('Reuse recipient', { exact: true }).click();
-  await object.getByRole('button', { name: 'Start Conversation', exact: true }).click();
+  // C-DM-New (IMC-4.7): search people, pick the row, then "Message <first name>".
+  await object.getByRole('textbox', { name: 'Search people' }).fill('Reuse recipient');
+  await object.getByRole('option').filter({ hasText: 'Reuse recipient' }).click();
+  await object.getByRole('button', { name: 'Message Reuse', exact: true }).click();
   await expect(page).toHaveURL(/\/imago\/dm\/[^/]+$/);
   const input = object.getByRole('combobox');
   await expect(input).toBeEditable();

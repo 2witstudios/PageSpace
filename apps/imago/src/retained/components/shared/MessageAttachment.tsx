@@ -269,6 +269,7 @@ export function MessageAttachment({ message }: MessageAttachmentProps) {
     <div className="mt-2">
       <a
         href={`/api/files/${fileId}/download?filename=${encodeURIComponent(name)}`}
+        aria-label={`Download ${name}`}
         className="flex items-center gap-3 p-3 bg-muted/50 hover:bg-muted rounded-lg border border-border/50 max-w-sm transition-colors"
       >
         <div className="w-10 h-10 rounded bg-muted flex items-center justify-center shrink-0">

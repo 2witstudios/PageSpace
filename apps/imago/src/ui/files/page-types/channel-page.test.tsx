@@ -6,6 +6,11 @@ import { click, mount, unmountAll } from '@/ui/test-support/dom';
 import type { TreePage } from '@/retained/hooks/usePageTree';
 import { ChannelPage } from './channel-page';
 
+const route = vi.hoisted(() => ({ path: '/d1/files/c1' }));
+const access = vi.hoisted(() => ({ webhooks: true }));
+
+vi.mock('next/navigation', () => ({ usePathname: () => route.path }));
+
 vi.mock('next/dynamic', async () => {
   const { createElement: h } = await import('react');
   return {
@@ -17,23 +22,39 @@ vi.mock('next/dynamic', async () => {
 vi.mock('@/retained/components/shared/PageWebhooksDialog', async () => {
   const { createElement: h } = await import('react');
   return {
+    useCanManagePageWebhooks: () => access.webhooks,
     PageWebhooksDialog: (props: { open: boolean; pageId: string; pageType: string }) =>
       props.open ? h('div', { role: 'dialog', 'aria-label': 'Webhooks', 'data-page': props.pageId, 'data-type': props.pageType }) : null,
   };
 });
 
-afterEach(unmountAll);
+afterEach(() => {
+  unmountAll();
+  access.webhooks = true;
+});
 
 const page = { id: 'c1', driveId: 'd1', title: 'Launch', type: 'CHANNEL' } as unknown as TreePage;
 
 describe('ChannelPage', () => {
-  test('renders the Channel tools strip', () => {
+  test('renders the Channel tools strip on the Files route', () => {
+    route.path = '/d1/files/c1';
     const container = mount(createElement(ChannelPage, { page, driveId: 'd1', pageId: 'c1' }));
     assert({
-      given: 'a channel page',
+      given: 'a channel opened from Files',
       should: 'render the Channel tools toolbar strip',
       actual: container.querySelector('[role="toolbar"]')?.getAttribute('aria-label'),
       expected: 'Channel tools',
+    });
+  });
+
+  test('names the strip "Channel" on the Messages route', () => {
+    route.path = '/d1/messages/c1';
+    const container = mount(createElement(ChannelPage, { page, driveId: 'd1', pageId: 'c1' }));
+    assert({
+      given: 'a channel opened from Messages',
+      should: 'name the 44px strip "Channel" as the Messages board does',
+      actual: container.querySelector('[role="toolbar"]')?.getAttribute('aria-label'),
+      expected: 'Channel',
     });
   });
 
@@ -59,6 +80,17 @@ describe('ChannelPage', () => {
       should: 'open PageWebhooksDialog for this channel only after a click',
       actual: { before: before === null, page: dialog?.getAttribute('data-page') ?? null, type: dialog?.getAttribute('data-type') ?? null },
       expected: { before: true, page: 'c1', type: 'CHANNEL' },
+    });
+  });
+
+  test('no Webhooks button for a viewer the webhooks route refuses', () => {
+    access.webhooks = false;
+    const container = mount(createElement(ChannelPage, { page, driveId: 'd1', pageId: 'c1' }));
+    assert({
+      given: 'a viewer who is not the drive owner or an admin',
+      should: 'leave the Webhooks button out of the strip',
+      actual: container.querySelector('button[aria-label="Webhooks"]'),
+      expected: null,
     });
   });
 

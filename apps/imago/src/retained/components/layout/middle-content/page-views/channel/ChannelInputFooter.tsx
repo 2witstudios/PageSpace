@@ -177,11 +177,11 @@ export function ChannelInputFooter({
                     )}
                   >
                     <AtSign className="h-4 w-4" />
-                    <span className="sr-only">Mention someone</span>
+                    <span className="sr-only">Mention</span>
                   </Button>
                 </PopoverTrigger>
               </TooltipTrigger>
-              <TooltipContent side="top">Mention someone</TooltipContent>
+              <TooltipContent side="top">Mention</TooltipContent>
             </Tooltip>
             <PopoverContent side="top" align="start" className="w-auto p-0" sideOffset={8}>
               <MentionPicker
@@ -209,10 +209,10 @@ export function ChannelInputFooter({
                 )}
               >
                 <AtSign className="h-4 w-4" />
-                <span className="sr-only">Mention someone</span>
+                <span className="sr-only">Mention</span>
               </Button>
             </TooltipTrigger>
-            <TooltipContent side="top">Mention someone</TooltipContent>
+            <TooltipContent side="top">Mention</TooltipContent>
           </Tooltip>
         )}
 
@@ -257,6 +257,9 @@ export function ChannelInputFooter({
 
       {/* Right group - Attachments + thread also-send toggle */}
       <div className="flex items-center gap-2">
+        <span className="hidden text-xs text-muted-foreground sm:inline">
+          Enter to send · Shift+Enter for a new line
+        </span>
         {alsoSendToParentEnabled && (
           <label
             className={cn(
@@ -290,10 +293,10 @@ export function ChannelInputFooter({
                 )}
               >
                 <Paperclip className="h-4 w-4" />
-                <span className="sr-only">Attach file</span>
+                <span className="sr-only">Attach files</span>
               </Button>
             </TooltipTrigger>
-            <TooltipContent side="top">Attach file</TooltipContent>
+            <TooltipContent side="top">Attach files</TooltipContent>
           </Tooltip>
         )}
       </div>

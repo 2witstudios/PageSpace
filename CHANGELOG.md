@@ -30,6 +30,8 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 - **Imago's settings (C · Blue Spine)** — agent and canvas settings open with a category list beside the form, which you can fold away with "Close settings menu". Editing an agent's settings shows a bar with "Unsaved changes to …", Discard and Save. A published canvas's strip shows its URL, Settings (publish title, description, share image and search visibility), Copy link and Unpublish.
 
+- **Imago's messages (C · Blue Spine)** — the Messages index lists channels and direct messages together, newest first, with an All · Channels · Direct filter, and opens on your unread counts. Direct messages get their own pane with a filter and the people you can message. An open conversation has one head ("Direct messages › name", Conversation options), and New message groups people by how you know them. Channel composers say how to mention and send. The Webhooks button only appears for drive owners and admins. Account › Messages lists every channel across your drives, with search, a drive filter, an Unread toggle and Load older.
+
 - **Imago reuses the full PageSpace feature UI** — native editors and file viewers, page creation and sharing, rich chat controls and results, messaging, tasks, agent sessions and account/drive settings now stay inside the persistent Imago shell. Classic PageSpace and rollout defaults are preserved.
 
 - **Right-sidebar chat input is a single compact card** — attach, tools, model picker and one send/stop button now share one toolbar row under the text box instead of stacking a separate model selector above it. While a reply is streaming, a queue button appears next to Stop once you've typed something, so you can still queue a follow-up on phones.

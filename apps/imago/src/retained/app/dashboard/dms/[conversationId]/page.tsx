@@ -605,6 +605,8 @@ export default function InboxDMPage() {
       parentSlot={renderParentSlot()}
       resolveAuthor={resolveThreadAuthor}
       replyCountHint={threadParent?.replyCount}
+      contextLabel={`${displayName} · DM`}
+      alsoSendToParentLabel={`Also send to ${displayName.split(' ')[0] || displayName}`}
       onClose={closeThread}
     />
   ) : null;
@@ -848,7 +850,7 @@ export default function InboxDMPage() {
       </div>
     </MessageDropZone>
     {threadPanel && !isMobile && (
-      <div className="hidden md:flex w-[420px] shrink-0 h-full">
+      <div className="hidden md:flex w-[360px] shrink-0 h-full">
         {threadPanel}
       </div>
     )}

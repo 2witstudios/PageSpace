@@ -107,6 +107,15 @@ const webhooksFetcher = async (url: string): Promise<{ webhooks: WebhookRow[] } 
   return body;
 };
 
+/**
+ * Whether the viewer may manage this page's webhooks: the route answers 403 to anyone but the drive
+ * owner or an admin. Shares the dialog's SWR key, so opening the dialog reuses this answer.
+ */
+export function useCanManagePageWebhooks(pageId: string): boolean {
+  const { data } = useSWR(`/api/pages/${pageId}/webhooks`, webhooksFetcher, { revalidateOnFocus: false });
+  return data !== undefined && !('error' in data);
+}
+
 function PageWebhooksDialogImpl({ open, onOpenChange, pageId, pageType }: PageWebhooksDialogProps) {
   // Identity only — deliberately the store selector, not useAuth() (which
   // wires refresh timers and routing this dialog must not own).
@@ -384,6 +393,7 @@ function PageWebhooksDialogImpl({ open, onOpenChange, pageId, pageType }: PageWe
               }}
             >
               <Input
+                aria-label="Webhook name"
                 value={newName}
                 onChange={(e) => setNewName(e.target.value)}
                 placeholder="Webhook name (e.g. Deploys)"
@@ -418,6 +428,7 @@ function PageWebhooksDialogImpl({ open, onOpenChange, pageId, pageType }: PageWe
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
                       <Switch
+                        aria-label={`${webhook.isEnabled ? 'Disable' : 'Enable'} ${webhook.name}`}
                         checked={webhook.isEnabled}
                         disabled={busyId === webhook.id || mintingId === webhook.id}
                         onCheckedChange={(checked) => toggleWebhook(webhook.id, checked)}
@@ -439,6 +450,7 @@ function PageWebhooksDialogImpl({ open, onOpenChange, pageId, pageType }: PageWe
                         type="button"
                         variant="ghost"
                         size="sm"
+                        aria-label={`Delete ${webhook.name}`}
                         disabled={busyId === webhook.id || mintingId === webhook.id}
                         onClick={() => removeWebhook(webhook.id)}
                       >
@@ -454,7 +466,7 @@ function PageWebhooksDialogImpl({ open, onOpenChange, pageId, pageType }: PageWe
 
         <DialogFooter className="shrink-0">
           <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Done
+            Close
           </Button>
         </DialogFooter>
 
