@@ -2744,6 +2744,11 @@
       "import": "./dist/compliance/export/gdpr-export.js",
       "require": "./dist/compliance/export/gdpr-export.js"
     },
+    "./compliance/export/export-sign-in-gate": {
+      "types": "./dist/compliance/export/export-sign-in-gate.d.ts",
+      "import": "./dist/compliance/export/export-sign-in-gate.js",
+      "require": "./dist/compliance/export/export-sign-in-gate.js"
+    },
     "./compliance/export/export-format": {
       "types": "./dist/compliance/export/export-format.d.ts",
       "import": "./dist/compliance/export/export-format.js",
@@ -3028,6 +3033,11 @@
       "types": "./dist/permissions/actor-authentication.d.ts",
       "import": "./dist/permissions/actor-authentication.js",
       "require": "./dist/permissions/actor-authentication.js"
+    },
+    "./permissions/org-derived-content": {
+      "types": "./dist/permissions/org-derived-content.d.ts",
+      "import": "./dist/permissions/org-derived-content.js",
+      "require": "./dist/permissions/org-derived-content.js"
     },
     "./organizations/authentication-policy-core": {
       "types": "./dist/organizations/authentication-policy-core.d.ts",
@@ -3895,6 +3905,9 @@
       "compliance/export/gdpr-export": [
         "./dist/compliance/export/gdpr-export.d.ts"
       ],
+      "compliance/export/export-sign-in-gate": [
+        "./dist/compliance/export/export-sign-in-gate.d.ts"
+      ],
       "compliance/export/export-format": [
         "./dist/compliance/export/export-format.d.ts"
       ],
@@ -3963,6 +3976,9 @@
       ],
       "permissions/actor-authentication": [
         "./dist/permissions/actor-authentication.d.ts"
+      ],
+      "permissions/org-derived-content": [
+        "./dist/permissions/org-derived-content.d.ts"
       ],
       "organizations/authentication-policy-core": [
         "./dist/organizations/authentication-policy-core.d.ts"

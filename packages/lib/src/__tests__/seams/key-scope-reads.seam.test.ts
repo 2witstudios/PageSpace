@@ -156,7 +156,6 @@ const KEY_SCOPE_READ_LEDGER: Readonly<Record<string, Verdict>> = {
   // ── org reads (X-1): the scope rides the org gate; consumers only refuse or narrow ──────────────────────
   'apps/web/src/lib/orgs/org-route-auth.ts#tokenAllowedDriveIds': ORG_GATE,
   'apps/web/src/lib/orgs/org-route-auth.ts#refuseDriveScopedToken': ORG_REFUSAL,
-  'apps/web/src/lib/orgs/org-route-auth.ts#authorizeOrgRequest': ORG_GATE,
   'apps/web/src/app/api/orgs/[orgId]/drives/route.ts#GET': ceiling(
     "filters the OWNER's org drive directory (listOrgDriveDirectory) to the token's scope; nothing outside the scope is added",
   ),

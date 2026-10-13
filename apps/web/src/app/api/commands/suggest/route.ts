@@ -34,6 +34,7 @@ interface CommandSuggestion {
 export async function GET(request: Request) {
   const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
   if (isAuthError(auth)) return auth.error;
+  const actor = actorFromAuth(auth);
   const userId = auth.userId;
 
   const { searchParams } = new URL(request.url);
@@ -55,7 +56,7 @@ export async function GET(request: Request) {
     if (driveId) {
       const isMember = await isPrincipalDriveMember(auth, driveId);
       if (!isMember) {
-        return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json(
+        return deniedResponse(actor, driveId, NextResponse.json(
           { error: 'Access denied to the specified drive' },
           { status: 403 }
         ));
@@ -65,7 +66,7 @@ export async function GET(request: Request) {
     // Shared with the /help built-in injection (available-commands.ts) so the
     // picker and the AI's command list can never drift apart. Membership for
     // driveId was verified above — the loader requires that contract.
-    const { winners, shadowed } = await loadAvailableCommands(actorFromAuth(auth), driveId || null);
+    const { winners, shadowed } = await loadAvailableCommands(actor, driveId || null);
 
     // q matching happens in JS over the caller's own small command set, so user
     // input never reaches a SQL LIKE pattern

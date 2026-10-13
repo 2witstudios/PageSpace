@@ -6,6 +6,7 @@ import { readPageContent } from '@pagespace/lib/services/page-content-store';
 import archiver from 'archiver';
 import { PassThrough } from 'node:stream';
 import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
+import { gateBackupRows, type BackupWithheld } from './backup-sign-in-gate';
 
 export type ExportManifestPage = {
   pageId: string;
@@ -24,6 +25,11 @@ export type ExportManifest = {
   exportedAt: string;
   label: string | null;
   pages: ExportManifestPage[];
+  /**
+   * Pages the org sign-in policy withheld (D-OW-62) — from the snapshot, or from the credential exporting it — by
+   * category and code, with the refusing orgs: sign in as they require and export again.
+   */
+  withheld: BackupWithheld[];
 };
 
 type PageInput = {
@@ -40,12 +46,14 @@ export function buildExportManifest(
   backup: { id: string; driveId: string; label: string | null },
   exportedAt: string,
   pages: PageInput[],
+  withheld: BackupWithheld[] = [],
 ): ExportManifest {
   return {
     backupId: backup.id,
     driveId: backup.driveId,
     exportedAt,
     label: backup.label,
+    withheld,
     pages: pages.map(p => ({
       pageId: p.pageId,
       title: p.title,
@@ -104,7 +112,7 @@ export async function streamBackupExport(
     throw new HttpError(400, 'Backup not found');
   }
 
-  const pageRows = await db
+  const snapshotRows = await db
     .select({
       pageId: driveBackupPages.pageId,
       title: driveBackupPages.title,
@@ -119,7 +127,9 @@ export async function streamBackupExport(
     .leftJoin(pageVersions, eq(driveBackupPages.pageVersionId, pageVersions.id))
     .where(eq(driveBackupPages.backupId, backupId));
 
-  const manifest = buildExportManifest(backup, new Date().toISOString(), pageRows);
+  // SEC-2/3 (D-OW-62): the zip is a read by the exporting credential, whoever took the backup.
+  const { rows: pageRows, withheld } = await gateBackupRows(actor, backup.metadata, snapshotRows);
+  const manifest = buildExportManifest(backup, new Date().toISOString(), pageRows, withheld);
 
   return (async function* () {
     const archive = archiver('zip', { store: true });

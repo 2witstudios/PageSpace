@@ -129,7 +129,7 @@ export const orgsListHandler: CommandHandler = async (ctx, intent) => {
     ctx.stderr.write(`${parsed.message}\n`);
     return EXIT_USAGE_ERROR;
   }
-  const result = await callSdk(ctx.stderr, () => ctx.sdk.organizations.list({}));
+  const result = await callSdk(ctx, () => ctx.sdk.organizations.list({}));
   if (!result.ok) return EXIT_RUNTIME_ERROR;
   ctx.stdout.write(intent.flags.json ? `${JSON.stringify(result.value)}\n` : renderOrgsList(result.value));
   return EXIT_SUCCESS;
@@ -141,7 +141,7 @@ export const orgsGetHandler: CommandHandler = async (ctx, intent) => {
     ctx.stderr.write(`${parsed.message}\n`);
     return EXIT_USAGE_ERROR;
   }
-  const result = await callSdk(ctx.stderr, () => ctx.sdk.organizations.get({ orgId: parsed.value.orgId }));
+  const result = await callSdk(ctx, () => ctx.sdk.organizations.get({ orgId: parsed.value.orgId }));
   if (!result.ok) return EXIT_RUNTIME_ERROR;
   ctx.stdout.write(intent.flags.json ? `${JSON.stringify(result.value)}\n` : renderOrg(result.value));
   return EXIT_SUCCESS;
@@ -153,7 +153,7 @@ export const orgsMembersHandler: CommandHandler = async (ctx, intent) => {
     ctx.stderr.write(`${parsed.message}\n`);
     return EXIT_USAGE_ERROR;
   }
-  const result = await callSdk(ctx.stderr, () => ctx.sdk.organizations.listMembers({ orgId: parsed.value.orgId }));
+  const result = await callSdk(ctx, () => ctx.sdk.organizations.listMembers({ orgId: parsed.value.orgId }));
   if (!result.ok) return EXIT_RUNTIME_ERROR;
   ctx.stdout.write(intent.flags.json ? `${JSON.stringify(result.value)}\n` : renderOrgMembers(result.value));
   return EXIT_SUCCESS;
@@ -165,7 +165,7 @@ export const orgsDrivesHandler: CommandHandler = async (ctx, intent) => {
     ctx.stderr.write(`${parsed.message}\n`);
     return EXIT_USAGE_ERROR;
   }
-  const result = await callSdk(ctx.stderr, () => ctx.sdk.organizations.listDrives({ orgId: parsed.value.orgId }));
+  const result = await callSdk(ctx, () => ctx.sdk.organizations.listDrives({ orgId: parsed.value.orgId }));
   if (!result.ok) return EXIT_RUNTIME_ERROR;
   ctx.stdout.write(intent.flags.json ? `${JSON.stringify(result.value)}\n` : renderOrgDrives(result.value));
   return EXIT_SUCCESS;
@@ -177,7 +177,7 @@ export const orgsPoliciesHandler: CommandHandler = async (ctx, intent) => {
     ctx.stderr.write(`${parsed.message}\n`);
     return EXIT_USAGE_ERROR;
   }
-  const result = await callSdk(ctx.stderr, () => ctx.sdk.organizations.getPolicies({ orgId: parsed.value.orgId }));
+  const result = await callSdk(ctx, () => ctx.sdk.organizations.getPolicies({ orgId: parsed.value.orgId }));
   if (!result.ok) return EXIT_RUNTIME_ERROR;
   ctx.stdout.write(intent.flags.json ? `${JSON.stringify(result.value)}\n` : renderOrgPolicies(result.value));
   return EXIT_SUCCESS;

@@ -136,7 +136,7 @@ describe('listOrgDriveDirectory', () => {
     expect((await directoryOf(lena))?.Research).toEqual({ visibility: 'RESTRICTED', joined: false, joinRequest: 'pending', canRequest: false });
     expect((await listAccessibleDrives(credentialActor(lena, null))).map((x) => x.id)).not.toContain(d.research);
 
-    await answerDriveJoinRequest(marcus, d.research, requested.request.id, 'approve');
+    await answerDriveJoinRequest(credentialActor(marcus, null), d.research, requested.request.id, 'approve');
 
     expect((await directoryOf(lena))?.Research).toEqual({ visibility: 'RESTRICTED', joined: true, joinRequest: null, canRequest: false });
     expect((await listAccessibleDrives(credentialActor(lena, null))).map((x) => x.id)).toContain(d.research);
@@ -165,7 +165,7 @@ describe('listOrgDriveDirectory', () => {
     expect(await getDriveRecipientUserIds(d.research)).not.toContain(lena);
 
     // The drive lead approves; Lena is in, and the picker now lists the drive.
-    expect(await answerDriveJoinRequest(marcus, d.research, asked.request.id, 'approve'))
+    expect(await answerDriveJoinRequest(credentialActor(marcus, null), d.research, asked.request.id, 'approve'))
       .toMatchObject({ ok: true, action: 'approve', admitted: true });
     expect((await listAccessibleDrives(credentialActor(lena, null))).map((x) => x.id)).toContain(d.research);
     expect(await getDriveAccess(d.research, credentialActor(lena, null))).toMatchObject({ isMember: true, role: 'MEMBER' });
@@ -175,7 +175,7 @@ describe('listOrgDriveDirectory', () => {
     const ninaAsked = await requestToJoinDrive(nina, playbook);
     if (!ninaAsked.ok) throw new Error(ninaAsked.code);
     expect((await listAccessibleDrives(credentialActor(nina, null))).map((x) => x.id)).not.toContain(playbook);
-    expect(await answerDriveJoinRequest(priya, playbook, ninaAsked.request.id, 'approve'))
+    expect(await answerDriveJoinRequest(credentialActor(priya, null), playbook, ninaAsked.request.id, 'approve'))
       .toMatchObject({ ok: true, action: 'approve', admitted: true });
     expect((await listAccessibleDrives(credentialActor(nina, null))).map((x) => x.id)).toContain(playbook);
     expect(await getDriveAccess(playbook, credentialActor(nina, null))).toMatchObject({ isMember: true, role: 'MEMBER' });

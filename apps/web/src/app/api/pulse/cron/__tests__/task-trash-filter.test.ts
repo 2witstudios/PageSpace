@@ -65,8 +65,9 @@ vi.mock('ai', () => ({
 
 vi.mock('../../calendar-context', () => ({
   fetchCalendarContext: vi.fn().mockResolvedValue({
-    happeningNow: [], upcomingToday: [], tomorrow: [], pendingInvites: [], allEvents: [],
+    happeningNow: [], upcomingToday: [], tomorrow: [], pendingInvites: [], allEvents: [], sourceDriveIds: [],
   }),
+  pulseSourceOrgIds: vi.fn(async () => []),
 }));
 
 // The one member-drive set (org-aware; owned drives plus accepted rows while dark).

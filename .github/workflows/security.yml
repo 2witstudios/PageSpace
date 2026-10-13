@@ -439,6 +439,9 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: TypeScript type checking
+        # The same heap the ci workflow gives its web jobs: the web typecheck exceeds Node's default and is OOM-killed (137).
+        env:
+          NODE_OPTIONS: --max-old-space-size=6144
         run: bun run typecheck
 
       - name: ESLint security rules

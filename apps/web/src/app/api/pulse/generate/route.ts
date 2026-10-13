@@ -17,7 +17,7 @@ import { directMessages, dmConversations } from '@pagespace/db/schema/social'
 import { pulseSummaries } from '@pagespace/db/schema/dashboard';
 import { userAutomationPreferences } from '@pagespace/db/schema/automation-preferences';
 import { resolvePulseEnabled } from '@pagespace/lib/billing/automation-preferences';
-import { fetchCalendarContext } from '../calendar-context';
+import { fetchCalendarContext, pulseSourceOrgIds } from '../calendar-context';
 import {
   groupActivitiesForDiff,
   type ActivityForDiff,
@@ -613,6 +613,8 @@ export async function POST(req: Request) {
     const tomorrowEvents = calendarContext.tomorrow;
     const pendingRsvps = calendarContext.pendingInvites;
     const allCalendarEvents = calendarContext.allEvents;
+    // SEC-2/3 (D-OW-62): every org whose drive, page or calendar event can feed this summary; readers must satisfy all.
+    const contributingOrgIds = await pulseSourceOrgIds({ driveIds, pageIds: accessiblePagesList, calendar: calendarContext });
 
     // ========================================
     // BUILD THE RICH CONTEXT WITH DIFFS
@@ -787,6 +789,7 @@ What would be genuinely useful or interesting to say right now? Maybe it's an ob
       summary,
       greeting,
       type: 'on_demand',
+      orgIds: contributingOrgIds,
       contextData: {
         workspace: contextData.workspace,
         workingOn: contextData.activitySummary.slice(0, 5).map(a => ({

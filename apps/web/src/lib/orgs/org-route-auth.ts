@@ -1,7 +1,8 @@
 /**
  * The shared gate for every /api/orgs route: dark behind ORGS_ENABLED, then
  * authenticate, then the ONE org authorization function requireOrgRole (Spec
- * ORG-5). A denial is audited here; route files audit what they do.
+ * ORG-5), then the org's sign-in policy on the credential (SEC-2/3). A denial is
+ * audited here; route files audit what they do.
  */
 import { NextResponse } from 'next/server';
 import { apiError } from '@/lib/api/api-error';
@@ -14,6 +15,8 @@ import type { OrgRole } from '@pagespace/db/schema/organizations';
 import { actorFromAuth } from '@/lib/auth/request-actor';
 import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 import type { VerifiedAuthentication } from '@pagespace/lib/auth/authentication-evidence';
+import { checkActorOrgAuthentication } from '@pagespace/lib/permissions/actor-authentication';
+import type { OrgAuthenticationDecision } from '@pagespace/lib/organizations/authentication-policy-core';
 
 // Writes stay session-only. READS admit an MCP token where the CLI/MCP mirror exists
 // (Spec X-1); OAuth access tokens are not admitted (the wallets routes' same posture).
@@ -81,7 +84,33 @@ export function refuseDriveScopedToken(gate: OrgGate): Response | null {
   return null;
 }
 
-export async function authorizeOrgRequest(
+const SIGN_IN_POLICY_MESSAGES: Record<Extract<OrgAuthenticationDecision, { allowed: false }>['code'], string> = {
+  org_strong_sign_in_required: 'This organization requires signing in with a passkey',
+  org_reauthentication_required: 'This organization requires a recent sign-in',
+};
+
+function signInPolicyRefusal(
+  request: Request,
+  gate: Extract<OrgGate, { ok: true }>,
+  decision: OrgAuthenticationDecision,
+  resource: { resourceType: 'organization'; resourceId: string },
+): Response | null {
+  if (decision.allowed) return null;
+  auditRequest(request, {
+    eventType: 'authz.access.denied',
+    userId: gate.userId,
+    ...resource,
+    details: { reason: decision.code },
+  });
+  return apiError(403, decision.code, SIGN_IN_POLICY_MESSAGES[decision.code]);
+}
+
+async function orgCredentialRefusal(request: Request, gate: Extract<OrgGate, { ok: true }>, orgId: string): Promise<Response | null> {
+  return signInPolicyRefusal(request, gate, await checkActorOrgAuthentication(gate.actor, orgId), { resourceType: 'organization', resourceId: orgId });
+}
+
+/** Dark check, authentication and the caller's org role, nothing more: the shared first half of the org gates below. */
+async function authorizeOrgRole(
   request: Request,
   orgId: string,
   minRole: OrgRole,
@@ -105,5 +134,35 @@ export async function authorizeOrgRequest(
     });
     return { ok: false, response: apiError(decision.status, code, error) };
   }
-  return { ok: true, userId: gate.userId, role: decision.role, allowedDriveIds: gate.allowedDriveIds, authentication: gate.authentication, actor: gate.actor };
+  return { ...gate, role: decision.role };
+}
+
+/**
+ * The org gate for acting ON the org: dark check, authentication, the caller's org role, then the org's sign-in policy.
+ */
+export async function authorizeOrgRequest(
+  request: Request,
+  orgId: string,
+  minRole: OrgRole,
+  options: AuthOptions,
+): Promise<OrgGate> {
+  const gate = await authorizeOrgRole(request, orgId, minRole, options);
+  if (!gate.ok) return gate;
+  // Role first: a non-member learns nothing about the org's sign-in policy. Then the policy, for sessions and keys
+  // alike, so a stolen or stale Admin credential cannot invite, change members, domains or ownership (review #2866 B1).
+  // D-OW-53(3): the policy asked here is policyInForce — a DAMAGED stored maximum age is held to the 15-minute floor, not
+  // read as 0, so a freshly signed-in Admin can still repair it. When lane D's policyInForce (8985a21ee) is integrated,
+  // these semantics are the ones kept.
+  const refused = await orgCredentialRefusal(request, gate, orgId);
+  if (refused) return { ok: false, response: refused };
+  return gate;
+}
+
+/**
+ * The org gate for LEAVING the org: the member's role, but never the org's sign-in policy. Leaving only restricts — it
+ * grants and reads nothing of the org (D-OW-33's spirit) — so a credential the policy no longer admits must still be
+ * able to walk away. Only POST /api/orgs/[orgId]/leave uses it.
+ */
+export async function authorizeOrgDeparture(request: Request, orgId: string, options: AuthOptions): Promise<OrgGate> {
+  return authorizeOrgRole(request, orgId, 'MEMBER', options);
 }

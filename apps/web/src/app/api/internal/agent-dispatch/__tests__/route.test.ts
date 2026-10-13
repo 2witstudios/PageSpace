@@ -130,8 +130,8 @@ describe('POST /api/internal/agent-dispatch', () => {
   });
 
   it('SEC-2 (partial) SEC-3 (partial) the worker principal carries the dispatching credential\'s evidence, re-parsed rather than trusted as shaped', async () => {
-    // Evidence from the future is not evidence: the receiver re-parses it, so a forged ceremony time fails closed.
-    await POST(signed({ ...PAYLOAD, authentication: { ...EVIDENCE, authenticatedAtMs: Date.now() + 60_000 } }));
+    // Evidence from beyond the clock-skew allowance is not evidence: the receiver re-parses it, so a forged ceremony time fails closed.
+    await POST(signed({ ...PAYLOAD, authentication: { ...EVIDENCE, authenticatedAtMs: Date.now() + 10 * 60_000 } }));
 
     expect(loadServicePrincipalMock).toHaveBeenCalledWith(expect.objectContaining({ authentication: null }));
   });

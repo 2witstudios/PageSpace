@@ -22,6 +22,7 @@ vi.mock('@/lib/auth', () => ({
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
   explainSignInRefusal: vi.fn().mockResolvedValue(null),
     canUserViewPage: vi.fn(),
+    getBatchPagePermissions: vi.fn(),
 }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
     loggers: {
@@ -61,7 +62,7 @@ vi.mock('@pagespace/lib/utils/api-utils', () => ({
 
 import { GET } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
-import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
+import { canUserViewPage, getBatchPagePermissions } from '@pagespace/lib/permissions/permissions';
 import { db } from '@pagespace/db/db';
 import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
@@ -92,6 +93,8 @@ describe('GET /api/pages/[pageId]/children', () => {
     vi.clearAllMocks();
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
     vi.mocked(canUserViewPage).mockResolvedValue(true);
+    vi.mocked(getBatchPagePermissions).mockImplementation(async (_actor, ids) =>
+      new Map(ids.map((id) => [id, { canView: true, canEdit: false, canShare: false, canDelete: false }])));
 
     // Default: return children
     vi.mocked(db.query.pages.findMany).mockResolvedValue([
@@ -142,6 +145,18 @@ describe('GET /api/pages/[pageId]/children', () => {
       expect(body).toHaveLength(2);
       expect(body[0].isTaskLinked).toBe(true);  // child_1 is in task-linked set
       expect(body[1].isTaskLinked).toBe(false); // child_2 is not
+    });
+
+    it('SEC-2 (partial) leaves out every child the caller may not view itself (a memory page withheld by org sign-in, a private child)', async () => {
+      vi.mocked(getBatchPagePermissions).mockImplementation(async (_actor, ids) =>
+        new Map(ids.map((id) => [id, { canView: id !== 'child_2', canEdit: false, canShare: false, canDelete: false }])));
+
+      const response = await GET(createRequest(), mockParams);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.map((child: { id: string }) => child.id)).toEqual(['child_1']);
+      expect(getBatchPagePermissions).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }), ['child_1', 'child_2']);
     });
 
     it('returns empty array when no children exist', async () => {
@@ -200,5 +215,6 @@ vi.mock('@/lib/auth/principal-permissions', async (importOriginal) => {
   const permissions = await import('@pagespace/lib/permissions/permissions');
   return { ...actual,
     canPrincipalViewPage: (auth: { userId: string }, resourceId: string) => permissions.canUserViewPage(credentialActor(auth.userId, null), resourceId),
+    getPrincipalBatchPagePermissions: (auth: { userId: string }, pageIds: string[]) => permissions.getBatchPagePermissions(credentialActor(auth.userId, null), pageIds),
   };
 });

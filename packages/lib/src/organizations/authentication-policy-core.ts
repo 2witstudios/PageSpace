@@ -43,6 +43,32 @@ export function decideOrgAuthentication(input: {
   return { allowed: true };
 }
 
+/**
+ * The policy as an admin acting ON the org is held to: a damaged stored maximum age (which, for content, reads as the
+ * strictest value and refuses everyone) is read as the strictest VALID age, so a freshly signed-in Admin can still reach
+ * the settings that repair it instead of no one ever being able to. Every other value is the stored one. D-OW-53(3):
+ * these are the semantics kept when lane D's policyInForce (8985a21ee) is integrated.
+ */
+export function policyInForce(policy: OrgAuthenticationPolicy): OrgAuthenticationPolicy {
+  return normalizeMaximumSessionAgeMinutes(policy.maximumSessionAgeMinutes) === undefined
+    ? { ...policy, maximumSessionAgeMinutes: MIN_MAXIMUM_SESSION_AGE_MINUTES }
+    : policy;
+}
+
+/**
+ * One policy for a resource several orgs govern (content derived from their drives, D-OW-62): strong sign-in if any
+ * requires it, and the shortest maximum age. It refuses exactly the credentials one of `policies` refuses. Null (no
+ * policy) when none governs.
+ */
+export function strictestAuthenticationPolicy(policies: readonly OrgAuthenticationPolicy[]): OrgAuthenticationPolicy | null {
+  if (policies.length === 0) return null;
+  const ages = policies.flatMap((policy) => (policy.maximumSessionAgeMinutes === null ? [] : [policy.maximumSessionAgeMinutes]));
+  return {
+    requireStrongSignIn: policies.some((policy) => policy.requireStrongSignIn),
+    maximumSessionAgeMinutes: ages.length === 0 ? null : Math.min(...ages),
+  };
+}
+
 /** [D-OW-33] Per key: does `after` admit no credential that `before` refused? Equal values are not looser. */
 export const requireStrongSignInNoLooser = (before: boolean, after: boolean): boolean => !before || after;
 export const maximumSessionAgeNoLooser = (before: number | null, after: number | null): boolean =>
@@ -71,8 +97,9 @@ export type SignInPolicyChangeDecision =
  *     (which reads as the strictest value and refuses everyone) is judged as the strictest VALID age, so a freshly
  *     signed-in Admin can repair it rather than no one ever being able to.
  *   - D-OW-47, TIGHTENING (strong sign-in on, a shorter or new maximum age) needs a credential that satisfies the
- *     RESULTING policy: the policy also governs the org's admin routes, so an Admin who could not meet it would lock
- *     themselves out of the very page that sets it. `requires` names the ceremony that would let them make it.
+ *     RESULTING policy: the policy also governs the org's admin routes (authorizeOrgRequest asks it of every session
+ *     and key after the role check), so an Admin who could not meet it would lock themselves out of the very page
+ *     that sets it. `requires` names the ceremony that would let them make it.
  * A mixed change must pass both. A change that leaves the two keys as they are is not judged. Billing never enters
  * here ([D-OW-33]): a lapsed org may tighten on the same terms.
  */
@@ -84,13 +111,13 @@ export function decideSignInPolicyChange(input: {
 }): SignInPolicyChangeDecision {
   const { before, after, authentication, nowMs } = input;
   if (signInPolicyLoosened(before, after)) {
-    const maximumAge = normalizeMaximumSessionAgeMinutes(before.maximumSessionAgeMinutes);
-    const inForce = { ...before, maximumSessionAgeMinutes: maximumAge === undefined ? MIN_MAXIMUM_SESSION_AGE_MINUTES : maximumAge };
-    const decision = decideOrgAuthentication({ policy: inForce, authentication, nowMs });
+    const decision = decideOrgAuthentication({ policy: policyInForce(before), authentication, nowMs });
     if (!decision.allowed) return decision;
   }
   if (signInPolicyTightened(before, after)) {
-    const decision = decideOrgAuthentication({ policy: after, authentication, nowMs });
+    // D-OW-53(3): judged against the policy as it will be in force, so a damaged stored age left in place reads as the
+    // 15-minute floor here too, and turning strong sign-in on stays decidable instead of refusing every credential.
+    const decision = decideOrgAuthentication({ policy: policyInForce(after), authentication, nowMs });
     if (!decision.allowed) return { allowed: false, code: 'org_policy_would_lock_out_actor', requires: decision.code };
   }
   return { allowed: true };

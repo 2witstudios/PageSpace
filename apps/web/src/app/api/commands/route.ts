@@ -33,10 +33,11 @@ export async function GET(request: Request) {
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
     if (isAuthError(auth)) return auth.error;
+    const actor = actorFromAuth(auth);
     const userId = auth.userId;
 
     // Drives the user is a member of (page-level access does not count), org-aware.
-    const memberDriveIds = filterDrivesByMCPScope(auth, await getMemberDriveIds(actorFromAuth(auth), { includeTrashed: false }));
+    const memberDriveIds = filterDrivesByMCPScope(auth, await getMemberDriveIds(actor, { includeTrashed: false }));
 
     // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
     const visible = await db.query.commands.findMany({
@@ -120,6 +121,7 @@ export async function POST(request: Request) {
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
     if (isAuthError(auth)) return auth.error;
+    const actor = actorFromAuth(auth);
     const userId = auth.userId;
 
     let body: unknown;
@@ -176,7 +178,7 @@ export async function POST(request: Request) {
       if (scopeError) return scopeError;
       const allowed = await isPrincipalDriveOwnerOrAdmin(auth, commandDriveId);
       if (!allowed) {
-        return deniedResponse(actorFromAuth(auth), commandDriveId, NextResponse.json(
+        return deniedResponse(actor, commandDriveId, NextResponse.json(
           { error: 'Only the drive owner or admins can manage drive commands' },
           { status: 403 }
         ));

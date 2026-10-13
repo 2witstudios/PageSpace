@@ -59,6 +59,13 @@ export async function resolveOrCreateConversation(
   opts?: {
     /** Display label for the new row (spawned workers are labeled at birth). Ignored for an existing row. */
     title?: string;
+    /**
+     * When the insert runs inside a caller's transaction, the `created` directory event must not leave before
+     * that transaction commits: a sidebar that re-reads on it would read the listing without the new thread and
+     * stay stale. A caller that passes a transaction hands its after-commit queue here; without one the event is
+     * emitted at once (the insert was its own statement, already committed).
+     */
+    afterCommit?: (emit: () => void) => void;
   },
 ): Promise<ResolveOrCreateResult> {
   if (!CUID2_RE.test(conversationId)) {
@@ -120,8 +127,10 @@ export async function resolveOrCreateConversation(
     // here, so emitting here is what makes a server-spawned worker appear in
     // the owner's sidebar without a poll. Only the actual-insert branch
     // emits; the race-loser fallback below resolved someone else's insert.
-    // No caller passes a transaction `db`, so this runs post-commit.
-    emitConversationLifecycle('created', { ...created, rev: Number(created.rev) });
+    // A caller that passes a transaction `db` defers it to after its commit (`afterCommit`).
+    const emitCreated = () => emitConversationLifecycle('created', { ...created, rev: Number(created.rev) });
+    if (opts?.afterCommit) opts.afterCommit(emitCreated);
+    else emitCreated();
     return { conversation: created, isNew: true };
   }
 

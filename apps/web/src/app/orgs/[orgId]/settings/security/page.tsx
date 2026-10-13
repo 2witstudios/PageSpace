@@ -19,9 +19,13 @@ import { reauthenticateCurrentSession } from '@/lib/auth/session-reauthenticatio
 import {
   SESSION_AGE_OPTIONS,
   SESSION_AGE_RANGE_TEXT,
+  blockedPeopleText,
   formatSessionAge,
+  isValidSessionAge,
   needsPasskeyBeforeSaving,
+  signInPolicyPatch,
   signInPreviewQuery,
+  type SignInBlockedCounts,
   type SignInPolicyDraft,
 } from '@/lib/orgs/sign-in-policy-ui';
 import { isOrgKey, orgReadKeys, type OrgPolicies } from '@/lib/orgs/org-api';
@@ -197,11 +201,13 @@ function SecurityBody({ orgId, orgName, role }: OrgSettingsContext) {
 }
 
 const NO_LIMIT = 'none';
+const INVALID_AGE = 'invalid';
 
 /**
  * SEC-2/SEC-3 (D-OW-45, D-OW-47): require strong sign-in (a user-verified passkey) and a maximum sign-in age for
  * everyone opening the org's drives, members and guests alike. Owners and Admins see, before saving, how many members
- * would have to sign in again. Turning strong sign-in on runs the passkey ceremony first: an Admin must meet a policy
+ * and guests would have to sign in again. Only the changed keys are sent, and a damaged stored age reads as invalid
+ * until the Admin chooses a value. Turning strong sign-in on runs the passkey ceremony first: an Admin must meet a policy
  * themselves before they can turn it on, or they would lock themselves out of these settings.
  */
 function SignInRequirementsCard({ orgId, orgName, role }: Pick<OrgSettingsContext, 'orgId' | 'orgName' | 'role'>) {
@@ -210,16 +216,17 @@ function SignInRequirementsCard({ orgId, orgName, role }: Pick<OrgSettingsContex
   const [draft, setDraft] = useState<SignInPolicyDraft | null>(null);
   const [saving, setSaving] = useState(false);
   const current: SignInPolicyDraft | null = draft ?? (stored ? { requireStrongSignIn: stored.requireStrongSignIn, maximumSessionAgeMinutes: stored.maximumSessionAgeMinutes } : null);
-  const dirty = !!(draft && stored && (draft.requireStrongSignIn !== stored.requireStrongSignIn || draft.maximumSessionAgeMinutes !== stored.maximumSessionAgeMinutes));
-  const preview = useOrgAdminRead<{ members: number; credentials: number }>(
-    dirty && draft ? `/api/orgs/${orgId}/policies/sign-in-preview?${signInPreviewQuery(draft)}` : null,
+  const dirty = !!(draft && stored && Object.keys(signInPolicyPatch(stored, draft)).length > 0);
+  // No preview of a damaged age: the preview only judges ages in the allowed range.
+  const preview = useOrgAdminRead<SignInBlockedCounts>(
+    dirty && draft && isValidSessionAge(draft.maximumSessionAgeMinutes) ? `/api/orgs/${orgId}/policies/sign-in-preview?${signInPreviewQuery(draft)}` : null,
     role,
   ).data;
 
   if (!current || !stored) return null;
-  const ages = SESSION_AGE_OPTIONS.includes(current.maximumSessionAgeMinutes ?? -1) || current.maximumSessionAgeMinutes === null
-    ? SESSION_AGE_OPTIONS
-    : [...SESSION_AGE_OPTIONS, current.maximumSessionAgeMinutes];
+  const age = current.maximumSessionAgeMinutes;
+  const ageValid = isValidSessionAge(age);
+  const ages = age === null || !ageValid || SESSION_AGE_OPTIONS.includes(age) ? SESSION_AGE_OPTIONS : [...SESSION_AGE_OPTIONS, age];
 
   const confirmFirst = async (requirement: 'org_strong_sign_in_required' | 'org_reauthentication_required'): Promise<boolean> => {
     const outcome = await reauthenticateCurrentSession(requirement);
@@ -235,7 +242,8 @@ function SignInRequirementsCard({ orgId, orgName, role }: Pick<OrgSettingsContex
     setSaving(true);
     try {
       if (needsPasskeyBeforeSaving(stored, draft) && !(await confirmFirst('org_strong_sign_in_required'))) return;
-      const send = () => patch<{ signInBlocked: { members: number; credentials: number } | null }>(orgReadKeys.policies(orgId), draft);
+      const body = signInPolicyPatch(stored, draft);
+      const send = () => patch<{ signInBlocked: SignInBlockedCounts | null }>(orgReadKeys.policies(orgId), body);
       let result;
       try {
         result = await send();
@@ -246,7 +254,9 @@ function SignInRequirementsCard({ orgId, orgName, role }: Pick<OrgSettingsContex
         result = await send();
       }
       const blocked = result.signInBlocked;
-      toast.success(blocked && blocked.members > 0 ? `Saved. ${blocked.members} ${blocked.members === 1 ? 'member needs' : 'members need'} to sign in again to open ${orgName}'s drives.` : 'Saved.');
+      const who = blocked ? blockedPeopleText(blocked) : '';
+      const one = blocked !== null && blocked.members + blocked.guests === 1;
+      toast.success(who ? `Saved. ${who} ${one ? 'needs' : 'need'} to sign in again to open ${orgName}'s drives.` : 'Saved.');
       setDraft(null);
       void mutate((k) => isOrgKey(orgId, k));
     } catch (error) {
@@ -282,11 +292,12 @@ function SignInRequirementsCard({ orgId, orgName, role }: Pick<OrgSettingsContex
             <p className="text-xs text-muted-foreground">How long a sign-in lasts before the organization asks for a fresh one. {SESSION_AGE_RANGE_TEXT}</p>
           </div>
           <Select
-            value={current.maximumSessionAgeMinutes === null ? NO_LIMIT : String(current.maximumSessionAgeMinutes)}
+            value={age === null ? NO_LIMIT : ageValid ? String(age) : INVALID_AGE}
             onValueChange={(v) => setDraft({ ...current, maximumSessionAgeMinutes: v === NO_LIMIT ? null : Number(v) })}
           >
             <SelectTrigger id="maximum-session-age" aria-label="Maximum sign-in age" className="w-[160px]"><SelectValue /></SelectTrigger>
             <SelectContent>
+              {ageValid ? null : <SelectItem value={INVALID_AGE} disabled>Invalid — choose a value</SelectItem>}
               <SelectItem value={NO_LIMIT}>No limit</SelectItem>
               {ages.map((m) => <SelectItem key={m} value={String(m)}>{formatSessionAge(m)}</SelectItem>)}
             </SelectContent>
@@ -297,9 +308,9 @@ function SignInRequirementsCard({ orgId, orgName, role }: Pick<OrgSettingsContex
         </p>
         {dirty && preview ? (
           <p className="text-sm" role="status">
-            {preview.members === 0
-              ? 'No members would need to sign in again.'
-              : `${preview.members} ${preview.members === 1 ? 'member' : 'members'} would need to sign in again before opening ${orgName}'s drives.`}
+            {blockedPeopleText(preview)
+              ? `${blockedPeopleText(preview)} would need to sign in again before opening ${orgName}'s drives.`
+              : 'No one would need to sign in again.'}
           </p>
         ) : null}
         <div className="flex gap-2">

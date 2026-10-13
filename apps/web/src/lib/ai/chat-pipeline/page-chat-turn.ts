@@ -1552,7 +1552,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     // available for prepareConversationContext's context-window budget math.
 
     // Fetch user personalization for AI system prompt injection
-    const personalization = await getUserPersonalization(userId);
+    const personalization = await getUserPersonalization(turnActor);
     turnTimer.mark('personalization');
     if (personalization) {
       loggers.ai.debug('AI Chat API: User personalization loaded', {
