@@ -198,7 +198,7 @@ describe('buildShellCheckAuth — access half', () => {
     });
     const checkAuth = buildShellCheckAuth(deps);
 
-    const result = await checkAuth({ userId: 'member-ana', shellId: 'shl-1' });
+    const result = await checkAuth({ actor: credentialActor('member-ana', null), shellId: 'shl-1' });
 
     assert({
       given: 'a drive session whose drive vanished mid-delete',
