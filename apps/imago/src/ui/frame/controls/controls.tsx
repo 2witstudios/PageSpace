@@ -50,11 +50,11 @@ export function CloseImago(): ReactNode {
 }
 
 /** In the page head while Imago is collapsed: brings it back docked. */
-export function AskPill(): ReactNode {
+export function AskPill({ label = 'Ask' }: { readonly label?: string }): ReactNode {
   return (
     <button type="button" className={askPillClass} onClick={() => dispatch(transactions.expandImago, undefined)}>
       {renderIcon({ name: 'sparkle', size: 12 })}
-      Ask
+      {label}
     </button>
   );
 }

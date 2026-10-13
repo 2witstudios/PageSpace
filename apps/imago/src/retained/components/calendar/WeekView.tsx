@@ -31,20 +31,22 @@ interface WeekViewProps {
   handlers: CalendarHandlers;
   driveColorMap?: Map<string | null, EventColorConfig> | null;
   context?: 'user' | 'drive';
+  /** The first day of the week: Sunday, unless the Calendar tool draws it Monday-first. */
+  weekStartsOn?: 0 | 1;
 }
 
 const HOURS = Array.from({ length: 24 }, (_, i) => i);
 const HOUR_HEIGHT = 48; // pixels per hour
 
-export function WeekView({ currentDate, events, tasks, handlers, driveColorMap, context = 'drive' }: WeekViewProps) {
+export function WeekView({ currentDate, events, tasks, handlers, driveColorMap, context = 'drive', weekStartsOn = 0 }: WeekViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
 
   // Calculate the days of the current week
   const weekDays = useMemo(() => {
-    const weekStart = startOfWeek(currentDate);
-    const weekEnd = endOfWeek(currentDate);
+    const weekStart = startOfWeek(currentDate, { weekStartsOn });
+    const weekEnd = endOfWeek(currentDate, { weekStartsOn });
     return eachDayOfInterval({ start: weekStart, end: weekEnd });
-  }, [currentDate]);
+  }, [currentDate, weekStartsOn]);
 
   // Separate all-day events from timed events
   const { allDayEvents, timedEvents } = useMemo(() => {

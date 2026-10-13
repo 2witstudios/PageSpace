@@ -13,6 +13,7 @@ import { DmIndexPane } from '../../messages/dm-index/dm-index';
 import { CommandPalette } from '../../palette/palette/palette';
 import { TasksPane } from '../../tasks/tasks-pane/tasks-pane';
 import { ToolPane } from '../tool-pane/tool-pane';
+import { askLabelFor } from '../controls/ask-label';
 import { AvatarMenu } from '../avatar-menu/avatar-menu';
 import { BrandChip } from '../brand-chip/brand-chip';
 import { DRIVES, driveStatus, drivesFrom, type DriveSummary } from '../drives/drives';
@@ -179,7 +180,7 @@ export function Shell({ children, homeDriveId, initialDrives }: ShellProps) {
   const hydrated = useHydrated();
   const pageTrailing = (
     <span className="flex flex-none items-center gap-1">
-      {columns.askPill ? <AskPill /> : null}
+      {columns.askPill ? <AskPill label={askLabelFor(stage)} /> : null}
       <ClosePage href={sectionPath(stage)} />
     </span>
   );
