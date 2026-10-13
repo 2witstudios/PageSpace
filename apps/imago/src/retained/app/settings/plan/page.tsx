@@ -5,18 +5,38 @@ import { useRouter, useSearchParams } from '@/retained-adapters/navigation';
 import { useSWRConfig } from 'swr';
 import { useTheme } from '@/retained-adapters/theme';
 import { Button } from '@/retained/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/retained/components/ui/card';
 import { Alert, AlertDescription } from '@/retained/components/ui/alert';
-import { ArrowLeft, CheckCircle, XCircle, Loader2 } from 'lucide-react';
+import { CheckCircle, XCircle, Loader2 } from 'lucide-react';
 import { fetchWithAuth, post, getCachedCSRFToken } from '@/retained/lib/auth/auth-fetch';
 import { StripeProvider } from '@/retained/components/billing/StripeProvider';
 import { EmbeddedCheckoutForm } from '@/retained/components/billing/EmbeddedCheckoutForm';
 import { PlanChangeConfirmation } from '@/retained/components/billing/PlanChangeConfirmation';
-import { PlanCard } from '@/retained/components/billing/PlanCard';
 import { BillingGuard } from '@/retained/components/billing/BillingGuard';
-import { getAllPlans, getPlan, getTierFromPriceId, type SubscriptionTier, type PlanDefinition } from '@/retained/lib/subscription/plans';
-import { creditsCellPhrase } from '@/retained/lib/subscription/credits';
-import type { AppliedPromo } from '@/retained/components/billing/PromoCodeInput';
+import { PromoCodeInput, type AppliedPromo } from '@/retained/components/billing/PromoCodeInput';
+import Link from '@/retained-adapters/link';
+import { useCreditBalance } from '@/retained/hooks/useCreditBalance';
+import { getPlan, getTierFromPriceId, type SubscriptionTier, type PlanDefinition } from '@/retained/lib/subscription/plans';
+import {
+  CREDIT_PACK_LIST,
+  MONTHLY_CREDIT_CENTS,
+  creditsCellPhrase,
+  formatCreditDollars,
+  formatWholeCredits,
+  includedCreditsPhrase,
+  topUpRatePhrase,
+} from '@/retained/lib/subscription/credits';
+import {
+  SettingsGroup,
+  SettingsRow,
+  SettingsScreen,
+  SettingsSection,
+} from '@/ui/settings/settings-screen/settings-screen';
+
+interface ApplyPromoResponse {
+  success: boolean;
+  subscriptionId: string;
+  clientSecret?: string;
+}
 
 interface SubscriptionData {
   subscriptionTier: SubscriptionTier;
@@ -30,7 +50,7 @@ interface SubscriptionData {
   };
 }
 
-export default function PlanPage() {
+function PlanPageContent() {
   const { mutate: mutate } = useSWRConfig();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -46,6 +66,9 @@ export default function PlanPage() {
   const [checkoutLoading, setCheckoutLoading] = useState(false);
   const [appliedPromo, setAppliedPromo] = useState<AppliedPromo | null>(null);
   const [applyingPromo, setApplyingPromo] = useState(false);
+  // Promo entered in the page header; applied to the subscription when Pro checkout starts.
+  const [pendingPromo, setPendingPromo] = useState<AppliedPromo | null>(null);
+  const { balance } = useCreditBalance();
 
   // Plan change dialog state
   const [changePlanDialog, setChangePlanDialog] = useState(false);
@@ -186,9 +209,22 @@ export default function PlanPage() {
       );
 
       if (result.clientSecret && result.subscriptionId) {
+        let checkoutSecret = result.clientSecret;
+        let checkoutSubscriptionId = result.subscriptionId;
+        if (pendingPromo && plan.id === 'pro') {
+          // Apply the header promo by recreating the incomplete subscription with it, the same
+          // path the checkout form's own promo field takes.
+          const applied = await post<ApplyPromoResponse>('/api/stripe/apply-promo', {
+            subscriptionId: checkoutSubscriptionId,
+            promotionCodeId: pendingPromo.promotionCodeId,
+          });
+          checkoutSubscriptionId = applied.subscriptionId;
+          if (applied.clientSecret) checkoutSecret = applied.clientSecret;
+          setAppliedPromo(pendingPromo);
+        }
         setCheckoutPlan(plan);
-        setClientSecret(result.clientSecret);
-        setSubscriptionId(result.subscriptionId);
+        setClientSecret(checkoutSecret);
+        setSubscriptionId(checkoutSubscriptionId);
       } else {
         setError('Failed to initialize checkout');
       }
@@ -284,223 +320,259 @@ export default function PlanPage() {
     }
   };
 
+
   if (loading) {
     return (
-      <div className="container mx-auto p-6">
-        <div className="flex items-center justify-center min-h-64">
+      <SettingsScreen title="Plan">
+        <div className="flex min-h-64 items-center justify-center text-muted-foreground">
           <div className="text-center">
-            <Loader2 className="h-8 w-8 animate-spin mx-auto mb-4" />
+            <Loader2 className="mx-auto mb-4 h-8 w-8 animate-spin" />
             <p>Loading plan information...</p>
           </div>
         </div>
-      </div>
+      </SettingsScreen>
     );
   }
 
-  const plans = getAllPlans();
-  const currentPlan = subscriptionData ? getPlan(subscriptionData.subscriptionTier) : getPlan('free');
+  const currentTier: SubscriptionTier = subscriptionData?.subscriptionTier ?? 'free';
+  const currentPlan = getPlan(currentTier);
   const scheduledTier = subscriptionData?.subscription?.scheduledPriceId
     ? getTierFromPriceId(subscriptionData.subscription.scheduledPriceId)
     : null;
+  const allowanceCents = balance?.monthly.allowance ?? MONTHLY_CREDIT_CENTS[currentTier];
+  const renewsOn = balance?.monthly.periodEnd
+    ? new Date(balance.monthly.periodEnd).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+    : null;
+  const lede = `You're on ${currentPlan.name} · ${includedCreditsPhrase(currentTier, allowanceCents)}${
+    renewsOn ? ` · renews ${renewsOn}` : ''
+  }`;
+
+  // Free and Pro are the personal columns. Business is an organization plan and is not
+  // rendered on this branch (orgs are off), so it has no column and no org note here.
+  const tierColumns: PlanDefinition[] = [getPlan('free'), getPlan('pro')];
+  const proPriceId = getPlan('pro').stripePriceId ?? '';
+
+  const packCredits = CREDIT_PACK_LIST.map((pack) => formatWholeCredits(pack.cents));
+  const packPrices = CREDIT_PACK_LIST.map((pack) => formatCreditDollars(pack.cents));
+  const joinOr = (items: string[]): string =>
+    items.length <= 1 ? items.join('') : `${items.slice(0, -1).join(', ')} or ${items[items.length - 1]}`;
+
+  const featureRows = [
+    { label: 'Credits', values: tierColumns.map((p) => creditsCellPhrase(p.id, MONTHLY_CREDIT_CENTS[p.id])) },
+    { label: 'AI models', values: tierColumns.map((p) => (p.limits.proModels ? 'Standard + Pro' : 'Standard')) },
+    { label: 'Buy more credits', values: tierColumns.map(() => topUpRatePhrase()) },
+    { label: 'Storage', values: tierColumns.map((p) => p.limits.storage.formatted) },
+    { label: 'Max File Size', values: tierColumns.map((p) => p.limits.maxFileSize.formatted) },
+  ];
+
+  const columnCta = (plan: PlanDefinition) => {
+    if (plan.id === 'free') {
+      return currentTier === 'free' ? null : (
+        <Button variant="outline" className="w-full" onClick={() => handlePlanSelect('free')} disabled={cancellingSchedule}>
+          Downgrade to Free Plan
+        </Button>
+      );
+    }
+    if (currentTier === 'pro') {
+      return (
+        <Button variant="outline" className="w-full" onClick={() => router.push('/settings/billing')}>
+          Manage Billing
+        </Button>
+      );
+    }
+    if (currentTier === 'free') {
+      return (
+        <Button className="w-full" onClick={() => handlePlanSelect('pro')} disabled={checkoutLoading}>
+          Upgrade to Pro
+        </Button>
+      );
+    }
+    return null;
+  };
+
+  const promoField = (
+    <div role="group" aria-label="Promo code" className="w-72">
+      <PromoCodeInput
+        priceId={proPriceId}
+        onPromoApplied={setPendingPromo}
+        disabled={!proPriceId || checkoutPlan !== null}
+      />
+    </div>
+  );
 
   return (
-    <BillingGuard>
-    <div className="container mx-auto p-6 space-y-8">
-      {/* Header */}
-      <div>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => router.push('/settings')}
-          className="mb-4"
-        >
-          <ArrowLeft className="h-4 w-4 mr-2" />
-          Back to Settings
-        </Button>
-        <div className="text-center space-y-2">
-          <h1 className="text-4xl font-bold">Choose Your Plan</h1>
-          <p className="text-muted-foreground text-lg max-w-2xl mx-auto">
-            Select the plan that best fits your needs. Upgrade or downgrade anytime.
-          </p>
-        </div>
-      </div>
+    <SettingsScreen title="Plan" lede={lede} actions={promoField}>
+        {success && (
+          <Alert className="border-green-200 bg-green-50 dark:border-green-800 dark:bg-green-950/20">
+            <CheckCircle className="h-4 w-4 text-green-600" />
+            <AlertDescription className="text-green-800 dark:text-green-200">
+              Your subscription has been updated successfully!
+            </AlertDescription>
+          </Alert>
+        )}
 
-      {/* Success/Cancel Alerts */}
-      {success && (
-        <Alert className="border-green-200 bg-green-50 dark:border-green-800 dark:bg-green-950/20">
-          <CheckCircle className="h-4 w-4 text-green-600" />
-          <AlertDescription className="text-green-800 dark:text-green-200">
-            Your subscription has been updated successfully!
-          </AlertDescription>
-        </Alert>
-      )}
+        {canceled && (
+          <Alert variant="destructive">
+            <XCircle className="h-4 w-4" />
+            <AlertDescription>
+              Subscription change was canceled. You can try again anytime.
+            </AlertDescription>
+          </Alert>
+        )}
 
-      {canceled && (
-        <Alert variant="destructive">
-          <XCircle className="h-4 w-4" />
-          <AlertDescription>
-            Subscription change was canceled. You can try again anytime.
-          </AlertDescription>
-        </Alert>
-      )}
+        {error && (
+          <Alert variant="destructive">
+            <XCircle className="h-4 w-4" />
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        )}
 
-      {/* Error Alert */}
-      {error && (
-        <Alert variant="destructive">
-          <XCircle className="h-4 w-4" />
-          <AlertDescription>{error}</AlertDescription>
-        </Alert>
-      )}
+        {checkoutLoading && (
+          <div className="flex items-center justify-center py-8">
+            <Loader2 className="mr-2 h-6 w-6 animate-spin" />
+            <span>Preparing checkout...</span>
+          </div>
+        )}
 
-      {/* Checkout Loading */}
-      {checkoutLoading && (
-        <div className="flex items-center justify-center py-8">
-          <Loader2 className="h-6 w-6 animate-spin mr-2" />
-          <span>Preparing checkout...</span>
-        </div>
-      )}
-
-      {/* Embedded Checkout */}
-      {checkoutPlan && clientSecret && subscriptionId && (
-        <Card className="max-w-lg mx-auto relative">
-          <CardHeader>
-            <CardTitle>Complete Your Subscription</CardTitle>
-          </CardHeader>
-          <CardContent>
-            {/* Loading overlay during promo application */}
-            {applyingPromo && (
-              <div className="absolute inset-0 bg-background/80 backdrop-blur-sm z-10 flex items-center justify-center rounded-lg">
-                <div className="text-center">
-                  <Loader2 className="h-8 w-8 animate-spin mx-auto mb-2" />
-                  <p className="text-sm font-medium">Applying promo code...</p>
+        {checkoutPlan && clientSecret && subscriptionId && (
+          <SettingsSection title="Complete your subscription">
+            <div className="relative">
+              {applyingPromo && (
+                <div className="absolute inset-0 z-10 flex items-center justify-center rounded-lg bg-background/80 backdrop-blur-sm">
+                  <div className="text-center">
+                    <Loader2 className="mx-auto mb-2 h-8 w-8 animate-spin" />
+                    <p className="text-sm font-medium">Applying promo code...</p>
+                  </div>
                 </div>
-              </div>
-            )}
-            <StripeProvider
-              key={clientSecret}
-              options={stripeElementsOptions}
-            >
-              <EmbeddedCheckoutForm
-                plan={checkoutPlan}
-                subscriptionId={subscriptionId}
-                appliedPromo={appliedPromo}
-                onPromoApplied={setAppliedPromo}
-                onApplyingPromoChange={setApplyingPromo}
-                onSuccess={handleCheckoutSuccess}
-                onCancel={handleCheckoutCancel}
-                onSubscriptionRecreated={handleSubscriptionRecreated}
-              />
-            </StripeProvider>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Plan Cards - Only show when not in checkout */}
-      {!checkoutPlan && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 pt-6 pb-4">
-          {plans.map((plan) => (
-            <PlanCard
-              key={plan.id}
-              plan={plan}
-              currentTier={subscriptionData?.subscriptionTier || 'free'}
-              isCurrentPlan={plan.id === subscriptionData?.subscriptionTier}
-              isScheduledPlan={plan.id === scheduledTier}
-              hasPendingSchedule={!!scheduledTier}
-              onUpgrade={handlePlanSelect}
-              onManageBilling={() => router.push('/settings/billing')}
-              onCancelSchedule={handleCancelSchedule}
-              cancellingSchedule={cancellingSchedule}
-              className={plan.highlighted ? 'relative z-10' : ''}
-            />
-          ))}
-        </div>
-      )}
-
-      {/* Feature Comparison */}
-      {!checkoutPlan && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-center">Feature Comparison</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead>
-                  <tr className="border-b">
-                    <th className="text-left py-4 pr-6 font-medium">Feature</th>
-                    {plans.map((plan) => (
-                      <th key={plan.id} className="text-center py-4 px-4 font-medium min-w-32">
-                        <div className="flex flex-col items-center gap-1">
-                          <plan.icon className={`h-5 w-5 ${plan.iconColor}`} />
-                          <span>{plan.name}</span>
-                        </div>
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr className="border-b">
-                    <td className="py-4 pr-6">Credits</td>
-                    {plans.map((plan) => (
-                      <td key={plan.id} className="text-center py-4 px-4 font-semibold">
-                        {creditsCellPhrase(plan.id, plan.limits.monthlyCreditsCents)}
-                      </td>
-                    ))}
-                  </tr>
-                  <tr className="border-b">
-                    <td className="py-4 pr-6">AI models</td>
-                    {plans.map((plan) => (
-                      <td key={plan.id} className="text-center py-4 px-4">
-                        {plan.limits.proModels ? (
-                          <span className="font-semibold">Standard + Pro</span>
-                        ) : (
-                          <span className="text-muted-foreground">Standard</span>
-                        )}
-                      </td>
-                    ))}
-                  </tr>
-                  <tr className="border-b">
-                    <td className="py-4 pr-6">Buy more credits</td>
-                    {plans.map((plan) => (
-                      <td key={plan.id} className="text-center py-4 px-4 text-muted-foreground">
-                        Anytime
-                      </td>
-                    ))}
-                  </tr>
-                  <tr className="border-b">
-                    <td className="py-4 pr-6">Storage</td>
-                    {plans.map((plan) => (
-                      <td key={plan.id} className="text-center py-4 px-4 font-semibold">
-                        {plan.limits.storage.formatted}
-                      </td>
-                    ))}
-                  </tr>
-                  <tr className="border-b">
-                    <td className="py-4 pr-6">Max File Size</td>
-                    {plans.map((plan) => (
-                      <td key={plan.id} className="text-center py-4 px-4 font-semibold">
-                        {plan.limits.maxFileSize.formatted}
-                      </td>
-                    ))}
-                  </tr>
-                </tbody>
-              </table>
+              )}
+              <StripeProvider key={clientSecret} options={stripeElementsOptions}>
+                <EmbeddedCheckoutForm
+                  plan={checkoutPlan}
+                  subscriptionId={subscriptionId}
+                  appliedPromo={appliedPromo}
+                  onPromoApplied={setAppliedPromo}
+                  onApplyingPromoChange={setApplyingPromo}
+                  onSuccess={handleCheckoutSuccess}
+                  onCancel={handleCheckoutCancel}
+                  onSubscriptionRecreated={handleSubscriptionRecreated}
+                />
+              </StripeProvider>
             </div>
-          </CardContent>
-        </Card>
-      )}
+          </SettingsSection>
+        )}
 
-      {/* Plan Change Confirmation Dialog */}
-      {targetPlan && subscriptionData && (
-        <PlanChangeConfirmation
-          open={changePlanDialog}
-          onOpenChange={setChangePlanDialog}
-          currentPlan={currentPlan}
-          targetPlan={targetPlan}
-          onSuccess={handlePlanChangeSuccess}
-        />
-      )}
-    </div>
+        {!checkoutPlan && (
+          <div className="flex flex-col gap-6">
+            <div className="grid grid-cols-1 overflow-hidden rounded-xl border border-border sm:grid-cols-2">
+              {tierColumns.map((plan, index) => {
+                const isCurrent = plan.id === currentTier;
+                return (
+                  <div
+                    key={plan.id}
+                    className={[
+                      'flex flex-col p-5',
+                      index > 0 ? 'border-t border-border sm:border-l sm:border-t-0' : '',
+                      isCurrent ? 'bg-primary/5' : '',
+                    ].join(' ')}
+                  >
+                    <div className="flex min-h-[22px] items-center justify-between gap-2">
+                      <span className="text-[15px] font-semibold">{plan.name}</span>
+                      {isCurrent && (
+                        <span className="rounded-full bg-foreground px-2 py-0.5 text-[11px] font-semibold text-background">
+                          Current Plan
+                        </span>
+                      )}
+                    </div>
+                    <div className="mt-3 text-3xl font-bold tracking-tight">{plan.price.formatted}</div>
+                    <p className="mb-3 mt-1 min-h-9 text-xs leading-relaxed text-muted-foreground">{plan.description}</p>
+                    <dl className="mb-5 flex flex-col gap-1.5 text-sm">
+                      <div className="flex justify-between gap-2">
+                        <dt className="text-muted-foreground">Included</dt>
+                        <dd className="text-right font-medium">
+                          {includedCreditsPhrase(plan.id, MONTHLY_CREDIT_CENTS[plan.id])}
+                        </dd>
+                      </div>
+                      <div className="flex justify-between gap-2">
+                        <dt className="text-muted-foreground">Top up</dt>
+                        <dd className="text-right font-medium">{topUpRatePhrase()}</dd>
+                      </div>
+                    </dl>
+                    <div className="mt-auto">{columnCta(plan)}</div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {scheduledTier && scheduledTier !== currentTier && (
+              <SettingsGroup label="Pending plan change">
+                <SettingsRow
+                  label={`Changing to ${getPlan(scheduledTier).name} at the end of this period`}
+                  hint="Your current plan stays active until then."
+                >
+                  <Button variant="outline" size="sm" onClick={handleCancelSchedule} disabled={cancellingSchedule}>
+                    {cancellingSchedule ? 'Cancelling...' : 'Keep Current Plan'}
+                  </Button>
+                </SettingsRow>
+              </SettingsGroup>
+            )}
+
+            <SettingsSection title="Feature comparison">
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[420px] border-collapse text-sm">
+                  <thead>
+                    <tr className="text-left text-xs text-muted-foreground">
+                      <th className="border-b border-border pb-2 font-medium">Feature</th>
+                      {tierColumns.map((plan) => (
+                        <th key={plan.id} className="border-b border-border pb-2 font-medium">
+                          {plan.name}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {featureRows.map((row) => (
+                      <tr key={row.label}>
+                        <td className="border-b border-border/60 py-2.5 pr-4">{row.label}</td>
+                        {row.values.map((value, index) => (
+                          <td key={tierColumns[index].id} className="border-b border-border/60 py-2.5 pr-4 font-medium">
+                            {value}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </SettingsSection>
+
+            <p className="text-xs text-muted-foreground">
+              <Link href="/account/usage" className="text-accent-deep hover:underline">Buy more credits</Link>
+              {` — ${joinOr(packCredits)} credits for ${joinOr(packPrices)}. Top-ups never expire.`}
+            </p>
+          </div>
+        )}
+
+        {targetPlan && subscriptionData && (
+          <PlanChangeConfirmation
+            open={changePlanDialog}
+            onOpenChange={setChangePlanDialog}
+            currentPlan={currentPlan}
+            targetPlan={targetPlan}
+            onSuccess={handlePlanChangeSuccess}
+          />
+        )}
+    </SettingsScreen>
+  );
+}
+
+/**
+ * Billing-only route: the guard sits outside the page so that on iOS or a non-cloud deployment
+ * nothing renders and no /api/stripe or subscription request fires, including while loading.
+ */
+export default function PlanPage() {
+  return (
+    <BillingGuard>
+      <PlanPageContent />
     </BillingGuard>
   );
 }
