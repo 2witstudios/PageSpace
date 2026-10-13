@@ -1,7 +1,7 @@
 'use client';
 
 import dynamic from 'next/dynamic';
-import { Plus } from 'lucide-react';
+import { Plus, Zap } from 'lucide-react';
 import { ToolbarStrip } from '@/ui/frame/toolbar-strip/toolbar-strip';
 import { Button } from '@/retained/components/ui/button';
 import type { TaskListPageFilter } from '@/retained/stores/useLayoutStore';
@@ -22,8 +22,9 @@ const segmentIdle = 'text-ink-muted';
 
 /**
  * The 44px List controls strip (C-Files-TaskList): the View group (Table, Board), the Status
- * group (Active, Completed, All), status settings and + Task. The board's Assignee and Due
- * menus are not here: classic has no filter for either, and this strip does not invent one.
+ * group (Active, Completed, All), the filter box, status settings, Workflows for drive managers
+ * and + Task. The board's Assignee and Due menus are not here: classic has no filter for either,
+ * and this strip does not invent one.
  */
 export function TaskListToolsStrip({ controls }: { readonly controls: TaskListToolsControls }) {
   const isTable = controls.viewMode === 'table';
@@ -65,8 +66,15 @@ export function TaskListToolsStrip({ controls }: { readonly controls: TaskListTo
           );
         })}
       </div>
+      <div className="ml-2">{controls.searchField}</div>
       <div className="flex-1" />
       {controls.statusSettings}
+      {controls.canManageWorkflows && (
+        <Button variant="ghost" size="sm" onClick={controls.onOpenWorkflows} className="ml-1 gap-1">
+          <Zap className="h-4 w-4" aria-hidden="true" />
+          Workflows
+        </Button>
+      )}
       {controls.canEdit && (
         <Button size="sm" onClick={controls.onNewTask} className="ml-1 gap-1">
           <Plus className="h-4 w-4" aria-hidden="true" />

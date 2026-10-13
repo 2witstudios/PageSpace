@@ -8,7 +8,7 @@
  * page-view component that needs to reflow inside a resizable pane.
  */
 
-import { useState, useEffect, useId, useRef, useCallback, memo, useMemo } from 'react';
+import { Fragment, useState, useEffect, useId, useRef, useCallback, memo, useMemo } from 'react';
 import { type Editor } from '@tiptap/react';
 import { useRouter } from '@/retained-adapters/navigation';
 import { toast } from 'sonner';
@@ -24,6 +24,7 @@ import { useFindStore } from '@/retained/stores/useFindStore';
 import { useEditingSession } from '@/retained/stores/useEditingSession';
 import { useLayoutStore } from '@/retained/stores/useLayoutStore';
 import { useTaskListPageFilter } from './useTaskListPageFilter';
+import { groupTasksByStatus, type TaskStatusGroup } from './task-groups';
 import type { TaskListPageFilter } from '@/retained/stores/useLayoutStore';
 import { TreePage } from '@/retained/hooks/usePageTree';
 import { fetchWithAuth, post, patch, del } from '@/retained/lib/auth/auth-fetch';
@@ -55,6 +56,8 @@ import {
   GripVertical,
   Zap,
   Bell,
+  ChevronDown,
+  ChevronRight,
 } from 'lucide-react';
 import {
   DndContext,
@@ -138,11 +141,16 @@ export interface TaskListToolsControls {
   readonly statusSettings: React.ReactNode;
   /** Focuses the table's new-task input, as the wide toolbar's New Task did. */
   readonly onNewTask: () => void;
+  /** The filter box, the wide toolbar's own input (Cmd+F focuses it), for the strip to place. */
+  readonly searchField: React.ReactNode;
+  /** Workflows is a drive-manager action, offered only to them. */
+  readonly canManageWorkflows: boolean;
+  readonly onOpenWorkflows: () => void;
 }
 
 interface TaskListViewProps {
   page: TreePage;
-  /** When given, the page type supplies the list controls and the wide toolbar is replaced by the progress line. */
+  /** When given, the page type supplies the list controls and the page's title, description and progress sit above the list. */
   readonly renderTools?: (controls: TaskListToolsControls) => React.ReactNode;
 }
 
@@ -281,6 +289,7 @@ function TaskFilterTabs({ filter, onSelect, fill = false }: TaskFilterTabsProps)
  * open — which the filter effect does on every keystroke.
  */
 const EMPTY_EXPANDED: Set<TaskNodePath> = new Set();
+const EMPTY_GROUP_KEYS: ReadonlySet<string> = new Set();
 
 // Only the most recently loaded page's hasMore matters — earlier pages are stale
 // snapshots of a bound that may have shifted as tasks were added/removed since.
@@ -433,6 +442,8 @@ function SortableTaskRow({
 }
 
 function TaskListView({ page, renderTools }: TaskListViewProps) {
+  // Under the v3 page the strip owns the list controls; this flag switches the body to the board's layout.
+  const embedded = renderTools !== undefined;
   const router = useRouter();
   const { user } = useAuth();
   const { permissions } = usePermissions(page.id);
@@ -490,6 +501,9 @@ function TaskListView({ page, renderTools }: TaskListViewProps) {
     [],
   );
   const [workflowsDialogOpen, setWorkflowsDialogOpen] = useState(false);
+  // Status groups whose open state the user has flipped. Done groups start collapsed, so for
+  // them membership means open; for the rest it means collapsed (see isGroupOpen).
+  const [toggledGroups, setToggledGroups] = useState<ReadonlySet<string>>(EMPTY_GROUP_KEYS);
   // Keyed by PATH (rootPageId/taskId/taskId…), not task id: it makes "collapse
   // this node's whole subtree" a prefix operation and gives React an
   // unambiguous key when the same task could appear in two places.
@@ -505,8 +519,10 @@ function TaskListView({ page, renderTools }: TaskListViewProps) {
     (path: TaskNodePath) => setExpandedPaths(prev => expandNodePath(prev, path)),
     [],
   );
-  const viewMode = useLayoutStore((state) => state.taskListViewMode);
+  const storedViewMode = useLayoutStore((state) => state.taskListViewMode);
   const setViewMode = useLayoutStore((state) => state.setTaskListViewMode);
+  // The strip's Table/Board is the only switch under the v3 page, so a stored Editor view falls back to Table.
+  const viewMode = embedded && storedViewMode === 'editor' ? 'table' : storedViewMode;
   // Description is always collapsed on load; the user expands it via the header toggle.
   const [descriptionOpen, setDescriptionOpen] = useState(false);
   const [editorInstance, setEditorInstance] = useState<Editor | null>(null);
@@ -782,6 +798,20 @@ function TaskListView({ page, renderTools }: TaskListViewProps) {
 
     return true;
   }) ?? [], [data?.tasks, filter, statusConfigs, activeSearch]);
+
+  // Under the v3 page the rows are grouped by status; classic keeps one flat list.
+  const statusGroups = useMemo(
+    () => groupTasksByStatus(filteredTasks, statusConfigs),
+    [filteredTasks, statusConfigs],
+  );
+  const isGroupOpen = (group: TaskStatusGroup<TaskItem>) =>
+    group.isDone ? toggledGroups.has(group.key) : !toggledGroups.has(group.key);
+  const toggleGroup = (key: string) => setToggledGroups((prev) => {
+    const next = new Set(prev);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    return next;
+  });
 
   // Report filtered task count to find store when search is active
   useEffect(() => {
@@ -1132,6 +1162,7 @@ function TaskListView({ page, renderTools }: TaskListViewProps) {
   const treeValue = useMemo(() => ({
     canEdit,
     driveId: page.driveId,
+    embedded,
     writeMachinery,
     rootStatusConfigs: statusConfigs,
     onNavigate: handleNavigate,
@@ -1147,7 +1178,7 @@ function TaskListView({ page, renderTools }: TaskListViewProps) {
   // handleNavigate and handleStartEdit are redefined every render; including
   // them would defeat the memo, and both read only state already listed.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [canEdit, page.driveId, writeMachinery, statusConfigs, openTriggerDialog,
+  }), [canEdit, page.driveId, embedded, writeMachinery, statusConfigs, openTriggerDialog,
        expandedPaths, toggleExpanded, expandNode, editingTaskId, editingTitle]);
 
   // Shared between the table, kanban, and compact-row renders — the bounded GET route
@@ -1227,6 +1258,16 @@ function TaskListView({ page, renderTools }: TaskListViewProps) {
     filter,
     onFilterChange: setFilter,
     canEdit,
+    searchField: (
+      <TaskSearchInput
+        inputRef={wideSearchRef}
+        value={search}
+        onChange={setSearch}
+        className="w-48"
+      />
+    ),
+    canManageWorkflows,
+    onOpenWorkflows: () => setWorkflowsDialogOpen(true),
     statusSettings: canEdit ? (
       <StatusConfigManager
         pageId={page.id}
@@ -1243,6 +1284,68 @@ function TaskListView({ page, renderTools }: TaskListViewProps) {
     },
   };
 
+  const taskPosition = new Map(filteredTasks.map((task, index) => [task.id, index + 1]));
+  const visibleTasks = embedded ? statusGroups.filter(isGroupOpen).flatMap((group) => group.tasks) : filteredTasks;
+  const renderTaskRow = (task: TaskItem) => {
+    const position = taskPosition.get(task.id) ?? 1;
+    return (
+    <TaskRowGroup
+      key={task.id}
+      task={task}
+      depth={0}
+      posInSet={position}
+      // Same rule as a sub-list: only claim a size when the
+      // whole set is loaded. This list pages, so with more to
+      // come any number would describe rows that are not here.
+      setSize={hasMoreTasks ? undefined : filteredTasks.length}
+      listPageId={page.id}
+      path={makeNodePath(rootPath, task.id)}
+      handlers={locatedHandlers}
+      statusConfigs={statusConfigs}
+      onCountDelta={(delta) => patchRootCounts(task.id, delta)}
+      renderRow={(cells, rowTree) => (
+        <SortableTaskRow
+          task={task}
+          posInSet={position}
+          setSize={hasMoreTasks ? undefined : filteredTasks.length}
+          canEdit={canEdit}
+          isCompleted={isCompletedStatus(task.status, statusConfigs)}
+          expandable={rowTree.expandable}
+          isExpanded={rowTree.isExpanded}
+          contextMenu={
+            <ContextMenuContent>
+              {task.pageId && (
+                <ContextMenuItem onSelect={() => handleNavigate(task)}>
+                  <FileText className="h-4 w-4 mr-2" />
+                  Open
+                </ContextMenuItem>
+              )}
+              <ContextMenuItem onSelect={() => handleStartEdit(task)} disabled={!canEdit}>
+                <Pencil className="h-4 w-4 mr-2" />
+                Rename
+              </ContextMenuItem>
+              <ContextMenuItem onSelect={() => openTriggerDialog(task, page.id)} disabled={!canEdit}>
+                <Zap className="h-4 w-4 mr-2" />
+                Agent triggers…
+              </ContextMenuItem>
+              <ContextMenuItem
+                onSelect={() => handleDeleteTask({ listPageId: page.id, taskId: task.id })}
+                className="text-destructive"
+                disabled={!canEdit}
+              >
+                <Trash2 className="h-4 w-4 mr-2" />
+                Delete
+              </ContextMenuItem>
+            </ContextMenuContent>
+          }
+        >
+          {cells}
+        </SortableTaskRow>
+      )}
+    />
+    );
+  };
+
   return (
     <TaskTreeProvider value={treeValue}>
     <div className="flex flex-col h-full min-w-0 @container">
@@ -1254,8 +1357,20 @@ function TaskListView({ page, renderTools }: TaskListViewProps) {
         descriptionOpen={descriptionOpen}
         onDescriptionToggle={() => setDescriptionOpen(prev => !prev)}
         canEdit={canEdit}
+        embedded={embedded}
       />
-      {descriptionOpen && (
+      {embedded ? (
+        <>
+          <h1 className="px-4 pt-4 text-3xl font-bold tracking-tight">{page.title}</h1>
+          <TaskListDescriptionContent
+            pageId={page.id}
+            canEdit={canEdit}
+            initialContent={page.content}
+            className="px-4 pt-2 pb-3 text-sm"
+          />
+          <TaskProgressLine summary={progress} />
+        </>
+      ) : descriptionOpen && (
         <TaskListDescriptionContent
           pageId={page.id}
           canEdit={canEdit}
@@ -1342,8 +1457,8 @@ function TaskListView({ page, renderTools }: TaskListViewProps) {
         </SheetContent>
       </Sheet>
 
-      {/* With renderTools the page type owns the list controls, so the wide toolbar is replaced by the progress line. */}
-      {renderTools ? <TaskProgressLine summary={progress} /> : (
+      {/* With renderTools the page type owns the list controls and the progress line sits above the list. */}
+      {!embedded && (
       <div className="hidden @[700px]:flex flex-wrap items-center justify-between gap-3 px-4 py-3 border-b bg-background">
         <div className="flex items-center gap-2">
           <TaskFilterTabs filter={filter} onSelect={setFilter} />
@@ -1520,67 +1635,37 @@ function TaskListView({ page, renderTools }: TaskListViewProps) {
                   </TableRow>
                 </TableHeader>
                 <SortableContext
-                  items={filteredTasks.map(t => t.id)}
+                  items={visibleTasks.map(t => t.id)}
                   strategy={verticalListSortingStrategy}
                 >
-                  <TableBody>
-                    {filteredTasks.map((task, index) => (
-                      <TaskRowGroup
-                        key={task.id}
-                        task={task}
-                        depth={0}
-                        posInSet={index + 1}
-                        // Same rule as a sub-list: only claim a size when the
-                        // whole set is loaded. This list pages, so with more to
-                        // come any number would describe rows that are not here.
-                        setSize={hasMoreTasks ? undefined : filteredTasks.length}
-                        listPageId={page.id}
-                        path={makeNodePath(rootPath, task.id)}
-                        handlers={locatedHandlers}
-                        statusConfigs={statusConfigs}
-                        onCountDelta={(delta) => patchRootCounts(task.id, delta)}
-                        renderRow={(cells, rowTree) => (
-                          <SortableTaskRow
-                            task={task}
-                            posInSet={index + 1}
-                            setSize={hasMoreTasks ? undefined : filteredTasks.length}
-                            canEdit={canEdit}
-                            isCompleted={isCompletedStatus(task.status, statusConfigs)}
-                            expandable={rowTree.expandable}
-                            isExpanded={rowTree.isExpanded}
-                            contextMenu={
-                              <ContextMenuContent>
-                                {task.pageId && (
-                                  <ContextMenuItem onSelect={() => handleNavigate(task)}>
-                                    <FileText className="h-4 w-4 mr-2" />
-                                    Open
-                                  </ContextMenuItem>
-                                )}
-                                <ContextMenuItem onSelect={() => handleStartEdit(task)} disabled={!canEdit}>
-                                  <Pencil className="h-4 w-4 mr-2" />
-                                  Rename
-                                </ContextMenuItem>
-                                <ContextMenuItem onSelect={() => openTriggerDialog(task, page.id)} disabled={!canEdit}>
-                                  <Zap className="h-4 w-4 mr-2" />
-                                  Agent triggers…
-                                </ContextMenuItem>
-                                <ContextMenuItem
-                                  onSelect={() => handleDeleteTask({ listPageId: page.id, taskId: task.id })}
-                                  className="text-destructive"
-                                  disabled={!canEdit}
-                                >
-                                  <Trash2 className="h-4 w-4 mr-2" />
-                                  Delete
-                                </ContextMenuItem>
-                              </ContextMenuContent>
-                            }
-                          >
-                            {cells}
-                          </SortableTaskRow>
-                        )}
-                      />
-                    ))}
-                  </TableBody>
+                  {embedded ? statusGroups.map((group) => {
+                    const open = isGroupOpen(group);
+                    return (
+                      <Fragment key={group.key}>
+                        <TableBody>
+                          <TableRow>
+                            <TableCell colSpan={TASK_TABLE_COLUMN_COUNT} className="p-0">
+                              <button
+                                type="button"
+                                aria-expanded={open}
+                                onClick={() => toggleGroup(group.key)}
+                                className="flex h-9 w-full items-center gap-2 px-2 text-left text-sm font-semibold hover:bg-muted/50"
+                              >
+                                {open
+                                  ? <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
+                                  : <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />}
+                                <span>{group.label}</span>
+                                <span className="font-normal text-muted-foreground tabular-nums">{group.tasks.length}</span>
+                              </button>
+                            </TableCell>
+                          </TableRow>
+                        </TableBody>
+                        {open && <TableBody>{group.tasks.map(renderTaskRow)}</TableBody>}
+                      </Fragment>
+                    );
+                  }) : (
+                    <TableBody>{filteredTasks.map(renderTaskRow)}</TableBody>
+                  )}
                 </SortableContext>
 
                 {/* New task row - outside SortableContext */}

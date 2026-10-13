@@ -34,8 +34,8 @@ export function DueDatePicker({
     const diffDays = Math.ceil(
       (date.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)
     );
-    if (diffDays < 0) return 'text-red-600 font-medium';
-    if (diffDays <= 3) return 'text-amber-600';
+    if (diffDays < 0) return 'text-status-danger font-medium';
+    if (diffDays <= 3) return 'text-status-warning';
     return 'text-muted-foreground';
   };
 

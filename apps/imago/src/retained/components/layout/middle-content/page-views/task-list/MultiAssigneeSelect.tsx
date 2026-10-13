@@ -130,7 +130,7 @@ export function MultiAssigneeSelect({
                   </Avatar>
                 ))}
                 {agentAssignees.slice(0, 3 - userAssignees.length).map(agent => (
-                  <div key={agent.id} className="h-5 w-5 rounded-full bg-primary/10 flex items-center justify-center border-2 border-background">
+                  <div key={agent.id} className="h-5 w-5 rounded-md bg-primary/10 flex items-center justify-center border-2 border-background">
                     <Bot className="h-3 w-3 text-primary" />
                   </div>
                 ))}
@@ -210,7 +210,7 @@ export function MultiAssigneeSelect({
                         value={`agent-${agent.name}`}
                         onSelect={() => handleToggle(agent)}
                       >
-                        <div className="mr-2 h-5 w-5 rounded-full bg-primary/10 flex items-center justify-center">
+                        <div className="mr-2 h-5 w-5 rounded-md bg-primary/10 flex items-center justify-center">
                           <Bot className="h-3 w-3 text-primary" />
                         </div>
                         <span className="truncate">{agent.name}</span>
