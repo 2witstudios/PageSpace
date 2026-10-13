@@ -1,13 +1,11 @@
-# SEAT-9 (partial): seat-9-matrix.integration (real PG) proves the whole capability list in one test — unpaid,
-# past_due, canceled and never-paid all lapse; reads kept; invite, create/take in an org drive, pool and
-# allocations, loosening policy and caps, approving guests, the publish guard, sandbox and env creation all
-# refused 402 org_lapsed; storage charged nothing (D-OW-32); nothing deleted; restricting allowed (D-OW-33);
-# paid again, all back — and the per-role banner data. The banner RENDERING on every org surface is proven by
-# OrgSurfaceBanner.test in apps/web. Stays listed because the two cannot share one describe (lib vs web), and
-# the publish route itself (apps/web publish-page.ts, server-only) is asserted only through its checkOrgActive guard.
+# SEAT-9: the real-PG seat-9 matrix proves lapse states, the capability list, retained reads,
+# security restrictions, storage no-charge and reactivation; OrgSurfaceBanner tests prove role notices.
+# Browser spec31 additionally exercises real unpaid/past_due publish, environment and invite routes.
+# Retained pending final-head browser verification and independent whole-requirement review.
 SEAT-9
-# UI-8 (partial): the chip, popover and composer strip (spend-surfaces*), the refusal card in the chat error
-# banner, the automation spend line / skipped badge / owner-left state, and the /btw fallback notice are
-# tested, each titled "UI-8 (partial)". Unproven: v1/chat/completions, consult and mentions still drop the
-# gate's fallback (SPEND-4, the spend-gate lane), and canvas page 2 fidelity needs a reviewer with the canvas.
+# UI-8: component tests and browser spec33 prove source disclosure, refusal with unchanged financial
+# state/provider count, explicit personal retry, empty/paused fallback and persisted automation states.
+# v1/completions and consult route tests prove fallback metadata; mentions use only drive-wallet spend
+# per SPEND-6, so an uncovered wallet skips rather than falling back to personal credits.
+# Retained pending rebuilt fresh-draft first-choice/provider proof and canvas page2 review.
 UI-8

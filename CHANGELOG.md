@@ -5,6 +5,8 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ## [Unreleased]
 
+- Organizations and their settings are now available in both interfaces. A fresh assistant conversation shows its spending source before the first message, and choosing another source uses it for the first reply. Imago now applies organization sign-in requirements and keeps access-restricting changes available while an organization is unpaid.
+
 - Paid models and voice now follow whoever pays for the call. Inside an organization's drive, its plan applies to a member on the drive wallet or their seat; on someone's personal drive wallet, the drive owner's plan applies; on your own credits, your own plan applies. This now holds for agent consultations, the OpenAI-compatible API, workflows, @mentions, agents asking agents, text-to-speech and voice calls.
 
 - Text-to-speech and Global Assistant voice calls made inside a drive now spend from that drive's wallet, like a typed message there, instead of always using your personal credits. Speech or a call whose drive cannot be determined is refused and charges nothing.
@@ -57,7 +59,7 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
-- **Organization Drives directory and join requests** (shown once organizations are switched on) — every
+- **Organization Drives directory and join requests** — every
   member, not only admins, can open the organization's Drives directory from the organization page or
   "Browse … drives" in the drive picker: the drives they can open, and the Restricted drives they can ask
   to join, with an optional note. The drive lead and organization Owners and Admins see pending requests
@@ -75,23 +77,23 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   sending or revoking invitations update the drive picker, the header and organization pages for every
   member without a refresh.
 
-- **Joining an organization from the invitation email** (shown once organizations are switched on) — the
+- **Joining an organization from the invitation email** — the
   invitation link now opens a page that lets you join: sign in or create an account with the invited
   address (by any sign-in method) and you land in the organization; if you are already signed in, one click
   joins. The page says plainly when the link has expired, is no longer valid, belongs to another account,
   or you are already a member.
 
-- **Organization avatar upload** (shown once organizations are switched on) — Owners and Admins set the
+- **Organization avatar upload** — Owners and Admins set the
   organization's avatar in Organization settings › General by uploading an image (JPEG, PNG, GIF or WebP,
   up to 5 MB). The avatar is stored by PageSpace and shown only to members; an avatar can no longer be a
   link to an image on another site.
 
-- **Create drives in your organization from anywhere** (shown once organizations are switched on) — the
+- **Create drives in your organization from anywhere** — the
   New drive dialog offers the organizations you may create drives in, preselecting the one you are working
   in, and the AI assistant's create-drive tool and the MCP drive create accept an organization too. The
   organization's "who can create drives" setting applies everywhere.
 
-- **Organization sign-in requirements** (shown once organizations are switched on) — an organization's
+- **Organization sign-in requirements** — an organization's
   Security page can now require strong sign-in (a passkey confirmed on your device) and a maximum sign-in age
   (15 minutes to 30 days) for everyone opening its drives, with a preview of how many members would have to
   sign in again. Turning a requirement on first asks you to meet it yourself, so you never lock yourself out;
@@ -103,7 +105,7 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   must sign in again to open an organization's drives under these requirements. Single sign-on and SCIM are
   out of scope and named as such on the Security page.
 
-- **Organizations in the CLI and on MCP keys** (shown once organizations are switched on) — `pagespace orgs
+- **Organizations in the CLI and on MCP keys** — `pagespace orgs
   list|get|members|drives|policies` and the matching `organizations.*` MCP tools read what the web already
   shows: your organizations and your role in each, the member roster, the drive directory (including
   Restricted drives, with join standing), and the org's policies for Owners and Admins. The CLI and MCP now
@@ -122,7 +124,7 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   an organization's sign-in requirements now apply to its own settings and admin actions too, for access
   keys and signed-in sessions alike.
 
-- **Organization settings** (shown once organizations are switched on) — Settings › Organizations lists the
+- **Organization settings** — Settings › Organizations lists the
   organizations you belong to and lets you create one: name it, choose the drives you own to move in (Home
   stays personal), invite people, see the price, and pay with a card; the organization is ready once that
   first payment goes through. Each organization has a settings page for its Owner and Admins: Members &
