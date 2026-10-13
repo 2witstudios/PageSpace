@@ -15,6 +15,7 @@ import { toast } from 'sonner';
 import { useSocket } from '@/retained/hooks/useSocket';
 import { del, fetchWithAuth } from '@/retained/lib/auth/auth-fetch';
 import { isHomeDrive } from '@pagespace/lib/services/drive-guards';
+import { partitionMembers } from '@/ui/tools/members/members-roster';
 
 interface DriveMember {
   id: string;
@@ -200,60 +201,80 @@ export function DriveMembers({ driveId, driveKind }: DriveMembersProps) {
     );
   }
 
-  return (
-    <div className="space-y-6">
-      <div className="flex justify-between items-center">
-        <div>
-          <h2 className="text-lg font-semibold">Members ({members.length})</h2>
-          <p className="text-sm text-gray-600 dark:text-gray-400">
-            People with access to this drive
-          </p>
-        </div>
-        {!isHome && (currentUserRole === 'OWNER' || currentUserRole === 'ADMIN') && (
-          <Button onClick={() => router.push(`/dashboard/${driveId}/members/invite`)}>
-            <UserPlus className="w-4 h-4 mr-2" />
-            Invite Member
-          </Button>
-        )}
-      </div>
+  const { people, guests } = partitionMembers(members);
+  const canManage = !isHome && (currentUserRole === 'OWNER' || currentUserRole === 'ADMIN');
 
+  return (
+    <div className="space-y-8">
       {isHome && (
         <p className="text-sm text-muted-foreground">
           Home is your private drive and can&apos;t be shared.
         </p>
       )}
 
-      {!isHome && (currentUserRole === 'OWNER' || currentUserRole === 'ADMIN') && (
-        <DriveShareLinkSection driveId={driveId} />
+      {canManage && (
+        <div className="flex justify-end">
+          <Button onClick={() => router.push(`/dashboard/${driveId}/members/invite`)}>
+            <UserPlus className="w-4 h-4 mr-2" />
+            Invite
+          </Button>
+        </div>
       )}
 
-      <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 divide-y divide-gray-200 dark:divide-gray-700">
-        {members.length === 0 ? (
-          <div className="p-8 text-center text-gray-500 dark:text-gray-400">
-            No members yet. Invite someone to collaborate!
-          </div>
-        ) : (
-          members.map((member) => (
-            <MemberRow
-              key={member.id}
-              member={member}
-              driveId={driveId}
-              currentUserRole={currentUserRole}
-              onRemove={() => handleRemoveMember(member.userId)}
-            />
-          ))
-        )}
-      </div>
+      {canManage && (
+        <section id="links" aria-label="Invite links">
+          <DriveShareLinkSection driveId={driveId} />
+        </section>
+      )}
 
-      <div>
-        <div className="mb-3 flex items-start justify-between gap-2">
-          <div>
-            <h2 className="text-lg font-semibold">Agents ({agentMembers.length})</h2>
-            <p className="text-sm text-gray-600 dark:text-gray-400">
-              AI agents with access to this drive
-            </p>
-          </div>
-          {!isHome && (currentUserRole === 'OWNER' || currentUserRole === 'ADMIN') && (
+      <section id="people" aria-label="People" className="space-y-3">
+        <MembersSectionHeading title="People" count={people.length} />
+        <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 divide-y divide-gray-200 dark:divide-gray-700">
+          {people.length === 0 ? (
+            <div className="p-8 text-center text-gray-500 dark:text-gray-400">
+              No members yet. Invite someone to collaborate!
+            </div>
+          ) : (
+            people.map((member) => (
+              <MemberRow
+                key={member.id}
+                member={member}
+                driveId={driveId}
+                currentUserRole={currentUserRole}
+                onRemove={() => handleRemoveMember(member.userId)}
+              />
+            ))
+          )}
+        </div>
+      </section>
+
+      {canManage && (
+        <section id="page-link-guests" aria-label="Page-link guests" className="space-y-3">
+          <MembersSectionHeading
+            title="Page-link guests"
+            count={guests.length}
+            detail="People outside Studio who joined a single page through a share link appear here. Only the drive lead and admins see this list."
+          />
+          {guests.length > 0 && (
+            <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 divide-y divide-gray-200 dark:divide-gray-700">
+              {guests.map((member) => (
+                <MemberRow
+                  key={member.id}
+                  member={member}
+                  driveId={driveId}
+                  currentUserRole={currentUserRole}
+                  onRemove={() => handleRemoveMember(member.userId)}
+                />
+              ))}
+            </div>
+          )}
+        </section>
+      )}
+
+      <section id="agents" aria-label="Agents" className="space-y-3">
+        <div className="flex items-start justify-between gap-2">
+          <MembersSectionHeading title="Agents" count={agentMembers.length} detail="AI Chat pages acting with a role" />
+          {canManage && (
             <Button variant="outline" size="sm" onClick={() => setInviteAgentOpen(true)}>
               <UserPlus className="h-4 w-4 mr-2" />
               Invite Agent
@@ -279,15 +300,10 @@ export function DriveMembers({ driveId, driveKind }: DriveMembersProps) {
             ))
           )}
         </div>
-      </div>
+      </section>
 
-      <div>
-        <div className="mb-3">
-          <h2 className="text-lg font-semibold">Apps ({appMembers.length})</h2>
-          <p className="text-sm text-gray-600 dark:text-gray-400">
-            MCP app tokens with access to this drive
-          </p>
-        </div>
+      <section id="apps" aria-label="Apps" className="space-y-3">
+        <MembersSectionHeading title="Apps" count={appMembers.length} detail="API tokens scoped to this drive" />
         <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 divide-y divide-gray-200 dark:divide-gray-700">
           {appMembers.length === 0 ? (
             <div className="p-6 text-center text-gray-500 dark:text-gray-400 text-sm">
@@ -307,7 +323,7 @@ export function DriveMembers({ driveId, driveKind }: DriveMembersProps) {
             ))
           )}
         </div>
-      </div>
+      </section>
 
       <PendingInvitesSection
         invites={pendingInvites}
@@ -322,6 +338,19 @@ export function DriveMembers({ driveId, driveKind }: DriveMembersProps) {
         existingAgentPageIds={agentMembers.map((a) => a.agentPageId)}
         onInvited={fetchMembers}
       />
+    </div>
+  );
+}
+
+/** A Members section's heading: its name, its live count, and a line of what it holds. */
+function MembersSectionHeading({ title, count, detail }: { title: string; count: number; detail?: string }) {
+  return (
+    <div>
+      <h2 className="text-base font-semibold flex items-baseline gap-2">
+        {title}
+        <span className="font-mono text-sm font-normal tabular-nums text-gray-500 dark:text-gray-400">{count}</span>
+      </h2>
+      {detail && <p className="text-sm text-gray-600 dark:text-gray-400">{detail}</p>}
     </div>
   );
 }

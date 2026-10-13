@@ -355,6 +355,22 @@ describe('paneLayout()', () => {
     });
   });
 
+  test('a member profile and the invite form stay on the Members tool, so its pane shows the member variants', () => {
+    assert({
+      given: 'the Members routes for one member and for the invite form',
+      should: 'map both to the members tool, with the same 260px pane',
+      actual: [stageFor('/drive-1/members/u1'), stageFor('/drive-1/members/invite')].map((stage) => ({
+        driveId: stage.driveId,
+        list: stage.list,
+        tool: stage.object?.kind === 'settings' ? stage.object.tool : null,
+      })),
+      expected: [
+        { driveId: 'drive-1', list: 'tree', tool: 'members' },
+        { driveId: 'drive-1', list: 'tree', tool: 'members' },
+      ],
+    });
+  });
+
   test('every section is a hideable section (SPEC v3.2)', () => {
     const every: readonly HideableSection[] = ['chat', 'files', 'messages', 'tasks', 'settings', 'account'];
     assert({
