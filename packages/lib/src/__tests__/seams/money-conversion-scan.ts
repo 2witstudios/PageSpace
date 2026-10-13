@@ -577,9 +577,9 @@ function scopeEnd(code: string, from: number): number {
  * (`name:`) or a longer word. Scoped, so a `const r` in one function never renames another's.
  */
 function renameUses(code: string, name: string, to: string, from: number): string {
-  const use = new RegExp(`(?<![\\w$.])${name.replace(/\$/g, '\\$')}(?![\\w$])(?!\\s*:(?!:))`, 'g');
+  const use = /(?<![\w$.])[A-Za-z_$][\w$]*(?![\w$])(?!\s*:(?!:))/g;
   const end = scopeEnd(code, from);
-  return code.slice(0, from) + code.slice(from, end).replace(use, to) + code.slice(end);
+  return code.slice(0, from) + code.slice(from, end).replace(use, (identifier) => identifier === name ? to : identifier) + code.slice(end);
 }
 
 /** True when `expr` has a `*`, `/`, `%`, `+` or `-` outside every bracket: arithmetic, not one value. */
