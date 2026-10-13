@@ -59,6 +59,8 @@ export async function resolveOrCreateConversation(
   opts?: {
     /** Display label for the new row (spawned workers are labeled at birth). Ignored for an existing row. */
     title?: string;
+    /** A source already validated by the session-only wallet chooser, inserted with a new draft. */
+    initialChosenWalletId?: string | null;
     /**
      * When the insert runs inside a caller's transaction, the `created` directory event must not leave before
      * that transaction commits: a sidebar that re-reads on it would read the listing without the new thread and
@@ -111,6 +113,7 @@ export async function resolveOrCreateConversation(
       type: 'global',
       isActive: true,
       title: opts?.title ?? null,
+      ...(opts?.initialChosenWalletId !== undefined && { chosenWalletId: opts.initialChosenWalletId }),
       // Explicit, matching the page path (conversationRepository
       // .createConversation): the column has no DB default, and leaving it to
       // drizzle's fill-$onUpdate-columns-on-insert behavior is a subtlety no

@@ -24,7 +24,7 @@ export function conversationSpendKey(conversationId: string | null, driveId: str
   return isGlobal && driveId ? `${base}?driveId=${encodeURIComponent(driveId)}` : base;
 }
 
-/** A conversation the server has not stored yet has no source to read: null, not an error. */
+/** A conversation the server has not stored yet is pending: only a global draft may preview its drive. */
 const fetcher = async (url: string): Promise<ConversationSpend | null> => {
   const response = await fetchWithAuth(url);
   if (response.status === 404) return null;
@@ -52,6 +52,8 @@ export function pendingConversationRetryMs(misses: number): number {
  * The spend source of one conversation, kept current: refetched when its drive's wallet changes
  * (`wallet:changed`) or the person's own balance does (`credits:updated`), never polled. `choose` is the only writer of the choice (PUT);
  * it persists for the conversation (SPEND-3) and throws the route's ApiRequestError on refusal.
+ * A missing global draft previews its drive without writing; only its explicit choice
+ * materializes it, with the source stored before any first-message gate can read the row.
  */
 export function useConversationSpend(conversationId: string | null, options: { driveId: string | null; isGlobal: boolean }) {
   const key = conversationSpendKey(conversationId, options.driveId, options.isGlobal);
@@ -67,8 +69,13 @@ export function useConversationSpend(conversationId: string | null, options: { d
     dedupingInterval: PENDING_CONVERSATION_RETRY_MS / 2,
     revalidateOnFocus: false,
   });
+  const isPending = data === null && !error;
+  const { spend: preview } = useDriveSpend(isPending && options.isGlobal ? options.driveId : null);
+  const spend = data ?? (isPending && options.isGlobal && preview && conversationId
+    ? { ...preview, conversationId, chosenWalletId: null }
+    : null);
   const socket = useSocketStore((state) => state.socket);
-  const spendDriveId = data?.driveId ?? null;
+  const spendDriveId = spend?.driveId ?? null;
 
   useEffect(() => {
     if (!socket || !key) return;
@@ -87,13 +94,13 @@ export function useConversationSpend(conversationId: string | null, options: { d
   const choose = useCallback(
     async (walletId: string | null) => {
       if (!key) return;
-      const next = await put<ConversationSpend>(key, { walletId });
+      const next = await put<ConversationSpend>(key, { walletId, ...(isPending && options.isGlobal && { createGlobalDraft: true }) });
       await mutate(next, { revalidate: false });
     },
-    [key, mutate],
+    [key, mutate, isPending, options.isGlobal],
   );
 
-  return { spend: data ?? null, error, isLoading, choose, refresh: mutate };
+  return { spend, isPending, error, isLoading, choose, refresh: mutate };
 }
 
 /** `GET /api/wallets/drives/[driveId]` (Spec SPEND-2): a drive's options and what a new conversation there would spend. */

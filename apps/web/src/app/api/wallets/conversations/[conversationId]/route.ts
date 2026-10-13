@@ -2,7 +2,10 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { getConversationSpend, setConversationSpend } from '@pagespace/lib/services/drive-wallet-service';
+import { getConversationSpend, getDriveSpend, setConversationSpend } from '@pagespace/lib/services/drive-wallet-service';
+import { credentialRefusalFor } from '@pagespace/lib/permissions/wallet-access';
+import { actorFromAuth } from '@/lib/auth/request-actor';
+import { resolveOrCreateConversation, ConversationOwnershipError, ConversationHistoryDeletedError } from '@/lib/repositories/resolve-or-create-conversation';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { safeParseBody } from '@/lib/validation/parse-body';
 import { WALLET_READ_AUTH, WALLET_WRITE_AUTH, refuseScopedTokenForAccountRead, walletCredentialOf, walletErrorResponse } from '@/lib/wallets/wallet-route';
@@ -16,6 +19,9 @@ import { WALLET_READ_AUTH, WALLET_WRITE_AUTH, refuseScopedTokenForAccountRead, w
  *      a turn never changes it. The wallet must be one the caller may spend in this
  *      conversation's drive now (400 otherwise); the gate re-checks it on every call and refuses
  *      it if it stops being one.
+ *      `createGlobalDraft: true` materializes a local global draft only after the session's
+ *      drive and wallet checks. Its selected source is part of the insert; viewing creates
+ *      nothing, and empty drafts remain outside the message-based history listing.
  *
  * The drive is the conversation's own (a drive or page conversation). A GLOBAL conversation has
  * none, so `?driveId=` names the drive the person is choosing for; it only lists options (which
@@ -27,7 +33,7 @@ import { WALLET_READ_AUTH, WALLET_WRITE_AUTH, refuseScopedTokenForAccountRead, w
 
 type RouteContext = { params: Promise<{ conversationId: string }> };
 
-const schema = z.object({ walletId: z.string().min(1).max(64).nullable() }).strict();
+const schema = z.object({ walletId: z.string().min(1).max(64).nullable(), createGlobalDraft: z.literal(true).optional() }).strict();
 
 const globalDriveIdOf = (request: Request): string | null => {
   const value = new URL(request.url).searchParams.get('driveId');
@@ -65,7 +71,26 @@ export async function PUT(request: Request, context: RouteContext) {
   const parsed = await safeParseBody(request, schema);
   if (!parsed.success) return parsed.response;
   try {
-    const result = await setConversationSpend(auth.userId, conversationId, parsed.data.walletId, walletCredentialOf(auth), globalDriveIdOf(request));
+    const credential = walletCredentialOf(auth);
+    const driveId = globalDriveIdOf(request);
+    let created = false;
+    if (parsed.data.createGlobalDraft) {
+      // Drafts stay local while viewed. Only an explicit session choice may
+      // create one, after validating its source; the insert carries the choice
+      // atomically so a concurrent first send never gates against a default.
+      const refusal = credentialRefusalFor(credential, 'set_conversation_source');
+      if (refusal) return walletErrorResponse({ ok: false, status: 403, ...refusal });
+      if (!driveId) return walletErrorResponse({ ok: false, status: 400, code: 'invalid_request', message: 'A draft source choice requires a drive context' });
+      const preview = await getDriveSpend(actorFromAuth(auth), driveId);
+      if (!preview.ok) return walletErrorResponse(preview);
+      if (parsed.data.walletId !== null && !preview.options.some((option) => option.walletId === parsed.data.walletId)) {
+        return walletErrorResponse({ ok: false, status: 400, code: 'wallet_not_available', message: 'That wallet is not one you can spend from in this conversation' });
+      }
+      created = (await resolveOrCreateConversation(auth.userId, conversationId, undefined, { initialChosenWalletId: parsed.data.walletId })).isNew;
+    }
+    const result = created
+      ? await getConversationSpend(auth.userId, conversationId, driveId)
+      : await setConversationSpend(auth.userId, conversationId, parsed.data.walletId, credential, driveId);
     if (!result.ok) return walletErrorResponse(result);
     auditRequest(request, {
       eventType: 'data.write',
@@ -77,6 +102,9 @@ export async function PUT(request: Request, context: RouteContext) {
     const { ok: _ok, ...body } = result;
     return NextResponse.json(body);
   } catch (error) {
+    if (error instanceof ConversationOwnershipError || error instanceof ConversationHistoryDeletedError) {
+      return walletErrorResponse({ ok: false, status: 404, code: 'not_found', message: 'Conversation not found' });
+    }
     loggers.api.error('Error setting the conversation spend source:', error as Error);
     return NextResponse.json({ error: 'Failed to set the spend source', code: 'internal_error' }, { status: 500 });
   }

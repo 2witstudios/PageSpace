@@ -60,6 +60,12 @@ describe('resolveOrCreateConversation', () => {
     expect(db.insert).not.toHaveBeenCalled();
   });
 
+  it('Given an explicitly selected draft source, should insert it atomically with the global conversation', async () => {
+    const db = makeDb([], [{ ...CONV, chosenWalletId: 'wallet-own' }]);
+    await resolveOrCreateConversation('user1', 'conv1', db as never, { initialChosenWalletId: 'wallet-own' });
+    expect(db.insert().values).toHaveBeenCalledWith(expect.objectContaining({ chosenWalletId: 'wallet-own' }));
+  });
+
   it('given no existing conversation, creates one with the correct fields and isNew=true', async () => {
     const created = { id: 'conv1', userId: 'user1', type: 'global', isActive: true };
     const db = makeDb([], [created]);

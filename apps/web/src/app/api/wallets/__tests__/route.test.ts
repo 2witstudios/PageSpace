@@ -17,6 +17,7 @@ vi.mock('@pagespace/lib/services/drive-wallet-service', () => ({
   setConversationSpend: vi.fn(),
   getDriveSpend: vi.fn(),
 }));
+vi.mock('@/lib/repositories/resolve-or-create-conversation', () => ({ resolveOrCreateConversation: vi.fn(), ConversationOwnershipError: class extends Error {}, ConversationHistoryDeletedError: class extends Error {} }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
@@ -39,6 +40,7 @@ import { GET as GET_DRIVE_SOURCE } from '../drives/[driveId]/route';
 import { listMyWallets, setPersonalDefaultSource, getConversationSpend, setConversationSpend, getDriveSpend } from '@pagespace/lib/services/drive-wallet-service';
 import { authenticateRequestWithOptions, checkMCPDriveScope } from '@/lib/auth';
 
+import { resolveOrCreateConversation, ConversationOwnershipError, ConversationHistoryDeletedError } from '@/lib/repositories/resolve-or-create-conversation';
 const session = (userId: string): SessionAuthResult => ({
   userId, tokenVersion: 0, tokenType: 'session', sessionId: 's-1', role: 'user', adminRoleVersion: 0,
 });
@@ -212,5 +214,50 @@ describe('/api/wallets/drives/[driveId]', () => {
     const res = await GET_DRIVE_SOURCE(req('GET', '/api/wallets/drives/d-product'), drive);
     expect(res.status).toBe(403);
     expect(getDriveSpend).not.toHaveBeenCalled();
+  });
+});
+
+
+describe('SPEND-2/3 global draft source choice', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(session('u-marcus'));
+    vi.mocked(getDriveSpend).mockResolvedValue({ ok: true, driveId: 'd-product', options: [{ walletId: 'w-own' }] as never, resolved: { kind: 'spend', walletId: 'w-own' } as never });
+    vi.mocked(resolveOrCreateConversation).mockResolvedValue({ isNew: true, conversation: { id: 'cnew', userId: 'u-marcus', type: 'global', chosenWalletId: 'w-own' } as never });
+    vi.mocked(getConversationSpend).mockResolvedValue({ ok: true, conversationId: 'cnew', driveId: 'd-product', chosenWalletId: 'w-own', options: [], resolved: { kind: 'spend', walletId: 'w-own' } as never });
+  });
+  const draft = { params: Promise.resolve({ conversationId: 'cnew' }) };
+  const chooseDraft = (walletId = 'w-own') => SET_SOURCE(req('PUT', '/api/wallets/conversations/cnew?driveId=d-product', { walletId, createGlobalDraft: true }), draft);
+
+  it('Given a fresh global draft, should materialize only on an explicit valid choice with that wallet in the insert', async () => {
+    const response = await chooseDraft();
+    expect(response.status).toBe(200);
+    expect(resolveOrCreateConversation).toHaveBeenCalledWith('u-marcus', 'cnew', undefined, { initialChosenWalletId: 'w-own' });
+    expect(getDriveSpend).toHaveBeenCalledWith(expect.objectContaining({ userId: 'u-marcus', via: 'credential' }), 'd-product');
+    expect(setConversationSpend).not.toHaveBeenCalled();
+    expect(await response.json()).toMatchObject({ chosenWalletId: 'w-own' });
+  });
+
+  it('Given an invalid wallet or inaccessible drive, should create nothing', async () => {
+    expect((await chooseDraft('w-stranger')).status).toBe(400);
+    expect(resolveOrCreateConversation).not.toHaveBeenCalled();
+    vi.mocked(getDriveSpend).mockResolvedValueOnce({ ok: false, status: 404, code: 'not_found', message: 'no access' });
+    expect((await chooseDraft()).status).toBe(404);
+    expect(resolveOrCreateConversation).not.toHaveBeenCalled();
+  });
+
+  it('Given an MCP credential, should refuse the money action before reading or creating a draft', async () => {
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(token('u-marcus', ['d-product']));
+    const response = await chooseDraft();
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ code: 'mcp_token_cannot_change_spend_source' });
+    expect(getDriveSpend).not.toHaveBeenCalled();
+    expect(resolveOrCreateConversation).not.toHaveBeenCalled();
+  });
+
+  it.each([ConversationOwnershipError, ConversationHistoryDeletedError])('Given a foreign, non-global or history-deleted id, should refuse without changing its choice (%s)', async ErrorClass => {
+    vi.mocked(resolveOrCreateConversation).mockRejectedValueOnce(new ErrorClass());
+    expect((await chooseDraft()).status).toBe(404);
+    expect(setConversationSpend).not.toHaveBeenCalled();
   });
 });
