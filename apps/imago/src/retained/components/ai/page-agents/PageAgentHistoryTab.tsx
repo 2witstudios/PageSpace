@@ -1,14 +1,7 @@
 import React, { useCallback, memo } from 'react';
-import { Card } from '@/retained/components/ui/card';
 import { Button } from '@/retained/components/ui/button';
 import { ScrollArea } from '@/retained/components/ui/scroll-area';
-import {
-  Plus,
-  Trash2,
-  MessageSquare,
-  Clock,
-  Hash,
-} from 'lucide-react';
+import { Plus, Trash2, MessageSquare, Clock, Hash } from 'lucide-react';
 import { cn } from '@/retained/lib/utils';
 import { formatDistanceToNow } from 'date-fns';
 import { VirtualizedConversationList } from '@/retained/components/ai/shared/chat';
@@ -27,7 +20,7 @@ interface Conversation {
   isShared?: boolean;
   isOwner?: boolean;
   lastMessage: {
-    role: string;
+    role: string | null;
     timestamp: Date | string;
   };
 }
@@ -36,7 +29,11 @@ interface PageAgentHistoryTabProps {
   conversations: Conversation[];
   currentConversationId: string | null;
   onSelectConversation: (conversationId: string) => void;
-  onCreateNew: () => void;
+  /**
+   * Shows the "New Conversation" button when given. The v3 AI_CHAT page starts a
+   * new conversation from its Agent views strip instead, so it leaves this out.
+   */
+  onCreateNew?: () => void;
   /**
    * Refuses "New Conversation" for a reason the LIST does not know about —
    * a response still streaming on the Chat tab, or a mint already in flight.
@@ -69,74 +66,65 @@ const ConversationCard = memo(function ConversationCard({
       : conversation.updatedAt;
 
   return (
-    <Card
+    <div
       data-testid="history-conversation-item"
       data-conversation-id={conversation.id}
       className={cn(
-        'p-4 cursor-pointer hover:bg-accent transition-colors',
-        isActive && 'bg-primary-soft border-primary'
+        'flex min-h-[60px] items-center gap-3.5 border-b border-border/60 px-1.5 py-2',
+        isActive && 'bg-primary-soft',
       )}
-      onClick={onClick}
     >
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 mb-2">
-            <MessageSquare className="h-4 w-4 text-muted-foreground shrink-0" />
-            <h4 className="font-medium truncate">{conversation.title}</h4>
-          </div>
-          <p className="text-sm text-muted-foreground line-clamp-2 mb-3">
-            {conversation.preview}
-          </p>
-          <div className="flex items-center gap-4 text-xs text-muted-foreground">
-            <span className="flex items-center gap-1">
-              <Clock className="h-3 w-3" />
-              {formatDistanceToNow(updatedAt, { addSuffix: true })}
-            </span>
-            <span className="flex items-center gap-1">
-              <Hash className="h-3 w-3" />
-              {conversation.messageCount} {conversation.messageCount === 1 ? 'message' : 'messages'}
-            </span>
-          </div>
-        </div>
-        <div className="flex items-center gap-1 shrink-0">
-          {onToggleShare && (
-            <ConversationShareToggle
-              isShared={conversation.isShared ?? false}
-              isOwner={conversation.isOwner ?? false}
-              onToggle={onToggleShare}
-            />
-          )}
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={(e) => {
-              e.stopPropagation();
-              onDelete();
-            }}
-            title="Delete conversation"
-          >
-            <Trash2 className="h-4 w-4" />
-          </Button>
-        </div>
-      </div>
-    </Card>
+      <button
+        type="button"
+        onClick={onClick}
+        aria-current={isActive ? 'true' : undefined}
+        className="flex min-w-0 flex-1 cursor-pointer flex-col gap-0.5 border-0 bg-transparent p-0 text-left"
+      >
+        <span className="truncate font-medium">{conversation.title}</span>
+        <span className="truncate text-[12.5px] text-muted-foreground">{conversation.preview}</span>
+        <span className="flex items-center gap-3 text-xs text-muted-foreground">
+          <span className="flex items-center gap-1">
+            <Clock className="h-3 w-3" aria-hidden="true" />
+            {formatDistanceToNow(updatedAt, { addSuffix: true })}
+          </span>
+          <span className="flex items-center gap-1">
+            <Hash className="h-3 w-3" aria-hidden="true" />
+            {conversation.messageCount} {conversation.messageCount === 1 ? 'message' : 'messages'}
+          </span>
+        </span>
+      </button>
+      {onToggleShare && (
+        <ConversationShareToggle
+          title={conversation.title}
+          isShared={conversation.isShared ?? false}
+          isOwner={conversation.isOwner ?? false}
+          onToggle={onToggleShare}
+        />
+      )}
+      <Button
+        variant="ghost"
+        size="icon"
+        aria-label={`Delete ${conversation.title}`}
+        onClick={(e) => {
+          e.stopPropagation();
+          onDelete();
+        }}
+        title="Delete conversation"
+      >
+        <Trash2 className="h-4 w-4" aria-hidden="true" />
+      </Button>
+    </div>
   );
 });
 
 function ConversationListSkeleton() {
   return (
-    <div className="space-y-3">
+    <div className="space-y-3" aria-busy="true">
       {[1, 2, 3].map((i) => (
-        <Card key={i} className="p-4 animate-pulse">
-          <div className="space-y-3">
-            <div className="h-4 bg-muted rounded w-3/4" />
-            <div className="h-3 bg-muted rounded w-1/2" />
-            <div className="flex gap-3">
-              <div className="h-3 bg-muted rounded w-24" />
-              <div className="h-3 bg-muted rounded w-20" />
-            </div>
-          </div>
-        </Card>
+        <div key={i} className="animate-pulse space-y-3 p-3">
+          <div className="h-4 w-3/4 rounded bg-muted" />
+          <div className="h-3 w-1/2 rounded bg-muted" />
+        </div>
       ))}
     </div>
   );
@@ -144,8 +132,8 @@ function ConversationListSkeleton() {
 
 function EmptyState({ message }: { message: string }) {
   return (
-    <div className="flex flex-col items-center justify-center h-64 text-center p-4">
-      <MessageSquare className="h-12 w-12 text-muted-foreground mb-4" />
+    <div className="flex h-64 flex-col items-center justify-center p-4 text-center">
+      <MessageSquare className="mb-4 h-12 w-12 text-muted-foreground" aria-hidden="true" />
       <p className="text-muted-foreground">{message}</p>
     </div>
   );
@@ -181,46 +169,54 @@ export default function PageAgentHistoryTab({
   const getConversationKey = useCallback((conv: Conversation) => conv.id, []);
 
   return (
-    <div className="flex flex-col h-full p-4">
-      <div className="mb-4">
-        <Button onClick={onCreateNew} className="w-full" disabled={isLoading || createDisabled}>
-          <Plus className="h-4 w-4 mr-2" />
-          New Conversation
-        </Button>
-      </div>
-
-      <div className="flex-1 min-h-0 overflow-hidden">
-        {isLoading ? (
-          <ConversationListSkeleton />
-        ) : conversations.length === 0 ? (
-          <EmptyState message="No conversations yet. Start a new conversation to get started." />
-        ) : shouldVirtualize ? (
-          // Virtualized rendering for large lists
-          <VirtualizedConversationList
-            conversations={conversations}
-            renderConversation={renderConversation}
-            getKey={getConversationKey}
-            estimatedRowHeight={120}
-            overscan={3}
-            gap={0}
-          />
-        ) : (
-          // Regular rendering for smaller lists
-          <ScrollArea className="h-full">
-            <div className="space-y-3 pr-4">
-              {conversations.map((conv) => (
-                <ConversationCard
-                  key={conv.id}
-                  conversation={conv}
-                  isActive={conv.id === currentConversationId}
-                  onClick={() => onSelectConversation(conv.id)}
-                  onDelete={() => onDeleteConversation(conv.id)}
-                  onToggleShare={onToggleShare ? () => onToggleShare(conv.id, !conv.isShared) : undefined}
-                />
-              ))}
-            </div>
-          </ScrollArea>
+    <div className="flex h-full flex-col px-7 py-5">
+      <div className="mx-auto flex h-full w-full max-w-[760px] flex-col">
+        <div className="mb-2 flex items-center justify-between gap-3">
+          <h2 className="m-0 text-[15px] font-semibold">Conversations</h2>
+          <span className="text-xs text-muted-foreground">Shared conversations are visible to drive members</span>
+        </div>
+        {onCreateNew && (
+          <div className="mb-4">
+            <Button onClick={onCreateNew} className="w-full" disabled={isLoading || createDisabled}>
+              <Plus className="mr-2 h-4 w-4" aria-hidden="true" />
+              New Conversation
+            </Button>
+          </div>
         )}
+
+        <div className="min-h-0 flex-1 overflow-hidden">
+          {isLoading ? (
+            <ConversationListSkeleton />
+          ) : conversations.length === 0 ? (
+            <EmptyState message="No conversations yet. Start a new conversation to get started." />
+          ) : shouldVirtualize ? (
+            // Virtualized rendering for large lists
+            <VirtualizedConversationList
+              conversations={conversations}
+              renderConversation={renderConversation}
+              getKey={getConversationKey}
+              estimatedRowHeight={120}
+              overscan={3}
+              gap={0}
+            />
+          ) : (
+            // Regular rendering for smaller lists
+            <ScrollArea className="h-full">
+              <div>
+                {conversations.map((conv) => (
+                  <ConversationCard
+                    key={conv.id}
+                    conversation={conv}
+                    isActive={conv.id === currentConversationId}
+                    onClick={() => onSelectConversation(conv.id)}
+                    onDelete={() => onDeleteConversation(conv.id)}
+                    onToggleShare={onToggleShare ? () => onToggleShare(conv.id, !conv.isShared) : undefined}
+                  />
+                ))}
+              </div>
+            </ScrollArea>
+          )}
+        </div>
       </div>
     </div>
   );

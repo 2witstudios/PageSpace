@@ -116,6 +116,15 @@ const show = (routes: Record<string, FakeRoute>, folderId: string) => {
 const rowNames = (container: HTMLElement) =>
   [...container.querySelectorAll('tbody tr [data-name]')].map((name) => name.textContent);
 
+/** The strip's New document button. */
+const newDocument = (container: HTMLElement): HTMLButtonElement => {
+  const button = [...container.querySelectorAll('[role="toolbar"] button')].find(
+    (candidate) => candidate.textContent === 'New document',
+  );
+  if (!(button instanceof HTMLButtonElement)) throw new Error('no New document');
+  return button;
+};
+
 const listed = (container: HTMLElement) =>
   settle(() => {
     if (container.querySelector('table, [data-empty]') === null) throw new Error('not listed yet');
@@ -128,13 +137,13 @@ describe('FolderView browsing', () => {
     assert({
       given: 'a folder the drive tree lists, two levels down',
       should:
-        'list its children from the drive tree with when each changed, under a path from Files through Work, asking apps/web for nothing but the tree',
+        'list its children from the drive tree with when each changed, under a Folder tools strip counting them, asking apps/web for nothing but the tree',
       actual: [
         [...container.querySelectorAll('tbody tr')].map((row) => [
           row.querySelector('[data-name]')?.textContent,
           row.querySelector('[data-modified]')?.textContent,
         ]),
-        [...container.querySelectorAll('nav[aria-label="Folder path"] li')].map((crumb) => crumb.textContent),
+        container.querySelector('[role="toolbar"] span')?.textContent,
         web.requests.map((request) => request.url),
       ],
       expected: [
@@ -142,7 +151,7 @@ describe('FolderView browsing', () => {
           ['Brief', 'Today, 9:12 AM'],
           ['Budget', 'Dec 31, 2025'],
         ],
-        ['Files', '›Work', '›Launch'],
+        'Launch · 2 pages',
         ['/api/drives/d1/pages'],
       ],
     });
@@ -210,14 +219,12 @@ describe('FolderView empty', () => {
     );
     await listed(container);
     const empty = container.querySelector('[data-empty]');
-    const button = empty?.querySelector('button');
-    if (!(button instanceof HTMLButtonElement)) throw new Error('no New page');
-    click(button);
+    click(newDocument(container));
     await settle(() => {
       if (router.pushed.length === 0) throw new Error('not opened');
     });
     assert({
-      given: 'New page pressed in the empty state of an empty folder',
+      given: 'New document pressed in the strip of an empty folder',
       should: 'create one document in that folder through the pages API, then open it',
       actual: [
         empty?.querySelector('h2')?.textContent,
@@ -245,9 +252,7 @@ describe('FolderView empty', () => {
       'archive',
     );
     await listed(container);
-    const button = container.querySelector('[data-empty] button');
-    if (!(button instanceof HTMLButtonElement)) throw new Error('no New page');
-    click(button);
+    click(newDocument(container));
     await settle(() => {
       if (rowNames(container).length === 0) throw new Error('no row yet');
     });
@@ -273,9 +278,7 @@ describe('FolderView empty', () => {
       'archive',
     );
     await listed(container);
-    const button = container.querySelector('[data-empty] button');
-    if (!(button instanceof HTMLButtonElement)) throw new Error('no New page');
-    click(button);
+    click(newDocument(container));
     await settle(() => {
       if (container.querySelector('[role="alert"]') === null) throw new Error('no alert yet');
     });

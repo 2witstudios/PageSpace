@@ -30,8 +30,9 @@ interface PublishControlsProps {
   /** 'header' (default): rendered among other populated header buttons, so
    *  staying silent when unavailable is fine. 'panel': rendered as the sole
    *  content of a dedicated tab/panel, where silence would leave a blank tab —
-   *  render an explanatory message instead. */
-  variant?: 'header' | 'panel';
+   *  render an explanatory message instead. 'strip': the page toolbar strip's
+   *  publish status chip and primary update action (no settings dialog). */
+  variant?: 'header' | 'panel' | 'strip';
 }
 
 /** PublishSettingsSnapshot plus a transient "picked an uploaded file"
@@ -207,6 +208,21 @@ const PublishControls = ({ pageId, contentDirty, variant = 'header' }: PublishCo
       );
     }
     return null;
+  }
+
+  if (variant === 'strip' && status.published && status.url) {
+    return (
+      <div className="flex flex-none items-center gap-2">
+        <span className="whitespace-nowrap rounded-full bg-yellow-100 px-2 py-0.5 text-xs text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400">
+          {status.isStale ? 'Published · changes not live' : 'Published'}
+        </span>
+        {status.isStale && (
+          <Button size="sm" onClick={() => handlePublish(true)} disabled={isBusy}>
+            {isBusy ? 'Republishing…' : 'Republish'}
+          </Button>
+        )}
+      </div>
+    );
   }
 
   if (!status.published || !status.url) {

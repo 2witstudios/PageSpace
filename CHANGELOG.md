@@ -11,6 +11,21 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 - **Imago's new shell (C · Blue Spine)** — Imago now sits on a blue spine: the drive tile, Search (⌘K), Chat, Files, Messages and Tasks, then Calendar, Agents, Workflows, Activity, Members and Trash, with the notification bell, Drive settings and your avatar at the foot. Open pages live in a tab bar across the top (Back, Forward, tabs that remember themselves per drive, and a + for a new page); under it every column has the same 48px head. The left sidebar folds away with its panel button and comes back from "Show sidebar"; a page closes with ×; Imago docked beside a page folds into an "Ask" pill, and when no page is open Imago fills the middle and can be closed, leaving "Nothing open" with your recent pages and "Ask Imago". A page's head carries its path, who is viewing, Share and a "…" for page actions, and its tools sit in one strip beneath it. The Files pane gains a filter, Favorites and Recents; drive settings and your account each get a sidebar of their screens.
 
+- **Imago's chat column (C · Blue Spine)** — the Imago column's head now has the agent picker (Imago first), History, New chat and a collapse button. A "Spending from …" line above the compact composer shows which credits a reply draws on. Tool calls appear as short rows ("Read Page: Brief") instead of raw tool names. The Chats pane can be searched and groups your conversations by date, and a home greeting suggests where to pick up.
+
+- **Imago's pages (C · Blue Spine)** — each page type has one tool strip under its head:
+  - Documents: Formatting, plus an "Ask" button in the selection bubble that quotes your selection to Imago.
+  - Sheets: Cell and Formula.
+  - Code: Language.
+  - Files: file facts and Download.
+  - Channels: Webhooks, a "New messages" divider, and "Sending…" on pending posts.
+  - Canvases: Code, Preview and Settings tabs, with "Republish" when the published copy is out of date.
+  - Folders: their contents as a table with Name, Type and Modified.
+  - Agent pages: Chat, History and Settings views.
+  - Task lists: Table/Board, Active/Completed/All, and a progress line.
+
+  A public link that no longer works now says so.
+
 - **Imago reuses the full PageSpace feature UI** — native editors and file viewers, page creation and sharing, rich chat controls and results, messaging, tasks, agent sessions and account/drive settings now stay inside the persistent Imago shell. Classic PageSpace and rollout defaults are preserved.
 
 - **Right-sidebar chat input is a single compact card** — attach, tools, model picker and one send/stop button now share one toolbar row under the text box instead of stacking a separate model selector above it. While a reply is streaming, a queue button appears next to Stop once you've typed something, so you can still queue a follow-up on phones.

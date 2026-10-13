@@ -47,7 +47,7 @@ function PageActions({ pageId, type, title }: { readonly pageId: string; readonl
           <div className="flex flex-col items-stretch gap-1">
             {type === 'DOCUMENT' ? <PageSetupButton pageId={pageId} /> : null}
             {type === 'DOCUMENT' || type === 'SHEET' ? <ExportDropdown pageId={pageId} pageTitle={title} pageType={pageType} /> : null}
-            {isPublishablePageType(pageType) ? <PublishControls pageId={pageId} contentDirty={false} /> : null}
+            {isPublishablePageType(pageType) && type !== 'CANVAS' ? <PublishControls pageId={pageId} contentDirty={false} /> : null}
             <PageHistory />
           </div>
         </RetainedSurface>

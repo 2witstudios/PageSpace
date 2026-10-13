@@ -1,9 +1,6 @@
 "use client";
 
 import React, { useEffect, useCallback, useRef, useState, useId } from 'react';
-import { usePathname, useRouter, useSearchParams } from '@/retained-adapters/navigation';
-import { Maximize2 } from 'lucide-react';
-import { fetchWithAuth } from '@/retained/lib/auth/auth-fetch';
 import dynamic from 'next/dynamic';
 import { CanvasFrame } from '@/retained/components/canvas/CanvasFrame';
 import { ErrorBoundary } from '@/retained/components/ai/shared';
@@ -16,44 +13,22 @@ import { useSocket } from '@/retained/hooks/useSocket';
 import { PageEventPayload } from '@/retained-adapters/ui-contracts';
 import { useFindStore } from '@/retained/stores/useFindStore';
 import { usePublishStatusStore } from '@/retained/stores/usePublishStatusStore';
-import { usePermissions } from '@/retained/hooks/usePermissions';
+import { fetchWithAuth } from '@/retained/lib/auth/auth-fetch';
 import { CanvasSettingsPanel } from './settings/CanvasSettingsPanel';
+import { useCanvasTab } from './useCanvasTab';
+import { CanvasFormTargetFooter, CanvasPreviewHeader } from './CanvasPreviewChrome';
 
 interface CanvasPageViewProps {
   pageId: string;
 }
 
-type CanvasTab = 'view' | 'code' | 'settings';
-
 const MonacoEditor = dynamic(() => import('@/retained/components/editors/MonacoEditor'), { ssr: false });
 
-const CANVAS_TABS: CanvasTab[] = ['view', 'code', 'settings'];
-const isCanvasTab = (value: string | null): value is CanvasTab =>
-  value !== null && (CANVAS_TABS as string[]).includes(value);
-
 const CanvasPageView = ({ pageId }: CanvasPageViewProps) => {
-  const { permissions } = usePermissions(pageId);
-  const isReadOnly = permissions?.canEdit !== true;
-  const router = useRouter();
-  const pathname = usePathname();
-  const searchParams = useSearchParams();
-  const rawTab = searchParams.get('tab');
-  // A stale/foreign ?tab= value (an old bookmark from before the Forms tab was
-  // removed, a manually edited URL, …) must fall back to 'view' rather than
-  // rendering none of the tab panels below.
-  const activeTab = isReadOnly && rawTab === 'settings' ? 'view' : isCanvasTab(rawTab) ? rawTab : 'view';
-  const setActiveTab = useCallback((tab: CanvasTab) => {
-    const params = new URLSearchParams(searchParams.toString());
-    if (tab === 'view') {
-      params.delete('tab');
-    } else {
-      params.set('tab', tab);
-    }
-    // Switching top-level tab always leaves any settings category behind.
-    params.delete('category');
-    const qs = params.toString();
-    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
-  }, [searchParams, pathname, router]);
+  // The tab itself is chosen in the page strip (ui/files/page-types/canvas-page.tsx); this
+  // view only renders the body for it.
+  const { activeTab, isReadOnly } = useCanvasTab(pageId);
+  const themeBridgeEnabled = usePublishStatusStore((s) => s.statuses.get(pageId)?.settings.themeBridgeEnabled ?? true);
 
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
   const closePreview = useCallback(() => setIsPreviewOpen(false), []);
@@ -252,27 +227,6 @@ const CanvasPageView = ({ pageId }: CanvasPageViewProps) => {
         isResolving={isResolvingConflict}
         previewMode="plain"
       />
-      <div className="relative flex flex-wrap items-center border-b">
-        <button
-          className={`px-4 py-2 ${activeTab === 'view' ? 'border-b-2 border-blue-500' : ''}`}
-          onClick={() => setActiveTab('view')}
-        >
-          View
-        </button>
-        <button
-          className={`px-4 py-2 ${activeTab === 'code' ? 'border-b-2 border-blue-500' : ''}`}
-          onClick={() => setActiveTab('code')}
-        >
-          Code
-        </button>
-        <button
-          className={`px-4 py-2 ${activeTab === 'settings' ? 'border-b-2 border-blue-500' : ''}`}
-          disabled={isReadOnly}
-          onClick={() => setActiveTab('settings')}
-        >
-          Settings
-        </button>
-      </div>
       {activeTab === 'code' && (
         <div className="flex-1 min-h-0">
           <MonacoEditor
@@ -284,21 +238,16 @@ const CanvasPageView = ({ pageId }: CanvasPageViewProps) => {
         </div>
       )}
       {activeTab === 'view' && (
-        <div className="relative flex-1 w-full bg-background text-foreground">
-          <button
-            type="button"
-            title="Fullscreen preview"
-            aria-label="Fullscreen preview"
-            onClick={() => setIsPreviewOpen(true)}
-            className="absolute top-2 right-2 z-10 rounded-md bg-background/70 p-1.5 text-muted-foreground backdrop-blur-sm hover:bg-background hover:text-foreground"
-          >
-            <Maximize2 className="h-4 w-4" />
-          </button>
-          {!isPreviewOpen && (
-            <ErrorBoundary>
-              <CanvasFrame pageId={pageId} previewKey={previewKey} />
-            </ErrorBoundary>
-          )}
+        <div className="flex min-h-0 flex-1 flex-col bg-background text-foreground">
+          <CanvasPreviewHeader themeBridgeEnabled={themeBridgeEnabled} onFullscreen={() => setIsPreviewOpen(true)} />
+          <div className="relative min-h-0 flex-1">
+            {!isPreviewOpen && (
+              <ErrorBoundary>
+                <CanvasFrame pageId={pageId} previewKey={previewKey} />
+              </ErrorBoundary>
+            )}
+          </div>
+          <CanvasFormTargetFooter pageId={pageId} />
         </div>
       )}
       {activeTab === 'settings' && (

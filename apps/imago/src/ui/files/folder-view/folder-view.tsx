@@ -29,8 +29,8 @@ const systemNow = (): Date => new Date();
  * children and the path down to it, read from the drive's tree, the one the
  * tree pane shows, so the browser lists exactly what the drive tree lists
  * and never asks the children route (which checks only the parent). It is
- * live with the tree; New page in an empty folder is the tree pane's create,
- * aimed at this folder.
+ * live with the tree; New document in the Folder tools strip creates a
+ * document in this folder.
  */
 export function FolderView({ driveId, folderId, now = systemNow }: FolderViewProps): ReactNode {
   const router = useRouter();
