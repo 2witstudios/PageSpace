@@ -39,10 +39,10 @@ const dom = (overrides: Partial<ChatPaneRenderProps> = {}): HTMLElement => {
 describe('renderChatPane()', () => {
   test('roomy', () => {
     const view = dom();
-    const pane = view.querySelector('section');
+    const pane = view.querySelector('aside');
     assert({
       given: 'the drive chat, roomy',
-      should: 'label the pane, name the agent and the context in its header, centre the thread and float the composer below it',
+      should: 'label the Imago column, name the agent and the context in its header, centre the thread and float the composer below it',
       actual: [
         pane?.getAttribute('aria-label'),
         pane?.dataset.density,
@@ -52,7 +52,7 @@ describe('renderChatPane()', () => {
         pane?.querySelector('ol')?.className,
         pane?.lastElementChild?.hasAttribute('data-composer'),
       ],
-      expected: ['Chat', 'roomy', chatPaneClass('roomy'), 'Imago/Alpha in context', chatContextLabelClass, chatThreadClass('roomy'), true],
+      expected: ['Imago', 'roomy', chatPaneClass('roomy'), 'Imago/Alpha in context', chatContextLabelClass, chatThreadClass('roomy'), true],
     });
   });
 
@@ -62,12 +62,37 @@ describe('renderChatPane()', () => {
       given: 'a page open beside the chat',
       should: 'pack the thread densely and name the open object in the header',
       actual: [
-        view.querySelector('section')?.dataset.density,
-        view.querySelector('section')?.className,
+        view.querySelector('aside')?.dataset.density,
+        view.querySelector('aside')?.className,
         view.querySelector('ol')?.className,
         view.querySelector('header small')?.textContent,
       ],
       expected: ['dense', chatPaneClass('dense'), chatThreadClass('dense'), 'Roadmap in context'],
+    });
+  });
+
+  test('head controls', () => {
+    const view = dom({
+      leading: <button type="button" aria-label="Show sidebar" />,
+      trailing: <button type="button" aria-label="Collapse Imago" />,
+    });
+    const header = view.querySelector('aside > header');
+    const labels = [...(header?.querySelectorAll('button[aria-label]') ?? [])].map((button) => button.getAttribute('aria-label'));
+    assert({
+      given: 'a leading Show sidebar and a trailing Collapse Imago',
+      should: 'put the leading control ahead of the title and the trailing one after it, both in the head',
+      actual: [labels, header?.firstElementChild?.hasAttribute('data-leading'), header?.lastElementChild?.getAttribute('aria-label')],
+      expected: [['Show sidebar', 'Collapse Imago'], true, 'Collapse Imago'],
+    });
+  });
+
+  test('no head controls', () => {
+    const header = dom().querySelector('aside > header');
+    assert({
+      given: 'neither a leading nor a trailing control',
+      should: 'render the head with its title alone',
+      actual: [header?.querySelector('[data-leading]'), header?.querySelectorAll('button').length],
+      expected: [null, 0],
     });
   });
 

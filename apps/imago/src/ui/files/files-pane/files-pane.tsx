@@ -15,17 +15,16 @@ export type FilesPaneProps = {
   readonly selectedPageId: string | null;
   readonly variant: Exclude<ListPaneVariant, 'closed'>;
   readonly title: string;
-  readonly closeHref: string;
 };
 
-export function FilesPane({ driveId, variant, title, closeHref }: FilesPaneProps) {
+export function FilesPane({ driveId, variant, title }: FilesPaneProps) {
   const [filter, setFilter] = useState('');
   const drives = useDriveStore(state => state.drives);
   const fetchDrives = useDriveStore(state => state.fetchDrives);
   useEffect(() => { void fetchDrives(); }, [fetchDrives]);
   const canCreate = drives.find(drive => drive.id === driveId)?.canCreatePages === true;
   const actions = renderNewPageButton({ create: () => useUIStore.getState().openQuickCreate(null), disabled: !canCreate });
-  return <ListPane section="files" variant={variant} title={title} closeHref={closeHref} actions={actions}>
+  return <ListPane section="files" variant={variant} title={title} actions={actions}>
     <RetainedSurface><div className="flex h-full min-h-0 flex-col gap-2 p-2">
       <Input aria-label="Filter files" placeholder="Search pages…" value={filter} onChange={event => setFilter(event.target.value)} />
       <PageTree driveId={driveId} searchQuery={filter} />

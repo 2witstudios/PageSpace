@@ -1244,7 +1244,7 @@ body.keyboard-open {
   --color-tab-bar: var(--tab-bar); --color-fill: var(--fill); --color-accent-deep: var(--accent-deep);
   --color-status-success: var(--status-success); --color-status-warning: var(--status-warning);
   --color-status-warning-ink: var(--status-warning-ink); --color-status-danger: var(--status-danger);
-  --color-badge: var(--badge); --color-badge-ink: var(--badge-ink);
+  --color-notice: var(--notice); --color-notice-ink: var(--notice-ink);
   --color-type-doc: var(--type-doc); --color-type-tasks: var(--type-tasks); --color-type-sheet: var(--type-sheet);
   --color-type-channel: var(--type-channel); --color-type-folder: var(--type-folder); --color-type-agent: var(--type-agent);
   --color-type-canvas: var(--type-canvas); --color-type-code: var(--type-code); --color-type-file: var(--type-file);

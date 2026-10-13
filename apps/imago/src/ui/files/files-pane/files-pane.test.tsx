@@ -11,7 +11,7 @@ vi.mock('@/retained-adapters/retained-provider', () => ({ RetainedSurface: ({ ch
 const { FilesPane } = await import('./files-pane');
 beforeEach(() => { drive.permission = undefined; setUiState(createInitialState()); useUIStore.getState().closeQuickCreate(); });
 afterEach(unmountAll);
-const show = () => mount(<FilesPane driveId="d1" selectedPageId="p1" variant="tree" title="Files" closeHref="/d1" />);
+const show = () => mount(<FilesPane driveId="d1" selectedPageId="p1" variant="tree" title="Files" />);
 it('mounts the retained tree in the existing list pane', () => {
   const container = show(); expect(container.querySelector('[data-retained-tree]')?.getAttribute('data-retained-tree')).toBe('d1');
 });
@@ -24,6 +24,6 @@ it('creation opens the retained type palette when the server permits it', () => 
 it('typing filters the retained tree', () => {
   const container = show(); typeInto(container.querySelector('input')!, 'Notes'); expect(container.querySelector('[data-retained-tree]')?.getAttribute('data-filter')).toBe('Notes');
 });
-it('closing the tree uses the original per-section shell state', () => {
-  const container = show(); click(container.querySelector('[aria-label="Hide Files"]')!); expect(getUiState().resources.collapsedSections).toContain('files');
+it('Close sidebar collapses the files section through the per-section shell state', () => {
+  const container = show(); click(container.querySelector('[aria-label="Close sidebar"]')!); expect(getUiState().resources.collapsedSections).toContain('files');
 });

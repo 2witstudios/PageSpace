@@ -8,7 +8,7 @@
 // Opening an object changes only the context a turn carries, never the agent
 // or the conversation.
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import { useRetainedChatSelection } from '@/retained-adapters/session-selection';
 import { RetainedChat } from '@/retained-adapters/retained-chat';
 import { ApiError } from '@/api/errors';
@@ -16,7 +16,6 @@ import { useUiState } from '@/ui/store/store';
 import type { UiState } from '@/ui/store/state';
 import { dispatch, transactions } from '@/ui/store/transactions';
 import { usePageTrail } from '@/ui/tasks/use-tasks/use-tasks';
-import { ListOpener } from '../../frame/list-pane/list-pane';
 import { chatContextFor, type Stage } from '../../frame/stage/stage';
 import { agentFor, agentMenu } from '../chat-agents/chat-agents';
 import { shownConversationId } from '../chat-plugin';
@@ -30,11 +29,14 @@ export type ChatPaneProps = {
   readonly driveName?: string;
   /** Where a cited page opens when the stage names no drive. */
   readonly homeDriveId: string | null;
+  /** Show sidebar, when the pane is closed and Imago leads the middle. */
+  readonly leading?: ReactNode;
+  /** Collapse Imago while docked, or Close Imago while it fills the middle (SPEC v3.2). */
+  readonly trailing?: ReactNode;
 };
 
 const selectConversation = (state: UiState) => state.resources.chatConversationId;
 const selectNew = (state: UiState) => state.resources.chatNew;
-const selectHistoryHidden = (state: UiState) => state.resources.collapsedSections.includes('chat');
 const selectLost = (state: UiState) => state.resources.chatAgentLost;
 
 /** How the agent routes say the viewer may no longer use an agent: it is gone (404) or not theirs to view (403). */
@@ -55,7 +57,7 @@ const objectNameOf = (stage: Stage, trail: readonly { readonly id: string; reado
   return stage.object?.kind === 'page' && last?.id === stage.object.pageId ? last.title : undefined;
 };
 
-export function ChatPane({ stage, driveName, homeDriveId }: ChatPaneProps) {
+export function ChatPane({ stage, driveName, homeDriveId, leading = null, trailing = null }: ChatPaneProps) {
   const retainedSelection = useRetainedChatSelection(state => state.selection);
   const { agents, chosenAgent, agentId, agentName, error: agentsError } = useChatAgent();
   const { agents: driveAgents } = useDriveAgents(stage.driveId);
@@ -77,7 +79,6 @@ export function ChatPane({ stage, driveName, homeDriveId }: ChatPaneProps) {
   const chosen = useUiState(selectConversation);
   const chatNew = useUiState(selectNew);
   const conversationId = shownConversationId({ chatConversationId: chosen, chatNew }, conversations?.[0]?.id ?? null);
-  const historyHidden = useUiState(selectHistoryHidden);
 
   const { trail } = usePageTrail(stage.object?.kind === 'page' ? stage.object.pageId : null);
   const resolving = !chatNew && chosen === null && conversations === undefined && conversationsError === undefined;
@@ -89,8 +90,8 @@ export function ChatPane({ stage, driveName, homeDriveId }: ChatPaneProps) {
   return renderChatPane({
     density: context.density,
     agentName: headerAgent?.title ?? agentName,
-    // The hidden history's hamburger sits in the chat's own header, as the tree's does in the object's.
-    leading: stage.section === 'chat' && historyHidden ? <ListOpener section="chat" title="Chat history" /> : null,
+    leading,
+    trailing,
     agents: agentMenu({ builtins: agents, driveAgents, driveName, selected: headerAgent }),
     selectAgent: (value) => {
       useRetainedChatSelection.getState().select(null);

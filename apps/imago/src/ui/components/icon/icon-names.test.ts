@@ -47,6 +47,9 @@ import {
   Workflow,
   Wrench,
   X,
+  PanelLeftClose,
+  PanelLeftOpen,
+  PanelRightClose,
 } from 'lucide-react';
 import { iconNames, icons } from './icon-names';
 
@@ -93,6 +96,9 @@ describe('icon names', () => {
         workflows: Workflow,
         members: Users,
         bell: Bell,
+        panelLeftClose: PanelLeftClose,
+        panelLeftOpen: PanelLeftOpen,
+        panelRightClose: PanelRightClose,
         connections: Cable,
         lock: Lock,
         stop: Square,
