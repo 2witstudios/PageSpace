@@ -15,4 +15,13 @@ describe('groundFor()', () => {
       expected: ['files', 'messages', 'dm', null, null],
     });
   });
+
+  test('the Tasks index, and an open list or task', () => {
+    assert({
+      given: 'the Tasks index of a drive, a list open in it, and the Tasks index with no drive',
+      should: 'show the Tasks ground on the index only, and nothing with an object open or no drive',
+      actual: [`/${DRIVE}/tasks`, `/${DRIVE}/tasks/${PAGE}`, '/tasks'].map((path) => groundFor(stageFor(path))),
+      expected: ['tasks', null, null],
+    });
+  });
 });

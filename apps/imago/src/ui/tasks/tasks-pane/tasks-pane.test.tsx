@@ -7,10 +7,18 @@ import { mount, unmountAll } from '../../test-support/dom';
 import { fakeWeb, type FakeRoute } from '@/ui/test-support/fake-web';
 import { taskItem, taskListResponse } from '../task-model/fixtures';
 import { TasksPane } from './tasks-pane';
+import { useTaskViewStore } from '../task-views/task-views';
 
 vi.mock('@/retained-adapters/create-actions', () => ({ CreateActions: () => null }));
+const router = vi.hoisted(() => ({ push: vi.fn() }));
+vi.mock('next/navigation', () => ({ useRouter: () => router }));
 
-afterEach(unmountAll);
+afterEach(() => {
+  unmountAll();
+  useTaskViewStore.getState().setView('assigned');
+});
+
+const COUNT = (filter = '') => `GET /api/tasks?context=drive&driveId=d1&limit=1${filter}`;
 
 const DRIVE = 'GET /api/drives/d1/pages?ls=true&recursive=true';
 
@@ -56,6 +64,25 @@ const show = (routes: Record<string, FakeRoute>, selectedPageId: string | null =
 };
 
 describe('TasksPane', () => {
+  test('New list makes a task list and opens it', async () => {
+    const { web, container } = show({
+      [DRIVE]: lists([]),
+      'POST /api/pages': () => Response.json({ id: 'n1', title: 'Untitled Task List', type: 'TASK_LIST', parentId: null, position: 0, isTrashed: false, updatedAt: '2026-10-01T00:00:00.000Z', createdAt: '2026-10-01T00:00:00.000Z' }),
+    });
+    const button = [...container.querySelectorAll('button')].find((entry) => entry.textContent?.includes('New list'));
+    await act(async () => {
+      button?.click();
+    });
+    await settle(() => {
+      assert({
+        given: 'New list in the Tasks pane',
+        should: 'POST an untitled task list at the drive top and open it',
+        actual: { body: web.writes()[0]?.body, opened: router.push.mock.calls.at(-1)?.[0] },
+        expected: { body: { title: 'Untitled Task List', type: 'TASK_LIST', driveId: 'd1', parentId: null }, opened: '/d1/tasks/n1' },
+      });
+    });
+  });
+
   test('a drive’s lists with progress', async () => {
     const { container } = show(
       {
@@ -85,19 +112,19 @@ describe('TasksPane', () => {
       given: 'a drive with two task lists (and a task’s own page)',
       should: 'list only the lists, each linking to its tasks route with its progress, the open one current',
       actual: {
-        group: container.querySelector('section')?.getAttribute('aria-label'),
+        group: [...container.querySelectorAll('section')].map((section) => section.getAttribute('aria-label')),
         links: links.map((link) => [link.textContent?.includes('Launch') ? 'Launch' : 'Errands', link.getAttribute('href')]),
         current: links.map((link) => link.getAttribute('aria-current')),
         progress: [...container.querySelectorAll('[role="progressbar"]')].map((bar) => bar.getAttribute('aria-label')),
       },
       expected: {
-        group: 'Task lists',
+        group: ['Views', 'Task lists'],
         links: [
           ['Launch', '/d1/tasks/l1'],
           ['Errands', '/d1/tasks/l2'],
         ],
         current: ['page', null],
-        progress: ['1 of 3 tasks done'],
+        progress: ['Launch: 1 of 3 tasks done'],
       },
     });
   });
@@ -160,6 +187,46 @@ describe('TasksPane', () => {
       should: 'ask the server again through SWR and draw the lists it answers',
       actual: { asked: web.count(DRIVE), alert: container.querySelector('[role="alert"]') === null },
       expected: { asked: 2, alert: true },
+    });
+  });
+
+  test('smart views with their counts, and picking one', async () => {
+    const counted = (total: number) => () => Response.json({ tasks: [], pagination: { total, limit: 1, offset: 0, hasMore: false } });
+    const { container } = show({
+      [DRIVE]: lists([]),
+      [COUNT()]: counted(6),
+      [COUNT('&dueDateFilter=overdue')]: counted(1),
+      [COUNT('&dueDateFilter=today')]: counted(2),
+      [COUNT('&dueDateFilter=this_week')]: counted(4),
+      [COUNT('&dueDateFilter=upcoming')]: counted(1),
+    });
+    await settle(() => {
+      if (!container.textContent?.includes('Upcoming1')) throw new Error('counts not loaded');
+    });
+    const views = () => [...container.querySelectorAll<HTMLButtonElement>('[aria-label="Views"] button[aria-pressed]')];
+    const before = views().map((view) => [view.textContent, view.getAttribute('aria-pressed')]);
+    act(() => {
+      views().find((view) => view.textContent?.startsWith('Overdue'))?.click();
+    });
+    assert({
+      given: 'the five views with their counts, then Overdue picked',
+      should: 'show each view with its count, select the one picked, and store it for the ground',
+      actual: {
+        before,
+        after: views().map((view) => view.getAttribute('aria-pressed')),
+        stored: useTaskViewStore.getState().view,
+      },
+      expected: {
+        before: [
+          ['Assigned to me6', 'true'],
+          ['Overdue1', 'false'],
+          ['Due today2', 'false'],
+          ['This week4', 'false'],
+          ['Upcoming1', 'false'],
+        ],
+        after: ['false', 'true', 'false', 'false', 'false'],
+        stored: 'overdue',
+      },
     });
   });
 });

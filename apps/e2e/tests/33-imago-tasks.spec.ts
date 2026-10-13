@@ -100,8 +100,11 @@ const tasksPath = (pageId: string) => `/api/pages/${pageId}/tasks`;
 const taskPath = (pageId: string, taskId: string) => `/api/pages/${pageId}/tasks/${taskId}`;
 
 const treeOf = (page: Page) => page.locator('[data-slot="object"]');
+/** A task's tick: "Complete"/"Reopen" in a list row, "Mark <title> complete" on the task's own page. */
 const checkbox = (scope: Page | Locator, title: string) =>
-  scope.getByRole('checkbox', { name: new RegExp(`^(Complete|Reopen) ${title}$`) }).filter({ visible: true });
+  scope
+    .getByRole('checkbox', { name: new RegExp(`^(?:(?:Complete|Reopen) ${title}|Mark ${title} complete)$`) })
+    .filter({ visible: true });
 
 /**
  * Shows the Done group's rows: the Table groups tasks by status and starts the Done group

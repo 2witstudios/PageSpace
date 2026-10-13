@@ -205,7 +205,7 @@ describe('TaskObject: a task', () => {
       actual: {
         crumbs: detail.querySelector('nav[aria-label="Task path"]')?.textContent,
         title: field<HTMLInputElement>(detail, 'Title')?.value,
-        complete: field(detail, 'Complete Plan launch')?.getAttribute('aria-checked'),
+        complete: field(detail, 'Mark Plan launch complete')?.getAttribute('aria-checked'),
         status: status?.value,
         statuses: [...(status?.options ?? [])].map((option) => option.textContent),
         priority: field<HTMLSelectElement>(detail, 'Priority')?.value,
@@ -216,7 +216,7 @@ describe('TaskObject: a task', () => {
         subtasks: [...(subtasks?.querySelectorAll('[data-title]') ?? [])].map((node) => node.textContent),
       },
       expected: {
-        crumbs: 'Launch',
+        crumbs: 'TasksLaunchPlan launch',
         title: 'Plan launch',
         complete: 'false',
         status: 'pending',
@@ -330,7 +330,7 @@ describe('TaskObject: a task', () => {
       true,
       'Book venue',
     );
-    click(field<HTMLButtonElement>(detail, 'Complete Book venue') as HTMLButtonElement);
+    click(field<HTMLButtonElement>(detail, 'Mark Book venue complete') as HTMLButtonElement);
     await settle(() => {
       if (tree?.querySelector('[aria-label="Complete Book venue"]')?.getAttribute('aria-checked') !== 'true') {
         throw new Error('not ticked in tree');
@@ -346,7 +346,7 @@ describe('TaskObject: a task', () => {
 
   test('a parent with an open subtask', async () => {
     const { web, detail } = await openTask();
-    click(field<HTMLButtonElement>(detail, 'Complete Plan launch') as HTMLButtonElement);
+    click(field<HTMLButtonElement>(detail, 'Mark Plan launch complete') as HTMLButtonElement);
     await settle(() => {
       if (!detail.textContent?.includes('Complete all sub-tasks first')) throw new Error('no refusal');
     });
@@ -712,3 +712,95 @@ describe('TaskObject: what the id names', () => {
   });
 });
 
+
+describe('TaskObject: a task’s automations and activity', () => {
+  const trigger = {
+    id: 'trg-1',
+    triggerType: 'due_date',
+    nextRunAt: '2026-11-14T08:00:00.000Z',
+    lastFiredAt: null,
+    lastFireError: null,
+    isEnabled: true,
+    agentPageId: 'ag-1',
+    prompt: 'Remind the launch team',
+  };
+  const activities = {
+    activities: [
+      {
+        id: 'act-1',
+        timestamp: new Date(Date.now() - 2 * 60 * 1000).toISOString(),
+        operation: 'update',
+        actorDisplayName: 'Imago',
+        isAiGenerated: true,
+        updatedFields: ['dueDate'],
+        user: null,
+      },
+    ],
+  };
+  const ACTIVITY = 'GET /api/activities?context=page&pageId=page-p&limit=20';
+
+  test('a task with a due trigger, and the AI’s due-date change', async () => {
+    const { detail } = await openTask({
+      ...server(),
+      'GET /api/tasks/p/triggers': () => Response.json({ triggers: [trigger] }),
+      [ACTIVITY]: () => Response.json(activities),
+    });
+    await settle(() => {
+      if (!detail.querySelector('[aria-label="Activity"]')) throw new Error('no activity');
+    });
+    const automations = detail.querySelector('[aria-label="Automations"]');
+    assert({
+      given: 'a task whose due trigger runs with the drive’s agent, and an AI change to its due date',
+      should: 'show the due trigger with its agent, offer the completion placeholder, enable the switch, list Imago’s change, and say the due date was set by Imago',
+      actual: {
+        rows: automations?.textContent?.includes('When due → run with Planner'),
+        completionPlaceholder: automations?.textContent?.includes('On completion → run a workflow…'),
+        enabled: automations?.querySelector('[role="switch"]')?.getAttribute('aria-checked'),
+        activity: detail.querySelector('[aria-label="Activity"]')?.textContent?.includes('Imago set due date'),
+        dueNote: detail.textContent?.includes('set by Imago'),
+      },
+      expected: { rows: true, completionPlaceholder: true, enabled: 'true', activity: true, dueNote: true },
+    });
+  });
+
+  test('a viewer who may not edit the list', async () => {
+    const { detail } = await openTask({
+      ...server(),
+      'GET /api/tasks/p/triggers': () => Response.json({ error: 'Forbidden' }, { status: 403 }),
+      [ACTIVITY]: () => Response.json(activities),
+    });
+    await settle(() => {
+      if (!detail.querySelector('[aria-label="Activity"]')) throw new Error('no activity');
+    });
+    assert({
+      given: 'a viewer whose triggers request is refused with 403',
+      should: 'hide the Automations section and still show the activity',
+      actual: {
+        automations: detail.querySelector('[aria-label="Automations"]') === null,
+        activity: detail.querySelector('[aria-label="Activity"]') !== null,
+      },
+      expected: { automations: true, activity: true },
+    });
+  });
+
+  test('the first of two tasks', async () => {
+    const { detail } = await openTask({ ...server(), 'GET /api/tasks/p/triggers': () => Response.json({ triggers: [] }) });
+    await settle(() => {
+      if (!detail.querySelector('[aria-label="Automations"]')) throw new Error('no automations');
+    });
+    const previous = detail.querySelector<HTMLButtonElement>('[aria-label="Previous task"]');
+    const next = detail.querySelector<HTMLAnchorElement>('[aria-label="Next task"]');
+    assert({
+      given: 'the first task of two in its list, with no triggers',
+      should: 'disable Previous task, link Next task to the next task, say the edit was saved, and offer the completion trigger',
+      actual: {
+        previous: previous?.disabled,
+        next: next?.getAttribute('href'),
+        saved: detail.textContent?.includes('Saved'),
+        placeholder: detail.querySelector('[aria-label="Automations"]')?.textContent?.includes('On completion → run a workflow…'),
+        list: detail.querySelector('a[href="/d1/tasks/l1"]')?.textContent,
+      },
+      expected: { previous: true, next: '/d1/tasks/page-z', saved: true, placeholder: true, list: 'Launch' },
+    });
+  });
+});

@@ -3,6 +3,7 @@ import type { KeyboardEvent, ReactNode } from 'react';
 import { AvatarGroup } from '../../components/avatar-group/avatar-group';
 import { Checkbox } from '../../components/checkbox/checkbox';
 import { Icon } from '../../components/icon/icon';
+import { ToolbarStrip } from '../../frame/toolbar-strip/toolbar-strip';
 import { defaultStatuses } from '../task-model/from-api';
 import type { Assignee, Priority, Task, TaskList, TaskListSummary } from '../task-model/task';
 import { isPriority, priorities } from '../task-meta/task-meta';
@@ -22,13 +23,16 @@ import {
   taskDetailMessageClass,
   taskDetailNoticeClass,
   taskDetailTitleClass,
+  taskCrumbCurrentClass,
   taskDetailTitleRowClass,
   taskFieldClass,
   taskFieldLabelClass,
   taskFieldValueClass,
   taskFieldsClass,
+  taskSavedClass,
   taskSectionClass,
   taskSectionHeadingClass,
+  taskStripButtonClass,
   taskUnassignedClass,
 } from './task-detail-class';
 
@@ -47,6 +51,7 @@ export type TaskDetailActions = {
 };
 
 export type TaskDetailRenderProps = {
+  readonly driveId: string;
   /** The drive task list the task was opened from. */
   readonly holder: TaskListSummary;
   /** Every task from the top of that list down to the open one, which comes last. */
@@ -56,12 +61,21 @@ export type TaskDetailRenderProps = {
   /** Who can be put on the task; empty until the drive's members load. */
   readonly assignable: readonly Assignee[];
   readonly notice: TaskNotice | null;
+  /** The task before and after this one in its list's order, as the pages they open. */
+  readonly previousHref: string | null;
+  readonly nextHref: string | null;
+  /** Whether Imago last set the due date: the Due row says so. */
+  readonly dueSetByImago: boolean;
   /** Which subtasks have their own subtasks open. */
   readonly expandedIds: readonly string[];
   /** Where a task's detail opens, and where a list's view does. */
   readonly hrefFor: (pageId: string) => string;
   /** The description's own slot: it loads and saves apart from the fields. */
   readonly description: ReactNode;
+  /** The Automations section, or null when the viewer may not see it. */
+  readonly automations: ReactNode | null;
+  /** The Activity section, below the subtasks. */
+  readonly activity: ReactNode;
   readonly actions: TaskDetailActions;
 };
 
@@ -97,18 +111,65 @@ const titleInput = (task: Task, rename: (title: string) => void): ReactNode => (
   />
 );
 
-/** Where the task sits: its list, then each task above it. */
-const crumbs = ({ holder, path, hrefFor }: TaskDetailRenderProps): ReactNode => (
-  <nav aria-label="Task path" className={taskDetailCrumbsClass}>
-    {[{ pageId: holder.pageId, title: holder.title }, ...path.slice(0, -1)].map((step, index) => (
-      <span key={step.pageId} className={taskFieldValueClass}>
-        {index === 0 ? null : <Icon name="chevronRight" size={12} />}
-        <Link href={hrefFor(step.pageId)} prefetch>
-          {step.title}
+/** Where the task sits: Tasks, its list, each task above it, then the task itself. */
+const crumbs = ({ driveId, holder, path, hrefFor }: TaskDetailRenderProps): ReactNode => {
+  const task = path.at(-1);
+  return (
+    <nav aria-label="Task path" className={taskDetailCrumbsClass}>
+      <span className={taskFieldValueClass}>
+        <Link href={`/${encodeURIComponent(driveId)}/tasks`} prefetch>
+          Tasks
         </Link>
       </span>
-    ))}
-  </nav>
+      {[{ pageId: holder.pageId, title: holder.title }, ...path.slice(0, -1)].map((step) => (
+        <span key={step.pageId} className={taskFieldValueClass}>
+          <Icon name="chevronRight" size={12} />
+          <Link href={hrefFor(step.pageId)} prefetch>
+            {step.title}
+          </Link>
+        </span>
+      ))}
+      {task === undefined ? null : (
+        <span className={taskFieldValueClass}>
+          <Icon name="chevronRight" size={12} />
+          <span aria-current="page" className={taskCrumbCurrentClass}>
+            {task.title}
+          </span>
+        </span>
+      )}
+    </nav>
+  );
+};
+
+const TaskStep = ({
+  href,
+  label,
+  icon,
+}: {
+  readonly href: string | null;
+  readonly label: string;
+  readonly icon: 'chevronLeft' | 'chevronRight';
+}): ReactNode =>
+  href === null ? (
+    <button type="button" aria-label={label} disabled className={taskStripButtonClass}>
+      <Icon name={icon} size={15} />
+    </button>
+  ) : (
+    <Link href={href} prefetch aria-label={label} title={label} className={taskStripButtonClass}>
+      <Icon name={icon} size={15} />
+    </Link>
+  );
+
+/** The 44px strip: the task before and after in list order, and whether the last edit was saved. */
+const strip = (props: TaskDetailRenderProps): ReactNode => (
+  <ToolbarStrip label="Task">
+    <TaskStep href={props.previousHref} label="Previous task" icon="chevronLeft" />
+    <TaskStep href={props.nextHref} label="Next task" icon="chevronRight" />
+    <div className="flex-1" />
+    <span className={taskSavedClass}>
+      {props.notice === null ? 'Saved' : 'Not saved'}
+    </span>
+  </ToolbarStrip>
 );
 
 /** The people and agents to offer: everyone assignable, plus anyone on the task who no longer is. */
@@ -204,6 +265,7 @@ const fields = (task: Task, props: TaskDetailRenderProps): ReactNode => {
             value={day}
             onChange={(event) => actions.setDueDate(dueDateFor(event.currentTarget.value))}
           />
+          {day === '' || !props.dueSetByImago ? null : <span className={taskFieldValueClass}>set by Imago</span>}
           {day === '' ? null : (
             <button
               type="button"
@@ -217,6 +279,12 @@ const fields = (task: Task, props: TaskDetailRenderProps): ReactNode => {
         </>,
       )}
       {field('Assignees', assigneePicker(task, props))}
+      {field(
+        'List',
+        <Link href={props.hrefFor(props.holder.pageId)} prefetch>
+          {props.holder.title}
+        </Link>,
+      )}
     </dl>
   );
 };
@@ -264,28 +332,33 @@ export function renderTaskDetail(props: TaskDetailRenderProps): ReactNode {
   if (task === undefined) return null;
   const { list, notice, actions } = props;
   return (
-    <article className={taskDetailClass} aria-label={task.title}>
-      {crumbs(props)}
-      <div className={taskDetailTitleRowClass}>
-        <Checkbox
-          checked={isDone(list, task)}
-          label={`Complete ${task.title}`}
-          toggle={() => actions.toggleComplete(task.id)}
-        />
-        {titleInput(task, actions.rename)}
-      </div>
-      {notice?.at === task.id ? (
-        <p role="status" className={taskDetailNoticeClass}>
-          {notice.message}
-        </p>
-      ) : null}
-      {fields(task, props)}
-      <section className={taskSectionClass}>
-        <h3 className={taskSectionHeadingClass}>Description</h3>
-        {props.description}
-      </section>
-      {subtasks(task, props)}
-    </article>
+    <>
+      {strip(props)}
+      <article className={taskDetailClass} aria-label={task.title}>
+        {crumbs(props)}
+        <div className={taskDetailTitleRowClass}>
+          <Checkbox
+            checked={isDone(list, task)}
+            label={`Mark ${task.title} complete`}
+            toggle={() => actions.toggleComplete(task.id)}
+          />
+          {titleInput(task, actions.rename)}
+        </div>
+        {notice?.at === task.id ? (
+          <p role="status" className={taskDetailNoticeClass}>
+            {notice.message}
+          </p>
+        ) : null}
+        {fields(task, props)}
+        {props.automations}
+        <section className={taskSectionClass}>
+          <h3 className={taskSectionHeadingClass}>Description</h3>
+          {props.description}
+        </section>
+        {subtasks(task, props)}
+        {props.activity}
+      </article>
+    </>
   );
 }
 
