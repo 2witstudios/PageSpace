@@ -4,13 +4,17 @@ import { useEffect } from 'react';
 import { useAuth } from '@/retained/hooks/useAuth';
 import { useRouter } from '@/retained-adapters/navigation';
 import { useDisplayPreferences } from '@/retained/hooks/useDisplayPreferences';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/retained/components/ui/card';
 import { Switch } from '@/retained/components/ui/switch';
-import { Label } from '@/retained/components/ui/label';
-import { Alert, AlertDescription } from '@/retained/components/ui/alert';
-import { Button } from '@/retained/components/ui/button';
 import { toast } from 'sonner';
-import { Eye, Loader2, ArrowLeft, Info, FileText } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
+import { useThemePreference } from '@/lib/theme/theme-provider';
+import type { ThemePreference } from '@/lib/theme/theme-preference';
+import {
+  SettingsGroup,
+  SettingsRow,
+  SettingsScreen,
+  SettingsSection,
+} from '@/ui/settings/settings-screen/settings-screen';
 
 interface DisplaySetting {
   id: 'SHOW_TOKEN_COUNTS' | 'SHOW_CODE_TOGGLE' | 'DEFAULT_MARKDOWN_MODE';
@@ -19,25 +23,23 @@ interface DisplaySetting {
   preferenceKey: 'showTokenCounts' | 'showCodeToggle' | 'defaultMarkdownMode';
 }
 
-interface DisplaySettingsSection {
-  key: string;
-  title: string;
-  description: string;
-  icon: typeof Eye;
-  settings: DisplaySetting[];
-}
+const THEME_OPTIONS: ReadonlyArray<{ value: ThemePreference; label: string; preview: string }> = [
+  { value: 'system', label: 'System', preview: 'bg-gradient-to-r from-neutral-900 to-neutral-50' },
+  { value: 'light', label: 'Light', preview: 'bg-neutral-50' },
+  { value: 'dark', label: 'Dark', preview: 'bg-neutral-900' },
+];
 
 const INTERFACE_SETTINGS: DisplaySetting[] = [
   {
     id: 'SHOW_TOKEN_COUNTS',
     label: 'Show AI token counts',
-    description: 'Display context window usage in AI chats',
+    description: 'Display context window usage in AI chats.',
     preferenceKey: 'showTokenCounts',
   },
   {
     id: 'SHOW_CODE_TOGGLE',
-    label: 'Show Rich/Code view toggle',
-    description: 'Display stable Rich and Code buttons for document pages',
+    label: 'Show Rich / Code view toggle',
+    description: 'Keep Rich and Code buttons visible on document pages.',
     preferenceKey: 'showCodeToggle',
   },
 ];
@@ -45,26 +47,9 @@ const INTERFACE_SETTINGS: DisplaySetting[] = [
 const PAGE_SETTINGS: DisplaySetting[] = [
   {
     id: 'DEFAULT_MARKDOWN_MODE',
-    label: 'Default new document pages to Markdown',
-    description: 'Sets the global default save format for newly created document pages',
+    label: 'Save new documents as Markdown',
+    description: 'The default save format for document pages you create. Existing pages keep theirs.',
     preferenceKey: 'defaultMarkdownMode',
-  },
-];
-
-const SETTINGS_SECTIONS: DisplaySettingsSection[] = [
-  {
-    key: 'global-page-settings',
-    title: 'Global Page Settings',
-    description: 'Set default behavior for how new document pages are created.',
-    icon: FileText,
-    settings: PAGE_SETTINGS,
-  },
-  {
-    key: 'display-settings',
-    title: 'Display Settings',
-    description: 'Control optional interface elements.',
-    icon: Eye,
-    settings: INTERFACE_SETTINGS,
   },
 ];
 
@@ -72,6 +57,7 @@ export default function DisplaySettingsPage() {
   const { user, isLoading: authLoading } = useAuth();
   const router = useRouter();
   const { preferences, isLoading, updatePreference } = useDisplayPreferences();
+  const { preference: theme, selectPreference } = useThemePreference();
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -96,74 +82,50 @@ export default function DisplaySettingsPage() {
     );
   }
 
+  const renderSetting = (setting: DisplaySetting) => (
+    <SettingsRow key={setting.id} label={setting.label} hint={setting.description}>
+      <Switch
+        id={setting.id}
+        aria-label={setting.label}
+        checked={preferences[setting.preferenceKey]}
+        onCheckedChange={(checked) => handleToggle(setting, checked)}
+      />
+    </SettingsRow>
+  );
+
   return (
-    <div className="container max-w-4xl mx-auto py-10 px-10 space-y-8">
-      <div>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => router.push('/settings')}
-          className="mb-4"
-        >
-          <ArrowLeft className="h-4 w-4 mr-2" />
-          Back to Settings
-        </Button>
-        <h1 className="text-3xl font-bold flex items-center gap-2">
-          <Eye className="h-8 w-8" />
-          Display & Page Settings
-        </h1>
-        <p className="text-muted-foreground mt-2">
-          Configure global page defaults and optional UI elements.
-        </p>
-      </div>
+    <SettingsScreen title="Display & pages" lede="Optional interface elements, and how new pages start out.">
+      <SettingsSection title="Appearance" description="Follows your system unless you choose. Remembered in this browser.">
+        <div role="radiogroup" aria-label="Theme" className="grid grid-cols-3 gap-3">
+          {THEME_OPTIONS.map((option) => (
+            <label key={option.value} className="flex cursor-pointer flex-col gap-2">
+              <span
+                aria-hidden="true"
+                className={`h-20 rounded-xl border-2 ${option.preview} ${theme === option.value ? 'border-primary' : 'border-border'}`}
+              />
+              <span className="flex items-center gap-2 text-sm font-medium">
+                <input
+                  type="radio"
+                  name="theme"
+                  value={option.value}
+                  checked={theme === option.value}
+                  onChange={() => selectPreference(option.value)}
+                  className="m-0"
+                />
+                {option.label}
+              </span>
+            </label>
+          ))}
+        </div>
+      </SettingsSection>
 
-      {SETTINGS_SECTIONS.map((section) => (
-        <Card key={section.key}>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <section.icon className="h-5 w-5" />
-              {section.title}
-            </CardTitle>
-            <CardDescription>{section.description}</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {section.settings.map((setting) => {
-              const isEnabled = preferences[setting.preferenceKey];
+      <SettingsSection title="Interface" description="Control optional interface elements. Saved to your account, so every device follows.">
+        <SettingsGroup>{INTERFACE_SETTINGS.map(renderSetting)}</SettingsGroup>
+      </SettingsSection>
 
-              return (
-                <div
-                  key={setting.id}
-                  className="flex items-center justify-between p-3 rounded-lg border bg-card hover:bg-accent/50 transition-colors"
-                >
-                  <div className="space-y-0.5">
-                    <Label
-                      htmlFor={setting.id}
-                      className="text-sm font-medium cursor-pointer"
-                    >
-                      {setting.label}
-                    </Label>
-                    <p className="text-xs text-muted-foreground">
-                      {setting.description}
-                    </p>
-                  </div>
-                  <Switch
-                    id={setting.id}
-                    checked={isEnabled}
-                    onCheckedChange={(checked) => handleToggle(setting, checked)}
-                  />
-                </div>
-              );
-            })}
-          </CardContent>
-        </Card>
-      ))}
-
-      <Alert>
-        <Info className="h-4 w-4" />
-        <AlertDescription>
-          These settings are saved to your account and apply across all your devices.
-        </AlertDescription>
-      </Alert>
-    </div>
+      <SettingsSection title="New pages" description="Default behavior for how new document pages are created. Saved to your account, so every device follows.">
+        <SettingsGroup>{PAGE_SETTINGS.map(renderSetting)}</SettingsGroup>
+      </SettingsSection>
+    </SettingsScreen>
   );
 }

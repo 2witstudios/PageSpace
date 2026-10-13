@@ -24,9 +24,20 @@ const orgs = (ctx: NavContext) => ctx.orgs;
 const integrations = (ctx: NavContext) => !ctx.onPrem;
 const billing = (ctx: NavContext) => ctx.showBilling;
 
-/** Drive settings: Overview, General, Members & roles, Wallet, Integrations, Commands, Context, Backups, Domains, Danger zone. */
-export const driveSettingsNav = (driveId: string, ctx: NavContext): readonly NavItem[] => {
+/** Who the viewer is in this drive: owners and admins manage it; the owner alone may delete it, and never a Home drive. */
+export type DriveAccess = { readonly role: 'OWNER' | 'ADMIN' | 'MEMBER'; readonly home: boolean };
+
+const ADMIN_ONLY = new Set(['General', 'Members & roles', 'Wallet', 'Integrations', 'Context', 'Backups', 'Domains']);
+
+/**
+ * Drive settings: Overview, General, Members & roles, Wallet, Integrations, Commands, Context, Backups, Domains, Danger zone.
+ * Classic's gating: a plain member sees Overview and Commands; Danger zone is the owner's, and a Home drive has none.
+ * With the access unknown (drives still loading), every row the build allows is shown and each route still refuses.
+ */
+export const driveSettingsNav = (driveId: string, ctx: NavContext, access?: DriveAccess): readonly NavItem[] => {
   const base = `/${encodeURIComponent(driveId)}/settings`;
+  const admin = access === undefined || access.role !== 'MEMBER';
+  const owner = access === undefined || (access.role === 'OWNER' && !access.home);
   return keep(
     [
       { label: 'Overview', href: base },
@@ -38,10 +49,10 @@ export const driveSettingsNav = (driveId: string, ctx: NavContext): readonly Nav
       { label: 'Context', href: `${base}/context` },
       { label: 'Backups', href: `${base}/backups` },
       { label: 'Domains', href: `${base}/domains` },
-      { label: 'Danger zone', href: `${base}/danger` },
+      { label: 'Danger zone', href: `${base}/danger`, when: () => owner },
     ],
     ctx,
-  );
+  ).filter((item) => admin || !ADMIN_ONLY.has(item.label));
 };
 
 /** The account's grouped nav: You · AI · Plan & data · Connections · Other, in the SPEC's order. */
@@ -52,12 +63,12 @@ export const accountNav = (ctx: NavContext): readonly NavGroup[] =>
       items: keep(
         [
           { label: 'Overview', href: '/account' },
-          { label: 'Profile', href: '/account/account' },
+          { label: 'Profile', href: '/account/profile' },
           { label: 'Display', href: '/account/display' },
           { label: 'Personalization', href: '/account/personalization' },
           { label: 'Notifications', href: '/account/notifications' },
           { label: 'Hotkeys', href: '/account/hotkeys' },
-          { label: 'Privacy', href: '/account/privacy' },
+          { label: 'Privacy', href: '/account/privacy', when: (c: NavContext) => !c.isNative },
         ],
         ctx,
       ),
@@ -112,7 +123,7 @@ export const accountNav = (ctx: NavContext): readonly NavGroup[] =>
         [
           { label: 'Messages', href: '/account/messages' },
           { label: 'Tasks', href: '/account/tasks' },
-          { label: 'Legal', href: '/account/legal/oss-licenses' },
+          { label: 'Legal', href: '/account/legal' },
         ],
         ctx,
       ),

@@ -1,7 +1,7 @@
 'use client';
 
 import { usePathname } from 'next/navigation';
-import type { ReactNode } from 'react';
+import { useEffect, type ReactNode } from 'react';
 import useSWR from 'swr';
 import { useUiState } from '../../store/store';
 import type { UiState } from '../../store/state';
@@ -31,6 +31,7 @@ import { AccountNavPane, DriveSettingsNavPane } from '../../settings/settings-na
 import { Rail } from '../rail/rail';
 import { railDrive } from '../rail/rail-items';
 import {
+  imagoStartsCollapsedAt,
   isHideableSection,
   isListSection,
   paneLayout,
@@ -40,6 +41,7 @@ import {
   type Stage,
 } from '../stage/stage';
 import { columnClass } from './shell-class';
+import { dispatch, transactions } from '../../store/transactions';
 import { renderShell } from './shell.render';
 import { useHydrated } from './use-hydrated';
 
@@ -166,6 +168,10 @@ export function Shell({ children, homeDriveId, initialDrives }: ShellProps) {
   const { data, error } = useSWR<unknown>(DRIVES, { fallbackData: initialDrives });
   const drives = drivesFrom(data, homeDriveId);
   const stage = stageFor(pathname);
+  // Screens whose boards open with Imago folded fold it on entry; reopening it there is the viewer's choice.
+  useEffect(() => {
+    if (imagoStartsCollapsedAt(pathname)) dispatch(transactions.collapseImago, undefined);
+  }, [pathname]);
   const missing = driveStatus(drives, stage.driveId) === 'missing';
   const layout = missing ? notFoundLayout : paneLayout(stage, { collapsedSections });
   const columns = missing

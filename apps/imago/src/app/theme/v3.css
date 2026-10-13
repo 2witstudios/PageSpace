@@ -82,6 +82,16 @@
   --container-browser: 1024px;
 }
 
+/* Settings and account screens (C-Settings-*, C-Account-*): a 720px form column padded 40/48,
+   one 30px/700 h1, 15px section heads. */
+@theme {
+  --container-settings: 720px;
+  --spacing-settings-y: 40px;
+  --spacing-settings-x: 48px;
+  --text-settings-title: 1.875rem;
+  --text-settings-section: 0.9375rem;
+}
+
 /* Trash treegrid columns (C-Drive-Trash): Was in 160px, Trashed 96px, actions 224px. */
 @theme {
   --spacing-trash-was-in: 160px;

@@ -1,12 +1,12 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/retained/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/retained/components/ui/select';
-import { ImageIcon, Loader2, Lock } from 'lucide-react';
+import { Loader2, Lock } from 'lucide-react';
 import { toast } from 'sonner';
 import { fetchWithAuth, patch } from '@/retained/lib/auth/auth-fetch';
 import { isImageGenerationAllowed } from '@/retained/lib/ai/core/image-gen-access';
+import { SettingsRow } from '@/ui/settings/settings-screen/settings-screen';
 
 interface ImageModel {
   id: string;
@@ -15,7 +15,8 @@ interface ImageModel {
 
 const NONE = '__none__';
 
-export function ImageGenerationCard() {
+/** The image-generation default: a row in the AI defaults group. Only admins may change it. */
+export function ImageGenerationSetting() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [isAdmin, setIsAdmin] = useState<boolean>(false);
@@ -66,49 +67,30 @@ export function ImageGenerationCard() {
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <ImageIcon className="h-5 w-5" />
-          Image generation
-        </CardTitle>
-        <CardDescription>
-          Choose the model the AI uses when it generates images. This is a tool the assistant can call —
-          it does not change your chat model. Generated images are saved to your Home drive.
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
-        {loading ? (
-          <p className="text-sm text-muted-foreground">Loading…</p>
-        ) : !allowed ? (
-          <div className="flex items-center gap-2 rounded-md border p-3 max-w-md text-sm text-muted-foreground">
-            <Lock className="h-4 w-4" />
-            Image generation is currently restricted to app administrators.
-          </div>
-        ) : (
-          <div className="max-w-md space-y-2">
-            <Select value={selected ?? NONE} onValueChange={onChange} disabled={saving}>
-              <SelectTrigger>
-                <SelectValue placeholder="Select an image model" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value={NONE}>None (use default)</SelectItem>
-                {models.map((m) => (
-                  <SelectItem key={m.id} value={m.id}>{m.displayName}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            {saving && (
-              <p className="flex items-center gap-1 text-xs text-muted-foreground">
-                <Loader2 className="h-3 w-3 animate-spin" /> Saving…
-              </p>
-            )}
-            {models.length === 0 && (
-              <p className="text-xs text-muted-foreground">No image models are currently available.</p>
-            )}
-          </div>
-        )}
-      </CardContent>
-    </Card>
+    <SettingsRow label="Image generation" hint="Model Imago uses when you ask for an image.">
+      {loading ? (
+        <span className="text-sm text-muted-foreground">Loading…</span>
+      ) : !allowed ? (
+        <span className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Lock className="h-4 w-4" aria-hidden="true" />
+          Restricted to app administrators.
+        </span>
+      ) : (
+        <div className="flex items-center gap-2">
+          <Select value={selected ?? NONE} onValueChange={onChange} disabled={saving}>
+            <SelectTrigger aria-label="Image generation" className="w-56">
+              <SelectValue placeholder="Select an image model" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={NONE}>None (use default)</SelectItem>
+              {models.map((m) => (
+                <SelectItem key={m.id} value={m.id}>{m.displayName}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {saving && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" aria-label="Saving" />}
+        </div>
+      )}
+    </SettingsRow>
   );
 }

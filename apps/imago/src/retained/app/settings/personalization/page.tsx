@@ -4,22 +4,17 @@ import { useEffect, useState } from 'react';
 import { useAuth } from '@/retained/hooks/useAuth';
 import { useRouter } from '@/retained-adapters/navigation';
 import useSWR from 'swr';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/retained/components/ui/card';
 import { Switch } from '@/retained/components/ui/switch';
-import { Alert, AlertDescription } from '@/retained/components/ui/alert';
 import { Button } from '@/retained/components/ui/button';
 import { toast } from 'sonner';
-import {
-  User,
-  Pencil,
-  BookOpen,
-  Loader2,
-  ArrowLeft,
-  Info,
-  ExternalLink,
-  FolderOpen,
-} from 'lucide-react';
+import { User, Pencil, BookOpen, Loader2 } from 'lucide-react';
 import { patch, fetchWithAuth } from '@/retained/lib/auth/auth-fetch';
+import {
+  SettingsGroup,
+  SettingsRow,
+  SettingsScreen,
+  SettingsSection,
+} from '@/ui/settings/settings-screen/settings-screen';
 
 const fetcher = async (url: string) => {
   const response = await fetchWithAuth(url);
@@ -123,40 +118,22 @@ export default function PersonalizationSettingsPage() {
 
   const personalization = data?.personalization;
   const pages = personalization?.pages ?? [];
+  const memoryFolderHref = personalization?.memoryFolderHref ?? null;
 
   return (
-    <div className="container max-w-4xl mx-auto py-10 px-10 space-y-8">
-      <div>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => router.push('/settings')}
-          className="mb-4"
-        >
-          <ArrowLeft className="h-4 w-4 mr-2" />
-          Back to Settings
-        </Button>
-        <h1 className="text-3xl font-bold flex items-center gap-2">
-          <User className="h-8 w-8" />
-          Personalization
-        </h1>
-        <p className="text-muted-foreground mt-2">
-          What the AI knows about you lives as pages in the Memory folder of your Home drive. Edit
-          them like any other page — the AI reads whatever is there.
-        </p>
-      </div>
-
-      <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between">
-            <div>
-              <CardTitle>AI Personalization</CardTitle>
-              <CardDescription>
-                When enabled, your memory pages are included in AI system prompts.
-              </CardDescription>
-            </div>
+    <SettingsScreen
+      title="Personalization"
+      lede="Three pages Imago reads before every conversation, in every drive. Edit them like any page."
+    >
+      <SettingsSection title="AI personalization">
+        <SettingsGroup>
+          <SettingsRow
+            label="Use in AI"
+            hint="Included in AI prompts to tailor replies. Only you can see it."
+          >
             <Switch
               id="personalization-enabled"
+              aria-label="Use personalization in AI"
               checked={enabled}
               // Belt and braces with the early return in the handler: this makes
               // the control visibly inert while a write is in flight, and the
@@ -164,74 +141,71 @@ export default function PersonalizationSettingsPage() {
               disabled={isTogglePending}
               onCheckedChange={handleToggleEnabled}
             />
-          </div>
-        </CardHeader>
-      </Card>
+          </SettingsRow>
+        </SettingsGroup>
+      </SettingsSection>
 
-      {personalization?.memoryFolderHref && (
-        <Button
-          variant="outline"
-          onClick={() => router.push(personalization.memoryFolderHref!)}
-          className="w-full justify-start"
-        >
-          <FolderOpen className="h-4 w-4 mr-2" />
-          Open Memory folder
-        </Button>
-      )}
+      <SettingsSection title="Memory pages">
+        <div className={enabled ? 'flex flex-col gap-3' : 'flex flex-col gap-3 opacity-60'}>
+          <SettingsGroup>
+            {pages.map((page) => {
+              const Icon = FIELD_META[page.field].icon;
 
-      <div className={enabled ? 'space-y-4' : 'space-y-4 opacity-60'}>
-        {pages.map((page) => {
-          const Icon = FIELD_META[page.field].icon;
-
-          return (
-            <Card key={page.field}>
-              <CardHeader>
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <CardTitle className="flex items-center gap-2">
-                      <Icon className="h-5 w-5" />
+              return (
+                <SettingsRow
+                  key={page.field}
+                  label={
+                    <span className="flex items-center gap-2">
+                      <Icon className="h-4 w-4" aria-hidden="true" />
                       {page.title}
-                    </CardTitle>
-                    <CardDescription>{FIELD_META[page.field].description}</CardDescription>
-                  </div>
+                      {page.isEmpty && (
+                        <span className="rounded-md bg-muted px-1.5 py-0.5 text-xs font-normal text-muted-foreground">
+                          Empty
+                        </span>
+                      )}
+                    </span>
+                  }
+                  hint={
+                    <span className="flex flex-col gap-1">
+                      <span>{FIELD_META[page.field].description}</span>
+                      <span className="whitespace-pre-wrap line-clamp-2 italic">
+                        {page.isEmpty
+                          ? page.href
+                            ? 'Nothing here yet. Open the page to write something, or let the AI fill it in as it learns.'
+                            : 'This page has not been created yet.'
+                          : page.preview}
+                      </span>
+                    </span>
+                  }
+                >
                   {page.href && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => router.push(page.href!)}
-                    >
-                      <ExternalLink className="h-4 w-4 mr-2" />
-                      Edit page
+                    <Button variant="ghost" size="sm" onClick={() => router.push(page.href!)}>
+                      {page.isEmpty ? 'Write' : 'Edit'}
                     </Button>
                   )}
-                </div>
-              </CardHeader>
-              <CardContent>
-                {page.isEmpty ? (
-                  <p className="text-sm text-muted-foreground italic">
-                    {page.href
-                      ? 'Nothing here yet. Open the page to write something, or let the AI fill it in as it learns.'
-                      : 'This page has not been created yet.'}
-                  </p>
-                ) : (
-                  <p className="text-sm text-muted-foreground whitespace-pre-wrap line-clamp-4">
-                    {page.preview}
-                  </p>
-                )}
-              </CardContent>
-            </Card>
-          );
-        })}
-      </div>
-
-      <Alert>
-        <Info className="h-4 w-4" />
-        <AlertDescription>
-          <strong>Privacy Note:</strong> Your personalization data is included in AI prompts to
-          customize responses. When using cloud AI providers, this data is sent to those services
-          according to their privacy policies.
-        </AlertDescription>
-      </Alert>
-    </div>
+                </SettingsRow>
+              );
+            })}
+          </SettingsGroup>
+          <p className="text-xs text-muted-foreground">
+            Stored as pages in{' '}
+            {memoryFolderHref ? (
+              <a
+                href={memoryFolderHref}
+                className="text-primary hover:underline"
+                onClick={(event) => {
+                  event.preventDefault();
+                  router.push(memoryFolderHref);
+                }}
+              >
+                Home › Memory
+              </a>
+            ) : (
+              'Home › Memory'
+            )}
+          </p>
+        </div>
+      </SettingsSection>
+    </SettingsScreen>
   );
 }
