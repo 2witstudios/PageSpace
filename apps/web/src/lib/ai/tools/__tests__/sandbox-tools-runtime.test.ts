@@ -256,7 +256,7 @@ describe('resolveSandboxActorContext', () => {
           findOwnImagoHomeDriveId: async (userId, pageId) => (userId === 'u1' && pageId === 'page-agent-1' ? 'home-u1' : null),
           findDrive: async (driveId) => {
             seenDriveIds.push(driveId);
-            return { ownerId: 'u1' };
+            return { ownerId: 'u1', orgId: null };
           },
         }),
       );
@@ -274,7 +274,7 @@ describe('resolveSandboxActorContext', () => {
         ...basePageContext,
         locationContext: { currentDrive: { id: 'd-other', name: 'Other', slug: 'other' } },
       };
-      const resolve = createResolveSandboxActorContext(makeDeps({ findDrive: async () => ({ ownerId: 'tenant-other' }) }));
+      const resolve = createResolveSandboxActorContext(makeDeps({ findDrive: async () => ({ ownerId: 'tenant-other', orgId: null }) }));
 
       const result = await resolve(context);
 
@@ -557,11 +557,11 @@ describe('buildRealSandboxRunDeps.acquireSandbox (session-anchored)', () => {
     mockGetConversation.mockResolvedValue({ type: 'page', contextId: 'imago-page', userId: 'u1' });
     mockFindOwnImagoHomeDriveId.mockResolvedValue('home-u1');
     mockEnsureDriveSessionForConversation.mockResolvedValue({ ok: true, session: sessionRecord });
-    const deps = buildRealSandboxRunDeps();
+    const deps = buildRealSandboxRunDeps({ actor: credentialActor('u1', null) });
     const result = await deps.acquireSandbox(baseInput({ agentPageId: 'imago-page' }));
     expect(mockFindOwnImagoHomeDriveId).toHaveBeenCalledWith('u1', 'imago-page');
-    expect(mockEnsureDriveSessionForConversation).toHaveBeenCalledWith('conv-1', 'u1', 'home-u1', 'Imago');
-    expect(mockProvisionSessionSandbox).toHaveBeenCalledWith(sessionRecord, 'u1');
+    expect(mockEnsureDriveSessionForConversation).toHaveBeenCalledWith('conv-1', credentialActor('u1', null), 'home-u1', 'Imago');
+    expect(mockProvisionSessionSandbox).toHaveBeenCalledWith(sessionRecord, credentialActor('u1', null));
     expect(result).toMatchObject({ ok: true, sandboxId: 'sbx-1' });
   });
 
@@ -569,7 +569,7 @@ describe('buildRealSandboxRunDeps.acquireSandbox (session-anchored)', () => {
     mockFindSessionForConversation.mockResolvedValue(null);
     mockFindOwnImagoHomeDriveId.mockResolvedValue(null);
     mockGetConversation.mockResolvedValue({ type: 'page', contextId: 'imago-page', userId: 'u1' });
-    const deps = buildRealSandboxRunDeps();
+    const deps = buildRealSandboxRunDeps({ actor: credentialActor('u1', null) });
     expect(await deps.acquireSandbox(baseInput())).toEqual({ ok: false, reason: 'no_session' });
 
     mockFindOwnImagoHomeDriveId.mockResolvedValue('home-u2');

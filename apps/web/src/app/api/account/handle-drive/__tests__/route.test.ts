@@ -25,6 +25,7 @@ vi.mock('@pagespace/db/db', () => ({
       },
     },
     delete: vi.fn(),
+    update: vi.fn(),
     // The drive delete runs in a transaction now — its chat history has to go
     // with it, and the two must not be able to half-happen. The tx exposes the
     // same `delete` mock the assertions already inspect.
@@ -140,6 +141,16 @@ describe('POST /api/account/handle-drive', () => {
   const setupTransferMock = () => {
     vi.mocked(transferDriveOwnership).mockResolvedValue(undefined);
     return vi.mocked(transferDriveOwnership);
+  };
+
+  // Helper to setup update mock. The route updates inside a transaction, so
+  // the tx handed to the callback carries the same `update` chain — the
+  // assertions below inspect that one mock either way.
+  const setupUpdateMock = () => {
+    const whereMock = vi.fn().mockResolvedValue(undefined);
+    const setMock = vi.fn().mockReturnValue({ where: whereMock });
+    vi.mocked(db.update).mockReturnValue({ set: setMock } as unknown as ReturnType<typeof db.update>);
+    return whereMock;
   };
 
   // Helper to setup delete mock. The route deletes inside a transaction, so
@@ -314,7 +325,7 @@ describe('POST /api/account/handle-drive', () => {
       expect(body.action).toBe('transfer');
       expect(body.message).toContain('transferred successfully');
       expect(transferMock).toHaveBeenCalledTimes(1);
-      expect(transferMock).toHaveBeenCalledWith(mockDriveId, mockUserId, mockNewOwnerId);
+      expect(transferMock).toHaveBeenCalledWith(mockDriveId, mockUserId, mockNewOwnerId, expect.anything());
       expect(loggers.auth.info).toHaveBeenCalledWith(
         `Drive ownership transferred: drive_abc from user_123 to admin_456`
       );

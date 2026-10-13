@@ -4,6 +4,7 @@ import { RequestCookies } from 'next/dist/server/web/spec-extension/cookies';
 import { isRedirectError } from 'next/dist/client/components/redirect-error';
 import { getURLFromRedirectError } from 'next/dist/client/components/redirect';
 import { PATHNAME_HEADER } from './sign-in-url';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 // Unit-level: what getViewer() asks the session-service and what it does with
 // the answer. The real session-service against Postgres (revoked, expired,
@@ -60,6 +61,7 @@ describe('getViewer() (unit)', () => {
       userId: 'user-1',
       userRole: 'admin',
       type: 'user',
+      authentication: null,
     });
     const viewer = await getViewer();
 
@@ -74,7 +76,7 @@ describe('getViewer() (unit)', () => {
       given: 'valid claims',
       should: 'return the viewer they name',
       actual: viewer,
-      expected: { userId: 'user-1', role: 'admin', sessionId: 'session-1' },
+      expected: { userId: 'user-1', role: 'admin', sessionId: 'session-1', actor: credentialActor('user-1', null) },
     });
   });
 

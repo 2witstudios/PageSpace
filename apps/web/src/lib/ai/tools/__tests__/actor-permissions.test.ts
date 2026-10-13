@@ -741,7 +741,7 @@ describe("built-in Imago agents (IMG-10.10: the owner's full reach, minus the dr
       expect(await canActorViewPage(agentCtx, 'private-page')).toBe(true);
       expect(await canActorEditPage(agentCtx, 'private-page')).toBe(true);
       expect(await canActorDeletePage(agentCtx, 'private-page')).toBe(true);
-      expect(vi.mocked(getUserAccessLevel)).toHaveBeenCalledWith('user-1', 'private-page');
+      expect(vi.mocked(getUserAccessLevel)).toHaveBeenCalledWith(credentialActor('user-1', null), 'private-page');
       expect(mockGetAgentAccessLevel).not.toHaveBeenCalled();
       expect(mockImagoExcludedDriveIds).toHaveBeenCalledWith('user-1');
     });

@@ -17,6 +17,7 @@ import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { drives } from '@pagespace/db/schema/core';
 import { getUserDriveAccess } from '../permissions/permissions';
+import type { AccessActor } from '../permissions/access-actor';
 import type { ServiceFailure } from '../services/drive-agent-service';
 import { homeDriveActionError } from '../services/drive-guards';
 import { imagoExcludedDriveIds, lockImagoUser, storeImagoDriveChoice } from './imago-reach';
@@ -36,18 +37,18 @@ const FORBIDDEN: ServiceFailure = {
 };
 
 /** Read whether Imago may work in a drive for the viewer. */
-export async function getImagoDriveAccess(userId: string, driveId: string): Promise<ImagoDriveAccessResult> {
-  if (!(await getUserDriveAccess(userId, driveId))) return FORBIDDEN;
-  return { ok: true, access: await readAccess(userId, driveId) };
+export async function getImagoDriveAccess(actor: AccessActor, driveId: string): Promise<ImagoDriveAccessResult> {
+  if (!(await getUserDriveAccess(actor, driveId))) return FORBIDDEN;
+  return { ok: true, access: await readAccess(actor.userId, driveId) };
 }
 
 /** Let Imago into a drive for the viewer, or keep it out; returns the new state. */
 export async function setImagoDriveAccess(
-  userId: string,
+  actor: AccessActor,
   driveId: string,
   enabled: boolean,
 ): Promise<ImagoDriveAccessResult> {
-  if (!(await getUserDriveAccess(userId, driveId))) return FORBIDDEN;
+  if (!(await getUserDriveAccess(actor, driveId))) return FORBIDDEN;
 
   const [drive] = await db
     .select({ kind: drives.kind, ownerId: drives.ownerId })
@@ -55,14 +56,14 @@ export async function setImagoDriveAccess(
     .where(eq(drives.id, driveId))
     .limit(1);
   if (!drive) return FORBIDDEN;
-  const homeError = drive.ownerId === userId ? homeDriveActionError(drive, 'imago-access') : null;
+  const homeError = drive.ownerId === actor.userId ? homeDriveActionError(drive, 'imago-access') : null;
   if (homeError) return { ok: false, status: 403, error: homeError };
 
   await db.transaction(async (tx) => {
-    await lockImagoUser(tx, userId);
-    await storeImagoDriveChoice(tx, userId, driveId, enabled);
+    await lockImagoUser(tx, actor.userId);
+    await storeImagoDriveChoice(tx, actor.userId, driveId, enabled);
   });
-  return { ok: true, access: await readAccess(userId, driveId) };
+  return { ok: true, access: await readAccess(actor.userId, driveId) };
 }
 
 async function readAccess(userId: string, driveId: string): Promise<ImagoDriveAccess> {

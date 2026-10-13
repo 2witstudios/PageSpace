@@ -186,8 +186,6 @@ describe('sub-list status vocabulary inheritance', () => {
     owner = await factories.createUser();
     currentUserId = owner.id;
     drive = await factories.createDrive(owner.id);
-    listTasksRoute = await import('../route');
-    taskItemRoute = await import('../[taskId]/route');
   }, WARM_UP_TIMEOUT_MS);
 
   it('seeds a new sub-list with its ancestor vocabulary, not the defaults', async () => {

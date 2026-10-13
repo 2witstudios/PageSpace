@@ -44,7 +44,7 @@ async function agentIdsOf(userId: string) {
 }
 
 async function browserSession(userId: string) {
-  const token = await sessionService.createSession({ userId, type: 'user', scopes: ['*'], expiresInMs: 60 * 60 * 1000 });
+  const token = await sessionService.createSession({ userId, type: 'user', scopes: ['*'], expiresInMs: 60 * 60 * 1000 , authentication: null});
   const claims = await sessionService.validateSession(token);
   if (!claims) throw new Error('session did not validate');
   return { token, csrf: generateCSRFToken(claims.sessionId) };

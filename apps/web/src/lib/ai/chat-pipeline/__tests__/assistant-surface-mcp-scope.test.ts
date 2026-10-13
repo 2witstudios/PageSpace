@@ -27,11 +27,12 @@ vi.mock('@pagespace/db/db', () => ({
 }));
 
 import { selectAssistantTools } from '../assistant-surface';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
 import { ACCOUNT_LEVEL_ONLY_TOOLS } from '@/lib/ai/core/tool-filtering';
 
 const baseInput = {
-  userId: 'user_mcp_scope',
+  actor: credentialActor('user_mcp_scope', null),
   readOnly: false,
   webSearch: false,
   imageGen: false,

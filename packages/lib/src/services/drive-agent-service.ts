@@ -120,7 +120,6 @@ async function resolveGranterFacts(userId: string, driveId: string): Promise<Gra
  * user's own access to the drive.
  */
 export async function addAgentToDrive(input: AddAgentToDriveInput): Promise<AddAgentToDriveResult> {
-export async function addAgentToDrive(input: AddAgentToDriveInput): Promise<AddAgentToDriveResult> {
   const authorized = await authorizeAgentDriveGrant(input);
   if (!authorized.ok) return authorized;
   // [D-OW-33] everyone who can run the agent reads this drive through it: adding it loosens the drive's access,

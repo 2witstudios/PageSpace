@@ -34,7 +34,11 @@ const commandLogger = loggers.ai.child({ module: 'command-tools' });
 
 const IMAGO_EXCLUDED_DRIVE = 'This drive is outside your reach here';
 
-async function loadCommandForManage(actor: AccessActor, commandId: string): Promise<SelectCommand> {
+async function loadCommandForManage(
+  context: ToolExecutionContext,
+  commandId: string,
+): Promise<SelectCommand> {
+  const actor = toolActor(context);
   const { userId } = actor;
   const command = await db.query.commands.findFirst({
     where: eq(commands.id, commandId),
@@ -215,7 +219,7 @@ export const commandTools = {
       }
 
       try {
-        const command = await loadCommandForManage(toolActor(context as ToolExecutionContext), commandId);
+        const command = await loadCommandForManage(context as ToolExecutionContext, commandId);
 
         if (typeof trigger === 'string' && trigger !== command.trigger) {
           const duplicate = await db.query.commands.findFirst({
@@ -289,7 +293,7 @@ export const commandTools = {
       if (!userId) throw new Error('User authentication required');
 
       try {
-        const command = await loadCommandForManage(toolActor(context as ToolExecutionContext), commandId);
+        const command = await loadCommandForManage(context as ToolExecutionContext, commandId);
         await db.delete(commands).where(eq(commands.id, command.id));
         if (command.driveId !== null) void broadcastCommandChange(command.driveId);
 

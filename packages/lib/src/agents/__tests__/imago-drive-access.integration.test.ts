@@ -18,6 +18,7 @@ import { driveAgentMembers } from '@pagespace/db/schema/members';
 import { imagoDriveAccess } from '@pagespace/db/schema/imago-drive-access';
 import { userBuiltinAgents } from '@pagespace/db/schema/user-builtin-agents';
 import { factories } from '@pagespace/db/test/factories';
+import { credentialActor } from '../../permissions/access-actor';
 import { requireDb } from '@pagespace/db/test/require-db';
 import { provisionImagoAgents } from '../provision-imago-agents';
 import { getImagoDriveAccess, setImagoDriveAccess } from '../imago-drive-access';
@@ -93,7 +94,7 @@ describe('getImagoDriveAccess (real Postgres)', () => {
     const w = await world();
 
     for (const drive of [w.owned, w.admin, w.member, w.shared]) {
-      expect(await getImagoDriveAccess(w.user.id, drive.id)).toEqual({ ok: true, access: { driveId: drive.id, enabled: true } });
+      expect(await getImagoDriveAccess(credentialActor(w.user.id, null), drive.id)).toEqual({ ok: true, access: { driveId: drive.id, enabled: true } });
     }
   });
 
@@ -101,8 +102,8 @@ describe('getImagoDriveAccess (real Postgres)', () => {
     if (!dbAvailable) return;
     const w = await world();
 
-    expect(await getImagoDriveAccess(w.user.id, w.stranger.id)).toMatchObject({ ok: false, status: 403 });
-    expect(await getImagoDriveAccess(w.user.id, w.pending.id)).toMatchObject({ ok: false, status: 403 });
+    expect(await getImagoDriveAccess(credentialActor(w.user.id, null), w.stranger.id)).toMatchObject({ ok: false, status: 403 });
+    expect(await getImagoDriveAccess(credentialActor(w.user.id, null), w.pending.id)).toMatchObject({ ok: false, status: 403 });
   });
 
   it('given an opt-out stored by the earlier model, should keep its meaning: off stays off', async () => {
@@ -110,7 +111,7 @@ describe('getImagoDriveAccess (real Postgres)', () => {
     const w = await world();
     await db.insert(imagoDriveAccess).values({ userId: w.user.id, driveId: w.member.id, enabled: false });
 
-    expect(await getImagoDriveAccess(w.user.id, w.member.id)).toMatchObject({ ok: true, access: { enabled: false } });
+    expect(await getImagoDriveAccess(credentialActor(w.user.id, null), w.member.id)).toMatchObject({ ok: true, access: { enabled: false } });
     expect(await imagoExcludedDriveIds(w.user.id)).toEqual(new Set([w.member.id]));
   });
 });
@@ -121,7 +122,7 @@ describe('setImagoDriveAccess (real Postgres)', () => {
     const w = await world();
 
     for (const drive of [w.owned, w.admin, w.member, w.shared]) {
-      expect(await setImagoDriveAccess(w.user.id, drive.id, false)).toEqual({ ok: true, access: { driveId: drive.id, enabled: false } });
+      expect(await setImagoDriveAccess(credentialActor(w.user.id, null), drive.id, false)).toEqual({ ok: true, access: { driveId: drive.id, enabled: false } });
       expect(await storedChoice(w.user.id, drive.id)).toBe(false);
     }
     expect(await imagoExcludedDriveIds(w.user.id)).toEqual(new Set([w.owned.id, w.admin.id, w.member.id, w.shared.id]));
@@ -130,9 +131,9 @@ describe('setImagoDriveAccess (real Postgres)', () => {
   it('given a drive turned off and back on, should let Imago back in', async () => {
     if (!dbAvailable) return;
     const w = await world();
-    await setImagoDriveAccess(w.user.id, w.member.id, false);
+    await setImagoDriveAccess(credentialActor(w.user.id, null), w.member.id, false);
 
-    expect(await setImagoDriveAccess(w.user.id, w.member.id, true)).toMatchObject({ ok: true, access: { enabled: true } });
+    expect(await setImagoDriveAccess(credentialActor(w.user.id, null), w.member.id, true)).toMatchObject({ ok: true, access: { enabled: true } });
     expect(await imagoExcludedDriveIds(w.user.id)).toEqual(new Set());
   });
 
@@ -141,10 +142,10 @@ describe('setImagoDriveAccess (real Postgres)', () => {
     const w = await world();
     await provisionHomeDriveIfNeeded(w.other.id);
 
-    await setImagoDriveAccess(w.user.id, w.member.id, false);
+    await setImagoDriveAccess(credentialActor(w.user.id, null), w.member.id, false);
 
     expect(await storedChoice(w.other.id, w.member.id)).toBeNull();
-    expect(await getImagoDriveAccess(w.other.id, w.member.id)).toMatchObject({ ok: true, access: { enabled: true } });
+    expect(await getImagoDriveAccess(credentialActor(w.other.id, null), w.member.id)).toMatchObject({ ok: true, access: { enabled: true } });
   });
 
   it('given a drive the user cannot access, should return 403 and store nothing', async () => {
@@ -152,7 +153,7 @@ describe('setImagoDriveAccess (real Postgres)', () => {
     const w = await world();
 
     for (const drive of [w.stranger, w.pending]) {
-      expect(await setImagoDriveAccess(w.user.id, drive.id, false)).toMatchObject({ ok: false, status: 403 });
+      expect(await setImagoDriveAccess(credentialActor(w.user.id, null), drive.id, false)).toMatchObject({ ok: false, status: 403 });
       expect(await storedChoice(w.user.id, drive.id)).toBeNull();
     }
   });
@@ -161,8 +162,8 @@ describe('setImagoDriveAccess (real Postgres)', () => {
     if (!dbAvailable) return;
     const w = await world();
 
-    expect(await setImagoDriveAccess(w.user.id, w.homeDriveId, false)).toMatchObject({ ok: false, status: 403 });
-    expect(await setImagoDriveAccess(w.user.id, w.homeDriveId, true)).toMatchObject({ ok: false, status: 403 });
+    expect(await setImagoDriveAccess(credentialActor(w.user.id, null), w.homeDriveId, false)).toMatchObject({ ok: false, status: 403 });
+    expect(await setImagoDriveAccess(credentialActor(w.user.id, null), w.homeDriveId, true)).toMatchObject({ ok: false, status: 403 });
     expect(await storedChoice(w.user.id, w.homeDriveId)).toBeNull();
   });
 
@@ -171,8 +172,8 @@ describe('setImagoDriveAccess (real Postgres)', () => {
     const w = await world();
 
     for (const drive of [w.owned, w.admin, w.member]) {
-      await setImagoDriveAccess(w.user.id, drive.id, false);
-      await setImagoDriveAccess(w.user.id, drive.id, true);
+      await setImagoDriveAccess(credentialActor(w.user.id, null), drive.id, false);
+      await setImagoDriveAccess(credentialActor(w.user.id, null), drive.id, true);
     }
 
     expect(await imagoGrantsOf(w.user.id)).toEqual([]);
@@ -183,13 +184,13 @@ describe('the exclusion outlives the agent page (real Postgres)', () => {
   it('given Imago deleted and recreated at sign-in, should keep the drive off', async () => {
     if (!dbAvailable) return;
     const w = await world();
-    await setImagoDriveAccess(w.user.id, w.member.id, false);
+    await setImagoDriveAccess(credentialActor(w.user.id, null), w.member.id, false);
     const [pointer] = await db.select().from(userBuiltinAgents).where(eq(userBuiltinAgents.userId, w.user.id));
     await db.delete(pages).where(eq(pages.id, pointer.pageId));
 
     await provisionHomeDriveIfNeeded(w.user.id);
 
-    expect(await getImagoDriveAccess(w.user.id, w.member.id)).toMatchObject({ ok: true, access: { enabled: false } });
+    expect(await getImagoDriveAccess(credentialActor(w.user.id, null), w.member.id)).toMatchObject({ ok: true, access: { enabled: false } });
     expect(await imagoGrantsOf(w.user.id)).toEqual([]);
   });
 
@@ -199,7 +200,7 @@ describe('the exclusion outlives the agent page (real Postgres)', () => {
 
     const created = await createDrive(w.user.id, { name: 'Brand new' });
 
-    expect(await getImagoDriveAccess(w.user.id, created.id)).toMatchObject({ ok: true, access: { enabled: true } });
+    expect(await getImagoDriveAccess(credentialActor(w.user.id, null), created.id)).toMatchObject({ ok: true, access: { enabled: true } });
     expect(await imagoGrantsOf(w.user.id)).toEqual([]);
   });
 
@@ -208,13 +209,13 @@ describe('the exclusion outlives the agent page (real Postgres)', () => {
     const w = await world();
     await provisionHomeDriveIfNeeded(w.other.id);
     await factories.createDriveMember(w.owned.id, w.other.id, { role: 'ADMIN', acceptedAt: new Date() });
-    await setImagoDriveAccess(w.user.id, w.owned.id, false);
+    await setImagoDriveAccess(credentialActor(w.user.id, null), w.owned.id, false);
 
     await transferDriveOwnership(w.owned.id, w.user.id, w.other.id);
 
     expect(await storedChoice(w.user.id, w.owned.id)).toBe(false);
     expect(await storedChoice(w.other.id, w.owned.id)).toBeNull();
-    expect(await getImagoDriveAccess(w.other.id, w.owned.id)).toMatchObject({ ok: true, access: { enabled: true } });
+    expect(await getImagoDriveAccess(credentialActor(w.other.id, null), w.owned.id)).toMatchObject({ ok: true, access: { enabled: true } });
   });
 });
 
@@ -236,7 +237,7 @@ describe('a turn-off racing a sign-in that recreates Imago (real concurrent Post
 
       const [, toggled] = await Promise.all([
         provisionHomeDriveIfNeeded(user.id),
-        setImagoDriveAccess(user.id, off.id, false),
+        setImagoDriveAccess(credentialActor(user.id, null), off.id, false),
       ]);
       expect(toggled.ok).toBe(true);
 

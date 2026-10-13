@@ -17,6 +17,7 @@ import { and, eq, inArray } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { driveAgentMembers, driveMembers } from '@pagespace/db/schema/members';
 import { factories } from '@pagespace/db/test/factories';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 import { addAgentToDrive } from '@pagespace/lib/services/drive-agent-service';
 import { sessionService } from '@pagespace/lib/auth/session-service';
 import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
@@ -52,7 +53,7 @@ afterAll(async () => {
 async function grantOwnAgent(userId: string, driveId: string): Promise<string[]> {
   const own = await factories.createDrive(userId, { name: 'Own' });
   const agent = await factories.createPage(own.id, { title: 'My agent', type: 'AI_CHAT' });
-  expect((await addAgentToDrive({ actingUserId: userId, agentPageId: agent.id, driveId, requestedRole: 'MEMBER' })).ok).toBe(true);
+  expect((await addAgentToDrive({ actor: credentialActor(userId, null), agentPageId: agent.id, driveId, requestedRole: 'MEMBER' })).ok).toBe(true);
   return [agent.id];
 }
 
@@ -152,7 +153,7 @@ describe('member removal outside the member route revokes the agent grants the m
 
 describe('backup restore through the route (real Postgres, real session and CSRF)', () => {
   async function restoreAs(userId: string, driveId: string, backupId: string) {
-    const token = await sessionService.createSession({ userId, type: 'user', scopes: ['*'], expiresInMs: 60 * 60 * 1000 });
+    const token = await sessionService.createSession({ userId, type: 'user', scopes: ['*'], expiresInMs: 60 * 60 * 1000 , authentication: null});
     const claims = await sessionService.validateSession(token);
     if (!claims) throw new Error('session did not validate');
     const response = await restoreBackup(
@@ -170,7 +171,7 @@ describe('backup restore through the route (real Postgres, real session and CSRF
   }
 
   async function backupOf(driveId: string, userId: string) {
-    const backup = await createDriveBackup(driveId, userId, { label: 'before' });
+    const backup = await createDriveBackup(driveId, credentialActor(userId, null), { label: 'before' });
     if (!backup.success || !backup.backupId) throw new Error('backup failed');
     return backup.backupId;
   }

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 import { getImagoDriveAccess, setImagoDriveAccess } from '@pagespace/lib/agents/imago-drive-access';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -27,7 +28,7 @@ export async function GET(
 
     const { driveId } = await context.params;
 
-    const result = await getImagoDriveAccess(userId, driveId);
+    const result = await getImagoDriveAccess(actorFromAuth(auth), driveId);
     if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status });
 
     auditRequest(request, { eventType: 'data.read', userId, resourceType: 'drive', resourceId: driveId, details: { imagoAccess: result.access.enabled } });
@@ -68,7 +69,7 @@ export async function PUT(
     }
     const { enabled } = parsed.data;
 
-    const result = await setImagoDriveAccess(userId, driveId, enabled);
+    const result = await setImagoDriveAccess(actorFromAuth(auth), driveId, enabled);
     if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status });
 
     auditRequest(request, {

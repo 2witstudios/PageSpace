@@ -28,6 +28,8 @@ import { getImagoDriveAccess, setImagoDriveAccess } from '@pagespace/lib/agents/
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 const VIEWER = 'user_viewer';
+// The route asks the lib through the request's actor (D-OW-45), built from the mocked session auth.
+const VIEWER_ACTOR = { via: 'credential' as const, userId: VIEWER, authentication: null };
 const DRIVE = 'drive_abc';
 
 const access = (enabled: boolean) => ({ driveId: DRIVE, enabled });
@@ -58,7 +60,7 @@ describe('GET /api/drives/[driveId]/imago-access', () => {
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual(access(true));
-    expect(getImagoDriveAccess).toHaveBeenCalledWith(VIEWER, DRIVE);
+    expect(getImagoDriveAccess).toHaveBeenCalledWith(VIEWER_ACTOR, DRIVE);
   });
 
   it('given session auth, should read without requiring a CSRF token', async () => {
@@ -121,7 +123,7 @@ describe('PUT /api/drives/[driveId]/imago-access', () => {
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual(access(enabled));
-    expect(setImagoDriveAccess).toHaveBeenCalledWith(VIEWER, DRIVE, enabled);
+    expect(setImagoDriveAccess).toHaveBeenCalledWith(VIEWER_ACTOR, DRIVE, enabled);
     expect(auditRequest).toHaveBeenCalledWith(expect.any(Request), {
       eventType: enabled ? 'authz.permission.granted' : 'authz.permission.revoked',
       userId: VIEWER,

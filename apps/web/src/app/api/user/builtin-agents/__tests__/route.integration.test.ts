@@ -39,7 +39,7 @@ async function bareUser() {
 }
 
 async function sessionFor(userId: string) {
-  return sessionService.createSession({ userId, type: 'user', scopes: ['*'], expiresInMs: 60 * 60 * 1000 });
+  return sessionService.createSession({ userId, type: 'user', scopes: ['*'], expiresInMs: 60 * 60 * 1000 , authentication: null});
 }
 
 function requestAs(token: string | null, query = '', headers: Record<string, string> = {}) {

@@ -17,7 +17,7 @@ export default async function DriveLayout({
 }: Readonly<{ children: ReactNode; params: Promise<{ driveId: string }> }>): Promise<ReactNode> {
   const viewer = await getViewer();
   const { driveId } = await params;
-  if (!(await getUserDriveAccess(viewer.userId, driveId))) {
+  if (!(await getUserDriveAccess(viewer.actor, driveId))) {
     const home = await getHomeDrive(viewer.userId);
     return renderNotFound({
       ...DRIVE_NOT_FOUND,

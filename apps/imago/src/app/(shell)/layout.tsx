@@ -18,7 +18,7 @@ export default async function ShellLayout({ children }: Readonly<{ children: Rea
   const viewer = await getViewer();
   const [home, drives] = await Promise.all([
     getHomeDrive(viewer.userId),
-    listAccessibleDrives(viewer.userId),
+    listAccessibleDrives(viewer.actor),
   ]);
   const initialDrives: DriveSummary[] = drives.map(({ id, name, kind }) => ({ id, name, kind }));
   return (

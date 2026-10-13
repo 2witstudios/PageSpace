@@ -1271,11 +1271,11 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
 
 
     // POL-8: a command's pages reach this turn's model only when their org allows the model it resolved.
-    ({ plans: commandPlans, prompt: commandSystemPrompt } = await commandsForModel(commandPlans, toolModelContext(providerResult)));
-
+    // After the error check, so the context names the model that will actually run.
     if (isProviderError(providerResult)) {
       return createProviderErrorResponse(providerResult);
     }
+    ({ plans: commandPlans, prompt: commandSystemPrompt } = await commandsForModel(commandPlans, toolModelContext(providerResult)));
     turnTimer.mark('provider_ready');
 
     // Use the resolved (provider, model) for billing. providerResult carries the
@@ -1484,14 +1484,14 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
         ? isOnPrem()
           ? {}
           : await resolver.resolveAssistantIntegrationTools({
-            userId,
+            actor: turnActor,
             agentId: chatId,
             driveInView: resolveImagoDriveInView(turnLocation, imagoContext),
             currentTools: preExposureTools,
           })
         : await resolver.resolvePageAgentIntegrationTools({
           agentId: chatId,
-          userId,
+          actor: turnActor,
           driveId: page.driveId,
           currentTools: preExposureTools,
         });
@@ -1728,7 +1728,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     // user-level check would leak an out-of-scope plan's title and id to a token
     // that may not reach that drive.
     // For Imago, also not a page in a drive its owner keeps it out of.
-    const imagoActor = { userId, chatSource: { type: 'page' as const, agentPageId: chatId } };
+    const imagoActor = { userId, accessActor: turnActor, chatSource: { type: 'page' as const, agentPageId: chatId } };
     const planPointer = await getActivePlan(conversationId, turnActor, async (pageId) =>
       (await canPrincipalViewPage(authResult, pageId)) &&
       !(imagoContext && await pageDeniedForActor(imagoActor, pageId)),

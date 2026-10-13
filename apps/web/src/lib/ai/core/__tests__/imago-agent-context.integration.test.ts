@@ -15,6 +15,7 @@ import { eq, inArray } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { factories } from '@pagespace/db/test/factories';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 import { provisionImagoAgents } from '@pagespace/lib/agents/provision-imago-agents';
 import { setImagoDriveAccess } from '@pagespace/lib/agents/imago-drive-access';
 import { ensureTestDb } from '@/test/ensure-test-db';
@@ -50,7 +51,7 @@ describe('loadImagoAgentContext (integration)', () => {
     const { user, home, imagoPageId } = await imagoUser();
     const kept = await factories.createDrive(user.id, { name: 'Kept', slug: `k-${createId()}` });
     const out = await factories.createDrive(user.id, { name: 'Out', slug: `o-${createId()}` });
-    expect((await setImagoDriveAccess(user.id, out.id, false)).ok).toBe(true);
+    expect((await setImagoDriveAccess(credentialActor(user.id, null), out.id, false)).ok).toBe(true);
 
     const context = await loadImagoAgentContext({ userId: user.id, agentPageId: imagoPageId });
 

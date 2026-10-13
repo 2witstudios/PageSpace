@@ -62,7 +62,9 @@ vi.mock('@/lib/ai/core/provider-factory', async (importOriginal) => {
         },
       }),
       provider: 'ollama',
-      modelName: 'mock-model',
+      // A free-tier-allowed model: this suite pins integration-tool scoping, not the
+      // WAL-8/POL-8 payer gate (which its users, on free, would otherwise trip).
+      modelName: 'openai/gpt-6-luna',
     })),
     updateUserProviderSettings: vi.fn(async () => undefined),
   };
@@ -81,6 +83,7 @@ import {
 } from '@pagespace/db/schema/integrations';
 import { factories } from '@pagespace/db/test/factories';
 import { sessionService } from '@pagespace/lib/auth/session-service';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 import { provisionImagoAgents } from '@pagespace/lib/agents/provision-imago-agents';
 import { setImagoDriveAccess } from '@pagespace/lib/agents/imago-drive-access';
 import type { IntegrationProviderConfig } from '@pagespace/lib/integrations/types';
@@ -163,7 +166,7 @@ async function seedWorld(): Promise<World> {
 
   const { agents } = await provisionImagoAgents(user.id);
   // The user keeps Imago out of Journal (IMG-10.10).
-  expect((await setImagoDriveAccess(user.id, journal.id, false)).ok).toBe(true);
+  expect((await setImagoDriveAccess(credentialActor(user.id, null), journal.id, false)).ok).toBe(true);
   // The other user can open the Imago page (a share), so they can consult it.
   await factories.createPagePermission(agents.imago, other.id);
 
@@ -181,7 +184,7 @@ async function seedWorld(): Promise<World> {
   await db.insert(integrationToolGrants).values({ agentId: agents.imago, connectionId: excludedDrive.connectionId });
 
   const session = (userId: string) =>
-    sessionService.createSession({ userId, type: 'user', scopes: ['*'], expiresInMs: 60 * 60 * 1000 });
+    sessionService.createSession({ userId, type: 'user', scopes: ['*'], expiresInMs: 60 * 60 * 1000 , authentication: null});
 
   return {
     userId: user.id,
@@ -211,6 +214,7 @@ async function viaAskAgent(userId: string, driveInView: string | null): Promise<
   capturedToolNames.length = 0;
   const context: ToolExecutionContext = {
     userId,
+    accessActor: credentialActor(userId, null),
     ...(driveInView ? { locationContext: { currentDrive: { id: driveInView, name: 'x', slug: 'x' } } } : {}),
   };
   const result = await executeAskAgent(

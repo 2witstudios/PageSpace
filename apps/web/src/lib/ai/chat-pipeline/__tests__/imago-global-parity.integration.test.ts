@@ -79,6 +79,7 @@ import { users } from '@pagespace/db/schema/auth';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { globalAssistantConfig, integrationConnections, integrationProviders } from '@pagespace/db/schema/integrations';
 import { factories } from '@pagespace/db/test/factories';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 import { sessionService } from '@pagespace/lib/auth/session-service';
 import { provisionImagoAgents } from '@pagespace/lib/agents/provision-imago-agents';
 import { setImagoDriveAccess } from '@pagespace/lib/agents/imago-drive-access';
@@ -164,7 +165,7 @@ async function seedWorld(): Promise<World> {
   });
 
   const { agents } = await provisionImagoAgents(user.id);
-  expect((await setImagoDriveAccess(user.id, journal.id, false)).ok).toBe(true);
+  expect((await setImagoDriveAccess(credentialActor(user.id, null), journal.id, false)).ok).toBe(true);
 
   const userConnection = await connect('user', { userId: user.id });
   await connect('acme', { driveId: acme.id });
@@ -177,7 +178,7 @@ async function seedWorld(): Promise<World> {
   });
 
   return {
-    token: await sessionService.createSession({ userId: user.id, type: 'user', scopes: ['*'], expiresInMs: 60 * 60 * 1000 }),
+    token: await sessionService.createSession({ userId: user.id, type: 'user', scopes: ['*'], expiresInMs: 60 * 60 * 1000 , authentication: null}),
     userId: user.id,
     imagoPageId: agents.imago,
     ordinaryAgentPageId: ordinary.id,

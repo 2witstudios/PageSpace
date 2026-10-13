@@ -65,7 +65,7 @@ describe('/imago', () => {
   };
 
   const signIn = () =>
-    sessionService.createSession({ userId, type: 'user', scopes: ['*'], expiresInMs: 60 * 60 * 1000 });
+    sessionService.createSession({ userId, type: 'user', scopes: ['*'], expiresInMs: 60 * 60 * 1000, authentication: null });
 
   beforeEach(async () => {
     userId = crypto.randomUUID();
