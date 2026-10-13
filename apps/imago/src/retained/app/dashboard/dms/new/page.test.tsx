@@ -9,6 +9,7 @@ import type { MessageablePerson } from '@/retained/lib/messages/dm-people';
 const push = vi.fn();
 const fetchWithAuth = vi.fn();
 const post = vi.fn();
+const refresh = vi.fn(async () => undefined);
 let threads: readonly { id: string; otherUserId: string | null }[] = [];
 
 vi.mock('@/retained-adapters/navigation', () => ({ useRouter: () => ({ push }) }));
@@ -20,7 +21,7 @@ vi.mock('@/retained/lib/auth/auth-fetch', () => ({
   post: (url: string, body: unknown) => post(url, body),
 }));
 vi.mock('@/ui/messages/use-messages/use-messages', () => ({
-  useDirectThreads: () => ({ threads, error: undefined, isLoading: false, retry: () => undefined }),
+  useDirectThreads: () => ({ threads, error: undefined, isLoading: false, retry: () => undefined, refresh }),
 }));
 
 const { default: NewConversationPage } = await import('./page');
@@ -65,6 +66,7 @@ afterEach(() => {
   unmountAll();
   push.mockReset();
   post.mockReset();
+  refresh.mockClear();
   fetchWithAuth.mockReset();
   threads = [];
 });
@@ -140,6 +142,13 @@ describe('NewConversationPage (C-DM-New)', () => {
       should: 'create the conversation for her and open it',
       actual: post.mock.calls[0],
       expected: ['/api/messages/conversations', { recipientId: 'priya' }],
+    });
+
+    assert({
+      given: 'a conversation the DM list has not met',
+      should: 'refresh the list before opening it, or the conversation page would not find it',
+      actual: refresh.mock.invocationCallOrder[0] < push.mock.invocationCallOrder[0],
+      expected: true,
     });
   });
 });

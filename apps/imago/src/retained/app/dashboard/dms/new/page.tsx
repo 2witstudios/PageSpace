@@ -31,7 +31,7 @@ export default function NewConversationPage() {
     '/api/users/messageable',
     fetcher
   );
-  const { threads } = useDirectThreads();
+  const { threads, refresh } = useDirectThreads();
 
   // "Open chat" shows for someone the viewer already has a conversation with.
   const conversationByUser = new Map<string, string>();
@@ -58,6 +58,8 @@ export default function NewConversationPage() {
         recipientId: selectedUserId,
       });
 
+      // The conversation page only draws ids in the viewer's list, which has not met this one yet.
+      await refresh();
       router.push(`/dashboard/dms/${conversation.id}`);
     } catch (error) {
       toast.error((error as Error).message || 'Failed to start conversation');

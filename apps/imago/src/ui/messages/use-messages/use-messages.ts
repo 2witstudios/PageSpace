@@ -116,7 +116,9 @@ export const useDirectThreads = () => {
   useLiveThreads<DirectThread>(data, mutate, { kind: 'dm' });
   /** Void action: asks the server again after a failure. */
   const retry = useCallback(() => void mutate(), [mutate]);
-  return { threads: data, error: error as unknown, isLoading, retry };
+  /** Asks the server again and resolves once the list has its answer (a failed load leaves the list as it was). */
+  const refresh = useCallback(() => mutate().catch(() => undefined), [mutate]);
+  return { threads: data, error: error as unknown, isLoading, retry, refresh };
 };
 
 /** The viewer's unread totals from /api/sidebar/badges, refetched on inbox events and notifications. */
