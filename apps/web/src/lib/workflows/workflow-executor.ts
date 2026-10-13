@@ -962,7 +962,10 @@ async function runExecution(
     // the webhook path's daily-ceiling accounting reads aiUsageLogs, so a
     // detached write here would open a window where neither the hold nor the
     // landed cost is visible to the next gate check.
-    const usage = result.usage;
+    // A step is a tool loop (up to 100 model rounds); settle its AGGREGATE usage
+    // so caps and accounting cover every round-trip, not just the last one
+    // (HIST-03, #2736) — the same contract the consult route settles on.
+    const usage = result.totalUsage;
     await AIMonitoring.trackUsage({
       // Counted as the consumer the run's gate bound: a manual Run's presser, else the creator (review #2817 P2-3).
       userId: input.creditSpend.userId ?? input.createdBy,

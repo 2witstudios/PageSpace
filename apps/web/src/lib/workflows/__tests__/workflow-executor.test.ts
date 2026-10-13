@@ -1,4 +1,5 @@
 import { describe, test, expect, beforeEach, vi } from 'vitest';
+import { automationActor, inDrives } from '@pagespace/lib/permissions/access-actor';
 
 // ============================================================================
 // Tests for workflow-executor.ts
@@ -157,7 +158,7 @@ vi.mock('@/lib/repositories/message-repository', () => ({
 const { mockCreateConversation } = vi.hoisted(() => ({ mockCreateConversation: vi.fn() }));
 
 // Wallets are dark in every test unless one turns them on (SPEND-6 fail-closed cases).
-const walletFlags = vi.hoisted(() => ({ billingEnabled: true }));
+const walletFlags = vi.hoisted(() => ({ billingEnabled: false }));
 vi.mock('@pagespace/lib/deployment-mode', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@pagespace/lib/deployment-mode')>()),
   isBillingEnabled: () => walletFlags.billingEnabled,
@@ -257,6 +258,10 @@ function setupSelectChain(...results: unknown[][]) {
 describe('executeWorkflow', () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    // Billing off by default: the SPEND-6 unreserved-run skip would otherwise
+    // pre-empt every configuration-validation test. The gate tests below turn
+    // it on explicitly ("with wallets on").
+    walletFlags.billingEnabled = false;
     modelEntitlement.mockResolvedValue({ allowed: true });
     // resetAllMocks wipes implementations — restore the session-mint defaults
     // (spawn refused ⇒ the executor degrades to running without sandbox tools).
@@ -273,6 +278,7 @@ describe('executeWorkflow', () => {
       text: 'Report complete',
       steps: [{ text: 'Report complete', toolCalls: [{}] }],
       usage: { inputTokens: 100, outputTokens: 50 },
+      totalUsage: { inputTokens: 100, outputTokens: 50 },
     } as never);
 
     // Default workflow_runs claim: succeeds with a fake run id.
@@ -860,7 +866,7 @@ describe('executeWorkflow', () => {
     expect(result.success).toBe(true);
     expect(mockResolvePageAgentIntegrationTools).toHaveBeenCalledWith({
       agentId: 'agent_1',
-      userId: 'user_123',
+      actor: automationActor('user_123', 'workflow:cron', inDrives('drive_abc')),
       driveId: 'drive_abc',
       currentTools: {},
       contextDriveId: 'drive_abc',
@@ -1118,6 +1124,32 @@ describe('executeWorkflow', () => {
       expect(genCall.experimental_context.creditSpend).toEqual({ ...creditSpend, automationRef: 'workflow:wf_1' });
     });
 
+    test('HIST-03 a tool-loop step settles its AGGREGATE usage — totalUsage, never just the last round', async () => {
+      setupSelectChain([mockAgent], [mockDrive]);
+      // A tool loop's last round used 150/100 tokens, but every round together used
+      // 1,500/1,000. Accounting on `usage` would under-count by an order of magnitude
+      // (#2736): caps and the daily ceiling would admit spend the run actually made.
+      vi.mocked(generateText).mockResolvedValue({
+        text: 'done',
+        steps: [
+          { text: 'round 1', toolCalls: [{}], usage: { inputTokens: 900, outputTokens: 600 } },
+          { text: 'round 2', toolCalls: [], usage: { inputTokens: 150, outputTokens: 100 } },
+        ],
+        usage: { inputTokens: 150, outputTokens: 100 },
+        totalUsage: { inputTokens: 1050, outputTokens: 700 },
+      } as never);
+
+      const result = await executeWorkflow(createInputFixture());
+
+      expect(result.success).toBe(true);
+      expect(AIMonitoring.trackUsage).toHaveBeenCalledWith(expect.objectContaining({
+        inputTokens: 1050,
+        outputTokens: 700,
+        totalTokens: 1750,
+      }));
+      expect(result.usage).toEqual({ inputTokens: 1050, outputTokens: 700 });
+    });
+
     test('SPEND-10 (partial) a run no person is present for records its workflow on its usage and hands it to its tools; a manual Run records none', async () => {
       setupSelectChain([mockAgent], [mockDrive]);
       const scheduled = { spend: { kind: 'automation' as const, driveId: 'drive_1' }, walletId: 'w_product', userId: 'user_creator' };
@@ -1167,6 +1199,7 @@ describe('executeWorkflow', () => {
 
     test('SPEND-6 (partial) with wallets on, an automation run with no reserved wallet is refused before any model runs, so nothing can settle on a person', async () => {
       setupSelectChain([mockAgent], [mockDrive]);
+      walletFlags.billingEnabled = true;
 
       // No admit and no creditSpend: the executor's own default names the drive and no wallet.
       const result = await executeWorkflow(createInputFixture());
@@ -1180,6 +1213,7 @@ describe('executeWorkflow', () => {
 
     test('SPEND-6 (partial) with wallets on, an admitted automation that names a drive wallet runs and settles there', async () => {
       setupSelectChain([mockAgent], [mockDrive]);
+      walletFlags.billingEnabled = true;
       const creditSpend = { spend: { kind: 'automation' as const, driveId: 'drive_1' }, walletId: 'w_product' };
 
       const result = await executeWorkflow(createInputFixture(), { admit: vi.fn().mockResolvedValue({ admitted: true, release: vi.fn(), creditSpend }) });
@@ -1239,6 +1273,7 @@ describe('executeWorkflow — explicit step chains', () => {
       text: 'AI step done',
       steps: [{ text: 'AI step done', toolCalls: [] }],
       usage: { inputTokens: 10, outputTokens: 5 },
+      totalUsage: { inputTokens: 10, outputTokens: 5 },
     } as never);
     setupStepInserts();
     mockUpdate.mockReturnValue({ set: mockUpdateSet });
