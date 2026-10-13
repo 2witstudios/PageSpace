@@ -48,6 +48,19 @@ describe('renderCanvasDocument', () => {
     expect(out).toContain('<p>x</p>');
   });
 
+  it('given a document with no <body> and many unterminated <html and <!doctype tags, should unwrap it promptly', () => {
+    const started = Date.now();
+    const out = renderCanvasDocument({ html: `<html><p>x</p>${'<html <!doctype '.repeat(20_000)}` });
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(out).toContain('<p>x</p>');
+  });
+
+  it('given a document with no <body>, should strip its doctype, html and head wrappers and keep the rest', () => {
+    const out = renderCanvasDocument({ html: '<!DOCTYPE html><HTML lang="en"><head><title>t</title></head><p>kept</p></html>' });
+    expect(out).toContain('<p>kept</p>');
+    expect(out).not.toContain('<title>t</title>');
+  });
+
   it('given a data:image url() inside an author <style>, should preserve it', () => {
     const out = renderCanvasDocument({
       html: '<style>.x { background: url("data:image/png;base64,iVBORw0KGgo="); }</style>',

@@ -215,6 +215,15 @@ describe('sanitizeDocumentHtml', () => {
       });
     });
 
+    it('removes data: hrefs that are not raster images', () => {
+      assert({
+        given: 'an anchor navigating to an XHTML document via a data: href',
+        should: 'remove the href attribute — only raster data: images are kept',
+        actual: sanitizeDocumentHtml('<a href="data:application/xhtml+xml,x">x</a>'),
+        expected: '<a>x</a>',
+      });
+    });
+
     it('removes unquoted javascript: hrefs', () => {
       assert({
         given: 'an unquoted javascript: href value',
