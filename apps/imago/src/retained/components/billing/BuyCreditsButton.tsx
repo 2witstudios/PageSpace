@@ -17,6 +17,7 @@ import { post } from '@/retained/lib/auth/auth-fetch';
 import {
   CREDIT_PACK_LIST,
   centsFromCredits,
+  dollarsFromCents,
   creditPackPriceCents,
   creditsFromDollars,
   formatDollars,
@@ -171,8 +172,8 @@ export function BuyCreditsButton({
             <Input
               type="number"
               inputMode="decimal"
-              min={TOPUP_MIN_CENTS / 100}
-              max={TOPUP_MAX_CENTS / 100}
+              min={dollarsFromCents(TOPUP_MIN_CENTS)}
+              max={dollarsFromCents(TOPUP_MAX_CENTS)}
               step="1"
               placeholder="25"
               value={customDollars}

@@ -8,7 +8,7 @@ import subprocess
 source = Path('apps/web/src')
 target = Path('apps/imago/src/retained')
 roots = ['components/orgs/AccountOrganizationsSection.tsx', 'app/settings/usage/wallets/page.tsx', 'app/dashboard/[driveId]/settings/wallet/page.tsx']
-roots += ['components/wallets/AutomationSpendState.tsx', 'components/members/InviteJoinChoice.tsx', 'lib/drives/drive-owner-choice.ts', 'components/members/PageLinkGuestsSection.tsx', 'components/drives/OrgDriveCard.tsx', 'components/wallets/ComposerSpendStrip.tsx', 'components/wallets/SpendSurface.tsx', 'components/wallets/SpendSourcePopover.tsx', 'components/wallets/SpendRefusalCard.tsx', 'components/messages/SpendFallbackNotice.tsx', 'components/orgs/OrgSurfaceBanner.tsx']
+roots += ['components/billing/BuyCreditsButton.tsx', 'components/billing/EmbeddedCheckoutForm.tsx', 'components/billing/InvoiceList.tsx', 'components/billing/PlanChangeConfirmation.tsx', 'components/billing/UpcomingInvoice.tsx', 'components/wallets/AutomationSpendState.tsx', 'components/members/InviteJoinChoice.tsx', 'lib/drives/drive-owner-choice.ts', 'components/members/PageLinkGuestsSection.tsx', 'components/drives/OrgDriveCard.tsx', 'components/wallets/ComposerSpendStrip.tsx', 'components/wallets/SpendSurface.tsx', 'components/wallets/SpendSourcePopover.tsx', 'components/wallets/SpendRefusalCard.tsx', 'components/messages/SpendFallbackNotice.tsx', 'components/orgs/OrgSurfaceBanner.tsx']
 roots += [str(p.relative_to(source)) for p in (source / 'app/orgs').rglob('page.tsx') if '__tests__' not in str(p)]
 existing = {str(p.relative_to(target)) for p in target.rglob('*') if p.is_file()}
 def resolve(path):

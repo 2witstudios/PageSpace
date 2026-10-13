@@ -1,5 +1,7 @@
 'use client';
 
+import { dollarsFromCents } from '@/retained/lib/subscription/credits';
+
 import { Button } from '@/retained/components/ui/button';
 import { Badge } from '@/retained/components/ui/badge';
 import { FileText, Loader2 } from 'lucide-react';
@@ -48,7 +50,7 @@ export function InvoiceList({
     return new Intl.NumberFormat('en-US', {
       style: 'currency',
       currency: currency.toUpperCase(),
-    }).format(amount / 100);
+    }).format(dollarsFromCents(amount));
   };
 
   const formatDate = (dateString: string) => {

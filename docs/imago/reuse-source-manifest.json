@@ -69,6 +69,11 @@
     "components/ai/shared/DerivedStreamingRegistrations.tsx",
     "components/ai/shared/chat/MessageRenderer.tsx",
     "components/ai/shared/chat/ask-user/AskUserAnswerContext.tsx",
+    "components/billing/BuyCreditsButton.tsx",
+    "components/billing/EmbeddedCheckoutForm.tsx",
+    "components/billing/InvoiceList.tsx",
+    "components/billing/PlanChangeConfirmation.tsx",
+    "components/billing/UpcomingInvoice.tsx",
     "components/create/QuickCreatePalette.tsx",
     "components/drives/OrgDriveCard.tsx",
     "components/layout/left-sidebar/AgentsSidebar.tsx",
@@ -1539,6 +1544,31 @@
         "lib/stripe-config.ts": "a061d93773bb57a59c68f702749b13917ca0caadc94c19a71ad46cfc63dafff2",
         "lib/subscription/plans.ts": "ed7ee2675b5d0e1e715fbedc0bfae01e85c81ef12c4f4c6e07160dc8ab2affeb",
         "stores/useSpendContextStore.ts": "1a5957dfcc8e2d55ee3ec12ebb57d41e62e4f0be3965614a5ec653b82e91261c"
+      }
+    },
+    {
+      "sourceCommit": "c2f6423d4b22654a02dd404ec51be4639df6e0d4",
+      "description": "Route retained billing amount conversions through the current canonical money helpers while preserving native flat invoice tables and the Imago checkout return path.",
+      "updatedFiles": [
+        "components/billing/BuyCreditsButton.tsx",
+        "components/billing/EmbeddedCheckoutForm.tsx",
+        "components/billing/InvoiceList.tsx",
+        "components/billing/PlanChangeConfirmation.tsx",
+        "components/billing/UpcomingInvoice.tsx"
+      ],
+      "sourceHashes": {
+        "components/billing/BuyCreditsButton.tsx": "53c814077aa1b20ebab1455516923d531596315d9583408849f64a9c6f40e286",
+        "components/billing/EmbeddedCheckoutForm.tsx": "5946fc2197099e9ff5500711562d98dcc035b0dd1ce498d5e6c6d158b441d01b",
+        "components/billing/InvoiceList.tsx": "48ad554b826c8f15b10e8436f892684322a55b5136674221c0c08ea735be5d48",
+        "components/billing/PlanChangeConfirmation.tsx": "b3139f92b6fbbeb9946535784cfc174fd9b2990e52b37c541e88ea9379c8505c",
+        "components/billing/UpcomingInvoice.tsx": "c6ae1b4b2acc6219c1cf78cae95d8cff40534247485741c75b0089c6d9c5812c"
+      },
+      "nativeHashes": {
+        "components/billing/BuyCreditsButton.tsx": "0ba605dabc4dc1445d55955e557f40d1109d26693c1aa2c19e9797557a634b28",
+        "components/billing/EmbeddedCheckoutForm.tsx": "a3066bfcbbf317d7765d3bcb9d06462215157ae36d077cdaa34b0629c3f92fc1",
+        "components/billing/InvoiceList.tsx": "eddb3dd432ac171e8ab8bea9bf5cf4502381bfd60969f8e3f30ada3e6139bb07",
+        "components/billing/PlanChangeConfirmation.tsx": "c2b4abbccb08407d2bb5524de19c24f4bfdecd678b4cb0f4f919398686e81d31",
+        "components/billing/UpcomingInvoice.tsx": "a563ec375bcd78426a11dffe54be784b5603476e37e02debadc89921ad7aed85"
       }
     }
   ]
