@@ -12,11 +12,12 @@ import { isBillingEnabled } from '@pagespace/lib/deployment-mode';
 import { ORGS_ENABLED } from '@pagespace/lib/organizations/orgs-enabled';
 import { requireOrgRole } from '@pagespace/lib/organizations/authorize';
 import { findMembershipRole } from '@pagespace/lib/organizations/repository';
-import { checkActorOrgAuthentication, drivePolicyOrgId } from '@pagespace/lib/permissions/actor-authentication';
 import type { OrgRole } from '@pagespace/db/schema/organizations';
 import { actorFromAuth } from '@/lib/auth/request-actor';
 import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 import type { VerifiedAuthentication } from '@pagespace/lib/auth/authentication-evidence';
+import { checkActorOrgAuthentication, drivePolicyOrgId } from '@pagespace/lib/permissions/actor-authentication';
+import type { OrgAuthenticationDecision } from '@pagespace/lib/organizations/authentication-policy-core';
 
 // Credential postures (Spec X-1, [D-OW-26]). TOKEN options admit a session or an MCP key — the
 // CLI and MCP mirror every org route that is not a money move. MONEY options are the money moves
@@ -36,8 +37,6 @@ export const ORG_SESSION_WRITE_AUTH = { allow: ['session'] as const, requireCSRF
 export const ORG_TOKEN_WRITE_AUTH = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 export const ORG_TOKEN_DIRECTORY_AUTH = { allow: ['session', 'mcp'] as const, requireCSRF: false, driveScopedTokens: 'filter' as const };
 export const ORG_MONEY_WRITE_AUTH = { allow: ['session', 'mcp'] as const, requireCSRF: true, delegatedCredentials: 'refuse_money_move' as const };
-
-type OrgAuthenticationDecision = Awaited<ReturnType<typeof checkActorOrgAuthentication>>;
 
 type AuthOptions =
   | typeof ORG_READ_AUTH
@@ -164,7 +163,8 @@ export async function refuseDriveCredential(request: Request, gate: Extract<OrgG
   return orgId === null ? null : refuseOrgCredential(request, gate, orgId);
 }
 
-export async function authorizeOrgRequest(
+/** Dark check, authentication and the caller's org role, nothing more: the shared first half of the org gates below. */
+async function authorizeOrgRole(
   request: Request,
   orgId: string,
   minRole: OrgRole,
@@ -186,10 +186,22 @@ export async function authorizeOrgBillingRequest(
   minRole: OrgRole,
   options: AuthOptions,
 ): Promise<OrgGate> {
-  const gate = await authenticateOrgRequest(request, options);
-  if (!gate.ok) return gate;
+  const authenticated = await authenticateOrgRequest(request, options);
+  if (!authenticated.ok) return authenticated;
   if (!isBillingEnabled()) return { ok: false, response: billingUnavailableResponse() };
-  return authorizeAuthenticated(request, gate, orgId, minRole);
+  const gate = await authorizeAuthenticated(request, authenticated, orgId, minRole);
+  return gate.ok ? withOrgSignInPolicy(request, gate, orgId) : gate;
+}
+
+/**
+ * The gate's last step for acting ON the org (the org routes and the billing routes alike): the org's sign-in policy,
+ * asked only after the role check so a non-member learns nothing about it. D-OW-53(3): the policy asked is
+ * policyInForce — a DAMAGED stored maximum age is held to the 15-minute floor, not read as 0, so a freshly signed-in
+ * Admin can still repair it.
+ */
+async function withOrgSignInPolicy(request: Request, gate: Extract<OrgGate, { ok: true }>, orgId: string): Promise<OrgGate> {
+  const refused = await orgCredentialRefusal(request, gate, orgId);
+  return refused ? { ok: false, response: refused } : gate;
 }
 
 async function authorizeAuthenticated(
@@ -214,8 +226,29 @@ async function authorizeAuthenticated(
     });
     return { ok: false, response: apiError(decision.status, code, error) };
   }
-  // Role first: a non-member learns nothing about the org's sign-in policy.
-  const refused = await orgCredentialRefusal(request, gate, orgId);
-  if (refused) return { ok: false, response: refused };
   return { ...gate, role: decision.role };
+}
+
+/**
+ * The org gate for acting ON the org: dark check, authentication, the caller's org role, then the org's sign-in policy.
+ */
+export async function authorizeOrgRequest(
+  request: Request,
+  orgId: string,
+  minRole: OrgRole,
+  options: AuthOptions,
+): Promise<OrgGate> {
+  const gate = await authorizeOrgRole(request, orgId, minRole, options);
+  // Role first, then the policy, for sessions and keys alike, so a stolen or stale Admin credential cannot invite,
+  // change members, domains or ownership (review #2866 B1).
+  return gate.ok ? withOrgSignInPolicy(request, gate, orgId) : gate;
+}
+
+/**
+ * The org gate for LEAVING the org: the member's role, but never the org's sign-in policy. Leaving only restricts — it
+ * grants and reads nothing of the org (D-OW-33's spirit) — so a credential the policy no longer admits must still be
+ * able to walk away. Only POST /api/orgs/[orgId]/leave uses it.
+ */
+export async function authorizeOrgDeparture(request: Request, orgId: string, options: AuthOptions): Promise<OrgGate> {
+  return authorizeOrgRole(request, orgId, 'MEMBER', options);
 }

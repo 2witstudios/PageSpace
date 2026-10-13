@@ -850,7 +850,7 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
 
     // Fetch user personalization and timezone for AI system prompt injection
     const [personalization, userTimezone] = await Promise.all([
-      getUserPersonalization(userId),
+      getUserPersonalization(driver),
       getUserTimezone(userId),
     ]);
     turnTimer.mark('personalization');

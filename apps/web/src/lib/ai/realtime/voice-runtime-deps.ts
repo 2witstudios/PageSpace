@@ -153,7 +153,7 @@ export const voiceSystemContextDeps = (auth: AuthResult): VoiceSystemContextDeps
         canPrincipalViewPage(auth, pageId),
       ),
     ),
-  loadPersonalization: (userId) => getUserPersonalization(userId),
+  loadPersonalization: async (userId) => (userId === auth.userId ? getUserPersonalization(actorFromAuth(auth)) : null),
   logger: loggers.ai,
 });
 

@@ -21,7 +21,7 @@ import { applyOpenDriveFloor } from './open-drive-floor';
 import { ORGS_ENABLED } from '../organizations/orgs-enabled';
 import type { OpenRoleFloor } from '../organizations/policies-core';
 import type { AccessActor, OrgAuthenticationDenialCode } from './access-actor';
-import { checkActorDriveAuthentication, checkActorResourceAuthentication, explainOrgAuthenticationDenial, filterDrivesForActor, filterResourcesForActor } from './actor-authentication';
+import { checkActorDriveAuthentication, checkActorResourceAuthentication, dropWithheldDerivedPages, explainOrgAuthenticationDenial, filterDrivesForActor, filterResourcesForActor } from './actor-authentication';
 
 /**
  * Permission level for a single page.
@@ -134,13 +134,15 @@ export async function isUserDriveMember(actor: AccessActor, driveId: string): Pr
 /** Every page id the actor can view in the drive */
 export async function getUserAccessiblePagesInDrive(actor: AccessActor, driveId: string): Promise<string[]> {
   if (!(await checkActorDriveAuthentication(actor, driveId)).allowed) return [];
-  return resolveAccessiblePagesInDrive(actor.userId, driveId);
+  return dropWithheldDerivedPages(actor, await resolveAccessiblePagesInDrive(actor.userId, driveId));
 }
 
 /** Every page the actor can view in the drive, with its details and the actor's permissions on it */
 export async function getUserAccessiblePagesInDriveWithDetails(actor: AccessActor, driveId: string): Promise<PageWithPermissions[]> {
   if (!(await checkActorDriveAuthentication(actor, driveId)).allowed) return [];
-  return resolveAccessiblePagesInDriveWithDetails(actor.userId, driveId);
+  const listed = await resolveAccessiblePagesInDriveWithDetails(actor.userId, driveId);
+  const readable = new Set(await dropWithheldDerivedPages(actor, listed.map((page) => page.id)));
+  return listed.filter((page) => readable.has(page.id));
 }
 
 /** Whether the actor reaches the drive at all: its owner, a member, or a holder of a page grant in it */

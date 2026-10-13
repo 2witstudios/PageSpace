@@ -16,6 +16,8 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { audit } from '@pagespace/lib/audit/audit-log';
 import { getHomeDrive } from '@pagespace/lib/services/drive-service';
+import { checkDerivedContentAccess } from '@pagespace/lib/permissions/org-derived-content';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 import {
   readMemoryPages,
   provisionMemoryPages,
@@ -83,7 +85,12 @@ export async function GET(request: Request) {
       where: eq(userPersonalization.userId, userId),
     });
 
-    const content = personalization ? await readMemoryPages(userId) : {};
+    // SEC-2/3 (D-OW-62): previews are the distilled memory itself. When an org it was distilled from refuses this
+    // sign-in, none is read or sent; `signInRequired` says what unlocks them.
+    const access = personalization
+      ? await checkDerivedContentAccess(actorFromAuth(auth), personalization.memoryOrgIds)
+      : { allowed: true as const };
+    const content = personalization && access.allowed ? await readMemoryPages(userId) : {};
 
     const pages: MemoryPageSummary[] = MEMORY_FIELDS.map((field) => {
       const pageId = personalization?.[POINTER_COLUMN[field]] ?? null;
@@ -95,7 +102,8 @@ export async function GET(request: Request) {
         pageId,
         href: pageId && homeDrive ? `/dashboard/${homeDrive.id}/${pageId}` : null,
         preview: body.slice(0, PREVIEW_LENGTH),
-        isEmpty: body.length === 0,
+        // Withheld is not empty: say nothing about what a withheld page holds.
+        isEmpty: access.allowed && body.length === 0,
       };
     });
 
@@ -108,6 +116,7 @@ export async function GET(request: Request) {
             : null,
         pages,
       },
+      signInRequired: access.allowed ? null : { code: access.code, orgIds: access.orgIds },
     });
   } catch (error) {
     loggers.api.error('Error fetching personalization settings:', error as Error);

@@ -4,6 +4,8 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
+// The sign-in row filter has its own integration test (activity-sign-in-filter); here it leaves nothing out.
+vi.mock('@/lib/activities/activity-sign-in-filter', () => ({ activitySignInCondition: vi.fn(async () => undefined) }));
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn((result: unknown) => result && typeof result === 'object' && 'error' in result),

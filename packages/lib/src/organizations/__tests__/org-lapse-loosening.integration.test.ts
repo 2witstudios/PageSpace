@@ -305,12 +305,12 @@ describe('[D-OW-33] a lapsed org may only restrict, on every guarded write (orgs
     const asked = await requestToJoinDrive(w.ids.lena, w.product);
     if (!asked.ok) throw new Error(`setup: request refused ${asked.code}`);
     await lapse(w);
-    expect(await answerDriveJoinRequest(w.ids.dana, w.product, asked.request.id, 'approve')).toEqual(ORG_LAPSED_REFUSAL);
+    expect(await answerDriveJoinRequest(credentialActor(w.ids.dana, null), w.product, asked.request.id, 'approve')).toEqual(ORG_LAPSED_REFUSAL);
     expect(await memberRow(w.product, w.ids.lena)).toBeNull();
     expect((await db.select({ status: driveJoinRequests.status }).from(driveJoinRequests).where(eq(driveJoinRequests.id, asked.request.id)))[0].status).toBe('pending');
 
     await pay(w);
-    expect(await answerDriveJoinRequest(w.ids.dana, w.product, asked.request.id, 'approve')).toMatchObject({ ok: true, admitted: true });
+    expect(await answerDriveJoinRequest(credentialActor(w.ids.dana, null), w.product, asked.request.id, 'approve')).toMatchObject({ ok: true, admitted: true });
     expect(await memberRow(w.product, w.ids.lena)).not.toBeNull();
 
     // Denying another request restricts nothing and still works while lapsed.
@@ -318,7 +318,7 @@ describe('[D-OW-33] a lapsed org may only restrict, on every guarded write (orgs
     const second = await requestToJoinDrive(w.ids.marcus, w.ops);
     if (!second.ok) throw new Error(`setup: request refused ${second.code}`);
     await lapse(w);
-    expect(await answerDriveJoinRequest(w.ids.dana, w.ops, second.request.id, 'deny')).toMatchObject({ ok: true, action: 'deny' });
+    expect(await answerDriveJoinRequest(credentialActor(w.ids.dana, null), w.ops, second.request.id, 'deny')).toMatchObject({ ok: true, action: 'deny' });
   });
 
   it('SEAT-9 (partial) [D-OW-33] inventory #18 a lead change is refused while lapsed (the lead is unchanged); paid, it goes through', async () => {

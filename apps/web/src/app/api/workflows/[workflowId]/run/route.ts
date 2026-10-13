@@ -64,6 +64,8 @@ export async function POST(
     instructionPageId: workflow.instructionPageId,
     timezone: workflow.timezone,
     source: { table: 'manual', id: null, triggerAt: null },
+    // Pressing Run is the CALLER acting: the run reads and writes as their credential, sign-in policy included (D-OW-62).
+    actingActor: actorFromAuth(auth),
   };
 
   // Atomic claim is enforced by the workflow_runs partial unique index inside

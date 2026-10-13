@@ -7,7 +7,7 @@ import { DEFAULT_ORG_POLICIES } from '@pagespace/lib/organizations/policies-core
 const mocks = vi.hoisted(() => ({
   role: 'ADMIN' as 'ADMIN' | 'MEMBER',
   policies: {} as Record<string, unknown>,
-  preview: { members: 3, credentials: 5 },
+  preview: { members: 3, guests: 0, credentials: 5 },
   reads: [] as string[],
   post: vi.fn(),
   del: vi.fn(),
@@ -53,10 +53,10 @@ beforeEach(() => {
   mocks.role = 'ADMIN';
   mocks.reads = [];
   mocks.policies = { ...DEFAULT_ORG_POLICIES };
-  mocks.preview = { members: 3, credentials: 5 };
+  mocks.preview = { members: 3, guests: 0, credentials: 5 };
   mocks.post.mockResolvedValue({});
   mocks.del.mockResolvedValue({ removed: true });
-  mocks.patch.mockResolvedValue({ signInBlocked: { members: 3, credentials: 5 } });
+  mocks.patch.mockResolvedValue({ signInBlocked: { members: 3, guests: 0, credentials: 5 } });
   mocks.reauth.mockResolvedValue({ status: 'done' });
 });
 
@@ -124,7 +124,7 @@ describe('org Security page: sign-in requirements (D-OW-45, D-OW-47)', () => {
   it('SEC-2 (partial) turning strong sign-in on runs the passkey ceremony BEFORE saving, so the Admin cannot lock themselves out (D-OW-47)', async () => {
     const order: string[] = [];
     mocks.reauth.mockImplementation(async () => { order.push('passkey'); return { status: 'done' }; });
-    mocks.patch.mockImplementation(async () => { order.push('save'); return { signInBlocked: { members: 3, credentials: 5 } }; });
+    mocks.patch.mockImplementation(async () => { order.push('save'); return { signInBlocked: { members: 3, guests: 0, credentials: 5 } }; });
     render(<OrgSecurityPage />);
     expect(screen.getByText(/turning on strong sign-in first asks you to confirm with your passkey/)).toBeTruthy();
 
@@ -133,7 +133,7 @@ describe('org Security page: sign-in requirements (D-OW-45, D-OW-47)', () => {
 
     await waitFor(() => expect(order).toEqual(['passkey', 'save']));
     expect(mocks.reauth).toHaveBeenCalledWith('org_strong_sign_in_required');
-    expect(mocks.patch).toHaveBeenCalledWith('/api/orgs/org_nw/policies', { requireStrongSignIn: true, maximumSessionAgeMinutes: null });
+    expect(mocks.patch).toHaveBeenCalledWith('/api/orgs/org_nw/policies', { requireStrongSignIn: true });
     await waitFor(() => expect(mocks.toastSuccess).toHaveBeenCalledWith("Saved. 3 members need to sign in again to open Northwind Labs's drives."));
   });
 
@@ -158,6 +158,47 @@ describe('org Security page: sign-in requirements (D-OW-45, D-OW-47)', () => {
     await waitFor(() => expect(mocks.patch).toHaveBeenCalledTimes(2));
     expect(mocks.reauth).toHaveBeenCalledWith('org_reauthentication_required');
     expect(mocks.toastSuccess).toHaveBeenCalledWith('Saved.');
+  });
+
+  it('SEC-2 (partial) the preview and the saved notice count guests apart from members (review #2866 B4)', async () => {
+    mocks.preview = { members: 2, guests: 1, credentials: 4 };
+    mocks.patch.mockResolvedValue({ signInBlocked: { members: 0, guests: 1, credentials: 1 } });
+    mocks.policies = { ...DEFAULT_ORG_POLICIES, requireStrongSignIn: true };
+    render(<OrgSecurityPage />);
+    await userEvent.click(screen.getByRole('combobox', { name: 'Maximum sign-in age' }));
+    await userEvent.click(await screen.findByRole('option', { name: '1 hour' }));
+    expect(await screen.findByText("2 members and 1 guest would need to sign in again before opening Northwind Labs's drives.")).toBeTruthy();
+    await userEvent.click(screen.getByRole('button', { name: 'Save sign-in requirements' }));
+    await waitFor(() => expect(mocks.toastSuccess).toHaveBeenCalledWith("Saved. 1 guest needs to sign in again to open Northwind Labs's drives."));
+  });
+
+  it('SEC-3 (partial) only the changed requirement is sent (review #2866 B2)', async () => {
+    render(<OrgSecurityPage />);
+    await userEvent.click(screen.getByRole('combobox', { name: 'Maximum sign-in age' }));
+    await userEvent.click(await screen.findByRole('option', { name: '1 hour' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Save sign-in requirements' }));
+    await waitFor(() => expect(mocks.patch).toHaveBeenCalledWith('/api/orgs/org_nw/policies', { maximumSessionAgeMinutes: 60 }));
+  });
+
+  it('SEC-3 (partial) a damaged stored age reads as invalid, an unrelated change leaves it unsent, and choosing a valid age repairs it (review #2866 B2)', async () => {
+    mocks.policies = { ...DEFAULT_ORG_POLICIES, maximumSessionAgeMinutes: 0 };
+    render(<OrgSecurityPage />);
+    const age = screen.getByRole('combobox', { name: 'Maximum sign-in age' });
+    expect(age.textContent).toBe('Invalid — choose a value');
+    expect(mocks.reads.some((k) => k.includes('sign-in-preview'))).toBe(false);
+
+    await userEvent.click(screen.getByRole('switch', { name: 'Require strong sign-in (passkey)' }));
+    expect(mocks.reads.some((k) => k.includes('sign-in-preview'))).toBe(false);
+    await userEvent.click(screen.getByRole('button', { name: 'Confirm with passkey and save' }));
+    await waitFor(() => expect(mocks.patch).toHaveBeenCalledWith('/api/orgs/org_nw/policies', { requireStrongSignIn: true }));
+
+    mocks.patch.mockClear();
+    await userEvent.click(screen.getByRole('combobox', { name: 'Maximum sign-in age' }));
+    expect(screen.queryByRole('option', { name: '0 days' })).toBeNull();
+    await userEvent.click(await screen.findByRole('option', { name: '1 hour' }));
+    expect(screen.getByRole('combobox', { name: 'Maximum sign-in age' }).textContent).toBe('1 hour');
+    await userEvent.click(screen.getByRole('button', { name: 'Save sign-in requirements' }));
+    await waitFor(() => expect(mocks.patch).toHaveBeenCalledWith('/api/orgs/org_nw/policies', { maximumSessionAgeMinutes: 60 }));
   });
 
   it('the maximum ages offered stay inside the allowed range and read in human units', () => {

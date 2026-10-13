@@ -1981,7 +1981,7 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
     const ids = [w.poolId, w.productWalletId, w.marcusWalletId];
     expect((await walletDriftAlerts({ toleranceCents: 0, limit: 10, walletIds: ids })).map((a) => a.walletId).sort()).toEqual([...ids].sort());
 
-    const migration = readFileSync(fileURLToPath(new URL('../../../../db/drizzle/0348_wallet_opening_balance.sql', import.meta.url)), 'utf8');
+    const migration = readFileSync(fileURLToPath(new URL('../../../../db/drizzle/0350_wallet_opening_balance.sql', import.meta.url)), 'utf8');
     await db.execute(sql.raw(migration));
     await db.execute(sql.raw(migration));
 

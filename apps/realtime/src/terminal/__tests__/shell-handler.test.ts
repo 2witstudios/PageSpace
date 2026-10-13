@@ -15,7 +15,7 @@ const mockRealtimeLogger = vi.hoisted(() => ({
 }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({ loggers: { realtime: mockRealtimeLogger } }));
 
-import { buildShellHandlers, regateResumedWindow, resumeBillingClock, MAX_INPUT_BYTES, SETTLE_HEARTBEAT_MS, resolveShellCommand, planConnect, ensureShellSession, connectFailureMessage, armIdleReap, planColdTailPersist, latestActivityAt } from '../shell-handler';
+import { buildShellHandlers, regateResumedWindow, resumeBillingClock, settleAccruedWindow, MAX_INPUT_BYTES, SETTLE_HEARTBEAT_MS, resolveShellCommand, planConnect, ensureShellSession, connectFailureMessage, armIdleReap, planColdTailPersist, latestActivityAt } from '../shell-handler';
 import { createTerminalSessionMap, DETACHED_IDLE_MS } from '../terminal-session-map';
 import type { ShellCheckAuthFn, OpenShellFn, SocketLike } from '../shell-handler';
 import type { TerminalSession } from '../terminal-session-map';
@@ -1176,7 +1176,7 @@ describe('buildShellHandlers', () => {
       expect(sessionMap.getByKey('shell:shl-1')).toBeUndefined();
     });
 
-    it('given a DETACHED session whose checkAuth THROWS, should keep the session alive (fail-open in both tick shapes — no unhandled rejection)', async () => {
+    it('SEC-3 (partial) given a DETACHED session whose checkAuth THROWS, the re-auth tick fails closed: the unsupervised session is torn down (and the throw is caught — no unhandled rejection)', async () => {
       const { onConnect, onDisconnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload);
       onDisconnect(); // detach — the tick now checks lastViewerUserId
@@ -1184,8 +1184,8 @@ describe('buildShellHandlers', () => {
       checkAuth.mockRejectedValue(new Error('db blip'));
       await vi.advanceTimersByTimeAsync(60_000);
 
-      expect(shell.kill).not.toHaveBeenCalled();
-      expect(sessionMap.getByKey('shell:shl-1')).toBeDefined();
+      expect(shell.kill).toHaveBeenCalledWith('forced-teardown');
+      expect(sessionMap.getByKey('shell:shl-1')).toBeUndefined();
     });
 
     it('given an authorized viewer who joins WHILE the detached tick\'s checkAuth is in flight, should not tear the session down under them', async () => {
@@ -1261,16 +1261,34 @@ describe('buildShellHandlers', () => {
       expect(checkAuth).toHaveBeenCalledWith(expect.objectContaining({ actor: expect.objectContaining({ userId: 'user1' }) }));
     });
 
-    it('given checkAuth THROWS for an attached viewer, should evict nobody this tick (fail-open — a DB blip is not a revocation)', async () => {
+    it('SEC-3 (partial) given checkAuth THROWS for an attached viewer, the re-auth tick fails closed: the viewer whose credential cannot be re-decided is evicted', async () => {
       const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload);
 
       checkAuth.mockRejectedValue(new Error('db blip'));
       await vi.advanceTimersByTimeAsync(60_000);
 
+      expect(socket.emit).toHaveBeenCalledWith('shell:error', { message: 'Session access revoked', connectionId: 'sock1' });
+      expect(sessionMap.getBySocket(viewer('sock1'))).toBeUndefined();
+    });
+
+    it('SEC-3 (partial) given checkAuth THROWS for ONE of two credentials, the re-auth tick fails closed for that credential only: the other viewer keeps the shell', async () => {
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
+      await onConnect(validPayload);
+      const socket2 = makeSocket('sock2', 'user2');
+      const handlers2 = buildShellHandlers({ sessionMap, openShell, checkAuth, socket: socket2, persistSpriteExecId });
+      await handlers2.onConnect(validPayload);
+
+      checkAuth.mockImplementation(async ({ actor }: { actor: { userId: string } }) => {
+        if (actor.userId === 'user2') throw new Error('db blip');
+        return makeAuthSuccess();
+      });
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(socket2.emit).toHaveBeenCalledWith('shell:error', { message: 'Session access revoked', connectionId: 'sock2' });
+      expect(socket.emit).not.toHaveBeenCalledWith('shell:error', expect.anything());
       expect(shell.kill).not.toHaveBeenCalled();
       expect(sessionMap.getByKey('shell:shl-1')).toBeDefined();
-      expect(sessionMap.getBySocket(viewer('sock1'))).toBeDefined();
     });
   });
 
@@ -3715,5 +3733,43 @@ describe('regateResumedWindow — a resumed window is re-held at once (review #2
     const getByKey = vi.spyOn(map, 'getByKey').mockReturnValue(session);
     await regateResumedWindow({ billing }, map, session, 'k1');
     expect(getByKey).toHaveBeenCalled();
+  });
+});
+
+describe('settleAccruedWindow — the payer is re-read at each window boundary (WAL-9)', () => {
+  const PERSON: ComputeCharge = { kind: 'user', userId: 'owner-1' };
+  const ORG: ComputeCharge = { kind: 'org', orgId: 'org-1', userId: 'actor-1' };
+  const live = (session: TerminalSession) => ({ getByKey: () => session }) as unknown as Parameters<typeof settleAccruedWindow>[1];
+  const session = (charge: ComputeCharge) =>
+    ({ sessionKey: 'k1', charge, holdId: 'hold-1', connectedAt: Date.now() - 60_000, ownerId: 'owner-1', actorId: 'actor-1', driveId: 'drive-1' }) as unknown as TerminalSession;
+
+  it('adopts the new payer when the drive moved into an org, and opens the next window on it', async () => {
+    const s = session(PERSON);
+    const billing = { ...makeBilling(), resolveCharge: vi.fn().mockResolvedValue(ORG) };
+    expect(await settleAccruedWindow(billing as never, live(s), s, 'k1')).toBe(true);
+    expect(s.charge).toEqual(ORG);
+    expect(billing.gate).toHaveBeenCalledWith({ charge: ORG });
+  });
+
+  it('keeps the payer it has when the re-resolve fails: a transient read never ends a live PTY', async () => {
+    const s = session(PERSON);
+    const billing = { ...makeBilling(), resolveCharge: vi.fn().mockRejectedValue(new Error('db down')) };
+    expect(await settleAccruedWindow(billing as never, live(s), s, 'k1')).toBe(true);
+    expect(s.charge).toEqual(PERSON);
+    expect(billing.gate).toHaveBeenCalledWith({ charge: PERSON });
+  });
+
+  it('a re-resolve that rejects with a non-Error is logged and the payer kept', async () => {
+    const s = session(PERSON);
+    const billing = { ...makeBilling(), resolveCharge: vi.fn().mockRejectedValue('timeout') };
+    expect(await settleAccruedWindow(billing as never, live(s), s, 'k1')).toBe(true);
+    expect(s.charge).toEqual(PERSON);
+  });
+
+  it('re-resolves nothing for a session with no owner to resolve from', async () => {
+    const s = { ...session(PERSON), ownerId: undefined } as unknown as TerminalSession;
+    const billing = { ...makeBilling(), resolveCharge: vi.fn() };
+    await settleAccruedWindow(billing as never, live(s), s, 'k1');
+    expect(billing.resolveCharge).not.toHaveBeenCalled();
   });
 });

@@ -123,7 +123,7 @@ const mockAskAgentExecute = executeAskAgent as unknown as Mock;
 const mockSendChannelExecute = channelTools.send_channel_message.execute as unknown as Mock;
 
 const params = {
-  userId: 'user-1',
+  sender: credentialActor('user-1', null),
   channelId: 'channel-1',
   channelTitle: 'General',
   channelType: 'CHANNEL' as const,
@@ -135,6 +135,7 @@ const params = {
 };
 
 import { DEFAULT_ORG_POLICIES } from '@pagespace/lib/organizations/policies-core';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 describe('agent-mention-responder credit gate', () => {
   beforeEach(() => {
