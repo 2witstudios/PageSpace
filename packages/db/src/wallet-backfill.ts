@@ -4,32 +4,30 @@ import path from 'path';
 /**
  * The X-5 wallets backfill, runnable outside the migrator.
  *
- * Migration 0315 IS the backfill: it gives every credit_ledger and credit_holds row its
- * owner's personal root wallet, in the same migrate invocation as the NOT NULL (0316)
+ * Migration 0340 IS the backfill: it gives every credit_ledger and credit_holds row its
+ * owner's personal root wallet, in the same migrate invocation as the NOT NULL (0341)
  * that depends on it. This runner executes the exact statements of that file (read from
  * disk, never a copy) inside one transaction, measures the money and the row counts
  * before and after, and then:
  *   - with `dryRun`, ROLLS BACK, so nothing is written, and reports what would change;
  *   - otherwise COMMITS, after refusing (rolling back) if any money moved.
- * On a database already migrated through 0315 it is a verifier: every count in the
+ * On a database already migrated through 0340 it is a verifier: every count in the
  * report comes back unchanged, which is what idempotent means here.
  *
- * Production is at 0309 until the deploy, so a rehearsal there cannot run 0315 alone:
- * `rehearseWalletMigration` runs the WHOLE chain, 0310 through 0316, inside one
+ * The pre-wallet schema ends at 0334, so a rehearsal there cannot run 0340 alone:
+ * `rehearseWalletMigration` runs the WHOLE chain, 0335 through 0341, inside one
  * transaction and always rolls it back (Postgres DDL is transactional).
  *
- * The chain was renumbered twice, each time master's migrations landed first: after
- * master's 0297/0298 (agent accounts) and again after master's 0308/0309 (the GUEST member
- * role). The SQL files were renamed with their bytes unchanged (the migrator keys on a hash
- * of the content, so a rename never re-runs one). Comments INSIDE those files still use the
- * original numbers: 0297 -> 0310, 0298 -> 0311, 0299 -> 0312, 0300 -> 0313, 0300_1 -> 0314,
- * 0301 -> 0315, 0302 -> 0316.
+ * The chain follows master's migrations through 0334. Existing migration SQL and
+ * snapshots are immutable; comments inside those files retain their original numbers.
+ * The current journal runs org schema 0335, wallet rename 0336, primary-key removal
+ * 0337, expansion 0338, lock-and-require 0339, backfill 0340 and NOT NULL 0341.
  *
  * Run it through `scripts/backfill-wallets.ts`.
  */
 
 const MIGRATIONS_DIR = path.resolve(__dirname, '../drizzle');
-const BACKFILL_MIGRATION_PREFIX = '0315_';
+const BACKFILL_MIGRATION_PREFIX = '0340_';
 const BREAKPOINT = '--> statement-breakpoint';
 
 /** The statements of the migration file starting with `prefix`, in order, exactly as the migrator runs them. */
@@ -42,16 +40,16 @@ function migrationStatements(prefix: string, migrationsDir: string): string[] {
     .filter((statement) => statement.length > 0);
 }
 
-/** The statements of migration 0315, in order, exactly as the migrator runs them. */
+/** The statements of migration 0340, in order, exactly as the migrator runs them. */
 export function walletBackfillStatements(migrationsDir: string = MIGRATIONS_DIR): string[] {
   return migrationStatements(BACKFILL_MIGRATION_PREFIX, migrationsDir);
 }
 
-/** The file-name prefixes of everything the deploy runs on top of production's 0309: the org
- * schema (0310; 0313 adds a foreign key to its `organizations` table) and the X-5 chain,
- * 0311 through 0316, with the lock-and-require (0314) before the backfill (0315). The journal,
+/** The file-name prefixes of everything the deploy runs on top of the pre-wallet schema at 0334: the org
+ * schema (0335; 0338 adds a foreign key to its `organizations` table) and the X-5 chain,
+ * 0336 through 0341, with the lock-and-require (0339) before the backfill (0340). The journal,
  * not the name, sets the order. */
-const WALLET_CHAIN_PREFIXES = ['0310_', '0311_', '0312_', '0313_', '0314_', '0315_', '0316_'] as const;
+const WALLET_CHAIN_PREFIXES = ['0335_', '0336_', '0337_', '0338_', '0339_', '0340_', '0341_'] as const;
 
 /** Every X-5 chain migration, in the order the migrator applies them: journal order, not file order. */
 function walletChainStatements(migrationsDir: string): string[] {
@@ -61,6 +59,9 @@ function walletChainStatements(migrationsDir: string): string[] {
   const chain = journal.entries
     .map((entry) => entry.tag)
     .filter((tag) => WALLET_CHAIN_PREFIXES.some((prefix) => tag.startsWith(prefix)));
+  if (WALLET_CHAIN_PREFIXES.some((prefix) => chain.filter((tag) => tag.startsWith(prefix)).length !== 1)) {
+    throw new Error('incomplete wallet migration chain in journal');
+  }
   return chain.flatMap((tag) => migrationStatements(`${tag}.sql`, migrationsDir));
 }
 
@@ -176,7 +177,7 @@ export async function runWalletBackfill(
   }
 }
 
-/** The balances as they stand at 0309, read from credit_balances. Whole cents. */
+/** The balances as they stand at 0334, read from credit_balances. Whole cents. */
 export interface PreMigrationCounts {
   balanceRows: number;
   ledgerRows: number;
@@ -192,7 +193,7 @@ export interface WalletMigrationRehearsal {
   rolledBack: true;
   before: PreMigrationCounts;
   after: WalletBackfillCounts;
-  /** Zero-balance personal wallets 0315 would create for users with ledger or hold rows but no balance row. */
+  /** Zero-balance personal wallets 0340 would create for users with ledger or hold rows but no balance row. */
   zeroWalletsCreated: number;
   /** Balance totals that would change; the deploy must leave this empty. */
   drift: string[];
@@ -210,9 +211,9 @@ const PRE_COUNTS_SQL = `
 `;
 
 /**
- * Rehearse the X-5 deploy against a database still at 0309 (production before the deploy,
- * or a restored snapshot of it): run 0310–0316 in ONE transaction, measure, and ROLL BACK.
- * Refuses a database that is not at 0309, rather than reporting "nothing to do".
+ * Rehearse the X-5 deploy against a database still at 0334 (the pre-wallet schema,
+ * or a restored snapshot of it): run 0335–0341 in ONE transaction, measure, and ROLL BACK.
+ * Refuses a database that is not at 0334, rather than reporting "nothing to do".
  *
  * It holds the locks the real migration takes (the rename is ACCESS EXCLUSIVE on the
  * balance table) until it rolls back, so live traffic waits for it: rehearse against a
@@ -229,7 +230,7 @@ export async function rehearseWalletMigration(
   );
   const state = stateRows[0] as { hasBalances: boolean; hasWallets: boolean; hasOrganizations: boolean };
   if (!state.hasBalances || state.hasWallets || state.hasOrganizations) {
-    throw new Error('database is not at 0309 (credit_balances present, wallets and organizations absent); run the dry run of the backfill (0315) instead');
+    throw new Error('database is not at 0334 (credit_balances present, wallets and organizations absent); run the dry run of the backfill (0340) instead');
   }
 
   await client.query('BEGIN');

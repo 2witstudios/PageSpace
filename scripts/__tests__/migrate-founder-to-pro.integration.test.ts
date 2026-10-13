@@ -65,7 +65,7 @@ describe('D-OW-42 Founder migration PostgreSQL writes', () => {
     const [observed] = await store.listCandidates();
     await pool.query('UPDATE users SET "subscriptionGrandfathered" = true WHERE id = $1', [user.id]);
     await expect(store.apply([{ user: observed, tier: 'pro' }], [observed])).rejects.toThrow('evidence changed');
-    const guardSql = await readFile(new URL('../../packages/db/drizzle/0338_personal_billing_cutover_guard.sql', import.meta.url), 'utf8');
+    const guardSql = await readFile(new URL('../../packages/db/drizzle/0360_personal_billing_cutover_guard.sql', import.meta.url), 'utf8');
     await expect(pool.query(guardSql)).rejects.toThrow('users_retired_billing_cleared');
     expect((await store.listCandidates())[0].grandfathered).toBe(true);
   });
@@ -73,8 +73,8 @@ describe('D-OW-42 Founder migration PostgreSQL writes', () => {
     const { user, wallet } = await seed('business');
     await pool.query('UPDATE users SET "subscriptionGrandfathered" = true WHERE id = $1', [user.id]);
     const [ledger] = await db.insert(creditLedger).values({ userId: user.id, walletId: wallet.id, entryType: 'topup_purchase', bucket: 'topup', amountCents: 456, consumeStatus: 'applied' }).returning();
-    const guardSql = await readFile(new URL('../../packages/db/drizzle/0338_personal_billing_cutover_guard.sql', import.meta.url), 'utf8');
-    const dropSql = await readFile(new URL('../../packages/db/drizzle/0339_drop_personal_grandfathering.sql', import.meta.url), 'utf8');
+    const guardSql = await readFile(new URL('../../packages/db/drizzle/0360_personal_billing_cutover_guard.sql', import.meta.url), 'utf8');
+    const dropSql = await readFile(new URL('../../packages/db/drizzle/0361_drop_personal_grandfathering.sql', import.meta.url), 'utf8');
     await expect(pool.query(guardSql)).rejects.toThrow('users_personal_subscription_tier');
     const store = createMigrationStore(db);
     const [candidate] = await store.listCandidates();

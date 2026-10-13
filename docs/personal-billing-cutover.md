@@ -2,7 +2,7 @@
 
 The final application supports personal Free/Pro and organization Business. A
 retired price never establishes paid entitlement. Complete subscriber verification
-before applying migrations 0338–0339 or starting the final application.
+before applying migrations 0360–0361 or starting the final application.
 
 ## Verify the destination
 
@@ -90,20 +90,20 @@ It normalizes personal tier caches and clears the obsolete flag. It makes no
 Stripe writes and changes no wallet balances or ledger records; existing credit
 value remains spendable. Repeating it after success is a no-op.
 
-Migration 0338 refuses retired personal tiers or uncleared flags. Migration 0339
+Migration 0360 refuses retired personal tiers or uncleared flags. Migration 0361
 then removes the flag. The retained database constraint prevents a runtime writer
 from putting Founder or Business back in a personal row. Both migrations are
 generated from the schema; never bypass their checks to complete deployment.
 
 The same offline window applies two wallet-ledger migrations (WAL-5, WAL-6b):
-0349 adds `credit_ledger.fallbackFromWalletId` with a foreign key to `wallets`,
+0371 adds `credit_ledger.fallbackFromWalletId` with a foreign key to `wallets`,
 whose validation takes a lock on the ledger while it scans, re-creates the
 `credit_ledger.userId` foreign key as ON DELETE SET NULL ([D-OW-58]: a deleted
 account's rows on wallets it did not own stay on those wallets' books, unnamed)
-and adds the partial index for unattributed usage; 0350 writes one
+and adds the partial index for unattributed usage; 0372 writes one
 `opening_balance` ledger row per wallet (its balance less what its earlier rows
 already account for), so balance-drift reconciliation is exact from the cutover
-forward. Both run with traffic and billing jobs stopped; 0350 is idempotent (keyed on
+forward. Both run with traffic and billing jobs stopped; 0372 is idempotent (keyed on
 `opening-balance:<walletId>`), so a repeated run writes nothing.
 
 Start only the final application images, resume webhook delivery and jobs, and
@@ -131,7 +131,7 @@ exact deployment candidate.
 ## Automated Fly deployment gate
 
 The migration entrypoint refuses an existing schema with the retired column unless
-`BILLING_CUTOVER_OFFLINE=true`. An ordinary push therefore cannot apply 0339 while
+`BILLING_CUTOVER_OFFLINE=true`. An ordinary push therefore cannot apply 0361 while
 the old images still serve traffic. This assertion is not a substitute for draining.
 
 After subscriber verification/apply and the maintenance-window preparation above,
@@ -198,7 +198,7 @@ manifest described above. Never select tenant/onprem to bypass Stripe evidence;
 the verifier rejects those modes when customer/subscription evidence exists.
 The migration command runs the compose service's normal main/admin migrations and
 admin-user provisioning. The final `up` may rerun migrations safely with the
-assertion back at false because 0339 removed the retired column. Resume external
+assertion back at false because 0361 removed the retired column. Resume external
 traffic/jobs only after the final images are healthy. If any step fails, leave
 application containers down and repair using the candidate; never restart old
 images against the contracted schema.
