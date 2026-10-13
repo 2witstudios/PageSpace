@@ -5,6 +5,7 @@ import { dispatch, transactions } from '../../store/transactions';
 import { isHideableSection, type PaneLayout, type Stage } from '../stage/stage';
 import { useUnreadBadges } from '../../messages/use-messages/use-messages';
 import { useNotificationCount } from './notification-count';
+import { NotificationBell } from './notification-bell';
 import {
   activeRailItem,
   activeRailPlace,
@@ -45,7 +46,7 @@ export function Rail({ stage, layout, homeDriveId, brand, footer }: RailProps) {
     activeId: activeRailItem(stage),
     activeAt: activeRailPlace(stage),
     unread: { messages: messagesUnread(badges) },
-    notifications,
+    bell: <NotificationBell count={notifications} current={stage.section === 'notifications'} />,
     onSearch: () => dispatch(transactions.openPalette, undefined),
     onReopen:
       layout.listHidden && isHideableSection(section)

@@ -1,30 +1,35 @@
 'use client';
 
+import { useState } from 'react';
+import DriveSwitcherDialog from '@/retained/components/layout/navbar/DriveSwitcherDialog';
 import type { DriveSummary } from '../drives/drives';
-import { switchDriveHref } from '../drives/drives';
-import { useDisclosure } from '../disclosure/use-disclosure';
-import type { Stage } from '../stage/stage';
 import { renderBrandChip } from './brand-chip.render';
 
 export type BrandChipProps = {
-  readonly stage: Stage;
   /** The drive the rail links into: the URL's, or Home on the driveless stages. */
   readonly currentId: string | null;
   readonly drives: readonly DriveSummary[] | null;
-  readonly failed: boolean;
 };
 
-/** Binds the drive switcher to the stage: a picked drive opens on the same section. */
-export function BrandChip({ stage, currentId, drives, failed }: BrandChipProps) {
-  const { open, setOpen, ref } = useDisclosure();
+/**
+ * The spine's drive tile. It opens apps/web's DriveSwitcherDialog (search,
+ * Favorites, Recent, All drives, Create drive, per-row star) from the retained
+ * tree, which the app-wide RetainedProvider already surrounds; picking a drive
+ * navigates through the retained navigation adapter to the imago drive route.
+ * The dialog mounts on the first opening, so a shell that never opens it pays
+ * for none of its stores.
+ */
+export function BrandChip({ currentId, drives }: BrandChipProps) {
+  const [open, setOpen] = useState(false);
+  const [opened, setOpened] = useState(false);
   return renderBrandChip({
     currentId,
     drives,
-    failed,
-    hrefFor: (driveId) => switchDriveHref(stage, driveId),
     open,
-    onToggle: setOpen,
-    onPick: () => setOpen(false),
-    detailsRef: ref,
+    onToggle: () => {
+      setOpened(true);
+      setOpen((was) => !was);
+    },
+    switcher: opened ? <DriveSwitcherDialog open={open} onOpenChange={setOpen} /> : null,
   });
 }

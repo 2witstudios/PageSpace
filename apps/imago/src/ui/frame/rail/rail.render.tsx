@@ -5,7 +5,7 @@ import {
   spineListClass,
   spineTileClass,
 } from '../rail-button/rail-button-class';
-import { renderRailButton, renderRailTooltip, renderSpineCount } from '../rail-button/rail-button.render';
+import { renderRailButton, renderRailTooltip } from '../rail-button/rail-button.render';
 import type { RailItem, RailItemId, RailPlace, SecondaryItem } from './rail-items';
 
 export type RailRenderProps = {
@@ -16,8 +16,8 @@ export type RailRenderProps = {
   /** The active item's own URL is open, or a place inside its section. */
   readonly activeAt: RailPlace;
   readonly unread: Partial<Readonly<Record<RailItemId, number>>>;
-  /** Unread notifications, the bell's badge. */
-  readonly notifications: number;
+  /** The bell: the notifications popover, at the foot (IMC-9.13). */
+  readonly bell: ReactNode;
   /** Opens the ⌘K palette. */
   readonly onSearch: () => void;
   /**
@@ -31,14 +31,6 @@ export type RailRenderProps = {
   readonly footer: ReactNode;
 };
 
-const NOTIFICATIONS = 'Notifications';
-
-/**
- * Classic's notifications page, until imago's own popover lands (IMC-9.13). It is outside
- * imago's basePath, so a plain anchor: Next's Link would put /imago in front of it.
- */
-const NOTIFICATIONS_HREF = '/notifications';
-
 /**
  * The spine (SPEC v3, C-Files-Doc): the drive tile, Search (⌘K), Chat · Files · Messages ·
  * Tasks, a divider, Calendar · Agents · Workflows · Activity · Members · Trash, then at the
@@ -47,7 +39,6 @@ const NOTIFICATIONS_HREF = '/notifications';
 export function renderRail(props: RailRenderProps): ReactNode {
   const { activeId, activeAt, unread, onReopen } = props;
   const current = (id: RailItemId) => (id === activeId ? activeAt : null);
-  const bellName = props.notifications > 0 ? `${NOTIFICATIONS}, ${props.notifications} unread` : NOTIFICATIONS;
   return (
     <>
       {props.brand === null ? null : <div className="mb-2">{props.brand}</div>}
@@ -87,13 +78,7 @@ export function renderRail(props: RailRenderProps): ReactNode {
       </ul>
       <div className="flex-1" />
       <ul className={spineListClass}>
-        <li>
-          <a href={NOTIFICATIONS_HREF} className={spineTileClass('small', false)} aria-label={bellName}>
-            {renderIcon({ name: 'bell', size: 18 })}
-            {renderSpineCount(props.notifications)}
-            {renderRailTooltip(NOTIFICATIONS)}
-          </a>
-        </li>
+        <li>{props.bell}</li>
         <li>
           {renderRailButton({
             icon: props.settings.icon,

@@ -1,6 +1,6 @@
 import { describe, test } from 'vitest';
 import { assert } from 'riteway/vitest';
-import { PALETTE_SEARCH, resultsFrom, searchPath } from './palette-search';
+import { PALETTE_SEARCH, resultsFrom, searchPath, usersFrom } from './palette-search';
 
 describe('searchPath()', () => {
   test('the open drive', () => {
@@ -8,7 +8,7 @@ describe('searchPath()', () => {
       given: 'a query in drive d-1',
       should: 'ask apps/web’s search for that drive’s pages, the query trimmed and escaped',
       actual: searchPath({ query: '  road map & co ', driveId: 'd-1', allDrives: false }),
-      expected: `${PALETTE_SEARCH}?q=road+map+%26+co&types=page&driveId=d-1`,
+      expected: `${PALETTE_SEARCH}?q=road+map+%26+co&types=page%2Cuser&driveId=d-1`,
     });
   });
 
@@ -21,8 +21,8 @@ describe('searchPath()', () => {
         searchPath({ query: 'road', driveId: null, allDrives: true }),
       ],
       expected: [
-        `${PALETTE_SEARCH}?q=road&types=page&crossDrive=true`,
-        `${PALETTE_SEARCH}?q=road&types=page&crossDrive=true`,
+        `${PALETTE_SEARCH}?q=road&types=page%2Cuser&crossDrive=true`,
+        `${PALETTE_SEARCH}?q=road&types=page%2Cuser&crossDrive=true`,
       ],
     });
   });
@@ -87,6 +87,33 @@ describe('resultsFrom()', () => {
       should: 'call it Untitled rather than draw an empty row',
       actual: resultsFrom([{ id: 'p-1', label: '  ', type: 'page', data: { pageType: 'DOCUMENT', driveId: 'd-1' } }]),
       expected: [{ id: 'p-1', title: 'Untitled', pageType: 'DOCUMENT', driveId: 'd-1' }],
+    });
+  });
+});
+
+describe('usersFrom()', () => {
+  test('the people in the answer, in order', () => {
+    assert({
+      given: 'an answer mixing a page, a user and a user with no name',
+      should: 'list the users by id and name, leaving the pages out',
+      actual: usersFrom([
+        { id: 'p-1', label: 'Roadmap', type: 'page', data: { pageType: 'DOCUMENT', driveId: 'd-1' } },
+        { id: 'u-1', label: 'Priya Raman', type: 'user', data: {}, description: 'User' },
+        { id: 'u-2', label: ' ', type: 'user', data: {}, description: 'User' },
+      ]),
+      expected: [
+        { id: 'u-1', name: 'Priya Raman' },
+        { id: 'u-2', name: 'Unnamed User' },
+      ],
+    });
+  });
+
+  test('an error body', () => {
+    assert({
+      given: 'an error body and no list at all',
+      should: 'list no one',
+      actual: [usersFrom({ error: 'nope' }), usersFrom(undefined)],
+      expected: [[], []],
     });
   });
 });

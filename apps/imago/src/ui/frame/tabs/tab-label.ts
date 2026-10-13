@@ -71,6 +71,7 @@ export const tabLabelFor = (path: string): TabLabel => {
   if (first === 'p') return { kind: 'page', pageId: second };
   if (first === 'dm') return { kind: 'conversation', conversationId: second };
   if (first === 'account') return screen(ACCOUNT[second], 'Account');
+  if (first === 'notifications') return screen('Notifications', 'Notifications');
   if (second === 'files' || second === 'messages' || second === 'tasks') return { kind: 'page', pageId: third };
   if (second === 'settings') return screen(DRIVE_SETTINGS[third], 'Drive settings');
   return screen(TOOLS[second], 'Drive');

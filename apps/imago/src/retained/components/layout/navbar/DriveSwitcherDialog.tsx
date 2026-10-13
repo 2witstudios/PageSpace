@@ -50,10 +50,12 @@ export default function DriveSwitcherDialog({ open, onOpenChange }: DriveSwitche
         description="Search your drives and open one"
         // Phone: top-anchored 12px below the safe area instead of centred, so
         // the keyboard never covers the input and the notch never covers the
-        // dialog (the header pads the same inset; in the iOS app it is real);
-        // the dialog becomes a column whose list takes whatever height is left
-        // above the bottom inset. sm+: the usual centred 576px.
-        className="max-sm:top-[calc(var(--safe-area-top)+0.75rem)] max-sm:flex max-sm:max-h-[calc(100dvh-var(--safe-area-top)-var(--safe-area-bottom)-1.5rem)] max-sm:max-w-[calc(100%-1.5rem)] max-sm:translate-y-0 max-sm:flex-col sm:max-w-xl"
+        // dialog; the dialog becomes a column whose list takes the height left.
+        // sm+: a popover anchored beside the spine's drive tile (SPEC v3
+        // C-Shell-DriveSwitcher), with a transparent scrim so it reads as a
+        // popover while Radix keeps focus trapped and Escape closing it.
+        className="max-sm:top-[calc(var(--safe-area-top)+0.75rem)] max-sm:flex max-sm:max-h-[calc(100dvh-var(--safe-area-top)-var(--safe-area-bottom)-1.5rem)] max-sm:max-w-[calc(100%-1.5rem)] max-sm:translate-y-0 max-sm:flex-col sm:top-3 sm:left-[72px] sm:max-w-[380px] sm:translate-x-0 sm:translate-y-0 sm:rounded-lg sm:shadow-2xl"
+        overlayClassName="bg-transparent"
         showCloseButton
         // useDrivePicker owns filtering (Recent must vanish under a query, and
         // groups must not be re-ranked against each other). Item values are

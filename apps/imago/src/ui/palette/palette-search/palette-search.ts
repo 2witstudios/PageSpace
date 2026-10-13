@@ -14,6 +14,9 @@ import { PageType, type PageTypeValue } from '@pagespace/lib/client-safe';
 
 export const PALETTE_SEARCH = '/api/mentions/search';
 
+/** The mention types the palette lists: pages (its Pages group) and people (its Users group). */
+export const PALETTE_TYPES = 'page,user';
+
 /** A page the search answered with, as the palette lists and opens it. */
 export type PaletteResult = {
   readonly id: string;
@@ -21,6 +24,12 @@ export type PaletteResult = {
   readonly pageType: PageTypeValue;
   /** The drive the page opens in: its own, or for a guest agent the drive it is a member of. */
   readonly driveId: string;
+};
+
+/** A person the search answered with. Only the name is kept: the route sends no email or avatar. */
+export type PaletteUser = {
+  readonly id: string;
+  readonly name: string;
 };
 
 export type SearchScope = {
@@ -39,9 +48,9 @@ export type SearchScope = {
 export const searchPath = ({ query, driveId, allDrives }: SearchScope): string | null => {
   const q = query.trim();
   if (q === '') return null;
-  if (allDrives) return `${PALETTE_SEARCH}?${new URLSearchParams({ q, types: 'page', crossDrive: 'true' })}`;
+  if (allDrives) return `${PALETTE_SEARCH}?${new URLSearchParams({ q, types: PALETTE_TYPES, crossDrive: 'true' })}`;
   if (driveId === null) return null;
-  return `${PALETTE_SEARCH}?${new URLSearchParams({ q, types: 'page', driveId })}`;
+  return `${PALETTE_SEARCH}?${new URLSearchParams({ q, types: PALETTE_TYPES, driveId })}`;
 };
 
 const pageTypes: readonly string[] = Object.values(PageType);
@@ -62,8 +71,19 @@ const resultOf = (entry: unknown): PaletteResult | null => {
 };
 
 /**
- * The pages in a search answer, in the server's order. People (which have no
- * imago route), anything malformed and an error body list nothing.
+ * The pages in a search answer, in the server's order. Anything malformed and
+ * an error body list nothing.
  */
 export const resultsFrom = (body: unknown): readonly PaletteResult[] =>
   Array.isArray(body) ? body.map(resultOf).filter((result): result is PaletteResult => result !== null) : [];
+
+const userOf = (entry: unknown): PaletteUser | null => {
+  if (!isRecord(entry) || entry.type !== 'user') return null;
+  const { id, label } = entry;
+  if (typeof id !== 'string' || id === '') return null;
+  return { id, name: typeof label === 'string' && label.trim() !== '' ? label : 'Unnamed User' };
+};
+
+/** The people in a search answer, in the server's order; anything else lists nothing. */
+export const usersFrom = (body: unknown): readonly PaletteUser[] =>
+  Array.isArray(body) ? body.map(userOf).filter((user): user is PaletteUser => user !== null) : [];

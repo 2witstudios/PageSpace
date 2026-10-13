@@ -10,6 +10,8 @@ export type DriveSummary = {
   readonly id: string;
   readonly name: string;
   readonly kind: DriveKind;
+  /** When the viewer last opened the drive (the API's own timestamp), null when never. */
+  readonly lastAccessedAt?: string | null;
 };
 
 const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
@@ -17,10 +19,10 @@ const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
 
 const summaryOf = (entry: unknown): DriveSummary | null => {
   if (!isRecord(entry) || entry.isTrashed === true) return null;
-  const { id, name, kind } = entry;
+  const { id, name, kind, lastAccessedAt } = entry;
   if (typeof id !== 'string' || id === '' || typeof name !== 'string') return null;
   if (kind !== 'HOME' && kind !== 'STANDARD') return null;
-  return { id, name, kind };
+  return { id, name, kind, lastAccessedAt: typeof lastAccessedAt === 'string' ? lastAccessedAt : null };
 };
 
 const byName = (a: DriveSummary, b: DriveSummary): number =>
@@ -56,6 +58,7 @@ export const switchDriveHref = (stage: Stage, driveId: string): string => {
       return `${drive}/${stage.section}`;
     case 'chat':
     case 'account':
+    case 'notifications':
       return drive;
   }
 };

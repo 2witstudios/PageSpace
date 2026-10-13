@@ -1,0 +1,65 @@
+import { describe, test } from 'vitest';
+import { assert } from 'riteway/vitest';
+import { countOf, creditsCardOf, resetLabel } from './avatar-menu-model';
+
+const balance = (overrides: Record<string, unknown> = {}) => ({
+  billingEnabled: true,
+  subscriptionTier: 'pro',
+  monthly: { remaining: 612, allowance: 900, periodEnd: '2026-11-03T12:00:00.000Z' },
+  topup: { remaining: 1000 },
+  debt: 0,
+  spendable: 1612,
+  reserved: 14,
+  ...overrides,
+});
+
+describe('creditsCardOf()', () => {
+  test('the monthly figures, the plan and the renewal date from /api/credits', () => {
+    const card = creditsCardOf(balance());
+
+    assert({
+      given: 'a paid balance with 612 of 900 monthly credits, 1,000 top-up credits and 14 reserved',
+      should: 'show the monthly credits left against the allowance, the meter, the bonus and the reserve',
+      actual: card === null ? null : { plan: card.plan, resets: card.resets, left: card.left, allowance: card.allowance, percent: card.percent, bonus: card.bonus, reserved: card.reserved },
+      expected: { plan: 'Pro', resets: 'Nov 3', left: 612, allowance: 900, percent: 68, bonus: 1000, reserved: 14 },
+    });
+  });
+
+  test('no card when billing is off or the balance is not loaded', () => {
+    assert({
+      given: 'billing disabled (tenant or on-prem), a balance missing its fields, and nothing loaded yet',
+      should: 'show no card',
+      actual: [creditsCardOf(balance({ billingEnabled: false })), creditsCardOf({ billingEnabled: true }), creditsCardOf(undefined)],
+      expected: [null, null, null],
+    });
+  });
+
+  test('a one-time grant with no renewal date', () => {
+    assert({
+      given: 'a free balance with no period end',
+      should: 'leave the renewal out',
+      actual: creditsCardOf(balance({ subscriptionTier: 'free', monthly: { remaining: 0, allowance: 100, periodEnd: null } }))?.resets ?? 'none',
+      expected: 'none',
+    });
+  });
+
+  test('a debt-free overdraw never shows a meter past full', () => {
+    assert({
+      given: 'monthly credits left above the allowance',
+      should: 'cap the meter at 100',
+      actual: creditsCardOf(balance({ spendable: 1500, topup: { remaining: 0 }, monthly: { remaining: 1500, allowance: 900, periodEnd: null } }))?.percent,
+      expected: 100,
+    });
+  });
+});
+
+describe('countOf() and resetLabel()', () => {
+  test('whole credits with separators, and a short renewal date', () => {
+    assert({
+      given: 'a large count and a renewal timestamp',
+      should: 'write the count with a thousands separator and the date as "Mon D"',
+      actual: [countOf(1000), resetLabel('2026-11-03T12:00:00.000Z'), resetLabel('not a date'), resetLabel(null)],
+      expected: ['1,000', 'Nov 3', null, null],
+    });
+  });
+});

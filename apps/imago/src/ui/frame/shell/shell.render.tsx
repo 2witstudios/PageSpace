@@ -20,6 +20,8 @@ export type ShellRenderProps = {
   /** React has hydrated the shell, so its controls act. */
   readonly hydrated: boolean;
   readonly rail: ReactNode;
+  /** The 36px banner strip above the tab bar: offline, conflicts and other notices by priority. */
+  readonly banner: ReactNode;
   /** The 40px open-pages tab bar across the top of the stage sheet. */
   readonly tabBar: ReactNode;
   readonly list: ReactNode;
@@ -40,7 +42,7 @@ export type ShellRenderProps = {
  * devtools; nothing styles off them.
  */
 export function renderShell(props: ShellRenderProps): ReactNode {
-  const { stage, layout, columns, hydrated, rail, tabBar, list, object, chat, empty, palette } = props;
+  const { stage, layout, columns, hydrated, rail, banner, tabBar, list, object, chat, empty, palette } = props;
   return (
     <div
       className={shellClass}
@@ -55,6 +57,7 @@ export function renderShell(props: ShellRenderProps): ReactNode {
         {rail}
       </nav>
       <div className={stageSheetClass} data-slot="stage">
+        {banner}
         {tabBar}
         <div className={columnsRowClass}>
           <Pane open={layout.list !== 'closed'} width={listSlotClass(columns, layout.list)} slot="list">

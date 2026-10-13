@@ -43,9 +43,9 @@ const everywhere = [
   { id: 'u-1', label: 'Road Runner', type: 'user', data: {}, description: 'User (cross-drive)' },
 ];
 
-const ALPHA_ROAD = 'GET /api/mentions/search?q=road&types=page&driveId=d-1';
-const HOME_ROAD = 'GET /api/mentions/search?q=road&types=page&driveId=home-1';
-const ALL_ROAD = 'GET /api/mentions/search?q=road&types=page&crossDrive=true';
+const ALPHA_ROAD = 'GET /api/mentions/search?q=road&types=page%2Cuser&driveId=d-1';
+const HOME_ROAD = 'GET /api/mentions/search?q=road&types=page%2Cuser&driveId=home-1';
+const ALL_ROAD = 'GET /api/mentions/search?q=road&types=page%2Cuser&crossDrive=true';
 
 const answer =
   (body: unknown): FakeRoute =>
@@ -142,9 +142,9 @@ describe('CommandPalette', () => {
         closedBefore: true,
         prevented: true,
         focusedField: true,
-        asked: ['/api/mentions/search?q=road&types=page&driveId=d-1'],
+        asked: ['/api/mentions/search?q=road&types=page%2Cuser&driveId=d-1'],
         first: [
-          { text: 'Roadmap', selected: 'true' },
+          { text: 'Roadmap↵', selected: 'true' },
           { text: 'road-crew', selected: 'false' },
           { text: 'Road tasks', selected: 'false' },
         ],
@@ -206,7 +206,7 @@ describe('CommandPalette', () => {
     assert({
       given: '"Include all workspaces" ticked with "road" typed, then the agent picked',
       should:
-        'ask every drive, list only the pages the server answered with each one’s drive, and open the agent’s drive chat talking to it',
+        'ask every drive, list the pages the server answered with each one’s drive, then the people, and open the agent’s drive chat talking to it',
       actual: {
         ticked: toggle.getAttribute('aria-checked'),
         asked: web.requests.map((request) => request.url),
@@ -218,10 +218,10 @@ describe('CommandPalette', () => {
       expected: {
         ticked: 'true',
         asked: [
-          '/api/mentions/search?q=road&types=page&driveId=d-1',
-          '/api/mentions/search?q=road&types=page&crossDrive=true',
+          '/api/mentions/search?q=road&types=page%2Cuser&driveId=d-1',
+          '/api/mentions/search?q=road&types=page%2Cuser&crossDrive=true',
         ],
-        rows: ['RoadmapAlpha', 'Road plannerBeta'],
+        rows: ['RoadmapAlpha↵', 'Road plannerBeta', 'Road Runner'],
         placeholder: 'Search all workspaces…',
         pushed: ['/d-2'],
         agent: { id: 'a-1', title: 'Road planner' },
@@ -242,7 +242,7 @@ describe('CommandPalette', () => {
       given: 'the palette opened from the DMs, which name no drive',
       should: 'search the viewer’s Home drive and say nothing matched',
       actual: [placeholder, web.requests.map((request) => request.url)],
-      expected: ['Search Home…', ['/api/mentions/search?q=road&types=page&driveId=home-1']],
+      expected: ['Search Home…', ['/api/mentions/search?q=road&types=page%2Cuser&driveId=home-1']],
     });
   });
 

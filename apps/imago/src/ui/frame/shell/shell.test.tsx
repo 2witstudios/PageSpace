@@ -30,6 +30,12 @@ vi.mock('@/ui/components/theme-switcher/theme-switcher', () => ({
   ThemeSwitcher: () => h('div', { role: 'radiogroup', 'aria-label': 'Theme' }),
 }));
 
+// The drive switcher is apps/web's dialog on the retained stores; its own suite
+// (and the brand chip's) proves it. Here it only has to open from the tile.
+vi.mock('@/retained/components/layout/navbar/DriveSwitcherDialog', () => ({
+  default: ({ open }: { open: boolean }) => (open ? h('div', { role: 'dialog', 'aria-label': 'Switch drive' }) : null),
+}));
+
 // The messages pane loads through SWR and realtime; its own suite proves it
 // against the real hooks. Here it only shows what the shell handed it.
 vi.mock('@/ui/messages/messages-pane/messages-pane', () => ({
@@ -609,10 +615,10 @@ describe('Shell', () => {
 
     assert({
       given: 'the shell on a drive chat, then on a channel',
-      should: 'fill the spine with the drive switcher, Search, the drive’s sections and tools, the bell, Drive settings and the avatar menu, and move aria-current without remounting the link',
+      should: 'fill the spine with the drive switcher, Search, the drive’s sections and tools, the bell, Drive settings and the avatar menu (ending in Log out), and move aria-current without remounting the link',
       actual: [
         names,
-        [...rail.querySelectorAll('button')].some((button) => button.textContent === 'Sign out'),
+        [...rail.querySelectorAll('button')].some((button) => button.textContent?.includes('Log out')),
         current === messages,
         rail.querySelectorAll(':scope > ul [aria-current]').length,
         rail.querySelector('summary[aria-label="Account menu"]')?.classList.contains('spine-avatar-ring'),
@@ -694,21 +700,16 @@ describe('Shell', () => {
   test('the drive switcher', () => {
     navigation.pathname = '/drive-1/tasks/list-1';
     render();
-    const rows = [...slot('rail').querySelectorAll('ul[aria-label="Drives"] a')].map((link) => [
-      link.textContent,
-      link.getAttribute('href'),
-      link.getAttribute('aria-current'),
-    ]);
+    const tile = () => slot('rail').querySelector<HTMLButtonElement>('button[aria-label^="Switch drive"]');
+    const before = document.querySelector('[role="dialog"][aria-label="Switch drive"]');
+    click('button[aria-label="Switch drive: Alpha"]');
+    const opened = document.querySelector('[role="dialog"][aria-label="Switch drive"]');
 
     assert({
-      given: 'a task list open in Alpha, with Beta and Home also listed',
-      should: 'list Home first, then the rest by name, each linking to its Tasks, with Alpha current',
-      actual: rows,
-      expected: [
-        ['HHome', '/home-1/tasks', null],
-        ['AAlpha', '/drive-1/tasks', 'page'],
-        ['BBeta', '/drive-2/tasks', null],
-      ],
+      given: 'a task list open in Alpha, and the drive tile pressed',
+      should: 'open the Switch drive dialog from the tile, which reports it expanded',
+      actual: [before, opened !== null, tile()?.getAttribute('aria-expanded'), tile()?.getAttribute('aria-haspopup')],
+      expected: [null, true, 'true', 'dialog'],
     });
   });
 
@@ -738,7 +739,7 @@ describe('Shell', () => {
       given: 'the same address',
       should: 'never show a name for that drive on the switcher',
       actual: [
-        rail.querySelector('summary[aria-label^="Switch drive"]')?.getAttribute('aria-label'),
+        rail.querySelector('button[aria-label^="Switch drive"]')?.getAttribute('aria-label'),
         rail.textContent?.includes('secret-drive'),
       ],
       expected: ['Switch drive', false],

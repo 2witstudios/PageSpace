@@ -27,6 +27,7 @@ const markup = (
       layout: paneLayout(stage, { collapsedSections }),
       columns,
       rail: h('p', null, 'rail'),
+      banner: h('p', null, 'banner'),
       tabBar: h('p', { 'data-tab-bar': '' }, 'tabs'),
       list: h('p', null, 'list'),
       object: h('p', null, 'object'),

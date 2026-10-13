@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, test, vi } from 'vitest';
 import { assert } from 'riteway/vitest';
 import { findElement } from '../../test-support/find-element';
-import { spineCountClass, spineDividerClass, spineTileClass } from '../rail-button/rail-button-class';
+import { spineDividerClass, spineTileClass } from '../rail-button/rail-button-class';
 import { railItems, secondaryItems, settingsItem } from './rail-items';
 import { renderRail, type RailRenderProps } from './rail.render';
 
@@ -14,7 +14,7 @@ const props = (overrides: Partial<RailRenderProps> = {}): RailRenderProps => ({
   activeId: 'files',
   activeAt: 'page',
   unread: { messages: 4 },
-  notifications: 0,
+  bell: <button type="button" aria-label="Notifications">Bell</button>,
   onSearch: () => {},
   brand: <span data-brand="">Alpha</span>,
   footer: <button type="button">Sign out</button>,
@@ -46,15 +46,15 @@ describe('renderRail()', () => {
       new RegExp(`class="([^"]+)"[^>]*aria-label="${name}"`).exec(html)?.[1];
     assert({
       given: 'nothing active',
-      should: 'draw the four sections as 48px tiles and Search, the tools, the bell and Drive settings as small ones',
+      should: 'draw the four sections as 48px tiles and Search, the tools and Drive settings as small ones',
       actual: [
         ['Chat', 'Files', 'Tasks'].map(classOf),
-        ['Calendar', 'Trash', 'Notifications', 'Drive settings'].map(classOf),
+        ['Calendar', 'Trash', 'Drive settings'].map(classOf),
         classOf('Search'),
       ],
       expected: [
         Array(3).fill(spineTileClass('primary', false)),
-        Array(4).fill(spineTileClass('small', false)),
+        Array(3).fill(spineTileClass('small', false)),
         `${spineTileClass('small', false)} mb-2`,
       ],
     });
@@ -127,21 +127,17 @@ describe('renderRail()', () => {
     });
   });
 
-  test('the bell', () => {
-    const quiet = markup({ unread: {} });
-    const loud = markup({ unread: {}, notifications: 3 });
-    const many = markup({ unread: {}, notifications: 150 });
+  test('the bell slot', () => {
+    const html = markup({ bell: <button type="button" aria-label="Notifications, 3 unread">Bell</button> });
     assert({
-      given: 'no unread notifications, then three, then 150',
-      should: 'link to classic’s notifications with a plain name, then carry the count in the name and the amber badge, capped at 99+',
+      given: 'the container’s bell',
+      should: 'render it at the foot, after the drive tools and before Drive settings',
       actual: [
-        /<a href="\/notifications"[^>]*aria-label="Notifications">/.test(quiet),
-        quiet.includes(spineCountClass),
-        /<a href="\/notifications"[^>]*aria-label="Notifications, 3 unread">/.test(loud),
-        loud.includes(`<span class="${spineCountClass}" aria-hidden="true">3</span>`),
-        many.includes(`<span class="${spineCountClass}" aria-hidden="true">99+</span>`),
+        html.includes('aria-label="Notifications, 3 unread">Bell</button>'),
+        html.indexOf('aria-label="Trash"') < html.indexOf('aria-label="Notifications, 3 unread"'),
+        html.indexOf('aria-label="Notifications, 3 unread"') < html.indexOf('aria-label="Drive settings"'),
       ],
-      expected: [true, false, true, true, true],
+      expected: [true, true, true],
     });
   });
 
@@ -183,7 +179,7 @@ describe('renderRail()', () => {
         (html.match(/disabled=""/g) ?? []).length,
         /<button[^>]*aria-label="Search">/.test(html),
       ],
-      expected: [['/notifications'], 11, true],
+      expected: [[], 11, true],
     });
   });
 
