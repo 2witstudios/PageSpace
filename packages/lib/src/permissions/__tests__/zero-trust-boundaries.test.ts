@@ -8,7 +8,7 @@ import { pages, drives } from '@pagespace/db/schema/core';
 import { pagePermissions, driveMembers } from '@pagespace/db/schema/members';
 import { getUserAccessLevel, canUserViewPage, canUserEditPage, canUserDeletePage, canUserSharePage } from '../permissions';
 import { createId } from '@paralleldrive/cuid2';
-import { credentialActor } from '../access-actor';
+import { automationActor, credentialActor, inDrives } from '../access-actor';
 
 describe('Zero-Trust Permission Boundaries (Integration)', () => {
   let testUser: Awaited<ReturnType<typeof factories.createUser>>;
@@ -429,24 +429,23 @@ describe('Zero-Trust Permission Boundaries (Integration)', () => {
   });
 
   describe('convenience functions deny by default', () => {
-    it('canUserViewPage returns false for invalid userId', async () => {
-      const result = await canUserViewPage(credentialActor('', null), testPage.id);
-      expect(result).toBe(false);
+    it('an actor cannot be built for an empty user id, as a credential or as an automation', () => {
+      expect(() => credentialActor('', null)).toThrow('An access actor needs a user');
+      expect(() => automationActor('', 'zero-trust test', inDrives(testDrive.id))).toThrow('An access actor needs a user');
     });
 
-    it('canUserEditPage returns false for invalid userId', async () => {
-      const result = await canUserEditPage(credentialActor('', null), testPage.id);
-      expect(result).toBe(false);
+    it('every convenience function denies an actor whose user does not exist', async () => {
+      const ghost = credentialActor(`ghost_${createId()}`, null);
+      expect(await canUserViewPage(ghost, testPage.id)).toBe(false);
+      expect(await canUserEditPage(ghost, testPage.id)).toBe(false);
+      expect(await canUserSharePage(ghost, testPage.id)).toBe(false);
+      expect(await canUserDeletePage(ghost, testPage.id)).toBe(false);
     });
 
-    it('canUserSharePage returns false for invalid userId', async () => {
-      const result = await canUserSharePage(credentialActor('', null), testPage.id);
-      expect(result).toBe(false);
-    });
-
-    it('canUserDeletePage returns false for invalid userId', async () => {
-      const result = await canUserDeletePage(credentialActor('', null), testPage.id);
-      expect(result).toBe(false);
+    it('an automation actor for a user that does not exist is denied too, even scoped to the page\'s own drive', async () => {
+      const ghost = automationActor(`ghost_${createId()}`, 'zero-trust test', inDrives(testDrive.id));
+      expect(await canUserViewPage(ghost, testPage.id)).toBe(false);
+      expect(await canUserEditPage(ghost, testPage.id)).toBe(false);
     });
 
     it('canUserViewPage returns false for user without permissions', async () => {
