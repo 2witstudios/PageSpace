@@ -17,8 +17,7 @@ import {
  * Only humans reach this. Agents (drive_agent_members) and apps with an explicit role
  * (mcp_token_drives) hold no org role and never get org-derived access.
  *
- * While `orgsEnabled` is false, or for a drive with no org, the answer is exactly the accepted
- * row the resolver already read, so the dark resolvers behave as they did before orgs existed.
+ * For a drive with no org the answer is exactly the accepted row the resolver already read.
  */
 
 export interface OrgDriveFacts {
@@ -27,7 +26,6 @@ export interface OrgDriveFacts {
 }
 
 export interface EffectiveDriveMembershipInput {
-  orgsEnabled: boolean;
   drive: OrgDriveFacts;
   /** The user's role in drive.orgId; null when not a member or the drive has no org. */
   orgRole: OrgRole | null;
@@ -50,7 +48,7 @@ export interface EffectiveDriveMembership extends OrgDriveAccess {
    * when the access comes from the IMPLICIT org membership: an org MEMBER on an OPEN drive whose membership is the
    * org's (source `org`, role MEMBER): no row, or an org-materialized row whatever role it now carries (a row frozen
    * on a former default, P2-3). Never for org power (already ADMIN), an invited or approved row (an explicit role),
-   * a guest, a RESTRICTED or PRIVATE drive, a personal drive, or while dark.
+   * a guest, a RESTRICTED or PRIVATE drive, or a personal drive.
    */
   openDriveFloor: OpenRoleFloor | null;
 }
@@ -77,14 +75,13 @@ export function validOrgDriveRow(
 }
 
 export function resolveEffectiveDriveMembership({
-  orgsEnabled,
   drive,
   orgRole,
   row,
   driveDefaultRole,
   openDriveRoleFloor,
 }: EffectiveDriveMembershipInput): EffectiveDriveMembership | null {
-  if (!orgsEnabled || drive.orgId === null) {
+  if (drive.orgId === null) {
     return row ? { ...row, auditOrgAdminPrivateAccess: false, openDriveFloor: null } : null;
   }
 
@@ -111,7 +108,6 @@ export function resolveEffectiveDriveMembership({
 }
 
 export interface ListedDriveRoleInput {
-  orgsEnabled: boolean;
   drive: OrgDriveFacts;
   orgRole: OrgRole | null;
   /** The user's ACCEPTED drive_members row for this drive, if any. */
@@ -130,13 +126,12 @@ export interface ListedDriveRoleInput {
  * where they find it). A page permission alone never lists an org drive (X-6).
  */
 export function decideListedDriveRole({
-  orgsEnabled,
   drive,
   orgRole,
   row,
   viaPagePermission,
 }: ListedDriveRoleInput): DriveMemberRole | null {
-  if (!orgsEnabled || drive.orgId === null) {
+  if (drive.orgId === null) {
     if (row) return row.role;
     return viaPagePermission ? 'MEMBER' : null;
   }
@@ -158,7 +153,6 @@ export function decideListedDriveRole({
 }
 
 export interface ExplicitScopeAuthorityInput {
-  orgsEnabled: boolean;
   drive: OrgDriveFacts;
   /** The user's ACCEPTED drive_members row for this drive, if any. */
   row: OrgDriveMembership | null;
@@ -176,15 +170,14 @@ export type ExplicitScopeAuthority =
  * and a former lead's OWNER row all come from, or outlived, an org relationship, so they back only
  * an INHERITING scope, which re-resolves the owner on every use.
  *
- * `orgDrive: false` means the org rule does not apply (dark, or a personal drive): the caller's
+ * `orgDrive: false` means the org rule does not apply (a personal drive): the caller's
  * existing check stands unchanged.
  */
 export function explicitScopeAuthorityRow({
-  orgsEnabled,
   drive,
   row,
 }: ExplicitScopeAuthorityInput): ExplicitScopeAuthority {
-  if (!orgsEnabled || drive.orgId === null) return { orgDrive: false };
+  if (drive.orgId === null) return { orgDrive: false };
   // With no org role, validOrgDriveRow drops every org-materialized row as well as an OWNER row.
   return { orgDrive: true, row: validOrgDriveRow(row, drive, null) };
 }
@@ -228,7 +221,6 @@ export interface DriveAudienceRow extends OrgDriveMembership {
 }
 
 export interface DriveAudienceInput {
-  orgsEnabled: boolean;
   drive: OrgDriveFacts & { ownerId: string };
   /** The drive's ACCEPTED drive_members rows. */
   rows: DriveAudienceRow[];
@@ -248,13 +240,12 @@ export interface DriveAudienceMember {
 
 /**
  * Everyone who is a member of a drive, each with their effective role: the lead, then every person
- * resolveEffectiveDriveMembership admits, among the row holders and (while enabled, on an org drive)
+ * resolveEffectiveDriveMembership admits, among the row holders and (on an org drive)
  * the org's members. The one membership enumeration behind drive broadcasts, group mentions and
  * event attendee lists: a stale org row or a pending invitation is no member, an implicit Open
  * member and an org Owner/Admin are.
  */
 export function decideDriveAudience({
-  orgsEnabled,
   drive,
   rows,
   orgRoles,
@@ -264,13 +255,12 @@ export function decideDriveAudience({
   members.set(drive.ownerId, { userId: drive.ownerId, isOwner: true, role: 'OWNER', customRoleId: null });
 
   const rowByUser = new Map(rows.map((row) => [row.userId, row]));
-  const orgCandidates = orgsEnabled && drive.orgId !== null ? [...orgRoles.keys()] : [];
+  const orgCandidates = drive.orgId !== null ? [...orgRoles.keys()] : [];
   for (const userId of [...rowByUser.keys(), ...orgCandidates]) {
     if (members.has(userId)) continue;
     const row = rowByUser.get(userId);
     const effective = resolveEffectiveDriveMembership({
-      orgsEnabled,
-      drive,
+          drive,
       orgRole: drive.orgId !== null ? orgRoles.get(userId) ?? null : null,
       row: row ? { role: row.role, customRoleId: row.customRoleId, source: row.source } : null,
       driveDefaultRole,

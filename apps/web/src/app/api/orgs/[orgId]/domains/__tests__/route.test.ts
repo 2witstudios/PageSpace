@@ -8,17 +8,11 @@ import { NextResponse } from 'next/server';
 import type { SessionAuthResult } from '@/lib/auth';
 import type { OrgRole } from '@pagespace/db/schema/organizations';
 
-const flags = vi.hoisted(() => ({ orgsEnabled: true }));
 
 // The org sign-in policy (SEC-2/3) has its own suites; here every credential meets it.
 vi.mock('@pagespace/lib/permissions/actor-authentication', () => ({
   checkActorOrgAuthentication: vi.fn(async () => ({ allowed: true })),
   drivePolicyOrgId: vi.fn(async () => null),
-}));
-vi.mock('@pagespace/lib/organizations/orgs-enabled', () => ({
-  get ORGS_ENABLED() {
-    return flags.orgsEnabled;
-  },
 }));
 vi.mock('@/lib/auth', () => ({ authenticateRequestWithOptions: vi.fn(), isAuthError: vi.fn() }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -85,7 +79,6 @@ const claim = {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  flags.orgsEnabled = true;
   vi.mocked(isAuthError).mockImplementation((result) => 'error' in result);
   vi.mocked(authenticateRequestWithOptions).mockResolvedValue(session('user_priya'));
   vi.mocked(checkDistributedRateLimit).mockResolvedValue({ allowed: true });
@@ -111,14 +104,6 @@ describe('domain routes', () => {
     for (const fn of [listOrgDomains, addOrgDomain, removeOrgDomain, verifyOrgDomainByDns, sendDomainProofEmail]) {
       expect(fn).not.toHaveBeenCalled();
     }
-  });
-
-  it('SEC-1 (partial) dark while ORGS_ENABLED is off: every domain route answers 404, the confirm link too', async () => {
-    flags.orgsEnabled = false;
-    as('OWNER');
-    expect((await GET(req('GET'), ctx)).status).toBe(404);
-    expect((await CONFIRM(req('POST', { token: 't' }))).status).toBe(404);
-    expect(confirmDomainProofEmail).not.toHaveBeenCalled();
   });
 
   it('SEC-1 (partial) an Admin claims a domain and is shown the exact TXT record to publish', async () => {

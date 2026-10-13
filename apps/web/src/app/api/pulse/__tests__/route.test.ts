@@ -61,7 +61,7 @@ vi.mock('@pagespace/db/operators', async () => {
   return fixtureOperators;
 });
 
-// The one member-drive set (org-aware; owned drives plus accepted rows while dark).
+// The one member-drive set (org-aware).
 vi.mock('@pagespace/lib/permissions/member-drives', () => ({
   getMemberDriveIds: vi.fn(async () => []),
 }));

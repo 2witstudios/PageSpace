@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { PgDialect } from 'drizzle-orm/pg-core';
 
 /**
@@ -8,13 +8,6 @@ import { PgDialect } from 'drizzle-orm/pg-core';
  * directory, recipients and join-request suites; the parity with listMemberDrives is
  * drive-gate-primitives.integration.test.ts.
  */
-
-let orgsEnabled = false;
-vi.mock('../../organizations/orgs-enabled', () => ({
-  get ORGS_ENABLED() {
-    return orgsEnabled;
-  },
-}));
 
 import { users } from '@pagespace/db/schema/auth';
 import { memberOfAnyDriveCondition } from '../member-drives';
@@ -28,21 +21,7 @@ function driveMembersExistsClauses(sqlText: string): string[] {
 }
 
 describe('memberOfAnyDriveCondition never counts a GUEST row', () => {
-  beforeEach(() => {
-    orgsEnabled = false;
-  });
-
-  it('D-OW-24 while dark, the accepted-row EXISTS admits only membership roles', () => {
-    const { sql, params } = render();
-    const clauses = driveMembersExistsClauses(sql);
-    expect(clauses).toHaveLength(1);
-    expect(clauses[0]).toMatch(/"drive_members"\."role" in \(\$\d+, \$\d+, \$\d+\)/);
-    expect(params).toEqual(expect.arrayContaining(['OWNER', 'ADMIN', 'MEMBER']));
-    expect(params).not.toContain('GUEST');
-  });
-
-  it('D-OW-24 with orgs on, the valid-row EXISTS admits only membership roles', () => {
-    orgsEnabled = true;
+  it('D-OW-24 the valid-row EXISTS admits only membership roles', () => {
     const { sql, params } = render();
     const clauses = driveMembersExistsClauses(sql);
     expect(clauses).toHaveLength(1);

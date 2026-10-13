@@ -12,8 +12,6 @@ import { users } from '@pagespace/db/schema/auth';
 import { drives } from '@pagespace/db/schema/core';
 import { organizations, orgMembers, orgSubscriptions } from '@pagespace/db/schema/organizations';
 
-vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
-
 import { createOrgDrive, moveDriveToOrg, type OrgDriveServiceDeps } from '../org-drive-service';
 import { orgDriveServiceDeps } from '../org-drive-service-deps';
 

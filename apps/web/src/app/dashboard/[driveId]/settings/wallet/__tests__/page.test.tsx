@@ -10,7 +10,6 @@ import { SWRConfig } from 'swr';
 import { projectDriveWallet, type DriveWalletFacts } from '@pagespace/lib/billing/wallet-views';
 import { walletActionsFor, type WalletViewer } from '@pagespace/lib/permissions/wallet-access';
 
-vi.mock('@pagespace/lib/organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 vi.mock('next/navigation', () => ({
   useParams: () => ({ driveId: 'd-product' }),
   useRouter: () => ({ push: vi.fn() }),

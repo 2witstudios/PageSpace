@@ -6,17 +6,11 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { SessionAuthResult } from '@/lib/auth';
 
-const flags = vi.hoisted(() => ({ orgsEnabled: true }));
 
 // The org sign-in policy (SEC-2/3) has its own suites; here every credential meets it.
 vi.mock('@pagespace/lib/permissions/actor-authentication', () => ({
   checkActorOrgAuthentication: vi.fn(async () => ({ allowed: true })),
   drivePolicyOrgId: vi.fn(async () => null),
-}));
-vi.mock('@pagespace/lib/organizations/orgs-enabled', () => ({
-  get ORGS_ENABLED() {
-    return flags.orgsEnabled;
-  },
 }));
 vi.mock('@/lib/auth', () => ({ authenticateRequestWithOptions: vi.fn(), isAuthError: vi.fn() }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -51,7 +45,6 @@ const research = {
 describe('GET /api/orgs/[orgId]/drives', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    flags.orgsEnabled = true;
     vi.mocked(isAuthError).mockReturnValue(false);
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(session(LENA));
   });
@@ -77,12 +70,5 @@ describe('GET /api/orgs/[orgId]/drives', () => {
 
     expect(response.status).toBe(404);
     expect(listOrgDriveDirectory).not.toHaveBeenCalled();
-  });
-
-  it('answers 404 without authenticating while ORGS_ENABLED is false', async () => {
-    flags.orgsEnabled = false;
-
-    expect((await GET(get(), context)).status).toBe(404);
-    expect(authenticateRequestWithOptions).not.toHaveBeenCalled();
   });
 });

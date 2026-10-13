@@ -11,7 +11,6 @@ vi.mock('@pagespace/lib/permissions/actor-authentication', () => ({
   checkActorOrgAuthentication: vi.fn(async () => ({ allowed: true })),
   drivePolicyOrgId: vi.fn(async () => null),
 }));
-vi.mock('@pagespace/lib/organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 vi.mock('@/lib/auth', () => ({ authenticateRequestWithOptions: vi.fn(), isAuthError: vi.fn() }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({ loggers: { api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() } } }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));

@@ -23,8 +23,6 @@ import { canViewDriveWallet } from '../spend-standing';
 import { isDriveOwnerOrAdmin } from '../permissions';
 import { credentialActor } from '../access-actor';
 
-vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
-
 let ok = false;
 const ids = { users: [] as string[], orgId: '', driveId: '', personalDriveId: '', pageId: '' };
 

@@ -57,12 +57,6 @@ import { groupPickerDrives } from '../../organizations/drive-picker-groups';
 import { cleanupNorthwind, createUser, northwind, type Fixture } from './fixtures/northwind-org-drives';
 import { credentialActor } from '../access-actor';
 
-const flags = vi.hoisted(() => ({ orgsEnabled: true }));
-vi.mock('../../organizations/orgs-enabled', () => ({
-  get ORGS_ENABLED() {
-    return flags.orgsEnabled;
-  },
-}));
 
 const LIST_OPTIONS: ListDrivesOptions[] = [{}, { includeTrash: true }, { tokenScopable: true }];
 const FULL = { canView: true, canEdit: true, canShare: true, canDelete: true };
@@ -138,7 +132,6 @@ describe('org drive requirements (integration)', () => {
   });
 
   afterEach(async () => {
-    flags.orgsEnabled = true;
     await cleanupNorthwind();
   }, 120_000);
 

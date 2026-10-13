@@ -49,12 +49,12 @@ describe('drive relationship decisions', () => {
 describe('decideDriveLeadAuthority (lead-only actions: rename, restore, permanent delete)', () => {
   const orgDrive = { ownerId: 'lena', orgId: 'org-1' };
   const personal = { ownerId: 'marcus', orgId: null };
-  const decide = (userId: string, drive: { ownerId: string; orgId: string | null }, orgRole: 'OWNER' | 'ADMIN' | 'MEMBER' | null, orgsEnabled = true) =>
-    decideDriveLeadAuthority({ orgsEnabled, userId, drive, orgRole });
+  const decide = (userId: string, drive: { ownerId: string; orgId: string | null }, orgRole: 'OWNER' | 'ADMIN' | 'MEMBER' | null) =>
+    decideDriveLeadAuthority({ userId, drive, orgRole });
 
-  it('the drive lead acts as lead on any drive, dark or enabled', () => {
+  it('the drive lead acts as lead on any drive', () => {
     expect(decide('lena', orgDrive, 'MEMBER')).toEqual({ allowed: true, via: 'lead' });
-    expect(decide('marcus', personal, null, false)).toEqual({ allowed: true, via: 'lead' });
+    expect(decide('marcus', personal, null)).toEqual({ allowed: true, via: 'lead' });
   });
 
   it('ORG-4 (partial) an org Owner or Admin acts as lead on an org-owned drive, and the answer names the org power so it is audited', () => {
@@ -70,9 +70,5 @@ describe('decideDriveLeadAuthority (lead-only actions: rename, restore, permanen
   it('a personal drive is unchanged: only its owner, whatever org role the caller holds elsewhere', () => {
     expect(decide('priya', personal, 'ADMIN')).toEqual({ allowed: false });
     expect(decide('nina', personal, null)).toEqual({ allowed: false });
-  });
-
-  it('while ORGS_ENABLED is false org power acts as nothing', () => {
-    expect(decide('priya', orgDrive, 'ADMIN', false)).toEqual({ allowed: false });
   });
 });

@@ -10,7 +10,7 @@ vi.mock('@pagespace/db/operators', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@pagespace/db/operators')>()),
   inArray: mockInArray,
 }));
-// The one member-drive listing (org-aware; owned drives plus accepted rows while dark).
+// The one member-drive listing (org-aware).
 vi.mock('@pagespace/lib/permissions/member-drives', () => ({
   getAdministeredDriveIds: vi.fn(),
 }));

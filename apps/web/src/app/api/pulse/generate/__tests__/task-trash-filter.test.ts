@@ -73,7 +73,7 @@ vi.mock('../../calendar-context', () => ({
   pulseSourceOrgIds: vi.fn(async () => []),
 }));
 
-// The one member-drive set (org-aware; owned drives plus accepted rows while dark).
+// The one member-drive set (org-aware).
 // POL-8: the scope the digest's model may read. Default: all of it (no org restricts the model).
 vi.mock('@/lib/ai/core/org-model-policy', () => ({
   scopeReadableByModel: vi.fn(async (_use: unknown, scope: { driveIds: readonly string[]; pageIds?: readonly string[] }) => ({ driveIds: [...scope.driveIds], pageIds: [...(scope.pageIds ?? [])] })),

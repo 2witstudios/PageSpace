@@ -3,7 +3,6 @@ import type { OrgRole } from '@pagespace/db/schema/organizations';
 import { decideDriveAudience, type DriveAudienceInput } from '../org-drive-resolution';
 
 const base = (overrides: Partial<DriveAudienceInput>): DriveAudienceInput => ({
-  orgsEnabled: true,
   drive: { ownerId: 'lead', orgId: 'org', orgVisibility: 'OPEN' },
   rows: [],
   orgRoles: new Map<string, OrgRole>(),
@@ -32,13 +31,12 @@ describe('decideDriveAudience', () => {
     expect(summary(input)).toEqual(['lead:OWNER:-:lead', 'jono:ADMIN:-']);
   });
 
-  it('while dark, or on a personal drive, it is the lead plus every accepted row as it is', () => {
+  it('on a personal drive it is the lead plus every accepted row as it is', () => {
     const rows = [
       { userId: 'marcus', role: 'MEMBER' as const, customRoleId: null, source: 'org' as const },
       { userId: 'fred', role: 'OWNER' as const, customRoleId: null, source: 'invite' as const },
     ];
     const orgRoles = new Map<string, OrgRole>([['nina', 'MEMBER']]);
-    expect(summary(base({ orgsEnabled: false, rows, orgRoles }))).toEqual(['lead:OWNER:-:lead', 'marcus:MEMBER:-', 'fred:OWNER:-']);
     expect(summary(base({ drive: { ownerId: 'lead', orgId: null, orgVisibility: 'OPEN' }, rows, orgRoles }))).toEqual(['lead:OWNER:-:lead', 'marcus:MEMBER:-', 'fred:OWNER:-']);
   });
 });

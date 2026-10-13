@@ -1,15 +1,13 @@
 /**
- * The shared gate for every org route (/api/orgs/**, the drive-org routes, join requests): dark
- * behind ORGS_ENABLED, then authenticate, then the ONE org authorization function requireOrgRole
+ * The shared gate for every org route (/api/orgs/**, the drive-org routes, join requests):
+ * authenticate, then the ONE org authorization function requireOrgRole
  * (Spec ORG-5), then the org's sign-in policy on the credential (SEC-2/3). A denial is audited
  * here; route files audit what they do.
  */
-import { NextResponse } from 'next/server';
 import { apiError } from '@/lib/api/api-error';
 import { authenticateRequestWithOptions, isAuthError, getAllowedDriveIds, type AuthResult } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { isBillingEnabled } from '@pagespace/lib/deployment-mode';
-import { ORGS_ENABLED } from '@pagespace/lib/organizations/orgs-enabled';
 import { requireOrgRole } from '@pagespace/lib/organizations/authorize';
 import { findMembershipRole } from '@pagespace/lib/organizations/repository';
 import type { OrgRole } from '@pagespace/db/schema/organizations';
@@ -57,12 +55,9 @@ export type OrgGate =
   | { ok: true; userId: string; role?: OrgRole; allowedDriveIds: string[]; authentication: VerifiedAuthentication | null; actor: AccessActor; credential: 'session' | 'mcp' }
   | { ok: false; response: Response };
 
-/** 404 exactly as an unknown route would answer, so dark orgs reveal nothing. */
-export const orgsDisabledResponse = (): Response => NextResponse.json({ error: 'Not found' }, { status: 404 });
-
 /**
  * Billing is off on this deployment (onprem, tenant): the org exists but has no plan, seats or
- * subscription. Distinguishable from orgs being dark by its code. Answered to every
+ * subscription. Answered to every
  * authenticated caller before any org lookup (authorizeOrgBillingRequest), so it is the same for
  * every org id and every role and reveals nothing about the org.
  */
@@ -70,11 +65,10 @@ export const billingUnavailableResponse = (): Response =>
   apiError(404, 'billing_unavailable', 'Organization billing is not available on this deployment');
 
 /**
- * Dark check and authentication, for routes that have no org yet (create, list, accept) or whose
+ * Authentication, for routes that have no org yet (create, list, accept) or whose
  * org is a drive's (join requests, the drive-org routes — their services ask requireOrgRole).
  */
 export async function authenticateOrgRequest(request: Request, options: AuthOptions): Promise<OrgGate> {
-  if (!ORGS_ENABLED) return { ok: false, response: orgsDisabledResponse() };
   const { allow, requireCSRF } = options;
   const auth = await authenticateRequestWithOptions(request, { allow, requireCSRF });
   if (isAuthError(auth)) return { ok: false, response: auth.error };

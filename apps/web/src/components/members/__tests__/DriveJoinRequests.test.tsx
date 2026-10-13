@@ -11,7 +11,6 @@ const mocks = vi.hoisted(() => ({
   patch: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 vi.mock('@/hooks/useMyOrganizations', () => ({ useMyOrganizations: () => ({ orgById: (id: string | null | undefined) => (id ? { id, role: mocks.role } : null) }) }));
 vi.mock('@/hooks/useOrgLapsed', () => ({ useOrgLapsed: () => mocks.lapsed, LAPSED_LOOSEN_NOTE: 'Paused while unpaid.' }));

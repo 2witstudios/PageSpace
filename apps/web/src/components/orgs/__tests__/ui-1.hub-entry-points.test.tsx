@@ -11,7 +11,6 @@ import type { Drive } from '@pagespace/lib/types';
 const mocks = vi.hoisted(() => ({ push: vi.fn() }));
 const NORTHWIND = { id: 'org_nw', name: 'Northwind Labs', slug: 'northwind', avatarUrl: null, role: 'ADMIN' as const, lapsed: false };
 
-vi.mock('@pagespace/lib/organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: mocks.push }),
   useParams: () => ({ orgId: 'org_nw' }),

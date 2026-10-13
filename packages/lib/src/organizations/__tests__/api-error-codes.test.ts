@@ -7,7 +7,7 @@ describe('the org, wallet, seat and policy routes\' error codes', () => {
     for (const code of ORG_API_ERROR_CODES) expect(code).toMatch(/^[a-z]+(_[a-z]+)*$/);
   });
 
-  it('billing being off has its own code; organizations being dark has none (a bare 404)', () => {
+  it('billing being off has its own code; an unknown code is not one', () => {
     expect(isOrgApiErrorCode('billing_unavailable')).toBe(true);
     expect(isOrgApiErrorCode('orgs_disabled')).toBe(false);
     expect(isOrgApiErrorCode(undefined)).toBe(false);

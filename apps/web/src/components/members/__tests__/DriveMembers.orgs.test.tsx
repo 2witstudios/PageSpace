@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
 
-vi.mock('@pagespace/lib/organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 const fetchWithAuth = vi.hoisted(() => vi.fn());
 const del = vi.hoisted(() => vi.fn(async () => ({})));
 vi.mock('@/lib/auth/auth-fetch', () => ({ fetchWithAuth, del, post: vi.fn() }));

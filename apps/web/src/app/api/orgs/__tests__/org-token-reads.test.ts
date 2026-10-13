@@ -12,17 +12,11 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { MCPAuthResult, SessionAuthResult } from '@/lib/auth';
 import type { OrgRole } from '@pagespace/db/schema/organizations';
 
-const flags = vi.hoisted(() => ({ orgsEnabled: true }));
 
 // The org sign-in policy (SEC-2/3) has its own suites; here every credential meets it.
 vi.mock('@pagespace/lib/permissions/actor-authentication', () => ({
   checkActorOrgAuthentication: vi.fn(async () => ({ allowed: true })),
   drivePolicyOrgId: vi.fn(async () => null),
-}));
-vi.mock('@pagespace/lib/organizations/orgs-enabled', () => ({
-  get ORGS_ENABLED() {
-    return flags.orgsEnabled;
-  },
 }));
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
@@ -131,7 +125,6 @@ const policies = { policies: { guests: 'approve', seatAllowanceCents: 3000 } };
 
 beforeEach(() => {
   vi.clearAllMocks();
-  flags.orgsEnabled = true;
   vi.mocked(findMembershipRole).mockResolvedValue('MEMBER');
   vi.mocked(listOrganizationsForUser).mockResolvedValue(orgsList.organizations);
   vi.mocked(findOrganizationById).mockResolvedValue(ORG_ROW);

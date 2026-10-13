@@ -17,12 +17,6 @@ vi.mock('@pagespace/lib/services/drive-service', () => ({
     listAccessibleDrives: vi.fn(),
     createDrive: vi.fn(),
 }));
-const { orgsFlag } = vi.hoisted(() => ({ orgsFlag: { enabled: false } }));
-vi.mock('@pagespace/lib/organizations/orgs-enabled', () => ({
-  get ORGS_ENABLED() {
-    return orgsFlag.enabled;
-  },
-}));
 vi.mock('@pagespace/lib/services/org-drive-service', () => ({
   createOrgDrive: vi.fn(),
 }));
@@ -301,7 +295,6 @@ describe('POST /api/drives', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    orgsFlag.enabled = false;
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
     vi.mocked(isAuthError).mockReturnValue(false);
   });
@@ -458,10 +451,6 @@ describe('POST /api/drives', () => {
     const post = (body: unknown) =>
       POST(new Request('https://example.com/api/drives', { method: 'POST', body: JSON.stringify(body) }));
 
-    beforeEach(() => {
-      orgsFlag.enabled = true;
-    });
-
     it('DRV-3 (partial) a drive created with an orgId goes through createOrgDrive with the production deps and answers 201 as its owner', async () => {
       vi.mocked(createOrgDrive).mockResolvedValue({ ok: true, drive: orgDriveRow });
 
@@ -543,16 +532,6 @@ describe('POST /api/drives', () => {
       expect(response.status).toBe(403);
       expect((await response.json()).code).toBe('org_strong_sign_in_required');
       expect(createOrgDrive).toHaveBeenCalledWith(mockUserId, expect.objectContaining({ orgId: 'org-northwind', authentication }), orgDriveServiceDeps);
-    });
-
-    it('an orgId answers 404 and creates nothing while ORGS_ENABLED is false', async () => {
-      orgsFlag.enabled = false;
-
-      const response = await post({ name: 'Engineering', orgId: 'org-northwind' });
-
-      expect(response.status).toBe(404);
-      expect(createOrgDrive).not.toHaveBeenCalled();
-      expect(createDrive).not.toHaveBeenCalled();
     });
 
     it('a drive created without an orgId stays personal', async () => {

@@ -29,20 +29,8 @@ import {
 import { checkGrantAuthority, parseScopeList, scopeSetToDriveScopes, type GrantAuthority } from '../../auth/oauth/scopes';
 import { cleanupNorthwind, createUser, northwind, type Fixture } from './fixtures/northwind-org-drives';
 import { factories } from '@pagespace/db/test/factories';
-import {
-  legacyGetDriveAccess,
-  legacyGetDriveAccessWithDrive,
-  legacyGetUserAccessLevel,
-  legacyListAccessibleDrives,
-} from './fixtures/pre-org-drive-resolvers';
 import { credentialActor } from '../access-actor';
 
-const flags = vi.hoisted(() => ({ orgsEnabled: false }));
-vi.mock('../../organizations/orgs-enabled', () => ({
-  get ORGS_ENABLED() {
-    return flags.orgsEnabled;
-  },
-}));
 
 const LIST_OPTIONS: ListDrivesOptions[] = [{}, { includeTrash: true }, { tokenScopable: true }];
 
@@ -57,34 +45,10 @@ async function auditRowsFor(resourceIds: string[]) {
 const listedIds = async (userId: string, options?: ListDrivesOptions) =>
   (await listAccessibleDrives(credentialActor(userId, null), options)).map((d) => d.id).sort();
 
-/** Every resolver, every user, every target: the live answer must equal the frozen pre-org answer. */
-async function expectResolversMatchLegacy(userIds: string[], driveIds: string[], pageIds: string[]) {
-  let compared = 0;
-  for (const userId of userIds) {
-    for (const target of [...driveIds, ...pageIds]) {
-      expect(await getUserAccessLevel(credentialActor(userId, null), target), `getUserAccessLevel ${userId} ${target}`)
-        .toEqual(await legacyGetUserAccessLevel(userId, target));
-      compared += 1;
-    }
-    for (const driveId of driveIds) {
-      expect(await getDriveAccess(driveId, credentialActor(userId, null))).toEqual(await legacyGetDriveAccess(driveId, userId));
-      expect(await getDriveAccessWithDrive(driveId, credentialActor(userId, null))).toEqual(await legacyGetDriveAccessWithDrive(driveId, userId));
-      compared += 2;
-    }
-    for (const options of LIST_OPTIONS) {
-      // toStrictEqual: same drives, same order, same keys and values (JSON byte-identical).
-      expect(await listAccessibleDrives(credentialActor(userId, null), options)).toStrictEqual(await legacyListAccessibleDrives(userId, options));
-      compared += 1;
-    }
-  }
-  return compared;
-}
-
 describe('org access in the human drive resolvers (integration)', () => {
   // Same teardown discipline as org-membership-sync.integration.test.ts: org drives, then orgs
   // (drives.orgId and organizations.ownerId RESTRICT), then users (cascading the rest).
   afterEach(async () => {
-    flags.orgsEnabled = false;
     await cleanupNorthwind();
   }, 120_000);
 
@@ -117,23 +81,7 @@ describe('org access in the human drive resolvers (integration)', () => {
 
   const everyone = (f: Fixture) => Object.values(f.people).map((u) => u.id);
 
-  it('while ORGS_ENABLED is false every resolver returns exactly the pre-org result, for personal and org drives, and writes no audit row', async () => {
-    const f = await northwind();
-    flags.orgsEnabled = false;
-
-    const compared = await expectResolversMatchLegacy(everyone(f), Object.values(f.drives).map((d) => d.id), Object.values(f.pages).map((p) => p.id));
-    expect(compared).toBe(12 * (6 + 8) + 12 * 6 * 2 + 12 * LIST_OPTIONS.length);
-
-    // Not vacuous: the fixture holds rows that org rules treat differently once enabled.
-    expect(await getUserAccessLevel(credentialActor(f.people.marcus.id, null), f.drives.finance.id)).not.toBeNull();
-    expect(await getUserAccessLevel(credentialActor(f.people.eve.id, null), f.drives.finance.id)).toBeNull();
-    expect(await listedIds(f.people.nina.id)).toEqual([f.drives.personal.id]);
-    expect(await listedIds(f.people.fred.id)).toEqual([f.drives.research.id]);
-
-    expect(await auditRowsFor([f.drives.product.id, f.drives.research.id, f.drives.finance.id])).toEqual([]);
-  });
-
-  it('D-OW-24 a GUEST row (a redeemed page share link) resolves exactly as master\'s frozen resolvers do, dark and on a personal drive once orgs are on: it opens its granted page and nothing drive-wide', async () => {
+  it('D-OW-24 a GUEST row (a redeemed page share link) opens its granted page and nothing drive-wide, on a personal drive and on org drives', async () => {
     const f = await northwind();
     // Gus redeemed page links: a GUEST row plus a page grant on Marcus's personal drive and on
     // Product (OPEN), and a bare GUEST row on Research (RESTRICTED), whose page he was never given.
@@ -143,11 +91,6 @@ describe('org access in the human drive resolvers (integration)', () => {
     await factories.createDriveMember(f.drives.product.id, gus.id, { source: 'invite', role: 'GUEST' });
     await factories.createPagePermission(f.pages.productPage.id, gus.id);
     await factories.createDriveMember(f.drives.research.id, gus.id, { source: 'invite', role: 'GUEST' });
-
-    const driveIds = Object.values(f.drives).map((d) => d.id);
-    const pageIds = Object.values(f.pages).map((p) => p.id);
-    flags.orgsEnabled = false;
-    expect(await expectResolversMatchLegacy([gus.id], driveIds, pageIds)).toBe((6 + 8) + 6 * 2 + LIST_OPTIONS.length);
 
     // Not vacuous: the GUEST row is really there, and it is no membership anywhere.
     const noMembership = { isOwner: false, isAdmin: false, isMember: false, role: null, customRoleId: null };
@@ -161,37 +104,14 @@ describe('org access in the human drive resolvers (integration)', () => {
     expect(await getUserAccessLevel(credentialActor(gus.id, null), f.pages.researchPage.id)).toBeNull();
     expect(await getUserAccessLevel(credentialActor(f.people.eve.id, null), f.pages.researchPage.id)).toMatchObject({ canView: true });
 
-    // Orgs on: Gus is in no org, so the org drives stay closed beyond his grants, and the personal
-    // drive still resolves exactly as master's resolvers do.
-    flags.orgsEnabled = true;
-    for (const target of [f.drives.personal.id, f.pages.personalPage.id, f.pages.personalPrivatePage.id]) {
-      expect(await getUserAccessLevel(credentialActor(gus.id, null), target)).toEqual(await legacyGetUserAccessLevel(gus.id, target));
-    }
-    expect(await getDriveAccess(f.drives.personal.id, credentialActor(gus.id, null))).toEqual(await legacyGetDriveAccess(f.drives.personal.id, gus.id));
-    expect(await getDriveAccess(f.drives.product.id, credentialActor(gus.id, null))).toEqual(noMembership);
+    // Gus is in no org, so the org drives stay closed beyond his grants; nothing else of the personal drive opens.
+    expect(await getUserAccessLevel(credentialActor(gus.id, null), f.pages.personalPrivatePage.id)).toBeNull();
     expect(await getUserAccessLevel(credentialActor(gus.id, null), f.pages.researchPage.id)).toBeNull();
     expect(await listedIds(gus.id)).not.toContain(f.drives.research.id);
   });
 
-  it('while ORGS_ENABLED is true personal drives still resolve exactly as before', async () => {
-    const f = await northwind();
-    flags.orgsEnabled = true;
-
-    const personalTargets = [f.pages.personalPage.id, f.pages.personalPrivatePage.id];
-    for (const userId of everyone(f)) {
-      for (const target of [f.drives.personal.id, ...personalTargets]) {
-        expect(await getUserAccessLevel(credentialActor(userId, null), target)).toEqual(await legacyGetUserAccessLevel(userId, target));
-      }
-      expect(await getDriveAccess(f.drives.personal.id, credentialActor(userId, null))).toEqual(await legacyGetDriveAccess(f.drives.personal.id, userId));
-      expect(await getDriveAccessWithDrive(f.drives.personal.id, credentialActor(userId, null))).toEqual(await legacyGetDriveAccessWithDrive(f.drives.personal.id, userId));
-      const personal = (drives: Awaited<ReturnType<typeof listAccessibleDrives>>) => drives.filter((d) => d.orgId === null);
-      expect(personal(await listAccessibleDrives(credentialActor(userId, null)))).toStrictEqual(personal(await legacyListAccessibleDrives(userId)));
-    }
-  });
-
   it('ORG-4 (partial) the org Owner and an org Admin resolve full access on every Northwind drive with no membership row, and only org power used on the PRIVATE drive writes an audit row', async () => {
     const f = await northwind();
-    flags.orgsEnabled = true;
     const full = { canView: true, canEdit: true, canShare: true, canDelete: true };
     const admin = { isOwner: false, isAdmin: true, isMember: true, role: 'ADMIN', customRoleId: null };
 
@@ -228,7 +148,6 @@ describe('org access in the human drive resolvers (integration)', () => {
 
   it('DRV-5 (partial) POL-6 (partial) an org member with no row resolves an OPEN drive with its default role and sees it listed; a private page stays closed', async () => {
     const f = await northwind();
-    flags.orgsEnabled = true;
     const { nina } = f.people;
 
     // The default role's drive-wide canEdit is what grants edit on a page: a plain member would read only.
@@ -267,7 +186,6 @@ describe('org access in the human drive resolvers (integration)', () => {
 
   it('DRV-6 (partial) an org member sees no RESTRICTED or PRIVATE drive without a joined row, and a stale source org row opens and lists nothing', async () => {
     const f = await northwind();
-    flags.orgsEnabled = true;
     const none = { isOwner: false, isAdmin: false, isMember: false, role: null, customRoleId: null };
 
     for (const member of [f.people.marcus, f.people.nina]) {
@@ -293,7 +211,6 @@ describe('org access in the human drive resolvers (integration)', () => {
 
   it('X-6 (partial) a non-member sees no Northwind drive, not through a stale org row nor a former lead\'s leftover OWNER row, and a guest sees exactly the one drive they were invited to', async () => {
     const f = await northwind();
-    flags.orgsEnabled = true;
     const { dana, chris, fred } = f.people;
 
     // A former lead's leftover OWNER row opens and lists nothing.
@@ -320,7 +237,6 @@ describe('org access in the human drive resolvers (integration)', () => {
 
   it('ORG-4 (partial) org power never mints an explicit-role MCP key scope: an org Admin with no row must use an inheriting scope, which stops resolving once they are demoted', async () => {
     const f = await northwind();
-    flags.orgsEnabled = true;
     const { priya, omar, nina, marcus, eve } = f.people;
     const full = { canView: true, canEdit: true, canShare: true, canDelete: true };
     const refused = (driveId: string) => ({ invalidDriveIds: [], unauthorizedRoles: [], invalidCustomRoles: [], unauthorizedCustomRoles: [], explicitRoleWithoutMembership: [driveId] });
@@ -355,7 +271,6 @@ describe('org access in the human drive resolvers (integration)', () => {
 
   it('ORG-4 (partial) org power never mints an explicit-role OAuth drive scope (authorize and device flow share checkGrantAuthority): an org Admin with no row must consent to an inheriting scope, which stops resolving once they are demoted', async () => {
     const f = await northwind();
-    flags.orgsEnabled = true;
     const { priya, omar, nina } = f.people;
     const full = { canView: true, canEdit: true, canShare: true, canDelete: true };
 

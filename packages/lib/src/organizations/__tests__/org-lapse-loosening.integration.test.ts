@@ -5,7 +5,7 @@
  * (org-lapse-loosening.seam.test.ts) marks guarded.
  *
  * Northwind Labs (Sequence Spec Part 2): Jono Owner, Priya Admin, Dana member and lead of Product (Restricted),
- * Marcus and Lena members, Gita outside the org. ORGS_ENABLED on, billing on (cloud). Deletes every row it creates,
+ * Marcus and Lena members, Gita outside the org. Billing on (cloud). Deletes every row it creates,
  * children before parents, users last, and ends the pool.
  *
  * Locally:
@@ -26,7 +26,6 @@ import { driveJoinRequests } from '@pagespace/db/schema/drive-join-requests';
 import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
 
-vi.mock('../orgs-enabled', () => ({ ORGS_ENABLED: true }));
 // The org audit chain is a separate store this suite does not assert; nothing may be left in it.
 
 import { ORG_LAPSED_MESSAGE, ORG_LAPSED_REFUSAL } from '../status';
@@ -165,7 +164,7 @@ const roleGrant = async (roleId: string) =>
   (await db.select({ driveWide: driveRoles.driveWidePermissions, isDefault: driveRoles.isDefault }).from(driveRoles).where(eq(driveRoles.id, roleId)))[0] ?? null;
 const linkCount = async (driveId: string) => (await db.select({ id: driveShareLinks.id }).from(driveShareLinks).where(eq(driveShareLinks.driveId, driveId))).length;
 
-describe('[D-OW-33] a lapsed org may only restrict, on every guarded write (orgs on, real Postgres)', () => {
+describe('[D-OW-33] a lapsed org may only restrict, on every guarded write (real Postgres)', () => {
   beforeAll(async () => {
     try {
       await db.select({ id: orgSubscriptions.id }).from(orgSubscriptions).limit(1);

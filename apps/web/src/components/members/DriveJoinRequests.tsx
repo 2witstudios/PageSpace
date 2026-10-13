@@ -3,7 +3,6 @@
 import { useState } from 'react';
 import useSWR from 'swr';
 import { toast } from 'sonner';
-import { ORGS_ENABLED } from '@pagespace/lib/organizations/orgs-enabled';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -23,7 +22,7 @@ import { mayAnswerJoinRequests } from '@/lib/orgs/org-drives';
 export function DriveJoinRequests({ drive }: { drive: Drive }) {
   const { orgById } = useMyOrganizations();
   const lapsed = useOrgLapsed(drive.orgId);
-  const answers = ORGS_ENABLED && mayAnswerJoinRequests(drive, orgById(drive.orgId)?.role);
+  const answers = mayAnswerJoinRequests(drive, orgById(drive.orgId)?.role);
   const { data, mutate } = useSWR<{ requests: DriveJoinRequestView[] }>(answers ? driveJoinRequestsKey(drive.id) : null, orgFetcher, { revalidateOnFocus: true });
   const [busy, setBusy] = useState<string | null>(null);
 

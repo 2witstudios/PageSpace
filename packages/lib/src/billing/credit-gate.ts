@@ -45,12 +45,10 @@ import { readSpendableCents } from './credit-balance';
 import { exactCentsFromDollars, tierAllowanceCents } from './money-model';
 import { ensurePersonalRootWalletId } from './personal-wallet';
 import { addOneMonth } from './wallet-funding';
-import { ORGS_ENABLED } from '../organizations/orgs-enabled';
 import {
   ORG_ENTITLEMENT_TIER,
   PERSONAL_ROOT_NOT_YET_CREATED,
   personalRootDecision,
-  resolvesDriveWallets,
   rootAvailableCents,
   walletSpendableCents,
   type CallSpendDecision,
@@ -357,9 +355,9 @@ export async function canConsumeAI(
   // wallet or a seat on the org pool is reserved by gateSharedWallet.
   const reservation = reservationCents(opts.estCostCents ?? CREDIT_HOLD_ESTIMATE_CENTS);
   // The drive-wallet reads (and the permissions they go through) load only when a drive
-  // session can resolve to a shared wallet: while orgs are dark, and for a call with no
-  // drive, the personal root is answered with no reads, exactly as before wallets.
-  const resolution = resolvesDriveWallets({ orgsEnabled: ORGS_ENABLED, target: opts.spend })
+  // session can resolve to a shared wallet: for a call with no drive (the personal target), the
+  // personal root is answered with no reads.
+  const resolution = opts.spend.kind !== 'personal'
     ? await import('./spend-resolution')
     : null;
   const decision: CallSpendDecision & { preselectedWalletId?: string } = resolution
@@ -425,7 +423,7 @@ export async function canConsumeAI(
  * the routes that decide model entitlement BEFORE they gate; a route that gates first
  * reads `CreditGateResult.entitlementTier` instead. Read-only: it reserves nothing.
  *
- * Answers `tier` with no reads while orgs are dark or for a call with no drive, and when
+ * Answers `tier` with no reads for a call with no drive, and when
  * the target names no spendable wallet — the gate refuses that call itself.
  */
 export async function resolveEntitlementTier(
@@ -434,7 +432,7 @@ export async function resolveEntitlementTier(
   spend: SpendTarget,
   estCostCents: number = CREDIT_HOLD_ESTIMATE_CENTS,
 ): Promise<SubscriptionTier> {
-  if (!resolvesDriveWallets({ orgsEnabled: ORGS_ENABLED, target: spend })) return tier;
+  if (spend.kind === 'personal') return tier;
   const decision = await (await import('./spend-resolution')).resolveCallSpend({
     userId,
     consumerTier: tier,

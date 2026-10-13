@@ -56,12 +56,6 @@ import { tokenOwnerActor } from '../../permissions/__tests__/fixtures/token-owne
 
 // Org-derived access is dark by default; a test that proves an org-shaped negative turns it on,
 // or the negative would hold only because the whole org branch is off.
-const flags = vi.hoisted(() => ({ orgsEnabled: false }));
-vi.mock('../orgs-enabled', () => ({
-  get ORGS_ENABLED() {
-    return flags.orgsEnabled;
-  },
-}));
 
 const HOUR = 60 * 60 * 1000;
 /** A delete that ends access would otherwise call the realtime service over HTTP; tests of the events pass their own. */
@@ -88,7 +82,6 @@ describe('org services (real Postgres)', () => {
   // suite's user cleanup fail in the shared CI database. Orgs are also swept by owner, so
   // one created by a service call this file did not track still goes.
   afterEach(async () => {
-    flags.orgsEnabled = false;
     const driveIds = createdDrives.splice(0);
     const userIds = createdUsers.splice(0);
     const trackedOrgIds = createdOrgs.splice(0);
@@ -932,7 +925,6 @@ describe('org services (real Postgres)', () => {
   });
 
   it('X-6 (partial) a pending org invitation grants no drive access and lists no drive', async () => {
-    flags.orgsEnabled = true;
     const { jono, org } = await seedNorthwind();
     const marcus = await person('Marcus Oyelaran');
     await addMember(org.id, marcus.id, 'MEMBER');
@@ -1000,18 +992,15 @@ describe('org services (real Postgres)', () => {
       // Restoring Finance out of the Owner's trash brings no access back to Priya.
       expect(await restoreDrive(finance.id)).not.toBeNull();
 
-      for (const orgsEnabled of [false, true]) {
-        flags.orgsEnabled = orgsEnabled;
-        for (const drive of [product, finance]) {
-          expect(await getDriveAccess(drive.id, credentialActor(priya.id, null))).toEqual({ isOwner: false, isAdmin: false, isMember: false, role: null, customRoleId: null });
-        }
-        expect(await getUserAccessLevel(credentialActor(priya.id, null), productPage.id)).toBeNull();
-        expect(await getUserAccessLevel(credentialActor(priya.id, null), financePage.id)).toBeNull();
-        const listed = (await listAccessibleDrives(credentialActor(priya.id, null), { includeTrash: true })).map((d) => d.id);
-        expect(listed).not.toContain(product.id);
-        expect(listed).not.toContain(finance.id);
-        expect(await getDriveAccess(product.id, credentialActor(marcus.id, null))).toMatchObject({ isOwner: true });
+      for (const drive of [product, finance]) {
+        expect(await getDriveAccess(drive.id, credentialActor(priya.id, null))).toEqual({ isOwner: false, isAdmin: false, isMember: false, role: null, customRoleId: null });
       }
+      expect(await getUserAccessLevel(credentialActor(priya.id, null), productPage.id)).toBeNull();
+      expect(await getUserAccessLevel(credentialActor(priya.id, null), financePage.id)).toBeNull();
+      const listed = (await listAccessibleDrives(credentialActor(priya.id, null), { includeTrash: true })).map((d) => d.id);
+      expect(listed).not.toContain(product.id);
+      expect(listed).not.toContain(finance.id);
+      expect(await getDriveAccess(product.id, credentialActor(marcus.id, null))).toMatchObject({ isOwner: true });
     });
 
     it('ORG-6 everyone whose access the delete ends gets a member_removed drive-list event and a room kick, only after it commits: revoked rows, rowless org Owner/Admin power and rowless Open-drive membership, never the new owner or someone still invited, and a refused delete kicks no one', async () => {

@@ -23,8 +23,6 @@ import { moveDriveOutOfOrg, type OrgDriveServiceDeps } from '../org-drive-servic
 import { orgDriveServiceDeps } from '../org-drive-service-deps';
 import { credentialActor } from '../../permissions/access-actor';
 
-vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
-
 const audit = vi.hoisted(() => ({ events: [] as Array<Record<string, unknown>> }));
 // AUD-1: the code under test stages its org events in the outbox; the chain append is captured here, so what this
 // suite sees is exactly what was staged, committed and delivered.

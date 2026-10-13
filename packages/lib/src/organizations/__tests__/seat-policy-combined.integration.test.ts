@@ -35,8 +35,6 @@ import { getOrgPolicies } from '../policy-reader';
 import { updateOrgPolicies } from '../policies';
 import type { SeatBillingPort } from '../seat-service';
 
-vi.mock('../orgs-enabled', () => ({ ORGS_ENABLED: true }));
-
 const SLOW_STRIPE_MS = 2_000;
 const COST_25C = 0.1666667;
 const created = { orgId: '', userIds: [] as string[], driveId: '' };

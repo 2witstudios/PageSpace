@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_ORG_POLICIES } from '@pagespace/lib/organizations/policies-core';
 
-vi.mock('@pagespace/lib/organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 vi.mock('@/lib/auth', () => ({ authenticateRequestWithOptions: vi.fn(), isAuthError: (r: object) => 'error' in r }));
 vi.mock('@pagespace/lib/services/drive-service', () => ({ listAccessibleDrives: vi.fn() }));
 vi.mock('@pagespace/lib/organizations/policy-reader', () => ({ getOrgPolicies: vi.fn() }));

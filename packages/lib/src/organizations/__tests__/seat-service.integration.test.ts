@@ -29,8 +29,6 @@ import { countOrgSeats } from '../repository';
 import { getSeatSummary, releaseDueSeats, releaseOrgSeats, setSeatAutoAdd, type SeatBillingPort } from '../seat-service';
 import { SEAT_RELEASE_LEAD_MS } from '../seats';
 
-vi.mock('../orgs-enabled', () => ({ ORGS_ENABLED: true }));
-
 const HOUR = 3_600_000;
 const deliver = async () => {};
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));

@@ -521,7 +521,7 @@ describe('isUserMemberOfAnyEventDrive', () => {
     expect(await isUserMemberOfAnyEventDrive(credentialActor(USER_ID, null), BASE_EVENT)).toBe(false);
   });
 
-  it('X-6 (partial) decides with the org-aware isUserDriveMember while dark too (a stale org row counts only as the resolver says), never a drive_members read of its own', async () => {
+  it('X-6 (partial) decides with the org-aware isUserDriveMember (a stale org row counts only as the resolver says), never a drive_members read of its own', async () => {
     vi.mocked(isUserDriveMember).mockResolvedValue(false);
     const mockDb = db as unknown as MockDb;
     const tables: unknown[] = [];

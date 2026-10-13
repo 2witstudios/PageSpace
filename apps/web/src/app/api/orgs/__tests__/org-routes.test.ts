@@ -10,18 +10,12 @@ import { NextResponse } from 'next/server';
 import type { MCPAuthResult, SessionAuthResult, AuthError } from '@/lib/auth';
 import type { OrgRole } from '@pagespace/db/schema/organizations';
 
-const flags = vi.hoisted(() => ({ orgsEnabled: true }));
 const endSubscriptionPort = vi.hoisted(() => async () => {});
 
 // The org sign-in policy (SEC-2/3) has its own suites; here every credential meets it.
 vi.mock('@pagespace/lib/permissions/actor-authentication', () => ({
   checkActorOrgAuthentication: vi.fn(async () => ({ allowed: true })),
   drivePolicyOrgId: vi.fn(async () => null),
-}));
-vi.mock('@pagespace/lib/organizations/orgs-enabled', () => ({
-  get ORGS_ENABLED() {
-    return flags.orgsEnabled;
-  },
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -209,7 +203,6 @@ function setServiceDefaults() {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  flags.orgsEnabled = true;
   vi.mocked(isAuthError).mockImplementation((result) => 'error' in result);
   vi.mocked(authenticateRequestWithOptions).mockResolvedValue(session(CALLER));
   vi.mocked(repository.findMembershipRole).mockResolvedValue(null);
@@ -297,15 +290,6 @@ describe('org route role matrix', () => {
           }
         });
       }
-
-      it(`ORG-5 (partial) ${route.name} is dark with 404 while ORGS_ENABLED is false`, async () => {
-        flags.orgsEnabled = false;
-        vi.mocked(repository.findMembershipRole).mockResolvedValue('OWNER');
-        const res = await route.call();
-        expect(res.status).toBe(404);
-        expect(authenticateRequestWithOptions).not.toHaveBeenCalled();
-        expect(route.service()).not.toHaveBeenCalled();
-      });
 
       it(`${route.name} authenticates a session ${route.csrf ? 'with' : 'without'} CSRF`, async () => {
         vi.mocked(repository.findMembershipRole).mockResolvedValue('OWNER');

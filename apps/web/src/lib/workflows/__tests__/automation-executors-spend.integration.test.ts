@@ -9,15 +9,9 @@
  * departure sweep are all real. Faked: the model (generateText) and its provider, the cron signature,
  * the session behind the Run route, and outbound realtime/side effects nothing here reads.
  *
- * apps/web loads @pagespace/lib from its built CommonJS dist, whose ORGS_ENABLED is the shipped
- * constant (off). The dist reads that export live (`orgs_enabled_1.ORGS_ENABLED`), so this suite turns
- * wallets on by setting the one shared module's export for its run and restores it afterwards; the
- * web modules' own import is mocked on.
- *
  * Requires DATABASE_URL → a migrated Postgres. Deletes every row it creates.
  */
 import { describe, it, expect, beforeAll, beforeEach, afterEach, afterAll, vi } from 'vitest';
-import { createRequire } from 'node:module';
 
 const { generateTextMock } = vi.hoisted(() => ({ generateTextMock: vi.fn() }));
 
@@ -36,7 +30,6 @@ vi.mock('@/lib/auth', async (importOriginal) => ({
   authenticateRequestWithOptions: vi.fn(async () => ({ userId: session.userId, tokenType: 'session', sessionId: 's', role: 'user', tokenVersion: 0, adminRoleVersion: 0 })),
   isAuthError: (r: unknown) => typeof r === 'object' && r !== null && 'error' in r,
 }));
-vi.mock('@pagespace/lib/organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 
 import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db';
@@ -70,8 +63,6 @@ import { triggerMentionedAgentResponses } from '@/lib/channels/agent-mention-res
 import { encodeAutomationRef } from '@pagespace/lib/billing/automation-attribution';
 import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
-const orgsFlag = createRequire(import.meta.url)('@pagespace/lib/organizations/orgs-enabled') as { ORGS_ENABLED: boolean };
-const shippedOrgsEnabled = orgsFlag.ORGS_ENABLED;
 const originalMode = process.env.DEPLOYMENT_MODE;
 const DAY = 86_400_000;
 const PERSONAL_CENTS = 5_000;
@@ -228,7 +219,6 @@ describe('SPEND-6 automations, triggers and scheduled workflows spend the drive 
       requireDb('automation-executors-spend.integration.test.ts', error);
       dbAvailable = false;
     }
-    orgsFlag.ORGS_ENABLED = true;
   });
 
   beforeEach(() => {
@@ -249,7 +239,6 @@ describe('SPEND-6 automations, triggers and scheduled workflows spend the drive 
   });
 
   afterAll(() => {
-    orgsFlag.ORGS_ENABLED = shippedOrgsEnabled;
     if (originalMode === undefined) delete process.env.DEPLOYMENT_MODE;
     else process.env.DEPLOYMENT_MODE = originalMode;
   });

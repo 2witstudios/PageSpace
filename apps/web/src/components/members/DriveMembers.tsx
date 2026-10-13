@@ -16,7 +16,6 @@ import { useSocket } from '@/hooks/useSocket';
 import { del, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { isHomeDrive } from '@pagespace/lib/services/drive-guards';
 import { LAPSED_LOOSEN_NOTE, useOrgLapsed } from '@/hooks/useOrgLapsed';
-import { ORGS_ENABLED } from '@pagespace/lib/organizations/orgs-enabled';
 import { useDriveStore } from '@/hooks/useDrive';
 import { useMyOrganizations } from '@/hooks/useMyOrganizations';
 import { MemberSourceLegend, PageLinkGuestsSection, type PageLinkGuest } from './PageLinkGuestsSection';
@@ -82,12 +81,12 @@ export function DriveMembers({ driveId, driveKind }: DriveMembersProps) {
   const [driveRoles, setDriveRoles] = useState<DriveRole[]>([]);
   const [pendingInvites, setPendingInvites] = useState<PendingInvite[]>([]);
   const [pageLinkGuests, setPageLinkGuests] = useState<PageLinkGuest[]>([]);
-  // UI-5 / DRV-8: an org drive labels each member's source and its guests (orgs on only).
+  // UI-5 / DRV-8: an org drive labels each member's source and its guests.
   const driveOrgId = useDriveStore((state) => state.drives.find((d) => d.id === driveId)?.orgId ?? null);
   // [D-OW-33] a lapsed org's drive may only restrict: inviting, new links and new agents wait until it pays.
   const lapsed = useOrgLapsed(driveOrgId);
   const { orgById } = useMyOrganizations();
-  const orgLabels = ORGS_ENABLED && driveOrgId !== null;
+  const orgLabels = driveOrgId !== null;
   const orgName = orgById(driveOrgId)?.name ?? null;
   const [currentUserRole, setCurrentUserRole] = useState<'OWNER' | 'ADMIN' | 'MEMBER'>('MEMBER');
   const [loading, setLoading] = useState(true);
@@ -113,7 +112,7 @@ export function DriveMembers({ driveId, driveKind }: DriveMembersProps) {
       if (currentSeq !== requestSeqRef.current) return;
       setMembers(data.members);
       setPendingInvites(data.pendingInvites ?? []);
-      setPageLinkGuests(ORGS_ENABLED ? data.guests ?? [] : []);
+      setPageLinkGuests(data.guests ?? []);
       setCurrentUserRole(data.currentUserRole || 'MEMBER');
 
       if (agentMembersRes.ok) {

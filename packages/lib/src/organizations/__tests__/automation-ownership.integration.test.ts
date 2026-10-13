@@ -8,7 +8,7 @@
  * An Owner or Admin reassigns one to Lena (it then runs as her, bounded by her cap) or deletes it.
  *
  * REAL: leaveOrganization, removeMember, accountRepository.deleteUser, the reassign/delete services, the
- * credit gate and the caps, all on Postgres. Faked: the audit chain (captured) and ORGS_ENABLED (on).
+ * credit gate and the caps, all on Postgres. Faked: the audit chain (captured).
  *
  * Requires DATABASE_URL → a migrated Postgres. Every row it creates is deleted, children first, users
  * last, and the pool is ended.
@@ -48,7 +48,6 @@ import { automationSpend } from '../../billing/spend-target';
 import { setDriveWalletCap } from '../../services/drive-wallet-service';
 import { credentialActor } from '../../permissions/access-actor';
 
-vi.mock('../orgs-enabled', () => ({ ORGS_ENABLED: true }));
 const audit = vi.hoisted(() => ({ events: [] as Array<Record<string, unknown>> }));
 // AUD-1: the code under test stages its org events in the outbox; the chain append is captured here, so what this
 // suite sees is exactly what was staged, committed and delivered.
@@ -180,7 +179,7 @@ const gateAs = (userId: string, driveId: string) =>
   canConsumeAI(userId, 'free', { spend: automationSpend(driveId), estCostCents: 5, skipDailyCap: true });
 const ownerLeftEvents = () => audit.events.filter((e) => e.eventType === 'org.automation.owner_left');
 
-describe('[D-OW-36] an org drive\'s automations outlive their creator (orgs on, real Postgres)', () => {
+describe('[D-OW-36] an org drive\'s automations outlive their creator (real Postgres)', () => {
   beforeAll(async () => {
     try {
       await db.select({ id: workflows.id }).from(workflows).limit(1);

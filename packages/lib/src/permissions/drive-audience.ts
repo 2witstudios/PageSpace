@@ -3,7 +3,6 @@ import { and, asc, eq, inArray, isNotNull } from '@pagespace/db/operators';
 import { drives, type OrgDriveVisibility } from '@pagespace/db/schema/core';
 import { driveMembers, driveRoles } from '@pagespace/db/schema/members';
 import { orgMembers, type OrgRole } from '@pagespace/db/schema/organizations';
-import { ORGS_ENABLED } from '../organizations/orgs-enabled';
 import { decideDriveAudience, type DriveAudienceMember, type DriveAudienceRow } from './org-drive-resolution';
 import { driveMembershipRow } from './drive-member-role';
 
@@ -19,8 +18,8 @@ function chunks<T>(items: T[]): T[][] {
 
 /**
  * The members of each drive (decideDriveAudience), keyed by drive id; a missing drive has no entry.
- * Constant queries however many drives: the drives, their accepted rows, and (only while
- * ORGS_ENABLED, only for org drives) the orgs' members and the OPEN drives' default roles. Writes no
+ * Constant queries however many drives: the drives, their accepted rows, and (only for org
+ * drives) the orgs' members and the OPEN drives' default roles. Writes no
  * ORG-4 audit event: an audience is computed, nobody accessed anything.
  */
 export async function listDriveAudiences(driveIds: string[]): Promise<Map<string, DriveAudienceMember[]>> {
@@ -49,7 +48,7 @@ export async function listDriveAudiences(driveIds: string[]): Promise<Map<string
     }
   }
 
-  const orgDrives = ORGS_ENABLED ? driveRows.filter((d) => d.orgId !== null) : [];
+  const orgDrives = driveRows.filter((d) => d.orgId !== null);
   const orgRolesByOrg = new Map<string, Map<string, OrgRole>>();
   const defaultRoleByDrive = new Map<string, string>();
   if (orgDrives.length > 0) {
@@ -78,7 +77,6 @@ export async function listDriveAudiences(driveIds: string[]): Promise<Map<string
 
   for (const drive of driveRows) {
     audiences.set(drive.id, decideDriveAudience({
-      orgsEnabled: ORGS_ENABLED,
       drive,
       rows: rowsByDrive.get(drive.id) ?? [],
       orgRoles: drive.orgId ? orgRolesByOrg.get(drive.orgId) ?? new Map() : new Map(),

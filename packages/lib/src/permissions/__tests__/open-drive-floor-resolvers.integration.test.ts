@@ -42,12 +42,6 @@ import { updateOrgPolicies } from '../../organizations/policies';
 import { credentialActor } from '../access-actor';
 import { tokenOwnerActor } from './fixtures/token-owner-actor';
 
-const flags = vi.hoisted(() => ({ orgsEnabled: true }));
-vi.mock('../../organizations/orgs-enabled', () => ({
-  get ORGS_ENABLED() {
-    return flags.orgsEnabled;
-  },
-}));
 // Parking a guest kicks their live sessions through the realtime service; keep it offline.
 vi.mock('../revocation-kick', () => ({
   kickForPagePermissionRevocation: vi.fn(async () => undefined),
@@ -285,7 +279,6 @@ describe('the Open-drive role floor is read by every implicit-membership resolve
   });
 
   afterEach(async () => {
-    flags.orgsEnabled = true;
     // Children before parents, users last: holds, drives (cascading pages, rows, roles, grants and key
     // scopes), subscriptions, org members, orgs, then the users (cascading their keys).
     const orgIds = createdOrgIds.splice(0);
@@ -320,7 +313,7 @@ describe('the Open-drive role floor is read by every implicit-membership resolve
     }, 180_000);
   }
 
-  it('POL-6 (partial) the matrix is not vacuous: the stored roles sit below both floors, and dark (no org resolution) the implicit members hold nothing', async () => {
+  it('POL-6 (partial) the matrix is not vacuous: the stored roles sit below both floors', async () => {
     const h = await harbor();
     await setFloor(h.org.id, 'edit');
 
@@ -332,12 +325,6 @@ describe('the Open-drive role floor is read by every implicit-membership resolve
       expect(r, name).toBeDefined();
       expect(openDefaultRoleMeetsFloor('view', r?.driveWide ?? null, r?.permissions ?? {}), name).toBe(false);
     }
-
-    flags.orgsEnabled = false;
-    expect(await getUserAccessLevel(credentialActor(h.people.ivy.id, null), h.pages.open.roadmap.id)).toBeNull();
-    expect(await getUserAccessLevel(credentialActor(h.people.sam.id, null), h.pages.open.secret.id)).toBeNull();
-    expect(await getUserAccessLevel(credentialActor(h.people.fay.id, null), h.pages.open.roadmap.id)).toBeNull();
-    expect(await getUserAccessLevel(credentialActor(h.people.gil.id, null), h.pages.open.roadmap.id)).toEqual({ canView: true, canEdit: false, canShare: false, canDelete: false });
   }, 180_000);
 
   it('POL-6 (partial) guests-off parking still wins: a parked outsider and a parked guest resolve nothing in any path, while the floor still holds for org members', async () => {
@@ -378,25 +365,5 @@ describe('the Open-drive role floor is read by every implicit-membership resolve
     await db.update(organizations).set({ policies: { openDriveRoleFloor: 'admin' } }).where(eq(organizations.id, h.org.id));
     expect(await getUserAccessLevel(credentialActor(gil.id, null), h.pages.open.roadmap.id)).toEqual({ canView: true, canEdit: false, canShare: false, canDelete: false });
     expect(await getUserAccessLevel(credentialActor(ivy.id, null), h.pages.open.secret.id)).toEqual({ canView: true, canEdit: false, canShare: false, canDelete: false });
-  }, 180_000);
-
-  it('POL-6 (partial) DRV-6 (partial) dark, the SQL twin still answers exactly what getUserAccessLevel answers, cell by cell (the org rules switch on with ORGS_ENABLED, never before)', async () => {
-    const h = await harbor();
-    await setFloor(h.org.id, 'edit');
-    flags.orgsEnabled = false;
-    const lines: string[] = [];
-    for (const [personKey, person] of Object.entries(h.people)) {
-      const sqlVisible = new Set(await accessiblePageIds(credentialActor(person.id, null)));
-      for (const [driveKey, drivePages] of Object.entries(h.pages)) {
-        for (const [pageKey, page] of Object.entries(drivePages)) {
-          const ts = (await getUserAccessLevel(credentialActor(person.id, null), page.id))?.canView === true;
-          if (sqlVisible.has(page.id) !== ts) lines.push(`${personKey}@${driveKey}/${pageKey}: sql ${sqlVisible.has(page.id)}, ts ${ts}`);
-        }
-      }
-    }
-    expect(lines).toEqual([]);
-    // Not vacuous: dark, Sam's stale org row on the PRIVATE Ledger still opens it in both, as before orgs.
-    expect(await getUserAccessLevel(credentialActor(h.people.sam.id, null), h.pages.priv.roadmap.id)).not.toBeNull();
-    expect(await accessiblePageIds(credentialActor(h.people.sam.id, null))).toContain(h.pages.priv.roadmap.id);
   }, 180_000);
 });

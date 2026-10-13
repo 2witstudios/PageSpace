@@ -206,7 +206,7 @@ export function decideJoinRequestApprover({
   drive: JoinDrive | null;
 }): { ok: true; drive: JoinDrive & { orgId: string } } | JoinRequestRefusal {
   if (!isLiveOrgDrive(drive) || actorOrgRole === null) return requestNotFound();
-  const authority = decideDriveLeadAuthority({ orgsEnabled: true, userId: actorId, drive, orgRole: actorOrgRole });
+  const authority = decideDriveLeadAuthority({ userId: actorId, drive, orgRole: actorOrgRole });
   if (!authority.allowed) {
     if (drive.orgVisibility === 'PRIVATE') return requestNotFound();
     return refuse('NOT_APPROVER', 403, 'Only the drive lead or an organization Owner or Admin can answer join requests.');

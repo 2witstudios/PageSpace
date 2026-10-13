@@ -120,8 +120,7 @@ describe('POST /api/ai/btw credit gate', () => {
     mocks.calculateCost.mockReturnValue(0.002);
     mocks.requiresPro.mockReturnValue(false);
     mocks.sessionDrive.mockResolvedValue('d1');
-    // While orgs are dark the funding tier is the caller's own (the real function answers
-    // it with no reads); a test that needs a funder's tier overrides this.
+    // By default the funding tier is the caller's own; a test that needs a funder's tier overrides this.
     mocks.entitlement.mockImplementation(async (_userId: string, tier: string) => tier);
   });
 

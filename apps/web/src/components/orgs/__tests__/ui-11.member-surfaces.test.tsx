@@ -25,7 +25,6 @@ const mocks = vi.hoisted(() => ({
 const NORTHWIND = { id: 'org_nw', name: 'Northwind Labs', slug: 'northwind', avatarUrl: null, role: 'MEMBER' as const, lapsed: true };
 const READ_ONLY = { kind: 'read_only' as const, canManageBilling: false as const };
 
-vi.mock('@pagespace/lib/organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 vi.mock('next/navigation', () => ({
   useParams: () => ({ orgId: 'org_nw', driveId: 'd-product' }),
   useRouter: () => ({ push: mocks.push }),

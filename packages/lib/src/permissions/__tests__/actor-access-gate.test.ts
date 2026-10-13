@@ -10,7 +10,6 @@ vi.mock('../actor-authentication', () => ({
   filterResourcesForActor: vi.fn(async () => new Set<string>()),
   explainOrgAuthenticationDenial: vi.fn(async () => 'org_reauthentication_required'),
 }));
-vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: false }));
 vi.mock('../org-drive-membership', () => ({
   loadEffectiveDriveMembership: vi.fn(),
   loadOrgRolesForUser: vi.fn(),

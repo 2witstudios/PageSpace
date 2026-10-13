@@ -14,7 +14,6 @@
  * Every row a test creates is deleted, children before parents, users last (audit rows stay: they are chain links).
  */
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
-import { createRequire } from 'node:module';
 import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db';
 import { and, eq, inArray } from '@pagespace/db/operators';
@@ -24,16 +23,6 @@ import { users } from '@pagespace/db/schema/auth';
 import { drives } from '@pagespace/db/schema/core';
 import { organizations, orgDomains, orgMembers, orgSubscriptions } from '@pagespace/db/schema/organizations';
 import type { SeatBillingPort } from '@pagespace/lib/organizations/seat-service';
-
-vi.mock('@pagespace/lib/organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
-
-/**
- * apps/web loads @pagespace/lib from its built CommonJS dist, and lib's own modules read the dark-ship constant
- * through require(), which vi.mock does not reach. Orgs are switched on for lib the only way that reaches it: on
- * the one shared module object every dist require() returns, restored after the suite.
- */
-const libOrgsFlag = createRequire(import.meta.url)('@pagespace/lib/organizations/orgs-enabled') as { ORGS_ENABLED: boolean };
-const shippedOrgsEnabled = libOrgsFlag.ORGS_ENABLED;
 
 const mail = vi.hoisted(() => ({ links: new Map<string, string>() }));
 vi.mock('@pagespace/lib/services/email-service', async (importOriginal) => ({
@@ -103,7 +92,6 @@ beforeAll(async () => {
   resetDefaultSecurityAuditForTests();
   vi.stubEnv('WEB_APP_URL', 'http://localhost');
   vi.stubEnv('OAUTH_STATE_SECRET', 'sec-1-oauth-state-secret-for-integration-tests');
-  libOrgsFlag.ORGS_ENABLED = true;
 });
 
 afterEach(async () => {
@@ -126,7 +114,6 @@ afterEach(async () => {
 });
 
 afterAll(async () => {
-  libOrgsFlag.ORGS_ENABLED = shippedOrgsEnabled;
   vi.unstubAllEnvs();
   for (const [key, value] of savedAuditEnv) {
     if (value === undefined) delete process.env[key];

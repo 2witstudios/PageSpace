@@ -6,7 +6,7 @@
  *
  * REAL: the un-park service, the permissions decision, the app billing gate (pool row lock, seat
  * cap), the POL-10 policy read, all against Postgres. Faked: the hosting kill switch (forced on) and
- * the audit chain (captured, as the policies suite does), and ORGS_ENABLED (on, as the org suites run).
+ * the audit chain (captured, as the policies suite does).
  *
  * Requires DATABASE_URL → a migrated Postgres. Every row it creates is deleted.
  */
@@ -45,8 +45,6 @@ vi.mock('../../../audit/security-audit', async (importOriginal) => {
     },
   };
 });
-
-vi.mock('../../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 
 const deps: AppUnparkDeps = { ...defaultAppUnparkDeps, isEnabled: () => true };
 

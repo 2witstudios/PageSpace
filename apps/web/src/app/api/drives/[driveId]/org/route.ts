@@ -29,7 +29,7 @@ import { actorFromAuth } from '@/lib/auth/request-actor';
  * A session or an unscoped MCP key (X-1: `drives.moveToOrg`, `drives.moveOutOfOrg`,
  * `drives.setOrgVisibility`); the org gate refuses a drive-scoped key and the org's sign-in policy
  * applies to the credential (the drive's org, and the target org on a move in). Authority is the
- * service's, through requireOrgRole (ORG-5). Dark while ORGS_ENABLED is false.
+ * service's, through requireOrgRole (ORG-5).
  */
 
 const moveInSchema = z.object({

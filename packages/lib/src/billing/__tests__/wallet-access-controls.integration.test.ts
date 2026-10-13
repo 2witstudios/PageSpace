@@ -50,8 +50,6 @@ import {
   updateDriveWallet,
 } from '../../services/drive-wallet-service';
 
-vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
-
 // A seam AFTER the unlocked resolution returns: a test changes the world before the gate's locked re-check.
 const afterResolution = vi.hoisted(() => ({ run: null as null | (() => Promise<void>) }));
 vi.mock('../spend-resolution', async (importOriginal) => {
@@ -181,7 +179,7 @@ const moveDeps: OrgDriveServiceDeps = {
   getOrgDriveCreationPolicy: async () => 'members',
 };
 
-describe('wallet access, visibility and controls (orgs on, real Postgres)', () => {
+describe('wallet access, visibility and controls (real Postgres)', () => {
   beforeAll(async () => {
     try {
       await db.select({ id: wallets.id }).from(wallets).limit(1);

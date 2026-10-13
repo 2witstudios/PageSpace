@@ -3,7 +3,6 @@ import { listAccessibleDrives } from '@pagespace/lib/services/drive-service';
 import { getOrgPolicies } from '@pagespace/lib/organizations/policy-reader';
 import { findOrganizationNames } from '@pagespace/lib/organizations/repository';
 import { lockedOrgDrives, type OrgAuthenticationPolicy } from '@pagespace/lib/organizations/authentication-policy-core';
-import { ORGS_ENABLED } from '@pagespace/lib/organizations/orgs-enabled';
 import { HELD_DRIVES, automationActor } from '@pagespace/lib/permissions/access-actor';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -21,7 +20,6 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 export async function GET(request: Request) {
   const auth = await authenticateRequestWithOptions(request, { allow: ['session'] as const, requireCSRF: false });
   if (isAuthError(auth)) return auth.error;
-  if (!ORGS_ENABLED) return NextResponse.json({ locked: [] });
 
   try {
     // The drives the PERSON holds, without this credential's sign-in check (which would hide exactly the locked

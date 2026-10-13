@@ -8,7 +8,6 @@ import { MODEL_ENTITLEMENT_MESSAGES, modelEntitlement } from '@/lib/ai/core/mode
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
 import { automationRunUnreserved, automationSpend } from '@pagespace/lib/billing/spend-target';
 import { automationRefFor } from '@pagespace/lib/billing/automation-attribution';
-import { ORGS_ENABLED } from '@pagespace/lib/organizations/orgs-enabled';
 import { isBillingEnabled } from '@pagespace/lib/deployment-mode';
 import { filterToolsForEphemeralWorkspace, filterToolsForImageGen, filterToolsForSandboxEnablement, filterToolsForSandboxTier, SANDBOX_COMPUTE_TOOL_NAMES } from '@/lib/ai/core/tool-filtering';
 import { resolveSandboxToolEligibility } from '@/lib/ai/core/sandbox-tool-eligibility';
@@ -238,7 +237,6 @@ export async function executeWorkflow(
       const creditSpend = admission?.creditSpend ?? options.creditSpend ?? { spend: automationSpend(input.driveId) };
       const runsModel = hasAiStep(resolveSteps({ steps: input.steps ?? null, prompt: input.prompt, agentPageId: input.agentPageId }));
       if (runsModel && automationRunUnreserved({
-        orgsEnabled: ORGS_ENABLED,
         billingEnabled: isBillingEnabled(),
         target: creditSpend.spend,
         walletId: creditSpend.walletId,

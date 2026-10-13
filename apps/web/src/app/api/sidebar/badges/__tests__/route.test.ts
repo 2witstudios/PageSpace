@@ -42,7 +42,7 @@ vi.mock('@pagespace/db/schema/notifications', () => ({ notifications: {} }));
 vi.mock('@pagespace/db/schema/core', () => ({ pages: {} }));
 vi.mock('@pagespace/db/schema/calendar', () => ({ calendarEvents: {}, eventAttendees: {} }));
 
-// The one member-drive set (org-aware; owned drives plus accepted rows while dark).
+// The one member-drive set (org-aware).
 vi.mock('@pagespace/lib/permissions/member-drives', () => ({
   getMemberDriveIds: vi.fn(async () => ['drive_member']),
 }));

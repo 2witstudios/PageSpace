@@ -1,6 +1,5 @@
 'use client';
 
-import { ORGS_ENABLED } from '@pagespace/lib/organizations/orgs-enabled';
 import { AutomationSkipNote, AutomationSpendLine, isSpendSkip } from '@/components/wallets/AutomationSpendState';
 import { memo, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Check, Copy, Webhook } from 'lucide-react';
@@ -416,7 +415,7 @@ function PageWebhooksDialogImpl({ open, onOpenChange, pageId, pageType }: PageWe
                       <span className="text-xs font-mono text-muted-foreground truncate block">
                         …{webhook.webhookToken.slice(-8)}
                       </span>
-                      {ORGS_ENABLED && webhook.ownerLeftAt ? (
+                      {webhook.ownerLeftAt ? (
                         <AutomationSpendLine creatorName={null} walletLabel={null} ownerLeft />
                       ) : isSpendSkip(webhook.lastFireError) ? (
                         <AutomationSkipNote error={webhook.lastFireError} driveId={null} className="text-xs text-muted-foreground mt-1" />

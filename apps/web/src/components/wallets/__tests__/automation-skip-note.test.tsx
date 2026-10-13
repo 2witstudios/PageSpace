@@ -1,7 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 
-vi.mock('@pagespace/lib/organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 vi.mock('@/hooks/useAutomationSpendContext', () => ({
   useAutomationSpendContext: () => ({ creatorNames: { 'u-priya': 'Priya Nair' }, walletLabel: 'Product wallet', orgName: 'Northwind Labs' }),
 }));

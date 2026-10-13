@@ -17,7 +17,6 @@ import { useEditingStore } from '@/stores/useEditingStore';
 import { toast } from 'sonner';
 import { fetchWithAuth, patch } from '@/lib/auth/auth-fetch';
 import useSWR from 'swr';
-import { ORGS_ENABLED } from '@pagespace/lib/organizations/orgs-enabled';
 import { OrgDriveCard } from '@/components/drives/OrgDriveCard';
 
 interface DriveMember {
@@ -206,7 +205,7 @@ export default function GeneralSettingsPage() {
         </CardContent>
       </Card>
 
-      {ORGS_ENABLED && drive && (
+      {drive && (
         <OrgDriveCard
           drive={drive}
           leadName={membersData?.members?.find((m) => m.source === 'lead')?.user?.name ?? null}
@@ -262,7 +261,7 @@ export default function GeneralSettingsPage() {
                 {humanCount} {humanCount === 1 ? 'member' : 'members'}
               </span>
             </div>
-            {ORGS_ENABLED && drive?.orgId && guestCount > 0 && (
+            {drive?.orgId && guestCount > 0 && (
               <div className="flex items-center gap-2 text-sm" data-testid="members-guest-count">
                 <span>
                   {guestCount} {guestCount === 1 ? 'guest' : 'guests'}

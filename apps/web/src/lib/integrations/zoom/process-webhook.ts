@@ -10,7 +10,6 @@ import { acquireUserCreditHold } from '@/lib/ai/core/user-credit-hold';
 import { automationRunUnreserved, automationSpend } from '@pagespace/lib/billing/spend-target';
 import { lookupDriveBillingFacts } from '@pagespace/lib/billing/sandbox-payer';
 import { encodeAutomationRef } from '@pagespace/lib/billing/automation-attribution';
-import { ORGS_ENABLED } from '@pagespace/lib/organizations/orgs-enabled';
 import { isBillingEnabled } from '@pagespace/lib/deployment-mode';
 import { getRecordings, downloadTranscript } from './zoom-api-client';
 import { getValidZoomAccessToken } from './token-refresh';
@@ -223,8 +222,7 @@ async function enrichTranscript(
   const billing = { userId: connection.userId, spend: automationSpend(targetDriveId) };
   let hold: Awaited<ReturnType<typeof acquireUserCreditHold>>;
   try {
-    // A destination that vanished since the connection was set up is a gate that cannot be checked
-    // (while orgs are dark an automation bills as before wallets, so it must not reach the gate).
+    // A destination that vanished since the connection was set up is a gate that cannot be checked.
     if (!(await lookupDriveBillingFacts(targetDriveId))) throw new Error(`destination drive ${targetDriveId} not found`);
     hold = await acquireUserCreditHold(billing.userId, {
       spend: billing.spend,
@@ -249,7 +247,6 @@ async function enrichTranscript(
 
   try {
     if (automationRunUnreserved({
-      orgsEnabled: ORGS_ENABLED,
       billingEnabled: isBillingEnabled(),
       target: billing.spend,
       walletId: hold.walletId,

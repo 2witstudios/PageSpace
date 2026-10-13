@@ -15,7 +15,6 @@ import { users } from '@pagespace/db/schema/auth';
 import { organizations, orgMembers } from '@pagespace/db/schema/organizations';
 import type { SessionAuthResult } from '@/lib/auth';
 
-vi.mock('@pagespace/lib/organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 vi.mock('@/lib/auth', () => ({ authenticateRequestWithOptions: vi.fn(), isAuthError: vi.fn() }));
 vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
   checkDistributedRateLimit: vi.fn(async () => ({ allowed: true })),

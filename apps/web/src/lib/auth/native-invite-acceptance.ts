@@ -34,7 +34,6 @@ import { connectionInviteRepository } from '@/lib/repositories/connection-invite
 import { buildAcceptancePorts } from './invite-acceptance-adapters';
 import { buildPageAcceptancePorts } from './page-invite-acceptance-adapters';
 import { buildConnectionAcceptancePorts } from './connection-invite-acceptance-adapters';
-import { ORGS_ENABLED } from '@pagespace/lib/organizations/orgs-enabled';
 import { findInvitationByToken, type AcceptInvitationResult } from '@pagespace/lib/organizations/invitations';
 import { acceptOrgInviteForUser } from '@/lib/orgs/accept-org-invite';
 import { orgHubPath, orgInvitePagePath } from '@/lib/orgs/org-invite-view';
@@ -131,8 +130,7 @@ export const consumeAnyInviteIfPresent = async ({
       driveInviteRepository.findPendingInviteByTokenHash(tokenHash),
       pageInviteRepository.findPendingInviteByTokenHash(tokenHash),
       connectionInviteRepository.findPendingInviteByTokenHash(tokenHash),
-      // Dark while orgs are: no org invitation can be issued then, and none is looked up.
-      ORGS_ENABLED ? findInvitationByToken(inviteToken) : Promise.resolve(null),
+      findInvitationByToken(inviteToken),
     ]);
 
     // ORG-3: acceptInvitation is the whole decision (address, expiry, lapse), in its own transaction.

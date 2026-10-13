@@ -37,8 +37,6 @@ import { defaultAppUnparkDeps } from '../../services/app-hosting/app-unpark';
 import { updateOrgPolicies } from '../policies';
 import { credentialActor } from '../../permissions/access-actor';
 
-vi.mock('../orgs-enabled', () => ({ ORGS_ENABLED: true }));
-
 const AUDIT_ENV = ['ADMIN_DATABASE_URL', 'ADMIN_DB_BREAK_GLASS', 'AUDIT_TRUST_PLANE_REQUIRED'] as const;
 const savedEnv = new Map<string, string | undefined>();
 const created = { users: [] as string[], drives: [] as string[], orgId: '' };

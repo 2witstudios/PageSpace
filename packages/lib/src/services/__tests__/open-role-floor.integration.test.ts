@@ -21,8 +21,6 @@ import { drives } from '@pagespace/db/schema/core';
 import { driveMembers, driveRoles } from '@pagespace/db/schema/members';
 import { organizations, orgMembers, orgSubscriptions } from '@pagespace/db/schema/organizations';
 
-vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
-
 import { updateOrgPolicies } from '../../organizations/policies';
 import { OpenRoleFloorError, createDriveRole, deleteDriveRole, updateDriveRole } from '../drive-role-service';
 import { guardOpenRoleFloor } from '../../organizations/open-role-floor';

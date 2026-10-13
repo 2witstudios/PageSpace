@@ -1,7 +1,6 @@
 'use client';
 
 import useSWR from 'swr';
-import { ORGS_ENABLED } from '@pagespace/lib/organizations/orgs-enabled';
 import { guestChoice, inviteeStanding, seatChoice } from '@pagespace/lib/organizations/invite-choice';
 import type { GuestPolicy } from '@pagespace/lib/organizations/policies-core';
 import { Badge } from '@/components/ui/badge';
@@ -31,7 +30,7 @@ const policyFetcher = async (url: string): Promise<GuestPolicy | null> => {
 
 /** The org drive context the invite page needs: the drive's org, its members and its Guests policy. */
 export function useInviteOrgContext(orgId: string | null) {
-  const on = ORGS_ENABLED && orgId !== null;
+  const on = orgId !== null;
   const { data: members } = useSWR(on ? `/api/orgs/${orgId}/members` : null, membersFetcher, { revalidateOnFocus: false });
   const { data: guestPolicy } = useSWR(on ? `/api/orgs/${orgId}/policies` : null, policyFetcher, { revalidateOnFocus: false });
   return { enabled: on, members: members ?? [], guestPolicy: guestPolicy ?? null };

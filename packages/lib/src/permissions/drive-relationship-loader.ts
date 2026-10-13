@@ -1,7 +1,6 @@
 import { db } from '@pagespace/db/db';
 import { and, eq } from '@pagespace/db/operators';
 import { orgMembers } from '@pagespace/db/schema/organizations';
-import { ORGS_ENABLED } from '../organizations/orgs-enabled';
 import { recordOrgAuditEvent } from '../audit/org-audit';
 import { loggers } from '../logging/logger-config';
 import {
@@ -123,8 +122,8 @@ async function writeOrgPowerDriveAction(
 }
 
 /**
- * decideDriveLeadAuthority with its IO: the user's role in the drive's org (read only while
- * ORGS_ENABLED, only for an org drive the user does not lead), and the audit event when org
+ * decideDriveLeadAuthority with its IO: the user's role in the drive's org (read only for an org
+ * drive the user does not lead), and the audit event when org
  * Owner/Admin power is what allows the action.
  */
 export async function loadDriveLeadAuthority(
@@ -135,9 +134,9 @@ export async function loadDriveLeadAuthority(
   if (!(await checkActorDriveAuthentication(actor, drive.id)).allowed) return { allowed: false };
   const { userId } = actor;
   if (isDriveLead(userId, drive)) return { allowed: true, via: 'lead' };
-  if (!ORGS_ENABLED || drive.orgId === null) return { allowed: false };
+  if (drive.orgId === null) return { allowed: false };
 
-  const authority = decideDriveLeadAuthority({ orgsEnabled: true, userId, drive, orgRole: await orgRoleIn(drive.orgId, userId) });
+  const authority = decideDriveLeadAuthority({ userId, drive, orgRole: await orgRoleIn(drive.orgId, userId) });
   if (authority.allowed && authority.via !== 'lead') await writeOrgPowerDriveAction(userId, drive, action, authority);
   return authority;
 }
@@ -145,7 +144,7 @@ export async function loadDriveLeadAuthority(
 /**
  * For an action a drive owner-or-admin gate already allowed (rename and trash through the drive
  * settings route): write the same audit event when the actor holds org Owner/Admin power over the
- * drive and does not lead it. Writes nothing for the lead, a personal drive, or while dark.
+ * drive and does not lead it. Writes nothing for the lead or a personal drive.
  */
 export async function recordOrgPowerDriveAction(
   actor: AccessActor,

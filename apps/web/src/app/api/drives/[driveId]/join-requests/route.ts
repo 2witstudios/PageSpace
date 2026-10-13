@@ -19,7 +19,7 @@ import { safeParseBody } from '@/lib/validation/parse-body';
  *
  * A session or an unscoped MCP key (X-1: `drives.listJoinRequests`, `drives.requestToJoin`); the drive's
  * org sign-in policy applies to the credential. Authority is the service's, through requireOrgRole
- * (ORG-5). Dark while ORGS_ENABLED is false.
+ * (ORG-5).
  */
 
 const requestSchema = z.object({

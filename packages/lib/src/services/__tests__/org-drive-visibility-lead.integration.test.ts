@@ -31,8 +31,6 @@ import { listAccessibleDrives } from '../drive-service';
 import { getUserDriveAccess } from '../../permissions/permissions';
 import { credentialActor } from '../../permissions/access-actor';
 
-vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
-
 // Northwind Labs (Sequence Spec Part 2), per-run ids. Marcus leads Product. Jono owns the org,
 // Priya is an Admin, Lena and Nina are members, Eve is a member whose join was approved (a direct
 // row), Chris is a guest outside the org.

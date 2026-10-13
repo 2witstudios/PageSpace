@@ -1,7 +1,6 @@
 'use client';
 
 import useSWR from 'swr';
-import { ORGS_ENABLED } from '@pagespace/lib/organizations/orgs-enabled';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 
 interface MemberRow {
@@ -25,10 +24,9 @@ const fetcher = async (url: string): Promise<Record<string, string>> => {
 /**
  * Display names of a drive's members by user id (GET /api/drives/[driveId]/members), so the
  * automation surfaces can say whom a workflow spends as (D-OW-34) without a second source of names.
- * No request while organizations are dark.
  */
 export function useDriveMemberNames(driveId: string | null): Record<string, string> {
-  const { data } = useSWR<Record<string, string>>(ORGS_ENABLED && driveId ? `/api/drives/${encodeURIComponent(driveId)}/members` : null, fetcher, {
+  const { data } = useSWR<Record<string, string>>(driveId ? `/api/drives/${encodeURIComponent(driveId)}/members` : null, fetcher, {
     revalidateOnFocus: false,
   });
   return data ?? {};

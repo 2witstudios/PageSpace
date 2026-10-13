@@ -46,9 +46,6 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: { api: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } },
 }));
 vi.mock('@pagespace/lib/billing/credit-gate', () => ({ canConsumeAI: mockCanConsumeAI }));
-vi.mock('@pagespace/lib/organizations/orgs-enabled', () => ({
-  get ORGS_ENABLED() { return walletsLive.orgs; },
-}));
 vi.mock('@pagespace/lib/deployment-mode', () => ({ isBillingEnabled: () => walletsLive.billing }));
 // Whether the destination drive still exists; the target is decided in process-webhook itself.
 vi.mock('@pagespace/lib/billing/sandbox-payer', () => ({ lookupDriveBillingFacts: mockLookupDrive }));

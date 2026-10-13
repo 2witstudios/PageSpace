@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { decideAppUnparkAuthority, type AppUnparkAuthorityInput } from '../app-unpark-authority';
 
 const orgDrive = { ownerId: 'lead', orgId: 'org-1' };
-const base: AppUnparkAuthorityInput = { orgsEnabled: true, userId: 'x', drive: orgDrive, orgRole: null, costOwnerId: 'creator', isDriveMember: false };
+const base: AppUnparkAuthorityInput = { userId: 'x', drive: orgDrive, orgRole: null, costOwnerId: 'creator', isDriveMember: false };
 
 describe('decideAppUnparkAuthority', () => {
   it('WAL-2 (partial) the drive lead may un-park', () => {
@@ -14,8 +14,7 @@ describe('decideAppUnparkAuthority', () => {
     expect(decideAppUnparkAuthority({ ...base, orgRole: 'ADMIN' })).toEqual({ allowed: true, via: 'org-admin' });
   });
 
-  it('WAL-2 (partial) org power is nothing while orgs are dark or on a personal drive', () => {
-    expect(decideAppUnparkAuthority({ ...base, orgRole: 'ADMIN', orgsEnabled: false })).toEqual({ allowed: false });
+  it('WAL-2 (partial) org power is nothing on a personal drive', () => {
     expect(decideAppUnparkAuthority({ ...base, orgRole: 'ADMIN', drive: { ownerId: 'lead', orgId: null } })).toEqual({ allowed: false });
   });
 

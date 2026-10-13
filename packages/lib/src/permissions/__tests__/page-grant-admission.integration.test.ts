@@ -22,7 +22,6 @@ import { organizations, orgMembers, orgSubscriptions } from '@pagespace/db/schem
 import { orgGuestHolds } from '@pagespace/db/schema/org-guest-holds';
 import type { SessionClaims } from '../../auth/session-service';
 
-vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 const audit = vi.hoisted(() => ({ events: [] as Array<Record<string, unknown>> }));
 vi.mock('../../audit/security-audit', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../audit/security-audit')>();

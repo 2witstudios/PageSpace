@@ -22,7 +22,6 @@ import { driveJoinRequests } from '@pagespace/db/schema/drive-join-requests';
 import { organizations, orgMembers, type OrgRole } from '@pagespace/db/schema/organizations';
 import type { MCPAuthResult, SessionAuthResult } from '@/lib/auth';
 
-vi.mock('@pagespace/lib/organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(),

@@ -8,7 +8,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 // sharesMemberDrive (org-aware, accepted rows only), mocked here.
 // ============================================================================
 
-// The one member-drive set (org-aware; owned drives plus accepted rows while dark).
+// The one member-drive set (org-aware).
 vi.mock('@pagespace/lib/permissions/member-drives', () => ({
   getMemberDriveIds: vi.fn(async () => []),
   sharesMemberDrive: vi.fn(async () => false),

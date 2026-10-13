@@ -3,13 +3,12 @@
 import { UserX } from 'lucide-react';
 import { automationSpendCopy } from '@pagespace/lib/billing/spend-surface';
 import { automationSkipCopy } from '@pagespace/lib/billing/spend-refusal-copy';
-import { ORGS_ENABLED } from '@pagespace/lib/organizations/orgs-enabled';
 import { runSkipReason, type AutomationRunState } from '@pagespace/lib/billing/automation-run-record';
 import { useAutomationSpendContext } from '@/hooks/useAutomationSpendContext';
 import { Badge } from '@/components/ui/badge';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 
-/** What the automation surfaces know about where a drive's automations spend (orgs on only). */
+/** What the automation surfaces know about where a drive's automations spend. */
 export interface AutomationSpendContext {
   /** Drive members' names by user id. */
   creatorNames: Record<string, string>;
@@ -67,8 +66,8 @@ export function AutomationSkippedBadge({ state, creatorName, context }: { state:
   );
 }
 
-/** Whether a trigger's recorded error is a spend skip the surfaces explain (orgs on only). */
-export const isSpendSkip = (error: string | null | undefined): boolean => ORGS_ENABLED && runSkipReason(error) !== null;
+/** Whether a trigger's recorded error is a spend skip the surfaces explain. */
+export const isSpendSkip = (error: string | null | undefined): boolean => runSkipReason(error) !== null;
 
 /**
  * A trigger's last run, when it was skipped for spend or a departed creator (SPEND-6): why, in the

@@ -209,11 +209,6 @@
       "import": "./dist/organizations/membership.js",
       "require": "./dist/organizations/membership.js"
     },
-    "./organizations/orgs-enabled": {
-      "types": "./dist/organizations/orgs-enabled.d.ts",
-      "import": "./dist/organizations/orgs-enabled.js",
-      "require": "./dist/organizations/orgs-enabled.js"
-    },
     "./organizations/drive-picker-groups": {
       "types": "./dist/organizations/drive-picker-groups.d.ts",
       "import": "./dist/organizations/drive-picker-groups.js",

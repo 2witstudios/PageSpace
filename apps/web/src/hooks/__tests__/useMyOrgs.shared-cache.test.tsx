@@ -3,7 +3,6 @@ import { renderHook, waitFor } from '@testing-library/react';
 import { SWRConfig } from 'swr';
 import type { ReactNode } from 'react';
 
-vi.mock('@pagespace/lib/organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 const fetchWithAuth = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/auth/auth-fetch', () => ({
   fetchWithAuth,

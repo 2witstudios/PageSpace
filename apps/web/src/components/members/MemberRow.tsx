@@ -40,7 +40,7 @@ interface MemberRowProps {
     isGuest?: boolean;
   };
   driveId: string;
-  /** Show the org drive labels (source, Guest): orgs on and the drive belongs to an org. */
+  /** Show the org drive labels (source, Guest): the drive belongs to an org. */
   orgLabels?: boolean;
   currentUserRole: 'OWNER' | 'ADMIN' | 'MEMBER';
   onRemove: () => void;

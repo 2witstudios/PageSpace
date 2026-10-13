@@ -19,7 +19,7 @@ import { actorFromAuth } from '@/lib/auth/request-actor';
  * and both are told in realtime.
  *
  * A session or an unscoped MCP key (X-1: `drives.setOrgLead`); the org's sign-in policy applies to the
- * credential. Authority is the service's, through requireOrgRole (ORG-5). Dark while ORGS_ENABLED is false.
+ * credential. Authority is the service's, through requireOrgRole (ORG-5).
  */
 
 const leadSchema = z.object({

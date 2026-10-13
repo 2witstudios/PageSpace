@@ -27,9 +27,6 @@ vi.mock('@pagespace/lib/services/org-drive-service', () => ({
 vi.mock('@pagespace/lib/services/org-drive-service-deps', () => ({
   orgDriveServiceDeps: {},
 }));
-vi.mock('@pagespace/lib/organizations/orgs-enabled', () => ({
-  ORGS_ENABLED: false,
-}));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
   audit: vi.fn(),
   auditRequest: vi.fn(),

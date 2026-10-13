@@ -2,7 +2,6 @@ import { db } from '@pagespace/db/db';
 import { eq, and, isNotNull, inArray } from '@pagespace/db/operators';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { loadEffectiveDriveMembership } from './org-drive-membership';
-import { ORGS_ENABLED } from '../organizations/orgs-enabled';
 import { driveRoles, driveMembers } from '@pagespace/db/schema/members';
 import { isGuestRole } from './guest-role';
 import { applyOpenDriveFloor } from './open-drive-floor';
@@ -55,26 +54,16 @@ export async function fetchCustomRolePermissions(
 }
 
 // Returns the customRoleId assigned to the user in this drive, or null if none / not a member / a guest.
-// While ORGS_ENABLED it is the EFFECTIVE membership's role: an implicit Open member holds the
-// drive's default role, an org Owner/Admin none, and a stale org row counts for nothing.
+// It is the EFFECTIVE membership's role: an implicit Open member holds the drive's default role, an
+// org Owner/Admin none, and a stale org row counts for nothing.
 export async function getMemberCustomRoleId(driveId: string, userId: string): Promise<string | null> {
-  if (ORGS_ENABLED) {
-    const [drive] = await db
-      .select({ id: drives.id, orgId: drives.orgId, orgVisibility: drives.orgVisibility })
-      .from(drives)
-      .where(eq(drives.id, driveId))
-      .limit(1);
-    if (!drive) return null;
-    return (await loadEffectiveDriveMembership(userId, drive))?.customRoleId ?? null;
-  }
-
-  const result = await db
-    .select({ customRoleId: driveMembers.customRoleId, role: driveMembers.role })
-    .from(driveMembers)
-    .where(and(eq(driveMembers.driveId, driveId), eq(driveMembers.userId, userId), isNotNull(driveMembers.acceptedAt)))
+  const [drive] = await db
+    .select({ id: drives.id, orgId: drives.orgId, orgVisibility: drives.orgVisibility })
+    .from(drives)
+    .where(eq(drives.id, driveId))
     .limit(1);
-  if (result.length === 0 || isGuestRole(result[0].role)) return null;
-  return result[0].customRoleId ?? null;
+  if (!drive) return null;
+  return (await loadEffectiveDriveMembership(userId, drive))?.customRoleId ?? null;
 }
 
 // True when the user's ACCEPTED drive_members row in this drive is a GUEST row (a redeemed page

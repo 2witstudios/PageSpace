@@ -17,11 +17,9 @@ import { memberAccessWidens } from '../organizations/loosening-core';
 import { loadEffectiveDriveMembership, loadExplicitScopeAuthority, loadOrgRolesForUser, resolveEffectiveDriveMemberships } from '../permissions/org-drive-membership';
 import { decideExplicitDriveScope, decideListedDriveRole, type ExplicitScopeAuthority } from '../permissions/org-drive-resolution';
 import { driveMembershipRow } from '../permissions/drive-member-role';
-import { ORGS_ENABLED } from '../organizations/orgs-enabled';
 import type { AccessActor } from '../permissions/access-actor';
 import { checkActorDriveAuthentication, filterDrivesForActor } from '../permissions/actor-authentication';
 import { isDriveLead } from '../permissions/drive-relationship';
-import { isGuestRole } from '../permissions/guest-role';
 import type { OpenRoleFloor } from '../organizations/policies-core';
 
 // ============================================================================
@@ -93,142 +91,17 @@ export interface DriveAccessInfo {
  * List all drives accessible to a user (owned + shared)
  * Handles deduplication when a drive appears in multiple sources
  *
- * The picker, the sidebar and accessible-drives all read this one list (DRV-9). While
- * ORGS_ENABLED it also lists the OPEN drives of the user's orgs and applies the org listing
- * rules (decideListedDriveRole); while dark it is exactly the pre-org listing.
+ * The picker, the sidebar and accessible-drives all read this one list (DRV-9). It also lists the
+ * OPEN drives of the user's orgs and applies the org listing rules (decideListedDriveRole).
  */
 export async function listAccessibleDrives(
   actor: AccessActor,
   options: ListDrivesOptions = {}
 ): Promise<DriveWithAccess[]> {
-  const listed = ORGS_ENABLED
-    ? await listAccessibleDrivesWithOrgs(actor.userId, options)
-    : await listUserDrives(actor.userId, options);
+  const listed = await listAccessibleDrivesWithOrgs(actor.userId, options);
   // SEC-2/3: an org drive whose sign-in policy the actor's credential fails is not listed (D-OW-45).
   const allowed = await filterDrivesForActor(actor, listed.map((drive) => drive.id));
   return listed.filter((drive) => allowed.has(drive.id));
-}
-
-/** listAccessibleDrives while ORGS_ENABLED is false: the pre-org listing. */
-async function listUserDrives(
-  userId: string,
-  options: ListDrivesOptions
-): Promise<DriveWithAccess[]> {
-  const { includeTrash = false, tokenScopable = false } = options;
-
-  // 1. Get owned drives
-  const ownedDrives = await db.query.drives.findMany({
-    where: includeTrash
-      ? eq(drives.ownerId, userId)
-      : and(eq(drives.ownerId, userId), eq(drives.isTrashed, false)),
-  });
-
-  // 2. Get drives where user is a member (including last access time). A GUEST
-  // row is not a membership: its drive is reached, like any page collaborator's,
-  // through step 3 — never token-scopable, never drive-wide create.
-  const memberRows = await db
-    .selectDistinct({ driveId: driveMembers.driveId, role: driveMembers.role, customRoleId: driveMembers.customRoleId, lastAccessedAt: driveMembers.lastAccessedAt })
-    .from(driveMembers)
-    .where(and(
-      eq(driveMembers.userId, userId),
-      isNotNull(driveMembers.acceptedAt),
-    ));
-  const memberDrives = memberRows.filter((d) => !isGuestRole(d.role));
-
-  // 3. Get drives where user has page-level permissions
-  // Skip this if tokenScopable is true (only owned + member drives can be scoped to tokens)
-  const permissionDrives = tokenScopable
-    ? []
-    : await db
-        .selectDistinct({ driveId: pages.driveId })
-        .from(pagePermissions)
-        .leftJoin(pages, eq(pagePermissions.pageId, pages.id))
-        .where(and(
-          eq(pagePermissions.userId, userId),
-          eq(pagePermissions.canView, true),
-          // An expired share lists nothing, as it opens nothing (getUserAccessLevel, getDriveIdsForUser).
-          or(isNull(pagePermissions.expiresAt), gt(pagePermissions.expiresAt, new Date())),
-        ));
-
-  // 4. Build role map and lastAccessedAt map (membership role takes precedence)
-  const driveRoles = new Map<string, 'OWNER' | 'ADMIN' | 'MEMBER'>();
-  const driveLastAccessed = new Map<string, Date | null>();
-  const memberCustomRoleIds = new Map<string, string | null>();
-  const allSharedDriveIds = new Set<string>();
-
-  for (const d of memberDrives) {
-    if (d.driveId) {
-      allSharedDriveIds.add(d.driveId);
-      driveRoles.set(d.driveId, d.role as 'OWNER' | 'ADMIN' | 'MEMBER');
-      memberCustomRoleIds.set(d.driveId, d.customRoleId ?? null);
-      driveLastAccessed.set(d.driveId, d.lastAccessedAt);
-    }
-  }
-
-  for (const d of permissionDrives) {
-    if (d.driveId) {
-      allSharedDriveIds.add(d.driveId);
-      // Only set MEMBER if not already assigned a role from membership
-      if (!driveRoles.has(d.driveId)) {
-        driveRoles.set(d.driveId, 'MEMBER');
-      }
-    }
-  }
-
-  // 5. Fetch shared drive details (excluding owned drives)
-  const sharedDriveIds = Array.from(allSharedDriveIds);
-  const sharedDrives = sharedDriveIds.length
-    ? await db.query.drives.findMany({
-        where: includeTrash
-          ? and(inArray(drives.id, sharedDriveIds), not(eq(drives.ownerId, userId)))
-          : and(
-              inArray(drives.id, sharedDriveIds),
-              not(eq(drives.ownerId, userId)),
-              eq(drives.isTrashed, false)
-            ),
-      })
-    : [];
-
-  // 6. Drive-wide create permission (#2627): one resolver for the DTO flag.
-  // Owned drives enter as OWNER; shared drives only when the user holds an
-  // actual membership — page-collaborator-only drives are not memberships
-  // and fail closed below. Batched: a single custom-role query at most.
-  const ownedDriveIds = new Set(ownedDrives.map((drive) => drive.id));
-  const canCreatePagesMap = await resolveDriveWideCanEdit([
-    ...ownedDrives.map((drive) => ({ driveId: drive.id, role: 'OWNER' as const, customRoleId: null, openDriveFloor: null })),
-    // Dark (ORGS_ENABLED false): no org resolution, so no POL-6 floor.
-    ...memberDrives
-      .filter((d) => d.driveId && !ownedDriveIds.has(d.driveId))
-      .map((d) => ({
-        driveId: d.driveId as string,
-        role: d.role as 'OWNER' | 'ADMIN' | 'MEMBER',
-        customRoleId: memberCustomRoleIds.get(d.driveId as string) ?? null,
-        openDriveFloor: null,
-      })),
-  ]);
-
-  // 7. Combine and deduplicate (owned drives take precedence)
-  const allDrives: DriveWithAccess[] = [
-    ...ownedDrives.map((drive) => ({
-      ...drive,
-      isOwned: true,
-      role: 'OWNER' as const,
-      canCreatePages: true,
-      lastAccessedAt: driveLastAccessed.get(drive.id) ?? null,
-    })),
-    ...sharedDrives.map((drive) => ({
-      ...drive,
-      isOwned: false,
-      role: driveRoles.get(drive.id) || ('MEMBER' as const),
-      canCreatePages: canCreatePagesMap.get(drive.id) ?? false,
-      lastAccessedAt: driveLastAccessed.get(drive.id) ?? null,
-    })),
-  ];
-
-  // Deduplicate by drive ID (first occurrence wins - owned drives first)
-  const uniqueDrives = Array.from(new Map(allDrives.map((d) => [d.id, d])).values());
-
-  return uniqueDrives;
 }
 
 async function listAccessibleDrivesWithOrgs(
@@ -334,7 +207,6 @@ async function listAccessibleDrivesWithOrgs(
   for (const drive of sharedDrives) {
     const row = rowByDrive.get(drive.id);
     const role = decideListedDriveRole({
-      orgsEnabled: true,
       drive: { orgId: drive.orgId, orgVisibility: drive.orgVisibility },
       orgRole: drive.orgId ? orgRoles.get(drive.orgId) ?? null : null,
       row: driveMembershipRow(row),
@@ -551,7 +423,7 @@ export async function validateDriveScopeAccess(
 
 /**
  * Which membership may back an explicit-role token or OAuth drive scope on a drive the user does
- * not own (explicitScopeAuthorityRow). `orgDrive: false` while dark or on a personal drive.
+ * not own (explicitScopeAuthorityRow). `orgDrive: false` on a personal drive.
  */
 export async function getExplicitScopeAuthority(driveId: string, userId: string): Promise<ExplicitScopeAuthority> {
   return loadExplicitScopeAuthority(userId, driveId);

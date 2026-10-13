@@ -1,6 +1,6 @@
 /**
  * Every AI call inside a drive names exactly one source before it runs (Spec SPEND-1) — real
- * Postgres, the real gate, orgs on.
+ * Postgres, the real gate.
  *
  * Each entry point hands the gate the target of the session it runs in, and the gate answers ONE
  * wallet and places ONE hold on it before any model is called (nothing is charged until the call
@@ -42,8 +42,6 @@ import {
   resolvedSpend,
   type SpendTarget,
 } from '../spend-target';
-
-vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 
 let dbAvailable = false;
 const originalMode = process.env.DEPLOYMENT_MODE;

@@ -19,8 +19,6 @@ import { requireDb } from '@pagespace/db/test/require-db';
 import { resolveEntitlementTier } from '../credit-gate';
 import { automationSpend, driveSpend } from '../spend-target';
 
-vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
-
 let dbAvailable = false;
 const originalMode = process.env.DEPLOYMENT_MODE;
 

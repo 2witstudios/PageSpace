@@ -3,9 +3,8 @@
  * its own, so it is gated and reserved on its turn's spend target before the model runs and
  * settles exactly once — and a refusal leaves the conversation exactly as it was.
  *
- * apps/web loads @pagespace/lib from its built dist, whose ORGS_ENABLED is the shipped
- * constant (false), so a drive target resolves to the caller's personal root here: this suite
- * proves the path production runs today. The drive-wallet and automation targets are the
+ * The conversation lives on the caller's own personal drive with no drive wallet, so its drive
+ * target resolves to the caller's own credits. The drive-wallet and automation targets are the
  * gate's own (packages/lib wallet-gate / automation-spend integration suites); the compaction
  * unit suite proves runCompaction hands the gate its turn's target unchanged.
  *

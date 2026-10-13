@@ -1,12 +1,10 @@
 'use client';
 
 /**
- * Org data for the org surfaces (UI-1, UI-2, UI-7). Every hook is dark while ORGS_ENABLED is false:
- * it fetches nothing and returns nothing, so no org UI shows while orgs are dark.
+ * Org data for the org surfaces (UI-1, UI-2, UI-7).
  */
 import { useEffect, useRef } from 'react';
 import useSWR, { useSWRConfig } from 'swr';
-import { ORGS_ENABLED } from '@pagespace/lib/organizations/orgs-enabled';
 import type { OrgChangedPayload, WalletChangedPayload } from '@pagespace/lib/realtime/org-wallet-events';
 import { orgRoleAtLeast } from '@pagespace/lib/organizations/org-roles';
 import { useSocketStore } from '@/stores/useSocketStore';
@@ -32,21 +30,21 @@ const SWR_OPTIONS = { revalidateOnFocus: false, isPaused: () => useEditingStore.
 /** My organizations for the org surfaces: the same GET /api/orgs cache entry the picker reads (useMyOrganizations). */
 export function useMyOrgs(): { orgs: OrgSummary[] | undefined; error: unknown; isLoading: boolean; mutate: () => Promise<unknown> } {
   const { loaded, error, isLoading, refresh } = useMyOrganizations();
-  return { orgs: loaded, error, isLoading: ORGS_ENABLED && isLoading, mutate: refresh };
+  return { orgs: loaded, error, isLoading: isLoading, mutate: refresh };
 }
 
 export function useOrg(orgId: string | undefined) {
   const { data, error, isLoading, mutate } = useSWR<OrgDetail>(
-    ORGS_ENABLED && orgId ? orgKeys.detail(orgId) : null,
+    orgId ? orgKeys.detail(orgId) : null,
     orgFetcher,
     SWR_OPTIONS,
   );
-  return { org: data, error, isLoading: ORGS_ENABLED && !!orgId && isLoading, mutate };
+  return { org: data, error, isLoading: !!orgId && isLoading, mutate };
 }
 
 /** Admin-only reads: each key is null (no request) unless the viewer manages the org. */
 function useManagerSWR<T>(key: string | null, role: OrgRole | undefined) {
-  return useSWR<T>(ORGS_ENABLED && key && orgRoleAtLeast(role, 'ADMIN') ? key : null, orgFetcher, SWR_OPTIONS);
+  return useSWR<T>(key && orgRoleAtLeast(role, 'ADMIN') ? key : null, orgFetcher, SWR_OPTIONS);
 }
 
 export function useOrgHubCounts(orgId: string, role: OrgRole | undefined): OrgHubCounts {
@@ -72,7 +70,7 @@ export function useOrgHubCounts(orgId: string, role: OrgRole | undefined): OrgHu
  * lists to each member only what they may see there (decideDriveDirectoryEntry).
  */
 export function useOrgDriveDirectory(orgId: string | undefined) {
-  return useSWR<{ drives: OrgDriveDirectoryEntry[] }>(ORGS_ENABLED && orgId ? orgKeys.drives(orgId) : null, orgFetcher, SWR_OPTIONS);
+  return useSWR<{ drives: OrgDriveDirectoryEntry[] }>(orgId ? orgKeys.drives(orgId) : null, orgFetcher, SWR_OPTIONS);
 }
 
 /** A read for Owner and Admins (the org settings pages); null key, no request, for anyone else. */
@@ -96,11 +94,11 @@ export function useOrgRealtime(viewedOrgId?: string) {
   const deferred = useRef<OrgChangedPayload[]>([]);
 
   useEffect(() => {
-    if (ORGS_ENABLED) connect();
+    connect();
   }, [connect]);
 
   useEffect(() => {
-    if (!ORGS_ENABLED || !socket) return;
+    if (!socket) return;
     const refresh = (payload: OrgChangedPayload) => void mutate(orgChangeRefreshes(payload, viewedOrgId));
     const onChanged = (payload: OrgChangedPayload) => {
       if (useEditingStore.getState().isAnyEditing()) {
@@ -135,7 +133,7 @@ export function useOrgWalletRealtime(orgId: string, driveIds: readonly string[])
   const key = driveIds.join(',');
 
   useEffect(() => {
-    if (!ORGS_ENABLED || !socket || driveIds.length === 0) return;
+    if (!socket || driveIds.length === 0) return;
     for (const driveId of driveIds) socket.emit('join_drive', driveId);
     const onChanged = (payload: WalletChangedPayload) => {
       const matcher = walletChangeRefreshes(payload, orgId, driveIds);

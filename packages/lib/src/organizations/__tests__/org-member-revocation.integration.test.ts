@@ -29,12 +29,6 @@ import { cleanupNorthwind, northwind } from '../../permissions/__tests__/fixture
 import { credentialActor } from '../../permissions/access-actor';
 import { tokenOwnerActor } from '../../permissions/__tests__/fixtures/token-owner-actor';
 
-const flags = vi.hoisted(() => ({ orgsEnabled: true }));
-vi.mock('../../organizations/orgs-enabled', () => ({
-  get ORGS_ENABLED() {
-    return flags.orgsEnabled;
-  },
-}));
 
 const createdClientIds: string[] = [];
 

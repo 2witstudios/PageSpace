@@ -1,9 +1,8 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { notFound, useParams, useRouter } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import { ChevronLeft } from 'lucide-react';
-import { ORGS_ENABLED } from '@pagespace/lib/organizations/orgs-enabled';
 import { driveWalletPanels } from '@pagespace/lib/billing/wallet-surface';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -24,11 +23,6 @@ import { CreateWalletCard, DonateCard } from '@/components/wallets/drive-wallet/
  * never the pool or anyone else's spend. Refreshes on `wallet:changed` (useDriveWallet).
  */
 export default function DriveWalletSettingsPage() {
-  if (!ORGS_ENABLED) notFound();
-  return <DriveWalletSettings />;
-}
-
-function DriveWalletSettings() {
   const params = useParams();
   const router = useRouter();
   const driveId = params.driveId as string;

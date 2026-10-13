@@ -7,17 +7,11 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { MCPAuthResult, SessionAuthResult } from '@/lib/auth';
 import type { OrgRole } from '@pagespace/db/schema/organizations';
 
-const flags = vi.hoisted(() => ({ orgsEnabled: true }));
 
 // The org sign-in policy (SEC-2/3) has its own suites; here every credential meets it.
 vi.mock('@pagespace/lib/permissions/actor-authentication', () => ({
   checkActorOrgAuthentication: vi.fn(async () => ({ allowed: true })),
   drivePolicyOrgId: vi.fn(async () => null),
-}));
-vi.mock('@pagespace/lib/organizations/orgs-enabled', () => ({
-  get ORGS_ENABLED() {
-    return flags.orgsEnabled;
-  },
 }));
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
@@ -60,7 +54,6 @@ const as = (role: OrgRole | null) => vi.mocked(findMembershipRole).mockResolvedV
 
 beforeEach(() => {
   vi.clearAllMocks();
-  flags.orgsEnabled = true;
   vi.mocked(isAuthError).mockImplementation((result) => 'error' in result);
   vi.mocked(authenticateRequestWithOptions).mockResolvedValue(session('user_priya'));
   vi.mocked(getOrgPolicies).mockResolvedValue({ ...DEFAULT_ORG_POLICIES });
@@ -200,13 +193,6 @@ describe('policies routes', () => {
       suspended: [], restored: [], blocked: { counts: {}, total: 0, items: [] }, signInBlocked: { members: 3, guests: 1, credentials: 5 },
     });
     expect(await (await PATCH(req('PATCH', '', { requireStrongSignIn: true }), ctx)).json()).toMatchObject({ signInBlocked: { members: 3, guests: 1, credentials: 5 } });
-  });
-
-  it('POL-1 (partial) the routes are dark with the orgs flag off', async () => {
-    flags.orgsEnabled = false;
-    as('OWNER');
-    expect((await GET(req('GET'), ctx)).status).toBe(404);
-    expect((await PATCH(req('PATCH', '', { guests: 'off' }), ctx)).status).toBe(404);
   });
   describe('published sites follow the publishing policies', () => {
     const changedPublishing = () =>

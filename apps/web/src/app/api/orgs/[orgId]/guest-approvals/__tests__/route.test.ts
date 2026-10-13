@@ -6,16 +6,10 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { SessionAuthResult } from '@/lib/auth';
 import type { OrgRole } from '@pagespace/db/schema/organizations';
 
-const flags = vi.hoisted(() => ({ orgsEnabled: true }));
 // The org sign-in policy (SEC-2/3) has its own suites; here every credential meets it.
 vi.mock('@pagespace/lib/permissions/actor-authentication', () => ({
   checkActorOrgAuthentication: vi.fn(async () => ({ allowed: true })),
   drivePolicyOrgId: vi.fn(async () => null),
-}));
-vi.mock('@pagespace/lib/organizations/orgs-enabled', () => ({
-  get ORGS_ENABLED() {
-    return flags.orgsEnabled;
-  },
 }));
 vi.mock('@/lib/auth', () => ({ authenticateRequestWithOptions: vi.fn(), isAuthError: vi.fn() }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({ loggers: { api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() } } }));
@@ -77,7 +71,6 @@ const claim = (over: Record<string, unknown> = {}) => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
-  flags.orgsEnabled = true;
   vi.mocked(isAuthError).mockImplementation((result) => 'error' in result);
   vi.mocked(authenticateRequestWithOptions).mockResolvedValue(session('user_priya'));
   vi.mocked(getOrgPolicies).mockResolvedValue({ ...DEFAULT_ORG_POLICIES, guests: 'approve' });
@@ -210,13 +203,6 @@ describe('the approval queue routes', () => {
     expect(res.status).toBe(409);
     expect(await res.json()).toMatchObject({ code: 'link_gone' });
     expect(requestGuestApproval).not.toHaveBeenCalled();
-  });
-
-  it('POL-2 (partial) the routes are dark with the orgs flag off', async () => {
-    flags.orgsEnabled = false;
-    as('OWNER');
-    expect((await get()).status).toBe(404);
-    expect((await decide({ decision: 'approve' })).status).toBe(404);
   });
 
   it('POL-2 (partial) approving a queued page grant writes exactly that grant and is audited; the drive invite handlers are not involved', async () => {
