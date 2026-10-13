@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useRef, useCallback, Fragment } from 'react';
-import { useParams, useRouter } from '@/retained-adapters/navigation';
+import { useParams } from '@/retained-adapters/navigation';
 import { useAuth } from '@/retained/hooks/useAuth';
 import { useDraft } from '@/retained/hooks/useDraft';
 import { buildDraftKey } from '@/retained/lib/draft/draft';
@@ -42,7 +42,8 @@ import { formatDistanceToNow } from 'date-fns';
 import { isFirstInGroup, formatMessageDate } from '@/retained/lib/messages/grouping';
 import { MessageDateSeparator } from '@/retained/components/messages/MessageDateSeparator';
 import { cn } from '@/retained/lib/utils';
-import { UserSafetyMenu } from '@/retained/components/moderation/UserSafetyMenu';
+import { ToolbarStrip } from '@/ui/frame/toolbar-strip/toolbar-strip';
+import { unreadMarkerOf, type UnreadMarker } from '@/retained/lib/messages/unread-divider';
 
 interface MessageAttachmentBearing {
   conversationId?: string;
@@ -121,7 +122,6 @@ interface DmConversation {
 
 export default function InboxDMPage() {
   const params = useParams();
-  const router = useRouter();
   const conversationId = params.conversationId as string;
   const { user } = useAuth();
   const [messages, setMessages] = useState<Message[]>([]);
@@ -156,6 +156,8 @@ export default function InboxDMPage() {
     // cannot leak its messageId into the next conversation's POST.
     setQuotedMessageId(null);
     setActiveQuotedSnapshot(null);
+    unreadTaken.current = false;
+    setUnreadMarker(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversationId]);
 
@@ -187,6 +189,17 @@ export default function InboxDMPage() {
       setMessages(messagesData.messages);
     }
   }, [messagesData]);
+
+  // The "N new" divider marks what was unread when the conversation opened. The GET
+  // reports messages as they were before it marked them read, so the first load is
+  // taken once; a later revalidation would read them all as read.
+  const [unreadMarker, setUnreadMarker] = useState<UnreadMarker | null>(null);
+  const unreadTaken = useRef(false);
+  useEffect(() => {
+    if (unreadTaken.current || !messagesData?.messages || !user?.id) return;
+    unreadTaken.current = true;
+    setUnreadMarker(unreadMarkerOf(messagesData.messages, user.id));
+  }, [messagesData, user?.id]);
 
   // The GET above marks the conversation read server-side; when it actually
   // cleared unread notifications, refetch so the bell/nav badge correct
@@ -608,27 +621,19 @@ export default function InboxDMPage() {
   return (
     <div role="region" aria-label={displayName} className="flex h-full w-full">
     <MessageDropZone inputRef={chatInputRef} enabled className="flex flex-col h-full flex-1 min-w-0">
-      {/* Header */}
-      <div className="flex-shrink-0 border-b border-border p-4">
-        <div className="flex items-center gap-3 max-w-4xl mx-auto">
-          <Avatar className="h-10 w-10">
-            <AvatarImage src={otherUser.image || otherUser.avatarUrl || ''} />
-            <AvatarFallback>{displayName.charAt(0).toUpperCase()}</AvatarFallback>
-          </Avatar>
-          <div className="min-w-0 flex-1">
-            <h2 className="font-semibold">{displayName}</h2>
-            {otherUser.username && (
-              <p className="text-sm text-muted-foreground">@{otherUser.username}</p>
-            )}
-          </div>
-          <UserSafetyMenu
-            userId={otherUser.id}
-            displayName={displayName}
-            conversationId={conversationId}
-            onBlocked={() => router.push('/dashboard/dms')}
-          />
-        </div>
-      </div>
+      {/* The 48px DM head is the column's (ui/messages/dm-head/conversation-head.tsx); this is the
+          conversation strip under it (C-DM-Conversation). The shared-drives line waits on an API
+          that reports the other person's drives. */}
+      <ToolbarStrip label="Conversation">
+        <Avatar className="h-[22px] w-[22px]">
+          <AvatarImage src={otherUser.image || otherUser.avatarUrl || ''} />
+          <AvatarFallback className="text-[9.5px]">{displayName.charAt(0).toUpperCase()}</AvatarFallback>
+        </Avatar>
+        <span className="min-w-0 flex-1 truncate text-[12.5px] text-muted-foreground">
+          <span className="font-semibold text-foreground">{displayName}</span>
+          {otherUser.username && <span className="ml-1 font-mono">@{otherUser.username}</span>}
+        </span>
+      </ToolbarStrip>
 
       {/* Messages */}
       <div className="flex-grow overflow-hidden relative">
@@ -655,6 +660,12 @@ export default function InboxDMPage() {
 
               return (
                 <Fragment key={message.id}>
+                {unreadMarker?.messageId === message.id && (
+                  <div role="separator" aria-label="New messages" className="mb-1 flex items-center gap-2.5 text-xs font-semibold text-status-warning">
+                    <span className="h-px flex-1 bg-status-warning/60" />
+                    {unreadMarker.count} new
+                  </div>
+                )}
                 {showDateSeparator && <MessageDateSeparator label={formatMessageDate(message.createdAt)} />}
                 <div role="article" aria-label={`Message from ${senderName}`} aria-busy={message.id.startsWith("temp-") || undefined} data-message-id={message.id} className={`group/msg flex items-start gap-4 ${rowSpacing} relative`}>
                   {isFirst ? (
@@ -692,7 +703,7 @@ export default function InboxDMPage() {
                           })}
                         </span>
                         {message.isEdited && (
-                          <span className="text-xs text-muted-foreground italic">(edited)</span>
+                          <span className="text-xs text-muted-foreground italic">· edited</span>
                         )}
                         {isLastRead && isOwnMessage && (
                           <span className="text-xs text-muted-foreground">Read</span>
@@ -757,7 +768,7 @@ export default function InboxDMPage() {
                         {!isFirst && (message.isEdited || (isLastRead && isOwnMessage)) && (
                           <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
                             {message.isEdited && (
-                              <span className="italic">(edited)</span>
+                              <span className="italic">· edited</span>
                             )}
                             {isLastRead && isOwnMessage && (
                               <span>Read</span>

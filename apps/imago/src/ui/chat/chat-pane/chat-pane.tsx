@@ -25,6 +25,9 @@ import { ChipsRow } from '../chips-row/chips-row';
 import { SideChatEmpty } from '../side-chat-empty/side-chat-empty';
 import { ImagoHistory } from '../imago-history/imago-history';
 import { FilesIntro } from '../files-intro/files-intro';
+import { MessagesGround } from '@/ui/messages/messages-ground/messages-ground';
+import { DmGround } from '@/ui/messages/dm-index/dm-index';
+import { groundFor } from './ground';
 import { usePathname } from 'next/navigation';
 import { RetainedSurface } from '@/retained-adapters/retained-provider';
 import { ProviderModelSelector } from '@/retained/components/ai/chat/input/ProviderModelSelector';
@@ -121,7 +124,8 @@ export function ChatPane({ stage, driveName, homeDriveId, leading = null, traili
     title: retainedSelection.agentTitle ?? (retainedSelection.agentId === null ? 'Imago' : 'Opening agent…'),
   } : chosenAgent;
   // The Files ground: no page open, so the column opens with the drive's page count (IMC-2.12).
-  const filesGround = stage.section === 'files' && stage.object === null && stage.driveId !== null;
+  // The Messages ground: unread counts on a drive's index (IMC-4.2); on /dm, the people you can message (IMC-4.5).
+  const ground = groundFor(stage);
   // A side chat with an agent beside a page, before its first message: the invitation and chips (IMC-3.11).
   const sideChatEmpty = chosenAgent !== null && stage.object?.kind === 'page' && conversationId === null && !resolving;
   const thread = view === 'history' ? <ImagoHistory agentId={agentId} activeId={conversationId} /> : <div ref={chatHost} className={context.density === 'roomy' ? 'mx-auto h-full min-h-0 w-full max-w-imago-ground' : 'h-full min-h-0'}><RetainedChat home={stage.section === 'chat'} agentId={agentId} name={agentName} conversationId={conversationId} resolving={resolving} placeholder={context.placeholder} aboveComposer={<>{sideChatEmpty ? <SideChatEmpty agentName={agentName} /> : null}<ChipsRow conversationId={conversationId} agentId={agentId} driveId={stage.driveId ?? undefined} /><SpendStrip /></>} /></div>;
@@ -157,9 +161,14 @@ export function ChatPane({ stage, driveName, homeDriveId, leading = null, traili
     streamingMessageId: null,
     notice: agentsError !== undefined || conversationsError !== undefined ? NOTICES.load : lost ? NOTICES.lost(lost) : null,
     citationDriveId: stage.driveId ?? homeDriveId,
-    content: filesGround && stage.driveId !== null ? (
+    content: ground === 'files' && stage.driveId !== null ? (
       <div className="flex h-full min-h-0 flex-col">
         <FilesIntro driveId={stage.driveId} driveName={driveName} />
+        <div className="min-h-0 flex-1">{thread}</div>
+      </div>
+    ) : ground === 'messages' || ground === 'dm' ? (
+      <div className="flex h-full min-h-0 flex-col">
+        {ground === 'dm' ? <DmGround /> : <MessagesGround />}
         <div className="min-h-0 flex-1">{thread}</div>
       </div>
     ) : thread,

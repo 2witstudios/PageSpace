@@ -1,6 +1,6 @@
 import { describe, test } from 'vitest';
 import { assert } from 'riteway/vitest';
-import { channelThreadsFrom, directThreadsFrom } from './from-api';
+import { channelThreadsFrom, directThreadsFrom, inboxThreadsFrom } from './from-api';
 import { conversation, inboxChannel } from './fixtures';
 import type { ConversationUserResponse } from './message';
 
@@ -50,6 +50,7 @@ describe('directThreadsFrom()', () => {
           kind: 'dm',
           id: 'm1',
           name: 'Grace',
+          username: 'grace',
           avatarUrl: 'https://img/grace.png',
           otherUserId: 'u2',
           lastMessageAt: '2026-10-05T10:00:00.000Z',
@@ -87,6 +88,7 @@ describe('directThreadsFrom()', () => {
         kind: 'dm',
         id: 'm1',
         name: '',
+        username: null,
         avatarUrl: null,
         otherUserId: null,
         lastMessageAt: '2026-10-05T10:00:00.000Z',
@@ -101,6 +103,25 @@ describe('directThreadsFrom()', () => {
       should: 'fall back to the profile avatar, as /api/inbox does',
       actual: named({ image: null, avatarUrl: 'https://img/profile.png' }).avatarUrl,
       expected: 'https://img/profile.png',
+    });
+  });
+});
+
+describe('inboxThreadsFrom()', () => {
+  test('the unified inbox page', () => {
+    const dm = { ...inboxChannel('m1', { name: 'Grace', lastMessagePreview: 'hi', unreadCount: 1 }), type: 'dm' as const, driveId: undefined };
+    assert({
+      given: 'a DM, a channel in drive d2, and a channel with no drive id',
+      should: 'keep the DM and the channel with its own drive, and leave out a channel that names no drive',
+      actual: inboxThreadsFrom([
+        dm,
+        inboxChannel('c1', { driveId: 'd2', lastMessageSender: 'Sam', lastMessagePreview: 'ship' }),
+        inboxChannel('c2', { driveId: undefined }),
+      ]).map((thread) => [thread.kind, thread.id, thread.kind === 'channel' ? thread.driveId : null, thread.unreadCount]),
+      expected: [
+        ['dm', 'm1', null, 1],
+        ['channel', 'c1', 'd2', 0],
+      ],
     });
   });
 });

@@ -61,8 +61,14 @@ export const inboxEventOf = (payload: unknown): InboxEvent | null => {
   };
 };
 
-/** What a list holds: the viewer's DMs, or one drive's channels. */
-export type ThreadScope = { readonly kind: 'dm' } | { readonly kind: 'channel'; readonly driveId: string };
+/**
+ * What a list holds: the viewer's DMs, one drive's channels, or the unified inbox of both. A
+ * channel scope with a null driveId is the channels of every drive the viewer can read.
+ */
+export type ThreadScope =
+  | { readonly kind: 'dm' }
+  | { readonly kind: 'channel'; readonly driveId: string | null }
+  | { readonly kind: 'all' };
 
 /** The list after an event; `refetch` when the event names a thread the list has not loaded. */
 export type Applied<T> = { readonly rows: readonly T[]; readonly refetch: boolean };
@@ -77,10 +83,12 @@ const byLatestPost = <T extends MessageThread>(rows: readonly T[]): readonly T[]
   });
 
 /** Whether the event can change a list of this scope (a thread reply never does). */
-export const concerns = (event: InboxEvent, scope: ThreadScope): boolean =>
-  event.operation !== 'thread_updated' &&
-  event.type === scope.kind &&
-  (scope.kind === 'dm' || event.driveId === scope.driveId);
+export const concerns = (event: InboxEvent, scope: ThreadScope): boolean => {
+  if (event.operation === 'thread_updated') return false;
+  if (scope.kind === 'all') return true;
+  if (event.type !== scope.kind) return false;
+  return scope.kind === 'dm' || scope.driveId === null || event.driveId === scope.driveId;
+};
 
 /**
  * A list after an inbox event, as classic's useInboxSocket applies it.

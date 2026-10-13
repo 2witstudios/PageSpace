@@ -37,13 +37,15 @@ interface UserSafetyMenuProps {
   /** The conversation the report is about, when there is one. */
   conversationId?: string;
   onBlocked?: () => void;
+  /** The trigger's accessible name; defaults to "More options for <name>". */
+  triggerLabel?: string;
 }
 
 /**
  * Report and Block for another user (App Review Guideline 1.2). Reports go to
  * the support inbox; a block stops direct messages in both directions.
  */
-export function UserSafetyMenu({ userId, displayName, conversationId, onBlocked }: UserSafetyMenuProps) {
+export function UserSafetyMenu({ userId, displayName, conversationId, onBlocked, triggerLabel }: UserSafetyMenuProps) {
   const [reportOpen, setReportOpen] = useState(false);
   const [blockOpen, setBlockOpen] = useState(false);
   const [reason, setReason] = useState('');
@@ -81,7 +83,7 @@ export function UserSafetyMenu({ userId, displayName, conversationId, onBlocked 
     <>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button variant="ghost" size="icon" aria-label={`More options for ${displayName}`}>
+          <Button variant="ghost" size="icon" aria-label={triggerLabel ?? `More options for ${displayName}`}>
             <MoreVertical className="h-4 w-4" />
           </Button>
         </DropdownMenuTrigger>
