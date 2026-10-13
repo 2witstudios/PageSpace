@@ -56,6 +56,9 @@ export interface EmbeddedCalendarState {
   readonly onDateChange: (date: Date) => void;
   readonly onOpenEventChange: (eventId: string | null) => void;
   readonly onComposingChange: (composing: boolean) => void;
+  /** Lifted task visibility, for a shell that draws its own Show tasks control. Defaults to shown. */
+  readonly showTasks?: boolean;
+  readonly onShowTasksChange?: (showTasks: boolean) => void;
 }
 
 interface CalendarViewProps {
@@ -115,7 +118,9 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
     [embeddedDateChange, currentDate],
   );
   const setViewMode = embedded ? embedded.onViewModeChange : setLocalViewMode;
-  const [showTasks, setShowTasks] = useState(true);
+  const [localShowTasks, setLocalShowTasks] = useState(true);
+  const showTasks = embedded?.showTasks ?? localShowTasks;
+  const setShowTasks = embedded?.onShowTasksChange ?? setLocalShowTasks;
   const [selectedEvent, setSelectedEvent] = useState<CalendarEvent | null>(null);
   const [isEventModalOpen, setIsEventModalOpen] = useState(false);
   // Track which deep-linked event id we've already opened, so a second event
@@ -722,7 +727,7 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
       {/* Calendar body: sidebar + content */}
       <div className="flex flex-1 overflow-hidden">
         {/* Sidebar (root calendar, desktop only) */}
-        {isUserContext && sidebarOpen && (
+        {isUserContext && !embedded && sidebarOpen && (
           <aside className="w-52 shrink-0 border-r overflow-y-auto p-3 hidden sm:block">
             <CalendarSidebar
               calendars={calendarEntries}

@@ -4,8 +4,6 @@ import { useState, useEffect, useRef } from 'react';
 import { Button } from '@/retained/components/ui/button';
 import { Input } from '@/retained/components/ui/input';
 import { Label } from '@/retained/components/ui/label';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/retained/components/ui/card';
-import { Badge } from '@/retained/components/ui/badge';
 import { Checkbox } from '@/retained/components/ui/checkbox';
 import {
   Select,
@@ -29,11 +27,15 @@ import {
   AlertDescription,
 } from '@/retained/components/ui/alert';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/retained/components/ui/tabs';
-import { Trash2, Copy, Plus, Eye, EyeOff, Key, Terminal, Check, Download, AlertTriangle, ArrowLeft, Shield, Code2, Pencil } from 'lucide-react';
+import { Copy, Plus, Eye, EyeOff, Check, Download, AlertTriangle, Shield } from 'lucide-react';
 import { toast } from 'sonner';
 import { formatDistanceToNow } from 'date-fns';
-import { useRouter } from '@/retained-adapters/navigation';
 import { post, del, patch, fetchWithAuth } from '@/retained/lib/auth/auth-fetch';
+import {
+  SettingsGroup,
+  SettingsScreen,
+  SettingsSection,
+} from '@/ui/settings/settings-screen/settings-screen';
 
 interface DriveRoleSelection {
   role: 'ADMIN' | 'MEMBER' | null;
@@ -198,23 +200,15 @@ for await (const chunk of stream) {
   }'`;
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <Code2 className="h-5 w-5" />
-          OpenAI-Compatible API
-        </CardTitle>
-        <CardDescription>
-          Use any MCP token as an API key with the OpenAI SDK or any compatible client
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="space-y-1">
-          <p className="text-sm font-medium">Base URL</p>
-          <div className="flex items-center gap-2">
-            <code className="flex-1 rounded-md bg-muted px-3 py-2 font-mono text-sm">{baseUrl}</code>
-            <CopyButton text={baseUrl} />
-          </div>
+    <SettingsSection
+      title="OpenAI-compatible API"
+      description="Use any MCP token as an API key with the OpenAI SDK or any compatible client."
+    >
+      <div className="flex flex-col gap-4">
+        <div className="flex items-center gap-3 rounded-xl border border-border px-4 py-3">
+          <span className="text-sm font-medium text-foreground">Base URL</span>
+          <code className="min-w-0 flex-1 truncate font-mono text-sm text-muted-foreground">{baseUrl}</code>
+          <CopyButton text={baseUrl} label="Copy" />
         </div>
 
         <div className="space-y-1">
@@ -249,13 +243,21 @@ for await (const chunk of stream) {
           Replace <code className="rounded bg-muted px-1">ps-agent://&lt;pageId&gt;</code> with the model ID
           found on each agent&apos;s <strong>Settings</strong> tab.
         </p>
-      </CardContent>
-    </Card>
+      </div>
+    </SettingsSection>
   );
 }
 
+/** The scope pill on a token row: All drives, one drive with its role, or a count. */
+function scopeLabelFor(token: MCPToken): string {
+  if (token.driveScopes.length === 0) return token.isScoped ? 'No drives' : 'All drives';
+  if (token.driveScopes.length > 1) return `${token.driveScopes.length} drives`;
+  const [scope] = token.driveScopes;
+  const roleLabel = scope.role === 'ADMIN' ? 'Admin' : scope.customRoleName || (scope.role === 'MEMBER' ? 'Member' : 'Inherit');
+  return `${scope.name} · ${roleLabel}`;
+}
+
 export default function MCPSettingsView() {
-  const router = useRouter();
   const [tokens, setTokens] = useState<MCPToken[]>([]);
   const [drives, setDrives] = useState<Drive[]>([]);
   const [loading, setLoading] = useState(true);
@@ -634,28 +636,14 @@ export default function MCPSettingsView() {
   );
 
   if (loading) {
-    return (
-      <div className="container mx-auto py-10">
-        <h1 className="text-3xl font-bold mb-6">MCP Integration</h1>
-        <p className="mb-8 text-muted-foreground">Loading...</p>
-      </div>
-    );
+    return <SettingsScreen title="MCP" lede="Loading..." />;
   }
 
   return (
-    <div className="container mx-auto py-10 space-y-10 px-10">
-      <div>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => router.push('/settings')}
-          className="mb-4"
-        >
-          <ArrowLeft className="h-4 w-4 mr-2" />
-          Back to Settings
-        </Button>
-        <h1 className="text-3xl font-bold mb-6">MCP Integration</h1>
-        <p className="mb-8 text-muted-foreground">
+    <SettingsScreen
+      title="MCP"
+      lede={
+        <>
           Connect Claude Code, Claude Desktop, and other MCP clients to PageSpace.{' '}
           <code className="rounded bg-muted px-1">pagespace login</code> is for you, personally —
           it grants only a key-management credential with no content access of its own, so it
@@ -666,65 +654,51 @@ export default function MCPSettingsView() {
             pagespace keys create --drive &lt;id&gt; --name agent
           </code>{' '}
           or the guided <code className="rounded bg-muted px-1">pagespace keys</code> wizard.
-        </p>
-      </div>
-
-      {/* New Token Display */}
+        </>
+      }
+    >
+      {/* New Token Display: the one-time value, shown with Copy */}
       {newToken && (
-        <Card className="border-green-600 dark:border-green-400 bg-green-50 dark:bg-green-950/30">
-          <CardHeader className="pb-3">
-            <CardTitle className="text-green-800 dark:text-green-400 text-lg">Token Created!</CardTitle>
-            <CardDescription className="text-green-700 dark:text-green-300">
-              Save this token now - it won&apos;t be shown again.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-3">
-              <div>
-                <Label className="text-sm font-medium">Token Name</Label>
-                <p className="text-sm">{newToken.name}</p>
-              </div>
-              <div>
-                <Label className="text-sm font-medium">Token Value</Label>
-                <div className="flex items-center gap-2 mt-1">
-                  <code className="flex-1 p-2 bg-muted border rounded text-sm font-mono text-foreground">
-                    {showNewToken ? newToken.token : '•'.repeat(48)}
-                  </code>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => setShowNewToken(!showNewToken)}
-                  >
-                    {showNewToken ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => copyToClipboard(newToken.token)}
-                  >
-                    <Copy className="w-4 h-4" />
-                  </Button>
-                </div>
-              </div>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  setNewToken(null);
-                  setShowNewToken(false);
-                }}
-              >
-                I&apos;ve saved this token
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
+        <div role="status" className="flex flex-col gap-3 rounded-xl border border-border bg-primary/10 p-4">
+          <div className="text-sm font-medium text-foreground">Token created — &ldquo;{newToken.name}&rdquo;</div>
+          <div className="flex items-center gap-2">
+            <code className="min-w-0 flex-1 truncate rounded-md border border-border bg-muted px-3 py-2 font-mono text-sm text-foreground">
+              {showNewToken ? newToken.token : 'mcp_' + '•'.repeat(24)}
+            </code>
+            <Button
+              size="sm"
+              variant="outline"
+              aria-label={showNewToken ? 'Hide token' : 'Show token'}
+              onClick={() => setShowNewToken(!showNewToken)}
+            >
+              {showNewToken ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => copyToClipboard(newToken.token)}>
+              <Copy className="w-4 h-4" />
+              <span className="ml-1">Copy</span>
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground">Copy it now. Existing token values can&apos;t be shown again.</p>
+          <div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setNewToken(null);
+                setShowNewToken(false);
+              }}
+            >
+              I&apos;ve saved this token
+            </Button>
+          </div>
+        </div>
       )}
 
       {/* Token Management */}
-      <section>
-        <div className="flex justify-between items-center mb-6">
-          <h2 className="text-2xl font-semibold">Your Tokens</h2>
+      <SettingsSection
+        title={`Your tokens ${tokens.length}`}
+        description="Scope a token to the drives it may read and edit."
+        actions={
           <Dialog open={createDialogOpen} onOpenChange={(open) => {
               setCreateDialogOpen(open);
               if (!open) {
@@ -736,7 +710,7 @@ export default function MCPSettingsView() {
             <DialogTrigger asChild>
               <Button>
                 <Plus className="h-4 w-4 mr-2" />
-                Create Token
+                New token
               </Button>
             </DialogTrigger>
             <DialogContent className="max-w-md">
@@ -834,85 +808,46 @@ export default function MCPSettingsView() {
               </DialogFooter>
             </DialogContent>
           </Dialog>
-        </div>
-
-        {tokens.length === 0 ? (
-          <Card>
-            <CardContent className="py-8 text-center">
-              <Key className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-              <h3 className="text-lg font-semibold mb-2">No MCP tokens</h3>
-              <p className="text-muted-foreground mb-4">
-                Create your first token to connect Claude to your documents
-              </p>
-            </CardContent>
-          </Card>
-        ) : (
-          <div className="space-y-2">
-            {tokens.map((token) => (
-              <Card key={token.id} className="p-4">
-                <div className="flex items-center justify-between">
-                  <div className="space-y-1">
-                    <div className="flex items-center gap-2">
-                      <h4 className="font-medium">{token.name}</h4>
-                      <Badge variant="secondary" className="text-xs">
-                        {token.lastUsed ? 'Active' : 'Never Used'}
-                      </Badge>
-                      {token.driveScopes && token.driveScopes.length > 0 ? (
-                        <Badge variant="outline" className="text-xs">
-                          <Shield className="w-3 h-3 mr-1" />
-                          {token.driveScopes.length} drive{token.driveScopes.length === 1 ? '' : 's'}
-                        </Badge>
-                      ) : token.isScoped ? (
-                        <Badge variant="destructive" className="text-xs">
-                          <AlertTriangle className="w-3 h-3 mr-1" />
-                          No access
-                        </Badge>
-                      ) : (
-                        <Badge variant="outline" className="text-xs text-muted-foreground">
-                          All drives
-                        </Badge>
-                      )}
-                    </div>
-                    <div className="text-sm text-muted-foreground">
-                      Created {formatDistanceToNow(new Date(token.createdAt), { addSuffix: true })}
-                      {token.lastUsed && (
-                        <> • Last used {formatDistanceToNow(new Date(token.lastUsed), { addSuffix: true })}</>
-                      )}
-                    </div>
-                    {token.driveScopes && token.driveScopes.length > 0 && (
-                      <div className="text-xs text-muted-foreground">
-                        Access: {token.driveScopes.map(d => {
-                          const roleLabel = d.role === 'ADMIN'
-                            ? 'Admin'
-                            : d.customRoleName || (d.role === 'MEMBER' ? 'Member' : null);
-                          return roleLabel ? `${d.name} (${roleLabel})` : d.name;
-                        }).join(', ')}
-                      </div>
-                    )}
-                  </div>
-                  <div className="flex gap-2">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      aria-label="Edit token scopes"
-                      onClick={() => openEditDialog(token)}
-                    >
-                      <Pencil className="w-4 h-4" />
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="destructive"
-                      onClick={() => deleteToken(token.id)}
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </Button>
+        }
+      >
+        <SettingsGroup label="Your tokens">
+          {tokens.length === 0 ? (
+            <p className="px-4 py-6 text-sm text-muted-foreground">
+              Create your first token to connect Claude to your documents.
+            </p>
+          ) : (
+            tokens.map((token) => (
+              <div key={token.id} className="flex items-center gap-4 px-4 py-3">
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm font-medium text-foreground">{token.name}</div>
+                  <div className="mt-px text-xs text-muted-foreground">
+                    Created {formatDistanceToNow(new Date(token.createdAt), { addSuffix: true })}
+                    {' · '}
+                    {token.lastUsed
+                      ? `last used ${formatDistanceToNow(new Date(token.lastUsed), { addSuffix: true })}`
+                      : 'never used'}
                   </div>
                 </div>
-              </Card>
-            ))}
-          </div>
-        )}
-      </section>
+                <span className="inline-flex h-[22px] flex-none items-center whitespace-nowrap rounded-full bg-primary/10 px-2 text-xs font-medium text-primary">
+                  {scopeLabelFor(token)}
+                </span>
+                <Button size="sm" variant="outline" onClick={() => openEditDialog(token)}>
+                  Edit scopes
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="text-destructive"
+                  aria-label={`Revoke ${token.name}`}
+                  onClick={() => deleteToken(token.id)}
+                >
+                  Revoke
+                </Button>
+              </div>
+            ))
+          )}
+        </SettingsGroup>
+      </SettingsSection>
 
       {/* Edit Token Scopes */}
       <Dialog open={editDialogOpen} onOpenChange={(open) => {
@@ -1006,17 +941,7 @@ export default function MCPSettingsView() {
       </Dialog>
 
       {/* Quick Setup */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Terminal className="h-5 w-5" />
-            Quick MCP Setup
-          </CardTitle>
-          <CardDescription>
-            Simple installation for most users
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-6">
+      <SettingsSection title="Quick setup" description="Simple installation for most users.">
           <Tabs value={setupStyle} onValueChange={(value) => setSetupStyle(value as 'global' | 'npx')}>
             <TabsList>
               <TabsTrigger value="global">Global install</TabsTrigger>
@@ -1077,8 +1002,7 @@ export default function MCPSettingsView() {
               </div>
             </TabsContent>
           </Tabs>
-        </CardContent>
-      </Card>
+      </SettingsSection>
 
       {/* OpenAI-Compatible API */}
       <OpenAIApiCard />
@@ -1091,6 +1015,6 @@ export default function MCPSettingsView() {
           Keep tokens secure and only use them with trusted Claude instances. You can revoke tokens at any time.
         </AlertDescription>
       </Alert>
-    </div>
+    </SettingsScreen>
   );
 }
