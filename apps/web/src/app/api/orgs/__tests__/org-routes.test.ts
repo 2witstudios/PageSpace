@@ -527,6 +527,25 @@ describe('org route behaviour', () => {
     expect(callOrgAvatarStorage).toHaveBeenCalledWith(ORG_ID, 'ps_svc_org', { method: 'DELETE' });
   });
 
+  it('ORG-1 (partial) Given no initial avatar, should clear the whole folder after successful deletion and never clean up a refused or failed deletion', async () => {
+    asRole('ADMIN');
+    expect((await orgRoute.DELETE(req('DELETE', { drives: [] }), params({ orgId: ORG_ID }))).status).toBe(403);
+    expect(mintOrgAvatarToken).not.toHaveBeenCalled();
+    expect(callOrgAvatarStorage).not.toHaveBeenCalled();
+    asRole('OWNER');
+    vi.mocked(repository.findOrganizationById).mockResolvedValue({ ...organization, avatarUrl: null });
+    vi.mocked(deleteOrganization).mockResolvedValueOnce({ ok: false, status: 403, reason: 'not_owner' });
+    expect((await orgRoute.DELETE(req('DELETE', { drives: [] }), params({ orgId: ORG_ID }))).status).toBe(403);
+    expect(callOrgAvatarStorage).not.toHaveBeenCalled();
+    vi.mocked(deleteOrganization).mockRejectedValueOnce(new Error('subscription cancellation failed'));
+    expect((await orgRoute.DELETE(req('DELETE', { drives: [] }), params({ orgId: ORG_ID }))).status).toBe(500);
+    expect(callOrgAvatarStorage).not.toHaveBeenCalled();
+    expect((await orgRoute.DELETE(req('DELETE', { drives: [] }), params({ orgId: ORG_ID }))).status).toBe(200);
+    expect(mintOrgAvatarToken).toHaveBeenCalledWith(ORG_ID, expect.objectContaining({ userId: CALLER }));
+    expect(callOrgAvatarStorage).toHaveBeenCalledTimes(1);
+    expect(callOrgAvatarStorage).toHaveBeenCalledWith(ORG_ID, 'ps_svc_org', { method: 'DELETE' });
+  });
+
   it('ORG-6 (partial) DELETE /api/orgs/[orgId] passes the caller so the service can re-check ownership, and maps its refusal', async () => {
     asRole('OWNER');
     vi.mocked(deleteOrganization).mockResolvedValue({ ok: false, status: 403, reason: 'not_owner' });

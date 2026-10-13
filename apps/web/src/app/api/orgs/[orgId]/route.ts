@@ -98,9 +98,10 @@ export async function DELETE(request: Request, context: Context) {
     // The service re-checks the caller is still the Owner under the org row lock, and ends
     // the org's live Stripe subscription inside its transaction (a Stripe failure refuses
     // the delete rather than leave a deleted org billed).
-    // ORG-1: the stored avatar file goes with the org. Its token is minted now, while the caller
-    // still holds the org; it is used only once the delete has committed.
-    const avatarToken = (await findOrganizationById(orgId))?.avatarUrl ? await mintOrgAvatarToken(orgId, gate.actor) : null;
+    // ORG-1: clean the folder even when no avatar is visible yet: an upload can
+    // commit before the delete takes its org lock. Mint while authorized, and
+    // use the token only after deletion commits.
+    const avatarToken = await mintOrgAvatarToken(orgId, gate.actor);
     // X-4: after the delete the org has no members to read, so who to tell is read now.
     const audience = await orgChangeAudience(orgId, 'deleted');
     const result = await deleteOrganization(
