@@ -657,9 +657,12 @@ export async function POST(request: Request) {
       const { resolvePageAgentIntegrationTools } = await import('@/lib/ai/core/integration-tool-resolver');
       const integrationTools = await resolvePageAgentIntegrationTools({
         agentId,
-        userId,
+        actor: actorFromAuth(auth),
         driveId: agent.driveId,
         currentTools: availableTools,
+        // A consult has no drive in view: an Imago agent gets user-level integrations only.
+        contextDriveId: null,
+        allowedDriveIds: getAllowedDriveIds(auth),
       });
       integrationToolCount = Object.keys(integrationTools).length;
       if (integrationToolCount > 0) {

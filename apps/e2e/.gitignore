@@ -2,3 +2,7 @@ storageState.json
 .seed-state.json
 playwright-report/
 test-results/
+# Visual baselines are committed for Linux only, made on the CI runner (tests/34-imago-visual.spec.ts).
+# A local macOS or Windows run writes its own, which never match CI's fonts.
+tests/__screenshots__/*-darwin.png
+tests/__screenshots__/*-win32.png

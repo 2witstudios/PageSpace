@@ -53,8 +53,23 @@ vi.mock('../../memory/memory-pages', () => ({
   }),
 }));
 
+// Imago agent provisioning runs against real Postgres in
+// agents/__tests__/provision-imago-agents.integration.test.ts (including through
+// this function, with a forced failure); here we only care that every branch
+// provisions the agents after the Home transaction commits, and that a failure
+// is logged instead of failing Home.
+vi.mock('../../agents/provision-imago-agents', () => ({
+  provisionImagoAgents: vi.fn(),
+}));
+vi.mock('../../logging/logger-config', () => ({
+  loggers: { ai: { error: vi.fn() } },
+}));
+
 import { db } from '@pagespace/db/db';
 import { sql } from '@pagespace/db/operators';
+import { provisionImagoAgents } from '../../agents/provision-imago-agents';
+import { loggers } from '../../logging/logger-config';
+import { allocatePublishSubdomain } from '../../services/drive-service';
 import { drives } from '@pagespace/db/schema/core';
 import { HOME_DRIVE_NAME, resolveUniqueSlug } from '../../services/drive-guards';
 import { populateUserDrive } from '../drive-setup';
@@ -101,6 +116,86 @@ describe('provisionHomeDriveIfNeeded', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(resolveUniqueSlug).mockReturnValue('home');
+    vi.mocked(provisionImagoAgents).mockResolvedValue({
+      homeDriveId: 'drive',
+      folderId: 'imago-folder',
+      agents: { imago: 'a1' },
+      created: [],
+      replacedPageIds: [],
+      retiredPageIds: [],
+      reconciledPageIds: [],
+      removedGrants: 0,
+    });
+  });
+
+  function commitOrder(tx: MockTx, order: string[]) {
+    vi.mocked(db.transaction).mockImplementation((async (cb: (t: typeof tx) => unknown) => {
+      const value = await cb(tx);
+      order.push('commit');
+      return value;
+    }) as never);
+    vi.mocked(provisionImagoAgents).mockImplementation(async () => {
+      order.push('agents');
+      throw new Error('stop here: only the order matters');
+    });
+  }
+
+  test('given an existing Home drive, should provision the Imago agents after the transaction commits so returning users get them', async () => {
+    const order: string[] = [];
+    commitOrder(makeTx([{ id: 'drive-home-existing', kind: 'HOME', slug: 'home' }]), order);
+
+    await provisionHomeDriveIfNeeded('user-123');
+
+    expect(order).toEqual(['commit', 'agents']);
+    expect(provisionImagoAgents).toHaveBeenCalledWith('user-123');
+  });
+
+  // Concurrent first sign-ins share the subdomain family: held from its write
+  // to the commit, so it comes after the seeding. The agents (and their
+  // activity, under the global chain lock) run in their own transaction after.
+  test('given a new user, should seed, allocate the subdomain last, commit, and only then provision the agents', async () => {
+    const order: string[] = [];
+    vi.mocked(populateUserDrive).mockImplementation(async () => {
+      order.push('seed');
+      return { seeded: true };
+    });
+    vi.mocked(allocatePublishSubdomain).mockImplementation(async () => {
+      order.push('subdomain');
+      return 'home';
+    });
+    commitOrder(makeTx(), order);
+
+    await provisionHomeDriveIfNeeded('user-new');
+
+    expect(order).toEqual(['seed', 'subdomain', 'commit', 'agents']);
+    expect(provisionImagoAgents).toHaveBeenCalledWith('user-new');
+  });
+
+  test('given an existing user reached lazily, should still provision the Imago agents', async () => {
+    const tx = makeTx([{ id: 'other-drive-1', kind: 'STANDARD', slug: 'my-drive' }]);
+    vi.mocked(db.transaction).mockImplementation((async (cb: (t: typeof tx) => unknown) => cb(tx)) as never);
+
+    const result = await provisionHomeDriveIfNeeded('user-existing');
+
+    expect(result.created).toBe(false);
+    expect(provisionImagoAgents).toHaveBeenCalledWith('user-existing');
+  });
+
+  test('given Imago provisioning throwing, should still return the committed Home and log the failure (closing review F8)', async () => {
+    const tx = makeTx();
+    vi.mocked(populateUserDrive).mockResolvedValue({ seeded: true });
+    vi.mocked(db.transaction).mockImplementation((async (cb: (t: typeof tx) => unknown) => cb(tx)) as never);
+    const failure = new Error('provisioning refused');
+    vi.mocked(provisionImagoAgents).mockRejectedValue(failure);
+
+    const result = await provisionHomeDriveIfNeeded('user-new');
+
+    expect(result).toEqual({ driveId: 'drive-new', created: true });
+    expect(loggers.ai.error).toHaveBeenCalledWith(
+      expect.stringContaining('Imago agents'),
+      failure,
+      { userId: 'user-new' },
+    );
   });
 
   test('given existing kind=HOME drive, returns it with created:false and makes no inserts', async () => {

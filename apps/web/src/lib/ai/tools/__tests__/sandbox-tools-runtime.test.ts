@@ -12,7 +12,9 @@ const {
   mockCheckSessionRuntimeGuardrail,
   mockRecordSessionActivity,
   mockEnsureGlobalSandboxSession,
+  mockEnsureDriveSessionForConversation,
   mockGetConversation,
+  mockFindOwnImagoHomeDriveId,
 } = vi.hoisted(() => ({
   mockFindSessionForConversation: vi.fn(),
   mockProvisionSessionSandbox: vi.fn(),
@@ -20,7 +22,9 @@ const {
   mockCheckSessionRuntimeGuardrail: vi.fn(),
   mockRecordSessionActivity: vi.fn(),
   mockEnsureGlobalSandboxSession: vi.fn(),
+  mockEnsureDriveSessionForConversation: vi.fn(),
   mockGetConversation: vi.fn(),
+  mockFindOwnImagoHomeDriveId: vi.fn(),
 }));
 
 vi.mock('@pagespace/db/db', () => ({ db: {} }));
@@ -35,6 +39,10 @@ vi.mock('@/lib/agent-workspaces/agent-workspaces-runtime', () => ({
   // or fail a tool call.
   measureWarmSessionStorage: mockMeasureWarmSessionStorage,
   ensureGlobalSandboxSession: mockEnsureGlobalSandboxSession,
+  ensureDriveSessionForConversation: mockEnsureDriveSessionForConversation,
+}));
+vi.mock('@/lib/ai/core/imago-agent-context', () => ({
+  findOwnImagoHomeDriveId: mockFindOwnImagoHomeDriveId,
 }));
 vi.mock('@/lib/repositories/conversation-repository', () => ({
   conversationRepository: { getConversation: mockGetConversation },
@@ -69,6 +77,7 @@ function makeDeps(overrides: Partial<ResolveSandboxActorContextDeps> = {}): Reso
   return {
     findDrive: async () => ({ ownerId: 'tenant-1', orgId: null }),
     findPageDriveId: async () => undefined,
+    findOwnImagoHomeDriveId: async () => null,
     findUser: async () => ({ subscriptionTier: 'pro' }),
     getActorInfo: async () => ({ actorEmail: 'u1@example.com', actorDisplayName: 'User One' }),
     findSessionForConversation: async () => null,
@@ -232,6 +241,46 @@ describe('resolveSandboxActorContext', () => {
       expect(result.driveId).toBe('drive-from-page');
       expect(result.tenantId).toBe('tenant-from-page-drive');
       expect(seenDriveIds).toEqual(['drive-from-page']);
+    });
+  });
+
+  describe("given the owner's own Imago conversation, unbound, with another drive in view (IMG-10.10)", () => {
+    it('should pay from the Home drive provisioning will mint its session in, never the location drive', async () => {
+      const context: ToolExecutionContext = {
+        ...basePageContext,
+        locationContext: { currentDrive: { id: 'd-other', name: 'Other', slug: 'other' } },
+      };
+      const seenDriveIds: string[] = [];
+      const resolve = createResolveSandboxActorContext(
+        makeDeps({
+          findOwnImagoHomeDriveId: async (userId, pageId) => (userId === 'u1' && pageId === 'page-agent-1' ? 'home-u1' : null),
+          findDrive: async (driveId) => {
+            seenDriveIds.push(driveId);
+            return { ownerId: 'u1', orgId: null };
+          },
+        }),
+      );
+
+      const result = await resolve(context);
+
+      expect('error' in result).toBe(false);
+      if ('error' in result) return;
+      expect(result).toMatchObject({ driveId: 'home-u1', tenantId: 'u1', ownerId: 'u1' });
+      expect(seenDriveIds).toEqual(['home-u1']);
+    });
+
+    it("given someone else's agent page (no Imago of this user), should keep the location drive as before", async () => {
+      const context: ToolExecutionContext = {
+        ...basePageContext,
+        locationContext: { currentDrive: { id: 'd-other', name: 'Other', slug: 'other' } },
+      };
+      const resolve = createResolveSandboxActorContext(makeDeps({ findDrive: async () => ({ ownerId: 'tenant-other', orgId: null }) }));
+
+      const result = await resolve(context);
+
+      expect('error' in result).toBe(false);
+      if ('error' in result) return;
+      expect(result).toMatchObject({ driveId: 'd-other', tenantId: 'tenant-other' });
     });
   });
 
@@ -501,6 +550,32 @@ describe('buildRealSandboxRunDeps.acquireSandbox (session-anchored)', () => {
     expect(mockEnsureGlobalSandboxSession).not.toHaveBeenCalled();
     expect(mockProvisionSessionSandbox).not.toHaveBeenCalled();
     expect(mockRecordSessionActivity).not.toHaveBeenCalled();
+  });
+
+  it("given the owner's own Imago conversation with NO session, should auto-provision one in its Home drive, as the global assistant's is (IMG-10.10)", async () => {
+    mockFindSessionForConversation.mockResolvedValue(null);
+    mockGetConversation.mockResolvedValue({ type: 'page', contextId: 'imago-page', userId: 'u1' });
+    mockFindOwnImagoHomeDriveId.mockResolvedValue('home-u1');
+    mockEnsureDriveSessionForConversation.mockResolvedValue({ ok: true, session: sessionRecord });
+    const deps = buildRealSandboxRunDeps({ actor: credentialActor('u1', null) });
+    const result = await deps.acquireSandbox(baseInput({ agentPageId: 'imago-page' }));
+    expect(mockFindOwnImagoHomeDriveId).toHaveBeenCalledWith('u1', 'imago-page');
+    expect(mockEnsureDriveSessionForConversation).toHaveBeenCalledWith('conv-1', credentialActor('u1', null), 'home-u1', 'Imago');
+    expect(mockProvisionSessionSandbox).toHaveBeenCalledWith(sessionRecord, credentialActor('u1', null));
+    expect(result).toMatchObject({ ok: true, sandboxId: 'sbx-1' });
+  });
+
+  it("given a page conversation on someone else's Imago, or another user's conversation, should DENY like any page agent", async () => {
+    mockFindSessionForConversation.mockResolvedValue(null);
+    mockFindOwnImagoHomeDriveId.mockResolvedValue(null);
+    mockGetConversation.mockResolvedValue({ type: 'page', contextId: 'imago-page', userId: 'u1' });
+    const deps = buildRealSandboxRunDeps({ actor: credentialActor('u1', null) });
+    expect(await deps.acquireSandbox(baseInput())).toEqual({ ok: false, reason: 'no_session' });
+
+    mockFindOwnImagoHomeDriveId.mockResolvedValue('home-u2');
+    mockGetConversation.mockResolvedValue({ type: 'page', contextId: 'imago-page', userId: 'u2' });
+    expect(await deps.acquireSandbox(baseInput())).toEqual({ ok: false, reason: 'no_session' });
+    expect(mockEnsureDriveSessionForConversation).not.toHaveBeenCalled();
   });
 
   it('given a GLOBAL conversation with NO session, should auto-provision one and proceed to provision its sandbox', async () => {

@@ -26,7 +26,8 @@ export type HomeDriveAction =
   | 'share'
   | 'publish'
   | 'transfer'
-  | 'org-move';
+  | 'org-move'
+  | 'imago-access';
 
 export function isReservedDriveName(name: string): boolean {
   const normalized = name.trim().toLowerCase();
@@ -57,6 +58,8 @@ const HOME_DRIVE_ACTION_ERRORS: Record<HomeDriveAction, string> = {
   // A Home drive is a person's own space and never belongs to an org (Spec DRV-1). The
   // database CHECK drives_home_never_org_check backs this at the row level.
   'org-move': 'Your Home drive is your own space and cannot be moved into an organization.',
+  // Imago agents live in Home: their access there is native, not a toggle.
+  'imago-access': 'Imago lives in your Home drive, so it cannot be kept out of it.',
 };
 
 /**

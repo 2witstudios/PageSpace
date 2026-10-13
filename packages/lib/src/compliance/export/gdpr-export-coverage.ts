@@ -97,6 +97,8 @@ export const EXPORTED_TABLES: Readonly<Record<string, ExportCategory>> = {
   user_automation_preferences: 'settings',
   user_toast_notification_preferences: 'settings',
   email_notification_preferences: 'settings',
+  // The subject's own per-drive Imago access choices (IMG-4.6a).
+  imago_drive_access: 'settings',
   // Added with this guard — the omission that motivated it.
   agent_workspaces: 'agentWorkspaces',
   // L2·G2 agent accounts: the subject's own accounts (metadata only) and the decisions they gave.
@@ -496,6 +498,8 @@ export const EXCLUDED_TABLES: Readonly<Record<string, string>> = {
     'PERMANENT, deliberate post-erasure suppression record [D-OW-27], like a do-not-contact list: when a member who left or was removed from an org deletes their account, the org keeps only a KEYED blind index (HMAC-SHA256 under the server index key) of their normalized email, so a new account with that address is not auto-joined back by a verified domain (SEC-1). It holds no user id and no recoverable email, so it cannot be tied to a data subject or exported to one; account deletion WRITES it (the retained minimum) rather than removing it. It goes with the org, and an org Admin can clear it by typing the address.',
   org_audit_outbox:
     'A transient delivery queue for org audit events (AUD-1): each row is an org event staged with its change and deleted once appended to the security audit chain, normally within the same request. It holds ids and counts only (an actor id, never content or names), and the audit chain row it becomes is the record; like the other outboxes it is operational plumbing, not the subject\'s data.',
+  user_builtin_agents:
+    'System pointers from a built-in agent key (imago; the retired imago-planner and imago-researcher pointers are dropped at the subject\'s next provisioning) to the AI_CHAT page provisioned for the subject; nothing in a row is authored by the subject. The agent pages are exported with the subject\'s Home drive like any other page (id, title, type, content); their system prompt and enabled tools are not exported — they are copied from the code registry, not authored by the subject.',
 };
 
 /** Every table the registry has a decision for. */

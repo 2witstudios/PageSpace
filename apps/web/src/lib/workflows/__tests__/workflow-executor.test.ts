@@ -866,6 +866,7 @@ describe('executeWorkflow', () => {
       userId: 'user_123',
       driveId: 'drive_abc',
       currentTools: {},
+      contextDriveId: 'drive_abc',
     });
 
     const genCall = vi.mocked(generateText).mock.calls[0][0] as Record<string, unknown>;

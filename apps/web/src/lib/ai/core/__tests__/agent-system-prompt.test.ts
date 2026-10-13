@@ -174,6 +174,24 @@ describe('buildAgentSystemPrompt — the page surface', () => {
       '<<DRIVE>>',
     );
   });
+
+  it('given no granted-drive summary, should be byte-identical to an explicit empty one', () => {
+    // Every non-Imago agent omits the field (IMG-4.7): it must cost them nothing.
+    for (const custom of [undefined, 'Be terse.']) {
+      expect(buildAgentSystemPrompt(pageInput({ customSystemPrompt: custom }))).toBe(
+        buildAgentSystemPrompt(pageInput({ customSystemPrompt: custom, grantedDrives: '' })),
+      );
+    }
+  });
+
+  it("given an Imago agent's granted-drive summary, should carry it on both branches, before the skill catalog", () => {
+    for (const custom of [undefined, 'Be terse.']) {
+      const assembled = buildAgentSystemPrompt(
+        pageInput({ customSystemPrompt: custom, grantedDrives: '\n\n<<GRANTED>>' }),
+      );
+      expect(orderOf(assembled, ['<<GRANTED>>', BLOCKS.skillCatalog])).toEqual(['<<GRANTED>>', BLOCKS.skillCatalog]);
+    }
+  });
 });
 
 describe('buildAgentSystemPrompt — the global surface', () => {

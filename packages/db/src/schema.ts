@@ -71,6 +71,8 @@ export * from './schema/agent-account-grant-nonces';
 export * from './schema/organizations';
 export * from './schema/org-guest-holds';
 export * from './schema/agent-accounts';
+export * from './schema/user-builtin-agents';
+export * from './schema/imago-drive-access';
 
 import * as auth from './schema/auth';
 import * as sessions from './schema/sessions';
@@ -144,6 +146,8 @@ import * as agentAccountGrantNonces from './schema/agent-account-grant-nonces';
 import * as orgs from './schema/organizations';
 import * as orgGuestHolds from './schema/org-guest-holds';
 import * as agentAccounts from './schema/agent-accounts';
+import * as userBuiltinAgents from './schema/user-builtin-agents';
+import * as imagoDriveAccess from './schema/imago-drive-access';
 
 export const schema = {
   ...auth,
@@ -218,4 +222,6 @@ export const schema = {
   ...orgs,
   ...orgGuestHolds,
   ...agentAccounts,
+  ...userBuiltinAgents,
+  ...imagoDriveAccess,
 };

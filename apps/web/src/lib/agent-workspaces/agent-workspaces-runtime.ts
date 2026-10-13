@@ -21,6 +21,8 @@ import { db } from '@pagespace/db/db';
 import { and, eq, inArray, sql } from '@pagespace/db/operators';
 import { conversations } from '@pagespace/db/schema/conversations';
 import { agentWorkspaceNodes } from '@pagespace/db/schema/agent-workspace-nodes';
+import { users } from '@pagespace/db/schema/auth';
+import { drives } from '@pagespace/db/schema/core';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { checkSessionConcurrency } from './session-concurrency';
 import {
@@ -74,9 +76,13 @@ import {
   nextUniqueSessionName,
   type AgentSessionDTO,
 } from '@pagespace/lib/agent-workspaces/session-contract';
-import { decideAgentSessionAccess } from '@pagespace/lib/agent-workspaces/decide-workspace-access';
+import {
+  decideAgentSessionAccess,
+  sessionHostsAgentsFromAnyDrive,
+} from '@pagespace/lib/agent-workspaces/decide-workspace-access';
 import { MAX_SESSION_CONVERSATIONS } from '@pagespace/lib/agent-workspaces/plan-spawn-worker';
 import { resolveDevPreviewHolder } from '@pagespace/lib/services/sandbox/preview/dev-preview-core';
+import { provisionHomeDriveIfNeeded } from '@pagespace/lib/onboarding/home-drive';
 import { requestDevPreviewWatch } from '@/lib/dev-preview/detection-trigger';
 import { broadcastSessionUpdated } from '@/lib/websocket/agent-workspace-events';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
@@ -353,7 +359,19 @@ function buildClaimDeps(actor: AccessActor): ClaimConversationInSessionDeps<DbEx
     },
     findSession: async (workspaceId) => {
       const row = await findSessionRecord(workspaceId);
-      return row ? { driveId: row.driveId, endedAt: row.endedAt } : null;
+      if (!row) return null;
+      const drive =
+        row.driveId === null
+          ? null
+          : ((await db.query.drives.findFirst({
+              where: eq(drives.id, row.driveId),
+              columns: { kind: true, ownerId: true },
+            })) ?? null);
+      return {
+        driveId: row.driveId,
+        endedAt: row.endedAt,
+        hostsAgentsFromAnyDrive: sessionHostsAgentsFromAnyDrive({ session: row, drive }),
+      };
     },
     admitConversation: (input) => admitConversationNode({ ...input, actor }),
   };
@@ -811,6 +829,9 @@ export async function spawnSession(input: {
       // assembly the provisioner also runs; the service calls this only when
       // the env's substrate is `local`.
       gateLocalEnvBind,
+      // A driveless (global-assistant) spawn is created in the owner's Home
+      // drive, provisioned on the spot for a user who has none yet.
+      resolveHomeDriveId: async (ownerId) => (await provisionHomeDriveIfNeeded(ownerId)).driveId,
     },
   });
 }

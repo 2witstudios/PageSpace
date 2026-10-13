@@ -165,6 +165,14 @@ const getTasks = (pageId: string) =>
     { params: Promise.resolve({ pageId }) },
   );
 
+// The first import of the task route pulls in its whole module graph (task
+// triggers, workflows, AI helpers): ~2.4s locally, ~6s with every core busy,
+// past vitest's 10s hook timeout on a loaded CI runner. The DB probe beside it
+// stays in tens of milliseconds and no lock waits show, so the cost is the cold
+// import, not the database. Pay it once here, under an explicit budget, so each
+// test times only its own work.
+const WARM_UP_TIMEOUT_MS = 60_000;
+
 describe('sub-list status vocabulary inheritance', () => {
   beforeAll(async () => {
     try {
@@ -178,7 +186,7 @@ describe('sub-list status vocabulary inheritance', () => {
     owner = await factories.createUser();
     currentUserId = owner.id;
     drive = await factories.createDrive(owner.id);
-  });
+  }, WARM_UP_TIMEOUT_MS);
 
   it('seeds a new sub-list with its ancestor vocabulary, not the defaults', async () => {
     if (!dbAvailable) return;

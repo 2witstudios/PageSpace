@@ -36,7 +36,7 @@ vi.mock('@pagespace/lib/permissions/app-permissions', () => ({
 }));
 vi.mock('@pagespace/lib/services/drive-member-service', () => ({ checkDriveAccess: vi.fn() }));
 vi.mock('@pagespace/db/db', () => ({
-  db: { select: () => ({ from: () => ({ where: mockDbWhere }) }) },
+  db: { select: () => ({ from: () => ({ where: mockDbWhere, leftJoin: () => ({ where: mockDbWhere }) }) }) },
 }));
 vi.mock('@pagespace/db/operators', () => ({ eq: vi.fn() }));
 vi.mock('@pagespace/db/schema/core', () => ({

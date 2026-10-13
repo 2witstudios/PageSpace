@@ -1,0 +1,178 @@
+/* Frame-owned size, material and stage tokens, ported from myimago
+   (its ADR 0028 and ADR 0029; here ADR 0007). Theme variables and the
+   utilities that have no token-locked equivalent; classes stay in the
+   markup. */
+@theme {
+  /* `p-0` and `inset-0` exist only because of this token: the spacing
+     multiplier is reset to `initial`, so every step is named. */
+  --spacing-0: 0px;
+
+  /* Frame — full-bleed. The canvases' floating card, its 18px margin and the
+     blurred blobs behind it are how a mockup presents itself on a page; the
+     product fills the viewport (myimago ADR 0029). The glass blur survives on the
+     panes that sit over the app background. */
+  --blur-glass: 26px;
+  --blur-object: 18px;
+
+  /* Rail — one width for every stage. The 44px hit box carries the focus
+     ring and the pointer target; the 38px chip carries the fill. */
+  --spacing-rail-width: 64px;
+  --spacing-rail-hit: 44px;
+  --spacing-rail-chip: 38px;
+  --spacing-rail-brand: 34px;
+  --spacing-rail-gap: 4px;
+  --spacing-rail-y: 14px;
+  --spacing-rail-tooltip-x: 54px;
+  /* The rail and the panes are each glass (a backdrop-filter), so each is a
+     stacking context; the rail's layer sits over the panes, so its tooltips
+     and the ⋯ menu are drawn above an open list. `popover` orders those
+     overlays inside the rail. */
+  --z-index-rail: 10;
+  --z-index-popover: 30;
+
+  /* Panes — the three stages' column widths. */
+  --spacing-pane-header: 52px;
+  /* A list row's vertical padding: 6px either side of 14px type makes the
+     ~32px row PageSpace's sidebars use. */
+  --spacing-row-y: 6px;
+  --spacing-list-pane: 274px;
+  --spacing-tree-pane: 244px;
+  --spacing-chat-pane: 350px;
+  --spacing-doc-min: 330px;
+  --spacing-tree-step: 14px;
+
+  /* Stage fills. Every pane carries an explicit width and the widths of each
+     stage sum to the frame, so moving between stages is one width
+     transition per pane, all on the same curve: the tree slides in exactly
+     as fast as the chat gives up the room. */
+  --spacing-stage-chat: calc(100% - var(--spacing-rail-width));
+  --spacing-stage-chat-list: calc(
+    100% - var(--spacing-rail-width) - var(--spacing-list-pane)
+  );
+  --spacing-stage-object: calc(
+    100% - var(--spacing-rail-width) - var(--spacing-chat-pane)
+  );
+  --spacing-stage-object-tree: calc(
+    100% - var(--spacing-rail-width) - var(--spacing-tree-pane) -
+      var(--spacing-chat-pane)
+  );
+
+  /* The one curve the designs draw (the mobile Imago sheet): quick out of
+     the gate, long settle. */
+  --ease-pane: cubic-bezier(0.2, 0.8, 0.3, 1);
+
+  /* Chat — thread, composer, presence. */
+  /* The reading column a wide chat centres itself in (PageSpace's 56rem), so
+     a maximised window does not stretch the thread across the whole screen. */
+  --container-thread: 56rem;
+  /* The composer is the one card rounder than the ladder, as in PageSpace. */
+  --radius-composer: 16px;
+  --spacing-composer-field: 44px;
+  --spacing-composer-field-dense: 40px;
+  --spacing-send: 36px;
+  --spacing-avatar-stack: 24px;
+  --spacing-avatar-overlap: 6px;
+  --spacing-live-dot: 7px;
+  /* Tasks — the mini progress meter and a board column. */
+  --spacing-progress: 28px;
+  --spacing-progress-track: 3px;
+  --spacing-board-column: 244px;
+  --spacing-menu: 192px;
+  --spacing-popover: 224px;
+  --spacing-description: 96px;
+  --spacing-live-ring: 2px;
+  --spacing-unread: 16px;
+
+  /* Document. */
+  --text-doc-title: 1.5625rem;
+  --tracking-doc-title: -0.03em;
+  --spacing-quote-border: 3px;
+  --container-doc: 720px;
+
+  /* The object card of a page imago hands off to classic. */
+  --container-handoff: 360px;
+}
+
+/* Transparency is decoration: when the viewer asks for less of it, the glass
+   falls back to a solid surface. */
+@custom-variant reduced-transparency (@media (prefers-reduced-transparency: reduce));
+
+/* Tailwind's backdrop utilities do not emit the -webkit- pair that older
+   WebKit (a Capacitor target) still needs, so each glass owns both. The
+   sheen along the top edge is what reads as thickness rather than tint. */
+@utility surface-glass {
+  -webkit-backdrop-filter: blur(var(--blur-glass)) saturate(180%);
+  backdrop-filter: blur(var(--blur-glass)) saturate(180%);
+  background-color: var(--glass-pane);
+  box-shadow: inset 0 1px 0 0 var(--glass-sheen);
+}
+
+@utility surface-glass-object {
+  -webkit-backdrop-filter: blur(var(--blur-object)) saturate(150%);
+  backdrop-filter: blur(var(--blur-object)) saturate(150%);
+  background-color: var(--glass-object);
+}
+
+@utility surface-glass-raised {
+  -webkit-backdrop-filter: blur(var(--blur-glass)) saturate(180%);
+  backdrop-filter: blur(var(--blur-glass)) saturate(180%);
+  background-color: var(--glass-raised);
+  box-shadow: inset 0 1px 0 0 var(--glass-sheen);
+}
+
+/* Border widths are not a token namespace in Tailwind v4, so the two the
+   frame needs own a utility rather than an arbitrary value. */
+@utility border-l-quote {
+  border-left-width: var(--spacing-quote-border);
+}
+
+@utility border-live-ring {
+  border-width: var(--spacing-live-ring);
+}
+
+/* Panes move by width alone. Tailwind's transition presets do not include
+   width, and an arbitrary property is off-limits (myimago ADR 0028). The global
+   reduced-motion rule cuts the duration to 0.01ms. */
+@utility pane-motion {
+  transition-property: width;
+  transition-duration: 320ms;
+  transition-timing-function: var(--ease-pane);
+}
+
+/* A task's mini progress meter is a native <progress>: its fill is the
+   element's own value, so no width is computed into a style attribute
+   (the CSP forbids those) or an arbitrary class. */
+@utility progress-meter {
+  appearance: none;
+  inline-size: var(--spacing-progress);
+  block-size: var(--spacing-progress-track);
+  flex: none;
+  border: 0;
+  border-radius: 9999px;
+  overflow: hidden;
+  background-color: var(--color-surface-overlay);
+  color: var(--color-accent);
+
+  &::-webkit-progress-bar {
+    background-color: var(--color-surface-overlay);
+  }
+
+  &::-webkit-progress-value {
+    background-color: var(--color-accent);
+    border-radius: 9999px;
+  }
+
+  &::-moz-progress-bar {
+    background-color: var(--color-accent);
+  }
+}
+
+/* A <details> summary used as a control: no disclosure triangle in any
+   engine (WebKit draws its own marker). */
+@utility summary-plain {
+  list-style: none;
+
+  &::-webkit-details-marker {
+    display: none;
+  }
+}

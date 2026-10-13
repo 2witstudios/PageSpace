@@ -7,6 +7,12 @@
 
 COMPOSE_FILE="docker-compose.test.yml"
 TEST_DB_URL="postgresql://user:password@localhost:5433/pagespace_test"
+# Scratch Admin PG for the suites that gate on ADMIN_DATABASE_URL (GDPR eraser,
+# audit hash-chainer, SIEM delivery, audit-backfill-flip). CI creates the same
+# second database on its Postgres service (ci.yml "Create scratch Admin
+# database"); like there, it must never be the app database, because those
+# suites DROP SCHEMA public on it.
+TEST_ADMIN_DB_URL="postgresql://user:password@localhost:5433/pagespace_admin_test"
 
 # The container has a fixed name (pagespace-postgres-test) shared across every
 # checkout/worktree of this repo, but compose scopes ownership by project
@@ -49,8 +55,16 @@ done
 echo "Running database migrations..."
 DATABASE_URL="$TEST_DB_URL" bun run db:migrate || exit 1
 
+echo "Ensuring scratch Admin database exists..."
+docker exec pagespace-postgres-test psql -U user -d postgres -tAc \
+  "SELECT 1 FROM pg_database WHERE datname = 'pagespace_admin_test'" \
+  | grep -q 1 || \
+  docker exec pagespace-postgres-test psql -U user -d postgres -c \
+  'CREATE DATABASE pagespace_admin_test'
+
 echo "Running tests..."
 DATABASE_URL="$TEST_DB_URL" \
+ADMIN_DATABASE_URL="$TEST_ADMIN_DB_URL" \
 CSRF_SECRET=test-csrf-secret-minimum-32-characters-long-for-testing-purposes \
 ENCRYPTION_KEY=test-encryption-key-32-chars-minimum-required-length \
 REALTIME_BROADCAST_SECRET=test-realtime-broadcast-secret-32-chars-minimum-length \

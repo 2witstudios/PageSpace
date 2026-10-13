@@ -323,6 +323,27 @@ async function upsertChannelReadStatus(
     });
 }
 
+export interface FindChannelLastReadAtInput {
+  userId: string;
+  channelId: string;
+}
+
+/** The user's read watermark in a channel; null when they have never read it. */
+async function findChannelLastReadAt(
+  input: FindChannelLastReadAtInput
+): Promise<Date | null> {
+  const [row] = await db
+    .select({ lastReadAt: channelReadStatus.lastReadAt })
+    .from(channelReadStatus)
+    .where(
+      and(
+        eq(channelReadStatus.userId, input.userId),
+        eq(channelReadStatus.channelId, input.channelId)
+      )
+    );
+  return row?.lastReadAt ?? null;
+}
+
 export interface UpdateChannelMessageContentInput {
   messageId: string;
   content: string;
@@ -799,6 +820,7 @@ export const channelMessageRepository = {
   loadChannelMessageWithRelations,
   insertChannelMessageWithAttachment,
   upsertChannelReadStatus,
+  findChannelLastReadAt,
   updateChannelMessageContent,
   softDeleteChannelMessage,
   restoreChannelMessage,

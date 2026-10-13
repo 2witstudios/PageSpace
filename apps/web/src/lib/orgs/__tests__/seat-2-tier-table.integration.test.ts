@@ -9,7 +9,7 @@
  * Requires DATABASE_URL → a migrated Postgres; fails loudly without one (requireDb).
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { NextRequest } from 'next/server';
 import { db } from '@pagespace/db/db';
@@ -55,11 +55,12 @@ function consumerSources(): Array<{ file: string; code: string }> {
   const roots = ['apps/web/src', 'apps/marketing/src', 'apps/admin/src', 'apps/control-plane/src', 'apps/e2e', 'packages/lib/src'];
   const out: Array<{ file: string; code: string }> = [];
   const walk = (dir: string) => {
-    for (const name of readdirSync(dir)) {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const { name } = entry;
       if (name === 'node_modules' || name === '__tests__' || name === '.next' || name === 'dist') continue;
       const full = path.join(dir, name);
-      if (statSync(full).isDirectory()) walk(full);
-      else if (/\.(ts|tsx)$/.test(name) && !/\.(test|spec)\.tsx?$/.test(name)) {
+      if (entry.isDirectory()) walk(full);
+      else if (entry.isFile() && /\.(ts|tsx)$/.test(name) && !/\.(test|spec)\.tsx?$/.test(name)) {
         // Comments may explain the terms; only code and copy must not restate them.
         const code = readFileSync(full, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
         out.push({ file: path.relative(REPO, full), code });

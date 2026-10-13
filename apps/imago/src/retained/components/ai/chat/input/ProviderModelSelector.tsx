@@ -1,0 +1,460 @@
+'use client';
+
+import { useState, useEffect, useMemo, useCallback } from 'react';
+import { Button } from '@/retained/components/ui/button';
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from '@/retained/components/ui/popover';
+import { ScrollArea } from '@/retained/components/ui/scroll-area';
+import { Badge } from '@/retained/components/ui/badge';
+import { ChevronDown, Check, Loader2 } from 'lucide-react';
+import { cn } from '@/retained/lib/utils';
+import { fetchWithAuth, patch } from '@/retained/lib/auth/auth-fetch';
+import { toast } from 'sonner';
+import {
+  AI_PROVIDERS,
+  getModelDisplayName,
+  getDefaultModelForTier,
+  getVisibleProviders,
+  isModelAllowedForTier,
+  ADMIN_ONLY_PROVIDERS,
+} from '@/retained/lib/ai/core/ai-providers-config';
+
+interface ProviderStatus {
+  isAvailable: boolean;
+}
+
+interface ProviderSettings {
+  currentProvider: string;
+  currentModel: string;
+  providers: Record<string, ProviderStatus>;
+  userSubscriptionTier?: string;
+  isAdmin?: boolean;
+}
+
+/** Providers served from a local server (model lists fetched at runtime). */
+const LOCAL_PROVIDERS: Record<string, true> = {
+  ollama: true,
+  lmstudio: true,
+  azure_openai: true,
+};
+
+/** Derive provider groups from visible providers (filtered by deployment mode) */
+function buildProviderGroups() {
+  const visibleProviders = getVisibleProviders();
+  const groups: { label: string; providers: { id: string; name: string }[] }[] = [
+    { label: 'Models', providers: [] },
+    { label: 'Local', providers: [] },
+  ];
+
+  for (const [id, config] of Object.entries(visibleProviders)) {
+    const provider = { id, name: config.name };
+    if (id === 'ollama' || id === 'lmstudio' || id === 'azure_openai') {
+      groups[1].providers.push(provider);
+    } else {
+      groups[0].providers.push(provider);
+    }
+  }
+
+  // Filter out empty groups
+  return groups.filter(g => g.providers.length > 0);
+}
+
+// Computed once at module load (deployment mode doesn't change at runtime)
+const PROVIDER_GROUPS = buildProviderGroups();
+
+export interface ProviderModelSelectorProps {
+  /** Currently selected provider */
+  provider?: string | null;
+  /** Currently selected model */
+  model?: string | null;
+  /** Callback when provider/model changes */
+  onChange?: (provider: string, model: string) => void;
+  /** Additional class names */
+  className?: string;
+  /** Disable the selector */
+  disabled?: boolean;
+}
+
+/**
+ * Two separate popover selectors for AI provider and model selection.
+ * Used in the InputFooter for quick model switching.
+ */
+export function ProviderModelSelector({
+  provider,
+  model,
+  onChange,
+  className,
+  disabled = false,
+}: ProviderModelSelectorProps) {
+  const [providerOpen, setProviderOpen] = useState(false);
+  const [modelOpen, setModelOpen] = useState(false);
+  const [providerSettings, setProviderSettings] =
+    useState<ProviderSettings | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+
+  // Dynamic model state (local providers only)
+  const [ollamaModels, setOllamaModels] = useState<Record<string, string> | null>(null);
+  const [lmstudioModels, setLmstudioModels] = useState<Record<string, string> | null>(null);
+  const [isLoadingModels, setIsLoadingModels] = useState(false);
+
+  // Fetch Ollama models dynamically
+  const fetchOllamaModels = useCallback(async () => {
+    if (ollamaModels !== null) return ollamaModels;
+    setIsLoadingModels(true);
+    try {
+      const response = await fetchWithAuth('/api/ai/ollama/models');
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success && data.models) {
+          setOllamaModels(data.models);
+          return data.models;
+        }
+      }
+    } catch (error) {
+      console.error('Failed to fetch Ollama models:', error);
+    } finally {
+      setIsLoadingModels(false);
+    }
+    setOllamaModels({});
+    return {};
+  }, [ollamaModels]);
+
+  // Fetch LM Studio models dynamically
+  const fetchLMStudioModels = useCallback(async () => {
+    if (lmstudioModels !== null) return lmstudioModels;
+    setIsLoadingModels(true);
+    try {
+      const response = await fetchWithAuth('/api/ai/lmstudio/models');
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success && data.models) {
+          setLmstudioModels(data.models);
+          return data.models;
+        }
+      }
+    } catch (error) {
+      console.error('Failed to fetch LM Studio models:', error);
+    } finally {
+      setIsLoadingModels(false);
+    }
+    setLmstudioModels({});
+    return {};
+  }, [lmstudioModels]);
+
+  // Fetch provider settings
+  const fetchSettings = useCallback(async () => {
+    setIsLoading(true);
+    try {
+      const response = await fetchWithAuth('/api/ai/settings');
+      if (response.ok) {
+        const data = await response.json();
+        setProviderSettings(data);
+      }
+    } catch (error) {
+      console.error('Failed to fetch provider settings:', error);
+      toast.error('Failed to load AI provider settings');
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  // Fetch on mount
+  useEffect(() => {
+    fetchSettings();
+  }, [fetchSettings]);
+
+  // Listen for settings updates (from settings page)
+  useEffect(() => {
+    const handleSettingsUpdate = () => {
+      fetchSettings();
+      // Clear cached models so they get refetched
+      setOllamaModels(null);
+      setLmstudioModels(null);
+    };
+    window.addEventListener('ai-settings-updated', handleSettingsUpdate);
+    return () => {
+      window.removeEventListener('ai-settings-updated', handleSettingsUpdate);
+    };
+  }, [fetchSettings]);
+
+  // Fetch dynamic models when a local provider is selected
+  useEffect(() => {
+    if (provider === 'ollama' && ollamaModels === null) {
+      fetchOllamaModels();
+    }
+    if (provider === 'lmstudio' && lmstudioModels === null) {
+      fetchLMStudioModels();
+    }
+  }, [provider, ollamaModels, lmstudioModels, fetchOllamaModels, fetchLMStudioModels]);
+
+  const subscriptionTier = providerSettings?.userSubscriptionTier;
+  const isAdmin = providerSettings?.isAdmin ?? false;
+
+  // Get display names
+  const providerDisplayName = useMemo(() => {
+    if (!provider) return 'Model';
+    const config = AI_PROVIDERS[provider as keyof typeof AI_PROVIDERS];
+    return config?.name || provider;
+  }, [provider]);
+
+  const modelDisplayName = useMemo(() => {
+    if (!model || !provider) return 'Model';
+
+    if (provider === 'ollama' && ollamaModels && ollamaModels[model]) {
+      return ollamaModels[model];
+    }
+    if (provider === 'lmstudio' && lmstudioModels && lmstudioModels[model]) {
+      return lmstudioModels[model];
+    }
+
+    return getModelDisplayName(provider, model);
+  }, [provider, model, ollamaModels, lmstudioModels]);
+
+  // Check whether the deployment has this provider configured.
+  const isProviderAvailable = useCallback(
+    (providerId: string) => {
+      if (!providerSettings) return false;
+      return providerSettings.providers[providerId]?.isAvailable ?? false;
+    },
+    [providerSettings]
+  );
+
+  // Whether the current subscription tier may select this model.
+  const isModelAccessible = useCallback(
+    (providerId: string, modelId: string) => {
+      if (LOCAL_PROVIDERS[providerId]) return true; // local models are not tier-gated
+      return isModelAllowedForTier(modelId, subscriptionTier);
+    },
+    [subscriptionTier]
+  );
+
+  // Whether the current tier can use a provider at all. Providers whose entire
+  // static catalog is paid are hidden rather than selectable-and-failing.
+  const hasAccessibleModel = useCallback(
+    (providerId: string) => {
+      if (LOCAL_PROVIDERS[providerId]) return true;
+      const config = AI_PROVIDERS[providerId as keyof typeof AI_PROVIDERS];
+      if (!config) return false;
+      return Object.keys(config.models).some((modelId) => isModelAccessible(providerId, modelId));
+    },
+    [isModelAccessible]
+  );
+
+  // Get models for current provider
+  const availableModels = useMemo(() => {
+    if (!provider) return [];
+
+    if (provider === 'ollama' && ollamaModels) {
+      return Object.entries(ollamaModels);
+    }
+    if (provider === 'lmstudio' && lmstudioModels) {
+      return Object.entries(lmstudioModels);
+    }
+
+    const config = AI_PROVIDERS[provider as keyof typeof AI_PROVIDERS];
+    if (!config) return [];
+    return Object.entries(config.models);
+  }, [provider, ollamaModels, lmstudioModels]);
+
+  // Handle provider selection
+  const handleProviderSelect = useCallback(
+    async (newProvider: string) => {
+      if (newProvider === provider) {
+        setProviderOpen(false);
+        return;
+      }
+
+      setIsSaving(true);
+      try {
+        // Land on the first model the current tier can actually select — the raw
+        // catalog default is usually a paid flagship, which the server's tier
+        // gate would reject for free users.
+        const newModel = getDefaultModelForTier(newProvider, subscriptionTier);
+
+        // Build request body - model is optional for local providers
+        const requestBody: { provider: string; model?: string } = {
+          provider: newProvider,
+        };
+        if (newModel) {
+          requestBody.model = newModel;
+        }
+
+        await patch('/api/ai/settings', requestBody);
+
+        onChange?.(newProvider, newModel || '');
+        setProviderOpen(false);
+      } catch (error) {
+        console.error('Failed to update provider:', error);
+        toast.error(error instanceof Error ? error.message : 'Failed to update provider');
+      } finally {
+        setIsSaving(false);
+      }
+    },
+    [provider, subscriptionTier, onChange]
+  );
+
+  // Handle model selection
+  const handleModelSelect = useCallback(
+    async (newModel: string) => {
+      if (newModel === model || !provider) {
+        setModelOpen(false);
+        return;
+      }
+
+      setIsSaving(true);
+      try {
+        await patch('/api/ai/settings', {
+          provider,
+          model: newModel,
+        });
+
+        onChange?.(provider, newModel);
+        setModelOpen(false);
+      } catch (error) {
+        console.error('Failed to update model:', error);
+        toast.error(error instanceof Error ? error.message : 'Failed to update model');
+      } finally {
+        setIsSaving(false);
+      }
+    },
+    [provider, model, onChange]
+  );
+
+  if (isLoading) {
+    return (
+      <Button
+        variant="ghost"
+        size="sm"
+        disabled
+        className="h-8 px-2 gap-1 text-muted-foreground"
+      >
+        <Loader2 className="h-3 w-3 animate-spin" />
+      </Button>
+    );
+  }
+
+  return (
+    <div className={cn('flex items-center gap-0.5', className)}>
+      {/* Provider Selector */}
+      <Popover open={providerOpen} onOpenChange={setProviderOpen}>
+        <PopoverTrigger asChild>
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={disabled || isSaving}
+            className="h-8 px-2 gap-1 min-w-0 text-muted-foreground hover:text-foreground hover:bg-transparent dark:hover:bg-transparent"
+          >
+            <span className="text-xs max-w-[50px] sm:max-w-[80px] truncate">{providerDisplayName}</span>
+            <ChevronDown className="h-3 w-3 shrink-0" />
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent className="w-52 p-0" align="end" sideOffset={8}>
+          <ScrollArea className="h-[280px] p-2">
+            <div className="space-y-2">
+              {PROVIDER_GROUPS
+                .map((group) => ({
+                  ...group,
+                  providers: group.providers.filter((p) =>
+                    isProviderAvailable(p.id) && (!ADMIN_ONLY_PROVIDERS.has(p.id) || isAdmin) && hasAccessibleModel(p.id)
+                  ),
+                }))
+                .filter((group) => group.providers.length > 0)
+                .map((group) => (
+                  <div key={group.label}>
+                    <div className="text-[10px] uppercase tracking-wider text-muted-foreground/60 mb-1 px-2">
+                      {group.label}
+                    </div>
+                    <div className="space-y-0.5">
+                      {group.providers.map((p) => {
+                        const isSelected = provider === p.id;
+                        return (
+                          <Button
+                            key={p.id}
+                            variant={isSelected ? 'secondary' : 'ghost'}
+                            size="sm"
+                            disabled={isSaving}
+                            onClick={() => handleProviderSelect(p.id)}
+                            className="w-full justify-between text-xs h-7 px-2 min-w-0"
+                          >
+                            <span className="truncate min-w-0">{p.name}</span>
+                            {isSelected && <Check className="h-3 w-3 shrink-0 ml-1" />}
+                          </Button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+            </div>
+          </ScrollArea>
+        </PopoverContent>
+      </Popover>
+
+      <span className="text-muted-foreground/30 text-xs">/</span>
+
+      {/* Model Selector */}
+      <Popover open={modelOpen} onOpenChange={setModelOpen}>
+        <PopoverTrigger asChild>
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={disabled || isSaving}
+            className="h-8 px-2 gap-1 min-w-0 text-muted-foreground hover:text-foreground hover:bg-transparent dark:hover:bg-transparent"
+          >
+            <span className="text-xs max-w-[50px] sm:max-w-[100px] truncate">
+              {modelDisplayName}
+            </span>
+            <ChevronDown className="h-3 w-3 shrink-0" />
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent className="w-52 p-0" align="end" sideOffset={8}>
+          <ScrollArea className="h-[200px] p-2">
+            <div className="space-y-0.5">
+              {isLoadingModels ? (
+                <div className="flex items-center gap-2 text-xs text-muted-foreground px-2 py-2">
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  Loading models...
+                </div>
+              ) : availableModels.length === 0 ? (
+                <div className="text-xs text-muted-foreground px-2 py-2">
+                  {provider === 'ollama' || provider === 'lmstudio'
+                    ? 'No models found. Start your local server.'
+                    : 'No models available'}
+                </div>
+              ) : (
+                availableModels.map(([modelId, modelName]) => {
+                  const isSelected = model === modelId;
+                  const accessible = isModelAccessible(provider as string, modelId);
+                  return (
+                    <Button
+                      key={modelId}
+                      variant={isSelected ? 'secondary' : 'ghost'}
+                      size="sm"
+                      disabled={isSaving || !accessible}
+                      onClick={() => handleModelSelect(modelId)}
+                      className="w-full justify-between text-xs h-7 px-2 min-w-0"
+                    >
+                      <span className={cn('truncate min-w-0', !accessible && 'text-muted-foreground')}>
+                        {modelName}
+                      </span>
+                      {isSelected ? (
+                        <Check className="h-3 w-3 shrink-0 ml-1" />
+                      ) : !accessible ? (
+                        <Badge variant="outline" className="text-[9px] h-4 px-1 ml-1 shrink-0">
+                          Paid
+                        </Badge>
+                      ) : null}
+                    </Button>
+                  );
+                })
+              )}
+            </div>
+          </ScrollArea>
+        </PopoverContent>
+      </Popover>
+    </div>
+  );
+}
