@@ -1,4 +1,4 @@
-import { test, expect, type BrowserContext, type Page } from '@playwright/test';
+import { test, expect, type APIRequestContext, type Browser, type BrowserContext, type Page } from '@playwright/test';
 import { db } from '@pagespace/db/db';
 import { eq, inArray, or } from '@pagespace/db/operators';
 import { wallets } from '@pagespace/db/schema/wallets';
@@ -17,8 +17,8 @@ import { DESKTOP_VIEWPORT, captureOrgEvidence, orgName, seedOrg, seedOrgDrive, s
  * UI-8 in the browser (canvas page 2): the spending-from chip and its popover, the composer strip,
  * and the refusal card, for a member of a paid org working in an org drive with a drive wallet.
  *
- * PARTIAL, and titled so: these exercise live spend refusal, fallback disclosure and persisted
- * automation states, not canvas fidelity itself, which needs a reviewer with the canvas open.
+ * Focused scenarios retain their partial titles. The full journey below executes
+ * every scenario together; canvas fidelity also needs review against the live canvas.
  *
  * The AI provider is Playwright's OpenRouter mock (support/mock-openrouter.ts); a refused call never
  * reaches it, which is the point of the refusal card.
@@ -91,175 +91,233 @@ async function expectPersonalCharge(w: SpendWorld, before: Awaited<ReturnType<ty
   expect(await getHolds(w.marcus.userId)).toEqual([]);
 }
 
+interface SpendJourneyContext {
+  browser: Browser;
+  baseURL?: string;
+  request: APIRequestContext;
+}
+
+async function chipAndPopoverJourney({ browser, baseURL }: Pick<SpendJourneyContext, 'browser' | 'baseURL'>) {
+  const w = await seedSpendWorld();
+  const page = await openAs(browser, w.marcus, baseURL!);
+  const pulseResponse = page.waitForResponse(response => new URL(response.url()).pathname === '/api/pulse/generate' && response.request().method() === 'POST');
+  await page.goto(`/dashboard/${w.productId}`);
+
+  const chip = page.locator('header').getByTestId('spend-source-chip');
+  await expect(chip).toBeVisible({ timeout: 30_000 });
+  await expect(chip).toHaveAttribute('aria-label', /^Spending from Product wallet: ([\d,]+ credits|No cap)$/);
+  // One token: a count, never the wallet's name (the name is in the popover and the label).
+  await expect(chip.getByTestId('spend-source-chip-text')).toHaveText(/^([\d,]+ credits|No cap)$/);
+
+  await chip.click();
+  const popover = page.getByRole('dialog').filter({ hasText: 'Your credits' });
+  await expect(popover).toBeVisible();
+  await expect(popover).toContainText('Product wallet');
+  await expect(popover).toContainText(`Funded by ${w.org.name}`);
+  await expect(popover).toContainText(`${w.org.name} seat`);
+  await expect(popover).toContainText(`Your seat allowance from ${w.org.name}`);
+  await expect(popover).toContainText('Personal balance · not billed to an organization');
+  await captureOrgEvidence(page, 'spend-chip-popover');
+  await page.keyboard.press('Escape');
+  await expect(popover).toHaveCount(0);
+  await captureOrgEvidence(page, 'spend-chip-canvas-overview');
+  // Finish background generation before the next isolated journey.
+  expect((await pulseResponse).ok()).toBe(true);
+  await expect.poll(async () => {
+    const state = await financialState(w);
+    return { pulse: state.usage.filter(row => row.source === 'pulse').length, ledger: state.ledger.filter(row => row.entryType === 'usage').length, holds: state.holds.length };
+  }).toEqual({ pulse: 1, ledger: 1, holds: 0 });
+}
+
+async function pausedRefusalAndSwitchJourney({ browser, baseURL, request }: SpendJourneyContext) {
+  const w = await seedSpendWorld();
+  const pageId = await createAgentPage(w.productId, w.marcus.userId);
+  const page = await openAs(browser, w.marcus, baseURL!);
+  await gotoChatPage(page, w.productId, pageId);
+  const chat = page.getByTestId('session-chat');
+
+  const strip = chat.getByTestId('composer-spend-strip');
+  await expect(strip).toBeVisible({ timeout: 30_000 });
+  await expect(strip).toContainText(/Spending from Product wallet · ([\d,]+ credits left|No cap)/);
+  await expect(strip.getByRole('button', { name: 'Change' })).toBeVisible();
+
+  // The Owner pauses the wallet (WAL-7). Stored directly: this spec is about what the member sees.
+  await db.update(wallets).set({ status: 'paused' }).where(eq(wallets.id, w.walletId));
+  await page.reload();
+  await expect(strip).toContainText('Product wallet: paused · choose another source', { timeout: 30_000 });
+
+  // A send is refused by name, charged nothing, and the card offers the other sources.
+  const before = await financialState(w);
+  const callsBefore = await mockCallCount(request);
+  await sendChatMessage(chat, 'Summarize the launch plan');
+  const card = chat.getByTestId('spend-refusal-card');
+  await expect(card).toBeVisible({ timeout: 30_000 });
+  await expect(card).toContainText('Product wallet is paused');
+  await expect(card).toContainText('Nothing was charged.');
+  await expect(card.getByRole('button', { name: new RegExp(`^${w.org.name} seat`) })).toBeVisible();
+  const ownCredits = card.getByRole('button', { name: 'Your credits' });
+  await expect(ownCredits).toBeVisible();
+  expect(await mockCallCount(request)).toBe(callsBefore);
+  expect(await financialState(w)).toEqual(before);
+  await captureOrgEvidence(page, 'spend-refusal-paused');
+
+  // Choosing a source switches THIS conversation; the person sends again and it goes through.
+  await ownCredits.click();
+  await expect(page.getByText('This conversation now spends from Your credits. Send your message again.')).toBeVisible();
+  await sendChatMessage(chat, 'Summarize the launch plan');
+  await expect(chat.locator('[data-testid="chat-message"][data-role="assistant"]').first()).toBeVisible({ timeout: 60_000 });
+  await expect(card).toHaveCount(0);
+  expect(await mockCallCount(request)).toBe(callsBefore + 1);
+  await expectPersonalCharge(w, before);
+}
+
+async function freshGlobalChoiceJourney({ browser, baseURL, request }: SpendJourneyContext) {
+  const w = await seedSpendWorld();
+  const page = await openAs(browser, w.marcus, baseURL!);
+  const pulseResponse = page.waitForResponse(response => new URL(response.url()).pathname === '/api/pulse/generate' && response.request().method() === 'POST');
+  await page.goto(`/dashboard/${w.productId}`);
+  const globalChat = page.getByTestId('global-assistant-view');
+  await expect(globalChat).toBeVisible();
+  const strip = globalChat.getByTestId('composer-spend-strip');
+  await expect(strip).toContainText('Spending from Product wallet', { timeout: 30_000 });
+  const draftId = await globalChat.evaluate((node) => node.closest('[data-spend-surface]')?.getAttribute('data-spend-surface'));
+  expect(draftId).toBeTruthy();
+  expect(await db.select().from(conversations).where(eq(conversations.id, draftId!))).toEqual([]);
+  // The global dashboard generates a personal Pulse before any chat send.
+  // Wait for its asynchronous billing too, so the choice has its own baseline.
+  expect((await pulseResponse).ok()).toBe(true);
+  await expect.poll(async () => {
+    const state = await financialState(w);
+    return { pulse: state.usage.filter(row => row.source === 'pulse').length, ledger: state.ledger.filter(row => row.entryType === 'usage').length, holds: state.holds.length };
+  }).toEqual({ pulse: 1, ledger: 1, holds: 0 });
+  expect(await mockCallCount(request)).toBe(1);
+  const before = await financialState(w);
+  const callsBefore = await mockCallCount(request);
+  const callsUrl = `${process.env.E2E_MOCK_OPENROUTER_URL ?? 'http://127.0.0.1:4998'}/__calls`;
+  expect(await (await request.get(callsUrl)).json()).toMatchObject({ requests: [{ stream: false, messageCount: 2 }] });
+
+  await strip.getByRole('button', { name: 'Change' }).click();
+  const choices = page.getByRole('dialog').filter({ hasText: 'Your credits' });
+  await choices.getByRole('radio', { name: /^Your credits/ }).click();
+  await expect(strip).toContainText('Spending from Your credits');
+  await expect(page.locator('header').getByTestId('spend-source-chip')).toHaveAttribute('aria-label', /^Spending from Your credits:/);
+  const personal = await getBalance(w.marcus.userId);
+  const [draft] = await db.select().from(conversations).where(eq(conversations.id, draftId!));
+  expect(draft).toMatchObject({ userId: w.marcus.userId, type: 'global', chosenWalletId: personal!.id });
+  expect(await db.select({ id: chatMessages.id }).from(chatMessages).where(eq(chatMessages.conversationId, draftId!))).toEqual([]);
+  const hiddenHistory = await page.request.get('/api/ai/global');
+  expect(hiddenHistory.ok()).toBe(true);
+  expect(((await hiddenHistory.json()) as { id: string }[]).some((row) => row.id === draftId)).toBe(false);
+  expect(await mockCallCount(request)).toBe(callsBefore);
+  expect(await financialState(w)).toEqual(before);
+  await expect(choices).toHaveCount(0);
+  await captureOrgEvidence(page, 'fresh-global-draft-own-choice');
+
+  await sendChatMessage(globalChat, 'Summarize the launch plan');
+  await expect(globalChat.locator('[data-testid="chat-message"][data-role="assistant"]').first()).toBeVisible({ timeout: 60_000 });
+  expect(await mockCallCount(request)).toBe(callsBefore + 1);
+  expect(await (await request.get(callsUrl)).json()).toMatchObject({ requests: [{ stream: false }, { stream: true }] });
+  await expectPersonalCharge(w, before);
+  const visibleHistory = await page.request.get('/api/ai/global');
+  expect(((await visibleHistory.json()) as { id: string }[]).some((row) => row.id === draftId)).toBe(true);
+  await captureOrgEvidence(page, 'fresh-global-draft-first-reply');
+}
+
+async function personalFallbackJourney({ browser, baseURL, request }: SpendJourneyContext, unavailableSource: 'paused' | 'empty') {
+  const w = await seedSpendWorld();
+  await db.update(organizations).set({ policies: { walletFallback: 'own_credits' } }).where(eq(organizations.id, w.org.orgId));
+  await db.update(wallets).set({
+    status: unavailableSource === 'paused' ? 'paused' : 'active',
+    ...(unavailableSource === 'empty' ? { monthlyAllowanceCents: 0 } : {}),
+    fallbackRule: 'own_credits',
+  }).where(eq(wallets.id, w.walletId));
+  const pageId = await createAgentPage(w.productId, w.marcus.userId);
+  const page = await openAs(browser, w.marcus, baseURL!);
+  await gotoChatPage(page, w.productId, pageId);
+  const chat = page.getByTestId('session-chat');
+  await expect(chat.getByTestId('composer-spend-strip')).toContainText('Spending from Your credits');
+  await expect(chat.getByTestId('composer-spend-strip')).toContainText('Product wallet cannot cover this');
+  await expect(page.locator('header').getByTestId('spend-source-chip')).toHaveAttribute('aria-label', /^Spending from Your credits:/);
+  const before = await financialState(w);
+  await sendChatMessage(chat, 'Summarize the launch plan');
+  const fallbackNotice = chat.getByRole('status').filter({ hasText: "Used your own credits because Product wallet couldn't cover this." });
+  await expect(fallbackNotice).toBeVisible({ timeout: 60_000 });
+  await expect(fallbackNotice.getByRole('button', { name: 'Change' })).toBeVisible();
+  await expect(chat.locator('[data-testid="chat-message"][data-role="assistant"]').first()).toBeVisible();
+  expect(await mockCallCount(request)).toBe(1);
+  await expectPersonalCharge(w, before);
+  await captureOrgEvidence(page, `spend-fallback-${unavailableSource}`);
+}
+
+async function automationStatesJourney({ browser, baseURL }: Pick<SpendJourneyContext, 'browser' | 'baseURL'>) {
+  const w = await seedSpendWorld();
+  const agentPageId = await createAgentPage(w.productId, w.jono.userId);
+  const [scheduled, departed] = await db.insert(workflows).values([
+    { driveId: w.productId, createdBy: w.jono.userId, name: 'Weekly digest', agentPageId, prompt: 'Summarize', cronExpression: '0 9 * * 1', isEnabled: true },
+    { driveId: w.productId, createdBy: null, name: 'Departed creator digest', agentPageId, prompt: 'Summarize', cronExpression: '0 9 * * 1', isEnabled: false, ownerLeftAt: new Date() },
+  ]).returning({ id: workflows.id });
+  await db.insert(workflowRuns).values({ workflowId: scheduled.id, sourceTable: 'cron', status: 'cancelled', error: 'AI credit gate denied: source_refused (drive_wallet_empty)', endedAt: new Date() });
+  const page = await openAs(browser, w.jono, baseURL!);
+  await page.goto(`/dashboard/${w.productId}/workflows`);
+  const scheduledRow = page.getByRole('row').filter({ hasText: 'Weekly digest' });
+  await expect(scheduledRow.getByTestId('automation-spends-as')).toContainText('Created by Jono');
+  await scheduledRow.getByText('As Jono', { exact: true }).hover();
+  const spendDetail = page.getByRole('tooltip');
+  await expect(spendDetail).toContainText('Each scheduled run spends only Product wallet, as Jono under their caps');
+  await expect(spendDetail).toContainText("never falls back to anyone's own credits");
+  await expect(spendDetail).toContainText('A channel mention or a manual Run counts against whoever triggered it.');
+  await expect(scheduledRow.getByTestId('automation-skipped')).toHaveAttribute('aria-label', 'Skipped: Product wallet was empty.');
+  const departedRow = page.getByRole('row').filter({ hasText: 'Departed creator digest' });
+  await expect(departedRow.getByTestId('automation-owner-left')).toContainText('Disabled until an org Owner or Admin reassigns or deletes it.');
+  await expect(departedRow.getByRole('switch')).toBeDisabled();
+  await expect(departedRow.getByRole('switch')).toHaveAttribute('aria-checked', 'false');
+  await expect(departedRow.getByRole('button', { name: 'Run workflow' })).toBeDisabled();
+  expect((await db.select().from(workflowRuns).where(eq(workflowRuns.workflowId, departed.id)))).toEqual([]);
+  await captureOrgEvidence(page, 'workflow-spend-states');
+}
+
 test.describe('UI-8 (partial) the spend surfaces for a member in an org drive', () => {
   test('UI-8 (partial) the header chip names the drive wallet in one short token, and its popover lists every source with who funds it', async ({ browser, baseURL }) => {
-    const w = await seedSpendWorld();
-    const page = await openAs(browser, w.marcus, baseURL!);
-    await page.goto(`/dashboard/${w.productId}`);
-
-    const chip = page.locator('header').getByTestId('spend-source-chip');
-    await expect(chip).toBeVisible({ timeout: 30_000 });
-    await expect(chip).toHaveAttribute('aria-label', /^Spending from Product wallet: ([\d,]+ credits|No cap)$/);
-    // One token: a count, never the wallet's name (the name is in the popover and the label).
-    await expect(chip.getByTestId('spend-source-chip-text')).toHaveText(/^([\d,]+ credits|No cap)$/);
-
-    await chip.click();
-    const popover = page.getByRole('dialog').filter({ hasText: 'Your credits' });
-    await expect(popover).toBeVisible();
-    await expect(popover).toContainText('Product wallet');
-    await expect(popover).toContainText(`Funded by ${w.org.name}`);
-    await expect(popover).toContainText(`${w.org.name} seat`);
-    await expect(popover).toContainText(`Your seat allowance from ${w.org.name}`);
-    await expect(popover).toContainText('Personal balance · not billed to an organization');
-    await captureOrgEvidence(page, 'spend-chip-popover');
+    await chipAndPopoverJourney({ browser, baseURL });
   });
 
   test('UI-8 (partial) the composer strip names the source before the first message, turns to "paused" when the drive wallet is, and the refusal card offers the other sources; choosing one lets the message through', async ({ browser, baseURL, request }) => {
-    const w = await seedSpendWorld();
-    const pageId = await createAgentPage(w.productId, w.marcus.userId);
-    const page = await openAs(browser, w.marcus, baseURL!);
-    await gotoChatPage(page, w.productId, pageId);
-    const chat = page.getByTestId('session-chat');
-
-    const strip = chat.getByTestId('composer-spend-strip');
-    await expect(strip).toBeVisible({ timeout: 30_000 });
-    await expect(strip).toContainText(/Spending from Product wallet · ([\d,]+ credits left|No cap)/);
-    await expect(strip.getByRole('button', { name: 'Change' })).toBeVisible();
-
-    // The Owner pauses the wallet (WAL-7). Stored directly: this spec is about what the member sees.
-    await db.update(wallets).set({ status: 'paused' }).where(eq(wallets.id, w.walletId));
-    await page.reload();
-    await expect(strip).toContainText('Product wallet: paused · choose another source', { timeout: 30_000 });
-
-    // A send is refused by name, charged nothing, and the card offers the other sources.
-    const before = await financialState(w);
-    const callsBefore = await mockCallCount(request);
-    await sendChatMessage(chat, 'Summarize the launch plan');
-    const card = chat.getByTestId('spend-refusal-card');
-    await expect(card).toBeVisible({ timeout: 30_000 });
-    await expect(card).toContainText('Product wallet is paused');
-    await expect(card).toContainText('Nothing was charged.');
-    await expect(card.getByRole('button', { name: new RegExp(`^${w.org.name} seat`) })).toBeVisible();
-    const ownCredits = card.getByRole('button', { name: 'Your credits' });
-    await expect(ownCredits).toBeVisible();
-    expect(await mockCallCount(request)).toBe(callsBefore);
-    expect(await financialState(w)).toEqual(before);
-    await captureOrgEvidence(page, 'spend-refusal-paused');
-
-    // Choosing a source switches THIS conversation; the person sends again and it goes through.
-    await ownCredits.click();
-    await expect(page.getByText('This conversation now spends from Your credits. Send your message again.')).toBeVisible();
-    await sendChatMessage(chat, 'Summarize the launch plan');
-    await expect(chat.locator('[data-testid="chat-message"][data-role="assistant"]').first()).toBeVisible({ timeout: 60_000 });
-    await expect(card).toHaveCount(0);
-    expect(await mockCallCount(request)).toBe(callsBefore + 1);
-    await expectPersonalCharge(w, before);
+    await pausedRefusalAndSwitchJourney({ browser, baseURL, request });
   });
 
   test('SPEND-2 (partial) SPEND-3 (partial) a fresh global draft chooses its wallet before the first message, remains out of history until sent, and charges the chosen personal wallet', async ({ browser, baseURL, request }) => {
-    const w = await seedSpendWorld();
-    const page = await openAs(browser, w.marcus, baseURL!);
-    const pulseResponse = page.waitForResponse(response => new URL(response.url()).pathname === '/api/pulse/generate' && response.request().method() === 'POST');
-    await page.goto(`/dashboard/${w.productId}`);
-    const globalChat = page.getByTestId('global-assistant-view');
-    await expect(globalChat).toBeVisible();
-    const strip = globalChat.getByTestId('composer-spend-strip');
-    await expect(strip).toContainText('Spending from Product wallet', { timeout: 30_000 });
-    const draftId = await globalChat.evaluate((node) => node.closest('[data-spend-surface]')?.getAttribute('data-spend-surface'));
-    expect(draftId).toBeTruthy();
-    expect(await db.select().from(conversations).where(eq(conversations.id, draftId!))).toEqual([]);
-    // The global dashboard generates a personal Pulse before any chat send.
-    // Wait for its asynchronous billing too, so the choice has its own baseline.
-    expect((await pulseResponse).ok()).toBe(true);
-    await expect.poll(async () => {
-      const state = await financialState(w);
-      return { pulse: state.usage.filter(row => row.source === 'pulse').length, ledger: state.ledger.filter(row => row.entryType === 'usage').length, holds: state.holds.length };
-    }).toEqual({ pulse: 1, ledger: 1, holds: 0 });
-    expect(await mockCallCount(request)).toBe(1);
-    const before = await financialState(w);
-    const callsBefore = await mockCallCount(request);
-    const callsUrl = `${process.env.E2E_MOCK_OPENROUTER_URL ?? 'http://127.0.0.1:4998'}/__calls`;
-    expect(await (await request.get(callsUrl)).json()).toMatchObject({ requests: [{ stream: false, messageCount: 2 }] });
-
-    await strip.getByRole('button', { name: 'Change' }).click();
-    const choices = page.getByRole('dialog').filter({ hasText: 'Your credits' });
-    await choices.getByRole('radio', { name: /^Your credits/ }).click();
-    await expect(strip).toContainText('Spending from Your credits');
-    await expect(page.locator('header').getByTestId('spend-source-chip')).toHaveAttribute('aria-label', /^Spending from Your credits:/);
-    const personal = await getBalance(w.marcus.userId);
-    const [draft] = await db.select().from(conversations).where(eq(conversations.id, draftId!));
-    expect(draft).toMatchObject({ userId: w.marcus.userId, type: 'global', chosenWalletId: personal!.id });
-    expect(await db.select({ id: chatMessages.id }).from(chatMessages).where(eq(chatMessages.conversationId, draftId!))).toEqual([]);
-    const hiddenHistory = await page.request.get('/api/ai/global');
-    expect(hiddenHistory.ok()).toBe(true);
-    expect(((await hiddenHistory.json()) as { id: string }[]).some((row) => row.id === draftId)).toBe(false);
-    expect(await mockCallCount(request)).toBe(callsBefore);
-    expect(await financialState(w)).toEqual(before);
-    await captureOrgEvidence(page, 'fresh-global-draft-own-choice');
-
-    await sendChatMessage(globalChat, 'Summarize the launch plan');
-    await expect(globalChat.locator('[data-testid="chat-message"][data-role="assistant"]').first()).toBeVisible({ timeout: 60_000 });
-    expect(await mockCallCount(request)).toBe(callsBefore + 1);
-    expect(await (await request.get(callsUrl)).json()).toMatchObject({ requests: [{ stream: false }, { stream: true }] });
-    await expectPersonalCharge(w, before);
-    const visibleHistory = await page.request.get('/api/ai/global');
-    expect(((await visibleHistory.json()) as { id: string }[]).some((row) => row.id === draftId)).toBe(true);
-    await captureOrgEvidence(page, 'fresh-global-draft-first-reply');
+    await freshGlobalChoiceJourney({ browser, baseURL, request });
   });
 
   for (const unavailableSource of ['paused', 'empty'] as const) {
     test(`UI-8 (partial) an allowed ${unavailableSource}-wallet fallback discloses personal spend in the strip, chip and reply and charges only that wallet`, async ({ browser, baseURL, request }) => {
-      const w = await seedSpendWorld();
-      await db.update(organizations).set({ policies: { walletFallback: 'own_credits' } }).where(eq(organizations.id, w.org.orgId));
-      await db.update(wallets).set({
-        status: unavailableSource === 'paused' ? 'paused' : 'active',
-        ...(unavailableSource === 'empty' ? { monthlyAllowanceCents: 0 } : {}),
-        fallbackRule: 'own_credits',
-      }).where(eq(wallets.id, w.walletId));
-      const pageId = await createAgentPage(w.productId, w.marcus.userId);
-      const page = await openAs(browser, w.marcus, baseURL!);
-      await gotoChatPage(page, w.productId, pageId);
-      const chat = page.getByTestId('session-chat');
-      await expect(chat.getByTestId('composer-spend-strip')).toContainText('Spending from Your credits');
-      await expect(chat.getByTestId('composer-spend-strip')).toContainText('Product wallet cannot cover this');
-      await expect(page.locator('header').getByTestId('spend-source-chip')).toHaveAttribute('aria-label', /^Spending from Your credits:/);
-      const before = await financialState(w);
-      await sendChatMessage(chat, 'Summarize the launch plan');
-      const fallbackNotice = chat.getByRole('status').filter({ hasText: "Used your own credits because Product wallet couldn't cover this." });
-      await expect(fallbackNotice).toBeVisible({ timeout: 60_000 });
-      await expect(fallbackNotice.getByRole('button', { name: 'Change' })).toBeVisible();
-      await expect(chat.locator('[data-testid="chat-message"][data-role="assistant"]').first()).toBeVisible();
-      expect(await mockCallCount(request)).toBe(1);
-      await expectPersonalCharge(w, before);
-      await captureOrgEvidence(page, `spend-fallback-${unavailableSource}`);
+      await personalFallbackJourney({ browser, baseURL, request }, unavailableSource);
     });
   }
 
   test('UI-8 (partial) persisted scheduled-workflow states show the creator and wallet, explain a skipped run and disable a departed creator', async ({ browser, baseURL }) => {
-    const w = await seedSpendWorld();
-    const agentPageId = await createAgentPage(w.productId, w.jono.userId);
-    const [scheduled, departed] = await db.insert(workflows).values([
-      { driveId: w.productId, createdBy: w.jono.userId, name: 'Weekly digest', agentPageId, prompt: 'Summarize', cronExpression: '0 9 * * 1', isEnabled: true },
-      { driveId: w.productId, createdBy: null, name: 'Departed creator digest', agentPageId, prompt: 'Summarize', cronExpression: '0 9 * * 1', isEnabled: false, ownerLeftAt: new Date() },
-    ]).returning({ id: workflows.id });
-    await db.insert(workflowRuns).values({ workflowId: scheduled.id, sourceTable: 'cron', status: 'cancelled', error: 'AI credit gate denied: source_refused (drive_wallet_empty)', endedAt: new Date() });
-    const page = await openAs(browser, w.jono, baseURL!);
-    await page.goto(`/dashboard/${w.productId}/workflows`);
-    const scheduledRow = page.getByRole('row').filter({ hasText: 'Weekly digest' });
-    await expect(scheduledRow.getByTestId('automation-spends-as')).toContainText('Created by Jono');
-    await scheduledRow.getByText('As Jono', { exact: true }).hover();
-    const spendDetail = page.getByRole('tooltip');
-    await expect(spendDetail).toContainText('Each scheduled run spends only Product wallet, as Jono under their caps');
-    await expect(spendDetail).toContainText("never falls back to anyone's own credits");
-    await expect(spendDetail).toContainText('A channel mention or a manual Run counts against whoever triggered it.');
-    await expect(scheduledRow.getByTestId('automation-skipped')).toHaveAttribute('aria-label', 'Skipped: Product wallet was empty.');
-    const departedRow = page.getByRole('row').filter({ hasText: 'Departed creator digest' });
-    await expect(departedRow.getByTestId('automation-owner-left')).toContainText('Disabled until an org Owner or Admin reassigns or deletes it.');
-    await expect(departedRow.getByRole('switch')).toBeDisabled();
-    await expect(departedRow.getByRole('switch')).toHaveAttribute('aria-checked', 'false');
-    await expect(departedRow.getByRole('button', { name: 'Run workflow' })).toBeDisabled();
-    expect((await db.select().from(workflowRuns).where(eq(workflowRuns.workflowId, departed.id)))).toEqual([]);
-    await captureOrgEvidence(page, 'workflow-spend-states');
+    await automationStatesJourney({ browser, baseURL });
   });
 
+});
+
+// New org/user fixtures and closed contexts isolate each provider and money baseline.
+test('UI-8 Spending-from chip and popover, composer strip, refusal card, automation state per canvas page 2', async ({ browser, baseURL, request }) => {
+  const context = { browser, baseURL, request };
+  const isolatedStep = async (name: string, journey: () => Promise<void>) => {
+    await test.step(name, async () => {
+      await resetMock(request);
+      try {
+        await journey();
+      } finally {
+        await Promise.all(openContexts.splice(0).map(browserContext => browserContext.close()));
+      }
+    });
+  };
+  await isolatedStep('Chip and every funded source in the popover', () => chipAndPopoverJourney(context));
+  await isolatedStep('Composer, paused refusal, source switch and personal charge', () => pausedRefusalAndSwitchJourney(context));
+  await isolatedStep('Fresh global source choice before the first charged turn', () => freshGlobalChoiceJourney(context));
+  await isolatedStep('Paused wallet fallback disclosed in composer, chip and reply', () => personalFallbackJourney(context, 'paused'));
+  await isolatedStep('Empty wallet fallback disclosed in composer, chip and reply', () => personalFallbackJourney(context, 'empty'));
+  await isolatedStep('Automation creator, wallet, skipped run and departed owner', () => automationStatesJourney(context));
 });

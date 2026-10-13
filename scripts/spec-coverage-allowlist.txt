@@ -1,6 +1,0 @@
-# UI-8: component tests and browser spec33 prove source disclosure, refusal with unchanged financial
-# state/provider count, explicit personal retry, empty/paused fallback and persisted automation states.
-# v1/completions and consult route tests prove fallback metadata; mentions use only drive-wallet spend
-# per SPEND-6, so an uncovered wallet skips rather than falling back to personal credits.
-# Retained pending rebuilt fresh-draft first-choice/provider proof and canvas page2 review.
-UI-8
