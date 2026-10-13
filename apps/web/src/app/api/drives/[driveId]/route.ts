@@ -14,6 +14,7 @@ import { trackDriveOperation } from '@pagespace/lib/monitoring/activity-tracker'
 import { syncPublishedHomeRoot, regeneratePublishedSiteFiles } from '@/lib/canvas/publish-page';
 import { resolveUploadedImageAssetUrl } from '@/lib/canvas/asset-pipeline';
 import { db } from '@pagespace/db/db';
+import { publishDriveTransitionInvalidation } from '@pagespace/lib/services/drive-transition-invalidation';
 import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: false };
@@ -374,6 +375,16 @@ export async function DELETE(
       }),
       recipientUserIds
     );
+
+    // ARCH-2: a trash ends live access for everyone but the owner (who reaches it through
+    // their trash), with no row deleted — re-resolve each recipient post-commit and kick
+    // the held rooms of those whose access ended.
+    await publishDriveTransitionInvalidation({
+      driveId,
+      orgIdBefore: drive.orgId,
+      orgIdAfter: drive.orgId,
+      audienceBefore: recipientUserIds,
+    });
 
     trackDriveOperation(userId, 'delete', driveId, {
       name: drive.name,

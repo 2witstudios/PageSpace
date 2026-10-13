@@ -2164,7 +2164,7 @@ export async function collectUserWallet(database: DB, userId: string, options?: 
     id: string;
     walletId: string;
     walletOwnerType: 'user' | 'org';
-    walletSubjectType: string | null;
+    walletSubjectType: 'drive' | null;
     walletSubjectDriveName: string | null;
     funderKind: 'owner' | 'donation';
     originalCents: number;

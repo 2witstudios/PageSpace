@@ -1689,6 +1689,11 @@
       "import": "./dist/services/org-membership-sync.js",
       "require": "./dist/services/org-membership-sync.js"
     },
+    "./services/drive-transition-invalidation": {
+      "types": "./dist/services/drive-transition-invalidation.d.ts",
+      "import": "./dist/services/drive-transition-invalidation.js",
+      "require": "./dist/services/drive-transition-invalidation.js"
+    },
     "./services/org-membership-sync-core": {
       "types": "./dist/services/org-membership-sync-core.d.ts",
       "import": "./dist/services/org-membership-sync-core.js",

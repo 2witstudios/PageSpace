@@ -350,7 +350,7 @@ describe('X-2 GDPR export carries the subject\'s org membership, wallets and don
     let histDriveId = '';
     try {
       const [histDrive] = await db.insert(drives).values({
-        name: 'History Export Drive', slug: `hist-${createId()}`, ownerId: histUser.id, type: 'AI_CHAT',
+        name: 'History Export Drive', slug: `hist-${createId()}`, ownerId: histUser.id,
       }).returning({ id: drives.id });
       histDriveId = histDrive.id;
       // One transaction: the wallet-leg invariant trigger re-checks a touched

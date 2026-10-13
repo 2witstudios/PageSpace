@@ -158,6 +158,25 @@ afterAll(async () => {
 });
 
 describe('moveDriveToOrg', () => {
+  it('ARCH-2 the move hands its sync call the drive\u2019s BEFORE audience, for the post-commit invalidation', async () => {
+    const driveId = await seedPersonalDrive();
+    await db.insert(driveMembers).values([
+      { driveId, userId: lena, role: 'ADMIN', acceptedAt: new Date() },
+      { driveId, userId: chris, role: 'MEMBER', acceptedAt: new Date() },
+    ]);
+
+    const result = await moveDriveToOrg(marcus, driveId, { credential: 'session', orgId: northwind }, deps);
+
+    expect(result.ok).toBe(true);
+    const call = syncCalls[syncCalls.length - 1];
+    expect(call?.kind).toBe('move-in');
+    // Everyone who could reach the drive before the move — the owner and both row holders —
+    // is named, so the committed transition can kick the rooms whose access or governing
+    // policy the move ended.
+    const audience = call?.kind === 'move-in' ? call.audienceBefore : undefined;
+    expect([...(audience ?? [])].sort()).toEqual([chris, lena, marcus].sort());
+  });
+
   it('DRV-2 moving a drive in keeps its members, roles, pages, envs and publishSubdomain', async () => {
     const driveId = await seedPersonalDrive();
     const [role] = await db.insert(driveRoles).values({ driveId, name: 'Editors', permissions: {} }).returning();
@@ -189,7 +208,8 @@ describe('moveDriveToOrg', () => {
     );
     expect(await db.select().from(pages).where(eq(pages.driveId, driveId))).toHaveLength(1);
     expect(await db.select().from(driveEnvs).where(eq(driveEnvs.driveId, driveId))).toHaveLength(1);
-    expect(syncCalls).toEqual([{ kind: 'move-in', driveId, orgId: northwind }]);
+    // ARCH-2: the call names the BEFORE audience for the post-commit invalidation.
+    expect(syncCalls).toEqual([{ kind: 'move-in', driveId, orgId: northwind, audienceBefore: expect.any(Array) }]);
     expect(published).toEqual([{ call: syncCalls[0], orgIdAtPublish: northwind }]);
   });
 
@@ -404,7 +424,7 @@ describe('moveDriveOutOfOrg', () => {
 
       await moveDriveOutOfOrg(jono, driveId, { credential: 'session', implicitMembers }, deps);
 
-      expect(syncCalls).toEqual([{ kind: 'move-out', driveId, orgId: northwind, implicitMembers }]);
+      expect(syncCalls).toEqual([{ kind: 'move-out', driveId, orgId: northwind, implicitMembers, audienceBefore: expect.any(Array) }]);
       expect(published).toEqual([{ call: syncCalls[0], orgIdAtPublish: null }]);
     }
   );

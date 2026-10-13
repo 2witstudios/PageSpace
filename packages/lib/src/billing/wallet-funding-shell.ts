@@ -42,6 +42,7 @@ import { tierAllowanceCents } from './money-model';
 import { orgBillingLockKey } from './org-subscription-core';
 import { computeMonthlyRefill, forgivenAtRefillCents } from './credit-core';
 import { debtClearedRow, ALLOCATION_RESET_ENTRY, DEBT_FORGIVEN_ENTRY, LEG_REFUND_ENTRY } from './wallet-ledger-core';
+import { includedDrawnCents } from './wallet-legs';
 import { RENEWAL_CAPABLE_STATUSES, TIER_ALLOWANCE_REFILLS } from './credit-pricing';
 import {
   orgInvoiceFundingInput,
@@ -606,6 +607,7 @@ export async function refundFundingLeg(legId: string, cents: number): Promise<Le
         funderKind: walletFundingLegs.funderKind,
         funderUserId: walletFundingLegs.funderUserId,
         remainingCents: walletFundingLegs.remainingCents,
+        includedCents: walletFundingLegs.includedCents,
         nonRefundable: walletFundingLegs.nonRefundable,
         createdAt: walletFundingLegs.createdAt,
       })
@@ -615,7 +617,10 @@ export async function refundFundingLeg(legId: string, cents: number): Promise<Le
     if (!row) return { kind: 'refuse', legId, reason: 'invalid_amount' };
     const plan = planLegRefund({ ...row, createdAtMs: row.createdAt.getTime() }, cents);
     if (plan.kind === 'refuse') return plan;
-    await tx.update(walletFundingLegs).set({ remainingCents: plan.remainingCents }).where(eq(walletFundingLegs.id, legId));
+    // MONEY-4: the cents leaving carry their included share with them, the same proportional
+    // rule a spend draw uses, in the same statement so the row CHECK always holds.
+    const includedRefunded = includedDrawnCents(row, plan.cents);
+    await tx.update(walletFundingLegs).set({ remainingCents: plan.remainingCents, includedCents: row.includedCents - includedRefunded }).where(eq(walletFundingLegs.id, legId));
     await tx
       .update(wallets)
       .set({ topupRemainingCents: sql`${wallets.topupRemainingCents} - ${plan.cents}` })

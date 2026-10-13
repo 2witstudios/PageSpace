@@ -41,6 +41,7 @@ import {
 import { retryOnDeadlock } from '../organizations/repository';
 import { openDriveFloorRefusal } from '../organizations/open-role-floor';
 import { holdOrgGuestsUnderPolicy, kickSuspendedGuests } from '../permissions/guest-holds';
+import { listDriveAudience } from '../permissions/drive-audience';
 import { checkOrgActive, checkOrgMayLoosen, type OrgLapsedRefusal } from '../organizations/status';
 import { removeFormerLeadOwnerRow } from '../permissions/org-drive-membership';
 import { getActorInfo, logActivityWithTx } from '../monitoring/activity-logger';
@@ -56,11 +57,11 @@ export type OrgDriveTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 /** What the org-membership sync is asked to do for one drive (D-OW-6, D-OW-10). */
 export type OrgMembershipSyncCall =
-  | { kind: 'move-in'; driveId: string; orgId: string }
+  | { kind: 'move-in'; driveId: string; orgId: string; audienceBefore?: readonly string[] }
   | { kind: 'create'; driveId: string; orgId: string }
-  | { kind: 'move-out'; driveId: string; orgId: string; implicitMembers: ImplicitMembersChoice }
-  | { kind: 'visibility'; driveId: string; orgId: string }
-  | { kind: 'lead-change'; driveId: string; orgId: string; fromUserId: string; toUserId: string };
+  | { kind: 'move-out'; driveId: string; orgId: string; implicitMembers: ImplicitMembersChoice; audienceBefore?: readonly string[] }
+  | { kind: 'visibility'; driveId: string; orgId: string; audienceBefore?: readonly string[] }
+  | { kind: 'lead-change'; driveId: string; orgId: string; fromUserId: string; toUserId: string; audienceBefore?: readonly string[] };
 
 /** Best-effort realtime publish, run only after the membership change has committed. */
 export type PublishAfterCommit = () => Promise<void>;
@@ -176,6 +177,9 @@ export async function moveDriveToOrg(
   input: { orgId: string; orgVisibility?: OrgDriveVisibility; credential: WalletCredential },
   deps: OrgDriveServiceDeps
 ): Promise<MoveDriveResult> {
+  // ARCH-2: who could reach the drive before the move, so the post-commit invalidation can
+  // close every held room the transition ends — rowless power and policy context included.
+  const audienceBefore = (await listDriveAudience(driveId)).map((member) => member.userId);
   // Org, then membership, then drive: departures hold membership before reassigning drives.
   const outcome = await retryOnOrgSlugConflict(() => retryOnDeadlock(() => transactionWithOrgAudit(async (tx, audit) => {
     const orgExists = await lockOrg(tx, input.orgId);
@@ -224,7 +228,7 @@ export async function moveDriveToOrg(
     // WAL-9 (D-OW-64, symmetric): the owner stops paying for this drive's apps' dedicated hosting at
     // period end — the drive is the org's now, and the org buys its own.
     await releaseDedicatedHostingInTx(tx, { driveId, formerPayer: { kind: 'user' } });
-    const publish = await deps.syncOrgMembership(tx, { kind: 'move-in', driveId, orgId: input.orgId });
+    const publish = await deps.syncOrgMembership(tx, { kind: 'move-in', driveId, orgId: input.orgId, audienceBefore });
     // POL-2 (Review #2762 P1-1): the drive brings its outsiders with it. Under the org row lock taken above, the
     // org's guests policy decides them as it decides any admission: off parks them (restored when guests come back
     // on), approve queues them for an Owner or Admin, on leaves them. The move itself is never refused for it.
@@ -246,6 +250,8 @@ export async function moveDriveOutOfOrg(
   input: { implicitMembers: ImplicitMembersChoice | null; credential: WalletCredential },
   deps: OrgDriveServiceDeps
 ): Promise<MoveDriveResult> {
+  // ARCH-2: the BEFORE audience, read before any lock or rewrite (see moveDriveToOrg).
+  const audienceBefore = (await listDriveAudience(driveId)).map((member) => member.userId);
   const outcome = await retryOnDeadlock(() => transactionWithOrgAudit(async (tx, audit) => {
     // The org row before the drive row: org deletion and joining an org lock in that order, and
     // taking the drive first would close a lock cycle with either.
@@ -286,6 +292,7 @@ export async function moveDriveOutOfOrg(
       driveId,
       orgId,
       implicitMembers: verdict.implicitMembers,
+      audienceBefore,
     });
     await audit({ orgId, driveId, eventType: 'org.drive.moved_out', actorId, resourceType: 'drive', resourceId: driveId, details: { implicitMembers: input.implicitMembers } });
     return { ok: true as const, drive: moved, orgId, storageReattribution, publish };
@@ -403,6 +410,8 @@ export async function changeDriveVisibility(
   input: { orgVisibility: OrgDriveVisibility },
   deps: OrgDriveServiceDeps
 ): Promise<ChangeVisibilityResult> {
+  // ARCH-2: the BEFORE audience, read before any lock or rewrite (see moveDriveToOrg).
+  const audienceBefore = (await listDriveAudience(driveId)).map((member) => member.userId);
   const outcome = await retryOnDeadlock(() => transactionWithOrgAudit(async (tx, audit) => {
     const locked = await lockDriveWithOrg(tx, driveId, actorId, deps);
     if (!locked) return driveNotFound();
@@ -425,7 +434,7 @@ export async function changeDriveVisibility(
       .set({ orgVisibility: verdict.to, updatedAt: new Date() })
       .where(eq(drives.id, driveId))
       .returning();
-    const publish = await deps.syncOrgMembership(tx, { kind: 'visibility', driveId, orgId: drive.orgId });
+    const publish = await deps.syncOrgMembership(tx, { kind: 'visibility', driveId, orgId: drive.orgId, audienceBefore });
     await audit({ orgId: drive.orgId, driveId, eventType: 'org.drive.visibility_changed', actorId, resourceType: 'drive', resourceId: driveId, details: { from: verdict.from, to: verdict.to } });
     return { ok: true as const, changed: true, drive: updated, from: verdict.from, to: verdict.to, publish };
   }));
@@ -455,6 +464,8 @@ export async function changeOrgDriveLead(
   input: { newLeadId: string },
   deps: OrgDriveServiceDeps
 ): Promise<ChangeLeadResult> {
+  // ARCH-2: the BEFORE audience, read before any lock or rewrite (see moveDriveToOrg).
+  const audienceBefore = (await listDriveAudience(driveId)).map((member) => member.userId);
   const outcome = await retryOnDeadlock(() => transactionWithOrgAudit(async (tx, audit) => {
     const locked = await lockDriveWithOrg(tx, driveId, actorId, deps, input.newLeadId);
     if (!locked) return driveNotFound();
@@ -501,6 +512,7 @@ export async function changeOrgDriveLead(
       orgId: drive.orgId,
       fromUserId: verdict.fromUserId,
       toUserId: verdict.toUserId,
+      audienceBefore,
     });
     await audit({
       orgId: drive.orgId,

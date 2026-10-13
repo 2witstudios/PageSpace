@@ -12,8 +12,33 @@ import { db } from '@pagespace/db/db';
 import { loadEffectiveDriveMembership } from '../permissions/org-drive-membership';
 import { closeStaleDriveJoinRequests } from '../permissions/drive-join-request-closure';
 import { publishDriveAccessEvents, publishOrgMembershipSyncEvents, syncDriveOrgMembership, type OrgMembershipSyncPorts } from './org-membership-sync';
-import type { OrgDriveServiceDeps } from './org-drive-service';
+import { publishDriveTransitionInvalidation } from './drive-transition-invalidation';
+import type { OrgDriveServiceDeps, OrgMembershipSyncCall } from './org-drive-service';
 import { getOrgPolicies } from '../organizations/policy-reader';
+
+/**
+ * The ARCH-2 post-commit invalidation for one transition call, or null when the call cannot
+ * change access (a create: a new drive holds no rooms). The governing org before and after
+ * decides whether the realtime policy fanout must re-decide held rooms.
+ */
+function transitionInvalidationFor(call: OrgMembershipSyncCall): (() => Promise<void>) | null {
+  switch (call.kind) {
+    case 'move-in':
+      if (!call.audienceBefore) return null;
+      return () => publishDriveTransitionInvalidation({ driveId: call.driveId, orgIdBefore: null, orgIdAfter: call.orgId, audienceBefore: call.audienceBefore ?? [] });
+    case 'move-out':
+      if (!call.audienceBefore) return null;
+      return () => publishDriveTransitionInvalidation({ driveId: call.driveId, orgIdBefore: call.orgId, orgIdAfter: null, audienceBefore: call.audienceBefore ?? [] });
+    case 'visibility':
+      if (!call.audienceBefore) return null;
+      return () => publishDriveTransitionInvalidation({ driveId: call.driveId, orgIdBefore: call.orgId, orgIdAfter: call.orgId, audienceBefore: call.audienceBefore ?? [] });
+    case 'lead-change':
+      if (!call.audienceBefore) return null;
+      return () => publishDriveTransitionInvalidation({ driveId: call.driveId, orgIdBefore: call.orgId, orgIdAfter: call.orgId, audienceBefore: call.audienceBefore ?? [] });
+    case 'create':
+      return null;
+  }
+}
 
 export const orgDriveServiceDeps: OrgDriveServiceDeps = {
   // The decision stays requireOrgRole's (ORG-5); only the membership read is bound to the move's
@@ -44,10 +69,19 @@ export const orgDriveServiceDeps: OrgDriveServiceDeps = {
     // DRV-6: a visibility change off Restricted, a move out, or a requester made lead leaves their
     // pending request asking for nothing; it closes in the same transaction.
     await closeStaleDriveJoinRequests(tx, [call.driveId]);
-    if (call.kind !== 'lead-change') return () => publishOrgMembershipSyncEvents(result);
+    // ARCH-2: the transition's full access delta, on top of the row sync's events — a move,
+    // visibility change or lead change can end rowless access and change the drive's governing
+    // sign-in policy, and neither is visible in the deleted rows the sync alone publishes.
+    const invalidation = transitionInvalidationFor(call);
+    const rowEvents = () => publishOrgMembershipSyncEvents(result);
+    if (!invalidation) return rowEvents;
+    if (call.kind !== 'lead-change') {
+      return async () => { await rowEvents(); await invalidation(); };
+    }
     return async () => {
-      await publishOrgMembershipSyncEvents(result);
+      await rowEvents();
       await publishLeadChangeEvents(call.driveId, call.fromUserId, call.toUserId);
+      await invalidation();
     };
   },
 
