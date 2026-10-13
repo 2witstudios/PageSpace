@@ -157,7 +157,7 @@ test('a prompt streams its reply in, and both are there after a reload', async (
   await expect(reply).toContainText(/chunk-0 chunk-1 .*chunk-11/);
 
   // The conversation is in the history under Today, named for its first prompt.
-  await expect(historyRow(page, 'What ships in October?')).toHaveAttribute('aria-current', 'true');
+  await expect(historyRow(page, 'What ships in October?')).toHaveAttribute('aria-current', 'page');
 
   // A reload reads both back from the stored thread.
   await page.reload();
@@ -252,18 +252,18 @@ test('the history switches between two conversations', async ({ browser, baseURL
   await ask(page, 'Alpha question');
   await turnEnded(page);
   await expect(said(page, 'assistant')).toHaveText(/pong/);
-  await expect(historyRow(page, 'Alpha question')).toHaveAttribute('aria-current', 'true');
+  await expect(historyRow(page, 'Alpha question')).toHaveAttribute('aria-current', 'page');
 
   await history(page).getByRole('button', { name: 'New chat' }).click();
   await expectEmptyChat(page);
   await ask(page, 'Beta question');
   await turnEnded(page);
-  await expect(historyRow(page, 'Beta question')).toHaveAttribute('aria-current', 'true');
-  await expect(historyRow(page, 'Alpha question')).not.toHaveAttribute('aria-current', 'true');
+  await expect(historyRow(page, 'Beta question')).toHaveAttribute('aria-current', 'page');
+  await expect(historyRow(page, 'Alpha question')).not.toHaveAttribute('aria-current', 'page');
 
   const showing = async (prompt: string, other: string) => {
-    await expect(historyRow(page, prompt)).toHaveAttribute('aria-current', 'true');
-    await expect(historyRow(page, other)).not.toHaveAttribute('aria-current', 'true');
+    await expect(historyRow(page, prompt)).toHaveAttribute('aria-current', 'page');
+    await expect(historyRow(page, other)).not.toHaveAttribute('aria-current', 'page');
     await expect(said(page, 'user')).toHaveText(new RegExp(prompt));
     await expect(said(page, 'assistant')).toHaveText(/pong/);
   };
