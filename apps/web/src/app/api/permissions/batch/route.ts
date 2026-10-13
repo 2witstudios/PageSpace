@@ -47,6 +47,7 @@ export async function POST(request: NextRequest) {
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
     if (isAuthError(auth)) return auth.error;
+    const actor = actorFromAuth(auth);
     const userId = auth.userId;
 
     const body = await request.json();
@@ -82,7 +83,7 @@ export async function POST(request: NextRequest) {
 
     const startTime = Date.now();
 
-    const permissionsMap = await getBatchPagePermissions(actorFromAuth(auth), pageIds);
+    const permissionsMap = await getBatchPagePermissions(actor, pageIds);
 
     const endTime = Date.now();
     const duration = endTime - startTime;
