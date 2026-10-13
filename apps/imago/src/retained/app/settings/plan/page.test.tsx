@@ -1,7 +1,10 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, test, vi } from 'vitest';
 import { assert } from 'riteway/vitest';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, configure, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+
+// The plan page waits on several mocked requests; under a full coverage run 1s was not always enough.
+configure({ asyncUtilTimeout: 5000 });
 import { SWRConfig } from 'swr';
 import type { ReactNode } from 'react';
 import PlanPage from './page';
