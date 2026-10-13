@@ -9,6 +9,7 @@ import { ChatHistory } from '../../chat/chat-history/chat-history';
 import { ChatPane } from '../../chat/chat-pane/chat-pane';
 import { FilesPane } from '../../files/files-pane/files-pane';
 import { MessagesPane } from '../../messages/messages-pane/messages-pane';
+import { DmIndexPane } from '../../messages/dm-index/dm-index';
 import { CommandPalette } from '../../palette/palette/palette';
 import { TasksPane } from '../../tasks/tasks-pane/tasks-pane';
 import { AvatarMenu } from '../avatar-menu/avatar-menu';
@@ -17,9 +18,10 @@ import { DRIVES, driveStatus, drivesFrom, type DriveSummary } from '../drives/dr
 import { DRIVE_NOT_FOUND, renderNotFound } from '../not-found/not-found.render';
 import { renderPaneHeader } from '../pane/pane-header';
 import { ListPane } from '../list-pane/list-pane';
-import { AskPill, ClosePage, CloseImago, CollapseImago, ShowSidebar } from '../controls/controls';
+import { AskPill, ClosePage, CloseImago, CloseSidebar, CollapseImago, ShowSidebar } from '../controls/controls';
 import { EmptyMiddle } from '../empty-middle/empty-middle';
 import { PageHead } from '../../files/page-head/page-head';
+import { ConversationHead } from '../../messages/dm-head/conversation-head';
 import { TabBar } from '../tabs/tab-bar';
 import { sectionPath } from '../tabs/tabs-model';
 import { columnsFor, type Columns } from '../stage/columns';
@@ -114,6 +116,16 @@ const listFor = (stage: Stage, layout: PaneLayout): ReactNode => {
   if (stage.section === 'settings') return stage.driveId === null ? null : <DriveSettingsNavPane driveId={stage.driveId} />;
   if (stage.section === 'account') return <AccountNavPane />;
   if (!isListSection(stage.section)) return null;
+  // The user-level /dm index: the Direct messages pane alone, with no drive's channels.
+  if (stage.section === 'messages' && stage.driveId === null) {
+    return (
+      <DmIndexPane
+        variant={layout.list}
+        close={<CloseSidebar section="messages" />}
+        selectedConversationId={stage.object?.kind === 'conversation' ? stage.object.conversationId : null}
+      />
+    );
+  }
   if (stage.section === 'files' && stage.driveId !== null) {
     return (
       <FilesPane
@@ -194,6 +206,8 @@ export function Shell({ children, homeDriveId, initialDrives }: ShellProps) {
       <section className={columnClass} aria-label={title}>
         {!missing && stage.object?.kind === 'page' ? (
           <PageHead pageId={stage.object.pageId} leading={opener(stage, columns, 'page')} trailing={pageTrailing} />
+        ) : !missing && stage.object?.kind === 'conversation' ? (
+          <ConversationHead conversationId={stage.object.conversationId} leading={opener(stage, columns, 'page')} trailing={pageTrailing} />
         ) : (
           renderPaneHeader({ title, leading: opener(stage, columns, 'page'), actions: missing ? null : pageTrailing })
         )}
