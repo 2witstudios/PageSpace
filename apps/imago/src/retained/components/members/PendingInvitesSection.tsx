@@ -9,31 +9,33 @@ interface PendingInvitesSectionProps {
 }
 
 /**
- * Owner/Admin-only list of pending drive invites. Renders nothing for
- * regular members or when the array is empty — keeps the members page
- * uncluttered for viewers without the management surface.
+ * Owner/Admin-only pending drive invites (C-Members "Pending invites"): the heading with its
+ * live count, then each invite, or a line saying there are none. Regular members see nothing.
  */
 export function PendingInvitesSection({ invites, currentUserRole, onRevoke }: PendingInvitesSectionProps) {
   const canManage = currentUserRole === 'OWNER' || currentUserRole === 'ADMIN';
-  if (!canManage || invites.length === 0) return null;
+  if (!canManage) return null;
 
   return (
-    <div className="mt-6 bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700">
-      <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-700">
-        <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300">
-          Pending invitations ({invites.length})
-        </h3>
+    <section id="pending" aria-label="Pending invites" className="space-y-3">
+      <h2 className="text-base font-semibold flex items-baseline gap-2">
+        Pending invites
+        <span className="font-mono text-sm font-normal tabular-nums text-gray-500 dark:text-gray-400">{invites.length}</span>
+      </h2>
+      <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 divide-y divide-gray-200 dark:divide-gray-700">
+        {invites.length === 0 ? (
+          <div className="p-6 text-center text-gray-500 dark:text-gray-400 text-sm">No pending invites.</div>
+        ) : (
+          invites.map((invite) => (
+            <PendingInviteRow
+              key={invite.id}
+              invite={invite}
+              canRevoke={canManage}
+              {...(onRevoke && { onRevoke })}
+            />
+          ))
+        )}
       </div>
-      <div className="divide-y divide-gray-200 dark:divide-gray-700">
-        {invites.map((invite) => (
-          <PendingInviteRow
-            key={invite.id}
-            invite={invite}
-            canRevoke={canManage}
-            {...(onRevoke && { onRevoke })}
-          />
-        ))}
-      </div>
-    </div>
+    </section>
   );
 }
