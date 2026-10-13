@@ -8,6 +8,8 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 // vi.hoisted ensures mockFindMany is defined before vi.mock factories run
 const mockFindMany = vi.hoisted(() => vi.fn().mockResolvedValue([]));
 
+// The sign-in row filter has its own integration test (activity-sign-in-filter); here it leaves nothing out.
+vi.mock('@/lib/activities/activity-sign-in-filter', () => ({ activitySignInCondition: vi.fn(async () => undefined) }));
 vi.mock('next/server', () => ({
   NextResponse: {
     json: vi.fn((data: unknown, init?: ResponseInit) => new Response(JSON.stringify(data), {

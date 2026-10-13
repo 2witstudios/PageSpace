@@ -6,6 +6,7 @@ import { composeLine, type ComposedLine } from "@pagespace/lib/home-signals/comp
 import type { HomeContext, Signal } from "@pagespace/lib/home-signals/types";
 import { fetchWithAuth } from "@/lib/auth/auth-fetch";
 import type { PulseResponse } from "@/app/api/pulse/route";
+import type { OrgContentSignInRequired } from "@/lib/auth/org-sign-in-denial";
 
 const fetcher = async (url: string) => {
   const response = await fetchWithAuth(url);
@@ -42,6 +43,8 @@ export interface UseHomeSignalsResult {
   /** The composed line, or the quiet-state fallback while loading/erroring. */
   line: ComposedLine;
   isLoading: boolean;
+  /** Set when an org's sign-in policy withholds the Pulse summary from this sign-in (D-OW-62): what unlocks it. */
+  signInRequired: OrgContentSignInRequired | null;
 }
 
 /**
@@ -85,9 +88,9 @@ export function useHomeSignals(): UseHomeSignalsResult {
   }, [data?.shouldRefresh, isGenerating, handleRefresh]);
 
   if (error || !data) {
-    return { line: QUIET_LINE, isLoading };
+    return { line: QUIET_LINE, isLoading, signInRequired: null };
   }
 
   const line = composeLine(reviveSignals(data.signals), reviveContext(data.context));
-  return { line, isLoading };
+  return { line, isLoading, signInRequired: data.signInRequired ?? null };
 }

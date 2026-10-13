@@ -110,7 +110,7 @@ import {
   type ClaimConversationOutcome,
   type ClaimConversationInSessionDeps,
 } from '@/lib/agent-workspaces/claim-conversation-in-workspace';
-import { type AccessActor, automationActor } from '@pagespace/lib/permissions/access-actor';
+import { type AccessActor, automationActor, inDrives } from '@pagespace/lib/permissions/access-actor';
 
 export { isCodeExecutionEnabled };
 
@@ -466,6 +466,12 @@ export async function createConversationInSession(input: {
   /** The pane a human picked into — see `AdmitConversationInput.activeNodeId`. */
   activeNodeId?: string;
 }): Promise<void> {
+  // The row is inserted inside the membership write's transaction, so its `created` event waits for that commit:
+  // emitted earlier, a sidebar re-reads the listing before the thread is in it and stays stale until its poll.
+  const afterCommit: Array<() => void> = [];
+  const queue = (emit: () => void) => {
+    afterCommit.push(emit);
+  };
   await createConversationInSessionWith<DbExecutor>(
     {
       ...buildClaimDeps(input.actor),
@@ -473,10 +479,12 @@ export async function createConversationInSession(input: {
         conversationRepository.createConversation(conversationId, userId, agentPageId, {
           title: title ?? undefined,
           executor: tx,
+          afterCommit: queue,
         }),
       createGlobalConversation: async ({ conversationId, userId, title }, tx) => {
         await resolveOrCreateConversation(userId, conversationId, tx, {
           title: title ?? undefined,
+          afterCommit: queue,
         });
       },
       findConversationIn: async (conversationId, tx) => {
@@ -494,6 +502,7 @@ export async function createConversationInSession(input: {
     },
     { ...input, userId: input.actor.userId },
   );
+  for (const emit of afterCommit) emit();
 }
 
 /**
@@ -1376,8 +1385,8 @@ export async function endSession(workspaceId: string): Promise<EndAgentSessionRe
     // an admission that reopened this session between the stamp above and the
     // write below keeps its tree instead of having it wiped out from under it.
     // See the flag's own doc for the ghost that produces.
-    // Binds nothing, so no credential is judged: the owner, as the system teardown it is.
-    const destroyed = await destroyWorkspaceTree({ workspaceId, actor: automationActor(ownerId, 'session-end-teardown'), requireEnded: true });
+    // Binds nothing, so no credential is judged: the owner, as the system teardown it is, reaching no drive.
+    const destroyed = await destroyWorkspaceTree({ workspaceId, actor: automationActor(ownerId, 'session-end-teardown', inDrives()), requireEnded: true });
     if (destroyed.status === 'refused' && destroyed.code === 'session_reopened') {
       // Not a failure: the session is live again because someone put work into
       // it, and the tree that work created is the one that should stand.

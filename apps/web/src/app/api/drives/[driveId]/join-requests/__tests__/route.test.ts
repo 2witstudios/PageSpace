@@ -177,7 +177,7 @@ describe('drive join request routes', () => {
       const listed = await GET(call('GET'), driveContext);
       expect(listed.status).toBe(200);
       expect(await listed.json()).toEqual({ requests: [{ id: REQUEST_ID, userId: LENA }] });
-      expect(listPendingDriveJoinRequests).toHaveBeenCalledWith(MARCUS, DRIVE);
+      expect(listPendingDriveJoinRequests).toHaveBeenCalledWith(expect.objectContaining({ userId: MARCUS }), DRIVE);
 
       vi.mocked(listPendingDriveJoinRequests).mockResolvedValueOnce({ ok: false, code: 'NOT_APPROVER', status: 403, message: 'no' });
       expect((await GET(call('GET'), driveContext)).status).toBe(403);
@@ -195,7 +195,7 @@ describe('drive join request routes', () => {
 
       expect(response.status).toBe(200);
       expect(await response.json()).toMatchObject({ admitted: true, request: { status: 'approved' } });
-      expect(answerDriveJoinRequest).toHaveBeenCalledWith(MARCUS, DRIVE, REQUEST_ID, 'approve');
+      expect(answerDriveJoinRequest).toHaveBeenCalledWith(expect.objectContaining({ userId: MARCUS }), DRIVE, REQUEST_ID, 'approve');
       expect(auditRequest).toHaveBeenCalledWith(expect.any(Request), expect.objectContaining({
         userId: MARCUS,
         resourceType: 'drive_join_request',

@@ -506,7 +506,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
         void import('@/lib/channels/agent-mention-responder')
           .then(({ triggerMentionedAgentResponses }) =>
             triggerMentionedAgentResponses({
-              userId,
+              // The reply runs as THIS request's credential, sign-in policy included (D-OW-62).
+              sender: actorFromAuth(auth),
               channelId: pageId,
               channelTitle: channel?.title || 'Channel',
               channelType: 'CHANNEL',
@@ -619,7 +620,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       void import('@/lib/channels/agent-mention-responder')
         .then(({ triggerMentionedAgentResponses }) =>
           triggerMentionedAgentResponses({
-            userId,
+            // The reply runs as THIS request's credential, sign-in policy included (D-OW-62).
+            sender: actorFromAuth(auth),
             channelId: pageId,
             channelTitle: channel?.title || 'Channel',
             channelType: 'CHANNEL',

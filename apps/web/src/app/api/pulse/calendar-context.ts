@@ -1,6 +1,7 @@
 import { db } from '@pagespace/db/db'
 import { eq, and, or, gte, lt, inArray, isNull } from '@pagespace/db/operators'
 import { calendarEvents, eventAttendees } from '@pagespace/db/schema/calendar';
+import { orgIdsOfSources } from '@pagespace/lib/permissions/org-derived-content';
 
 export interface PulseCalendarEvent {
   title: string;
@@ -22,6 +23,11 @@ export async function fetchCalendarContext(params: {
   tomorrow: PulseCalendarEvent[];
   pendingInvites: Array<{ eventTitle: string; startAt: Date; allDay: boolean }>;
   allEvents: PulseCalendarEvent[];
+  /**
+   * The drives of every event read here (drive events, events the person only attends, pending RSVPs), sorted and
+   * distinct: sources of the summary, whose orgs it records (D-OW-62). Personal events have none.
+   */
+  sourceDriveIds: string[];
 }> {
   const { userId, driveIds, now, endOfToday, endOfTomorrow } = params;
 
@@ -94,6 +100,7 @@ export async function fetchCalendarContext(params: {
       eventTitle: calendarEvents.title,
       startAt: calendarEvents.startAt,
       allDay: calendarEvents.allDay,
+      driveId: calendarEvents.driveId,
     })
     .from(eventAttendees)
     .innerJoin(calendarEvents, eq(calendarEvents.id, eventAttendees.eventId))
@@ -131,11 +138,28 @@ export async function fetchCalendarContext(params: {
   const upcomingToday = allCalendarEvents.filter(e => e.startAt > now && e.startAt < endOfToday);
   const tomorrow = allCalendarEvents.filter(e => e.startAt >= endOfToday && e.startAt < endOfTomorrow);
 
+  const sourceDriveIds = [...new Set(
+    [...upcomingCalendarEvents, ...attendeeEventRows, ...pendingRsvps].flatMap((event) => (event.driveId ? [event.driveId] : [])),
+  )].sort();
+
   return {
     happeningNow,
     upcomingToday,
     tomorrow,
-    pendingInvites: pendingRsvps,
+    pendingInvites: pendingRsvps.map(({ eventTitle, startAt, allDay }) => ({ eventTitle, startAt, allDay })),
     allEvents: allCalendarEvents,
+    sourceDriveIds,
   };
+}
+
+/**
+ * SEC-2/3 (D-OW-62): every org whose content can feed a Pulse summary — the drives and pages it reads, and the drives
+ * of the calendar events it read (an event the person only attends included) — sorted. Readers must satisfy all.
+ */
+export async function pulseSourceOrgIds(sources: {
+  driveIds: readonly string[];
+  pageIds: readonly string[];
+  calendar: { sourceDriveIds: readonly string[] };
+}): Promise<string[]> {
+  return orgIdsOfSources({ driveIds: [...sources.driveIds, ...sources.calendar.sourceDriveIds], pageIds: sources.pageIds });
 }

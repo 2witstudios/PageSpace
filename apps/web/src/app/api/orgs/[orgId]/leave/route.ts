@@ -4,7 +4,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { announceOrgChange } from '@pagespace/lib/organizations/org-change-events';
 import { leaveOrganization, type LeaveRefusal } from '@pagespace/lib/organizations/leave';
 import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
-import { authorizeOrgRequest, ORG_TOKEN_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
+import { authorizeOrgDeparture, ORG_TOKEN_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
 
 type Context = { params: Promise<{ orgId: string }> };
 
@@ -22,7 +22,8 @@ const REFUSALS: Record<LeaveRefusal, { status: number; code: 'not_member' | 'own
  */
 export async function POST(request: Request, context: Context) {
   const { orgId } = await context.params;
-  const gate = await authorizeOrgRequest(request, orgId, 'MEMBER', ORG_TOKEN_WRITE_AUTH);
+  // Leaving never asks the org's sign-in policy: it only restricts (authorizeOrgDeparture).
+  const gate = await authorizeOrgDeparture(request, orgId, ORG_TOKEN_WRITE_AUTH);
   if (!gate.ok) return gate.response;
   try {
     const limit = await checkDistributedRateLimit(`org_leave:${orgId}:${gate.userId}`, DISTRIBUTED_RATE_LIMITS.API);

@@ -17,7 +17,7 @@ import { directMessages, dmConversations } from '@pagespace/db/schema/social'
 import { pulseSummaries } from '@pagespace/db/schema/dashboard';
 import { userAutomationPreferences } from '@pagespace/db/schema/automation-preferences';
 import { filterPulseEligible } from '@pagespace/lib/billing/automation-preferences';
-import { fetchCalendarContext } from '../calendar-context';
+import { fetchCalendarContext, pulseSourceOrgIds } from '../calendar-context';
 import {
   groupActivitiesForDiff,
   type ActivityForDiff,
@@ -42,7 +42,7 @@ import { toPersonalSubscriptionTier } from '@pagespace/lib/billing/subscription-
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 import { PULSE_SYSTEM_PROMPT } from '../pulse-prompt';
 import { errorLogFields } from '@pagespace/lib/logging/error-cause';
-import { automationActor } from '@pagespace/lib/permissions/access-actor';
+import { HELD_DRIVES, automationActor } from '@pagespace/lib/permissions/access-actor';
 
 export async function POST(req: Request) {
   const authError = validateSignedCronRequest(req);
@@ -214,7 +214,7 @@ async function buildAndPersistPulse(
   const { holdId, walletId } = reservation;
   const userId = user.id;
   // The scheduled pulse runs for the user with no one signing in (D-OW-34): org sign-in policy does not apply.
-  const actor = automationActor(userId, 'pulse-cron');
+  const actor = automationActor(userId, 'pulse-cron', HELD_DRIVES);
   // Decrypt PII at the edge so the pulse prompt addresses the user in plaintext.
   const userNamePlain = await decryptField(user.name);
   const userEmailPlain = await decryptField(user.email);
@@ -768,6 +768,8 @@ async function buildAndPersistPulse(
   const tomorrowEvents = calendarContext.tomorrow;
   const pendingRsvps = calendarContext.pendingInvites;
   const allCalendarEvents = calendarContext.allEvents;
+  // SEC-2/3 (D-OW-62): every org whose drive, page or calendar event can feed this summary; readers must satisfy all.
+  const contributingOrgIds = await pulseSourceOrgIds({ driveIds, pageIds: accessiblePagesList, calendar: calendarContext });
 
   // ========================================
   // BUILD THE RICH CONTEXT WITH DIFFS
@@ -964,6 +966,7 @@ What would be genuinely useful or interesting to say right now? Maybe it's an ob
     summary,
     greeting,
     type: 'scheduled',
+    orgIds: contributingOrgIds,
     contextData: {
       workspace: contextData.workspace,
       workingOn: contextData.activitySummary.slice(0, 5).map(a => ({

@@ -33,9 +33,12 @@ export function planOrgRoomExpiry(input: {
   const expired: Array<{ room: string; resourceId: string; code: OrgAuthenticationDenialCode }> = [];
   let earliest: number | null = null;
   for (const { room, resourceId, policy } of rooms) {
-    const decision = decideActorAuthentication({ actor, policy, nowMs });
+    // `driveId` matters only to an automation's scope; a socket always carries a credential, decided by `policy`.
+    const decision = decideActorAuthentication({ actor, driveId: resourceId, policy, nowMs });
     if (!decision.allowed) {
-      expired.push({ room, resourceId, code: decision.code });
+      // A socket's actor is a credential, so an automation's out-of-scope refusal cannot occur here; were it ever to,
+      // the room is still left (fail closed) and the person is asked to sign in again.
+      expired.push({ room, resourceId, code: decision.code === 'automation_out_of_scope' ? 'org_reauthentication_required' : decision.code });
       continue;
     }
     const maxAgeMinutes = policy?.maximumSessionAgeMinutes ?? null;
