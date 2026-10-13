@@ -59,8 +59,9 @@ test('creates through the retained palette, edits with the retained toolbar and 
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
   await expect(page.locator('.retained-ui.dark').first()).toBeVisible();
   await page.keyboard.press('Escape');
-  // v3 has no second header bar: History lives in the page head's "…" Page actions menu.
-  await page.locator('[data-slot="object"] summary[aria-label="Page actions"]').click();
+  // v3 has no second header bar: History lives in the page head's "…" Page tools menu (the
+  // Page actions menu beside it holds the page's rename, move and delete).
+  await page.locator('[data-slot="object"] summary[aria-label="Page tools"]').click();
   await page.getByRole('button', { name: 'History', exact: true }).click();
   await expect(page.getByRole('dialog', { name: 'Page history' })).toBeVisible();
   await expect(page.getByText('Page Activity', { exact: true })).toBeVisible();
