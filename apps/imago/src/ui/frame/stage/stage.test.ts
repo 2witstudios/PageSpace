@@ -1,6 +1,6 @@
 import { describe, test } from 'vitest';
 import { assert } from 'riteway/vitest';
-import { chatChipFor, chatContextFor, imagoStartsCollapsed, paneLayout, stageFor, type HideableSection } from './stage';
+import { chatChipFor, chatContextFor, imagoStartsCollapsed, imagoStartsCollapsedAt, paneLayout, stageFor, type HideableSection } from './stage';
 
 const page = (pageId: string) => ({ kind: 'page', pageId }) as const;
 
@@ -564,6 +564,17 @@ describe('imagoStartsCollapsed() (IMC-3.11)', () => {
       should: 'fold Imago only for AI_CHAT',
       actual: ['AI_CHAT', 'DOCUMENT', 'CHANNEL', '', undefined, null].map((type) => imagoStartsCollapsed(type)),
       expected: [true, false, false, false, false, false],
+    });
+  });
+});
+
+describe('imagoStartsCollapsedAt()', () => {
+  test('the screens whose boards open with Imago folded', () => {
+    assert({
+      given: 'drive Calendar and Activity, account Agents and a snapshot, then a page, drive settings and the account overview',
+      should: 'fold Imago on the first four only',
+      actual: ['/d1/calendar', '/d1/activity', '/account/agents', '/account/backups/b1/snapshot', '/d1/files/p1', '/d1/settings', '/account'].map(imagoStartsCollapsedAt),
+      expected: [true, true, true, true, false, false, false],
     });
   });
 });

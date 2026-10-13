@@ -89,14 +89,8 @@ export function DeviceList() {
 
   return (
     <>
-      {/* Header */}
-      <div className="mb-4">
-        <h3 className="text-lg font-semibold">Saved Devices ({devices.length})</h3>
-        <p className="text-sm text-muted-foreground">Devices with access to your account</p>
-      </div>
-
-      {/* Device list */}
-      <div className="border border-border rounded-lg divide-y divide-border bg-card">
+      {/* Device list (the profile page owns the section heading and intro) */}
+      <div className="divide-y divide-border rounded-xl border border-border">
         {devices.map((device) => (
           <DeviceRow key={device.id} device={device} onRevoke={(device) => setDeviceToRevoke(device)} />
         ))}

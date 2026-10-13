@@ -29,9 +29,10 @@ const DRIVE_SETTINGS: Readonly<Record<string, string>> = {
   danger: 'Danger zone',
 };
 
-/** Account screens, in the SPEC's nav names (Profile lives at /account/account). */
+/** Account screens, in the SPEC's nav names (Profile lives at /account/profile; /account/account is its alias). */
 const ACCOUNT: Readonly<Record<string, string>> = {
   '': 'Overview',
+  profile: 'Profile',
   account: 'Profile',
   display: 'Display',
   personalization: 'Personalization',

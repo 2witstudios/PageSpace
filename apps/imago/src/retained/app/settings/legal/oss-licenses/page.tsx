@@ -1,9 +1,12 @@
 "use client";
 
-import { useRouter } from "@/retained-adapters/navigation";
-import { Button } from "@/retained/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/retained/components/ui/card";
-import { ArrowLeft, ExternalLink } from "lucide-react";
+import { ExternalLink } from "lucide-react";
+import {
+  SettingsGroup,
+  SettingsRow,
+  SettingsScreen,
+  SettingsSection,
+} from "@/ui/settings/settings-screen/settings-screen";
 
 interface Attribution {
   name: string;
@@ -72,105 +75,78 @@ const OTHER_ATTRIBUTIONS: Attribution[] = [
   },
 ];
 
-function AttributionList({ items }: { items: Attribution[] }) {
+function AttributionGroup({ items }: { items: Attribution[] }) {
   return (
-    <ul className="space-y-4">
+    <SettingsGroup>
       {items.map((item) => (
-        <li key={item.name} className="border-l-2 border-muted pl-4">
-          <div className="font-mono text-sm font-semibold">{item.name}</div>
-          <div className="text-sm text-muted-foreground">{item.license}</div>
-          <p className="mt-1 text-sm">{item.note}</p>
+        <SettingsRow
+          key={item.name}
+          label={<span className="font-mono">{item.name}</span>}
+          hint={
+            <span className="flex flex-col gap-1">
+              <span>{item.license}</span>
+              <span>{item.note}</span>
+            </span>
+          }
+        >
           {item.upstream && (
             <a
               href={item.upstream.href}
               target="_blank"
               rel="noopener noreferrer"
-              className="mt-1 inline-flex items-center gap-1 text-sm text-primary hover:underline"
+              className="inline-flex items-center gap-1 text-sm text-accent-deep hover:underline"
             >
               {item.upstream.label}
               <ExternalLink className="h-3 w-3" />
             </a>
           )}
-        </li>
+        </SettingsRow>
       ))}
-    </ul>
+    </SettingsGroup>
   );
 }
 
 export default function OssLicensesPage() {
-  const router = useRouter();
-
   return (
-    <div className="container mx-auto py-10 px-10 max-w-4xl">
-      <div className="mb-8">
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => router.push("/settings")}
-          className="mb-4"
+    <SettingsScreen
+      title="Open-source licenses"
+      lede="Third-party open-source software used in PageSpace, and the attribution notices their licenses require."
+    >
+      <SettingsSection
+        title="MPL-2.0 attribution"
+        description="Required recipient notice under Mozilla Public License 2.0 §3.2 for Covered Software distributed as part of a Larger Work."
+      >
+        <AttributionGroup items={MPL_ATTRIBUTIONS} />
+      </SettingsSection>
+
+      <SettingsSection
+        title="Other notable attributions"
+        description="Additional third-party components with attribution, font, or dual-license notices worth surfacing in the application."
+      >
+        <AttributionGroup items={OTHER_ATTRIBUTIONS} />
+      </SettingsSection>
+
+      <SettingsSection
+        title="Full inventory"
+        description={
+          <>
+            The lists above are not exhaustive. They cover the third-party components whose licenses carry
+            specific attribution obligations worth surfacing in the application itself. The complete inventory,
+            with the license identifier for every direct and transitive dependency, is published in the
+            open-source PageSpace repository:
+          </>
+        }
+      >
+        <a
+          href="https://github.com/2witstudios/PageSpace/blob/master/OSS-INVENTORY.md"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-1 text-sm text-accent-deep hover:underline"
         >
-          <ArrowLeft className="h-4 w-4 mr-2" />
-          Back to Settings
-        </Button>
-        <h1 className="text-3xl font-bold mb-2">Open-source licenses</h1>
-        <p className="text-muted-foreground">
-          Third-party open-source software used in PageSpace and the attribution
-          notices required by those licenses.
-        </p>
-      </div>
-
-      <Card className="mb-6">
-        <CardHeader>
-          <CardTitle>MPL-2.0 attribution</CardTitle>
-          <CardDescription>
-            Required recipient notice under Mozilla Public License 2.0 §3.2 for
-            Covered Software distributed as part of a Larger Work.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <AttributionList items={MPL_ATTRIBUTIONS} />
-        </CardContent>
-      </Card>
-
-      <Card className="mb-6">
-        <CardHeader>
-          <CardTitle>Other notable attributions</CardTitle>
-          <CardDescription>
-            Additional third-party components with attribution, font, or dual-license
-            notices worth surfacing in the application.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <AttributionList items={OTHER_ATTRIBUTIONS} />
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Full inventory</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3 text-sm text-muted-foreground">
-          <p>
-            The list above is not exhaustive. It covers the third-party components
-            whose licenses carry specific attribution obligations worth surfacing
-            in the application itself.
-          </p>
-          <p>
-            The complete open-source inventory — every direct and transitive
-            dependency, with the license identifier for each — is published
-            in the open-source PageSpace repository:
-          </p>
-          <a
-            href="https://github.com/2witstudios/PageSpace/blob/master/OSS-INVENTORY.md"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
-          >
-            OSS-INVENTORY.md
-            <ExternalLink className="h-3 w-3" />
-          </a>
-        </CardContent>
-      </Card>
-    </div>
+          OSS-INVENTORY.md
+          <ExternalLink className="h-3 w-3" />
+        </a>
+      </SettingsSection>
+    </SettingsScreen>
   );
 }

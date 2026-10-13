@@ -242,6 +242,16 @@ export const chatContextFor = (
  */
 export const imagoStartsCollapsed = (pageType: string | null | undefined): boolean => pageType === 'AI_CHAT';
 
+/** The screens whose boards open with Imago folded to its Ask pill (C-Drive-Calendar, C-Drive-Activity, C-Account-Agents, -Calendar, -Legal, -Drives, -Activity, -BackupSnapshot). */
+const foldedScreens: readonly RegExp[] = [
+  /^\/[^/]+\/(calendar|activity)$/,
+  /^\/account\/(agents|calendar|legal|drives|activity)$/,
+  /^\/account\/backups\/[^/]+\/snapshot$/,
+];
+
+/** Whether entering this address folds Imago (pathname is basePath-relative, as usePathname returns it). */
+export const imagoStartsCollapsedAt = (pathname: string): boolean => foldedScreens.some((pattern) => pattern.test(pathname));
+
 /**
  * Imago's context chip (SPEC v3 assistant head): the bare name of what it answers about — the
  * open page (once its name loads), the screen, "Account", the section — and none on the chat

@@ -35,6 +35,14 @@ function buildRevokeActionBinding(grantId: string): Record<string, string> {
   return { op: 'revoke_oauth_grant', grantId };
 }
 
+function formatGrantDate(dateStr: string): string {
+  return new Date(dateStr).toLocaleDateString(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+  });
+}
+
 export function ConnectedAppsList() {
   const { grants, isLoading, isError, refetch } = useOAuthGrants();
   const [confirmingGrant, setConfirmingGrant] = useState<OAuthGrant | null>(null);
@@ -129,23 +137,29 @@ export function ConnectedAppsList() {
 
   return (
     <>
-      <div className="divide-y divide-border rounded-lg border border-border bg-card">
+      <div className="divide-y divide-border rounded-xl border border-border">
         {grants.map((grant) => (
-          <div key={grant.id} className="flex items-center justify-between gap-4 p-4">
-            <div className="min-w-0">
-              <p className="font-medium">{grant.clientName}</p>
-              <ul className="mt-1 list-inside list-disc space-y-0.5 text-sm text-muted-foreground">
-                {grant.scopeDescriptions.map((description, i) => (
-                  <li key={i}>{description}</li>
-                ))}
-              </ul>
-              <p className="mt-1 text-xs text-muted-foreground">
-                Connected {new Date(grant.createdAt).toLocaleDateString()}
-              </p>
+          <div key={grant.id} className="flex min-h-[52px] items-center gap-3 px-3.5 py-2">
+            <span
+              aria-hidden="true"
+              className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-fill text-[11px] font-semibold text-muted-foreground"
+            >
+              {grant.clientName.slice(0, 2).toUpperCase()}
+            </span>
+            <div className="flex min-w-0 flex-1 flex-col">
+              <span className="truncate font-medium">{grant.clientName}</span>
+              <span className="text-xs text-muted-foreground">
+                Authorized {formatGrantDate(grant.createdAt)}
+              </span>
+              {grant.scopeDescriptions.length > 0 && (
+                <span className="text-xs text-muted-foreground/70">{grant.scopeDescriptions.join(' · ')}</span>
+              )}
             </div>
             <Button
-              variant="outline"
+              variant="ghost"
               size="sm"
+              className="text-muted-foreground"
+              aria-label={`Revoke ${grant.clientName}`}
               onClick={() => setConfirmingGrant(grant)}
               disabled={revokingId === grant.id}
             >

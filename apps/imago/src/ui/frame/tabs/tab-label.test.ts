@@ -23,14 +23,14 @@ describe('tabLabelFor() (IMC-1.5)', () => {
       should: 'title each as its nav row',
       actual: [
         '/d1/calendar', '/d1/members/u1', '/d1/settings', '/d1/settings/roles', '/d1/settings/danger',
-        '/account', '/account/account', '/account/ai', '/account/local-mcp', '/account/legal/oss-licenses',
+        '/account', '/account/profile', '/account/account', '/account/ai', '/account/local-mcp', '/account/legal/oss-licenses',
       ].map((path) => {
         const label = tabLabelFor(path);
         return label.kind === 'screen' ? label.title : label.kind;
       }),
       expected: [
         'Calendar', 'Members', 'Overview', 'Members & roles', 'Danger zone',
-        'Overview', 'Profile', 'AI providers', 'Local MCP', 'Legal',
+        'Overview', 'Profile', 'Profile', 'AI providers', 'Local MCP', 'Legal',
       ],
     });
   });

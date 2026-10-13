@@ -6,6 +6,21 @@ const cloud: NavContext = { isDesktop: false, showBilling: true, isNative: false
 const labels = (groups: ReturnType<typeof accountNav>) => groups.map((group) => [group.label, group.items.map((item) => item.label)]);
 
 describe('driveSettingsNav() (IMC-1.11)', () => {
+  test('the viewer\'s access gates the rows (IMC-7.10)', () => {
+    const labels = (access: Parameters<typeof driveSettingsNav>[2]) => driveSettingsNav('d1', cloud, access).map((item) => item.label);
+    assert({
+      given: 'a plain member, an admin, the owner of a Home drive and the owner of a shared drive',
+      should: 'show a member Overview and Commands; hide Danger zone from admins and on a Home drive',
+      actual: [
+        labels({ role: 'MEMBER', home: false }),
+        labels({ role: 'ADMIN', home: false }).includes('Danger zone'),
+        labels({ role: 'OWNER', home: true }).includes('Danger zone'),
+        labels({ role: 'OWNER', home: false }).includes('Danger zone'),
+      ],
+      expected: [['Overview', 'Commands'], false, false, true],
+    });
+  });
+
   test('SPEC order', () => {
     assert({
       given: 'a cloud drive with orgs on',
@@ -37,6 +52,15 @@ describe('driveSettingsNav() (IMC-1.11)', () => {
 });
 
 describe('accountNav()', () => {
+  test('no Privacy row in the native app', () => {
+    assert({
+      given: 'the native app',
+      should: 'leave Privacy out, since the cookie screen renders nothing there',
+      actual: accountNav({ ...cloud, isNative: true }).flatMap((group) => group.items).some((item) => item.label === 'Privacy'),
+      expected: false,
+    });
+  });
+
   test('SPEC groups on cloud desktop with orgs on', () => {
     assert({
       given: 'every gate open',
@@ -71,7 +95,7 @@ describe('accountNav()', () => {
       given: 'the account screens',
       should: 'link Profile, Google Calendar and Legal to their routes',
       actual: ['Profile', 'Google Calendar', 'Legal'].map((label) => items.find((item) => item.label === label)?.href),
-      expected: ['/account/account', '/account/integrations/google-calendar', '/account/legal/oss-licenses'],
+      expected: ['/account/profile', '/account/integrations/google-calendar', '/account/legal'],
     });
   });
 });

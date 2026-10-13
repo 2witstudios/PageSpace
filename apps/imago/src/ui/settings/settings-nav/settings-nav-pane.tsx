@@ -4,6 +4,8 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import type { ReactNode } from 'react';
 import { isBillingEnabled, isOnPrem } from '@/retained/lib/deployment-mode';
+import { isNativeApp } from '@/retained/lib/capacitor-bridge';
+import { useDriveStore } from '@/retained/hooks/useDrive';
 import { ORGS_ENABLED } from '../orgs-flag';
 import { ListPane } from '../../frame/list-pane/list-pane';
 import { accountNav, activeNavHref, driveSettingsNav, type NavContext, type NavItem } from './settings-nav';
@@ -13,10 +15,10 @@ const isDesktop = (): boolean =>
   typeof window !== 'undefined' && (window as { electron?: { isDesktop?: boolean } }).electron?.isDesktop === true;
 
 /** The build's and the viewer's gates, as classic's settings index reads them. */
-const navContext = (): NavContext => ({
+export const navContext = (): NavContext => ({
   isDesktop: isDesktop(),
   showBilling: isBillingEnabled(),
-  isNative: false,
+  isNative: isNativeApp(),
   onPrem: isOnPrem(),
   orgs: ORGS_ENABLED,
 });
@@ -37,7 +39,9 @@ const rows = (items: readonly NavItem[], active: string | null): ReactNode =>
 /** The 260px "Drive settings" pane: the drive's settings in the SPEC's fixed order (IMC-1.11). */
 export function DriveSettingsNavPane({ driveId }: { readonly driveId: string }) {
   const pathname = usePathname() ?? '/';
-  const items = driveSettingsNav(driveId, navContext());
+  const drive = useDriveStore((state) => state.drives.find((entry) => entry.id === driveId));
+  const access = drive === undefined ? undefined : { role: drive.role ?? (drive.isOwned ? 'OWNER' : 'MEMBER'), home: drive.kind === 'HOME' } as const;
+  const items = driveSettingsNav(driveId, navContext(), access);
   return (
     <ListPane section="settings" variant="tree" title="Drive settings">
       <nav aria-label="Drive settings">{rows(items, activeNavHref(items, pathname))}</nav>
