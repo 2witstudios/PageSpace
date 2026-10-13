@@ -34,25 +34,25 @@ async function world() {
   return { user, org, driveId, walletId };
 }
 
-test('UI-2 UI-9 a user without org memberships has Wallets and only the Create organization affordance', async ({ browser, baseURL }) => {
+test('UI-2 (partial) UI-9 (partial) a user without org memberships has Wallets and only the Create organization affordance', async ({ browser, baseURL }) => {
   const user = await viewer('Native personal owner');
   const page = await open(browser, baseURL!, user, '/imago/account');
   await expect(page.getByRole('link', { name: 'Organizations', exact: true })).toHaveCount(0);
-  await expect(page.getByRole('link', { name: /Create organization/ })).toBeVisible();
+  await expect(page.getByRole('link', { name: /Create organization/ }).first()).toBeVisible();
   await page.getByRole('link', { name: /^Wallets/ }).first().click();
   await expect(page).toHaveURL(/\/imago\/account\/wallets$/);
   await expect(page.getByRole('heading', { name: 'Wallets', exact: true })).toBeVisible();
   await expect(page.getByText('Open in classic', { exact: true })).toHaveCount(0);
 });
 
-test('UI-1 UI-2 UI-9 org hub and drive wallet destinations remain under the native shell', async ({ browser, baseURL }) => {
+test('UI-1 (partial) UI-2 (partial) UI-9 (partial) org hub and drive wallet destinations remain under the native shell', async ({ browser, baseURL }) => {
   const w = await world();
   const page = await open(browser, baseURL!, w.user, '/imago/account/organizations');
   await page.getByRole('link').filter({ hasText: w.org.name }).click();
   await expect(page).toHaveURL(new RegExp(`/imago/orgs/${w.org.orgId}/settings$`));
   await expect(page.getByRole('heading', { name: 'Organization Settings', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: `Switch workspace: ${w.org.name}`, exact: true })).toBeVisible();
-  for (const suffix of ['general', 'members', 'drives', 'policies', 'security', 'audit', 'billing']) {
+  for (const suffix of ['general', 'members', 'drives', 'policies', 'security', 'audit', 'billing', 'attention', 'danger']) {
     await page.goto(`/imago/orgs/${w.org.orgId}/settings/${suffix}`);
     await hydrated(page);
     await expect(page.getByText('Open in classic', { exact: true })).toHaveCount(0);
@@ -63,7 +63,7 @@ test('UI-1 UI-2 UI-9 org hub and drive wallet destinations remain under the nati
   await expect(page.getByText('Product wallet', { exact: true }).first()).toBeVisible();
 });
 
-test('SPEND-1 UI-8 opening an org drive keeps the global Imago agent on its actual personal source', async ({ browser, baseURL }) => {
+test('SPEND-1 (partial) UI-8 (partial) opening an org drive keeps the global Imago agent on its actual personal source', async ({ browser, baseURL }) => {
   const w = await world();
   const page = await open(browser, baseURL!, w.user, imagoPath(w.driveId, 'files'));
   const chat = page.getByRole('complementary', { name: 'Imago', exact: true });
@@ -75,7 +75,7 @@ test('SPEND-1 UI-8 opening an org drive keeps the global Imago agent on its actu
   expect(agent.driveId).toBe(w.user.homeDriveId);
 });
 
-test('SPEND-1 SPEND-3 UI-8 a native org agent chooses personal credits atomically before its first billed turn', async ({ browser, baseURL }) => {
+test('SPEND-1 (partial) SPEND-3 (partial) UI-8 (partial) a native org agent chooses personal credits atomically before its first billed turn', async ({ browser, baseURL }) => {
   const w = await world();
   const agentId = await createAgentPage(w.driveId, w.user.id);
   await db.update(pages).set({ title: 'Native org source proof' }).where(eq(pages.id, agentId));
