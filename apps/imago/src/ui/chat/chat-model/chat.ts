@@ -31,6 +31,10 @@ export type BuiltinAgentsResponse = {
 export type DriveAgent = {
   readonly id: string;
   readonly title: string;
+  /** The agent page's model, as the drive's agents route lists it. */
+  readonly aiModel?: string;
+  /** Its parent page, or 'root' at the drive's top level. */
+  readonly parentId?: string;
 };
 
 /** The agent the chat talks to when it is not Imago itself. */

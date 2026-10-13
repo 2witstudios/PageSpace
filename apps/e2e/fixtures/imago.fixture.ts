@@ -15,8 +15,8 @@ import { provisionHomeDriveIfNeeded } from '@pagespace/lib/onboarding/home-drive
  *
  * Imago specs run on one origin, as production does: the e2e proxy (support/e2e-proxy.ts)
  * serves /imago from apps/imago's production build, /socket.io from realtime and everything
- * else — classic's sign-in and /api included — from web. See 27-imago-shell.spec.ts for why
- * imago must be the production build.
+ * else — classic's sign-in and /api included — from web. imago must be the production build:
+ * its CSP has no 'unsafe-eval', which next dev needs to hydrate.
  */
 
 /** The shell frame; its data attributes name the stage. */

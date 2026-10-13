@@ -2,7 +2,7 @@
 
 import { Editor } from '@tiptap/react';
 import {
-  Bold, Italic, Strikethrough, Code, Heading1, Heading2, Heading3, Pilcrow, List, ListOrdered, Quote
+  Bold, Italic, Strikethrough, Code, List, ListOrdered, Quote
 } from 'lucide-react';
 import React from 'react';
 import TableMenu from './TableMenu';
@@ -88,6 +88,46 @@ const isFontSizeValue = (value: string): value is FontSizeValue => {
   return FONT_SIZE_OPTIONS.some((option) => option.value === value);
 };
 
+/** One labelled formatting button; `aria-pressed` carries the active mark (the board's Bold [pressed]). */
+const FormatButton = ({ label, active, onClick, children }: {
+  readonly label: string;
+  readonly active: boolean;
+  readonly onClick: () => void;
+  readonly children: React.ReactNode;
+}) => (
+  <button
+    type="button"
+    aria-label={label}
+    aria-pressed={active}
+    onMouseDown={(e) => e.preventDefault()}
+    onClick={onClick}
+    className={`h-8 w-8 flex items-center justify-center rounded-md transition-colors ${active ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}
+  >
+    {children}
+  </button>
+);
+
+const BLOCK_TYPE_OPTIONS = [
+  { value: 'paragraph', label: 'Paragraph' },
+  { value: 'heading1', label: 'Heading 1' },
+  { value: 'heading2', label: 'Heading 2' },
+  { value: 'heading3', label: 'Heading 3' },
+] as const;
+
+type BlockTypeValue = (typeof BLOCK_TYPE_OPTIONS)[number]['value'];
+
+const isBlockTypeValue = (value: string): value is BlockTypeValue => {
+  return BLOCK_TYPE_OPTIONS.some((option) => option.value === value);
+};
+
+/** The block the selection sits in, as the block-type dropdown names it. */
+export const blockTypeOf = (editor: Editor): BlockTypeValue => {
+  if (editor.isActive('heading', { level: 1 })) return 'heading1';
+  if (editor.isActive('heading', { level: 2 })) return 'heading2';
+  if (editor.isActive('heading', { level: 3 })) return 'heading3';
+  return 'paragraph';
+};
+
 const Toolbar = ({ editor, contentMode = 'html' }: ToolbarProps) => {
   const [, setTick] = React.useState(0);
 
@@ -153,23 +193,53 @@ const Toolbar = ({ editor, contentMode = 'html' }: ToolbarProps) => {
       .run();
   };
 
+  const handleBlockTypeChange = (value: string) => {
+    if (!isBlockTypeValue(value)) {
+      return;
+    }
+
+    const chain = editor.chain().focus();
+    switch (value) {
+      case 'heading1':
+        chain.toggleHeading({ level: 1 }).run();
+        return;
+      case 'heading2':
+        chain.toggleHeading({ level: 2 }).run();
+        return;
+      case 'heading3':
+        chain.toggleHeading({ level: 3 }).run();
+        return;
+      case 'paragraph':
+        chain.setParagraph().run();
+        return;
+    }
+  };
+
   return (
-    <div className="w-full overflow-x-auto scrollbar-thin">
-      <div className="flex items-center gap-1 p-2 min-w-max">
-        <button onMouseDown={(e) => e.preventDefault()} onClick={() => editor.chain().focus().toggleBold().run()} className={`p-2 rounded-md transition-colors ${editor.isActive('bold') ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}><Bold size={16} /></button>
-        <button onMouseDown={(e) => e.preventDefault()} onClick={() => editor.chain().focus().toggleItalic().run()} className={`p-2 rounded-md transition-colors ${editor.isActive('italic') ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}><Italic size={16} /></button>
-        <button onMouseDown={(e) => e.preventDefault()} onClick={() => editor.chain().focus().toggleStrike().run()} className={`p-2 rounded-md transition-colors ${editor.isActive('strike') ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}><Strikethrough size={16} /></button>
-        <button onMouseDown={(e) => e.preventDefault()} onClick={() => editor.chain().focus().toggleCode().run()} className={`p-2 rounded-md transition-colors ${editor.isActive('code') ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}><Code size={16} /></button>
+    <div className="flex h-full min-w-0 flex-1 items-center gap-1 overflow-x-auto scrollbar-thin">
+      <div className="flex items-center gap-1 min-w-max">
+        <Select value={blockTypeOf(editor)} onValueChange={(value) => handleBlockTypeChange(value)}>
+          <SelectTrigger className="h-8 w-[120px] text-xs" aria-label="Block type">
+            <SelectValue placeholder="Paragraph" />
+          </SelectTrigger>
+          <SelectContent>
+            {BLOCK_TYPE_OPTIONS.map((option) => (
+              <SelectItem key={option.value} value={option.value}>
+                {option.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <div className="w-[1px] h-6 bg-border mx-1" />
+        <FormatButton label="Bold" active={editor.isActive('bold')} onClick={() => editor.chain().focus().toggleBold().run()}><Bold size={16} /></FormatButton>
+        <FormatButton label="Italic" active={editor.isActive('italic')} onClick={() => editor.chain().focus().toggleItalic().run()}><Italic size={16} /></FormatButton>
+        <FormatButton label="Strikethrough" active={editor.isActive('strike')} onClick={() => editor.chain().focus().toggleStrike().run()}><Strikethrough size={16} /></FormatButton>
+        <FormatButton label="Inline code" active={editor.isActive('code')} onClick={() => editor.chain().focus().toggleCode().run()}><Code size={16} /></FormatButton>
         <LinkButton editor={editor} variant="toolbar" />
         <div className="w-[1px] h-6 bg-border mx-1" />
-        <button onMouseDown={(e) => e.preventDefault()} onClick={() => editor.chain().focus().toggleHeading({ level: 1 }).run()} className={`p-2 rounded-md transition-colors ${editor.isActive('heading', { level: 1 }) ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}><Heading1 size={16} /></button>
-        <button onMouseDown={(e) => e.preventDefault()} onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()} className={`p-2 rounded-md transition-colors ${editor.isActive('heading', { level: 2 }) ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}><Heading2 size={16} /></button>
-        <button onMouseDown={(e) => e.preventDefault()} onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()} className={`p-2 rounded-md transition-colors ${editor.isActive('heading', { level: 3 }) ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}><Heading3 size={16} /></button>
-        <button onMouseDown={(e) => e.preventDefault()} onClick={() => editor.chain().focus().setParagraph().run()} className={`p-2 rounded-md transition-colors ${editor.isActive('paragraph') ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}><Pilcrow size={16} /></button>
-        <div className="w-[1px] h-6 bg-border mx-1" />
-        <button onMouseDown={(e) => e.preventDefault()} onClick={() => editor.chain().focus().toggleBulletList().run()} className={`p-2 rounded-md transition-colors ${editor.isActive('bulletList') ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}><List size={16} /></button>
-        <button onMouseDown={(e) => e.preventDefault()} onClick={() => editor.chain().focus().toggleOrderedList().run()} className={`p-2 rounded-md transition-colors ${editor.isActive('orderedList') ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}><ListOrdered size={16} /></button>
-        <button onMouseDown={(e) => e.preventDefault()} onClick={() => editor.chain().focus().toggleBlockquote().run()} className={`p-2 rounded-md transition-colors ${editor.isActive('blockquote') ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}><Quote size={16} /></button>
+        <FormatButton label="Bulleted list" active={editor.isActive('bulletList')} onClick={() => editor.chain().focus().toggleBulletList().run()}><List size={16} /></FormatButton>
+        <FormatButton label="Numbered list" active={editor.isActive('orderedList')} onClick={() => editor.chain().focus().toggleOrderedList().run()}><ListOrdered size={16} /></FormatButton>
+        <FormatButton label="Quote" active={editor.isActive('blockquote')} onClick={() => editor.chain().focus().toggleBlockquote().run()}><Quote size={16} /></FormatButton>
         <div className="w-[1px] h-6 bg-border mx-1" />
         <TableMenu editor={editor} />
         {showFontControls && (

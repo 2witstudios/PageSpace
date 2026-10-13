@@ -12,6 +12,8 @@ const TableMenu = ({ editor }: TableMenuProps) => {
   return (
     <div className="flex items-center gap-1">
       <button
+        type="button"
+        aria-label="Insert table"
         onMouseDown={(e) => e.preventDefault()}
         onClick={() => editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()}
         className="p-2 rounded hover:bg-muted"

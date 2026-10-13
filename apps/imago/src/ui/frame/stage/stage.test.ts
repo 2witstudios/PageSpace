@@ -1,6 +1,6 @@
 import { describe, test } from 'vitest';
 import { assert } from 'riteway/vitest';
-import { chatContextFor, paneLayout, stageFor, type HideableSection } from './stage';
+import { chatChipFor, chatContextFor, imagoStartsCollapsed, imagoStartsCollapsedAt, paneLayout, stageFor, type HideableSection } from './stage';
 
 const page = (pageId: string) => ({ kind: 'page', pageId }) as const;
 
@@ -94,12 +94,12 @@ describe('stageFor() settings and account', () => {
   test('drive settings', () => {
     assert({
       given: 'a drive’s settings path',
-      should: 'open the settings as the object, with no list',
+      should: 'open the settings as the object beside the 260px settings nav',
       actual: stageFor('/drive-1/settings'),
       expected: {
         driveId: 'drive-1',
         section: 'settings',
-        list: 'closed',
+        list: 'tree',
         object: { kind: 'settings' },
       },
     });
@@ -108,9 +108,9 @@ describe('stageFor() settings and account', () => {
   test('account', () => {
     assert({
       given: 'the user-level account path',
-      should: 'open the account as the object, with no drive and no list',
+      should: 'open the account as the object beside its nav, with no drive',
       actual: stageFor('/account'),
-      expected: { driveId: null, section: 'account', list: 'closed', object: { kind: 'account' } },
+      expected: { driveId: null, section: 'account', list: 'tree', object: { kind: 'account' } },
     });
   });
 });
@@ -152,6 +152,27 @@ describe('stageFor() unknown and malformed paths', () => {
         stageFor('/drive-1/settings/extra'),
       ],
       expected: [driveChat, driveChat, driveChat, driveChat, driveChat, stageFor('/drive-1/settings')],
+    });
+  });
+
+  test('a drive tool with trailing segments', () => {
+    assert({
+      given: 'a drive tool addressed with the segments no tool route holds, or more than Members’ one',
+      should: 'fall back to the drive’s chat, keeping only the real Members sub-routes',
+      actual: [
+        stageFor('/drive-1/calendar/anything'),
+        stageFor('/drive-1/trash/a/b/c'),
+        stageFor('/drive-1/members/u1'),
+        stageFor('/drive-1/members/invite'),
+        stageFor('/drive-1/members/u1/extra'),
+      ],
+      expected: [
+        driveChat,
+        driveChat,
+        stageFor('/drive-1/members'),
+        stageFor('/drive-1/members'),
+        driveChat,
+      ],
     });
   });
 
@@ -236,7 +257,7 @@ describe('paneLayout()', () => {
         { list: 'list', listHidden: false, object: false },
         { list: 'list', listHidden: false, object: false },
         { list: 'tree', listHidden: false, object: true },
-        { list: 'closed', listHidden: false, object: true },
+        { list: 'tree', listHidden: false, object: true },
       ],
     });
   });
@@ -306,44 +327,78 @@ describe('paneLayout()', () => {
     });
   });
 
-  test('the stage 2 list never hides', () => {
+  test('the stage 2 list hides too', () => {
     assert({
       given: 'stage 2 with its section collapsed',
-      should: 'keep the wide list open, because it is the whole stage',
+      should: 'close the wide list like any other left pane (SPEC v3.2)',
       actual: [
         paneLayout(stageFor('/drive-1/files'), { collapsedSections: ['files'] }),
         paneLayout(stageFor('/dm'), { collapsedSections: ['messages'] }),
       ],
       expected: [
-        { list: 'list', listHidden: false, object: false },
-        { list: 'list', listHidden: false, object: false },
+        { list: 'closed', listHidden: true, object: false },
+        { list: 'closed', listHidden: true, object: false },
       ],
     });
   });
 
-  test('stages with no list', () => {
-    const every: readonly HideableSection[] = ['chat', 'files', 'messages', 'tasks'];
+  test('the settings and account navs hide', () => {
     assert({
-      given: 'settings and account with every section collapsed',
-      should: 'have no list to hide, so report none hidden',
+      given: 'settings and account each with its own section collapsed, then with only the other sections collapsed',
+      should: 'close only the nav whose own section is collapsed and keep the object',
       actual: [
-        paneLayout(stageFor('/drive-1/settings'), { collapsedSections: every }).listHidden,
-        paneLayout(stageFor('/account'), { collapsedSections: every }).listHidden,
+        paneLayout(stageFor('/drive-1/settings'), { collapsedSections: ['settings'] }),
+        paneLayout(stageFor('/account'), { collapsedSections: ['account'] }),
+        paneLayout(stageFor('/drive-1/settings'), { collapsedSections: ['chat', 'files', 'messages', 'tasks', 'account'] }).list,
+        paneLayout(stageFor('/account'), { collapsedSections: ['chat', 'files', 'messages', 'tasks', 'settings'] }).list,
       ],
-      expected: [false, false],
+      expected: [
+        { list: 'closed', listHidden: true, object: true },
+        { list: 'closed', listHidden: true, object: true },
+        'tree',
+        'tree',
+      ],
     });
   });
 
-  test('only sections with a list collapse', () => {
-    // Type-level: a section with no list is not a collapsible section, so
-    // tsc rejects it (bun run typecheck fails if the type widens again).
-    // @ts-expect-error settings has no list to collapse
-    const settings: readonly HideableSection[] = ['settings'];
+  test('a drive tool has its pane, and it hides with Close sidebar', () => {
     assert({
-      given: 'a collapsed-sections value naming settings',
-      should: 'be rejected by the type (the value never reaches a layout)',
-      actual: settings.length,
-      expected: 1,
+      given: 'a drive tool, open and then with its section collapsed',
+      should: 'show the 260px pane, then report it hidden',
+      actual: [
+        paneLayout(stageFor('/drive-1/members'), { collapsedSections: [] }),
+        paneLayout(stageFor('/drive-1/members'), { collapsedSections: ['settings'] }),
+      ],
+      expected: [
+        { list: 'tree', listHidden: false, object: true },
+        { list: 'closed', listHidden: true, object: true },
+      ],
+    });
+  });
+
+  test('a member profile and the invite form stay on the Members tool, so its pane shows the member variants', () => {
+    assert({
+      given: 'the Members routes for one member and for the invite form',
+      should: 'map both to the members tool, with the same 260px pane',
+      actual: [stageFor('/drive-1/members/u1'), stageFor('/drive-1/members/invite')].map((stage) => ({
+        driveId: stage.driveId,
+        list: stage.list,
+        tool: stage.object?.kind === 'settings' ? stage.object.tool : null,
+      })),
+      expected: [
+        { driveId: 'drive-1', list: 'tree', tool: 'members' },
+        { driveId: 'drive-1', list: 'tree', tool: 'members' },
+      ],
+    });
+  });
+
+  test('every section is a hideable section (SPEC v3.2)', () => {
+    const every: readonly HideableSection[] = ['chat', 'files', 'messages', 'tasks', 'settings', 'account'];
+    assert({
+      given: 'every section named as hideable',
+      should: 'accept them all: each left pane closes with Close sidebar',
+      actual: every.length,
+      expected: 6,
     });
   });
 });
@@ -408,7 +463,7 @@ describe('chatContextFor() with names', () => {
         chatContextFor(stageFor('/drive-1/tasks')),
       ],
       expected: [
-        { density: 'roomy', contextLabel: 'Files in context', placeholder: 'Ask about your files…' },
+        { density: 'roomy', contextLabel: 'Files in context', placeholder: 'Ask across Files, or @mention a page' },
         {
           density: 'roomy',
           contextLabel: 'Messages in context',
@@ -492,6 +547,85 @@ describe('chatContextFor() before names load', () => {
         chatContextFor(stageFor('/drive-1/files/page-1'), { object: '   ' }).contextLabel,
       ],
       expected: ['This drive in context', 'This page in context'],
+    });
+  });
+});
+
+describe('chatChipFor() (IMC-2.1)', () => {
+  test('the bare name of what Imago answers about', () => {
+    assert({
+      given: 'a page, a setting, a drive tool, the account, a section index and the chat home',
+      should: 'name the page, the screen, "Account", the section, and nothing on the chat home',
+      actual: [
+        chatChipFor(stageFor('/d1/files/p1'), { object: 'Q4 Launch Plan' }),
+        chatChipFor(stageFor('/d1/settings/general'), {}),
+        chatChipFor(stageFor('/d1/calendar'), {}),
+        chatChipFor(stageFor('/account/display'), {}),
+        chatChipFor(stageFor('/d1/files'), {}),
+        chatChipFor(stageFor('/d1'), {}),
+      ],
+      expected: ['Q4 Launch Plan', 'Drive settings', 'Calendar', 'Account', 'Files', null],
+    });
+  });
+
+  test('a page whose name has not loaded', () => {
+    assert({
+      given: 'a page open before its name arrives',
+      should: 'show no chip rather than a placeholder',
+      actual: chatChipFor(stageFor('/d1/files/p1'), {}),
+      expected: null,
+    });
+  });
+});
+
+describe('imagoStartsCollapsed() (IMC-3.11)', () => {
+  test('an agent page folds Imago on entry; other page types and no type do not', () => {
+    assert({
+      given: 'the page types an entry can name, an unknown one and none',
+      should: 'fold Imago only for AI_CHAT',
+      actual: ['AI_CHAT', 'DOCUMENT', 'CHANNEL', '', undefined, null].map((type) => imagoStartsCollapsed(type)),
+      expected: [true, false, false, false, false, false],
+    });
+  });
+});
+
+describe('imagoStartsCollapsedAt()', () => {
+  test('the screens whose boards open with Imago folded', () => {
+    assert({
+      given: 'drive Calendar and Activity, account Agents and a snapshot, then a page, drive settings and the account overview',
+      should: 'fold Imago on the first four only',
+      actual: ['/d1/calendar', '/d1/activity', '/account/agents', '/account/backups/b1/snapshot', '/d1/files/p1', '/d1/settings', '/account'].map(imagoStartsCollapsedAt),
+      expected: [true, true, true, true, false, false, false],
+    });
+  });
+});
+
+describe('stageFor() notifications (IMC-9.14)', () => {
+  test('the notifications page', () => {
+    assert({
+      given: '/notifications',
+      should: 'open the notifications object with no drive and no list pane, so Imago docks beside it',
+      actual: stageFor('/notifications'),
+      expected: { driveId: null, section: 'notifications', list: 'closed', object: { kind: 'notifications' } },
+    });
+  });
+
+  test('a path beneath it is no notifications stage', () => {
+    assert({
+      given: '/notifications/anything',
+      should: 'fall back to the root rather than read notifications as a drive',
+      actual: stageFor('/notifications/anything').section,
+      expected: 'chat',
+    });
+  });
+
+  test('Imago’s context and chip name the page', () => {
+    const stage = stageFor('/notifications');
+    assert({
+      given: 'the notifications page',
+      should: 'name Imago’s context and chip Notifications',
+      actual: [chatContextFor(stage).contextLabel, chatChipFor(stage, {})],
+      expected: ['Notifications in context', 'Notifications'],
     });
   });
 });

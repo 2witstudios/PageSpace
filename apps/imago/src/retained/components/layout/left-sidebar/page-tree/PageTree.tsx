@@ -25,6 +25,8 @@ interface PageTreeProps {
   mutate?: KeyedMutator<TreePage[]>;
   isTrashView?: boolean;
   searchQuery?: string;
+  /** Phone rows are 44px tall (C-Resp-Phone-Tree). */
+  roomyRows?: boolean;
 }
 
 // Extend TreePage to satisfy TreeItem interface
@@ -36,6 +38,7 @@ export default function PageTree({
   mutate: externalMutate,
   isTrashView = false,
   searchQuery = "",
+  roomyRows = false,
 }: PageTreeProps) {
   const { tree: fetchedTree, isLoading, mutate: internalMutate } = usePageTreeSocket(driveId, isTrashView);
   const tree = initialTree ?? fetchedTree;
@@ -345,6 +348,7 @@ export default function PageTree({
                   onOpenCreateDialog={handleOpenCreateDialog}
                   mutate={mutate}
                   isTrashView={isTrashView}
+                  roomyRows={roomyRows}
                   fileDragState={fileDragState}
                 />
               )}

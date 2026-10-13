@@ -43,9 +43,13 @@ import { getSeedState } from '../fixtures/seed-state';
 
 type Probed = HTMLElement & { __probe?: string };
 
-const rail = (page: Page) => page.getByRole('navigation', { name: 'Primary' });
+const rail = (page: Page) => page.getByRole('navigation', { name: 'Sections' });
 const listPane = (page: Page) => page.locator('[data-slot="list"]');
 const railLink = (page: Page, name: string) => rail(page).getByRole('link', { name, exact: true });
+/** The head control that opens a closed left pane (SPEC v3.2): in the first visible head. */
+const showSidebar = (scope: Locator) => scope.getByRole('button', { name: 'Show sidebar', exact: true });
+const imagoColumn = (page: Page) => page.locator('[data-slot="chat"]');
+const pageColumn = (page: Page) => page.locator('[data-slot="object"]');
 
 /** Acting on the inert server-rendered markup would not reach React: wait for the shell to hydrate. */
 const whenHydrated = async (page: Page, control: Locator): Promise<Locator> => {
@@ -78,7 +82,7 @@ test.describe('signed in', () => {
     // The chat's own list is its history of past chats (IMG-6.5).
     await expect(shell(page)).toHaveAttribute('data-list', 'list');
     await expect(listPane(page).getByRole('region', { name: 'Chat history' })).toBeVisible();
-    await expect(page.getByRole('region', { name: 'Chat', exact: true })).toBeVisible();
+    await expect(page.getByRole('complementary', { name: 'Imago', exact: true })).toBeVisible();
     await expect(railLink(page, 'Chat')).toHaveAttribute('aria-current', 'page');
   });
 
@@ -92,7 +96,7 @@ test.describe('signed in', () => {
 
     const stops = [
       { link: 'Files', section: 'files', path: imagoPath(homeDriveId, 'files') },
-      { link: 'Settings', section: 'settings', path: imagoPath(homeDriveId, 'settings') },
+      { link: 'Drive settings', section: 'settings', path: imagoPath(homeDriveId, 'settings') },
       { link: 'Chat', section: 'chat', path: imagoPath(homeDriveId) },
     ];
     for (const stop of stops) {
@@ -110,22 +114,33 @@ test.describe('signed in', () => {
     expect(await probeOf(shell(page))).toBeNull();
   });
 
-  test('× on the files list leaves Files for the chat and its history', async ({ page }) => {
-    await page.goto(imagoPath(homeDriveId, 'files'));
+  test('Close sidebar on the files list hides it in place; Show sidebar in the Imago head brings it back', async ({
+    page,
+  }) => {
+    const path = imagoPath(homeDriveId, 'files');
+    await page.goto(path);
     await expect(shell(page)).toHaveAttribute('data-list', 'list');
     expect(await widthOf(listPane(page))).toBeGreaterThan(0);
     await expect(listPane(page)).not.toHaveAttribute('inert');
 
-    const close = await whenHydrated(page, page.getByRole('link', { name: 'Close Files' }));
+    const close = await whenHydrated(page, listPane(page).getByRole('button', { name: 'Close sidebar', exact: true }));
     await close.click();
 
-    await page.waitForURL(pathnameIs(imagoPath(homeDriveId)));
-    await expect(shell(page)).toHaveAttribute('data-section', 'chat');
-    await expect(listPane(page).getByRole('region', { name: 'Chat history' })).toBeVisible();
+    // v3: the stage-2 list collapses in place rather than leaving the section.
+    expect(new URL(page.url()).pathname).toBe(path);
+    await expect(shell(page)).toHaveAttribute('data-section', 'files');
+    await expect(shell(page)).toHaveAttribute('data-list', 'closed');
+    await expect.poll(() => widthOf(listPane(page))).toBe(0);
+    await expect(listPane(page)).toHaveAttribute('inert', '');
+
+    // No page is open, so Imago's head is the first visible one.
+    await showSidebar(imagoColumn(page)).click();
+    await expect(shell(page)).toHaveAttribute('data-list', 'list');
+    await expect.poll(() => widthOf(listPane(page))).toBeGreaterThan(0);
     await expect(listPane(page)).not.toHaveAttribute('inert');
   });
 
-  test('× on the chat history hides it to width 0 and inert; the hamburger brings it back', async ({
+  test('Close sidebar on the chat history hides it to width 0 and inert; Show sidebar brings it back', async ({
     page,
   }) => {
     const path = imagoPath(homeDriveId);
@@ -133,7 +148,7 @@ test.describe('signed in', () => {
     await expect(shell(page)).toHaveAttribute('data-list', 'list');
     expect(await widthOf(listPane(page))).toBeGreaterThan(0);
 
-    const hide = await whenHydrated(page, page.getByRole('button', { name: 'Hide Chat history' }));
+    const hide = await whenHydrated(page, listPane(page).getByRole('button', { name: 'Close sidebar', exact: true }));
     await hide.click();
 
     // View state, not a route: there is nowhere to step back to from the chat.
@@ -144,13 +159,13 @@ test.describe('signed in', () => {
     await expect(listPane(page)).toHaveAttribute('inert', '');
     await expect(listPane(page)).toHaveAttribute('aria-hidden', 'true');
 
-    await page.getByRole('button', { name: 'Show Chat history' }).click();
+    await showSidebar(imagoColumn(page)).click();
     await expect(shell(page)).toHaveAttribute('data-list', 'list');
     await expect.poll(() => widthOf(listPane(page))).toBeGreaterThan(0);
     await expect(listPane(page)).not.toHaveAttribute('inert');
   });
 
-  test('× on the files tree beside an open page hides it to width 0 and inert', async ({
+  test('Close sidebar on the files tree beside an open page hides it to width 0 and inert', async ({
     page,
   }) => {
     const filePage = await factories.createPage(homeDriveId, { title: 'Shell spec page' });
@@ -159,7 +174,7 @@ test.describe('signed in', () => {
     await expect(shell(page)).toHaveAttribute('data-list', 'tree');
     expect(await widthOf(listPane(page))).toBeGreaterThan(0);
 
-    const hide = await whenHydrated(page, page.getByRole('button', { name: 'Hide Files' }));
+    const hide = await whenHydrated(page, listPane(page).getByRole('button', { name: 'Close sidebar', exact: true }));
     await hide.click();
 
     // View state, not a route: the address and the open object stay.
@@ -168,7 +183,9 @@ test.describe('signed in', () => {
     await expect(shell(page)).toHaveAttribute('data-list-hidden', 'true');
     await expect.poll(() => widthOf(listPane(page))).toBe(0);
     await expect(listPane(page)).toHaveAttribute('inert', '');
-    await expect(page.getByRole('button', { name: 'Show Files' })).toBeVisible();
+    // A page is open, so Show sidebar leads the page head, not Imago's.
+    await expect(showSidebar(pageColumn(page))).toBeVisible();
+    await expect(showSidebar(imagoColumn(page))).toHaveCount(0);
   });
 
   /**
@@ -177,9 +194,13 @@ test.describe('signed in', () => {
    * open; with none it jumps straight there.
    */
   const paintedListWidths = async (page: Page): Promise<number[]> => {
-    // Settings has no list, so Files slides its list open from width 0.
-    await page.goto(imagoPath(homeDriveId, 'settings'));
-    const files = await whenHydrated(page, railLink(page, 'Files'));
+    // Every drive tool now has a left pane of its own, so start where the left pane is closed:
+    // the chat with its history hidden. Files then slides its list open from width 0.
+    await page.goto(imagoPath(homeDriveId));
+    const hide = await whenHydrated(page, listPane(page).getByRole('button', { name: 'Close sidebar', exact: true }));
+    await hide.click();
+    await expect.poll(() => widthOf(listPane(page))).toBe(0);
+    const files = railLink(page, 'Files');
     await page.evaluate(() => {
       const pane = document.querySelector('[data-slot="list"]');
       const record = window as Window & { __widths?: number[] };

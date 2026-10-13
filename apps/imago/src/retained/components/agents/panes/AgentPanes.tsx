@@ -87,6 +87,7 @@ import PaneBar, {
   PaneSplitCloseActions,
   type PaneChatTab,
 } from './PaneBar';
+import { OpenShellButton, agentModelToolsLabel, usePaneRequest } from './PaneHeadControls';
 import PanePicker, { type PickableAgent, type ReattachableShell } from './PanePicker';
 import { resolvePaneSurface } from './pane-surface';
 import { selectPaneAgent } from './select-pane-agent';
@@ -1497,6 +1498,29 @@ export default function AgentPanes({
     [bindPane, sessionId],
   );
 
+  // The toolbar's "Add pane" and a chat head's "Open shell" arrive as requests (see
+  // `useAgentPaneRequestStore`). Both split the active pane with the existing store
+  // action; "Add pane" leaves the new unbound pane showing the PanePicker, "Open shell"
+  // then runs the picker's own shell path on it. A shell's scrollback is NOT kept across
+  // Close shell / Open shell: closing ends its PTY and Open shell mints a new one.
+  const splitActivePane = useCallback((): string | null => {
+    const live = useAgentWorkspaceStore.getState().workspaces[sessionId];
+    const target = live?.activeNodeId ?? live?.nodes.find((n) => n.nodeType === 'pane')?.id ?? null;
+    if (target === null) return null;
+    useAgentWorkspaceStore.getState().splitPane(sessionId, target, 'row');
+    return useAgentWorkspaceStore.getState().workspaces[sessionId]?.pendingPickerNodeId ?? null;
+  }, [sessionId]);
+
+  const hasShellPane = nodes.some((n) => n.nodeType === 'pane' && n.target?.kind === 'terminal');
+
+  const openShellPane = useCallback(() => {
+    const created = splitActivePane();
+    if (created !== null) void handlePickShell(created);
+  }, [splitActivePane, handlePickShell]);
+
+  usePaneRequest('addPane', sessionId, () => void splitActivePane());
+  usePaneRequest('openShell', sessionId, openShellPane);
+
   const paneLabel = useCallback((node: PaneNode) => titleOf(targetIndex, node), [targetIndex]);
 
   const renderPane = ({
@@ -1541,6 +1565,7 @@ export default function AgentPanes({
           onSplitRight={() => splitPane(sessionId, node.id, 'row')}
           onSplitDown={() => splitPane(sessionId, node.id, 'column')}
           onClose={() => handleClosePane(node.id)}
+          onOpenShell={hasShellPane || !canRunSandbox ? undefined : openShellPane}
           // The "+" chip and History's own "New Conversation" button are the
           // identical call — both start a fresh conversation with this pane's
           // current agent, replacing what is showing.
@@ -1562,6 +1587,7 @@ export default function AgentPanes({
         onFocusCapture={() => selectNode(sessionId, node.id)}
       >
         <PaneBar
+          size="board"
           isActive={isActive}
           identity={
             node.target ? (
@@ -1577,6 +1603,7 @@ export default function AgentPanes({
               onSplitRight={() => splitPane(sessionId, node.id, 'row')}
               onSplitDown={() => splitPane(sessionId, node.id, 'column')}
               onClose={() => handleClosePane(node.id)}
+              closeLabel={surface.surface === 'terminal' ? 'Close shell' : 'Close pane'}
             />
           }
         />
@@ -1674,6 +1701,7 @@ function ChatPane({
   onSplitRight,
   onSplitDown,
   onClose,
+  onOpenShell,
   onCreateNewFromHistory,
   onPickHistoryConversation,
   onHistoryDeleteConversation,
@@ -1704,6 +1732,8 @@ function ChatPane({
   onSplitRight: () => void;
   onSplitDown: () => void;
   onClose: () => void;
+  /** Present only while the workspace has no shell pane: re-adds one (history is not kept). */
+  onOpenShell?: () => void;
   /** Starts a new conversation with this pane's current agent, replacing what it shows. */
   onCreateNewFromHistory: () => Promise<boolean>;
   /** Resolves to whether the pick actually landed — false on a failed reopen. */
@@ -1778,6 +1808,7 @@ function ChatPane({
     handleSaved: handleSettingsSaved,
   } = useAgentSettingsSaveState({ isConfigLoaded: agentConfig !== null });
   const settingsRef = useRef<PageAgentSettingsTabRef>(null);
+  const modelToolsLabel = agentModelToolsLabel(agentConfig);
 
   const toggleConversationShare = useCallback(
     async (targetConversationId: string, isShared: boolean) => {
@@ -1856,6 +1887,7 @@ function ChatPane({
       onFocusCapture={onSelectPane}
     >
       <PaneBar
+        size="board"
         isActive={isActive}
         identity={
           <div className="flex min-w-0 flex-1 items-center gap-0.5">
@@ -1891,6 +1923,12 @@ function ChatPane({
         }
         actions={
           <>
+            {modelToolsLabel !== null && (
+              <span className="hidden shrink-0 truncate text-[11px] font-normal text-muted-foreground sm:inline">
+                {modelToolsLabel}
+              </span>
+            )}
+            {onOpenShell !== undefined && <OpenShellButton onOpen={onOpenShell} />}
             {activeTab === 'settings' && agentPageId !== null && (
               <PaneSettingsSaveAction
                 saveState={settingsSaveState}
@@ -1922,6 +1960,7 @@ function ChatPane({
               onSplitRight={onSplitRight}
               onSplitDown={onSplitDown}
               onClose={onClose}
+              closeLabel="Close agent chat"
             />
           </>
         }

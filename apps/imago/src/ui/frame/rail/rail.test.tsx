@@ -13,13 +13,24 @@ import { fakeRealtime } from '../../test-support/fake-realtime';
 import { paneLayout, stageFor } from '../stage/stage';
 import { Rail } from './rail';
 
-/** apps/web's badges route as the browser sees it: a fake fetch behind the real imago client. */
-const badgesClient = (body: unknown | (() => unknown), status = 200) => {
+type Body = unknown | (() => unknown);
+
+const BADGES = '/api/sidebar/badges';
+const NOTIFICATIONS = '/api/notifications?countOnly=true';
+
+const bodyOf = (body: Body): unknown => (typeof body === 'function' ? body() : body);
+
+/**
+ * apps/web's badges and notification-count routes as the browser sees them: a fake fetch
+ * behind the real imago client, answering each route with its own body.
+ */
+const countsClient = (badges: Body, notifications: Body = { count: 0 }, status = 200) => {
   const requests: string[] = [];
   const client = createApiClient({
     fetch: async (input) => {
       requests.push(input);
-      return Response.json(typeof body === 'function' ? body() : body, { status });
+      if (input === NOTIFICATIONS) return Response.json(bodyOf(notifications), { status });
+      return Response.json(bodyOf(badges), { status });
     },
     navigate: () => {},
     location: () => ({ origin: 'http://localhost:3006', pathname: '/imago/drive-1' }),
@@ -29,9 +40,10 @@ const badgesClient = (body: unknown | (() => unknown), status = 200) => {
 
 const railAt = (
   pathname: string,
-  body: unknown | (() => unknown) = { dms: 0, channels: 0, files: 0, tasks: 0, calendar: 0 },
+  body: Body = { dms: 0, channels: 0, files: 0, tasks: 0, calendar: 0 },
+  notifications: Body = { count: 0 },
 ) => {
-  const api = badgesClient(body);
+  const api = countsClient(body, notifications);
   const rt = fakeRealtime();
   const stage = stageFor(pathname);
   const layout = paneLayout(stage, getUiState().resources);
@@ -45,21 +57,11 @@ const railAt = (
   return { container, requests: api.requests, rt };
 };
 
+/** Requests to one route, in order. */
+const to = (requests: readonly string[], route: string): string[] => requests.filter((request) => request === route);
+
 const settle = (check: () => void): Promise<void> =>
   act(() => vi.waitFor(check, { timeout: 1000, interval: 5 }));
-
-/**
- * Clicks the disclosure's summary. The browser flips `open` at once but fires
- * `toggle` as a later task, and only that event reaches React's state.
- */
-const toggleMore = async (container: HTMLElement): Promise<void> => {
-  const details = container.querySelector('details');
-  const toggled = new Promise<void>((resolve) => {
-    details?.addEventListener('toggle', () => resolve(), { once: true });
-  });
-  act(() => control(container, 'More').click());
-  await act(() => toggled);
-};
 
 const control = (container: HTMLElement, name: string): HTMLElement => {
   const element = container.querySelector(`[aria-label="${name}"]`);
@@ -81,13 +83,13 @@ describe('Rail', () => {
     await settle(() => {
       control(container, 'Messages, 7 unread');
     });
-    const badge = control(container, 'Messages, 7 unread').querySelector('[aria-hidden="true"].bg-accent');
+    const badge = control(container, 'Messages, 7 unread').querySelector('[aria-hidden="true"].bg-notice');
 
     assert({
       given: 'two unread DMs and five unread channel messages',
-      should: 'load the badges once through the imago client and show 7 on Messages in the accent badge',
-      actual: [requests, badge?.textContent, container.querySelectorAll('.bg-accent').length],
-      expected: [['/api/sidebar/badges'], '7', 1],
+      should: 'load the badges once through the imago client and show 7 on Messages in the amber badge',
+      actual: [to(requests, BADGES), badge?.textContent, container.querySelectorAll('.bg-notice').length],
+      expected: [[BADGES], '7', 1],
     });
   });
 
@@ -102,7 +104,7 @@ describe('Rail', () => {
     await settle(() => {
       control(container, 'Messages, 1 unread');
     });
-    const afterPost = requests.length;
+    const afterPost = to(requests, BADGES).length;
     channels = 0;
     rt.emit('inbox:read_status_changed', { operation: 'read_status_changed', type: 'channel', id: 'c1', unreadCount: 0 });
     await settle(() => {
@@ -112,13 +114,13 @@ describe('Rail', () => {
     assert({
       given: 'the rail open away from Messages, a post in a channel, then the channel read',
       should: 'refetch the counts on each inbox event and show 1, then none, without a reload',
-      actual: [afterPost, requests.length],
+      actual: [afterPost, to(requests, BADGES).length],
       expected: [2, 3],
     });
   });
 
   test('a failed badges request', async () => {
-    const api = badgesClient({ error: 'Failed to fetch sidebar badges' }, 500);
+    const api = countsClient({ error: 'Failed to fetch sidebar badges' }, { error: 'Failed to fetch notifications' }, 500);
     const stage = stageFor('/drive-1');
     const container = mount(
       <ImagoSWRProvider client={api.client}>
@@ -128,20 +130,22 @@ describe('Rail', () => {
       </ImagoSWRProvider>,
     );
     await settle(() => {
-      if (api.requests.length === 0) throw new Error('not requested');
+      if (to(api.requests, BADGES).length === 0 || to(api.requests, NOTIFICATIONS).length === 0) {
+        throw new Error('not requested');
+      }
     });
 
     assert({
-      given: 'the badges route failing',
-      should: 'keep the rail and show no count',
-      actual: [control(container, 'Messages').tagName, container.querySelector('.bg-accent')],
-      expected: ['A', null],
+      given: 'the badges and notification-count routes failing',
+      should: 'keep the rail and show no count on Messages or the bell',
+      actual: [control(container, 'Messages').tagName, control(container, 'Notifications').tagName, container.querySelector('.bg-notice')],
+      expected: ['A', 'BUTTON', null],
     });
   });
 
   test('links to the current drive', () => {
     const { container } = railAt('/drive-1/tasks/list-1');
-    const hrefs = ['Chat', 'Files', 'Messages', 'Tasks', 'Settings'].map((name) =>
+    const hrefs = ['Chat', 'Files', 'Messages', 'Tasks', 'Calendar', 'Members', 'Drive settings'].map((name) =>
       control(container, name).getAttribute('href'),
     );
 
@@ -149,7 +153,19 @@ describe('Rail', () => {
       given: 'a task list open in drive-1',
       should: 'link every item into drive-1 and mark Tasks as the current section',
       actual: [hrefs, control(container, 'Tasks').getAttribute('aria-current'), container.querySelectorAll('[aria-current]').length],
-      expected: [['/drive-1', '/drive-1/files', '/drive-1/messages', '/drive-1/tasks', '/drive-1/settings'], 'true', 1],
+      expected: [
+        [
+          '/drive-1',
+          '/drive-1/files',
+          '/drive-1/messages',
+          '/drive-1/tasks',
+          '/drive-1/calendar',
+          '/drive-1/members',
+          '/drive-1/settings',
+        ],
+        'true',
+        1,
+      ],
     });
   });
 
@@ -226,46 +242,49 @@ describe('Rail', () => {
     });
   });
 
-  test('the overflow menu', async () => {
-    const { container } = railAt('/drive-1');
-    const details = container.querySelector('details');
-    await toggleMore(container);
-    const opened = [...container.querySelectorAll('details a')].map((link) => link.getAttribute('href'));
+  test('a drive tool at its own URL', () => {
+    const { container } = railAt('/drive-1/members');
 
-    const link = container.querySelector<HTMLElement>('details a');
-    act(() => link?.focus());
-    const focusedLink = document.activeElement === link;
-    act(() => {
-      link?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    assert({
+      given: 'the drive’s Members open',
+      should: 'mark Members, under the divider, as the only current page',
+      actual: [control(container, 'Members').getAttribute('aria-current'), container.querySelectorAll('[aria-current]').length],
+      expected: ['page', 1],
     });
-    const afterEscape = details?.open;
-    const focusBack = document.activeElement === control(container, 'More');
+  });
 
-    await toggleMore(container);
-    const reopened = details?.open;
-    act(() => {
-      document.body.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }));
+  test('Search', () => {
+    const { container } = railAt('/drive-1');
+    const before = getUiState().resources.paletteOpen;
+    act(() => control(container, 'Search').click());
+
+    assert({
+      given: 'Search clicked on the spine',
+      should: 'open the ⌘K palette through the store',
+      actual: [before, getUiState().resources.paletteOpen],
+      expected: [false, true],
+    });
+  });
+
+  test('the bell', async () => {
+    let count = 3;
+    const { container, requests, rt } = railAt('/drive-1', undefined, () => ({ count }));
+    await settle(() => {
+      control(container, 'Notifications, 3 unread');
+    });
+    const bell = control(container, 'Notifications, 3 unread');
+    const shown = [bell.tagName, bell.querySelector('[aria-hidden="true"].bg-notice')?.textContent];
+    count = 4;
+    rt.emit('notification:new', { type: 'TASK_ASSIGNED' });
+    await settle(() => {
+      control(container, 'Notifications, 4 unread');
     });
 
     assert({
-      given: '⋯ clicked, then Escape, then ⋯ again and a click outside',
-      should: 'open the classic deep links for this drive, close on Escape with focus back on ⋯, and close on an outside click',
-      actual: [opened, focusedLink, afterEscape, focusBack, reopened, details?.open],
-      expected: [
-        [
-          '/drive-1/calendar',
-          '/drive-1/agents',
-          '/drive-1/settings/integrations',
-          '/drive-1/activity',
-          '/drive-1/trash',
-        '/drive-1/workflows',
-        ],
-        true,
-        false,
-        true,
-        true,
-        false,
-      ],
+      given: 'three unread notifications, then a fourth arriving over realtime',
+      should: 'show the bell as a popover trigger with the amber count, and refetch the count on notification:new',
+      actual: [shown, to(requests, NOTIFICATIONS).length],
+      expected: [['BUTTON', '3'], 2],
     });
   });
 });

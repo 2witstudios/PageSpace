@@ -20,7 +20,11 @@ export function useDisclosure(): Disclosure {
   useEffect(() => {
     if (!open) return;
     const onPointerDown = (event: PointerEvent) => {
-      if (!(event.target instanceof Node) || !ref.current?.contains(event.target)) setOpen(false);
+      if (!(event.target instanceof Node)) return setOpen(false);
+      // A reused classic control inside the menu (a model selector, an export menu) opens its
+      // own popover portaled to <body>; a press there is still inside this menu.
+      const inPortal = event.target instanceof Element && event.target.closest('[data-radix-popper-content-wrapper]') !== null;
+      if (!inPortal && !ref.current?.contains(event.target)) setOpen(false);
     };
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;

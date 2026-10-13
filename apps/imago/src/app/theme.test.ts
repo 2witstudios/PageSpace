@@ -15,6 +15,7 @@ const themeFiles = [
   join(appDir, 'theme/reset.css'),
   join(appDir, 'theme/frame.css'),
   join(appDir, 'theme/components.css'),
+  join(appDir, 'theme/v3.css'),
 ];
 const tailwindTheme = join(
   dirname(createRequire(import.meta.url).resolve('tailwindcss')),
@@ -383,11 +384,11 @@ describe('imago design tokens', () => {
         '--spacing-chat-pane',
       ]),
       expected: [
-        ['--spacing-rail-width', '64px'],
-        ['--spacing-pane-header', '52px'],
-        ['--spacing-list-pane', '274px'],
-        ['--spacing-tree-pane', '244px'],
-        ['--spacing-chat-pane', '350px'],
+        ['--spacing-rail-width', '72px'],
+        ['--spacing-pane-header', '48px'],
+        ['--spacing-list-pane', '300px'],
+        ['--spacing-tree-pane', '260px'],
+        ['--spacing-chat-pane', '360px'],
       ],
     });
   });

@@ -10,6 +10,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Mail, ArrowLeft, Loader2, CheckCircle } from 'lucide-react';
 import { getMagicLinkPlatformFields } from '@/lib/auth/magic-link-platform-fields';
 import { useCapacitor } from '@/hooks/useCapacitor';
+import { isImagoEnabled } from '@/lib/imago/imago-enabled';
 
 type FormState = 'input' | 'sending' | 'sent' | 'error';
 
@@ -28,6 +29,8 @@ export function MagicLinkForm({ nextPath, inviteToken }: MagicLinkFormProps = {}
   // Resolved after mount, never during render — the shell is a `window` fact
   // the server does not have.
   const { isIOS } = useCapacitor();
+  // The v3 look is only applied when Imago is enabled; classic markup is unchanged.
+  const v3 = isImagoEnabled();
   const formRef = useRef<HTMLFormElement>(null);
   const [email, setEmail] = useState('');
   const [acceptedTos, setAcceptedTos] = useState(false);
@@ -210,7 +213,13 @@ export function MagicLinkForm({ nextPath, inviteToken }: MagicLinkFormProps = {}
             <CheckCircle className="h-6 w-6 text-green-600 dark:text-green-400" />
           </div>
           <div className="text-center">
-            <h3 className="font-medium text-lg">Check your email</h3>
+            {v3 ? (
+              <h1 className="text-[28px] font-bold leading-[1.15] tracking-[-0.02em] text-[oklch(0.15_0.01_220)]">
+                Check your email
+              </h1>
+            ) : (
+              <h3 className="font-medium text-lg">Check your email</h3>
+            )}
             <p className="text-muted-foreground text-sm mt-1">
               We sent a sign-in link to{' '}
               <span className="font-medium text-foreground">{email}</span>
@@ -307,7 +316,7 @@ export function MagicLinkForm({ nextPath, inviteToken }: MagicLinkFormProps = {}
       </div>
 
       {error && (
-        <div className="text-sm text-red-500 dark:text-red-400">
+        <div role="alert" className="text-sm text-red-500 dark:text-red-400">
           {error}
           {retryAfterSeconds > 0 && (
             <span className="font-medium ml-1">

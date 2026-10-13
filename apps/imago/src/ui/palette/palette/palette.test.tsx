@@ -43,21 +43,21 @@ const everywhere = [
   { id: 'u-1', label: 'Road Runner', type: 'user', data: {}, description: 'User (cross-drive)' },
 ];
 
-const ALPHA_ROAD = 'GET /api/mentions/search?q=road&types=page&driveId=d-1';
-const HOME_ROAD = 'GET /api/mentions/search?q=road&types=page&driveId=home-1';
-const ALL_ROAD = 'GET /api/mentions/search?q=road&types=page&crossDrive=true';
+const ALPHA_ROAD = 'GET /api/mentions/search?q=road&types=page%2Cuser&driveId=d-1';
+const HOME_ROAD = 'GET /api/mentions/search?q=road&types=page%2Cuser&driveId=home-1';
+const ALL_ROAD = 'GET /api/mentions/search?q=road&types=page%2Cuser&crossDrive=true';
 
 const answer =
   (body: unknown): FakeRoute =>
   () =>
     Response.json(body);
 
-const setup = (pathname = '/d-1/files', routes: Record<string, FakeRoute> = {}) => {
+const setup = (pathname = '/d-1/files', routes: Record<string, FakeRoute> = {}, driveList: readonly DriveSummary[] | null = drives) => {
   const web = fakeWeb({ [ALPHA_ROAD]: answer(inAlpha), [HOME_ROAD]: answer([]), [ALL_ROAD]: answer(everywhere), ...routes });
   const container = mount(
     <ImagoSWRProvider client={web.client}>
       <textarea aria-label="Message Imago" />
-      <CommandPalette stage={stageFor(pathname)} homeDriveId="home-1" drives={drives} delayMs={1} />
+      <CommandPalette stage={stageFor(pathname)} homeDriveId="home-1" drives={driveList} delayMs={1} />
     </ImagoSWRProvider>,
   );
   const composer = container.querySelector('textarea') as HTMLTextAreaElement;
@@ -142,9 +142,9 @@ describe('CommandPalette', () => {
         closedBefore: true,
         prevented: true,
         focusedField: true,
-        asked: ['/api/mentions/search?q=road&types=page&driveId=d-1'],
+        asked: ['/api/mentions/search?q=road&types=page%2Cuser&driveId=d-1'],
         first: [
-          { text: 'Roadmap', selected: 'true' },
+          { text: 'Roadmap↵', selected: 'true' },
           { text: 'road-crew', selected: 'false' },
           { text: 'Road tasks', selected: 'false' },
         ],
@@ -206,7 +206,7 @@ describe('CommandPalette', () => {
     assert({
       given: '"Include all workspaces" ticked with "road" typed, then the agent picked',
       should:
-        'ask every drive, list only the pages the server answered with each one’s drive, and open the agent’s drive chat talking to it',
+        'ask every drive, list the pages the server answered with each one’s drive, then the people, and open the agent’s drive chat talking to it',
       actual: {
         ticked: toggle.getAttribute('aria-checked'),
         asked: web.requests.map((request) => request.url),
@@ -218,10 +218,10 @@ describe('CommandPalette', () => {
       expected: {
         ticked: 'true',
         asked: [
-          '/api/mentions/search?q=road&types=page&driveId=d-1',
-          '/api/mentions/search?q=road&types=page&crossDrive=true',
+          '/api/mentions/search?q=road&types=page%2Cuser&driveId=d-1',
+          '/api/mentions/search?q=road&types=page%2Cuser&crossDrive=true',
         ],
-        rows: ['RoadmapAlpha', 'Road plannerBeta'],
+        rows: ['RoadmapAlpha↵', 'Road plannerBeta', 'Road Runner'],
         placeholder: 'Search all workspaces…',
         pushed: ['/d-2'],
         agent: { id: 'a-1', title: 'Road planner' },
@@ -242,7 +242,7 @@ describe('CommandPalette', () => {
       given: 'the palette opened from the DMs, which name no drive',
       should: 'search the viewer’s Home drive and say nothing matched',
       actual: [placeholder, web.requests.map((request) => request.url)],
-      expected: ['Search Home…', ['/api/mentions/search?q=road&types=page&driveId=home-1']],
+      expected: ['Search Home…', ['/api/mentions/search?q=road&types=page%2Cuser&driveId=home-1']],
     });
   });
 
@@ -360,5 +360,54 @@ describe('CommandPalette', () => {
       actual: [keys, dialog(container) === null],
       expected: [[false, false, false, false], true],
     });
+  });
+});
+
+describe('CommandPalette edge cases', () => {
+  test('all workspaces before the drives are listed: results carry no drive name, and Enter on a person row opens nothing', async () => {
+    const { container } = setup('/d-1/files', {}, null);
+    ctrlK(document.body);
+    typeInto(field(container) as HTMLInputElement, 'road');
+    await listed(container, 3);
+    click(container.querySelector<HTMLButtonElement>('[role="checkbox"]') as HTMLButtonElement);
+    await settle(() => {
+      if (!options(container).some((option) => option.text?.includes('Road planner'))) throw new Error('not every drive');
+    });
+    const rows = options(container).map((option) => option.text);
+    press(field(container) as HTMLInputElement, 'ArrowDown');
+    press(field(container) as HTMLInputElement, 'ArrowDown');
+    press(field(container) as HTMLInputElement, 'Enter');
+    assert({
+      given: 'every workspace searched while the drive list is still unknown, then Enter on the person row',
+      should: 'list pages with no drive name and navigate nowhere',
+      actual: [rows, router.pushed],
+      expected: [['Roadmap↵', 'Road planner', 'Road Runner'], []],
+    });
+  });
+
+  test('all workspaces: a result from a drive the viewer has no name for shows no drive name', async () => {
+    const stranger = [page('x-1', 'Roadside', 'DOCUMENT', 'd-9')];
+    const { container } = setup('/d-1/files', { [ALL_ROAD]: answer(stranger) });
+    ctrlK(document.body);
+    typeInto(field(container) as HTMLInputElement, 'road');
+    await listed(container, 3);
+    click(container.querySelector<HTMLButtonElement>('[role="checkbox"]') as HTMLButtonElement);
+    await settle(() => {
+      if (!options(container).some((option) => option.text?.includes('Roadside'))) throw new Error('not every drive');
+    });
+    assert({ given: 'a result whose drive is not in the list', should: 'show the title alone', actual: options(container).map((option) => option.text), expected: ['Roadside↵'] });
+  });
+
+  test('opening from a focused non-HTML element does not try to give focus back to it', () => {
+    const { container } = setup();
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('tabindex', '0');
+    document.body.append(svg);
+    svg.focus();
+    ctrlK(svg);
+    const opened = dialog(container) !== null;
+    ctrlK(svg);
+    svg.remove();
+    assert({ given: 'focus on an SVG when the palette opens', should: 'open and close without error', actual: [opened, dialog(container)], expected: [true, null] });
   });
 });

@@ -11,6 +11,8 @@ export type AgentOption = {
   readonly value: string;
   readonly title: string;
   readonly disabled: boolean;
+  /** The row's second line in the picker: "Global · your chosen model", or model · folder. */
+  readonly meta?: string;
 };
 
 export type AgentGroup = {
@@ -31,12 +33,28 @@ type AgentLists = {
 
 const PENDING = 'pending:';
 
-const builtinOption = (agent: BuiltinAgentPointer): AgentOption =>
-  agent.pageId === null
-    ? { value: `${PENDING}${agent.key}`, title: agent.title, disabled: true }
-    : { value: agent.pageId, title: agent.title, disabled: false };
+/** Imago's own row says it is global and talks through the model you chose (C-Chat-AgentPicker). */
+const IMAGO_META = 'Global · your chosen model';
+
+const builtinOption = (agent: BuiltinAgentPointer): AgentOption => {
+  const meta = agent.key === 'imago' ? { meta: IMAGO_META } : {};
+  return agent.pageId === null
+    ? { value: `${PENDING}${agent.key}`, title: agent.title, disabled: true, ...meta }
+    : { value: agent.pageId, title: agent.title, disabled: false, ...meta };
+};
 
 const option = (agent: DriveAgent | ChatAgent): AgentOption => ({ value: agent.id, title: agent.title, disabled: false });
+
+/** A drive agent's second line: its model and the folder it lives in (the drive at the top level). */
+const driveOption = (
+  agent: DriveAgent,
+  driveName: string | undefined,
+  folderTitle: ((pageId: string) => string | undefined) | undefined,
+): AgentOption => {
+  const folder = agent.parentId === undefined ? undefined : agent.parentId === 'root' ? driveName : folderTitle?.(agent.parentId);
+  const meta = [agent.aiModel, folder].filter((part): part is string => part !== undefined && part !== '').join(' · ');
+  return meta === '' ? option(agent) : { ...option(agent), meta };
+};
 
 const imagoOf = (builtins: readonly BuiltinAgentPointer[] | undefined) => builtins?.find((agent) => agent.key === 'imago');
 
@@ -49,14 +67,20 @@ export const agentMenu = ({
   driveAgents,
   driveName,
   selected,
-}: AgentLists & { readonly driveName?: string; readonly selected: ChatAgent | null }): AgentMenu => {
+  folderTitle,
+}: AgentLists & {
+  readonly driveName?: string;
+  readonly selected: ChatAgent | null;
+  /** A folder's title by page id, from the drive's tree, for the agent rows' meta. */
+  readonly folderTitle?: (pageId: string) => string | undefined;
+}): AgentMenu => {
   const imago = (builtins ?? []).map(builtinOption);
   const builtinIds = new Set(imago.map((entry) => entry.value));
-  const drive = (driveAgents ?? []).filter((agent) => !builtinIds.has(agent.id)).map(option);
+  const drive = (driveAgents ?? []).filter((agent) => !builtinIds.has(agent.id)).map((agent) => driveOption(agent, driveName, folderTitle));
   const listed = selected === null || [...imago, ...drive].some((entry) => entry.value === selected.id);
   const groups: AgentGroup[] = [
     { label: 'Imago', options: imago },
-    { label: driveName ?? 'This drive', options: drive },
+    { label: `Agents in ${driveName ?? 'this drive'}`, options: drive },
     { label: 'Chosen', options: listed || selected === null ? [] : [option(selected)] },
   ];
   return {

@@ -1,13 +1,13 @@
 'use client';
 
 import { Suspense } from 'react';
-import { CalendarView } from '@/retained/components/calendar';
+import { UserCalendarMiddle } from '@/ui/tools/user-calendar/user-calendar-middle';
 import { Skeleton } from '@/retained/components/ui/skeleton';
 
 function CalendarPageContent() {
   return (
     <div className="h-full flex flex-col">
-      <CalendarView context="user" />
+      <UserCalendarMiddle />
     </div>
   );
 }

@@ -85,6 +85,7 @@
     "app/dashboard/drives/page.tsx"
   ],
   "files": [
+    "app/api/pulse/route.ts",
     "app/dashboard/[driveId]/activity/page.tsx",
     "app/dashboard/[driveId]/calendar/page.tsx",
     "app/dashboard/[driveId]/members/[userId]/page.tsx",
@@ -196,6 +197,8 @@
     "components/ai/chat/input/ProviderModelSelector.tsx",
     "components/ai/chat/input/QueueTray.tsx",
     "components/ai/chat/input/index.ts",
+    "components/ai/chat/layouts/HomeLine.tsx",
+    "components/ai/chat/layouts/HomeSuggestions.tsx",
     "components/ai/page-agents/AgentDrivesCard.tsx",
     "components/ai/page-agents/AgentIntegrationsPanel.tsx",
     "components/ai/page-agents/AgentSettingsMenu.tsx",
@@ -628,6 +631,7 @@
     "hooks/useEnterToSend.ts",
     "hooks/useFavorites.ts",
     "hooks/useFileDrop.ts",
+    "hooks/useHomeSignals.ts",
     "hooks/useHotkeyPreferences.ts",
     "hooks/useInboxSocket.ts",
     "hooks/useIntegrations.ts",

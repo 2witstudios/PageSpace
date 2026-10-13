@@ -1,6 +1,6 @@
 'use client';
 
-import { Trash2, Eye, Edit, Share, User } from 'lucide-react';
+import { Trash2 } from 'lucide-react';
 import { Button } from '@/retained/components/ui/button';
 import { Badge } from '@/retained/components/ui/badge';
 import { Avatar, AvatarFallback, AvatarImage } from '@/retained/components/ui/avatar';
@@ -87,6 +87,13 @@ export function MemberRow({ member, driveId, currentUserRole, onRemove }: Member
         </Badge>
       );
     }
+    if (member.role === 'GUEST') {
+      return (
+        <Badge className="bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300">
+          Guest
+        </Badge>
+      );
+    }
     if (member.customRole) {
       return (
         <Badge className={getCustomRoleColorClasses(member.customRole.color)}>
@@ -101,66 +108,43 @@ export function MemberRow({ member, driveId, currentUserRole, onRemove }: Member
     );
   };
 
+  const joined = new Date(member.acceptedAt ?? member.invitedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+
   return (
-    <div className="p-4 flex items-center justify-between hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
-      <div className="flex items-center space-x-4">
+    <div className="p-4 flex items-center justify-between gap-4 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
+      <Link
+        href={`/dashboard/${driveId}/members/${member.userId}`}
+        className="flex min-w-0 flex-1 items-center gap-4 no-underline"
+        aria-label={`Open ${displayName}`}
+      >
         <Avatar>
           <AvatarImage src={member.profile?.avatarUrl} alt={displayName} />
           <AvatarFallback>{initials}</AvatarFallback>
         </Avatar>
 
-        <div>
-          <div className="flex items-center space-x-2">
-            <p className="font-medium">{displayName}</p>
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <p className="font-medium truncate">{displayName}</p>
             {member.profile?.username && (
               <span className="text-sm text-gray-500 dark:text-gray-400">@{member.profile.username}</span>
             )}
-            {getRoleBadge()}
           </div>
-          <p className="text-sm text-gray-600 dark:text-gray-400">{member.user.email}</p>
-
-          <div className="flex items-center space-x-4 mt-1">
-            {member.permissionCounts.view > 0 && (
-              <div className="flex items-center space-x-1 text-xs text-gray-500 dark:text-gray-400">
-                <Eye className="w-3 h-3" />
-                <span>{member.permissionCounts.view} pages</span>
-              </div>
-            )}
-            {member.permissionCounts.edit > 0 && (
-              <div className="flex items-center space-x-1 text-xs text-gray-500 dark:text-gray-400">
-                <Edit className="w-3 h-3" />
-                <span>{member.permissionCounts.edit} pages</span>
-              </div>
-            )}
-            {member.permissionCounts.share > 0 && (
-              <div className="flex items-center space-x-1 text-xs text-gray-500 dark:text-gray-400">
-                <Share className="w-3 h-3" />
-                <span>{member.permissionCounts.share} pages</span>
-              </div>
-            )}
-          </div>
+          <p className="text-sm text-gray-600 dark:text-gray-400 truncate">{member.user.email}</p>
         </div>
-      </div>
+      </Link>
 
-      <div className="flex items-center space-x-2">
-        {canManage && (
-          <Link href={`/dashboard/${driveId}/members/${member.userId}`}>
-            <Button
-              variant="ghost"
-              size="sm"
-              title="Member Settings"
-            >
-              <User className="w-4 h-4" />
-            </Button>
-          </Link>
-        )}
+      <div className="flex items-center gap-3 flex-none">
+        {getRoleBadge()}
+        <span className="hidden sm:inline font-mono text-xs tabular-nums text-gray-500 dark:text-gray-400">
+          Joined {joined}
+        </span>
         {canManage && member.role !== 'OWNER' && (
           <Button
             variant="ghost"
             size="sm"
             onClick={onRemove}
             className="text-red-600 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300"
-            title="Remove Member"
+            aria-label={`Remove ${displayName}`}
           >
             <Trash2 className="w-4 h-4" />
           </Button>

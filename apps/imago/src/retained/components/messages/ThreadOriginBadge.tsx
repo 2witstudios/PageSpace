@@ -22,7 +22,7 @@ export function ThreadOriginBadge({ onOpenThread, className }: ThreadOriginBadge
         className={cn(base, 'hover:text-foreground hover:border-primary/60 transition-colors')}
       >
         <MessageSquareReply size={11} />
-        Also sent from thread
+        Replied to a thread:
       </button>
     );
   }
@@ -30,7 +30,7 @@ export function ThreadOriginBadge({ onOpenThread, className }: ThreadOriginBadge
   return (
     <div className={base}>
       <MessageSquareReply size={11} />
-      Also sent from thread
+      Replied to a thread:
     </div>
   );
 }

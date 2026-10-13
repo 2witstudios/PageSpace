@@ -351,12 +351,13 @@ const CompactToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: stri
   const { toolIcon, statusIcon, descriptiveTitle, compactSummary, expandedDetails } = useCompactToolCallDisplay(part, toolName, Boolean(isExpanded));
 
   return (
-    <div className="py-0.5 text-[11px] max-w-full">
+    <div className="max-w-full text-xs">
+      {/* Imago C v3 (C-Files-Doc): one 22px row per tool call, 12px, no box. */}
       <button
         type="button"
         onClick={toggleExpanded}
         aria-expanded={isExpanded}
-        className="w-full flex items-center space-x-1.5 text-left hover:bg-muted/30 rounded py-0.5 px-1 transition-colors max-w-full"
+        className="-mx-1 flex h-[22px] w-[calc(100%+0.5rem)] max-w-none items-center gap-1.5 rounded-[5px] px-1 text-left text-foreground/80 transition-colors hover:bg-muted/40"
       >
         {isExpanded ? <ChevronDown className="h-3 w-3 flex-shrink-0" /> : <ChevronRight className="h-3 w-3 flex-shrink-0" />}
         <div className="flex-shrink-0">{toolIcon}</div>

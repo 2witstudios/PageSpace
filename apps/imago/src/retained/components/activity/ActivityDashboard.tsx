@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useRouter, useSearchParams } from '@/retained-adapters/navigation';
 import { ArrowLeft, RefreshCw, AlertTriangle } from 'lucide-react';
 import { Button } from '@/retained/components/ui/button';
@@ -16,14 +16,22 @@ import type { ActivityLog, ActivityFilters, Drive, Pagination } from './types';
 import { dayRangeParams, parseDayParam, formatDayParam } from './utils';
 import type { RollbackContext } from './ActivityItem';
 import type { ActivityActionResult } from '@/retained/types/activity-actions';
+import { SettingsScreen } from '@/ui/settings/settings-screen/settings-screen';
 
 interface ActivityDashboardProps {
   context: 'user' | 'drive';
   driveId?: string;
   driveName?: string;
+  /**
+   * 'dashboard' keeps the drive-dashboard chrome (Back, Refresh, a title with a drive name).
+   * 'settings' is the account's Your activity screen: a settings screen with its lede, no Back or Refresh.
+   */
+  variant?: 'dashboard' | 'settings';
 }
 
-export function ActivityDashboard({ context, driveId: initialDriveId, driveName }: ActivityDashboardProps) {
+const SETTINGS_LEDE = 'Changes you and your AI made, across every drive. Any change can be rolled back.';
+
+export function ActivityDashboard({ context, driveId: initialDriveId, driveName, variant = 'dashboard' }: ActivityDashboardProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -206,6 +214,8 @@ export function ActivityDashboard({ context, driveId: initialDriveId, driveName 
     }
   };
 
+  const driveNames = useMemo(() => new Map(drives.map((d) => [d.id, d.name] as const)), [drives]);
+
   // Map component context to rollback API context
   const rollbackContext: RollbackContext = context === 'user' ? 'user_dashboard' : 'drive';
 
@@ -252,6 +262,67 @@ export function ActivityDashboard({ context, driveId: initialDriveId, driveName 
       ? `Your recent activity in ${drives.find(d => d.id === filters.driveId)?.name || 'selected drive'}`
       : 'Your recent activity across all drives';
 
+  const errorAlert = error ? (
+    <Alert variant="destructive" className="mb-6">
+      <AlertTriangle className="h-4 w-4" />
+      <AlertTitle>Error</AlertTitle>
+      <AlertDescription>{error}</AlertDescription>
+    </Alert>
+  ) : null;
+
+  const filterBar = (
+    <ActivityFilterBar
+      context={context}
+      driveId={context === 'drive' ? selectedDriveId : filters.driveId}
+      drives={drives}
+      filters={filters}
+      onFiltersChange={handleFiltersChange}
+      onDriveChange={handleDriveChange}
+    />
+  );
+
+  const timeline = (
+    <ActivityTimeline
+      activities={activities}
+      pagination={pagination}
+      loading={loading}
+      loadingMore={loadingMore}
+      onLoadMore={handleLoadMore}
+      emptyMessage={context === 'drive' && !selectedDriveId
+        ? 'Select a drive to view activity'
+        : 'No activity found'
+      }
+      emptyDescription={context === 'drive' && !selectedDriveId
+        ? 'Choose a drive from the dropdown above'
+        : 'Activity will appear here as you and your team make changes'
+      }
+      context={rollbackContext}
+      onRollback={handleRollback}
+      driveNames={driveNames}
+    />
+  );
+
+  if (variant === 'settings') {
+    return (
+      <div className="h-full overflow-x-hidden">
+        <PullToRefresh
+          direction="top"
+          onRefresh={handleRefresh}
+        >
+          <CustomScrollArea className="h-full">
+            <SettingsScreen title="Your activity" lede={SETTINGS_LEDE}>
+              {errorAlert}
+              <div role="toolbar" aria-label="Filters" className="pb-4 border-b">
+                {filterBar}
+              </div>
+              {timeline}
+            </SettingsScreen>
+          </CustomScrollArea>
+        </PullToRefresh>
+      </div>
+    );
+  }
+
   return (
     <div className="h-full overflow-x-hidden">
       <PullToRefresh
@@ -292,44 +363,15 @@ export function ActivityDashboard({ context, driveId: initialDriveId, driveName 
             </div>
 
             {/* Error Alert */}
-            {error && (
-              <Alert variant="destructive" className="mb-6">
-                <AlertTriangle className="h-4 w-4" />
-                <AlertTitle>Error</AlertTitle>
-                <AlertDescription>{error}</AlertDescription>
-              </Alert>
-            )}
+            {errorAlert}
 
             {/* Filter Bar */}
             <div className="mb-6">
-              <ActivityFilterBar
-                context={context}
-                driveId={context === 'drive' ? selectedDriveId : filters.driveId}
-                drives={drives}
-                filters={filters}
-                onFiltersChange={handleFiltersChange}
-                onDriveChange={handleDriveChange}
-              />
+              {filterBar}
             </div>
 
             {/* Activity Timeline */}
-            <ActivityTimeline
-              activities={activities}
-              pagination={pagination}
-              loading={loading}
-              loadingMore={loadingMore}
-              onLoadMore={handleLoadMore}
-              emptyMessage={context === 'drive' && !selectedDriveId
-                ? 'Select a drive to view activity'
-                : 'No activity found'
-              }
-              emptyDescription={context === 'drive' && !selectedDriveId
-                ? 'Choose a drive from the dropdown above'
-                : 'Activity will appear here as you and your team make changes'
-              }
-              context={rollbackContext}
-              onRollback={handleRollback}
-            />
+            {timeline}
           </div>
         </CustomScrollArea>
       </PullToRefresh>

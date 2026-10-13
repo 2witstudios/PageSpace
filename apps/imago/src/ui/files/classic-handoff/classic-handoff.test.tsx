@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act } from 'react';
+import { act, type ReactNode } from 'react';
 import { afterEach, beforeEach, describe, test, vi } from 'vitest';
 import { assert } from 'riteway/vitest';
 import { ImagoSWRProvider } from '@/api/swr-provider';
@@ -19,9 +19,14 @@ import { LegacyDocumentObject as PageView } from '../../test-support/legacy-docu
 const router = vi.hoisted(() => ({ pushed: [] as string[] }));
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: (href: string) => router.pushed.push(href) }),
+  usePathname: () => '/d1/files/p1',
 }));
 
 vi.mock('@/retained-adapters/retained-chat', () => ({ RetainedChat: ({ agentId }: { agentId: string | null }) => <div data-agent-id={agentId} /> }));
+// The chat head's agent picker carries Imago's Model section: classic's selector in a themed
+// retained surface, each proven in its own suite.
+vi.mock('@/retained-adapters/retained-provider', () => ({ RetainedSurface: ({ children }: { children: ReactNode }) => <>{children}</> }));
+vi.mock('@/retained/components/ai/chat/input/ProviderModelSelector', () => ({ ProviderModelSelector: () => null }));
 const { ClassicHandoff } = await import('./classic-handoff');
 
 beforeEach(() => {
@@ -211,7 +216,12 @@ describe('Chat with this agent, through the chat header', () => {
     'GET /api/pages/p1/breadcrumbs': () => Response.json([{ id: 'p1', title: 'Support', type: 'AI_CHAT', parentId: null }]),
   });
 
-  const picker = (container: HTMLElement) => container.querySelector('header select');
+  /** The agent the chat head's picker marks Active: its checked radio's value is the row's title. */
+  const picked = (container: HTMLElement) =>
+    [
+      container.querySelector('aside header summary')?.getAttribute('aria-label'),
+      container.querySelector('[role="radiogroup"][aria-label="Agent"] [role="radio"][aria-checked="true"] span span')?.textContent,
+    ];
 
   test('an agent the viewer can use', async () => {
     const { container } = show(chatRoutes(() => Response.json(conversationsPage([agentConversation('k1')]))), { withChat: true });
@@ -225,8 +235,8 @@ describe('Chat with this agent, through the chat header', () => {
     assert({
       given: 'Chat with this agent beside the chat pane',
       should: 'show the agent chosen in the header and its latest conversation',
-      actual: [(picker(container) as HTMLSelectElement | null)?.value, Boolean(container.querySelector('[data-agent-id="p-imago"]'))],
-      expected: ['p1', false],
+      actual: [picked(container), Boolean(container.querySelector('[data-agent-id="p-imago"]'))],
+      expected: [['Choose agent: Support', 'Support'], false],
     });
   });
 
@@ -247,10 +257,10 @@ describe('Chat with this agent, through the chat header', () => {
       should: 'fall back to Imago with the chat header’s lost-access notice',
       actual: [
         container.querySelector('[role="alert"]')?.textContent,
-        (picker(container) as HTMLSelectElement | null)?.value,
+        picked(container),
         getUiState().resources.chatAgent,
       ],
-      expected: ['You no longer have access to Support, so Imago is answering.', 'p-imago', null],
+      expected: ['You no longer have access to Support, so Imago is answering.', ['Choose agent: Imago', 'Imago'], null],
     });
   });
 });

@@ -41,13 +41,13 @@ import {
   GripVertical,
   Plus,
   Zap,
-  Bell,
 } from 'lucide-react';
 import { cn } from '@/retained/lib/utils';
 import { compareByPagePosition } from '@/retained/services/api/task-ordering';
 import {
   TaskItem,
   TaskStatusConfig,
+  TaskStatusGroup,
   TaskHandlers,
   buildStatusConfig,
   getStatusOrder,
@@ -55,6 +55,10 @@ import {
   PRIORITY_CONFIG,
 } from './task-list-types';
 import { SubTaskProgress } from './SubTaskProgress';
+import { PriorityBars } from './TaskRowCells';
+import { AssigneeAvatars } from './TaskAssigneeAvatars';
+import { TaskTriggerBadge } from './TaskTriggerBadge';
+import { kanbanDropStatus } from './kanban-drop';
 
 interface TaskKanbanViewProps {
   tasks: TaskItem[];
@@ -265,43 +269,31 @@ function TaskCard({
           </DropdownMenu>
         </div>
 
-        {/* Metadata row */}
-        <div className="flex flex-wrap items-center gap-1.5 mt-1 ml-6">
-          {/* Priority badge */}
-          <Badge className={cn('text-xs px-1.5 py-0', PRIORITY_CONFIG[task.priority].color)}>
-            {PRIORITY_CONFIG[task.priority].label}
-          </Badge>
+        {/* Metadata row: priority bars, sub-task progress, due (or "No date"), then the
+            assignees as avatars. Trigger badge sits last, as on the list's rows. */}
+        <div className="mt-2 ml-6 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+          <span role="img" aria-label={`Priority ${PRIORITY_CONFIG[task.priority].label}`} className="inline-flex">
+            <PriorityBars priority={task.priority} />
+          </span>
 
           {/* Sub-task progress — parity with the table's rows. Without it a
               parent card reads as a leaf, and "In Progress" on a container tells
               you nothing about the work underneath it. */}
-          <SubTaskProgress task={task} className="text-xs text-muted-foreground tabular-nums" />
+          <SubTaskProgress task={task} className="tabular-nums" />
 
-          {/* Assignee */}
-          {(task.assignee || task.assigneeAgent) && (
-            <span className="text-xs text-muted-foreground">
-              {task.assignee?.name || task.assigneeAgent?.title || 'Assigned'}
-            </span>
-          )}
+          <span className="tabular-nums">
+            {task.dueDate ? formatDue(task.dueDate) : 'No date'}
+          </span>
 
-          {/* Due date */}
-          {task.dueDate && (
-            <span className="text-xs text-muted-foreground">
-              {new Date(task.dueDate).toLocaleDateString()}
-            </span>
-          )}
+          <span className="flex-1" />
 
-          {canEdit && handlers.onConfigureTriggers && (task.activeTriggerCount ?? 0) > 0 && (
-            <button
-              type="button"
-              onClick={() => handlers.onConfigureTriggers?.(task)}
-              title="Agent trigger configured — click to edit"
-              aria-label="Agent trigger configured — click to edit"
-              className="inline-flex h-5 items-center gap-0.5 rounded-md border border-amber-300/60 bg-amber-50 px-1.5 text-[10px] text-amber-700 hover:bg-amber-100 dark:border-amber-700/50 dark:bg-amber-950/40 dark:text-amber-300"
-            >
-              <Bell className="h-2.5 w-2.5" />
-              <span>Trigger</span>
-            </button>
+          <AssigneeAvatars task={task} />
+
+          {canEdit && handlers.onConfigureTriggers && (
+            <TaskTriggerBadge
+              count={task.activeTriggerCount ?? 0}
+              onOpen={() => handlers.onConfigureTriggers?.(task)}
+            />
           )}
         </div>
       </CardContent>
@@ -309,33 +301,39 @@ function TaskCard({
   );
 }
 
-// Column header with count
+/** The three status groups as the list names them (the list's "To do" / "In progress" / "Done" groups). */
+const GROUP_LABEL: Record<TaskStatusGroup, string> = {
+  todo: 'To do',
+  in_progress: 'In progress',
+  done: 'Done',
+};
+
+const formatDue = (iso: string): string =>
+  new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+
+// Column header: status name, its task count, and the status group it belongs to
 interface ColumnHeaderProps {
-  status: string;
   statusLabel: string;
   statusColor: string;
+  group: TaskStatusGroup | null;
   count: number;
-  canEdit: boolean;
-  onAddTask: () => void;
 }
 
-function ColumnHeader({ status: _status, statusLabel, statusColor, count, canEdit, onAddTask }: ColumnHeaderProps) {
+function ColumnHeader({ statusLabel, statusColor, group, count }: ColumnHeaderProps) {
   return (
-    <div role="heading" aria-level={3} aria-label={`${statusLabel}, ${count} ${count === 1 ? "task" : "tasks"}`} className="flex items-center justify-between mb-3 px-1">
-      <div className="flex items-center gap-2">
-        <Badge className={cn('text-xs', statusColor)}>{statusLabel}</Badge>
-        <span className="text-sm text-muted-foreground">{count}</span>
-      </div>
-      {canEdit && (
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-6 w-6"
-          onClick={onAddTask}
-          aria-label={`Add task to ${statusLabel}`}
-        >
-          <Plus className="h-4 w-4" />
-        </Button>
+    <div
+      role="heading"
+      aria-level={3}
+      aria-label={`${statusLabel}, ${count} ${count === 1 ? "task" : "tasks"}`}
+      className="flex h-10 items-center gap-2 px-2"
+    >
+      <Badge className={cn('text-xs', statusColor)}>{statusLabel}</Badge>
+      <span className="text-sm tabular-nums text-muted-foreground">{count}</span>
+      <span className="flex-1" />
+      {group && (
+        <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+          {GROUP_LABEL[group]}
+        </span>
       )}
     </div>
   );
@@ -474,36 +472,15 @@ export function TaskKanbanView({
     const activeTask = active.data.current?.task as TaskItem | undefined;
     if (!activeTask) return;
 
-    // Determine the target status
-    // The over.id could be either a task id or a column id
-    let targetStatus: string | null = null;
-    let _targetTask: TaskItem | null = null;
-
-    // Check if dropped over a task
-    for (const status of statusOrder) {
-      const task = tasksByStatus[status]?.find((t) => t.id === over.id);
-      if (task) {
-        targetStatus = status;
-        _targetTask = task;
-        break;
-      }
-    }
-
-    // Check if dropped over a column (empty area)
-    if (!targetStatus && statusOrder.includes(over.id as string)) {
-      targetStatus = over.id as string;
-    }
-
+    // over.id is a card (its column's status) or a column (its status)
+    const targetStatus = kanbanDropStatus(tasksByStatus, statusOrder, String(over.id));
     if (!targetStatus) return;
 
-    // If the status changed, update it
+    // Moving a card PATCHes its status through the list's handler. Reordering
+    // within a column is not written here.
     if (activeTask.status !== targetStatus) {
       handlers.onStatusChange(activeTask, targetStatus);
     }
-
-    // Handle reordering within or across columns
-    // (For simplicity, we just update the status here.
-    // Full position reordering within kanban columns could be added later)
   };
 
   const handleDragCancel = () => {
@@ -527,15 +504,13 @@ export function TaskKanbanView({
             key={status}
             role="region"
             aria-label={cfg?.label || status}
-            className="flex-shrink-0 w-72 @max-[500px]:w-60 flex flex-col"
+            className="flex-shrink-0 w-72 @max-[500px]:w-60 flex flex-col rounded-xl bg-muted/40 p-1"
           >
             <ColumnHeader
-              status={status}
               statusLabel={cfg?.label || status}
               statusColor={cfg?.color || 'bg-slate-100 text-slate-700'}
+              group={cfg?.group ?? null}
               count={tasksByStatus[status]?.length || 0}
-              canEdit={canEdit}
-              onAddTask={() => setAddingToColumn(status)}
             />
 
             <ScrollArea className="flex-1">
@@ -567,6 +542,19 @@ export function TaskKanbanView({
                   )}
                 </KanbanColumn>
               </SortableContext>
+
+              {canEdit && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="mt-1 h-8 w-full justify-start gap-1 px-2 text-muted-foreground"
+                  onClick={() => setAddingToColumn(status)}
+                  aria-label={`Add task to ${cfg?.label || status}`}
+                >
+                  <Plus className="h-4 w-4" aria-hidden="true" />
+                  Add
+                </Button>
+              )}
 
               {addingToColumn === status && (
                 <NewTaskInput

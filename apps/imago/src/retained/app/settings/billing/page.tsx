@@ -4,18 +4,12 @@ import { useState, useEffect, useCallback } from 'react';
 import { useRouter, useSearchParams } from '@/retained-adapters/navigation';
 import Link from '@/retained-adapters/link';
 import { Button } from '@/retained/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/retained/components/ui/card';
 import { Alert, AlertDescription } from '@/retained/components/ui/alert';
 import { Badge } from '@/retained/components/ui/badge';
 import {
-  ArrowLeft,
   CheckCircle,
   XCircle,
   Loader2,
-  CreditCard,
-  Receipt,
-  MapPin,
-  Sparkles,
   Clock,
   AlertTriangle,
   ExternalLink,
@@ -27,7 +21,14 @@ import { BillingAddressForm, type BillingAddress } from '@/retained/components/b
 import { BillingGuard } from '@/retained/components/billing/BillingGuard';
 import { useBillingVisibility } from '@/retained/hooks/useBillingVisibility';
 import { getPlan, getPlanFromPriceId, type SubscriptionTier } from '@/retained/lib/subscription/plans';
+import { includedCreditsPhrase, MONTHLY_CREDIT_CENTS, topUpRatePhrase } from '@/retained/lib/subscription/credits';
 import { post } from '@/retained/lib/auth/auth-fetch';
+import {
+  SettingsGroup,
+  SettingsRow,
+  SettingsScreen,
+  SettingsSection,
+} from '@/ui/settings/settings-screen/settings-screen';
 
 interface SubscriptionData {
   subscriptionTier: SubscriptionTier;
@@ -200,14 +201,14 @@ function BillingPageContent() {
 
   if (loading) {
     return (
-      <div className="container mx-auto p-6">
-        <div className="flex items-center justify-center min-h-64">
+      <SettingsScreen title="Billing">
+        <div className="flex min-h-64 items-center justify-center text-muted-foreground">
           <div className="text-center">
-            <Loader2 className="h-8 w-8 animate-spin mx-auto mb-4" />
+            <Loader2 className="mx-auto mb-4 h-8 w-8 animate-spin" />
             <p>Loading billing information...</p>
           </div>
         </div>
-      </div>
+      </SettingsScreen>
     );
   }
 
@@ -241,26 +242,18 @@ function BillingPageContent() {
     return projected;
   })();
 
-  return (
-    <div className="container mx-auto p-6 space-y-8 max-w-4xl">
-      <div>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => router.push('/settings')}
-          className="mb-4"
-        >
-          <ArrowLeft className="h-4 w-4 mr-2" />
-          Back to Settings
-        </Button>
-        <div className="text-center space-y-2">
-          <h1 className="text-4xl font-bold">Billing</h1>
-          <p className="text-muted-foreground text-lg max-w-2xl mx-auto">
-            Your subscription, payment methods, and invoices
-          </p>
-        </div>
-      </div>
+  const priceLine = [
+    `${plan.price.formatted}${plan.price.monthly > 0 ? '/month' : ''}`,
+    isPaid && displayPeriodEnd ? `${isCanceling ? 'Ends' : 'Renews'} ${displayPeriodEnd.toLocaleDateString()}` : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
 
+  return (
+    <SettingsScreen
+      title="Billing"
+      lede="Your subscription, invoices and billing address. Payments are processed by Stripe."
+    >
       {success && (
         <Alert className="border-green-200 bg-green-50 dark:border-green-800 dark:bg-green-950/20">
           <CheckCircle className="h-4 w-4 text-green-600" />
@@ -278,184 +271,130 @@ function BillingPageContent() {
       )}
 
       {showBillingSections && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Sparkles className="h-5 w-5" />
-              Current Subscription
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3">
-              <div className="flex items-center gap-3">
-                <div className={`p-2 rounded-full ${plan.accentColor}`}>
-                  <plan.icon className={`h-5 w-5 ${plan.iconColor}`} />
-                </div>
-                <div>
-                  <div className="font-semibold flex items-center gap-2">
-                    {plan.displayName}
-                    {isPaid && (
-                      <Badge variant={isCanceling ? 'secondary' : 'default'}>
-                        {isCanceling ? 'Canceling' : subscriptionData?.subscription?.status}
-                      </Badge>
-                    )}
-                  </div>
-                  <div className="text-sm text-muted-foreground">
-                    {plan.price.formatted}{plan.price.monthly > 0 && '/month'}
-                  </div>
-                </div>
-              </div>
-              <div className="flex items-center gap-2">
-                {isPaid && displayPeriodEnd && (
-                  <div className="text-sm text-muted-foreground flex items-center gap-1 mr-4">
-                    <Clock className="h-4 w-4" />
-                    {isCanceling ? 'Ends' : 'Renews'}{' '}
-                    {displayPeriodEnd.toLocaleDateString()}
-                  </div>
-                )}
-                <Link href="/settings/plan">
-                  <Button variant="outline">
-                    {isPaid ? 'Change Plan' : 'Upgrade'}
-                  </Button>
-                </Link>
-              </div>
-            </div>
+        <SettingsSection title="Subscription">
+          {isCanceling && (
+            <Alert>
+              <AlertTriangle className="h-4 w-4" />
+              <AlertDescription>
+                Your subscription will end on{' '}
+                {displayPeriodEnd?.toLocaleDateString()}.
+                You can reactivate anytime before then.
+              </AlertDescription>
+            </Alert>
+          )}
 
-            {isCanceling && (
-              <Alert className="mt-4">
-                <AlertTriangle className="h-4 w-4" />
-                <AlertDescription>
-                  Your subscription will end on{' '}
-                  {displayPeriodEnd?.toLocaleDateString()}.
-                  You can reactivate anytime before then.
-                </AlertDescription>
-              </Alert>
-            )}
+          {scheduledPlan && !isCanceling && (
+            <Alert className="border-blue-200 bg-blue-50 dark:border-blue-800 dark:bg-blue-950/20">
+              <Clock className="h-4 w-4 text-blue-600" />
+              <AlertDescription className="flex items-center justify-between text-blue-800 dark:text-blue-200">
+                <span>
+                  Changing to {scheduledPlan.displayName} on{' '}
+                  {scheduledChangeDate ? new Date(scheduledChangeDate).toLocaleDateString() : 'next billing period'}
+                </span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleCancelSchedule}
+                  disabled={cancellingSchedule}
+                  className="ml-4"
+                >
+                  {cancellingSchedule ? (
+                    <>
+                      <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                      Cancelling...
+                    </>
+                  ) : (
+                    'Keep Current Plan'
+                  )}
+                </Button>
+              </AlertDescription>
+            </Alert>
+          )}
 
-            {scheduledPlan && !isCanceling && (
-              <Alert className="mt-4 border-blue-200 bg-blue-50 dark:border-blue-800 dark:bg-blue-950/20">
-                <Clock className="h-4 w-4 text-blue-600" />
-                <AlertDescription className="text-blue-800 dark:text-blue-200 flex items-center justify-between">
-                  <span>
-                    Changing to {scheduledPlan.displayName} on{' '}
-                    {scheduledChangeDate ? new Date(scheduledChangeDate).toLocaleDateString() : 'next billing period'}
-                  </span>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={handleCancelSchedule}
-                    disabled={cancellingSchedule}
-                    className="ml-4"
-                  >
-                    {cancellingSchedule ? (
-                      <>
-                        <Loader2 className="h-3 w-3 mr-1 animate-spin" />
-                        Cancelling...
-                      </>
-                    ) : (
-                      'Keep Current Plan'
-                    )}
-                  </Button>
-                </AlertDescription>
-              </Alert>
-            )}
-          </CardContent>
-        </Card>
+          <SettingsGroup label="Subscription">
+            <SettingsRow
+              label={
+                <span className="flex items-center gap-2">
+                  {plan.displayName}
+                  {isPaid && (
+                    <Badge variant={isCanceling ? 'secondary' : 'default'}>
+                      {isCanceling ? 'Canceling' : subscriptionData?.subscription?.status}
+                    </Badge>
+                  )}
+                </span>
+              }
+              hint={priceLine}
+            >
+              <Link href="/settings/plan">
+                <Button variant="outline">{isPaid ? 'Change plan' : 'Upgrade'}</Button>
+              </Link>
+            </SettingsRow>
+            <SettingsRow label="Included">
+              <span className="text-sm font-medium">{includedCreditsPhrase(plan.id, MONTHLY_CREDIT_CENTS[plan.id])}</span>
+            </SettingsRow>
+            <SettingsRow label="Top up">
+              <span className="text-sm font-medium">{topUpRatePhrase()}</span>
+            </SettingsRow>
+          </SettingsGroup>
+        </SettingsSection>
       )}
 
       {showBillingSections && (
-        <>
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <CreditCard className="h-5 w-5" />
-                Payment Methods
-              </CardTitle>
-              <CardDescription>
-                Add, remove, or update your payment methods securely through Stripe.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              {portalError && (
-                <Alert variant="destructive" className="mb-4">
-                  <XCircle className="h-4 w-4" />
-                  <AlertDescription>{portalError}</AlertDescription>
-                </Alert>
+        <SettingsSection
+          title="Payment methods"
+          description="Add, remove, or update cards securely in the Stripe customer portal."
+          actions={
+            <Button onClick={handleManagePaymentMethods} disabled={portalLoading}>
+              {portalLoading ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Opening...
+                </>
+              ) : (
+                <>
+                  <ExternalLink className="mr-2 h-4 w-4" />
+                  Manage payment methods
+                </>
               )}
-              <Button onClick={handleManagePaymentMethods} disabled={portalLoading}>
-                {portalLoading ? (
-                  <>
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    Opening...
-                  </>
-                ) : (
-                  <>
-                    <ExternalLink className="h-4 w-4 mr-2" />
-                    Manage Payment Methods
-                  </>
-                )}
-              </Button>
-            </CardContent>
-          </Card>
-
-          {isPaid && (
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Receipt className="h-5 w-5" />
-                  Upcoming Invoice
-                </CardTitle>
-                <CardDescription>
-                  Your next scheduled payment
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <UpcomingInvoice invoice={upcomingInvoice} />
-              </CardContent>
-            </Card>
+            </Button>
+          }
+        >
+          {portalError && (
+            <Alert variant="destructive">
+              <XCircle className="h-4 w-4" />
+              <AlertDescription>{portalError}</AlertDescription>
+            </Alert>
           )}
-
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Receipt className="h-5 w-5" />
-                Invoice History
-              </CardTitle>
-              <CardDescription>
-                View and download your past invoices
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <InvoiceList
-                invoices={invoices}
-                hasMore={invoicesHasMore}
-                onLoadMore={handleLoadMoreInvoices}
-                loading={invoicesLoading}
-              />
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <MapPin className="h-5 w-5" />
-                Billing Address
-              </CardTitle>
-              <CardDescription>
-                Your billing address for invoices and receipts
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <BillingAddressForm
-                address={billingAddress}
-                name={billingName}
-                onUpdate={fetchBillingAddress}
-              />
-            </CardContent>
-          </Card>
-        </>
+        </SettingsSection>
       )}
-    </div>
+
+      {showBillingSections && isPaid && (
+        <SettingsSection title="Upcoming invoice">
+          <UpcomingInvoice invoice={upcomingInvoice} />
+        </SettingsSection>
+      )}
+
+      {showBillingSections && (
+        <SettingsSection title="Invoice history">
+          <InvoiceList
+            invoices={invoices}
+            hasMore={invoicesHasMore}
+            onLoadMore={handleLoadMoreInvoices}
+            loading={invoicesLoading}
+          />
+        </SettingsSection>
+      )}
+
+      {showBillingSections && (
+        <SettingsSection title="Billing address" description="Printed on invoices and receipts.">
+          <BillingAddressForm
+            address={billingAddress}
+            name={billingName}
+            onUpdate={fetchBillingAddress}
+          />
+        </SettingsSection>
+      )}
+    </SettingsScreen>
   );
 }
 

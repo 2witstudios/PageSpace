@@ -1,10 +1,8 @@
 "use client";
 
-import { useRouter } from '@/retained-adapters/navigation';
 import { useState } from 'react';
-import { ArrowLeft, RotateCcw } from 'lucide-react';
+import { RotateCcw, Search } from 'lucide-react';
 import { Button } from '@/retained/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/retained/components/ui/card';
 import {
   useHotkeyPreferences,
   updateHotkeyPreference,
@@ -18,16 +16,24 @@ import { HotkeyInput } from '@/retained/components/settings/hotkeys/HotkeyInput'
 import { RESERVED_BINDINGS, formatBindingForDisplay } from '@/retained/lib/hotkeys/binding';
 import { useIsMac } from '@/retained/hooks/useIsMac';
 import { toast } from 'sonner';
+import { SettingsGroup, SettingsRow, SettingsScreen, SettingsSection } from '@/ui/settings/settings-screen/settings-screen';
+import { matchesHotkeyFilter } from './hotkey-filter';
 
 export default function HotkeysSettingsPage() {
-  const router = useRouter();
   const { preferences, isLoading, mutate } = useHotkeyPreferences();
   const userBindings = useHotkeyStore((s) => s.userBindings);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [filter, setFilter] = useState('');
   const isMac = useIsMac();
 
   const hotkeysByCategory = getHotkeysByCategory();
   const categories = Object.keys(hotkeysByCategory) as HotkeyCategory[];
+  const visibleCategories = categories
+    .map((category) => ({
+      category,
+      hotkeys: hotkeysByCategory[category].filter((hotkey) => matchesHotkeyFilter(hotkey, filter)),
+    }))
+    .filter(({ hotkeys }) => hotkeys.length > 0);
 
   // The notice is a view of what the server holds, not a thing to keep in step
   // with it: any preference still stored in a shape that cannot fire.
@@ -150,112 +156,123 @@ export default function HotkeysSettingsPage() {
     }
   };
 
+  // Every customised binding goes back to its default, one conditional-free delete
+  // each (the same delete the per-row reset uses). Reset all is only offered while
+  // something is customised, so an empty map is a no-op rather than an error.
+  const handleResetAll = async () => {
+    const customisedIds = [...userBindings.keys()];
+    if (customisedIds.length === 0) return;
+    try {
+      await Promise.all(customisedIds.map((hotkeyId) => deleteHotkeyPreference(hotkeyId)));
+      setEditingId(null);
+      toast.success('All shortcuts reset to default');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to reset shortcuts');
+    } finally {
+      void mutate().catch(() => {});
+    }
+  };
+
   return (
-    <div className="container mx-auto px-4 py-10 sm:px-6 lg:px-10 max-w-4xl">
-      <div className="mb-8">
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => router.push('/settings')}
-          className="mb-4"
-        >
-          <ArrowLeft className="h-4 w-4 mr-2" />
-          Back to Settings
+    <SettingsScreen
+      title="Keyboard shortcuts"
+      lede="Click a shortcut, then press the new keys. Synced to your account."
+      actions={
+        <Button variant="outline" size="sm" onClick={handleResetAll} disabled={userBindings.size === 0}>
+          Reset all
         </Button>
-        <h1 className="text-3xl font-bold mb-2">Keyboard Shortcuts</h1>
-        <p className="text-muted-foreground">
-          Customize keyboard shortcuts for common actions. Click a shortcut to edit it.
-        </p>
-        {resetHotkeyIds.length > 0 && (
-          <div className="mt-3 flex items-start gap-3 rounded-md border bg-muted/50 px-3 py-2">
-            <p className="flex-1 text-sm text-muted-foreground">
-              {resetLabels} {resetHotkeyIds.length === 1 ? 'was' : 'were'} saved in a format that could
-              never be triggered, so {resetHotkeyIds.length === 1 ? 'it has' : 'they have'} been restored
-              to the default. Set {resetHotkeyIds.length === 1 ? 'it' : 'them'} again below.
-            </p>
-            <Button variant="ghost" size="sm" onClick={handleDismissResetNotice}>
-              Dismiss
-            </Button>
-          </div>
-        )}
-      </div>
+      }
+    >
+      {resetHotkeyIds.length > 0 && (
+        <div className="flex items-start gap-3 rounded-md border bg-muted/50 px-3 py-2">
+          <p className="flex-1 text-sm text-muted-foreground">
+            {resetLabels} {resetHotkeyIds.length === 1 ? 'was' : 'were'} saved in a format that could
+            never be triggered, so {resetHotkeyIds.length === 1 ? 'it has' : 'they have'} been restored
+            to the default. Set {resetHotkeyIds.length === 1 ? 'it' : 'them'} again below.
+          </p>
+          <Button variant="ghost" size="sm" onClick={handleDismissResetNotice}>
+            Dismiss
+          </Button>
+        </div>
+      )}
+
+      <label className="flex h-9 items-center gap-2 rounded-lg border border-border px-3 text-muted-foreground">
+        <Search className="h-3.5 w-3.5 flex-none" aria-hidden="true" />
+        <input
+          aria-label="Filter shortcuts"
+          placeholder="Filter shortcuts"
+          value={filter}
+          onChange={(event) => setFilter(event.target.value)}
+          className="min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none"
+        />
+      </label>
 
       {isLoading ? (
         <div className="text-muted-foreground">Loading...</div>
       ) : (
-        <div className="space-y-8">
-          {categories.map((category) => {
-            const hotkeys = hotkeysByCategory[category];
-            if (hotkeys.length === 0) return null;
+        visibleCategories.map(({ category, hotkeys }) => {
+          const categoryInfo = HOTKEY_CATEGORIES[category];
 
-            const categoryInfo = HOTKEY_CATEGORIES[category];
+          return (
+            <SettingsSection key={category} title={categoryInfo.label} description={categoryInfo.description}>
+              <SettingsGroup label={categoryInfo.label}>
+                {hotkeys.map((hotkey) => {
+                  const isEditing = editingId === hotkey.id;
+                  const isCustomized = userBindings.has(hotkey.id);
+                  const defaultBinding = resolvePlatformBinding(hotkey.defaultBinding, isMac);
+                  const effectiveBinding = isCustomized
+                    ? userBindings.get(hotkey.id)!
+                    : defaultBinding;
+                  const defaultLabel = formatBindingForDisplay(defaultBinding, isMac) || 'Disabled';
 
-            return (
-              <Card key={category}>
-                <CardHeader>
-                  <CardTitle>{categoryInfo.label}</CardTitle>
-                  <CardDescription>{categoryInfo.description}</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <div className="space-y-4">
-                    {hotkeys.map((hotkey) => {
-                      const isEditing = editingId === hotkey.id;
-                      const isCustomized = userBindings.has(hotkey.id);
-                      const effectiveBinding = isCustomized
-                        ? userBindings.get(hotkey.id)!
-                        : resolvePlatformBinding(hotkey.defaultBinding, isMac);
-
-                      return (
-                        <div
-                          key={hotkey.id}
-                          className="flex items-center justify-between py-2 border-b last:border-0"
-                        >
-                          <div className="flex-1 min-w-0">
-                            <div className="font-medium">{hotkey.label}</div>
-                            <div className="text-sm text-muted-foreground truncate">
-                              {hotkey.description}
-                            </div>
-                          </div>
-                          <div className="flex items-center gap-2 ml-4">
-                            {isEditing ? (
-                              <HotkeyInput
-                                initialValue={effectiveBinding}
-                                onSave={(binding) => handleSave(hotkey.id, binding)}
-                                onCancel={() => setEditingId(null)}
-                              />
-                            ) : (
-                              <>
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  onClick={() => setEditingId(hotkey.id)}
-                                  className="font-mono min-w-[120px]"
-                                >
-                                  {formatBindingForDisplay(effectiveBinding, isMac) || 'Disabled'}
-                                </Button>
-                                {isCustomized && (
-                                  <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    onClick={() => handleReset(hotkey.id)}
-                                    title="Reset to default"
-                                  >
-                                    <RotateCcw className="h-4 w-4" />
-                                  </Button>
-                                )}
-                              </>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </CardContent>
-              </Card>
-            );
-          })}
-        </div>
+                  return (
+                    <SettingsRow key={hotkey.id} label={hotkey.label} hint={hotkey.description}>
+                      {isEditing ? (
+                        <HotkeyInput
+                          initialValue={effectiveBinding}
+                          onSave={(binding) => handleSave(hotkey.id, binding)}
+                          onCancel={() => setEditingId(null)}
+                        />
+                      ) : (
+                        <>
+                          {isCustomized && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleReset(hotkey.id)}
+                              title={`Reset to ${defaultLabel}`}
+                              className="h-7 px-2 text-primary"
+                            >
+                              <RotateCcw className="mr-1 h-3.5 w-3.5" aria-hidden="true" />
+                              Reset to {defaultLabel}
+                            </Button>
+                          )}
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setEditingId(hotkey.id)}
+                            aria-label={`Change shortcut for ${hotkey.label}`}
+                            className={
+                              isCustomized
+                                ? 'min-w-[120px] border-primary bg-primary/5 font-mono text-primary'
+                                : 'min-w-[120px] font-mono'
+                            }
+                          >
+                            {formatBindingForDisplay(effectiveBinding, isMac) || 'Disabled'}
+                          </Button>
+                        </>
+                      )}
+                    </SettingsRow>
+                  );
+                })}
+              </SettingsGroup>
+            </SettingsSection>
+          );
+        })
       )}
-    </div>
+      {!isLoading && visibleCategories.length === 0 && (
+        <p className="text-sm text-muted-foreground">No shortcuts match &ldquo;{filter}&rdquo;.</p>
+      )}
+    </SettingsScreen>
   );
 }

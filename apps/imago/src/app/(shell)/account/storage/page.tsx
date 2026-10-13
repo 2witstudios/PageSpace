@@ -1,7 +1,7 @@
-import { redirect } from 'next/navigation';
 import { getViewer } from '@/lib/auth/get-viewer';
+import { AccountStorage } from '@/ui/settings/account-storage/account-storage';
 
 export default async function Page() {
-  await getViewer();
-  redirect('/account/usage');
+  const viewer = await getViewer();
+  return <AccountStorage isAdmin={viewer.role === 'admin'} />;
 }

@@ -10,6 +10,7 @@ const widths: Readonly<Record<Exclude<ListPane, 'closed'>, string>> = {
  * slides the rows are clipped rather than reflowed.
  */
 export const listPaneClass = (variant: Exclude<ListPane, 'closed'>): string =>
-  `flex h-full flex-none flex-col border-r border-hairline surface-glass ${widths[variant]}`;
+  `flex h-full flex-none flex-col border-r border-hairline bg-background ${widths[variant]}`;
 
-export const listBodyClass = 'flex flex-1 flex-col gap-4 overflow-y-auto p-3';
+/** The pane's body scrolls under its head (SPEC v2: padding 10px 8px). */
+export const listBodyClass = 'flex min-h-0 flex-1 flex-col gap-px overflow-y-auto px-2 py-2';

@@ -33,6 +33,8 @@ export interface ChatTextareaProps {
   canSendEmpty?: boolean;
   /** Placeholder text */
   placeholder?: string;
+  /** The field's accessible name when it should not follow the placeholder (Imago's composer: "Message Imago"). */
+  inputLabel?: string;
   /** Drive ID for mention suggestions */
   driveId?: string;
   /**
@@ -85,6 +87,7 @@ const ChatTextareaInner = forwardRef<ChatTextareaRef, ChatTextareaProps>(
       onSend,
       canSendEmpty = false,
       placeholder = 'Type your message...',
+      inputLabel,
       driveId,
       commandDriveId,
       allowClientHandledCommands = false,
@@ -230,7 +233,7 @@ const ChatTextareaInner = forwardRef<ChatTextareaRef, ChatTextareaProps>(
       <div className="relative flex-1 min-w-0 overflow-hidden">
         <Textarea
           data-testid="chat-textarea"
-          aria-label={placeholder.replace(/\.\.\.$/, '')}
+          aria-label={inputLabel ?? placeholder.replace(/\.\.\.$/, '')}
           ref={textareaRef}
           value={displayText}
           onChange={(e) => {

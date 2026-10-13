@@ -2,13 +2,12 @@
 
 import { useEffect } from 'react';
 import useSWR from 'swr';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/retained/components/ui/card';
 import { Progress } from '@/retained/components/ui/progress';
 import { Skeleton } from '@/retained/components/ui/skeleton';
-import { BarChart3 } from 'lucide-react';
 import { fetchWithAuth } from '@/retained/lib/auth/auth-fetch';
-import { formatCreditCount } from '@/retained/lib/subscription/credits';
+import { formatWholeCredits } from '@/retained/lib/subscription/credits';
 import { useSocketStore } from '@/retained/stores/useSocketStore';
+import { SettingsSection } from '@/ui/settings/settings-screen/settings-screen';
 
 interface FeatureRow {
   source: string;
@@ -81,50 +80,40 @@ export function UsageBreakdownCard() {
     data?.periodEnd && new Date(data.periodEnd) > new Date() ? new Date(data.periodEnd) : null;
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <BarChart3 className="h-5 w-5" />
-          Usage this period
-        </CardTitle>
-        <CardDescription>
+    <SettingsSection
+      title="Where credits went"
+      description={
+        <>
           Where your credits are going{renewDate && <> · renews {renewDate.toLocaleDateString()}</>}
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
-        {isLoading ? (
-          <div className="space-y-3">
-            <Skeleton className="h-4 w-40" />
-            <Skeleton className="h-4 w-full" />
-            <Skeleton className="h-4 w-5/6" />
+        </>
+      }
+    >
+      {isLoading ? (
+        <div className="space-y-3">
+          <Skeleton className="h-4 w-40" />
+          <Skeleton className="h-4 w-full" />
+          <Skeleton className="h-4 w-5/6" />
+        </div>
+      ) : error || !data ? (
+        <p className="text-sm text-muted-foreground">
+          Could not load your usage breakdown. Please refresh and try again.
+        </p>
+      ) : data.totalSpendCents === 0 ? (
+        <p className="text-sm text-muted-foreground">
+          No AI usage yet this period. Spending starts as you use chat, agents, and other AI features.
+        </p>
+      ) : (
+        <div className="flex flex-col gap-6">
+          <div className="text-2xl font-bold tabular-nums">
+            {formatWholeCredits(data.totalSpendCents)}
+            <span className="ml-2 text-sm font-normal text-muted-foreground">credits used</span>
           </div>
-        ) : error || !data ? (
-          <p className="text-sm text-muted-foreground">
-            Could not load your usage breakdown. Please refresh and try again.
-          </p>
-        ) : data.totalSpendCents === 0 ? (
-          <p className="text-sm text-muted-foreground">
-            No AI usage yet this period. Spending starts as you use chat, agents, and other AI features.
-          </p>
-        ) : (
-          <div className="space-y-6">
-            <div className="text-2xl font-bold tabular-nums">
-              {formatCreditCount(data.totalSpendCents)}
-              <span className="ml-2 text-sm font-normal text-muted-foreground">credits used</span>
-            </div>
 
-            <UsageList
-              title="By feature"
-              rows={data.byFeature.map(featureToRow)}
-            />
-            <UsageList
-              title="By model"
-              rows={data.byModel.map(modelToRow)}
-            />
-          </div>
-        )}
-      </CardContent>
-    </Card>
+          <UsageList title="By feature" rows={data.byFeature.map(featureToRow)} />
+          <UsageList title="By model" rows={data.byModel.map(modelToRow)} />
+        </div>
+      )}
+    </SettingsSection>
   );
 }
 
@@ -181,7 +170,7 @@ function UsageList({
                 )}
               </span>
               <span className="shrink-0 tabular-nums">
-                {formatCreditCount(row.spendCents)} cr
+                {formatWholeCredits(row.spendCents)} credits
               </span>
             </div>
             <Progress value={row.sharePct} className="h-2" />

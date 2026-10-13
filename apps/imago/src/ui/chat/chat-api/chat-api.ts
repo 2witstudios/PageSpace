@@ -37,6 +37,10 @@ export const chatPaths = {
     `${agentConversations(agentId)}?page=${page}&pageSize=${CONVERSATIONS_PAGE_SIZE}`,
   /** Creates a conversation with an agent page; the server picks its id. */
   newConversation: (agentId: string) => agentConversations(agentId),
+  /** One conversation with an agent page (DELETE removes it). */
+  conversation: (agentId: string, conversationId: string) => `${agentConversations(agentId)}/${segment(conversationId)}`,
+  /** The viewer's own replies still streaming, on any agent (History's "Generating…"). */
+  activeStreams: '/api/ai/chat/active-streams?scope=user',
   /** A conversation's newest messages, or those before `cursor` (a message id). */
   messages: (agentId: string, conversationId: string, cursor?: string) =>
     `${agentConversations(agentId)}/${segment(conversationId)}/messages?limit=${MESSAGES_PAGE_SIZE}` +
@@ -65,9 +69,14 @@ const UNTITLED_AGENT = 'Untitled agent';
 
 const driveAgentOf = (entry: unknown): DriveAgent | null => {
   if (typeof entry !== 'object' || entry === null) return null;
-  const { id, title } = entry as Record<string, unknown>;
+  const { id, title, aiModel, parentId } = entry as Record<string, unknown>;
   if (typeof id !== 'string' || id === '') return null;
-  return { id, title: typeof title === 'string' && title.trim() !== '' ? title : UNTITLED_AGENT };
+  return {
+    id,
+    title: typeof title === 'string' && title.trim() !== '' ? title : UNTITLED_AGENT,
+    ...(typeof aiModel === 'string' && aiModel !== 'default' ? { aiModel } : {}),
+    ...(typeof parentId === 'string' ? { parentId } : {}),
+  };
 };
 
 /** The agents of a drive the viewer can use, in the server's order; malformed rows are dropped, never named. */
@@ -121,3 +130,7 @@ export const createConversation = async (client: ApiClient, agentId: string): Pr
   }
   return body.conversationId;
 };
+
+/** Deletes one of the viewer's conversations with an agent page. */
+export const deleteConversation = (client: ApiClient, agentId: string, conversationId: string): Promise<unknown> =>
+  client.apiFetch<unknown>(chatPaths.conversation(agentId, conversationId), { method: 'DELETE' });

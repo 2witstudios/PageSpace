@@ -45,6 +45,8 @@ export interface ChannelInputProps {
   parentId?: string;
   /** Render the "Also send to channel/DM" checkbox in the footer (thread composer only) */
   showAlsoSendToParent?: boolean;
+  /** Label for the also-send checkbox; defaults to "Also send to channel" / "Also send to DM" */
+  alsoSendToParentLabel?: string;
   /** Stable key used to register the draft with useEditingStore so SWR can't clobber unsent text */
   editingSessionKey?: string;
   /** Author + snippet for the quote-reply chip rendered above the input row.
@@ -100,6 +102,7 @@ export const ChannelInput = forwardRef<ChannelInputRef, ChannelInputProps>(
       conversationId,
       parentId,
       showAlsoSendToParent = false,
+      alsoSendToParentLabel,
       editingSessionKey,
       quotedPreview,
       onClearQuote,
@@ -260,8 +263,8 @@ export const ChannelInput = forwardRef<ChannelInputRef, ChannelInputProps>(
             ? 'bg-primary text-primary-foreground hover:bg-primary/90 dark:bg-primary/90 dark:hover:bg-primary'
             : 'bg-muted text-muted-foreground'
         )}
-        title="Send message"
-        aria-label="Send message"
+        title={parentId ? 'Send reply' : 'Send message'}
+        aria-label={parentId ? 'Send reply' : 'Send message'}
       >
         <ArrowUp className={cn(
           'h-4 w-4 transition-transform duration-200',
@@ -415,7 +418,8 @@ export const ChannelInput = forwardRef<ChannelInputRef, ChannelInputProps>(
             disabled={disabled || isUploading}
             alsoSendToParentEnabled={Boolean(parentId) && showAlsoSendToParent}
             alsoSendToParentLabel={
-              conversationId && !channelId ? 'Also send to DM' : 'Also send to channel'
+              alsoSendToParentLabel ??
+              (conversationId && !channelId ? 'Also send to DM' : 'Also send to channel')
             }
             alsoSendToParent={alsoSendToParent}
             onAlsoSendToParentChange={setAlsoSendToParent}

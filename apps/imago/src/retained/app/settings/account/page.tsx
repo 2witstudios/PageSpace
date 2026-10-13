@@ -7,15 +7,14 @@ import useSWR from "swr";
 import { Button } from "@/retained/components/ui/button";
 import { Input } from "@/retained/components/ui/input";
 import { Label } from "@/retained/components/ui/label";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/retained/components/ui/card";
 import { Avatar, AvatarFallback, AvatarImage } from "@/retained/components/ui/avatar";
 import { Alert, AlertDescription } from "@/retained/components/ui/alert";
 import { toast } from "sonner";
-import { User, Mail, Calendar, AlertTriangle, Loader2, ArrowLeft, Upload, X, CheckCircle2, AlertCircle, Download, Clock, Smartphone, Link2 } from "lucide-react";
+import { User, Mail, Loader2, X, CheckCircle2, Download, Clock, Upload } from "lucide-react";
 import { Badge } from "@/retained/components/ui/badge";
 import { patch, post, del, fetchWithAuth } from '@/retained/lib/auth/auth-fetch';
 import { useAuthStore } from "@/retained/stores/useAuthStore";
-import { DeleteAccountDialog } from "@/retained/components/dialogs/DeleteAccountDialog";
+import { DeleteAccountDialog, ownedOrganizationsFrom } from "@/retained/components/dialogs/DeleteAccountDialog";
 import type { AppleSignInRevocation } from "@/retained/components/account/SignInWithAppleDeletionNotice";
 import { postDeletionDestination } from "@/retained/lib/account/post-deletion-destination";
 import { DriveOwnershipDialog } from "@/retained/components/dialogs/DriveOwnershipDialog";
@@ -25,6 +24,7 @@ import { RevokeAllDevicesDialog } from "@/retained/components/devices/RevokeAllD
 import { ConnectedAppsList } from "@/retained/components/oauth-grants/ConnectedAppsList";
 import { useDevices } from "@/retained/hooks/useDevices";
 import { PasskeyManager } from "@/retained/components/settings/PasskeyManager";
+import { SettingsScreen, SettingsSection } from "@/ui/settings/settings-screen/settings-screen";
 
 
 const fetcher = async (url: string) => {
@@ -81,6 +81,8 @@ export default function AccountPage() {
   const [multiMemberDrives, setMultiMemberDrives] = useState<MultiMemberDrive[]>([]);
   const [soloDrivesCount, setSoloDrivesCount] = useState(0);
   const [appleSignInRevocation, setAppleSignInRevocation] = useState<AppleSignInRevocation | undefined>(undefined);
+  // Organizations the server refused the deletion for (orgs-enabled API only).
+  const [ownedOrganizations, setOwnedOrganizations] = useState<readonly string[] | undefined>(undefined);
 
   // Data export state
   const [isExporting, setIsExporting] = useState(false);
@@ -310,6 +312,7 @@ export default function AccountPage() {
     // Best-effort: it must never stand in the way of deleting the account.
     // Cleared first so a reopened dialog never shows the previous answer.
     setAppleSignInRevocation(undefined);
+    setOwnedOrganizations(undefined);
     void fetchWithAuth("/api/account/apple-sign-in")
       .then(async (response) => {
         if (!response.ok) {
@@ -371,6 +374,13 @@ export default function AccountPage() {
       }, 1000);
     } catch (error) {
       console.error("Account deletion error:", error);
+      const refusedBy = ownedOrganizationsFrom(error);
+      if (refusedBy !== undefined) {
+        // Refused, not failed: keep the dialog open and name the organizations to hand over.
+        setOwnedOrganizations(refusedBy);
+        setIsDeletingAccount(false);
+        return;
+      }
       const errorMessage = error instanceof Error ? error.message : "Failed to delete account";
       toast.error(errorMessage);
       setIsDeletingAccount(false);
@@ -386,224 +396,123 @@ export default function AccountPage() {
     );
   }
 
-  const memberSince = user.id ? new Date().toLocaleDateString("en-US", {
-    month: "long",
-    year: "numeric",
-  }) : "Unknown";
-
   return (
-    <div className="container mx-auto py-10 px-10 max-w-4xl">
-      <div className="mb-8">
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => router.push('/settings')}
-          className="mb-4"
-        >
-          <ArrowLeft className="h-4 w-4 mr-2" />
-          Back to Settings
-        </Button>
-        <h1 className="text-3xl font-bold mb-2">Account Settings</h1>
-        <p className="text-muted-foreground">
-          Manage your account information and security settings
-        </p>
-      </div>
-
-      {/* Profile Section */}
-      <Card className="mb-6">
-        <CardHeader>
-          <CardTitle>Profile Information</CardTitle>
-          <CardDescription>Update your personal information</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <form onSubmit={handleProfileUpdate} className="space-y-4">
-            <div className="flex items-center gap-6 mb-6">
-              <div className="relative">
-                <Avatar className="h-20 w-20">
-                  <AvatarImage src={avatarPreview || user?.image || ""} />
-                  <AvatarFallback>
-                    <User className="h-10 w-10" />
-                  </AvatarFallback>
-                </Avatar>
-                {avatarPreview && (
-                  <Button
-                    type="button"
-                    size="icon"
-                    variant="destructive"
-                    className="absolute -top-2 -right-2 h-6 w-6 rounded-full"
-                    onClick={handleAvatarDelete}
-                    disabled={isUploadingAvatar}
-                  >
-                    <X className="h-3 w-3" />
-                  </Button>
-                )}
-              </div>
-              <div className="flex-1">
-                <Label>Profile Picture</Label>
-                <p className="text-sm text-muted-foreground mb-3">
-                  Upload a profile picture to personalize your account
-                </p>
-                <div className="flex gap-2">
-                  <input
-                    type="file"
-                    accept="image/*"
-                    onChange={handleAvatarSelect}
-                    className="hidden"
-                    id="avatar-upload"
-                  />
-                  <Label
-                    htmlFor="avatar-upload"
-                    className="cursor-pointer inline-flex items-center justify-center rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 border border-input bg-background hover:bg-accent hover:text-accent-foreground h-9 px-3"
-                  >
-                    <Upload className="h-4 w-4 mr-2" />
-                    Choose File
-                  </Label>
-                  {avatarFile && (
-                    <Button
-                      type="button"
-                      size="sm"
-                      onClick={handleAvatarUpload}
-                      disabled={isUploadingAvatar}
-                    >
-                      {isUploadingAvatar ? (
-                        <>
-                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                          Uploading...
-                        </>
-                      ) : (
-                        'Upload'
-                      )}
-                    </Button>
-                  )}
-                </div>
-                {avatarFile && (
-                  <p className="text-xs text-muted-foreground mt-2">
-                    Selected: {avatarFile.name}
-                  </p>
-                )}
-              </div>
-            </div>
-
-            <div className="grid gap-4">
-              <div className="grid gap-2">
-                <Label htmlFor="name">Name</Label>
-                <Input
-                  id="name"
-                  type="text"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder="Enter your name"
-                  required
-                />
-              </div>
-
-              <div className="grid gap-2">
-                <Label htmlFor="email">Email</Label>
-                <Input
-                  id="email"
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="Enter your email"
-                  required
-                />
-              </div>
-            </div>
-
-            <Button type="submit" disabled={isSavingProfile}>
-              {isSavingProfile ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Saving...
-                </>
-              ) : (
-                "Save Changes"
-              )}
-            </Button>
-          </form>
-        </CardContent>
-      </Card>
-
-      {/* Email Verification Section */}
-      <Card className="mb-6">
-        <CardHeader>
-          <div className="flex items-center justify-between">
-            <div>
-              <CardTitle>Email Verification</CardTitle>
-              <CardDescription>Verify your email to unlock all features</CardDescription>
-            </div>
-            {accountDataLoading ? (
-              <Badge variant="outline">
-                <Loader2 className="h-3 w-3 mr-1 animate-spin" />
-                Checking...
-              </Badge>
-            ) : accountDataError ? (
-              <Badge variant="destructive">
-                <AlertCircle className="h-3 w-3 mr-1" />
-                Error
-              </Badge>
-            ) : accountData?.emailVerified ? (
-              <Badge variant="default" className="bg-green-600">
-                <CheckCircle2 className="h-3 w-3 mr-1" />
-                Verified
-              </Badge>
-            ) : (
-              <Badge variant="destructive">
-                <AlertCircle className="h-3 w-3 mr-1" />
-                Unverified
-              </Badge>
+    <SettingsScreen title="Profile" lede="Your name, sign-in methods and devices.">
+      {/* Identity: picture, name and email. */}
+      <form onSubmit={handleProfileUpdate} className="flex flex-col gap-6" aria-label="Identity">
+        <div className="flex items-center gap-6">
+          <div className="relative">
+            <Avatar className="h-20 w-20">
+              <AvatarImage src={avatarPreview || user?.image || ""} />
+              <AvatarFallback>
+                <User className="h-10 w-10" />
+              </AvatarFallback>
+            </Avatar>
+            {avatarPreview && (
+              <Button
+                type="button"
+                size="icon"
+                variant="destructive"
+                className="absolute -top-2 -right-2 h-6 w-6 rounded-full"
+                onClick={handleAvatarDelete}
+                disabled={isUploadingAvatar}
+                aria-label="Remove profile picture"
+              >
+                <X className="h-3 w-3" />
+              </Button>
             )}
           </div>
-        </CardHeader>
-        <CardContent>
-          {accountDataLoading ? (
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              Checking verification status...
+          <div className="flex flex-col gap-2">
+            <span className="text-sm font-medium text-foreground">Profile picture</span>
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                type="file"
+                accept="image/*"
+                onChange={handleAvatarSelect}
+                className="hidden"
+                id="avatar-upload"
+              />
+              <Label
+                htmlFor="avatar-upload"
+                className="inline-flex h-9 cursor-pointer items-center justify-center rounded-md border border-input bg-background px-3 text-sm font-medium hover:bg-accent"
+              >
+                <Upload className="mr-2 h-4 w-4" />
+                Upload image
+              </Label>
+              {avatarPreview && (
+                <Button type="button" variant="ghost" size="sm" onClick={handleAvatarDelete} disabled={isUploadingAvatar}>
+                  Remove
+                </Button>
+              )}
+              {avatarFile && (
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={handleAvatarUpload}
+                  disabled={isUploadingAvatar}
+                >
+                  {isUploadingAvatar ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Uploading...
+                    </>
+                  ) : (
+                    'Upload'
+                  )}
+                </Button>
+              )}
             </div>
-          ) : accountDataError ? (
-            <Alert variant="destructive">
-              <AlertCircle className="h-4 w-4" />
-              <AlertDescription>
-                Failed to load verification status. Please refresh the page.
-              </AlertDescription>
-            </Alert>
-          ) : accountData?.emailVerified ? (
-            <Alert>
-              <CheckCircle2 className="h-4 w-4 text-green-600" />
-              <AlertDescription>
-                Your email address has been verified.
-              </AlertDescription>
-            </Alert>
-          ) : (
-            <div className="space-y-4">
-              <Alert variant="destructive">
-                <AlertCircle className="h-4 w-4" />
-                <AlertDescription>
-                  <p className="mb-2">
-                    Please verify your email address to unlock all features:
-                  </p>
-                  <ul className="list-disc list-inside text-sm space-y-1 ml-2">
-                    <li>Send drive invitations</li>
-                    <li>Send connection requests</li>
-                    <li>Send direct messages</li>
-                  </ul>
-                </AlertDescription>
-              </Alert>
+            {avatarFile && (
+              <p className="text-xs text-muted-foreground">Selected: {avatarFile.name}</p>
+            )}
+          </div>
+        </div>
 
-              {verificationEmailSent ? (
-                <Alert>
+        <div className="grid gap-4">
+          <div className="grid gap-2">
+            <Label htmlFor="name">Name</Label>
+            <Input
+              id="name"
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Enter your name"
+              required
+            />
+          </div>
+
+          <div className="grid gap-2">
+            <div className="flex items-center gap-2">
+              <Label htmlFor="email">Email</Label>
+              {accountData?.emailVerified && (
+                <Badge variant="default" className="bg-green-600">
+                  <CheckCircle2 className="mr-1 h-3 w-3" />
+                  Verified
+                </Badge>
+              )}
+            </div>
+            <Input
+              id="email"
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="Enter your email"
+              required
+            />
+            {/* Unverified email: the classic resend stays as a conditional row. */}
+            {!accountDataLoading && !accountDataError && accountData && !accountData.emailVerified && (
+              verificationEmailSent ? (
+                <p className="flex items-center gap-2 text-sm text-muted-foreground">
                   <CheckCircle2 className="h-4 w-4 text-green-600" />
-                  <AlertDescription>
-                    Verification email sent! Please check your inbox at <strong>{user.email}</strong>
-                  </AlertDescription>
-                </Alert>
+                  Verification email sent to <strong>{user.email}</strong>.
+                </p>
               ) : (
-                <div>
-                  <p className="text-sm text-muted-foreground mb-3">
-                    Didn&apos;t receive the verification email? Click the button below to send a new one to <strong>{user.email}</strong>
-                  </p>
+                <div className="flex flex-wrap items-center gap-3">
+                  <span className="text-sm text-muted-foreground">Your email is not verified.</span>
                   <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
                     onClick={handleResendVerification}
                     disabled={isResendingVerification}
                   >
@@ -615,154 +524,109 @@ export default function AccountPage() {
                     ) : (
                       <>
                         <Mail className="mr-2 h-4 w-4" />
-                        Resend Verification Email
+                        Resend verification email
                       </>
                     )}
                   </Button>
                 </div>
-              )}
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      {/* Security Section */}
-      <Card className="mb-6">
-        <CardHeader>
-          <CardTitle>Security</CardTitle>
-          <CardDescription>Manage your passkeys</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-6">
-          <PasskeyManager />
-        </CardContent>
-      </Card>
-
-      {/* Connected Devices Section */}
-      <Card className="mb-6">
-        <CardHeader>
-          <div className="flex items-center justify-between">
-            <div>
-              <CardTitle className="flex items-center gap-2">
-                <Smartphone className="h-5 w-5" />
-                Connected Devices
-              </CardTitle>
-              <CardDescription>
-                Manage devices with access to your account. Devices are automatically logged out after 90 days.
-              </CardDescription>
-            </div>
-            {devices && devices.length > 1 && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setIsRevokeAllDialogOpen(true)}
-              >
-                Revoke All Others
-              </Button>
+              )
             )}
           </div>
-        </CardHeader>
-        <CardContent>
-          <DeviceList />
-        </CardContent>
-      </Card>
+        </div>
 
-      {/* Connected Apps Section */}
-      <Card className="mb-6">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Link2 className="h-5 w-5" />
-            Connected Apps
-          </CardTitle>
-          <CardDescription>
-            Apps and CLIs authorized to access your account. Revoking access here takes effect
-            immediately, even if the device that authorized it is lost or offline.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <ConnectedAppsList />
-        </CardContent>
-      </Card>
+        <div>
+          <Button type="submit" disabled={isSavingProfile}>
+            {isSavingProfile ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Saving...
+              </>
+            ) : (
+              "Save profile"
+            )}
+          </Button>
+        </div>
+      </form>
 
-      {/* Account Info */}
-      <Card className="mb-6">
-        <CardHeader>
-          <CardTitle>Account Information</CardTitle>
-          <CardDescription>View your account details</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="flex items-center gap-2 text-sm">
-            <Calendar className="h-4 w-4 text-muted-foreground" />
-            <span className="text-muted-foreground">Member since:</span>
-            <span>{memberSince}</span>
-          </div>
-          <div className="flex items-center gap-2 text-sm">
-            <Mail className="h-4 w-4 text-muted-foreground" />
-            <span className="text-muted-foreground">Account ID:</span>
-            <span className="font-mono text-xs">{user.id}</span>
-          </div>
-        </CardContent>
-      </Card>
+      {/* Passkeys: the retained manager keeps its register, rename and remove logic. */}
+      <SettingsSection title="Passkeys" description="Sign in with Touch ID, Face ID or a security key.">
+        <PasskeyManager />
+      </SettingsSection>
 
-      {/* Data & Privacy */}
-      <Card className="mb-6">
-        <CardHeader>
-          <CardTitle>Data & Privacy</CardTitle>
-          <CardDescription>Download a copy of all your data stored in PageSpace</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <p className="text-sm text-muted-foreground">
-            Export a ZIP archive containing your profile information, drives, pages, messages, files, AI conversations, connections, and activity logs.
-          </p>
-          {exportCooldown && (
-            <Alert>
-              <Clock className="h-4 w-4" />
-              <AlertDescription>
-                You can request another export in {exportCooldown}.
-              </AlertDescription>
-            </Alert>
-          )}
-          <Button
-            onClick={handleDataExport}
-            disabled={isExporting}
-          >
+      {/* Signed-in devices. */}
+      <SettingsSection
+        title="Signed-in devices"
+        description="Devices are signed out automatically after 90 days."
+        actions={
+          devices && devices.length > 1 ? (
+            <Button variant="outline" size="sm" onClick={() => setIsRevokeAllDialogOpen(true)}>
+              Revoke all others
+            </Button>
+          ) : undefined
+        }
+      >
+        <DeviceList />
+      </SettingsSection>
+
+      {/* Connected apps. */}
+      <SettingsSection
+        title="Connected apps"
+        description="Apps and CLIs authorized to act as you. Revoking takes effect immediately, even if the device is offline."
+      >
+        <ConnectedAppsList />
+      </SettingsSection>
+
+      {/* Account. */}
+      <SettingsSection title="Account">
+        <div className="flex items-center gap-2 text-sm">
+          <span className="text-muted-foreground">ID</span>
+          <span className="font-mono text-xs text-foreground">{user.id}</span>
+        </div>
+      </SettingsSection>
+
+      {/* Your data. */}
+      <SettingsSection
+        title="Your data"
+        description="ZIP of your profile, drives, pages, messages, files, AI conversations and activity."
+      >
+        {exportCooldown && (
+          <Alert>
+            <Clock className="h-4 w-4" />
+            <AlertDescription>
+              You can request another export in {exportCooldown}.
+            </AlertDescription>
+          </Alert>
+        )}
+        <div>
+          <Button onClick={handleDataExport} disabled={isExporting}>
             {isExporting ? (
               <>
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                Preparing Export...
+                Preparing export...
               </>
             ) : (
               <>
                 <Download className="mr-2 h-4 w-4" />
-                Download My Data
+                Download my data
               </>
             )}
           </Button>
-        </CardContent>
-      </Card>
+        </div>
+      </SettingsSection>
 
-      {/* Danger Zone */}
-      <Card className="border-destructive/50">
-        <CardHeader>
-          <CardTitle className="text-destructive">Danger Zone</CardTitle>
-          <CardDescription>Irreversible actions for your account</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <Alert>
-            <AlertTriangle className="h-4 w-4" />
-            <AlertDescription>
-              Account deletion is permanent and cannot be undone. All your data will be permanently deleted.
-            </AlertDescription>
-          </Alert>
+      {/* Delete account: opens the ownership check, then the confirmation. */}
+      <SettingsSection title="Delete account" description="Permanent. Drives you share with others must be transferred first.">
+        <div>
           <Button
-            variant="destructive"
-            className="mt-4"
+            variant="link"
+            className="h-auto p-0 text-status-danger"
             onClick={handleInitiateAccountDeletion}
             disabled={isDeletingAccount}
           >
-            Delete Account
+            Delete account
           </Button>
-        </CardContent>
-      </Card>
+        </div>
+      </SettingsSection>
 
       {/* Drive Ownership Dialog */}
       {isOwnershipDialogOpen && (
@@ -783,6 +647,7 @@ export default function AccountPage() {
         isDeleting={isDeletingAccount}
         soloDrivesCount={soloDrivesCount}
         appleSignInRevocation={appleSignInRevocation}
+        ownedOrganizations={ownedOrganizations}
       />
 
       {/* Revoke All Devices Dialog */}
@@ -805,6 +670,6 @@ export default function AccountPage() {
           onCropComplete={handleCropComplete}
         />
       )}
-    </div>
+    </SettingsScreen>
   );
 }

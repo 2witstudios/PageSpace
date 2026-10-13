@@ -2,21 +2,16 @@
 
 import { useState } from 'react';
 import { formatDistanceToNow, format } from 'date-fns';
-import { Bot, FileText, History, MoreVertical, RotateCcw } from 'lucide-react';
+import { Bot, FileText } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/retained/components/ui/avatar';
 import { Badge } from '@/retained/components/ui/badge';
 import { Button } from '@/retained/components/ui/button';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/retained/components/ui/dropdown-menu';
 import { RollbackConfirmDialog } from './RollbackConfirmDialog';
 import { RollbackToPointDialog } from './RollbackToPointDialog';
 import { toast } from 'sonner';
 import { post } from '@/retained/lib/auth/auth-fetch';
 import { operationConfig, resourceTypeIcons, defaultOperationConfig } from './constants';
+import { fieldChanges } from './field-changes';
 import { getInitials } from './utils';
 import { getUserFacingModelName } from '@/retained/lib/ai/core/ai-providers-config';
 import type { ActivityLog } from './types';
@@ -29,9 +24,13 @@ interface ActivityItemProps {
   context?: RollbackContext;
   onRollback?: (activityId: string, force: boolean) => Promise<ActivityActionResult>;
   onRollbackToPointSuccess?: () => void;
+  /** A later change already undid this one (the log links it back). */
+  rolledBack?: boolean;
+  /** The drive the change happened in, when the caller knows its name. */
+  driveName?: string;
 }
 
-export function ActivityItem({ activity, context, onRollback, onRollbackToPointSuccess }: ActivityItemProps) {
+export function ActivityItem({ activity, context, onRollback, onRollbackToPointSuccess, rolledBack = false, driveName }: ActivityItemProps) {
   const [showConfirm, setShowConfirm] = useState(false);
   const [showRollbackToPoint, setShowRollbackToPoint] = useState(false);
   const [preview, setPreview] = useState<ActivityActionPreview | null>(null);
@@ -46,9 +45,11 @@ export function ActivityItem({ activity, context, onRollback, onRollbackToPointS
 
   const actorName = activity.user?.name || activity.actorDisplayName || activity.actorEmail;
   const actorImage = activity.user?.image;
+  const diffs = fieldChanges(activity);
 
-  // All activities (including rollbacks) can be undone via the unified rollback endpoint
-  const canUndo = context && onRollback;
+  // All activities (including rollbacks) can be undone via the unified rollback endpoint; a row
+  // that was already undone has nothing left to roll back.
+  const canRollback = Boolean(context && onRollback) && !rolledBack;
 
   const handleActionClick = async () => {
     if (!context) return;
@@ -114,18 +115,35 @@ export function ActivityItem({ activity, context, onRollback, onRollbackToPointS
           <span className="truncate">
             {activity.resourceTitle || activity.resourceType}
           </span>
+          {driveName && <span className="shrink-0 text-xs">in {driveName}</span>}
         </div>
 
-        {/* Updated fields */}
+        {/* Changed fields */}
         {activity.updatedFields && activity.updatedFields.length > 0 && (
-          <div className="text-xs text-muted-foreground">
-            Changed: {activity.updatedFields.join(', ')}
+          <div className="flex flex-wrap gap-1">
+            {activity.updatedFields.map((field) => (
+              <Badge key={field} variant="outline" className="font-mono text-[11px] font-normal">
+                {field}
+              </Badge>
+            ))}
+          </div>
+        )}
+
+        {/* Before and after, where the log recorded both */}
+        {diffs.length > 0 && (
+          <div className="font-mono text-xs space-y-0.5 overflow-hidden">
+            {diffs.map((diff) => (
+              <div key={diff.field} className="truncate text-muted-foreground">
+                <div><span className="text-destructive">−</span> {diff.field}: {diff.before}</div>
+                <div><span className="text-foreground">+</span> {diff.field}: {diff.after}</div>
+              </div>
+            ))}
           </div>
         )}
       </div>
 
       {/* Timestamp and Actions */}
-      <div className="flex items-start gap-1 sm:gap-2 shrink-0">
+      <div className="flex flex-col items-end gap-1 shrink-0">
         <div className="text-xs text-muted-foreground shrink-0 text-right">
           <div className="hidden sm:block">{format(new Date(activity.timestamp), 'h:mm a')}</div>
           <div className="text-muted-foreground/60">
@@ -133,29 +151,19 @@ export function ActivityItem({ activity, context, onRollback, onRollbackToPointS
           </div>
         </div>
 
-        {canUndo && (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-8 w-8 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity"
-              >
-                <MoreVertical className="h-4 w-4" />
-                <span className="sr-only">Actions</span>
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem onClick={() => handleActionClick()}>
-                <History className="h-4 w-4 mr-2" />
-                Undo this change
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setShowRollbackToPoint(true)}>
-                <RotateCcw className="h-4 w-4 mr-2" />
-                Rollback to this point
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+        {rolledBack && (
+          <Badge variant="outline" className="text-xs">Rolled back</Badge>
+        )}
+
+        {canRollback && (
+          <div className="flex items-center gap-1">
+            <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => handleActionClick()}>
+              Undo this
+            </Button>
+            <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setShowRollbackToPoint(true)}>
+              Roll back to here
+            </Button>
+          </div>
         )}
       </div>
     </div>

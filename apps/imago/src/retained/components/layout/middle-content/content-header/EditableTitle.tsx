@@ -11,7 +11,21 @@ import { useParams } from '@/retained-adapters/navigation';
 import { patch } from '@/retained/lib/auth/auth-fetch';
 import { useTabsStore } from '@/retained/stores/useTabsStore';
 
-export function EditableTitle({ pageId: propPageId }: { pageId?: string | null } = {}) {
+/** The classic header's title, or the v3 in-body title (34–40px, the board's document h1). */
+export type EditableTitleVariant = 'header' | 'body';
+
+const titleClass: Record<EditableTitleVariant, { readonly text: string; readonly input: string }> = {
+  header: {
+    text: 'text-lg @[400px]:text-2xl font-bold cursor-pointer truncate max-w-[150px] @[400px]:max-w-[400px] @[600px]:max-w-[600px]',
+    input: 'text-lg @[400px]:text-2xl font-bold h-auto p-0 border-none focus-visible:ring-0',
+  },
+  body: {
+    text: 'text-[40px] leading-[1.12] tracking-[-0.025em] font-bold cursor-pointer break-words',
+    input: 'text-[40px] leading-[1.12] tracking-[-0.025em] font-bold h-auto p-0 border-none focus-visible:ring-0',
+  },
+};
+
+export function EditableTitle({ pageId: propPageId, variant = 'header' }: { pageId?: string | null; variant?: EditableTitleVariant } = {}) {
   const storePageId = usePageStore((state) => state.pageId);
   const pageId = propPageId !== undefined ? propPageId : storePageId;
   const { mutate } = useSWRConfig();
@@ -87,7 +101,7 @@ export function EditableTitle({ pageId: propPageId }: { pageId?: string | null }
         onChange={handleTitleChange}
         onBlur={updateTitle}
         onKeyDown={handleKeyDown}
-        className="text-lg @[400px]:text-2xl font-bold h-auto p-0 border-none focus-visible:ring-0"
+        className={titleClass[variant].input}
       />
     );
   }
@@ -95,7 +109,7 @@ export function EditableTitle({ pageId: propPageId }: { pageId?: string | null }
   return (
     <h1
       onClick={handleTitleClick}
-      className="text-lg @[400px]:text-2xl font-bold cursor-pointer truncate max-w-[150px] @[400px]:max-w-[400px] @[600px]:max-w-[600px]"
+      className={titleClass[variant].text}
       title={page?.title || ''}
     >
       {page?.title}

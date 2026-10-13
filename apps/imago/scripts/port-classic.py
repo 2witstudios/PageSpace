@@ -20,7 +20,6 @@ roots = [
     'components/layout/middle-content/page-views/file/FileViewer.tsx',
     'components/layout/middle-content/page-views/channel/ChannelView.tsx',
     'components/layout/middle-content/page-views/task-list/TaskListView.tsx',
-    'components/layout/middle-content/content-header/index.tsx',
     'components/layout/left-sidebar/page-tree/PageTree.tsx',
     'components/create/QuickCreatePalette.tsx',
     'components/ai/page-agents/PageAgentSettingsTab.tsx',
@@ -49,6 +48,18 @@ roots += [str(p.relative_to(source)) for p in (source / 'app/dashboard/[driveId]
 roots += [f'app/dashboard/[driveId]/{name}/page.tsx' for name in ['calendar', 'workflows', 'activity', 'trash', 'members', 'members/invite']]
 roots += [f'app/dashboard/{name}/page.tsx' for name in ['channels', 'tasks', 'calendar', 'activity', 'trash']]
 roots += ['app/dashboard/connections/page.tsx', 'app/dashboard/drives/page.tsx']
+
+# Retired by the C v3 redesign: native screens or the shell's panes replaced these, so a re-port must not bring them back.
+RETIRED = {
+    'components/layout/left-sidebar/AgentsSidebar.tsx',
+    'app/settings/page.tsx',
+    'app/dashboard/[driveId]/settings/page.tsx',
+    'app/dashboard/[driveId]/calendar/page.tsx',
+    'app/dashboard/activity/page.tsx',
+    'app/dashboard/trash/page.tsx',
+    'app/dashboard/drives/page.tsx',
+}
+roots = [root for root in dict.fromkeys(roots) if root not in RETIRED]
 
 def resolve(path):
     for candidate in [path, *[Path(str(path) + ext) for ext in ['.ts', '.tsx', '.js', '.jsx', '.css', '.json']], path / 'index.ts', path / 'index.tsx']:

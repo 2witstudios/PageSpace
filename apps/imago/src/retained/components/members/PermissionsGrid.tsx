@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef, forwardRef, useImperativeHandle, useCallback } from 'react';
+import { useState, useEffect, useRef, forwardRef, useImperativeHandle, useCallback, type ReactNode } from 'react';
 import { Checkbox } from '@/retained/components/ui/checkbox';
 import { Button } from '@/retained/components/ui/button';
 import { ChevronRight, ChevronDown, HardDrive } from 'lucide-react';
@@ -8,7 +8,7 @@ import { PageTypeIcon } from '@/retained/components/common/PageTypeIcon';
 import { PageType } from '@pagespace/lib/utils/enums';
 import { fetchWithAuth } from '@/retained/lib/auth/auth-fetch';
 
-interface PageNode {
+export interface PageNode {
   id: string;
   title: string;
   type: string;
@@ -29,14 +29,21 @@ interface PermissionsGridProps {
    *  Use in member management context where drive-level access is derived from membership role,
    *  not from the permissions JSONB. */
   readOnlyDriveRoot?: boolean;
+  /** Told the page tree once it loads, so a caller can name the pages it changed. */
+  onTreeLoaded?: (pages: readonly PageNode[]) => void;
 }
+
+const NO_PERMISSIONS = { canView: false, canEdit: false, canShare: false } as const;
+
+/** One treegrid row: Page, View, Edit, Share, and the Apply-to-children cell. */
+const permissionRowClass = 'grid grid-cols-[minmax(0,1fr)_64px_64px_64px_112px] items-center gap-2 border-b border-border px-3 py-2 text-sm last:border-b-0';
 
 export interface PermissionsGridRef {
   applyRolePermissions: (rolePerms: Record<string, { canView: boolean; canEdit: boolean; canShare: boolean }>) => void;
 }
 
 export const PermissionsGrid = forwardRef<PermissionsGridRef, PermissionsGridProps>(function PermissionsGrid(
-  { driveId, userId, permissions, onChange, readOnlyDriveRoot = false },
+  { driveId, userId, permissions, onChange, readOnlyDriveRoot = false, onTreeLoaded },
   ref
 ) {
   const [pages, setPages] = useState<PageNode[]>([]);
@@ -95,6 +102,7 @@ export const PermissionsGrid = forwardRef<PermissionsGridRef, PermissionsGridPro
 
       const data = await response.json();
       setPages(data.pages);
+      onTreeLoaded?.(data.pages);
       
       // Initialize permissions with current permissions if available
       if (userId && data.pages) {
@@ -211,151 +219,121 @@ export const PermissionsGrid = forwardRef<PermissionsGridRef, PermissionsGridPro
     clearAll(pages);
   };
 
+  const checkboxCell = (page: PageNode, perm: 'canView' | 'canEdit' | 'canShare', label: string, disabled: boolean) => (
+    <div role="gridcell" className="flex justify-center">
+      <Checkbox
+        aria-label={`${label} ${page.title}`}
+        checked={(permissions.get(page.id) ?? NO_PERMISSIONS)[perm]}
+        disabled={disabled}
+        onCheckedChange={(checked) => handlePermissionChange(page.id, perm, !!checked)}
+      />
+    </div>
+  );
+
   const renderDriveRootRow = (page: PageNode) => {
-    const perms = permissions.get(page.id) || { canView: false, canEdit: false, canShare: false };
+    const perms = permissions.get(page.id) ?? NO_PERMISSIONS;
     return (
-      <div key={page.id} className="flex items-center p-2 bg-blue-50 dark:bg-blue-900/20 border-b-2 border-blue-200 dark:border-blue-700">
-        <div className="flex-1 flex items-center space-x-2 min-w-0 overflow-hidden">
-          <HardDrive className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0" />
-          <span className="font-semibold shrink-0">{page.title}</span>
-          <span className="text-xs text-gray-500 dark:text-gray-400 truncate">
-            {readOnlyDriveRoot
-              ? '(access derived from membership role)'
-              : '(controls root-level page creation)'}
+      <div key={page.id} role="row" className={permissionRowClass}>
+        <div role="gridcell" className="flex min-w-0 items-center gap-2 font-medium">
+          <HardDrive className="size-4 shrink-0 text-muted-foreground" />
+          <span className="truncate">{page.title}</span>
+          <span className="truncate text-xs text-muted-foreground">
+            {readOnlyDriveRoot ? '(access derived from membership role)' : '(controls root-level page creation)'}
           </span>
         </div>
-        <div className="w-[100px] flex justify-center">
-          <Checkbox
-            checked={perms.canView}
-            disabled={readOnlyDriveRoot}
-            onCheckedChange={(checked) => handlePermissionChange(page.id, 'canView', !!checked)}
-          />
+        {checkboxCell(page, 'canView', 'View', readOnlyDriveRoot)}
+        <div role="gridcell" className="flex justify-center">
+          <Checkbox aria-label={`Edit ${page.title}`} checked={perms.canEdit} disabled={readOnlyDriveRoot || !perms.canView} onCheckedChange={(checked) => handlePermissionChange(page.id, 'canEdit', !!checked)} />
         </div>
-        <div className="w-[100px] flex justify-center">
-          <Checkbox
-            checked={perms.canEdit}
-            disabled={readOnlyDriveRoot || !perms.canView}
-            onCheckedChange={(checked) => handlePermissionChange(page.id, 'canEdit', !!checked)}
-          />
+        <div role="gridcell" className="flex justify-center">
+          <Checkbox aria-label={`Share ${page.title}`} checked={perms.canShare} disabled={readOnlyDriveRoot || !perms.canView} onCheckedChange={(checked) => handlePermissionChange(page.id, 'canShare', !!checked)} />
         </div>
-        <div className="w-[100px] flex justify-center">
-          <Checkbox
-            checked={perms.canShare}
-            disabled={readOnlyDriveRoot || !perms.canView}
-            onCheckedChange={(checked) => handlePermissionChange(page.id, 'canShare', !!checked)}
-          />
-        </div>
+        <div role="gridcell" />
       </div>
     );
   };
 
-  const renderPageRow = (page: PageNode, depth: number = 0) => {
+  /** One page row, then its children when the row is expanded: a treegrid is flat rows with a depth. */
+  const renderPageRows = (page: PageNode, depth: number = 0): ReactNode[] => {
     if (page.type === 'DRIVE') {
-      return renderDriveRootRow(page);
+      return [renderDriveRootRow(page)];
     }
 
-    const perms = permissions.get(page.id) || { canView: false, canEdit: false, canShare: false };
+    const perms = permissions.get(page.id) ?? NO_PERMISSIONS;
     const hasChildren = page.children && page.children.length > 0;
     const isExpanded = expandedNodes.has(page.id);
 
-    return (
-      <div key={page.id}>
-        <div className="flex items-center p-2 bg-gray-50 dark:bg-gray-800/50 hover:bg-gray-100 dark:hover:bg-gray-700/50 border-b border-gray-200 dark:border-gray-700">
-          {/* Page Name with Indentation */}
-          <div
-            className="flex-1 flex items-center cursor-pointer"
-            style={{ paddingLeft: `${depth * 20}px` }}
-            onClick={() => hasChildren && toggleExpanded(page.id)}
-          >
-            {hasChildren && (
-              <button className="mr-1">
-                {isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
-              </button>
-            )}
-            <div className="flex items-center space-x-2">
-              <PageTypeIcon type={page.type as PageType} className="w-4 h-4" />
-              <span className="truncate">{page.title}</span>
-            </div>
-            {hasChildren && (
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  applyToChildren(page.id, perms);
-                }}
-                className="ml-2 text-xs text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300"
-              >
-                Apply to children
-              </button>
-            )}
-          </div>
-
-          {/* Permission Checkboxes */}
-          <div className="w-[100px] flex justify-center">
-            <Checkbox
-              checked={perms.canView}
-              onCheckedChange={(checked) => handlePermissionChange(page.id, 'canView', !!checked)}
-            />
-          </div>
-          <div className="w-[100px] flex justify-center">
-            <Checkbox
-              checked={perms.canEdit}
-              disabled={!perms.canView}
-              onCheckedChange={(checked) => handlePermissionChange(page.id, 'canEdit', !!checked)}
-            />
-          </div>
-          <div className="w-[100px] flex justify-center">
-            <Checkbox
-              checked={perms.canShare}
-              disabled={!perms.canView}
-              onCheckedChange={(checked) => handlePermissionChange(page.id, 'canShare', !!checked)}
-            />
-          </div>
+    const row = (
+      <div key={page.id} role="row" aria-level={depth + 1} className={permissionRowClass}>
+        <div role="gridcell" className="flex min-w-0 items-center gap-1" style={{ paddingLeft: `${depth * 20}px` }}>
+          {hasChildren ? (
+            <button
+              type="button"
+              aria-expanded={isExpanded}
+              aria-label={`${isExpanded ? 'Collapse' : 'Expand'} ${page.title}`}
+              onClick={() => toggleExpanded(page.id)}
+              className="grid size-5 shrink-0 place-items-center rounded text-muted-foreground hover:bg-accent"
+            >
+              {isExpanded ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
+            </button>
+          ) : (
+            <span className="size-5 shrink-0" aria-hidden="true" />
+          )}
+          <PageTypeIcon type={page.type as PageType} className="size-4 shrink-0" />
+          <span className="truncate">{page.title}</span>
         </div>
-
-        {/* Render Children */}
-        {hasChildren && isExpanded && (
-          <div>
-            {page.children.map(child => renderPageRow(child, depth + 1))}
-          </div>
-        )}
+        {checkboxCell(page, 'canView', 'View', false)}
+        <div role="gridcell" className="flex justify-center">
+          <Checkbox aria-label={`Edit ${page.title}`} checked={perms.canEdit} disabled={!perms.canView} onCheckedChange={(checked) => handlePermissionChange(page.id, 'canEdit', !!checked)} />
+        </div>
+        <div role="gridcell" className="flex justify-center">
+          <Checkbox aria-label={`Share ${page.title}`} checked={perms.canShare} disabled={!perms.canView} onCheckedChange={(checked) => handlePermissionChange(page.id, 'canShare', !!checked)} />
+        </div>
+        <div role="gridcell" className="flex justify-end">
+          {hasChildren && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-6 px-2 text-xs"
+              onClick={() => applyToChildren(page.id, perms)}
+            >
+              Apply to children
+            </Button>
+          )}
+        </div>
       </div>
     );
+
+    return [row, ...(hasChildren && isExpanded ? page.children.flatMap((child) => renderPageRows(child, depth + 1)) : [])];
   };
 
   if (loading) {
     return (
       <div className="flex justify-center py-8">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900 dark:border-gray-100" />
+        <div className="size-8 animate-spin rounded-full border-b-2 border-foreground" />
       </div>
     );
   }
 
   return (
-    <div className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
-      {/* Header */}
-      <div className="flex items-center p-2 bg-gray-100 dark:bg-gray-800 font-semibold text-sm sticky top-0">
-        <div className="flex-1">Page Tree</div>
-        <div className="w-[100px] text-center">View</div>
-        <div className="w-[100px] text-center">Edit</div>
-        <div className="w-[100px] text-center">Share</div>
+    <div className="flex flex-col gap-3">
+      <div role="group" aria-label="Bulk actions" className="flex w-fit gap-0.5 rounded-lg bg-muted p-0.5">
+        <Button type="button" variant="ghost" size="sm" onClick={selectAll}>View all</Button>
+        <Button type="button" variant="ghost" size="sm" onClick={selectAllPermissions}>Full access</Button>
+        <Button type="button" variant="ghost" size="sm" onClick={selectNone}>Clear</Button>
       </div>
-      
-      {/* Page Tree */}
-      <div className="max-h-96 overflow-y-auto">
-        {pages.map(page => renderPageRow(page))}
-      </div>
-      
-      {/* Quick Actions */}
-      <div className="border-t border-gray-200 dark:border-gray-700 p-3 bg-gray-50 dark:bg-gray-800 flex gap-2">
-        <Button size="sm" variant="outline" onClick={selectAllPermissions}>
-          Select All
-        </Button>
-        <Button size="sm" variant="outline" onClick={selectAll}>
-          Select All View
-        </Button>
-        <Button size="sm" variant="outline" onClick={selectNone}>
-          Clear All
-        </Button>
+      <div role="treegrid" aria-label="Page permissions" className="overflow-hidden rounded-xl border border-border">
+        <div role="row" className={`${permissionRowClass} text-xs font-medium text-muted-foreground`}>
+          <div role="columnheader">Page</div>
+          <div role="columnheader" className="text-center">View</div>
+          <div role="columnheader" className="text-center">Edit</div>
+          <div role="columnheader" className="text-center">Share</div>
+          <div role="columnheader" />
+        </div>
+        <div className="max-h-96 overflow-y-auto">
+          {pages.flatMap((page) => renderPageRows(page))}
+        </div>
       </div>
     </div>
   );

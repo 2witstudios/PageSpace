@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState, useCallback, useRef, useId } from 'react';
+import React, { useEffect, useState, useCallback, useRef, useId, type ReactNode } from 'react';
 import dynamic from 'next/dynamic';
 import { useDocument } from '@/retained/hooks/useDocument';
 import { Editor } from '@tiptap/react';
@@ -20,16 +20,28 @@ import { PullToRefresh } from '@/retained/components/ui/pull-to-refresh';
 import { CustomScrollArea } from '@/retained/components/ui/custom-scroll-area';
 import DocumentConflictGate from './DocumentConflictGate';
 
+/** What the v3 Formatting strip needs from the editor this view owns. */
+export interface DocumentToolbarState {
+  readonly editor: Editor | null;
+  readonly contentMode: 'html' | 'markdown';
+  /** True while the rich editor is the one on screen (not Markdown, not read-only). */
+  readonly formatting: boolean;
+}
+
 interface DocumentViewProps {
   pageId: string;
   driveId?: string;
+  /** The page type's strip (v3); without it the classic floating toolbar is drawn. */
+  renderToolbar?: (state: DocumentToolbarState) => ReactNode;
+  /** Above the prose inside the scroll area: the v3 in-body title and meta line. */
+  bodyHeader?: ReactNode;
 }
 
 const MonacoEditor = dynamic(() => import('@/retained/components/editors/MonacoEditor'), { ssr: false });
 const RichEditor = dynamic(() => import('@/retained/components/editors/RichEditor'), { ssr: false });
 
 
-const DocumentView = ({ pageId, driveId }: DocumentViewProps) => {
+const DocumentView = ({ pageId, driveId, renderToolbar, bodyHeader }: DocumentViewProps) => {
   const activeView = useDocumentStore((state) => state.activeView);
   const [editor, setEditor] = useState<Editor | null>(null);
   const { permissions } = usePermissions(pageId);
@@ -289,9 +301,16 @@ const DocumentView = ({ pageId, driveId }: DocumentViewProps) => {
       className="h-full flex flex-col relative"
     >
 
-      {/* Editor toolbar for rich text mode */}
+      {/* The page type's Formatting strip (v3): always mounted, formatting only while rich and editable */}
+      {renderToolbar?.({
+        editor,
+        contentMode: documentState?.contentMode === 'markdown' ? 'markdown' : 'html',
+        formatting: activeView === 'rich' && !isReadOnly,
+      })}
+
+      {/* Editor toolbar for rich text mode (classic floating pill, when no page type supplies one) */}
       <AnimatePresence>
-        {activeView === 'rich' && !isReadOnly && (
+        {!renderToolbar && activeView === 'rich' && !isReadOnly && (
           <motion.div
             initial={{ y: -10, opacity: 0 }}
             animate={{ y: 0, opacity: 1 }}
@@ -330,6 +349,7 @@ const DocumentView = ({ pageId, driveId }: DocumentViewProps) => {
         className="flex-1"
       >
         <CustomScrollArea className={`h-full ${isReadOnly ? 'bg-muted/30 dark:bg-muted/20' : ''}`}>
+          {activeView === 'code' || !bodyHeader ? null : <div className="mx-auto w-full max-w-4xl px-4">{bodyHeader}</div>}
           <div className={`flex justify-center items-start p-4 ${activeView === 'code' ? 'h-full' : ''}`}>
             <AnimatePresence mode="wait">
               {activeView === 'code' ? (

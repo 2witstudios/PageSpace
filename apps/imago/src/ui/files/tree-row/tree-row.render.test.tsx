@@ -145,3 +145,52 @@ describe('renderTreeRows()', () => {
     });
   });
 });
+
+describe('renderTreeRows() multi-select and row actions (IMC-9.6, IMC-9.3)', () => {
+  test('select mode gives each row a checkbox named for its page', () => {
+    const markup = html({
+      selection: { selectedIds: new Set(['roadmap']), toggle: () => {} },
+    });
+    assert({
+      given: 'select mode on, with one row picked',
+      should: 'name a checkbox for each top-level row, checked only for the picked page',
+      actual: [...markup.matchAll(/<input[^>]*aria-label="Select ([^"]+)"[^>]*>/g)].map((match) => [match[1], /checked=""/.test(match[0])]),
+      expected: [
+        ['Launch', false],
+        ['Archive', false],
+        ['Roadmap', true],
+      ],
+    });
+  });
+
+  test('rows have no checkboxes outside select mode', () => {
+    assert({
+      given: 'select mode off',
+      should: 'render no checkboxes',
+      actual: html().includes('type="checkbox"'),
+      expected: false,
+    });
+  });
+
+  test('a row carries the container’s actions trigger', () => {
+    const markup = html({ renderRowActions: (node) => <button type="button" aria-label={`Page actions for ${node.name}`}>…</button> });
+    assert({
+      given: 'a container that supplies a row action',
+      should: 'render it on every row',
+      actual: [...markup.matchAll(/aria-label="Page actions for ([^"]+)"/g)].map((match) => match[1]),
+      expected: ['Launch', 'Archive', 'Roadmap'],
+    });
+  });
+});
+
+describe('renderTreeRows() pending rows that are not open', () => {
+  test('a row being created that is not the open page carries no current marker', () => {
+    const markup = html({ pendingIds: ['roadmap'], selectedId: 'other' });
+    assert({
+      given: 'a pending row that is not the open page',
+      should: 'draw it busy without aria-current',
+      actual: [/<span[^>]*aria-busy="true"/.test(markup), /aria-busy="true"[^>]*aria-current/.test(markup)],
+      expected: [true, false],
+    });
+  });
+});

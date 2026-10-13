@@ -6,84 +6,56 @@ import type { DriveSummary } from '../drives/drives';
 import { renderBrandChip, type BrandChipRenderProps } from './brand-chip.render';
 
 const drives: DriveSummary[] = [
-  { id: 'home-1', name: 'Home', kind: 'HOME' },
-  { id: 'd-alpha', name: 'Alpha', kind: 'STANDARD' },
+  { id: 'home-1', name: 'Home', kind: 'HOME', lastAccessedAt: null },
+  { id: 'd-alpha', name: 'Alpha', kind: 'STANDARD', lastAccessedAt: null },
 ];
 
 const props = (overrides: Partial<BrandChipRenderProps> = {}): BrandChipRenderProps => ({
   currentId: 'd-alpha',
   drives,
-  failed: false,
-  hrefFor: (id) => `/${id}/files`,
-  open: true,
+  open: false,
   onToggle: () => {},
-  onPick: () => {},
   ...overrides,
 });
 
-const markup = (overrides: Partial<BrandChipRenderProps> = {}) => renderToStaticMarkup(renderBrandChip(props(overrides)));
-
-const links = (html: string) => {
+const markup = (overrides: Partial<BrandChipRenderProps> = {}) => {
   const parsed = document.createElement('template');
-  parsed.innerHTML = html;
-  return [...parsed.content.querySelectorAll('a[href]')].map((anchor) => [
-    anchor.getAttribute('href'),
-    anchor.textContent ?? '',
-  ]);
+  parsed.innerHTML = renderToStaticMarkup(renderBrandChip(props(overrides)));
+  return parsed.content;
 };
 
 describe('renderBrandChip()', () => {
-  test('the drive list', () => {
-    const html = markup();
-
-    assert({
-      given: 'Home and Alpha, with Alpha open',
-      should: 'list each drive by its initial and name, linking into the same section, in the order given',
-      actual: links(html),
-      expected: [
-        ['/home-1/files', 'HHome'],
-        ['/d-alpha/files', 'AAlpha'],
-      ],
-    });
+  test('the tile for the open drive', () => {
+    const tile = markup().querySelector('button');
 
     assert({
       given: 'Alpha open',
-      should: 'name the chip after Alpha and mark only Alpha as the current drive',
+      should: 'name the tile for Alpha, show its initial and advertise the dialog it opens',
+      actual: [tile?.getAttribute('aria-label'), tile?.textContent?.startsWith('A'), tile?.getAttribute('aria-haspopup'), tile?.getAttribute('aria-expanded')],
+      expected: ['Switch drive: Alpha', true, 'dialog', 'false'],
+    });
+  });
+
+  test('a drive the list does not hold, and a list not yet loaded', () => {
+    assert({
+      given: 'an unlisted current drive, then no list at all',
+      should: 'never name a drive on the tile',
       actual: [
-        /<summary[^>]*aria-label="Switch drive, Alpha"/.test(html),
-        html.match(/aria-current="[^"]+"/g),
-        /aria-current="page"[^>]*href="\/d-alpha\/files"|href="\/d-alpha\/files"[^>]*aria-current="page"/.test(html),
+        markup({ currentId: 'secret' }).querySelector('button')?.getAttribute('aria-label'),
+        markup({ drives: null }).querySelector('button')?.getAttribute('aria-label'),
       ],
-      expected: [true, ['aria-current="page"'], true],
+      expected: ['Switch drive', 'Switch drive'],
     });
   });
 
-  test('a drive the API did not list', () => {
-    const html = markup({ currentId: 'd-secret' });
+  test('the switcher beside the tile', () => {
+    const fragment = markup({ open: true, switcher: <div data-switcher="" /> });
 
     assert({
-      given: 'a URL naming a drive missing from the list',
-      should: 'show no drive name on the chip and mark no drive current',
-      actual: [/aria-label="Switch drive"/.test(html), html.includes('aria-current'), html.includes('d-secret')],
-      expected: [true, false, false],
-    });
-  });
-
-  test('before the list arrives, and when it fails', () => {
-    assert({
-      given: 'no list yet, then a failed request',
-      should: 'say so in the menu, with no drive names',
-      actual: [markup({ drives: null }).includes('Loading drives…'), markup({ drives: null, failed: true }).includes('Couldn’t load drives'), links(markup({ drives: null }))],
-      expected: [true, true, []],
-    });
-  });
-
-  test('closed', () => {
-    assert({
-      given: 'the menu closed',
-      should: 'render the disclosure closed',
-      actual: [/<details[^>]*open=""/.test(markup({ open: false })), /<details[^>]*open=""/.test(markup())],
-      expected: [false, true],
+      given: 'the switcher open',
+      should: 'mount the dialog beside the tile and mark the tile expanded',
+      actual: [fragment.querySelector('[data-switcher]') !== null, fragment.querySelector('button')?.getAttribute('aria-expanded')],
+      expected: [true, 'true'],
     });
   });
 });

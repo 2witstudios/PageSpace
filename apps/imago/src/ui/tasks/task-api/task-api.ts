@@ -5,10 +5,15 @@
 
 import type { ApiClient } from '@/api/client';
 import type {
+  ActivitiesResponse,
+  ActivityResponse,
   AssignablesResponse,
   Assignee,
   BreadcrumbResponse,
+  DriveTasksResponse,
+  DueDateFilter,
   DrivePagesLsResponse,
+  StatusGroupFilter,
   PageContentResponse,
   Priority,
   TaskItemResponse,
@@ -17,6 +22,8 @@ import type {
   TaskListSummary,
   TaskStatus,
   TaskStatusesResponse,
+  TaskTriggerResponse,
+  TaskTriggersResponse,
 } from '../task-model/task';
 import { driveTaskLists, statusesFrom, taskListFrom } from '../task-model/from-api';
 import { MAX_LEVELS, withSubtasks } from '../task-tree/task-tree';
@@ -39,7 +46,41 @@ export const taskPaths = {
   permissions: (pageId: string) => `/api/pages/${segment(pageId)}/permissions/check`,
   /** A page itself: a task's description is its own page's content. */
   page: (pageId: string) => `/api/pages/${segment(pageId)}`,
+  /** The viewer's own tasks in a drive, filtered by status group and due window. */
+  driveTasks: (query: DriveTasksQuery) => {
+    const params = new URLSearchParams({ context: 'drive', driveId: query.driveId, limit: String(query.limit) });
+    if (query.statusGroup !== undefined) params.set('statusGroup', query.statusGroup);
+    if (query.dueDateFilter !== undefined) params.set('dueDateFilter', query.dueDateFilter);
+    return `/api/tasks?${params.toString()}`;
+  },
+  /** A task's agent triggers, keyed by the task's id (not its page's). */
+  triggers: (taskId: string) => `/api/tasks/${segment(taskId)}/triggers`,
+  /** A page's most recent activity, newest first. */
+  activities: (pageId: string) => `/api/activities?context=page&pageId=${segment(pageId)}&limit=${ACTIVITY_LIMIT}`,
 };
+
+/** How many of a page's activities the detail lists. */
+const ACTIVITY_LIMIT = 20;
+
+/** What GET /api/tasks?context=drive is asked for. Without assignee params the route answers for the viewer. */
+export type DriveTasksQuery = {
+  readonly driveId: string;
+  readonly limit: number;
+  readonly statusGroup?: StatusGroupFilter;
+  readonly dueDateFilter?: DueDateFilter;
+};
+
+/** The viewer's tasks in a drive, as GET /api/tasks answers them. */
+export const fetchDriveTasks = (client: ApiClient, query: DriveTasksQuery) =>
+  client.apiFetch<DriveTasksResponse>(taskPaths.driveTasks(query));
+
+/** How many of the viewer's tasks in a drive fall in a due window (all of them without one): the route's pagination.total. */
+export const fetchDriveTaskCount = async (
+  client: ApiClient,
+  driveId: string,
+  dueDateFilter?: DueDateFilter,
+): Promise<number> =>
+  (await fetchDriveTasks(client, { driveId, limit: 1, dueDateFilter })).pagination.total;
 
 /** The most GET /tasks returns in one page (query-spec.ts MAX_LIMIT). */
 const PAGE_SIZE = 200;
@@ -188,3 +229,17 @@ export type PagePermissions = {
 /** What the viewer may do on a page. */
 export const fetchPagePermissions = (client: ApiClient, pageId: string) =>
   client.apiFetch<PagePermissions>(taskPaths.permissions(pageId));
+
+/**
+ * A task's triggers: GET answers 403 to a viewer who cannot edit the list,
+ * which callers read as "hide the automations", not as a failure.
+ */
+export const fetchTaskTriggers = async (
+  client: ApiClient,
+  taskId: string,
+): Promise<readonly TaskTriggerResponse[]> =>
+  (await client.apiFetch<TaskTriggersResponse>(taskPaths.triggers(taskId))).triggers;
+
+/** A page's newest activity: who did what and when, Imago's work included. */
+export const fetchPageActivity = async (client: ApiClient, pageId: string): Promise<readonly ActivityResponse[]> =>
+  (await client.apiFetch<ActivitiesResponse>(taskPaths.activities(pageId))).activities;

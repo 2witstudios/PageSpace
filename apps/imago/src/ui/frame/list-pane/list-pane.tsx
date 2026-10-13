@@ -1,37 +1,20 @@
 'use client';
 
 import type { ReactNode } from 'react';
-import { dispatch, transactions } from '../../store/transactions';
-import type { HideableSection, ListPane as ListPaneVariant, ListSection } from '../stage/stage';
-import { renderListOpener, renderListPane } from './list-pane.render';
+import { CloseSidebar } from '../controls/controls';
+import type { HideableSection, ListPane as ListPaneVariant } from '../stage/stage';
+import { renderListPane } from './list-pane.render';
 
 export type ListPaneProps = {
-  readonly section: ListSection;
+  readonly section: HideableSection;
   readonly variant: Exclude<ListPaneVariant, 'closed'>;
   readonly title: string;
-  readonly closeHref: string;
-  /** The section's own header controls, ahead of the close. */
+  /** The section's own head actions, ahead of Close sidebar. */
   readonly actions?: ReactNode;
   readonly children?: ReactNode;
 };
 
-/** Binds the tree's × to the store: hiding is per section, never a route. */
-export function ListPane({ section, variant, title, closeHref, actions = null, children = null }: ListPaneProps) {
-  return renderListPane({
-    variant,
-    title,
-    closeHref,
-    actions,
-    onCollapse: () => dispatch(transactions.collapseSection, section),
-    children,
-  });
-}
-
-export type ListOpenerProps = {
-  readonly section: HideableSection;
-  readonly title: string;
-};
-
-export function ListOpener({ section, title }: ListOpenerProps) {
-  return renderListOpener({ title, onOpen: () => dispatch(transactions.expandSection, section) });
+/** Binds the pane's Close sidebar to the store: hiding is per section, never a route. */
+export function ListPane({ section, variant, title, actions = null, children = null }: ListPaneProps) {
+  return renderListPane({ variant, title, actions, close: <CloseSidebar section={section} />, children });
 }

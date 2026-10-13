@@ -39,3 +39,6 @@ const ICON_MAP: Record<string, string> = {
 export function getNodeIcon(type: string): string {
   return ICON_MAP[type] ?? 'File';
 }
+
+/** A flattened snapshot tree row: the node with how far it sits below the root. */
+export type FlatSnapshotNode = SnapshotPageNode & { depth: number };

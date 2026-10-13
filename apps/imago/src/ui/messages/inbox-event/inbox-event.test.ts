@@ -1,6 +1,6 @@
 import { describe, test } from 'vitest';
 import { assert } from 'riteway/vitest';
-import { applyInboxEvent, inboxEventOf, type InboxEvent } from './inbox-event';
+import { applyInboxEvent, concerns, inboxEventOf, type InboxEvent } from './inbox-event';
 import type { ChannelThread, DirectThread } from '../message-model/message';
 
 const channel = (id: string, overrides: Partial<ChannelThread> = {}): ChannelThread => ({
@@ -270,6 +270,31 @@ describe('applyInboxEvent()', () => {
         DMS,
       ).rows[0],
       expected: direct('m1', { unreadCount: 1, lastMessageAt: '2026-10-05T12:00:00.000Z', lastMessagePreview: 'earlier' }),
+    });
+  });
+});
+
+describe('concerns() for the unified inbox and every drive', () => {
+  const post = (type: 'dm' | 'channel', driveId?: string): InboxEvent => ({
+    operation: 'channel_updated',
+    type,
+    id: 'x',
+    ...(driveId === undefined ? {} : { driveId }),
+  });
+
+  test('scopes', () => {
+    assert({
+      given: 'a channel in drive d2, a DM, and a thread reply, against each list scope',
+      should: 'let the unified inbox take both kinds, every drive’s channel list take channels from any drive, and never take a reply',
+      actual: [
+        concerns(post('channel', 'd2'), { kind: 'all' }),
+        concerns(post('dm'), { kind: 'all' }),
+        concerns(post('channel', 'd2'), { kind: 'channel', driveId: null }),
+        concerns(post('channel', 'd2'), { kind: 'channel', driveId: 'd1' }),
+        concerns(post('dm'), { kind: 'channel', driveId: null }),
+        concerns({ ...post('channel', 'd2'), operation: 'thread_updated' }, { kind: 'all' }),
+      ],
+      expected: [true, true, true, false, false, false],
     });
   });
 });

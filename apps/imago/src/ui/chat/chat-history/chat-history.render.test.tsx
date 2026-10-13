@@ -28,6 +28,9 @@ const markup = (props: Partial<ChatHistoryRenderProps> = {}): string =>
       hide: noop,
       loadMore: noop,
       retry: noop,
+      filter: '',
+      onFilter: noop,
+      timeOf: () => '9:40',
       ...props,
     }),
   );
@@ -54,14 +57,23 @@ describe('renderChatHistory', () => {
     });
   });
 
-  test('a row is a button with its title alone', () => {
+  test('a row is a button with its title and time', () => {
     const html = markup();
     const rows = html.slice(html.indexOf('>Today</h2>'));
     assert({
       given: 'the rows under the group headings',
-      should: 'switch the chat in place (a button, not a link) and draw no icon, since every row would carry the same one',
-      actual: [rows.includes('<a '), rows.includes('<svg'), rows.includes(`<button type="button" class="${chatHistoryRowClass(true)}" aria-current="true">`)],
-      expected: [false, false, true],
+      should: 'switch the chat in place (a button, not a link), draw no icon, and carry the row time (C-Chat-Home-Empty)',
+      actual: [rows.includes('<a '), rows.includes('<svg'), rows.includes(`<button type="button" class="${chatHistoryRowClass(true)}" aria-current="page">`), rows.includes('9:40')],
+      expected: [false, false, true, true],
+    });
+  });
+
+  test('Search chats (IMC-2.6)', () => {
+    assert({
+      given: 'the pane, and a filter that matches nothing',
+      should: 'offer the "Search chats" field and say no chats match',
+      actual: [markup().includes('aria-label="Search chats"'), markup({ filter: 'zzz', list: { ...ready, days: [] } }).includes('No chats match.')],
+      expected: [true, true],
     });
   });
 
@@ -69,7 +81,7 @@ describe('renderChatHistory', () => {
     assert({
       given: 'an open past chat, then a new chat',
       should: 'mark exactly one row current, then none',
-      actual: [(markup().match(/aria-current="true"/g) ?? []).length, (markup({ activeId: null }).match(/aria-current="true"/g) ?? []).length],
+      actual: [(markup().match(/aria-current="page"/g) ?? []).length, (markup({ activeId: null }).match(/aria-current="page"/g) ?? []).length],
       expected: [1, 0],
     });
   });
@@ -78,8 +90,8 @@ describe('renderChatHistory', () => {
     const html = markup();
     assert({
       given: 'the pane header',
-      should: 'carry a New chat button and a control that hides the history',
-      actual: [html.includes('aria-label="New chat"'), html.includes('aria-label="Hide Chat history"'), html.includes('>Chats<')],
+      should: 'carry a New chat button and Close sidebar, which hides the history like every left pane',
+      actual: [html.includes('aria-label="New chat"'), html.includes('aria-label="Close sidebar"'), html.includes('>Chats<')],
       expected: [true, true, true],
     });
   });

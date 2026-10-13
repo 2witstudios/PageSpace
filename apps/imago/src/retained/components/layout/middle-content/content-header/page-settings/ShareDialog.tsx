@@ -418,7 +418,7 @@ export function ShareDialog({
                           onClick={handleAddRole}
                           disabled={isAddingRole || !selectedRoleId}
                         >
-                          {isAddingRole ? 'Adding...' : 'Add Role'}
+                          {isAddingRole ? 'Adding...' : 'Add role'}
                         </Button>
                       </div>
                     )}

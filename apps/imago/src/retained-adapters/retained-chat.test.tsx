@@ -16,7 +16,7 @@ vi.mock('@/retained/hooks/usePermissions', () => ({ usePermissions: () => ({ per
 vi.mock('@/retained/components/ai/shared/chat/ChatMessagesArea', () => ({ ChatMessagesArea: () => <div data-empty-messages="" /> }));
 vi.mock('./retained-provider', () => ({ RetainedSurface: ({ children }: { children: ReactNode }) => <>{children}</> }));
 vi.mock('./chat-attachments', () => ({ useChatAttachments: () => ({ attachments: [], getFilesForSend: () => [], addFiles: vi.fn(), removeFile: vi.fn() }) }));
-vi.mock('@/retained/components/ai/chat/input', () => ({ ChatInput: (props: ChatInputProps) => <><textarea value={props.value} disabled={props.disabled} onChange={event => props.onChange(event.target.value)} /><button disabled={props.disabled} onClick={props.onSend}>Send</button></> }));
+vi.mock('@/retained/components/ai/chat/input', () => ({ ChatInput: (props: ChatInputProps) => <><textarea aria-label={props.inputLabel} value={props.value} disabled={props.disabled} onChange={event => props.onChange(event.target.value)} /><button disabled={props.disabled} onClick={props.onSend}>Send</button></> }));
 vi.mock('@/retained/components/agents/chat/SessionChat', () => ({ default: (props: SessionChatProps) => { boundary.session = props; return <div data-conversation={props.conversationId} />; } }));
 vi.mock('@/retained/components/agents/chat/AssistantSessionChat', () => ({ default: () => <div data-global-assistant="" /> }));
 const { RetainedChat } = await import('./retained-chat');
@@ -40,6 +40,11 @@ function send(container: HTMLElement, text: string) {
   act(() => { dispatch(transactions.setChatDraft, text); });
   act(() => { container.querySelector('button')!.click(); });
 }
+
+it('names the first-message composer after the agent, as the session composer is', async () => {
+  const { container } = show(); await settle();
+  expect(container.querySelector('textarea')?.getAttribute('aria-label')).toBe('Message Support');
+});
 
 it('opening, typing and reopening a new draft never creates a conversation', async () => {
   const { web } = show(); await settle();
@@ -92,4 +97,80 @@ it('deduplicates a pending first send and recovers its draft if the selection ch
   expect(getUiState().resources.chatDraft).toBe('Pending');
   expect(container.querySelector('[data-global-assistant]')).not.toBeNull();
   expect(boundary.session).toBeNull();
+});
+
+const agentPage = (id: string, title: string) => () => Response.json({ id, title, driveId: 'd1', aiModel: '' });
+
+function showWith(props: Partial<Parameters<typeof RetainedChat>[0]>, routes: Record<string, FakeRoute> = {}) {
+  const web = fakeWeb({ 'GET /api/pages/a1': agentPage('a1', 'Support'), ...routes });
+  const container = mount(
+    <ImagoSWRProvider client={web.client}>
+      <RetainedChat agentId="a1" name="Support" conversationId={null} resolving={false} {...props} />
+    </ImagoSWRProvider>,
+  );
+  return { container, web };
+}
+
+it('offers a retry when the agent page cannot be loaded', async () => {
+  let fail = true;
+  const { container } = showWith({}, { 'GET /api/pages/a1': () => (fail ? Response.json({ error: 'down' }, { status: 500 }) : Response.json({ id: 'a1', title: 'Support', driveId: 'd1', aiModel: '' })) });
+  await settle(); await settle();
+  expect(container.textContent).toContain('Could not open this chat');
+  fail = false;
+  const retry = [...container.querySelectorAll('button')].find(button => /retry|try again/i.test(button.textContent ?? ''));
+  expect(retry).toBeDefined();
+  act(() => retry?.click());
+  await settle();
+  expect(container.querySelector('textarea')).not.toBeNull();
+});
+
+it('shows the opening state while the conversation is still resolving', async () => {
+  const { container } = showWith({ resolving: true });
+  await settle();
+  expect(container.textContent).toContain('Opening chat');
+  expect(container.querySelector('textarea')).toBeNull();
+});
+
+it('shows the opening state while there is no agent to load', async () => {
+  const { container } = showWith({ agentId: null });
+  await settle();
+  expect(container.textContent).toContain('Opening chat');
+});
+
+it('an empty draft is never sent', async () => {
+  const { container, web } = show(); await settle();
+  send(container, '   '); await settle();
+  expect(web.requests.filter(request => request.method === 'POST')).toHaveLength(0);
+});
+
+it('an isolated chat ignores the shared selection and stays on its own agent', async () => {
+  act(() => useRetainedChatSelection.getState().select({ sessionId: 's9', conversationId: 'other', agentId: 'a2', driveId: 'd1', isReadOnly: true }));
+  const { container } = showWith({ isolated: true, conversationId: 'mine' });
+  await settle();
+  expect(container.querySelector('[data-conversation="mine"]')).not.toBeNull();
+  expect(boundary.session).toMatchObject({ conversationId: 'mine', isReadOnly: false });
+  expect(boundary.session?.agent.id).toBe('a1');
+});
+
+it('a selected conversation on another agent opens read-only as the selection says, titled by that agent', async () => {
+  act(() => useRetainedChatSelection.getState().select({ sessionId: 's9', conversationId: 'c9', agentId: 'a2', driveId: 'd1', isReadOnly: true }));
+  const { container } = showWith({}, { 'GET /api/pages/a2': agentPage('a2', 'Billing bot') });
+  await settle();
+  expect(container.querySelector('[data-conversation="c9"]')).not.toBeNull();
+  expect(boundary.session).toMatchObject({ conversationId: 'c9', sessionId: 's9', isReadOnly: true });
+  expect(boundary.session?.agent).toMatchObject({ id: 'a2', title: 'Billing bot' });
+  expect(boundary.session?.initialSend).toBeUndefined();
+});
+
+it('without permission to edit, an open conversation is read-only', async () => {
+  boundary.canEdit = false;
+  showWith({ conversationId: 'c1' });
+  await settle();
+  expect(boundary.session?.isReadOnly).toBe(true);
+});
+
+it('passes the host composer settings to the open conversation', async () => {
+  showWith({ conversationId: 'c1', placeholder: 'Ask about this page…', ownsCreditsAlert: true });
+  await settle();
+  expect(boundary.session?.imagoComposer).toMatchObject({ placeholder: 'Ask about this page…', ownsCreditsAlert: true });
 });

@@ -23,6 +23,8 @@ export interface Workflow {
   name: string;
   /** Null for step-based workflows whose ai steps carry their own agent. */
   agentPageId: string | null;
+  /** The page whose content is the agent's standing instructions; null when none is linked. */
+  instructionPageId: string | null;
   prompt: string;
   /** Null = legacy single-AI-prompt workflow; the form synthesizes one ai step. */
   steps: WorkflowStep[] | null;

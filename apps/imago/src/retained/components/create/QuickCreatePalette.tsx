@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
+import { useEffect, useRef, useState, useCallback, useMemo, type ReactNode } from 'react';
 import { useParams, usePathname } from '@/retained-adapters/navigation';
 import {
   ArrowLeft, Upload,
@@ -12,13 +12,21 @@ import { toast } from 'sonner';
 import useSWR, { useSWRConfig } from 'swr';
 
 import {
-  CommandDialog,
+  Command,
   CommandEmpty,
   CommandGroup,
   CommandInput,
   CommandItem,
   CommandList,
 } from '@/retained/components/ui/command';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/retained/components/ui/dialog';
+import { Popover, PopoverAnchor, PopoverContent } from '@/retained/components/ui/popover';
 import { Button } from '@/retained/components/ui/button';
 import { Input } from '@/retained/components/ui/input';
 import { post, fetchWithAuth } from '@/retained/lib/auth/auth-fetch';
@@ -40,7 +48,8 @@ import {
   getPageTypeConfig,
 } from '@pagespace/lib/client-safe';
 
-type Phase = 'type-select' | 'name-entry';
+/** The three steps of the create palette (C-Files-NewPage): pick a type, name it, or upload a file. */
+type Phase = 'type-select' | 'name-entry' | 'upload';
 
 const PAGE_TYPE_COLORS: Partial<Record<PageType, string>> = {
   [PageType.DOCUMENT]:  '#60a5fa',
@@ -135,6 +144,7 @@ export default function QuickCreatePalette() {
 
   const quickCreateOpen = useUIStore((s) => s.quickCreateOpen);
   const quickCreateParentOverride = useUIStore((s) => s.quickCreateParentOverride);
+  const quickCreateAnchor = useUIStore((s) => s.quickCreateAnchor);
   const openQuickCreate = useUIStore((s) => s.openQuickCreate);
   const closeQuickCreate = useUIStore((s) => s.closeQuickCreate);
 
@@ -202,13 +212,9 @@ export default function QuickCreatePalette() {
   const handleSelectType = useCallback((type: PageType) => {
     const config = getPageTypeConfig(type);
     setSelectedType(type);
-    setName(`Untitled ${config.displayName}`);
-    setPhase('name-entry');
-    if (type === PageType.FILE) {
-      // Defer past the Radix Dialog open animation so the native file picker
-      // doesn't fight focus-trap or get swallowed by browsers mid-animation.
-      setTimeout(() => fileInputRef.current?.click(), 100);
-    }
+    // A file keeps its own name (taken from the picked file); a page is named before it is created.
+    setName(type === PageType.FILE ? '' : `Untitled ${config.displayName}`);
+    setPhase(type === PageType.FILE ? 'upload' : 'name-entry');
   }, []);
 
   const handleCreate = useCallback(async () => {
@@ -278,6 +284,165 @@ export default function QuickCreatePalette() {
 
   if (!quickCreateOpen) return null;
 
+  const selectedDisplayName = selectedType ? getPageTypeConfig(selectedType).displayName : '';
+
+  const onOpenChange = (open: boolean) => {
+    if (!open) closeQuickCreate();
+  };
+
+  const stepHeader = (title: string) => (
+    <div className="flex items-center gap-2 px-2.5 pt-2.5 pb-1.5">
+      <button
+        type="button"
+        onClick={() => setPhase('type-select')}
+        className="text-muted-foreground hover:text-foreground transition-colors"
+        aria-label="Back to type selection"
+      >
+        <ArrowLeft className="h-3.5 w-3.5" />
+      </button>
+      {selectedType ? <PageIconBadge type={selectedType} size="sm" /> : null}
+      <span className="text-[13.5px] font-semibold">{title}</span>
+    </div>
+  );
+
+  const pickStep = (
+    <Command>
+      <div className="px-4 pt-3 pb-2">
+        <div className="text-[13.5px] font-semibold">Create new page</div>
+        <div className="text-xs text-muted-foreground">
+          Choose a page type to create · in <span className="font-medium text-foreground">{contextLabel}</span>
+        </div>
+      </div>
+      <CommandInput placeholder="Search page types…" aria-label="Search page types" autoFocus />
+      <CommandList aria-label="Page types" className="max-h-[360px]">
+        <CommandEmpty>No matching types.</CommandEmpty>
+        <CommandGroup>
+          {creatableTypes.map((type) => {
+            const config = getPageTypeConfig(type);
+            return (
+              <CommandItem
+                key={type}
+                value={`${config.displayName} ${config.description}`}
+                onSelect={() => handleSelectType(type)}
+                className="flex items-center gap-3 py-2.5"
+              >
+                <PageIconBadge type={type} />
+                <span className="flex flex-col gap-0.5">
+                  <span className="text-sm font-medium">{config.displayName}</span>
+                  <span className="text-xs text-muted-foreground">{config.description}</span>
+                </span>
+                {type === PageType.FILE ? <span className="ml-auto text-[11.5px] text-muted-foreground">Upload</span> : null}
+              </CommandItem>
+            );
+          })}
+        </CommandGroup>
+      </CommandList>
+      <div className="flex gap-3.5 border-t px-3.5 py-2 text-[11.5px] text-muted-foreground">
+        <span><KbdHint keys={['↑↓']} /> choose</span>
+        <span><KbdHint keys={['Enter']} /> next</span>
+        <span><KbdHint keys={['Esc']} /> close</span>
+      </div>
+    </Command>
+  );
+
+  const nameStep = (
+    <div>
+      {stepHeader('Name your page')}
+      <div className="flex flex-col gap-2 px-4 pt-1 pb-4">
+        <label htmlFor="quick-create-name" className="text-xs text-muted-foreground">
+          Enter a name for the new page
+        </label>
+        <Input
+          id="quick-create-name"
+          ref={nameInputRef}
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder={`Untitled ${selectedDisplayName}`}
+          onKeyDown={handleKeyDownNameEntry}
+          className="h-9 text-sm"
+        />
+        <div className="flex justify-end gap-2 pt-1">
+          <Button variant="outline" size="sm" onClick={() => setPhase('type-select')} className="h-8 px-3.5">
+            Back
+          </Button>
+          <Button size="sm" onClick={() => void handleCreate()} disabled={isCreating} className="h-8 px-3.5">
+            {isCreating ? 'Creating…' : 'Create'}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+
+  const uploadStep = (
+    <div>
+      {stepHeader('Upload a file')}
+      <div className="flex flex-col gap-2.5 px-4 pt-1 pb-4">
+        <Button
+          variant="outline"
+          onClick={() => fileInputRef.current?.click()}
+          className="h-[110px] w-full flex-col gap-1.5 border-dashed"
+        >
+          <Upload className="h-5 w-5 text-muted-foreground" />
+          <span className="text-[13px] text-muted-foreground">
+            {selectedFile ? selectedFile.name : 'Click to select a file'}
+          </span>
+        </Button>
+        <label htmlFor="quick-create-file-name" className="sr-only">File name (optional)</label>
+        <Input
+          id="quick-create-file-name"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="File name (optional)"
+          onKeyDown={handleKeyDownNameEntry}
+          className="h-9 text-sm"
+        />
+        <div className="flex justify-end gap-2 pt-1">
+          <Button variant="outline" size="sm" onClick={() => setPhase('type-select')} className="h-8 px-3.5">
+            Back
+          </Button>
+          <Button
+            size="sm"
+            onClick={() => void handleCreate()}
+            disabled={isCreating || !selectedFile}
+            className="h-8 px-3.5"
+          >
+            {isCreating ? 'Uploading…' : 'Upload'}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+
+  const step: ReactNode =
+    phase === 'type-select' ? pickStep : phase === 'name-entry' ? nameStep : uploadStep;
+
+  // The same palette in two presentations: anchored under the control that opened it (the Files
+  // pane "+"), or the centred dialog when it was opened from elsewhere.
+  const panel = quickCreateAnchor ? (
+    <Popover open onOpenChange={onOpenChange}>
+      <PopoverAnchor virtualRef={{ current: quickCreateAnchor }} />
+      <PopoverContent
+        align="start"
+        side="bottom"
+        sideOffset={6}
+        aria-label="Create new page"
+        className="w-[360px] overflow-hidden p-0"
+      >
+        {step}
+      </PopoverContent>
+    </Popover>
+  ) : (
+    <Dialog open onOpenChange={onOpenChange}>
+      <DialogContent showCloseButton={false} className="max-w-[360px] gap-0 overflow-hidden p-0" aria-label="Create new page">
+        <DialogHeader className="sr-only">
+          <DialogTitle>Create new page</DialogTitle>
+          <DialogDescription>Choose a page type to create</DialogDescription>
+        </DialogHeader>
+        {step}
+      </DialogContent>
+    </Dialog>
+  );
+
   return (
     <>
       <input
@@ -294,136 +459,7 @@ export default function QuickCreatePalette() {
           e.target.value = '';
         }}
       />
-
-      {phase === 'type-select' && (
-        <CommandDialog
-          open={quickCreateOpen}
-          onOpenChange={(open) => !open && closeQuickCreate()}
-          title="Create new page"
-          description="Choose a page type to create"
-          showCloseButton={false}
-          className="max-w-[480px]"
-        >
-          <div className="px-3 py-2 border-b">
-            <p className="text-xs text-muted-foreground">
-              In: <span className="font-medium">{contextLabel}</span>
-            </p>
-          </div>
-          <div className="relative">
-            <CommandInput placeholder="Search page types…" autoFocus />
-            <div className="pointer-events-none absolute inset-y-0 right-3 flex items-center">
-              <KbdHint keys={['⌥', 'N']} />
-            </div>
-          </div>
-          <CommandList className="max-h-[360px]">
-            <CommandEmpty>No matching types.</CommandEmpty>
-            <CommandGroup>
-              {creatableTypes.map((type) => {
-                const config = getPageTypeConfig(type);
-                return (
-                  <CommandItem
-                    key={type}
-                    value={`${config.displayName} ${config.description}`}
-                    onSelect={() => handleSelectType(type)}
-                    className="flex items-center gap-3 py-2.5"
-                  >
-                    <PageIconBadge type={type} />
-                    <span className="flex flex-col gap-0.5">
-                      <span className="text-sm font-medium">{config.displayName}</span>
-                      <span className="text-xs text-muted-foreground">{config.description}</span>
-                    </span>
-                  </CommandItem>
-                );
-              })}
-            </CommandGroup>
-          </CommandList>
-        </CommandDialog>
-      )}
-
-      {phase === 'name-entry' && selectedType && (
-        <CommandDialog
-          open={quickCreateOpen}
-          onOpenChange={(open) => !open && closeQuickCreate()}
-          title="Name your page"
-          description="Enter a name for the new page"
-          showCloseButton={false}
-          className="max-w-[480px]"
-        >
-          <div className="flex items-center gap-2 px-3 py-2.5 border-b">
-            <button
-              onClick={() => setPhase('type-select')}
-              className="text-muted-foreground hover:text-foreground transition-colors"
-              aria-label="Back to type selection"
-            >
-              <ArrowLeft className="h-3.5 w-3.5" />
-            </button>
-            <PageIconBadge type={selectedType} size="sm" />
-            <span className="text-sm font-medium">{getPageTypeConfig(selectedType).displayName}</span>
-          </div>
-
-          <div className="px-4 py-4 flex flex-col gap-4">
-            {selectedType === PageType.FILE ? (
-              <div className="flex flex-col gap-3">
-                {selectedFile ? (
-                  <div className="flex items-center gap-2 p-3 rounded-md border bg-muted/30">
-                    <span className="text-sm truncate flex-1">{selectedFile.name}</span>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => fileInputRef.current?.click()}
-                      className="shrink-0 h-7 px-2 text-xs"
-                    >
-                      Change
-                    </Button>
-                  </div>
-                ) : (
-                  <Button
-                    variant="outline"
-                    onClick={() => fileInputRef.current?.click()}
-                    className="w-full h-20 border-dashed flex-col gap-2"
-                  >
-                    <Upload className="h-5 w-5 text-muted-foreground" />
-                    <span className="text-sm text-muted-foreground">Click to select a file</span>
-                  </Button>
-                )}
-                {selectedFile && (
-                  <Input
-                    ref={nameInputRef}
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    placeholder="File name (optional)"
-                    onKeyDown={handleKeyDownNameEntry}
-                    className="h-9"
-                  />
-                )}
-              </div>
-            ) : (
-              <Input
-                ref={nameInputRef}
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder={`Untitled ${getPageTypeConfig(selectedType).displayName}`}
-                onKeyDown={handleKeyDownNameEntry}
-                className="h-9 text-sm"
-              />
-            )}
-
-            <div className="flex items-center justify-between">
-              <p className="text-xs text-muted-foreground">
-                Creating in: <span className="font-medium">{contextLabel}</span>
-              </p>
-              <Button
-                size="sm"
-                onClick={() => void handleCreate()}
-                disabled={isCreating || (selectedType === PageType.FILE && !selectedFile)}
-                className="h-7 px-3 text-xs"
-              >
-                {isCreating ? 'Creating…' : selectedType === PageType.FILE ? 'Upload' : 'Create'}
-              </Button>
-            </div>
-          </div>
-        </CommandDialog>
-      )}
+      {panel}
     </>
   );
 }

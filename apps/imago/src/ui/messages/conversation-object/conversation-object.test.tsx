@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act } from 'react';
-import { afterEach, describe, test, vi } from 'vitest';
+import { afterEach, describe, test } from 'vitest';
 import { assert } from 'riteway/vitest';
 import { ImagoSWRProvider } from '@/api/swr-provider';
 import { RealtimeProvider } from '@/realtime/realtime-provider';
@@ -35,7 +35,24 @@ const show = (routes: Record<string, FakeRoute>) => {
   return { web, container };
 };
 
-const settle = (check: () => void): Promise<void> => act(() => vi.waitFor(check, { timeout: 1000, interval: 5 }));
+/**
+ * Waits for `check`, letting React flush between tries: a state update made inside one long
+ * act() only lands when that act ends.
+ */
+const settle = async (check: () => void): Promise<void> => {
+  for (let tries = 0; tries < 200; tries += 1) {
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    });
+    try {
+      check();
+      return;
+    } catch {
+      // Not yet: flush again.
+    }
+  }
+  check();
+};
 
 describe('ConversationObject', () => {
   test('one of the viewer’s conversations', async () => {
@@ -53,6 +70,7 @@ describe('ConversationObject', () => {
 
   test('an id the viewer is not part of', async () => {
     const { container } = show({ [CONVERSATIONS]: dms([conversation('m2')]) });
+    // The guard asks the server once more before giving up; the answer still lacks the id.
     await settle(() => {
       if (!container.querySelector('[data-not-found]')) throw new Error('no not-found');
     });
@@ -62,6 +80,25 @@ describe('ConversationObject', () => {
       should: 'draw the not-found object with a way back to Messages',
       actual: [object?.querySelector('h2')?.textContent, object?.querySelector('a')?.getAttribute('href'), container.querySelector('[data-conversation-content]')],
       expected: ['Conversation not found', '/dm', null],
+    });
+  });
+
+  test('a conversation created after the list was cached', async () => {
+    let calls = 0;
+    const { container } = show({
+      [CONVERSATIONS]: (request) => {
+        calls += 1;
+        return dms(calls === 1 ? [conversation('m2')] : [conversation('m1'), conversation('m2')])(request);
+      },
+    });
+    await settle(() => {
+      if (!container.querySelector('[data-conversation-content]')) throw new Error('not shown');
+    });
+    assert({
+      given: 'a DM list that did not yet include a conversation just created',
+      should: 'ask the server once more and show the conversation instead of not-found',
+      actual: [container.textContent, calls],
+      expected: ['the conversation', 2],
     });
   });
 

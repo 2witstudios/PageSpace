@@ -1,7 +1,7 @@
 "use client";
 
 import React from 'react';
-import { Columns3, FunctionSquare, Rows3 } from 'lucide-react';
+import { Columns3, Rows3 } from 'lucide-react';
 import { cn } from '@/retained/lib/utils';
 import { Button } from '@/retained/components/ui/button';
 import { MentionPickerPortal } from '@/retained/components/mentions/MentionPickerPortal';
@@ -64,22 +64,19 @@ export const SheetFormulaBar: React.FC<SheetFormulaBarProps> = ({
   driveId,
   mention,
 }) => (
-  <div className="@container px-4 pt-2">
-    <div className="flex items-center gap-2">
-      {/* The address chip: monospace and fixed-width so the input does not
-          shift as the selection moves between A1 and AB100. */}
-      <span
-        className={cn(
-          'shrink-0 rounded-md border border-[var(--separator)] bg-muted/50 px-2 py-1',
-          'min-w-[72px] text-center font-mono text-xs tabular-nums text-foreground',
-        )}
-        aria-label={isRange ? 'Selected range' : 'Selected cell'}
+  <div className="@container border-b border-[var(--separator)] px-3">
+    <div className="flex h-[38px] items-center gap-2">
+      {/* The address, as a labelled read-only input: monospace and fixed-width so
+          the formula does not shift as the selection moves between A1 and AB100. */}
+      <input
+        readOnly
+        value={selectionAddress}
+        aria-label="Cell"
         title={isRange ? 'Selected range' : 'Selected cell'}
-      >
-        {selectionAddress}
-      </span>
+        className="h-7 w-[72px] shrink-0 rounded-md border border-[var(--separator)] bg-muted/50 px-2 text-center font-mono text-xs tabular-nums text-foreground outline-none"
+      />
 
-      <FunctionSquare size={16} className="hidden shrink-0 text-muted-foreground @[420px]:block" aria-hidden="true" />
+      <span className="shrink-0 font-serif text-xs italic text-muted-foreground" aria-hidden="true">fx</span>
 
       <div className="relative flex-1">
         <input
@@ -90,9 +87,9 @@ export const SheetFormulaBar: React.FC<SheetFormulaBarProps> = ({
           onChange={(event) => onFormulaChange(event.target.value)}
           onKeyDown={onFormulaKeyDown}
           disabled={isReadOnly}
-          aria-label="Cell value or formula"
+          aria-label="Formula"
           className={cn(
-            'w-full rounded-md border border-input bg-background px-2 py-1 font-mono text-sm shadow-xs transition-[color,box-shadow] outline-none',
+            'h-7 w-full rounded-md border border-input bg-background px-2 font-mono text-sm shadow-xs transition-[color,box-shadow] outline-none',
             'focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]',
             isReadOnly && 'cursor-not-allowed opacity-75',
           )}
