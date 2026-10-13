@@ -65,9 +65,6 @@ export function customDomainsDecision(policies: OrgPolicies | null): PolicyDecis
   return policies === null || policies.customDomains ? { ok: true } : refuse('customDomains', CUSTOM_DOMAINS_OFF_MESSAGE);
 }
 
-/** What happens to a person being added to an org drive (POL-2). */
-export type GuestAdmission = 'allow' | 'hold' | 'refuse';
-
 /** Why an outsider was not added: the guests policy is off, or the org is lapsed ([D-OW-33]). */
 export type GuestAdmissionRefusal = 'guests_off' | 'org_lapsed';
 

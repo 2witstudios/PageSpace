@@ -181,6 +181,7 @@
     },
     "packages/lib": {
       "entry": [
+        "src/env-bridge/index.ts",
         "src/agent-accounts/grant.ts",
         "src/agent-accounts/executor/plane-main.ts",
         "src/agent-accounts/account-authority-executor.ts",

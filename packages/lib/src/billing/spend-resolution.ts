@@ -490,6 +490,7 @@ function preselectedWalletOf(callInput: CallSpendInput): string | null {
  * into a bare row as it always has). Returns the wallet stored for, so a turn that creates its
  * conversation row after the gate can pin it then.
  */
+/** @public Used by credit-gate through a lazy `await import()` that knip cannot follow. */
 export async function persistPreselectedSource(input: { userId: string; target: SpendTarget; preselectedWalletId: string | undefined }): Promise<string | undefined> {
   const { target } = input;
   if (target.kind !== 'drive' || typeof target.conversationId !== 'string' || target.conversationId.length === 0) return undefined;
