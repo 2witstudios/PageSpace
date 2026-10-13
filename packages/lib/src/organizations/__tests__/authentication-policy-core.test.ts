@@ -167,7 +167,7 @@ describe('org drives a credential is locked out of (D-OW-45)', () => {
   });
 });
 
-describe('counting who a sign-in policy blocks (POL-1, D-OW-45)', () => {
+describe('counting who a sign-in policy blocks (D-OW-45)', () => {
   const single = { authenticatedAtMs: nowMs - 1000, assurance: 'single_factor' as const };
   it('POL-1 (partial) counts credentials that fail and members left with no credential that passes', () => {
     const rows = [

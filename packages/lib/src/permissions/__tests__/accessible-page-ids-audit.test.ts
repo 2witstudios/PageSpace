@@ -9,8 +9,8 @@ import { auditOrgPowerAccess } from '../accessible-page-ids';
 
 beforeEach(() => vi.mocked(auditOrgAdminPrivateDriveAccess).mockClear());
 
-describe('auditOrgPowerAccess (ORG-4)', () => {
-  it('writes one event per PRIVATE drive org power opened, and none for rows org power did not open', () => {
+describe('auditOrgPowerAccess', () => {
+  it('ORG-4 (partial) writes one event per PRIVATE drive org power opened, and none for rows org power did not open', () => {
     auditOrgPowerAccess('user-1', [
       { org_power_drive_id: 'drive-a', org_power_org_id: 'org-1', org_power_role: 'ADMIN' },
       { org_power_drive_id: 'drive-a', org_power_org_id: 'org-1', org_power_role: 'ADMIN' },
@@ -25,7 +25,7 @@ describe('auditOrgPowerAccess (ORG-4)', () => {
     ]);
   });
 
-  it('a member role is still an org role, so a row naming one is audited', () => {
+  it('ORG-4 (partial) a member role is still an org role, so a row naming one is audited', () => {
     auditOrgPowerAccess('user-1', [{ org_power_drive_id: 'drive-e', org_power_org_id: 'org-1', org_power_role: 'MEMBER' }]);
     expect(auditOrgAdminPrivateDriveAccess).toHaveBeenCalledWith({ userId: 'user-1', driveId: 'drive-e', orgId: 'org-1', orgRole: 'MEMBER' });
   });
