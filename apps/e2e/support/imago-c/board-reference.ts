@@ -1,6 +1,6 @@
 import path from 'node:path';
 
-/** Where scripts/render-imago-boards.mjs writes the boards' reference PNGs (DEC-C3). */
+/** Where the boards' committed reference PNGs live (DEC-C3). */
 export const BOARD_REFERENCE_DIR = path.resolve(__dirname, '..', '..', 'imago-boards');
 
 /**

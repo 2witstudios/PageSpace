@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises';
-import { expect, type Locator, type Page, type TestInfo } from '@playwright/test';
+import type { Page, TestInfo } from '@playwright/test';
 import { factories } from '@pagespace/db/test/factories';
 import { db } from '@pagespace/db/db';
 import { favorites } from '@pagespace/db/schema/core';
@@ -74,30 +74,4 @@ export const attachBoard = async (
   const name = state === undefined ? board : `${board}@${state}`;
   await testInfo.attach(`${name} · board`, { body: await readFile(boardReference(board, state)), contentType: 'image/png' });
   await testInfo.attach(`${name} · app`, { body: await page.screenshot(), contentType: 'image/png' });
-};
-
-export type Box = { readonly x: number; readonly width: number; readonly height: number };
-
-const box = async (locator: Locator): Promise<Box> => {
-  const rect = await locator.boundingBox();
-  if (rect === null) throw new Error(`not laid out: ${locator.toString()}`);
-  return { x: Math.round(rect.x), width: Math.round(rect.width), height: Math.round(rect.height) };
-};
-
-/** The v3 landmarks every in-app board shares (SPEC v3.3). */
-export const landmarks = (page: Page) => ({
-  spine: page.getByRole('navigation', { name: 'Sections' }),
-  tabBar: page.getByRole('tablist', { name: 'Open pages' }),
-  imago: page.getByRole('complementary', { name: 'Imago' }),
-  emptyMiddle: page.getByRole('region', { name: 'Nothing open' }),
-});
-
-/** Asserts a landmark's laid-out width, the geometry a board fixes (72 spine, 260 pane, 360 Imago). */
-export const expectWidth = async (locator: Locator, width: number): Promise<void> => {
-  await expect.poll(async () => (await box(locator)).width).toBe(width);
-};
-
-/** Asserts a laid-out height (40 tab bar, 48 column head). */
-export const expectHeight = async (locator: Locator, height: number): Promise<void> => {
-  await expect.poll(async () => (await box(locator)).height).toBe(height);
 };
