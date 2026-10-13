@@ -4,10 +4,14 @@ import { useEffect } from 'react';
 import { useRouter } from '@/retained-adapters/navigation';
 import { useAuth } from '@/retained/hooks/useAuth';
 import { useDriveStore } from '@/retained/hooks/useDrive';
-import { Button } from '@/retained/components/ui/button';
-import { Loader2, ArrowLeft, SlashSquare } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
 import { CommandsSettings } from '@/retained/components/commands/CommandsSettings';
+import { SettingsScreen } from '@/ui/settings/settings-screen/settings-screen';
 
+/**
+ * Your commands (C-Account-Commands): the viewer's personal slash commands, on the account route's
+ * settings screen. The shell's Account pane is the way back, so the screen draws no "Back to Settings".
+ */
 export default function CommandsSettingsPage() {
   const { user, isLoading: authLoading } = useAuth();
   const router = useRouter();
@@ -27,36 +31,18 @@ export default function CommandsSettingsPage() {
 
   if (authLoading || !user) {
     return (
-      <div className="container max-w-4xl mx-auto py-10 px-10 flex items-center justify-center min-h-[400px]">
+      <div className="flex min-h-[400px] items-center justify-center">
         <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
       </div>
     );
   }
 
   return (
-    <div className="container max-w-4xl mx-auto py-10 px-10 space-y-8">
-      <div>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => router.push('/settings')}
-          className="mb-4"
-        >
-          <ArrowLeft className="h-4 w-4 mr-2" />
-          Back to Settings
-        </Button>
-        <h1 className="text-3xl font-bold flex items-center gap-2">
-          <SlashSquare className="h-8 w-8" />
-          Commands
-        </h1>
-        <p className="text-muted-foreground mt-2">
-          Register pages as slash commands. Typing /trigger in any AI input injects the
-          command&apos;s entry page into context; its child pages become resources the AI reads
-          on demand.
-        </p>
-      </div>
-
+    <SettingsScreen
+      title="Your commands"
+      lede="Type /trigger in any AI input to pull a page into context. Its child pages become resources the AI reads on demand."
+    >
       <CommandsSettings scope="personal" canManage />
-    </div>
+    </SettingsScreen>
   );
 }
