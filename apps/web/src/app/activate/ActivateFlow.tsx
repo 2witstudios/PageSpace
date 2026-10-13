@@ -3,6 +3,15 @@
 import { useEffect, useState } from 'react';
 import { post } from '@/lib/auth/auth-fetch';
 import { attemptStepUp, readStepUpTokenFromHash, stripStepUpTokenFromHash } from '@/lib/auth/step-up-ceremony';
+import { isImagoEnabled } from '@/lib/imago/imago-enabled';
+import { ConsentScopeCard } from '@/components/auth/ConsentScopeCard';
+import {
+  V3_BODY,
+  V3_ERROR_TEXT,
+  V3_HEADING,
+  V3_PRIMARY_BUTTON,
+  V3_SECONDARY_BUTTON,
+} from '@/components/auth/auth-v3-styles';
 
 interface VerifyResponse {
   userCode: string;
@@ -119,10 +128,12 @@ export function ActivateFlow({ initialUserCode }: ActivateFlowProps) {
     }
   }
 
+  const v3 = isImagoEnabled();
+
   if (stepUpStatus === 'awaiting_email') {
     return (
       <div className="mt-8">
-        <p className="text-sm text-muted-foreground">
+        <p className="text-sm text-muted-foreground" role="status">
           Check your email for a confirmation link to finish approving this request.
         </p>
       </div>
@@ -130,55 +141,110 @@ export function ActivateFlow({ initialUserCode }: ActivateFlowProps) {
   }
 
   if (step.name === 'done') {
+    const connected = step.action === 'approve';
+    const message = connected
+      ? 'Device connected. You may return to your terminal.'
+      : 'Access denied. You may close this window.';
+    if (v3) {
+      return (
+        <div>
+          <h1 className={V3_HEADING}>{connected ? 'Device connected' : 'Access denied'}</h1>
+          <p className={V3_BODY}>{message}</p>
+        </div>
+      );
+    }
     return (
       <div className="mt-8">
-        <p className="text-sm">
-          {step.action === 'approve'
-            ? 'Device connected. You may return to your terminal.'
-            : 'Access denied. You may close this window.'}
-        </p>
+        <p className="text-sm">{message}</p>
       </div>
     );
   }
 
   if (step.name === 'consent') {
     const { data } = step;
+    const approveLabel = stepUpStatus === 'in_progress' ? 'Confirming…' : 'Allow';
     return (
-      <div className="mt-8">
-        <h2 className="text-lg font-medium">
-          {data.clientName} is requesting access
-          {data.firstParty && (
-            <span className="ml-2 rounded bg-muted px-2 py-0.5 text-xs font-normal text-muted-foreground">
-              Built by PageSpace
-            </span>
-          )}
-        </h2>
-        <ul className="mt-4 space-y-3 text-sm">
-          {data.scopeDescriptions.map((text, i) => (
-            <li key={i} className="rounded border p-3">
-              {text}
-            </li>
-          ))}
-        </ul>
-        {error && <p className="mt-3 text-sm text-destructive">{error}</p>}
-        <div className="mt-6 flex gap-3">
-          <button
-            type="button"
-            disabled={isSubmitting}
-            onClick={() => decide('approve', data)}
-            className="flex-1 rounded bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50"
-          >
-            {stepUpStatus === 'in_progress' ? 'Confirming…' : 'Allow'}
-          </button>
-          <button
-            type="button"
-            disabled={isSubmitting}
-            onClick={() => decide('deny', data)}
-            className="flex-1 rounded border px-4 py-2 text-sm font-medium disabled:opacity-50"
-          >
-            Deny
-          </button>
-        </div>
+      <ConsentScopeCard
+        title={`${data.clientName} is requesting access`}
+        firstParty={data.firstParty}
+        scopeDescriptions={data.scopeDescriptions}
+        headingLevel={v3 ? 1 : 2}
+      >
+        {error && <p className={v3 ? V3_ERROR_TEXT : 'mt-3 text-sm text-destructive'}>{error}</p>}
+        {v3 ? (
+          <div className="mt-6 flex flex-col gap-3">
+            <button
+              type="button"
+              disabled={isSubmitting}
+              onClick={() => decide('approve', data)}
+              className={V3_PRIMARY_BUTTON}
+            >
+              {approveLabel}
+            </button>
+            <button
+              type="button"
+              disabled={isSubmitting}
+              onClick={() => decide('deny', data)}
+              className={V3_SECONDARY_BUTTON}
+            >
+              Deny
+            </button>
+          </div>
+        ) : (
+          <div className="mt-6 flex gap-3">
+            <button
+              type="button"
+              disabled={isSubmitting}
+              onClick={() => decide('approve', data)}
+              className="flex-1 rounded bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50"
+            >
+              {approveLabel}
+            </button>
+            <button
+              type="button"
+              disabled={isSubmitting}
+              onClick={() => decide('deny', data)}
+              className="flex-1 rounded border px-4 py-2 text-sm font-medium disabled:opacity-50"
+            >
+              Deny
+            </button>
+          </div>
+        )}
+      </ConsentScopeCard>
+    );
+  }
+
+  if (v3) {
+    return (
+      <div className="flex flex-col">
+        <h1 className={V3_HEADING}>Activate a device</h1>
+        <p className={V3_BODY}>Enter the code shown on your device to connect it to your PageSpace account.</p>
+        <label htmlFor="user-code" className="mt-6 block text-sm font-medium text-[oklch(0.15_0.01_220)]">
+          Device code
+        </label>
+        <input
+          id="user-code"
+          type="text"
+          autoCapitalize="characters"
+          autoComplete="off"
+          value={userCode}
+          onChange={(e) => setUserCode(e.target.value)}
+          placeholder="XXXX-XXXX"
+          className="mt-2 h-10 w-full rounded-[10px] border border-[oklch(0.90_0.005_230)] bg-[oklch(0.995_0.002_240)] px-3 font-['Geist_Mono',monospace] text-sm uppercase tracking-[0.08em] text-[oklch(0.15_0.01_220)]"
+        />
+        {error && (
+          <p role="alert" className={V3_ERROR_TEXT}>
+            {error}
+          </p>
+        )}
+        <button
+          type="button"
+          disabled={isSubmitting || userCode.trim().length === 0}
+          onClick={verify}
+          className={`mt-6 ${V3_PRIMARY_BUTTON}`}
+        >
+          Continue
+        </button>
       </div>
     );
   }

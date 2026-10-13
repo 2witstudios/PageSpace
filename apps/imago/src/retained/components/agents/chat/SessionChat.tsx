@@ -57,7 +57,7 @@ export interface SessionChatProps {
   initialSend?: { id: string; text: string; files?: FileUIPart[] };
   onInitialSend?: (dispatched: boolean) => void;
   /** Imago's column (IMC-2.2): the compact composer row, a Mention button and its own placeholder. */
-  imagoComposer?: { readonly placeholder: string; readonly aboveComposer?: React.ReactNode };
+  imagoComposer?: { readonly placeholder: string; readonly aboveComposer?: React.ReactNode; readonly ownsCreditsAlert?: boolean };
 }
 
 export default function SessionChat({
@@ -130,7 +130,7 @@ export interface SessionChatViewProps {
   commandDriveId: string | null;
   context: 'page' | 'console';
   isReadOnly?: boolean;
-  imagoComposer?: { readonly placeholder: string; readonly aboveComposer?: React.ReactNode };
+  imagoComposer?: { readonly placeholder: string; readonly aboveComposer?: React.ReactNode; readonly ownsCreditsAlert?: boolean };
 }
 
 export function SessionChatView({
@@ -269,7 +269,7 @@ export function SessionChatView({
         {sideQuestion.state && <SideQuestionCard state={sideQuestion.state} onDismiss={sideQuestion.dismiss} />}
         <ChatErrorBanner
           cause={chat.errorCause}
-          show={showError}
+          show={showError && !(imagoComposer?.ownsCreditsAlert === true && chat.errorCause?.code === 'out_of_credits')}
           onClearError={() => {
             setShowError(false);
             chat.dismissError();

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Loader2, ShieldAlert } from 'lucide-react';
-import { AuthShell } from '@/components/auth/AuthShell';
+import { AuthLayout } from '@/components/auth/AuthLayout';
 import { Button } from '@/components/ui/button';
 import { isCapacitorApp } from '@/lib/capacitor-bridge';
 import { getPlatformStorage } from '@/lib/auth/platform-storage';
@@ -206,7 +206,7 @@ export function MagicLinkRedeem({ token, next }: { token: string; next?: string 
   }, [run]);
 
   return (
-    <AuthShell>
+    <AuthLayout>
       <div className="flex flex-col items-center gap-4 py-6 text-center">
         {status.kind === 'error' ? (
           <>
@@ -234,6 +234,6 @@ export function MagicLinkRedeem({ token, next }: { token: string; next?: string 
           </>
         )}
       </div>
-    </AuthShell>
+    </AuthLayout>
   );
 }

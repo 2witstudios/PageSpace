@@ -2,6 +2,9 @@ import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { sessionService } from '@pagespace/lib/auth/session-service';
 import { getSessionFromCookies } from '@/lib/auth/cookie-config';
+import { AuthLayout } from '@/components/auth/AuthLayout';
+import { isImagoEnabled } from '@/lib/imago/imago-enabled';
+import { getViewerDisplayName } from '@/lib/auth/viewer-display-name';
 import { ActivateFlow } from './ActivateFlow';
 
 interface ActivatePageProps {
@@ -37,13 +40,21 @@ export default async function ActivatePage({ searchParams }: ActivatePageProps) 
     redirect(`/auth/signin?next=${encodeURIComponent(nextTarget)}`);
   }
 
+  // The v3 entry heading is rendered by ActivateFlow so it can change per step.
+  const v3 = isImagoEnabled();
+  const signedInAs = v3 ? await getViewerDisplayName(session.userId) : undefined;
+
   return (
-    <div className="mx-auto max-w-md py-16">
-      <h1 className="text-xl font-semibold">Activate a device</h1>
-      <p className="mt-2 text-sm text-muted-foreground">
-        Enter the code shown on your device to connect it to your PageSpace account.
-      </p>
+    <AuthLayout classic="bare" {...(signedInAs ? { signedInAs } : {})}>
+      {!v3 && (
+        <>
+          <h1 className="text-xl font-semibold">Activate a device</h1>
+          <p className="mt-2 text-sm text-muted-foreground">
+            Enter the code shown on your device to connect it to your PageSpace account.
+          </p>
+        </>
+      )}
       <ActivateFlow initialUserCode={userCode} />
-    </div>
+    </AuthLayout>
   );
 }

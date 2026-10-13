@@ -170,7 +170,7 @@ it('without permission to edit, an open conversation is read-only', async () => 
 });
 
 it('passes the host composer settings to the open conversation', async () => {
-  showWith({ conversationId: 'c1', placeholder: 'Ask about this page…' });
+  showWith({ conversationId: 'c1', placeholder: 'Ask about this page…', ownsCreditsAlert: true });
   await settle();
-  expect(boundary.session?.imagoComposer).toMatchObject({ placeholder: 'Ask about this page…' });
+  expect(boundary.session?.imagoComposer).toMatchObject({ placeholder: 'Ask about this page…', ownsCreditsAlert: true });
 });
