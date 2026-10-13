@@ -26,9 +26,11 @@ interface ActivityItemProps {
   onRollbackToPointSuccess?: () => void;
   /** A later change already undid this one (the log links it back). */
   rolledBack?: boolean;
+  /** The drive the change happened in, when the caller knows its name. */
+  driveName?: string;
 }
 
-export function ActivityItem({ activity, context, onRollback, onRollbackToPointSuccess, rolledBack = false }: ActivityItemProps) {
+export function ActivityItem({ activity, context, onRollback, onRollbackToPointSuccess, rolledBack = false, driveName }: ActivityItemProps) {
   const [showConfirm, setShowConfirm] = useState(false);
   const [showRollbackToPoint, setShowRollbackToPoint] = useState(false);
   const [preview, setPreview] = useState<ActivityActionPreview | null>(null);
@@ -113,6 +115,7 @@ export function ActivityItem({ activity, context, onRollback, onRollbackToPointS
           <span className="truncate">
             {activity.resourceTitle || activity.resourceType}
           </span>
+          {driveName && <span className="shrink-0 text-xs">in {driveName}</span>}
         </div>
 
         {/* Changed fields */}

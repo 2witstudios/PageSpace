@@ -1,8 +1,7 @@
-import RetainedPage from '@/retained/app/dashboard/drives/page';
-import type { ComponentProps } from 'react';
 import { getViewer } from '@/lib/auth/get-viewer';
+import { AccountDrives } from '@/ui/settings/account-drives/account-drives';
 
-export default async function Page(props: ComponentProps<typeof RetainedPage> & object) {
+export default async function Page() {
   await getViewer();
-  return <RetainedPage {...props} />;
+  return <AccountDrives />;
 }
