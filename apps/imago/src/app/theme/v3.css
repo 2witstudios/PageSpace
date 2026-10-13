@@ -75,9 +75,16 @@
 }
 
 /* The stage sheet's lift off the spine. */
-/* Body column caps (C-Files-Folder): the folder table centres at 860px. */
+/* Body column caps: the folder table centres at 860px (C-Files-Folder), the
+   files browser at 1024px (C-Files-Browser). */
 @theme {
   --container-folder: 860px;
+  --container-browser: 1024px;
+}
+
+/* The in-middle settings sub-nav is 220px wide (C-Files-AiSettings). */
+@theme {
+  --spacing-settings-nav: 220px;
 }
 
 @theme {

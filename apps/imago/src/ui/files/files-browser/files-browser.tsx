@@ -260,6 +260,7 @@ export function FilesBrowser({ driveId, folderIds }: FilesBrowserProps): ReactNo
       pageType: node.pageType,
       typeLabel: typeLabelOf(node.pageType),
       updated: node.updatedAt === undefined ? null : shortDate(node.updatedAt),
+      created: node.createdAt === undefined ? null : shortDate(node.createdAt),
       href,
       pending: drawn.pendingIds.includes(node.id),
       menuLabel,

@@ -63,6 +63,16 @@ describe('sortNodes()', () => {
     });
   });
 
+  test('created, newest first', () => {
+    const made = (id: string, createdAt: string): FileNode => ({ id, name: id, kind: 'page', pageType: 'DOCUMENT', createdAt });
+    assert({
+      given: 'pages made on different days, sorted by Created descending',
+      should: 'put the newest first',
+      actual: names(sortNodes([made('old', '2025-01-02T00:00:00.000Z'), made('new', '2026-09-01T00:00:00.000Z'), made('mid', '2026-01-01T00:00:00.000Z')], { key: 'createdAt', dir: 'desc' })),
+      expected: ['new', 'mid', 'old'],
+    });
+  });
+
   test('type sorts by the page type value', () => {
     assert({
       given: 'the Type column ascending',

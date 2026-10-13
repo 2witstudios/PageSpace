@@ -12,7 +12,7 @@ export const browserClass = 'flex h-full min-h-0 flex-col';
 export const browserBodyClass = 'min-h-0 flex-1 overflow-auto px-8 pb-12 pt-5';
 
 /** The column the contents sit in, centred and capped at the board's 1024px. */
-export const browserContentClass = 'relative mx-auto max-w-folder';
+export const browserContentClass = 'relative mx-auto max-w-browser';
 
 /** The breadcrumb path, one line, truncating from the left-most crumb. */
 export const crumbsClass = 'flex min-w-0 flex-1 items-center gap-1 overflow-hidden whitespace-nowrap text-sm';

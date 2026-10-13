@@ -52,6 +52,7 @@ export type BrowserRow = {
   readonly typeLabel: string;
   /** The day it last changed, as M/D/YYYY; null for a create still in flight. */
   readonly updated: string | null;
+  readonly created: string | null;
   readonly href: string;
   /** Drawn but not yet a page the server lists: no link. */
   readonly pending: boolean;
@@ -117,6 +118,7 @@ const COLUMNS: readonly { readonly key: SortKey; readonly label: string; readonl
   { key: 'title', label: 'Name', width: '' },
   { key: 'type', label: 'Type', width: 'w-32' },
   { key: 'updatedAt', label: 'Last Modified', width: 'w-40' },
+  { key: 'createdAt', label: 'Created', width: 'w-40' },
 ];
 
 const iconOf = (pageType: PageTypeValue): { readonly icon: IconName; readonly hue: string } => pageTypeIcons[pageType];
@@ -193,6 +195,9 @@ const listRow = (row: BrowserRow): ReactNode => (
     </td>
     <td className={dateCellClass} data-modified="">
       {row.updated ?? '—'}
+    </td>
+    <td className={dateCellClass} data-created="">
+      {row.created ?? '—'}
     </td>
     <td className="w-10 pr-2 text-right">
       <button

@@ -20,6 +20,7 @@ describe('PageResponse', () => {
       position: true,
       isTrashed: true,
       updatedAt: true,
+      createdAt: true,
     };
 
     assert({
@@ -55,11 +56,11 @@ describe('fileNodesFrom()', () => {
           id: 'f1',
           name: 'Specs',
           kind: 'folder',
-          pageType: 'FOLDER', updatedAt: AT,
+          pageType: 'FOLDER', updatedAt: AT, createdAt: AT,
           count: 2,
           children: [
-            { id: 'doc', name: 'Title doc', kind: 'page', pageType: 'DOCUMENT', updatedAt: AT },
-            { id: 'sheet', name: 'Title sheet', kind: 'page', pageType: 'SHEET', updatedAt: AT },
+            { id: 'doc', name: 'Title doc', kind: 'page', pageType: 'DOCUMENT', updatedAt: AT, createdAt: AT },
+            { id: 'sheet', name: 'Title sheet', kind: 'page', pageType: 'SHEET', updatedAt: AT, createdAt: AT },
           ],
         },
       ],
@@ -92,7 +93,7 @@ describe('fileNodesFrom()', () => {
       given: 'a folder the tree shows with no children',
       should: 'carry an empty children list and a zero count',
       actual: fileNodesFrom([treeRow('f1', 'FOLDER')]),
-      expected: [{ id: 'f1', name: 'Title f1', kind: 'folder', pageType: 'FOLDER', updatedAt: AT, count: 0, children: [] }],
+      expected: [{ id: 'f1', name: 'Title f1', kind: 'folder', pageType: 'FOLDER', updatedAt: AT, createdAt: AT, count: 0, children: [] }],
     });
   });
 
@@ -108,14 +109,14 @@ describe('fileNodesFrom()', () => {
           id: 'doc',
           name: 'Title doc',
           kind: 'page',
-          pageType: 'DOCUMENT', updatedAt: AT,
+          pageType: 'DOCUMENT', updatedAt: AT, createdAt: AT,
           children: [
             {
               id: 'sub',
               name: 'Title sub',
               kind: 'page',
-              pageType: 'CANVAS', updatedAt: AT,
-              children: [{ id: 'deep', name: 'Title deep', kind: 'page', pageType: 'CODE', updatedAt: AT }],
+              pageType: 'CANVAS', updatedAt: AT, createdAt: AT,
+              children: [{ id: 'deep', name: 'Title deep', kind: 'page', pageType: 'CODE', updatedAt: AT, createdAt: AT }],
             },
           ],
         },
@@ -131,8 +132,8 @@ describe('fileNodesFrom()', () => {
       should: 'leave children and count off, so a view knows to load them rather than show an empty folder',
       actual: fileNodesFrom(rows),
       expected: [
-        { id: 'f2', name: 'Title f2', kind: 'folder', pageType: 'FOLDER', updatedAt: AT },
-        { id: 'doc', name: 'Title doc', kind: 'page', pageType: 'DOCUMENT', updatedAt: AT },
+        { id: 'f2', name: 'Title f2', kind: 'folder', pageType: 'FOLDER', updatedAt: AT, createdAt: AT },
+        { id: 'doc', name: 'Title doc', kind: 'page', pageType: 'DOCUMENT', updatedAt: AT, createdAt: AT },
       ],
     });
   });
@@ -152,9 +153,9 @@ describe('fileNodesFrom()', () => {
           id: 'f1',
           name: 'Title f1',
           kind: 'folder',
-          pageType: 'FOLDER', updatedAt: AT,
+          pageType: 'FOLDER', updatedAt: AT, createdAt: AT,
           count: 1,
-          children: [{ id: 'kept', name: 'Title kept', kind: 'page', pageType: 'DOCUMENT', updatedAt: AT }],
+          children: [{ id: 'kept', name: 'Title kept', kind: 'page', pageType: 'DOCUMENT', updatedAt: AT, createdAt: AT }],
         },
       ],
     });

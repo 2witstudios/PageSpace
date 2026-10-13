@@ -13,6 +13,7 @@ const row = (id: string, title: string, overrides: Partial<BrowserRow> = {}): Br
   pageType: 'DOCUMENT',
   typeLabel: 'Document',
   updated: '10/5/2026',
+  created: '9/1/2026',
   href: `/d1/files/${id}`,
   pending: false,
   menuLabel: `Actions for ${title}`,
@@ -88,12 +89,13 @@ describe('the list', () => {
     const heads = [...container.querySelectorAll('th[aria-sort]')].map((head) => [head.textContent, head.getAttribute('aria-sort')]);
     assert({
       given: 'the list sorted by Last Modified descending',
-      should: 'mark that column descending and the others none, with Name, Type and Last Modified as sort buttons',
+      should: 'mark that column descending and the others none, with Name, Type, Last Modified and Created as sort buttons',
       actual: heads,
       expected: [
         ['Name', 'none'],
         ['Type', 'none'],
         ['Last Modified', 'descending'],
+        ['Created', 'none'],
       ],
     });
   });

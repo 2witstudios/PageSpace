@@ -4,8 +4,8 @@
 
 import type { FileNode } from '../file-model/file-node';
 
-/** The columns the browser can sort by. Created is not listed: the tree model carries no created time yet. */
-export type SortKey = 'title' | 'type' | 'updatedAt';
+/** The columns the browser can sort by. */
+export type SortKey = 'title' | 'type' | 'updatedAt' | 'createdAt';
 
 export type SortDirection = 'asc' | 'desc';
 
@@ -14,11 +14,12 @@ export type SortState = { readonly key: SortKey; readonly dir: SortDirection };
 /** The browser opens sorted by name, A to Z. */
 export const DEFAULT_SORT: SortState = { key: 'title', dir: 'asc' };
 
-/** What each column compares: a page's name, its page type, when it last changed. */
+/** What each column compares: a page's name, its page type, when it last changed, when it was made. */
 const fieldOf: Readonly<Record<SortKey, (node: FileNode) => string | undefined>> = {
   title: (node) => node.name,
   type: (node) => node.pageType,
   updatedAt: (node) => node.updatedAt,
+  createdAt: (node) => node.createdAt,
 };
 
 /** Sorts a copy of the nodes; the input is left as it is. A missing value (a create still in flight) compares as empty. */
