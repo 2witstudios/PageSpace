@@ -2,7 +2,11 @@
      Source of truth is the page. scripts/check-spec-coverage.ts reads the page via the
      pagespace CLI when a credential is present and falls back to this file otherwise (CI).
      Refresh: pagespace pages read drc7x34unhc0ty1dc0u1j3gy | sed -E "s/^ *[0-9]+ \| ?//" > docs/specs/organizations-wallets.md
-     (the orchestrator refreshes it; lanes do not hand-edit requirement lines). -->
+     (the orchestrator refreshes it; lanes do not hand-edit requirement lines).
+     Umbrella-cutover snapshot amendments authorized by Jonathan Woodall in #org-wallets
+     (sh2uigygbmyb4hephpiw1x49): D-OW-59, message mr3c0sqgc2ijrb8cxitk3dlh,
+     2026-10-12T18:33:04.159Z (drive-only wallet subjects); D-OW-67, message
+     e2hcnnkksxkffjrdhl2859rv, 2026-10-13T06:55:23.951Z (single consumer-spend read model). -->
 
 # Organizations & Wallets — Spec
 
@@ -20,7 +24,7 @@ Teams need a way to own drives together, pay for them once, and set rules inside
 
 ## Relationship to prior decisions
 
-The Public Platform Program's Phase 1 (Credit Provisioning, unbuilt) already decided the pool primitive: ADR D17-final (pool-first, absolute own-credits override, funder entitlement), D18 (consumers see remaining allotment only), D20 (fine-grain: owner-only funding, debt as self-spend, UTC windows, any authenticated consumer, 10-credit daily and 100-credit monthly defaults, 80/100% alerts, global override switch, passive chip disclosure). This spec adopts that primitive as the wallet and generalizes it: a subject can be a drive, an agent page, or an org pool; a funder can be a user or an org; and donations add funders beyond the owner. Where this spec differs, it says so under Decisions. Two unmerged March branches (ppg/orgs-schema, ppg/orgs-billing) hold an org schema, drives.orgId, org-visible drives, and Stripe seat-quantity logic; they are reference material, not a base.
+The Public Platform Program's Phase 1 (Credit Provisioning, unbuilt) already decided the pool primitive: ADR D17-final (pool-first, absolute own-credits override, funder entitlement), D18 (consumers see remaining allotment only), D20 (fine-grain: owner-only funding, debt as self-spend, UTC windows, any authenticated consumer, 10-credit daily and 100-credit monthly defaults, 80/100% alerts, global override switch, passive chip disclosure). This spec adopts that primitive as the wallet and generalizes it: a subject can only be a drive (D-OW-59); personal roots and org pools have no subject; a funder can be a user or an org; and donations add funders beyond the owner. Where this spec differs, it says so under Decisions. Two unmerged March branches (ppg/orgs-schema, ppg/orgs-billing) hold an org schema, drives.orgId, org-visible drives, and Stripe seat-quantity logic; they are reference material, not a base.
 
 
 ## Requirements
@@ -62,7 +66,7 @@ Each line must be true for the epic to be complete. IDs are stable for task list
 
 
 ### WAL — Wallets and allocations (generalizes Phase 1 credit provisioning)
-- WAL-1 One table. A wallet has: owner (user or org), optional subject (drive or agent page), optional parent wallet, monthly allocation, spent, top-up remainder (never expires), UTC period, status (active, paused, over). The existing per-user credit balance becomes the personal root wallet.
+- WAL-1 One table. A wallet has: owner (user or org), optional subject (drive only; agent-page wallets removed by D-OW-59), optional parent wallet, monthly allocation, spent, top-up remainder (never expires), UTC period, status (active, paused, over). The existing per-user credit balance becomes the personal root wallet.
 - WAL-2 An org pool is a wallet owned by the org with no subject and no parent. A seat allowance is the per-consumer monthly cap on the pool's own leg (D17.4), not a separate row. A drive wallet has a drive subject; its parent is the org pool for org drives or the owner's personal wallet for personal drives.
 - WAL-3 An allocation is a budget drawn against the parent as spend happens; unspent allocation never leaves the parent. A top-up moves funds into the wallet and lasts until spent.
 - WAL-4 Donations: any authenticated user can add funds to a drive wallet they can see, from their own balance, as a one-off amount. A donation is a funder leg on that wallet, recorded with the donor, never refundable (D-OW-13), and the drive lead can turn donations off for the drive. A donation is the donor's whole leg: it never pays the wallet's debt, which stays the funder's to net from the next allocation (WAL-6c/d). Supersedes D20.1 owner-only funding.
@@ -96,7 +100,7 @@ Each line must be true for the epic to be complete. IDs are stable for task list
 - SPEND-7 An agent's spend is attributed to the drive of the session it runs in, not the drive the agent page lives in.
 - SPEND-8 The global assistant with no drive spends personal credits.
 - SPEND-9 Consumers see the drive wallet's remaining amount and their own remaining cap; never the org pool, never the funder's balance, never other consumers' spend (D18 as refined).
-- SPEND-10 The drive lead sees spend by member and automation for their drive. Org Admins see every wallet, the pool, and the unallocated balance.
+- SPEND-10 The drive lead sees spend by member and automation for their drive. Consumer spend rows use one read model keyed by (person, automationRef); per-automation rows and UI-9 figures derive from it, never from ai_usage_logs.source, with a former member represented by one unnamed row and no figure computed twice (D-OW-67). Org Admins see every wallet, the pool, and the unallocated balance.
 
 ### POL — Policies (org-wide, enforced at existing seams)
 - POL-1 Policies are stored once per org and read through one function; no route reads the org row directly. A change applies immediately; anything newly forbidden is suspended, not deleted, and listed in the audit log.
@@ -131,7 +135,7 @@ Each line must be true for the epic to be complete. IDs are stable for task list
 - UI-6 Create-organization dialog: name, slug, move owned drives (Home excluded), invite people, plan summary, and card-first checkout with no trial (D-OW-30, SEAT-8).
 - UI-7 Members & seats, Drives, Policies, Security, Plan & seats, Audit log pages per canvas page 1.
 - UI-8 Spending-from chip and popover, composer strip, refusal card, automation state per canvas page 2.
-- UI-9 Drive Settings › Wallet page: allocation, top-up, donate, who spends, fallback, spend this month.
+- UI-9 Drive Settings › Wallet page: allocation, top-up, donate, who spends, fallback, spend this month, and each member’s today and via-automations figures from the same (person, automationRef) read model as SPEND-10; via automations is the member’s typed automationRef-attributed rows, never ai_usage_logs.source (D-OW-67).
 - UI-10 Settings › Usage › Wallets: everything I spend from, everything I fund, my default.
 - UI-11 Every surface degrades correctly for a plain Member, who sees no org settings beyond leaving the org.
 - UI-12 Credit amounts never carry a currency symbol anywhere in the product: they render as integer counts with thousands separators through the one formatter in the money-model module ("1,482 credits", "192 credits left"). The dollar sign appears only on plan prices, seat prices, invoices, and top-up purchase prices, which are real money. The rate (100 credits per dollar) and the formatter are unconditional. The included-credit ratio is selected by a CODE CONSTANT in the money-model module, flipped by one migration commit deployed to every app together — never by a runtime environment variable (D-OW-17). Legal text such as the Terms of Service states no credit figure and refers to the pricing page (D-OW-18); the FAQ and pricing page source figures from the module.
