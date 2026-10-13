@@ -1,0 +1,2 @@
+ALTER TABLE "wallet_funding_legs" ADD COLUMN "includedCents" integer DEFAULT 0 NOT NULL;--> statement-breakpoint
+ALTER TABLE "wallet_funding_legs" ADD CONSTRAINT "wallet_funding_legs_included_range" CHECK ("wallet_funding_legs"."includedCents" >= 0 AND "wallet_funding_legs"."includedCents" <= "wallet_funding_legs"."remainingCents");

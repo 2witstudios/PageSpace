@@ -755,6 +755,11 @@ export async function donateToDriveWallet(input: DonateInput): Promise<DonationO
         funderUserId: input.donorUserId,
         originalCents: plan.leg.originalCents,
         remainingCents: plan.leg.remainingCents,
+        // MONEY-4: the grant part of the gift keeps its composition. The donor root drew
+        // monthly first (plan.donor.spentMonthly), so that value left the report's
+        // included bucket at the root and must be counted as included HERE, where it now
+        // sits — transfer invariance, never counted twice.
+        includedCents: plan.donor.spentMonthly,
         nonRefundable: plan.leg.nonRefundable,
         sourceRef,
       })

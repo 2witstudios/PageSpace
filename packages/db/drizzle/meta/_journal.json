@@ -2416,6 +2416,13 @@
       "when": 1791906769766,
       "tag": "0376_accessible_page_ids_always_org_aware",
       "breakpoints": true
+    },
+    {
+      "idx": 345,
+      "version": "7",
+      "when": 1791906770000,
+      "tag": "0377_wallet_leg_included_cents",
+      "breakpoints": true
     }
   ]
 }

@@ -8,6 +8,7 @@
 import { db } from '@pagespace/db/db';
 import { sql, count, eq, type SQL } from '@pagespace/db/operators';
 import { wallets } from '@pagespace/db/schema/wallets';
+import { walletFundingLegs } from '@pagespace/db/schema/wallets';
 import { users } from '@pagespace/db/schema/auth';
 import { foldCreditLiability, type CreditLiabilityReport, type LiabilityGroup } from './credit-liability';
 
@@ -20,20 +21,30 @@ export async function readCreditLiability(within?: SQL): Promise<CreditLiability
   const hasSubject = sql<boolean>`(${wallets.subjectType} IS NOT NULL)`;
   const hasParent = sql<boolean>`(${wallets.parentWalletId} IS NOT NULL)`;
   const freeTier = sql<boolean>`(COALESCE(${users.subscriptionTier}, '') = 'free')`;
-  const rows = await db
-    .select({
-      ownerType: wallets.ownerType,
-      hasSubject,
-      hasParent,
-      freeTier,
-      monthlyRemainingCents: sql<number>`COALESCE(SUM(${wallets.monthlyRemainingCents}), 0)::double precision`,
-      topupRemainingCents: sql<number>`COALESCE(SUM(${wallets.topupRemainingCents}), 0)::double precision`,
-      walletCount: count(),
-    })
-    .from(wallets)
-    .leftJoin(users, eq(users.id, wallets.userId))
-    .where(within)
-    .groupBy(wallets.ownerType, hasSubject, hasParent, freeTier);
+  const [rows, legRows] = await Promise.all([
+    db
+      .select({
+        ownerType: wallets.ownerType,
+        hasSubject,
+        hasParent,
+        freeTier,
+        monthlyRemainingCents: sql<number>`COALESCE(SUM(${wallets.monthlyRemainingCents}), 0)::double precision`,
+        topupRemainingCents: sql<number>`COALESCE(SUM(${wallets.topupRemainingCents}), 0)::double precision`,
+        walletCount: count(),
+      })
+      .from(wallets)
+      .leftJoin(users, eq(users.id, wallets.userId))
+      .where(within)
+      .groupBy(wallets.ownerType, hasSubject, hasParent, freeTier),
+    // MONEY-4: grant value that moved onto funding legs (a donation draws the donor root
+    // monthly-first). It left the root's monthly bucket, so it is counted as included
+    // HERE, where it now sits; the purchased side of the same legs is the remainder.
+    db
+      .select({ cents: sql<number>`COALESCE(SUM(${walletFundingLegs.includedCents}), 0)::double precision` })
+      .from(walletFundingLegs)
+      .innerJoin(wallets, eq(wallets.id, walletFundingLegs.walletId))
+      .where(within),
+  ]);
 
   const groups: LiabilityGroup[] = rows.map((r) => ({
     ownerType: r.ownerType,
@@ -44,5 +55,5 @@ export async function readCreditLiability(within?: SQL): Promise<CreditLiability
     topupRemainingCents: Number(r.topupRemainingCents),
     walletCount: Number(r.walletCount),
   }));
-  return foldCreditLiability(groups);
+  return foldCreditLiability(groups, Number(legRows[0]?.cents ?? 0));
 }

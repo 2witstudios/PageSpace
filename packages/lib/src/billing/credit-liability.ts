@@ -19,8 +19,11 @@
  *         money; counting it would count the pool twice.
  *       · its funding legs (topupRemainingCents = SUM of legs) ARE counted, in the total
  *         only: a top-up or donation moves money out of the payer root (monthly first)
- *         into the leg, so it is counted once, where it now sits. A leg does not record
- *         whether it came from a grant or a purchase, so it is not called "included".
+ *         into the leg, so it is counted once, where it now sits. A leg records the part
+ *         of its remaining that began as the funder's INCLUDED grant (includedCents,
+ *         MONEY-4): that part counts as included — it left the root's monthly bucket, so
+ *         counting it there would lose it, and at the root would count it twice. The
+ *         purchased remainder keeps the report's cash apart from grants.
  *       · a child never holds a grant bucket; a monthlyRemainingCents on one is ignored.
  */
 
@@ -51,13 +54,13 @@ export interface LiabilityGroup extends WalletShape {
 }
 
 export interface CreditLiabilityReport {
-  /** Grants outstanding: personal roots' plus org pools' monthly buckets. */
+  /** Grants outstanding: personal roots' plus org pools' monthly buckets, plus the grant part of funding legs. */
   includedCreditLiabilityCents: number;
   personalIncludedCents: number;
   /** The part of personalIncludedCents held by free-tier accounts: the unpaid starter grant. */
   starterGrantIncludedCents: number;
   orgPoolIncludedCents: number;
-  /** Purchased or moved-in credit on every wallet: root top-ups and child funding legs. */
+  /** Purchased credit on every wallet: root top-ups and the purchased part of child funding legs. */
   topupRemainingCents: number;
   /** includedCreditLiabilityCents + topupRemainingCents. */
   totalLiabilityCents: number;
@@ -66,7 +69,7 @@ export interface CreditLiabilityReport {
   orgPoolCount: number;
 }
 
-export function foldCreditLiability(groups: readonly LiabilityGroup[]): CreditLiabilityReport {
+export function foldCreditLiability(groups: readonly LiabilityGroup[], legIncludedCents = 0): CreditLiabilityReport {
   let personal = 0;
   let starter = 0;
   let pools = 0;
@@ -90,14 +93,18 @@ export function foldCreditLiability(groups: readonly LiabilityGroup[]): CreditLi
         break;
     }
   }
-  const included = personal + pools;
+  // The legs' grant value is included where it now sits; the same value left the roots'
+  // monthly buckets, so it must not be counted there again (transfer invariance, MONEY-4).
+  const included = personal + pools + legIncludedCents;
+  // The purchased side of legs is their topup value minus the grant part now on them.
+  const purchased = Math.max(0, topup - legIncludedCents);
   return {
     includedCreditLiabilityCents: included,
     personalIncludedCents: personal,
     starterGrantIncludedCents: starter,
     orgPoolIncludedCents: pools,
-    topupRemainingCents: topup,
-    totalLiabilityCents: included + topup,
+    topupRemainingCents: purchased,
+    totalLiabilityCents: included + purchased,
     userCount,
     orgPoolCount,
   };

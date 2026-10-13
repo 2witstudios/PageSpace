@@ -383,6 +383,7 @@ describe('wallet-funding: funding legs (D-OW-13)', () => {
     funderKind: kind,
     funderUserId,
     remainingCents,
+    includedCents: 0,
     nonRefundable: kind === 'donation',
     createdAtMs,
   });

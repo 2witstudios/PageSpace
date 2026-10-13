@@ -18,14 +18,16 @@ import { driveMembers } from '@pagespace/db/schema/members';
 import { organizations } from '@pagespace/db/schema/organizations';
 import { creditLedger } from '@pagespace/db/schema/credits';
 import { wallets, walletFundingLegs, isPersonalRootWallet } from '@pagespace/db/schema/wallets';
+import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
 import { readCreditLiability } from '../credit-liability-query';
 import { donateToDriveWallet } from '../wallet-funding-shell';
+import { consumeCredits } from '../credit-consume';
 
 let dbAvailable = false;
 const originalMode = process.env.DEPLOYMENT_MODE;
-const created = { users: [] as string[], drives: [] as string[], orgs: [] as string[], childWallets: [] as string[], rootWallets: [] as string[] };
+const created = { users: [] as string[], drives: [] as string[], orgs: [] as string[], childWallets: [] as string[], rootWallets: [] as string[], usageLogIds: [] as string[] };
 
 async function user(tier: 'free' | 'pro'): Promise<string> {
   const u = await factories.createUser({ subscriptionTier: tier });
@@ -58,6 +60,7 @@ describe('credit liability against Postgres', () => {
     else process.env.DEPLOYMENT_MODE = originalMode;
     if (!dbAvailable) return;
     if (created.users.length) await db.delete(creditLedger).where(inArray(creditLedger.userId, created.users));
+    if (created.usageLogIds.length) await db.delete(aiUsageLogs).where(inArray(aiUsageLogs.id, created.usageLogIds));
     const everyWallet = [...created.childWallets, ...created.rootWallets];
     if (everyWallet.length) await db.delete(creditLedger).where(inArray(creditLedger.walletId, everyWallet));
     if (created.childWallets.length) await db.delete(wallets).where(inArray(wallets.id, created.childWallets));
@@ -132,14 +135,64 @@ describe('credit liability against Postgres', () => {
     expect(proRootAfter.monthlyRemainingCents).toBe(500);
 
     const donated = await readCreditLiability(scope());
+    // MONEY-4: the donation drew the donor's monthly GRANT, and the leg records that
+    // composition. The 400 stays included where it now sits — the leg — instead of
+    // dropping out of included liability into cash: included holds, purchased is
+    // unchanged, and the total never moves.
     expect(donated).toMatchObject({
-      includedCreditLiabilityCents: 5800,
+      includedCreditLiabilityCents: 6200,
       personalIncludedCents: 1000,
       orgPoolIncludedCents: 4800,
-      topupRemainingCents: 400,
+      topupRemainingCents: 0,
       totalLiabilityCents: 6200,
       userCount: 2,
       orgPoolCount: 1,
     });
+  });
+
+  it('MONEY-4 a mixed donation keeps grant and purchase apart through the leg, and spending it draws both sides', async () => {
+    if (!dbAvailable) return;
+    const pro = await user('pro');
+    // 100 of grant + 50 of cash on the donor root.
+    const donorRoot = await root({ ownerType: 'user', userId: pro, monthlyRemainingCents: 100, topupRemainingCents: 50 });
+    const drive = await factories.createDrive(pro);
+    created.drives.push(drive.id);
+    const [child] = await db
+      .insert(wallets)
+      .values({ ownerType: 'user', userId: pro, subjectType: 'drive', subjectId: drive.id, parentWalletId: donorRoot, topupRemainingCents: 0 })
+      .returning({ id: wallets.id });
+    created.childWallets.push(child.id);
+
+    const before = await readCreditLiability(scope());
+
+    // Donate 150: the plan draws the root monthly FIRST (100 grant), then cash (50).
+    expect(
+      await donateToDriveWallet({ donorUserId: pro, targetWalletId: child.id, amountCents: 150, donationId: createId() }),
+    ).toMatchObject({ kind: 'donated', amountCents: 150 });
+
+    // Transfer invariance: the 100 grant is still included — on the leg now, not the
+    // root — and the 50 cash is still purchased. Before MONEY-4 the grant part fell out
+    // of included into purchased (−100/+150); every delta is now zero.
+    const [leg] = await db.select().from(walletFundingLegs).where(eq(walletFundingLegs.walletId, child.id));
+    expect(leg).toMatchObject({ remainingCents: 150, includedCents: 100 });
+    const moved = await readCreditLiability(scope());
+    expect(moved.includedCreditLiabilityCents - before.includedCreditLiabilityCents).toBe(0);
+    expect(moved.topupRemainingCents - before.topupRemainingCents).toBe(0);
+    expect(moved.totalLiabilityCents - before.totalLiabilityCents).toBe(0);
+
+    // Spend 60 of the leg through the real settle: the draw carries composition with it —
+    // 40 included + 20 purchased — so both sides fall by exactly what was consumed.
+    const [usageLog] = await db.insert(aiUsageLogs).values({
+      userId: pro, provider: 'openrouter', model: 'e2e/stub', cost: 0.6, timestamp: new Date(),
+    }).returning({ id: aiUsageLogs.id });
+    created.usageLogIds.push(usageLog.id);
+    expect(await consumeCredits({ userId: pro, walletId: child.id, costDollars: 0.6, aiUsageLogId: usageLog.id, markupBpsOverride: 10_000 })).toBe('settled');
+
+    const [legAfter] = await db.select().from(walletFundingLegs).where(eq(walletFundingLegs.walletId, child.id));
+    expect(legAfter).toMatchObject({ remainingCents: 90, includedCents: 60 });
+    const spent = await readCreditLiability(scope());
+    expect(spent.includedCreditLiabilityCents - moved.includedCreditLiabilityCents).toBe(-40);
+    expect(spent.topupRemainingCents - moved.topupRemainingCents).toBe(-20);
+    expect(spent.totalLiabilityCents - moved.totalLiabilityCents).toBe(-60);
   });
 });

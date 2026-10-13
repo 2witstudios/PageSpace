@@ -28,6 +28,7 @@ async function lockedLegs(tx: Tx, walletId: string): Promise<StoredFundingLeg[]>
       funderKind: walletFundingLegs.funderKind,
       funderUserId: walletFundingLegs.funderUserId,
       remainingCents: walletFundingLegs.remainingCents,
+      includedCents: walletFundingLegs.includedCents,
       nonRefundable: walletFundingLegs.nonRefundable,
       createdAt: walletFundingLegs.createdAt,
     })
@@ -36,6 +37,18 @@ async function lockedLegs(tx: Tx, walletId: string): Promise<StoredFundingLeg[]>
     .orderBy(asc(walletFundingLegs.createdAt), asc(walletFundingLegs.id))
     .for('update');
   return rows.map((r) => ({ ...r, createdAtMs: r.createdAt.getTime() }));
+}
+
+/**
+ * How much of a leg's INCLUDED composition a draw of `cents` out of `remainingBefore`
+ * consumes (MONEY-4): its proportional share, swept to the whole remainder when the draw
+ * empties the leg, so a fully drawn leg never strands included cents its bucket no longer
+ * holds. The draw order (which legs, how much) is the pure planner's.
+ */
+export function includedDrawnCents(leg: { remainingCents: number; includedCents: number }, cents: number): number {
+  if (leg.includedCents <= 0) return 0;
+  if (cents >= leg.remainingCents) return leg.includedCents;
+  return Math.min(leg.includedCents, Math.round((leg.includedCents * cents) / leg.remainingCents));
 }
 
 /**
@@ -51,11 +64,21 @@ export async function drawWalletFundingLegs(
 ): Promise<{ draws: { legId: string; cents: number }[]; appliedCents: number; shortfallCents: number }> {
   const [wallet] = await tx.select({ id: wallets.id }).from(wallets).where(eq(wallets.id, walletId)).for('update');
   if (!wallet) throw new Error(`wallet ${walletId} not found`);
-  const drawn = drawFundingLegs(await lockedLegs(tx, walletId), amountCents);
+  const legs = await lockedLegs(tx, walletId);
+  const drawn = drawFundingLegs(legs, amountCents);
+  const drawnLegsById = new Map(legs.map((leg) => [leg.id, leg]));
   for (const d of drawn.draws) {
+    // MONEY-4: the included composition rides the draw — proportional to what left the
+    // leg, swept to zero when the leg empties — in the SAME statement as remainingCents,
+    // so the included-within-remaining CHECK holds row by row.
+    const leg = drawnLegsById.get(d.legId);
+    const includedUsed = leg ? includedDrawnCents(leg, d.cents) : 0;
     await tx
       .update(walletFundingLegs)
-      .set({ remainingCents: sql`${walletFundingLegs.remainingCents} - ${d.cents}` })
+      .set({
+        remainingCents: sql`${walletFundingLegs.remainingCents} - ${d.cents}`,
+        includedCents: sql`${walletFundingLegs.includedCents} - ${includedUsed}`,
+      })
       .where(eq(walletFundingLegs.id, d.legId));
   }
   if (drawn.appliedCents > 0) {
@@ -86,7 +109,7 @@ export async function creditWalletFundingLegs(
   if (asked.length === 0) return { appliedCents: 0 };
   const ids = [...new Set(asked.map((c) => c.legId))];
   const rows = await tx
-    .select({ id: walletFundingLegs.id, originalCents: walletFundingLegs.originalCents, remainingCents: walletFundingLegs.remainingCents })
+    .select({ id: walletFundingLegs.id, originalCents: walletFundingLegs.originalCents, remainingCents: walletFundingLegs.remainingCents, includedCents: walletFundingLegs.includedCents })
     .from(walletFundingLegs)
     .where(and(eq(walletFundingLegs.walletId, walletId), inArray(walletFundingLegs.id, ids)))
     .orderBy(asc(walletFundingLegs.createdAt), asc(walletFundingLegs.id))
@@ -99,9 +122,18 @@ export async function creditWalletFundingLegs(
     headroom.set(credit.legId, room - credit.cents);
   }
   for (const credit of asked) {
+    // MONEY-4: cents credited back carry the included share they left with — the exact
+    // inverse of the draw's proportional rule (same formula, against the leg's remaining
+    // BEFORE the credit) — so composition follows the money both ways and the
+    // included-within-remaining CHECK always holds.
+    const row = rows.find((r) => r.id === credit.legId);
+    const includedRestored = row ? includedDrawnCents(row, credit.cents) : 0;
     await tx
       .update(walletFundingLegs)
-      .set({ remainingCents: sql`${walletFundingLegs.remainingCents} + ${credit.cents}` })
+      .set({
+        remainingCents: sql`${walletFundingLegs.remainingCents} + ${credit.cents}`,
+        includedCents: sql`${walletFundingLegs.includedCents} + ${includedRestored}`,
+      })
       .where(eq(walletFundingLegs.id, credit.legId));
   }
   const appliedCents = asked.reduce((sum, c) => sum + c.cents, 0);

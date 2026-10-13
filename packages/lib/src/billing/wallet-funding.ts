@@ -576,6 +576,8 @@ export interface StoredFundingLeg {
   funderKind: 'owner' | 'donation';
   funderUserId: string | null;
   remainingCents: number;
+  /** The part of remainingCents that began as the funder's included grant (MONEY-4). */
+  includedCents: number;
   nonRefundable: boolean;
   createdAtMs: number;
 }

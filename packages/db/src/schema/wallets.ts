@@ -340,6 +340,11 @@ export const walletFundingLegs = pgTable('wallet_funding_legs', {
   funderOrgId: text('funderOrgId').references(() => organizations.id, { onDelete: 'set null' }),
   originalCents: integer('originalCents').notNull(),
   remainingCents: integer('remainingCents').notNull(),
+  // MONEY-4: the part of remainingCents that began as the funder's INCLUDED grant (their
+  // monthly allowance), not purchased credit. A donation draws the donor root monthly-first,
+  // so a leg can carry grant value; the liability report counts it as included, here, where
+  // it now sits — transfer invariance without counting the root it left twice.
+  includedCents: integer('includedCents').notNull().default(0),
   nonRefundable: boolean('nonRefundable').notNull(),
   // Idempotency key: one leg per donation id or payment reference.
   sourceRef: text('sourceRef'),
@@ -355,6 +360,11 @@ export const walletFundingLegs = pgTable('wallet_funding_legs', {
   remainingInRange: check(
     'wallet_funding_legs_remaining_range',
     sql`${table.remainingCents} >= 0 AND ${table.remainingCents} <= ${table.originalCents}`,
+  ),
+  // Included composition is drawn down with the leg it belongs to, never past it.
+  includedInRange: check(
+    'wallet_funding_legs_included_range',
+    sql`${table.includedCents} >= 0 AND ${table.includedCents} <= ${table.remainingCents}`,
   ),
   // D-OW-13: a donation leg is never refundable.
   donationNonRefundable: check(
