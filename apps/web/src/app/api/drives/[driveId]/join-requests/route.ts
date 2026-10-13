@@ -31,7 +31,7 @@ export async function GET(request: Request, context: RouteContext) {
   const gate = await authenticateOrgRequest(request, ORG_READ_AUTH);
   if (!gate.ok) return gate.response;
   try {
-    const result = await listPendingDriveJoinRequests(gate.userId, driveId);
+    const result = await listPendingDriveJoinRequests(gate.actor, driveId);
     if (!result.ok) return orgRefusalResponse(result);
     auditRequest(request, {
       eventType: 'data.read',
