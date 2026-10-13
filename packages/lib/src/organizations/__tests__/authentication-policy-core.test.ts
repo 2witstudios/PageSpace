@@ -200,6 +200,7 @@ describe('several orgs governing one resource (derived content, D-OW-62)', () =>
     for (const a of policies) {
       for (const b of policies) {
         const combined = strictestAuthenticationPolicy([a, b]);
+        if (combined === null) throw new Error('two governing policies fold into one');
         for (const authentication of credentials) {
           const anyRefuses = [a, b].some((policy) => !decideOrgAuthentication({ policy, authentication, nowMs }).allowed);
           expect(decideOrgAuthentication({ policy: combined, authentication, nowMs }).allowed).toBe(!anyRefuses);
