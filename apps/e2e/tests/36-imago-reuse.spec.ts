@@ -258,9 +258,9 @@ test('opening and abandoning new chat drafts creates no conversations before the
     if (request.method() === 'POST' && new URL(request.url()).pathname === `/api/ai/page-agents/${agentId}/conversations`) creations.push(request.url());
   });
   for (let i = 0; i < 3; i++) {
-    await page.getByRole('button', { name: 'New chat', exact: true }).click();
+    await chat.getByRole('button', { name: 'New chat', exact: true }).click();
     await input.fill('An abandoned draft');
-    await page.getByRole('button', { name: 'New chat', exact: true }).click();
+    await chat.getByRole('button', { name: 'New chat', exact: true }).click();
     await expect(input).toHaveValue('An abandoned draft');
     await input.fill('');
   }

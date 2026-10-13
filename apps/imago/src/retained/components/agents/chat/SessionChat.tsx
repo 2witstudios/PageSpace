@@ -286,6 +286,7 @@ export function SessionChatView({
           isStopping={chat.isStopping}
           disabled={isReadOnly}
           placeholder={isReadOnly ? 'View only' : imagoComposer?.placeholder ?? `Message ${name}...`}
+          inputLabel={imagoComposer ? `Message ${name}` : undefined}
           hideModelSelector
           variant={context === 'console' || imagoComposer ? 'sidebar' : 'main'}
           showMention={imagoComposer !== undefined && !isReadOnly}

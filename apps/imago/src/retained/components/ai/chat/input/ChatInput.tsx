@@ -43,6 +43,8 @@ export interface ChatInputProps {
   /** Whether the input is disabled */
   disabled?: boolean;
   /** Placeholder text */
+  /** The composer's accessible name, when it should not follow the placeholder. */
+  inputLabel?: string;
   placeholder?: string;
   /** Drive ID for mention suggestions */
   driveId?: string;
@@ -153,6 +155,7 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
       isStopping = false,
       disabled = false,
       placeholder = 'Type your message...',
+      inputLabel,
       driveId,
       commandDriveId,
       crossDrive = false,
@@ -398,6 +401,7 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
             onChange={onChange}
             onSend={handleSend}
             placeholder={placeholder}
+            inputLabel={inputLabel}
             driveId={driveId}
             commandDriveId={commandDriveId}
             // ChatInput owns the /btw interception gate (handleSend), so it —
