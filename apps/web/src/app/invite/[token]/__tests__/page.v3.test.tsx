@@ -12,7 +12,7 @@ vi.mock('@/lib/auth/invite-resolver', () => ({
 }));
 
 vi.mock('next/headers', () => ({
-  cookies: vi.fn(async () => ({ toString: () => 'session=test-session' })),
+  cookies: vi.fn(async () => ({ toString: (): string => 'session=test-session' })),
 }));
 vi.mock('@/lib/orgs/org-invite-page', () => ({ loadOrgInvitePage: vi.fn() }));
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push: vi.fn() }) }));
