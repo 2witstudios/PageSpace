@@ -334,12 +334,7 @@ export async function resolveCallSpend(input: {
   now?: Date;
   /** Log a refusal (SPEND-4). Off for a read-only question that is not the gate itself. */
   recordRefusal?: boolean;
-  /**
-   * SPEND-3: store this call's preselected source as the conversation's own (the gate's first
-   * call of a turn). Off for a read-only question, which must never write.
-   */
-  pinConversationSource?: boolean;
-}): Promise<CallSpendDecision & { pinnedWalletId?: string }> {
+}): Promise<CallSpendDecision & { preselectedWalletId?: string }> {
   const { userId, consumerTier, target } = input;
   if (!resolvesDriveWallets({ orgsEnabled: ORGS_ENABLED, target }) || target.kind === 'personal') {
     return personalRootDecision(consumerTier);
@@ -474,24 +469,33 @@ export async function resolveCallSpend(input: {
       orgLapsed,
     });
   }
-  const pinned = input.pinConversationSource === true && typeof target.conversationId === 'string' && target.conversationId.length > 0
-    ? await pinPreselectedSource(userId, target.conversationId, target.driveId, callInput)
-    : null;
-  return pinned ? { ...decision, pinnedWalletId: pinned } : decision;
+  // SPEND-3: the wallet of the source this call PRESELECTED (spend-target `sourceToPin`), if any.
+  // Resolution only names it; the gate persists it (persistPreselectedSource).
+  const preselected = preselectedWalletOf(callInput);
+  return preselected ? { ...decision, preselectedWalletId: preselected } : decision;
 }
 
-/**
- * SPEND-3: the wallet of the source this conversation's first call preselected (spend-target
- * `sourceToPin`), stored as its own. Own credits name the person's root wallet, created bare if
- * it does not exist yet (the gate grants into a bare row as it always has).
- */
-async function pinPreselectedSource(userId: string, conversationId: string, driveId: string, callInput: CallSpendInput): Promise<string | null> {
+/** The wallet of the source a call preselected (it may be the not-yet-created personal root's placeholder). */
+function preselectedWalletOf(callInput: CallSpendInput): string | null {
   const source = sourceToPin(callInput);
   if (source === null) return null;
   const leg = source === 'drive_wallet' ? callInput.driveWallet : source === 'seat_allowance' ? callInput.seatAllowance : callInput.personal;
-  if (!leg) return null;
-  const walletId = leg.walletId === PERSONAL_ROOT_NOT_YET_CREATED ? await ensurePersonalRootWalletId(db, userId) : leg.walletId;
-  await pinConversationSource({ userId, conversationId, driveId, walletId });
+  return leg?.walletId ?? null;
+}
+
+/**
+ * SPEND-3, the gate's write after resolving: store the wallet a conversation's first call
+ * preselected as the conversation's own (pinConversationSource: once, never over a stored choice).
+ * Own credits name the person's root wallet, created bare if it does not exist yet (the gate grants
+ * into a bare row as it always has). Returns the wallet stored for, so a turn that creates its
+ * conversation row after the gate can pin it then.
+ */
+export async function persistPreselectedSource(input: { userId: string; target: SpendTarget; preselectedWalletId: string | undefined }): Promise<string | undefined> {
+  const { target } = input;
+  if (target.kind !== 'drive' || typeof target.conversationId !== 'string' || target.conversationId.length === 0) return undefined;
+  if (!input.preselectedWalletId) return undefined;
+  const walletId = input.preselectedWalletId === PERSONAL_ROOT_NOT_YET_CREATED ? await ensurePersonalRootWalletId(db, input.userId) : input.preselectedWalletId;
+  await pinConversationSource({ userId: input.userId, conversationId: target.conversationId, driveId: target.driveId, walletId });
   return walletId;
 }
 

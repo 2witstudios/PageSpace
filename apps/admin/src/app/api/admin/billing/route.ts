@@ -18,6 +18,7 @@ import {
   getCreditLiability,
   getLiveHolds,
   getBalanceDriftAlerts,
+  getUnattributedUsage,
   getNegativeMarginAccounts,
   type Granularity,
 } from '@/lib/monitoring';
@@ -72,6 +73,7 @@ export const GET = withAdminAuth(async (_adminUser, request) => {
       holds,
       balanceDrift,
       negativeMargin,
+      unattributedUsage,
     ] = await Promise.all([
       getUnitEconomicsSummary(startDate, endDate),
       getMarginByPeriod(startDate, endDate, granularity),
@@ -90,6 +92,7 @@ export const GET = withAdminAuth(async (_adminUser, request) => {
       getLiveHolds(),
       getBalanceDriftAlerts(),
       getNegativeMarginAccounts(startDate, endDate),
+      getUnattributedUsage(),
     ]);
 
     const enforcement = {
@@ -207,7 +210,7 @@ export const GET = withAdminAuth(async (_adminUser, request) => {
       subscriptionsByTier,
       liability,
       holds,
-      alerts: { balanceDrift, negativeMargin },
+      alerts: { balanceDrift, negativeMargin, unattributedUsage },
       tokens: {
         summary: tokenSummary,
         byModel: tokensByModel,

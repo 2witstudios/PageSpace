@@ -30,6 +30,7 @@ import { automationSpend, driveSpend, personTriggeredSpend } from '../spend-targ
 import { notifyCapAlerts } from '../wallet-cap-alerts';
 import { listDriveWalletCaps, setDriveWalletCap, setSeatCap } from '../../services/drive-wallet-service';
 import { leaveOrganization } from '../../organizations/leave';
+import { credentialActor } from '../../permissions/access-actor';
 
 vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 
@@ -154,24 +155,24 @@ describe('per-consumer caps on drive-wallet and seat legs (orgs on, real Postgre
     world = await build();
     const w = world;
 
-    expect(await setDriveWalletCap(w.anaId, w.productId, w.marcusId, { dailyCents: 30 }, 'session')).toMatchObject({
+    expect(await setDriveWalletCap(credentialActor(w.anaId, null), w.productId, w.marcusId, { dailyCents: 30 }, 'session')).toMatchObject({
       ok: true,
       walletId: w.productWalletId,
       caps: [{ userId: w.marcusId, displayName: 'Marcus Oyelaran', dailyCapCents: 30, monthlyCapCents: 1_000, dailyCapCredits: '30', monthlyCapCredits: '1,000' }],
     });
     expect(await capRow(w.productWalletId, w.marcusId)).toMatchObject({ dailyCapCents: 30, monthlyCapCents: 1_000 });
 
-    expect(await setDriveWalletCap(w.lenaId, w.productId, w.marcusId, { dailyCents: 999 }, 'session')).toMatchObject({ ok: false, status: 403, code: 'insufficient_role' });
-    expect(await setDriveWalletCap(w.marcusId, w.productId, w.marcusId, { dailyCents: 999 }, 'session')).toMatchObject({ ok: false, status: 403 });
-    expect(await setDriveWalletCap(w.jonoId, w.productId, w.marcusId, { dailyCents: 999 }, 'mcp')).toMatchObject({ ok: false, status: 403, code: 'mcp_token_cannot_move_money' });
+    expect(await setDriveWalletCap(credentialActor(w.lenaId, null), w.productId, w.marcusId, { dailyCents: 999 }, 'session')).toMatchObject({ ok: false, status: 403, code: 'insufficient_role' });
+    expect(await setDriveWalletCap(credentialActor(w.marcusId, null), w.productId, w.marcusId, { dailyCents: 999 }, 'session')).toMatchObject({ ok: false, status: 403 });
+    expect(await setDriveWalletCap(credentialActor(w.jonoId, null), w.productId, w.marcusId, { dailyCents: 999 }, 'mcp')).toMatchObject({ ok: false, status: 403, code: 'mcp_token_cannot_move_money' });
     expect(await capRow(w.productWalletId, w.marcusId)).toMatchObject({ dailyCapCents: 30 });
 
     // The lead reads them (spend by member is theirs); a member does not.
-    expect(await listDriveWalletCaps(w.lenaId, w.productId, 'session')).toMatchObject({ ok: true, caps: [{ userId: w.marcusId }] });
-    expect(await listDriveWalletCaps(w.marcusId, w.productId, 'session')).toMatchObject({ ok: false, status: 403 });
+    expect(await listDriveWalletCaps(credentialActor(w.lenaId, null), w.productId, 'session')).toMatchObject({ ok: true, caps: [{ userId: w.marcusId }] });
+    expect(await listDriveWalletCaps(credentialActor(w.marcusId, null), w.productId, 'session')).toMatchObject({ ok: false, status: 403 });
 
     // Clearing restores "no cap" (unlimited within the wallet).
-    expect(await setDriveWalletCap(w.jonoId, w.productId, w.marcusId, null, 'session')).toMatchObject({ ok: true, caps: [] });
+    expect(await setDriveWalletCap(credentialActor(w.jonoId, null), w.productId, w.marcusId, null, 'session')).toMatchObject({ ok: true, caps: [] });
     expect(await capRow(w.productWalletId, w.marcusId)).toBeNull();
   });
 
@@ -179,17 +180,17 @@ describe('per-consumer caps on drive-wallet and seat legs (orgs on, real Postgre
     if (!dbAvailable) return;
     world = await build();
     const w = world;
-    expect(await setDriveWalletCap(w.jonoId, w.sideId, w.marcusId, {}, 'session')).toMatchObject({ ok: true, caps: [{ dailyCapCents: 50, monthlyCapCents: 1_000 }] });
-    expect(await setDriveWalletCap(w.marcusId, w.sideId, w.marcusId, { dailyCents: null }, 'session')).toMatchObject({ ok: false, status: 403 });
-    expect(await setDriveWalletCap(w.jonoId, w.sideId, w.anaId, {}, 'session')).toMatchObject({ ok: false, status: 404, code: 'not_a_consumer' });
-    expect(await setDriveWalletCap(w.jonoId, w.sideId, w.marcusId, { dailyCents: -1 }, 'session')).toMatchObject({ ok: false, status: 400, code: 'invalid_amount' });
+    expect(await setDriveWalletCap(credentialActor(w.jonoId, null), w.sideId, w.marcusId, {}, 'session')).toMatchObject({ ok: true, caps: [{ dailyCapCents: 50, monthlyCapCents: 1_000 }] });
+    expect(await setDriveWalletCap(credentialActor(w.marcusId, null), w.sideId, w.marcusId, { dailyCents: null }, 'session')).toMatchObject({ ok: false, status: 403 });
+    expect(await setDriveWalletCap(credentialActor(w.jonoId, null), w.sideId, w.anaId, {}, 'session')).toMatchObject({ ok: false, status: 404, code: 'not_a_consumer' });
+    expect(await setDriveWalletCap(credentialActor(w.jonoId, null), w.sideId, w.marcusId, { dailyCents: -1 }, 'session')).toMatchObject({ ok: false, status: 400, code: 'invalid_amount' });
   });
 
   it('WAL-7 (partial) a cap write re-checks the drive under its lock: a personal lead\'s write that crosses a move into an org is refused drive_moved and writes nothing', async () => {
     if (!dbAvailable) return;
     world = await build();
     const w = world;
-    const result = await setDriveWalletCap(w.jonoId, w.sideId, w.marcusId, { dailyCents: 40 }, 'session', {
+    const result = await setDriveWalletCap(credentialActor(w.jonoId, null), w.sideId, w.marcusId, { dailyCents: 40 }, 'session', {
       afterAccess: async () => {
         await db.update(drives).set({ orgId: w.orgId }).where(eq(drives.id, w.sideId));
       },
@@ -216,9 +217,9 @@ describe('per-consumer caps on drive-wallet and seat legs (orgs on, real Postgre
     if (!dbAvailable) return;
     world = await build();
     const w = world;
-    await setDriveWalletCap(w.anaId, w.productId, w.marcusId, { dailyCents: 30 }, 'session');
+    await setDriveWalletCap(credentialActor(w.anaId, null), w.productId, w.marcusId, { dailyCents: 30 }, 'session');
     await setSeatCap(w.jonoId, w.orgId, w.marcusId, { dailyCents: 40 });
-    await setDriveWalletCap(w.jonoId, w.sideId, w.marcusId, { dailyCents: 50 }, 'session');
+    await setDriveWalletCap(credentialActor(w.jonoId, null), w.sideId, w.marcusId, { dailyCents: 50 }, 'session');
     expect(await leaveOrganization(w.marcusId, w.orgId)).toMatchObject({ ok: true });
     expect(await capRow(w.productWalletId, w.marcusId)).toBeNull();
     expect(await capRow(w.poolId, w.marcusId)).toBeNull();
@@ -229,7 +230,7 @@ describe('per-consumer caps on drive-wallet and seat legs (orgs on, real Postgre
     if (!dbAvailable) return;
     world = await build();
     const w = world;
-    await setDriveWalletCap(w.anaId, w.productId, w.marcusId, { dailyCents: 30, monthlyCents: null }, 'session');
+    await setDriveWalletCap(credentialActor(w.anaId, null), w.productId, w.marcusId, { dailyCents: 30, monthlyCents: null }, 'session');
     await settledCall(w, w.productId, 0.2); // 30¢: the whole day's cap
 
     const refused = await canConsumeAI(w.marcusId, 'free', { spend: driveSpend(w.productId, 'drive_wallet'), estCostCents: 5 });
@@ -244,7 +245,7 @@ describe('per-consumer caps on drive-wallet and seat legs (orgs on, real Postgre
     if (!dbAvailable) return;
     world = await build();
     const w = world;
-    await setDriveWalletCap(w.anaId, w.productId, w.marcusId, { dailyCents: 30, monthlyCents: null }, 'session');
+    await setDriveWalletCap(credentialActor(w.anaId, null), w.productId, w.marcusId, { dailyCents: 30, monthlyCents: null }, 'session');
     await settledCall(w, w.productId, 0.2); // 30¢: the day's cap is spent
 
     const mention = await canConsumeAI(w.marcusId, 'free', { spend: personTriggeredSpend(w.productId), estCostCents: 5 });
@@ -262,7 +263,7 @@ describe('per-consumer caps on drive-wallet and seat legs (orgs on, real Postgre
     if (!dbAvailable) return;
     world = await build();
     const w = world;
-    await setDriveWalletCap(w.anaId, w.productId, w.marcusId, { dailyCents: 5, monthlyCents: null }, 'session');
+    await setDriveWalletCap(credentialActor(w.anaId, null), w.productId, w.marcusId, { dailyCents: 5, monthlyCents: null }, 'session');
     for (let run = 0; run < 3; run += 1) {
       const gates = await Promise.all(Array.from({ length: 10 }, () =>
         canConsumeAI(w.marcusId, 'free', { spend: driveSpend(w.productId, 'drive_wallet'), estCostCents: 5, maxInFlight: 50 })));
@@ -277,7 +278,7 @@ describe('per-consumer caps on drive-wallet and seat legs (orgs on, real Postgre
     world = await build();
     const w = world;
     // Lena leads Product and presses Run; an Admin capped her on Product's wallet.
-    await setDriveWalletCap(w.anaId, w.productId, w.lenaId, { dailyCents: 10, monthlyCents: null }, 'session');
+    await setDriveWalletCap(credentialActor(w.anaId, null), w.productId, w.lenaId, { dailyCents: 10, monthlyCents: null }, 'session');
     await db.insert(creditLedger).values({ userId: w.lenaId, walletId: w.productWalletId, entryType: 'usage', bucket: 'monthly', amountCents: -10, appliedCents: -10, chargeMillicents: 10_000, consumeStatus: 'applied' });
     // Exactly the gate call the Run route's admission makes (acquireWorkflowCreditHold, interactive, triggeredBy).
     const run = await canConsumeAI(w.lenaId, 'free', { spend: personTriggeredSpend(w.productId), estCostCents: 10, maxInFlight: 3 });
@@ -290,7 +291,7 @@ describe('per-consumer caps on drive-wallet and seat legs (orgs on, real Postgre
     world = await build();
     const w = world;
     // Lena leads Product and is capped there; Jono (the Owner, uncapped) created the workflow she keeps pressing Run on.
-    await setDriveWalletCap(w.anaId, w.productId, w.lenaId, { dailyCents: 40, monthlyCents: null }, 'session');
+    await setDriveWalletCap(credentialActor(w.anaId, null), w.productId, w.lenaId, { dailyCents: 40, monthlyCents: null }, 'session');
     let admitted = 0;
     let refused: Awaited<ReturnType<typeof canConsumeAI>> | null = null;
     for (let i = 0; i < 20; i += 1) {
@@ -316,7 +317,7 @@ describe('per-consumer caps on drive-wallet and seat legs (orgs on, real Postgre
     if (!dbAvailable) return;
     world = await build();
     const w = world;
-    await setDriveWalletCap(w.anaId, w.productId, w.marcusId, { dailyCents: 30, monthlyCents: null }, 'session');
+    await setDriveWalletCap(credentialActor(w.anaId, null), w.productId, w.marcusId, { dailyCents: 30, monthlyCents: null }, 'session');
     afterResolution.run = async () => {
       await db.insert(creditLedger).values({ userId: w.marcusId, walletId: w.productWalletId, entryType: 'usage', bucket: 'monthly', amountCents: -30, appliedCents: -30, chargeMillicents: 30_000, consumeStatus: 'applied' });
     };
@@ -329,7 +330,7 @@ describe('per-consumer caps on drive-wallet and seat legs (orgs on, real Postgre
     if (!dbAvailable) return;
     world = await build();
     const w = world;
-    await setDriveWalletCap(w.anaId, w.productId, w.marcusId, { dailyCents: 30, monthlyCents: null }, 'session');
+    await setDriveWalletCap(credentialActor(w.anaId, null), w.productId, w.marcusId, { dailyCents: 30, monthlyCents: null }, 'session');
     const marcusBefore = (await db.select().from(wallets).where(inArray(wallets.userId, [w.marcusId])))[0];
     await settledCall(w, w.productId, 1); // admitted at a 5¢ hold, settles at 150¢ — past the 30¢ cap
     const usage = (await db.select().from(creditLedger).where(and(eq(creditLedger.userId, w.marcusId), eq(creditLedger.entryType, 'usage'))))[0];
@@ -345,7 +346,7 @@ describe('per-consumer caps on drive-wallet and seat legs (orgs on, real Postgre
     if (!dbAvailable) return;
     world = await build();
     const w = world;
-    await setDriveWalletCap(w.anaId, w.productId, w.marcusId, { dailyCents: 100, monthlyCents: null }, 'session');
+    await setDriveWalletCap(credentialActor(w.anaId, null), w.productId, w.marcusId, { dailyCents: 100, monthlyCents: null }, 'session');
 
     await settledCall(w, w.productId, 0.3); // 45¢: below 80%
     expect(await capAlertsFor(w.jonoId)).toHaveLength(0);
@@ -380,7 +381,7 @@ describe('per-consumer caps on drive-wallet and seat legs (orgs on, real Postgre
     });
     try {
       await settledCall(w, w.productId, 0.02);
-      await setDriveWalletCap(w.anaId, w.productId, w.marcusId, { dailyCents: 500 }, 'session');
+      await setDriveWalletCap(credentialActor(w.anaId, null), w.productId, w.marcusId, { dailyCents: 500 }, 'session');
       await vi.waitFor(() => expect(sent.filter((m) => m.event === 'wallet:changed').length).toBeGreaterThanOrEqual(2));
       const walletEvents = sent.filter((m) => m.event === 'wallet:changed');
       expect(walletEvents.map((m) => [m.channelId, m.payload.change])).toEqual(expect.arrayContaining([
@@ -399,7 +400,7 @@ describe('per-consumer caps on drive-wallet and seat legs (orgs on, real Postgre
     if (!dbAvailable) return;
     world = await build();
     const w = world;
-    await setDriveWalletCap(w.anaId, w.productId, w.marcusId, { dailyCents: 50, monthlyCents: null }, 'session');
+    await setDriveWalletCap(credentialActor(w.anaId, null), w.productId, w.marcusId, { dailyCents: 50, monthlyCents: null }, 'session');
 
     // Marcus built a trigger that fires on his own actions; every fire is an automation recorded under him (its creator).
     const fire = () => canConsumeAI(w.marcusId, 'free', { spend: automationSpend(w.productId), estCostCents: 5, skipDailyCap: true });
@@ -432,7 +433,7 @@ describe('per-consumer caps on drive-wallet and seat legs (orgs on, real Postgre
     if (!dbAvailable) return;
     world = await build();
     const w = world;
-    await setDriveWalletCap(w.anaId, w.productId, w.marcusId, { dailyCents: 30, monthlyCents: null }, 'session');
+    await setDriveWalletCap(credentialActor(w.anaId, null), w.productId, w.marcusId, { dailyCents: 30, monthlyCents: null }, 'session');
     await settledCall(w, w.productId, 0.2); // 30¢: Marcus's day is spent
     const fire = () => canConsumeAI(w.marcusId, 'free', { spend: automationSpend(w.productId), estCostCents: 5, skipDailyCap: true });
     expect(await fire()).toMatchObject({ allowed: false, refusal: { reason: 'source_cap_reached' } });
@@ -464,7 +465,7 @@ describe('per-consumer caps on drive-wallet and seat legs (orgs on, real Postgre
     if (!dbAvailable) return;
     world = await build();
     const w = world;
-    await setDriveWalletCap(w.anaId, w.productId, w.marcusId, { dailyCents: 20, monthlyCents: null }, 'session');
+    await setDriveWalletCap(credentialActor(w.anaId, null), w.productId, w.marcusId, { dailyCents: 20, monthlyCents: null }, 'session');
     const [pending] = await db.insert(creditLedger).values({
       userId: w.marcusId, walletId: w.productWalletId, entryType: 'usage', bucket: 'monthly',
       amountCents: -30, chargeMillicents: 30_000, consumeStatus: 'pending',
@@ -477,7 +478,7 @@ describe('per-consumer caps on drive-wallet and seat legs (orgs on, real Postgre
     if (!dbAvailable) return;
     world = await build();
     const w = world;
-    await setDriveWalletCap(w.jonoId, w.sideId, w.marcusId, { dailyCents: 10, monthlyCents: null }, 'session');
+    await setDriveWalletCap(credentialActor(w.jonoId, null), w.sideId, w.marcusId, { dailyCents: 10, monthlyCents: null }, 'session');
     await settledCall(w, w.sideId, 0.1); // 15¢ ≥ 10¢: 80% and 100%
     expect(await capAlertsFor(w.jonoId)).toHaveLength(2);
     // The same spend seen from tomorrow is a new day's window with nothing spent in it.

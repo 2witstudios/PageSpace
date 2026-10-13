@@ -23,10 +23,12 @@ vi.mock('@pagespace/db/schema/core', () => ({
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
     canUserViewPage: vi.fn(),
     getUserAccessLevel: vi.fn(),
 }));
 vi.mock('../actor-permissions', () => ({
+  toolActor: (ctx: { userId: string; accessActor?: unknown }) => ctx.accessActor ?? { via: 'credential', userId: ctx.userId, authentication: null },
   canActorViewPage: vi.fn(),
   canActorConsultAgent: vi.fn(),
   canActorEditPage: vi.fn(),
@@ -201,6 +203,7 @@ import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 import { prepareHistoryForModel, finishModelRequest } from '../../core/context-assembly';
 import { runCompaction } from '../../core/compaction/compaction-service';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const mockDb = vi.mocked(db);
 const mockCanActorViewPage = vi.mocked(canActorViewPage);
@@ -243,7 +246,7 @@ describe('agent-communication-tools', () => {
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       const result = await agentCommunicationTools.list_agents!.execute!(
@@ -283,7 +286,7 @@ describe('agent-communication-tools', () => {
         toolCallId: '1',
         messages: [],
         experimental_context: {
-          userId: 'user_1',
+          userId: 'user_1', accessActor: credentialActor('user_1', null),
           chatSource: { type: 'page' as const, agentPageId: 'agent_1' },
         } as ToolExecutionContext,
       };
@@ -314,7 +317,7 @@ describe('agent-communication-tools', () => {
         toolCallId: '1',
         messages: [],
         experimental_context: {
-          userId: 'user_1',
+          userId: 'user_1', accessActor: credentialActor('user_1', null),
           chatSource: { type: 'page' as const, agentPageId: 'agent_1' },
         } as ToolExecutionContext,
       };
@@ -325,7 +328,7 @@ describe('agent-communication-tools', () => {
       );
 
       expect(listAgentDrives).not.toHaveBeenCalled();
-      expect(listAccessibleDrives).toHaveBeenCalledWith('user_1');
+      expect(listAccessibleDrives).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user_1' }));
       // Not just owned drives — a drive reached only via membership/page-permission
       // must be scanned too (the bug this test guards against): both d1 and d2
       // must reach the per-drive agent scan, not just the owned one.
@@ -344,7 +347,7 @@ describe('agent-communication-tools', () => {
       const context = {
         toolCallId: '1',
         messages: [],
-        experimental_context: { userId: 'user_1' } as ToolExecutionContext,
+        experimental_context: { userId: 'user_1' , accessActor: credentialActor('user_1', null)} as ToolExecutionContext,
       };
 
       await agentCommunicationTools.multi_drive_list_agents!.execute!(
@@ -353,7 +356,7 @@ describe('agent-communication-tools', () => {
       );
 
       expect(listAgentDrives).not.toHaveBeenCalled();
-      expect(listAccessibleDrives).toHaveBeenCalledWith('user_1');
+      expect(listAccessibleDrives).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user_1' }));
     });
 
   });
@@ -404,7 +407,7 @@ describe('agent-communication-tools', () => {
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       const result = await executeAskAgent(
@@ -436,7 +439,7 @@ describe('agent-communication-tools', () => {
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       const result = await executeAskAgent(
@@ -470,7 +473,7 @@ describe('agent-communication-tools', () => {
       mockCanActorConsultAgent.mockResolvedValue(true);
 
       const experimental_context = {
-        userId: 'user-123',
+        userId: 'user-123', accessActor: credentialActor('user-123', null),
         locationContext: { currentDrive: { id: 'drive-1', name: 'D', slug: 'd' } },
       } as ToolExecutionContext;
 
@@ -495,7 +498,7 @@ describe('agent-communication-tools', () => {
       const context = {
         toolCallId: '1', messages: [],
         experimental_context: {
-          userId: 'user-123',
+          userId: 'user-123', accessActor: credentialActor('user-123', null),
           agentCallDepth: 2, // MAX_AGENT_DEPTH
         } as ToolExecutionContext & { agentCallDepth: number },
       };
@@ -538,7 +541,7 @@ describe('agent-communication-tools', () => {
           {
             toolCallId: '1',
             messages: [],
-            experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+            experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
           }
         );
         const call = vi.mocked(generateText).mock.calls.at(-1)?.[0] as { tools?: Record<string, unknown> };
@@ -588,7 +591,7 @@ describe('agent-communication-tools', () => {
           toolCallId: '1',
           messages: [],
           experimental_context: {
-            userId: 'user-123',
+            userId: 'user-123', accessActor: credentialActor('user-123', null),
           } as ToolExecutionContext,
         };
 
@@ -623,7 +626,7 @@ describe('agent-communication-tools', () => {
           toolCallId: '1',
           messages: [],
           experimental_context: {
-            userId: 'user-123',
+            userId: 'user-123', accessActor: credentialActor('user-123', null),
             locationContext: {
               currentPage: { id: parentAgentPageId, title: 'Parent Agent', type: 'AI_CHAT' },
               currentDrive: { id: 'drive-1', name: 'Test Drive', slug: 'test' },
@@ -655,7 +658,7 @@ describe('agent-communication-tools', () => {
           toolCallId: '1',
           messages: [],
           experimental_context: {
-            userId: 'user-123',
+            userId: 'user-123', accessActor: credentialActor('user-123', null),
             agentChain: ['root-agent'],
           } as ToolExecutionContext,
         };
@@ -684,7 +687,7 @@ describe('agent-communication-tools', () => {
           toolCallId: '1',
           messages: [],
           experimental_context: {
-            userId: 'user-123',
+            userId: 'user-123', accessActor: credentialActor('user-123', null),
           } as ToolExecutionContext,
         };
 
@@ -712,7 +715,7 @@ describe('agent-communication-tools', () => {
           toolCallId: '1',
           messages: [],
           experimental_context: {
-            userId: 'user-123',
+            userId: 'user-123', accessActor: credentialActor('user-123', null),
             conversationId: parentConversationId,
           } as ToolExecutionContext,
         };
@@ -742,7 +745,7 @@ describe('agent-communication-tools', () => {
           toolCallId: '1',
           messages: [],
           experimental_context: {
-            userId: 'user-123',
+            userId: 'user-123', accessActor: credentialActor('user-123', null),
             agentChain: existingChain,
           } as ToolExecutionContext,
         };
@@ -771,7 +774,7 @@ describe('agent-communication-tools', () => {
           toolCallId: '1',
           messages: [],
           experimental_context: {
-            userId: 'user-123',
+            userId: 'user-123', accessActor: credentialActor('user-123', null),
             // No agentChain
           } as ToolExecutionContext,
         };
@@ -799,7 +802,7 @@ describe('agent-communication-tools', () => {
           toolCallId: '1',
           messages: [],
           experimental_context: {
-            userId: 'user-123',
+            userId: 'user-123', accessActor: credentialActor('user-123', null),
             agentCallDepth: 1,
           } as ToolExecutionContext & { agentCallDepth: number },
         };
@@ -846,7 +849,7 @@ describe('agent-communication-tools', () => {
           toolCallId: '1',
           messages: [],
           experimental_context: {
-            userId: 'user-123',
+            userId: 'user-123', accessActor: credentialActor('user-123', null),
             locationContext: {
               currentPage: { id: sourceAgentPageId, title: 'Global Assistant', type: 'AI_CHAT' },
               currentDrive: { id: 'drive-1', name: 'Test Drive', slug: 'test' },
@@ -879,7 +882,7 @@ describe('agent-communication-tools', () => {
           toolCallId: '1',
           messages: [],
           experimental_context: {
-            userId: 'user-123',
+            userId: 'user-123', accessActor: credentialActor('user-123', null),
             locationContext: {
               currentPage: { id: 'doc-page-id', title: 'Some Document', type: 'DOCUMENT' },
               currentDrive: { id: 'drive-1', name: 'Test Drive', slug: 'test' },
@@ -912,7 +915,7 @@ describe('agent-communication-tools', () => {
           toolCallId: '1',
           messages: [],
           experimental_context: {
-            userId: 'user-123',
+            userId: 'user-123', accessActor: credentialActor('user-123', null),
             // No locationContext
           } as ToolExecutionContext,
         };
@@ -959,7 +962,7 @@ describe('agent-communication-tools', () => {
         const context = {
           toolCallId: '1',
           messages: [],
-          experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+          experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
         };
 
         await executeAskAgent(
@@ -982,7 +985,7 @@ describe('agent-communication-tools', () => {
         const context = {
           toolCallId: '1',
           messages: [],
-          experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+          experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
         };
 
         await executeAskAgent(
@@ -1059,7 +1062,7 @@ describe('agent-communication-tools', () => {
 
         const context = {
           toolCallId: '1', messages: [],
-          experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+          experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
         };
         await executeAskAgent(
           { agentPath: '/test/agent', agentId: 'agent-1', question: 'Test question' },
@@ -1111,7 +1114,7 @@ describe('agent-communication-tools', () => {
 
         const context = {
           toolCallId: '1', messages: [],
-          experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+          experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
         };
         await executeAskAgent(
           { agentPath: '/test/agent', agentId: 'agent-1', question: 'Test question' },
@@ -1154,7 +1157,7 @@ describe('agent-communication-tools', () => {
           {
             toolCallId: '1', messages: [],
             experimental_context: {
-              userId: 'user-123',
+              userId: 'user-123', accessActor: credentialActor('user-123', null),
               creditSpend: { spend: { kind: 'automation', driveId: 'drive-1' }, walletId: 'w-drive-1' },
             } as ToolExecutionContext,
           },
@@ -1199,7 +1202,7 @@ describe('agent-communication-tools', () => {
           {
             toolCallId: '1', messages: [],
             experimental_context: {
-              userId: 'user-creator',
+              userId: 'user-creator', accessActor: credentialActor('user-creator', null),
               creditSpend: { spend: { kind: 'automation', driveId: 'drive-1' }, walletId: 'w-drive-1', userId: 'user-presser' },
             } as ToolExecutionContext,
           },
@@ -1212,7 +1215,7 @@ describe('agent-communication-tools', () => {
       it('SPEND-8 (partial) an ask_agent call with no gated caller plans its compaction on personal credits', async () => {
         await executeAskAgent(
           { agentPath: '/test/agent', agentId: 'agent-1', question: 'Test question' },
-          { toolCallId: '1', messages: [], experimental_context: { userId: 'user-123' } as ToolExecutionContext },
+          { toolCallId: '1', messages: [], experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext },
         );
         expect(vi.mocked(prepareHistoryForModel).mock.calls[0][0].spend).toEqual({ kind: 'personal' });
       });
@@ -1252,6 +1255,27 @@ describe('agent-communication-tools', () => {
         expect(AIMonitoring.trackUsage).not.toHaveBeenCalled();
       });
 
+      it('WAL-6 (partial) a channel mention reply is reserved ONCE: the responder\'s hold is settled by the reply, never doubled by a second reservation, and nothing nested inside reuses it', async () => {
+        // The wallet can afford the reply once: a second reservation would be refused.
+        mockGateUserCall.mockResolvedValue({ allowed: false, reason: 'source_refused', refusal: { source: 'drive_wallet', reason: 'source_empty', options: [] } });
+        const mentionSpend = { kind: 'automation' as const, driveId: 'drive-1', personPresent: true as const };
+
+        const result = await executeAskAgent(
+          { agentPath: '/test/agent', agentId: 'agent-1', question: 'Test question' },
+          {
+            toolCallId: '1', messages: [],
+            experimental_context: { userId: 'user-123', creditSpend: { spend: mentionSpend, walletId: 'w-drive-1', reservedHoldId: 'hold-mention' } } as ToolExecutionContext,
+          },
+        );
+
+        expect(result).toMatchObject({ success: true });
+        expect(mockGateUserCall).not.toHaveBeenCalled();
+        expect(AIMonitoring.trackUsage).toHaveBeenCalledWith(expect.objectContaining({ holdId: 'hold-mention', walletId: 'w-drive-1' }));
+        const nested = (vi.mocked(generateText).mock.calls[0][0] as { experimental_context: ToolExecutionContext }).experimental_context;
+        expect(nested.creditSpend?.reservedHoldId).toBeUndefined();
+        expect(nested.creditSpend?.walletId).toBe('w-drive-1');
+      });
+
       it('a sub-agent run that fails before the settle releases its hold at once', async () => {
         vi.mocked(generateText).mockRejectedValueOnce(new Error('provider down'));
 
@@ -1289,7 +1313,7 @@ describe('agent-communication-tools', () => {
         const context = {
           toolCallId: '1',
           messages: [],
-          experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+          experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
         };
 
         await executeAskAgent(
@@ -1312,7 +1336,7 @@ describe('agent-communication-tools', () => {
         const context = {
           toolCallId: '1',
           messages: [],
-          experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+          experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
         };
 
         // Should not throw — error is caught and logged
@@ -1368,7 +1392,7 @@ describe('agent-communication-tools', () => {
         const context = {
           toolCallId: '1',
           messages: [],
-          experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+          experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
         };
 
         await executeAskAgent(
@@ -1397,7 +1421,7 @@ describe('agent-communication-tools', () => {
         const context = {
           toolCallId: '1',
           messages: [],
-          experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+          experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
         };
 
         await executeAskAgent(
@@ -1442,7 +1466,7 @@ describe('agent-communication-tools', () => {
           toolCallId: '1',
           messages: [],
           experimental_context: {
-            userId: 'user-123',
+            userId: 'user-123', accessActor: credentialActor('user-123', null),
             mcpAllowedDriveIds: ['drive-1'],
           } as ToolExecutionContext,
         };
@@ -1465,7 +1489,7 @@ describe('agent-communication-tools', () => {
         const context = {
           toolCallId: '1',
           messages: [],
-          experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+          experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
         };
 
         await executeAskAgent(
@@ -1501,7 +1525,7 @@ describe('agent-communication-tools', () => {
         const context = {
           toolCallId: '1',
           messages: [],
-          experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+          experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
         };
 
         await executeAskAgent(
@@ -1556,7 +1580,7 @@ describe('agent-communication-tools', () => {
         const context = {
           toolCallId: '1',
           messages: [],
-          experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+          experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
         };
 
         await executeAskAgent(
@@ -1599,7 +1623,7 @@ describe('agent-communication-tools', () => {
         const context = {
           toolCallId: '1',
           messages: [],
-          experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+          experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
         };
 
         await executeAskAgent(
@@ -1647,7 +1671,7 @@ describe('agent-communication-tools', () => {
         const context = {
           toolCallId: '1',
           messages: [],
-          experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+          experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
         };
 
         await executeAskAgent(
@@ -1665,7 +1689,7 @@ describe('agent-communication-tools', () => {
         const context = {
           toolCallId: '1',
           messages: [],
-          experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+          experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
         };
 
         await executeAskAgent(
@@ -1687,7 +1711,7 @@ describe('agent-communication-tools', () => {
           toolCallId: '1',
           messages: [],
           experimental_context: {
-            userId: 'user-123',
+            userId: 'user-123', accessActor: credentialActor('user-123', null),
             mcpAllowedDriveIds: ['drive-home'],
           } as ToolExecutionContext,
         };

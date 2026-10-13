@@ -20,6 +20,8 @@ import { isGuestRole } from './guest-role';
 import { applyOpenDriveFloor } from './open-drive-floor';
 import { ORGS_ENABLED } from '../organizations/orgs-enabled';
 import type { OpenRoleFloor } from '../organizations/policies-core';
+import type { AccessActor, OrgAuthenticationDenialCode } from './access-actor';
+import { checkActorDriveAuthentication, checkActorResourceAuthentication, dropWithheldDerivedPages, explainOrgAuthenticationDenial, filterDrivesForActor, filterResourcesForActor } from './actor-authentication';
 
 /**
  * Permission level for a single page.
@@ -46,11 +48,155 @@ export interface DrivePermissionLevel {
   canEdit: boolean;
 }
 
+// ---------------------------------------------------------------------------
+// The access API (D-OW-45). Every question about what THE CALLER may open takes an AccessActor, and the
+// org's sign-in policy (SEC-2/3) is asked first: a credential that fails it has no access to that org's
+// drives, exactly as a non-member has none (explainSignInRefusal names the reason for a route).
+// The userId-only resolvers below are module-private, so no caller can skip the policy; questions about
+// third parties (getUsersWhoCanViewPage, usersShareDrive) take user ids because no one is opening anything.
+// ---------------------------------------------------------------------------
+
+/**
+ * Why the actor was refused a page or drive, when the org's sign-in policy is the reason AND the person would
+ * otherwise reach it: the code a route or socket returns so they can sign in again (or with a passkey). Null when
+ * sign-in policy is not why — including for someone the resource would refuse anyway, so the code is never an
+ * oracle for what exists in an org they do not belong to.
+ */
+export async function explainSignInRefusal(actor: AccessActor, resourceId: string): Promise<OrgAuthenticationDenialCode | null> {
+  const code = await explainOrgAuthenticationDenial(actor, resourceId);
+  if (code === null) return null;
+  const held = (await resolveAccessLevel(actor.userId, resourceId)) !== null || (await resolveDriveAccess(actor.userId, resourceId));
+  return held ? code : null;
+}
+
+/**
+ * Get all drive IDs the actor can open
+ * Includes owned drives, member drives, and drives with page permissions
+ */
+export async function getDriveIdsForUser(actor: AccessActor): Promise<string[]> {
+  const driveIds = await resolveDriveIdsForUser(actor.userId);
+  const allowed = await filterDrivesForActor(actor, driveIds);
+  return driveIds.filter((id) => allowed.has(id));
+}
+
+/**
+ * The actor's access level for a page or drive (drive-as-root-node). See resolveAccessLevel.
+ * @returns Permission object or null if no access / invalid input
+ */
+export async function getUserAccessLevel(
+  actor: AccessActor,
+  pageId: unknown,
+  options: { silent?: boolean } = {}
+): Promise<PermissionLevel | null> {
+  const pageIdResult = parsePageId(pageId);
+  // An invalid id opens nothing; the resolver logs why (when not silent) and refuses it without a query.
+  if (!pageIdResult.success) return resolveAccessLevel(actor.userId, pageId, options);
+  if (!(await checkActorResourceAuthentication(actor, pageIdResult.data)).allowed) return null;
+  return resolveAccessLevel(actor.userId, pageIdResult.data, options);
+}
+
+/** Check if the actor can view a page */
+export async function canUserViewPage(actor: AccessActor, pageId: string): Promise<boolean> {
+  const perms = await getUserAccessLevel(actor, pageId);
+  return perms?.canView ?? false;
+}
+
+/** Check if the actor can edit a page */
+export async function canUserEditPage(actor: AccessActor, pageId: string): Promise<boolean> {
+  const perms = await getUserAccessLevel(actor, pageId);
+  return perms?.canEdit ?? false;
+}
+
+/** Check if the actor can share a page */
+export async function canUserSharePage(actor: AccessActor, pageId: string): Promise<boolean> {
+  const perms = await getUserAccessLevel(actor, pageId);
+  return perms?.canShare ?? false;
+}
+
+/** Check if the actor can delete a page */
+export async function canUserDeletePage(actor: AccessActor, pageId: string): Promise<boolean> {
+  const perms = await getUserAccessLevel(actor, pageId);
+  return perms?.canDelete ?? false;
+}
+
+/** Whether the actor owns or administers the drive */
+export async function isDriveOwnerOrAdmin(actor: AccessActor, driveId: string): Promise<boolean> {
+  if (!(await checkActorDriveAuthentication(actor, driveId)).allowed) return false;
+  return resolveIsDriveOwnerOrAdmin(actor.userId, driveId);
+}
+
+/** Whether the actor is a member of the drive (accepted members only; a GUEST is not a member) */
+export async function isUserDriveMember(actor: AccessActor, driveId: string): Promise<boolean> {
+  if (!(await checkActorDriveAuthentication(actor, driveId)).allowed) return false;
+  return resolveIsDriveMember(actor.userId, driveId);
+}
+
+/** Every page id the actor can view in the drive */
+export async function getUserAccessiblePagesInDrive(actor: AccessActor, driveId: string): Promise<string[]> {
+  if (!(await checkActorDriveAuthentication(actor, driveId)).allowed) return [];
+  return dropWithheldDerivedPages(actor, await resolveAccessiblePagesInDrive(actor.userId, driveId));
+}
+
+/** Every page the actor can view in the drive, with its details and the actor's permissions on it */
+export async function getUserAccessiblePagesInDriveWithDetails(actor: AccessActor, driveId: string): Promise<PageWithPermissions[]> {
+  if (!(await checkActorDriveAuthentication(actor, driveId)).allowed) return [];
+  const listed = await resolveAccessiblePagesInDriveWithDetails(actor.userId, driveId);
+  const readable = new Set(await dropWithheldDerivedPages(actor, listed.map((page) => page.id)));
+  return listed.filter((page) => readable.has(page.id));
+}
+
+/** Whether the actor reaches the drive at all: its owner, a member, or a holder of a page grant in it */
+export async function getUserDriveAccess(
+  actor: AccessActor,
+  driveId: string,
+  options: { silent?: boolean } = {}
+): Promise<boolean> {
+  if (!(await checkActorDriveAuthentication(actor, driveId)).allowed) return false;
+  return resolveDriveAccess(actor.userId, driveId, options);
+}
+
+/** The actor's granular drive-level permissions; page collaborators are not drive members (null) */
+export async function getUserDrivePermissions(
+  actor: AccessActor,
+  driveId: string,
+  options: { silent?: boolean } = {}
+): Promise<DrivePermissionLevel | null> {
+  if (!(await checkActorDriveAuthentication(actor, driveId)).allowed) return null;
+  return resolveDrivePermissions(actor.userId, driveId, options);
+}
+
+/**
+ * Batch page permissions for the actor: an entry for every requested id, all-false where the actor has no
+ * access (including pages in an org drive whose sign-in policy the actor's credential fails).
+ */
+export async function getBatchPagePermissions(actor: AccessActor, pageIds: string[]): Promise<Map<string, PermissionLevel>> {
+  const allowed = await filterResourcesForActor(actor, pageIds);
+  const results = await resolveBatchPagePermissions(actor.userId, pageIds.filter((id) => allowed.has(id)));
+  for (const pageId of pageIds) {
+    if (!allowed.has(pageId)) results.set(pageId, { canView: false, canEdit: false, canShare: false, canDelete: false });
+  }
+  return results;
+}
+
+/**
+ * THIRD-PARTY facts: what a person HOLDS, asked about someone who is not presenting a credential right now —
+ * re-checking a donor inside the donation's own transaction, recapping what someone granted, an admin viewing the
+ * grants of a member. No sign-in policy is asked, because no one is opening content. The guard test pins each importer;
+ * content access for the caller goes through the actor API above.
+ */
+export async function getGrantedAccessLevel(userId: string, resourceId: string): Promise<PermissionLevel | null> {
+  return resolveAccessLevel(userId, resourceId);
+}
+
+export async function holdsDriveAccess(userId: string, driveId: string): Promise<boolean> {
+  return resolveDriveAccess(userId, driveId);
+}
+
 /**
  * Get all drive IDs that a user has access to
  * Includes owned drives, member drives, and drives with page permissions
  */
-export async function getDriveIdsForUser(userId: string): Promise<string[]> {
+async function resolveDriveIdsForUser(userId: string): Promise<string[]> {
   if (ORGS_ENABLED) return getDriveIdsForUserWithOrgs(userId);
 
   const driveIdSet = new Set<string>();
@@ -188,7 +334,7 @@ const VIEW_ONLY: PermissionLevel = { canView: true, canEdit: false, canShare: fa
  * @param options.silent - If false, log debug messages (default: true)
  * @returns Permission object or null if no access / invalid input
  */
-export async function getUserAccessLevel(
+async function resolveAccessLevel(
   userId: unknown,
   pageId: unknown,
   options: { silent?: boolean } = {}
@@ -416,41 +562,9 @@ async function resolveNonAdminPageAccess({
 }
 
 /**
- * Check if user can view a page
- */
-export async function canUserViewPage(userId: string, pageId: string): Promise<boolean> {
-  const perms = await getUserAccessLevel(userId, pageId);
-  return perms?.canView ?? false;
-}
-
-/**
- * Check if user can edit a page
- */
-export async function canUserEditPage(userId: string, pageId: string): Promise<boolean> {
-  const perms = await getUserAccessLevel(userId, pageId);
-  return perms?.canEdit ?? false;
-}
-
-/**
- * Check if user can share a page
- */
-export async function canUserSharePage(userId: string, pageId: string): Promise<boolean> {
-  const perms = await getUserAccessLevel(userId, pageId);
-  return perms?.canShare ?? false;
-}
-
-/**
- * Check if user can delete a page
- */
-export async function canUserDeletePage(userId: string, pageId: string): Promise<boolean> {
-  const perms = await getUserAccessLevel(userId, pageId);
-  return perms?.canDelete ?? false;
-}
-
-/**
  * Check if user is owner or admin of a drive
  */
-export async function isDriveOwnerOrAdmin(
+async function resolveIsDriveOwnerOrAdmin(
   userId: string,
   driveId: string
 ): Promise<boolean> {
@@ -471,7 +585,7 @@ export async function isDriveOwnerOrAdmin(
  * Check if user is a member of a drive (accepted members only). A GUEST is not
  * a member: they hold pages in the drive, not the drive.
  */
-export async function isUserDriveMember(
+async function resolveIsDriveMember(
   userId: string,
   driveId: string
 ): Promise<boolean> {
@@ -489,7 +603,7 @@ export async function isUserDriveMember(
 /**
  * Get all pages a user has access to in a drive
  */
-export async function getUserAccessiblePagesInDrive(
+async function resolveAccessiblePagesInDrive(
   userId: string,
   driveId: string
 ): Promise<string[]> {
@@ -607,7 +721,7 @@ export type PageWithPermissions = {
  * Get all pages a user has access to in a drive with full page details and permissions
  * Optimized to avoid N+1 queries by using batch permission checks
  */
-export async function getUserAccessiblePagesInDriveWithDetails(
+async function resolveAccessiblePagesInDriveWithDetails(
   userId: string,
   driveId: string
 ): Promise<PageWithPermissions[]> {
@@ -797,7 +911,7 @@ export async function getUserAccessiblePagesInDriveWithDetails(
  * Returns true when the user owns the drive, is a drive member, or has
  * page-level permissions within the drive.
  */
-export async function getUserDriveAccess(
+async function resolveDriveAccess(
   userId: string,
   driveId: string,
   options: { silent?: boolean } = {}
@@ -888,7 +1002,7 @@ export async function getUserDriveAccess(
  * validation where we need to distinguish owner / admin / member / viewer /
  * page-collaborator.
  */
-export async function getUserDrivePermissions(
+async function resolveDrivePermissions(
   userId: string,
   driveId: string,
   options: { silent?: boolean } = {}
@@ -1262,7 +1376,7 @@ async function fetchRolePermissionsById(
  * `map.get(pageId)?.canView` without conditional-path handling for missing
  * entries.
  */
-export async function getBatchPagePermissions(
+async function resolveBatchPagePermissions(
   userId: string,
   pageIds: string[]
 ): Promise<Map<string, PermissionLevel>> {

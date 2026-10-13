@@ -16,6 +16,7 @@ import { eq } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -29,7 +30,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
 
   try {
     // Check authorization
-    const canView = await permissionManagementService.canUserViewPermissions(userId, pageId);
+    const canView = await permissionManagementService.canUserViewPermissions(actorFromAuth(auth), pageId);
     if (!canView) {
       loggers.api.warn('Unauthorized permission list access attempt', { userId, pageId });
       return NextResponse.json(

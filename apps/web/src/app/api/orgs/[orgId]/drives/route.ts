@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { listOrgDriveDirectory } from '@pagespace/lib/permissions/org-drive-directory';
-import { authorizeOrgRequest, ORG_TOKEN_READ_AUTH } from '@/lib/orgs/org-route-auth';
+import { authorizeOrgRequest, ORG_TOKEN_DIRECTORY_AUTH } from '@/lib/orgs/org-route-auth';
 
 /**
  * GET /api/orgs/[orgId]/drives — the org Drives directory (DRV-6): every drive of the org the caller
@@ -13,7 +13,7 @@ import { authorizeOrgRequest, ORG_TOKEN_READ_AUTH } from '@/lib/orgs/org-route-a
  */
 export async function GET(request: Request, context: { params: Promise<{ orgId: string }> }) {
   const { orgId } = await context.params;
-  const gate = await authorizeOrgRequest(request, orgId, 'MEMBER', ORG_TOKEN_READ_AUTH);
+  const gate = await authorizeOrgRequest(request, orgId, 'MEMBER', ORG_TOKEN_DIRECTORY_AUTH);
   if (!gate.ok) return gate.response;
   try {
     const listed = await listOrgDriveDirectory(orgId, gate.userId);

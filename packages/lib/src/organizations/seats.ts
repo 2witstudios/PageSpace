@@ -32,12 +32,14 @@
  */
 
 import type { OrgRole } from '@pagespace/db/schema/organizations';
+import { holdsOrgRole } from './authorize-core';
 
 /**
  * How long before the billing period's end a freed seat is handed back. The renewal invoice
  * is created at the boundary, so the quantity must be lowered before it; the sweep that does
  * it runs every 15 minutes (docker/cron/crontab), so the window holds several ticks. A re-add
- * inside this last hour pays the pro-rata of that hour, not a month.
+ * inside this last hour, after the release ran, raises the quantity back with NO proration
+ * (decideSeatAdmission): the seat was paid for this period, so re-adding never charges (SEAT-5).
  */
 export const SEAT_RELEASE_LEAD_MS = 60 * 60 * 1000;
 
@@ -58,14 +60,49 @@ export function seatQuantity(input: { members: number; pendingInvites: number; i
 
 export type SeatAdmissionDecision =
   | { action: 'admit' }
-  | { action: 'raise'; toExtra: number }
-  | { action: 'refuse'; reason: 'auto_add_off'; purchased: number; held: number };
+  | { action: 'raise'; toExtra: number; proration: SeatReleaseProration }
+  | { action: 'refuse'; reason: SeatRefusalReason; purchased: number; held: number };
+
+/**
+ * Why no seat could be granted: auto-add is off, the org is on an admin gift whose seat
+ * count is pinned (D-OW-54) — a gift is never raised, whatever auto-add says — or the raise
+ * was asked for by a delegated credential ([D-OW-26]: a key never buys a seat).
+ */
+export type SeatRefusalReason = 'auto_add_off' | 'gifted_seats_full' | 'delegated_raise';
+
+/** The live subscription's period as the release sweep left it; null with no live subscription. */
+export interface SeatPeriod {
+  end: Date | null;
+  /** The last boundary the release sweep reconciled (org_subscriptions.seatsReconciledThrough). */
+  reconciledThrough: Date | null;
+}
+
+/**
+ * SEAT-5: has the release already handed back this period's unused seats? True from the
+ * release (up to {@link SEAT_RELEASE_LEAD_MS} before the end) until the boundary itself: the
+ * period end is recorded as reconciled, and it is still in the future.
+ */
+function releasedBeforeBoundary(period: SeatPeriod | null, now: Date): boolean {
+  if (!period || period.end === null || period.reconciledThrough === null) return false;
+  const endMs = period.end.getTime();
+  return period.reconciledThrough.getTime() >= endMs && now.getTime() < endMs;
+}
 
 /**
  * May ONE more seat be taken? `held` is the count BEFORE this seat (read under the org's
  * billing lock, so it is the truth the decision and the write both see). `purchasedExtra` is
  * the quantity Stripe was last set to, 0 while the org has no live subscription yet (its
  * provisioning prices the real count when it happens, D1).
+ *
+ * A raise is prorated (SEAT-4) — except in the last stretch of a period after the release has
+ * already lowered the quantity for the coming boundary: those seats were paid for this period,
+ * so raising back is free now and Stripe bills the count from the renewal (SEAT-5). Such a
+ * raise can exceed what was released only by seats bought inside that same last hour, whose
+ * pro-rata is not charged either (in the customer's favour, never against them).
+ *
+ * [D-OW-26] A raise is a money move (a prorated Stripe charge), so a delegated credential (an MCP/CLI
+ * key) is never admitted one: past the purchased seats it is refused as `delegated_raise`; within
+ * them it is admitted like a session.
  */
 export function decideSeatAdmission(input: {
   held: number;
@@ -73,15 +110,29 @@ export function decideSeatAdmission(input: {
   purchasedExtra: number;
   autoAdd: boolean;
   billingEnabled: boolean;
+  period: SeatPeriod | null;
+  now: Date;
+  /** The extra seats an admin gift pins (org_subscriptions.giftedExtraSeats); null when not gifted. */
+  giftedExtraSeats: number | null;
+  credential: 'session' | 'mcp';
 }): SeatAdmissionDecision {
   if (!input.billingEnabled) return { action: 'admit' };
   assertCount('held', input.held);
   assertCount('purchasedExtra', input.purchasedExtra);
-  const purchased = input.included + input.purchasedExtra;
   const after = input.held + 1;
+  if (input.giftedExtraSeats !== null) {
+    // D-OW-54: the gift is for the seats the admin pinned. Auto-add would buy seats the
+    // coupon makes free, so past the pin the invite is refused instead.
+    assertCount('giftedExtraSeats', input.giftedExtraSeats);
+    const gifted = input.included + input.giftedExtraSeats;
+    return after <= gifted ? { action: 'admit' } : { action: 'refuse', reason: 'gifted_seats_full', purchased: gifted, held: input.held };
+  }
+  const purchased = input.included + input.purchasedExtra;
   if (after <= purchased) return { action: 'admit' };
   if (!input.autoAdd) return { action: 'refuse', reason: 'auto_add_off', purchased, held: input.held };
-  return { action: 'raise', toExtra: Math.max(0, after - input.included) };
+  if (input.credential !== 'session') return { action: 'refuse', reason: 'delegated_raise', purchased, held: input.held };
+  const proration: SeatReleaseProration = releasedBeforeBoundary(input.period, input.now) ? 'none' : 'create_prorations';
+  return { action: 'raise', toExtra: Math.max(0, after - input.included), proration };
 }
 
 export type SeatReleaseProration = 'none' | 'create_prorations';
@@ -116,6 +167,8 @@ export function decideSeatRelease(input: {
   reconciledThrough?: Date | null;
   now: Date;
   leadMs?: number;
+  /** D-OW-54: a gift pins the seat item at this many extra seats; null when not gifted. */
+  giftedExtraSeats: number | null;
 }): SeatReleaseDecision {
   assertCount('held', input.held);
   assertCount('purchasedExtra', input.purchasedExtra);
@@ -148,7 +201,7 @@ export function decideSeatRelease(input: {
     return { action: 'keep', reason: 'mid_period' };
   }
 
-  const needed = Math.max(0, input.held - input.included);
+  const needed = input.giftedExtraSeats ?? Math.max(0, input.held - input.included);
   if (needed === input.purchasedExtra) return { action: 'keep', reason: 'nothing_unused', boundary };
   return needed < input.purchasedExtra
     ? { action: 'release', toExtra: needed, proration, boundary }
@@ -157,13 +210,24 @@ export function decideSeatRelease(input: {
 
 /**
  * What the person who tried to invite sees when no seat can be granted (SEAT-4). No price and
- * no credit figure (MON-5). An Owner is told how to fix it; an Admin is told to ask the Owner (the
- * refusal is audited by the route; an in-app Owner notification needs a NotificationType value).
+ * no credit figure (MON-5). An Owner is told how to fix it; anyone else is told to ask the Owner
+ * (the refusal is audited by the route). The seat COUNT is billing information, visible to the
+ * Owner and Admins only (SEAT-6): a Member (an invite POL-5 allows, or a domain auto-join) is
+ * told every seat is taken, never how many there are.
  */
-export function seatRefusalMessage(input: { purchased: number; held: number; actorRole: OrgRole }): string {
+export function seatRefusalMessage(input: { purchased: number; held: number; actorRole: OrgRole; reason?: SeatRefusalReason }): string {
   const plural = input.purchased === 1 ? 'seat' : 'seats';
-  const state = `All ${input.purchased} ${plural} in this organization are taken (members and pending invitations).`;
-  return input.actorRole === 'OWNER'
+  if (input.reason === 'gifted_seats_full') {
+    if (input.actorRole === 'MEMBER') return 'Every seat in this organization is taken (members and pending invitations). Ask the organization Owner to free a seat.';
+    const state = `All ${input.purchased} ${plural} this organization was gifted are taken (members and pending invitations). A gift's seats are fixed, so none can be added automatically.`;
+    return holdsOrgRole(input.actorRole, 'OWNER')
+      ? `${state} Revoke an invitation or remove a member to free one, or ask PageSpace support to change the gift.`
+      : `${state} Ask the organization Owner to free a seat.`;
+  }
+  const state = input.actorRole === 'MEMBER'
+    ? 'Every seat in this organization is taken (members and pending invitations).'
+    : `All ${input.purchased} ${plural} in this organization are taken (members and pending invitations).`;
+  return holdsOrgRole(input.actorRole, 'OWNER')
     ? `${state} Turn on automatic seat purchase in billing to add seats as you invite, or revoke an invitation or remove a member to free one.`
     : `${state} Ask the organization Owner to turn on automatic seat purchase or to free a seat.`;
 }

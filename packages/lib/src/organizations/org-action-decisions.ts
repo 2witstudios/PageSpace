@@ -7,7 +7,7 @@
  * and a message that says what was refused.
  */
 import type { OrgRole } from '@pagespace/db/schema/organizations';
-import { ORG_ROLE_RANK } from './org-roles';
+import { holdsOrgRole } from './authorize-core';
 import type { ActorPolicy, OrgPolicies, OrgPolicyKey } from './policies-core';
 import { policyRefusal as refuse, type PolicyDecision } from './sharing-decisions';
 
@@ -21,8 +21,7 @@ export type OrgActorAction = 'invite' | 'create_drive';
  */
 export function orgActorDecision(setting: ActorPolicy, role: OrgRole, action: OrgActorAction): PolicyDecision {
   const min = MIN_ROLE[setting];
-  const rank = ORG_ROLE_RANK[role];
-  if (min !== undefined && rank !== undefined && rank >= ORG_ROLE_RANK[min]) return { ok: true };
+  if (min !== undefined && holdsOrgRole(role, min)) return { ok: true };
   return action === 'invite'
     ? refuse('whoCanInvite', 'This organization lets only Owners and Admins invite people. Ask an Owner or Admin to send the invitation.')
     : refuse('whoCanCreateDrives', 'This organization lets only Owners and Admins create drives. Ask an Owner or Admin to create it.');

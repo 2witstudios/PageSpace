@@ -24,7 +24,7 @@ import { and, eq, gt, inArray } from '@pagespace/db/operators';
 import { isBillingEnabled } from '../deployment-mode';
 import { computeMonthlyRefill, forgivenAtRefillCents } from './credit-core';
 import { debtClearedRow, DEBT_FORGIVEN_ENTRY } from './wallet-ledger-core';
-import { MONEY_MODEL_V2_ACTIVE, allowanceCentsForPaidCents } from './money-model';
+import { allowanceCentsForPaidCents } from './money-model';
 import { ensurePersonalRootWalletId } from './personal-wallet';
 import { toSubscriptionTier, type SubscriptionTier } from './subscription-tiers';
 import { deriveTierFromSubscriptions, type SubscriptionRowLike } from './subscription-tier-sync';
@@ -59,11 +59,6 @@ export interface MissedGrantReconcileResult {
 interface MissedGrantReconcileOptions {
   /** Resolve entitlement from configured price identity, independently of the invoice amount. */
   priceTier: (stripePriceId: string) => SubscriptionTier;
-  /**
-   * Whether the money model's ratio is in force (D-OW-17 test seam, as applyStripeFunding's
-   * `{ active }`). Production callers leave it unset: the MONEY_MODEL_V2_ACTIVE default.
-   */
-  active?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -91,9 +86,9 @@ export interface MissedGrantPlan {
  * (never the stale tier that caused the miss). `allowanceCentsForPaidCents` is the
  * same pure function every other grant path uses — one definition, no drift.
  */
-export function planMissedGrantReconcile(row: MissedGrantRow, resolvedTier: string, active: boolean = MONEY_MODEL_V2_ACTIVE): MissedGrantPlan {
+export function planMissedGrantReconcile(row: MissedGrantRow, resolvedTier: string): MissedGrantPlan {
   const tier = toSubscriptionTier(resolvedTier);
-  const allowanceCents = allowanceCentsForPaidCents(row.paidCents, tier, active);
+  const allowanceCents = allowanceCentsForPaidCents(row.paidCents, tier);
   return {
     id: row.id,
     userId: row.userId,
@@ -191,14 +186,17 @@ export async function reconcileMissedGrants(options: MissedGrantReconcileOptions
   let cursor = '';
 
   for (;;) {
-    const page = await db
+    const rawPage = await db
       .select({ id: creditLedger.id, userId: creditLedger.userId, paidCents: creditLedger.paidCents })
       .from(creditLedger)
       .where(and(eq(creditLedger.entryType, 'missed_grant'), gt(creditLedger.id, cursor)))
       .orderBy(creditLedger.id)
       .limit(BATCH);
-    if (page.length === 0) break;
-    cursor = page[page.length - 1].id;
+    if (rawPage.length === 0) break;
+    cursor = rawPage[rawPage.length - 1].id;
+    // A missed grant is a person's own record on their own root; it never outlives them (D-OW-58:
+    // only rows on wallets they did not own are kept, unnamed), so a null person is skipped.
+    const page = rawPage.filter((r): r is { id: string; userId: string; paidCents: number | null } => r.userId !== null);
 
     let rowsByUser: Map<string, SubscriptionRowLike[]>;
     try {
@@ -218,7 +216,7 @@ export async function reconcileMissedGrants(options: MissedGrantReconcileOptions
         firstLedgerId: page[0].id,
         rows: page.length,
       });
-      if (page.length < BATCH) break;
+      if (rawPage.length < BATCH) break;
       continue;
     }
 
@@ -229,7 +227,6 @@ export async function reconcileMissedGrants(options: MissedGrantReconcileOptions
         const plan = planMissedGrantReconcile(
           { id: row.id, userId: row.userId, paidCents: row.paidCents ?? 0 },
           derived.tier,
-          options.active,
         );
         if (derived.indeterminate) {
           result.indeterminate++;
@@ -261,7 +258,7 @@ export async function reconcileMissedGrants(options: MissedGrantReconcileOptions
       }
     }
 
-    if (page.length < BATCH) break;
+    if (rawPage.length < BATCH) break;
   }
 
   for (const userId of toEmit) void emitCreditsUpdated(userId);

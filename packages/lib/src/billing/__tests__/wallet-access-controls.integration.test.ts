@@ -36,6 +36,7 @@ import { refundFundingLeg, resetDueAllocations } from '../wallet-funding-shell';
 import { walletDriftAlerts } from '../wallet-reconcile';
 import { moveDriveOutOfOrg, moveDriveToOrg, type OrgDriveServiceDeps } from '../../services/org-drive-service';
 import type { OrgRole } from '@pagespace/db/schema/organizations';
+import { credentialActor } from '../../permissions/access-actor';
 import {
   donateToDrive,
   getDriveSpend,
@@ -238,7 +239,7 @@ describe('wallet access, visibility and controls (orgs on, real Postgres)', () =
       const w = world as World;
       const now = new Date();
       await db.update(wallets).set({ spentCents: 4_000, monthlyPeriodStart: new Date(now.getTime() - 40 * DAY), monthlyPeriodEnd: new Date(now.getTime() - 11 * DAY) }).where(eq(wallets.id, w.productWalletId));
-      expect(await donateToDrive(w.marcusId, w.productId, { amountCents: 700, idempotencyKey: createId() }, 'session')).toMatchObject({ ok: true });
+      expect(await donateToDrive(credentialActor(w.marcusId, null), w.productId, { amountCents: 700, idempotencyKey: createId() }, 'session')).toMatchObject({ ok: true });
 
       const swept = await resetDueAllocations({ now });
       expect(swept.failed).toBe(0);
@@ -256,9 +257,9 @@ describe('wallet access, visibility and controls (orgs on, real Postgres)', () =
       const w = world as World;
       const chrisRootBefore = (await db.select().from(wallets).where(and(eq(wallets.userId, w.chrisId), sql`${wallets.subjectType} IS NULL`)))[0];
       const key = createId();
-      const donated = await donateToDrive(w.chrisId, w.productId, { amountCents: 500, idempotencyKey: key }, 'session');
+      const donated = await donateToDrive(credentialActor(w.chrisId, null), w.productId, { amountCents: 500, idempotencyKey: key }, 'session');
       expect(donated).toMatchObject({ ok: true, amountCents: 500, duplicate: false });
-      expect(await donateToDrive(w.chrisId, w.productId, { amountCents: 500, idempotencyKey: key }, 'session')).toMatchObject({ ok: true, duplicate: true });
+      expect(await donateToDrive(credentialActor(w.chrisId, null), w.productId, { amountCents: 500, idempotencyKey: key }, 'session')).toMatchObject({ ok: true, duplicate: true });
 
       const chrisRootAfter = await walletRow(chrisRootBefore.id);
       expect(chrisRootAfter.monthlyRemainingCents + chrisRootAfter.topupRemainingCents).toBe(chrisRootBefore.monthlyRemainingCents + chrisRootBefore.topupRemainingCents - 500);
@@ -268,17 +269,17 @@ describe('wallet access, visibility and controls (orgs on, real Postgres)', () =
       expect((await walletRow(w.productWalletId)).topupRemainingCents).toBe(500);
 
       // Dana cannot see Product: refused as if it were not there, and nothing moves.
-      expect(await donateToDrive(w.danaId, w.productId, { amountCents: 100, idempotencyKey: createId() }, 'session')).toMatchObject({ ok: false, status: 404 });
+      expect(await donateToDrive(credentialActor(w.danaId, null), w.productId, { amountCents: 100, idempotencyKey: createId() }, 'session')).toMatchObject({ ok: false, status: 404 });
       expect((await walletRow(w.productWalletId)).topupRemainingCents).toBe(500);
     });
 
     it('the drive lead turns donations off and the same donor is refused with nothing moved; a donation leg is never refunded', async () => {
       const w = world as World;
-      const donated = await donateToDrive(w.marcusId, w.productId, { amountCents: 300, idempotencyKey: createId() }, 'session');
+      const donated = await donateToDrive(credentialActor(w.marcusId, null), w.productId, { amountCents: 300, idempotencyKey: createId() }, 'session');
       expect(donated).toMatchObject({ ok: true });
-      expect(await updateDriveWallet(w.lenaId, w.productId, { donationsEnabled: false }, 'session')).toMatchObject({ ok: true });
+      expect(await updateDriveWallet(credentialActor(w.lenaId, null), w.productId, { donationsEnabled: false }, 'session')).toMatchObject({ ok: true });
       const before = await walletRow(w.productWalletId);
-      expect(await donateToDrive(w.marcusId, w.productId, { amountCents: 300, idempotencyKey: createId() }, 'session')).toMatchObject({ ok: false, status: 409, code: 'donations_disabled' });
+      expect(await donateToDrive(credentialActor(w.marcusId, null), w.productId, { amountCents: 300, idempotencyKey: createId() }, 'session')).toMatchObject({ ok: false, status: 409, code: 'donations_disabled' });
       expect((await walletRow(w.productWalletId)).topupRemainingCents).toBe(before.topupRemainingCents);
 
       const [leg] = await db.select().from(walletFundingLegs).where(eq(walletFundingLegs.walletId, w.productWalletId));
@@ -289,7 +290,7 @@ describe('wallet access, visibility and controls (orgs on, real Postgres)', () =
     it('a donation to a wallet carrying debt is the donor\'s whole leg; the debt stays for the funder\'s next allocation', async () => {
       const w = world as World;
       await db.update(wallets).set({ debtCents: 300 }).where(eq(wallets.id, w.productWalletId));
-      expect(await donateToDrive(w.marcusId, w.productId, { amountCents: 200, idempotencyKey: createId() }, 'session')).toMatchObject({ ok: true, amountCents: 200 });
+      expect(await donateToDrive(credentialActor(w.marcusId, null), w.productId, { amountCents: 200, idempotencyKey: createId() }, 'session')).toMatchObject({ ok: true, amountCents: 200 });
       expect(await walletRow(w.productWalletId)).toMatchObject({ debtCents: 300, topupRemainingCents: 200 });
       const [leg] = await db.select().from(walletFundingLegs).where(eq(walletFundingLegs.walletId, w.productWalletId));
       expect(leg).toMatchObject({ originalCents: 200, remainingCents: 200, funderUserId: w.marcusId });
@@ -300,13 +301,13 @@ describe('wallet access, visibility and controls (orgs on, real Postgres)', () =
     it('enabling caps with nothing named stores 50 credits a day and 1,000 a month; a window set to null, and a person with no row, are unlimited', async () => {
       const w = world as World;
       expect(DEFAULT_CONSUMER_CAPS).toEqual({ dailyCents: credits(50), monthlyCents: credits(1_000) });
-      expect(await setDriveWalletCap(w.anaId, w.productId, w.marcusId, {}, 'session')).toMatchObject({ ok: true });
-      expect(await listDriveWalletCaps(w.anaId, w.productId, 'session')).toMatchObject({
+      expect(await setDriveWalletCap(credentialActor(w.anaId, null), w.productId, w.marcusId, {}, 'session')).toMatchObject({ ok: true });
+      expect(await listDriveWalletCaps(credentialActor(w.anaId, null), w.productId, 'session')).toMatchObject({
         ok: true,
         caps: [{ userId: w.marcusId, dailyCapCents: credits(50), monthlyCapCents: credits(1_000) }],
       });
-      await setDriveWalletCap(w.anaId, w.productId, w.marcusId, { monthlyCents: null }, 'session');
-      const read = await getDriveWallet(w.marcusId, w.productId, 'session');
+      await setDriveWalletCap(credentialActor(w.anaId, null), w.productId, w.marcusId, { monthlyCents: null }, 'session');
+      const read = await getDriveWallet(credentialActor(w.marcusId, null), w.productId, 'session');
       expect(read.ok && read.wallet && 'myCap' in read.wallet ? read.wallet.myCap : null).toMatchObject({ dailyRemainingCents: credits(50), monthlyRemainingCents: null });
       // Lena has no cap row: unlimited within the wallet, so a call far past Marcus's daily cap passes.
       expect(await canConsumeAI(w.lenaId, 'free', { spend: driveSpend(w.productId, 'drive_wallet'), estCostCents: credits(60) })).toMatchObject({ allowed: true });
@@ -314,7 +315,7 @@ describe('wallet access, visibility and controls (orgs on, real Postgres)', () =
 
     it('the gate refuses past the daily and then the monthly UTC window by name, charging nothing; the funders get one 80% and one 100% alert per window', async () => {
       const w = world as World;
-      await setDriveWalletCap(w.anaId, w.productId, w.marcusId, { dailyCents: 100, monthlyCents: null }, 'session');
+      await setDriveWalletCap(credentialActor(w.anaId, null), w.productId, w.marcusId, { dailyCents: 100, monthlyCents: null }, 'session');
       await settledCall(w, w.marcusId, 0.6); // 90¢ of a 100¢ day: 80% reached
       await settledCall(w, w.marcusId, 0.1); // 105¢: 100% reached
       const refused = await canConsumeAI(w.marcusId, 'free', { spend: driveSpend(w.productId, 'drive_wallet'), estCostCents: 5 });
@@ -322,7 +323,7 @@ describe('wallet access, visibility and controls (orgs on, real Postgres)', () =
       expect(await liveHolds(w.marcusId)).toHaveLength(0);
 
       // The month: the day lifted, a 120¢ month already 105¢ in.
-      await setDriveWalletCap(w.anaId, w.productId, w.marcusId, { dailyCents: null, monthlyCents: 120 }, 'session');
+      await setDriveWalletCap(credentialActor(w.anaId, null), w.productId, w.marcusId, { dailyCents: null, monthlyCents: 120 }, 'session');
       await settledCall(w, w.marcusId, 0.1); // 120¢: 80% and 100% of the month
       expect(await canConsumeAI(w.marcusId, 'free', { spend: driveSpend(w.productId, 'drive_wallet'), estCostCents: 5 }))
         .toMatchObject({ allowed: false, refusal: { reason: 'source_cap_reached' } });
@@ -345,12 +346,12 @@ describe('wallet access, visibility and controls (orgs on, real Postgres)', () =
 
     it('pausing the drive wallet refuses every consumer and skips every automation; resuming restores it', async () => {
       const w = world as World;
-      expect(await updateDriveWallet(w.lenaId, w.productId, { paused: true }, 'session')).toMatchObject({ ok: true });
+      expect(await updateDriveWallet(credentialActor(w.lenaId, null), w.productId, { paused: true }, 'session')).toMatchObject({ ok: true });
       expect(await canConsumeAI(w.lenaId, 'free', { spend: driveSpend(w.productId, 'drive_wallet'), estCostCents: 5 }))
         .toMatchObject({ allowed: false, refusal: { reason: 'source_paused' } });
       expect(await canConsumeAI(w.lenaId, 'free', { spend: automationSpend(w.productId), estCostCents: 5, skipDailyCap: true }))
         .toMatchObject({ allowed: false, refusal: { reason: 'drive_wallet_paused' } });
-      await updateDriveWallet(w.lenaId, w.productId, { paused: false }, 'session');
+      await updateDriveWallet(credentialActor(w.lenaId, null), w.productId, { paused: false }, 'session');
       expect(await canConsumeAI(w.lenaId, 'free', { spend: driveSpend(w.productId, 'drive_wallet'), estCostCents: 5 })).toMatchObject({ allowed: true });
     });
 
@@ -365,7 +366,7 @@ describe('wallet access, visibility and controls (orgs on, real Postgres)', () =
         .toMatchObject({ allowed: false, refusal: { reason: 'drive_wallet_paused' } });
       // The drive wallet's own row is untouched; it reads paused because its parent is.
       expect((await walletRow(w.productWalletId)).status).toBe('active');
-      const memberView = await getDriveWallet(w.marcusId, w.productId, 'session');
+      const memberView = await getDriveWallet(credentialActor(w.marcusId, null), w.productId, 'session');
       expect(memberView.ok && memberView.wallet?.status).toBe('paused');
       const split = await getOrgPoolSplit(w.orgId);
       expect(split.status).toBe('paused');
@@ -408,12 +409,12 @@ describe('wallet access, visibility and controls (orgs on, real Postgres)', () =
       const productLeft = PRODUCT_ALLOCATION - 30;
       // The drive wallet read, in a session and through a token (D-OW-26): the consumer allowlist only.
       for (const [who, credential] of [[w.marcusId, 'session'], [w.lenaId, 'mcp']] as const) {
-        const read = await getDriveWallet(who, w.productId, credential);
+        const read = await getDriveWallet(credentialActor(who, null), w.productId, credential);
         expect(read.ok && read.wallet ? Object.keys(read.wallet).sort() : null, who).toEqual([...CONSUMER_WALLET_FIELDS].sort());
         expect(read.ok && read.wallet ? read.wallet.remainingCents : null).toBe(productLeft);
       }
       // My wallets, the conversation/drive spend options (the chip, strip and popover).
-      const mine = await listMyWallets(w.marcusId, 'session');
+      const mine = await listMyWallets(credentialActor(w.marcusId, null), 'session');
       expect(mine.driveWallets.find((d) => d.walletId === w.productWalletId)?.remainingCents).toBe(productLeft);
       expect(mine.driveWallets.find((d) => d.walletId === w.sideWalletId)?.remainingCents).toBe(SIDE_ALLOCATION);
       expect(mine.funds.pools).toEqual([]);
@@ -421,10 +422,10 @@ describe('wallet access, visibility and controls (orgs on, real Postgres)', () =
       expect(productChoice).toMatchObject({ walletId: w.productWalletId, remainingCents: productLeft });
       const sideChoice = (await listSpendChoices(w.marcusId, w.sideId)).find((c) => c.source === 'drive_wallet');
       expect(sideChoice).toMatchObject({ walletId: w.sideWalletId, remainingCents: SIDE_ALLOCATION });
-      const driveSpendRead = await getDriveSpend(w.marcusId, w.productId);
+      const driveSpendRead = await getDriveSpend(credentialActor(w.marcusId, null), w.productId);
       expect(driveSpendRead.ok ? driveSpendRead.options.find((o) => o.source === 'drive_wallet')?.remainingCents : null).toBe(productLeft);
       // Neither parent's figure appears anywhere a consumer reads.
-      const everything = JSON.stringify([mine, productChoice, sideChoice, driveSpendRead, await getDriveWallet(w.marcusId, w.productId, 'session')]);
+      const everything = JSON.stringify([mine, productChoice, sideChoice, driveSpendRead, await getDriveWallet(credentialActor(w.marcusId, null), w.productId, 'session')]);
       for (const leaked of ['"availableCents"', '"unallocatedCents"', '"spendByConsumer"']) expect(everything).not.toContain(leaked);
       expect(everything).not.toMatch(/"remainingCents":(700|300|670)\b/);
 
@@ -436,15 +437,15 @@ describe('wallet access, visibility and controls (orgs on, real Postgres)', () =
 
     it('a consumer\'s own remaining cap bounds what they see, and a guest sees the drive wallet only once the drive opens it to guests, bounded by the default caps', async () => {
       const w = world as World;
-      await setDriveWalletCap(w.anaId, w.productId, w.marcusId, { dailyCents: 40, monthlyCents: null }, 'session');
+      await setDriveWalletCap(credentialActor(w.anaId, null), w.productId, w.marcusId, { dailyCents: 40, monthlyCents: null }, 'session');
       expect((await listSpendChoices(w.marcusId, w.productId)).find((c) => c.source === 'drive_wallet')?.remainingCents).toBe(40);
 
       expect((await listSpendChoices(w.chrisId, w.productId)).map((c) => c.source)).toEqual(['own_credits']);
-      expect(await updateDriveWallet(w.anaId, w.productId, { guestSpendEnabled: true }, 'session')).toMatchObject({ ok: true });
+      expect(await updateDriveWallet(credentialActor(w.anaId, null), w.productId, { guestSpendEnabled: true }, 'session')).toMatchObject({ ok: true });
       const chris = await listSpendChoices(w.chrisId, w.productId);
       expect(chris.map((c) => c.source)).toEqual(['drive_wallet', 'own_credits']);
       expect(chris[0].remainingCents).toBe(credits(50));
-      const guestView = await getDriveWallet(w.chrisId, w.productId, 'session');
+      const guestView = await getDriveWallet(credentialActor(w.chrisId, null), w.productId, 'session');
       expect(guestView.ok && guestView.wallet && 'myCap' in guestView.wallet ? guestView.wallet.myCap : null)
         .toMatchObject({ dailyRemainingCents: credits(50), monthlyRemainingCents: credits(1_000) });
     });
@@ -462,25 +463,25 @@ describe('wallet access, visibility and controls (orgs on, real Postgres)', () =
       // Same row: the org's now, under its pool; the old funder's allocation and debt stayed behind (forgiven, ledgered).
       expect(await walletRow(w.sideWalletId)).toMatchObject({ ownerType: 'org', orgId: w.orgId, userId: null, parentWalletId: w.poolId, monthlyAllowanceCents: 0, spentCents: 0, debtCents: 0, status: 'active' });
       expect(await walletDriftAlerts({ toleranceCents: 0, limit: 10, walletIds: [w.sideWalletId] })).toEqual([]);
-      expect(await updateDriveWallet(w.anaId, w.sideId, { allocationCents: 2_000 }, 'session')).toMatchObject({ ok: true });
+      expect(await updateDriveWallet(credentialActor(w.anaId, null), w.sideId, { allocationCents: 2_000 }, 'session')).toMatchObject({ ok: true });
       // Chris, outside Northwind, is invited onto the moved drive: a guest of it now.
       await factories.createDriveMember(w.sideId, w.chrisId, { source: 'invite' });
 
       // Chris is a guest now: refused while the switch is off, capped at the default when it is on.
       expect(await canConsumeAI(w.chrisId, 'free', { spend: driveSpend(w.sideId, 'drive_wallet'), estCostCents: 5 }))
         .toMatchObject({ allowed: false, refusal: { reason: 'guest_drive_wallet_off' } });
-      expect(await updateDriveWallet(w.anaId, w.sideId, { guestSpendEnabled: true }, 'session')).toMatchObject({ ok: true });
+      expect(await updateDriveWallet(credentialActor(w.anaId, null), w.sideId, { guestSpendEnabled: true }, 'session')).toMatchObject({ ok: true });
       expect(await canConsumeAI(w.chrisId, 'free', { spend: driveSpend(w.sideId, 'drive_wallet'), estCostCents: credits(60) }))
         .toMatchObject({ allowed: false, refusal: { reason: 'source_cap_reached' } });
       expect(await canConsumeAI(w.chrisId, 'free', { spend: driveSpend(w.sideId, 'drive_wallet'), estCostCents: 5 }))
         .toMatchObject({ allowed: true, walletId: w.sideWalletId });
-      const view = await getDriveWallet(w.chrisId, w.sideId, 'session');
+      const view = await getDriveWallet(credentialActor(w.chrisId, null), w.sideId, 'session');
       expect(view.ok && view.wallet && 'myCap' in view.wallet ? view.wallet.myCap : null).toMatchObject({ dailyRemainingCents: expect.any(Number), monthlyRemainingCents: expect.any(Number) });
     });
 
     it('SPEND-6 (partial) WAL-2 (partial) a drive moved OUT of the org: its wallet is the lead\'s under their root, and its members are not guests', async () => {
       const w = world as World;
-      await donateToDrive(w.marcusId, w.productId, { amountCents: 300, idempotencyKey: createId() }, 'session');
+      await donateToDrive(credentialActor(w.marcusId, null), w.productId, { amountCents: 300, idempotencyKey: createId() }, 'session');
       expect(await moveDriveOutOfOrg(w.jonoId, w.productId, { implicitMembers: 'keep' }, moveDeps)).toMatchObject({ ok: true });
       const lenaRoot = (await db.select().from(wallets).where(and(eq(wallets.userId, w.lenaId), sql`${wallets.subjectType} IS NULL`)))[0];
       // Same row, the lead's now under their root; the donation leg moved with it.
@@ -490,7 +491,7 @@ describe('wallet access, visibility and controls (orgs on, real Postgres)', () =
       // Chris (outside the former org) is a member of a personal drive now — no guest switch, no guest cap.
       expect(await canConsumeAI(w.chrisId, 'free', { spend: driveSpend(w.productId, 'drive_wallet'), estCostCents: credits(60) }))
         .toMatchObject({ allowed: true, walletId: w.productWalletId });
-      const view = await getDriveWallet(w.chrisId, w.productId, 'session');
+      const view = await getDriveWallet(credentialActor(w.chrisId, null), w.productId, 'session');
       expect(view.ok && view.wallet && 'myCap' in view.wallet ? view.wallet.myCap : null).toMatchObject({ dailyRemainingCents: null, monthlyRemainingCents: null });
     });
 
@@ -533,7 +534,7 @@ describe('wallet access, visibility and controls (orgs on, real Postgres)', () =
       await db.update(wallets).set({ spentCents: PRODUCT_ALLOCATION, debtCents: 300, status: 'over' }).where(eq(wallets.id, w.productWalletId));
       expect(await canConsumeAI(w.marcusId, 'free', { spend: driveSpend(w.productId, 'drive_wallet'), estCostCents: 100 }))
         .toMatchObject({ allowed: false, refusal: { reason: 'source_empty' } });
-      await donateToDrive(w.chrisId, w.productId, { amountCents: 200, idempotencyKey: createId() }, 'session');
+      await donateToDrive(credentialActor(w.chrisId, null), w.productId, { amountCents: 200, idempotencyKey: createId() }, 'session');
       expect((await listSpendChoices(w.marcusId, w.productId)).find((o) => o.source === 'drive_wallet')?.remainingCents).toBe(200);
       const gate = await canConsumeAI(w.marcusId, 'free', { spend: driveSpend(w.productId, 'drive_wallet'), estCostCents: 100 });
       expect(gate).toMatchObject({ allowed: true, walletId: w.productWalletId });
@@ -558,7 +559,7 @@ describe('wallet access, visibility and controls (orgs on, real Postgres)', () =
 
     it('SPEND-6 (partial) with the switch on a guest\'s mention spends the drive wallet, bounded by the default caps (50 credits a day) though no cap row exists', async () => {
       const w = world as World;
-      await updateDriveWallet(w.anaId, w.productId, { guestSpendEnabled: true }, 'session');
+      await updateDriveWallet(credentialActor(w.anaId, null), w.productId, { guestSpendEnabled: true }, 'session');
       expect(await canConsumeAI(w.chrisId, 'free', { spend: personTriggeredSpend(w.productId), estCostCents: 5 }))
         .toMatchObject({ allowed: true, walletId: w.productWalletId });
       expect(await canConsumeAI(w.chrisId, 'free', { spend: driveSpend(w.productId, 'drive_wallet'), estCostCents: credits(50) }))
@@ -568,7 +569,7 @@ describe('wallet access, visibility and controls (orgs on, real Postgres)', () =
 
     it('SPEND-6 (partial) the switch turned off between resolution and the hold still refuses the guest, decided under the wallet lock', async () => {
       const w = world as World;
-      await updateDriveWallet(w.anaId, w.productId, { guestSpendEnabled: true }, 'session');
+      await updateDriveWallet(credentialActor(w.anaId, null), w.productId, { guestSpendEnabled: true }, 'session');
       afterResolution.run = async () => {
         await db.update(wallets).set({ guestSpendEnabled: false }).where(eq(wallets.id, w.productWalletId));
       };
@@ -579,7 +580,7 @@ describe('wallet access, visibility and controls (orgs on, real Postgres)', () =
 
     it('SPEND-6 (partial) a member whose cap is spent: their mention skips by name and the lead is told it was the cap, not an empty wallet', async () => {
       const w = world as World;
-      await setDriveWalletCap(w.anaId, w.productId, w.marcusId, { dailyCents: 0, monthlyCents: null }, 'session');
+      await setDriveWalletCap(credentialActor(w.anaId, null), w.productId, w.marcusId, { dailyCents: 0, monthlyCents: null }, 'session');
       expect(await canConsumeAI(w.marcusId, 'free', { spend: personTriggeredSpend(w.productId), estCostCents: 5 }))
         .toMatchObject({ allowed: false, refusal: { reason: 'source_cap_reached' } });
       expect(await leadSkips(w)).toEqual(['source_cap_reached']);

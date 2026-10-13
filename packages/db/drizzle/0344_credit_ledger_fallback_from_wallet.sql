@@ -1,2 +1,0 @@
-ALTER TABLE "credit_ledger" ADD COLUMN "fallbackFromWalletId" text;--> statement-breakpoint
-ALTER TABLE "credit_ledger" ADD CONSTRAINT "credit_ledger_fallbackFromWalletId_wallets_id_fk" FOREIGN KEY ("fallbackFromWalletId") REFERENCES "public"."wallets"("id") ON DELETE set null ON UPDATE no action;

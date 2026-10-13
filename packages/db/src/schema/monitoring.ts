@@ -195,6 +195,13 @@ export const aiUsageLogs = pgTable('ai_usage_logs', {
   // creator. A soft link like walletId. Null for a person's own call, a channel mention or a manual Run.
   automationRef: text('automation_ref'),
 
+  /**
+   * WAL-6b fail closed: when a billable call's charge was first found to name no wallet. Never
+   * charged; terminal for the backfill sweeps, and counted (partial index) on the admin billing
+   * panel for an operator to reconcile. Null for every row that was charged or owed nothing.
+   */
+  unattributedAt: timestamp('unattributed_at', { mode: 'date', withTimezone: true }),
+
   // Metadata
   metadata: jsonb('metadata'),
 
@@ -235,6 +242,10 @@ export const aiUsageLogs = pgTable('ai_usage_logs', {
   reconcileIdx: index('idx_ai_usage_reconcile')
     .on(table.reconcileStatus, table.timestamp)
     .where(sql`reconcile_status = 'pending'`),
+  // Partial: only the (rare) unattributed rows, so the admin panel's count never scans the log.
+  unattributedIdx: index('idx_ai_usage_unattributed')
+    .on(table.unattributedAt)
+    .where(sql`unattributed_at IS NOT NULL`),
 }));
 
 /**

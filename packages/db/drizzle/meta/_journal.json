@@ -2301,43 +2301,85 @@
     {
       "idx": 330,
       "version": "7",
-      "when": 1791767513387,
-      "tag": "0340_org_subscription_funding",
+      "when": 1791811765438,
+      "tag": "0340_org_subscription_collection_method",
       "breakpoints": true
     },
     {
       "idx": 331,
       "version": "7",
-      "when": 1791771356674,
-      "tag": "0341_credential_authentication_evidence",
+      "when": 1791811791589,
+      "tag": "0341_drop_org_subscription_trial_end",
       "breakpoints": true
     },
     {
       "idx": 332,
       "version": "7",
-      "when": 1791772892501,
-      "tag": "0342_device_authentication_evidence",
+      "when": 1791812566533,
+      "tag": "0342_org_subscription_funding",
       "breakpoints": true
     },
     {
       "idx": 333,
       "version": "7",
-      "when": 1791773814980,
-      "tag": "0343_oauth_authentication_evidence",
+      "when": 1791830722697,
+      "tag": "0343_credential_authentication_evidence",
       "breakpoints": true
     },
     {
       "idx": 334,
       "version": "7",
-      "when": 1791811107113,
-      "tag": "0344_credit_ledger_fallback_from_wallet",
+      "when": 1791833139433,
+      "tag": "0344_pulse_memory_org_ids",
       "breakpoints": true
     },
     {
       "idx": 335,
       "version": "7",
-      "when": 1791833659315,
-      "tag": "0345_wallet_guest_spend_automation_attribution",
+      "when": 1791847764090,
+      "tag": "0345_memory_page_pointer_indexes",
+      "breakpoints": true
+    },
+    {
+      "idx": 336,
+      "version": "7",
+      "when": 1791865738885,
+      "tag": "0346_clear_external_org_avatars",
+      "breakpoints": true
+    },
+    {
+      "idx": 337,
+      "version": "7",
+      "when": 1791865743974,
+      "tag": "0347_org_avatar_upload_only",
+      "breakpoints": true
+    },
+    {
+      "idx": 338,
+      "version": "7",
+      "when": 1791871459217,
+      "tag": "0348_org_gift_seats",
+      "breakpoints": true
+    },
+    {
+      "idx": 339,
+      "version": "7",
+      "when": 1791873153545,
+      "tag": "0349_ledger_fallback_and_unattributed",
+      "breakpoints": true
+    },
+    {
+      "idx": 340,
+      "version": "7",
+      "when": 1791873159073,
+      "tag": "0350_wallet_opening_balance",
+      "breakpoints": true
+    },
+    {
+      "idx": 341,
+      "version": "7",
+      "when": 1791874828540,
+      "tag": "0351_wallet_guest_spend_automation_attribution",
       "breakpoints": true
     }
   ]

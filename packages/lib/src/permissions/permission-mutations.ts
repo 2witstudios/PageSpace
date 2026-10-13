@@ -6,6 +6,7 @@
  * grantedBy is derived from ctx.userId, never accepted as parameter.
  */
 
+import { checkActorResourceAuthentication } from './actor-authentication';
 import { z } from 'zod';
 import { db } from '@pagespace/db/db';
 import { and, eq, isNotNull } from '@pagespace/db/operators';
@@ -26,6 +27,7 @@ import { ORG_LAPSED_MESSAGE } from '../organizations/status-core';
 import { checkDriveMayLoosen } from './org-lapse-guard';
 import { recordOrgAuditEvent } from '../audit/org-audit';
 import { loggers } from '../logging/logger-config';
+import type { AccessActor } from './access-actor';
 
 // ============================================================================
 // Error Types
@@ -107,9 +109,14 @@ interface PageForSharing {
  * This prevents information leakage about page existence.
  */
 async function getPageIfCanShare(
-  userId: string,
+  actor: AccessActor,
   pageId: string
 ): Promise<{ ok: true; page: PageForSharing } | { ok: false; error: PermissionMutationError }> {
+  // SEC-2/3: a credential the page's org refuses cannot share it, exactly as if it could not see it.
+  if (!(await checkActorResourceAuthentication(actor, pageId)).allowed) {
+    return { ok: false, error: { code: 'PAGE_NOT_ACCESSIBLE', pageId } };
+  }
+  const { userId } = actor;
   // Get page with drive info
   const pageWithDrive = await db
     .select({
@@ -246,7 +253,7 @@ export async function grantPagePermission(
   }
 
   // 4. Authorization - can user share this page?
-  const pageResult = await getPageIfCanShare(ctx.userId, pageId);
+  const pageResult = await getPageIfCanShare(ctx.actor, pageId);
   if (!pageResult.ok) {
     return { ok: false, error: pageResult.error };
   }
@@ -418,7 +425,7 @@ export async function revokePagePermission(
   }
 
   // 3. Authorization - can user share (and thus revoke) this page?
-  const pageResult = await getPageIfCanShare(ctx.userId, pageId);
+  const pageResult = await getPageIfCanShare(ctx.actor, pageId);
   if (!pageResult.ok) {
     return { ok: false, error: pageResult.error };
   }

@@ -3,7 +3,7 @@ import { announceOrgChange } from '@pagespace/lib/organizations/org-change-event
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { transferOwnership } from '@pagespace/lib/organizations/membership';
-import { authorizeOrgRequest, ORG_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
+import { authorizeOrgRequest, ORG_MONEY_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
 import { transferOwnershipSchema } from '@/lib/orgs/org-schemas';
 import { ORG_LAPSED_MESSAGE } from '@pagespace/lib/organizations/status-core';
 
@@ -11,10 +11,13 @@ import { ORG_LAPSED_MESSAGE } from '@pagespace/lib/organizations/status-core';
  * POST /api/orgs/[orgId]/transfer-ownership — the Owner hands the org to another
  * member (ORG-1). organizations.ownerId and the OWNER row move in one transaction;
  * the previous Owner stays as an Admin.
+ *
+ * Session only: the Owner holds the org's money authority (billing, the pool, seat caps), so handing it
+ * over is a [D-OW-26] money move a delegated key never makes, and the actor cannot take it back.
  */
 export async function POST(request: Request, context: { params: Promise<{ orgId: string }> }) {
   const { orgId } = await context.params;
-  const gate = await authorizeOrgRequest(request, orgId, 'OWNER', ORG_WRITE_AUTH);
+  const gate = await authorizeOrgRequest(request, orgId, 'OWNER', ORG_MONEY_WRITE_AUTH);
   if (!gate.ok) return gate.response;
   try {
     const parsed = transferOwnershipSchema.safeParse(await request.json().catch(() => null));

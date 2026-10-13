@@ -848,7 +848,8 @@ export async function getTopSpendersByMargin(
 ): Promise<TopSpenderRow[]> {
   const rows = await db
     .select({
-      userId: creditLedger.userId,
+      // The inner join to users: a former member's rows (D-OW-58, userId null) belong to no account here.
+      userId: users.id,
       userName: users.name,
       userEmail: users.email,
       realCostCents: realCostSum,
@@ -860,7 +861,7 @@ export async function getTopSpendersByMargin(
     .leftJoin(aiUsageLogs, eq(creditLedger.aiUsageLogId, aiUsageLogs.id))
     .innerJoin(users, eq(creditLedger.userId, users.id))
     .where(and(...usageConditions(startDate, endDate)))
-    .groupBy(creditLedger.userId, users.name, users.email)
+    .groupBy(users.id, users.name, users.email)
     .orderBy(desc(chargedSum))
     .limit(limit);
 
@@ -922,8 +923,9 @@ export interface BalanceDriftRow {
 /**
  * Wallets whose net (monthly + top-up − debt) disagrees with their OWN ledger rows beyond tolerance
  * (WAL-5): every personal root, org pool and drive wallet, every money-moving entry type counted,
- * through the one lib reader (walletDriftAlerts). Forgiveness at a renewal or an allocation reset
- * moves no money and writes no row, so a flag means "look at this wallet". Worst drift first.
+ * through the one lib reader (walletDriftAlerts). Every balance change is a row — forgiveness at a
+ * renewal (debt_forgiven), netting at an allocation reset (allocation_reset), the cutover's
+ * opening_balance — so any drift is a change that bypassed the ledger. Worst drift first.
  */
 export async function getBalanceDriftAlerts(
   toleranceCents: number = BALANCE_DRIFT_TOLERANCE_CENTS,
@@ -978,7 +980,8 @@ export async function getNegativeMarginAccounts(
   const floorBps = Math.max(0, marginFloorBps);
   const rows = await db
     .select({
-      userId: creditLedger.userId,
+      // The inner join to users: a former member's rows (D-OW-58, userId null) belong to no account here.
+      userId: users.id,
       userName: users.name,
       userEmail: users.email,
       realCostCents: realCostSum,
@@ -989,7 +992,7 @@ export async function getNegativeMarginAccounts(
     .leftJoin(aiUsageLogs, eq(creditLedger.aiUsageLogId, aiUsageLogs.id))
     .innerJoin(users, eq(creditLedger.userId, users.id))
     .where(and(...usageConditions(startDate, endDate)))
-    .groupBy(creditLedger.userId, users.name, users.email)
+    .groupBy(users.id, users.name, users.email)
     .having(sql`${realCostSum} > 0 AND ${chargedSum} < ${realCostSum} * (1 + ${floorBps}::numeric / 10000)`)
     .orderBy(asc(sql`${chargedSum} - ${realCostSum}`))
     .limit(limit);

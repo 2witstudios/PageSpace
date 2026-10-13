@@ -21,7 +21,7 @@
 import type { WalletViewer } from '../permissions/wallet-access';
 import { formatCreditCount } from './money-model';
 import { encodeAutomationRef, parseAutomationRef, ZOOM_TRANSCRIPTS_AUTOMATION_NAME, type AutomationRef } from './automation-attribution';
-import { userConsumerKey, walletChainStatus, walletOwnRemainingCents, walletStatusFor, type FallbackRule, type OvershootFunderChoice, type SpendSourceKind, type WalletStatus } from './wallet-core';
+import { FORMER_MEMBER_CONSUMER_KEY, userConsumerKey, walletChainStatus, walletOwnRemainingCents, walletStatusFor, type FallbackRule, type OvershootFunderChoice, type SpendSourceKind, type WalletStatus } from './wallet-core';
 
 export interface DriveWalletRowFacts {
   id: string;
@@ -64,43 +64,72 @@ export interface ConsumerCapFacts {
 }
 
 /**
- * One row of this period's spend on a wallet (SPEND-10):
- *   - member: a person's own spend, including what they triggered themselves (a manual Run, a
- *     channel mention — a person's action, SPEND-6); keyed `user:<id>`.
- *   - automation: what an automation spent with no person present (a workflow's cron or trigger, a
- *     Zoom connection's transcript enrichment), keyed `automation:<stored ref>`. It runs on behalf of
- *     its creator ([D-OW-34]) and counts toward their cap, but is listed as the automation so the lead
- *     sees it apart from the person.
+ * One automation's spend this period, under the person it is recorded as (SPEND-10, D-OW-67): what a workflow's cron or
+ * trigger, or a Zoom connection's transcript enrichment, spent with no person present. It runs on behalf of its creator
+ * ([D-OW-34]) and counts toward their cap, and is listed under them so the lead sees it apart from their own spend.
  */
-export type ConsumerSpend =
-  | {
-      kind: 'member';
-      consumerKey: string;
-      userId: string;
-      /** The person's name, so the UI never resolves an id (null when unknown). */
-      displayName: string | null;
-      spentCents: number;
-    }
-  | {
-      kind: 'automation';
-      consumerKey: string;
-      /** Which automation (automation-attribution's typed reference). */
-      automation: AutomationRef;
-      /** Its name: the workflow's (null once the workflow is deleted; its spend stays listed), or "Zoom transcripts". */
-      displayName: string | null;
-      /** Who it runs as now (the workflow's creator); null when unknown or deleted. */
-      creatorUserId: string | null;
-      creatorName: string | null;
-      spentCents: number;
-    };
+export interface AutomationSpend {
+  /** `automation:<stored ref>`. */
+  consumerKey: string;
+  /** Which automation (automation-attribution's typed reference). */
+  automation: AutomationRef;
+  /** Its name: the workflow's (null once the workflow is deleted; its spend stays listed), or "Zoom transcripts". */
+  displayName: string | null;
+  /** Who it runs as now (the workflow's creator); null when unknown or deleted. */
+  creatorUserId: string | null;
+  creatorName: string | null;
+  spentCents: number;
+  /** Of that, spent since the start of today (UTC, the cap window, WAL-7). */
+  spentTodayCents: number;
+}
 
-/** A spend row as the lead and admins see it: the amount also as a credit count. */
-export type ConsumerSpendView = ConsumerSpend & { spentCredits: string };
+/**
+ * One member's row of this period's spend on a wallet (UI-9, SPEND-10). D-OW-67: the ONE read model is the ledger keyed
+ * by (person, automation reference); both views derive from it, so nothing is counted twice. `spentCents` is
+ * everything recorded as this person (their own calls, manual Runs and channel mentions, SPEND-6, plus their
+ * automations); `viaAutomationsCents` is the part their automation-attributed rows spent, itemised in `automations`.
+ */
+export interface ConsumerSpend {
+  /**
+   * `user:<id>` for a person, or `former-member` for spend by people who deleted their account (D-OW-58: userId null),
+   * one unnamed row.
+   */
+  consumerKey: string;
+  userId: string | null;
+  /** The person's name, so the UI never resolves an id (null when unknown). */
+  displayName: string | null;
+  /** Spent this period. */
+  spentCents: number;
+  /** Of that, spent since the start of today (UTC, the cap window, WAL-7). */
+  spentTodayCents: number;
+  /** Of that, spent by automations run on this person's behalf ([D-OW-34]). */
+  viaAutomationsCents: number;
+  /** Those automations, one row each, largest first. */
+  automations: AutomationSpend[];
+}
 
-/** One ledger group of this period's usage on a wallet: who it is recorded as, and the stored automation reference (null: none). */
+/** An automation row as the lead and admins see it: the amounts also as credit counts. */
+export interface AutomationSpendView extends AutomationSpend {
+  spentCredits: string;
+  spentTodayCredits: string;
+}
+
+/** A spend-by-member row as the lead and admins see it: the amounts also as credit counts. */
+export interface ConsumerSpendView extends Omit<ConsumerSpend, 'automations'> {
+  spentCredits: string;
+  spentTodayCredits: string;
+  viaAutomationsCredits: string;
+  automations: AutomationSpendView[];
+}
+
+/**
+ * One ledger group of this period's usage on a wallet: who it is recorded as (null: a deleted account, D-OW-58), the
+ * stored automation reference (null: none), and whether it falls since the start of today.
+ */
 export interface ConsumerSpendGroup {
-  userId: string;
+  userId: string | null;
   automationRef: string | null;
+  today: boolean;
   spentCents: number;
 }
 
@@ -108,7 +137,7 @@ export interface ConsumerSpendGroup {
  * The workflows whose names the spend list needs, from the ledger's groups: the ONE place the list
  * reads stored automation references (automation-attribution's codec), with consumerSpendRows.
  */
-export function workflowIdsToName(groups: readonly ConsumerSpendGroup[]): string[] {
+export function workflowIdsToName(groups: readonly Pick<ConsumerSpendGroup, 'automationRef'>[]): string[] {
   const ids = groups.flatMap((g) => {
     const ref = parseAutomationRef(g.automationRef);
     return ref?.kind === 'workflow' ? [ref.workflowId] : [];
@@ -127,52 +156,115 @@ export function automationConsumerKey(ref: AutomationRef): string {
   return `automation:${encodeAutomationRef(ref)}`;
 }
 
+function automationSpendRow(automation: AutomationRef, recordedAs: string | null, names: ConsumerSpendNames): AutomationSpend {
+  const consumerKey = automationConsumerKey(automation);
+  if (automation.kind === 'zoom') {
+    // A Zoom connection's enrichment runs as the connection's owner: the person it is recorded under.
+    const creatorName = recordedAs === null ? null : names.people.get(recordedAs) ?? null;
+    return { consumerKey, automation, displayName: ZOOM_TRANSCRIPTS_AUTOMATION_NAME, creatorUserId: recordedAs, creatorName, spentCents: 0, spentTodayCents: 0 };
+  }
+  const workflow = names.automations.get(automation.workflowId);
+  const creatorUserId = workflow?.createdBy ?? null;
+  const creatorName = creatorUserId ? names.people.get(creatorUserId) ?? null : null;
+  return { consumerKey, automation, displayName: workflow?.name ?? null, creatorUserId, creatorName, spentCents: 0, spentTodayCents: 0 };
+}
+
+const byLargest = <T extends { spentCents: number; consumerKey: string }>(a: T, b: T): number =>
+  b.spentCents - a.spentCents || a.consumerKey.localeCompare(b.consumerKey);
+
 /**
- * The lead's spend list (SPEND-10) from the ledger's groups: a person's own spend is one member row;
- * each automation is ONE row whoever it was recorded as this period (a workflow reassigned
- * mid-period, [D-OW-36], stays one automation), never folded into its creator's member row. Largest
- * first; a net refund below zero shows nothing spent.
+ * The lead's spend list (UI-9, SPEND-10) from the ledger's groups (D-OW-67): one row per person (every deleted account's
+ * spend one unnamed `former-member` row, never folded into anyone else's), with their today and via-automations parts
+ * and their automation rows nested. A reference this codec did not write is no automation: it stays the recorded
+ * person's own spend. Largest first; a net refund below zero shows nothing spent.
  */
 export function consumerSpendRows(groups: readonly ConsumerSpendGroup[], names: ConsumerSpendNames): ConsumerSpend[] {
-  const rows = new Map<string, ConsumerSpend>();
+  const members = new Map<string, ConsumerSpend & { automationsByKey: Map<string, AutomationSpend> }>();
   for (const g of groups) {
     const cents = whole(g.spentCents);
-    // A reference this codec did not write is no automation: it stays the recorded person's spend.
+    const key = g.userId === null ? FORMER_MEMBER_CONSUMER_KEY : userConsumerKey(g.userId);
+    const member = members.get(key) ?? {
+      consumerKey: key,
+      userId: g.userId,
+      displayName: g.userId === null ? null : names.people.get(g.userId) ?? null,
+      spentCents: 0,
+      spentTodayCents: 0,
+      viaAutomationsCents: 0,
+      automations: [],
+      automationsByKey: new Map<string, AutomationSpend>(),
+    };
+    members.set(key, member);
+    member.spentCents += cents;
+    if (g.today) member.spentTodayCents += cents;
     const automation = parseAutomationRef(g.automationRef);
-    const key = automation === null ? userConsumerKey(g.userId) : automationConsumerKey(automation);
-    const existing = rows.get(key);
-    if (existing) {
-      rows.set(key, { ...existing, spentCents: existing.spentCents + cents });
-    } else if (automation === null) {
-      rows.set(key, { kind: 'member', consumerKey: key, userId: g.userId, displayName: names.people.get(g.userId) ?? null, spentCents: cents });
-    } else if (automation.kind === 'zoom') {
-      // A Zoom connection's enrichment runs as the connection's owner: the person it is recorded under.
-      rows.set(key, {
-        kind: 'automation',
-        consumerKey: key,
-        automation,
-        displayName: ZOOM_TRANSCRIPTS_AUTOMATION_NAME,
-        creatorUserId: g.userId,
-        creatorName: names.people.get(g.userId) ?? null,
-        spentCents: cents,
-      });
-    } else {
-      const workflow = names.automations.get(automation.workflowId);
-      const creatorUserId = workflow?.createdBy ?? null;
-      rows.set(key, {
-        kind: 'automation',
-        consumerKey: key,
-        automation,
-        displayName: workflow?.name ?? null,
-        creatorUserId,
-        creatorName: creatorUserId ? names.people.get(creatorUserId) ?? null : null,
-        spentCents: cents,
-      });
-    }
+    if (automation === null) continue;
+    member.viaAutomationsCents += cents;
+    const automationKey = automationConsumerKey(automation);
+    const row = member.automationsByKey.get(automationKey) ?? automationSpendRow(automation, g.userId, names);
+    member.automationsByKey.set(automationKey, row);
+    row.spentCents += cents;
+    if (g.today) row.spentTodayCents += cents;
   }
-  return [...rows.values()]
-    .map((r) => ({ ...r, spentCents: Math.max(0, r.spentCents) }))
-    .sort((a, b) => b.spentCents - a.spentCents || a.consumerKey.localeCompare(b.consumerKey));
+  return [...members.values()]
+    .map(({ automationsByKey, ...member }) => ({
+      ...member,
+      spentCents: Math.max(0, member.spentCents),
+      spentTodayCents: Math.max(0, member.spentTodayCents),
+      viaAutomationsCents: Math.max(0, member.viaAutomationsCents),
+      automations: [...automationsByKey.values()]
+        .map((a) => ({ ...a, spentCents: Math.max(0, a.spentCents), spentTodayCents: Math.max(0, a.spentTodayCents) }))
+        .sort(byLargest),
+    }))
+    .sort(byLargest);
+}
+
+/** The keys of a drive wallet in my list: a test pins the entry to exactly these, and the SDK's copy is drift-guarded. */
+export const DRIVE_WALLET_LIST_FIELDS = [
+  'driveId',
+  'driveName',
+  'walletId',
+  'status',
+  'remainingCents',
+  'remainingCredits',
+  'mySpentCents',
+  'mySpentCredits',
+] as const;
+
+/** A drive wallet I spend from, as Settings › Usage › Wallets lists it (UI-10). */
+export interface DriveWalletListEntry {
+  driveId: string;
+  driveName: string | null;
+  walletId: string;
+  status: WalletStatus;
+  remainingCents: number;
+  remainingCredits: string;
+  /** What I spent from it this period: my own spend only (SPEND-9). */
+  mySpentCents: number;
+  mySpentCredits: string;
+}
+
+/**
+ * One drive wallet in my list (UI-10): what is left (the consumer amount, SPEND-9) and what I spent
+ * from it this period. Picks fields explicitly, so the wallet's allocation, its total spend and
+ * other people's spend never reach the list.
+ */
+export function driveWalletListEntry(
+  row: { id: string; subjectId: string; status: WalletStatus; monthlyAllowanceCents: number; spentCents: number; topupRemainingCents: number; debtCents: number },
+  driveName: string | null,
+  mySpentCents: number,
+): DriveWalletListEntry {
+  const remaining = walletRemainingCents(row);
+  const mine = Math.max(0, whole(mySpentCents));
+  return {
+    driveId: row.subjectId,
+    driveName,
+    walletId: row.id,
+    status: displayedWalletStatus(row),
+    remainingCents: remaining,
+    remainingCredits: formatCreditCount(remaining),
+    mySpentCents: mine,
+    mySpentCredits: formatCreditCount(mine),
+  };
 }
 
 export interface PoolFacts {
@@ -321,7 +413,18 @@ function leadFields(facts: DriveWalletFacts): Omit<LeadWalletView, 'viewer'> {
     spendByConsumer: facts.spendByConsumer.map((s): ConsumerSpendView => ({
       ...s,
       spentCents: whole(s.spentCents),
+      spentTodayCents: whole(s.spentTodayCents),
+      viaAutomationsCents: whole(s.viaAutomationsCents),
       spentCredits: formatCreditCount(whole(s.spentCents)),
+      spentTodayCredits: formatCreditCount(whole(s.spentTodayCents)),
+      viaAutomationsCredits: formatCreditCount(whole(s.viaAutomationsCents)),
+      automations: s.automations.map((a): AutomationSpendView => ({
+        ...a,
+        spentCents: whole(a.spentCents),
+        spentTodayCents: whole(a.spentTodayCents),
+        spentCredits: formatCreditCount(whole(a.spentCents)),
+        spentTodayCredits: formatCreditCount(whole(a.spentTodayCents)),
+      })),
     })),
   };
 }

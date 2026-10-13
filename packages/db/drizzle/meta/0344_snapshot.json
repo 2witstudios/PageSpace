@@ -1,6 +1,6 @@
 {
-  "id": "814cd47f-1f4b-43f6-8e39-dcf8c3c30b44",
-  "prevId": "a4fc469c-1ae6-472e-8052-c7da2271d7a7",
+  "id": "cb70c503-40c9-4253-9861-1889ff070d4e",
+  "prevId": "276b096e-ea0e-4c62-a2c4-01c20f2170fe",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -4507,6 +4507,13 @@
           "type": "jsonb",
           "primaryKey": false,
           "notNull": false
+        },
+        "orgIds": {
+          "name": "orgIds",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "ARRAY[]::text[]"
         },
         "aiProvider": {
           "name": "aiProvider",
@@ -13984,6 +13991,13 @@
           "primaryKey": false,
           "notNull": true
         },
+        "orgIds": {
+          "name": "orgIds",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "ARRAY[]::text[]"
+        },
         "occurrences": {
           "name": "occurrences",
           "type": "integer",
@@ -14130,6 +14144,13 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
+        },
+        "memoryOrgIds": {
+          "name": "memoryOrgIds",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "ARRAY[]::text[]"
         },
         "enabled": {
           "name": "enabled",
@@ -18804,12 +18825,6 @@
           "notNull": true,
           "default": "'ai'"
         },
-        "fallbackFromWalletId": {
-          "name": "fallbackFromWalletId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
         "createdAt": {
           "name": "createdAt",
           "type": "timestamp with time zone",
@@ -18956,19 +18971,6 @@
             "id"
           ],
           "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "credit_ledger_fallbackFromWalletId_wallets_id_fk": {
-          "name": "credit_ledger_fallbackFromWalletId_wallets_id_fk",
-          "tableFrom": "credit_ledger",
-          "tableTo": "wallets",
-          "columnsFrom": [
-            "fallbackFromWalletId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
           "onUpdate": "no action"
         }
       },
@@ -26209,11 +26211,12 @@
           "primaryKey": false,
           "notNull": false
         },
-        "trialEnd": {
-          "name": "trialEnd",
-          "type": "timestamp",
+        "collectionMethod": {
+          "name": "collectionMethod",
+          "type": "text",
           "primaryKey": false,
-          "notNull": false
+          "notNull": true,
+          "default": "'charge_automatically'"
         },
         "currentPeriodStart": {
           "name": "currentPeriodStart",

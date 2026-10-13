@@ -13,11 +13,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   conversation spends from and what the next AI call would do (`--drive` only matters for a global
   conversation). Amounts are shown as credits, never as money; `--json` prints the raw result.
   `list` and `source` need a key with no drive restriction.
+- **`pagespace wallets drive-source <driveId>`** shows which wallet a new conversation in a drive
+  would spend from, and the wallets you may pick there.
 - **Read-only, by design.** A key can never create, fund, donate to or change a wallet, or change
   what a conversation or your account spends from — sign in to the web app for that. There is no
   CLI verb for any of it.
-- **`pagespace mcp` exposes `wallets.getDriveWallet`, `wallets.list` and
-  `wallets.getConversationSource` as tools** — and no wallet write.
+- **`pagespace mcp` exposes `wallets.getDriveWallet`, `wallets.list`,
+  `wallets.getConversationSource`, `wallets.getDriveSource` and `wallets.getAlwaysOwnCredits` as
+  tools** — and no wallet write.
 - Organizations and wallets are not yet enabled on pagespace.ai; until they are, these verbs answer
   not found.
 

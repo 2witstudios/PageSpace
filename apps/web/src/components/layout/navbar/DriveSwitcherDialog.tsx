@@ -261,6 +261,20 @@ function DrivePickerBody({ onClose, onCreate }: DrivePickerBodyProps) {
               }
             >
               {group.drives.map((drive) => renderItem(drive, group.key))}
+              {/* DRV-6: Restricted drives are never in the picker; every member finds them in the directory. */}
+              {group.kind === "org" && (
+                <CommandItem
+                  value={`org-drives:${group.orgId}`}
+                  onSelect={() => {
+                    close();
+                    router.push(`/orgs/${group.orgId}/drives`);
+                  }}
+                  className="cursor-pointer gap-2.5 text-muted-foreground"
+                >
+                  <Layers className="h-4 w-4 shrink-0" aria-hidden="true" />
+                  <span className="min-w-0 flex-1 truncate">Browse {group.label} drives</span>
+                </CommandItem>
+              )}
               {group.kind === "org" && (
                 <CommandItem
                   value={`org-settings:${group.orgId}`}

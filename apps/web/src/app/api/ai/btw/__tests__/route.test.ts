@@ -33,7 +33,7 @@ describe('POST /api/ai/btw', () => {
   it('authorizes and streams through the detached path without primary writes', async () => {
     const response = await POST(new Request('http://test/api/ai/btw', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ conversationId: 'c1', question: 'What changed?' }) }));
     expect(await response.text()).toBe('side');
-    expect(mocks.access).toHaveBeenCalledWith('u1', expect.anything());
+    expect(mocks.access).toHaveBeenCalledWith(expect.objectContaining({ userId: 'u1' }), expect.anything());
     expect(mocks.stream).toHaveBeenCalledWith(expect.objectContaining({ abortSignal: expect.any(AbortSignal), question: 'What changed?' }));
     expect(mocks.messages).toHaveBeenCalledTimes(1);
   });

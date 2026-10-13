@@ -66,6 +66,7 @@ import { conversationRepository } from '@/lib/repositories/conversation-reposito
 import type { ToolExecutionContext } from '../core/types';
 import { notifyShellAgentActivity } from '@/lib/websocket/socket-utils';
 import { isOrgLapsedForDrive } from '@pagespace/lib/organizations/status';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 // The Sprites client is a process-wide stateless singleton, built lazily so
 // importing this module does no SDK work at load.
@@ -153,7 +154,7 @@ type ResolveOrProvisionResult =
  */
 async function resolveOrProvisionSession(
   conversationId: string,
-  userId: string,
+  actor: AccessActor,
 ): Promise<ResolveOrProvisionResult> {
   const existing = await findSessionForConversation(conversationId);
   if (existing) return { ok: true, session: existing };
@@ -168,7 +169,7 @@ async function resolveOrProvisionSession(
   const conversation = await conversationRepository.getConversation(conversationId);
   if (conversation?.type !== 'global') return { ok: false, attempted: false };
 
-  const ensured = await ensureGlobalSandboxSession(conversationId, userId);
+  const ensured = await ensureGlobalSandboxSession(conversationId, actor);
   if (ensured.ok) return { ok: true, session: ensured.session };
   return { ok: false, attempted: true, reason: ensured.reason };
 }
@@ -180,16 +181,19 @@ async function resolveOrProvisionSession(
  * resolver feeds both `acquireSandbox` and `resolveBillingSession`, so billing
  * and execution can never disagree about which session they act on.
  */
-type ResolveRunSession = (conversationId: string, userId: string) => Promise<ResolveOrProvisionResult>;
+type ResolveRunSession = (conversationId: string, actor: AccessActor) => Promise<ResolveOrProvisionResult>;
 
 interface BuildRealSandboxRunDepsOptions {
+  /** The actor the call's gate authorized: provisioning re-checks code execution as them (sign-in policy included). */
+  actor: AccessActor;
   resolveSession?: ResolveRunSession;
 }
 
 /** Wire the real lib deps for the runners (session-anchored acquire + real Sprites driver). */
 export function buildRealSandboxRunDeps({
+  actor,
   resolveSession = resolveOrProvisionSession,
-}: BuildRealSandboxRunDepsOptions = {}): SandboxRunDeps {
+}: BuildRealSandboxRunDepsOptions): SandboxRunDeps {
   return {
     isEnabled: isCodeExecutionEnabled,
     // The session-anchored acquisition: resolve the conversation's SESSION row,
@@ -215,7 +219,9 @@ export function buildRealSandboxRunDeps({
       // as a blanket invariant the auto-provisioning below it visibly
       // contradicts, which is exactly the kind of drift that gets the new
       // behavior "fixed" back out by a future reader trusting the comment).
-      const resolved = await resolveSession(conversationId, input.userId);
+      // The run's user must be the actor its gate authorized; anything else refuses.
+      if (input.userId !== actor.userId) return { ok: false, reason: 'no_drive_access' };
+      const resolved = await resolveSession(conversationId, actor);
       if (!resolved.ok) {
         if (!resolved.attempted) return { ok: false, reason: 'no_session' };
         return { ok: false, reason: 'provision_failed', cause: resolved.reason };
@@ -228,7 +234,7 @@ export function buildRealSandboxRunDeps({
       const guardrail = checkSessionRuntimeGuardrail({ workspaceId: row.id, now: nowMs });
       if (!guardrail.allowed) return { ok: false, reason: guardrail.reason };
 
-      const provisioned = await provisionSessionSandbox(row, input.userId);
+      const provisioned = await provisionSessionSandbox(row, actor);
       if (!provisioned.ok) {
         if (provisioned.reason === 'denied') {
           // `not_authorized` is the capability denial the runners already speak
@@ -384,8 +390,8 @@ export function buildRealSandboxRunDeps({
     // findings — P1, PR #2314, both rounds: session_limit_reached fell
     // through unmetered first, then spawn_failed did too).
     resolveBillingSession: async (ctx) => {
-      if (!ctx.conversationId) return null;
-      const resolved = await resolveSession(ctx.conversationId, ctx.userId);
+      if (!ctx.conversationId || ctx.userId !== actor.userId) return null;
+      const resolved = await resolveSession(ctx.conversationId, actor);
       if (resolved.ok) {
         const row = resolved.session;
         return { workspaceId: row.id, driveId: row.driveId, ownerId: row.ownerId };
@@ -579,9 +585,12 @@ export const resolveSandboxActorContext: ResolveSandboxContext =
   createResolveSandboxActorContext();
 
 /** The shared call-time gate binding — kill-switch, canRunCode, quota preflight. */
-export const productionSandboxGate: SandboxGate = (ctx) =>
-  gateSandboxToolCall({
-    userId: ctx.userId,
+export const productionSandboxGate: SandboxGate = (ctx, actor) =>
+  // The resolved sandbox context and the driving actor must name the same person; anything else refuses.
+  actor.userId !== ctx.userId
+    ? Promise.resolve({ ok: false, reason: 'error', error: 'Code execution could not be authorized.' })
+    : gateSandboxToolCall({
+    actor,
     driveId: ctx.driveId,
     ownerId: ctx.ownerId,
     tenantId: ctx.tenantId,
@@ -602,7 +611,7 @@ export function buildSandboxTools(): {
   editFile: Tool;
 } {
   return createSandboxTools({
-    runDeps: buildRealSandboxRunDeps(),
+    runDeps: (actor) => buildRealSandboxRunDeps({ actor }),
     resolveContext: resolveSandboxActorContext,
     gate: productionSandboxGate,
   });

@@ -491,10 +491,10 @@ export const OUT_OF_BOX_SOURCES: readonly SpendSourceKind[] = Object.freeze(['dr
 export const ORG_ENTITLEMENT_TIER: SubscriptionTier = 'business';
 
 /**
- * WAL-8 / SEAT-9: the tier an org confers follows its billing status. A paid (active,
- * past_due) org carries Business; a LAPSED org carries no paid entitlement — its
- * compute gets no Business ceilings and no sandbox — until it reactivates. Lapse is a
- * read, never a write, so reactivating restores Business at once.
+ * WAL-8 / SEAT-9: the tier an org confers follows its billing status. An active,
+ * automatically collected org carries Business; a LAPSED org (past_due included) carries
+ * no paid entitlement — its compute gets no Business ceilings and no sandbox — until it
+ * reactivates. Lapse is a read, never a write, so reactivating restores Business at once.
  */
 export function orgEntitlementTier(orgLapsed: boolean): SubscriptionTier {
   return orgLapsed ? 'free' : ORG_ENTITLEMENT_TIER;

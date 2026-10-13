@@ -5,6 +5,7 @@ import type { OrgRole } from '@pagespace/db/schema/organizations';
 import type { DriveMemberRole } from './org-access';
 import { decideDriveLeadAuthority, isDriveLead } from './drive-relationship';
 import { validOrgDriveRow } from './org-drive-resolution';
+import { holdsOrgRole } from '../organizations/authorize-core';
 
 /**
  * Restricted org drives (Spec DRV-6, D-OW-22): who may ask to join one, who may answer, and what
@@ -296,7 +297,7 @@ export function decideDriveDirectoryEntry({
       return { joined: false, joinRequest: null, canRequest: !isPendingInvite(viewerRow) };
     }
     case 'PRIVATE': {
-      const orgAdmin = viewerOrgRole === 'OWNER' || viewerOrgRole === 'ADMIN';
+      const orgAdmin = holdsOrgRole(viewerOrgRole, 'ADMIN');
       if (!member && !orgAdmin) return null;
       return { joined: member, joinRequest: null, canRequest: false };
     }

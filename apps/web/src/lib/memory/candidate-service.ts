@@ -12,10 +12,10 @@
  * genuine one-off after two or three nights while the user said nothing new.
  */
 
-import { and, eq, gte, inArray, isNotNull, isNull, lt, ne, or } from '@pagespace/db/operators';
+import { and, eq, gte, inArray, isNotNull, isNull, lt, ne, or, sql } from '@pagespace/db/operators';
 import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db';
-import { personalizationCandidates } from '@pagespace/db/schema/personalization';
+import { personalizationCandidates, userPersonalization } from '@pagespace/db/schema/personalization';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 // Single definition, owned by the producer. A local copy here had already
 // drifted — it lacked `evidenceAt`, so the staging table could not have seen
@@ -106,7 +106,9 @@ export function shouldIncrementOccurrences(
  */
 export async function upsertCandidates(
   userId: string,
-  claims: DiscoveredClaim[]
+  claims: DiscoveredClaim[],
+  /** The orgs whose drives fed the discovery that produced `claims` (D-OW-62): unioned into each row. */
+  orgIds: readonly string[] = []
 ): Promise<number> {
   if (claims.length === 0) return 0;
 
@@ -125,6 +127,7 @@ export async function upsertCandidates(
         id: personalizationCandidates.id,
         occurrences: personalizationCandidates.occurrences,
         lastSeenAt: personalizationCandidates.lastSeenAt,
+        orgIds: personalizationCandidates.orgIds,
         promotedAt: personalizationCandidates.promotedAt,
         rejectedAt: personalizationCandidates.rejectedAt,
       })
@@ -156,6 +159,7 @@ export async function upsertCandidates(
           occurrences: 1,
           firstSeenAt: claim.evidenceAt,
           lastSeenAt: claim.evidenceAt,
+          orgIds: unionOrgIds([], orgIds),
         })
         .onConflictDoNothing()
         .returning({ id: personalizationCandidates.id });
@@ -185,6 +189,8 @@ export async function upsertCandidates(
         // make a claim look staler than evidence already counted for it.
         lastSeenAt: claim.evidenceAt > existing.lastSeenAt ? claim.evidenceAt : existing.lastSeenAt,
         evidence: claim.evidence, // keep most recent evidence
+        // Every org any corroborating discovery read from: the claim may restate any of them.
+        orgIds: unionOrgIds(existing.orgIds, orgIds),
       })
       .where(
         and(
@@ -203,6 +209,11 @@ export async function upsertCandidates(
   });
 
   return upserted;
+}
+
+/** Sorted, distinct union of two org id lists. Pure. */
+export function unionOrgIds(a: readonly string[], b: readonly string[]): string[] {
+  return [...new Set([...a, ...b])].sort();
 }
 
 /**
@@ -390,4 +401,25 @@ export async function redactSettledEvidence(
   }
 
   return redacted.length;
+}
+
+/**
+ * Union `orgIds` into the user's `memoryOrgIds` (D-OW-62): what the memory pages may now restate. Memory pages are
+ * free-text merges, so attribution is per row, never per sentence, and only ever grows — an org drops out only when
+ * the memory is cleared. Atomic: concurrent runs cannot lose each other's orgs.
+ */
+export async function recordMemoryOrgIds(userId: string, orgIds: readonly string[]): Promise<void> {
+  const unique = unionOrgIds([], orgIds);
+  if (unique.length === 0) return;
+  const incoming = sql`ARRAY[${sql.join(unique.map((id) => sql`${id}`), sql`, `)}]::text[]`;
+  await db
+    .insert(userPersonalization)
+    .values({ userId, memoryOrgIds: unique })
+    .onConflictDoUpdate({
+      target: userPersonalization.userId,
+      set: {
+        memoryOrgIds: sql`ARRAY(SELECT DISTINCT o FROM unnest(${userPersonalization.memoryOrgIds} || ${incoming}) AS o ORDER BY o)`,
+        updatedAt: new Date(),
+      },
+    });
 }

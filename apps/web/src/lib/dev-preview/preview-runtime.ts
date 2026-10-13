@@ -48,6 +48,7 @@ import { createRequestScopedSandboxHost } from '@/lib/sandbox/sprites-client';
 import { findSessionRecord } from '@/lib/agent-workspaces/agent-workspaces-runtime';
 import { getDriveEnvStore, resolveDriveEnvPayer } from '@/lib/drive-envs/drive-envs-runtime';
 import { readDevPreviewListeners } from './listeners-source';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 let previewStore: DevPreviewStore | null = null;
 let previewLock: DevPreviewLock | null = null;
@@ -109,8 +110,8 @@ function buildPreviewAccessDeps(): PreviewAccessDeps {
       const payer = await resolveDriveEnvPayer(driveId);
       return payer ? { payerId: payer.payerId } : null;
     },
-    canRunCode: ({ userId, driveId, ownerId }) => canRunCode({ userId, driveId: driveId ?? undefined, ownerId, requestOrigin: 'user' }),
-    isSessionUsable: ({ sessionId, userId }) => sessionService.isSessionUsableById(sessionId, userId),
+    canRunCode: ({ actor, driveId, ownerId }) => canRunCode({ actor, driveId: driveId ?? undefined, ownerId, requestOrigin: 'user' }),
+    loadSessionActor: ({ sessionId, userId }) => sessionService.loadUsableSessionActor(sessionId, userId),
     attach: async (sandboxId) => {
       const host = await createRequestScopedSandboxHost();
       return host.attach({ sandboxId }).catch(() => null);
@@ -186,22 +187,23 @@ export type OpenPreviewResult =
 export async function openPreviewForUser({
   authorizeAs,
   mintFor = authorizeAs,
-  userId,
+  actor,
   sessionId,
 }: {
   /** The holder whose access decision governs — the session the user came through, or the env. */
   authorizeAs: DevPreviewHolderRef;
   /** The holder whose preview origin the grant opens — the env for an env-bound session (the holder rule). */
   mintFor?: DevPreviewHolderRef;
-  userId: string;
+  /** The opener's credential: the holder's drive access (sign-in policy included) is asked of it. */
+  actor: AccessActor;
   /** The session doing the opening; carried into the grant and the cookie so revoking it cuts the preview. */
   sessionId: string;
 }): Promise<OpenPreviewResult> {
   const apex = isDevPreviewEnabled() ? resolveDevPreviewApex() : null;
   if (apex === null) return { ok: false, reason: 'not-configured' };
-  const authorization: PreviewAuthorization = await authorizePreviewHolder({ holder: authorizeAs, userId, deps: buildPreviewAccessDeps() });
+  const authorization: PreviewAuthorization = await authorizePreviewHolder({ holder: authorizeAs, actor, deps: buildPreviewAccessDeps() });
   if (!authorization.allowed) return { ok: false, reason: 'not-authorized', detail: authorization.reason };
-  const grant = await getPreviewGrantsStore().mint({ holder: mintFor, userId, sessionId, now: new Date() });
+  const grant = await getPreviewGrantsStore().mint({ holder: mintFor, userId: actor.userId, sessionId, now: new Date() });
   return { ok: true, redirectTo: buildPreviewAuthRedirect(buildPreviewHost(mintFor, apex), grant.id) };
 }
 
@@ -216,18 +218,18 @@ export async function openPreviewForUser({
 export function readDevPreviewStatusForUser({
   authorizeAs,
   holder = authorizeAs,
-  userId,
+  actor,
 }: {
   authorizeAs: DevPreviewHolderRef;
   holder?: DevPreviewHolderRef;
-  userId: string;
+  actor: AccessActor;
 }): Promise<DevPreviewStatusResult> {
-  return gatherDevPreviewStatus({ authorizeAs, holder, userId, deps: { ...buildPreviewAccessDeps(), readListeners: readDevPreviewListeners } });
+  return gatherDevPreviewStatus({ authorizeAs, holder, actor, deps: { ...buildPreviewAccessDeps(), readListeners: readDevPreviewListeners } });
 }
 
 /** The rows-only access decision for a holder, as the write routes ask it before applying a user action. */
-export function authorizePreviewHolderForUser({ holder, userId }: { holder: DevPreviewHolderRef; userId: string }): Promise<PreviewAuthorization> {
-  return authorizePreviewHolder({ holder, userId, deps: buildPreviewAccessDeps() });
+export function authorizePreviewHolderForUser({ holder, actor }: { holder: DevPreviewHolderRef; actor: AccessActor }): Promise<PreviewAuthorization> {
+  return authorizePreviewHolder({ holder, actor, deps: buildPreviewAccessDeps() });
 }
 
 /**
@@ -238,13 +240,13 @@ export function authorizePreviewHolderForUser({ holder, userId }: { holder: DevP
 export function applyDevPreviewUserActionForHolder({
   holder,
   action,
-  userId,
+  actor,
   wakeSubject,
   sandboxId,
 }: {
   holder: DevPreviewHolderRef;
   action: DevPreviewUserAction;
-  userId: string;
+  actor: AccessActor;
   /** `PreviewAuthorization.wakeSubject` — the payer the resume wake gate is asked about. */
   wakeSubject: { driveId: string | null; ownerId: string };
   /** `PreviewAuthorization.sandboxId` — what a SELECT attaches to when no row exists yet. */
@@ -254,7 +256,7 @@ export function applyDevPreviewUserActionForHolder({
   return applyDevPreviewUserAction({
     holder,
     action,
-    userId,
+    actor,
     wakeSubject,
     sandboxId,
     deps: { previewStore: deps.previewStore, attach: deps.attach, readListeners: readDevPreviewListeners, canRunCode: deps.canRunCode, lock: getPreviewLock(), now: deps.now },
@@ -264,19 +266,19 @@ export function applyDevPreviewUserActionForHolder({
 /** The ports list, bound to the real store, host and gate — see `probeDevPreviewPorts`. */
 export function probeDevPreviewPortsForHolder({
   holder,
-  userId,
+  actor,
   wakeSubject,
   sandboxId,
 }: {
   holder: DevPreviewHolderRef;
-  userId: string;
+  actor: AccessActor;
   wakeSubject: { driveId: string | null; ownerId: string };
   sandboxId: string | null;
 }): Promise<DevPreviewPortsResult> {
   const deps = buildPreviewAccessDeps();
   return probeDevPreviewPorts({
     holder,
-    userId,
+    actor,
     wakeSubject,
     sandboxId,
     deps: { previewStore: deps.previewStore, attach: deps.attach, readListeners: readDevPreviewListeners, canRunCode: deps.canRunCode, now: deps.now },

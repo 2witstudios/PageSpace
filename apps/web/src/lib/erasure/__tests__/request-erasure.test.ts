@@ -32,6 +32,7 @@ import { dataSubjectRequestRepository } from '@pagespace/lib/repositories/data-s
 import { stripe } from '@/lib/stripe/client';
 import { enqueueAccountErasure } from '../enqueue';
 import { revokeAndDiscardAppleTokens } from '@pagespace/lib/auth/apple/revoke-apple-tokens';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const repo = vi.mocked(dataSubjectRequestRepository);
 
@@ -56,7 +57,7 @@ const baseInput = {
   subjectUserId: 'u1',
   subjectEmail: 'a@b.com',
   stripeCustomerId: null,
-  callerUserId: 'u1',
+  caller: credentialActor('u1', null),
   requestedByType: 'self' as const,
   forceDelete: false,
   subjectAppleLinked: false,
@@ -70,7 +71,7 @@ describe('lodgeAndEnqueueErasure', () => {
     expect(enqueueAccountErasure).toHaveBeenCalledWith({
       requestId: 'dsr_1',
       userId: 'u1',
-      callerUserId: 'u1',
+      caller: credentialActor('u1', null),
     });
     expect(repo.markQueued).toHaveBeenCalledWith('dsr_1', 'job_1');
     expect(result).toEqual({

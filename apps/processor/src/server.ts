@@ -12,6 +12,7 @@ import { QueueManager } from './workers/queue-manager';
 import { ingestRouter } from './api/ingest';
 import { verifyRouter } from './api/verify';
 import avatarRouter from './api/avatar';
+import orgAvatarRouter from './api/org-avatar';
 import { deleteFileRouter } from './api/delete-file';
 import { erasureRouter } from './api/erasure';
 import { appBuildRouter } from './api/app-build';
@@ -216,6 +217,8 @@ app.use('/api/avatar', authenticateService, requireScope('avatars:write'), avata
 // Web app proxies GET /api/avatar/:userId/:filename here when it doesn't have
 // direct volume access (e.g. Fly.io deployments).
 app.use('/avatars', avatarRouter);
+// ORG-1: org avatars, written only with a token bound to the org (no public read here; the web app serves them to members).
+app.use('/api/org-avatar', authenticateService, requireScope('org-avatars:write'), orgAvatarRouter);
 app.use('/api/files', authenticateService, requireScope('files:delete'), deleteFileRouter);
 app.use('/api/erasure', authenticateService, requireScope('erasure:enqueue'), erasureRouter);
 app.use('/api/app-hosting', authenticateService, requireScope('app-hosting:publish'), appBuildRouter);

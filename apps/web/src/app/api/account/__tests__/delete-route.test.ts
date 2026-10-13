@@ -178,7 +178,7 @@ describe('DELETE /api/account (async erasure)', () => {
       expect(lodgeAndEnqueueErasure).toHaveBeenCalledWith(
         expect.objectContaining({
           subjectUserId: mockUserId,
-          callerUserId: mockUserId,
+          caller: expect.objectContaining({ userId: mockUserId }),
           requestedByType: 'self',
           forceDelete: false,
         })

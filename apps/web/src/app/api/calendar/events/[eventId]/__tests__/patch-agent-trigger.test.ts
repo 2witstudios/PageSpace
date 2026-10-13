@@ -57,6 +57,7 @@ vi.mock('@/lib/workflows/calendar-trigger-helpers', () => ({
 // naive-datetime rule.
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   isUserDriveMember: vi.fn(),
   isDriveOwnerOrAdmin: vi.fn(),
 }));
@@ -84,11 +85,11 @@ vi.mock('../../../../../../lib/auth', () => ({
   // Session auth falls through to the user-level checks.
   isPrincipalDriveMember: vi.fn(async (auth: { userId: string }, driveId: string) => {
     const { isUserDriveMember } = await import('@pagespace/lib/permissions/permissions');
-    return isUserDriveMember(auth.userId, driveId);
+    return isUserDriveMember(credentialActor(auth.userId, null), driveId);
   }),
   isPrincipalDriveOwnerOrAdmin: vi.fn(async (auth: { userId: string }, driveId: string) => {
     const { isDriveOwnerOrAdmin } = await import('@pagespace/lib/permissions/permissions');
-    return isDriveOwnerOrAdmin(auth.userId, driveId);
+    return isDriveOwnerOrAdmin(credentialActor(auth.userId, null), driveId);
   }),
 }));
 
@@ -110,6 +111,7 @@ import {
   validateCalendarAgentTrigger,
   resyncCalendarTriggerTimings,
 } from '@/lib/workflows/calendar-trigger-helpers';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const USER_ID = 'user_creator';
 const EVENT_ID = 'event_123';

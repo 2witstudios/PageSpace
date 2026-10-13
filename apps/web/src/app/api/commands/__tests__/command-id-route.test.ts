@@ -33,6 +33,7 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
   auditRequest: vi.fn(),
 }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   canUserViewPage: vi.fn(),
   isDriveOwnerOrAdmin: vi.fn(),
 }));
@@ -50,6 +51,7 @@ import { db } from '@pagespace/db/db';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
 import { authenticateRequestWithOptions, checkMCPDriveScope, canPrincipalViewPage } from '@/lib/auth';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const mockedAuth = vi.mocked(authenticateRequestWithOptions);
 const mockedDb = vi.mocked(db, true);
@@ -265,7 +267,7 @@ describe('DELETE /api/commands/[commandId]', () => {
     mockedDb.query.commands.findFirst.mockResolvedValue(driveCommand as never);
     const response = await DELETE(deleteRequest(), params('cmd_2'));
     expect(response.status).toBe(200);
-    expect(mockedIsOwnerOrAdmin).toHaveBeenCalledWith(USER_ID, 'drive_1');
+    expect(mockedIsOwnerOrAdmin).toHaveBeenCalledWith(expect.objectContaining({ userId: USER_ID }), 'drive_1');
   });
 });
 
@@ -274,7 +276,7 @@ vi.mock('@/lib/auth/principal-permissions', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/auth/principal-permissions')>();
   const permissions = await import('@pagespace/lib/permissions/permissions');
   return { ...actual,
-    canPrincipalViewPage: (auth: { userId: string }, resourceId: string) => permissions.canUserViewPage(auth.userId, resourceId),
-    isPrincipalDriveOwnerOrAdmin: (auth: { userId: string }, resourceId: string) => permissions.isDriveOwnerOrAdmin(auth.userId, resourceId),
+    canPrincipalViewPage: (auth: { userId: string }, resourceId: string) => permissions.canUserViewPage(credentialActor(auth.userId, null), resourceId),
+    isPrincipalDriveOwnerOrAdmin: (auth: { userId: string }, resourceId: string) => permissions.isDriveOwnerOrAdmin(credentialActor(auth.userId, null), resourceId),
   };
 });

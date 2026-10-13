@@ -18,6 +18,7 @@ import { isOrgLapsedForDrive } from '@pagespace/lib/organizations/status';
 import { resolvePersonalCapabilityTier } from '@pagespace/lib/billing/deployment-capability';
 import { changePublishSubdomain, PublishError, PUBLISH_HOST } from '@/lib/canvas/publish-page';
 import { CUSTOM_SUBDOMAIN_UNAVAILABLE_MESSAGE } from '@/lib/subscription/plan-refusal-copy';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true }; // keep PATCH CSRF-protected
 
@@ -49,7 +50,7 @@ export async function GET(
     if (scopeError) return scopeError;
 
     if (!(await isPrincipalDriveOwnerOrAdmin(auth, driveId))) {
-      return NextResponse.json({ error: 'Only drive owners and admins can view subdomain settings' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Only drive owners and admins can view subdomain settings' }, { status: 403 }));
     }
 
     const [driveRow] = await db
@@ -86,7 +87,7 @@ export async function PATCH(
     const userId = auth.userId!;
 
     if (!(await isPrincipalDriveOwnerOrAdmin(auth, driveId))) {
-      return NextResponse.json({ error: 'Only drive owners and admins can change the subdomain' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Only drive owners and admins can change the subdomain' }, { status: 403 }));
     }
 
     if (!(await canChooseSubdomain(driveId))) {
@@ -108,7 +109,7 @@ export async function PATCH(
       return NextResponse.json({ error: parsed.error.issues[0]?.message ?? 'Invalid subdomain' }, { status: 400 });
     }
 
-    const result = await changePublishSubdomain(driveId, parsed.data.subdomain, userId);
+    const result = await changePublishSubdomain(driveId, parsed.data.subdomain, actorFromAuth(auth));
 
     auditRequest(request, {
       eventType: 'data.write',

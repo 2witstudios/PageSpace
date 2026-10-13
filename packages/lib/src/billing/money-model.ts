@@ -3,11 +3,14 @@
  * (Spec MON-1..MON-8, A-11).
  *
  * A credit is not a dollar. This module is the only place that states:
- *   - MARKUP_BPS: what real provider cost is marked up by before it is charged;
+ *   - MARKUP_BPS: what real provider cost is marked up by before it is charged (and
+ *     MACHINE_MARKUP_BPS, its separately floored twin for Machine substrate cost);
  *   - CREDITS_PER_DOLLAR: the purchase and display rate of a credit;
  *   - INCLUDED_CREDIT_RATIO_BPS: the share of a subscription's price paid that is
  *     granted back as credit value each period;
  *   - FREE_STARTER_CREDITS: the one-time free grant, a plain count;
+ *   - the org seat allowance default and ceiling, and the per-consumer cap defaults
+ *     ([D-OW-31]);
  *   - CREDIT_PACKS and the custom top-up bounds, as credit counts priced from the
  *     rate with no ratio (MON-4);
  *   - the conversions between cents, credits, and dollars, and the one formatter
@@ -19,29 +22,13 @@
  * credit VALUE — `wallets.*Cents`, the ledger, holds — and this module is how
  * those cents become the counts a person sees.
  *
- * MONEY_MODEL_V2_ACTIVE (D-OW-17) gates only the RATIO. Off, a paid tier is granted
- * 100% of its price as credit value, which is exactly today's tabulated allowance
- * (Pro $15 → 1500¢), so balances compute as before until migration day flips it. The
- * rate and the formatter are not gated: a credit is CREDITS_PER_DOLLAR⁻¹ of a dollar
- * everywhere, immediately.
- *
- * D-OW-17: the ratio switch is a CODE CONSTANT, not a runtime env var. An earlier
- * revision of this fix used a server env var (`MONEY_MODEL_V2`), then a client-visible
- * `NEXT_PUBLIC_` mirror of it, then a server-computed value patched onto the client
- * after the fact — three attempts at the same problem: a value that must read
- * identically in every process (web, marketing, a "use client" bundle) cannot be a
- * value each process reads independently, because nothing enforces that they agree.
- * Only a value baked into the shared source at build time — this constant — is
- * identical everywhere by construction: web and marketing both compile
- * `@pagespace/lib` from the same commit, so both embed the same literal, and a "use
- * client" bundle embeds it too, no different from any other compile-time constant.
- * Flipping it is a commit (migration day), deployed to every app together — never an
- * env var an operator sets on a subset of processes. `MONEY_MODEL_V2_ACTIVE` is FALSE
- * in this PR; a follow-up commit on migration day changes the literal.
- *
- * The seam guard `packages/lib/src/__tests__/seams/credit-conversion.seam.test.ts`
- * fails if any file (this one included) reads `process.env.MONEY_MODEL_V2` — that
- * name must never come back.
+ * D-OW-17 / D-OW-42: the ratio is in force unconditionally. It was staged behind a
+ * code constant (`MONEY_MODEL_V2_ACTIVE`), flipped by one migration commit and then
+ * removed with every legacy 100%-of-price branch — the full cutover leaves no
+ * reversibility switch. A value that must read identically in every process (web,
+ * marketing, a "use client" bundle) is a literal in this shared source, never an env
+ * var: the seam guard `packages/lib/src/__tests__/seams/credit-conversion.seam.test.ts`
+ * fails if any file reads `process.env.MONEY_MODEL_V2`.
  */
 
 import { envInt } from './env-parse';
@@ -49,6 +36,34 @@ import { TIER_PLAN_LIMITS, isSubscriptionTier, type SubscriptionTier } from './s
 
 /** Markup applied to real provider cost, in basis points. 15000 = 1.5×. */
 export const MARKUP_BPS = envInt('CREDIT_MARKUP_BPS', 15000);
+
+/**
+ * Absolute floor for {@link MACHINE_MARKUP_BPS} — 15000bps (1.5x). The whole
+ * point of that constant is to GUARANTEE Machine billing never falls below
+ * 1.5x real substrate cost, independent of {@link MARKUP_BPS}; an env
+ * misconfiguration (typo, someone mirroring a reduced AI markup) must not be
+ * able to silently violate that guarantee. Only a value BELOW this floor is
+ * clamped up — a deliberately higher markup passes through unclamped, since
+ * there is no stated ceiling.
+ */
+export const MACHINE_MARKUP_FLOOR_BPS = 15000;
+
+/**
+ * Markup applied to Machine substrate cost, in basis points — the
+ * founder-set floor of 1.5× real substrate cost. Deliberately a SEPARATE env
+ * var and constant from {@link MARKUP_BPS} (not derived from it): AI-model
+ * pricing and substrate-runtime pricing are different economics that may
+ * diverge, so lowering `CREDIT_MARKUP_BPS` for AI billing must never silently
+ * lower what a Machine is charged. Threaded into `consumeCredits` via
+ * `markupBpsOverride` (see machine-billing.ts's `trackUsage`) so the real
+ * settle path enforces this floor independent of the shared default. Clamped
+ * to {@link MACHINE_MARKUP_FLOOR_BPS} so a misconfigured env var can raise
+ * the markup but never lower it below the documented floor.
+ */
+export const MACHINE_MARKUP_BPS = Math.max(
+  envInt('MACHINE_MARKUP_BPS', MACHINE_MARKUP_FLOOR_BPS),
+  MACHINE_MARKUP_FLOOR_BPS,
+);
 
 /**
  * One dollar is 100 cents. Stated once; every cents↔dollars conversion goes through here.
@@ -77,12 +92,6 @@ export const INCLUDED_CREDIT_RATIO_BPS: Record<SubscriptionTier, number> = {
 };
 
 /**
- * The ratio in force with the money model off: the whole price paid becomes credit
- * value, which reproduces the old tabulated allowances exactly.
- */
-const LEGACY_INCLUDED_CREDIT_RATIO_BPS = 10_000;
-
-/**
  * One-time starter grant for the free tier, as a plain credit count (MON-8). Not
  * derived from any price. 500 credits = $5 of credit value at CREDITS_PER_DOLLAR,
  * unchanged from the previous $5 starter grant.
@@ -90,38 +99,36 @@ const LEGACY_INCLUDED_CREDIT_RATIO_BPS = 10_000;
 export const FREE_STARTER_CREDITS = 500;
 
 /**
- * D-OW-17: whether the decoupled money model (the 60% ratio) is active — a CODE
- * CONSTANT, never a runtime env var (see the module doc comment for why). FALSE in
- * this PR; migration day changes this literal in a follow-up commit.
+ * The org's default seat allowance, in credits a month per member (WAL-2, the POL-7 policy
+ * default and the fallback when an org sets none): D20.5's 100. Its own figure on purpose:
+ * [D-OW-31] moved the per-consumer cap defaults and left the seat allowance where it was, so a
+ * cap edit must never move what every member may draw from every pool.
  */
-export const MONEY_MODEL_V2_ACTIVE = false;
+export const DEFAULT_SEAT_ALLOWANCE_CREDITS = 100;
 
 /**
- * Whether the decoupled money model is active. Takes no argument and returns
- * {@link MONEY_MODEL_V2_ACTIVE} directly — kept as a named predicate for callers that
- * want the flag itself rather than a derived number.
+ * The most a seat allowance may be set to: 10,000,000 cents of credit value a month per
+ * member. A ceiling exists so "a very large number" is not "unlimited by another name": the
+ * cap arithmetic multiplies cents into millicents, and an unbounded value would walk toward
+ * 2^53 there.
  */
-export function isMoneyModelV2Enabled(): boolean {
-  return MONEY_MODEL_V2_ACTIVE;
-}
+export const MAX_SEAT_ALLOWANCE_CENTS = 10_000_000;
+
+/**
+ * Per-consumer cap defaults when an admin enables caps without naming values, in credits
+ * ([D-OW-31]: 50 a day and 1,000 a month, replacing D20.5's 10/100, which sat below one image
+ * or uncatalogued model's hold and so refused every such call).
+ */
+export const DEFAULT_CONSUMER_CAP_CREDITS = { daily: 50, monthly: 1_000 } as const;
 
 /**
  * The included-credit ratio for `tier`, in basis points. 0 for the free tier and for
  * any unknown/legacy value (nothing is paid, so nothing derives). Accepts the raw
  * `users.subscriptionTier` string.
- *
- * PURE: `active` is an explicit parameter, not a hidden read of global state — this
- * is the actual ratio-selection step D-OW-17 asked to be testable in isolation, with
- * no env mutation and no module-load timing to manage. Defaults to
- * {@link MONEY_MODEL_V2_ACTIVE}, so every production call site (which never passes a
- * third/second argument) gets the real constant "for free"; tests pass `true`/`false`
- * directly to exercise both branches.
  */
-export function includedCreditRatioBps(tier: string, active: boolean = MONEY_MODEL_V2_ACTIVE): number {
+export function includedCreditRatioBps(tier: string): number {
   if (!isSubscriptionTier(tier)) return 0;
-  const ratio = INCLUDED_CREDIT_RATIO_BPS[tier];
-  if (ratio <= 0) return 0;
-  return active ? ratio : LEGACY_INCLUDED_CREDIT_RATIO_BPS;
+  return Math.max(0, INCLUDED_CREDIT_RATIO_BPS[tier]);
 }
 
 /**
@@ -129,16 +136,11 @@ export function includedCreditRatioBps(tier: string, active: boolean = MONEY_MOD
  * paid so a price change, a promo, or a partial period flows through without a
  * table edit. Floored to whole cents (never grants more than the ratio of what was
  * paid); fails closed — a negative or non-finite amount, or a tier with no ratio,
- * grants nothing. `active` defaults to {@link MONEY_MODEL_V2_ACTIVE}, same as
- * {@link includedCreditRatioBps}.
+ * grants nothing.
  */
-export function allowanceCentsForPaidCents(
-  paidCents: number,
-  tier: SubscriptionTier,
-  active: boolean = MONEY_MODEL_V2_ACTIVE,
-): number {
+export function allowanceCentsForPaidCents(paidCents: number, tier: SubscriptionTier): number {
   if (!Number.isFinite(paidCents) || paidCents <= 0) return 0;
-  const ratio = includedCreditRatioBps(tier, active);
+  const ratio = includedCreditRatioBps(tier);
   if (ratio <= 0) return 0;
   return Math.floor((paidCents * ratio) / 10_000);
 }
@@ -154,12 +156,11 @@ export function tierListPriceCents(tier: SubscriptionTier): number {
  * brand-new balance row, and display of an account that has never been granted.
  * Paid tiers derive from the list price; free is the starter grant; an
  * unknown/legacy value (e.g. a stale `users.subscriptionTier`) is treated as free so
- * it is never handed a paid allowance. Accepts the raw column string. `active`
- * defaults to {@link MONEY_MODEL_V2_ACTIVE}, same as {@link allowanceCentsForPaidCents}.
+ * it is never handed a paid allowance. Accepts the raw column string.
  */
-export function tierAllowanceCents(tier: string, active: boolean = MONEY_MODEL_V2_ACTIVE): number {
+export function tierAllowanceCents(tier: string): number {
   if (isSubscriptionTier(tier) && tier !== 'free') {
-    return allowanceCentsForPaidCents(tierListPriceCents(tier), tier, active);
+    return allowanceCentsForPaidCents(tierListPriceCents(tier), tier);
   }
   return centsFromCredits(FREE_STARTER_CREDITS);
 }
@@ -226,6 +227,11 @@ export function chargedCentsFromProviderDollars(realCostDollars: number, markupB
 /** Millicents (the accrual unit) → cents, unrounded. */
 export function centsFromMillicents(millicents: number): number {
   return millicents / MILLICENTS_PER_CENT;
+}
+
+/** Cents → millicents (the accrual unit). */
+export function millicentsFromCents(cents: number): number {
+  return cents * MILLICENTS_PER_CENT;
 }
 
 /**

@@ -3,14 +3,15 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { z } from 'zod';
 import { getOrgPoolSplit, setOrgPoolPaused } from '@pagespace/lib/services/drive-wallet-service';
-import { authorizeOrgRequest, ORG_READ_AUTH, ORG_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
+import { authorizeOrgRequest, ORG_READ_AUTH, ORG_SESSION_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
 import { safeParseBody } from '@/lib/validation/parse-body';
 import { walletErrorResponse } from '@/lib/wallets/wallet-route';
 
 /**
  * GET /api/orgs/[orgId]/pool — the org pool and where it goes: available, unallocated, seats and every
  * drive wallet (read model, D-OW-38 "pool split"; SPEND-10; UI-7). Owner and Admins only:
- * SPEND-9 keeps the pool from every consumer.
+ * SPEND-9 keeps the pool from every consumer. Session only ([D-OW-26]: a key reads wallet views through
+ * the consumer allowlist, and the pool is an admin money view; X-1 exclusion table).
  */
 export async function GET(request: Request, context: { params: Promise<{ orgId: string }> }) {
   const { orgId } = await context.params;
@@ -42,7 +43,7 @@ const poolPauseSchema = z.object({ paused: z.boolean() }).strict();
  */
 export async function PATCH(request: Request, context: { params: Promise<{ orgId: string }> }) {
   const { orgId } = await context.params;
-  const gate = await authorizeOrgRequest(request, orgId, 'ADMIN', ORG_WRITE_AUTH);
+  const gate = await authorizeOrgRequest(request, orgId, 'ADMIN', ORG_SESSION_WRITE_AUTH);
   if (!gate.ok) return gate.response;
   const parsed = await safeParseBody(request, poolPauseSchema);
   if (!parsed.success) return parsed.response;

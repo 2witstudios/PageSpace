@@ -11,6 +11,7 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
 }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   isDriveOwnerOrAdmin: vi.fn(),
 }));
 vi.mock('@pagespace/db/db', () => ({
@@ -30,6 +31,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
 import { db } from '@pagespace/db/db';
 import { readPageContent } from '@pagespace/lib/services/page-content-store';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const mockAuth = (userId: string): SessionAuthResult => ({
   userId,
@@ -174,6 +176,6 @@ vi.mock('@/lib/auth/principal-permissions', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/auth/principal-permissions')>();
   const permissions = await import('@pagespace/lib/permissions/permissions');
   return { ...actual,
-    isPrincipalDriveOwnerOrAdmin: (auth: { userId: string }, resourceId: string) => permissions.isDriveOwnerOrAdmin(auth.userId, resourceId),
+    isPrincipalDriveOwnerOrAdmin: (auth: { userId: string }, resourceId: string) => permissions.isDriveOwnerOrAdmin(credentialActor(auth.userId, null), resourceId),
   };
 });

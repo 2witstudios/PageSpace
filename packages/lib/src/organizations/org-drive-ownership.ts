@@ -2,6 +2,7 @@ import type { OrgRole } from '@pagespace/db/schema/organizations';
 import type { OrgDriveVisibility } from '@pagespace/db/schema/core';
 import { homeDriveActionError, isHomeDrive } from '../services/drive-guards';
 import { isDriveLead } from '../permissions/drive-relationship';
+import { holdsOrgRole } from './authorize-core';
 
 /**
  * Org-owned drives: who may move a drive into or out of an org, who may create one
@@ -70,11 +71,12 @@ const refuse = (
   message: string
 ): OrgDriveRefusal => ({ ok: false, code, status, message });
 
-const isOrgAdmin = (role: OrgRole | null): boolean => role === 'OWNER' || role === 'ADMIN';
+/** Org Owner or Admin power, through the one org authorization decision (ORG-5). */
+const isOrgAdmin = (role: OrgRole | null): boolean => holdsOrgRole(role, 'ADMIN');
 
 /** The lead (drives.ownerId) of an org drive must be a member of that org (O-7). */
 export function canLeadOrgDrive(orgRole: OrgRole | null): boolean {
-  return orgRole !== null;
+  return holdsOrgRole(orgRole, 'MEMBER');
 }
 
 export function decideMoveDriveIntoOrg({
@@ -150,6 +152,21 @@ export function decideCreateDriveInOrg({
   }
   return { ok: true };
 }
+
+/**
+ * DRV-3: whether this person may create a drive in this org right now — the same verdict
+ * createOrgDrive reaches (decideCreateDriveInOrg, then SEAT-9: a lapsed org creates nothing). The
+ * create-drive dialog offers exactly these orgs; the server decides again when the drive is created.
+ */
+export const canCreateOrgDrive = ({
+  role,
+  creationPolicy,
+  lapsed,
+}: {
+  role: OrgRole | null;
+  creationPolicy: OrgDriveCreationPolicy;
+  lapsed: boolean;
+}): boolean => !lapsed && decideCreateDriveInOrg({ actorOrgRole: role, creationPolicy }).ok;
 
 /** The drive facts a visibility or lead change depends on. */
 export interface OrgDriveFactsForChange {

@@ -14,7 +14,7 @@ import { and, eq, lt, gt, inArray, isNull, notInArray } from '@pagespace/db/oper
 import { isBillingEnabled } from '../deployment-mode';
 import { computeBackfillActions } from './credit-core';
 import { MACHINE_MARKUP_BPS } from './credit-pricing';
-import { consumeCredits, settlePendingLedgerRow } from './credit-consume';
+import { consumeCredits, markUsageUnattributed, settlePendingLedgerRow } from './credit-consume';
 import { emitCreditsUpdated } from './credit-emit';
 import { loggers } from '../logging/logger-config';
 import type { AIUsageSource } from '../monitoring/usage-source';
@@ -166,11 +166,10 @@ export async function backfillCredits(): Promise<BackfillResult> {
           gt(aiUsageLogs.cost, 0),
           lt(aiUsageLogs.timestamp, cutoff),
           notInArray(aiUsageLogs.provider, METERING_EXEMPT_PROVIDERS),
+          // WAL-6b: a row already found to name no wallet is terminal — never rescanned.
+          isNull(aiUsageLogs.unattributedAt),
         ),
       )
-      // WAL-6b: rows that name a wallet first (ascending puts NULL last), so the unattributed rows
-      // the sweep never charges cannot fill a batch ahead of orphans it can settle.
-      .orderBy(aiUsageLogs.walletId)
       .limit(BATCH);
 
     if (pending.length === 0 && orphans.length === 0) break;
@@ -208,12 +207,14 @@ export async function backfillCredits(): Promise<BackfillResult> {
           orphanCount++;
         } else {
           // WAL-6b fail closed: no wallet was chosen for this usage, so the sweep charges no one —
-          // never the recorded person by default. Reported for reconciliation, every run.
+          // never the recorded person by default. Marked terminal (counted on the admin billing
+          // panel for reconciliation) and reported once, here.
           loggers.ai.error('billable AI usage names no wallet — not charged, left for reconciliation', new Error('unattributed usage'), {
             aiUsageLogId: action.aiUsageLogId,
             userId: action.userId,
             costDollars: action.costDollars,
           });
+          await markUsageUnattributed(action.aiUsageLogId, now);
           unattributed++;
         }
       } catch (error) {

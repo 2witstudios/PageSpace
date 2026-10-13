@@ -24,6 +24,7 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
   auditRequest: vi.fn(),
 }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   canUserViewPage: vi.fn(),
   isUserDriveMember: vi.fn(),
 }));
@@ -38,6 +39,7 @@ import { GET } from '../route';
 import { db } from '@pagespace/db/db';
 import { canUserViewPage, isUserDriveMember } from '@pagespace/lib/permissions/permissions';
 import { authenticateRequestWithOptions } from '@/lib/auth';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const mockedAuth = vi.mocked(authenticateRequestWithOptions);
 const mockedFindMany = db.query.commands.findMany as unknown as ReturnType<typeof vi.fn>;
@@ -205,7 +207,7 @@ vi.mock('@/lib/auth/principal-permissions', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/auth/principal-permissions')>();
   const permissions = await import('@pagespace/lib/permissions/permissions');
   return { ...actual,
-    canPrincipalViewPage: (auth: { userId: string }, resourceId: string) => permissions.canUserViewPage(auth.userId, resourceId),
-    isPrincipalDriveMember: (auth: { userId: string }, resourceId: string) => permissions.isUserDriveMember(auth.userId, resourceId),
+    canPrincipalViewPage: (auth: { userId: string }, resourceId: string) => permissions.canUserViewPage(credentialActor(auth.userId, null), resourceId),
+    isPrincipalDriveMember: (auth: { userId: string }, resourceId: string) => permissions.isUserDriveMember(credentialActor(auth.userId, null), resourceId),
   };
 });

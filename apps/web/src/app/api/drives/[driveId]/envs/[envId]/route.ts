@@ -48,6 +48,7 @@ import {
   revokeEnv,
   toDriveEnvDTO,
 } from '@/lib/drive-envs/drive-envs-runtime';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -69,7 +70,7 @@ export async function GET(request: Request, context: { params: Promise<{ driveId
         resourceId: driveId,
         details: { route: 'drive-envs', operation: 'read', envId },
       });
-      return NextResponse.json({ error: 'Not a member of this drive' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Not a member of this drive' }, { status: 403 }));
     }
 
     const env = await resolveEnvInDrive(envId, driveId);
@@ -99,7 +100,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ drive
         resourceId: driveId,
         details: { route: 'drive-envs', operation: 'rename', envId },
       });
-      return NextResponse.json({ error: 'Only drive owners and admins can rename environments' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Only drive owners and admins can rename environments' }, { status: 403 }));
     }
 
     if (!(await resolveEnvInDrive(envId, driveId))) {
@@ -150,7 +151,7 @@ export async function DELETE(request: Request, context: { params: Promise<{ driv
         resourceId: driveId,
         details: { route: 'drive-envs', operation: 'delete', envId },
       });
-      return NextResponse.json({ error: 'Only drive owners and admins can delete environments' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Only drive owners and admins can delete environments' }, { status: 403 }));
     }
 
     const env = await resolveEnvInDrive(envId, driveId);

@@ -12,12 +12,13 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({ loggers: { api: { error
 vi.mock('@/lib/orgs/org-route-auth', () => ({
   authorizeOrgRequest: vi.fn(),
   ORG_READ_AUTH: { allow: ['session'], requireCSRF: false },
-  ORG_WRITE_AUTH: { allow: ['session'], requireCSRF: true },
+  ORG_SESSION_WRITE_AUTH: { allow: ['session'], requireCSRF: true },
 }));
 
 import { PATCH } from '../route';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 import { setOrgPoolPaused } from '@pagespace/lib/services/drive-wallet-service';
-import { authorizeOrgRequest, ORG_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
+import { authorizeOrgRequest, ORG_SESSION_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
 
 const ctx = { params: Promise.resolve({ orgId: 'org-1' }) };
 const req = (body: unknown) => new Request('https://example.com/api/orgs/org-1/pool', {
@@ -27,7 +28,7 @@ const req = (body: unknown) => new Request('https://example.com/api/orgs/org-1/p
 describe('PATCH /api/orgs/[orgId]/pool — the pool kill switch', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(authorizeOrgRequest).mockResolvedValue({ ok: true, userId: 'u-ana', role: 'ADMIN', allowedDriveIds: [] });
+    vi.mocked(authorizeOrgRequest).mockResolvedValue({ ok: true, userId: 'u-ana', role: 'ADMIN', allowedDriveIds: [], authentication: null, actor: credentialActor('u-ana', null), credential: 'session' });
   });
 
   it('WAL-7 (partial) an Admin pauses and resumes the pool through the service, behind the session-only Admin gate', async () => {
@@ -35,7 +36,7 @@ describe('PATCH /api/orgs/[orgId]/pool — the pool kill switch', () => {
     const res = await PATCH(req({ paused: true }), ctx);
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ walletId: 'w-pool', status: 'paused' });
-    expect(authorizeOrgRequest).toHaveBeenCalledWith(expect.any(Request), 'org-1', 'ADMIN', ORG_WRITE_AUTH);
+    expect(authorizeOrgRequest).toHaveBeenCalledWith(expect.any(Request), 'org-1', 'ADMIN', ORG_SESSION_WRITE_AUTH);
     expect(setOrgPoolPaused).toHaveBeenLastCalledWith('u-ana', 'org-1', true);
     vi.mocked(setOrgPoolPaused).mockResolvedValue({ ok: true, walletId: 'w-pool', status: 'active' });
     await PATCH(req({ paused: false }), ctx);

@@ -27,12 +27,15 @@ vi.mock('@pagespace/db/operators', () => ({
   isNull: vi.fn((a) => ({ op: 'isNull', a })),
   notInArray: vi.fn((a, b) => ({ op: 'notInArray', a, b })),
   inArray: vi.fn((a, b) => ({ op: 'inArray', a, b })),
+  sql: vi.fn((strings: TemplateStringsArray, ...values: unknown[]) => ({ op: 'sql', strings, values })),
 }));
 vi.mock('../../deployment-mode', () => ({ isBillingEnabled: mockIsBillingEnabled }));
 vi.mock('../../logging/logger-config', () => ({ loggers: { ai: mockAiLogger } }));
+const mockMarkUnattributed = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('../credit-consume', () => ({
   consumeCredits: mockConsumeCredits,
   settlePendingLedgerRow: mockSettlePending,
+  markUsageUnattributed: mockMarkUnattributed,
 }));
 const mockEmitCreditsUpdated = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('../credit-emit', () => ({ emitCreditsUpdated: mockEmitCreditsUpdated }));
@@ -59,7 +62,7 @@ function queuePass(pendingRows: unknown[], orphanRows: unknown[]) {
         leftJoin: () => ({
           where: (w: unknown) => {
             lastOrphanWhere = w;
-            return { orderBy: () => ({ limit: () => Promise.resolve(orphanRows) }) };
+            return { limit: () => Promise.resolve(orphanRows) };
           },
         }),
       }),
@@ -208,6 +211,8 @@ describe('backfillCredits', () => {
 
     expect(mockConsumeCredits).not.toHaveBeenCalled();
     expect(result).toMatchObject({ orphans: 0, unattributed: 1 });
+    // Marked terminal on first detection, so no later sweep rescans it.
+    expect(mockMarkUnattributed).toHaveBeenCalledWith('aul_nw', expect.any(Date));
     expect(mockAiLogger.error).toHaveBeenCalledWith(expect.stringContaining('names no wallet'), expect.any(Error), expect.objectContaining({ aiUsageLogId: 'aul_nw' }));
   });
 

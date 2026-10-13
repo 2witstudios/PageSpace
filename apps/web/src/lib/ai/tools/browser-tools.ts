@@ -33,6 +33,7 @@ import {
 import type { SandboxActorContext } from '@pagespace/lib/services/sandbox/tool-runners';
 import type { ToolExecutionContext } from '../core/types';
 import type { ResolveSandboxContext, SandboxGate } from './sandbox-tools';
+import { toolActor } from './actor-permissions';
 
 type ToolModelOutputFn = NonNullable<Tool['toModelOutput']>;
 type ToolResultOutput = Awaited<ReturnType<ToolModelOutputFn>>;
@@ -120,7 +121,8 @@ export function createBrowserTools({ resolveContext, gate, operate }: BrowserToo
     if (!exposed.includes(name)) return { success: false, error: `${name} is not enabled for this agent.` };
     const ctx = await resolveContext(context);
     if ('error' in ctx) return { success: false, error: ctx.error };
-    const decision = await gate(ctx);
+    if (!context) return { success: false, error: 'User authentication required' };
+    const decision = await gate(ctx, toolActor(context));
     if (!decision.ok) return { success: false, error: decision.error, reason: decision.reason };
     return operate({ ctx, operation });
   };

@@ -68,6 +68,7 @@ import { executePageWebhookTrigger } from '@/lib/webhooks/page-webhook-trigger-e
 import { executeCalendarTrigger } from '@/lib/workflows/calendar-trigger-executor';
 import { triggerMentionedAgentResponses } from '@/lib/channels/agent-mention-responder';
 import { encodeAutomationRef } from '@pagespace/lib/billing/automation-attribution';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const orgsFlag = createRequire(import.meta.url)('@pagespace/lib/organizations/orgs-enabled') as { ORGS_ENABLED: boolean };
 const shippedOrgsEnabled = orgsFlag.ORGS_ENABLED;
@@ -209,7 +210,7 @@ async function runEveryAutomation(w: World) {
 
 const mention = (w: World, userId: string) =>
   triggerMentionedAgentResponses({
-    userId,
+    sender: credentialActor(userId, null),
     channelId: w.channelId,
     channelTitle: 'ops',
     sourceMessageId: createId(),
@@ -289,7 +290,7 @@ describe('SPEND-6 automations, triggers and scheduled workflows spend the drive 
   it('the creator\'s cap binds their automations; the presser\'s and the sender\'s own caps bind their Run and mention, not the creator\'s; a reached cap skips, records why and tells the lead', async () => {
     if (!dbAvailable) return;
     const w = (world = await build());
-    expect(await setDriveWalletCap(w.jonoId, w.productId, w.marcusId, { dailyCents: 0, monthlyCents: null }, 'session')).toMatchObject({ ok: true });
+    expect(await setDriveWalletCap(credentialActor(w.jonoId, null), w.productId, w.marcusId, { dailyCents: 0, monthlyCents: null }, 'session')).toMatchObject({ ok: true });
 
     const ran = await runEveryAutomation(w);
     expect(await lastRun(w.hourlyId)).toMatchObject({ status: 'cancelled', error: expect.stringContaining('source_cap_reached') });
@@ -304,7 +305,7 @@ describe('SPEND-6 automations, triggers and scheduled workflows spend the drive 
     const runAsPriya = () => manualRun(new Request(`https://example.com/api/workflows/${w.hourlyId}/run`, { method: 'POST' }), { params: Promise.resolve({ workflowId: w.hourlyId }) });
     expect((await runAsPriya()).status).toBe(200);
     expect((await usageRows(w)).map((r) => r.userId)).toEqual([w.priyaId]);
-    await setDriveWalletCap(w.jonoId, w.productId, w.priyaId, { dailyCents: 0, monthlyCents: null }, 'session');
+    await setDriveWalletCap(credentialActor(w.jonoId, null), w.productId, w.priyaId, { dailyCents: 0, monthlyCents: null }, 'session');
     expect((await runAsPriya()).status).not.toBe(200);
     const charged = (await usageRows(w)).length;
     await mention(w, w.priyaId);

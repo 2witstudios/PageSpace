@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { deleteOwnerLeftAutomation } from '@pagespace/lib/organizations/automation-ownership';
-import { authorizeOrgRequest, ORG_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
+import { authorizeOrgRequest, ORG_TOKEN_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
 import { automationKindSchema, automationRefusalResponse } from '@/lib/orgs/automation-ownership-route';
 
 type Context = { params: Promise<{ orgId: string; kind: string; automationId: string }> };
@@ -13,7 +13,7 @@ type Context = { params: Promise<{ orgId: string; kind: string; automationId: st
  */
 export async function DELETE(request: Request, context: Context) {
   const { orgId, kind: rawKind, automationId } = await context.params;
-  const gate = await authorizeOrgRequest(request, orgId, 'ADMIN', ORG_WRITE_AUTH);
+  const gate = await authorizeOrgRequest(request, orgId, 'ADMIN', ORG_TOKEN_WRITE_AUTH);
   if (!gate.ok) return gate.response;
   const kind = automationKindSchema.safeParse(rawKind);
   if (!kind.success) return NextResponse.json({ error: 'Automation not found', code: 'not_found' }, { status: 404 });

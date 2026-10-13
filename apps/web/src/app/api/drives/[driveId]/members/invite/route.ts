@@ -9,6 +9,7 @@ import { driveInviteRepository } from '@/lib/repositories/drive-invite-repositor
 import { canAdministerDrive } from '@pagespace/lib/permissions/drive-relationship';
 import { loadDriveRelationship } from '@pagespace/lib/permissions/drive-relationship-loader';
 import { handleEmailPath, handleUserIdPath } from '@/lib/drive-invites/invite-handlers';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -88,7 +89,7 @@ export async function POST(
 
     // The drive's lead or an effective ADMIN. The org-aware membership reads ACCEPTED rows only, so
     // a pending admin cannot exercise admin powers; an org Owner/Admin invites as ADMIN.
-    if (!canAdministerDrive(await loadDriveRelationship(inviterUserId, drive))) {
+    if (!canAdministerDrive(await loadDriveRelationship(actorFromAuth(auth), drive))) {
       auditRequest(request, {
         eventType: 'authz.access.denied',
         userId: inviterUserId,
@@ -96,10 +97,10 @@ export async function POST(
         resourceId: driveId,
         details: { operation: 'invite', reason: 'not_drive_admin' },
       });
-      return NextResponse.json(
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json(
         { error: 'Only drive owners and admins can add members' },
         { status: 403 }
-      );
+      ));
     }
 
     if ('userId' in body) {

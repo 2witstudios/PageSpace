@@ -42,6 +42,9 @@ import { getActorInfo, logActivityWithTx } from '../monitoring/activity-logger';
 import { reattributeDriveStorageInTx, type StorageReattributionResult } from './storage-limits';
 import { recordOrgAuditEventAfterCommit } from '../audit/org-audit';
 import { rehomeDriveWalletInTx } from '../billing/drive-wallet-rehome';
+import type { VerifiedAuthentication } from '../auth/authentication-evidence';
+import { decideOrgAuthentication } from '../organizations/authentication-policy-core';
+import { getOrgPolicies } from '../organizations/policy-reader';
 
 export type OrgDriveTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -83,7 +86,15 @@ export type MoveDriveResult =
   | DriveNotFound;
 
 /** A lapsed org (SEAT-9) refuses a new drive and a move in; moving a drive OUT stays open. */
-export type CreateOrgDriveResult = { ok: true; drive: DriveRow } | OrgDriveRefusal | OrgLapsedRefusal;
+/** SEC-2/SEC-3: the org's sign-in policy refuses the credential that asked. */
+export interface OrgCredentialRefusal {
+  ok: false;
+  code: 'org_strong_sign_in_required' | 'org_reauthentication_required';
+  status: 403;
+  message: string;
+}
+
+export type CreateOrgDriveResult = { ok: true; drive: DriveRow } | OrgDriveRefusal | OrgLapsedRefusal | OrgCredentialRefusal;
 
 const driveNotFound = (): DriveNotFound => ({
   ok: false,
@@ -275,7 +286,14 @@ export async function moveDriveOutOfOrg(
 
 export async function createOrgDrive(
   actorId: string,
-  input: { name: string; orgId: string; orgVisibility?: OrgDriveVisibility },
+  input: {
+    name: string;
+    orgId: string;
+    orgVisibility?: OrgDriveVisibility;
+    drivePrompt?: string | null;
+    /** The asking credential's verified sign-in, judged against the org's sign-in policy (null: none on record). */
+    authentication: VerifiedAuthentication | null;
+  },
   deps: OrgDriveServiceDeps
 ): Promise<CreateOrgDriveResult> {
   const outcome = await retryOnOrgSlugConflict(() => db.transaction(async (tx) => {
@@ -284,6 +302,12 @@ export async function createOrgDrive(
     const creationPolicy = orgExists ? await deps.getOrgDriveCreationPolicy(tx, input.orgId) : 'members';
     const verdict = decideCreateDriveInOrg({ actorOrgRole, creationPolicy });
     if (!verdict.ok) return verdict;
+    // SEC-2/SEC-3: the org's sign-in policy, judged only for a member (an outsider learns nothing about the org's
+    // policy, only that they are not a member) and under the same lock as the membership read.
+    const credential = decideOrgAuthentication({ policy: await getOrgPolicies(input.orgId, tx), authentication: input.authentication, nowMs: Date.now() });
+    if (!credential.allowed) {
+      return { ok: false, code: credential.code, status: 403, message: 'This organization requires a stronger or more recent sign-in.' } satisfies OrgCredentialRefusal;
+    }
     // SEAT-9: creating org drives is an org-only capability (after the permission verdict, as above).
     const active = await checkOrgActive(input.orgId, { executor: tx });
     if (!active.ok) return active;
@@ -299,6 +323,7 @@ export async function createOrgDrive(
         slug,
         ownerId: actorId,
         orgId: input.orgId,
+        drivePrompt: input.drivePrompt ?? null,
         ...orgDriveVisibilityForInsert(input.orgVisibility),
         updatedAt: new Date(),
       })

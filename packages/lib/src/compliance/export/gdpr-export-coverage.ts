@@ -87,6 +87,9 @@ export const EXPORTED_TABLES: Readonly<Record<string, ExportCategory>> = {
   // this about you and did not act on it" is exactly the processing a subject
   // access request exists to disclose.
   personalization_candidates: 'personalizationCandidates',
+  // Digests the AI wrote FOR the subject from their workspace activity: content addressed to them, carried in full
+  // (only when the requesting credential may read the org content it drew on, SEC-2/3 — see export-sign-in-gate).
+  pulse_summaries: 'pulseSummaries',
   // Art 15(3) is a right to a COPY, not to visibility. These were excluded on
   // the reasoning that the subject can read them in Settings — see the
   // `settings` collector for why that was not a basis (review finding).
@@ -368,6 +371,9 @@ export const EXCLUDED_TABLES: Readonly<Record<string, string>> = {
     // the org and naming no person. The same answer as `subscriptions` — a billing
     // record whose Stripe-side copy is the org's to obtain from Stripe.
     'org_subscriptions',
+    // The verified first payment or gift of that org subscription (SEAT-8): keyed on the
+    // org and the Stripe ids, naming no person — the same answer as `org_subscriptions`.
+    'org_subscription_funding',
     // X-5 made this the single balance table. The subject's PERSONAL ROOT wallet
     // is their money and is exported (the `wallet` category). What stays out is
     // the rest of the table: an ORG pool's row is the org's money (SPEND-9/D18 —
@@ -395,6 +401,12 @@ export const EXCLUDED_TABLES: Readonly<Record<string, string>> = {
     // Which WAL-7 cap alert (80% / 100%) was sent for a consumer's window this period (0332): a
     // once-per-threshold throttle stamp. The alert itself is exported under `notifications`.
     'credit_holds',
+    // [D-OW-58] ledger rows are the WALLET's financial records. The subject's own money — their
+    // personal root wallet — is exported under `wallet`; rows on wallets they do not own (an org
+    // pool, a drive wallet: allocation draws, usage, debt landed on a funder) are that wallet's
+    // books. On erasure those rows are KEPT with the person anonymised (credit_ledger.userId ON
+    // DELETE SET NULL, read as a "former member"); the subject's own root and its rows go with
+    // the user row (wallets.userId and credit_ledger.walletId cascade).
     'credit_ledger',
   ),
 
@@ -434,7 +446,6 @@ export const EXCLUDED_TABLES: Readonly<Record<string, string>> = {
     'agent_workspace_node_revs',
     'ai_pending_abort_intents',
     'conversation_compactions',
-    'pulse_summaries',
     'user_page_views',
     'message_drafts',
   ),

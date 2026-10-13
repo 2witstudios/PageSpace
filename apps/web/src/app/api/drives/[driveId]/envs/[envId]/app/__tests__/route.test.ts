@@ -332,7 +332,7 @@ describe('GET /app — whether this viewer may un-park a parked app', () => {
     const response = await GET(getReq(), envParams);
 
     expect(await response.json()).toEqual({ app: { id: PUBLISHED_APP_ID, viewerCanUnpark: true } });
-    expect(canUnparkPublishedApp).toHaveBeenCalledWith(USER_ID, expect.objectContaining({ driveId: DRIVE_ID, costOwnerId: USER_ID }));
+    expect(canUnparkPublishedApp).toHaveBeenCalledWith(expect.objectContaining({ userId: USER_ID }), expect.objectContaining({ driveId: DRIVE_ID, costOwnerId: USER_ID }));
   });
 
   it('does not ask for an app that is not parked', async () => {

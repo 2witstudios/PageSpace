@@ -28,6 +28,7 @@ vi.mock('@pagespace/lib/permissions/drive-relationship-loader', () => ({
 import { buildRevokePorts } from '../revoke-adapters';
 import type { DriveRelationship } from '@pagespace/lib/permissions/drive-relationship';
 import { loadDriveRelationship } from '@pagespace/lib/permissions/drive-relationship-loader';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const asMember = (role: 'OWNER' | 'ADMIN' | 'MEMBER', source: 'invite' | 'org' = 'invite'): DriveRelationship => ({
   isOwner: false,
@@ -36,7 +37,7 @@ const asMember = (role: 'OWNER' | 'ADMIN' | 'MEMBER', source: 'invite' | 'org' =
 const orgDrive = { id: 'drive-1', ownerId: 'lead-1', orgId: 'org-1', orgVisibility: 'OPEN' as const };
 
 const findActorDriveRole = (actorId: string) =>
-  buildRevokePorts(new Request('https://example.com')).findActorDriveRole({ driveId: 'drive-1', actorId });
+  buildRevokePorts(new Request('https://example.com'), credentialActor(actorId, null)).findActorDriveRole({ driveId: 'drive-1', actorId });
 
 describe('revoke adapters: findActorDriveRole', () => {
   beforeEach(() => {
@@ -53,7 +54,7 @@ describe('revoke adapters: findActorDriveRole', () => {
   it('gives the drive lead OWNER even without an OWNER row (org drives never get one)', async () => {
     vi.mocked(loadDriveRelationship).mockResolvedValue({ isOwner: true, membership: null });
     await expect(findActorDriveRole('lead-1')).resolves.toBe('OWNER');
-    expect(loadDriveRelationship).toHaveBeenCalledWith('lead-1', orgDrive);
+    expect(loadDriveRelationship).toHaveBeenCalledWith(expect.objectContaining({ userId: 'lead-1' }), orgDrive);
   });
 
   it('ORG-4 (partial) an org Admin with no drive_members row revokes as ADMIN', async () => {

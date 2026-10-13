@@ -36,13 +36,16 @@ import { subscriptions } from '@pagespace/db/schema/subscriptions';
 import { and, asc, eq, gt, inArray, isNotNull, isNull, lte, or, lt, sql } from '@pagespace/db/operators';
 import { alias } from 'drizzle-orm/pg-core';
 import { isBillingEnabled } from '../deployment-mode';
-import { getUserDriveAccess } from '../permissions/permissions';
+import { holdsDriveAccess } from '../permissions/permissions';
 import { loggers } from '../logging/logger-config';
-import { MONEY_MODEL_V2_ACTIVE, tierAllowanceCents } from './money-model';
+import { tierAllowanceCents } from './money-model';
+import { orgBillingLockKey } from './org-subscription-core';
 import { computeMonthlyRefill, forgivenAtRefillCents } from './credit-core';
 import { debtClearedRow, ALLOCATION_RESET_ENTRY, DEBT_FORGIVEN_ENTRY, LEG_REFUND_ENTRY } from './wallet-ledger-core';
 import { RENEWAL_CAPABLE_STATUSES, TIER_ALLOWANCE_REFILLS } from './credit-pricing';
 import {
+  orgInvoiceFundingInput,
+  orgInvoiceSubscriptionId,
   orgPoolRefillGrant,
   orgSubscriptionFundingBasis,
   refillPool,
@@ -51,8 +54,8 @@ import {
   planPersonalRootRoll,
   planLegRefund,
   planDonation,
-  selectOrgPoolRefillLines,
   type DonationRefusal,
+  type OrgInvoice,
   type LegRefundPlan,
 } from './wallet-funding';
 import { recordOrgAuditEventAfterCommit } from '../audit/org-audit';
@@ -86,32 +89,6 @@ function orgPoolOf(orgId: string) {
 // Org pool refill (MON-3)
 // ---------------------------------------------------------------------------
 
-/** Structural subset of a Stripe invoice the pool refill reads (a Stripe.Invoice satisfies it). */
-export interface OrgInvoice {
-  id?: string | null;
-  customer?: string | { id?: string | null } | null;
-  amount_paid?: number | null;
-  subtotal?: number | null;
-  billing_reason?: string | null;
-  period_start?: number | null;
-  period_end?: number | null;
-  parent?: {
-    subscription_details?: {
-      metadata?: Record<string, string> | null;
-      subscription?: string | { id?: string | null } | null;
-    } | null;
-  } | null;
-  lines?: {
-    data?: Array<{
-      amount?: number | null;
-      discount_amounts?: ReadonlyArray<{ amount?: number | null } | null> | null;
-      period?: { start?: number | null; end?: number | null } | null;
-      pricing?: { price_details?: { price?: string | { id?: string | null } | null } | null } | null;
-      parent?: { subscription_item_details?: { subscription_item?: string | null } | null } | null;
-    } | null | undefined> | null;
-  } | null;
-}
-
 export type OrgPoolRefillOutcome =
   /** The customer is not an org's: the personal funding path owns this invoice. */
   | { kind: 'not_org' }
@@ -120,29 +97,13 @@ export type OrgPoolRefillOutcome =
   | { kind: 'duplicate'; orgId: string }
   | { kind: 'nothing'; orgId: string; reason: string };
 
-const GIFT_SUBSCRIPTION_METADATA_TYPE = 'gift_subscription';
-
 function customerIdOf(invoice: OrgInvoice): string | null {
   const c = invoice.customer;
   if (!c) return null;
   return typeof c === 'string' ? c : c.id ?? null;
 }
 
-function invoiceSubscriptionIdOf(invoice: OrgInvoice): string | null {
-  const s = invoice.parent?.subscription_details?.subscription;
-  if (typeof s === 'string') return s.length > 0 ? s : null;
-  return typeof s?.id === 'string' && s.id.length > 0 ? s.id : null;
-}
-
-function hasSubscriptionParent(invoice: OrgInvoice): boolean {
-  const s = invoice.parent?.subscription_details?.subscription;
-  if (typeof s === 'string') return s.length > 0;
-  return typeof s?.id === 'string' && s.id.length > 0;
-}
-
 export interface OrgPoolRefillOptions {
-  /** Extra seats on the subscription, for a gift funded at list price ([D-OW-23]). */
-  extraSeats?: number;
   /**
    * MON-3: the configured org plan price ids (stripe-config orgPriceIds) — the Business
    * base and the extra-seat item. Only lines on these prices refill the pool;
@@ -150,8 +111,6 @@ export interface OrgPoolRefillOptions {
    */
   basePriceId?: string;
   seatPriceId?: string;
-  /** D-OW-17 test seam only; production callers never pass it. */
-  active?: boolean;
 }
 
 /**
@@ -176,28 +135,38 @@ export async function applyOrgPoolRefill(invoice: OrgInvoice, opts: OrgPoolRefil
 
   const stripeRef = invoice.id ?? null;
   if (!stripeRef) return { kind: 'nothing', orgId: org.id, reason: 'no_invoice_id' };
+  // Plan identity, the refill and funding proof are all derived from the lines, so a page of
+  // them proves nothing: a later page can hold the Business line or an unrecognized charge.
+  // Callers expand the invoice first (completeInvoiceLines); anything else throws so the
+  // event is redelivered rather than acknowledged without funding.
+  if (invoice.lines?.has_more !== false) {
+    throw new Error(`org pool refill requires every line of invoice ${stripeRef}; expand the invoice before funding`);
+  }
 
-  const lines = invoice.lines?.data ?? [];
-  const gifted = invoice.parent?.subscription_details?.metadata?.type === GIFT_SUBSCRIPTION_METADATA_TYPE;
-  // The gift gate requires the invoice to belong to the org's own subscription.
-  const [stored] = await db
-    .select({
-      stripeSubscriptionId: orgSubscriptions.stripeSubscriptionId,
-    })
-    .from(orgSubscriptions)
-    .where(eq(orgSubscriptions.orgId, org.id))
-    .limit(1);
-  const onOrgSubscription =
-    gifted && invoiceSubscriptionIdOf(invoice) !== null && stored?.stripeSubscriptionId === invoiceSubscriptionIdOf(invoice);
-
+  // The gift gate requires the invoice to belong to the org's own subscription, and a gift is
+  // sized from the seats the admin pinned (D-OW-54). Read under the org's billing lock, so a
+  // gift being written right now (org-gift holds the lock across its Stripe writes) is seen
+  // committed, never half-applied.
+  const [stored] = await db.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${orgBillingLockKey(org.id)}, 0))`);
+    return tx
+      .select({
+        stripeSubscriptionId: orgSubscriptions.stripeSubscriptionId,
+        giftedExtraSeats: orgSubscriptions.giftedExtraSeats,
+      })
+      .from(orgSubscriptions)
+      .where(eq(orgSubscriptions.orgId, org.id))
+      .limit(1);
+  });
   // MON-3: the pool refills only from the Business base and extra-seat lines. An ad-hoc
   // invoice item (or any line on an unrecognized price) is excluded and logged with its
   // price id and amount, so a misconfiguration is visible instead of silently funding the pool.
-  const selection = selectOrgPoolRefillLines(
-    lines,
-    { basePriceId: opts.basePriceId, seatPriceId: opts.seatPriceId },
-  );
-  for (const line of selection.unrecognized) {
+  const { input: grantInput, unrecognized } = orgInvoiceFundingInput(invoice, {
+    prices: { basePriceId: opts.basePriceId, seatPriceId: opts.seatPriceId },
+    storedSubscriptionId: stored?.stripeSubscriptionId ?? null,
+    giftedExtraSeats: stored?.giftedExtraSeats ?? null,
+  });
+  for (const line of unrecognized) {
     loggers.api.warn('org pool refill: invoice line is not the Business base or an extra-seat item; excluded', {
       orgId: org.id,
       stripeRef,
@@ -207,20 +176,9 @@ export async function applyOrgPoolRefill(invoice: OrgInvoice, opts: OrgPoolRefil
     });
   }
 
-  const grantInput = {
-    lines: selection.refillLines,
-    hasVerifiedGiftPrice: selection.hasVerifiedGiftPrice,
-    amountPaidCents: invoice.amount_paid,
-    hasSubscriptionParent: hasSubscriptionParent(invoice),
-    billingReason: invoice.billing_reason,
-    subtotalCents: invoice.subtotal,
-    gifted,
-    onOrgSubscription,
-    extraSeats: opts.extraSeats,
-  };
-  const grant = orgPoolRefillGrant(grantInput, opts.active ?? MONEY_MODEL_V2_ACTIVE);
+  const grant = orgPoolRefillGrant(grantInput);
   const basis = orgSubscriptionFundingBasis(grantInput);
-  const stripeSubscriptionId = invoiceSubscriptionIdOf(invoice);
+  const stripeSubscriptionId = orgInvoiceSubscriptionId(invoice);
   const recordFunding = async (tx: Tx): Promise<boolean> => {
     if (!basis || !stripeSubscriptionId) return false;
     const inserted = await tx.insert(orgSubscriptionFunding).values({
@@ -239,12 +197,13 @@ export async function applyOrgPoolRefill(invoice: OrgInvoice, opts: OrgPoolRefil
   if (grant.allowanceCents <= 0) {
     await announceFunding(await db.transaction(recordFunding));
     if (grant.reason === 'gift_not_org_subscription') {
-      // An operator gifted a subscription the org never mirrors: no credit lands in a pool the org
-      // cannot spend. Fix it by applying the gift coupon to the org's own subscription (runbook).
+      // A gift on a subscription the org never mirrors: no credit lands in a pool the org cannot
+      // spend. Gift an org only through the admin route (POST /api/admin/orgs/[orgId]/gift-subscription,
+      // lib billing/org-gift), which writes the gift ON the org's own stored subscription.
       loggers.api.error('org pool refill REFUSED: gift invoice is not on the org\'s own subscription', undefined, {
         orgId: org.id,
         stripeRef,
-        invoiceSubscriptionId: invoiceSubscriptionIdOf(invoice),
+        invoiceSubscriptionId: orgInvoiceSubscriptionId(invoice),
       });
     }
     loggers.api.info('org pool refill: invoice grants nothing', { orgId: org.id, stripeRef, reason: grant.reason, paidCents: grant.paidCents });
@@ -252,7 +211,7 @@ export async function applyOrgPoolRefill(invoice: OrgInvoice, opts: OrgPoolRefil
   }
   // The service period comes from the recognized lines too: an ad-hoc line's period must
   // no more move the pool's reset date than its amount may fund the pool.
-  const period = invoiceServicePeriodMs({ lines: selection.refillLines, periodStart: invoice.period_start, periodEnd: invoice.period_end });
+  const period = invoiceServicePeriodMs({ lines: grantInput.lines, periodStart: invoice.period_start, periodEnd: invoice.period_end });
 
   const result = await db.transaction(async (tx) => {
     await tx.insert(wallets).values({ ownerType: 'org', orgId: org.id }).onConflictDoNothing(ORG_POOL_ARBITER);
@@ -703,7 +662,7 @@ export interface DonateInput {
 /**
  * WAL-4: donate a one-off amount from the donor's personal root wallet to a drive
  * wallet. The drive-visibility decision goes through the permissions module
- * (getUserDriveAccess) before anything is locked. In one transaction: the donor wallet
+ * (holdsDriveAccess) before anything is locked. In one transaction: the donor wallet
  * and the target wallet are locked (drive wallet first, then the donor root: the global order), the
  * plan is made from the locked rows, a non-refundable donation leg is written (its
  * sourceRef makes a replay a no-op), both balances move, and a ledger pair records the
@@ -719,7 +678,7 @@ export async function donateToDriveWallet(input: DonateInput): Promise<DonationO
   if (!target) return { kind: 'refused', reason: 'wallet_not_found' };
   const donorCanSeeDrive =
     target.subjectType === 'drive' && target.subjectId !== null
-      ? await getUserDriveAccess(input.donorUserId, target.subjectId)
+      ? await holdsDriveAccess(input.donorUserId, target.subjectId)
       : false;
 
   const sourceRef = `donation:${input.donationId}`;

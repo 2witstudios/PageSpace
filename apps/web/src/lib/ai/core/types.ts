@@ -6,9 +6,16 @@
 import { ModelCapabilities } from './model-capabilities';
 import type { CommandExecutionData } from './command-processor';
 import type { SpendTarget } from '@pagespace/lib/billing/spend-target';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 export interface ToolExecutionContext {
   userId: string;
+  /**
+   * Who drives this turn, as the permission layer's actor (D-OW-45): the chat request's credential (with its
+   * ceremony evidence) or, for a workflow/trigger run, the automation running as its creator. Every tool access
+   * check asks the org sign-in policy (SEC-2/3) of it. Its userId is `userId`.
+   */
+  accessActor: AccessActor;
   conversationId?: string;
   // User's IANA timezone (e.g., "America/New_York") for timezone-aware tool operations
   timezone?: string;
@@ -63,7 +70,11 @@ export interface ToolExecutionContext {
   // `automationRef` is the stored reference (automation-attribution's codec) of the automation a run
   // with no person present spends for (SPEND-10, automationRefFor): every model call riding the run records it, so the drive lead sees
   // that spend as the automation rather than merged into its creator.
-  creditSpend?: { spend: SpendTarget; walletId?: string; userId?: string; automationRef?: string };
+  //
+  // `reservedHoldId` is a hold the CALLER already took for exactly the one ask_agent call it is
+  // about to make (the channel mention responder's per-reply hold): that call settles on it
+  // instead of reserving a second time, and does not pass it on to anything nested inside it.
+  creditSpend?: { spend: SpendTarget; walletId?: string; userId?: string; automationRef?: string; reservedHoldId?: string };
 
   // MCP token drive-scope restriction. Empty/undefined = full access (session auth
   // or an unscoped MCP token); non-empty = tools may only touch these drive IDs.

@@ -31,20 +31,20 @@ describe('Session Service', () => {
     it('SEC-2 (partial) SEC-3 (partial) preserves the verified ceremony on its credential without upgrading sibling sessions', async () => {
       const authenticatedAtMs = Date.now() - 60_000;
       const authentication = { authenticatedAtMs, assurance: 'user_verified_passkey' as const };
-      const oldToken = await sessionService.createSession({ userId: testUserId, type: 'user', scopes: ['*'], expiresInMs: 3600000 });
+      const oldToken = await sessionService.createSession({ authentication: null, userId: testUserId, type: 'user', scopes: ['*'], expiresInMs: 3600000 });
       const freshToken = await sessionService.createSession({ userId: testUserId, type: 'user', scopes: ['*'], expiresInMs: 3600000, authentication });
       expect((await sessionService.validateSession(freshToken))?.authentication).toEqual(authentication);
       expect((await sessionService.validateSession(oldToken))?.authentication).toBeNull();
-      const derivedToken = await sessionService.createSession({ userId: testUserId, type: 'socket', scopes: [], expiresInMs: 300000, authentication: (await sessionService.validateSession(freshToken))?.authentication });
+      const derivedToken = await sessionService.createSession({ userId: testUserId, type: 'socket', scopes: [], expiresInMs: 300000, authentication: (await sessionService.validateSession(freshToken))?.authentication ?? null });
       expect((await sessionService.validateSession(derivedToken))?.authentication).toEqual(authentication);
     });
 
     it('SEC-3 (partial) refuses future ceremony evidence when minting a session', async () => {
-      await expect(sessionService.createSession({ userId: testUserId, type: 'user', scopes: ['*'], expiresInMs: 3600000, authentication: { authenticatedAtMs: Date.now() + 60_000, assurance: 'single_factor' } })).rejects.toThrow('Invalid authentication evidence');
+      await expect(sessionService.createSession({ userId: testUserId, type: 'user', scopes: ['*'], expiresInMs: 3600000, authentication: { authenticatedAtMs: Date.now() + 10 * 60_000, assurance: 'single_factor' } })).rejects.toThrow('Invalid authentication evidence');
     });
 
     it('creates session with valid user', async () => {
-      const token = await sessionService.createSession({
+      const token = await sessionService.createSession({ authentication: null,
         userId: testUserId,
         type: 'user',
         scopes: ['*'],
@@ -57,7 +57,7 @@ describe('Session Service', () => {
 
     it('throws for non-existent user', async () => {
       await expect(
-        sessionService.createSession({
+        sessionService.createSession({ authentication: null,
           userId: 'non-existent',
           type: 'user',
           scopes: ['*'],
@@ -67,7 +67,7 @@ describe('Session Service', () => {
     });
 
     it('stores tokenHash, not raw token', async () => {
-      const token = await sessionService.createSession({
+      const token = await sessionService.createSession({ authentication: null,
         userId: testUserId,
         type: 'user',
         scopes: ['*'],
@@ -84,7 +84,7 @@ describe('Session Service', () => {
     });
 
     it('captures user tokenVersion at creation', async () => {
-      const token = await sessionService.createSession({
+      const token = await sessionService.createSession({ authentication: null,
         userId: testUserId,
         type: 'user',
         scopes: ['*'],
@@ -101,7 +101,7 @@ describe('Session Service', () => {
 
   describe('validateSession', () => {
     it('returns claims for valid session', async () => {
-      const token = await sessionService.createSession({
+      const token = await sessionService.createSession({ authentication: null,
         userId: testUserId,
         type: 'user',
         scopes: ['files:read'],
@@ -117,7 +117,7 @@ describe('Session Service', () => {
     });
 
     it('returns null for expired session', async () => {
-      const token = await sessionService.createSession({
+      const token = await sessionService.createSession({ authentication: null,
         userId: testUserId,
         type: 'user',
         scopes: ['*'],
@@ -131,7 +131,7 @@ describe('Session Service', () => {
     });
 
     it('returns null for revoked session', async () => {
-      const token = await sessionService.createSession({
+      const token = await sessionService.createSession({ authentication: null,
         userId: testUserId,
         type: 'user',
         scopes: ['*'],
@@ -145,7 +145,7 @@ describe('Session Service', () => {
     });
 
     it('returns null for tokenVersion mismatch', async () => {
-      const token = await sessionService.createSession({
+      const token = await sessionService.createSession({ authentication: null,
         userId: testUserId,
         type: 'user',
         scopes: ['*'],
@@ -166,7 +166,7 @@ describe('Session Service', () => {
     });
 
     it('updates lastUsedAt on validation', async () => {
-      const token = await sessionService.createSession({
+      const token = await sessionService.createSession({ authentication: null,
         userId: testUserId,
         type: 'user',
         scopes: ['*'],
@@ -205,7 +205,7 @@ describe('Session Service', () => {
 
   describe('revokeSession', () => {
     it('marks session as revoked', async () => {
-      const token = await sessionService.createSession({
+      const token = await sessionService.createSession({ authentication: null,
         userId: testUserId,
         type: 'user',
         scopes: ['*'],
@@ -223,7 +223,7 @@ describe('Session Service', () => {
     });
 
     it('revoked session cannot be validated', async () => {
-      const token = await sessionService.createSession({
+      const token = await sessionService.createSession({ authentication: null,
         userId: testUserId,
         type: 'user',
         scopes: ['*'],
@@ -239,14 +239,14 @@ describe('Session Service', () => {
 
   describe('revokeAllUserSessions', () => {
     it('revokes all active sessions for user', async () => {
-      await sessionService.createSession({
+      await sessionService.createSession({ authentication: null,
         userId: testUserId,
         type: 'user',
         scopes: ['*'],
         expiresInMs: 3600000,
       });
 
-      await sessionService.createSession({
+      await sessionService.createSession({ authentication: null,
         userId: testUserId,
         type: 'device',
         scopes: ['files:read'],
@@ -268,7 +268,7 @@ describe('Session Service', () => {
     });
 
     it('returns count of revoked sessions', async () => {
-      await sessionService.createSession({
+      await sessionService.createSession({ authentication: null,
         userId: testUserId,
         type: 'user',
         scopes: ['*'],
@@ -282,7 +282,7 @@ describe('Session Service', () => {
 
   describe('socket tokens (#1054)', () => {
     it('mints a ps_sock_* token', async () => {
-      const token = await sessionService.createSession({
+      const token = await sessionService.createSession({ authentication: null,
         userId: testUserId,
         type: 'socket',
         scopes: [],
@@ -293,7 +293,7 @@ describe('Session Service', () => {
     });
 
     it('validates a socket token and returns claims with type socket', async () => {
-      const token = await sessionService.createSession({
+      const token = await sessionService.createSession({ authentication: null,
         userId: testUserId,
         type: 'socket',
         scopes: [],
@@ -308,7 +308,7 @@ describe('Session Service', () => {
     });
 
     it('returns null for an expired socket token', async () => {
-      const token = await sessionService.createSession({
+      const token = await sessionService.createSession({ authentication: null,
         userId: testUserId,
         type: 'socket',
         scopes: [],
@@ -322,7 +322,7 @@ describe('Session Service', () => {
     });
 
     it('returns null for a revoked socket token', async () => {
-      const token = await sessionService.createSession({
+      const token = await sessionService.createSession({ authentication: null,
         userId: testUserId,
         type: 'socket',
         scopes: [],
@@ -336,7 +336,7 @@ describe('Session Service', () => {
     });
 
     it('rejects a socket token where a user session is expected (cookie/bearer surface)', async () => {
-      const token = await sessionService.createSession({
+      const token = await sessionService.createSession({ authentication: null,
         userId: testUserId,
         type: 'socket',
         scopes: [],
@@ -348,7 +348,7 @@ describe('Session Service', () => {
     });
 
     it('accepts a socket token where a socket session is expected (realtime handshake)', async () => {
-      const token = await sessionService.createSession({
+      const token = await sessionService.createSession({ authentication: null,
         userId: testUserId,
         type: 'socket',
         scopes: [],
@@ -360,7 +360,7 @@ describe('Session Service', () => {
     });
 
     it('rejects a user session where a socket token is expected', async () => {
-      const token = await sessionService.createSession({
+      const token = await sessionService.createSession({ authentication: null,
         userId: testUserId,
         type: 'user',
         scopes: ['*'],
@@ -372,7 +372,7 @@ describe('Session Service', () => {
     });
 
     it('type-mismatch rejection does not revoke the token for its own surface', async () => {
-      const token = await sessionService.createSession({
+      const token = await sessionService.createSession({ authentication: null,
         userId: testUserId,
         type: 'socket',
         scopes: [],
@@ -388,7 +388,7 @@ describe('Session Service', () => {
 
   describe('per-app session scoping', () => {
     async function createWebSession() {
-      return sessionService.createSession({
+      return sessionService.createSession({ authentication: null,
         userId: testUserId,
         type: 'user',
         scopes: ['*'],
@@ -397,7 +397,7 @@ describe('Session Service', () => {
     }
 
     async function createAdminSession() {
-      return sessionService.createSession({
+      return sessionService.createSession({ authentication: null,
         userId: testUserId,
         type: 'user',
         scopes: [],

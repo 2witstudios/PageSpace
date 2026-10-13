@@ -11,9 +11,9 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 /**
  * MON-2: the included-credit figure per tier, computed HERE from `tierAllowanceCents`
- * (D-OW-17: `MONEY_MODEL_V2_ACTIVE` is now a code constant, identical in every
- * process — web, marketing, and any "use client" bundle — so this route and
- * `settings/plan`'s own client-side derivation would in fact agree either way).
+ * (the ratio is a literal in money-model, identical in every process — web,
+ * marketing, and any "use client" bundle — so this route and `settings/plan`'s own
+ * client-side derivation agree).
  * `settings/plan` still fetches this route and patches its plan data with
  * `planCredits` via `withCreditOverrides` (`@/lib/subscription/plans`); that seam is
  * unchanged and still correct, just no longer load-bearing for the env/client

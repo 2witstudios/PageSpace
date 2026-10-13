@@ -1641,8 +1641,10 @@ export async function trackAIUsage(data: AIUsageData): Promise<UsageTrackingOutc
           userId: data.userId,
           costDollars: cost,
           holdId: data.holdId,
-          walletId: data.walletId,
-          ...(data.fallbackFromWalletId ? { fallbackFromWalletId: data.fallbackFromWalletId } : {}),
+          // The wallet and origin read from the live hold above (or named by the caller): the same
+          // ones written on the usage row, so the in-line settle and any recovery agree.
+          walletId: settleWalletId,
+          ...(settleFallbackFromWalletId ? { fallbackFromWalletId: settleFallbackFromWalletId } : {}),
           ...(data.automationRef ? { automationRef: data.automationRef } : {}),
           spendKind: data.spendKind,
           // Scope the live balance push so the per-conversation usage monitor

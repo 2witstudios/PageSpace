@@ -113,8 +113,8 @@ Each line must be true for the epic to be complete. IDs are stable for task list
 
 ### SEC — Security
 - SEC-1 Verified email domains (DNS or email verification) with auto-join for new signups on a verified domain, subject to seats.
-- SEC-2 Require two-step sign-in for org members; enforcement blocks org drive access, not the account.
-- SEC-3 Session maximum age for org members.
+- SEC-2 Require two-step sign-in for org members: a user-verified passkey ceremony (D-OW-45). Enforcement blocks org drive access for every credential that opens an org drive, members and guests alike, not the account.
+- SEC-3 Session maximum age for org members: a credential older than the org's limit since its sign-in ceremony is refused org drive access until the person signs in again (D-OW-45).
 - SEC-4 SSO and SCIM are out of scope and named as such in the org Security page.
 
 ### AUD — Audit log
@@ -142,7 +142,7 @@ Each line must be true for the epic to be complete. IDs are stable for task list
 ### X — Cross-cutting
 - X-1 CLI and MCP expose orgs, members, drives, policies, and wallets where the web does.
 - X-2 GDPR export and account deletion account for org membership, wallets, and donations.
-- X-3 Backups and restore preserve orgId, visibility, and wallet rows.
+- X-3 Tenant export/import carries orgId, visibility, org membership and wallet rows (D-OW-46). In-product drive backups record a drive's orgId and visibility in the snapshot, but restore never re-applies them (a drive stays in the org it is in now) and leaves wallet rows untouched.
 - X-4 Realtime events for membership, visibility, and wallet state so sidebar, picker, and chip update without refresh.
 - X-5 Migration: credit_balances BECOMES the wallets table — each existing per-user balance row is migrated in place into that user's personal root wallet in one backfill (decided by Jono at Standup 0, 2026-09-16). There is never a second balance store and no dual-read aliasing; ledger and holds gain walletId in the same migration. The backfill is idempotent, has a dry-run, and is verified by a row-count equality test plus a sum-of-balances equality test before and after.
 

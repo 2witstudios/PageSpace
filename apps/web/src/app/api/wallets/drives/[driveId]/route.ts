@@ -3,6 +3,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getDriveSpend } from '@pagespace/lib/services/drive-wallet-service';
 import { authenticateRequestWithOptions, checkMCPDriveScope, isAuthError } from '@/lib/auth';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 import { WALLET_READ_AUTH, walletErrorResponse } from '@/lib/wallets/wallet-route';
 
 /**
@@ -22,10 +23,11 @@ export async function GET(request: Request, context: RouteContext) {
   const { driveId } = await context.params;
   const auth = await authenticateRequestWithOptions(request, WALLET_READ_AUTH);
   if (isAuthError(auth)) return auth.error;
+  const actor = actorFromAuth(auth);
   const scopeError = checkMCPDriveScope(auth, driveId);
   if (scopeError) return scopeError;
   try {
-    const result = await getDriveSpend(auth.userId, driveId);
+    const result = await getDriveSpend(actor, driveId);
     if (!result.ok) return walletErrorResponse(result);
     auditRequest(request, {
       eventType: 'data.read',

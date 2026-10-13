@@ -45,7 +45,7 @@ describe('acquireMentionCreditHold', () => {
     hold.release();
     hold.release();
 
-    expect(hold.creditSpend).toEqual({ spend: PRODUCT_AUTOMATION, walletId: 'w-product' });
+    expect(hold.creditSpend).toEqual({ spend: PRODUCT_AUTOMATION, walletId: 'w-product', reservedHoldId: 'hold-1' });
     expect(mockReleaseHold).toHaveBeenCalledTimes(1);
     expect(mockReleaseHold).toHaveBeenCalledWith('hold-1');
   });

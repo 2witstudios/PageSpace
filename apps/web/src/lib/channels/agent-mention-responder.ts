@@ -40,6 +40,7 @@ import {
 } from '@/lib/channels/build-recent-image-file-parts';
 import { getDrivePolicies } from '@pagespace/lib/organizations/policy-reader';
 import { agentsAutonomousDecision } from '@pagespace/lib/organizations/org-action-decisions';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 const channelMentionLogger = loggers.ai.child({ module: 'channel-agent-mentions' });
 
@@ -71,7 +72,12 @@ export interface RecentChannelMessage {
 }
 
 export interface TriggerMentionedAgentResponsesParams {
-  userId: string;
+  /**
+   * The person who posted the mention, as the credential of the request that posted it (D-OW-62): the mentioner gate,
+   * the reply's tools, attachments and commands all run under it, so an org's sign-in policy applies to a mention
+   * exactly as to that request. Never an automation.
+   */
+  sender: AccessActor;
   channelId: string;
   channelTitle: string;
   channelType?: string;
@@ -279,7 +285,7 @@ export async function fetchRecentChannelMessages(channelId: string): Promise<Rec
  * `attachmentMeta` is used only for the display filename.
  */
 async function resolveImageAttachmentsForContext(
-  userId: string,
+  actor: AccessActor,
   contextMessages: RecentChannelMessage[]
 ): Promise<ImageFilePart[]> {
   // Dedup by fileId, keeping each file's MOST RECENT mention: re-sharing the
@@ -369,7 +375,7 @@ async function resolveImageAttachmentsForContext(
         };
       }
 
-      const accessible = await canUserAccessFile(userId, file.id, file.driveId);
+      const accessible = await canUserAccessFile(actor, file.id, file.driveId);
       const url = accessible
         ? await generatePresignedUrl(
             toContentHash(file.storagePath),
@@ -423,7 +429,8 @@ function buildMentionerContext(
   creditSpend?: ToolExecutionContext['creditSpend'],
 ): ToolExecutionContext {
   return {
-    userId: params.userId,
+    userId: params.sender.userId,
+    accessActor: mentionActor(params),
     conversationId,
     locationContext,
     requestOrigin: 'user',
@@ -448,7 +455,8 @@ function buildAgentActorContext(
   commandExecution?: CommandExecutionData[],
 ): ToolExecutionContext {
   return {
-    userId: params.userId,
+    userId: params.sender.userId,
+    accessActor: mentionActor(params),
     conversationId,
     locationContext,
     requestOrigin: 'agent',
@@ -459,6 +467,11 @@ function buildAgentActorContext(
     },
     ...(commandExecution && { commandExecution }),
   } as ToolExecutionContext;
+}
+
+/** The actor a mention reply runs as: the sender's credential from the request that posted the mention (D-OW-62). */
+function mentionActor(params: Pick<TriggerMentionedAgentResponsesParams, 'sender'>): AccessActor {
+  return params.sender;
 }
 
 function mentionConversationIdFor(channelId: string, agentId: string): string {
@@ -682,7 +695,7 @@ export async function triggerMentionedAgentResponses(
       // to the function-level catch and silence the whole mention entirely.
       if (eligibleAgents.some((agent) => agent.hasVision)) {
         try {
-          imageAttachments = await resolveImageAttachmentsForContext(params.userId, contextMessages);
+          imageAttachments = await resolveImageAttachmentsForContext(mentionActor(params), contextMessages);
         } catch (error) {
           channelMentionLogger.error(
             'Failed to resolve recent channel image attachments; continuing with text-only replies',
@@ -708,7 +721,7 @@ export async function triggerMentionedAgentResponses(
     // page for commandExecutionDataFromPlan to read.
     const commandPlans = isSoloHelpMention
       ? []
-      : await planCommandExecutions(params.content, params.userId, {
+      : await planCommandExecutions(params.content, mentionActor(params), {
           driveId: params.driveId ?? null,
         });
     const commandContext = buildCommandPromptSection(commandPlans);
@@ -728,11 +741,11 @@ export async function triggerMentionedAgentResponses(
 
         let replyContent: string;
         if (isSoloHelpMention) {
-          replyContent = await loadHelpAnswerText(params.userId, params.driveId ?? null);
+          replyContent = await loadHelpAnswerText(mentionActor(params), params.driveId ?? null);
         } else {
           // SPEND-6: the reply spends the channel's drive wallet or is skipped — never the
           // sender's credits — gated before the model call and settled on that wallet.
-          const hold = await acquireMentionCreditHold({ userId: params.userId, driveId: params.driveId });
+          const hold = await acquireMentionCreditHold({ userId: params.sender.userId, driveId: params.driveId });
           if (!hold.allowed) {
             channelMentionLogger.warn('Mentioned agent skipped (credit gate denied)', {
               channelId: params.channelId,
@@ -804,7 +817,7 @@ export async function triggerMentionedAgentResponses(
           // to the resulting follower set so other followers see the reply
           // in their inbox even though it was posted by the agent.
           await postAgentThreadReply({
-            userId: params.userId,
+            userId: params.sender.userId,
             channelId: params.channelId,
             content: replyContent,
             parentId: trimmedParent,

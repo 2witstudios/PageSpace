@@ -72,6 +72,7 @@ import {
 import { decideAgentSessionRenameAccess } from '@pagespace/lib/agent-workspaces/decide-workspace-access';
 import { canRunCodeForSession } from '@pagespace/lib/services/agent-workspaces/agent-workspace-tenant';
 import { ORG_LAPSED_MESSAGE } from '@pagespace/lib/organizations/status-core';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -113,7 +114,7 @@ export async function GET(request: Request, context: RouteContext) {
   if (isAuthError(auth)) return auth.error;
   const { workspaceId } = await context.params;
 
-  const access = await checkSessionAccess(auth.userId, workspaceId);
+  const access = await checkSessionAccess(actorFromAuth(auth), workspaceId);
   if (!access.allowed) {
     // Not found and denied answer THE SAME — null, never a 404 or a 403 —
     // so a probe learns nothing from the difference (family policy above).
@@ -134,7 +135,7 @@ export async function GET(request: Request, context: RouteContext) {
   // only knows the viewer's own tier, the wrong axis; this is the one place
   // that resolves the real answer.
   const sandboxEligible = await canRunCodeForSession({
-    userId: auth.userId,
+    actor: actorFromAuth(auth),
     driveId: row.driveId,
     ownerId: row.ownerId,
   });
@@ -146,7 +147,7 @@ export async function GET(request: Request, context: RouteContext) {
   // otherwise be offered the last-pane end confirm and handed a 404 for obeying
   // it. Read-only and already behind the same access gate as the row itself, so
   // it discloses nothing the caller could not learn by pressing the button.
-  const endAccess = await checkSessionEndAccess(auth.userId, workspaceId);
+  const endAccess = await checkSessionEndAccess(actorFromAuth(auth), workspaceId);
   return NextResponse.json({
     session: await toSessionDTOWithEnv(row),
     sandboxEligible,
@@ -169,7 +170,7 @@ export async function POST(request: Request, context: RouteContext) {
   // The session must already exist — spawning one is the collection route's
   // POST. This POST (re-)provisions an EXISTING workspace's sandbox: cold
   // start, or resume after an end.
-  const access = await checkSessionAccess(auth.userId, workspaceId);
+  const access = await checkSessionAccess(actorFromAuth(auth), workspaceId);
   if (!access.allowed) {
     return workspaceNotFoundOrDenied(request, auth.userId, workspaceId, access.reason, ROUTE);
   }
@@ -177,7 +178,7 @@ export async function POST(request: Request, context: RouteContext) {
   const existing = await findSessionRecord(workspaceId);
   if (!existing) return NextResponse.json({ error: 'Session not found' }, { status: 404 });
 
-  const provisioned = await provisionSessionSandbox(existing, auth.userId);
+  const provisioned = await provisionSessionSandbox(existing, actorFromAuth(auth));
   if (!provisioned.ok) {
     if (provisioned.reason === 'denied') {
       // A plan-limit refusal is not an access denial — separate response and
@@ -225,7 +226,7 @@ export async function PATCH(request: Request, context: RouteContext) {
 
   // Gate 1 — the family's shared decision. An unknown id and a denied one
   // answer IDENTICALLY here, exactly as they do on POST/DELETE.
-  const access = await checkSessionAccess(auth.userId, workspaceId);
+  const access = await checkSessionAccess(actorFromAuth(auth), workspaceId);
   if (!access.allowed) {
     return workspaceNotFoundOrDenied(request, auth.userId, workspaceId, access.reason, ROUTE);
   }
@@ -289,7 +290,7 @@ export async function DELETE(request: Request, context: RouteContext) {
   if (isAuthError(auth)) return auth.error;
   const { workspaceId } = await context.params;
 
-  const access = await checkSessionEndAccess(auth.userId, workspaceId);
+  const access = await checkSessionEndAccess(actorFromAuth(auth), workspaceId);
   if (!access.allowed) {
     return workspaceNotFoundOrDenied(request, auth.userId, workspaceId, access.reason, ROUTE);
   }

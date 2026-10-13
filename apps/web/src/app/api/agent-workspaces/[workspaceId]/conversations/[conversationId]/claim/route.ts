@@ -30,6 +30,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { checkSessionAccess, claimConversationInSession } from '@/lib/agent-workspaces/agent-workspaces-runtime';
 import { workspaceNotFoundOrDenied } from '@/lib/agent-workspaces/workspace-unavailable-response';
 import { sessionConversationLimitExceeded } from '@/lib/agent-workspaces/quota-response';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
@@ -42,7 +43,7 @@ export async function POST(request: Request, context: RouteContext) {
   if (isAuthError(auth)) return auth.error;
   const { workspaceId, conversationId } = await context.params;
 
-  const access = await checkSessionAccess(auth.userId, workspaceId);
+  const access = await checkSessionAccess(actorFromAuth(auth), workspaceId);
   if (!access.allowed) {
     return workspaceNotFoundOrDenied(request, auth.userId, workspaceId, access.reason, ROUTE);
   }
@@ -94,7 +95,7 @@ export async function POST(request: Request, context: RouteContext) {
   try {
     outcome = await claimConversationInSession({
       conversationId,
-      userId: auth.userId,
+      actor: actorFromAuth(auth),
       workspaceId,
       ...(activeNodeId === null ? {} : { activeNodeId }),
     });

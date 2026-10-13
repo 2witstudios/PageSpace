@@ -35,10 +35,12 @@ vi.mock('@pagespace/lib/permissions/agent-permissions', () => ({
   hasAgentDriveMembership: vi.fn().mockResolvedValue(false),
 }));
 vi.mock('@/lib/ai/tools/actor-permissions', () => ({
+  toolActor: (ctx: { userId: string; accessActor?: unknown }) => ctx.accessActor ?? { via: 'credential', userId: ctx.userId, authentication: null },
   canActorEditPage: vi.fn().mockResolvedValue(true),
   canActorConsultAgent: vi.fn().mockResolvedValue(true),
 }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
     canUserViewPage: vi.fn(),
 }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -112,6 +114,7 @@ import {
   triggerMentionedAgentResponses,
   type TriggerMentionedAgentResponsesParams,
 } from '../agent-mention-responder';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const mockPagesFindMany = db.query.pages.findMany as unknown as Mock;
 const mockChannelMessagesFindMany = db.query.channelMessages.findMany as unknown as Mock;
@@ -175,7 +178,7 @@ const createSendChannelSuccess = () => ({
 });
 
 const baseParams: TriggerMentionedAgentResponsesParams = {
-  userId: 'user-1',
+  sender: credentialActor('user-1', null),
   channelId: 'channel-1',
   channelTitle: 'General',
   channelType: 'CHANNEL',

@@ -235,10 +235,10 @@ export const DRIVE_ACCESS_GATE_ALLOWLIST: AccessGateAllowlist = {
   },
   'packages/lib/src/services/drive-service.ts': {
     getHomeDrive: { ownerCompares: 1, reason: "looks up the user's own HOME drive (never an org drive)" },
-    listAccessibleDrives: {
+    listUserDrives: {
       ownerCompares: 4,
       reads: 1,
-      reason: 'the accessible-drives resolver itself (B7): its dark body is owned drives plus accepted rows; while ORGS_ENABLED it delegates to listAccessibleDrivesWithOrgs',
+      reason: 'the accessible-drives resolver itself (B7), behind the org sign-in filter in listAccessibleDrives (D-OW-45): its dark body is owned drives plus accepted rows; while ORGS_ENABLED listAccessibleDrives uses listAccessibleDrivesWithOrgs',
     },
     listAccessibleDrivesWithOrgs: {
       ownerCompares: 2,

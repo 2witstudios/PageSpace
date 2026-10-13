@@ -11,8 +11,24 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { useOrgAdminRead } from '@/hooks/useOrgs';
 import { OrgBadge } from '@/components/orgs/OrgBadge';
 import { OrgSettingsShell, type OrgSettingsContext } from '@/components/orgs/OrgSettingsShell';
-import { del, post } from '@/lib/auth/auth-fetch';
-import { isOrgKey } from '@/lib/orgs/org-api';
+import { ApiRequestError, del, patch, post } from '@/lib/auth/auth-fetch';
+import { Label } from '@/components/ui/label';
+import { Switch } from '@/components/ui/switch';
+import { isOrgSignInDenialCode } from '@/lib/auth/org-sign-in-denial';
+import { reauthenticateCurrentSession } from '@/lib/auth/session-reauthentication';
+import {
+  SESSION_AGE_OPTIONS,
+  SESSION_AGE_RANGE_TEXT,
+  blockedPeopleText,
+  formatSessionAge,
+  isValidSessionAge,
+  needsPasskeyBeforeSaving,
+  signInPolicyPatch,
+  signInPreviewQuery,
+  type SignInBlockedCounts,
+  type SignInPolicyDraft,
+} from '@/lib/orgs/sign-in-policy-ui';
+import { isOrgKey, orgReadKeys, type OrgPolicies } from '@/lib/orgs/org-api';
 import { orgErrorMessage } from '@/lib/orgs/org-error-copy';
 import { formatOrgLongDate } from '@/lib/orgs/org-format';
 
@@ -171,18 +187,141 @@ function SecurityBody({ orgId, orgName, role }: OrgSettingsContext) {
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Sign-in requirements</CardTitle>
-          <CardDescription>Requiring two-step sign-in and a maximum session age for members are not available yet. Each person&rsquo;s own account settings apply.</CardDescription>
-        </CardHeader>
-      </Card>
+      <SignInRequirementsCard orgId={orgId} orgName={orgName} role={role} />
 
-      <div className="flex gap-2.5 rounded-lg bg-muted p-3 text-[13px] leading-[18px]">
+      <section aria-labelledby="sec-out-of-scope" className="flex gap-2.5 rounded-lg bg-muted p-3 text-[13px] leading-[18px]">
         <Info className="mt-0.5 h-4 w-4 flex-shrink-0 text-muted-foreground" />
-        <span>Single sign-on (SSO) and SCIM user provisioning are not part of organizations yet.</span>
-      </div>
+        <div>
+          <h2 id="sec-out-of-scope" className="font-medium">Single sign-on and SCIM</h2>
+          <p>Single sign-on (SSO) and SCIM user provisioning are out of scope for organizations. Members sign in with their own PageSpace sign-in methods.</p>
+        </div>
+      </section>
     </div>
+  );
+}
+
+const NO_LIMIT = 'none';
+const INVALID_AGE = 'invalid';
+
+/**
+ * SEC-2/SEC-3 (D-OW-45, D-OW-47): require strong sign-in (a user-verified passkey) and a maximum sign-in age for
+ * everyone opening the org's drives, members and guests alike. Owners and Admins see, before saving, how many members
+ * and guests would have to sign in again. Only the changed keys are sent, and a damaged stored age reads as invalid
+ * until the Admin chooses a value. Turning strong sign-in on runs the passkey ceremony first: an Admin must meet a policy
+ * themselves before they can turn it on, or they would lock themselves out of these settings.
+ */
+function SignInRequirementsCard({ orgId, orgName, role }: Pick<OrgSettingsContext, 'orgId' | 'orgName' | 'role'>) {
+  const { mutate } = useSWRConfig();
+  const stored = useOrgAdminRead<{ policies: OrgPolicies }>(orgReadKeys.policies(orgId), role).data?.policies;
+  const [draft, setDraft] = useState<SignInPolicyDraft | null>(null);
+  const [saving, setSaving] = useState(false);
+  const current: SignInPolicyDraft | null = draft ?? (stored ? { requireStrongSignIn: stored.requireStrongSignIn, maximumSessionAgeMinutes: stored.maximumSessionAgeMinutes } : null);
+  const dirty = !!(draft && stored && Object.keys(signInPolicyPatch(stored, draft)).length > 0);
+  // No preview of a damaged age: the preview only judges ages in the allowed range.
+  const preview = useOrgAdminRead<SignInBlockedCounts>(
+    dirty && draft && isValidSessionAge(draft.maximumSessionAgeMinutes) ? `/api/orgs/${orgId}/policies/sign-in-preview?${signInPreviewQuery(draft)}` : null,
+    role,
+  ).data;
+
+  if (!current || !stored) return null;
+  const age = current.maximumSessionAgeMinutes;
+  const ageValid = isValidSessionAge(age);
+  const ages = age === null || !ageValid || SESSION_AGE_OPTIONS.includes(age) ? SESSION_AGE_OPTIONS : [...SESSION_AGE_OPTIONS, age];
+
+  const confirmFirst = async (requirement: 'org_strong_sign_in_required' | 'org_reauthentication_required'): Promise<boolean> => {
+    const outcome = await reauthenticateCurrentSession(requirement);
+    if (outcome.status === 'awaiting_email') {
+      toast.info('We emailed you a confirmation link. Open it in this browser, then save again.');
+      return false;
+    }
+    return true;
+  };
+
+  const save = async () => {
+    if (!draft) return;
+    setSaving(true);
+    try {
+      if (needsPasskeyBeforeSaving(stored, draft) && !(await confirmFirst('org_strong_sign_in_required'))) return;
+      const body = signInPolicyPatch(stored, draft);
+      const send = () => patch<{ signInBlocked: SignInBlockedCounts | null }>(orgReadKeys.policies(orgId), body);
+      let result;
+      try {
+        result = await send();
+      } catch (error) {
+        const body = error instanceof ApiRequestError ? (error.body as { code?: unknown; requires?: unknown } | undefined) : undefined;
+        if (body?.code !== 'org_policy_would_lock_out_actor' || !isOrgSignInDenialCode(body.requires)) throw error;
+        if (!(await confirmFirst(body.requires))) return;
+        result = await send();
+      }
+      const blocked = result.signInBlocked;
+      const who = blocked ? blockedPeopleText(blocked) : '';
+      const one = blocked !== null && blocked.members + blocked.guests === 1;
+      toast.success(who ? `Saved. ${who} ${one ? 'needs' : 'need'} to sign in again to open ${orgName}'s drives.` : 'Saved.');
+      setDraft(null);
+      void mutate((k) => isOrgKey(orgId, k));
+    } catch (error) {
+      toast.error(orgErrorMessage(error, 'The sign-in requirements could not be saved.'));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Sign-in requirements</CardTitle>
+        <CardDescription>
+          These apply to everyone who opens {orgName}&rsquo;s drives, members and guests alike. Someone who does not meet them keeps their account and personal drives, and is asked to sign in again before opening the organization&rsquo;s drives.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-5">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <Label htmlFor="require-strong-sign-in">Require strong sign-in (passkey)</Label>
+            <p className="text-xs text-muted-foreground">A passkey confirmed on the device (fingerprint, face or PIN). Emailed links, Google and Apple do not count.</p>
+          </div>
+          <Switch
+            id="require-strong-sign-in"
+            checked={current.requireStrongSignIn}
+            onCheckedChange={(checked) => setDraft({ ...current, requireStrongSignIn: checked })}
+          />
+        </div>
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <Label htmlFor="maximum-session-age">Maximum sign-in age</Label>
+            <p className="text-xs text-muted-foreground">How long a sign-in lasts before the organization asks for a fresh one. {SESSION_AGE_RANGE_TEXT}</p>
+          </div>
+          <Select
+            value={age === null ? NO_LIMIT : ageValid ? String(age) : INVALID_AGE}
+            onValueChange={(v) => setDraft({ ...current, maximumSessionAgeMinutes: v === NO_LIMIT ? null : Number(v) })}
+          >
+            <SelectTrigger id="maximum-session-age" aria-label="Maximum sign-in age" className="w-[160px]"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {ageValid ? null : <SelectItem value={INVALID_AGE} disabled>Invalid — choose a value</SelectItem>}
+              <SelectItem value={NO_LIMIT}>No limit</SelectItem>
+              {ages.map((m) => <SelectItem key={m} value={String(m)}>{formatSessionAge(m)}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          You have to meet a requirement yourself before you can turn it on, so you never lock yourself out: turning on strong sign-in first asks you to confirm with your passkey. Relaxing a requirement needs a sign-in that meets the one in force.
+        </p>
+        {dirty && preview ? (
+          <p className="text-sm" role="status">
+            {blockedPeopleText(preview)
+              ? `${blockedPeopleText(preview)} would need to sign in again before opening ${orgName}'s drives.`
+              : 'No one would need to sign in again.'}
+          </p>
+        ) : null}
+        <div className="flex gap-2">
+          <Button size="sm" disabled={!dirty || saving} onClick={() => void save()}>
+            {saving ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : null}
+            {draft && needsPasskeyBeforeSaving(stored, draft) ? 'Confirm with passkey and save' : 'Save sign-in requirements'}
+          </Button>
+          {dirty ? <Button size="sm" variant="ghost" onClick={() => setDraft(null)}>Cancel</Button> : null}
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 

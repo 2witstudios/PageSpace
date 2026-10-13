@@ -332,7 +332,7 @@ describe('POST /envs/[envId]/rebuild — the only sprite-replacing verb', () => 
     vi.mocked(rebuildEnv).mockResolvedValue({ ok: true, sandboxId: 'pgs-env-abc' } as never);
     const response = await rebuildEnvRoute(rebuildReq(), envParams);
     expect(response.status).toBe(200);
-    expect(rebuildEnv).toHaveBeenCalledWith({ envId: ENV_ID, requesterId: USER_ID });
+    expect(rebuildEnv).toHaveBeenCalledWith({ envId: ENV_ID, requester: expect.objectContaining({ userId: USER_ID }) });
   });
 
   it('given a LOCAL env, should answer 409 substrate_unsupported — the user\'s own machine has no Sprite to replace (C1)', async () => {

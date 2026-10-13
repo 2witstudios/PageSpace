@@ -183,7 +183,7 @@ interface BillingResponse {
     orgPoolCount: number;
   };
   holds: { holdCount: number; heldCents: number };
-  alerts: { balanceDrift: BalanceDriftRow[]; negativeMargin: NegativeMarginRow[] };
+  alerts: { balanceDrift: BalanceDriftRow[]; negativeMargin: NegativeMarginRow[]; unattributedUsage: { count: number; realCostCents: number } };
   tokens: { summary: TokenTotals; byModel: TokenModelRow[]; byPeriod: TokenPeriodRow[]; byUser: TokenUserRow[] };
 }
 
@@ -645,6 +645,9 @@ function UsersTab({ data }: { data: BillingResponse }) {
         <CardHeader>
           <CardTitle>Balance drift ({alerts.balanceDrift.length})</CardTitle>
           <CardDescription>Wallets (personal credits, org pools, drive wallets) whose balance disagrees with their own ledger rows.</CardDescription>
+          <CardDescription data-testid="unattributed-usage">
+            Unattributed usage: {alerts.unattributedUsage.count} {alerts.unattributedUsage.count === 1 ? 'call' : 'calls'} ({usd(alerts.unattributedUsage.realCostCents)} provider cost) named no wallet and were not charged — reconcile by hand.
+          </CardDescription>
         </CardHeader>
         <CardContent>
           <Table>

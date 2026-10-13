@@ -57,6 +57,7 @@ import { callerCanViewUser, searchRelatedProfilesByName } from '../visibility';
 import { db } from '@pagespace/db/db';
 import { eq, ne, isNotNull, ilike, exists } from '@pagespace/db/operators';
 import { getMemberDriveIds, memberOfAnyDriveCondition, sharesMemberDrive } from '@pagespace/lib/permissions/member-drives';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 function queueSelectResults(results: unknown[][]) {
   let i = 0;
@@ -139,18 +140,18 @@ describe('searchRelatedProfilesByName', () => {
       [], // connectedToCaller EXISTS subquery
       [friend], // main query
     ]);
-    const rows = await searchRelatedProfilesByName('u1', PATTERN, 10);
+    const rows = await searchRelatedProfilesByName(credentialActor('u1', null), PATTERN, 10);
     expect(rows).toEqual([friend]);
   });
 
   it('composes the relationship, name, and safety gates', async () => {
     vi.mocked(getMemberDriveIds).mockResolvedValueOnce(['drive_a']);
     queueSelectResults([[], []]);
-    await searchRelatedProfilesByName('u1', PATTERN, 10);
+    await searchRelatedProfilesByName(credentialActor('u1', null), PATTERN, 10);
     // Accepted connections only.
     expect(eq).toHaveBeenCalledWith('connections.status', 'ACCEPTED');
     // Co-membership of the caller's member drives, decided by the permissions layer.
-    expect(getMemberDriveIds).toHaveBeenCalledWith('u1', { includeTrashed: true });
+    expect(getMemberDriveIds).toHaveBeenCalledWith(expect.objectContaining({ userId: 'u1' }), { includeTrashed: true });
     expect(memberOfAnyDriveCondition).toHaveBeenCalledWith('userProfiles.userId', ['drive_a']);
     // Temp/magic-link accounts excluded; caller never matches themselves.
     expect(isNotNull).toHaveBeenCalledWith('users.emailVerified');
@@ -167,7 +168,7 @@ describe('searchRelatedProfilesByName', () => {
       [], // connectedToCaller EXISTS subquery
       [friend], // main query
     ]);
-    const rows = await searchRelatedProfilesByName('u1', PATTERN, 10);
+    const rows = await searchRelatedProfilesByName(credentialActor('u1', null), PATTERN, 10);
     expect(rows).toEqual([friend]);
     expect(memberOfAnyDriveCondition).not.toHaveBeenCalled();
     expect(db.select).toHaveBeenCalledTimes(2);

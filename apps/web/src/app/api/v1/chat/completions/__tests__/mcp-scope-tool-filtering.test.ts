@@ -68,6 +68,7 @@ vi.mock('@pagespace/lib/utils/enums', () => ({
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   canUserViewPage: vi.fn().mockResolvedValue(true),
   canUserEditPage: vi.fn().mockResolvedValue(true),
 }));

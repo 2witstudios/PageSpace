@@ -8,6 +8,7 @@ vi.mock('@/lib/auth', () => ({
 }));
 vi.mock('@pagespace/lib/services/drive-member-service', () => ({
   checkDriveAccess: vi.fn(),
+  isMemberOfDrive: vi.fn().mockResolvedValue(true),
 }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
@@ -58,14 +59,10 @@ vi.mock('@pagespace/db/schema/auth', () => ({
     userId: 'col_mt_userId',
   },
 }));
-vi.mock('@pagespace/lib/permissions/permissions', () => ({
-  isUserDriveMember: vi.fn().mockResolvedValue(true),
-}));
 
 import { PATCH, DELETE } from '../route';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { checkDriveAccess } from '@pagespace/lib/services/drive-member-service';
-import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
+import { checkDriveAccess, isMemberOfDrive } from '@pagespace/lib/services/drive-member-service';
 import { db } from '@pagespace/db/db';
 
 const MOCK_USER_ID = 'user_abc';
@@ -229,7 +226,7 @@ describe('PATCH /api/drives/[driveId]/apps/[tokenId]', () => {
 
   it('clears role to inherit (null) when the token owner is a drive member', async () => {
     setupSequencedSelect([{ id: 'mtd-1', ownerUserId: 'owner-1' }], []);
-    vi.mocked(isUserDriveMember).mockResolvedValue(true);
+    vi.mocked(isMemberOfDrive).mockResolvedValue(true);
     const { mockSet } = setupUpdateChain({ id: 'mtd-1', tokenId: MOCK_TOKEN_ID, role: null });
 
     const res = await PATCH(createRequest('PATCH', { role: null }), createContext(MOCK_DRIVE_ID, MOCK_TOKEN_ID));
@@ -237,13 +234,13 @@ describe('PATCH /api/drives/[driveId]/apps/[tokenId]', () => {
 
     expect(res.status).toBe(200);
     expect(body.success).toBe(true);
-    expect(isUserDriveMember).toHaveBeenCalledWith('owner-1', MOCK_DRIVE_ID);
+    expect(isMemberOfDrive).toHaveBeenCalledWith(MOCK_DRIVE_ID, 'owner-1');
     expect(mockSet).toHaveBeenCalledWith({ role: null });
   });
 
   it('returns 400 when clearing to inherit but the token owner is not a drive member', async () => {
     setupSequencedSelect([{ id: 'mtd-1', ownerUserId: 'foreign-owner' }], []);
-    vi.mocked(isUserDriveMember).mockResolvedValue(false);
+    vi.mocked(isMemberOfDrive).mockResolvedValue(false);
 
     const res = await PATCH(createRequest('PATCH', { role: null }), createContext(MOCK_DRIVE_ID, MOCK_TOKEN_ID));
     const body = await res.json();

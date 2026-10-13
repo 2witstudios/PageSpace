@@ -5,6 +5,7 @@ import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
 import { mergeToolSets } from '@/lib/ai/core/tool-utils';
 import { filterToolsForMcpScope, filterToolsForImageGen, filterToolsForSandboxEnablement } from '@/lib/ai/core/tool-filtering';
 import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPPageScope, getAllowedDriveIds, isScopedMCPAuth, canPrincipalViewPage } from '@/lib/auth';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 import { AIMonitoring, discardUsageOutcome } from '@pagespace/lib/monitoring/ai-monitoring';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -285,10 +286,10 @@ export async function POST(request: Request) {
     const canView = await canPrincipalViewPage(auth, agentId);
     if (!canView) {
       auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'page_agent', resourceId: agentId, details: { reason: 'no_view_permission', action: 'consult', method: 'POST' }, riskScore: 0.5 });
-      return NextResponse.json(
+      return deniedResponse(actorFromAuth(auth), agentId, NextResponse.json(
         { error: 'Insufficient permissions to consult this agent' },
         { status: 403 }
-      );
+      ));
     }
 
     // Prepaid credit gate: block out-of-credits users before any model invocation.
@@ -541,6 +542,7 @@ export async function POST(request: Request) {
     // Build execution context for tool execution
     const executionContext: ToolExecutionContext = {
       userId,
+      accessActor: actorFromAuth(auth),
       timezone: userTimezone,
       aiProvider: agent.aiProvider ?? undefined,
       aiModel: agent.aiModel ?? undefined,

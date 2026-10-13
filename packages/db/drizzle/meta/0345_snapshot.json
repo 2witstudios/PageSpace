@@ -1,6 +1,6 @@
 {
-  "id": "d43bf40d-b910-44b0-b416-a75a188dfe19",
-  "prevId": "814cd47f-1f4b-43f6-8e39-dcf8c3c30b44",
+  "id": "518d56c8-101c-4ce0-8985-f3e0a190cb2d",
+  "prevId": "cb70c503-40c9-4253-9861-1889ff070d4e",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -4508,6 +4508,13 @@
           "primaryKey": false,
           "notNull": false
         },
+        "orgIds": {
+          "name": "orgIds",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "ARRAY[]::text[]"
+        },
         "aiProvider": {
           "name": "aiProvider",
           "type": "text",
@@ -6376,12 +6383,6 @@
         },
         "wallet_id": {
           "name": "wallet_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "automation_ref": {
-          "name": "automation_ref",
           "type": "text",
           "primaryKey": false,
           "notNull": false
@@ -13990,6 +13991,13 @@
           "primaryKey": false,
           "notNull": true
         },
+        "orgIds": {
+          "name": "orgIds",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "ARRAY[]::text[]"
+        },
         "occurrences": {
           "name": "occurrences",
           "type": "integer",
@@ -14137,6 +14145,13 @@
           "primaryKey": false,
           "notNull": false
         },
+        "memoryOrgIds": {
+          "name": "memoryOrgIds",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "ARRAY[]::text[]"
+        },
         "enabled": {
           "name": "enabled",
           "type": "boolean",
@@ -14171,6 +14186,51 @@
             }
           ],
           "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "user_personalization_bio_page_idx": {
+          "name": "user_personalization_bio_page_idx",
+          "columns": [
+            {
+              "expression": "bioPageId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "user_personalization_writing_style_page_idx": {
+          "name": "user_personalization_writing_style_page_idx",
+          "columns": [
+            {
+              "expression": "writingStylePageId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "user_personalization_rules_page_idx": {
+          "name": "user_personalization_rules_page_idx",
+          "columns": [
+            {
+              "expression": "rulesPageId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -18810,18 +18870,6 @@
           "notNull": true,
           "default": "'ai'"
         },
-        "fallbackFromWalletId": {
-          "name": "fallbackFromWalletId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "automationRef": {
-          "name": "automationRef",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
         "createdAt": {
           "name": "createdAt",
           "type": "timestamp with time zone",
@@ -18968,19 +19016,6 @@
             "id"
           ],
           "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "credit_ledger_fallbackFromWalletId_wallets_id_fk": {
-          "name": "credit_ledger_fallbackFromWalletId_wallets_id_fk",
-          "tableFrom": "credit_ledger",
-          "tableTo": "wallets",
-          "columnsFrom": [
-            "fallbackFromWalletId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
           "onUpdate": "no action"
         }
       },
@@ -19600,13 +19635,6 @@
           "notNull": true,
           "default": true
         },
-        "guestSpendEnabled": {
-          "name": "guestSpendEnabled",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
-        },
         "fallbackRule": {
           "name": "fallbackRule",
           "type": "text",
@@ -19773,7 +19801,7 @@
         },
         "wallets_subject_type_valid": {
           "name": "wallets_subject_type_valid",
-          "value": "\"wallets\".\"subjectType\" IS NULL OR \"wallets\".\"subjectType\" = 'drive'"
+          "value": "\"wallets\".\"subjectType\" IS NULL OR \"wallets\".\"subjectType\" IN ('drive', 'agent_page')"
         },
         "wallets_subject_complete": {
           "name": "wallets_subject_complete",
@@ -19798,10 +19826,6 @@
         "wallets_default_spend_source_valid": {
           "name": "wallets_default_spend_source_valid",
           "value": "\"wallets\".\"defaultSpendSource\" IS NULL OR (\"wallets\".\"defaultSpendSource\" IN ('drive_wallet', 'seat_allowance', 'own_credits') AND NOT (\"wallets\".\"ownerType\" = 'org' AND \"wallets\".\"subjectType\" IS NULL))"
-        },
-        "wallets_guest_spend_subject_wallet": {
-          "name": "wallets_guest_spend_subject_wallet",
-          "value": "NOT \"wallets\".\"guestSpendEnabled\" OR \"wallets\".\"subjectType\" IS NOT NULL"
         },
         "wallets_always_own_credits_personal_root": {
           "name": "wallets_always_own_credits_personal_root",
@@ -26232,11 +26256,12 @@
           "primaryKey": false,
           "notNull": false
         },
-        "trialEnd": {
-          "name": "trialEnd",
-          "type": "timestamp",
+        "collectionMethod": {
+          "name": "collectionMethod",
+          "type": "text",
           "primaryKey": false,
-          "notNull": false
+          "notNull": true,
+          "default": "'charge_automatically'"
         },
         "currentPeriodStart": {
           "name": "currentPeriodStart",

@@ -198,6 +198,7 @@ describe('upsertCandidates — what the corroboration count is measured against'
       lastSeenAt: theOnlyMessage,
       promotedAt: null,
       rejectedAt: null,
+      orgIds: [],
     };
 
     const { upsertCandidates } = await import('../candidate-service');
@@ -218,6 +219,7 @@ describe('upsertCandidates — what the corroboration count is measured against'
       lastSeenAt: new Date('2026-03-10T12:00:00.000Z'),
       promotedAt: null,
       rejectedAt: null,
+      orgIds: [],
     };
 
     const { upsertCandidates } = await import('../candidate-service');
@@ -239,6 +241,7 @@ describe('upsertCandidates — what the corroboration count is measured against'
       lastSeenAt: newest,
       promotedAt: null,
       rejectedAt: null,
+      orgIds: [],
     };
 
     const { upsertCandidates } = await import('../candidate-service');
@@ -272,6 +275,39 @@ describe('upsertCandidates — what the corroboration count is measured against'
       should: 'neither re-insert nor re-update it',
       actual: { inserts: dbCalls.inserts.length, updates: dbCalls.updates.length },
       expected: { inserts: 0, updates: 0 },
+    });
+  });
+
+  it('SEC-2 (partial) a new candidate records the orgs whose drives fed its discovery', async () => {
+    existingRow = null;
+    const { upsertCandidates } = await import('../candidate-service');
+    await upsertCandidates('user-1', [claim(new Date('2026-03-10T12:00:00.000Z'))], ['org-b', 'org-a', 'org-b']);
+
+    assert({
+      given: 'a claim discovered from two orgs\' drives',
+      should: 'stage it carrying both orgs, sorted and distinct',
+      actual: dbCalls.inserts[0]?.orgIds,
+      expected: ['org-a', 'org-b'],
+    });
+  });
+
+  it('SEC-2 (partial) a re-discovered candidate keeps every org any discovery of it read from', async () => {
+    existingRow = {
+      id: 'c1',
+      occurrences: 1,
+      lastSeenAt: new Date('2026-03-10T12:00:00.000Z'),
+      promotedAt: null,
+      rejectedAt: null,
+      orgIds: ['org-a'],
+    };
+    const { upsertCandidates } = await import('../candidate-service');
+    await upsertCandidates('user-1', [claim(new Date('2026-03-11T12:00:00.000Z'))], ['org-c']);
+
+    assert({
+      given: 'a staged claim from org-a corroborated by a discovery that read org-c',
+      should: 'carry both orgs (the union), never only the latest',
+      actual: dbCalls.updates[0]?.orgIds,
+      expected: ['org-a', 'org-c'],
     });
   });
 

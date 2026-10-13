@@ -166,7 +166,7 @@ const GlobalAssistantView: React.FC = () => {
   const [input, setInput] = useState<string>('');
   const [showError, setShowError] = useState(true);
   const [locationContext, setLocationContext] = useState<LocationContext | null>(null);
-  const { line: homeLine } = useHomeSignals();
+  const { line: homeLine, signInRequired: homeSignInRequired } = useHomeSignals();
   const leftSidebarOpen = useLayoutStore((state) => state.leftSidebarOpen);
   // No agent selected and no drive context — the Home line/suggestions,
   // the drive-scope pill, and the collapsed strip all gate on this.
@@ -1106,7 +1106,7 @@ const GlobalAssistantView: React.FC = () => {
         welcomeContent={
           isGlobalMode ? (
             <>
-              <HomeLine line={homeLine} />
+              <HomeLine line={homeLine} signInRequired={homeSignInRequired} />
               <HomeSuggestions suggestions={homeLine.suggestions} onSelect={setInput} />
             </>
           ) : undefined

@@ -54,7 +54,7 @@ vi.mock('@/lib/auth', () => ({
   // test's getDriveAccess fixture so existing fixtures keep driving 403/200.
   isPrincipalDriveOwnerOrAdmin: vi.fn(async (auth: { userId: string }, driveId: string) => {
     const { getDriveAccess } = await import('@pagespace/lib/services/drive-service');
-    const access = await getDriveAccess(driveId, auth.userId);
+    const access = await getDriveAccess(driveId, credentialActor(auth.userId, null));
     return Boolean(access && (access.isOwner || access.isAdmin));
   }),
 }));
@@ -80,6 +80,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { LEAD_ACTION_CASES, LEAD_ACTION_DRIVES, leadAuthority } from '@/lib/auth/__tests__/lead-authority-fake';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 // ============================================================================
 // Test Helpers
@@ -208,7 +209,7 @@ describe('GET /api/drives/[driveId]', () => {
       const request = new Request(`https://example.com/api/drives/${mockDriveId}`);
       await GET(request, createContext(mockDriveId));
 
-      expect(getDriveWithAccess).toHaveBeenCalledWith(mockDriveId, mockUserId);
+      expect(getDriveWithAccess).toHaveBeenCalledWith(mockDriveId, expect.objectContaining({ userId: mockUserId }));
     });
 
     it('should call getDriveById when getDriveWithAccess returns null', async () => {

@@ -137,6 +137,8 @@ describe('consumeAnyInviteIfPresent', () => {
       invitedDriveId: null,
       invitedPageId: null,
       connectionId: null,
+      invitedOrgId: null,
+      orgLandingPath: null,
     });
     expect(driveInviteRepository.findPendingInviteByTokenHash).not.toHaveBeenCalled();
     expect(pageInviteRepository.findPendingInviteByTokenHash).not.toHaveBeenCalled();
@@ -170,6 +172,8 @@ describe('consumeAnyInviteIfPresent', () => {
       invitedDriveId: 'drive_1',
       invitedPageId: null,
       connectionId: null,
+      invitedOrgId: null,
+      orgLandingPath: null,
     });
     expect(acceptForNewPipe).toHaveBeenCalledOnce();
     expect(acceptPageForNewPipe).not.toHaveBeenCalled();
@@ -207,6 +211,8 @@ describe('consumeAnyInviteIfPresent', () => {
       invitedDriveId: 'drive_1',
       invitedPageId: 'page_1',
       connectionId: null,
+      invitedOrgId: null,
+      orgLandingPath: null,
     });
     expect(acceptPageForNewPipe).toHaveBeenCalledOnce();
     expect(acceptForNewPipe).not.toHaveBeenCalled();
@@ -239,6 +245,8 @@ describe('consumeAnyInviteIfPresent', () => {
       invitedDriveId: null,
       invitedPageId: null,
       connectionId: 'conn_1',
+      invitedOrgId: null,
+      orgLandingPath: null,
     });
   });
 
@@ -377,6 +385,8 @@ describe('consumeAnyInviteIfPresent', () => {
       invitedDriveId: null,
       invitedPageId: null,
       connectionId: null,
+      invitedOrgId: null,
+      orgLandingPath: null,
     });
   });
 });

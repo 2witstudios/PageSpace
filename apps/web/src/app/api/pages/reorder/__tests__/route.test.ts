@@ -259,7 +259,7 @@ describe('PATCH /api/pages/reorder', () => {
         pageId: mockPageId,
         newParentId: 'parent_456',
         newPosition: 5,
-        userId: mockUserId,
+        actor: expect.objectContaining({ userId: mockUserId }),
       });
     });
   });

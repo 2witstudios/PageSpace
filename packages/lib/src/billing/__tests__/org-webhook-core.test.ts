@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { ORG_ID_METADATA_KEY, ORG_SUBSCRIPTION_KIND } from '../org-subscription-core';
-import { routeBillingOwner, orgInvoiceExtraSeats, planOrgSubscriptionMirror, planOrgSeatItemMirror, planOrgSubscriptionPriceMirror } from '../org-webhook-core';
+import { routeBillingOwner, planOrgSubscriptionMirror, planOrgSeatItemMirror, planOrgSubscriptionPriceMirror } from '../org-webhook-core';
 
 const ORG = 'org_northwind';
 
@@ -35,30 +35,6 @@ describe('routeBillingOwner', () => {
       orgId: ORG,
       taggedOrgId: 'org_other',
     });
-  });
-});
-
-describe('orgInvoiceExtraSeats', () => {
-  const SEAT = 'price_seat';
-  const line = (price: string | { id: string } | null, quantity: number | null) => ({
-    quantity,
-    pricing: price === null ? null : { price_details: { price } },
-  });
-
-  it('A-8 the extra seats an org invoice billed are the quantity on its extra-seat line (a count, not an amount)', () => {
-    expect(orgInvoiceExtraSeats([line('price_base', 1), line(SEAT, 10)], SEAT)).toBe(10);
-    expect(orgInvoiceExtraSeats([line('price_base', 1), line({ id: SEAT }, 2)], SEAT)).toBe(2);
-    expect(orgInvoiceExtraSeats([line('price_base', 1), line(SEAT, 0)], SEAT)).toBe(0);
-  });
-
-  it('A-8 an invoice with no extra-seat line, or no configured seat price, reports null (the caller falls back)', () => {
-    expect(orgInvoiceExtraSeats([line('price_base', 1)], SEAT)).toBeNull();
-    expect(orgInvoiceExtraSeats([line(SEAT, 3)], '')).toBeNull();
-    expect(orgInvoiceExtraSeats([line(SEAT, null)], SEAT)).toBeNull();
-  });
-
-  it('A-8 proration lines for the seat price do not stack: the largest positive quantity is the period seat count', () => {
-    expect(orgInvoiceExtraSeats([line(SEAT, 2), line(SEAT, 3), line('price_base', 1)], SEAT)).toBe(3);
   });
 });
 

@@ -37,6 +37,7 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
     canUserViewPage: vi.fn().mockResolvedValue(true),
     canUserEditPage: vi.fn().mockResolvedValue(true),
 }));
@@ -230,6 +231,7 @@ vi.mock('@/lib/ai/core/model-capabilities', () => ({
 }));
 
 import { authenticateRequestWithOptions, checkMCPPageScope } from '@/lib/auth';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 // ============================================================================
 // Test Fixtures
@@ -345,7 +347,7 @@ vi.mock('@/lib/auth/principal-permissions', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/auth/principal-permissions')>();
   const permissions = await import('@pagespace/lib/permissions/permissions');
   return { ...actual,
-    canPrincipalViewPage: (auth: { userId: string }, resourceId: string) => permissions.canUserViewPage(auth.userId, resourceId),
-    canPrincipalEditPage: (auth: { userId: string }, resourceId: string) => permissions.canUserEditPage(auth.userId, resourceId),
+    canPrincipalViewPage: (auth: { userId: string }, resourceId: string) => permissions.canUserViewPage(credentialActor(auth.userId, null), resourceId),
+    canPrincipalEditPage: (auth: { userId: string }, resourceId: string) => permissions.canUserEditPage(credentialActor(auth.userId, null), resourceId),
   };
 });

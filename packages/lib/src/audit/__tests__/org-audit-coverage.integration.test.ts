@@ -56,6 +56,7 @@ import { workflows } from '@pagespace/db/schema/workflows';
 import { defaultAppUnparkDeps, unparkPublishedApp } from '../../services/app-hosting/app-unpark';
 import { driveEnvs } from '@pagespace/db/schema/drive-envs';
 import { publishedApps } from '@pagespace/db/schema/published-apps';
+import { credentialActor } from '../../permissions/access-actor';
 
 vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 
@@ -205,15 +206,15 @@ describe('every org mutation writes its event', () => {
     expect(await setSeatAutoAdd(orgId, true, jono.id)).toBe(true);
     const stripe = new FakeSeatStripe();
     const tokens: string[] = [];
-    const invited = await createOrRotateInvitation({
-      orgId, email: tomasEmail, role: 'MEMBER', invitedBy: jono.id, actorRole: 'OWNER', now: new Date(), seatBilling: stripe,
+    const invited = await createOrRotateInvitation({ credential: 'session',
+      orgId, email: tomasEmail, role: 'MEMBER', invitedBy: jono.id, now: new Date(), seatBilling: stripe,
       deliver: async (_i, token) => { tokens.push(token); },
     });
     if (!invited.ok) throw new Error(`invite: ${invited.reason}`);
     expect(await setSeatAutoAdd(orgId, false, jono.id)).toBe(true);
-    const refused = await createOrRotateInvitation({ orgId, email: `x-${createId()}@invitee.test`, role: 'MEMBER', invitedBy: jono.id, actorRole: 'OWNER', now: new Date(), deliver });
+    const refused = await createOrRotateInvitation({ credential: 'session', orgId, email: `x-${createId()}@invitee.test`, role: 'MEMBER', invitedBy: jono.id, now: new Date(), deliver });
     expect(refused).toMatchObject({ ok: false, reason: 'seats_full' });
-    const resent = await resendInvitation({ orgId, invitationId: invited.invitation.id, actorRole: 'OWNER', actorId: jono.id, now: new Date(), deliver: async (_i, token) => { tokens.push(token); } });
+    const resent = await resendInvitation({ credential: 'session', orgId, invitationId: invited.invitation.id, actorId: jono.id, now: new Date(), deliver: async (_i, token) => { tokens.push(token); } });
     expect(resent.ok).toBe(true);
     expect(await acceptInvitation({ token: tokens[tokens.length - 1], userId: tomas.id, now: new Date() })).toMatchObject({ ok: true, joined: true });
     const [stale] = await db.insert(orgInvitations).values({ orgId, email: `y-${createId()}@invitee.test`, role: 'MEMBER', tokenHash: hashToken(createId()), invitedBy: jono.id, expiresAt: new Date(Date.now() + 86_400_000) }).returning();
@@ -221,20 +222,20 @@ describe('every org mutation writes its event', () => {
     expect((await changeMemberRole({ orgId, actorId: jono.id, targetId: marcus.id, newRole: 'ADMIN' })).ok).toBe(true);
 
     // ── drives: create, visibility, join requests, move in and out, lead ──────────
-    const product = await createOrgDrive(lena.id, { name: 'Product', orgId }, deps);
+    const product = await createOrgDrive(lena.id, { authentication: null, name: 'Product', orgId }, deps);
     if (!product.ok) throw new Error('create drive');
     const productId = product.drive.id;
     created.drives.push(productId);
     expect((await changeDriveVisibility(lena.id, productId, { orgVisibility: 'RESTRICTED' }, deps)).ok).toBe(true);
     const ask1 = await requestToJoinDrive(dana.id, productId);
     if (!ask1.ok) throw new Error('join request');
-    expect((await answerDriveJoinRequest(lena.id, productId, ask1.request.id, 'deny')).ok).toBe(true);
+    expect((await answerDriveJoinRequest(credentialActor(lena.id, null), productId, ask1.request.id, 'deny')).ok).toBe(true);
     const ask2 = await requestToJoinDrive(dana.id, productId);
     if (!ask2.ok) throw new Error('join request');
     expect((await withdrawDriveJoinRequest(dana.id, productId, ask2.request.id)).ok).toBe(true);
     const ask3 = await requestToJoinDrive(dana.id, productId);
     if (!ask3.ok) throw new Error('join request');
-    expect((await answerDriveJoinRequest(lena.id, productId, ask3.request.id, 'approve')).ok).toBe(true);
+    expect((await answerDriveJoinRequest(credentialActor(lena.id, null), productId, ask3.request.id, 'approve')).ok).toBe(true);
     const notes = await factories.createDrive(lena.id, { name: 'Lena Notes', slug: `notes-${createId()}` });
     created.drives.push(notes.id);
     expect((await moveDriveToOrg(lena.id, notes.id, { orgId }, deps)).ok).toBe(true);
@@ -244,16 +245,16 @@ describe('every org mutation writes its event', () => {
     // ── admin access to a Private drive (ORG-4) ──────────────────────────────────
     const finance = await factories.createDrive(lena.id, { name: 'Finance', slug: `finance-${createId()}`, orgId, orgVisibility: 'PRIVATE' });
     created.drives.push(finance.id);
-    expect(await getUserDriveAccess(priya.id, finance.id)).toBe(true);
+    expect(await getUserDriveAccess(credentialActor(priya.id, null), finance.id)).toBe(true);
 
     // ── policies, and a guest held by them ───────────────────────────────────────
     const link = await createDriveShareLink(ctxFor(marcus.id), productId, {});
     if (!link.ok) throw new Error('share link');
-    expect((await updateOrgPolicies({ orgId, actorId: jono.id, patch: { publicShareLinks: false } })).ok).toBe(true);
-    expect((await updateOrgPolicies({ orgId, actorId: jono.id, patch: { publicShareLinks: true, guests: 'approve' } })).ok).toBe(true);
+    expect((await updateOrgPolicies({ orgId, actorId: jono.id, actorAuthentication: null, patch: { publicShareLinks: false } })).ok).toBe(true);
+    expect((await updateOrgPolicies({ orgId, actorId: jono.id, actorAuthentication: null, patch: { publicShareLinks: true, guests: 'approve' } })).ok).toBe(true);
     // POL-1: a page agent on a model the org then stops allowing is listed as blocked (org.policy.blocked).
     await factories.createPage(productId, { type: 'AI_CHAT', aiProvider: 'openai', aiModel: 'gpt-old' });
-    expect((await updateOrgPolicies({ orgId, actorId: jono.id, patch: { modelAllowlist: ['gpt-new'] } })).ok).toBe(true);
+    expect((await updateOrgPolicies({ orgId, actorId: jono.id, actorAuthentication: null, patch: { modelAllowlist: ['gpt-new'] } })).ok).toBe(true);
     expect(await redeemDriveShareLink(ctxFor(chris.id), link.data.rawToken)).toMatchObject({ ok: false, error: 'PENDING_APPROVAL' });
 
     // ── compute (D-OW-28): an env handed to the lead, a parked app taken back ───────
@@ -265,7 +266,7 @@ describe('every org mutation writes its event', () => {
       id: appId, envId, driveId: productId, ownerId: tomas.id, costOwnerId: tomas.id, flyAppName: `pgs-${appId}`, networkName: 'published-apps',
       subdomain: `cov-${appId}`.toLowerCase(), machineId: `m-${appId}`, imageDigest: 'sha256:abc', status: 'parked', lastError: 'parked: test', tier: 'metered', updatedAt: new Date(),
     });
-    expect(await unparkPublishedApp({ publishedAppId: appId, actorId: jono.id }, {
+    expect(await unparkPublishedApp({ publishedAppId: appId, actor: credentialActor(jono.id, null) }, {
       ...defaultAppUnparkDeps,
       isEnabled: () => true,
       // The real payer resolution; the wallet gate is not what this story audits, so it admits the wake.
@@ -276,10 +277,10 @@ describe('every org mutation writes its event', () => {
     await db.update(organizations).set({ stripeCustomerId: `cus_${createId()}` }).where(eq(organizations.id, orgId));
     await db.insert(wallets).values({ ownerType: 'org', orgId, monthlyRemainingCents: 500_000 });
     await db.insert(wallets).values({ userId: dana.id, monthlyRemainingCents: 5_000, monthlyPeriodStart: new Date(), monthlyPeriodEnd: new Date(Date.now() + 20 * 86_400_000) });
-    expect(await createDriveWallet(jono.id, productId, { allocationCents: 10_000 }, 'session')).toMatchObject({ ok: true });
-    expect(await updateDriveWallet(jono.id, productId, { donationsEnabled: true }, 'session')).toMatchObject({ ok: true });
-    expect(await topUpDriveWallet(jono.id, productId, { amountCents: 500, idempotencyKey: createId() }, 'session')).toMatchObject({ ok: true, duplicate: false });
-    expect(await donateToDrive(dana.id, productId, { amountCents: 100, idempotencyKey: createId() }, 'session')).toMatchObject({ ok: true, duplicate: false });
+    expect(await createDriveWallet(credentialActor(jono.id, null), productId, { allocationCents: 10_000 }, 'session')).toMatchObject({ ok: true });
+    expect(await updateDriveWallet(credentialActor(jono.id, null), productId, { donationsEnabled: true }, 'session')).toMatchObject({ ok: true });
+    expect(await topUpDriveWallet(credentialActor(jono.id, null), productId, { amountCents: 500, idempotencyKey: createId() }, 'session')).toMatchObject({ ok: true, duplicate: false });
+    expect(await donateToDrive(credentialActor(dana.id, null), productId, { amountCents: 100, idempotencyKey: createId() }, 'session')).toMatchObject({ ok: true, duplicate: false });
     const [orgRow] = await db.select().from(organizations).where(eq(organizations.id, orgId));
     const startS = Math.floor(Date.now() / 1000);
     expect(await applyOrgPoolRefill({
@@ -289,8 +290,8 @@ describe('every org mutation writes its event', () => {
       amount_paid: 5000,
       subtotal: 5000,
       parent: { subscription_details: { subscription: `sub_${createId()}` } },
-      lines: { data: [{ amount: 5000, parent: { subscription_item_details: { subscription_item: 'si_org' } }, period: { start: startS, end: startS + 30 * 86_400 }, pricing: { price_details: { price: REFILL_PRICE_ID } } }] },
-    }, { active: true, basePriceId: REFILL_PRICE_ID, seatPriceId: REFILL_SEAT_PRICE_ID })).toMatchObject({ kind: 'granted' });
+      lines: { has_more: false, data: [{ amount: 5000, parent: { subscription_item_details: { subscription_item: 'si_org' } }, period: { start: startS, end: startS + 30 * 86_400 }, pricing: { price_details: { price: REFILL_PRICE_ID } } }] },
+    }, { basePriceId: REFILL_PRICE_ID, seatPriceId: REFILL_SEAT_PRICE_ID })).toMatchObject({ kind: 'granted' });
 
     // ── verified domains and auto-join (one refused while seats are full, one joined with auto-add) ──
     const claim = await addOrgDomain({ orgId, domain, actorId: jono.id });

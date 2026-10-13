@@ -122,12 +122,12 @@ async function bumpAttempts(aiUsageLogId: string): Promise<void> {
  * backfill pending sweep, an absent one is billed by its orphan sweep).
  *
  * Returns the wallet that base charge was billed to (WAL-5: reconciliation is keyed on
- * the wallet) and the automation it ran for (SPEND-10, so the correction stays attributed),
- * or null when there is no base charge yet.
+ * the wallet), the automation it ran for (SPEND-10, so the correction stays attributed) and the
+ * fallback origin its claim recorded (WAL-6b), or null when there is no base charge yet.
  */
-async function usageLedgerCharge(aiUsageLogId: string): Promise<{ walletId: string; automationRef: string | null } | null> {
+async function usageLedgerCharge(aiUsageLogId: string): Promise<{ walletId: string; automationRef: string | null; fallbackFromWalletId: string | null } | null> {
   const rows = await db
-    .select({ walletId: creditLedger.walletId, automationRef: creditLedger.automationRef })
+    .select({ walletId: creditLedger.walletId, automationRef: creditLedger.automationRef, fallbackFromWalletId: creditLedger.fallbackFromWalletId })
     .from(creditLedger)
     .where(and(eq(creditLedger.aiUsageLogId, aiUsageLogId), eq(creditLedger.entryType, 'usage')))
     .limit(1);
@@ -145,7 +145,9 @@ async function usageLedgerCharge(aiUsageLogId: string): Promise<{ walletId: stri
  */
 async function applyCorrection(
   userId: string,
-  charge: { walletId: string; automationRef: string | null },
+  // WAL-6b: `fallbackFromWalletId` is the chosen wallet the call fell back off, so an undercharge's overshoot lands
+  // where the original settle's would have — never on the consumer who did not choose own credits.
+  charge: { walletId: string; automationRef: string | null; fallbackFromWalletId: string | null },
   drift: ReturnType<typeof computeCostDrift>,
   aiUsageLogId: string,
   generationIds: string[],
@@ -154,7 +156,7 @@ async function applyCorrection(
   // Signed nominal cents for the adjustment row: positive delta = more spend = negative
   // amount; negative delta = refund = positive amount. `|| 0` avoids storing -0.
   const amountCents = -Math.round(drift.deltaChargeMillicents / 1000) || 0;
-  const { walletId } = charge;
+  const { walletId, fallbackFromWalletId } = charge;
 
   return db.transaction(async (tx) => {
     const claimed = await tx
@@ -191,7 +193,7 @@ async function applyCorrection(
       // wallet, allocation from the parent, then the locked funding legs, then overshoot
       // per D20.2 — never a direct write of topupRemainingCents past the legs.
       // Rollover: carry balance is always spendable; no period-expiry exclusion here.
-      const charged = await chargeWallet(tx, walletId, drift.deltaChargeMillicents, aiUsageLogId, { userId, spendKind: 'ai' });
+      const charged = await chargeWallet(tx, walletId, drift.deltaChargeMillicents, aiUsageLogId, { userId, spendKind: 'ai' }, fallbackFromWalletId);
       // No balance row to move (rare — reconcile runs on billed rows). Record the
       // correction row with no applied delta so a later run doesn't re-correct.
       if (!charged) {
