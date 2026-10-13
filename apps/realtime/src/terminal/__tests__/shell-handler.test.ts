@@ -15,7 +15,7 @@ const mockRealtimeLogger = vi.hoisted(() => ({
 }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({ loggers: { realtime: mockRealtimeLogger } }));
 
-import { buildShellHandlers, regateResumedWindow, resumeBillingClock, MAX_INPUT_BYTES, SETTLE_HEARTBEAT_MS, resolveShellCommand, planConnect, ensureShellSession, connectFailureMessage, armIdleReap, planColdTailPersist, latestActivityAt } from '../shell-handler';
+import { buildShellHandlers, regateResumedWindow, resumeBillingClock, settleAccruedWindow, MAX_INPUT_BYTES, SETTLE_HEARTBEAT_MS, resolveShellCommand, planConnect, ensureShellSession, connectFailureMessage, armIdleReap, planColdTailPersist, latestActivityAt } from '../shell-handler';
 import { createTerminalSessionMap, DETACHED_IDLE_MS } from '../terminal-session-map';
 import type { ShellCheckAuthFn, OpenShellFn, SocketLike } from '../shell-handler';
 import type { TerminalSession } from '../terminal-session-map';
@@ -3733,5 +3733,43 @@ describe('regateResumedWindow — a resumed window is re-held at once (review #2
     const getByKey = vi.spyOn(map, 'getByKey').mockReturnValue(session);
     await regateResumedWindow({ billing }, map, session, 'k1');
     expect(getByKey).toHaveBeenCalled();
+  });
+});
+
+describe('settleAccruedWindow — the payer is re-read at each window boundary (WAL-9)', () => {
+  const PERSON: ComputeCharge = { kind: 'user', userId: 'owner-1' };
+  const ORG: ComputeCharge = { kind: 'org', orgId: 'org-1', userId: 'actor-1' };
+  const live = (session: TerminalSession) => ({ getByKey: () => session }) as unknown as Parameters<typeof settleAccruedWindow>[1];
+  const session = (charge: ComputeCharge) =>
+    ({ sessionKey: 'k1', charge, holdId: 'hold-1', connectedAt: Date.now() - 60_000, ownerId: 'owner-1', actorId: 'actor-1', driveId: 'drive-1' }) as unknown as TerminalSession;
+
+  it('adopts the new payer when the drive moved into an org, and opens the next window on it', async () => {
+    const s = session(PERSON);
+    const billing = { ...makeBilling(), resolveCharge: vi.fn().mockResolvedValue(ORG) };
+    expect(await settleAccruedWindow(billing as never, live(s), s, 'k1')).toBe(true);
+    expect(s.charge).toEqual(ORG);
+    expect(billing.gate).toHaveBeenCalledWith({ charge: ORG });
+  });
+
+  it('keeps the payer it has when the re-resolve fails: a transient read never ends a live PTY', async () => {
+    const s = session(PERSON);
+    const billing = { ...makeBilling(), resolveCharge: vi.fn().mockRejectedValue(new Error('db down')) };
+    expect(await settleAccruedWindow(billing as never, live(s), s, 'k1')).toBe(true);
+    expect(s.charge).toEqual(PERSON);
+    expect(billing.gate).toHaveBeenCalledWith({ charge: PERSON });
+  });
+
+  it('a re-resolve that rejects with a non-Error is logged and the payer kept', async () => {
+    const s = session(PERSON);
+    const billing = { ...makeBilling(), resolveCharge: vi.fn().mockRejectedValue('timeout') };
+    expect(await settleAccruedWindow(billing as never, live(s), s, 'k1')).toBe(true);
+    expect(s.charge).toEqual(PERSON);
+  });
+
+  it('re-resolves nothing for a session with no owner to resolve from', async () => {
+    const s = { ...session(PERSON), ownerId: undefined } as unknown as TerminalSession;
+    const billing = { ...makeBilling(), resolveCharge: vi.fn() };
+    await settleAccruedWindow(billing as never, live(s), s, 'k1');
+    expect(billing.resolveCharge).not.toHaveBeenCalled();
   });
 });

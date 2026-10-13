@@ -68,6 +68,69 @@ describe('org room watch', () => {
     expect(socket.emit).toHaveBeenCalledWith(ORG_REAUTHENTICATION_REQUIRED_EVENT, { code: 'org_strong_sign_in_required', resourceId: 'd' });
   });
 
+  it('SEC-3 (partial) a failed policy read reports the error and retries a minute later, still watching held rooms', async () => {
+    const socket = {
+      data: { actor: credentialActor('user-1', { authenticatedAtMs: T0, assurance: 'single_factor' as const }) },
+      leave: vi.fn(),
+      emit: vi.fn(),
+    };
+    const onError = vi.fn();
+    let failing = true;
+    const watch = createOrgRoomWatch(socket, {
+      readPolicies: async (ids) => {
+        if (failing) throw new Error('policy read failed');
+        return new Map(ids.map((id) => [id, { requireStrongSignIn: true, maximumSessionAgeMinutes: null }]));
+      },
+      onLeft: vi.fn(),
+      now: () => Date.now(),
+      setTimer: (run, delay) => setTimeout(run, delay),
+      clearTimer: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+      onError,
+    });
+    await watch.track('drive:d', 'd');
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(socket.leave).not.toHaveBeenCalled();
+    failing = false;
+    await vi.advanceTimersByTimeAsync(minutes(1));
+    expect(socket.leave).toHaveBeenCalledWith('drive:d');
+  });
+
+  it('a watch disposed while its policy read is in flight leaves nothing and arms nothing', async () => {
+    const socket = { data: { actor: credentialActor('user-1', null) }, leave: vi.fn(), emit: vi.fn() };
+    let release: (value: Map<string, { requireStrongSignIn: boolean; maximumSessionAgeMinutes: number | null } | null>) => void = () => {};
+    const watch = createOrgRoomWatch(socket, {
+      readPolicies: () => new Promise((resolve) => { release = resolve; }),
+      onLeft: vi.fn(),
+      now: () => Date.now(),
+      setTimer: (run, delay) => setTimeout(run, delay),
+      clearTimer: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+      onError: vi.fn(),
+    });
+    const tracking = watch.track('drive:d', 'd');
+    await Promise.resolve();
+    watch.dispose();
+    release(new Map([['d', { requireStrongSignIn: true, maximumSessionAgeMinutes: null }]]));
+    await tracking;
+    expect(socket.leave).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('a failed read with no rooms left arms no retry', async () => {
+    const socket = { data: { actor: credentialActor('user-1', null) }, leave: vi.fn(), emit: vi.fn() };
+    const watch = createOrgRoomWatch(socket, {
+      readPolicies: async () => { throw new Error('policy read failed'); },
+      onLeft: vi.fn(),
+      now: () => Date.now(),
+      setTimer: (run, delay) => setTimeout(run, delay),
+      clearTimer: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+      onError: vi.fn(),
+    });
+    const tracking = watch.track('drive:d', 'd');
+    watch.untrack('drive:d');
+    await tracking;
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it('a left room is no longer watched, and dispose clears the timer', async () => {
     const { socket, watch } = setup({ d: { requireStrongSignIn: false, maximumSessionAgeMinutes: 15 } });
     await watch.track('drive:d', 'd');

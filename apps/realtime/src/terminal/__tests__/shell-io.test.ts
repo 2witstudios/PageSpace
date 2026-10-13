@@ -505,6 +505,30 @@ describe('shell IO — headless start', () => {
       });
     });
 
+    it('WAL-2 (partial) given a start for someone other than the window\'s actor, should claim the window for them without a second re-auth', async () => {
+      const { session, written } = writableSession();
+      session.actorId = 'priya-owner';
+      const start = starter(session);
+      const claims: string[] = [];
+      const reauthorized: string[] = [];
+      await handleShellSendRequest(
+        {
+          ...deps(),
+          startSession: start.startSession,
+          reauthorizeViewer: async ({ actor }) => { reauthorized.push(actor.userId); return true; },
+          claimBillingWindow: async (_session, userId) => { claims.push(userId); return true; },
+        },
+        sendBody({ start: true, userId: 'ben' }),
+      );
+
+      assert({
+        given: 'a send that starts the session for Ben in a window Priya opened',
+        should: 'claim the window for Ben (the start authorized him) and deliver the input',
+        actual: { claims, reauthorized, written },
+        expected: { claims: ['ben'], reauthorized: [], written: ['ls\n'] },
+      });
+    });
+
     it('given input for a reserved session and a start seam, should start the PTY and deliver into it', async () => {
       const { session, written } = writableSession();
       const start = starter(session);
@@ -999,6 +1023,13 @@ describe('shell IO — headless start', () => {
 });
 
 describe('planSessionStart', () => {
+  it('refuses a start on a session that is not addressable, and starts only for a named user with a starter', () => {
+    expect(planSessionStart({ start: true, userId: 'u1' }, { addressable: false, hasStarter: true })).toEqual({ ok: false, error: 'Invalid start' });
+    expect(planSessionStart({ start: true }, { addressable: true, hasStarter: true })).toEqual({ ok: false, error: 'Missing or invalid userId' });
+    expect(planSessionStart({ start: true, userId: 'u1' }, { addressable: true, hasStarter: false })).toEqual({ ok: true, start: false });
+    expect(planSessionStart({ start: 'yes' }, { addressable: true, hasStarter: true })).toEqual({ ok: false, error: 'Invalid start' });
+  });
+
   it('given a malformed userId, should refuse even when no start was asked for', () => {
     // Validated on its own terms rather than only inside the start branch: a
     // field this endpoint uses to decide WHO a sandbox is billed to must never
