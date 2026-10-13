@@ -64,7 +64,9 @@ const expectEmptyChat = async (page: Page): Promise<void> => {
 };
 
 const history = (page: Page) => page.locator('[data-slot="list"]').getByRole('region', { name: 'Chat history' });
-const historyRow = (page: Page, title: string) => history(page).getByRole('button', { name: title, exact: true });
+// A row's name is its title then its time ("Alpha question now"), so match the title as the name's start.
+const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const historyRow = (page: Page, title: string) => history(page).getByRole('button', { name: new RegExp(`^${escapeRegExp(title)}`) });
 
 const tagDocument = (page: Page) =>
   page.evaluate(() => {
