@@ -22,8 +22,8 @@ export function SpendStrip({ conversationId = null, driveId = null, isGlobal = f
   /** Materialize a new agent conversation with its source atomically, without sending a turn. */
   readonly onChooseDraftSource?: (walletId: string) => Promise<void>;
 } = {}): ReactNode {
-  const { spend: conversation, isPending: conversationPending, error: conversationError, choose, refresh: refreshConversation } = useConversationSpend(conversationId, { driveId, isGlobal });
-  const { spend: drive, isPending: drivePending, error: driveError, refresh: refreshDrive } = useDriveSpend(conversationId ? null : driveId);
+  const { spend: conversation, error: conversationError, choose, refresh: refreshConversation } = useConversationSpend(conversationId, { driveId, isGlobal });
+  const { spend: drive, error: driveError, refresh: refreshDrive } = useDriveSpend(conversationId ? null : driveId);
   const scoped = conversationId !== null || driveId !== null;
   const { data, mutate } = useSWR<unknown>(scoped ? null : CREDITS);
   const socket = useSocketStore(state => state.socket);
