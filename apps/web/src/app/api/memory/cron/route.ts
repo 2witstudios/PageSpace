@@ -63,6 +63,7 @@ import {
   upsertCandidates,
   findPromotableCandidates,
   markCandidatesPromoted,
+  recordMemoryOrgIds,
   markCandidatesRejected,
   pruneStaleCandidates,
   redactSettledEvidence,
@@ -250,7 +251,7 @@ async function processUserMemory(
   // outage are already corroborated and still deserve evaluation, and a quiet
   // week would otherwise strand them indefinitely.
   if (discovered > 0) {
-    await upsertCandidates(userId, discoveryResult.claims);
+    await upsertCandidates(userId, discoveryResult.claims, discoveryResult.orgIds);
   }
 
   // Step 3: Find candidates that have cleared the corroboration bar
@@ -296,6 +297,13 @@ async function processUserMemory(
       pruned,
       creditRefusals,
     };
+  }
+
+  // SEC-2/3 (D-OW-62): the evaluator saw every ready candidate, so any page it rewrites may restate any of them. The
+  // memory takes on all their orgs BEFORE a page is written, so no reader is ever served restated content its org
+  // has not yet been recorded against (a write that then fails only over-attributes, which withholds, never leaks).
+  if (Object.keys(evaluation.updates).length > 0) {
+    await recordMemoryOrgIds(userId, promotable.flatMap((candidate) => candidate.orgIds));
   }
 
   // Step 6: Apply updates with guards

@@ -4,7 +4,7 @@ import type { OrgRole } from '@pagespace/db/schema/organizations';
 import { auditOrgAdminPrivateDriveAccess } from './org-admin-access-audit';
 import { accessiblePageIdsSource } from './accessible-page-ids-source';
 import type { AccessActor } from './access-actor';
-import { filterDrivesForActor } from './actor-authentication';
+import { dropWithheldDerivedPages, filterDrivesForActor } from './actor-authentication';
 
 /**
  * Returns the set of page IDs the actor can view, computed via the
@@ -20,7 +20,8 @@ import { filterDrivesForActor } from './actor-authentication';
  * grants (compared in UTC) are excluded.
  *
  * SEC-2/3 (D-OW-45): the function knows nothing of the credential, so the pages of every org drive
- * whose sign-in policy the actor's credential fails are dropped here, as getUserAccessLevel drops them.
+ * whose sign-in policy the actor's credential fails are dropped here, as getUserAccessLevel drops them, and so are
+ * pages restating org-derived content (memory pages, D-OW-62) a contributing org withholds from the credential.
  * Org power is audited only for the pages that survive.
  */
 export async function accessiblePageIds(actor: AccessActor): Promise<string[]> {
@@ -33,7 +34,8 @@ export async function accessiblePageIds(actor: AccessActor): Promise<string[]> {
   const allowedDrives = await filterDrivesForActor(actor, [...new Set(result.rows.map((row) => row.drive_id))]);
   const rows = result.rows.filter((row) => allowedDrives.has(row.drive_id));
   auditOrgPowerAccess(actor.userId, rows);
-  return rows.map((row) => row.page_id);
+  // D-OW-62: a page restating org-derived content (a memory page) is withheld from a credential its orgs refuse.
+  return dropWithheldDerivedPages(actor, rows.map((row) => row.page_id));
 }
 
 /** The function's ORG-4 columns: set only when org Owner/Admin power opened a PRIVATE drive's page. */

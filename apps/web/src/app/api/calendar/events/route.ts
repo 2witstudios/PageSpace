@@ -20,6 +20,7 @@ import { absoluteInstant } from '@/lib/validation/date-params';
 import { expandRecurringEvents } from '@/lib/workflows/recurrence-utils';
 import { CronExpressionParser } from 'cron-parser';
 import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
+import { filterDrivesForActor } from '@pagespace/lib/permissions/actor-authentication';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -479,12 +480,19 @@ export async function GET(request: Request) {
     // exact identity) — but a driveless event belonging to a DIFFERENT user
     // (reachable only via the attendee branch) stays capped out.
     const principalDriveIdSet = new Set(driveIds);
-    const visibleEvents = isScopedMCPAuth(auth)
+    const scopedEvents = isScopedMCPAuth(auth)
       ? events.filter((e) =>
           (e.driveId !== null && principalDriveIdSet.has(e.driveId)) ||
           (e.driveId === null && e.createdById === userId)
         )
       : events;
+    // SEC-2/3 (D-OW-45): the attendee branch is identity-derived, so it can surface an event in an org drive whose
+    // sign-in policy this credential fails. An event in a drive is that drive's content: drop it here.
+    const signedInDrives = await filterDrivesForActor(
+      actorFromAuth(auth),
+      [...new Set(scopedEvents.flatMap((e) => (e.driveId ? [e.driveId] : [])))],
+    );
+    const visibleEvents = scopedEvents.filter((e) => e.driveId === null || signedInDrives.has(e.driveId));
 
     // Annotate events with agent trigger presence
     const triggeredIds = await getTriggeredEventIds(visibleEvents.map(e => e.id));

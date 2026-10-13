@@ -4,7 +4,7 @@
  * Loosening (strong sign-in off, a longer or no maximum age) is judged under the org row's lock against the stored
  * policy and needs the acting credential to satisfy it; nothing is stored when it does not. Tightening always applies,
  * even for a lapsed org ([D-OW-33]), and the org.policy.blocked audit row says how many members and live credentials
- * the new policy refuses (counts, no identities).
+ * and guests and live credentials the new policy refuses (counts, no identities).
  *
  * Locally:
  *     DATABASE_URL=... bun run --filter '@pagespace/lib' test:integration -- src/organizations/__tests__/sign-in-policy-change.integration.test.ts
@@ -16,6 +16,7 @@ import { db } from '@pagespace/db/db';
 import { eq, inArray } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { organizations, orgMembers, orgSubscriptions } from '@pagespace/db/schema/organizations';
+import { drives } from '@pagespace/db/schema/core';
 import { sessionService } from '../../auth/session-service';
 import type { VerifiedAuthentication } from '../../auth/authentication-evidence';
 
@@ -29,8 +30,9 @@ vi.mock('../../audit/org-audit', () => ({
 
 import { updateOrgPolicies } from '../policies';
 import { getOrgPolicies } from '../policy-reader';
+import { countOrgSignInBlocked } from '../sign-in-blocked';
 
-const created = { userIds: [] as string[], orgIds: [] as string[] };
+const created = { userIds: [] as string[], orgIds: [] as string[], driveIds: [] as string[] };
 let orgId: string;
 let owner: string;
 let members: string[];
@@ -44,6 +46,8 @@ async function session(userId: string, authentication: VerifiedAuthentication | 
 }
 
 async function cleanup() {
+  if (created.driveIds.length) await db.delete(drives).where(inArray(drives.id, created.driveIds));
+  created.driveIds = [];
   if (created.orgIds.length) {
     await db.delete(orgMembers).where(inArray(orgMembers.orgId, created.orgIds));
     await db.delete(orgSubscriptions).where(inArray(orgSubscriptions.orgId, created.orgIds));
@@ -103,6 +107,38 @@ describe('changing an org sign-in policy (D-OW-45)', () => {
     expect(result).toMatchObject({ ok: true, signInBlocked: { members: 2, credentials: 3 } });
     expect(blockedEvent()).toMatchObject({ eventType: 'org.policy.blocked', details: { signIn: { members: 2, credentials: 3 } } });
     expect(JSON.stringify(blockedEvent())).not.toContain(members[1]);
+  });
+
+  it('SEC-2 (partial) POL-1 (partial) the count includes the org\'s guests, apart from its members (review #2866 B4)', async () => {
+    const mk = async () => {
+      const u = await factories.createUser();
+      created.userIds.push(u.id);
+      return u.id;
+    };
+    const drive = await factories.createDrive(owner, { orgId });
+    created.driveIds.push(drive.id);
+    const [guest, admittedGuest] = [await mk(), await mk()];
+    await factories.createDriveMember(drive.id, guest);
+    await factories.createDriveMember(drive.id, admittedGuest);
+    await factories.createDriveMember(drive.id, members[1]);
+    await session(guest, emailLink());
+    await session(admittedGuest, passkey());
+
+    const result = await change(passkey(), { requireStrongSignIn: true });
+
+    // Members as before (a member on a drive is still a member, not a guest); one guest left with no admitted credential.
+    expect(result).toMatchObject({ ok: true, signInBlocked: { members: 2, guests: 1, credentials: 4 } });
+    expect(blockedEvent()).toMatchObject({ details: { signIn: { members: 2, guests: 1, credentials: 4 } } });
+    expect(JSON.stringify(blockedEvent())).not.toContain(guest);
+  });
+
+  it('POL-1 (partial) the count reads people in chunks, and every chunking counts the same (review #2866 B: no bind-parameter limit)', async () => {
+    const strongOnly = { requireStrongSignIn: true, maximumSessionAgeMinutes: null };
+    const whole = await countOrgSignInBlocked(db, orgId, strongOnly);
+    expect(whole.members).toBeGreaterThan(1);
+    for (const chunkSize of [1, 2]) {
+      expect(await countOrgSignInBlocked(db, orgId, strongOnly, new Date(), chunkSize)).toEqual(whole);
+    }
   });
 
   it('SEC-3 (partial) POL-1 (partial) a maximum age audits the stale and evidence-less credentials it refuses', async () => {

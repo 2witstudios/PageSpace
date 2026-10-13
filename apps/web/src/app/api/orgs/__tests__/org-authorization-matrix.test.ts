@@ -61,6 +61,8 @@ type Posture = 'token' | 'directory' | 'session-read' | 'session-write' | 'money
 interface Row {
   minRole: OrgRole | null;
   posture: Posture;
+  /** false: the org's sign-in policy is never asked (leaving only restricts — authorizeOrgDeparture). */
+  signInPolicy?: false;
 }
 
 const ORGS_DIR = join(__dirname, '..');
@@ -101,7 +103,7 @@ const MATRIX: Record<string, Row> = {
   '/[orgId]/invitations POST': { minRole: 'MEMBER', posture: 'token' },
   '/[orgId]/invitations/[invitationId] DELETE': { minRole: 'ADMIN', posture: 'token' },
   '/[orgId]/invitations/[invitationId]/resend POST': { minRole: 'MEMBER', posture: 'token' },
-  '/[orgId]/leave POST': { minRole: 'MEMBER', posture: 'token' },
+  '/[orgId]/leave POST': { minRole: 'MEMBER', posture: 'token', signInPolicy: false },
   '/[orgId]/members GET': { minRole: 'MEMBER', posture: 'token' },
   '/[orgId]/members/activity GET': { minRole: 'ADMIN', posture: 'token' },
   '/[orgId]/members/[userId] PATCH': { minRole: 'ADMIN', posture: 'token' },
@@ -169,6 +171,8 @@ function expected(row: Row, role: OrgRole | null, credential: Credential): { sta
   if (row.minRole === null) return { status: -1, code: null };
   if (role === null) return { status: 404, code: 'org_not_found' };
   if (RANK[role] < RANK[row.minRole]) return { status: 403, code: 'insufficient_role' };
+  // Past the role check: the sign-in policy stops the caller, except on a route that never asks it.
+  if (row.signInPolicy === false) return { status: -2, code: null };
   return { status: 403, code: 'org_reauthentication_required' };
 }
 
@@ -204,6 +208,12 @@ describe('ORG-5 every org route authorizes through the one shared org permission
           caller.credential = credential;
           vi.mocked(findMembershipRole).mockResolvedValue(who.role);
           const response = await call(entry);
+          if (want.status === -2) {
+            // Admitted by the role check and past the gate: the sign-in policy was never asked.
+            expect(findMembershipRole).toHaveBeenCalledWith(ORG_ID, 'user_caller');
+            expect(checkActorOrgAuthentication).not.toHaveBeenCalled();
+            return;
+          }
           expect(response.status).toBe(want.status);
           if (want.code) expect((await response.json()).code).toBe(want.code);
           if (want.code === 'org_reauthentication_required') {

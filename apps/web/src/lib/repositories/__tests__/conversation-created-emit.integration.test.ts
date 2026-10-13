@@ -348,6 +348,23 @@ describe('conversation:created is genuinely EMITTED by every creation path (real
     expect(broadcasts.filter(createdFor(conversationId))).toHaveLength(1);
   });
 
+  it('path 3, in a caller transaction — the INSERT emits only when the caller runs its after-commit queue', async () => {
+    const owner = await factories.createUser();
+    const conversationId = createId();
+    const afterCommit: Array<() => void> = [];
+
+    await db.transaction(async (tx) => {
+      await resolveOrCreateConversation(owner.id, conversationId, tx, { afterCommit: (emit) => afterCommit.push(emit) });
+    });
+    await settle();
+    // Committed, but nothing announced yet: a re-read triggered earlier would have raced the commit.
+    expect(broadcasts.filter(createdFor(conversationId))).toHaveLength(0);
+    expect(afterCommit).toHaveLength(1);
+
+    for (const emit of afterCommit) emit();
+    await waitForBroadcasts(createdFor(conversationId), 1, 'deferred global create');
+  });
+
   it('path 4a — createWorkerSession (global worker): the spawn emits conversation:created, then the claim emits the workspace binding', async () => {
     const owner = await factories.createUser();
     const callerConversationId = createId();

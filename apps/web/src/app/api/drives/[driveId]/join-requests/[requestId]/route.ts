@@ -37,7 +37,7 @@ export async function PATCH(request: Request, context: RouteContext) {
   if (!parsed.success) return parsed.response;
 
   try {
-    const result = await answerDriveJoinRequest(gate.userId, driveId, requestId, parsed.data.decision);
+    const result = await answerDriveJoinRequest(gate.actor, driveId, requestId, parsed.data.decision);
     if (!result.ok) return orgRefusalResponse(result);
 
     auditRequest(request, {

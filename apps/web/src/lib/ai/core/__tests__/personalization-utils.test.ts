@@ -1,5 +1,6 @@
 import { describe, it, vi, beforeEach } from 'vitest';
 import { assert } from '@/lib/memory/__tests__/riteway';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 /**
  * Personalization injection tests.
@@ -33,6 +34,13 @@ vi.mock('@pagespace/lib/memory/memory-pages', () => ({
   readMemoryPages: (...a: unknown[]) => readMemoryPages(...a),
 }));
 
+const checkDerivedContentAccess = vi.fn();
+vi.mock('@pagespace/lib/permissions/org-derived-content', () => ({
+  checkDerivedContentAccess: (...a: unknown[]) => checkDerivedContentAccess(...a),
+}));
+
+const ACTOR = credentialActor('user-1', null);
+
 describe('getUserPersonalization', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -46,8 +54,30 @@ describe('getUserPersonalization', () => {
       bioPageId: 'bio-page-1',
       writingStylePageId: 'style-page-1',
       rulesPageId: 'rules-page-1',
+      memoryOrgIds: [],
     });
     readMemoryPages.mockResolvedValue({});
+    checkDerivedContentAccess.mockResolvedValue({ allowed: true });
+  });
+
+  it('SEC-2 (partial) withholds memory distilled from an org whose sign-in policy refuses the credential', async () => {
+    findFirst.mockResolvedValue({
+      enabled: true, bio: null, writingStyle: null, rules: null,
+      bioPageId: 'bio-page-1', writingStylePageId: 'style-page-1', rulesPageId: 'rules-page-1',
+      memoryOrgIds: ['org-a'],
+    });
+    readMemoryPages.mockResolvedValue({ rules: 'Never use emojis.' });
+    checkDerivedContentAccess.mockResolvedValue({ allowed: false, code: 'org_strong_sign_in_required', orgIds: ['org-a'] });
+    const { getUserPersonalization } = await import('../personalization-utils');
+
+    const actual = await getUserPersonalization(ACTOR);
+
+    assert({
+      given: 'memory recorded against an org that refuses this sign-in',
+      should: 'inject nothing and read no memory page',
+      actual: { actual, pagesRead: readMemoryPages.mock.calls.length, askedFor: checkDerivedContentAccess.mock.calls[0] },
+      expected: { actual: null, pagesRead: 0, askedFor: [ACTOR, ['org-a']] },
+    });
   });
 
   it('returns null when the user has disabled personalization', async () => {
@@ -57,7 +87,7 @@ describe('getUserPersonalization', () => {
     assert({
       given: 'a user with personalization switched off',
       should: 'inject nothing, even though the page has content',
-      actual: await getUserPersonalization('user-1'),
+      actual: await getUserPersonalization(ACTOR),
       expected: null,
     });
   });
@@ -69,7 +99,7 @@ describe('getUserPersonalization', () => {
     assert({
       given: 'pages that exist but hold only whitespace',
       should: 'inject nothing rather than an empty header',
-      actual: await getUserPersonalization('user-1'),
+      actual: await getUserPersonalization(ACTOR),
       expected: null,
     });
   });
@@ -78,7 +108,7 @@ describe('getUserPersonalization', () => {
     readMemoryPages.mockResolvedValue({ bio: 'x'.repeat(9000) });
     const { getUserPersonalization } = await import('../personalization-utils');
 
-    const result = await getUserPersonalization('user-1');
+    const result = await getUserPersonalization(ACTOR);
 
     assert({
       given: 'a hand-edited bio far over its 3000-char budget',
@@ -98,7 +128,7 @@ describe('getUserPersonalization', () => {
     });
     const { getUserPersonalization } = await import('../personalization-utils');
 
-    const result = await getUserPersonalization('user-1');
+    const result = await getUserPersonalization(ACTOR);
     const total =
       (result?.bio?.length ?? 0) +
       (result?.writingStyle?.length ?? 0) +
@@ -123,7 +153,7 @@ describe('getUserPersonalization', () => {
     });
     const { getUserPersonalization } = await import('../personalization-utils');
 
-    const result = await getUserPersonalization('user-1');
+    const result = await getUserPersonalization(ACTOR);
 
     assert({
       given: 'a profile over the total budget',
@@ -159,7 +189,7 @@ describe('getUserPersonalization', () => {
     assert({
       given: 'a deleted memory page whose pointer still exists',
       should: 'inject nothing for that field rather than the stale legacy column',
-      actual: await getUserPersonalization('user-1'),
+      actual: await getUserPersonalization(ACTOR),
       expected: null,
     });
   });
@@ -179,7 +209,7 @@ describe('getUserPersonalization', () => {
     readMemoryPages.mockResolvedValue({});
     const { getUserPersonalization } = await import('../personalization-utils');
 
-    const result = await getUserPersonalization('user-1');
+    const result = await getUserPersonalization(ACTOR);
 
     assert({
       given: 'a user the backfill has not reached',
@@ -202,7 +232,7 @@ describe('getUserPersonalization', () => {
     readMemoryPages.mockResolvedValue({ bio: 'current page bio' });
     const { getUserPersonalization } = await import('../personalization-utils');
 
-    const result = await getUserPersonalization('user-1');
+    const result = await getUserPersonalization(ACTOR);
 
     assert({
       given: 'both a page and a legacy column',

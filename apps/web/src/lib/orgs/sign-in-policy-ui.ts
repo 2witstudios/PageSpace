@@ -4,6 +4,7 @@
 import {
   MAX_MAXIMUM_SESSION_AGE_MINUTES,
   MIN_MAXIMUM_SESSION_AGE_MINUTES,
+  normalizeMaximumSessionAgeMinutes,
 } from '@pagespace/lib/organizations/authentication-policy-core';
 
 /** The maximum ages offered, from the allowed range's floor (15 minutes) to its ceiling (30 days). */
@@ -40,4 +41,40 @@ export function signInPreviewQuery(draft: SignInPolicyDraft): string {
   const params = new URLSearchParams({ requireStrongSignIn: String(draft.requireStrongSignIn) });
   if (draft.maximumSessionAgeMinutes !== null) params.set('maximumSessionAgeMinutes', String(draft.maximumSessionAgeMinutes));
   return params.toString();
+}
+
+/**
+ * A stored maximum age outside the allowed range (damaged; the policy GET reads it as the strictest value, 0) is shown
+ * as invalid for the Admin to replace, never offered as a choice.
+ */
+export const isValidSessionAge = (minutes: number | null): boolean =>
+  normalizeMaximumSessionAgeMinutes(minutes) !== undefined;
+
+/**
+ * The PATCH body: only the keys the Admin changed. Re-sending an unchanged key would re-validate it, so a damaged stored
+ * age would refuse an unrelated change (and be judged as a change the Admin never made).
+ */
+export function signInPolicyPatch(stored: SignInPolicyDraft, draft: SignInPolicyDraft): Partial<SignInPolicyDraft> {
+  const body: Partial<SignInPolicyDraft> = {};
+  if (draft.requireStrongSignIn !== stored.requireStrongSignIn) body.requireStrongSignIn = draft.requireStrongSignIn;
+  if (draft.maximumSessionAgeMinutes !== stored.maximumSessionAgeMinutes) body.maximumSessionAgeMinutes = draft.maximumSessionAgeMinutes;
+  return body;
+}
+
+/** Who a sign-in policy would refuse, by count (the preview and the save result). */
+export interface SignInBlockedCounts {
+  members: number;
+  guests: number;
+  credentials: number;
+}
+
+const people = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+
+/** "3 members", "1 guest", "2 members and 1 guest"; empty when nobody. */
+export function blockedPeopleText(counts: Pick<SignInBlockedCounts, 'members' | 'guests'>): string {
+  const parts = [
+    counts.members > 0 ? people(counts.members, 'member', 'members') : null,
+    counts.guests > 0 ? people(counts.guests, 'guest', 'guests') : null,
+  ].filter((part): part is string => part !== null);
+  return parts.join(' and ');
 }

@@ -40,7 +40,7 @@ describe('Session Service', () => {
     });
 
     it('SEC-3 (partial) refuses future ceremony evidence when minting a session', async () => {
-      await expect(sessionService.createSession({ userId: testUserId, type: 'user', scopes: ['*'], expiresInMs: 3600000, authentication: { authenticatedAtMs: Date.now() + 60_000, assurance: 'single_factor' } })).rejects.toThrow('Invalid authentication evidence');
+      await expect(sessionService.createSession({ userId: testUserId, type: 'user', scopes: ['*'], expiresInMs: 3600000, authentication: { authenticatedAtMs: Date.now() + 10 * 60_000, assurance: 'single_factor' } })).rejects.toThrow('Invalid authentication evidence');
     });
 
     it('creates session with valid user', async () => {

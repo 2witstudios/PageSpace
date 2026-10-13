@@ -84,6 +84,7 @@ const mockOrgRoomWatch = { track: vi.fn().mockResolvedValue(undefined), untrack:
 vi.mock('../org-room-watch', () => ({
   ORG_REAUTHENTICATION_REQUIRED_EVENT: 'org:reauthentication_required',
   createOrgRoomWatch: vi.fn(() => mockOrgRoomWatch),
+  createPolicyChangeFanout: vi.fn(() => vi.fn()),
 }));
 
 // conversation-access predicate mock (join_conversation authz — SSoT Phase 2)

@@ -20,6 +20,7 @@ export async function GET(request: Request) {
       auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'message', resourceId: 'list', details: { reason: 'auth_failed', method: 'GET', authFailureReason: auth.authFailureReason }, riskScore: 0.5 });
       return auth.error;
     }
+    const actor = actorFromAuth(auth);
 
     const { searchParams } = new URL(request.url);
     const pageId = searchParams.get('pageId');
@@ -43,7 +44,7 @@ export async function GET(request: Request) {
     const canView = await canPrincipalViewPage(auth, pageId);
     if (!canView) {
       auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'message', resourceId: pageId, details: { reason: 'no_view_permission', method: 'GET' }, riskScore: 0.5 });
-      return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json({
+      return deniedResponse(actor, pageId, NextResponse.json({
         error: 'You need view permission to access this page\'s chat messages',
         details: 'Contact the page owner to request access'
       }, { status: 403 }));

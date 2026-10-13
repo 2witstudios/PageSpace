@@ -20,6 +20,7 @@ import {
 import { OrgLapsedError, checkCalendarVisibilityMayLoosen, isOrgLapsedError } from '@pagespace/lib/permissions/org-lapse-guard';
 import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
 import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
+import { checkActorDriveAuthentication } from '@pagespace/lib/permissions/actor-authentication';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -65,6 +66,12 @@ const updateEventSchema = z.object({
  */
 async function canAccessEvent(auth: AuthResult, event: typeof calendarEvents.$inferSelect): Promise<boolean> {
   const userId = auth.userId;
+
+  // SEC-2/3 (D-OW-45): an event in a drive is that drive's content, so the drive's org sign-in policy is asked of the
+  // credential BEFORE any identity shortcut — its creator and attendees included.
+  if (event.driveId && !(await checkActorDriveAuthentication(actorFromAuth(auth), event.driveId)).allowed) {
+    return false;
+  }
 
   // Creator always has access (identity check) — including a scoped token
   // reading back a driveless event IT created: the token still acts on
