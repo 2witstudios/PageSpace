@@ -18,6 +18,10 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 // The URL is the shell's only input besides the store. Next's router is the
 // seam: a navigation is a new pathname with the same layout still mounted.
 const navigation = vi.hoisted(() => ({ pathname: '/drive-1' as string | null }));
+vi.mock('@/retained-adapters/retained-provider', () => ({ RetainedSurface: ({ children }: { children: React.ReactNode }) => children }));
+vi.mock('@/retained/components/auth/OrgReauthenticationPrompt', () => ({ OrgReauthenticationPrompt: () => null }));
+vi.mock('@/retained/components/orgs/OrgSurfaceBanner', () => ({ OrgSurfaceBanner: () => null }));
+
 vi.mock('next/navigation', () => ({
   usePathname: () => navigation.pathname,
   // The palette navigates through the router; its own suite proves where.

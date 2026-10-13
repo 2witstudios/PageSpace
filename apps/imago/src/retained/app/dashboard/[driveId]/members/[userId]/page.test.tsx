@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act } from 'react';
-import { afterEach, beforeEach, describe, test, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { assert } from 'riteway/vitest';
 import { click, mount, unmountAll } from '@/ui/test-support/dom';
 import { useEditingStore } from '@/retained/stores/useEditingStore';
@@ -19,6 +19,10 @@ vi.mock('@/retained-adapters/navigation', () => ({
   useRouter: () => ({ push: spies.push }),
 }));
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+
+const orgState = vi.hoisted(() => ({ lapsed: false }));
+vi.mock('@/retained/hooks/useOrgLapsed', () => ({ useOrgLapsed: () => orgState.lapsed, LAPSED_LOOSEN_NOTE: 'Removing access still works.' }));
+vi.mock('@/retained/hooks/useDrive', () => ({ useDriveStore: (select: (state: { drives: { id: string; orgId: string }[] }) => unknown) => select({ drives: [{ id: 'd1', orgId: 'northwind' }] }) }));
 
 const SESSION = 'member-permissions:u2';
 
@@ -76,6 +80,8 @@ const shareBox = (container: HTMLElement, title: string) =>
 const bar = (container: HTMLElement) => container.querySelector<HTMLElement>('[role="region"][aria-label="Unsaved changes"]');
 
 beforeEach(() => {
+  orgState.lapsed = false;
+  HTMLElement.prototype.scrollIntoView = vi.fn();
   spies.fetchWithAuth.mockReset();
   spies.patch.mockReset().mockResolvedValue({});
   spies.del.mockReset().mockResolvedValue({});
@@ -173,4 +179,37 @@ describe('MemberSettingsPage', () => {
       },
     });
   });
+
+  test('SEAT-9 (partial) lapsed org page permission widening cannot be saved while narrowing still can', async () => {
+    orgState.lapsed = true;
+    const container = mount(<MemberSettingsPage />);
+    await settle(() => expect(shareBox(container, 'Pricing Model')).not.toBeNull());
+    click(shareBox(container, 'Pricing Model')!);
+    const save = () => [...(bar(container)?.querySelectorAll('button') ?? [])].find((button) => button.textContent === 'Save changes')!;
+    expect(save().disabled).toBe(true);
+    expect(container.textContent).toContain('Giving this member more is paused.');
+    click(save());
+    expect(spies.patch).not.toHaveBeenCalled();
+    click([...(bar(container)?.querySelectorAll('button') ?? [])].find((button) => button.textContent === 'Discard')!);
+    const view = container.querySelector<HTMLElement>('[role="checkbox"][aria-label="View Pricing Model"]')!;
+    click(view);
+    expect(save().disabled).toBe(false);
+    click(save());
+    await settle(() => expect(spies.patch).toHaveBeenCalledWith('/api/drives/d1/members/u2', expect.objectContaining({ permissions: [{ pageId: 'p1', canView: false, canEdit: false, canShare: false }] })));
+  });
+
+  test('SEAT-9 (partial) lapsed org promotion to Admin cannot be saved', async () => {
+    orgState.lapsed = true;
+    const container = mount(<MemberSettingsPage />);
+    await settle(() => expect(container.querySelector('[role="combobox"]')).not.toBeNull());
+    const trigger = container.querySelector<HTMLElement>('[role="combobox"]')!;
+    act(() => trigger.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true })));
+    await settle(() => expect([...document.querySelectorAll('[role="option"]')].find((option) => option.textContent?.includes('Admin'))).toBeTruthy());
+    click([...document.querySelectorAll<HTMLElement>('[role="option"]')].find((option) => option.textContent?.includes('Admin'))!);
+    const save = [...(bar(container)?.querySelectorAll('button') ?? [])].find((button) => button.textContent === 'Save changes')!;
+    expect(save.disabled).toBe(true);
+    click(save);
+    expect(spies.patch).not.toHaveBeenCalled();
+  });
+
 });

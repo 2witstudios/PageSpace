@@ -1,3 +1,4 @@
+import { useOrgReauthStore } from '@/retained/stores/useOrgReauthStore';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { assert } from 'riteway/vitest';
 import { LOGOUT_ENDPOINT, signOut } from './sign-out';
@@ -119,4 +120,11 @@ test('sign-out removes saved organization setup data before leaving, even on net
       expect(values.get('unrelated')).toBe('keep');
     },
   });
+});
+
+test('sign-out clears pending organization authentication denials before navigating', async () => {
+  useOrgReauthStore.getState().report({ code: 'org_reauthentication_required', orgId: 'northwind' });
+  await signOut({ fetch: async () => new Response(null, { status: 200 }), navigate: () => {
+    expect(useOrgReauthStore.getState().denials).toEqual([]);
+  } });
 });

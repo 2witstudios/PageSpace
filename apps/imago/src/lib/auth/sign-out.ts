@@ -1,4 +1,5 @@
 import { purgePendingSetups } from '@/retained/lib/orgs/pending-setup';
+import { useOrgReauthStore } from '@/retained/stores/useOrgReauthStore';
 import { SIGN_IN_PATH } from './sign-in-url';
 
 /**
@@ -26,6 +27,7 @@ export async function signOut({ fetch, navigate }: SignOutIO): Promise<void> {
     // Nothing to recover: the landing below happens either way.
   } finally {
     purgePendingSetups();
+    useOrgReauthStore.getState().dismiss();
     navigate(SIGN_IN_PATH);
   }
 }

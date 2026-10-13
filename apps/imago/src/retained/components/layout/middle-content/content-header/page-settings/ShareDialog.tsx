@@ -48,6 +48,8 @@ import { PageShareLinkSection } from './PageShareLinkSection';
 import { PageLinkSection } from './PageLinkSection';
 import type { DriveRole } from '@pagespace/lib/services/drive-role-service';
 import type { RoleGrant } from '@/retained-adapters/ui-contracts';
+import { useDriveStore } from '@/retained/hooks/useDrive';
+import { LAPSED_LOOSEN_NOTE, useOrgLapsed } from '@/retained/hooks/useOrgLapsed';
 
 interface ShareDialogProps {
   pageId?: string | null;
@@ -67,6 +69,8 @@ export function ShareDialog({
   const params = useParams();
   const driveId = params.driveId as string;
   const { tree } = usePageTree(driveId);
+  const driveOrgId = useDriveStore((state) => state.drives.find((d) => d.id === driveId)?.orgId ?? null);
+  const lapsed = useOrgLapsed(driveOrgId);
   const pageResult = pageId ? findNodeAndParent(tree, pageId) : null;
   const page = pageResult?.node;
 
@@ -328,7 +332,7 @@ export function ShareDialog({
               <Switch
                 checked={isPrivate}
                 onCheckedChange={handlePrivacyToggle}
-                disabled={isTogglingPrivacy}
+                disabled={isTogglingPrivacy || (lapsed && isPrivate)}
                 aria-label="Toggle page privacy"
               />
             </div>
@@ -343,6 +347,11 @@ export function ShareDialog({
                   Permissions
                 </TabsTrigger>
               </TabsList>
+              {lapsed && (
+                <p className="mt-2 text-xs text-muted-foreground" data-testid="lapsed-loosen-note">
+                  Sharing more is paused. {LAPSED_LOOSEN_NOTE}
+                </p>
+              )}
               <TabsContent value="share" className="mt-4 space-y-4">
                 {/* Role access section */}
                 {driveRoles.length > 0 && (
@@ -416,7 +425,7 @@ export function ShareDialog({
                         <Button
                           size="sm"
                           onClick={handleAddRole}
-                          disabled={isAddingRole || !selectedRoleId}
+                          disabled={isAddingRole || !selectedRoleId || lapsed}
                         >
                           {isAddingRole ? 'Adding...' : 'Add role'}
                         </Button>
@@ -453,7 +462,7 @@ export function ShareDialog({
                       variant="outline"
                       size="sm"
                       onClick={() => setOffPlatformEmail(null)}
-                      disabled={isSubmitting}
+                      disabled={isSubmitting || lapsed}
                     >
                       Cancel
                     </Button>
@@ -557,13 +566,13 @@ export function ShareDialog({
                 )}
 
                 {offPlatformEmail ? (
-                  <Button onClick={handleOffPlatformInvite} disabled={isSubmitting} className="w-full">
+                  <Button onClick={handleOffPlatformInvite} disabled={isSubmitting || lapsed} className="w-full">
                     {isSubmitting
                       ? 'Sending Invite...'
                       : `Invite ${offPlatformEmail} to PageSpace and share this page`}
                   </Button>
                 ) : (
-                  <Button onClick={handleInvite} disabled={isSubmitting} className="w-full">
+                  <Button onClick={handleInvite} disabled={isSubmitting || lapsed} className="w-full">
                     {isSubmitting ? 'Granting Access...' : 'Grant Access'}
                   </Button>
                 )}
@@ -571,6 +580,7 @@ export function ShareDialog({
                 <div className="border-t pt-4">
                   <PageShareLinkSection
                     pageId={page.id}
+                    lapsed={lapsed}
                     permissions={{
                       canView: permissions.canView,
                       canEdit: permissions.canEdit,
@@ -581,7 +591,7 @@ export function ShareDialog({
                 </div>
               </TabsContent>
               <TabsContent value="permissions" className="mt-4">
-                <PermissionsList key={permissionsVersion} pageId={pageId} />
+                <PermissionsList key={permissionsVersion} pageId={pageId} lapsed={lapsed} />
               </TabsContent>
             </Tabs>
           </>

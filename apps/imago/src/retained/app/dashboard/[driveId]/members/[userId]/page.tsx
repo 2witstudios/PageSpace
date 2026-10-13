@@ -29,6 +29,9 @@ import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, Sele
 import { patch, del, fetchWithAuth } from '@/retained/lib/auth/auth-fetch';
 import { getRoleColorClasses } from '@/retained/lib/utils';
 import { useEditingStore } from '@/retained/stores/useEditingStore';
+import { useDriveStore } from '@/retained/hooks/useDrive';
+import { LAPSED_LOOSEN_NOTE, useOrgLapsed } from '@/retained/hooks/useOrgLapsed';
+import { memberAccessWidens, pageFlagsWiden, type MemberAccess } from '@pagespace/lib/organizations/loosening-core';
 
 interface MemberDetails {
   id: string;
@@ -62,6 +65,7 @@ interface CustomRole {
   color?: string;
   isDefault: boolean;
   permissions: Record<string, PagePermissions>;
+  driveWidePermissions?: { canView: boolean; canEdit: boolean; canShare: boolean } | null;
 }
 
 // Unified role type: Admin or a custom role
@@ -121,6 +125,24 @@ export default function MemberSettingsPage() {
     [originalPermissions, permissions, pageTitles],
   );
   const hasChanges = pageChanges.length > 0 || roleChanged;
+  const driveOrgId = useDriveStore((state) => state.drives.find((drive) => drive.id === driveId)?.orgId ?? null);
+  const lapsed = useOrgLapsed(driveOrgId);
+  const accessOf = (role: UnifiedRole): MemberAccess => {
+    if (role?.type === 'admin') return { role: 'ADMIN', customRole: null };
+    const custom = role?.type === 'custom' ? customRoles.find((candidate) => candidate.id === role.roleId) : undefined;
+    return {
+      role: 'MEMBER',
+      customRole: role?.type === 'custom'
+        ? { permissions: custom?.permissions ?? {}, driveWidePermissions: custom?.driveWidePermissions ?? null }
+        : null,
+    };
+  };
+  const changeLoosens = memberAccessWidens(accessOf(originalUnifiedRole), accessOf(selectedUnifiedRole)) ||
+    Array.from(permissions.entries()).some(([pageId, flags]) => {
+      const before = originalPermissions.get(pageId);
+      return pageFlagsWiden(before ? { ...before, canDelete: false } : null, { ...flags, canDelete: false });
+    });
+  const lapsedBlocksSave = lapsed && hasChanges && changeLoosens;
 
   // A dirty member profile holds the editing store, so an auth refresh or SWR revalidation waits for the save.
   useEffect(() => {
@@ -411,7 +433,12 @@ export default function MemberSettingsPage() {
           <Button variant="ghost" onClick={handleDiscard} disabled={saving}>
             Discard
           </Button>
-          <Button onClick={handleSave} disabled={saving}>
+          {lapsedBlocksSave && (
+            <p className="text-xs text-muted-foreground" data-testid="lapsed-loosen-note">
+              Giving this member more is paused. {LAPSED_LOOSEN_NOTE}
+            </p>
+          )}
+          <Button onClick={handleSave} disabled={saving || lapsedBlocksSave}>
             {saving ? 'Saving…' : 'Save changes'}
           </Button>
         </div>

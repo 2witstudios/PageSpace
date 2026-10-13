@@ -16,6 +16,10 @@ declare global {
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
+vi.mock('@/retained-adapters/retained-provider', () => ({ RetainedSurface: ({ children }: { children: ReactNode }) => h('div', { 'data-retained-org-surface': '' }, children) }));
+vi.mock('@/retained/components/auth/OrgReauthenticationPrompt', () => ({ OrgReauthenticationPrompt: () => h('div', { 'data-org-reauth-prompt': '' }) }));
+vi.mock('@/retained/components/orgs/OrgSurfaceBanner', () => ({ OrgSurfaceBanner: () => h('div', { 'data-org-lapse-banner': '' }) }));
+
 // The URL is the shell's only input besides the store. Next's router is the
 // seam: a navigation is a new pathname with the same layout still mounted.
 const navigation = vi.hoisted(() => ({ pathname: '/drive-1' as string | null }));
@@ -286,6 +290,19 @@ describe('Shell', () => {
     navigation.pathname = null;
     render();
     assert({ given: 'no pathname from the router', should: 'still render the shell', actual: container.firstElementChild !== null, expected: true });
+  });
+
+  test('SEC-2 (partial) SEAT-9 (partial) mounts one shared org reauthentication prompt and lapse banner across org and drive navigation', () => {
+    render();
+    for (const pathname of ['/drive-1', '/orgs/northwind/settings', '/account']) {
+      navigate(pathname);
+      assert({
+        given: `the native shell at ${pathname}`,
+        should: 'mount each org security surface once without the classic layout',
+        actual: [container.querySelectorAll('[data-org-reauth-prompt]').length, container.querySelectorAll('[data-org-lapse-banner]').length],
+        expected: [1, 1],
+      });
+    }
   });
 
   test('one shell across every navigation', () => {

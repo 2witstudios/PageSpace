@@ -55,6 +55,9 @@ import { dispatch, transactions } from '../../store/transactions';
 import { renderShell } from './shell.render';
 import { useHydrated } from './use-hydrated';
 import { useDesktopFrame } from './desktop-frame';
+import { RetainedSurface } from '@/retained-adapters/retained-provider';
+import { OrgReauthenticationPrompt } from '@/retained/components/auth/OrgReauthenticationPrompt';
+import { OrgSurfaceBanner } from '@/retained/components/orgs/OrgSurfaceBanner';
 
 export type ShellProps = {
   /** The route's page: it renders only the object's content. */
@@ -292,7 +295,7 @@ export function Shell({ children, homeDriveId, initialDrives }: ShellProps) {
     return renderPhoneShell({
       stage,
       hydrated,
-      screen,
+      screen: <><RetainedSurface fill={false}><OrgSurfaceBanner /></RetainedSurface>{screen}</>,
       ask:
         onTree && stage.driveId !== null ? (
           <PhoneAsk href={`/${encodeURIComponent(stage.driveId)}`} />
@@ -300,7 +303,7 @@ export function Shell({ children, homeDriveId, initialDrives }: ShellProps) {
           <PhoneAsk onPress={() => setAskedAt(pathname)} />
         ) : null,
       bar: asking ? null : <PhoneBottomBar stage={stage} driveId={railDrive(stage, homeDriveId)} />,
-      palette: <CommandPalette stage={stage} homeDriveId={homeDriveId} drives={drives} />,
+      palette: <><CommandPalette stage={stage} homeDriveId={homeDriveId} drives={drives} /><RetainedSurface fill={false}><OrgReauthenticationPrompt /></RetainedSurface></>,
     });
   }
   return renderShell({
@@ -325,12 +328,12 @@ export function Shell({ children, homeDriveId, initialDrives }: ShellProps) {
         footer={<AvatarMenu active={stage.section === 'account'} />}
       />
     ),
-    banner: <AppBanner />,
+    banner: <><AppBanner /><RetainedSurface fill={false}><OrgSurfaceBanner /></RetainedSurface></>,
     tabBar: <TabBar stage={stage} driveKey={railDrive(stage, homeDriveId) ?? 'home'} />,
     list: missing ? null : listFor(stage, layout),
     object: objectColumn,
     chat: chatColumn,
     empty: <EmptyMiddle driveId={railDrive(stage, homeDriveId)} leading={opener(stage, columns, 'empty')} />,
-    palette: <CommandPalette stage={stage} homeDriveId={homeDriveId} drives={drives} />,
+    palette: <><CommandPalette stage={stage} homeDriveId={homeDriveId} drives={drives} /><RetainedSurface fill={false}><OrgReauthenticationPrompt /></RetainedSurface></>,
   });
 }
