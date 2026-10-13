@@ -20,7 +20,7 @@
  *   and the returned steps name every drive's destination for the confirmation and
  *   for the per-drive audit event the caller writes.
  */
-import { and, eq, inArray, sql } from '@pagespace/db/operators';
+import { and, asc, eq, inArray, sql } from '@pagespace/db/operators';
 import { drives } from '@pagespace/db/schema/core';
 import { driveMembers } from '@pagespace/db/schema/members';
 import { organizations, orgMembers, orgSubscriptions } from '@pagespace/db/schema/organizations';
@@ -33,6 +33,7 @@ import { closeStaleDriveJoinRequests } from '../permissions/drive-join-request-c
 import { transactionWithOrgAudit } from '../audit/org-audit';
 import { reattributeDriveStorageInTx } from '../services/storage-limits';
 import { releaseDedicatedHostingInTx } from '../services/app-hosting/dedicated-release';
+import { rehomeDriveWalletInTx } from '../billing/drive-wallet-rehome';
 
 export type DriveDeletionChoice =
   | { driveId: string; action: 'transfer'; toUserId: string }
@@ -116,6 +117,7 @@ export type DeleteOrganizationResult =
   | { ok: true; steps: OrgDeletionStep[] }
   | { ok: false; status: 404; reason: 'not_found' }
   | { ok: false; status: 403; reason: 'not_owner' }
+  | { ok: false; status: 409; reason: 'drive_wallet_calls_in_flight'; driveIds: string[] }
   | { ok: false; status: 400; reason: Exclude<OrgDeletionRefusal, 'not_owner'>; driveIds: string[] };
 
 /** The org's live Business subscription, as the delete hands it to {@link DeleteOrganizationDeps.endSubscription}. */
@@ -137,6 +139,14 @@ export interface DeleteOrganizationDeps {
 }
 
 type RevokedRow = { userId: string; driveId: string };
+
+/** A later wallet refusal must roll back every earlier transition in this closure. */
+class OrgDeletionWalletInUseError extends Error {
+  constructor(readonly driveId: string) {
+    super('A drive wallet has calls in flight');
+    this.name = 'OrgDeletionWalletInUseError';
+  }
+}
 
 export async function deleteOrganization(
   input: {
@@ -166,6 +176,7 @@ export async function deleteOrganization(
       .select({ id: drives.id, name: drives.name, isTrashed: drives.isTrashed, ownerId: drives.ownerId, orgVisibility: drives.orgVisibility })
       .from(drives)
       .where(eq(drives.orgId, input.orgId))
+      .orderBy(asc(drives.id))
       .for('update');
     const members = await tx
       .select({ userId: orgMembers.userId, role: orgMembers.role })
@@ -186,6 +197,14 @@ export async function deleteOrganization(
     }
 
     for (const step of plan.steps) {
+      // Trashed drives remain restorable. Their wallet, contribution legs and ledger
+      // must travel with them exactly as on an ordinary move out of the org.
+      const rehomed = await rehomeDriveWalletInTx(tx, {
+        driveId: step.driveId,
+        actorId: input.actorId,
+        to: { kind: 'personal', leadUserId: step.ownerId },
+      });
+      if (!rehomed.ok) throw new OrgDeletionWalletInUseError(step.driveId);
       const before = orgDrives.find((drive) => drive.id === step.driveId);
       const alreadyTrashed = before?.isTrashed === true;
       await tx
@@ -270,6 +289,11 @@ export async function deleteOrganization(
       },
     });
     return { ok: true, steps: plan.steps };
+  }).catch((error: unknown): DeleteOrganizationResult => {
+    if (error instanceof OrgDeletionWalletInUseError) {
+      return { ok: false, status: 409, reason: 'drive_wallet_calls_in_flight', driveIds: [error.driveId] };
+    }
+    throw error;
   });
   // Once committed, and best effort: each person gets one member_removed event naming the drives
   // they lost (the sidebar and picker refresh on it) and a room kick per drive, 20 at a time.

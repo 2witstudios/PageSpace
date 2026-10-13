@@ -114,6 +114,7 @@ export async function DELETE(request: Request, context: Context) {
     if (!result.ok) {
       if (result.status === 404) return NextResponse.json({ error: 'Organization not found', code: 'org_not_found' }, { status: 404 });
       if (result.status === 403) return NextResponse.json({ error: 'Only the Owner can delete this organization', code: 'not_owner' }, { status: 403 });
+      if (result.status === 409) return NextResponse.json({ error: 'A drive wallet has calls in flight. Wait for them to finish and retry.', code: result.reason, driveIds: result.driveIds }, { status: 409 });
       return NextResponse.json(
         { error: 'Every organization drive needs a valid destination', code: result.reason, driveIds: result.driveIds },
         { status: 400 },

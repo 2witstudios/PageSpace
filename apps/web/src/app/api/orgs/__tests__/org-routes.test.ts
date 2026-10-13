@@ -110,7 +110,7 @@ import * as transferRoute from '../[orgId]/transfer-ownership/route';
 import * as invitationsRoute from '../[orgId]/invitations/route';
 import * as invitationRoute from '../[orgId]/invitations/[invitationId]/route';
 import * as resendRoute from '../[orgId]/invitations/[invitationId]/resend/route';
-import { announceOrgChange } from '@pagespace/lib/organizations/org-change-events';
+import { announceOrgChange, announceOrgChangeTo } from '@pagespace/lib/organizations/org-change-events';
 import { ORG_LAPSED_MESSAGE } from '@pagespace/lib/organizations/status-core';
 import * as acceptRoute from '../invitations/accept/route';
 
@@ -579,6 +579,17 @@ describe('org route behaviour', () => {
     const res = await orgRoute.DELETE(req('DELETE', { drives: [] }), params({ orgId: ORG_ID }));
     expect(res.status).toBe(403);
     expect(deleteOrganization).toHaveBeenCalledWith(expect.objectContaining({ actorId: CALLER, orgId: ORG_ID }), expect.anything());
+  });
+
+  it('Given a live drive-wallet hold, should return retryable conflict and perform no deletion cleanup or success audit', async () => {
+    asRole('OWNER');
+    vi.mocked(deleteOrganization).mockResolvedValue({ ok: false, status: 409, reason: 'drive_wallet_calls_in_flight', driveIds: ['d_product'] });
+    const response = await orgRoute.DELETE(req('DELETE', { drives: [{ driveId: 'd_product', action: 'trash' }] }), params({ orgId: ORG_ID }));
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ code: 'drive_wallet_calls_in_flight', driveIds: ['d_product'] });
+    expect(callOrgAvatarStorage).not.toHaveBeenCalled();
+    expect(announceOrgChangeTo).not.toHaveBeenCalled();
+    expect(auditRequest).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: 'data.delete' }));
   });
 
   it('ORG-6 (partial) DELETE /api/orgs/[orgId] reports the drives that block the delete', async () => {
