@@ -7,7 +7,7 @@ import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { organizations } from '@pagespace/db/schema/organizations';
 import { workflows } from '@pagespace/db/schema/workflows';
 import { workflowRuns } from '@pagespace/db/schema/workflow-runs';
-import { conversations } from '@pagespace/db/schema/conversations';
+import { conversations, messages as chatMessages } from '@pagespace/db/schema/conversations';
 import { createAgentPage, getBalance, getLedger, getHolds, seedUser, type SeededUser } from '../support/db';
 import { mockCallCount, resetMock } from '../support/http';
 import { authedContext, gotoChatPage, sendChatMessage } from '../fixtures/chat.fixture';
@@ -175,7 +175,8 @@ test.describe('UI-8 (partial) the spend surfaces for a member in an org drive', 
     await expect(page.locator('header').getByTestId('spend-source-chip')).toHaveAttribute('aria-label', /^Spending from Your credits:/);
     const personal = await getBalance(w.marcus.userId);
     const [draft] = await db.select().from(conversations).where(eq(conversations.id, draftId!));
-    expect(draft).toMatchObject({ userId: w.marcus.userId, type: 'global', chosenWalletId: personal!.id, hasMessages: false });
+    expect(draft).toMatchObject({ userId: w.marcus.userId, type: 'global', chosenWalletId: personal!.id });
+    expect(await db.select({ id: chatMessages.id }).from(chatMessages).where(eq(chatMessages.conversationId, draftId!))).toEqual([]);
     const hiddenHistory = await page.request.get('/api/ai/global');
     expect(hiddenHistory.ok()).toBe(true);
     expect(((await hiddenHistory.json()) as { id: string }[]).some((row) => row.id === draftId)).toBe(false);
