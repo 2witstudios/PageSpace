@@ -14,12 +14,16 @@ export async function selectTaskFilter(page: Page, name: 'All' | 'Active' | 'Com
   }
 }
 
+/** The status dialog's trigger is named for the strip it sits in: Manage statuses (Table), Edit statuses (Board), Statuses (Filters sheet). */
+const configurationName = (name: 'Statuses' | 'Workflows'): string | RegExp => (name === 'Statuses' ? /^(Manage statuses|Edit statuses|Statuses)$/ : name);
+
 export async function openTaskConfiguration(page: Page, name: 'Statuses' | 'Workflows'): Promise<void> {
+  const trigger = configurationName(name);
   const sheet = page.getByRole('dialog', { name: 'Filters', exact: true });
   const object = page.locator('[data-slot="object"]');
-  const direct = object.getByRole('button', { name, exact: true });
+  const direct = object.getByRole('button', { name: trigger, exact: true });
   const filters = object.getByRole('button', { name: /^Filters/ });
-  const inSheet = sheet.getByRole('button', { name, exact: true });
+  const inSheet = sheet.getByRole('button', { name: trigger, exact: true });
   // Closing a nested configuration dialog restores the Filters sheet asynchronously.
   await expect(inSheet.or(direct).or(filters).first()).toBeVisible();
   if (await inSheet.isVisible()) {
@@ -30,7 +34,7 @@ export async function openTaskConfiguration(page: Page, name: 'Statuses' | 'Work
     await direct.click();
   } else {
     await filters.click();
-    await sheet.getByRole('button', { name, exact: true }).click();
+    await sheet.getByRole('button', { name: trigger, exact: true }).click();
   }
 }
 
