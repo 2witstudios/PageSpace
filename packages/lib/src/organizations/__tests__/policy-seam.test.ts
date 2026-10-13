@@ -45,6 +45,8 @@ function sourceFiles(dir: string, out: string[] = []): string[] {
  * Adding a file to this list is a reviewed decision.
  */
 const ORGANIZATIONS_IMPORTERS = [
+  // Reviewed Playwright fixture: seeds/removes isolated org test data, never handles production policy.
+  'apps/e2e/fixtures/org.fixture.ts',
   'apps/web/src/lib/org-billing/org-subscription.ts',
   'packages/lib/src/billing/wallet-funding-shell.ts',
   // The Art 15 export reads the orgs the subject OWNS (Spec X-2): a read-only
