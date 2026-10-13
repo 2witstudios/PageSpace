@@ -41,6 +41,13 @@ export {
 } from '@pagespace/lib/billing/credit-copy';
 
 /**
+ * Master's name for the one credit formatter (MON-5): whole credits with
+ * thousands separators ("1,000", "612"); fractions round to the nearest credit.
+ * The account screens show balances as whole numbers, never "$", never decimals.
+ */
+export { formatCreditCount as formatWholeCredits } from '@pagespace/lib/billing/money-model';
+
+/**
  * Credit-balance explanations for the Usage card and the header tooltip.
  *
  * Where billing is hidden (the iOS app, Guideline 3.1.1) the copy states the

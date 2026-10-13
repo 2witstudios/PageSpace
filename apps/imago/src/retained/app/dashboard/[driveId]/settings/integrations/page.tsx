@@ -4,10 +4,11 @@ import { useEffect } from 'react';
 import { useParams, useRouter } from '@/retained-adapters/navigation';
 import { Button } from '@/retained/components/ui/button';
 import { Skeleton } from '@/retained/components/ui/skeleton';
-import { ChevronLeft, Shield } from 'lucide-react';
+import { Shield } from 'lucide-react';
 import { useDriveStore } from '@/retained/hooks/useDrive';
 import { DriveIntegrations } from '@/retained/components/settings/DriveIntegrations';
 import { IntegrationAuditLog } from '@/retained/components/settings/IntegrationAuditLog';
+import { SettingsScreen } from '@/ui/settings/settings-screen/settings-screen';
 
 export default function IntegrationsSettingsPage() {
   const params = useParams();
@@ -26,11 +27,10 @@ export default function IntegrationsSettingsPage() {
 
   if (isLoading) {
     return (
-      <div className="container mx-auto px-4 py-10 sm:px-6 lg:px-10 max-w-2xl">
-        <Skeleton className="h-8 w-48 mb-2" />
-        <Skeleton className="h-4 w-64 mb-8" />
+      <SettingsScreen title="Integrations">
+        <Skeleton className="h-8 w-48" />
         <Skeleton className="h-64 w-full" />
-      </div>
+      </SettingsScreen>
     );
   }
 
@@ -54,25 +54,12 @@ export default function IntegrationsSettingsPage() {
   }
 
   return (
-    <div className="container mx-auto px-4 py-10 sm:px-6 lg:px-10 max-w-2xl space-y-6">
-      <div>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => router.push(`/dashboard/${driveId}/settings`)}
-          className="mb-4"
-        >
-          <ChevronLeft className="h-4 w-4 mr-1" />
-          Back to Settings
-        </Button>
-        <h1 className="text-3xl font-bold mb-1">Integrations</h1>
-        <p className="text-muted-foreground">
-          Connect external services and view agent API activity.
-        </p>
-      </div>
-
+    <SettingsScreen
+      title="Integrations"
+      lede="External services connected to this drive. Each AI Chat picks which of a connection’s tools its agent can use."
+    >
       <DriveIntegrations driveId={driveId} />
       <IntegrationAuditLog driveId={driveId} />
-    </div>
+    </SettingsScreen>
   );
 }

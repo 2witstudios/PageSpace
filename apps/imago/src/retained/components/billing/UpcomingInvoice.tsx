@@ -1,7 +1,5 @@
 'use client';
 
-import { Calendar, Receipt } from 'lucide-react';
-
 interface UpcomingInvoiceProps {
   invoice: {
     amountDue: number;
@@ -15,6 +13,7 @@ interface UpcomingInvoiceProps {
   } | null;
 }
 
+/** The next scheduled invoice as a flat table: its lines, the subtotal and the amount due. */
 export function UpcomingInvoice({ invoice }: UpcomingInvoiceProps) {
   const formatCurrency = (amount: number, currency: string = 'usd') => {
     return new Intl.NumberFormat('en-US', {
@@ -26,55 +25,53 @@ export function UpcomingInvoice({ invoice }: UpcomingInvoiceProps) {
   const formatDate = (dateString: string) => {
     return new Date(dateString).toLocaleDateString('en-US', {
       year: 'numeric',
-      month: 'long',
+      month: 'short',
       day: 'numeric',
     });
   };
 
   if (!invoice) {
-    return (
-      <div className="text-center py-6 border rounded-lg bg-muted/30">
-        <Receipt className="h-8 w-8 mx-auto mb-2 text-muted-foreground" />
-        <p className="text-sm text-muted-foreground">No upcoming invoice</p>
-      </div>
-    );
+    return <p className="text-sm text-muted-foreground">No upcoming invoice</p>;
   }
 
   return (
-    <div className="border rounded-lg bg-card p-4 space-y-4">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2 text-muted-foreground">
-          <Calendar className="h-4 w-4" />
-          <span className="text-sm">
-            {invoice.nextPaymentAttempt
-              ? `Next payment: ${formatDate(invoice.nextPaymentAttempt)}`
-              : 'Upcoming'}
-          </span>
-        </div>
-        <div className="text-2xl font-bold">
-          {formatCurrency(invoice.amountDue, invoice.currency)}
-        </div>
-      </div>
-
-      {invoice.lines.length > 0 && (
-        <div className="border-t pt-3 space-y-2">
+    <div className="flex flex-col gap-3">
+      <p className="text-xs text-muted-foreground">
+        {invoice.nextPaymentAttempt
+          ? `Next payment attempt ${formatDate(invoice.nextPaymentAttempt)}`
+          : 'Upcoming'}
+      </p>
+      <table className="w-full border-collapse text-sm">
+        <tbody>
           {invoice.lines.slice(0, 3).map((line, i) => (
-            <div key={i} className="flex justify-between text-sm">
-              <span className="text-muted-foreground truncate mr-4">
-                {line.description || 'Subscription'}
-              </span>
-              <span className="font-medium">
+            <tr key={i}>
+              <td className="border-b border-border/60 py-2 pr-4">{line.description || 'Subscription'}</td>
+              <td className="border-b border-border/60 py-2 text-right font-mono tabular-nums">
                 {formatCurrency(line.amount, invoice.currency)}
-              </span>
-            </div>
+              </td>
+            </tr>
           ))}
           {invoice.lines.length > 3 && (
-            <div className="text-xs text-muted-foreground">
-              +{invoice.lines.length - 3} more items
-            </div>
+            <tr>
+              <td colSpan={2} className="py-2 text-xs text-muted-foreground">
+                +{invoice.lines.length - 3} more items
+              </td>
+            </tr>
           )}
-        </div>
-      )}
+          <tr>
+            <td className="border-b border-border/60 py-2 pr-4 text-muted-foreground">Subtotal</td>
+            <td className="border-b border-border/60 py-2 text-right font-mono tabular-nums text-muted-foreground">
+              {formatCurrency(invoice.total, invoice.currency)}
+            </td>
+          </tr>
+          <tr>
+            <td className="pt-2.5 font-semibold">Amount due</td>
+            <td className="pt-2.5 text-right font-mono font-semibold tabular-nums">
+              {formatCurrency(invoice.amountDue, invoice.currency)}
+            </td>
+          </tr>
+        </tbody>
+      </table>
     </div>
   );
 }

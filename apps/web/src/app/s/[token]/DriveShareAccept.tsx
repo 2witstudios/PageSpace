@@ -8,6 +8,17 @@ import { Badge } from '@/components/ui/badge';
 import { useAuth } from '@/hooks/useAuth';
 import { useCSRFToken } from '@/hooks/useCSRFToken';
 import type { ShareTokenInfo } from '@pagespace/lib/permissions/share-link-service';
+import { isImagoEnabled } from '@/lib/imago/imago-enabled';
+import {
+  V3_BUTTON_PRIMARY,
+  V3_ACCENT,
+  V3_FINE,
+  V3_H1,
+  V3_LEAD,
+  V3_LINK,
+  V3_SPINNER,
+  V3_STRONG,
+} from '@/components/auth/authCardV3';
 
 interface DriveShareAcceptProps {
   token: string;
@@ -50,7 +61,7 @@ export function DriveShareAccept({ token, info }: DriveShareAcceptProps) {
           if (!controller.signal.aborted) setError(data.message ?? 'Your request is waiting for approval.');
           return;
         }
-        router.push(`/dashboard/${data.driveId}`);
+        router.push(isImagoEnabled() ? `/imago/${data.driveId}` : `/dashboard/${data.driveId}`);
       } catch (err) {
         if ((err as Error).name === 'AbortError') return;
         if (!controller.signal.aborted) {
@@ -65,7 +76,55 @@ export function DriveShareAccept({ token, info }: DriveShareAcceptProps) {
     return () => controller.abort();
   }, [isAuthenticated, csrfToken, token, router]);
 
-  if (authLoading || (isAuthenticated && (csrfLoading || isPending) && !error)) {
+  const joining = authLoading || (isAuthenticated && (csrfLoading || isPending) && !error);
+  const driveName = info.driveName ?? 'workspace';
+
+  if (joining && isImagoEnabled()) {
+    return (
+      <div className="space-y-4">
+        <p className={V3_LEAD}>
+          Joining <strong className={V3_STRONG}>{driveName}</strong>…
+        </p>
+        <div className="flex justify-center">
+          <div className={V3_SPINNER} />
+        </div>
+      </div>
+    );
+  }
+
+  if (!isAuthenticated && isImagoEnabled()) {
+    return (
+      <div>
+        <h1 className={V3_H1}>
+          Join <span className={V3_ACCENT}>{info.driveName ?? 'this workspace'}</span>
+        </h1>
+        <p className={V3_LEAD}>
+          <strong className={V3_STRONG}>{info.creatorName}</strong> shared an invite link. You&apos;ll join as a{' '}
+          <span className={V3_STRONG}>{info.role ?? 'Member'}</span>.
+        </p>
+        <button
+          type="button"
+          className={`${V3_BUTTON_PRIMARY} mt-6`}
+          onClick={() => router.push(`/auth/signin?next=${encodeURIComponent(`/s/${token}`)}`)}
+        >
+          Sign in to join
+        </button>
+        <p className={`${V3_LEAD} text-center`}>
+          New to PageSpace?{' '}
+          <Link href={`/auth/signup?next=${encodeURIComponent(`/s/${token}`)}`} className={V3_LINK}>
+            Create an account
+          </Link>
+        </p>
+        <div className="mt-4 text-center">
+          <Link href="/imago" className={V3_FINE}>
+            Not now
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
+  if (joining) {
     return (
       <div className="text-center space-y-4">
         <p className="text-sm text-muted-foreground">

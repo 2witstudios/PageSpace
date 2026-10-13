@@ -20,15 +20,24 @@ describe('paneClass()', () => {
       expected: 'flex h-full flex-none overflow-clip pane-motion w-0',
     });
   });
+
+  test('the rest of the row', () => {
+    assert({
+      given: 'a middle area that takes the rest (grow)',
+      should: 'flex to fill, shrink to nothing and clip, with no width motion of its own',
+      actual: paneClass('grow'),
+      expected: 'flex h-full min-w-0 flex-1 overflow-clip',
+    });
+  });
 });
 
 describe('paneHeaderClass', () => {
   test('the shared header', () => {
     assert({
       given: 'any pane header',
-      should: 'be the 52px row with a hairline under it',
+      should: 'be the 48px row with a hairline under it',
       actual: paneHeaderClass,
-      expected: 'flex h-pane-header flex-none items-center gap-2 border-b border-hairline px-3',
+      expected: 'flex h-pane-header flex-none items-center gap-1 border-b border-hairline pr-2 pl-4 text-sm',
     });
   });
 });
@@ -36,11 +45,11 @@ describe('paneHeaderClass', () => {
 describe('paneControlClass', () => {
   test('a borderless icon control', () => {
     assert({
-      given: 'a header control such as close or the hamburger',
-      should: 'be a borderless square that tints on hover',
+      given: 'a head control such as close',
+      should: 'be a borderless 28px ghost square that tints on hover',
       actual: paneControlClass,
       expected:
-        'flex size-8 flex-none items-center justify-center rounded-md text-ink-muted hover:bg-surface-overlay hover:text-ink',
+        'flex size-head-control flex-none cursor-pointer items-center justify-center rounded-md border-0 bg-transparent text-ink-muted no-underline hover:bg-fill hover:text-ink hover:no-underline',
     });
   });
 });

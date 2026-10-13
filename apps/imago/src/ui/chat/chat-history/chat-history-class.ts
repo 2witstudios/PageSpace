@@ -14,3 +14,10 @@ export const chatHistoryTitleClass = 'min-w-0 flex-1 truncate';
 
 /** Why the history has no rows: loading, failed or empty. */
 export const chatHistoryNoteClass = 'px-2 text-sm text-ink-muted';
+
+/** A row's time, right-aligned and faint. */
+export const chatHistoryTimeClass = 'flex-none pl-2 text-xs text-ink-faint';
+
+/** "Search chats": the 32px filter field above the rows, as the Files pane's. */
+export const chatHistoryFilterClass =
+  'mx-px mb-2 flex h-filter flex-none items-center gap-2 rounded-md bg-fill px-3 text-ink-faint';

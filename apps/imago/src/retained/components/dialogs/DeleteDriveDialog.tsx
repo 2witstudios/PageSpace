@@ -50,7 +50,7 @@ export function DeleteDriveDialog({
 
   return (
     <AlertDialog open={isOpen} onOpenChange={handleClose}>
-      <AlertDialogContent>
+      <AlertDialogContent className="sm:max-w-[500px] rounded-2xl">
         <AlertDialogHeader>
           <AlertDialogTitle>Delete Drive?</AlertDialogTitle>
           <AlertDialogDescription>

@@ -119,7 +119,7 @@ export function BuyCreditsButton({
             {label}
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end">
+        <DropdownMenuContent align="end" aria-label="Add credits">
           {/* Plain content (not a DropdownMenuItem), same reasoning as the custom-amount
               block below: stop keydown propagation so Radix typeahead doesn't hijack it. */}
           <div

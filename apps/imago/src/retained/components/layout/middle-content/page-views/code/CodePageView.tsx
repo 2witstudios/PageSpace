@@ -11,16 +11,10 @@ import { toast } from 'sonner';
 import { usePermissions } from '@/retained/hooks/usePermissions';
 import { fetchWithAuth } from '@/retained/lib/auth/auth-fetch';
 import { useEditingStore } from '@/retained/stores/useEditingStore';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/retained/components/ui/select';
 import { usePageTree } from '@/retained/hooks/usePageTree';
 import { findNodeAndParent } from '@/retained/lib/tree/tree-utils';
 import { useParams } from '@/retained-adapters/navigation';
+import { CodeLanguageSelect } from './CodeLanguageSelect';
 
 interface CodePageViewProps {
   pageId: string;
@@ -33,37 +27,17 @@ interface CodePageViewProps {
    * fetched page's real driveId explicitly.
    */
   driveId?: string;
+  /**
+   * Controlled language, for a caller (the v3 Page tools strip) that renders the Language
+   * select itself. Without `onLanguageChange` the view keeps its own choice and the select
+   * sits in its own row, as before.
+   */
+  language?: string;
+  onLanguageChange?: (language: string) => void;
 }
 
 const MonacoEditor = dynamic(() => import('@/retained/components/editors/MonacoEditor'), { ssr: false });
 
-const LANGUAGES = [
-  { value: 'plaintext', label: 'Plain Text' },
-  { value: 'sudolang', label: 'SudoLang' },
-  { value: 'javascript', label: 'JavaScript' },
-  { value: 'typescript', label: 'TypeScript' },
-  { value: 'python', label: 'Python' },
-  { value: 'html', label: 'HTML' },
-  { value: 'css', label: 'CSS' },
-  { value: 'json', label: 'JSON' },
-  { value: 'markdown', label: 'Markdown' },
-  { value: 'java', label: 'Java' },
-  { value: 'c', label: 'C' },
-  { value: 'cpp', label: 'C++' },
-  { value: 'csharp', label: 'C#' },
-  { value: 'go', label: 'Go' },
-  { value: 'rust', label: 'Rust' },
-  { value: 'ruby', label: 'Ruby' },
-  { value: 'php', label: 'PHP' },
-  { value: 'swift', label: 'Swift' },
-  { value: 'kotlin', label: 'Kotlin' },
-  { value: 'sql', label: 'SQL' },
-  { value: 'shell', label: 'Shell' },
-  { value: 'yaml', label: 'YAML' },
-  { value: 'xml', label: 'XML' },
-  { value: 'graphql', label: 'GraphQL' },
-  { value: 'scss', label: 'SCSS' },
-] as const;
 
 import { detectLanguageFromFilename } from '@pagespace/lib/utils/language-detection';
 
@@ -71,10 +45,15 @@ function detectLanguageFromTitle(title: string): string {
   return detectLanguageFromFilename(title);
 }
 
-const CodePageView = ({ pageId, driveId: driveIdProp }: CodePageViewProps) => {
+const CodePageView = ({ pageId, driveId: driveIdProp, language: languageProp, onLanguageChange }: CodePageViewProps) => {
   const { permissions } = usePermissions(pageId);
   const isReadOnly = permissions?.canEdit !== true;
-  const [language, setLanguage] = useState('plaintext');
+  const [internalLanguage, setInternalLanguage] = useState('plaintext');
+  const language = languageProp ?? internalLanguage;
+  const setLanguage = useCallback((next: string) => {
+    if (onLanguageChange) onLanguageChange(next);
+    else setInternalLanguage(next);
+  }, [onLanguageChange]);
   const isDirtyRef = useRef(false);
   const hasInitializedRef = useRef(false);
   const params = useParams();
@@ -111,7 +90,7 @@ const CodePageView = ({ pageId, driveId: driveIdProp }: CodePageViewProps) => {
       const detected = detectLanguageFromTitle(page.title);
       setLanguage(detected);
     }
-  }, [tree, pageId]);
+  }, [tree, pageId, setLanguage]);
 
   // Initialize document when component mounts
   useEffect(() => {
@@ -246,21 +225,12 @@ const CodePageView = ({ pageId, driveId: driveIdProp }: CodePageViewProps) => {
         isResolving={isResolvingConflict}
         previewMode="plain"
       />
-      {/* Language selector toolbar */}
-      <div className="flex items-center gap-2 px-4 py-2 border-b border-[var(--separator)]">
-        <Select value={language} onValueChange={setLanguage}>
-          <SelectTrigger className="w-[160px] h-8 text-xs">
-            <SelectValue placeholder="Language" />
-          </SelectTrigger>
-          <SelectContent>
-            {LANGUAGES.map((lang) => (
-              <SelectItem key={lang.value} value={lang.value}>
-                {lang.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
+      {/* Language selector toolbar: omitted when the Page tools strip owns the select */}
+      {!onLanguageChange && (
+        <div className="flex items-center gap-2 px-4 py-2 border-b border-[var(--separator)]">
+          <CodeLanguageSelect value={language} onValueChange={setLanguage} />
+        </div>
+      )}
 
       {/* Read-only indicator */}
       {isReadOnly && (

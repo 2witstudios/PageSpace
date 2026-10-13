@@ -1,12 +1,9 @@
 'use client';
 
 import React, { useState } from 'react';
-import { useRouter } from '@/retained-adapters/navigation';
 import { Button } from '@/retained/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/retained/components/ui/card';
-import { Badge } from '@/retained/components/ui/badge';
 import { Alert, AlertDescription } from '@/retained/components/ui/alert';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/retained/components/ui/tabs';
+import { Textarea } from '@/retained/components/ui/textarea';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -17,25 +14,36 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/retained/components/ui/alert-dialog';
-import { Textarea } from '@/retained/components/ui/textarea';
-import {
-  ArrowLeft,
-  Play,
-  Square,
-  RotateCw,
-  AlertTriangle,
-  Server,
-  CheckCircle2,
-  XCircle,
-  Loader2,
-  Trash2,
-  Terminal,
-} from 'lucide-react';
+import { AlertTriangle, Play, Square, RotateCw, Trash2 } from 'lucide-react';
 import { useMCP } from '@/retained/hooks/useMCP';
 import type { MCPServerStatus } from '@/retained/types/mcp';
+import {
+  SettingsGroup,
+  SettingsScreen,
+  SettingsSection,
+} from '@/ui/settings/settings-screen/settings-screen';
 
+const statusLabel: Record<MCPServerStatus, string> = {
+  running: 'Running',
+  stopped: 'Stopped',
+  starting: 'Starting',
+  error: 'Error',
+  crashed: 'Crashed',
+};
+
+const statusClass: Record<MCPServerStatus, string> = {
+  running: 'text-green-600',
+  stopped: 'text-muted-foreground',
+  starting: 'text-blue-500',
+  error: 'text-destructive',
+  crashed: 'text-destructive',
+};
+
+/**
+ * Local MCP servers (desktop only): the servers the desktop bridge runs on this computer, and the
+ * raw JSON that configures them. Off desktop the screen says so; the nav hides the item there.
+ */
 export default function LocalMCPSettingsPage() {
-  const router = useRouter();
   const mcp = useMCP();
 
   const [configJson, setConfigJson] = useState('');
@@ -76,256 +84,142 @@ export default function LocalMCPSettingsPage() {
     }
   };
 
-  const getStatusIcon = (status: MCPServerStatus) => {
-    switch (status) {
-      case 'running':
-        return <CheckCircle2 className="h-5 w-5 text-green-500" />;
-      case 'stopped':
-        return <Square className="h-5 w-5 text-gray-400" />;
-      case 'starting':
-        return <Loader2 className="h-5 w-5 text-blue-500 animate-spin" />;
-      case 'error':
-      case 'crashed':
-        return <XCircle className="h-5 w-5 text-red-500" />;
-    }
-  };
-
-  const getStatusBadge = (status: MCPServerStatus) => {
-    const variants: Record<MCPServerStatus, 'default' | 'secondary' | 'outline' | 'destructive'> = {
-      running: 'default',
-      stopped: 'secondary',
-      starting: 'outline',
-      error: 'destructive',
-      crashed: 'destructive',
-    };
-    return (
-      <Badge variant={variants[status]}>
-        {status.charAt(0).toUpperCase() + status.slice(1)}
-      </Badge>
-    );
-  };
-
-  // Show desktop-only message if not on desktop
   if (!mcp.isDesktop) {
     return (
-      <div className="container mx-auto py-10 px-10">
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => router.push('/settings')}
-          className="mb-4"
-        >
-          <ArrowLeft className="h-4 w-4 mr-2" />
-          Back to Settings
-        </Button>
-
+      <SettingsScreen
+        title="Local MCP servers"
+        lede="Run Model Context Protocol servers on your own computer."
+      >
         <Alert>
           <AlertTriangle className="h-4 w-4" />
           <AlertDescription>
-            <strong>Desktop Only Feature</strong>
-            <p className="mt-2">
-              Local MCP Servers are only available in the PageSpace Desktop app.
-              This feature allows you to run MCP servers on your local machine, similar to
-              Claude Desktop, Cursor, and Roo Code.
-            </p>
+            <strong>Desktop only.</strong> Local MCP servers run in the PageSpace desktop app, on the
+            computer it is installed on.
           </AlertDescription>
         </Alert>
-      </div>
+      </SettingsScreen>
     );
   }
 
   if (mcp.loading) {
-    return (
-      <div className="container mx-auto py-10 px-10">
-        <div className="flex items-center justify-center">
-          <Loader2 className="h-8 w-8 animate-spin" />
-        </div>
-      </div>
-    );
+    return <SettingsScreen title="Local MCP servers" lede="Loading..." />;
   }
 
+  const serverNames = Object.keys(mcp.config.mcpServers);
+
   return (
-    <div className="container mx-auto py-10 space-y-8 px-10">
-      {/* Header */}
-      <div>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => router.push('/settings')}
-          className="mb-4"
-        >
-          <ArrowLeft className="h-4 w-4 mr-2" />
-          Back to Settings
-        </Button>
-        <h1 className="text-3xl font-bold mb-2">Local MCP Servers</h1>
-        <p className="text-muted-foreground">
-          Run Model Context Protocol servers on your local machine to extend AI capabilities
-          with custom tools and integrations.
-        </p>
+    <SettingsScreen
+      title="Local MCP servers"
+      lede="Servers that run on this computer through the desktop app. Agents in any drive you open here can call their tools."
+    >
+      <div role="note" className="flex items-start gap-2 rounded-xl border border-border bg-muted px-4 py-3 text-sm text-foreground">
+        <AlertTriangle className="mt-0.5 h-4 w-4 flex-none text-amber-500" aria-hidden="true" />
+        <span>
+          <strong>MCP servers run commands on your computer.</strong> Only add servers you trust.
+        </span>
       </div>
 
-      {/* Security Warning */}
-      <Alert>
-        <AlertTriangle className="h-4 w-4" />
-        <AlertDescription>
-          <strong>Security Notice:</strong> MCP servers execute commands on your computer.
-          Only use servers from trusted sources. Review configuration carefully before starting servers.
-        </AlertDescription>
-      </Alert>
-
-      {/* Tabs: Server Management vs JSON Config */}
-      <Tabs defaultValue="servers" className="w-full">
-        <TabsList>
-          <TabsTrigger value="servers">
-            <Server className="h-4 w-4 mr-2" />
-            Servers
-          </TabsTrigger>
-          <TabsTrigger value="config">
-            <Terminal className="h-4 w-4 mr-2" />
-            Configuration
-          </TabsTrigger>
-        </TabsList>
-
-        {/* Servers Tab */}
-        <TabsContent value="servers" className="space-y-4">
-          <div className="flex justify-between items-center">
-            <h2 className="text-xl font-semibold">Your MCP Servers</h2>
-          </div>
-
-          {Object.keys(mcp.config.mcpServers).length === 0 ? (
-            <Card>
-              <CardContent className="py-8 text-center">
-                <Server className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-                <h3 className="text-lg font-semibold mb-2">No MCP servers configured</h3>
-                <p className="text-muted-foreground mb-4">
-                  Add servers by editing the configuration in the Configuration tab
-                </p>
-              </CardContent>
-            </Card>
+      <SettingsSection title={`Your servers ${serverNames.length}`}>
+        <SettingsGroup label="Your servers">
+          {serverNames.length === 0 ? (
+            <p className="px-4 py-6 text-sm text-muted-foreground">
+              No MCP servers configured. Add servers in the JSON configuration below.
+            </p>
           ) : (
-            <div className="space-y-3">
-              {Object.entries(mcp.config.mcpServers).map(([name, serverConfig]) => {
-                const status = mcp.serverStatuses[name] || {
-                  status: 'stopped' as MCPServerStatus,
-                  enabled: true,
-                  autoStart: false,
-                  crashCount: 0,
-                };
+            serverNames.map((name) => {
+              const serverConfig = mcp.config.mcpServers[name];
+              const status = mcp.serverStatuses[name] || {
+                status: 'stopped' as MCPServerStatus,
+                enabled: true,
+                autoStart: false,
+                crashCount: 0,
+              };
 
-                return (
-                  <Card key={name}>
-                    <CardHeader className="pb-3">
-                      <div className="flex items-start justify-between">
-                        <div className="flex items-center gap-3">
-                          {getStatusIcon(status.status)}
-                          <div>
-                            <CardTitle className="text-lg">{name}</CardTitle>
-                            <CardDescription className="font-mono text-xs mt-1">
-                              {serverConfig.command} {serverConfig.args.join(' ')}
-                            </CardDescription>
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          {getStatusBadge(status.status)}
-                        </div>
-                      </div>
-                    </CardHeader>
-                    <CardContent>
-                      <div className="flex items-center justify-between">
-                        <div className="text-sm text-muted-foreground space-y-1">
-                          {status.error && (
-                            <div className="text-red-500">Error: {status.error}</div>
-                          )}
-                          {status.crashCount > 0 && (
-                            <div>Crashes: {status.crashCount}</div>
-                          )}
-                          <div className="flex gap-2">
-                            <span>Auto-start: {status.autoStart ? 'Yes' : 'No'}</span>
-                            <span>•</span>
-                            <span>Enabled: {status.enabled ? 'Yes' : 'No'}</span>
-                          </div>
-                        </div>
-                        <div className="flex gap-2">
-                          {status.status === 'running' ? (
-                            <>
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={() => mcp.restartServer(name)}
-                              >
-                                <RotateCw className="h-4 w-4" />
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={() => mcp.stopServer(name)}
-                              >
-                                <Square className="h-4 w-4" />
-                              </Button>
-                            </>
-                          ) : (
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => mcp.startServer(name)}
-                              disabled={status.status === 'starting'}
-                            >
-                              <Play className="h-4 w-4" />
-                            </Button>
-                          )}
-                          <Button
-                            size="sm"
-                            variant="destructive"
-                            onClick={() => confirmDeleteServer(name)}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
-                        </div>
-                      </div>
-                    </CardContent>
-                  </Card>
-                );
-              })}
-            </div>
+              return (
+                <div key={name} className="flex items-start gap-4 px-4 py-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono text-sm font-semibold text-foreground">{name}</span>
+                      <span className={`text-xs font-medium ${statusClass[status.status]}`}>
+                        {statusLabel[status.status]}
+                      </span>
+                    </div>
+                    <code className="mt-px block truncate font-mono text-xs text-muted-foreground">
+                      {serverConfig.command} {serverConfig.args.join(' ')}
+                    </code>
+                    <div className="mt-px text-xs text-muted-foreground">
+                      Auto-start {status.autoStart ? 'on' : 'off'} · Enabled {status.enabled ? 'on' : 'off'}
+                      {status.crashCount > 0 ? ` · ${status.crashCount} crashes` : ''}
+                    </div>
+                    {status.error && <div className="mt-px text-xs text-destructive">Error: {status.error}</div>}
+                  </div>
+                  <div className="flex flex-none items-center gap-2">
+                    {status.status === 'running' ? (
+                      <>
+                        <Button size="sm" variant="outline" onClick={() => mcp.restartServer(name)}>
+                          <RotateCw className="h-4 w-4" />
+                          <span className="ml-1">Restart</span>
+                        </Button>
+                        <Button size="sm" variant="outline" onClick={() => mcp.stopServer(name)}>
+                          <Square className="h-4 w-4" />
+                          <span className="ml-1">Stop</span>
+                        </Button>
+                      </>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => mcp.startServer(name)}
+                        disabled={status.status === 'starting'}
+                      >
+                        <Play className="h-4 w-4" />
+                        <span className="ml-1">Start</span>
+                      </Button>
+                    )}
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      aria-label={`Remove ${name}`}
+                      onClick={() => confirmDeleteServer(name)}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
+              );
+            })
           )}
-        </TabsContent>
+        </SettingsGroup>
+      </SettingsSection>
 
-        {/* Configuration Tab */}
-        <TabsContent value="config" className="space-y-4">
-          <Card>
-            <CardHeader>
-              <CardTitle>JSON Configuration</CardTitle>
-              <CardDescription>
-                Edit the raw JSON configuration. Compatible with Claude Desktop config format.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <Textarea
-                value={configJson}
-                onChange={(e) => {
-                  setConfigJson(e.target.value);
-                  setJsonError('');
-                }}
-                className="font-mono text-sm min-h-[400px]"
-                placeholder='{"mcpServers": {}}'
-              />
-              {jsonError && (
-                <Alert variant="destructive">
-                  <AlertTriangle className="h-4 w-4" />
-                  <AlertDescription>{jsonError}</AlertDescription>
-                </Alert>
-              )}
-              <div className="flex gap-2">
-                <Button onClick={handleSaveJson}>Save Configuration</Button>
-                <Button variant="outline" onClick={() => setConfigJson(JSON.stringify(mcp.config, null, 2))}>
-                  Reset
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-      </Tabs>
+      <SettingsSection
+        title="JSON configuration"
+        description="Same shape as Claude Desktop's mcpServers."
+      >
+        <Textarea
+          id="mcpjson"
+          aria-label="MCP servers JSON"
+          value={configJson}
+          onChange={(e) => {
+            setConfigJson(e.target.value);
+            setJsonError('');
+          }}
+          className="min-h-[280px] font-mono text-sm"
+          placeholder='{"mcpServers": {}}'
+        />
+        {jsonError && (
+          <Alert variant="destructive">
+            <AlertTriangle className="h-4 w-4" />
+            <AlertDescription>{jsonError}</AlertDescription>
+          </Alert>
+        )}
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={() => setConfigJson(JSON.stringify(mcp.config, null, 2))}>
+            Reset
+          </Button>
+          <Button onClick={handleSaveJson}>Save configuration</Button>
+        </div>
+      </SettingsSection>
 
       {/* Confirmation Dialog for Server Deletion */}
       <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
@@ -350,6 +244,6 @@ export default function LocalMCPSettingsPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </div>
+    </SettingsScreen>
   );
 }

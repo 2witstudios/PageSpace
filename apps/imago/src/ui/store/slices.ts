@@ -3,6 +3,7 @@ import { filesPlugin } from '../files/files-plugin/files-plugin';
 import { stagePlugin } from '../frame/stage/stage-plugin';
 import { palettePlugin } from '../palette/palette-plugin';
 import { tasksPlugin } from '../tasks/tasks-plugin';
+import { tabsPlugin } from '../frame/tabs/tabs-plugin';
 
 /**
  * Every section's store slice, listed once. A new section adds its slice
@@ -10,4 +11,4 @@ import { tasksPlugin } from '../tasks/tasks-plugin';
  * compose the shell from this list and refuse a resource key or transaction
  * name two slices share.
  */
-export const uiSlices = [stagePlugin, tasksPlugin, filesPlugin, chatPlugin, palettePlugin] as const;
+export const uiSlices = [stagePlugin, tabsPlugin, tasksPlugin, filesPlugin, chatPlugin, palettePlugin] as const;

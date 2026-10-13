@@ -77,6 +77,7 @@ export function PendingInviteRow({ invite, canRevoke = false, onRevoke }: Pendin
     );
   })();
 
+  const invitedOn = new Date(invite.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
   const isExpired = invite.expiresAt !== null && new Date(invite.expiresAt).getTime() < Date.now();
   const expiryLabel =
     invite.expiresAt !== null && !isExpired
@@ -109,7 +110,7 @@ export function PendingInviteRow({ invite, canRevoke = false, onRevoke }: Pendin
             </Badge>
           </div>
           <p className="text-sm text-gray-600 dark:text-gray-400">
-            Invited by {invite.invitedByName}
+            Invited by {invite.invitedByName} · {invitedOn}
             {expiryLabel && (
               <span className="ml-2 text-gray-400 dark:text-gray-500">· {expiryLabel}</span>
             )}

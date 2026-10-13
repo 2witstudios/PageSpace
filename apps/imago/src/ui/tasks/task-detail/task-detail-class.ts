@@ -52,3 +52,35 @@ export const taskDescriptionClass =
   'min-h-description w-full rounded-md text-sm leading-normal whitespace-pre-wrap text-ink outline-none';
 
 export const taskDetailMessageClass = 'px-6 py-4 text-sm text-ink-muted';
+
+/* The 44px strip's own buttons: a quiet square that firms on hover, dimmed when there is no task that way. */
+export const taskStripButtonClass =
+  'flex size-8 items-center justify-center rounded-md text-ink-muted transition-colors duration-120 ease-standard hover:bg-surface-overlay hover:text-ink disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-ink-muted';
+
+/** "Saved" or a refusal, at the strip's right edge. */
+export const taskSavedClass = 'flex items-center gap-2 px-2 text-xs text-ink-muted';
+
+/** The task's own name in the path: the last step, which is not a link. */
+export const taskCrumbCurrentClass = 'min-w-0 truncate font-semibold text-ink';
+
+/* The Automations box: one hairline frame, a row per trigger. */
+export const taskAutomationsClass = 'flex flex-col rounded-xl border border-hairline';
+
+export const taskAutomationRowClass = 'flex items-center gap-3 px-3 py-2 text-sm text-ink-muted border-t border-hairline first:border-t-0';
+
+export const taskAutomationTextClass = 'min-w-0 flex-1 cursor-pointer truncate text-left text-sm text-ink hover:underline';
+
+export const taskAutomationWhenClass = 'flex-none text-xs text-ink-faint';
+
+/** The Enabled switch: shown, not yet a control (the API has no re-enable). */
+export const taskSwitchClass = 'relative inline-flex h-5 w-10 flex-none items-center rounded-full bg-border-strong aria-checked:bg-accent-deep';
+
+export const taskSwitchKnobClass = 'absolute right-1 top-1 size-4 rounded-full bg-background transition-transform duration-120 ease-standard';
+
+export const taskActivityListClass = 'flex flex-col gap-2 text-sm text-ink-muted';
+
+export const taskActivityRowClass = 'flex min-w-0 items-center gap-2';
+
+export const taskActivityTextClass = 'min-w-0 flex-1 truncate';
+
+export const taskActivityTimeClass = 'flex-none text-xs text-ink-faint';

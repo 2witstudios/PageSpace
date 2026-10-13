@@ -53,7 +53,7 @@ const MessageQuoteBlock: React.FC<MessageQuoteBlockProps> = ({
   return (
     <div
       className={cn(
-        'border-l-2 border-primary/40 pl-3 py-1 mb-1 text-xs',
+        'mb-1 rounded-lg bg-muted/40 px-2.5 py-1.5 text-[13px]',
         isClickable && 'cursor-pointer hover:bg-muted/30 rounded-r transition-colors',
         className,
       )}

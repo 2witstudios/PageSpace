@@ -3,19 +3,21 @@
 import { useEffect, useState, useCallback } from "react";
 import { useRouter, useSearchParams, imagoBrowserPath } from "@/retained-adapters/navigation";
 import { Button } from "@/retained/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/retained/components/ui/card";
 import { Alert, AlertDescription } from "@/retained/components/ui/alert";
 import { Badge } from "@/retained/components/ui/badge";
 import { Skeleton } from "@/retained/components/ui/skeleton";
 import { Checkbox } from "@/retained/components/ui/checkbox";
 import { Label } from "@/retained/components/ui/label";
-import {
-  ArrowLeft, Calendar, CheckCircle2, XCircle, AlertCircle,
-  RefreshCw, ExternalLink, CalendarDays
-} from "lucide-react";
+import { AlertCircle, RefreshCw, ExternalLink } from "lucide-react";
 import { fetchWithAuth } from "@/retained/lib/auth/auth-fetch";
 import { toast } from "sonner";
 import { startThirdPartyOAuth } from "@/retained/lib/navigation/oauth-redirect";
+import {
+  SettingsGroup,
+  SettingsRow,
+  SettingsScreen,
+  SettingsSection,
+} from "@/ui/settings/settings-screen/settings-screen";
 
 interface ConnectionStatus {
   connected: boolean;
@@ -80,6 +82,8 @@ export default function GoogleCalendarSettingsPage() {
   const connection = status?.connection ?? null;
   const connectionStatus = connection?.status;
   const isActiveConnection = connectionStatus === "active";
+  // A connection whose grant has lapsed needs the user to authorise Google again.
+  const needsReauth = connectionStatus === "expired";
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -295,62 +299,23 @@ export default function GoogleCalendarSettingsPage() {
 
     switch (status.connection.status) {
       case "active":
-        return (
-          <Badge variant="default" className="bg-green-500/10 text-green-600 border-green-500/20">
-            <CheckCircle2 className="h-3 w-3 mr-1" />
-            Connected
-          </Badge>
-        );
+        return <Badge variant="default">Active</Badge>;
       case "expired":
-        return (
-          <Badge variant="destructive" className="bg-yellow-500/10 text-yellow-600 border-yellow-500/20">
-            <AlertCircle className="h-3 w-3 mr-1" />
-            Expired
-          </Badge>
-        );
+        return <Badge variant="destructive">Expired</Badge>;
       case "error":
-        return (
-          <Badge variant="destructive">
-            <XCircle className="h-3 w-3 mr-1" />
-            Error
-          </Badge>
-        );
+        return <Badge variant="destructive">Error</Badge>;
       default:
-        return (
-          <Badge variant="secondary">
-            Disconnected
-          </Badge>
-        );
+        return <Badge variant="secondary">Disconnected</Badge>;
     }
   };
 
   return (
-    <div className="container mx-auto px-4 py-10 sm:px-6 lg:px-10 max-w-2xl">
-      <div className="mb-8">
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => router.push("/settings")}
-          className="mb-4"
-        >
-          <ArrowLeft className="h-4 w-4 mr-2" />
-          Back to Settings
-        </Button>
-        <div className="flex items-center gap-3">
-          <div className="p-2 rounded-lg bg-primary/10">
-            <Calendar className="h-6 w-6 text-primary" />
-          </div>
-          <div>
-            <h1 className="text-2xl font-bold">Google Calendar</h1>
-            <p className="text-muted-foreground">
-              Two-way sync with Google Calendar
-            </p>
-          </div>
-        </div>
-      </div>
-
+    <SettingsScreen
+      title="Google Calendar"
+      lede="Two-way sync between your Google calendars and PageSpace, so agents see your real availability."
+    >
       {error && (
-        <Alert variant="destructive" className="mb-6">
+        <Alert variant="destructive">
           <AlertCircle className="h-4 w-4" />
           <AlertDescription>
             {ERROR_MESSAGES[error] || "An error occurred. Please try again."}
@@ -358,219 +323,188 @@ export default function GoogleCalendarSettingsPage() {
         </Alert>
       )}
 
-      <div className="space-y-6">
-        {/* Connection Status Card */}
-        <Card>
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <CardTitle className="text-lg">Connection</CardTitle>
-              {!loading && getStatusBadge()}
-            </div>
-          </CardHeader>
-          <CardContent>
-            {loading ? (
-              <div className="space-y-3">
-                <Skeleton className="h-4 w-48" />
-                <Skeleton className="h-10 w-32" />
-              </div>
-            ) : connection ? (
-              <div className="space-y-4">
-                <div className="flex items-center justify-between py-2 border-b">
-                  <span className="text-sm text-muted-foreground">Account</span>
-                  <span className="font-medium">{connection.googleEmail}</span>
-                </div>
-                <div className="flex items-center justify-between py-2 border-b">
-                  <span className="text-sm text-muted-foreground">Last synced</span>
-                  <span className="text-sm">
-                    {formatLastSync(connection.lastSyncAt)}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between py-2 border-b">
-                  <span className="text-sm text-muted-foreground">Events</span>
-                  <span className="text-sm font-medium">
-                    {status?.syncedEventCount ?? 0} synced
-                  </span>
-                </div>
-                {connection.lastSyncError && (
-                  <Alert variant="destructive">
-                    <AlertCircle className="h-4 w-4" />
-                    <AlertDescription>
-                      {/^(API error|Error:|fetch failed|ECONNREFUSED)/i.test(connection.lastSyncError)
-                        ? "Last sync could not be completed. Please try again later."
-                        : `Last sync failed: ${connection.lastSyncError}`}
-                    </AlertDescription>
-                  </Alert>
-                )}
-                {!isActiveConnection && connection.statusMessage && (
-                  <Alert>
-                    <AlertCircle className="h-4 w-4" />
-                    <AlertDescription>{connection.statusMessage}</AlertDescription>
-                  </Alert>
-                )}
-                <div className="flex gap-2 pt-2">
-                  {isActiveConnection ? (
-                    <Button
-                      variant="default"
-                      size="sm"
-                      disabled={syncing || disconnecting}
-                      onClick={() => handleSync()}
-                    >
-                      {syncing ? (
-                        <>
-                          <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
-                          Syncing...
-                        </>
-                      ) : (
-                        <>
-                          <RefreshCw className="h-4 w-4 mr-2" />
-                          Sync Now
-                        </>
-                      )}
-                    </Button>
-                  ) : (
-                    <Button
-                      variant="default"
-                      size="sm"
-                      disabled={connecting || disconnecting}
-                      onClick={handleConnect}
-                    >
-                      {connecting ? (
-                        <>
-                          <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
-                          Reconnecting...
-                        </>
-                      ) : (
-                        <>
-                          <ExternalLink className="h-4 w-4 mr-2" />
-                          Reconnect
-                        </>
-                      )}
-                    </Button>
-                  )}
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={disconnecting || syncing || connecting}
-                    onClick={handleDisconnect}
-                  >
-                    {disconnecting ? (
-                      <>
-                        <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
-                        Disconnecting...
-                      </>
-                    ) : (
-                      "Disconnect"
-                    )}
-                  </Button>
-                </div>
-              </div>
-            ) : (
-              <div className="space-y-4">
-                <div className="text-sm text-muted-foreground">
-                  <p className="mb-3">Benefits of connecting:</p>
-                  <ul className="list-disc list-inside space-y-1 ml-2">
-                    <li>Two-way sync keeps both calendars in sync</li>
-                    <li>AI can see your real availability</li>
-                    <li>Changes appear instantly</li>
-                    <li>Automatic attendee matching</li>
-                  </ul>
-                </div>
+      <SettingsSection title="Connection" actions={!loading ? getStatusBadge() : null}>
+        {loading ? (
+          <div className="space-y-3">
+            <Skeleton className="h-4 w-48" />
+            <Skeleton className="h-10 w-32" />
+          </div>
+        ) : connection ? (
+          <div className="flex flex-col gap-4">
+            <SettingsGroup>
+              <SettingsRow label="Account">
+                <span className="text-sm font-medium">{connection.googleEmail}</span>
+              </SettingsRow>
+              <SettingsRow
+                label="Last synced"
+                hint={`every ${connection.syncFrequencyMinutes} min`}
+              >
+                <span className="text-sm">{formatLastSync(connection.lastSyncAt)}</span>
+              </SettingsRow>
+              <SettingsRow label="Events synced">
+                <span className="text-sm font-medium">{status?.syncedEventCount ?? 0}</span>
+              </SettingsRow>
+              {connection.targetDriveId === null && (
+                <SettingsRow label="Events land in">
+                  <span className="text-sm">Your personal calendar</span>
+                </SettingsRow>
+              )}
+            </SettingsGroup>
+
+            {connection.lastSyncError && (
+              <Alert variant="destructive">
+                <AlertCircle className="h-4 w-4" />
+                <AlertDescription>
+                  {/^(API error|Error:|fetch failed|ECONNREFUSED)/i.test(connection.lastSyncError)
+                    ? "Last sync could not be completed. Please try again later."
+                    : `Last sync failed: ${connection.lastSyncError}`}
+                </AlertDescription>
+              </Alert>
+            )}
+            {!isActiveConnection && connection.statusMessage && (
+              <Alert>
+                <AlertCircle className="h-4 w-4" />
+                <AlertDescription>{connection.statusMessage}</AlertDescription>
+              </Alert>
+            )}
+            {needsReauth && (
+              <Alert variant="destructive">
+                <AlertCircle className="h-4 w-4" />
+                <AlertDescription>Google needs you to sign in again before events can sync.</AlertDescription>
+              </Alert>
+            )}
+
+            <div className="flex gap-2">
+              {isActiveConnection ? (
                 <Button
+                  variant="default"
+                  size="sm"
+                  disabled={syncing || disconnecting}
+                  onClick={() => handleSync()}
+                >
+                  {syncing ? (
+                    <>
+                      <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                      Syncing...
+                    </>
+                  ) : (
+                    <>
+                      <RefreshCw className="h-4 w-4 mr-2" />
+                      Sync now
+                    </>
+                  )}
+                </Button>
+              ) : needsReauth ? (
+                <Button
+                  variant="default"
+                  size="sm"
+                  disabled={connecting || disconnecting}
                   onClick={handleConnect}
-                  disabled={connecting}
                 >
                   {connecting ? (
                     <>
                       <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
-                      Connecting...
+                      Reconnecting...
                     </>
                   ) : (
                     <>
                       <ExternalLink className="h-4 w-4 mr-2" />
-                      Connect Google Calendar
+                      Reconnect
                     </>
                   )}
                 </Button>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        {/* Calendar Selection Card - only shown when connected */}
-        {isActiveConnection && (
-          <Card>
-            <CardHeader>
-              <div className="flex items-center gap-2">
-                <CalendarDays className="h-5 w-5 text-muted-foreground" />
-                <CardTitle className="text-lg">Calendars</CardTitle>
-              </div>
-              <CardDescription>
-                Choose which calendars to keep in sync
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              {loadingCalendars ? (
-                <div className="space-y-3">
-                  <Skeleton className="h-6 w-full" />
-                  <Skeleton className="h-6 w-full" />
-                  <Skeleton className="h-6 w-full" />
-                </div>
-              ) : availableCalendars.length === 0 ? (
-                <p className="text-sm text-muted-foreground">
-                  No calendars found. Try reconnecting.
-                </p>
-              ) : (
-                <div className="space-y-3">
-                  {availableCalendars.map((cal) => (
-                    <div key={cal.id} className="flex items-center space-x-3">
-                      <Checkbox
-                        id={`cal-${cal.id}`}
-                        checked={selectedCalendarIds.includes(cal.id)}
-                        onCheckedChange={() => toggleCalendar(cal.id)}
-                      />
-                      <div className="flex items-center gap-2 flex-1 min-w-0">
-                        {cal.backgroundColor && (
-                          <div
-                            className="w-3 h-3 rounded-full flex-shrink-0"
-                            style={{ backgroundColor: cal.backgroundColor }}
-                          />
-                        )}
-                        <Label
-                          htmlFor={`cal-${cal.id}`}
-                          className="text-sm font-medium cursor-pointer truncate"
-                        >
-                          {cal.summary}
-                          {cal.primary && (
-                            <span className="ml-1.5 text-xs text-muted-foreground">(primary)</span>
-                          )}
-                        </Label>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        )}
-
-        {/* Info Card */}
-        <Card className="bg-muted/50">
-          <CardContent className="pt-6">
-            <div className="flex gap-3">
-              <AlertCircle className="h-5 w-5 text-muted-foreground flex-shrink-0 mt-0.5" />
-              <div className="text-sm text-muted-foreground">
-                <p className="font-medium mb-1">Privacy & Data</p>
-                <p>
-                  PageSpace syncs event details (titles, times, locations, descriptions,
-                  attendees, and conference links) with your Google Calendar using two-way
-                  access. Your calendar data is stored encrypted, never shared with third
-                  parties, and never used for advertising. You can disconnect at any time.
-                </p>
-              </div>
+              ) : null}
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={disconnecting || syncing || connecting}
+                onClick={handleDisconnect}
+              >
+                {disconnecting ? (
+                  <>
+                    <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                    Disconnecting...
+                  </>
+                ) : (
+                  "Disconnect"
+                )}
+              </Button>
             </div>
-          </CardContent>
-        </Card>
-      </div>
-    </div>
+          </div>
+        ) : (
+          <div className="flex flex-col gap-4">
+            <div className="text-sm text-muted-foreground">
+              <p className="mb-3">Benefits of connecting:</p>
+              <ul className="list-disc list-inside space-y-1 ml-2">
+                <li>Two-way sync keeps both calendars in sync</li>
+                <li>AI can see your real availability</li>
+                <li>Changes appear instantly</li>
+                <li>Automatic attendee matching</li>
+              </ul>
+            </div>
+            <div>
+              <Button onClick={handleConnect} disabled={connecting}>
+                {connecting ? (
+                  <>
+                    <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                    Connecting...
+                  </>
+                ) : (
+                  <>
+                    <ExternalLink className="h-4 w-4 mr-2" />
+                    Connect Google Calendar
+                  </>
+                )}
+              </Button>
+            </div>
+          </div>
+        )}
+      </SettingsSection>
+
+      {/* Calendar selection: only shown when connected */}
+      {isActiveConnection && (
+        <SettingsSection title="Calendars" description="Changes save as you toggle.">
+          {loadingCalendars ? (
+            <div className="space-y-3">
+              <Skeleton className="h-6 w-full" />
+              <Skeleton className="h-6 w-full" />
+              <Skeleton className="h-6 w-full" />
+            </div>
+          ) : availableCalendars.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No calendars found. Try reconnecting.</p>
+          ) : (
+            <SettingsGroup>
+              {availableCalendars.map((cal) => (
+                <SettingsRow
+                  key={cal.id}
+                  label={
+                    <Label htmlFor={`cal-${cal.id}`} className="cursor-pointer">
+                      {cal.summary}
+                      {cal.primary && <span className="ml-1.5 text-xs text-muted-foreground">(primary)</span>}
+                    </Label>
+                  }
+                  hint={`${cal.timeZone ?? "—"} · ${cal.accessRole}`}
+                >
+                  <Checkbox
+                    id={`cal-${cal.id}`}
+                    checked={selectedCalendarIds.includes(cal.id)}
+                    onCheckedChange={() => toggleCalendar(cal.id)}
+                  />
+                </SettingsRow>
+              ))}
+            </SettingsGroup>
+          )}
+        </SettingsSection>
+      )}
+
+      <SettingsSection title="Privacy & data">
+        <p className="text-sm text-muted-foreground">
+          PageSpace syncs event details (titles, times, locations, descriptions,
+          attendees, and conference links) with your Google Calendar using two-way
+          access. Your calendar data is stored encrypted, never shared with third
+          parties, and never used for advertising. You can disconnect at any time.
+        </p>
+      </SettingsSection>
+    </SettingsScreen>
   );
 }

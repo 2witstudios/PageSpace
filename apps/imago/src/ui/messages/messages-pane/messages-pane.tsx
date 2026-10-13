@@ -3,6 +3,7 @@
 import { CreateActions } from '@/retained-adapters/create-actions';
 import type { ChannelThread, DirectThread } from '../message-model/message';
 import { useDirectThreads, useDriveChannels } from '../use-messages/use-messages';
+import { InboxPane } from './inbox-pane';
 import { renderMessagesPane, type MessageRowView, type MessagesSectionView } from './messages-pane.render';
 
 export type MessagesPaneProps = {
@@ -48,18 +49,29 @@ const sectionOf = <T,>(
 };
 
 /**
- * The Messages section's list pane on IMG-8.1's live data: the current
- * drive's channels and the viewer's DMs with their unread counts, which
- * inbox events keep current.
+ * The Messages section's list pane. On the index it is the unified inbox (every drive's channels
+ * and the viewer's DMs, with previews and times); with a channel or DM open, or on the user-level
+ * /dm routes, it is the compact Channels and Direct messages groups on live unread counts.
  */
 export function MessagesPane({ driveId, selectedPageId, selectedConversationId }: MessagesPaneProps) {
+  const unified = driveId !== null && selectedPageId === null && selectedConversationId === null;
+  return (
+    <>
+      <CreateActions driveId={driveId} messages />
+      {unified ? <InboxPane /> : <CompactPane driveId={driveId} selectedPageId={selectedPageId} selectedConversationId={selectedConversationId} />}
+    </>
+  );
+}
+
+/** The compact groups: the current drive's channels, then the viewer's DMs. */
+function CompactPane({ driveId, selectedPageId, selectedConversationId }: MessagesPaneProps) {
   const channels = useDriveChannels(driveId);
   const direct = useDirectThreads();
-  return <><CreateActions driveId={driveId} messages />{renderMessagesPane({
+  return renderMessagesPane({
     channels:
       driveId === null
         ? { status: 'no-drive' }
         : sectionOf(channels.channels, channels.error, channels.retry, (thread) => channelRow(thread, selectedPageId)),
     direct: sectionOf(direct.threads, direct.error, direct.retry, (thread) => directRow(thread, selectedConversationId)),
-  })}</>;
+  });
 }

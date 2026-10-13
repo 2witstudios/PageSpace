@@ -2,11 +2,13 @@
 
 import { useEffect, useState } from 'react';
 import type { ApiClient } from '@/api/client';
-import { resultsFrom, type PaletteResult } from '../palette-search/palette-search';
+import { resultsFrom, usersFrom, type PaletteResult, type PaletteUser } from '../palette-search/palette-search';
 
 export type PaletteSearch = {
   readonly status: 'idle' | 'loading' | 'done' | 'error';
   readonly results: readonly PaletteResult[];
+  /** The people the search answered with: the Users group. */
+  readonly people: readonly PaletteUser[];
 };
 
 /** The pause after the last keystroke before the palette asks. */
@@ -14,8 +16,8 @@ export const SEARCH_DELAY_MS = 150;
 
 type Answer = { readonly path: string; readonly search: PaletteSearch };
 
-const IDLE: PaletteSearch = { status: 'idle', results: [] };
-const LOADING: PaletteSearch = { status: 'loading', results: [] };
+const IDLE: PaletteSearch = { status: 'idle', results: [], people: [] };
+const LOADING: PaletteSearch = { status: 'loading', results: [], people: [] };
 
 /**
  * The server's answer for one search path. It asks once typing pauses, and
@@ -36,10 +38,10 @@ export function usePaletteSearch(
     const timer = setTimeout(() => {
       client.apiFetch(path, { signal: controller.signal }).then(
         (body) => {
-          if (!controller.signal.aborted) setAnswer({ path, search: { status: 'done', results: resultsFrom(body) } });
+          if (!controller.signal.aborted) setAnswer({ path, search: { status: 'done', results: resultsFrom(body), people: usersFrom(body) } });
         },
         () => {
-          if (!controller.signal.aborted) setAnswer({ path, search: { status: 'error', results: [] } });
+          if (!controller.signal.aborted) setAnswer({ path, search: { status: 'error', results: [], people: [] } });
         },
       );
     }, delayMs);

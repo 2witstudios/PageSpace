@@ -5,13 +5,15 @@ import tailwind from '@tailwindcss/postcss';
 import postcss from 'postcss';
 import { describe, test } from 'vitest';
 import { assert } from 'riteway/vitest';
-import { accountItemClass, accountMenuClass, accountNameClass } from './avatar-menu/avatar-menu-class';
+import {
+  accountItemClass,
+  accountMenuClass,
+  accountNameClass,
+  avatarSummaryClass,
+} from './avatar-menu/avatar-menu-class';
 import {
   brandChipClass,
-  driveInitialClass,
-  driveLinkClass,
-  driveMenuClass,
-  driveNoteClass,
+  brandSummaryClass,
 } from './brand-chip/brand-chip-class';
 import {
   notFoundClass,
@@ -38,16 +40,12 @@ const selectorOf = (cls: string): string => `.${cls.replace(/[:/.]/g, (char) => 
 describe('brand chip classes', () => {
   test('exact strings', () => {
     assert({
-      given: 'the brand chip, the drive menu, a drive row (open and not), its initial and the menu note',
+      given: 'the brand chip and its summary',
       should: 'return the token-locked class strings',
-      actual: [brandChipClass, driveMenuClass, driveLinkClass(true), driveLinkClass(false), driveInitialClass, driveNoteClass],
+      actual: [brandChipClass, brandSummaryClass],
       expected: [
-        'flex size-rail-brand items-center justify-center rounded-lg border border-hairline bg-surface-raised font-semibold text-ink',
-        'absolute top-0 left-rail-tooltip-x z-popover m-0 flex w-popover list-none flex-col rounded-lg border border-hairline p-1 shadow-2 surface-glass-raised',
-        'flex items-center gap-2 rounded-md px-2 py-row-y text-sm font-medium text-ink no-underline hover:no-underline bg-accent-soft',
-        'flex items-center gap-2 rounded-md px-2 py-row-y text-sm font-medium text-ink no-underline hover:no-underline hover:bg-surface-overlay',
-        'flex size-avatar-xs flex-none items-center justify-center rounded-md border border-hairline bg-surface-raised text-2xs font-semibold',
-        'px-2 py-row-y text-sm text-ink-muted',
+        'flex size-spine-brand items-center justify-center rounded-spine-brand bg-spine-tile font-bold text-spine',
+        'group relative flex cursor-pointer border-0 bg-transparent p-0 summary-plain',
       ],
     });
   });
@@ -56,13 +54,15 @@ describe('brand chip classes', () => {
 describe('account menu classes', () => {
   test('exact strings', () => {
     assert({
-      given: 'the account menu, the signed-in name and a menu row',
-      should: 'return the token-locked class strings',
-      actual: [accountMenuClass, accountNameClass, accountItemClass],
+      given: 'the account menu, the signed-in name, a menu row and the avatar control (account open and not)',
+      should: 'return the token-locked class strings, ringing the avatar only while the account is open',
+      actual: [accountMenuClass, accountNameClass, accountItemClass, avatarSummaryClass(true), avatarSummaryClass(false)],
       expected: [
         'absolute bottom-0 left-rail-tooltip-x z-popover m-0 flex w-max list-none flex-col gap-1 rounded-lg border border-hairline p-1 shadow-2 surface-glass-raised',
         'px-2 py-row-y text-xs text-ink-muted',
         'flex w-full cursor-pointer items-center gap-2 rounded-md border-0 bg-transparent px-2 py-row-y text-left text-sm font-medium text-ink no-underline hover:bg-surface-overlay hover:no-underline',
+        'group relative flex cursor-pointer summary-plain spine-avatar-ring',
+        'group relative flex cursor-pointer summary-plain',
       ],
     });
   });
@@ -88,14 +88,11 @@ describe('frame menu class modules against the theme', () => {
   test('every class resolves', async () => {
     const classes = [
       brandChipClass,
-      driveMenuClass,
-      driveLinkClass(true),
-      driveLinkClass(false),
-      driveInitialClass,
-      driveNoteClass,
+      brandSummaryClass,
       accountMenuClass,
       accountNameClass,
       accountItemClass,
+      avatarSummaryClass(true),
       notFoundClass,
       notFoundTitleClass,
       notFoundDetailClass,
@@ -103,7 +100,9 @@ describe('frame menu class modules against the theme', () => {
       edgeLoadingClass,
     ]
       .flatMap((list) => list.split(' '))
-      .filter((cls, index, all) => all.indexOf(cls) === index);
+      .filter((cls, index, all) => all.indexOf(cls) === index)
+      // `group` is a marker for group-* variants and emits no rule of its own.
+      .filter((cls) => cls !== 'group');
     const css = await compile(classes);
 
     assert({

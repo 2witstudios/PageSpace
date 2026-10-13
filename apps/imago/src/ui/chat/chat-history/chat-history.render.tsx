@@ -1,11 +1,11 @@
-import { Plus, X } from 'lucide-react';
+import { PanelLeftClose, Plus, Search } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { renderButton } from '../../components/button/button.render';
 import { renderListGroup } from '../../components/list-group/list-group.render';
 import { listBodyClass, listPaneClass } from '../../frame/list-pane/list-pane-class';
 import { paneControlClass } from '../../frame/pane/pane-class';
 import { renderPaneHeader } from '../../frame/pane/pane-header';
-import { chatHistoryNoteClass, chatHistoryRowClass, chatHistoryTitleClass } from './chat-history-class';
+import { chatHistoryFilterClass, chatHistoryNoteClass, chatHistoryRowClass, chatHistoryTimeClass, chatHistoryTitleClass } from './chat-history-class';
 import type { HistoryDay } from './history-days';
 
 /** The history's rows, or why there are none. */
@@ -32,6 +32,11 @@ export type ChatHistoryRenderProps = {
   readonly hide: () => void;
   readonly loadMore: () => void;
   readonly retry: () => void;
+  /** "Search chats": filters the loaded rows by title. */
+  readonly filter: string;
+  readonly onFilter: (value: string) => void;
+  /** A row's time beside its title: now, 9:40, Sun, Oct 8. */
+  readonly timeOf: (iso: string) => string;
 };
 
 /** lucide at stroke 1.5 / 16px (DEC-8); the control carries the name. */
@@ -54,10 +59,11 @@ const renderDay = ({ label, conversations }: HistoryDay, props: ChatHistoryRende
             <button
               type="button"
               className={chatHistoryRowClass(selected)}
-              aria-current={selected ? 'true' : undefined}
+              aria-current={selected ? 'page' : undefined}
               onClick={() => props.selectConversation(conversation.id)}
             >
               <span className={chatHistoryTitleClass}>{conversation.title}</span>
+              <span className={chatHistoryTimeClass}>{props.timeOf(conversation.updatedAt)}</span>
             </button>
           </li>
         );
@@ -77,7 +83,7 @@ const renderRows = (props: ChatHistoryRenderProps): ReactNode => {
       </>
     );
   }
-  if (list.days.length === 0) return renderNote('No chats yet.');
+  if (list.days.length === 0) return renderNote(props.filter.trim() === '' ? 'No chats yet.' : 'No chats match.');
   return (
     <>
       {list.days.map((day) => renderDay(day, props))}
@@ -92,8 +98,7 @@ const renderRows = (props: ChatHistoryRenderProps): ReactNode => {
  * The chat's own list: the current agent's past chats, filed under the day
  * they were last active. A row switches the one chat beside every stage
  * rather than navigating, so it is a button and the open chat marks itself
- * current. Nowhere to step back to from the chat, so × hides the history
- * rather than closing a stage (myimago ADR 0029 decision 2).
+ * current. Like every left pane it collapses with Close sidebar (SPEC v3.2).
  */
 export function renderChatHistory(props: ChatHistoryRenderProps): ReactNode {
   return (
@@ -105,13 +110,25 @@ export function renderChatHistory(props: ChatHistoryRenderProps): ReactNode {
             <button type="button" aria-label="New chat" className={paneControlClass} onClick={props.startNewChat}>
               <Plus {...icon} />
             </button>
-            <button type="button" aria-label="Hide Chat history" className={paneControlClass} onClick={props.hide}>
-              <X {...icon} />
+            <button type="button" aria-label="Close sidebar" title="Close sidebar" className={paneControlClass} onClick={props.hide}>
+              <PanelLeftClose {...icon} />
             </button>
           </>
         ),
       })}
-      <div className={listBodyClass}>{renderRows(props)}</div>
+      <div className={listBodyClass}>
+        <label className={chatHistoryFilterClass}>
+          <Search {...icon} />
+          <input
+            aria-label="Search chats"
+            placeholder="Search chats"
+            value={props.filter}
+            onChange={(event) => props.onFilter(event.target.value)}
+            className="min-w-0 flex-1 border-0 bg-transparent text-sm text-ink outline-none"
+          />
+        </label>
+        {renderRows(props)}
+      </div>
     </section>
   );
 }

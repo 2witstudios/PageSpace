@@ -16,13 +16,13 @@
 
   /* Rail — one width for every stage. The 44px hit box carries the focus
      ring and the pointer target; the 38px chip carries the fill. */
-  --spacing-rail-width: 64px;
+  --spacing-rail-width: 72px;
   --spacing-rail-hit: 44px;
   --spacing-rail-chip: 38px;
   --spacing-rail-brand: 34px;
   --spacing-rail-gap: 4px;
   --spacing-rail-y: 14px;
-  --spacing-rail-tooltip-x: 54px;
+  --spacing-rail-tooltip-x: 62px;
   /* The rail and the panes are each glass (a backdrop-filter), so each is a
      stacking context; the rail's layer sits over the panes, so its tooltips
      and the ⋯ menu are drawn above an open list. `popover` orders those
@@ -30,14 +30,31 @@
   --z-index-rail: 10;
   --z-index-popover: 30;
 
-  /* Panes — the three stages' column widths. */
-  --spacing-pane-header: 52px;
+  /* v3 frame (IMC-1.2; SPEC v3 "Column widths", v3.3 tab bar): the spine is
+     72px, the open-pages tab bar 40px over 48px column heads, a page's tool
+     strip 44px, a thread sheet 360px, and the stage sheet rounds 22px at its
+     top-left where it meets the spine. */
+  --spacing-tab-bar: 40px;
+  --spacing-toolbar-strip: 44px;
+  --spacing-thread-sheet: 360px;
+  --spacing-spine-tile: 48px;
+  --spacing-spine-tile-small: 40px;
+  --spacing-spine-brand: 36px;
+  --spacing-spine-avatar: 34px;
+  --spacing-head-control: 28px;
+  --spacing-tab-min: 76px;
+  --spacing-tab-max: 180px;
+  --radius-stage: 22px;
+
+  /* Panes — the stages' column widths: 260 beside an open page, 300 on a
+     stage-2 index, Imago 360 (SPEC v3). */
+  --spacing-pane-header: 48px;
   /* A list row's vertical padding: 6px either side of 14px type makes the
      ~32px row PageSpace's sidebars use. */
   --spacing-row-y: 6px;
-  --spacing-list-pane: 274px;
-  --spacing-tree-pane: 244px;
-  --spacing-chat-pane: 350px;
+  --spacing-list-pane: 300px;
+  --spacing-tree-pane: 260px;
+  --spacing-chat-pane: 360px;
   --spacing-doc-min: 330px;
   --spacing-tree-step: 14px;
 

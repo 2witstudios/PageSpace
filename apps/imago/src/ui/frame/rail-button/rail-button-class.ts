@@ -1,46 +1,42 @@
 import { cn } from '../../cn';
 
-/* The hit box is 44px and the chip inside it 38px: the mockups' 38px target
-   is below the accessible floor, and the ring belongs on the real control
-   (myimago ADR 0029 decision 4). Variants never override the base: each owns
-   its colors. */
-const hitBase =
-  'group relative flex size-rail-hit flex-none items-center justify-center rounded-lg no-underline hover:no-underline';
+/** A spine tile's two sizes: the four primary sections, and the tools, Search, bell and Settings. */
+export type SpineTileSize = 'primary' | 'small';
 
-const chipBase =
-  'flex size-rail-chip items-center justify-center rounded-lg transition-colors duration-120 ease-standard';
+const tileBase =
+  'group relative flex flex-none items-center justify-center no-underline transition-colors duration-120 ease-standard hover:no-underline';
 
-/** Classes for the rail control itself: the 44px hit box. */
-export const railHitClass = (enabled: boolean): string =>
-  cn(hitBase, enabled ? 'cursor-pointer' : 'cursor-default');
-
-/** Classes for the visible 38px chip inside the hit box. */
-export const railChipClass = (active: boolean, enabled: boolean): string =>
+/**
+ * A spine destination (SPEC v3 spine, C-Files-Doc): 48px radius-12 tiles for Chat, Files,
+ * Messages and Tasks, 40px radius-10 tiles for everything else. The active one is filled
+ * white at 15% and marked; the rest sit quieter on the blue and fill white at 10% on hover.
+ */
+export const spineTileClass = (size: SpineTileSize, active: boolean, enabled = true): string =>
   cn(
-    chipBase,
+    tileBase,
+    size === 'primary' ? 'size-spine-tile rounded-spine-tile' : 'size-spine-tile-small rounded-lg',
     active
-      ? 'bg-accent-soft text-ink'
-      : enabled
-        ? 'text-ink-muted group-hover:bg-surface-overlay group-hover:text-ink'
-        : 'text-ink-faint',
+      ? 'bg-spine-active text-spine-on'
+      : cn(size === 'primary' ? 'text-spine-quiet' : 'text-spine-dim', enabled ? 'cursor-pointer hover:bg-spine-hover' : 'cursor-default'),
   );
 
-/** The rail's destination list, and the one pinned to its foot. */
-export const railListClass = 'm-0 flex list-none flex-col items-center gap-rail-gap p-0';
+/** The 4px bar at the spine's edge beside the active tile: 24px beside a primary tile, 20px beside a tool. */
+export const spineMarkerClass = (size: SpineTileSize): string =>
+  cn(
+    'absolute top-1/2 w-spine-marker -translate-y-1/2 rounded-r-sm bg-spine-marker',
+    size === 'primary' ? '-left-3 h-spine-marker-tall' : '-left-4 h-spine-marker-short',
+  );
 
-export const railPinnedClass = 'm-0 mt-auto flex list-none flex-col items-center gap-rail-gap p-0';
+/** The amber count on Messages and the bell. */
+export const spineCountClass =
+  'absolute top-1 right-1 flex h-spine-count min-w-spine-count items-center justify-center rounded-round bg-notice px-1 text-badge leading-none font-bold text-notice-ink';
 
-/** The label beside a hovered or focused control; the control carries the name. */
+/** The spine's lists: tiles stacked 4px apart, centred on the spine. */
+export const spineListClass = 'm-0 flex list-none flex-col items-center gap-rail-gap p-0';
+
+/** The 28px rule between the sections and the tools. */
+export const spineDividerClass = 'my-2 h-px w-spine-divider flex-none bg-spine-active';
+
+/** The label beside a hovered or focused tile; the tile carries the name. */
 export const railTooltipClass =
   'pointer-events-none invisible absolute top-1/2 left-rail-tooltip-x z-popover -translate-y-1/2 rounded-md border border-hairline bg-surface-raised px-2 py-1 text-2xs whitespace-nowrap text-ink opacity-0 shadow-2 transition-opacity duration-120 ease-standard group-hover:visible group-hover:opacity-100 group-focus-visible:visible group-focus-visible:opacity-100';
-
-/** Where an unread count sits on a rail control: its top-right corner. */
-export const railUnreadClass = 'absolute top-0 right-0';
-
-/** The ⋯ overflow's menu, opening beside the rail at the tooltip's offset. */
-export const overflowMenuClass =
-  'absolute top-0 left-rail-tooltip-x z-popover m-0 flex w-menu list-none flex-col rounded-lg border border-hairline p-1 shadow-2 surface-glass-raised';
-
-/** One classic deep link in the overflow menu: a ~32px sidebar row. */
-export const overflowLinkClass =
-  'flex items-center gap-2 rounded-md px-2 py-row-y text-sm font-medium text-ink no-underline hover:bg-surface-overlay hover:no-underline';

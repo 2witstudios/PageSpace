@@ -1,680 +1,348 @@
-"use client";
+'use client';
 
-import React, { useEffect, useState, useMemo, useCallback } from 'react';
-import { useParams, usePathname } from '@/retained-adapters/navigation';
-import { Input } from '@/retained/components/ui/input';
-import { Skeleton } from '@/retained/components/ui/skeleton';
+import { useCallback, useEffect, useId, useMemo, useState } from 'react';
+import { History, Loader2, Search, Sparkles } from 'lucide-react';
 import { Badge } from '@/retained/components/ui/badge';
 import { Button } from '@/retained/components/ui/button';
-import { Avatar, AvatarFallback, AvatarImage } from '@/retained/components/ui/avatar';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/retained/components/ui/dropdown-menu';
-import {
-  Activity,
-  Search,
-  FileEdit,
-  Trash2,
-  RotateCcw,
-  Move,
-  Share2,
-  Bot,
-  FolderPlus,
-  Settings,
-  History,
-  MoreVertical,
-  ChevronDown,
-  ChevronRight,
-} from 'lucide-react';
-import { formatDistanceToNow } from 'date-fns';
-import { fetchWithAuth, post } from '@/retained/lib/auth/auth-fetch';
-import { getUserFacingModelName } from '@/retained/lib/ai/core/ai-providers-config';
-import { RollbackConfirmDialog } from '@/retained/components/activity/RollbackConfirmDialog';
-import { RollbackToPointDialog, type RollbackToPointContext } from '@/retained/components/activity/RollbackToPointDialog';
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/retained/components/ui/collapsible';
-import { toast } from 'sonner';
-import { useActivitySocket, type ActivityContext } from '@/retained/hooks/useActivitySocket';
+import { Label } from '@/retained/components/ui/label';
+import { Skeleton } from '@/retained/components/ui/skeleton';
+import { Switch } from '@/retained/components/ui/switch';
+import { fetchJSON, post } from '@/retained/lib/auth/auth-fetch';
+import { useActivitySocket } from '@/retained/hooks/useActivitySocket';
+import { cn } from '@/retained/lib/utils';
+import type { RollbackToPointPreview } from '@/retained-adapters/ui-contracts';
 import type { ActivityActionPreview, ActivityActionResult } from '@/retained/types/activity-actions';
-import type { ActivityLog, ActivityGroup } from '@/retained/components/activity/types';
-import { groupConsecutiveActivities } from '@/retained/components/activity/utils';
+import {
+  actorOf,
+  aiViaOf,
+  canUndoNow,
+  filterVersions,
+  groupVersions,
+  initialOf,
+  retentionLabelOf,
+  rollbackToPointCount,
+  rolledBackIds,
+  summaryOf,
+  timeLabelOf,
+  verbOf,
+  type HistoryFilter,
+  type HistoryVersion,
+} from './page-history-model';
 
-// Exported for unit testing
-export interface ActivityUser {
-  id: string;
-  name: string | null;
-  email: string;
-  image: string | null;
+interface HistoryResponse {
+  versions: HistoryVersion[];
+  retentionDays: number;
 }
 
-// Exported for unit testing
-export interface ActivityItem {
-  id: string;
-  timestamp: string;
-  operation: string;
-  resourceType: string;
-  resourceId: string;
-  resourceTitle: string | null;
-  isAiGenerated: boolean;
-  aiProvider: string | null;
-  aiModel: string | null;
-  aiConversationId: string | null;
-  changeGroupId: string | null;
-  metadata: Record<string, unknown> | null;
-  rollbackSourceOperation: string | null;
-  // User relation - null when user has been deleted (FK set null)
-  user: ActivityUser | null;
-  // Denormalized actor info - preserved for audit trail when user is deleted
-  actorEmail: string | null;
-  actorDisplayName: string | null;
+const PAGE_SIZE = 50;
+
+function errorMessageOf(error: unknown, fallback: string): string {
+  return error instanceof Error && error.message ? error.message : fallback;
 }
 
-/**
- * Get display name for an activity actor.
- * Prioritizes user relation, falls back to denormalized actor info.
- * Exported for unit testing.
- */
-export function getActorDisplayName(activity: ActivityItem): string {
-  // Prefer user relation if available
-  if (activity.user?.name) {
-    return activity.user.name;
-  }
-  // Fall back to denormalized actor display name
-  if (activity.actorDisplayName) {
-    return activity.actorDisplayName;
-  }
-  // Fall back to actor email
-  if (activity.actorEmail) {
-    return activity.actorEmail;
-  }
-  // Ultimate fallback
-  return 'Unknown';
-}
-
-/**
- * Get avatar info for an activity actor.
- */
-function getActorAvatar(activity: ActivityItem): { image: string | null; initial: string } {
-  if (activity.user) {
-    return {
-      image: activity.user.image,
-      initial: activity.user.name?.[0]?.toUpperCase() || '?',
-    };
-  }
-  // Deleted user - use first character of display name or email
-  const displayName = activity.actorDisplayName || activity.actorEmail;
-  return {
-    image: null,
-    initial: displayName?.[0]?.toUpperCase() || '?',
-  };
-}
-
-interface ActivityResponse {
-  activities: ActivityItem[];
-  pagination: {
-    total: number;
-    limit: number;
-    offset: number;
-    hasMore: boolean;
-  };
-}
-
-// Operation icons mapping
-const operationIcons: Record<string, React.ReactNode> = {
-  create: <FolderPlus className="h-3 w-3" />,
-  update: <FileEdit className="h-3 w-3" />,
-  delete: <Trash2 className="h-3 w-3" />,
-  trash: <Trash2 className="h-3 w-3" />,
-  restore: <RotateCcw className="h-3 w-3" />,
-  reorder: <Move className="h-3 w-3" />,
-  move: <Move className="h-3 w-3" />,
-  permission_grant: <Share2 className="h-3 w-3" />,
-  permission_update: <Share2 className="h-3 w-3" />,
-  permission_revoke: <Share2 className="h-3 w-3" />,
-  agent_config_update: <Settings className="h-3 w-3" />,
-  rollback: <History className="h-3 w-3" />,
-};
-
-// Human-readable operation labels
-const operationLabels: Record<string, string> = {
-  create: 'Created',
-  update: 'Updated',
-  delete: 'Deleted',
-  trash: 'Trashed',
-  restore: 'Restored',
-  reorder: 'Reordered',
-  move: 'Moved',
-  permission_grant: 'Shared',
-  permission_update: 'Updated sharing',
-  permission_revoke: 'Revoked access',
-  agent_config_update: 'Configured agent',
-  rollback: 'Rolled back',
-};
-
-/**
- * Activity tab for the right sidebar.
- *
- * Shows activity based on context:
- * - Dashboard (/dashboard): User's own activity
- * - Drive view (/dashboard/[driveId]): All drive activity
- * - Page view (/dashboard/[driveId]/[pageId]): All page activity
- */
-export default function SidebarActivityTab() {
-  const params = useParams();
-  const pathname = usePathname();
-
-  const [activities, setActivities] = useState<ActivityItem[]>([]);
-  const [searchQuery, setSearchQuery] = useState('');
+/** Undo / rollback for one expanded row. Its previews load when it mounts and reset when it closes. */
+function HistoryRowDetail({
+  activityId,
+  rolledBack,
+  onApplied,
+}: {
+  readonly activityId: string;
+  readonly rolledBack: boolean;
+  readonly onApplied: () => void;
+}) {
+  const forceId = useId();
+  const [undoPreview, setUndoPreview] = useState<ActivityActionPreview | null>(null);
+  const [pointPreview, setPointPreview] = useState<RollbackToPointPreview | null>(null);
   const [loading, setLoading] = useState(true);
+  const [force, setForce] = useState(false);
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Rollback state
-  const [selectedActivityForRollback, setSelectedActivityForRollback] = useState<ActivityItem | null>(null);
-  const [showRollbackConfirm, setShowRollbackConfirm] = useState(false);
-  const [showRollbackToPoint, setShowRollbackToPoint] = useState(false);
-  const [selectedActivityForRollbackToPoint, setSelectedActivityForRollbackToPoint] = useState<ActivityItem | null>(null);
-  const [preview, setPreview] = useState<ActivityActionPreview | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([
+      post<{ preview: ActivityActionPreview | null }>(`/api/activities/${activityId}/rollback`, {
+        context: 'page',
+        dryRun: true,
+      }),
+      fetchJSON<RollbackToPointPreview>(`/api/activities/${activityId}/rollback-to-point?context=page`),
+    ])
+      .then(([undo, point]) => {
+        if (cancelled) return;
+        setUndoPreview(undo.preview ?? null);
+        setPointPreview(point);
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setError(errorMessageOf(err, 'Failed to load the changes to apply'));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activityId]);
 
-  // Determine context and IDs from route params
-  const driveId = params.driveId as string | undefined;
-  const pageId = params.pageId as string | undefined;
+  const pointCount = pointPreview ? rollbackToPointCount(pointPreview.activitiesAffected, force) : 0;
+  const undoable = canUndoNow(undoPreview, force);
 
-  // Determine the activity context
-  const context = useMemo(() => {
-    if (pageId) return 'page';
-    if (driveId) return 'drive';
-    return 'user'; // Dashboard view
-  }, [driveId, pageId]);
-
-  // Map to rollback API context
-  const rollbackContext = useMemo(() => {
-    if (pageId) return 'page';
-    if (driveId) return 'drive';
-    return 'user_dashboard';
-  }, [driveId, pageId]);
-
-  // Context-aware header text
-  const headerText = useMemo(() => {
-    switch (context) {
-      case 'page':
-        return 'Page Activity';
-      case 'drive':
-        return 'Drive Activity';
-      default:
-        return 'Your Activity';
+  const runAction = async (action: () => Promise<ActivityActionResult>) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await action();
+      onApplied();
+    } catch (err) {
+      setError(errorMessageOf(err, 'Action failed'));
+    } finally {
+      setBusy(false);
     }
-  }, [context]);
+  };
 
-  const getOperationLabel = useCallback((activity: ActivityItem) => {
-    return operationLabels[activity.operation] || activity.operation;
-  }, []);
+  const undoChange = () =>
+    runAction(() => post<ActivityActionResult>(`/api/activities/${activityId}/rollback`, { context: 'page', force }));
 
-  // Load activities
-  const loadActivities = useCallback(async () => {
+  const rollbackToPoint = () =>
+    runAction(() => post<ActivityActionResult>(`/api/activities/${activityId}/rollback-to-point`, { context: 'page', force }));
+
+  return (
+    <div className="mb-2 ml-[46px] mr-2 flex flex-col gap-2.5">
+      {rolledBack ? <p className="text-xs text-muted-foreground">This change has already been rolled back.</p> : null}
+      <div className="overflow-hidden rounded-md border text-xs">
+        <div className="border-b bg-muted/50 px-2.5 py-1.5 font-semibold text-muted-foreground">Changes to apply</div>
+        <div className="flex flex-col gap-2 p-2.5">
+          {loading ? (
+            <span className="flex items-center gap-2 text-muted-foreground">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+              Loading changes
+            </span>
+          ) : null}
+          {!loading && undoPreview?.isNoOp ? <span className="text-muted-foreground">No changes needed.</span> : null}
+          {undoPreview && !undoPreview.canExecute && undoPreview.reason ? (
+            <p className="text-destructive">Cannot undo: {undoPreview.reason}</p>
+          ) : null}
+          {undoPreview?.warnings.map((warning) => (
+            <p key={warning} className="text-amber-700 dark:text-amber-400">{warning}</p>
+          ))}
+          {undoPreview?.changes.map((change) => (
+            <div key={change.id} className="rounded bg-muted/50 p-2">
+              <div className="font-medium">{change.label}</div>
+              {change.description ? <div className="text-muted-foreground">{change.description}</div> : null}
+              {change.fields && change.fields.length > 0 ? (
+                <div className="mt-1 text-muted-foreground">Fields: {change.fields.join(', ')}</div>
+              ) : null}
+            </div>
+          ))}
+          {undoPreview?.hasConflict && undoPreview.conflictFields.length > 0 ? (
+            <p className="text-amber-700 dark:text-amber-400">
+              Changed since this activity. Conflicting fields: {undoPreview.conflictFields.join(', ')}
+            </p>
+          ) : null}
+          {undoPreview?.requiresForce ? (
+            <div className="flex items-center justify-between gap-2">
+              <Label htmlFor={forceId} className="text-xs">Force undo (overwrite newer changes)</Label>
+              <Switch id={forceId} checked={force} onCheckedChange={setForce} />
+            </div>
+          ) : null}
+        </div>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={busy || rolledBack || !undoable}
+          onClick={undoChange}
+        >
+          <History aria-hidden="true" />
+          Undo this change
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={busy || rolledBack || pointCount === 0}
+          onClick={rollbackToPoint}
+        >
+          Rollback to this point
+        </Button>
+      </div>
+      {error ? <p role="alert" className="text-xs text-destructive">{error}</p> : null}
+    </div>
+  );
+}
+
+/**
+ * The page history body: search, All / AI filter, the retention meta, and grouped rows that
+ * expand into the changes to apply. Mounted inside the page-history sheet.
+ */
+export default function SidebarActivityTab({ pageId }: { readonly pageId: string }) {
+  const searchId = useId();
+  const [filter, setFilter] = useState<HistoryFilter>('all');
+  const [query, setQuery] = useState('');
+  const [versions, setVersions] = useState<HistoryVersion[]>([]);
+  const [retentionDays, setRetentionDays] = useState<number | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [openId, setOpenId] = useState<string | null>(null);
+
+  const loadHistory = useCallback(async () => {
     setLoading(true);
     setError(null);
-
+    const params = new URLSearchParams({ limit: String(PAGE_SIZE) });
+    // includeAiOnly is parsed as a boolean on the server, so it is only sent when it is true.
+    if (filter === 'ai') params.set('includeAiOnly', 'true');
     try {
-      const queryParams = new URLSearchParams({ context });
-      if (driveId) queryParams.set('driveId', driveId);
-      if (pageId) queryParams.set('pageId', pageId);
-
-      const response = await fetchWithAuth(`/api/activities?${queryParams}`);
-
-      if (response.ok) {
-        const data: ActivityResponse = await response.json();
-        setActivities(data.activities);
-      } else {
-        const errorData = await response.json().catch(() => ({}));
-        setError(errorData.error || 'Failed to load activity');
-        setActivities([]);
-      }
+      const data = await fetchJSON<HistoryResponse>(
+        `/api/pages/${encodeURIComponent(pageId)}/history?${params.toString()}`,
+      );
+      setVersions(data.versions);
+      setRetentionDays(data.retentionDays);
     } catch (err) {
-      console.error('Failed to load activities:', err);
-      setError('Failed to load activity');
-      setActivities([]);
+      setError(errorMessageOf(err, 'Failed to load page history'));
+      setVersions([]);
     } finally {
       setLoading(false);
     }
-  }, [context, driveId, pageId]);
+  }, [pageId, filter]);
 
   useEffect(() => {
-    loadActivities();
-  }, [loadActivities, pathname]);
-
-  // Real-time activity updates via socket
-  // Only enabled when viewing a specific drive or page (not user dashboard)
-  const activityContext: ActivityContext | null = pageId ? 'page' : driveId ? 'drive' : null;
-  const activityContextId = pageId || driveId || null;
+    void loadHistory();
+  }, [loadHistory]);
 
   useActivitySocket({
-    context: activityContext || 'drive', // Fallback for type, but won't be used when contextId is null
-    contextId: activityContextId,
-    onActivityLogged: loadActivities,
-    driveId: driveId ?? null,
-    pageId: pageId ?? null,
+    context: 'page',
+    contextId: pageId,
+    onActivityLogged: loadHistory,
+    driveId: null,
+    pageId,
   });
 
-  // Handle undo click - fetch preview and show confirm dialog
-  const handleActionClick = useCallback(async (activity: ActivityItem) => {
-    setSelectedActivityForRollback(activity);
+  const rolledBack = useMemo(() => rolledBackIds(versions), [versions]);
+  const visible = useMemo(() => filterVersions(versions, query), [versions, query]);
+  // Grouping depends on the day, so it is recomputed on each render rather than memoized.
+  const now = new Date();
+  const groups = groupVersions(visible, now);
 
-    try {
-      // All undo operations go through /rollback - server handles rollback-of-rollback
-      const data = await post<{ preview: ActivityActionPreview | null }>(`/api/activities/${activity.id}/rollback`, {
-        context: rollbackContext,
-        dryRun: true,
-      });
-      setPreview(data.preview ?? null);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to load rollback preview');
-      setPreview({
-        action: 'rollback',
-        canExecute: false,
-        reason: 'Preview unavailable. Please try again.',
-        warnings: [],
-        hasConflict: false,
-        conflictFields: [],
-        requiresForce: false,
-        isNoOp: false,
-        currentValues: null,
-        targetValues: null,
-        changes: [],
-        affectedResources: [],
-      });
-    }
-    setShowRollbackConfirm(true);
-  }, [rollbackContext]);
-
-  // Handle confirmed rollback
-  const handleConfirmAction = useCallback(async (force: boolean): Promise<ActivityActionResult> => {
-    if (!selectedActivityForRollback) {
-      throw new Error('No activity selected');
-    }
-
-    try {
-      const result = await post<ActivityActionResult>(`/api/activities/${selectedActivityForRollback.id}/rollback`, {
-        context: rollbackContext,
-        force,
-      });
-
-      toast.success(result.message || 'Action completed');
-
-      // Refresh the activity list
-      loadActivities();
-
-      return result;
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to rollback');
-      throw err;
-    }
-  }, [selectedActivityForRollback, rollbackContext, loadActivities]);
-
-  // Filter activities based on search query
-  const filteredActivities = useMemo(() => {
-    if (!searchQuery.trim()) return activities;
-    const query = searchQuery.toLowerCase();
-    return activities.filter(
-      (a) =>
-        a.resourceTitle?.toLowerCase().includes(query) ||
-        getActorDisplayName(a).toLowerCase().includes(query) ||
-        operationLabels[a.operation]?.toLowerCase().includes(query)
+  const pillClass = (on: boolean) =>
+    cn(
+      'h-7 rounded-md px-2.5 text-xs transition-colors',
+      on ? 'bg-background font-medium text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground',
     );
-  }, [activities, searchQuery]);
-
-  // Group consecutive activities for cleaner display
-  const groupedDisplayItems = useMemo(() => {
-    // Cast to ActivityLog for grouping (types are compatible)
-    const asActivityLogs = filteredActivities.map((a) => ({
-      ...a,
-      actorEmail: a.actorEmail ?? '',
-      userId: null,
-      driveId: null,
-      pageId: null,
-      updatedFields: null,
-      previousValues: null,
-      newValues: null,
-      rollbackFromActivityId: null,
-      rollbackSourceTimestamp: null,
-      rollbackSourceTitle: null,
-    })) as unknown as ActivityLog[];
-    return groupConsecutiveActivities(asActivityLogs);
-  }, [filteredActivities]);
-
-  // State for expanded groups
-  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
-
-  const toggleGroup = useCallback((groupId: string) => {
-    setExpandedGroups((prev) => {
-      const next = new Set(prev);
-      if (next.has(groupId)) {
-        next.delete(groupId);
-      } else {
-        next.add(groupId);
-      }
-      return next;
-    });
-  }, []);
-
-  // Loading state
-  if (loading) {
-    return (
-      <div className="flex flex-col h-full">
-        <div className="p-3 border-b border-[var(--separator)] space-y-2">
-          <Skeleton className="h-4 w-28" />
-          <Skeleton className="h-8 w-full" />
-        </div>
-        <div className="flex-grow p-2">
-          {[1, 2, 3, 4, 5].map((i) => (
-            <div key={i} className="py-2 px-2 space-y-1">
-              <Skeleton className="h-4 w-3/4" />
-              <Skeleton className="h-3 w-1/2" />
-            </div>
-          ))}
-        </div>
-      </div>
-    );
-  }
 
   return (
-    <div className="flex flex-col h-full">
-      {/* Header */}
-      <div className="p-3 border-b border-[var(--separator)] space-y-2">
-        <div className="flex items-center gap-2">
-          <Activity className="h-4 w-4 text-primary" />
-          <h3 className="text-sm font-medium">{headerText}</h3>
-        </div>
-        <div className="relative">
-          <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
-          <Input
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex flex-col gap-2.5 border-b p-3">
+        <div className="flex h-8 items-center gap-2 rounded-md bg-muted/50 px-2.5 text-muted-foreground">
+          <Search className="h-3.5 w-3.5" aria-hidden="true" />
+          <Label htmlFor={searchId} className="sr-only">Search activity</Label>
+          <input
+            id={searchId}
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
             placeholder="Search activity..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="pl-8 h-8 text-xs"
+            className="min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground"
           />
+        </div>
+        <div className="flex items-center gap-2.5">
+          <div role="group" aria-label="Show" className="flex rounded-md bg-muted/50 p-0.5">
+            <button
+              type="button"
+              aria-pressed={filter === 'all'}
+              onClick={() => setFilter('all')}
+              className={pillClass(filter === 'all')}
+            >
+              All changes
+            </button>
+            <button
+              type="button"
+              aria-pressed={filter === 'ai'}
+              onClick={() => setFilter('ai')}
+              className={pillClass(filter === 'ai')}
+            >
+              AI changes
+            </button>
+          </div>
+          <span className="ml-auto text-xs text-muted-foreground">
+            {retentionDays === null ? null : retentionLabelOf(retentionDays)}
+          </span>
         </div>
       </div>
 
-      {/* Activity List */}
-      <div className="flex-grow overflow-y-auto">
-        {error ? (
-          <div className="text-center py-8 px-4">
-            <Activity className="h-8 w-8 mx-auto text-muted-foreground mb-2 opacity-50" />
-            <p className="text-sm text-muted-foreground">{error}</p>
+      <div className="min-h-0 flex-1 overflow-auto px-2 pt-1.5 pb-4">
+        {loading && versions.length === 0 ? (
+          <div className="flex flex-col gap-3 p-2" aria-label="Loading page history">
+            <Skeleton className="h-10 w-full" />
+            <Skeleton className="h-10 w-full" />
+            <Skeleton className="h-10 w-full" />
           </div>
-        ) : groupedDisplayItems.length === 0 ? (
-          <div className="text-center py-8 px-4">
-            <Activity className="h-8 w-8 mx-auto text-muted-foreground mb-2 opacity-50" />
-            <p className="text-sm text-muted-foreground">
-              {searchQuery ? 'No matching activity' : 'No activity yet'}
-            </p>
-          </div>
-        ) : (
-          <div className="divide-y divide-[var(--separator)]">
-            {groupedDisplayItems.map((item) => {
-              if (item.type === 'single') {
-                // Render single activity
-                const activity = filteredActivities.find((a) => a.id === item.activity.id);
-                if (!activity) return null;
-                return (
-                  <div
-                    key={activity.id}
-                    className="py-2.5 px-3 hover:bg-accent/30 transition-colors group"
-                  >
-                    <div className="flex items-start gap-2">
-                      {/* User avatar or AI indicator */}
-                      {activity.isAiGenerated ? (
-                        <div className="h-6 w-6 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0">
-                          <Bot className="h-3 w-3 text-primary" />
-                        </div>
-                      ) : (
-                        <Avatar className="h-6 w-6 flex-shrink-0">
-                          <AvatarImage src={getActorAvatar(activity).image || undefined} />
-                          <AvatarFallback className="text-xs bg-muted">
-                            {getActorAvatar(activity).initial}
-                          </AvatarFallback>
-                        </Avatar>
-                      )}
+        ) : null}
+        {error ? <p role="alert" className="p-2 text-sm text-destructive">{error}</p> : null}
+        {!loading && !error && visible.length === 0 ? (
+          <p className="p-2 text-sm text-muted-foreground">
+            {filter === 'ai' ? 'No AI changes to show.' : 'No changes to show.'}
+          </p>
+        ) : null}
 
-                      <div className="flex-1 min-w-0">
-                        {/* Actor and action */}
-                        <div className="flex items-center gap-1 text-sm">
-                          <span className="font-medium truncate">
-                            {activity.isAiGenerated
-                              ? `${getActorDisplayName(activity)} (via AI)`
-                              : getActorDisplayName(activity)}
-                          </span>
-                        </div>
-
-                        {/* Operation and resource */}
-                        <div className="flex items-center gap-1.5 text-xs text-muted-foreground mt-0.5">
-                          {operationIcons[activity.operation] || (
-                            <Activity className="h-3 w-3" />
-                          )}
-                          <span>
-                            {getOperationLabel(activity)}
-                          </span>
-                          {activity.resourceTitle && (
-                            <>
-                              <span className="text-muted-foreground/60">-</span>
-                              <span className="truncate min-w-0">
-                                {activity.resourceTitle}
-                              </span>
-                            </>
-                          )}
-                        </div>
-
-                        {/* Timestamp and AI model */}
-                        <div className="flex items-center gap-2 mt-1">
-                          <span className="text-xs text-muted-foreground/70">
-                            {formatDistanceToNow(new Date(activity.timestamp), {
-                              addSuffix: true,
-                            })}
-                          </span>
-                          {activity.isAiGenerated && (
-                            <Badge
-                              variant="secondary"
-                              className="text-[10px] h-4 px-1.5 py-0"
-                            >
-                              {getUserFacingModelName(activity.aiProvider, activity.aiModel)}
-                            </Badge>
-                          )}
-                        </div>
-                      </div>
-
-                      {/* Rollback action */}
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-6 w-6 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity flex-shrink-0"
-                          >
-                            <MoreVertical className="h-3 w-3" />
-                            <span className="sr-only">Actions</span>
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end">
-                          <DropdownMenuItem onClick={() => handleActionClick(activity)}>
-                            <History className="h-4 w-4 mr-2" />
-                            Undo this change
-                          </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => {
-                            setSelectedActivityForRollbackToPoint(activity);
-                            setShowRollbackToPoint(true);
-                          }}>
-                            <RotateCcw className="h-4 w-4 mr-2" />
-                            Rollback to this point
-                          </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    </div>
-                  </div>
-                );
-              }
-
-              // Render group (collapsed by default)
-              const group = item as ActivityGroup;
-              const isExpanded = expandedGroups.has(group.id);
-              const GroupIcon = group.type === 'ai_stream' ? Bot : group.type === 'rollback' ? History : FileEdit;
-              const oldestActivity = filteredActivities.find((a) => a.id === group.activities[group.activities.length - 1].id);
-
+        {groups.map((group) => (
+          <div key={group.label}>
+            <div className="px-2 pt-3 pb-1.5 text-[11px] font-medium tracking-wider text-muted-foreground uppercase">
+              {group.label}
+            </div>
+            {group.items.map((version) => {
+              const open = openId === version.id;
+              const isRolledBack = rolledBack.has(version.id);
               return (
-                <Collapsible key={group.id} open={isExpanded} onOpenChange={() => toggleGroup(group.id)}>
-                  <div className="py-2.5 px-3 hover:bg-accent/30 transition-colors group">
-                    <div className="flex items-start gap-2">
-                      {/* Expand/collapse button */}
-                      <CollapsibleTrigger asChild>
-                        <Button variant="ghost" size="icon" className="h-5 w-5 shrink-0 -ml-1">
-                          {isExpanded ? (
-                            <ChevronDown className="h-3 w-3" />
-                          ) : (
-                            <ChevronRight className="h-3 w-3" />
-                          )}
-                        </Button>
-                      </CollapsibleTrigger>
-
-                      {/* Group icon */}
-                      <div className="h-6 w-6 rounded-full bg-muted flex items-center justify-center flex-shrink-0">
-                        <GroupIcon className="h-3 w-3 text-muted-foreground" />
-                      </div>
-
-                      <div className="flex-1 min-w-0">
-                        {/* Group label */}
-                        <div className="flex items-center gap-1 text-sm">
-                          <span className="font-medium truncate">
-                            {group.summary.label}
-                          </span>
-                        </div>
-
-                        {/* Actor and timestamp */}
-                        <div className="flex items-center gap-1.5 text-xs text-muted-foreground mt-0.5">
-                          <span>{group.summary.actorName}</span>
-                          <span className="text-muted-foreground/60">•</span>
-                          <span>
-                            {formatDistanceToNow(new Date(group.summary.timestamp), {
-                              addSuffix: true,
-                            })}
-                          </span>
-                        </div>
-                      </div>
-
-                      {/* Group rollback action */}
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-6 w-6 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity flex-shrink-0"
-                          >
-                            <MoreVertical className="h-3 w-3" />
-                            <span className="sr-only">Actions</span>
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end">
-                          <DropdownMenuItem onClick={() => {
-                            if (oldestActivity) {
-                              setSelectedActivityForRollbackToPoint(oldestActivity);
-                              setShowRollbackToPoint(true);
-                            }
-                          }}>
-                            <RotateCcw className="h-4 w-4 mr-2" />
-                            Undo all {group.activities.length} changes
-                          </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    </div>
-                  </div>
-
-                  {/* Expanded content */}
-                  <CollapsibleContent>
-                    <div className="pl-8 border-l-2 border-muted ml-4">
-                      {group.activities.map((groupActivity) => {
-                        const activity = filteredActivities.find((a) => a.id === groupActivity.id);
-                        if (!activity) return null;
-                        return (
-                          <div
-                            key={activity.id}
-                            className="py-2 px-3 hover:bg-accent/30 transition-colors group/item"
-                          >
-                            <div className="flex items-start gap-2">
-                              <div className="flex-1 min-w-0">
-                                <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                                  {operationIcons[activity.operation] || (
-                                    <Activity className="h-3 w-3" />
-                                  )}
-                                  <span>{getOperationLabel(activity)}</span>
-                                  {activity.resourceTitle && (
-                                    <>
-                                      <span className="text-muted-foreground/60">-</span>
-                                      <span className="truncate min-w-0">
-                                        {activity.resourceTitle}
-                                      </span>
-                                    </>
-                                  )}
-                                </div>
-                              </div>
-                              <DropdownMenu>
-                                <DropdownMenuTrigger asChild>
-                                  <Button
-                                    variant="ghost"
-                                    size="icon"
-                                    className="h-5 w-5 sm:opacity-0 sm:group-hover/item:opacity-100 transition-opacity flex-shrink-0"
-                                  >
-                                    <MoreVertical className="h-3 w-3" />
-                                  </Button>
-                                </DropdownMenuTrigger>
-                                <DropdownMenuContent align="end">
-                                  <DropdownMenuItem onClick={() => handleActionClick(activity)}>
-                                    <History className="h-4 w-4 mr-2" />
-                                    Undo this change
-                                  </DropdownMenuItem>
-                                </DropdownMenuContent>
-                              </DropdownMenu>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </CollapsibleContent>
-                </Collapsible>
+                <div key={version.id} className={cn('rounded-lg', open && 'bg-accent/40')}>
+                  <button
+                    type="button"
+                    aria-expanded={open}
+                    onClick={() => setOpenId(open ? null : version.id)}
+                    className="flex w-full items-start gap-2.5 p-2 text-left"
+                  >
+                    <span
+                      className={cn(
+                        'mt-0.5 flex h-7 w-7 flex-none items-center justify-center text-[10.5px] font-semibold',
+                        version.isAiGenerated ? 'rounded-lg bg-primary text-primary-foreground' : 'rounded-full bg-muted',
+                      )}
+                      aria-hidden="true"
+                    >
+                      {version.isAiGenerated ? <Sparkles className="h-3 w-3" /> : initialOf(version)}
+                    </span>
+                    <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                      <span className="text-sm leading-snug">
+                        <strong className="font-semibold">{actorOf(version)}</strong>{' '}
+                        <span className="text-muted-foreground">{verbOf(version)}</span>
+                      </span>
+                      <span className="text-xs leading-snug">{summaryOf(version)}</span>
+                      <span className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+                        <time dateTime={version.timestamp}>{timeLabelOf(version, now)}</time>
+                        {version.isAiGenerated ? (
+                          <Badge variant="outline" className="h-[18px] px-1.5 text-[11px]">
+                            AI · {aiViaOf(version)}
+                          </Badge>
+                        ) : null}
+                        {isRolledBack ? (
+                          <Badge variant="secondary" className="h-[18px] px-1.5 text-[11px]">Rolled back</Badge>
+                        ) : null}
+                      </span>
+                    </span>
+                  </button>
+                  {open ? (
+                    <HistoryRowDetail
+                      key={version.id}
+                      activityId={version.id}
+                      rolledBack={isRolledBack}
+                      onApplied={() => {
+                        setOpenId(null);
+                        void loadHistory();
+                      }}
+                    />
+                  ) : null}
+                </div>
               );
             })}
           </div>
-        )}
+        ))}
       </div>
-
-      {/* Footer */}
-      <div className="border-t border-[var(--separator)] p-3">
-        <div className="text-xs text-muted-foreground text-center">
-          {activities.length} {activities.length === 1 ? 'event' : 'events'}
-        </div>
-      </div>
-
-      {/* Rollback Confirmation Dialog */}
-      <RollbackConfirmDialog
-        open={showRollbackConfirm}
-        onOpenChange={setShowRollbackConfirm}
-        resourceTitle={selectedActivityForRollback?.resourceTitle ?? null}
-        operation={(() => {
-          const op = selectedActivityForRollback?.rollbackSourceOperation ?? selectedActivityForRollback?.operation ?? '';
-          return operationLabels[op] || op;
-        })()}
-        timestamp={selectedActivityForRollback?.timestamp || new Date().toISOString()}
-        preview={preview}
-        onConfirm={handleConfirmAction}
-      />
-
-      {/* Rollback to Point Dialog */}
-      <RollbackToPointDialog
-        open={showRollbackToPoint}
-        onOpenChange={setShowRollbackToPoint}
-        activityId={selectedActivityForRollbackToPoint?.id ?? null}
-        context={rollbackContext as RollbackToPointContext}
-        onSuccess={loadActivities}
-      />
     </div>
   );
 }

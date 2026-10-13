@@ -1,7 +1,11 @@
 import Link from "next/link";
+import { Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { StopUsingSignInWithAppleSteps } from "@/components/account/SignInWithAppleDeletionNotice";
+import { AuthLayout } from "@/components/auth/AuthLayout";
+import { AuthStatusCard } from "@/components/auth/AuthStatusCard";
+import { isImagoEnabled } from "@/lib/imago/imago-enabled";
 
 /**
  * Post-deletion landing page for every account deletion (the deletion itself is
@@ -10,6 +14,35 @@ import { StopUsingSignInWithAppleSteps } from "@/components/account/SignInWithAp
  * finish that step.
  */
 export function AccountDeletedView({ showAppleSignInSteps }: { showAppleSignInSteps: boolean }) {
+  if (isImagoEnabled()) {
+    return (
+      <AuthLayout>
+        <AuthStatusCard
+          icon={<Trash2 className="h-5 w-5" />}
+          title="Your account is being deleted"
+          action={
+            <>
+              {showAppleSignInSteps && (
+                <div className="space-y-2 text-left">
+                  <p className="text-sm font-medium text-[oklch(0.15_0.01_220)]">
+                    One more step: remove PageSpace from Sign in with Apple
+                  </p>
+                  <StopUsingSignInWithAppleSteps />
+                </div>
+              )}
+              {/* Stays in the app: `/` is the marketing site, which the iOS shell must not land on. */}
+              <Button asChild variant="outline" className="w-full">
+                <Link href="/auth/signin">Back to sign in</Link>
+              </Button>
+            </>
+          }
+        >
+          <p>You&apos;ve been signed out, and your data is being permanently removed.</p>
+        </AuthStatusCard>
+      </AuthLayout>
+    );
+  }
+
   return (
     <div className="flex items-center justify-center min-h-screen bg-muted dark:bg-background px-4">
       <Card className="w-full max-w-md">

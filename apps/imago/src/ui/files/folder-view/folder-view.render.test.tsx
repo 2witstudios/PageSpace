@@ -81,15 +81,19 @@ const rows = (container: HTMLElement) =>
     row.querySelector('time')?.getAttribute('datetime') ?? null,
   ]);
 
-/** The path bar as [text, href or null] per crumb. */
-const crumbs = (container: HTMLElement) =>
-  [...container.querySelectorAll('nav[aria-label="Folder path"] li')].map((crumb) => [
-    crumb.querySelector('a, [aria-current]')?.textContent,
-    crumb.querySelector('a')?.getAttribute('href') ?? null,
-  ]);
+/** The Folder tools strip, as [count label, Browse files href, New document button]. */
+const strip = (container: HTMLElement) => {
+  const toolbar = container.querySelector('[role="toolbar"][aria-label="Folder tools"]');
+  const buttons = [...(toolbar?.querySelectorAll('button') ?? [])];
+  return [
+    toolbar?.querySelector('span')?.textContent,
+    toolbar?.querySelector('a')?.getAttribute('href') ?? null,
+    buttons.map((button) => button.textContent),
+  ];
+};
 
 describe('renderFolderView() contents', () => {
-  test('a folder’s children, Finder-style', () => {
+  test('a folder’s children, in order, as linked rows with their name, type, kind and when they last changed', () => {
     assert({
       given: 'a folder holding a folder, a document and a sheet',
       should: 'list each in order as a linked row with its name, page type, kind and when it last changed',
@@ -102,26 +106,38 @@ describe('renderFolderView() contents', () => {
     });
   });
 
-  test('each row’s type icon', () => {
+  test('agent and task list kinds use the board’s names', () => {
+    const agent: FileNode = { id: 'a1', name: 'Planner', kind: 'page', pageType: 'AI_CHAT', updatedAt: '2026-10-05T09:12:00.000Z' };
+    const tasks: FileNode = { id: 't1', name: 'Launch tasks', kind: 'page', pageType: 'TASK_LIST', updatedAt: '2026-10-05T09:12:00.000Z' };
+    const folder: FileNode = { ...launch, count: 2, children: [agent, tasks] };
+    assert({
+      given: 'a folder holding an agent page and a task list',
+      should: 'call them "AI agent" and "Task list"',
+      actual: rows(html({ path: [work, folder] })).map((row) => row[3]),
+      expected: ['AI agent', 'Task list'],
+    });
+  });
+
+  test('each row’s coloured type dot', () => {
     const container = html();
     assert({
       given: 'a folder, a document and a sheet',
-      should: 'draw each row’s icon for its page type, as the tree does (folder, file-text, sheet)',
-      actual: [...container.querySelectorAll('tbody tr a svg')].map((icon) =>
-        [...icon.classList].find((cls) => cls.startsWith('lucide-') && cls !== 'lucide-icon'),
+      should: 'draw each row a dot in its page type’s colour',
+      actual: [...container.querySelectorAll('tbody tr [data-dot]')].map((dot) =>
+        [...dot.classList].find((cls) => cls.startsWith('text-type-')),
       ),
-      expected: ['lucide-folder', 'lucide-file-text', 'lucide-file-spreadsheet'],
+      expected: ['text-type-folder', 'text-type-doc', 'text-type-sheet'],
     });
   });
 
   test('columns', () => {
     assert({
       given: 'the table head',
-      should: 'name the Name, Kind and Modified columns',
+      should: 'name the Name, Type and Modified columns',
       actual: [...html().querySelectorAll('thead th')].map((cell) => [cell.textContent, cell.getAttribute('scope')]),
       expected: [
         ['Name', 'col'],
-        ['Kind', 'col'],
+        ['Type', 'col'],
         ['Modified', 'col'],
       ],
     });
@@ -133,52 +149,45 @@ describe('renderFolderView() contents', () => {
     const row = container.querySelectorAll('tbody tr')[3];
     assert({
       given: 'a page the viewer is creating here that the server has not named yet',
-      should: 'draw its row busy and unlinked, saying it is being created rather than when it changed',
+      should: 'draw its row busy and unlinked, with Creating… beside its name and no time yet',
       actual: [
         row?.querySelector('[data-name]')?.textContent,
         row?.querySelector('a'),
         row?.getAttribute('aria-busy'),
         row?.querySelector('[data-modified]')?.textContent,
+        row?.textContent?.includes('Creating…'),
         row?.className.includes('opacity-60'),
       ],
-      expected: ['Untitled Document', null, 'true', 'Creating…', true],
+      expected: ['Untitled Document', null, 'true', '—', true, true],
     });
   });
 });
 
-describe('renderFolderView() path', () => {
-  test('a breadcrumb from the drive to the folder', () => {
+describe('renderFolderView() strip', () => {
+  test('the folder’s name and page count, Browse files and New document', () => {
+    assert({
+      given: 'a folder holding three pages',
+      should: 'show "<name> · <n> pages", a Browse files link to the files section and a New document button',
+      actual: strip(html()),
+      expected: ['Launch · 3 pages', '/d1/files', ['New document']],
+    });
+  });
+
+  test('one page reads singular', () => {
+    assert({
+      given: 'a folder holding one page',
+      should: 'count it as "1 page"',
+      actual: strip(html({ path: [work, { ...launch, children: [brief] }] }))[0],
+      expected: 'Launch · 1 page',
+    });
+  });
+
+  test('the in-body path is gone', () => {
     assert({
       given: 'a folder inside a folder',
-      should: 'lead from Files through each ancestor, linked, to the folder itself, unlinked and current',
-      actual: crumbs(html()),
-      expected: [
-        ['Files', '/d1/files'],
-        ['Work', '/d1/files/work'],
-        ['Launch', null],
-      ],
-    });
-  });
-
-  test('the folder is the current crumb', () => {
-    const current = html().querySelector('nav[aria-label="Folder path"] [aria-current]');
-    assert({
-      given: 'the open folder',
-      should: 'mark its crumb as the current location',
-      actual: [current?.getAttribute('aria-current'), current?.textContent],
-      expected: ['location', 'Launch'],
-    });
-  });
-
-  test('a folder at the top of the drive', () => {
-    assert({
-      given: 'a folder with no folder above it',
-      should: 'lead from Files straight to it',
-      actual: crumbs(html({ path: [work] })),
-      expected: [
-        ['Files', '/d1/files'],
-        ['Work', null],
-      ],
+      should: 'draw no folder path nav in the body (the path lives in the page head)',
+      actual: html().querySelector('nav[aria-label="Folder path"]'),
+      expected: null,
     });
   });
 
@@ -199,14 +208,13 @@ describe('renderFolderView() empty', () => {
     const empty = container.querySelector('[data-empty]');
     assert({
       given: 'an empty folder',
-      should: 'show the empty state with New page in place of the table, keeping the path',
+      should: 'show the empty state in place of the table, with the strip still counting zero pages',
       actual: [
         empty?.querySelector('h2')?.textContent,
-        empty?.querySelector('button')?.textContent,
         container.querySelector('table'),
-        crumbs(container).map(([name]) => name),
+        strip(container)[0],
       ],
-      expected: ['This folder is empty', 'New page', null, ['Files', 'Work', 'Drafts']],
+      expected: ['This folder is empty', null, 'Drafts · 0 pages'],
     });
   });
 
@@ -220,14 +228,16 @@ describe('renderFolderView() empty', () => {
     });
   });
 
-  test('New page creates', () => {
+  test('New document creates', () => {
     const pressed: string[] = [];
     const container = mount(renderFolderView(props({ path: [drafts], create: () => pressed.push('create') })));
-    const button = container.querySelector('[data-empty] button');
-    if (!(button instanceof HTMLButtonElement)) throw new Error('no New page');
+    const button = [...container.querySelectorAll('[role="toolbar"] button')].find(
+      (candidate) => candidate.textContent === 'New document',
+    );
+    if (!(button instanceof HTMLButtonElement)) throw new Error('no New document');
     click(button);
     assert({
-      given: 'New page pressed in an empty folder',
+      given: 'New document pressed in an empty folder',
       should: 'run the create action once',
       actual: pressed,
       expected: ['create'],
@@ -235,10 +245,10 @@ describe('renderFolderView() empty', () => {
   });
 
   test('while a create is in flight', () => {
-    const button = html({ path: [drafts], creating: true }).querySelector('[data-empty] button');
+    const button = html({ path: [drafts], creating: true }).querySelector('[role="toolbar"] button');
     assert({
       given: 'a create in this drive still waiting for the server',
-      should: 'turn New page off',
+      should: 'turn New document off',
       actual: button?.hasAttribute('disabled'),
       expected: true,
     });

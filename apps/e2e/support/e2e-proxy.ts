@@ -16,7 +16,7 @@
  * With `E2E_IMAGO_TARGET` set it also plays the edge's `/imago` rule: apps/imago (basePath
  * `/imago`) on the same origin as web, so imago's signed-out redirect reaches classic's sign-in
  * on that origin and sign-in returns to the imago path it was given — the production round trip
- * that `next dev` on its own port cannot make (tests/27-imago-shell.spec.ts). The split itself
+ * that `next dev` on its own port cannot make (imago's signed-out round trip). The split itself
  * lives in e2e-proxy-routes.ts.
  *
  * Used by the `e2e` job in .github/workflows/ci.yml and by anyone reproducing the specs locally

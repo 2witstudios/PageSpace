@@ -1,24 +1,17 @@
 'use client';
 
-import Link from '@/retained-adapters/link';
-import { ArrowLeft } from 'lucide-react';
-import { Button } from '@/retained/components/ui/button';
+import { SettingsScreen } from '@/ui/settings/settings-screen/settings-screen';
 import { AgentAccountsPanel } from '@/retained/components/agent-accounts/AgentAccountsPanel';
 
 /**
- * Personal settings → Agent Accounts: API keys the signed-in person's global assistant can use (G2).
- * The same panel as an agent page's Accounts settings, scoped to accounts the person owns.
+ * Personal settings → Agent accounts: API keys the signed-in person's global assistant can use (G2).
+ * The same panel as an agent page's Accounts settings, scoped to accounts the person owns, laid out as
+ * the account route's screen (C-Account-AgentAccounts): one lede, the accounts, then the add form inline.
  */
 export default function AgentAccountsSettingsPage() {
   return (
-    <div className="container max-w-3xl mx-auto py-8 px-4 space-y-4">
-      <Button variant="ghost" size="sm" asChild>
-        <Link href="/settings">
-          <ArrowLeft className="h-4 w-4 mr-1" /> Settings
-        </Link>
-      </Button>
-      <h1 className="text-2xl font-semibold">Agent Accounts</h1>
-      <AgentAccountsPanel scope={{ kind: 'user' }} />
-    </div>
+    <SettingsScreen title="Agent accounts" lede="API keys Imago can use. It refers to an account by name and never sees the key.">
+      <AgentAccountsPanel scope={{ kind: 'user' }} layout="page" />
+    </SettingsScreen>
   );
 }

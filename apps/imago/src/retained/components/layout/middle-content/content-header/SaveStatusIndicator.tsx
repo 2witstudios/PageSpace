@@ -16,7 +16,7 @@ export function SaveStatusIndicator({ isDirty, isSaving }: SaveStatusIndicatorPr
         className="flex items-center gap-1 text-xs text-muted-foreground"
       >
         <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse" />
-        Saving...
+        Saving…
       </motion.div>
     );
   }

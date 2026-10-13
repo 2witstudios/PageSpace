@@ -2,11 +2,9 @@
 
 import { useEffect } from 'react';
 import useSWR from 'swr';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/retained/components/ui/card';
 import { Skeleton } from '@/retained/components/ui/skeleton';
-import { Boxes } from 'lucide-react';
 import { fetchWithAuth } from '@/retained/lib/auth/auth-fetch';
-import { formatCreditCount } from '@/retained/lib/subscription/credits';
+import { formatWholeCredits } from '@/retained/lib/subscription/credits';
 import { useSocketStore } from '@/retained/stores/useSocketStore';
 
 interface EnvironmentRow {
@@ -66,46 +64,46 @@ export function EnvironmentUsageCard() {
     };
   }, [socket, mutate]);
 
+  if (isLoading) {
+    return (
+      <div className="space-y-3">
+        <Skeleton className="h-4 w-40" />
+        <Skeleton className="h-4 w-full" />
+      </div>
+    );
+  }
+
+  if (error || !data) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        Could not load your environment usage. Please refresh and try again.
+      </p>
+    );
+  }
+
+  if (data.byEnvironment.length === 0) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        No environment usage yet this period. Environments you create in a drive keep their files
+        between sessions, and appear here once they do.
+      </p>
+    );
+  }
+
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <Boxes className="h-5 w-5" />
-          Environments
-        </CardTitle>
-        <CardDescription>Stored environment filesystems and their cost this period</CardDescription>
-      </CardHeader>
-      <CardContent>
-        {isLoading ? (
-          <div className="space-y-3">
-            <Skeleton className="h-4 w-40" />
-            <Skeleton className="h-4 w-full" />
-          </div>
-        ) : error || !data ? (
-          <p className="text-sm text-muted-foreground">
-            Could not load your environment usage. Please refresh and try again.
-          </p>
-        ) : data.byEnvironment.length === 0 ? (
-          <p className="text-sm text-muted-foreground">
-            No environment usage yet this period. Environments you create in a drive keep their files
-            between sessions, and appear here once they do.
-          </p>
-        ) : (
-          <div className="space-y-3">
-            {data.byEnvironment.map((environment) => (
-              <div
-                key={environment.envId ?? environment.label}
-                className="flex items-center justify-between gap-2 text-sm"
-              >
-                <span className="truncate font-medium">{environment.label}</span>
-                <span className="shrink-0 tabular-nums text-xs text-muted-foreground">
-                  {formatCreditCount(environment.spendCents)} cr · {environment.sharePct}%
-                </span>
-              </div>
-            ))}
-          </div>
-        )}
-      </CardContent>
-    </Card>
+    <div className="flex flex-col gap-2">
+      <h3 className="text-sm font-medium">Stored environments</h3>
+      {data.byEnvironment.map((environment) => (
+        <div
+          key={environment.envId ?? environment.label}
+          className="flex items-center justify-between gap-2 text-sm"
+        >
+          <span className="truncate font-medium">{environment.label}</span>
+          <span className="shrink-0 tabular-nums text-muted-foreground">
+            {formatWholeCredits(environment.spendCents)} credits · {environment.sharePct}%
+          </span>
+        </div>
+      ))}
+    </div>
   );
 }

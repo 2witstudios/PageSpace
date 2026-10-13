@@ -16,6 +16,8 @@ import type { TaskNodePath } from './task-tree-core';
 export interface TaskTreeContextValue {
   canEdit: boolean;
   driveId: string;
+  /** Rendered under the v3 page (renderTools given): rows take the Imago presentation. */
+  embedded: boolean;
   /**
    * The view-wide write machinery (self-write log + deferred revalidation).
    *

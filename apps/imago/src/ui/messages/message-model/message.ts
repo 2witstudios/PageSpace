@@ -73,6 +73,8 @@ export type DirectThread = {
   readonly kind: 'dm';
   readonly id: string;
   readonly name: string;
+  /** The other person's username, when their profile has one (the DM index shows it as @username). */
+  readonly username?: string | null;
   readonly avatarUrl: string | null;
   readonly otherUserId: string | null;
   readonly lastMessageAt: string | null;

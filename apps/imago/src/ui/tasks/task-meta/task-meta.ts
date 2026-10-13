@@ -42,3 +42,23 @@ export const dueToneOf = (dueDate: string | null, today: string, done: boolean):
   const day = dueDay(dueDate);
   return day === '' ? null : dueTone(day, today, done);
 };
+
+/** The window a due date falls in, by the viewer's own day: overdue, by the end of this week, or later. Null without a date. */
+export type DueWindow = 'overdue' | 'this_week' | 'later';
+
+const DAY_MS = 86_400_000;
+
+/**
+ * Where an open task's due date falls: before today (overdue), by the end of
+ * this week (Sunday, as GET /api/tasks's this_week reads it), or later. A
+ * done task is never overdue, and a task with no date has no window.
+ */
+export const dueWindowOf = (dueDate: string | null, today: string, done: boolean): DueWindow | null => {
+  const day = dueDay(dueDate);
+  if (day === '') return null;
+  if (done) return 'later';
+  const days = Math.round((Date.parse(day) - Date.parse(today)) / DAY_MS);
+  if (days < 0) return 'overdue';
+  const weekEnd = 7 - new Date(Date.parse(today)).getUTCDay();
+  return days <= weekEnd ? 'this_week' : 'later';
+};

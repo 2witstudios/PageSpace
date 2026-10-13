@@ -5,8 +5,10 @@ import { clientExtensions } from '@/retained/lib/editor/client-schema';
 import { BubbleMenu, FloatingMenu } from '@tiptap/react/menus';
 import React, { useEffect } from 'react';
 import { useRouter } from '@/retained-adapters/navigation';
-import { Bold, Italic, Strikethrough, Code, Heading1, Heading2, Heading3, Pilcrow, List, ListOrdered, Quote } from 'lucide-react';
+import { Bold, Italic, Heading1, Heading2, Heading3, Pilcrow, List, ListOrdered, Quote, Sparkles } from 'lucide-react';
 import { subscribeToNavigationEvents } from '@/retained/lib/navigation/app-navigation';
+import { dispatch, transactions } from '@/ui/store/transactions';
+import { getUiState } from '@/ui/store/store';
 import LinkButton from './LinkButton';
 
 interface RichEditorProps {
@@ -32,6 +34,16 @@ const getEditorRootElement = (editor: Editor | null): HTMLElement | null => {
   } catch {
     return null;
   }
+};
+
+/** Quotes the selected text for Imago's composer: each line prefixed with '> ', then a blank line. */
+export const buildAskQuote = (selectedText: string): string =>
+  `${selectedText.split('\n').map(line => `> ${line}`).join('\n')}\n\n`;
+
+/** Puts the selection into Imago's composer as a quote (keeping any draft after it) and opens Imago. */
+export const askImagoAboutSelection = (selectedText: string): void => {
+  dispatch(transactions.setChatDraft, buildAskQuote(selectedText) + getUiState().resources.chatDraft);
+  dispatch(transactions.openImago, undefined);
 };
 
 const serializeEditorContent = (editor: Editor, isMarkdownMode: boolean): string => {
@@ -220,20 +232,28 @@ const RichEditor = ({ value, onChange, onEditorChange, readOnly = false, isPagin
           editor={editor}
           pluginKey="bubbleMenu"
           shouldShow={({ from, to }) => {
-            // show the bubble menu when the user selects some text
+            // show the selection bubble when the user selects some text
             return from !== to;
           }}
+          role="toolbar"
+          aria-label="Selection"
           className="flex items-center gap-1 p-2 border rounded-md bg-card shadow-lg"
         >
-          <button onClick={() => editor.chain().focus().toggleBold().run()} className={`p-2 rounded ${editor.isActive('bold') ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}><Bold size={16} /></button>
-          <button onClick={() => editor.chain().focus().toggleItalic().run()} className={`p-2 rounded ${editor.isActive('italic') ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}><Italic size={16} /></button>
-          <button onClick={() => editor.chain().focus().toggleStrike().run()} className={`p-2 rounded ${editor.isActive('strike') ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}><Strikethrough size={16} /></button>
-          <button onClick={() => editor.chain().focus().toggleCode().run()} className={`p-2 rounded ${editor.isActive('code') ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}><Code size={16} /></button>
+          <button type="button" aria-label="Bold" aria-pressed={editor.isActive('bold')} onClick={() => editor.chain().focus().toggleBold().run()} className={`p-2 rounded ${editor.isActive('bold') ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}><Bold size={16} /></button>
+          <button type="button" aria-label="Italic" aria-pressed={editor.isActive('italic')} onClick={() => editor.chain().focus().toggleItalic().run()} className={`p-2 rounded ${editor.isActive('italic') ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}><Italic size={16} /></button>
           <LinkButton editor={editor} variant="bubble" />
-          <div className="w-[1px] h-6 bg-muted-foreground/50 mx-2" />
-          <button onClick={() => editor.chain().focus().toggleHeading({ level: 1 }).run()} className={`p-2 rounded ${editor.isActive('heading', { level: 1 }) ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}><Heading1 size={16} /></button>
-          <button onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()} className={`p-2 rounded ${editor.isActive('heading', { level: 2 }) ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}><Heading2 size={16} /></button>
-          <button onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()} className={`p-2 rounded ${editor.isActive('heading', { level: 3 }) ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}><Heading3 size={16} /></button>
+          <div className="w-px h-5 mx-1 bg-muted-foreground/50" aria-hidden="true" />
+          <button
+            type="button"
+            onClick={() => {
+              const { from, to } = editor.state.selection;
+              askImagoAboutSelection(editor.state.doc.textBetween(from, to, '\n'));
+            }}
+            className="flex items-center gap-1.5 h-8 px-2 rounded text-sm hover:bg-muted"
+          >
+            <Sparkles size={14} />
+            <span>Ask</span>
+          </button>
         </BubbleMenu>
       )}
       {editor && !editor.isDestroyed && isEditorViewMounted && !readOnly && (

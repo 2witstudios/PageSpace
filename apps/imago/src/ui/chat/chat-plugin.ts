@@ -51,7 +51,9 @@ export const chatPlugin = {
     readonly chatAgentLost: string | null;
     /** New chat is open: an empty thread, its conversation created by the first send. */
     readonly chatNew: boolean;
-  } => ({ streaming: null, chatDraft: '', chatConversationId: null, chatAgent: null, chatAgentLost: null, chatNew: false }),
+    /** What Imago's column body shows: the thread, or its History view (C-Chat-History). */
+    readonly chatView: 'thread' | 'history';
+  } => ({ streaming: null, chatDraft: '', chatConversationId: null, chatAgent: null, chatAgentLost: null, chatNew: false, chatView: 'thread' }),
   transactions: {
     startStreaming: (state: UiState, conversationId: string): UiState =>
       isStreaming(state, conversationId) ? state : withStreaming(state, { conversationId }),
@@ -60,12 +62,17 @@ export const chatPlugin = {
     setChatDraft: (state: UiState, chatDraft: string): UiState =>
       state.resources.chatDraft === chatDraft ? state : withResources(state, { chatDraft }),
     openConversation: (state: UiState, chatConversationId: string): UiState =>
-      state.resources.chatConversationId === chatConversationId && !state.resources.chatNew
+      state.resources.chatConversationId === chatConversationId && !state.resources.chatNew && state.resources.chatView === 'thread'
         ? state
-        : withResources(state, { chatConversationId, chatNew: false }),
+        : withResources(state, { chatConversationId, chatNew: false, chatView: 'thread' }),
     /** Opens an empty thread; the draft stays, and nothing is created until it is sent. */
     startNewChat: (state: UiState): UiState =>
-      state.resources.chatNew ? state : withResources(state, { chatConversationId: null, chatNew: true }),
+      state.resources.chatNew && state.resources.chatView === 'thread'
+        ? state
+        : withResources(state, { chatConversationId: null, chatNew: true, chatView: 'thread' }),
+    /** History in Imago's head swaps the column body to its History view, and back. */
+    toggleChatHistory: (state: UiState): UiState =>
+      withResources(state, { chatView: state.resources.chatView === 'history' ? 'thread' : 'history' }),
     /** Talks to another agent (null: Imago) in its latest conversation, leaving a new chat; the draft stays. */
     selectAgent: (state: UiState, chatAgent: ChatAgent | null): UiState =>
       sameAgent(state.resources.chatAgent, chatAgent) && state.resources.chatAgentLost === null

@@ -24,7 +24,7 @@ import {
   DialogTitle,
 } from '@/retained/components/ui/dialog';
 import { toast } from 'sonner';
-import { Fingerprint, Key, Trash2, Pencil, Shield, Loader2, AlertCircle } from 'lucide-react';
+import { Fingerprint, Shield, Loader2, AlertCircle } from 'lucide-react';
 import { useCSRFToken } from '@/retained/hooks/useCSRFToken';
 import { isDesktopPlatform, getDevicePlatformFields } from '@/retained/lib/desktop-auth';
 import { buildPasskeyRegisterExternalUrl } from '@/retained/components/auth/passkeyExternal';
@@ -283,13 +283,7 @@ export function PasskeyManager() {
   }
 
   return (
-    <div className="space-y-4">
-      {/* Description */}
-      <p className="text-sm text-muted-foreground">
-        Passkeys are a more secure and convenient way to sign in. Use your device&apos;s
-        fingerprint, face recognition, or security key.
-      </p>
-
+    <div className="space-y-3">
       {/* Loading state */}
       {isLoading && (
         <div className="flex items-center justify-center py-8">
@@ -307,61 +301,53 @@ export function PasskeyManager() {
 
       {/* Passkey list */}
       {!isLoading && !error && (
-        <div className="space-y-2">
+        <div className="rounded-xl border border-border">
           {passkeys.length === 0 ? (
-            <p className="text-sm text-muted-foreground py-4 text-center">
-              No passkeys registered yet.
-            </p>
+            <p className="py-4 text-center text-sm text-muted-foreground">No passkeys registered yet.</p>
           ) : (
             passkeys.map((passkey) => {
               const DeviceIcon = getDeviceIcon(passkey.deviceType);
+              const name = passkey.name || 'Unnamed Passkey';
               return (
                 <div
                   key={passkey.id}
-                  className="flex items-center justify-between p-3 border rounded-lg bg-card"
+                  className="flex min-h-[52px] items-center gap-3 border-b border-border px-3.5 py-2 last:border-b-0"
                 >
-                  <div className="flex items-center gap-3">
-                    <div className="p-2 rounded-full bg-muted">
-                      <DeviceIcon className="h-4 w-4 text-muted-foreground" />
-                    </div>
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <span className="font-medium">
-                          {passkey.name || 'Unnamed Passkey'}
+                  <DeviceIcon className="h-[18px] w-[18px] shrink-0 text-muted-foreground" aria-hidden="true" />
+                  <div className="flex min-w-0 flex-1 flex-col">
+                    <div className="flex items-center gap-2">
+                      <span className="truncate font-medium">{name}</span>
+                      {passkey.backedUp && (
+                        <span className="inline-flex h-[22px] items-center rounded-full bg-fill px-2 text-xs text-muted-foreground">
+                          Synced
                         </span>
-                        {passkey.backedUp && (
-                          <span className="text-xs px-1.5 py-0.5 bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400 rounded">
-                            Synced
-                          </span>
-                        )}
-                      </div>
-                      <div className="text-xs text-muted-foreground">
-                        Created {formatDate(passkey.createdAt)}
-                        {passkey.lastUsedAt && ` • Last used ${formatDate(passkey.lastUsedAt)}`}
-                      </div>
+                      )}
                     </div>
+                    <span className="text-xs text-muted-foreground">
+                      Added {formatDate(passkey.createdAt)}
+                      {passkey.lastUsedAt && ` · last used ${formatDate(passkey.lastUsedAt)}`}
+                    </span>
                   </div>
-                  <div className="flex items-center gap-1">
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      aria-label="Rename passkey"
-                      onClick={() => {
-                        setEditPasskey(passkey);
-                        setNewName(passkey.name || '');
-                      }}
-                    >
-                      <Pencil className="h-4 w-4" />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      aria-label="Delete passkey"
-                      onClick={() => setDeletePasskeyId(passkey.id)}
-                    >
-                      <Trash2 className="h-4 w-4 text-destructive" />
-                    </Button>
-                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    aria-label={`Rename ${name}`}
+                    onClick={() => {
+                      setEditPasskey(passkey);
+                      setNewName(passkey.name || '');
+                    }}
+                  >
+                    Rename
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="text-muted-foreground"
+                    aria-label={`Remove ${name}`}
+                    onClick={() => setDeletePasskeyId(passkey.id)}
+                  >
+                    Remove
+                  </Button>
                 </div>
               );
             })
@@ -370,23 +356,23 @@ export function PasskeyManager() {
       )}
 
       {/* Add passkey button */}
-      <Button
-        onClick={handleRegister}
-        disabled={isRegistering || isSupported === null}
-        className="w-full"
-      >
-        {isRegistering ? (
-          <>
-            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            Registering...
-          </>
-        ) : (
-          <>
-            <Key className="mr-2 h-4 w-4" />
-            Add Passkey
-          </>
-        )}
-      </Button>
+      <div className="flex justify-end">
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={handleRegister}
+          disabled={isRegistering || isSupported === null}
+        >
+          {isRegistering ? (
+            <>
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              Registering...
+            </>
+          ) : (
+            'Add passkey'
+          )}
+        </Button>
+      </div>
 
       {/* Delete confirmation dialog */}
       <AlertDialog open={!!deletePasskeyId} onOpenChange={() => setDeletePasskeyId(null)}>

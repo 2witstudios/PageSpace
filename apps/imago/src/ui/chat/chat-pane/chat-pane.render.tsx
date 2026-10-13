@@ -1,17 +1,13 @@
 import type { ReactNode, Ref, UIEventHandler } from 'react';
 import type { ChatDensity } from '../../frame/stage/stage';
-import { renderPaneHeader } from '../../frame/pane/pane-header';
+import { paneHeaderClass } from '../../frame/pane/pane-class';
+import { headControlClass } from '../../frame/controls/controls-class';
 import { Icon } from '../../components/icon/icon';
-import type { AgentMenu } from '../chat-agents/chat-agents';
 import type { ChatMessage } from '../chat-model/chat';
 import { renderChatMessage } from '../chat-message/chat-message.render';
 import {
-  chatAgentNameClass,
-  chatAgentPickerClass,
-  chatAgentSelectClass,
-  chatContextLabelClass,
+  chatChipClass,
   chatEmptyClass,
-  chatHeaderTitleClass,
   chatNoticeClass,
   chatPaneClass,
   chatScrollClass,
@@ -22,12 +18,18 @@ export type ChatPaneRenderProps = {
   readonly density: ChatDensity;
   /** The agent the conversation is with. */
   readonly agentName: string;
-  /** The agents the header offers, Imago's first; with none listed yet it names `agentName` only. */
-  readonly agents: AgentMenu;
-  /** Void action: the option the viewer picked. */
-  readonly selectAgent: (value: string) => void;
-  /** Ahead of the title: the hidden chat history's opener. */
+  /** The agent picker (IMC-2.1). */
+  readonly picker: ReactNode;
+  /** The context chip: the bare name of what Imago answers about; none on the chat home. */
+  readonly chip?: string | null;
+  /** History in the head; pressed while the History view shows. */
+  readonly onHistory: () => void;
+  readonly historyOpen?: boolean;
+  readonly onNewChat: () => void;
+  /** Show sidebar, at the start of the head while the pane is closed. */
   readonly leading?: ReactNode;
+  /** The head's closing control: Collapse Imago or Close Imago. */
+  readonly trailing?: ReactNode;
   /** What the agent answers against: the drive, the section, or the open object. */
   readonly contextLabel: string;
   /** Oldest first; undefined while the conversation loads. */
@@ -45,39 +47,35 @@ export type ChatPaneRenderProps = {
   readonly onScroll?: UIEventHandler<HTMLDivElement>;
 };
 
-const renderAgent = ({ agentName, agents, selectAgent }: ChatPaneRenderProps): ReactNode =>
-  agents.groups.length === 0 ? (
-    <span className={chatAgentNameClass}>{agentName}</span>
-  ) : (
-    <span className={chatAgentPickerClass}>
-      <select
-        aria-label="Agent"
-        value={agents.value}
-        className={chatAgentSelectClass}
-        onChange={(event) => selectAgent(event.currentTarget.value)}
-      >
-        {agents.groups.map((group) => (
-          <optgroup key={group.label} label={group.label}>
-            {group.options.map((option) => (
-              <option key={option.value} value={option.value} disabled={option.disabled}>
-                {option.title}
-              </option>
-            ))}
-          </optgroup>
-        ))}
-      </select>
-      <Icon name="chevronDown" size={12} />
-    </span>
-  );
+/** The context chip: what Imago answers about, the bare page or screen name (C-Files-Doc head). */
+const renderChip = (chip: string | null | undefined): ReactNode =>
+  chip === null || chip === undefined || chip === '' ? null : <span className={chatChipClass}>{chip}</span>;
 
-const renderTitle = (props: ChatPaneRenderProps): ReactNode => (
-  <span className={chatHeaderTitleClass}>
-    {renderAgent(props)}
-    <span className="text-ink-faint" aria-hidden="true">
-      /
-    </span>
-    <small className={chatContextLabelClass}>{props.contextLabel}</small>
-  </span>
+/**
+ * Imago's head (SPEC v3 "Assistant column", v3.1, v3.2): [Show sidebar] · the agent picker ·
+ * the context chip · History · New chat · Collapse Imago or Close Imago.
+ */
+const renderHead = (props: ChatPaneRenderProps): ReactNode => (
+  <header className={paneHeaderClass}>
+    {props.leading ?? null}
+    {props.picker}
+    {renderChip(props.chip)}
+    <span className="flex-1" />
+    <button
+      type="button"
+      className={headControlClass}
+      aria-label="Chat history"
+      title="History"
+      aria-pressed={props.historyOpen ?? false}
+      onClick={props.onHistory}
+    >
+      <Icon name="history" size={15} />
+    </button>
+    <button type="button" className={headControlClass} aria-label="New chat" title="New chat" onClick={props.onNewChat}>
+      <Icon name="newChat" size={15} />
+    </button>
+    {props.trailing ?? null}
+  </header>
 );
 
 /**
@@ -86,11 +84,11 @@ const renderTitle = (props: ChatPaneRenderProps): ReactNode => (
  * section; dense beside an open object, where the header names the object.
  */
 export function renderChatPane(props: ChatPaneRenderProps): ReactNode {
-  const { density, agentName, leading, messages, streamingMessageId, notice, citationDriveId, composer, scrollRef, onScroll } =
+  const { density, agentName, messages, streamingMessageId, notice, citationDriveId, composer, scrollRef, onScroll } =
     props;
   return (
-    <section className={chatPaneClass(density)} aria-label="Chat" data-density={density}>
-      {renderPaneHeader({ title: renderTitle(props), leading })}
+    <aside className={chatPaneClass(density)} aria-label="Imago" data-density={density}>
+      {renderHead(props)}
       {props.content !== undefined ? <>{notice === null ? null : <p role="alert" className={chatNoticeClass}>{notice}</p>}{props.content}</> : <>
       <div ref={scrollRef} onScroll={onScroll} className={chatScrollClass}>
         <ol className={chatThreadClass(density)} aria-busy={messages === undefined ? true : undefined}>
@@ -116,6 +114,6 @@ export function renderChatPane(props: ChatPaneRenderProps): ReactNode {
       </div>
       {composer}
       </>}
-    </section>
+    </aside>
   );
 }

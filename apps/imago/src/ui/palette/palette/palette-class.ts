@@ -38,3 +38,13 @@ export const paletteDriveClass = 'flex-none truncate text-2xs text-ink-faint';
 
 /** Searching, nothing found, or a failure, under the field. */
 export const paletteNoteClass = 'px-3 py-row-y text-sm text-ink-muted';
+
+/** A group's heading in the results: Pages, Users. */
+export const paletteGroupClass = 'flex flex-col';
+
+export const paletteGroupLabelClass = 'px-2 pt-2 pb-1 text-2xs font-semibold text-ink-faint';
+
+/** The keyboard hints under the results. */
+export const paletteFooterClass = 'flex flex-wrap gap-3 border-t border-hairline px-3 py-row-y text-2xs text-ink-faint';
+
+export const paletteKbdClass = 'rounded-md border border-hairline px-1 font-mono';

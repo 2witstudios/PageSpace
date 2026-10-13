@@ -20,6 +20,11 @@ interface TaskListHeaderProps {
   descriptionOpen?: boolean;
   onDescriptionToggle?: () => void;
   canEdit: boolean;
+  /**
+   * The v3 page type owns the view switch (its strip's Table/Board) and the description is
+   * shown inline, so only the self-task controls and save status remain here.
+   */
+  embedded?: boolean;
 }
 
 export function TaskListHeader({
@@ -29,10 +34,23 @@ export function TaskListHeader({
   descriptionOpen,
   onDescriptionToggle,
   canEdit,
+  embedded = false,
 }: TaskListHeaderProps) {
   const isDirty  = useDocumentManagerStore((s: DocumentManagerState) => s.documents.get(pageId)?.isDirty ?? false);
   const isSaving = useDocumentManagerStore((s: DocumentManagerState) => s.savingDocuments.has(pageId));
-  const showSaveStatus = canEdit && (viewMode === 'editor' || descriptionOpen);
+  const showSaveStatus = canEdit && (viewMode === 'editor' || descriptionOpen || embedded);
+
+  if (embedded) {
+    // No bar of its own: it disappears entirely when there is no self-task and nothing to save.
+    return (
+      <div className="flex items-center gap-2 px-4 empty:hidden shrink-0">
+        <SelfTaskControls pageId={pageId} canEdit={canEdit} />
+        {showSaveStatus && (
+          <SaveStatusIndicator isDirty={isDirty} isSaving={isSaving} />
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="flex items-center justify-between gap-2 px-3 py-1.5 @[700px]:px-4 @[700px]:py-2 border-b bg-background shrink-0">

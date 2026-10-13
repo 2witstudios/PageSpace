@@ -68,7 +68,7 @@ export function DriveShareLinkSection({ driveId }: { driveId: string }) {
   };
 
   return (
-    <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-4 space-y-3">
+    <div className="space-y-3">
       <div>
         <h3 className="text-sm font-medium flex items-center gap-2">
           <Link2 className="h-4 w-4" />
@@ -137,7 +137,7 @@ export function DriveShareLinkSection({ driveId }: { driveId: string }) {
             }
           >
             <Select value={selectedRoleToSelectValue(selectedRole)} onValueChange={handleRoleChange}>
-              <SelectTrigger className="w-40 h-8">
+              <SelectTrigger className="w-40 h-8" aria-label="New link as">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -180,7 +180,7 @@ export function DriveShareLinkSection({ driveId }: { driveId: string }) {
               className="flex-1"
             >
               <Link2 className="mr-1.5 h-3.5 w-3.5" />
-              {isGenerating ? 'Generating…' : 'New invite link'}
+              {isGenerating ? 'Creating…' : 'Create link'}
             </Button>
           </div>
         </>

@@ -188,3 +188,66 @@ export type TaskListSummary = {
   readonly pageId: string;
   readonly title: string;
 };
+
+/** A due-date window GET /api/tasks?context=drive answers with dueDateFilter. */
+export type DueDateFilter = 'overdue' | 'today' | 'this_week' | 'upcoming';
+
+/** GET /api/tasks's statusGroup: the active statuses, the done ones, or both. */
+export type StatusGroupFilter = 'active' | 'completed' | 'all';
+
+/**
+ * One task from GET /api/tasks?context=drive: the task as GET /tasks returns it,
+ * with the list it sits in and that status's group, label and colour.
+ */
+export type DriveTaskResponse = TaskItemResponse & {
+  readonly driveId: string;
+  readonly taskListPageId: string;
+  readonly taskListPageTitle: string;
+  readonly statusGroup: StatusGroup;
+  readonly statusLabel: string;
+  readonly statusColor: string;
+};
+
+/** GET /api/tasks?context=drive. */
+export type DriveTasksResponse = {
+  readonly tasks: readonly DriveTaskResponse[];
+  readonly pagination: {
+    readonly total: number;
+    readonly limit: number;
+    readonly offset: number;
+    readonly hasMore: boolean;
+  };
+};
+
+/** One row of GET /api/tasks/[taskId]/triggers: a task trigger with its workflow's agent and prompt. */
+export type TaskTriggerResponse = {
+  readonly id: string;
+  readonly triggerType: 'due_date' | 'completion';
+  readonly nextRunAt: string | null;
+  readonly lastFiredAt: string | null;
+  readonly lastFireError: string | null;
+  readonly isEnabled: boolean;
+  readonly agentPageId: string | null;
+  readonly prompt: string | null;
+};
+
+/** GET /api/tasks/[taskId]/triggers. */
+export type TaskTriggersResponse = {
+  readonly triggers: readonly TaskTriggerResponse[];
+};
+
+/** One row of GET /api/activities; `user` is the account behind it when there is one. */
+export type ActivityResponse = {
+  readonly id: string;
+  readonly timestamp: string;
+  readonly operation: string;
+  readonly actorDisplayName: string | null;
+  readonly isAiGenerated: boolean;
+  readonly updatedFields: readonly string[] | null;
+  readonly user?: { readonly name: string | null } | null;
+};
+
+/** GET /api/activities. */
+export type ActivitiesResponse = {
+  readonly activities: readonly ActivityResponse[];
+};

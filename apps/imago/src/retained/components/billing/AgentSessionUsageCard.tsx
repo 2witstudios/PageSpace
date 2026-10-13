@@ -2,11 +2,9 @@
 
 import { useEffect } from 'react';
 import useSWR from 'swr';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/retained/components/ui/card';
 import { Skeleton } from '@/retained/components/ui/skeleton';
-import { Bot } from 'lucide-react';
 import { fetchWithAuth } from '@/retained/lib/auth/auth-fetch';
-import { formatCreditCount } from '@/retained/lib/subscription/credits';
+import { formatWholeCredits } from '@/retained/lib/subscription/credits';
 import { useSocketStore } from '@/retained/stores/useSocketStore';
 
 interface AgentSessionRow {
@@ -66,45 +64,57 @@ export function AgentSessionUsageCard() {
     };
   }, [socket, mutate]);
 
+  if (isLoading) {
+    return (
+      <div className="space-y-3">
+        <Skeleton className="h-4 w-40" />
+        <Skeleton className="h-4 w-full" />
+      </div>
+    );
+  }
+
+  if (error || !data) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        Could not load your agent session usage. Please refresh and try again.
+      </p>
+    );
+  }
+
+  if (data.byAgentSession.length === 0) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        No agent session usage yet this period. Run code in an agent to spin one up.
+      </p>
+    );
+  }
+
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <Bot className="h-5 w-5" />
-          Agent sessions
-        </CardTitle>
-        <CardDescription>Agent sandbox runtime and cost this period</CardDescription>
-      </CardHeader>
-      <CardContent>
-        {isLoading ? (
-          <div className="space-y-3">
-            <Skeleton className="h-4 w-40" />
-            <Skeleton className="h-4 w-full" />
-          </div>
-        ) : error || !data ? (
-          <p className="text-sm text-muted-foreground">
-            Could not load your agent session usage. Please refresh and try again.
-          </p>
-        ) : data.byAgentSession.length === 0 ? (
-          <p className="text-sm text-muted-foreground">
-            No agent session usage yet this period. Run code in an agent to spin one up.
-          </p>
-        ) : (
-          <div className="space-y-3">
-            {data.byAgentSession.map((session) => (
-              <div
-                key={session.pageId ?? session.label}
-                className="flex items-center justify-between gap-2 text-sm"
-              >
-                <span className="truncate font-medium">{session.label}</span>
-                <span className="shrink-0 tabular-nums text-xs text-muted-foreground">
-                  {formatRuntime(session.activeSeconds)} · {formatCreditCount(session.spendCents)} cr
-                </span>
-              </div>
-            ))}
-          </div>
-        )}
-      </CardContent>
-    </Card>
+    <div className="overflow-x-auto">
+      <table className="w-full min-w-[420px] border-collapse text-sm">
+        <thead>
+          <tr className="text-left text-xs text-muted-foreground">
+            <th className="border-b border-border pb-2 font-medium">Agent</th>
+            <th className="border-b border-border pb-2 font-medium">Runtime</th>
+            <th className="border-b border-border pb-2 text-right font-medium">Calls</th>
+            <th className="border-b border-border pb-2 text-right font-medium">Credits</th>
+          </tr>
+        </thead>
+        <tbody>
+          {data.byAgentSession.map((session) => (
+            <tr key={session.pageId ?? session.label}>
+              <td className="border-b border-border/60 py-2.5 pr-3 font-medium">{session.label}</td>
+              <td className="border-b border-border/60 py-2.5 pr-3 tabular-nums">
+                {formatRuntime(session.activeSeconds)}
+              </td>
+              <td className="border-b border-border/60 py-2.5 pr-3 text-right tabular-nums">{session.calls}</td>
+              <td className="border-b border-border/60 py-2.5 text-right tabular-nums">
+                {formatWholeCredits(session.spendCents)}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }

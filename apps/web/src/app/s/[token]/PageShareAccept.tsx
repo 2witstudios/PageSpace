@@ -7,6 +7,14 @@ import { Button } from '@/components/ui/button';
 import { useAuth } from '@/hooks/useAuth';
 import { useCSRFToken } from '@/hooks/useCSRFToken';
 import type { ShareTokenInfo } from '@pagespace/lib/permissions/share-link-service';
+import { isImagoEnabled } from '@/lib/imago/imago-enabled';
+import {
+  V3_BUTTON_PRIMARY,
+  V3_H1,
+  V3_LEAD,
+  V3_SPINNER,
+  V3_STRONG,
+} from '@/components/auth/authCardV3';
 
 interface PageShareAcceptProps {
   token: string;
@@ -45,7 +53,11 @@ export function PageShareAccept({ token, info }: PageShareAcceptProps) {
           setError(data.message ?? 'Your request is waiting for approval.');
           return;
         }
-        router.push(`/dashboard/${data.driveId}/${data.pageId}`);
+        router.push(
+          isImagoEnabled()
+            ? `/imago/${data.driveId}/files/${data.pageId}`
+            : `/dashboard/${data.driveId}/${data.pageId}`,
+        );
       } catch (err) {
         if ((err as Error).name === 'AbortError') return;
         setError('Something went wrong. Please try again.');
@@ -55,6 +67,24 @@ export function PageShareAccept({ token, info }: PageShareAcceptProps) {
     accept();
     return () => controller.abort();
   }, [isAuthenticated, csrfToken, token, router]);
+
+  if (!authLoading && !isAuthenticated && isImagoEnabled()) {
+    return (
+      <div>
+        <h1 className={V3_H1}>You’re invited</h1>
+        <p className={V3_LEAD}>
+          Sign in to open <strong className={V3_STRONG}>{info.pageTitle ?? 'this page'}</strong>.
+        </p>
+        <button
+          type="button"
+          className={`${V3_BUTTON_PRIMARY} mt-6`}
+          onClick={() => router.push(`/auth/signin?next=/s/${token}`)}
+        >
+          Sign in to continue
+        </button>
+      </div>
+    );
+  }
 
   if (!authLoading && !isAuthenticated) {
     return (
@@ -90,6 +120,19 @@ export function PageShareAccept({ token, info }: PageShareAcceptProps) {
         <Link href="/dashboard">
           <Button variant="outline" className="w-full">Go to dashboard</Button>
         </Link>
+      </div>
+    );
+  }
+
+  if (isImagoEnabled()) {
+    return (
+      <div className="space-y-4">
+        <p className={V3_LEAD}>
+          Opening <strong className={V3_STRONG}>{info.pageTitle ?? 'page'}</strong>…
+        </p>
+        <div className="flex justify-center">
+          <div className={V3_SPINNER} />
+        </div>
       </div>
     );
   }

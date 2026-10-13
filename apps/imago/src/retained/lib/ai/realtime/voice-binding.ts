@@ -82,7 +82,7 @@ export type VoiceBinding =
  * addressing field, and carrying the agent explicitly is what lets a switch
  * between two agents be recognised as a rebind even mid-resolution.
  */
-const agentTarget = (agentId: string, conversationId: string): VoiceTarget => ({
+export const agentTarget = (agentId: string, conversationId: string): VoiceTarget => ({
   conversationId,
   type: 'page',
   contextId: agentId,

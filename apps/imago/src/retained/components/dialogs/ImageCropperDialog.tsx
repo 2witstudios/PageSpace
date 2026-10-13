@@ -162,7 +162,7 @@ export function ImageCropperDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="sm:max-w-[480px]">
         <DialogHeader>
           <DialogTitle>Crop Avatar</DialogTitle>
         </DialogHeader>
@@ -172,6 +172,7 @@ export function ImageCropperDialog({
             <RadioGroup
               value={shape}
               onValueChange={(value) => setShape(value as CropShape)}
+              aria-label="Crop shape"
               className="flex gap-4"
             >
               <div className="flex items-center space-x-2">

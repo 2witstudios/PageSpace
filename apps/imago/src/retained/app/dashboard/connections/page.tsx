@@ -3,13 +3,10 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '@/retained/hooks/useAuth';
 import { useRouter } from '@/retained-adapters/navigation';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/retained/components/ui/card';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/retained/components/ui/tabs';
 import { Avatar, AvatarFallback, AvatarImage } from '@/retained/components/ui/avatar';
 import { Button } from '@/retained/components/ui/button';
 import { Input } from '@/retained/components/ui/input';
-import { Badge } from '@/retained/components/ui/badge';
-import { UserPlus, UserMinus, UserCheck, UserX, MessageSquare, MoreVertical, User, Mail, Ban } from 'lucide-react';
+import { UserCheck, UserX, MessageSquare, MoreVertical, UserMinus, Ban, Mail } from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -23,7 +20,11 @@ import { VerificationRequiredAlert } from '@/retained/components/VerificationReq
 import { post, patch, del, fetchWithAuth } from '@/retained/lib/auth/auth-fetch';
 import { useSocket } from '@/retained/hooks/useSocket';
 import { useNotificationStore } from '@/retained/stores/useNotificationStore';
-import { BlockedUsersList } from '@/retained/components/moderation/BlockedUsersList';
+import {
+  SettingsGroup,
+  SettingsScreen,
+  SettingsSection,
+} from '@/ui/settings/settings-screen/settings-screen';
 
 const fetcher = async (url: string) => {
   const response = await fetchWithAuth(url);
@@ -39,6 +40,7 @@ interface Connection {
   requestedAt: string;
   acceptedAt: string | null;
   requestMessage: string | null;
+  blockedBy?: string | null;
   user: {
     id: string;
     name: string;
@@ -53,14 +55,13 @@ interface Connection {
 }
 
 export default function ConnectionsPage() {
-  const { mutate: mutate } = useSWRConfig();
-  const { } = useAuth();
+  const { mutate } = useSWRConfig();
+  const { user } = useAuth();
   const router = useRouter();
   const socket = useSocket();
   const [email, setEmail] = useState('');
-  const [isSubmitting, setIsSubmitting] = useState(false);
   const [isInviting, setIsInviting] = useState(false);
-  const [invitableEmail, setInvitableEmail] = useState<string | null>(null);
+  const [filter, setFilter] = useState('');
   const [showVerificationAlert, setShowVerificationAlert] = useState(false);
 
   // Fetch accepted connections
@@ -70,13 +71,35 @@ export default function ConnectionsPage() {
   );
 
   // Fetch pending connections
-  const { data: pendingData, error: pendingError } = useSWR<{ connections: Connection[] }>(
+  const { data: pendingData } = useSWR<{ connections: Connection[] }>(
     '/api/connections?status=PENDING',
+    fetcher
+  );
+
+  // Fetch blocked connections; only the blocker can lift a block
+  const { data: blockedData } = useSWR<{ connections: Connection[] }>(
+    '/api/connections?status=BLOCKED',
     fetcher
   );
 
   const acceptedConnections = acceptedData?.connections || [];
   const pendingConnections = pendingData?.connections || [];
+  const blockedConnections = (blockedData?.connections || []).filter(
+    (connection) => connection.blockedBy === user?.id
+  );
+
+  const normalizedFilter = filter.trim().toLowerCase();
+  const visibleAccepted = normalizedFilter
+    ? acceptedConnections.filter((connection) => {
+        const haystack = [
+          connection.user.displayName,
+          connection.user.name,
+          connection.user.username,
+          connection.user.email,
+        ];
+        return haystack.some((value) => value?.toLowerCase().includes(normalizedFilter));
+      })
+    : acceptedConnections;
 
   useEffect(() => {
     if (!socket) return;
@@ -94,80 +117,33 @@ export default function ConnectionsPage() {
     return () => { socket.off('notification:new', handleNotification); };
   }, [socket]);
 
-  const handleSendConnectionRequest = async () => {
-    const trimmedEmail = email.trim().toLowerCase();
-    if (!trimmedEmail) return;
-
-    setInvitableEmail(null);
-    setIsSubmitting(true);
-    try {
-      const response = await fetchWithAuth(`/api/connections/search?email=${encodeURIComponent(trimmedEmail)}`);
-      if (!response.ok) throw new Error('Failed to search for user');
-
-      const data = await response.json();
-
-      if (!data.user) {
-        // The search endpoint now returns a single generic `{ user: null }` for
-        // every non-actionable case (no account, self-search, or an existing
-        // PENDING/ACCEPTED/BLOCKED relationship) so relationship state cannot be
-        // enumerated. Offer the invite path uniformly; /api/connections/invite
-        // enforces the real rules (dedupe, blocks, self) when a request is sent.
-        setInvitableEmail(trimmedEmail);
-        return;
-      }
-
-      const targetUser = data.user;
-      await post('/api/connections', { targetUserId: targetUser.id });
-
-      const recipientLabel = targetUser.displayName || targetUser.name;
-      toast.success(`Connection request sent to ${recipientLabel} (${targetUser.email})`);
-      setEmail('');
-      mutate('/api/connections?status=PENDING');
-    } catch (error) {
-      const errorMessage = (error as Error).message;
-      if (errorMessage.includes('requiresEmailVerification') || errorMessage.includes('verification')) {
-        setShowVerificationAlert(true);
-        return;
-      }
-
-      toast.error(errorMessage || 'Failed to send connection request');
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  const handleSendRequestOrInvite = async () => {
-    if (!invitableEmail) return;
-    const targetEmail = invitableEmail;
+  // The invite endpoint handles both members (a PENDING request) and non-members (an email invite),
+  // and enforces the real rules. Its outcome is reported uniformly so it reveals nothing about
+  // another person's account or relationship state.
+  const handleSendRequest = async () => {
+    const targetEmail = email.trim().toLowerCase();
+    if (!targetEmail) return;
 
     setIsInviting(true);
     try {
-      try {
-        await post('/api/connections/invite', { email: targetEmail });
-      } catch (error) {
-        const errorMessage = (error as Error).message ?? '';
-        // Only caller-side conditions are safe to surface — they reveal nothing
-        // about the target's account or relationship state.
-        if (/verification|requiresEmailVerification/i.test(errorMessage)) {
-          setShowVerificationAlert(true);
-          return;
-        }
-        if (/too many/i.test(errorMessage)) {
-          toast.error('Too many requests right now. Please try again later.');
-          return;
-        }
-        // Everything else — already connected / pending / blocked / self / "invite
-        // already pending" / generic failure — falls through to the SAME uniform
-        // confirmation below. The connections/search response is intentionally
-        // generic (L2); surfacing these distinguishing outcomes here would let a
-        // user recover the existence/relationship state it conceals.
+      await post('/api/connections/invite', { email: targetEmail });
+    } catch (error) {
+      const errorMessage = (error as Error).message ?? '';
+      if (/verification|requiresEmailVerification/i.test(errorMessage)) {
+        setShowVerificationAlert(true);
+        return;
       }
-      toast.success(`If ${targetEmail} can be reached, your connection request is on its way.`);
-      setEmail('');
-      setInvitableEmail(null);
+      if (/too many/i.test(errorMessage)) {
+        toast.error('Too many requests right now. Please try again later.');
+        return;
+      }
+      // Everything else falls through to the uniform confirmation below.
     } finally {
       setIsInviting(false);
     }
+    toast.success(`If ${targetEmail} can be reached, your connection request is on its way.`);
+    setEmail('');
+    mutate('/api/connections?status=PENDING');
   };
 
   const handleBlockUser = async (userId: string, name: string) => {
@@ -180,6 +156,16 @@ export default function ConnectionsPage() {
     } catch (error) {
       toast.error('Failed to block user');
       console.error('Block user error:', error);
+    }
+  };
+
+  const handleUnblockUser = async (userId: string, name: string) => {
+    try {
+      await del(`/api/users/${encodeURIComponent(userId)}/block`);
+      toast.success(`${name} is unblocked`);
+      mutate('/api/connections?status=BLOCKED');
+    } catch {
+      toast.error(`Could not unblock ${name}`);
     }
   };
 
@@ -234,253 +220,206 @@ export default function ConnectionsPage() {
   };
 
   return (
-    <div className="container max-w-6xl mx-auto py-8 px-4">
-      <div className="mb-8">
-        <h1 className="text-3xl font-bold">Connections</h1>
-        <p className="text-muted-foreground mt-2">
-          Manage your connections and find new people to connect with
-        </p>
-      </div>
+    <SettingsScreen
+      title="Connections"
+      lede="People you’ve connected with can message you directly and be added to your drives."
+    >
+      <form
+        className="flex flex-col gap-2"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void handleSendRequest();
+        }}
+      >
+        <label htmlFor="cn-email" className="text-sm font-medium text-foreground">
+          Send a connection request
+        </label>
+        <div className="flex gap-2">
+          <Input
+            id="cn-email"
+            type="email"
+            placeholder="Enter email address"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            disabled={isInviting}
+          />
+          <Button type="submit" disabled={isInviting || !email.trim()}>
+            <Mail className="mr-2 h-4 w-4" />
+            {isInviting ? 'Sending...' : 'Send request'}
+          </Button>
+        </div>
+        <span className="text-xs text-muted-foreground">
+          If they don’t have an account yet, we’ll email them an invite instead.
+        </span>
+        {showVerificationAlert && (
+          <div className="mt-2">
+            <VerificationRequiredAlert onDismiss={() => setShowVerificationAlert(false)} />
+          </div>
+        )}
+      </form>
 
-      <Tabs defaultValue="connections" className="space-y-6">
-        <TabsList className="flex w-full flex-col sm:grid sm:grid-cols-3 h-auto">
-          <TabsTrigger value="connections" className="w-full">
-            <span className="truncate">Connections</span>
-            {acceptedConnections.length > 0 && <span className="ml-1 shrink-0">({acceptedConnections.length})</span>}
-          </TabsTrigger>
-          <TabsTrigger value="pending" className="w-full">
-            <span className="truncate">Pending</span>
-            {pendingConnections.length > 0 && <Badge className="ml-1.5 shrink-0">{pendingConnections.length}</Badge>}
-          </TabsTrigger>
-          <TabsTrigger value="discover" className="w-full">
-            <span className="truncate">Add Connection</span>
-          </TabsTrigger>
-        </TabsList>
+      {pendingConnections.length > 0 && (
+        <SettingsSection title={`Pending ${pendingConnections.length}`}>
+          <SettingsGroup>
+            {pendingConnections.map((connection) => {
+              const displayName = connection.user.displayName || connection.user.name;
+              const isIncoming = !connection.isRequester;
+              const when = formatDistanceToNow(new Date(connection.requestedAt), { addSuffix: true });
 
-        {/* Accepted Connections */}
-        <TabsContent value="connections">
-          <Card>
-            <CardHeader>
-              <CardTitle>Your Connections</CardTitle>
-              <CardDescription>
-                People you&apos;re connected with on PageSpace
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              {acceptedError ? (
-                <p className="text-center text-muted-foreground py-8">
-                  Failed to load connections
-                </p>
-              ) : acceptedConnections.length === 0 ? (
-                <div className="text-center py-8">
-                  <User className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-                  <p className="text-muted-foreground">
-                    You don&apos;t have any connections yet
-                  </p>
-                  <p className="text-sm text-muted-foreground mt-2">
-                    Search for people to connect with in the Discover tab
-                  </p>
+              return (
+                <div key={connection.id} className="flex items-start gap-3 px-4 py-3">
+                  <Avatar className="h-10 w-10 shrink-0">
+                    <AvatarImage src={connection.user.image || connection.user.avatarUrl || ''} />
+                    <AvatarFallback>{displayName.charAt(0).toUpperCase()}</AvatarFallback>
+                  </Avatar>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium text-foreground">
+                      {displayName}{' '}
+                      <span className="font-normal text-muted-foreground">{connection.user.email}</span>
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {isIncoming ? `Sent you a request ${when}` : when}
+                    </p>
+                    {connection.requestMessage && (
+                      <p className="mt-1 text-sm leading-relaxed text-foreground">“{connection.requestMessage}”</p>
+                    )}
+                  </div>
+                  {isIncoming ? (
+                    <div className="flex shrink-0 items-center gap-2">
+                      <Button
+                        variant="default"
+                        size="sm"
+                        aria-label="Accept request"
+                        onClick={() => handleConnectionAction(connection.id, 'accept')}
+                      >
+                        <UserCheck className="h-4 w-4 sm:mr-2" />
+                        <span className="hidden sm:inline">Accept</span>
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        aria-label="Decline request"
+                        onClick={() => handleConnectionAction(connection.id, 'reject')}
+                      >
+                        <UserX className="h-4 w-4 sm:mr-2" />
+                        <span className="hidden sm:inline">Decline</span>
+                      </Button>
+                    </div>
+                  ) : (
+                    <span className="shrink-0 text-xs text-muted-foreground">Sent · awaiting reply</span>
+                  )}
                 </div>
-              ) : (
-                <div className="space-y-4">
-                  {acceptedConnections.map((connection) => {
-                    const displayName = connection.user.displayName || connection.user.name;
-                    return (
-                      <div key={connection.id} className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 border rounded-lg">
-                        <div className="flex items-center gap-3 min-w-0">
-                          <Avatar className="h-10 w-10 shrink-0">
-                            <AvatarImage src={connection.user.image || connection.user.avatarUrl || ''} />
-                            <AvatarFallback>{displayName.charAt(0).toUpperCase()}</AvatarFallback>
-                          </Avatar>
-                          <div className="min-w-0">
-                            <p className="font-medium truncate">{displayName}</p>
-                            <p className="text-sm text-muted-foreground truncate">{connection.user.email}</p>
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-2 shrink-0 self-end sm:self-auto">
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            aria-label="Message"
-                            onClick={() => handleStartConversation(connection.user.id)}
-                          >
-                            <MessageSquare className="h-4 w-4 sm:mr-2" />
-                            <span className="hidden sm:inline">Message</span>
-                          </Button>
-                          <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                              <Button variant="ghost" size="icon">
-                                <MoreVertical className="h-4 w-4" />
-                              </Button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent align="end">
-                              <DropdownMenuItem
-                                onClick={() => handleConnectionAction(connection.id, 'remove')}
-                                className="text-destructive"
-                              >
-                                <UserMinus className="h-4 w-4 mr-2" />
-                                Remove Connection
-                              </DropdownMenuItem>
-                              <DropdownMenuItem
-                                onClick={() => void handleBlockUser(connection.user.id, displayName)}
-                                className="text-destructive"
-                              >
-                                <Ban className="h-4 w-4 mr-2" />
-                                Block
-                              </DropdownMenuItem>
-                            </DropdownMenuContent>
-                          </DropdownMenu>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-              <div className="mt-6">
-                <BlockedUsersList />
-              </div>
-            </CardContent>
-          </Card>
-        </TabsContent>
+              );
+            })}
+          </SettingsGroup>
+        </SettingsSection>
+      )}
 
-        {/* Pending Connections */}
-        <TabsContent value="pending">
-          <Card>
-            <CardHeader>
-              <CardTitle>Pending Requests</CardTitle>
-              <CardDescription>
-                Connection requests waiting for your response
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              {pendingError ? (
-                <p className="text-center text-muted-foreground py-8">
-                  Failed to load pending requests
-                </p>
-              ) : pendingConnections.length === 0 ? (
-                <p className="text-center text-muted-foreground py-8">
-                  No pending connection requests
-                </p>
-              ) : (
-                <div className="space-y-4">
-                  {pendingConnections.map((connection) => {
-                    const displayName = connection.user.displayName || connection.user.name;
-                    const isIncoming = !connection.isRequester;
-
-                    return (
-                      <div key={connection.id} className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 border rounded-lg">
-                        <div className="flex items-center gap-3 min-w-0">
-                          <Avatar className="h-10 w-10 shrink-0">
-                            <AvatarImage src={connection.user.image || connection.user.avatarUrl || ''} />
-                            <AvatarFallback>{displayName.charAt(0).toUpperCase()}</AvatarFallback>
-                          </Avatar>
-                          <div className="min-w-0">
-                            <p className="font-medium truncate">{displayName}</p>
-                            <p className="text-sm text-muted-foreground truncate">{connection.user.email}</p>
-                            <p className="text-xs text-muted-foreground">
-                              {isIncoming ? 'Sent you a request' : 'Request sent'} {' '}
-                              {formatDistanceToNow(new Date(connection.requestedAt), { addSuffix: true })}
-                            </p>
-                            {connection.requestMessage && (
-                              <p className="text-sm mt-1 line-clamp-2">{connection.requestMessage}</p>
-                            )}
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-2 shrink-0 self-end sm:self-auto">
-                          {isIncoming ? (
-                            <>
-                              <Button
-                                variant="default"
-                                size="sm"
-                                aria-label="Accept request"
-                                onClick={() => handleConnectionAction(connection.id, 'accept')}
-                              >
-                                <UserCheck className="h-4 w-4 sm:mr-2" />
-                                <span className="hidden sm:inline">Accept</span>
-                              </Button>
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                aria-label="Decline request"
-                                onClick={() => handleConnectionAction(connection.id, 'reject')}
-                              >
-                                <UserX className="h-4 w-4 sm:mr-2" />
-                                <span className="hidden sm:inline">Decline</span>
-                              </Button>
-                            </>
-                          ) : (
-                            <Badge variant="secondary">Pending</Badge>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
+      <SettingsSection
+        title={`Your connections ${acceptedConnections.length}`}
+        actions={
+          <Input
+            aria-label="Filter connections"
+            placeholder="Filter"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            className="h-8 w-44"
+          />
+        }
+      >
+        {acceptedError ? (
+          <p className="py-6 text-center text-sm text-muted-foreground">Failed to load connections</p>
+        ) : acceptedConnections.length === 0 ? (
+          <p className="py-6 text-center text-sm text-muted-foreground">You don&apos;t have any connections yet.</p>
+        ) : (
+          <SettingsGroup>
+            {visibleAccepted.map((connection) => {
+              const displayName = connection.user.displayName || connection.user.name;
+              const since = formatDistanceToNow(new Date(connection.acceptedAt ?? connection.requestedAt), { addSuffix: true });
+              return (
+                <div key={connection.id} className="flex items-center gap-3 px-4 py-3">
+                  <Avatar className="h-10 w-10 shrink-0">
+                    <AvatarImage src={connection.user.image || connection.user.avatarUrl || ''} />
+                    <AvatarFallback>{displayName.charAt(0).toUpperCase()}</AvatarFallback>
+                  </Avatar>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium text-foreground">
+                      {displayName}{' '}
+                      {connection.user.username && (
+                        <span className="font-normal text-muted-foreground">@{connection.user.username}</span>
+                      )}
+                    </p>
+                    <p className="truncate text-xs text-muted-foreground">
+                      {connection.user.email} · connected {since}
+                    </p>
+                  </div>
+                  <Button variant="outline" size="sm" onClick={() => handleStartConversation(connection.user.id)}>
+                    <MessageSquare className="mr-2 h-4 w-4" />
+                    Message
+                  </Button>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="ghost" size="icon" aria-label={`More actions for ${displayName}`}>
+                        <MoreVertical className="h-4 w-4" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem
+                        onClick={() => handleConnectionAction(connection.id, 'remove')}
+                        className="text-destructive"
+                      >
+                        <UserMinus className="mr-2 h-4 w-4" />
+                        Remove Connection
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        onClick={() => void handleBlockUser(connection.user.id, displayName)}
+                        className="text-destructive"
+                      >
+                        <Ban className="mr-2 h-4 w-4" />
+                        Block
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                 </div>
-              )}
-            </CardContent>
-          </Card>
-        </TabsContent>
+              );
+            })}
+            {visibleAccepted.length === 0 && (
+              <p className="px-4 py-6 text-center text-sm text-muted-foreground">No connections match “{filter.trim()}”.</p>
+            )}
+          </SettingsGroup>
+        )}
+      </SettingsSection>
 
-        {/* Add Connection by Email */}
-        <TabsContent value="discover">
-          <Card>
-            <CardHeader>
-              <CardTitle>Add Connection</CardTitle>
-              <CardDescription>
-                Connect with other PageSpace users by entering their email address
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              {showVerificationAlert && (
-                <div className="mb-4">
-                  <VerificationRequiredAlert onDismiss={() => setShowVerificationAlert(false)} />
-                </div>
-              )}
-              <div className="space-y-4">
-                <div className="flex gap-2">
-                  <Input
-                    type="email"
-                    placeholder="Enter email address"
-                    value={email}
-                    onChange={(e) => {
-                      setEmail(e.target.value);
-                      if (invitableEmail) setInvitableEmail(null);
-                    }}
-                    onKeyDown={(e) => e.key === 'Enter' && handleSendConnectionRequest()}
-                    disabled={isSubmitting || isInviting}
-                  />
+      <SettingsSection title={`Blocked ${blockedConnections.length}`}>
+        {blockedConnections.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            No one is blocked. People you block can’t message you or send you connection requests.
+          </p>
+        ) : (
+          <SettingsGroup>
+            {blockedConnections.map((connection) => {
+              const name = connection.user.displayName || connection.user.name;
+              return (
+                <div key={connection.id} className="flex items-center gap-3 px-4 py-3">
+                  <Avatar className="h-10 w-10 shrink-0">
+                    <AvatarImage src={connection.user.image || connection.user.avatarUrl || ''} />
+                    <AvatarFallback>{name.charAt(0).toUpperCase()}</AvatarFallback>
+                  </Avatar>
+                  <p className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">{name}</p>
                   <Button
-                    onClick={handleSendConnectionRequest}
-                    disabled={isSubmitting || isInviting || !email.trim()}
+                    variant="outline"
+                    size="sm"
+                    aria-label={`Unblock ${name}`}
+                    onClick={() => void handleUnblockUser(connection.user.id, name)}
                   >
-                    <UserPlus className="h-4 w-4 mr-2" />
-                    {isSubmitting ? 'Searching...' : 'Find User'}
+                    Unblock
                   </Button>
                 </div>
-                {invitableEmail && (
-                  <div className="flex items-start gap-3 rounded-lg border border-dashed p-4">
-                    <Mail className="h-5 w-5 text-muted-foreground mt-0.5 shrink-0" />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium">Send a connection request</p>
-                      <p className="text-sm text-muted-foreground truncate">
-                        We&apos;ll reach {invitableEmail} — inviting them to PageSpace if they&apos;re not a member yet.
-                      </p>
-                    </div>
-                    <Button
-                      size="sm"
-                      onClick={handleSendRequestOrInvite}
-                      disabled={isInviting}
-                    >
-                      <Mail className="h-4 w-4 mr-2" />
-                      {isInviting ? 'Sending...' : 'Send request'}
-                    </Button>
-                  </div>
-                )}
-              </div>
-            </CardContent>
-          </Card>
-        </TabsContent>
-      </Tabs>
-    </div>
+              );
+            })}
+          </SettingsGroup>
+        )}
+      </SettingsSection>
+    </SettingsScreen>
   );
 }

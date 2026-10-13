@@ -1,12 +1,25 @@
 'use client';
 
 import { motion } from 'motion/react';
+import { isImagoEnabled } from '@/lib/imago/imago-enabled';
 
 interface AuthDividerProps {
   delay?: number;
 }
 
 export function AuthDivider({ delay = 0.4 }: AuthDividerProps) {
+  if (isImagoEnabled()) {
+    return (
+      <div
+        role="separator"
+        className="my-5 flex items-center gap-3 text-xs uppercase tracking-[0.06em] text-[oklch(0.60_0.012_220)]"
+      >
+        <span className="h-px flex-1 bg-[oklch(0.90_0.005_230)]" />
+        or
+        <span className="h-px flex-1 bg-[oklch(0.90_0.005_230)]" />
+      </div>
+    );
+  }
   return (
     <motion.div
       className="relative my-6"

@@ -10,6 +10,7 @@ import { todayOf } from '../../time/time';
 import { fileHref, isCreatingIn, useCreateFile } from '../create-file/create-file';
 import { onlyListed, pathTo, withPendingCreates } from '../tree-view/tree-view';
 import { useFileTree } from '../use-file-tree/use-file-tree';
+import { browseHref } from '../files-browser/files-browser-model';
 import { renderFolderView } from './folder-view.render';
 
 export type FolderViewProps = {
@@ -29,8 +30,8 @@ const systemNow = (): Date => new Date();
  * children and the path down to it, read from the drive's tree, the one the
  * tree pane shows, so the browser lists exactly what the drive tree lists
  * and never asks the children route (which checks only the parent). It is
- * live with the tree; New page in an empty folder is the tree pane's create,
- * aimed at this folder.
+ * live with the tree; New document in the Folder tools strip creates a
+ * document in this folder.
  */
 export function FolderView({ driveId, folderId, now = systemNow }: FolderViewProps): ReactNode {
   const router = useRouter();
@@ -68,7 +69,8 @@ export function FolderView({ driveId, folderId, now = systemNow }: FolderViewPro
   }
   return renderFolderView({
     path,
-    filesHref,
+    // The Browse files link opens this folder in the browser: its path of ids from the top of the drive.
+    filesHref: browseHref(driveId, path),
     hrefFor,
     pendingIds: drawn.pendingIds,
     today: todayOf(now()),

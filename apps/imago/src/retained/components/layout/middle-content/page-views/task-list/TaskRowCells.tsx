@@ -12,7 +12,7 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from '@/retained/components/ui/dropdown-menu';
 import {
-  MoreHorizontal, Pencil, Trash2, FileText, Zap, Bell,
+  MoreHorizontal, Pencil, Trash2, FileText, Zap,
   ChevronRight, ChevronDown, ListPlus,
 } from 'lucide-react';
 import { cn } from '@/retained/lib/utils';
@@ -26,6 +26,7 @@ import {
   getStatusOrder,
   isCompletedStatus,
   PRIORITY_CONFIG,
+  type TaskPriority,
 } from './task-list-types';
 import {
   canExpandNode,
@@ -34,6 +35,26 @@ import {
 } from './task-tree-core';
 import { useTaskTree } from './task-tree-context';
 import { SubTaskProgress } from './SubTaskProgress';
+import { TaskTriggerBadge } from './TaskTriggerBadge';
+
+/** How many of the three bars a priority fills; the board's Pri. column. */
+const PRIORITY_BARS: Record<TaskPriority, number> = { low: 1, medium: 2, high: 3 };
+
+/** Three rising bars, filled up to the priority's level. The trigger carries the name. */
+export function PriorityBars({ priority }: { readonly priority: TaskPriority }) {
+  const filled = PRIORITY_BARS[priority];
+  return (
+    <span aria-hidden="true" className="flex h-3.5 w-7 items-end gap-0.5">
+      {[1, 2, 3].map((level) => (
+        <span
+          key={level}
+          className={cn('w-1.5 rounded-sm', level <= filled ? 'bg-foreground' : 'bg-muted')}
+          style={{ height: `${level * 4 + 2}px` }}
+        />
+      ))}
+    </span>
+  );
+}
 
 /**
  * The seven cells of a task row, after the drag handle.
@@ -65,7 +86,7 @@ export function TaskRowCells({
   task, depth, listPageId, path, isExpanded, statusConfigs, handlers, onAddSubTask,
 }: TaskRowCellsProps) {
   const {
-    canEdit, driveId, onNavigate, openTriggerDialog,
+    canEdit, driveId, embedded, onNavigate, openTriggerDialog,
     toggleExpanded, editingTaskId, editingTitle,
     onEditingTitleChange, onCancelEdit,
   } = useTaskTree();
@@ -182,13 +203,24 @@ export function TaskRowCells({
           onValueChange={(value) => handlers.onPriorityChange(loc, value)}
           disabled={!canEdit}
         >
-          <SelectTrigger aria-label={`Priority of ${task.title}`} className="h-8 w-28">
-            <SelectValue>
-              <Badge className={cn('text-xs', PRIORITY_CONFIG[task.priority].color)}>
-                {PRIORITY_CONFIG[task.priority].label}
-              </Badge>
-            </SelectValue>
-          </SelectTrigger>
+          {embedded ? (
+            <SelectTrigger
+              aria-label={`Priority ${PRIORITY_CONFIG[task.priority].label}`}
+              className="h-8 w-auto gap-1 border-0 px-1 shadow-none"
+            >
+              <SelectValue>
+                <PriorityBars priority={task.priority} />
+              </SelectValue>
+            </SelectTrigger>
+          ) : (
+            <SelectTrigger aria-label={`Priority of ${task.title}`} className="h-8 w-28">
+              <SelectValue>
+                <Badge className={cn('text-xs', PRIORITY_CONFIG[task.priority].color)}>
+                  {PRIORITY_CONFIG[task.priority].label}
+                </Badge>
+              </SelectValue>
+            </SelectTrigger>
+          )}
           <SelectContent>
             {Object.entries(PRIORITY_CONFIG).map(([key, { label, color }]) => (
               <SelectItem key={key} value={key}>
@@ -208,17 +240,11 @@ export function TaskRowCells({
             onUpdate={(assigneeIds) => handlers.onMultiAssigneeChange?.(loc, assigneeIds)}
             disabled={!canEdit}
           />
-          {canEdit && (task.activeTriggerCount ?? 0) > 0 && (
-            <button
-              type="button"
-              onClick={() => openTriggerDialog(task, listPageId)}
-              title="Agent trigger configured — click to edit"
-              aria-label="Agent trigger configured — click to edit"
-              className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-amber-300/60 bg-amber-50 text-amber-700 hover:bg-amber-100 dark:border-amber-700/50 dark:bg-amber-950/40 dark:text-amber-300"
-            >
-              <Bell className="h-3 w-3" />
-              <span className="sr-only">Agent trigger configured</span>
-            </button>
+          {canEdit && (
+            <TaskTriggerBadge
+              count={task.activeTriggerCount ?? 0}
+              onOpen={() => openTriggerDialog(task, listPageId)}
+            />
           )}
         </div>
       </TableCell>

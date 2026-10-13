@@ -2,6 +2,7 @@
 @import './theme/reset.css';
 @import './theme/components.css';
 @import './theme/frame.css';
+@import './theme/v3.css';
 @source not '../retained';
 
 /* Tests hold deliberately bad class strings (lint probes, negative
@@ -76,7 +77,7 @@
     rgba(255, 255, 255, 0.03)
   );
   /* The frame's own 1px lines: PageSpace's separator weight. */
-  --hairline: light-dark(oklch(0.15 0.01 220 / 0.08), oklch(0.94 0 0 / 0.12));
+  --hairline: light-dark(oklch(0.9 0.005 230 / 0.8), oklch(0.94 0 0 / 0.12));
 
   /* Borders */
   --border: light-dark(oklch(0.9 0.005 230), oklch(0.32 0 0));

@@ -6,19 +6,22 @@ import postcss from 'postcss';
 import { describe, test } from 'vitest';
 import { assert } from 'riteway/vitest';
 import {
+  folderBodyClass,
+  folderBrowseClass,
   folderCellClass,
-  folderCrumbClass,
-  folderCrumbCurrentClass,
-  folderCrumbItemClass,
-  folderCrumbSeparatorClass,
+  folderContentClass,
+  folderCountClass,
+  folderCreatingClass,
+  folderDotClass,
   folderHeadClass,
+  folderHeadEndClass,
+  folderKindClass,
   folderLinkClass,
-  folderMetaClass,
   folderNameClass,
-  folderPathClass,
   folderRowClass,
   folderTableClass,
   folderViewClass,
+  folderWhenClass,
 } from './folder-view-class';
 
 const appDir = join(dirname(fileURLToPath(import.meta.url)), '../../../app');
@@ -36,6 +39,24 @@ const selectorOf = (cls: string): string => `.${cls.replace(/[:/.]/g, (char) => 
 
 const row = 'border-b border-hairline transition-colors duration-120 ease-standard hover:bg-surface-overlay';
 
+const parts = [
+  folderViewClass,
+  folderCountClass,
+  folderBrowseClass,
+  folderBodyClass,
+  folderContentClass,
+  folderTableClass,
+  folderHeadClass,
+  folderHeadEndClass,
+  folderCellClass,
+  folderDotClass,
+  folderLinkClass,
+  folderNameClass,
+  folderCreatingClass,
+  folderKindClass,
+  folderWhenClass,
+];
+
 describe('folderRowClass()', () => {
   test('a listed row and one being created', () => {
     assert({
@@ -50,56 +71,47 @@ describe('folderRowClass()', () => {
 describe('folder browser parts', () => {
   test('exact classes', () => {
     assert({
-      given: 'the browser, its path bar, its table and the cells of a row',
-      should: 'stack the path over a full-width list of quiet 32px rows: name at full ink, kind and time muted',
+      given: 'the browser, its tools strip, its table and the cells of a row',
+      should: 'fill the object column under a strip, with a 44px row per page: name at full ink, kind and time muted',
       actual: [
         folderViewClass,
-        folderPathClass,
-        folderCrumbItemClass,
-        folderCrumbClass,
-        folderCrumbCurrentClass,
-        folderCrumbSeparatorClass,
+        folderCountClass,
+        folderBrowseClass,
+        folderBodyClass,
+        folderContentClass,
         folderTableClass,
         folderHeadClass,
+        folderHeadEndClass,
         folderCellClass,
+        folderDotClass,
         folderLinkClass,
         folderNameClass,
-        folderMetaClass,
+        folderCreatingClass,
+        folderKindClass,
+        folderWhenClass,
       ],
       expected: [
-        'flex h-full flex-col gap-4 p-4',
-        'flex min-w-0 flex-wrap items-center gap-1 text-sm text-ink-muted',
-        'flex items-center gap-1',
-        'text-ink-muted no-underline hover:text-ink',
-        'font-semibold text-ink',
-        'text-ink-faint',
+        'flex h-full min-h-0 flex-col',
+        'whitespace-nowrap text-xs text-ink-muted',
+        'ml-2 inline-flex items-center gap-2 whitespace-nowrap rounded-md border border-hairline px-2 py-1 text-sm text-ink no-underline hover:bg-surface-overlay',
+        'min-h-0 flex-1 overflow-auto px-10 pb-12 pt-5',
+        'mx-auto max-w-folder',
         'w-full border-collapse text-sm',
-        'h-8 border-b border-hairline px-2 text-left text-xs font-medium text-ink-faint',
-        'h-8 px-2',
-        'flex min-w-0 items-center gap-2 text-ink no-underline hover:no-underline',
+        'border-b border-hairline px-2 pb-2 text-left text-xs font-medium text-ink-muted',
+        'border-b border-hairline px-2 pb-2 text-left text-xs font-medium text-ink-muted text-right',
+        'h-10 px-2',
+        'inline-block size-2 shrink-0 rounded-full bg-current',
+        'flex min-w-0 items-center gap-2 font-medium text-ink no-underline hover:no-underline',
         'min-w-0 truncate',
-        'h-8 whitespace-nowrap px-2 text-ink-muted',
+        'text-xs font-normal text-ink-faint',
+        'h-10 whitespace-nowrap px-2 text-ink-muted',
+        'h-10 whitespace-nowrap px-2 text-right tabular-nums text-ink-muted',
       ],
     });
   });
 
   test('every class resolves against the theme', async () => {
-    const classes = [
-      folderRowClass(false),
-      folderRowClass(true),
-      folderViewClass,
-      folderPathClass,
-      folderCrumbItemClass,
-      folderCrumbClass,
-      folderCrumbCurrentClass,
-      folderCrumbSeparatorClass,
-      folderTableClass,
-      folderHeadClass,
-      folderCellClass,
-      folderLinkClass,
-      folderNameClass,
-      folderMetaClass,
-    ]
+    const classes = [folderRowClass(false), folderRowClass(true), ...parts]
       .flatMap((list) => list.split(' '))
       .filter((cls, index, all) => all.indexOf(cls) === index);
     const css = await compile(classes);

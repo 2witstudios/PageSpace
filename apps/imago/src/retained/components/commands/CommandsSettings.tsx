@@ -2,7 +2,6 @@
 
 import React, { useMemo, useState } from 'react';
 import Link from '@/retained-adapters/link';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/retained/components/ui/card';
 import { Button } from '@/retained/components/ui/button';
 import { Switch } from '@/retained/components/ui/switch';
 import { Badge } from '@/retained/components/ui/badge';
@@ -23,7 +22,9 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/retained/components/ui/alert-dialog';
-import { Loader2, MoreHorizontal, Pencil, Trash2, Plus, Layers } from 'lucide-react';
+import { Loader2, MoreHorizontal, Pencil, Trash2, Plus } from 'lucide-react';
+import { cn } from '@/retained/lib/utils';
+import { SettingsGroup, SettingsRow, SettingsSection } from '@/ui/settings/settings-screen/settings-screen';
 import { toast } from 'sonner';
 import { useCommands } from '@/retained/hooks/useCommands';
 import { useDriveStore } from '@/retained/hooks/useDrive';
@@ -43,7 +44,6 @@ import {
   EMPTY_STATE_SUBTEXT,
   ENTRY_PAGE_UNAVAILABLE_BADGE,
   ENTRY_PAGE_UNAVAILABLE_TOOLTIP,
-  PERSONAL_SHADOW_TOOLTIP,
   type CommandFormScope,
 } from '@/retained/lib/commands/command-form-core';
 import { CommandFormDialog } from './CommandFormDialog';
@@ -114,77 +114,89 @@ export function CommandsSettings({ scope, driveId, canManage }: CommandsSettings
     }
   };
 
+  const newCommandButton = canManage ? (
+    <Button onClick={openCreate}>
+      <Plus className="mr-2 h-4 w-4" />
+      New command
+    </Button>
+  ) : undefined;
+
+  const formDialogs = (
+    <>
+      <CommandFormDialog
+        inline
+        scope={scope}
+        driveId={driveId}
+        command={null}
+        open={formOpen && editing === null}
+        onOpenChange={setFormOpen}
+        existingTriggers={existingTriggers}
+        allCommands={commands}
+        driveNameById={driveNameById}
+        onCreate={createCommand}
+        onUpdate={updateCommand}
+      />
+      <CommandFormDialog
+        scope={scope}
+        driveId={driveId}
+        command={editing}
+        open={formOpen && editing !== null}
+        onOpenChange={setFormOpen}
+        existingTriggers={existingTriggers}
+        allCommands={commands}
+        driveNameById={driveNameById}
+        onCreate={createCommand}
+        onUpdate={updateCommand}
+      />
+    </>
+  );
+
   if (isLoading) {
     return (
-      <Card>
-        <CardContent className="flex items-center justify-center py-12">
-          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-        </CardContent>
-      </Card>
+      <div className="flex items-center justify-center py-12">
+        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+      </div>
     );
   }
 
   if (list.length === 0) {
     return (
       <>
-        <Card>
-          <CardHeader className="items-center text-center">
-            <CardTitle>{EMPTY_STATE_TITLE}</CardTitle>
-            <CardDescription>{EMPTY_STATE_SUBTEXT[scope]}</CardDescription>
-          </CardHeader>
-          {canManage && (
-            <CardContent className="flex justify-center pb-8">
-              <Button onClick={openCreate}>
-                <Plus className="mr-2 h-4 w-4" />
-                New command
-              </Button>
-            </CardContent>
-          )}
-        </Card>
-        <CommandFormDialog
-          scope={scope}
-          driveId={driveId}
-          command={editing}
-          open={formOpen}
-          onOpenChange={setFormOpen}
-          existingTriggers={existingTriggers}
-          allCommands={commands}
-          driveNameById={driveNameById}
-          onCreate={createCommand}
-          onUpdate={updateCommand}
+        <SettingsSection
+          title={EMPTY_STATE_TITLE}
+          description={EMPTY_STATE_SUBTEXT[scope]}
+          actions={newCommandButton}
         />
+        {formDialogs}
       </>
     );
   }
 
   return (
     <>
-      <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between">
-            <div>
-              <CardTitle>{scope === 'personal' ? 'Your commands' : 'Drive commands'}</CardTitle>
-              <CardDescription>{EMPTY_STATE_SUBTEXT[scope]}</CardDescription>
-            </div>
-            {canManage && (
-              <Button onClick={openCreate}>
-                <Plus className="mr-2 h-4 w-4" />
-                New command
-              </Button>
-            )}
-          </div>
-        </CardHeader>
-        <CardContent className="divide-y divide-border p-0">
+      <SettingsSection
+        title={scope === 'personal' ? 'Your commands' : 'Drive commands'}
+        actions={newCommandButton}
+      >
+        <SettingsGroup label={scope === 'personal' ? 'Your commands' : 'Drive commands'}>
           {list.map((command) => {
             const shadowsDrives =
               scope === 'personal'
                 ? shadowedDriveNames(command.trigger, commands, driveNameById)
                 : [];
             return (
-              <div key={command.id} className="flex items-center gap-3 px-6 py-3">
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <span className="font-mono text-sm font-semibold">/{command.trigger}</span>
+              <SettingsRow
+                key={command.id}
+                label={
+                  <span className="flex items-center gap-2">
+                    <span
+                      className={cn(
+                        'font-mono text-sm font-semibold',
+                        !command.enabled && 'text-muted-foreground'
+                      )}
+                    >
+                      /{command.trigger}
+                    </span>
                     {!command.entryPageAvailable && (
                       <Tooltip>
                         <TooltipTrigger asChild>
@@ -198,43 +210,42 @@ export function CommandsSettings({ scope, driveId, canManage }: CommandsSettings
                       </Tooltip>
                     )}
                     {shadowsDrives.length > 0 && (
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Layers
-                            className="h-3.5 w-3.5 shrink-0 text-muted-foreground"
-                            aria-label="Shadows a drive command"
-                          />
-                        </TooltipTrigger>
-                        <TooltipContent className="max-w-xs">
-                          {PERSONAL_SHADOW_TOOLTIP}
-                        </TooltipContent>
-                      </Tooltip>
-                    )}
-                  </div>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <p className="truncate text-xs text-muted-foreground">
-                        {command.description}
-                      </p>
-                    </TooltipTrigger>
-                    <TooltipContent className="max-w-sm">{command.description}</TooltipContent>
-                  </Tooltip>
-                  <div className="mt-0.5 flex items-center gap-2 text-xs text-muted-foreground">
-                    {command.entryPageAvailable && command.entryPageTitle ? (
-                      <Link
-                        href={`/p/${command.entryPageId}`}
-                        className="truncate underline-offset-2 hover:underline"
+                      <Badge
+                        variant="outline"
+                        className="shrink-0"
+                        title={`Overrides the drive command with the same trigger in ${shadowsDrives.join(', ')}`}
                       >
-                        {command.entryPageTitle}
-                      </Link>
-                    ) : command.entryPageTitle ? (
-                      <span className="truncate">{command.entryPageTitle}</span>
-                    ) : null}
-                    {scope === 'drive' && command.authorName && (
-                      <span className="shrink-0">Added by {command.authorName}</span>
+                        Shadows {shadowsDrives.join(', ')}
+                      </Badge>
                     )}
-                  </div>
-                </div>
+                  </span>
+                }
+                hint={
+                  <>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span className="block truncate">{command.description}</span>
+                      </TooltipTrigger>
+                      <TooltipContent className="max-w-sm">{command.description}</TooltipContent>
+                    </Tooltip>
+                    <span className="mt-0.5 flex items-center gap-2">
+                      {command.entryPageAvailable && command.entryPageTitle ? (
+                        <Link
+                          href={`/p/${command.entryPageId}`}
+                          className="truncate underline-offset-2 hover:underline"
+                        >
+                          {command.entryPageTitle}
+                        </Link>
+                      ) : command.entryPageTitle ? (
+                        <span className="truncate">{command.entryPageTitle}</span>
+                      ) : null}
+                      {scope === 'drive' && command.authorName && (
+                        <span className="shrink-0">Added by {command.authorName}</span>
+                      )}
+                    </span>
+                  </>
+                }
+              >
                 <Switch
                   checked={command.enabled}
                   disabled={!canManage}
@@ -268,24 +279,13 @@ export function CommandsSettings({ scope, driveId, canManage }: CommandsSettings
                     </DropdownMenuContent>
                   </DropdownMenu>
                 )}
-              </div>
+              </SettingsRow>
             );
           })}
-        </CardContent>
-      </Card>
+        </SettingsGroup>
+      </SettingsSection>
 
-      <CommandFormDialog
-        scope={scope}
-        driveId={driveId}
-        command={editing}
-        open={formOpen}
-        onOpenChange={setFormOpen}
-        existingTriggers={existingTriggers}
-        allCommands={commands}
-        driveNameById={driveNameById}
-        onCreate={createCommand}
-        onUpdate={updateCommand}
-      />
+      {formDialogs}
 
       <AlertDialog open={deleting !== null} onOpenChange={(open) => !open && setDeleting(null)}>
         <AlertDialogContent>

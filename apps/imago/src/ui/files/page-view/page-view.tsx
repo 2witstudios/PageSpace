@@ -4,20 +4,16 @@ import type { ReactNode } from 'react';
 import { renderObjectPlaceholder } from '../../frame/shell/object-placeholder';
 import { type DocumentPage } from '../document-view/document-view';
 import { usePage } from '../page-object/page-object';
-import dynamic from 'next/dynamic';
 import type { TreePage } from '@/retained/hooks/usePageTree';
 import { RetainedSurface } from '@/retained-adapters/retained-provider';
-import { ViewHeader } from '@/retained/components/layout/middle-content/content-header';
-import { PageHistory } from '@/retained-adapters/page-history';
-import { AgentSettings } from '@/retained-adapters/agent-settings';
-
-const Document = dynamic(() => import('@/retained/components/layout/middle-content/page-views/document/DocumentView'), { ssr: false });
-const Code = dynamic(() => import('@/retained/components/layout/middle-content/page-views/code/CodePageView'), { ssr: false });
-const Sheet = dynamic(() => import('@/retained/components/layout/middle-content/page-views/sheet/SheetView'), { ssr: false });
-const Canvas = dynamic(() => import('@/retained/components/layout/middle-content/page-views/canvas/CanvasPageView'), { ssr: false });
-const File = dynamic(() => import('@/retained-adapters/file-view'), { ssr: false });
-const Channel = dynamic(() => import('@/retained/components/layout/middle-content/page-views/channel/ChannelView'), { ssr: false });
-const Tasks = dynamic(() => import('@/retained/components/layout/middle-content/page-views/task-list/TaskListView'), { ssr: false });
+import { AgentPage } from '../page-types/agent-page';
+import { CanvasPage } from '../page-types/canvas-page';
+import { ChannelPage } from '../page-types/channel-page';
+import { CodePage } from '../page-types/code-page';
+import { DocumentPage as DocumentPageView } from '../page-types/document-page';
+import { FilePage } from '../page-types/file-page';
+import { SheetPage } from '../page-types/sheet-page';
+import { TaskListPage } from '../page-types/task-list-page';
 
 export type PageViewProps = {
   readonly driveId: string;
@@ -43,17 +39,20 @@ export function PageView({ driveId, pageId }: PageViewProps): ReactNode {
   const { data } = usePage(pageId);
   if (!data || typeof data !== 'object' || !('type' in data)) return renderObjectPlaceholder('Page');
   const page = data as TreePage;
+  const props = { page, driveId, pageId };
+  // One module per page type (ui/files/page-types): each owns its 44px strip (IMC-1.10) and body,
+  // under the page head (IMC-1.9), which is the page's only header.
   let content: ReactNode;
   switch (page.type) {
-    case 'DOCUMENT': content = <Document pageId={pageId} driveId={driveId} />; break;
-    case 'CODE': content = <Code pageId={pageId} driveId={driveId} />; break;
-    case 'SHEET': content = <Sheet page={page} />; break;
-    case 'CANVAS': content = <Canvas pageId={pageId} />; break;
-    case 'FILE': content = <File driveId={driveId} pageId={pageId} />; break;
-    case 'CHANNEL': content = <Channel page={page} />; break;
-    case 'TASK_LIST': content = <Tasks page={page} />; break;
-    case 'AI_CHAT': content = <AgentSettings pageId={pageId} driveId={driveId} title={page.title} />; break;
+    case 'DOCUMENT': content = <DocumentPageView {...props} />; break;
+    case 'CODE': content = <CodePage {...props} />; break;
+    case 'SHEET': content = <SheetPage {...props} />; break;
+    case 'CANVAS': content = <CanvasPage {...props} />; break;
+    case 'FILE': content = <FilePage {...props} />; break;
+    case 'CHANNEL': content = <ChannelPage {...props} />; break;
+    case 'TASK_LIST': content = <TaskListPage {...props} />; break;
+    case 'AI_CHAT': content = <AgentPage {...props} />; break;
     default: return renderObjectPlaceholder('Page');
   }
-  return <RetainedSurface><div className="flex h-full min-h-0 flex-col"><ViewHeader pageId={pageId}><PageHistory /></ViewHeader><div className="min-h-0 flex-1">{content}</div></div></RetainedSurface>;
+  return <RetainedSurface><div className="h-full min-h-0">{content}</div></RetainedSurface>;
 }

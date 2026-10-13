@@ -1,19 +1,34 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useParams, useRouter } from '@/retained-adapters/navigation';
 import { Button } from '@/retained/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/retained/components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '@/retained/components/ui/avatar';
-import { Badge } from '@/retained/components/ui/badge';
-import { PermissionsGrid, PermissionsGridRef } from '@/retained/components/members/PermissionsGrid';
-import { ChevronLeft, Save, X, Shield, RefreshCw } from 'lucide-react';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/retained/components/ui/alert-dialog';
+import { PermissionsGrid, type PageNode, type PermissionsGridRef } from '@/retained/components/members/PermissionsGrid';
+import {
+  changedPages,
+  describeChanges,
+  pageTitlesOf,
+  type PagePermissions,
+} from '@/retained/components/members/member-permission-changes';
+import { RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
 import { Skeleton } from '@/retained/components/ui/skeleton';
 import { Label } from '@/retained/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from '@/retained/components/ui/select';
-import { patch, fetchWithAuth } from '@/retained/lib/auth/auth-fetch';
+import { patch, del, fetchWithAuth } from '@/retained/lib/auth/auth-fetch';
 import { getRoleColorClasses } from '@/retained/lib/utils';
+import { useEditingStore } from '@/retained/stores/useEditingStore';
 
 interface MemberDetails {
   id: string;
@@ -46,12 +61,38 @@ interface CustomRole {
   description?: string;
   color?: string;
   isDefault: boolean;
-  permissions: Record<string, { canView: boolean; canEdit: boolean; canShare: boolean }>;
+  permissions: Record<string, PagePermissions>;
 }
 
 // Unified role type: Admin or a custom role
 type UnifiedRole = { type: 'admin' } | { type: 'custom'; roleId: string } | null;
 
+const unifiedRolesEqual = (a: UnifiedRole, b: UnifiedRole): boolean => {
+  if (a === null && b === null) return true;
+  if (a === null || b === null) return false;
+  if (a.type !== b.type) return false;
+  if (a.type === 'admin') return true;
+  if (a.type === 'custom' && b.type === 'custom') return a.roleId === b.roleId;
+  return false;
+};
+
+const shortDate = (value: string) => new Date(value).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+
+/** The member's line under the name: email · @username · invited … · joined … (C-Members-Profile). */
+const memberLine = (member: MemberDetails): string =>
+  [
+    member.user.email,
+    member.profile?.username ? `@${member.profile.username}` : null,
+    `invited ${shortDate(member.invitedAt)}`,
+    member.acceptedAt ? `joined ${shortDate(member.acceptedAt)}` : null,
+  ]
+    .filter((part): part is string => part !== null)
+    .join(' · ');
+
+/**
+ * One member's access to the drive: the role, and the page permissions under it. Edits stay
+ * local until Save changes (PATCH members/[userId]); the dirty bar names what would change.
+ */
 export default function MemberSettingsPage() {
   const params = useParams();
   const router = useRouter();
@@ -62,17 +103,37 @@ export default function MemberSettingsPage() {
   const [customRoles, setCustomRoles] = useState<CustomRole[]>([]);
   const [selectedUnifiedRole, setSelectedUnifiedRole] = useState<UnifiedRole>(null);
   const [originalUnifiedRole, setOriginalUnifiedRole] = useState<UnifiedRole>(null);
-  const [permissions, setPermissions] = useState<Map<string, { canView: boolean; canEdit: boolean; canShare: boolean }>>(new Map());
-  const [originalPermissions, setOriginalPermissions] = useState<Map<string, { canView: boolean; canEdit: boolean; canShare: boolean }>>(new Map());
+  const [permissions, setPermissions] = useState<Map<string, PagePermissions>>(new Map());
+  const [originalPermissions, setOriginalPermissions] = useState<Map<string, PagePermissions>>(new Map());
+  const [pageTitles, setPageTitles] = useState<ReadonlyMap<string, string>>(new Map());
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [hasChanges, setHasChanges] = useState(false);
+  const [removeOpen, setRemoveOpen] = useState(false);
+  const startEditing = useEditingStore((state) => state.startEditing);
+  const endEditing = useEditingStore((state) => state.endEditing);
   const permissionsGridRef = useRef<PermissionsGridRef>(null);
 
+  const isOwner = member?.userId === member?.drive.ownerId;
+  const isAdmin = selectedUnifiedRole?.type === 'admin';
+  const roleChanged = !unifiedRolesEqual(selectedUnifiedRole, originalUnifiedRole);
+  const pageChanges = useMemo(
+    () => changedPages(originalPermissions, permissions, pageTitles),
+    [originalPermissions, permissions, pageTitles],
+  );
+  const hasChanges = pageChanges.length > 0 || roleChanged;
+
+  // A dirty member profile holds the editing store, so an auth refresh or SWR revalidation waits for the save.
   useEffect(() => {
-    fetchMemberDetails();
-    fetchRoles();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    if (!hasChanges) return;
+    const sessionId = `member-permissions:${userId}`;
+    startEditing(sessionId, 'form', { componentName: 'MemberSettingsPage' });
+    return () => endEditing(sessionId);
+  }, [hasChanges, userId, startEditing, endEditing]);
+
+  useEffect(() => {
+    void fetchMemberDetails();
+    void fetchRoles();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [driveId, userId]);
 
   const fetchRoles = async () => {
@@ -86,56 +147,6 @@ export default function MemberSettingsPage() {
       console.error('Error fetching roles:', error);
     }
   };
-
-  // Unified role change handler
-  const handleUnifiedRoleChange = (value: string) => {
-    if (value === 'admin') {
-      setSelectedUnifiedRole({ type: 'admin' });
-      setPermissions(new Map()); // Clear permissions - admin has full access
-    } else if (value === 'none') {
-      setSelectedUnifiedRole(null);
-    } else {
-      setSelectedUnifiedRole({ type: 'custom', roleId: value });
-      // Apply role permissions imperatively
-      const role = customRoles.find(r => r.id === value);
-      if (role && permissionsGridRef.current) {
-        permissionsGridRef.current.applyRolePermissions(role.permissions);
-      }
-    }
-  };
-
-  const handleSyncToRole = () => {
-    if (selectedUnifiedRole?.type === 'custom') {
-      const role = customRoles.find(r => r.id === selectedUnifiedRole.roleId);
-      if (role && permissionsGridRef.current) {
-        permissionsGridRef.current.applyRolePermissions(role.permissions);
-        toast.success(`Permissions reset to "${role.name}" defaults`);
-      }
-    }
-  };
-
-  // Helper to compare unified roles
-  const unifiedRolesEqual = (a: UnifiedRole, b: UnifiedRole): boolean => {
-    if (a === null && b === null) return true;
-    if (a === null || b === null) return false;
-    if (a.type !== b.type) return false;
-    if (a.type === 'admin') return true;
-    if (a.type === 'custom' && b.type === 'custom') return a.roleId === b.roleId;
-    return false;
-  };
-
-  useEffect(() => {
-    // Check if permissions or role have changed
-    const roleChanged = !unifiedRolesEqual(selectedUnifiedRole, originalUnifiedRole);
-    const permsChanged = originalPermissions.size > 0 && Array.from(permissions.entries()).some(([pageId, perms]) => {
-      const original = originalPermissions.get(pageId);
-      if (!original) return true;
-      return original.canView !== perms.canView ||
-             original.canEdit !== perms.canEdit ||
-             original.canShare !== perms.canShare;
-    });
-    setHasChanges(roleChanged || permsChanged);
-  }, [permissions, originalPermissions, selectedUnifiedRole, originalUnifiedRole]);
 
   const fetchMemberDetails = async () => {
     try {
@@ -151,7 +162,6 @@ export default function MemberSettingsPage() {
       const data = await response.json();
       setMember(data.member);
 
-      // Initialize unified role state from backend model
       let unifiedRole: UnifiedRole = null;
       if (data.member.role === 'ADMIN') {
         unifiedRole = { type: 'admin' };
@@ -161,9 +171,8 @@ export default function MemberSettingsPage() {
       setSelectedUnifiedRole(unifiedRole);
       setOriginalUnifiedRole(unifiedRole);
 
-      // Initialize permissions map
       if (data.permissions) {
-        const permsMap = new Map();
+        const permsMap = new Map<string, PagePermissions>();
         data.permissions.forEach((perm: { pageId: string; canView: boolean; canEdit: boolean; canShare: boolean }) => {
           permsMap.set(perm.pageId, {
             canView: perm.canView,
@@ -182,39 +191,68 @@ export default function MemberSettingsPage() {
     }
   };
 
-  const handlePermissionChange = (pageId: string, perms: { canView: boolean; canEdit: boolean; canShare: boolean }) => {
-    setPermissions(prevPermissions => {
+  // Unified role change handler
+  const handleUnifiedRoleChange = (value: string) => {
+    if (value === 'admin') {
+      setSelectedUnifiedRole({ type: 'admin' });
+      setPermissions(new Map()); // Admin has full access; no page rows apply
+    } else if (value === 'none') {
+      setSelectedUnifiedRole(null);
+    } else {
+      setSelectedUnifiedRole({ type: 'custom', roleId: value });
+      // Changing the role re-applies its page permissions to the grid
+      const role = customRoles.find((r) => r.id === value);
+      if (role && permissionsGridRef.current) {
+        permissionsGridRef.current.applyRolePermissions(role.permissions);
+      }
+    }
+  };
+
+  const handleSyncToRole = () => {
+    if (selectedUnifiedRole?.type === 'custom') {
+      const role = customRoles.find((r) => r.id === selectedUnifiedRole.roleId);
+      if (role && permissionsGridRef.current) {
+        permissionsGridRef.current.applyRolePermissions(role.permissions);
+        toast.success(`Permissions reset to "${role.name}" defaults`);
+      }
+    }
+  };
+
+  const handlePermissionChange = (pageId: string, perms: PagePermissions) => {
+    setPermissions((prevPermissions) => {
       const newPermissions = new Map(prevPermissions);
       newPermissions.set(pageId, perms);
       return newPermissions;
     });
   };
 
+  const handleTreeLoaded = (pages: readonly PageNode[]) => setPageTitles(pageTitlesOf(pages));
+
+  const handleDiscard = () => {
+    setPermissions(new Map(originalPermissions));
+    setSelectedUnifiedRole(originalUnifiedRole);
+  };
+
   const handleSave = async () => {
     setSaving(true);
     try {
-      // Map unified role back to backend model
       const backendRole = selectedUnifiedRole?.type === 'admin' ? 'ADMIN' : 'MEMBER';
-      const backendCustomRoleId = selectedUnifiedRole?.type === 'custom'
-        ? selectedUnifiedRole.roleId
-        : null;
+      const backendCustomRoleId = selectedUnifiedRole?.type === 'custom' ? selectedUnifiedRole.roleId : null;
 
       const permissionsArray = Array.from(permissions.entries()).map(([pageId, perms]) => ({
         pageId,
-        ...perms
+        ...perms,
       }));
 
       await patch(`/api/drives/${driveId}/members/${userId}`, {
         role: backendRole,
         customRoleId: backendCustomRoleId,
-        permissions: permissionsArray
+        permissions: permissionsArray,
       });
 
       toast.success('Member settings updated successfully');
-
       setOriginalPermissions(new Map(permissions));
       setOriginalUnifiedRole(selectedUnifiedRole);
-      setHasChanges(false);
     } catch (error) {
       console.error('Error saving changes:', error);
       toast.error('Failed to save changes');
@@ -223,28 +261,31 @@ export default function MemberSettingsPage() {
     }
   };
 
-  const handleCancel = () => {
-    setPermissions(new Map(originalPermissions));
-    setSelectedUnifiedRole(originalUnifiedRole);
-    setHasChanges(false);
+  const handleRemove = async () => {
+    try {
+      await del(`/api/drives/${driveId}/members/${userId}`);
+      toast.success('Member removed');
+      router.push(`/dashboard/${driveId}/members`);
+    } catch (error) {
+      console.error('Error removing member:', error);
+      toast.error('Failed to remove member');
+    }
   };
 
   if (loading) {
     return (
-      <div className="h-full overflow-auto">
-        <div className="max-w-6xl mx-auto p-6">
-          <Skeleton className="h-8 w-48 mb-6" />
-          <Skeleton className="h-32 w-full mb-6" />
-          <Skeleton className="h-96 w-full" />
-        </div>
+      <div className="h-full overflow-auto p-6">
+        <Skeleton className="mb-6 h-8 w-48" />
+        <Skeleton className="mb-6 h-32 w-full" />
+        <Skeleton className="h-96 w-full" />
       </div>
     );
   }
 
   if (!member) {
     return (
-      <div className="flex items-center justify-center h-full">
-        <p className="text-gray-500 dark:text-gray-400">Member not found</p>
+      <div className="flex h-full items-center justify-center">
+        <p className="text-muted-foreground">Member not found</p>
       </div>
     );
   }
@@ -252,239 +293,142 @@ export default function MemberSettingsPage() {
   const displayName = member.profile?.displayName || member.user.name || 'Unknown User';
   const initials = displayName
     .split(' ')
-    .map(n => n[0])
+    .map((n) => n[0])
     .join('')
     .toUpperCase()
     .slice(0, 2);
-
-  const getRoleBadgeColor = (role: string) => {
-    switch (role) {
-      case 'OWNER':
-        return 'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300';
-      case 'ADMIN':
-        return 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300';
-      default:
-        return 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300';
-    }
-  };
+  const selectedRoleName =
+    selectedUnifiedRole?.type === 'admin'
+      ? 'Admin'
+      : selectedUnifiedRole?.type === 'custom'
+        ? (customRoles.find((r) => r.id === selectedUnifiedRole.roleId)?.name ?? 'custom role')
+        : 'No role';
+  const summary = pageChanges.length > 0 ? describeChanges(pageChanges) : `Role changed to ${selectedRoleName}`;
 
   return (
-    <div className="h-full overflow-auto">
-      <div className="max-w-6xl mx-auto p-6">
-        {/* Header with back button */}
-        <div className="mb-6">
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => router.push(`/dashboard/${driveId}/members`)}
-            className="mb-4"
-          >
-            <ChevronLeft className="w-4 h-4 mr-1" />
-            Back to Members
-          </Button>
-          
-          <h1 className="text-2xl font-bold">Member Settings</h1>
-          <p className="text-gray-600 dark:text-gray-400 mt-1">
-            Manage permissions for {displayName} in {member.drive.name}
-          </p>
-        </div>
-
-        {/* Member Info Card */}
-        <Card className="mb-6">
-          <CardHeader>
-            <CardTitle>Member Information</CardTitle>
-            <CardDescription>Details about this member</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="flex items-start space-x-4 mb-6">
-              <Avatar className="w-16 h-16">
-                <AvatarImage src={member.profile?.avatarUrl} alt={displayName} />
-                <AvatarFallback>{initials}</AvatarFallback>
-              </Avatar>
-
-              <div className="flex-1">
-                <div className="flex items-center space-x-2 mb-2">
-                  <h3 className="text-lg font-semibold">{displayName}</h3>
-                  {member.profile?.username && (
-                    <span className="text-sm text-gray-500 dark:text-gray-400">
-                      @{member.profile.username}
-                    </span>
-                  )}
-                  <Badge className={getRoleBadgeColor(member.role)}>
-                    {member.role}
-                  </Badge>
-                </div>
-
-                <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">
-                  {member.user.email}
-                </p>
-
-                <div className="flex gap-4 text-xs text-gray-500 dark:text-gray-400">
-                  <span>Invited: {new Date(member.invitedAt).toLocaleDateString()}</span>
-                  {member.acceptedAt && (
-                    <span>Joined: {new Date(member.acceptedAt).toLocaleDateString()}</span>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            {/* Unified Role Selector - Only for non-owners */}
-            {member.role !== 'OWNER' && (
-              <div>
-                <Label htmlFor="unified-role-select" className="mb-2 block">Role</Label>
-                <Select
-                  value={
-                    selectedUnifiedRole?.type === 'admin'
-                      ? 'admin'
-                      : selectedUnifiedRole?.type === 'custom'
-                        ? selectedUnifiedRole.roleId
-                        : 'none'
-                  }
-                  onValueChange={handleUnifiedRoleChange}
-                >
-                  <SelectTrigger id="unified-role-select" className="max-w-md">
-                    <SelectValue placeholder="Select a role" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {/* Admin - always first */}
-                    <SelectItem value="admin">
-                      <div className="flex items-center gap-2">
-                        <Badge className="bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300">
-                          Admin
-                        </Badge>
-                        <span className="text-xs text-muted-foreground">Full access</span>
-                      </div>
-                    </SelectItem>
-
-                    {customRoles.length > 0 && <SelectSeparator />}
-
-                    {/* Custom roles */}
-                    {customRoles.map((role) => (
-                      <SelectItem key={role.id} value={role.id}>
-                        <div className="flex items-center gap-2">
-                          <Badge className={getRoleColorClasses(role.color)}>
-                            {role.name}
-                          </Badge>
-                        </div>
-                      </SelectItem>
-                    ))}
-
-                    {customRoles.length === 0 && <SelectSeparator />}
-
-                    {/* No role option */}
-                    <SelectItem value="none">
-                      <span className="text-muted-foreground">No role</span>
-                    </SelectItem>
-                  </SelectContent>
-                </Select>
-                <p className="text-xs text-gray-500 dark:text-gray-500 mt-2">
-                  {selectedUnifiedRole?.type === 'admin'
-                    ? 'Admins have the same permissions as drive owners and can manage members.'
-                    : 'This role defines which pages this member can access.'}
-                </p>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        {/* Permissions Card - Hidden when Admin is selected */}
-        {member.userId !== member.drive.ownerId && selectedUnifiedRole?.type !== 'admin' && (
-          <Card>
-            <CardHeader>
-              <div className="flex items-center justify-between">
-                <div>
-                  <CardTitle>Page Permissions</CardTitle>
-                  <CardDescription>
-                    Control which pages this member can view, edit, or share
-                  </CardDescription>
-                </div>
-                {selectedUnifiedRole?.type === 'custom' && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={handleSyncToRole}
-                    title="Reset permissions to role defaults"
-                  >
-                    <RefreshCw className="w-4 h-4 mr-2" />
-                    Sync to role
-                  </Button>
-                )}
-              </div>
-            </CardHeader>
-            <CardContent>
-              <PermissionsGrid
-                ref={permissionsGridRef}
-                driveId={driveId}
-                userId={userId}
-                permissions={permissions}
-                onChange={handlePermissionChange}
-                readOnlyDriveRoot
-              />
-            </CardContent>
-          </Card>
-        )}
-
-        {/* Owner Access Card */}
-        {member.userId === member.drive.ownerId && (
-          <Card>
-            <CardContent className="py-8">
-              <div className="text-center">
-                <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-purple-100 dark:bg-purple-900/30 mb-4">
-                  <Shield className="w-8 h-8 text-purple-600 dark:text-purple-400" />
-                </div>
-                <h3 className="text-lg font-semibold mb-2">Owner Access</h3>
-                <p className="text-gray-600 dark:text-gray-400">
-                  Drive owners have full access to all pages by default.
-                </p>
-                <p className="text-sm text-gray-500 dark:text-gray-500 mt-2">
-                  No permission configuration needed.
-                </p>
-              </div>
-            </CardContent>
-          </Card>
-        )}
-
-        {/* Admin Access Card - When Admin role is selected */}
-        {member.userId !== member.drive.ownerId && selectedUnifiedRole?.type === 'admin' && (
-          <Card>
-            <CardContent className="py-8">
-              <div className="text-center">
-                <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-blue-100 dark:bg-blue-900/30 mb-4">
-                  <Shield className="w-8 h-8 text-blue-600 dark:text-blue-400" />
-                </div>
-                <h3 className="text-lg font-semibold mb-2">Admin Access</h3>
-                <p className="text-gray-600 dark:text-gray-400">
-                  Admins have full access to all pages, just like the drive owner.
-                </p>
-                <p className="text-sm text-gray-500 dark:text-gray-500 mt-2">
-                  No permission configuration needed.
-                </p>
-              </div>
-            </CardContent>
-          </Card>
-        )}
-
-        {/* Action Buttons - Show when there are changes */}
-        {member.userId !== member.drive.ownerId && (
-          <div className="flex justify-end gap-2 mt-6">
-            <Button
-              variant="outline"
-              onClick={handleCancel}
-              disabled={!hasChanges || saving}
-            >
-              <X className="w-4 h-4 mr-2" />
-              Cancel
-            </Button>
-            <Button
-              onClick={handleSave}
-              disabled={!hasChanges || saving}
-            >
-              <Save className="w-4 h-4 mr-2" />
-              {saving ? 'Saving...' : 'Save Changes'}
-            </Button>
+    <div className="relative flex h-full flex-col overflow-auto">
+      <div className="mx-auto flex w-full max-w-3xl flex-col gap-8 p-6 pb-24">
+        <header className="flex items-start gap-4">
+          <Avatar className="size-12">
+            <AvatarImage src={member.profile?.avatarUrl} alt={displayName} />
+            <AvatarFallback>{initials}</AvatarFallback>
+          </Avatar>
+          <div className="min-w-0 flex-1">
+            <h1 className="text-2xl font-bold tracking-tight">{displayName}</h1>
+            <p className="text-sm text-muted-foreground">{memberLine(member)}</p>
           </div>
+          {!isOwner && (
+            <Button variant="outline" size="sm" className="text-destructive" onClick={() => setRemoveOpen(true)}>
+              Remove from drive
+            </Button>
+          )}
+        </header>
+
+        {isOwner ? (
+          <p className="text-sm text-muted-foreground">Drive owners have full access to all pages by default.</p>
+        ) : (
+          <section className="flex flex-col gap-2">
+            <Label htmlFor="unified-role-select">Role</Label>
+            <Select
+              value={
+                selectedUnifiedRole?.type === 'admin'
+                  ? 'admin'
+                  : selectedUnifiedRole?.type === 'custom'
+                    ? selectedUnifiedRole.roleId
+                    : 'none'
+              }
+              onValueChange={handleUnifiedRoleChange}
+            >
+              <SelectTrigger id="unified-role-select" className="max-w-md">
+                <SelectValue placeholder="Select a role" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="admin">
+                  <span className="text-sm">Admin — full access</span>
+                </SelectItem>
+
+                {customRoles.length > 0 && <SelectSeparator />}
+
+                {customRoles.map((role) => (
+                  <SelectItem key={role.id} value={role.id}>
+                    <span className={`rounded px-1.5 py-0.5 text-xs ${getRoleColorClasses(role.color)}`}>{role.name}</span>
+                  </SelectItem>
+                ))}
+
+                {customRoles.length === 0 && <SelectSeparator />}
+
+                <SelectItem value="none">
+                  <span className="text-muted-foreground">No role (custom permissions)</span>
+                </SelectItem>
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              {isAdmin
+                ? 'Admins have full access to all pages, just like the drive owner.'
+                : 'Changing the role re-applies its page permissions below.'}
+            </p>
+          </section>
+        )}
+
+        {!isOwner && isAdmin && (
+          <p className="text-sm text-muted-foreground">No permission configuration needed.</p>
+        )}
+
+        {!isOwner && !isAdmin && (
+          <section className="flex flex-col gap-3">
+            <div className="flex items-end justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-semibold">Page permissions</h2>
+                <p className="text-sm text-muted-foreground">Edit and Share imply View. Turning off View removes all three.</p>
+              </div>
+              {selectedUnifiedRole?.type === 'custom' && (
+                <Button variant="outline" size="sm" onClick={handleSyncToRole} title="Reset permissions to role defaults">
+                  <RefreshCw className="mr-2 size-4" />
+                  Sync to role
+                </Button>
+              )}
+            </div>
+            <PermissionsGrid
+              ref={permissionsGridRef}
+              driveId={driveId}
+              userId={userId}
+              permissions={permissions}
+              onChange={handlePermissionChange}
+              onTreeLoaded={handleTreeLoaded}
+              readOnlyDriveRoot
+            />
+          </section>
         )}
       </div>
+
+      {hasChanges && (
+        <div
+          role="region"
+          aria-label="Unsaved changes"
+          className="sticky bottom-0 flex items-center gap-3 border-t border-border bg-background px-6 py-3 shadow-sm"
+        >
+          <span className="min-w-0 flex-1 truncate text-sm">{summary}</span>
+          <Button variant="ghost" onClick={handleDiscard} disabled={saving}>
+            Discard
+          </Button>
+          <Button onClick={handleSave} disabled={saving}>
+            {saving ? 'Saving…' : 'Save changes'}
+          </Button>
+        </div>
+      )}
+
+      <AlertDialog open={removeOpen} onOpenChange={setRemoveOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove {displayName} from this drive?</AlertDialogTitle>
+            <AlertDialogDescription>They lose access to this drive.</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleRemove}>Remove from drive</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

@@ -44,7 +44,7 @@ import {
 
 type Probed = Window & { __probe?: string };
 
-const rail = (page: Page) => page.getByRole('navigation', { name: 'Primary' });
+const rail = (page: Page) => page.getByRole('navigation', { name: 'Sections' });
 const railLink = (page: Page, name: string) => rail(page).getByRole('link', { name, exact: true });
 const listLink = (page: Page, name: string) =>
   page.locator('[data-slot="list"]').getByRole('link', { name, exact: true });

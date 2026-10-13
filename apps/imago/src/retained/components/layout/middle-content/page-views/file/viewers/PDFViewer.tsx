@@ -2,9 +2,9 @@
 
 import { useState, useEffect } from 'react';
 import { TreePage } from '@/retained/hooks/usePageTree';
-import { Loader2, ChevronLeft, ChevronRight } from 'lucide-react';
-import { Button } from '@/retained/components/ui/button';
+import { Loader2 } from 'lucide-react';
 import { fetchWithAuth } from '@/retained/lib/auth/auth-fetch';
+import { PdfControls } from './PdfControls';
 
 // Dynamically import react-pdf to avoid SSR issues
 type ReactPdfModule = typeof import('react-pdf');
@@ -37,6 +37,7 @@ export default function PDFViewer({ page }: PDFViewerProps) {
   const [pdfData, setPdfData] = useState<ArrayBuffer | null>(null);
   const [numPages, setNumPages] = useState<number | null>(null);
   const [pageNumber, setPageNumber] = useState(1);
+  const [scale, setScale] = useState(1);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isClient, setIsClient] = useState(false);
@@ -112,29 +113,13 @@ export default function PDFViewer({ page }: PDFViewerProps) {
   return (
     <div className="h-full flex flex-col">
       {/* PDF Navigation Controls */}
-      <div className="flex items-center justify-between p-4 border-b">
-        <div className="flex items-center gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setPageNumber(pageNumber - 1)}
-            disabled={pageNumber <= 1}
-          >
-            <ChevronLeft className="h-4 w-4" />
-          </Button>
-          <span className="text-sm">
-            Page {pageNumber} of {numPages || '...'}
-          </span>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setPageNumber(pageNumber + 1)}
-            disabled={pageNumber >= (numPages || 1)}
-          >
-            <ChevronRight className="h-4 w-4" />
-          </Button>
-        </div>
-      </div>
+      <PdfControls
+        pageNumber={pageNumber}
+        numPages={numPages}
+        scale={scale}
+        onPageChange={setPageNumber}
+        onScaleChange={setScale}
+      />
 
       {/* PDF Document */}
       <div className="flex-1 overflow-auto flex justify-center p-4">
@@ -154,6 +139,7 @@ export default function PDFViewer({ page }: PDFViewerProps) {
           >
             <Page 
               pageNumber={pageNumber}
+              scale={scale}
               className="shadow-lg"
               renderTextLayer={true}
               renderAnnotationLayer={true}

@@ -132,7 +132,7 @@ export function AgentMemberRow({
             onValueChange={handleRoleSelect}
             disabled={saving}
           >
-            <SelectTrigger className="w-36 h-8 text-xs">
+            <SelectTrigger className="w-36 h-8 text-xs" aria-label={`Role for ${displayName}`}>
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -160,7 +160,7 @@ export function AgentMemberRow({
             size="sm"
             onClick={handleRemove}
             className="text-red-600 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300"
-            title="Remove Agent Member"
+            aria-label={`Remove ${displayName}`}
           >
             <Trash2 className="w-4 h-4" />
           </Button>

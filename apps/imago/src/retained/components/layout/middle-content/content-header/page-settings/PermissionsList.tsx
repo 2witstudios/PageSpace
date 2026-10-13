@@ -225,7 +225,7 @@ export function PermissionsList({ pageId: propPageId }: { pageId?: string | null
   return (
     <div className="space-y-4">
       {/* Owner */}
-      <div className="flex items-center justify-between p-3 border rounded-lg bg-purple-50 dark:bg-purple-900/20">
+      <div className="flex items-center justify-between p-3 border border-border rounded-lg">
         <div className="flex items-center space-x-3">
           <Avatar className="h-8 w-8">
             <AvatarImage src={owner.image || undefined} />
@@ -239,8 +239,8 @@ export function PermissionsList({ pageId: propPageId }: { pageId?: string | null
           </div>
         </div>
         <div className="flex items-center space-x-2">
-          <Shield className="h-4 w-4 text-purple-600 dark:text-purple-400" />
-          <span className="text-xs font-medium text-purple-600 dark:text-purple-400">Full Access</span>
+          <Shield className="h-4 w-4 text-muted-foreground" />
+          <span className="text-xs font-medium text-muted-foreground">Full access</span>
         </div>
       </div>
 
@@ -306,7 +306,9 @@ export function PermissionsList({ pageId: propPageId }: { pageId?: string | null
                   variant="ghost"
                   size="sm"
                   onClick={() => handleRemoveRolePermission(role.roleId)}
-                  className="text-red-600 hover:text-red-700"
+                  className="text-destructive hover:text-destructive"
+                  aria-label="Remove access"
+                  title="Remove access"
                 >
                   <Trash2 className="h-4 w-4" />
                 </Button>
@@ -323,9 +325,7 @@ export function PermissionsList({ pageId: propPageId }: { pageId?: string | null
         </p>
       ) : permissions.length > 0 ? (
         <div className="space-y-2">
-          {roles.length > 0 && (
-            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">People</p>
-          )}
+          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">People</p>
           {permissions.map((permission) => (
             <div
               key={permission.id}
@@ -400,7 +400,9 @@ export function PermissionsList({ pageId: propPageId }: { pageId?: string | null
                   variant="ghost"
                   size="sm"
                   onClick={() => handleRemovePermission(permission.userId)}
-                  className="text-red-600 hover:text-red-700"
+                  className="text-destructive hover:text-destructive"
+                  aria-label="Remove access"
+                  title="Remove access"
                 >
                   <Trash2 className="h-4 w-4" />
                 </Button>

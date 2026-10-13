@@ -23,7 +23,7 @@ import { useApiClient } from '@/api/swr-provider';
 import { useSocketEvent } from '@/realtime/realtime-provider';
 import type { ChannelThread, DirectThread, MessageThread, SidebarBadges } from '../message-model/message';
 import { applyInboxEvent, concerns, inboxEventOf, type ThreadScope } from '../inbox-event/inbox-event';
-import { fetchDirectThreads, fetchDriveChannels, messagePaths } from '../messages-api/messages-api';
+import { fetchDirectThreads, fetchDriveChannels, fetchInbox, messagePaths } from '../messages-api/messages-api';
 
 /** How long a burst of inbox events waits before the totals are refetched (classic's useSidebarBadges). */
 export const BADGES_DEBOUNCE_MS = 250;
@@ -94,16 +94,31 @@ export const useDriveChannels = (driveId: string | null) => {
   return { channels: data, error: error as unknown, isLoading, retry };
 };
 
+/** The unified inbox (DMs and every drive's channels, newest first) with unread counts, live. */
+export const useInbox = () => {
+  const client = useApiClient();
+  const { data, error, isLoading, mutate } = useSWR(['imago:inbox'] as const, () => fetchInbox(client));
+  useLiveThreads<MessageThread>(data, mutate, { kind: 'all' });
+  /** Void action: asks the server again after a failure. */
+  const retry = useCallback(() => void mutate(), [mutate]);
+  return { threads: data, error: error as unknown, isLoading, retry };
+};
+
 /** The viewer's DM conversations (user-level, not per drive), with unread counts, live. */
+/** The SWR key the viewer's DM list lives under, so a guard can ask for it again. */
+export const DIRECT_THREADS_KEY = ['imago:direct-threads'] as const;
+
 export const useDirectThreads = () => {
   const client = useApiClient();
-  const { data, error, isLoading, mutate } = useSWR(['imago:direct-threads'] as const, () =>
+  const { data, error, isLoading, mutate } = useSWR(DIRECT_THREADS_KEY, () =>
     fetchDirectThreads(client),
   );
   useLiveThreads<DirectThread>(data, mutate, { kind: 'dm' });
   /** Void action: asks the server again after a failure. */
   const retry = useCallback(() => void mutate(), [mutate]);
-  return { threads: data, error: error as unknown, isLoading, retry };
+  /** Asks the server again and resolves once the list has its answer (a failed load leaves the list as it was). */
+  const refresh = useCallback(() => mutate().catch(() => undefined), [mutate]);
+  return { threads: data, error: error as unknown, isLoading, retry, refresh };
 };
 
 /** The viewer's unread totals from /api/sidebar/badges, refetched on inbox events and notifications. */

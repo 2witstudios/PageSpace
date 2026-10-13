@@ -13,6 +13,7 @@ const props = (overrides: Partial<PaletteRenderProps> = {}): PaletteRenderProps 
     { id: 'p-1', title: 'Roadmap', icon: 'page', driveName: null },
     { id: 'p-2', title: 'road-crew', icon: 'hash', driveName: null },
   ],
+  people: [],
   active: 1,
   idPrefix: 'pal',
   typeQuery: () => {},
@@ -54,8 +55,8 @@ describe('renderPalette()', () => {
           attribute(html, 'input', 'aria-expanded'),
           attribute(html, 'input', 'placeholder'),
         ],
-        list: attribute(html, 'ul', 'id'),
-        options: [...html.matchAll(/<li id="([^"]+)" role="option" aria-selected="(true|false)"/g)].map(([, id, selected]) => [id, selected]),
+        list: /<div id="([^"]+)" role="listbox"/.exec(html)?.[1],
+        options: [...html.matchAll(/<div id="([^"]+)" role="option" aria-selected="(true|false)"/g)].map(([, id, selected]) => [id, selected]),
       },
       expected: {
         dialog: ['true', 'Search'],
@@ -94,9 +95,26 @@ describe('renderPalette()', () => {
     });
     assert({
       given: 'results from every drive, one in a drive the viewer’s list does not name',
-      should: 'show the drive beside each result that has one',
-      actual: [...html.matchAll(/role="option"[^>]*>(.*?)<\/li>/g)].map(([, inner]) => (inner ?? '').replace(/<[^>]+>/g, '|').replace(/\|+/g, '|')),
-      expected: ['|Roadmap|Alpha|', '|Planner|'],
+      should: 'show the drive beside each result that has one, and the Enter hint on the highlighted one',
+      actual: [...html.matchAll(/role="option"[^>]*>(.*?)<\/div>/g)].map(([, inner]) => (inner ?? '').replace(/<[^>]+>/g, '|').replace(/\|+/g, '|')),
+      expected: ['|Roadmap|Alpha|', '|Planner|↵|'],
+    });
+  });
+
+  test('the Pages and Users groups, and the keyboard hints', () => {
+    const html = markup({ people: [{ id: 'u-1', name: 'Priya Raman' }], active: 2 });
+    const groups = [...html.matchAll(/role="group" aria-label="([^"]+)"/g)].map(([, label]) => label);
+    const person = [...html.matchAll(/role="option"[^>]*>(.*?)<\/div>/g)].map(([, inner]) => inner ?? '').at(-1) ?? '';
+
+    assert({
+      given: 'two pages and one person, with the person highlighted',
+      should: 'group the pages, then the users, put the Enter hint on the person, and close with a kbd footer',
+      actual: [
+        groups,
+        person.includes('Priya Raman') && person.includes('↵'),
+        html.includes('<kbd') && html.includes('esc</kbd> close'),
+      ],
+      expected: [['Pages', 'Users'], true, true],
     });
   });
 

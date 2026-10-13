@@ -14,12 +14,16 @@ export async function selectTaskFilter(page: Page, name: 'All' | 'Active' | 'Com
   }
 }
 
+/** The status dialog's trigger is named for the strip it sits in: Manage statuses (Table), Edit statuses (Board), Statuses (Filters sheet). */
+const configurationName = (name: 'Statuses' | 'Workflows'): string | RegExp => (name === 'Statuses' ? /^(Manage statuses|Edit statuses|Statuses)$/ : name);
+
 export async function openTaskConfiguration(page: Page, name: 'Statuses' | 'Workflows'): Promise<void> {
+  const trigger = configurationName(name);
   const sheet = page.getByRole('dialog', { name: 'Filters', exact: true });
   const object = page.locator('[data-slot="object"]');
-  const direct = object.getByRole('button', { name, exact: true });
+  const direct = object.getByRole('button', { name: trigger, exact: true });
   const filters = object.getByRole('button', { name: /^Filters/ });
-  const inSheet = sheet.getByRole('button', { name, exact: true });
+  const inSheet = sheet.getByRole('button', { name: trigger, exact: true });
   // Closing a nested configuration dialog restores the Filters sheet asynchronously.
   await expect(inSheet.or(direct).or(filters).first()).toBeVisible();
   if (await inSheet.isVisible()) {
@@ -30,14 +34,14 @@ export async function openTaskConfiguration(page: Page, name: 'Statuses' | 'Work
     await direct.click();
   } else {
     await filters.click();
-    await sheet.getByRole('button', { name, exact: true }).click();
+    await sheet.getByRole('button', { name: trigger, exact: true }).click();
   }
 }
 
 /** The same task actions are a row menu in wide panes and a detail sheet in narrow panes. */
 export async function openTaskActions(page: Page, taskId: string, title: string): Promise<Locator> {
   const object = page.locator('[data-slot="object"]');
-  await object.getByRole('button', { name: 'Table view', exact: true }).click();
+  await object.getByRole('group', { name: 'View', exact: true }).getByRole('button', { name: 'Table', exact: true }).click();
   const row = object.locator(`[data-task-id="${taskId}"]:visible`);
   await expect(row).toBeVisible();
   const actions = row.getByRole('button', { name: `Actions for ${title}`, exact: true });
@@ -50,3 +54,7 @@ export async function openTaskActions(page: Page, taskId: string, title: string)
   await expect(details).toBeVisible();
   return details;
 }
+
+/** The "+ Task" button in the task list's List controls strip, which focuses the new-task field. */
+export const newTaskButton = (scope: Locator): Locator =>
+  scope.getByRole('toolbar', { name: 'List controls', exact: true }).getByRole('button', { name: 'Task', exact: true });

@@ -1,8 +1,7 @@
-import RetainedPage from '@/retained/app/dashboard/trash/page';
-import type { ComponentProps } from 'react';
 import { getViewer } from '@/lib/auth/get-viewer';
+import { AccountTrash } from '@/ui/settings/account-trash/account-trash';
 
-export default async function Page(props: ComponentProps<typeof RetainedPage> & object) {
-  await getViewer();
-  return <RetainedPage {...props} />;
+export default async function Page() {
+  const viewer = await getViewer();
+  return <AccountTrash viewerId={viewer.userId} />;
 }

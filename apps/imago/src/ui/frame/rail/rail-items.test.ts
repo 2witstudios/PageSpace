@@ -4,9 +4,8 @@ import { stageFor } from '../stage/stage';
 import {
   activeRailItem,
   activeRailPlace,
-  classicHref,
   messagesUnread,
-  overflowItems,
+  secondaryItems,
   railItems,
   railDrive,
   settingsItem,
@@ -30,9 +29,9 @@ describe('railItems()', () => {
   test('Settings', () => {
     assert({
       given: 'the current drive',
-      should: 'pin the drive’s own settings, not the account',
+      should: 'pin the drive’s own settings, named as the board names it',
       actual: [settingsItem('drive-1').label, settingsItem('drive-1').href],
-      expected: ['Settings', '/drive-1/settings'],
+      expected: ['Drive settings', '/drive-1/settings'],
     });
   });
 
@@ -55,39 +54,49 @@ describe('railItems()', () => {
   });
 });
 
-describe('overflowItems()', () => {
-  test('classic deep links for the current drive (D5, DEC-6)', () => {
+describe('secondaryItems() (IMC-1.4)', () => {
+  test('the six drive tools under the divider, in board order', () => {
     assert({
       given: 'the current drive',
-      should: 'list Calendar, Agents, Connections, Activity and Trash at classic’s drive routes',
-      actual: overflowItems('drive-1').map(({ id, label, href }) => [id, label, href]),
+      should: 'list Calendar, Agents, Workflows, Activity, Members and Trash at that drive',
+      actual: secondaryItems('drive-1').map(({ id, label, href }) => [id, label, href]),
       expected: [
         ['calendar', 'Calendar', '/drive-1/calendar'],
         ['agents', 'Agents', '/drive-1/agents'],
-        ['connections', 'Connections', '/drive-1/settings/integrations'],
-        ['activity', 'Activity', '/drive-1/activity'],
-        ['trash', 'Trash', '/drive-1/trash'],
         ['workflows', 'Workflows', '/drive-1/workflows'],
+        ['activity', 'Activity', '/drive-1/activity'],
+        ['members', 'Members', '/drive-1/members'],
+        ['trash', 'Trash', '/drive-1/trash'],
       ],
     });
   });
 
-  test('same-origin paths only', () => {
-    const hrefs = [...overflowItems('drive-1'), ...overflowItems('//evil.example')].map((entry) => entry.href);
+  test('no drive', () => {
     assert({
-      given: 'any drive id, a protocol-relative one included',
-      should: 'produce only root-relative paths under /dashboard/, never another origin',
-      actual: hrefs.filter((href) => !href.startsWith('/') || href.startsWith('//')),
-      expected: [],
+      given: 'no current drive',
+      should: 'leave the tools without a destination',
+      actual: secondaryItems(null).map((entry) => entry.href),
+      expected: [null, null, null, null, null, null],
     });
   });
 
-  test('classicHref()', () => {
+  test('the active tool', () => {
     assert({
-      given: 'a drive id with a URL delimiter in it',
-      should: 'escape it into one segment of classic’s drive route',
-      actual: classicHref('../x', 'trash'),
-      expected: '/dashboard/..%2Fx/trash',
+      given: 'a drive tool open',
+      should: 'mark that tool, not Settings',
+      actual: ['calendar', 'agents', 'workflows', 'activity', 'members', 'trash'].map((tool) =>
+        activeRailItem(stageFor(`/drive-1/${tool}`)),
+      ),
+      expected: ['calendar', 'agents', 'workflows', 'activity', 'members', 'trash'],
+    });
+  });
+
+  test('a member profile or the invite page', () => {
+    assert({
+      given: 'a page under Members',
+      should: 'keep Members marked',
+      actual: [activeRailItem(stageFor('/drive-1/members/user-1')), activeRailItem(stageFor('/drive-1/members/invite'))],
+      expected: ['members', 'members'],
     });
   });
 });

@@ -283,6 +283,7 @@ export function TaskAgentTriggersDialog({
                     </div>
                     <Switch
                       id={switchId}
+                      aria-label={label}
                       checked={section.enabled}
                       disabled={disabled}
                       onCheckedChange={(checked) => updateSection(ui, { enabled: checked })}
@@ -290,11 +291,6 @@ export function TaskAgentTriggersDialog({
                   </div>
 
                   <p className="text-xs text-muted-foreground">{help}</p>
-                  {ui === 'due_date' && !hasDueDate && (
-                    <p className="text-xs text-amber-600 dark:text-amber-400">
-                      Add a due date to this task to enable this trigger.
-                    </p>
-                  )}
 
                   {section.enabled && !disabled && (
                     <div className="space-y-3 pt-1">
@@ -314,6 +310,7 @@ export function TaskAgentTriggersDialog({
                             ? 'What should the agent do when the due date arrives?'
                             : 'What should the agent do when the task is completed?'
                         }
+                        showAdvanced
                       />
 
                       {existingStatus && existingStatus !== 'never_run' && (
@@ -359,7 +356,7 @@ export function TaskAgentTriggersDialog({
 
         <DialogFooter className="shrink-0">
           <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Done
+            Close
           </Button>
         </DialogFooter>
       </DialogContent>

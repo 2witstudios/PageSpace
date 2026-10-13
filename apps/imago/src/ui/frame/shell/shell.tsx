@@ -1,7 +1,7 @@
 'use client';
 
 import { usePathname } from 'next/navigation';
-import type { ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import useSWR from 'swr';
 import { useUiState } from '../../store/store';
 import type { UiState } from '../../store/state';
@@ -9,17 +9,40 @@ import { ChatHistory } from '../../chat/chat-history/chat-history';
 import { ChatPane } from '../../chat/chat-pane/chat-pane';
 import { FilesPane } from '../../files/files-pane/files-pane';
 import { MessagesPane } from '../../messages/messages-pane/messages-pane';
+import { DmIndexPane } from '../../messages/dm-index/dm-index';
 import { CommandPalette } from '../../palette/palette/palette';
 import { TasksPane } from '../../tasks/tasks-pane/tasks-pane';
+import { ToolPane } from '../tool-pane/tool-pane';
+import { askLabelFor } from '../controls/ask-label';
 import { AvatarMenu } from '../avatar-menu/avatar-menu';
 import { BrandChip } from '../brand-chip/brand-chip';
 import { DRIVES, driveStatus, drivesFrom, type DriveSummary } from '../drives/drives';
 import { DRIVE_NOT_FOUND, renderNotFound } from '../not-found/not-found.render';
 import { renderPaneHeader } from '../pane/pane-header';
-import { ListOpener, ListPane } from '../list-pane/list-pane';
+import { ListPane } from '../list-pane/list-pane';
+import { AskPill, ClosePage, CloseImago, CloseSidebar, CollapseImago, ShowSidebar } from '../controls/controls';
+import { EmptyMiddle } from '../empty-middle/empty-middle';
+import { PageHead } from '../../files/page-head/page-head';
+import { ConversationHead } from '../../messages/dm-head/conversation-head';
+import { AppBanner } from '../banners/app-banner';
+import { TabBar } from '../tabs/tab-bar';
+import { sectionPath } from '../tabs/tabs-model';
+import { columnsFor, type Columns } from '../stage/columns';
+import { AccountNavPane, DriveSettingsNavPane } from '../../settings/settings-nav/settings-nav-pane';
 import { Rail } from '../rail/rail';
+import { PhoneAsk } from '../phone/phone-ask';
+import { PhoneBottomBar } from '../phone/phone-bar';
+import { PhoneChatBack } from '../phone/phone-chat-back';
+import { PhoneDocHead } from '../phone/phone-doc-head';
+import { PhoneFilesHeader } from '../phone/phone-files-header';
+import { phoneDocBodyClass } from '../phone/phone-doc-class';
+import { renderPhoneShell } from '../phone/phone-shell.render';
+import { useViewportTier } from '../viewport/use-viewport-tier';
 import { railDrive } from '../rail/rail-items';
 import {
+  imagoStartsCollapsedAt,
+  isHideableSection,
+  type HideableSection,
   isListSection,
   paneLayout,
   stageFor,
@@ -28,8 +51,10 @@ import {
   type Stage,
 } from '../stage/stage';
 import { columnClass } from './shell-class';
+import { dispatch, transactions } from '../../store/transactions';
 import { renderShell } from './shell.render';
 import { useHydrated } from './use-hydrated';
+import { useDesktopFrame } from './desktop-frame';
 
 export type ShellProps = {
   /** The route's page: it renders only the object's content. */
@@ -47,9 +72,13 @@ const titles: Readonly<Record<Section, string>> = {
   tasks: 'Tasks',
   settings: 'Settings',
   account: 'Account',
+  notifications: 'Notifications',
 };
 
 const selectCollapsed = (state: UiState) => state.resources.collapsedSections;
+const selectPaneSheetOpen = (state: UiState) => state.resources.paneSheetOpen;
+const selectImagoCollapsed = (state: UiState) => state.resources.imagoCollapsed;
+const selectImagoClosed = (state: UiState) => state.resources.imagoClosed;
 
 /**
  * A drive the API does not list for the viewer (it lists every drive they
@@ -58,12 +87,20 @@ const selectCollapsed = (state: UiState) => state.resources.collapsedSections;
  */
 const notFoundLayout: PaneLayout = { list: 'closed', listHidden: false, object: true };
 
+const notFoundColumns: Columns = {
+  pane: false,
+  page: true,
+  imago: 'docked',
+  paneSheet: false,
+  showSidebarIn: null,
+  askPill: false,
+  collapseImago: true,
+  closeImago: false,
+  closePage: false,
+};
+
 const homeHref = (homeDriveId: string | null): string | null =>
   homeDriveId === null ? null : `/${encodeURIComponent(homeDriveId)}`;
-
-/** × on the stage-2 list steps back to the drive chat, or the Home root. */
-const chatHref = (stage: Stage): string =>
-  stage.driveId === null ? '/' : `/${encodeURIComponent(stage.driveId)}`;
 
 /** A section's rows: channels and DMs in Messages, the drive's task lists in Tasks. */
 const rowsFor = (stage: Stage): ReactNode => {
@@ -88,14 +125,28 @@ const rowsFor = (stage: Stage): ReactNode => {
 };
 
 /**
- * The list slot holds the section's list; the chat's is its history of past
- * chats. Files draws its own pane, since its header carries New page beside
- * the close.
+ * The left pane: the chat's history, a section's list or tree, or the settings and account
+ * navs. Files draws its own pane, since its head carries New page beside Close sidebar.
  */
-const listFor = (stage: Stage, layout: PaneLayout): ReactNode => {
+const listFor = (stage: Stage, layout: PaneLayout, phoneDrive?: { readonly name: string | null }): ReactNode => {
   if (layout.list === 'closed') return null;
   if (stage.section === 'chat') return <ChatHistory />;
+  if (stage.section === 'settings' && stage.driveId !== null && stage.object?.kind === 'settings' && stage.object.tool !== undefined) {
+    return <ToolPane tool={stage.object.tool} driveId={stage.driveId} close={<CloseSidebar section="settings" />} />;
+  }
+  if (stage.section === 'settings') return stage.driveId === null ? null : <DriveSettingsNavPane driveId={stage.driveId} />;
+  if (stage.section === 'account') return <AccountNavPane />;
   if (!isListSection(stage.section)) return null;
+  // The user-level /dm index: the Direct messages pane alone, with no drive's channels.
+  if (stage.section === 'messages' && stage.driveId === null) {
+    return (
+      <DmIndexPane
+        variant={layout.list}
+        close={<CloseSidebar section="messages" />}
+        selectedConversationId={stage.object?.kind === 'conversation' ? stage.object.conversationId : null}
+      />
+    );
+  }
   if (stage.section === 'files' && stage.driveId !== null) {
     return (
       <FilesPane
@@ -103,30 +154,24 @@ const listFor = (stage: Stage, layout: PaneLayout): ReactNode => {
         selectedPageId={stage.object?.kind === 'page' ? stage.object.pageId : null}
         variant={layout.list}
         title={titles.files}
-        closeHref={chatHref(stage)}
+        phoneHeader={
+          phoneDrive === undefined
+            ? undefined
+            : (newPage) => <PhoneFilesHeader driveName={phoneDrive.name} title={titles.files} newPage={newPage} />
+        }
       />
     );
   }
   return (
-    <ListPane
-      section={stage.section}
-      variant={layout.list}
-      title={titles[stage.section]}
-      closeHref={chatHref(stage)}
-    >
+    <ListPane section={stage.section} variant={layout.list} title={titles[stage.section]}>
       {rowsFor(stage)}
     </ListPane>
   );
 };
 
-/**
- * The hamburger, while this section's list is hidden. Only the tree beside an
- * open object hides (stage.ts), so it always belongs in the object's header.
- */
-const openerFor = (stage: Stage, layout: PaneLayout): ReactNode =>
-  layout.listHidden && isListSection(stage.section) ? (
-    <ListOpener section={stage.section} title={titles[stage.section]} />
-  ) : null;
+/** Show sidebar, in whichever head comes first while the pane is closed. */
+const opener = (stage: Stage, columns: Columns, at: Columns['showSidebarIn']): ReactNode =>
+  columns.showSidebarIn === at && isHideableSection(stage.section) ? <ShowSidebar section={stage.section} /> : null;
 
 /**
  * The one persistent frame, mounted once by the (shell) layout. Routes are
@@ -137,45 +182,155 @@ const openerFor = (stage: Stage, layout: PaneLayout): ReactNode =>
 export function Shell({ children, homeDriveId, initialDrives }: ShellProps) {
   const pathname = usePathname() ?? '/';
   const collapsedSections = useUiState(selectCollapsed);
-  const { data, error } = useSWR<unknown>(DRIVES, { fallbackData: initialDrives });
+  const imagoCollapsed = useUiState(selectImagoCollapsed);
+  const imagoClosed = useUiState(selectImagoClosed);
+  const { data } = useSWR<unknown>(DRIVES, { fallbackData: initialDrives });
   const drives = drivesFrom(data, homeDriveId);
   const stage = stageFor(pathname);
+  // Screens whose boards open with Imago folded fold it on entry; reopening it there is the viewer's choice.
+  useEffect(() => {
+    if (imagoStartsCollapsedAt(pathname)) dispatch(transactions.collapseImago, undefined);
+  }, [pathname]);
+  const tier = useViewportTier();
+  const phone = tier === 'phone';
+  const paneSheetOpen = useUiState(selectPaneSheetOpen);
+  // Navigating from the narrow pane sheet closes it, so the page it opened is not left covered.
+  useEffect(() => {
+    dispatch(transactions.closePaneSheet, undefined);
+  }, [pathname]);
+  // Below 1024px (not phone) the pane is a sheet: hidden until Show sidebar, whatever desktop remembers.
+  const sheetSections = (): readonly HideableSection[] =>
+    !isHideableSection(stage.section)
+      ? collapsedSections
+      : paneSheetOpen
+        ? collapsedSections.filter((entry) => entry !== stage.section)
+        : [...collapsedSections, stage.section];
+  const effectiveCollapsed = tier === 'narrow' ? sheetSections() : collapsedSections;
   const missing = driveStatus(drives, stage.driveId) === 'missing';
-  const layout = missing ? notFoundLayout : paneLayout(stage, { collapsedSections });
-  const opener = missing ? null : openerFor(stage, layout);
+  // A phone has no left pane to collapse: its list is a screen of its own.
+  const layout = missing ? notFoundLayout : paneLayout(stage, { collapsedSections: phone ? [] : effectiveCollapsed });
+  const columns = missing
+    ? notFoundColumns
+    : columnsFor(
+        stage,
+        {
+          paneCollapsed: !phone && isHideableSection(stage.section) && effectiveCollapsed.includes(stage.section),
+          imagoCollapsed,
+          imagoClosed,
+        },
+        tier,
+      );
   const drive = drives?.find((entry) => entry.id === stage.driveId);
   const title = missing ? 'Not found' : stage.object?.kind === 'settings' && stage.object.title ? stage.object.title : titles[stage.section];
   const hydrated = useHydrated();
+  // Ask on a phone page opens Imago full-screen; it is the page it was asked on, so leaving the page ends it.
+  const [askedAt, setAskedAt] = useState<string | null>(null);
+  const desktopFrame = useDesktopFrame();
+  const pageTrailing = (
+    <span className="flex flex-none items-center gap-1">
+      {columns.askPill ? <AskPill label={askLabelFor(stage)} /> : null}
+      <ClosePage href={sectionPath(stage)} />
+    </span>
+  );
+  const objectColumn = (
+    <section className={columnClass} aria-label={title}>
+      {!missing && stage.object?.kind === 'page' ? (
+        <PageHead pageId={stage.object.pageId} leading={opener(stage, columns, 'page')} trailing={pageTrailing} />
+      ) : !missing && stage.object?.kind === 'conversation' ? (
+        <ConversationHead conversationId={stage.object.conversationId} leading={opener(stage, columns, 'page')} trailing={pageTrailing} />
+      ) : (
+        renderPaneHeader({ title, leading: opener(stage, columns, 'page'), actions: missing ? null : pageTrailing })
+      )}
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        {missing ? renderNotFound({ ...DRIVE_NOT_FOUND, homeHref: homeHref(homeDriveId) }) : children}
+      </div>
+    </section>
+  );
+  const chatColumn = (
+    <ChatPane
+      stage={stage}
+      driveName={drive?.name}
+      homeDriveId={homeDriveId}
+      leading={opener(stage, columns, 'imago')}
+      trailing={columns.collapseImago ? <CollapseImago /> : columns.closeImago ? <CloseImago /> : null}
+    />
+  );
+  if (phone) {
+    const pageObject = !missing && stage.object?.kind === 'page' ? stage.object : null;
+    const asking = pageObject !== null && askedAt === pathname;
+    // A page on a phone: its 52px head over the body; the toolbar scrolls sideways (C-Resp-Phone-Doc).
+    const phoneObject =
+      pageObject === null ? (
+        objectColumn
+      ) : (
+        <section className={columnClass} aria-label={title}>
+          <PhoneDocHead stage={stage} pageId={pageObject.pageId} driveKey={railDrive(stage, homeDriveId) ?? 'home'} />
+          <div className={`${phoneDocBodyClass} overflow-y-auto`}>{children}</div>
+        </section>
+      );
+    // Full-screen Imago over the page, Back in its head (C-Resp-Phone-Chat).
+    const phoneChat = (
+      <ChatPane
+        stage={stage}
+        driveName={drive?.name}
+        homeDriveId={homeDriveId}
+        leading={pageObject === null ? null : <PhoneChatBack pageId={pageObject.pageId} onBack={() => setAskedAt(null)} />}
+        trailing={null}
+      />
+    );
+    // One column (C-Resp-Phone-Tree): the page the URL names; else the section's own screen.
+    const onTree = stage.section === 'files' && stage.object === null && stage.driveId !== null && !missing;
+    const listScreen = missing ? null : listFor(stage, layout, onTree ? { name: drive?.name ?? null } : undefined);
+    const screen =
+      asking
+        ? phoneChat
+        : stage.object !== null || missing
+        ? phoneObject
+        : stage.section === 'chat'
+          ? chatColumn
+          : (listScreen ?? objectColumn);
+    return renderPhoneShell({
+      stage,
+      hydrated,
+      screen,
+      ask:
+        onTree && stage.driveId !== null ? (
+          <PhoneAsk href={`/${encodeURIComponent(stage.driveId)}`} />
+        ) : pageObject !== null && !asking ? (
+          <PhoneAsk onPress={() => setAskedAt(pathname)} />
+        ) : null,
+      bar: asking ? null : <PhoneBottomBar stage={stage} driveId={railDrive(stage, homeDriveId)} />,
+      palette: <CommandPalette stage={stage} homeDriveId={homeDriveId} drives={drives} />,
+    });
+  }
   return renderShell({
     stage,
     layout,
+    columns,
+    tier,
+    onDismissImago: () => dispatch(transactions.collapseImago, undefined),
+    onDismissPane: () => {
+      if (isHideableSection(stage.section)) dispatch(transactions.collapseSection, stage.section);
+    },
     hydrated,
+    desktopFrame,
     rail: (
       <Rail
         stage={stage}
         layout={layout}
         homeDriveId={homeDriveId}
         brand={
-          <BrandChip
-            stage={stage}
-            currentId={railDrive(stage, homeDriveId)}
-            drives={drives}
-            failed={error !== undefined}
-          />
+          <BrandChip currentId={railDrive(stage, homeDriveId)} drives={drives} />
         }
-        footer={<AvatarMenu />}
+        footer={<AvatarMenu active={stage.section === 'account'} />}
       />
     ),
+    banner: <AppBanner />,
+    tabBar: <TabBar stage={stage} driveKey={railDrive(stage, homeDriveId) ?? 'home'} />,
     list: missing ? null : listFor(stage, layout),
-    object: (
-      <section className={columnClass} aria-label={title}>
-        {renderPaneHeader({ title, leading: opener })}
-        <div className="min-h-0 flex-1 overflow-y-auto">
-          {missing ? renderNotFound({ ...DRIVE_NOT_FOUND, homeHref: homeHref(homeDriveId) }) : children}
-        </div>
-      </section>
-    ),
-    chat: <ChatPane stage={stage} driveName={drive?.name} homeDriveId={homeDriveId} />,
+    object: objectColumn,
+    chat: chatColumn,
+    empty: <EmptyMiddle driveId={railDrive(stage, homeDriveId)} leading={opener(stage, columns, 'empty')} />,
     palette: <CommandPalette stage={stage} homeDriveId={homeDriveId} drives={drives} />,
   });
 }

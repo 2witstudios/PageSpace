@@ -30,8 +30,9 @@ interface PublishControlsProps {
   /** 'header' (default): rendered among other populated header buttons, so
    *  staying silent when unavailable is fine. 'panel': rendered as the sole
    *  content of a dedicated tab/panel, where silence would leave a blank tab —
-   *  render an explanatory message instead. */
-  variant?: 'header' | 'panel';
+   *  render an explanatory message instead. 'strip': the page toolbar strip's
+   *  publish status chip and primary update action (no settings dialog). */
+  variant?: 'header' | 'panel' | 'strip';
 }
 
 /** PublishSettingsSnapshot plus a transient "picked an uploaded file"
@@ -232,19 +233,43 @@ const PublishControls = ({ pageId, contentDirty, variant = 'header' }: PublishCo
     noindex: status.settings.noindex,
   };
 
+  // The page toolbar strip (canvas) shows a Published chip and Republish where the header shows a
+  // Stale badge and Update; both carry the same URL, Settings, Copy link and Unpublish controls.
+  const isStrip = variant === 'strip';
+
   return (
-    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 px-2 py-1 max-w-full">
+    <div
+      className={
+        isStrip
+          ? 'flex flex-none items-center gap-2'
+          : 'flex flex-wrap items-center gap-x-2 gap-y-1 px-2 py-1 max-w-full'
+      }
+    >
+      {isStrip && (
+        <span className="whitespace-nowrap rounded-full bg-yellow-100 px-2 py-0.5 text-xs text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400">
+          {status.isStale ? 'Published · changes not live' : 'Published'}
+        </span>
+      )}
       <a
         href={status.url}
         target="_blank"
         rel="noreferrer"
-        className="min-w-0 max-w-[10rem] sm:max-w-[16rem] truncate text-sm text-blue-500 hover:underline"
+        className={
+          isStrip
+            ? 'min-w-0 max-w-[12rem] truncate text-sm text-blue-500 hover:underline'
+            : 'min-w-0 max-w-[10rem] sm:max-w-[16rem] truncate text-sm text-blue-500 hover:underline'
+        }
         title={status.url}
       >
         {status.url}
       </a>
       <div className="flex flex-wrap items-center gap-2">
-        {status.isStale && (
+        {status.isStale && isStrip && (
+          <Button size="sm" onClick={() => handlePublish(true)} disabled={isBusy}>
+            {isBusy ? 'Republishing…' : 'Republish'}
+          </Button>
+        )}
+        {status.isStale && !isStrip && (
           <>
             <span className="px-2 py-0.5 text-xs rounded-full bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400 whitespace-nowrap">
               Stale

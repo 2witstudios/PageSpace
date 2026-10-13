@@ -30,6 +30,8 @@ import { UndoAiChangesDialog } from '@/retained/components/ai/shared/chat';
 import { AskUserAnswerProvider } from '@/retained/components/ai/shared/chat/ask-user/AskUserAnswerContext';
 import { ChatErrorBanner } from '@/retained/components/ai/shared/chat/ChatErrorBanner';
 import { ChatMessagesArea } from '@/retained/components/ai/shared/chat/ChatMessagesArea';
+import { VoiceCallBarForConversation } from '@/retained/components/ai/voice/realtime';
+import { ImagoVoiceCallToggle } from './ImagoVoiceCallToggle';
 import { Conversation, ConversationScrollButton } from '@/retained/components/ai/ui/conversation';
 import { SidebarMessagesContent } from '@/retained/components/layout/right-sidebar/ai-assistant/SidebarChatTab';
 import { hasVisionCapability } from '@/retained/lib/ai/core/vision-models';
@@ -54,6 +56,8 @@ export interface SessionChatProps {
   /** A native draft's first accepted send, after its conversation was created. */
   initialSend?: { id: string; text: string; files?: FileUIPart[] };
   onInitialSend?: (dispatched: boolean) => void;
+  /** Imago's column (IMC-2.2): the compact composer row, a Mention button and its own placeholder. */
+  imagoComposer?: { readonly placeholder: string; readonly aboveComposer?: React.ReactNode; readonly ownsCreditsAlert?: boolean };
 }
 
 export default function SessionChat({
@@ -64,6 +68,7 @@ export default function SessionChat({
   isReadOnly = false,
   initialSend,
   onInitialSend,
+  imagoComposer,
 }: SessionChatProps) {
   const chat = useAgentSessionChat({ agent, conversationId });
   const firstSend = useRef<string | null>(null);
@@ -84,11 +89,13 @@ export default function SessionChat({
       // which can legitimately be a different one. The server resolves this
       // turn's command chips against the agent page's `page.driveId`, so any
       // other scope would offer commands that fail as `not_found` on send.
+      agentId={agent.id}
       commandDriveId={agent.driveId}
       name={agent.title}
       visionModel={agent.aiModel || ''}
       context={context}
       isReadOnly={isReadOnly}
+      imagoComposer={imagoComposer}
     />
   );
 }
@@ -106,6 +113,8 @@ export interface SessionChatViewProps {
   conversationId: string;
   /** The chat's whole state — from either pipeline's hook. */
   chat: UseAgentSessionChatReturn;
+  /** The agent page this conversation belongs to: the voice call's target. Absent on the global assistant. */
+  agentId?: string;
   /** The counterpart's display name (composer placeholder, compact-renderer label). */
   name: string;
   /** The model whose vision capability gates image attachment — '' = none. */
@@ -121,17 +130,20 @@ export interface SessionChatViewProps {
   commandDriveId: string | null;
   context: 'page' | 'console';
   isReadOnly?: boolean;
+  imagoComposer?: { readonly placeholder: string; readonly aboveComposer?: React.ReactNode; readonly ownsCreditsAlert?: boolean };
 }
 
 export function SessionChatView({
   sessionId,
   conversationId,
   chat,
+  agentId,
   name,
   visionModel,
   commandDriveId,
   context,
   isReadOnly = false,
+  imagoComposer,
 }: SessionChatViewProps) {
   const input = useUiState(state => state.resources.chatDraft);
   const setInput = useCallback((next: string | ((current: string) => string)) => {
@@ -194,6 +206,7 @@ export function SessionChatView({
       data-testid="session-chat"
       className="@container flex h-full min-w-0 min-h-0 flex-col bg-background"
     >
+      {imagoComposer && <VoiceCallBarForConversation conversationId={conversationId} assistantName={name} />}
       {chat.hasLoadError && (
         <div className="flex items-center justify-between gap-2 border-b border-destructive/20 bg-destructive/10 px-3 py-1.5 text-xs text-destructive">
           <span className="truncate">Failed to load messages</span>
@@ -213,7 +226,7 @@ export function SessionChatView({
           <div data-testid="session-chat-loading" className="flex h-full items-center justify-center">
             <Loader2 className="size-4 animate-spin text-muted-foreground" />
           </div>
-        ) : context === 'page' ? (
+        ) : context === 'page' && !imagoComposer ? (
           <ChatMessagesArea
             messages={chat.messages}
             isLoading={chat.isMessagesLoading}
@@ -256,12 +269,13 @@ export function SessionChatView({
         {sideQuestion.state && <SideQuestionCard state={sideQuestion.state} onDismiss={sideQuestion.dismiss} />}
         <ChatErrorBanner
           cause={chat.errorCause}
-          show={showError}
+          show={showError && !(imagoComposer?.ownsCreditsAlert === true && chat.errorCause?.code === 'out_of_credits')}
           onClearError={() => {
             setShowError(false);
             chat.dismissError();
           }}
         />
+        {imagoComposer?.aboveComposer}
         <ChatInput
           value={input}
           onChange={setInput}
@@ -271,9 +285,12 @@ export function SessionChatView({
           isStreaming={chat.displayIsStreaming}
           isStopping={chat.isStopping}
           disabled={isReadOnly}
-          placeholder={isReadOnly ? 'View only' : `Message ${name}...`}
+          placeholder={isReadOnly ? 'View only' : imagoComposer?.placeholder ?? `Message ${name}...`}
+          inputLabel={imagoComposer ? `Message ${name}` : undefined}
           hideModelSelector
-          variant={context === 'console' ? 'sidebar' : 'main'}
+          variant={context === 'console' || imagoComposer ? 'sidebar' : 'main'}
+          showMention={imagoComposer !== undefined && !isReadOnly}
+          voiceCall={imagoComposer !== undefined && !isReadOnly && agentId !== undefined ? <ImagoVoiceCallToggle agentId={agentId} conversationId={conversationId} /> : undefined}
           hasVision={hasVisionCapability(visionModel)}
           attachments={attachments}
           onAddFiles={addFiles}

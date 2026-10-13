@@ -41,6 +41,16 @@ export const createDocument = (
     json: { title: NEW_DOCUMENT_TITLE, type: PageType.DOCUMENT, driveId, parentId },
   });
 
+/** A new task list's title, as classic's quick create names one. */
+export const NEW_TASK_LIST_TITLE = `Untitled ${getPageTypeConfig(PageType.TASK_LIST).displayName}`;
+
+/** Creates an empty task list at the top of a drive (the Tasks pane's New list). */
+export const createTaskList = (client: ApiClient, driveId: string): Promise<PageResponse> =>
+  client.apiFetch<PageResponse>(CREATE_PAGE_PATH, {
+    method: 'POST',
+    json: { title: NEW_TASK_LIST_TITLE, type: PageType.TASK_LIST, driveId, parentId: null },
+  });
+
 /** A page's address in the files section; Link and the router add imago's basePath. */
 export const fileHref = (driveId: string, pageId: string): string =>
   `/${encodeURIComponent(driveId)}/files/${encodeURIComponent(pageId)}`;

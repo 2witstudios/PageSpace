@@ -9,8 +9,8 @@ describe('listPaneClass()', () => {
       should: 'hold its own width so the content never reflows while the pane slides',
       actual: [listPaneClass('list'), listPaneClass('tree')],
       expected: [
-        'flex h-full flex-none flex-col border-r border-hairline surface-glass w-list-pane',
-        'flex h-full flex-none flex-col border-r border-hairline surface-glass w-tree-pane',
+        'flex h-full flex-none flex-col border-r border-hairline bg-background w-list-pane',
+        'flex h-full flex-none flex-col border-r border-hairline bg-background w-tree-pane',
       ],
     });
   });
@@ -18,9 +18,9 @@ describe('listPaneClass()', () => {
   test('the body', () => {
     assert({
       given: 'the list body',
-      should: 'scroll on its own under the header',
+      should: 'scroll on its own under the header, padded 8px',
       actual: listBodyClass,
-      expected: 'flex flex-1 flex-col gap-4 overflow-y-auto p-3',
+      expected: 'flex min-h-0 flex-1 flex-col gap-px overflow-y-auto px-2 py-2',
     });
   });
 });
