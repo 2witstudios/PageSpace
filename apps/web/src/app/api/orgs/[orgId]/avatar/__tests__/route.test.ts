@@ -103,6 +103,22 @@ describe('ORG-1 (partial) uploading and removing the org avatar', () => {
     expect(calls).toEqual([`storage POST ${ORG}`, `storage DELETE ${ORG}/${NEW_FILE}`]);
   });
 
+  it.each([['not_member', 404], ['insufficient_role', 403]] as const)('Given a role change after storage (%s), should reject the avatar mutation and remove only the newly uploaded file', async (reason, status) => {
+    asRole('ADMIN');
+    vi.mocked(setOrganizationAvatar).mockResolvedValueOnce({ ok: false, reason });
+    const response = await POST(upload(png()), params);
+    expect(response.status).toBe(status);
+    expect(await response.json()).toMatchObject({ code: reason });
+    expect(calls).toEqual([`storage POST ${ORG}`, `storage DELETE ${ORG}/${NEW_FILE}`]);
+    expect(stored.avatarUrl).toBe(OLD);
+    expect(announceOrgChange).not.toHaveBeenCalled();
+    calls.length = 0;
+    vi.mocked(setOrganizationAvatar).mockResolvedValueOnce({ ok: false, reason });
+    expect((await DELETE(new Request('https://example.test', { method: 'DELETE' }), params)).status).toBe(status);
+    expect(calls).toEqual([]);
+    expect(stored.avatarUrl).toBe(OLD);
+  });
+
   it('a plain Member is refused and a non-member gets 404; nothing is stored', async () => {
     asRole('MEMBER');
     expect((await POST(upload(png()), params)).status).toBe(403);

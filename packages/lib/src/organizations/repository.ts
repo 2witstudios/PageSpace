@@ -19,7 +19,8 @@ import {
 } from '@pagespace/db/schema/organizations';
 import { decryptUserRows, userEmailMatch } from '../auth/user-repository';
 import { isOrgAvatarPath } from './org-avatar-core';
-import { decideOrgOwnerCandidate, loadOrgPrincipalKind } from './owner-candidate';
+import { decideOrgRole } from './authorize-core';
+import { decideOrgOwnerCandidate, loadOrgPrincipalKind, ownerHasActiveErasure } from './owner-candidate';
 import { transactionWithOrgAudit } from '../audit/org-audit';
 import { NEW_ORG_POLICIES } from './policies-core';
 
@@ -200,7 +201,7 @@ export async function countOrgSeats(orgId: string): Promise<number> {
 
 export type CreateOrganizationResult =
   | { ok: true; organization: OrgRecord }
-  | { ok: false; reason: 'slug_taken' | 'owner_not_human' | 'owner_not_found' };
+  | { ok: false; reason: 'slug_taken' | 'owner_not_human' | 'owner_not_found' | 'owner_erasure_in_progress' };
 
 /**
  * ORG-1: the org row and its OWNER membership are written together or not at all,
@@ -213,6 +214,7 @@ export async function createOrganization(input: {
 }): Promise<CreateOrganizationResult> {
   try {
     return await transactionWithOrgAudit(async (tx, audit): Promise<CreateOrganizationResult> => {
+      if (await ownerHasActiveErasure(tx, input.ownerId)) return { ok: false, reason: 'owner_erasure_in_progress' };
       const candidate = decideOrgOwnerCandidate(await loadOrgPrincipalKind(tx, input.ownerId));
       if (!candidate.ok) return { ok: false, reason: candidate.reason };
       const [org] = await tx
@@ -231,15 +233,20 @@ export async function createOrganization(input: {
 
 export type UpdateOrganizationResult =
   | { ok: true; organization: OrgRecord }
-  | { ok: false; reason: 'not_found' | 'slug_taken' };
+  | { ok: false; reason: 'not_found' | 'slug_taken' | 'not_member' | 'insufficient_role' };
 
 export async function updateOrganization(
   orgId: string,
   patch: { name?: string; slug?: string },
-  actorId?: string,
+  actorId: string,
 ): Promise<UpdateOrganizationResult> {
   try {
     return await transactionWithOrgAudit(async (tx, audit): Promise<UpdateOrganizationResult> => {
+      const [current] = await tx.select({ id: organizations.id }).from(organizations).where(eq(organizations.id, orgId)).for('update');
+      if (!current) return { ok: false, reason: 'not_found' };
+      const [membership] = await tx.select({ role: orgMembers.role }).from(orgMembers).where(and(eq(orgMembers.orgId, orgId), eq(orgMembers.userId, actorId))).for('update');
+      const authority = decideOrgRole({ membershipRole: membership?.role ?? null, minRole: 'ADMIN' });
+      if (!authority.ok) return { ok: false, reason: authority.reason };
       const [organization] = await tx.update(organizations).set(patch).where(eq(organizations.id, orgId)).returning(ORG_RECORD);
       if (!organization) return { ok: false, reason: 'not_found' };
       await audit({ orgId, eventType: 'org.updated', actorId, resourceType: 'organization', resourceId: orgId, details: { fields: Object.keys(patch).sort() } });
@@ -254,7 +261,7 @@ export async function updateOrganization(
 export type SetOrganizationAvatarResult =
   /** previousAvatarUrl: the path this call replaced (its file is now the caller's to delete), or null. */
   | { ok: true; organization: OrgRecord; previousAvatarUrl: string | null }
-  | { ok: false; reason: 'not_found' | 'invalid_avatar' };
+  | { ok: false; reason: 'not_found' | 'invalid_avatar' | 'not_member' | 'insufficient_role' };
 
 /**
  * ORG-1: sets (or clears, with null) the org's avatar. Only this org's own PageSpace avatar path is
@@ -270,9 +277,12 @@ export async function setOrganizationAvatar(
 ): Promise<SetOrganizationAvatarResult> {
   if (avatarUrl !== null && !isOrgAvatarPath(orgId, avatarUrl)) return { ok: false, reason: 'invalid_avatar' };
   // AUD-1: the change's event commits with it (the outbox).
-  const switched = await transactionWithOrgAudit(async (tx, audit) => {
+  return transactionWithOrgAudit(async (tx, audit): Promise<SetOrganizationAvatarResult> => {
     const [current] = await tx.select({ avatarUrl: organizations.avatarUrl }).from(organizations).where(eq(organizations.id, orgId)).for('update');
-    if (!current) return null;
+    if (!current) return { ok: false, reason: 'not_found' };
+    const [membership] = await tx.select({ role: orgMembers.role }).from(orgMembers).where(and(eq(orgMembers.orgId, orgId), eq(orgMembers.userId, actorId))).for('update');
+    const authority = decideOrgRole({ membershipRole: membership?.role ?? null, minRole: 'ADMIN' });
+    if (!authority.ok) return { ok: false, reason: authority.reason };
     const [organization] = await tx.update(organizations).set({ avatarUrl }).where(eq(organizations.id, orgId)).returning(ORG_RECORD);
     await audit({
       orgId,
@@ -282,10 +292,8 @@ export async function setOrganizationAvatar(
       resourceId: orgId,
       details: { fields: ['avatar'], removed: avatarUrl === null },
     });
-    return { organization, previousAvatarUrl: current.avatarUrl };
+    return { ok: true, organization, previousAvatarUrl: current.avatarUrl };
   });
-  if (!switched) return { ok: false, reason: 'not_found' };
-  return { ok: true, ...switched };
 }
 
 /**

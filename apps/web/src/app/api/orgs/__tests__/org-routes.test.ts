@@ -110,6 +110,7 @@ import * as transferRoute from '../[orgId]/transfer-ownership/route';
 import * as invitationsRoute from '../[orgId]/invitations/route';
 import * as invitationRoute from '../[orgId]/invitations/[invitationId]/route';
 import * as resendRoute from '../[orgId]/invitations/[invitationId]/resend/route';
+import { announceOrgChange } from '@pagespace/lib/organizations/org-change-events';
 import { ORG_LAPSED_MESSAGE } from '@pagespace/lib/organizations/status-core';
 import * as acceptRoute from '../invitations/accept/route';
 
@@ -400,6 +401,23 @@ describe('org route behaviour', () => {
     expect((await res.json()).billing).toEqual({ state: 'pending' });
   });
 
+  it('ORG-6 (partial) an erasing ownership recipient is refused explicitly without announcing a transfer', async () => {
+    asRole('OWNER');
+    vi.mocked(membership.transferOwnership).mockResolvedValue({ ok: false, status: 400, reason: 'owner_erasure_in_progress' });
+    const response = await transferRoute.POST(req('POST', { toUserId: 'user_priya' }), params({ orgId: ORG_ID }));
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ code: 'owner_erasure_in_progress', error: expect.stringMatching(/erasure/) });
+    expect(announceOrgChange).not.toHaveBeenCalled();
+  });
+
+  it('ORG-6 (partial) an erasing account cannot create an organization or start billing', async () => {
+    vi.mocked(repository.createOrganization).mockResolvedValue({ ok: false, reason: 'owner_erasure_in_progress' });
+    const response = await orgsRoute.POST(req('POST', { name: 'Northwind Labs', slug: 'northwind' }));
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ code: 'owner_erasure_in_progress', error: expect.stringMatching(/erasure/) });
+    expect(startOrgBusinessSubscription).not.toHaveBeenCalled();
+  });
+
   it('SEAT-8 (partial) POST /api/orgs starts no subscription when the org was not created', async () => {
     vi.mocked(repository.createOrganization).mockResolvedValue({ ok: false, reason: 'slug_taken' });
     expect((await orgsRoute.POST(req('POST', { name: 'N', slug: 'northwind' }))).status).toBe(409);
@@ -513,6 +531,15 @@ describe('org route behaviour', () => {
     const res = await orgRoute.DELETE(req('DELETE', { drives: [] }), params({ orgId: ORG_ID }));
     expect(res.status).toBe(200);
     expect(deleteOrganization).toHaveBeenCalledWith(expect.objectContaining({ orgId: ORG_ID }), { endSubscription: endSubscriptionPort });
+  });
+
+  it.each([['not_member', 404], ['insufficient_role', 403]] as const)('Given a current profile-write refusal (%s), should preserve its authorization code and write no success audit', async (reason, status) => {
+    asRole('ADMIN');
+    vi.mocked(repository.updateOrganization).mockResolvedValueOnce({ ok: false, reason });
+    const response = await orgRoute.PATCH(req('PATCH', { name: 'Unauthorized' }), params({ orgId: ORG_ID }));
+    expect(response.status).toBe(status);
+    expect(await response.json()).toMatchObject({ code: reason });
+    expect(auditRequest).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: 'data.write' }));
   });
 
   it('ORG-1 (partial) deleting an org removes its stored avatar file, only once the delete has gone through', async () => {

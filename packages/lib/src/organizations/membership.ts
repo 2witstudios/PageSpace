@@ -13,7 +13,7 @@ import { organizations, orgMembers, type OrgRole } from '@pagespace/db/schema/or
 import { decideOrgRole } from './authorize';
 import { roleChangeOnlyRestricts } from './org-roles';
 import { checkOrgMayLoosen, type ORG_LAPSED_CODE } from './status';
-import { loadOrgPrincipalKind, type OrgPrincipalKind } from './owner-candidate';
+import { loadOrgPrincipalKind, ownerHasActiveErasure, type OrgPrincipalKind } from './owner-candidate';
 import { computeReattributionAuditEvents, leaveOrganization, type ComputeReattribution } from './leave';
 import { ownerLeftAutomationAuditEvents, type OwnerLeftAutomation } from './automation-ownership';
 import { revokeForDemotion } from './demotion';
@@ -40,6 +40,7 @@ export type MembershipRefusal =
   | 'use_leave'
   | 'already_owner'
   | 'owner_not_human'
+  | 'owner_erasure_in_progress'
   | 'not_owner'
   | 'not_found'
   | 'not_member'
@@ -125,6 +126,8 @@ async function lockActorAndTargetRoles(
   actorId: string,
   targetId: string,
 ): Promise<{ actorRole: OrgRole | null; targetRole: OrgRole | null }> {
+  // Profile writes and ownership transfers use the same org-before-member order.
+  await tx.select({ id: organizations.id }).from(organizations).where(eq(organizations.id, orgId)).for('share');
   const rows = await tx
     .select({ userId: orgMembers.userId, role: orgMembers.role })
     .from(orgMembers)
@@ -252,6 +255,7 @@ export async function transferOwnership(input: {
     const targetKind = await loadOrgPrincipalKind(tx, input.targetId);
     const decision = decideOwnershipTransfer({ currentOwnerId: org.ownerId, ...input, targetRole, targetKind });
     if (!decision.ok) return decision;
+    if (await ownerHasActiveErasure(tx, input.targetId)) return { ok: false, status: 400, reason: 'owner_erasure_in_progress' };
     // [D-OW-33] #19: while lapsed, only a transfer that widens nothing (to an Admin) goes through; read under the org
     // row lock and the target's row lock taken above.
     if (await checkOrgMayLoosen(tx, input.orgId, ownershipTransferWidens(targetRole))) {

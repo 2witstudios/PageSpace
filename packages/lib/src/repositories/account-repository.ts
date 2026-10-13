@@ -13,7 +13,7 @@ import { driveMembers } from '@pagespace/db/schema/members';
 import { organizations } from '@pagespace/db/schema/organizations';
 import { deleteConversationsForDrive } from './conversation-cleanup';
 import { decryptUserRow } from '../auth/user-repository';
-import { computeReattributionAuditEvents, leaveAllOrganizations, reassignLedOrgDrives, type ComputeReattribution } from '../organizations/leave';
+import { LeaveOrganizationRefusedError, computeReattributionAuditEvents, leaveAllOrganizations, reassignLedOrgDrives, type ComputeReattribution } from '../organizations/leave';
 import { leaveAuditEvents } from '../organizations/org-events';
 import { ownerLeftAutomationAuditEvents, prepareAutomationsForAccountDeletion, type OwnerLeftAutomation } from '../organizations/automation-ownership';
 import { transactionWithOrgAudit } from '../audit/org-audit';
@@ -71,6 +71,12 @@ export const accountRepository = {
         name: true,
       },
     });
+  },
+
+  /** Refuse erasure while the subject owns an organization; caller holds the subject's user-row lock. */
+  assertMayLodgeErasure: async (userId: string, executor: Pick<typeof db, 'select'>): Promise<void> => {
+    const [owned] = await executor.select({ id: organizations.id }).from(organizations).where(eq(organizations.ownerId, userId)).limit(1);
+    if (owned) throw new LeaveOrganizationRefusedError(owned.id, 'OWNER_MUST_TRANSFER');
   },
 
   /**

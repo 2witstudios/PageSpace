@@ -11,7 +11,7 @@
 import { describe, it, expect, afterAll, afterEach, beforeAll, vi } from 'vitest';
 import { createId } from '@paralleldrive/cuid2';
 import { db, pool } from '@pagespace/db/db';
-import { and, eq, inArray } from '@pagespace/db/operators';
+import { and, eq, inArray, sql } from '@pagespace/db/operators';
 import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
 import { users, mcpTokens } from '@pagespace/db/schema/auth';
@@ -28,6 +28,7 @@ import {
   findOrganizationById,
   listOrganizationsForUser,
   setOrganizationAvatar,
+  updateOrganization,
 } from '../repository';
 import { orgAvatarPath } from '../org-avatar-core';
 import { changeMemberRole, removeMember, transferOwnership } from '../membership';
@@ -41,6 +42,8 @@ import {
   findInvitationByToken,
 } from '../invitations';
 import { deleteOrganization } from '../deletion';
+import { securityAudit } from '../../audit/security-audit';
+import { leaveAllOrganizations, reassignLedOrgDrives } from '../leave';
 import { requireOrgRole } from '../authorize';
 import { getUserAccessLevel } from '../../permissions/permissions';
 import { hasAppDriveMembership } from '../../permissions/app-permissions';
@@ -221,6 +224,116 @@ describe('org services (real Postgres)', () => {
       expect([...replaced, stored].sort()).toEqual([initial, ...uploads].sort());
       expect(replaced).not.toContain(stored);
     });
+
+    it.each(['removed', 'demoted'] as const)('ORG-1 (partial) Given an admitted Admin whose role is %s before a profile write, should retain the avatar/name/slug and write no profile audit', async kind => {
+      const { jono, org } = await seedNorthwind();
+      const admin = await person('Profile Admin');
+      await addMember(org.id, admin.id, 'ADMIN');
+      const previousAvatar = orgAvatarPath(org.id, 'avatar-abc123.png');
+      expect((await setOrganizationAvatar(org.id, previousAvatar, admin.id)).ok).toBe(true);
+      expect((await updateOrganization(org.id, { name: 'Retained profile' }, admin.id)).ok).toBe(true);
+      expect((await requireOrgRole(admin.id, org.id, 'ADMIN')).ok).toBe(true);
+      if (kind === 'removed') expect((await removeMember({ orgId: org.id, actorId: jono.id, targetId: admin.id })).ok).toBe(true);
+      else expect((await changeMemberRole({ orgId: org.id, actorId: jono.id, targetId: admin.id, newRole: 'MEMBER' })).ok).toBe(true);
+      const previous = await findOrganizationById(org.id);
+      const refusal = { ok: false, reason: kind === 'removed' ? 'not_member' : 'insufficient_role' };
+      const auditSpy = vi.spyOn(securityAudit, 'logEvent');
+      expect(await setOrganizationAvatar(org.id, orgAvatarPath(org.id, 'avatar-def456.png'), admin.id)).toEqual(refusal);
+      expect(await updateOrganization(org.id, { name: 'Unauthorized change', slug: createId() }, admin.id)).toEqual(refusal);
+      expect(await findOrganizationById(org.id)).toEqual(previous);
+      expect(auditSpy).not.toHaveBeenCalledWith(expect.objectContaining({ eventType: 'org.updated' }));
+      auditSpy.mockRestore();
+    });
+
+    it.each(['removed', 'demoted'] as const)('ORG-1 (partial) Given a %s Admin, should independently refuse a name/slug update', async kind => {
+      const { jono, org } = await seedNorthwind();
+      const admin = await person('Stale Profile Admin');
+      await addMember(org.id, admin.id, 'ADMIN');
+      expect((await requireOrgRole(admin.id, org.id, 'ADMIN')).ok).toBe(true);
+      if (kind === 'removed') await removeMember({ orgId: org.id, actorId: jono.id, targetId: admin.id });
+      else await changeMemberRole({ orgId: org.id, actorId: jono.id, targetId: admin.id, newRole: 'MEMBER' });
+      expect(await updateOrganization(org.id, { name: 'Unauthorized', slug: createId() }, admin.id)).toEqual({ ok: false, reason: kind === 'removed' ? 'not_member' : 'insufficient_role' });
+      expect(await findOrganizationById(org.id)).toEqual(org);
+    });
+
+    it.each(['removed', 'demoted'] as const)('ORG-1 (partial) Given a %s Admin queued before a profile mutation, should serialize revocation and refuse the write without deadlocking', async kind => {
+      const { jono, org } = await seedNorthwind();
+      const admin = await person('Racing Profile Admin');
+      await addMember(org.id, admin.id, 'ADMIN');
+      const blocker = await pool.connect();
+      let mutation: Promise<unknown> | undefined;
+      let profile: ReturnType<typeof setOrganizationAvatar> | undefined;
+      try {
+        await blocker.query('BEGIN');
+        const { rows: [{ pid }] } = await blocker.query<{ pid: number }>('SELECT pg_backend_pid() AS pid');
+        // The revocation takes its org lock before waiting on this member row.
+        await blocker.query('SELECT id FROM org_members WHERE "orgId" = $1 AND "userId" = $2 FOR UPDATE', [org.id, admin.id]);
+        let revokerPid: number | undefined;
+        mutation = (kind === 'removed' ? removeMember({ orgId: org.id, actorId: jono.id, targetId: admin.id }) : changeMemberRole({ orgId: org.id, actorId: jono.id, targetId: admin.id, newRole: 'MEMBER' })).then(result => { expect(result.ok).toBe(true); });
+        await vi.waitFor(async () => {
+          const waiting = await db.execute(sql`SELECT pid FROM pg_stat_activity WHERE ${pid} = ANY(pg_blocking_pids(pid))`);
+          expect(waiting.rows.length).toBeGreaterThan(0);
+          revokerPid = Number(waiting.rows[0].pid);
+        });
+        profile = setOrganizationAvatar(org.id, orgAvatarPath(org.id, 'avatar-abc123.png'), admin.id);
+        // Prove the profile is blocked by the revoker's granted org lock, rather
+        // than assuming PostgreSQL grants competing row waiters in FIFO order.
+        await vi.waitFor(async () => expect((await db.execute(sql`SELECT pid FROM pg_stat_activity WHERE ${revokerPid!} = ANY(pg_blocking_pids(pid))`)).rows.length).toBeGreaterThan(0));
+        await blocker.query('COMMIT');
+        await mutation;
+        expect(await profile).toEqual({ ok: false, reason: kind === 'removed' ? 'not_member' : 'insufficient_role' });
+        expect((await findOrganizationById(org.id))?.avatarUrl).toBeNull();
+      } finally {
+        await blocker.query('ROLLBACK');
+        blocker.release();
+        await Promise.allSettled([mutation, profile]);
+      }
+    }, 10000);
+
+    it('ORG-1 (partial) Given two leavers who joined the same orgs in opposite orders, should complete both departures in globally sorted org order without deadlocking', async () => {
+      const orgs = [(await seedNorthwind()).org, (await seedNorthwind()).org].sort((a, b) => a.id.localeCompare(b.id));
+      const first = await person('First Leaver');
+      const second = await person('Second Leaver');
+      for (const org of orgs) await addMember(org.id, first.id, 'MEMBER');
+      for (const org of [...orgs].reverse()) await addMember(org.id, second.id, 'MEMBER');
+      const depart = (userId: string) => db.transaction(async tx => {
+        await tx.execute(sql`SET LOCAL statement_timeout = '5s'`);
+        return leaveAllOrganizations(userId, tx);
+      });
+      const outcomes = await Promise.all([depart(first.id), depart(second.id)]);
+      for (const left of outcomes) expect(left.map(item => item.orgId)).toEqual(orgs.map(org => org.id));
+      expect(await db.select().from(orgMembers).where(inArray(orgMembers.userId, [first.id, second.id]))).toEqual([]);
+    }, 15000);
+
+    it('ORG-1 (partial) Given membership orgs and an orphan led-org, should lock their sorted union before any departure and retain the orphan drive', async () => {
+      const orgs = [(await seedNorthwind()).org, (await seedNorthwind()).org, (await seedNorthwind()).org].sort((a, b) => a.id.localeCompare(b.id));
+      const leaver = await person('Orphan Drive Leaver');
+      for (const org of orgs.slice(1)) await addMember(org.id, leaver.id, 'MEMBER');
+      const orphanDrive = await seedDrive(leaver.id, orgs[0].id);
+      const blocker = await pool.connect();
+      let departure: Promise<unknown> | undefined;
+      try {
+        await blocker.query('BEGIN');
+        const { rows: [{ pid }] } = await blocker.query<{ pid: number }>('SELECT pg_backend_pid() AS pid');
+        await blocker.query('SELECT id FROM organizations WHERE id = $1 FOR UPDATE', [orgs[0].id]);
+        let membershipsLeft = false;
+        departure = db.transaction(async tx => {
+          await tx.execute(sql`SET LOCAL statement_timeout = '5s'`);
+          await leaveAllOrganizations(leaver.id, tx);
+          membershipsLeft = true;
+          await reassignLedOrgDrives(leaver.id, tx);
+        });
+        await vi.waitFor(async () => expect((await db.execute(sql`SELECT pid FROM pg_stat_activity WHERE ${pid} = ANY(pg_blocking_pids(pid))`)).rows.length).toBeGreaterThan(0));
+        expect(membershipsLeft).toBe(false);
+        await blocker.query('COMMIT');
+        await departure;
+        expect((await db.select().from(drives).where(eq(drives.id, orphanDrive.id)))[0].ownerId).toBe(orgs[0].ownerId);
+      } finally {
+        await blocker.query('ROLLBACK');
+        blocker.release();
+        await Promise.allSettled([departure]);
+      }
+    }, 15000);
 
     it('ORG-1 (partial) a taken slug creates neither the org nor a membership row', async () => {
       const { org } = await seedNorthwind();

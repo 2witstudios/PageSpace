@@ -35,6 +35,7 @@ vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
   logUserActivity: vi.fn(),
 }));
 
+import { LeaveOrganizationRefusedError } from '@pagespace/lib/organizations/leave';
 import { DELETE } from '../route';
 import { accountRepository } from '@pagespace/lib/repositories/account-repository';
 import { dataSubjectRequestRepository } from '@pagespace/lib/repositories/data-subject-request-repository';
@@ -211,6 +212,14 @@ describe('DELETE /api/account (async erasure)', () => {
       expect(body.error).toBe('Transfer ownership of your organizations or delete them before deleting your account');
       expect(body.ownedOrganizations).toEqual(['Northwind Labs']);
       expect(lodgeAndEnqueueErasure).not.toHaveBeenCalled();
+    });
+
+    it('ORG-6 (partial) an ownership race refused by atomic lodge returns the ownership refusal instead of 500', async () => {
+      mockAccountRepo.getOwnedOrganizationNames.mockResolvedValueOnce([]).mockResolvedValueOnce(['Northwind Labs']);
+      vi.mocked(lodgeAndEnqueueErasure).mockRejectedValueOnce(new LeaveOrganizationRefusedError('org-raced', 'OWNER_MUST_TRANSFER'));
+      const response = await DELETE(deleteReq(mockUserEmail));
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({ error: expect.stringMatching(/Transfer ownership/), ownedOrganizations: ['Northwind Labs'] });
     });
 
     it('given an in-flight erasure, should be idempotent and return the existing request', async () => {

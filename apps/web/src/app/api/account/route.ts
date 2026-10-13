@@ -1,3 +1,4 @@
+import { LeaveOrganizationRefusedError } from '@pagespace/lib/organizations/leave';
 import { db } from '@pagespace/db/db'
 import { eq } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth';
@@ -283,6 +284,9 @@ export async function DELETE(req: Request) {
       { status: 202 }
     );
   } catch (error) {
+    if (error instanceof LeaveOrganizationRefusedError) {
+      return Response.json({ error: 'Transfer ownership of your organizations or delete them before deleting your account', code: 'org_owner_must_transfer', ownedOrganizations: await accountRepository.getOwnedOrganizationNames(userId) }, { status: 400 });
+    }
     loggers.auth.error('Account erasure request error:', error as Error);
     return Response.json({ error: 'Failed to queue account erasure' }, { status: 500 });
   }

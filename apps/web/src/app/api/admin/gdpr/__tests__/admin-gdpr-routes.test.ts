@@ -33,6 +33,7 @@ vi.mock('@pagespace/lib/monitoring/hash-chain-verifier', () => ({ verifyHashChai
 vi.mock('@pagespace/lib/audit/security-audit-chain-verifier', () => ({ verifySecurityAuditChain: vi.fn() }));
 vi.mock('@pagespace/lib/audit/security-audit', () => ({ securityAudit: { logEvent: vi.fn() } }));
 
+import { LeaveOrganizationRefusedError } from '@pagespace/lib/organizations/leave';
 import { POST as erasurePost } from '../erasure/route';
 import { POST as pseudoPost } from '../pseudonymize/route';
 import { accountRepository } from '@pagespace/lib/repositories/account-repository';
@@ -69,6 +70,15 @@ describe('POST /api/admin/gdpr/erasure (force-delete escalation)', () => {
     expect(res.status).toBe(400);
     expect(body.ownedOrganizations).toEqual(['Northwind Labs']);
     expect(lodgeAndEnqueueErasure).not.toHaveBeenCalled();
+    expect(enqueueAccountErasure).not.toHaveBeenCalled();
+  });
+
+  it('ORG-6 (partial) atomic lodge refuses an ownership race with 400 even for force erasure', async () => {
+    vi.mocked(accountRepository.getOwnedOrganizationNames).mockResolvedValueOnce([]).mockResolvedValueOnce(['Northwind Labs']);
+    vi.mocked(lodgeAndEnqueueErasure).mockRejectedValueOnce(new LeaveOrganizationRefusedError('raced-org', 'OWNER_MUST_TRANSFER'));
+    const response = await post(erasurePost, { userId: 'u1', confirmation: 'ERASE u1', forceDelete: true });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ error: expect.stringMatching(/Transfer ownership/), ownedOrganizations: ['Northwind Labs'] });
     expect(enqueueAccountErasure).not.toHaveBeenCalled();
   });
 

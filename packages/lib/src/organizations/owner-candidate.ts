@@ -8,8 +8,9 @@
  * answer 'agent' for them.
  */
 import { db } from '@pagespace/db/db';
-import { and, eq } from '@pagespace/db/operators';
+import { and, eq, inArray, isNotNull, or } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
+import { dataSubjectRequests } from '@pagespace/db/schema/data-subject-requests';
 import { pages } from '@pagespace/db/schema/core';
 
 export type OrgPrincipalKind = 'human' | 'agent';
@@ -37,4 +38,23 @@ export async function loadOrgPrincipalKind(executor: Executor, id: string): Prom
     .where(and(eq(pages.id, id), eq(pages.type, 'AI_CHAT')))
     .limit(1);
   return agent ? 'agent' : null;
+}
+
+/** Serialize erasure/ownership writers without blocking the requester/subject foreign-key KEY SHARE checks. */
+export async function lockOwnershipSubject(executor: Executor, userId: string): Promise<void> {
+  await executor.select({ id: users.id }).from(users).where(eq(users.id, userId)).for('no key update');
+}
+
+/** A started worker can retry after failure; a failed enqueue before starting is inactive. */
+export const activeErasureForUser = (userId: string) => and(
+  eq(dataSubjectRequests.userId, userId), eq(dataSubjectRequests.requestType, 'erasure'),
+  or(inArray(dataSubjectRequests.status, ['pending', 'queued', 'in_progress', 'blocked']),
+    and(eq(dataSubjectRequests.status, 'failed'), isNotNull(dataSubjectRequests.startedAt))),
+);
+
+export async function ownerHasActiveErasure(executor: Executor, userId: string): Promise<boolean> {
+  await lockOwnershipSubject(executor, userId);
+  const [request] = await executor.select({ id: dataSubjectRequests.id }).from(dataSubjectRequests)
+    .where(activeErasureForUser(userId)).limit(1);
+  return Boolean(request);
 }

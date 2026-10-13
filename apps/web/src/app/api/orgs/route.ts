@@ -63,6 +63,9 @@ export async function POST(request: Request) {
     }
     const result = await createOrganization({ ...parsed.data, ownerId: gate.userId });
     if (!result.ok) {
+      if (result.reason === 'owner_erasure_in_progress') {
+        return NextResponse.json({ error: 'An account undergoing erasure cannot own an organization', code: result.reason }, { status: 400 });
+      }
       if (result.reason === 'slug_taken') {
         return NextResponse.json({ error: 'That organization URL is already taken', code: 'slug_taken' }, { status: 409 });
       }

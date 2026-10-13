@@ -81,6 +81,9 @@ export async function runAccountErasureJob(data: AccountErasureJobData): Promise
     return;
   }
 
+  const claimed = await dataSubjectRequestRepository.claimErasure(requestId, userId);
+  if (!claimed) return;
+
   const mode = resolveDeploymentMode();
   const forceDelete = request.forceDelete;
 
@@ -202,7 +205,7 @@ export async function runAccountErasureJob(data: AccountErasureJobData): Promise
       try {
         await accountRepository.deleteUser(userId);
       } catch (error) {
-        // Became an org Owner after drive-disposition passed: terminal, not a retry.
+        // Defense against legacy/direct database writes bypassing retirement admission.
         if (error instanceof LeaveOrganizationRefusedError) {
           throw new Error(`${ERASURE_BLOCKED_PREFIX}: ${error.message}`);
         }

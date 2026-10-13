@@ -424,6 +424,8 @@ export async function leaveOrganization(
     return done.result;
   }
 
+  // Profile writes, removals and ownership transfers all lock org before member.
+  await tx.select({ id: organizations.id }).from(organizations).where(eq(organizations.id, orgId)).for('share');
   const [membership] = await tx
     .select({ id: orgMembers.id, role: orgMembers.role })
     .from(orgMembers)
@@ -562,9 +564,18 @@ export async function leaveAllOrganizations(
     .select({ orgId: orgMembers.orgId })
     .from(orgMembers)
     .where(eq(orgMembers.userId, userId))
-    // Deterministic order, so a refusal part-way through is reproducible (the caller's
-    // transaction rolls back whatever earlier orgs already applied).
-    .orderBy(orgMembers.joinedAt, orgMembers.id);
+    .orderBy(asc(orgMembers.orgId));
+
+  // Account deletion also reassigns legacy org drives led without a membership.
+  // Lock the complete union before removing anything, in one global order: two
+  // leavers may have joined the same organizations in opposite orders.
+  const led = await tx.selectDistinct({ orgId: drives.orgId }).from(drives)
+    .where(and(eq(drives.ownerId, userId), isNotNull(drives.orgId)));
+  const orgIds = [...new Set([...memberships.map(row => row.orgId), ...led.flatMap(row => row.orgId ? [row.orgId] : [])])].sort();
+  if (orgIds.length > 0) {
+    await tx.select({ id: organizations.id }).from(organizations)
+      .where(inArray(organizations.id, orgIds)).orderBy(asc(organizations.id)).for('share');
+  }
 
   const left: LeftOrganization[] = [];
   for (const { orgId } of memberships) {

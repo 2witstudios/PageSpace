@@ -1,3 +1,4 @@
+import { LeaveOrganizationRefusedError } from '@pagespace/lib/organizations/leave';
 import { withAdminAuth } from '@/lib/auth';
 import { z } from 'zod';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -116,6 +117,9 @@ export const POST = withAdminAuth(async (admin, request) => {
       { status: 202 }
     );
   } catch (error) {
+    if (error instanceof LeaveOrganizationRefusedError) {
+      return Response.json({ error: 'Transfer ownership of your organizations or delete them before deleting your account', code: 'org_owner_must_transfer', ownedOrganizations: await accountRepository.getOwnedOrganizationNames(userId) }, { status: 400 });
+    }
     loggers.auth.error('Admin erasure escalation failed:', error as Error);
     return Response.json({ error: 'Failed to queue account erasure' }, { status: 500 });
   }

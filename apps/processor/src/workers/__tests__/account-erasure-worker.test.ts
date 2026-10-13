@@ -54,6 +54,7 @@ vi.mock('@pagespace/lib/organizations/leave', () => ({
 vi.mock('@pagespace/lib/repositories/data-subject-request-repository', () => ({
   dataSubjectRequestRepository: {
     findById: vi.fn().mockResolvedValue({ status: 'pending', attempts: 0, forceDelete: false }),
+    claimErasure: vi.fn().mockResolvedValue(true),
     incrementAttempts: vi.fn().mockResolvedValue(undefined),
     appendStepResult: vi.fn().mockResolvedValue(undefined),
     updateStatus: vi.fn().mockResolvedValue(undefined),
@@ -144,6 +145,15 @@ describe('runAccountErasureJob — org Owner refusal', () => {
   beforeEach(() => {
     callOrder.length = 0;
     vi.clearAllMocks();
+  });
+
+  it('ORG-6 (partial) an unclaimable cancelled request never starts a destructive step', async () => {
+    vi.mocked(dataSubjectRequestRepository.claimErasure).mockResolvedValueOnce(false);
+    await runAccountErasureJob({ requestId: 'dsr-1', userId: 'user-1' });
+    expect(accountRepository.getOwnedDrives).not.toHaveBeenCalled();
+    expect(accountRepository.deleteDrive).not.toHaveBeenCalled();
+    expect(deleteUserAvatars).not.toHaveBeenCalled();
+    expect(accountRepository.deleteUser).not.toHaveBeenCalled();
   });
 
   it('ORG-6 (partial) an org Owner is blocked at the first step and nothing is destroyed', async () => {

@@ -59,6 +59,9 @@ export async function PATCH(request: Request, context: Context) {
     }
     const result = await updateOrganization(orgId, parsed.data, gate.userId);
     if (!result.ok) {
+      if (result.reason === 'not_member' || result.reason === 'insufficient_role') {
+        return NextResponse.json({ error: 'Your organization role no longer permits this change', code: result.reason }, { status: result.reason === 'not_member' ? 404 : 403 });
+      }
       return result.reason === 'slug_taken'
         ? NextResponse.json({ error: 'That organization URL is already taken', code: 'slug_taken' }, { status: 409 })
         : NextResponse.json({ error: 'Organization not found', code: 'org_not_found' }, { status: 404 });

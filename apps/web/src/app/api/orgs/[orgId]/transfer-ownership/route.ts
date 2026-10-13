@@ -26,6 +26,9 @@ export async function POST(request: Request, context: { params: Promise<{ orgId:
     }
     const result = await transferOwnership({ orgId, actorId: gate.userId, targetId: parsed.data.toUserId });
     if (!result.ok) {
+      if (result.reason === 'owner_erasure_in_progress') {
+        return NextResponse.json({ error: 'An account undergoing erasure cannot own an organization', code: result.reason }, { status: result.status });
+      }
       const error =
         result.reason === 'target_not_member'
           ? 'Ownership can only move to a member of this organization'

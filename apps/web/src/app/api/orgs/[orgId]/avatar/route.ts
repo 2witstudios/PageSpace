@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { setOrganizationAvatar } from '@pagespace/lib/organizations/repository';
+import { setOrganizationAvatar, type SetOrganizationAvatarResult } from '@pagespace/lib/organizations/repository';
 import { announceOrgChange } from '@pagespace/lib/organizations/org-change-events';
 import {
   ORG_AVATAR_MAX_BYTES,
@@ -28,6 +28,13 @@ async function removeFile(orgId: string, token: string, filename: string | null)
 
 function avatarResponse(organization: { id: string; avatarUrl: string | null }) {
   return NextResponse.json({ organization: { id: organization.id, avatarUrl: organization.avatarUrl } });
+}
+
+function avatarWriteRefusal(result: Extract<SetOrganizationAvatarResult, { ok: false }>) {
+  if (result.reason === 'insufficient_role') return apiError(403, 'insufficient_role', 'Only an Owner or Admin can change the organization avatar');
+  if (result.reason === 'not_member') return apiError(404, 'not_member', 'Organization not found');
+  if (result.reason === 'invalid_avatar') return apiError(400, 'invalid_request', 'Invalid organization avatar');
+  return apiError(404, 'org_not_found', 'Organization not found');
 }
 
 /**
@@ -67,7 +74,7 @@ export async function POST(request: Request, context: Context) {
     if (!saved.ok) {
       // Nothing points at the new file: remove it.
       await removeFile(orgId, token, filename);
-      return apiError(404, 'org_not_found', 'Organization not found');
+      return avatarWriteRefusal(saved);
     }
     await removeFile(orgId, token, saved.previousAvatarUrl && orgAvatarFilenameFromPath(orgId, saved.previousAvatarUrl));
     auditRequest(request, {
@@ -94,7 +101,7 @@ export async function DELETE(request: Request, context: Context) {
   try {
     const token = await mintOrgAvatarToken(orgId, gate.actor);
     const saved = await setOrganizationAvatar(orgId, null, gate.userId);
-    if (!saved.ok) return apiError(404, 'org_not_found', 'Organization not found');
+    if (!saved.ok) return avatarWriteRefusal(saved);
     await removeFile(orgId, token, saved.previousAvatarUrl && orgAvatarFilenameFromPath(orgId, saved.previousAvatarUrl));
     auditRequest(request, {
       eventType: 'data.delete',
