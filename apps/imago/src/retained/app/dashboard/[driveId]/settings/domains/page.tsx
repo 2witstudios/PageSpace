@@ -6,10 +6,9 @@ import { Button } from '@/retained/components/ui/button';
 import { Input } from '@/retained/components/ui/input';
 import { Label } from '@/retained/components/ui/label';
 import { Badge } from '@/retained/components/ui/badge';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/retained/components/ui/card';
 import { Skeleton } from '@/retained/components/ui/skeleton';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/retained/components/ui/select';
-import { ChevronLeft, Shield, Globe, Trash2, Plus, RefreshCw, CheckCircle2, XCircle, Lock, Loader2, Star, Image as ImageIcon, FileWarning } from 'lucide-react';
+import { Shield, Globe, Trash2, Plus, RefreshCw, CheckCircle2, XCircle, Lock, Loader2, Star, Copy } from 'lucide-react';
 import { useDriveStore, type Drive } from '@/retained/hooks/useDrive';
 import { useAuth } from '@/retained/hooks/useAuth';
 import { toast } from 'sonner';
@@ -20,12 +19,21 @@ import { selectPrimaryActiveDomain, isEligibleForPrimaryHost } from '@pagespace/
 import { PagePickerPopover } from '@/retained/components/common/PagePickerPopover';
 import { UpgradeLink } from '@/retained/components/billing/UpgradeLink';
 import { PageType } from '@pagespace/lib/utils/enums';
+import { isBillingEnabled } from '@/retained/lib/deployment-mode';
+import { SettingsScreen, SettingsSection } from '@/ui/settings/settings-screen/settings-screen';
+import {
+  domainCountLabel,
+  domainStatusLabel,
+  imageUrlError,
+  needsDnsRecords,
+  type DomainStatus,
+} from './domain-settings-model';
 
 interface CustomDomain {
   id: string;
   driveId: string;
   hostname: string;
-  status: 'pending' | 'verified' | 'failed' | 'dns_failed' | 'provisioning' | 'active' | 'cert_failed';
+  status: DomainStatus;
   isPrimary: boolean;
   createdAt: string;
   /**
@@ -438,21 +446,10 @@ export default function DomainsSettingsPage() {
   }
 
   return (
-    <div className="container mx-auto px-4 py-10 sm:px-6 lg:px-10 max-w-2xl space-y-6">
-      <div>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => router.push(`/dashboard/${driveId}/settings`)}
-          className="mb-4"
-        >
-          <ChevronLeft className="h-4 w-4 mr-1" />
-          Back to Settings
-        </Button>
-        <h1 className="text-3xl font-bold mb-1">Domains &amp; Publishing</h1>
-        <p className="text-muted-foreground">Custom domains and share defaults for this drive&apos;s published canvas site</p>
-      </div>
-
+    <SettingsScreen
+      title="Domains & publishing"
+      lede={`Where ${drive.name}'s published pages live, and what visitors see.`}
+    >
       <SubdomainCard
         subdomain={subdomainData?.subdomain ?? null}
         publishHost={subdomainData?.publishHost ?? 'pagespace.site'}
@@ -492,9 +489,8 @@ export default function DomainsSettingsPage() {
 
       <UploadableImageSettingCard
         driveId={driveId}
-        icon={<ImageIcon className="h-4 w-4" />}
-        title="Default Share Image"
-        description="The Open Graph image used when a published page has no image of its own. Recommended 1200×630."
+        title="Default share image"
+        description="Used when a published page has no image of its own. 1200×630."
         inputId="default-og-image"
         inputLabel="Image URL"
         previewAlt="Default share image preview"
@@ -505,40 +501,30 @@ export default function DomainsSettingsPage() {
 
       <UploadableImageSettingCard
         driveId={driveId}
-        icon={<ImageIcon className="h-4 w-4" />}
         title="Favicon"
-        description={<>The icon shown in browser tabs for this site. Falls back to a page&apos;s own &lt;link rel=&quot;icon&quot;&gt; tag, then the PageSpace default.</>}
+        description="Shown in browser tabs. Falls back to a page’s own icon, then the PageSpace default."
         inputId="favicon-url"
-        inputLabel="Favicon URL"
+        inputLabel="Or an image URL"
         previewAlt="Favicon preview"
         previewClassName="h-10 w-10 rounded border object-contain bg-muted"
         savedValue={drive.publishFaviconUrl ?? ''}
         {...faviconSetting}
       />
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <FileWarning className="h-4 w-4" />
-            Custom 404 Page
-          </CardTitle>
-          <CardDescription>
-            The Canvas page shown when a visitor requests a URL that doesn&apos;t exist on this
-            site. Falls back to a generic not-found page when unset.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <PagePickerPopover
-            driveId={driveId}
-            value={notFoundPageId}
-            onChange={handleSetNotFoundPage}
-            pageType={PageType.CANVAS}
-            placeholder="Select a Canvas page…"
-            disabled={isSavingNotFoundPage}
-          />
-        </CardContent>
-      </Card>
-    </div>
+      <SettingsSection
+        title="Custom 404 page"
+        description="The Canvas page shown when a visitor requests a URL that doesn’t exist on this site. Falls back to a generic not-found page when unset."
+      >
+        <PagePickerPopover
+          driveId={driveId}
+          value={notFoundPageId}
+          onChange={handleSetNotFoundPage}
+          pageType={PageType.CANVAS}
+          placeholder="Select a Canvas page…"
+          disabled={isSavingNotFoundPage}
+        />
+      </SettingsSection>
+    </SettingsScreen>
   );
 }
 
@@ -631,7 +617,6 @@ function useUploadableImageSetting({
 
 interface UploadableImageSettingCardProps extends UploadableImageSettingHook {
   driveId: string;
-  icon: ReactNode;
   title: string;
   description: ReactNode;
   inputId: string;
@@ -643,7 +628,6 @@ interface UploadableImageSettingCardProps extends UploadableImageSettingHook {
 
 function UploadableImageSettingCard({
   driveId,
-  icon,
   title,
   description,
   inputId,
@@ -659,16 +643,11 @@ function UploadableImageSettingCard({
   onSave,
   onPickFile,
 }: UploadableImageSettingCardProps) {
+  const urlError = imageUrlError(value);
+  const errorId = `${inputId}-error`;
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          {icon}
-          {title}
-        </CardTitle>
-        <CardDescription>{description}</CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
+    <SettingsSection title={title} description={description}>
+      <div className="flex flex-col gap-4">
         <div className="space-y-1.5">
           <Label htmlFor={inputId}>{inputLabel}</Label>
           <Input
@@ -676,11 +655,18 @@ function UploadableImageSettingCard({
             type="url"
             value={value}
             onChange={(e) => setValue(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && onSave()}
+            onKeyDown={(e) => e.key === 'Enter' && urlError === null && onSave()}
             placeholder="https://…"
+            aria-invalid={urlError !== null}
+            aria-describedby={urlError === null ? undefined : errorId}
           />
+          {urlError !== null && (
+            <p id={errorId} role="alert" className="text-xs text-destructive">
+              {urlError}
+            </p>
+          )}
         </div>
-        {value.trim() && !previewError && (
+        {value.trim() && !previewError && urlError === null && (
           // eslint-disable-next-line @next/next/no-img-element
           <img
             key={value.trim()}
@@ -691,7 +677,7 @@ function UploadableImageSettingCard({
           />
         )}
         <div className="flex gap-2">
-          <Button onClick={() => onSave()} disabled={isSaving || value.trim() === savedValue}>
+          <Button onClick={() => onSave()} disabled={isSaving || urlError !== null || value.trim() === savedValue}>
             {isSaving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
             Save
           </Button>
@@ -711,8 +697,8 @@ function UploadableImageSettingCard({
             disabled={isSaving}
           />
         </div>
-      </CardContent>
-    </Card>
+      </div>
+    </SettingsSection>
   );
 }
 
@@ -732,17 +718,8 @@ function SubdomainCard({ subdomain, publishHost, canChange, inputValue, onInputC
   const preview = inputValue.trim().toLowerCase() || subdomain || 'your-subdomain';
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <Globe className="h-4 w-4" />
-          Subdomain
-        </CardTitle>
-        <CardDescription>
-          Your published site URL on {publishHost}
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
+    <SettingsSection title="Subdomain" description={`Your published site URL on ${publishHost}`}>
+      <div className="flex flex-col gap-4">
         {subdomain && (
           <a
             href={`https://${subdomain}.${publishHost}`}
@@ -793,8 +770,8 @@ function SubdomainCard({ subdomain, publishHost, canChange, inputValue, onInputC
             </UpgradeLink>
           </p>
         )}
-      </CardContent>
-    </Card>
+      </div>
+    </SettingsSection>
   );
 }
 
@@ -871,27 +848,16 @@ function CustomDomainsCard({ driveId, domains, limit, apps, newDomain, onNewDoma
     [domains],
   );
 
+  // The plan count is a billing fact: it only shows where billing is enabled.
+  const planCount = isBillingEnabled() && limit !== null && limit > 0 ? domainCountLabel(domains.length, limit) : null;
+
   return (
-    <Card>
-      <CardHeader>
-        <div className="flex items-start justify-between">
-          <div>
-            <CardTitle className="flex items-center gap-2">
-              <Globe className="h-4 w-4" />
-              Custom Domains
-            </CardTitle>
-            <CardDescription>
-              Point your own domain at this drive&apos;s published canvas site
-            </CardDescription>
-          </div>
-          {limit !== null && limit > 0 && (
-            <span className="text-xs text-muted-foreground tabular-nums mt-1">
-              {domains.length} / {limit}
-            </span>
-          )}
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-4">
+    <SettingsSection
+      title="Custom domains"
+      description="Point your own domain at this drive’s published canvas site."
+      actions={planCount === null ? undefined : <span className="text-xs text-muted-foreground tabular-nums">{planCount}</span>}
+    >
+      <div className="flex flex-col gap-4">
         {notAvailable ? (
           <p className="text-sm text-muted-foreground">
             Custom domains are available on Pro and higher plans.
@@ -910,7 +876,7 @@ function CustomDomainsCard({ driveId, domains, limit, apps, newDomain, onNewDoma
             />
             <Button onClick={onAdd} disabled={addDisabled}>
               {isAdding ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
-              Add
+              Add domain
             </Button>
           </div>
         )}
@@ -957,8 +923,8 @@ function CustomDomainsCard({ driveId, domains, limit, apps, newDomain, onNewDoma
         ) : (
           !notAvailable && <p className="text-sm text-muted-foreground">No custom domains yet</p>
         )}
-      </CardContent>
-    </Card>
+      </div>
+    </SettingsSection>
   );
 }
 
@@ -1003,7 +969,8 @@ function DomainRow({
   anyBusy: boolean;
   verifyReason: string | undefined;
 }) {
-  const [showDns, setShowDns] = useState(false);
+  // A domain still waiting on its records opens the record table straight away.
+  const [showDns, setShowDns] = useState(() => needsDnsRecords(domain.status));
   const instructions = buildDnsInstructions({
     hostname: domain.hostname,
     edgeIpv4: EDGE_IPV4,
@@ -1011,59 +978,50 @@ function DomainRow({
     cnameTarget: CNAME_TARGET,
   });
 
-  const statusBadge = () => {
-    if (domain.status === 'active') {
-      return (
-        <Badge variant="secondary" className="text-xs text-green-600 gap-1">
-          <Lock className="h-3 w-3" />
-          Active
-        </Badge>
-      );
+  const statusIcon = () => {
+    switch (domain.status) {
+      case 'active':
+        return <Lock className="h-3 w-3" />;
+      case 'provisioning':
+        return <Loader2 className="h-3 w-3 animate-spin" />;
+      case 'verified':
+        return <CheckCircle2 className="h-3 w-3" />;
+      case 'dns_failed':
+      case 'failed':
+      case 'cert_failed':
+        return <XCircle className="h-3 w-3" />;
+      case 'pending':
+        return null;
     }
-    if (domain.status === 'provisioning') {
-      return (
-        <Badge variant="secondary" className="text-xs gap-1">
-          <Loader2 className="h-3 w-3 animate-spin" />
-          Provisioning SSL
-        </Badge>
-      );
+  };
+
+  const statusClass = (): string => {
+    switch (domain.status) {
+      case 'active':
+      case 'verified':
+        return 'text-xs text-green-600 gap-1';
+      case 'dns_failed':
+      case 'failed':
+        return 'text-xs text-destructive gap-1';
+      case 'cert_failed':
+        return 'text-xs text-orange-600 gap-1';
+      case 'provisioning':
+      case 'pending':
+        return 'text-xs gap-1';
     }
-    if (domain.status === 'verified') {
-      return (
-        <Badge variant="secondary" className="text-xs text-green-600 gap-1">
-          <CheckCircle2 className="h-3 w-3" />
-          DNS Verified
-        </Badge>
-      );
-    }
-    if (domain.status === 'dns_failed') {
-      return (
-        <Badge variant="secondary" className="text-xs text-destructive gap-1">
-          <XCircle className="h-3 w-3" />
-          DNS Failed
-        </Badge>
-      );
-    }
-    if (domain.status === 'cert_failed') {
-      return (
-        <Badge variant="secondary" className="text-xs text-orange-600 gap-1">
-          <XCircle className="h-3 w-3" />
-          SSL Failed
-        </Badge>
-      );
-    }
-    if (domain.status === 'failed') {
-      return (
-        <Badge variant="secondary" className="text-xs text-destructive gap-1">
-          <XCircle className="h-3 w-3" />
-          DNS Failed
-        </Badge>
-      );
-    }
-    return (
-      <Badge variant="secondary" className="text-xs">
-        Pending DNS
-      </Badge>
+  };
+
+  const statusBadge = () => (
+    <Badge variant="secondary" className={statusClass()}>
+      {statusIcon()}
+      {domainStatusLabel(domain.status)}
+    </Badge>
+  );
+
+  const copyRecordValue = (value: string) => {
+    navigator.clipboard.writeText(value).then(
+      () => toast.success('Record value copied'),
+      () => toast.error('Could not copy — select the value and copy it instead'),
     );
   };
 
@@ -1197,15 +1155,37 @@ function DomainRow({
               ? 'Add these records at your DNS provider:'
               : 'Add this record at your DNS provider:'}
           </p>
-          <div className="space-y-1">
-            {instructions.records.map((r, i) => (
-              <div key={i} className="flex gap-3 text-xs font-mono">
-                <span className="w-12 text-muted-foreground">{r.type}</span>
-                <span className="w-8 text-muted-foreground">{r.name}</span>
-                <span className="break-all">{r.value}</span>
-              </div>
-            ))}
-          </div>
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="text-left text-muted-foreground">
+                <th className="font-medium pb-1 pr-3">Type</th>
+                <th className="font-medium pb-1 pr-3">Name</th>
+                <th className="font-medium pb-1">Value</th>
+                <th className="pb-1" />
+              </tr>
+            </thead>
+            <tbody>
+              {instructions.records.map((r, i) => (
+                <tr key={i} className="font-mono align-top">
+                  <td className="py-1 pr-3">{r.type}</td>
+                  <td className="py-1 pr-3">{r.name}</td>
+                  <td className="py-1 break-all">{r.value}</td>
+                  <td className="py-1 pl-2 text-right">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 w-6 p-0"
+                      aria-label="Copy record value"
+                      title="Copy record value"
+                      onClick={() => copyRecordValue(r.value)}
+                    >
+                      <Copy className="h-3 w-3" />
+                    </Button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
           <p className="text-xs text-muted-foreground mt-2">
             Once records propagate, click Verify DNS to confirm setup and automatically provision SSL.
           </p>

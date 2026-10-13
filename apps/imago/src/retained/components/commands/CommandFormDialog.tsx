@@ -70,6 +70,8 @@ interface CommandFormDialogProps {
   driveNameById: ReadonlyMap<string, string>;
   onCreate: (payload: CreateCommandPayload) => Promise<void>;
   onUpdate: (commandId: string, payload: Partial<CommandPayloadValues>) => Promise<void>;
+  /** Render the form as a section in the settings column instead of a dialog or sheet. */
+  inline?: boolean;
 }
 
 interface FormValues {
@@ -111,6 +113,7 @@ export function CommandFormDialog({
   driveNameById,
   onCreate,
   onUpdate,
+  inline = false,
 }: CommandFormDialogProps) {
   const isMobile = useBreakpoint('(max-width: 639px)');
   const isEdit = command !== null;
@@ -298,6 +301,7 @@ export function CommandFormDialog({
             onBlur={() => setTouched((prev) => ({ ...prev, trigger: true }))}
           />
         </div>
+        <p className="text-xs text-muted-foreground">Lowercase letters, numbers and dashes.</p>
         {triggerError && (
           <p id="command-trigger-error" role="alert" className="text-sm text-destructive">
             {triggerError.message}
@@ -350,6 +354,7 @@ export function CommandFormDialog({
 
       <div className="space-y-1.5" ref={entryPageRef} tabIndex={-1}>
         <Label>Entry page</Label>
+        <p className="text-xs text-muted-foreground">The page the command opens or prompts.</p>
         <EntryPagePicker
           driveId={scope === 'drive' ? driveId : undefined}
           value={values.entryPage}
@@ -376,8 +381,13 @@ export function CommandFormDialog({
         )}
       </div>
 
-      <div className="flex items-center justify-between">
-        <Label htmlFor="command-enabled">Enabled</Label>
+      <div className="flex items-center justify-between gap-4">
+        <div className="space-y-0.5">
+          <Label htmlFor="command-enabled">Enabled</Label>
+          <p className="text-xs text-muted-foreground">
+            Off hides it from everyone&apos;s / menu without deleting it.
+          </p>
+        </div>
         <Switch
           id="command-enabled"
           checked={values.enabled}
@@ -418,6 +428,47 @@ export function CommandFormDialog({
       ? 'Drive commands are available to everyone in this drive.'
       : 'Personal commands follow you into every drive.';
 
+  const discardDialog = (
+    <AlertDialog open={confirmDiscard} onOpenChange={setConfirmDiscard}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Discard changes?</AlertDialogTitle>
+          <AlertDialogDescription>
+            You have unsaved changes. If you close now, they will be lost.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Keep editing</AlertDialogCancel>
+          <AlertDialogAction
+            onClick={() => {
+              setConfirmDiscard(false);
+              onOpenChange(false);
+            }}
+          >
+            Discard
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+
+  if (inline) {
+    return (
+      <>
+        {open && (
+          <section aria-labelledby="command-form-title" className="flex flex-col gap-4">
+            <h2 id="command-form-title" className="text-base font-semibold text-foreground">
+              {title}
+            </h2>
+            {form}
+            <div className="flex justify-end gap-2">{footer}</div>
+          </section>
+        )}
+        {discardDialog}
+      </>
+    );
+  }
+
   return (
     <>
       {isMobile ? (
@@ -444,27 +495,7 @@ export function CommandFormDialog({
         </Dialog>
       )}
 
-      <AlertDialog open={confirmDiscard} onOpenChange={setConfirmDiscard}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Discard changes?</AlertDialogTitle>
-            <AlertDialogDescription>
-              You have unsaved changes. If you close now, they will be lost.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Keep editing</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => {
-                setConfirmDiscard(false);
-                onOpenChange(false);
-              }}
-            >
-              Discard
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      {discardDialog}
     </>
   );
 }

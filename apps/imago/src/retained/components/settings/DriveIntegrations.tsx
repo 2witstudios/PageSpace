@@ -2,7 +2,6 @@
 
 import { useState, useMemo } from 'react';
 import { Button } from '@/retained/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/retained/components/ui/card';
 import {
   Dialog,
   DialogContent,
@@ -11,8 +10,8 @@ import {
   DialogTitle,
 } from '@/retained/components/ui/dialog';
 import { Skeleton } from '@/retained/components/ui/skeleton';
-import { AlertCircle, Cable, Plug2, Plus, Bot } from 'lucide-react';
-import { Badge } from '@/retained/components/ui/badge';
+import { AlertCircle, Plug2, Plus } from 'lucide-react';
+import { SettingsSection, SettingsGroup } from '@/ui/settings/settings-screen/settings-screen';
 import { toast } from 'sonner';
 import { useAuth } from '@/retained/hooks/useAuth';
 import { useDriveConnections, useProviders, useConnectionGrantCount } from '@/retained/hooks/useIntegrations';
@@ -63,64 +62,49 @@ export function DriveIntegrations({ driveId }: DriveIntegrationsProps) {
 
   return (
     <>
-      <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between">
-            <div>
-              <CardTitle className="flex items-center gap-2">
-                <Cable className="w-5 h-5" />
-                Drive Integrations
-              </CardTitle>
-              <CardDescription>
-                External services connected to this drive. Each AI Chat then chooses which of a
-                connection&apos;s tools its agent can use — that per-agent choice is what caps what
-                an agent can do.
-              </CardDescription>
-            </div>
-            <Button
-              size="sm"
-              onClick={() => setShowProviderPicker(true)}
-              disabled={isLoading || availableProviders.length === 0}
-            >
-              <Plus className="h-4 w-4 mr-1" />
-              Connect
+      <SettingsSection
+        title="Connected"
+        actions={
+          <Button
+            size="sm"
+            onClick={() => setShowProviderPicker(true)}
+            disabled={isLoading || availableProviders.length === 0}
+          >
+            <Plus className="h-4 w-4 mr-1" />
+            Connect
+          </Button>
+        }
+      >
+        {isLoading ? (
+          <div className="space-y-3">
+            <Skeleton className="h-14 w-full" />
+            <Skeleton className="h-14 w-full" />
+          </div>
+        ) : error ? (
+          <div className="flex items-center gap-2 p-4 text-sm text-destructive bg-destructive/10 rounded-lg">
+            <AlertCircle className="h-4 w-4" />
+            <span>Failed to load integrations</span>
+            <Button variant="ghost" size="sm" onClick={() => { mutateConnections(); mutateProviders(); }}>
+              Retry
             </Button>
           </div>
-        </CardHeader>
-        <CardContent>
-          {isLoading ? (
-            <div className="space-y-3">
-              <Skeleton className="h-14 w-full" />
-              <Skeleton className="h-14 w-full" />
-            </div>
-          ) : error ? (
-            <div className="flex items-center gap-2 p-4 text-sm text-destructive bg-destructive/10 rounded-lg">
-              <AlertCircle className="h-4 w-4" />
-              <span>Failed to load integrations</span>
-              <Button variant="ghost" size="sm" onClick={() => { mutateConnections(); mutateProviders(); }}>
-                Retry
-              </Button>
-            </div>
-          ) : connections.length === 0 ? (
-            <div className="border border-dashed rounded-lg p-6 text-center">
-              <Plug2 className="h-8 w-8 mx-auto mb-2 text-muted-foreground" />
-              <p className="text-sm text-muted-foreground">
-                No integrations connected to this drive.
-              </p>
-            </div>
-          ) : (
-            <div className="space-y-2">
-              {connections.map((connection) => (
-                <DriveConnectionRow
-                  key={connection.id}
-                  connection={connection}
-                  onDisconnect={() => setDisconnectConnection(connection)}
-                />
-              ))}
-            </div>
-          )}
-        </CardContent>
-      </Card>
+        ) : connections.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-border p-6 text-center">
+            <Plug2 className="h-8 w-8 mx-auto mb-2 text-muted-foreground" />
+            <p className="text-sm text-muted-foreground">No integrations connected to this drive.</p>
+          </div>
+        ) : (
+          <SettingsGroup label="Connected integrations">
+            {connections.map((connection) => (
+              <DriveConnectionRow
+                key={connection.id}
+                connection={connection}
+                onDisconnect={() => setDisconnectConnection(connection)}
+              />
+            ))}
+          </SettingsGroup>
+        )}
+      </SettingsSection>
 
       {/* Provider Picker - reuse ConnectIntegrationDialog for the selected provider */}
       {showProviderPicker && !connectProvider && (
@@ -160,28 +144,25 @@ function DriveConnectionRow({
   connection: SafeConnection;
   onDisconnect: () => void;
 }) {
-  const { count: agentCount } = useConnectionGrantCount(connection.id);
+  const { count: agentCount, isLoading: loadingGrants } = useConnectionGrantCount(connection.id);
+  const providerName = connection.provider?.name;
 
   return (
-    <div className="flex items-center justify-between p-3 border rounded-lg">
-      <div className="flex items-center gap-3 min-w-0">
-        <div className="p-2 rounded-full bg-muted flex-shrink-0">
-          <Plug2 className="h-4 w-4 text-muted-foreground" />
+    <div className="flex min-h-[60px] items-center gap-3 px-4 py-2">
+      <span
+        aria-hidden="true"
+        className="grid size-9 flex-none place-items-center rounded-[10px] bg-tint text-sm font-bold text-muted-foreground"
+      >
+        {(providerName ?? connection.name).slice(0, 2)}
+      </span>
+      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <div className="flex items-center gap-2">
+          <span className="truncate font-medium text-foreground">{connection.name}</span>
+          <IntegrationStatusBadge status={connection.status} />
         </div>
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <span className="font-medium truncate">{connection.name}</span>
-            <IntegrationStatusBadge status={connection.status} />
-          </div>
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            {connection.provider && <span>{connection.provider.name}</span>}
-            {agentCount > 0 && (
-              <Badge variant="secondary" className="text-xs px-1.5 py-0 h-5 gap-1">
-                <Bot className="h-3 w-3" />
-                {agentCount} {agentCount === 1 ? 'agent' : 'agents'}
-              </Badge>
-            )}
-          </div>
+        <div className="text-xs text-muted-foreground">
+          {providerName ?? 'Unknown provider'}
+          {loadingGrants ? null : ` · ${agentCount} ${agentCount === 1 ? 'agent' : 'agents'}`}
         </div>
       </div>
       <Button

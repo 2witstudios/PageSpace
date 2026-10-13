@@ -6,8 +6,6 @@ import { useParams, useRouter } from '@/retained-adapters/navigation';
 import { Button } from '@/retained/components/ui/button';
 import { Input } from '@/retained/components/ui/input';
 import { Label } from '@/retained/components/ui/label';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/retained/components/ui/card';
-import { Badge } from '@/retained/components/ui/badge';
 import { Skeleton } from '@/retained/components/ui/skeleton';
 import { Switch } from '@/retained/components/ui/switch';
 import {
@@ -17,13 +15,19 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/retained/components/ui/select';
-import { ChevronLeft, Shield, Plus, Loader2, Lock } from 'lucide-react';
+import { Shield, Loader2, Lock } from 'lucide-react';
 import { useDriveStore } from '@/retained/hooks/useDrive';
 import { fetchWithAuth, post, patch } from '@/retained/lib/auth/auth-fetch';
 import { toast } from 'sonner';
 import { UpgradeLink } from '@/retained/components/billing/UpgradeLink';
 import useSWR from 'swr';
-import { format, formatDistanceToNow } from 'date-fns';
+import { format } from 'date-fns';
+import {
+  SettingsGroup,
+  SettingsRow,
+  SettingsScreen,
+  SettingsSection,
+} from '@/ui/settings/settings-screen/settings-screen';
 
 const PAGE_SIZE = 10;
 
@@ -61,15 +65,53 @@ type CreateBackupResult = {
   counts: { pages: number; permissions: number; members: number; roles: number; files: number };
 };
 
+/** A backup being created: shown as a pending row until the create request answers. */
+type PendingBackup = { readonly label: string | null };
+
+// ============================================================================
+// Pure helpers
+// ============================================================================
+
+/**
+ * The schedule PATCH body: the schedule as it is, with the one change applied. A change of the
+ * switch or of the frequency always sends the whole schedule, so the server keeps the rest.
+ */
+export function scheduleBody(
+  schedule: Pick<BackupSchedule, 'enabled' | 'frequency' | 'timezone'>,
+  change: Partial<Pick<BackupSchedule, 'enabled' | 'frequency'>>,
+): Pick<BackupSchedule, 'enabled' | 'frequency' | 'timezone'> {
+  return { enabled: schedule.enabled, frequency: schedule.frequency, timezone: schedule.timezone, ...change };
+}
+
+/** A run time in the schedule's own timezone, so "02:00" means 02:00 where the drive runs. */
+export function runAtLabel(iso: string | null, timezone: string): string | null {
+  if (iso === null) return null;
+  return new Intl.DateTimeFormat('en-GB', {
+    timeZone: timezone,
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(new Date(iso));
+}
+
+export const FREQUENCY_LABELS: Readonly<Record<BackupFrequency, string>> = {
+  weekly: 'Weekly',
+  daily: 'Daily',
+  monthly: 'Monthly',
+};
+
+const statusPillClass: Readonly<Record<string, string>> = {
+  ready: 'bg-status-success/15 text-status-success',
+  failed: 'bg-status-danger/15 text-status-danger',
+  pending: 'bg-tint text-muted-foreground',
+};
+
 // ============================================================================
 // Fetchers
 // ============================================================================
-
-function statusVariant(status: string): 'default' | 'secondary' | 'destructive' | 'outline' {
-  if (status === 'ready') return 'default';
-  if (status === 'failed') return 'destructive';
-  return 'secondary';
-}
 
 const fetcher = (url: string) =>
   fetchWithAuth(url).then((r) => {
@@ -84,7 +126,7 @@ const scheduleFetcher = (url: string) =>
   });
 
 // ============================================================================
-// AutomaticBackups component
+// Automatic backups section
 // ============================================================================
 
 function AutomaticBackups({ driveId }: { driveId: string }) {
@@ -95,33 +137,15 @@ function AutomaticBackups({ driveId }: { driveId: string }) {
     { revalidateOnFocus: false }
   );
 
-  const handleToggle = async (enabled: boolean) => {
+  const save = async (change: Partial<Pick<BackupSchedule, 'enabled' | 'frequency'>>, failed: string) => {
+    if (!data) return;
     try {
-      await mutate(
-        patch<BackupSchedule>(scheduleKey, {
-          enabled,
-          frequency: data?.frequency ?? 'daily',
-          timezone: data?.timezone ?? 'UTC',
-        }),
-        { optimisticData: data ? { ...data, enabled } : undefined, rollbackOnError: true }
-      );
+      await mutate(patch<BackupSchedule>(scheduleKey, scheduleBody(data, change)), {
+        optimisticData: { ...data, ...change },
+        rollbackOnError: true,
+      });
     } catch {
-      toast.error('Failed to update backup schedule');
-    }
-  };
-
-  const handleFrequencyChange = async (frequency: BackupFrequency) => {
-    try {
-      await mutate(
-        patch<BackupSchedule>(scheduleKey, {
-          enabled: data?.enabled ?? true,
-          frequency,
-          timezone: data?.timezone ?? 'UTC',
-        }),
-        { optimisticData: data ? { ...data, frequency } : undefined, rollbackOnError: true }
-      );
-    } catch {
-      toast.error('Failed to update backup frequency');
+      toast.error(failed);
     }
   };
 
@@ -133,72 +157,58 @@ function AutomaticBackups({ driveId }: { driveId: string }) {
     return null;
   }
 
-  const { available, enabled, frequency, nextRunAt, lastRunAt } = data;
+  const { available, enabled, frequency, nextRunAt, lastRunAt, timezone } = data;
+  const nextLabel = runAtLabel(nextRunAt, timezone);
+  const lastLabel = runAtLabel(lastRunAt, timezone);
 
   return (
-    <Card>
-      <CardHeader className="flex flex-row items-start justify-between space-y-0">
-        <div>
-          <div className="flex items-center gap-2">
-            {!available && <Lock className="h-4 w-4 text-muted-foreground" />}
-            <CardTitle>Automatic Backups</CardTitle>
-          </div>
-          {!available && (
-            <CardDescription className="mt-1">
-              <UpgradeLink
-                href="/settings/plan"
-                className="underline hover:text-foreground"
-                fallback="Available on paid plans:"
-              >
-                Upgrade to enable
-              </UpgradeLink>{' '}
-              daily, weekly, or monthly snapshots.
-            </CardDescription>
-          )}
-        </div>
+    <SettingsSection
+      title="Automatic backups"
+      description="Runs on a schedule in your timezone. Included in your plan."
+      actions={
         <Switch
-          aria-label="Enable automatic backups"
+          aria-label="Automatic backups"
           checked={enabled}
-          onCheckedChange={handleToggle}
+          onCheckedChange={(next) => save({ enabled: next }, 'Failed to update backup schedule')}
           disabled={!available}
         />
-      </CardHeader>
-      <CardContent className={!available ? 'opacity-50 pointer-events-none' : undefined}>
-        {available && enabled && (
-          <div className="space-y-3">
-            <div className="space-y-1.5">
-              <Label>Frequency</Label>
-              <Select value={frequency} onValueChange={handleFrequencyChange}>
-                <SelectTrigger className="w-40">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="daily">Daily</SelectItem>
-                  <SelectItem value="weekly">Weekly</SelectItem>
-                  <SelectItem value="monthly">Monthly</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            {nextRunAt && (
-              <p
-                className="text-sm text-muted-foreground"
-                title={format(new Date(nextRunAt), 'PPpp')}
-              >
-                Next backup {formatDistanceToNow(new Date(nextRunAt), { addSuffix: true })}
-              </p>
-            )}
-            {lastRunAt && (
-              <p
-                className="text-sm text-muted-foreground"
-                title={format(new Date(lastRunAt), 'PPpp')}
-              >
-                Last backup {formatDistanceToNow(new Date(lastRunAt), { addSuffix: true })}
-              </p>
-            )}
-          </div>
-        )}
-      </CardContent>
-    </Card>
+      }
+    >
+      {!available && (
+        <p className="text-sm text-muted-foreground">
+          <Lock className="mr-1 inline h-3.5 w-3.5 align-[-2px]" />
+          <UpgradeLink href="/settings/plan" className="underline hover:text-foreground" fallback="Available on paid plans:">
+            Upgrade to enable
+          </UpgradeLink>{' '}
+          daily, weekly, or monthly snapshots.
+        </p>
+      )}
+      {available && enabled && (
+        <SettingsGroup label="Schedule">
+          <SettingsRow label="Frequency">
+            <Select
+              value={frequency}
+              onValueChange={(next) => save({ frequency: next as BackupFrequency }, 'Failed to update backup frequency')}
+            >
+              <SelectTrigger aria-label="Frequency" className="w-40">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {(Object.keys(FREQUENCY_LABELS) as BackupFrequency[]).map((value) => (
+                  <SelectItem key={value} value={value}>{FREQUENCY_LABELS[value]}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </SettingsRow>
+          <SettingsRow label="Next run" hint={timezone}>
+            <span className="text-sm text-foreground">{nextLabel ?? 'Not scheduled'}</span>
+          </SettingsRow>
+          <SettingsRow label="Last run" hint={timezone}>
+            <span className="text-sm text-foreground">{lastLabel ?? 'Never'}</span>
+          </SettingsRow>
+        </SettingsGroup>
+      )}
+    </SettingsSection>
   );
 }
 
@@ -215,8 +225,7 @@ export default function DriveBackupsPage() {
   const fetchDrives = useDriveStore((state) => state.fetchDrives);
 
   const [newLabel, setNewLabel] = useState('');
-  const [isCreating, setIsCreating] = useState(false);
-  const [showCreateForm, setShowCreateForm] = useState(false);
+  const [pending, setPending] = useState<PendingBackup | null>(null);
   const [accumulatedBackups, setAccumulatedBackups] = useState<SerializedBackup[]>([]);
   const [offset, setOffset] = useState(0);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
@@ -266,33 +275,32 @@ export default function DriveBackupsPage() {
   }, [driveId, isLoadingMore, offset]);
 
   const handleCreateBackup = async () => {
-    if (isCreating) return;
-    setIsCreating(true);
+    if (pending !== null) return;
+    const label = newLabel.trim() || null;
+    setPending({ label });
     try {
       const result = await post<CreateBackupResult>(`/api/drives/${driveId}/backups`, {
         source: 'manual',
-        label: newLabel.trim() || undefined,
+        label: label ?? undefined,
       });
       toast.success(`Backup created — ${result.counts.pages} pages snapshotted`);
       setNewLabel('');
-      setShowCreateForm(false);
-      setAccumulatedBackups([]);
       setOffset(0);
-      mutate();
+      await mutate();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to create backup');
     } finally {
-      setIsCreating(false);
+      setPending(null);
     }
   };
 
   if (isLoading) {
     return (
-      <div className="container mx-auto px-4 py-10 sm:px-6 lg:px-10 max-w-2xl space-y-6">
+      <SettingsScreen title="Backups">
         <Skeleton className="h-8 w-48" />
         <Skeleton className="h-40 w-full" />
         <Skeleton className="h-64 w-full" />
-      </div>
+      </SettingsScreen>
     );
   }
 
@@ -316,147 +324,131 @@ export default function DriveBackupsPage() {
   }
 
   return (
-    <div className="container mx-auto px-4 py-10 sm:px-6 lg:px-10 max-w-2xl space-y-6">
-      <div>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => router.push(`/dashboard/${driveId}/settings`)}
-          className="mb-4"
-        >
-          <ChevronLeft className="h-4 w-4 mr-1" />
-          Back to Settings
-        </Button>
-        <h1 className="text-3xl font-bold mb-1">Backups</h1>
-        <p className="text-muted-foreground">
-          Create and restore snapshots of this drive&apos;s pages, members, and roles.
-        </p>
-      </div>
-
+    <SettingsScreen
+      title="Backups"
+      lede={`Snapshots of pages, permissions, members, roles and files in ${drive.name}.`}
+    >
       <AutomaticBackups driveId={driveId} />
 
-      <Card>
-        <CardHeader className="flex flex-row items-start justify-between space-y-0">
-          <div>
-            <CardTitle>Create Backup</CardTitle>
-            <CardDescription>Snapshot the current state of this drive</CardDescription>
+      <SettingsSection title="Create a backup now">
+        <form
+          className="flex items-end gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void handleCreateBackup();
+          }}
+        >
+          <div className="flex flex-1 flex-col gap-1.5">
+            <Label htmlFor="backup-label" className="text-sm font-medium">
+              Label <span className="font-normal text-muted-foreground">(optional)</span>
+            </Label>
+            <Input
+              id="backup-label"
+              placeholder="e.g. Before Q2 restructure"
+              value={newLabel}
+              onChange={(e) => setNewLabel(e.target.value)}
+              disabled={pending !== null}
+            />
           </div>
-          {!showCreateForm && (
-            <Button size="sm" onClick={() => setShowCreateForm(true)}>
-              <Plus className="h-4 w-4 mr-2" />
-              Create Backup
-            </Button>
-          )}
-        </CardHeader>
-        {showCreateForm && (
-          <CardContent className="space-y-3">
-            <div className="space-y-1.5">
-              <Label htmlFor="backup-label">
-                Label{' '}
-                <span className="text-muted-foreground font-normal">(optional)</span>
-              </Label>
-              <Input
-                id="backup-label"
-                placeholder="e.g. Before Q2 restructure"
-                value={newLabel}
-                onChange={(e) => setNewLabel(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') handleCreateBackup();
-                  if (e.key === 'Escape') {
-                    setShowCreateForm(false);
-                    setNewLabel('');
-                  }
-                }}
-                disabled={isCreating}
-                autoFocus
-              />
-            </div>
-            <div className="flex gap-2">
-              <Button onClick={handleCreateBackup} disabled={isCreating}>
-                {isCreating && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-                Snapshot Now
-              </Button>
-              <Button
-                variant="ghost"
-                onClick={() => {
-                  setShowCreateForm(false);
-                  setNewLabel('');
-                }}
-                disabled={isCreating}
-              >
-                Cancel
-              </Button>
-            </div>
-          </CardContent>
-        )}
-      </Card>
+          <Button type="submit" disabled={pending !== null}>
+            {pending !== null && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+            Create backup
+          </Button>
+        </form>
+      </SettingsSection>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Backup History</CardTitle>
-          <CardDescription>All backups for {drive.name}</CardDescription>
-        </CardHeader>
-        <CardContent>
-          {error ? (
-            <p className="text-sm text-muted-foreground py-4">Failed to load backups.</p>
-          ) : isLoadingBackups ? (
-            <div className="flex items-center gap-2 text-muted-foreground py-4">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              <span className="text-sm">Loading backups…</span>
-            </div>
-          ) : accumulatedBackups.length === 0 ? (
-            <p className="text-sm text-muted-foreground py-4">
-              No backups yet. Create one above to protect this drive.
-            </p>
-          ) : (
-            <div className="divide-y">
-              {accumulatedBackups.map((backup) => (
-                <div key={backup.id} className="flex items-start justify-between py-3 gap-4">
-                  <div className="space-y-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <Badge variant={statusVariant(backup.status)}>{backup.status}</Badge>
-                      <Badge variant="outline">{backup.source}</Badge>
-                      {backup.label && (
-                        <span className="text-sm font-medium truncate">{backup.label}</span>
-                      )}
-                    </div>
-                    {backup.failureReason && (
-                      <p className="text-xs text-destructive">{backup.failureReason}</p>
-                    )}
-                    {backup.status === 'ready' && (
-                      <Link
-                        href="/settings/backups"
-                        className="text-xs text-primary hover:underline"
-                      >
-                        Restore from Settings
-                      </Link>
-                    )}
-                  </div>
-                  <div
-                    className="text-right text-sm text-muted-foreground shrink-0"
-                    title={format(new Date(backup.createdAt), 'PPpp')}
-                  >
-                    {formatDistanceToNow(new Date(backup.createdAt), { addSuffix: true })}
-                  </div>
-                </div>
-              ))}
-              {hasMore && (
-                <div className="flex justify-end pt-3">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={handleLoadMore}
-                    disabled={isLoadingMore}
-                  >
-                    {isLoadingMore && <Loader2 className="h-3 w-3 mr-2 animate-spin" />}
-                    Load more
-                  </Button>
-                </div>
-              )}
-            </div>
-          )}
-        </CardContent>
-      </Card>
+      <SettingsSection title="History" description={`All backups for ${drive.name}`}>
+        {error ? (
+          <p className="py-4 text-sm text-muted-foreground">Failed to load backups.</p>
+        ) : isLoadingBackups && accumulatedBackups.length === 0 && pending === null ? (
+          <div className="flex items-center gap-2 py-4 text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            <span className="text-sm">Loading backups…</span>
+          </div>
+        ) : accumulatedBackups.length === 0 && pending === null ? (
+          <p className="py-4 text-sm text-muted-foreground">No backups yet. Create one above to protect this drive.</p>
+        ) : (
+          <div className="flex flex-col">
+            {pending !== null && <PendingRow label={pending.label} />}
+            {accumulatedBackups.map((backup) => (
+              <BackupRow key={backup.id} backup={backup} />
+            ))}
+            {hasMore && (
+              <div className="pt-3">
+                <Button variant="ghost" size="sm" onClick={handleLoadMore} disabled={isLoadingMore}>
+                  {isLoadingMore && <Loader2 className="mr-2 h-3 w-3 animate-spin" />}
+                  Load more
+                </Button>
+              </div>
+            )}
+          </div>
+        )}
+      </SettingsSection>
+    </SettingsScreen>
+  );
+}
+
+const historyRowClass = 'flex min-h-[52px] items-center gap-3 border-b border-border px-2 py-2';
+
+function PendingRow({ label }: { label: string | null }) {
+  return (
+    <div className={historyRowClass} data-backup-status="pending">
+      <StatusPill status="pending" />
+      <SourcePill source="manual" />
+      <div className="flex min-w-0 flex-1 flex-col">
+        <span className="truncate font-medium text-foreground">{label ?? 'Untitled backup'}</span>
+        <span className="text-xs text-muted-foreground">Creating…</span>
+      </div>
     </div>
   );
+}
+
+function BackupRow({ backup }: { backup: SerializedBackup }) {
+  const ready = backup.status === 'ready';
+  const meta = backupMeta(backup);
+  return (
+    <div className={historyRowClass} data-backup-status={backup.status}>
+      <StatusPill status={backup.status} />
+      <SourcePill source={backup.source} />
+      <div className="flex min-w-0 flex-1 flex-col">
+        <span className="truncate font-medium text-foreground">{backup.label ?? 'Untitled backup'}</span>
+        <span className={backup.status === 'failed' ? 'text-xs text-status-danger' : 'text-xs text-muted-foreground'}>{meta}</span>
+      </div>
+      {ready && (
+        <Link
+          href={`/account/backups/${backup.id}/snapshot`}
+          className="inline-flex h-7 items-center rounded-md border border-border px-2.5 text-sm text-foreground hover:bg-tint"
+        >
+          View &amp; restore
+        </Link>
+      )}
+    </div>
+  );
+}
+
+function StatusPill({ status }: { status: string }) {
+  const label = status.charAt(0).toUpperCase() + status.slice(1);
+  return (
+    <span className={`inline-flex h-5 flex-none items-center rounded-full px-2 text-[11.5px] font-medium ${statusPillClass[status] ?? 'bg-tint text-muted-foreground'}`}>
+      {label}
+    </span>
+  );
+}
+
+function SourcePill({ source }: { source: string }) {
+  return (
+    <span className="inline-flex h-5 flex-none items-center rounded-full border border-border px-2 font-mono text-[11.5px] text-muted-foreground">
+      {source}
+    </span>
+  );
+}
+
+/** The row's second line: when it was made, then when it finished or why it failed. */
+export function backupMeta(backup: SerializedBackup): string {
+  const created = format(new Date(backup.createdAt), 'MMM d, HH:mm');
+  if (backup.status === 'failed') return `${created} · failed${backup.failureReason ? `: ${backup.failureReason}` : ''}`;
+  if (backup.status === 'ready' && backup.completedAt) {
+    return `${created} · completed ${format(new Date(backup.completedAt), 'HH:mm')}`;
+  }
+  return created;
 }
