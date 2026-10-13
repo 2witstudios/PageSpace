@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { credentialActor } from '@pagespace/lib/permissions/access-actor';
+import { automationActor, credentialActor, inDrives } from '@pagespace/lib/permissions/access-actor';
 import { planOrgRoomExpiry, MAX_TIMER_DELAY_MS } from '../org-room-expiry';
 
 const nowMs = Date.parse('2026-10-12T12:00:00Z');
@@ -8,6 +8,12 @@ const maxAge = (m: number) => ({ requireStrongSignIn: false, maximumSessionAgeMi
 const signedIn = (agoMs: number) => credentialActor('u', { authenticatedAtMs: nowMs - agoMs, assurance: 'single_factor' });
 
 describe('planOrgRoomExpiry', () => {
+  it('fails closed: an automation actor holding a room outside its drive scope is told to sign in again', () => {
+    const actor = automationActor('u', 'room expiry test', inDrives('other'));
+    const plan = planOrgRoomExpiry({ actor, rooms: [{ room: 'drive:a', resourceId: 'a', policy: maxAge(60) }], nowMs });
+    expect(plan.expired).toEqual([{ room: 'drive:a', resourceId: 'a', code: 'org_reauthentication_required' }]);
+  });
+
   it('SEC-3 (partial) rooms of orgs without a sign-in policy never expire and arm no timer', () => {
     const plan = planOrgRoomExpiry({ actor: signedIn(minutes(5)), rooms: [{ room: 'drive:p', resourceId: 'p', policy: null }], nowMs });
     expect(plan).toEqual({ expired: [], nextCheckAtMs: null });

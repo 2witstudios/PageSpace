@@ -81,6 +81,31 @@ describe('SEC-2 (partial) SEC-3 (partial) the org sign-in seam is structural (D-
     ]);
   });
 
+  it('SEC-2 (partial) every automation actor is pinned with its reason, and only output filtered per reader reaches past one drive (D-OW-62)', () => {
+    const callers = (pattern: RegExp) =>
+      PRODUCTION_SOURCES.filter(({ path, text }) => pattern.test(text) && !path.endsWith('permissions/access-actor.ts')).map(({ path }) => path).sort();
+    // Each is work no one signs in for (D-OW-34). Request-driven paths (a channel @mention, a manual workflow Run)
+    // run as the request's credential instead, never as an automation.
+    const CONFINED_TO_THEIR_DRIVE: Record<string, string> = {
+      'apps/web/src/app/api/cron/scheduled-backups/route.ts': 'a backup schedule, confined to the drive it backs up',
+      'apps/web/src/lib/agent-workspaces/agent-workspaces-runtime.ts': 'session-end teardown binds nothing: reaches no drive',
+      'apps/web/src/lib/auth/google-avatar.ts': 'avatar import during sign-in: the user\'s own avatar, reaches no drive',
+      'apps/web/src/lib/canvas/publish-page.ts': 'published-site regeneration, confined to the published drive',
+      'apps/web/src/lib/integrations/zoom/process-webhook.ts': 'a Zoom recording filed into the connection\'s target drive',
+      'apps/web/src/lib/integrations/zoom/webhook-trigger-executor.ts': 'a Zoom trigger, confined to the workflow\'s drive',
+      'apps/web/src/lib/webhooks/page-webhook-trigger-executor.ts': 'a page webhook trigger, confined to the workflow\'s drive',
+      'apps/web/src/lib/workflows/calendar-trigger-executor.ts': 'a calendar trigger, confined to the trigger\'s drive',
+      'apps/web/src/lib/workflows/workflow-executor.ts': 'a scheduled or triggered run, confined to the workflow\'s (and its agent\'s) drive',
+    };
+    const OVER_HELD_DRIVES: Record<string, string> = {
+      'apps/web/src/app/api/drives/locked/route.ts': 'names only of the person\'s own drives, to show which are locked',
+      'apps/web/src/app/api/pulse/cron/route.ts': 'Pulse: the summary records its orgs and is omitted for a reader any of them refuses',
+      'apps/web/src/lib/memory/discovery-service.ts': 'memory: distilled items record their orgs and are omitted for a reader any of them refuses',
+    };
+    expect(callers(/\bautomationActor\(/)).toEqual(Object.keys({ ...CONFINED_TO_THEIR_DRIVE, ...OVER_HELD_DRIVES }).sort());
+    expect(callers(/\bHELD_DRIVES\b/)).toEqual(Object.keys(OVER_HELD_DRIVES).sort());
+  });
+
   it('SEC-2 (partial) third-party membership facts are asked only where no credential is opening content', () => {
     // The donor re-check inside a donation's transaction (the wallet route already passed the actor gate), and
     // recapping what someone granted an agent. Wallet reads and spends themselves go through the actor (D-OW-45).

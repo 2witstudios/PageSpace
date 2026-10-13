@@ -87,6 +87,9 @@ export const EXPORTED_TABLES: Readonly<Record<string, ExportCategory>> = {
   // this about you and did not act on it" is exactly the processing a subject
   // access request exists to disclose.
   personalization_candidates: 'personalizationCandidates',
+  // Digests the AI wrote FOR the subject from their workspace activity: content addressed to them, carried in full
+  // (only when the requesting credential may read the org content it drew on, SEC-2/3 — see export-sign-in-gate).
+  pulse_summaries: 'pulseSummaries',
   // Art 15(3) is a right to a COPY, not to visibility. These were excluded on
   // the reasoning that the subject can read them in Settings — see the
   // `settings` collector for why that was not a basis (review finding).
@@ -437,7 +440,6 @@ export const EXCLUDED_TABLES: Readonly<Record<string, string>> = {
     'agent_workspace_node_revs',
     'ai_pending_abort_intents',
     'conversation_compactions',
-    'pulse_summaries',
     'user_page_views',
     'message_drafts',
   ),

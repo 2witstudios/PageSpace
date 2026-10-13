@@ -41,7 +41,8 @@ vi.mock('@pagespace/lib/services/app-hosting/app-logs-env', () => ({
 
 import { getUserDriveAccess } from '@pagespace/lib/permissions/permissions';
 import { isAppLogsNatsConfigured } from '@pagespace/lib/services/app-hosting/app-logs-env';
-import { buildAppLogHandlers, IDLE_UNSUBSCRIBE_MS } from '../app-log-handler';
+import { appLogRoom, buildAppLogHandlers, IDLE_UNSUBSCRIBE_MS } from '../app-log-handler';
+import { createOrgRoomWatch } from '../../org-room-watch';
 import { createAppLogSessionMap } from '../app-log-session-map';
 import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 

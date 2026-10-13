@@ -229,13 +229,13 @@ describe('every org mutation writes its event', () => {
     expect((await changeDriveVisibility(lena.id, productId, { orgVisibility: 'RESTRICTED' }, deps)).ok).toBe(true);
     const ask1 = await requestToJoinDrive(dana.id, productId);
     if (!ask1.ok) throw new Error('join request');
-    expect((await answerDriveJoinRequest(lena.id, productId, ask1.request.id, 'deny')).ok).toBe(true);
+    expect((await answerDriveJoinRequest(credentialActor(lena.id, null), productId, ask1.request.id, 'deny')).ok).toBe(true);
     const ask2 = await requestToJoinDrive(dana.id, productId);
     if (!ask2.ok) throw new Error('join request');
     expect((await withdrawDriveJoinRequest(dana.id, productId, ask2.request.id)).ok).toBe(true);
     const ask3 = await requestToJoinDrive(dana.id, productId);
     if (!ask3.ok) throw new Error('join request');
-    expect((await answerDriveJoinRequest(lena.id, productId, ask3.request.id, 'approve')).ok).toBe(true);
+    expect((await answerDriveJoinRequest(credentialActor(lena.id, null), productId, ask3.request.id, 'approve')).ok).toBe(true);
     const notes = await factories.createDrive(lena.id, { name: 'Lena Notes', slug: `notes-${createId()}` });
     created.drives.push(notes.id);
     expect((await moveDriveToOrg(lena.id, notes.id, { orgId }, deps)).ok).toBe(true);

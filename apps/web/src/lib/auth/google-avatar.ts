@@ -1,6 +1,6 @@
 import { createUserServiceToken, type ServiceScope } from '@pagespace/lib/services/validated-service-token';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { automationActor } from '@pagespace/lib/permissions/access-actor';
+import { automationActor, inDrives } from '@pagespace/lib/permissions/access-actor';
 
 const PROCESSOR_URL = process.env.PROCESSOR_URL || 'http://processor:3003';
 const MAX_AVATAR_BYTES = 5 * 1024 * 1024;
@@ -164,7 +164,7 @@ async function readResponseBodyWithLimit(response: Response, maxBytes: number): 
 async function uploadAvatarToProcessor(userId: string, file: File): Promise<string | null> {
   // Run while an account is being signed in or created, before any credential exists: a system import of the
   // user's OWN avatar (no org content), so it runs as an automation of that user, not as a sign-in.
-  const { token } = await createUserServiceToken(automationActor(userId, 'oauth-avatar-import'), REQUIRED_AVATAR_SCOPES, '5m');
+  const { token } = await createUserServiceToken(automationActor(userId, 'oauth-avatar-import', inDrives()), REQUIRED_AVATAR_SCOPES, '5m');
 
   const formData = new FormData();
   formData.append('file', file);

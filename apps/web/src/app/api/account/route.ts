@@ -185,6 +185,7 @@ export async function DELETE(req: Request) {
   if (isAuthError(auth)) {
     return auth.error;
   }
+  const actor = actorFromAuth(auth);
   const userId = auth.userId;
 
   try {
@@ -267,7 +268,7 @@ export async function DELETE(req: Request) {
       subjectUserId: userId,
       subjectEmail: user.email,
       stripeCustomerId: user.stripeCustomerId,
-      caller: actorFromAuth(auth),
+      caller: actor,
       requestedByType: 'self',
       forceDelete: false,
       subjectAppleLinked: user.appleId !== null,

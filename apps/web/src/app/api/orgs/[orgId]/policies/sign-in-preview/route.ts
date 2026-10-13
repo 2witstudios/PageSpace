@@ -12,9 +12,10 @@ type Context = { params: Promise<{ orgId: string }> };
 /**
  * GET /api/orgs/[orgId]/policies/sign-in-preview?requireStrongSignIn=true&maximumSessionAgeMinutes=60 (D-OW-45, UI-7)
  *
- * Before an Owner or Admin saves a sign-in policy, how many of the org's members (and their live credentials) it would
+ * Before an Owner or Admin saves a sign-in policy, how many of the org's members and guests (and their live credentials) it would
  * refuse right now. Counts only, no identities. Owner and Admin only: a plain member gets the 403 of any Admin read.
- * Session or MCP key (X-1: `organizations.previewSignInPolicy`, `pagespace orgs sign-in-preview`), like the policies it previews. `maximumSessionAgeMinutes` is a whole number of minutes in the allowed range, or omitted for none.
+ * Session or MCP key (X-1: `organizations.previewSignInPolicy`, `pagespace orgs sign-in-preview`), like the policies it
+ * previews. `maximumSessionAgeMinutes` is a whole number of minutes in the allowed range, or omitted for none.
  */
 export async function GET(request: Request, context: Context) {
   const { orgId } = await context.params;

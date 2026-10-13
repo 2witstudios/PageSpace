@@ -1537,13 +1537,15 @@ export async function ensureShellSession(
     // session is torn down IMMEDIATELY — no one-tick grace for an
     // unsupervised revoked process.
     //
-    // A `checkAuth` that THROWS (a transient DB blip) revokes nobody this
-    // tick — deliberately fail-open, in BOTH the attached and detached
-    // shapes: revocation is a verdict, not an error, and a blip must not
-    // kick live viewers or kill a detached session. (An uncaught throw here
-    // would be worse than a wrong verdict: an async interval callback's
+    // A `checkAuth` that THROWS fails CLOSED (SEC-3), in BOTH the attached and
+    // detached shapes: a credential whose access cannot be re-decided is
+    // treated as revoked — the viewer is evicted, and a detached session whose
+    // last attacher cannot be re-decided is torn down. A shell is code
+    // execution; keeping it open on an unverifiable credential is the wrong
+    // default, and the viewer can simply reconnect once the DB is back. The
+    // throw is still CAUGHT here, never rethrown: an async interval callback's
     // rejection is unhandled, and this process installs no unhandledRejection
-    // hook, so one DB blip would take down every session on the replica.)
+    // hook, so one DB blip would otherwise take down every session on the replica.
     //
     // `reauthing` mirrors `startSettleHeartbeat`'s `settling` guard: an
     // async interval body can outlive its own cadence when the DB is slow,
@@ -1570,9 +1572,9 @@ export async function ensureShellSession(
               const result = await checkAuth({ actor, shellId });
               if (!result.ok) revoked.add(actor);
             } catch (error) {
-              // Fail-open — see above. Absent from `revoked` can only ever
-              // mean "not revoked", so an error needs no sentinel encoding.
-              loggers.realtime.warn('Shell re-auth check failed; keeping viewer this tick', {
+              // Fail closed — see above.
+              revoked.add(actor);
+              loggers.realtime.warn('Shell re-auth check failed; revoking the credential (fail closed)', {
                 sessionKey,
                 error: error instanceof Error ? error.message : String(error),
               });

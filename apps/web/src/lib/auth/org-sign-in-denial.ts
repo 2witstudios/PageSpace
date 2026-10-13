@@ -15,6 +15,16 @@ export interface OrgSignInDenial {
   readonly orgId: string | null;
 }
 
+/**
+ * Content derived from several orgs' drives (a Pulse summary, AI memory — D-OW-62) that an org's sign-in policy
+ * withholds from this sign-in: the API answers 200 with the content left out and this beside it. `orgIds` are the
+ * refusing orgs.
+ */
+export interface OrgContentSignInRequired {
+  readonly code: OrgSignInDenialCode;
+  readonly orgIds: readonly string[];
+}
+
 const CODES: ReadonlySet<string> = new Set<OrgSignInDenialCode>(['org_strong_sign_in_required', 'org_reauthentication_required']);
 
 export function isOrgSignInDenialCode(value: unknown): value is OrgSignInDenialCode {

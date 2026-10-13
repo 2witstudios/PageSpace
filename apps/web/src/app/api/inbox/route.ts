@@ -20,6 +20,7 @@ export async function GET(request: Request) {
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
     if (isAuthError(auth)) return auth.error;
+    const actor = actorFromAuth(auth);
     const userId = auth.userId;
 
     const { searchParams } = new URL(request.url);
@@ -48,7 +49,7 @@ export async function GET(request: Request) {
 
     // Channel candidate drives: the ones the user is a member of, owned or joined (org-aware).
     // getBatchPagePermissions below stays the access decision.
-    const memberDriveIds = type === 'dm' ? [] : await getMemberDriveIds(actorFromAuth(auth), { includeTrashed: true });
+    const memberDriveIds = type === 'dm' ? [] : await getMemberDriveIds(actor, { includeTrashed: true });
 
     if (driveId) {
       // Parse cursor - can be ISO timestamp or "id:<channelId>" for null timestamps
@@ -131,7 +132,7 @@ export async function GET(request: Request) {
       `);
 
       const channelPermissions = await getBatchPagePermissions(
-        actorFromAuth(auth),
+        actor,
         channelResults.rows.map((row) => row.id)
       );
       // Permission-filter BEFORE decrypting: a non-viewable channel's sender
@@ -316,7 +317,7 @@ export async function GET(request: Request) {
           LIMIT ${fetchLimit}
         `);
         const channelPermissions = await getBatchPagePermissions(
-          actorFromAuth(auth),
+          actor,
           channelResults.rows.map((row) => row.id)
         );
         // Permission-filter BEFORE decrypting: a non-viewable channel's sender

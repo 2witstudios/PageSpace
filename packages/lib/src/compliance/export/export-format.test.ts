@@ -62,6 +62,8 @@ function makeData(overrides: Partial<AllUserData> = {}): AllUserData {
     settings: { hotkeys: [], automation: null, toastNotifications: null, emailNotifications: [] },
     personalization: null,
     personalizationCandidates: [],
+    pulseSummaries: [],
+    withheld: [],
     agentWorkspaces: [],
     agentAccounts: { accounts: [], approvalsGiven: [], bindingsMade: [], delegationsGiven: [] },
     streamState: [],
@@ -128,7 +130,7 @@ describe('buildNativeExportFiles', () => {
 describe('buildExportManifest', () => {
   it('given_filesAndDate_returnsVersionedManifestWithInventory', () => {
     const files = buildNativeExportFiles(makeData());
-    const manifest = buildExportManifest(files, { exportedAt: D1, format: 'native' });
+    const manifest = buildExportManifest(files, { exportedAt: D1, format: 'native', withheld: [] });
 
     expect(manifest.schemaVersion).toBe(EXPORT_SCHEMA_VERSION);
     expect(manifest.exportedAt).toBe('2024-01-02T03:04:05.000Z');
@@ -138,6 +140,31 @@ describe('buildExportManifest', () => {
     expect(pages).toEqual({ name: 'pages.json', description: expect.any(String), recordCount: 2 });
     // inventory does not leak the raw data payload
     expect(JSON.stringify(manifest)).not.toContain('hello');
+  });
+  it('SEC-2 (partial) names what an org sign-in policy kept out of the bundle, with the code and the sign-in that brings it back', () => {
+    const manifest = buildExportManifest(buildNativeExportFiles(makeData()), {
+      exportedAt: D1,
+      format: 'native',
+      withheld: [
+        { category: 'pulseSummaries', count: 2, code: 'org_strong_sign_in_required', orgIds: ['org-a'] },
+        { category: 'personalization', count: 1, code: 'org_reauthentication_required', orgIds: ['org-b'] },
+      ],
+    });
+    expect(manifest.withheld).toEqual([
+      expect.objectContaining({ category: 'pulseSummaries', count: 2, code: 'org_strong_sign_in_required', orgIds: ['org-a'] }),
+      expect.objectContaining({ category: 'personalization', count: 1, code: 'org_reauthentication_required', orgIds: ['org-b'] }),
+    ]);
+    expect(manifest.withheld[0].note).toContain('2 Pulse summaries');
+    expect(manifest.withheld[0].note).toContain('org_strong_sign_in_required');
+    expect(manifest.withheld[0].note).toContain('passkey');
+    expect(manifest.withheld[1].note).toContain('Sign in again');
+  });
+
+  it('ships the Pulse summaries as their own file', () => {
+    const files = buildNativeExportFiles(makeData({
+      pulseSummaries: [{ summary: 'Board prep moved', greeting: null, type: 'scheduled', periodStart: D1, periodEnd: D2, generatedAt: D2 }],
+    }));
+    expect(files.find((f) => f.name === 'pulse-summaries.json')?.recordCount).toBe(1);
   });
 });
 
@@ -256,7 +283,9 @@ describe('toPortableExport', () => {
     // category and forgetting the bundle stayed green. These are the keys the
     // schema.org mapping consumes directly; everything ELSE must appear here.
     const SCHEMA_ORG_MAPPED = new Set(['profile', 'drives', 'pages', 'messages', 'files']);
-    const expectedProps = Object.keys(full).filter((key) => !SCHEMA_ORG_MAPPED.has(key));
+    // `withheld` is not data: it is what the bundle left out, written into manifest.json (SEC-2/3).
+    const MANIFEST_ONLY = new Set(['withheld']);
+    const expectedProps = Object.keys(full).filter((key) => !SCHEMA_ORG_MAPPED.has(key) && !MANIFEST_ONLY.has(key));
     for (const key of expectedProps) {
       expect(byName, `${key} is an AllUserData category the portable bundle drops`).toHaveProperty(key);
     }

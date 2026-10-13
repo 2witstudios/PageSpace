@@ -38,7 +38,7 @@ import { DEFAULT_READ_LINES } from '@pagespace/lib/services/sandbox/execution-po
 import type { SandboxToolGateResult } from '@pagespace/lib/services/sandbox/tool-gate';
 import type { ToolExecutionContext } from '../core/types';
 import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
-import { toolActor } from './actor-permissions';
+import { toolActor } from './tool-actor';
 
 export const MAX_PATH_LENGTH = 1024;
 

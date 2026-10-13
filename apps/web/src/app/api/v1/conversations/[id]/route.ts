@@ -11,6 +11,8 @@ import {
   validateConversationAccess,
   serializeMessageRowToMessages,
 } from '@/lib/ai/openai-api/v1-conversations';
+import { canAccessConversation } from '@pagespace/lib/permissions/conversation-access';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['mcp'] as const, requireCSRF: false };
 
@@ -27,13 +29,18 @@ export async function GET(request: Request, context: RouteContext): Promise<Resp
   if (!access.ok) {
     return NextResponse.json({ error: access.message }, { status: access.status });
   }
-
   const allowedDriveIds = getAllowedDriveIds(authResult);
   if (allowedDriveIds.length > 0) {
     const contextId = conversation!.contextId;
     if (contextId === null || !allowedDriveIds.includes(contextId)) {
       return NextResponse.json({ error: 'Conversation not accessible with this token' }, { status: 403 });
     }
+  }
+  // SEC-2/3 (D-OW-45): a page or drive conversation carries that org's content; its owner reaches it only through a
+  // credential the org admits, refused with the sign-in code.
+  const actor = actorFromAuth(authResult);
+  if (!(await canAccessConversation(actor, conversation!))) {
+    return deniedResponse(actor, conversation!.contextId, NextResponse.json({ error: 'Conversation not found' }, { status: 404 }));
   }
 
   // Stale-tab rollout protection: SDK consumers deployed before this PR never send this
@@ -71,13 +78,18 @@ export async function DELETE(request: Request, context: RouteContext): Promise<R
   if (!access.ok) {
     return NextResponse.json({ error: access.message }, { status: access.status });
   }
-
   const allowedDriveIds = getAllowedDriveIds(authResult);
   if (allowedDriveIds.length > 0) {
     const contextId = conversation!.contextId;
     if (contextId === null || !allowedDriveIds.includes(contextId)) {
       return NextResponse.json({ error: 'Conversation not accessible with this token' }, { status: 403 });
     }
+  }
+  // SEC-2/3 (D-OW-45): a page or drive conversation carries that org's content; its owner reaches it only through a
+  // credential the org admits, refused with the sign-in code.
+  const actor = actorFromAuth(authResult);
+  if (!(await canAccessConversation(actor, conversation!))) {
+    return deniedResponse(actor, conversation!.contextId, NextResponse.json({ error: 'Conversation not found' }, { status: 404 }));
   }
 
   // Repository-owned conversation soft-delete (same conversationId-scoped

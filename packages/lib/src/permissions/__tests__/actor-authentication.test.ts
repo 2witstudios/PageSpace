@@ -3,12 +3,17 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('../../organizations/policy-reader', () => ({
   getDriveAuthenticationPolicies: vi.fn(),
   getResourceDriveIds: vi.fn(),
+  getDerivedPageOrgIds: vi.fn(),
+  getOrgPolicies: vi.fn(),
+  listOrgIdsOfDrives: vi.fn(),
 }));
 
-import { getDriveAuthenticationPolicies, getResourceDriveIds } from '../../organizations/policy-reader';
-import { automationActor, credentialActor } from '../access-actor';
+import { getDerivedPageOrgIds, getDriveAuthenticationPolicies, getOrgPolicies, getResourceDriveIds } from '../../organizations/policy-reader';
+import { parseOrgPolicies } from '../../organizations/policies-core';
+import { HELD_DRIVES, automationActor, credentialActor, inDrives } from '../access-actor';
 import {
   checkActorDriveAuthentication,
+  checkActorResourceAuthentication,
   explainOrgAuthenticationDenial,
   filterDrivesForActor,
   filterResourcesForActor,
@@ -26,7 +31,15 @@ beforeEach(() => {
     new Map(ids.map((id) => [id, id === ORG_DRIVE ? maxAgeHour : null])));
   vi.mocked(getResourceDriveIds).mockImplementation(async (ids) =>
     new Map(ids.map((id) => [id, id.startsWith('page-org') ? ORG_DRIVE : id.startsWith('page-') ? PERSONAL_DRIVE : id])));
+  vi.mocked(getDerivedPageOrgIds).mockReset();
+  vi.mocked(getOrgPolicies).mockReset();
+  // A memory page in the personal (Home) drive restates content distilled from org-a's drives.
+  vi.mocked(getDerivedPageOrgIds).mockImplementation(async (ids) =>
+    new Map(ids.filter((id) => id === MEMORY_PAGE).map((id) => [id, ['org-a']])));
+  vi.mocked(getOrgPolicies).mockImplementation(async () => parseOrgPolicies(maxAgeHour));
 });
+
+const MEMORY_PAGE = 'page-memory-bio';
 
 describe('the actor sign-in shell', () => {
   it('SEC-3 (partial) explainOrgAuthenticationDenial names the reauthentication code for a stale credential', async () => {
@@ -48,11 +61,36 @@ describe('the actor sign-in shell', () => {
     expect([...(await filterResourcesForActor(stale, ['page-org-1', 'page-mine']))]).toEqual(['page-mine']);
   });
 
-  it('SEC-2 (partial) an automation is admitted without reading any policy', async () => {
-    const actor = automationActor('user-1', 'workflow');
+  it('SEC-2 (partial) an automation is admitted inside its scope without reading any policy, and refused outside it', async () => {
+    const actor = automationActor('user-1', 'workflow', inDrives(ORG_DRIVE));
+    expect(await checkActorDriveAuthentication(actor, PERSONAL_DRIVE)).toEqual({ allowed: false, code: 'automation_out_of_scope' });
+    expect([...(await filterDrivesForActor(actor, [ORG_DRIVE, PERSONAL_DRIVE]))]).toEqual([ORG_DRIVE]);
     expect(await checkActorDriveAuthentication(actor, ORG_DRIVE)).toEqual({ allowed: true });
     expect([...(await filterDrivesForActor(actor, [ORG_DRIVE]))]).toEqual([ORG_DRIVE]);
     expect(getDriveAuthenticationPolicies).not.toHaveBeenCalled();
     expect(getResourceDriveIds).not.toHaveBeenCalled();
+  });
+});
+
+describe('pages that restate org-derived content (memory pages, D-OW-62)', () => {
+  const stale = () => credentialActor('user-1', { authenticatedAtMs: Date.now() - 2 * HOUR, assurance: 'single_factor' });
+  const fresh = () => credentialActor('user-1', { authenticatedAtMs: Date.now() - 60_000, assurance: 'single_factor' });
+
+  it('SEC-3 (partial) a memory page in a personal drive is withheld from a credential a contributing org refuses, with its code', async () => {
+    expect(await checkActorResourceAuthentication(stale(), MEMORY_PAGE)).toEqual({ allowed: false, code: 'org_reauthentication_required' });
+    expect(await explainOrgAuthenticationDenial(stale(), MEMORY_PAGE)).toBe('org_reauthentication_required');
+    expect([...(await filterResourcesForActor(stale(), [MEMORY_PAGE, 'page-mine']))]).toEqual(['page-mine']);
+  });
+
+  it('SEC-3 (partial) a credential every contributing org admits reads the memory page', async () => {
+    expect(await checkActorResourceAuthentication(fresh(), MEMORY_PAGE)).toEqual({ allowed: true });
+    expect([...(await filterResourcesForActor(fresh(), [MEMORY_PAGE, 'page-mine']))]).toEqual([MEMORY_PAGE, 'page-mine']);
+  });
+
+  it('SEC-2 (partial) an automation is judged by its scope alone, and ordinary pages read no org policy', async () => {
+    const held = automationActor('user-1', 'memory-discovery', HELD_DRIVES);
+    expect(await checkActorResourceAuthentication(held, MEMORY_PAGE)).toEqual({ allowed: true });
+    expect(await checkActorResourceAuthentication(stale(), 'page-mine')).toEqual({ allowed: true });
+    expect(getOrgPolicies).not.toHaveBeenCalled();
   });
 });

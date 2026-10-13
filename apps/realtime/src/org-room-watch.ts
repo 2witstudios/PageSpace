@@ -99,3 +99,30 @@ export function createOrgRoomWatch(socket: OrgRoomWatchSocket, deps: OrgRoomWatc
     },
   };
 }
+
+export interface PolicyChangeFanoutDeps {
+  /** Every live watch on this process, read at fan-out time. */
+  watches(): Iterable<OrgRoomWatch>;
+  now(): number;
+  /** Repeat notices for one org within this window are one change (the broadcast arrives once per member). */
+  windowMs: number;
+}
+
+/**
+ * An org's sign-in policy changed (SEC-2/3): re-decide EVERY watch on this process, not only the org's members' — a
+ * guest or former member can hold a room in one of the org's drives, and the policy binds them too. A watch holding
+ * no rooms returns without reading anything, so the fan-out costs one policy read per socket that holds a room.
+ * `org:changed` is broadcast once per member, so repeats for one org within `windowMs` are folded into one fan-out.
+ */
+export function createPolicyChangeFanout(deps: PolicyChangeFanoutDeps): (orgId: string) => void {
+  const lastFanoutAt = new Map<string, number>();
+  return (orgId) => {
+    const nowMs = deps.now();
+    for (const [id, at] of lastFanoutAt) {
+      if (nowMs - at >= deps.windowMs) lastFanoutAt.delete(id);
+    }
+    if (lastFanoutAt.has(orgId)) return;
+    lastFanoutAt.set(orgId, nowMs);
+    for (const watch of deps.watches()) void watch.recheck();
+  };
+}

@@ -159,7 +159,7 @@ export const rolesListHandler: CommandHandler = async (ctx, intent) => {
     return EXIT_USAGE_ERROR;
   }
 
-  const result = await callSdk(ctx.stderr, () => ctx.sdk.roles.list({ driveId }));
+  const result = await callSdk(ctx, () => ctx.sdk.roles.list({ driveId }));
   if (!result.ok) return EXIT_RUNTIME_ERROR;
 
   if (intent.flags.json) {
@@ -181,7 +181,7 @@ export const rolesGetHandler: CommandHandler = async (ctx, intent) => {
     return EXIT_USAGE_ERROR;
   }
 
-  const result = await callSdk(ctx.stderr, () => ctx.sdk.roles.get({ driveId, roleId }));
+  const result = await callSdk(ctx, () => ctx.sdk.roles.get({ driveId, roleId }));
   if (!result.ok) return EXIT_RUNTIME_ERROR;
 
   if (intent.flags.json) {
@@ -227,7 +227,7 @@ export const rolesCreateHandler: CommandHandler = async (ctx, intent) => {
     return EXIT_USAGE_ERROR;
   }
 
-  const result = await callSdk(ctx.stderr, () =>
+  const result = await callSdk(ctx, () =>
     ctx.sdk.roles.create({
       driveId,
       name,
@@ -323,7 +323,7 @@ export const rolesUpdateHandler: CommandHandler = async (ctx, intent) => {
       ? { canView: driveWide.canView, canEdit: driveWide.canEdit, canShare: driveWide.canShare }
       : undefined;
 
-  const result = await callSdk(ctx.stderr, () =>
+  const result = await callSdk(ctx, () =>
     ctx.sdk.roles.update({
       driveId,
       roleId,
@@ -365,7 +365,7 @@ export const rolesDeleteHandler: CommandHandler = async (ctx, intent) => {
     return EXIT_RUNTIME_ERROR;
   }
 
-  const result = await callSdk(ctx.stderr, () => ctx.sdk.roles.delete({ driveId, roleId }));
+  const result = await callSdk(ctx, () => ctx.sdk.roles.delete({ driveId, roleId }));
   if (!result.ok) return EXIT_RUNTIME_ERROR;
 
   if (intent.flags.json) {
@@ -406,7 +406,7 @@ export const rolesSetPagePermissionsHandler: CommandHandler = async (ctx, intent
     return EXIT_USAGE_ERROR;
   }
 
-  const result = await callSdk(ctx.stderr, () =>
+  const result = await callSdk(ctx, () =>
     ctx.sdk.roles.setPagePermissions(
       buildSetRolePagePermissionsInput({
         driveId,
@@ -458,7 +458,7 @@ export const rolesSetDriveWidePermissionsHandler: CommandHandler = async (ctx, i
     return EXIT_USAGE_ERROR;
   }
 
-  const result = await callSdk(ctx.stderr, () =>
+  const result = await callSdk(ctx, () =>
     ctx.sdk.roles.setDriveWidePermissions(
       buildSetRoleDriveWidePermissionsInput({
         driveId,
@@ -500,7 +500,7 @@ export const rolesRemovePagePermissionsHandler: CommandHandler = async (ctx, int
     return EXIT_RUNTIME_ERROR;
   }
 
-  const result = await callSdk(ctx.stderr, () =>
+  const result = await callSdk(ctx, () =>
     ctx.sdk.roles.removePagePermissions(buildRemoveRolePagePermissionsInput({ driveId, roleId, pageId })),
   );
   if (!result.ok) return EXIT_RUNTIME_ERROR;

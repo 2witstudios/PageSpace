@@ -32,6 +32,11 @@ vi.mock('@pagespace/lib/compliance/export/gdpr-export', () => ({
   collectAllUserData: vi.fn(),
 }));
 
+const mockGate = { derivedContent: vi.fn(), refusedDrives: vi.fn(), refusedDerivedPages: vi.fn() };
+vi.mock('@pagespace/lib/compliance/export/export-sign-in-gate', () => ({
+  credentialExportGate: vi.fn(() => mockGate),
+}));
+
 vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
   checkDistributedRateLimit: vi.fn(),
   resetDistributedRateLimit: vi.fn(),
@@ -58,6 +63,7 @@ vi.mock('archiver', () => ({
 
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { collectAllUserData } from '@pagespace/lib/compliance/export/gdpr-export';
+import { credentialExportGate } from '@pagespace/lib/compliance/export/export-sign-in-gate';
 import { buildNativeExportFiles, EXPORT_SCHEMA_VERSION } from '@pagespace/lib/compliance/export/export-format';
 import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 import { GET } from '../route';
@@ -98,6 +104,8 @@ const mockUserData = {
   settings: { hotkeys: [], automation: null, toastNotifications: null, emailNotifications: [] },
   personalization: null,
   personalizationCandidates: [],
+  pulseSummaries: [],
+  withheld: [],
   // The categories the "Agent-Session Single Source of Truth" epic added. They
   // were missing from the export for the whole epic, and THIS FILE is why
   // nobody noticed: the category assertion below used to be a hand-written list
@@ -278,6 +286,21 @@ describe('GET /api/account/export', () => {
       expect(manifest.format).toBe('native');
       expect(Array.isArray(manifest.files)).toBe(true);
       expect(manifest.files.some((f: { name: string }) => f.name === 'pages.json')).toBe(true);
+    });
+
+    it('SEC-2 (partial) collects through the requesting session credential, and the manifest names what an org sign-in policy left out', async () => {
+      const withheld = [{ category: 'pulseSummaries', count: 1, code: 'org_strong_sign_in_required', orgIds: ['org-1'] }];
+      vi.mocked(collectAllUserData).mockResolvedValue({ ...mockUserData, withheld } as never);
+
+      await GET(createRequest());
+
+      expect(credentialExportGate).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1', via: 'credential' }));
+      expect(collectAllUserData).toHaveBeenCalledWith(expect.anything(), 'user-1', mockGate);
+      const manifestCall = mockArchive.append.mock.calls.find(
+        (call: unknown[]) => (call[1] as { name: string }).name.includes('manifest.json')
+      );
+      const manifest = JSON.parse(manifestCall![0] as string);
+      expect(manifest.withheld).toEqual([expect.objectContaining({ ...withheld[0], note: expect.stringContaining('passkey') })]);
     });
 
     it('format=portable emits a single schema.org data.json plus manifest', async () => {
