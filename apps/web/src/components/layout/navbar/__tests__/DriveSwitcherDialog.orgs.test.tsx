@@ -3,7 +3,6 @@ import { fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Drive } from '@pagespace/lib/types';
 
-vi.mock('@pagespace/lib/organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 const push = vi.hoisted(() => vi.fn());
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push }), useParams: () => ({}), usePathname: () => '/dashboard' }));
 vi.mock('@/lib/auth/auth-fetch', () => ({ fetchWithAuth: vi.fn(() => Promise.resolve(new Response(null, { status: 200 }))), post: vi.fn(), del: vi.fn() }));

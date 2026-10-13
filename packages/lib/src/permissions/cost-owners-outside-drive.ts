@@ -3,16 +3,14 @@
  * attributed in (review #2760 P3-4) — the access half of the removed-creator sweep
  * (organizations/creator-reattribution), decided here with the org-aware membership answer.
  *
- * Org drives only, and only while orgs are enabled: a personal drive's compute is its owner's own
- * wallet whoever created it, and a dark deployment has no org layer to consult. The drive's lead is
- * never "outside" their own drive.
+ * Org drives only: a personal drive's compute is its owner's own wallet whoever created it. The
+ * drive's lead is never "outside" their own drive.
  */
 import { db } from '@pagespace/db/db';
 import { and, eq, isNotNull, ne } from '@pagespace/db/operators';
 import { drives } from '@pagespace/db/schema/core';
 import { driveEnvs } from '@pagespace/db/schema/drive-envs';
 import { publishedApps } from '@pagespace/db/schema/published-apps';
-import { ORGS_ENABLED } from '../organizations/orgs-enabled';
 import { loadEffectiveDriveMembership } from './org-drive-membership';
 
 export interface CostOwnerOutsideDrive {
@@ -22,7 +20,6 @@ export interface CostOwnerOutsideDrive {
 }
 
 export async function listCostOwnersOutsideTheirDrive(): Promise<CostOwnerOutsideDrive[]> {
-  if (!ORGS_ENABLED) return [];
   const cols = { orgId: drives.orgId, ownerId: drives.ownerId, orgVisibility: drives.orgVisibility };
   const envPairs = await db
     .selectDistinct({ driveId: driveEnvs.driveId, costOwnerId: driveEnvs.costOwnerId, ...cols })

@@ -59,7 +59,6 @@ export type DriveLeadAuthority =
   | { allowed: true; via: 'org-owner' | 'org-admin'; orgId: string };
 
 export interface DriveLeadAuthorityInput {
-  orgsEnabled: boolean;
   userId: string;
   drive: { ownerId: string | null | undefined; orgId: string | null };
   /** The user's role in drive.orgId; null when not a member or the drive has no org. */
@@ -72,9 +71,9 @@ export interface DriveLeadAuthorityInput {
  * full access on every org-owned drive; DRV-1: the human lead keeps the Owner role). The org-power
  * answers name themselves so the caller writes the audit event.
  */
-export function decideDriveLeadAuthority({ orgsEnabled, userId, drive, orgRole }: DriveLeadAuthorityInput): DriveLeadAuthority {
+export function decideDriveLeadAuthority({ userId, drive, orgRole }: DriveLeadAuthorityInput): DriveLeadAuthority {
   if (isDriveLead(userId, drive)) return { allowed: true, via: 'lead' };
-  if (!orgsEnabled || drive.orgId === null) return { allowed: false };
+  if (drive.orgId === null) return { allowed: false };
   // Org power through the one org authorization decision (ORG-5); `via` only names which seat it came from.
   if (!holdsOrgRole(orgRole, 'ADMIN')) return { allowed: false };
   return { allowed: true, via: holdsOrgRole(orgRole, 'OWNER') ? 'org-owner' : 'org-admin', orgId: drive.orgId };

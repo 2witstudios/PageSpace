@@ -60,7 +60,6 @@ vi.mock('@/lib/auth', async (importOriginal) => ({
   isAuthError: vi.fn(() => false),
 }));
 // Organizations are live for this app's own reads (the move-in route answers); the lib dist reads its own constant.
-vi.mock('@pagespace/lib/organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 vi.mock('@/lib/websocket', async (importOriginal) => ({ ...(await importOriginal<typeof import('@/lib/websocket')>()), broadcastPageEvent: vi.fn(async () => undefined) }));
 
 import { createAIProvider, isProviderError, orgModelRefusal } from '../provider-factory';

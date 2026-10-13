@@ -11,7 +11,7 @@ import { HELD_DRIVES, automationActor, type AccessActor } from '@pagespace/lib/p
  */
 
 const mockGetMemberDriveIds = vi.fn(async (_actor: AccessActor, _options: { includeTrashed: boolean }) => ['drive-1']);
-// The one member-drive set (org-aware; owned drives plus accepted rows while dark).
+// The one member-drive set (org-aware).
 vi.mock('@pagespace/lib/permissions/member-drives', () => ({
   getMemberDriveIds: (actor: AccessActor, options: { includeTrashed: boolean }) => mockGetMemberDriveIds(actor, options),
 }));

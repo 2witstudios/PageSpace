@@ -4,7 +4,6 @@ import type { Drive } from '@pagespace/lib/types';
 import { useParams, usePathname } from 'next/navigation';
 import { useDriveStore } from '@/hooks/useDrive';
 
-vi.mock('@pagespace/lib/organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 vi.mock('next/navigation', () => ({ useParams: vi.fn(() => ({})), usePathname: vi.fn(() => '/dashboard') }));
 vi.mock('@/components/layout/navbar/DriveSwitcherDialog', () => ({ default: () => null }));
 vi.mock('@/hooks/useMyOrganizations', () => ({

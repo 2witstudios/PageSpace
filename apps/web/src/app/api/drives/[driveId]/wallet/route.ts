@@ -28,7 +28,6 @@ import { actorFromAuth } from '@/lib/auth/request-actor';
  *
  * [D-OW-26] An MCP/CLI token reads the consumer projection only (whatever the person's role)
  * and every write refuses it by name (`mcp_token_cannot_move_money`), writing nothing.
- * Dark while ORGS_ENABLED is false (404).
  */
 
 type RouteContext = { params: Promise<{ driveId: string }> };

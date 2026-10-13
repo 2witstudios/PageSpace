@@ -84,8 +84,7 @@ export async function acquireWorkflowCreditHold(
   const gate = await canConsumeAI(userId, toPersonalSubscriptionTier(user?.subscriptionTier), opts);
   if (!gate.allowed) return gate.refusal ? { allowed: false, reason: gate.reason, refusal: gate.refusal } : { allowed: false, reason: gate.reason };
 
-  // The run settles on the wallet the gate reserved on (WAL-5): the drive wallet once
-  // wallets are on; while orgs are dark, the personal root as before wallets. Its usage is
+  // The run settles on the wallet the gate reserved on (WAL-5): the drive wallet. Its usage is
   // recorded as the person the gate bound — the presser of a manual Run, else the creator — so
   // the spend counts toward the same cap that admitted it (review #2817 P2-3).
   const creditSpend: RunCreditSpend = { spend: target, walletId: gate.walletId, userId };

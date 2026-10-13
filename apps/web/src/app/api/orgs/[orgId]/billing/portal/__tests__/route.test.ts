@@ -7,17 +7,12 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { SessionAuthResult } from '@/lib/auth';
 import type { OrgRole } from '@pagespace/db/schema/organizations';
 
-const flags = vi.hoisted(() => ({ orgsEnabled: true, billingEnabled: true }));
+const flags = vi.hoisted(() => ({ billingEnabled: true }));
 
 // The org sign-in policy (SEC-2/3) has its own suites; here every credential meets it.
 vi.mock('@pagespace/lib/permissions/actor-authentication', () => ({
   checkActorOrgAuthentication: vi.fn(async () => ({ allowed: true })),
   drivePolicyOrgId: vi.fn(async () => null),
-}));
-vi.mock('@pagespace/lib/organizations/orgs-enabled', () => ({
-  get ORGS_ENABLED() {
-    return flags.orgsEnabled;
-  },
 }));
 vi.mock('@pagespace/lib/deployment-mode', () => ({ isBillingEnabled: () => flags.billingEnabled }));
 vi.mock('@/lib/auth', () => ({ authenticateRequestWithOptions: vi.fn(), isAuthError: vi.fn() }));
@@ -57,7 +52,6 @@ const originalUrl = process.env.WEB_APP_URL;
 
 beforeEach(() => {
   vi.clearAllMocks();
-  flags.orgsEnabled = true;
   flags.billingEnabled = true;
   process.env.WEB_APP_URL = originalUrl;
   vi.mocked(isAuthError).mockImplementation((result) => 'error' in result);
@@ -89,17 +83,12 @@ describe('POST /api/orgs/[orgId]/billing/portal', () => {
     expect(createOrgBillingPortalSession).not.toHaveBeenCalled();
   });
 
-  it('SEAT-6 (partial) is absent where billing is off (onprem, tenant) and while orgs are dark', async () => {
+  it('SEAT-6 (partial) is absent where billing is off (onprem, tenant)', async () => {
     as('OWNER');
     flags.billingEnabled = false;
     const billingOff = await call();
-    // Billing off is told apart from orgs being dark by its code (UI-7); orgs dark stays a bare 404.
+    // Billing off answers its own code (UI-7).
     expect([billingOff.status, (await billingOff.json()).code]).toEqual([404, 'billing_unavailable']);
-    flags.billingEnabled = true;
-    flags.orgsEnabled = false;
-    const dark = await call();
-    expect(dark.status).toBe(404);
-    expect(await dark.json()).toEqual({ error: 'Not found' });
     expect(createOrgBillingPortalSession).not.toHaveBeenCalled();
   });
 

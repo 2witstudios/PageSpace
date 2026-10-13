@@ -1,5 +1,5 @@
 /**
- * SEAT-9 as one capability matrix, against a real Postgres (orgs on, billing on).
+ * SEAT-9 as one capability matrix, against a real Postgres (billing on).
  *
  * One Northwind Labs, paid, then lapsed. While lapsed: every org drive stays readable; every org-only
  * capability that adds access or spend is refused with 402 org_lapsed — inviting, creating (or taking in)
@@ -43,8 +43,6 @@ import { releaseHold } from '../../billing/credit-consume';
 import { defaultReconcileSandboxStorageDeps } from '../../services/sandbox/sandbox-storage-billing';
 import { reconcileSandboxStorage, MAX_BILLABLE_SPAN_MS, type ReconcileSandboxStorageDeps } from '../../services/sandbox/sandbox-storage-reconcile';
 import { credentialActor } from '../../permissions/access-actor';
-
-vi.mock('../orgs-enabled', () => ({ ORGS_ENABLED: true }));
 
 const deps: OrgDriveServiceDeps = {
   getOrgRole: async (tx, orgId, userId) => {
@@ -128,7 +126,7 @@ async function storageTick(now: Date) {
   return { result, charges };
 }
 
-describe('a lapsed org, every capability at once (orgs on, real Postgres)', () => {
+describe('a lapsed org, every capability at once (real Postgres)', () => {
   beforeAll(async () => {
     try {
       await db.select({ id: orgSubscriptions.id }).from(orgSubscriptions).limit(1);

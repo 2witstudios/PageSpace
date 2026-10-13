@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { ORGS_ENABLED } from '@pagespace/lib/organizations/orgs-enabled';
 import { spendChipModel } from '@pagespace/lib/billing/spend-surface';
 import { useConversationSpend, useDriveSpend } from '@/hooks/useConversationSpend';
 import { focusDriveId, useFocus } from '@/lib/dashboard/focus';
@@ -12,7 +11,7 @@ import { CreditBalance } from './CreditBalance';
 /**
  * The header's credit chip. Where the conversation in view can spend from more than one source,
  * the spending-from chip replaces the personal-credits chip (Spec SPEND-2, D20.8); everywhere
- * else, and while organizations are dark, it is the personal chip as before. Inside a drive with
+ * else it is the personal chip. Inside a drive with
  * no conversation in view (a document, a folder), the chip follows the DRIVE: what a new
  * conversation there would spend, read only — a source is switched per conversation (SPEND-3).
  *
@@ -42,7 +41,7 @@ export function AiBalanceWidget() {
   }, [pinned, pinnedStillMounted]);
 
   if (!target) {
-    const driveChip = driveSpend ? spendChipModel({ orgsEnabled: ORGS_ENABLED, options: driveSpend.options, resolved: driveSpend.resolved }) : null;
+    const driveChip = driveSpend ? spendChipModel({ options: driveSpend.options, resolved: driveSpend.resolved }) : null;
     if (!driveSpend || !driveChip) return <CreditBalance />;
     return (
       <SpendSourcePopover
@@ -57,7 +56,7 @@ export function AiBalanceWidget() {
   }
 
   const spend = conversationSpend;
-  const chip = spend ? spendChipModel({ orgsEnabled: ORGS_ENABLED, options: spend.options, resolved: spend.resolved }) : null;
+  const chip = spend ? spendChipModel({ options: spend.options, resolved: spend.resolved }) : null;
   if (!spend || !chip) return <CreditBalance />;
 
   const driveName = spend.options.find((o) => o.driveName)?.driveName ?? null;

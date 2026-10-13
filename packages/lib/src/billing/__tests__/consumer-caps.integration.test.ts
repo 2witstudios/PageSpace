@@ -32,8 +32,6 @@ import { listDriveWalletCaps, setDriveWalletCap, setSeatCap } from '../../servic
 import { leaveOrganization } from '../../organizations/leave';
 import { credentialActor } from '../../permissions/access-actor';
 
-vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
-
 // A seam AFTER the unlocked resolution returns: a test changes the world before the gate's locked re-check.
 const afterResolution = vi.hoisted(() => ({ run: null as null | (() => Promise<void>) }));
 vi.mock('../spend-resolution', async (importOriginal) => {
@@ -130,7 +128,7 @@ async function settledCall(w: World, driveId: string, costDollars: number) {
   expect(await consumeCredits({ aiUsageLogId: log.id, userId: w.marcusId, costDollars, holdId: gate.holdId, walletId: gate.walletId })).toBe('settled');
 }
 
-describe('per-consumer caps on drive-wallet and seat legs (orgs on, real Postgres)', () => {
+describe('per-consumer caps on drive-wallet and seat legs (real Postgres)', () => {
   beforeAll(async () => {
     try {
       await db.select({ id: wallets.id }).from(wallets).limit(1);

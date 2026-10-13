@@ -3,7 +3,6 @@ import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
-  orgsEnabled: true,
   useMyOrgs: vi.fn(),
   useOrgRealtime: vi.fn(),
   showBilling: true,
@@ -12,11 +11,6 @@ const mocks = vi.hoisted(() => ({
   assign: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/organizations/orgs-enabled', () => ({
-  get ORGS_ENABLED() {
-    return mocks.orgsEnabled;
-  },
-}));
 vi.mock('@/hooks/useOrgs', () => ({ useMyOrgs: mocks.useMyOrgs, useOrgRealtime: mocks.useOrgRealtime }));
 vi.mock('@/hooks/useBillingVisibility', () => ({ useBillingVisibility: () => ({ showBilling: mocks.showBilling }) }));
 vi.mock('@/lib/deployment-mode', () => ({ isBillingEnabled: () => mocks.billingEnabled }));
@@ -32,7 +26,6 @@ import { AccountOrganizationsSection } from '../AccountOrganizationsSection';
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mocks.orgsEnabled = true;
   mocks.showBilling = true;
   mocks.billingEnabled = true;
   mocks.paymentHere = true;
@@ -91,12 +84,6 @@ describe('Account › Organizations', () => {
     mocks.useMyOrgs.mockReturnValue({ orgs: [], isLoading: false });
     render(<AccountOrganizationsSection />);
     expect(screen.getByRole('button', { name: /Create organization/ })).toBeTruthy();
-  });
-
-  it('renders nothing while orgs are dark (ORGS_ENABLED false)', () => {
-    mocks.orgsEnabled = false;
-    const { container } = render(<AccountOrganizationsSection />);
-    expect(container.innerHTML).toBe('');
   });
 
   it('hides Create where purchases are hidden (iOS), since creating takes a card', () => {

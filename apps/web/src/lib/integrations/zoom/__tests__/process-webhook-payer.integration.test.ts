@@ -2,14 +2,11 @@
  * processZoomWebhook end to end against a real Postgres (Spec SPEND-6): who pays for a
  * transcript's AI enrichment, and that no refusal blocks the page.
  *
- * apps/web loads @pagespace/lib from its built dist, whose ORGS_ENABLED is the shipped constant
- * (false): this suite proves the path production runs today. With orgs ON the enrichment is an
- * automation on its destination drive (automationSpend) — its wallet pays, an org drive's or a
- * personal drive's alike, and empty/paused/missing skips with the lead's notice and no fallback to
- * anyone's own credits — proven in packages/lib automation-spend.integration.test.ts, where the
- * flag reaches the gate.
+ * The enrichment is an automation on its destination drive (automationSpend): its wallet pays, an
+ * org drive's or a personal drive's alike, and empty/paused/missing skips with the lead's notice and
+ * no fallback to anyone's own credits (the full matrix is packages/lib automation-spend.integration).
  *
- *   (b) while orgs are dark, an automation bills as before wallets: the connection owner's wallet;
+ *   (b) the destination drive's wallet pays both calls, never the connection owner's own credits;
  *   (c) a refusal, and a gate that cannot be checked, both create the page without enrichment and
  *       record why (#2729).
  *
@@ -33,18 +30,11 @@ import type { ZoomConnection } from '@pagespace/db/schema/zoom';
 import { factories } from '@pagespace/db/test/factories';
 import { ensureTestDb } from '@/test/ensure-test-db';
 
-const { flags, mockGenerateText, mockCreatePage } = vi.hoisted(() => ({
-  flags: { orgsEnabled: false },
+const { mockGenerateText, mockCreatePage } = vi.hoisted(() => ({
   mockGenerateText: vi.fn(),
   mockCreatePage: vi.fn(),
 }));
 
-// Pinned to the shipped value for process-webhook's own read (the lib dist reads its constant).
-vi.mock('@pagespace/lib/organizations/orgs-enabled', () => ({
-  get ORGS_ENABLED() {
-    return flags.orgsEnabled;
-  },
-}));
 vi.mock('ai', () => ({ generateText: mockGenerateText }));
 vi.mock('@/lib/ai/core/provider-factory', () => ({
   createAIProvider: vi.fn(async () => ({ model: {}, provider: 'anthropic', modelName: 'claude-3-haiku-20240307' })),
@@ -194,7 +184,6 @@ describe('Zoom enrichment: the destination drive\'s payer pays (real Postgres)',
 
   beforeEach(() => {
     vi.clearAllMocks();
-    flags.orgsEnabled = false;
     process.env.DEPLOYMENT_MODE = 'cloud';
     mockCreatePage.mockResolvedValue({ success: true, page: { id: 'page-1' } });
     mockGenerateText.mockImplementation(async ({ system }: { system: string }) => ({
@@ -210,15 +199,15 @@ describe('Zoom enrichment: the destination drive\'s payer pays (real Postgres)',
     world = null;
   });
 
-  it('SPEND-6 (partial) (b) while orgs are dark the enrichment bills as before wallets: the connection owner\'s own wallet pays both calls', async () => {
+  it('SPEND-6 (partial) (b) the enrichment is an automation on its destination drive: the drive wallet pays both calls, never the connection owner', async () => {
     world = await build({ allocationCents: 1_000 });
 
-    await processZoomWebhook(event, connectionFor(world, world.marcusDriveId));
+    await processZoomWebhook(event, connectionFor(world, world.productId));
 
     const usage = await settledUsage(world);
-    expect(usage.map((r) => [r.userId, r.walletId])).toEqual([[world.marcusId, world.marcusWalletId], [world.marcusId, world.marcusWalletId]]);
-    expect((await walletRow(world.marcusWalletId)).monthlyRemainingCents).toBeLessThan(MARCUS_CENTS);
-    expect((await walletRow(world.productWalletId as string)).spentCents).toBe(0);
+    expect(usage.map((r) => r.walletId)).toEqual([world.productWalletId, world.productWalletId]);
+    expect((await walletRow(world.productWalletId as string)).spentCents).toBeGreaterThan(0);
+    expect((await walletRow(world.marcusWalletId)).monthlyRemainingCents).toBe(MARCUS_CENTS);
     expect(createdMetadata()).not.toHaveProperty('aiEnrichmentSkipped');
   });
 

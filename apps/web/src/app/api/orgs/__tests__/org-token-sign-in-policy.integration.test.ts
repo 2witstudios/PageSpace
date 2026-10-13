@@ -18,7 +18,6 @@ import { organizations, orgMembers } from '@pagespace/db/schema/organizations';
 import type { MCPAuthResult, SessionAuthResult } from '@/lib/auth';
 import type { VerifiedAuthentication } from '@pagespace/lib/auth/authentication-evidence';
 
-vi.mock('@pagespace/lib/organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(),

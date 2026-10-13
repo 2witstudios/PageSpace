@@ -38,8 +38,6 @@ import { leaveOrganization } from '../../organizations/leave';
 import { deleteOrganization } from '../../organizations/deletion';
 import { credentialActor } from '../../permissions/access-actor';
 
-vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
-
 // Northwind Labs fixture names (Sequence Spec Part 2), with per-run ids. Marcus leads Customer
 // Research (Restricted); Jono owns the org, Priya is an Admin, Lena and Nina are members, Chris is
 // outside the org.

@@ -67,7 +67,6 @@ vi.mock('@pagespace/lib/services/drive-service', () => ({
     id: 'drive-new', name: input.name, slug: 'test-drive', drivePrompt: input.drivePrompt ?? null, orgId: null,
   })),
 }));
-vi.mock('@pagespace/lib/organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 vi.mock('@pagespace/lib/services/org-drive-service', () => ({ createOrgDrive: vi.fn() }));
 vi.mock('@pagespace/lib/services/org-drive-service-deps', () => ({ orgDriveServiceDeps: { production: true } }));
 

@@ -27,7 +27,7 @@ type ListedWorkflow = Workflow & { ownerLeftAt?: string | null };
 
 interface WorkflowListProps {
   workflows: ListedWorkflow[];
-  /** Where these automations spend (orgs on): each row says whom it spends as and why a run was skipped. */
+  /** Where these automations spend: each row says whom it spends as and why a run was skipped. */
   spendContext?: AutomationSpendContext;
   onRun: (id: string) => Promise<void> | void;
   onToggle: (id: string, enabled: boolean) => Promise<void> | void;

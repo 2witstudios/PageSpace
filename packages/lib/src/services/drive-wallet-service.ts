@@ -10,10 +10,6 @@
  * `wallet-admin` and written here under row locks. A person with no access to the drive gets
  * 404 (whether a drive or its wallet exists is itself drive data); a person with access but
  * not the action gets 403.
- *
- * Dark while ORGS_ENABLED is false: drive wallets are not resolved by the gate then, so the
- * surfaces that configure them answer 404. The personal default and the conversation source
- * work regardless (they are personal), and answer own credits while dark.
  */
 
 import { db } from '@pagespace/db/db';
@@ -33,7 +29,6 @@ import {
   type SpendSourceKindValue,
 } from '@pagespace/db/schema/wallets';
 import { isBillingEnabled } from '../deployment-mode';
-import { ORGS_ENABLED } from '../organizations/orgs-enabled';
 import { getDriveIdsForUser, getUserDriveAccess } from '../permissions/permissions';
 import { checkActorDriveAuthentication } from '../permissions/actor-authentication';
 import { loadDriveWalletStanding, type DriveWalletStanding } from '../permissions/spend-standing';
@@ -135,7 +130,6 @@ interface WalletAccess {
 }
 
 async function walletAccess(actor: AccessActor, driveId: string, credential: WalletCredential): Promise<WalletAccess | WalletServiceError> {
-  if (!ORGS_ENABLED) return notFound();
   const standing = await loadDriveWalletStanding(actor.userId, driveId);
   if (!standing) return notFound();
   // SEC-2/3 (D-OW-45): reading or spending an org drive's wallet is org content, so a credential the drive's org
@@ -920,7 +914,6 @@ export async function setSeatCap(
   consumerId: string,
   input: ConsumerCapWriteInput | null,
 ): Promise<WalletCapsRead | WalletServiceError> {
-  if (!ORGS_ENABLED) return notFound('Organization not found');
   const decision = decideSeatCapWrite({
     actorRole: await findMembershipRole(orgId, userId),
     consumerRole: await findMembershipRole(orgId, consumerId),
@@ -1285,8 +1278,6 @@ export async function listMyWallets(actor: AccessActor, credential: WalletCreden
     remainingCredits: formatCreditCount(d.remainingCents),
     createdAt: d.createdAt.toISOString(),
   }));
-
-  if (!ORGS_ENABLED) return result;
 
   // The drives this credential can open, through the one access model (sign-in policy included); nothing else is listed.
   const driveIds = await getDriveIdsForUser(actor);

@@ -6,7 +6,7 @@
  * with the lapse refusal (SEAT-9) until the org pays.
  *
  * Northwind Labs (Sequence Spec Part 2): Jono Owner, Priya Admin, Dana member and Product's lead,
- * Marcus member of Product, Gita an outsider guest in Product. ORGS_ENABLED on. Deletes every row it
+ * Marcus member of Product, Gita an outsider guest in Product. Deletes every row it
  * creates, children before parents, users last, and ends the pool.
  */
 import { describe, it, expect, beforeAll, beforeEach, afterEach, afterAll, vi } from 'vitest';
@@ -24,7 +24,6 @@ import { walletConsumerCaps, wallets } from '@pagespace/db/schema/wallets';
 import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
 
-vi.mock('../orgs-enabled', () => ({ ORGS_ENABLED: true }));
 // The org audit chain is a separate store this suite does not assert; nothing may be left in it.
 
 import { getOrgPolicies, updateOrgPolicies } from '../policies';
@@ -132,7 +131,7 @@ const capOf = async (walletId: string, userId: string) =>
   (await db.select({ daily: walletConsumerCaps.dailyCapCents, monthly: walletConsumerCaps.monthlyCapCents }).from(walletConsumerCaps)
     .where(and(eq(walletConsumerCaps.walletId, walletId), eq(walletConsumerCaps.consumerKey, `user:${userId}`))))[0] ?? null;
 
-describe('a lapsed org may still restrict (orgs on, real Postgres)', () => {
+describe('a lapsed org may still restrict (real Postgres)', () => {
   beforeAll(async () => {
     try {
       await db.select({ id: orgSubscriptions.id }).from(orgSubscriptions).limit(1);

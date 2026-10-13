@@ -23,8 +23,6 @@ import { removeMember } from '../membership';
 import { leaveOrganization } from '../leave';
 import { clearDepartureSuppression } from '../departure-suppression';
 
-vi.mock('../orgs-enabled', () => ({ ORGS_ENABLED: true }));
-
 const audit = vi.hoisted(() => ({ events: [] as Array<Record<string, unknown>> }));
 // AUD-1: the code under test stages its org events in the outbox; the chain append is captured here, so what this
 // suite sees is exactly what was staged, committed and delivered.

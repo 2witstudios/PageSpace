@@ -153,10 +153,6 @@ describe('permissions/permissions.ts', () => {
     expect(extractFunctionBody(source, 'getDriveIdsForUser')).toMatch(/resolveDriveIdsForUser\(/);
     const body = extractPrivateBody(source, 'resolveDriveIdsForUser');
     expect(body).toMatch(GATE);
-    // The org-aware body (ORGS_ENABLED) reads its own rows with the same gate.
-    const start = source.indexOf('async function getDriveIdsForUserWithOrgs');
-    expect(start).toBeGreaterThan(-1);
-    expect(source.slice(start, source.indexOf('\n}\n', start))).toMatch(GATE);
   });
 
   it.each([

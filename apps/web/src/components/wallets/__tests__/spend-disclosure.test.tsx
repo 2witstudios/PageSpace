@@ -10,7 +10,6 @@ import { SWRConfig } from 'swr';
 import type { ReactNode } from 'react';
 import type { SurfaceChoice, SurfaceDecision } from '@pagespace/lib/billing/spend-surface';
 
-vi.mock('@pagespace/lib/organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 const fetchWithAuth = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/auth/auth-fetch', () => ({ fetchWithAuth, put: vi.fn(), ApiRequestError: class extends Error {} }));
 vi.mock('@/stores/useSocketStore', () => ({ useSocketStore: (select: (s: { socket: null }) => unknown) => select({ socket: null }) }));

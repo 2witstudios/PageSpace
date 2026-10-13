@@ -12,11 +12,9 @@ import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 type OrgRole = 'OWNER' | 'ADMIN' | 'MEMBER';
 
 export const leadAuthority = {
-  orgsEnabled: true,
   orgRoles: new Map<string, OrgRole>(),
   audited: [] as Array<{ userId: string; driveId: string; action: string; via: string }>,
   reset() {
-    this.orgsEnabled = true;
     this.orgRoles.clear();
     this.audited.length = 0;
   },
@@ -29,7 +27,6 @@ export const loadDriveLeadAuthority = vi.fn(async (
 ) => {
   const { userId } = actor;
   const authority = decideDriveLeadAuthority({
-    orgsEnabled: leadAuthority.orgsEnabled,
     userId,
     drive,
     orgRole: drive.orgId ? leadAuthority.orgRoles.get(userId) ?? null : null,

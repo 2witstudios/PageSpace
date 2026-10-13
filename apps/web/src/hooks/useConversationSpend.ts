@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useRef } from 'react';
 import useSWR from 'swr';
-import { ORGS_ENABLED } from '@pagespace/lib/organizations/orgs-enabled';
 import type { SurfaceChoice, SurfaceDecision } from '@pagespace/lib/billing/spend-surface';
 import { fetchWithAuth, put } from '@/lib/auth/auth-fetch';
 import { useSocketStore } from '@/stores/useSocketStore';
@@ -20,7 +19,7 @@ export interface ConversationSpend {
 export const WALLET_CHANGED_EVENT = 'wallet:changed';
 
 export function conversationSpendKey(conversationId: string | null, driveId: string | null, isGlobal: boolean): string | null {
-  if (!ORGS_ENABLED || !conversationId) return null;
+  if (!conversationId) return null;
   const base = `/api/wallets/conversations/${encodeURIComponent(conversationId)}`;
   return isGlobal && driveId ? `${base}?driveId=${encodeURIComponent(driveId)}` : base;
 }
@@ -51,8 +50,7 @@ export function pendingConversationRetryMs(misses: number): number {
 
 /**
  * The spend source of one conversation, kept current: refetched when its drive's wallet changes
- * (`wallet:changed`) or the person's own balance does (`credits:updated`), never polled. Dark (no
- * request at all) while organizations are off. `choose` is the only writer of the choice (PUT);
+ * (`wallet:changed`) or the person's own balance does (`credits:updated`), never polled. `choose` is the only writer of the choice (PUT);
  * it persists for the conversation (SPEND-3) and throws the route's ApiRequestError on refusal.
  */
 export function useConversationSpend(conversationId: string | null, options: { driveId: string | null; isGlobal: boolean }) {
@@ -106,7 +104,7 @@ export interface DriveSpend {
 }
 
 export function driveSpendKey(driveId: string | null): string | null {
-  return ORGS_ENABLED && driveId ? `/api/wallets/drives/${encodeURIComponent(driveId)}` : null;
+  return driveId ? `/api/wallets/drives/${encodeURIComponent(driveId)}` : null;
 }
 
 const driveFetcher = async (url: string): Promise<DriveSpend | null> => {
@@ -119,7 +117,7 @@ const driveFetcher = async (url: string): Promise<DriveSpend | null> => {
 /**
  * SPEND-2: the source of the drive the person is in while no conversation is in view, so the
  * header chip still names it there. Read only (a choice is per conversation, SPEND-3); refetched
- * on the drive's `wallet:changed` and on `credits:updated`, never polled. Dark while orgs are off.
+ * on the drive's `wallet:changed` and on `credits:updated`, never polled.
  */
 export function useDriveSpend(driveId: string | null) {
   const key = driveSpendKey(driveId);

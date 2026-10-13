@@ -10,7 +10,7 @@
  * checkOrgMayLoosen at a write site), tested here too.
  *
  * Northwind Labs (Sequence Spec Part 2): Jono Owner, Priya Admin, Dana member and Product's lead, Marcus member,
- * Gita an outsider. ORGS_ENABLED on, billing on (cloud). Deletes every row it creates, children before parents,
+ * Gita an outsider. Billing on (cloud). Deletes every row it creates, children before parents,
  * users last, and ends the pool.
  *
  * Locally:
@@ -30,7 +30,6 @@ import { driveShareLinks } from '@pagespace/db/schema/share-links';
 import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
 
-vi.mock('../orgs-enabled', () => ({ ORGS_ENABLED: true }));
 // The org audit chain is a separate store this suite does not assert; nothing may be left in it.
 
 import { ORG_LAPSED_REFUSAL, checkOrgMayLoosen, isOrgActive } from '../status';
@@ -113,7 +112,7 @@ const roleOf = async (orgId: string, userId: string) =>
 const rowsFor = async (driveId: string, userId: string) =>
   db.select({ id: driveMembers.id }).from(driveMembers).where(and(eq(driveMembers.driveId, driveId), eq(driveMembers.userId, userId)));
 
-describe('a lapsed org cannot loosen access (orgs on, real Postgres)', () => {
+describe('a lapsed org cannot loosen access (real Postgres)', () => {
   beforeAll(async () => {
     try {
       await db.select({ id: orgSubscriptions.id }).from(orgSubscriptions).limit(1);

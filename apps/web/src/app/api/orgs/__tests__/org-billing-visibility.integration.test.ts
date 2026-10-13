@@ -6,8 +6,7 @@
  * shell's adapter seam, wrapped so every port call is counted; the app's raw Stripe client is
  * replaced by one that fails the test if anything reaches it.
  *
- * Only authentication is faked (who is calling), and ORGS_ENABLED (a dark-ship code constant)
- * is turned on.
+ * Only authentication is faked (who is calling).
  *
  * Requires DATABASE_URL → a migrated Postgres (requireDb). Deletes every row it creates.
  */
@@ -37,7 +36,6 @@ const harness = vi.hoisted(() => ({
   stripe: null as unknown,
 }));
 
-vi.mock('@pagespace/lib/organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
 vi.mock('@pagespace/lib/organizations/org-change-events', () => ({ announceOrgChange: vi.fn(async () => undefined) }));
 vi.mock('@/lib/auth', async (importOriginal) => {

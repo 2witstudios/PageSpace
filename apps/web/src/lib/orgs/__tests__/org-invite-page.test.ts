@@ -13,7 +13,6 @@ const mocks = vi.hoisted(() => ({
   session: null as null | { userId: string },
 }));
 
-vi.mock('@pagespace/lib/organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 vi.mock('@pagespace/lib/organizations/invitations', () => ({ findInvitationByToken: vi.fn(async () => mocks.invite) }));
 vi.mock('@pagespace/lib/organizations/repository', () => ({ findMembershipRole: vi.fn(async () => mocks.memberRole) }));
 vi.mock('@pagespace/lib/auth/session-service', () => ({ sessionService: { validateSession: vi.fn(async () => mocks.session) } }));

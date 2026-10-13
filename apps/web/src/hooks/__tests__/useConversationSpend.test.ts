@@ -1,7 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
 
-vi.mock('@pagespace/lib/organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
-
 import { conversationSpendKey } from '../useConversationSpend';
 import { driveWalletKey } from '../useDriveWallet';
 

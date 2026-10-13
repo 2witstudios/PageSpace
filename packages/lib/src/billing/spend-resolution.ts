@@ -9,8 +9,7 @@
  * answer under a row lock; this read is unlocked and only decides WHICH wallet, never
  * whether it can pay (the gate re-checks that on the locked row and never switches).
  *
- * While ORGS_ENABLED is false, and for the personal target, it reads nothing and answers
- * the personal root wallet: personal spend behaves exactly as before wallets.
+ * For the personal target it reads nothing and answers the personal root wallet.
  */
 
 import { loadConsumerCapFacts } from './consumer-caps';
@@ -23,7 +22,6 @@ import { users } from '@pagespace/db/schema/auth';
 import { conversations } from '@pagespace/db/schema/conversations';
 import { creditHolds } from '@pagespace/db/schema/credits';
 import { driveSpendOverrides, wallets, personalRootWalletOf } from '@pagespace/db/schema/wallets';
-import { ORGS_ENABLED } from '../organizations/orgs-enabled';
 import { isOrgActive } from '../organizations/status';
 import { orgLegStatus } from '../organizations/status-core';
 import { automationCreatorRemains, loadDriveSpendStanding, sharedSpendLegsFor } from '../permissions/spend-standing';
@@ -40,7 +38,6 @@ import {
   personalRootDecision,
   personActor,
   reservedAgainstCents,
-  resolvesDriveWallets,
   seatAllowanceLeg,
   walletLeg,
   walletSpendableCents,
@@ -336,7 +333,7 @@ export async function resolveCallSpend(input: {
   recordRefusal?: boolean;
 }): Promise<CallSpendDecision & { preselectedWalletId?: string }> {
   const { userId, consumerTier, target } = input;
-  if (!resolvesDriveWallets({ orgsEnabled: ORGS_ENABLED, target }) || target.kind === 'personal') {
+  if (target.kind === 'personal') {
     return personalRootDecision(consumerTier);
   }
   const now = input.now ?? new Date();
@@ -540,7 +537,7 @@ export async function listSpendChoices(userId: string, driveId: string | null): 
     remainingCredits: remainingCents === null ? null : formatCreditCount(remainingCents),
   });
   const own = choice('own_credits', personalId, { driveName: null, orgName: null }, ownRemaining);
-  if (!ORGS_ENABLED || driveId === null) return [own];
+  if (driveId === null) return [own];
 
   const now = new Date();
   const standing = await loadDriveSpendStanding(userId, driveId);

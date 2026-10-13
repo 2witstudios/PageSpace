@@ -1,6 +1,6 @@
 /**
  * The tier that governs a call is its FUNDER's (Spec WAL-8) — real Postgres, the real resolver and
- * gate, orgs on.
+ * gate.
  *
  * Every model-call surface asks one resolver for the tier its pro-model (and voice) entitlement
  * is judged on: the gate's `entitlementTier` when it gates first, `resolveEntitlementTier` on the
@@ -30,8 +30,6 @@ import { canConsumeAI, resolveEntitlementTier } from '../credit-gate';
 import { releaseHold } from '../credit-consume';
 import { PERSONAL_SPEND, automationSpend, driveSpend, type SpendTarget } from '../spend-target';
 import type { SubscriptionTier } from '../subscription-tiers';
-
-vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 
 let dbAvailable = false;
 const originalMode = process.env.DEPLOYMENT_MODE;

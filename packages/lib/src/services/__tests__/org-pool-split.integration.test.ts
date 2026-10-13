@@ -19,8 +19,6 @@ import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
 import { getOrgPoolSplit } from '../drive-wallet-service';
 
-vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
-
 // Reachability is settled before collection, so a DB-less run skips the suite (requireDb throws unless opted out).
 const ok = await db.select({ id: wallets.id }).from(wallets).limit(1).then(
   () => true,

@@ -17,8 +17,6 @@ import { listAccessibleDrives } from '../../services/drive-service';
 import { groupPickerDrives } from '../drive-picker-groups';
 import { credentialActor } from '../../permissions/access-actor';
 
-vi.mock('../orgs-enabled', () => ({ ORGS_ENABLED: true }));
-
 let ready = false;
 let orgId = '';
 const userIds: string[] = [];

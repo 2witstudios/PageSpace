@@ -175,17 +175,14 @@ export function personTriggeredSpend(driveId: string): SpendTarget {
  * SPEND-6, fail closed: an automation about to call a model with NO reserved wallet. Its
  * usage would settle through consumeCredits' fallback onto the recorded person's personal
  * root, which an automation must never reach. Refuse the run before the model is called.
- * Only while wallets are live (orgs on, billing on); while orgs are dark an automation
- * bills as before wallets, and with billing off nothing settles at all.
+ * Only while billing is on: with billing off nothing settles at all.
  */
 export function automationRunUnreserved(input: {
-  orgsEnabled: boolean;
   billingEnabled: boolean;
   target: SpendTarget;
   walletId: string | undefined;
 }): boolean {
   return input.billingEnabled
-    && input.orgsEnabled
     && input.target.kind === 'automation'
     && (input.walletId === undefined || input.walletId.length === 0);
 }
@@ -208,16 +205,6 @@ export function resolvedSpend(target: SpendTarget, source: SpendSourceKind | und
 /** The chosen wallet a turn's fallback moved off, as its follow-on target carries it (WAL-6b). */
 export function spendFallbackFromWalletId(target: SpendTarget | undefined): string | undefined {
   return target?.kind === 'drive' ? target.fallbackFromWalletId : undefined;
-}
-
-/**
- * Whether the gate resolves a wallet at all. While orgs are dark (ORGS_ENABLED false),
- * and for the personal target, every call spends the personal root wallet exactly as it
- * did before wallets: no wallet reads, no new refusals. That includes an automation while
- * orgs are dark: it bills the person it has always billed until wallets turn on.
- */
-export function resolvesDriveWallets(input: { orgsEnabled: boolean; target: SpendTarget }): boolean {
-  return input.orgsEnabled && input.target.kind !== 'personal';
 }
 
 // ---------------------------------------------------------------------------
@@ -604,7 +591,7 @@ export function automationSpendInput(input: {
 export const PERSONAL_ROOT_NOT_YET_CREATED = 'personal-root:not-yet-created';
 
 /**
- * Own credits, with no reads: the call named no drive (SPEND-8), or orgs are dark. The
+ * Own credits, with no reads: the call named no drive (SPEND-8). The
  * gate's personal path finds (or lazily creates) the personal root wallet itself.
  */
 export function personalRootDecision(consumerTier: SubscriptionTier): CallSpendDecision {

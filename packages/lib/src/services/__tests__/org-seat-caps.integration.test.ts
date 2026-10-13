@@ -24,8 +24,6 @@ import { drives } from '@pagespace/db/schema/core';
 import { driveMembers } from '@pagespace/db/schema/members';
 import { credentialActor } from '../../permissions/access-actor';
 
-vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
-
 // Reachability is settled before collection, so a DB-less run skips the suite (requireDb throws unless opted out).
 const ok = await db.select({ id: wallets.id }).from(wallets).limit(1).then(
   () => true,

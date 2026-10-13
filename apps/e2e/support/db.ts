@@ -43,6 +43,10 @@ export interface SeededUser {
 }
 
 export interface SeedOptions {
+  /** Display name, for specs that find a person by name on screen. Factory default otherwise. */
+  name?: string;
+  /** Name of the user's own drive, for specs that find it on screen. Factory default otherwise. */
+  driveName?: string;
   tier?: Tier;
   /** AI provider for this user. Defaults to 'openrouter' so calls hit the mock stub. */
   provider?: string;
@@ -62,11 +66,12 @@ export interface SeedOptions {
 export async function seedUser(opts: SeedOptions = {}): Promise<SeededUser> {
   const tier = opts.tier ?? 'pro';
   const user = await factories.createUser({
+    ...(opts.name ? { name: opts.name } : {}),
     subscriptionTier: tier,
     currentAiProvider: opts.provider ?? 'openrouter',
     currentAiModel: opts.model ?? 'e2e/stub-model',
   });
-  const drive = await factories.createDrive(user.id);
+  const drive = await factories.createDrive(user.id, opts.driveName ? { name: opts.driveName } : {});
 
   await setBalance(user.id, {
     monthlyRemainingCents: opts.monthlyRemainingCents ?? 10_000,

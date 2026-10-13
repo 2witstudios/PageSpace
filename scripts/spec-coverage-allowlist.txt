@@ -1,10 +1,3 @@
-# ORG-2 (Owner/Admin/Member; many orgs per user; a user in no org sees no org UI) re-added per the lane-B review
-# of #2869 (comment 6126276565): no single test proves all three clauses. Proven in parts, each titled
-# "ORG-2 (partial)": the roles and many-orgs clauses and a no-org person's empty org list and 404s on real Postgres
-# (packages/lib org-roles-many-orgs.integration), and the no-org UI on the real web components with an empty org
-# list (apps/web components/orgs/__tests__/no-org-ui.test.tsx; ruling: the Create organization entry is the one
-# affordance a no-org user sees). A test crossing both packages is not possible in one run, so it stays here.
-ORG-2
 # SEAT-9 (partial): seat-9-matrix.integration (real PG) proves the whole capability list in one test — unpaid,
 # past_due, canceled and never-paid all lapse; reads kept; invite, create/take in an org drive, pool and
 # allocations, loosening policy and caps, approving guests, the publish guard, sandbox and env creation all
@@ -13,17 +6,8 @@ ORG-2
 # OrgSurfaceBanner.test in apps/web. Stays listed because the two cannot share one describe (lib vs web), and
 # the publish route itself (apps/web publish-page.ts, server-only) is asserted only through its checkOrgActive guard.
 SEAT-9
-# SPEND-10 (partial, ow-c6): the lead's view carries spend by member, the org admin's the pool and the
-# unallocated balance; automation spend is labeled per person until C4 names the drive consumer.
-UI-7
 # UI-8 (partial): the chip, popover and composer strip (spend-surfaces*), the refusal card in the chat error
 # banner, the automation spend line / skipped badge / owner-left state, and the /btw fallback notice are
 # tested, each titled "UI-8 (partial)". Unproven: v1/chat/completions, consult and mentions still drop the
 # gate's fallback (SPEND-4, the spend-gate lane), and canvas page 2 fidelity needs a reviewer with the canvas.
 UI-8
-# X-4 (partial): one drive-member event per affected user from the org membership sync (B4); wallet:changed
-# and org:changed contracts; org rename/avatar, delete (audience read before), invitation create/revoke and
-# accept announce org:changed; the app shell's listener refetches GET /api/orgs so the picker regroups and
-# renames without reload (useMyOrgs.shared-cache). Unproven in one test: a two-context run where a visibility
-# change updates another member's sidebar live (an e2e in E2E_SPECS once ORGS_ENABLED flips).
-X-4

@@ -1,6 +1,5 @@
 "use client";
 
-import { ORGS_ENABLED } from '@pagespace/lib/organizations/orgs-enabled';
 import { OrgMark } from '@/components/orgs/OrgMark';
 import { useMyOrganizations } from '@/hooks/useMyOrganizations';
 import { useState } from "react";
@@ -66,15 +65,15 @@ export default function DashboardCrumb() {
     driveId ? state.drives.find((drive) => drive.id === driveId)?.name : undefined
   );
   // UI-3: an org-owned drive is still ONE chip — the org's mark replaces the folder icon, and
-  // the org's name is in the tooltip, never a second crumb. Dark while orgs are off.
+  // the org's name is in the tooltip, never a second crumb.
   const driveOrgId = useDriveStore((state) =>
     driveId ? state.drives.find((drive) => drive.id === driveId)?.orgId ?? null : null
   );
   const { orgById } = useMyOrganizations();
-  const org = ORGS_ENABLED ? orgById(driveOrgId) : null;
+  const org = orgById(driveOrgId);
   // UI-3 (canvas Main): on the org hub and its settings pages the header names the org, as a link
   // back to the hub. Only an org the viewer belongs to is named; anything else shows Home alone.
-  const pageOrg = ORGS_ENABLED && !driveName ? orgById(orgIdFromPath(pathname)) : null;
+  const pageOrg = !driveName ? orgById(orgIdFromPath(pathname)) : null;
 
   if (pathname === DASHBOARD_PATH) {
     // Hidden below lg, unlike the link. This variant is orientation only —

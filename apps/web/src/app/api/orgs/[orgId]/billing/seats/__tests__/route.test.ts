@@ -63,7 +63,7 @@ describe('/api/orgs/[orgId]/billing/seats', () => {
     expect((await PATCH(patch({ autoAdd: true, extra: 1 }), ctx)).status).toBe(400);
   });
 
-  it('SEAT-4 (partial) where billing is off the route answers 404 billing_unavailable — distinguishable from organizations being dark', async () => {
+  it('SEAT-4 (partial) where billing is off the route answers 404 billing_unavailable', async () => {
     mockBilling.mockReturnValue(false);
     const read = await GET(get(), ctx);
     expect(read.status).toBe(404);

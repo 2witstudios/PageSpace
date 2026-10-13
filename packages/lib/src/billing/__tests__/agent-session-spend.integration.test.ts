@@ -1,5 +1,5 @@
 /**
- * Where an agent's spend lands (Spec SPEND-7) — real Postgres, the real gate and settle, orgs on.
+ * Where an agent's spend lands (Spec SPEND-7) — real Postgres, the real gate and settle.
  *
  * Northwind has two org drives, each with its own drive wallet under the pool: Product (drive A),
  * where Marcus is working, and Research (drive B), where the agent page lives. An agent's spend is
@@ -28,8 +28,6 @@ import { requireDb } from '@pagespace/db/test/require-db';
 import { canConsumeAI } from '../credit-gate';
 import { consumeCredits } from '../credit-consume';
 import { agentCallSpend, conversationSpend, resolvedSpend, type SpendTarget } from '../spend-target';
-
-vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 
 let dbAvailable = false;
 const originalMode = process.env.DEPLOYMENT_MODE;

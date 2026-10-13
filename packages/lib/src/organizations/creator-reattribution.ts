@@ -11,9 +11,8 @@
  * departure — and `org.compute.reattributed` is audited with `reason: removed_from_drive`.
  *
  * Run hourly by the period sweep, BEFORE the member-cap un-park, so an app parked on a removed
- * creator's cap is judged against the lead's from the same tick. Only while orgs are enabled and
- * only for org drives: a personal drive's compute is its owner's wallet whoever created it, and a
- * dark deployment's membership answer has no org layer to consult. Never throws.
+ * creator's cap is judged against the lead's from the same tick. Only for org drives: a personal
+ * drive's compute is its owner's wallet whoever created it. Never throws.
  */
 import { and, eq } from '@pagespace/db/operators';
 import { driveEnvs } from '@pagespace/db/schema/drive-envs';
@@ -21,12 +20,10 @@ import { publishedApps } from '@pagespace/db/schema/published-apps';
 import { loggers } from '../logging/logger-config';
 import { errorLogFields } from '../logging/error-cause';
 import { listCostOwnersOutsideTheirDrive, type CostOwnerOutsideDrive } from '../permissions/cost-owners-outside-drive';
-import { ORGS_ENABLED } from './orgs-enabled';
 import { computeReattributionAuditEvents, type ComputeReattribution } from './leave';
 import { transactionWithOrgAudit } from '../audit/org-audit';
 
 export interface ReattributeRemovedCreatorsResult {
-  outcome: 'disabled' | 'swept';
   /** (drive, cost owner) pairs whose cost owner is outside the drive. */
   examined: number;
   /** Envs and apps handed to the drive lead. */
@@ -35,8 +32,7 @@ export interface ReattributeRemovedCreatorsResult {
 }
 
 export async function reattributeRemovedCreators(): Promise<ReattributeRemovedCreatorsResult> {
-  const result: ReattributeRemovedCreatorsResult = { outcome: 'swept', examined: 0, reattributed: 0, failed: 0 };
-  if (!ORGS_ENABLED) return { ...result, outcome: 'disabled' };
+  const result: ReattributeRemovedCreatorsResult = { examined: 0, reattributed: 0, failed: 0 };
 
   let pairs: CostOwnerOutsideDrive[];
   try {

@@ -30,12 +30,6 @@ import { accessiblePageIds } from '../accessible-page-ids';
 import { cleanupNorthwind, northwind } from './fixtures/northwind-org-drives';
 import { credentialActor } from '../access-actor';
 
-const flags = vi.hoisted(() => ({ orgsEnabled: true }));
-vi.mock('../../organizations/orgs-enabled', () => ({
-  get ORGS_ENABLED() {
-    return flags.orgsEnabled;
-  },
-}));
 
 /** Rows read through the audit service, so the query follows the same binding as the write. */
 async function accessRows(userId: string, driveId: string) {

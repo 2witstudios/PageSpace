@@ -25,7 +25,6 @@
  * Every row a test creates is deleted, children before parents, users last.
  */
 import { describe, it, expect, beforeAll, beforeEach, afterEach, afterAll, vi } from 'vitest';
-import { createRequire } from 'node:module';
 import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db';
 import { and, eq, inArray } from '@pagespace/db/operators';
@@ -38,8 +37,6 @@ import { organizations, orgMembers, orgSubscriptions } from '@pagespace/db/schem
 import { orgGuestHolds } from '@pagespace/db/schema/org-guest-holds';
 import { pendingInvites } from '@pagespace/db/schema/pending-invites';
 import { pendingPageInvites } from '@pagespace/db/schema/pending-page-invites';
-
-vi.mock('@pagespace/lib/organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 
 const mail = vi.hoisted(() => ({ inviteUrls: new Map<string, string>(), magicLinks: new Map<string, string>() }));
 vi.mock('@pagespace/lib/services/notification-email-service', async (importOriginal) => ({
@@ -71,14 +68,6 @@ import { POST as decideGuest } from '@/app/api/orgs/[orgId]/guest-approvals/[hol
 import { POST as sendMagicLink } from '@/app/api/auth/magic-link/send/route';
 import { GET as verifyMagicLink } from '@/app/api/auth/magic-link/verify/route';
 
-/**
- * apps/web loads @pagespace/lib from its built CommonJS dist, and lib's own modules read the dark-ship constant
- * through require(), which vi.mock does not reach. Orgs are switched on for lib on the one shared module object
- * every dist require() returns, and restored after the suite.
- */
-const libOrgsFlag = createRequire(import.meta.url)('@pagespace/lib/organizations/orgs-enabled') as { ORGS_ENABLED: boolean };
-const shippedOrgsEnabled = libOrgsFlag.ORGS_ENABLED;
-
 type Guests = 'off' | 'approve' | 'on';
 
 interface World {
@@ -103,12 +92,10 @@ beforeAll(async () => {
   } catch (error) {
     requireDb('guests-policy-matrix.integration.test.ts', error);
   }
-  libOrgsFlag.ORGS_ENABLED = true;
   vi.stubEnv('WEB_APP_URL', 'http://localhost');
 });
 
 afterAll(() => {
-  libOrgsFlag.ORGS_ENABLED = shippedOrgsEnabled;
   vi.unstubAllEnvs();
 });
 

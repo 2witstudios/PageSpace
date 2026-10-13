@@ -46,7 +46,6 @@ import {
   type DomainAdminMailbox,
 } from './domains-core';
 import { lockOrgInviteAddress } from './invitations';
-import { ORGS_ENABLED } from './orgs-enabled';
 import { isUniqueViolation, retryOnDeadlock } from './repository';
 import { admitSeat, seatAdmissionAuditEvents, type SeatAdmission, type SeatBillingPort } from './seat-service';
 import { checkOrgActive } from './status';
@@ -345,7 +344,7 @@ export async function removeOrgDomain(input: { orgId: string; domainId: string; 
 
 export type AutoJoinResult =
   | { kind: 'joined'; orgId: string; seatRaised: boolean }
-  | { kind: 'skipped'; reason: AutoJoinSkipReason | 'orgs_disabled' | 'no_verified_domain' | 'user_not_found' }
+  | { kind: 'skipped'; reason: AutoJoinSkipReason | 'no_verified_domain' | 'user_not_found' }
   | { kind: 'refused'; orgId: string; reason: 'org_lapsed' }
   | { kind: 'refused'; orgId: string; reason: 'seats_full'; message: string };
 
@@ -374,7 +373,6 @@ export async function autoJoinVerifiedDomainOrg(
   input: { userId: string; now: Date; seatBilling?: SeatBillingPort },
   deps: AutoJoinDeps = autoJoinDeps,
 ): Promise<AutoJoinResult> {
-  if (!ORGS_ENABLED) return { kind: 'skipped', reason: 'orgs_disabled' };
   const [userRow] = await db
     .select({ email: users.email, emailVerified: users.emailVerified, createdAt: users.createdAt })
     .from(users)

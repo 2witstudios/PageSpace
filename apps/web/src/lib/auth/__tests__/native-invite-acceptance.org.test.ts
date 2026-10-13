@@ -6,7 +6,6 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-vi.mock('@pagespace/lib/organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: { auth: { error: vi.fn(), info: vi.fn(), warn: vi.fn(), debug: vi.fn() }, api: { error: vi.fn() } },
 }));

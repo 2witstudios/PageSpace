@@ -2,7 +2,6 @@
 
 import { useEffect } from 'react';
 import useSWR from 'swr';
-import { ORGS_ENABLED } from '@pagespace/lib/organizations/orgs-enabled';
 import type { DriveWalletView } from '@pagespace/lib/billing/wallet-views';
 import type { WalletAction, WalletViewer } from '@pagespace/lib/permissions/wallet-access';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
@@ -18,9 +17,9 @@ export interface DriveWalletRead {
 }
 
 export const driveWalletKey = (driveId: string | null): string | null =>
-  ORGS_ENABLED && driveId ? `/api/drives/${encodeURIComponent(driveId)}/wallet` : null;
+  driveId ? `/api/drives/${encodeURIComponent(driveId)}/wallet` : null;
 
-/** No access (or orgs dark on the server) is a 404: no wallet view, not an error. */
+/** No access is a 404: no wallet view, not an error. */
 const fetcher = async (url: string): Promise<DriveWalletRead | null> => {
   const response = await fetchWithAuth(url);
   if (response.status === 404) return null;
@@ -30,7 +29,7 @@ const fetcher = async (url: string): Promise<DriveWalletRead | null> => {
 
 /**
  * A drive's wallet as the person may see it, refetched on `wallet:changed` for that drive (X-4:
- * payloads carry no amounts, so the client refetches its own projection). Dark while orgs are off.
+ * payloads carry no amounts, so the client refetches its own projection).
  */
 export function useDriveWallet(driveId: string | null) {
   const key = driveWalletKey(driveId);

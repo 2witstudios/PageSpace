@@ -50,7 +50,6 @@ const { stripeItems } = vi.hoisted(() => {
   };
 });
 
-vi.mock('@pagespace/lib/organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 vi.mock('@/lib/auth', () => ({ authenticateRequestWithOptions: vi.fn(), isAuthError: vi.fn((r: object) => 'error' in r), getAllowedDriveIds: vi.fn(() => []) }));
 vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
   checkDistributedRateLimit: vi.fn(async () => ({ allowed: true })),

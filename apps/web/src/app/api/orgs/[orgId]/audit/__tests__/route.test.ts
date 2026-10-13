@@ -7,17 +7,11 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { SessionAuthResult } from '@/lib/auth';
 import type { OrgRole } from '@pagespace/db/schema/organizations';
 
-const flags = vi.hoisted(() => ({ orgsEnabled: true }));
 
 // The org sign-in policy (SEC-2/3) has its own suites; here every credential meets it.
 vi.mock('@pagespace/lib/permissions/actor-authentication', () => ({
   checkActorOrgAuthentication: vi.fn(async () => ({ allowed: true })),
   drivePolicyOrgId: vi.fn(async () => null),
-}));
-vi.mock('@pagespace/lib/organizations/orgs-enabled', () => ({
-  get ORGS_ENABLED() {
-    return flags.orgsEnabled;
-  },
 }));
 vi.mock('@/lib/auth', () => ({ authenticateRequestWithOptions: vi.fn(), isAuthError: vi.fn() }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -51,7 +45,6 @@ async function* csv(...chunks: string[]) {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  flags.orgsEnabled = true;
   vi.mocked(isAuthError).mockImplementation((result) => 'error' in result);
   vi.mocked(authenticateRequestWithOptions).mockResolvedValue(session('user_priya'));
   vi.mocked(checkDistributedRateLimit).mockResolvedValue({ allowed: true });
@@ -69,13 +62,6 @@ describe('org audit routes', () => {
     expect((await EXPORT(req('/export'), ctx)).status).toBe(404);
     expect(queryOrgAuditEvents).not.toHaveBeenCalled();
     expect(exportOrgAuditCsv).not.toHaveBeenCalled();
-  });
-
-  it('AUD-3 (partial) dark while ORGS_ENABLED is off', async () => {
-    flags.orgsEnabled = false;
-    as('OWNER');
-    expect((await GET(req(''), ctx)).status).toBe(404);
-    expect((await EXPORT(req('/export'), ctx)).status).toBe(404);
   });
 
   it('AUD-3 (partial) passes type, drive, time and cursor through, always for the org in the path', async () => {

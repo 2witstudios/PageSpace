@@ -21,8 +21,6 @@ import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
 import { listOrgDriveUsage, listOrgGuests, listOrgMemberActivity, listOrgTrashedDrives } from '../org-read-models';
 
-vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
-
 // Reachability is settled before collection, so a DB-less run skips the suite (requireDb throws unless opted out).
 const ok = await db.select({ id: users.id }).from(users).limit(1).then(
   () => true,

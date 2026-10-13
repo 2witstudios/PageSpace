@@ -7,7 +7,6 @@
  * connection invites (and to their one "no longer valid" card for a token nothing holds).
  */
 import { sessionService } from '@pagespace/lib/auth/session-service';
-import { ORGS_ENABLED } from '@pagespace/lib/organizations/orgs-enabled';
 import { findInvitationByToken } from '@pagespace/lib/organizations/invitations';
 import { findMembershipRole } from '@pagespace/lib/organizations/repository';
 import { decideOrgInviteView } from '@pagespace/lib/organizations/invite-view-core';
@@ -27,8 +26,6 @@ export async function loadOrgInvitePage(input: {
   cookieHeader: string;
   now: Date;
 }): Promise<OrgInviteCardModel | null> {
-  // Dark while orgs are: no org invitation can be issued then.
-  if (!ORGS_ENABLED) return null;
   const invite = await findInvitationByToken(input.token);
   if (!invite) return null;
 

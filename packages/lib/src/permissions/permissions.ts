@@ -18,7 +18,6 @@ import type { OrgDriveMembership } from './org-access';
 import { driveMembershipRow } from './drive-member-role';
 import { isGuestRole } from './guest-role';
 import { applyOpenDriveFloor } from './open-drive-floor';
-import { ORGS_ENABLED } from '../organizations/orgs-enabled';
 import type { OpenRoleFloor } from '../organizations/policies-core';
 import type { AccessActor, OrgAuthenticationDenialCode } from './access-actor';
 import { checkActorDriveAuthentication, checkActorResourceAuthentication, dropWithheldDerivedPages, explainOrgAuthenticationDenial, filterDrivesForActor, filterResourcesForActor } from './actor-authentication';
@@ -193,62 +192,14 @@ export async function holdsDriveAccess(userId: string, driveId: string): Promise
 }
 
 /**
- * Get all drive IDs that a user has access to
- * Includes owned drives, member drives, and drives with page permissions
- */
-async function resolveDriveIdsForUser(userId: string): Promise<string[]> {
-  if (ORGS_ENABLED) return getDriveIdsForUserWithOrgs(userId);
-
-  const driveIdSet = new Set<string>();
-
-  const ownedDrives = await db.select({ id: drives.id })
-    .from(drives)
-    .where(eq(drives.ownerId, userId));
-
-  for (const drive of ownedDrives) {
-    driveIdSet.add(drive.id);
-  }
-
-  const memberDrives = await db.select({ driveId: driveMembers.driveId, role: driveMembers.role })
-    .from(driveMembers)
-    .where(and(
-      eq(driveMembers.userId, userId),
-      isNotNull(driveMembers.acceptedAt),
-    ));
-
-  // A GUEST row reaches the drive only through its page grants, below.
-  for (const membership of memberDrives) {
-    if (isGuestRole(membership.role)) continue;
-    driveIdSet.add(membership.driveId);
-  }
-
-  const pageDrives = await db.select({ driveId: pages.driveId })
-    .from(pagePermissions)
-    .leftJoin(pages, eq(pagePermissions.pageId, pages.id))
-    .where(and(
-      eq(pagePermissions.userId, userId),
-      eq(pagePermissions.canView, true),
-      or(isNull(pagePermissions.expiresAt), gt(pagePermissions.expiresAt, new Date()))
-    ));
-
-  for (const page of pageDrives) {
-    if (page.driveId) {
-      driveIdSet.add(page.driveId);
-    }
-  }
-
-  return Array.from(driveIdSet);
-}
-
-/**
- * getDriveIdsForUser while ORGS_ENABLED: the same drive set listAccessibleDrives lists (trashed
- * drives included, as before), decided by decideListedDriveRole. Owned drives, valid rows, page
+ * All drive IDs a user has access to: the same drive set listAccessibleDrives lists (trashed
+ * drives included), decided by decideListedDriveRole. Owned drives, valid rows, page
  * shares on personal drives, and the OPEN drives of the user's orgs; a RESTRICTED or PRIVATE org
  * drive only once joined, and never through a page share alone (DRV-6, X-6). Every id is one the
  * user can open, so a cross-drive aggregate over it (mentions, calendar, sessions) still filters
  * per page.
  */
-async function getDriveIdsForUserWithOrgs(userId: string): Promise<string[]> {
+async function resolveDriveIdsForUser(userId: string): Promise<string[]> {
   const driveIdSet = new Set<string>();
 
   const ownedDrives = await db.select({ id: drives.id })
@@ -299,7 +250,6 @@ async function getDriveIdsForUserWithOrgs(userId: string): Promise<string[]> {
       if (!drive) continue;
       const row = rowByDrive.get(id);
       const listed = decideListedDriveRole({
-        orgsEnabled: true,
         drive: { orgId: drive.orgId, orgVisibility: drive.orgVisibility },
         orgRole: drive.orgId ? orgRoles.get(drive.orgId) ?? null : null,
         row: driveMembershipRow(row),
@@ -1289,15 +1239,12 @@ type OrgMembershipFacts = {
  * drive: an org Owner/Admin is ADMIN, an implicit Open member holds the drive's default custom
  * role, and a stale org row or a former lead's OWNER row counts for nothing.
  *
- * While ORGS_ENABLED is false, or when no row is on an org drive, the rows come back untouched
- * and no query runs. Each (user, drive) pair is resolved once however many pages it spans.
+ * When no row is on an org drive, the rows come back untouched and no query runs. Each (user, drive) pair is resolved once however many pages it spans.
  */
 async function withEffectiveMembership<R extends PagePermissionRow & OrgMembershipFacts>(
   rows: R[],
   options: ResolveMembershipsOptions,
 ): Promise<R[]> {
-  if (!ORGS_ENABLED) return rows;
-
   const pairKey = (row: R) => `${row.userId}:${row.driveId}`;
   const pairs = new Map<string, R>();
   for (const row of rows) {

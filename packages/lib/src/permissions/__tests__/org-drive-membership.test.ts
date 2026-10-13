@@ -6,14 +6,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
  * the real rows in org-drive-resolvers.integration.test.ts.
  */
 
-const flags = vi.hoisted(() => ({ orgsEnabled: false }));
 const selects = vi.hoisted(() => ({ results: [] as unknown[][], tables: [] as string[] }));
 
-vi.mock('../../organizations/orgs-enabled', () => ({
-  get ORGS_ENABLED() {
-    return flags.orgsEnabled;
-  },
-}));
 
 vi.mock('@pagespace/db/db', () => ({
   db: {
@@ -61,25 +55,12 @@ const OPEN_ORG_DRIVE = { id: 'drive_product', orgId: 'org_northwind', orgVisibil
 
 describe('loadEffectiveDriveMembership', () => {
   beforeEach(() => {
-    flags.orgsEnabled = false;
     selects.results = [];
     selects.tables = [];
     vi.mocked(audit).mockClear();
   });
 
-  it('while ORGS_ENABLED is false runs only the drive_members query, even for an org drive, and never audits', async () => {
-    selects.results = [[{ role: 'MEMBER', customRoleId: null, source: 'org' }]];
-
-    const result = await loadEffectiveDriveMembership('user_marcus', PRIVATE_ORG_DRIVE);
-
-    expect(selects.tables).toEqual(['drive_members']);
-    expect(result).toEqual({ role: 'MEMBER', customRoleId: null, source: 'org', auditOrgAdminPrivateAccess: false, openDriveFloor: null });
-    expect(audit).not.toHaveBeenCalled();
-  });
-
-  it('while ORGS_ENABLED is true runs no org query for a personal drive or a drive row without org facts', async () => {
-    flags.orgsEnabled = true;
-
+  it('runs no org query for a personal drive or a drive row without org facts', async () => {
     expect(await loadEffectiveDriveMembership('user_nina', { id: 'drive_notes', orgId: null, orgVisibility: 'OPEN' })).toBeNull();
     expect(await loadEffectiveDriveMembership('user_nina', { id: 'drive_notes' })).toBeNull();
 
@@ -87,7 +68,6 @@ describe('loadEffectiveDriveMembership', () => {
   });
 
   it('DRV-5 (partial) POL-6 (partial) reads the org role, the drive default role, then the org floor, for an org member with no row on an OPEN drive', async () => {
-    flags.orgsEnabled = true;
     selects.results = [
       [],
       [{ orgId: 'org_northwind', userId: 'user_nina', role: 'MEMBER' }],
@@ -102,7 +82,6 @@ describe('loadEffectiveDriveMembership', () => {
   });
 
   it('POL-6 (partial) reads no floor where none can apply: an org Admin, a RESTRICTED drive, a guest', async () => {
-    flags.orgsEnabled = true;
     selects.results = [[], [{ orgId: 'org_northwind', userId: 'user_priya', role: 'ADMIN' }]];
     await loadEffectiveDriveMembership('user_priya', OPEN_ORG_DRIVE, { audit: false });
     selects.results = [[{ role: 'MEMBER', customRoleId: null, source: 'invite' }], [{ orgId: 'org_northwind', userId: 'user_eve', role: 'MEMBER' }]];
@@ -114,7 +93,6 @@ describe('loadEffectiveDriveMembership', () => {
   });
 
   it('ORG-4 (partial) hands the audit writer one access when an org Admin opens a PRIVATE drive through org power', async () => {
-    flags.orgsEnabled = true;
     selects.results = [[], [{ orgId: 'org_northwind', userId: 'user_priya', role: 'ADMIN' }]];
 
     const result = await loadEffectiveDriveMembership('user_priya', PRIVATE_ORG_DRIVE);
@@ -126,7 +104,6 @@ describe('loadEffectiveDriveMembership', () => {
   });
 
   it('ORG-4 (partial) writes no audit event when an org Admin opens an OPEN drive, or a PRIVATE drive through their own ADMIN row', async () => {
-    flags.orgsEnabled = true;
     selects.results = [[], [{ orgId: 'org_northwind', userId: 'user_priya', role: 'ADMIN' }], [{ role: 'ADMIN', customRoleId: null, source: 'invite' }], [{ orgId: 'org_northwind', userId: 'user_omar', role: 'ADMIN' }]];
 
     await loadEffectiveDriveMembership('user_priya', OPEN_ORG_DRIVE);
@@ -135,13 +112,7 @@ describe('loadEffectiveDriveMembership', () => {
     expect(audit).not.toHaveBeenCalled();
   });
 
-  it('while ORGS_ENABLED is false loadExplicitScopeAuthority reads nothing and leaves today\'s scope check standing', async () => {
-    expect(await loadExplicitScopeAuthority('user_priya', 'drive_finance')).toEqual({ orgDrive: false });
-    expect(selects.tables).toEqual([]);
-  });
-
   it('ORG-4 (partial) loadExplicitScopeAuthority on an org drive reads the drive then the row, and org rows do not count', async () => {
-    flags.orgsEnabled = true;
     selects.results = [[{ orgId: 'org_northwind', orgVisibility: 'OPEN' }], [{ role: 'MEMBER', customRoleId: null, source: 'org' }]];
 
     expect(await loadExplicitScopeAuthority('user_marcus', 'drive_product')).toEqual({ orgDrive: true, row: null });

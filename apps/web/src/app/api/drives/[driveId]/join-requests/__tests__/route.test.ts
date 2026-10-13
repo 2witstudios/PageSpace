@@ -8,17 +8,11 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { SessionAuthResult } from '@/lib/auth';
 
-const flags = vi.hoisted(() => ({ orgsEnabled: true }));
 
 // The org sign-in policy (SEC-2/3) has its own suites; here every credential meets it.
 vi.mock('@pagespace/lib/permissions/actor-authentication', () => ({
   checkActorOrgAuthentication: vi.fn(async () => ({ allowed: true })),
   drivePolicyOrgId: vi.fn(async () => null),
-}));
-vi.mock('@pagespace/lib/organizations/orgs-enabled', () => ({
-  get ORGS_ENABLED() {
-    return flags.orgsEnabled;
-  },
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -91,26 +85,8 @@ const research = { id: DRIVE, name: 'Research', ownerId: MARCUS, orgId: NORTHWIN
 describe('drive join request routes', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    flags.orgsEnabled = true;
     vi.mocked(isAuthError).mockReturnValue(false);
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(session(LENA));
-  });
-
-  it.each([
-    ['GET', () => GET(call('GET'), driveContext)],
-    ['POST', () => POST(call('POST', {}), driveContext)],
-    ['PATCH', () => PATCH(call('PATCH', { decision: 'approve' }), requestContext)],
-    ['DELETE', () => DELETE(call('DELETE'), requestContext)],
-  ] as const)('%s answers 404 and does nothing while ORGS_ENABLED is false', async (_method, run) => {
-    flags.orgsEnabled = false;
-
-    const response = await run();
-
-    expect(response.status).toBe(404);
-    expect(authenticateRequestWithOptions).not.toHaveBeenCalled();
-    for (const service of [requestToJoinDrive, listPendingDriveJoinRequests, answerDriveJoinRequest, withdrawDriveJoinRequest]) {
-      expect(service).not.toHaveBeenCalled();
-    }
   });
 
   it('DRV-6 (partial) X-1 (partial) mutations admit a session with CSRF or an MCP key; reads without CSRF', async () => {

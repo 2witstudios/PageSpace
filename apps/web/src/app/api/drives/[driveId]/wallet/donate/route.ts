@@ -11,7 +11,7 @@ import { actorFromAuth } from '@/lib/auth/request-actor';
 /**
  * POST /api/drives/[driveId]/wallet/donate — Donate from the caller's own balance to a drive's wallet (Spec WAL-4): anyone who can open the drive, unless its lead turned donations off. A non-refundable donation leg recorded with the donor (D-OW-13); one per idempotency key. 402 when the caller's balance cannot cover it.
  *
- * Session only: an MCP/CLI token is refused by name, nothing written ([D-OW-26]). Dark while ORGS_ENABLED is false (404).
+ * Session only: an MCP/CLI token is refused by name, nothing written ([D-OW-26]).
  */
 
 type RouteContext = { params: Promise<{ driveId: string }> };

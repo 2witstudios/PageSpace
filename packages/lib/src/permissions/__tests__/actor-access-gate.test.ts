@@ -10,7 +10,6 @@ vi.mock('../actor-authentication', () => ({
   filterResourcesForActor: vi.fn(async () => new Set<string>()),
   explainOrgAuthenticationDenial: vi.fn(async () => 'org_reauthentication_required'),
 }));
-vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: false }));
 vi.mock('../org-drive-membership', () => ({
   loadEffectiveDriveMembership: vi.fn(),
   loadOrgRolesForUser: vi.fn(),
@@ -19,7 +18,7 @@ vi.mock('../org-drive-membership', () => ({
 vi.mock('@pagespace/db/db', () => ({ db: { select: vi.fn() } }));
 
 import { db } from '@pagespace/db/db';
-import { loadEffectiveDriveMembership } from '../org-drive-membership';
+import { loadEffectiveDriveMembership, loadOrgRolesForUser } from '../org-drive-membership';
 import { credentialActor } from '../access-actor';
 import {
   canUserDeletePage,
@@ -76,6 +75,7 @@ describe('the actor access API behind the org sign-in decision', () => {
   });
 
   it('SEC-2 (partial) the drive list keeps personal drives and drops the org drive the credential is refused', async () => {
+    vi.mocked(loadOrgRolesForUser).mockResolvedValue(new Map());
     let call = 0;
     const rowsFor = () => (call++ === 0 ? [{ id: ORG_DRIVE }, { id: PERSONAL_DRIVE }] : []);
     const chain = {

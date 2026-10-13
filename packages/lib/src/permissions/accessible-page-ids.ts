@@ -12,9 +12,9 @@ import { dropWithheldDerivedPages, filterDrivesForActor } from './actor-authenti
  *
  * The function is the SQL twin of `getUserAccessLevel`'s canView decision —
  * owner, drive admin, explicit page permission (a deny is final), custom role,
- * then accepted member on a non-private page, and (while ORGS_ENABLED) the org-aware membership
+ * then accepted member on a non-private page, and the org-aware membership
  * and the POL-6 Open-drive floor; current definition in
- * `drizzle/0334_accessible_page_ids_org_aware.sql`, and
+ * `drizzle/0376_accessible_page_ids_always_org_aware.sql`, and
  * accessible-page-ids-agreement.integration.test.ts holds the two together.
  * Trashed pages and pages in trashed drives are excluded; expired explicit
  * grants (compared in UTC) are excluded.

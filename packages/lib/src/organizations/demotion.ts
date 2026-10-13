@@ -62,7 +62,6 @@ export function planDemotionRevocation({
   for (const d of orgDrives) {
     if (d.leadId === userId) continue;
     const resolve = (orgRole: OrgRole) => resolveEffectiveDriveMembership({
-      orgsEnabled: true,
       drive: { orgId: d.orgId, orgVisibility: d.orgVisibility },
       orgRole,
       row: d.row,

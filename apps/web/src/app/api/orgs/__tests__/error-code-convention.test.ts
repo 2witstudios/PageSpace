@@ -2,8 +2,7 @@
  * The ONE error convention of the org, wallet, seat and policy routes (Review 3+4 P2-11(a)):
  * every error body is `{ error, code, ...extras }`, the code is one the registry lists, and
  * `reason` is never the machine key. A static scan of the route sources, so a new route or a new
- * refusal cannot ship another shape. (The orgs-dark 404 goes through `orgsDisabledResponse`, not
- * a literal here, and is deliberately bare.)
+ * refusal cannot ship another shape.
  */
 import { describe, it, expect } from 'vitest';
 import { readdirSync, readFileSync, statSync } from 'node:fs';

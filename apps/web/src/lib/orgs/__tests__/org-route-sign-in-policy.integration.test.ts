@@ -3,7 +3,7 @@
  * Review #2866 B1 (D-OW-45, SEC-2/3): the org admin routes ask the org's sign-in policy of every session and key AFTER
  * the role check. A stolen stale or single-factor Admin (or Owner) session cannot invite, change a member, add a domain
  * or hand over ownership; a freshly signed-in passkey Admin passes the gate; a non-member is refused exactly as before,
- * learning nothing of the policy. Real Postgres, real session tokens, real routes; only ORGS_ENABLED is switched on.
+ * learning nothing of the policy. Real Postgres, real session tokens, real routes.
  */
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createId } from '@paralleldrive/cuid2';
@@ -15,7 +15,6 @@ import { factories } from '@pagespace/db/test/factories';
 import { sessionService } from '@pagespace/lib/auth/session-service';
 import type { VerifiedAuthentication } from '@pagespace/lib/auth/authentication-evidence';
 
-vi.mock('@pagespace/lib/organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 vi.mock('@pagespace/lib/security/distributed-rate-limit', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@pagespace/lib/security/distributed-rate-limit')>()),
   checkDistributedRateLimit: vi.fn(async () => ({ allowed: true })),

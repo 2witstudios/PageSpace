@@ -11,8 +11,6 @@ import { eq, inArray } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { organizations, orgInvitations, orgMembers, orgSubscriptions } from '@pagespace/db/schema/organizations';
 
-vi.mock('../orgs-enabled', () => ({ ORGS_ENABLED: true }));
-
 import { createOrRotateInvitation, resendInvitation } from '../invitations';
 
 const created = { userIds: [] as string[], orgId: '' };

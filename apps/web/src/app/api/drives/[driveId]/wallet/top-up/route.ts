@@ -11,7 +11,7 @@ import { actorFromAuth } from '@/lib/auth/request-actor';
 /**
  * POST /api/drives/[driveId]/wallet/top-up — Top up a drive's wallet from its funder (Spec WAL-3): the org pool for an org drive (org admins only), the lead's own wallet for a personal drive. A refundable owner funding leg; one per idempotency key (a replay moves nothing). 402 when the funder cannot cover it.
  *
- * Session only: an MCP/CLI token is refused by name, nothing written ([D-OW-26]). Dark while ORGS_ENABLED is false (404).
+ * Session only: an MCP/CLI token is refused by name, nothing written ([D-OW-26]).
  */
 
 type RouteContext = { params: Promise<{ driveId: string }> };

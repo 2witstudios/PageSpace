@@ -1,6 +1,6 @@
 /**
  * Automations spend the drive wallet only, against a real Postgres (Spec SPEND-6, X-6): the
- * REAL canConsumeAI and consumeCredits, with ORGS_ENABLED on, over a small Northwind
+ * REAL canConsumeAI and consumeCredits, over a small Northwind
  * (Sequence Spec fixture): the org pool, Product's drive wallet under it, and Marcus, who
  * created Product's weekly digest workflow and holds his own credits.
  *
@@ -31,8 +31,6 @@ import { canConsumeAI } from '../credit-gate';
 import { consumeCredits } from '../credit-consume';
 import { automationSpend } from '../spend-target';
 import { notifyLeadOfAutomationSkip } from '../automation-skip-notifier';
-
-vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 
 let dbAvailable = false;
 const originalMode = process.env.DEPLOYMENT_MODE;
@@ -125,7 +123,7 @@ const stampOf = async (driveId: string) =>
 const startOfUtcMonth = (d: Date) => new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1));
 const skipEmptyProduct = (w: World) => canConsumeAI(w.marcusId, 'free', { spend: automationSpend(w.productId), skipDailyCap: true });
 
-describe('automations spend the drive wallet only (orgs on, real Postgres)', () => {
+describe('automations spend the drive wallet only (real Postgres)', () => {
   beforeAll(async () => {
     try {
       await db.select({ id: wallets.id }).from(wallets).limit(1);

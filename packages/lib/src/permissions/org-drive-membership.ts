@@ -4,7 +4,6 @@ import type { OrgDriveVisibility } from '@pagespace/db/schema/core';
 import { driveMembers, driveRoles } from '@pagespace/db/schema/members';
 import { orgMembers, type OrgRole } from '@pagespace/db/schema/organizations';
 import { auditOrgAdminPrivateDriveAccess } from './org-admin-access-audit';
-import { ORGS_ENABLED } from '../organizations/orgs-enabled';
 import { getOpenDriveRoleFloors } from '../organizations/policy-reader';
 import type { DriveRoleGrant, OrgDriveMembership } from './org-access';
 import { driveMembershipRole, driveMembershipRow } from './drive-member-role';
@@ -20,11 +19,9 @@ import {
 
 /**
  * The IO around resolveEffectiveDriveMembership for ONE human and ONE drive they do not own:
- * the accepted drive_members row, then (only while ORGS_ENABLED, only for an org drive) the
- * user's org role and the drive's default role, then the ORG-4 audit event when org Owner/Admin
- * power opened a PRIVATE drive.
- *
- * While dark it runs exactly the one membership query the resolvers ran before orgs existed.
+ * the accepted drive_members row, then (only for an org drive) the user's org role and the drive's
+ * default role, then the ORG-4 audit event when org Owner/Admin power opened a PRIVATE drive.
+ * For a personal drive it runs only the one membership query.
  */
 
 export interface MembershipDrive {
@@ -82,7 +79,7 @@ export interface ResolveMembershipsOptions {
 /**
  * The effective membership of many (user, drive) pairs whose accepted rows the caller already read,
  * in the order given. The ONE IO edge every human drive resolver goes through, single or batched:
- * while ORGS_ENABLED is false, or for a personal drive, it runs no query and returns the row.
+ * for a personal drive it runs no query and returns the row.
  * Otherwise it reads the org roles (one query), the default roles of the OPEN drives a row-less
  * member needs (one query) and the Open-drive role floor of the orgs whose OPEN drives an org MEMBER
  * resolves (one query, POL-6), then applies resolveEffectiveDriveMembership to each pair.
@@ -96,9 +93,8 @@ export async function resolveEffectiveDriveMemberships(
     orgVisibility: drive.orgVisibility ?? 'OPEN',
   }));
 
-  if (!ORGS_ENABLED || facts.every((f) => f.orgId === null)) {
+  if (facts.every((f) => f.orgId === null)) {
     return candidates.map(({ row }, i) => resolveEffectiveDriveMembership({
-      orgsEnabled: false,
       drive: facts[i],
       orgRole: null,
       row,
@@ -141,12 +137,11 @@ export async function resolveEffectiveDriveMemberships(
     const orgId = facts[i].orgId;
     if (orgId === null) {
       return resolveEffectiveDriveMembership({
-        orgsEnabled: false, drive: facts[i], orgRole: null, row, driveDefaultRole: NO_DEFAULT_ROLE, openDriveRoleFloor: null,
+        drive: facts[i], orgRole: null, row, driveDefaultRole: NO_DEFAULT_ROLE, openDriveRoleFloor: null,
       });
     }
     const orgRole = orgRoleOf(i);
     const effective = resolveEffectiveDriveMembership({
-      orgsEnabled: true,
       drive: facts[i],
       orgRole,
       row,
@@ -164,11 +159,9 @@ export async function resolveEffectiveDriveMemberships(
 
 /**
  * The membership that may back an explicit-role token scope on a drive the user does not own
- * (explicitScopeAuthorityRow). Reads nothing while ORGS_ENABLED is false.
+ * (explicitScopeAuthorityRow).
  */
 export async function loadExplicitScopeAuthority(userId: string, driveId: string): Promise<ExplicitScopeAuthority> {
-  if (!ORGS_ENABLED) return { orgDrive: false };
-
   const [drive] = await db
     .select({ orgId: drives.orgId, orgVisibility: drives.orgVisibility })
     .from(drives)
@@ -186,7 +179,7 @@ export async function loadExplicitScopeAuthority(userId: string, driveId: string
     ))
     .limit(1);
 
-  return explicitScopeAuthorityRow({ orgsEnabled: true, drive, row: driveMembershipRow(rows[0]) });
+  return explicitScopeAuthorityRow({ drive, row: driveMembershipRow(rows[0]) });
 }
 
 /**

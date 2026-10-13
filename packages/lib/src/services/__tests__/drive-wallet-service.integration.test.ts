@@ -1,7 +1,7 @@
 /**
  * The drive-wallet service against a real Postgres, per role (Spec SPEND-2, SPEND-3, SPEND-9,
  * SPEND-10, UI-9, UI-10, WAL-3, WAL-4): the REAL access model (drive relationships, org roles)
- * over a small Northwind Labs (Sequence Spec fixture), with ORGS_ENABLED on.
+ * over a small Northwind Labs (Sequence Spec fixture).
  *
  *   Jono   org Owner        Priya  org Admin (not in Product)   Dana  member, Product's lead
  *   Marcus member of Product   Lena member of Product          Chris guest on Product
@@ -47,8 +47,6 @@ import {
 } from '../drive-wallet-service';
 import { encodeAutomationRef } from '../../billing/automation-attribution';
 import { credentialActor } from '../../permissions/access-actor';
-
-vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 
 // Distinctive numbers, searched for in consumer responses.
 const POOL_CENTS = 900_017;
@@ -140,7 +138,7 @@ async function teardown(w: World): Promise<void> {
 
 const walletRow = async (id: string) => (await db.select().from(wallets).where(eq(wallets.id, id)))[0];
 
-describe('drive-wallet service (orgs on, real Postgres)', () => {
+describe('drive-wallet service (real Postgres)', () => {
   beforeAll(async () => {
     try {
       await db.select({ id: wallets.id }).from(wallets).limit(1);

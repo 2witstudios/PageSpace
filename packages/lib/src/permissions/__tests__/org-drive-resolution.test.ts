@@ -20,31 +20,8 @@ const inviteAdmin: OrgDriveMembership = { role: 'ADMIN', customRoleId: null, sou
 const orgRow: OrgDriveMembership = { role: 'MEMBER', customRoleId: 'role_default', source: 'org' };
 
 describe('resolveEffectiveDriveMembership', () => {
-  describe('while ORGS_ENABLED is false', () => {
-    it('returns the accepted row exactly as today for a personal drive, and null without one', () => {
-      expect(resolveEffectiveDriveMembership({
-        orgsEnabled: false, drive: PERSONAL, orgRole: null, row: inviteAdmin, driveDefaultRole: DEFAULT_ROLE, openDriveRoleFloor: 'edit',
-      })).toEqual({ ...inviteAdmin, auditOrgAdminPrivateAccess: false, openDriveFloor: null });
-      expect(resolveEffectiveDriveMembership({
-        orgsEnabled: false, drive: PERSONAL, orgRole: 'OWNER', row: null, driveDefaultRole: DEFAULT_ROLE, openDriveRoleFloor: 'edit',
-      })).toBeNull();
-    });
-
-    it('ignores org roles and visibility on an org drive: an org Admin without a row gets nothing, a stale org row still counts as today', () => {
-      expect(resolveEffectiveDriveMembership({
-        orgsEnabled: false, drive: PRIVATE, orgRole: 'ADMIN', row: null, driveDefaultRole: DEFAULT_ROLE, openDriveRoleFloor: 'edit',
-      })).toBeNull();
-      expect(resolveEffectiveDriveMembership({
-        orgsEnabled: false, drive: OPEN, orgRole: 'MEMBER', row: null, driveDefaultRole: DEFAULT_ROLE, openDriveRoleFloor: 'edit',
-      })).toBeNull();
-      expect(resolveEffectiveDriveMembership({
-        orgsEnabled: false, drive: RESTRICTED, orgRole: null, row: orgRow, driveDefaultRole: DEFAULT_ROLE, openDriveRoleFloor: 'edit',
-      })).toEqual({ ...orgRow, auditOrgAdminPrivateAccess: false, openDriveFloor: null });
-    });
-  });
-
-  describe('while ORGS_ENABLED is true', () => {
-    const on = { orgsEnabled: true, driveDefaultRole: DEFAULT_ROLE, openDriveRoleFloor: 'edit' } as const;
+  describe('on personal and org drives', () => {
+    const on = { driveDefaultRole: DEFAULT_ROLE, openDriveRoleFloor: 'edit' } as const;
 
     it('leaves a personal drive exactly row-based: an org role never applies to a drive with no org', () => {
       expect(resolveEffectiveDriveMembership({ ...on, drive: PERSONAL, orgRole: 'OWNER', row: null })).toBeNull();
@@ -144,7 +121,7 @@ describe('resolveEffectiveDriveMembership', () => {
         expect(resolveEffectiveDriveMembership({ ...on, drive: OPEN, orgRole: 'MEMBER', row: adminOrgRow })?.openDriveFloor).toBeNull();
       });
 
-      it('POL-6 (partial) the floor never reaches a guest, a departed member, a RESTRICTED or PRIVATE drive, a personal drive, or a dark resolver', () => {
+      it('POL-6 (partial) the floor never reaches a guest, a departed member, a RESTRICTED or PRIVATE drive, or a personal drive', () => {
         for (const drive of [OPEN, RESTRICTED, PRIVATE]) {
           expect(resolveEffectiveDriveMembership({ ...on, drive, orgRole: null, row: inviteMember })?.openDriveFloor ?? null).toBeNull();
           expect(resolveEffectiveDriveMembership({ ...on, drive, orgRole: null, row: orgRow })).toBeNull();
@@ -153,7 +130,6 @@ describe('resolveEffectiveDriveMembership', () => {
           expect(resolveEffectiveDriveMembership({ ...on, drive, orgRole: 'MEMBER', row: inviteMember })?.openDriveFloor).toBeNull();
         }
         expect(resolveEffectiveDriveMembership({ ...on, drive: PERSONAL, orgRole: null, row: orgRow })?.openDriveFloor).toBeNull();
-        expect(resolveEffectiveDriveMembership({ ...on, orgsEnabled: false, drive: OPEN, orgRole: 'MEMBER', row: orgRow })?.openDriveFloor).toBeNull();
       });
 
       it('POL-6 (partial) a caller that did not read the floor (null) gets no floor, never a guessed one', () => {
@@ -164,24 +140,12 @@ describe('resolveEffectiveDriveMembership', () => {
 });
 
 describe('decideListedDriveRole', () => {
-  describe('while ORGS_ENABLED is false', () => {
-    it('lists exactly as today: a row gives its role, a page permission alone gives MEMBER, nothing gives null, on personal and org drives alike', () => {
-      for (const drive of [PERSONAL, OPEN, RESTRICTED, PRIVATE]) {
-        const off = { orgsEnabled: false, drive, orgRole: 'OWNER' as const };
-        expect(decideListedDriveRole({ ...off, row: inviteAdmin, viaPagePermission: false })).toBe('ADMIN');
-        expect(decideListedDriveRole({ ...off, row: orgRow, viaPagePermission: false })).toBe('MEMBER');
-        expect(decideListedDriveRole({ ...off, row: null, viaPagePermission: true })).toBe('MEMBER');
-        expect(decideListedDriveRole({ ...off, row: null, viaPagePermission: false })).toBeNull();
-      }
-    });
-  });
-
-  describe('while ORGS_ENABLED is true', () => {
-    const on = { orgsEnabled: true, viaPagePermission: false } as const;
+  describe('on personal and org drives', () => {
+    const on = { viaPagePermission: false } as const;
 
     it('lists a personal drive exactly as today', () => {
       expect(decideListedDriveRole({ ...on, drive: PERSONAL, orgRole: null, row: inviteAdmin })).toBe('ADMIN');
-      expect(decideListedDriveRole({ orgsEnabled: true, drive: PERSONAL, orgRole: null, row: null, viaPagePermission: true })).toBe('MEMBER');
+      expect(decideListedDriveRole({ drive: PERSONAL, orgRole: null, row: null, viaPagePermission: true })).toBe('MEMBER');
     });
 
     it('DRV-5 (partial) lists an OPEN org drive to every org member without a row, with their resolved role', () => {
@@ -207,7 +171,7 @@ describe('decideListedDriveRole', () => {
       for (const drive of [OPEN, RESTRICTED, PRIVATE]) {
         expect(decideListedDriveRole({ ...on, drive, orgRole: null, row: null })).toBeNull();
         expect(decideListedDriveRole({ ...on, drive, orgRole: null, row: orgRow })).toBeNull();
-        expect(decideListedDriveRole({ orgsEnabled: true, drive, orgRole: null, row: null, viaPagePermission: true })).toBeNull();
+        expect(decideListedDriveRole({ drive, orgRole: null, row: null, viaPagePermission: true })).toBeNull();
       }
     });
 
@@ -227,19 +191,17 @@ describe('decideListedDriveRole', () => {
 describe('explicitScopeAuthorityRow', () => {
   const staleOwnerRow: OrgDriveMembership = { role: 'OWNER', customRoleId: null, source: 'invite' };
 
-  it('while ORGS_ENABLED is false, or on a personal drive, answers "not an org drive" so today\'s check stands', () => {
-    for (const drive of [PERSONAL, OPEN, PRIVATE]) {
-      expect(explicitScopeAuthorityRow({ orgsEnabled: false, drive, row: orgRow })).toEqual({ orgDrive: false });
-    }
-    expect(explicitScopeAuthorityRow({ orgsEnabled: true, drive: PERSONAL, row: null })).toEqual({ orgDrive: false });
+  it('on a personal drive answers "not an org drive" so the existing scope check stands', () => {
+    expect(explicitScopeAuthorityRow({ drive: PERSONAL, row: orgRow })).toEqual({ orgDrive: false });
+    expect(explicitScopeAuthorityRow({ drive: PERSONAL, row: null })).toEqual({ orgDrive: false });
   });
 
   it('ORG-4 (partial) on an org drive only a direct invited row grants an explicit-role token scope: never org power, an org-materialized row, or a leftover OWNER row', () => {
     for (const drive of [OPEN, RESTRICTED, PRIVATE]) {
-      expect(explicitScopeAuthorityRow({ orgsEnabled: true, drive, row: null })).toEqual({ orgDrive: true, row: null });
-      expect(explicitScopeAuthorityRow({ orgsEnabled: true, drive, row: orgRow })).toEqual({ orgDrive: true, row: null });
-      expect(explicitScopeAuthorityRow({ orgsEnabled: true, drive, row: staleOwnerRow })).toEqual({ orgDrive: true, row: null });
-      expect(explicitScopeAuthorityRow({ orgsEnabled: true, drive, row: inviteAdmin })).toEqual({ orgDrive: true, row: inviteAdmin });
+      expect(explicitScopeAuthorityRow({ drive, row: null })).toEqual({ orgDrive: true, row: null });
+      expect(explicitScopeAuthorityRow({ drive, row: orgRow })).toEqual({ orgDrive: true, row: null });
+      expect(explicitScopeAuthorityRow({ drive, row: staleOwnerRow })).toEqual({ orgDrive: true, row: null });
+      expect(explicitScopeAuthorityRow({ drive, row: inviteAdmin })).toEqual({ orgDrive: true, row: inviteAdmin });
     }
   });
 });

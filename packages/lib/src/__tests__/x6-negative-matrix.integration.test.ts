@@ -8,8 +8,7 @@
  * Each behaviour is also proven in its own lane's suite (org-drive-resolvers, share-link-policy,
  * wallet-gate, automation-spend), where it sits among many partial claims. This file is the one
  * place every clause is exercised end to end through the REAL resolvers and gates — nothing about
- * the decision is mocked; only the dark-ship ORGS_ENABLED constant is forced on, and the org audit
- * append is stubbed so a policy change does not need the audit store.
+ * the decision is mocked; only the org audit append is stubbed so a policy change does not need the audit store.
  *
  * Every "refuses" is paired with its "and nothing happened": no access row or grant was created,
  * no hold or ledger row was written, and no wallet balance — above all no person's — moved.
@@ -45,8 +44,6 @@ import { getDriveAccess, listAccessibleDrives, type ListDrivesOptions } from '..
 import { canConsumeAI } from '../billing/credit-gate';
 import { automationSpend, conversationSpend } from '../billing/spend-target';
 import { cleanupNorthwind, northwind } from '../permissions/__tests__/fixtures/northwind-org-drives';
-
-vi.mock('../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 
 import { updateOrgPolicies } from '../organizations/policies';
 

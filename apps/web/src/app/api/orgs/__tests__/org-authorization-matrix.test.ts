@@ -26,7 +26,6 @@ import type { OrgRole } from '@pagespace/db/schema/organizations';
 type Credential = 'session' | 'mcp' | 'drive-key';
 const caller = vi.hoisted(() => ({ credential: 'session' as 'session' | 'mcp' | 'drive-key' }));
 
-vi.mock('@pagespace/lib/organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 vi.mock('@/lib/auth', () => ({
   // The real admission rule of authenticateRequestWithOptions: a credential type the route does not
   // list is a 401 before anything else runs.

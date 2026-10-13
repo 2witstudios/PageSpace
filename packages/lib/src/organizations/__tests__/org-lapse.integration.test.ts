@@ -8,7 +8,7 @@
  * apps/web …/org-webhook.integration.test.ts); here it is written directly.
  *
  * Northwind Labs (Sequence Spec Part 2): Jono Owner, Priya Admin, Dana member and
- * Product's lead, Marcus member of Product. ORGS_ENABLED on. Deletes every row it
+ * Product's lead, Marcus member of Product. Deletes every row it
  * creates, children before parents, users last.
  */
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
@@ -34,8 +34,6 @@ import { resolveSandboxPayerTier } from '../../billing/sandbox-eligibility';
 import { lookupDriveBillingFacts } from '../../billing/sandbox-payer';
 import { getUserDriveAccess, canUserViewPage } from '../../permissions/permissions';
 import { credentialActor } from '../../permissions/access-actor';
-
-vi.mock('../orgs-enabled', () => ({ ORGS_ENABLED: true }));
 
 const deps: OrgDriveServiceDeps = {
   getOrgRole: async (tx, orgId, userId) => {
@@ -147,7 +145,7 @@ async function footprint(w: World) {
   };
 }
 
-describe('org lapse gates (orgs on, real Postgres)', () => {
+describe('org lapse gates (real Postgres)', () => {
   beforeAll(async () => {
     try {
       await db.select({ id: orgSubscriptions.id }).from(orgSubscriptions).limit(1);

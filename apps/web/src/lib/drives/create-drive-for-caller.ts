@@ -7,7 +7,6 @@
  * sign-in policy (SEC-2/SEC-3) still applies to the credential that asks, judged by createOrgDrive
  * after membership.
  */
-import { ORGS_ENABLED } from '@pagespace/lib/organizations/orgs-enabled';
 import type { VerifiedAuthentication } from '@pagespace/lib/auth/authentication-evidence';
 import { createDrive, type DriveWithAccess } from '@pagespace/lib/services/drive-service';
 import { createOrgDrive } from '@pagespace/lib/services/org-drive-service';
@@ -38,8 +37,6 @@ export async function createDriveForCaller(input: CreateDriveForCallerInput): Pr
   if (input.orgId === undefined) {
     return { ok: true, drive: await createDrive(input.userId, { name, drivePrompt: input.drivePrompt }) };
   }
-  // Dark while orgs are: answered exactly like an unknown org.
-  if (!ORGS_ENABLED) return { ok: false, status: 404, error: 'Not found' };
 
   // Membership, the who-can-create policy and then the org's sign-in policy are all decided inside the
   // create transaction, in that order, so a non-member learns nothing about the org's sign-in policy.

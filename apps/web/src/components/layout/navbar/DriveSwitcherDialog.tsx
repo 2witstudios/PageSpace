@@ -232,7 +232,7 @@ function DrivePickerBody({ onClose, onCreate }: DrivePickerBodyProps) {
         )}
 
         {/*
-          DRV-9: with orgs on, the same drives under org headers and a Personal group. cmdk hides
+          DRV-9: the same drives under org headers and a Personal group. cmdk hides
           group headings from assistive tech, so the header's settings icon is only a pointer
           shortcut; the group's last option, "<org> settings", is the way to the org hub for the
           keyboard and screen readers (UI-1).

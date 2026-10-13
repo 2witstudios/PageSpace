@@ -3,7 +3,6 @@
 import { useCallback, useMemo } from "react";
 import { usePathname, useRouter } from "next/navigation";
 
-import { ORGS_ENABLED } from "@pagespace/lib/organizations/orgs-enabled";
 import { groupPickerDrives, type PickerGroup } from "@pagespace/lib/organizations/drive-picker-groups";
 import { useDriveStore, type Drive } from "@/hooks/useDrive";
 import { useMyOrganizations } from "@/hooks/useMyOrganizations";
@@ -67,7 +66,7 @@ export function useDrivePicker(query: string) {
    * orgs are on and some drive belongs to an org; otherwise null and the picker lists All drives.
    */
   const ownerGroups = useMemo<PickerGroup<Drive>[] | null>(() => {
-    if (!ORGS_ENABLED || !allDrives.some((drive) => drive.orgId)) return null;
+    if (!allDrives.some((drive) => drive.orgId)) return null;
     return groupPickerDrives(allDrives, organizations);
   }, [allDrives, organizations]);
 

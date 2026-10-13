@@ -34,7 +34,6 @@ vi.mock('../../audit/security-audit', async (importOriginal) => {
     },
   };
 });
-vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 vi.mock('../revocation-kick', () => ({ kickForDriveMembershipRevocation: vi.fn(async () => {}), kickForPagePermissionRevocation: vi.fn(async () => {}) }));
 
 import { createDriveShareLink, completeApprovedLinkAdmission, redeemDriveShareLink } from '../share-link-service';

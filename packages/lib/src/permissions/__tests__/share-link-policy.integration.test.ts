@@ -25,8 +25,6 @@ import { completeApprovedLinkAdmission, createDriveShareLink, createPageShareLin
 import { claimPendingGuestApproval, listPendingGuestApprovals } from '../guest-holds';
 import { getUserAccessLevel } from '../permissions';
 
-vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
-
 import { updateOrgPolicies } from '../../organizations/policies';
 import { credentialActor } from '../access-actor';
 

@@ -23,7 +23,6 @@ import { driveMembers, driveRoles, mcpTokenDrives, pagePermissions } from '@page
 import { organizations, orgMembers, orgSubscriptions } from '@pagespace/db/schema/organizations';
 import { orgGuestHolds } from '@pagespace/db/schema/org-guest-holds';
 
-vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 vi.mock('../revocation-kick', () => ({ kickForDriveMembershipRevocation: vi.fn(async () => {}), kickForPagePermissionRevocation: vi.fn(async () => {}) }));
 
 import { updateOrgPolicies } from '../../organizations/policies';

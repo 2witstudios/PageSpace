@@ -3,7 +3,6 @@
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { ChevronRight, Plus } from 'lucide-react';
-import { ORGS_ENABLED } from '@pagespace/lib/organizations/orgs-enabled';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useMyOrgs, useOrgRealtime } from '@/hooks/useOrgs';
 import { useBillingVisibility } from '@/hooks/useBillingVisibility';
@@ -14,8 +13,7 @@ import { OrgMark } from './OrgMark';
 import { OrgRoleBadge } from './OrgBadge';
 
 /**
- * Account Settings › Organizations (UI-2): every org I belong to, plus Create. Nothing renders while
- * orgs are dark. Creating needs a card (D-OW-30), so where purchases are hidden (iOS) Create is too.
+ * Account Settings › Organizations (UI-2): every org I belong to, plus Create. Creating needs a card (D-OW-30), so where purchases are hidden (iOS) Create is too.
  */
 export function AccountOrganizationsSection() {
   const { orgs, isLoading } = useMyOrgs();
@@ -37,7 +35,6 @@ export function AccountOrganizationsSection() {
     else setCreating(true);
   };
 
-  if (!ORGS_ENABLED) return null;
   const canCreate = !isBillingEnabled() || showBilling;
 
   return (

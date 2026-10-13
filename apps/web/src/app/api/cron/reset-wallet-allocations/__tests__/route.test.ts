@@ -59,7 +59,7 @@ function makeRequest(): Request {
 }
 
 const ROOTS = { scanned: 1, reset: 1, failed: 0 };
-const REATTRIBUTED = { outcome: 'swept', examined: 3, reattributed: 1, failed: 0 };
+const REATTRIBUTED = { examined: 3, reattributed: 1, failed: 0 };
 const UNPARK = { outcome: 'swept', examined: 2, unparked: 1, stillCapped: 1, policyHeld: 0, failed: 0 };
 
 describe('/api/cron/reset-wallet-allocations', () => {

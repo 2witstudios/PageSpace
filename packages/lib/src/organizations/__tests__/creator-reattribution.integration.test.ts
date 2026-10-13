@@ -3,7 +3,7 @@
  * its envs' and apps' cost owner — the drive lead's cap carries them from the next sweep, audited.
  *
  * REAL: the sweep, the org-aware membership answer, the updates, all against Postgres. Faked: the
- * audit chain (captured) and ORGS_ENABLED (on, as the org suites run).
+ * audit chain (captured).
  *
  * Requires DATABASE_URL → a migrated Postgres. Every row it creates is deleted.
  */
@@ -21,7 +21,6 @@ import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
 import { reattributeRemovedCreators } from '../creator-reattribution';
 
-vi.mock('../orgs-enabled', () => ({ ORGS_ENABLED: true }));
 const audit = vi.hoisted(() => ({ events: [] as Array<Record<string, unknown>> }));
 // AUD-1: the code under test stages its org events in the outbox; the chain append is captured here, so what this
 // suite sees is exactly what was staged, committed and delivered.
@@ -143,7 +142,7 @@ describe('a creator removed from a drive stops carrying its compute', () => {
 
     const result = await reattributeRemovedCreators();
 
-    expect(result.outcome).toBe('swept');
+    expect(result.failed).toBe(0);
     expect([await envOwner(w.envIds.marcus), await appOwner(w)]).toEqual([null, null]);
     expect([await envOwner(w.envIds.ada), await envOwner(w.envIds.lead)]).toEqual([w.adaId, w.leadId]);
     expect(ownEvents(w)).toEqual([

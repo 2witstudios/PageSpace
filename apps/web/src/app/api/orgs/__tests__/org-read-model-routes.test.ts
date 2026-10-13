@@ -7,16 +7,10 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { SessionAuthResult } from '@/lib/auth';
 import type { OrgRole } from '@pagespace/db/schema/organizations';
 
-const flags = vi.hoisted(() => ({ orgsEnabled: true }));
 // The org sign-in policy (SEC-2/3) has its own suites; here every credential meets it.
 vi.mock('@pagespace/lib/permissions/actor-authentication', () => ({
   checkActorOrgAuthentication: vi.fn(async () => ({ allowed: true })),
   drivePolicyOrgId: vi.fn(async () => null),
-}));
-vi.mock('@pagespace/lib/organizations/orgs-enabled', () => ({
-  get ORGS_ENABLED() {
-    return flags.orgsEnabled;
-  },
 }));
 vi.mock('@/lib/auth', () => ({ authenticateRequestWithOptions: vi.fn(), isAuthError: vi.fn() }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({ loggers: { api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() } } }));
@@ -60,7 +54,6 @@ const routes = [
 
 beforeEach(() => {
   vi.clearAllMocks();
-  flags.orgsEnabled = true;
   vi.mocked(isAuthError).mockImplementation((result) => 'error' in result);
   vi.mocked(authenticateRequestWithOptions).mockResolvedValue(session('u_priya'));
 });
@@ -90,13 +83,6 @@ describe.each(routes)('GET /api/orgs/[orgId]/$name', ({ name, get, fn, keys }) =
     as(null);
     expect((await get(req(), ctx)).status).toBe(404);
     expect(fn).not.toHaveBeenCalled();
-  });
-
-  it('is a bare 404 while orgs are dark', async () => {
-    flags.orgsEnabled = false;
-    const res = await get(req(), ctx);
-    expect(res.status).toBe(404);
-    expect(await res.json()).toEqual({ error: 'Not found' });
   });
 
   it('a failure is a coded 500', async () => {

@@ -2,17 +2,11 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import type { SessionAuthResult } from '@/lib/auth';
 
-const { orgsFlag } = vi.hoisted(() => ({ orgsFlag: { enabled: true } }));
 
 // The org sign-in policy (SEC-2/3) has its own suites; here every credential meets it.
 vi.mock('@pagespace/lib/permissions/actor-authentication', () => ({
   checkActorOrgAuthentication: vi.fn(async () => ({ allowed: true })),
   drivePolicyOrgId: vi.fn(async () => null),
-}));
-vi.mock('@pagespace/lib/organizations/orgs-enabled', () => ({
-  get ORGS_ENABLED() {
-    return orgsFlag.enabled;
-  },
 }));
 
 vi.mock('@pagespace/lib/services/org-drive-service', () => ({
@@ -93,7 +87,6 @@ const applied = { status: 'applied' as const, direction: 'into-org' as const, mo
 describe('/api/drives/[driveId]/org', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    orgsFlag.enabled = true;
     vi.mocked(isAuthError).mockReturnValue(false);
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(session(MARCUS));
   });
@@ -312,22 +305,5 @@ describe('/api/drives/[driveId]/org', () => {
       expect(response.status).toBe(400);
       expect(changeDriveVisibility).not.toHaveBeenCalled();
     });
-  });
-
-  it.each([
-    ['PUT', { orgId: NORTHWIND }],
-    ['DELETE', { implicitMembers: 'keep' }],
-    ['PATCH', { orgVisibility: 'PRIVATE' }],
-  ] as const)('%s answers 404 and does nothing while ORGS_ENABLED is false', async (method, body) => {
-    orgsFlag.enabled = false;
-    const handler = method === 'PUT' ? PUT : method === 'DELETE' ? DELETE : PATCH;
-
-    const response = await handler(request(method, body), context);
-
-    expect(response.status).toBe(404);
-    expect(authenticateRequestWithOptions).not.toHaveBeenCalled();
-    expect(moveDriveToOrg).not.toHaveBeenCalled();
-    expect(moveDriveOutOfOrg).not.toHaveBeenCalled();
-    expect(changeDriveVisibility).not.toHaveBeenCalled();
   });
 });

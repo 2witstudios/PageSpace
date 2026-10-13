@@ -6,9 +6,7 @@
  * ...extras }` (extras: `issues` on a validation 400, `blockers` on a wallet delete, `policy` on an
  * org-policy refusal, `driveIds` on an org delete). `reason` is never the machine key.
  *
- * The one deliberate exception: while organizations are dark the routes answer a bare
- * `{ error: 'Not found' }` 404, exactly as an unknown route would, so nothing reveals that orgs
- * exist. Billing being off is NOT dark: it answers `billing_unavailable`.
+ * Billing being off answers its own code, `billing_unavailable`.
  *
  * Pure: a registry and a type, no IO.
  */

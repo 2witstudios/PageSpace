@@ -32,8 +32,8 @@ export type SurfaceDecision =
 const SOURCES: readonly SpendSourceKind[] = ['drive_wallet', 'seat_allowance', 'own_credits'];
 const isSource = (value: unknown): value is SpendSourceKind => typeof value === 'string' && (SOURCES as readonly string[]).includes(value);
 
-/** Whether the spend surfaces show at all: orgs on, and more than one source (D20.8 passive disclosure). */
-const surfacesShow = (orgsEnabled: boolean, options: readonly SurfaceChoice[]): boolean => orgsEnabled && options.length > 1;
+/** Whether the spend surfaces show at all: more than one source (D20.8 passive disclosure). */
+const surfacesShow = (options: readonly SurfaceChoice[]): boolean => options.length > 1;
 
 function choiceFor(decision: SurfaceDecision, options: readonly SurfaceChoice[]): SurfaceChoice | null {
   if (decision.kind === 'spend') {
@@ -62,12 +62,12 @@ const REFUSED_CHIP_TEXT: Readonly<Record<string, string>> = {
 };
 
 /**
- * The header chip, or null where the personal-credits chip stays (one source, or orgs dark).
+ * The header chip, or null where the personal-credits chip stays (one source).
  * It names what the gate will actually spend, so a fallback the drive rule applies shows the
  * new source (SPEND-4).
  */
-export function spendChipModel(input: { orgsEnabled: boolean; options: readonly SurfaceChoice[]; resolved: SurfaceDecision }): SpendChipModel | null {
-  if (!surfacesShow(input.orgsEnabled, input.options)) return null;
+export function spendChipModel(input: { options: readonly SurfaceChoice[]; resolved: SurfaceDecision }): SpendChipModel | null {
+  if (!surfacesShow(input.options)) return null;
   const { resolved } = input;
   const choice = choiceFor(resolved, input.options);
   if (resolved.kind === 'spend' && choice) {
@@ -110,12 +110,11 @@ const REFUSED_STRIP_TEXT: Readonly<Record<string, string>> = {
 
 /** The strip above the composer before a conversation's first message (SPEND-2). */
 export function composerStripModel(input: {
-  orgsEnabled: boolean;
   options: readonly SurfaceChoice[];
   resolved: SurfaceDecision;
   hasMessages: boolean;
 }): ComposerStripModel | null {
-  if (input.hasMessages || !surfacesShow(input.orgsEnabled, input.options)) return null;
+  if (input.hasMessages || !surfacesShow(input.options)) return null;
   const { resolved } = input;
   const choice = choiceFor(resolved, input.options);
   if (resolved.kind === 'refuse' && choice && Object.prototype.hasOwnProperty.call(REFUSED_STRIP_TEXT, resolved.reason)) {

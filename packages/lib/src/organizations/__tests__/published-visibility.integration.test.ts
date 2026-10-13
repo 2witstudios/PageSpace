@@ -14,8 +14,6 @@ import { drives } from '@pagespace/db/schema/core';
 import { customDomains } from '@pagespace/db/schema/custom-domains';
 import { organizations, orgMembers, orgSubscriptions } from '@pagespace/db/schema/organizations';
 
-vi.mock('../orgs-enabled', () => ({ ORGS_ENABLED: true }));
-
 import { updateOrgPolicies } from '../policies';
 import type { PublishedObjectStore } from '../published-visibility-core';
 import {

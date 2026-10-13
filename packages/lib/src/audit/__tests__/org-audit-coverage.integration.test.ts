@@ -64,8 +64,6 @@ import { driveEnvs } from '@pagespace/db/schema/drive-envs';
 import { publishedApps } from '@pagespace/db/schema/published-apps';
 import { credentialActor } from '../../permissions/access-actor';
 
-vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
-
 /** Types only apps/web writes, with the file that writes each (checked statically below). */
 const WEB_EMITTED: Partial<Record<OrgAuditCatalogType, string[]>> = {
   'org.billing.subscription_changed': [

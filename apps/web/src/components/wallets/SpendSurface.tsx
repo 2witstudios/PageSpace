@@ -1,7 +1,6 @@
 'use client';
 
 import { createContext, useContext, useEffect, useId, useMemo, type ReactNode } from 'react';
-import { ORGS_ENABLED } from '@pagespace/lib/organizations/orgs-enabled';
 import { useSpendContextStore, type SpendContext } from '@/stores/useSpendContextStore';
 
 const SpendSurfaceContext = createContext<SpendContext | null>(null);
@@ -25,7 +24,6 @@ export function SpendSurfaceProvider({ conversationId, driveId, isGlobal, childr
   // A changed conversation or drive updates this surface IN PLACE (register upserts); it does not
   // move it to the front of the header's focus order — only focus or a click does (P2-A).
   useEffect(() => {
-    if (!ORGS_ENABLED) return;
     if (value) register(surfaceId, value);
     else unregister(surfaceId);
   }, [register, unregister, surfaceId, value]);

@@ -1,17 +1,11 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { SessionAuthResult } from '@/lib/auth';
 
-const { orgsFlag } = vi.hoisted(() => ({ orgsFlag: { enabled: true } }));
 
 // The org sign-in policy (SEC-2/3) has its own suites; here every credential meets it.
 vi.mock('@pagespace/lib/permissions/actor-authentication', () => ({
   checkActorOrgAuthentication: vi.fn(async () => ({ allowed: true })),
   drivePolicyOrgId: vi.fn(async () => null),
-}));
-vi.mock('@pagespace/lib/organizations/orgs-enabled', () => ({
-  get ORGS_ENABLED() {
-    return orgsFlag.enabled;
-  },
 }));
 vi.mock('@pagespace/lib/services/org-drive-service', () => ({ changeOrgDriveLead: vi.fn() }));
 vi.mock('@pagespace/lib/services/org-drive-service-deps', () => ({ orgDriveServiceDeps: { marker: 'production-deps' } }));
@@ -64,7 +58,6 @@ const handedOver = { id: DRIVE, name: 'Product', slug: 'product', ownerId: LENA,
 describe('PUT /api/drives/[driveId]/org/lead', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    orgsFlag.enabled = true;
     vi.mocked(isAuthError).mockReturnValue(false);
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(session(PRIYA));
   });
@@ -99,14 +92,6 @@ describe('PUT /api/drives/[driveId]/org/lead', () => {
 
   it('DRV-1 (partial) a body without a target is rejected before the service runs', async () => {
     expect((await PUT(put({}), context)).status).toBe(400);
-    expect(changeOrgDriveLead).not.toHaveBeenCalled();
-  });
-
-  it('answers 404 and does nothing while ORGS_ENABLED is false', async () => {
-    orgsFlag.enabled = false;
-
-    expect((await PUT(put({ userId: LENA }), context)).status).toBe(404);
-    expect(authenticateRequestWithOptions).not.toHaveBeenCalled();
     expect(changeOrgDriveLead).not.toHaveBeenCalled();
   });
 });

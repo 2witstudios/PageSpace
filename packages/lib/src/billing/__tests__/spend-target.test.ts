@@ -10,7 +10,6 @@ import {
   spendFallbackFromWalletId,
   automationSpendInput,
   automationRunUnreserved,
-  resolvesDriveWallets,
   resolvedSpend,
   conversationSpend,
   personalRootDecision,
@@ -113,16 +112,6 @@ describe('spend-target: the target a caller names', () => {
   it('SPEND-7 (partial) a drive session names its own drive and the chosen source', () => {
     expect(driveSpend('d-product', 'seat_allowance')).toEqual({ kind: 'drive', driveId: 'd-product', chosen: 'seat_allowance' });
     expect(driveSpend('d-product')).toEqual({ kind: 'drive', driveId: 'd-product', chosen: null });
-  });
-
-  it('SPEND-8 (partial) the personal target never resolves drive wallets, orgs on or off', () => {
-    expect(resolvesDriveWallets({ orgsEnabled: true, target: PERSONAL_SPEND })).toBe(false);
-    expect(resolvesDriveWallets({ orgsEnabled: false, target: PERSONAL_SPEND })).toBe(false);
-  });
-
-  it('given orgs dark, a drive session spends the personal root exactly as before wallets', () => {
-    expect(resolvesDriveWallets({ orgsEnabled: false, target: driveSpend('d-product', 'drive_wallet') })).toBe(false);
-    expect(resolvesDriveWallets({ orgsEnabled: true, target: driveSpend('d-product', 'drive_wallet') })).toBe(true);
   });
 });
 
@@ -563,11 +552,6 @@ describe('spend-target: automations', () => {
     expect(availableSources(legs)).toEqual(['drive_wallet']);
   });
 
-  it('SPEND-6 (partial) with orgs on an automation resolves drive wallets; while orgs are dark it bills as before wallets', () => {
-    expect(resolvesDriveWallets({ orgsEnabled: true, target: automationSpend('d-product') })).toBe(true);
-    expect(resolvesDriveWallets({ orgsEnabled: false, target: automationSpend('d-product') })).toBe(false);
-  });
-
   it('SPEND-6 (partial) a tool call inside an automation run stays an automation, whatever source the turn resolved', () => {
     expect(resolvedSpend(automationSpend('d-product'), 'drive_wallet')).toEqual(automationSpend('d-product'));
     expect(resolvedSpend(automationSpend('d-product'), 'own_credits')).toEqual(automationSpend('d-product'));
@@ -586,14 +570,13 @@ describe('spend-target: automations', () => {
   });
 
   it('SPEND-6 (partial) an automation that would run a model with no reserved wallet is refused, so it cannot settle on a person', () => {
-    const on = { orgsEnabled: true, billingEnabled: true, target: automationSpend('d-product') };
+    const on = { billingEnabled: true, target: automationSpend('d-product') };
     expect(automationRunUnreserved({ ...on, walletId: undefined })).toBe(true);
     expect(automationRunUnreserved({ ...on, walletId: 'w-product' })).toBe(false);
   });
 
-  it('while orgs are dark, billing is off, or the target is a person, an unreserved run is not an automation settle to refuse', () => {
-    const base = { orgsEnabled: true, billingEnabled: true, target: automationSpend('d-product'), walletId: undefined };
-    expect(automationRunUnreserved({ ...base, orgsEnabled: false })).toBe(false);
+  it('while billing is off, or the target is a person, an unreserved run is not an automation settle to refuse', () => {
+    const base = { billingEnabled: true, target: automationSpend('d-product'), walletId: undefined };
     expect(automationRunUnreserved({ ...base, billingEnabled: false })).toBe(false);
     expect(automationRunUnreserved({ ...base, target: PERSONAL_SPEND })).toBe(false);
     expect(automationRunUnreserved({ ...base, target: driveSpend('d-product', 'own_credits') })).toBe(false);

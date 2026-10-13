@@ -4,7 +4,7 @@
  * magic-link verification, passkey signup, and email verification.
  *
  * It never throws and never blocks a sign-in: a refusal (no seat, a lapsed org) is audited by lib and the
- * person simply is not added. Dark while ORGS_ENABLED is off (lib returns before any IO).
+ * person simply is not added.
  */
 import { autoJoinVerifiedDomainOrg } from '@pagespace/lib/organizations/domains';
 import { loggers } from '@pagespace/lib/logging/logger-config';

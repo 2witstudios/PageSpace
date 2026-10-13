@@ -1,12 +1,8 @@
 /**
- * Turning orgs on was mechanically blocked on the export work: shipping
- * ORGS_ENABLED = true while either export dropped org data would export org
- * users' data without their org membership (GDPR, Spec X-2) and migrate an org
- * drive as a personal drive with its balances gone (tenant export, Spec X-3).
- *
- * Both are now met, so these assertions hold UNCONDITIONALLY rather than only
- * once the flag flips: a later change that drops an org or wallet table from
- * either export fails here whatever the flag says.
+ * Org data must survive both exports: an export that dropped it would export org users' data
+ * without their org membership (GDPR, Spec X-2) and migrate an org drive as a personal drive with
+ * its balances gone (tenant export, Spec X-3). A later change that drops an org or wallet table from
+ * either export fails here.
  *
  *  - GDPR: no org table may sit in EXCLUDED_TABLES under a "temporary X-2" reason.
  *  - Tenant: `drives.orgId` is carried, every org and wallet table is carried,
@@ -82,7 +78,7 @@ function tenantOrgWalletGaps(input: {
   ];
 }
 
-describe('ORGS_ENABLED export precondition', () => {
+describe('org and wallet data in the GDPR and tenant exports', () => {
   it('X-2 (partial) no org table is excluded from the GDPR export as a temporary measure', () => {
     expect(temporaryGdprOrgExclusions(EXCLUDED_TABLES)).toEqual([]);
   });

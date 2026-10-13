@@ -49,23 +49,19 @@ const spends = (choice: SurfaceChoice, fallbackFrom: SurfaceChoice['source'] | n
 
 describe('spendChipModel: the header chip', () => {
   it('UI-8 (partial) the chip replaces the personal chip only where more than one source exists (SPEND-2 (partial), D20.8)', () => {
-    expect(spendChipModel({ orgsEnabled: true, options: [own], resolved: spends(own) })).toBeNull();
-    expect(spendChipModel({ orgsEnabled: true, options: [], resolved: spends(own) })).toBeNull();
-    expect(spendChipModel({ orgsEnabled: true, options: [product, seat, own], resolved: spends(product) })).not.toBeNull();
-  });
-
-  it('UI-8 (partial) nothing shows while organizations are dark, whatever the options', () => {
-    expect(spendChipModel({ orgsEnabled: false, options: [product, seat, own], resolved: spends(product) })).toBeNull();
+    expect(spendChipModel({ options: [own], resolved: spends(own) })).toBeNull();
+    expect(spendChipModel({ options: [], resolved: spends(own) })).toBeNull();
+    expect(spendChipModel({ options: [product, seat, own], resolved: spends(product) })).not.toBeNull();
   });
 
   it('UI-8 (partial) the chip is one short token: the source kind and a credit count, never the wallet name', () => {
-    const chip = spendChipModel({ orgsEnabled: true, options: [product, seat, own], resolved: spends(product) });
+    const chip = spendChipModel({ options: [product, seat, own], resolved: spends(product) });
     expect(chip).toEqual({ source: 'drive_wallet', text: '192 credits', tone: 'normal', ariaLabel: 'Spending from Product wallet: 192 credits' });
     expect(chip?.text).not.toContain('Product');
   });
 
   it('UI-8 (partial) the chip names what the gate will actually spend, so a fallback shows the new source (SPEND-4 (partial))', () => {
-    const chip = spendChipModel({ orgsEnabled: true, options: [product, seat, own], resolved: spends(seat, 'drive_wallet') });
+    const chip = spendChipModel({ options: [product, seat, own], resolved: spends(seat, 'drive_wallet') });
     expect(chip?.source).toBe('seat_allowance');
     expect(chip?.text).toBe('54 credits');
   });
@@ -73,16 +69,16 @@ describe('spendChipModel: the header chip', () => {
   it('UI-8 (partial) a paused chosen wallet reads "Paused" and a refused source reads what is wrong', () => {
     const options = [product, seat, own];
     const refuse = (reason: string, source: SurfaceChoice['source'] | null = 'drive_wallet'): SurfaceDecision => ({ kind: 'refuse', source, reason, options: [] });
-    expect(spendChipModel({ orgsEnabled: true, options, resolved: refuse('source_paused') })).toMatchObject({ source: 'drive_wallet', text: 'Paused', tone: 'paused' });
-    expect(spendChipModel({ orgsEnabled: true, options, resolved: refuse('source_cap_reached') })).toMatchObject({ text: 'Cap reached', tone: 'refused' });
-    expect(spendChipModel({ orgsEnabled: true, options, resolved: refuse('source_empty') })).toMatchObject({ text: '0 credits', tone: 'refused' });
-    expect(spendChipModel({ orgsEnabled: true, options, resolved: refuse('no_source_chosen', null) })).toMatchObject({ source: null, text: 'Choose', tone: 'refused' });
-    expect(spendChipModel({ orgsEnabled: true, options, resolved: refuse('chosen_wallet_unavailable', null) })).toMatchObject({ source: null, text: 'Choose', tone: 'refused' });
+    expect(spendChipModel({ options, resolved: refuse('source_paused') })).toMatchObject({ source: 'drive_wallet', text: 'Paused', tone: 'paused' });
+    expect(spendChipModel({ options, resolved: refuse('source_cap_reached') })).toMatchObject({ text: 'Cap reached', tone: 'refused' });
+    expect(spendChipModel({ options, resolved: refuse('source_empty') })).toMatchObject({ text: '0 credits', tone: 'refused' });
+    expect(spendChipModel({ options, resolved: refuse('no_source_chosen', null) })).toMatchObject({ source: null, text: 'Choose', tone: 'refused' });
+    expect(spendChipModel({ options, resolved: refuse('chosen_wallet_unavailable', null) })).toMatchObject({ source: null, text: 'Choose', tone: 'refused' });
   });
 
   it('UI-8 (partial) a source with no limit of its own shows no number rather than a sentinel', () => {
     const unlimited = { ...product, remainingCents: null, remainingCredits: null };
-    expect(spendChipModel({ orgsEnabled: true, options: [unlimited, own], resolved: spends(unlimited) })?.text).toBe('No cap');
+    expect(spendChipModel({ options: [unlimited, own], resolved: spends(unlimited) })?.text).toBe('No cap');
   });
 });
 
@@ -105,34 +101,33 @@ describe('spendChoiceHint and spendChoiceAmount: the popover rows', () => {
 
 describe('composerStripModel: the strip before the first message', () => {
   it('SPEND-2 (partial) the source is named before the first message, and only then', () => {
-    expect(composerStripModel({ orgsEnabled: true, options: [product, seat, own], resolved: spends(product), hasMessages: false }))
+    expect(composerStripModel({ options: [product, seat, own], resolved: spends(product), hasMessages: false }))
       .toEqual({ label: 'Product wallet', detail: '192 credits left', tone: 'normal' });
-    expect(composerStripModel({ orgsEnabled: true, options: [product, seat, own], resolved: spends(product), hasMessages: true })).toBeNull();
+    expect(composerStripModel({ options: [product, seat, own], resolved: spends(product), hasMessages: true })).toBeNull();
   });
 
-  it('SPEND-2 (partial) no strip with a single source or while organizations are dark', () => {
-    expect(composerStripModel({ orgsEnabled: true, options: [own], resolved: spends(own), hasMessages: false })).toBeNull();
-    expect(composerStripModel({ orgsEnabled: false, options: [product, own], resolved: spends(product), hasMessages: false })).toBeNull();
+  it('SPEND-2 (partial) no strip with a single source', () => {
+    expect(composerStripModel({ options: [own], resolved: spends(own), hasMessages: false })).toBeNull();
   });
 
   it('SPEND-4 (partial) a fallback the drive rule applies is named on the strip before sending', () => {
-    expect(composerStripModel({ orgsEnabled: true, options: [product, seat, own], resolved: spends(seat, 'drive_wallet'), hasMessages: false }))
+    expect(composerStripModel({ options: [product, seat, own], resolved: spends(seat, 'drive_wallet'), hasMessages: false }))
       .toEqual({ label: 'Northwind Labs seat', detail: '54 credits left · Product wallet cannot cover this', tone: 'fallback' });
   });
 
   it('SPEND-4 (partial) a refused source the person knows is named with what is wrong, so they know to choose another', () => {
     const refuse = (reason: string): SurfaceDecision => ({ kind: 'refuse', source: 'drive_wallet', reason, options: [] });
-    expect(composerStripModel({ orgsEnabled: true, options: [product, seat, own], resolved: refuse('source_cap_reached'), hasMessages: false }))
+    expect(composerStripModel({ options: [product, seat, own], resolved: refuse('source_cap_reached'), hasMessages: false }))
       .toEqual({ label: 'Product wallet', detail: 'you reached your cap here · choose another source', tone: 'refused' });
-    expect(composerStripModel({ orgsEnabled: true, options: [product, own], resolved: refuse('source_paused'), hasMessages: false })?.detail)
+    expect(composerStripModel({ options: [product, own], resolved: refuse('source_paused'), hasMessages: false })?.detail)
       .toBe('paused · choose another source');
-    expect(composerStripModel({ orgsEnabled: true, options: [product, own], resolved: refuse('source_empty'), hasMessages: false })?.detail)
+    expect(composerStripModel({ options: [product, own], resolved: refuse('source_empty'), hasMessages: false })?.detail)
       .toBe('empty this month · choose another source');
   });
 
   it('SPEND-4 (partial) a refused source asks for a choice instead of naming a source', () => {
     const refused: SurfaceDecision = { kind: 'refuse', source: null, reason: 'no_source_chosen', options: [] };
-    expect(composerStripModel({ orgsEnabled: true, options: [product, own], resolved: refused, hasMessages: false }))
+    expect(composerStripModel({ options: [product, own], resolved: refused, hasMessages: false }))
       .toEqual({ label: null, detail: 'Choose what this conversation spends from', tone: 'refused' });
   });
 });

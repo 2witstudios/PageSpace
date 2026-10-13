@@ -30,8 +30,6 @@ import { countOrgSeats } from '../../organizations/repository';
 import { accountRepository } from '../../repositories/account-repository';
 import { credentialActor } from '../access-actor';
 
-vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
-
 // Northwind Labs (Sequence Spec Part 2), per-run ids. Marcus leads every drive. Jono owns the org,
 // Priya is an Admin, Lena, Nina and Eve are members, Chris is outside the org.
 const run = createId().slice(0, 8);

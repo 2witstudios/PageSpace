@@ -1,7 +1,6 @@
 'use client';
 
 import { useState } from 'react';
-import { ORGS_ENABLED } from '@pagespace/lib/organizations/orgs-enabled';
 import { composerStripModel } from '@pagespace/lib/billing/spend-surface';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { useConversationSpend } from '@/hooks/useConversationSpend';
@@ -14,7 +13,7 @@ import { SpendSourceOptionsPanel } from './SpendSourcePopover';
  * The strip above the composer before a conversation's first message (Spec SPEND-2; canvas v9
  * SpendSource): which source this conversation will spend, what is left, and a Change control
  * that opens the same options as the header chip (at every width; the chip hides below sm).
- * Renders nothing with one source, once the conversation has messages, or while orgs are dark.
+ * Renders nothing with one source, or once the conversation has messages.
  * It reads and writes exactly the conversation it is given (its surface's), never the header's.
  */
 export function ComposerSpendStrip({ conversationId, driveId, isGlobal, hasMessages, persistentBelowLg = false, className }: SpendContext & {
@@ -30,7 +29,7 @@ export function ComposerSpendStrip({ conversationId, driveId, isGlobal, hasMessa
   const { spend, choose } = useConversationSpend(conversationId, { driveId, isGlobal });
   const [open, setOpen] = useState(false);
   const stayBelowLg = persistentBelowLg && hasMessages;
-  const strip = spend ? composerStripModel({ orgsEnabled: ORGS_ENABLED, options: spend.options, resolved: spend.resolved, hasMessages: hasMessages && !stayBelowLg }) : null;
+  const strip = spend ? composerStripModel({ options: spend.options, resolved: spend.resolved, hasMessages: hasMessages && !stayBelowLg }) : null;
   if (!spend || !strip) return null;
 
   const resolvedWalletId = spend.resolved.kind === 'spend' ? spend.resolved.walletId : null;

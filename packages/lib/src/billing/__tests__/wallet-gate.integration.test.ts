@@ -1,6 +1,6 @@
 /**
  * The wallet-aware credit gate against a real Postgres (Spec WAL-5, WAL-6, WAL-8, SPEND-1,
- * SPEND-4, SPEND-8): the REAL canConsumeAI and consumeCredits, with ORGS_ENABLED on, over a
+ * SPEND-4, SPEND-8): the REAL canConsumeAI and consumeCredits, over a
  * small Northwind (Sequence Spec fixture): the org pool, Product's drive wallet under it,
  * Marcus (a free-tier member with his own credits) and Chris Rowe (a guest on Product).
  *
@@ -46,8 +46,6 @@ import { gateComputeCharge } from '../compute-gate';
 import { computeChargeFor, driveAccrualChargeFor } from '../compute-charge';
 import { expectWalletLegInvariant } from '../../test/wallet-leg-invariant';
 import { credentialActor } from '../../permissions/access-actor';
-
-vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 
 // A pass-through of the real resolution with a seam AFTER it returns: a test can change the
 // world between the unlocked resolution and gateSharedWallet's locked re-read (SPEND-4).
@@ -158,7 +156,7 @@ const walletRow = async (id: string) => (await db.select().from(wallets).where(e
 const holdsOf = (userId: string) => db.select().from(creditHolds).where(eq(creditHolds.userId, userId));
 const ledgerOf = (userId: string) => db.select().from(creditLedger).where(eq(creditLedger.userId, userId));
 
-describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
+describe('the wallet-aware credit gate (real Postgres)', () => {
   beforeAll(async () => {
     try {
       await db.select({ id: wallets.id }).from(wallets).limit(1);
@@ -419,7 +417,7 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
     expect((await holdsOf(world.marcusId)).map((h) => h.walletId)).toEqual([world.marcusWalletId]);
   });
 
-  it('SPEND-8 (partial) a call with no drive spends the personal root wallet, orgs on', async () => {
+  it('SPEND-8 (partial) a call with no drive spends the personal root wallet', async () => {
     if (!dbAvailable) return;
     world = await build({ productAllocationCents: 1_000, poolCents: 5_000 });
 
