@@ -74,6 +74,9 @@ export interface ThreadReply {
   file?: FileRelation | null;
   reactions?: Reaction[];
   aiSenderName?: string | null;
+  aiSenderType?: string | null;
+  /** Set once the reply has been edited; drives the "(edited)" marker. */
+  editedAt?: string | null;
   /** Universal Commands execution feedback on agent replies (UX spec §7) —
    * one entry per resolved command in the triggering message, in order. */
   commandExecution?: ThreadCommandExecution[] | null;
@@ -98,6 +101,10 @@ export interface ThreadPanelProps {
   resolveAuthor: (authorId: string | null | undefined, fallbackName?: string | null) => ThreadAuthor;
   /** Optional reply-count hint for the divider; the page knows it from the parent */
   replyCountHint?: number;
+  /** Context shown in the head: "#launch-ops" (channel) or "Dana · DM" (DM) */
+  contextLabel: string;
+  /** Checkbox label for mirroring the reply to the parent surface, e.g. "Also send to #launch-ops" */
+  alsoSendToParentLabel: string;
   onClose: () => void;
   /**
    * Test seam: lets tests inject a synchronous fetcher / SWR stub so the
@@ -131,7 +138,12 @@ interface RawReply {
   // single object here (no data migration for the jsonb column) — always
   // read this through normalizeCommandExecutionList, never assume the array
   // shape.
-  aiMeta?: { senderName: string; commandExecution?: ThreadCommandExecution[] | ThreadCommandExecution } | null;
+  aiMeta?: {
+    senderName: string;
+    senderType?: string;
+    commandExecution?: ThreadCommandExecution[] | ThreadCommandExecution;
+  } | null;
+  editedAt?: string | Date | null;
   // dm shape
   senderId?: string | null;
   sender?: { id: string; name: string | null; image: string | null } | null;
@@ -182,6 +194,8 @@ const normalizeReply = (raw: RawReply): ThreadReply => ({
   attachments: raw.attachments ?? null,
   reactions: raw.reactions ?? [],
   aiSenderName: raw.aiMeta?.senderName ?? null,
+  aiSenderType: raw.aiMeta?.senderType ?? null,
+  editedAt: raw.editedAt ? new Date(raw.editedAt).toISOString() : null,
   commandExecution: raw.aiMeta?.commandExecution
     ? (normalizeCommandExecutionList(raw.aiMeta.commandExecution) as ThreadCommandExecution[])
     : null,
@@ -197,6 +211,8 @@ export function ThreadPanel({
   parentSlot,
   resolveAuthor,
   replyCountHint,
+  contextLabel,
+  alsoSendToParentLabel,
   onClose,
   fetcher,
 }: ThreadPanelProps) {
@@ -683,19 +699,12 @@ export function ThreadPanel({
     <aside
       data-testid="thread-panel"
       aria-label="Thread"
-      className="flex h-full w-full flex-col border-l border-border bg-background"
+      className="flex h-full w-full min-w-0 flex-col border-l border-border bg-background"
     >
-      {/* Header */}
-      <div className="flex items-center justify-between border-b border-border px-4 py-3 pt-[calc(0.75rem+env(safe-area-inset-top,0px))]">
-        <div className="flex flex-col">
-          <span className="text-sm font-semibold">Thread</span>
-          {replyCount > 0 && (
-            <span className="text-xs text-muted-foreground">
-              {replyCount} {replyCount === 1 ? 'reply' : 'replies'}
-            </span>
-          )}
-        </div>
-        <div className="flex items-center gap-1">
+      {/* Head: 48px, the thread's title and its controls */}
+      <div className="flex h-12 shrink-0 items-center justify-between gap-2 border-b border-border px-4">
+        <span className="min-w-0 truncate text-sm font-semibold">Thread {contextLabel}</span>
+        <div className="flex shrink-0 items-center gap-1">
           <Button
             variant="ghost"
             size="sm"
@@ -708,19 +717,20 @@ export function ThreadPanel({
               followError
                 ? followError
                 : isFollowing
-                ? 'Following — click to stop receiving inbox bumps'
-                : 'Not following — click to receive inbox bumps for new replies'
+                ? 'Following bumps this thread in your inbox on every reply'
+                : 'Follow to bump this thread in your inbox on every reply'
             }
-            className="gap-1.5 text-xs"
+            className="h-7 gap-1.5 rounded-full px-2.5 text-xs"
           >
             {isFollowing ? <Bell className="h-3.5 w-3.5" /> : <BellOff className="h-3.5 w-3.5" />}
-            <span>{isFollowing ? 'Following' : 'Not following'}</span>
+            <span>{isFollowing ? 'Following' : 'Follow'}</span>
           </Button>
           <Button
             variant="ghost"
             size="icon"
             onClick={onClose}
             aria-label="Close thread"
+            title="Close thread"
             data-testid="thread-panel-close"
           >
             <X className="h-4 w-4" />
@@ -798,12 +808,24 @@ export function ThreadPanel({
                 <div className={cn("min-w-0 flex-1", "[@media(hover:none)]:pr-28 touch:pr-28")}>
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-semibold">{author.name}</span>
+                    {isAi && (
+                      <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                        {reply.aiSenderType === 'global_assistant'
+                          ? 'Global assistant'
+                          : reply.aiSenderType === 'webhook'
+                            ? 'Webhook'
+                            : 'Agent'}
+                      </span>
+                    )}
                     <span className="text-xs text-muted-foreground">
                       {new Date(reply.createdAt).toLocaleTimeString([], {
                         hour: '2-digit',
                         minute: '2-digit',
                       })}
                     </span>
+                    {reply.editedAt && (
+                      <span className="text-xs italic text-muted-foreground">(edited)</span>
+                    )}
                     {isOwn && isTemp && (
                       <span className="text-xs italic text-muted-foreground">sending…</span>
                     )}
@@ -924,6 +946,7 @@ export function ThreadPanel({
           parentId={parentId}
           driveId={driveId}
           showAlsoSendToParent
+          alsoSendToParentLabel={alsoSendToParentLabel}
           value={draft}
           onChange={setDraft}
           onSubmit={handleSubmit}

@@ -750,6 +750,8 @@ function ChannelView({ page, floatingWebhooks = true }: ChannelViewProps) {
       parentSlot={renderParentSlot()}
       resolveAuthor={resolveThreadAuthor}
       replyCountHint={threadParent?.replyCount}
+      contextLabel={`#${page.title || 'channel'}`}
+      alsoSendToParentLabel={`Also send to #${page.title || 'channel'}`}
       onClose={closeThread}
     />
   ) : null;
@@ -1034,7 +1036,7 @@ function ChannelView({ page, floatingWebhooks = true }: ChannelViewProps) {
         </div>
     </MessageDropZone>
     {threadPanel && !isMobile && (
-      <div className="hidden md:flex w-[420px] shrink-0 h-full">
+      <div className="hidden md:flex w-[360px] shrink-0 h-full">
         {threadPanel}
       </div>
     )}
