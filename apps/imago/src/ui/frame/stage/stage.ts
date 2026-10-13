@@ -224,7 +224,7 @@ export const chatContextFor = (
     return {
       density: 'roomy',
       contextLabel: `${sectionNames[stage.section]} in context`,
-      placeholder: `Ask about your ${stage.section}…`,
+      placeholder: stage.section === 'files' ? 'Ask across Files, or @mention a page' : `Ask about your ${stage.section}…`,
     };
   }
   return {

@@ -421,7 +421,7 @@ describe('chatContextFor() with names', () => {
         chatContextFor(stageFor('/drive-1/tasks')),
       ],
       expected: [
-        { density: 'roomy', contextLabel: 'Files in context', placeholder: 'Ask about your files…' },
+        { density: 'roomy', contextLabel: 'Files in context', placeholder: 'Ask across Files, or @mention a page' },
         {
           density: 'roomy',
           contextLabel: 'Messages in context',
