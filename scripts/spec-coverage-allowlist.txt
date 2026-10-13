@@ -1,8 +1,3 @@
-# SEAT-9: the real-PG seat-9 matrix proves lapse states, the capability list, retained reads,
-# security restrictions, storage no-charge and reactivation; OrgSurfaceBanner tests prove role notices.
-# Browser spec31 additionally exercises real unpaid/past_due publish, environment and invite routes.
-# Retained pending final-head browser verification and independent whole-requirement review.
-SEAT-9
 # UI-8: component tests and browser spec33 prove source disclosure, refusal with unchanged financial
 # state/provider count, explicit personal retry, empty/paused fallback and persisted automation states.
 # v1/completions and consult route tests prove fallback metadata; mentions use only drive-wallet spend

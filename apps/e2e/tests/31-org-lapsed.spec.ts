@@ -1,4 +1,9 @@
-import { test, expect, type BrowserContext, type Page } from '@playwright/test';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { test, expect, type BrowserContext, type Page, type Browser, type APIRequestContext } from '@playwright/test';
 import { db } from '@pagespace/db/db';
 import { eq, sql } from '@pagespace/db/operators';
 import { factories } from '@pagespace/db/test/factories';
@@ -26,22 +31,20 @@ import {
  * spend, still lets Admins restrict, and tells each role so — Owner and Admins a reactivate
  * banner on every org surface, members a read-only notice.
  *
- * PARTIAL by construction, and titled so. The requirement lists capabilities a browser in this
- * job does not fully cover (storage charged nothing while lapsed, sandboxes, the org pool
- * and allocations, approving guests); those are proven together on real Postgres by
- * seat-9-matrix.integration. What this spec adds is the part only a browser shows: the banners on
- * the real surfaces per role, the refused controls with the lapsed copy, a restriction that still
- * goes through, and that none of it deleted anything.
+ * Focused cases remain partial. The complete lifecycle case also runs the existing real-PG
+ * capability/storage matrix with an exact passing JSON report and joins the actual DOM and
+ * HTTP stories, all authorized org surfaces, retained reads and paid reactivation.
  */
 
 test.use({ storageState: { cookies: [], origins: [] } });
 test.setTimeout(150_000);
 
 const openContexts: BrowserContext[] = [];
-test.afterEach(async () => {
+async function closeStoryContexts() {
   await Promise.all(openContexts.map((context) => context.close()));
   openContexts.length = 0;
-});
+}
+test.afterEach(closeStoryContexts);
 
 async function openAs(browser: Parameters<typeof authedContext>[0], user: SeededUser, baseURL: string): Promise<Page> {
   const context = await authedContext(browser, user.sessionToken, baseURL);
@@ -98,8 +101,9 @@ async function footprint(orgId: string) {
   return { drives: d.n, members: m.n };
 }
 
-test.describe('SEAT-9 (partial) a lapsed org in the browser: banners per role, refused controls, restricting still works, nothing deleted', () => {
-  test('SEAT-9 (partial) never paid: Owner and Admin see the reactivate banner on org settings and on an org drive; a Member sees the read-only notice and still opens the drive', async ({ browser, baseURL }) => {
+interface StoryContext { browser: Browser; baseURL?: string; request: APIRequestContext; }
+
+async function proveRoleNotices({ browser, baseURL }: StoryContext) {
     const w = await seedLapsedNorthwind('never_paid');
 
     const owner = await openAs(browser, w.jono, baseURL!);
@@ -128,9 +132,9 @@ test.describe('SEAT-9 (partial) a lapsed org in the browser: banners per role, r
     await expect(member.locator('aside').getByRole('button', { name: 'Product' })).toBeVisible();
     const read = await member.request.get(`/api/drives/${w.productId}`);
     expect(read.status()).toBe(200);
-  });
+}
 
-  test('SEAT-9 (partial) canceled: inviting, creating or moving in org drives and opening a drive further are refused with the lapsed copy, and the invite route answers 402 org_lapsed', async ({ browser, baseURL, request }) => {
+async function proveRefusedControls({ browser, baseURL, request }: StoryContext) {
     const w = await seedLapsedNorthwind('canceled');
     const admin = await openAs(browser, w.priya, baseURL!);
 
@@ -160,9 +164,9 @@ test.describe('SEAT-9 (partial) a lapsed org in the browser: banners per role, r
     await expect(visibility.getByRole('radio', { name: /^Open/ })).toBeDisabled();
     await expect(visibility.getByRole('radio', { name: /^Restricted/ })).toBeDisabled();
     await expect(card.getByTestId('lapsed-loosen-note')).toContainText('Making it less open still works.');
-  });
+}
 
-  test('SEAT-9 (partial) while lapsed an Admin still restricts — revokes an invitation and makes an Open drive Restricted — and nothing is deleted', async ({ browser, baseURL }) => {
+async function proveSecurityRestrictions({ browser, baseURL }: StoryContext) {
     const w = await seedLapsedNorthwind('never_paid');
     const before = await footprint(w.org.orgId);
     const admin = await openAs(browser, w.priya, baseURL!);
@@ -191,10 +195,9 @@ test.describe('SEAT-9 (partial) a lapsed org in the browser: banners per role, r
     await member.goto(`/dashboard/${w.productId}`);
     await expect(readOnlyNotice(member, w.org)).toBeVisible();
     expect((await member.request.get(`/api/drives/${w.productId}`)).status()).toBe(200);
-  });
+}
 
-  for (const billing of ['unpaid', 'past_due'] as const) {
-    test(`SEAT-9 (partial) ${billing}: actual publish and environment entrypoints refuse access expansion, reads and security restriction remain available`, async ({ request }) => {
+async function proveHttpRefusals({ request }: Pick<StoryContext, 'request'>, billing: 'unpaid' | 'past_due') {
       const w = await seedLapsedNorthwind(billing);
       const canvas = await factories.createPage(w.productId, { type: 'CANVAS', title: 'Launch canvas', content: '<p>Launch plan</p>' });
       const before = await footprint(w.org.orgId);
@@ -227,7 +230,106 @@ test.describe('SEAT-9 (partial) a lapsed org in the browser: banners per role, r
       const read = await request.get(`/api/drives/${w.productId}`, { headers: { cookie: `session=${w.marcus.sessionToken}` } });
       expect(read.status()).toBe(200);
       expect(await footprint(w.org.orgId)).toEqual(before);
+}
+test.describe('SEAT-9 (partial) a lapsed org in the browser: banners per role, refused controls, restricting still works, nothing deleted', () => {
+  test('SEAT-9 (partial) never paid: Owner and Admin see the reactivate banner on org settings and on an org drive; a Member sees the read-only notice and still opens the drive', proveRoleNotices);
+  test('SEAT-9 (partial) canceled: inviting, creating or moving in org drives and opening a drive further are refused with the lapsed copy, and the invite route answers 402 org_lapsed', proveRefusedControls);
+  test('SEAT-9 (partial) while lapsed an Admin still restricts — revokes an invitation and makes an Open drive Restricted — and nothing is deleted', proveSecurityRestrictions);
+  for (const billing of ['unpaid', 'past_due'] as const) {
+    test(`SEAT-9 (partial) ${billing}: actual publish and environment entrypoints refuse access expansion, reads and security restriction remain available`, async ({ request }) => {
+      await proveHttpRefusals({ request }, billing);
     });
   }
 
+});
+
+/** The two real-PG cases are part of this journey, not assumed from another CI job. */
+async function proveDatabaseCapabilityLifecycle(): Promise<void> {
+  expect(process.env.DATABASE_URL, 'the capability matrix requires real PostgreSQL').toBeTruthy();
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'seat9-proof-'));
+  const reportPath = path.join(dir, 'results.json');
+  try {
+    await promisify(execFile)('bun', ['x', 'vitest', 'run', '--config', 'vitest.integration.config.ts',
+      'src/organizations/__tests__/seat-9-matrix.integration.test.ts', '--reporter=json', '--maxWorkers=1', '--minWorkers=1', `--outputFile=${reportPath}`], {
+      cwd: path.resolve(__dirname, '../../../packages/lib'),
+      env: { ...process.env, ALLOW_SKIP_DB_TESTS: '0', TEST_REQUIRE_DB: 'true' },
+      timeout: 60_000, maxBuffer: 1_048_576,
+    });
+    const report = JSON.parse(await readFile(reportPath, 'utf8')) as {
+      success: boolean; numTotalTests: number; numPassedTests: number; numPendingTests: number;
+      testResults: { assertionResults: { title: string; status: string }[] }[];
+    };
+    expect(report).toMatchObject({ success: true, numTotalTests: 2, numPassedTests: 2, numPendingTests: 0 });
+    const cases = report.testResults.flatMap((file) => file.assertionResults);
+    expect(cases).toEqual([
+      expect.objectContaining({ title: 'SEAT-9 (partial) unpaid, a failed payment, canceled and never paid are all lapsed; the Owner and Admins are told to reactivate, a Member that it is read-only', status: 'passed' }),
+      expect.objectContaining({ title: 'SEAT-9 (partial) lapsed: reads kept; every capability that adds access or spend refused; storage not charged; nothing deleted; restricting still works; paid again, everything is back', status: 'passed' }),
+    ]);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+}
+
+async function proveEverySurfaceAndReactivation({ browser, baseURL, request }: StoryContext): Promise<void> {
+  const w = await seedLapsedNorthwind('never_paid');
+  const restrictedId = await seedOrgDrive({ orgId: w.org.orgId, leadId: w.priya.userId, name: 'Restricted reading', visibility: 'RESTRICTED' });
+  await factories.createDriveMember(restrictedId, w.marcus.userId);
+  await factories.createDriveMember(w.financeId, w.marcus.userId);
+  const before = await footprint(w.org.orgId);
+  const orgScreens = ['', '/members', '/drives', '/billing', '/policies', '/security', '/audit', '/danger'];
+  for (const user of [w.jono, w.priya]) {
+    const page = await openAs(browser, user, baseURL!);
+    for (const screen of orgScreens.filter((screen) => user === w.jono || screen !== '/danger')) {
+      await page.goto(`/orgs/${w.org.orgId}/settings${screen}`);
+      await expect(reactivateBanner(page, w.org)).toBeVisible();
+      await expect(reactivateBanner(page, w.org).getByRole('button', { name: 'Reactivate' })).toBeVisible();
+    }
+    for (const route of [`/dashboard/${w.productId}`, `/dashboard/${w.productId}/settings/general`, `/dashboard/${w.productId}/settings/wallet`]) {
+      await page.goto(route);
+      await expect(reactivateBanner(page, w.org)).toBeVisible();
+    }
+  }
+  const member = await openAs(browser, w.marcus, baseURL!);
+  for (const driveId of [w.productId, restrictedId, w.financeId]) {
+    await member.goto(`/dashboard/${driveId}`);
+    await expect(readOnlyNotice(member, w.org)).toBeVisible();
+    await expect(member.getByRole('button', { name: 'Reactivate' })).toHaveCount(0);
+    expect((await member.request.get(`/api/drives/${driveId}`)).status()).toBe(200);
+  }
+  const turnGuestsOff = await request.patch(`/api/orgs/${w.org.orgId}/policies`, {
+    headers: { cookie: `session=${w.priya.sessionToken}`, 'x-csrf-token': w.priya.csrf }, data: { guests: 'off' },
+  });
+  expect(turnGuestsOff.ok(), await turnGuestsOff.text()).toBe(true);
+  expect(await footprint(w.org.orgId)).toEqual(before);
+
+  // Verified current funding restores capability; the notice disappears on the actual surfaces.
+  await factories.createOrgSubscription(w.org.orgId);
+  const owner = await openAs(browser, w.jono, baseURL!);
+  await owner.goto(`/orgs/${w.org.orgId}/settings/members`);
+  await expect(owner.getByRole('button', { name: 'Invite people' })).toBeEnabled();
+  await expect(reactivateBanner(owner, w.org)).toHaveCount(0);
+  await member.goto(`/dashboard/${w.productId}`);
+  await expect(readOnlyNotice(member, w.org)).toHaveCount(0);
+  expect((await member.request.get(`/api/drives/${w.productId}`)).status()).toBe(200);
+  expect(await footprint(w.org.orgId)).toEqual(before);
+}
+
+// Outside the partial describe: only this case joins the real database lifecycle and live DOM/HTTP proofs.
+test('SEAT-9 the complete lapse lifecycle preserves reads and money, refuses every expansion, permits restrictions, renders each role notice and restores paid capabilities', async ({ browser, baseURL, request }) => {
+  const context = { browser, baseURL, request };
+  test.setTimeout(240_000);
+  await test.step('real-PG capability, storage, restriction and paid-again matrix', proveDatabaseCapabilityLifecycle);
+  await test.step('actual role notices, refused controls and security restriction', async () => {
+    await proveRoleNotices(context);
+    await closeStoryContexts();
+    await proveRefusedControls(context);
+    await closeStoryContexts();
+    await proveSecurityRestrictions(context);
+    await closeStoryContexts();
+  });
+  await test.step('real unpaid and past-due publish, environment and invitation routes', async () => {
+    await proveHttpRefusals(context, 'unpaid');
+    await proveHttpRefusals(context, 'past_due');
+  });
+  await test.step('every authorized org surface, all drive visibilities and restored DOM', async () => {
+    await proveEverySurfaceAndReactivation(context);
+  });
 });
