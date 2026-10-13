@@ -4,6 +4,7 @@ import { sessionGet } from '../support/http';
 import { authedContext } from '../fixtures/chat.fixture';
 import {
   DESKTOP_VIEWPORT,
+  captureOrgEvidence,
   inviteeEmail,
   orgName,
   seedOrg,
@@ -87,6 +88,7 @@ test.describe('UI-7 the Owner\'s org pages: Members & seats, Drives, Policies, S
     await expect(page.getByRole('combobox', { name: 'Org role for Marcus Oyelaran' })).toHaveText('Member');
     await expect(page.getByText(w.invitee)).toBeVisible();
     await expect(page.getByRole('button', { name: 'Invite people' })).toBeEnabled();
+    await captureOrgEvidence(page, 'org-members-seats');
 
     // Drives: every org drive with its visibility and lead, the actions, and the visibility legend.
     await page.goto(`${base}/drives`);
@@ -99,6 +101,7 @@ test.describe('UI-7 the Owner\'s org pages: Members & seats, Drives, Policies, S
     await expect(page.getByRole('button', { name: 'New drive' })).toBeEnabled();
     await expect(page.getByRole('button', { name: 'Move a drive in' })).toBeEnabled();
     await expect(page.getByText('What visibility means', { exact: true })).toBeVisible();
+    await captureOrgEvidence(page, 'org-drives');
 
     // Policies: the four groups of org policy.
     await page.goto(`${base}/policies`);
@@ -108,6 +111,7 @@ test.describe('UI-7 the Owner\'s org pages: Members & seats, Drives, Policies, S
     }
     await expect(page.getByText('Who can invite new members', { exact: true })).toBeVisible();
     await expect(page.getByText('When a drive wallet runs out', { exact: true })).toBeVisible();
+    await captureOrgEvidence(page, 'org-policies');
 
     // Security: verified domains, removed people, sign-in requirements, and SSO/SCIM out of scope.
     await page.goto(`${base}/security`);
@@ -116,6 +120,7 @@ test.describe('UI-7 the Owner\'s org pages: Members & seats, Drives, Policies, S
     await expect(page.getByText('Removed people', { exact: true })).toBeVisible();
     await expect(page.getByText('Sign-in requirements', { exact: true })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Single sign-on and SCIM' })).toBeVisible();
+    await captureOrgEvidence(page, 'org-security');
 
     // Plan & seats: the plan with its state, seats, the pool with the drive wallet, invoices.
     await page.goto(`${base}/billing`);
@@ -128,6 +133,7 @@ test.describe('UI-7 the Owner\'s org pages: Members & seats, Drives, Policies, S
     await expect(page.getByRole('switch', { name: 'Pause the credits pool' })).toBeVisible();
     await expect(page.locator('#pool').getByText('Product', { exact: true })).toBeVisible();
     await expect(page.getByText('Invoices', { exact: true })).toBeVisible();
+    await captureOrgEvidence(page, 'org-plan-seats');
 
     // Audit log: filter by type, drive and time; CSV export; the list itself answers.
     await page.goto(`${base}/audit`);
@@ -137,6 +143,7 @@ test.describe('UI-7 the Owner\'s org pages: Members & seats, Drives, Policies, S
     }
     await expect(page.getByRole('button', { name: 'Export CSV' })).toBeVisible();
     await expect(page.getByText('Loading…')).toHaveCount(0, { timeout: 30_000 });
+    await captureOrgEvidence(page, 'org-audit');
   });
 
   test('Security: the strong sign-in and maximum sign-in age controls, and a changed maximum age persists after reload', async ({ browser, baseURL, request }) => {

@@ -1,3 +1,5 @@
+import { mkdir } from 'node:fs/promises';
+import { join } from 'node:path';
 import { expect, type Locator, type Page } from '@playwright/test';
 import { createId } from '@paralleldrive/cuid2';
 import { factories } from '@pagespace/db/test/factories';
@@ -23,7 +25,7 @@ import { NORTHWIND_ORG } from './northwind';
  * `canceled` is a funded subscription Stripe has since canceled.
  */
 
-export type OrgBilling = 'paid' | 'never_paid' | 'canceled';
+export type OrgBilling = 'paid' | 'never_paid' | 'canceled' | 'unpaid' | 'past_due';
 
 export interface SeededOrg {
   orgId: string;
@@ -52,7 +54,7 @@ export async function seedOrg(opts: {
   ]);
   const billing = opts.billing ?? 'paid';
   if (billing === 'paid') await factories.createOrgSubscription(org.id);
-  if (billing === 'canceled') await factories.createOrgSubscription(org.id, { status: 'canceled' });
+  if (billing !== 'paid' && billing !== 'never_paid') await factories.createOrgSubscription(org.id, { status: billing });
   return { orgId: org.id, name: opts.name };
 }
 
@@ -166,4 +168,12 @@ export async function markDocument(page: Page): Promise<void> {
 export async function expectSameDocument(page: Page): Promise<void> {
   const marked = await page.evaluate(() => (window as Window & { __e2eSameDocument?: boolean }).__e2eSameDocument === true);
   expect(marked, 'the page reloaded or navigated: the update did not arrive live').toBe(true);
+}
+
+/** Optional rendered evidence for an independent review; never a screenshot baseline assertion. */
+export async function captureOrgEvidence(page: Page, name: string): Promise<void> {
+  const directory = process.env.E2E_EVIDENCE_DIR;
+  if (!directory) return;
+  await mkdir(directory, { recursive: true });
+  await page.screenshot({ path: join(directory, `${name}.png`), fullPage: true });
 }

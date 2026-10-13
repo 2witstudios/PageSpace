@@ -1,13 +1,17 @@
 import { test, expect, type BrowserContext, type Page } from '@playwright/test';
 import { db } from '@pagespace/db/db';
 import { eq, sql } from '@pagespace/db/operators';
+import { factories } from '@pagespace/db/test/factories';
+import { publishedPages } from '@pagespace/db/schema/published-pages';
+import { driveEnvs } from '@pagespace/db/schema/drive-envs';
 import { drives } from '@pagespace/db/schema/core';
 import { orgMembers } from '@pagespace/db/schema/organizations';
 import { seedUser, type SeededUser } from '../support/db';
-import { sessionPost } from '../support/http';
+import { sessionPost, sessionDelete } from '../support/http';
 import { authedContext } from '../fixtures/chat.fixture';
 import {
   DESKTOP_VIEWPORT,
+  captureOrgEvidence,
   inviteeEmail,
   orgName,
   seedOrg,
@@ -23,8 +27,8 @@ import {
  * banner on every org surface, members a read-only notice.
  *
  * PARTIAL by construction, and titled so. The requirement lists capabilities a browser in this
- * job cannot reach (storage charged nothing while lapsed, sandboxes and environments, the org pool
- * and allocations, publishing, approving guests); those are proven together on real Postgres by
+ * job does not fully cover (storage charged nothing while lapsed, sandboxes, the org pool
+ * and allocations, approving guests); those are proven together on real Postgres by
  * seat-9-matrix.integration. What this spec adds is the part only a browser shows: the banners on
  * the real surfaces per role, the refused controls with the lapsed copy, a restriction that still
  * goes through, and that none of it deleted anything.
@@ -102,6 +106,7 @@ test.describe('SEAT-9 (partial) a lapsed org in the browser: banners per role, r
     await owner.goto(`/orgs/${w.org.orgId}/settings`);
     await expect(reactivateBanner(owner, w.org)).toBeVisible();
     await expect(reactivateBanner(owner, w.org).getByRole('button', { name: 'Reactivate' })).toBeVisible();
+    await captureOrgEvidence(owner, 'org-settings-lapsed-owner');
     await owner.goto(`/dashboard/${w.productId}`);
     await expect(reactivateBanner(owner, w.org)).toBeVisible();
 
@@ -187,4 +192,42 @@ test.describe('SEAT-9 (partial) a lapsed org in the browser: banners per role, r
     await expect(readOnlyNotice(member, w.org)).toBeVisible();
     expect((await member.request.get(`/api/drives/${w.productId}`)).status()).toBe(200);
   });
+
+  for (const billing of ['unpaid', 'past_due'] as const) {
+    test(`SEAT-9 (partial) ${billing}: actual publish and environment entrypoints refuse access expansion, reads and security restriction remain available`, async ({ request }) => {
+      const w = await seedLapsedNorthwind(billing);
+      const canvas = await factories.createPage(w.productId, { type: 'CANVAS', title: 'Launch canvas', content: '<p>Launch plan</p>' });
+      const before = await footprint(w.org.orgId);
+      const publishedBefore = await db.select().from(publishedPages).where(eq(publishedPages.driveId, w.productId));
+      const envsBefore = await db.select().from(driveEnvs).where(eq(driveEnvs.driveId, w.productId));
+
+      const publish = await sessionPost(request, `/api/pages/${canvas.id}/publish`, w.jono, {});
+      expect(publish.status(), await publish.text()).toBe(402);
+      expect((await publish.json()).error).toMatch(/subscription has lapsed/);
+      const env = await sessionPost(request, `/api/drives/${w.productId}/envs`, w.jono, { name: 'Blocked environment' });
+      expect(env.status(), await env.text()).toBe(402);
+      expect(await env.json()).toMatchObject({ code: 'org_lapsed' });
+      const invite = await sessionPost(request, `/api/orgs/${w.org.orgId}/invitations`, w.priya, { email: inviteeEmail('blocked') });
+      expect(invite.status()).toBe(402);
+      expect(await invite.json()).toMatchObject({ code: 'org_lapsed' });
+
+      expect(await db.select().from(publishedPages).where(eq(publishedPages.driveId, w.productId))).toEqual(publishedBefore);
+      expect(await db.select().from(driveEnvs).where(eq(driveEnvs.driveId, w.productId))).toEqual(envsBefore);
+      expect(await footprint(w.org.orgId)).toEqual(before);
+
+      // D-OW-33: the same Admin's credential may still revoke access while unpaid.
+      const invitationId = await seedOrgInvitation(w.org.orgId, w.priya.userId, inviteeEmail('revoke'));
+      const revoke = await sessionDelete(request, `/api/orgs/${w.org.orgId}/invitations/${invitationId}`, w.priya);
+      expect(revoke.ok(), await revoke.text()).toBe(true);
+      const tighten = await request.patch(`/api/orgs/${w.org.orgId}/policies`, {
+        headers: { cookie: `session=${w.priya.sessionToken}`, 'x-csrf-token': w.priya.csrf },
+        data: { publicShareLinks: false },
+      });
+      expect(tighten.ok(), await tighten.text()).toBe(true);
+      const read = await request.get(`/api/drives/${w.productId}`, { headers: { cookie: `session=${w.marcus.sessionToken}` } });
+      expect(read.status()).toBe(200);
+      expect(await footprint(w.org.orgId)).toEqual(before);
+    });
+  }
+
 });
