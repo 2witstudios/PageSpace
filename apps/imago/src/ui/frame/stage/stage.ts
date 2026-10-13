@@ -114,7 +114,8 @@ const driveStage = (driveId: string, rest: readonly string[]): Stage => {
     return {
       driveId,
       section: 'settings',
-      list: 'closed',
+      // Each tool has its 260px pane (C-Drive-Calendar … C-Members; Trash keeps the Files pane).
+      list: 'tree',
       object: { kind: 'settings', title: section.charAt(0).toUpperCase() + section.slice(1), tool: section },
     };
   }

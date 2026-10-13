@@ -12,6 +12,7 @@ import { MessagesPane } from '../../messages/messages-pane/messages-pane';
 import { DmIndexPane } from '../../messages/dm-index/dm-index';
 import { CommandPalette } from '../../palette/palette/palette';
 import { TasksPane } from '../../tasks/tasks-pane/tasks-pane';
+import { ToolPane } from '../tool-pane/tool-pane';
 import { AvatarMenu } from '../avatar-menu/avatar-menu';
 import { BrandChip } from '../brand-chip/brand-chip';
 import { DRIVES, driveStatus, drivesFrom, type DriveSummary } from '../drives/drives';
@@ -113,6 +114,9 @@ const rowsFor = (stage: Stage): ReactNode => {
 const listFor = (stage: Stage, layout: PaneLayout): ReactNode => {
   if (layout.list === 'closed') return null;
   if (stage.section === 'chat') return <ChatHistory />;
+  if (stage.section === 'settings' && stage.driveId !== null && stage.object?.kind === 'settings' && stage.object.tool !== undefined) {
+    return <ToolPane tool={stage.object.tool} driveId={stage.driveId} close={<CloseSidebar section="settings" />} />;
+  }
   if (stage.section === 'settings') return stage.driveId === null ? null : <DriveSettingsNavPane driveId={stage.driveId} />;
   if (stage.section === 'account') return <AccountNavPane />;
   if (!isListSection(stage.section)) return null;
