@@ -1,17 +1,18 @@
 'use client';
 
-import { useCallback, useState, type ReactNode } from 'react';
+import { useCallback, useState } from 'react';
 import { Download } from 'lucide-react';
-import { EditorToggles } from '@/retained/components/layout/middle-content/content-header/EditorToggles';
 import { SaveStatusIndicator } from '@/retained/components/layout/middle-content/content-header/SaveStatusIndicator';
 import { Button } from '@/retained/components/ui/button';
 import { useDocumentManagerStore } from '@/retained/stores/useDocumentManagerStore';
 import { fetchWithAuth } from '@/retained/lib/auth/auth-fetch';
 import type { TreePage } from '@/retained/hooks/usePageTree';
-import { ToolbarStrip } from '@/ui/frame/toolbar-strip/toolbar-strip';
+
+/** What every page-type module receives from the page view. */
+export type PageTypeProps = { readonly page: TreePage; readonly driveId: string; readonly pageId: string };
 
 /** Classic's header save status for one page, read from the same document store. */
-function SaveStatus({ pageId }: { readonly pageId: string }) {
+export function SaveStatus({ pageId }: { readonly pageId: string }) {
   const isDirty = useDocumentManagerStore((state) => state.documents.get(pageId)?.isDirty ?? false);
   const isSaving = useDocumentManagerStore((state) => state.savingDocuments.has(pageId));
   return <SaveStatusIndicator isDirty={isDirty} isSaving={isSaving} />;
@@ -21,7 +22,7 @@ function SaveStatus({ pageId }: { readonly pageId: string }) {
  * A file's Download, as classic's header does it: the presigned URL as JSON first, then the
  * bytes without credentials (a credentialed redirect into the bucket fails CORS).
  */
-function DownloadFile({ page }: { readonly page: TreePage }) {
+export function DownloadFile({ page }: { readonly page: TreePage }) {
   const [busy, setBusy] = useState(false);
   const download = useCallback(async () => {
     setBusy(true);
@@ -49,39 +50,4 @@ function DownloadFile({ page }: { readonly page: TreePage }) {
       {busy ? 'Downloading…' : 'Download'}
     </Button>
   );
-}
-
-/**
- * The page's 44px toolbar strip (IMC-1.10), carrying the tools classic's second header bar
- * held for this page type. Phase 3 fills each page type's strip from its board; until then a
- * document keeps Rich/Markdown and its save status, a sheet or code page its save status, and
- * a file its Download. Other types have no strip.
- */
-export function PageToolbar({ page }: { readonly page: TreePage }): ReactNode {
-  if (page.type === 'DOCUMENT') {
-    return (
-      <ToolbarStrip label="Formatting">
-        <EditorToggles />
-        <div className="flex-1" />
-        <SaveStatus pageId={page.id} />
-      </ToolbarStrip>
-    );
-  }
-  if (page.type === 'SHEET' || page.type === 'CODE') {
-    return (
-      <ToolbarStrip label={page.type === 'SHEET' ? 'Sheet' : 'Code'}>
-        <div className="flex-1" />
-        <SaveStatus pageId={page.id} />
-      </ToolbarStrip>
-    );
-  }
-  if (page.type === 'FILE') {
-    return (
-      <ToolbarStrip label="File">
-        <div className="flex-1" />
-        <DownloadFile page={page} />
-      </ToolbarStrip>
-    );
-  }
-  return null;
 }

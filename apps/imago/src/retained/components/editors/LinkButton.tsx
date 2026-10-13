@@ -107,7 +107,8 @@ const LinkButton = ({ editor, variant = 'toolbar' }: LinkButtonProps) => {
       <PopoverTrigger asChild>
         <button
           type="button"
-          aria-label={isActive ? 'Edit link' : 'Add link'}
+          aria-label={variant === 'toolbar' ? 'Link' : isActive ? 'Edit link' : 'Add link'}
+          aria-pressed={variant === 'toolbar' ? isActive : undefined}
           aria-keyshortcuts={variant === 'toolbar' ? 'Meta+K Control+K' : undefined}
           onMouseDown={(e) => e.preventDefault()}
           className={triggerClass}

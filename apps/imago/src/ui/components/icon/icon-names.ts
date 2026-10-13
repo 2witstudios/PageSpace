@@ -45,6 +45,9 @@ import {
   Square,
   SquareTerminal,
   Trash2,
+  Undo2,
+  Redo2,
+  Webhook,
   Users,
   Wallet,
   Workflow,
@@ -107,6 +110,10 @@ export const icons = {
   file: File,
   // Imago's head: History and New chat (IMC-2.1).
   history: History,
+  // Page-type strips (IMC-3.3, IMC-3.9).
+  undo: Undo2,
+  redo: Redo2,
+  webhook: Webhook,
   // The spend strip above the composer (IMC-2.4).
   wallet: Wallet,
   newChat: SquarePen,

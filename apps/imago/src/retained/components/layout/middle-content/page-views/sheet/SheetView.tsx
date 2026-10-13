@@ -6,7 +6,6 @@ import { TreePage, usePageTree } from '@/retained/hooks/usePageTree';
 import { useSocket } from '@/retained/hooks/useSocket';
 import { useAuth } from '@/retained/hooks/useAuth';
 import { toast } from 'sonner';
-import { motion } from 'motion/react';
 import { PullToRefresh } from '@/retained/components/ui/pull-to-refresh';
 import {
   SheetData,
@@ -109,8 +108,22 @@ import {
   type FormatCommand,
 } from './core/format-commands';
 
+/** What a page-type strip above the formula bar can read and call (C-Files-Sheet). */
+export interface SheetToolsControls {
+  readonly rowCount: number;
+  readonly columnCount: number;
+  readonly canUndo: boolean;
+  readonly canRedo: boolean;
+  readonly onUndo: () => void;
+  readonly onRedo: () => void;
+  /** The formatting tools without undo and redo, which the strip owns. */
+  readonly toolbar: React.ReactNode;
+}
+
 interface SheetViewProps {
   page: TreePage;
+  /** Renders the page's tools strip; the sheet's history and size live here, so it reaches them through this. */
+  renderTools: (controls: SheetToolsControls) => React.ReactNode;
 }
 
 /** Ctrl/Cmd chords that apply a format to the selection. */
@@ -120,7 +133,7 @@ const FORMAT_SHORTCUTS: Record<string, FormatCommand> = {
   u: { kind: 'toggle', field: 'underline' },
 };
 
-const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
+const SheetViewComponent: React.FC<SheetViewProps> = ({ page, renderTools }) => {
   const initialSheet = useMemo(() => sanitizeSheetData(parseSheetContent(page.content)), [page.content]);
   const {
     sheet,
@@ -1291,30 +1304,36 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
           page to try again; if it keeps failing, the stored content needs repair.
         </div>
       )}
-      <motion.div
-        initial={{ y: -10, opacity: 0 }}
-        animate={{ y: 0, opacity: 1 }}
-        transition={{ duration: 0.2 }}
-        className="sticky top-0 z-10 mx-4 mt-4 overflow-hidden rounded-lg liquid-glass-thin border border-[var(--separator)] shadow-[var(--shadow-ambient)]"
-      >
-        <SheetToolbar
-          format={currentFormat}
-          disabled={isReadOnly}
-          canUndo={canUndo}
-          canRedo={canRedo}
-          frozenRows={sheet.frozenRows ?? 0}
-          frozenColumns={sheet.frozenColumns ?? 0}
-          onCommand={runFormatCommand}
-          onUndo={handleUndo}
-          onRedo={handleRedo}
-          onFreezeRows={handleFreezeRows}
-          onFreezeColumns={handleFreezeColumns}
-          onOpenConditional={() => setConditionalOpen((open) => !open)}
-          conditionalOpen={conditionalOpen}
-          conditionalCount={conditionalRules.length}
-          onRefocusGrid={focusGrid}
-        />
-      </motion.div>
+      {renderTools({
+        rowCount: sheet.rowCount,
+        columnCount: sheet.columnCount,
+        canUndo,
+        canRedo,
+        onUndo: handleUndo,
+        onRedo: handleRedo,
+        toolbar: (
+          <div className="w-[min(560px,90vw)]">
+            <SheetToolbar
+              format={currentFormat}
+              disabled={isReadOnly}
+              canUndo={canUndo}
+              canRedo={canRedo}
+              showHistory={false}
+              frozenRows={sheet.frozenRows ?? 0}
+              frozenColumns={sheet.frozenColumns ?? 0}
+              onCommand={runFormatCommand}
+              onUndo={handleUndo}
+              onRedo={handleRedo}
+              onFreezeRows={handleFreezeRows}
+              onFreezeColumns={handleFreezeColumns}
+              onOpenConditional={() => setConditionalOpen((open) => !open)}
+              conditionalOpen={conditionalOpen}
+              conditionalCount={conditionalRules.length}
+              onRefocusGrid={focusGrid}
+            />
+          </div>
+        ),
+      })}
       <SheetFormulaBar
         isRange={selection.type === 'range'}
         selectionAddress={selectionAddress}
