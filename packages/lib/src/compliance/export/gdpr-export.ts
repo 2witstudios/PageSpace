@@ -1,4 +1,4 @@
-import { eq, inArray, or, and, ne, isNull, gte, asc, sql } from 'drizzle-orm';
+import { eq, inArray, or, and, ne, isNull, gte, gt, asc, sql } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { users } from '@pagespace/db/schema/auth';
 import { agentWorkspaces, agentWorkspaceShells } from '@pagespace/db/schema/agent-workspaces';
@@ -1998,9 +1998,6 @@ export interface UserFundingLegExport {
   createdAt: Date;
 }
 
-/** Bounded like every other collector's worst case; a person's legs are few. */
-const WALLET_EXPORT_LIMIT = 10_000;
-
 /**
  * The ORGS the subject OWNS (X-2). Membership in orgs owned by OTHERS is
  * carried by the orgMembership category; owning one is a different
@@ -2133,7 +2130,7 @@ export async function collectUserOrgMembership(database: DB, userId: string): Pr
  * A deleted drive's name reads as null rather than dropping the leg — money
  * movement outlives the container it moved into.
  */
-export async function collectUserWallet(database: DB, userId: string): Promise<UserWalletExport> {
+export async function collectUserWallet(database: DB, userId: string, options?: { fundingLegBatchSize?: number }): Promise<UserWalletExport> {
   const walletRows = await database
     .select({
       id: wallets.id,
@@ -2159,26 +2156,63 @@ export async function collectUserWallet(database: DB, userId: string): Promise<U
       isNull(wallets.parentWalletId),
     ));
 
-  const legRows = await database
-    .select({
-      id: walletFundingLegs.id,
-      walletId: walletFundingLegs.walletId,
-      walletOwnerType: wallets.ownerType,
-      walletSubjectType: wallets.subjectType,
-      walletSubjectDriveName: drives.name,
-      funderKind: walletFundingLegs.funderKind,
-      originalCents: walletFundingLegs.originalCents,
-      remainingCents: walletFundingLegs.remainingCents,
-      nonRefundable: walletFundingLegs.nonRefundable,
-      createdAt: walletFundingLegs.createdAt,
-    })
-    .from(walletFundingLegs)
-    .innerJoin(wallets, eq(walletFundingLegs.walletId, wallets.id))
-    // `wallets.subjectId` is a soft link with no FK; the name join is a
-    // convenience left join and a missing drive row reads as null.
-    .leftJoin(drives, eq(drives.id, wallets.subjectId))
-    .where(eq(walletFundingLegs.funderUserId, userId))
-    .limit(WALLET_EXPORT_LIMIT);
+  // HIST-02 (#2859): EVERY funding leg the subject funded is emitted, through bounded
+  // deterministic keyset batches. One capped query silently dropped legs past its limit —
+  // an incomplete export with no truncation signal — and without an ordering, which legs
+  // survived was not even deterministic. Batches walk (createdAt, id) in a stable order.
+  type FundingLegRow = {
+    id: string;
+    walletId: string;
+    walletOwnerType: 'user' | 'org';
+    walletSubjectType: string | null;
+    walletSubjectDriveName: string | null;
+    funderKind: 'owner' | 'donation';
+    originalCents: number;
+    remainingCents: number;
+    nonRefundable: boolean;
+    createdAt: Date;
+  };
+  const legRows: FundingLegRow[] = [];
+  let cursor: { createdAt: Date; id: string } | null = null;
+  const FUNDING_LEG_BATCH = options?.fundingLegBatchSize ?? 1_000;
+  for (;;) {
+    const batch: FundingLegRow[] = await database
+      .select({
+        id: walletFundingLegs.id,
+        walletId: walletFundingLegs.walletId,
+        walletOwnerType: wallets.ownerType,
+        walletSubjectType: wallets.subjectType,
+        walletSubjectDriveName: drives.name,
+        funderKind: walletFundingLegs.funderKind,
+        originalCents: walletFundingLegs.originalCents,
+        remainingCents: walletFundingLegs.remainingCents,
+        nonRefundable: walletFundingLegs.nonRefundable,
+        createdAt: walletFundingLegs.createdAt,
+      })
+      .from(walletFundingLegs)
+      .innerJoin(wallets, eq(walletFundingLegs.walletId, wallets.id))
+      // `wallets.subjectId` is a soft link with no FK; the name join is a
+      // convenience left join and a missing drive row reads as null.
+      .leftJoin(drives, eq(drives.id, wallets.subjectId))
+      .where(cursor
+        ? and(
+            eq(walletFundingLegs.funderUserId, userId),
+            or(
+              gt(walletFundingLegs.createdAt, cursor.createdAt),
+              and(
+                eq(walletFundingLegs.createdAt, cursor.createdAt),
+                gt(walletFundingLegs.id, cursor.id),
+              ),
+            ),
+          )
+        : eq(walletFundingLegs.funderUserId, userId))
+      .orderBy(asc(walletFundingLegs.createdAt), asc(walletFundingLegs.id))
+      .limit(FUNDING_LEG_BATCH);
+    legRows.push(...batch);
+    if (batch.length < FUNDING_LEG_BATCH) break;
+    const last = batch[batch.length - 1];
+    cursor = { createdAt: last.createdAt, id: last.id };
+  }
 
   const fundingLegs: UserFundingLegExport[] = legRows.map((row) => ({
     id: row.id,

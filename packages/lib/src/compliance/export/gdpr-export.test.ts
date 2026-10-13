@@ -161,6 +161,8 @@ vi.mock('drizzle-orm', () => ({
   and: (...conditions: unknown[]) => ({ _op: 'and', conditions }),
   ne: (col: unknown, val: unknown) => ({ _op: 'ne', col, val }),
   isNull: (col: unknown) => ({ _op: 'isNull', col }),
+  gt: (col: unknown, val: unknown) => ({ _op: 'gt', col, val }),
+  asc: (col: unknown) => ({ _op: 'asc', col }),
 }));
 
 import {
@@ -937,7 +939,11 @@ describe('collectAllUserData', () => {
     // Returns an empty array that also has a .limit() method so both
     // callers that chain .limit() (profile, personalization) and callers
     // that use the array directly (drives, messages, etc.) both work.
-    const emptyWithLimit = () => Object.assign([], { limit: vi.fn().mockReturnValue([]) });
+    // The funding-leg collector also chains .orderBy() before .limit() (HIST-02).
+    const emptyWithLimit = () => Object.assign([], {
+      orderBy: vi.fn().mockReturnThis(),
+      limit: vi.fn().mockReturnValue([]),
+    });
 
     let callCount = 0;
     const db = {

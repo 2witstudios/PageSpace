@@ -342,4 +342,55 @@ describe('X-2 GDPR export carries the subject\'s org membership, wallets and don
     expect(byId.get(orgDriveId)?.orgId).toBe(orgId);
     expect(byId.get(personalDriveId)?.orgId).toBeNull();
   });
+
+  it('HIST-02 emits EVERY leg the subject funded — keyset batches, deterministic order, no silent cap', async () => {
+    // A subject of their own, so the shared fixture's legs stay out of the count.
+    const histUser = await factories.createUser({ subscriptionTier: 'pro' });
+    const createdWalletIds: string[] = [];
+    let histDriveId = '';
+    try {
+      const [histDrive] = await db.insert(drives).values({
+        name: 'History Export Drive', slug: `hist-${createId()}`, ownerId: histUser.id, type: 'AI_CHAT',
+      }).returning({ id: drives.id });
+      histDriveId = histDrive.id;
+      // One transaction: the wallet-leg invariant trigger re-checks a touched
+      // non-root wallet at COMMIT, so a wallet and its legs land together.
+      const [rootWallet, childWallet] = await db.transaction(async (tx) => {
+        const [root] = await tx.insert(wallets).values({ userId: histUser.id, monthlyRemainingCents: 100 })
+          .returning({ id: wallets.id });
+        const [child] = await tx.insert(wallets).values({
+          userId: histUser.id, subjectType: 'drive', subjectId: histDrive.id,
+          parentWalletId: root.id, topupRemainingCents: 15,
+        }).returning({ id: wallets.id });
+        await tx.insert(walletFundingLegs).values([1, 2, 3, 4, 5].map((n) => ({
+          walletId: child.id,
+          funderKind: 'donation' as const,
+          funderUserId: histUser.id,
+          originalCents: n,
+          remainingCents: n,
+          nonRefundable: true,
+          sourceRef: `donation-${createId()}`,
+          createdAt: new Date(Date.UTC(2026, 0, n)),
+        })));
+        return [root, child];
+      });
+      createdWalletIds.push(rootWallet.id, childWallet.id);
+
+      // Five legs past a two-per-batch window: two full batches and a remainder.
+      const walletFile = await collectUserWallet(database, histUser.id, { fundingLegBatchSize: 2 });
+
+      // All five arrive — a capped single query would have dropped two without a signal.
+      expect(walletFile.fundingLegs.map((leg) => leg.originalCents)).toEqual([1, 2, 3, 4, 5]);
+      // Deterministic (createdAt, id) order, not whichever rows the engine returned.
+      const ordered = walletFile.fundingLegs.every((leg, i, all) =>
+        i === 0 || all[i - 1].createdAt.getTime() <= leg.createdAt.getTime());
+      expect(ordered).toBe(true);
+    } finally {
+      const { users } = await import('@pagespace/db/schema/auth');
+      await db.delete(walletFundingLegs).where(inArray(walletFundingLegs.funderUserId, [histUser.id]));
+      if (createdWalletIds.length) await db.delete(wallets).where(inArray(wallets.id, createdWalletIds));
+      if (histDriveId) await db.delete(drives).where(inArray(drives.id, [histDriveId]));
+      await db.delete(users).where(inArray(users.id, [histUser.id]));
+    }
+  });
 });
