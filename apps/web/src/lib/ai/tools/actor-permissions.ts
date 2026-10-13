@@ -22,7 +22,7 @@ import {
 } from '@pagespace/lib/permissions/app-permissions';
 import { checkDriveAccess } from '@pagespace/lib/services/drive-member-service';
 import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
-import { checkActorDriveAuthentication, checkActorResourceAuthentication } from '@pagespace/lib/permissions/actor-authentication';
+import { checkActorDriveAuthentication, checkActorResourceAuthentication, dropWithheldDerivedPages } from '@pagespace/lib/permissions/actor-authentication';
 import { PageType } from '@pagespace/lib/utils/enums';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
@@ -429,6 +429,19 @@ export async function canActorAdministerDrive(
   return driveGateWithAgentCheck(context, driveId, hasAgentDriveAdminRole);
 }
 
+/**
+ * D-OW-62: an agent's membership listing knows nothing of the credential driving it, so pages restating org-derived
+ * content (memory pages) that a contributing org's sign-in policy withholds from that credential are dropped here, as
+ * the user listing (getUserAccessiblePagesInDriveWithDetails) drops them.
+ */
+async function withoutWithheldDerivedPages(
+  context: ToolExecutionContext,
+  listed: PageWithPermissions[],
+): Promise<PageWithPermissions[]> {
+  const readable = new Set(await dropWithheldDerivedPages(toolActor(context), listed.map((page) => page.id)));
+  return listed.filter((page) => readable.has(page.id));
+}
+
 export async function getActorAccessiblePagesInDrive(
   context: ToolExecutionContext,
   driveId: string,
@@ -437,7 +450,7 @@ export async function getActorAccessiblePagesInDrive(
   if (!(await passesDriveSignInPolicy(context, driveId))) return [];
   const agentPageId = await resolveActingAgentId(context);
   const actorPages = agentPageId
-    ? await getAgentAccessiblePagesInDrive(agentPageId, driveId)
+    ? await withoutWithheldDerivedPages(context, await getAgentAccessiblePagesInDrive(agentPageId, driveId))
     : await getUserAccessiblePagesInDriveWithDetails(toolActor(context), driveId);
   if (!hasAppTokenCeiling(context)) return actorPages;
   // Inherit rows apply no ceiling — the key acts as its owner.
