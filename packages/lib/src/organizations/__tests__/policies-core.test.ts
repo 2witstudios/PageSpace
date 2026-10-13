@@ -269,3 +269,23 @@ describe('the Open drive default-role floor', () => {
     expect(openDefaultRoleMeetsFloor('edit', wide(true, true), { p1: wide(true, true) })).toBe(true);
   });
 });
+
+
+describe('suspension reconciliation boundaries', () => {
+  it('reconciles custom-domain and published-page policy restrictions and restorations independently', () => {
+    const restricted = { ...DEFAULT_ORG_POLICIES, customDomains: false, publishWeb: false };
+    expect(suspensionKindsChanged(DEFAULT_ORG_POLICIES, restricted)).toEqual(['publishedPages', 'customDomains']);
+    expect(suspensionKindsChanged(restricted, DEFAULT_ORG_POLICIES)).toEqual(['publishedPages', 'customDomains']);
+  });
+
+  it('reconciles a changed integration set even at the same size, including forbidding all and restoring unrestricted access', () => {
+    const original = { ...DEFAULT_ORG_POLICIES, integrationsAllowlist: ['calendar', 'mail'] };
+    const replacement = { ...original, integrationsAllowlist: ['calendar', 'chat'] };
+    const blocked = { ...original, integrationsAllowlist: [] };
+    expect(suspensionKindsChanged(original, replacement)).toEqual(['integrations']);
+    expect(suspensionKindsChanged(original, blocked)).toEqual(['integrations']);
+    expect(suspensionKindsChanged(blocked, original)).toEqual(['integrations']);
+    expect(suspensionKindsChanged(blocked, DEFAULT_ORG_POLICIES)).toEqual(['integrations']);
+    expect(suspensionKindsChanged(DEFAULT_ORG_POLICIES, original)).toEqual(['integrations']);
+  });
+});

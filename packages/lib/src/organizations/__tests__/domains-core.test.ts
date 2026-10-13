@@ -9,6 +9,7 @@ import {
   dnsRecordValue,
   emailDomain,
   isAdminMailboxAddress,
+  adminMailboxAddress,
   normalizeDomain,
   PUBLIC_EMAIL_DOMAINS,
   suppressionAddress,
@@ -198,5 +199,26 @@ describe('isAuditedRejoinSkip', () => {
 
   it.each(['domain_not_verified', 'email_not_verified', 'already_member', 'account_predates_verification', 'org_guest', 'invited'] as const)('AUD-1 (partial) an ordinary skip (%s) is not a re-join attempt and writes nothing', (reason) => {
     expect(isAuditedRejoinSkip(reason)).toBe(false);
+  });
+});
+
+
+describe('domain proof input boundaries', () => {
+  it('refuses a domain whose individual labels fit but whose total DNS name exceeds the limit', () => {
+    const input = `${'a'.repeat(63)}.${'b'.repeat(63)}.${'c'.repeat(63)}.${'d'.repeat(61)}.com`;
+    expect(normalizeDomain(input)).toEqual({ ok: false, reason: 'invalid_domain' });
+  });
+
+  it('keeps a public-provider email domain for address matching while refusing its organization claim', () => {
+    expect(emailDomain('Person@GMAIL.COM')).toBe('gmail.com');
+    expect(normalizeDomain('gmail.com')).toEqual({ ok: false, reason: 'public_email_domain' });
+  });
+
+  it('normalizes malformed suppression input without inventing a mailbox and refuses it as administrative proof', () => {
+    expect(suppressionAddress('  NO-MAILBOX  ')).toBe('no-mailbox');
+    expect(isAdminMailboxAddress('admin', 'northwind.com')).toBe(false);
+    expect(isAdminMailboxAddress('@northwind.com', 'northwind.com')).toBe(false);
+    expect(adminMailboxAddress('northwind.com', 'postmaster')).toBe('postmaster@northwind.com');
+    expect(isAdminMailboxAddress(adminMailboxAddress('northwind.com', 'postmaster'), 'northwind.com')).toBe(true);
   });
 });
