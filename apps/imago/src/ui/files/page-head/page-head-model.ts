@@ -21,3 +21,10 @@ export const crumbsOf = (
 /** Presence avatars appear only on pages people edit together (SPEC v3). */
 export const isCollaborative = (type: string): boolean =>
   ['DOCUMENT', 'SHEET', 'CODE', 'CANVAS', 'TASK_LIST', 'CHANNEL'].includes(type);
+
+/** The drive a page belongs to, from GET /api/pages/[pageId]; null until the page loads. */
+export const driveIdOf = (body: unknown): string | null => {
+  if (typeof body !== 'object' || body === null) return null;
+  const { driveId } = body as { readonly driveId?: unknown };
+  return typeof driveId === 'string' ? driveId : null;
+};

@@ -40,7 +40,7 @@ export function FilesPane({ driveId, selectedPageId, variant, title }: FilesPane
   const recents = useRecents(driveId, 3);
   const now = new Date();
   const canCreate = drives.find((drive) => drive.id === driveId)?.canCreatePages === true;
-  const actions = renderNewPageButton({ create: () => useUIStore.getState().openQuickCreate(null), disabled: !canCreate });
+  const actions = renderNewPageButton({ create: (anchor) => useUIStore.getState().openQuickCreate(null, anchor), disabled: !canCreate });
   return (
     <ListPane section="files" variant={variant} title={title} actions={actions}>
       <label className={filterClass}>

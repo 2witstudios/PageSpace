@@ -1,6 +1,6 @@
 import { describe, test } from 'vitest';
 import { assert } from 'riteway/vitest';
-import { crumbsOf, isCollaborative } from './page-head-model';
+import { crumbsOf, driveIdOf, isCollaborative } from './page-head-model';
 
 describe('crumbsOf() (IMC-1.9)', () => {
   test('the path from the breadcrumbs route', () => {
@@ -41,6 +41,17 @@ describe('isCollaborative()', () => {
       should: 'show presence on doc, sheet, code, canvas, task list and channel only',
       actual: ['DOCUMENT', 'SHEET', 'CODE', 'CANVAS', 'TASK_LIST', 'CHANNEL', 'FOLDER', 'FILE', 'AI_CHAT'].map(isCollaborative),
       expected: [true, true, true, true, true, true, false, false, false],
+    });
+  });
+});
+
+describe('driveIdOf() (IMC-9.3)', () => {
+  test('the drive a page belongs to, from the page route', () => {
+    assert({
+      given: 'a page body with its drive id',
+      should: 'return the drive id, or null without one',
+      actual: [driveIdOf({ driveId: 'd1' }), driveIdOf(undefined), driveIdOf({ title: 'x' })],
+      expected: ['d1', null, null],
     });
   });
 });

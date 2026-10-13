@@ -4,7 +4,9 @@ import { Icon } from '../../components/icon/icon';
 import type { FileNode } from '../file-model/file-node';
 import { fileIcon } from '../tree-view/tree-view';
 import {
+  treeCheckboxClass,
   treeCaretClass,
+  treeRowActionsClass,
   treeChildrenClass,
   treeCountClass,
   treeLinkClass,
@@ -13,6 +15,13 @@ import {
   treeSpacerClass,
   treeToggleClass,
 } from './tree-row-class';
+
+/** Multi-select on: every row carries a checkbox for its page. */
+export type TreeRowSelection = {
+  readonly selectedIds: ReadonlySet<string>;
+  /** Void action: selects or clears one row's page. */
+  readonly toggle: (node: FileNode) => void;
+};
 
 export type TreeRowsRenderProps = {
   readonly nodes: readonly FileNode[];
@@ -24,6 +33,10 @@ export type TreeRowsRenderProps = {
   readonly hrefFor: (pageId: string) => string;
   /** Void action: opens or closes a page in the tree. */
   readonly toggle: (pageId: string) => void;
+  /** Present while Select multiple is on. */
+  readonly selection?: TreeRowSelection;
+  /** A row's hover "…": the page actions menu's trigger, when the container supplies one. */
+  readonly renderRowActions?: (node: FileNode) => ReactNode;
 };
 
 /** A folder always discloses (even empty); another page only when it holds pages. */
@@ -60,7 +73,7 @@ const disclosure = (node: FileNode, expanded: boolean, toggle: (pageId: string) 
  * level, so the depth is in the markup and assistive technology follows it.
  */
 export function renderTreeRows(props: TreeRowsRenderProps): ReactNode {
-  const { nodes, selectedId, expandedIds, pendingIds, hrefFor, toggle } = props;
+  const { nodes, selectedId, expandedIds, pendingIds, hrefFor, toggle, selection, renderRowActions } = props;
   return nodes.map((node) => {
     const expanded = discloses(node) && expandedIds.includes(node.id);
     const selected = node.id === selectedId;
@@ -68,8 +81,17 @@ export function renderTreeRows(props: TreeRowsRenderProps): ReactNode {
     const children = node.children ?? [];
     return (
       <li key={node.id}>
-        <div className={treeRowClass({ selected, pending })} data-page-type={node.pageType}>
+        <div className={`${treeRowClass({ selected, pending })} group`} data-page-type={node.pageType}>
           {disclosure(node, expanded, toggle)}
+          {selection === undefined ? null : (
+            <input
+              type="checkbox"
+              className={treeCheckboxClass}
+              aria-label={`Select ${node.name}`}
+              checked={selection.selectedIds.has(node.id)}
+              onChange={() => selection.toggle(node)}
+            />
+          )}
           {pending ? (
             <span className={treeLinkClass} aria-busy="true" aria-current={selected ? 'page' : undefined}>
               {label(node)}
@@ -84,6 +106,7 @@ export function renderTreeRows(props: TreeRowsRenderProps): ReactNode {
               {label(node)}
             </Link>
           )}
+          {renderRowActions === undefined ? null : <span className={treeRowActionsClass}>{renderRowActions(node)}</span>}
         </div>
         {expanded && children.length > 0 ? (
           <ul className={treeChildrenClass} aria-label={node.name}>

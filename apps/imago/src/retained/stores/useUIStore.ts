@@ -18,12 +18,17 @@ export interface UIState {
    * rather than accidentally mapping a null "no page" to "drive root".
    */
   quickCreateParentOverride: string | null | undefined;
+  /**
+   * The control that opened the palette (the Files pane "+"). When set, the palette anchors
+   * under it as a popover; when null, it opens as the centred dialog. Not persisted.
+   */
+  quickCreateAnchor: HTMLElement | null;
 
   // Actions
   setTreeExpanded: (nodeId: string, expanded: boolean) => void;
   setTreeScrollPosition: (position: number) => void;
   /** @see quickCreateParentOverride for parentOverride semantics */
-  openQuickCreate: (parentOverride?: string | null) => void;
+  openQuickCreate: (parentOverride?: string | null, anchor?: HTMLElement | null) => void;
   closeQuickCreate: () => void;
 }
 
@@ -35,6 +40,7 @@ export const useUIStore = create<UIState>()(
       treeScrollPosition: 0,
       quickCreateOpen: false,
       quickCreateParentOverride: undefined,
+      quickCreateAnchor: null,
 
       // Actions
       setTreeExpanded: (nodeId: string, expanded: boolean) => {
@@ -51,12 +57,12 @@ export const useUIStore = create<UIState>()(
         set({ treeScrollPosition: position });
       },
 
-      openQuickCreate: (parentOverride?: string | null) => {
-        set({ quickCreateOpen: true, quickCreateParentOverride: parentOverride });
+      openQuickCreate: (parentOverride?: string | null, anchor?: HTMLElement | null) => {
+        set({ quickCreateOpen: true, quickCreateParentOverride: parentOverride, quickCreateAnchor: anchor ?? null });
       },
 
       closeQuickCreate: () => {
-        set({ quickCreateOpen: false, quickCreateParentOverride: undefined });
+        set({ quickCreateOpen: false, quickCreateParentOverride: undefined, quickCreateAnchor: null });
       },
     }),
     {

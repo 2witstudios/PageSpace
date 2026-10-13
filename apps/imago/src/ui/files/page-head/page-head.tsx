@@ -1,6 +1,6 @@
 'use client';
 
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { usePage } from '../page-object/page-object';
 import { usePageTrail } from '../../tasks/use-tasks/use-tasks';
 import { renderIcon } from '../../components/icon/icon.render';
@@ -17,7 +17,11 @@ import { PageSetupButton } from '@/retained/components/layout/middle-content/con
 import PublishControls from '@/retained/components/layout/middle-content/content-header/PublishControls';
 import { isPublishablePageType } from '@pagespace/lib/content/page-types.config';
 import { PageType, type PageTypeValue } from '@pagespace/lib/utils/enums';
-import { crumbsOf, isCollaborative } from './page-head-model';
+import { PageActionsMenu } from '../page-actions/page-actions';
+import { PAGE_ACTIONS_ABSORB_HEADER } from '../page-actions/page-actions-flag';
+import type { PageActionDialog } from '../page-actions/page-actions-model';
+import { PageHeadDialogs, openAddChild } from './page-head-dialogs';
+import { crumbsOf, driveIdOf, isCollaborative } from './page-head-model';
 import { crumbClass, crumbSeparatorClass, crumbsClass, pageActionsMenuClass, pageHeadClass } from './page-head-class';
 
 export type PageHeadProps = {
@@ -26,29 +30,32 @@ export type PageHeadProps = {
   readonly leading: ReactNode;
   /** The Ask pill (Imago collapsed) and Close page. */
   readonly trailing: ReactNode;
+  /** Void action: also told of the dialog a "…" item opens (the head opens it itself). */
+  readonly onDialog?: (dialog: PageActionDialog) => void;
 };
 
 /**
- * "…" Page actions: the page actions classic's header carried (Page setup, Export, Publish,
- * History), gathered here because v3 has no second header bar. Which of these the "…" menu
- * keeps is the open decision "Page … menu" (tk8o9kzohmat9ueheb5g9vss): this ships them as
- * they are, adds none, and is flagged rather than resolved.
+ * The page's header tools that the "…" menu may absorb (Page setup, Export, Publish, History).
+ * Export moves into the menu when PAGE_ACTIONS_ABSORB_HEADER is on; the others stay here until
+ * their panels can be reached from a menu item (the tracked "Page … menu" decision).
  */
-function PageActions({ pageId, type, title }: { readonly pageId: string; readonly type: PageTypeValue; readonly title: string }) {
+function PageTools({ pageId, type, title }: { readonly pageId: string; readonly type: PageTypeValue; readonly title: string }) {
   const { open, setOpen, ref } = useDisclosure();
   const pageType = PageType[type];
   return (
     <details ref={ref} className="relative" open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
-      <summary className={`${headControlClass} summary-plain`} aria-label="Page actions" title="Page actions">
+      <summary className={`${headControlClass} summary-plain`} aria-label="Page tools" title="Page tools">
         {renderIcon({ name: 'more', size: 15 })}
       </summary>
-      <div className={pageActionsMenuClass} role="group" aria-label="Page actions">
+      <div className={pageActionsMenuClass} role="group" aria-label="Page tools">
         <RetainedSurface fill={false}>
           <div className="flex flex-col items-stretch gap-1">
             {type === 'DOCUMENT' ? <PageSetupButton pageId={pageId} /> : null}
-            {type === 'DOCUMENT' || type === 'SHEET' ? <ExportDropdown pageId={pageId} pageTitle={title} pageType={pageType} /> : null}
+            {(type === 'DOCUMENT' || type === 'SHEET') && !PAGE_ACTIONS_ABSORB_HEADER ? (
+              <ExportDropdown pageId={pageId} pageTitle={title} pageType={pageType} />
+            ) : null}
             {isPublishablePageType(pageType) && type !== 'CANVAS' ? <PublishControls pageId={pageId} contentDirty={false} /> : null}
-            <PageHistory />
+            <PageHistory pageId={pageId} pageTitle={title} />
           </div>
         </RetainedSurface>
       </div>
@@ -61,9 +68,16 @@ function PageActions({ pageId, type, title }: { readonly pageId: string; readonl
  * Share · "…" · [Ask] · divider · Close page. It is the page's only header: the body keeps a
  * big title only where the board does (documents).
  */
-export function PageHead({ pageId, leading, trailing }: PageHeadProps) {
+export function PageHead({ pageId, leading, trailing, onDialog }: PageHeadProps) {
   const { data } = usePage(pageId);
+  const [dialog, setDialog] = useState<PageActionDialog | null>(null);
+  const openDialog = (next: PageActionDialog) => {
+    onDialog?.(next);
+    if (next === 'add-child') openAddChild(pageId);
+    else setDialog(next);
+  };
   const page = pageTabOf(data);
+  const driveId = driveIdOf(data);
   const { trail } = usePageTrail(pageId);
   // Joining the page's presence room was classic's header's job; the head keeps it.
   usePagePresence(pageId);
@@ -96,9 +110,24 @@ export function PageHead({ pageId, leading, trailing }: PageHeadProps) {
             <ShareDialog pageId={pageId} />
           </RetainedSurface>
         </span>
-        {page === null ? null : <PageActions pageId={pageId} type={page.type} title={page.title} />}
+        {page === null || driveId === null ? null : (
+          <PageActionsMenu
+            driveId={driveId}
+            pageId={pageId}
+            onDialog={openDialog}
+            trigger={
+              <button type="button" className={headControlClass} aria-label="Page actions" title="Page actions">
+                {renderIcon({ name: 'more', size: 15 })}
+              </button>
+            }
+          />
+        )}
+        {page === null ? null : <PageTools pageId={pageId} type={page.type} title={page.title} />}
         {trailing}
       </span>
+      {driveId === null ? null : (
+        <PageHeadDialogs pageId={pageId} driveId={driveId} dialog={dialog} onClose={() => setDialog(null)} />
+      )}
     </header>
   );
 }
