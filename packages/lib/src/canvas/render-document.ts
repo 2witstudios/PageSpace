@@ -364,11 +364,33 @@ function unwrapFullDocument(html: string): string {
 
   // No explicit <body> tag (malformed/partial document) — best-effort: strip
   // the doctype/html/head wrapper and keep whatever's left.
-  const stripped = html
-    .replace(/<!doctype[^>]*>/gi, '')
-    .replace(/<\/?html(?=[\s/>])[^>]*>/gi, '')
-    .replace(/<head(?=[\s/>])[^>]*>[\s\S]*?<\/head(?=[\s/>])[^>]*>/gi, '');
+  const stripped = removeHeadBlocks(
+    html.replace(/<!doctype[^>]*>/gi, '').replace(/<\/?html(?=[\s/>])[^>]*>/gi, ''),
+  );
   return headStyles + stripped;
+}
+
+/**
+ * Remove every `<head …>…</head …>` block, each to its NEAREST close tag (what a lazy regex would
+ * match), by scanning forward: a lazy `[\s\S]*?` retried from every `<head` is quadratic on a
+ * document full of unclosed heads.
+ */
+function removeHeadBlocks(html: string): string {
+  const open = /<head(?=[\s/>])[^>]*>/gi;
+  const close = /<\/head(?=[\s/>])[^>]*>/gi;
+  let out = '';
+  let from = 0;
+  for (;;) {
+    open.lastIndex = from;
+    const opened = open.exec(html);
+    if (!opened) break;
+    close.lastIndex = opened.index + opened[0].length;
+    const closed = close.exec(html);
+    if (!closed) break;
+    out += html.slice(from, opened.index);
+    from = closed.index + closed[0].length;
+  }
+  return out + html.slice(from);
 }
 
 /**
@@ -431,24 +453,33 @@ function extractAndSanitizeStyles(html: string, allowedHttpsHosts?: string[], no
   // `-`/`:` and could truncate an author script mid-block, corrupting it).
   const scriptOrStyle = /<script(?=[\s/>])[^>]*>[\s\S]*?<\/script(?=[\s/>])[^>]*>|<style(?=[\s/>])[^>]*>([\s\S]*?)<\/style(?=[\s/>])[^>]*>/gi;
   const cssParts: string[] = [];
-  const body = html.replace(scriptOrStyle, (match, styleContent: string | undefined) => {
-    // styleContent is the capture group; defined only when a real <style>
-    // element matched (not a <script> block).
-    if (styleContent !== undefined) {
-      cssParts.push(
-        sanitizeCSS(
-          styleContent,
-          allowAnyHttpsUrl
-            ? { allowAnyHttpsUrl: true }
-            : allowedHttpsHosts?.length
-              ? { allowedHttpsHosts }
-              : undefined,
-        ),
-      );
-      return '';
-    }
-    return nonce ? stampScriptNonce(match, nonce) : match; // <script> block — leave verbatim (unless nonce is stamped)
-  });
+  // Removing a style block can splice its neighbours into a NEW one (`<sty<style></style>le>`), so
+  // passes repeat until one removes nothing: no unsanitized <style> survives. Script blocks are
+  // consumed whole on every pass (a `<style>` inside one is script text) and stamped only once.
+  let body = html;
+  for (let pass = 0, removed = true; removed; pass += 1) {
+    removed = false;
+    body = body.replace(scriptOrStyle, (match, styleContent: string | undefined) => {
+      // styleContent is the capture group; defined only when a real <style>
+      // element matched (not a <script> block).
+      if (styleContent !== undefined) {
+        removed = true;
+        cssParts.push(
+          sanitizeCSS(
+            styleContent,
+            allowAnyHttpsUrl
+              ? { allowAnyHttpsUrl: true }
+              : allowedHttpsHosts?.length
+                ? { allowedHttpsHosts }
+                : undefined,
+          ),
+        );
+        return '';
+      }
+      // <script> block — leave verbatim (unless nonce is stamped, on the first pass only)
+      return nonce && pass === 0 ? stampScriptNonce(match, nonce) : match;
+    });
+  }
   return { css: cssParts.join('\n'), body };
 }
 

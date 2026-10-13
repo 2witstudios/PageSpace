@@ -92,6 +92,7 @@ const hasDangerousScheme = (rawValue: string): boolean => {
     .toLowerCase();
   return (
     normalized.startsWith('javascript:') ||
+    normalized.startsWith('vbscript:') ||
     normalized.startsWith('data:text/html') ||
     normalized.startsWith('data:image/svg+xml')
   );

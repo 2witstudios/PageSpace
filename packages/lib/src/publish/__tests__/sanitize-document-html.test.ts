@@ -206,6 +206,15 @@ describe('sanitizeDocumentHtml', () => {
       });
     });
 
+    it('removes vbscript: hrefs', () => {
+      assert({
+        given: 'an anchor with a vbscript: href',
+        should: 'remove the href attribute, keep the anchor',
+        actual: sanitizeDocumentHtml('<a href="VBScript:msgbox(1)">x</a>'),
+        expected: '<a>x</a>',
+      });
+    });
+
     it('removes unquoted javascript: hrefs', () => {
       assert({
         given: 'an unquoted javascript: href value',

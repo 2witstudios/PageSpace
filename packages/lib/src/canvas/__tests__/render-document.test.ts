@@ -29,6 +29,25 @@ describe('renderCanvasDocument', () => {
     expect(out).toContain('</head><body><p>x</p></body>');
   });
 
+  it('given a <style> spliced together by removing an inner one, should sanitize it too, never leave it raw in the body', () => {
+    const out = renderCanvasDocument({
+      html: '<sty<style></style>le>body { background: url("https://evil.com/pixel.png"); }</style><p>x</p>',
+    });
+    expect(out).not.toContain('https://evil.com');
+  });
+
+  it('given a <style> written as text inside an author <script>, should leave the script intact', () => {
+    const script = '<script>const css = "<style>p{}</style>";</script>';
+    expect(renderCanvasDocument({ html: `<style>p{}</style>${script}` })).toContain(script);
+  });
+
+  it('given a document with no <body> and many unclosed <head> tags, should unwrap it promptly', () => {
+    const started = Date.now();
+    const out = renderCanvasDocument({ html: `<html>${'<head>'.repeat(20_000)}<p>x</p></html>` });
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(out).toContain('<p>x</p>');
+  });
+
   it('given a data:image url() inside an author <style>, should preserve it', () => {
     const out = renderCanvasDocument({
       html: '<style>.x { background: url("data:image/png;base64,iVBORw0KGgo="); }</style>',
