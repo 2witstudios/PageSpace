@@ -75,7 +75,7 @@ function DriveMenu({ drive, isFavorite, open, onToggle, onAction }: {
         <Icon name="more" />
       </button>
       {open ? (
-        <div role="menu" aria-label="Drive actions" className="absolute right-0 top-8 z-10 flex flex-col whitespace-nowrap rounded-xl border border-hairline bg-fill p-1 shadow-1">
+        <div role="menu" aria-label={`${drive.name} actions`} className="absolute right-0 top-8 z-10 flex flex-col whitespace-nowrap rounded-xl border border-hairline bg-fill p-1 shadow-1">
           {driveActionsOf(drive, isFavorite).map((item) => (
             <button
               key={item.action}
