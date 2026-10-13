@@ -4,7 +4,7 @@ import { useEffect, Suspense } from 'react';
 import { useParams } from '@/retained-adapters/navigation';
 import { Skeleton } from '@/retained/components/ui/skeleton';
 import { useDriveStore } from '@/retained/hooks/useDrive';
-import { WorkflowsDashboard } from '@/retained/components/workflows/WorkflowsDashboard';
+import { WorkflowDetail } from '@/retained/components/workflows/WorkflowDetail';
 
 function WorkflowsContent() {
   const params = useParams();
@@ -22,12 +22,10 @@ function WorkflowsContent() {
   if (isLoading) {
     return (
       <div className="h-full overflow-y-auto">
-        <div className="container mx-auto px-4 py-10 sm:px-6 lg:px-10 max-w-5xl">
-          <div className="space-y-6">
-            <Skeleton className="h-8 w-48" />
-            <Skeleton className="h-10 w-full" />
-            <Skeleton className="h-96" />
-          </div>
+        <div className="mx-auto max-w-3xl space-y-6 p-6">
+          <Skeleton className="h-8 w-48" />
+          <Skeleton className="h-10 w-full" />
+          <Skeleton className="h-96" />
         </div>
       </div>
     );
@@ -41,7 +39,7 @@ function WorkflowsContent() {
     );
   }
 
-  return <WorkflowsDashboard driveId={driveId} driveName={drive.name} />;
+  return <WorkflowDetail driveId={driveId} />;
 }
 
 export default function WorkflowsPage() {
@@ -49,12 +47,10 @@ export default function WorkflowsPage() {
     <Suspense
       fallback={
         <div className="h-full overflow-y-auto">
-          <div className="container mx-auto px-4 py-10 sm:px-6 lg:px-10 max-w-5xl">
-            <div className="space-y-6">
-              <Skeleton className="h-8 w-48" />
-              <Skeleton className="h-10 w-full" />
-              <Skeleton className="h-96" />
-            </div>
+          <div className="mx-auto max-w-3xl space-y-6 p-6">
+            <Skeleton className="h-8 w-48" />
+            <Skeleton className="h-10 w-full" />
+            <Skeleton className="h-96" />
           </div>
         </div>
       }
