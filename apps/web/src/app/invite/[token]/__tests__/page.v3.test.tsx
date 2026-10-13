@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 
 vi.mock('next/link', () => ({
@@ -11,8 +11,16 @@ vi.mock('@/lib/auth/invite-resolver', () => ({
   resolveInviteContext: vi.fn(),
 }));
 
+vi.mock('next/headers', () => ({
+  cookies: vi.fn(async () => ({ toString: () => 'session=test-session' })),
+}));
+vi.mock('@/lib/orgs/org-invite-page', () => ({ loadOrgInvitePage: vi.fn() }));
+vi.mock('next/navigation', () => ({ useRouter: () => ({ push: vi.fn() }) }));
+vi.mock('@/hooks/useAuth', () => ({ useAuth: () => ({ actions: { logout: vi.fn() } }) }));
+
 import InvitePage from '../page';
 import { resolveInviteContext } from '@/lib/auth/invite-resolver';
+import { loadOrgInvitePage } from '@/lib/orgs/org-invite-page';
 
 const renderPage = async () => {
   const element = await InvitePage({ params: Promise.resolve({ token: 'tok' }) });
@@ -20,6 +28,10 @@ const renderPage = async () => {
 };
 
 describe('InvitePage v3 branch', () => {
+  beforeEach(() => {
+    vi.mocked(loadOrgInvitePage).mockResolvedValue(null);
+  });
+
   afterEach(() => {
     vi.unstubAllEnvs();
     vi.clearAllMocks();
@@ -60,5 +72,22 @@ describe('InvitePage v3 branch', () => {
 
     expect(screen.queryByTestId('auth-frame-spine')).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Create account & join' })).toBeInTheDocument();
+  });
+
+  it.each(['true', undefined])('Given an org invitation and Imago enabled=%s, should render its org card before the generic invalid card', async (enabled) => {
+    vi.stubEnv('NEXT_PUBLIC_IMAGO_ENABLED', enabled);
+    vi.mocked(resolveInviteContext).mockResolvedValue({ ok: false, error: 'NOT_FOUND' });
+    vi.mocked(loadOrgInvitePage).mockResolvedValue({
+      view: 'sign_in', orgName: 'Northwind Labs', inviterName: 'Jono', role: 'MEMBER', invitedEmail: 'a@b.c',
+    });
+
+    await renderPage();
+
+    expect(loadOrgInvitePage).toHaveBeenCalledWith({ token: 'tok', cookieHeader: 'session=test-session', now: expect.any(Date) });
+    expect(screen.getByTestId('org-invite-sign_in')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1, name: 'Join Northwind Labs' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Sign in to join' })).toHaveAttribute('href', '/auth/signin?invite=tok');
+    expect(screen.queryByRole('heading', { name: 'This invite is no longer valid' })).not.toBeInTheDocument();
+    expect(Boolean(screen.queryByTestId('auth-frame-spine'))).toBe(enabled === 'true');
   });
 });
