@@ -94,6 +94,9 @@ export async function POST(request: Request, context: Context) {
     // the admission's own transaction (held with an emailed invitation until it is sent), so it exists exactly when
     // the guest was admitted: never for a refused or re-queued request, never lost after a committed one.
     const decided = await claimGuestApprovalDecision({ orgId, holdId, decision: parsed.data.decision, actorId: gate.userId });
+    if (!decided.ok && (decided.reason === 'insufficient_role' || decided.reason === 'not_member')) {
+      return NextResponse.json({ error: decided.reason === 'not_member' ? 'Request not found' : 'An organization Owner or Admin is required', code: decided.reason }, { status: decided.status });
+    }
     if (!decided.ok && decided.reason === 'org_lapsed') return orgLapsedResponse(decided.message);
     if (!decided.ok) return NextResponse.json({ error: 'Request not found', code: 'not_found' }, { status: 404 });
     if (parsed.data.decision === 'decline') return NextResponse.json({ decided: 'declined' });

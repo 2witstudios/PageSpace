@@ -39,7 +39,7 @@ vi.mock('@/lib/page-invites/share-invite-handlers', () => ({ sendPendingPageInvi
 
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { findMembershipRole } from '@pagespace/lib/organizations/repository';
-import { claimGuestApprovalDecision, claimPendingGuestApproval, listPendingGuestApprovalViews, markApprovedInvitation, requestGuestApproval } from '@pagespace/lib/permissions/guest-holds';
+import { claimGuestApprovalDecision, claimPendingGuestApproval, guestDecisionAuditEvent, listPendingGuestApprovalViews, markApprovedInvitation, requestGuestApproval } from '@pagespace/lib/permissions/guest-holds';
 import { createPermissionNotification } from '@pagespace/lib/notifications/notifications';
 import { broadcastPageEvent } from '@/lib/websocket';
 import { completeApprovedLinkAdmission } from '@pagespace/lib/permissions/share-link-service';
@@ -86,6 +86,22 @@ beforeEach(() => {
 });
 
 describe('the approval queue routes', () => {
+  it.each([
+    { reason: 'insufficient_role' as const, status: 403 as const },
+    { reason: 'not_member' as const, status: 404 as const },
+  ])('a current-authority $reason refusal is typed and never carries out an approval', async refusal => {
+    as('ADMIN');
+    vi.mocked(claimGuestApprovalDecision).mockResolvedValue({ ok: false, ...refusal });
+    const response = await decide({ decision: 'approve' });
+    expect(response.status).toBe(refusal.status);
+    expect(await response.json()).toMatchObject({ code: refusal.reason });
+    expect(handleUserIdPath).not.toHaveBeenCalled();
+    expect(handleEmailPath).not.toHaveBeenCalled();
+    expect(completeApprovedLinkAdmission).not.toHaveBeenCalled();
+    expect(completeApprovedPageGrant).not.toHaveBeenCalled();
+    expect(guestDecisionAuditEvent).not.toHaveBeenCalled();
+  });
+
   it('POL-2 (partial) X-6 (partial) only Owner and Admins list or decide; a plain member is refused and a non-member sees no org; the queue is never touched', async () => {
     as('MEMBER');
     expect((await get()).status).toBe(403);

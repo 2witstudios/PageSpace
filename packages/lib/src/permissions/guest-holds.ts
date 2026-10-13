@@ -18,9 +18,10 @@ import { mcpTokens, users } from '@pagespace/db/schema/auth';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { decryptField } from '../encryption/field-crypto';
 import { driveMembers, driveRoles, mcpTokenDrives, pagePermissions } from '@pagespace/db/schema/members';
-import { orgMembers } from '@pagespace/db/schema/organizations';
+import { orgMembers, organizations } from '@pagespace/db/schema/organizations';
 import { getOrgPolicies } from '../organizations/policy-reader';
 import { publishOrgAuditEvents, stageOrgAuditEvent, transactionWithOrgAudit, type OrgAuditEvent, type StagedOrgAuditEvent } from '../audit/org-audit';
+import { decideOrgRole, type OrgAuthorization } from '../organizations/authorize-core';
 import { isOrgActive } from '../organizations/status';
 import { ORG_LAPSED_CODE, ORG_LAPSED_MESSAGE } from '../organizations/status-core';
 import {
@@ -643,6 +644,7 @@ export type GuestApprovalDecisionClaim =
    */
   | { ok: true; claim: ClaimedGuestApproval }
   | { ok: false; reason: 'not_found' }
+  | Extract<OrgAuthorization, { ok: false }>
   | { ok: false; reason: typeof ORG_LAPSED_CODE; message: string };
 
 /**
@@ -655,6 +657,13 @@ export async function claimGuestApprovalDecision(input: { orgId: string; holdId:
   let declined = null as StagedOrgAuditEvent | null;
   const decided = await db.transaction(async (tx): Promise<GuestApprovalDecisionClaim> => {
     declined = null;
+    // The committed claim is the decision: guard current authority before taking
+    // it off the queue. Org-before-member matches removals and profile writes.
+    await tx.select({ id: organizations.id }).from(organizations).where(eq(organizations.id, input.orgId)).for('share');
+    const [member] = await tx.select({ role: orgMembers.role }).from(orgMembers)
+      .where(and(eq(orgMembers.orgId, input.orgId), eq(orgMembers.userId, input.actorId))).for('share');
+    const authority = decideOrgRole({ membershipRole: member?.role ?? null, minRole: 'ADMIN' });
+    if (!authority.ok) return authority;
     if (input.decision === 'approve' && !(await isOrgActive(input.orgId, { executor: tx }))) {
       return { ok: false, reason: ORG_LAPSED_CODE, message: ORG_LAPSED_MESSAGE };
     }
