@@ -103,6 +103,11 @@ import { TaskAgentTriggersDialog } from './TaskAgentTriggersDialog';
 import { TaskListWorkflowsDialog } from './TaskListWorkflowsDialog';
 import { SubTaskProgress } from './SubTaskProgress';
 import {
+  formatTaskProgress,
+  summarizeTaskProgress,
+  type TaskProgressSummary,
+} from './task-progress-summary';
+import {
   TaskItem,
   TaskListData,
   TaskLocation,
@@ -119,8 +124,46 @@ import {
 } from '@/retained/lib/tasks/task-cache-core';
 import { useTaskWriteMachinery, useTaskWriter } from '@/retained/lib/tasks/task-write-machinery';
 
+/**
+ * What a page type's own strip may drive. Passed to `renderTools` so the v3 strip can
+ * reuse classic's filter, view mode and status settings without copying their logic.
+ */
+export interface TaskListToolsControls {
+  readonly viewMode: 'table' | 'kanban' | 'editor';
+  readonly onViewModeChange: (mode: 'table' | 'kanban' | 'editor') => void;
+  readonly filter: TaskListPageFilter;
+  readonly onFilterChange: (next: TaskListPageFilter) => void;
+  readonly canEdit: boolean;
+  /** Classic's status settings dialog trigger, present only for editors. */
+  readonly statusSettings: React.ReactNode;
+  /** Focuses the table's new-task input, as the wide toolbar's New Task did. */
+  readonly onNewTask: () => void;
+}
+
 interface TaskListViewProps {
   page: TreePage;
+  /** When given, the page type supplies the list controls and the wide toolbar is replaced by the progress line. */
+  readonly renderTools?: (controls: TaskListToolsControls) => React.ReactNode;
+}
+
+/** The progress line under the header: a bar and "<done> of <total> …" (the board's summary). */
+function TaskProgressLine({ summary }: { readonly summary: TaskProgressSummary }) {
+  const ratio = summary.total === 0 ? 0 : summary.done / summary.total;
+  return (
+    <div className="flex items-center gap-2.5 px-4 py-2 border-b text-xs text-muted-foreground">
+      <div
+        role="progressbar"
+        aria-label={`${summary.done} of ${summary.total} tasks done`}
+        aria-valuemin={0}
+        aria-valuemax={summary.total}
+        aria-valuenow={summary.done}
+        className="relative h-1.5 w-36 overflow-hidden rounded-full bg-muted"
+      >
+        <div className="h-full bg-emerald-600" style={{ width: `${ratio * 100}%` }} />
+      </div>
+      <span>{formatTaskProgress(summary)}</span>
+    </div>
+  );
 }
 
 const fetcher = async (url: string) => {
@@ -389,7 +432,7 @@ function SortableTaskRow({
   );
 }
 
-function TaskListView({ page }: TaskListViewProps) {
+function TaskListView({ page, renderTools }: TaskListViewProps) {
   const router = useRouter();
   const { user } = useAuth();
   const { permissions } = usePermissions(page.id);
@@ -720,6 +763,11 @@ function TaskListView({ page }: TaskListViewProps) {
   }, [filter, debouncedSearch, viewMode, setSize]);
 
   // Filter tasks
+  const progress = useMemo(
+    () => summarizeTaskProgress(data?.tasks ?? [], statusConfigs, new Date()),
+    [data?.tasks, statusConfigs],
+  );
+
   const filteredTasks = useMemo(() => data?.tasks.filter(task => {
     // Status filter - use group-based completion detection
     const isDone = isCompletedStatus(task.status, statusConfigs);
@@ -1173,9 +1221,32 @@ function TaskListView({ page }: TaskListViewProps) {
     );
   }
 
+  const toolsControls: TaskListToolsControls = {
+    viewMode,
+    onViewModeChange: setViewMode,
+    filter,
+    onFilterChange: setFilter,
+    canEdit,
+    statusSettings: canEdit ? (
+      <StatusConfigManager
+        pageId={page.id}
+        statusConfigs={statusConfigs}
+        onConfigsChanged={() => mutateTasks()}
+      />
+    ) : null,
+    // The strip's button serves both layouts: the table's field, or the compact list's when the
+    // pane is too narrow for the table. Only the one on screen has an offsetParent to focus.
+    onNewTask: () => {
+      const input = [wideNewTaskInputRef.current, newTaskInputRef.current].find((el) => el?.offsetParent);
+      input?.scrollIntoView({ block: 'nearest' });
+      input?.focus();
+    },
+  };
+
   return (
     <TaskTreeProvider value={treeValue}>
     <div className="flex flex-col h-full min-w-0 @container">
+      {renderTools?.(toolsControls)}
       <TaskListHeader
         pageId={page.id}
         viewMode={viewMode}
@@ -1271,7 +1342,8 @@ function TaskListView({ page }: TaskListViewProps) {
         </SheetContent>
       </Sheet>
 
-      {/* Wide Toolbar */}
+      {/* With renderTools the page type owns the list controls, so the wide toolbar is replaced by the progress line. */}
+      {renderTools ? <TaskProgressLine summary={progress} /> : (
       <div className="hidden @[700px]:flex flex-wrap items-center justify-between gap-3 px-4 py-3 border-b bg-background">
         <div className="flex items-center gap-2">
           <TaskFilterTabs filter={filter} onSelect={setFilter} />
@@ -1319,6 +1391,7 @@ function TaskListView({ page }: TaskListViewProps) {
           )}
         </div>
       </div>
+      )}
 
       {/* Narrow Compact List — table/list switch only; Kanban has its own always-visible view below.
           Rows are title + one metadata line; every field edit happens in the detail sheet. */}
@@ -1606,5 +1679,6 @@ export default memo(
   TaskListView,
   (prevProps, nextProps) =>
     prevProps.page.id === nextProps.page.id &&
-    prevProps.page.driveId === nextProps.page.driveId
+    prevProps.page.driveId === nextProps.page.driveId &&
+    prevProps.renderTools === nextProps.renderTools
 );

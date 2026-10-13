@@ -75,6 +75,11 @@
 }
 
 /* The stage sheet's lift off the spine. */
+/* Body column caps (C-Files-Folder): the folder table centres at 860px. */
+@theme {
+  --container-folder: 860px;
+}
+
 @theme {
   --shadow-sheet: -8px 0 32px rgb(0 0 0 / 0.18);
 }
