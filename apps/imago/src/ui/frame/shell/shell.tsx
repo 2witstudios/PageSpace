@@ -19,6 +19,7 @@ import { renderPaneHeader } from '../pane/pane-header';
 import { ListPane } from '../list-pane/list-pane';
 import { AskPill, ClosePage, CloseImago, CollapseImago, ShowSidebar } from '../controls/controls';
 import { EmptyMiddle } from '../empty-middle/empty-middle';
+import { PageHead } from '../../files/page-head/page-head';
 import { TabBar } from '../tabs/tab-bar';
 import { sectionPath } from '../tabs/tabs-model';
 import { columnsFor, type Columns } from '../stage/columns';
@@ -160,6 +161,12 @@ export function Shell({ children, homeDriveId, initialDrives }: ShellProps) {
   const drive = drives?.find((entry) => entry.id === stage.driveId);
   const title = missing ? 'Not found' : stage.object?.kind === 'settings' && stage.object.title ? stage.object.title : titles[stage.section];
   const hydrated = useHydrated();
+  const pageTrailing = (
+    <span className="flex flex-none items-center gap-1">
+      {columns.askPill ? <AskPill /> : null}
+      <ClosePage href={sectionPath(stage)} />
+    </span>
+  );
   return renderShell({
     stage,
     layout,
@@ -185,16 +192,11 @@ export function Shell({ children, homeDriveId, initialDrives }: ShellProps) {
     list: missing ? null : listFor(stage, layout),
     object: (
       <section className={columnClass} aria-label={title}>
-        {renderPaneHeader({
-          title,
-          leading: opener(stage, columns, 'page'),
-          actions: missing ? null : (
-            <span className="flex flex-none items-center gap-1">
-              {columns.askPill ? <AskPill /> : null}
-              <ClosePage href={sectionPath(stage)} />
-            </span>
-          ),
-        })}
+        {!missing && stage.object?.kind === 'page' ? (
+          <PageHead pageId={stage.object.pageId} leading={opener(stage, columns, 'page')} trailing={pageTrailing} />
+        ) : (
+          renderPaneHeader({ title, leading: opener(stage, columns, 'page'), actions: missing ? null : pageTrailing })
+        )}
         <div className="min-h-0 flex-1 overflow-y-auto">
           {missing ? renderNotFound({ ...DRIVE_NOT_FOUND, homeHref: homeHref(homeDriveId) }) : children}
         </div>

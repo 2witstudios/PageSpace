@@ -15,6 +15,7 @@ import {
   FileImage,
   FileSpreadsheet,
   FileText,
+  ListFilter,
   Files,
   Flag,
   Folder,
@@ -101,6 +102,8 @@ export const icons = {
   sheet: FileSpreadsheet,
   code: FileCode,
   file: File,
+  // The Files pane's filter field (IMC-1.8).
+  filter: ListFilter,
   // The v3.2 column controls (IMC-1.6): Close/Show sidebar, Collapse Imago.
   panelLeftClose: PanelLeftClose,
   panelLeftOpen: PanelLeftOpen,

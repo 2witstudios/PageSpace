@@ -369,10 +369,11 @@ jobs:
   # SCOPE: specs 15-19 only, not the whole e2e suite. These are the live-delivery gate; the
   # metering and storage specs (09-14, 08) need Stripe and real S3 credentials and cost far
   # more runner time than their regression risk here justifies. Widening the list means
-  # widening `E2E_SPECS` below AND the citations in the evidence manifest. Imago's per-screen
-  # and visual-baseline specs were removed during the C v3 redesign (owner decision, plan
-  # Revision 3): imago is proven by unit tests until the UI settles, and e2e returns as user
-  # stories (PageSpace "E2E backlog — Imago C v3").
+  # widening `E2E_SPECS` below AND the citations in the evidence manifest. During the Imago C v3
+  # redesign (owner decision, plan Revision 3) only imago's behaviour stories run here (27 shell
+  # never remounts, 29 live messaging, 31 chat streaming, 33 task persistence, 36 retained-UI
+  # behaviour); per-screen and visual-baseline specs were removed, and new e2e is added per user
+  # story from PageSpace "E2E backlog — Imago C v3".
   #
   # 11 (task tree) is outside for the storage reason, not a coverage judgement: every spec
   # in it creates pages, and page creation writes a first version to object storage
@@ -444,7 +445,7 @@ jobs:
       AWS_ACCESS_KEY_ID: e2e
       AWS_SECRET_ACCESS_KEY: e2e-not-a-real-secret
       BUCKET_NAME: pagespace-e2e
-      E2E_SPECS: tests/15-chat-fixture-smoke.spec.ts tests/16-dispatch-multiplayer.spec.ts tests/17-agent-workspace-grid.spec.ts tests/18-sidebar-directory-live.spec.ts tests/19-channels-badge-live.spec.ts tests/20-pane-lifecycle.spec.ts tests/26-imago-api-proxy.spec.ts
+      E2E_SPECS: tests/15-chat-fixture-smoke.spec.ts tests/16-dispatch-multiplayer.spec.ts tests/17-agent-workspace-grid.spec.ts tests/18-sidebar-directory-live.spec.ts tests/19-channels-badge-live.spec.ts tests/20-pane-lifecycle.spec.ts tests/26-imago-api-proxy.spec.ts tests/27-imago-shell.spec.ts tests/29-imago-messages.spec.ts tests/31-imago-chat.spec.ts tests/33-imago-tasks.spec.ts tests/36-imago-reuse.spec.ts
 
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0

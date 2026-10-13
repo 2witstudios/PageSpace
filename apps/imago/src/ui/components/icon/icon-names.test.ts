@@ -50,6 +50,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   PanelRightClose,
+  ListFilter,
 } from 'lucide-react';
 import { iconNames, icons } from './icon-names';
 
@@ -96,6 +97,7 @@ describe('icon names', () => {
         workflows: Workflow,
         members: Users,
         bell: Bell,
+        filter: ListFilter,
         panelLeftClose: PanelLeftClose,
         panelLeftOpen: PanelLeftOpen,
         panelRightClose: PanelRightClose,

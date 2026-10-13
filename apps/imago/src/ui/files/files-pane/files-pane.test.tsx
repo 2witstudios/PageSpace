@@ -27,3 +27,35 @@ it('typing filters the retained tree', () => {
 it('Close sidebar collapses the files section through the per-section shell state', () => {
   const container = show(); click(container.querySelector('[aria-label="Close sidebar"]')!); expect(getUiState().resources.collapsedSections).toContain('files');
 });
+
+it('lists this drive’s favorites and recents above the pages (IMC-1.8)', async () => {
+  const { createApiClient } = await import('@/api/client');
+  const { ImagoSWRProvider } = await import('@/api/swr-provider');
+  const { act } = await import('react');
+  // A fixed midday clock: "2 hours ago" must land on the same calendar day whenever CI runs.
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(new Date('2026-10-12T12:00:00'));
+  const now = Date.now();
+  const bodies: Record<string, unknown> = {
+    '/api/user/favorites': { favorites: [
+      { id: 'f1', itemType: 'page', page: { id: 'plan', title: 'Q4 Launch Plan', type: 'DOCUMENT', driveId: 'd1' } },
+      { id: 'f2', itemType: 'page', page: { id: 'other', title: 'Elsewhere', type: 'DOCUMENT', driveId: 'd2' } },
+    ] },
+    '/api/user/recents': { recents: [
+      { id: 'ops', title: 'launch-ops', type: 'CHANNEL', driveId: 'd1', viewedAt: new Date(now - 2 * 3600_000).toISOString() },
+    ] },
+  };
+  const client = createApiClient({
+    fetch: async (input) => Response.json(bodies[new URL(input, 'http://x').pathname] ?? {}),
+    navigate: () => {},
+    location: () => ({ origin: 'http://localhost:3006', pathname: '/imago/d1/files' }),
+  });
+  const container = mount(<ImagoSWRProvider client={client}><FilesPane driveId="d1" selectedPageId="plan" variant="tree" title="Files" /></ImagoSWRProvider>);
+  await act(() => vi.waitFor(() => { if (!container.textContent?.includes('#launch-ops')) throw new Error('not loaded'); }, { timeout: 1000 }));
+  const groups = [...container.querySelectorAll('button[aria-expanded]')].map((button) => button.textContent);
+  const rows = [...container.querySelectorAll('a')].map((link) => [link.textContent, link.getAttribute('aria-current')]);
+  expect(groups).toEqual(['Favorites', 'Recents', 'Pages']);
+  expect(rows).toEqual([['Q4 Launch Plan', 'page'], ['#launch-ops2h', null]]);
+  expect(container.querySelector('input')?.getAttribute('placeholder')).toBe('Filter pages');
+  vi.useRealTimers();
+});

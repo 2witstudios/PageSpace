@@ -20,7 +20,6 @@ roots = [
     'components/layout/middle-content/page-views/file/FileViewer.tsx',
     'components/layout/middle-content/page-views/channel/ChannelView.tsx',
     'components/layout/middle-content/page-views/task-list/TaskListView.tsx',
-    'components/layout/middle-content/content-header/index.tsx',
     'components/layout/left-sidebar/page-tree/PageTree.tsx',
     'components/create/QuickCreatePalette.tsx',
     'components/ai/page-agents/PageAgentSettingsTab.tsx',

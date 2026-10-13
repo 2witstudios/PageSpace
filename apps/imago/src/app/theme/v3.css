@@ -113,6 +113,8 @@
   --spacing-empty-row: 36px;
   --spacing-ask-imago: 34px;
   --spacing-ask-pill: 30px;
+  --spacing-pane-row: 30px;
+  --spacing-filter: 32px;
 }
 
 /* Share in the page head (SPEC v3: outlined, 30px, radius 8, identical everywhere). The trigger
