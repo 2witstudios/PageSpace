@@ -75,6 +75,8 @@ vi.mock('@/lib/ai/core/provider-factory', async (importOriginal) => {
 
 import { db } from '@pagespace/db/db';
 import { eq, inArray } from '@pagespace/db/operators';
+import { wallets } from '@pagespace/db/schema/wallets';
+import { creditHolds, creditLedger } from '@pagespace/db/schema/credits';
 import { users } from '@pagespace/db/schema/auth';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { globalAssistantConfig, integrationConnections, integrationProviders } from '@pagespace/db/schema/integrations';
@@ -152,6 +154,8 @@ async function seedWorld(): Promise<World> {
   // A paid plan: the global surface admits the chosen model only on one.
   const user = await factories.createUser({ subscriptionTier: 'pro' });
   seededUserIds.push(user.id);
+  // A paid subscription permits the model; a funded root pays for actual turns.
+  await db.insert(wallets).values({ userId: user.id, monthlyRemainingCents: 100000 });
   await factories.createDrive(user.id, { kind: 'HOME', name: 'Home', slug: 'home' });
   const acme = await factories.createDrive(user.id, { name: `${MARK} Acme`, slug: `acme-${createId()}`, drivePrompt: `${MARK}-acme-prompt` });
   const journal = await factories.createDrive(user.id, { name: `${MARK} Journal`, slug: `journal-${createId()}`, drivePrompt: `${MARK}-journal-prompt` });
@@ -367,4 +371,22 @@ describe('IMG-10.10 — Imago is given the global assistant\'s context, plus its
       await db.delete(pages).where(eq(pages.id, memory.id));
     }
   });
+});
+
+it('negative control: an empty personal root refuses both interactive surfaces before any provider call or billing write', async () => {
+  await vi.waitFor(async () => expect(await db.select().from(creditHolds).where(eq(creditHolds.userId, world.userId))).toEqual([]));
+  const [root] = await db.select().from(wallets).where(eq(wallets.userId, world.userId));
+  await db.update(wallets).set({ monthlyRemainingCents: 0, topupRemainingCents: 0 }).where(eq(wallets.id, root.id));
+  const ledgerBefore = await db.select().from(creditLedger).where(eq(creditLedger.userId, world.userId));
+  captured.length = 0;
+  const pageResponse = await postPageChat(new Request('http://localhost/api/ai/chat', { method: 'POST', headers: headers(), body: JSON.stringify({ messages: message(), chatId: world.imagoPageId, conversationId: createId(), selectedProvider: 'openai', selectedModel: 'openai/gpt-5.4-nano' }) }));
+  const id = createId();
+  const globalResponse = await postGlobalMessage(new Request(`http://localhost/api/ai/global/${id}/messages`, { method: 'POST', headers: headers(), body: JSON.stringify({ messages: message(), conversationId: id, selectedProvider: 'openai', selectedModel: 'openai/gpt-5.4-nano' }) }), { params: Promise.resolve({ id }) });
+  expect(pageResponse.status).toBe(402);
+  expect(await pageResponse.json()).toMatchObject({ source: 'own_credits', refusalReason: 'source_empty' });
+  expect(globalResponse.status).toBe(402);
+  expect(await globalResponse.json()).toMatchObject({ error: 'out_of_credits' });
+  expect(captured).toEqual([]);
+  expect(await db.select().from(creditHolds).where(eq(creditHolds.userId, world.userId))).toEqual([]);
+  expect(await db.select().from(creditLedger).where(eq(creditLedger.userId, world.userId))).toEqual(ledgerBefore);
 });

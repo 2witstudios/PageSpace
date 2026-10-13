@@ -71,7 +71,10 @@ vi.mock('@/lib/ai/core/provider-factory', async (importOriginal) => {
 });
 
 import { db } from '@pagespace/db/db';
-import { inArray } from '@pagespace/db/operators';
+import { eq, inArray } from '@pagespace/db/operators';
+import { wallets, walletConsumerCaps } from '@pagespace/db/schema/wallets';
+import { creditHolds, creditLedger } from '@pagespace/db/schema/credits';
+import { userConsumerKey } from '@pagespace/lib/billing/wallet-core';
 import { users } from '@pagespace/db/schema/auth';
 import { drives } from '@pagespace/db/schema/core';
 import { workflows } from '@pagespace/db/schema/workflows';
@@ -90,7 +93,8 @@ import type { IntegrationProviderConfig } from '@pagespace/lib/integrations/type
 import { ensureTestDb } from '@/test/ensure-test-db';
 import type { ToolExecutionContext } from '@/lib/ai/core/types';
 // Before agent-communication-tools: it sits in a cycle with ai-tools' tool registry.
-import { executeWorkflow } from '@/lib/workflows/workflow-executor';
+import { creditAdmission } from '@/lib/workflows/workflow-credit-gate';
+import { executeWorkflow, type WorkflowExecutionInput } from '@/lib/workflows/workflow-executor';
 import { executeAskAgent } from '@/lib/ai/tools/agent-communication-tools';
 import { POST as consult } from '@/app/api/ai/page-agents/consult/route';
 
@@ -157,9 +161,17 @@ async function seedWorld(): Promise<World> {
   seededUserIds.push(user.id, other.id);
 
   const home = await factories.createDrive(user.id, { kind: 'HOME', name: 'Home', slug: `home-${createId()}` });
+  const [root] = await db.insert(wallets).values({ userId: user.id, monthlyRemainingCents: 100000 }).returning();
+  await db.insert(wallets).values({ userId: other.id, monthlyRemainingCents: 100000 });
   const acme = await factories.createDrive(user.id, { name: 'Acme', slug: `acme-${createId()}` });
   const journal = await factories.createDrive(user.id, { name: 'Journal', slug: `journal-${createId()}` });
   await factories.createDrive(other.id, { kind: 'HOME', name: 'Home', slug: `home-${createId()}` });
+  // Automated integration tests enter through the real drive-wallet reservation,
+  // including the creator's caps; personal credits cannot admit an automation.
+  for (const drive of [acme, journal]) {
+    const [wallet] = await db.insert(wallets).values({ userId: user.id, subjectType: 'drive', subjectId: drive.id, parentWalletId: root.id, monthlyAllowanceCents: 10000 }).returning();
+    await db.insert(walletConsumerCaps).values({ walletId: wallet.id, consumerKey: userConsumerKey(user.id), monthlyCapCents: 1000 });
+  }
   // Another user's drive the user is a member of, where no grant was ever made.
   const team = await factories.createDrive(other.id, { name: 'Team', slug: `team-${createId()}` });
   await factories.createDriveMember(team.id, user.id, { role: 'MEMBER', acceptedAt: new Date() });
@@ -239,7 +251,7 @@ async function viaConsult(token: string): Promise<string[]> {
   return integrationsSent();
 }
 
-async function viaWorkflow(driveId: string): Promise<string[]> {
+async function viaWorkflow(driveId: string, options: { reserve?: boolean; refusal?: RegExp } = {}): Promise<string[]> {
   capturedToolNames.length = 0;
   const [workflow] = await db
     .insert(workflows)
@@ -256,7 +268,7 @@ async function viaWorkflow(driveId: string): Promise<string[]> {
       isEnabled: true,
     })
     .returning();
-  const result = await executeWorkflow({
+  const input: WorkflowExecutionInput = {
     workflowId: workflow.id,
     workflowName: workflow.name,
     driveId,
@@ -266,8 +278,29 @@ async function viaWorkflow(driveId: string): Promise<string[]> {
     contextPageIds: [],
     instructionPageId: null,
     timezone: 'UTC',
-    source: { table: 'manual', id: null, triggerAt: null },
-  });
+    source: { table: 'cron', id: null, triggerAt: null },
+  };
+  const acquire = creditAdmission(input, 'scheduled');
+  const admit = async () => {
+    const admission = await acquire();
+    if (admission.admitted) {
+      const [payer] = await db.select().from(wallets).where(eq(wallets.subjectId, driveId));
+      expect(admission.creditSpend).toMatchObject({ walletId: payer.id, userId: world.userId, spend: { kind: 'automation', driveId } });
+      const holds = await db.select().from(creditHolds).where(eq(creditHolds.walletId, payer.id));
+      expect(holds).toHaveLength(1);
+      expect(holds[0].userId).toBe(world.userId);
+      expect(holds[0].estCents).toBeGreaterThan(0);
+    }
+    return admission;
+  };
+  const result = await executeWorkflow(input, options.reserve === false ? {} : { admit });
+  await vi.waitFor(async () => expect(await db.select().from(creditHolds).where(eq(creditHolds.userId, world.userId))).toEqual([]));
+  if (options.refusal) {
+    expect(result).toMatchObject({ success: false, skipped: true });
+    expect(result.error).toMatch(options.refusal);
+    expect(capturedToolNames).toEqual([]);
+    return [];
+  }
   expect(result.success, JSON.stringify(result)).toBe(true);
   return integrationsSent();
 }
@@ -328,4 +361,15 @@ describe('Imago agent integrations outside page chat (IMG-4.9 AC4)', () => {
       expect(await viaWorkflow(world.excludedDriveId)).toEqual(['userEnabled']);
     });
   });
+});
+
+it('negative control: a workflow with no reservation or an exhausted creator cap never calls the provider or bills personal credits', async () => {
+  const before = await db.select().from(creditLedger).where(eq(creditLedger.userId, world.userId));
+  const walletsBefore = await db.select().from(wallets).where(eq(wallets.userId, world.userId)).orderBy(wallets.id);
+  expect(await viaWorkflow(world.ownedDriveId, { reserve: false, refusal: /no drive wallet reserved/ })).toEqual([]);
+  const [wallet] = await db.select().from(wallets).where(eq(wallets.subjectId, world.ownedDriveId));
+  await db.update(walletConsumerCaps).set({ monthlyCapCents: 0 }).where(eq(walletConsumerCaps.walletId, wallet.id));
+  expect(await viaWorkflow(world.ownedDriveId, { refusal: /cap/ })).toEqual([]);
+  expect(await db.select().from(creditLedger).where(eq(creditLedger.userId, world.userId))).toEqual(before);
+  expect(await db.select().from(wallets).where(eq(wallets.userId, world.userId)).orderBy(wallets.id)).toEqual(walletsBefore);
 });
